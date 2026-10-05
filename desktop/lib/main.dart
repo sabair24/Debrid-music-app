@@ -5,7 +5,7 @@ import 'dart:ui' show ImageFilter;
 // Flutter 3.36+ exports a RepeatMode of its own (for RepeatingAnimationBuilder), which collides
 // with the player's. Ours is the one this app means everywhere.
 import 'package:flutter/material.dart' hide RepeatMode;
-import 'package:flutter/foundation.dart' show mapEquals;
+import 'package:flutter/foundation.dart' show mapEquals, visibleForTesting;
 // AppExitResponse hoort bij de haak die Windows gebruikt als het de app wil beëindigen — zie
 // _saveOnLeaving. Hij woont in dart:ui; material.dart exporteert hem niet.
 import 'dart:ui' show AppExitResponse, PlatformDispatcher;
@@ -4729,6 +4729,60 @@ class AlbumDetailPage extends StatefulWidget implements OnderDeBalk {
   State<AlbumDetailPage> createState() => _AlbumDetailPageState();
 }
 
+/// [matchAlbumTracks] voor de albumpagina, opnieuw alleen als er iets veranderd is.
+///
+/// **Gemeten op 05-10-2026:** één vergelijking kost op de pc 1,3 ms bij 12 nummers, 2,9 ms bij 20 en
+/// 25,6 ms bij 60 — hij groeit kwadratisch. De albumpagina deed hem bij ELKE bouw, en die bouwt bij
+/// elke melding van de bibliotheek opnieuw (hoezen die binnenkomen, een verrijking die vordert). Bij
+/// een deluxe-uitgave was dat meer dan een heel beeld, telkens weer, voor dezelfde uitkomst.
+///
+/// Opnieuw zodra iets dat erin gaat anders is: een andere officiële lijst (die wordt altijd in zijn
+/// geheel vervangen), een ander nummer — een `Track` heeft alleen `final`-velden, dus een correctie
+/// is een nieuw object —, een nummer meer of minder, een andere bron, artiest of titel, of een
+/// andere toewijzing van jou.
+class VergelijkingGeheugen {
+  List<ChoiceTrack>? _official;
+  List<Track> _tracks = const [];
+  String? _artiest, _titel, _bron;
+  Map<String, String>? _handmatig;
+  AlbumCompleteness? _uitkomst;
+
+  /// Hoe vaak er echt vergeleken is — voor de toets.
+  @visibleForTesting
+  int keer = 0;
+
+  AlbumCompleteness van(List<ChoiceTrack> official, Album album,
+      {required String source, required Map<String, String> handmatig}) {
+    final u = _uitkomst;
+    if (u != null &&
+        identical(official, _official) &&
+        album.artist == _artiest &&
+        album.title == _titel &&
+        source == _bron &&
+        _zelfdeNummers(album.tracks) &&
+        mapEquals(handmatig, _handmatig)) {
+      return u;
+    }
+    keer++;
+    _official = official;
+    _tracks = List.of(album.tracks);
+    _artiest = album.artist;
+    _titel = album.title;
+    _bron = source;
+    _handmatig = handmatig;
+    return _uitkomst = matchAlbumTracks(official, album.tracks, album.artist,
+        source: source, album: album.title, handmatig: handmatig);
+  }
+
+  bool _zelfdeNummers(List<Track> nu) {
+    if (nu.length != _tracks.length) return false;
+    for (var i = 0; i < nu.length; i++) {
+      if (!identical(nu[i], _tracks[i])) return false;
+    }
+    return true;
+  }
+}
+
 class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumDetailPage> {
   late Album album = widget.album;
 
@@ -4738,6 +4792,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
   List<ChoiceTrack> _official = const [];
   String _officialFrom = '';
   int? _officialYear;
+
+  /// De laatste vergelijking van [_official] met de bestanden, en waarmee ze gemaakt is.
+  final _vergelijking = VergelijkingGeheugen();
   bool _officialBusy = false;
 
   /// What the OTHER pressings of this record hold that yours doesn't — not missing, just elsewhere.
@@ -5484,11 +5541,12 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     // The record laid next to the files. Recomputed per build on purpose: a download that lands
     // triggers a rescan, `album` above is re-pointed at the new grouping, and the track it filled
     // in flips from missing to owned without this page having to be told.
+    //
+    // Wel onthouden zolang er niets veranderd is: zie [VergelijkingGeheugen].
     final comp = _official.isEmpty
         ? null
-        : matchAlbumTracks(_official, album.tracks, album.artist,
+        : _vergelijking.van(_official, album,
             source: _officialFrom,
-            album: album.title,
             // Wat jij zelf hebt aangewezen gaat vóór elke vergelijking — zie [RijToewijzenDialog].
             handmatig: lib.rijToewijzingen(album.tracks));
     final rows = comp == null
