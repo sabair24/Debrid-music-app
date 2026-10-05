@@ -23398,7 +23398,12 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   // en de telefoon warm tot hij zichzelf afremde — zie `ui/langzame_draai.dart`. Eerst 30 (3.9.441),
   // maar dat zag Saber haperen: "de staande is nu de cd niet vloeiend". Nu 60, op elke tweede
   // schermtik.
-  late final LangzameDraai _spin = LangzameDraai(this, omwenteling: const Duration(seconds: 9));
+  //
+  // Op de pc elke schermtik (op Sabers MSI van 144 Hz dus 144 per seconde): een beeld kost daar 2 ms
+  // tekenen en 0,3 ms bouwen, gemeten in fps.log, en er is geen batterij of warmte om te sparen. Op
+  // een telefoon of tv hooguit 60, op een heel aantal schermtikken.
+  late final LangzameDraai _spin = LangzameDraai(this,
+      omwenteling: const Duration(seconds: 9), maxBeeldenPerSeconde: _isDesktop ? 1000 : 60);
 
   /// Wat het scherm haalt zolang de plaat draait.
   ///

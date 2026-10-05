@@ -19,8 +19,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// Een plaat die draait, zoals in `AlbumArt`.
 class _Plaat extends StatefulWidget {
-  const _Plaat({required this.speelt, required this.draai});
+  const _Plaat({required this.speelt, required this.draai, this.hz = 120, this.max = 60});
   final bool speelt;
+  final double hz;
+  final int max;
   final void Function(LangzameDraai) draai;
   @override
   State<_Plaat> createState() => _PlaatState();
@@ -29,7 +31,8 @@ class _Plaat extends StatefulWidget {
 class _PlaatState extends State<_Plaat> with TickerProviderStateMixin {
   // Een scherm van 120 Hz, zoals de S26 — de toets doet hieronder ook 120 Hz na.
   late final LangzameDraai spin =
-      LangzameDraai(this, omwenteling: const Duration(seconds: 9), schermHz: () => 120);
+      LangzameDraai(this,
+          omwenteling: const Duration(seconds: 9), schermHz: () => widget.hz, maxBeeldenPerSeconde: widget.max);
 
   @override
   void initState() {
@@ -172,9 +175,42 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  // Saber, 05-10-2026: "ik heb een refresh rate beeld van msi die tot 144ghz gaat". Met een vast doel
+  // van 60 viel 144 Hz om en om op 2 en 3 schermtikken; fps.log op de pc gaf 49 tot 53 per seconde.
+  for (final (naam, hz, max, perSeconde) in [
+    ('telefoon op 144 Hz: elke 2e tik', 144.0, 60, 72),
+    ('telefoon op 60 Hz: elke tik', 60.0, 60, 60),
+    ('pc op 144 Hz: elke tik', 144.0, 1000, 144),
+  ]) {
+    testWidgets('DE GRENS ($naam): $perSeconde per seconde, gelijkmatig', (tester) async {
+      late LangzameDraai spin;
+      await tester.pumpWidget(_Plaat(speelt: true, hz: hz, max: max, draai: (s) => spin = s));
+      final tijden = <Duration>[];
+      void noteer() => tijden.add(SchedulerBinding.instance.currentFrameTimeStamp);
+      spin.addListener(noteer);
+      final tik = Duration(microseconds: (1e6 / hz).round());
+      final n = (2 * hz).round();
+      for (var i = 0; i < n; i++) {
+        await tester.pump(tik);
+      }
+      spin.removeListener(noteer);
+      expect(tijden.length / 2, closeTo(perSeconde, perSeconde * .05),
+          reason: 'beelden per seconde op ${hz.round()} Hz');
+      final verwacht = 1000 / perSeconde;
+      final afstanden = [
+        for (var i = 2; i < tijden.length; i++) (tijden[i] - tijden[i - 1]).inMicroseconds / 1000
+      ];
+      expect(afstanden.where((ms) => (ms - verwacht).abs() < 1.2).length / afstanden.length, greaterThan(.95),
+          reason: 'afstanden: ${afstanden.map((a) => a.toStringAsFixed(1)).toSet().join(', ')} ms');
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
   test('de plaat in de app gebruikt deze draaier', () {
     final main = File('lib/main.dart').readAsStringSync();
-    expect(main, contains('late final LangzameDraai _spin = LangzameDraai(this, omwenteling: const Duration(seconds: 9));'));
+    expect(main, contains('late final LangzameDraai _spin = LangzameDraai(this,'));
+    expect(main, contains('maxBeeldenPerSeconde: _isDesktop ? 1000 : 60'),
+        reason: 'op de pc elke schermtik, op een telefoon hooguit 60');
     expect(main, isNot(contains('AnimationController(vsync: this, duration: const Duration(seconds: 9))')),
         reason: 'een AnimationController vraagt elk schermbeeld aan');
   });
