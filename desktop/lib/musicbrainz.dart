@@ -1028,7 +1028,10 @@ class MusicBrainzService {
   /// then again each time a pressing's scans arrive. Same contract as the Discogs side, so the
   /// gallery can treat both sources the same way.
   Future<List<ReleaseChoice>> editionChoices(String artist, String album,
-      {int max = 40, String? pinnedMbid, void Function(List<ReleaseChoice>)? onPartial}) async {
+      {int max = 40,
+      String? pinnedMbid,
+      void Function(List<ReleaseChoice>)? onPartial,
+      void Function(List<String> groepen)? onGroepen}) async {
     final out = <ReleaseChoice>[];
     final seen = <String>{};
 
@@ -1120,6 +1123,10 @@ class MusicBrainzService {
         return _kindRank(a.primaryType).compareTo(_kindRank(b.primaryType));
       });
     }
+
+    // Welke releasegroepen dit album zijn, voor wie er ook mee verder kan: TheAudioDB zoekt erop, en
+    // daar doet een andere spelling van de artiestnaam niet mee ("Amir" tegen "Amir Haddad").
+    onGroepen?.call([if (pinnedGroup != null) pinnedGroup, for (final g in ranked.take(2)) g.mbid]);
 
     // The pinned pressing's own group first, then the ranked search results — which is only ever one
     // or the other, but written as one loop so the browse and the row cap behave identically.

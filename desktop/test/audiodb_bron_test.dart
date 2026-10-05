@@ -313,7 +313,7 @@ void main() {
 
     test('de kiezer vraagt TheAudioDB, en zet die rij bovenaan', () {
       final main = File('lib/main.dart').readAsStringSync();
-      expect(main, contains('AudioDbService(settings).zoek(widget.album.artist, widget.album.title)'));
+      expect(main, contains('adb.zoek(widget.album.artist, widget.album.title)'));
       expect(main, contains('_merge([for (final a in l) a.keuze()], opIndex: 0)'),
           reason: 'bovenaan, niet waar hij toevallig binnenkwam');
     });
@@ -339,6 +339,108 @@ void main() {
       expect(pc, contains("'audiodbKey': config.audiodbKey"));
       expect(tel, contains("settings.audiodbKey = audiodb"));
       expect(tel, contains("settings.audiodbKey = '';"));
+    });
+  });
+
+  // Saber op 05-10-2026, bij *Au cœur de moi*: "the audio db vindt niet alles ?". De site toonde het
+  // album, de kiezer niet. Gemeten: TheAudioDB kent de artiest als "Amir Haddad", de bibliotheek als
+  // "Amir" — en `searchalbum.php?s=Amir&a=Au cœur de moi` gaf `{"album":null}`.
+  group('als TheAudioDB de naam anders schrijft', () {
+    Map<String, dynamic> auCoeur() => {
+          'idAlbum': '2265602',
+          'idArtist': '143382',
+          'strAlbum': 'Au cœur de moi',
+          'strArtist': 'Amir Haddad',
+          'intYearReleased': '2016',
+          'strAlbumThumb': 'https://r2.theaudiodb.com/images/media/album/thumb/aucoeur.jpg',
+          'strMusicBrainzID': 'c5b37466-1e2f-468e-856e-264e7ffcfb38',
+        };
+    Map<String, dynamic> album(String titel, String id) => {...auCoeur(), 'strAlbum': titel, 'idAlbum': id};
+
+    /// TheAudioDB zoals die dag: alleen "Amir Haddad" vindt het album; "Amir" geeft de artiest terug.
+    MockClient amir(List<String> gevraagd, {List<Map<String, dynamic>>? discografie, bool opNaam = true}) =>
+        MockClient((r) async {
+          final pad = r.url.pathSegments.last;
+          final q = r.url.queryParameters;
+          gevraagd.add('$pad ${q.values.join('|')}');
+          // In UTF-8, zoals TheAudioDB het stuurt: `http.Response(tekst)` codeert als Latin-1, en daar
+          // bestaat "œ" niet in.
+          http.Response antwoord(Object? v) => http.Response.bytes(utf8.encode(jsonEncode(v)), 200,
+              headers: {'content-type': 'application/json; charset=utf-8'});
+          if (pad == 'searchalbum.php') {
+            final raak = opNaam && q['s'] == 'Amir Haddad' && q['a'] == 'Au cœur de moi';
+            return antwoord({'album': raak ? [auCoeur()] : null});
+          }
+          if (pad == 'search.php') {
+            return antwoord({
+              'artists': [
+                {'idArtist': '143382', 'strArtist': 'Amir Haddad'}
+              ]
+            });
+          }
+          if (pad == 'album.php' && q['i'] == '143382') {
+            return antwoord({'album': discografie ?? [auCoeur()]});
+          }
+          if (pad == 'album-mb.php') {
+            final raak = q['i'] == 'c5b37466-1e2f-468e-856e-264e7ffcfb38';
+            return antwoord({'album': raak ? [auCoeur()] : null});
+          }
+          return http.Response('{}', 404);
+        });
+
+    test('DE KERN: "Amir" vindt het album via de naam die TheAudioDB zelf gebruikt', () async {
+      final gevraagd = <String>[];
+      final l = await AudioDbService(_met(), client: amir(gevraagd)).zoek('Amir', 'Au cœur de moi');
+      expect(l.map((a) => a.titel), ['Au cœur de moi'], reason: 'de site had het, de kiezer niet');
+      expect(gevraagd, [
+        'searchalbum.php Amir|Au cœur de moi',
+        'search.php Amir',
+        'searchalbum.php Amir Haddad|Au cœur de moi',
+      ]);
+    });
+
+    test('DE VAL: "coeur" zonder ligatuur vindt "cœur" — via de albums van de artiest', () async {
+      final gevraagd = <String>[];
+      final l = await AudioDbService(_met(),
+              client: amir(gevraagd, discografie: [album('Addictions', '1'), auCoeur()]))
+          .zoek('Amir', 'Au coeur de moi');
+      expect(l.map((a) => a.id), ['2265602']);
+      expect(gevraagd.last, 'album.php 143382');
+    });
+
+    test('vindt de eerste vraag iets, dan wordt er niets meer gevraagd', () async {
+      final gevraagd = <String>[];
+      await AudioDbService(_met(), client: amir(gevraagd)).zoek('Amir Haddad', 'Au cœur de moi');
+      expect(gevraagd, hasLength(1));
+    });
+
+    test('DE GRENS: zonder haakjes vergelijken, maar alleen als er dan precies één overblijft', () {
+      AudioDbAlbum a(String t, String id) => AudioDbAlbum(id: id, artiest: 'X', titel: t);
+      expect(AudioDbService.kiesOpTitel([a('Brave (Deluxe)', '1'), a('Rebirth', '2')], 'Brave').map((x) => x.id),
+          ['1']);
+      expect(AudioDbService.kiesOpTitel([a('Hits (Vol. 1)', '1'), a('Hits (Vol. 2)', '2')], 'Hits'), isEmpty,
+          reason: 'twee albums die alleen in het deelnummer verschillen: daar raden we niet tussen');
+      expect(AudioDbService.kiesOpTitel([a('Hits (Vol. 1)', '1'), a('Hits (Vol. 2)', '2')], 'Hits (Vol. 2)')
+          .map((x) => x.id), ['2'], reason: 'met het deelnummer is het wél één');
+      expect(AudioDbService.kiesOpTitel([a('Cœur (Vol. 1)', '1'), a('Cœur (Vol. 2)', '2')], 'Coeur (Vol. 2)')
+          .map((x) => x.id), ['2'],
+          reason: 'accenten gelijk trekken MET de haakjes erbij — anders zijn het er weer twee');
+    });
+
+    test('DE KERN: via het MusicBrainz-nummer doet de naam niet mee', () async {
+      final gevraagd = <String>[];
+      final l = await AudioDbService(_met(), client: amir(gevraagd, opNaam: false))
+          .viaMusicBrainz(['c5b37466-1e2f-468e-856e-264e7ffcfb38', 'c5b37466-1e2f-468e-856e-264e7ffcfb38', ' ']);
+      expect(l.map((a) => a.titel), ['Au cœur de moi']);
+      expect(gevraagd, hasLength(1), reason: 'hetzelfde nummer twee keer en een leeg nummer: één vraag');
+    });
+
+    test('"Uitgave kiezen" vraagt via MusicBrainz zodra die de albumnummers noemt', () {
+      final main = File('lib/main.dart').readAsStringSync();
+      final mb = File('lib/musicbrainz.dart').readAsStringSync();
+      expect(main, contains('onPartial: _merge, onGroepen: viaGroepen'));
+      expect(main, contains('adb.viaMusicBrainz(groepen)'));
+      expect(mb, contains('onGroepen?.call('));
     });
   });
 }

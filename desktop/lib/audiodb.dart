@@ -26,6 +26,7 @@ import 'package:http/http.dart' as http;
 
 import 'editions.dart';
 import 'enrichment.dart' show CoverEnricher;
+import 'organize.dart' show normKey;
 import 'settings.dart';
 
 /// De gratis, openbare sleutel van TheAudioDB. Geen geheim: hij staat in hun eigen documentatie.
@@ -200,19 +201,90 @@ class AudioDbService {
   static List<Map> _lijst(Map<String, dynamic> j, String naam) =>
       [for (final x in (j[naam] as List?) ?? const []) if (x is Map) x];
 
-  /// De albums van [artiest] die [album] heten.
+  /// De albums van [artiest] die [album] heten — ook als TheAudioDB de artiest of de titel net
+  /// anders schrijft dan jouw bibliotheek.
   ///
-  /// Allebei nodig: zonder artiest geeft TheAudioDB niets terug (`searchalbum.php?a=Brave` was leeg),
-  /// en met alleen de artiest geeft de gratis sleutel er één.
+  /// Allebei nodig: zonder artiest geeft TheAudioDB niets terug (`searchalbum.php?a=Brave` was leeg).
+  ///
+  /// **Gemeten op 05-10-2026**, Saber met *Au cœur de moi*: *"the audio db vindt niet alles ?"*. De
+  /// site toonde het album, de kiezer niet. TheAudioDB kent de artiest als "Amir Haddad", de
+  /// bibliotheek als "Amir": `searchalbum.php?s=Amir&a=Au cœur de moi` gaf `{"album":null}`, met
+  /// "Amir Haddad" kwam het album meteen. Daarom, alleen als de vorige stap niets vond:
+  ///   1. zoals gevraagd;
+  ///   2. met de naam die TheAudioDB zelf voor deze artiest gebruikt (`search.php?s=Amir` gaf
+  ///      "Amir Haddad");
+  ///   3. de albums van die artiest, op titel vergeleken zonder accenten — "Au coeur de moi" vond
+  ///      niets, "Au cœur de moi" wel. De gratis sleutel geeft hier maar één album (de site toont er
+  ///      vier); met een eigen sleutel allemaal.
   Future<List<AudioDbAlbum>> zoek(String artiest, String album) async {
     final wie = artiest.trim(), wat = album.trim();
     if (wie.isEmpty || wat.isEmpty) return const [];
+    final direct = await _zoekAlbum(wie, wat);
+    if (direct.isNotEmpty) return direct;
+    final a = await _artiest(wie);
+    if (a == null) return const [];
+    if (normKey(a.naam) != normKey(wie)) {
+      final opNaam = await _zoekAlbum(a.naam, wat);
+      if (opNaam.isNotEmpty) return opNaam;
+    }
+    return kiesOpTitel(await albumsVan(a.id), wat);
+  }
+
+  /// Via MusicBrainz: TheAudioDB bewaart bij een album het nummer van de MusicBrainz-releasegroep
+  /// (`strMusicBrainzID`), en kan erop opzoeken. Daar doen namen niet mee — "Amir" of "Amir Haddad",
+  /// het nummer is hetzelfde. Gemeten: `album-mb.php?i=c5b37466…` gaf *Au cœur de moi*, ook met de
+  /// gratis sleutel.
+  Future<List<AudioDbAlbum>> viaMusicBrainz(Iterable<String> groepen) async {
+    final uit = <AudioDbAlbum>[];
+    final gezien = <String>{};
+    for (final g in groepen.map((g) => g.trim()).where((g) => g.isNotEmpty).toSet().take(3)) {
+      final j = await _v1('album-mb.php?i=${Uri.encodeQueryComponent(g)}');
+      for (final m in _lijst(j, 'album')) {
+        final a = AudioDbAlbum.vanJson(m);
+        if (a != null && gezien.add(a.id)) uit.add(a);
+      }
+    }
+    return uit;
+  }
+
+  Future<List<AudioDbAlbum>> _zoekAlbum(String wie, String wat) async {
     final j = await _v1('searchalbum.php?s=${Uri.encodeQueryComponent(wie)}&a=${Uri.encodeQueryComponent(wat)}');
     return [
       for (final m in _lijst(j, 'album'))
         if (AudioDbAlbum.vanJson(m) case final a?) a,
     ];
   }
+
+  /// De artiest zoals TheAudioDB hem noemt, met zijn nummer.
+  Future<({String id, String naam})?> _artiest(String wie) async {
+    final l = _lijst(await _v1('search.php?s=${Uri.encodeQueryComponent(wie)}'), 'artists');
+    if (l.isEmpty) return null;
+    final id = AudioDbAlbum._tekst(l.first['idArtist']);
+    final naam = AudioDbAlbum._tekst(l.first['strArtist']);
+    return id == null || naam == null ? null : (id: id, naam: naam);
+  }
+
+  /// Alle albums van artiest [artiestId] (met de gratis sleutel maar één).
+  Future<List<AudioDbAlbum>> albumsVan(String artiestId) async => [
+        for (final m in _lijst(await _v1('album.php?i=${Uri.encodeQueryComponent(artiestId)}'), 'album'))
+          if (AudioDbAlbum.vanJson(m) case final a?) a,
+      ];
+
+  /// Welke van [albums] is [titel]? Eerst gelijk op de titel zonder accenten en hoofdletters; vindt
+  /// dat niets, dan ook zonder toevoegsels tussen haakjes ("(Deluxe)") — maar alleen als er dan
+  /// precies één overblijft. Twee albums die alleen in "(Vol. 1)" en "(Vol. 2)" verschillen zijn twee
+  /// albums, en daar raden we niet tussen.
+  static List<AudioDbAlbum> kiesOpTitel(List<AudioDbAlbum> albums, String titel) {
+    final doel = normKey(titel);
+    final gelijk = [for (final a in albums) if (normKey(a.titel) == doel) a];
+    if (gelijk.isNotEmpty) return gelijk;
+    final kaal = normKey(zonderHaakjes(titel));
+    final bijna = [for (final a in albums) if (normKey(zonderHaakjes(a.titel)) == kaal) a];
+    return bijna.length == 1 ? bijna : const [];
+  }
+
+  static final _haakjes = RegExp(r'\s*[\(\[][^\)\]]*[\)\]]');
+  static String zonderHaakjes(String t) => t.replaceAll(_haakjes, '').trim();
 
   /// Eén album op zijn nummer.
   Future<AudioDbAlbum?> album(String id) async {

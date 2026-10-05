@@ -23871,9 +23871,23 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     // TheAudioDB tegelijk met de rest, en bovenaan zodra het er is — niet ergens waar het toevallig
     // binnenkwam. Eén verzoek; een album, geen persing, met de scherpste hoes die er vaak is
     // (2160×2160 bij Play en Thriller). Gevraagd op 04-10-2026. Een fout hier laat de rest staan.
-    unawaited(AudioDbService(settings).zoek(widget.album.artist, widget.album.title).then((l) {
-      if (mounted && l.isNotEmpty) _merge([for (final a in l) a.keuze()], opIndex: 0);
-    }).catchError((Object _) {}));
+    final adb = AudioDbService(settings);
+    var adbGevonden = false;
+    void adbErbij(List<AudioDbAlbum> l) {
+      if (!mounted || l.isEmpty) return;
+      adbGevonden = true;
+      _merge([for (final a in l) a.keuze()], opIndex: 0);
+    }
+
+    unawaited(adb.zoek(widget.album.artist, widget.album.title).then(adbErbij).catchError((Object _) {}));
+    // En via het MusicBrainz-nummer van het album, zodra MusicBrainz dat noemt — daar doet de
+    // spelling van de naam niet mee. Saber op 05-10-2026 bij Au cœur de moi: "the audio db vindt
+    // niet alles ?" — TheAudioDB kent "Amir Haddad", de bibliotheek "Amir". Dubbel vinden kan geen
+    // kwaad: dezelfde TheAudioDB-rij heeft dezelfde sleutel en komt er één keer in.
+    void viaGroepen(List<String> groepen) {
+      if (adbGevonden || groepen.isEmpty) return;
+      unawaited(adb.viaMusicBrainz(groepen).then(adbErbij).catchError((Object _) {}));
+    }
 
     try {
       // Shown as it fills in: the pressings the moment they are named, then their scans as each
@@ -23881,7 +23895,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       // ready seconds before the artwork the spinner was actually waiting for.
       final mb = await context.read<MusicBrainzService>().editionChoices(
           widget.album.artist, widget.album.title,
-          pinnedMbid: pinnedMb, onPartial: _merge);
+          pinnedMbid: pinnedMb, onPartial: _merge, onGroepen: viaGroepen);
       if (!mounted) return;
       _merge(mb);
       setState(() => _mbDone = true);
