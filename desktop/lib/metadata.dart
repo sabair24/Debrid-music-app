@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:http/http.dart' as http;
 
 import 'audiodb.dart';
@@ -188,22 +190,32 @@ class MetadataSearch {
     }
     if (query.trim().isEmpty && album.trim().isEmpty) return [];
     final direct = switch (provider) {
-      'Discogs' => await _discogs(query, artist: artist, album: album),
-      'MusicBrainz' => await _musicbrainz(query, artist: artist, album: album),
+      'Discogs' => _discogs(query, artist: artist, album: album),
+      'MusicBrainz' => _musicbrainz(query, artist: artist, album: album),
       // Een eigen arm. Zonder viel elke nieuwe bron stil in de Deezer-arm hieronder.
-      'TheAudioDB' => await _audioDb(query, artist: artist, album: album),
-      _ => await _deezer(query, track),
+      'TheAudioDB' => _audioDb(query, artist: artist, album: album),
+      _ => _deezer(query, track),
     };
     if (track) return direct;
+    // Op album en op liedje TEGELIJK, niet na elkaar. Gemeten op 05-10-2026: "Alles" voor Oasis
+    // stond 7 s te zoeken, en die tijd zat in vragen die op elkaar wachtten zonder dat het moest.
     final viaTrack = switch (provider) {
-      'Discogs' => await _discogsByTrack(query),
-      'MusicBrainz' => await _musicbrainzByTrack(query),
+      'Discogs' => _discogsByTrack(query),
+      'MusicBrainz' => _musicbrainzByTrack(query, bekendeArtiest: artist),
       // Zoeken op een liedje kan bij TheAudioDB alleen met de artiest erbij, en de gratis sleutel geeft
       // er één — dat voegt hier niets toe aan de albumtreffers.
-      'TheAudioDB' => const <MetaResult>[],
-      _ => await _deezerByTrack(query),
+      'TheAudioDB' => Future.value(const <MetaResult>[]),
+      _ => _deezerByTrack(query),
     };
-    return _merged(direct, viaTrack);
+    try {
+      final (op, via) = await (direct, viaTrack).wait;
+      return _merged(op, via);
+    } on ParallelWaitError<(List<MetaResult>?, List<MetaResult>?), (AsyncError?, AsyncError?)> catch (e) {
+      // De fout van de bron zelf, niet die van het wachten: het venster toont hem als "Discogs gaf
+      // een fout: …", en een verlopen token moet daar herkenbaar blijven.
+      final fout = e.errors.$1 ?? e.errors.$2!;
+      Error.throwWithStackTrace(fout.error, fout.stackTrace);
+    }
   }
 
   /// Album hits first, song-derived after, and nothing twice.
@@ -310,13 +322,16 @@ class MetadataSearch {
     if (settings.discogsToken.isEmpty) return [];
     final wie = artist.trim(), wat = album.trim();
     if (wie.isEmpty || wat.isEmpty) return _discogsZoeklijst(query);
+    // Meteen gevraagd, terwijl de persingen nog binnenkomen, en niet erna: hij loopt niet over de
+    // baan van DiscogsService en vangt zijn eigen fouten af, dus hij kan er gewoon naast.
+    final zoeklijst = _discogsZoeklijst(query);
     try {
       // Eén pagina per master. `maxPaginas <= 1` vraagt er vijftig tegelijk op — genoeg om alle
       // formaten te zien — en het scheelt de reeks vervolgverzoeken die dit venster niet kan
       // betalen: er staat iemand te wachten met een draaiend wieltje.
       final keuzes = await DiscogsService(settings)
           .releaseChoices(wie, wat, max: 60, maxPaginas: 1);
-      if (keuzes.isEmpty) return _discogsZoeklijst(query);
+      if (keuzes.isEmpty) return zoeklijst;
       final persingen = [
         for (final k in keuzes)
           MetaResult(
@@ -342,11 +357,11 @@ class MetadataSearch {
       // dit venster uitzetten: het heet "metadata corrigeren", en een naam corrigeren hoort daar
       // net zo goed bij als de juiste cd aanwijzen. Dubbele vallen weg in [_merged], en die houdt
       // de eerste — dus een persing blijft een persing.
-      return _merged(persingen, await _discogsZoeklijst(query));
+      return _merged(persingen, await zoeklijst);
     } catch (_) {
       // Een fout hier hoort niet het hele venster leeg te laten: de zoeklijst is minder, maar hij
       // is er wel.
-      return _discogsZoeklijst(query);
+      return zoeklijst;
     }
   }
 
@@ -552,16 +567,30 @@ class MetadataSearch {
   /// Two steps and one request: the recording search already answers with the releases each hit
   /// appears on, so no per-recording lookup is needed — which matters on a service that asks for
   /// one request a second.
-  Future<List<MetaResult>> _musicbrainzByTrack(String query) async {
+  ///
+  /// [bekendeArtiest] is wat in het veld "Artiest" van het venster staat. Begint de zoekregel daar
+  /// mee, dan is de rest het liedje en hoeft er niets geraden te worden. **Gemeten op 05-10-2026:**
+  /// zonder dat probeerde deze tak voor "Oasis (What's The Story) Morning Glory?" elk begin van de
+  /// zoekregel als artiestnaam — "Oasis (What's The Story) Morning", "Oasis (What's The Story)", …
+  /// tot "Oasis" — één vraag per seconde, en "Alles" stond 7 s te wachten op een artiest die er al
+  /// stond.
+  Future<List<MetaResult>> _musicbrainzByTrack(String query, {String bekendeArtiest = ''}) async {
     try {
       final mb = MusicBrainzService();
       // Scoped the same way the album search is: "Yasmine porselein" is an artist and a song, and
       // unscoped it matches the whole string as one phrase against the title.
       var artist = '', song = query.trim();
       final dash = query.indexOf(' - ');
+      final bekend = bekendeArtiest.trim();
       if (dash > 0) {
         artist = query.substring(0, dash).trim();
         song = query.substring(dash + 3).trim();
+      } else if (bekend.isNotEmpty &&
+          song.length > bekend.length &&
+          song[bekend.length] == ' ' &&
+          song.substring(0, bekend.length).toLowerCase() == bekend.toLowerCase()) {
+        artist = bekend;
+        song = song.substring(bekend.length).trim();
       } else {
         final words = query.trim().split(RegExp(r'\s+'));
         for (var take = words.length - 1; take >= 1; take--) {
