@@ -14,6 +14,8 @@
 /// dezelfde tv-uitweg die `glassSurface` al documenteert.
 library;
 
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -620,10 +622,17 @@ Widget randAchterDeBalk(double hoogte, {bool naarWaas = false}) => Positioned(
 /// albumpagina of gewoon in de achtergrond. Een zwart verloop eroverheen had het beeld donker gemaakt
 /// in plaats van het te laten verdwijnen, en dan stond er waar het ophoudt alsnog een rand.
 ///
-/// **Het schuift mee met de pagina** ([rol]): het hoort bij de kop, niet bij het venster. In een
-/// eigen `RepaintBoundary`, zodat scrollen het beeld verschuift in plaats van het elke stap opnieuw
-/// te vervagen.
-class HoesAchtergrond extends StatelessWidget {
+/// **Het schuift mee met de pagina** ([rol]): het hoort bij de kop, niet bij het venster.
+///
+/// **Eén keer gebakken, niet elk beeld opnieuw** ([bakHoesAchtergrond]). Gemeten op 05-10-2026 op
+/// Sabers S26, met muziek erbij: scrollen bovenaan een albumpagina miste 10–11 beelden per ronde,
+/// dezelfde vegen onderaan dezelfde pagina — waar de vervaagde hoes uit beeld is maar dezelfde
+/// glazen knoppen er nog staan — 1 tot 3. Dit stond als een `ImageFiltered` met σ30 onder een
+/// `ShaderMask`, en de `RepaintBoundary` die het moest sparen spaart onder Impeller niets: die
+/// bewaart geen getekend beeld tussen twee frames, dus elke scrollstap vervaagde ruim een miljoen
+/// pixels opnieuw en legde er een masker overheen. Nu wordt vervaging, donkering en uitvloeiing
+/// één keer in een klein beeld gebakken, en tekent elke stap alleen dat beeld.
+class HoesAchtergrond extends StatefulWidget {
   const HoesAchtergrond({
     super.key,
     required this.beeld,
@@ -648,8 +657,15 @@ class HoesAchtergrond extends StatelessWidget {
   static ImageProvider? uitUrl(String? url) =>
       url == null || url.isEmpty ? null : NetworkImage(url);
 
-  /// Hoe sterk de hoes vervaagt.
-  static final ImageFilter vervaging = ImageFilter.blur(sigmaX: 30, sigmaY: 30);
+  /// Hoe sterk de hoes vervaagt, in logische punten.
+  static const double sigma = 30;
+
+  /// Te ver uitvergroot, want een vervaging trekt aan de randen het zwart van buiten het beeld naar
+  /// binnen.
+  static const double uitvergroting = 1.2;
+
+  /// De donkering die mee oplost — zie de klasse: een witte titel moet er altijd op lezen.
+  static const Color donkering = Color(0xB307080C);
 
   /// Het masker: tot iets over de helft het volle beeld, daarna naar niets.
   static const LinearGradient vervloeiing = LinearGradient(
@@ -659,49 +675,192 @@ class HoesAchtergrond extends StatelessWidget {
     stops: [0, .55, 1],
   );
 
+  /// Hoe breed het gebakken beeld hooguit is, in pixels. Na σ30 is er niets meer dat meer vraagt:
+  /// opgerekt over een scherm van 2560 is het nog altijd glad, en het kost geen geheugen van belang.
+  static const double gebakkenBreedte = 360;
+
+  @override
+  State<HoesAchtergrond> createState() => _HoesAchtergrondState();
+}
+
+/// De vervaagde hoes als één beeld: [hoes] als `BoxFit.cover` in een vak van [vak] logische punten,
+/// [HoesAchtergrond.uitvergroting] keer uitvergroot rond het midden, vervaagd met
+/// [HoesAchtergrond.sigma], [HoesAchtergrond.donkering] erover, en dat alles met
+/// [HoesAchtergrond.vervloeiing] naar doorzichtig onderaan.
+///
+/// [schaal] is het aantal pixels per logisch punt van het resultaat; de vervaging schaalt mee, dus
+/// het beeld is op elke schaal hetzelfde, alleen grover of fijner.
+///
+/// In twee stappen, en dat is met opzet: eerst de vervaging op een doek dat ruim genoeg is om alles
+/// te bevatten wat hij nodig heeft, pas dan uitsnijden. Een vervaging binnen een uitsnede vraagt de
+/// tekenmotor om zelf te bepalen hoeveel er buiten die uitsnede meedoet, en dat doen Skia en Impeller
+/// niet gelijk — dan krijg je donkere randen op het ene toestel en niet op het andere.
+Future<ui.Image> bakHoesAchtergrond(ui.Image hoes, {required Size vak, required double schaal}) async {
+  final w = (vak.width * schaal).ceil().clamp(1, 4096);
+  final h = (vak.height * schaal).ceil().clamp(1, 4096);
+  final doel = Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble());
+  final sigma = HoesAchtergrond.sigma * schaal;
+  // Drie keer sigma rond het vak: wat verder weg ligt, telt in de vervaging niet meer mee.
+  final rand = (sigma * 3).ceil() + 2;
+
+  final eerst = ui.PictureRecorder();
+  final c = Canvas(eerst)..translate(rand.toDouble(), rand.toDouble());
+  c.saveLayer(doel.inflate(rand.toDouble()),
+      Paint()..imageFilter = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma));
+  c
+    ..translate(doel.center.dx, doel.center.dy)
+    ..scale(HoesAchtergrond.uitvergroting)
+    ..translate(-doel.center.dx, -doel.center.dy);
+  paintImage(canvas: c, rect: doel, image: hoes, fit: BoxFit.cover, filterQuality: FilterQuality.low);
+  c.restore();
+  final vervaagd = await eerst.endRecording().toImage(w + 2 * rand, h + 2 * rand);
+
+  try {
+    final dan = ui.PictureRecorder();
+    final d = Canvas(dan);
+    d.saveLayer(doel, Paint());
+    d.drawImageRect(vervaagd, doel.shift(Offset(rand.toDouble(), rand.toDouble())), doel,
+        Paint()..filterQuality = FilterQuality.low);
+    d.drawRect(doel, Paint()..color = HoesAchtergrond.donkering);
+    d.drawRect(doel,
+        Paint()
+          ..blendMode = BlendMode.dstIn
+          ..shader = HoesAchtergrond.vervloeiing.createShader(doel));
+    d.restore();
+    return await dan.endRecording().toImage(w, h);
+  } finally {
+    vervaagd.dispose();
+  }
+}
+
+class _HoesAchtergrondState extends State<HoesAchtergrond> {
+  ImageStream? _stroom;
+  ImageStreamListener? _luisteraar;
+
+  /// De gedecodeerde hoes, klein — zie [_hoesStroom].
+  ImageInfo? _hoes;
+
+  /// Het gebakken beeld, en voor welke maat. Bij een andere maat blijft het oude staan tot het
+  /// nieuwe klaar is: liever een paar beelden een iets uitgerekte waas dan een knipperende kop.
+  ui.Image? _gebakken;
+  Size? _gebakkenVoor;
+  Size? _gevraagdVoor;
+
+  /// Welke bakbeurt de laatste is. Een venster dat wordt versleept vraagt er veel achter elkaar, en
+  /// zonder dit landt een trage oude beurt als laatste.
+  int _beurt = 0;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _hoesStroom();
+  }
+
+  @override
+  void didUpdateWidget(HoesAchtergrond oud) {
+    super.didUpdateWidget(oud);
+    if (oud.beeld != widget.beeld) _hoesStroom();
+  }
+
+  /// De hoes op 128 pixels breed: na deze vervaging is er geen detail meer dat een grotere
+  /// decodering rechtvaardigt — dezelfde afweging als bij `ArtistBackdrop`.
+  void _hoesStroom() {
+    final b = widget.beeld;
+    final nieuw = b == null ? null : ResizeImage(b, width: 128).resolve(createLocalImageConfiguration(context));
+    if (nieuw?.key == _stroom?.key) return;
+    _laatStroomLos();
+    _wisHoes();
+    _stroom = nieuw;
+    if (nieuw == null) return;
+    _luisteraar = ImageStreamListener(
+      (info, _) {
+        if (!mounted) {
+          info.dispose();
+          return;
+        }
+        _hoes?.dispose();
+        _hoes = info;
+        _gevraagdVoor = null;
+        _gebakkenVoor = null;
+        setState(() {});
+      },
+      // Een hoes die niet laadt is geen fout op deze pagina: dan blijft de kop gewoon zonder beeld.
+      onError: (_, __) {},
+    );
+    nieuw.addListener(_luisteraar!);
+  }
+
+  void _laatStroomLos() {
+    final l = _luisteraar;
+    if (l != null) _stroom?.removeListener(l);
+    _luisteraar = null;
+    _stroom = null;
+  }
+
+  void _wisHoes() {
+    _hoes?.dispose();
+    _hoes = null;
+    _gebakken?.dispose();
+    _gebakken = null;
+    _gebakkenVoor = null;
+    _gevraagdVoor = null;
+  }
+
+  void _bak(Size vak, double dpr) {
+    final hoes = _hoes;
+    if (hoes == null || vak.isEmpty || vak == _gevraagdVoor) return;
+    _gevraagdVoor = vak;
+    final beurt = ++_beurt;
+    final schaal = math.min(dpr, HoesAchtergrond.gebakkenBreedte / vak.width);
+    final bron = hoes.image.clone();
+    bakHoesAchtergrond(bron, vak: vak, schaal: schaal).then((beeld) {
+      if (!mounted || beurt != _beurt) {
+        beeld.dispose();
+        return;
+      }
+      setState(() {
+        _gebakken?.dispose();
+        _gebakken = beeld;
+        _gebakkenVoor = vak;
+      });
+    }, onError: (Object _) {}).whenComplete(bron.dispose);
+  }
+
+  @override
+  void dispose() {
+    _laatStroomLos();
+    _wisHoes();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final b = beeld;
-    if (b == null) return const SizedBox.shrink();
+    if (widget.beeld == null) return const SizedBox.shrink();
+    final dpr = MediaQuery.devicePixelRatioOf(context);
     final vak = RepaintBoundary(
       child: SizedBox(
-        height: hoogte,
+        height: widget.hoogte,
         width: double.infinity,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            ShaderMask(
-              blendMode: BlendMode.dstIn,
-              shaderCallback: vervloeiing.createShader,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  ClipRect(
-                    child: ImageFiltered(
-                      imageFilter: vervaging,
-                      // Te ver uitvergroot, want een vervaging trekt aan de randen het zwart van
-                      // buiten het beeld naar binnen.
-                      child: Transform.scale(
-                        scale: 1.2,
-                        child: Image(
-                          image: ResizeImage(b, width: 128),
-                          fit: BoxFit.cover,
-                          filterQuality: FilterQuality.low,
-                          errorBuilder: (_, __, ___) => const SizedBox(),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const ColoredBox(color: Color(0xB307080C)),
-                ],
-              ),
-            ),
-            if (balkRuimte > 0) randAchterDeBalk(balkRuimte),
-          ],
-        ),
+        child: LayoutBuilder(builder: (context, maat) {
+          final grootte = Size(maat.maxWidth, widget.hoogte);
+          if (grootte != _gebakkenVoor) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _bak(grootte, dpr);
+            });
+          }
+          final beeld = _gebakken;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              if (beeld != null)
+                RawImage(image: beeld, fit: BoxFit.fill, filterQuality: FilterQuality.low),
+              if (widget.balkRuimte > 0) randAchterDeBalk(widget.balkRuimte),
+            ],
+          );
+        }),
       ),
     );
-    final rol = this.rol;
+    final rol = widget.rol;
     return Align(
       alignment: Alignment.topCenter,
       child: rol == null
@@ -711,7 +870,7 @@ class HoesAchtergrond extends StatelessWidget {
               child: vak,
               builder: (_, kind) {
                 // Nooit omlaag: trek je een lijst voorbij zijn bovenrand, dan blijft het beeld staan.
-                final schuif = rol.hasClients ? rol.offset.clamp(0.0, hoogte) : 0.0;
+                final schuif = rol.hasClients ? rol.offset.clamp(0.0, widget.hoogte) : 0.0;
                 return Transform.translate(offset: Offset(0, -schuif), child: kind);
               },
             ),
