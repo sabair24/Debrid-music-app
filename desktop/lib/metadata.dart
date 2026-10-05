@@ -87,6 +87,15 @@ class MetadataSearch {
 
   static const _ua = 'DebridMusic/0.1 ( https://github.com/sabair24/Debrid-music-app )';
 
+  /// Het token gaat als KOP mee, nooit in het adres. Een adres belandt in logboeken, proxy's en
+  /// foutmeldingen — een `ClientException` noemt het hele adres, token incluis — en een kop niet.
+  /// Tot 05-10-2026 waren de zoeklijst en de liedjesvraag hieronder de enige twee vragen in de app
+  /// die het token in de query zetten; `DiscogsService` en de verbindingstoets deden het al zo.
+  Map<String, String> get _discogsKoppen => {
+        'User-Agent': _ua,
+        'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
+      };
+
   /// "Alles" staat vooraan, en dat is de belangrijkste wijziging aan dit venster.
   ///
   /// Eén bron per keer betekende dat je zelf moest weten wélke bron jouw persing kent — en dat is
@@ -369,10 +378,9 @@ class MetadataSearch {
   Future<List<MetaResult>> _discogsZoeklijst(String query) async {
     if (query.trim().isEmpty) return [];
     try {
-      final tok = Uri.encodeComponent(settings.discogsToken);
       final r = await http.get(
-        Uri.parse('https://api.discogs.com/database/search?type=release&token=$tok&q=${Uri.encodeComponent(query)}&per_page=25'),
-        headers: {'User-Agent': _ua},
+        Uri.parse('https://api.discogs.com/database/search?type=release&q=${Uri.encodeComponent(query)}&per_page=25'),
+        headers: _discogsKoppen,
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return [];
       return _discogsRows(jsonBody(r));
@@ -549,11 +557,10 @@ class MetadataSearch {
   Future<List<MetaResult>> _discogsByTrack(String query) async {
     if (settings.discogsToken.isEmpty) return [];
     try {
-      final tok = Uri.encodeComponent(settings.discogsToken);
       final r = await http.get(
-        Uri.parse('https://api.discogs.com/database/search?type=release&token=$tok'
+        Uri.parse('https://api.discogs.com/database/search?type=release'
             '&track=${Uri.encodeComponent(query)}&per_page=12'),
-        headers: {'User-Agent': _ua},
+        headers: _discogsKoppen,
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return [];
       return _discogsRows(jsonBody(r), because: query);

@@ -251,6 +251,7 @@ jobs:
             test/navigatie_meteen_test.dart test/runner_toon_test.dart test/metadata_vlot_test.dart \
             test/hoes_zelfde_bytes_test.dart test/vergelijking_geheugen_test.dart \
             test/start_vast_geschud_test.dart \
+            test/discogs_token_in_kop_test.dart \
             test/torrent_nummering_test.dart test/verwijderen_en_eigen_keuze_test.dart \
             test/zuinig_test.dart test/accountkoppeling_test.dart \
             test/uitwijk_test.dart test/kantnummer_test.dart \
