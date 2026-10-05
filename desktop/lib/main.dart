@@ -23608,6 +23608,71 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
 /// The metadata editor could already pin a release, but it listed them as bare names and said
 /// nothing about their artwork. Choosing blind meant finding out afterwards that a pressing had no
 /// disc scan, and the animation had nothing to spin.
+/// Onder deze breedte staat de uitleg van [OvernemenBalk] BOVEN de knoppen in plaats van ernaast.
+///
+/// "Ongedaan maken" en "Opslaan" zijn samen ~240 punten; daarnaast hoort de uitleg er nog minstens
+/// 200 te houden ("Overnemen: hoes, achterkant, cd").
+const kOvernemenSmal = 440.0;
+
+/// Onder deze breedte staat de uitleg in "Alle scans" onder de drie voorbeeldvakjes (samen 186
+/// punten) in plaats van ernaast; daarnaast moet hij er nog ~230 houden.
+const kVoorbeeldSmal = 420.0;
+
+/// De balk onderaan "Uitgave kiezen" zodra je een scan hebt klaargezet: wat er overgenomen wordt, en
+/// de twee knoppen.
+///
+/// **Saber op 05-10-2026:** *"ook bij uitgave kiezen staat de tekst verticaal bij gsm als ik een hoes
+/// ofzo selecteer"*. Het was één Row: de uitleg (uitrekbaar) + "Ongedaan maken" + "Opslaan". In de
+/// dialoog op een telefoon (~250 punten binnenin) namen de knoppen er ~240, en "Overnemen: hoes" brak
+/// letter voor letter af. Dezelfde storing als een dag eerder bij "Nummers toewijzen"
+/// ([kToewijsRijSmal]). Gemeten aan de breedte die de balk krijgt, niet aan het scherm.
+class OvernemenBalk extends StatelessWidget {
+  const OvernemenBalk({
+    super.key,
+    required this.tekst,
+    required this.bezig,
+    required this.onOngedaan,
+    required this.onOpslaan,
+  });
+
+  final String tekst;
+  final bool bezig;
+  final VoidCallback onOngedaan, onOpslaan;
+
+  @override
+  Widget build(BuildContext context) {
+    final uitleg = Text(tekst, style: const TextStyle(color: _muted, fontSize: 12));
+    final ongedaan = TextButton(onPressed: bezig ? null : onOngedaan, child: const Text('Ongedaan maken'));
+    final opslaan = FilledButton.icon(
+      style: FilledButton.styleFrom(backgroundColor: _accent),
+      onPressed: bezig ? null : onOpslaan,
+      icon: bezig
+          ? const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+          : const Icon(Icons.check_rounded, size: 18),
+      label: Text(bezig ? 'Opslaan…' : 'Opslaan'),
+    );
+    return LayoutBuilder(builder: (context, c) {
+      if (c.maxWidth < kOvernemenSmal) {
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          uitleg,
+          const SizedBox(height: 6),
+          Wrap(
+            alignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 6,
+            runSpacing: 6,
+            children: [ongedaan, opslaan],
+          ),
+        ]);
+      }
+      return Row(children: [Expanded(child: uitleg), ongedaan, const SizedBox(width: 6), opslaan]);
+    });
+  }
+}
+
 /// Een scan ophalen bij de dienst waar hij vandaan komt, en alleen DIE zijn sleutel meegeven.
 ///
 /// Zie [scanBronVan]: tot 04-10-2026 ging alles wat niet van het Cover Art Archive kwam via Discogs,
@@ -24319,7 +24384,9 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
               _nummerVeld(),
               const SizedBox(height: 10),
               // Filters over what was fetched, not another trip to Discogs.
-              Row(children: [
+              // Wrap en geen Row: op een smalle telefoon passen de vier net niet naast elkaar. Waar
+              // er plaats is ziet het er precies hetzelfde uit.
+              Wrap(runSpacing: 6, children: [
                 for (final f in const ['Alles', 'CD', 'Vinyl', 'Digitaal'])
                   Padding(
                     padding: const EdgeInsets.only(right: 6),
@@ -24448,35 +24515,17 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
               // a control that does nothing, most of the time.
               if (_staged.isNotEmpty) ...[
                 const Divider(height: 18),
-                Row(children: [
-                  Expanded(
-                    child: Text(
-                      // Names what will change, in the words the thumbnails use, so pressing Save is
-                      // not a leap of faith.
-                      'Overnemen: ${[
-                        for (final r in _roles)
-                          if (_staged.containsKey(r.$1)) r.$2
-                      ].join(', ')}',
-                      style: const TextStyle(color: _muted, fontSize: 12),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: _saving ? null : () => setState(_staged.clear),
-                    child: const Text('Ongedaan maken'),
-                  ),
-                  const SizedBox(width: 6),
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(backgroundColor: _accent),
-                    onPressed: _saving ? null : _save,
-                    icon: _saving
-                        ? const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Icon(Icons.check_rounded, size: 18),
-                    label: Text(_saving ? 'Opslaan…' : 'Opslaan'),
-                  ),
-                ]),
+                OvernemenBalk(
+                  // Names what will change, in the words the thumbnails use, so pressing Save is
+                  // not a leap of faith.
+                  tekst: 'Overnemen: ${[
+                    for (final r in _roles)
+                      if (_staged.containsKey(r.$1)) r.$2
+                  ].join(', ')}',
+                  bezig: _saving,
+                  onOngedaan: () => setState(_staged.clear),
+                  onOpslaan: _save,
+                ),
               ],
             ],
           ),
@@ -25206,9 +25255,12 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(children: [
-                const Text('Scans toewijzen',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                const Spacer(),
+                const Expanded(
+                  child: Text('Scans toewijzen',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                ),
                 IconButton(
                     icon: const Icon(Icons.close_rounded),
                     onPressed: () => Navigator.of(context).pop()),
@@ -25253,8 +25305,11 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                                 const SizedBox(height: 4),
                                 ScanMaatRegel(img: img),
                                 const SizedBox(height: 4),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                                // Wrap: in een tegel van ~118 punten op een telefoon passen de drie
+                                // knopjes niet naast elkaar, en een Row tekende ze dan over de rand.
+                                Wrap(
+                                  alignment: WrapAlignment.center,
+                                  runSpacing: 4,
                                   children: [
                                     for (final (role, label) in _roles)
                                       Padding(
@@ -25282,14 +25337,22 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
               ),
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Row(children: [
+                // Op een telefoon onder elkaar: "Alles weer laten raden" en "Opslaan" zijn samen
+                // breder dan de dialoog daar is.
+                child: LayoutBuilder(
+                  builder: (context, c) => Flex(
+                    direction: c.maxWidth < kOvernemenSmal ? Axis.vertical : Axis.horizontal,
+                    crossAxisAlignment:
+                        c.maxWidth < kOvernemenSmal ? CrossAxisAlignment.end : CrossAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
                   if (roles.isNotEmpty)
                     TextButton(
                       onPressed: _opslaan ? null : () => setState(roles.clear),
                       child: const Text('Alles weer laten raden',
                           style: TextStyle(color: _muted, fontSize: 12)),
                     ),
-                  const Spacer(),
+                  if (c.maxWidth >= kOvernemenSmal) const Spacer(),
                   // De knop die er niet was. Hij zegt ook of er iets te bewaren valt: staat hij uit,
                   // dan is er niets veranderd — en dat is een antwoord op "heeft het iets gedaan?"
                   // nog vóór je hem indrukt.
@@ -25309,6 +25372,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                             : 'Niets gewijzigd'),
                   ),
                 ]),
+                ),
               ),
             ],
           ),
@@ -25318,8 +25382,12 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
   }
 
   /// De drie rollen zoals ze er NU voor staan, met het gekozen plaatje erin.
-  Widget _voorbeeld(Map<String, String> roles) => Row(
-        children: [
+  // Op een telefoon de uitleg ONDER de drie vakjes. Saber op 05-10-2026: *"ook bij uitgave kiezen
+  // staat de tekst verticaal bij gsm als ik een hoes ofzo selecteer"*. De drie vakjes nemen samen 186
+  // punten; in de dialoog op een telefoon hield de zin ernaast er 14 (360 punten) tot 65 (411) over,
+  // en brak hij per letter of per paar letters af — elke keer dat je hier een scan aanwees.
+  Widget _voorbeeld(Map<String, String> roles) => LayoutBuilder(builder: (context, c) {
+        final vakjes = [
           for (final (role, label) in _roles)
             Padding(
               padding: const EdgeInsets.only(right: 10),
@@ -25343,15 +25411,21 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                         fontWeight: roles[role] == null ? FontWeight.w400 : FontWeight.w700)),
               ]),
             ),
-          const Expanded(
-            child: Text(
-              'Zo komt deze plaat eruit te zien. Een leeg vak betekent: de app mag het zelf blijven '
-              'raden.',
-              style: TextStyle(color: _muted, fontSize: 11.5),
-            ),
-          ),
-        ],
-      );
+        ];
+        const uitleg = Text(
+          'Zo komt deze plaat eruit te zien. Een leeg vak betekent: de app mag het zelf blijven '
+          'raden.',
+          style: TextStyle(color: _muted, fontSize: 11.5),
+        );
+        if (c.maxWidth < kVoorbeeldSmal) {
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: vakjes),
+            const SizedBox(height: 6),
+            uitleg,
+          ]);
+        }
+        return Row(children: [...vakjes, const Expanded(child: uitleg)]);
+      });
 
   Widget _roleChip(String text, {required bool on, required VoidCallback onTap}) => InkWell(
         onTap: onTap,

@@ -736,6 +736,10 @@ class CoverEnricher {
   /// under three minutes of pacing. Being refused is what costs the user something.
   static const _audioDbGap = Duration(seconds: 3);
 
+  /// Een vraag uit een venster (zie `audiodb.dart`) ging net de deur uit, buiten deze rij om. De
+  /// achtergrond houdt daarna weer [_audioDbGap] afstand, zodat de twee samen niet te snel gaan.
+  static void meldAudioDbVraag() => _audioDbLast = DateTime.now();
+
   /// Het GENRE van een artiest volgens TheAudioDB ("Euro Dance", "Pop", "R&B"), of null.
   ///
   /// Voor de radio — zie `radiostijl.dart`. Op dezelfde rij als alles hier, want het is dezelfde

@@ -25,6 +25,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'editions.dart';
+import 'enrichment.dart' show CoverEnricher;
 import 'settings.dart';
 
 /// De gratis, openbare sleutel van TheAudioDB. Geen geheim: hij staat in hun eigen documentatie.
@@ -167,7 +168,7 @@ class AudioDbService {
   /// `enrichment.dart` haalt op de achtergrond honderden albums op, drie seconden uit elkaar. Een
   /// zoekopdracht uit een venster daarachter zetten betekent minuten wachten. Wel MELDT dit zich bij
   /// die rij ([vraagGedaan]), zodat de achtergrond erna weer drie seconden afstand houdt.
-  static void Function() vraagGedaan = () {};
+  static void Function() vraagGedaan = CoverEnricher.meldAudioDbVraag;
 
   Future<Map<String, dynamic>> _v1(String pad) async {
     vraagGedaan();
