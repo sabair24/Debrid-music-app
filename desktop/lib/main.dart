@@ -134,6 +134,7 @@ import 'hartslag.dart';
 import 'ui/binnenkomst.dart';
 import 'ui/kleuren.dart';
 import 'ui/kop.dart';
+import 'ui/langzame_draai.dart';
 import 'ui/leeg.dart';
 import 'ui/maten.dart';
 import 'ui/paginawas.dart';
@@ -23336,8 +23337,13 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     reverseDuration: const Duration(milliseconds: 450),
   );
   // Roughly a third of an RPM on screen — enough to read as turning, slow enough not to nag.
-  late final AnimationController _spin =
-      AnimationController(vsync: this, duration: const Duration(seconds: 9));
+  //
+  // Dertig beelden per seconde en niet het schermritme. Op 05-10-2026 gemeten op Sabers S26: met
+  // een AnimationController tekende "Now playing" 120 beelden per seconde voor een plaat die in
+  // negen seconden één keer ronddraait (0,3 graad per beeld), en liep de batterij aan de lader leeg
+  // en de telefoon warm tot hij zichzelf afremde — zie `ui/langzame_draai.dart`. Met 30 is het 1,3
+  // graad per beeld: nog altijd vloeiend.
+  late final LangzameDraai _spin = LangzameDraai(this, omwenteling: const Duration(seconds: 9));
 
   /// Wat het scherm haalt zolang de plaat draait.
   ///
@@ -23396,7 +23402,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     if (widget.playing) {
       _slide.forward();
       if (!_spin.isAnimating) {
-        _spin.repeat();
+        _spin.start();
         // Alleen meten zolang er iets te meten valt. Een stilstaande plaat vraagt geen frames aan,
         // dus dan zou de teller alleen ruis van de rest van het scherm optellen.
         _fps.start('draaiende cd ${widget.size.round()}px');
