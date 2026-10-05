@@ -7827,35 +7827,20 @@ class _ArtistCardState extends State<_ArtistCard> {
 /// Open an artist's discography. Goes to the catalogue rather than your own shelf on purpose:
 /// a guest like Beyoncé usually isn't in your library at all, and even for an artist you do own
 /// the interesting thing here is their whole catalogue — that's what tapping a name promises.
+/// De artiestpagina, METEEN — op naam.
+///
+/// **Gemeten op 05-10-2026 op Sabers S26:** tik op "Amir" op een albumpagina, en na 0,8 s stond er
+/// nog steeds de albumpagina; pas tussen 0,8 en 1,3 s verscheen de artiestpagina, in één keer. Hier
+/// werd eerst Deezer gevraagd wie de artiest was (en zonder antwoord ook MusicBrainz), en pas daarna
+/// de pagina geopend: een tik waar niets op gebeurt. Saber: *"de app moet snel navigeren tussen alle
+/// schermen"*.
+///
+/// De pagina zoekt het zelf al op naam op — [DiscographyService.vanDeezer] en
+/// [DiscographyService.vanMusicBrainz] lossen de naam op met een strengere naamcontrole dan hier
+/// stond, en `_loadRelated` zoekt het Deezer-nummer zelf als het er niet is. Dus de pagina gaat nu
+/// open en vult zich; wat je al in je bibliotheek hebt staat er meteen.
 Future<void> openArtist(BuildContext context, String name) async {
-  final navigator = Navigator.of(context);
-  final mb = context.read<MusicBrainzService>();
-
-  CatalogArtist? artist;
-  try {
-    final hits = await CatalogService().searchArtists(name);
-    // Prefer an exact name match over the first (fuzzy) hit.
-    if (hits.isNotEmpty) {
-      artist = hits.firstWhere((a) => artistKey(a.name) == artistKey(name), orElse: () => hits.first);
-    }
-  } catch (_) {/* fall through to MusicBrainz */}
-
-  // Deezer catalogues what streams, so it has never heard of plenty of acts a real library holds.
-  // MusicBrainz usually has them, and its discography is the fuller one anyway.
-  if (artist == null) {
-    try {
-      final a = await mb.resolveArtist(name);
-      if (a != null) {
-        artist = CatalogArtist(0, a.name, null, 0,
-            origin: CatalogRef.musicbrainz(a.mbid), detail: a.line);
-      }
-    } catch (_) {}
-  }
-
-  // Still nothing: open the page regardless. It can show no discography, but it CAN show the
-  // records of theirs you already own — and refusing to open at all showed you neither.
-  artist ??= CatalogArtist(0, name, null, 0);
-  openOp(navigator, (_) => ArtistBrowsePage(artist!));
+  openOp(Navigator.of(context), (_) => ArtistBrowsePage(CatalogArtist(0, name, null, 0)));
 }
 
 /// Minimise, maximise/restore and close, drawn by the app.
@@ -13213,6 +13198,13 @@ class _HoverCard extends StatelessWidget {
       );
 }
 
+/// Hoe lang een oogst van Ontdek blijft staan als je het tabblad verlaat en terugkomt.
+const kOntdekBewaard = Duration(minutes: 30);
+
+/// Mag de bewaarde oogst van [om] op [nu] nog getoond worden?
+bool ontdekBewaardBruikbaar(DateTime? om, DateTime nu) =>
+    om != null && !nu.isBefore(om) && nu.difference(om) < kOntdekBewaard;
+
 class OntdekView extends StatefulWidget {
   const OntdekView({super.key});
   @override
@@ -13220,6 +13212,16 @@ class OntdekView extends StatefulWidget {
 }
 
 class _OntdekViewState extends State<OntdekView> {
+  /// De laatste oogst, zolang de app draait.
+  ///
+  /// **Gemeten op 05-10-2026 op Sabers S26:** elke keer dat je het tabblad Ontdek opende, stond er
+  /// opnieuw 5 seconden een draaiwieltje — ook als je er net nog was. Het tabblad wordt bij elke
+  /// wissel opnieuw opgebouwd, en dan vroeg hij alles opnieuw aan Deezer. Saber: *"de app moet snel
+  /// navigeren tussen alle schermen"*. Nu staat de vorige oogst er meteen; de verversknop haalt nog
+  /// steeds een nieuwe.
+  static List<RecTrack>? _bewaard;
+  static DateTime? _bewaardOm;
+
   final _rec = RecommendService();
   List<RecTrack> _tracks = [];
   bool _busy = false;
@@ -13230,6 +13232,16 @@ class _OntdekViewState extends State<OntdekView> {
   @override
   void initState() {
     super.initState();
+    final b = _bewaard;
+    if (b != null && ontdekBewaardBruikbaar(_bewaardOm, DateTime.now())) {
+      // Opnieuw gezeefd tegen wat je NU hebt: wat je intussen hebt binnengehaald hoort er niet meer
+      // tussen te staan.
+      final vers = nogNietInBezit(b, bezitSleutels(context.read<LibraryStore>().tracks));
+      if (vers.isNotEmpty) {
+        _tracks = vers;
+        return;
+      }
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
@@ -13260,6 +13272,10 @@ class _OntdekViewState extends State<OntdekView> {
       failed = true;
     }
     final fresh = nogNietInBezit(recs, owned);
+    if (!failed && recs.isNotEmpty) {
+      _bewaard = recs;
+      _bewaardOm = DateTime.now();
+    }
     if (mounted) {
       setState(() {
         _tracks = fresh;
@@ -19549,7 +19565,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
     // Niet awaited op elkaar: de drie lopen naast elkaar en elke setState tekent wat er dán is.
     await Future.wait([
-      pak(svc.vanDeezer(naam, bekendId: ref.isMb ? null : widget.artist.id),
+      // Geen nummer (0): dan zoekt vanDeezer hem zelf op naam. Met 0 vroeg hij de albums van
+      // "artiest 0" op — zie [openArtist], dat de pagina sinds 05-10-2026 meteen op naam opent.
+      pak(svc.vanDeezer(naam, bekendId: ref.isMb || widget.artist.id <= 0 ? null : widget.artist.id),
           (u) { _dz = u.releases; _dzStatus = u.status; }),
       pak(svc.vanMusicBrainz(naam, bekendeMbid: ref.isMb ? ref.id : null),
           (u) { _mb = u.releases; _mbStatus = u.status; }),

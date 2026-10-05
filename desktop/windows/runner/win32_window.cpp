@@ -152,21 +152,36 @@ bool Win32Window::Create(const std::wstring& title,
 
 bool Win32Window::Show() {
   // Dit draait één keer: zodra Flutter het eerste beeld getekend heeft (flutter_window.cpp). Maar
-  // het venster staat dan al lang open -- `windowManager.show()` in main.dart toont het eerder -- en
-  // SW_SHOWNORMAL zet een venster dat intussen gemaximaliseerd is terug op zijn herstelmaat. Of dat
-  // de kleine start na een update verklaart (04-10-2026) is niet aangetoond; deze regel moet het
-  // laten zien: de stand vlak ervóór, en die erna.
+  // het venster staat dan al open -- `windowManager.show()` in main.dart toont het eerder -- en
+  // SW_SHOWNORMAL zet een venster dat intussen gemaximaliseerd is terug op zijn herstelmaat.
+  //
+  // **Aangetoond op 05-10-2026**, met de meetregels hieronder in start.log, bij vier starts door de
+  // installer (3.9.439, .440, .442, .444): telkens maximaliseert main.dart het venster om +594 ms,
+  // tekent Flutter om +719 ms zijn eerste beeld, en staat het daarna op 660,310 1240x820 --
+  // "Ervoor: zichtbaar=1 gemaximaliseerd=1 ... Erna: gemaximaliseerd=0". Twee keer maximaliseerde
+  // Saber het daarna zelf; twee keer bleef het klein. Dat was "na bijwerken opent hij klein".
+  //
+  // Dus: staat het venster al open, dan blijft het zoals het is. Alleen een venster dat nog niet
+  // zichtbaar is wordt hier getoond, en een dat al gemaximaliseerd is dan gemaximaliseerd.
   const HWND venster = window_handle_;
   const bool was_zichtbaar = ::IsWindowVisible(venster) != FALSE;
   const bool was_gemaximaliseerd = ::IsZoomed(venster) != FALSE;
   const bool voorgrond = ::GetForegroundWindow() == venster;
-  const BOOL resultaat = ShowWindow(window_handle_, SW_SHOWNORMAL);
+  if (was_zichtbaar) {
+    StartLogRegel(
+        "runner: eerste beeld getekend, venster stond al open (gemaximaliseerd=%d voorgrond=%d) "
+        "-- niets aan veranderd",
+        was_gemaximaliseerd ? 1 : 0, voorgrond ? 1 : 0);
+    return true;
+  }
+  const int stand = was_gemaximaliseerd ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+  const BOOL resultaat = ShowWindow(venster, stand);
   RECT maat = {};
   ::GetWindowRect(venster, &maat);
   StartLogRegel(
-      "runner: eerste beeld getekend, ShowWindow(SW_SHOWNORMAL). Ervoor: zichtbaar=%d "
-      "gemaximaliseerd=%d voorgrond=%d. Erna: gemaximaliseerd=%d, %ld,%ld %ldx%ld fysiek, dpi %u",
-      was_zichtbaar ? 1 : 0, was_gemaximaliseerd ? 1 : 0, voorgrond ? 1 : 0,
+      "runner: eerste beeld getekend, venster nog dicht: ShowWindow(%s). Erna: gemaximaliseerd=%d, "
+      "%ld,%ld %ldx%ld fysiek, dpi %u",
+      was_gemaximaliseerd ? "SW_SHOWMAXIMIZED" : "SW_SHOWNORMAL",
       ::IsZoomed(venster) != FALSE ? 1 : 0, maat.left, maat.top, maat.right - maat.left,
       maat.bottom - maat.top, FlutterDesktopGetDpiForHWND(venster));
   return resultaat != FALSE;
