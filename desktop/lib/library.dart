@@ -1655,6 +1655,23 @@ class LibraryStore extends ChangeNotifier {
   /// "hoes overgenomen" staan voor een plaat waar niets aan veranderd is — en dan is dat logboek
   /// geen bewijs meer maar ruis, precies op de plek waar je het straks nodig hebt om uit te zoeken
   /// wélke plaat van hoes wisselde.
+  /// Dezelfde hoes, ook als hij als nieuw stuk geheugen binnenkomt.
+  ///
+  /// Hier stond `identical`, en dat is nooit waar voor een hoes die opnieuw van schijf gelezen is —
+  /// wat `AlbumArt` bij elke opening van een albumpagina of Nu speelt doet. Gevonden op 05-10-2026:
+  /// elke opening meldde de hele bibliotheek als veranderd en liet alles wat ernaar kijkt opnieuw
+  /// opbouwen, en met een vastgezette persing ging de hoes er elke keer opnieuw voor naar schijf.
+  /// Eén keer de bytes langs is goedkoper dan dat: een hoes is hooguit een paar honderd kilobyte.
+  static bool _zelfdeHoes(Uint8List? a, Uint8List b) {
+    if (a == null) return false;
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   bool adoptAlbumCover(String artist, String album, Uint8List bytes,
       {String? from, AppSettings? settings}) {
     if (bytes.length < 500) return false;
@@ -1679,7 +1696,7 @@ class LibraryStore extends ChangeNotifier {
       // die zelf geen hoes draagt, maar hij kan de jouwe niet meer verdringen.
       final vastgezet = _pinPastBij(a, from);
       if (from != null && vastgezet) {
-        if (identical(a.resolvedCover, bytes) && a.resolvedFrom == from) continue;
+        if (_zelfdeHoes(a.resolvedCover, bytes) && a.resolvedFrom == from) continue;
         a.resolvedCover = bytes;
         a.resolvedFrom = from;
         // Only a traced sleeve is kept: it belongs to a named pressing, so it is a fact about the
@@ -1688,7 +1705,7 @@ class LibraryStore extends ChangeNotifier {
           unawaited(CoverEnricher(settings).saveResolvedCover(a, bytes, from));
         }
       } else {
-        if (identical(a.enriched, bytes)) continue;
+        if (_zelfdeHoes(a.enriched, bytes)) continue;
         a.enriched = bytes;
       }
       changed = true;
