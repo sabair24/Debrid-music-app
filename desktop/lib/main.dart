@@ -11312,22 +11312,31 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
           //
           // De doorzichtigheid via `Image` en NIET via een `Opacity`-widget. Die laatste zet een
           // schermvullende `saveLayer` op — de duurste soort laag die er is.
-          if (p.currentCover != null && !isTv)
+          //
+          // En het uitdoven ZONDER `ShaderMask`: dat was ook een schermvullende tussenlaag, en op de
+          // S26 stond de grafische chip op 99 % met 29 ms per beeld terwijl de cd draaide — zie
+          // [hoesUitdoving]. Nu ligt dezelfde was er nog eens overheen, oplopend in dekking; dat
+          // geeft hetzelfde beeld en de chip tekent het in één keer.
+          if (p.currentCover != null && !isTv) ...[
             Positioned.fill(
-              child: ShaderMask(
-                blendMode: BlendMode.dstIn,
-                shaderCallback: (r) => const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.white, Colors.transparent],
-                  stops: [.20, .72],
-                ).createShader(r),
+              key: const Key('np-hoes-achter'),
+              child: IgnorePointer(
                 child: Image.memory(p.currentCover!,
                     fit: BoxFit.cover,
                     cacheWidth: 480,
                     opacity: const AlwaysStoppedAnimation(.22)),
               ),
             ),
+            Positioned.fill(
+              child: IgnorePointer(
+                child: AnimatedContainer(
+                  duration: kWas,
+                  curve: Curves.easeOut,
+                  decoration: BoxDecoration(gradient: hoesUitdoving(wasBasis(p.wasKleur))),
+                ),
+              ),
+            ),
+          ],
           SafeArea(
               // A television reports no insets, so SafeArea alone is a no-op there; this is the
               // margin that keeps the back arrow off the part of the picture a set cuts away.

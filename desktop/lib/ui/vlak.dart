@@ -173,6 +173,43 @@ Color? wasBasis(int? kleur) {
 ///
 /// Onder de 78% is er niets meer van over, en dat is met opzet: daaronder staan tracklijsten en
 /// grijze regels, en alles wat daar nog kleur draagt gaat van hun leesbaarheid af.
+/// De hoes op de achtergrond van "Now playing" laten uitdoven naar onderen — ZONDER masker.
+///
+/// **Gemeten op 05-10-2026 op Sabers S26:** met een spelende plaat wachtte de tekendraad per beeld
+/// gemiddeld 29 ms op de grafische chip (`QueuePresentKHR`), die op 99 % bezet stond, en haalde het
+/// scherm bij Scatman's World 30 beelden per seconde. Het duurste dat hier per beeld gebeurde was een
+/// `ShaderMask` over het hele scherm: die laat de chip eerst het hele scherm (3120×1440) apart tekenen
+/// en dan pas maskeren en overvloeien — en Impeller onthoudt niets tussen twee beelden, dus elke tik
+/// van de draaiende cd betaalde dat opnieuw.
+///
+/// Dit geeft hetzelfde beeld zonder tussenlaag: onder de hoes ligt de was ([kleurWas]); hierover komt
+/// DIEZELFDE was terug, met een doorzichtigheid die van 0 op 20 % naar 1 op 72 % van de hoogte loopt
+/// — precies de rampen van het oude masker. Uitgerekend: was·(1−α(1−a)) + hoes·α(1−a), en dat is
+/// wat het masker deed met een hoes van dekking α.
+LinearGradient hoesUitdoving(Color? basis) {
+  final was = kleurWas(basis);
+  Color op(double y) {
+    if (was == null) return kAchtergrond;
+    // De kleur van de was op hoogte y: lineair tussen zijn eigen stops.
+    final s = was.stops!, c = was.colors;
+    if (y <= s.first) return c.first;
+    for (var i = 1; i < s.length; i++) {
+      if (y <= s[i]) return Color.lerp(c[i - 1], c[i], (y - s[i - 1]) / (s[i] - s[i - 1]))!;
+    }
+    return c.last;
+  }
+
+  const van = .20, tot = .72;
+  double a(double y) => y <= van ? 0 : (y >= tot ? 1 : (y - van) / (tot - van));
+  const punten = [van, .34, .50, .62, tot, .78];
+  return LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    stops: punten,
+    colors: [for (final y in punten) op(y).withValues(alpha: a(y))],
+  );
+}
+
 LinearGradient? kleurWas(Color? basis) {
   if (basis == null) return null;
   return LinearGradient(
