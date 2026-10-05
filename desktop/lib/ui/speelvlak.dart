@@ -83,3 +83,43 @@ double hoesNaast({required Size scherm, required double reisfactor}) {
 
 /// Hoe breed het hoesblok werkelijk is: de hoes plus de ruimte waar de cd in uitschuift.
 double blokBreedte({required double hoes, required double reisfactor}) => hoes * (1 + reisfactor);
+
+// ── Een telefoon dwars ────────────────────────────────────────────────────────
+
+/// Saber op 05-10-2026: *"ok fix ook de liggende indeling"*. Zijn S26 dwars is 832 bij 384 punten:
+/// te smal en te laag voor [naastElkaar] (1100 bij 460), dus viel "Now playing" terug op de
+/// gestapelde indeling — en op 384 punten hoog stonden de titel, de spoelbalk en de knoppen onder
+/// de rand van het scherm. Je zag een hoes en de albumnaam, en kon niets bedienen.
+///
+/// Breder dan hoog en te laag voor naast elkaar: dan de hoes links op maat van de hoogte, en de
+/// kolom met titel en knoppen rechts.
+bool liggend({required Size scherm, required bool tv}) =>
+    !tv && scherm.width > scherm.height && scherm.height < kSpeelHoogte;
+
+/// De uitschuifruimte van de cd in de liggende indeling, als deel van de hoes. Minder dan de 0,62
+/// van een breed scherm: die ruimte gaat hier van de kolom met knoppen af.
+const double kLiggendReis = .30;
+
+/// Tussen het hoesblok en de kolom.
+const double kLiggendGat = 32;
+
+/// Boven en onder de hoes: de balk met de chevron (48), de albumnaam eronder (32) en marge.
+const double kLiggendLucht = 48 + 32 + 16;
+
+/// Smaller dan dit wordt de kolom niet; dan krimpt de hoes. Zes knoppen van 48 op een rij, plus
+/// lucht — de transportrij is de reden dat dit scherm bestaat.
+const double kLiggendKolomMin = 330;
+
+/// De hoes in de liggende indeling. [bruikbaar] is het scherm zonder de systeembalken.
+double hoesLiggend({required Size bruikbaar}) {
+  final opHoogte = bruikbaar.height - kLiggendLucht;
+  final opBreedte = (bruikbaar.width - kGoot * 2 - kLiggendGat - kLiggendKolomMin) / (1 + kLiggendReis);
+  final kleinste = opHoogte < opBreedte ? opHoogte : opBreedte;
+  return kleinste.clamp(120.0, 420.0);
+}
+
+/// Wat er naast het hoesblok overblijft voor de kolom.
+double kolomLiggend({required Size bruikbaar, required double hoes}) {
+  final over = bruikbaar.width - kGoot * 2 - kLiggendGat - blokBreedte(hoes: hoes, reisfactor: kLiggendReis);
+  return over < kLiggendKolomMin ? kLiggendKolomMin : over;
+}

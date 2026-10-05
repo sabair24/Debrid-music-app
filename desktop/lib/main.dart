@@ -10806,9 +10806,23 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     // speler, bibliotheek en speaker na te rekenen — en dit scherm is dat niet.
     final schermmaat = MediaQuery.sizeOf(context);
     final naast = naastElkaar(scherm: schermmaat, compact: isCompact(context), tv: isTv);
+    // Een telefoon dwars: breder dan hoog, maar te laag om naast elkaar te staan — zie [liggend].
+    // Dan de hoes links, de kolom met titel en knoppen rechts.
+    final dwars = !naast && liggend(scherm: schermmaat, tv: isTv);
+    final rand = MediaQuery.paddingOf(context);
+    final bruikbaar = Size(schermmaat.width - rand.horizontal, schermmaat.height - rand.vertical);
+    // Naast elkaar of dwars: in allebei staat de tekst links uitgelijnd naast de hoes.
+    final zij = naast || dwars;
     final hoesMaat = naast
         ? hoesNaast(scherm: schermmaat, reisfactor: discTravelFactor(context))
-        : _sleeve(context);
+        : dwars
+            ? hoesLiggend(bruikbaar: bruikbaar)
+            : _sleeve(context);
+    final kolom = naast
+        ? kSpeelKolom
+        : dwars
+            ? kolomLiggend(bruikbaar: bruikbaar, hoes: hoesMaat)
+            : dialogWidth(context, 540);
 
     // De plaat waar dit nummer op staat, één keer opgezocht.
     //
@@ -10869,6 +10883,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     album: al?.title ?? t.album,
                     identity: al == null ? '' : bib.uidOf(al),
                     size: hoesMaat,
+                    reisFactor: dwars ? kLiggendReis : null,
                     fallback: p.currentCover,
                     chosen: al?.correctedCover,
                     trackCount: al?.tracks.length ?? 0,
@@ -10921,16 +10936,17 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
         : Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment:
-                naast ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+                zij ? CrossAxisAlignment.start : CrossAxisAlignment.center,
             children: [
-              if (artiestVanPlaat.trim().isNotEmpty) ...[
+              // Dwars niet: op 384 punten hoog is er voor een logo boven de hoes geen plaats.
+              if (!dwars && artiestVanPlaat.trim().isNotEmpty) ...[
                 ArtiestKop(
                   naam: artiestVanPlaat,
-                  gecentreerd: !naast,
+                  gecentreerd: !zij,
                   // Naast elkaar de breedte van de HOES, niet die van de tekstkolom ernaast: dan
                   // staat de kop netjes boven de plaat waar hij over gaat. De loopruimte van de cd
                   // zit in het blok maar niet onder de hoes zelf.
-                  breedte: naast ? hoesMaat : dialogWidth(context, 540),
+                  breedte: zij ? hoesMaat : dialogWidth(context, 540),
                 ),
                 const SizedBox(height: 14),
               ],
@@ -10938,8 +10954,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
               if (albumNaam.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 SizedBox(
-                  width: naast ? hoesMaat : dialogWidth(context, 540),
-                  child: _albumRegel(context, albumNaam, al, gecentreerd: !naast),
+                  width: zij ? hoesMaat : dialogWidth(context, 540),
+                  child: _albumRegel(context, albumNaam, al, gecentreerd: !zij),
                 ),
               ],
             ],
@@ -10954,7 +10970,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
       Text(t?.title ?? '—',
           maxLines: isTv ? 1 : null,
           overflow: isTv ? TextOverflow.ellipsis : null,
-          style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800), textAlign: naast ? TextAlign.left : TextAlign.center),
+          style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800), textAlign: zij ? TextAlign.left : TextAlign.center),
       const SizedBox(height: 6),
       // **Waarom hier een breedte omheen staat.** Deze rij had er geen, en dat is precies waarom de
       // artiestenregel aan twee kanten van het scherm afliep zonder puntjes.
@@ -10968,9 +10984,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
       //
       // Dezelfde maat als de spoelbalk eronder: één breedte voor dit hele blok, geen nieuw getal.
       SizedBox(
-        width: naast ? kSpeelKolom : dialogWidth(context, 540),
+        width: kolom,
         child: Row(
-          mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center,
+          mainAxisAlignment: zij ? MainAxisAlignment.start : MainAxisAlignment.center,
           children: [
             if (t != null)
               // Flexibel, zodat de begrenzing hierboven ook echt bij de namen aankomt. En
@@ -10999,23 +11015,23 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
       if (p.speelFout != null) ...[
         const SizedBox(height: kRuimte8),
         SizedBox(
-          width: naast ? kSpeelKolom : dialogWidth(context, 540),
+          width: kolom,
           child: Text(p.speelFout!,
-              textAlign: naast ? TextAlign.start : TextAlign.center,
+              textAlign: zij ? TextAlign.start : TextAlign.center,
               style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 12.5)),
         ),
       ] else if (p.stroomGrens != null && t != null) ...[
         const SizedBox(height: kRuimte8),
         SizedBox(
-          width: naast ? kSpeelKolom : dialogWidth(context, 540),
+          width: kolom,
           child: Text(_stroomUitleg(p, t),
-              textAlign: naast ? TextAlign.start : TextAlign.center,
+              textAlign: zij ? TextAlign.start : TextAlign.center,
               style: const TextStyle(color: kUitgezet, fontSize: 11.5)),
         ),
       ],
       SizedBox(height: isTv ? 14 : 26),
       SizedBox(
-        width: naast ? kSpeelKolom : dialogWidth(context, 540),
+        width: kolom,
         child: Row(
           children: [
             Text(_fmt(position), style: const TextStyle(color: _muted, fontSize: 12)),
@@ -11062,7 +11078,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
         if (probleem != null) {
           return Padding(
             padding: const EdgeInsets.only(top: 4, bottom: 4),
-            child: Row(mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center, children: [
+            child: Row(mainAxisAlignment: zij ? MainAxisAlignment.start : MainAxisAlignment.center, children: [
               const Icon(Icons.volume_off_rounded, size: 16, color: Colors.orangeAccent),
               const SizedBox(width: 8),
               Flexible(
@@ -11075,7 +11091,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
         }
         return Padding(
           padding: const EdgeInsets.only(top: 4, bottom: 4),
-          child: Row(mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center, children: [
+          child: Row(mainAxisAlignment: zij ? MainAxisAlignment.start : MainAxisAlignment.center, children: [
             const Icon(Icons.speaker_rounded, size: 16, color: _accent),
             const SizedBox(width: 8),
             Flexible(
@@ -11088,9 +11104,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
         );
       }),
       // De duimen. Alleen bij een nummer dat DEZE radio heeft opgehaald — zie [_RadioOordeel].
-      _RadioOordeel(track: t, naast: naast),
+      _RadioOordeel(track: t, naast: zij),
       Row(
-        mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center,
+        mainAxisAlignment: zij ? MainAxisAlignment.start : MainAxisAlignment.center,
         children: [
           IconButton(
               icon: const Icon(Icons.shuffle_rounded),
@@ -11374,6 +11390,35 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: onder,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                // Dwars: de hoes links op maat van de hoogte, de kolom rechts. De kolom mag als
+                // vangnet schuiven — op een nog lagere telefoon blijft de knoppenrij zo bereikbaar,
+                // in plaats van onder de rand te verdwijnen zoals vóór 05-10-2026.
+                else if (dwars)
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte8),
+                      child: Row(
+                        key: const Key('np-dwars'),
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          hoesKolom,
+                          const SizedBox(width: kLiggendGat),
+                          SizedBox(
+                            width: kolom,
+                            child: Center(
+                              child: SingleChildScrollView(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: onder,
+                                ),
+                              ),
                             ),
                           ),
                         ],
@@ -23338,11 +23383,12 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   );
   // Roughly a third of an RPM on screen — enough to read as turning, slow enough not to nag.
   //
-  // Dertig beelden per seconde en niet het schermritme. Op 05-10-2026 gemeten op Sabers S26: met
+  // Zestig beelden per seconde en niet het schermritme. Op 05-10-2026 gemeten op Sabers S26: met
   // een AnimationController tekende "Now playing" 120 beelden per seconde voor een plaat die in
   // negen seconden één keer ronddraait (0,3 graad per beeld), en liep de batterij aan de lader leeg
-  // en de telefoon warm tot hij zichzelf afremde — zie `ui/langzame_draai.dart`. Met 30 is het 1,3
-  // graad per beeld: nog altijd vloeiend.
+  // en de telefoon warm tot hij zichzelf afremde — zie `ui/langzame_draai.dart`. Eerst 30 (3.9.441),
+  // maar dat zag Saber haperen: "de staande is nu de cd niet vloeiend". Nu 60, op elke tweede
+  // schermtik.
   late final LangzameDraai _spin = LangzameDraai(this, omwenteling: const Duration(seconds: 9));
 
   /// Wat het scherm haalt zolang de plaat draait.

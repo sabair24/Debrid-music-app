@@ -10,6 +10,7 @@
 /// Dat is precies het soort fout dat een schermafbeelding van een stilstaand scherm niet laat zien.
 library;
 
+import 'dart:io';
 import 'dart:ui' show Size;
 
 import 'package:debridmusic/ui/maten.dart';
@@ -95,5 +96,60 @@ void main() {
     // Niet in gebruik in deze indeling — een telefoon blijft gestapeld — maar de som hoort ook daar
     // te kloppen, want dit is dezelfde reservering die `_sleeve` op een telefoon gebruikt.
     expect(blokBreedte(hoes: 269, reisfactor: smal), closeTo(349.7, .1));
+  });
+
+  // Saber op 05-10-2026, met zijn S26 dwars (832×384 punten): de gestapelde indeling duwde de titel,
+  // de spoelbalk en de knoppen onder de rand. Je zag de hoes en de albumnaam, verder niets.
+  group('een telefoon dwars', () {
+    /// Schermmaat en wat er overblijft zonder de systeembalken (status, navigatie, uitsparing).
+    const dwars = <(String, Size, Size)>[
+      ('S26 dwars', Size(832, 384), Size(795, 331)),
+      ('Pixel 7 dwars', Size(915, 412), Size(867, 364)),
+      ('kleine telefoon dwars', Size(740, 360), Size(704, 320)),
+      ('S26, systeembalken verborgen', Size(832, 384), Size(832, 384)),
+      // Hier is de BREEDTE de grens en niet de hoogte: dan moet de hoes krimpen voor de kolom.
+      ('smal en laag venster', Size(700, 440), Size(680, 430)),
+    ];
+
+    test('DE KERN: dwars is liggend — niet naast elkaar, niet gestapeld', () {
+      for (final (naam, scherm, _) in dwars) {
+        expect(liggend(scherm: scherm, tv: false), isTrue, reason: naam);
+        expect(naastElkaar(scherm: scherm, compact: false, tv: false), isFalse, reason: naam);
+      }
+    });
+
+    test('DE GRENS: staand, een breed venster en een televisie zijn het niet', () {
+      expect(liggend(scherm: const Size(384, 832), tv: false), isFalse, reason: 'de S26 staand');
+      expect(liggend(scherm: const Size(1440, 900), tv: false), isFalse, reason: 'hoog genoeg voor naast elkaar');
+      expect(liggend(scherm: const Size(960, 540), tv: true), isFalse,
+          reason: 'de Shield heeft zijn eigen indeling, met de hoes als rustplek');
+    });
+
+    for (final (naam, _, bruikbaar) in dwars) {
+      test('DE VAL ($naam): de cd schuift niet in de kolom, en alles past in de hoogte', () {
+        final hoes = hoesLiggend(bruikbaar: bruikbaar);
+        final kolom = kolomLiggend(bruikbaar: bruikbaar, hoes: hoes);
+        final blok = blokBreedte(hoes: hoes, reisfactor: kLiggendReis);
+        expect(kGoot * 2 + blok + kLiggendGat + kolom, lessThanOrEqualTo(bruikbaar.width + .5),
+            reason: 'hoesblok + gat + kolom mogen samen niet breder zijn dan het scherm');
+        expect(hoes + kLiggendLucht, lessThanOrEqualTo(bruikbaar.height + .5),
+            reason: 'de hoes met de balk erboven en de albumnaam eronder past in de hoogte');
+        expect(kolom, greaterThanOrEqualTo(kLiggendKolomMin), reason: 'zes knoppen op een rij');
+        // De kolom (titel, artiest, spoelbalk, knoppen) is ~250 punten; onder de balk van 48 moet
+        // daar plaats voor zijn — anders valt de knoppenrij weer onder de rand.
+        expect(bruikbaar.height - 48, greaterThanOrEqualTo(250), reason: 'de kolom past ernaast');
+        expect(hoes, greaterThanOrEqualTo(180), reason: 'een hoes die het waard is, geen postzegel');
+      });
+    }
+
+    test('Now playing gebruikt de liggende indeling, met de kleinere uitschuifruimte', () {
+      final main = File('lib/main.dart').readAsStringSync();
+      expect(main, contains("final dwars = !naast && liggend(scherm: schermmaat, tv: isTv);"));
+      expect(main, contains("key: const Key('np-dwars'),"));
+      expect(main, contains('reisFactor: dwars ? kLiggendReis : null,'),
+          reason: 'anders rekent de cd met de ruimte van een breed scherm en schuift hij in de kolom');
+      expect(main, contains('if (!dwars && artiestVanPlaat.trim().isNotEmpty)'),
+          reason: 'het logo boven de hoes past niet in 384 punten hoogte');
+    });
   });
 }

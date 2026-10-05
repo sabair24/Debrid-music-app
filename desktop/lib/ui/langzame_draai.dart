@@ -1,4 +1,4 @@
-/// Een draaiing die maar een paar keer per seconde om een nieuw beeld vraagt.
+/// Een draaiing die maar zestig keer per seconde om een nieuw beeld vraagt, gelijkmatig.
 ///
 /// **Gemeten op 05-10-2026, op Sabers S26 aan de kabel.** "Now playing" met een spelende plaat
 /// tekende 14.403 beelden in twee minuten — 120 per seconde, onafgebroken — terwijl de cd één keer
@@ -19,9 +19,12 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 
 class LangzameDraai extends ChangeNotifier {
-  LangzameDraai(TickerProvider vsync, {required this.omwenteling, this.beeldenPerSeconde = 30}) {
+  LangzameDraai(TickerProvider vsync,
+      {required this.omwenteling, this.beeldenPerSeconde = 60, double Function()? schermHz})
+      : _schermHz = schermHz ?? _verversingVanHetScherm {
     _ticker = vsync.createTicker(_tik);
   }
 
@@ -30,6 +33,15 @@ class LangzameDraai extends ChangeNotifier {
 
   /// Hoe vaak er hooguit om een nieuw beeld gevraagd wordt.
   final int beeldenPerSeconde;
+
+  /// Hoe vaak het scherm ververst. Op de S26 120 Hz.
+  final double Function() _schermHz;
+
+  static double _verversingVanHetScherm() {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    final hz = views.isEmpty ? 0.0 : views.first.display.refreshRate;
+    return hz >= 24 ? hz : 60;
+  }
 
   late final Ticker _ticker;
   Timer? _wacht;
@@ -44,9 +56,18 @@ class LangzameDraai extends ChangeNotifier {
 
   bool get isAnimating => _loopt;
 
-  /// Hoe lang er tussen twee tikken gewacht wordt, min een marge: daarna wacht de [Ticker] nog op
-  /// het eerstvolgende schermbeeld.
-  Duration get _tussen => Duration(microseconds: (1e6 / beeldenPerSeconde).round() - 4000);
+  /// Hoe lang er na een tik gewacht wordt voor de [Ticker] weer aan gaat.
+  ///
+  /// **Een halve schermtik vóór het gewenste moment**, zodat de volgende tik precies op het juiste
+  /// schermbeeld valt. In 3.9.441 stond hier een vaste marge van 4 ms, en op het toestel gemeten
+  /// kwamen de beelden daardoor om en om na 8, 29, 33 en 42 ms — 42 per seconde, maar schokkerig.
+  /// Saber: *"de staande is nu de cd niet vloeiend"*. Met 60 per seconde op 120 Hz is het nu elke
+  /// tweede schermtik, gelijkmatig 16,7 ms.
+  Duration get _tussen {
+    final tik = 1e6 / _schermHz();
+    final wacht = 1e6 / beeldenPerSeconde - tik / 2;
+    return Duration(microseconds: wacht < 0 ? 0 : wacht.round());
+  }
 
   void start() {
     if (_loopt || _weg) return;

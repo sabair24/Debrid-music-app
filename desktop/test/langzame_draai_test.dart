@@ -1,4 +1,4 @@
-/// De draaiende plaat vraagt dertig beelden per seconde, niet honderdtwintig.
+/// De draaiende plaat vraagt zestig beelden per seconde, gelijkmatig — niet honderdtwintig.
 ///
 /// Gemeten op 05-10-2026 op Sabers S26 aan de kabel: "Now playing" met een spelende plaat tekende
 /// 14.403 beelden in twee minuten, terwijl de plaat in negen seconden één keer ronddraait. De
@@ -14,6 +14,7 @@ import 'dart:io';
 
 import 'package:debridmusic/ui/langzame_draai.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een plaat die draait, zoals in `AlbumArt`.
@@ -26,7 +27,9 @@ class _Plaat extends StatefulWidget {
 }
 
 class _PlaatState extends State<_Plaat> with TickerProviderStateMixin {
-  late final LangzameDraai spin = LangzameDraai(this, omwenteling: const Duration(seconds: 9));
+  // Een scherm van 120 Hz, zoals de S26 — de toets doet hieronder ook 120 Hz na.
+  late final LangzameDraai spin =
+      LangzameDraai(this, omwenteling: const Duration(seconds: 9), schermHz: () => 120);
 
   @override
   void initState() {
@@ -97,14 +100,35 @@ class _OudState extends State<_Oud> with SingleTickerProviderStateMixin {
 }
 
 void main() {
-  testWidgets('DE KERN: op een scherm van 120 Hz vraagt de plaat ~30 beelden per seconde, niet 120',
+  testWidgets('DE KERN: op een scherm van 120 Hz vraagt de plaat 60 beelden per seconde, niet 120',
       (tester) async {
     late LangzameDraai spin;
     await tester.pumpWidget(_Plaat(speelt: true, draai: (s) => spin = s));
     final gevraagd = await _scherm120(tester, 3, spin);
-    expect(gevraagd, inInclusiveRange(60, 100), reason: 'dertig per seconde, en niet het schermritme');
+    expect(gevraagd, inInclusiveRange(170, 185), reason: 'zestig per seconde, en niet het schermritme');
     // En hij draait wel echt: 3 van de 9 seconden is een derde slag.
     expect(spin.value, closeTo(1 / 3, .03), reason: 'de plaat moet even snel draaien als voorheen');
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  // Op het toestel gemeten in 3.9.441, met een vaste marge van 4 ms: 42 beelden per seconde, maar om
+  // en om na 8, 29, 33 en 42 ms. Dat zag Saber als haperen — "de staande is nu de cd niet vloeiend".
+  testWidgets('DE VAL: gelijkmatig — elke tweede schermtik, niet om en om kort en lang', (tester) async {
+    late LangzameDraai spin;
+    await tester.pumpWidget(_Plaat(speelt: true, draai: (s) => spin = s));
+    final tijden = <Duration>[];
+    void noteer() => tijden.add(SchedulerBinding.instance.currentFrameTimeStamp);
+    spin.addListener(noteer);
+    for (var i = 0; i < 240; i++) {
+      await tester.pump(const Duration(microseconds: 8333));
+    }
+    spin.removeListener(noteer);
+    final afstanden = [
+      for (var i = 2; i < tijden.length; i++) (tijden[i] - tijden[i - 1]).inMicroseconds / 1000
+    ];
+    final gelijk = afstanden.where((ms) => ms > 15 && ms < 18.5).length;
+    expect(gelijk / afstanden.length, greaterThan(.95),
+        reason: 'afstanden: ${afstanden.map((a) => a.toStringAsFixed(1)).toSet().join(', ')} ms');
     await tester.pumpWidget(const SizedBox());
   });
 
