@@ -254,6 +254,7 @@ jobs:
             test/discogs_token_in_kop_test.dart \
             test/omzetten_5g_test.dart test/onderweg_ander_adres_test.dart \
             test/opslaan_logt_in_test.dart test/omzetten_label_onbekend_test.dart \
+            test/uitgave_uit_menu_test.dart \
             test/torrent_nummering_test.dart test/verwijderen_en_eigen_keuze_test.dart \
             test/zuinig_test.dart test/accountkoppeling_test.dart \
             test/uitwijk_test.dart test/kantnummer_test.dart \

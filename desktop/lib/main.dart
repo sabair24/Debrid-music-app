@@ -4927,10 +4927,20 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
   ///
   /// De pin hoort dus in de sleutel. Dan is "is dit nog het antwoord op mijn vraag?" een vraag die
   /// ook echt over de persing gaat.
-  String get _officialVraag {
-    final lib = context.read<LibraryStore>();
-    return '$_albumKey|${lib.pinnedRelease(album) ?? 0}|${lib.pinnedMbid(album) ?? ''}';
-  }
+  String get _officialVraag => _vraagMet(context.read<LibraryStore>());
+
+  /// [_officialVraag] met een bibliotheek die je al hebt — in `build` mag `context.read` niet.
+  String _vraagMet(LibraryStore lib) =>
+      '$_albumKey|${lib.pinnedRelease(album) ?? 0}|${lib.pinnedMbid(album) ?? ''}';
+
+  /// Voor welke vraag `build` al een herlading ingepland heeft, zodat dat één keer gebeurt.
+  ///
+  /// **Waarom.** Sinds 06-10-2026 staat "Uitgave kiezen…" ook in het menu van elk nummer en elke
+  /// albumtegel. Kies je daar een persing terwijl deze pagina eronder openstaat — het menu van een
+  /// nummer OP deze pagina — dan liep het via geen enkele knop van deze pagina, en riep niemand
+  /// [_refresh] aan. De hoes werd wel nieuw (die hangt aan de bibliotheek), maar de tracklijst bleef
+  /// die van de vorige persing. Nu merkt `build` dat de vraag veranderd is.
+  String _herlaadVoor = '';
 
   /// Ask the PC what this record is.
   ///
@@ -5541,6 +5551,14 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
       // Every track of this album is gone — there's nothing left to show.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) Navigator.of(context).maybePop();
+      });
+    }
+    // Een persing die ELDERS gekozen is, bijvoorbeeld via het menu van een nummer. Zie [_herlaadVoor].
+    final vraag = _vraagMet(lib);
+    if (_officialFor.isNotEmpty && vraag != _officialFor && vraag != _herlaadVoor) {
+      _herlaadVoor = vraag;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _loadOfficial();
       });
     }
     // The record laid next to the files. Recomputed per build on purpose: a download that lands
@@ -9296,6 +9314,14 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
         if (album != null)
           MenuRegel(Icons.album_rounded, 'Ga naar album',
               () => openOp(nav, (_) => AlbumDetailPage(album: album))),
+        // De galerij van de albumpagina, zonder eerst naar die pagina te gaan. Saber op 06-10-2026,
+        // vanaf "Nu speelt": *"nu moet ik eerst naar de album gaan en dan daar uitgave kiezen. wil
+        // dit sneller kunnen doen."* Zelfde voorwaarden als de knop daar: geen single, geen tv.
+        // Komt de albumpagina hieronder vandaan, dan ziet die de nieuwe persing zelf — zie
+        // `_AlbumDetailPageState._herlaadVoor`.
+        if (album != null && !album.isSingle)
+          if (!isTv) MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…',
+              () => showDialog<bool>(context: context, builder: (_) => ReleaseGallery(album))),
         MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
         MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, t.artist, titel: t.title, zaad: t)),
       ],
@@ -9378,6 +9404,10 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
       [
         MenuRegel(Icons.open_in_new_rounded, 'Album openen',
             () => openOp(nav, (_) => AlbumDetailPage(album: a))),
+        // Zelfde regel als in het menu van een nummer: de galerij meteen, zonder de omweg.
+        if (!a.isSingle)
+          if (!isTv) MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…',
+              () => showDialog<bool>(context: context, builder: (_) => ReleaseGallery(a))),
         MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, a.artist)),
         MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, a.artist)),
       ],
