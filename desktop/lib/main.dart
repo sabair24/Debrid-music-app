@@ -21457,14 +21457,35 @@ class _SharingSectionState extends State<_SharingSection> {
   void initState() {
     super.initState();
     _root = TextEditingController(text: context.read<LibraryStore>().rootPath);
+    _actief = this;
   }
 
   @override
   void dispose() {
+    if (identical(_actief, this)) _actief = null;
     _root.dispose();
     _email.dispose();
     _password.dispose();
     super.dispose();
+  }
+
+  /// Het accountblok dat nu in het instellingenvenster staat, voor de knop "Opslaan".
+  static _SharingSectionState? _actief;
+
+  /// Staat hier een ingevuld aanmeldformulier dat nog niet verstuurd is, log dan nu in. True als het
+  /// venster dicht mag.
+  ///
+  /// **Waarom.** Saber op 06-10-2026: *"men pc onthoud men inloggen niet??? heb net geprobeerd en
+  /// opslaan geklikt"*. Het formulier heeft een eigen knop "Inloggen"; "Opslaan" onderaan het venster
+  /// bewaarde alleen de gewone instellingen, sloot het venster en gooide het e-mailadres en wachtwoord
+  /// weg. Er was dus nooit ingelogd — en zonder aanmelding kan een telefoon onderweg niet via het
+  /// account opnieuw koppelen, alleen nog met een code op het scherm van de pc.
+  Future<bool> inloggenAlsIngevuld() async {
+    if (context.read<CloudSession>().state == CloudState.signedIn) return true;
+    if (_email.text.trim().isEmpty && _password.text.isEmpty) return true;
+    await _cloudSubmit();
+    // Mislukt: het venster blijft open, met de reden in rood onder de velden.
+    return _cloudError == null;
   }
 
   /// Sign in (or register) and start publishing straight away.
@@ -23321,6 +23342,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // over a broken file is a repair rather than the loss the guard exists for.
                     s.forgetLoadFailure();
                     await s.save();
+                    // Een ingevuld aanmeldformulier gaat mee — zie [_SharingSectionState.inloggenAlsIngevuld].
+                    final account = _SharingSectionState._actief;
+                    if (account != null && !await account.inloggenAlsIngevuld()) return;
                     if (context.mounted) Navigator.pop(context);
                     lib.enrich(s); // pick up covers that need the (new) Discogs token
                   },
