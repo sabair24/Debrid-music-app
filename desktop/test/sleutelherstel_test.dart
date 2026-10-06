@@ -140,7 +140,9 @@ void main() {
       final lijf = sessie.substring(start, sessie.indexOf('Future<void> unpair()', start));
       expect(lijf, contains('uitwijk: huidig.uitwijk'),
           reason: 'anders is het Tailscale-adres na het herstel weg, en kom je buitenshuis niet binnen');
-      expect(lijf, contains('debugPrint('), reason: 'het herstel hoort te zeggen wat het doet');
+      // `_log(` en niet meer `debugPrint(`: sinds 06-10-2026 gaat het ook naar verbinding.log, want
+      // debugPrint verdwijnt in een vrijgegeven versie en dan zegt het herstel achteraf niets.
+      expect(lijf, contains('_log('), reason: 'het herstel hoort te zeggen wat het doet');
     });
 
     test('"Opnieuw proberen" probeert het sleutelherstel ook echt opnieuw', () {

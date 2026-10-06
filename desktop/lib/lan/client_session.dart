@@ -5,12 +5,15 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 
 import '../catalogus_kopie.dart';
 import '../library.dart';
+import '../paths.dart';
 import '../settings.dart';
+import '../warm_log.dart';
 import 'client.dart';
 import 'discovery.dart';
 import '../cloud/catalog_mirror.dart';
@@ -26,7 +29,13 @@ class ClientSession extends ChangeNotifier {
     RemoteEndpoint? endpoint,
     this.kopie = const CatalogusKopie(),
     this.verseSleutel,
-  }) : _endpoint = endpoint;
+    Future<List<FoundServer>> Function()? zoekOpNetwerk,
+  })  : _endpoint = endpoint,
+        _zoekOpNetwerk = zoekOpNetwerk ?? LanBrowser.find;
+
+  /// Hoe er op het lokale netwerk naar de pc gezocht wordt. Standaard [LanBrowser.find]; een toets
+  /// zet hier iets anders, want op de pc waar hij draait staat vaak de echte app.
+  final Future<List<FoundServer>> Function() _zoekOpNetwerk;
 
   /// Haalt via de cloud een nieuwe sleutel op voor de pc op dit adres. Null = niet gelukt.
   ///
@@ -129,7 +138,7 @@ class ClientSession extends ChangeNotifier {
         return vers;
       }
 
-      for (final server in await LanBrowser.find()) {
+      for (final server in await _zoekOpNetwerk()) {
         if (server.baseUrl == onthouden.baseUrl) continue;
         if (await RemoteClient.health(server.baseUrl) == null) continue;
         final vers = onthouden.met(
@@ -165,6 +174,73 @@ class ClientSession extends ChangeNotifier {
     } catch (_) {/* volgende keer weer */}
   }
 
+  /// Wat dit toestel met zijn pc deed: met welk adres het verbond, wanneer de pc niet antwoordde of
+  /// de sleutel weigerde, welke adressen het daarna probeerde en waar het op overstapte.
+  ///
+  /// **Waarom dit er is.** Op 06-10-2026 kwam Sabers telefoon op 5G niet meer bij de pc, met
+  /// Tailscale aan, en koppelen lukte alleen nog met een code via Chrome Remote Desktop. Op de pc
+  /// stond van 07:51 tot 08:22 geen enkele aanvraag; op de telefoon stond nergens iets, want alles
+  /// ging naar `debugPrint`, en dat verdwijnt in een vrijgegeven versie. Een sleutel staat er nooit
+  /// in, hooguit de eerste vier tekens.
+  ///
+  /// Het pad wordt elke regel opnieuw bepaald en niet onthouden: [logDir] wordt bij het opstarten
+  /// pas vastgelegd, en een vroeg onthouden pad zou dan naar de verkeerde map wijzen.
+  static void _log(String regel) {
+    try {
+      WarmLog('$logDir${Platform.pathSeparator}verbinding.log').line(regel);
+    } catch (_) {/* een logboek mag de verbinding nooit in de weg zitten */}
+    debugPrint(regel);
+  }
+
+  /// De laatst gemelde toestand, zodat een poll die elke vijftien seconden hetzelfde ziet het
+  /// logboek niet vult.
+  String _gemeld = '';
+  void _meldToestand(String toestand) {
+    if (toestand == _gemeld) return;
+    _gemeld = toestand;
+    _log(toestand);
+  }
+
+  /// Wanneer er voor het laatst naar een ander adres gezocht is, en of dat nu loopt.
+  DateTime? _laatstGezocht;
+  bool _zoekt = false;
+
+  /// De pc antwoordt niet op het adres dat we hebben: de andere adressen afgaan en overstappen op
+  /// het eerste dat wél antwoordt.
+  ///
+  /// **Waarom dit er moest komen.** [_bereikbaarAdres] draaide alleen bij een KOUDE start. Een app die
+  /// thuis gestart is, verbindt met het thuisadres en blijft dat daarna elke vijftien seconden
+  /// proberen — ook als je de deur uit bent en op 5G zit, waar dat adres per definitie niets is. Het
+  /// Tailscale-adres stond klaar in [RemoteEndpoint.uitwijk] en werd nooit geprobeerd tot je de app
+  /// helemaal afsloot. Gemeten op 06-10-2026: geen enkele aanvraag bij de pc tussen 07:51 en 08:22,
+  /// terwijl Tailscale aan stond en de pc via Tailscale gewoon antwoordde.
+  ///
+  /// Hooguit eens per halve minuut, want een pc die écht uit staat hoort niet elke poll een rondje
+  /// adressen te kosten. [refreshNow] — "Opnieuw proberen" en terugkomen in de app — mag meteen.
+  Future<void> _zoekAnderAdres({bool meteen = false}) async {
+    final huidig = _endpoint;
+    if (huidig == null || owner || _zoekt) return;
+    final nu = DateTime.now();
+    final vorige = _laatstGezocht;
+    if (!meteen && vorige != null && nu.difference(vorige) < const Duration(seconds: 30)) return;
+    _laatstGezocht = nu;
+    _zoekt = true;
+    try {
+      _log('pc antwoordt niet op ${huidig.baseUrl.authority} — andere adressen proberen'
+          ' (${huidig.uitwijk.length} uitwijk)');
+      final ander = await _bereikbaarAdres(huidig);
+      if (ander.baseUrl == huidig.baseUrl) {
+        _log('geen ander adres antwoordt; blijft op ${huidig.baseUrl.authority}');
+        return;
+      }
+      _log('overgestapt op ${ander.baseUrl.authority}');
+      // Via [connect], zodat de speler, de catalogus en het peilen het nieuwe adres krijgen.
+      await connect(ander);
+    } finally {
+      _zoekt = false;
+    }
+  }
+
   /// Wire an endpoint into the app and pull the library in.
   Future<void> connect(RemoteEndpoint endpoint, {bool remember = true}) async {
     // Een ONTHOUDEN adres wordt eerst nagekeken; een vers gekoppeld adres niet.
@@ -182,6 +258,10 @@ class ClientSession extends ChangeNotifier {
     final werkend = remember ? endpoint : await _bereikbaarAdres(endpoint);
     endpoint = werkend;
     _endpoint = endpoint;
+    _gemeld = '';
+    _log('verbinden met ${endpoint.baseUrl.authority}'
+        ' (sleutel ${endpoint.token.length >= 4 ? endpoint.token.substring(0, 4) : '?'}…,'
+        ' ${endpoint.uitwijk.length} uitwijk)');
     if (remember) await savePairedServer(endpoint);
 
     // Wie er aan de andere kant staat, en met welke code. Zie [serverVersie]: bij een koppeling doet
@@ -242,21 +322,21 @@ class ClientSession extends ChangeNotifier {
     _sleutelGevraagd = true;
     // Hardop, want op 11-09-2026 ging dit stil: de Shield werd elke vijftien seconden geweigerd, het
     // herstel kreeg niets terug, en in het logboek stond er geen woord over.
-    debugPrint('Sleutel geweigerd door ${huidig.baseUrl.host} — een nieuwe halen…');
+    _log('sleutel geweigerd door ${huidig.baseUrl.host} — een nieuwe halen…');
     String? verse;
     try {
       verse = await haal(huidig.baseUrl);
     } catch (e) {
-      debugPrint('Verse sleutel halen mislukte: $e');
+      _log('verse sleutel halen mislukte: $e');
       return;
     }
     // Dezelfde sleutel terug betekent dat de pc hem nooit had ingetrokken maar kwijt was; opnieuw
     // verbinden lost dat niet op en zou alleen het scherm laten knipperen.
     if (verse == null || verse.isEmpty || verse == huidig.token) {
-      debugPrint('Geen nieuwe sleutel gekregen; "Opnieuw proberen" probeert het nog eens.');
+      _log('geen nieuwe sleutel gekregen; "Opnieuw proberen" probeert het nog eens');
       return;
     }
-    debugPrint('Nieuwe sleutel van ${huidig.baseUrl.host} — opnieuw verbinden.');
+    _log('nieuwe sleutel van ${huidig.baseUrl.host} — opnieuw verbinden');
     // Via `connect` en niet met de hand: die legt hem vast, hangt de client aan de bibliotheek,
     // vertelt de speler hoe hij een pad ondertekent en haalt de catalogus opnieuw op. Dat met de
     // hand overdoen is precies hoe je er één vergeet.
@@ -274,6 +354,7 @@ class ClientSession extends ChangeNotifier {
 
   /// Forget the PC and go back to the pairing screen.
   Future<void> unpair() async {
+    _log('pc vergeten (door de gebruiker)');
     _poll?.cancel();
     _poll = null;
     await forgetPairedServer();
@@ -306,7 +387,13 @@ class ClientSession extends ChangeNotifier {
       // instellingenscherm bleef groen terwijl elke poll een 401 kreeg.
       if (library.geenVerbinding == null) {
         lastError = null;
+        _meldToestand('pc antwoordt op ${_endpoint?.baseUrl.authority}');
       } else {
+        _meldToestand(library.geenVerbinding == GeenVerbinding.sleutelGeweigerd
+            ? 'sleutel geweigerd door ${_endpoint?.baseUrl.authority}'
+            : 'pc antwoordt niet op ${_endpoint?.baseUrl.authority}');
+        // Niet afwachten, net als het sleutelherstel hieronder: een rondje adressen kost seconden.
+        if (library.geenVerbinding == GeenVerbinding.pcStil) unawaited(_zoekAnderAdres());
         lastError = library.geenVerbinding == GeenVerbinding.sleutelGeweigerd
             ? 'De pc antwoordt, maar weigert de sleutel van dit toestel.'
             : 'De pc antwoordde niet.';
@@ -335,6 +422,8 @@ class ClientSession extends ChangeNotifier {
       if (library.tracks.isEmpty || library.geenVerbinding != null) await _fillFromMirror();
     } catch (e) {
       lastError = e.toString();
+      _meldToestand('pc antwoordt niet: $e');
+      unawaited(_zoekAnderAdres());
       // The PC did not answer. Show the cloud copy rather than nothing — you can browse, and put
       // downloads in the queue for when it wakes up.
       await _fillFromMirror();
@@ -388,8 +477,11 @@ class ClientSession extends ChangeNotifier {
   /// een keer: na één mislukte poging was die knop anders een knop die de catalogus opnieuw opvroeg
   /// bij een pc die hem net had geweigerd -- en verder niets. Dat dit ook bij terugkomen naar de
   /// voorgrond gebeurt is prima: dat is een handvol keer per dag, niet elke vijftien seconden.
-  Future<void> refreshNow() {
+  Future<void> refreshNow() async {
     _sleutelGevraagd = false;
+    // Stond de pc als "antwoordt niet", dan eerst de andere adressen — anders was ook deze knop
+    // alleen een nieuwe poging op een adres dat op 5G niets is.
+    if (library.geenVerbinding == GeenVerbinding.pcStil) await _zoekAnderAdres(meteen: true);
     return _refresh();
   }
 
