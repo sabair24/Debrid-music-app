@@ -4,6 +4,35 @@ import 'dart:io';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 
+import 'kapot_bestand.dart' show id3TagLengte;
+
+/// Waar `fLaC` begint in [raf]: op 0, of voorbij een ID3v2-blok dat ervoor geplakt is. -1 als er
+/// geen FLAC staat. De lezer staat daarna net achter `fLaC`, op de eerste blokkop.
+///
+/// **Waarom dit er is.** Op 14-09-2026 bleken acht bestanden in de bibliotheek een volwaardige FLAC
+/// te zijn met een ID3-blok ervoor (2 KB tot 896 KB, vaak met een hoes erin) — zie [id3TagLengte],
+/// dat toen alleen de kapot-bestandcontrole repareerde. Deze lezers keken nog steeds alleen naar
+/// byte 0. Gevolg, gemeten op 06-10-2026 in de catalogus van de pc: zeventien nummers zonder
+/// bitdiepte en met een verzonnen frequentie (48000, 22050, 12000, 11025 Hz), want de terugval —
+/// het algemene pakket — zag `ID3` en las het als mp3. In de cd-stand van de telefoon werd een
+/// 16/44.1 daardoor "omgezet" naar 24 bit: wachten vooraf, en méér data over 5G dan het origineel.
+int flacBegin(RandomAccessFile raf) {
+  var pos = 0;
+  // Hooguit een paar blokken achter elkaar; meer is geen bestand maar een raadsel.
+  for (var i = 0; i < 3; i++) {
+    raf.setPositionSync(pos);
+    final kop = raf.readSync(10);
+    if (kop.length >= 4 && kop[0] == 0x66 && kop[1] == 0x4C && kop[2] == 0x61 && kop[3] == 0x43) {
+      raf.setPositionSync(pos + 4);
+      return pos;
+    }
+    final n = id3TagLengte(kop);
+    if (n == null) return -1;
+    pos += n;
+  }
+  return -1;
+}
+
 /// A tolerant FLAC tag reader, used when the metadata package refuses a file.
 ///
 /// Why this exists: `audio_metadata_reader` runs `int.parse` on TRACKNUMBER, so a vinyl-style
@@ -105,7 +134,7 @@ Map<String, String> readFlacRawFields(File f) {
   final fields = <String, String>{};
   try {
     raf = f.openSync();
-    if (String.fromCharCodes(raf.readSync(4)) != 'fLaC') return fields;
+    if (flacBegin(raf) < 0) return fields;
     for (var block = 0; block < 64; block++) {
       final h = raf.readSync(4);
       if (h.length < 4) break;
@@ -133,7 +162,7 @@ FlacTags? readFlacTags(File f) {
   RandomAccessFile? raf;
   try {
     raf = f.openSync();
-    if (String.fromCharCodes(raf.readSync(4)) != 'fLaC') return null;
+    if (flacBegin(raf) < 0) return null;
 
     final fields = <String, String>{};
     Duration? duration;
@@ -221,7 +250,7 @@ FlacTags? readFlacTags(File f) {
   RandomAccessFile? raf;
   try {
     raf = f.openSync();
-    if (String.fromCharCodes(raf.readSync(4)) != 'fLaC') return (gelezen: false, hoes: null);
+    if (flacBegin(raf) < 0) return (gelezen: false, hoes: null);
     for (var block = 0; block < 64; block++) {
       final h = raf.readSync(4);
       if (h.length < 4) break;

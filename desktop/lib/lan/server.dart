@@ -81,6 +81,7 @@ class LanServer {
     //
     // `logDir` bestaat altijd (zie paths.dart), dus dit logboek nu ook.
     _koppelLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}koppeling.log');
+    _stroomLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}stroom.log');
   }
 
   /// Met welk account deze pc zelf is ingelogd, of leeg als hij dat niet is.
@@ -123,6 +124,25 @@ class LanServer {
   /// Van de aangeboden sleutel gaan alleen de eerste vier tekens mee — genoeg om te zien of het
   /// telkens hetzelfde toestel is, te weinig om er iets mee te kunnen.
   WarmLog? _koppelLog;
+
+  /// Wat er met elk gestart nummer gebeurde: origineel, uit de cache, of nieuw omgezet — en hoe lang
+  /// dat duurde. **Waarom dit er is.** Saber op 06-10-2026: het omzetten naar cd-kwaliteit voor 5G "is
+  /// nog traag en niet altijd juist of doet hij het niet". Op de pc stond daar niets van: geen
+  /// aanvraag, geen duur, niet of de cache raak was. Zonder regel valt "het hapert op 5G" niet uit
+  /// elkaar te halen in "de pc zette te lang om", "er werd niet omgezet" en "er kwam niets aan".
+  WarmLog? _stroomLog;
+
+  /// Eén regel per gestart nummer: zonder Range of vanaf byte 0. De vervolgstukken die een speler
+  /// opvraagt zouden het logboek anders vullen met hetzelfde nummer.
+  void _stroomRegel(HttpRequest req, Track track, String wat) {
+    final range = req.headers.value(HttpHeaders.rangeHeader);
+    if (range != null && !range.trim().startsWith('bytes=0-')) return;
+    final van = req.connectionInfo?.remoteAddress.address ?? '?';
+    final bron = '${track.bitsPerSample > 0 ? track.bitsPerSample : '?'}/${track.sampleRate > 0 ? track.sampleRate : '?'} ${track.ext}';
+    _stroomLog?.line('van $van  "${track.artist} – ${track.title}"  $bron  →  $wat');
+  }
+
+  static String _mb(int bytes) => '${(bytes / 1048576).toStringAsFixed(1)} MB';
   int _geweigerd = 0;
   DateTime _laatsteWeigerRegel = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -865,8 +885,10 @@ class LanServer {
       // SNEL (de kopie wordt na het spelen weggegooid). Zie [Omzetrecept].
       final vanSpeaker = req.uri.queryParameters['cast'] == '1';
       return _streamResampled(req, file, grens.rate, grens.bits <= 0 ? 24 : grens.bits,
-          recept: vanSpeaker ? receptCast : receptStroom);
+          recept: vanSpeaker ? receptCast : receptStroom, track: track);
     }
+    _stroomRegel(req, track,
+        'origineel${maxRate == null ? '' : ' (vraag $maxRate/${maxBits ?? '-'}, valt eronder)'}  ${_mb(track.sizeBytes)}');
     return serveFile(req, file, contentType: mimeForExt(track.ext));
   }
 
@@ -884,13 +906,25 @@ class LanServer {
   /// de deur uit: dat is bij een gekoppeld toestel gewoon de oude situatie, en bij een speaker met
   /// een plafond een nummer dat overgeslagen wordt — precies wat er zonder ffmpeg ook al gebeurde.
   Future<void> _streamResampled(HttpRequest req, File file, int maxRate, int maxBits,
-      {Omzetrecept recept = receptCast}) async {
+      {Omzetrecept recept = receptCast, Track? track}) async {
     final map = recept.naam == receptCast.naam ? 'cast_cache' : 'stream_cache';
+    final klok = Stopwatch()..start();
     final klaar = await transcoder.resampleToFile(file,
         maxSampleRate: maxRate,
         maxBits: maxBits,
         recept: recept,
         cacheDir: Directory('$appDir${Platform.pathSeparator}$map'));
+    if (track != null) {
+      final ms = klok.elapsedMilliseconds;
+      _stroomRegel(
+          req,
+          track,
+          klaar == null
+              ? 'omzetten naar $maxBits/$maxRate MISLUKT na $ms ms — origineel  ${_mb(track.sizeBytes)}'
+              : '${ms < 40 ? 'uit de cache' : 'omgezet'} naar $maxBits/$maxRate in $ms ms'
+                  '${transcoder.soxr ? ' (soxr)' : ''}  ${_mb(klaar.lengthSync())}'
+                  '${recept.naam == receptCast.naam ? '  [speaker]' : ''}');
+    }
     return serveFile(req, klaar ?? file, contentType: 'audio/flac');
   }
 

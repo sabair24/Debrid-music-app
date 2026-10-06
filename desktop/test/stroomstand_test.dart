@@ -143,13 +143,16 @@ void main() {
       expect(Uri.parse(uit).pathSegments.last, 'abc123.flac');
     });
 
-    test('een onbekende diepte levert nooit maxBits=0 op', () {
+    test('een onbekende diepte levert nooit maxBits=0 op, maar het plafond van de stand', () {
       // Een catalogus van vóór deze versie geeft 0. Dat is "ik weet het niet", en dat mag nooit als
       // grens doorgegeven worden — ffmpeg krijgt dan `-bits_per_raw_sample 0`.
+      //
+      // Tot 06-10-2026 ging er dan helemaal GEEN maxBits mee, en dat was de fout: de pc vulde zelf 24
+      // in, en de cd-stand leverde 24/44.1. Wordt er omgezet, dan geldt het plafond van de stand.
       final uit = metStand(_url, stand: Stroomstand.cd, sampleRate: 192000, bits: 0, lossless: true);
       final q = Uri.parse(uit).queryParameters;
       expect(q['maxRate'], '44100');
-      expect(q.containsKey('maxBits'), isFalse);
+      expect(q['maxBits'], '16', reason: 'zonder maxBits maakte de pc er 24 bit van in de cd-stand');
     });
 
     test('een onbekende diepte alleen is geen reden om om te zetten', () {

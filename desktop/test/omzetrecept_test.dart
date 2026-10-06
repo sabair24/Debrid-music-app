@@ -83,9 +83,10 @@ void main() {
       expect(na(args(rate: 44100, bits: 16), '-c:a'), 'flac');
     });
 
-    test('gewone aresample en nooit soxr', () {
+    test('zonder soxr in deze ffmpeg: gewone aresample, en nooit soxr', () {
       // Veel ffmpeg-bouwsels komen zonder soxr, en er dan om vragen laat de hele filterketen
-      // mislukken: niets geschreven, en een lege stroom bij de speler.
+      // mislukken: niets geschreven, en een lege stroom bij de speler. Of hij er is vraagt
+      // [Transcoder.soxr] na; zonder die uitspraak is het standaard-nee.
       final a = na(args(rate: 44100, bits: 16), '-af')!;
       expect(a, startsWith('aresample=44100'));
       expect(a, isNot(contains('soxr')));

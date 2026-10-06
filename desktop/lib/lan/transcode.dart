@@ -59,9 +59,13 @@ const receptStroom = Omzetrecept(naam: 's5', compressie: 5, bewaar: 60);
 /// hoor je in stille passages als korrel. `triangular_hp` is de gebruikelijke keuze en kost niets.
 /// Boven 16 bit heeft het geen zin en blijft het weg.
 ///
-/// **Gewone `aresample` en NIET `resampler=soxr`.** Veel ffmpeg-bouwsels komen zonder soxr, en er
-/// dan om vragen laat de hele filterketen mislukken: "Requested resampling engine is unavailable",
-/// niets geschreven, en een lege stroom bij de speaker.
+/// **soxr alleen als deze ffmpeg hem heeft ([soxr]).** Veel ffmpeg-bouwsels komen zonder soxr, en er
+/// dan blind om vragen laat de hele filterketen mislukken: "Requested resampling engine is
+/// unavailable", niets geschreven, en een lege stroom bij de speaker. Dus vraagt [Transcoder] het één
+/// keer na. Heeft hij hem, dan is het de moeite: gemeten op 06-10-2026 op Sabers pc, een 24/192 van
+/// 325 s naar 16/44.1 — swr met `filter_size=256` 2,5 s, soxr op precisie 28 0,9 s. Het verschil
+/// tussen de twee uitkomsten: −82 dB RMS tegen een muziekniveau van −22,6 dB, op de hoogte van de
+/// dither. Zonder soxr blijft het het swr-filter van hiervoor.
 ///
 /// **`-f flac` is niet optioneel.** ffmpeg kiest de doos op de EXTENSIE van het uitvoerbestand, en
 /// die is hier `.tmp` — een naam die hij niet kent. Zonder deze regel stopt hij met "Unable to
@@ -72,9 +76,12 @@ List<String> omzetArgumenten({
   required int maxSampleRate,
   required int maxBits,
   required Omzetrecept recept,
+  bool soxr = false,
 }) {
   final naarZestien = maxBits <= 16;
-  final keten = StringBuffer('aresample=$maxSampleRate:filter_size=256');
+  final keten = StringBuffer(soxr
+      ? 'aresample=$maxSampleRate:resampler=soxr:precision=28'
+      : 'aresample=$maxSampleRate:filter_size=256');
   if (naarZestien) keten.write(':out_sample_fmt=s16:dither_method=triangular_hp');
   return [
     '-hide_banner', '-loglevel', 'error',
@@ -107,6 +114,28 @@ class Transcoder {
   }
 
   bool get available => path != null;
+
+  bool? _soxr;
+
+  /// Heeft deze ffmpeg soxr? Eén keer nagevraagd met een omzetting van 0,05 s stilte; zie
+  /// [omzetArgumenten] voor waarom niet blind.
+  bool get soxr {
+    final bekend = _soxr;
+    if (bekend != null) return bekend;
+    final ffmpeg = path;
+    if (ffmpeg == null) return _soxr = false;
+    try {
+      final r = Process.runSync(ffmpeg, const [
+        '-hide_banner', '-loglevel', 'error',
+        '-f', 'lavfi', '-i', 'anullsrc=r=96000', '-t', '0.05',
+        '-af', 'aresample=44100:resampler=soxr',
+        '-f', 'null', '-',
+      ]);
+      return _soxr = r.exitCode == 0;
+    } catch (_) {
+      return _soxr = false;
+    }
+  }
 
   static String? _find() {
     final candidates = Platform.isWindows
@@ -196,6 +225,7 @@ class Transcoder {
             maxSampleRate: maxSampleRate,
             maxBits: maxBits,
             recept: recept,
+            soxr: soxr,
           ));
       if (result.exitCode != 0 || !tijdelijk.existsSync()) {
         debugPrint('ffmpeg kon niet omzetten: ${result.stderr}');
@@ -223,9 +253,10 @@ class Transcoder {
   /// **En de wijzigingstijd, niet alleen de grootte.** FLAC houdt met opzet een PADDING-blok vrij
   /// zodat het hertaggen van een bestand de bytelengte gelijk kan laten. Op grootte alleen zou een
   /// hernoemd album dus de oude omzetting terugkrijgen, met de oude labels erin.
-  static String _sleutel(File file, int rate, int bits, Omzetrecept recept) {
+  String _sleutel(File file, int rate, int bits, Omzetrecept recept) {
     final st = file.statSync();
-    return '${recept.naam}_${file.path.hashCode.toUnsigned(32).toRadixString(16)}'
+    // De herbemonsteraar hoort bij de vlaggen, dus bij de sleutel: zie [Omzetrecept.naam].
+    return '${recept.naam}${soxr ? 'x' : ''}_${file.path.hashCode.toUnsigned(32).toRadixString(16)}'
         '_${st.size}_${st.modified.millisecondsSinceEpoch}_${rate}_$bits';
   }
 

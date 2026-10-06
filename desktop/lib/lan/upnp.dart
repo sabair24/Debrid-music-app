@@ -92,7 +92,12 @@ class Renderer {
     // Wat niet overschreden wordt, blijft staan. Alleen de diepte verlagen en de frequentie met rust
     // laten is precies wat je wilt voor een speaker die 384 kHz best aankan.
     rate: teHoog ? maxSampleRate : sampleRate,
-    bits: teDiep ? maxBitDepth : bits,
+    // Wordt er tóch omgezet (de frequentie is te hoog) en is de diepte onbekend, dan het plafond en
+    // niet 0. Met 0 ging er geen `maxBits` mee, en de pc vulde dan zelf 24 in: in de cd-stand van de
+    // telefoon kwam er 24/44.1 uit in plaats van 16/44.1 — gemeten op 06-10-2026 bij zeventien
+    // nummers waarvan de diepte door een ID3-blok niet gelezen was. Wat al omgezet wordt, mag het
+    // plafond van het doel ook in de diepte halen.
+    bits: teDiep ? maxBitDepth : (teHoog && bits <= 0 && maxBitDepth > 0 ? maxBitDepth : bits),
   );
 }
 

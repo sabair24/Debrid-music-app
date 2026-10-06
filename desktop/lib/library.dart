@@ -319,7 +319,13 @@ ScanUitslag _scanTags(String root, String? cachePad) {
     // houden in plaats van opnieuw geprobeerd te worden.
     if (sizeBytes > 0) {
       final bewaard = cache[e.path];
-      if (bewaard != null && bewaard['addedMs'] == addedMs && bewaard['sizeBytes'] == sizeBytes) {
+      // Een FLAC zonder bitdiepte is een rij die vóór 06-10-2026 verkeerd gelezen werd: een ID3-blok
+      // vóór `fLaC` liet de lezer terugvallen op het algemene pakket, dat er een mp3 in zag. Zie
+      // [flacBegin]. Die rijen één keer opnieuw lezen, anders blijft de verzonnen frequentie staan.
+      if (bewaard != null &&
+          bewaard['addedMs'] == addedMs &&
+          bewaard['sizeBytes'] == sizeBytes &&
+          !moetOpnieuwGelezen(e.path, bewaard)) {
         out.add(bewaard);
         uitCache++;
         continue;
@@ -339,6 +345,14 @@ ScanUitslag _scanTags(String root, String? cachePad) {
 /// scan. Twee lezers die uit elkaar lopen is hier bijzonder naar: een nummer dat via de radio
 /// binnenkomt zou dan andere velden krijgen dan datzelfde nummer na een herstart, en dan verspringt
 /// het van album zodra je de app opnieuw opent.
+/// Is deze bewaarde rij uit de tag-cache verdacht genoeg om het bestand opnieuw te lezen?
+///
+/// Alleen een `.flac` zonder bitdiepte. Een echte FLAC heeft er altijd een in zijn STREAMINFO; staat
+/// hij op 0, dan is de rij gemaakt door de terugval die er een mp3 in las. Na één keer opnieuw lezen
+/// staat er een echte diepte in en komt deze regel niet meer langs.
+bool moetOpnieuwGelezen(String pad, Map<String, dynamic> rij) =>
+    pad.toLowerCase().endsWith('.flac') && ((rij['bitsPerSample'] as num?) ?? 0) <= 0;
+
 Map<String, dynamic>? tagrijVoorBestand(File e,
     {required int addedMs, required int sizeBytes}) {
   // FLAC goes through our own parser first: the package throws on tags it can't parse (a vinyl
