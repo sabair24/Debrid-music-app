@@ -12557,15 +12557,6 @@ class HomeStartView extends StatefulWidget {
   State<HomeStartView> createState() => _HomeStartViewState();
 }
 
-/// Wat het startscherm al opgehaald had, over een schermwissel heen.
-///
-/// **Zonder dit begon dit scherm elke keer opnieuw.** Wissel naar Albums en terug, en de widget
-/// wordt van de grond af opgebouwd: spinner, nieuw netwerkverkeer, en een andere volgorde dan je
-/// net zag. Op een telefoon is dat de hele tijd, want elke sectie zit achter de hamburgerla.
-///
-/// Bewust alleen de opgehaalde lijsten en niet de hele widgetboom. Dat laatste (een IndexedStack)
-/// houdt verborgen schermen in de boom, en dan blijven ze meeluisteren en hertekenen — precies wat
-/// er net uitgehaald is.
 /// [albums] in een vaste willekeurige volgorde: dezelfde zolang [zaad] en de verzameling dezelfde
 /// zijn, ongeacht in welke volgorde ze binnenkomen.
 ///
@@ -12581,6 +12572,15 @@ List<Album> vastGeschud(Iterable<Album> albums, int zaad) {
   return [for (final (_, a) in metSleutel) a]..shuffle(math.Random(zaad));
 }
 
+/// Wat het startscherm al opgehaald had, over een schermwissel heen.
+///
+/// **Zonder dit begon dit scherm elke keer opnieuw.** Wissel naar Albums en terug, en de widget
+/// wordt van de grond af opgebouwd: spinner, nieuw netwerkverkeer, en een andere volgorde dan je
+/// net zag. Op een telefoon is dat de hele tijd, want elke sectie zit achter de hamburgerla.
+///
+/// Bewust alleen de opgehaalde lijsten en niet de hele widgetboom. Dat laatste (een IndexedStack)
+/// houdt verborgen schermen in de boom, en dan blijven ze meeluisteren en hertekenen — precies wat
+/// er net uitgehaald is.
 class _StartCache {
   /// Waarmee de eigen rijen geschud worden: elke start anders, en bij elke Ververs ook — zie
   /// [vastGeschud].
