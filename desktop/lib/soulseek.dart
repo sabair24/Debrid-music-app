@@ -525,7 +525,16 @@ class SoulseekClient {
     // adverteren tot hij de app herstartte. Zette hij hem op 0 ("niet luisteren"), dan bleef de socket
     // zelfs gewoon open. `stopListening()` had in de hele app geen enkele aanroeper.
     if (_listener != null && _listener!.port == listenPort) return _listener!.port;
-    if (_listener != null) stopListening();
+    // Wachten tot de oude socket ECHT dicht is. `stopListening()` laat `close()` los, en wie meteen
+    // daarna dezelfde poort weer bindt, krijgt van Dart "The shared flag to bind() needs to be
+    // `true`": de poort is dan nog van ons. Op 06-10-2026 viel de bouwstraat daar één keer op om
+    // (soulseek_zombie_test, "een gewijzigde poort wordt echt opnieuw gebonden"), en in de app is het
+    // dezelfde val: snel terug naar je vorige poort viel stil terug op "niet luisteren".
+    final oud = _listener;
+    if (oud != null) {
+      _listener = null;
+      await oud.close();
+    }
     if (listenPort <= 0) return 0;
     try {
       final s = await ServerSocket.bind(InternetAddress.anyIPv4, listenPort);
