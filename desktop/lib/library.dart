@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'album_facts.dart';
 import 'album_id.dart';
+import 'ape_kop.dart';
 import 'beeldvorm.dart';
 import 'cachesleutel.dart';
 import 'completeness.dart';
@@ -347,11 +348,21 @@ ScanUitslag _scanTags(String root, String? cachePad) {
 /// het van album zodra je de app opnieuw opent.
 /// Is deze bewaarde rij uit de tag-cache verdacht genoeg om het bestand opnieuw te lezen?
 ///
-/// Alleen een `.flac` zonder bitdiepte. Een echte FLAC heeft er altijd een in zijn STREAMINFO; staat
-/// hij op 0, dan is de rij gemaakt door de terugval die er een mp3 in las. Na één keer opnieuw lezen
-/// staat er een echte diepte in en komt deze regel niet meer langs.
-bool moetOpnieuwGelezen(String pad, Map<String, dynamic> rij) =>
-    pad.toLowerCase().endsWith('.flac') && ((rij['bitsPerSample'] as num?) ?? 0) <= 0;
+/// Een `.flac` zonder bitdiepte. Een echte FLAC heeft er altijd een in zijn STREAMINFO; staat hij op
+/// 0, dan is de rij gemaakt door de terugval die er een mp3 in las. Na één keer opnieuw lezen staat er
+/// een echte diepte in en komt deze regel niet meer langs.
+///
+/// En sinds 06-10-2026 ook een `.wv` of `.ape` zonder frequentie of diepte: die rijen zijn gemaakt
+/// vóór de koplezers het metablok van WavPack en de kop van Monkey's Audio kenden.
+bool moetOpnieuwGelezen(String pad, Map<String, dynamic> rij) {
+  final p = pad.toLowerCase();
+  final bits = (rij['bitsPerSample'] as num?) ?? 0;
+  if (p.endsWith('.flac')) return bits <= 0;
+  if (p.endsWith('.wv') || p.endsWith('.ape')) {
+    return bits <= 0 || ((rij['sampleRate'] as num?) ?? 0) <= 0;
+  }
+  return false;
+}
 
 Map<String, dynamic>? tagrijVoorBestand(File e,
     {required int addedMs, required int sizeBytes}) {
@@ -440,6 +451,15 @@ Map<String, dynamic>? tagrijVoorBestand(File e,
         hertz = k.sampleRate;
         bits = k.bitsPerSample;
       }
+    } else {
+      // De APE-kant ontbrak tot 06-10-2026: *Mr. Vain* stond als `ape 0/0` in de catalogus, en ging
+      // daardoor als 216 MB op 24/192 over 5G. Zie `ape_kop.dart`.
+      final k = readApeKop(e);
+      if (k != null) {
+        duurMs = k.duration?.inMilliseconds ?? 0;
+        hertz = k.sampleRate;
+        bits = k.bitsPerSample;
+      }
     }
     // En als de ontleder dit bestand NIET wil aannemen, leest de eigen lezer het blok alsnog. Zonder
     // dit valt zo'n bestand terug op zijn bestandsnaam terwijl de titel er letterlijk in staat.
@@ -499,7 +519,10 @@ Map<String, dynamic>? tagrijVoorBestand(File e,
       'genre': (m.genres.isNotEmpty) ? m.genres.first : null,
       'addedMs': addedMs,
       'sizeBytes': sizeBytes,
-      'sampleRate': m.sampleRate ?? hertz,
+      // De eigen koplezers hierboven (DSD, WavPack, APE) gaan vóór: die lezen het getal uit het
+      // bestand zelf. Hier stond `m.sampleRate ?? hertz`, en een ontleder die 0 teruggeeft in plaats
+      // van null verdrong dan een goed gelezen frequentie.
+      'sampleRate': hertz > 0 ? hertz : (m.sampleRate ?? 0),
       // The generic reader doesn't report bit depth. Alleen onze eigen FLAC- en DSD-lezers hierboven
       // kennen het, en die hebben het al in `bits` gezet als ze iets vonden.
       'bitsPerSample': bits,

@@ -874,16 +874,36 @@ class LanServer {
     // wordt blijft staan, en een onbekende diepte is geen te grote diepte. Hier stond een tweede
     // kopie van dat rekensommetje; twee kopieën van een regel lopen uiteen zodra er één bijgesteld
     // wordt, en deze is degene die nagemeten is (`test/castgrenzen_test.dart`).
-    final grens = castGrenzen(
-      sampleRate: track.sampleRate,
-      bits: track.bitsPerSample,
+    final vanSpeaker = req.uri.queryParameters['cast'] == '1';
+    // Een toestel (geen speaker) dat om een plafond vraagt. Dat doet het ook als de catalogus de maat
+    // NIET weet — zie `metStand` — en dan meet de pc het bestand hier zelf na in plaats van op een
+    // nul te beslissen. Een speaker blijft precies zoals hij was.
+    final toestelVraagt = !vanSpeaker && (maxRate != null || maxBits != null);
+    var rate = track.sampleRate;
+    var bits = track.bitsPerSample;
+    if (toestelVraagt && (rate <= 0 || bits <= 0)) {
+      final maat = await transcoder.meet(file);
+      if (rate <= 0) rate = maat?.rate ?? 0;
+      if (bits <= 0) bits = maat?.bits ?? 0;
+    }
+    var grens = castGrenzen(
+      sampleRate: rate,
+      bits: bits,
       maxSampleRate: maxRate ?? 0,
       maxBitDepth: maxBits ?? 0,
+      // Ook na het nameten onbekend: dan het plafond. Een te grote stroom over 5G merk je pas als
+      // je bundel op is; een onnodige omzetting kost een halve seconde.
+      onbekendIsTeVeel: toestelVraagt,
     );
+    // Wie om een plafond vraagt kreeg van `metStand` een adres op `.flac`. Dan moet er ook FLAC
+    // uitkomen, ook als de maat al binnen het plafond zit: een AIFF achter een `.flac`-adres weigert
+    // AVFoundation, en ongecomprimeerd is het over 5G bovendien bijna het dubbele.
+    if (toestelVraagt && !grens.omzetten && track.ext.toLowerCase() != 'flac') {
+      grens = (omzetten: true, rate: grens.rate, bits: grens.bits);
+    }
     if (grens.omzetten) {
       // Een gekoppeld toestel vraagt om KLEIN (het gaat over iemands databundel), een speaker om
       // SNEL (de kopie wordt na het spelen weggegooid). Zie [Omzetrecept].
-      final vanSpeaker = req.uri.queryParameters['cast'] == '1';
       return _streamResampled(req, file, grens.rate, grens.bits <= 0 ? 24 : grens.bits,
           recept: vanSpeaker ? receptCast : receptStroom, track: track);
     }

@@ -155,10 +155,16 @@ void main() {
       expect(q['maxBits'], '16', reason: 'zonder maxBits maakte de pc er 24 bit van in de cd-stand');
     });
 
-    test('een onbekende diepte alleen is geen reden om om te zetten', () {
-      // 44,1 kHz en diepte onbekend: er is niets aantoonbaar te hoog, dus blijf van het bestand af.
-      expect(metStand(_url, stand: Stroomstand.cd, sampleRate: 44100, bits: 0, lossless: true),
-          _url);
+    test('een onbekende diepte is een vraag om het plafond — de pc meet na', () {
+      // Tot 06-10-2026 bleef de telefoon hier van af: niets was "aantoonbaar te hoog". Maar zo ging
+      // er ook een APE van 216 MB (24/192, catalogus 0/0) onveranderd over 5G. Nu vraagt de telefoon
+      // om het plafond en meet de pc het bestand zelf na; zit het eronder, dan stuurt hij het
+      // origineel. Zie `omzetten_label_onbekend_test.dart`.
+      final q = Uri.parse(
+              metStand(_url, stand: Stroomstand.cd, sampleRate: 44100, bits: 0, lossless: true))
+          .queryParameters;
+      expect(q['maxRate'], '44100');
+      expect(q['maxBits'], '16');
     });
 
     test('de hi-res-sport laat 24 bit staan en zakt alleen in frequentie', () {

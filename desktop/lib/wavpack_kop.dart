@@ -23,7 +23,8 @@ class WvKop {
   /// Hoe lang het stuk duurt, of null als de kop het niet zegt (een stroom zonder totaal).
   final Duration? duration;
 
-  /// Monsters per seconde, of 0 als de kop naar een metablok verwijst in plaats van naar de tabel.
+  /// Monsters per seconde, uit de tabel of uit het metablok waar de kop naar verwijst; 0 als geen
+  /// van beide het zegt.
   final int sampleRate;
 
   /// Bits per monster. Bij een zwevendekommabestand altijd 32 — dat ís de vorm.
@@ -70,7 +71,12 @@ WvKop? readWvKop(File f) {
     final vlaggen = u32(24);
 
     final index = (vlaggen >> 23) & 0xF;
-    final hz = index < _snelheden.length ? _snelheden[index] : 0;
+    var hz = index < _snelheden.length ? _snelheden[index] : 0;
+    // Index 15: de frequentie staat niet in de tabel maar in een metablok verderop in hetzelfde blok.
+    // Dat gold op 06-10-2026 voor een vinylrip op 176,4 kHz — een getal dat de tabel niet kent — en
+    // die stond daardoor als "32/?" in de catalogus. Een telefoon op 5G vroeg dan om 16 bit zonder
+    // frequentie, en de pc stuurde 77 MB terug op 176,4 kHz.
+    if (hz == 0) hz = _frequentieUitMetablok(raf, u32(4) + 8);
     final zwevend = (vlaggen & 0x80) != 0;
     // De "magnitude" is de hoogste bit die gebruikt wordt, dus één minder dan de diepte. Bij
     // zwevende komma zegt dat veld iets anders en is de vorm per definitie 32 bits.
@@ -95,6 +101,34 @@ WvKop? readWvKop(File f) {
       raf?.closeSync();
     } catch (_) {/* een bestand dat al weg is hoeft niet dicht */}
   }
+}
+
+/// De frequentie uit het metablok `ID_SAMPLE_RATE` (0x27) van het eerste blok, of 0.
+///
+/// [raf] staat net achter de kop van 32 bytes; [blokMaat] is de hele lengte van het blok. Een
+/// metablok is één byte id (0x80 = lange maat in drie bytes, 0x40 = de laatste byte is opvulling),
+/// een maat in woorden van twee bytes, en dan de inhoud. Gemeten op de rip van 176,4 kHz: het
+/// zesde metablok, id 0x67, drie bytes.
+int _frequentieUitMetablok(RandomAccessFile raf, int blokMaat) {
+  final te = (blokMaat < 65536 ? blokMaat : 65536) - 32;
+  if (te <= 2) return 0;
+  final b = raf.readSync(te);
+  var p = 0;
+  while (p + 2 <= b.length) {
+    final id = b[p];
+    final lang = (id & 0x80) != 0;
+    if (lang && p + 4 > b.length) break;
+    final woorden = lang ? b[p + 1] | (b[p + 2] << 8) | (b[p + 3] << 16) : b[p + 1];
+    final kop = lang ? 4 : 2;
+    final maat = woorden * 2;
+    final echt = (id & 0x40) != 0 ? maat - 1 : maat;
+    if ((id & 0x3F) == 0x27 && echt >= 3 && p + kop + echt <= b.length) {
+      final i = p + kop;
+      return b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (echt >= 4 ? b[i + 3] << 24 : 0);
+    }
+    p += kop + maat;
+  }
+  return 0;
 }
 
 /// Wat er in een APEv2-blok stond. Alles kan ontbreken; dat is geen fout.

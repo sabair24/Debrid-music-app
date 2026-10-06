@@ -98,6 +98,35 @@ List<String> omzetArgumenten({
   ];
 }
 
+/// Frequentie en diepte uit wat `ffmpeg -i` over de eerste geluidsstroom zegt, of null.
+///
+/// Drie vormen, alle drie gezien op deze pc op 06-10-2026:
+///
+///     Audio: ape (APE  / 0x20455041), 192000 Hz, stereo, s32p (24 bit)
+///     Audio: wavpack, 176400 Hz, stereo, fltp
+///     Audio: pcm_s16be, 48000 Hz, stereo, s16, 1536 kb/s
+///
+/// Staat "(N bit)" erbij, dan is dat de echte diepte; een s32 zonder is ook écht 32. Zwevende komma
+/// telt als 32, net als in `wavpack_kop.dart`.
+({int rate, int bits})? maatUitFfmpeg(String uitvoer) {
+  final regel = RegExp(r'Stream #\d+:\d+.*?: Audio: ([^\n]*)').firstMatch(uitvoer)?.group(1);
+  if (regel == null) return null;
+  final rate = int.tryParse(RegExp(r'(\d+) Hz').firstMatch(regel)?.group(1) ?? '') ?? 0;
+  var bits = int.tryParse(RegExp(r'\((\d+) bit\)').firstMatch(regel)?.group(1) ?? '') ?? 0;
+  if (bits <= 0) {
+    final vorm = RegExp(r', (u8|s16|s32|s64|flt|dbl)p?\b').firstMatch(regel)?.group(1);
+    bits = switch (vorm) {
+      'u8' => 8,
+      's16' => 16,
+      's32' || 'flt' => 32,
+      's64' || 'dbl' => 64,
+      _ => 0,
+    };
+  }
+  if (rate <= 0 && bits <= 0) return null;
+  return (rate: rate, bits: bits);
+}
+
 class Transcoder {
   Transcoder({String? ffmpegPath}) : _explicitPath = ffmpegPath;
 
@@ -259,6 +288,34 @@ class Transcoder {
     return '${recept.naam}${soxr ? 'x' : ''}_${file.path.hashCode.toUnsigned(32).toRadixString(16)}'
         '_${st.size}_${st.modified.millisecondsSinceEpoch}_${rate}_$bits';
   }
+
+  /// Wat er werkelijk in [bron] zit, volgens ffmpeg zelf — of null als ffmpeg er niet is of het
+  /// niet zegt.
+  ///
+  /// **Waarom.** De catalogus weet het niet altijd. Op 06-10-2026 stonden er een APE (24/192) en een
+  /// WavPack (32 bit, 176,4 kHz) in zonder frequentie, en twee AIFF's zonder diepte. Een telefoon
+  /// op mobiele data vraagt dan om het plafond (zie `metStand`), en dan beslist de pc hier op wat er
+  /// ÉCHT in het bestand zit in plaats van op een nul. Eén keer per bestand: het antwoord blijft
+  /// bewaard zolang grootte en wijzigingstijd gelijk blijven.
+  Future<({int rate, int bits})?> meet(File bron) async {
+    final ffmpeg = path;
+    if (ffmpeg == null) return null;
+    try {
+      final st = bron.statSync();
+      final sleutel = '${bron.path}|${st.size}|${st.modified.millisecondsSinceEpoch}';
+      if (_gemeten.containsKey(sleutel)) return _gemeten[sleutel];
+      // Zonder uitvoerbestand stopt ffmpeg met rc=1 nadat hij de invoer beschreven heeft — precies
+      // wat hier nodig is, en sneller dan het bestand ook maar te decoderen.
+      final r = await Process.run(ffmpeg, ['-hide_banner', '-i', bron.path]);
+      final maat = maatUitFfmpeg('${r.stderr}');
+      _gemeten[sleutel] = maat;
+      return maat;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  final Map<String, ({int rate, int bits})?> _gemeten = {};
 
   /// De nieuwste [bewaar] omzettingen houden en de rest weggooien.
   ///

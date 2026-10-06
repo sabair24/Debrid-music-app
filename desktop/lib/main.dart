@@ -726,6 +726,11 @@ Future<void> main() async {
   // daar kijkt de speler rechtstreeks naar het bestand en is er niets te vragen.
   player.vraagDeBron = (url) async => library.remote?.waarom(url);
   player.onKlaarzetten = (url) => unawaited(_zetKlaar(url));
+  // Wat er in een kopie op het toestel zit. Dezelfde volgorde als de resolver hierboven: een
+  // offline bewaarde kopie is bit voor bit het origineel en gaat voor; alleen een vooruit gehaalde
+  // kan omgezet zijn. Zie `OfflineTrack.grens`.
+  player.kopieGrens =
+      (path) => offline.localFor(path) != null ? null : vooruit.grensVoor(path);
   // Het volgende nummer alvast op de telefoon, alleen op mobiele data. Zie vooruithalen.dart.
   player.onVooruithalen = (huidig, volgende) {
     if (mode.owner) return; // de pc heeft alles zelf al

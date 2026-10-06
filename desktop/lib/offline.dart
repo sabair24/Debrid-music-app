@@ -17,6 +17,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'lan/stroomstand.dart' show grensUitUrl;
 import 'paths.dart';
 
 /// One track that lives on this device.
@@ -29,6 +30,8 @@ class OfflineTrack {
     required this.artist,
     required this.album,
     required this.savedAt,
+    this.grensRate = 0,
+    this.grensBits = 0,
   });
 
   /// The library path, exactly as the PC's catalogue gives it. The key to everything: it is what
@@ -44,6 +47,22 @@ class OfflineTrack {
   final String album;
   final DateTime savedAt;
 
+  /// Naar welke kwaliteit de pc dit nummer omzette voor het hierheen kwam, of 0 als het het origineel
+  /// is. Zie [grens].
+  final int grensRate;
+  final int grensBits;
+
+  /// Wat er in deze kopie zit als het NIET het bestand van de pc is, of null als het dat wel is.
+  ///
+  /// **Waarom dit bestaat.** Op mobiele data haalt de telefoon het volgende nummer alvast binnen (zie
+  /// `vooruithalen.dart`), en dat gaat via dezelfde weg als het spelen: met de grens van de cd-stand
+  /// erop. De kopie is dan 16/44.1. Maar zodra hij speelt, geeft de speler een pad op het toestel in
+  /// plaats van een adres met `maxRate=` erin, en las het scherm weer het BESTAND: "FLAC · 24/96".
+  /// Gemeld op 06-10-2026 met twee schermafdrukken vanaf 5G — *"sommige nummers worden nog altijd
+  /// niet omgezet"* — terwijl `stroom.log` op de pc bij allebei "omgezet naar 16/44100" zei.
+  ({int rate, int bits})? get grens =>
+      grensRate > 0 ? (rate: grensRate, bits: grensBits < 0 ? 0 : grensBits) : null;
+
   Map<String, dynamic> toJson() => {
         'path': path,
         'file': file,
@@ -52,6 +71,8 @@ class OfflineTrack {
         'artist': artist,
         'album': album,
         'savedAt': savedAt.toUtc().toIso8601String(),
+        if (grensRate > 0) 'grensRate': grensRate,
+        if (grensRate > 0 && grensBits > 0) 'grensBits': grensBits,
       };
 
   static OfflineTrack? fromJson(Map<String, dynamic> j) {
@@ -66,6 +87,8 @@ class OfflineTrack {
       artist: (j['artist'] ?? '').toString(),
       album: (j['album'] ?? '').toString(),
       savedAt: DateTime.tryParse((j['savedAt'] ?? '').toString()) ?? DateTime(1970),
+      grensRate: (j['grensRate'] as num?)?.toInt() ?? 0,
+      grensBits: (j['grensBits'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -266,6 +289,10 @@ class OfflineStore extends ChangeNotifier {
     }
     return t.file;
   }
+
+  /// Naar welke kwaliteit de kopie van [libraryPath] omgezet werd, of null als hier het origineel
+  /// staat of er geen kopie is. Zie [OfflineTrack.grens].
+  ({int rate, int bits})? grensVoor(String libraryPath) => _tracks[libraryPath]?.grens;
 
   Directory get _dir => appSubdir(map);
   File get _index => appFile(indexNaam);
@@ -522,6 +549,10 @@ class OfflineStore extends ChangeNotifier {
       await temp.rename(target.path);
       await _gooiDeelWeg(libraryPath); // de stempel hoort bij het halve bestand, niet bij het hele
 
+      // De grens uit het adres waarmee hij gehaald is, zodat het scherm straks kan zeggen wat er in
+      // deze kopie zit. Alleen de twee getallen: het adres zelf draagt een sleutel, en die hoort niet
+      // in een index op schijf.
+      final grens = grensUitUrl(url);
       _tracks[libraryPath] = OfflineTrack(
         path: libraryPath,
         file: target.path,
@@ -530,6 +561,8 @@ class OfflineStore extends ChangeNotifier {
         artist: artist,
         album: album,
         savedAt: DateTime.now(),
+        grensRate: grens?.rate ?? 0,
+        grensBits: grens?.bits ?? 0,
       );
       // Eerst afmelden, dan pas de index wegschrijven. Andersom is er een moment — de tijd van één
       // schrijfactie — waarop dit nummer zowel "staat op het toestel" als "wordt nog opgehaald" is,

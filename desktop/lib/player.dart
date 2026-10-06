@@ -850,6 +850,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// de zuinige stand werkt. Zie `grensUitUrl`.
   ({int rate, int bits})? stroomGrens;
 
+  /// Naar welke kwaliteit een kopie OP HET TOESTEL omgezet werd, of null. Ingehangen vanuit main.dart.
+  ///
+  /// Het vooruit gehaalde volgende nummer is al omgezet toen het binnenkwam, maar speelt als pad op
+  /// het toestel — daar staat geen `maxRate=` in. Zonder deze vraag stond er dan weer "FLAC · 24/96"
+  /// boven een kopie van 16/44.1. Zie `OfflineTrack.grens`.
+  ({int rate, int bits})? Function(String path)? kopieGrens;
+
   Stilstandwacht _wacht = Stilstandwacht();
 
   /// De bron zoals libmpv hem krijgt, plus het geduld dat daarbij hoort.
@@ -860,8 +867,10 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// geluid" over zou roepen. Vandaar vijfentwintig zodra er een plafond in de URL staat.
   String _bron(String path) {
     final url = mediaResolver(path);
-    stroomGrens = grensUitUrl(url);
-    _omzetten = stroomGrens != null;
+    final opDeLijn = grensUitUrl(url);
+    // Het geduld hoort alleen bij de lijn: een kopie op het toestel hoeft niemand meer om te zetten.
+    _omzetten = opDeLijn != null;
+    stroomGrens = opDeLijn ?? (url.startsWith('http') ? null : kopieGrens?.call(path));
     _wacht = Stilstandwacht(
         geduld: Duration(seconds: _omzetten ? 25 : 10));
     return url;

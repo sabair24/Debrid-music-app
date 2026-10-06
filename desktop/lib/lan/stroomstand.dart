@@ -142,6 +142,10 @@ String metStand(
     bits: bits,
     maxSampleRate: plafond.rate,
     maxBitDepth: plafond.bits,
+    // Weet de catalogus het niet, dan VRAGEN om het plafond. De pc meet het bestand dan zelf na en
+    // stuurt het origineel als het eronder blijkt te zitten. Andersom — niets vragen — ging er een
+    // APE van 216 MB onveranderd over 5G. Zie [castGrenzen].
+    onbekendIsTeVeel: true,
   );
   if (!grens.omzetten) return url;
 

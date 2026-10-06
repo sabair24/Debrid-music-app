@@ -77,16 +77,24 @@ class Renderer {
 /// frequentie.
 ///
 /// [maxSampleRate] 0 betekent "geen bekend plafond" — dan blijft de frequentie zoals hij is.
+///
+/// [onbekendIsTeVeel] zegt wat een ONBEKENDE frequentie of diepte betekent. Voor een speaker niets
+/// (zie hieronder); voor een telefoon op mobiele data juist "zet om naar het plafond". Zonder dat
+/// ging op 06-10-2026 een APE van 216 MB (24/192, de catalogus wist het niet) onveranderd over 5G,
+/// en werd een WavPack van 32 bit zonder bekende frequentie "16/0": 16 bit, maar op 176,4 kHz.
 ({bool omzetten, int rate, int bits}) castGrenzen({
   required int sampleRate,
   required int bits,
   required int maxSampleRate,
   required int maxBitDepth,
+  bool onbekendIsTeVeel = false,
 }) {
-  final teHoog = maxSampleRate > 0 && sampleRate > maxSampleRate;
-  // `bits > 0` want een onbekende diepte is geen te grote diepte. Een catalogus van vóór deze
-  // versie geeft 0, en dan hoort er niets omgezet te worden op grond van niets.
-  final teDiep = maxBitDepth > 0 && bits > 0 && bits > maxBitDepth;
+  final teHoog = maxSampleRate > 0 &&
+      (sampleRate > maxSampleRate || (onbekendIsTeVeel && sampleRate <= 0));
+  // Standaard is een onbekende diepte geen te grote diepte. Een catalogus van vóór deze versie geeft
+  // 0, en dan hoort er bij een speaker niets omgezet te worden op grond van niets.
+  final teDiep = maxBitDepth > 0 &&
+      (bits > maxBitDepth || (onbekendIsTeVeel && bits <= 0));
   return (
     omzetten: teHoog || teDiep,
     // Wat niet overschreden wordt, blijft staan. Alleen de diepte verlagen en de frequentie met rust
