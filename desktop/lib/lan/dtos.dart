@@ -238,6 +238,14 @@ class TrackDto {
   /// Null voor alles wat niemand heeft aangewezen, en dat is verreweg het meeste.
   final String? rij;
 
+  /// Wat de pc over de luidheid van dit bestand weet (gelijk volume, zie luidheid_winkel.dart):
+  /// `{'i': LUFS, 'tp': piek}` bij een meting, `{'mk': kanalen}` bij meerkanaals en `{'f': 1}` bij
+  /// definitief mislukt — die twee zonder getallen, zodat geen toestel er een versterking op kan
+  /// zetten — of `{'her': 1}` als het na een bewerking opnieuw gemeten wordt. Null = ongemeten.
+  ///
+  /// De ruwe meting en geen dB: de keuze Uit/Gelijk/Luider is per toestel, dus elk toestel rekent zelf.
+  final Map<String, dynamic>? luid;
+
   const TrackDto({
     required this.id,
     required this.albumId,
@@ -263,6 +271,7 @@ class TrackDto {
     this.addedMs = 0,
     this.echt,
     this.rij,
+    this.luid,
   });
 
   /// True when the file is beyond what Sonos will accept (it plays FLAC/ALAC up to 24-bit but
@@ -295,6 +304,7 @@ class TrackDto {
         addedMs: _int(j['addedMs']),
         echt: j['echt'] is Map ? Map<String, dynamic>.from(j['echt'] as Map) : null,
         rij: j['rij'] as String?,
+        luid: j['luid'] is Map ? Map<String, dynamic>.from(j['luid'] as Map) : null,
       );
 
   Map<String, dynamic> toJson() => {
@@ -324,6 +334,7 @@ class TrackDto {
         // nummer null, en een null per nummer meesturen kost bytes zonder iets te zeggen.
         if (echt != null) 'echt': echt,
         if (rij != null && rij!.isNotEmpty) 'rij': rij,
+        if (luid != null) 'luid': luid,
       };
 }
 
@@ -333,11 +344,16 @@ class CatalogDto {
   final List<TrackDto> tracks;
   final int generatedAt;
 
+  /// De stand van gelijk volume op de pc (`LuidheidStatus.toJson`): doet hij mee, meet hij nog, is
+  /// hij klaar. Null bij een pc van vóór deze versie — en dan zegt het toestel "werk je pc bij".
+  final Map<String, dynamic>? luidheid;
+
   const CatalogDto({
     this.artists = const [],
     this.albums = const [],
     this.tracks = const [],
     this.generatedAt = 0,
+    this.luidheid,
   });
 
   factory CatalogDto.fromJson(Map<String, dynamic> j) => CatalogDto(
@@ -345,6 +361,7 @@ class CatalogDto {
         albums: _list(j['albums'], AlbumDto.fromJson),
         tracks: _list(j['tracks'], TrackDto.fromJson),
         generatedAt: _int(j['generatedAt']),
+        luidheid: j['luidheid'] is Map ? Map<String, dynamic>.from(j['luidheid'] as Map) : null,
       );
 
   Map<String, dynamic> toJson() => {
@@ -352,6 +369,7 @@ class CatalogDto {
         'albums': [for (final a in albums) a.toJson()],
         'tracks': [for (final t in tracks) t.toJson()],
         'generatedAt': generatedAt,
+        if (luidheid != null) 'luidheid': luidheid,
       };
 }
 

@@ -157,6 +157,78 @@ Map<String, String> readFlacRawFields(File f) {
   return fields;
 }
 
+/// Wat een FLAC over zijn eigen audio zegt: aantal monsters, frequentie, kanalen, diepte, de MD5 van
+/// de gedecodeerde monsters en hoeveel bytes audio er na het laatste metablok staan.
+typedef FlacKern = ({int monsters, int frequentie, int kanalen, int diepte, String md5, int audioBytes});
+
+/// Leest de [FlacKern] van [f], of null als het geen leesbare FLAC is.
+///
+/// **Waarom dit er is.** Gelijk volume (luidheid_veger.dart) hoeft een nummer na een tagbewerking niet
+/// opnieuw te meten: tags schrijven kopieert de audiobytes ongewijzigd ([_finish]), en STREAMINFO
+/// draagt een MD5 van de monsters. Gelijke MD5, monsters, frequentie, kanalen, diepte én audiolengte
+/// — plus een controlegang op de gedecodeerde audio — is bewijs dat het dezelfde audio is.
+///
+/// Eigen openSync/closeSync, nooit via audio_metadata_reader: die laat een handvat open. De MD5 is
+/// "0000…" als de encoder hem niet uitrekende; dat is geen bewijs van iets.
+FlacKern? leesFlacKern(File f) {
+  RandomAccessFile? raf;
+  try {
+    raf = f.openSync();
+    if (flacBegin(raf) < 0) return null;
+    FlacKern? kern;
+    var laatsteGezien = false;
+    for (var block = 0; block < 128; block++) {
+      final h = raf.readSync(4);
+      if (h.length < 4) return null;
+      final isLast = (h[0] & 0x80) != 0;
+      final type = h[0] & 0x7F;
+      final len = (h[1] << 16) | (h[2] << 8) | h[3];
+      if (len < 0 || len > 64 * 1024 * 1024) return null;
+      if (type == 0 && len >= 34) {
+        final d = raf.readSync(len);
+        if (d.length < 34) return null;
+        final frequentie = (d[10] << 12) | (d[11] << 4) | (d[12] >> 4);
+        final kanalen = ((d[12] >> 1) & 0x07) + 1;
+        final diepte = (((d[12] & 0x01) << 4) | (d[13] >> 4)) + 1;
+        final monsters =
+            ((d[13] & 0x0F) << 32) | (d[14] << 24) | (d[15] << 16) | (d[16] << 8) | d[17];
+        final md5 = [for (final b in d.sublist(18, 34)) b.toRadixString(16).padLeft(2, '0')].join();
+        kern = (
+          monsters: monsters,
+          frequentie: frequentie,
+          kanalen: kanalen,
+          diepte: diepte,
+          md5: md5,
+          audioBytes: 0,
+        );
+      } else {
+        raf.setPositionSync(raf.positionSync() + len);
+      }
+      if (isLast) {
+        laatsteGezien = true;
+        break;
+      }
+    }
+    if (kern == null || !laatsteGezien) return null;
+    final audio = raf.lengthSync() - raf.positionSync();
+    if (audio <= 0) return null;
+    return (
+      monsters: kern.monsters,
+      frequentie: kern.frequentie,
+      kanalen: kern.kanalen,
+      diepte: kern.diepte,
+      md5: kern.md5,
+      audioBytes: audio,
+    );
+  } catch (_) {
+    return null;
+  } finally {
+    try {
+      raf?.closeSync();
+    } catch (_) {}
+  }
+}
+
 /// Reads [f]'s FLAC tags, or null if it isn't FLAC / has no readable header.
 FlacTags? readFlacTags(File f) {
   RandomAccessFile? raf;

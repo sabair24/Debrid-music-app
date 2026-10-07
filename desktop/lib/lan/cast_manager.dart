@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../models.dart';
 import '../warm_log.dart';
 import 'catalog.dart';
 import 'dtos.dart';
@@ -123,6 +124,28 @@ Future<String?> probeShield(String host, {int port = ShieldTarget.port}) async {
 /// the audio then goes straight from here to the speaker instead of being relayed by whatever
 /// you happened to tap on; one implementation serves every device in the house; and it sidesteps
 /// Apple's multicast entitlement, which SSDP discovery from an iPad would otherwise need.
+/// De lijst die naar de Shield gaat: per bekend nummer een adres, en PARALLEL daaraan de
+/// luidheidsopgave voor dat adres (gelijk volume). Eén lus met één `continue`, zodat de twee lijsten
+/// nooit uit de pas lopen als een nummer niet (meer) in de catalogus staat. Puur, zodat een toets het
+/// kan nalopen zonder Shield.
+({List<String> urls, List<Map<String, dynamic>?> luidheid}) shieldLijst({
+  required List<String> trackIds,
+  required List<Track?> tracks,
+  required String Function(String id, Track t) adres,
+  Map<String, dynamic>? Function(Track t, List<Track> rij, int plek)? opgave,
+}) {
+  final rij = [for (final t in tracks) if (t != null) t];
+  final urls = <String>[];
+  final luidheid = <Map<String, dynamic>?>[];
+  for (var i = 0; i < trackIds.length && i < tracks.length; i++) {
+    final track = tracks[i];
+    if (track == null) continue;
+    urls.add(adres(trackIds[i], track));
+    luidheid.add(opgave?.call(track, rij, urls.length - 1));
+  }
+  return (urls: urls, luidheid: luidheid);
+}
+
 class CastManager {
   CastManager({
     required this.catalog,
@@ -234,16 +257,23 @@ class CastManager {
   }
 
   /// The Shield gets the whole queue at once — it has a real player and can manage its own gaps.
+  /// Gelijk volume voor de Shield: de opgave per nummer (meting, plaatwaarde, stand van deze pc), of
+  /// null. Ingehangen vanuit main.dart — daar zitten de bibliotheek en de instellingen. Zie
+  /// luidheid_winkel.dart `zenderopgaveVoor`. Statisch: de castmanager wordt pas met de server
+  /// gemaakt, en dit hoort één keer bij het opstarten gezet te worden.
+  static Map<String, dynamic>? Function(Track t, List<Track> rij, int plek)? luidheidOpgave;
+
   Future<void> _playOnShield(ShieldTarget shield, List<String> trackIds, int index) async {
     final base = await lanAddressFor(shield.host);
     if (base == null) throw StateError('no route to ${shield.host}');
     final tracks = [for (final id in trackIds) catalog.track(id)];
-    final urls = <String>[];
-    for (var i = 0; i < trackIds.length; i++) {
-      final track = tracks[i];
-      if (track == null) continue;
-      urls.add('http://$base:$port/stream/${trackIds[i]}.${track.ext}?token=$token');
-    }
+    final lijst = shieldLijst(
+      trackIds: trackIds,
+      tracks: tracks,
+      adres: (id, t) => 'http://$base:$port/stream/$id.${t.ext}?token=$token',
+      opgave: luidheidOpgave,
+    );
+    final urls = lijst.urls;
     if (urls.isEmpty) throw StateError('none of those tracks are in the library');
 
     final first = tracks[index.clamp(0, tracks.length - 1)];
@@ -259,6 +289,8 @@ class CastManager {
         'title': first?.title ?? '',
         'artist': first?.artist ?? '',
         'album': first?.album ?? '',
+        // Parallel aan streamUrls; een oudere ontvanger negeert hem.
+        if (lijst.luidheid.any((o) => o != null)) 'luidheid': lijst.luidheid,
       }));
       request.contentLength = payload.length;
       request.add(payload);

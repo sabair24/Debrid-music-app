@@ -72,20 +72,47 @@ void main() {
   });
 
   group('de hoes wordt er groter van, niet kleiner', () {
-    /// De gestapelde regel, zoals `_sleeve` in main.dart hem aanhoudt op een breed scherm.
-    double gestapeld(Size s) {
-      final opBreedte = (s.width - 40) / (1 + breed);
-      final opHoogte = s.height * .46;
-      final kleinste = opBreedte < opHoogte ? opBreedte : opHoogte;
-      return kleinste.clamp(140.0, 520.0);
-    }
-
+    // De echte gestapelde regel uit speelvlak.dart, dezelfde die `_sleeve` in main.dart aanroept —
+    // hier stond eerst een kopie, en twee kopieën lopen uiteen zodra er één bijgesteld wordt.
     for (final (naam, scherm) in _schermen) {
       test(naam, () {
-        expect(hoesNaast(scherm: scherm, reisfactor: breed), greaterThan(gestapeld(scherm)),
+        final gestapeld = hoesGestapeld(scherm: scherm, compact: false, tv: false, reisfactor: breed);
+        expect(hoesNaast(scherm: scherm, reisfactor: breed), greaterThan(gestapeld),
             reason: 'als de hoes er niet groter van wordt, is de verbouwing zinloos');
       });
     }
+
+    test('_sleeve gebruikt de echte regel, geen eigen kopie', () {
+      final main = File('lib/main.dart').readAsStringSync();
+      expect(main, contains('double _sleeve(BuildContext context) => hoesGestapeld('));
+    });
+  });
+
+  // Gelijk volume (07-10-2026) zet een merk bij de naamrij van Nu speelt. Op een smal scherm krijgt
+  // het een eigen regel — in de rij zou het de artiestnaam tot puntjes drukken — en die regel kost
+  // hoogte die op een telefoon dwars en op de Shield krap is.
+  group('het gelijk-volume-merk', () {
+    test('DE KERN: telefoon staand — eigen regel', () {
+      expect(merkEigenRegel(kolom: 328, tv: false), isTrue, reason: 'een S26 staand');
+      expect(merkEigenRegel(kolom: 280, tv: false), isTrue, reason: 'een kleine telefoon');
+    });
+
+    test('DE GRENS: een breed scherm en de televisie — in de rij, geen extra hoogte', () {
+      expect(merkEigenRegel(kolom: kMerkRijBreedte, tv: false), isFalse);
+      expect(merkEigenRegel(kolom: 640, tv: false), isFalse, reason: 'een pc-venster');
+      expect(merkEigenRegel(kolom: 300, tv: true), isFalse,
+          reason: 'op de Shield (960×540) is de hoogte tot op de punt verdeeld; daar mag niets bij');
+    });
+
+    test('DE VAL: op een telefoon staand blijven hoes, kolom en merk binnen het scherm', () {
+      // S26 staand: 412×892, minus statusbalk en navigatie. De gestapelde indeling zet de hoes
+      // boven de kolom; met het merk erbij moet de kolom van ~250 er nog steeds onder passen.
+      const bruikbaar = Size(412, 846);
+      final hoes = hoesGestapeld(scherm: bruikbaar, compact: true, tv: false, reisfactor: smal);
+      // 48 balk boven, 32 albumnaam onder de hoes, 64 speelbalk onderaan.
+      expect(48 + hoes + 32 + 250 + kMerkregel + 64, lessThanOrEqualTo(bruikbaar.height),
+          reason: 'anders duwt het merk de transportknoppen onder de rand');
+    });
   });
 
   test('op een enorm scherm wordt de hoes geen behang', () {
@@ -136,8 +163,11 @@ void main() {
             reason: 'de hoes met de balk erboven en de albumnaam eronder past in de hoogte');
         expect(kolom, greaterThanOrEqualTo(kLiggendKolomMin), reason: 'zes knoppen op een rij');
         // De kolom (titel, artiest, spoelbalk, knoppen) is ~250 punten; onder de balk van 48 moet
-        // daar plaats voor zijn — anders valt de knoppenrij weer onder de rand.
-        expect(bruikbaar.height - 48, greaterThanOrEqualTo(250), reason: 'de kolom past ernaast');
+        // daar plaats voor zijn — anders valt de knoppenrij weer onder de rand. De kolom is hier
+        // smaller dan kMerkRijBreedte, dus het gelijk-volume-merk staat op een eigen regel en kost
+        // kMerkregel extra.
+        expect(merkEigenRegel(kolom: kolom, tv: false), isTrue, reason: 'dwars is de kolom smal');
+        expect(bruikbaar.height - 48, greaterThanOrEqualTo(250 + kMerkregel), reason: 'de kolom past ernaast');
         expect(hoes, greaterThanOrEqualTo(180), reason: 'een hoes die het waard is, geen postzegel');
       });
     }

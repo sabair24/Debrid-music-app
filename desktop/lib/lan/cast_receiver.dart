@@ -16,6 +16,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../luidheid_winkel.dart' show onthoudLuidheidVanZender;
 import '../models.dart';
 
 /// Where the sender looks. Fixed rather than announced: the PC probes a /24 in under a second,
@@ -68,9 +69,19 @@ class CastReceiver {
           if (decoded is! Map<String, dynamic>) {
             return _json(req, {'error': 'empty request'}, status: HttpStatus.badRequest);
           }
-          final urls = [
-            for (final u in (decoded['streamUrls'] as List? ?? const [])) '$u',
-          ]..removeWhere((u) => u.isEmpty);
+          final ruw = [for (final u in (decoded['streamUrls'] as List? ?? const [])) '$u'];
+          // Gelijk volume: de opgave per adres, parallel aan streamUrls — gekoppeld VÓÓR het
+          // weglaten van lege adressen, anders schuift de lijst en krijgt elk nummer de opgave van
+          // zijn buurman. Een oudere zender stuurt niets; dan speelt alles zoals vroeger.
+          final opgaven = decoded['luidheid'];
+          onthoudLuidheidVanZender({
+            for (var i = 0; i < ruw.length; i++)
+              if (ruw[i].isNotEmpty)
+                ruw[i]: (opgaven is List && i < opgaven.length && opgaven[i] is Map)
+                    ? Map<String, dynamic>.from(opgaven[i] as Map)
+                    : null,
+          });
+          final urls = ruw..removeWhere((u) => u.isEmpty);
           if (urls.isEmpty) {
             return _json(req, {'error': 'empty request'}, status: HttpStatus.badRequest);
           }

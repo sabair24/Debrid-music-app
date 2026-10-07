@@ -239,10 +239,26 @@ class Transcoder {
   /// Oplopend, zodat twee omzettingen nooit dezelfde tijdelijke naam kiezen.
   static int _teller = 0;
 
+  /// Hoeveel omzettingen er nu lopen, over ALLE Transcoders (de server en de castmanager hebben elk
+  /// een eigen). De luidheidsveger wacht zolang dit niet nul is: de eerste byte voor de telefoon gaat
+  /// voor een meting die ook over een minuut kan.
+  static int _actief = 0;
+  static bool get bezig => _actief > 0;
+
   Future<File?> _zetOm(File file, File uit, int maxSampleRate, int maxBits, Omzetrecept recept,
       Directory cacheDir) async {
     final ffmpeg = path;
     if (ffmpeg == null) return null;
+    _actief++;
+    try {
+      return await _zetOmMet(ffmpeg, file, uit, maxSampleRate, maxBits, recept, cacheDir);
+    } finally {
+      _actief--;
+    }
+  }
+
+  Future<File?> _zetOmMet(String ffmpeg, File file, File uit, int maxSampleRate, int maxBits,
+      Omzetrecept recept, Directory cacheDir) async {
     try {
       if (!cacheDir.existsSync()) cacheDir.createSync(recursive: true);
       final tijdelijk = File('${uit.path}.${pid}_${_teller++}.tmp');

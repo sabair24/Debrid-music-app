@@ -7,6 +7,7 @@ import 'package:media_kit/media_kit.dart' hide Track;
 import 'artwork.dart' show kleurBuitenDeTekendraad;
 import 'kapot_bestand.dart' show waaromNietTeOpenen;
 import 'lan/stroomstand.dart' show grensUitUrl;
+import 'luidheid.dart' show Bijstelbron, Bijstelling, adresSleutel;
 import 'models.dart';
 import 'paths.dart';
 import 'schudvolgorde.dart';
@@ -857,6 +858,29 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// boven een kopie van 16/44.1. Zie `OfflineTrack.grens`.
   ({int rate, int bits})? Function(String path)? kopieGrens;
 
+  /// Gelijk volume: de versterking voor een nummer. Ingehangen vanuit main.dart, waar de bibliotheek
+  /// en de instellingen zitten (zie luidheid_winkel.dart `bijstellingVoorNummer`). Null = uit.
+  Bijstelling Function(Track t, {required List<Track> rij, required int plek, required bool opVolgorde})?
+      luidheidVoor;
+
+  /// Wat er berekend is voor het nummer dat nu opent — voor het blad.
+  Bijstelling? luidheidNu;
+
+  /// Wat de on_load-haak WERKELIJK aan mpv gaf. Dit toont het merk op Nu speelt, en niet [luidheidNu]:
+  /// een merk dat "−3,4 dB" zegt boven een nummer dat op 0 dB speelt is het slechtste wat kan.
+  Bijstelling? luidheidToegepast;
+
+  /// Kent deze mpv `replaygain-fallback` niet? Dan zegt de instelling dat.
+  bool luidheidWerktNiet = false;
+
+  /// Adres → versterking, zodat de haak per bestand de juiste waarde vindt, ook bij snel doorklikken
+  /// (de haak van nummer A kan pas lopen nadat B al vastgelegd is). Hooguit de laatste ~8. Een
+  /// oudere waarde voor hetzelfde bestand uit een andere context (album of nummer) is veilig: beide
+  /// zijn met de eigen piek van dat nummer berekend — dus niet "corrigeren" naar per nummer.
+  final Map<String, ({double db, String titel, Bijstelling b})> _luidheidPerAdres = {};
+  String? _adresNu;
+  double _luidheidGezet = 0;
+
   Stilstandwacht _wacht = Stilstandwacht();
 
   /// De bron zoals libmpv hem krijgt, plus het geduld dat daarbij hoort.
@@ -874,6 +898,122 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _wacht = Stilstandwacht(
         geduld: Duration(seconds: _omzetten ? 25 : 10));
     return url;
+  }
+
+  /// Gelijk volume: reken de versterking voor [t] uit en leg hem vast onder het adres dat mpv zo
+  /// krijgt. Toegepast wordt hij pas in [_luidheidHaak], vóór het laden van dat bestand — nooit op het
+  /// uitgaande nummer. Met het VERSE Track uit de bibliotheek: de wachtrij kan een oud object houden
+  /// (remapQueue vervangt alleen bij een andere weergave), en een betere versie die op hetzelfde
+  /// bestand landde heeft een andere grootte en dus een andere meting.
+  void _zetLuidheid(Track t,
+      {required String adres, required List<Track> rij, required int plek, required bool opVolgorde}) {
+    final vers = trackResolver?.call(t.path) ?? t;
+    final f = luidheidVoor;
+    final b = f == null ? Bijstelling.nul : f(vers, rij: rij, plek: plek, opVolgorde: opVolgorde);
+    luidheidNu = b;
+    _onthoudLuidheid(adres, b, vers.title);
+  }
+
+  void _onthoudLuidheid(String adres, Bijstelling b, String titel) {
+    final k = adresSleutel(adres, kleineLetters: padenZijnHoofdletterOngevoelig);
+    _luidheidPerAdres.remove(k);
+    _luidheidPerAdres[k] = (db: b.db, titel: titel, b: b);
+    while (_luidheidPerAdres.length > 8) {
+      _luidheidPerAdres.remove(_luidheidPerAdres.keys.first);
+    }
+  }
+
+  /// mpv's on_load-haak: draait nadat het vorige nummer gestopt is en vóór het nieuwe bestand opent
+  /// (media_kit wacht de haken af vóór `mpv_hook_continue`). Zoekt de versterking op onder mpv's eigen
+  /// `path` — op Windows `\\?\D:\…`, vandaar [adresSleutel] aan beide kanten — en schrijft hem als
+  /// `replaygain-fallback` (met `replaygain=no`: één vermenigvuldiging op de uitgangsversterking, los
+  /// van het volume en de demping). Onbekend adres → 0 dB: het enige getal dat voor elk bestand veilig
+  /// is. Kort: geen andere await dan get/setProperty, want elk laden wacht hierop.
+  Future<void> _luidheidHaak() async {
+    final p = _player.platform;
+    if (p is! NativePlayer) return;
+    try {
+      final pad = await p.getProperty('path');
+      final k = adresSleutel(pad, kleineLetters: padenZijnHoofdletterOngevoelig);
+      final w = _luidheidPerAdres[k];
+      if (w == null) _log?.line('LUIDHEID onbekend adres $k');
+      final db = w?.db ?? 0.0;
+      if (db != _luidheidGezet) await p.setProperty('replaygain-fallback', db.toStringAsFixed(2));
+      final terug = await p.getProperty('replaygain-fallback');
+      final gelezen = double.tryParse(terug);
+      // Onleesbaar teruggelezen = onbekend wat mpv heeft; NaN zorgt dat de volgende haak altijd schrijft.
+      _luidheidGezet = gelezen ?? double.nan;
+      _adresNu = k;
+      luidheidToegepast = gelezen == null
+          ? const Bijstelling(0, Bijstelbron.mpvWeigert)
+          : (w == null ? const Bijstelling(0, Bijstelbron.onbekendAdres) : w.b);
+      _log?.line('LUIDHEID ${db.toStringAsFixed(2)} dB ${w?.b.bron.name ?? 'onbekend'}'
+          '${(w?.b.alsAlbum ?? false) ? ' album' : ''} — ${w?.titel ?? ''} — mpv=$terug');
+      notifyListeners();
+    } catch (e) {
+      _log?.line('LUIDHEID haak faalde: $e');
+      // Niet de versterking van het vorige nummer laten staan — bij twijfel onaangeroerd.
+      if (_luidheidGezet != 0) {
+        try {
+          await p.setProperty('replaygain-fallback', '0.00');
+          _luidheidGezet = 0;
+        } catch (_) {}
+      }
+      luidheidToegepast = const Bijstelling(0, Bijstelbron.mpvWeigert);
+    }
+  }
+
+  /// Eén keer bij het maken van de speler: tags in de bestanden NIET gebruiken (die hebben geen ware
+  /// piek, een ander referentieniveau, en een verzamel-albumgain klopt niet meer na herindelen), en de
+  /// haak inhangen. Niet `replaygain-fallback=0` zetten: dat zou een vroege eerste waarde overschrijven.
+  Future<void> _zetLuidheidBasis() async {
+    final p = _player.platform;
+    if (p is! NativePlayer) return;
+    try {
+      await p.setProperty('replaygain', 'no');
+      final rg = await p.getProperty('replaygain');
+      final fb = await p.getProperty('replaygain-fallback');
+      if (rg.isEmpty || fb.isEmpty) {
+        luidheidWerktNiet = true;
+        _log?.line('LUIDHEID mpv kent replaygain niet (replaygain="$rg", fallback="$fb")');
+      }
+      p.onLoadHooks.add(_luidheidHaak);
+    } catch (e) {
+      luidheidWerktNiet = true;
+      _log?.line('LUIDHEID basis niet ingesteld: $e');
+    }
+  }
+
+  /// De instelling (of de albumschakelaar) veranderde: meteen toepassen op wat nu speelt — dat is de
+  /// A/B-knop. mpv neemt het over vanaf de volgende uitgangsperiode (UPDATE_VOL), van de ene geldige
+  /// waarde naar de andere zonder tussenwaarden. Nieuwe metingen of een nieuwe catalogus veranderen
+  /// nooit midden in een nummer; alleen deze bewuste keuze.
+  Future<void> herzieLuidheid() async {
+    final t = current;
+    final adres = _adresNu;
+    final p = _player.platform;
+    if (t == null || adres == null || p is! NativePlayer) return;
+    final vers = trackResolver?.call(t.path) ?? t;
+    final f = luidheidVoor;
+    final b = f == null
+        ? Bijstelling.nul
+        : f(vers,
+            rij: radioMode ? [vers] : _order,
+            plek: radioMode ? 0 : _index,
+            opVolgorde: !shuffle && !radioMode);
+    luidheidNu = b;
+    _luidheidPerAdres[adres] = (db: b.db, titel: vers.title, b: b);
+    try {
+      await p.setProperty('replaygain-fallback', b.db.toStringAsFixed(2));
+      final terug = await p.getProperty('replaygain-fallback');
+      final gelezen = double.tryParse(terug);
+      _luidheidGezet = gelezen ?? double.nan;
+      luidheidToegepast = gelezen == null ? const Bijstelling(0, Bijstelbron.mpvWeigert) : b;
+      _log?.line('LUIDHEID ${b.db.toStringAsFixed(2)} dB ${b.bron.name} (omgezet) — ${vers.title} — mpv=$terug');
+    } catch (e) {
+      _log?.line('LUIDHEID omzetten faalde: $e');
+    }
+    notifyListeners();
   }
 
   /// The queue as it will actually play, shuffle applied.
@@ -930,6 +1070,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   PlayerStore() {
     unawaited(_zetVooruitlezen());
+    unawaited(_zetLuidheidBasis());
     _player.stream.playing.listen((p) {
       playing = p;
       if (p) resumedPaused = false;
@@ -1280,7 +1421,14 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     if (t == null) return;
     final plek = position;
     try {
-      await _player.open(Media(_bron(t.path)), play: true);
+      final bron = _bron(t.path);
+      // Gelijk volume: NIET herrekenen (zelfde nummer), maar de lopende waarde overnemen onder het
+      // adres dat nu opent. Na een hapering kiest de stroomstand een ander adres (`maxRate=`), of is
+      // intussen een vooruit-kopie binnen; zonder dit vond de haak dat adres niet en sprong een luid
+      // nummer halverwege 6–9 dB omhoog. Veilig: dezelfde opname, dus met zijn eigen piek berekend.
+      final lopend = luidheidToegepast ?? Bijstelling(_luidheidGezet.isNaN ? 0 : _luidheidGezet, Bijstelbron.nummer);
+      _onthoudLuidheid(bron, lopend, t.title);
+      await _player.open(Media(bron), play: true);
       if (plek <= Duration.zero) return;
 
       // **Een seek vlak na open() wordt stil genegeerd** zolang libmpv het bestand nog niet geladen
@@ -1532,7 +1680,11 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
         currentCover = it.isLocal ? coverResolver?.call(it.local!) : null;
         notifyListeners();
         _nieuwVoorDeTelling(it.local);
-        await _player.open(Media(_bron(path)), play: true);
+        final bron = _bron(path);
+        // Radio is per nummer: geen plaat op volgorde.
+        _zetLuidheid(it.local ?? Track(path: path, title: it.title, artist: it.artist, album: ''),
+            adres: bron, rij: const [], plek: 0, opVolgorde: false);
+        await _player.open(Media(bron), play: true);
         if (gen != _radioGen) return; // superseded while opening
         _prefetchNext();
         _maybeExtend();
@@ -1793,7 +1945,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _vooruitLaatst = null;
     if (coverResolver != null) currentCover = coverResolver!(t);
     _nieuwVoorDeTelling(t);
-    await _player.open(Media(_bron(t.path)), play: true);
+    final bron = _bron(t.path);
+    _zetLuidheid(t, adres: bron, rij: _order, plek: _index, opVolgorde: !shuffle);
+    await _player.open(Media(bron), play: true);
     _saveProgress(force: true); // track changed → persist the new spot
     _zetVolgendeKlaar();
     notifyListeners();
@@ -2129,7 +2283,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       if (t == null) return;
       currentCover = coverResolver?.call(t);
       _nieuwVoorDeTelling(t);
-      await _player.open(Media(_bron(t.path)), play: false); // reopen PAUSED
+      final bron = _bron(t.path);
+      _zetLuidheid(t, adres: bron, rij: _order, plek: _index, opVolgorde: !shuffle);
+      await _player.open(Media(bron), play: false); // reopen PAUSED
       if (posMs > 0) {
         // The seek only sticks once libmpv has loaded the file (duration known);
         // seeking too early is silently dropped → playback would restart at 0.

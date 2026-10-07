@@ -80,6 +80,11 @@ import 'lan/stroomstand.dart';
 import 'now_playing.dart';
 import 'login_screen.dart';
 import 'lossless_want.dart' show performerFromFilename, zoekvraagVoorAlbum, zoekvraagVoorNummer;
+import 'lan/cast_manager.dart' show CastManager;
+import 'luidheid.dart';
+import 'luidheid_keuze.dart';
+import 'luidheid_veger.dart';
+import 'luidheid_winkel.dart';
 import 'pairing_screen.dart';
 import 'artwork.dart' show decodeWidth, kleurBuitenDeTekendraad;
 import 'beeldvorm.dart';
@@ -662,6 +667,9 @@ Future<void> main() async {
   // Wat er van elk bestand gemeten is. Vóór de eerste scan, want `firstIsBetter` vraagt hier bij elke
   // vergelijking naar — en een lijst die nog niet is ingelezen beschermt niets.
   if (mode.owner) await laadEchtheid();
+  // Gelijk volume: wat de pc al gemeten heeft. Vóór de server start, zodat zijn eerste catalogus de
+  // status al draagt ("de pc begint zo met meten") — zie luidheid_winkel.dart.
+  if (mode.owner) await laadLuidheid();
 
   player = PlayerStore()
     ..resolver = online.resolveRadio
@@ -731,6 +739,27 @@ Future<void> main() async {
   // kan omgezet zijn. Zie `OfflineTrack.grens`.
   player.kopieGrens =
       (path) => offline.localFor(path) != null ? null : vooruit.grensVoor(path);
+  // Gelijk volume: de versterking per nummer (luidheid_winkel.dart `bijstellingVoorNummer`). Op het
+  // Track, niet op de bron: offline, vooruit en gestreamd krijgen dezelfde dB.
+  player.luidheidVoor = (Track t,
+          {required List<Track> rij, required int plek, required bool opVolgorde}) =>
+      bijstellingVoorNummer(t,
+          rij: rij,
+          plek: plek,
+          opVolgorde: opVolgorde,
+          stand: luidheidsstandUit(settings.luidheid),
+          albumGeheel: settings.luidheidAlbum,
+          albumVan: library.albumForPath,
+          bibliotheek: () => library.tracks);
+  // Alleen een bewuste keuze verandert iets midden in een nummer — dat is de A/B-knop. Nieuwe
+  // metingen of een nieuwe catalogus wachten op het volgende nummer.
+  var luidheidKeuze = '${settings.luidheid}|${settings.luidheidAlbum}';
+  settings.addListener(() {
+    final nu = '${settings.luidheid}|${settings.luidheidAlbum}';
+    if (nu == luidheidKeuze) return;
+    luidheidKeuze = nu;
+    unawaited(player.herzieLuidheid());
+  });
   // Het volgende nummer alvast op de telefoon, alleen op mobiele data. Zie vooruithalen.dart.
   player.onVooruithalen = (huidig, volgende) {
     if (mode.owner) return; // de pc heeft alles zelf al
@@ -1350,6 +1379,29 @@ Future<void> main() async {
     // Verwijderen is verwijderen: wat je weggooit hoort niet uit te blijven spelen, en een bestand
     // dat mpv open heeft laat zich op Windows niet eens wissen. Zie [PlayerStore.vergeetPaden].
     library.speelNietMeer = player.vergeetPaden;
+    // Gelijk volume: de veger meet elk nummer één keer (luidheid_veger.dart). Een eigen Timer van drie
+    // minuten — niet achter `fase('enrichArtists')`, die fouten doorgooit. Wissen en verplaatsen laten
+    // een lopende meting eerst los: Windows houdt een bestand vast zolang ffmpeg het open heeft.
+    final veger = LuidheidVeger(library: library, enabled: mode.owner);
+    library.laatLos = veger.laatLos;
+    voorVerplaatsen = veger.laatLos;
+    meldAanBijHartslag(() =>
+        LuidheidVeger.voortgang.value.isEmpty ? '' : 'luidheid ${LuidheidVeger.voortgang.value}');
+    // De Shield krijgt per nummer de meting en de plaatwaarde mee, met de stand van deze pc.
+    CastManager.luidheidOpgave = (t, rij, plek) {
+      if (!luidheidKlaar) return null;
+      final b = bijstellingVoorNummer(t,
+          rij: rij,
+          plek: plek,
+          opVolgorde: true,
+          stand: luidheidsstandUit(settings.luidheid),
+          albumGeheel: settings.luidheidAlbum,
+          albumVan: library.albumForPath);
+      final o = zenderopgaveVoor(t, b: b, album: b.albumMeting);
+      return o == null ? null : {...o, 'stand': settings.luidheid};
+    };
+    unawaited(veger.start().then((_) => startLog.line('luidheid: veger gestart (eerste ronde na 3 min)'),
+        onError: (Object e) => startLog.line('luidheid: veger MISLUKT: $e')));
     // Niet meteen: dit logde bij het opstarten in zonder dat iemand erom vroeg, en botste dan met de
     // sessie die de vorige keer nooit is afgemeld. Een wens die dagen loopt kan drie minuten wachten.
     // Het ritme staat HIER, dus wordt het hier ook aan de strook op de Kwaliteitspagina verteld.
@@ -10020,36 +10072,14 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
 ///
 /// Also capped by height: in landscape, or on a phone with the keyboard up, a sleeve sized from
 /// the width alone pushes the title and the transport controls off the bottom.
-double _sleeve(BuildContext context) {
-  final size = MediaQuery.sizeOf(context);
-  final narrow = isCompact(context);
-  // The sleeve plus the room the disc needs to slide into — less of that room in portrait, so the
-  // sleeve is not paying for a stride nobody has space for.
-  final byWidth = (size.width - 40) / (1 + discTravelFactor(context));
-  // And a firm ceiling on height in portrait. Below the sleeve sit the title, the seek bar and the
-  // five transport buttons, and those are the reason the screen exists: a sleeve sized from width
-  // alone pushes them under the fold on a tall, narrow screen. Sideways the height is the binding
-  // constraint anyway, so the looser factor there costs nothing.
-  //
-  // Op een televisie is die verhouding te gulzig. Nagerekend op de Shield (960x540 punten, minus 54
-  // overscan = 486 bruikbaar): 0.46 geeft een hoes van 248, en met de titel, de artiestregel, de
-  // spoelbalk en de transportrij erbij komt de kolom op 566. Dat is 80 punten te veel, en die 80
-  // vallen onderaan weg — precies de rij met vorige, afspelen en volgende. Op het toestel gezien:
-  // van de witte speelknop blijft een randje over, van vorige en volgende niets.
-  //
-  // 0.34 is wat een telefoon al gebruikt om diezelfde reden, en op 540 punten geeft dat 184 —
-  // ruim binnen wat er overblijft nadat de rest zijn deel heeft.
-  final byHeight = size.height * (narrow || isTv ? 0.34 : 0.46);
-  final smaller = byWidth < byHeight ? byWidth : byHeight;
-  // Het plafond hangt van de indeling af. Op een breed scherm was 360 de bindende grens en niet de
-  // ruimte: 0.46 van 1440 punten hoog is 662, teruggeklemd naar 360 — een postzegel midden op een groot
-  // scherm. Op een telefoon blijft 360 wél juist, want daar eisen de titel en de knoppenrij eronder hun
-  // plek op.
-  //
-  // Hoger mag zonder gevaar: [byWidth] deelt de breedte al door de ruimte die de cd nodig heeft om uit
-  // te schuiven, dus de hoes kan nooit zo groot worden dat de cd van het scherm loopt.
-  return smaller.clamp(140.0, narrow ? 360.0 : 520.0);
-}
+/// De rekensom zelf (en waarom 0,34 op de tv) staat in ui/speelvlak.dart `hoesGestapeld`, zodat
+/// speelvlak_test.dart de echte functie toetst.
+double _sleeve(BuildContext context) => hoesGestapeld(
+      scherm: MediaQuery.sizeOf(context),
+      compact: isCompact(context),
+      tv: isTv,
+      reisfactor: discTravelFactor(context),
+    );
 
 /// De naam van de plaat, onder de hoes.
 ///
@@ -10848,6 +10878,56 @@ class NowPlayingScreen extends StatefulWidget {
 }
 
 class _NowPlayingScreenState extends State<NowPlayingScreen> {
+  /// Gelijk volume: de eenmalige aankondiging ("dit nummer speelt 6,2 dB zachter…"), hooguit één keer
+  /// per scherm, alleen bij een VERLAGING, niet op de tv. Aflopen telt alleen als gezien als de app die
+  /// twintig seconden op de voorgrond stond — anders komt hij de volgende keer terug.
+  bool _aankondigingGedaan = false;
+  bool _nietOpVoorgrond = false;
+  AppLifecycleListener? _levensloop;
+
+  void _misschienAankondigen(PlayerStore p) {
+    if (_aankondigingGedaan || isTv) return;
+    final settings = context.read<AppSettings>();
+    final b = p.luidheidToegepast;
+    if (settings.luidheidUitgelegd || b == null || b.db >= 0) return;
+    if (luidheidsstandUit(settings.luidheid) == Luidheidsstand.uit) return;
+    _aankondigingGedaan = true;
+    _nietOpVoorgrond = false;
+    _levensloop ??= AppLifecycleListener(onStateChange: (s) {
+      if (s != AppLifecycleState.resumed) _nietOpVoorgrond = true;
+    });
+    final db = b.db;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      toonLuidheidAankondiging(
+        context,
+        db: db,
+        // Staat Luider al aan, dan is een Luider-knop er een die niets doet.
+        onLuider: luidheidsstandUit(settings.luidheid) == Luidheidsstand.luid
+            ? null
+            : () {
+                settings.luidheid = 'luid';
+                unawaited(settings.save());
+              },
+        onUit: () {
+          settings.luidheid = 'uit';
+          unawaited(settings.save());
+        },
+        opGezien: () {
+          settings.luidheidUitgelegd = true;
+          unawaited(settings.save());
+        },
+        telAfloop: () => !_nietOpVoorgrond,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _levensloop?.dispose();
+    super.dispose();
+  }
+
   /// Staat de markering op de hoes? Dan — en alleen dan — zijn links en rechts vorige en volgende.
   ///
   /// De voorwaarde is de hele reparatie. Links en rechts zijn op een televisie óók hoe Flutter de
@@ -10873,6 +10953,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     final t = x.track;
     final cast = x.speaker;
     final casting = x.casting;
+    if (!casting) _misschienAankondigen(p);
     final position = x.position;
     final duration = x.duration;
     final playing = x.playing;
@@ -11063,28 +11144,30 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
       // Dezelfde maat als de spoelbalk eronder: één breedte voor dit hele blok, geen nieuw getal.
       SizedBox(
         width: kolom,
-        child: Row(
-          mainAxisAlignment: zij ? MainAxisAlignment.start : MainAxisAlignment.center,
-          children: [
-            if (t != null)
-              // Flexibel, zodat de begrenzing hierboven ook echt bij de namen aankomt. En
-              // omvouwend, want hier is ruimte: drie gasten zakken naar een tweede regel in plaats
-              // van tot puntjes te worden teruggebracht.
-              Flexible(
-                child: ArtistLine(
+        // De rij zelf staat in [NuSpeeltNaamrij] (luidheid_keuze.dart), zodat hij zonder speler te
+        // toetsen is. Het gelijk-volume-merk krijgt op een smal scherm een eigen regel eronder — in
+        // de rij zou het de artiestnaam wegdrukken — en staat op de tv en brede schermen ernaast.
+        child: NuSpeeltNaamrij(
+          zij: zij,
+          merkInDeRij: !merkEigenRegel(kolom: kolom, tv: isTv),
+          // Flexibel (dat doet de rij), zodat de begrenzing hierboven ook echt bij de namen aankomt.
+          // En omvouwend, want hier is ruimte: drie gasten zakken naar een tweede regel in plaats
+          // van tot puntjes te worden teruggebracht.
+          naam: t == null
+              ? null
+              : ArtistLine(
                   artist: t.artist,
                   title: t.title,
                   lookup: true,
                   omvouwen: true,
                   style: const TextStyle(color: _muted, fontSize: 15),
                 ),
-              ),
-            if (t != null) _echtheidMerk(t),
-            // Wat je NU hoort, en niet wat er op de schijf van de pc staat. Zie [_stroomKwaliteit]:
-            // onderweg stuurt je pc een kleinere versie, en zolang de badge het bestand toonde was
-            // er geen enkele manier om te zien dát dat gebeurde.
-            if (t != null && t.sizeBytes > 0) _qualityBadge(_stroomKwaliteit(p, t)),
-          ],
+          echtheid: t == null ? null : _echtheidMerk(t),
+          // Wat je NU hoort, en niet wat er op de schijf van de pc staat. Zie [_stroomKwaliteit]:
+          // onderweg stuurt je pc een kleinere versie, en zolang de badge het bestand toonde was
+          // er geen enkele manier om te zien dát dat gebeurde.
+          kwaliteit: (t != null && t.sizeBytes > 0) ? _qualityBadge(_stroomKwaliteit(p, t)) : null,
+          merk: t == null ? null : _luidheidMerk(context, p, t, cast),
         ),
       ),
       // Twee regels die hier ontbraken, en allebei om dezelfde reden: dit scherm dekt op een
@@ -15072,6 +15155,34 @@ class EchtheidDialog extends StatelessWidget {
 /// **Uit een mp3** is een verlies dat je niet terugkrijgt: die bestanden moeten eruit. Dat merkje mag
 /// in de weg zitten, en blijft daarom precies zoals het was.
 ///
+/// Het gelijk-volume-merk op Nu speelt: wat mpv WERKELIJK kreeg ([PlayerStore.luidheidToegepast]),
+/// met een woord erbij, en een tik opent het blad met de uitleg en de keuzes. Zie luidheid_keuze.dart.
+///
+/// Speelt een speaker, dan zegt het merk dat (Sonos/KEF krijgen het origineel); bij de Shield rekent
+/// het merk zelf, want daar past de Shield het toe.
+Widget _luidheidMerk(BuildContext context, PlayerStore p, Track t, SpeakerTarget cast) {
+  final settings = context.read<AppSettings>();
+  final shield = cast.isCasting && (cast.device?.playsUntouched ?? false);
+  final speaker = cast.isCasting && !shield;
+  // Gecast naar de Shield: géén getal. De Shield rekent zelf, met de stand van de pc en zijn eigen
+  // plaatbeslissing over de hele castlijst — een getal van hier (met de stand van dít toestel, per
+  // nummer) kon een ander zijn dan wat de tv speelt.
+  final b = shield
+      ? const Bijstelling(0, Bijstelbron.shield)
+      : (p.luidheidToegepast ?? p.luidheidNu ?? Bijstelling.nul);
+  // Uit op dit toestel verbergt het merk alleen als er hier ook echt niets gebeurt. Bij casten naar de
+  // Shield, en óp de Shield bij een nummer van de pc, geldt de stand van de pc: een Shield die zelf op
+  // Uit stond speelde dan zachter zonder merk en zonder blad.
+  final eigenUit = luidheidsstandUit(settings.luidheid) == Luidheidsstand.uit;
+  if (eigenUit && !shield && !b.vanZender) return const SizedBox.shrink();
+  final tekst = luidheidMerkTekst(b,
+      opPc: luidheidEigenaar, voortgang: LuidheidVeger.voortgang.value, speaker: speaker, kort: isTv);
+  return LuidheidMerk(
+    tekst: tekst,
+    onPressed: () => toonLuidheidBlad(context, b: b, settings: settings, opPc: luidheidEigenaar),
+  );
+}
+
 /// **Opgeschaald** is iets anders. Zo'n bestand IS cd-kwaliteit; het draagt alleen een te grote jas.
 /// Er valt niets aan te verbeteren door het opnieuw te halen — je krijgt exact hetzelfde geluid terug.
 /// Een even luide waarschuwing als bij een echte transcode zette 89 nummers in het rood voor iets wat
@@ -22857,6 +22968,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Gelijk volume BOVENAAN: dat is wat je zoekt als iets ineens zachter klinkt, en
+                    // het staat op pc, telefoon en tv in hetzelfde venster. Zie luidheid_keuze.dart.
+                    const _LuidheidSectie(),
+                    const Divider(color: _line, height: 1),
+                    const SizedBox(height: 12),
                     _field('TorBox API-sleutel', _torbox),
                     const TorrentmotorKeuze(),
                     _field('Discogs token', _discogs),
@@ -28970,6 +29086,35 @@ class SeedKeuze extends StatelessWidget {
 /// **Waarom dit op het scherm staat en niet alleen in een bestand.** Het is de enige instelling die
 /// bepaalt of jouw IP-adres in de zwerm terechtkomt. Dat is geen technisch detail dat je stilletjes
 /// voor iemand invult — dat is precies het verschil waarvoor mensen een debrid-dienst nemen.
+/// De sectie "Gelijk volume" in de instellingen, met de stand van de metingen eronder.
+class _LuidheidSectie extends StatelessWidget {
+  const _LuidheidSectie();
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = context.watch<AppSettings>();
+    final library = context.read<LibraryStore>();
+    final player = context.read<PlayerStore>();
+    String status(String voortgang) => luidheidStatusTekst(
+          eigenaar: luidheidEigenaar,
+          telling: luidheidEigenaar ? luidheidTelling(library.tracks) : null,
+          ffmpeg: LuidheidVeger.ffmpegGevonden,
+          voortgang: voortgang,
+          klaar: luidheidKlaar,
+          vanPc: statusVanPc,
+          werktNiet: player.luidheidWerktNiet,
+        );
+    return ValueListenableBuilder<String>(
+      valueListenable: LuidheidVeger.voortgang,
+      builder: (context, voortgang, _) => LuidheidKeuze(
+        settings: settings,
+        // Op de tv: wat de pc naar hier cast, volgt de stand van de pc — ook als hier Uit staat.
+        status: isTv ? '${status(voortgang)}\n$kLuidheidOpDeShield' : status(voortgang),
+      ),
+    );
+  }
+}
+
 class TorrentmotorKeuze extends StatelessWidget {
   const TorrentmotorKeuze({super.key});
 

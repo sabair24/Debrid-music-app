@@ -1979,6 +1979,9 @@ Future<String> _install(File src, File dest, List<File> losers, {required String
     } catch (_) {/* couldn't remove the old copy — the new one still lands */}
   }
   try {
+    await voorVerplaatsen?.call([landed, dest.path]);
+  } catch (_) {/* zie [voorVerplaatsen] */}
+  try {
     final at = (await File(landed).rename(dest.path)).path;
     // Deze hernoeming loopt NIET langs [_move] — het is de laatste stap van "eerst ernaast landen, dan
     // pas op zijn plek". De markering van een handmatige keuze hangt aan het pad en zou anders op het
@@ -2064,7 +2067,16 @@ Future<String?> zetGeparkeerdeTerug(File geparkeerd, File huidig, {required Stri
   }
 }
 
+/// Wordt afgewacht vlak voordat een muziekbestand van pad verandert ([_move], en de laatste stap van
+/// [_install]). Gelijk volume (luidheid_veger.dart) laat dan een lopende meting op dat bestand los:
+/// Windows houdt een bestand vast zolang ffmpeg het open heeft, en dan faalt de rename drie keer,
+/// kopieert [_move] en blijft het origineel stil staan. Gezet in `main.dart`.
+Future<void> Function(List<String> paden)? voorVerplaatsen;
+
 Future<String> _move(File src, File dest) async {
+  try {
+    await voorVerplaatsen?.call([src.path]);
+  } catch (_) {/* een meting mag het verplaatsen nooit tegenhouden */}
   // De bescherming van een handmatige keuze hangt aan het PAD, en dit is de enige plek in de app waar
   // een muziekbestand van pad verandert. Zonder deze regel gold zo'n keuze precies één keer: het filen
   // van een download verplaatst het bestand van de landingsmap naar `Albums/…`, en daarna wees de

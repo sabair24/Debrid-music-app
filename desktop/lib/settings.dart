@@ -163,6 +163,16 @@ class AppSettings extends ChangeNotifier {
   /// zoals hij was voordat deze keuze bestond.
   String radioSmaak = 'gemengd';
 
+  /// Gelijk volume: 'uit', 'normaal' (Gelijk, −14 LUFS) of 'luid' (Luider, −11). Per toestel — net
+  /// als de stroomstand staat dit buiten `_synced` en `_config`. Zie `luidheid.dart`.
+  String luidheid = 'normaal';
+
+  /// Speelt een plaat op volgorde als geheel (de verschillen tussen de nummers blijven)?
+  bool luidheidAlbum = true;
+
+  /// Is de eenmalige aankondiging ("dit nummer speelt 6,2 dB zachter…") al gezien?
+  bool luidheidUitgelegd = false;
+
   static File file() {
     return appFile('settings.json');
   }
@@ -339,6 +349,9 @@ class AppSettings extends ChangeNotifier {
         stroomOnderweg = (m['stroom_onderweg'] ?? 'cd') as String;
         stroomAdaptief = (m['stroom_adaptief'] ?? true) as bool;
         radioSmaak = (m['radio_smaak'] ?? 'gemengd') as String;
+        luidheid = (m['luidheid'] ?? 'normaal') as String;
+        luidheidAlbum = (m['luidheid_album'] ?? true) as bool;
+        luidheidUitgelegd = (m['luidheid_uitgelegd'] ?? false) as bool;
     }
   }
 
@@ -381,6 +394,9 @@ class AppSettings extends ChangeNotifier {
         'stroom_onderweg': stroomOnderweg,
         'stroom_adaptief': stroomAdaptief,
         'radio_smaak': radioSmaak,
+        'luidheid': luidheid,
+        'luidheid_album': luidheidAlbum,
+        'luidheid_uitgelegd': luidheidUitgelegd,
       };
 
   /// Write the settings down.

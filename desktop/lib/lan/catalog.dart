@@ -6,6 +6,7 @@ import '../beeldvorm.dart';
 import '../library.dart';
 import '../echtheid_oordelen.dart';
 import '../enrichment.dart';
+import '../luidheid_winkel.dart' show gepubliceerdeLuidheid, gepubliceerdeStatus, luidheidUitgave;
 import '../models.dart';
 import '../organize.dart';
 import 'dtos.dart';
@@ -76,6 +77,8 @@ class CatalogSnapshot {
 class LanCatalog {
   LanCatalog(this.library) {
     library.addListener(_markDirty);
+    // Een nieuwe publicatie van gelijk volume verandert geen enkel nummer, maar wel de catalogus.
+    luidheidUitgave.addListener(_markDirty);
   }
 
   final LibraryStore library;
@@ -126,7 +129,10 @@ class LanCatalog {
     _artiestenPerId = artiesten;
   }
 
-  void dispose() => library.removeListener(_markDirty);
+  void dispose() {
+    library.removeListener(_markDirty);
+    luidheidUitgave.removeListener(_markDirty);
+  }
 
   CatalogSnapshot snapshot() {
     final cached = _snapshot;
@@ -263,6 +269,10 @@ class LanCatalog {
           // Zie [TrackDto.rij]: zonder dit ziet een telefoon nooit terug wat ze zelf heeft
           // aangewezen, want daar staat de keuze niet — hij staat hier.
           rij: rijen[t.path],
+          // Gelijk volume: wat de pc GEPUBLICEERD heeft, niet de levende meting — anders zou elke
+          // herbouw tijdens de veegronde een nieuwe ETag geven, en haalt elk toestel elke 15 s de
+          // hele catalogus opnieuw. Zie luidheid_winkel.dart.
+          luid: gepubliceerdeLuidheid(t),
         ));
       }
     }
@@ -287,11 +297,13 @@ class LanCatalog {
         )
     ]..sort((x, y) => x.name.toLowerCase().compareTo(y.name.toLowerCase()));
 
+    final luidheid = gepubliceerdeStatus;
     final catalog = CatalogDto(
       artists: artistList,
       albums: albums,
       tracks: tracks,
       generatedAt: DateTime.now().millisecondsSinceEpoch,
+      luidheid: luidheid?.toJson(),
     );
 
     // Fingerprint the CONTENT, not the moment: `generatedAt` moves on every rebuild, and if that
@@ -344,7 +356,11 @@ class LanCatalog {
         // terug. Een toewijzing verandert geen enkele titel en geen enkel nummer — dat is nu juist
         // de hele bedoeling ervan.
         ..add(t.rij ?? '');
+      // De luidheid alleen als hij er is: een bibliotheek zonder metingen (of een pc zonder winkel,
+      // zoals in de toetsen) houdt dan exact dezelfde ETag als vóór deze functie.
+      if (t.luid != null) fingerprint.add('L${jsonEncode(t.luid)}');
     }
+    if (luidheid != null) fingerprint.add('luidheid:${luidheid.vingerafdruk}');
 
     return CatalogSnapshot(
       catalog: catalog,

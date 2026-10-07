@@ -123,3 +123,35 @@ double kolomLiggend({required Size bruikbaar, required double hoes}) {
   final over = bruikbaar.width - kGoot * 2 - kLiggendGat - blokBreedte(hoes: hoes, reisfactor: kLiggendReis);
   return over < kLiggendKolomMin ? kLiggendKolomMin : over;
 }
+
+/// De hoes in de GESTAPELDE indeling (Nu speelt op een telefoon staand, de tv, een smal venster).
+///
+/// Verhuisd uit `_sleeve` in main.dart, zodat de hoogte-rekensom hieronder de echte hoes meetelt in
+/// plaats van een kopie (speelvlak_test.dart had er een eigen `gestapeld()`, en twee kopieën lopen
+/// uiteen zodra er één bijgesteld wordt).
+///
+/// De hoes plus de ruimte die de cd nodig heeft om uit te schuiven — op een telefoon minder. En een
+/// vast plafond op de hoogte: onder de hoes staan de titel, de spoelbalk en de vijf transportknoppen,
+/// en die zijn de reden dat dit scherm bestaat. Op een televisie is 0,46 te gulzig: nagerekend op de
+/// Shield (960×540, minus 54 overscan = 486 bruikbaar) gaf 0,46 een hoes van 248 en viel de rij met
+/// vorige, afspelen en volgende onderaan weg. 0,34 is wat een telefoon om dezelfde reden gebruikt.
+/// Het plafond hangt van de indeling af: op een breed scherm was 360 een postzegel, op een telefoon
+/// blijft het juist.
+double hoesGestapeld({required Size scherm, required bool compact, required bool tv, required double reisfactor}) {
+  final opBreedte = (scherm.width - 40) / (1 + reisfactor);
+  final opHoogte = scherm.height * (compact || tv ? 0.34 : 0.46);
+  final kleinste = opBreedte < opHoogte ? opBreedte : opHoogte;
+  return kleinste.clamp(140.0, compact ? 360.0 : 520.0);
+}
+
+/// Wat het merk van gelijk volume onder de naamrij kost, als het een eigen regel krijgt (kLabel 11 pt
+/// met 3 punt boven en onder, plus 2 punt tussenruimte).
+const double kMerkregel = 20;
+
+/// Krijgt het merk een eigen regel onder de naamrij? Niet op de tv — daar is breedte genoeg en is de
+/// hoogte krap tot op de punt — en niet op een breed scherm; wel als de kolom smaller is dan
+/// [kMerkRijBreedte], want dan zou het merk de artiestnaam wegdrukken.
+bool merkEigenRegel({required double kolom, required bool tv}) => !tv && kolom < kMerkRijBreedte;
+
+/// Zie [merkEigenRegel]. Een telefoon staand is ~328 punt breed.
+const double kMerkRijBreedte = 480;

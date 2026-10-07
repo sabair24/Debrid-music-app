@@ -32,6 +32,7 @@ import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
 import 'integriteit.dart' show kapotSleutels;
+import 'luidheid_winkel.dart' show onthoudLuidheidVanPc, zetLuidheidStatusVanPc;
 import 'organize.dart';
 import 'settings.dart';
 import 'vaste_keuze.dart';
@@ -1782,6 +1783,10 @@ class LibraryStore extends ChangeNotifier {
   /// in `main.dart`, naast de andere haken.
   Future<void> Function(List<String> paden)? speelNietMeer;
 
+  /// Laat een lopende luidheidsmeting op deze bestanden los vóór ze weggaan (Windows houdt een
+  /// bestand vast zolang ffmpeg het open heeft). Gezet in `main.dart`; zie luidheid_veger.dart.
+  Future<void> Function(List<String> paden)? laatLos;
+
   /// Waar [removeTracks] met `naarPrullenbak` heen gaat, en of dat hier kan. Haken, zodat een toets
   /// niets in een echte prullenbak gooit — en op de Linux-bouwstraat hetzelfde toetst als op Windows.
   Future<Set<String>> Function(List<String> paden) prullenbak = pb.naarPrullenbak;
@@ -1819,6 +1824,9 @@ class LibraryStore extends ChangeNotifier {
     try {
       await speelNietMeer?.call(list);
     } catch (_) {/* de speler mag het wissen nooit tegenhouden */}
+    try {
+      await laatLos?.call(list);
+    } catch (_) {/* een meting mag het wissen ook nooit tegenhouden */}
     var deleted = 0;
     // De mappen waar iets uit weggehaald is. Een map die daardoor leegloopt hoort niet te blijven
     // staan: een radio van vijfhonderd nummers laat anders honderden lege `Singles/<Artiest>`-mappen
@@ -2814,6 +2822,9 @@ class LibraryStore extends ChangeNotifier {
 
   /// Turn what the PC sent into the very same [Track] and [Album] objects a disk scan produces.
   void _adoptCatalog(CatalogDto catalog, RemoteClient client) {
+    // Gelijk volume: de stand van de pc. ALTIJD zetten, ook op null — een oudere pc of opnieuw
+    // koppelen moet een oude status wissen. Hier komen de live weg en de catalogus-kopie samen.
+    zetLuidheidStatusVanPc(catalog.luidheid);
     // Covers, keyed by track path exactly as [rebuildAlbums] does — a refreshed catalogue makes
     // fresh Album objects, and without this the grid blanks on every poll and then refetches every
     // cover over the network.
@@ -3042,6 +3053,9 @@ class LibraryStore extends ChangeNotifier {
     } else {
       _rijenVanPc.remove(pad);
     }
+    // Gelijk volume: de meting van de pc, onder dezelfde sleutel (grootte|tijd) als op de pc — het
+    // Track hier krijgt die twee uit deze DTO. Zie luidheid_winkel.dart.
+    onthoudLuidheidVanPc(sizeBytes: d.sizeBytes, addedMs: d.addedMs, luid: d.luid);
     return _trackFromDtoMet(d, pad);
   }
 

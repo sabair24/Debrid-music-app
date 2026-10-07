@@ -12,6 +12,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/lan/cast_receiver.dart';
+import 'package:debridmusic/luidheid.dart';
+import 'package:debridmusic/luidheid_winkel.dart';
 import 'package:debridmusic/models.dart';
 
 void main() {
@@ -21,6 +23,7 @@ void main() {
   late int stops;
 
   setUp(() async {
+    resetLuidheidVoorTest();
     played = [];
     playedIndex = -1;
     stops = 0;
@@ -126,6 +129,61 @@ void main() {
       // The sender names only the track it starts on; it has the catalogue and this end does not.
       expect(played[0].title, 'abc');
       expect(played[2].title, 'ghi');
+    });
+  });
+
+  // Gelijk volume (07-10-2026). De pc stuurt naast streamUrls een parallelle lijst met de meting per
+  // nummer. Hier tegen een echte socket, met een leeg adres in het midden: de ontvanger laat lege
+  // adressen weg, en koppelt hij de opgave pas daarna, dan krijgt elk nummer na het gat de opgave
+  // van zijn buurman — een stil nummer dat 10 dB omhoog gaat in plaats van een luid dat zakt.
+  group('gelijk volume van de zender', () {
+    Bijstelling bij(int plek) => bijstellingVoorNummer(played[plek],
+        rij: played, plek: plek, opVolgorde: true, stand: Luidheidsstand.normaal, albumGeheel: true, albumVan: (_) => null);
+
+    test('DE KERN: elk nummer krijgt zijn eigen opgave, ook na een leeg adres', () async {
+      final res = await post('/play', {
+        'streamUrls': [
+          'http://192.168.0.117:47820/stream/luid.flac?token=t',
+          '',
+          'http://192.168.0.117:47820/stream/zacht.flac?token=t',
+        ],
+        'luidheid': [
+          {'i': -8.0, 'tp': -3.0, 'stand': 'normaal'},
+          {'i': -30.0, 'tp': -20.0, 'stand': 'normaal'},
+          {'i': -20.0, 'tp': -9.0, 'stand': 'normaal'},
+        ],
+        'index': 0,
+      });
+      expect(res.statusCode, 200);
+      await res.drain<void>();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(played.length, 2);
+      expect(bij(0).db, closeTo(-6, 1e-9), reason: 'het luide nummer gaat 6 dB zachter');
+      expect(bij(1).db, closeTo(6, 1e-9),
+          reason: 'het zachte nummer krijgt zijn eigen +6, niet de +10 van het weggelaten adres ervoor');
+    });
+
+    test('DE GRENS: een zender zonder de lijst speelt alles zoals vroeger', () async {
+      await (await post('/play', {
+        'streamUrls': ['http://192.168.0.117:47820/stream/oud.flac?token=t'],
+        'index': 0,
+      }))
+          .drain<void>();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(played.length, 1);
+      expect(bij(0).db, 0, reason: 'geen opgave = niets aanraken');
+    });
+
+    test('DE VAL: rommel in de lijst laat het nummer onaangeroerd', () async {
+      await (await post('/play', {
+        'streamUrls': ['http://192.168.0.117:47820/stream/raar.flac?token=t'],
+        'luidheid': ['geen kaart'],
+        'index': 0,
+      }))
+          .drain<void>();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(played.length, 1, reason: 'het speelt gewoon');
+      expect(bij(0).db, 0);
     });
   });
 
