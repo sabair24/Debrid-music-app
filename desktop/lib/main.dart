@@ -11673,14 +11673,25 @@ const _nuSpeeltRoute = 'nu-speelt';
 ///
 /// 320 ms met easeOutCubic: lang genoeg om te zien dat het één beweging is, kort genoeg om niet in
 /// de weg te zitten als je het scherm tien keer per rit opent.
-Route<void> nuSpeeltRoute() => PageRouteBuilder<void>(
+///
+/// **Ondoorzichtig, en dat is de warmte.** Saber op 08-10-2026: *"ik teste gisteren de app op de
+/// ipad en die werd enorm heet bij de now playing screen"*. Deze route stond op `opaque: false`,
+/// "zodat het scherm eronder blijft staan terwijl dit omhoog schuift". Maar daarvoor hoeft dat niet:
+/// een route zet zijn ondoorzichtigheid pas aan als de overgang klaar is, en tijdens het schuiven
+/// (open en dicht) staat het scherm eronder er hoe dan ook. Doorzichtig betekende alleen dat het
+/// hele scherm eronder — startpagina, glazen bovenbalk, de hoezen — bij ELK beeld van de draaiende
+/// cd opnieuw getekend werd, onzichtbaar achter dit scherm, en dat zijn animaties (de glans van de
+/// laadtegels) doorliepen op het schermritme. Op een telefoon viel dat mee: daar staat de vervaging
+/// van het glas uit (`zonderBlur: isCompact`). Op de iPad, met 120 Hz, meer pixels en echt glas, niet.
+///
+/// [scherm] alleen voor de toets (nu_speelt_ondoorzichtig_test.dart): het echte scherm heeft libmpv.
+Route<void> nuSpeeltRoute({WidgetBuilder? scherm}) => PageRouteBuilder<void>(
       settings: const RouteSettings(name: _nuSpeeltRoute),
       transitionDuration: const Duration(milliseconds: 320),
       reverseTransitionDuration: const Duration(milliseconds: 260),
-      // Doorzichtig, zodat het scherm eronder blijft staan terwijl dit omhoog schuift.
-      opaque: false,
+      opaque: true,
       barrierColor: Colors.transparent,
-      pageBuilder: (_, __, ___) => const NowPlayingScreen(),
+      pageBuilder: (context, __, ___) => scherm?.call(context) ?? const NowPlayingScreen(),
       transitionsBuilder: (_, animatie, __, kind) => SlideTransition(
         position: Tween(begin: const Offset(0, 1), end: Offset.zero)
             .animate(CurvedAnimation(parent: animatie, curve: Curves.easeOutCubic)),
