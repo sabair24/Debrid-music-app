@@ -105,6 +105,12 @@ class RemoteOnlineService extends OnlineService {
       rutracker.lastError = (rt['fout'] as String?) ?? '';
       rutracker.laatsteAantal = (rt['aantal'] as num?)?.toInt() ?? -1;
       rutracker.laatsteDoorZeef = (rt['doorZeef'] as num?)?.toInt() ?? -1;
+      // Een oudere pc stuurt deze drie niet; dan blijft de zin zoals hij was.
+      rutracker.laatsteVraag = (rt['vraag'] as String?) ?? '';
+      rutracker.laatsteRuimer = (rt['ruimer'] as String?) ?? '';
+      rutracker.laatstGeprobeerd = [
+        for (final g in (rt['geprobeerd'] as List? ?? const [])) if (g is String) g,
+      ];
     }
     // Idem voor de andere bronnen: het zoeken gebeurde op de pc, dus daar staat wie er meedeed.
     final bronnen = j['bronnen'];

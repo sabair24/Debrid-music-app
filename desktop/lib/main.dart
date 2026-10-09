@@ -9235,24 +9235,16 @@ Future<bool> rutrackerControle(BuildContext context) async {
 Widget _waaromGeenTorrents(BuildContext context, {required bool leeg, VoidCallback? opnieuw}) {
   final rt = context.read<OnlineService>().rutracker;
   final reden = rt.lastError;
-  final aantal = rt.laatsteAantal;
-  final doorZeef = rt.laatsteDoorZeef;
-
-  final String rutracker;
-  if (reden.isNotEmpty) {
-    rutracker = 'RuTracker deed niet mee — $reden';
-  } else if (aantal < 0) {
-    rutracker = 'RuTracker: niet bevraagd.';
-  } else if (aantal == 0) {
-    rutracker = 'RuTracker: bevraagd, nul treffers.';
-  } else if (doorZeef >= 0 && doorZeef < aantal) {
-    // Hier zie je de zeef aan het werk: hij gaf ze wél, ze haalden de lijst niet.
-    rutracker = 'RuTracker: $aantal treffers, $doorZeef door de zeef.';
-  } else {
-    // Staan ze er niet bij, dan had een andere bron dezelfde torrent met meer seeders — de
-    // zoekverdeler ontdubbelt op infohash. Ook dát is een antwoord.
-    rutracker = 'RuTracker: $aantal treffers.';
-  }
+  // Een lege uitslag is geen storing: dan staat er waarnaar gezocht is, en wat er korter nog
+  // geprobeerd werd. Zie [rutrackerLeegSoort].
+  final rutracker = rutrackerStandZin(
+    reden: reden,
+    aantal: rt.laatsteAantal,
+    doorZeef: rt.laatsteDoorZeef,
+    vraag: rt.laatsteVraag,
+    ruimer: rt.laatsteRuimer,
+    geprobeerd: rt.laatstGeprobeerd,
+  );
 
   // De versie erbij. Niet als sieraad: bij elke terugkoppeling was de eerste vraag welke uitgave er
   // op het toestel stond, en zonder antwoord daarop is een schermafdruk niet te lezen. Zie

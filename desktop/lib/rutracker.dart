@@ -56,6 +56,111 @@ String rutrackerPaginaKenmerk(int status, List<int> bytes) {
   return '$status, ${bytes.length} bytes${controle ? ', CONTROLE' : ''}';
 }
 
+/// Wat een zoekpagina zonder één herkende resultaatrij is.
+enum RtLeeg {
+  /// De zoekpagina zelf, en RuTracker had niets voor die woorden. Geen storing.
+  niets,
+
+  /// Er staan wél torrents in (topic-ids, titellinks), maar de app herkent de regels niet meer:
+  /// RuTracker heeft zijn HTML veranderd. Dat is een storing, en hij hoort zo te heten.
+  vormVeranderd,
+
+  /// Geen zoekformulier en geen torrents: een pagina die de app niet kent.
+  onbekend,
+}
+
+/// **Een lege uitslag is een volle pagina.** Op 09-10-2026 stond er "RuTracker deed niet mee — er
+/// stond geen enkele resultaatrij in de pagina" bij "Bazart Goud", in de kleur van een storing.
+/// Gemeten: dezelfde app gaf voor "Pink Floyd Wish You Were Here" 50 treffers, en voor "Bazart" alleen
+/// 2 — RuTracker zoekt in torrentnamen, en daar staat het album, niet elk nummer. Er was niets stuk.
+///
+/// Het aantal bytes scheidde de twee niet, zoals de oude zin aannam: in `rutracker.log` was een lege
+/// uitslag 169–171 KB en een uitslag met één rij 172 KB — de omlijsting (de forumkeuzelijst) is het
+/// grootste deel van de pagina. Daarom wordt hier gekeken naar wat er staat: wat van een
+/// resultaatrij is (een topic-id, een titellink), en of het de zoekpagina is (het zoekveld `nm`).
+RtLeeg rutrackerLeegSoort(String html) {
+  if (RegExp(r'data-topic_id="\d+"').hasMatch(html) ||
+      RegExp(r'class="[^"]*\btLink\b').hasMatch(html)) {
+    return RtLeeg.vormVeranderd;
+  }
+  if (html.contains('id="tor-tbl"') ||
+      RegExp(r'''name=["']?nm\b''').hasMatch(html) ||
+      RegExp(r'''action=["'][^"']*tracker\.php''').hasMatch(html)) {
+    return RtLeeg.niets;
+  }
+  return RtLeeg.onbekend;
+}
+
+/// De vorm van een pagina zonder rijen, voor `rutracker.log` — nooit iets uit de pagina zelf (daar
+/// staat je gebruikersnaam in). Zo is na de eerste lege zoekopdracht te lezen waar
+/// [rutrackerLeegSoort] op besliste.
+String rutrackerLeegKenmerk(String html) =>
+    'tor-tbl ${html.contains('id="tor-tbl"') ? 'ja' : 'nee'}, '
+    'zoekveld ${RegExp(r'''name=["']?nm\b''').hasMatch(html) ? 'ja' : 'nee'}, '
+    'formulier ${RegExp(r'''action=["'][^"']*tracker\.php''').hasMatch(html) ? 'ja' : 'nee'}, '
+    'topic-ids ${RegExp(r'data-topic_id="\d+"').allMatches(html).length}, '
+    'titellinks ${RegExp(r'class="[^"]*\btLink\b').allMatches(html).length}';
+
+/// Lidwoorden die als enig woord een hele tracker zouden opvragen.
+const _losseLidwoorden = {'the', 'een', 'het', 'les', 'los', 'las', 'die', 'der', 'das', 'una', 'uno'};
+
+/// De kortere zoektermen om te proberen als de hele zoekterm niets gaf, de langste eerst.
+///
+/// **Waarom.** Je zoekt een nummer ("Bazart Goud"); RuTracker zoekt in torrentnamen, en een
+/// torrentnaam is een album of een discografie ("Bazart - Onderweg - 2021, FLAC"). Een nummertitel
+/// staat er bijna nooit in. Het begin van de zoekterm is meestal de artiest, dus dat wordt
+/// geprobeerd: hoogstens drie woorden, en dan steeds één minder. Wat er dan komt is het album of de
+/// discografie waar het nummer in zit — de app haalt er bij het downloaden het ene nummer uit.
+///
+/// Eén los woord alleen als het iets zegt: minstens drie letters en geen lidwoord.
+List<String> rutrackerKortereVragen(String vraag) {
+  final woorden = vraag
+      .split(RegExp(r'\s+'))
+      .where((w) => RegExp(r'[\p{L}\p{N}]', unicode: true).hasMatch(w))
+      .toList();
+  final uit = <String>[];
+  for (var n = (woorden.length - 1).clamp(0, 3); n >= 1; n--) {
+    final kandidaat = woorden.take(n).join(' ');
+    if (n == 1) {
+      final letters = kandidaat.replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
+      if (letters.length < 3 || _losseLidwoorden.contains(letters.toLowerCase())) continue;
+    }
+    uit.add(kandidaat);
+  }
+  return uit;
+}
+
+/// De regel over RuTracker onder de zoekresultaten — op de pc en, via `server.dart`, op de telefoon.
+///
+/// [ruimer] is de kortere zoekterm die de treffers gaf (leeg: de hele zoekterm gaf ze);
+/// [geprobeerd] wat er verder geprobeerd werd zonder iets op te leveren.
+String rutrackerStandZin({
+  required String reden,
+  required int aantal,
+  required int doorZeef,
+  String vraag = '',
+  String ruimer = '',
+  List<String> geprobeerd = const [],
+}) {
+  if (reden.isNotEmpty) return 'RuTracker deed niet mee — $reden';
+  if (aantal < 0) return 'RuTracker: niet bevraagd.';
+  if (aantal == 0) {
+    if (vraag.isEmpty) return 'RuTracker: bevraagd, nul treffers.';
+    final ook = geprobeerd.isEmpty
+        ? ''
+        : ', ook niet voor ${geprobeerd.map((g) => '„$g“').join(' of ')}';
+    return 'RuTracker: niets voor „$vraag“$ook — hij zoekt alleen in torrentnamen.';
+  }
+  final voor = ruimer.isEmpty ? '' : ' voor „$ruimer“ (niets voor „$vraag“ zelf)';
+  // Hier zie je de zeef aan het werk: hij gaf ze wél, ze haalden de lijst niet.
+  if (doorZeef >= 0 && doorZeef < aantal) {
+    return 'RuTracker: $aantal treffers$voor, $doorZeef door de zeef.';
+  }
+  // Staan ze er niet bij, dan had een andere bron dezelfde torrent met meer seeders — de
+  // zoekverdeler ontdubbelt op infohash. Ook dát is een antwoord.
+  return 'RuTracker: $aantal treffers$voor.';
+}
+
 class RuTrackerService {
   final AppSettings settings;
   RuTrackerService(this.settings);
@@ -978,11 +1083,20 @@ class RuTrackerService {
   /// Hoeveel daarvan de zeef in `search.dart` overleefden. Zie [laatsteAantal].
   int laatsteDoorZeef = -1;
 
+  /// De zoekterm van de laatste keer, de kortere die de treffers gaf (leeg: de hele), en wat er
+  /// verder zonder treffers geprobeerd werd. Zie [rutrackerKortereVragen] en [rutrackerStandZin].
+  String laatsteVraag = '';
+  String laatsteRuimer = '';
+  List<String> laatstGeprobeerd = const [];
+
   Future<List<SearchResult>> search(String query, {bool allowRelogin = true}) async {
     // Niet bevraagd, tot het tegendeel blijkt. Zie [laatsteAantal].
     laatsteAantal = -1;
     laatsteDoorZeef = -1;
     vraagtControle = false;
+    laatsteVraag = query.trim();
+    laatsteRuimer = '';
+    laatstGeprobeerd = const [];
     // Zwijgen is hier duur gebleken: een lege lijst leest als "RuTracker heeft niets", terwijl de
     // reden is dat er niets klaarstaat om mee binnen te komen. Zeg het dus.
     if (settings.rutrackerCookie.isEmpty) {
@@ -1063,15 +1177,49 @@ class RuTrackerService {
         lastError = 'Je RuTracker-sessie is verlopen — Instellingen → RuTracker → Aanmelden.';
         return [];
       }
-      final rows = _parseRows(html);
-      // **Nul rijen uit een pagina die wél binnenkwam.** Dat is iets anders dan "niets gevonden":
-      // het kan de zoekpagina zijn die niets had, maar ook een RuTracker die zijn HTML veranderd
-      // heeft — en dat laatste is het brooste stuk van deze hele bron. Het aantal bytes erbij, want
-      // dat scheidt de twee: een lege uitslag is een halve pagina, een veranderde vorm een hele.
+      var rows = _parseRows(html);
+      // **Nul rijen uit een pagina die wél binnenkwam.** Dat kan de zoekpagina zijn die niets had —
+      // dan is er niets stuk en wordt een kortere zoekterm geprobeerd — maar ook een RuTracker die
+      // zijn HTML veranderd heeft, en dat is het brooste stuk van deze hele bron. Het aantal bytes
+      // scheidt die twee niet (zie [rutrackerLeegSoort]); wat er in de pagina staat wel.
       if (rows.isEmpty) {
-        lastError = 'RuTracker antwoordde (${resp.status}, ${resp.bytes.length} bytes) maar er '
-            'stond geen enkele resultaatrij in de pagina.';
-        return [];
+        final soort = rutrackerLeegSoort(html);
+        _spoor('zoek "$laatsteVraag": 0 rijen — ${soort.name} (${rutrackerLeegKenmerk(html)})');
+        final geprobeerd = <String>[];
+        if (soort == RtLeeg.niets) {
+          for (final korter in rutrackerKortereVragen(query)) {
+            // Ruimte laten voor de topicpagina's hieronder: zonder infohash zijn treffers niets.
+            if (deadline.difference(DateTime.now()) < const Duration(seconds: 15)) break;
+            final r = await _haal('$_base/tracker.php?nm=${Uri.encodeComponent(korter)}');
+            if (r == null || r.status != 200) break;
+            final h = cp1251Tekst(r.bytes);
+            if (cloudflareUitdaging(const {}, h)) break;
+            final gevonden = _parseRows(h);
+            _spoor('zoek ruimer "$korter": ${gevonden.length} rijen');
+            if (gevonden.isNotEmpty) {
+              rows = gevonden;
+              laatsteRuimer = korter;
+              break;
+            }
+            geprobeerd.add(korter);
+          }
+        }
+        laatstGeprobeerd = List.unmodifiable(geprobeerd);
+        if (rows.isEmpty) {
+          switch (soort) {
+            case RtLeeg.niets:
+              // Geen storing: [laatsteAantal] blijft 0 en [rutrackerStandZin] zegt waarnaar gezocht is.
+              return [];
+            case RtLeeg.vormVeranderd:
+              lastError = 'RuTracker gaf torrents terug, maar de app herkent de regels niet meer — '
+                  'RuTracker heeft zijn pagina veranderd (${resp.bytes.length} bytes).';
+              return [];
+            case RtLeeg.onbekend:
+              lastError = 'RuTracker antwoordde (${resp.status}, ${resp.bytes.length} bytes) maar '
+                  'dat was geen zoekpagina — er stond geen enkele resultaatrij in.';
+              return [];
+          }
+        }
       }
       // De ontbrekende infohashes van de topicpagina halen.
       //

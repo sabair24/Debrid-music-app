@@ -1011,6 +1011,9 @@ class LanServer {
           'fout': rt.lastError,
           'aantal': rt.laatsteAantal,
           'doorZeef': rt.laatsteDoorZeef,
+          'vraag': rt.laatsteVraag,
+          'ruimer': rt.laatsteRuimer,
+          'geprobeerd': rt.laatstGeprobeerd,
         },
         // En hoe elke bron het deed. Zonder dit staat op de telefoon één getal en is niet te zien
         // welke tracker eraan meebetaald heeft — precies waarom "volgens mij is die bron down" hier

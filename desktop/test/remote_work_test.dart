@@ -246,6 +246,23 @@ void main() {
       expect(service.rutracker.lastError, isEmpty);
     });
 
+    test('en waarnaar er gezocht is, zodat "niets voor Bazart Goud" ook op de telefoon staat', () async {
+      // 09-10-2026: een lege uitslag stond er als storing. Nu zegt de zin waarnaar gezocht is en wat
+      // er korter geprobeerd werd — en dat weet alleen de pc. Zie `rutracker_leeg_test.dart`.
+      online.rutracker.lastError = '';
+      online.rutracker.laatsteAantal = 2;
+      online.rutracker.laatsteVraag = 'Bazart Goud';
+      online.rutracker.laatsteRuimer = 'Bazart';
+      online.rutracker.laatstGeprobeerd = const ['Bazart Goud Live'];
+      final service = remoteOnline();
+
+      await service.search('iets');
+
+      expect(service.rutracker.laatsteVraag, 'Bazart Goud');
+      expect(service.rutracker.laatsteRuimer, 'Bazart');
+      expect(service.rutracker.laatstGeprobeerd, ['Bazart Goud Live']);
+    });
+
     test('een aanmelding zonder bb_session wordt geweigerd', () async {
       final service = remoteOnline();
       final uit = await service.stuurRutrackerSessie('cf_clearance=x', 'Mozilla/5.0');
