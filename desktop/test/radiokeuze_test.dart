@@ -158,4 +158,16 @@ void main() {
       expect(kiesNummers(const []), isEmpty);
     });
   });
+
+  group('hetzelfde woord, anders geschreven', () {
+    test('DE KERN: "Vonken & Vuur" van het model is "Vonken en vuur" bij Deezer', () {
+      expect(basisTitel('Vonken & Vuur'), basisTitel('Vonken en vuur'));
+      expect(basisTitel('Hier En Nu'), basisTitel('Hier & Nu'));
+    });
+
+    test('alleen het hele woord: "Een" en "Venen" blijven wat ze zijn', () {
+      expect(basisTitel('Een Dag'), isNot(basisTitel('And Dag')));
+      expect(basisTitel('Venen'), isNot(basisTitel('Vandand')));
+    });
+  });
 }

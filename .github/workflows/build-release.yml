@@ -258,6 +258,8 @@ jobs:
             test/luidheid_test.dart test/luidheid_meting_test.dart test/luidheid_lijn_test.dart \
             test/luidheid_merk_test.dart \
             test/nu_speelt_ondoorzichtig_test.dart \
+            test/radio_droog_test.dart test/radioladder_test.dart \
+            test/radio_nooitstil_test.dart test/radiobijvuller_test.dart \
             test/torrent_nummering_test.dart test/verwijderen_en_eigen_keuze_test.dart \
             test/zuinig_test.dart test/accountkoppeling_test.dart \
             test/uitwijk_test.dart test/kantnummer_test.dart \

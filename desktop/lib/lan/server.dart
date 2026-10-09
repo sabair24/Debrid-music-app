@@ -1411,6 +1411,7 @@ class LanServer {
           return _json(req.response, {
             'genre': o.genre,
             'aantal': o.aantal,
+            'aantalGenoemd': o.aantalGenoemd,
             'zaadArtiesten': o.zaadArtiesten,
             if (o.jaarVan != null) 'jaarVan': o.jaarVan,
             if (o.jaarTot != null) 'jaarTot': o.jaarTot,

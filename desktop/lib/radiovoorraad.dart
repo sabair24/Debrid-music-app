@@ -43,6 +43,26 @@ enum Haalstand {
   mislukt,
 }
 
+/// Waarom een plek [Haalstand.mislukt] werd — voor het bijvullen, dat per reden iets anders doet.
+///
+/// [tijdvak] kan een ruimer venster later opnieuw keuren; [nietGevonden] krijgt na een half uur één
+/// herkansing; [verdwenen] (het bestand stond er niet meer bij het openen) wordt niet opnieuw gehaald;
+/// de rest is een oordeel en blijft staan.
+enum Weerreden { sfeer, tijdvak, stijl, nietGevonden, verdwenen, duim, geheugen }
+
+/// Onder hoeveel nummers vooruit de RESERVE meespeelt — eigen nummers in de stijl, die de bijvuller
+/// klaarzet voor als er niets anders is (zie `radiobijvuller.dart`).
+///
+/// Twee, en niet [kMinVooruit]: de gewone vulling met eigen muziek gaat al in bij minder dan zes, en
+/// die gebeurt routinematig (doorspringen, een trage Soulseek). Dan zou de reserve gewone mengmuziek
+/// worden in plaats van het vangnet waarvoor hij er is (beoordeling van 08-10-2026).
+const int kReserveVooruit = 2;
+
+/// Hoeveel reserveplekken er bij nood in één keer de rij in mogen. Ook bij nood niet meer: anders vulde
+/// de reserve de rij aan tot [kMinVooruit] — zes eigen nummers op een rij, precies wat de reserve niet
+/// mag worden (beoordeling van 08-10-2026).
+const int kNoodReserve = 2;
+
 /// Soulseek doet even niet mee: geen aanmelding, of de server antwoordt niet. Dat is geen mislukte
 /// plek maar een plek die later opnieuw moet.
 ///
@@ -176,6 +196,11 @@ const int kMaxVooruit = 12;
 /// start stond alleen het zaad in de rij — nul nummers vooruit — en dus mocht Flashback van 2 Fabiola
 /// er meteen achter, en Let The Music Play erna; vier keer 2 Fabiola in de eerste tien. Terwijl het
 /// zaad zelf 3:35 duurde en de eerste haal na acht seconden landde.
+///
+/// **De reserve** ([reserve], per plek) is eigen muziek die alleen meespeelt als er minder dan
+/// [kReserveVooruit] vooruit staat, of bij [nood] — dan hoogstens [kNoodReserve]. [reserveMag] onwaar:
+/// geen reserve (het genoemde aantal van een radio uit een zin is er). Geen [reserve] meegegeven: zoals
+/// voorheen.
 Voorraadbesluit voorraadPlan(
   List<Haalstand> standen, {
   required int vooruitNu,
@@ -189,7 +214,11 @@ Voorraadbesluit voorraadPlan(
   int? restSeconden,
   List<int?> seconden = const [],
   String? zaad,
+  List<bool> reserve = const [],
+  bool nood = false,
+  bool reserveMag = true,
 }) {
+  bool isReserve(int i) => i < reserve.length && reserve[i];
   final inRij = <int>[];
   var vooruit = vooruitNu;
   var rest = restSeconden;
@@ -230,9 +259,15 @@ Voorraadbesluit voorraadPlan(
   // Wat er net geland is telt mee: staat die artiest er al, dan hoeft zijn eigen werk er niet
   // meteen achteraan.
   final gezien = <String>{for (final i in inRij) naam(i)}..remove('');
+  var reserveErbij = 0;
   for (var ronde = 0; ronde < 2 && vooruit < minVooruit; ronde++) {
     for (var i = 0; i < standen.length && vooruit < minVooruit; i++) {
       if (standen[i] != Haalstand.klaar || inRij.contains(i)) continue;
+      // De reserve pas als het echt krap wordt — zie [kReserveVooruit] en [kNoodReserve].
+      if (isReserve(i) &&
+          (!reserveMag || (nood ? reserveErbij >= kNoodReserve : vooruit >= kReserveVooruit))) {
+        continue;
+      }
       final a = naam(i);
       if (ronde == 0 && a.isNotEmpty && (vlakErvoor(a) || !gezien.add(a))) continue;
       // Ook in de tweede ronde niet vlak achter zichzelf zolang er al twee vooruit staan. Zonder dit
@@ -240,6 +275,7 @@ Voorraadbesluit voorraadPlan(
       // muziek van de zaadartiest al gekeurd, en de tweede ronde vulde de rij daarmee op (review van
       // 26-09-2026). Onder de twee gaat hij er alsnog in: een rij die leegloopt stopt de radio.
       if (ronde == 1 && ruim() && vlakErvoor(a)) continue;
+      if (isReserve(i)) reserveErbij++;
       inRij.add(i);
       rij.add(a);
       vooruit++;

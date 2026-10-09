@@ -35,10 +35,15 @@ class RadioOpdracht {
     this.jaarVan,
     this.jaarTot,
     this.stemming = '',
+    this.aantalGenoemd = false,
   });
 
   final String genre;
   final int aantal;
+
+  /// Noemde je zelf een aantal ("300 liedjes")? Dan stopt het bijvullen daar, met een knop om toch
+  /// door te gaan. Zonder genoemd aantal is [aantal] alleen de beginlading en vult hij gewoon bij.
+  final bool aantalGenoemd;
 
   /// De artiesten waarmee de radio begint. Nooit leeg als deze opdracht bruikbaar is.
   final List<String> zaadArtiesten;
@@ -110,6 +115,10 @@ Map<String, dynamic> radioSchema() => {
           'type': 'integer',
           'description': 'Hoeveel nummers de gebruiker vroeg. Hoogstens $kMaxRadio.',
         },
+        'aantalGenoemd': {
+          'type': 'boolean',
+          'description': 'Of de gebruiker zelf een aantal nummers noemde.',
+        },
         'zaadArtiesten': {
           'type': 'array',
           'items': {'type': 'string'},
@@ -124,7 +133,7 @@ Map<String, dynamic> radioSchema() => {
       },
       // Alles, en niet alleen wat verplicht voelt. Zie de kop hierboven: een veld dat in
       // `properties` staat maar niet hier, laat de API het hele schema weigeren.
-      'required': ['genre', 'jaarVan', 'jaarTot', 'aantal', 'zaadArtiesten', 'stemming'],
+      'required': ['genre', 'jaarVan', 'jaarTot', 'aantal', 'aantalGenoemd', 'zaadArtiesten', 'stemming'],
     };
 
 /// De vraag aan het model.
@@ -150,7 +159,7 @@ Drie dingen die je in de gaten moet houden bij die namen, want de app kan ze nie
 3. Vermijd namen die je met één teken verschil met een veel bekendere artiest kunt verwarren, tenzij
    ze werkelijk in dit genre horen.
 
-Noemt hij geen aantal, kies dan $kStandaardAantal.''';
+Noemt hij geen aantal, kies dan $kStandaardAantal en zet aantalGenoemd op false.''';
 
 /// Wat er van het antwoord geloofd wordt.
 ///
@@ -181,6 +190,9 @@ RadioOpdracht leesRadioOpdracht(Object? json) {
     genre: _kort(m['genre']),
     stemming: _kort(m['stemming']),
     aantal: _getal(m['aantal'], standaard: kStandaardAantal, laag: 1, hoog: kMaxRadio),
+    // Ontbreekt het (een oudere pc die het plan maakte), dan geldt het als niet genoemd: liever een
+    // radio die doorgaat dan een die onverwacht stopt.
+    aantalGenoemd: m['aantalGenoemd'] == true,
     jaarVan: _jaar(m['jaarVan']),
     jaarTot: _naJaar(_jaar(m['jaarTot']), _jaar(m['jaarVan'])),
     zaadArtiesten: artiesten,

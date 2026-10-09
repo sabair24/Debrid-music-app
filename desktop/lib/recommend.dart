@@ -125,8 +125,12 @@ class RecTrack {
   /// Hoe bekend het nummer is volgens Deezer (`rank`, hoger is bekender) — 0 als de bron het niet
   /// zei. Zie `radiosmaak.dart`: daarop kiest de radio tussen Bekend en Ontdekken.
   final int rank;
+
+  /// Deezers id voor de artiest — 0 als de bron het niet zei. Een naam alleen is niet genoeg: "Camille"
+  /// is bij Deezer op naam de Franse (646), en de Vlaamse (108271532) vind je alleen via de buurt.
+  final int artistId;
   const RecTrack(this.artist, this.title, this.cover,
-      {this.album = '', this.albumId = 0, this.seconds = 0, this.rank = 0});
+      {this.album = '', this.albumId = 0, this.seconds = 0, this.rank = 0, this.artistId = 0});
 
   /// True when there is a record to open rather than only a song to play.
   bool get hasAlbum => albumId > 0 && album.trim().isNotEmpty && artist.trim().isNotEmpty;
@@ -240,6 +244,7 @@ class RecommendService {
               albumId: ((t['album']?['id']) as num?)?.toInt() ?? 0,
               seconds: (t['duration'] as num?)?.toInt() ?? 0,
               rank: (t['rank'] as num?)?.toInt() ?? 0,
+              artistId: ((t['artist']?['id']) as num?)?.toInt() ?? 0,
             ))
         .where((r) => r.title.isNotEmpty)
         .toList();
@@ -379,6 +384,31 @@ class RecommendService {
     final eigen = topUitZoeken((z?['data'] as List?) ?? const [], id);
     return {'data': eigen.skip(index).take(limit).toList()};
   }
+
+  /// De artiest en zijn `/related`, met ids: de bronnen waaruit een lopende radio bijvult als er geen
+  /// model is. Nooit de artiestenradio (`/artist/{id}/radio`): gemeten op 08-10-2026 zitten daar bij
+  /// Niels Destadsbader K3, Kinderen Voor Kinderen en Katastroof in, en in `/related` niet.
+  Future<({int id, String naam, List<({int id, String naam})> verwant})?> bronArtiesten(String artiest,
+      {bool metVerwant = true}) async {
+    final id = await _artistId(artiest);
+    if (id == null) return null;
+    if (!metVerwant) return (id: id, naam: artiest, verwant: const <({int id, String naam})>[]);
+    final rel = ((await _get('$_base/artist/$id/related?limit=20'))?['data'] as List?) ?? const [];
+    return (
+      id: id,
+      naam: artiest,
+      verwant: [
+        for (final a in rel)
+          if (a is Map && a['id'] is num && '${a['name'] ?? ''}'.trim().isNotEmpty)
+            (id: (a['id'] as num).toInt(), naam: '${a['name']}')
+      ],
+    );
+  }
+
+  /// De toppers van artiest [id], vanaf plek [index]. Via [_top], dus ook op de dag dat Deezers eigen
+  /// lijst zwijgt.
+  Future<List<RecTrack>> toppers(int id, String naam, {int limit = 25, int index = 0}) async =>
+      _tracks(await _top(id, naam, limit: limit, index: index));
 
   /// Radio (~25 tracks) around an artist — the seed artist mixed with similar ones.
   Future<List<RecTrack>> artistRadio(String artist) async {

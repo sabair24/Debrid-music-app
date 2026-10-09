@@ -33,6 +33,20 @@ class _Speler implements PlayerStore {
   void Function(List<RadioItem> gespeeld)? bijRadioEinde;
 
   @override
+  void Function(RadioItem item, {required bool bestand})? bijRadioOverslaan;
+
+  // Speelt niet en staat niet droog: dan houdt de poort van het bijvullen dicht (zie `bijvulBesluit`),
+  // en meten deze toetsen alleen het landen.
+  @override
+  bool get playing => false;
+
+  @override
+  bool get radioDroog => false;
+
+  @override
+  bool get wilVerder => false;
+
+  @override
   List<RadioItem> get radioQueue => rij;
 
   @override

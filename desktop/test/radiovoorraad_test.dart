@@ -268,4 +268,37 @@ void main() {
       expect(b.inRij, isEmpty);
     });
   });
+
+  // De reserve: eigen nummers die de bijvuller als vangnet klaarzet (plan van 08-10-2026). Die mogen
+  // de radio niet overnemen — anders is een radio vanaf Niels na een kwartier je eigen bibliotheek.
+  group('de reserve speelt alleen als het krap wordt', () {
+    test('DE KERN: bij drie vooruit niet, bij één wel — tot er twee staan', () {
+      final reserve = [true, true, true];
+      expect(voorraadPlan(standen('kkk'), vooruitNu: 3, reserve: reserve).inRij, isEmpty);
+      expect(voorraadPlan(standen('kkk'), vooruitNu: 1, reserve: reserve).inRij, [0]);
+      expect(voorraadPlan(standen('kkk'), vooruitNu: 0, reserve: reserve).inRij, [0, 1]);
+    });
+
+    test('bij nood telt de drempel niet — maar meer dan twee worden het nooit', () {
+      final b = voorraadPlan(standen('kkkk'), vooruitNu: 3, reserve: const [true, true, true, true], nood: true);
+      expect(b.inRij, [0, 1]);
+      final droog = voorraadPlan(standen('kkkk'), vooruitNu: 0, reserve: const [true, true, true, true], nood: true);
+      expect(droog.inRij, hasLength(2), reason: 'niet aanvullen tot zes eigen nummers op een rij');
+    });
+
+    test('mag de reserve niet (het genoemde aantal is er), dan geen reserve', () {
+      expect(voorraadPlan(standen('kk'), vooruitNu: 0, reserve: const [true, true], reserveMag: false).inRij, isEmpty);
+      expect(voorraadPlan(standen('kk'), vooruitNu: 0, reserve: const [false, true], reserveMag: false).inRij, [0]);
+    });
+
+    test('gewone eigen muziek gaat voor, en blijft werken zoals voorheen', () {
+      final b = voorraadPlan(standen('kkkk'),
+          vooruitNu: 0, artiesten: const ['A', 'B', 'C', 'D'], reserve: const [false, false, true, true]);
+      expect(b.inRij.take(2), [0, 1]);
+      expect(b.inRij, isNot(contains(3)), reason: 'na twee vooruit doet de reserve niet meer mee');
+      // Zonder reservelijst: precies het oude gedrag.
+      expect(voorraadPlan(standen('kkkk'), vooruitNu: 0, artiesten: const ['A', 'B', 'C', 'D']).inRij,
+          [0, 1, 2, 3]);
+    });
+  });
 }

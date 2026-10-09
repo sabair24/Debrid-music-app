@@ -28,7 +28,8 @@ import 'online.dart';
 import 'paths.dart';
 import 'settings.dart';
 import 'player.dart';
-import 'radiokeuze.dart' show artiestSleutel, basisTitel;
+import 'radiokeuze.dart' show artiestSleutel, basisTitel, kArtiestAfstand, kMaxPerArtiest;
+import 'radioladder.dart';
 import 'radiosessie.dart';
 import 'radiovoorraad.dart';
 
@@ -41,11 +42,50 @@ class Radioplek {
     this.jaar,
     this.eigen,
     this.zaad = false,
-  }) {
+    this.bron = 'start',
+    this.deezerArtiest = 0,
+    this.reserve = false,
+    this.herhaling = false,
+  }) : teHalen = eigen == null {
     // Wat je al hebt is meteen klaar: het bestand staat er, er valt niets aan te halen. Dat is de
     // enige plek waar het onderscheid tussen "eigen muziek" en "moet nog komen" gemaakt wordt.
     if (eigen != null) stand = Haalstand.klaar;
   }
+
+  /// Moest deze plek gehaald worden (geen eigen nummer bij het maken)? Voor de opbrengst: alleen
+  /// zulke plekken tellen mee in "hoeveel van wat wacht, klinkt straks".
+  final bool teHalen;
+
+  /// Waar de plek vandaan kwam — "start", "buren", "reserve", "herhaling" — voor het logboek.
+  final String bron;
+
+  /// Deezers id voor de artiest, als de bron hem gaf (0: onbekend).
+  final int deezerArtiest;
+
+  /// Eigen muziek die de bijvuller als vangnet klaarzette: speelt alleen mee als het krap wordt — zie
+  /// [kReserveVooruit] — en staat altijd achteraan het plan.
+  final bool reserve;
+
+  /// Een nummer dat deze radio al speelde en nu herhaalt — zie [RadioBesturing.voegHerhalingBij].
+  final bool herhaling;
+
+  /// Waarom de plek [Haalstand.mislukt] werd, als dat zo is.
+  Weerreden? weer;
+
+  /// Het jaar waarom het tijdvak deze plek weerde — voor een ruimer venster later.
+  int? buitenJaar;
+
+  /// Wanneer de plek niet te vinden bleek, en of hij al een herkansing kreeg.
+  DateTime? mislukteOp;
+  bool herkansd = false;
+
+  /// De stand van de voorbij-teller toen deze plek voorbij kwam (gespeeld of overgeslagen), of null.
+  /// Zie [RadioBesturing._stempel].
+  int? voorbijOp;
+
+  /// Werkelijk beluisterd (de luistertelling van de app), niet alleen voorbij gekomen. Alleen wat je
+  /// hoorde wordt herhaald — wat je oversloeg niet (beoordeling van 08-10-2026).
+  bool gehoord = false;
 
   final String artiest;
   final String titel;
@@ -246,6 +286,74 @@ List<Radioplek> nieuweNakomers(List<Radioplek> plan, List<Radioplek> extra) {
   ];
 }
 
+/// De artiesten die meetellen voor het plafond per artiest (zie `spreidArtiesten`).
+///
+/// **Wat er nog komt, plus de laatste [venster] die voorbij kwamen.** Eerst ging hier het hele plan
+/// in, ook wat geweerd of niet te vinden was: drie afgekeurde Clouseau-nummers en Clouseau kwam er
+/// nooit meer in (beoordeling van 08-10-2026). En zonder venster vraagt een radio van driehonderd
+/// nummers met hoogstens drie per artiest honderd artiesten — zoveel heeft Vlaamse pop er niet.
+///
+/// "Wat nog komt" is: wachten, onderweg, klaar (zonder de reserve), geland, en in de rij maar nog
+/// niet voorbij. Een nummer dat je oversloeg telt alleen binnen het venster mee.
+List<String> artiestenVoorPlafond(List<Radioplek> plan, {required int voorbijteller, int venster = 40}) => [
+      for (final p in plan)
+        if (p.stand != Haalstand.mislukt &&
+            !(p.stand == Haalstand.klaar && p.reserve) &&
+            (p.voorbijOp == null || voorbijteller - p.voorbijOp! < venster))
+          p.artiest
+    ];
+
+/// Artiesten die deze radio al minstens drie keer weerde om tijdvak of stijl: niet steeds opnieuw
+/// laten keuren. Een besparing op de keuring (de rij van Discogs is 1,1 s per vraag), geen
+/// smaakregel.
+Set<String> steedsGeweigerd(List<Radioplek> plan) {
+  final tel = <String, int>{};
+  for (final p in plan) {
+    if (p.stand == Haalstand.mislukt && (p.weer == Weerreden.tijdvak || p.weer == Weerreden.stijl)) {
+      final k = artiestSleutel(p.artiest);
+      tel[k] = (tel[k] ?? 0) + 1;
+    }
+  }
+  return {for (final e in tel.entries) if (e.value >= 3) e.key};
+}
+
+/// Wat er bij een radio onder de titel staat — of null: niets bijzonders, toon de artiest.
+///
+/// **Zolang de radio loopt nooit "Radio klaar".** Dat zei de speler zodra zijn rij op was, en dan
+/// stond het er terwijl er nog acht nummers onderweg waren (08-10-2026, "0 hierna" en "Radio klaar"
+/// na dertien nummers). Een lege rij is wachten, geen einde.
+///
+/// [spelerStatus] is wat de speler zelf meldt (`PlayerStore.radioStatus`), [stand] wat het
+/// bijvullen zegt ([RadioBesturing.bijvulStand]). [aantal] is het genoemde aantal van een radio uit
+/// een zin, als dat bereikt is ([aantalBereikt]).
+String? radioStatusTekst({
+  required String spelerStatus,
+  required bool droog,
+  required bool wilVerder,
+  required bool loopt,
+  String? stand,
+  bool aantalBereikt = false,
+  int? aantal,
+}) {
+  final wacht = droog || wilVerder;
+  if (wacht && aantalBereikt && aantal != null) return 'Je vroeg $aantal nummers — de radio stopt hier';
+  if (wacht && loopt) return stand ?? 'Zoekt het volgende nummer…';
+  if (loopt && spelerStatus == 'Radio klaar') return stand;
+  if (spelerStatus.isNotEmpty) return spelerStatus;
+  return null;
+}
+
+/// De kop van het radiopaneel: hoeveel er nog komt, en of hij nog zoekt.
+///
+/// "0 hierna" alleen klonk als het einde, ook als er acht onderweg waren. [zoekt] is onwaar als hij
+/// niet zoekt: het genoemde aantal is er, of het ophalen staat even stil — dan geen "zoekt verder".
+String radioKop({required int hierna, required int onderweg, required bool loopt, bool zoekt = true}) {
+  final h = hierna < 0 ? 0 : hierna;
+  if (!loopt) return '$h hierna';
+  if (onderweg > 0) return '$h hierna · $onderweg onderweg';
+  return h == 0 && zoekt ? '0 hierna · zoekt verder' : '$h hierna';
+}
+
 /// Waar de nakomers in het plan terechtkomen.
 ///
 /// **Waarom niet gewoon achteraan.** Gemeten op 12-09-2026: het model leverde 41 nummers uit twaalf
@@ -264,7 +372,9 @@ List<Radioplek> mengNakomers(List<Radioplek> plan, List<Radioplek> nieuw) {
     // die telde eerst mee, en dan kwamen nakomers achter het hele blok terecht.
     if (plan[i].stand != Haalstand.wacht && plan[i].stand != Haalstand.klaar) grens = i + 1;
   }
-  final rest = plan.sublist(grens);
+  // De reserve blijft achteraan: dat is het vangnet, geen mengmuziek (zie [kReserveVooruit]).
+  final rest = [for (final p in plan.sublist(grens)) if (!p.reserve) p];
+  final reserve = [for (final p in plan.sublist(grens)) if (p.reserve) p];
   final uit = [...plan.take(grens)];
   for (var i = 0; i < rest.length || i < nieuw.length; i++) {
     // De nakomer EERST. Gemeten op 12-09-2026: met de plek van Deezer vooraan kwam er in zeven
@@ -274,7 +384,7 @@ List<Radioplek> mengNakomers(List<Radioplek> plan, List<Radioplek> nieuw) {
     if (i < nieuw.length) uit.add(nieuw[i]);
     if (i < rest.length) uit.add(rest[i]);
   }
-  return uit;
+  return [...uit, ...reserve];
 }
 
 /// Het plan na het afstemmen: wat al in gang is blijft, de rest wordt vervangen door [nieuw].
@@ -289,13 +399,29 @@ List<Radioplek> mengNakomers(List<Radioplek> plan, List<Radioplek> nieuw) {
 List<Radioplek> stemPlanAf(List<Radioplek> plan, List<Radioplek> nieuw) {
   final blijft = [
     for (final p in plan)
-      if (p.zaad || (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar)) p
+      if (p.zaad || p.reserve || (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar)) p
   ];
   return [...blijft, ...nieuweNakomers(blijft, nieuw)];
 }
 
+/// Wat de radio de bijvuller meegeeft bij een ronde. [reserveNodig]: hoeveel eigen nummers er als
+/// reserve bij mogen (0: nog niet, of genoeg); [reserveKlaar]: hoeveel er al klaarstaan.
+typedef Bijvulvraag = ({bool nood, double verwacht, int reserveNodig, int reserveKlaar});
+
+/// Een ronde van de bijvuller: geeft terug hoeveel plekken er bij kwamen. Zie `radiobijvuller.dart`.
+typedef Bijvuller = Future<int> Function(int sessie, int ronde, Bijvulvraag vraag);
+
 class RadioBesturing extends ChangeNotifier {
-  RadioBesturing({required this.speler, required this.bron});
+  /// [klok] is er voor de toetsen: de reserve na een minuut zonder landing, en een herkansing na een
+  /// half uur, zijn anders niet na te spelen.
+  RadioBesturing({required this.speler, required this.bron, DateTime Function()? klok})
+      : _klok = klok ?? DateTime.now;
+
+  final DateTime Function() _klok;
+
+  /// Eén tik van de radio, nu — voor de toetsen, die niet vijf seconden willen wachten.
+  @visibleForTesting
+  void tikVoorToets() => _pas(_sessie);
 
   final PlayerStore speler;
   final Radiobron bron;
@@ -322,6 +448,89 @@ class RadioBesturing extends ChangeNotifier {
   /// Van een pad naar het gedeelde id, om een oordeel te kunnen terugvinden als het bestand er niet
   /// meer is. Ingehangen vanuit main.dart.
   String? Function(String pad)? idVanPad;
+
+  /// Je eigen nummers van de zaadartiest, voor het laatste vangnet van het herhalen. Ingehangen vanuit
+  /// main.dart.
+  List<Track> Function()? eigenVanZaad;
+
+  /// Heeft dit nummer een duim omhoog? Voor het herhalen (groen gaat eerst). Ingehangen vanuit main.dart.
+  bool Function(Track t)? isGroen;
+
+  /// Het bijvullen van deze radio, of null (dan vult hij niet bij). Zie [start].
+  Bijvuller? _bijvul;
+  void Function(String regel)? _spoor;
+
+  /// Bij een radio uit een zin met een genoemd aantal ("300 nummers"): daar stopt het bijvullen.
+  int? _aantal;
+
+  bool _bijvulBezig = false;
+  int _bijvulRonde = 0;
+  DateTime? _vorigeRonde;
+  bool _noodVorige = false;
+  DateTime? _laatsteNood;
+  DateTime? _startTijd;
+  bool _eersteLanding = false;
+  DateTime? _droogSinds;
+
+  /// Telt elke stap waarin er iets voorbij kwam — zie [_stempel].
+  int _voorbijteller = 0;
+  int get voorbijteller => _voorbijteller;
+
+  /// Bij welke plek een rij-item hoort. Op identiteit: weghalen uit de rij verschuift het niet.
+  final Expando<Radioplek> _plekVan = Expando<Radioplek>('plek');
+
+  /// De afloop van elke plek die gehaald moest worden, oud naar nieuw: true = geland, false = mislukt
+  /// of geweerd. Voor [recenteOpbrengst].
+  final List<bool> _uitkomsten = [];
+
+  int _gehoordTeller = 0;
+
+  /// Wat het bijvullen nu doet, voor het paneel — of null als er niets bijzonders is.
+  String? bijvulStand;
+
+  /// De bijvuller zegt wat hij doet. Alleen bij een verandering.
+  void zetBijvulStand(String? stand) {
+    if (stand == bijvulStand) return;
+    bijvulStand = stand;
+    notifyListeners();
+  }
+
+  /// Het bijvullen van een radio uit een zin staat stil omdat het genoemde aantal er is.
+  bool get aantalBereikt {
+    final a = _aantal;
+    return a != null &&
+        _plan.where((p) => p.stand != Haalstand.mislukt && !p.reserve && !p.herhaling).length >= a;
+  }
+
+  /// Het genoemde aantal is er én er komt niets meer: niets onderweg, wachtend of klaar. Dan pas zegt
+  /// het scherm het, met "Ga door".
+  bool get aantalOp =>
+      aantalBereikt &&
+      !_plan.any((p) =>
+          !p.reserve &&
+          (p.stand == Haalstand.wacht ||
+              p.stand == Haalstand.onderweg ||
+              p.stand == Haalstand.klaar ||
+              p.stand == Haalstand.geland));
+
+  /// Het genoemde aantal van een radio uit een zin, zolang het geldt.
+  int? get aantal => _aantal;
+
+  /// "Ga door" na een bereikt aantal: vanaf nu zonder grens.
+  void gaDoor() {
+    if (_aantal == null || !_loopt) return;
+    _aantal = null;
+    _spoor?.call('radio: het genoemde aantal is er — gaat door op verzoek');
+    notifyListeners();
+    _pas(_sessie);
+  }
+
+  /// Hoe lang een bijvulronde mag duren voor hij niet meer telt. Instelbaar voor de toetsen.
+  @visibleForTesting
+  Duration bijvulGeduld = const Duration(minutes: 3);
+
+  /// Welke bijvulronde nu geldt. Wat een oudere ronde nog toevoegt, valt weg.
+  int get bijvulRonde => _bijvulRonde;
 
   Timer? _tik;
   int _sessie = 0;
@@ -457,7 +666,10 @@ class RadioBesturing extends ChangeNotifier {
       String? zaadArtiest,
       Track? zaad,
       Future<bool> Function(Radioplek plek)? keur,
-      void Function(int sessie)? bijStart}) async {
+      void Function(int sessie)? bijStart,
+      Bijvuller? bijvul,
+      void Function(String regel)? spoor,
+      int? aantal}) async {
     if (nieuw.isEmpty) return 'Er viel niets te vinden om een radio van te maken.';
 
     // Eerst vragen of het KAN, en pas daarna de lopende radio verlaten. Andersom zou een radio die
@@ -477,6 +689,21 @@ class RadioBesturing extends ChangeNotifier {
     _rustWaarom = null;
     _pauzeGemeld = false;
     _keur = keur;
+    _bijvul = bijvul;
+    _spoor = spoor;
+    _aantal = aantal;
+    _bijvulBezig = false;
+    _bijvulRonde = 0;
+    _vorigeRonde = null;
+    _noodVorige = false;
+    _laatsteNood = null;
+    _startTijd = _klok();
+    _eersteLanding = false;
+    _droogSinds = null;
+    _voorbijteller = 0;
+    _uitkomsten.clear();
+    _gehoordTeller = 0;
+    bijvulStand = null;
     _plan = nieuw;
     this.naam = naam;
     this.zaadArtiest = zaadArtiest;
@@ -522,6 +749,13 @@ class RadioBesturing extends ChangeNotifier {
     speler.bijRadioEinde = (_) {
       if (sessie == _sessie) stop();
     };
+    // Een nummer dat de speler oversloeg: het bestand deugde niet, of het bleef onbereikbaar. Op de
+    // plek, zodat het niet herhaald wordt — en een verdwenen bestand ook niet opnieuw gehaald.
+    speler.bijRadioOverslaan = (it, {required bestand}) {
+      if (sessie != _sessie) return;
+      final p = _plekVan[it];
+      if (p != null) p.weer = bestand ? Weerreden.verdwenen : Weerreden.nietGevonden;
+    };
     // Alleen als DEZE start het werd. Een start die ingehaald is geeft ook null terug, en wie dan
     // [sessie] las, voegde zijn nummers toe aan de radio die hem inhaalde (review van 26-09-2026).
     bijStart?.call(sessie);
@@ -552,12 +786,179 @@ class RadioBesturing extends ChangeNotifier {
   ///
   /// Dus begint de radio met wat Deezer meteen geeft, en schuiven deze erbij zodra ze er zijn.
   /// [_pas] loopt elke vijf seconden en pakt ze vanzelf op — er hoeft hier niets gestart te worden.
-  void voegBij(int sessie, List<Radioplek> extra) {
-    if (sessie != _sessie || !_loopt || extra.isEmpty) return;
+  ///
+  /// Geeft terug hoeveel plekken er werkelijk bij kwamen. [ronde]: van welke bijvulronde ze komen —
+  /// is die intussen voorbij (een time-out, een nieuwe radio), dan komt er niets meer bij.
+  ///
+  /// [achteraan]: na wat er al wacht, vóór de reserve, in plaats van ertussen gemengd. Voor het
+  /// bijvullen: dat begon op de pc al na vijf seconden en zette zo vierentwintig ongekeurde buren
+  /// tussen de startlijst die het model op sfeer gekeurd had (beoordeling van 08-10-2026).
+  int voegBij(int sessie, List<Radioplek> extra, {int? ronde, bool achteraan = false}) {
+    if (sessie != _sessie || !_loopt || extra.isEmpty) return 0;
+    if (ronde != null && ronde != _bijvulRonde) return 0;
     final nieuw = nieuweNakomers(_plan, extra);
-    if (nieuw.isEmpty) return;
-    _plan = mengNakomers(_plan, nieuw);
+    if (nieuw.isEmpty) return 0;
+    if (achteraan) {
+      var k = _plan.length;
+      while (k > 0 && _plan[k - 1].reserve) {
+        k--;
+      }
+      _plan = [..._plan.take(k), ...nieuw, ..._plan.skip(k)];
+    } else {
+      _plan = mengNakomers(_plan, nieuw);
+    }
     notifyListeners();
+    return nieuw.length;
+  }
+
+  /// Eigen nummers als reserve erbij: achteraan, en ze spelen pas mee als het krap wordt (zie
+  /// [kReserveVooruit]). [plekken] moeten [Radioplek.reserve] zijn.
+  int voegReserveBij(int sessie, List<Radioplek> plekken) {
+    if (sessie != _sessie || !_loopt || plekken.isEmpty) return 0;
+    final nieuw = nieuweNakomers(_plan, [for (final p in plekken) if (p.reserve && p.eigen != null) p]);
+    if (nieuw.isEmpty) return 0;
+    _plan = [..._plan, ...nieuw];
+    _spoor?.call('radio-reserve: ${nieuw.length} eigen nummers klaar — '
+        '${nieuw.map((p) => '${p.artiest} — ${p.titel}').join('; ')}');
+    notifyListeners();
+    return nieuw.length;
+  }
+
+  /// Wat niet te vinden was en minstens [na] oud is, nog één keer proberen: hoogstens [max].
+  int herkans(int sessie, {required int ronde, int max = 8, Duration na = const Duration(minutes: 30)}) {
+    if (sessie != _sessie || !_loopt || ronde != _bijvulRonde) return 0;
+    final nu = _klok();
+    var n = 0;
+    for (final p in _plan) {
+      if (n >= max) break;
+      if (p.stand != Haalstand.mislukt || p.weer != Weerreden.nietGevonden || p.herkansd) continue;
+      final op = p.mislukteOp;
+      if (op == null || nu.difference(op) < na) continue;
+      p.stand = Haalstand.wacht;
+      p.weer = null;
+      p.herkansd = true;
+      n++;
+    }
+    if (n > 0) notifyListeners();
+    return n;
+  }
+
+  /// Herhalen wat deze radio al speelde, als er niets nieuws is: hoogstens [hoeveel]. Zie
+  /// [kiesHerhaling]. Gaat buiten [nieuweNakomers] om — die zou elke herhaling weren, want het nummer
+  /// staat al in het plan — en meteen als [Haalstand.geland], zodat het de rij in gaat.
+  int voegHerhalingBij(int sessie, int hoeveel) {
+    if (sessie != _sessie || !_loopt || hoeveel <= 0) return 0;
+    // Per bestand: de laatste keer dat het voorbij kwam, of je het hoorde, en of het nog komt (dan niet
+    // nóg eens).
+    final laatst = <String, int>{};
+    final gehoordPad = <String>{};
+    final komtNog = <String>{};
+    final weg = <String>{};
+    final eerste = <String, Radioplek>{};
+    for (final p in _plan) {
+      final t = p.eigen;
+      if (t == null) continue;
+      final pad = t.path;
+      eerste.putIfAbsent(pad, () => p);
+      // Weg, door je duim, of onbereikbaar gebleven: niet terug.
+      if (p.weer == Weerreden.verdwenen || p.weer == Weerreden.duim || p.weer == Weerreden.nietGevonden) {
+        weg.add(pad);
+      }
+      if (p.gehoord) gehoordPad.add(pad);
+      // Een herhaling die je oversloeg: dat nummer wil je nu niet, ook al hoorde je het eerder wel.
+      if (p.herhaling && p.voorbijOp != null && !p.gehoord) weg.add(pad);
+      final v = p.voorbijOp;
+      if (v != null) {
+        final oud = laatst[pad];
+        if (oud == null || oud < v) laatst[pad] = v;
+      } else if (p.stand != Haalstand.mislukt) {
+        komtNog.add(pad);
+      }
+    }
+    final zaadEigen = eigenVanZaad?.call() ?? const <Track>[];
+    final paden = <String>[
+      for (final pad in eerste.keys)
+        if (!weg.contains(pad) && !komtNog.contains(pad)) pad,
+      for (final t in zaadEigen)
+        if (!eerste.containsKey(t.path) && !weg.contains(t.path)) t.path,
+    ];
+    final zaadPaden = {for (final t in zaadEigen) t.path};
+    final trackVan = {for (final t in zaadEigen) t.path: t, for (final e in eerste.entries) e.key: e.value.eigen!};
+    final k = <Herhaalkandidaat>[
+      for (final pad in paden)
+        (
+          artiest: eerste[pad]?.artiest ?? trackVan[pad]!.artist,
+          laatstVoorbij: laatst[pad],
+          gehoord: gehoordPad.contains(pad),
+          groen: isGroen?.call(trackVan[pad]!) ?? false,
+          eigen: !(eerste[pad]?.doorRadio ?? false),
+          opSchijf: (eerste[pad]?.doorRadio ?? false) && (pad.startsWith('http') || File(pad).existsSync()),
+          zaadOfAnker: zaadPaden.contains(pad),
+          rood: false,
+        )
+    ];
+    // Wie al aan zijn plafond zit (zie [artiestenVoorPlafond]) komt pas als er niemand anders is.
+    final telling = <String, int>{};
+    for (final a in artiestenVoorPlafond(_plan, voorbijteller: _voorbijteller)) {
+      final sl = artiestSleutel(a);
+      telling[sl] = (telling[sl] ?? 0) + 1;
+    }
+    final rij = speler.radioQueue;
+    final zaadSleutel = zaadArtiest == null ? null : artiestSleutel(zaadArtiest!);
+    final zaadNet = zaadSleutel != null &&
+        rij
+            .skip(rij.length > kZaadAfstand ? rij.length - kZaadAfstand : 0)
+            .any((it) => artiestSleutel(it.artist) == zaadSleutel);
+    final keuze = kiesHerhaling(k,
+        teller: _voorbijteller,
+        recenteArtiesten: [for (final it in rij.skip(rij.length > kArtiestAfstand ? rij.length - kArtiestAfstand : 0)) it.artist],
+        vol: {
+          for (final e in telling.entries) if (e.value >= kMaxPerArtiest) e.key,
+          if (zaadNet) zaadSleutel,
+        },
+        hoeveel: hoeveel);
+    if (keuze.keuze.isEmpty) return 0;
+    final erbij = <Radioplek>[];
+    for (final i in keuze.keuze) {
+      final pad = paden[i];
+      final t = trackVan[pad]!;
+      final bron = eerste[pad];
+      // Kwam het in deze radio al eens voorbij, dan is het een herhaling en zegt het scherm "opnieuw".
+      // Een eigen nummer van de zaadartiest dat nog niet speelde is gewoon een eigen nummer.
+      final opnieuw = laatst[pad] != null;
+      final plek = Radioplek(
+        artiest: bron?.artiest ?? t.artist,
+        titel: bron?.titel ?? t.title,
+        seconden: t.duration?.inSeconds,
+        eigen: t,
+        bron: opnieuw ? 'herhaling' : 'vangnet',
+        herhaling: opnieuw,
+      )
+        ..doorRadio = bron?.doorRadio ?? false
+        ..stand = Haalstand.geland;
+      erbij.add(plek);
+      _spoor?.call(opnieuw
+          ? 'radio-herhaling: "${plek.artiest} — ${plek.titel}" (${_voorbijteller - laatst[pad]!} voorbij geleden, niveau ${keuze.niveau})'
+          : 'radio-vangnet: "${plek.artiest} — ${plek.titel}" (van jou, nog niet in deze radio)');
+    }
+    _plan = [..._plan, ...erbij];
+    notifyListeners();
+    return erbij.length;
+  }
+
+  /// Een nummer is echt beluisterd (dezelfde maat als de luistertelling van de app). Voor het logboek:
+  /// zo is na te tellen hoe lang een radio werkelijk liep.
+  void gehoord(Track t) {
+    if (!_loopt) return;
+    Radioplek? p;
+    for (final q in _plan) {
+      if (q.eigen?.path == t.path) p = q;
+    }
+    if (p == null) return;
+    p.gehoord = true;
+    _gehoordTeller++;
+    final soort = p.herhaling ? 'herhaling' : (p.doorRadio ? 'nieuw' : 'eigen');
+    _spoor?.call('radio-gehoord #$_gehoordTeller: "${p.artiest} — ${p.titel}" ($soort)');
   }
 
   /// De radio opnieuw afstemmen — Bekend, Gemengd of Ontdekken — zonder hem te stoppen.
@@ -630,7 +1031,143 @@ class RadioBesturing extends ChangeNotifier {
     return rest;
   }
 
-  RadioItem _itemVan(Radioplek p) => RadioItem(artist: p.artiest, title: p.titel, local: p.eigen);
+  RadioItem _itemVan(Radioplek p) {
+    final it = RadioItem(artist: p.artiest, title: p.titel, local: p.eigen, herhaling: p.herhaling);
+    _plekVan[it] = p;
+    return it;
+  }
+
+  /// Wat er in de rij vóór het spelende nummer staat, is voorbij — gespeeld of overgeslagen. Alles
+  /// wat in één beweging voorbij ging (een tik van regel 10 naar 30) krijgt dezelfde stempel: één stap.
+  /// Wordt een nummer weer het spelende (terug met "vorige"), dan is het niet meer voorbij.
+  void _stempel() {
+    final rij = speler.radioQueue;
+    final i = speler.radioIndex;
+    final nieuw = <Radioplek>[];
+    for (var k = 0; k < i && k < rij.length; k++) {
+      final p = _plekVan[rij[k]];
+      if (p != null && p.voorbijOp == null) nieuw.add(p);
+    }
+    if (nieuw.isNotEmpty) {
+      final stap = ++_voorbijteller;
+      for (final p in nieuw) {
+        p.voorbijOp = stap;
+      }
+    }
+    if (i >= 0 && i < rij.length) _plekVan[rij[i]]?.voorbijOp = null;
+  }
+
+  /// Moet er bijgevuld worden? Zie [bijvulBesluit].
+  ({Bijvulbesluit besluit, double verwacht}) _bijvulNu() {
+    final rij = speler.radioQueue;
+    final vooruit = rij.length - speler.radioIndex - 1;
+    final opbrengst = recenteOpbrengst(_uitkomsten);
+    final klaar = [for (final p in _plan) if (p.stand == Haalstand.klaar && !p.reserve) p.artiest];
+    final geland = _plan.where((p) => p.stand == Haalstand.geland).length;
+    final onderweg = _plan.where((p) => p.stand == Haalstand.onderweg).length;
+    final wacht = _plan.where((p) => p.stand == Haalstand.wacht).length;
+    final verwacht = verwachtVooruit(
+      rijVooruit: vooruit < 0 ? 0 : vooruit,
+      geland: geland,
+      klaarArtiesten: klaar,
+      zaad: zaadArtiest,
+      onderweg: onderweg,
+      wacht: wacht,
+      opbrengst: opbrengst,
+    );
+    final b = bijvulBesluit(
+      loopt: _loopt,
+      speelt: speler.playing,
+      droog: speler.radioDroog,
+      wilVerder: speler.wilVerder,
+      verwacht: verwacht,
+      restSeconden: _restSeconden(),
+      gelandOfKlaar: geland + klaar.length,
+      onderweg: onderweg,
+      opbrengst: opbrengst,
+      bezig: _bijvulBezig,
+      // Afgerond, niet afgekapt: de droogte wordt aan het eind van een tik vastgelegd, en vijf seconden
+      // later is het verschil 4,99 s — dat telde als 4, en dan kwam de nood pas een tik later.
+      droogSeconden: _droogSinds == null ? 0 : (_klok().difference(_droogSinds!).inMilliseconds + 500) ~/ 1000,
+      vorige: _vorigeRonde,
+      nu: _klok(),
+    );
+    return (besluit: b, verwacht: verwacht);
+  }
+
+  /// Bijvullen als het besluit dat zegt, en nood flankgestuurd: bij de overgang, daarna hoogstens
+  /// één keer per dertig seconden zolang de nood duurt.
+  ///
+  /// [reserveVoor] is wat er aan reserve klaarstond vóór [voorraadPlan] er bij nood twee van de rij in
+  /// zette — anders leek de reserve bij nood altijd leeg, en kwamen er nog twee herhalingen bovenop.
+  void _misschienBijvullen(int sessie, Bijvulbesluit b, double verwacht, int reserveVoor) {
+    if (sessie != _sessie || !_loopt) return;
+    final nu = _klok();
+    final reserveKlaar = _plan.where((p) => p.reserve && p.stand == Haalstand.klaar).length;
+    // Een radio uit een zin die zijn aantal heeft, stopt — met "Ga door" (Sabers keuze). Herhalen zou
+    // hem eindeloos laten doorgaan, en dan kwam die knop nooit in beeld.
+    if (b.nood &&
+        !aantalBereikt &&
+        (!_noodVorige || _laatsteNood == null || nu.difference(_laatsteNood!) >= const Duration(seconds: 30))) {
+      _laatsteNood = nu;
+      // Stond er reserve klaar, dan nam [voorraadPlan] die al mee. Zo niet: herhalen.
+      if (reserveVoor == 0) {
+        final n = voegHerhalingBij(sessie, 2);
+        _spoor?.call('radio-nood: ${n == 0 ? 'niets om te herhalen' : '$n herhalingen'}');
+        if (n > 0) {
+          _noodVorige = b.nood;
+          _pas(sessie);
+          return;
+        }
+      } else {
+        _spoor?.call('radio-nood: reserve speelt mee');
+      }
+    }
+    _noodVorige = b.nood;
+    final f = _bijvul;
+    if (f == null || !b.nu || aantalBereikt) return;
+    _bijvulBezig = true;
+    final ronde = ++_bijvulRonde;
+    _vorigeRonde = nu;
+    // De reserve mag na de eerste landing, na een minuut zonder landing, of bij nood.
+    final start = _startTijd;
+    final reserveMag = _eersteLanding || b.nood || (start != null && nu.difference(start) >= kReserveZonderLanding);
+    final vraag = (
+      nood: b.nood,
+      // Wat de reserve net de rij in bracht staat er nu: anders kwamen er in dezelfde nood nog twee
+      // herhalingen bovenop de twee reservenummers.
+      verwacht: verwacht + (reserveVoor - reserveKlaar).clamp(0, reserveVoor),
+      reserveNodig: reserveMag ? (kReserve - reserveKlaar).clamp(0, kReserve) : 0,
+      reserveKlaar: reserveKlaar,
+    );
+    f(sessie, ronde, vraag).timeout(bijvulGeduld).then((n) {
+      if (sessie != _sessie || ronde != _bijvulRonde) return;
+      _bijvulBezig = false;
+      if (n > 0) _pas(sessie);
+    }, onError: (Object e) {
+      if (sessie != _sessie || ronde != _bijvulRonde) return;
+      // Een ronde die niet afkomt: hij telt niet meer, en wat hij later nog toevoegt valt weg.
+      _bijvulRonde++;
+      _bijvulBezig = false;
+      _spoor?.call('radio-bijvul #$ronde: ${e is TimeoutException ? 'na ${bijvulGeduld.inSeconds} s afgebroken' : 'fout — $e'}');
+    });
+  }
+
+  /// Een regel in het logboek als de radio droog valt, en als hij weer speelt.
+  void _droogSpoor() {
+    final droog = speler.radioDroog;
+    final since = _droogSinds;
+    if (droog && since == null) {
+      _droogSinds = _klok();
+      final voorbij = _plan.where((p) => p.voorbijOp != null).length;
+      final weg = _plan.where((p) => p.stand == Haalstand.mislukt).length;
+      _spoor?.call('radio droog: rij leeg, $onderweg onderweg, plan ${_plan.length} '
+          '($voorbij voorbij, $weg geweerd/mislukt)');
+    } else if (!droog && since != null) {
+      _droogSinds = null;
+      _spoor?.call('radio hervat na ${_klok().difference(since).inSeconds} s');
+    }
+  }
 
   /// Duim omlaag: dit nummer NU weg. Uit de rij, uit het plan, van de schijf.
   ///
@@ -660,6 +1197,7 @@ class RadioBesturing extends ChangeNotifier {
       p.eigen = null;
       p.doorRadio = false;
       p.stand = Haalstand.mislukt;
+      p.weer = Weerreden.duim;
     }
 
     // Dan uit de speelrij, en dat is ook wat het bestand loslaat als het net klonk.
@@ -691,6 +1229,9 @@ class RadioBesturing extends ChangeNotifier {
       _pauzeGemeld = false;
       notifyListeners();
     }
+    _stempel();
+    final bijvul = _bijvulNu();
+    final reserveVoor = _plan.where((p) => p.reserve && p.stand == Haalstand.klaar).length;
     final vooruit = speler.radioQueue.length - speler.radioIndex - 1;
     final rij = speler.radioQueue;
     final besluit = voorraadPlan(
@@ -705,6 +1246,10 @@ class RadioBesturing extends ChangeNotifier {
       restSeconden: _restSeconden(),
       seconden: [for (final p in _plan) _lengte(p)],
       zaad: zaadArtiest,
+      reserve: [for (final p in _plan) p.reserve],
+      nood: bijvul.besluit.nood,
+      // Het genoemde aantal is er: dan ook geen eigen nummers meer als vulling.
+      reserveMag: !aantalBereikt,
     );
 
     if (besluit.inRij.isNotEmpty) {
@@ -720,6 +1265,8 @@ class RadioBesturing extends ChangeNotifier {
       unawaited(_haal(sessie, _plan[i]));
     }
     if (besluit.inRij.isNotEmpty || besluit.starten.isNotEmpty) notifyListeners();
+    _droogSpoor();
+    _misschienBijvullen(sessie, bijvul.besluit, bijvul.verwacht, reserveVoor);
   }
 
   Future<void> _haal(int sessie, Radioplek p) async {
@@ -738,8 +1285,12 @@ class RadioBesturing extends ChangeNotifier {
       } catch (_) {/* een keuring die stukloopt is geen nee */}
       if (sessie != _sessie) return;
       if (!mag) {
-        // Geweerd: telt nergens meer in mee, net als een plek die niet te vinden was.
+        // Geweerd: telt nergens meer in mee, net als een plek die niet te vinden was. `??=`: de
+        // keuring zette misschien al "tijdvak" of "sfeer", en dat moet blijven staan — anders vindt
+        // een ruimer venster later geen enkele tijdvakweigering terug.
         p.stand = Haalstand.mislukt;
+        p.weer ??= Weerreden.stijl;
+        _uitkomsten.add(false);
         notifyListeners();
         _pas(sessie);
         return;
@@ -778,11 +1329,18 @@ class RadioBesturing extends ChangeNotifier {
       // Geen foutmelding en geen gat: deze plek slaat over en het plan schuift door. Een radio die
       // bij elke peer die niet thuis geeft iets op het scherm zet, is onbruikbaar.
       p.stand = Haalstand.mislukt;
+      p.weer = Weerreden.nietGevonden;
+      p.mislukteOp = _klok();
+      _uitkomsten.add(false);
     } else if (!vanRadio) {
       // Van jou: in de rij, maar niet in de notitie van deze radio — zie [AlVanJou].
       p.eigen = t;
       p.stand = Haalstand.geland;
+      _uitkomsten.add(true);
+      _eersteLanding = true;
     } else {
+      _uitkomsten.add(true);
+      _eersteLanding = true;
       p.eigen = t;
       p.doorRadio = true;
       // `geland` en niet `klaar`: dit gaat meteen de rij in. Zie [Haalstand.geland] — een net

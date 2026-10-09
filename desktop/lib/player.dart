@@ -26,7 +26,12 @@ class RadioItem {
   String? url; // resolved online stream URL (cached after first resolve)
   bool failed = false;
   Future<String?>? pending; // in-flight resolve, so prefetch + open share one call
-  RadioItem({required this.artist, required this.title, this.local});
+
+  /// Dit nummer klonk al eerder in deze radio: de radio vond niets nieuws en herhaalt wat er was (zie
+  /// `radioladder.dart`, [kiesHerhaling]). Op het scherm staat er dan "opnieuw" bij — anders ziet een
+  /// herhaling eruit als een fout.
+  bool herhaling;
+  RadioItem({required this.artist, required this.title, this.local, this.herhaling = false});
   bool get isLocal => local != null;
 }
 
@@ -354,7 +359,7 @@ Wachtrij verplaatsInWachtrijLijst(Wachtrij w, int van, int naar, {required bool 
 /// [eigen] is het onderscheid waar alles om draait: staat dit nummer als BESTAND in je bibliotheek,
 /// of is het (nog) niets meer dan een artiest en een titel? Alleen het eerste kan zonder wachten
 /// klinken, en alleen het tweede mag straks weer weg.
-typedef Radioregel = ({Track nummer, bool eigen, bool mislukt});
+typedef Radioregel = ({Track nummer, bool eigen, bool mislukt, bool herhaling});
 
 /// De radio als een lijst nummers, zodat een paneel er niets bijzonders voor hoeft te weten.
 ///
@@ -378,8 +383,158 @@ List<Radioregel> radioAlsRij(List<RadioItem> radio) => [
           // Mislukt telt alleen als er ook geen bestand ligt: een nummer dat je zelf hebt is er,
           // wat een eerdere zoektocht online ook gedaan heeft.
           mislukt: !it.isLocal && it.failed && it.url == null,
+          herhaling: it.herhaling,
         ),
     ];
+
+/// Wat er gebeurt als het laatste radionummer afloopt of overgeslagen wordt.
+enum NaRadioEinde { volgende, droog }
+
+/// **De stilte na het laatste nummer.** Gemeten op 08-10-2026: een radio die uitspeelde startte nooit
+/// meer. [PlayerStore._onCompleted] riep `next()` aan, en die doet in radiostand bij het laatste nummer
+/// niets — de droogstand werd alleen gezet als een bron niet te vinden was. Wat er daarna landde werd
+/// achteraan geplakt, het scherm zei "1 hierna", en er klonk niets tot je zelf tikte.
+NaRadioEinde naRadioEinde({required int index, required int lengte}) =>
+    index < lengte - 1 ? NaRadioEinde.volgende : NaRadioEinde.droog;
+
+/// Waar de radio staat nadat het spelende nummer uit de rij gehaald is en er niets na kwam.
+///
+/// Op het LAATSTE nummer dat over is, en droog — niet op -1. Met -1 telde de kop "N hierna" voor de
+/// hele rij, en `clamp` zette hem op het eerste nummer, waarna niets meer verder ging (beoordeling van
+/// 08-10-2026). Lege rij: -1.
+int radioIndexNaWeghalen({required int lengteNa}) => lengteNa - 1;
+
+/// Hoe het nummer dat nu aan de beurt is ervoor staat, voor [Radiofoutpoort]. [pad] is het pad van het
+/// nummer, [adres] wat mpv ervan kreeg (`mediaResolver`: op de telefoon een ander adres). [netwacht]:
+/// er loopt een wachtklok op de pc voor DIT nummer. [droog]: de rij is op.
+///
+/// Bewust geen "speelt": media_kit zet `playing` bij `open(play: true)` meteen op waar, ook als het
+/// openen mislukt (beoordeling van 08-10-2026, media_kit 1.2.6). Wat telt is of de teller loopt.
+typedef Poortstand = ({bool radio, String? pad, String? adres, bool opNul, bool netwacht, bool droog});
+
+/// Noemt deze mpv-melding een ánder bestand dan [namen] (het pad en het adres van wat nu aan de beurt
+/// is)? Dan was het een late melding van het vorige nummer.
+///
+/// mpv meldt een ontbrekend bestand in twee vormen, ~1 ms na elkaar (`speler.log`, 17:46:17.079 en
+/// .085): `Cannot open file '\\?\D:\…\08 - Tiritomba.flac': No such file or directory` en
+/// `Failed to open \\?\D:\…\08 - Tiritomba.flac.` — de tweede zonder aanhalingstekens, en die is
+/// het die om 18:23:22.785 op het volgende nummer ("Me And I") terechtkwam terwijl hij Super Trouper
+/// noemde. Daarom op "bevat" over de HELE melding: het voorvoegsel `\\?\`, de punt aan het eind, een
+/// reden achter een stroomadres of een apostrof in de naam (Guns N' Roses) maken het niet tot een ander
+/// bestand. Een melding die geen bestand noemt ("Error decoding audio.", `tcp: … timed out`) geldt
+/// voor het huidige nummer.
+bool meldtAnderBestand(String melding, Iterable<String?> namen) {
+  final m = melding.trim();
+  if (!m.startsWith('Failed to open ') && !m.startsWith('Cannot open file ')) return false;
+  final eigen = [
+    for (final n in namen)
+      if (n != null && n.isNotEmpty) n.startsWith(r'\\?\') ? n.substring(4) : n
+  ];
+  if (eigen.isEmpty) return false;
+  return !eigen.any(m.contains);
+}
+
+/// Is [fout] de tweede regel van een netwerkfout waarvoor de radio al op de pc wacht? Dan niets doen:
+/// de wachtklok doet het werk.
+///
+/// mpv meldt een weggevallen pc in twee regels: eerst `tcp: … timed out`, dan `Failed to open
+/// http://…`. De tweede gaf eerst een herkansing en daarna een overgeslagen nummer, om de 3,5 minuut
+/// één (beoordeling van 08-10-2026). Maar ALLEEN zolang de klok loopt ([klokLoopt]): komt de pc terug
+/// en antwoordt hij met een gewone fout (een 404 omdat het nummer intussen naar FLAC is opgewaardeerd,
+/// een 503 terwijl de pc-app opstart), dan moet die gewoon zijn herkansing krijgen — anders bleef de
+/// radio voorgoed op 0:00 staan (tweede beoordeling van 08-10-2026).
+bool isTweedeRegelVanNetfout(
+        {required bool radio, required String fout, required bool klokLoopt, required bool wachtVoorDit}) =>
+    radio && !isNetwerkfout(fout) && klokLoopt && wachtVoorDit;
+
+/// Het overslaan van een radionummer, met de foutpoort — los van mpv, zodat een toets het verloop met
+/// een nep-foutstroom kan naspelen. [PlayerStore] hangt er zijn eigen stappen in.
+///
+/// **Waarom een poort.** mpv meldt per mislukte opening twee fouten, ~1 ms na elkaar (`speler.log`,
+/// 18:23:22.784 en .785). De eerste slaat het nummer over; de tweede kwam vroeger binnen als het
+/// volgende nummer al aan de beurt was, en trof dan dát nummer — op de telefoon een stroom die de pc
+/// nog omzet, die zo een onnodige herkansing kreeg of zelf werd overgeslagen. Tijdens de opening van
+/// het volgende nummer en [adem] daarna wordt elke melding daarom uitgesteld, en bij het sluiten
+/// opnieuw beoordeeld:
+///
+/// 1. alleen als er een melding over DIT nummer binnenkwam — een traag startend bestand wordt niet op
+///    verdenking overgeslagen (`waaromNietTeOpenen` hoort pas na een mislukte opening);
+/// 2. staat het bestand van dat nummer er zelf niet, dan het overslaan (drie ontbrekende bestanden
+///    achter elkaar: de radio valt niet stil);
+/// 3. anders de melding afhandelen, een netwerkfout eerst: mpv meldt eerst `tcp: … timed out` en dan
+///    `Failed to open http://…`, en alleen de eerste zegt dat wachten zin heeft;
+/// 4. niets bij een droge rij (het laatste nummer ontbrak: niet elke halve seconde opnieuw overslaan),
+///    een teller die al loopt, of een wachtklok op de pc voor dit nummer.
+class Radiofoutpoort {
+  Radiofoutpoort({
+    required this.naarVolgende,
+    required this.verwerk,
+    required this.bestandsreden,
+    required this.overslaan,
+    required this.stand,
+    this.adem = const Duration(milliseconds: 500),
+  });
+
+  /// Naar het volgende nummer, of droog. Klaar als de opening klaar is.
+  final Future<void> Function() naarVolgende;
+
+  /// Een melding gewoon afhandelen, zoals de luisteraar dat doet.
+  final void Function(String melding) verwerk;
+
+  /// Wat er met het bestand mis is, of null.
+  final String? Function(String? pad) bestandsreden;
+
+  /// Het nummer dat nu aan de beurt is overslaan om zijn bestand.
+  final void Function(String reden) overslaan;
+
+  final Poortstand Function() stand;
+  final Duration adem;
+
+  /// Een teller en geen vlag: een overslag binnen een overslag mag de buitenste poort niet te vroeg
+  /// sluiten.
+  int _open = 0;
+  final List<String> _uitgesteld = [];
+
+  bool get open => _open > 0;
+
+  /// Een melding van mpv: tijdens een overslag onthouden, anders meteen afhandelen.
+  void melding(String e) {
+    if (_open > 0) {
+      _uitgesteld.add(e);
+      return;
+    }
+    verwerk(e);
+  }
+
+  /// Overslaan: de poort open, naar het volgende nummer, even ademen, en bij het sluiten opnieuw kijken.
+  Future<void> slaOver() async {
+    _open++;
+    try {
+      await naarVolgende();
+      await Future<void>.delayed(adem);
+    } finally {
+      _open--;
+    }
+    if (_open == 0) _naPoort();
+  }
+
+  void _naPoort() {
+    // Eerst wissen, dan afhandelen: een nieuwe overslag vanuit de afhandeling opent een verse poort,
+    // en een oude melding schuift niet door naar de volgende.
+    final meldingen = List.of(_uitgesteld);
+    _uitgesteld.clear();
+    final s = stand();
+    if (!s.radio || !s.opNul || s.netwacht || s.droog) return;
+    final hier = [for (final e in meldingen) if (!meldtAnderBestand(e, [s.pad, s.adres])) e];
+    if (hier.isEmpty) return;
+    final r = bestandsreden(s.pad);
+    if (r != null) {
+      overslaan(r);
+      return;
+    }
+    verwerk(hier.firstWhere(isNetwerkfout, orElse: () => hier.last));
+  }
+}
 
 /// Wat er moet gebeuren als de speler zegt dat een nummer afgelopen is.
 enum NaHetEinde {
@@ -1114,29 +1269,15 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     // beschreef en nergens werd aangeroepen.
     _player.stream.error.listen((e) {
       if (e.trim().isEmpty) return;
-      // MET de reden erbij. Hier stond alleen de kale zin, en dat is precies het antwoord waar
-      // niemand iets mee kan: mpv zégt waarom het niet lukte — een verbinding die geweigerd werd,
-      // een adres dat niet te bereiken is, een antwoord dat te lang uitbleef — en die zin werd
-      // weggegooid. Dezelfde fout als bij het taalmodel dat alleen "400" mocht zeggen.
-      _log?.line('OPENEN MISLUKT — ${current?.title ?? "?"} — ${e.trim()}');
-      // Eerst naar het BESTAND kijken, en pas daarna mpv citeren.
-      //
-      // "Failed to recognize file format" is waar en zegt niets. Staat er nul bytes, dan is dát het
-      // antwoord — en de gebruiker weet meteen dat er niets te repareren valt aan de app maar iets
-      // weg te gooien op zijn schijf. Zie `kapot_bestand.dart`.
-      final eigen = _redenUitBestand(current?.path);
-      _meldStilstand('Kan dit nummer niet openen — ${eigen ?? _kortereReden(e)}');
-      // Kon HIER niets gezien worden, dan is het een stroomadres en staat het bestand op de pc.
-      // Die kan er wél naar kijken. Zie `vraagDeBron`.
-      if (eigen == null) _vraagHetDeBron(current?.path, current?.title);
-      // Opnieuw proberen heeft alleen zin bij iets dat over kan gaan — een haperende verbinding, een
-      // pc die net wakker wordt. Een leeg bestand is over vier seconden nog steeds leeg, en dan is
-      // een tweede poging alleen een tweede foutmelding.
-      if (eigen == null) _naOpenfout(e);
+      // Tijdens het overslaan van een radionummer: onthouden, niet weggooien en niet meteen
+      // afhandelen. Zie [_radioOverslaan]: mpv meldt twee keer per mislukte opening, en de tweede
+      // melding zou anders het VOLGENDE nummer treffen.
+      if (radioMode) {
+        _poort.melding(e);
+        return;
+      }
+      _verwerkFout(e);
     });
-    // Twee seconden: vaak genoeg om binnen het geduld van de wacht te vallen, zeldzaam genoeg om
-    // niets te kosten. Een timer en niet de positiestroom, want het geval dát dit moet vangen is nu
-    // juist dat er geen positie meer binnenkomt.
     _stilstandTikker = Timer.periodic(const Duration(seconds: 2), (_) {
       final vast = _wacht.voeden(speelt: playing, positie: position, nu: DateTime.now());
       if (vast) {
@@ -1159,6 +1300,105 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     });
   }
 
+  /// Eén foutmelding van mpv afhandelen. Zie de luisteraar in de constructor.
+  void _verwerkFout(String e) {
+    {
+      // MET de reden erbij. Hier stond alleen de kale zin, en dat is precies het antwoord waar
+      // niemand iets mee kan: mpv zégt waarom het niet lukte — een verbinding die geweigerd werd,
+      // een adres dat niet te bereiken is, een antwoord dat te lang uitbleef — en die zin werd
+      // weggegooid. Dezelfde fout als bij het taalmodel dat alleen "400" mocht zeggen.
+      _log?.line('OPENEN MISLUKT — ${current?.title ?? "?"} — ${e.trim()}');
+      // Eerst naar het BESTAND kijken, en pas daarna mpv citeren.
+      //
+      // "Failed to recognize file format" is waar en zegt niets. Staat er nul bytes, dan is dát het
+      // antwoord — en de gebruiker weet meteen dat er niets te repareren valt aan de app maar iets
+      // weg te gooien op zijn schijf. Zie `kapot_bestand.dart`.
+      final eigen = _redenUitBestand(current?.path);
+      _meldStilstand('Kan dit nummer niet openen — ${eigen ?? _kortereReden(e)}');
+      // Kon HIER niets gezien worden, dan is het een stroomadres en staat het bestand op de pc.
+      // Die kan er wél naar kijken. Zie `vraagDeBron`.
+      if (eigen == null) _vraagHetDeBron(current?.path, current?.title);
+      // Een radionummer waarvan het BESTAND niet deugt (weg, leeg, kapot): overslaan. Vroeger bleef
+      // de radio hier staan met "Kan dit nummer niet openen" — en dan stond hij niet droog en speelde
+      // hij niet, dus vulde er ook niets bij. Op 08-10-2026 genoemde oorzaken: een radio-mp3 die
+      // intussen naar FLAC is opgewaardeerd, een bestand dat je zelf wiste, een verplaatste
+      // keuringsmap. Alleen op 0:00: een fout midden in een nummer slaat niets over.
+      if (eigen != null && radioMode && position == Duration.zero) {
+        unawaited(_radioOverslaan(eigen, bestand: true));
+        return;
+      }
+      // Opnieuw proberen heeft alleen zin bij iets dat over kan gaan — een haperende verbinding, een
+      // pc die net wakker wordt. Een leeg bestand is over vier seconden nog steeds leeg, en dan is
+      // een tweede poging alleen een tweede foutmelding.
+      if (eigen == null) _naOpenfout(e);
+    }
+  }
+
+  /// De foutpoort van de radio — zie [Radiofoutpoort].
+  late final Radiofoutpoort _poort = Radiofoutpoort(
+    naarVolgende: _naarVolgendeNaOverslaan,
+    verwerk: _verwerkFout,
+    bestandsreden: _redenUitBestand,
+    overslaan: (r) => unawaited(_radioOverslaan(r, bestand: true)),
+    stand: () => (
+      radio: radioMode,
+      pad: current?.path,
+      adres: current == null ? null : mediaResolver(current!.path),
+      opNul: position == Duration.zero,
+      netwacht: _pcKlok != null && _pcWachtVoor != null && _pcWachtVoor == current?.path,
+      droog: _radioDroog,
+    ),
+  );
+
+  /// Een radionummer overslaan: naar het volgende, of droog als dit het laatste was. Met de foutpoort —
+  /// zie [Radiofoutpoort].
+  Future<void> _radioOverslaan(String reden, {required bool bestand}) async {
+    if (!radioMode || _radioIndex < 0 || _radioIndex >= _radio.length) return;
+    final it = _radio[_radioIndex];
+    // Al overgeslagen en droog: dan staat de radio op dit nummer omdat het het laatste was, en elke
+    // nieuwe melding zou het opnieuw overslaan — twee keer per seconde, tot er iets landt. Niet bij
+    // elk eerder mislukt nummer: tik je er zelf op, dan moet het gewoon weer overgeslagen worden.
+    if (it.failed && _radioDroog) return;
+    it.failed = true;
+    _stopPcWacht();
+    _log?.line('RADIO OVERGESLAGEN — $reden — ${it.title}');
+    bijRadioOverslaan?.call(it, bestand: bestand);
+    await _poort.slaOver();
+  }
+
+  Future<void> _naarVolgendeNaOverslaan() async {
+    if (naRadioEinde(index: _radioIndex, lengte: _radio.length) == NaRadioEinde.volgende) {
+      _radioIndex++;
+      await _openRadioCurrent();
+    } else {
+      // Eerst droog, dan stoppen: landt er iets terwijl mpv stopt, dan speelt dat meteen (zie
+      // [voegToeAanRadio]) in plaats van dat het daarna alsnog "droog" heet.
+      _radioDroog = true;
+      radioStatus = '';
+      // De melding van het nummer dat net overgeslagen werd hoort er niet meer: anders stond "Kan dit
+      // nummer niet openen" in de plaats van "Zoekt het volgende nummer…".
+      speelFout = null;
+      notifyListeners();
+      await _player.stop();
+    }
+  }
+
+  /// Voor de radio: dit nummer is overgeslagen. [bestand]: het bestand deugde niet (weg, leeg, kapot),
+  /// anders bleef het onbereikbaar na een herkansing. Ingehangen door `RadioBesturing`.
+  void Function(RadioItem item, {required bool bestand})? bijRadioOverslaan;
+
+  /// Je drukte op "volgende" bij het laatste radionummer: het eerstvolgende nummer dat landt, speelt
+  /// meteen — in plaats van dat de knop stil niets doet (beoordeling van 08-10-2026).
+  bool _wilVerder = false;
+  bool get wilVerder => _wilVerder;
+
+  /// De radio staat droog: de rij is op en er speelt niets. Zie [_radioDroog].
+  bool get radioDroog => _radioDroog;
+
+  /// Is wat nu speelt een herhaling van eerder in deze radio? Voor het label "opnieuw".
+  bool get speeltHerhaling =>
+      radioMode && _radioIndex >= 0 && _radioIndex < _radio.length && _radio[_radioIndex].herhaling;
+
   /// Hoe vaak deze stroom al afgebroken is. Nul bij elk nieuw nummer.
   int _hervatpogingen = 0;
 
@@ -1171,6 +1411,10 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// daar teruggezet wordt, wordt door de poging zelf teruggezet. Dan probeert hij elke vier
   /// seconden opnieuw, voor altijd.
   String? _tweedePogingVoor;
+
+  /// Voor welk nummer die tweede poging ook werkelijk is uitgevoerd. Een fout daarna betekent: ook dat
+  /// lukte niet. Een fout ervóór is de tweede melding van dezelfde opening.
+  String? _herkansingGedaanVoor;
 
   /// Nog één keer proberen te openen, na een tel of vier.
   ///
@@ -1186,7 +1430,16 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   void _probeerNogEens() {
     if (position > Duration.zero) return;
     final t = current;
-    if (t == null || t.path.isEmpty || _tweedePogingVoor == t.path) return;
+    if (t == null || t.path.isEmpty) return;
+    if (_tweedePogingVoor == t.path) {
+      // De tweede poging is gedaan en mislukte ook: in een radio verder, in plaats van op een dood
+      // nummer te blijven staan. Was hij nog niet gedaan (de tweede melding van dezelfde opening),
+      // dan gewoon wachten.
+      if (radioMode && _herkansingGedaanVoor == t.path && !(_pcKlok != null && _pcWachtVoor == t.path)) {
+        unawaited(_radioOverslaan('ook de tweede poging mislukte', bestand: false));
+      }
+      return;
+    }
     _tweedePogingVoor = t.path;
     // Wél opschrijven of de pc stond om te zetten: dat scheelde bij het nameten het verschil tussen
     // een herkansing die 93 % raak was en eentje die het nooit haalde, en zonder die aantekening is
@@ -1196,6 +1449,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     Timer(kHerkansingNa, () {
       // Intussen doorgeklikt of gestopt? Dan hoort deze poging nergens meer bij.
       if (current?.path != t.path || position > Duration.zero) return;
+      _herkansingGedaanVoor = t.path;
       _meldStilstand('Nog een poging…');
       unawaited(radioMode ? _openRadioCurrent() : _hervatOpDezelfdePlek());
     });
@@ -1212,6 +1466,17 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// volgende nummer, dat dan al op de telefoon staat.
   void _naOpenfout(String fout) {
     if (position > Duration.zero) return;
+    // In een radio die op de pc wacht is "Failed to open http://…" de tweede regel van dezelfde
+    // netwerkfout (eerst `tcp: … timed out`, dan deze). Die gaf eerst een herkansing en daarna een
+    // overgeslagen nummer, om de 3,5 minuut één, terwijl de pc gewoon even weg was (beoordeling van
+    // 08-10-2026). De wachtklok doet het werk.
+    if (isTweedeRegelVanNetfout(
+        radio: radioMode,
+        fout: fout,
+        klokLoopt: _pcKlok != null,
+        wachtVoorDit: _pcWachtVoor != null && _pcWachtVoor == current?.path)) {
+      return;
+    }
     if (!isNetwerkfout(fout)) {
       _probeerNogEens();
       return;
@@ -1235,6 +1500,22 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
         _log?.line('NAAR HET VOLGENDE — dat staat al op de telefoon — ${t.title} sla ik over');
         _stopPcWacht();
         unawaited(next());
+      case NaOpenfout.opgeven when radioMode:
+        // In een radio niet opgeven: alles wat erna komt is ook een stroom van de pc, en zou zo één
+        // voor één als "niet te vinden" opgeschreven worden terwijl de bestanden gewoon bestaan
+        // (beoordeling van 08-10-2026). Elke minuut opnieuw, tot de pc terug is.
+        _meldStilstand('Wacht op de pc…');
+        _pcKlok = Timer(const Duration(seconds: 60), () {
+          _pcKlok = null;
+          if (current?.path != t.path || position > Duration.zero) return;
+          if (_volgendeStaatHier()) {
+            _log?.line('NAAR HET VOLGENDE — dat staat al op de telefoon — ${t.title} sla ik over');
+            _stopPcWacht();
+            unawaited(next());
+            return;
+          }
+          unawaited(_hervatOpDezelfdePlek());
+        });
       case NaOpenfout.opgeven:
         _log?.line('OPGEGEVEN — ${kNetGeduld.inMinutes} min geen pc — ${t.title}');
         _stopPcWacht();
@@ -1286,6 +1567,17 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _pcWachtSinds = null;
   }
 
+  /// De verbinding met de pc is er weer (`session.ready`). Wacht de radio op de pc voor dit nummer,
+  /// dan nu opnieuw openen in plaats van tot een minuut later — zie de wachtstand in [_naOpenfout].
+  void pcWeerBereikbaar() {
+    final t = current;
+    if (!radioMode || t == null || _pcWachtVoor != t.path || position > Duration.zero) return;
+    _pcKlok?.cancel();
+    _pcKlok = null;
+    _log?.line('VERBINDING MET DE PC TERUG — opnieuw — ${t.title}');
+    unawaited(_hervatOpDezelfdePlek());
+  }
+
   void _pcIsTerug() {
     final sinds = _pcWachtSinds;
     _log?.line('PC WEER BEREIKBAAR'
@@ -1298,7 +1590,14 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// Staat het volgende nummer in de rij al op dit toestel? Offline bewaard of vooruitgehaald: in
   /// beide gevallen geeft [mediaResolver] een pad op de telefoon in plaats van een adres op de pc.
   bool _volgendeStaatHier() {
-    if (radioMode) return false;
+    if (radioMode) {
+      // Ook in een radio. Het volgende radionummer is via [_meldVooruit] vaak al naar de telefoon
+      // gehaald — en dan wachtte de radio op een weggevallen pc in plaats van dat nummer te spelen.
+      final i = _radioIndex + 1;
+      if (i < 0 || i >= _radio.length) return false;
+      final l = _radio[i].local;
+      return l != null && !mediaResolver(l.path).startsWith('http');
+    }
     final i = _index + 1;
     if (i < 0 || i >= _order.length) return false;
     return !mediaResolver(_order[i].path).startsWith('http');
@@ -1402,6 +1701,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
           _log?.line('OPGEGEVEN na $_hervatpogingen pogingen — door naar het volgende');
         }
         _hervatpogingen = 0;
+        // Het laatste radionummer liep af: droog, zodat wat er straks landt meteen speelt. Zie
+        // [naRadioEinde]. `next()` deed hier niets, en daarmee bleef de radio voorgoed stil.
+        if (radioMode && naRadioEinde(index: _radioIndex, lengte: _radio.length) == NaRadioEinde.droog) {
+          _radioDroog = true;
+          notifyListeners();
+          return;
+        }
         next();
     }
   }
@@ -1453,8 +1759,11 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       // klaar voor is.
       for (var i = 0; i < 100 && position <= Duration.zero && duration <= Duration.zero; i++) {
         await Future.delayed(const Duration(milliseconds: 100));
+        // Intussen overgeslagen of doorgeklikt: dan hoort deze sprong bij een ander nummer.
+        if (current?.path != t.path) return;
       }
       for (var poging = 0; poging < 60; poging++) {
+        if (current?.path != t.path) return;
         await _player.seek(plek);
         await Future.delayed(const Duration(milliseconds: 150));
         if ((position - plek).abs() < const Duration(seconds: 3)) return;
@@ -1619,6 +1928,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     currentCover = null;
     _radio = items;
     _radioIndex = items.isEmpty ? -1 : start.clamp(0, items.length - 1);
+    _wilVerder = false;
     await _openRadioCurrent();
   }
 
@@ -1629,6 +1939,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   Future<void> springInRadio(int plek) async {
     if (!radioMode || plek < 0 || plek >= _radio.length) return;
     _radioIndex = plek;
+    _wilVerder = false;
     await _openRadioCurrent();
   }
 
@@ -1719,8 +2030,10 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     if (!radioMode || meer.isEmpty) return;
     final was = _radio.length;
     _radio.addAll(meer);
-    if (_radioDroog) {
+    if (_radioDroog || _wilVerder) {
+      // Eén sprong: de vlag gaat hier uit, anders brak elke volgende landing het spelende nummer af.
       _radioDroog = false;
+      _wilVerder = false;
       _radioIndex = was;
       unawaited(_openRadioCurrent());
       return; // die roept zelf notifyListeners aan
@@ -1905,10 +2218,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       if (hasNext) {
         await next();
       } else {
-        // Niets meer om naar door te gaan: stoppen, en het bestand loslaten.
+        // Niets meer om naar door te gaan: stoppen, en het bestand loslaten. In een radio niet op -1:
+        // dan vond de droogtak hieronder het spelende nummer niet terug, zette `clamp` de index op 0
+        // en lag de radio dood (beoordeling van 08-10-2026).
         await _player.stop();
         if (radioMode) {
-          _radioIndex = -1;
+          _radioDroog = true;
         } else {
           _index = -1;
         }
@@ -1925,7 +2240,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       final huidig = (_radioIndex >= 0 && _radioIndex < _radio.length) ? _radio[_radioIndex] : null;
       _radio = [for (final it in _radio) if (!isWeg(it.local?.path)) it];
       final nieuw = huidig == null ? -1 : _radio.indexWhere((it) => identical(it, huidig));
-      _radioIndex = _radio.isEmpty ? -1 : (nieuw >= 0 ? nieuw : _radioIndex.clamp(0, _radio.length - 1));
+      if (radioMode && nieuw < 0 && huidig != null) {
+        // Het nummer dat speelde is weg en er kwam niets na: droog, op het laatste nummer dat over is.
+        _radioIndex = radioIndexNaWeghalen(lengteNa: _radio.length);
+        _radioDroog = true;
+      } else {
+        _radioIndex = _radio.isEmpty ? -1 : (nieuw >= 0 ? nieuw : _radioIndex.clamp(0, _radio.length - 1));
+      }
     }
     notifyListeners();
   }
@@ -1974,7 +2295,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// Zou dit meelopen met de speaker, dan pauzeerde een melding op de Shield de muziek in een andere
   /// kamer. Wat de gebruiker zelf indrukt gaat via [speelAf] en [pauzeer].
   @override
-  void playPause() => _player.playOrPause();
+  void playPause() {
+    // Een pauze na "volgende" op het laatste radionummer: dan hoort wat er landt niet midden in die
+    // pauze te beginnen.
+    if (playing) _wilVerder = false;
+    _player.playOrPause();
+  }
 
   /// Wat er klinkt, en waar het staat -- niet wat libmpv doet.
   ///
@@ -2008,8 +2334,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   @override
   void pauzeer() {
     // Wie zelf op pauze drukt terwijl we op de pc wachten, wil niet dat het nummer daarna alsnog
-    // begint zodra de verbinding terug is.
+    // begint zodra de verbinding terug is. En niet zodra er een radionummer landt.
     _stopPcWacht();
+    _wilVerder = false;
     final s = _bijSpeaker;
     if (s != null) {
       if (s.isPlaying) unawaited(s.playPause());
@@ -2024,8 +2351,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     if (s != null) return s.next();
     if (radioMode) {
       if (_radioIndex < _radio.length - 1) {
+        _wilVerder = false;
         _radioIndex++;
         await _openRadioCurrent();
+      } else {
+        // Het laatste nummer: niet stil niets doen. Het eerstvolgende nummer dat landt, speelt meteen.
+        _wilVerder = true;
+        notifyListeners();
       }
       return;
     }
@@ -2059,11 +2391,14 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     if (radioMode) {
       // Step back to the previous item that's playable or still resolvable
       // (skip ones already known to have failed to source).
+      // Elk mislukt nummer overslaan, ook een eigen bestand dat bij het openen stuk bleek: anders
+      // sprong "vorige" erop terug, gaf weer een fout, en sprong weer vooruit.
       var i = _radioIndex - 1;
-      while (i >= 0 && _radio[i].failed && !_radio[i].isLocal && _radio[i].url == null) {
+      while (i >= 0 && _radio[i].failed) {
         i--;
       }
       if (i >= 0) {
+        _wilVerder = false;
         _radioIndex = i;
         await _openRadioCurrent();
       }

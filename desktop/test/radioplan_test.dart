@@ -10,6 +10,8 @@
 /// hoofdletter — dat gebeurt, en elk daarvan zou hier iets kosten dat niet terug te draaien is.
 library;
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/radioplan.dart';
@@ -39,6 +41,21 @@ void main() {
 
     test('een getal als tekst wordt gelezen', () {
       expect(leesRadioOpdracht({'aantal': '250', 'zaadArtiesten': ['A']}).aantal, 250);
+    });
+
+    // Een genoemd aantal is een grens ("300 liedjes": daar stopt hij, met Ga door); zonder is het
+    // alleen de beginlading en vult hij door (plan van 08-10-2026).
+    test('DE KERN: alleen een echt genoemd aantal is een grens', () {
+      expect(leesRadioOpdracht({'aantal': 300, 'aantalGenoemd': true, 'zaadArtiesten': ['A']}).aantalGenoemd, isTrue);
+      expect(leesRadioOpdracht({'aantal': 50, 'aantalGenoemd': false, 'zaadArtiesten': ['A']}).aantalGenoemd, isFalse);
+      // Een oudere pc stuurt het niet mee: dan liever doorgaan dan onverwacht stoppen.
+      expect(leesRadioOpdracht({'aantal': 300, 'zaadArtiesten': ['A']}).aantalGenoemd, isFalse);
+      expect(leesRadioOpdracht({'aantal': 300, 'aantalGenoemd': 'ja', 'zaadArtiesten': ['A']}).aantalGenoemd, isFalse);
+    });
+
+    test('de pc geeft het door aan de telefoon', () {
+      final server = File('lib/lan/server.dart').readAsStringSync();
+      expect(server.contains("'aantalGenoemd': o.aantalGenoemd,"), isTrue, reason: 'server.dart stuurt het niet mee');
     });
   });
 

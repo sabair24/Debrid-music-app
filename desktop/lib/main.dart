@@ -23,13 +23,15 @@ import 'acoustid.dart';
 import 'aanbevelingplan.dart';
 import 'ai.dart';
 import 'radio.dart';
+import 'radiobijvuller.dart';
 import 'radiokeuze.dart';
 import 'radiobestand.dart' show kRadioSpeling;
 import 'scanmaat.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
-import 'radiostijl.dart' show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl, naLijstVanModel, sfeerBeslistFamilie;
-import 'radiovoorraad.dart' show Haalstand, RadioKeuringLater;
+import 'radiostijl.dart'
+    show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl, buitenTijdvak, naLijstVanModel, sfeerBeslistFamilie;
+import 'radiovoorraad.dart' show Haalstand, RadioKeuringLater, Weerreden;
 import 'radioplan.dart';
 import 'oordelen.dart';
 import 'prullenbak.dart' show heeftPrullenbak;
@@ -930,7 +932,13 @@ Future<void> main() async {
   player.oordeelWeging = (t) => oordeelBonus(oordelen.vanTrack(t));
   // **Buiten `if (mode.owner)`, en dat is de reparatie.** Deze haak hing daarbinnen, dus een
   // gekoppelde telefoon telde nooit een beluistering — terwijl daar het meest geluisterd wordt.
-  player.onPlayed = (t) => unawaited(speelstanden.meld(t));
+  player.onPlayed = (t) {
+    unawaited(speelstanden.meld(t));
+    // En de radio telt mee: zo is in radio.log na te tellen hoe lang een radio werkelijk liep.
+    radio.gehoord(t);
+  };
+  // Groen gaat bij het herhalen voor — zie [RadioBesturing.voegHerhalingBij].
+  radio.isGroen = (t) => oordelen.vanTrack(t) == Oordeel.omhoog;
 
   // Wat er in de AUTO te bladeren valt. Dit is de enige plek waar de boom aan de echte bibliotheek
   // hangt; de boom zelf staat in auto_bladeren.dart en weet van niets.
@@ -1241,7 +1249,14 @@ Future<void> main() async {
       speelstanden.duwOps = duw;
       oordelen.duwOps = duw;
       session.addListener(() {
-        if (session.ready) unawaited(haalFavorieten());
+        if (session.ready) {
+          unawaited(haalFavorieten());
+          // Wacht de radio op de pc, dan nu opnieuw — zie [PlayerStore.pcWeerBereikbaar]. Eerlijk
+          // gezegd: `session.ready` is geen bewijs dat de pc terug is (het blijft waar zolang de
+          // telefoon gekoppeld is); het is een gelegenheid om het te proberen. De klok van een minuut
+          // blijft het vangnet.
+          player.pcWeerBereikbaar();
+        }
       });
       unawaited(haalFavorieten());
       // Where a download goes when the PC does not answer: into the queue, for the PC to pick up
@@ -8451,14 +8466,27 @@ class PlayerBar extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 12.5))
-                      else if (p.radioMode && p.radioStatus.isNotEmpty)
-                        Text(p.radioStatus,
+                      else if ((p.radioMode ? _radioRegel(context, p) : null) case final s?)
+                        Text(s,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(color: _accent2, fontSize: 12.5))
                       else if (t == null)
                         const Text('Niets aan het spelen',
                             style: TextStyle(color: _muted, fontSize: 12.5))
+                      // Een herhaling vervangt de artiest niet: "opnieuw" komt erachter.
+                      else if (p.speeltHerhaling)
+                        Row(children: [
+                          Flexible(
+                            child: ArtistLine(
+                              artist: t.artist,
+                              title: t.title,
+                              lookup: true,
+                              style: const TextStyle(color: _muted, fontSize: 12.5),
+                            ),
+                          ),
+                          const Text(' · opnieuw', style: TextStyle(color: _accent2, fontSize: 12.5)),
+                        ])
                       else
                         // Everyone on the track, each name tappable — a guest artist is exactly
                         // who you want to look up while their verse is playing.
@@ -9618,15 +9646,52 @@ class WachtrijPaneelView extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
             child: Row(
               children: [
-                Text(radio ? 'Radio' : 'Wachtrij',
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                const SizedBox(width: 8),
-                Text(
-                    rij.isEmpty
-                        ? ''
-                        : '${rij.length - nu - 1} hierna',
-                    style: const TextStyle(color: _muted, fontSize: 12)),
-                const Spacer(),
+                // Bij een radio de stand op een eigen regel onder "Radio": naast "Radio afsluiten" en het
+                // kruisje paste "12 hierna · 6 onderweg" op 340 punt maar net, en op de tv (tekstschaal
+                // 1,35) bleef er "12 hierna…" van over (beoordeling van 08-10-2026).
+                Expanded(
+                  child: radio
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text('Radio', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                            if (rij.isNotEmpty)
+                              Text(
+                                  radioKop(
+                                      hierna: rij.length - nu - 1,
+                                      onderweg: context.watch<RadioBesturing>().onderweg,
+                                      loopt: context.watch<RadioBesturing>().loopt,
+                                      zoekt: !context.watch<RadioBesturing>().aantalBereikt &&
+                                          context.watch<RadioBesturing>().pauze == null),
+                                  // Op de tv (tekstschaal 1,35) past "12 hierna · 6 onderweg" niet op één regel.
+                                  maxLines: isTv ? 2 : 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: _muted, fontSize: 12)),
+                          ],
+                        )
+                      : Row(children: [
+                          const Text('Wachtrij', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(rij.isEmpty ? '' : '${rij.length - nu - 1} hierna',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: _muted, fontSize: 12)),
+                          ),
+                        ]),
+                ),
+                // Het genoemde aantal van een radio uit een zin is gespeeld: hier ook verder, niet alleen
+                // op het speelscherm.
+                if (radio && context.watch<RadioBesturing>().aantalOp && (p.radioDroog || p.wilVerder))
+                  TextButton(
+                    onPressed: context.read<RadioBesturing>().gaDoor,
+                    style: TextButton.styleFrom(
+                        foregroundColor: _accent,
+                        padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
+                        minimumSize: const Size(0, 30)),
+                    child: const Text('Ga door', style: TextStyle(fontSize: 12)),
+                  ),
                 // De weg uit de radio, hier en niet alleen op het speelscherm.
                 //
                 // **Waarom dit erbij moest.** Het kruisje hiernaast sluit het PANEEL, en dat ziet
@@ -9824,10 +9889,17 @@ class _WachtrijRij extends StatelessWidget {
                             fontSize: 12.5,
                             fontWeight: FontWeight.w600,
                             color: speeltNu ? _accent : _text)),
-                    Text(track.artist,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 11, color: _muted)),
+                    Row(children: [
+                      Flexible(
+                        child: Text(track.artist,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 11, color: _muted)),
+                      ),
+                      // Achter de naam en niet erin: een lange naam kortte "opnieuw" anders juist weg.
+                      if (r != null && r.herhaling)
+                        const Text(' · opnieuw', style: TextStyle(fontSize: 11, color: _accent2)),
+                    ]),
                   ],
                 ),
               ),
@@ -10026,12 +10098,21 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
                               // Alleen de artiesttak wordt een link; "Niets aan het spelen" en de
                               // radiostatus zijn geen naam. De brede speler doet dit al met
                               // ArtistLine — deze smalle variant was als enige achtergebleven.
-                              else if (t == null || (p.radioMode && p.radioStatus.isNotEmpty))
+                              else if (t == null || (p.radioMode && _radioRegel(context, p) != null))
                                 Text(
-                                    t == null ? 'Niets aan het spelen' : p.radioStatus,
+                                    t == null ? 'Niets aan het spelen' : _radioRegel(context, p)!,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(color: _muted, fontSize: 12))
+                              // Een herhaling: "opnieuw" achter de artiest, zoals in de brede balk.
+                              else if (p.speeltHerhaling)
+                                Row(children: [
+                                  Flexible(
+                                    child: _artistLine(splitFeatured(t.artist, t.title),
+                                        const TextStyle(color: _muted, fontSize: 12)),
+                                  ),
+                                  const Text(' · opnieuw', style: TextStyle(color: _accent2, fontSize: 12)),
+                                ])
                               else
                                 _artistLine(splitFeatured(t.artist, t.title),
                                     const TextStyle(color: _muted, fontSize: 12)),
@@ -10285,7 +10366,39 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
     }
     final lib = context.read<LibraryStore>();
     final radio = context.read<RadioBesturing>();
-    final reden = await radio.start(_radioplan(nummers, lib), naam: o.naam);
+    final rec = RecommendService();
+    final log = WarmLog('$appDir${Platform.pathSeparator}radio.log');
+    final genoemd = {for (final a in o.zaadArtiesten) artiestSleutel(a)};
+    // Bijvullen uit de toppers van de genoemde artiesten zelf — die zíjn het genre. Zonder keuring,
+    // net als de start van deze radio.
+    final bijvuller = Radiobijvuller(
+      radio: radio,
+      deezer: Radiodeezer(
+        bronArtiesten: (a, verwant) => rec.bronArtiesten(a, metVerwant: verwant),
+        toppers: (id, naam, limit, index) => rec.toppers(id, naam, limit: limit, index: index),
+      ),
+      ankers: o.zaadArtiesten,
+      metVerwant: false,
+      maakPlan: (recs) => _radioplan(recs, lib,
+          al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller), bron: 'buren'),
+      reserveKandidaten: (artiesten) => [
+        for (final t in lib.tracks)
+          if (!nooitOpRadio(t.title) && artiesten.contains(artiestSleutel(t.artist))) t
+      ],
+      spoor: log.line,
+    );
+    log.line('radio uit een zin "${o.naam}": ${o.zaadArtiesten.length} artiesten, '
+        '${o.aantalGenoemd ? 'stopt bij ${o.aantal}' : 'geen aantal genoemd, vult door'}');
+    final reden = await radio.start(_radioplan(nummers, lib),
+        naam: o.naam,
+        bijvul: bijvuller.call,
+        spoor: log.line,
+        aantal: o.aantalGenoemd ? o.aantal : null,
+        // Het vangnet pas als deze start het werd.
+        bijStart: (_) => radio.eigenVanZaad = () => [
+              for (final t in lib.tracks)
+                if (!nooitOpRadio(t.title) && genoemd.contains(artiestSleutel(t.artist))) t
+            ]);
     if (!mounted) return;
     if (reden != null) {
       setState(() {
@@ -10791,6 +10904,21 @@ class _RijDuimen extends StatelessWidget {
 /// Niet op televisie. Daar is geen aanwijzer, en een oordeel dat je met een afstandsbediening moet
 /// aanklikken tussen zeven andere knoppen door is geen oordeel maar een ongeluk in wording. Het
 /// overzicht bij het afsluiten is daar het vangnet.
+/// De radioregel onder de titel — zie [radioStatusTekst]. Null: niets bijzonders.
+String? _radioRegel(BuildContext context, PlayerStore p) {
+  final r = context.watch<RadioBesturing>();
+  return radioStatusTekst(
+    spelerStatus: p.radioStatus,
+    droog: p.radioDroog,
+    wilVerder: p.wilVerder,
+    loopt: r.loopt,
+    // Kort: in de smalle balk van de telefoon is er plaats voor een kleine dertig tekens.
+    stand: r.bijvulStand ?? (r.pauze == null ? null : 'Even stil: ${r.pauze}'),
+    aantalBereikt: r.aantalOp,
+    aantal: r.aantal,
+  );
+}
+
 class _RadioOordeel extends StatelessWidget {
   const _RadioOordeel({required this.track, required this.naast});
 
@@ -10855,15 +10983,32 @@ class _RadioAfsluitknop extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final radio = context.watch<RadioBesturing>();
+    final p = context.watch<PlayerStore>();
     if (!radio.loopt) return const SizedBox.shrink();
+    // Een radio uit een zin die zijn genoemde aantal gespeeld heeft: hier gaat hij verder.
+    final gaDoor = radio.aantalOp && (p.radioDroog || p.wilVerder);
     return Padding(
       padding: const EdgeInsets.only(top: kRuimte12),
       child: Center(
-        child: TextButton.icon(
-          onPressed: radio.stop,
-          icon: const Icon(Icons.close_rounded, size: 15),
-          label: const Text('Radio afsluiten'),
-          style: TextButton.styleFrom(foregroundColor: _muted),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (gaDoor) ...[
+              TextButton.icon(
+                onPressed: radio.gaDoor,
+                icon: const Icon(Icons.play_arrow_rounded, size: 16),
+                label: const Text('Ga door'),
+                style: TextButton.styleFrom(foregroundColor: _accent),
+              ),
+              const SizedBox(width: kRuimte8),
+            ],
+            TextButton.icon(
+              onPressed: radio.stop,
+              icon: const Icon(Icons.close_rounded, size: 15),
+              label: const Text('Radio afsluiten'),
+              style: TextButton.styleFrom(foregroundColor: _muted),
+            ),
+          ],
         ),
       ),
     );
@@ -11180,6 +11325,29 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
           child: Text(p.speelFout!,
               textAlign: zij ? TextAlign.start : TextAlign.center,
               style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 12.5)),
+        ),
+      // De radio: wat hij doet als er niets klinkt (zoekt, het genoemde aantal is er), en "opnieuw" bij
+      // een herhaling. In hetzelfde vak als de melding hierboven en niet op een eigen regel: de gestapelde
+      // indeling (telefoon staand, de Shield) heeft geen schuifvangnet, en op de tv is de hoogte tot op de
+      // punt verdeeld — een regel erbij duwde "Radio afsluiten" onder de rand (beoordeling van 08-10-2026).
+      ] else if ((p.radioMode ? _radioRegel(context, p) : null) case final status?) ...[
+        const SizedBox(height: kRuimte8),
+        SizedBox(
+          width: kolom,
+          child: Text(status,
+              textAlign: zij ? TextAlign.start : TextAlign.center,
+              style: const TextStyle(color: _accent2, fontSize: 12.5)),
+        ),
+      ] else if (p.speeltHerhaling) ...[
+        const SizedBox(height: kRuimte8),
+        SizedBox(
+          width: kolom,
+          child: Text(
+              p.stroomGrens != null && t != null
+                  ? 'Opnieuw · ${_stroomUitleg(p, t)}'
+                  : 'Opnieuw — dit nummer speelde eerder in deze radio',
+              textAlign: zij ? TextAlign.start : TextAlign.center,
+              style: const TextStyle(color: kGedempt, fontSize: 11.5)),
         ),
       ] else if (p.stroomGrens != null && t != null) ...[
         const SizedBox(height: kRuimte8),
@@ -11836,6 +12004,8 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
     Track? zaad,
     String? zaadTitel,
     Iterable<String> al = const [],
+    Set<String> weert = const {},
+    String bron = 'start',
     bool elkeLengte = false}) {
   // Op het liedje en niet op de hele titel — zie [eigenSleutel]: op de hele titel haalde de radio
   // Haddaway "What Is Love" drie keer, omdat je hem als "(Single Version)" had en niet als "(7" Mix)".
@@ -11878,6 +12048,7 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
     for (final r in recs)
       if (r.title.trim().isNotEmpty &&
           r.artist.trim().isNotEmpty &&
+          !weert.contains(artiestSleutel(r.artist)) &&
           (zaadNaam == null || !isZaadlied(r.artist, r.title, zaadArtiest: zaadWie, zaadTitel: zaadNaam)))
         r
   ];
@@ -11896,6 +12067,8 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
         titel: bruikbaar[gekozen[v]].title,
         seconden: bruikbaar[gekozen[v]].seconds > 0 ? bruikbaar[gekozen[v]].seconds : null,
         eigen: eigenVoor(bruikbaar[gekozen[v]]),
+        bron: bron,
+        deezerArtiest: bruikbaar[gekozen[v]].artistId,
       ),
   ];
 }
@@ -12026,6 +12199,30 @@ Future<void> startRadio(BuildContext context, String artist,
   // het antwoord er is voordat de eerste haal begint.
   keuring.vraagSfeer(plan);
   final zelf = artiestSleutel(artist);
+  // Het bijvullen: zonder model alleen uit de toppers van de zaadartiest en van zijn `/related` —
+  // nooit uit de artiestenradio (zie `radiobijvuller.dart`).
+  var zaadLaatst = zaadNu;
+  unawaited(zaadStijl.then((z) => zaadLaatst = z, onError: (Object _) => zaadNu));
+  final bijvuller = Radiobijvuller(
+    radio: radio,
+    deezer: Radiodeezer(
+      bronArtiesten: (a, verwant) => rec.bronArtiesten(a, metVerwant: verwant),
+      toppers: (id, naam, limit, index) => rec.toppers(id, naam, limit: limit, index: index),
+    ),
+    ankers: [artist],
+    metVerwant: true,
+    maakPlan: (recs) => _radioplan(recs, lib,
+        zaadArtiest: artist,
+        zaad: zaad,
+        zaadTitel: zaadTitel,
+        al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller),
+        weert: steedsGeweigerd(radio.plan),
+        elkeLengte: keuring.elkeLengte,
+        bron: 'buren'),
+    keurEigen: (p) => keuring.keur(p, eigen: true),
+    reserveKandidaten: (artiesten) => _reserveUit(lib, artiesten, zaadLaatst),
+    spoor: log.line,
+  );
   int? gestart;
   final reden = await radio.start([
     if (zaad != null)
@@ -12043,9 +12240,16 @@ Future<void> startRadio(BuildContext context, String artist,
           zaad: true),
     for (final p in plan)
       if (p.eigen == null || artiestSleutel(p.artiest) == zelf) p,
-  ], naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijStart: (s) {
+  ], naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijvul: bijvuller.call, spoor: log.line,
+      bijStart: (s) {
     gestart = s;
     _keuring = keuring;
+    // Het laatste vangnet van het herhalen: je eigen nummers van de zaadartiest. Pas hier, als deze
+    // start het werd — anders kreeg een lopende radio het vangnet van een start die geweigerd werd.
+    radio.eigenVanZaad = () => [
+          for (final t in lib.tracks)
+            if (artiestSleutel(t.artist) == zelf && !nooitOpRadio(t.title)) t
+        ];
   });
   final sessie = gestart;
   if (reden == null && sessie != null && beurt == _afstemBeurt) {
@@ -12094,7 +12298,8 @@ Future<void> startRadio(BuildContext context, String artist,
                   zaadArtiest: artist,
                   zaad: zaad,
                   zaadTitel: zaadTitel,
-                  al: [for (final p in radio.plan) p.artiest],
+                  al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller),
+                  weert: steedsGeweigerd(radio.plan),
                   elkeLengte: keuring.elkeLengte));
         } catch (e) {
           log.line('radio-lijst: het model gaf niets — $e');
@@ -12187,6 +12392,7 @@ class _Radiokeuring {
       }
       if (past == false) {
         log.line('radio-keuring "${p.artiest} — ${p.titel}": NEE — past niet in de sfeer (het model)');
+        p.weer = Weerreden.sfeer;
         return false;
       }
       if (past == null) _wachtOfDoor(p, 'nog geen sfeeroordeel', eigen);
@@ -12206,7 +12412,13 @@ class _Radiokeuring {
         jaarHint: hint,
         zaadTak: tak,
         doorModel: doorModel,
-        familieTelt: !(sfeerJa && sfeerBeslistFamilie(z.familie)));
+        familieTelt: !(sfeerJa && sfeerBeslistFamilie(z.familie)),
+        // Het tijdvak was de reden: dat staat dan op de plek, zodat een ruimer venster later precies
+        // die weigeringen terugvindt — zie [Weerreden].
+        buitenJaar: (j) {
+          p.weer = Weerreden.tijdvak;
+          p.buitenJaar = j;
+        });
     try {
       // Heeft het model de sfeer goedgekeurd en is het zaad soul of jazz, dan telt alleen nog het
       // tijdvak — zie [sfeerBeslistFamilie]: Sting "Fields of Gold" hoort bij Sade, ook al noemt
@@ -12222,6 +12434,11 @@ class _Radiokeuring {
       o = (mag: true, waarom: 'geen antwoord${eigen ? '' : ', na ${p.keurUitstel} keer wachten'}');
     }
     log.line('radio-keuring "${p.artiest} — ${p.titel}": ${o.mag ? 'ja' : 'NEE'} — ${o.waarom}');
+    // Toch ja (het model koos hem zelf, of een tweede blik): dan geen reden laten staan.
+    if (o.mag) {
+      p.weer = null;
+      p.buitenJaar = null;
+    }
     // Het jaar reist mee naar de download: met een jaar zijn de tags gezaghebbend en schrijft de radio
     // ze zelf, in plaats van het rommelalbum van de uploader te laten staan.
     if (o.mag && p.jaar == null && p.eigen == null) {
@@ -12302,6 +12519,31 @@ class _Radiokeuring {
         return z.familie == Stijlfamilie.rock && t != null ? await stijlboek.tak(artiest, t) : null;
       });
   Future<String?>? _zaadTakF;
+}
+
+/// Eigen nummers voor de reserve van een radio — zie `Radiobijvuller.vulReserve`. Alleen van
+/// [artiesten]: de zaadartiest en zijn `/related`.
+///
+/// Geen familielaag ("alle eigen dance"): de familie "dans" omvat ook downtempo en trip hop, en zo
+/// kwamen Enya en Massive Attack in een Freak Out-radio (beoordeling van 08-10-2026). Die laag mag pas
+/// mee met een sfeeroordeel van het model, in een volgende uitlevering.
+///
+/// Een jaar uit je tags weert alleen als het VÓÓR het tijdvak ligt. Een later jaar is vaak dat van een
+/// verzamelaar ("90s Hits", 2012), en dan beslist Discogs in de keuring.
+List<Track> _reserveUit(LibraryStore lib, Set<String> artiesten, Zaadstijl zaad) => [
+      for (final t in lib.tracks)
+        if (!nooitOpRadio(t.title) &&
+            artiesten.contains(artiestSleutel(t.artist)) &&
+            !tagjaarVoorTijdvak(zaad, t.year))
+          t
+    ];
+
+/// Ligt dit jaar uit je tags vóór het tijdvak van [zaad]? Alleen dan weert het — zie [_reserveUit].
+bool tagjaarVoorTijdvak(Zaadstijl zaad, int? jaar) {
+  final zj = zaad.jaar;
+  if (jaar == null || jaar < 1900 || zj == null) return false;
+  final buiten = buitenTijdvak(zaad, jaar);
+  return buiten != null && buiten < zj;
 }
 
 /// Telt bij deze radio je gewone versie van een liedje als het origineel, hoe lang ook — of let hij
@@ -12396,10 +12638,12 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
   if (recs.isEmpty) return; // liever de oude afstemming dan een leeg plan
   // Intussen nog eens getikt? Dan is dit antwoord voor een stand die niet meer geldt.
   if (beurt != _afstemBeurt) return;
-  final blijft = [
+  // Wat na het afstemmen blijft staan (zie `stemPlanAf`), geteld zoals het plafond telt: wat nog
+  // komt, plus de laatste veertig die voorbij kwamen.
+  final blijft = artiestenVoorPlafond([
     for (final p in radio.plan)
-      if (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar) p.artiest
-  ];
+      if (p.zaad || p.reserve || (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar)) p
+  ], voorbijteller: radio.voorbijteller);
   final nieuw = _radioplan(recs, lib,
       zaadArtiest: artist,
       zaad: zaad,
@@ -12432,7 +12676,8 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
             zaadArtiest: artist,
             zaad: zaad,
             zaadTitel: keuring?.zaadTitel,
-            al: [for (final p in radio.plan) p.artiest],
+            al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller),
+            weert: steedsGeweigerd(radio.plan),
             elkeLengte: keuring?.elkeLengte ?? false));
   } catch (_) {/* de Deezer-helft staat er al; dit is een toegift */}
 }

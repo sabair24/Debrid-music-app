@@ -289,6 +289,9 @@ String basisTitel(String titel) {
 const Map<String, String> _zelfdeWoord = {
   '2': 'to', '4': 'for', 'u': 'you', 'ur': 'your', 'n': 'and', "'n'": 'and', "n'": 'and',
   "'n": 'and', '&': 'and', '+': 'and',
+  // "Vonken & Vuur" (het model) heet bij Deezer "Vonken en vuur" — gemeten op 08-10-2026. Alleen het
+  // hele woord, en aan beide kanten hetzelfde: "Hier En Nu" en "Hier & Nu" zijn één liedje.
+  'en': 'and',
 };
 
 /// Waarop de radio kijkt of je een liedje AL HEBT: dezelfde artiest ([artiestSleutel]) en hetzelfde

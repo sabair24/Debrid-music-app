@@ -313,4 +313,50 @@ void main() {
       expect(await b.stijlnamen('2 Fabiola', 'Freak Out'), ['Euro House', 'Trance']);
     });
   });
+
+  // Het tijdvak van een recent zaad (plan van 08-10-2026). Symmetrisch rond 2026 viel de helft van het
+  // venster in de toekomst: Natalia (2004), Peeters (2006), Waes (2010) en Bazart "Chaos" (2012) vielen
+  // weg uit een radio vanaf Niels Destadsbader.
+  group('het tijdvak van een recent zaad', () {
+    const niels = (familie: Stijlfamilie.popsoul, jaar: 2026);
+
+    test('DE KERN: wat in de toekomst zou vallen, schuift naar achteren', () {
+      expect(buitenTijdvak(niels, 2004, ditJaar: 2026), isNull, reason: 'Natalia');
+      expect(buitenTijdvak(niels, 2006, ditJaar: 2026), isNull, reason: 'Peeters');
+      expect(buitenTijdvak(niels, 2010, ditJaar: 2026), isNull, reason: 'Waes');
+      expect(buitenTijdvak(niels, 2012, ditJaar: 2026), isNull, reason: 'Bazart — Chaos');
+      expect(buitenTijdvak(niels, 2002, ditJaar: 2026), isNull);
+      expect(buitenTijdvak(niels, 2001, ditJaar: 2026), 2001, reason: 'Clouseau blijft erbuiten');
+      expect(buitenTijdvak(niels, 1991, ditJaar: 2026), 1991, reason: 'Hermans blijft erbuiten');
+    });
+
+    test('DE VAL: de klassieke zaden houden precies hun venster', () {
+      const freak = (familie: Stijlfamilie.dans, jaar: 1996);
+      expect(buitenTijdvak(freak, 1988, ditJaar: 2026), isNull);
+      expect(buitenTijdvak(freak, 2004, ditJaar: 2026), isNull);
+      expect(buitenTijdvak(freak, 1987, ditJaar: 2026), 1987);
+      expect(buitenTijdvak(freak, 2005, ditJaar: 2026), 2005);
+      expect(buitenTijdvak(freak, 2010, ditJaar: 2026), 2010, reason: 'EDM uit 2010 blijft uit een Freak Out-radio');
+      const sade = (familie: Stijlfamilie.jazz, jaar: 1992);
+      expect(buitenTijdvak(sade, 1972, ditJaar: 2026), isNull);
+      expect(buitenTijdvak(sade, 2012, ditJaar: 2026), isNull);
+      expect(buitenTijdvak(sade, 2013, ditJaar: 2026), 2013);
+      const nirvana = (familie: Stijlfamilie.rock, jaar: 1991);
+      expect(buitenTijdvak(nirvana, 2001, ditJaar: 2026), 2001, reason: 'Nickelback blijft uit een Nirvana-radio');
+      const billie = (familie: Stijlfamilie.popsoul, jaar: 1982);
+      expect(buitenTijdvak(billie, 1970, ditJaar: 2026), isNull);
+      expect(buitenTijdvak(billie, 1994, ditJaar: 2026), isNull);
+      expect(buitenTijdvak(billie, 1995, ditJaar: 2026), 1995);
+    });
+
+    test('keurStijl gebruikt hetzelfde venster', () {
+      expect(keurStijl(niels, (families: const <Stijlfamilie>{}, jaar: 2004), ditJaar: 2026).mag, isTrue);
+      expect(keurStijl(niels, (families: const <Stijlfamilie>{}, jaar: 2001), ditJaar: 2026).mag, isFalse);
+    });
+
+    test('zonder jaar van zaad of nummer zegt het tijdvak niets', () {
+      expect(buitenTijdvak((familie: Stijlfamilie.popsoul, jaar: null), 1950, ditJaar: 2026), isNull);
+      expect(buitenTijdvak(niels, null, ditJaar: 2026), isNull);
+    });
+  });
 }

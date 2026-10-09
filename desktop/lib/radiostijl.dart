@@ -408,11 +408,29 @@ bool sfeerBeslistFamilie(Stijlfamilie? zaad) => zaad == Stijlfamilie.jazz || zaa
 bool familiePast(Stijlfamilie zaad, Set<Stijlfamilie> families) =>
     families.contains(zaad) || families.any((f) => _buurfamilies[zaad]?.contains(f) ?? false);
 
+/// Het jaar als het buiten het tijdvak van [zaad] valt, anders null.
+///
+/// **Het venster houdt zijn breedte.** Het lag symmetrisch rond het zaad, en dat brak bij een zaad van
+/// nu: op 08-10-2026, radio vanaf "Niels Destadsbader — Vuur en vlam" (popsoul, 2026, ±12), bleef
+/// alleen 2014–2026 over — de helft van het venster lag in de toekomst, en Natalia (2004), Bart Peeters
+/// (2006), Tom Waes (2010) en Bazart "Chaos" (2012) vielen af. Wat na [ditJaar] zou vallen schuift nu
+/// naar achteren: 2002–2026. Voor elk zaad waarvan het venster niet voorbij dit jaar reikt (Freak Out
+/// 1996, Sade 1992, Zombie 1993, Billie Jean 1982) verandert er niets.
+int? buitenTijdvak(Zaadstijl zaad, int? jaar, {int? speling, int? ditJaar}) {
+  final zj = zaad.jaar;
+  if (zj == null || jaar == null) return null;
+  final s = speling ?? tijdvakSpeling(zaad.familie);
+  final nu = ditJaar ?? DateTime.now().year;
+  final tot = zj + s;
+  final vanaf = tot > nu ? zj - s - (tot - nu) : zj - s;
+  return jaar < vanaf || jaar > tot ? jaar : null;
+}
+
 /// Past [n] bij [zaad]? Zie de drie regels bovenaan. [speling] is standaard die van de familie van
-/// het zaad — zie [tijdvakSpeling].
-Stijloordeel keurStijl(Zaadstijl zaad, Nummerstijl n, {int? speling}) {
+/// het zaad — zie [tijdvakSpeling]; het tijdvak zelf staat in [buitenTijdvak].
+Stijloordeel keurStijl(Zaadstijl zaad, Nummerstijl n, {int? speling, int? ditJaar}) {
   final zj = zaad.jaar, j = n.jaar;
-  if (zj != null && j != null && (zj - j).abs() > (speling ?? tijdvakSpeling(zaad.familie))) {
+  if (buitenTijdvak(zaad, j, speling: speling, ditJaar: ditJaar) != null) {
     return (mag: false, waarom: 'uit $j, het zaad is van $zj');
   }
   final zf = zaad.familie;
@@ -741,16 +759,27 @@ class Stijlboek {
   /// erbij doet — Bon Jovi in een Nirvana-radio. Op 27-09-2026, radio vanaf Zombie, noemde Discogs
   /// "Don't Speak", "You Oughta Know" en "Torn" Pop Rock, en Pop Rock is de klassieke tak: drie
   /// keuzes van het model die precies in de sfeer van 1993 lagen, eruit.
+  ///
+  /// [speling] geldt voor ALLE vier de keuringen hieronder, niet alleen de eerste: anders logt een
+  /// verruimde ronde "verruimd" en weigert de familietak alsnog met het oude venster. [buitenJaar]
+  /// hoort het jaar als het tijdvak de reden van het nee is — de radio onthoudt dat op de plek, zodat
+  /// een ruimer venster later precies die weigeringen opnieuw kan keuren.
   Future<Stijloordeel> keur(String artiest, String titel, Zaadstijl zaad,
-      {int? jaarHint, String? zaadTak, bool familieTelt = true, bool doorModel = false}) async {
+      {int? jaarHint,
+      String? zaadTak,
+      bool familieTelt = true,
+      bool doorModel = false,
+      int? speling,
+      void Function(int jaar)? buitenJaar}) async {
     final n = await nummer(artiest, titel);
     final jaar = n.jaar ?? jaarHint ?? (zaad.jaar == null ? null : await _deezerJaar(artiest, titel));
-    final eerst = keurStijl(zaad, (families: const {}, jaar: jaar));
+    final eerst = keurStijl(zaad, (families: const {}, jaar: jaar), speling: speling);
+    if (!eerst.mag && jaar != null) buitenJaar?.call(jaar);
     if (!eerst.mag || !familieTelt) return eerst;
     final zf = zaad.familie;
     final Stijloordeel o;
     if (zf == null || familiePast(zf, n.families)) {
-      o = keurStijl(zaad, (families: n.families, jaar: jaar));
+      o = keurStijl(zaad, (families: n.families, jaar: jaar), speling: speling);
     } else if (doorModel && zf == Stijlfamilie.rock && (await helft(artiest, titel)).contains(zf)) {
       // Koos het model het zelf en staat het op minstens de helft van de uitgaven bij rock, dan is het
       // rock — ook als Discogs er nog vaker "Pop" bij zet. Gemeten op 27-09-2026, radio vanaf Zombie:
@@ -758,10 +787,10 @@ class Stijlboek {
       // bij Pop, en viel af als "stijl country". Alleen voor wat het model koos: wat Deezer erbij doet
       // (Simply Red, 7 van 10) blijft buiten een Zombie-radio. Everything But The Girl "Missing" (3 van
       // 9) en Björk (0) blijven er ook buiten.
-      o = keurStijl(zaad, (families: {zf}, jaar: jaar));
+      o = keurStijl(zaad, (families: {zf}, jaar: jaar), speling: speling);
     } else {
       final a = await this.artiest(artiest);
-      o = keurStijl(zaad, (families: {...n.families, if (a != null) a}, jaar: jaar));
+      o = keurStijl(zaad, (families: {...n.families, if (a != null) a}, jaar: jaar), speling: speling);
     }
     if (!o.mag || zf != Stijlfamilie.rock || zaadTak == null || doorModel) return o;
     final t = await tak(artiest, titel);
