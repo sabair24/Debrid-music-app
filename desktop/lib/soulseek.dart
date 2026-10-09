@@ -1133,9 +1133,12 @@ class SoulseekClient {
   /// A connection that dies within a minute of logging in was almost certainly KICKED by another
   /// client on the same account. Fighting back immediately is what creates the burst, so stand
   /// down for a while and let the other client have it.
-  void noteConnectionLost() {
+  ///
+  /// [relogged]: de server zei het zelf (code 41). Dan is het een kick, ook na die eerste minuut — en
+  /// valt er niets aan het netwerk na te gaan.
+  void noteConnectionLost({bool relogged = false}) {
     final ok = _lastLoginOk;
-    if (ok == null || DateTime.now().difference(ok) >= const Duration(minutes: 1)) return;
+    if (!relogged && (ok == null || DateTime.now().difference(ok) >= const Duration(minutes: 1))) return;
     // NOT a refusal: the login worked and something took the account off us afterwards. Saying
     // "login geweigerd" here sent the user to check a password that was never wrong.
     //
@@ -1151,6 +1154,7 @@ class SoulseekClient {
     // minutes" while soulseek_guard.json said nothing was wrong — and a restart walked straight
     // back into the kick that caused it.
     unawaited(_saveGuard());
+    if (relogged) return;
     unawaited(() async {
       if (!await _netwerkVeranderd()) return;
       if (_pause != SlskPause.kicked) return; // er is intussen iets anders gebeurd
@@ -1485,6 +1489,37 @@ class _SearchRun {
   }
 }
 
+/// De regel in `soulseek_login.log` als de verbinding met de server wegvalt — zie [SlskSession._lost].
+///
+/// **Waarom die er moet zijn.** Op 09-10-2026 viel de verbinding om 06:50:41 weg, anderhalve minuut na
+/// een geslaagde login, midden in acht radiodownloads. Daarna gaf de server 22 minuten lang geen
+/// antwoord op precies hetzelfde loginbericht (dezelfde vingerafdruk als het bericht dat om 07:12 wél
+/// lukte). Wáárom de verbinding wegviel stond nergens: een verlies na de eerste minuut werd stil
+/// opgeruimd. Of het Soulseek zelf was, of Soulseek dat op een stortvloed zoekopdrachten van ons
+/// reageerde, was daardoor niet te zeggen.
+///
+/// [open] hoe lang de verbinding ingelogd was, [hoe] wie hem sloot, [codes] de laatste berichtcodes van
+/// de server met hoe lang geleden (41 is "Relogged": elders ingelogd), [zoekMinuut]/[zoekVijf] hoeveel
+/// zoekopdrachten we zelf in de laatste minuut en de laatste vijf minuten stuurden.
+String verbindingWegRegel({
+  Duration? open,
+  required String hoe,
+  required List<(Duration, int)> codes,
+  required int zoekMinuut,
+  required int zoekVijf,
+  bool relogged = false,
+}) {
+  String duur(Duration d) => d.inMinutes > 0 ? '${d.inMinutes}m${d.inSeconds % 60}s' : '${d.inSeconds}s';
+  final laatste = codes.isEmpty ? 'geen' : codes.map((c) => '${c.$2}@-${duur(c.$1)}').join(', ');
+  return 'verbinding met de server weg${open == null ? '' : ' na ${duur(open)}'} ($hoe)'
+      '${relogged ? ' — de server meldde: elders ingelogd (Relogged)' : ''}'
+      ' — laatste servercodes: $laatste'
+      ' — zoekopdrachten: $zoekMinuut in de laatste minuut, $zoekVijf in 5 min';
+}
+
+/// Hoeveel servercodes [SlskSession] onthoudt voor [verbindingWegRegel].
+const int kServercodesOnthouden = 6;
+
 /// A reusable, logged-in Soulseek SERVER connection for a batch of downloads.
 ///
 /// Soulseek allows only ONE login per username and rate-limits/blocks repeated logins. The
@@ -1532,6 +1567,13 @@ class SlskSession {
 
   bool get _alive => _conn != null;
 
+  /// Voor [verbindingWegRegel]: sinds wanneer we ingelogd zijn, de laatste berichtcodes van de server,
+  /// wanneer we zelf zochten, en of de server "Relogged" (41) stuurde.
+  DateTime? _ingelogdOp;
+  final List<(DateTime, int)> _servercodes = [];
+  final List<DateTime> _zoektijden = [];
+  bool _relogged = false;
+
   /// Staat de verbinding met de server er nu? Zonder een nieuwe te openen  voor wie wil weten of
   /// "geen treffers" een antwoord was of een verbinding die er niet is. Zie `_haalVoorRadio`.
   bool get verbonden => _alive;
@@ -1560,6 +1602,10 @@ class SlskSession {
         run.tickets.add(t);
         client._searchSinks[t] = run.add;
         _conn!.send(_message(26, (_W()..u32(t)..str(q)).bytes())); // FileSearch
+        final nu = DateTime.now();
+        _zoektijden
+          ..add(nu)
+          ..removeWhere((z) => nu.difference(z) > const Duration(minutes: 5));
       }
       await run.settle();
     } catch (_) {
@@ -1629,9 +1675,20 @@ class SlskSession {
       // (ok, what the server said). The reason string sits right after the success flag and used to
       // be dropped on the floor, which is why every refusal reached the user as the same four words.
       final login = Completer<(bool, String)>();
+      _servercodes.clear();
+      _relogged = false;
       _sub = c.messages.listen((payload) {
         final r = _R(payload);
         final code = r.u32();
+        _servercodes.add((DateTime.now(), code));
+        if (_servercodes.length > kServercodesOnthouden) _servercodes.removeAt(0);
+        if (code == 41) {
+          // Relogged: iemand anders logde in met dit account (de officiële app, een tweede toestel).
+          // Soulseek zegt het hier zelf, dus geen gok meer op "binnen een minuut na de login".
+          _relogged = true;
+          client.logboek('de server meldt: elders ingelogd met dit account (code 41, Relogged)');
+          return;
+        }
         if (code == 1) {
           final ok = r.u8() != 0;
           // On success this field is the server's greeting, on failure the reason. Only the second
@@ -1663,7 +1720,7 @@ class SlskSession {
             }
           }
         }
-      }, onError: (_) => _lost(), onDone: _lost);
+      }, onError: (Object e) => _lost('fout: $e'), onDone: () => _lost('door de server gesloten'));
       // ONZE EIGEN ADRESSEN NU OPHALEN, niet straks.
       //
       // Dit stond eerst ná `await login.future`, en dat was een gat waar een hele sessie in verdween.
@@ -1731,6 +1788,7 @@ class SlskSession {
       if (_server != s) return false;
       client.noteLoggedIn(credId: wie, adressen: onze);
       c.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort (real port if listening)
+      _ingelogdOp = DateTime.now();
       _conn = c;
       _loginTries = 0; // healthy login → reset the consecutive-failure counter
       return true;
@@ -1741,10 +1799,26 @@ class SlskSession {
   }
 
   /// The connection died on us (as opposed to us closing it). If that happened right after a
-  /// successful login it's a kick from another client on this account — [noteConnectionLost]
-  /// makes us stand down instead of racing to log back in.
-  void _lost() {
-    if (_conn != null) client.noteConnectionLost();
+  /// successful login, or the server said "Relogged", it's a kick from another client on this
+  /// account — [noteConnectionLost] makes us stand down instead of racing to log back in.
+  ///
+  /// En nu altijd met een regel in het logboek: hoe lang de verbinding open stond, wie hem sloot,
+  /// wat de server als laatste stuurde en hoeveel we zelf zochten — zie [verbindingWegRegel].
+  void _lost(String hoe) {
+    if (_conn != null) {
+      final nu = DateTime.now();
+      final open = _ingelogdOp;
+      client.logboek(verbindingWegRegel(
+        open: open == null ? null : nu.difference(open),
+        hoe: hoe,
+        codes: [for (final (t, code) in _servercodes) (nu.difference(t), code)],
+        zoekMinuut: _zoektijden.where((z) => nu.difference(z) <= const Duration(minutes: 1)).length,
+        zoekVijf: _zoektijden.where((z) => nu.difference(z) <= const Duration(minutes: 5)).length,
+        relogged: _relogged,
+      ));
+      client.noteConnectionLost(relogged: _relogged);
+    }
+    _relogged = false;
     _drop();
   }
 
