@@ -506,6 +506,8 @@ class CoverEnricher {
   /// image and that IS the official lettering.
   Future<ArtistArt?> artistArt(String name) {
     final sleutel = name.toLowerCase();
+    final al = _artiestUitGeheugen(sleutel);
+    if (al != null) return Future.value(al);
     final loopt = _artistArtInFlight[sleutel];
     if (loopt != null) return loopt;
     // Een BLOKlichaam, en dat is geen stijlkwestie. Zie `discogs.dart:838-848`: met een pijl
@@ -513,12 +515,47 @@ class CoverEnricher {
     // `Map<String, Future<…>>` is dat de verwijderde Future zélf, en `whenComplete` wacht dan op het
     // werk dat het net afrondde. Voor altijd, zonder socket, zonder logregel. Die fout kostte daar
     // zes herschrijvingen; hier staat hij één keer opgeschreven en niet nog eens gemaakt.
-    final werk = _artistArtVers(name).whenComplete(() {
+    final werk = _artistArtVers(name).then((art) {
+      if (art != null) _artiestOnthoud(sleutel, art);
+      return art;
+    }).whenComplete(() {
       _artistArtInFlight.remove(sleutel);
     });
     _artistArtInFlight[sleutel] = werk;
     return werk;
   }
+
+  /// Wat er al eens gelezen is, per artiest — en dan HETZELFDE object terug.
+  ///
+  /// Saber op 10-10-2026, na de hoezen: *"is dit ook zo voor de naam van de artist via the audio
+  /// DB ?"* Ja: [_artistArtVers] las het JSON-bestand en vijf beelden opnieuw van schijf bij elke
+  /// vraag, en een `Image.memory` herkent een beeld aan zijn bytes-OBJECT — dus het logo boven de
+  /// hoes op Nu speelt werd bij elke andere artiest opnieuw gedecodeerd, na eerst de naam als tekst
+  /// (zie `ArtiestKop`). Dezelfde reparatie als `DiscogsArtwork._readArt`. Tweeëndertig artiesten;
+  /// een logo is klein.
+  static final Map<String, ArtistArt> _artiestGelezen = <String, ArtistArt>{};
+  static const int kArtiestGelezenMax = 32;
+
+  static ArtistArt? _artiestUitGeheugen(String sleutel) {
+    final a = _artiestGelezen.remove(sleutel);
+    if (a != null) _artiestGelezen[sleutel] = a; // weer achteraan: het laatst gebruikt
+    return a;
+  }
+
+  static void _artiestOnthoud(String sleutel, ArtistArt art) {
+    _artiestGelezen.remove(sleutel);
+    _artiestGelezen[sleutel] = art;
+    while (_artiestGelezen.length > kArtiestGelezenMax) {
+      _artiestGelezen.remove(_artiestGelezen.keys.first);
+    }
+  }
+
+  /// Het logo en de foto's van deze artiest als ze al in het geheugen liggen — meteen, zonder
+  /// schijf of net. Voor het eerste beeld na een artiestwissel; zie `ArtiestKop`.
+  ArtistArt? artistArtInGeheugen(String name) => _artiestUitGeheugen(name.toLowerCase());
+
+  /// Alles vergeten. Voor toetsen.
+  static void vergeetArtiestGelezenVoorToets() => _artiestGelezen.clear();
 
   /// Wie tegelijk om dezelfde naam vraagt, wacht op hetzelfde antwoord.
   ///

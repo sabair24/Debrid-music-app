@@ -218,7 +218,7 @@ jobs:
             test/zoekzeef_test.dart test/rutracker_koekjes_test.dart test/rutracker_enkelbaan_test.dart \
             test/rutracker_meldingen_test.dart test/rutracker_leeg_test.dart test/torbox_stand_test.dart \
             test/warmtemeter_test.dart test/warmte_log_test.dart test/glas_ipad_test.dart \
-            test/hoes_wissel_test.dart \
+            test/hoes_wissel_test.dart test/artiest_wissel_test.dart \
             test/remote_work_test.dart test/nu_speelt_namen_test.dart \
             test/bronnen_stand_test.dart test/torznab_test.dart test/bronkap_test.dart test/hoesplafond_test.dart \
             test/cue_knippen_test.dart test/aria2_selectie_test.dart \

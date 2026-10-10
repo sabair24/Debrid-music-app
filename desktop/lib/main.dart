@@ -11154,6 +11154,11 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     // dezelfde vraag stellen is drie kansen om drie verschillende antwoorden te krijgen.
     final bib = context.watch<LibraryStore>();
     final al = t == null ? null : bib.albumForPath(t.path);
+    // En die van het VOLGENDE nummer, om de hoes, de cd en het artiestlogo alvast klaar te zetten —
+    // met dezelfde regels als hierboven, anders zet het klaarzetten iets anders klaar dan er straks
+    // komt. Saber, 10-10-2026: "een lichte verspringing als je naar het volgende liedje gaat".
+    final volgendNummer = p.volgendNummer;
+    final volgendAlbum = volgendNummer == null ? null : bib.albumForPath(volgendNummer.path);
 
     // De hoes met de draaiende plaat, één keer beschreven. Hij staat in beide indelingen, en
     // twee kopieën van zeventig regels zouden binnen een maand uit elkaar lopen.
@@ -11236,14 +11241,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         setState(() => _shown = f);
                       }
                     },
-                    // De hoes en cd van het volgende nummer alvast klaarzetten, met dezelfde regels
-                    // als hierboven — anders staat er bij de wissel even de hoes uit het bestand
-                    // met een getekende schijf (Saber, 10-10-2026: "een lichte verspringing").
-                    volgende: () {
-                      final n = p.volgendNummer;
-                      final na = n == null ? null : bib.albumForPath(n.path);
-                      return na == null ? null : albumArtVooruit(bib, na);
-                    }(),
+                    // De hoes en cd van het volgende nummer alvast klaarzetten — anders staat er bij
+                    // de wissel even de hoes uit het bestand met een getekende schijf.
+                    volgende: volgendAlbum == null ? null : albumArtVooruit(bib, volgendAlbum),
                   );
                 }),
         ),
@@ -11273,6 +11273,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
               if (!dwars && artiestVanPlaat.trim().isNotEmpty) ...[
                 ArtiestKop(
                   naam: artiestVanPlaat,
+                  // Zelfde regel als [artiestVanPlaat], voor het volgende nummer.
+                  volgende: volgendAlbum?.artist ?? volgendNummer?.artist,
                   gecentreerd: !zij,
                   // Naast elkaar de breedte van de HOES, niet die van de tekstkolom ernaast: dan
                   // staat de kop netjes boven de plaat waar hij over gaat. De loopruimte van de cd
@@ -19510,9 +19512,15 @@ class ArtiestKop extends StatefulWidget {
     this.hoogte = 64,
     this.breedte = 320,
     this.gecentreerd = true,
+    this.volgende,
   });
 
   final String naam;
+
+  /// De artiest van het VOLGENDE nummer: zijn logo wordt alvast opgehaald en op deze maat
+  /// gedecodeerd, zodat het er bij de wissel in hetzelfde beeld staat. Zie
+  /// [CoverEnricher.artistArtInGeheugen].
+  final String? volgende;
 
   /// Hoe hoog het logo hoogstens mag worden. De artiestenpagina gunt het 96; hier staat er een hoes
   /// onder die de hoogte al opeist.
@@ -19527,19 +19535,27 @@ class ArtiestKop extends StatefulWidget {
 class _ArtiestKopState extends State<ArtiestKop> {
   Uint8List? _logo;
 
+  /// Wat er al in het geheugen ligt, meteen. Zonder dit stond bij elke andere artiest eerst de naam
+  /// als tekst en een tel later het logo — een andere hoogte, dus de hoes eronder sprong mee.
+  Uint8List? _uitGeheugen() =>
+      CoverEnricher(context.read<AppSettings>()).artistArtInGeheugen(widget.naam)?.logoBytes;
+
   @override
   void initState() {
     super.initState();
+    _logo = _uitGeheugen();
     _laad();
+    _zetVolgendeKlaar();
   }
 
   @override
   void didUpdateWidget(ArtiestKop oud) {
     super.didUpdateWidget(oud);
     if (oud.naam != widget.naam) {
-      setState(() => _logo = null);
+      setState(() => _logo = _uitGeheugen());
       _laad();
     }
+    _zetVolgendeKlaar();
   }
 
   Future<void> _laad() async {
@@ -19547,7 +19563,29 @@ class _ArtiestKopState extends State<ArtiestKop> {
     if (naam.trim().isEmpty) return;
     final art = await CoverEnricher(context.read<AppSettings>()).artistArt(naam);
     if (!mounted || naam != widget.naam) return;
-    setState(() => _logo = art?.logoBytes);
+    // Hetzelfde object als wat er al staat: niets te doen, en dus niets opnieuw te decoderen.
+    if (!identical(art?.logoBytes, _logo)) setState(() => _logo = art?.logoBytes);
+  }
+
+  /// Welke volgende artiest er al klaargezet is.
+  String? _klaargezet;
+
+  /// Het logo van [ArtiestKop.volgende] ophalen (dan ligt het in het geheugen van [CoverEnricher])
+  /// en decoderen op de maat waarop het hier staat (dan ligt het in de beeldcache van Flutter).
+  void _zetVolgendeKlaar() {
+    final v = widget.volgende?.trim();
+    if (v == null || v.isEmpty || v == _klaargezet || v == widget.naam) return;
+    _klaargezet = v;
+    final verrijker = CoverEnricher(context.read<AppSettings>());
+    final hoogte = decodeWidth(widget.hoogte);
+    unawaited(() async {
+      try {
+        final logo = (await verrijker.artistArt(v))?.logoBytes;
+        if (logo != null && mounted) {
+          await precacheImage(ResizeImage(MemoryImage(logo), height: hoogte), context);
+        }
+      } catch (_) {/* niets klaargezet is geen fout: dan laadt hij bij de wissel, zoals vroeger */}
+    }());
   }
 
   Widget _alsTekst() => Text(
@@ -19578,6 +19616,8 @@ class _ArtiestKopState extends State<ArtiestKop> {
                   // Zelfde wenk als bij de artiestenkop, en hier telt hij dubbel: dit staat op het
                   // speelscherm, dat bij elk nieuw album opnieuw opgebouwd wordt.
                   cacheHeight: decodeWidth(widget.hoogte),
+                  // Bij een ander logo blijft het vorige staan tot het nieuwe gedecodeerd is.
+                  gaplessPlayback: true,
                   alignment: widget.gecentreerd ? Alignment.center : Alignment.centerLeft,
                   // Een kapot of half binnengehaald bestand mag geen leeg gat geven; dan de naam.
                   errorBuilder: (_, __, ___) => _alsTekst(),

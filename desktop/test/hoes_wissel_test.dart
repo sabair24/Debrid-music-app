@@ -166,7 +166,9 @@ void main() {
 
   test('Nu speelt geeft het volgende nummer door, met dezelfde regels als het huidige', () {
     final main = File('lib/main.dart').readAsStringSync();
-    expect(main.contains('final n = p.volgendNummer;'), isTrue);
-    expect(main.contains('return na == null ? null : albumArtVooruit(bib, na);'), isTrue);
+    expect(main.contains('final volgendNummer = p.volgendNummer;'), isTrue);
+    expect(
+        main.contains('volgende: volgendAlbum == null ? null : albumArtVooruit(bib, volgendAlbum),'),
+        isTrue);
   });
 }
