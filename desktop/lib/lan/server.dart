@@ -82,6 +82,7 @@ class LanServer {
     // `logDir` bestaat altijd (zie paths.dart), dus dit logboek nu ook.
     _koppelLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}koppeling.log');
     _stroomLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}stroom.log');
+    _warmteLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}warmte.log');
   }
 
   /// Met welk account deze pc zelf is ingelogd, of leeg als hij dat niet is.
@@ -131,6 +132,10 @@ class LanServer {
   /// aanvraag, geen duur, niet of de cache raak was. Zonder regel valt "het hapert op 5G" niet uit
   /// elkaar te halen in "de pc zette te lang om", "er werd niet omgezet" en "er kwam niets aan".
   WarmLog? _stroomLog;
+
+  /// Wat elk toestel tekent en hoe warm het is — zie `warmtemeter.dart`. Een iPad hangt niet aan
+  /// een kabel; dit is de enige plek waar zijn metingen te lezen zijn.
+  WarmLog? _warmteLog;
 
   /// Eén regel per gestart nummer: zonder Range of vanaf byte 0. De vervolgstukken die een speler
   /// opvraagt zouden het logboek anders vullen met hetzelfde nummer.
@@ -360,6 +365,8 @@ class LanServer {
         return _update(req);
       case '/api/radio':
         return _radio(req);
+      case '/api/diag/warmte':
+        return _warmte(req);
     }
 
     if (path.startsWith('/stream/')) return _stream(req);
@@ -986,6 +993,31 @@ class LanServer {
     final text = await utf8.decoder.bind(req).join();
     final decoded = jsonDecode(text.isEmpty ? '{}' : text);
     return decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{};
+  }
+
+  /// De metingen van een toestel in `warmte.log`. Zie `warmtemeter.dart`.
+  ///
+  /// Begrensd: hoogstens 60 regels van 800 tekens per keer, want dit is een logboek en geen opslag.
+  /// Het toestel staat ervoor, en zijn adres, zodat de iPad en de telefoon uit elkaar te houden zijn.
+  Future<void> _warmte(HttpRequest req) async {
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    String kort(Object? s, int n) {
+      final t = (s is String ? s : '').replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+      return t.length > n ? t.substring(0, n) : t;
+    }
+
+    final toestel = kort(body['toestel'], 80);
+    final adres = req.connectionInfo?.remoteAddress.address ?? '?';
+    final regels = body['regels'];
+    var n = 0;
+    if (regels is List) {
+      for (final r in regels.take(60)) {
+        _warmteLog?.line('[${toestel.isEmpty ? '?' : toestel} $adres] ${kort(r, 800)}');
+        n++;
+      }
+    }
+    return _json(req.response, {'ok': true, 'regels': n});
   }
 
   /// 503 with a sentence a person can read, not a bare status code: on the iPad this is the

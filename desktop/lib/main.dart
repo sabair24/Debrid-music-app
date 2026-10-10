@@ -95,6 +95,7 @@ import 'jaarlint.dart';
 import 'overblok.dart';
 import 'wikipedia.dart';
 import 'warm_log.dart' show WarmLog;
+import 'warmtemeter.dart';
 import 'library.dart';
 import 'metadata.dart';
 import 'models.dart';
@@ -939,6 +940,27 @@ Future<void> main() async {
   };
   // Groen gaat bij het herhalen voor — zie [RadioBesturing.voegHerhalingBij].
   radio.isGroen = (t) => oordelen.vanTrack(t) == Oordeel.omhoog;
+
+  // Wat dit toestel tekent en hoe warm het wordt, naar `warmte.log` op de pc. Zie warmtemeter.dart:
+  // de iPad werd heet en kon niet gemeten worden. Alleen op een toestel dat met een pc praat; de pc
+  // zelf heeft zijn eigen fps.log. Het adres wordt bij elke zending opgezocht, zodat koppelen
+  // ná het opstarten gewoon werkt.
+  if (!mode.owner) {
+    final ik = thisDevice();
+    Warmtemeter(
+      stuur: (regels) async {
+        final e = session.endpoint;
+        if (e == null) throw StateError('nog niet gekoppeld');
+        final c = RemoteClient(e, timeout: const Duration(seconds: 10));
+        try {
+          await c.ask('/api/diag/warmte', {'toestel': warmteToestel(await ik), 'regels': regels});
+        } finally {
+          c.close();
+        }
+      },
+      extra: () => player.playing ? 'speelt' : 'stil',
+    ).start();
+  }
 
   // Wat er in de AUTO te bladeren valt. Dit is de enige plek waar de boom aan de echte bibliotheek
   // hangt; de boom zelf staat in auto_bladeren.dart en weet van niets.
