@@ -85,6 +85,23 @@ void main() {
         reason: 'zonder afstand houden loopt de startpagina zijn eigen budget omver');
   });
 
+  test('DE GRENS: ook een klok die te vroeg afgaat houdt de afstand', () async {
+    // 10-10-2026 op de bouwstraat (Linux): de toets hierboven gaf minder dan 2 × 110 ms. Eén
+    // `delayed` en dan door vertrouwt erop dat de klok niet vóór zijn tijd afgaat. Deze klok doet
+    // dat expres — 5 ms te vroeg — en de afstand moet er toch zijn.
+    DeezerBaan.wacht = (d) {
+      final korter = d - const Duration(milliseconds: 5);
+      return Future<void>.delayed(korter.isNegative ? Duration.zero : korter);
+    };
+    addTearDown(() => DeezerBaan.wacht = Future<void>.delayed);
+    final klant = MockClient((_) async => http.Response('{"data":[]}', 200));
+    final begin = DateTime.now();
+    await Future.wait([
+      for (var i = 0; i < 3; i++) DeezerBaan.haal('https://api.deezer.com/y$i', client: klant),
+    ]);
+    expect(DateTime.now().difference(begin), greaterThanOrEqualTo(DeezerBaan.minimaleTussenpoos * 2));
+  });
+
   test('de artiest-id-kaart wordt gedeeld', () {
     // Twee rijen zoeken dezelfde namen op. Delen scheelt niet alleen verzoeken: het dwingt af dat
     // beide dezelfde "Adele" bedoelen.

@@ -22,6 +22,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 
 import 'json_body.dart';
@@ -48,6 +49,10 @@ class DeezerBaan {
 
   static DateTime _laatste = DateTime.fromMillisecondsSinceEpoch(0);
   static Future<void> _beurt = Future.value();
+
+  /// Hoe er gewacht wordt. Een toets zet hier een klok die te vroeg afgaat; zie [haal].
+  @visibleForTesting
+  static Future<void> Function(Duration) wacht = Future<void>.delayed;
 
   /// Waar de baan zijn verhaal kwijt kan. Wordt één keer gezet, door wie een logboek heeft — zo
   /// blijft dit bestand vrij van `dart:io`.
@@ -79,10 +84,14 @@ class DeezerBaan {
   /// bruikbare JSON was. Dat onderscheid is de hele reden dat deze functie bestaat.
   static Future<Map<String, dynamic>?> haal(String url, {http.Client? client}) {
     final mijn = _beurt.then((_) async {
-      final nu = DateTime.now();
-      final sinds = nu.difference(_laatste);
-      if (sinds < minimaleTussenpoos) {
-        await Future<void>.delayed(minimaleTussenpoos - sinds);
+      // **Opnieuw kijken na het wachten, tot de tijd echt om is.** Hier stond één `delayed` en dan
+      // door. Op de bouwstraat (Linux) gemeten op 10-10-2026: drie verzoeken in minder dan 2 × 110
+      // ms — een klok die een fractie vóór zijn tijd afgaat, gemeten tegen `DateTime.now()`. Een
+      // klok die terugsprong (negatief) wacht niet; anders stond de baan een uur stil.
+      var sinds = DateTime.now().difference(_laatste);
+      while (!sinds.isNegative && sinds < minimaleTussenpoos) {
+        await wacht(minimaleTussenpoos - sinds);
+        sinds = DateTime.now().difference(_laatste);
       }
       _laatste = DateTime.now();
     });
