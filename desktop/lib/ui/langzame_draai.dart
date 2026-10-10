@@ -84,14 +84,21 @@ class LangzameDraai extends ChangeNotifier {
     return Duration(microseconds: wacht < 0 ? 0 : wacht.round());
   }
 
+  /// Hoeveel platen er nu draaien, in de hele app. Voor de warmtemeter: een plaat zit in een
+  /// `AnimatedBuilder` met `Listenable.merge`, en daar is van buitenaf niet in te kijken.
+  static int get lopend => _lopend;
+  static int _lopend = 0;
+
   void start() {
     if (_loopt || _weg) return;
     _loopt = true;
+    _lopend++;
     _vorige = null;
     if (!_ticker.isActive) _ticker.start();
   }
 
   void stop() {
+    if (_loopt) _lopend--;
     _loopt = false;
     _wacht?.cancel();
     _wacht = null;

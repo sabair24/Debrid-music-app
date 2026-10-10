@@ -1777,7 +1777,10 @@ class _MeeschuivendGlas extends StatelessWidget {
     // Steviger glas op een telefoon. Daar staat de tekst van rand tot rand en is deze balk het enige
     // tussen zes witte pictogrammen en een lopende alinea; op het toestel las de bovenste regel van
     // de albumbeschrijving dwars door de knoppen heen. Zie [balkGlas].
-    final dicht = isCompact(context);
+    //
+    // Zonder vervaging (iPad, telefoon, tv) ook de dichtere vulling: dan draagt de kleur alleen de
+    // leesbaarheid. Zie [glasZonderVervaging].
+    final dicht = isCompact(context) || glasZonderVervaging;
     return AnimatedBuilder(
       animation: rol,
       builder: (_, __) => balkGlas(
@@ -1867,7 +1870,9 @@ Widget glassSurface({
   // die Flutter niet mag raster-cachen: hij leest de achtergrond terug en blurt hem opnieuw bij élke
   // hertekening, en op een telefoon is dat precies tijdens het scrollen. De uitweg voor de televisie
   // stond er al; die voor een telefoon ontbrak.
-  if (isTv || zonderBlur) {
+  //
+  // En sinds 10-10-2026 ook de iPad: zie [glasZonderVervaging] voor de meting.
+  if (glasZonderVervaging || zonderBlur) {
     return DecoratedBox(
       decoration: schaduw,
       child: ClipRRect(borderRadius: BorderRadius.circular(999), child: surface),

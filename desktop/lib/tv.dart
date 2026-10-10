@@ -97,6 +97,31 @@ bool isTablet(BuildContext context) {
   return w >= 600 && w < 1280;
 }
 
+/// Een bureaublad: Windows, macOS of Linux.
+bool get isBureaublad =>
+    bureaubladVoorToets ?? (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+
+/// Zet [isBureaublad] vast, voor een toets die een iPad naspeelt. Null = het echte platform.
+@visibleForTesting
+bool? bureaubladVoorToets;
+
+/// Glas zonder echte vervaging — alleen de vulling, de rand en de schaduw. Overal behalve op een
+/// bureaublad.
+///
+/// **Gemeten, niet geraden.** Saber op 10-10-2026: *"de ipad wordt nog altijd extreem warm heet
+/// zelf, bij album detailscreen ook en now playing, eigenlijk overal"*. De warmtemeter van 3.9.458
+/// gaf in `warmte.log` van de iPad (120 Hz, 1668×2388 px), over 72 vensters van tien seconden:
+/// steeds ~60 beelden per seconde zolang de cd draait, en per beeld 1,4 ms rasteren op een scherm
+/// met 0–2 glasvlakken tegen gemiddeld 6,5 ms (tot 24 ms) met 8 of meer — de albumpagina en Nu
+/// speelt, precies waar de cd draait. Een `BackdropFilter` is de enige laag die niet bewaard kan
+/// worden: bij elk beeld leest hij het scherm terug en vervaagt het opnieuw, en dat tien tot veertien
+/// keer. De GPU stond op die schermen tot 100 % bezet en de batterij zakte 10 % in elf minuten.
+///
+/// De telefoon kreeg zijn glas om dezelfde reden al zonder vervaging (`isCompact`), en de
+/// televisie (`isTv`) ook. Breedte was de verkeerde maat: een iPad is breed, maar heeft net zo goed
+/// een batterij en een GPU die warm wordt. Op een pc kost het niets wat telt.
+bool get glasZonderVervaging => isTv || !isBureaublad;
+
 /// How far the disc slides out from behind the sleeve, as a fraction of the sleeve's width.
 ///
 /// This is reserved WIDTH: [AlbumArt] lays out `size * (1 + factor)`, so on a phone in portrait

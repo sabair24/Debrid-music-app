@@ -319,7 +319,8 @@ Widget balkGlas(Color tint, double op, {bool dicht = false, bool plat = false}) 
   //
   // Het kost daar bijna niets aan uiterlijk: `dicht` zet de vulling op een telefoon al op 78 %
   // dekking, dus van wat eronder vervaagd werd kwam toch nauwelijks iets door.
-  if (plat || isTv) return vulling;
+  // En op elk toestel dat geen bureaublad is: zie [glasZonderVervaging] voor de meting op de iPad.
+  if (plat || glasZonderVervaging) return vulling;
   return Stack(
     fit: StackFit.expand,
     children: [
@@ -381,7 +382,9 @@ final ImageFilter glasVervorming = ImageFilter.compose(
 ///   meer dekking, met dezelfde ophogingen als `glassSurface` — anders lost de pil van drie meter
 ///   afstand op in het donker.
 Widget glasRuit({bool? plat}) {
-  final tv = plat ?? isTv;
+  // Zonder vervaging ook buiten de tv, met de stevigere vulling die daarbij hoort — de glazen knoppen
+  // stonden met tien tot veertien tegelijk op de albumpagina van de iPad. Zie [glasZonderVervaging].
+  final tv = (plat ?? isTv) || glasZonderVervaging;
   const hoek = BorderRadius.all(Radius.circular(kHoekRond));
   final vulling = DecoratedBox(
     decoration: BoxDecoration(

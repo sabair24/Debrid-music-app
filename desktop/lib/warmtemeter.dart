@@ -17,6 +17,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -37,6 +38,8 @@ class Warmtestaal {
     required this.tikkers,
     required this.animaties,
     required this.glas,
+    this.cds = 0,
+    this.aanrakingen = 0,
     this.extra = '',
     this.toestel,
   });
@@ -61,6 +64,15 @@ class Warmtestaal {
   /// van wat eronder ligt.
   final int glas;
 
+  /// Hoeveel draaiende platen ([LangzameDraai.lopend]). Een plaat hangt in een `Listenable.merge`
+  /// en is daardoor niet als animatie in de boom te herkennen — de eerste meting op de iPad zag hem
+  /// niet, terwijl hij de 60 beelden per seconde vroeg.
+  final int cds;
+
+  /// Hoeveel aanraak- en sleepgebeurtenissen er in het venster waren. Nul aanrakingen en toch
+  /// zestig beelden per seconde: dan tekent de app uit zichzelf.
+  final int aanrakingen;
+
   /// Wat de app erbij vertelt: speelt er iets, welk scherm.
   final String extra;
 
@@ -83,7 +95,7 @@ String warmteRegel(Warmtestaal s) {
       'bouwen ${_ms(s.buildGemUs)}/${_ms(s.buildMaxUs)} ms | '
       'rasteren ${_ms(s.rasterGemUs)}/${_ms(s.rasterMaxUs)} ms | '
       'draad vertraagd ${s.draadVertraagdMs} ms | '
-      'tikkers ${s.tikkers} | glas ${s.glas} | '
+      'tikkers ${s.tikkers} | cd ${s.cds} | aanrakingen ${s.aanrakingen} | glas ${s.glas} | '
       'animaties: $anim'
       '${s.extra.isEmpty ? '' : ' | ${s.extra}'}'
       '${s.toestel == null ? '' : ' | ${s.toestel}'}';
@@ -240,6 +252,8 @@ class Warmtemeter {
   TimingsCallback? _haak;
   int _beelden = 0, _buildUs = 0, _buildMaxUs = 0, _rasterUs = 0, _rasterMaxUs = 0;
   int _vertraagdUs = 0;
+  int _aanrakingen = 0;
+  PointerRoute? _aanraakRoute;
   int _beginMs = 0;
   int _vensters = 0;
   bool _bezig = false;
@@ -253,6 +267,10 @@ class Warmtemeter {
   void start() {
     if (loopt) return;
     _haak = _tel;
+    _aanraakRoute = (PointerEvent e) {
+      if (e is PointerDownEvent || e is PointerMoveEvent || e is PointerScrollEvent) _aanrakingen++;
+    };
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_aanraakRoute!);
     SchedulerBinding.instance.addTimingsCallback(_haak!);
     _nieuwVenster();
     _draad
@@ -278,6 +296,9 @@ class Warmtemeter {
     final h = _haak;
     if (h != null) SchedulerBinding.instance.removeTimingsCallback(h);
     _haak = null;
+    final r = _aanraakRoute;
+    if (r != null) GestureBinding.instance.pointerRouter.removeGlobalRoute(r);
+    _aanraakRoute = null;
   }
 
   void _nieuwVenster() {
@@ -287,6 +308,7 @@ class Warmtemeter {
     _rasterUs = 0;
     _rasterMaxUs = 0;
     _vertraagdUs = 0;
+    _aanrakingen = 0;
     _beginMs = DateTime.now().millisecondsSinceEpoch;
   }
 
@@ -315,6 +337,7 @@ class Warmtemeter {
       rasterGem: beelden == 0 ? 0 : _rasterUs ~/ beelden,
       rasterMax: _rasterMaxUs,
       vertraagd: _vertraagdUs ~/ 1000,
+      aanrakingen: _aanrakingen,
     );
     _nieuwVenster();
     final w = wortel ?? WidgetsBinding.instance.rootElement;
@@ -334,6 +357,8 @@ class Warmtemeter {
       tikkers: SchedulerBinding.instance.transientCallbackCount,
       animaties: telling.animaties,
       glas: telling.glas,
+      cds: LangzameDraai.lopend,
+      aanrakingen: staal.aanrakingen,
       extra: extra?.call() ?? '',
       toestel: stand,
     )));

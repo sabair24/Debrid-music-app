@@ -155,13 +155,15 @@ void main() {
         tikkers: 2,
         animaties: {'RotationTransition in _Plaat': 1, 'Skelet in _Lijst': 3},
         glas: 4,
+        cds: 1,
+        aanrakingen: 37,
         extra: 'speelt',
         toestel: 'warmte normaal, batterij 54 % laadt',
       ));
       expect(
           r,
           '60.0 beelden/s (600 in 10.0 s) | bouwen 1.2/4.5 ms | rasteren 6.1/15.2 ms | '
-          'draad vertraagd 340 ms | tikkers 2 | glas 4 | '
+          'draad vertraagd 340 ms | tikkers 2 | cd 1 | aanrakingen 37 | glas 4 | '
           'animaties: Skelet in _Lijst ×3, RotationTransition in _Plaat | speelt | '
           'warmte normaal, batterij 54 % laadt');
     });
@@ -171,6 +173,52 @@ void main() {
       expect(toestelstandTekst(warmte: 2, batterij: 0.9, laden: 1),
           'warmte WARM (iOS remt af), batterij 90 % op batterij');
       expect(toestelstandTekst(warmte: 3, batterij: -1, laden: 0), 'warmte HEET (kritiek), batterij ?');
+    });
+  });
+
+  group('wat de boom niet laat zien', () {
+    testWidgets('DE KERN: draaiende platen worden geteld, ook in een Listenable.merge', (tester) async {
+      // Zo hangt de plaat in AlbumArt: `AnimatedBuilder(animation: Listenable.merge([_spin, _slide]))`.
+      // De eerste meting op de iPad zag hem daardoor niet, terwijl hij de beelden vroeg.
+      final voor = LangzameDraai.lopend;
+      final d = LangzameDraai(const TestVSync(), omwenteling: const Duration(seconds: 9));
+      d.start();
+      d.start();
+      expect(LangzameDraai.lopend, voor + 1, reason: 'twee keer starten is één plaat');
+      d.stop();
+      d.stop();
+      expect(LangzameDraai.lopend, voor);
+      d.start();
+      d.dispose();
+      expect(LangzameDraai.lopend, voor, reason: 'weggooien zet hem ook stil');
+    });
+
+    testWidgets('een draaiende plaat staat in de meetregel', (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: _ProefScherm(draait: false)));
+      final d = LangzameDraai(const TestVSync(), omwenteling: const Duration(seconds: 9));
+      addTearDown(d.dispose);
+      d.start();
+      final m = Warmtemeter(stuur: (_) async {}, toestelstand: () async => null);
+      final wortel = tester.binding.rootElement!;
+      await tester.runAsync(() => m.sluitVenster(wortel: wortel));
+      expect(m.wachtend.single.contains('| cd ${LangzameDraai.lopend} |'), isTrue, reason: m.wachtend.single);
+      expect(LangzameDraai.lopend, greaterThanOrEqualTo(1));
+      d.stop();
+    });
+
+    testWidgets('aanrakingen worden geteld, zodat zelf tekenen te onderscheiden is van vegen',
+        (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: _ProefScherm(draait: false)));
+      final m = Warmtemeter(stuur: (_) async {}, toestelstand: () async => null);
+      m.start();
+      addTearDown(m.stop);
+      await tester.tap(find.byType(Scaffold));
+      await tester.drag(find.byType(Scaffold), const Offset(0, -80));
+      final wortel = tester.binding.rootElement!;
+      await tester.runAsync(() => m.sluitVenster(wortel: wortel));
+      final n = int.parse(RegExp(r'aanrakingen (\d+)').firstMatch(m.wachtend.single)!.group(1)!);
+      expect(n, greaterThanOrEqualTo(3), reason: m.wachtend.single);
+      m.stop();
     });
   });
 
