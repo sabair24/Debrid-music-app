@@ -11236,6 +11236,14 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         setState(() => _shown = f);
                       }
                     },
+                    // De hoes en cd van het volgende nummer alvast klaarzetten, met dezelfde regels
+                    // als hierboven — anders staat er bij de wissel even de hoes uit het bestand
+                    // met een getekende schijf (Saber, 10-10-2026: "een lichte verspringing").
+                    volgende: () {
+                      final n = p.volgendNummer;
+                      final na = n == null ? null : bib.albumForPath(n.path);
+                      return na == null ? null : albumArtVooruit(bib, na);
+                    }(),
                   );
                 }),
         ),
@@ -11672,6 +11680,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                 child: Image.memory(p.currentCover!,
                     fit: BoxFit.cover,
                     cacheWidth: 480,
+                    // De vorige hoes blijft staan tot de volgende gedecodeerd is; anders knippert
+                    // het hele scherm even naar leeg bij elk nummer.
+                    gaplessPlayback: true,
                     opacity: const AlwaysStoppedAnimation(.22)),
               ),
             ),
@@ -23866,6 +23877,11 @@ class AlbumArt extends StatefulWidget {
 
   /// Images the user assigned by hand — see LibraryStore.albumArtRoles. They outrank every guess.
   final Map<String, String> roles;
+
+  /// De plaat van het VOLGENDE nummer, met dezelfde gegevens waarmee hij straks hier komt te staan.
+  /// Zijn scans worden alvast van schijf gelezen en gedecodeerd, zodat ze er bij de wissel in
+  /// hetzelfde beeld staan. Null = niets klaarzetten. Zie [DiscogsService.artInGeheugen].
+  final AlbumArtVooruit? volgende;
   const AlbumArt({
     super.key,
     required this.artist,
@@ -23884,11 +23900,34 @@ class AlbumArt extends StatefulWidget {
     this.onFront,
     this.roles = const {},
     this.heroTag,
+    this.volgende,
   });
 
   @override
   State<AlbumArt> createState() => _AlbumArtState();
 }
+
+/// Wat [AlbumArt] nodig heeft om de scans van een plaat te vinden — precies de sleutel van
+/// [DiscogsService.artMap], zodat het klaarzetten en het tonen dezelfde map bedoelen.
+typedef AlbumArtVooruit = ({
+  String artist,
+  String album,
+  int trackCount,
+  int? pinned,
+  String? pinnedMbid,
+  Map<String, String> roles,
+});
+
+/// De gegevens van [AlbumArt] voor dit album, zoals Nu speelt ze voor het huidige nummer bepaalt —
+/// voor het volgende nummer met dezelfde regels, anders zet het klaarzetten een andere map klaar.
+AlbumArtVooruit albumArtVooruit(LibraryStore bib, Album al) => (
+      artist: al.artist,
+      album: al.title,
+      trackCount: al.tracks.length,
+      pinned: bib.pinnedRelease(al) ?? persingUitHerkomst(al.resolvedFrom).release,
+      pinnedMbid: bib.pinnedMbid(al) ?? persingUitHerkomst(al.resolvedFrom).mbid,
+      roles: bib.albumArtRoles(al.artist, al.title),
+    );
 
 /// How far the disc stays out when nothing is playing.
 ///
@@ -23962,11 +24001,44 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     super.initState();
     _load();
     _sync();
+    _zetVolgendeKlaar();
+  }
+
+  /// Welke volgende plaat er al klaargezet is, zodat 4 hertekeningen per seconde niet 4 keer lezen.
+  String? _klaargezet;
+
+  /// De scans van [AlbumArt.volgende] van schijf lezen (dan liggen ze in het geheugen van
+  /// [DiscogsService]) en decoderen op precies de maat waarop ze hier getekend worden (dan liggen ze
+  /// in de beeldcache van Flutter). Bij de wissel vindt [didUpdateWidget] ze dan meteen, en staat de
+  /// nieuwe hoes en cd er in hetzelfde beeld. Alleen wat er al op schijf ligt: geen zoektocht op het
+  /// net voor een nummer dat misschien nooit komt.
+  void _zetVolgendeKlaar() {
+    final v = widget.volgende;
+    if (v == null) return;
+    final sleutel = '${v.artist}|${v.album}|${v.trackCount}|${v.pinned}|${v.pinnedMbid}|${v.roles}';
+    if (sleutel == _klaargezet) return;
+    _klaargezet = sleutel;
+    final dienst = DiscogsService(context.read<AppSettings>());
+    final s = widget.size;
+    unawaited(() async {
+      try {
+        final art = await dienst.cachedReleaseArt(v.artist, v.album,
+            expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+        final f = art?.front, d = art?.disc;
+        if (f != null && mounted) {
+          await precacheImage(ResizeImage(MemoryImage(f), width: decodeWidth(s)), context);
+        }
+        if (d != null && mounted) {
+          await precacheImage(ResizeImage(MemoryImage(d), width: decodeWidth(s * .92)), context);
+        }
+      } catch (_) {/* niets klaargezet is geen fout: dan laadt hij bij de wissel, zoals vroeger */}
+    }());
   }
 
   @override
   void didUpdateWidget(AlbumArt old) {
     super.didUpdateWidget(old);
+    _zetVolgendeKlaar();
     // Same as the info panel: a new pin is a new set of scans, even when the album's name is
     // unchanged. This is why the disc never followed the release you picked.
     if (old.artist != widget.artist ||
@@ -23974,10 +24046,24 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
         old.pinned != widget.pinned ||
         old.pinnedMbid != widget.pinnedMbid ||
         !mapEquals(old.roles, widget.roles)) {
-      // A DIFFERENT record: drop what is up. Keeping it would put one album's sleeve and disc on
-      // another album's page for the length of a round trip, which is not a smaller lie than a gap.
-      if (widget.identity.isNotEmpty && old.identity.isNotEmpty &&
+      // **Eerst kijken of de scans van deze plaat al in het geheugen liggen.** Dan staan ze er in
+      // hetzelfde beeld, zonder tussenstap. Saber op 10-10-2026: "bij het laden van de hoes en cd
+      // zie je een lichte verspringing als je naar het volgende liedje gaat" — eerst de hoes uit
+      // het bestand met een getekende schijf, een tel later de scans. Zie
+      // [DiscogsService.artInGeheugen].
+      final klaar = DiscogsService(context.read<AppSettings>()).artInGeheugen(
+          widget.artist, widget.album,
+          expectedTracks: widget.trackCount,
+          pinned: widget.pinned,
+          pinnedMbid: widget.pinnedMbid,
+          roles: widget.roles);
+      if (klaar != null) {
+        if (!identical(klaar, _art)) setState(() => _art = klaar);
+      } else if (widget.identity.isNotEmpty && old.identity.isNotEmpty &&
           old.identity != widget.identity) {
+        // A DIFFERENT record: drop what is up. Keeping it would put one album's sleeve and disc on
+        // another album's page for the length of a round trip, which is not a smaller lie than a
+        // gap.
         setState(() => _art = null);
       }
       // Otherwise the old scans stay up until the new ones arrive — renaming a record does not
@@ -24039,7 +24125,11 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           pinned: widget.pinned,
           pinnedMbid: widget.pinnedMbid,
           roles: widget.roles);
-      if (uitCache != null && mounted && mine == _gen) setState(() => _art = uitCache);
+      // Hetzelfde object als wat er al staat: niets te doen. Een `setState` hier liet Flutter vroeger
+      // het beeld opnieuw decoderen — zie [DiscogsService._readArt].
+      if (uitCache != null && mounted && mine == _gen && !identical(uitCache, _art)) {
+        setState(() => _art = uitCache);
+      }
       final art = await dienst.releaseArt(artist, album,
           expectedTracks: widget.trackCount,
           pinned: widget.pinned,
@@ -24048,7 +24138,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
       // Nothing found leaves what is on screen alone: an empty answer is not a better answer than
       // the sleeve already showing.
-      if (art != null) setState(() => _art = art);
+      if (art != null && !identical(art, _art)) setState(() => _art = art);
       // Hand it to the library too. Without this the correction lived only on the open page: the
       // album showed the right sleeve, and going back to the grid showed the wrong one again.
       //
@@ -24107,8 +24197,11 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       borderRadius: BorderRadius.circular(10),
       child: front == null
           ? Container(width: s, height: s, color: _panel2, child: const Icon(Icons.album, color: _muted))
+          // `gaplessPlayback`: bij een andere hoes blijft de vorige staan tot de nieuwe gedecodeerd is,
+          // in plaats van een leeg vak tussendoor — dat was de "lichte verspringing" bij elk volgend
+          // nummer (10-10-2026).
           : Image.memory(front,
-              width: s, height: s, fit: BoxFit.cover, cacheWidth: decodeWidth(s)),
+              width: s, height: s, fit: BoxFit.cover, cacheWidth: decodeWidth(s), gaplessPlayback: true),
     );
 
     final vliegend =
@@ -24133,7 +24226,8 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
             fit: BoxFit.cover,
             // This one rotates sixty times a second. Decoding it at 1200px to spin it inside a
             // 600px circle is the most expensive picture in the app.
-            cacheWidth: decodeWidth(s * .92))
+            cacheWidth: decodeWidth(s * .92),
+            gaplessPlayback: true)
         : (front == null ? null : _GetekendeSchijf(label: front, maat: s * .92));
     if (schijf == null) return vliegend;
 

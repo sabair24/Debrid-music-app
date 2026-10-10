@@ -1201,6 +1201,19 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     return (_index >= 0 && _index < _order.length) ? _order[_index] : null;
   }
 
+  /// Het nummer na het huidige, als het er is — dezelfde keuze als [_meldVooruit] maakt voor het
+  /// vooruithalen van de audio. In de radio alleen een EIGEN nummer: een online bron heeft nog geen
+  /// album om scans van te tonen. Voor `AlbumArt.volgende`: de hoes en cd van het volgende nummer
+  /// liggen dan al klaar als het begint.
+  Track? get volgendNummer {
+    if (radioMode) {
+      final i = _radioIndex + 1;
+      return i >= 0 && i < _radio.length ? _radio[i].local : null;
+    }
+    final i = _index + 1;
+    return i >= 0 && i < _order.length ? _order[i] : null;
+  }
+
   bool get hasNext => radioMode
       ? _radioIndex < _radio.length - 1
       : (_index < _order.length - 1 || (repeat == RepeatMode.all && _order.isNotEmpty));

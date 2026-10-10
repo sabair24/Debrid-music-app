@@ -2033,7 +2033,54 @@ extension DiscogsArtwork on DiscogsService {
   }) =>
       _readArt(artMap(artist, album, expectedTracks, pinned, pinnedMbid, roles));
 
+  /// Wat er al eens van schijf gelezen is, per map — en dan HETZELFDE object terug.
+  ///
+  /// **Waarom hetzelfde object, en niet alleen dezelfde bytes.** Saber op 10-10-2026, op Nu speelt:
+  /// *"bij het laden van de hoes en cd zie je een lichte verspringing als je naar het volgende liedje
+  /// gaat. de app moet altijd de hoezen herladen heb ik de indruk."* Dat klopte: elke vraag las
+  /// front, back en disc opnieuw van schijf, en bij een nummerwissel gebeurde dat twee keer
+  /// (`cachedReleaseArt` en daarna `releaseArt`). Een `Image.memory` herkent een beeld aan zijn
+  /// bytes-OBJECT, niet aan de inhoud — dus elke lezing was voor Flutter een nieuw beeld, dat opnieuw
+  /// gedecodeerd werd terwijl er even niets stond. Met hetzelfde object vindt Flutter het in zijn
+  /// eigen beeldcache en staat het er meteen.
+  ///
+  /// Zestien albums: ruim genoeg voor een wachtrij en heen en weer bladeren; een scan is een paar
+  /// honderd KB. [_writeArt] vergeet een map zodra er nieuwe scans in komen.
+  static final Map<String, ReleaseArt> _gelezen = <String, ReleaseArt>{};
+  static const int kGelezenMax = 16;
+
+  static ReleaseArt? _uitGeheugen(String pad) {
+    final a = _gelezen.remove(pad);
+    if (a != null) _gelezen[pad] = a; // weer achteraan: het laatst gebruikt gaat het laatst weg
+    return a;
+  }
+
+  static void _onthoud(String pad, ReleaseArt art) {
+    _gelezen.remove(pad);
+    _gelezen[pad] = art;
+    while (_gelezen.length > kGelezenMax) {
+      _gelezen.remove(_gelezen.keys.first);
+    }
+  }
+
+  /// De scans van dit album als ze al in het geheugen liggen — zonder schijf en zonder net, dus
+  /// meteen. Voor het eerste beeld na een albumwissel; zie `AlbumArt.didUpdateWidget`.
+  ReleaseArt? artInGeheugen(
+    String artist,
+    String album, {
+    int expectedTracks = 0,
+    int? pinned,
+    String? pinnedMbid,
+    Map<String, String> roles = const {},
+  }) =>
+      _uitGeheugen(artMap(artist, album, expectedTracks, pinned, pinnedMbid, roles).path);
+
+  /// Alles vergeten. Voor toetsen.
+  static void vergeetGelezenVoorToets() => _gelezen.clear();
+
   Future<ReleaseArt?> _readArt(Directory dir) async {
+    final al = _uitGeheugen(dir.path);
+    if (al != null) return al;
     try {
       if (!await dir.exists()) return null;
       Future<Uint8List?> one(String n) async {
@@ -2065,6 +2112,7 @@ extension DiscogsArtwork on DiscogsService {
       // OVERSCHRIJFT wat er al op het scherm stond. Zo werd een leeggeruimd mapje een album zonder
       // hoes en zonder cd, en werd er nooit meer gezocht.
       if (art.front == null && art.back == null && art.disc == null) return null;
+      _onthoud(dir.path, art);
       return art;
     } catch (_) {
       return null;
@@ -2143,6 +2191,9 @@ extension DiscogsArtwork on DiscogsService {
   }
 
   Future<void> _writeArt(Directory dir, ReleaseArt art, {bool done = true}) async {
+    // Nieuwe scans: wat er van deze map in het geheugen lag, klopt niet meer. Ook ná het schrijven
+    // (zie `finally`), want een lezing tussendoor zou een half geschreven map onthouden.
+    _gelezen.remove(dir.path);
     try {
       await dir.create(recursive: true);
       Future<void> one(String n, Uint8List? b) async {
@@ -2168,6 +2219,8 @@ extension DiscogsArtwork on DiscogsService {
       await File('${dir.path}${Platform.pathSeparator}done').writeAsString('1');
     } catch (_) {
       /* a cache that can't be written is not worth failing over */
+    } finally {
+      _gelezen.remove(dir.path);
     }
   }
 
