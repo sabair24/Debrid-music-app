@@ -1309,12 +1309,23 @@ Future<void> main() async {
       // its own copy of the answers, keyed by the PC's album id.
       await library.facts.load();
       final endpoint = mode.endpoint;
-      if (endpoint != null) await session.connect(endpoint, remember: false);
+      // The queue is restored either way — the paths in it are stream URLs, and they resolve
+      // against whatever library has just landed. **Zodra er iets staat**: de kopie op dit toestel
+      // als die er is, anders de catalogus van de pc. Een pc die niet antwoordt hield de spelerbalk
+      // anders dertig seconden leeg (11-10-2026) — zie `ClientSession.connect`.
+      var hersteld = false;
+      Future<void> herstel() async {
+        if (hersteld) return;
+        hersteld = true;
+        await player.restore(library.trackByPath);
+      }
+
+      if (endpoint != null) {
+        await session.connect(endpoint, remember: false, zodraErIetsStaat: herstel);
+      }
       // Whatever the PC is downloading shows up in "Mijn downloads" here too, progress and all.
       if (downloads is RemoteDownloadManager) downloads.startWatching();
-      // The queue is restored either way — the paths in it are stream URLs, and they resolve
-      // against whatever library has just landed.
-      await player.restore(library.trackByPath);
+      await herstel();
     }();
     return;
   }
@@ -7467,26 +7478,47 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
             ),
             const SizedBox(width: kRuimte12),
             Expanded(
-              child: Row(
-                children: [
-                  Flexible(
-                    child: Text(s.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: kTekstNormaal.copyWith(color: dim, fontWeight: FontWeight.w500)),
-                  ),
-                  const SizedBox(width: kRuimte8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: kRuimte6, vertical: kRuimte2),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(kHoek4),
-                      border: Border.all(color: _line),
+              // **Op een smal scherm het label ONDER de titel.** Saber op 11-10-2026, met de gsm op
+              // deze lijst: *"als je naar een album gaat en je open verborgen tracks die niet in men
+              // bibliotheek staan zie ik de titels niet door de melding"*. Naast elkaar kreeg het
+              // label zijn volle breedte en de titel wat er overbleef: "Just…", "Run…", "Thre…".
+              child: isCompact(context)
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(s.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: kTekstNormaal.copyWith(color: dim, fontWeight: FontWeight.w500)),
+                        const SizedBox(height: kRuimte2),
+                        Text(widget.note ?? 'niet in bibliotheek',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: kLabel.copyWith(color: dim, letterSpacing: .2)),
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        Flexible(
+                          child: Text(s.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: kTekstNormaal.copyWith(color: dim, fontWeight: FontWeight.w500)),
+                        ),
+                        const SizedBox(width: kRuimte8),
+                        Container(
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: kRuimte6, vertical: kRuimte2),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(kHoek4),
+                            border: Border.all(color: _line),
+                          ),
+                          child: Text(widget.note ?? 'niet in bibliotheek',
+                              style: kLabel.copyWith(color: dim, letterSpacing: .2)),
+                        ),
+                      ],
                     ),
-                    child: Text(widget.note ?? 'niet in bibliotheek',
-                        style: kLabel.copyWith(color: dim, letterSpacing: .2)),
-                  ),
-                ],
-              ),
             ),
             if (s.seconds != null && s.seconds! > 0)
               Text(_fmt(Duration(seconds: s.seconds!)), style: kTekstKlein.copyWith(color: dim)),

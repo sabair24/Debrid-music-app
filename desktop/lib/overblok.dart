@@ -55,6 +55,13 @@ const double kZijfoto = 460;
 /// Hoe breed het beeld naast een opengeklapt hoofdstuk staat.
 const double kSectiefoto = 300;
 
+/// Hoe smal het beeld naast de tekst hoogstens mag worden; daaronder gaat het ónder de tekst.
+const double kSectiefotoMin = 200;
+
+/// Hoeveel breedte de tekst naast een beeld minstens houdt. Een gsm (411 punten) haalt dit met een
+/// beeld ernaast nooit, en krijgt dus tekst over de volle breedte met het beeld eronder.
+const double kSectietekstMin = 480;
+
 /// De twee lagen van de beeldband, apart aangeleverd.
 ///
 /// **Apart, omdat alleen de ACHTERGROND mag inzoomen.** De Ken Burns stond eerst om het hele vlak,
@@ -797,30 +804,48 @@ class _SectieRij extends StatelessWidget {
           if (open)
             Padding(
               padding: const EdgeInsets.only(bottom: kRuimte16),
-              // Het beeld RECHTS naast de tekst. De leesmaat laat er ruim vierhonderd punten over op
-              // een breed venster, en dat stond leeg — een hoofdstuk over Thriller met de hoes van
-              // Thriller ernaast leest als een artikel in plaats van als een uitklapmenu.
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: kLeesmaat),
-                    child: _Alineas(afdeling.tekst),
-                  ),
-                  if (beeld != null) ...[
+              child: LayoutBuilder(builder: (context, c) {
+                // **Op een smal scherm onder elkaar, en de tekst nooit breder dan er plek is.**
+                // Saber op 11-10-2026: *"bij artist detail de biografie is niet leesbaar op gsm"*.
+                // Op de gsm gezien: elke regel liep rechts van het scherm af ("Zijn eers" / "eerste
+                // vrouw…"). De tekst stond als niet-buigend kind in een `Row` met een maximum van
+                // [kLeesmaat], en een Row geeft zo'n kind geen breedtegrens mee — dus werd hij altijd
+                // op de leesmaat van een pc gezet, ook op 411 punten.
+                final fotoBreed = (c.maxWidth - kRuimte32 - kSectietekstMin).clamp(0.0, kSectiefoto);
+                final naast = beeld != null && fotoBreed >= kSectiefotoMin;
+                final tekst = ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: kLeesmaat),
+                  child: _Alineas(afdeling.tekst),
+                );
+                if (!naast) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      tekst,
+                      if (beeld != null) ...[
+                        const SizedBox(height: kRuimte16),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: kSectiefoto),
+                          child: beeld,
+                        ),
+                      ],
+                    ],
+                  );
+                }
+                // Het beeld RECHTS naast de tekst. De leesmaat laat er ruim vierhonderd punten over op
+                // een breed venster, en dat stond leeg — een hoofdstuk over Thriller met de hoes van
+                // Thriller ernaast leest als een artikel in plaats van als een uitklapmenu.
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Buigend: de tekst neemt wat er is, tot de leesmaat.
+                    Flexible(child: tekst),
                     const SizedBox(width: kRuimte32),
-                    // Meebuigen en niet vastzetten: op een smal venster is er geen vierhonderd
-                    // punten over, en dan hoort het beeld te krimpen in plaats van de tekst weg te
-                    // duwen.
-                    Flexible(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: kSectiefoto),
-                        child: beeld,
-                      ),
-                    ),
+                    SizedBox(width: fotoBreed, child: beeld),
                   ],
-                ],
-              ),
+                );
+              }),
             ),
           Container(height: 1, color: kLijnZacht),
         ],

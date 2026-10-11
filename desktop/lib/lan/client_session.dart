@@ -242,7 +242,8 @@ class ClientSession extends ChangeNotifier {
   }
 
   /// Wire an endpoint into the app and pull the library in.
-  Future<void> connect(RemoteEndpoint endpoint, {bool remember = true}) async {
+  Future<void> connect(RemoteEndpoint endpoint,
+      {bool remember = true, Future<void> Function()? zodraErIetsStaat}) async {
     // Een ONTHOUDEN adres wordt eerst nagekeken; een vers gekoppeld adres niet.
     //
     // **Waarom dat verschil er moest komen.** Het inlogscherm loopt élk adres af dat de pc publiceert
@@ -255,6 +256,36 @@ class ClientSession extends ChangeNotifier {
     // met de juiste namen, maar elke hoes wordt bij een adres opgehaald dat niemand opneemt. Dat is
     // exact het beeld: titels goed, vakjes leeg. En opnieuw inloggen hielp permanent, want dán werd
     // er wél gezocht.
+    // **Eerst wat op dit toestel ligt, vóór er één verzoek naar de pc gaat — ook vóór de
+    // adrescontrole hieronder**, die bij een zwijgende pc zelf 4 tot 15 seconden wacht. Saber op 11-10-2026:
+    // *"op men gsm bij de cold start, laadt de home page met recent toegevoegd enzo verder heel
+    // traag"*. In `verbinding.log` van de gsm: 12:43:47 "verbinden met", 12:44:17 "pc antwoordt" —
+    // precies dertig seconden, de time-out van één verzoek. De pc-app draaide nog niet, en Windows
+    // laat een verzoek aan een dichte poort onbeantwoord in plaats van het te weigeren. De kopie van
+    // de catalogus op dit toestel kwam pas NA die dertig seconden op het scherm (in [_refresh]), en
+    // tot dan was de startpagina leeg. Met de pc aan gemeten: eerste beeld na 0,24 s, startpagina met
+    // hoezen na 2,1 s — het wachten zat alleen in het wachten op een pc die niet antwoordt.
+    //
+    // [zodraErIetsStaat] (de wachtrij herstellen) mag dan ook meteen: zijn paden wijzen naar de pc en
+    // passen op de kopie net zo goed. Zonder dit bleef de spelerbalk even lang leeg als de startpagina.
+    var gemeld = false;
+    Future<void> meld() async {
+      final haak = zodraErIetsStaat;
+      if (gemeld || haak == null) return;
+      gemeld = true;
+      await haak();
+    }
+
+    // Met het ONTHOUDEN adres: de paden van de kopie wijzen naar de pc. Blijkt hieronder een ander
+    // adres te werken, dan vervangt de catalogus van de pc deze kopie, met de goede paden.
+    RemoteClient? voorlopig;
+    if (library.tracks.isEmpty) {
+      voorlopig = RemoteClient(endpoint);
+      library.remote = voorlopig;
+      applyMediaResolver(voorlopig.authorized);
+      if (await _toonEigenKopie()) unawaited(meld());
+    }
+
     final werkend = remember ? endpoint : await _bereikbaarAdres(endpoint);
     endpoint = werkend;
     _endpoint = endpoint;
@@ -272,7 +303,8 @@ class ClientSession extends ChangeNotifier {
       notifyListeners();
     }).catchError((_) {/* niet weten is geen reden om niet te verbinden */}));
 
-    final client = RemoteClient(endpoint);
+    final client =
+        voorlopig != null && voorlopig.endpoint == endpoint ? voorlopig : RemoteClient(endpoint);
     // Waar deze pc nog meer te bereiken is, voor de dag dat dit adres niet meer werkt. Zie
     // [_onthoudUitwijk] — bewust niet afgewacht.
     unawaited(_onthoudUitwijk(client, endpoint));
@@ -286,13 +318,17 @@ class ClientSession extends ChangeNotifier {
     // asking the PC for every lookup. Applied in memory and deliberately NOT saved: it is fetched
     // fresh on every connect, so nothing is written to this device's disk, changing a token on the
     // PC reaches here by itself, and unpairing takes it with it.
-    final shared = await client.config();
-    final discogs = shared['discogsToken'] ?? '';
-    final lastfm = shared['lastfmKey'] ?? '';
-    final audiodb = shared['audiodbKey'] ?? '';
-    if (discogs.isNotEmpty) settings.discogsToken = discogs;
-    if (lastfm.isNotEmpty) settings.lastfmKey = lastfm;
-    if (audiodb.isNotEmpty) settings.audiodbKey = audiodb;
+    //
+    // **Niet meer afgewacht.** Ze zijn voor het opzoeken van platen, niet voor de catalogus, en hier
+    // stond `await`: een pc die niet antwoordde hield zo de hele start dertig seconden op.
+    final sleutels = client.config().then((shared) {
+      final discogs = shared['discogsToken'] ?? '';
+      final lastfm = shared['lastfmKey'] ?? '';
+      final audiodb = shared['audiodbKey'] ?? '';
+      if (discogs.isNotEmpty) settings.discogsToken = discogs;
+      if (lastfm.isNotEmpty) settings.lastfmKey = lastfm;
+      if (audiodb.isNotEmpty) settings.audiodbKey = audiodb;
+    });
 
     loading = true;
     notifyListeners();
@@ -303,6 +339,9 @@ class ClientSession extends ChangeNotifier {
     // Covers after the grid is on screen, not before it.
     unawaited(library.loadRemoteCovers(settings));
     _startPolling();
+    await meld();
+    // De sleutels zijn er doorgaans al; een pc die niet antwoordde heeft hier al zijn time-out gehad.
+    await sleutels.timeout(const Duration(seconds: 2), onTimeout: () {});
   }
 
   /// Hoogstens één keer per zitting een nieuwe sleutel halen.
@@ -430,6 +469,22 @@ class ClientSession extends ChangeNotifier {
     }
   }
 
+  /// De kopie van de catalogus op dit toestel op het scherm, als die er is en het scherm nog leeg is
+  /// (of zelf een kopie toont). Geen netwerk, dus meteen. True als hij er nu staat.
+  Future<bool> _toonEigenKopie() async {
+    final eigen = await kopie.lees();
+    if (eigen == null ||
+        !library.adoptMirror(eigen.json, updatedAt: eigen.bijgewerkt, vanToestel: true)) {
+      return false;
+    }
+    // Ook hier de hoezen, want die staan in de cache op dit toestel. Zonder deze aanroep is het een
+    // raster van lege vakjes, en dat leest als een kapotte bibliotheek in plaats van als een pc die
+    // uit staat.
+    unawaited(library.loadRemoteCovers(settings));
+    notifyListeners();
+    return true;
+  }
+
   /// Fall back to a copy. Only ever fills an empty screen: [adoptMirror] refuses to replace a live
   /// library, so this cannot turn a playable one unplayable.
   ///
@@ -439,15 +494,7 @@ class ClientSession extends ChangeNotifier {
   /// hier ligt wordt zo nodig meteen daarna overschreven door de cloud — `adoptMirror` staat dat
   /// toe zolang wat er staat zelf een kopie is.
   Future<void> _fillFromMirror() async {
-    final eigen = await kopie.lees();
-    if (eigen != null &&
-        library.adoptMirror(eigen.json, updatedAt: eigen.bijgewerkt, vanToestel: true)) {
-      // Ook hier de hoezen, want die staan in de cache op dit toestel. Zonder deze aanroep is het
-      // een raster van lege vakjes, en dat leest als een kapotte bibliotheek in plaats van als een
-      // pc die uit staat.
-      unawaited(library.loadRemoteCovers(settings));
-      notifyListeners();
-    }
+    await _toonEigenKopie();
 
     final m = mirror;
     if (m == null) return;
