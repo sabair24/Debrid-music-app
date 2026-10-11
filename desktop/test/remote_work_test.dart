@@ -5,7 +5,10 @@
 /// the PC are stubbed — this is about the wire and the plumbing, not about TorBox.
 library;
 
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -200,6 +203,51 @@ void main() {
       expect(got.single.filename, r'muziek\Portishead\01.flac');
       expect(got.single.bitrate, 1000);
       service.dispose();
+    });
+
+    test('een albumbrede lijst van duizenden bestanden komt heel door', () async {
+      soulseek.answer = [
+        for (var i = 0; i < 3000; i++) _peer('muziek\\Oasis\\Morning Glory\\${i % 12} - nummer $i.flac')
+      ];
+      final service = remoteSoulseek();
+      final got = await service.search('oasis morning glory');
+      expect(got, hasLength(3000));
+      expect(got[2999].filename, 'muziek\\Oasis\\Morning Glory\\11 - nummer 2999.flac');
+      service.dispose();
+    });
+
+    test('DE KERN: het ontleden houdt de UI-draad niet vast', () async {
+      // 4400 bestanden zijn 1,3 MB en kostten op de pc 8–20 ms in één blok; dit is het vijfvoudige,
+      // zodat het verschil ook op een snelle bouwmachine boven de ruis uitkomt.
+      final bytes = Uint8List.fromList(utf8.encode(jsonEncode({
+        'files': [
+          for (var i = 0; i < 20000; i++)
+            _peer('@@peer$i\\Music\\Oasis\\(What\'s The Story) Morning Glory (1995)\\${i % 12} - titel.flac')
+                .toJson()
+        ]
+      })));
+      var tikken = 0;
+      final klok = Timer.periodic(const Duration(milliseconds: 5), (_) => tikken++);
+      final sw = Stopwatch()..start();
+      final files = await soulseekBestandenUit(bytes);
+      sw.stop();
+      klok.cancel();
+      expect(files, hasLength(20000));
+      expect(tikken, greaterThanOrEqualTo(sw.elapsedMilliseconds ~/ 20),
+          reason: '${sw.elapsedMilliseconds} ms ontleed en maar $tikken tikken: de draad zat vast');
+    });
+
+    test('kapotte regels vallen weg, een leeg antwoord is een lege lijst', () {
+      final bytes = Uint8List.fromList(utf8.encode(jsonEncode({
+        'files': [
+          {'username': 'a', 'filename': 'x.flac', 'size': 1},
+          {'filename': 'zonder gebruiker.flac'},
+          'geen kaart',
+        ]
+      })));
+      expect(soulseekBestandenUitNu(bytes).map((f) => f.filename), ['x.flac']);
+      expect(soulseekBestandenUitNu(Uint8List(0)), isEmpty);
+      expect(soulseekBestandenUitNu(Uint8List.fromList(utf8.encode('[]'))), isEmpty);
     });
 
     test('a PC without a Soulseek login says so', () async {

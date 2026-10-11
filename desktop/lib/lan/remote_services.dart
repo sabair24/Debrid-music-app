@@ -14,6 +14,8 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -52,6 +54,17 @@ class _Rpc {
         .get(endpoint.baseUrl.replace(path: path, queryParameters: query), headers: _headers)
         .timeout(timeout);
     return _decode(res);
+  }
+
+  /// Als [get], maar met de ruwe bytes terug, zodat de beller ze buiten de UI-draad kan ontleden.
+  /// Een fout gooit dezelfde zin van de pc als [get].
+  Future<Uint8List> getBytes(String path,
+      {Map<String, String>? query, Duration timeout = const Duration(seconds: 90)}) async {
+    final res = await _http
+        .get(endpoint.baseUrl.replace(path: path, queryParameters: query), headers: _headers)
+        .timeout(timeout);
+    if (res.statusCode != 200) _decode(res);
+    return res.bodyBytes;
   }
 
   Future<Map<String, dynamic>> post(String path, Map<String, dynamic> body,
@@ -239,18 +252,39 @@ class RemoteSoulseekService extends SoulseekService {
       {void Function(List<SoulseekFile>)? onPartial,
       void Function(String)? gebruikteVraag}) async {
     gebruikteVraag?.call(query.trim().replaceAll(RegExp(r'\s+'), ' '));
-    final j = await _rpc.get('/api/soulseek/search', query: {'q': query});
-    final files = <SoulseekFile>[];
-    for (final f in (j['files'] as List? ?? const [])) {
-      if (f is! Map<String, dynamic>) continue;
-      final parsed = SoulseekFile.fromJson(f);
-      if (parsed != null) files.add(parsed);
-    }
+    final files = await soulseekBestandenUit(
+        await _rpc.getBytes('/api/soulseek/search', query: {'q': query}));
     onPartial?.call(files);
     return files;
   }
 
   void dispose() => _rpc.close();
+}
+
+/// De bestanden uit een antwoord van `/api/soulseek/search`, ontleed in een eigen isolate.
+///
+/// **Waarom.** Een albumbrede zoekopdracht levert duizenden bestanden — één zoekopdracht gaf er in
+/// downloads.log 1935 — en de pc stuurt ze allemaal. 4400 bestanden zijn 1,3 MB JSON: 8–20 ms
+/// ontleden op de pc (gemeten 11-10-2026), een veelvoud op een telefoon, in één blok op de UI-draad
+/// precies op het moment dat de catalogusalbumpagina zijn bronnen binnenkrijgt. `Isolate.run` geeft
+/// zijn uitkomst terug zonder kopie; alleen de ruwe bytes gaan erheen.
+///
+/// Op het hoogste niveau, zodat de sluiting alleen [bytes] vangt en geen `this`.
+Future<List<SoulseekFile>> soulseekBestandenUit(Uint8List bytes) =>
+    Isolate.run(() => soulseekBestandenUitNu(bytes));
+
+/// Dezelfde ontleding, zonder isolate.
+List<SoulseekFile> soulseekBestandenUitNu(Uint8List bytes) {
+  final files = <SoulseekFile>[];
+  if (bytes.isEmpty) return files;
+  final j = jsonDecode(utf8.decode(bytes));
+  if (j is! Map) return files;
+  for (final f in (j['files'] as List? ?? const [])) {
+    if (f is! Map<String, dynamic>) continue;
+    final parsed = SoulseekFile.fromJson(f);
+    if (parsed != null) files.add(parsed);
+  }
+  return files;
 }
 
 /// The job list, mirrored from the PC.
