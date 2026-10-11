@@ -18,6 +18,7 @@ import 'package:flutter/services.dart';
 
 import 'lan/stroomstand.dart';
 import 'settings.dart';
+import 'tv.dart' show isTv;
 
 /// Waar dit toestel nu op zit.
 ///
@@ -36,16 +37,31 @@ enum Netsoort { wifi, mobiel, onbekend }
 /// Staat [adaptief] uit, dan geldt [thuis] altijd — dan is er één stand en verder niets.
 ///
 /// [noodstand] is regel B: één sport lager voor de rest van deze sessie, nadat het hapert. Zie
-/// [eenSportLager].
+/// [eenSportLager]. **Alleen onderweg, op mobiele data.**
+///
+/// **Waarom alleen daar.** Saber op 11-10-2026: *"ik zag gisteren op de shield mijn nummers ook
+/// worden omgezet voor databesparing, maar dit klopt niet, shield gebruikt geen mobile data. daar moet
+/// het volle resolutie gestreamd worden vlekkeloos."* In `stroom.log` van de pc stond waarom: tot
+/// 22:02:04 kreeg de Shield alles als origineel (ook 24/192), toen vroeg hij "Stromae – Sommeil" vier
+/// keer in een kwart seconde op — een bestand van 0,1 MB, kapot — en daarna ging elk hi-res nummer
+/// als 24/48 de deur uit, de hele avond. Eén kapot bestand werd gelezen als een zwakke verbinding.
+/// Thuis is een hapering bijna nooit de lijn, en een lagere sport lost daar dus niets op; onderweg
+/// is het wél de lijn, en daarvoor bestaat deze regel.
+///
+/// [tv]: een televisie zit thuis, altijd. Android kan zijn netwerk ook daar "beperkt" noemen (een
+/// VPN, een gedeelde verbinding) en dan las de app "mobiel"; dan geldt [thuis] toch.
 Stroomstand welkeStand({
   required Stroomstand thuis,
   required Stroomstand onderweg,
   required bool adaptief,
   required Netsoort net,
   bool noodstand = false,
+  bool tv = false,
 }) {
-  final gekozen = (adaptief && net == Netsoort.mobiel) ? onderweg : thuis;
-  return noodstand ? eenSportLager(gekozen) : gekozen;
+  if (tv) return thuis;
+  final onderwegNu = net == Netsoort.mobiel;
+  final gekozen = (adaptief && onderwegNu) ? onderweg : thuis;
+  return noodstand && onderwegNu ? eenSportLager(gekozen) : gekozen;
 }
 
 /// Regel B: één sport omlaag, en nooit onder de onderste.
@@ -165,6 +181,7 @@ class NetsoortStore extends ChangeNotifier {
         adaptief: s.stroomAdaptief,
         net: _net,
         noodstand: _noodstand,
+        tv: isTv,
       );
 
   @override

@@ -1804,8 +1804,17 @@ class LibraryStore extends ChangeNotifier {
   Future<int> removeTracks(Iterable<String> paths,
       {required bool fromDisk, bool naarPrullenbak = false}) async {
     if (isRemote) {
+      final lijst = paths.toList();
+      // **Ook hier eerst de speler.** Saber op 11-10-2026: *"als ik een nummer verwijder op ipad, mac,
+      // en gsm, blijft nummer spelen, dit klopt toch niet ?"* Klopte niet: deze tak stuurde de opdracht
+      // naar de pc en hield op, en [speelNietMeer] — die het nummer uit de rij haalt en doorgaat naar
+      // het volgende — liep alleen op de pc zelf. Het toestel speelde verder uit zijn stroom of zijn
+      // vooruit gehaalde kopie.
+      try {
+        await speelNietMeer?.call(lijst);
+      } catch (_) {/* de speler mag het wissen nooit tegenhouden */}
       final ids = [
-        for (final p in paths)
+        for (final p in lijst)
           if (_remoteTrackId(p) case final id?) id,
       ];
       await _editOnPc({

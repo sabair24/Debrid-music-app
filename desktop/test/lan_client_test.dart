@@ -473,6 +473,39 @@ void main() {
       expect(c.edits.single['naarPrullenbak'], isTrue);
     });
 
+    test('DE KERN: op een toestel laat de speler het nummer óók los — vóór de pc het wist', () async {
+      // 11-10-2026: "als ik een nummer verwijder op ipad, mac, en gsm, blijft nummer spelen". Deze
+      // tak stuurde de opdracht naar de pc en hield op; de speler hoorde het alleen op de pc zelf.
+      final pc = _pc();
+      final c = _client(pc.library);
+      await c.library.loadRemote();
+      final track = c.library.tracks.firstWhere((t) => t.title == 'Sour Times');
+      final gemeld = <String>[];
+      var verstuurdBijDeMelding = -1;
+      c.library.speelNietMeer = (paden) async {
+        gemeld.addAll(paden);
+        verstuurdBijDeMelding = c.edits.length;
+      };
+
+      await c.library.removeTracks([track.path], fromDisk: true, naarPrullenbak: true);
+
+      expect(gemeld, [track.path], reason: 'hetzelfde pad als in de wachtrij van dit toestel');
+      expect(verstuurdBijDeMelding, 0, reason: 'eerst de speler, dan pas de pc — zoals op de pc zelf');
+      expect(c.edits, hasLength(1));
+    });
+
+    test('DE VAL: een speler die struikelt houdt het wissen op de pc niet tegen', () async {
+      final pc = _pc();
+      final c = _client(pc.library);
+      await c.library.loadRemote();
+      final track = c.library.tracks.firstWhere((t) => t.title == 'Sour Times');
+      c.library.speelNietMeer = (_) async => throw StateError('speler ligt eruit');
+
+      await c.library.removeTracks([track.path], fromDisk: false);
+
+      expect(c.edits, hasLength(1));
+    });
+
     test('an edit the PC refuses changes nothing here', () async {
       final pc = _pc(twoPressings: true);
       final c = _client(pc.library, editStatus: 500);

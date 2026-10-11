@@ -4,6 +4,8 @@
 /// hebben staan omdat een fout erin niet omvalt maar stilletjes het verkeerde doet.
 library;
 
+import 'dart:io';
+
 import 'package:debridmusic/lan/stroomstand.dart';
 import 'package:debridmusic/netsoort.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,9 +17,15 @@ void main() {
     bool adaptief = true,
     Netsoort net = Netsoort.wifi,
     bool noodstand = false,
+    bool tv = false,
   }) =>
       welkeStand(
-          thuis: thuis, onderweg: onderweg, adaptief: adaptief, net: net, noodstand: noodstand);
+          thuis: thuis,
+          onderweg: onderweg,
+          adaptief: adaptief,
+          net: net,
+          noodstand: noodstand,
+          tv: tv);
 
   group('regel A: de netsoort kiest de sport', () {
     test('op wifi geldt wat je thuis wilt', () {
@@ -59,18 +67,46 @@ void main() {
       expect(eenSportLager(eenSportLager(eenSportLager(Stroomstand.max))), Stroomstand.cd);
     });
 
-    test('de noodstand werkt op de sport die op dat moment geldt', () {
-      expect(stand(net: Netsoort.wifi, noodstand: true), Stroomstand.hoog);
+    test('onderweg werkt de noodstand op de sport die op dat moment geldt', () {
       expect(stand(net: Netsoort.mobiel, noodstand: true), Stroomstand.cd);
+      expect(stand(net: Netsoort.mobiel, onderweg: Stroomstand.max, noodstand: true),
+          Stroomstand.hoog);
     });
 
     test('de noodstand klimt nooit vanzelf terug', () {
       // Zolang de grendel staat blijft hij staan; hem laten opklimmen na een geslaagd nummer lokt
       // precies de hapering uit die hij net oploste.
-      final een = stand(noodstand: true);
-      final twee = stand(noodstand: true);
+      final een = stand(net: Netsoort.mobiel, onderweg: Stroomstand.hoog, noodstand: true);
+      final twee = stand(net: Netsoort.mobiel, onderweg: Stroomstand.hoog, noodstand: true);
       expect(een, twee);
-      expect(een, Stroomstand.hoog);
+      expect(een, Stroomstand.cd);
+    });
+
+    test('DE KERN: thuis zakt het nooit — één kapot bestand is geen zwakke lijn', () {
+      // 10-10-2026 op de Shield: "Stromae – Sommeil" van 0,1 MB brak af, de noodstand ging aan, en de
+      // rest van de avond ging elk hi-res nummer als 24/48 de deur uit. Thuis lost een lagere sport
+      // niets op; onderweg wel.
+      expect(stand(net: Netsoort.wifi, noodstand: true), Stroomstand.max);
+      expect(stand(net: Netsoort.onbekend, noodstand: true), Stroomstand.max);
+      expect(stand(net: Netsoort.wifi, thuis: Stroomstand.hoog, noodstand: true), Stroomstand.hoog,
+          reason: 'wat je thuis zelf koos blijft staan, niet lager');
+    });
+  });
+
+  group('DE KERN: een televisie zit thuis', () {
+    test('ook als Android zijn netwerk "beperkt" noemt (een VPN), en ook na een hapering', () {
+      expect(stand(tv: true, net: Netsoort.mobiel), Stroomstand.max);
+      expect(stand(tv: true, net: Netsoort.mobiel, noodstand: true), Stroomstand.max);
+      expect(stand(tv: true, net: Netsoort.wifi, noodstand: true), Stroomstand.max);
+    });
+
+    test('wat je op de tv als thuisstand koos, blijft het', () {
+      expect(stand(tv: true, thuis: Stroomstand.hoog, net: Netsoort.mobiel), Stroomstand.hoog);
+    });
+
+    test('de winkel geeft de tv mee', () {
+      final bron = File('lib/netsoort.dart').readAsStringSync();
+      expect(bron.contains('        tv: isTv,\n'), isTrue);
     });
   });
 
