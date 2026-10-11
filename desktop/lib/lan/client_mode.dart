@@ -33,8 +33,34 @@ Future<RemoteEndpoint?> loadPairedServer() async {
 }
 
 Future<void> savePairedServer(RemoteEndpoint endpoint) async {
+  final f = _pairedFile;
+  final tekst = jsonEncode(endpoint.toJson());
   try {
-    await _pairedFile.writeAsString(jsonEncode(endpoint.toJson()));
+    // Eerst ernaast, dan erover hernoemen. `writeAsString` maakt het bestand eerst leeg: wie het
+    // op dat moment leest krijgt niets, en een app die dan stopt, staat de volgende keer ongekoppeld
+    // op. Gevonden doordat `_onthoudUitwijk` (los, na het verbinden) het bestand overschreef terwijl
+    // client_session_test het las — rood in een volledige CI-ronde op 11-10-2026.
+    final tmp = File('${f.path}.${DateTime.now().microsecondsSinceEpoch}.tmp');
+    await tmp.writeAsString(tekst, flush: true);
+    // Windows weigert het hernoemen zolang een ander het doel open heeft — een lezer, voor een paar
+    // milliseconden. Dus even opnieuw, en pas daarna toch gewoon schrijven: liever het oude risico
+    // dan geen koppeling.
+    for (var poging = 0;; poging++) {
+      try {
+        await tmp.rename(f.path);
+        break;
+      } on FileSystemException {
+        if (poging < 5) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          continue;
+        }
+        await f.writeAsString(tekst, flush: true);
+        try {
+          await tmp.delete();
+        } catch (_) {}
+        break;
+      }
+    }
   } catch (e) {
     // Pairing still worked for this run; it will simply be asked for again next start.
     debugPrint('Could not remember the paired server: $e');

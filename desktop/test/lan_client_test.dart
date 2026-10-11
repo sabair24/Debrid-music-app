@@ -6,6 +6,7 @@
 /// Anything that would make a Mac show something a Windows PC does not has to fail here.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -111,6 +112,7 @@ Track _t(
   Map<String, Uint8List> art = const {},
   int catalogStatus = 200,
   int editStatus = 200,
+  Future<void>? hoesWacht,
 }) {
   final catalog = LanCatalog(pc);
   final requests = <String>[];
@@ -138,6 +140,8 @@ Track _t(
       return http.Response(jsonEncode({'ok': true}), 200);
     }
     if (req.url.path.startsWith('/art/')) {
+      // Een pc die nog niet antwoordt: zo is te zien wat het toestel intussen al toont.
+      if (hoesWacht != null) await hoesWacht;
       final ref = req.url.pathSegments.last;
       final bytes = art[ref] ?? catalog.artwork(ref);
       if (bytes == null) return http.Response('', 404);
@@ -294,6 +298,81 @@ void main() {
       expect(second.uitgeleverd.where((r) => r == ref), isEmpty,
           reason: 'en geen enkele byte: dat is het hele punt van het navragen');
       expect(second.library.albums.firstWhere((a) => a.title == 'Dummy').cover, isNotNull);
+    });
+
+    test('DE KERN: een hoes op schijf staat er al terwijl de pc nog moet antwoorden', () async {
+      // Gemeten op de S26 na een koude start (11-10-2026): de hoezen kwamen pas na 1,3 tot ruim 3
+      // seconden, die van Lionel Richie als laatste. Elke bewaarde hoes wachtte op de navraag bij de
+      // pc vóór hij getekend werd — zes tegelijk, album na album.
+      final pc = _pc();
+      pc.library.albums.firstWhere((a) => a.title == 'Dummy').embeddedCover =
+          Uint8List.fromList(List.generate(600, (i) => i % 256));
+      final first = _client(pc.library);
+      await first.library.loadRemote();
+      await first.library.loadRemoteCovers(AppSettings());
+
+      final pcStil = Completer<void>();
+      final second = _client(pc.library, hoesWacht: pcStil.future);
+      await second.library.loadRemote();
+      final ronde = second.library.loadRemoteCovers(AppSettings());
+      for (var i = 0; i < 400 && !second.requests.any((r) => r.startsWith('/art/')); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(second.requests.where((r) => r.startsWith('/art/')), isNotEmpty,
+          reason: 'de navraag hoort er nog steeds te zijn');
+      expect(second.library.albums.firstWhere((a) => a.title == 'Dummy').cover, isNotNull,
+          reason: 'wat op schijf ligt staat er meteen, niet pas na het antwoord van de pc');
+      pcStil.complete();
+      await ronde;
+    });
+
+    test('DE VAL: een nieuwe hoes van de pc verdringt wat de leesronde al neerzette', () async {
+      // Bij `embeddedIsVanEenAndere` wint `enriched` van `embeddedCover`. De leesronde zet daar
+      // de oude hoes in; kwam de nieuwe alleen in `embeddedCover`, dan bleef de oude staan.
+      final pc = _pc();
+      final dummy = pc.library.albums.firstWhere((a) => a.title == 'Dummy');
+      dummy.embeddedCover = Uint8List.fromList(List.generate(600, (i) => i % 256));
+      final first = _client(pc.library);
+      await first.library.loadRemote();
+      await first.library.loadRemoteCovers(AppSettings());
+      final nieuwe = Uint8List.fromList(List.generate(600, (i) => (i * 5 + 3) % 256));
+      dummy.embeddedCover = nieuwe;
+
+      final second = _client(pc.library);
+      await second.library.loadRemote();
+      second.library.albums.firstWhere((a) => a.title == 'Dummy').embeddedIsVanEenAndere = true;
+      await second.library.loadRemoteCovers(AppSettings());
+      expect(second.library.albums.firstWhere((a) => a.title == 'Dummy').cover, nieuwe);
+    });
+
+    test('DE GRENS: koos je op de pc een andere hoes, dan komt de oude keuze er niet even op', () async {
+      final pc = _pc();
+      final dummy = pc.library.albums.firstWhere((a) => a.title == 'Dummy');
+      dummy.correctedCover = Uint8List.fromList(List.generate(600, (i) => (i * 7) % 256));
+      final first = _client(pc.library);
+      await first.library.loadRemote();
+      await first.library.loadRemoteCovers(AppSettings());
+      dummy.correctedCover = Uint8List.fromList(List.generate(600, (i) => (i * 11 + 1) % 256));
+
+      final pcStil = Completer<void>();
+      final second = _client(pc.library, hoesWacht: pcStil.future);
+      await second.library.loadRemote();
+      final ronde = second.library.loadRemoteCovers(AppSettings());
+      for (var i = 0; i < 400 && !second.requests.any((r) => r.startsWith('/art/')); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(second.library.albums.firstWhere((a) => a.title == 'Dummy').cover, isNull,
+          reason: 'de pc houdt de boeken bij: een achterhaalde keuze wacht op het antwoord');
+      pcStil.complete();
+      await ronde;
+      expect(second.library.albums.firstWhere((a) => a.title == 'Dummy').cover, dummy.correctedCover);
+    });
+
+    test('de nieuwste platen eerst: dat is de rij bovenaan Start', () {
+      Album a(String t, int ms) =>
+          Album(t, 'X', [Track(path: '/$t.flac', title: t, artist: 'X', album: t, addedMs: ms)]);
+      final volgorde = hoesVolgorde([a('oud', 10), a('nieuw', 30), a('nooit', 0), a('midden', 20)]);
+      expect(volgorde.map((x) => x.title), ['nieuw', 'midden', 'oud', 'nooit']);
     });
 
     test('verandert de hoes op de pc, dan haalt het toestel hem alsnog op', () async {

@@ -6,6 +6,8 @@
 /// getal geworden, en de meting die eronder ligt staat in de toets zelf.
 library;
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/catalog.dart';
@@ -329,6 +331,20 @@ void main() {
     test('een onleesbare datum telt niet mee', () {
       expect(uitJaren([hit('A', 'x', '')], {2026}), isEmpty);
     });
+  });
+
+  test('DE VAL: "Nieuwe release" duwt de eigen rijen niet meer omlaag als hij binnenkomt', () {
+    // Hij komt van Deezer, seconden na "Recent toegevoegd" eronder (S26, koude start, 11-10-2026).
+    // Een skelet van precies zijn hoogte houdt de plek vrij zolang hij nog kan komen.
+    final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(
+        main.contains('        else if (_chartsLoading || _komtNog)\n'
+            '          Padding(\n'
+            '            padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),\n'
+            '            child: Skelet(breedte: double.infinity, hoogte: HeroCarousel.hoogte(context), radius: 18),'),
+        isTrue);
+    expect(main.contains('          height: HeroCarousel.hoogte(context),'), isTrue,
+        reason: 'skelet en balk lezen dezelfde hoogte, anders verspringt het alsnog');
   });
 
   test('de kop van "jouw jaren": geen "jaren 0" voor de jaren 2000', () {

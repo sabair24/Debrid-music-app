@@ -7,6 +7,7 @@
 /// a port already taken.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -163,6 +164,79 @@ void main() {
   test('without a token the library stays shut', () async {
     final res = await http.get(base.replace(path: '/api/catalog'));
     expect(res.statusCode, 401);
+  });
+
+  test('DE VAL: wie de koppeling leest terwijl hij opnieuw bewaard wordt, ziet nooit niets', () async {
+    // `_onthoudUitwijk` schrijft het bestand los na het verbinden opnieuw. Met een gewone
+    // `writeAsString` (eerst leegmaken, dan schrijven) las deze toets hieronder af en toe null — rood
+    // in een volledige CI-ronde op 11-10-2026 — en een app die op dat moment stopt is zijn koppeling
+    // kwijt.
+    final a = RemoteEndpoint(baseUrl: Uri.parse('http://192.168.0.117:47820'), token: 'sleutel-a');
+    final b = a.met(uitwijk: const ['100.97.101.113']);
+    await savePairedServer(a);
+    var leeg = 0;
+    for (var i = 0; i < 200; i++) {
+      final schrijf = savePairedServer(i.isEven ? b : a);
+      final gelezen = await loadPairedServer();
+      await schrijf;
+      if (gelezen == null) leeg++;
+    }
+    expect(leeg, 0, reason: '$leeg van de 200 keer las de app een lege koppeling');
+  });
+
+  test('DE VAL: een uitwijk-antwoord dat pas na het ontkoppelen komt, koppelt niet opnieuw', () async {
+    // Een tussenpersoon vóór de pc die /api/uitwijk vasthoudt tot ná het ontkoppelen, en dan een
+    // adres noemt dat nog niet bewaard is. Zonder [_koppelRonde] schreef dat de koppeling terug.
+    final poort = Completer<void>();
+    final gevraagd = Completer<void>();
+    final tussen = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final door = http.Client();
+    tussen.listen((req) async {
+      if (req.uri.path == '/api/uitwijk') {
+        if (!gevraagd.isCompleted) gevraagd.complete();
+        await poort.future;
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({
+          'urls': ['http://100.97.101.113:47820']
+        }));
+        await req.response.close();
+        return;
+      }
+      final lijf = await req.fold<List<int>>(<int>[], (a, b) => a..addAll(b));
+      final vraag = http.Request(req.method, base.replace(path: req.uri.path, query: req.uri.hasQuery ? req.uri.query : null))
+        ..bodyBytes = lijf;
+      req.headers.forEach((k, v) {
+        if (k != 'host' && k != 'content-length') vraag.headers[k] = v.join(',');
+      });
+      final antwoord = await door.send(vraag);
+      req.response.statusCode = antwoord.statusCode;
+      antwoord.headers.forEach((k, v) {
+        if (k != 'transfer-encoding' && k != 'content-length' && k != 'content-encoding') {
+          req.response.headers.set(k, v);
+        }
+      });
+      await req.response.addStream(antwoord.stream);
+      await req.response.close();
+    });
+    addTearDown(() async {
+      door.close();
+      await tussen.close(force: true);
+    });
+
+    final via = Uri.parse('http://127.0.0.1:${tussen.port}');
+    final endpoint = await RemoteClient.pair(via, pairing.start(), deviceName: 'Mac');
+    final session = ClientSession(
+        library: LibraryStore(), settings: AppSettings(), owner: false, applyMediaResolver: (_) {});
+    await session.connect(endpoint);
+    await gevraagd.future.timeout(const Duration(seconds: 5));
+    expect(await loadPairedServer(), isNotNull);
+
+    await session.unpair(); // wacht hooguit 3 s op de vastgehouden beurt
+    expect(await loadPairedServer(), isNull);
+    poort.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(await loadPairedServer(), isNull, reason: 'ontkoppeld is ontkoppeld, ook als de pc laat antwoordt');
+    session.dispose();
   });
 
   test('the session pairs, remembers, and comes back paired', () async {

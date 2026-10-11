@@ -92,6 +92,7 @@ import 'artwork.dart' show decodeWidth, kleurBuitenDeTekendraad;
 import 'beeldvorm.dart';
 import 'fps_probe.dart';
 import 'jaarlint.dart';
+import 'kandidatenzeef.dart';
 import 'overblok.dart';
 import 'ui/wikifoto_beeld.dart';
 import 'wikifotos.dart';
@@ -5453,15 +5454,16 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
   /// Both filtered to this exact title and running time, so the pool can never fill with a
   /// different song by the same artist.
   Future<List<SoulseekFile>> _candidatesFor(AlbumSlot s, SoulseekService soulseek) async {
-    bool fits(SoulseekFile f) =>
-        f.isAudio && fileOffersTitle(s.title, s.seconds, album.artist, f.filename, f.durationSec, album: album.title);
+    // Buiten de UI-draad: zie [zeefKandidaten] voor de 2 seconden stilstand op de gsm.
+    Future<List<SoulseekFile>> zeef(List<SoulseekFile> files) => zeefKandidaten(files,
+        titel: s.title, seconden: s.seconds, artiest: album.artist, album: album.title);
     final pool = <String, SoulseekFile>{
-      for (final f in (await _albumWide(soulseek)).where(fits)) '${f.username}|${f.filename}': f
+      for (final f in await zeef(await _albumWide(soulseek))) '${f.username}|${f.filename}': f
     };
     if (pool.isEmpty) {
       try {
-        for (final f in await soulseek.search(soulseekQuery(album.artist, s.title))) {
-          if (fits(f)) pool.putIfAbsent('${f.username}|${f.filename}', () => f);
+        for (final f in await zeef(await soulseek.search(soulseekQuery(album.artist, s.title)))) {
+          pool.putIfAbsent('${f.username}|${f.filename}', () => f);
         }
       } catch (_) {}
     }
@@ -13449,6 +13451,14 @@ class _HomeStartViewState extends State<HomeStartView> {
           Padding(
             padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),
             child: HeroCarousel(hits: hero.take(7).toList()),
+          )
+        // Zolang hij nog kan komen, houdt een skelet van precies zijn hoogte de plek vrij. Hij komt
+        // van Deezer, seconden na de eigen rijen hieronder, en duwde die dan 300 punten omlaag —
+        // gezien op de S26 na een koude start op 11-10-2026, terwijl je net een hoes wilde aantikken.
+        else if (_chartsLoading || _komtNog)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),
+            child: Skelet(breedte: double.infinity, hoogte: HeroCarousel.hoogte(context), radius: 18),
           ),
         if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList())),
         // Boven de netwerkrijen: deze twee staan er meteen en zijn altijd raak.
@@ -18202,6 +18212,13 @@ class HeroCarousel extends StatefulWidget {
   final List<CatalogAlbumHit> hits;
   const HeroCarousel({super.key, required this.hits});
 
+  /// De hoogte van de balk, ook voor het skelet dat zijn plek vrijhoudt op Start.
+  ///
+  /// The banner lays a cover beside a title, a year and a button. On a phone that column is narrow
+  /// enough that the title takes two lines and the button fell one pixel past the bottom — so the
+  /// banner is taller there, not shorter.
+  static double hoogte(BuildContext context) => isCompact(context) ? 300 : 260;
+
   @override
   State<HeroCarousel> createState() => _HeroCarouselState();
 }
@@ -18260,10 +18277,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(18),
         child: SizedBox(
-          // The banner lays a cover beside a title, a year and a button. On a phone that column is
-          // narrow enough that the title takes two lines and the button fell one pixel past the
-          // bottom — so the banner is taller there, not shorter.
-          height: isCompact(context) ? 300 : 260,
+          height: HeroCarousel.hoogte(context),
           child: Stack(
             children: [
               PageView.builder(
@@ -21521,10 +21535,25 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// Pre-loaded Soulseek copies of one track. Empty if the album-wide search didn't cover it.
   /// Deezer's running time is passed along because the title alone can't tell a track from a
   /// medley that contains it, nor from a remix of about the same length.
-  List<SoulseekFile> _slskForTitle(CatalogTrack t) => _albumSlsk
-      .where((f) => f.isAudio && fileOffersTitle(t.title, t.durationSec, widget.artistName, f.filename, f.durationSec,
-          album: widget.album.title))
-      .toList();
+  ///
+  /// Onthouden per titel zolang [_albumSlsk] dezelfde lijst is. `_trackRow` vraagt dit bij elke opbouw
+  /// van elke rij, alleen voor de telling ernaast, en elke vraag zeefde de hele albumbrede lijst
+  /// opnieuw: 5,3 µs per bestand (gemeten op de pc, 11-10-2026), bij 4400 bestanden dus ruim 20 ms per
+  /// rij — bij elk stukje scrollen dat een rij in beeld brengt en bij elke setState op deze pagina.
+  /// Een nieuw deelresultaat is een nieuwe lijst (`sortSoulseek`), en dan begint het geheugen opnieuw.
+  List<SoulseekFile> _slskForTitle(CatalogTrack t) {
+    if (!identical(_slskPerTitelVan, _albumSlsk)) {
+      _slskPerTitel.clear();
+      _slskPerTitelVan = _albumSlsk;
+    }
+    return _slskPerTitel.putIfAbsent(
+        '${t.title}|${t.durationSec}',
+        () => zeefKandidatenNu(_albumSlsk,
+            titel: t.title, seconden: t.durationSec, artiest: widget.artistName, album: widget.album.title));
+  }
+
+  final _slskPerTitel = <String, List<SoulseekFile>>{};
+  List<SoulseekFile>? _slskPerTitelVan;
 
   /// The copy of this track already in the library (null if we don't have it). Version markers
   /// are part of the identity, so a Live/Radio-Edit/compilation cut still counts as NOT owned.

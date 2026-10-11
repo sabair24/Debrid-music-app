@@ -341,6 +341,11 @@ ScanUitslag _scanTags(String root, String? cachePad) {
   return (rijen: out, uitCache: uitCache, gelezen: gelezen);
 }
 
+/// In welke volgorde een toestel de hoezen van zijn albums inleest: de nieuwste eerst, want die
+/// vullen "Recent toegevoegd" bovenaan Start. Albums zonder datum achteraan.
+List<Album> hoesVolgorde(Iterable<Album> albums) =>
+    [...albums]..sort((a, b) => b.addedMs.compareTo(a.addedMs));
+
 /// De tagrij van ÉÉN bestand, of null als er niets leesbaars in staat.
 ///
 /// Uit [_scanTags] gelicht zodat [leesTagrijInIsolate] precies hetzelfde leest als een volledige
@@ -3188,10 +3193,48 @@ class LibraryStore extends ChangeNotifier {
     // vroeger.
     var pcKentMerken = true;
 
+    // EERST WAT ER AL OP SCHIJF LIGT, dan pas navragen.
+    //
+    // De werkers hieronder vroegen per album eerst aan de pc of de bewaarde hoes nog klopte, en
+    // tekenden hem pas daarna. Op een koude start wachtte zo elke hoes die al lang op de telefoon
+    // lag op een rit over wifi: gemeten op de S26 op 11-10-2026 kwamen ze na 1,3 tot ruim 3
+    // seconden, die van Lionel Richie — bovenaan "Recent toegevoegd" en in de minispeler — als
+    // laatste. Nu leest deze ronde alleen de schijf, de nieuwste platen voorop omdat die de rij
+    // bovenaan Start vullen, en zet meteen neer wat er ligt. Een achterhaalde keuze van de pc
+    // (`verouderd`) komt er niet op: die wacht op de navraag, zoals voorheen.
+    final volgorde = hoesVolgorde(wachtrij);
+    final uitSchijf = <Album, Uint8List>{};
+    final bewaardeMerken = <Album, String>{};
+    var gelezen = 0;
+    Future<void> lezer() async {
+      while (gelezen < volgorde.length) {
+        final album = volgorde[gelezen++];
+        final merk = _remoteAlbums[album]?.artTag ?? '';
+        final bewaard = await enricher.bewaardMerk(album);
+        bewaardeMerken[album] = bewaard;
+        if (merk.isNotEmpty && bewaard != merk) continue;
+        if (album.zekereHoes != null) continue;
+        final c = await enricher.cached(album);
+        if (c == null) continue;
+        uitSchijf[album] = c;
+        album.enriched = c;
+        if (++since >= 24) {
+          since = 0;
+          notifyListeners();
+        }
+      }
+    }
+
+    await Future.wait([for (var i = 0; i < 6; i++) lezer()]);
+    if (uitSchijf.isNotEmpty) {
+      since = 0;
+      notifyListeners();
+    }
+
     Future<void> werker() async {
       while (true) {
-        if (volgende >= wachtrij.length) return;
-        final album = wachtrij[volgende++];
+        if (volgende >= volgorde.length) return;
+        final album = volgorde[volgende++];
         // Het merkteken van de hoes die de eigenaar op de pc GEKOZEN heeft. Wijkt dat af van wat
         // hier in de cache ligt, dan is die cache achterhaald en moet hij wijken.
         //
@@ -3201,11 +3244,12 @@ class LibraryStore extends ChangeNotifier {
         // pc de juiste Whitney-hoes, op de telefoon het logo van een verzamelaar — telkens weer, hoe
         // vaak de eigenaar het ook corrigeerde.
         final merk = _remoteAlbums[album]?.artTag ?? '';
-        final bewaard = await enricher.bewaardMerk(album);
+        final bewaard = bewaardeMerken[album] ?? await enricher.bewaardMerk(album);
         final verouderd = merk.isNotEmpty && bewaard != merk;
         // Er staat al iets én het klopt: niets te doen. Deze uitgang stond vroeger in de wachtrij
-        // zelf, en daarom werd `verouderd` hierboven nooit voor zo'n album berekend.
-        if (album.zekereHoes != null && !verouderd) continue;
+        // zelf, en daarom werd `verouderd` hierboven nooit voor zo'n album berekend. Wat de
+        // leesronde hierboven net van schijf zette telt niet als "klopt": dat moet nog nagevraagd.
+        if (album.zekereHoes != null && !verouderd && !uitSchijf.containsKey(album)) continue;
         if (verouderd) {
           // De pc heeft een ANDERE bewuste keuze dan hier ligt, en de pc houdt de boeken bij. Alles
           // wat hier lokaal voorrang had is daarmee achterhaald — laat je dat staan, dan wint het
@@ -3214,7 +3258,7 @@ class LibraryStore extends ChangeNotifier {
           album.resolvedCover = null;
         }
         final ref = _remoteAlbums[album]?.artRef;
-        final cached = verouderd ? null : await enricher.cached(album);
+        final cached = verouderd ? null : (uitSchijf[album] ?? await enricher.cached(album));
 
         // Er ligt hier al een hoes. Klopt hij nog met wat de pc toont?
         //
@@ -3240,6 +3284,9 @@ class LibraryStore extends ChangeNotifier {
           final verse = antwoord?.bytes;
           if (verse != null && verse.isNotEmpty) {
             album.embeddedCover = verse;
+            // Ook hier: de leesronde zette de oude al neer, en bij `embeddedIsVanEenAndere` wint
+            // `enriched` van `embeddedCover` — dan bleef de achterhaalde staan.
+            album.enriched = verse;
             await enricher.putCached(album, verse);
             final versMerk = antwoord!.etag ?? merk;
             if (versMerk.isNotEmpty) await enricher.schrijfMerk(album, versMerk);

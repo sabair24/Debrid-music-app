@@ -161,9 +161,19 @@ class ClientSession extends ChangeNotifier {
   /// geeft niets — allebei komen hier aan als een lege lijst, en die betekent "ik weet het niet",
   /// niet "er zijn er geen". Wat er stond blijft dan staan; dat is het adres waarmee je op de baan
   /// binnenkomt.
-  Future<void> _onthoudUitwijk(RemoteClient client, RemoteEndpoint endpoint) async {
+  ///
+  /// **En niet na het ontkoppelen.** Dit loopt los, dus het antwoord kan binnenkomen nadat je de pc
+  /// liet vergeten — en dan schreef het de koppeling gewoon opnieuw weg (client_session_test, rood
+  /// op 11-10-2026). Daarom kijkt deze beurt vóór het schrijven of de koppeling nog dezelfde is
+  /// ([_koppelRonde], omhoog bij elk [connect] en [unpair]), en wacht [unpair] een beurt die al aan
+  /// het schrijven is nog even af.
+  Future<void> _onthoudUitwijk(RemoteClient client, RemoteEndpoint endpoint) =>
+      _uitwijkBezig = _onthoudUitwijkNu(client, endpoint, _koppelRonde);
+
+  Future<void> _onthoudUitwijkNu(RemoteClient client, RemoteEndpoint endpoint, int ronde) async {
     try {
       final verse = await client.uitwijkAdressen();
+      if (ronde != _koppelRonde) return;
       if (verse.isEmpty) return;
       // Op waarde vergelijken en niet met `==`: twee lijsten met dezelfde inhoud zijn niet hetzelfde
       // object, en dan zou er bij elke start naar schijf geschreven worden.
@@ -268,6 +278,8 @@ class ClientSession extends ChangeNotifier {
     //
     // [zodraErIetsStaat] (de wachtrij herstellen) mag dan ook meteen: zijn paden wijzen naar de pc en
     // passen op de kopie net zo goed. Zonder dit bleef de spelerbalk even lang leeg als de startpagina.
+    // Een nieuwe koppeling: een uitwijk-beurt van de vorige schrijft er niet meer overheen.
+    _koppelRonde++;
     var gemeld = false;
     Future<void> meld() async {
       final haak = zodraErIetsStaat;
@@ -351,6 +363,12 @@ class ClientSession extends ChangeNotifier {
   /// Firestore krijgen, voor altijd. Eén poging per keer dat de app draait is genoeg: helpt het
   /// niet, dan is er iets aan de hand waar een herhaling niets aan verandert, en dan staat de knop
   /// "Opnieuw koppelen" in de meldingsbalk klaar.
+  /// Welke koppeling er nu geldt. Een losse [_onthoudUitwijk] van een vorige schrijft niets meer weg.
+  int _koppelRonde = 0;
+
+  /// De lopende [_onthoudUitwijk], die [unpair] even afwacht voor hij de koppeling wist.
+  Future<void>? _uitwijkBezig;
+
   bool _sleutelGevraagd = false;
 
   Future<void> _vernieuwSleutel() async {
@@ -396,6 +414,12 @@ class ClientSession extends ChangeNotifier {
     _log('pc vergeten (door de gebruiker)');
     _poll?.cancel();
     _poll = null;
+    // Eerst de ronde om, zodat een laat uitwijk-antwoord niets meer wegschrijft, en een beurt die al
+    // aan het schrijven is even afwachten — anders zet die de koppeling na het wissen hieronder terug.
+    // Begrensd: een pc die niet antwoordt mag de knop "Ontkoppelen" niet laten hangen. Zie
+    // [_onthoudUitwijk].
+    _koppelRonde++;
+    await _uitwijkBezig?.timeout(const Duration(seconds: 3), onTimeout: () {}).catchError((_) {});
     await forgetPairedServer();
     // The PC's key does not stay behind after you tell the app to forget the PC.
     //

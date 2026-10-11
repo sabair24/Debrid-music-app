@@ -232,7 +232,10 @@ void main() {
 
     test('"Ontbrekende downloaden" en de catalogus geven het album mee aan de titelcontrole', () {
       final main = File('lib/main.dart').readAsStringSync();
-      expect(main, contains('f.durationSec, album: album.title)'));
+      // Sinds 11-10-2026 via de zeef buiten de UI-draad (kandidatenzeef.dart), die het album doorgeeft.
+      expect(main, contains('titel: s.title, seconden: s.seconds, artiest: album.artist, album: album.title);'));
+      expect(File('lib/kandidatenzeef.dart').readAsStringSync(),
+          contains('f.durationSec, album: album)'));
       expect(RegExp(r'album: widget\.album\.title\)').allMatches(main).length, greaterThanOrEqualTo(2));
     });
   });
