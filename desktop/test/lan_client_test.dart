@@ -368,6 +368,39 @@ void main() {
       expect(second.library.albums.firstWhere((a) => a.title == 'Dummy').cover, dummy.correctedCover);
     });
 
+    test('DE VAL: klopt alles op de pc, dan meldt de navraag niets', () async {
+      // Elke melding bouwt elk scherm opnieuw op dat naar de bibliotheek kijkt — op de artiestpagina
+      // tot 33 ms per keer (S26, 11-10-2026). De navraag meldde om de 24 albums, ook als de pc met
+      // een 304 zei dat de hoes die al op het scherm stond klopte.
+      final pc = _pc();
+      for (var i = 0; i < 60; i++) {
+        pc.library.tracks.add(_t('${pc.root.path}/X/$i/01.flac', 'Nummer', 'Artiest $i', 'Plaat $i',
+            no: 1, total: 1));
+      }
+      pc.library.rebuildAlbums();
+      for (final a in pc.library.albums) {
+        a.embeddedCover = Uint8List.fromList(List.generate(600, (i) => (i + a.title.length) % 256));
+      }
+      final first = _client(pc.library);
+      await first.library.loadRemote();
+      await first.library.loadRemoteCovers(AppSettings());
+
+      final pcStil = Completer<void>();
+      final second = _client(pc.library, hoesWacht: pcStil.future);
+      await second.library.loadRemote();
+      var meldingen = 0;
+      second.library.addListener(() => meldingen++);
+      final ronde = second.library.loadRemoteCovers(AppSettings());
+      for (var i = 0; i < 400 && !second.requests.any((r) => r.startsWith('/art/')); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      final voorDeNavraag = meldingen;
+      pcStil.complete();
+      await ronde;
+      expect(second.uitgeleverd, isEmpty, reason: 'alles klopte: alleen 304\'jes');
+      expect(meldingen - voorDeNavraag, 1, reason: 'alleen de slotmelding — de rest stond er al');
+    });
+
     test('de nieuwste platen eerst: dat is de rij bovenaan Start', () {
       Album a(String t, int ms) =>
           Album(t, 'X', [Track(path: '/$t.flac', title: t, artist: 'X', album: t, addedMs: ms)]);

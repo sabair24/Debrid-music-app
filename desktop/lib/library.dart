@@ -3306,6 +3306,11 @@ class LibraryStore extends ChangeNotifier {
         }
 
         if (cached != null) {
+          // Staat er al sinds de leesronde, en de pc zei dat hij klopt: niets veranderd, dus ook
+          // niets melden. Elke melding bouwt elk scherm dat naar de bibliotheek kijkt opnieuw op — op
+          // de artiestpagina tot 33 ms per keer (S26, 11-10-2026) — en zo meldde deze lus na elke
+          // koude start nog ~28 keer "alles anders" over 680 hoezen die al op het scherm stonden.
+          if (identical(uitSchijf[album], cached)) continue;
           album.enriched = cached;
           if (++since >= 24) {
             since = 0;
