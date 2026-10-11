@@ -65,16 +65,29 @@ String? _editieStaart(String title) {
   var t = title.trim();
   var gevonden = false;
   for (var i = 0; i < 3; i++) {
-    final m = _staart.firstMatch(t);
+    // Tussen haakjes, of na een streepje: Deezer schrijft dezelfde staart ook als
+    // "Aux Armes Et Caetera-Version Internationale" en "Histoire De Melody Nelson - 40ème
+    // Anniversaire". Zonder die tweede vorm stonden die heruitgaven met hun eigen jaar (2003, 2011)
+    // tussen de studioalbums van Serge Gainsbourg (gezien op 11-10-2026).
+    final haakje = _staart.firstMatch(t);
+    final m = haakje ?? _streepStaart.firstMatch(t);
     if (m == null) break;
     final binnen = normKey(m.group(0)!).split(' ').where((w) => w.isNotEmpty);
     if (binnen.isEmpty) break;
     if (!binnen.every((w) => _uitgaveWoorden.contains(w) || _getalWoord.hasMatch(w))) break;
-    t = t.substring(0, m.start).trim();
+    // Een kaal getal na een streepje ("Hits - 2") is geen uitspraak; dat beslist de jubileumregel in
+    // [vouwHeruitgaves], die het jaarverschil narekent.
+    if (haakje == null && binnen.every(_getalWoord.hasMatch)) break;
+    final kaal = t.substring(0, m.start).trim();
+    if (kaal.isEmpty) break;
+    t = kaal;
     gevonden = true;
   }
   return gevonden ? t : null;
 }
+
+/// Een staart na een streepje: "Titel - 40ème Anniversaire", "Titel-Version Internationale".
+final _streepStaart = RegExp(r'\s*[-–—]\s*[^-–—()\[\]{}]+$');
 
 /// Deezers `record_type`.
 RecordKind kindFromDeezer(String recordType) => switch (recordType.trim().toLowerCase()) {
@@ -226,6 +239,10 @@ const _uitgaveWoorden = {
   // 'super' erbij voor "Thriller 25 Super Deluxe Edition": zonder dat woord faalt de eis dat ÉLK
   // staartwoord uit deze lijst komt, en blijft die uitgave tussen de studioalbums staan.
   'super',
+  // Frans, voor de heruitgaven van Gainsbourg: "Version Internationale", "40ème Anniversaire",
+  // "Mix 2023", "Édition Collector", "Remasterisé" (na normKey zonder accenten).
+  'internationale', 'international', 'anniversaire', 'mix', 'collector', 'remasterise',
+  'remasterisee', 'integrale',
 };
 
 final _staart = RegExp(r'[\(\[\{][^\)\]\}]*[\)\]\}]\s*$');
@@ -234,7 +251,7 @@ final _staart = RegExp(r'[\(\[\{][^\)\]\}]*[\)\]\}]\s*$');
 ///
 /// Als één woord, want [normKey] plakt cijfer en achtervoegsel aan elkaar. Ze los in de woordenlijst
 /// zetten helpt dus niet — "25th" is nooit "25" plus "th".
-final _getalWoord = RegExp(r'^\d+(st|nd|rd|th|e|de|ste)?$');
+final _getalWoord = RegExp(r'^\d+(st|nd|rd|th|e|de|ste|eme|ieme)?$');
 
 /// De sleutel waarop twee regels dezelfde plaat zijn.
 ///
@@ -511,8 +528,67 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
       samen[k] = bestaand == null ? r : bestaand.mergedWith(r);
     }
   }
+  // TWEEDE RONDE: een aanduiding die zegt WAT de plaat is, niet welke uitgave.
+  //
+  // Deezer noemt de soundtrack van Madame Claude "Madame Claude (Bande originale du film)", met als
+  // datum zijn digitale heruitgave van 2021; MusicBrainz noemt hem "Madame Claude", 1977. Op sleutel
+  // zijn dat twee platen, en dan stond de 2021 tussen de albums (Serge Gainsbourg, 11-10-2026). Zelfde
+  // met "BOF Anna" (2006 tegen 1967) en "Enregistrement public au Théâtre Le Palace (Live)" (2020
+  // tegen 1980). Alleen samen als de kale titel er ÓÓK staat, en van het passende soort: een
+  // live-aanduiding alleen bij een liveplaat, want "Plaat (Live)" naast de studioplaat "Plaat" zijn
+  // twee platen. In vaste volgorde, zodat de uitkomst niet van de aanvoer afhangt.
+  for (final k in samen.keys.toList()..sort()) {
+    final r = samen[k];
+    if (r == null) continue;
+    final a = _aanduiding(r.title);
+    if (a == null) continue;
+    final kk = discoKey(a.kaal);
+    if (kk == k) continue;
+    final basis = samen[kk];
+    if (basis == null) continue;
+    if (basis.kind != (a.live ? RecordKind.live : RecordKind.album)) continue;
+    final m = basis.mergedWith(r);
+    samen[kk] = DiscoRelease(
+      title: basis.title,
+      kind: m.kind,
+      firstDate: m.firstDate,
+      cover: m.cover,
+      trackCount: m.trackCount,
+      sources: m.sources,
+      refs: m.refs,
+    );
+    samen.remove(k);
+  }
   return samen.values.toList();
 }
+
+/// De titel zonder een aanduiding van wat de plaat IS — soundtrack, live, of een tweede naam als
+/// "(N°3)" — of null. Geen uitgave-staart: die maakt een ander product, zie [heeftEditieStaart].
+({String kaal, bool live})? _aanduiding(String title) {
+  final t = title.trim();
+  final bof = RegExp(r'^B\.?O\.?F\.?\s+', caseSensitive: false).firstMatch(t);
+  if (bof != null) {
+    final kaal = t.substring(bof.end).trim();
+    return kaal.isEmpty ? null : (kaal: kaal, live: false);
+  }
+  final m = _staart.firstMatch(t);
+  if (m == null) return null;
+  final kaal = t.substring(0, m.start).trim();
+  if (kaal.isEmpty) return null;
+  final binnen = normKey(m.group(0)!);
+  if (_soundtrackAanduiding.hasMatch(binnen) || _tweedeNaam.hasMatch(binnen)) {
+    return (kaal: kaal, live: false);
+  }
+  if (_liveAanduiding.hasMatch(binnen)) return (kaal: kaal, live: true);
+  return null;
+}
+
+/// "Bande originale du film", "… de la série TV", "… de la comédie musicale", "… du film de Claude
+/// Berri" — Discogs en Deezer zetten er van alles achter; het blijft dezelfde soundtrack.
+final _soundtrackAanduiding = RegExp(r'^(bande originale( d[eu]( la| l)? .+)?|musique( originale)? du film( .+)?|'
+    r'(original )?(motion picture )?(sound ?track|score)( .+)?|ost|music from the motion picture( .+)?)$');
+final _liveAanduiding = RegExp(r'^live( \d{4})?$');
+final _tweedeNaam = RegExp(r'^n \d+$');
 
 /// Vult ontbrekende hoezen aan uit een losse tabel, zonder ooit een regel toe te voegen.
 ///

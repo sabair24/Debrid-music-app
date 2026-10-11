@@ -125,8 +125,16 @@ class DiscogsSweep {
   /// 200 regels, op master-id 43, en samen 57. Twee sleutels omdat ze andere regels raken.
   final Map<int, String> hoesPerMaster;
 
+  /// Discogs-master-id → titel, oorspronkelijk jaar en aan wie hij gecrediteerd is.
+  ///
+  /// **Waarom.** [DiscogsService.artistReleases] leest twee pagina's, nieuwste eerst. Serge Gainsbourg
+  /// heeft er daar 5820 (59 pagina's), dus kwam er van Discogs niets van vóór 2001 binnen, en stond
+  /// *Aux armes et cætera* op het jaar van zijn heruitgave. Deze zoekopdracht kent er maar 240 masters
+  /// van (drie pagina's), allemaal met het jaar van de eerste uitgave — en ze is al gedaan.
+  final Map<int, ({String titel, int? jaar, String artiest})> meesters;
+
   const DiscogsSweep(this.formaatPerMaster, this.hoesPerSleutel,
-      [this.hoesPerMaster = const {}]);
+      [this.hoesPerMaster = const {}, this.meesters = const {}]);
 
   bool get isLeeg => formaatPerMaster.isEmpty && hoesPerSleutel.isEmpty;
 }
@@ -1116,6 +1124,7 @@ class DiscogsService {
     final perMaster = <int, String>{};
     final hoesPerSleutel = <String, String>{};
     final hoesPerMaster = <int, String>{};
+    final meesters = <int, ({String titel, int? jaar, String artiest})>{};
     // ALLEEN masters, en dat is een meting die tegenviel. `type=master` levert uitsluitend masters
     // — geprobeerd: 202 masters en nul persingen voor The Police — terwijl de helft van wat
     // `/artists/{id}/releases` teruggeeft persingen zijn. Een tweede ronde op `type=release` erbij
@@ -1140,7 +1149,11 @@ class DiscogsService {
           // sleutel waarop de rest van de discografie vergelijkt.
           var titel = (r['title'] as String? ?? '').trim();
           final streep = titel.indexOf(' - ');
+          final artiest = streep > 0 ? titel.substring(0, streep).trim() : '';
           if (streep > 0) titel = titel.substring(streep + 3).trim();
+          if (id != null && titel.isNotEmpty) {
+            meesters[id] = (titel: titel, jaar: discogsJaar(r['year']), artiest: artiest);
+          }
           // `cover_image` (600×601, q90) en niet `thumb` (150×150, q40). Zie
           // [DiscogsSweep.hoesPerSleutel] voor de meting; `thumb` blijft als terugval, want een
           // kleine hoes is beter dan geen.
@@ -1156,7 +1169,7 @@ class DiscogsService {
         if (totaal == null || p >= totaal.toInt()) break;
       }
     }
-    return DiscogsSweep(perMaster, hoesPerSleutel, hoesPerMaster);
+    return DiscogsSweep(perMaster, hoesPerSleutel, hoesPerMaster, meesters);
   }
 
   /// Alles wat deze artiest zelf uitbracht, voor de discografie.
@@ -1174,11 +1187,13 @@ class DiscogsService {
   /// warmer. Twee pagina's is tweehonderd uitgaves; wie meer heeft, heeft ook geen leesbare lijst meer.
   ///
   /// Loopt door dezelfde [_get] als de rest: baan, cache en foutentelling zitten daar al in.
-  Future<List<DiscoRelease>> artistReleases(int id, {int pages = 2, DiscogsSweep? sweep_}) async {
+  Future<List<DiscoRelease>> artistReleases(int id,
+      {int pages = 2, DiscogsSweep? sweep_, String? naam}) async {
     // Zonder de sweep draagt elke master hier `RecordKind.other`. De aanroeper mag hem meegeven als
     // hij hem toch al ophaalt; zie [artistSweep] voor waarom niet per regel.
     final sweep = sweep_ ?? await artistSweep(id);
     final uit = <DiscoRelease>[];
+    final gezienMasters = <int>{};
     for (var p = 1; p <= pages; p++) {
       final b = await _get('https://api.discogs.com/artists/$id/releases'
           '?sort=year&sort_order=desc&per_page=100&page=$p');
@@ -1193,6 +1208,7 @@ class DiscogsService {
         // Een master is de PLAAT, een release één persing ervan. Beide takken bestaan al aan de
         // andere kant, bij het openen van een album.
         final master = (r['type'] as String? ?? '') == 'master';
+        if (master) gezienMasters.add(rid);
         // De GROTE hoes uit de sweep gaat vóór de eigen `thumb` van deze regel, en dat is een
         // omkering: eerst was de sweep alleen een noodgreep voor regels zónder hoes. Maar `thumb`
         // is hier altijd 150×150 op kwaliteit 40, en de sweep draagt 600×601 op kwaliteit 90 van
@@ -1250,7 +1266,43 @@ class DiscogsService {
       final totaal = (b?['pagination'] as Map<String, dynamic>?)?['pages'] as num?;
       if (totaal == null || p >= totaal.toInt()) break;
     }
+    // DE MASTERS DIE BUITEN DE TWEE PAGINA'S VIELEN, met hun oorspronkelijke jaar.
+    //
+    // De pagina's hierboven lopen van nieuw naar oud, en bij een grote catalogus houden ze op in
+    // deze eeuw: bij Serge Gainsbourg kwam er niets van vóór 2001 binnen. De sweep kende de masters
+    // al — zie [DiscogsSweep.meesters] — en daarmee kost dit geen enkel verzoek. Alleen wat op naam
+    // van deze artiest staat: de zoekopdracht op `artist_id` levert ook platen waar hij op meedoet.
+    if (naam != null && naam.trim().isNotEmpty) {
+      for (final e in sweep.meesters.entries) {
+        if (gezienMasters.contains(e.key)) continue;
+        final m = e.value;
+        if (!doorDezeArtiest(m.artiest, naam)) continue;
+        final hoes = sweep.hoesPerMaster[e.key] ?? '';
+        uit.add(DiscoRelease(
+          title: m.titel,
+          kind: kindFromDiscogs(sweep.formaatPerMaster[e.key] ?? ''),
+          firstDate: m.jaar == null ? null : '${m.jaar}',
+          cover: hoes.isEmpty || hoes.contains('spacer') ? null : hoes,
+          sources: const {DiscoSource.discogs},
+          refs: {DiscoSource.discogs: CatalogRef.discogsMaster(e.key)},
+        ));
+      }
+    }
     return uit;
+  }
+
+  /// Staat deze Discogs-credit op naam van [naam]? Alleen of als één van de namen in een duo.
+  ///
+  /// Discogs nummert naamgenoten ("Oasis (2)") en zet een sterretje bij een andere schrijfwijze; die
+  /// tellen niet mee. "Jane Birkin & Serge Gainsbourg" telt voor allebei, "Various" voor niemand.
+  static bool doorDezeArtiest(String credit, String naam) {
+    String schoon(String s) => artistKey(s.replaceAll('*', '').replaceAll(RegExp(r'\s*\(\d+\)\s*$'), ''));
+    final wie = schoon(naam);
+    if (wie.isEmpty) return false;
+    if (schoon(credit) == wie) return true;
+    return credit
+        .split(RegExp(r'\s*(?:&|,|\+|/|\b(?:and|et|feat\.?|featuring|with|und|y)\b)\s*', caseSensitive: false))
+        .any((deel) => deel.trim().isNotEmpty && schoon(deel) == wie);
   }
 
   /// What Discogs knows about an act: the write-up, who is in it, and every photo it holds.

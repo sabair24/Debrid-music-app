@@ -524,6 +524,13 @@ class MusicBrainzService {
   /// How many requests are waiting for a slot right now, across all lanes.
   static int _queued = 0;
 
+  /// Hoe vaak een "busy" (503/429) geprobeerd wordt, de eerste keer meegeteld. Zie [_get].
+  static const kBusyPogingen = 3;
+
+  /// Hoe er gewacht wordt tussen twee pogingen. Een toets zet hier een kortere klok neer.
+  @visibleForTesting
+  static Future<void> Function(Duration) busyWacht = Future<void>.delayed;
+
   /// Spaced out per host, disk-cached. Null on any failure: a missing album page is a
   /// disappointment, a crashed one is a bug.
   Future<Map<String, dynamic>?> _get(String url, {required String lane, required Duration gap}) async {
@@ -557,9 +564,26 @@ class MusicBrainzService {
         laneTrace?.call('  [$lane] ${wachtte.inSeconds}s in de rij '
             '(nog $_queued wachtend) voor ${Uri.parse(url).path}');
       }
-      final r = await http
+      // "Busy" is geen antwoord maar een verzoek om het straks nog eens te proberen, en zo staat het
+      // er ook: "The MusicBrainz web server is currently busy. Please try again later." Zonder
+      // herkansing werd één 503 een uur lang "deze artiest bestaat niet": op 11-10-2026 om 17:54
+      // mislukte het opzoeken van Serge Gainsbourg, de artiestpagina kreeg nul MusicBrainz-regels,
+      // en dus stond elke plaat op het jaar van zijn digitale heruitgave (Aux armes et cætera 2003
+      // in plaats van 1979). Een tweede poging een paar seconden later lukte gewoon.
+      var r = await http
           .get(Uri.parse(url), headers: {'User-Agent': _ua, 'Accept': 'application/json'})
           .timeout(const Duration(seconds: 12));
+      for (var poging = 1; poging < kBusyPogingen && (r.statusCode == 503 || r.statusCode == 429); poging++) {
+        final vraagt = int.tryParse(r.headers['retry-after'] ?? '');
+        final wacht = Duration(seconds: (vraagt ?? 2 * poging).clamp(1, 10));
+        laneTrace?.call('  [$lane] ${r.statusCode} (busy), poging ${poging + 1} van $kBusyPogingen '
+            'over ${wacht.inSeconds}s voor ${Uri.parse(url).path}');
+        await busyWacht(wacht);
+        await laneSlot(lane, gap);
+        r = await http
+            .get(Uri.parse(url), headers: {'User-Agent': _ua, 'Accept': 'application/json'})
+            .timeout(const Duration(seconds: 12));
+      }
       // 404 from the Cover Art Archive means this pressing has no scans. Very common, and not a
       // failure — it is the signal to fall back to Discogs.
       if (r.statusCode != 200) {

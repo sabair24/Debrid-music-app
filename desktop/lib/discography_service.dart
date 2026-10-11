@@ -87,7 +87,10 @@ class DiscographyService {
   /// v7: "Comp" wordt herkend als Compilation — dat is de ENIGE spelling die
   /// `/artists/{id}/releases` gebruikt, gemeten 1711 keer tegen nul keer "Compilation" voluit — en
   /// een plaat die aan "Various …" gecrediteerd is gaat naar de verzamelaars.
-  static const schema = 'disco|v7';
+  /// v8: de jaren. Een bewaarde lijst van vóór de herkansing bij een MusicBrainz-"busy" en vóór de
+  /// Discogs-masters uit de sweep draagt bij een grote catalogus het jaar van de heruitgave — bij
+  /// Serge Gainsbourg *Aux armes et cætera* op 2003 en *Love on the Beat* op 2015.
+  static const schema = 'disco|v8';
 
   /// Hoe lang een bewaard antwoord meegaat voor er bij Deezer opnieuw wordt gekeken.
   ///
@@ -175,17 +178,27 @@ class DiscographyService {
   }
 
   Future<BronUitkomst> vanMusicBrainz(String naam, {String? bekendeMbid}) async {
+    // `MusicBrainzService` slikt elke fout en geeft dan "niets" terug — ook bij een 503. Of een lege
+    // uitkomst "deze artiest heeft er geen" of "MusicBrainz antwoordde niet" betekent, staat alleen
+    // in deze teller. Zonder dat onderscheid meldde de pagina van Serge Gainsbourg niets bijzonders
+    // terwijl MusicBrainz ontbrak, en stond elke plaat op het jaar van zijn heruitgave.
+    final foutenVoor = MusicBrainzService.transportErrors;
+    BronUitkomst leeg() => BronUitkomst(
+        DiscoSource.musicbrainz,
+        MusicBrainzService.transportErrors > foutenVoor ? BronStatus.onbereikbaar : BronStatus.klaar,
+        const []);
     try {
       var mbid = bekendeMbid;
       if (mbid == null) {
         final a = await mb.resolveArtist(naam);
-        if (a == null) return const BronUitkomst(DiscoSource.musicbrainz, BronStatus.klaar, []);
+        if (a == null) return leeg();
         if (!_zelfdeArtiest(naam, a.name)) {
           return const BronUitkomst(DiscoSource.musicbrainz, BronStatus.andereArtiest, []);
         }
         mbid = a.mbid;
       }
       final groepen = await mb.discographyOf(mbid);
+      if (groepen.isEmpty) return leeg();
       return BronUitkomst(DiscoSource.musicbrainz, BronStatus.klaar, [
         for (final g in groepen)
           DiscoRelease(
@@ -238,7 +251,7 @@ class DiscographyService {
       // miniatuurhoes voor regels die er geen hebben. Hier opgehaald en doorgegeven, zodat hij
       // gegarandeerd één keer gebeurt in plaats van te leunen op de schijfcache.
       final sweep = await discogs.artistSweep(id);
-      final rijen = await discogs.artistReleases(id, sweep_: sweep);
+      final rijen = await discogs.artistReleases(id, sweep_: sweep, naam: naam);
       return BronUitkomst(DiscoSource.discogs, BronStatus.klaar, rijen,
           hoezen: sweep.hoesPerSleutel);
     } catch (_) {
