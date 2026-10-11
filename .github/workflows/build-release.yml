@@ -220,7 +220,7 @@ jobs:
             test/warmtemeter_test.dart test/warmte_log_test.dart test/glas_ipad_test.dart \
             test/hoes_wissel_test.dart test/artiest_wissel_test.dart \
             test/ontbrekend_smal_test.dart test/koude_start_test.dart test/overblok_smal_test.dart \
-            test/wikifotos_test.dart test/kandidatenzeef_test.dart \
+            test/wikifotos_test.dart test/kandidatenzeef_test.dart test/torrentwerk_opruimen_test.dart \
             test/remote_work_test.dart test/nu_speelt_namen_test.dart \
             test/bronnen_stand_test.dart test/torznab_test.dart test/bronkap_test.dart test/hoesplafond_test.dart \
             test/cue_knippen_test.dart test/aria2_selectie_test.dart \

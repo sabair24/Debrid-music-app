@@ -338,6 +338,10 @@ class RemoteDownloadManager extends DownloadManager {
   /// Name of this device, written into the queue item so the PC's list can say who asked.
   String requestedBy = '';
 
+  /// Torrents draaien op de pc; daar ruimt de pc zijn eigen werkmappen op.
+  @override
+  Future<int> ruimDodeTorrentwerkOp() async => 0;
+
   /// Put a request in the queue instead of failing. Returns false when there is no queue to put it
   /// in, so the caller can report the original problem rather than a silent success.
   Future<bool> _enqueueForLater(String kind, String title, Map<String, dynamic> payload) async {

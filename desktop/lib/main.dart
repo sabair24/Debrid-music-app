@@ -1406,6 +1406,11 @@ Future<void> main() async {
     try {
       await fase('resumePending', () => downloads.resumePending(start: false));
     } catch (_) {}
+    // En wat aria2 bij een vorige keer half liet liggen: na een herstart hoort daar niets meer bij.
+    // Zie [DownloadManager.ruimDodeTorrentwerkOp].
+    try {
+      await fase('torrentwerk', () => downloads.ruimDodeTorrentwerkOp());
+    } catch (_) {}
     soulseek.bijEersteGebruik = () => unawaited(downloads.hervatWachtende());
     // FLAC is koning, en dat vraagt om volhouden. De wens naar een lossless kopie staat op schijf en
     // wordt hier weer opgepakt: na de scan, zodat een FLAC die inmiddels van buiten de app is

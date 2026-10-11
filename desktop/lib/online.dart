@@ -1774,6 +1774,42 @@ class DownloadManager extends ChangeNotifier {
     return resumePending();
   }
 
+  /// Werkmappen van torrents die bij een vorige keer bleven liggen, opruimen. Eén keer bij het
+  /// opstarten.
+  ///
+  /// **Waarom.** aria2 start zonder sessiebestand (zie `aria2.dart`): na een herstart kent hij geen
+  /// enkele torrent meer, dus wat er onder [torrentWerkMap] ligt hoort nergens meer bij. Ging de app
+  /// dicht terwijl een torrent liep, dan bleef zijn werkmap staan "tot de volgende download van
+  /// dezelfde plaat hem overneemt" ([_ruimNaSeeden]) — en die kwam nooit. Gevonden op 11-10-2026: zes
+  /// halve torrents, samen zo'n 900 MB, de oudste van 30-08 (Oasis, "Wonderwall" 78 MB binnen toen de
+  /// app om 09:41 dichtging).
+  ///
+  /// Een map die nu wél bij een lopende torrent hoort ([_gidPerTorrent]) blijft staan, voor het geval
+  /// dit ooit later dan bij het opstarten aangeroepen wordt.
+  Future<int> ruimDodeTorrentwerkOp() async {
+    final werk = Directory('$_downloadsRoot${Platform.pathSeparator}$torrentWerkMap');
+    if (!await werk.exists()) return 0;
+    final inGebruik = {
+      for (final h in _gidPerTorrent.keys)
+        if (h.length >= 8) h.substring(0, 8)
+    };
+    var n = 0;
+    await for (final e in werk.list(followLinks: false)) {
+      final naam = e.path.split(Platform.pathSeparator).last;
+      if (inGebruik.contains(naam.toLowerCase())) continue;
+      try {
+        await e.delete(recursive: true);
+        n++;
+      } catch (_) {/* staat er een vast, dan de volgende keer */}
+    }
+    if (n > 0) _log.line('opstarten: $n achtergebleven torrentwerkmap${n == 1 ? '' : 'pen'} opgeruimd');
+    return n;
+  }
+
+  /// Doen alsof deze torrent nu loopt, voor de toets van [ruimDodeTorrentwerkOp].
+  @visibleForTesting
+  void torrentLooptVoorToets(String hash) => _gidPerTorrent[hash.toLowerCase()] = 'toets';
+
   /// Is dit bestand écht wat het zegt? Gemeten zodra het binnen is, nooit ervoor.
   ///
   /// Bij een zoekresultaat kan dit niet: je kunt niet in het bestand van een vreemde kijken zonder het
