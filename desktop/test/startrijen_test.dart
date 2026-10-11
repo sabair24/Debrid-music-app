@@ -330,4 +330,11 @@ void main() {
       expect(uitJaren([hit('A', 'x', '')], {2026}), isEmpty);
     });
   });
+
+  test('de kop van "jouw jaren": geen "jaren 0" voor de jaren 2000', () {
+    expect(jarenKop(1980), 'Jouw jaren 80');
+    expect(jarenKop(1990), 'Jouw jaren 90');
+    expect(jarenKop(2000), 'Jouw jaren 2000');
+    expect(jarenKop(2010), 'Jouw jaren 2010');
+  });
 }

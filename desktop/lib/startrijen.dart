@@ -240,6 +240,10 @@ int? zwaartepuntDecennium(Iterable<int?> jaren, {int drempel = 20, int overslaan
   return gesorteerd[overslaan % gesorteerd.length].key;
 }
 
+/// De kop boven de rij van [zwaartepuntDecennium]: "Jouw jaren 80", en vanaf 2000 het hele jaartal.
+/// `% 100` maakte van 2000 een "Jouw jaren 0" (gezien op de gsm, 11-10-2026) en van 2010 een "10".
+String jarenKop(int decennium) => 'Jouw jaren ${decennium >= 2000 ? decennium : decennium % 100}';
+
 /// De genres waar deze bibliotheek werkelijk over gaat, zwaarste eerst.
 ///
 /// **Waarom uit de bibliotheek en niet uit Deezer.** "Top van dit moment" haalde letterlijk

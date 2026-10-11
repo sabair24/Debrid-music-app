@@ -87,6 +87,25 @@ void main() {
         reason: 'zonder vervaging lost de pil van drie meter afstand op in het donker');
   });
 
+  testWidgets('DE KERN: op een gsm een donkere onderlaag, want daar vervaagt niets', (t) async {
+    // Zonder onderlaag las je "Tracklijst opnieuw ophalen" dwars door de ronde knoppen heen.
+    final onderlaag = find.byWidgetPredicate((w) => w is ColoredBox && w.color == kGlasOnderlaag);
+    t.view.physicalSize = const Size(390, 844);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.reset);
+    await zet(t, GlasKnop.rond(icoon: Icons.arrow_back_rounded, onPressed: () {}));
+    expect(find.byType(BackdropFilter), findsNothing);
+    expect(onderlaag, findsOneWidget);
+
+    t.view.physicalSize = const Size(1400, 900);
+    await zet(t, radio());
+    expect(onderlaag, findsNothing, reason: 'op een pc vervaagt het glas zelf');
+
+    setTvModeForTest(true);
+    await zet(t, radio());
+    expect(onderlaag, findsNothing, reason: 'de tv blijft zoals hij goedgekeurd is');
+  });
+
   testWidgets('DE KERN: hij doet wat een knop doet, ook de ronde', (t) async {
     var getikt = 0;
     await zet(t, radio(() => getikt++));

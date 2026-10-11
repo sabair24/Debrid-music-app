@@ -127,6 +127,22 @@ void main() {
         reason: 'donkerder bovenaan, waar de balk staat, en lichter naar de foto toe');
   });
 
+  testWidgets('DE VAL: op een gsm staat "[ Artiest ]" onder de terugknop, en de naam blijft staan',
+      (t) async {
+    // De ronde terugknop staat op 8 punten en is 44 hoog (`GlasKnop.rond`). Op 44 viel het kopje er
+    // half onder — gezien op de S26, 11-10-2026.
+    t.view.physicalSize = const Size(411, 914);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.reset);
+    await t.pumpWidget(omhulsel(kop()));
+    await t.pump();
+    final vak = t.getRect(find.byType(EditorialeKop));
+    final label = t.getRect(find.text('[ Artiest ]'));
+    expect(label.top - vak.top, greaterThanOrEqualTo(8 + 44 + 4), reason: 'het kopje valt onder de knop');
+    expect(t.getRect(find.text('MICHAEL')).top - vak.top, 44 + label.height + 120,
+        reason: 'de naam staat op dezelfde plek in de foto als voorheen');
+  });
+
   testWidgets('DE GRENS: zonder bloeding is alles zoals het was', (t) async {
     // Telefoon, televisie, en de pc zolang de offline-melding er staat: daar zweeft niets.
     pc(t);

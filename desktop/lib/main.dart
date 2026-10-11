@@ -93,6 +93,8 @@ import 'beeldvorm.dart';
 import 'fps_probe.dart';
 import 'jaarlint.dart';
 import 'overblok.dart';
+import 'ui/wikifoto_beeld.dart';
+import 'wikifotos.dart';
 import 'wikipedia.dart';
 import 'warm_log.dart' show WarmLog;
 import 'warmtemeter.dart';
@@ -13451,7 +13453,7 @@ class _HomeStartViewState extends State<HomeStartView> {
         if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList())),
         // Boven de netwerkrijen: deze twee staan er meteen en zijn altijd raak.
         if (uitDecennium.length >= 4)
-          _section('Jouw jaren ${decennium! % 100}', _localRow(uitDecennium.take(20).toList()),
+          _section(jarenKop(decennium!), _localRow(uitDecennium.take(20).toList()),
               bij: '${uitDecennium.length} platen'),
         if (vergeten.length >= 4)
           _section('Lang niet gedraaid', _localRow(vergeten.take(20).toList()),
@@ -19423,13 +19425,16 @@ class EditorialeKop extends StatelessWidget {
 
             Padding(
               // Omlaag met [bovenBloed]: het vak begint achter de balk, de tekst hoort eronder.
-              padding: EdgeInsets.fromLTRB(marge, (smal ? 44 : 56) + bovenBloed, marge, smal ? 18 : 28),
+              // Op een gsm onder de ronde terugknop (8 + 44 punten): op 44 viel "[ Artiest ]" er half
+              // onder (gezien op 11-10-2026). Wat het kopje zakt, gaat van de witruimte eronder af,
+              // zodat de naam op dezelfde plek in de foto blijft.
+              padding: EdgeInsets.fromLTRB(marge, (smal ? 60 : 56) + bovenBloed, marge, smal ? 18 : 28),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('[ Artiest ]', style: kOpschrift),
-                  SizedBox(height: smal ? 120 : 150),
+                  SizedBox(height: smal ? 104 : 150),
                   // De naam. Geen laatste trap nodig als er geen beeld is: dan draagt hij het
                   // kader alleen, en dat is een compositie in plaats van een gat.
                   for (var i = 0; i < kop.length; i++)
@@ -20046,6 +20051,14 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// Geboren, land, actief, label. Komen mee met de biografie, uit dezelfde respons.
   ArtiestFeiten? _feiten;
 
+  /// Foto's uit het leven van de artiest, per periode, uit de Engelse Wikipedia — zie
+  /// `wikifotos.dart`. [_fotoPerKop] koppelt ze aan de hoofdstukken van [_wiki]; [_geboorteBytes] is
+  /// de jeugdfoto bij "Geboren" op het jaarlint, of null — dan staat daar liever niets dan een
+  /// volwassen foto of een hoes (Saber, 11-10-2026).
+  Map<String, WikiFoto?> _fotoPerKop = const {};
+  WikiFoto? _geboorteFoto;
+  Uint8List? _geboorteBytes;
+
   /// De MBID van deze artiest, als de pagina hem via MusicBrainz geopend heeft.
   ///
   /// Daarmee loopt de weg naar het Wikipedia-artikel over Wikidata en valt er niets te raden. Komt
@@ -20229,6 +20242,23 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // de tekst van TheAudioDB er al. Zo is er nooit een leeg blok, alleen een dat beter wordt.
     final wiki = await WikipediaService().artikel(naam, mbid: _mbid);
     if (mounted && naam == widget.artist.name) setState(() => _wiki = wiki);
+
+    // De foto's per periode, en pas na het artikel: het Wikidata-nummer waarmee het Engelse artikel
+    // gevonden wordt, komt mee met de titel die het artikel opzocht.
+    final fotoDienst = WikiFotoService();
+    final fotos = await fotoDienst.fotos(naam);
+    if (!mounted || naam != widget.artist.name || fotos.isEmpty) return;
+    final geboren = _feiten?.geborenJaar;
+    final geboorte = geboortefoto(fotos, geboren: geboren);
+    final geboorteBytes = geboorte == null ? null : await fotoDienst.bytes(geboorte);
+    if (!mounted || naam != widget.artist.name) return;
+    final koppen = [for (final a in wiki?.afdelingen ?? const <WikiAfdeling>[]) a.kop];
+    final perKop = fotosPerHoofdstuk(fotos, koppen, geboren: geboren);
+    setState(() {
+      _fotoPerKop = {for (var i = 0; i < koppen.length; i++) koppen[i]: perKop[i]};
+      _geboorteFoto = geboorteBytes == null ? null : geboorte;
+      _geboorteBytes = geboorteBytes;
+    });
   }
 
   /// Wat er in de beeldband onder het jaarlint komt te staan.
@@ -20277,13 +20307,19 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // op 10-09-2026 was het gevolg dat een plaat die je niet hebt een half uitgesneden woordmerk
     // naast zijn tekst kreeg — dat leest als een storing, niet als een hoes. Bij een geboortejaar
     // is er nu eenmaal geen hoes en dan is het artiestbeeld wél het juiste antwoord.
+    //
+    // **En bij "Geboren" een foto uit de jeugd, of niets.** Hier stond het portret van TheAudioDB,
+    // en dat was bij Lionel Richie de hoes van "Tuskegee". Saber op 11-10-2026: "zoals geboren of
+    // kindertijd, moet je als dat kan baby en of kinder afbeeldingen tonen". Zie [geboortefoto].
     final bytes = eigen?.correctedCover ??
         eigen?.cover ??
         (punt.soort == Jaarsoort.plaat
             ? null
-            : punt.soort == Jaarsoort.geboorte || punt.soort == Jaarsoort.oprichting
-                ? _art?.thumbBytes
-                : _art?.clearartBytes ?? _art?.backdropBytes);
+            : punt.soort == Jaarsoort.geboorte
+                ? _geboorteBytes
+                : punt.soort == Jaarsoort.oprichting
+                    ? _art?.thumbBytes
+                    : _art?.clearartBytes ?? _art?.backdropBytes);
 
     final url = punt.hoesUrl;
     final heeftHoes = bytes != null || (url != null && url.isNotEmpty);
@@ -20350,6 +20386,13 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       return AspectRatio(aspectRatio: 1, child: vlak(hoes));
     }
 
+    // Dan een foto uit dezelfde periode, uit de Engelse Wikipedia — de Jackson 5 in 1972 bij zijn
+    // jeugd, zijn ster op de Walk of Fame bij zijn overlijden. Zie [fotosPerHoofdstuk].
+    if (_fotoPerKop[afdeling.kop] case final foto?) return WikiFotoBeeld(foto: foto);
+    // Over de jeugd, en geen foto uit de jeugd: niets. Een volwassen foto naast "1949–1968: Jeugd"
+    // is precies wat er gemeld werd (Saber, 11-10-2026).
+    if (kopOverJeugd(afdeling.kop)) return null;
+
     // Wat er van deze artiest op schijf staat, zonder de woordmerken: een logo naast een alinea
     // over zijn jeugd is geen foto maar een sticker.
     final fotos = <Uint8List>[
@@ -20367,8 +20410,16 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       bool heeftHoes) {
     final bib = context.watch<LibraryStore>();
     // De hoes vult de band op de hoogte; de rest van de breedte is voor de tekst.
-    const hoes = kBandHoogte - 56;
-    const reis = .62;
+    //
+    // **Behalve op een gsm.** Daar namen de hoes van 284 punten en de uitgeschoven cd samen meer
+    // ruimte in dan het hele scherm van 411, en kreeg de tekst ernaast niets — op de gsm gezien op
+    // 11-10-2026 bij Lionel Richie: alleen een hoes, geen woord uitleg ("de biografie is niet
+    // leesbaar op gsm"). Dan een kleine hoes, zodat de uitleg ernaast past.
+    final smal = isCompact(context);
+    final hoes = smal ? 112.0 : kBandHoogte - 56;
+    final reis = smal ? .45 : .62;
+    final rand = smal ? 16.0 : 28.0;
+    final tussen = smal ? 16.0 : 36.0;
 
     // Alleen bij een plaat die je HEBT is [AlbumArt] eerlijk bruikbaar: hij zoekt zijn scans op
     // naam bij Discogs, en `pinned`/`roles` slaan nergens op voor een uitgave die niet van jou is.
@@ -20395,11 +20446,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             : kaleBandHoes(bytes: bytes, url: url, maat: hoes, reis: reis);
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
+      padding: EdgeInsets.symmetric(horizontal: rand, vertical: 28),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          if (links != null) ...[links, const SizedBox(width: 36)],
+          if (links != null) ...[links, SizedBox(width: tussen)],
           // De leesmaat ook hier, en dat bleek pas op het scherm: zonder deze grens loopt een
           // albumtekst over de volle veertienhonderd punten door en wordt hij aan de rechterrand
           // afgesneden midden in een zin.
@@ -20449,6 +20500,17 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             style: kKop.copyWith(letterSpacing: -.4)),
         const SizedBox(height: 6),
         Text(feiten.join(' · '), style: kOpschrift),
+        // De jeugdfoto bij "Geboren": wat hij is, en van wie (zie [WikiFoto.vermelding]).
+        if (punt.soort == Jaarsoort.geboorte && _geboorteFoto != null) ...[
+          const SizedBox(height: 10),
+          if (_geboorteFoto!.onderschrift.isNotEmpty)
+            Text(_geboorteFoto!.onderschrift,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13, height: 1.5, color: Color(0xFFC7CBDA))),
+          const SizedBox(height: 4),
+          Text(_geboorteFoto!.vermelding, maxLines: 2, overflow: TextOverflow.ellipsis, style: kLabel),
+        ],
         // Geen uitleg? Dan alleen de feitenregel. Nooit een vulzin en nooit een leeg kader — dat is
         // de regel die elders op deze pagina ook al geldt.
         if (tekst != null && tekst.isNotEmpty) ...[

@@ -340,6 +340,16 @@ class WikipediaService {
     return null;
   }
 
+  /// Het Wikidata-nummer van deze artiest, zoals [titelVoor] het bewaarde — alleen van schijf, zonder
+  /// verzoek. Voor `wikifotos.dart`: de foto's komen uit het Engelse artikel, en dat vind je via dit
+  /// nummer, ook als de biografie zelf Nederlands is.
+  Future<String?> wikidataVoor(String naam) async {
+    final j = await _lees(_naamFile(naam));
+    if (j == null || _isMis(j)) return null;
+    final q = (j['q'] as String?)?.trim() ?? '';
+    return q.isEmpty ? null : q;
+  }
+
   /// De artikeltitel bij een Wikidata-nummer, Nederlands vóór Engels.
   Future<({String taal, String titel})?> _sitelink(String q) async {
     final j = await _haal(Uri.parse('https://www.wikidata.org/w/api.php'

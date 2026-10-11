@@ -131,6 +131,14 @@ class DiscogsSweep {
   bool get isLeeg => formaatPerMaster.isEmpty && hoesPerSleutel.isEmpty;
 }
 
+/// Een jaartal uit een persing of master, of null. Discogs zet `year: 0` waar niemand het jaar
+/// kent, en dat stond als "0 · Rock · Funk / Soul · Pop · UTV Records" boven een album op de gsm
+/// (11-10-2026). Ook bij het teruglezen uit de schijfcache, want daar staan die nullen al.
+int? discogsJaar(Object? v) {
+  final j = DiscogsService.jaarUit(v);
+  return j == null || j <= 0 ? null : j;
+}
+
 class DiscogsEdition {
   final int releaseId;
   final String format; // File / CD / Vinyl / Cassette …
@@ -203,8 +211,8 @@ class DiscogsEdition {
     country: j['country'] as String?,
     notes: j['notes'] as String?,
     barcode: j['barcode'] as String?,
-    year: (j['year'] as num?)?.toInt(),
-    albumYear: (j['albumYear'] as num?)?.toInt(),
+    year: discogsJaar(j['year']),
+    albumYear: discogsJaar(j['albumYear']),
     genres: [for (final g in (j['genres'] as List<dynamic>? ?? const [])) g.toString()],
     styles: [for (final s in (j['styles'] as List<dynamic>? ?? const [])) s.toString()],
     tracklist: [
@@ -900,7 +908,7 @@ class DiscogsService {
       // it is the difference between describing Demon Days and describing whatever came first.
       final m = await _get('https://api.discogs.com/masters/$master');
       final masterTracks = (m?['tracklist'] as List<dynamic>?)?.length ?? 0;
-      final masterYear = (m?['year'] as num?)?.toInt();
+      final masterYear = discogsJaar(m?['year']);
       // Discogs names one pressing per master as the main one. Among equally documented pressings
       // of the same year that is a far better tiebreak than list order, which put Dangerous on a
       // Taiwanese CD when a US one was sitting right beside it.
@@ -976,7 +984,7 @@ class DiscogsService {
         }
         return null;
       }(),
-      year: (b['year'] as num?)?.toInt(),
+      year: discogsJaar(b['year']),
       albumYear: albumYear,
       genres: [for (final g in (b['genres'] as List<dynamic>? ?? const [])) g.toString()],
       styles: [for (final s in (b['styles'] as List<dynamic>? ?? const [])) s.toString()],

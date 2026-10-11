@@ -290,4 +290,21 @@ void masters() {
           greaterThan(0));
     });
   });
+
+  group('jaar 0 is geen jaar', () {
+    // Gezien op de gsm, 11-10-2026: "0 · Rock · Funk / Soul · Pop · UTV Records" boven een album.
+    test('Discogs zet 0 waar het jaar onbekend is', () {
+      expect(discogsJaar(0), isNull);
+      expect(discogsJaar('0'), isNull);
+      expect(discogsJaar(null), isNull);
+      expect(discogsJaar(1998), 1998);
+      expect(discogsJaar('2005-03-01'), 2005);
+    });
+
+    test('ook een persing die al met een 0 in de schijfcache staat', () {
+      final e = DiscogsEdition.fromJson({'releaseId': 7, 'format': 'CD', 'year': 0, 'albumYear': 0});
+      expect(e.year, isNull);
+      expect(e.albumYear, isNull);
+    });
+  });
 }

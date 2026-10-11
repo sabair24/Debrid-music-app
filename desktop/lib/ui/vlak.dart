@@ -381,6 +381,9 @@ final ImageFilter glasVervorming = ImageFilter.compose(
 /// * [plat] is de uitweg voor een televisie, om de reden die bij [balkGlas] staat: geen vervaging, wel
 ///   meer dekking, met dezelfde ophogingen als `glassSurface` — anders lost de pil van drie meter
 ///   afstand op in het donker.
+/// De donkere laag onder plat glas buiten de tv, zie [glasRuit]: de achtergrondkleur op 60 procent.
+const kGlasOnderlaag = Color(0x9907080C);
+
 Widget glasRuit({bool? plat}) {
   // Zonder vervaging ook buiten de tv, met de stevigere vulling die daarbij hoort — de glazen knoppen
   // stonden met tien tot veertien tegelijk op de albumpagina van de iPad. Zie [glasZonderVervaging].
@@ -421,7 +424,16 @@ Widget glasRuit({bool? plat}) {
     child: ClipRRect(
       borderRadius: hoek,
       child: tv
-          ? vulling
+          ? (isTv
+              ? vulling
+              // Op een gsm en een iPad doet de onderlaag wat de vervaging deed: wat eronder door
+              // schuift onleesbaar maken. Met alleen het witte waas las je "Tracklijst opnieuw
+              // ophalen" dwars door de ronde knoppen heen (gsm, 11-10-2026). De tv blijft zoals hij
+              // goedgekeurd is: daar schuift niets onder een knop door.
+              : Stack(
+                  fit: StackFit.expand,
+                  children: [const ColoredBox(color: kGlasOnderlaag), vulling],
+                ))
           : Stack(
               fit: StackFit.expand,
               children: [
