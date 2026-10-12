@@ -266,6 +266,46 @@ void main() {
       expect(find.byKey(const Key('scanmaat')), findsNothing);
     });
 
+    // Op het scherm gezien op 12-10-2026 in 3.9.470, bij Purple Rain: "achter 600×597", maar onder de hoes
+    // van dezelfde Discogs-rij niets. Een FutureBuilder neemt zijn initialData alleen de eerste keer; de
+    // plek begon met het miniatuur uit de versielijst (geen maat) en hield dat vast toen de echte hoes kwam.
+    testWidgets('DE VAL: een Discogs-rij die opgezocht wordt, krijgt ook onder de hoes zijn maat', (tester) async {
+      await tester.pumpWidget(kader(const ScanMaatRegel(
+          img: ChoiceImage('https://i.discogs.com/150.jpg', 'https://i.discogs.com/150.jpg', alleenMiniatuur: true))));
+      await tester.pump();
+      expect(find.byKey(const Key('scanmaat')), findsNothing, reason: 'het miniatuur zegt niets');
+      await tester.pumpWidget(kader(const ScanMaatRegel(
+          img: ChoiceImage('https://i.discogs.com/600.jpg', 'https://i.discogs.com/150.jpg', breedte: 600, hoogte: 597))));
+      expect(find.text('600×597'), findsOneWidget);
+    });
+
+    testWidgets('DE VAL: krijgt een plek een andere scan, dan ook diens maat — niet die van de vorige', (tester) async {
+      await tester.pumpWidget(kader(const ScanMaatRegel(img: ChoiceImage('a', 'a', breedte: 1400, hoogte: 1400))));
+      expect(find.text('1400×1400'), findsOneWidget);
+      // Een rij erboven erbij: dezelfde plek in de lijst, een andere uitgave.
+      await tester.pumpWidget(kader(const ScanMaatRegel(img: ChoiceImage('b', 'b', breedte: 600, hoogte: 597))));
+      expect(find.text('600×597'), findsOneWidget);
+      expect(find.text('1400×1400'), findsNothing);
+    });
+
+    testWidgets('DE VAL: ook een gemeten maat gaat niet mee naar de volgende scan op dezelfde plek', (tester) async {
+      MockClient server(int w) => MockClient((_) async => http.Response.bytes(_png(w, w), 206));
+      await tester.runAsync(() async {
+        await scanMaatVan(const ChoiceImage('https://caa/a.png', 't'), client: server(1400));
+        await scanMaatVan(const ChoiceImage('https://caa/b.png', 't'), client: server(500));
+      });
+      await tester.pumpWidget(kader(const ScanMaatRegel(img: ChoiceImage('https://caa/a.png', 't'))));
+      // Het antwoord hoort bij de echte zone: die even aan de beurt laten.
+      await tester.runAsync(() async {});
+      await tester.pump();
+      expect(find.text('1400×1400'), findsOneWidget);
+      await tester.pumpWidget(kader(const ScanMaatRegel(img: ChoiceImage('https://caa/b.png', 't'))));
+      expect(find.text('1400×1400'), findsNothing, reason: 'dat is de maat van de vorige scan');
+      await tester.runAsync(() async {});
+      await tester.pump();
+      expect(find.text('500×500'), findsOneWidget);
+    });
+
     testWidgets('een maat van vijf cijfers past ook in 58 punten', (tester) async {
       await tester.pumpWidget(kader(const ScanMaatRegel(img: ChoiceImage('u', 't', breedte: 12000, hoogte: 9000))));
       expect(find.text('12000×9000'), findsOneWidget);

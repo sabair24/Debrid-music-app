@@ -25683,29 +25683,42 @@ class ScanMaatRegel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Wat de catalogus al meegaf, meteen en zonder FutureBuilder.
+    //
+    // **Op het scherm gezien op 12-10-2026, in 3.9.470.** Hier stond één FutureBuilder met
+    // `initialData: bekend`. Maar een FutureBuilder neemt `initialData` alleen bij zijn EERSTE
+    // tekening; daarna houdt hij zijn laatste antwoord vast. Een Discogs-rij begint met het miniatuur
+    // uit de versielijst (geen maat: "niets"), en krijgt na het opzoeken op dezelfde plek de echte
+    // hoes van 600×597 — en de regel bleef "niets" zeggen. De achterkant en de cd kwamen er als nieuw
+    // vakje bij en kregen hun maat wél: daarom stond bij Purple Rain wel "achter 600×597" maar geen
+    // maat onder de hoes. En omgekeerd: schuift er een rij boven, dan krijgt deze plek een andere scan
+    // maar hield hij de maat van de vorige.
     final bekend = bekendeMaat(img);
+    if (bekend != null) return _regel(bekend);
     return FutureBuilder<Maat?>(
-      // Dezelfde Future per adres (zie [scanMaatVan]), dus een hertekening meet niet opnieuw.
-      future: bekend == null ? scanMaatVan(img) : null,
-      initialData: bekend,
+      // Per scan een eigen staat, om dezelfde reden. Dezelfde Future per adres (zie [scanMaatVan]),
+      // dus een hertekening meet niet opnieuw.
+      key: ValueKey(img.uri),
+      future: scanMaatVan(img),
       builder: (context, snap) {
         final m = snap.data;
-        if (m == null) return SizedBox(height: groot ? 16 : 12);
-        return FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            groot ? '${maatTekst(m)} pixels' : maatTekst(m),
-            key: const Key('scanmaat'),
-            maxLines: 1,
-            softWrap: false,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                color: kleurVan(scherpteVan(m)), fontSize: groot ? 12.5 : 9.5, fontWeight: FontWeight.w700),
-          ),
-        );
+        return m == null ? SizedBox(height: groot ? 16 : 12) : _regel(m);
       },
     );
   }
+
+  Widget _regel(Maat m) => FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          groot ? '${maatTekst(m)} pixels' : maatTekst(m),
+          key: const Key('scanmaat'),
+          maxLines: 1,
+          softWrap: false,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+              color: kleurVan(scherpteVan(m)), fontSize: groot ? 12.5 : 9.5, fontWeight: FontWeight.w700),
+        ),
+      );
 }
 
 /// De ondergrond van de zweeftip met een scan: donker, zoals de rest van de app.
