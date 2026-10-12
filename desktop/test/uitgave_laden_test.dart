@@ -376,6 +376,33 @@ void main() {
       expect(d?.back?.uri, isNot(d?.front?.uri));
     });
 
+    // Op vorm, zoals de albumpagina: een achterinlay is 1,1 tot 1,5 keer zo breed als de hoes. De kiezer
+    // nam "breder dan 1,4" en anders het eerste beeld dat over was. Echte vormen van Discogs, nagekeken op
+    // de miniaturen (12-10-2026): telkens is het gekozen beeld de achterinlay met de tracklijst.
+    test('DE VAL: Rusland (9321705) — niet de cd, maar de achterinlay', () async {
+      final d = await zoekOp([beeld(1, 494, 480), beeld(2, 498, 480), beeld(3, 559, 480)]);
+      expect(d?.back?.uri, 'https://i.discogs.com/3.jpg', reason: 'beeld 2 is de roze cd');
+    });
+
+    test('DE VAL: Purple Rain (11798563) — niet de binnenkant van het boekje', () async {
+      final d = await zoekOp([beeld(1, 600, 597), beeld(2, 600, 596), beeld(3, 600, 471), beeld(4, 600, 450)]);
+      expect(d?.back?.uri, 'https://i.discogs.com/3.jpg');
+    });
+
+    test('DE VAL: Venezuela (32121567) — niet het opengeklapte doosje van 2,14', () async {
+      final d = await zoekOp(
+          [{...beeld(1, 600, 517), 'type': 'primary'}, beeld(2, 600, 517), beeld(3, 600, 281), beeld(4, 561, 600)]);
+      expect(d?.front?.uri, 'https://i.discogs.com/1.jpg');
+      expect(d?.back?.uri, 'https://i.discogs.com/2.jpg');
+    });
+
+    test('DE GRENS: een dubbele boekjespagina vóór de inlay is niet de achterkant', () async {
+      // Random Access Memories (Discogs 28622347): hoes 1,33, spread 2,04, inlay 1,30 — zie artwork.dart.
+      final d = await zoekOp(
+          [{...beeld(1, 600, 450), 'type': 'primary'}, beeld(2, 600, 294), beeld(3, 600, 462)]);
+      expect(d?.back?.uri, 'https://i.discogs.com/3.jpg');
+    });
+
     test('DE GRENS: met een primary blijft die de hoes', () async {
       final d = await zoekOp([beeld(1, 600, 471), {...beeld(2, 600, 600), 'type': 'primary'}]);
       expect(d?.front?.uri, 'https://i.discogs.com/2.jpg');
