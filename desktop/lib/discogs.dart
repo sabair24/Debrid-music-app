@@ -2664,6 +2664,12 @@ extension DiscogsChoices on DiscogsService {
     for (final i in imgs) {
       if (front == null && i.primary) front = i;
     }
+    // Geen "primary": dan is het eerste beeld de hoes — en dat staat vast vóór de achterkant gekozen
+    // wordt. Dit stond onderaan, en dan was het eerste beeld nog vrij voor de achterkant. Op het scherm
+    // gezien op 12-10-2026 bij "1, 2, 3 Soleils": een Italiaanse uitgave met één beeld (16907574) had
+    // "✓ achterkant" met de hoes erin, en Ukraine (11728335, vier beelden, geen primary) had beeld 1
+    // als hoes én als achterkant. Zelfde regel als [assignRoles].
+    front ??= imgs.isEmpty ? null : imgs.first;
     for (final i in imgs) {
       if (identical(i, front)) continue;
       if (back == null && i.isWide) back = i;
@@ -2691,7 +2697,6 @@ extension DiscogsChoices on DiscogsService {
         break;
       }
     }
-    front ??= imgs.isEmpty ? null : imgs.first;
     return row.withArt(
       front: front == null ? row.front : of(front),
       back: back == null ? null : of(back),

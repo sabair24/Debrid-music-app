@@ -163,6 +163,12 @@ ArtKind guessKind(int index, bool primary, Uint8List? bytes) {
   for (var i = 0; i < primary.length; i++) {
     if (front == null && primary[i]) front = i;
   }
+  // Geen enkel beeld als "primary" aangewezen: dan is het eerste de voorkant, en dat staat vast
+  // VÓÓR de achterkant gekozen wordt. Dit stond onderaan, en dan was het eerste beeld nog vrij toen de
+  // achterkant werd gezocht: bij een uitgave met één beeld werd dat ene beeld hoes én achterkant
+  // (Discogs 16907574 en 4890343, "1, 2, 3 Soleils", 12-10-2026), en bij vier beelden zonder primary
+  // (11728335) zat beeld 1 in beide vakjes.
+  front ??= primary.isEmpty ? null : 0;
   // The sleeve's own shape, which is what a rear inlay is measured against.
   final sleeve = (front != null && front < ratios.length) ? ratios[front] : 1.0;
   for (var i = 0; i < primary.length; i++) {
@@ -183,7 +189,6 @@ ArtKind guessKind(int index, bool primary, Uint8List? bytes) {
       }
     }
   }
-  front ??= primary.isEmpty ? null : 0;
   return (front: front, back: back, disc: disc);
 }
 

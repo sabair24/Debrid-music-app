@@ -18,6 +18,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:debridmusic/discogs.dart';
 import 'package:debridmusic/editions.dart';
 import 'package:debridmusic/metadata.dart';
 import 'package:debridmusic/musicbrainz.dart';
@@ -333,6 +334,52 @@ void main() {
       expect(main, contains('if (mounted && ronde == _zoekRonde) setState(() => _results = totNu);'));
       expect(main, contains('child: _searching && _results.isEmpty'),
           reason: 'de molen alleen zolang er nog niets staat');
+    });
+  });
+
+  // Op het scherm gezien op de pc, 12-10-2026, bij "1, 2, 3 Soleils": rijen zonder "primary"-beeld bij
+  // Discogs toonden hetzelfde beeld als hoes én als achterkant, met "✓ achterkant". Nagevraagd bij
+  // Discogs: 16907574 en 4890343 hebben één beeld, 11728335 heeft er vier, allemaal "secondary".
+  group('Discogs zonder hoofdbeeld', () {
+    Map<String, dynamic> beeld(int n, int w, int h) => {
+          'type': 'secondary',
+          'uri': 'https://i.discogs.com/$n.jpg',
+          'uri150': 'https://i.discogs.com/$n-150.jpg',
+          'width': w,
+          'height': h,
+        };
+    Future<ReleaseChoice?> zoekOp(List<Map<String, dynamic>> beelden) async {
+      late ReleaseChoice? uit;
+      await http.runWithClient(() async {
+        uit = await DiscogsService(AppSettings()..discogsToken = 'proef')
+            .detailOf(ReleaseChoice(source: EditionSource.discogs, releaseId: 42, format: 'CD'));
+      }, () => MockClient((r) async {
+            if (r.url.path == '/releases/42') {
+              return _json({'id': 42, 'title': '1, 2, 3 Soleils', 'images': beelden, 'tracklist': []});
+            }
+            return http.Response('geen beeld', 404); // de miniaturen voor de cd-herkenning
+          }));
+      return uit;
+    }
+
+    test('DE KERN: één beeld is de hoes, en er is geen achterkant', () async {
+      final d = await zoekOp([beeld(1, 600, 600)]);
+      expect(d?.front?.uri, 'https://i.discogs.com/1.jpg');
+      expect(d?.front?.breedte, 600);
+      expect(d?.back, isNull, reason: 'in 3.9.471 stond hier dezelfde hoes, met "✓ achterkant"');
+    });
+
+    test('vier beelden: het eerste is de hoes, de achterkant is een ander', () async {
+      final d = await zoekOp([beeld(1, 592, 600), beeld(2, 600, 463), beeld(3, 590, 600), beeld(4, 569, 585)]);
+      expect(d?.front?.uri, 'https://i.discogs.com/1.jpg');
+      expect(d?.back, isNotNull);
+      expect(d?.back?.uri, isNot(d?.front?.uri));
+    });
+
+    test('DE GRENS: met een primary blijft die de hoes', () async {
+      final d = await zoekOp([beeld(1, 600, 471), {...beeld(2, 600, 600), 'type': 'primary'}]);
+      expect(d?.front?.uri, 'https://i.discogs.com/2.jpg');
+      expect(d?.back?.uri, 'https://i.discogs.com/1.jpg');
     });
   });
 }

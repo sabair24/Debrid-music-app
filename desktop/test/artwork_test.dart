@@ -138,6 +138,25 @@ void main() {
     test('no primary marked: the first scan is the front', () {
       final r = assignRoles([false, false], [1.0, 1.2], <Uint8List?>[_png(_sleeve(60)), _png(_sleeve(15))]);
       expect(r.front, 0);
+      expect(r.back, 1, reason: 'en dus niet ook de achterkant');
+    });
+
+    // Op het scherm gezien op 12-10-2026 bij "1, 2, 3 Soleils": Discogs 16907574 heeft één beeld, zonder
+    // primary, en de kiezer toonde het als hoes én als achterkant ("✓ achterkant").
+    test('DE VAL: één beeld zonder primary is de hoes, en er is geen achterkant', () {
+      final r = assignRoles([false], [1.0], <Uint8List?>[_png(_sleeve(60))]);
+      expect(r.front, 0);
+      expect(r.back, isNull);
+      expect(r.disc, isNull);
+    });
+
+    test('DE VAL: vier beelden zonder primary — het eerste is niet ook de achterkant', () {
+      // Discogs 11728335 (Ukraine): 592×600, 600×463, 590×600, 569×585, allemaal "secondary".
+      final r = assignRoles([false, false, false, false], [592 / 600, 600 / 463, 590 / 600, 569 / 585],
+          <Uint8List?>[_png(_sleeve(60)), _png(_sleeve(15)), _png(_sleeve(200)), _png(_sleeve(90))]);
+      expect(r.front, 0);
+      expect(r.back, isNot(0));
+      expect(r.back, isNotNull);
     });
 
     test('a booklet spread listed before the inlay is not taken for the back', () {
