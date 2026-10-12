@@ -91,6 +91,15 @@ String? voorkantUitCaa(Map<String, dynamic> body) {
   return null;
 }
 
+/// Een scan op zijn vaste adres in het Cover Art Archive: [rol] is `front` of `back`, groot in 1200
+/// en als tegel in 250.
+///
+/// Het archief stuurt door naar het beeld met die rol: de 1200-versie, of het origineel als er geen is.
+/// Nagegaan op 12-10-2026: ook een oude scan waarvan de scanlijst geen 1200-versie noemt, komt zo
+/// binnen (206, het hele bestand van 48 kB); een rol die er niet is geeft meteen een 404.
+ChoiceImage vasteScan(String mbid, String rol) => ChoiceImage(
+    'https://coverartarchive.org/release/$mbid/$rol-1200', 'https://coverartarchive.org/release/$mbid/$rol-250');
+
 /// Het Discogs-artiestnummer uit de `url-rels` van een MusicBrainz-artiest, of null.
 ///
 /// De verwijzing ziet eruit als `https://www.discogs.com/artist/140140`, soms met de naam erachter
@@ -144,6 +153,30 @@ class MbRelease {
   /// When the RECORD came out, as opposed to when this pressing did.
   final int? albumYear;
 
+  /// Wat MusicBrainz zelf over de scans van deze persing zegt (`cover-art-archive`): is er een
+  /// voorkant, een achterkant, en hoeveel scans zijn het in totaal. Null als het antwoord dat veld
+  /// niet droeg.
+  ///
+  /// **Gemeten op 12-10-2026:** van de 40 persingen van Thriller zei de bladerlijst bij 9 "geen
+  /// scans", en alle 9 gaven het archief daarna een 404. De uitgavekiezer vroeg ze toch allemaal na,
+  /// elk een beurt op de `caa`-baan en één tot vier seconden wachten op archive.org — dat die dag bij
+  /// 7 van de 16 persingen van Monkey Business eerst een 500 gaf, en twee keer na 12 s niets.
+  final ({bool voor, bool achter, int aantal})? scanStand;
+
+  /// Of er scans zijn. Null: niet bekend.
+  bool? get heeftScans => scanStand == null ? null : scanStand!.aantal > 0;
+
+  /// Of de scanlijst van het archief iets kan toevoegen aan wat [scanStand] al zegt.
+  ///
+  /// Voor- en achterkant hebben een vast adres (`/front-1200`, `/back-1200`), dus die zijn er zonder
+  /// het archief te vragen. Alleen een cd-scan moet uit de lijst komen, en die kan er alleen zijn als
+  /// er méér scans zijn dan die twee.
+  bool get scanlijstNodig {
+    final s = scanStand;
+    if (s == null) return true;
+    return s.aantal > (s.voor ? 1 : 0) + (s.achter ? 1 : 0);
+  }
+
   const MbRelease({
     required this.mbid,
     required this.title,
@@ -160,6 +193,7 @@ class MbRelease {
     this.tracks = const [],
     this.genres = const [],
     this.albumYear,
+    this.scanStand,
   });
 
   String get major => majorFormat(format);
@@ -258,6 +292,21 @@ class MbRelease {
 
     final rg = j['release-group'];
     final rgDate = rg is Map ? (rg['first-release-date'] ?? '').toString() : '';
+    // Verduisterde scans ("darkened") bestaan wel, maar het archief geeft ze niet: voor de kiezer is
+    // dat hetzelfde als geen. Zonder `count` is het aantal onbekend, en dan beslist de scanlijst.
+    final caa = j['cover-art-archive'];
+    final ({bool voor, bool achter, int aantal})? scanStand;
+    if (caa is! Map || caa['artwork'] is! bool) {
+      scanStand = null;
+    } else if (caa['artwork'] != true || caa['darkened'] == true) {
+      scanStand = (voor: false, achter: false, aantal: 0);
+    } else {
+      scanStand = (
+        voor: caa['front'] == true,
+        achter: caa['back'] == true,
+        aantal: (caa['count'] as num?)?.toInt() ?? 1 << 20,
+      );
+    }
 
     return MbRelease(
       mbid: (j['id'] ?? '').toString(),
@@ -279,6 +328,7 @@ class MbRelease {
           if (g is Map && g['name'] != null) g['name'].toString()
       ],
       albumYear: rgDate.length >= 4 ? int.tryParse(rgDate.substring(0, 4)) : null,
+      scanStand: scanStand,
     );
   }
 }
@@ -570,13 +620,21 @@ class MusicBrainzService {
       // mislukte het opzoeken van Serge Gainsbourg, de artiestpagina kreeg nul MusicBrainz-regels,
       // en dus stond elke plaat op het jaar van zijn digitale heruitgave (Aux armes et cætera 2003
       // in plaats van 1979). Een tweede poging een paar seconden later lukte gewoon.
+      //
+      // Op de `caa`-baan ook een 500, 502 en 504: daar antwoordt archive.org, en dat zegt onder last
+      // gewoon "fout" waar het "straks" bedoelt. Gemeten op 12-10-2026: van 40 scanlijsten van
+      // Thriller op het ritme van de kiezer kwamen er 2 terug als 500. Opnieuw gevraagd gaven ze 23
+      // en 8 scans, de tweede pas bij de tweede poging (en daarna weer twee keer 500). Zonder
+      // herkansing stond zo'n persing een uur lang als "geen scans" in de kiezer.
+      bool straks(int s) =>
+          s == 503 || s == 429 || (lane == 'caa' && (s == 500 || s == 502 || s == 504));
       var r = await http
           .get(Uri.parse(url), headers: {'User-Agent': _ua, 'Accept': 'application/json'})
           .timeout(const Duration(seconds: 12));
-      for (var poging = 1; poging < kBusyPogingen && (r.statusCode == 503 || r.statusCode == 429); poging++) {
+      for (var poging = 1; poging < kBusyPogingen && straks(r.statusCode); poging++) {
         final vraagt = int.tryParse(r.headers['retry-after'] ?? '');
         final wacht = Duration(seconds: (vraagt ?? 2 * poging).clamp(1, 10));
-        laneTrace?.call('  [$lane] ${r.statusCode} (busy), poging ${poging + 1} van $kBusyPogingen '
+        laneTrace?.call('  [$lane] ${r.statusCode} (straks), poging ${poging + 1} van $kBusyPogingen '
             'over ${wacht.inSeconds}s voor ${Uri.parse(url).path}');
         await busyWacht(wacht);
         await laneSlot(lane, gap);
@@ -599,7 +657,8 @@ class MusicBrainzService {
       }
       await _writeCache(url, body);
       return body;
-    } catch (_) {
+    } catch (e) {
+      laneTrace?.call('  [$lane] geen antwoord (${e.runtimeType}) voor ${Uri.parse(url).path}');
       transportErrors++;
       await _writeMiss(url, notFound: false);
       return null;
@@ -1072,6 +1131,12 @@ class MusicBrainzService {
     ReleaseChoice? rowFor(MbRelease r, List<MbImage> images,
         {bool always = false, bool known = true}) {
       ChoiceImage? front, back, disc;
+      // Voor- en achterkant op hun vaste adres, zodra MusicBrainz zegt dat ze er zijn — zonder op de
+      // scanlijst te wachten, en ook als het archief die niet geeft. En dan ook ná die lijst hetzelfde
+      // adres: een rij waarvan de hoes al klaargezet is, mag niet onder je vinger van adres wisselen.
+      final stand = r.scanStand;
+      if (stand != null && stand.voor) front = vasteScan(r.mbid, 'front');
+      if (stand != null && stand.achter) back = vasteScan(r.mbid, 'back');
       for (final i in images) {
         // The archive states what each scan IS — Front, Back, Medium — so nothing here is inferred
         // from pixels. That matters: the Escape CD is a white disc on a white scanner bed, and no
@@ -1191,15 +1256,23 @@ class MusicBrainzService {
       return rows;
     }
 
+    // Wat MusicBrainz zelf al over de scans zegt, hoeft het archief niet te horen: dat is een beurt
+    // op de baan en één tot vier seconden wachten op archive.org, als die al antwoordt. Geen scans
+    // (bij Thriller 9 van de 40), of alleen een voor- en achterkant: die rij is meteen beantwoord.
+    // Zie [MbRelease.scanlijstNodig].
+    for (final (r, _) in candidates) {
+      if (!r.scanlijstNodig) scans[r.mbid] = const <MbImage>[];
+    }
     onPartial?.call(build());
     await Future.wait([
       for (final (r, _) in candidates)
-        art(r.mbid).then((imgs) {
-          scans[r.mbid] = imgs;
-          onPartial?.call(build());
-        }).catchError((_) {
-          scans[r.mbid] = const <MbImage>[];
-        }),
+        if (r.scanlijstNodig)
+          art(r.mbid).then((imgs) {
+            scans[r.mbid] = imgs;
+            onPartial?.call(build());
+          }).catchError((_) {
+            scans[r.mbid] = const <MbImage>[];
+          }),
     ]);
     out.addAll(build());
     return out;

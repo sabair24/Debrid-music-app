@@ -432,6 +432,9 @@ Future<void> main() async {
   // Before anything reads a setting or a cache: on iOS the app's own folder cannot be worked out
   // from the environment, it has to be asked for.
   await initAppPaths();
+  // Gemeten hoesmaten van "Uitgave kiezen" bewaren. Hier en niet in scanmaat.dart zelf, zodat een
+  // toets die de map vergeet niet in de echte app-map schrijft. Zie `scanmaat.dart`.
+  bewaarScanmatenIn(appFile('scanmaten.json'));
   // Before the first widget: whether this is a television decides focus rings, overscan margins
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
@@ -6712,8 +6715,13 @@ class _MetadataEditorState extends State<MetadataEditor> {
     super.dispose();
   }
 
+  /// Welke zoekopdracht de laatste is. Een tussenstand van een vorige mag de treffers van een nieuwe
+  /// niet overschrijven — Enter in het zoekveld werkt ook terwijl er nog gezocht wordt.
+  int _zoekRonde = 0;
+
   Future<void> _search() async {
     FocusScope.of(context).unfocus();
+    final ronde = ++_zoekRonde;
     setState(() {
       _searching = true;
       _searchError = null;
@@ -6732,11 +6740,15 @@ class _MetadataEditorState extends State<MetadataEditor> {
       // hele persingenlijst op in plaats van de eerste twaalf zoekresultaten. Dertig seconden was
       // krap voor één bron en zou hier stelselmatig aflopen — een tijdslimiet die altijd afgaat is
       // geen tijdslimiet maar een storing.
+      //
+      // De treffers verschijnen per bron, zodra die antwoordt — zie [MetadataSearch.search].
       res = await MetadataSearch(context.read<AppSettings>())
           .search(_provider, _query.text,
               track: widget.album.isSingle,
               artist: _artist.text,
-              album: widget.album.isSingle ? '' : _title.text)
+              album: widget.album.isSingle ? '' : _title.text, onDeel: (totNu) {
+            if (mounted && ronde == _zoekRonde) setState(() => _results = totNu);
+          })
           .timeout(Duration(seconds: _provider == 'Alles' ? 75 : 40));
     } on TimeoutException {
       failure = '$_provider antwoordde niet op tijd. Probeer het opnieuw of kies een andere bron.';
@@ -6745,9 +6757,10 @@ class _MetadataEditorState extends State<MetadataEditor> {
           ? 'Discogs gaf een fout: $e\nStaat je Discogs-token in Instellingen?'
           : '$_provider gaf een fout: $e';
     }
-    if (!mounted) return;
+    if (!mounted || ronde != _zoekRonde) return;
     setState(() {
-      _results = res;
+      // Liep de tijd af, dan blijft staan wat de snellere bronnen al gaven.
+      if (failure == null || res.isNotEmpty) _results = res;
       _searching = false;
       _searchError = failure;
     });
@@ -6943,8 +6956,15 @@ class _MetadataEditorState extends State<MetadataEditor> {
                 );
               }),
               const SizedBox(height: 12),
+              // Er staan al treffers, maar een bron zoekt nog: een dun streepje erboven, geen molen
+              // eroverheen.
+              if (_searching && _results.isNotEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 6),
+                  child: LinearProgressIndicator(minHeight: 2, color: _accent, backgroundColor: Colors.transparent),
+                ),
               Expanded(
-                child: _searching
+                child: _searching && _results.isEmpty
                     ? const Center(child: CircularProgressIndicator(color: _accent))
                     : _results.isEmpty
                         ? Center(
@@ -24584,6 +24604,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   bool _mbDone = false, _dgDone = false, _dgFailed = false;
   bool _busy = false;
 
+  /// Hoe lang Discogs-rijen hooguit wachten tot MusicBrainz zijn persingen genoemd heeft. Gemeten:
+  /// 1,4 s gewoonlijk, 3,6 s met één "busy" ertussen. Zie [_load].
+  static const _dgWachtOpMb = Duration(seconds: 4);
+
   /// Which formats to show. Everything Discogs has is fetched; this only narrows what is listed,
   /// so switching filters never costs another request.
   String _filter = 'Alles';
@@ -24762,17 +24786,48 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       unawaited(adb.viaMusicBrainz(groepen).then(adbErbij).catchError((Object _) {}));
     }
 
-    try {
-      // Shown as it fills in: the pressings the moment they are named, then their scans as each
-      // arrives. Waiting for the whole answer is what made this dialog feel broken — the rows were
-      // ready seconds before the artwork the spinner was actually waiting for.
-      final mb = await context.read<MusicBrainzService>().editionChoices(
-          widget.album.artist, widget.album.title,
-          pinnedMbid: pinnedMb, onPartial: _merge, onGroepen: viaGroepen);
-      if (!mounted) return;
-      _merge(mb);
-      setState(() => _mbDone = true);
-    } catch (_) {
+    // MusicBrainz en Discogs TEGELIJK, en niet meer na elkaar.
+    //
+    // Gemeten op 12-10-2026 met een lege cache: MusicBrainz noemt zijn persingen na 1,4 tot 3,6 s,
+    // maar is pas klaar als het archief van élke persing de scans gemeld heeft — 10,7 s bij Monkey
+    // Business en Melody Nelson, 21,8 s bij Thriller. Discogs begon pas dáárna, terwijl het zelf maar
+    // 1,8 tot 2,9 s nodig had voor zijn eerste rijen. Een halve minuut "Discogs vult nog aan" voor
+    // werk dat al die tijd had kunnen lopen.
+    //
+    // De VOLGORDE op het scherm blijft zoals hij was: MusicBrainz boven, Discogs eronder. Wat Discogs
+    // binnenbrengt wacht daarom tot MusicBrainz zijn persingen genoemd heeft (hooguit
+    // [_dgWachtOpMb]), en een MusicBrainz-rij die later pas verschijnt komt achter de laatste
+    // MusicBrainz-rij te staan, niet onderaan. Zo blijft ook het ontdubbelen wat het was: wie het eerst
+    // staat wint, en dat is MusicBrainz.
+    final mbSvc = context.read<MusicBrainzService>();
+    final mbGenoemd = Completer<void>();
+    List<ReleaseChoice>? dgWacht;
+    void laatDiscogsToe() {
+      if (mbGenoemd.isCompleted) return;
+      mbGenoemd.complete();
+      final w = dgWacht;
+      dgWacht = null;
+      if (w != null) _merge(w);
+    }
+
+    // Niet eindeloos: zegt MusicBrainz twee keer "busy", dan komt Discogs gewoon.
+    unawaited(Future<void>.delayed(_dgWachtOpMb).then((_) => laatDiscogsToe()));
+
+    Future<void> vanMusicBrainz() async {
+      try {
+        // Shown as it fills in: the pressings the moment they are named, then their scans as each
+        // arrives. Waiting for the whole answer is what made this dialog feel broken — the rows were
+        // ready seconds before the artwork the spinner was actually waiting for.
+        final mb = await mbSvc.editionChoices(widget.album.artist, widget.album.title,
+            pinnedMbid: pinnedMb,
+            onPartial: (l) {
+              _merge(l, naMusicBrainz: true);
+              laatDiscogsToe();
+            },
+            onGroepen: viaGroepen);
+        if (mounted) _merge(mb, naMusicBrainz: true);
+      } catch (_) {/* dan maar alleen Discogs; de voettekst zegt niets verkeerds */}
+      laatDiscogsToe();
       if (mounted) setState(() => _mbDone = true);
     }
 
@@ -24783,42 +24838,57 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     // een 5xx dezelfde `null` als van "bestaat niet", dus de `catch` hieronder ving in de praktijk
     // nooit iets — en Discogs die plat lag las als "deze plaat heeft geen uitgaves". Het verschil
     // tussen die twee is precies wat de gebruiker moet horen.
-    final foutenVoor = DiscogsService.transportErrors;
-    try {
-      // The rows appear as soon as the versions listing lands — one request for a whole master.
-      // Their scans are fetched per row, as each is scrolled into view: see _wantDetail.
-      await DiscogsService(settings).releaseChoices(
-        widget.album.artist,
-        widget.album.title,
-        pinned: pinnedDg,
-        onPartial: _merge,
-        // De dialoog is dicht. Doorgaan kost requests op een baan van zestig per minuut voor een
-        // venster dat er niet meer is — en die requests gaan af van wat de rest van de app krijgt.
-        gestopt: () => !mounted,
-        // Opgeteld en niet overschreven, net als bij het nummerveld. Vraag je een master op terwijl
-        // de gewone lijst nog binnenkomt, dan zou dit anders "niet alles staat hier" weer uitzetten
-        // op grond van een lijst die daar niets over te zeggen heeft.
-        onEinde: (totaal, meer, andereMasters) {
-          if (!mounted) return;
-          setState(() {
-            if (totaal > _dgTotaal) _dgTotaal = totaal;
-            _dgMeer = _dgMeer || meer;
-            _andereMasters = andereMasters;
-          });
-        },
-      );
-    } catch (_) {
-      _dgFailed = true;
+    Future<void> vanDiscogs() async {
+      final foutenVoor = DiscogsService.transportErrors;
+      try {
+        // The rows appear as soon as the versions listing lands — one request for a whole master.
+        // Their scans are fetched per row, as each is scrolled into view: see _wantDetail.
+        await DiscogsService(settings).releaseChoices(
+          widget.album.artist,
+          widget.album.title,
+          pinned: pinnedDg,
+          // Elke lading is de hele lijst tot nu toe, dus van wat er wacht telt alleen de laatste.
+          onPartial: (l) {
+            if (mbGenoemd.isCompleted) {
+              _merge(l);
+            } else {
+              dgWacht = l;
+            }
+          },
+          // De dialoog is dicht. Doorgaan kost requests op een baan van zestig per minuut voor een
+          // venster dat er niet meer is — en die requests gaan af van wat de rest van de app krijgt.
+          gestopt: () => !mounted,
+          // Opgeteld en niet overschreven, net als bij het nummerveld. Vraag je een master op terwijl
+          // de gewone lijst nog binnenkomt, dan zou dit anders "niet alles staat hier" weer uitzetten
+          // op grond van een lijst die daar niets over te zeggen heeft.
+          onEinde: (totaal, meer, andereMasters) {
+            if (!mounted) return;
+            setState(() {
+              if (totaal > _dgTotaal) _dgTotaal = totaal;
+              _dgMeer = _dgMeer || meer;
+              _andereMasters = andereMasters;
+            });
+          },
+        );
+      } catch (_) {
+        _dgFailed = true;
+      }
+      // Pas "klaar" als de rijen er ook staan: zonder dit kon "Alles opgehaald" onder een lijst
+      // verschijnen waar de Discogs-rijen nog op MusicBrainz wachtten.
+      await mbGenoemd.future;
+      if (!mounted) return;
+      // De teller is van de hele app, dus hij kan ook de mislukking van de achtergrondwarmer
+      // opvangen. Dat is bewust de goede kant om ernaast te zitten: hoogstens zegt de dialoog dat de
+      // lijst onvolledig KAN zijn terwijl hij compleet is. Andersom — stilzwijgend een halve lijst
+      // tonen als het hele antwoord — is de fout waar deze wijziging over gaat.
+      setState(() {
+        _dgDone = true;
+        _dgFailed = _dgFailed || DiscogsService.transportErrors > foutenVoor;
+      });
     }
+
+    await Future.wait([vanMusicBrainz(), vanDiscogs()]);
     if (!mounted) return;
-    // De teller is van de hele app, dus hij kan ook de mislukking van de achtergrondwarmer
-    // opvangen. Dat is bewust de goede kant om ernaast te zitten: hoogstens zegt de dialoog dat de
-    // lijst onvolledig KAN zijn terwijl hij compleet is. Andersom — stilzwijgend een halve lijst
-    // tonen als het hele antwoord — is de fout waar deze wijziging over gaat.
-    setState(() {
-      _dgDone = true;
-      _dgFailed = _dgFailed || DiscogsService.transportErrors > foutenVoor;
-    });
     if (_choices?.isEmpty ?? true) {
       // Over de ontbrekende sleutel staat hier niets: die regel staat altijd onder de lijst, ook
       // als er wél rijen zijn. Hem hier herhalen zou hetzelfde twee keer op één scherm zetten.
@@ -24843,7 +24913,12 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// Geeft terug hoeveel rijen er in het BLOK op [opIndex] terecht kwamen — nul als er niets
   /// veranderde. Het nummerveld leest dat getal, want "de dienst gaf een uitgave terug" en "er staat
   /// nu een rij op het scherm" zijn twee verschillende dingen, en alleen het tweede telt.
-  int _merge(List<ReleaseChoice> nieuw, {int? opIndex, bool ontdubbel = true}) {
+  ///
+  /// [naMusicBrainz]: nieuwe rijen komen achter de laatste MusicBrainz-rij die er al staat (of, als
+  /// er nog geen staat, achter wat TheAudioDB bovenaan zette), en dus nooit onder de Discogs-rijen.
+  /// Sinds beide catalogussen tegelijk laden is "achteraan" voor een late MusicBrainz-rij onder
+  /// tweehonderd Discogs-persingen. Zie [_load].
+  int _merge(List<ReleaseChoice> nieuw, {int? opIndex, bool ontdubbel = true, bool naMusicBrainz = false}) {
     if (!mounted || nieuw.isEmpty) return 0;
     final huidig = [...?_choices];
     final plaats = <String, int>{};
@@ -24888,7 +24963,8 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     }
     if (opIndex == null) {
       if (!iets && _choices != null) return 0;
-      setState(() => _choices = [...huidig, ...erbij]);
+      final k = naMusicBrainz ? plekVoorMusicBrainz(huidig) : huidig.length;
+      setState(() => _choices = [...huidig.take(k), ...erbij, ...huidig.skip(k)]);
       return erbij.length;
     }
     // Op een plek gevraagd: ook een rij die er AL stond schuift daarheen. Zonder dat zou het
@@ -24921,10 +24997,20 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   ///
   /// De laatst gevraagde rij is de rij waar je nú naar kijkt. Dus die eerst.
   final _stapel = <ReleaseChoice>[];
-  bool _detailBezig = false;
 
-  /// De uitgave waar nu een lookup voor loopt, zodat hij er niet nog een keer bij komt.
-  int _bezigMet = 0;
+  /// Hoeveel rijen er tegelijk opgezocht worden: twee, en niet één.
+  ///
+  /// Pas na dit opzoeken kent een Discogs-rij de maat van zijn scans — de versielijst geeft alleen een
+  /// miniatuur van 150 pixels — dus dit tempo is het tempo waarin "1200×1200" onder de rijen
+  /// verschijnt. Gemeten op 12-10-2026: één opzoeking duurt 0,5 tot 2,3 s, waarvan het verzoek zelf de
+  /// kleinste helft; de rest is miniaturen ophalen en de cd herkennen. Met één tegelijk stond de baan
+  /// (één verzoek per 1,1 s) dus de helft van de tijd stil. Met twee blijft hij bezig, en het tempo
+  /// van de verzoeken bepaalt nog steeds de baan zelf, niet dit getal.
+  static const _detailTegelijk = 2;
+  int _detailWerkers = 0;
+
+  /// De uitgaves waar nu een lookup voor loopt, zodat ze er niet nog een keer bij komen.
+  final _bezigMet = <int>{};
 
   /// This row is on screen, so now it is worth knowing what it holds.
   ///
@@ -24941,17 +25027,17 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
   /// Herhalen kan niet blijven duren: een lookup die niets oplevert zet de rij alsnog op
   /// `detailed`, en dan valt hij op de eerste regel hieronder af.
   void _wantDetail(ReleaseChoice c) {
-    if (c.isMb || c.detailed || c.releaseId <= 0 || c.releaseId == _bezigMet) return;
+    if (c.isMb || c.detailed || c.releaseId <= 0 || _bezigMet.contains(c.releaseId)) return;
     _stapel.removeWhere((x) => x.releaseId == c.releaseId);
     _stapel.add(c);
-    if (_detailBezig) return;
-    _detailBezig = true;
+    if (_detailWerkers >= _detailTegelijk) return;
+    _detailWerkers++;
     WidgetsBinding.instance.addPostFrameCallback((_) => _werkStapelAf());
   }
 
   Future<void> _werkStapelAf() async {
     if (!mounted) {
-      _detailBezig = false;
+      _detailWerkers--;
       return;
     }
     final settings = context.read<AppSettings>();
@@ -24963,10 +25049,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       final voor = _choices;
       final j = voor == null ? -1 : voor.indexWhere((x) => x.key == gevraagd.key);
       final c = j >= 0 ? voor![j] : gevraagd;
-      if (c.detailed) continue;
-      _bezigMet = c.releaseId;
+      // De andere werker kan met dezelfde uitgave bezig zijn: die rij stond twee keer op de stapel.
+      if (c.detailed || !_bezigMet.add(c.releaseId)) continue;
       final filled = await DiscogsService(settings).detailOf(c).catchError((_) => null);
-      _bezigMet = 0;
+      _bezigMet.remove(c.releaseId);
       if (!mounted) break;
       final list = _choices;
       if (list == null) continue;
@@ -24978,7 +25064,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       // "asked, and there was nothing", which is true and is what the crosses are for.
       setState(() => _choices = [...list]..[i] = filled ?? list[i].withArt());
     }
-    _detailBezig = false;
+    _detailWerkers--;
   }
 
   /// Haal precies de uitgave op die in het veld staat — of elke uitgave van dat master.
@@ -25297,19 +25383,21 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
               ]),
               const SizedBox(height: 12),
               Expanded(child: _body(pinnedKey)),
-              // MusicBrainz answers in about two seconds and Discogs in fifteen, so the list is
-              // usable long before it is finished. Say which, rather than let a short list look
-              // like the whole answer.
-              if (_mbDone && !_dgDone)
-                const Padding(
-                  padding: EdgeInsets.only(top: 8),
+              // The list is usable long before it is finished. Say which source is still busy, rather
+              // than let a short list look like the whole answer. Sinds beide tegelijk laden kan dat
+              // ook MusicBrainz zijn: de scans van veertig persingen bij het archief kosten bij
+              // Thriller twintig seconden, terwijl Discogs al lang klaar is.
+              if (_choices != null && (!_mbDone || !_dgDone))
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
                   child: Row(children: [
-                    SizedBox(
+                    const SizedBox(
                         width: 11,
                         height: 11,
                         child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
-                    SizedBox(width: 8),
-                    Text('Discogs vult nog aan…', style: TextStyle(color: _muted, fontSize: 11.5)),
+                    const SizedBox(width: 8),
+                    Text(nogBezigTekst(musicBrainz: !_mbDone, discogs: !_dgDone),
+                        style: const TextStyle(color: _muted, fontSize: 11.5)),
                   ]),
                 ),
               // "Zes? Meer niet?" — en niets op het scherm dat die vraag beantwoordt.

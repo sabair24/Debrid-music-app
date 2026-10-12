@@ -167,12 +167,18 @@ class MetadataSearch {
     return const [];
   }
 
+  /// [onDeel] krijgt bij "Alles" de lijst tot nu toe, telkens als er een bron klaar is — in dezelfde
+  /// volgorde als het eindantwoord (Discogs voorop). Gemeten op 12-10-2026 met een lege cache:
+  /// TheAudioDB 0,2 s, Deezer 0,3 s, MusicBrainz 1,3 s, Discogs 3,9 tot 5,5 s. Met alleen het
+  /// eindantwoord stond er tot die laatste een molen over het hele venster, en als MusicBrainz' zoeken
+  /// traag is (12 tot 18 s, zie [MusicBrainzService.editionChoices]) bepaalde dát de wachttijd.
   Future<List<MetaResult>> search(
     String provider,
     String query, {
     bool track = false,
     String artist = '',
     String album = '',
+    void Function(List<MetaResult> totNu)? onDeel,
   }) async {
     if (provider == 'Alles') {
       // Alle drie tegelijk, niet na elkaar: ze wachten op verschillende servers en het duurt dus
@@ -189,13 +195,21 @@ class MetadataSearch {
         }
       }
 
-      final alles = await Future.wait(
-          [veilig('Discogs'), veilig('MusicBrainz'), veilig('TheAudioDB'), veilig('Deezer')]);
+      const bronnen = ['Discogs', 'MusicBrainz', 'TheAudioDB', 'Deezer'];
+      final alles = List<List<MetaResult>>.filled(bronnen.length, const []);
       // Discogs voorop, want dat is de bron die PERSINGEN kent — cd's, catalogusnummers, landen —
       // en dat is waar in dit venster op gekozen wordt. De andere twee vullen aan wat Discogs niet
       // heeft; dubbele persingen vallen weg in [_merged].
       // TheAudioDB vóór Deezer: zelfde soort regel (een album, geen persing), maar met de scherpere hoes.
-      return _merged(alles[0], [...alles[1], ...alles[2], ...alles[3]]);
+      List<MetaResult> samen() => _merged(alles[0], [...alles[1], ...alles[2], ...alles[3]]);
+      await Future.wait([
+        for (var i = 0; i < bronnen.length; i++)
+          veilig(bronnen[i]).then((l) {
+            alles[i] = l;
+            onDeel?.call(samen());
+          }),
+      ]);
+      return samen();
     }
     if (query.trim().isEmpty && album.trim().isEmpty) return [];
     final direct = switch (provider) {

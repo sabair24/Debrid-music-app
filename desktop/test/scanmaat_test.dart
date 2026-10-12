@@ -118,7 +118,7 @@ void main() {
       expect(m, isNull);
     });
 
-    test('een netwerkhik mag de volgende keer opnieuw', () async {
+    test('een netwerkhik wordt meteen opnieuw geprobeerd', () async {
       var keer = 0;
       final client = MockClient((_) async {
         keer++;
@@ -126,8 +126,117 @@ void main() {
         return http.Response.bytes(_png(900, 900), 206);
       });
       const img = ChoiceImage('https://caa/hik.png', 't');
-      expect(await scanMaatVan(img, client: client), isNull);
       expect(await scanMaatVan(img, client: client), (w: 900, h: 900));
+      expect(keer, 2);
+    });
+  });
+
+  // Saber op 12-10-2026: "resolutie staat ook niet altijd vermeld". Gemeten bij Thriller: van twintig
+  // scans tegelijk gaf archive.org er drie tot acht een 500 of 502, en die "nee" bleef de hele sessie
+  // staan. Dezelfde scans daarna één voor één gaven elk gewoon hun maat.
+  group('als het archief "straks" bedoelt', () {
+    setUp(() => scanMaatWacht = (_) async {});
+    tearDown(() => scanMaatWacht = Future<void>.delayed);
+
+    test('DE KERN: een 500 of 502 wordt opnieuw gevraagd, en dan staat de maat er', () async {
+      for (final s in [500, 502, 503, 429]) {
+        resetScanmatenVoorTest();
+        var keer = 0;
+        final m = await scanMaatVan(ChoiceImage('https://caa/$s.png', 't'), client: MockClient((_) async {
+          keer++;
+          return keer == 1 ? http.Response('fout', s) : http.Response.bytes(_png(1200, 1197), 206);
+        }));
+        expect(m, (w: 1200, h: 1197), reason: '$s');
+        expect(keer, 2, reason: '$s');
+      }
+    });
+
+    test('DE GRENS: niet eindeloos — en daarna mag het later opnieuw', () async {
+      var keer = 0;
+      var stuk = true;
+      final client = MockClient((_) async {
+        keer++;
+        return stuk ? http.Response('fout', 500) : http.Response.bytes(_png(600, 600), 206);
+      });
+      const img = ChoiceImage('https://caa/stuk.png', 't');
+      expect(await scanMaatVan(img, client: client), isNull);
+      expect(keer, kScanMaatPogingen);
+      stuk = false;
+      expect(await scanMaatVan(img, client: client), (w: 600, h: 600),
+          reason: 'een "nee" van een haperende server blijft niet de hele sessie staan');
+    });
+
+    test('DE GRENS: een 404 is een antwoord en wordt niet herhaald', () async {
+      var keer = 0;
+      await scanMaatVan(const ChoiceImage('https://caa/weg.png', 't'), client: MockClient((_) async {
+        keer++;
+        return http.Response('nee', 404);
+      }));
+      expect(keer, 1);
+    });
+
+    test('wie snel door een lange lijst bladert, zet er niet honderd tegelijk uit', () async {
+      var nu = 0, hoogst = 0;
+      final client = MockClient((_) async {
+        nu++;
+        if (nu > hoogst) hoogst = nu;
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        nu--;
+        return http.Response.bytes(_png(1000, 1000), 206);
+      });
+      final maten = await Future.wait([
+        for (var i = 0; i < 100; i++) scanMaatVan(ChoiceImage('https://caa/$i.png', 't'), client: client),
+      ]);
+      expect(maten.where((m) => m != null), hasLength(100), reason: 'en ze krijgen allemaal hun maat');
+      expect(hoogst, kScanMaatTegelijk);
+      expect(kScanMaatTegelijk, greaterThanOrEqualTo(24),
+          reason: 'wat op één scherm staat, in één keer: minder tegelijk gaf niet minder fouten, wel 40 s wachten');
+    });
+  });
+
+  group('op schijf onthouden', () {
+    late File bestand;
+    setUp(() {
+      bestand = File('${Directory.systemTemp.createTempSync('dm_scanmaten_').path}${Platform.pathSeparator}scanmaten.json');
+      bewaarScanmatenIn(bestand);
+    });
+    tearDown(() => bewaarScanmatenIn(null));
+
+    test('DE KERN: een tweede keer kiezen vraagt het archief niets meer', () async {
+      const img = ChoiceImage('https://caa/blijft.png', 't');
+      expect(await scanMaatVan(img, client: _server(_png(2826, 2812), [])), (w: 2826, h: 2812));
+      await schrijfScanmatenNu();
+      // Een nieuwe start: niets in het geheugen, wel het bestand.
+      resetScanmatenVoorTest();
+      bewaarScanmatenIn(bestand);
+      final m = await scanMaatVan(img, client: MockClient((_) async => throw StateError('mocht niet gevraagd worden')));
+      expect(m, (w: 2826, h: 2812));
+    });
+
+    test('twee keer schrijven over hetzelfde bestand gaat goed', () async {
+      await scanMaatVan(const ChoiceImage('https://caa/1.png', 't'), client: _server(_png(500, 500), []));
+      await schrijfScanmatenNu();
+      await scanMaatVan(const ChoiceImage('https://caa/2.png', 't'), client: _server(_png(700, 700), []));
+      await schrijfScanmatenNu();
+      final j = jsonDecode(bestand.readAsStringSync()) as Map;
+      expect(j['https://caa/1.png'], [500, 500]);
+      expect(j['https://caa/2.png'], [700, 700]);
+    });
+
+    test('een kapot bestand is een lege kaart, geen storing', () async {
+      bestand.writeAsStringSync('{dit is geen json');
+      bewaarScanmatenIn(bestand);
+      expect(await scanMaatVan(const ChoiceImage('https://caa/x.png', 't'), client: _server(_png(800, 800), [])),
+          (w: 800, h: 800));
+    });
+
+    test('wat niet gemeten kon worden, wordt niet bewaard', () async {
+      scanMaatWacht = (_) async {};
+      addTearDown(() => scanMaatWacht = Future<void>.delayed);
+      await scanMaatVan(const ChoiceImage('https://caa/nee.png', 't'),
+          client: MockClient((_) async => http.Response('fout', 500)));
+      await schrijfScanmatenNu();
+      expect(bestand.existsSync() ? bestand.readAsStringSync() : '{}', isNot(contains('nee.png')));
     });
   });
 

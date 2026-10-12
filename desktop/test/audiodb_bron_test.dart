@@ -274,7 +274,9 @@ void main() {
 
     test('"Alles" vraagt TheAudioDB mee', () {
       final bron = File('lib/metadata.dart').readAsStringSync();
-      expect(bron, contains("veilig('TheAudioDB')"));
+      // Sinds 12-10-2026 per bron in een lijst, zodat elke bron zijn treffers toont zodra hij klaar is.
+      expect(bron, contains("const bronnen = ['Discogs', 'MusicBrainz', 'TheAudioDB', 'Deezer'];"));
+      expect(bron, contains('veilig(bronnen[i])'));
     });
   });
 
@@ -438,7 +440,7 @@ void main() {
     test('"Uitgave kiezen" vraagt via MusicBrainz zodra die de albumnummers noemt', () {
       final main = File('lib/main.dart').readAsStringSync();
       final mb = File('lib/musicbrainz.dart').readAsStringSync();
-      expect(main, contains('onPartial: _merge, onGroepen: viaGroepen'));
+      expect(main, contains('onGroepen: viaGroepen'));
       expect(main, contains('adb.viaMusicBrainz(groepen)'));
       expect(mb, contains('onGroepen?.call('));
     });

@@ -85,6 +85,30 @@ int rijkdom(ReleaseChoice c) =>
     (c.disc != null ? 1 : 0) +
     (c.tracklist.isNotEmpty ? 1 : 0);
 
+/// Waar nieuwe MusicBrainz-rijen in de uitgavekiezer horen: achter de laatste MusicBrainz-rij, of —
+/// staat er nog geen — achter de TheAudioDB-rijen bovenaan. Nooit onder Discogs.
+///
+/// **Waarom dit nodig werd.** Sinds 12-10-2026 laden MusicBrainz en Discogs tegelijk. MusicBrainz
+/// levert een persing waarvan niets bekend is (geen formaat, land, nummer of jaar) pas als zijn scans
+/// binnen zijn, en dat kan na de eerste tweehonderd Discogs-rijen zijn. Achteraan geplakt stond hij
+/// dan onderaan de lijst, tussen de Discogs-persingen.
+int plekVoorMusicBrainz(List<ReleaseChoice> rijen) {
+  final laatste = rijen.lastIndexWhere((c) => c.isMb);
+  if (laatste >= 0) return laatste + 1;
+  var k = 0;
+  while (k < rijen.length && rijen[k].source == EditionSource.audiodb) {
+    k++;
+  }
+  return k;
+}
+
+/// De regel onder de uitgavekiezer zolang er nog een catalogus bezig is.
+String nogBezigTekst({required bool musicBrainz, required bool discogs}) => switch ((musicBrainz, discogs)) {
+      (true, true) => 'MusicBrainz en Discogs vullen nog aan…',
+      (true, false) => 'MusicBrainz vult nog aan…',
+      _ => 'Discogs vult nog aan…',
+    };
+
 /// Het catalogusnummer, of leeg als de uitgave er geen heeft.
 ///
 /// **Het woord "geen" is geen nummer, en beide catalogussen schrijven het anders.** Discogs zet er
