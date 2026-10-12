@@ -345,6 +345,7 @@ jobs:
             test/settings_sync_test.dart test/sharing_grants_test.dart \
             test/soulseek_guard_test.dart test/soulseek_herstart_test.dart \
             test/soulseek_pause_test.dart test/soulseek_zombie_test.dart \
+            test/zoekantwoord_afgekapt_test.dart \
             test/startrijen_test.dart test/startscherm_test.dart \
             test/startup_cover_test.dart test/step2_test.dart \
             test/sweep_order_test.dart test/tag_cache_test.dart \

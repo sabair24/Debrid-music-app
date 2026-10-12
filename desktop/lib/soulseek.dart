@@ -437,7 +437,7 @@ class _Inbound {
 /// Wacht er nog iemand op dit uitgepakte zoekantwoord?
 ///
 /// Het kaartje staat vooraan: één naam-string, dan vier bytes. Dat aflezen kost niets vergeleken
-/// met [SoulseekClient._parseAny], dat tot vijfhonderd bestandsregels uit elkaar haalt. Zie
+/// met [ontleedZoekantwoord], dat tot vijfhonderd bestandsregels uit elkaar haalt. Zie
 /// [SoulseekClient._onFramed] voor de meting waar dit uit voortkomt.
 ///
 /// Bij twijfel wordt er gewoon ontleed: een antwoord dat te kort is om het kaartje uit te lezen
@@ -450,6 +450,88 @@ bool wilZoekantwoord(Uint8List uitgepakt, Set<int> actieveTickets) {
   r.str(); // de naam van de peer
   if (r.remaining < 4) return true;
   return actieveTickets.contains(r.u32());
+}
+
+/// Een uitgepakt FileSearchResponse: het kaartje en de bestanden, zonder filter. Een binnenkomende
+/// verbinding heeft het kaartje nodig om te weten bij WELKE zoekopdracht de treffers horen.
+///
+/// **Gooit nooit.** In start.log stond (vermoedelijk 07-10-2026, op 3.9.453) een ONGEVANGEN
+/// RangeError uit deze ontleder: het antwoord was 11867 bytes, en de lezer wilde het aantal kenmerken
+/// lezen op plaats 11867. Naam en grootte waren nog binnen; daarna hield het op. Er werd alleen aan
+/// het begin van elke regel gekeken of er nog vijf bytes waren, en de rest werd blind gelezen. Dat
+/// gebeurt in een stroomluisteraar ([_Inbound._onData]), en daar vangt niemand iets op.
+///
+/// Nu staat vóór elk getal de vraag of het er helemaal is. Een bestand telt alleen als zijn hele regel
+/// binnen is: houdt het antwoord halverwege op, dan komen de bestanden ervóór terug en de rest niet.
+/// De staart (vrije plaatsen, snelheid, wachtrij) ontbreekt dan ook; wat daar zou staan is een stuk
+/// van de halve regel, dus blijven die op hun nulwaarde.
+///
+/// En de kenmerken worden allemaal gelezen. Er werden er hooguit tien gelezen, en een peer die er meer
+/// stuurde schoof elke volgende regel scheef: de rest van zijn kenmerken werd gelezen als de kop van
+/// het volgende bestand.
+(int, List<SoulseekFile>) ontleedZoekantwoord(Uint8List uitgepakt) {
+  final r = _R(uitgepakt);
+  final peerUser = r.str();
+  final ticket = r.remaining >= 4 ? r.u32() : -1;
+  final count = r.remaining >= 4 ? r.u32().clamp(0, 500) : 0;
+  final files = <SoulseekFile>[];
+  for (var i = 0; i < count; i++) {
+    if (r.remaining < 5) break;
+    r.u8(); // entry type
+    // Een naam die langer is dan wat er nog staat kapt [_R.str] af tot het eind van het bericht. Dan
+    // is er geen grootte meer, en valt de regel bij de volgende vraag af: een halve naam wordt zo
+    // nooit een bestand. Hetzelfde geldt voor de extensie en het aantal kenmerken.
+    final filename = r.str();
+    if (r.remaining < 8) break;
+    final size = r.u64();
+    r.str(); // legacy ext
+    if (r.remaining < 4) break;
+    final numAttr = r.u32();
+    if (r.remaining < numAttr * 8) break;
+    int? bitrate, dur;
+    var vbr = false;
+    // Alles wat de peer stuurt wordt onthouden, niet alleen wat we vandaag gebruiken. Type 0, 1 en 2
+    // zijn bitrate, duur en VBR — maar er zijn er meer, en de vraag is welke er in de praktijk
+    // binnenkomen. De app las ze wel van de lijn en gooide ze meteen weg.
+    final kenmerken = <int, int>{};
+    int? sr, bits;
+    for (var a = 0; a < numAttr; a++) {
+      final t = r.u32();
+      final v = r.u32();
+      kenmerken[t] = v;
+      if (t == 0) {
+        bitrate = v;
+      } else if (t == 1) {
+        dur = v;
+      } else if (t == 2) {
+        vbr = v != 0;
+      } else if (t == 4) {
+        // Sample rate. Gemeten op een echte zoekopdracht: bij lossless bestanden komt deze altijd
+        // mee en komt er juist géén bitrate — 44100, 88200, 96000 en 176400 op twaalf van de twaalf.
+        sr = v;
+      } else if (t == 5) {
+        bits = v; // bitdiepte; alleen ooit 16 of 24
+      }
+    }
+    _noteerKenmerken(filename, kenmerken);
+    files.add(SoulseekFile(
+        username: peerUser,
+        filename: filename,
+        size: size,
+        bitrate: bitrate,
+        durationSec: dur,
+        isVbr: vbr,
+        sampleRate: sr,
+        bitDepth: bits));
+  }
+  final heel = files.length == count;
+  final freeSlots = heel && r.remaining > 0 ? r.boolean() : false;
+  final speed = heel && r.remaining >= 4 ? r.u32() : 0;
+  final queueLen = heel && r.remaining >= 4 ? r.u32() : 0;
+  return (
+    ticket,
+    [for (final f in files) f.copyWith(freeSlots: freeSlots, speed: speed, queueLength: queueLen)]
+  );
 }
 
 /// Hoe lang een BINNENGEKOMEN peerverbinding stil mag blijven voor hij dichtgaat.
@@ -503,6 +585,11 @@ class SoulseekClient {
 
   /// ticket → sink for results arriving on INCOMING connections.
   final Map<int, void Function(List<SoulseekFile>)> _searchSinks = {};
+
+  /// Een zoekkaartje zonder zoekopdracht: zo kan een nep-peer op de luisterpoort een antwoord
+  /// afleveren zonder dat er bij Soulseek ingelogd wordt.
+  @visibleForTesting
+  void zetZoekkaartjeVoorTest(int ticket, void Function(List<SoulseekFile>) sink) => _searchSinks[ticket] = sink;
 
   /// token → handler for a peer we asked the SERVER to make call us back (ConnectToPeer). This
   /// is how you reach a FIREWALLED uploader: we can't dial them, so the server tells them to dial
@@ -612,7 +699,7 @@ class SoulseekClient {
     // tijdslimiet ([_SearchRun.settle]), maar de antwoorden bleven dáárna nog dertig seconden
     // binnenstromen en werden allemaal uitgepakt, ontleed en weggegooid.
     if (!wilZoekantwoord(uitgepakt, _searchSinks.keys.toSet())) return;
-    final (ticket, files) = _parseAny(uitgepakt);
+    final (ticket, files) = ontleedZoekantwoord(uitgepakt);
     final sink = _searchSinks[ticket];
     if (sink != null && files.isNotEmpty) sink(files);
   }
@@ -1238,9 +1325,11 @@ class SoulseekClient {
       var count = 0;
       final sub = conn.messages.listen((payload) {
         count++;
-        final code = _R(payload).u32();
+        // Een bericht korter dan zijn eigen code: niets te lezen. Zonder deze regel gooide het in
+        // deze luisteraar, en de try eromheen vangt daar niets van op.
+        final code = payload.length >= 4 ? _R(payload).u32() : -1;
         if (code == 9) {
-          final (ticket, files) = _parseAny(_zlib(Uint8List.sublistView(payload, 4)));
+          final (ticket, files) = ontleedZoekantwoord(_zlib(Uint8List.sublistView(payload, 4)));
           final sink = _searchSinks[ticket];
           if (sink != null && files.isNotEmpty) sink(files);
           if (!done.isCompleted) done.complete();
@@ -1253,66 +1342,6 @@ class SoulseekClient {
     } catch (_) {} finally {
       peer?.destroy();
     }
-  }
-
-  /// Parse a FileSearchResponse and return its ticket + files (no filtering) — incoming
-  /// connections need the ticket to know WHICH search the results belong to.
-  (int, List<SoulseekFile>) _parseAny(Uint8List data) {
-    final r = _R(data);
-    final peerUser = r.str();
-    final ticket = r.remaining >= 4 ? r.u32() : -1;
-    final count = r.remaining >= 4 ? r.u32().clamp(0, 500) : 0;
-    final files = <SoulseekFile>[];
-    for (var i = 0; i < count; i++) {
-      if (r.remaining < 5) break;
-      r.u8(); // entry type
-      final filename = r.str();
-      final size = r.u64();
-      r.str(); // legacy ext
-      final numAttr = r.u32().clamp(0, 10);
-      int? bitrate, dur;
-      var vbr = false;
-      // Alles wat de peer stuurt wordt onthouden, niet alleen wat we vandaag gebruiken. Type 0, 1 en 2
-      // zijn bitrate, duur en VBR — maar er zijn er meer, en de vraag is welke er in de praktijk
-      // binnenkomen. De app las ze wel van de lijn en gooide ze meteen weg.
-      final kenmerken = <int, int>{};
-      int? sr, bits;
-      for (var a = 0; a < numAttr; a++) {
-        final t = r.u32();
-        final v = r.u32();
-        kenmerken[t] = v;
-        if (t == 0) {
-          bitrate = v;
-        } else if (t == 1) {
-          dur = v;
-        } else if (t == 2) {
-          vbr = v != 0;
-        } else if (t == 4) {
-          // Sample rate. Gemeten op een echte zoekopdracht: bij lossless bestanden komt deze altijd
-          // mee en komt er juist géén bitrate — 44100, 88200, 96000 en 176400 op twaalf van de twaalf.
-          sr = v;
-        } else if (t == 5) {
-          bits = v; // bitdiepte; alleen ooit 16 of 24
-        }
-      }
-      _noteerKenmerken(filename, kenmerken);
-      files.add(SoulseekFile(
-          username: peerUser,
-          filename: filename,
-          size: size,
-          bitrate: bitrate,
-          durationSec: dur,
-          isVbr: vbr,
-          sampleRate: sr,
-          bitDepth: bits));
-    }
-    final freeSlots = r.remaining > 0 ? r.boolean() : false;
-    final speed = r.remaining >= 4 ? r.u32() : 0;
-    final queueLen = r.remaining >= 4 ? r.u32() : 0;
-    return (
-      ticket,
-      [for (final f in files) f.copyWith(freeSlots: freeSlots, speed: speed, queueLength: queueLen)]
-    );
   }
 
   // Single-file download now lives in [SlskSession.download] — it reuses ONE login per batch
@@ -2060,20 +2089,26 @@ class SlskSession {
       }
 
       final psub = pmsgs.listen((payload) {
+        // Een te kort bericht van de peer wordt overgeslagen. Dit is een stroomluisteraar: een lezer
+        // die voorbij het eind leest gooit hier een fout die niemand opvangt (zie [ontleedZoekantwoord]).
+        if (payload.length < 4) return;
         final r = _R(payload);
         final code = r.u32();
         if (code == 41) {
+          if (r.remaining < 5) return; // kaartje + toegestaan
           r.u32();
           if (r.boolean()) {
-            // Always read it (the reader has to advance), and prefer it over the search's figure:
-            // this is the peer telling us what it is about to send.
-            final stated = r.u64();
-            if (stated > 0) fileSize.v = stated;
+            // Prefer it over the search's figure: this is the peer telling us what it is about to send.
+            if (r.remaining >= 8) {
+              final stated = r.u64();
+              if (stated > 0) fileSize.v = stated;
+            }
           } else {
             deny = r.str();
             if (deny!.toLowerCase().contains('queued')) noteQueued();
           }
         } else if (code == 40) {
+          if (r.remaining < 8) return; // richting + kaartje
           r.u32();
           final tok = r.u32();
           r.str();
