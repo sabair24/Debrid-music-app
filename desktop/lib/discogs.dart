@@ -2670,9 +2670,13 @@ extension DiscogsChoices on DiscogsService {
     // "✓ achterkant" met de hoes erin, en Ukraine (11728335, vier beelden, geen primary) had beeld 1
     // als hoes én als achterkant. Zelfde regel als [assignRoles].
     front ??= imgs.isEmpty ? null : imgs.first;
+    // De achterkant op vorm: een achterinlay, gemeten tegen de hoes — dezelfde regel als de albumpagina
+    // ([kanAchterinlayZijn]). Hier stond "breder dan 1,4", en dat haalt een inlay van 1,2 tot 1,3
+    // vrijwel nooit; zie daar wat er dan als achterkant verscheen.
+    final hoesVorm = front != null && front.height > 0 ? front.width / front.height : 1.0;
     for (final i in imgs) {
       if (identical(i, front)) continue;
-      if (back == null && i.isWide) back = i;
+      if (back == null && i.height > 0 && kanAchterinlayZijn(i.width / i.height, hoesVorm)) back = i;
     }
     // The disc candidates, tested together. Still "the first one that reads as a disc wins" — the
     // order below decides, not whichever download happens to finish first — but the thumbnails are

@@ -128,7 +128,15 @@ bool looksLikeDisc(Uint8List bytes) {
 /// The upper bound is the only thing being added here. Ordering still decides between the
 /// candidates that pass, because on real releases the back cover is listed early and no measurement
 /// separates it from a single booklet page of the same shape. That is what the picker is for.
-bool _couldBeInlay(double ratio, double sleeve) => ratio > 1.1 && ratio <= sleeve * 1.5;
+///
+/// Openbaar sinds 12-10-2026: de uitgavekiezer (`DiscogsService._detail`) koos de achterkant op "breder
+/// dan 1,4", en een achterinlay is 1,2 tot 1,3 — dus vrijwel nooit op vorm, en dan won het eerste beeld
+/// dat over was. Bij Rusland (Discogs 9321705) was dat de cd, bij Purple Rain (11798563) de binnenkant van
+/// het boekje, bij Venezuela (32121567) een foto van het opengeklapte doosje. Met deze regel was het
+/// bij alle drie de achterinlay met de tracklijst; bij vijftien andere uitgaves veranderde er niets.
+bool kanAchterinlayZijn(double ratio, double sleeve) => ratio > 1.1 && ratio <= sleeve * 1.5;
+
+bool _couldBeInlay(double ratio, double sleeve) => kanAchterinlayZijn(ratio, sleeve);
 
 /// A back cover, as opposed to a front cover.
 ///
