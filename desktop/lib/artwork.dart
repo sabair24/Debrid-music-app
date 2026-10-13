@@ -1,4 +1,5 @@
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
@@ -86,36 +87,35 @@ enum ArtKind { front, back, disc, other }
 
 /// Is this a scan of a disc?
 ///
-/// It looks for the one thing only a disc has: **the hole**. Dead centre there is a punched circle
-/// of nothing, so it scans as a small patch of pure backing — flat, even, with no detail at all —
-/// and the printed face around it is plainly different.
+/// Een cd is een ronde schijf op een ondergrond. Drie dingen samen, gemeten in [meetSchijf]:
+///  * **de rand** — net binnen de rand van het beeld (90 en 95 % van de halve breedte) is het de
+///    schijf, en daarbuiten, in de vier hoeken, de ondergrond; die twee verschillen (`rand > 10`);
+///  * **de naaf** — rond het midden, iets verder dan het gat (9 tot 16 %), is een cd egaal: het gat,
+///    de doorzichtige naaf, de stapelring. Een hoes of boekje heeft daar druk (`naaf < 15`);
+///  * **de ondergrond** — alles buiten de cirkel is even egaal: scannerdeksel, wit vel, zwart doek
+///    (`achtergrond < 30`). Een rechthoekige scan loopt met zijn druk door tot in de hoeken.
 ///
-/// The earlier version tested brightness instead: pale surround, pale centre, and a much darker
-/// face between them. That worked on a black disc and failed on every light one. Measured on the
-/// real scans, Enrique's *Escape* CD is white on a white scanner bed — corners 250, centre 244,
-/// face 231 — while a blank booklet page from the very same release reads 198/201/186. The two
-/// shapes are indistinguishable by brightness, so no threshold could ever separate them.
+/// **Waarom niet meer "het gat".** Tot 13-10-2026 eiste dit een volkomen vlak gat (spreiding ≤ 4 op
+/// een cirkeltje van 6 %). Op de miniaturen waar de uitgavekiezer mee werkt — 150 pixels, JPEG van
+/// lage kwaliteit — haalt zelfs een gewone cd-scan dat vaak niet, en een cd die in zijn doosje
+/// gefotografeerd is nooit (Saber, 12-10-2026: de roze cd van Discogs 9321705 werd niet herkend,
+/// spreiding ±49). Gemeten op twee sets met bekend antwoord:
+///  * 138 Discogs-miniaturen, met het oog gelabeld: oud 19 van 41 cd's, 1 keer ten onrechte; nu 28 van
+///    41, 0 keer ten onrechte;
+///  * 201 scans uit het Cover Art Archive, daar door mensen gelabeld ("Medium" = de cd; twee die als
+///    "Spine" of zonder type geüpload waren, bleken ook cd's): oud 51 van 73, 2 keer ten onrechte; nu
+///    62 van 73, 0 keer ten onrechte.
+/// De drempels zijn op de Discogs-set gekozen en gaven op de andere set dezelfde uitslag; een kleine
+/// verschuiving van elke drempel geeft 25–28 en 56–63 cd's, met 0–2 valse. Wat nog gemist wordt, is
+/// vooral een cd die scheef of klein in een foto staat, en de zilveren onderkant — die laatste is als
+/// draaiende cd ook niet gewenst.
 ///
-/// The hole separates them cleanly. Sampled around a small circle at the centre, the spread of
-/// brightness is 0–1 for every disc measured and 8–23 for every sleeve, tray, obi and booklet page:
-/// paper and print always carry texture, a hole never does. The second test — that the hole differs
-/// from the face around it — rejects an image that is simply flat all over.
-///
-/// Deliberately conservative still. Calling a back cover a disc would spin the wrong picture out
-/// from behind the sleeve, which looks broken; failing to spot one only costs the animation.
+/// Nog altijd voorzichtig. Calling a back cover a disc would spin the wrong picture out from behind
+/// the sleeve, which looks broken; failing to spot one only costs the animation.
 bool looksLikeDisc(Uint8List bytes) {
-  final s = _sample(bytes);
+  final s = meetSchijf(bytes);
   if (s == null) return false;
-  // A hole has no detail. Print always does.
-  if (s.holeSpread > 4) return false;
-  // A disc is round: its four corners are all the same backing. A rectangular scan runs artwork
-  // into them, and a booklet page with a pale middle used to pass the two tests above on that
-  // alone. Generous — a scanner lid vignettes, and a shadow down one side is still backing.
-  if (s.cornerSpread > 45) return false;
-  // And it has to stand apart from the printed face, or this is just a flat image.
-  final apart = (s.hole - s.faceInner).abs();
-  final apartOuter = (s.hole - s.faceOuter).abs();
-  return (apart > apartOuter ? apart : apartOuter) > 25;
+  return s.rand > 10 && s.naaf < 15 && s.achtergrond < 30;
 }
 
 /// Is this shape a plausible rear inlay, given the sleeve it belongs to?
@@ -200,23 +200,16 @@ ArtKind guessKind(int index, bool primary, Uint8List? bytes) {
   return (front: front, back: back, disc: disc);
 }
 
-class _Sample {
-  /// Brightness at the very centre, and how much it varies around that little circle.
-  final double hole, holeSpread;
+/// De drie metingen waarop [looksLikeDisc] beslist. Zie daar waarom juist deze.
+@visibleForTesting
+typedef SchijfMeting = ({double rand, double naaf, double achtergrond});
 
-  /// Brightness of the face at two radii — a CD's clear hub reaches further out on some pressings,
-  /// so one sample alone can land on backing rather than print.
-  final double faceInner, faceOuter;
-
-  /// How much the four corners differ from each other. Around a round disc they are all the same
-  /// backing; on a rectangular scan they are four different bits of artwork.
-  final double cornerSpread;
-  const _Sample(
-      this.hole, this.holeSpread, this.faceInner, this.faceOuter, this.cornerSpread);
-}
-
-/// Brightness around three concentric circles: the hole, and the face at two radii.
-_Sample? _sample(Uint8List bytes) {
+/// Meet een plaatje zoals [looksLikeDisc] het bekijkt, of null als het niet te lezen is.
+///
+/// Op 128×128 en in helderheid. Ringen met 72 punten rond het midden; "buiten" is alles buiten de
+/// ingeschreven cirkel (de vier hoeken samen).
+@visibleForTesting
+SchijfMeting? meetSchijf(Uint8List bytes) {
   img.Image? im;
   try {
     im = img.decodeImage(bytes);
@@ -224,74 +217,53 @@ _Sample? _sample(Uint8List bytes) {
     return null;
   }
   if (im == null || im.width < 32 || im.height < 32) return null;
-  // 128 wide so the hole — about an eighth of the radius on a CD — is still several pixels across.
   const n = 128;
   final t = img.copyResize(im, width: n, height: n);
 
-  double lum(double x, double y) {
-    final p = t.getPixel(x.round().clamp(0, n - 1), y.round().clamp(0, n - 1));
+  double lum(int x, int y) {
+    final p = t.getPixel(x.clamp(0, n - 1), y.clamp(0, n - 1));
     return .299 * p.r + .587 * p.g + .114 * p.b;
   }
 
-  /// Mean and spread of brightness around a circle at [fraction] of the half-width.
-  (double, double) ring(double fraction) {
-    const steps = 36;
-    final r = fraction * n / 2;
-    final vals = <double>[];
-    for (var i = 0; i < steps; i++) {
-      final a = i * 6.2831853 / steps;
-      vals.add(lum(n / 2 + r * _cos(a), n / 2 + r * _sin(a)));
+  /// Gemiddelde en spreiding van de helderheid op een cirkel op [deel] van de halve breedte.
+  (double, double) ring(double deel) {
+    const stappen = 72;
+    final r = deel * n / 2;
+    var som = 0.0, kwad = 0.0;
+    for (var i = 0; i < stappen; i++) {
+      final a = i * 2 * math.pi / stappen;
+      final v = lum((n / 2 + r * math.cos(a)).round(), (n / 2 + r * math.sin(a)).round());
+      som += v;
+      kwad += v * v;
     }
-    var mean = 0.0;
-    for (final v in vals) {
-      mean += v;
+    final gem = som / stappen;
+    return (gem, math.sqrt(math.max(0.0, kwad / stappen - gem * gem)));
+  }
+
+  var som = 0.0, kwad = 0.0, aantal = 0;
+  for (var y = 0; y < n; y++) {
+    for (var x = 0; x < n; x++) {
+      final dx = x - n / 2 + .5, dy = y - n / 2 + .5;
+      if (dx * dx + dy * dy <= (n / 2 * 1.02) * (n / 2 * 1.02)) continue;
+      final v = lum(x, y);
+      som += v;
+      kwad += v * v;
+      aantal++;
     }
-    mean /= vals.length;
-    var varSum = 0.0;
-    for (final v in vals) {
-      varSum += (v - mean) * (v - mean);
-    }
-    return (mean, _sqrt(varSum / vals.length));
   }
+  final buiten = aantal == 0 ? 0.0 : som / aantal;
+  final buitenSpreiding = aantal == 0 ? 0.0 : math.sqrt(math.max(0.0, kwad / aantal - buiten * buiten));
 
-  final (hole, spread) = ring(0.06); // inside the hole
-  final (inner, _) = ring(0.20); // hub / inner label
-  final (outer, _) = ring(0.45); // printed face
-
-  // The four corners. A disc is round, so whatever is behind it shows in all four the same —
-  // scanner lid, white backdrop, black cloth. A rectangular scan carries printed artwork right into
-  // its corners, and those rarely agree.
-  const m = 6.0, far = n - 6.0;
-  final corners = [lum(m, m), lum(far, m), lum(m, far), lum(far, far)];
-  var cMean = 0.0;
-  for (final v in corners) {
-    cMean += v;
-  }
-  cMean /= corners.length;
-  var cVar = 0.0;
-  for (final v in corners) {
-    cVar += (v - cMean) * (v - cMean);
-  }
-  return _Sample(hole, spread, inner, outer, _sqrt(cVar / corners.length));
-}
-
-/// Newton's method — this file deliberately avoids dragging in dart:math for a handful of calls.
-double _sqrt(double v) {
-  if (v <= 0) return 0;
-  var x = v;
-  for (var i = 0; i < 20; i++) {
-    x = (x + v / x) / 2;
-  }
-  return x;
-}
-
-// Tiny local trig so this file doesn't drag in dart:math for two calls.
-double _cos(double a) => _sin(a + 1.5707963);
-double _sin(double a) {
-  // Bhaskara-style approximation, plenty accurate for picking sample points.
-  var x = a % 6.2831853;
-  if (x > 3.1415927) return -_sin(x - 3.1415927);
-  return 16 * x * (3.1415927 - x) / (49.348022 - 4 * x * (3.1415927 - x));
+  final (rand90, _) = ring(.90);
+  final (rand95, _) = ring(.95);
+  final (_, naaf09) = ring(.09);
+  final (_, naaf12) = ring(.12);
+  final (_, naaf16) = ring(.16);
+  return (
+    rand: (math.max(rand90, rand95) - buiten).abs(),
+    naaf: math.min(naaf09, math.min(naaf12, naaf16)),
+    achtergrond: buitenSpreiding,
+  );
 }
 
 /// How many pixels wide this artwork actually needs to be decoded at.

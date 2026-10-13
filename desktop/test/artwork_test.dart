@@ -1,3 +1,4 @@
+import 'dart:math' show Random, cos, sin;
 import 'dart:typed_data';
 
 import 'package:debridmusic/artwork.dart';
@@ -87,6 +88,61 @@ void main() {
 
   test('later secondaries are booklet pages and stay unassigned', () {
     expect(guessKind(4, false, _png(_sleeve(15))), ArtKind.other);
+  });
+
+  // Sinds 13-10-2026 op rand, naaf en ondergrond in plaats van "een volkomen vlak gat". Gemeten op 138
+  // Discogs-miniaturen en 201 gelabelde scans uit het Cover Art Archive: 28 i.p.v. 19 van 41 en 62
+  // i.p.v. 51 van 73 cd's herkend, en 0 i.p.v. 3 keer ten onrechte. Zie looksLikeDisc.
+  group('rand, naaf en ondergrond', () {
+    test('DE VAL: een cd met iets in het gat — de as van het doosje, zoals Discogs 9321705', () {
+      final im = img.Image(width: 300, height: 300);
+      img.fill(im, color: img.ColorRgb8(200, 200, 200)); // tray
+      img.fillCircle(im, x: 150, y: 150, radius: 146, color: img.ColorRgb8(170, 40, 120)); // roze opdruk
+      img.fillCircle(im, x: 150, y: 150, radius: 27, color: img.ColorRgb8(215, 215, 215)); // doorzichtige naaf
+      // In het gat: de as met zijn tandjes, en dus geen egaal vlak.
+      for (var i = 0; i < 8; i++) {
+        final a = i * 3.14159 / 4;
+        img.drawLine(im,
+            x1: 150, y1: 150, x2: (150 + 9 * cos(a)).round(), y2: (150 + 9 * sin(a)).round(),
+            color: img.ColorRgb8(40, 40, 40), thickness: 2);
+      }
+      expect(looksLikeDisc(_png(im)), isTrue, reason: 'de oude regel eiste een vlak gat en zag deze nooit');
+    });
+
+    test('een cd als Discogs-miniatuur: 150 pixels en JPEG van lage kwaliteit', () {
+      final klein = img.copyResize(_disc(), width: 150);
+      expect(looksLikeDisc(Uint8List.fromList(img.encodeJpg(klein, quality: 40))), isTrue);
+    });
+
+    test('DE GRENS: een boekjespagina met een witte middenvlek is geen cd', () {
+      // Wit tot in de hoeken, tekst in een ring rond een leeg midden. De oude regel zag een "vlak gat"
+      // dat verschilde van de tekst eromheen, met egale hoeken — en noemde dit een cd.
+      final im = _sleeve(250);
+      final rnd = Random(7);
+      for (var y = 60; y < 240; y++) {
+        for (var x = 60; x < 240; x++) {
+          final dx = x - 150, dy = y - 150;
+          if (dx * dx + dy * dy < 30 * 30) continue;
+          final v = rnd.nextBool() ? 30 : 240;
+          im.setPixelRgb(x, y, v, v, v);
+        }
+      }
+      expect(looksLikeDisc(_png(im)), isFalse);
+    });
+
+    test('DE GRENS: iets ronds zonder naaf — een rond logo of een foto in een cirkel — is geen cd', () {
+      final im = _sleeve(250);
+      final rnd = Random(11);
+      for (var y = 0; y < 300; y++) {
+        for (var x = 0; x < 300; x++) {
+          final dx = x - 150, dy = y - 150;
+          if (dx * dx + dy * dy > 146 * 146) continue;
+          final v = 40 + rnd.nextInt(180);
+          im.setPixelRgb(x, y, v, v ~/ 2, 255 - v);
+        }
+      }
+      expect(looksLikeDisc(_png(im)), isFalse, reason: 'rond, maar met druk tot in het midden');
+    });
   });
 
   test('unreadable bytes never crash the page', () {

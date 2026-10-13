@@ -2670,21 +2670,18 @@ extension DiscogsChoices on DiscogsService {
     // "✓ achterkant" met de hoes erin, en Ukraine (11728335, vier beelden, geen primary) had beeld 1
     // als hoes én als achterkant. Zelfde regel als [assignRoles].
     front ??= imgs.isEmpty ? null : imgs.first;
-    // De achterkant op vorm: een achterinlay, gemeten tegen de hoes — dezelfde regel als de albumpagina
-    // ([kanAchterinlayZijn]). Hier stond "breder dan 1,4", en dat haalt een inlay van 1,2 tot 1,3
-    // vrijwel nooit; zie daar wat er dan als achterkant verscheen.
-    final hoesVorm = front != null && front.height > 0 ? front.width / front.height : 1.0;
-    for (final i in imgs) {
-      if (identical(i, front)) continue;
-      if (back == null && i.height > 0 && kanAchterinlayZijn(i.width / i.height, hoesVorm)) back = i;
-    }
+    // Eerst de cd, dan pas de achterkant — zoals [assignRoles] het per beeld doet. Andersom kon een cd
+    // die in zijn doosje gefotografeerd is (vorm 1,1 tot 1,5; Discogs 36004678 is 600×525) als
+    // achterinlay gekozen worden vóór er naar cd's gekeken werd, en dan kwam hij als cd niet meer aan
+    // bod.
+    //
     // The disc candidates, tested together. Still "the first one that reads as a disc wins" — the
     // order below decides, not whichever download happens to finish first — but the thumbnails are
     // 150px and off the rate-limited path, so fetching a handful at once costs less than waiting
     // for each in turn. Capped, because a release can carry thirty scans.
     final maybeDisc = [
       for (final i in imgs)
-        if (!identical(i, front) && !identical(i, back) && !i.isWide) i
+        if (!identical(i, front) && !i.isWide) i
     ].take(6).toList();
     final discBytes = await Future.wait([for (final i in maybeDisc) fetchImage(i.thumb)]);
     // Buiten de tekendraad, en dat is hier geen detail maar het verschil tussen een venster dat
@@ -2693,6 +2690,14 @@ extension DiscogsChoices on DiscogsService {
     // [eersteSchijfBuitenDeTekendraad].
     final k = await eersteSchijfBuitenDeTekendraad(discBytes);
     if (k != null) disc = maybeDisc[k];
+    // De achterkant op vorm: een achterinlay, gemeten tegen de hoes — dezelfde regel als de albumpagina
+    // ([kanAchterinlayZijn]). Hier stond "breder dan 1,4", en dat haalt een inlay van 1,2 tot 1,3
+    // vrijwel nooit; zie daar wat er dan als achterkant verscheen.
+    final hoesVorm = front != null && front.height > 0 ? front.width / front.height : 1.0;
+    for (final i in imgs) {
+      if (identical(i, front) || identical(i, disc)) continue;
+      if (back == null && i.height > 0 && kanAchterinlayZijn(i.width / i.height, hoesVorm)) back = i;
+    }
     // No inlay-shaped scan: fall back to the convention that the first spare secondary is the back.
     if (back == null) {
       for (final i in imgs) {

@@ -17,6 +17,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:debridmusic/discogs.dart';
 import 'package:debridmusic/editions.dart';
@@ -27,6 +28,7 @@ import 'package:debridmusic/settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:image/image.dart' as img;
 
 http.Response _json(Object body, [int status = 200]) => http.Response.bytes(utf8.encode(jsonEncode(body)), status,
     headers: {'content-type': 'application/json; charset=utf-8'});
@@ -97,6 +99,15 @@ MockClient _mb(List<Map<String, dynamic>> persingen, List<String> archief,
       }
       return http.Response('niet nagebootst: $u', 404);
     });
+
+/// Een nagemaakte cd: witte ondergrond, donkere opdruk tot net binnen de rand, een wit gat.
+Uint8List _cdPng() {
+  final im = img.Image(width: 150, height: 150);
+  img.fill(im, color: img.ColorRgb8(250, 250, 250));
+  img.fillCircle(im, x: 75, y: 75, radius: 73, color: img.ColorRgb8(30, 30, 30));
+  img.fillCircle(im, x: 75, y: 75, radius: 12, color: img.ColorRgb8(250, 250, 250));
+  return Uint8List.fromList(img.encodePng(im));
+}
 
 void main() {
   setUp(() {
@@ -348,7 +359,7 @@ void main() {
           'width': w,
           'height': h,
         };
-    Future<ReleaseChoice?> zoekOp(List<Map<String, dynamic>> beelden) async {
+    Future<ReleaseChoice?> zoekOp(List<Map<String, dynamic>> beelden, {Set<int> cds = const {}}) async {
       late ReleaseChoice? uit;
       await http.runWithClient(() async {
         uit = await DiscogsService(AppSettings()..discogsToken = 'proef')
@@ -357,7 +368,10 @@ void main() {
             if (r.url.path == '/releases/42') {
               return _json({'id': 42, 'title': '1, 2, 3 Soleils', 'images': beelden, 'tracklist': []});
             }
-            return http.Response('geen beeld', 404); // de miniaturen voor de cd-herkenning
+            // De miniaturen voor de cd-herkenning: een nagemaakte cd voor wie in [cds] staat.
+            final nr = int.tryParse(RegExp(r'/(\d+)-150\.jpg$').firstMatch(r.url.path)?.group(1) ?? '');
+            if (nr != null && cds.contains(nr)) return http.Response.bytes(_cdPng(), 200);
+            return http.Response('geen beeld', 404);
           }));
       return uit;
     }
@@ -400,6 +414,15 @@ void main() {
       // Random Access Memories (Discogs 28622347): hoes 1,33, spread 2,04, inlay 1,30 — zie artwork.dart.
       final d = await zoekOp(
           [{...beeld(1, 600, 450), 'type': 'primary'}, beeld(2, 600, 294), beeld(3, 600, 462)]);
+      expect(d?.back?.uri, 'https://i.discogs.com/3.jpg');
+    });
+
+    test('DE VAL: een cd in zijn doosje (vorm 1,14) is de cd, en niet de achterkant', () async {
+      // Discogs 36004678 heeft zo'n foto van 600×525. Werd de achterkant op vorm gekozen vóór er naar
+      // cd's gekeken werd, dan was dit de "achterinlay" en kwam hij als cd nooit meer aan bod.
+      final d = await zoekOp(
+          [{...beeld(1, 600, 600), 'type': 'primary'}, beeld(2, 600, 525), beeld(3, 600, 471)], cds: {2});
+      expect(d?.disc?.uri, 'https://i.discogs.com/2.jpg');
       expect(d?.back?.uri, 'https://i.discogs.com/3.jpg');
     });
 
