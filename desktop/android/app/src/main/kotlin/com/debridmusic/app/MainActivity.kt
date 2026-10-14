@@ -210,6 +210,20 @@ class MainActivity : AudioServiceActivity() {
                 }
             })
 
+        // "Test buitenverbinding": een paar verzoeken over mobiele data, ook met wifi aan. Zie
+        // Buitenproef.kt en lib/buitenproef.dart.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "debridmusic/buiten")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "proef" -> {
+                        val doelen = call.argument<List<String>>("doelen") ?: emptyList()
+                        val pin = call.argument<String>("pin") ?: ""
+                        Buitenproef.proef(applicationContext, doelen, pin) { uit -> result.success(uit) }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // Bijwerken vanuit de app. Zie lib/updater.dart voor de kant die de APK binnenhaalt.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "debridmusic/updater")
             .setMethodCallHandler { call, result ->

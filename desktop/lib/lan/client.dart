@@ -621,6 +621,8 @@ class RemoteClient {
         urls: [
           for (final u in (j['urls'] as List? ?? const [])) '$u',
           for (final u in (j['thuis'] as List? ?? const [])) '$u',
+          // De eigen deur naar buiten (https, alleen met de pin): de wedloop probeert hem alleen versleuteld.
+          for (final u in (j['buiten'] as List? ?? const [])) '$u',
         ],
         pin: (j['pin'] ?? '').toString(),
         tlsPoort: (j['tlsPoort'] as num?)?.toInt() ?? 0,

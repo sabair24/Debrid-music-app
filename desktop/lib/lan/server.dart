@@ -131,6 +131,7 @@ class LanServer {
     this.certificaat,
     this.tlsPoort = kTlsPoort,
     this.publiekPoort,
+    this.buitenAdres,
     ValueNotifier<String?>? rodeMelding,
     GrantStore? grants,
   })  : grants = grants ?? GrantStore(),
@@ -181,6 +182,10 @@ class LanServer {
 
   /// De poort voor buiten, of null zolang de deur naar buiten niet aan staat (stap 7). 0 in toetsen.
   final int? publiekPoort;
+
+  /// Het adres van de eigen deur naar buiten (`https://<publiek>:<poort>`), of null zolang die niet open
+  /// is. Gaat mee in `/api/uitwijk`, zodat een toestel het al kent voor het de deur uit gaat.
+  final Uri? Function()? buitenAdres;
 
   /// Een rode melding voor op de pc: iets wat op misbruik van een sleutel wijst. Zie [_ruil] en de
   /// TLS-sleutel die op 47820 aankwam.
@@ -1925,6 +1930,8 @@ class LanServer {
       // De pin is geen geheim: hij zegt alleen welk certificaat bij deze pc hoort. Een toestel leert
       // hem hier, thuis of via Tailscale, en vertrouwt daarna alleen dat certificaat.
       if (c != null) 'pin': c.pin,
+      // De eigen deur naar buiten: alleen versleuteld, alleen met de pin. Zie `deur.dart`.
+      if (buitenAdres?.call() != null) 'buiten': ['${buitenAdres!()}'],
       if (c != null && _tls != null) 'tlsPoort': _tls!.port,
     });
   }

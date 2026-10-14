@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -10,6 +11,7 @@ import '../settings.dart';
 import '../warm_log.dart';
 import '../paths.dart';
 import 'certificaat.dart';
+import 'deur.dart';
 import 'discovery.dart';
 import 'ids.dart';
 import 'net.dart';
@@ -76,6 +78,14 @@ class LanSharing extends ChangeNotifier {
   /// gemaakt; zonder certificaat draait alleen 47820, zoals voorheen.
   PcCertificaat? _certificaat;
 
+  /// De deur naar buiten in de modem (`deur.dart`). Alleen aan als "Bereikbaar van buitenaf" aan staat,
+  /// de versleutelde verbinding aan staat, en 47821 echt luistert. Nooit in een toets (poort 0).
+  late final DeurNaarBuiten deur = DeurNaarBuiten(log: _upnpLog.line)..addListener(notifyListeners);
+  late final WarmLog _upnpLog = WarmLog('$logDir${Platform.pathSeparator}upnp.log');
+
+  /// Moet de deur naar buiten open? Zie [deur].
+  bool get _deurGewenst => settings.lanEnabled && settings.versleuteld && settings.deurNaarBuiten;
+
   /// De pin van dit certificaat, voor de hartslag in het account (geen geheim). Leeg zonder certificaat.
   String get pin => _certificaat?.pin ?? '';
 
@@ -98,7 +108,12 @@ class LanSharing extends ChangeNotifier {
   /// Every address this PC answers on, the ones that survive leaving the house first. That order
   /// is what makes [primaryUrl] and the cloud relay hand out the useful one without either of them
   /// having to know what Tailscale is.
-  List<String> get addresses => [..._remote, ..._home];
+  List<String> get addresses => [
+        ..._remote,
+        ..._home,
+        // De eigen deur, versleuteld: een toestel probeert hem alleen met de pin (zie `adreswedloop.dart`).
+        if (deur.adresVoorToestellen != null) '${deur.adresVoorToestellen}',
+      ];
 
   /// Only the ones that stop at the front door — so the settings panel can label them honestly.
   List<String> get homeAddresses => _home;
@@ -166,7 +181,9 @@ class LanSharing extends ChangeNotifier {
     // A port change has to go through a full restart — you cannot rebind a listening socket.
     // De noodrem om (`settings.versleuteld`): ook dat kan alleen met een volledige herstart, want de
     // versleutelde ingangen gaan open of dicht met de server.
-    final remOm = current != null && (current.certificaat != null) != (settings.versleuteld && _certificaat != null);
+    final remOm = current != null &&
+        ((current.certificaat != null) != (settings.versleuteld && _certificaat != null) ||
+            (current.publiekPoort != null) != _deurGewenst);
     if (current != null && (!wanted || current.port != settings.lanPort || remOm)) {
       await _discovery?.stop();
       _discovery = null;
@@ -179,6 +196,7 @@ class LanSharing extends ChangeNotifier {
       return;
     }
     if (!wanted) {
+      unawaited(deur.zetUit());
       _error = null;
       _home = const [];
       _remote = const [];
@@ -219,12 +237,21 @@ class LanSharing extends ChangeNotifier {
       certificaat: settings.versleuteld ? _certificaat : null,
       // Poort 0 in een toets: dan ook hier vrij kiezen, en nooit de echte 47822 van de draaiende app.
       tlsPoort: settings.lanPort == 0 ? 0 : kTlsPoort,
-      // De deur naar buiten (47821) gaat pas open met stap 7, als jij hem aanzet.
+      // De deur naar buiten (47821): alleen als jij hem aanzet. Poort 0 in een toets.
+      publiekPoort: _deurGewenst && _certificaat != null ? (settings.lanPort == 0 ? 0 : kPubliekPoort) : null,
       rodeMelding: rodeMelding,
+      buitenAdres: () => deur.adresVoorToestellen,
       grants: grants,
     );
     _error = await server.start();
     _server = _error == null ? server : null;
+    // De deur in de modem: alleen als 47821 echt luistert, en nooit met poort 0 (een toets mag de
+    // echte modem nooit raken).
+    if (_server?.publiekBoundPort != null && settings.lanPort != 0) {
+      unawaited(deur.zetAan());
+    } else {
+      unawaited(deur.zetUit());
+    }
     if (_server != null) {
       final discovery = LanDiscovery(
         port: _server!.boundPort,
@@ -320,6 +347,7 @@ class LanSharing extends ChangeNotifier {
 
   @override
   void dispose() {
+    unawaited(deur.zetUit());
     _discovery?.stop();
     _server?.dispose();
     state.dispose();

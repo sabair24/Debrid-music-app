@@ -17,6 +17,7 @@ import 'player.dart' show Speakerbediening;
 import 'package:flutter/material.dart';
 
 import 'lan/client.dart';
+import 'lan/verbindingsstand.dart' show kAlleenThuisSpeaker, vanBuitenaf;
 import 'models.dart';
 import 'tv.dart';
 import 'ui/kleuren.dart';
@@ -377,11 +378,16 @@ class _SpeakerPickerState extends State<SpeakerPicker> {
                       title: d.name,
                       subtitle: _describe(d),
                       selected: widget.target.device?.id == d.id,
-                      onTap: () {
-                        widget.target.select(d);
-                        widget.onPickedRemote?.call(d);
-                        Navigator.pop(context);
-                      },
+                      // Van buiten geen nieuwe speaker starten (de pc zou het toch weigeren); de speaker
+                      // die al speelt blijft te bedienen.
+                      onTap: vanBuitenaf(widget.client.endpoint.baseUrl) && widget.target.device?.id != d.id
+                          ? () => ScaffoldMessenger.of(context)
+                              .showSnackBar(const SnackBar(content: Text(kAlleenThuisSpeaker)))
+                          : () {
+                              widget.target.select(d);
+                              widget.onPickedRemote?.call(d);
+                              Navigator.pop(context);
+                            },
                     ),
               ],
             ),

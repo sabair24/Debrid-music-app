@@ -113,6 +113,47 @@ void main() {
     expect(s.tlsBoundPort, isNotNull);
   });
 
+  test('"Bereikbaar van buitenaf": standaard uit; aan opent 47821, uit sluit hem — en in een toets nooit de modem', () async {
+    final settings = AppSettings()
+      ..lanEnabled = true
+      ..lanPort = 0;
+    expect(settings.deurNaarBuiten, isFalse, reason: 'een poort in de modem is jouw beslissing');
+    final s = sharing(settings);
+    addTearDown(() async {
+      settings.lanEnabled = false;
+      await s.applySettings();
+    });
+    await s.applySettings();
+    expect(s.server!.publiekBoundPort, isNull, reason: 'standaard dicht');
+
+    settings.deurNaarBuiten = true;
+    await s.applySettings();
+    final buiten = s.server!.publiekBoundPort;
+    expect(buiten, isNotNull, reason: 'de versleutelde ingang voor buiten luistert');
+    expect(s.deur.aan, isFalse, reason: 'met poort 0 (een toets) vraagt de app de modem nooit iets');
+
+    // Zonder versleutelde verbinding geen deur: de witte lijst staat alleen op de versleutelde ingang.
+    settings.versleuteld = false;
+    await s.applySettings();
+    expect(s.server!.publiekBoundPort, isNull);
+    settings.versleuteld = true;
+
+    settings.deurNaarBuiten = false;
+    await s.applySettings();
+    expect(s.server!.publiekBoundPort, isNull);
+    Future<bool> open(int poort) async {
+      try {
+        final sock = await Socket.connect(InternetAddress.loopbackIPv4, poort, timeout: const Duration(seconds: 3));
+        sock.destroy();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    expect(await open(buiten!), isFalse, reason: 'uit is echt dicht');
+  });
+
   test('de noodrem overleeft een herstart van de app', () {
     final a = AppSettings()..versleuteld = false;
     final b = AppSettings()..applyJson(a.toJson());

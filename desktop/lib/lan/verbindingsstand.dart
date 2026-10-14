@@ -20,6 +20,15 @@ import 'tokens.dart' show toestelWeg;
 /// Langs welke weg dit toestel nu met de pc praat.
 enum Verbindingsweg { thuis, tailscale, rechtstreeks }
 
+/// Wat van buiten (de eigen deur, 47821) niet kan, en waarom — vooraf grijs in plaats van een weigering
+/// achteraf (stap 8.4). De pc weigert het daar toch (`weigerVanBuiten`, `server.dart`).
+const kAlleenThuisBijwerken = 'Je pc bijwerken kan alleen thuis of via Tailscale.';
+const kAlleenThuisSpeaker = 'Van buitenaf kan muziek alleen hier starten. Een speaker die al speelt, kan je '
+    'wel pauzeren, stoppen en zachter zetten.';
+
+/// Praat dit toestel nu langs de eigen deur van buiten met de pc?
+bool vanBuitenaf(Uri? adres) => adres != null && adres.scheme == 'https' && wegNaar(adres) == Verbindingsweg.rechtstreeks;
+
 /// De weg naar dit adres. Een IP-adres via [toestelWeg] (dezelfde indeling als in de toestellenlijst
 /// op de pc); een naam: `*.ts.net` is Tailscale, een naam zonder punt of op `.local` is thuis, de rest
 /// is rechtstreeks.

@@ -170,6 +170,40 @@ void main() {
     expect(s.sessie.doorgever, isNull, reason: 'geen isolate voor niets');
   });
 
+  test('de eigen deur naar buiten gaat mee in /api/uitwijk, alleen als hij open is, en de gsm onthoudt hem', () async {
+    final p = await pc();
+    final g = p.grants.nieuweSleutel(deviceId: 'gsm-van-saber-01', deviceName: 'S26', metTls: true);
+    // Een tweede pc-server met een buitenadres: de deur staat open.
+    Uri? deur;
+    final s = LanServer(
+      library: p.server.library,
+      token: 'gedeelde-sleutel',
+      state: LanStateStore(File('${pcRoot.path}/state2.json')),
+      pairing: PairingStore(),
+      port: 0,
+      settings: AppSettings()..serverId = 'pc-saber-0001',
+      certificaat: proefCertificaat,
+      tlsPoort: 0,
+      grants: p.grants,
+      buitenAdres: () => deur,
+    );
+    expect(await s.start(), isNull);
+    servers.add(s);
+    final e = RemoteEndpoint(
+      baseUrl: Uri.parse('https://127.0.0.1:${s.tlsBoundPort}'),
+      token: g.token,
+      serverId: 'pc-saber-0001',
+      pin: proefCertificaat.pin,
+      tlsToken: g.tlsToken!,
+      tlsPoort: s.tlsBoundPort!,
+    );
+    final c = RemoteClient(e);
+    addTearDown(c.close);
+    expect((await c.uitwijk()).urls.where((u) => u.startsWith('https://')), isEmpty, reason: 'dicht: niets');
+    deur = Uri.parse('https://81.82.83.84:47821');
+    expect((await c.uitwijk()).urls, contains('https://81.82.83.84:47821'));
+  });
+
   test('een versleuteld adres zonder pin: geen enkel certificaat wordt aanvaard', () async {
     final p = await pc();
     final h = await RemoteClient.health(Uri.parse('https://127.0.0.1:${p.server.tlsBoundPort}'));

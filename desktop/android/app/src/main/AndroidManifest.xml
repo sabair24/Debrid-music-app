@@ -2,6 +2,8 @@
 
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <!-- "Test buitenverbinding": één verzoek over mobiele data terwijl wifi aan staat (requestNetwork). Een gewone toestemming, zonder vraag aan de gebruiker. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
     <!-- Bonjour/mDNS. Without the multicast lock the PC is simply never discovered, and the
          failure looks exactly like the PC being switched off. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>

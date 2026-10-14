@@ -127,6 +127,10 @@ class AppSettings extends ChangeNotifier {
   /// De noodrem van uitlevering B: de versleutelde ingangen (47822, en 47821 als de deur naar buiten
   /// aan staat). Standaard aan. Uit = de toestellen vallen terug op 47820, thuis of via Tailscale.
   bool versleuteld = true;
+
+  /// "Bereikbaar van buitenaf" (stap 7): de app zet zelf een deur in de modem (UPnP) naar 47821, de
+  /// versleutelde ingang met de witte lijst. **Standaard uit**: een poort in de modem is jouw beslissing.
+  bool deurNaarBuiten = false;
   String lanToken = '';
 
   /// This PC's own id in the cloud, so a device knows which machine it asked. Generated once and
@@ -346,6 +350,7 @@ class AppSettings extends ChangeNotifier {
         lanEnabled = (m['lan_enabled'] ?? true) as bool;
         lanPort = (m['lan_port'] ?? 47820) as int;
         versleuteld = (m['versleuteld'] ?? true) as bool;
+        deurNaarBuiten = (m['deur_naar_buiten'] ?? false) as bool;
         lanToken = (m['lan_token'] ?? '') as String;
         serverId = (m['server_id'] ?? '') as String;
         musicRoot = (m['music_root'] ?? '') as String;
@@ -392,6 +397,7 @@ class AppSettings extends ChangeNotifier {
         'lan_enabled': lanEnabled,
         'lan_port': lanPort,
         'versleuteld': versleuteld,
+        'deur_naar_buiten': deurNaarBuiten,
         'lan_token': lanToken,
         'server_id': serverId,
         'music_root': musicRoot,

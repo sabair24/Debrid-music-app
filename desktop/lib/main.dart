@@ -62,6 +62,8 @@ import 'mp3_tags.dart';
 import 'afspeellijsten.dart';
 import 'favorieten.dart';
 import 'lan/ids.dart';
+import 'buitenproef.dart';
+import 'lan/deur.dart';
 import 'lan/sharing.dart';
 import 'lan/tokens.dart';
 import 'cloud/catalog_mirror.dart';
@@ -22635,6 +22637,11 @@ class _SharingSectionState extends State<_SharingSection> {
         // Meteen onder de versie van de pc, want dat is waar dit over gaat. Zie [PcBijwerkenKnop]
         // — hij tekent niets zolang er niets te melden valt.
         PcBijwerkenKnop(session: session),
+        // Of de eigen deur van buiten werkt, over mobiele data (stap 8.2). Niet op tv.
+        if (!isTv) ...[
+          const SizedBox(height: 14),
+          BuitenproefKnop(session: session, gedempt: _muted),
+        ],
         const SizedBox(height: 14),
         Text(
           'Je bibliotheek, je covers en je bewerkingen komen van je pc. Aanpassen doe je daar; '
@@ -22776,6 +22783,58 @@ class _SharingSectionState extends State<_SharingSection> {
             style: TextStyle(
                 color: settings.versleuteld ? _muted : const Color(0xFFFFB454), fontSize: 11.5, height: 1.35),
           ),
+          // De deur naar buiten (stap 7): alleen met de versleutelde verbinding, en standaard uit.
+          if (settings.versleuteld) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text('Bereikbaar van buitenaf',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                ),
+                Switch(
+                  value: settings.deurNaarBuiten,
+                  activeThumbColor: _accent,
+                  onChanged: (on) async {
+                    settings.deurNaarBuiten = on;
+                    await settings.save();
+                    await sharing.applySettings();
+                  },
+                ),
+              ],
+            ),
+            Text(
+              deurTekst(
+                aan: settings.deurNaarBuiten,
+                stand: sharing.deur.stand,
+                poort: sharing.deur.externePoort,
+                waarom: sharing.deur.waarom,
+                laatstVanBuiten: laatstVanBuiten(sharing.grants.all),
+              ),
+              style: TextStyle(
+                  color: settings.deurNaarBuiten && sharing.deur.stand == DeurStand.mislukt
+                      ? const Color(0xFFFFB454)
+                      : _muted,
+                  fontSize: 11.5,
+                  height: 1.35),
+            ),
+            if (settings.deurNaarBuiten && sharing.deur.stand == DeurStand.mislukt)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  deurMetDeHand(sharing.homeAddresses.isEmpty
+                      ? null
+                      : Uri.tryParse(sharing.homeAddresses.first)?.host),
+                  style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+                ),
+              ),
+            if (sharing.deur.rodeMelding != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(sharing.deur.rodeMelding!,
+                    style: const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12, height: 1.35)),
+              ),
+          ],
         ],
         const SizedBox(height: 14),
         Row(
@@ -29814,10 +29873,15 @@ class _PcBijwerkenKnopState extends State<PcBijwerkenKnop> {
         if (beeld.knop != null) ...[
           const SizedBox(height: 10),
           OutlinedButton.icon(
-            onPressed: () => unawaited(_start()),
+            // Van buiten (de eigen deur) kan bijwerken niet: grijs, met de zin eronder.
+            onPressed: vanBuitenaf(widget.session.endpoint?.baseUrl) ? null : () => unawaited(_start()),
             icon: const Icon(Icons.system_update_alt_rounded, size: 18),
             label: Text(beeld.knop!),
           ),
+          if (vanBuitenaf(widget.session.endpoint?.baseUrl)) ...[
+            const SizedBox(height: 6),
+            const Text(kAlleenThuisBijwerken, style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4)),
+          ],
         ],
         // De kijk-knop. Dezelfde weg naar de pc als hierboven — die kijkt vers bij GitHub en
         // installeert als er dan toch iets blijkt te staan — maar met een andere belofte op het
