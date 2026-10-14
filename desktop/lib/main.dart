@@ -790,6 +790,8 @@ Future<void> main() async {
     )..start();
     // "Geen internet op je gsm" in de regel bovenin komt van hier.
     session.geenNetwerk = () => wacht.geenNetwerk;
+    // En of er alleen mobiele data is: dan is een thuisadres dat antwoordt "via Tailscale".
+    session.opMobiel = () => wacht.opMobiel;
   }
   // Als het openen mislukt en dit toestel zelf niets kan zien, de pc vragen. Een closure en geen
   // vaste verwijzing: `library.remote` wordt pas verderop gezet, en op de pc blijft hij null —

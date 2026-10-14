@@ -175,10 +175,10 @@ class ClientSession extends ChangeNotifier {
       final winnaar = uitslag.winnaar;
       _laatsteWinnaar = winnaar;
       if (winnaar == null) {
-        unawaited(_naMislukken(onthouden.serverId));
+        if (!_zoektNaWissel) unawaited(_naMislukken(onthouden.serverId));
         return onthouden;
       }
-      _zetStand(Verbindingsstand.verbonden(wegNaar(winnaar)));
+      _zetStand(Verbindingsstand.verbonden(_wegVoor(winnaar)));
       final id = uitslag.health?.serverId ?? '';
       final vers = onthouden.met(baseUrl: winnaar, serverId: id.isEmpty ? null : id);
       if (vers.baseUrl == onthouden.baseUrl && vers.serverId == onthouden.serverId) return onthouden;
@@ -217,6 +217,16 @@ class ClientSession extends ChangeNotifier {
   /// gemaakt wordt — vandaar een veld en geen parameter).
   bool Function() geenNetwerk = _nooit;
   static bool _nooit() => false;
+
+  /// Of dit toestel nu alleen mobiele data heeft (geen wifi of kabel). Dan loopt een thuisadres dat
+  /// antwoordt via Tailscale (een subnetroute), en heet het "Onderweg — via Tailscale", niet "Thuis".
+  /// Gemeten 14-10-2026: op mobiel antwoordde 192.168.0.117, en de regel bovenin zei "Thuis".
+  bool Function() opMobiel = _nooit;
+
+  Verbindingsweg _wegVoor(Uri adres) {
+    final w = wegNaar(adres);
+    return w == Verbindingsweg.thuis && opMobiel() ? Verbindingsweg.tailscale : w;
+  }
 
   /// De weg naar de pc, of waarom die er niet is — voor de regel bovenin. Zie `verbindingsstand.dart`.
   ///
@@ -506,18 +516,36 @@ class ClientSession extends ChangeNotifier {
       _log('netwerk gewisseld ($waarom) — er wordt al gekozen; daarna opnieuw');
       return;
     }
+    final herkansing = waarom.startsWith('herkansing');
+    if (!herkansing) {
+      _wisselBegon = DateTime.now();
+      _wisselWaarom = waarom;
+    }
     _zoekt = true;
     try {
       _log('netwerk gewisseld ($waarom) — opnieuw kiezen');
-      _zetStand(Verbindingsstand.zoekt(DateTime.now()));
+      // De seconden tellen vanaf de wissel zelf, ook over de herkansingen heen.
+      _zetStand(Verbindingsstand.zoekt(_wisselBegon ?? DateTime.now()));
       final beste = await _bereikbaarAdres(huidig);
-      if (_laatsteWinnaar == null && !waarom.startsWith('herkansing')) {
-        Timer(herkansingNaWissel, () {
-          if (_endpoint == null || _stand.soort == Verbindingssoort.verbonden) return;
-          unawaited(netwerkVeranderd('herkansing na: $waarom'));
-        });
-      }
       if (_endpoint != huidig) return; // intussen ontkoppeld of elders verbonden
+      if (_laatsteWinnaar == null) {
+        // NIET verbinden met een adres dat net niet antwoordde: dat verzoek hangt tot de time-out (30 s)
+        // en hield het zoeken zo lang vast. Gemeten 14-10-2026: Tailscale had na wifi → mobiel 8 tot 12 s
+        // nodig, en de app zat dan vast op het thuisadres. Nu elke [herkansingNaWissel] opnieuw, tot
+        // [zoekNaWissel] na de wissel; pas daarna de reden.
+        if (_zoektNaWissel) {
+          Timer(herkansingNaWissel, () {
+            if (_endpoint == null || _stand.soort == Verbindingssoort.verbonden) return;
+            unawaited(netwerkVeranderd('herkansing na: ${_wisselWaarom ?? waarom}'));
+          });
+        } else {
+          _wisselBegon = null;
+          _log('na ${zoekNaWissel.inSeconds} s zoeken nog geen pc');
+          unawaited(_naMislukken(huidig.serverId));
+        }
+        return;
+      }
+      _wisselBegon = null;
       final oud = library.remote;
       _log(beste.baseUrl == huidig.baseUrl
           ? 'blijft op ${beste.baseUrl.authority}, met een verse verbinding'
@@ -540,7 +568,21 @@ class ClientSession extends ChangeNotifier {
   /// Wie de laatste wedloop won (null = niemand). Voor de herkansing na een netwerkwissel.
   Uri? _laatsteWinnaar;
 
-  /// Hoe lang er na een netwerkwissel zonder winnaar gewacht wordt op één herkansing.
+  /// Wanneer de laatste echte netwerkwissel begon (niet een herkansing), en waarom. Null als er na die
+  /// wissel al een pc gevonden is of het zoeken opgegeven.
+  DateTime? _wisselBegon;
+  String? _wisselWaarom;
+
+  /// Hoe lang er na een netwerkwissel gezocht wordt voor er een reden op het scherm komt.
+  @visibleForTesting
+  Duration zoekNaWissel = const Duration(seconds: 20);
+
+  bool get _zoektNaWissel {
+    final b = _wisselBegon;
+    return b != null && DateTime.now().difference(b) < zoekNaWissel;
+  }
+
+  /// Hoe lang er na een netwerkwissel zonder winnaar gewacht wordt op de volgende poging.
   ///
   /// **Waarom.** Gemeten 14-10-2026, wifi uit en mobiel erbij: Tailscale had ruim drie seconden nodig
   /// om de weg op het nieuwe netwerk te vinden, en de wedloop gaf er na drie seconden de brui aan. Pas de
@@ -557,16 +599,22 @@ class ClientSession extends ChangeNotifier {
       unawaited(netwerkVeranderd('$wissel, na de lopende keuze'));
       return;
     }
-    if (_stand.soort == Verbindingssoort.zoekt) unawaited(_naMislukken());
+    if (_stand.soort == Verbindingssoort.zoekt && !_zoektNaWissel) unawaited(_naMislukken());
   }
 
   /// Een regel in `verbinding.log`, voor wie naast deze klasse iets over de verbinding te zeggen
   /// heeft (de netwerkwacht in `main.dart`).
   static void logRegel(String regel) => _log(regel);
 
+  /// Hoe vaak [connect] liep. Voor de toetsen: na een netwerkwissel zonder winnaar hoort er níet
+  /// verbonden te worden met het adres dat net niet antwoordde.
+  @visibleForTesting
+  int verbindBeurten = 0;
+
   /// Wire an endpoint into the app and pull the library in.
   Future<void> connect(RemoteEndpoint endpoint,
       {bool remember = true, Future<void> Function()? zodraErIetsStaat}) async {
+    verbindBeurten++;
     // Een ONTHOUDEN adres wordt eerst nagekeken; een vers gekoppeld adres niet.
     //
     // **Waarom dat verschil er moest komen.** Het inlogscherm loopt élk adres af dat de pc publiceert
@@ -780,7 +828,7 @@ class ClientSession extends ChangeNotifier {
         lastError = null;
         _meldToestand('pc antwoordt op ${_endpoint?.baseUrl.authority}');
         final e = _endpoint;
-        if (e != null) _zetStand(Verbindingsstand.verbonden(wegNaar(e.baseUrl)));
+        if (e != null) _zetStand(Verbindingsstand.verbonden(_wegVoor(e.baseUrl)));
       } else {
         _meldToestand(library.geenVerbinding == GeenVerbinding.sleutelGeweigerd
             ? 'sleutel geweigerd door ${_endpoint?.baseUrl.authority}'
@@ -790,7 +838,7 @@ class ClientSession extends ChangeNotifier {
         // Een geweigerde sleutel is wél een pc die antwoordt: de weg is er, de melding gaat over de sleutel.
         final e = _endpoint;
         if (library.geenVerbinding == GeenVerbinding.sleutelGeweigerd && e != null) {
-          _zetStand(Verbindingsstand.verbonden(wegNaar(e.baseUrl)));
+          _zetStand(Verbindingsstand.verbonden(_wegVoor(e.baseUrl)));
         }
         lastError = library.geenVerbinding == GeenVerbinding.sleutelGeweigerd
             ? 'De pc antwoordt, maar weigert de sleutel van dit toestel.'

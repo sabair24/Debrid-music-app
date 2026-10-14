@@ -106,10 +106,21 @@ class Netwerkwacht {
   bool _fysiekGezien = false;
   final Set<String> _fysiek = {};
 
+  /// Welke soort elk fysiek netwerk is (Android), en wat het pad zegt (iOS/macOS).
+  final Map<String, String> _fysiekSoort = {};
+  String _padSoort = '';
+
+  /// Of dit toestel nu alleen mobiele data heeft: geen wifi en geen kabel. Zie
+  /// `ClientSession.opMobiel` — dan loopt een thuisadres dat antwoordt via Tailscale.
+  bool get opMobiel => _padSoort.isNotEmpty
+      ? _padSoort == 'mobiel'
+      : _fysiekSoort.isNotEmpty && _fysiekSoort.values.every((t) => t == 'mobiel');
+
   void _onthoud(NetwerkGebeurtenis g) {
     switch (g.soort) {
       case 'pad':
         _padWeg = g.transport == 'weg';
+        _padSoort = g.transport;
       case 'standaard-weg':
         _standaardWeg = true;
       case 'standaard-beschikbaar' || 'standaard-eigenschappen':
@@ -117,9 +128,11 @@ class Netwerkwacht {
       case 'fysiek-beschikbaar':
         _fysiekGezien = true;
         _fysiek.add(g.netwerk);
+        _fysiekSoort[g.netwerk] = g.transport;
       case 'fysiek-weg':
         _fysiekGezien = true;
         _fysiek.remove(g.netwerk);
+        _fysiekSoort.remove(g.netwerk);
     }
   }
 

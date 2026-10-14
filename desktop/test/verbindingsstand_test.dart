@@ -216,6 +216,15 @@ void main() {
           isFalse);
     });
 
+    test('alleen mobiel: wifi weg met mobiel erbij wel, wifi en mobiel samen niet', () async {
+      expect((await wacht([wifi, mobiel])).opMobiel, isFalse);
+      expect((await wacht([wifi, mobiel, wifiWeg])).opMobiel, isTrue);
+      expect((await wacht([wifi])).opMobiel, isFalse);
+      expect((await wacht([])).opMobiel, isFalse, reason: 'niets gemeld is niet "mobiel"');
+      expect((await wacht([const NetwerkGebeurtenis(soort: 'pad', transport: 'mobiel', gevalideerd: true)])).opMobiel, isTrue);
+      expect((await wacht([const NetwerkGebeurtenis(soort: 'pad', transport: 'wifi', gevalideerd: true)])).opMobiel, isFalse);
+    });
+
     test('iOS en macOS: het pad zegt het zelf; niets gemeld is geen "geen internet"', () async {
       expect((await wacht([const NetwerkGebeurtenis(soort: 'pad', transport: 'weg')])).geenNetwerk, isTrue);
       expect(
@@ -435,6 +444,57 @@ void main() {
       await _wachtTot(() => s.endpoint?.baseUrl.port == later, max: const Duration(seconds: 8));
       expect(s.endpoint?.baseUrl.port, later, reason: 'zonder herkansing pas na de volgende poll-zoektocht');
       expect(logboek(), contains('herkansing na: test'));
+    });
+
+    test('na een wissel: blijven zoeken zonder vast te lopen op het oude adres, tot de pc er is', () async {
+      // Gemeten 14-10-2026 met wissel_proef.js: na wifi → mobiel had Tailscale 8 tot 12 s nodig. De app
+      // verbond na de eerste mislukte wedloop met het oude adres (dat verzoek hing tot 30 s) en zei "Je pc
+      // reageert niet". Nu: elke seconde opnieuw, en al die tijd "Zoekt je pc…".
+      final later = await _vrijePoort();
+      final dood = Uri.parse('http://127.0.0.1:${await _vrijePoort()}');
+      final s = sessie(hartslag: (_) async => null)
+        ..herkansingNaWissel = const Duration(milliseconds: 300)
+        ..zoekNaWissel = const Duration(seconds: 15);
+      addTearDown(s.dispose);
+      await s.connect(RemoteEndpoint(
+          baseUrl: dood, token: 'gedeelde-pc-saber-0001', serverId: 'pc-saber-0001', uitwijk: ['http://127.0.0.1:$later']));
+      await _wachtTot(() => !s.zoektNu);
+      final beurten = s.verbindBeurten;
+      final standen = <Verbindingssoort>[];
+      s.addListener(() => standen.add(s.verbinding.soort));
+      unawaited(s.netwerkVeranderd('test: wifi weg, mobiel erbij'));
+      // Een paar mislukte rondes, en dan pas de pc.
+      await Future<void>.delayed(const Duration(seconds: 3));
+      expect(s.verbindBeurten, beurten, reason: 'niet verbinden met een adres dat net niet antwoordde');
+      expect(s.verbinding.soort, Verbindingssoort.zoekt, reason: 'nog geen reden: er wordt nog gezocht');
+      await pc('pc-saber-0001', poort: later);
+      await _wachtTot(() => s.endpoint?.baseUrl.port == later, max: const Duration(seconds: 8));
+      expect(s.endpoint?.baseUrl.port, later);
+      expect(standen, isNot(contains(Verbindingssoort.weg)), reason: 'geen "reageert niet" tussendoor');
+    });
+
+    test('na een wissel en de hele zoektijd niets: dan pas de reden', () async {
+      final dood = Uri.parse('http://127.0.0.1:${await _vrijePoort()}');
+      final s = sessie(hartslag: (_) async => null)
+        ..herkansingNaWissel = const Duration(milliseconds: 200)
+        ..zoekNaWissel = const Duration(milliseconds: 1500);
+      addTearDown(s.dispose);
+      await s.connect(RemoteEndpoint(baseUrl: dood, token: 'x', serverId: 'pc-saber-0001'));
+      await _wachtTot(() => !s.zoektNu);
+      unawaited(s.netwerkVeranderd('test: wifi weg'));
+      expect(s.verbinding.soort, Verbindingssoort.zoekt);
+      await _wachtTot(() => s.verbinding.soort == Verbindingssoort.weg, max: const Duration(seconds: 12));
+      expect(s.verbinding.soort, Verbindingssoort.weg);
+    });
+
+    test('alleen mobiele data: een thuisadres dat antwoordt heet "via Tailscale"', () async {
+      // Gemeten 14-10-2026: op mobiel antwoordde 192.168.0.117 (een Tailscale-subnetroute) en de regel zei "Thuis".
+      final adres = await pc('pc-saber-0001');
+      final s = sessie()..opMobiel = () => true;
+      addTearDown(s.dispose);
+      await s.connect(RemoteEndpoint(baseUrl: adres, token: 'gedeelde-pc-saber-0001', serverId: 'pc-saber-0001'),
+          remember: false);
+      expect(s.verbinding.weg, Verbindingsweg.tailscale);
     });
 
     test('"Opnieuw proberen" laat zien dat er gezocht wordt, ook als de reden er al stond', () async {
