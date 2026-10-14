@@ -1,10 +1,65 @@
 import Flutter
+import Network
 import UIKit
+
+/// Elke netwerkwissel naar Dart (lib/netwerkwissel.dart), zodat de app meteen een ander adres van de
+/// pc kiest in plaats van te wachten tot een verzoek vastloopt. Stap 4 van "verbinden zoals Roon ARC"
+/// (14-10-2026). Eén monitor zolang de app draait; alleen een echte wissel (wifi, mobiel, weg) wordt
+/// een melding.
+final class NetwerkWacht: NSObject, FlutterStreamHandler {
+  private var monitor: NWPathMonitor?
+  private var oor: FlutterEventSink?
+  private var laatste = ""
+
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    oor = events
+    if monitor == nil {
+      let m = NWPathMonitor()
+      m.pathUpdateHandler = { [weak self] pad in
+        let transport: String
+        if pad.status != .satisfied {
+          transport = "weg"
+        } else if pad.usesInterfaceType(.wifi) {
+          transport = "wifi"
+        } else if pad.usesInterfaceType(.cellular) {
+          transport = "mobiel"
+        } else if pad.usesInterfaceType(.wiredEthernet) {
+          transport = "kabel"
+        } else {
+          transport = "anders"
+        }
+        let gevalideerd = pad.status == .satisfied
+        DispatchQueue.main.async {
+          guard let zelf = self else { return }
+          let stand = "\(transport)|\(gevalideerd)"
+          if stand == zelf.laatste { return }
+          zelf.laatste = stand
+          zelf.oor?([
+            "soort": "pad",
+            "netwerk": "",
+            "transport": transport,
+            "gevalideerd": gevalideerd,
+          ])
+        }
+      }
+      m.start(queue: DispatchQueue(label: "debridmusic.netwerk"))
+      monitor = m
+    }
+    return nil
+  }
+
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    oor = nil
+    return nil
+  }
+}
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   /// Vastgehouden, zodat het kanaal blijft bestaan zolang de app draait.
   private var warmteKanaal: FlutterMethodChannel?
+  private var netwerkKanaal: FlutterEventChannel?
+  private let netwerkWacht = NetwerkWacht()
 
   override func application(
     _ application: UIApplication,
@@ -35,6 +90,13 @@ import UIKit
         ])
       }
       warmteKanaal = kanaal
+    }
+
+    // Netwerkwissels, zie NetwerkWacht hierboven.
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "DebridMusicNetwerk") {
+      let kanaal = FlutterEventChannel(name: "debridmusic/netwerk", binaryMessenger: registrar.messenger())
+      kanaal.setStreamHandler(netwerkWacht)
+      netwerkKanaal = kanaal
     }
   }
 }

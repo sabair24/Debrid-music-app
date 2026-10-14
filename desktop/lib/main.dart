@@ -125,6 +125,7 @@ import 'rutracker.dart';
 import 'rutracker_login.dart';
 import 'rutracker_venster.dart';
 import 'netsoort.dart';
+import 'netwerkwissel.dart';
 import 'settings.dart';
 import 'speelstanden.dart';
 import 'slsk_groepen.dart';
@@ -756,6 +757,20 @@ Future<void> main() async {
   // dan raakt `metStand` de URL niet aan. Een `if (mode.owner)` eromheen zou alleen een tweede
   // plek zijn waar dit stuk kapot kan.
   player.onHapering = netStore.hapering;
+  // Wisselt het toestel van netwerk (wifi weg, mobiel erbij, Tailscale aan of uit), dan meteen
+  // opnieuw een adres van de pc kiezen in plaats van te wachten tot een verzoek vastloopt — en de
+  // netsoort (de 5G-stand) mee. Zie `netwerkwissel.dart`. Alleen op een toestel: de pc zelf hoeft
+  // nergens heen.
+  if (!mode.owner) {
+    Netwerkwacht(
+      bron: netwerkGebeurtenissen(),
+      log: ClientSession.logRegel,
+      bijWissel: (waarom) async {
+        unawaited(netStore.ververs());
+        await session.netwerkVeranderd(waarom);
+      },
+    ).start();
+  }
   // Als het openen mislukt en dit toestel zelf niets kan zien, de pc vragen. Een closure en geen
   // vaste verwijzing: `library.remote` wordt pas verderop gezet, en op de pc blijft hij null —
   // daar kijkt de speler rechtstreeks naar het bestand en is er niets te vragen.

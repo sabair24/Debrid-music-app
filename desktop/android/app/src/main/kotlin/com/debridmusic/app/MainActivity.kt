@@ -4,13 +4,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
@@ -23,6 +29,91 @@ import java.io.File
  * which reads as "the buttons stopped working" rather than as a wiring mistake.
  */
 class MainActivity : AudioServiceActivity() {
+
+    companion object {
+        /** Waar de netwerkwissels heen gaan (lib/netwerkwissel.dart), of null zolang Dart niet luistert. */
+        @Volatile private var netwerkOor: EventChannel.EventSink? = null
+        @Volatile private var netwerkGeregistreerd = false
+        private val hoofd = Handler(Looper.getMainLooper())
+
+        /** Per netwerk de laatst gemelde stand, zodat alleen een ECHTE wissel een melding wordt. */
+        private val laatste = HashMap<String, String>()
+
+        /**
+         * Elke netwerkwissel naar Dart, zodat de app meteen een ander adres van de pc kiest.
+         *
+         * **Waarom.** Stap 4 van "verbinden zoals Roon ARC" (14-10-2026). Saber: "als ik het huis
+         * verlaat … heb ik ineens geen internet meer". De app merkte een wissel pas als een verzoek
+         * vastliep — een poll per vijftien seconden, met dertig seconden geduld per verzoek. Nu zegt
+         * Android het zelf.
+         *
+         * **Eén keer per proces**, met de applicatiecontext: configureFlutterEngine draait bij elke
+         * nieuwe Activity (MainActivity is een AudioServiceActivity), en Android weigert boven de
+         * honderd callbacks per app. Twee callbacks: het standaardnetwerk (met Tailscale aan is dat
+         * de VPN) en elk fysiek netwerk met internet (wifi of mobiel eronder).
+         *
+         * **Alleen echte wissels.** onCapabilitiesChanged vuurt ook bij elke verandering in
+         * signaalsterkte; daarom wordt per netwerk alleen soort + gevalideerd + adressen vergeleken.
+         */
+        @Synchronized
+        private fun registreerNetwerkwacht(context: Context) {
+            if (netwerkGeregistreerd) return
+            val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE)
+                as? ConnectivityManager ?: return
+
+            fun meld(soort: String, netwerk: Network?, caps: NetworkCapabilities?, lp: LinkProperties?) {
+                val transport = when {
+                    caps == null -> "onbekend"
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "mobiel"
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "kabel"
+                    else -> "anders"
+                }
+                val gevalideerd = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ?: false
+                val adressen = lp?.linkAddresses?.joinToString(",") { it.address.hostAddress ?: "" } ?: ""
+                val sleutel = soort.substringBefore('-') + "|" + (netwerk?.toString() ?: "")
+                val stand = "$soort|$transport|$gevalideerd|$adressen"
+                synchronized(laatste) {
+                    if (laatste[sleutel] == stand) return
+                    laatste[sleutel] = stand
+                }
+                val bericht = mapOf(
+                    "soort" to soort,
+                    "netwerk" to (netwerk?.toString() ?: ""),
+                    "transport" to transport,
+                    "gevalideerd" to gevalideerd,
+                )
+                hoofd.post { netwerkOor?.success(bericht) }
+            }
+
+            val standaard = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) =
+                    meld("standaard-beschikbaar", network, cm.getNetworkCapabilities(network), cm.getLinkProperties(network))
+                override fun onLost(network: Network) = meld("standaard-weg", network, null, null)
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
+                    meld("standaard-eigenschappen", network, caps, cm.getLinkProperties(network))
+                override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) =
+                    meld("standaard-eigenschappen", network, cm.getNetworkCapabilities(network), lp)
+            }
+            val fysiek = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) =
+                    meld("fysiek-beschikbaar", network, cm.getNetworkCapabilities(network), cm.getLinkProperties(network))
+                override fun onLost(network: Network) = meld("fysiek-weg", network, null, null)
+            }
+            try {
+                cm.registerDefaultNetworkCallback(standaard)
+                // Zonder VPN: een NetworkRequest sluit VPN standaard uit, dus dit volgt wifi en mobiel.
+                cm.registerNetworkCallback(
+                    NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(),
+                    fysiek,
+                )
+                netwerkGeregistreerd = true
+            } catch (e: Exception) {
+                // Zonder seintjes valt de app terug op wat er was: de poll van vijftien seconden.
+            }
+        }
+    }
 
     /**
      * What to call this device in the PC's list of trusted devices.
@@ -104,6 +195,20 @@ class MainActivity : AudioServiceActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // Netwerkwissels, zie registreerNetwerkwacht. Het oor wordt per engine gezet; de callbacks zelf
+        // maar één keer per proces.
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "debridmusic/netwerk")
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    netwerkOor = events
+                    registreerNetwerkwacht(applicationContext)
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    netwerkOor = null
+                }
+            })
 
         // Bijwerken vanuit de app. Zie lib/updater.dart voor de kant die de APK binnenhaalt.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "debridmusic/updater")

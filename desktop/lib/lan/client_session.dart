@@ -291,6 +291,44 @@ class ClientSession extends ChangeNotifier {
     }
   }
 
+  /// Het toestel wisselde van netwerk (`netwerkwissel.dart`): meteen opnieuw kiezen, en altijd met
+  /// een VERSE verbinding — ook als het adres hetzelfde blijft.
+  ///
+  /// **Waarom vers.** De open verbindingen van het netwerk dat net weg is, blijven in de client
+  /// hangen; een volgend verzoek gaat daarover en wacht dertig seconden op niets. Dat was het
+  /// grootste deel van de "30 tot 45 seconden" na de voordeur. Een lopend nummer merkt hier niets
+  /// van: mpv heeft zijn eigen verbinding, en het volgende nummer krijgt het nieuwe adres.
+  Future<void> netwerkVeranderd(String waarom) async {
+    final huidig = _endpoint;
+    if (owner || huidig == null) return;
+    if (_zoekt) {
+      _log('netwerk gewisseld ($waarom) — er wordt al gekozen');
+      return;
+    }
+    _zoekt = true;
+    try {
+      _log('netwerk gewisseld ($waarom) — opnieuw kiezen');
+      final beste = await _bereikbaarAdres(huidig);
+      if (_endpoint != huidig) return; // intussen ontkoppeld of elders verbonden
+      final oud = library.remote;
+      _log(beste.baseUrl == huidig.baseUrl
+          ? 'blijft op ${beste.baseUrl.authority}, met een verse verbinding'
+          : 'overgestapt op ${beste.baseUrl.authority}');
+      await connect(beste);
+      // De oude client pas na even dicht: wat er nog liep, is op een verdwenen netwerk toch verloren,
+      // maar een verzoek dat net klaar was hoort zijn antwoord nog te kunnen lezen.
+      if (oud != null && !identical(oud, library.remote)) {
+        Timer(const Duration(seconds: 5), oud.close);
+      }
+    } finally {
+      _zoekt = false;
+    }
+  }
+
+  /// Een regel in `verbinding.log`, voor wie naast deze klasse iets over de verbinding te zeggen
+  /// heeft (de netwerkwacht in `main.dart`).
+  static void logRegel(String regel) => _log(regel);
+
   /// Wire an endpoint into the app and pull the library in.
   Future<void> connect(RemoteEndpoint endpoint,
       {bool remember = true, Future<void> Function()? zodraErIetsStaat}) async {

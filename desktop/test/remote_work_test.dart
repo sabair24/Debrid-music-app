@@ -357,6 +357,10 @@ void main() {
       expect(aangekomen.bestand, isNotNull, reason: 'zonder naam en grootte kan de pc alleen op nummer kiezen');
       expect(aangekomen.bestand!.label, '06 - Superstition.flac');
       expect(aangekomen.bestand!.size, 102991331);
+      // Pas opruimen als het toestel zijn joblijst ververst heeft: enqueue post en ververst daarna
+      // los, en een dispose daartussen gaf "used after being disposed" — rood op de tag van
+      // 3.9.476 (14-10-2026), groen op de proeftak met dezelfde code.
+      await _until(() => manager.jobs.isNotEmpty);
       manager.dispose();
     });
 
@@ -367,6 +371,10 @@ void main() {
       expect(downloads.gekozen.single.fileId, 7);
       expect(downloads.gekozen.single.bestand, isNull,
           reason: 'dan zoekt de pc het nummer zelf op in de lijst van het torrentbestand');
+      // Pas opruimen als het toestel zijn joblijst ververst heeft: enqueue post en ververst daarna
+      // los, en een dispose daartussen gaf "used after being disposed" — rood op de tag van
+      // 3.9.476 (14-10-2026), groen op de proeftak met dezelfde code.
+      await _until(() => manager.jobs.isNotEmpty);
       manager.dispose();
     });
 
