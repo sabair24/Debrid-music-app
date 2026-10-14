@@ -17,6 +17,7 @@ import '../warm_log.dart';
 import 'client.dart';
 import 'discovery.dart';
 import '../cloud/catalog_mirror.dart';
+import 'adreswedloop.dart';
 import 'client_mode.dart';
 import 'uitwijk.dart';
 
@@ -29,6 +30,7 @@ class ClientSession extends ChangeNotifier {
     RemoteEndpoint? endpoint,
     this.kopie = const CatalogusKopie(),
     this.verseSleutel,
+    this.adressenUitAccount,
     Future<List<FoundServer>> Function()? zoekOpNetwerk,
   })  : _endpoint = endpoint,
         _zoekOpNetwerk = zoekOpNetwerk ?? LanBrowser.find;
@@ -121,36 +123,71 @@ class ClientSession extends ChangeNotifier {
   /// netwerk niets te vinden — je pc staat daar niet. Wat wél werkt is het adres dat de pc zelf
   /// heeft doorgegeven toen je nog verbonden was: zijn Tailscale-adres. Zie `uitwijk.dart` voor de
   /// volgorde en waarom die zichzelf corrigeert.
+  ///
+  /// **Sinds 14-10-2026 alle adressen tegelijk** (`adreswedloop.dart`): thuis meteen, Tailscale
+  /// 400 ms later, drie seconden per poging, en alleen de pc met de onthouden [RemoteEndpoint.serverId]
+  /// telt. Voorheen ná elkaar, met vier seconden per adres: thuis de deur uit kostte eerst een volle
+  /// poging op het thuisadres. Het zoeken op het lokale netwerk begint meteen mee en telt pas als de
+  /// bekende adressen niets opleveren; daarna nog de adressen die de pc in je account zet
+  /// ([adressenUitAccount]).
   Future<RemoteEndpoint> _bereikbaarAdres(RemoteEndpoint onthouden) async {
     try {
-      // Eerst wat we zonder zoeken al weten. Het lokale netwerk afzoeken duurt seconden en levert
-      // op de baan per definitie niets op, dus dat komt achteraan.
-      for (final adres in weguitVolgorde(
+      final bekend = weguitVolgorde(
         onthouden: onthouden.baseUrl,
         uitwijk: leesAdressen(onthouden.uitwijk),
-      )) {
-        if (await RemoteClient.health(adres) == null) continue;
-        if (adres == onthouden.baseUrl) return onthouden;
-        final vers = onthouden.met(baseUrl: adres);
-        // Meteen vastleggen, anders staat hier bij de volgende start weer het oude adres — en
-        // daarmee elke start op de baan opnieuw die ene mislukte poging.
-        await savePairedServer(vers);
-        return vers;
+      );
+      // Begint meteen, telt pas als de bekende adressen niets opleveren.
+      final opNetwerk = _zoekOpNetwerk().catchError((Object _) => <FoundServer>[]);
+      var uitslag = await _wedloop(bekend, onthouden);
+
+      if (uitslag.winnaar == null) {
+        final gevonden = [
+          for (final s in await opNetwerk)
+            if (!bekend.contains(s.baseUrl) &&
+                (onthouden.serverId.isEmpty || s.serverId.isEmpty || s.serverId == onthouden.serverId))
+              s.baseUrl,
+        ];
+        if (gevonden.isNotEmpty) uitslag = await _wedloop(gevonden, onthouden);
+      }
+      if (uitslag.winnaar == null && adressenUitAccount != null) {
+        final uitAccount = [
+          for (final u in await adressenUitAccount!(onthouden.serverId).catchError((Object _) => <Uri>[]))
+            if (!bekend.contains(u)) u,
+        ];
+        if (uitAccount.isNotEmpty) uitslag = await _wedloop(uitAccount, onthouden);
       }
 
-      for (final server in await _zoekOpNetwerk()) {
-        if (server.baseUrl == onthouden.baseUrl) continue;
-        if (await RemoteClient.health(server.baseUrl) == null) continue;
-        final vers = onthouden.met(
-          baseUrl: server.baseUrl,
-          name: server.name.isEmpty ? onthouden.name : server.name,
-        );
-        await savePairedServer(vers);
-        return vers;
-      }
+      final winnaar = uitslag.winnaar;
+      if (winnaar == null) return onthouden;
+      final id = uitslag.health?.serverId ?? '';
+      final vers = onthouden.met(baseUrl: winnaar, serverId: id.isEmpty ? null : id);
+      if (vers.baseUrl == onthouden.baseUrl && vers.serverId == onthouden.serverId) return onthouden;
+      // Meteen vastleggen, anders staat hier bij de volgende start weer het oude adres — en daarmee
+      // elke start op de baan opnieuw die ene mislukte poging.
+      await savePairedServer(vers);
+      return vers;
     } catch (_) {/* zoeken mag nooit tussen jou en je muziek staan */}
     return onthouden;
   }
+
+  /// Eén wedloop, met zijn verloop in `verbinding.log`.
+  Future<WedloopUitslag> _wedloop(List<Uri> adressen, RemoteEndpoint onthouden) async {
+    final uitslag = await adresWedloop(
+      kandidatenVoor(adressen),
+      vraag: (u, limiet) => RemoteClient.health(u, timeout: limiet),
+      verwachtServerId: onthouden.serverId,
+    );
+    for (final r in uitslag.verloop) {
+      _log('  wedloop: $r');
+    }
+    _log('  wedloop: ${uitslag.winnaar == null ? 'geen winnaar' : 'winnaar ${uitslag.winnaar!.authority}'}');
+    return uitslag;
+  }
+
+  /// De adressen die de pc met deze id in je account zette, voor als geen enkel bekend adres
+  /// antwoordt (een nieuw Telenet-adres, een nieuwe Tailscale-naam). Null = geen account op dit
+  /// toestel. Zie `main.dart`.
+  final Future<List<Uri>> Function(String serverId)? adressenUitAccount;
 
   /// Vragen waar deze pc nog meer te bereiken is, en dat bewaren voor de dag dat je weggaat.
   ///
@@ -175,10 +212,13 @@ class ClientSession extends ChangeNotifier {
       final verse = await client.uitwijkAdressen();
       if (ronde != _koppelRonde) return;
       if (verse.isEmpty) return;
+      // Voortbouwen op de koppeling van NU, niet op die van het begin van [connect]: intussen kan de
+      // id van de pc geleerd zijn (zie [connect]), en die mag deze beurt niet weer wegschrijven.
+      final basis = _endpoint ?? endpoint;
       // Op waarde vergelijken en niet met `==`: twee lijsten met dezelfde inhoud zijn niet hetzelfde
       // object, en dan zou er bij elke start naar schijf geschreven worden.
-      if (verse.join('\n') == endpoint.uitwijk.join('\n')) return;
-      final bij = endpoint.met(uitwijk: verse);
+      if (verse.join('\n') == basis.uitwijk.join('\n')) return;
+      final bij = basis.met(uitwijk: verse);
       _endpoint = bij;
       await savePairedServer(bij);
     } catch (_) {/* volgende keer weer */}
@@ -309,10 +349,21 @@ class ClientSession extends ChangeNotifier {
 
     // Wie er aan de andere kant staat, en met welke code. Zie [serverVersie]: bij een koppeling doet
     // de pc het werk, dus zijn versie is de versie die telt.
-    unawaited(RemoteClient.health(endpoint.baseUrl).then((h) {
-      if (h == null || h.version.isEmpty) return;
-      serverVersie = h.version;
-      notifyListeners();
+    final ronde = _koppelRonde;
+    unawaited(RemoteClient.health(endpoint.baseUrl).then((h) async {
+      if (h == null) return;
+      if (h.version.isNotEmpty) {
+        serverVersie = h.version;
+        notifyListeners();
+      }
+      // Welke pc dit is, onthouden voor de volgende wedloop (`adreswedloop.dart`). Alleen als hij
+      // nog niet bekend is, en alleen als deze koppeling nog dezelfde is.
+      final huidig = _endpoint;
+      if (h.serverId.isEmpty || huidig == null || huidig.serverId.isNotEmpty || ronde != _koppelRonde) return;
+      final met = huidig.met(serverId: h.serverId);
+      _endpoint = met;
+      await savePairedServer(met);
+      _log('pc herkend als ${h.serverId}');
     }).catchError((_) {/* niet weten is geen reden om niet te verbinden */}));
 
     final client =

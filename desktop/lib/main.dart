@@ -74,6 +74,7 @@ import 'lan/cast_receiver.dart';
 import 'lan/client.dart';
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
+import 'lan/uitwijk.dart' show leesAdressen;
 import 'lan/sleutelherstel.dart';
 import 'lan/bijwerkstand.dart';
 import 'lan/remote_services.dart';
@@ -593,6 +594,17 @@ Future<void> main() async {
     library: library,
     settings: settings,
     owner: mode.owner,
+    // De laatste kans als geen enkel bekend adres antwoordt: wat de pc in je account zette (een
+    // nieuw Telenet-adres, een nieuwe Tailscale-naam). Alleen de pc met deze id, of — bij een
+    // koppeling die de id nog niet kent — de enige pc onder je account. Zie `adreswedloop.dart`.
+    adressenUitAccount: (id) async {
+      if (!cloud.isSignedIn) return const <Uri>[];
+      final pcs = await cloud.servers();
+      final pc = id.isNotEmpty
+          ? pcs.where((s) => s.id == id).firstOrNull
+          : (pcs.length == 1 ? pcs.first : null);
+      return pc == null ? const <Uri>[] : leesAdressen(pc.urls);
+    },
     // The one place a path becomes something to play, so "the copy if we have it, otherwise the
     // PC" is decided once. No screen, and not the player itself, needs to know that offline
     // copies exist.

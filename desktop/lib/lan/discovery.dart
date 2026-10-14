@@ -27,7 +27,11 @@ class LanDiscovery {
     required this.port,
     required this.deviceName,
     required this.trackCount,
+    this.serverId = '',
   });
+
+  /// De vaste id van deze pc. Zie `RemoteEndpoint.serverId`.
+  final String serverId;
 
   final int port;
   final String deviceName;
@@ -77,6 +81,7 @@ class LanDiscovery {
         txt: {
           'v': utf8.encode('1'),
           'device': utf8.encode(deviceName),
+          if (serverId.isNotEmpty) 'sid': utf8.encode(serverId),
         },
       ));
     } catch (e) {
@@ -93,6 +98,7 @@ class LanDiscovery {
         'name': deviceName,
         'port': port,
         'trackCount': trackCount(),
+        if (serverId.isNotEmpty) 'serverId': serverId,
       };
 
   Future<void> stop() async {
@@ -114,7 +120,10 @@ class FoundServer {
   final Uri baseUrl;
   final int trackCount;
 
-  const FoundServer({required this.name, required this.baseUrl, this.trackCount = 0});
+  /// De vaste id van de pc, of leeg. Zie `RemoteEndpoint.serverId`.
+  final String serverId;
+
+  const FoundServer({required this.name, required this.baseUrl, this.trackCount = 0, this.serverId = ''});
 
   /// The address is the identity — two mechanisms find the same PC and it must appear once.
   @override
@@ -164,6 +173,7 @@ class LanBrowser {
             name: (j['name'] ?? packet.address.address).toString(),
             baseUrl: url,
             trackCount: (j['trackCount'] as num?)?.toInt() ?? 0,
+            serverId: (j['serverId'] ?? '').toString(),
           );
         } catch (_) {/* something else answering on that port */}
       });
@@ -218,6 +228,7 @@ class LanBrowser {
           () => FoundServer(
             name: _txt(service, 'device') ?? service.name ?? host,
             baseUrl: url,
+            serverId: _txt(service, 'sid') ?? '',
           ),
         );
       });

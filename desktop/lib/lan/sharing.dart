@@ -167,6 +167,12 @@ class LanSharing extends ChangeNotifier {
       return;
     }
 
+    // Een vaste id voor deze pc, ook als hij niet bij een account is aangemeld: een toestel herkent
+    // er zijn pc aan als het tussen adressen kiest (`adreswedloop.dart`).
+    if (settings.serverId.isEmpty) {
+      settings.serverId = generateDeviceToken().substring(0, 16);
+      await settings.save();
+    }
     final server = LanServer(
       library: library,
       token: settings.lanToken,
@@ -191,6 +197,7 @@ class LanSharing extends ChangeNotifier {
         port: _server!.boundPort,
         deviceName: deviceName(),
         trackCount: () => library.tracks.length,
+        serverId: settings.serverId,
       );
       await discovery.start();
       _discovery = discovery;

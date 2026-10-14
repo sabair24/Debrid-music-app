@@ -294,6 +294,8 @@ class LanServer {
         'deviceName': deviceName(),
         'trackCount': library.tracks.length,
         'albumCount': library.albums.length,
+        // Welke pc dit is, zodat een toestel dat tussen adressen kiest weet dat het de zijne is.
+        if ((settings?.serverId ?? '').isNotEmpty) 'serverId': settings!.serverId,
       });
     }
 

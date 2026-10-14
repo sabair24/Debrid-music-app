@@ -40,18 +40,28 @@ class RemoteEndpoint {
   /// kent (die antwoordt 404).
   final List<String> uitwijk;
 
+  /// Welke pc dit is: zijn vaste id (`settings.serverId` op de pc), geleerd bij de eerste verbinding.
+  /// Leeg voor een koppeling van vóór 14-10-2026 of een pc die hem nog niet meegeeft.
+  ///
+  /// **Waarom.** Bij het kiezen tussen adressen (`adreswedloop.dart`) wint het eerste dat antwoordt.
+  /// Op een vreemd wifi kan op `192.168.0.117:47820` best iets ánders staan; zonder dit id was dat
+  /// ook een "pc".
+  final String serverId;
+
   const RemoteEndpoint({
     required this.baseUrl,
     required this.token,
     this.name,
     this.uitwijk = const [],
+    this.serverId = '',
   });
 
-  RemoteEndpoint met({Uri? baseUrl, String? name, List<String>? uitwijk}) => RemoteEndpoint(
+  RemoteEndpoint met({Uri? baseUrl, String? name, List<String>? uitwijk, String? serverId}) => RemoteEndpoint(
         baseUrl: baseUrl ?? this.baseUrl,
         token: token,
         name: name ?? this.name,
         uitwijk: uitwijk ?? this.uitwijk,
+        serverId: serverId ?? this.serverId,
       );
 
   /// Accepts what a person types: `192.168.0.216`, `192.168.0.216:47820`, or a full URL.
@@ -74,6 +84,7 @@ class RemoteEndpoint {
         'token': token,
         'name': name,
         if (uitwijk.isNotEmpty) 'uitwijk': uitwijk,
+        if (serverId.isNotEmpty) 'serverId': serverId,
       };
 
   static RemoteEndpoint? fromJson(Map<String, dynamic> j) {
@@ -87,6 +98,7 @@ class RemoteEndpoint {
       // Ontbreekt in elk `paired_server.json` van vóór 04-09-2026, en dat hoort geen fout te zijn:
       // dan is de lijst leeg en wordt hij bij de eerste verbinding alsnog opgehaald.
       uitwijk: [for (final u in (j['uitwijk'] as List? ?? const [])) '$u'],
+      serverId: (j['serverId'] ?? '').toString(),
     );
   }
 
@@ -158,7 +170,10 @@ class ServerHealth {
   final String name;
   final String version;
   final int trackCount;
-  const ServerHealth({this.name = '', this.version = '', this.trackCount = 0});
+
+  /// De vaste id van de pc, of leeg bij een pc van vóór 14-10-2026. Zie [RemoteEndpoint.serverId].
+  final String serverId;
+  const ServerHealth({this.name = '', this.version = '', this.trackCount = 0, this.serverId = ''});
 }
 
 /// A speaker, a television, or anything else on the network that can be handed a URL.
@@ -652,6 +667,7 @@ class RemoteClient {
         name: (j['name'] ?? j['deviceName'] ?? '').toString(),
         version: (j['version'] ?? '').toString(),
         trackCount: (j['trackCount'] as num?)?.toInt() ?? 0,
+        serverId: (j['serverId'] ?? '').toString(),
       );
     } catch (_) {
       return null;
