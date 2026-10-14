@@ -28,12 +28,14 @@ import 'radiohaler.dart';
 import 'remming.dart';
 import 'accountkoppeling.dart';
 import 'catalog.dart';
+import 'certificaat.dart';
 import 'dtos.dart';
 import 'net.dart';
 import 'pairing.dart';
 import 'pc_bijwerker.dart';
 import 'range.dart';
 import 'state_store.dart';
+import 'tls_ingang.dart';
 import 'tokens.dart';
 import 'transcode.dart';
 import 'upnp.dart';
@@ -42,6 +44,48 @@ import '../artwork.dart';
 /// The port the other devices look for. Fixed on purpose — an ephemeral port would mean every
 /// restart hands out a different address, and anything a client saved would go stale.
 const int kLanPort = 47820;
+
+/// De versleutelde poort voor thuis en Tailscale (alleen privé-adressen), met TLS-sleutels.
+const int kTlsPoort = 47822;
+
+/// De versleutelde poort voor buiten: het enige doel van de deur in de modem (UPnP), met een witte lijst.
+const int kPubliekPoort = 47821;
+
+/// Langs welke ingang een verzoek binnenkwam. Het beleid volgt uit de socket die de verbinding aannam,
+/// nooit uit het bronadres: dat beslist alleen nog of het op een thuisingang mag.
+enum Ingang {
+  /// 47820: HTTP, zoals altijd. Alleen HTTP-sleutels, alleen privé-adressen.
+  http,
+
+  /// 47822: TLS, alle rechten, alleen privé-adressen (thuis, Tailscale). Alleen TLS-sleutels.
+  tlsThuis,
+
+  /// 47821: TLS, wat via de modem binnenkomt. Alleen TLS-sleutels, en alleen wat op [weigerVanBuiten] mag.
+  tlsBuiten,
+}
+
+/// Waarom iets van buiten (47821) niet mag, of null als het mag. Alleen op pad en methode; wat van het
+/// lijf afhangt (bijwerken, speakers) staat bij die routes zelf.
+///
+/// **Een witte lijst, geen zwarte.** Wat hier niet staat, kan van buiten niet — ook een route die er
+/// morgen bij komt. Niet van buiten: koppelen, de hele bibliotheek doorzoeken of uitlijsten, de
+/// gebeurtenissenstroom, muziek op een speaker thuis starten, RuTracker aanmelden en de warmtemeting.
+@visibleForTesting
+String? weigerVanBuiten(String pad, String methode) {
+  const exact = {
+    '/health', '/api/catalog', '/api/album/facts', '/api/state', '/api/state/ops', '/api/uitwijk',
+    '/api/config', '/api/radio', '/api/jobs', '/api/corrections', '/api/move/plan', '/api/move/apply',
+    '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status',
+  };
+  const voorvoegsels = ['/stream/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
+  if (exact.contains(pad) || voorvoegsels.any(pad.startsWith)) return null;
+  if (pad == '/api/rutracker/sessie') return 'Kan alleen met je gsm thuis op wifi.';
+  return 'Dit kan alleen thuis of via Tailscale.';
+}
+
+/// Of dit bronadres op een thuisingang (47820, 47822) mag: deze pc zelf, het eigen netwerk en Tailscale.
+/// Zie [toestelWeg]: alles wat daar `buiten` heet, niet.
+bool magOpThuisingang(InternetAddress bron) => toestelWeg(bron) != 'buiten';
 
 /// Serves this machine's library to the Mac, the iPad and the Shield.
 ///
@@ -65,6 +109,9 @@ class LanServer {
     this.cloudUid,
     this.uidVanSleutel,
     this.firebaseProject,
+    this.certificaat,
+    this.tlsPoort = kTlsPoort,
+    this.publiekPoort,
     GrantStore? grants,
   })  : grants = grants ?? GrantStore(),
         catalog = LanCatalog(library) {
@@ -104,6 +151,19 @@ class LanServer {
   /// Het Firebase-project van deze build, voor de eerste blik op een inlogsleutel
   /// (`inlogsleutelFout`). Null of leeg: die blik wordt overgeslagen en beslist Google alleen.
   final String Function()? firebaseProject;
+
+  /// Het eigen certificaat (`certificaat.dart`). Null: geen versleutelde ingangen, alleen 47820.
+  final PcCertificaat? certificaat;
+
+  /// De versleutelde poort voor thuis. 0 in toetsen.
+  final int tlsPoort;
+
+  /// De poort voor buiten, of null zolang de deur naar buiten niet aan staat (stap 7). 0 in toetsen.
+  final int? publiekPoort;
+
+  /// Een rode melding voor op de pc: iets wat op misbruik van een sleutel wijst. Zie [_ruil] en de
+  /// TLS-sleutel die op 47820 aankwam.
+  final ValueNotifier<String?> rodeMelding = ValueNotifier(null);
 
   /// Zie `remming.dart`.
   final Remming remming = Remming();
@@ -205,8 +265,16 @@ class LanServer {
   String token;
 
   HttpServer? _http;
+  HttpServer? _tls;
+  HttpServer? _publiek;
+  TlsIngang? _tlsIngang;
+  TlsIngang? _publiekIngang;
 
   bool get running => _http != null;
+
+  /// De poorten waar de versleutelde ingangen echt op luisteren, of null.
+  int? get tlsBoundPort => _tls?.port;
+  int? get publiekBoundPort => _publiek?.port;
 
   /// The port actually listening. Equals [port] in the app; differs only when [port] is 0, which
   /// tests use to let the OS pick something free rather than fight the running app for 47820.
@@ -234,13 +302,51 @@ class LanServer {
     _http!.autoCompress = false; // audio and covers are already compressed
     _meldStand();
     unawaited(_serve(_http!));
+    await _startTls();
     return null;
+  }
+
+  /// De versleutelde ingangen. Lukt dat niet (poort bezet), dan draait 47820 gewoon door: zonder
+  /// versleutelde weg vallen de toestellen terug op wat ze vandaag doen.
+  Future<void> _startTls() async {
+    final c = certificaat;
+    if (c == null) return;
+    Future<(HttpServer, TlsIngang)?> open(int poort, Ingang ingang) async {
+      try {
+        final i = await TlsIngang.bind(InternetAddress.anyIPv4, poort, c.context());
+        final h = HttpServer.listenOn(i)..autoCompress = false;
+        unawaited(_serve(h, ingang));
+        return (h, i);
+      } catch (e) {
+        _koppelLog?.line('VERSLEUTELDE POORT $poort niet geopend: $e');
+        return null;
+      }
+    }
+
+    final thuis = await open(tlsPoort, Ingang.tlsThuis);
+    _tls = thuis?.$1;
+    _tlsIngang = thuis?.$2;
+    final p = publiekPoort;
+    if (p != null) {
+      final buiten = await open(p, Ingang.tlsBuiten);
+      _publiek = buiten?.$1;
+      _publiekIngang = buiten?.$2;
+    }
+    _koppelLog?.line('VERSLEUTELD  thuis ${_tls?.port ?? '-'}  buiten ${_publiek?.port ?? '-'}  pin ${c.pin.substring(0, 12)}…');
   }
 
   Future<void> stop() async {
     final http = _http;
     _http = null;
     await http?.close(force: true);
+    final tls = _tls;
+    final publiek = _publiek;
+    _tls = null;
+    _publiek = null;
+    _tlsIngang = null;
+    _publiekIngang = null;
+    await tls?.close(force: true);
+    await publiek?.close(force: true);
   }
 
   /// Stop for good. Separate from [stop] so switching sharing off and on again doesn't leave the
@@ -254,10 +360,10 @@ class LanServer {
     await grants.wachtOpOpslaan();
   }
 
-  Future<void> _serve(HttpServer server) async {
+  Future<void> _serve(HttpServer server, [Ingang ingang = Ingang.http]) async {
     await for (final request in server) {
       // One bad request must never take the server — and with it the whole app — down.
-      unawaited(_handle(request).catchError((Object e, StackTrace s) {
+      unawaited(_handle(request, ingang).catchError((Object e, StackTrace s) {
         debugPrint('LAN request failed (${request.uri.path}): $e');
         try {
           request.response.statusCode = HttpStatus.internalServerError;
@@ -267,14 +373,25 @@ class LanServer {
     }
   }
 
-  Future<void> _handle(HttpRequest req) async {
+  Future<void> _handle(HttpRequest req, [Ingang ingang = Ingang.http]) async {
     final res = req.response;
+    // Een thuisingang neemt alleen het eigen netwerk, Tailscale en deze pc zelf aan — in code, niet
+    // alleen via de firewall: die laat DebridMusic.exe op 'Openbaar' op elke poort binnen (gemeten
+    // 14-10-2026), en een toewijzing in de modem naar 47820 zou dan alles openzetten.
+    final bron = req.connectionInfo?.remoteAddress;
+    if (ingang != Ingang.tlsBuiten && bron != null && !(_bronMagThuis ?? magOpThuisingang)(bron)) {
+      _koppelLog?.line('VAN BUITEN op een thuisingang ($ingang) geweigerd: ${bron.address}');
+      return _rauw(req, 403, 'Forbidden', {'error': 'Dit kan alleen thuis of via Tailscale.'});
+    }
+    // CORS alleen op 47820: een browser hoort niet bij de versleutelde ingangen.
+    if (ingang == Ingang.http) {
     res.headers
       ..set('Access-Control-Allow-Origin', '*')
       ..set('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range, If-None-Match')
       ..set('Access-Control-Allow-Methods', 'GET, POST, HEAD, OPTIONS')
       // Without this a browser client can't read the range headers it just asked for.
       ..set('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, ETag');
+    }
 
     if (req.method == 'OPTIONS') {
       res.statusCode = HttpStatus.noContent;
@@ -287,6 +404,13 @@ class LanServer {
     // Unauthenticated on purpose: this is how a device confirms it found the right machine, and
     // how the app itself checks whether a second copy is already running.
     if (path == '/health') {
+      // Van buiten alleen dat het deze pc is: geen naam, geen versie, geen aantallen.
+      if (ingang == Ingang.tlsBuiten) {
+        return _json(res, {
+          'status': 'ok',
+          if ((settings?.serverId ?? '').isNotEmpty) 'serverId': settings!.serverId,
+        });
+      }
       return _json(res, {
         'status': 'ok',
         'name': 'debridmusic-desktop',
@@ -299,16 +423,24 @@ class LanServer {
       });
     }
 
+    // Koppelen en ruilen kan niet van buiten (koppelen van overal komt pas met uitlevering C).
+    if (ingang == Ingang.tlsBuiten && (path == '/pair' || path == '/pair-cloud' || path == '/api/sleutel/ruil')) {
+      return _rauw(req, 403, 'Forbidden', {'error': 'Dit kan alleen thuis of via Tailscale.'});
+    }
+    // De ruil: alleen op 47822, met de huidige HTTP-sleutel van een echt toestel. Zie [GrantStore.ruil].
+    if (path == '/api/sleutel/ruil' && ingang == Ingang.tlsThuis) return _ruil(req);
+
     // Also unauthenticated, necessarily — this is how a device that has no token gets one.
-    if (path == '/pair') return _pair(req);
+    // Over 47822 komt er meteen een TLS-sleutel bij.
+    if (path == '/pair') return _pair(req, metTls: ingang == Ingang.tlsThuis);
 
     // Dezelfde soort deur, maar met je account in plaats van zes cijfers. Zie
     // `accountkoppeling.dart` voor waarom die er moest komen: zonder deze weg sloot één haperende
     // Firestore je buiten je eigen muziek, ook met de pc op dezelfde wifi.
-    if (path == '/pair-cloud') return _pairCloud(req);
+    if (path == '/pair-cloud') return _pairCloud(req, metTls: ingang == Ingang.tlsThuis);
 
     final van = req.connectionInfo?.remoteAddress.address ?? '?';
-    if (!await _authorizedOfHerstel(req)) {
+    if (!await _authorizedOfHerstel(req, ingang)) {
       // Per adres steeds later, en NOOIT bij een geldige sleutel (die komt hier niet). Zie `remming.dart`.
       final wacht = remming.naMislukt(van);
       if (wacht > Duration.zero) await Future<void>.delayed(wacht);
@@ -320,6 +452,13 @@ class LanServer {
       return res.close();
     }
     remming.gelukt(van);
+    // Een geldig verzoek: deze verbinding telt niet meer mee voor het plafond van de TLS-ingang.
+    if (ingang == Ingang.tlsThuis) _tlsIngang?.geldig(req.connectionInfo);
+    if (ingang == Ingang.tlsBuiten) {
+      _publiekIngang?.geldig(req.connectionInfo);
+      final nee = weigerVanBuiten(path, req.method);
+      if (nee != null) return _weigerVanBuiten(req, nee);
+    }
 
     switch (path) {
       case '/api/catalog':
@@ -347,7 +486,7 @@ class LanServer {
       case '/api/cast/requeue':
         return _castRequeue(req);
       case '/api/cast/control':
-        return _castControl(req);
+        return _castControl(req, ingang);
       case '/api/cast/status':
         // GET with the id in the query: a phone polls this while a progress bar is on screen, and
         // a body on every poll is needless ceremony.
@@ -388,7 +527,7 @@ class LanServer {
       case '/api/move/apply':
         return _moveApply(req);
       case '/api/update':
-        return _update(req);
+        return _update(req, ingang);
       case '/api/radio':
         return _radio(req);
       case '/api/diag/warmte':
@@ -430,27 +569,63 @@ class LanServer {
     return na > voor;
   }
 
-  Future<bool> _authorizedOfHerstel(HttpRequest req) async {
-    if (_authorized(req, stil: true)) return true;
+  Future<bool> _authorizedOfHerstel(HttpRequest req, [Ingang ingang = Ingang.http]) async {
+    if (_authorized(req, stil: true, ingang: ingang)) return true;
     // Nog één kans, en alleen de eerste keer: opnieuw inlezen en het aanbod nog eens toetsen.
-    if (await _herlaadKoppelingen() && _authorized(req, stil: true)) return true;
-    _authorized(req); // nu mét de regel in het logboek
+    if (await _herlaadKoppelingen() && _authorized(req, stil: true, ingang: ingang)) return true;
+    _authorized(req, ingang: ingang); // nu mét de regel in het logboek
     return false;
   }
 
-  bool _authorized(HttpRequest req, {bool stil = false}) {
+  /// Voor de toetsen: welk bronadres op een thuisingang mag. Null = [magOpThuisingang].
+  @visibleForTesting
+  bool Function(InternetAddress bron)? bronMagThuisVoorToets;
+  bool Function(InternetAddress bron)? get _bronMagThuis => bronMagThuisVoorToets;
+
+  Future<void> _weigerVanBuiten(HttpRequest req, String waarom) {
+    if (req.contentLength > 0 || req.headers.chunkedTransferEncoding) {
+      return _rauw(req, 403, 'Forbidden', {'error': waarom});
+    }
+    return _json(req.response, {'error': waarom}, status: HttpStatus.forbidden);
+  }
+
+  bool _authorized(HttpRequest req, {bool stil = false, Ingang ingang = Ingang.http}) {
     final header = req.headers.value(HttpHeaders.authorizationHeader) ?? '';
     final bearer = header.startsWith('Bearer ') ? header.substring(7).trim() : '';
+    final adres = req.connectionInfo?.remoteAddress;
+    // Versleuteld: alleen een TLS-sleutel, en alleen in de kop. Nooit de gedeelde sleutel, nooit
+    // `?token=` (een adres met een sleutel erin belandt in logboeken en geschiedenis).
+    if (ingang != Ingang.http) {
+      if (bearer.isNotEmpty && grants.acceptsTls(bearer)) {
+        final via = ingang == Ingang.tlsBuiten ? 'buiten' : (adres == null ? null : toestelWeg(adres));
+        if (grants.touch(bearer, via: via)) unawaited(grants.save());
+        return true;
+      }
+      if (!stil) _noteerWeigering(req, bearer);
+      return false;
+    }
     // The query form is not laziness: a UPnP renderer and an <audio> tag both fetch the URL
     // themselves and have nowhere to put a header.
     final query = req.uri.queryParameters['token'] ?? '';
     final offered = bearer.isNotEmpty ? bearer : query;
     if (offered.isEmpty) return false;
 
+    // Een TLS-sleutel hoort hier nooit: hij reisde nu onversleuteld. Weigeren, intrekken en melden.
+    if (grants.isTlsSleutel(offered)) {
+      if (!stil) {
+        final g = grants.grantFor(offered);
+        grants.trekSleutelIn(offered);
+        unawaited(grants.save());
+        _koppelLog?.line('TLS-SLEUTEL OP 47820  "${g?.deviceName ?? '?'}"  van ${adres?.address ?? '?'} — ingetrokken');
+        rodeMelding.value = 'De versleutelde sleutel van "${g?.deviceName ?? 'een toestel'}" kwam onversleuteld '
+            'binnen en is ingetrokken. Het toestel koppelt vanzelf opnieuw.';
+      }
+      return false;
+    }
+
     // A per-device grant, or the one shared token this used to have. The legacy check stays and is
     // NOT rotated on upgrade: a device paired yesterday must keep working the moment this ships,
     // and unpairing everything at once is exactly what the old design was stuck with.
-    final adres = req.connectionInfo?.remoteAddress;
     if (grants.accepts(offered)) {
       if (grants.touch(offered, via: adres == null ? null : toestelWeg(adres))) unawaited(grants.save());
       if (grants.grantFor(offered)?.legacy ?? false) _gedeeldGebruikt(req);
@@ -639,7 +814,7 @@ class LanServer {
   /// uit — dezelfde die in elke cast-URL naar Sonos en KEF staat, en die niet per toestel in te
   /// trekken is. Nu krijgt elk toestel een rij en een sleutel van zichzelf. Een toestel van vóór deze
   /// versie stuurt geen id mee; dan maakt de pc er een (zelfde vorm als `device_identity.dart`).
-  Future<void> _pair(HttpRequest req) async {
+  Future<void> _pair(HttpRequest req, {bool metTls = false}) async {
     if (req.method != 'POST') {
       req.response.statusCode = HttpStatus.methodNotAllowed;
       return req.response.close();
@@ -663,15 +838,71 @@ class LanServer {
       deviceId: id,
       deviceName: naam,
       platform: schoneToestelnaam(map['platform'], leeg: ''),
+      metTls: metTls,
     );
     await grants.save();
     _meldNieuweSleutel(req, grant, via: 'code');
+    if (metTls) _tlsIngang?.geldig(req.connectionInfo);
     return _json(req.response, {
       'token': grant.token,
+      if (grant.tlsToken != null) 'tlsToken': grant.tlsToken,
       'deviceId': id,
       'name': deviceName(),
       'trackCount': library.tracks.length,
     });
+  }
+
+  /// De eenmalige ruil (alleen op 47822): de huidige HTTP-sleutel van dit toestel in het lijf, een
+  /// TLS-sleutel terug. Zie [GrantStore.ruil] voor wie mag.
+  ///
+  /// **Een 409 is een alarm.** Het echte toestel ruilt hoogstens één keer. Heeft het toestel al een
+  /// TLS-sleutel en vraagt iemand opnieuw met zijn HTTP-sleutel, dan had iemand anders die HTTP-sleutel
+  /// (afgeluisterd op het netwerk thuis) — of het toestel zelf zijn TLS-sleutel kwijt. Hoe dan ook:
+  /// rood op de pc, met wat te doen.
+  Future<void> _ruil(HttpRequest req) async {
+    if (req.method != 'POST') {
+      req.response.statusCode = HttpStatus.methodNotAllowed;
+      return req.response.close();
+    }
+    final van = req.connectionInfo?.remoteAddress.address ?? '?';
+    final body = await _leesLijf(req, lijfZonderSleutel);
+    if (body == null) return;
+    Map<String, dynamic> map;
+    try {
+      final d = jsonDecode(body.isEmpty ? '{}' : body);
+      map = d is Map ? d.cast<String, dynamic>() : <String, dynamic>{};
+    } on FormatException {
+      map = <String, dynamic>{};
+    }
+    final http = (map['sleutel'] ?? '').toString();
+    final gedeeld = token.isNotEmpty ? token : (settings?.lanToken ?? '');
+    if (http.isNotEmpty && gedeeld.isNotEmpty && _constantTimeEquals(http, gedeeld)) {
+      _koppelLog?.line('RUIL  geweigerd: de gedeelde sleutel, van $van');
+      return _json(req.response, {'error': 'De gedeelde sleutel kan niet omgeruild worden.'}, status: HttpStatus.forbidden);
+    }
+    final r = grants.ruil(http);
+    switch (r.status) {
+      case 200:
+        remming.gelukt(van);
+        // Eerst naar schijf, dan pas teruggeven: een pc die daarna omvalt, mag geen toestel achterlaten
+        // met een sleutel die hij nooit gekend heeft.
+        await grants.save();
+        _tlsIngang?.geldig(req.connectionInfo);
+        _koppelLog?.line('RUIL  "${r.grant!.deviceName}" gebruikt nu een versleutelde verbinding (van $van)');
+        return _json(req.response, {'tlsToken': r.tls});
+      case 409:
+        _koppelLog?.line('RUIL  NOG EENS voor "${r.grant?.deviceName ?? '?'}" (van $van) — geweigerd, rood gemeld');
+        rodeMelding.value = 'De sleutel van "${r.grant?.deviceName ?? 'een toestel'}" werd al door een ander toestel '
+            'omgeruild. Trek die sleutel in bij Instellingen → Delen → Toestellen.';
+        return _json(req.response, {
+          'error': 'De sleutel van dit toestel werd al door een ander toestel omgeruild. Trek die sleutel in op je pc.'
+        }, status: HttpStatus.conflict);
+      default:
+        final wacht = remming.naMislukt(van);
+        if (wacht > Duration.zero) await Future<void>.delayed(wacht);
+        _koppelLog?.line('RUIL  geweigerd (${r.status}) van $van');
+        return _json(req.response, {'error': 'Deze sleutel kan niet omgeruild worden.'}, status: r.status);
+    }
   }
 
   /// Elke nieuwe sleutel: één regel in `koppeling.log` en een melding op de pc. Zie [SleutelMelding].
@@ -699,7 +930,7 @@ class LanServer {
   /// **Elke weigering wordt opgeschreven.** Dit is een deur naar je hele bibliotheek; als er ooit
   /// iets vreemds langskomt hoort dat in `koppeling.log` te staan en niet alleen in een 403 die
   /// niemand ziet.
-  Future<void> _pairCloud(HttpRequest req) async {
+  Future<void> _pairCloud(HttpRequest req, {bool metTls = false}) async {
     if (req.method != 'POST') {
       req.response.statusCode = HttpStatus.methodNotAllowed;
       return req.response.close();
@@ -782,13 +1013,16 @@ class LanServer {
       deviceId: id,
       deviceName: naam,
       platform: schoneToestelnaam(map['platform'], leeg: ''),
+      metTls: metTls,
     );
     // Eerst naar schijf, dan pas teruggeven. Andersom zou een pc die daarna omvalt een toestel
     // achterlaten met een sleutel waar hij nooit meer van gehoord heeft.
     await grants.save();
     _meldNieuweSleutel(req, grant, via: 'account');
+    if (metTls) _tlsIngang?.geldig(req.connectionInfo);
     return _json(req.response, {
       'token': grant.token,
+      if (grant.tlsToken != null) 'tlsToken': grant.tlsToken,
       'name': deviceName(),
       'trackCount': library.tracks.length,
     });
@@ -835,13 +1069,18 @@ class LanServer {
     }
   }
 
-  Future<void> _castControl(HttpRequest req) async {
+  Future<void> _castControl(HttpRequest req, [Ingang ingang = Ingang.http]) async {
     if (req.method != 'POST') {
       req.response.statusCode = HttpStatus.methodNotAllowed;
       return req.response.close();
     }
     final map = await _body(req);
     if (map == null) return;
+    // Van buiten: wat al speelt pauzeren, stoppen of zachter zetten — niet thuis iets laten afspelen.
+    if (ingang == Ingang.tlsBuiten && !const {'pause', 'stop', 'volume'}.contains(map['action'])) {
+      return _json(req.response, {'error': 'Op een speaker thuis iets afspelen kan alleen thuis of via Tailscale.'},
+          status: HttpStatus.forbidden);
+    }
     try {
       await cast.control(
         (map['deviceId'] ?? '') as String,
@@ -1580,8 +1819,13 @@ class LanServer {
       // weten we alleen niets, en een lege lijst zegt dat precies.
       debugPrint('Uitwijkadressen niet op te maken: $e');
     }
+    final c = certificaat;
     return _json(req.response, {
       'urls': [for (final ip in overal) 'http://$ip:$port'],
+      // De pin is geen geheim: hij zegt alleen welk certificaat bij deze pc hoort. Een toestel leert
+      // hem hier, thuis of via Tailscale, en vertrouwt daarna alleen dat certificaat.
+      if (c != null) 'pin': c.pin,
+      if (c != null && _tls != null) 'tlsPoort': _tls!.port,
     });
   }
 
@@ -1592,10 +1836,13 @@ class LanServer {
   /// eraan is geschreven vanuit "verander iets aan de muziek". Dit verandert de app zelf. Een pc die
   /// deze weg nog niet kent antwoordt 404, en dat leest de telefoon als "kan het niet" — precies wat
   /// er dan ook aan de hand is.
-  Future<void> _update(HttpRequest req) async {
+  Future<void> _update(HttpRequest req, [Ingang ingang = Ingang.http]) async {
     final body = await _jsonBody(req);
     if (body == null) return;
     final op = (body['op'] ?? 'status') as String;
+    if (ingang == Ingang.tlsBuiten && op == 'start') {
+      return _json(req.response, {'error': 'Je pc bijwerken kan alleen thuis of via Tailscale.'}, status: HttpStatus.forbidden);
+    }
     // Alleen de versienaam, zonder het buildnummer erachter: `version` is hier `3.9.236+11471` en
     // dat is niet wat er straks naast een knop hoort te staan.
     final hier = version.split('+').first;
