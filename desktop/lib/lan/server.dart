@@ -1673,9 +1673,15 @@ class LanServer {
 
   /// Apply the plan the user actually read.
   ///
-  /// The approved `to` and `fate` come back with the request rather than being worked out again:
-  /// re-planning here would let the folder change between the screen someone agreed to and the
-  /// files that move.
+  /// The approved `to` and `fate` come back with the request, and the PC works the plan out AGAIN
+  /// and compares. Nothing moves unless every item is exactly what this machine would do itself.
+  ///
+  /// **Waarom vergelijken en niet gewoon aannemen.** Tot 14-10-2026 werd `to` letterlijk uitgevoerd:
+  /// wie een sleutel had, kon een bestand uit de bibliotheek naar elke plek op de pc laten schrijven
+  /// (`C:\Users\…\Opstarten`, een andere schijf). Opnieuw plannen zonder te vergelijken zou dat
+  /// dichten, maar dan verhuist er misschien iets anders dan wat op het scherm stond — precies wat
+  /// het meesturen van het plan moest voorkomen. Vergelijken doet beide: wat afwijkt wordt geweigerd
+  /// (409), en het toestel vraagt het plan dan opnieuw op.
   Future<void> _moveApply(HttpRequest req) async {
     final config = settings;
     if (config == null) return _unavailable(req, 'Deze pc kan geen wijzigingen aannemen.');
@@ -1705,10 +1711,30 @@ class LanServer {
         : _tracksFor(body['trackIds']);
     if (tracks.isEmpty) return _json(req.response, {'moved': 0});
 
+    // Het plan van deze pc zelf, voor precies deze nummers. Alleen wat daar letterlijk mee
+    // overeenkomt, mag verhuizen; anders wordt het plan van deze pc uitgevoerd en niet dat van het
+    // verzoek.
+    List<MovePlan>? uitTeVoeren;
+    if (approved.isNotEmpty) {
+      final eigen = {for (final p in library.planMove(tracks, target)) p.track.path: p};
+      final afwijkend = approvedAfwijkend(approved, eigen);
+      if (afwijkend > 0) {
+        return _json(
+            req.response,
+            {
+              'error': 'Wat er op de pc zou gebeuren is intussen anders dan wat je zag '
+                  '($afwijkend ${afwijkend == 1 ? 'bestand' : 'bestanden'}). Er is niets verplaatst — '
+                  'open het verplaatsen opnieuw.',
+              'afwijkend': afwijkend,
+            },
+            status: HttpStatus.conflict);
+      }
+      uitTeVoeren = [for (final p in approved) eigen[p.track.path]!];
+    }
+
     try {
       final moved = await library.moveTracksToAlbum(tracks, target, config,
-          moveFiles: body['moveFiles'] != false,
-          plan: approved.isEmpty ? null : approved);
+          moveFiles: body['moveFiles'] != false, plan: uitTeVoeren);
       return _json(req.response, {'moved': moved});
     } catch (e) {
       return _unavailable(req, 'De pc kon dat niet verplaatsen: $e');
@@ -1898,6 +1924,20 @@ class LanServer {
   /// The URLs to hand to the other devices, best first.
   Future<List<String>> addresses() async =>
       [for (final ip in await lanAddresses()) 'http://$ip:$port'];
+}
+
+/// Hoeveel items van een meegestuurd verplaatsplan NIET exact zijn wat deze pc zelf zou doen.
+///
+/// Een item zonder eigen tegenhanger telt als afwijkend; `to` en `fate` moeten allebei gelijk zijn.
+/// Apart en openbaar zodat de toets de regel zelf kan raken, naast de route.
+@visibleForTesting
+int approvedAfwijkend(List<MovePlan> approved, Map<String, MovePlan> eigen) {
+  var n = 0;
+  for (final p in approved) {
+    final e = eigen[p.track.path];
+    if (e == null || e.to != p.to || e.fate != p.fate) n++;
+  }
+  return n;
 }
 
 /// A fresh access token. Generated once and kept, so a device stays paired across restarts.

@@ -26902,10 +26902,19 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
     final target = _target;
     if (target == null) return;
     setState(() => _busy = true);
-    final moved = await context
-        .read<LibraryStore>()
-        .moveTracksToAlbum([widget.track], target, context.read<AppSettings>(),
-            moveFiles: _moveFiles, plan: _plan);
+    final int moved;
+    try {
+      moved = await context
+          .read<LibraryStore>()
+          .moveTracksToAlbum([widget.track], target, context.read<AppSettings>(),
+              moveFiles: _moveFiles, plan: _plan);
+    } on RemoteException catch (e) {
+      // Bv. 409: het plan op de pc is intussen anders dan wat hier stond. Zeggen, niet hangen.
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _srcToast(context, e.message);
+      return;
+    }
     if (!mounted) return;
     _srcToast(context, moved > 0 ? 'Verplaatst — $moved bestand mee verhuisd' : 'Verplaatst — bestand bleef staan');
     Navigator.of(context).pop(true);
@@ -29004,8 +29013,15 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
     final settings = context.read<AppSettings>();
     int moved;
     if (widget.absorb != null) {
-      moved = await lib.moveTracksToAlbum(widget.absorb!.tracks, widget.album, settings,
-          moveFiles: _moveFiles, plan: _plan.items);
+      try {
+        moved = await lib.moveTracksToAlbum(widget.absorb!.tracks, widget.album, settings,
+            moveFiles: _moveFiles, plan: _plan.items);
+      } on RemoteException catch (e) {
+        if (!mounted) return;
+        setState(() => _busy = false);
+        _srcToast(context, e.message);
+        return;
+      }
     } else {
       // Regroup first: the tags are what decide, and the user's word beats them.
       await lib.mergeEditions(widget.album);
