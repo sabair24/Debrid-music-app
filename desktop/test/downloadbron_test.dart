@@ -10,7 +10,6 @@ import 'package:debridmusic/online.dart';
 import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/rutracker.dart';
 import 'package:debridmusic/settings.dart';
-import 'package:debridmusic/soulseek.dart';
 import 'package:debridmusic/torbox.dart';
 import 'package:flutter_test/flutter_test.dart';
 

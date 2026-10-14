@@ -176,7 +176,8 @@ void main() {
 
     test('DE VAL: ook het toestel stuurt naam en grootte mee, en de pc neemt ze aan', () {
       expect(remote, contains("'fileSize': bestand.size"));
-      final s = lijf(server, 'void startTorrentDownload(');
+      // Sinds 14-10-2026 geeft hij de reden van een weigering terug (downloadbron.dart).
+      final s = lijf(server, 'String? startTorrentDownload(');
       expect(s, contains("body['fileSize']"));
       expect(s, contains('bestand: bestand'));
     });
