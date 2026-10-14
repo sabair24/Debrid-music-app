@@ -11,6 +11,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:io' show HttpDate;
 
 import 'package:http/http.dart' as http;
 
@@ -51,10 +52,15 @@ String firestoreUitleg(int status, String bericht) => switch (status) {
 
 /// One document: its id and its fields, already flattened to plain Dart.
 class FirestoreDoc {
-  const FirestoreDoc(this.id, this.data, {this.updateTime});
+  const FirestoreDoc(this.id, this.data, {this.updateTime, this.serverTijd});
   final String id;
   final Map<String, dynamic> data;
   final DateTime? updateTime;
+
+  /// "Nu" volgens Firestore: de `Date`-kop van het antwoord waarin dit document zat. Samen met
+  /// [updateTime] geeft dat de leeftijd van het document met één klok — die van de server. De klok
+  /// van dit toestel kan een uur verkeerd staan; zie `lan/verbindingsstand.dart`.
+  final DateTime? serverTijd;
 }
 
 class Firestore {
@@ -81,7 +87,7 @@ class Firestore {
     final res = await _send(() => _http.get(config.documentsUrl(path), headers: _headers));
     if (res.statusCode == 404) return null;
     final body = _decode(res);
-    return _toDoc(body);
+    return _toDoc(body, serverTijd: _datum(res));
   }
 
   /// Every document in a collection. `pageSize` is generous because the collections here are
@@ -97,7 +103,7 @@ class Firestore {
     if (docs is! List) return const [];
     return [
       for (final d in docs)
-        if (d is Map<String, dynamic>) _toDoc(d),
+        if (d is Map<String, dynamic>) _toDoc(d, serverTijd: _datum(res)),
     ];
   }
 
@@ -147,7 +153,17 @@ class Firestore {
     );
   }
 
-  FirestoreDoc _toDoc(Map<String, dynamic> raw) {
+  static DateTime? _datum(http.Response res) {
+    final kop = res.headers['date'];
+    if (kop == null || kop.isEmpty) return null;
+    try {
+      return HttpDate.parse(kop);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  FirestoreDoc _toDoc(Map<String, dynamic> raw, {DateTime? serverTijd}) {
     final name = (raw['name'] ?? '').toString();
     final id = name.contains('/') ? name.split('/').last : name;
     final fields = raw['fields'];
@@ -155,6 +171,7 @@ class Firestore {
       id,
       fields is Map<String, dynamic> ? _decodeFields(fields) : const {},
       updateTime: DateTime.tryParse((raw['updateTime'] ?? '').toString()),
+      serverTijd: serverTijd,
     );
   }
 

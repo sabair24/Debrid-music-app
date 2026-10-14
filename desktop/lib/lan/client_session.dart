@@ -20,6 +20,7 @@ import '../cloud/catalog_mirror.dart';
 import 'adreswedloop.dart';
 import 'client_mode.dart';
 import 'uitwijk.dart';
+import 'verbindingsstand.dart';
 
 class ClientSession extends ChangeNotifier {
   ClientSession({
@@ -31,6 +32,7 @@ class ClientSession extends ChangeNotifier {
     this.kopie = const CatalogusKopie(),
     this.verseSleutel,
     this.adressenUitAccount,
+    this.hartslagUitAccount,
     Future<List<FoundServer>> Function()? zoekOpNetwerk,
   })  : _endpoint = endpoint,
         _zoekOpNetwerk = zoekOpNetwerk ?? LanBrowser.find;
@@ -158,7 +160,11 @@ class ClientSession extends ChangeNotifier {
       }
 
       final winnaar = uitslag.winnaar;
-      if (winnaar == null) return onthouden;
+      if (winnaar == null) {
+        unawaited(_naMislukken(onthouden.serverId));
+        return onthouden;
+      }
+      _zetStand(Verbindingsstand.verbonden(wegNaar(winnaar)));
       final id = uitslag.health?.serverId ?? '';
       final vers = onthouden.met(baseUrl: winnaar, serverId: id.isEmpty ? null : id);
       if (vers.baseUrl == onthouden.baseUrl && vers.serverId == onthouden.serverId) return onthouden;
@@ -188,6 +194,103 @@ class ClientSession extends ChangeNotifier {
   /// antwoordt (een nieuw Telenet-adres, een nieuwe Tailscale-naam). Null = geen account op dit
   /// toestel. Zie `main.dart`.
   final Future<List<Uri>> Function(String serverId)? adressenUitAccount;
+
+  /// Wat de pc het laatst in je account schreef (`CloudSession.hartslag`), voor de reden als hij niet
+  /// antwoordt. Null = geen account op dit toestel; dan zegt de regel alleen "reageert niet".
+  final Future<Hartslag?> Function(String serverId)? hartslagUitAccount;
+
+  /// Of dit toestel zelf geen netwerk heeft (de netwerkwacht in `main.dart`, die pas na deze sessie
+  /// gemaakt wordt — vandaar een veld en geen parameter).
+  bool Function() geenNetwerk = _nooit;
+  static bool _nooit() => false;
+
+  /// De weg naar de pc, of waarom die er niet is — voor de regel bovenin. Zie `verbindingsstand.dart`.
+  ///
+  /// Gezet na elke wedloop (een winnaar: verbonden langs zijn weg; geen: de reden halen) en na elke
+  /// poll. Begint op "zoekt": tot de eerste wedloop weet niemand iets.
+  Verbindingsstand get verbinding => _stand;
+  Verbindingsstand _stand = Verbindingsstand.zoekt(DateTime.now());
+
+  /// Wanneer de regel bovenin even mag zeggen langs welke weg het nu loopt: bij een andere weg dan
+  /// daarnet (thuis de deur uit), en na een tijd zonder pc. Niet bij elke start — "Thuis" bij elk
+  /// openen van de app is ruis.
+  DateTime? wegGewisseld;
+  Verbindingsweg? _laatsteWeg;
+  int _verbondenTeller = 0;
+
+  /// Er was een tijd zonder pc sinds de laatste verbinding. Apart onthouden, want een netwerkwissel
+  /// zet de stand eerst op "zoekt" — dan is de stand van daarnet niet meer "weg".
+  bool _naGeenPc = false;
+
+  void _zetStand(Verbindingsstand nieuw) {
+    final oud = _stand;
+    _stand = nieuw;
+    if (nieuw.soort == Verbindingssoort.verbonden) {
+      _verbondenTeller++;
+      final vorige = _laatsteWeg;
+      if ((vorige != null && vorige != nieuw.weg) || _naGeenPc) {
+        wegGewisseld = DateTime.now();
+      }
+      _laatsteWeg = nieuw.weg;
+      _naGeenPc = false;
+    } else if (nieuw.soort == Verbindingssoort.weg) {
+      _naGeenPc = true;
+    }
+    if (oud.zelfde(nieuw)) return;
+    _log('stand: $nieuw');
+    notifyListeners();
+  }
+
+  /// Wanneer de reden het laatst bepaald is: hoogstens eens per minuut opnieuw, want het kost een
+  /// leesbeurt in je account. Een netwerkwissel en "Opnieuw proberen" zetten de stand eerst op
+  /// "zoekt", en dan mag het meteen.
+  DateTime? _waaromOm;
+
+  /// Geen enkel adres antwoordde: de hartslag van de pc lezen en zeggen waarom. Loopt hij al, dan
+  /// wacht een tweede aanvraag op dezelfde (één leesbeurt).
+  Future<void> _naMislukken([String? serverId]) =>
+      _waaromBezig ??= _bepaalWaarom(serverId).whenComplete(() => _waaromBezig = null);
+  Future<void>? _waaromBezig;
+
+  Future<void> _bepaalWaarom(String? serverId) async {
+    final nu = DateTime.now();
+    final vorige = _waaromOm;
+    if (_stand.soort == Verbindingssoort.weg &&
+        vorige != null &&
+        nu.difference(vorige) < const Duration(minutes: 1)) {
+      return;
+    }
+    _waaromOm = nu;
+    final teller = _verbondenTeller;
+    Hartslag? hartslag;
+    var onbereikbaar = false;
+    final haal = hartslagUitAccount;
+    if (haal != null && !geenNetwerk()) {
+      try {
+        hartslag = await haal(serverId ?? _endpoint?.serverId ?? '').timeout(const Duration(seconds: 8));
+      } on HartslagOnbereikbaar {
+        onbereikbaar = true;
+      } catch (_) {/* niet weten: dan "reageert niet" */}
+    }
+    // Intussen toch verbonden (een poll die wel lukte), of ontkoppeld: dan geen reden meer.
+    if (teller != _verbondenTeller || _endpoint == null) return;
+    final waarom = waaromNiet(hartslag: hartslag, geenNetwerk: onbereikbaar || geenNetwerk());
+    final bij = hartslag?.bijgewerkt;
+    final serverNu = hartslag?.serverNu;
+    _log('waarom niet: ${waarom.name}'
+        '${hartslag == null ? '' : ' (hartslag ${hartslag.online ? 'aan' : 'uit'}'
+            '${bij == null || serverNu == null ? '' : ', ${serverNu.difference(bij).inSeconds} s oud'})'}');
+    _zetStand(Verbindingsstand.weg(waarom));
+  }
+
+  /// De poll kreeg niets van de pc: zoeken, en lukt dat nu niet (te snel na de vorige keer), dan
+  /// tenminste de reden.
+  void _pcStil() {
+    if (_stand.soort == Verbindingssoort.verbonden) _zetStand(Verbindingsstand.zoekt(DateTime.now()));
+    unawaited(_zoekAnderAdres().then((liep) {
+      if (!liep && !_zoekt) unawaited(_naMislukken());
+    }));
+  }
 
   /// Vragen waar deze pc nog meer te bereiken is, en dat bewaren voor de dag dat je weggaat.
   ///
@@ -255,6 +358,11 @@ class ClientSession extends ChangeNotifier {
   DateTime? _laatstGezocht;
   bool _zoekt = false;
 
+  /// Of er nu een zoektocht loopt. Voor toetsen: het logboek is daar geen maat, want een sessie van
+  /// een vorige toets die nog zoekt, schrijft in hetzelfde bestand.
+  @visibleForTesting
+  bool get zoektNu => _zoekt;
+
   /// De pc antwoordt niet op het adres dat we hebben: de andere adressen afgaan en overstappen op
   /// het eerste dat wél antwoordt.
   ///
@@ -267,27 +375,38 @@ class ClientSession extends ChangeNotifier {
   ///
   /// Hooguit eens per halve minuut, want een pc die écht uit staat hoort niet elke poll een rondje
   /// adressen te kosten. [refreshNow] — "Opnieuw proberen" en terugkomen in de app — mag meteen.
-  Future<void> _zoekAnderAdres({bool meteen = false}) async {
+  Future<bool> _zoekAnderAdres({bool meteen = false}) async {
     final huidig = _endpoint;
-    if (huidig == null || owner || _zoekt) return;
+    if (huidig == null || owner) return false;
+    if (_zoekt) {
+      // Er loopt al een zoektocht. Een tik op "Opnieuw proberen" mag die laten zien; de uitkomst
+      // komt van die zoektocht zelf (zie [_naZoeken]).
+      if (meteen) _zetStand(Verbindingsstand.zoekt(DateTime.now()));
+      return false;
+    }
     final nu = DateTime.now();
     final vorige = _laatstGezocht;
-    if (!meteen && vorige != null && nu.difference(vorige) < const Duration(seconds: 30)) return;
+    if (!meteen && vorige != null && nu.difference(vorige) < const Duration(seconds: 30)) return false;
     _laatstGezocht = nu;
     _zoekt = true;
+    // Een tik op "Opnieuw proberen" hoort te zien dat er iets gebeurt; een herhaling elke halve
+    // minuut terwijl de reden er al staat niet — dat zou flikkeren.
+    if (meteen || _stand.soort == Verbindingssoort.verbonden) _zetStand(Verbindingsstand.zoekt(nu));
     try {
       _log('pc antwoordt niet op ${huidig.baseUrl.authority} — andere adressen proberen'
           ' (${huidig.uitwijk.length} uitwijk)');
       final ander = await _bereikbaarAdres(huidig);
       if (ander.baseUrl == huidig.baseUrl) {
         _log('geen ander adres antwoordt; blijft op ${huidig.baseUrl.authority}');
-        return;
+        return true;
       }
       _log('overgestapt op ${ander.baseUrl.authority}');
       // Via [connect], zodat de speler, de catalogus en het peilen het nieuwe adres krijgen.
       await connect(ander);
+      return true;
     } finally {
       _zoekt = false;
+      _naZoeken();
     }
   }
 
@@ -302,12 +421,17 @@ class ClientSession extends ChangeNotifier {
     final huidig = _endpoint;
     if (owner || huidig == null) return;
     if (_zoekt) {
-      _log('netwerk gewisseld ($waarom) — er wordt al gekozen');
+      // Niet weggooien: de zoektocht die nu loopt begon op het netwerk van daarnet, en kan dus niets
+      // gevonden hebben op het nieuwe. Zonder deze tweede beurt bleef de app dan tot de volgende
+      // poll-zoektocht (hoogstens eens per halve minuut) op "geen pc" staan.
+      _wisselWacht = waarom;
+      _log('netwerk gewisseld ($waarom) — er wordt al gekozen; daarna opnieuw');
       return;
     }
     _zoekt = true;
     try {
       _log('netwerk gewisseld ($waarom) — opnieuw kiezen');
+      _zetStand(Verbindingsstand.zoekt(DateTime.now()));
       final beste = await _bereikbaarAdres(huidig);
       if (_endpoint != huidig) return; // intussen ontkoppeld of elders verbonden
       final oud = library.remote;
@@ -322,7 +446,23 @@ class ClientSession extends ChangeNotifier {
       }
     } finally {
       _zoekt = false;
+      _naZoeken();
     }
+  }
+
+  /// Een netwerkwissel die binnenkwam terwijl er al gezocht werd.
+  String? _wisselWacht;
+
+  /// Na elke zoektocht: een wissel die intussen binnenkwam alsnog afhandelen, en anders nooit op
+  /// "zoekt" blijven staan — dan de reden halen.
+  void _naZoeken() {
+    final wissel = _wisselWacht;
+    if (wissel != null) {
+      _wisselWacht = null;
+      unawaited(netwerkVeranderd('$wissel, na de lopende keuze'));
+      return;
+    }
+    if (_stand.soort == Verbindingssoort.zoekt) unawaited(_naMislukken());
   }
 
   /// Een regel in `verbinding.log`, voor wie naast deze klasse iets over de verbinding te zeggen
@@ -376,6 +516,9 @@ class ClientSession extends ChangeNotifier {
       if (await _toonEigenKopie()) unawaited(meld());
     }
 
+    // Ook bij een verse koppeling als er nog "zoekt" staat: anders telt de regel vanaf het moment dat
+    // deze sessie gemaakt werd, en wie vijf minuten op het koppelscherm zat, zag "Zoekt je pc… 300 s".
+    if (!remember || _stand.soort == Verbindingssoort.zoekt) _zetStand(Verbindingsstand.zoekt(DateTime.now()));
     final werkend = remember ? endpoint : await _bereikbaarAdres(endpoint);
     endpoint = werkend;
     _endpoint = endpoint;
@@ -540,12 +683,19 @@ class ClientSession extends ChangeNotifier {
       if (library.geenVerbinding == null) {
         lastError = null;
         _meldToestand('pc antwoordt op ${_endpoint?.baseUrl.authority}');
+        final e = _endpoint;
+        if (e != null) _zetStand(Verbindingsstand.verbonden(wegNaar(e.baseUrl)));
       } else {
         _meldToestand(library.geenVerbinding == GeenVerbinding.sleutelGeweigerd
             ? 'sleutel geweigerd door ${_endpoint?.baseUrl.authority}'
             : 'pc antwoordt niet op ${_endpoint?.baseUrl.authority}');
         // Niet afwachten, net als het sleutelherstel hieronder: een rondje adressen kost seconden.
-        if (library.geenVerbinding == GeenVerbinding.pcStil) unawaited(_zoekAnderAdres());
+        if (library.geenVerbinding == GeenVerbinding.pcStil) _pcStil();
+        // Een geweigerde sleutel is wél een pc die antwoordt: de weg is er, de melding gaat over de sleutel.
+        final e = _endpoint;
+        if (library.geenVerbinding == GeenVerbinding.sleutelGeweigerd && e != null) {
+          _zetStand(Verbindingsstand.verbonden(wegNaar(e.baseUrl)));
+        }
         lastError = library.geenVerbinding == GeenVerbinding.sleutelGeweigerd
             ? 'De pc antwoordt, maar weigert de sleutel van dit toestel.'
             : 'De pc antwoordde niet.';
@@ -575,7 +725,7 @@ class ClientSession extends ChangeNotifier {
     } catch (e) {
       lastError = e.toString();
       _meldToestand('pc antwoordt niet: $e');
-      unawaited(_zoekAnderAdres());
+      _pcStil();
       // The PC did not answer. Show the cloud copy rather than nothing — you can browse, and put
       // downloads in the queue for when it wakes up.
       await _fillFromMirror();
@@ -645,8 +795,20 @@ class ClientSession extends ChangeNotifier {
     return _refresh();
   }
 
+  /// Na [dispose] meldt de sessie niets meer. Er loopt veel los van elkaar (de wedloop, de reden uit
+  /// de hartslag, een uitgestelde netwerkwissel), en een antwoord dat na het opruimen binnenkomt hoort
+  /// stil te vallen in plaats van "used after being disposed" te gooien.
+  bool _opgeruimd = false;
+
+  @override
+  void notifyListeners() {
+    if (_opgeruimd) return;
+    super.notifyListeners();
+  }
+
   @override
   void dispose() {
+    _opgeruimd = true;
     _poll?.cancel();
     super.dispose();
   }

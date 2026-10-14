@@ -92,9 +92,41 @@ class Netwerkwacht {
   bool _nogEen = false;
   String _laatste = '';
 
+  /// Of dit toestel op dit moment helemaal geen netwerk heeft, voor "Geen internet op je gsm" in de
+  /// statusregel (`lan/verbindingsstand.dart`). Onwaar zolang er niets gemeld is: niet weten is geen
+  /// "geen internet".
+  ///
+  /// * iOS en macOS: het pad zegt het zelf (`transport: weg`).
+  /// * Android: het standaardnetwerk is weg, of elk fysiek netwerk (wifi én mobiel) is weg. Dat
+  ///   tweede is nodig omdat met Tailscale aan de VPN het standaardnetwerk is, en die blijft
+  ///   "beschikbaar" als het netwerk eronder verdwijnt.
+  bool get geenNetwerk => _standaardWeg || (_fysiekGezien && _fysiek.isEmpty) || _padWeg;
+  bool _standaardWeg = false;
+  bool _padWeg = false;
+  bool _fysiekGezien = false;
+  final Set<String> _fysiek = {};
+
+  void _onthoud(NetwerkGebeurtenis g) {
+    switch (g.soort) {
+      case 'pad':
+        _padWeg = g.transport == 'weg';
+      case 'standaard-weg':
+        _standaardWeg = true;
+      case 'standaard-beschikbaar' || 'standaard-eigenschappen':
+        _standaardWeg = false;
+      case 'fysiek-beschikbaar':
+        _fysiekGezien = true;
+        _fysiek.add(g.netwerk);
+      case 'fysiek-weg':
+        _fysiekGezien = true;
+        _fysiek.remove(g.netwerk);
+    }
+  }
+
   void start() {
     _abonnement ??= bron.listen((g) {
       log?.call('netwerk: $g');
+      _onthoud(g);
       _laatste = g.toString();
       _klok?.cancel();
       _klok = Timer(rust, _rustig);

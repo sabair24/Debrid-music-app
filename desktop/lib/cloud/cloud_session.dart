@@ -21,6 +21,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../lan/tokens.dart';
+import '../lan/verbindingsstand.dart';
 import '../paths.dart';
 import 'auth.dart';
 import 'config.dart';
@@ -397,6 +398,32 @@ class CloudSession extends ChangeNotifier {
           lastSeen: d.data['lastSeenAt'] is DateTime ? d.data['lastSeenAt'] as DateTime : null,
         ),
     ];
+  }
+
+  /// Wat de pc met deze id het laatst over zichzelf schreef, voor de reden in de statusregel
+  /// (`lan/verbindingsstand.dart`). Eén document, dus één leesbeurt. Zonder id (een koppeling van
+  /// vóór de id): de enige pc onder je account, anders niets. Null = niet aangemeld of geen regel.
+  ///
+  /// Gooit [HartslagOnbereikbaar] als Firestore helemaal niet antwoordde — dan heeft dit toestel
+  /// vrijwel zeker zelf geen internet. Een antwoord met een foutcode (429, 503) gooit gewoon door.
+  Future<Hartslag?> hartslag(String serverId) async {
+    if (!isSignedIn) return null;
+    try {
+      final db = await _db();
+      if (db == null) return null;
+      final FirestoreDoc? doc;
+      if (serverId.isNotEmpty) {
+        doc = await db.get('users/$uid/servers/$serverId');
+      } else {
+        final alle = await db.list('users/$uid/servers');
+        doc = alle.length == 1 ? alle.single : null;
+      }
+      if (doc == null) return null;
+      return Hartslag(online: doc.data['online'] == true, bijgewerkt: doc.updateTime, serverNu: doc.serverTijd);
+    } on FirestoreException catch (e) {
+      if (e.statusCode == null) throw const HartslagOnbereikbaar();
+      rethrow;
+    }
   }
 
   // Hier stonden `verseSleutelVoor`, `requestAccess` en `awaitAccess`: een toestel vroeg zijn sleutel

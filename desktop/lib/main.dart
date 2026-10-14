@@ -75,6 +75,7 @@ import 'lan/client.dart';
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
 import 'lan/uitwijk.dart' show leesAdressen;
+import 'lan/verbindingsstand.dart';
 import 'lan/sleutelherstel.dart';
 import 'lan/bijwerkstand.dart';
 import 'lan/remote_services.dart';
@@ -606,6 +607,9 @@ Future<void> main() async {
           : (pcs.length == 1 ? pcs.first : null);
       return pc == null ? const <Uri>[] : leesAdressen(pc.urls);
     },
+    // Waarom de pc niet antwoordt, voor de regel bovenin: wat hij het laatst in je account schreef.
+    // Zie `lan/verbindingsstand.dart`.
+    hartslagUitAccount: (id) => cloud.hartslag(id),
     // The one place a path becomes something to play, so "the copy if we have it, otherwise the
     // PC" is decided once. No screen, and not the player itself, needs to know that offline
     // copies exist.
@@ -762,14 +766,16 @@ Future<void> main() async {
   // netsoort (de 5G-stand) mee. Zie `netwerkwissel.dart`. Alleen op een toestel: de pc zelf hoeft
   // nergens heen.
   if (!mode.owner) {
-    Netwerkwacht(
+    final wacht = Netwerkwacht(
       bron: netwerkGebeurtenissen(),
       log: ClientSession.logRegel,
       bijWissel: (waarom) async {
         unawaited(netStore.ververs());
         await session.netwerkVeranderd(waarom);
       },
-    ).start();
+    )..start();
+    // "Geen internet op je gsm" in de regel bovenin komt van hier.
+    session.geenNetwerk = () => wacht.geenNetwerk;
   }
   // Als het openen mislukt en dit toestel zelf niets kan zien, de pc vragen. Een closure en geen
   // vaste verwijzing: `library.remote` wordt pas verderop gezet, en op de pc blijft hij null —
@@ -3375,14 +3381,89 @@ class _SectionsDrawer extends StatelessWidget {
 ///
 /// Without it, a tap on play does nothing and there is no way to tell why — the albums are all
 /// there, the covers are all there, and the files are on a machine that is asleep.
-class _OfflineBanner extends StatelessWidget {
+///
+/// **Sinds 14-10-2026 de regel bovenin voor de verbinding** (`lan/verbindingsstand.dart`). Eerst kwam
+/// deze balk alleen als het scherm een kopie toonde. Wie thuis de app opende en daarna de deur uit
+/// ging, hield de bibliotheek van thuis op het scherm, en dan stond er niets — ook niet als de pc
+/// onderweg onbereikbaar was. Nu: "Zoekt je pc… 3 s" zodra het zoeken langer dan een seconde duurt,
+/// daarna de reden als het niet lukt (uit de hartslag van de pc), en vier seconden de nieuwe weg als
+/// die verandert ("Onderweg — via Tailscale", "Thuis").
+class _OfflineBanner extends StatefulWidget {
   const _OfflineBanner();
+
+  @override
+  State<_OfflineBanner> createState() => _OfflineBannerState();
+}
+
+class _OfflineBannerState extends State<_OfflineBanner> {
+  /// Elke seconde opnieuw tekenen, alleen zolang er geteld wordt of de nieuwe weg nog even staat.
+  Timer? _tik;
+
+  void _tikken(bool nodig) {
+    if (nodig) {
+      _tik ??= Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    } else {
+      _tik?.cancel();
+      _tik = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _tik?.cancel();
+    super.dispose();
+  }
+
+  /// Hoe de tekst dit toestel noemt ("Geen internet op je gsm").
+  static String _toestel(BuildContext context) {
+    if (isTv) return 'dit toestel';
+    if (Platform.isAndroid) return isCompact(context) ? 'je gsm' : 'dit toestel';
+    if (Platform.isIOS) return isCompact(context) ? 'je iPhone' : 'je iPad';
+    if (Platform.isMacOS) return 'je Mac';
+    return 'dit toestel';
+  }
+
+  /// Een smalle, rustige regel zonder knop: zoeken, of de nieuwe weg.
+  static Widget _rustig({required IconData icoon, required String tekst, required Color kleur, required Color achter}) =>
+      Container(
+        width: double.infinity,
+        color: achter,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+        child: Row(children: [
+          Icon(icoon, size: 15, color: kleur),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(tekst,
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: kleur, fontSize: 12)),
+          ),
+        ]),
+      );
 
   @override
   Widget build(BuildContext context) {
     final lib = context.watch<LibraryStore>();
-    if (!lib.fromCloudMirror) return const SizedBox.shrink();
+    final sessie = context.watch<ClientSession>();
+    if (sessie.owner) {
+      _tikken(false);
+      return const SizedBox.shrink();
+    }
+    final nu = DateTime.now();
+    final stand = sessie.verbinding;
+    final gewisseld = sessie.wegGewisseld;
+    // Zoeken telt pas na een seconde: een gewone start vindt de pc binnen een paar honderd ms, en
+    // dan hoort hier niets op te flitsen.
+    final zoekt = stand.soort == Verbindingssoort.zoekt && nu.difference(stand.sinds!) >= const Duration(seconds: 1);
+    // Niet op een tv: die gaat nergens heen, en een balk die verschijnt en weer verdwijnt verzet daar
+    // de halte van de afstandsbediening.
+    final nieuweWeg = !isTv &&
+        stand.soort == Verbindingssoort.verbonden &&
+        gewisseld != null &&
+        nu.difference(gewisseld) < const Duration(seconds: 4);
+    _tikken(stand.soort == Verbindingssoort.zoekt || nieuweWeg);
     final when = lib.mirrorUpdatedAt;
+    final weg = stand.soort == Verbindingssoort.weg;
 
     // Twee gevallen, twee kleuren, twee zinnen — want ze vragen iets heel anders van je.
     //
@@ -3390,6 +3471,33 @@ class _OfflineBanner extends StatelessWidget {
     // ANTWOORDDE (ping 13 ms, /health 200): de sleutel was geweigerd. Die zin stuurt je dan naar je
     // router terwijl er niets met je netwerk aan de hand is.
     final geweigerd = lib.geenVerbinding == GeenVerbinding.sleutelGeweigerd;
+    if (!geweigerd && !weg) {
+      if (zoekt) {
+        return _rustig(
+          icoon: Icons.sync_rounded,
+          tekst: verbindingsTekst(stand, nu: nu),
+          kleur: const Color(0xFF9DB4C8),
+          achter: const Color(0xFF1A2129),
+        );
+      }
+      if (nieuweWeg) {
+        return _rustig(
+          icoon: switch (stand.weg!) {
+            Verbindingsweg.thuis => Icons.home_rounded,
+            Verbindingsweg.tailscale => Icons.vpn_lock_rounded,
+            Verbindingsweg.rechtstreeks => Icons.public_rounded,
+          },
+          tekst: verbindingsTekst(stand, nu: nu),
+          kleur: const Color(0xFF8FD3A6),
+          achter: const Color(0xFF15241B),
+        );
+      }
+      return const SizedBox.shrink();
+    }
+    // De reden, uit de hartslag van de pc (`verbindingsstand.dart`). Eindigt hij op een vraag, dan
+    // geen punt erachter.
+    final reden = verbindingsTekst(stand, nu: nu, kort: isCompact(context), toestel: _toestel(context));
+    final punt = reden.endsWith('?') || reden.endsWith('.') || reden.endsWith('…') ? '' : '.';
     final kleur = geweigerd ? const Color(0xFFE89A6A) : const Color(0xFFE8C36A);
     return Container(
       width: double.infinity,
@@ -3410,8 +3518,9 @@ class _OfflineBanner extends StatelessWidget {
                 ? (geweigerd
                     ? 'Geen toegang tot je pc — je ziet een kopie'
                         '${when == null ? '' : ' van ${_ago(when)}'}'
-                    : 'Pc offline — je ziet een kopie'
-                        '${when == null ? '' : ' van ${_ago(when)}'}')
+                    // Op een telefoon alleen de reden: die is het enige wat je hier kunt doen of
+                    // laten, en twee regels houden geen kopie-datum er nog bij.
+                    : reden)
                 : (geweigerd
                     ? 'Je pc is bereikbaar, maar dit toestel heeft geen toegang meer. '
                         'Je ziet de kopie van je bibliotheek'
@@ -3420,8 +3529,8 @@ class _OfflineBanner extends StatelessWidget {
                     // offline bewaarde speelt hier wél, want de speler pakt de kopie op dit toestel
                     // voordat hij het de pc vraagt. Dat is de hele reden dat offline bewaren bestaat
                     // en het stond hier als onmogelijk aangekondigd.
-                    : 'Je pc reageert niet — dit is de kopie van je bibliotheek'
-                        '${when == null ? '' : ' van ${_ago(when)}'}. '
+                    : '$reden$punt '
+                        '${lib.fromCloudMirror ? 'Dit is de kopie van je bibliotheek${when == null ? '' : ' van ${_ago(when)}'}. ' : ''}'
                         'Wat je offline bewaarde speelt gewoon; de rest staat op de pc.'),
             maxLines: isCompact(context) ? 2 : null,
             overflow: isCompact(context) ? TextOverflow.ellipsis : null,
@@ -22413,7 +22522,11 @@ class _SharingSectionState extends State<_SharingSection> {
                           // scherm is die van DIT toestel en zegt daar niets over. Op 27-08-2026
                           // stond op de Mac 3.9.223 — mét de reparatie — en verscheen toch een
                           // melding die in die versie niet meer bestaat. Hij kwam van de pc.
-                          '${session.serverVersie.isEmpty ? '' : ' · ${session.serverVersie}'}',
+                          '${session.serverVersie.isEmpty ? '' : ' · ${session.serverVersie}'}'
+                          // Langs welke weg, of waarom niet — dezelfde tekst als de regel bovenin,
+                          // maar zonder de tellende seconden: dit scherm tekent zichzelf niet elke
+                          // seconde opnieuw.
+                          '\n${session.verbinding.soort == Verbindingssoort.zoekt ? 'Zoekt je pc…' : verbindingsTekst(session.verbinding, nu: DateTime.now())}',
                   style: const TextStyle(color: _muted, fontSize: 12),
                 ),
               ]),
