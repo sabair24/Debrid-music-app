@@ -205,7 +205,11 @@ int titelRegels(BuildContext context) => isCompact(context) ? 3 : 1;
 
 /// A loopback port this app holds while it runs. Binding it is the lock; connecting to it is how
 /// a second copy says "you're already running, come to the front".
-const _instancePort = 47821;
+///
+/// Tot 3.9.480 was dit 47821 — de poort die de deur naar buiten nodig heeft (`lan/poorten.dart`). Gezien
+/// op 14-10-2026 in de lijst van luisterende poorten: 127.0.0.1:47821 van DebridMusic zelf, en dan kan de
+/// versleutelde ingang voor buiten er niet meer op. Niet in 47980–47990: die houdt Windows vast.
+const _instancePort = 47829;
 
 /// Claim the single-instance lock, or hand over to the copy that already holds it.
 ///

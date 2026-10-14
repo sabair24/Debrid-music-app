@@ -1827,8 +1827,11 @@ class LanServer {
   /// netwerkkaarten. Bewaren zou betekenen dat Tailscale aanzetten pas na een herstart aankomt.
   Future<void> _uitwijk(HttpRequest req) async {
     List<String> overal = const [];
+    List<String> thuis = const [];
     try {
-      overal = (await addressesByReach()).overal;
+      final a = await addressesByReach();
+      overal = a.overal;
+      thuis = a.thuis;
     } catch (e) {
       // Geen netwerkkaarten kunnen opsommen is geen reden om het verzoek te laten mislukken; dan
       // weten we alleen niets, en een lege lijst zegt dat precies.
@@ -1837,6 +1840,10 @@ class LanServer {
     final c = certificaat;
     return _json(req.response, {
       'urls': [for (final ip in overal) 'http://$ip:$port'],
+      // Ook de adressen op het eigen netwerk, apart (een oudere app leest alleen `urls`). Zonder deze
+      // kende een toestel dat via Tailscale koppelde zijn pc thuis alleen via Tailscale: gemeten
+      // 14-10-2026, op wifi won telkens 100.97.101.113 en deed 192.168.0.117 niet eens mee.
+      'thuis': [for (final ip in thuis) 'http://$ip:$port'],
       // De pin is geen geheim: hij zegt alleen welk certificaat bij deze pc hoort. Een toestel leert
       // hem hier, thuis of via Tailscale, en vertrouwt daarna alleen dat certificaat.
       if (c != null) 'pin': c.pin,

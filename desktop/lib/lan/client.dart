@@ -583,7 +583,12 @@ class RemoteClient {
       final j = jsonDecode(utf8.decode(res.bodyBytes));
       if (j is! Map) return (urls: const <String>[], pin: '', tlsPoort: 0);
       return (
-        urls: [for (final u in (j['urls'] as List? ?? const [])) '$u'],
+        // Van buiten bereikbaar én thuis: de wedloop deelt elk adres zelf in (thuis meteen, de rest
+        // 400 ms later), dus allebei in één lijst.
+        urls: [
+          for (final u in (j['urls'] as List? ?? const [])) '$u',
+          for (final u in (j['thuis'] as List? ?? const [])) '$u',
+        ],
         pin: (j['pin'] ?? '').toString(),
         tlsPoort: (j['tlsPoort'] as num?)?.toInt() ?? 0,
       );

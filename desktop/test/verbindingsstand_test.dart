@@ -101,6 +101,15 @@ void main() {
       expect(waaromNiet(hartslag: slag, toestelNu: _nu.add(const Duration(minutes: 9))), Waarom.pcStil);
     });
 
+    test('een hartslag van meer dan een dag zegt niets (de pc is niet aangemeld bij je account)', () {
+      // Gemeten 14-10-2026 op de gsm: 31 dagen oud en online:false gaf "staat uit" bij een draaiende pc.
+      expect(waaromNiet(hartslag: _slag(online: false, oud: const Duration(days: 31))), Waarom.onbekend);
+      expect(waaromNiet(hartslag: _slag(oud: const Duration(days: 2))), Waarom.onbekend);
+      expect(waaromNiet(hartslag: _slag(online: false, oud: const Duration(hours: 3))), Waarom.pcUit,
+          reason: 'afgesloten en sindsdien niet meer gestart');
+      expect(waaromNiet(hartslag: _slag(oud: const Duration(hours: 3))), Waarom.pcStil);
+    });
+
     test('geen netwerk gaat voor alles; geen hartslag is "onbekend"', () {
       expect(waaromNiet(hartslag: _slag(oud: Duration.zero), geenNetwerk: true), Waarom.geenInternet);
       expect(waaromNiet(), Waarom.onbekend);
@@ -218,6 +227,21 @@ void main() {
           isFalse);
       expect((await wacht([])).geenNetwerk, isFalse);
     });
+  });
+
+  test('uitwijk: ook de thuisadressen van de pc doen mee', () async {
+    // Gemeten 14-10-2026: een gsm die via Tailscale koppelde, kende zijn pc thuis alleen via Tailscale.
+    final nep = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => nep.close(force: true));
+    nep.listen((req) async {
+      req.response.write(jsonEncode({
+        'urls': ['http://100.64.0.7:47820'],
+        'thuis': ['http://192.168.0.117:47820'],
+      }));
+      await req.response.close();
+    });
+    final u = await RemoteClient(RemoteEndpoint(baseUrl: Uri.parse('http://127.0.0.1:${nep.port}'), token: 'x')).uitwijk();
+    expect(u.urls, ['http://100.64.0.7:47820', 'http://192.168.0.117:47820']);
   });
 
   group('de stand van een echte sessie', () {
@@ -389,6 +413,28 @@ void main() {
           reason: 'zonder tweede beurt bleef de app tot de volgende poll-zoektocht (≥ 30 s) op "geen pc" staan');
       expect(s.endpoint?.baseUrl.port, later);
       expect(logboek(), contains('na de lopende keuze'));
+    });
+
+    test('na een wissel zonder winnaar: één herkansing, die de pc alsnog vindt', () async {
+      // Gemeten 14-10-2026: Tailscale had na wifi → mobiel ruim drie seconden nodig; de wedloop gaf het
+      // na drie seconden op, en pas de volgende poll (tot vijftien seconden later) vond de pc.
+      final later = await _vrijePoort();
+      final dood = Uri.parse('http://127.0.0.1:${await _vrijePoort()}');
+      final s = sessie(hartslag: (_) async => null)..herkansingNaWissel = const Duration(seconds: 2);
+      addTearDown(s.dispose);
+      await s.connect(RemoteEndpoint(
+          baseUrl: dood, token: 'gedeelde-pc-saber-0001', serverId: 'pc-saber-0001', uitwijk: ['http://127.0.0.1:$later']));
+      await _wachtTot(() => !s.zoektNu);
+      unawaited(s.netwerkVeranderd('test: wifi weg, mobiel erbij'));
+      expect(s.verbinding.soort, Verbindingssoort.zoekt);
+      // De eerste wedloop is voorbij als de sessie "weg" zegt; pas dan staat de pc er ("Tailscale heeft de
+      // weg gevonden"). Niet afhankelijk van hoe lang een geweigerde verbinding duurt: op Windows twee
+      // seconden (SYN-herhalingen), op de Linux-bouwstraat meteen.
+      await _wachtTot(() => s.verbinding.soort == Verbindingssoort.weg);
+      await pc('pc-saber-0001', poort: later);
+      await _wachtTot(() => s.endpoint?.baseUrl.port == later, max: const Duration(seconds: 8));
+      expect(s.endpoint?.baseUrl.port, later, reason: 'zonder herkansing pas na de volgende poll-zoektocht');
+      expect(logboek(), contains('herkansing na: test'));
     });
 
     test('"Opnieuw proberen" laat zien dat er gezocht wordt, ook als de reden er al stond', () async {

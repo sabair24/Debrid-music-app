@@ -226,6 +226,15 @@ void main() {
     expect(magOpThuisingang(InternetAddress('203.0.113.9')), isFalse);
   });
 
+  test('het slot tegen een tweede kopie zit niet op een poort van de pc', () {
+    // Tot 3.9.480 hield de app 127.0.0.1:47821 vast — de poort van de deur naar buiten (gezien 14-10-2026).
+    final m = RegExp(r'const _instancePort = (\d+);').firstMatch(File('lib/main.dart').readAsStringSync());
+    expect(m, isNotNull, reason: '_instancePort is hernoemd of verdwenen');
+    final slot = int.parse(m!.group(1)!);
+    expect([kLanPort, kTlsPoort, kPubliekPoort], isNot(contains(slot)));
+    expect(slot >= 47980 && slot <= 47990, isFalse, reason: 'die poorten houdt Windows vast');
+  });
+
   test('/api/uitwijk geeft de pin en de versleutelde poort mee', () async {
     final s = toestel();
     final r = await _vraag(http, '/api/uitwijk', sleutel: s.http);

@@ -173,6 +173,7 @@ class ClientSession extends ChangeNotifier {
       }
 
       final winnaar = uitslag.winnaar;
+      _laatsteWinnaar = winnaar;
       if (winnaar == null) {
         unawaited(_naMislukken(onthouden.serverId));
         return onthouden;
@@ -386,6 +387,15 @@ class ClientSession extends ChangeNotifier {
       _log('versleutelde sleutel ontvangen (ruil)');
     } on RemoteException catch (x) {
       _log('ruil mislukte: ${x.message}');
+      if (x.statusCode == 403) {
+        // Dit toestel gebruikt nog de GEDEELDE sleutel (gekoppeld vóór er sleutels per toestel waren). Die kan
+        // nooit omgeruild worden — hij staat leesbaar in elke cast-URL. Dus een eigen koppeling halen via je
+        // account, versleuteld over 47822 met de net geleerde pin: dat geeft een eigen sleutel én een TLS-sleutel.
+        // Gemeten 14-10-2026: Sabers gsm had nog de gedeelde sleutel, en de ruil werd (terecht) geweigerd.
+        _log('dit toestel heeft nog de gedeelde sleutel — een eigen koppeling halen via je account');
+        _sleutelGevraagd = false;
+        unawaited(_vernieuwSleutel(waarom: 'eigen sleutel in plaats van de gedeelde'));
+      }
       if (x.statusCode == 409) {
         waarschuwing.value = 'De sleutel van dit toestel werd al door een ander toestel omgeruild. Trek die '
             'sleutel in op je pc. Dit toestel koppelt nu opnieuw via je account.';
@@ -501,6 +511,12 @@ class ClientSession extends ChangeNotifier {
       _log('netwerk gewisseld ($waarom) — opnieuw kiezen');
       _zetStand(Verbindingsstand.zoekt(DateTime.now()));
       final beste = await _bereikbaarAdres(huidig);
+      if (_laatsteWinnaar == null && !waarom.startsWith('herkansing')) {
+        Timer(herkansingNaWissel, () {
+          if (_endpoint == null || _stand.soort == Verbindingssoort.verbonden) return;
+          unawaited(netwerkVeranderd('herkansing na: $waarom'));
+        });
+      }
       if (_endpoint != huidig) return; // intussen ontkoppeld of elders verbonden
       final oud = library.remote;
       _log(beste.baseUrl == huidig.baseUrl
@@ -520,6 +536,17 @@ class ClientSession extends ChangeNotifier {
 
   /// Een netwerkwissel die binnenkwam terwijl er al gezocht werd.
   String? _wisselWacht;
+
+  /// Wie de laatste wedloop won (null = niemand). Voor de herkansing na een netwerkwissel.
+  Uri? _laatsteWinnaar;
+
+  /// Hoe lang er na een netwerkwissel zonder winnaar gewacht wordt op één herkansing.
+  ///
+  /// **Waarom.** Gemeten 14-10-2026, wifi uit en mobiel erbij: Tailscale had ruim drie seconden nodig
+  /// om de weg op het nieuwe netwerk te vinden, en de wedloop gaf er na drie seconden de brui aan. Pas de
+  /// volgende poll (tot vijftien seconden later) vond hem dan. Eén herkansing na een seconde vangt dat.
+  @visibleForTesting
+  Duration herkansingNaWissel = const Duration(seconds: 1);
 
   /// Na elke zoektocht: een wissel die intussen binnenkwam alsnog afhandelen, en anders nooit op
   /// "zoekt" blijven staan — dan de reden halen.

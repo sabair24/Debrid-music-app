@@ -204,6 +204,28 @@ void main() {
       expect(s.endpoint!.tlsToken, isEmpty);
     });
 
+    test('nog de gedeelde sleutel: vanzelf een eigen koppeling via het account, versleuteld', () async {
+      // Gemeten 14-10-2026 op de gsm: hij had nog de gedeelde sleutel, en de ruil werd terecht geweigerd.
+      // Dan blijft er geen andere weg naar een versleutelde sleutel dan opnieuw koppelen.
+      final s = sessie(verse: (huidig) => RemoteClient.pairMetAccount(
+            huidig.baseUrl,
+            idToken: 'inlog-van-saber',
+            deviceId: 'gsm-van-saber-01',
+            deviceName: 'S26',
+            platform: 'android',
+            pin: huidig.pin,
+            tlsPoort: huidig.tlsBasis.port,
+          ));
+      addTearDown(s.dispose);
+      await s.connect(RemoteEndpoint(baseUrl: http, token: 'gedeelde-sleutel-van-de-pc'));
+      await _wachtTot(() => (s.endpoint?.tlsToken ?? '').isNotEmpty);
+      final nu = s.endpoint!;
+      expect(nu.token, isNot('gedeelde-sleutel-van-de-pc'), reason: 'een eigen sleutel, los in te trekken');
+      expect(grants.byDevice('gsm-van-saber-01')?.token, nu.token);
+      expect(grants.acceptsTls(nu.tlsToken), isTrue);
+      expect(nu.pin, proefCertificaat.pin);
+    });
+
     test('een pc die opeens een ander certificaat noemt: waarschuwing, de oude pin blijft, geen ruil', () async {
       final e = await metCode('ipad-van-saber-01');
       final s = sessie();

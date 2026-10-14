@@ -84,16 +84,23 @@ class HartslagOnbereikbaar implements Exception {
 const Duration kHartslagVers = Duration(minutes: 3);
 const Duration kHartslagOud = Duration(minutes: 5);
 
+/// Ouder dan dit, en de hartslag zegt niets meer: de pc schrijft hem niet bij (niet aangemeld bij je
+/// account). Gemeten 14-10-2026: een regel van 31 dagen oud met `online: false` gaf "DebridMusic staat
+/// uit op je pc" terwijl de pc gewoon draaide — alleen niet aangemeld.
+const Duration kHartslagVergeten = Duration(days: 1);
+
 /// De reden, uit wat er bekend is. [toestelNu] telt alleen als de `Date`-kop ontbrak.
 Waarom waaromNiet({Hartslag? hartslag, bool geenNetwerk = false, DateTime? toestelNu}) {
   if (geenNetwerk) return Waarom.geenInternet;
   final h = hartslag;
   if (h == null) return Waarom.onbekend;
-  // Gaat voor de leeftijd: afsluiten schrijft `online: false`, en dat maakt het document juist vers.
-  if (!h.online) return Waarom.pcUit;
   final bij = h.bijgewerkt;
   if (bij == null) return Waarom.onbekend;
   final leeftijd = (h.serverNu ?? toestelNu ?? DateTime.now()).difference(bij);
+  if (leeftijd > kHartslagVergeten) return Waarom.onbekend;
+  // Gaat voor de rest van de leeftijd: afsluiten schrijft `online: false`, en dat maakt het document
+  // juist vers. Een dag oud mag nog: de app is dan afgesloten en sindsdien niet meer gestart.
+  if (!h.online) return Waarom.pcUit;
   if (leeftijd <= kHartslagVers) return Waarom.pcAanMaarDicht;
   if (leeftijd > kHartslagOud) return Waarom.pcStil;
   return Waarom.twijfel;
