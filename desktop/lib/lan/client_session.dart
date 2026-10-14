@@ -16,6 +16,9 @@ import '../settings.dart';
 import '../warm_log.dart';
 import 'client.dart';
 import 'discovery.dart';
+import 'doorgever.dart';
+import 'poorten.dart';
+import 'vaste_naam.dart' show kPcHost;
 import '../cloud/catalog_mirror.dart';
 import 'adreswedloop.dart';
 import 'client_mode.dart';
@@ -190,11 +193,89 @@ class ClientSession extends ChangeNotifier {
     return onthouden;
   }
 
+  /// Elk adres ook versleuteld (47822) als dit toestel dat kan, en elk versleuteld adres ook gewoon
+  /// (47820) als terugval. De wedloop kiest, en versleuteld gaat voor (`adreswedloop.dart`). Stap 8.1.
+  List<Uri> _metVersleuteld(RemoteEndpoint e, List<Uri> adressen) {
+    final uit = <Uri>[];
+    final gezien = <String>{};
+    void neem(Uri u) {
+      if (gezien.add('${u.scheme}://${u.host}:${u.port}')) uit.add(u);
+    }
+
+    for (final u in adressen) {
+      if (u.scheme == 'https') {
+        if (e.kanVersleuteld) neem(u);
+        // De eigen deur naar buiten is alleen versleuteld; thuis en Tailscale hebben ook de gewone.
+        if (adresSoort(u) != AdresSoort.anders) neem(u.replace(scheme: 'http', port: kHttpPoort));
+      } else {
+        if (e.kanVersleuteld) neem(u.replace(scheme: 'https', port: e.tlsPoort > 0 ? e.tlsPoort : kTlsPoort));
+        neem(u);
+      }
+    }
+    return uit;
+  }
+
+  /// De doorgever voor mpv als er versleuteld gepraat wordt (`doorgever.dart`). Eén per sessie, in een
+  /// eigen isolate; pas gestart bij de eerste versleutelde verbinding.
+  DoorgeverIsolaat? _doorgever;
+  @visibleForTesting
+  DoorgeverIsolaat? get doorgever => _doorgever;
+
+  /// De doorgever op [e] richten: versleuteld → (één keer) starten en de pc aanwijzen; anders niets meer
+  /// doorgeven. Start hij niet, dan speelt alles via de gewone ingang (zie `RemoteClient.authorized`).
+  Future<void> _doorgeverVoor(RemoteEndpoint e) async {
+    if (!e.versleuteld) {
+      _doorgever?.zetBron(null);
+      return;
+    }
+    final d = _doorgever ??= DoorgeverIsolaat(
+      log: _log,
+      // De pc antwoordt niet meer op het adres van nu, terwijl mpv wacht: opnieuw kiezen. De doorgever
+      // houdt mpv intussen vast en gaat verder zodra er een nieuw adres is.
+      storing: () => unawaited(netwerkVeranderd('doorgever: de pc antwoordt niet op ${_endpoint?.baseUrl.authority}')),
+      veranderd: (_) => waarschuwing.value = 'Dit nummer veranderde op je pc terwijl het speelde. Start het opnieuw.',
+    );
+    if (!d.draait) {
+      try {
+        await d.start();
+      } catch (x) {
+        _log('doorgever start niet ($x) — stromen via de gewone ingang');
+        return;
+      }
+    }
+    d.zetBron(DoorgeverBron(basis: e.baseUrl, sleutel: e.tlsToken, pin: e.pin));
+  }
+
+  /// Na het hervatten van de app: leeft de doorgever nog (zie [DoorgeverIsolaat.nakijken]).
+  Future<void> doorgeverNakijken() async {
+    try {
+      await _doorgever?.nakijken();
+    } catch (x) {
+      _log('doorgever nakijken mislukte: $x');
+    }
+  }
+
+  /// Een adres van de doorgever terug naar de vaste naam van de pc, of null.
+  Uri? _vanDoorgever(Uri u) {
+    final d = _doorgever;
+    if (d == null || !d.draait || u.host != '127.0.0.1' || u.port != d.poort) return null;
+    final s = u.pathSegments;
+    if (s.length < 2 || s.first != d.geheim) return null;
+    return Uri(scheme: 'http', host: kPcHost, path: '/${s.skip(1).join('/')}', query: u.query.isEmpty ? null : u.query);
+  }
+
+  /// Een client voor [e]; versleuteld met de doorgever erbij.
+  RemoteClient _clientVoor(RemoteEndpoint e) {
+    final d = _doorgever;
+    return RemoteClient(e,
+        viaDoorgever: e.versleuteld && d != null && d.draait ? d.adresVoor : null, vanDoorgever: _vanDoorgever);
+  }
+
   /// Eén wedloop, met zijn verloop in `verbinding.log`.
   Future<WedloopUitslag> _wedloop(List<Uri> adressen, RemoteEndpoint onthouden) async {
     final uitslag = await adresWedloop(
-      kandidatenVoor(adressen),
-      vraag: (u, limiet) => RemoteClient.health(u, timeout: limiet),
+      kandidatenVoor(_metVersleuteld(onthouden, adressen)),
+      vraag: (u, limiet) => RemoteClient.health(u, timeout: limiet, pin: onthouden.pin),
       verwachtServerId: onthouden.serverId,
     );
     for (final r in uitslag.verloop) {
@@ -653,7 +734,8 @@ class ClientSession extends ChangeNotifier {
     // adres te werken, dan vervangt de catalogus van de pc deze kopie, met de goede paden.
     RemoteClient? voorlopig;
     if (library.tracks.isEmpty) {
-      voorlopig = RemoteClient(endpoint);
+      await _doorgeverVoor(endpoint);
+      voorlopig = _clientVoor(endpoint);
       library.remote = voorlopig;
       applyMediaResolver(voorlopig.authorized);
       if (await _toonEigenKopie()) unawaited(meld());
@@ -674,7 +756,7 @@ class ClientSession extends ChangeNotifier {
     // Wie er aan de andere kant staat, en met welke code. Zie [serverVersie]: bij een koppeling doet
     // de pc het werk, dus zijn versie is de versie die telt.
     final ronde = _koppelRonde;
-    unawaited(RemoteClient.health(endpoint.baseUrl).then((h) async {
+    unawaited(RemoteClient.health(endpoint.baseUrl, pin: endpoint.pin).then((h) async {
       if (h == null) return;
       if (h.version.isNotEmpty) {
         serverVersie = h.version;
@@ -690,8 +772,9 @@ class ClientSession extends ChangeNotifier {
       _log('pc herkend als ${h.serverId}');
     }).catchError((_) {/* niet weten is geen reden om niet te verbinden */}));
 
+    await _doorgeverVoor(endpoint);
     final client =
-        voorlopig != null && voorlopig.endpoint == endpoint ? voorlopig : RemoteClient(endpoint);
+        voorlopig != null && voorlopig.endpoint == endpoint ? voorlopig : _clientVoor(endpoint);
     // Waar deze pc nog meer te bereiken is, voor de dag dat dit adres niet meer werkt. Zie
     // [_onthoudUitwijk] — bewust niet afgewacht.
     unawaited(_onthoudUitwijk(client, endpoint));
@@ -813,6 +896,7 @@ class ClientSession extends ChangeNotifier {
     library.laatsteCatalogusBytes = null;
     library.remote = null;
     applyMediaResolver((p) => p);
+    _doorgever?.zetBron(null);
     _endpoint = null;
     notifyListeners();
   }
@@ -954,6 +1038,9 @@ class ClientSession extends ChangeNotifier {
   void dispose() {
     _opgeruimd = true;
     _poll?.cancel();
+    final d = _doorgever;
+    _doorgever = null;
+    if (d != null) unawaited(d.stop());
     super.dispose();
   }
 }

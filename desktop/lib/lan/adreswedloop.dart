@@ -11,6 +11,11 @@
 /// open, dan wacht de wedloop tot [thuisVoorrang] om het thuisadres een kans te geven: thuis is
 /// rechtstreeks, Tailscale een omweg. Antwoordt thuis niet binnen die tijd, dan wint Tailscale.
 ///
+/// **Versleuteld gaat altijd voor** (stap 8.1, uitlevering B). Een `https`-kandidaat (47822, of de
+/// eigen deur 47821) wint van elke `http`-kandidaat (47820), ook als die sneller is: onversleuteld
+/// wint pas als geen enkele versleutelde kandidaat meer open staat. Binnen dezelfde soort geldt de
+/// voorrang voor thuis zoals hierboven.
+///
 /// Zuiver: de vraag aan een adres komt binnen als functie, zodat de toets de klok zelf in de hand
 /// heeft (`adreswedloop_test`, met fake_async).
 library;
@@ -41,6 +46,9 @@ class Kandidaat {
   const Kandidaat(this.adres, this.soort, this.start);
   final Uri adres;
   final AdresSoort soort;
+
+  /// Over de vastgepinde versleutelde ingang (47822/47821).
+  bool get versleuteld => adres.scheme == 'https';
 
   /// Wanneer deze poging begint, na het begin van de wedloop.
   final Duration start;
@@ -83,9 +91,8 @@ Future<WedloopUitslag> adresWedloop(
   // Alleen voor de getallen in het verloop. De beslissingen hangen aan timers, niet aan een klok —
   // zo gaat de toets er met nep-tijd doorheen zoals het toestel er in echte tijd doorheen gaat.
   final klok = Stopwatch()..start();
-  var open = kandidaten.length;
-  var openThuis = kandidaten.where((k) => k.soort == AdresSoort.thuis).length;
-  ({Kandidaat k, ServerHealth h})? besteAnder;
+  final open = {...kandidaten};
+  ({Kandidaat k, ServerHealth h})? beste;
   final timers = <Timer>[];
   var voorrangVoorbij = false;
 
@@ -97,14 +104,26 @@ Future<WedloopUitslag> adresWedloop(
     klaar.complete(WedloopUitslag(adres, h, List.unmodifiable(verloop)));
   }
 
+  /// Is [a] beter dan [b]? Eerst versleuteld, dan thuis.
+  bool beter(Kandidaat a, Kandidaat b) =>
+      a.versleuteld != b.versleuteld ? a.versleuteld : (a.soort == AdresSoort.thuis && b.soort != AdresSoort.thuis);
+
   void besluit() {
     if (klaar.isCompleted) return;
-    final b = besteAnder;
-    if (b != null && (openThuis == 0 || voorrangVoorbij)) {
-      sluit(b.k.adres, b.h);
-      return;
+    final b = beste;
+    if (b != null) {
+      // Hard: zolang er een versleutelde kandidaat open staat, wint geen onversleutelde.
+      final wachtOpVersleuteld = !b.k.versleuteld && open.any((k) => k.versleuteld);
+      // Zacht: een thuisadres van dezelfde soort krijgt [thuisVoorrang] om nog te antwoorden.
+      final wachtOpThuis = b.k.soort != AdresSoort.thuis &&
+          !voorrangVoorbij &&
+          open.any((k) => k.soort == AdresSoort.thuis && k.versleuteld == b.k.versleuteld);
+      if (!wachtOpVersleuteld && !wachtOpThuis) {
+        sluit(b.k.adres, b.h);
+        return;
+      }
     }
-    if (open == 0) sluit(null, null);
+    if (open.isEmpty) sluit(b?.k.adres, b?.h);
   }
 
   // Na [thuisVoorrang] krijgt thuis geen voorrang meer: dan wint wie er al juist antwoordde.
@@ -129,17 +148,14 @@ Future<WedloopUitslag> adresWedloop(
       // Streng zodra de id bekend is: ook een antwoord zónder id is dan een andere pc.
       final juist = h != null && (verwachtServerId.isEmpty || h.serverId == verwachtServerId);
       if (h != null && !juist) hoe = 'een andere pc (${h.serverId.isEmpty ? 'zonder id' : h.serverId})';
-      verloop.add('${k.adres.authority} [${k.soort.name}] na ${klok.elapsedMilliseconds - begin} ms: $hoe');
-      open--;
-      if (k.soort == AdresSoort.thuis) openThuis--;
+      verloop.add('${k.adres.scheme == 'https' ? 'versleuteld ' : ''}${k.adres.authority} [${k.soort.name}]'
+          ' na ${klok.elapsedMilliseconds - begin} ms: $hoe');
+      open.remove(k);
       if (klaar.isCompleted) return;
+      // Niet meteen winnen als er nog een betere open staat: [besluit] weegt dat af.
       if (juist) {
-        if (k.soort == AdresSoort.thuis) {
-          sluit(k.adres, h);
-          return;
-        }
-        // Niet meteen winnen als thuis nog open is en de voorrang nog loopt: [besluit] wacht dan.
-        besteAnder ??= (k: k, h: h);
+        final b = beste;
+        if (b == null || beter(k, b.k)) beste = (k: k, h: h);
       }
       besluit();
     }));

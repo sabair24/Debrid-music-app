@@ -373,12 +373,20 @@ class LanServer {
     await http?.close(force: true);
     final tls = _tls;
     final publiek = _publiek;
+    final tlsIngang = _tlsIngang;
+    final publiekIngang = _publiekIngang;
     _tls = null;
     _publiek = null;
     _tlsIngang = null;
     _publiekIngang = null;
     await tls?.close(force: true);
     await publiek?.close(force: true);
+    // **Ook de ingangen zelf.** Een HttpServer uit `listenOn` sluit de socket die hij kreeg NIET
+    // (dart:io, `_closeServer = false`): zonder deze twee regels bleef 47822 luisteren en handdrukken
+    // aannemen na het stoppen, en mislukte de volgende start met "poort in gebruik". Gevonden met de
+    // toets voor de noodrem (sharing_grants_test).
+    await tlsIngang?.close();
+    await publiekIngang?.close();
   }
 
   /// Stop for good. Separate from [stop] so switching sharing off and on again doesn't leave the
@@ -1472,7 +1480,10 @@ class LanServer {
                   '${transcoder.soxr ? ' (soxr)' : ''}  ${_mb(klaar.lengthSync())}'
                   '${recept.naam == receptCast.naam ? '  [speaker]' : ''}');
     }
-    return serveFile(req, klaar ?? file, contentType: 'audio/flac');
+    // Het merkteken van een omzetting is bron plus recept: de naam in de cache (`_sleutel`).
+    final naam = klaar?.uri.pathSegments.last ?? '';
+    return serveFile(req, klaar ?? file,
+        contentType: 'audio/flac', merk: naam.endsWith('.flac') ? naam.substring(0, naam.length - 5) : null);
   }
 
 

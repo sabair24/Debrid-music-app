@@ -73,4 +73,50 @@ void main() {
     expect(s.grants.all.where((g) => g.legacy).length, 1,
         reason: 'de zojuist gegenereerde token hoort de legacy-rij te zijn, precies één');
   });
+
+  test('de noodrem "Versleutelde verbinding": uit sluit de versleutelde ingang, aan opent hem weer', () async {
+    // Poort 0: de server kiest zelf, en vecht nooit met de draaiende app om 47820 of 47822.
+    final settings = AppSettings()
+      ..lanEnabled = true
+      ..lanPort = 0;
+    final s = sharing(settings);
+    addTearDown(() async {
+      settings.lanEnabled = false;
+      await s.applySettings();
+    });
+    await s.applySettings();
+    expect(s.running, isTrue);
+    expect(s.tlsBoundPort, isNotNull, reason: 'standaard aan');
+    expect(s.pin, isNotEmpty);
+
+    final oud = s.tlsBoundPort!;
+    settings.versleuteld = false;
+    await s.applySettings();
+    expect(s.running, isTrue, reason: '47820 blijft draaien: de toestellen vallen daarop terug');
+    expect(s.tlsBoundPort, isNull);
+    // En de oude ingang is echt dicht: niet een nieuwe server naast een oude die blijft luisteren.
+    Future<bool> open(int poort) async {
+      try {
+        final sock = await Socket.connect(InternetAddress.loopbackIPv4, poort, timeout: const Duration(seconds: 3));
+        sock.destroy();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    expect(await open(oud), isFalse, reason: 'de noodrem sluit 47822, hij zet er niets naast');
+    expect(s.pin, isNotEmpty, reason: 'de pin blijft dezelfde, ook met de rem aan');
+
+    settings.versleuteld = true;
+    await s.applySettings();
+    expect(s.tlsBoundPort, isNotNull);
+  });
+
+  test('de noodrem overleeft een herstart van de app', () {
+    final a = AppSettings()..versleuteld = false;
+    final b = AppSettings()..applyJson(a.toJson());
+    expect(b.versleuteld, isFalse);
+    expect((AppSettings()..applyJson(const {})).versleuteld, isTrue, reason: 'standaard aan');
+  });
 }

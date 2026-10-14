@@ -265,6 +265,9 @@ AppLifecycleListener? _saveOnLeaving;
 ///
 /// Stil bij een fout: dit is een verversing die je niet gevraagd hebt, en de banner zegt het al.
 Future<void> _naVoorgrond(ClientSession session) async {
+  // Eerst de doorgever: iOS kan de sockets van een app in de achtergrond sluiten, en dan speelt het
+  // volgende nummer niet. Zie `doorgever.dart`.
+  await session.doorgeverNakijken();
   try {
     await session.refreshNow();
   } catch (_) {/* de banner vertelt het verhaal al */}
@@ -22744,6 +22747,36 @@ class _SharingSectionState extends State<_SharingSection> {
           'inclusief je eigen covers en persingen.',
           style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
         ),
+        if (settings.lanEnabled) ...[
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              const Expanded(
+                child: Text('Versleutelde verbinding',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+              ),
+              Switch(
+                value: settings.versleuteld,
+                activeThumbColor: _accent,
+                onChanged: (on) async {
+                  settings.versleuteld = on;
+                  await settings.save();
+                  await sharing.applySettings();
+                },
+              ),
+            ],
+          ),
+          Text(
+            settings.versleuteld
+                ? 'Je gsm, iPad en Mac praten versleuteld met deze pc, en alleen met deze pc — zoals '
+                    'Roon ARC. Zet dit alleen uit als een toestel daardoor niet meer verbindt: dan valt '
+                    'elk toestel terug op de gewone verbinding, thuis of via Tailscale.'
+                : 'Uit: elk toestel gebruikt de gewone, onversleutelde verbinding, thuis of via '
+                    'Tailscale. Zet dit weer aan zodra het kan.',
+            style: TextStyle(
+                color: settings.versleuteld ? _muted : const Color(0xFFFFB454), fontSize: 11.5, height: 1.35),
+          ),
+        ],
         const SizedBox(height: 14),
         Row(
           children: [

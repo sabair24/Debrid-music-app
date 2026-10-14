@@ -110,6 +110,93 @@ void main() {
     });
   });
 
+  group('versleuteld gaat voor (stap 8.1)', () {
+    final thuisTls = Uri.parse('https://192.168.0.117:47822');
+    final tsTls = Uri.parse('https://100.97.101.113:47822');
+    // 'NEE' = weigert na zoveel ms (poort dicht); null = hangt.
+    Future<ServerHealth?> Function(Uri, Duration) pcs(Map<Uri, (int ms, String? id)> wat) => (u, limiet) {
+          final w = wat[u];
+          if (w == null || w.$2 == null) return Completer<ServerHealth?>().future;
+          return Future.delayed(
+              Duration(milliseconds: w.$1), () => w.$2 == 'NEE' ? null : ServerHealth(name: 'pc', serverId: w.$2!));
+        };
+
+    test('thuis: 47820 is sneller, toch wint 47822', () {
+      fakeAsync((t) {
+        WedloopUitslag? u;
+        adresWedloop(kandidatenVoor([_thuis, thuisTls]),
+                vraag: pcs({_thuis: (2, 'pc-1'), thuisTls: (40, 'pc-1')}), verwachtServerId: 'pc-1')
+            .then((x) => u = x);
+        t.elapse(const Duration(milliseconds: 30));
+        expect(u, isNull, reason: 'niet onversleuteld winnen zolang de versleutelde nog open staat');
+        t.elapse(const Duration(milliseconds: 20));
+        expect(u?.winnaar, thuisTls);
+        expect(u?.verloop.join('\n'), contains('versleuteld 192.168.0.117:47822'));
+      });
+    });
+
+    test('versleuteld via Tailscale wint van onversleuteld thuis', () {
+      fakeAsync((t) {
+        WedloopUitslag? u;
+        adresWedloop(kandidatenVoor([_thuis, thuisTls, tsTls]),
+                vraag: pcs({_thuis: (2, 'pc-1'), thuisTls: (3, 'NEE'), tsTls: (30, 'pc-1')}), verwachtServerId: 'pc-1')
+            .then((x) => u = x);
+        t.elapse(const Duration(milliseconds: 600));
+        expect(u?.winnaar, tsTls);
+      });
+    });
+
+    test('de noodrem op de pc (47822 dicht): dan pas 47820, zodra de versleutelde geweigerd is', () {
+      fakeAsync((t) {
+        WedloopUitslag? u;
+        adresWedloop(kandidatenVoor([_thuis, thuisTls]),
+                vraag: pcs({_thuis: (2, 'pc-1'), thuisTls: (15, 'NEE')}), verwachtServerId: 'pc-1')
+            .then((x) => u = x);
+        t.elapse(const Duration(milliseconds: 14));
+        expect(u, isNull);
+        t.elapse(const Duration(milliseconds: 2));
+        expect(u?.winnaar, _thuis);
+      });
+    });
+
+    test('een versleutelde die hangt: onversleuteld pas na de volle poging', () {
+      fakeAsync((t) {
+        WedloopUitslag? u;
+        adresWedloop(kandidatenVoor([_thuis, thuisTls]),
+                vraag: pcs({_thuis: (2, 'pc-1'), thuisTls: (0, null)}), verwachtServerId: 'pc-1')
+            .then((x) => u = x);
+        t.elapse(const Duration(milliseconds: 2990));
+        expect(u, isNull);
+        t.elapse(const Duration(milliseconds: 20));
+        expect(u?.winnaar, _thuis);
+      });
+    });
+
+    test('een onversleuteld thuisadres dat hangt, houdt versleuteld Tailscale niet op', () {
+      fakeAsync((t) {
+        WedloopUitslag? u;
+        // Thuis is 47822 dicht en hangt 47820; Tailscale versleuteld antwoordt op 430 ms. Wachten op een
+        // thuisadres dat hoe dan ook zou verliezen, is tijd voor niets.
+        adresWedloop(kandidatenVoor([_thuis, thuisTls, tsTls]),
+                vraag: pcs({_thuis: (0, null), thuisTls: (3, 'NEE'), tsTls: (30, 'pc-1')}), verwachtServerId: 'pc-1')
+            .then((x) => u = x);
+        t.elapse(const Duration(milliseconds: 440));
+        expect(u?.winnaar, tsTls, reason: 'meteen, niet pas na de thuisvoorrang van 500 ms');
+      });
+    });
+
+    test('thuis versleuteld blijft voorgaan op Tailscale versleuteld', () {
+      fakeAsync((t) {
+        WedloopUitslag? u;
+        adresWedloop(kandidatenVoor([thuisTls, tsTls]),
+                vraag: pcs({thuisTls: (480, 'pc-1'), tsTls: (10, 'pc-1')}), verwachtServerId: 'pc-1')
+            .then((x) => u = x);
+        t.elapse(const Duration(milliseconds: 600));
+        expect(u?.winnaar, thuisTls);
+      });
+    });
+  });
+
   test('geen adressen: meteen nee', () async {
     final u = await adresWedloop(const [], vraag: (_, __) async => null);
     expect(u.winnaar, isNull);

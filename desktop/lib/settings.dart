@@ -123,6 +123,10 @@ class AppSettings extends ChangeNotifier {
   // unpair everything.
   bool lanEnabled = true;
   int lanPort = 47820;
+
+  /// De noodrem van uitlevering B: de versleutelde ingangen (47822, en 47821 als de deur naar buiten
+  /// aan staat). Standaard aan. Uit = de toestellen vallen terug op 47820, thuis of via Tailscale.
+  bool versleuteld = true;
   String lanToken = '';
 
   /// This PC's own id in the cloud, so a device knows which machine it asked. Generated once and
@@ -341,6 +345,7 @@ class AppSettings extends ChangeNotifier {
         tidalCountry = (m['tidal_country'] ?? '') as String;
         lanEnabled = (m['lan_enabled'] ?? true) as bool;
         lanPort = (m['lan_port'] ?? 47820) as int;
+        versleuteld = (m['versleuteld'] ?? true) as bool;
         lanToken = (m['lan_token'] ?? '') as String;
         serverId = (m['server_id'] ?? '') as String;
         musicRoot = (m['music_root'] ?? '') as String;
@@ -386,6 +391,7 @@ class AppSettings extends ChangeNotifier {
         'tidal_country': tidalCountry,
         'lan_enabled': lanEnabled,
         'lan_port': lanPort,
+        'versleuteld': versleuteld,
         'lan_token': lanToken,
         'server_id': serverId,
         'music_root': musicRoot,

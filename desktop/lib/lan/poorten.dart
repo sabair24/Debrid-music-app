@@ -2,6 +2,9 @@
 /// Zie `server.dart` voor wat er op welke poort mag.
 library;
 
+/// De gewone poort (HTTP, thuis en Tailscale), met HTTP-sleutels. Gelijk aan `kLanPort` op de pc.
+const int kHttpPoort = 47820;
+
 /// De versleutelde poort voor thuis en Tailscale (alleen privé-adressen), met TLS-sleutels.
 const int kTlsPoort = 47822;
 

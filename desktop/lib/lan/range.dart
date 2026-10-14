@@ -57,6 +57,19 @@ ByteRange? parseRange(String? header, int total) {
 /// Sentinel for "syntactically valid, but not satisfiable" → answer 416.
 const ByteRange rangeNotSatisfiable = ByteRange(-1, -1);
 
+/// Of een `If-Range` nog klopt met wat hier ligt: een merkteken moet exact gelijk zijn (een zwak
+/// merkteken `W/` telt nooit, RFC 9110 13.1.5), een datum moet tot op de seconde gelijk zijn.
+bool ifRangeKlopt(String ifRange, String etag, DateTime gewijzigd) {
+  final v = ifRange.trim();
+  if (v.startsWith('"') || v.startsWith('W/')) return v == etag;
+  try {
+    final d = HttpDate.parse(v);
+    return d.millisecondsSinceEpoch ~/ 1000 == gewijzigd.millisecondsSinceEpoch ~/ 1000;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// Send [file] to [response], honouring the request's `Range` header.
 ///
 /// Range support is not a nicety here. Seeking inside a track needs it, Sonos and other UPnP
@@ -66,16 +79,30 @@ Future<void> serveFile(
   HttpRequest request,
   File file, {
   required String contentType,
+  String? merk,
 }) async {
-  final total = await file.length();
+  final stat = await file.stat();
+  final total = stat.size;
   final res = request.response;
+  // **Een merkteken en een datum, voor wie halverwege opnieuw vraagt.** De doorgever op de telefoon
+  // (`doorgever.dart`) hervat een nummer na een netwerkwissel met `If-Range`: klopt het merkteken
+  // niet meer, dan komt hier het hele bestand terug (200) in plaats van het stuk, en weet hij dat
+  // het nummer op de pc veranderde terwijl het speelde — anders plakte hij twee verschillende
+  // bestanden aan elkaar. [merk]: wat het merkteken draagt; standaard het tijdstip van het bestand,
+  // voor een omgezette stroom de bron plus het recept (de naam in de cache).
+  final etag = '"${merk ?? stat.modified.microsecondsSinceEpoch.toRadixString(16)}-${total.toRadixString(16)}"';
   res.headers
     ..set(HttpHeaders.acceptRangesHeader, 'bytes')
     ..set(HttpHeaders.contentTypeHeader, contentType)
+    ..set(HttpHeaders.etagHeader, etag)
+    ..set(HttpHeaders.lastModifiedHeader, HttpDate.format(stat.modified))
     // Big and immutable: the bytes of a track never change under the same id.
     ..set(HttpHeaders.cacheControlHeader, 'private, max-age=86400');
 
-  final range = parseRange(request.headers.value(HttpHeaders.rangeHeader), total);
+  var gevraagd = request.headers.value(HttpHeaders.rangeHeader);
+  final ifRange = request.headers.value(HttpHeaders.ifRangeHeader);
+  if (gevraagd != null && ifRange != null && !ifRangeKlopt(ifRange, etag, stat.modified)) gevraagd = null;
+  final range = parseRange(gevraagd, total);
 
   if (range == rangeNotSatisfiable) {
     res.statusCode = HttpStatus.requestedRangeNotSatisfiable;

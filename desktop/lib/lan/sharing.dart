@@ -90,6 +90,9 @@ class LanSharing extends ChangeNotifier {
   String version = '';
 
   bool get running => _server?.running ?? false;
+
+  /// Waar de versleutelde ingang voor thuis luistert, of null (noodrem uit, of geen certificaat).
+  int? get tlsBoundPort => _server?.tlsBoundPort;
   String? get error => _error;
 
   /// Every address this PC answers on, the ones that survive leaving the house first. That order
@@ -161,13 +164,16 @@ class LanSharing extends ChangeNotifier {
     final current = _server;
 
     // A port change has to go through a full restart — you cannot rebind a listening socket.
-    if (current != null && (!wanted || current.port != settings.lanPort)) {
+    // De noodrem om (`settings.versleuteld`): ook dat kan alleen met een volledige herstart, want de
+    // versleutelde ingangen gaan open of dicht met de server.
+    final remOm = current != null && (current.certificaat != null) != (settings.versleuteld && _certificaat != null);
+    if (current != null && (!wanted || current.port != settings.lanPort || remOm)) {
       await _discovery?.stop();
       _discovery = null;
       await current.dispose();
       _server = null;
     }
-    if (current != null && wanted && current.port == settings.lanPort) {
+    if (current != null && wanted && current.port == settings.lanPort && !remOm) {
       current.token = settings.lanToken;
       await _refreshAddresses();
       return;
@@ -209,7 +215,8 @@ class LanSharing extends ChangeNotifier {
       cloudUid: cloudUid,
       uidVanSleutel: uidVanSleutel,
       firebaseProject: firebaseProject,
-      certificaat: _certificaat,
+      // De noodrem: zonder certificaat geen versleutelde ingang, en vallen de toestellen terug op 47820.
+      certificaat: settings.versleuteld ? _certificaat : null,
       // Poort 0 in een toets: dan ook hier vrij kiezen, en nooit de echte 47822 van de draaiende app.
       tlsPoort: settings.lanPort == 0 ? 0 : kTlsPoort,
       // De deur naar buiten (47821) gaat pas open met stap 7, als jij hem aanzet.

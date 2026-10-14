@@ -95,8 +95,19 @@ class RemoteEndpoint {
         tlsPoort: tlsPoort ?? this.tlsPoort,
       );
 
+  /// Praat deze verbinding versleuteld? Dat is zo als het gekozen adres de vastgepinde ingang is
+  /// (47822, straks 47821): de wedloop kiest dat zelf zodra [kanVersleuteld]. Zie `adreswedloop.dart`.
+  bool get versleuteld => baseUrl.scheme == 'https';
+
+  /// Kan dit toestel versleuteld met de pc praten: een TLS-sleutel en de pin. Stap 8.1.
+  bool get kanVersleuteld => pin.isNotEmpty && tlsToken.isNotEmpty;
+
+  /// De gewone ingang op hetzelfde adres (47820), voor de terugval als de versleutelde niet antwoordt.
+  Uri get httpBasis => versleuteld ? baseUrl.replace(scheme: 'http', port: kHttpPoort) : baseUrl;
+
   /// De versleutelde ingang op hetzelfde adres (thuis of Tailscale).
-  Uri get tlsBasis => baseUrl.replace(scheme: 'https', port: tlsPoort > 0 ? tlsPoort : kTlsPoort);
+  Uri get tlsBasis =>
+      versleuteld ? baseUrl : baseUrl.replace(scheme: 'https', port: tlsPoort > 0 ? tlsPoort : kTlsPoort);
 
   /// Accepts what a person types: `192.168.0.216`, `192.168.0.216:47820`, or a full URL.
   /// Returns null when there is nothing usable in it, so the caller can say so plainly.
@@ -321,13 +332,27 @@ class RemoteClient {
   /// leave the app on a spinner forever.
   final Duration timeout;
 
-  RemoteClient(this.endpoint, {http.Client? client, this.timeout = const Duration(seconds: 30)})
-      : _http = client ?? http.Client();
+  /// Versleuteld (`endpoint.versleuteld`): een client die alleen het certificaat met de pin aanvaardt.
+  /// Zonder pin aanvaardt hij niets — nooit "dan maar elk certificaat".
+  RemoteClient(this.endpoint,
+      {http.Client? client, this.timeout = const Duration(seconds: 30), this.viaDoorgever, this.vanDoorgever})
+      : _http = client ?? (endpoint.versleuteld ? pinClient(pin: endpoint.pin.isEmpty ? '-' : endpoint.pin) : http.Client());
+
+  /// Het adres voor mpv bij een stroom van de pc, als er versleuteld gepraat wordt: de doorgever op dit
+  /// toestel (`doorgever.dart`). mpv kan het certificaat van de pc niet vastpinnen, en de sleutel hoort
+  /// niet in een adres.
+  final Uri Function(Uri pcAdres)? viaDoorgever;
+
+  /// Een adres van de doorgever terug naar de vaste naam van de pc (`pc.invalid`), of null als het er geen is.
+  final Uri? Function(Uri adres)? vanDoorgever;
 
   Uri _api(String path, [Map<String, String>? query]) =>
       endpoint.baseUrl.replace(path: path, queryParameters: query);
 
-  Map<String, String> get _headers => {'Authorization': 'Bearer ${endpoint.token}'};
+  /// Versleuteld de TLS-sleutel, anders de HTTP-sleutel. Nooit door elkaar: een TLS-sleutel op 47820
+  /// wordt door de pc ingetrokken.
+  Map<String, String> get _headers =>
+      {'Authorization': 'Bearer ${endpoint.versleuteld ? endpoint.tlsToken : endpoint.token}'};
 
   /// The library. Pass the ETag from last time and the PC answers 304 when nothing changed, which
   /// is the ordinary case on every poll — the fingerprint is over the CONTENT, so enriching a
@@ -367,17 +392,6 @@ class RemoteClient {
     return AlbumFacts.fromJson(decoded);
   }
 
-  /// The URL to hand libmpv. It carries the file extension because that is how players — and
-  /// AVFoundation on the Apple side — work out the format; a URL ending in an opaque id gets
-  /// refused before a byte is read.
-  Uri streamUrl(TrackDto t, {int? maxSampleRate}) => endpoint.baseUrl.replace(
-        path: t.streamPath,
-        queryParameters: {
-          'token': endpoint.token,
-          if (maxSampleRate != null) 'maxRate': '$maxSampleRate',
-        },
-      );
-
   /// Add the token to a URL that was stored without one — what [LibraryStore] keeps in
   /// `Track.path`, handed over at the moment of playback.
   ///
@@ -390,19 +404,38 @@ class RemoteClient {
   String authorized(String url) {
     final uri = _naarHier(url);
     if (uri == null) return url;
+    // Versleuteld: via de doorgever, en nooit de HTTP-sleutel in het adres.
+    if (endpoint.versleuteld) {
+      final via = viaDoorgever;
+      if (via != null) return via(uri).toString();
+      // Geen doorgever (hij startte niet): dan de gewone ingang met de HTTP-sleutel, thuis of via
+      // Tailscale. Liever dat dan een nummer dat niet speelt.
+      final h = endpoint.httpBasis;
+      return uri
+          .replace(scheme: h.scheme, port: h.port, queryParameters: {...uri.queryParameters, 'token': endpoint.token})
+          .toString();
+    }
     return uri.replace(queryParameters: {...uri.queryParameters, 'token': endpoint.token})
         .toString();
   }
 
   /// [url] als hij naar onze pc wijst, op het adres van deze verbinding; anders null.
   Uri? _naarHier(String url) {
-    final uri = Uri.tryParse(url);
+    var uri = Uri.tryParse(url);
     if (uri == null) return null;
+    // Een adres dat mpv van de doorgever kreeg (bij "waarom speelt dit niet"): eerst naar `pc.invalid`.
+    uri = vanDoorgever?.call(uri) ?? uri;
+    final b = endpoint.baseUrl;
     if (uri.host == kPcHost) {
-      final b = endpoint.baseUrl;
       return uri.replace(scheme: b.scheme, host: b.host, port: b.hasPort ? b.port : null);
     }
-    if (uri.host != endpoint.baseUrl.host || uri.port != endpoint.baseUrl.port) return null;
+    if (uri.host != b.host) return null;
+    // Versleuteld praten we met 47822; een adres op de gewone poort van DEZELFDE pc is ook van ons, en
+    // gaat dan over dezelfde versleutelde weg. Een ander adres nooit: dat kan een andere machine zijn.
+    if (endpoint.versleuteld && uri.port == kHttpPoort) {
+      return uri.replace(scheme: b.scheme, port: b.hasPort ? b.port : null);
+    }
+    if (uri.port != b.port) return null;
     return uri;
   }
 
@@ -705,8 +738,10 @@ class RemoteClient {
   /// Ask a PC who it is. Null when nothing at that address answers like our server — used by the
   /// pairing screen to tell "wrong address" apart from "wrong code".
   static Future<ServerHealth?> health(Uri baseUrl,
-      {http.Client? client, Duration timeout = const Duration(seconds: 4)}) async {
-    final c = client ?? http.Client();
+      {http.Client? client, Duration timeout = const Duration(seconds: 4), String pin = ''}) async {
+    // Een versleuteld adres alleen met de pin: zonder pin geen antwoord, nooit "elk certificaat".
+    if (client == null && baseUrl.scheme == 'https' && pin.isEmpty) return null;
+    final c = client ?? (baseUrl.scheme == 'https' ? pinClient(pin: pin) : http.Client());
     try {
       final res = await c.get(baseUrl.replace(path: '/health')).timeout(timeout);
       if (res.statusCode != 200) return null;
@@ -884,7 +919,8 @@ class RemoteClient {
           'Klopt het adres? Is je pc opnieuw geïnstalleerd, koppel dan opnieuw met de zes cijfers.');
     } catch (_) {
       // Geen versleutelde ingang. Is het een pc van vóór uitlevering B (47820 antwoordt wel), zeg dat.
-      final h = await health(baseUrl, timeout: const Duration(seconds: 3));
+      final gewoon = baseUrl.scheme == 'https' ? baseUrl.replace(scheme: 'http', port: kHttpPoort) : baseUrl;
+      final h = await health(gewoon, timeout: const Duration(seconds: 3));
       if (h != null) {
         throw RemoteException('${h.name.isEmpty ? 'Je pc' : h.name} heeft een oudere versie van DebridMusic. '
             'Werk de app op je pc bij: koppelen via je account gaat nu versleuteld.');

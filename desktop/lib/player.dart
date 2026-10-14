@@ -1239,6 +1239,10 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   PlayerStore() {
     unawaited(_zetVooruitlezen());
     unawaited(_zetLuidheidBasis());
+    // **Wanneer mpv op de stroom wacht (paused-for-cache), en hoe lang.** Stap 6 van "verbinden zoals
+    // Roon ARC": het criterium aan de kabel is nul keer wachten bij een netwerkwissel. Zonder deze regel
+    // is "het haperde even" niet te scheiden van "het nummer opende traag".
+    _player.stream.buffering.listen((wacht) => unawaited(_meldBufferen(wacht)));
     _player.stream.playing.listen((p) {
       playing = p;
       if (p) resumedPaused = false;
@@ -1689,6 +1693,32 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       return null;
     }
   }();
+
+  DateTime? _buffertSinds;
+
+  Future<void> _meldBufferen(bool wacht) async {
+    final pad = current?.path ?? '';
+    // Alleen wat van het net komt; een bestand op dit toestel dat even laadt is geen haper.
+    if (!mediaResolver(pad).startsWith('http')) return;
+    if (wacht) {
+      if (position <= Duration.zero || !playing) return; // het openen zelf, of op pauze
+      _buffertSinds = DateTime.now();
+      var cache = '?';
+      final p = _player.platform;
+      if (p is NativePlayer) {
+        try {
+          cache = await p.getProperty('demuxer-cache-duration');
+        } catch (_) {}
+      }
+      _log?.line('WACHT OP DE STROOM (paused-for-cache) bij ${position.inSeconds} s, buffer nog $cache s');
+    } else {
+      final sinds = _buffertSinds;
+      _buffertSinds = null;
+      if (sinds != null) {
+        _log?.line('stroom weer verder na ${DateTime.now().difference(sinds).inMilliseconds} ms');
+      }
+    }
+  }
 
   void _onCompleted() {
     switch (watNaHetEinde(
