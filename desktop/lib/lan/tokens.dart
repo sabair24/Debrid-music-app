@@ -61,6 +61,20 @@ class DeviceGrant {
   /// toestel met al zijn sleutels weg.
   List<String> oudereTokens = <String>[];
 
+  /// De VERSLEUTELDE sleutel van dit toestel, voor 47822 (thuis) en 47821 (van buiten). Null zolang het
+  /// toestel nog niet geruild heeft ([GrantStore.ruil]).
+  ///
+  /// **Waarom een tweede sleutel.** [token] reisde onversleuteld (over 47820, en tot 14-10-2026 ook via
+  /// Firestore). Wie hem ooit opving, mag daarmee nooit van buiten binnen. Een TLS-sleutel wordt alleen
+  /// over een vastgepinde TLS-verbinding uitgegeven en geldt alleen daar; op 47820 wordt hij geweigerd
+  /// en ingetrokken (hij reisde dan alsnog onversleuteld). Nooit in [oudereTokens]: een vervangen
+  /// TLS-sleutel is meteen ingetrokken.
+  String? tlsToken;
+
+  /// Wanneer [tlsToken] uitgegeven werd. Bij het samenvoegen van twee kopieën wint de jongste TLS-sleutel
+  /// apart van de rest van de koppeling: een ruil gebeurt na het koppelen, met een eigen tijd.
+  int tlsAt = 0;
+
   Map<String, dynamic> toJson() => {
         'deviceId': deviceId,
         'deviceName': deviceName,
@@ -71,6 +85,8 @@ class DeviceGrant {
         if (lastSeenVia != null) 'lastSeenVia': lastSeenVia,
         'legacy': legacy,
         if (oudereTokens.isNotEmpty) 'oudereTokens': oudereTokens,
+        if (tlsToken != null) 'tlsToken': tlsToken,
+        if (tlsToken != null) 'tlsAt': tlsAt,
       };
 
   static DeviceGrant? fromJson(Map<String, dynamic> j) {
@@ -89,6 +105,12 @@ class DeviceGrant {
     );
     for (final t in (j['oudereTokens'] as List<dynamic>? ?? const [])) {
       if (t is String && t.isNotEmpty && t != token) g.oudereTokens.add(t);
+    }
+    // De gedeelde sleutel (de rij `legacy`) krijgt nooit een TLS-sleutel, ook niet van schijf.
+    final tls = j['tlsToken'];
+    if (!g.legacy && tls is String && tls.isNotEmpty && tls != token) {
+      g.tlsToken = tls;
+      g.tlsAt = (j['tlsAt'] as num?)?.toInt() ?? 0;
     }
     return g;
   }
@@ -193,6 +215,9 @@ class GrantStore {
   /// walk: this runs on every single HTTP request, including every range request of a stream.
   final Map<String, String> _byToken = {};
 
+  /// TLS-sleutel → deviceId. Apart van [_byToken], zodat [accepts] (47820) een TLS-sleutel nooit kent.
+  final Map<String, String> _byTls = {};
+
   /// Toestellen die je met OPZET hebt ontkoppeld. Zonder dit haalt het samenvoegende opslaan ze
   /// zo weer van schijf terug, en dan doet "ontkoppelen" niets.
   ///
@@ -272,6 +297,26 @@ class GrantStore {
     while (nieuw.oudereTokens.length > 3) {
       nieuw.oudereTokens.removeAt(0);
     }
+    // De TLS-sleutel apart, op zijn eigen tijd: de jongste wint, de andere is ingetrokken (twee kopieën
+    // met elk een andere TLS-sleutel = één geldig, de andere 401). Nooit naar `oudereTokens`.
+    DeviceGrant? tlsWinnaar;
+    for (final k in [?oud, g]) {
+      final t = k.tlsToken;
+      if (t == null || isIngetrokken(t)) continue;
+      if (tlsWinnaar == null || k.tlsAt > tlsWinnaar.tlsAt) tlsWinnaar = k;
+    }
+    final tlsSleutel = tlsWinnaar?.tlsToken;
+    final tlsTijd = tlsWinnaar?.tlsAt ?? 0;
+    for (final k in [?oud, g]) {
+      final t = k.tlsToken;
+      if (t != null && t != tlsSleutel) {
+        _ingetrokkenSleutels.add(_vingerafdruk(t));
+        _byTls.remove(t);
+      }
+    }
+    nieuw.tlsToken = tlsSleutel;
+    nieuw.tlsAt = tlsSleutel == null ? 0 : tlsTijd;
+    if (tlsSleutel != null) _byTls[tlsSleutel] = g.deviceId;
     _byDevice[g.deviceId] = nieuw;
     for (final t in [nieuw.token, ...nieuw.oudereTokens]) {
       if (!isIngetrokken(t)) _byToken[t] = g.deviceId;
@@ -287,10 +332,15 @@ class GrantStore {
   /// dat net opnieuw koppelde en zijn antwoord kwijtraakte, mag niet buitengesloten worden.
   ///
   /// Haalt het toestel uit [_ingetrokken]: opnieuw koppelen na ontkoppelen is precies de bedoeling.
+  ///
+  /// [metTls]: koppelen over 47822 (vastgepinde TLS) geeft er meteen een TLS-sleutel bij. De vorige
+  /// TLS-sleutel van dit toestel vervalt altijd: wie opnieuw koppelt, heeft hem doorgaans niet meer (een
+  /// nieuwe installatie), en anders zou zijn eerste ruil op 409 stuiten.
   DeviceGrant nieuweSleutel({
     required String deviceId,
     required String deviceName,
     String platform = '',
+    bool metTls = false,
   }) {
     final oud = _byDevice[deviceId];
     if (_ingetrokken.remove(deviceId)) _weerToegelaten.add(deviceId);
@@ -318,6 +368,16 @@ class GrantStore {
         _byToken.remove(t);
       }
     }
+    final oudeTls = oud?.tlsToken;
+    if (oudeTls != null) {
+      _ingetrokkenSleutels.add(_vingerafdruk(oudeTls));
+      _byTls.remove(oudeTls);
+    }
+    if (metTls && deviceId != 'legacy') {
+      grant.tlsToken = generateDeviceToken();
+      grant.tlsAt = max(nu, (oud?.tlsAt ?? 0) + 1);
+      _byTls[grant.tlsToken!] = deviceId;
+    }
     _byDevice[deviceId] = grant;
     for (final t in [grant.token, ...grant.oudereTokens]) {
       _byToken[t] = deviceId;
@@ -325,11 +385,54 @@ class GrantStore {
     return grant;
   }
 
+  /// De eenmalige ruil: de huidige HTTP-sleutel van een echt toestel → een TLS-sleutel. Alleen op 47822.
+  ///
+  /// * 200: [tls] is de nieuwe TLS-sleutel. De HTTP-sleutel blijft geldig op 47820.
+  /// * 401: onbekende of ingetrokken sleutel.
+  /// * 403: de gedeelde sleutel (rij `legacy`, leesbaar in elke cast-URL) of een sleutel uit
+  ///   [DeviceGrant.oudereTokens] — die kunnen nooit omgeruild worden.
+  /// * 409: dit toestel heeft al een TLS-sleutel. Kwam die ruil niet van het toestel zelf, dan heeft
+  ///   iemand zijn HTTP-sleutel; de server meldt dat (stap 5, "gekaapte ruil").
+  ({int status, String? tls, DeviceGrant? grant}) ruil(String httpSleutel) {
+    if (httpSleutel.isEmpty || isIngetrokken(httpSleutel)) return (status: 401, tls: null, grant: null);
+    final id = _byToken[httpSleutel];
+    final g = id == null ? null : _byDevice[id];
+    if (g == null) return (status: 401, tls: null, grant: null);
+    if (g.legacy || !_constantTimeEquals(httpSleutel, g.token)) return (status: 403, tls: null, grant: g);
+    if (g.tlsToken != null) return (status: 409, tls: null, grant: g);
+    final tls = generateDeviceToken();
+    g.tlsToken = tls;
+    g.tlsAt = max(DateTime.now().millisecondsSinceEpoch, g.tlsAt + 1);
+    _byTls[tls] = g.deviceId;
+    return (status: 200, tls: tls, grant: g);
+  }
+
+  /// De controle op 47822 en 47821: alleen een TLS-sleutel, in constante tijd.
+  bool acceptsTls(String sleutel) {
+    if (sleutel.isEmpty || isIngetrokken(sleutel)) return false;
+    final id = _byTls[sleutel];
+    final t = id == null ? null : _byDevice[id]?.tlsToken;
+    return t != null && _constantTimeEquals(sleutel, t);
+  }
+
+  /// Of dit een (geldige) TLS-sleutel is — voor 47820, waar zo'n sleutel nooit hoort te komen.
+  bool isTlsSleutel(String sleutel) => sleutel.isNotEmpty && _byTls.containsKey(sleutel);
+
   /// Precies één sleutel intrekken; de andere sleutels van hetzelfde toestel blijven werken.
   /// Geeft true als deze winkel de sleutel kende.
   bool trekSleutelIn(String sleutel) {
     if (sleutel.isEmpty) return false;
     _ingetrokkenSleutels.add(_vingerafdruk(sleutel));
+    final tlsId = _byTls.remove(sleutel);
+    if (tlsId != null) {
+      final g = _byDevice[tlsId];
+      if (g != null && g.tlsToken == sleutel) {
+        g
+          ..tlsToken = null
+          ..tlsAt = 0;
+      }
+      return g != null;
+    }
     final id = _byToken.remove(sleutel);
     final g = id == null ? null : _byDevice[id];
     g?.oudereTokens.remove(sleutel);
@@ -380,8 +483,16 @@ class GrantStore {
       for (final t in [g.token, ...g.oudereTokens]) {
         _byToken.remove(t);
       }
+      if (g.tlsToken != null) _byTls.remove(g.tlsToken);
     }
     for (final g in _byDevice.values) {
+      final tls = g.tlsToken;
+      if (tls != null && isIngetrokken(tls)) {
+        _byTls.remove(tls);
+        g
+          ..tlsToken = null
+          ..tlsAt = 0;
+      }
       for (final t in g.oudereTokens.where(isIngetrokken).toList()) {
         _byToken.remove(t);
       }
@@ -415,6 +526,7 @@ class GrantStore {
       }
       _byDevice.clear();
       _byToken.clear();
+      _byTls.clear();
       var overgeslagen = 0;
       for (final e in decoded) {
         if (e is! Map<String, dynamic>) {
@@ -529,6 +641,8 @@ class GrantStore {
 
   /// The check on every request. Constant-time on the token so a wrong guess cannot be narrowed
   /// down by timing — cheap here, and the previous `==` had no such property.
+  ///
+  /// Alleen HTTP-sleutels (47820): een TLS-sleutel staat niet in [_byToken] en valt hier dus af.
   bool accepts(String token) {
     if (token.isEmpty || isIngetrokken(token)) return false;
     final deviceId = _byToken[token];
@@ -542,8 +656,10 @@ class GrantStore {
     return false;
   }
 
+  /// Het toestel bij een HTTP- of TLS-sleutel. Zegt niets over waar die sleutel geldt: dat beslissen
+  /// [accepts] (47820) en [acceptsTls] (47822, 47821).
   DeviceGrant? grantFor(String token) {
-    final id = _byToken[token];
+    final id = _byToken[token] ?? _byTls[token];
     return id == null ? null : _byDevice[id];
   }
 
@@ -580,8 +696,9 @@ class GrantStore {
     if (gone == null) return false;
     // Ook elke sleutel van dit toestel apart: koppelt het later opnieuw, dan haalt een oudere kopie
     // op schijf zijn oude sleutels niet terug in `oudereTokens`.
-    for (final t in [gone.token, ...gone.oudereTokens]) {
+    for (final t in [gone.token, ...gone.oudereTokens, ?gone.tlsToken]) {
       _byToken.remove(t);
+      _byTls.remove(t);
       if (t.isNotEmpty) _ingetrokkenSleutels.add(_vingerafdruk(t));
     }
     return true;
@@ -590,12 +707,13 @@ class GrantStore {
   void revokeAll() {
     _ingetrokken.addAll(_byDevice.keys);
     for (final g in _byDevice.values) {
-      for (final t in [g.token, ...g.oudereTokens]) {
+      for (final t in [g.token, ...g.oudereTokens, ?g.tlsToken]) {
         if (t.isNotEmpty) _ingetrokkenSleutels.add(_vingerafdruk(t));
       }
     }
     _byDevice.clear();
     _byToken.clear();
+    _byTls.clear();
   }
 
   /// Stand in for everything paired before grants existed, so upgrading does not cut off a device
