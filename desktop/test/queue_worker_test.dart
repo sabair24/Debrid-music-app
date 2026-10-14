@@ -202,6 +202,23 @@ void main() {
       expect(downloads.torrents.single.cached, isTrue);
     });
 
+    test('een torrent uit de wachtrij naar een vreemd adres faalt met de reden en start niets', () async {
+      // Een rij in de cloud is geen reden om de pc met je RuTracker-koekje naar een ander adres te
+      // laten gaan: zelfde controle als een rechtstreeks verzoek (downloadbron.dart).
+      await queue.put(QueueItem(
+        id: 'v',
+        kind: QueueKind.torrent,
+        title: 'Vreemd',
+        payload: const {'name': 'x', 'torrentUrl': 'https://example.invalid/', 'magnet': '', 'hash': ''},
+      ));
+      await worker().tick();
+
+      final item = queue.items['v']!;
+      expect(item.status, QueueStatus.failed);
+      expect(item.detail, contains('niet van RuTracker'));
+      expect(downloads.torrents, isEmpty);
+    });
+
     test('two PCs racing the same item produce one download', () async {
       await queue.put(soulseekItem());
       // Both see it as free and both write a claim; only the one whose id survives the read runs.

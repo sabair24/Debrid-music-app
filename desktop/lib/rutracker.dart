@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'cp1251.dart';
+import 'downloadbron.dart';
 import 'flaresolverr.dart';
 import 'paths.dart';
 import 'warm_log.dart';
@@ -1022,9 +1023,18 @@ class RuTrackerService {
   /// `dl.php` geeft alleen iets zinnigs terug met een geldige sessie; zonder krijg je een
   /// HTML-pagina in plaats van een torrent. Vandaar de controle op de eerste byte: een bencode-
   /// bestand begint met `d`. Zo komt er nooit een foutpagina als "torrent" bij TorBox terecht.
+  ///
+  /// **Alleen naar `dl.php` van RuTracker zelf.** Dit is de plek waar je koekje de deur uitgaat, dus
+  /// ook de plek waar het adres gecontroleerd wordt — wat er ook vóór gebeurde. Een adres van een
+  /// toestel kon tot 14-10-2026 overal heen wijzen; zie `downloadbron.dart`.
   Future<List<int>?> haalTorrentBestand(String url) async {
     if (settings.rutrackerCookie.isEmpty) return null;
-    final r = await _haal(url, referer: '$_base/index.php');
+    final schoon = rutrackerTorrentAdres(url);
+    if (schoon == null) {
+      _spoor('torrentbestand geweigerd: geen RuTracker-downloadadres');
+      return null;
+    }
+    final r = await _haal(schoon, referer: '$_base/index.php');
     if (r == null || r.status != 200 || r.bytes.isEmpty) return null;
     if (r.bytes.first != 0x64) return null; // geen 'd' = geen torrent, maar een pagina
     return r.bytes;

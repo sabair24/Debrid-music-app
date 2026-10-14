@@ -159,7 +159,10 @@ class QueueWorker {
   Future<bool> _replay(QueueItem item) async {
     switch (item.kind) {
       case QueueKind.torrent:
-        server.startTorrentDownload(item.payload);
+        // Dezelfde controle als een rechtstreeks verzoek: een rij in de cloud is geen reden om de pc
+        // naar een vreemd adres te laten gaan. De zin komt bij de mislukte rij te staan.
+        final fout = server.startTorrentDownload(item.payload);
+        if (fout != null) throw fout;
         return true;
       case QueueKind.soulseek:
         return server.startSoulseekDownload({...item.payload, 'key': item.id});

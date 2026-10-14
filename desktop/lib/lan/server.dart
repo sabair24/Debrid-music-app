@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../ai.dart';
 import '../album_facts.dart';
 import '../cloud/device_identity.dart';
+import '../downloadbron.dart';
 import '../album_facts_resolver.dart';
 import '../enrichment.dart';
 import '../kapot_bestand.dart';
@@ -1065,6 +1066,8 @@ class LanServer {
     if (service == null) return _unavailable(req, 'Deze pc kan niet online zoeken.');
     final body = await _jsonBody(req);
     if (body == null) return;
+    final fout = downloadBronFout(body);
+    if (fout != null) return _json(req.response, {'error': fout}, status: HttpStatus.badRequest);
     try {
       final (torrent, files) = await service.tracklist(SearchResult.fromJson(body));
       return _json(req.response, {
@@ -1084,7 +1087,8 @@ class LanServer {
     if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
     final body = await _jsonBody(req);
     if (body == null) return;
-    startTorrentDownload(body);
+    final fout = startTorrentDownload(body);
+    if (fout != null) return _json(req.response, {'error': fout}, status: HttpStatus.badRequest);
     return _json(req.response, {'ok': true});
   }
 
@@ -1110,10 +1114,17 @@ class LanServer {
   // download that was queued must land the same way as one asked for live, including the
   // authority tags — and two copies of this parsing would eventually disagree about that.
 
-  /// The body of `POST /api/online/download`.
-  void startTorrentDownload(Map<String, dynamic> body) {
+  /// The body of `POST /api/online/download`. Null when it started; otherwise why it did not —
+  /// a `torrentUrl` that is not RuTracker's or Redacted's own, or something that is not a magnet
+  /// (see `downloadbron.dart`). The cloud queue comes through here too, so it gets the same check.
+  String? startTorrentDownload(Map<String, dynamic> body) {
     final manager = downloads;
-    if (manager == null) return;
+    if (manager == null) return 'Deze pc kan niet downloaden.';
+    final fout = downloadBronFout(body);
+    if (fout != null) {
+      debugPrint('download geweigerd: $fout');
+      return fout;
+    }
     final fileId = (body['fileId'] as num?)?.toInt();
     // Het gekozen bestand zoals de lijst op het toestel het toonde. Met alleen het nummer koos de
     // pc bij een torrent die via TorBox binnenkomt een ánder liedje — zie `zelfdeBestandIn`. Een
@@ -1125,6 +1136,7 @@ class LanServer {
     // Deliberately not awaited: enqueue starts the work and returns, and the caller watches
     // /api/jobs. Holding a request open for a download would time out long before it finished.
     manager.enqueue(SearchResult.fromJson(body), fileId: fileId, bestand: bestand);
+    return null;
   }
 
   /// The body of `POST /api/soulseek/download`. False when nothing usable was in it.
