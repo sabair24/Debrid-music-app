@@ -43,8 +43,11 @@ void main() {
     expect(g.accepts(gsm), isTrue);
     expect(g.accepts(ipad), isTrue);
 
-    // Dan echt. Bovenaan staat de nieuwste rij: de iPad.
-    await tester.tap(find.widgetWithText(TextButton, 'Intrekken').first);
+    // Dan echt, op de rij van de iPad. Niet "de bovenste": de lijst staat op koppeltijd, en twee
+    // sleutels uit dezelfde milliseconde hebben dezelfde — dan stond de gsm bovenaan en werd die
+    // ingetrokken (rood in de volledige lijst op 14-10-2026, groen als losse toets).
+    final rijVanIpad = find.ancestor(of: find.text('iPad'), matching: find.byType(Row)).first;
+    await tester.tap(find.descendant(of: rijVanIpad, matching: find.widgetWithText(TextButton, 'Intrekken')));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Intrekken'));
     await tester.pump();
