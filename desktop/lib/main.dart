@@ -908,6 +908,7 @@ Future<void> main() async {
     // dat er werkelijk een toestel aanklopt.
     cloudUid: mode.owner ? () => cloud.uid : null,
     uidVanSleutel: mode.owner ? (t) => cloud.uidVanSleutel(t) : null,
+    firebaseProject: mode.owner ? () => cloud.config.projectId : null,
   );
   // Favorieten. Op de pc rechtstreeks in de gedeelde staat; op een Mac of iPad gaat dezelfde op over
   // de lijn (zie waar `duwOps` gezet wordt). Eén weg, dus geen tweede waarheid die kan afwijken.

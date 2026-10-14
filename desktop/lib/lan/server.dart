@@ -25,6 +25,7 @@ import '../soulseek.dart';
 import '../torbox.dart';
 import 'cast_manager.dart';
 import 'radiohaler.dart';
+import 'remming.dart';
 import 'accountkoppeling.dart';
 import 'catalog.dart';
 import 'dtos.dart';
@@ -63,6 +64,7 @@ class LanServer {
     this.musicbrainz,
     this.cloudUid,
     this.uidVanSleutel,
+    this.firebaseProject,
     GrantStore? grants,
   })  : grants = grants ?? GrantStore(),
         catalog = LanCatalog(library) {
@@ -98,6 +100,14 @@ class LanServer {
   /// Meegegeven en niet hier opgebouwd, zodat een toets deze deur kan uitproberen zonder Google —
   /// en dat is precies de deur die je wél wil kunnen uitproberen.
   final Future<String> Function(String idToken)? uidVanSleutel;
+
+  /// Het Firebase-project van deze build, voor de eerste blik op een inlogsleutel
+  /// (`inlogsleutelFout`). Null of leeg: die blik wordt overgeslagen en beslist Google alleen.
+  final String Function()? firebaseProject;
+
+  /// Zie `remming.dart`.
+  final Remming remming = Remming();
+  final KoppelBudget koppelBudget = KoppelBudget();
 
   /// Eén regel bij het opzetten: waarmee deze server dénkt te mogen werken.
   ///
@@ -295,10 +305,19 @@ class LanServer {
     // Firestore je buiten je eigen muziek, ook met de pc op dezelfde wifi.
     if (path == '/pair-cloud') return _pairCloud(req);
 
+    final van = req.connectionInfo?.remoteAddress.address ?? '?';
     if (!await _authorizedOfHerstel(req)) {
+      // Per adres steeds later, en NOOIT bij een geldige sleutel (die komt hier niet). Zie `remming.dart`.
+      final wacht = remming.naMislukt(van);
+      if (wacht > Duration.zero) await Future<void>.delayed(wacht);
+      // Met een lijf dat nog moet komen: niet via close(), want die wacht op dat lijf (zie [_teGroot]).
+      if (req.contentLength > 0 || req.headers.chunkedTransferEncoding) {
+        return _rauw(req, 401, 'Unauthorized', const {});
+      }
       res.statusCode = HttpStatus.unauthorized;
       return res.close();
     }
+    remming.gelukt(van);
 
     switch (path) {
       case '/api/catalog':
@@ -671,6 +690,41 @@ class LanServer {
     final map = decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{};
     final sleutel = (map['idToken'] ?? '').toString();
 
+    // Het eigen id van het toestel, en alleen een geldig: één rij per toestel, zodat intrekken werkt.
+    // Hier stond `deviceId ?? naam` — een toestel zonder id kreeg zijn NAAM als id, en twee gsm's met
+    // dezelfde naam deelden dan één sleutel. En nooit `legacy`: die rij is de gedeelde sleutel.
+    // Vóór Google: een verzoek dat toch geweigerd wordt, kost geen opzoeking.
+    final id = map['deviceId'];
+    if (id is! String || !geldigToestelId(id)) {
+      _koppelLog?.line('PAIR-CLOUD  geweigerd: geen geldig toestel-id meegestuurd');
+      return _json(req.response, {'error': 'Dit toestel stuurde geen geldig id mee. Werk de app bij.'},
+          status: HttpStatus.badRequest);
+    }
+
+    // De eerste blik: rommel krijgt meteen nee, zonder Google en zonder het budget te raken.
+    final project = (firebaseProject?.call() ?? '').trim();
+    if (project.isNotEmpty) {
+      final waarom = inlogsleutelFout(sleutel, project: project);
+      if (waarom != null) {
+        _koppelLog?.line('PAIR-CLOUD  geweigerd vóór Google: $waarom');
+        return _json(req.response,
+            {'error': 'Je inlogsleutel klopt niet ($waarom). Log opnieuw in en probeer het nog eens.'},
+            status: HttpStatus.forbidden);
+      }
+    }
+    final weerOm = koppelBudget.neem();
+    if (weerOm != null) {
+      final om = '${weerOm.hour.toString().padLeft(2, '0')}:${weerOm.minute.toString().padLeft(2, '0')}';
+      _koppelLog?.line('PAIR-CLOUD  geremd: te veel pogingen, weer vanaf $om');
+      return _json(
+          req.response,
+          {
+            'error': 'Er wordt nu te vaak geprobeerd te koppelen via je account. '
+                'Probeer het om $om opnieuw, of koppel met de zes cijfers op de pc.'
+          },
+          status: HttpStatus.tooManyRequests);
+    }
+
     String vanWie;
     try {
       vanWie = await opzoeker(sleutel);
@@ -694,15 +748,6 @@ class LanServer {
           status: HttpStatus.forbidden);
     }
 
-    // Het eigen id van het toestel, en alleen een geldig: één rij per toestel, zodat intrekken werkt.
-    // Hier stond `deviceId ?? naam` — een toestel zonder id kreeg zijn NAAM als id, en twee gsm's met
-    // dezelfde naam deelden dan één sleutel. En nooit `legacy`: die rij is de gedeelde sleutel.
-    final id = map['deviceId'];
-    if (id is! String || !geldigToestelId(id)) {
-      _koppelLog?.line('PAIR-CLOUD  geweigerd: geen geldig toestel-id meegestuurd');
-      return _json(req.response, {'error': 'Dit toestel stuurde geen geldig id mee. Werk de app bij.'},
-          status: HttpStatus.badRequest);
-    }
     final naam = schoneToestelnaam(map['deviceName']);
     final grant = grants.nieuweSleutel(
       deviceId: id,
@@ -834,11 +879,16 @@ class LanServer {
   /// antwoord vast tot het aangekondigde lijf helemaal binnen is. Een verzoek dat "10 MB" aankondigt
   /// en niets stuurt, kreeg na drie seconden nog geen antwoord — en hield de verbinding zo lang open
   /// als de afzender wou. Via `detachSocket` kwam de 413 na 2 ms aan.
-  Future<void> _teGroot(HttpRequest req, int max) async {
-    final lijf = utf8.encode(jsonEncode({'error': 'Dat verzoek is te groot (meer dan ${max ~/ 1024} KB).'}));
+  Future<void> _teGroot(HttpRequest req, int max) => _rauw(req, 413, 'Request Entity Too Large',
+      {'error': 'Dat verzoek is te groot (meer dan ${max ~/ 1024} KB).'});
+
+  /// Een antwoord rechtstreeks op de verbinding, en dan de verbinding dicht. Voor als het lijf van
+  /// het verzoek niet gelezen wordt: dan houdt `response.close()` het antwoord vast (zie [_teGroot]).
+  Future<void> _rauw(HttpRequest req, int status, String woord, Map<String, dynamic> body) async {
+    final lijf = utf8.encode(jsonEncode(body));
     final sok = await req.response.detachSocket(writeHeaders: false);
     try {
-      sok.add(utf8.encode('HTTP/1.1 413 Request Entity Too Large\r\n'
+      sok.add(utf8.encode('HTTP/1.1 $status $woord\r\n'
           'Content-Type: application/json; charset=utf-8\r\n'
           'Content-Length: ${lijf.length}\r\n'
           'Connection: close\r\n\r\n'));

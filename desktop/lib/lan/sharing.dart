@@ -30,6 +30,7 @@ class LanSharing extends ChangeNotifier {
     this.musicbrainz,
     this.cloudUid,
     this.uidVanSleutel,
+    this.firebaseProject,
   }) : state = LanStateStore(File('${_appDir()}${Platform.pathSeparator}state.json'));
 
   final LibraryStore library;
@@ -50,6 +51,9 @@ class LanSharing extends ChangeNotifier {
   /// `accountkoppeling.dart`.
   final String Function()? cloudUid;
   final Future<String> Function(String idToken)? uidVanSleutel;
+
+  /// Zie [LanServer.firebaseProject].
+  final String Function()? firebaseProject;
 
   /// Playlists, favourites, play position and counts — shared with every device. Lives here
   /// rather than in the server so switching sharing off doesn't drop what the PC itself knows.
@@ -177,6 +181,7 @@ class LanSharing extends ChangeNotifier {
       musicbrainz: musicbrainz,
       cloudUid: cloudUid,
       uidVanSleutel: uidVanSleutel,
+      firebaseProject: firebaseProject,
       grants: grants,
     );
     _error = await server.start();

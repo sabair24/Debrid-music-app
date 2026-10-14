@@ -27,6 +27,8 @@
 /// zo uit als de goede versie. Hier staat de regel één keer, met een toets eromheen.
 library;
 
+import 'dart:convert';
+
 /// Mag een toestel dat deze sleutel toont bij deze pc naar binnen?
 ///
 /// **Alleen bij een letterlijke gelijkenis van het account.** Geen "leeg telt als gelijk", geen
@@ -65,4 +67,34 @@ String koppelweigering({required String uidVanSleutel, required String uidVanPc}
     return 'Je inlogsleutel kon niet nagekeken worden. Log opnieuw in en probeer het nog eens.';
   }
   return 'Deze pc hoort bij een ander account. Log op allebei in met hetzelfde account.';
+}
+
+/// Klopt deze inlogsleutel op het eerste gezicht? Null als ja, anders waarom niet.
+///
+/// **Vóór de vraag aan Google, niet in plaats daarvan.** Dit leest alleen wat er in de sleutel
+/// staat — voor welk project (`aud`), van wie uitgegeven (`iss`), tot wanneer geldig (`exp`) — en
+/// controleert (nog) GEEN handtekening; wie wil kan zo'n sleutel dus namaken. Het beslist daarom
+/// nooit "ja": dat doet Google. Het zegt alleen vroeg "nee" tegen rommel, zodat die geen opzoeking
+/// kost en het dagbudget van `/pair-cloud` (zie `remming.dart`) niet opmaakt. De handtekening zelf
+/// komt erbij in stap 5 van het plan, samen met de bibliotheek die het certificaat maakt.
+String? inlogsleutelFout(String sleutel, {required String project, DateTime? nu}) {
+  final delen = sleutel.trim().split('.');
+  if (delen.length != 3 || delen.any((d) => d.isEmpty)) return 'geen inlogsleutel';
+  final Map<String, dynamic> inhoud;
+  try {
+    final j = jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(delen[1]))));
+    if (j is! Map<String, dynamic>) return 'onleesbare inlogsleutel';
+    inhoud = j;
+  } catch (_) {
+    return 'onleesbare inlogsleutel';
+  }
+  if (inhoud['aud'] != project) return 'inlogsleutel voor een ander project';
+  if (inhoud['iss'] != 'https://securetoken.google.com/$project') return 'inlogsleutel van een andere uitgever';
+  final exp = inhoud['exp'];
+  final sub = inhoud['sub'];
+  if (exp is! num) return 'inlogsleutel zonder vervaldatum';
+  final tijd = (nu ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000;
+  if (exp <= tijd) return 'verlopen inlogsleutel';
+  if (sub is! String || sub.isEmpty || sub.length > 128) return 'inlogsleutel zonder account';
+  return null;
 }
