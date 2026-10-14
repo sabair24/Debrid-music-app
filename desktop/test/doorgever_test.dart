@@ -293,9 +293,23 @@ void main() {
       // Eerste adres: een kale ingang die de kop met de volle lengte stuurt, de helft van de bytes, en
       // dan ophangt — zoals een verbinding die bij het verlaten van de wifi wegvalt. Het merkteken is
       // dat van serveFile, zodat de hervatting op de echte ingang erbij past.
+      // Het tweede adres: een gewone pc-ingang met hetzelfde certificaat, waar de wedloop straks heen gaat.
+      final ander = _NepPc(bestand);
+      await ander.start();
+      addTearDown(ander.stop);
+      // Het merkteken letterlijk zoals serveFile het geeft, uit een HEAD — niet zelf nagerekend: op de
+      // bouwstraat (Linux) gaf een eigen berekening uit `lastModifiedSync()` een ander getal, en dan
+      // las de doorgever terecht "veranderd" (412). Gezien 14-10-2026.
+      final c = pinHttpClient();
+      final kop = await (await c.openUrl('HEAD', ander.basis.replace(path: '/stream/x.flac'))
+            ..headers.set(HttpHeaders.authorizationHeader, 'Bearer $_sleutel'))
+          .close();
+      final etag = kop.headers.value(HttpHeaders.etagHeader)!;
+      await kop.drain<void>();
+      c.close(force: true);
+      ander.koppen.clear();
       final rauw = await SecureServerSocket.bind(InternetAddress.loopbackIPv4, 0, proefCertificaat.context());
       addTearDown(rauw.close);
-      final etag = '"${bestand.lastModifiedSync().microsecondsSinceEpoch.toRadixString(16)}-${alles.length.toRadixString(16)}"';
       rauw.listen((s) {
         final gelezen = <int>[];
         var beantwoord = false;
@@ -314,10 +328,7 @@ void main() {
       final eerst = await _mpv(adres());
       expect(eerst.afgebroken, isTrue, reason: 'mpv moet merken dat het niet af is');
       expect(eerst.lijf.length, lessThan(alles.length));
-      // De wedloop koos intussen een ander adres (een tweede pc-ingang met hetzelfde certificaat).
-      final ander = _NepPc(bestand);
-      await ander.start();
-      addTearDown(ander.stop);
+      // De wedloop koos intussen het andere adres.
       d.zetBron(DoorgeverBron(basis: ander.basis, sleutel: _sleutel, pin: proefCertificaat.pin));
       final rest = await _mpv(adres(), range: 'bytes=${eerst.lijf.length}-');
       expect(rest.status, 206);
