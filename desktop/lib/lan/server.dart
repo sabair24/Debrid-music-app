@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data' show BytesBuilder;
 
 import 'package:flutter/foundation.dart';
 
@@ -595,7 +596,8 @@ class LanServer {
       req.response.statusCode = HttpStatus.methodNotAllowed;
       return req.response.close();
     }
-    final body = await utf8.decoder.bind(req).join();
+    final body = await _leesLijf(req, lijfZonderSleutel);
+    if (body == null) return;
     final decoded = jsonDecode(body.isEmpty ? '{}' : body);
     final map = decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{};
     final opgegeven = map['deviceId'];
@@ -663,7 +665,8 @@ class LanServer {
           status: HttpStatus.forbidden);
     }
 
-    final body = await utf8.decoder.bind(req).join();
+    final body = await _leesLijf(req, lijfZonderSleutel);
+    if (body == null) return;
     final decoded = jsonDecode(body.isEmpty ? '{}' : body);
     final map = decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{};
     final sleutel = (map['idToken'] ?? '').toString();
@@ -723,6 +726,7 @@ class LanServer {
       return req.response.close();
     }
     final map = await _body(req);
+    if (map == null) return;
     try {
       await cast.play(
         (map['deviceId'] ?? '') as String,
@@ -744,6 +748,7 @@ class LanServer {
       return req.response.close();
     }
     final map = await _body(req);
+    if (map == null) return;
     try {
       await cast.requeue(
         (map['deviceId'] ?? '') as String,
@@ -762,6 +767,7 @@ class LanServer {
       return req.response.close();
     }
     final map = await _body(req);
+    if (map == null) return;
     try {
       await cast.control(
         (map['deviceId'] ?? '') as String,
@@ -774,8 +780,79 @@ class LanServer {
     }
   }
 
-  Future<Map<String, dynamic>> _body(HttpRequest req) async {
-    final text = await utf8.decoder.bind(req).join();
+  /// Hoeveel een verzoek ZONDER sleutel mag meesturen (`/pair`, `/pair-cloud`): zes cijfers of een
+  /// inlogsleutel van ongeveer een kilobyte, met ruimte.
+  static const kLijfZonderSleutel = 4 * 1024;
+
+  /// En met een geldige sleutel. Ruim, want een catalogusbewerking of een rij favorieten kan groot
+  /// zijn: dit is een grens tegen een lijf dat het geheugen volloopt, geen quotum.
+  static const kLijfMetSleutel = 8 * 1024 * 1024;
+
+  /// Voor de toetsen, die de grens niet met acht megabyte willen bewijzen.
+  @visibleForTesting
+  int lijfZonderSleutel = kLijfZonderSleutel;
+  @visibleForTesting
+  int lijfMetSleutel = kLijfMetSleutel;
+
+  /// Het lijf van een verzoek, hoogstens [max] bytes. Daarboven null, en dan is er al 413 gestuurd.
+  ///
+  /// **Waarom dit er moest komen.** Elke route las het lijf met `utf8.decoder.bind(req).join()`:
+  /// onbegrensd, in het geheugen. Ook `/pair` en `/pair-cloud`, die zonder sleutel open staan — wie
+  /// het netwerk op kon, kon de pc zo een gigabyte laten bufferen. Een lijf dat zijn lengte vooraf
+  /// opgeeft wordt meteen geweigerd, zonder één byte te lezen; een lijf zonder lengte wordt tijdens
+  /// het lezen afgebroken zodra het over de grens gaat.
+  Future<String?> _leesLijf(HttpRequest req, int max) async {
+    if (req.contentLength > max) {
+      await _teGroot(req, max);
+      return null;
+    }
+    final bytes = BytesBuilder(copy: false);
+    var teGroot = false;
+    await for (final stuk in req) {
+      bytes.add(stuk);
+      if (bytes.length > max) {
+        teGroot = true;
+        break;
+      }
+    }
+    if (teGroot) {
+      await _teGroot(req, max);
+      return null;
+    }
+    try {
+      return utf8.decode(bytes.takeBytes());
+    } on FormatException {
+      await _json(req.response, {'error': 'Dat verzoek is geen geldige tekst.'},
+          status: HttpStatus.badRequest);
+      return null;
+    }
+  }
+
+  /// 413, rechtstreeks op de verbinding, en dan de verbinding dicht.
+  ///
+  /// **Niet via `response.close()`.** Gemeten op 14-10-2026 (`scratchpad/meet_413`): Dart houdt een
+  /// antwoord vast tot het aangekondigde lijf helemaal binnen is. Een verzoek dat "10 MB" aankondigt
+  /// en niets stuurt, kreeg na drie seconden nog geen antwoord — en hield de verbinding zo lang open
+  /// als de afzender wou. Via `detachSocket` kwam de 413 na 2 ms aan.
+  Future<void> _teGroot(HttpRequest req, int max) async {
+    final lijf = utf8.encode(jsonEncode({'error': 'Dat verzoek is te groot (meer dan ${max ~/ 1024} KB).'}));
+    final sok = await req.response.detachSocket(writeHeaders: false);
+    try {
+      sok.add(utf8.encode('HTTP/1.1 413 Request Entity Too Large\r\n'
+          'Content-Type: application/json; charset=utf-8\r\n'
+          'Content-Length: ${lijf.length}\r\n'
+          'Connection: close\r\n\r\n'));
+      sok.add(lijf);
+      await sok.flush().timeout(const Duration(seconds: 5));
+    } catch (_) {/* de afzender is al weg */} finally {
+      sok.destroy();
+    }
+  }
+
+  /// Null als het lijf te groot of geen tekst was; dan is het antwoord al verstuurd.
+  Future<Map<String, dynamic>?> _body(HttpRequest req) async {
+    final text = await _leesLijf(req, lijfMetSleutel);
+    if (text == null) return null;
     final decoded = jsonDecode(text.isEmpty ? '{}' : text);
     return decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{};
   }
@@ -800,7 +877,8 @@ class LanServer {
       req.response.statusCode = HttpStatus.methodNotAllowed;
       return req.response.close();
     }
-    final body = await utf8.decoder.bind(req).join();
+    final body = await _leesLijf(req, lijfMetSleutel);
+    if (body == null) return;
     final decoded = jsonDecode(body.isEmpty ? '{}' : body);
     final map = decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{};
     final result = state.applyOps(
@@ -1038,7 +1116,8 @@ class LanServer {
       await req.response.close();
       return null;
     }
-    final text = await utf8.decoder.bind(req).join();
+    final text = await _leesLijf(req, lijfMetSleutel);
+    if (text == null) return null;
     final decoded = jsonDecode(text.isEmpty ? '{}' : text);
     return decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{};
   }
