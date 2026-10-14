@@ -39,6 +39,10 @@ class FakeServer {
   /// is en niet stilletjes opnieuw begonnen.
   String? laatsteBereik;
 
+  /// Wat er in de laatste `Authorization`-kop en het laatste adres stond.
+  String? laatsteSleutelkop;
+  String? laatsteAdres;
+
   Future<Uri> start() async {
     final s = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     _server = s;
@@ -46,6 +50,8 @@ class FakeServer {
       requests++;
       final cut = cutAfter;
       laatsteBereik = req.headers.value(HttpHeaders.rangeHeader);
+      laatsteSleutelkop = req.headers.value(HttpHeaders.authorizationHeader);
+      laatsteAdres = req.uri.toString();
 
       var vanaf = 0;
       final m = RegExp(r'^bytes=(\d+)-$').firstMatch(laatsteBereik ?? '');
@@ -178,6 +184,18 @@ void main() {
       );
 
   group('a copy on this device', () {
+    test('de sleutel gaat in de kop, niet in het adres; de rest van het adres blijft', () async {
+      // Het adres komt van de speler, die de sleutel voor mpv in het adres zet. Dit verzoek kan een kop
+      // zetten (stap 5 van "verbinden zoals Roon ARC"): een adres met een sleutel erin belandt in logboeken.
+      expect(
+          await store.download(
+              libraryPath: path, url: '$url?token=geheim&maxRate=48000', title: 't', artist: 'a', album: 'b'),
+          isTrue);
+      expect(server.laatsteSleutelkop, 'Bearer geheim');
+      expect(server.laatsteAdres, isNot(contains('token=')));
+      expect(server.laatsteAdres, contains('maxRate=48000'));
+    });
+
     test('the bytes arrive whole and the player is pointed at them', () async {
       expect(await download(), isTrue);
 

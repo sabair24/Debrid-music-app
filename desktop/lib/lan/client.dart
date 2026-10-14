@@ -419,13 +419,12 @@ class RemoteClient {
     try {
       final uri = _naarHier(streamUrl);
       if (uri == null || !uri.path.startsWith('/stream/')) return null;
-      final vraag = endpoint.baseUrl.replace(
-        path: uri.path.replaceFirst('/stream/', '/waarom/'),
-        queryParameters: {'token': endpoint.token},
-      );
+      // De sleutel in de kop, niet in het adres (stap 5 van "verbinden zoals Roon ARC"): een adres met een
+      // sleutel erin belandt in logboeken, en de versleutelde ingangen nemen hem daar niet eens aan.
+      final vraag = endpoint.baseUrl.replace(path: uri.path.replaceFirst('/stream/', '/waarom/'));
       // Kort: dit hangt aan een foutmelding die al op het scherm staat, en een gebruiker die vier
       // seconden op een preciezere zin wacht is slechter af dan een die hem niet krijgt.
-      final res = await _http.get(vraag).timeout(const Duration(seconds: 4));
+      final res = await _http.get(vraag, headers: _headers).timeout(const Duration(seconds: 4));
       if (res.statusCode != 200) return null;
       final body = jsonDecode(utf8.decode(res.bodyBytes));
       if (body is! Map) return null;
@@ -436,22 +435,19 @@ class RemoteClient {
     }
   }
 
-  /// Cover art. Same query-token reason as [streamUrl]: `Image.network` sets no headers.
+  /// Cover art. Zonder sleutel in het adres: [art] en [artAls] zetten hem in de kop.
   /// `maxZijde` vraagt de pc om de hoes eerst te verkleinen. Zie `verkleindeHoes` in
   /// `artwork.dart`: 548 hoezen van samen 174 MB, met een staart tot 14,7 MB, voor een tegel van
   /// 390 pixels. Laat je hem weg, dan komt onveranderd het origineel — dat is wat de pc zelf en elk
   /// ouder toestel doen.
-  Uri artUrl(String ref, {int? maxZijde}) =>
-      endpoint.baseUrl.replace(path: '/art/$ref', queryParameters: {
-        'token': endpoint.token,
-        if (maxZijde != null) 'w': '$maxZijde',
-      });
+  Uri artUrl(String ref, {int? maxZijde}) => endpoint.baseUrl
+      .replace(path: '/art/$ref', queryParameters: maxZijde == null ? null : {'w': '$maxZijde'});
 
   /// Fetch a cover. Null rather than throwing when there simply isn't one — an album without art
   /// is normal, not a failure, and the caller would only swallow the exception anyway.
   Future<Uint8List?> art(String ref) async {
     try {
-      final res = await _http.get(artUrl(ref)).timeout(timeout);
+      final res = await _http.get(artUrl(ref), headers: _headers).timeout(timeout);
       if (res.statusCode != 200 || res.bodyBytes.isEmpty) return null;
       return res.bodyBytes;
     } catch (_) {
@@ -483,7 +479,7 @@ class RemoteClient {
       String ref, String merk, {int? maxZijde}) async {
     try {
       final res = await _http
-          .get(artUrl(ref, maxZijde: maxZijde), headers: merk.isEmpty ? null : {'If-None-Match': '"$merk"'})
+          .get(artUrl(ref, maxZijde: maxZijde), headers: {..._headers, if (merk.isNotEmpty) 'If-None-Match': '"$merk"'})
           .timeout(timeout);
       final etag = res.headers['etag']?.replaceAll('"', '');
       if (res.statusCode == 304) return (ongewijzigd: true, bytes: null, etag: etag);

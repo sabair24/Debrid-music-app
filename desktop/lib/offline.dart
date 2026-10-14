@@ -483,7 +483,21 @@ class OfflineStore extends ChangeNotifier {
       if (adres == null || isVastePcNaam(adres)) {
         throw const HttpException('geen verbinding met de pc — probeer het zo opnieuw');
       }
-      final req = http.Request('GET', Uri.parse(adres));
+      // De sleutel uit het adres en in de kop (stap 5 van "verbinden zoals Roon ARC"): het adres komt van
+      // de speler, die hem voor mpv in het adres zet; dit verzoek kan een kop zetten, en een adres met een
+      // sleutel erin belandt in logboeken.
+      final ruw = Uri.parse(adres);
+      final sleutel = ruw.queryParameters['token'] ?? '';
+      final rest = Map<String, String>.of(ruw.queryParameters)..remove('token');
+      final schoon = Uri(
+        scheme: ruw.scheme,
+        host: ruw.host,
+        port: ruw.hasPort ? ruw.port : null,
+        path: ruw.path,
+        queryParameters: rest.isEmpty ? null : rest,
+      );
+      final req = http.Request('GET', schoon);
+      if (sleutel.isNotEmpty) req.headers[HttpHeaders.authorizationHeader] = 'Bearer $sleutel';
       if (al > 0) req.headers[HttpHeaders.rangeHeader] = 'bytes=$al-';
       final res = await _http.send(req).timeout(stilte);
 

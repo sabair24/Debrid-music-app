@@ -31,12 +31,14 @@ void main() {
   late HttpServer buurman;
   late String basis;
   late List<String> gevraagd;
+  late List<String?> koppen;
   late List<String> bijDeBuurman;
   late int antwoord;
   late String lijf;
 
   setUp(() async {
     gevraagd = [];
+    koppen = [];
     bijDeBuurman = [];
     antwoord = 200;
     lijf = jsonEncode({
@@ -48,6 +50,7 @@ void main() {
     unawaited(() async {
       await for (final req in pc) {
         gevraagd.add(req.uri.toString());
+        koppen.add(req.headers.value(HttpHeaders.authorizationHeader));
         req.response.statusCode = antwoord;
         // Het lijf hoort ook bij een FOUTCODE geschreven te worden. Schrijf je het alleen bij 200,
         // dan kan een toets niet zien of de client op de code let of op het lege antwoord — en dat
@@ -86,7 +89,10 @@ void main() {
       await klant().waarom('$basis/stream/abc123.flac?token=sleutel');
       expect(gevraagd, hasLength(1));
       expect(gevraagd.single, startsWith('/waarom/abc123.flac'));
-      expect(gevraagd.single, contains('token=sleutel'));
+      // De sleutel in de KOP, niet in het adres (stap 5 van "verbinden zoals Roon ARC"): een adres met een
+      // sleutel erin belandt in logboeken.
+      expect(gevraagd.single, isNot(contains('token=')));
+      expect(koppen.single, 'Bearer sleutel');
     });
 
     test('DE VAL: een adres dat NIET van onze pc is wordt niet aangeraakt', () async {
