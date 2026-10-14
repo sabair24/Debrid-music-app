@@ -16,7 +16,6 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:provider/provider.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'acoustid.dart';
@@ -617,9 +616,8 @@ Future<void> main() async {
     },
     endpoint: mode.endpoint,
     // Een geweigerde sleutel vervangt zichzelf, zolang dit toestel op hetzelfde account ingelogd is
-    // als de pc. EERST via het account bij de pc zelf, pas dan via de accountdatabase -- zie
-    // `lan/sleutelherstel.dart` voor waarom die volgorde. Op 11-09-2026 liep dit alleen via de
-    // database, en die zat aan zijn daglimiet: de Shield bleef geweigerd en niemand zei het.
+    // als de pc: via het account bij de pc zelf -- zie `lan/sleutelherstel.dart`. De terugval via de
+    // accountdatabase is weg sinds 14-10-2026: die zette de sleutel leesbaar in Firestore.
     verseSleutel: (basis) async {
       final herstel = await herstelSleutel(
         basis: basis,
@@ -642,7 +640,6 @@ Future<void> main() async {
             platform: ik.platform,
           );
         },
-        viaDatabase: (pc) => cloud.verseSleutelVoor(pc),
       );
       debugPrint('Sleutelherstel: ${herstel.verloop.join(' → ')}');
       return herstel.sleutel;
@@ -2032,9 +2029,44 @@ class _HomeShellState extends State<HomeShell> {
     // overzicht van toen hier alsnog — anders blijven die bestanden voor altijd staan zonder dat
     // iemand weet waar ze vandaan komen.
     unawaited(_radio!.laadOpenstaand());
+    _sleutels = context.read<LanSharing>().grants..nieuweSleutelMelding.addListener(_toonSleutelMelding);
   }
 
   RadioBesturing? _radio;
+  GrantStore? _sleutels;
+
+  /// Elke nieuwe sleutel die deze pc uitgaf, met [Intrekken] erbij. Zie `SleutelMelding`.
+  ///
+  /// Alleen díe sleutel intrekken, niet het toestel: kwam hij van iemand die je inlog had, dan blijft
+  /// je echte gsm met zijn eigen sleutel gewoon werken. Twintig seconden in beeld, want dit vraagt
+  /// iets van je; en na het frame, want dit vuurt vanuit een verzoek, niet vanuit het scherm.
+  void _toonSleutelMelding() {
+    final m = _sleutels?.nieuweSleutelMelding.value;
+    if (m == null || !mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final berichten = ScaffoldMessenger.of(context);
+      berichten.showSnackBar(SnackBar(
+        content: Text(m.tekst),
+        duration: const Duration(seconds: 20),
+        action: SnackBarAction(
+          label: 'Intrekken',
+          onPressed: () async {
+            final g = _sleutels;
+            if (g == null) return;
+            g.trekSleutelIn(m.sleutel);
+            await g.save();
+            berichten.showSnackBar(SnackBar(
+              content: Text("Die sleutel van '${m.deviceName}' is ingetrokken. "
+                  'Eerdere sleutels van dit toestel blijven werken; wil je het hele toestel weg, '
+                  'doe dat bij Instellingen → Toestellen.'),
+              duration: const Duration(seconds: 8),
+            ));
+          },
+        ),
+      ));
+    });
+  }
   bool _overzichtOpen = false;
 
   /// De notitie die al getoond is. "Later beslissen" laat hem staan — bij de volgende START komt
@@ -2113,6 +2145,7 @@ class _HomeShellState extends State<HomeShell> {
   void dispose() {
     _zoekPauze?.cancel();
     _radio?.removeListener(_kijkNaarRadio);
+    _sleutels?.nieuweSleutelMelding.removeListener(_toonSleutelMelding);
     _tvBalk.dispose();
     _tvInhoud.dispose();
     _tvMelding.dispose();
@@ -22063,7 +22096,6 @@ class _SharingSection extends StatefulWidget {
 
 class _SharingSectionState extends State<_SharingSection> {
   late final TextEditingController _root;
-  bool _showToken = false;
 
   // Signing this PC in to the account. The same two fields as LoginScreen, but a different job: a
   // Mac signs in to FIND the music, this machine signs in to be findable.
@@ -22536,38 +22568,22 @@ class _SharingSectionState extends State<_SharingSection> {
                             style: TextStyle(color: Color(0xFFE0A44A), fontSize: 11, height: 1.35),
                           ),
                         ),
-                      const SizedBox(height: 8),
-                      const Text('Toegangscode', style: TextStyle(color: _muted, fontSize: 11.5)),
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              _showToken ? sharing.token : '•' * 16,
-                              style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                      // Hier stonden de gedeelde sleutel zelf (met Tonen en Kopiëren) en, ernaast, een
+                      // QR-code van `adres#sleutel`. Weg sinds 14-10-2026: niets in de app leest die
+                      // in, dus ze gaven de sleutel alleen weg — in elke schermafdruk en elke sessie op
+                      // afstand. Koppelen gaat met je account of met de zes cijfers hieronder; elk
+                      // toestel krijgt dan een sleutel van zichzelf.
+                      if (context.watch<CloudSession>().state == CloudState.signedOut)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 6),
+                          child: Text(
+                            'Deze pc is niet aangemeld bij je account. Dan vindt je gsm hem onderweg '
+                            'niet terug als je adres verandert, en kan een geweigerd toestel zich niet '
+                            'vanzelf herstellen. Meld hem aan bij Account.',
+                            style: TextStyle(color: Color(0xFFE0A44A), fontSize: 11, height: 1.35),
                           ),
-                          TvLabelled(
-                            label: _showToken ? 'Verbergen' : 'Tonen',
-                            child: IconButton(
-                            icon: Icon(_showToken ? Icons.visibility_off_rounded : Icons.visibility_rounded,
-                                size: 15),
-                            color: _muted,
-                            tooltip: _showToken ? 'Verbergen' : 'Tonen',
-                            onPressed: () => setState(() => _showToken = !_showToken),
-                          ),
-                          ),
-                          TvLabelled(
-                            label: 'Code kopiëren',
-                            child: IconButton(
-                            icon: const Icon(Icons.copy_rounded, size: 15),
-                            color: _muted,
-                            tooltip: 'Code kopiëren',
-                            onPressed: () => _copy(sharing.token, 'Toegangscode'),
-                          ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      const SizedBox(height: 6),
                       Text(
                         sharing.discoverable
                             ? 'Je apparaten vinden deze pc vanzelf.'
@@ -22577,22 +22593,6 @@ class _SharingSectionState extends State<_SharingSection> {
                     ],
                   ),
                 ),
-                if (sharing.pairingCode != null) ...[
-                  const SizedBox(width: 14),
-                  // White backing on purpose: a QR on a dark panel is unreadable to most scanners.
-                  Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: QrImageView(
-                      data: sharing.pairingCode!,
-                      size: 96,
-                      padding: EdgeInsets.zero,
-                    ),
-                  ),
-                ],
               ],
             ),
             const SizedBox(height: 10),

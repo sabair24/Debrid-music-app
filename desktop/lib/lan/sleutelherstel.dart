@@ -1,4 +1,4 @@
-/// Een geweigerde sleutel vervangen: eerst via je account, pas daarna via de accountdatabase.
+/// Een geweigerde sleutel vervangen, via je account, rechtstreeks bij de pc.
 ///
 /// **Waarom dit bestaat.** Op 11-09-2026 werd de Shield door zijn eigen pc geweigerd, elke vijftien
 /// seconden, terwijl de Mac met zijn sleutel bij diezelfde pc gewoon binnenkwam. Er was al een
@@ -8,14 +8,20 @@
 /// toestel van zijn eigen account binnen (`accountkoppeling.dart`). Alleen gebruikte niemand hem
 /// voor een toestel dat al gekoppeld wás.
 ///
+/// **Alleen nog die weg, sinds 14-10-2026.** Hiernaast stond een terugval via de accountdatabase: het
+/// toestel zette een aanvraag in Firestore, en de pc schreef de sleutel daar leesbaar terug. Dat is
+/// weg (zie `CloudSession._wisSleutelsUitDatabase`): wie die database kan lezen, had anders elke
+/// sleutel. Wat er overblijft is de pc zelf vragen; kan dat niet (de pc staat uit, of is niet
+/// bereikbaar van hier), dan lost het zich op zodra hij dat weer is.
+///
 /// **Waarom het adres dat weigerde, en niet zoeken op het netwerk.** Die pc heeft net geantwoord --
 /// met een weigering, maar hij antwoordde. We weten dus precies waar hij staat. Zoeken met een
 /// omroep kost seconden, gaat een tailnet niet over, en levert op de Shield in slaapstand zelfs een
 /// "Operation not permitted" op. Dat hoeft allemaal niet.
 ///
 /// **Waarom zuiver.** Dit is een deur, en een fout hier ziet er in code precies zo uit als de goede
-/// versie. De drie diensten komen als functies binnen, zodat de volgorde getoetst kan worden zonder
-/// dat er een netwerk, een Google-account of een pc aan te pas komt.
+/// versie. De diensten komen als functies binnen, zodat het verloop getoetst kan worden zonder dat
+/// er een netwerk, een Google-account of een pc aan te pas komt.
 library;
 
 import 'client.dart';
@@ -24,26 +30,24 @@ import 'client.dart';
 class Sleutelherstel {
   const Sleutelherstel(this.sleutel, this.verloop);
 
-  /// De nieuwe sleutel, of null als geen van beide wegen er een gaf.
+  /// De nieuwe sleutel, of null als er geen kwam.
   final String? sleutel;
 
   /// Elke stap in gewone taal. Ook als het lukt: dan staat er via welke weg.
   final List<String> verloop;
 }
 
-/// Eerst [viaAccount], dan [viaDatabase].
+/// Via [viaAccount] bij de pc op [basis].
 ///
 /// * [inlogsleutel] geeft een inlogsleutel die NU geldig is, of leeg als dit toestel niet ingelogd
 ///   is (of het netwerk er even niet is -- dan kan de accountweg ook niet).
 /// * [viaAccount] is `RemoteClient.pairMetAccount`: null betekent "deze pc kent die weg niet"
-///   (oudere bouw), een [RemoteException] betekent dat de pc nee zei, en zijn zin is de reden.
-/// * [viaDatabase] is de oude weg via Firestore. Die blijft de terugval: een pc die zelf niet
-///   ingelogd is, kan de accountweg niet beoordelen maar wel een aanvraag in de database oppikken.
+///   (oudere bouw) of "niet bereikbaar", een [RemoteException] betekent dat de pc nee zei, en zijn
+///   zin is de reden.
 Future<Sleutelherstel> herstelSleutel({
   required Uri basis,
   required Future<String> Function() inlogsleutel,
   required Future<RemoteEndpoint?> Function(Uri basis, String inlogsleutel) viaAccount,
-  required Future<String?> Function(Uri basis) viaDatabase,
 }) async {
   final verloop = <String>[];
 
@@ -56,30 +60,19 @@ Future<Sleutelherstel> herstelSleutel({
 
   if (sleutel.isEmpty) {
     verloop.add('niet ingelogd, of geen netwerk voor een verse inlogsleutel — de accountweg vervalt');
-  } else {
-    try {
-      final toegang = await viaAccount(basis, sleutel);
-      if (toegang != null && toegang.token.isNotEmpty) {
-        verloop.add('accountweg: toegang van ${basis.host}');
-        return Sleutelherstel(toegang.token, verloop);
-      }
-      verloop.add('accountweg: ${basis.host} kent hem niet (oudere bouw)');
-    } on RemoteException catch (e) {
-      verloop.add('accountweg: ${basis.host} zei nee — ${e.message}');
-    } catch (e) {
-      verloop.add('accountweg mislukte: $e');
-    }
+    return Sleutelherstel(null, verloop);
   }
-
   try {
-    final uitDatabase = await viaDatabase(basis);
-    if (uitDatabase != null && uitDatabase.isNotEmpty) {
-      verloop.add('accountdatabase: toegang');
-      return Sleutelherstel(uitDatabase, verloop);
+    final toegang = await viaAccount(basis, sleutel);
+    if (toegang != null && toegang.token.isNotEmpty) {
+      verloop.add('accountweg: toegang van ${basis.host}');
+      return Sleutelherstel(toegang.token, verloop);
     }
-    verloop.add('accountdatabase: geen sleutel');
+    verloop.add('accountweg: ${basis.host} kent hem niet (oudere bouw) of antwoordde niet');
+  } on RemoteException catch (e) {
+    verloop.add('accountweg: ${basis.host} zei nee — ${e.message}');
   } catch (e) {
-    verloop.add('accountdatabase mislukte: $e');
+    verloop.add('accountweg mislukte: $e');
   }
   return Sleutelherstel(null, verloop);
 }

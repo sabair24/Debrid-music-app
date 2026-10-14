@@ -308,7 +308,7 @@ class CloudSession extends ChangeNotifier {
           gezet = regel;
           geschrevenOm = nu;
         }
-        await _grantPending(db, serverId, grants);
+        if (!_sleutelsGewist) await _wisSleutelsUitDatabase(db, serverId);
         lastError = null;
       } catch (e) {
         // Losing Firestore is not losing the library. Say it once and carry on serving.
@@ -323,25 +323,32 @@ class CloudSession extends ChangeNotifier {
     _heartbeat = Timer.periodic(kHartslagTik, (_) => unawaited(beat()));
   }
 
-  /// Answer every device that asked for access while we were looking the other way.
-  Future<void> _grantPending(Firestore db, String serverId, GrantStore grants) async {
-    final requests = await db.list('users/$uid/servers/$serverId/grants');
-    for (final doc in requests) {
-      if (doc.data['status'] != 'pending') continue;
-      final grant = grants.mint(
-        deviceId: doc.id,
-        deviceName: (doc.data['deviceName'] ?? 'Onbekend apparaat').toString(),
-        platform: (doc.data['platform'] ?? '').toString(),
-      );
-      // Disk before cloud, deliberately. A crash between the two must not leave a device holding a
-      // token this PC has never heard of — that device would be refused with no way to tell why.
-      await grants.save();
+  /// Of de sleutels in de accountdatabase deze sessie al gewist zijn. Zie [_wisSleutelsUitDatabase].
+  bool _sleutelsGewist = false;
+
+  /// Elke sleutel die ooit via de accountdatabase uitgedeeld werd, daar weghalen. Eén keer per
+  /// sessie, en opnieuw geprobeerd bij de volgende slag als het niet lukte.
+  ///
+  /// **Waarom.** Tot 14-10-2026 beantwoordde de pc een aanvraag in Firestore door de sleutel van het
+  /// toestel er leesbaar in te zetten (`grants/<toestel>`: `status: granted, token: …`). De regels van
+  /// die database zijn niet in deze repository te zien, en wie ze kan lezen had dan elke sleutel. Een
+  /// toestel komt nu binnen door de pc rechtstreeks te vragen, op grond van het account
+  /// (`/pair-cloud`, `accountkoppeling.dart`); Firestore is alleen nog een adresboek.
+  ///
+  /// De rij blijft staan (met `verlopen`), zodat een oudere app die nog wacht een antwoord ziet en
+  /// niet blijft vragen; alleen de sleutel gaat eruit.
+  Future<void> _wisSleutelsUitDatabase(Firestore db, String serverId) async {
+    final rijen = await db.list('users/$uid/servers/$serverId/grants');
+    for (final doc in rijen) {
+      final sleutel = (doc.data['token'] ?? '').toString();
+      if (sleutel.isEmpty) continue;
       await db.set('users/$uid/servers/$serverId/grants/${doc.id}', {
-        'status': 'granted',
-        'token': grant.token,
-        'grantedAt': DateTime.now().toUtc(),
+        'status': 'verlopen',
+        'token': '',
+        'verlopenOp': DateTime.now().toUtc(),
       });
     }
+    _sleutelsGewist = true;
   }
 
   /// Cut one device off everywhere: locally, and in the request document it is watching.
@@ -392,90 +399,9 @@ class CloudSession extends ChangeNotifier {
     ];
   }
 
-  /// Een verse sleutel voor de pc die op [baseUrl] antwoordt, zonder dat er iemand zes cijfers
-  /// hoeft over te tikken.
-  ///
-  /// **Waarom dit bestaat.** Een toestel waarvan de sleutel niet meer aanvaard wordt zat vast: het
-  /// koppelscherm komt niet terug zolang er nog een kopie van de bibliotheek ligt, en de enige
-  /// plek die ooit een nieuwe sleutel vroeg was het inlogscherm. Dus moest je naar de pc lopen voor
-  /// een code, terwijl allebei de kanten op hetzelfde account ingelogd zijn en de pc een verzoek
-  /// van je eigen toestel gewoon toekent.
-  ///
-  /// Dit geeft niets weg wat het inlogscherm niet al gaf: hetzelfde account, hetzelfde verzoek,
-  /// dezelfde pc die het toekent. Een toestel dat je bewust hebt ingetrokken blijft ingetrokken --
-  /// [requestAccess] geeft bij `revoked` null terug en vraagt niets opnieuw.
-  Future<String?> verseSleutelVoor(Uri baseUrl, {Duration wacht = const Duration(seconds: 90)}) async {
-    if (state != CloudState.signedIn) return null;
-    final List<CloudServer> lijst;
-    try {
-      lijst = await servers();
-    } catch (e) {
-      debugPrint('Verse sleutel: de serverlijst kwam niet: $e');
-      return null;
-    }
-    if (lijst.isEmpty) return null;
-    // Op adres zoeken, en alleen als er twijfel kan zijn. Bij één pc onder je account is er niets te
-    // verwarren; bij meer moet het ADRES kloppen, anders vraag je toegang aan de verkeerde machine.
-    final passend = [
-      for (final s in lijst)
-        if (s.urls.any((u) => Uri.tryParse(u)?.host == baseUrl.host)) s,
-    ];
-    final doel = passend.length == 1
-        ? passend.first
-        : (passend.isEmpty && lijst.length == 1 ? lijst.first : null);
-    if (doel == null) return null;
-    return awaitAccess(doel.id, timeout: wacht);
-  }
-
-  /// Ask a PC for access. Returns the token once it has been granted, or null while we are still
-  /// waiting — which is the ordinary state when the PC is simply switched off.
-  Future<String?> requestAccess(String serverId) async {
-    final db = await _db();
-    if (db == null) return null;
-    final me = await thisDevice();
-    final path = 'users/$uid/servers/$serverId/grants/${me.id}';
-
-    final existing = await db.get(path);
-    final status = existing?.data['status'];
-    if (status == 'granted') {
-      final token = (existing?.data['token'] ?? '').toString();
-      if (token.isNotEmpty) return token;
-    }
-    if (status == 'revoked') return null;
-
-    if (existing == null || status != 'pending') {
-      // Deliberately without a token field: the rules refuse a client that tries to hand itself
-      // one, so a bug here fails loudly instead of quietly granting access.
-      await db.set(path, {
-        'status': 'pending',
-        'deviceName': me.name,
-        'platform': me.platform,
-        'requestedAt': DateTime.now().toUtc(),
-      });
-    }
-    return null;
-  }
-
-  /// Poll until the PC answers. [onWaiting] fires once so a screen can say what is going on rather
-  /// than spinning silently.
-  Future<String?> awaitAccess(
-    String serverId, {
-    Duration timeout = const Duration(minutes: 3),
-    void Function()? onWaiting,
-  }) async {
-    final deadline = DateTime.now().add(timeout);
-    var announced = false;
-    while (DateTime.now().isBefore(deadline)) {
-      final token = await requestAccess(serverId);
-      if (token != null) return token;
-      if (!announced) {
-        announced = true;
-        onWaiting?.call();
-      }
-      await Future<void>.delayed(const Duration(seconds: 5));
-    }
-    return null;
-  }
+  // Hier stonden `verseSleutelVoor`, `requestAccess` en `awaitAccess`: een toestel vroeg zijn sleutel
+  // aan via een rij in de accountdatabase, en de pc zette hem daar leesbaar in. Weg sinds 14-10-2026;
+  // zie [_wisSleutelsUitDatabase]. Een toestel vraagt het nu de pc zelf (`RemoteClient.pairMetAccount`).
 
   @override
   void dispose() {

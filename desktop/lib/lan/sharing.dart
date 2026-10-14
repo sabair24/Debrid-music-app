@@ -101,12 +101,6 @@ class LanSharing extends ChangeNotifier {
   /// is one, it is the answer to "which address" in every case, not only the away case.
   String? get primaryUrl => remoteUrl ?? (_home.isEmpty ? null : _home.first);
 
-  /// Everything a device needs, in one string — what the QR code in settings encodes.
-  String? get pairingCode {
-    final url = primaryUrl;
-    return url == null ? null : '$url#${settings.lanToken}';
-  }
-
   /// Bring the server in line with the current settings. Safe to call repeatedly.
   Future<void> applySettings() async {
     // Eén keer laden, maar een tweede aanroep WACHT erop in plaats van het over te slaan.

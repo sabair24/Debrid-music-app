@@ -191,44 +191,62 @@ class _LoginScreenState extends State<LoginScreen> {
     final server = servers.firstWhere((s) => s.online && s.isFresh, orElse: () => servers.first);
 
     setState(() => _waiting = server.isFresh
-        ? 'Toegang aanvragen bij ${server.name}…'
-        : '${server.name} lijkt uit te staan. Je aanvraag blijft klaarstaan.');
+        ? 'Toegang vragen aan ${server.name}…'
+        : '${server.name} lijkt uit te staan. Toch even proberen…');
 
-    final token = await widget.session.awaitAccess(server.id);
-    if (!mounted) return;
-
-    if (token == null) {
-      // De aanvraag liep via de accountdatabase en die is niet opgepikt. Dat zegt niets over de
-      // pc: staat hij naast je op hetzelfde wifi, dan kan hij zelf antwoorden. Dit is precies het
-      // geval waarin je vroeger vastliep terwijl alles er stond.
-      setState(() => _waiting = 'Geen antwoord. Zoeken naar je pc op dit netwerk…');
-      if (await _zoekOpNetwerk()) return;
+    // Elk adres dat de pc publiceerde, en daar rechtstreeks binnenkomen op grond van je account.
+    //
+    // **Sinds 14-10-2026 zo, en niet meer via de accountdatabase.** Daar zette dit toestel een
+    // aanvraag in, en de pc zette er de sleutel LEESBAAR in terug — wie die database kon lezen, had
+    // elke sleutel. Nu vraagt het toestel de pc zelf, met zijn inlogsleutel, en de pc kijkt bij
+    // Google na van wie die is (`accountkoppeling.dart`). Zelfde account, zelfde "geen code", maar de
+    // sleutel staat nergens anders dan op de pc en op dit toestel.
+    //
+    // Elk adres, want een machine met een VPN of Hyper-V heeft er meerdere, en alleen dit toestel
+    // weet welke het kan bereiken.
+    final ik = await thisDevice();
+    final String inlog;
+    try {
+      inlog = await widget.session.idToken();
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _busy = false;
         _waiting = null;
-        _error = _netwerkUitleg ??
-            'Je pc heeft nog niet geantwoord. Zet hem aan en probeer opnieuw — '
-                'je aanvraag staat er al, dus hij pikt het vanzelf op.';
+        _error = 'Je inlog kon niet vernieuwd worden: $e';
       });
       return;
     }
-
-    // Every address the PC published; the one that answers wins. A machine with a VPN or Hyper-V
-    // has several, and only this device knows which of them it can reach.
     for (final url in server.urls) {
       final base = RemoteEndpoint.parseHost(url);
-      if (base == null) continue;
-      if (await RemoteClient.health(base) != null) {
-        widget.onConnected(RemoteEndpoint(baseUrl: base, token: token, name: server.name));
+      if (base == null || inlog.isEmpty) continue;
+      try {
+        final toegang = await RemoteClient.pairMetAccount(
+          base,
+          idToken: inlog,
+          deviceId: ik.id,
+          deviceName: ik.name,
+          platform: ik.platform,
+        );
+        if (toegang == null) continue;
+        if (!mounted) return;
+        widget.onConnected(RemoteEndpoint(
+          baseUrl: toegang.baseUrl,
+          token: toegang.token,
+          name: toegang.name ?? server.name,
+        ));
         return;
+      } on RemoteException catch (e) {
+        // De pc antwoordde en zei nee; zijn eigen zin is de enige die verder helpt.
+        _netwerkUitleg = '${server.name}: ${e.message}';
       }
     }
+    final uitleg = _netwerkUitleg;
+    if (!mounted) return;
 
-    // De pc gaf toegang maar geen van zijn gepubliceerde adressen antwoordt. Dat gebeurt zodra hij
-    // een ander ip kreeg dan hij ooit opschreef — dan is het adres oud, niet de pc weg. Hij roept
-    // zich op dit netwerk gewoon om.
-    setState(() => _waiting = 'Adres klopt niet meer. Zoeken op dit netwerk…');
+    // Geen van de gepubliceerde adressen. Dat gebeurt zodra de pc een ander ip kreeg dan hij ooit
+    // opschreef — dan is het adres oud, niet de pc weg. Hij roept zich op dit netwerk gewoon om.
+    setState(() => _waiting = 'Zoeken naar je pc op dit netwerk…');
     if (await _zoekOpNetwerk()) return;
     if (!mounted) return;
 
@@ -236,8 +254,9 @@ class _LoginScreenState extends State<LoginScreen> {
       _busy = false;
       _waiting = null;
       _error = _netwerkUitleg ??
-          'Je pc gaf toegang, maar is op dit netwerk niet te bereiken.\n'
-              'Hangen beide apparaten aan hetzelfde netwerk?';
+          uitleg ??
+          '${server.name} antwoordt niet. Staat hij aan, en hangt dit toestel aan hetzelfde '
+              'netwerk (of staat Tailscale aan)?';
     });
   }
 

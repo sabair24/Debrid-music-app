@@ -238,6 +238,9 @@ class LanServer {
     await stop();
     cast.dispose();
     catalog.dispose();
+    // Een opslagbeurt die een verzoek net startte (`touch`), nog afmaken: anders gaat hij verloren,
+    // of schrijft hij in een map die intussen weg is.
+    await grants.wachtOpOpslaan();
   }
 
   Future<void> _serve(HttpServer server) async {
@@ -578,10 +581,15 @@ class LanServer {
     return _json(req.response, [for (final t in filtered) t.toJson()]);
   }
 
-  /// Trade a six-digit code for the access token.
+  /// Trade a six-digit code for a token of this device's own.
   ///
   /// Answers exactly the same way for a wrong code and for pairing not being open at all, so
   /// nothing on the network can work out whether a code is currently on screen.
+  ///
+  /// **Sinds 14-10-2026 een eigen sleutel, niet de gedeelde.** Hier ging de gedeelde sleutel de deur
+  /// uit — dezelfde die in elke cast-URL naar Sonos en KEF staat, en die niet per toestel in te
+  /// trekken is. Nu krijgt elk toestel een rij en een sleutel van zichzelf. Een toestel van vóór deze
+  /// versie stuurt geen id mee; dan maakt de pc er een (zelfde vorm als `device_identity.dart`).
   Future<void> _pair(HttpRequest req) async {
     if (req.method != 'POST') {
       req.response.statusCode = HttpStatus.methodNotAllowed;
@@ -590,15 +598,46 @@ class LanServer {
     final body = await utf8.decoder.bind(req).join();
     final decoded = jsonDecode(body.isEmpty ? '{}' : body);
     final map = decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{};
+    final opgegeven = map['deviceId'];
+    if (opgegeven != null && (opgegeven is! String || !geldigToestelId(opgegeven))) {
+      return _json(req.response, {'error': 'Dit toestel stuurde een ongeldig id mee.'},
+          status: HttpStatus.badRequest);
+    }
     if (!pairing.redeem((map['code'] ?? '').toString())) {
       req.response.statusCode = HttpStatus.forbidden;
       return req.response.close();
     }
+    final id = (opgegeven as String?) ?? generateDeviceToken();
+    final naam = schoneToestelnaam(map['deviceName']);
+    final grant = grants.nieuweSleutel(
+      deviceId: id,
+      deviceName: naam,
+      platform: schoneToestelnaam(map['platform'], leeg: ''),
+    );
+    await grants.save();
+    _meldNieuweSleutel(req, grant, via: 'code');
     return _json(req.response, {
-      'token': token,
+      'token': grant.token,
+      'deviceId': id,
       'name': deviceName(),
       'trackCount': library.tracks.length,
     });
+  }
+
+  /// Elke nieuwe sleutel: één regel in `koppeling.log` en een melding op de pc. Zie [SleutelMelding].
+  void _meldNieuweSleutel(HttpRequest req, DeviceGrant grant, {required String via}) {
+    final van = req.connectionInfo?.remoteAddress.address ?? '?';
+    final bestaand = grant.oudereTokens.isNotEmpty;
+    _koppelLog?.line('${bestaand ? 'NIEUWE SLEUTEL' : 'NIEUW TOESTEL'}  "${grant.deviceName}"'
+        '  via $via  van $van  (${grant.oudereTokens.length} eerdere sleutel(s) blijven geldig)');
+    grants.nieuweSleutelMelding.value = SleutelMelding(
+      deviceId: grant.deviceId,
+      deviceName: grant.deviceName,
+      bestaand: bestaand,
+      via: via,
+      van: van,
+      sleutel: grant.token,
+    );
   }
 
   /// Toegang op grond van het ACCOUNT, over het lokale netwerk, zonder Firestore.
@@ -652,17 +691,25 @@ class LanServer {
           status: HttpStatus.forbidden);
     }
 
-    final naam = (map['deviceName'] ?? 'Onbekend apparaat').toString();
-    final grant = grants.mint(
-      deviceId: (map['deviceId'] ?? naam).toString(),
+    // Het eigen id van het toestel, en alleen een geldig: één rij per toestel, zodat intrekken werkt.
+    // Hier stond `deviceId ?? naam` — een toestel zonder id kreeg zijn NAAM als id, en twee gsm's met
+    // dezelfde naam deelden dan één sleutel. En nooit `legacy`: die rij is de gedeelde sleutel.
+    final id = map['deviceId'];
+    if (id is! String || !geldigToestelId(id)) {
+      _koppelLog?.line('PAIR-CLOUD  geweigerd: geen geldig toestel-id meegestuurd');
+      return _json(req.response, {'error': 'Dit toestel stuurde geen geldig id mee. Werk de app bij.'},
+          status: HttpStatus.badRequest);
+    }
+    final naam = schoneToestelnaam(map['deviceName']);
+    final grant = grants.nieuweSleutel(
+      deviceId: id,
       deviceName: naam,
-      platform: (map['platform'] ?? '').toString(),
+      platform: schoneToestelnaam(map['platform'], leeg: ''),
     );
     // Eerst naar schijf, dan pas teruggeven. Andersom zou een pc die daarna omvalt een toestel
-    // achterlaten met een sleutel waar hij nooit meer van gehoord heeft. Zelfde volgorde als in
-    // `CloudSession._grantPending`, en om dezelfde reden.
+    // achterlaten met een sleutel waar hij nooit meer van gehoord heeft.
     await grants.save();
-    _koppelLog?.line('PAIR-CLOUD  toegang gegeven aan "$naam" op grond van het account');
+    _meldNieuweSleutel(req, grant, via: 'account');
     return _json(req.response, {
       'token': grant.token,
       'name': deviceName(),

@@ -1,4 +1,4 @@
-/// Een geweigerde sleutel vervangen: eerst via je account, pas daarna via de accountdatabase.
+/// Een geweigerde sleutel vervangen, via je account, rechtstreeks bij de pc.
 ///
 /// **Waarom dit bestaat.** Op 11-09-2026 werd de Shield opnieuw door zijn eigen pc geweigerd, terwijl
 /// de Mac met zijn sleutel bij diezelfde pc gewoon binnenkwam. Het zelfherstel liep alleen via
@@ -6,7 +6,10 @@
 /// accountweg bestond al, maar werkte alleen op het inlogscherm. En dat inlogscherm vroeg om een
 /// wachtwoord dat de Shield al had.
 ///
-/// De volgorde wordt hier met nepdiensten getoetst: er gaat niets het netwerk op. Onderaan staan drie
+/// **Sinds 14-10-2026 alleen nog de accountweg.** De terugval via de accountdatabase zette de sleutel
+/// leesbaar in Firestore en is weg; de bronbewaker onderaan houdt dat zo.
+///
+/// Het verloop wordt hier met nepdiensten getoetst: er gaat niets het netwerk op. Onderaan staan
 /// bronbewakers voor de plekken waar dit aan de app vastzit.
 library;
 
@@ -20,21 +23,15 @@ import 'package:debridmusic/lan/sleutelherstel.dart';
 final _pc = Uri.parse('http://192.168.0.117:47820');
 
 void main() {
-  group('de volgorde', () {
-    test('de accountweg eerst, en dan wordt de database niet eens gevraagd', () async {
-      var databaseGevraagd = false;
+  group('het verloop', () {
+    test('de accountweg geeft de nieuwe sleutel', () async {
       final r = await herstelSleutel(
         basis: _pc,
         inlogsleutel: () async => 'id-token',
         viaAccount: (pc, s) async => RemoteEndpoint(baseUrl: pc, token: 'nieuw-via-account'),
-        viaDatabase: (_) async {
-          databaseGevraagd = true;
-          return 'nieuw-via-database';
-        },
       );
       expect(r.sleutel, 'nieuw-via-account');
-      expect(databaseGevraagd, isFalse,
-          reason: 'de database is de dienst met de daglimiet — wie hem niet nodig heeft, vraagt hem niet');
+      expect(r.verloop.join(' '), contains('accountweg: toegang'));
     });
 
     test('de accountweg krijgt het adres dat weigerde, met de verse inlogsleutel', () async {
@@ -48,34 +45,32 @@ void main() {
           getoond = s;
           return null;
         },
-        viaDatabase: (_) async => null,
       );
       expect(gevraagd, _pc,
           reason: 'die pc antwoordde net met een weigering, dus hij is bereikbaar — zoeken hoeft niet');
       expect(getoond, 'id-token-vers');
     });
 
-    test('een pc die nee zegt: terug naar de database, en zijn reden bewaard', () async {
+    test('een pc die nee zegt: geen sleutel, en zijn reden bewaard', () async {
       final r = await herstelSleutel(
         basis: _pc,
         inlogsleutel: () async => 'id-token',
         viaAccount: (pc, s) async =>
             throw const RemoteException('Deze pc hoort bij een ander account.', statusCode: 403),
-        viaDatabase: (_) async => 'nieuw-via-database',
       );
-      expect(r.sleutel, 'nieuw-via-database');
+      expect(r.sleutel, isNull);
       expect(r.verloop.join(' '), contains('ander account'),
           reason: 'de zin van de pc is de enige die iemand verder helpt');
     });
 
-    test('een oudere pc die de accountweg niet kent: gewoon de database', () async {
+    test('een oudere pc die de accountweg niet kent: geen sleutel, wel een verhaal', () async {
       final r = await herstelSleutel(
         basis: _pc,
         inlogsleutel: () async => 'id-token',
         viaAccount: (pc, s) async => null,
-        viaDatabase: (_) async => 'nieuw-via-database',
       );
-      expect(r.sleutel, 'nieuw-via-database');
+      expect(r.sleutel, isNull);
+      expect(r.verloop.join(' '), contains('kent hem niet'));
     });
 
     test('een netwerkfout in de accountweg breekt niets af', () async {
@@ -83,14 +78,14 @@ void main() {
         basis: _pc,
         inlogsleutel: () async => 'id-token',
         viaAccount: (pc, s) async => throw SocketException('Connection refused'),
-        viaDatabase: (_) async => 'nieuw-via-database',
       );
-      expect(r.sleutel, 'nieuw-via-database');
+      expect(r.sleutel, isNull);
+      expect(r.verloop.join(' '), contains('Connection refused'),
+          reason: 'stil opgeven is precies hoe dit tien dagen onopgemerkt bleef');
     });
 
-    test('niet ingelogd: de accountweg vervalt, de database wordt nog wel geprobeerd', () async {
+    test('niet ingelogd: de accountweg wordt niet eens geprobeerd', () async {
       var accountGevraagd = false;
-      var databaseGevraagd = false;
       final r = await herstelSleutel(
         basis: _pc,
         inlogsleutel: () async => '',
@@ -98,27 +93,10 @@ void main() {
           accountGevraagd = true;
           return null;
         },
-        viaDatabase: (_) async {
-          databaseGevraagd = true;
-          return null;
-        },
       );
       expect(accountGevraagd, isFalse, reason: 'zonder inlogsleutel valt er niets te laten zien');
-      expect(databaseGevraagd, isTrue);
       expect(r.sleutel, isNull);
-    });
-
-    test('niets werkt: geen sleutel, maar wel een verhaal voor het logboek', () async {
-      final r = await herstelSleutel(
-        basis: _pc,
-        inlogsleutel: () async => 'id-token',
-        viaAccount: (pc, s) async => null,
-        viaDatabase: (_) async => throw Exception('Quota exceeded'),
-      );
-      expect(r.sleutel, isNull);
-      expect(r.verloop.length, greaterThanOrEqualTo(2),
-          reason: 'stil opgeven is precies hoe dit tien dagen onopgemerkt bleef');
-      expect(r.verloop.join(' '), contains('Quota exceeded'));
+      expect(r.verloop.join(' '), contains('niet ingelogd'));
     });
   });
 
@@ -127,11 +105,15 @@ void main() {
     late final String sessie = File('lib/lan/client_session.dart').readAsStringSync();
     late final String inloggen = File('lib/login_screen.dart').readAsStringSync();
 
-    test('het zelfherstel loopt via de accountweg, met de database als terugval', () {
+    test('het zelfherstel loopt via de accountweg, en nooit meer via de database', () {
       expect(hoofd, contains('herstelSleutel('));
       expect(hoofd, contains('RemoteClient.pairMetAccount('),
-          reason: 'zonder de accountweg is dit weer alleen de database, en die zat aan zijn limiet');
-      expect(hoofd, contains('viaDatabase: (pc) => cloud.verseSleutelVoor(pc)'));
+          reason: 'zonder de accountweg herstelt een geweigerd toestel zich nergens meer');
+      expect(hoofd, isNot(contains('viaDatabase')),
+          reason: 'die weg zette de sleutel leesbaar in Firestore');
+      expect(hoofd, isNot(contains('verseSleutelVoor')));
+      expect(inloggen, isNot(contains('awaitAccess(')),
+          reason: 'het inlogscherm vraagt de pc zelf, niet de accountdatabase');
     });
 
     test('een nieuwe sleutel neemt de uitwijkadressen mee', () {

@@ -613,7 +613,11 @@ class RemoteClient {
     if (res.statusCode == 304 || res.statusCode == 200) return res;
     throw RemoteException(
       res.statusCode == 401 || res.statusCode == 403
-          ? 'De koppeling met de pc is niet meer geldig. Koppel opnieuw.'
+          // Sinds 14-10-2026 niet meer "Koppel opnieuw": een geweigerde sleutel herstelt zichzelf via
+          // het account zodra de pc bereikbaar is (sleutelherstel.dart). Koppelen met een code is
+          // alleen nog nodig als dat niet lukt — en dan staat de knop er.
+          ? 'Je pc herkent dit toestel niet meer. Dat lost zich vanzelf op zodra je thuis bent of '
+              'Tailscale aanzet, als je pc en dit toestel op hetzelfde account zijn aangemeld.'
           : 'De pc antwoordde met ${res.statusCode}.',
       statusCode: res.statusCode,
     );
@@ -677,6 +681,10 @@ class RemoteClient {
     Uri baseUrl,
     String code, {
     required String deviceName,
+    // Het eigen id van dit toestel (`thisDevice().id`), zodat de pc één rij per toestel houdt en dit
+    // toestel los kan intrekken. Zonder maakt de pc er zelf een.
+    String? deviceId,
+    String platform = '',
     http.Client? client,
     Duration timeout = const Duration(seconds: 10),
   }) async {
@@ -686,7 +694,12 @@ class RemoteClient {
           .post(
             baseUrl.replace(path: '/pair'),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'code': code, 'deviceName': deviceName}),
+            body: jsonEncode({
+              'code': code,
+              'deviceName': deviceName,
+              if (deviceId != null) 'deviceId': deviceId,
+              if (platform.isNotEmpty) 'platform': platform,
+            }),
           )
           .timeout(timeout);
       if (res.statusCode == 403) {

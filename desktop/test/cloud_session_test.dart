@@ -198,42 +198,36 @@ void main() {
       expect(doc?.data['online'], isTrue);
     });
 
-    test('the PC turns a pending request into a token, disk first', () async {
-      final grants = GrantStore(file: File('${scratch.path}/grants.json'));
+    // Hier stond "the PC turns a pending request into a token, disk first": de pc beantwoordde een
+    // aanvraag in Firestore door de sleutel er leesbaar in te zetten. Weg sinds 14-10-2026; de twee
+    // toetsen hieronder bewijzen het omgekeerde.
+
+    test('een sleutel die ooit in de database stond, wordt bij de eerste slag gewist', () async {
+      final s = session();
+      await s.signIn('saber@example.test', 'goed');
       final store = Firestore(token: 'id-token', config: _config, client: db.client());
-
-      // What a device leaves behind.
-      await store.set('users/user-1/servers/pc-1/grants/ipad-abc', {
-        'status': 'pending',
-        'deviceName': 'iPad van Saber',
-        'platform': 'ios',
-      });
-
-      // What the PC does with it.
-      final pending = await store.list('users/user-1/servers/pc-1/grants');
-      expect(pending.single.data['status'], 'pending');
-      final grant = grants.mint(
-        deviceId: pending.single.id,
-        deviceName: '${pending.single.data['deviceName']}',
-        platform: '${pending.single.data['platform']}',
-      );
-      await grants.save();
-      await store.set('users/user-1/servers/pc-1/grants/ipad-abc', {
+      // Wat een eerdere versie van de pc achterliet.
+      await store.set('users/user-1/servers/pc-1/grants/gsm-abc', {
         'status': 'granted',
-        'token': grant.token,
+        'token': 'een-oude-sleutel-van-32-tekens!!',
+        'deviceName': 'S26',
       });
 
-      final answered = await store.get('users/user-1/servers/pc-1/grants/ipad-abc');
-      expect(answered?.data['status'], 'granted');
-      expect(answered?.data['token'], grant.token);
-      // The merge kept what the device said about itself.
-      expect(answered?.data['deviceName'], 'iPad van Saber');
+      s.startAsOwner(
+        serverId: 'pc-1',
+        serverName: 'SABER-PC',
+        port: 8477,
+        addresses: () => ['http://192.168.0.10:8477'],
+        grants: GrantStore(file: File('${scratch.path}/grants.json')),
+        trackCount: () => 1,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 300));
 
-      // And the PC wrote it down before telling anyone, so a crash here cannot leave a device
-      // holding a token the PC has never heard of.
-      final reopened = GrantStore(file: File('${scratch.path}/grants.json'));
-      await reopened.load();
-      expect(reopened.accepts(grant.token), isTrue);
+      final rij = await store.get('users/user-1/servers/pc-1/grants/gsm-abc');
+      expect(rij?.data['token'], '', reason: 'wie de database kan lezen, mag geen sleutel meer vinden');
+      expect(rij?.data['status'], 'verlopen');
+      expect(rij?.data['deviceName'], 'S26', reason: 'alleen de sleutel gaat eruit, de rij blijft');
+      s.dispose();
     });
 
     /// The PC making itself findable — the step every device depends on and nothing tested.
@@ -241,7 +235,7 @@ void main() {
     /// Signing in on the PC only pays off through this heartbeat: until the server document exists,
     /// a Mac that signs in is told "Nog geen pc gevonden onder dit account". That is why signing in
     /// from Settings starts it immediately instead of waiting for the next launch.
-    test('a signed-in PC publishes where it is, and answers what was waiting', () async {
+    test('a signed-in PC publishes where it is, and hands out NO token in the database', () async {
       final s = session();
       await s.signIn('saber@example.test', 'goed');
 
@@ -273,10 +267,12 @@ void main() {
       expect(doc.data['urls'], contains('http://192.168.0.10:8477'));
       expect(doc.data['trackCount'], 325);
 
-      // And the request that was already waiting is answered in the same beat.
-      final answered = await store.get('users/user-1/servers/pc-1/grants/ipad-abc');
-      expect(answered?.data['status'], 'granted');
-      expect('${answered?.data['token']}', isNotEmpty);
+      // En de aanvraag die er stond, wordt NIET met een sleutel beantwoord: een toestel komt binnen
+      // door de pc zelf te vragen (`/pair-cloud`), en de sleutel staat nergens anders.
+      final rij = await store.get('users/user-1/servers/pc-1/grants/ipad-abc');
+      expect(rij?.data['status'], 'pending');
+      expect(rij?.data['token'] ?? '', '');
+      expect(grants.all, isEmpty, reason: 'een rij in Firestore is geen reden om een sleutel te maken');
 
       s.dispose();
     });
@@ -300,16 +296,6 @@ void main() {
       s.dispose();
     });
 
-    test('a PC that is off leaves the request pending, and says so', () async {
-      final s = session();
-      await s.signIn('saber@example.test', 'goed');
-      // Nothing answers; awaitAccess gives up rather than spinning for ever.
-      var told = false;
-      final token = await s.awaitAccess('pc-1',
-          timeout: const Duration(milliseconds: 400), onWaiting: () => told = true);
-      expect(token, isNull);
-      expect(told, isTrue, reason: 'het scherm moet kunnen zeggen dat het wacht');
-    });
   });
 
   group('the wire format', () {

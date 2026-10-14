@@ -130,8 +130,11 @@ void main() {
     expect(health!.trackCount, 2);
 
     final code = pairing.start();
-    final endpoint = await RemoteClient.pair(base, code, deviceName: 'iPad van Saber');
-    expect(endpoint.token, 'de-echte-sleutel');
+    final endpoint = await RemoteClient.pair(base, code,
+        deviceName: 'iPad van Saber', deviceId: 'ipad-van-saber-0001', platform: 'ios');
+    // Een sleutel van dit toestel zelf (sinds 14-10-2026), niet de gedeelde 'de-echte-sleutel'.
+    expect(endpoint.token, isNot('de-echte-sleutel'));
+    expect(endpoint.token, hasLength(32));
 
     final client = RemoteClient(endpoint);
     final mac = LibraryStore()..remote = client;

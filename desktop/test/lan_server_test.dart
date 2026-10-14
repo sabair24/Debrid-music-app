@@ -342,7 +342,10 @@ void main() {
       final res = await req.close();
       expect(res.statusCode, 200);
       final body = jsonDecode(await res.transform(utf8.decoder).join()) as Map<String, dynamic>;
-      expect(body['token'], 'test-token');
+      // Sinds 14-10-2026 een sleutel van dit toestel zelf, nooit de gedeelde (die staat in elke
+      // cast-URL en is niet per toestel in te trekken). Zie sleutels_per_toestel_test.
+      expect(body['token'], isNot('test-token'));
+      expect(body['token'], hasLength(32));
 
       // And that token really does open the door.
       expect((await get('/api/catalog', token: body['token'] as String)).statusCode, 200);

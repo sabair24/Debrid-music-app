@@ -14,6 +14,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import '../paths.dart';
@@ -94,6 +95,65 @@ String generateDeviceToken() {
   return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
 
+/// Mag dit als toestel-id dienen? Letters, cijfers, `_` en `-`, 8 tot 64 tekens.
+///
+/// Het id gaat letterlijk een Firestore-pad in (`grants/<id>`) en een logregel; een `/` of een
+/// regeleinde hoort daar niet. Een id van deze app is 32 hextekens (`device_identity.dart`). Ook de
+/// vaste rij `legacy` valt erbuiten: die staat voor de gedeelde sleutel en krijgt nooit een sleutel
+/// van zichzelf.
+bool geldigToestelId(String id) => RegExp(r'^[A-Za-z0-9_-]{8,64}$').hasMatch(id);
+
+/// Een toestelnaam zoals een toestel hem meestuurt, veilig voor de lijst en voor `koppeling.log`:
+/// geen stuurtekens (een regeleinde zou een valse logregel kunnen maken), witruimte samengevoegd,
+/// hoogstens 60 tekens. Leeg of geen tekst geeft [leeg].
+String schoneToestelnaam(Object? naam, {String leeg = 'Onbekend apparaat'}) {
+  if (naam is! String) return leeg;
+  var n = naam.replaceAll(RegExp(r'[\x00-\x1f\x7f]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (n.length > 60) n = n.substring(0, 60).trimRight();
+  return n.isEmpty ? leeg : n;
+}
+
+/// Een nieuwe sleutel is uitgegeven. Voor de melding op de pc, met [Intrekken] erbij.
+///
+/// **Waarom elke nieuwe sleutel, ook voor een toestel dat er al stond.** Wie je inlogsleutel heeft
+/// en het id van je gsm meestuurt, krijgt een sleutel op dié rij — er komt geen nieuwe rij bij, dus
+/// ook geen "nieuw toestel". Zonder deze melding gebeurt dat stil. [sleutel] staat erin om precies
+/// die ene sleutel te kunnen intrekken; hij wordt nergens getoond.
+class SleutelMelding {
+  SleutelMelding({
+    required this.deviceId,
+    required this.deviceName,
+    required this.bestaand,
+    required this.via,
+    required this.van,
+    required this.sleutel,
+    DateTime? op,
+  }) : op = op ?? DateTime.now();
+
+  final String deviceId;
+  final String deviceName;
+
+  /// True als dit toestel al een rij had: een NIEUWE sleutel voor een bestaand toestel.
+  final bool bestaand;
+
+  /// 'code' of 'account'.
+  final String via;
+
+  /// Het adres waar het verzoek vandaan kwam.
+  final String van;
+  final String sleutel;
+  final DateTime op;
+
+  /// "Nieuwe sleutel voor 'S26' (bestaand toestel), via je account, 14:02, van 192.168.0.42".
+  String get tekst {
+    final tijd = '${op.hour.toString().padLeft(2, '0')}:${op.minute.toString().padLeft(2, '0')}';
+    final wie = bestaand ? "Nieuwe sleutel voor '$deviceName' (bestaand toestel)" : "Nieuw toestel gekoppeld: '$deviceName'";
+    return '$wie, via ${via == 'code' ? 'de code' : 'je account'}, $tijd, van $van';
+  }
+}
+
+String _vingerafdruk(String sleutel) => sha256.convert(utf8.encode(sleutel)).toString();
+
 class GrantStore {
   GrantStore({File? file}) : _file = file ?? appFile('grants.json');
 
@@ -106,7 +166,32 @@ class GrantStore {
 
   /// Toestellen die je met OPZET hebt ontkoppeld. Zonder dit haalt het samenvoegende opslaan ze
   /// zo weer van schijf terug, en dan doet "ontkoppelen" niets.
+  ///
+  /// Sinds 14-10-2026 op schijf ([_ingetrokkenBestand]): een herstart, of een tweede kopie van de
+  /// app met een oudere `grants.json`, haalde een ingetrokken toestel anders terug.
   final Set<String> _ingetrokken = {};
+
+  /// Sleutels die je los hebt ingetrokken, als vingerafdruk (SHA-256) — niet de sleutel zelf.
+  ///
+  /// **Waarom per sleutel.** Een nieuwe sleutel voor een bestaand toestel kan van iemand anders
+  /// komen (zie [SleutelMelding]). Het hele toestel intrekken sluit dan ook je echte gsm buiten;
+  /// alleen die ene sleutel intrekken niet. En het samenvoegen bij [save] mag zo'n sleutel niet via
+  /// een oudere kopie op schijf terug in [DeviceGrant.oudereTokens] zetten — daarom staat de
+  /// controle in [_neemOp], waar elke sleutel langskomt.
+  final Set<String> _ingetrokkenSleutels = {};
+
+  /// Toestellen die na intrekken opnieuw gekoppeld zijn, en nog niet weggeschreven. Anders haalt
+  /// [_laadIngetrokken] in [save] ze uit de oude lijst op schijf meteen weer terug als ingetrokken.
+  final Set<String> _weerToegelaten = {};
+
+  File get _ingetrokkenBestand =>
+      File('${_file.path.replaceFirst(RegExp(r'\.json$'), '')}_ingetrokken.json');
+
+  bool isIngetrokken(String sleutel) =>
+      sleutel.isNotEmpty && _ingetrokkenSleutels.contains(_vingerafdruk(sleutel));
+
+  /// De laatst uitgegeven sleutel, voor de melding op de pc. Zie [SleutelMelding].
+  final ValueNotifier<SleutelMelding?> nieuweSleutelMelding = ValueNotifier(null);
 
   /// Waar als deze kopie van de app de poort NIET heeft. Dan schrijft ze geen koppelingen weg.
   ///
@@ -146,17 +231,78 @@ class GrantStore {
     final ander = identical(nieuw, g) ? oud : g;
     if (ander != null) {
       for (final t in [ander.token, ...ander.oudereTokens]) {
-        if (t != nieuw.token && !nieuw.oudereTokens.contains(t)) nieuw.oudereTokens.add(t);
+        // Een los ingetrokken sleutel komt via een oudere kopie NIET terug.
+        if (t != nieuw.token && !nieuw.oudereTokens.contains(t) && !isIngetrokken(t)) {
+          nieuw.oudereTokens.add(t);
+        }
       }
       nieuw.lastSeenAt = max(nieuw.lastSeenAt ?? 0, ander.lastSeenAt ?? 0);
     }
+    nieuw.oudereTokens.removeWhere(isIngetrokken);
     while (nieuw.oudereTokens.length > 3) {
       nieuw.oudereTokens.removeAt(0);
     }
     _byDevice[g.deviceId] = nieuw;
     for (final t in [nieuw.token, ...nieuw.oudereTokens]) {
-      _byToken[t] = g.deviceId;
+      if (!isIngetrokken(t)) _byToken[t] = g.deviceId;
     }
+  }
+
+  /// Een NIEUWE sleutel voor dit toestel, altijd — ook als het er al een had.
+  ///
+  /// **Waarom nooit de bestaande teruggeven** (wat [mint] doet). Wie je inlogsleutel en het id van je
+  /// gsm heeft, kreeg zo de sleutel die je gsm op dat moment gebruikt. Nu krijgt hij een eigen, en
+  /// die is los in te trekken ([trekSleutelIn]) zonder je gsm buiten te sluiten. De vorige sleutels
+  /// blijven geldig in [DeviceGrant.oudereTokens] (hoogstens drie, de recentste eerst): een toestel
+  /// dat net opnieuw koppelde en zijn antwoord kwijtraakte, mag niet buitengesloten worden.
+  ///
+  /// Haalt het toestel uit [_ingetrokken]: opnieuw koppelen na ontkoppelen is precies de bedoeling.
+  DeviceGrant nieuweSleutel({
+    required String deviceId,
+    required String deviceName,
+    String platform = '',
+  }) {
+    final oud = _byDevice[deviceId];
+    if (_ingetrokken.remove(deviceId)) _weerToegelaten.add(deviceId);
+    final nu = DateTime.now().millisecondsSinceEpoch;
+    final grant = DeviceGrant(
+      deviceId: deviceId,
+      deviceName: deviceName,
+      token: generateDeviceToken(),
+      platform: platform,
+      // Altijd later dan de vorige, ook bij een klok die terugsprong: bij het samenvoegen met een
+      // kopie op schijf wint zo deze rij, en verhuist de oude sleutel naar `oudereTokens`.
+      grantedAt: max(nu, (oud?.grantedAt ?? 0) + 1),
+      lastSeenAt: oud?.lastSeenAt,
+    );
+    if (oud != null) {
+      for (final t in [oud.token, ...oud.oudereTokens]) {
+        if (t.isNotEmpty && !isIngetrokken(t) && !grant.oudereTokens.contains(t)) grant.oudereTokens.add(t);
+      }
+      while (grant.oudereTokens.length > 3) {
+        grant.oudereTokens.removeLast();
+      }
+      _byToken.remove(oud.token);
+      for (final t in oud.oudereTokens) {
+        _byToken.remove(t);
+      }
+    }
+    _byDevice[deviceId] = grant;
+    for (final t in [grant.token, ...grant.oudereTokens]) {
+      _byToken[t] = deviceId;
+    }
+    return grant;
+  }
+
+  /// Precies één sleutel intrekken; de andere sleutels van hetzelfde toestel blijven werken.
+  /// Geeft true als deze winkel de sleutel kende.
+  bool trekSleutelIn(String sleutel) {
+    if (sleutel.isEmpty) return false;
+    _ingetrokkenSleutels.add(_vingerafdruk(sleutel));
+    final id = _byToken.remove(sleutel);
+    final g = id == null ? null : _byDevice[id];
+    g?.oudereTokens.remove(sleutel);
+    return g != null;
   }
 
   List<DeviceGrant> get all => _byDevice.values.toList()
@@ -173,7 +319,59 @@ class GrantStore {
   /// Van buitenaf is dat niet te onderscheiden van een ingetrokken koppeling.
   void Function(String)? meldlog;
 
+  /// Wat er bewust is ingetrokken, van schijf. Vóór de koppelingen, zodat [_neemOp] het al weet.
+  Future<void> _laadIngetrokken() async {
+    try {
+      final f = _ingetrokkenBestand;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString());
+      if (j is! Map) return;
+      for (final id in (j['toestellen'] as List? ?? const [])) {
+        if (id is String && id.isNotEmpty && !_weerToegelaten.contains(id)) _ingetrokken.add(id);
+      }
+      for (final h in (j['sleutels'] as List? ?? const [])) {
+        if (h is String && h.length == 64) _ingetrokkenSleutels.add(h);
+      }
+    } catch (e) {
+      // Onleesbaar: dan weten we niets extra, en gelden de koppelingen zoals ze op schijf staan.
+      meldlog?.call('ingetrokken sleutels NIET geladen: $e');
+    }
+  }
+
+  /// Wat ingetrokken is ook in het GEHEUGEN doorvoeren. Na [_laadIngetrokken] in [save]: een tweede
+  /// kopie van de app met een oudere momentopname heeft een ingetrokken sleutel nog gewoon in zijn
+  /// rij staan, en zou hem anders bij het opslaan terug op schijf zetten — samen met een lijst
+  /// ingetrokken sleutels waar hij niet in staat.
+  void _pasIngetrokkenToe() {
+    for (final id in _ingetrokken) {
+      final g = _byDevice.remove(id);
+      if (g == null) continue;
+      for (final t in [g.token, ...g.oudereTokens]) {
+        _byToken.remove(t);
+      }
+    }
+    for (final g in _byDevice.values) {
+      for (final t in g.oudereTokens.where(isIngetrokken).toList()) {
+        _byToken.remove(t);
+      }
+      g.oudereTokens.removeWhere(isIngetrokken);
+      if (isIngetrokken(g.token)) _byToken.remove(g.token);
+    }
+  }
+
+  Future<void> _schrijfIngetrokken() async {
+    if (_ingetrokken.isEmpty && _ingetrokkenSleutels.isEmpty && !await _ingetrokkenBestand.exists()) return;
+    final tmp = File('${_ingetrokkenBestand.path}.tmp');
+    await tmp.writeAsString(jsonEncode({
+      'toestellen': _ingetrokken.toList()..sort(),
+      'sleutels': _ingetrokkenSleutels.toList()..sort(),
+    }));
+    await tmp.rename(_ingetrokkenBestand.path);
+    _weerToegelaten.clear();
+  }
+
   Future<void> load() async {
+    await _laadIngetrokken();
     try {
       if (!await _file.exists()) {
         meldlog?.call('koppelingen: bestand bestaat niet — 0 geladen');
@@ -197,6 +395,7 @@ class GrantStore {
           overgeslagen++;
           continue;
         }
+        if (_ingetrokken.contains(g.deviceId)) continue;
         _neemOp(g);
       }
       meldlog?.call('koppelingen geladen: ${_byDevice.length} van ${decoded.length}'
@@ -209,11 +408,35 @@ class GrantStore {
     }
   }
 
-  Future<void> save() async {
+  /// De opslagbeurt die nu loopt (of de laatste), zodat de volgende erachter wacht.
+  Future<void>? _lopend;
+
+  /// Opslaan, NA de vorige opslagbeurt.
+  ///
+  /// **Waarom in een rij.** Elk geslaagd verzoek kan er een starten (`touch` → `unawaited(save())`),
+  /// en een koppeling ook. Twee tegelijk schreven allebei naar `grants.json.tmp` en hernoemden
+  /// dat — op Windows kan de tweede hernoeming dan mislukken op een bestand dat in gebruik is, en
+  /// wint de oudste momentopname. En wie afsluit kan met [wachtOpOpslaan] de laatste afwachten.
+  Future<void> save() {
+    final vorige = _lopend ?? Future<void>.value();
+    final deze = vorige.catchError((Object _) {}).then((_) => _slaOp());
+    _lopend = deze;
+    return deze;
+  }
+
+  /// Tot de laatst gestarte opslagbeurt klaar is. Voor het afsluiten van de server.
+  Future<void> wachtOpOpslaan() => (_lopend ?? Future<void>.value()).catchError((Object _) {});
+
+  Future<void> _slaOp() async {
     if (alleenLezen) {
       meldlog?.call('koppelingen NIET opgeslagen: deze kopie van de app heeft de poort niet');
       return;
     }
+    // Eerst wat er op schijf ingetrokken staat erbij — van deze kopie of een andere — en meteen
+    // doorvoeren. Pas daarna samenvoegen en schrijven: zo zet geen enkele kopie een ingetrokken
+    // toestel of sleutel terug.
+    await _laadIngetrokken();
+    _pasIngetrokkenToe();
     try {
       // LEEG SCHRIJFT NOOIT OVER NIET-LEEG. Dezelfde klep als bij corrections.json en de
       // feitencache: een lege verzameling betekent "ik weet het niet", niet "er is niets".
@@ -228,11 +451,18 @@ class GrantStore {
       // De kosten van deze regel zijn precies één geval: "ik heb zojuist mijn laatste toestel
       // ontkoppeld" wordt niet weggeschreven. Dat is te overzien — [revoke] schrijft zelf, en één
       // regel te veel is oneindig veel beter dan een huis vol toestellen dat er niet meer in kan.
+      //
+      // Sinds 14-10-2026 met één uitzondering: staat ELKE koppeling op schijf bewust ingetrokken
+      // ([_ingetrokken], ook op schijf), dan is leeg wél de waarheid en wordt het weggeschreven. Zo
+      // blijft "mijn laatste toestel ontkoppelen" niet langer liggen tot een andere kopie het terugzet.
       if (_byDevice.isEmpty && await _file.exists()) {
         final bestaand = await _file.readAsString();
         final oud = jsonDecode(bestaand);
-        if (oud is List && oud.isNotEmpty) {
+        final alleBewustIngetrokken = oud is List &&
+            oud.every((e) => e is Map && _ingetrokken.contains('${e['deviceId']}'));
+        if (oud is List && oud.isNotEmpty && !alleBewustIngetrokken) {
           debugPrint('grants.json NIET overschreven: geheugen leeg, schijf heeft ${oud.length}');
+          await _schrijfIngetrokken();
           return;
         }
       }
@@ -259,12 +489,17 @@ class GrantStore {
     } catch (e) {
       debugPrint('Could not save grants.json: $e');
     }
+    try {
+      await _schrijfIngetrokken();
+    } catch (e) {
+      meldlog?.call('ingetrokken sleutels NIET opgeslagen: $e');
+    }
   }
 
   /// The check on every request. Constant-time on the token so a wrong guess cannot be narrowed
   /// down by timing — cheap here, and the previous `==` had no such property.
   bool accepts(String token) {
-    if (token.isEmpty) return false;
+    if (token.isEmpty || isIngetrokken(token)) return false;
     final deviceId = _byToken[token];
     if (deviceId == null) return false;
     final g = _byDevice[deviceId];
@@ -310,16 +545,24 @@ class GrantStore {
     // Onthouden DAT je ontkoppeld hebt: anders haalt het samenvoegende opslaan dit toestel zo weer
     // van schijf terug, en doet ontkoppelen niets.
     _ingetrokken.add(deviceId);
+    _weerToegelaten.remove(deviceId);
     if (gone == null) return false;
-    _byToken.remove(gone.token);
-    for (final t in gone.oudereTokens) {
+    // Ook elke sleutel van dit toestel apart: koppelt het later opnieuw, dan haalt een oudere kopie
+    // op schijf zijn oude sleutels niet terug in `oudereTokens`.
+    for (final t in [gone.token, ...gone.oudereTokens]) {
       _byToken.remove(t);
+      if (t.isNotEmpty) _ingetrokkenSleutels.add(_vingerafdruk(t));
     }
     return true;
   }
 
   void revokeAll() {
     _ingetrokken.addAll(_byDevice.keys);
+    for (final g in _byDevice.values) {
+      for (final t in [g.token, ...g.oudereTokens]) {
+        if (t.isNotEmpty) _ingetrokkenSleutels.add(_vingerafdruk(t));
+      }
+    }
     _byDevice.clear();
     _byToken.clear();
   }

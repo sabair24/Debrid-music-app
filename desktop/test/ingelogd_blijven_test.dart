@@ -176,56 +176,10 @@ void main() {
     });
   });
 
-  group('een geweigerde sleutel haalt zichzelf een nieuwe', () {
-    test('de pc op dit adres kent de toegang toe', () async {
-      final s = sessie(ververs: _versGoed);
-      await s.signIn('saber@example.test', 'goed');
-
-      await db.seed('users/user-1/servers/pc-1', {
-        'name': 'Saber',
-        'urls': ['http://192.168.0.117:47820'],
-        'online': true,
-      });
-      // De pc heeft het verzoek al toegekend — dat is wat `awaitAccess` bij de eerste peiling ziet.
-      await db.seed('users/user-1/servers/pc-1/grants/shield-1', {
-        'status': 'granted',
-        'token': 'verse-sleutel-32',
-      });
-
-      final sleutel = await s.verseSleutelVoor(Uri.parse('http://192.168.0.117:47820'));
-      expect(sleutel, 'verse-sleutel-32');
-    });
-
-    test('bij twee pcs telt het adres, en een vreemd adres krijgt niets', () async {
-      final s = sessie(ververs: _versGoed);
-      await s.signIn('saber@example.test', 'goed');
-
-      await db.seed('users/user-1/servers/pc-1', {
-        'name': 'Woonkamer',
-        'urls': ['http://192.168.0.117:47820'],
-        'online': true,
-      });
-      await db.seed('users/user-1/servers/pc-2', {
-        'name': 'Zolder',
-        'urls': ['http://192.168.0.9:47820'],
-        'online': true,
-      });
-
-      final voor = db.writes.length;
-      final sleutel = await s.verseSleutelVoor(Uri.parse('http://10.0.0.5:47820'));
-
-      expect(sleutel, isNull);
-      // En er is geen verzoek blijven staan bij een pc waar dit toestel niets te zoeken heeft.
-      expect(db.writes.length, voor,
-          reason: 'een onbekend adres mag bij géén enkele pc gaan aankloppen');
-    });
-
-    test('niet ingelogd vraagt niets', () async {
-      final s = sessie(ververs: _versGoed);
-      expect(s.state, CloudState.signedOut);
-      expect(await s.verseSleutelVoor(Uri.parse('http://192.168.0.117:47820')), isNull);
-    });
-  });
+  // Hier stond de groep "een geweigerde sleutel haalt zichzelf een nieuwe" over
+  // `CloudSession.verseSleutelVoor`: die vroeg de sleutel via de accountdatabase, en de pc zette hem
+  // daar leesbaar in. Weg sinds 14-10-2026 — het herstel loopt nu alleen via de pc zelf (zie
+  // sleutelherstel_test).
 
   group('hersteld: wanneer je op de sessie kunt rekenen', () {
     Future<bool> alKlaar(CloudSession s) async {

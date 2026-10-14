@@ -10,6 +10,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'cloud/device_identity.dart';
 import 'lan/client.dart';
 import 'lan/discovery.dart';
 import 'tv.dart';
@@ -118,7 +119,9 @@ class _PairingScreenState extends State<PairingScreen> {
       _error = null;
     });
     try {
-      final endpoint = await RemoteClient.pair(target, code, deviceName: widget.deviceName);
+      final ik = await thisDevice();
+      final endpoint = await RemoteClient.pair(target, code,
+          deviceName: widget.deviceName, deviceId: ik.id, platform: ik.platform);
       if (!mounted) return;
       widget.onPaired(endpoint);
     } on RemoteException catch (e) {
