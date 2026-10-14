@@ -21,6 +21,7 @@ import 'package:http/http.dart' as http;
 
 import '../album_facts.dart';
 import 'dtos.dart';
+import 'vaste_naam.dart';
 
 /// A paired PC: where it is and what proves we may talk to it.
 class RemoteEndpoint {
@@ -328,13 +329,26 @@ class RemoteClient {
   /// Anything not pointing at our own PC is returned untouched. A Radio queue mixes library tracks
   /// with resolved TorBox streams, and appending our pairing token to someone else's URL would
   /// both fail and hand the token to a stranger.
+  ///
+  /// De vaste naam van een nummer (`http://pc.invalid/stream/…`, zie `vaste_naam.dart`) wordt hier
+  /// het adres van NU: dat van deze verbinding.
   String authorized(String url) {
-    final uri = Uri.tryParse(url);
-    if (uri == null || uri.host != endpoint.baseUrl.host || uri.port != endpoint.baseUrl.port) {
-      return url;
-    }
+    final uri = _naarHier(url);
+    if (uri == null) return url;
     return uri.replace(queryParameters: {...uri.queryParameters, 'token': endpoint.token})
         .toString();
+  }
+
+  /// [url] als hij naar onze pc wijst, op het adres van deze verbinding; anders null.
+  Uri? _naarHier(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return null;
+    if (uri.host == kPcHost) {
+      final b = endpoint.baseUrl;
+      return uri.replace(scheme: b.scheme, host: b.host, port: b.hasPort ? b.port : null);
+    }
+    if (uri.host != endpoint.baseUrl.host || uri.port != endpoint.baseUrl.port) return null;
+    return uri;
   }
 
   /// Wat de pc over dit nummer te zeggen heeft nadat het openen mislukt is, of null.
@@ -348,13 +362,8 @@ class RemoteClient {
   /// stond. Een tweede foutmelding over de eerste heen helpt niemand.
   Future<String?> waarom(String streamUrl) async {
     try {
-      final uri = Uri.tryParse(streamUrl);
-      if (uri == null ||
-          uri.host != endpoint.baseUrl.host ||
-          uri.port != endpoint.baseUrl.port ||
-          !uri.path.startsWith('/stream/')) {
-        return null;
-      }
+      final uri = _naarHier(streamUrl);
+      if (uri == null || !uri.path.startsWith('/stream/')) return null;
       final vraag = endpoint.baseUrl.replace(
         path: uri.path.replaceFirst('/stream/', '/waarom/'),
         queryParameters: {'token': endpoint.token},

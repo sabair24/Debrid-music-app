@@ -18,6 +18,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'lan/stroomstand.dart' show grensUitUrl;
+import 'lan/vaste_naam.dart';
 import 'paths.dart';
 
 /// One track that lives on this device.
@@ -76,7 +77,8 @@ class OfflineTrack {
       };
 
   static OfflineTrack? fromJson(Map<String, dynamic> j) {
-    final path = (j['path'] ?? '').toString();
+    // Van vóór 14-10-2026 stond hier het adres van de pc in het pad; zie `vaste_naam.dart`.
+    final path = normaliseerPcPad((j['path'] ?? '').toString());
     final file = (j['file'] ?? '').toString();
     if (path.isEmpty || file.isEmpty) return null;
     return OfflineTrack(
@@ -133,17 +135,18 @@ class OfflineJob {
 /// Bestaat omdat een album als GEHEEL wordt gevraagd. Zonder zoiets moest de aanvrager de nummers
 /// zelf één voor één afwachten, en dat is precies waar het misging: die lus stond in de knop op de
 /// albumpagina en stopte zodra je die pagina verliet.
+/// Wat er opgehaald moet worden. **Zonder adres**, sinds 14-10-2026: dat wordt bij elke poging
+/// opnieuw gevraagd ([OfflineStore.adresVoor]). Een album dat thuis begon, had anders het
+/// thuisadres van de pc vastgehouden en kwam onderweg niet verder — ook niet via Tailscale.
 class OfflineRequest {
   const OfflineRequest({
     required this.libraryPath,
-    required this.url,
     required this.title,
     required this.artist,
     required this.album,
   });
 
   final String libraryPath;
-  final String url;
   final String title;
   final String artist;
   final String album;
@@ -159,6 +162,12 @@ class OfflineStore extends ChangeNotifier {
   }) : _http = client ?? http.Client();
 
   final http.Client _http;
+
+  /// Het adres voor een nummer, NU — bij elke poging opnieuw gevraagd. Gezet bij elke verbinding
+  /// (`main.dart`, `applyMediaResolver`): voor je offline lijst het origineel van de pc, voor het
+  /// vooruithalen het adres met de stand van dat moment. Null of een null-antwoord: er is nu geen
+  /// pc, en de poging mislukt met die reden in plaats van een oud adres te proberen.
+  String? Function(String libraryPath)? adresVoor;
 
   /// Waar de bytes en de index staan. Standaard je offline-lijst; de vooruitgehaalde nummers
   /// gebruiken dezelfde machine in een eigen map, zodat ze nooit tussen wat je zelf bewaarde
@@ -263,7 +272,6 @@ class OfflineStore extends ChangeNotifier {
         // Nooit gooien: één nummer dat niet lukt mag de rest van de plaat niet meenemen.
         await download(
           libraryPath: r.libraryPath,
-          url: r.url,
           title: r.title,
           artist: r.artist,
           album: r.album,
@@ -420,11 +428,13 @@ class OfflineStore extends ChangeNotifier {
 
   /// Fetch one track onto this device.
   ///
-  /// [url] is the authorised stream URL — this class deliberately knows nothing about tokens or
-  /// which PC is which; the caller already has a [RemoteClient] that does.
+  /// The address comes from [adresVoor], asked at the moment of this attempt — this class
+  /// deliberately knows nothing about tokens or which PC is which; the caller does. [url] overrides
+  /// that, for a caller (a test) that wants to name the address itself.
   Future<bool> download({
     required String libraryPath,
-    required String url,
+    // Alleen voor wie zelf een adres wil opgeven (toetsen); anders [adresVoor], nu.
+    String? url,
     required String title,
     required String artist,
     required String album,
@@ -439,7 +449,6 @@ class OfflineStore extends ChangeNotifier {
 
     final verzoek = OfflineRequest(
       libraryPath: libraryPath,
-      url: url,
       title: title,
       artist: artist,
       album: album,
@@ -470,7 +479,11 @@ class OfflineStore extends ChangeNotifier {
       // Verdergaan waar de vorige poging stopte. Bij een plaat als één bestand van 32 bit/384 kHz
       // gaat het om gigabytes: opnieuw beginnen na een wegvallende wifi betekent dat het nooit af
       // komt, omdat elke poging weer van voren af aan begint.
-      final req = http.Request('GET', Uri.parse(url));
+      final adres = url ?? adresVoor?.call(libraryPath);
+      if (adres == null || isVastePcNaam(adres)) {
+        throw const HttpException('geen verbinding met de pc — probeer het zo opnieuw');
+      }
+      final req = http.Request('GET', Uri.parse(adres));
       if (al > 0) req.headers[HttpHeaders.rangeHeader] = 'bytes=$al-';
       final res = await _http.send(req).timeout(stilte);
 
@@ -552,7 +565,7 @@ class OfflineStore extends ChangeNotifier {
       // De grens uit het adres waarmee hij gehaald is, zodat het scherm straks kan zeggen wat er in
       // deze kopie zit. Alleen de twee getallen: het adres zelf draagt een sleutel, en die hoort niet
       // in een index op schijf.
-      final grens = grensUitUrl(url);
+      final grens = grensUitUrl(adres);
       _tracks[libraryPath] = OfflineTrack(
         path: libraryPath,
         file: target.path,

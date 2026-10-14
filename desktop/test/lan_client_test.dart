@@ -442,7 +442,10 @@ void main() {
       await c.library.loadRemote();
 
       final t = c.library.tracks.first;
-      expect(t.path, startsWith('http://192.168.0.216:47820/stream/'));
+      // Sinds 14-10-2026 zonder het adres van de pc (`lan/vaste_naam.dart`): een adreswissel mag
+      // geen enkel nummer van naam doen veranderen. Het adres komt er pas bij het afspelen bij.
+      expect(t.path, startsWith('http://pc.invalid/stream/'));
+      expect(c.client.authorized(t.path), startsWith('http://192.168.0.216:47820/stream/'));
       // The path is the key for favourites, playlists and resume. A token baked into it would
       // break all three the moment you paired again — and would sit in a plain file on disk.
       expect(t.path, isNot(contains('geheim')));

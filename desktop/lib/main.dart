@@ -596,7 +596,14 @@ Future<void> main() async {
     // The one place a path becomes something to play, so "the copy if we have it, otherwise the
     // PC" is decided once. No screen, and not the player itself, needs to know that offline
     // copies exist.
-    applyMediaResolver: (resolver) => player.mediaResolver = (path) {
+    applyMediaResolver: (resolver) {
+      // Het adres voor het ophalen, bij ELKE poging opnieuw gevraagd (stap 3, `lan/vaste_naam.dart`):
+      // een album dat thuis begon, komt zo onderweg via Tailscale verder. Offline bewaren krijgt het
+      // origineel van de pc (bit-perfect, zie hieronder); het vooruithalen het adres waarmee het
+      // nummer zo zal spelen, met de stand van dat moment.
+      offline.adresVoor = resolver;
+      vooruit.adresVoor = (p) => player.mediaResolver(p);
+      player.mediaResolver = (path) {
       final local = offline.localFor(path) ?? vooruit.localFor(path);
       if (local != null) return local;
       // **Hier en niet in `client.authorized`.** Die wordt ook gebruikt door de knop "Offline
@@ -614,6 +621,7 @@ Future<void> main() async {
         bits: t.bitsPerSample,
         lossless: losslessExtensie(t.ext),
       );
+      };
     },
     endpoint: mode.endpoint,
     // Een geweigerde sleutel vervangt zichzelf, zolang dit toestel op hetzelfde account ingelogd is
@@ -783,7 +791,6 @@ Future<void> main() async {
     vooruit.bewaarAlles([
       OfflineRequest(
         libraryPath: halen,
-        url: player.mediaResolver(halen),
         title: volgende.title,
         artist: volgende.artist,
         album: volgende.album,
@@ -4375,10 +4382,9 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
     offline.bewaarAlles([
       for (final t in widget.album.tracks)
         OfflineRequest(
+          // Alleen de vaste naam van het nummer; het adres komt bij elke poging van
+          // `offline.adresVoor` (stap 3, `lan/vaste_naam.dart`).
           libraryPath: t.path,
-          // The path IS the URL in client mode — the catalogue hands out stream URLs — but it is
-          // stored without the token, which is added at the moment of use and never written down.
-          url: client.authorized(t.path),
           title: t.title,
           artist: t.artist,
           album: widget.album.title,

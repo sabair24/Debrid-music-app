@@ -128,6 +128,7 @@ void main() {
     await store.load();
     server = FakeServer(payload);
     url = await server.start();
+    store.adresVoor = (_) => url.toString();
   });
 
   tearDown(() async {
@@ -260,7 +261,6 @@ void main() {
           for (var i = 1; i <= n; i++)
             OfflineRequest(
               libraryPath: 'D:\\m\\Daft Punk\\Discovery\\$i.flac',
-              url: url.toString(),
               title: 'Nummer $i',
               artist: 'Daft Punk',
               album: 'Discovery',
@@ -286,7 +286,7 @@ void main() {
 
       store.bewaarAlles([
         OfflineRequest(
-            libraryPath: path, url: url.toString(), title: 'x', artist: 'y', album: 'z'),
+            libraryPath: path, title: 'x', artist: 'y', album: 'z'),
       ]);
       await Future<void>.delayed(const Duration(milliseconds: 30));
 
@@ -420,7 +420,7 @@ void main() {
       server.cutAfter = 5000;
       store.bewaarAlles([
         OfflineRequest(
-            libraryPath: r'D:\m\A\B\1.flac', url: url.toString(), title: '1', artist: 'a',
+            libraryPath: r'D:\m\A\B\1.flac', title: '1', artist: 'a',
             album: 'b'),
       ]);
       for (var i = 0; i < 200 && store.mislukt == 0; i++) {
@@ -429,7 +429,7 @@ void main() {
       server.cutAfter = null;
       store.bewaarAlles([
         OfflineRequest(
-            libraryPath: r'D:\m\A\B\2.flac', url: url.toString(), title: '2', artist: 'a',
+            libraryPath: r'D:\m\A\B\2.flac', title: '2', artist: 'a',
             album: 'b'),
       ]);
       for (var i = 0; i < 200 && store.tracks.isEmpty; i++) {

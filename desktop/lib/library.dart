@@ -23,6 +23,7 @@ import 'kantnummer.dart';
 import 'lan/client.dart';
 import 'lan/dtos.dart';
 import 'lan/ids.dart';
+import 'lan/vaste_naam.dart';
 import 'mojibake.dart';
 import 'models.dart';
 import 'mp3_duur.dart';
@@ -1095,10 +1096,15 @@ class LibraryStore extends ChangeNotifier {
   /// track: the pressing the user pinned and the cover they picked both live on it, and without
   /// them that screen went off and resolved its own record — landing on a different artist's album
   /// that happened to share a title.
-  Album? albumForPath(String path) => _albumByPath[path];
+  Album? albumForPath(String path) =>
+      _albumByPath[path] ?? (isRemote ? _albumByPath[normaliseerPcPad(path)] : null);
 
   /// Resolve a saved file path back to a library track (for resume).
-  Track? trackByPath(String path) => _trackByPath[path];
+  ///
+  /// Op een toestel herkent dit ook een pad van vóór 14-10-2026, met het adres van de pc erin
+  /// (`resume_queue.json`, `resume_pos.json`): dat wordt eerst de vaste naam (`vaste_naam.dart`).
+  Track? trackByPath(String path) =>
+      _trackByPath[path] ?? (isRemote ? _trackByPath[normaliseerPcPad(path)] : null);
 
   /// Bumped whenever a track's TEXT changes — its title, artist, album or numbering.
   ///
@@ -3052,8 +3058,12 @@ class LibraryStore extends ChangeNotifier {
   /// the identity key for favourites, playlists and resume, and those must survive re-pairing —
   /// the token is added at the moment of playback instead. The extension is kept because that is
   /// how a player types the stream.
+  ///
+  /// **Sinds 14-10-2026 zonder het adres van de pc** (`http://pc.invalid/stream/…`, zie
+  /// `lan/vaste_naam.dart`): anders heette elk nummer anders zodra je van adres wisselde, en vonden
+  /// je offline kopie, je wachtrij en je speelplek hun nummer niet meer terug.
   Track _trackFromDto(TrackDto d, RemoteClient client) {
-    final pad = client.endpoint.baseUrl.replace(path: d.streamPath).toString();
+    final pad = vastePcNaam(d.streamPath);
     // Het oordeel van de pc onder de naam die het nummer HIER heeft. Zonder deze regel reist de
     // meting wel mee maar vindt niemand haar terug: `gemeten()` sleutelt op pad, en dat pad is op
     // een iPad een stream-URL en geen bestandsnaam.
