@@ -233,6 +233,22 @@ class Transcoder {
     return werk;
   }
 
+  /// Of [resampleToFile] met deze keuzes géén nieuw werk zou doen: al omgezet, of al bezig. Voor het
+  /// quotum van buiten (`quota.dart`), dat alleen nieuw werk telt.
+  bool alOmgezet(File file,
+      {required int maxSampleRate,
+      required Directory cacheDir,
+      int maxBits = 24,
+      Omzetrecept recept = receptCast}) {
+    final uit = File('${cacheDir.path}${Platform.pathSeparator}${_sleutel(file, maxSampleRate, maxBits, recept)}.flac');
+    if (_bezig.containsKey(uit.path)) return true;
+    try {
+      return uit.existsSync() && uit.lengthSync() > 1024;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Wat er loopt, op uitvoerpad. Zie [resampleToFile].
   final Map<String, Future<File?>> _bezig = {};
 

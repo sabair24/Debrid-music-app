@@ -19,6 +19,7 @@ import '../musicbrainz.dart';
 import '../online.dart';
 import '../organize.dart';
 import '../paths.dart';
+import '../prullenbak.dart' show heeftPrullenbak;
 import '../warm_log.dart';
 import '../settings.dart';
 import '../soulseek.dart';
@@ -38,6 +39,7 @@ import 'state_store.dart';
 import 'tls_ingang.dart';
 import 'poorten.dart';
 export 'poorten.dart';
+import 'quota.dart';
 import 'tokens.dart';
 import 'transcode.dart';
 import 'upnp.dart';
@@ -77,6 +79,27 @@ String? weigerVanBuiten(String pad, String methode) {
   if (exact.contains(pad) || voorvoegsels.any(pad.startsWith)) return null;
   if (pad == '/api/rutracker/sessie') return 'Kan alleen met je gsm thuis op wifi.';
   return 'Dit kan alleen thuis of via Tailscale.';
+}
+
+/// Mag dit adres in een bewerking die van buiten (47821) komt? Leeg mag (dat wist een keuze). Verder
+/// alleen `https` naar een naam of adres op het internet: de pc haalt zo'n adres later zelf op, en een
+/// adres op het eigen netwerk (de modem, een speaker, `pc.invalid`) of een bestand op de pc hoort daar
+/// niet via de deur naar buiten in te komen.
+@visibleForTesting
+bool adresVanBuitenMag(String url) {
+  if (url.isEmpty) return true;
+  final u = Uri.tryParse(url);
+  if (u == null || u.scheme != 'https' || u.host.isEmpty || u.userInfo.isNotEmpty) return false;
+  final host = u.host.toLowerCase();
+  final ip = InternetAddress.tryParse(host);
+  if (ip != null) {
+    if (ip.isMulticast || toestelWeg(ip) != 'buiten') return false;
+    final eerste = int.tryParse(host.split('.').first);
+    return ip.type == InternetAddressType.IPv6 || (eerste != null && eerste != 0 && eerste < 224);
+  }
+  if (!host.contains('.') || host == 'localhost') return false;
+  const binnen = ['.localhost', '.local', '.lan', '.home', '.internal', '.localdomain', '.home.arpa', '.invalid', '.test'];
+  return !binnen.any(host.endsWith);
 }
 
 /// Of dit bronadres op een thuisingang (47820, 47822) mag: deze pc zelf, het eigen netwerk en Tailscale.
@@ -165,6 +188,17 @@ class LanServer {
 
   /// Zie `remming.dart`.
   final Remming remming = Remming();
+
+  /// Hoeveel duur werk een sleutel van buiten mag laten doen. Zie `quota.dart`.
+  final Quota quota = Quota();
+
+  /// Langs welke ingang elk verzoek binnenkwam, voor de routes die het zelf moeten weten (quota, de
+  /// regels voor bewerkingen van buiten) zonder dat elke route een extra argument krijgt.
+  final Expando<Ingang> _ingangVan = Expando('ingang');
+
+  /// Kan deze pc iets naar een prullenbak sturen? Van buiten gaat verwijderen alleen zo.
+  @visibleForTesting
+  bool Function() prullenbakAanwezig = () => heeftPrullenbak;
   final KoppelBudget koppelBudget = KoppelBudget();
 
   /// Eén regel bij het opzetten: waarmee deze server dénkt te mogen werken.
@@ -373,6 +407,7 @@ class LanServer {
 
   Future<void> _handle(HttpRequest req, [Ingang ingang = Ingang.http]) async {
     final res = req.response;
+    _ingangVan[req] = ingang;
     // Een thuisingang neemt alleen het eigen netwerk, Tailscale en deze pc zelf aan — in code, niet
     // alleen via de firewall: die laat DebridMusic.exe op 'Openbaar' op elke poort binnen (gemeten
     // 14-10-2026), en een toewijzing in de modem naar 47820 zou dan alles openzetten.
@@ -587,6 +622,23 @@ class LanServer {
   @visibleForTesting
   bool Function(InternetAddress bron)? bronMagThuisVoorToets;
   bool Function(InternetAddress bron)? get _bronMagThuis => bronMagThuisVoorToets;
+
+  /// Een quotum van buiten boeken. Null = mag (en is geboekt); anders de zin voor het toestel. Thuis
+  /// en via Tailscale altijd null: daar telt niets.
+  String? _quotum(HttpRequest req, Quotumsoort soort, [int aantal = 1]) {
+    if (_ingangVan[req] != Ingang.tlsBuiten) return null;
+    final kop = req.headers.value(HttpHeaders.authorizationHeader) ?? '';
+    final sleutel = kop.startsWith('Bearer ') ? kop.substring(7).trim() : '';
+    final nee = quota.boek(sleutel, soort, aantal);
+    if (nee != null) {
+      _koppelLog?.line('QUOTUM ${soort.naam} geraakt  "${grants.grantFor(sleutel)?.deviceName ?? '?'}"  ($aantal gevraagd)');
+    }
+    return nee;
+  }
+
+  /// 429 met de zin uit het quotum: wat, en tot wanneer.
+  Future<void> _teVeel(HttpRequest req, String zin) =>
+      _json(req.response, {'error': zin}, status: HttpStatus.tooManyRequests);
 
   Future<void> _weigerVanBuiten(HttpRequest req, String waarom) {
     if (req.contentLength > 0 || req.headers.chunkedTransferEncoding) {
@@ -1394,12 +1446,21 @@ class LanServer {
   Future<void> _streamResampled(HttpRequest req, File file, int maxRate, int maxBits,
       {Omzetrecept recept = receptCast, Track? track}) async {
     final map = recept.naam == receptCast.naam ? 'cast_cache' : 'stream_cache';
+    final cache = Directory('$appDir${Platform.pathSeparator}$map');
+    // Van buiten telt alleen NIEUW werk, en een geraakt plafond weigert niets: dan het origineel. Dat
+    // is groter, maar het speelt — omzetten voor 5G mag nooit de reden zijn dat een nummer stilvalt.
+    if (_ingangVan[req] == Ingang.tlsBuiten &&
+        !transcoder.alOmgezet(file, maxSampleRate: maxRate, maxBits: maxBits, recept: recept, cacheDir: cache) &&
+        _quotum(req, kQuotumOmzetten) != null) {
+      if (track != null) _stroomRegel(req, track, 'quotum omzetten geraakt — origineel  ${_mb(track.sizeBytes)}');
+      return serveFile(req, file, contentType: mimeForExt(track?.ext ?? 'flac'));
+    }
     final klok = Stopwatch()..start();
     final klaar = await transcoder.resampleToFile(file,
         maxSampleRate: maxRate,
         maxBits: maxBits,
         recept: recept,
-        cacheDir: Directory('$appDir${Platform.pathSeparator}$map'));
+        cacheDir: cache);
     if (track != null) {
       final ms = klok.elapsedMilliseconds;
       _stroomRegel(
@@ -1546,6 +1607,8 @@ class LanServer {
     if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
     final body = await _jsonBody(req);
     if (body == null) return;
+    final teVeel = _quotum(req, kQuotumDownloads);
+    if (teVeel != null) return _teVeel(req, teVeel);
     final fout = startTorrentDownload(body);
     if (fout != null) return _json(req.response, {'error': fout}, status: HttpStatus.badRequest);
     return _json(req.response, {'ok': true});
@@ -1667,6 +1730,8 @@ class LanServer {
     if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
     final body = await _jsonBody(req);
     if (body == null) return;
+    final teVeel = _quotum(req, kQuotumDownloads);
+    if (teVeel != null) return _teVeel(req, teVeel);
     try {
       final started = await startSoulseekDownload(body);
       return _json(req.response, {'ok': started});
@@ -1684,6 +1749,8 @@ class LanServer {
     if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
     final body = await _jsonBody(req);
     if (body == null) return;
+    final teVeel = _quotum(req, kQuotumDownloads, (body['tracks'] as List?)?.length ?? 1);
+    if (teVeel != null) return _teVeel(req, teVeel);
     try {
       final started = await startSoulseekAlbumDownload(body);
       return _json(req.response, {'started': started});
@@ -1902,6 +1969,8 @@ class LanServer {
         final artiest = (body['artiest'] ?? '') as String;
         final titel = (body['titel'] ?? '') as String;
         if (titel.trim().isEmpty) return _unavailable(req, 'Zonder titel valt er niets te halen.');
+        final teVeelHaal = _quotum(req, kQuotumDownloads);
+        if (teVeelHaal != null) return _teVeel(req, teVeelHaal);
         final h = radiohaler.haal(
           artiest: artiest,
           titel: titel,
@@ -1925,6 +1994,8 @@ class LanServer {
         // hem dan niet te kennen, en er is één plek waar hij staat.
         final config = settings;
         if (config == null) return _unavailable(req, 'Deze pc kan geen radioplan maken.');
+        final teVeelPlan = _quotum(req, kQuotumRadioplan);
+        if (teVeelPlan != null) return _teVeel(req, teVeelPlan);
         try {
           final o = await AiService(() => config.anthropicKey,
                   werkruimteVan: () => config.anthropicWorkspace)
@@ -1954,6 +2025,13 @@ class LanServer {
     if (body == null) return;
 
     final op = (body['op'] ?? '') as String;
+    final vanBuiten = _ingangVan[req] == Ingang.tlsBuiten;
+    // Van buiten: een adres dat de pc later zelf ophaalt, alleen naar het internet. Zie [adresVanBuitenMag].
+    if (vanBuiten && body['url'] is String && !adresVanBuitenMag(body['url'] as String)) {
+      _koppelLog?.line('BEWERKING VAN BUITEN geweigerd: $op met een adres dat niet naar het internet wijst');
+      return _json(req.response, {'error': 'Van buitenaf kan alleen een https-adres op het internet.'},
+          status: HttpStatus.forbidden);
+    }
     final album = body['albumId'] is String ? catalog.album(body['albumId'] as String) : null;
     // Twee bewerkingen gaan niet OVER een album: nummers weghalen noemt losse nummers, en een
     // artiestfoto hoort bij de artiest. Zonder deze uitzondering kreeg de telefoon hier "Dat album
@@ -2111,9 +2189,21 @@ class LanServer {
             if (t != null) paths.add(t.path);
           }
           if (paths.isEmpty) return _json(req.response, {'ok': false, 'reason': 'niets gevonden'});
+          final vanSchijf = body['fromDisk'] == true;
+          // Van buiten gaat er nooit iets definitief weg: altijd de prullenbak, en zonder prullenbak
+          // alleen thuis. Een gestolen gsm kan zo hoogstens iets in de prullenbak zetten.
+          if (vanBuiten && vanSchijf) {
+            if (!prullenbakAanwezig()) {
+              return _json(req.response,
+                  {'error': 'Van buitenaf gaat verwijderen alleen naar de prullenbak, en deze pc heeft er geen.'},
+                  status: HttpStatus.forbidden);
+            }
+            final teVeel = _quotum(req, kQuotumPrullenbak, paths.length);
+            if (teVeel != null) return _teVeel(req, teVeel);
+          }
           await library.removeTracks(paths,
-              fromDisk: body['fromDisk'] == true,
-              naarPrullenbak: body['naarPrullenbak'] == true);
+              fromDisk: vanSchijf,
+              naarPrullenbak: body['naarPrullenbak'] == true || (vanBuiten && vanSchijf));
         default:
           return _json(req.response, {'error': 'Onbekende bewerking: $op'},
               status: HttpStatus.badRequest);
@@ -2337,9 +2427,18 @@ class LanServer {
     // Het merkteken telt het plafond MEE. Zonder dat zou een toestel dat de volle hoes al in zijn
     // cache heeft een 304 krijgen op een verzoek om de kleine, en dus voor altijd de grote houden.
     final gevraagd = int.tryParse(req.uri.queryParameters['w'] ?? '');
-    final plafond = gevraagd != null && gevraagd >= 128
+    var plafond = gevraagd != null && gevraagd >= 128
         ? (gevraagd > 2048 ? 2048 : gevraagd)
         : null;
+    // Van buiten telt alleen een verkleining die nog niet klaarligt, en een geraakt plafond geeft het
+    // origineel (met zijn eigen merkteken, zodat het toestel later alsnog de kleine vraagt).
+    if (plafond != null &&
+        _ingangVan[req] == Ingang.tlsBuiten &&
+        !_kleineHoezen.containsKey('$ref|$plafond|$merk') &&
+        !_hoesBezig.containsKey('$ref|$plafond|$merk') &&
+        _quotum(req, kQuotumHoezen) != null) {
+      plafond = null;
+    }
     final etag = plafond == null ? '"$merk"' : '"$merk-w$plafond"';
 
     // **De 304 gaat VOOR het verkleinen, en dat is geen microseconde-werk.** Het merkteken hangt aan
