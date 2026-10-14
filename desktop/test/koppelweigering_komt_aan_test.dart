@@ -33,6 +33,8 @@ import 'package:debridmusic/lan/state_store.dart';
 import 'package:debridmusic/library.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'hulp_tls.dart';
+
 void main() {
   late Directory wortel;
   late LanServer server;
@@ -56,13 +58,16 @@ void main() {
       port: 0,
       cloudUid: uidVanDePc == null ? null : () => uidVanDePc,
       uidVanSleutel: opzoeker,
+      // Koppelen via het account gaat sinds uitlevering B alleen nog versleuteld (47822).
+      certificaat: proefCertificaat,
+      tlsPoort: 0,
     );
     expect(await server.start(), isNull);
-    basis = Uri.parse('http://127.0.0.1:${server.boundPort}');
+    basis = Uri.parse('https://127.0.0.1:${server.tlsBoundPort}');
   }
 
   Future<HttpClientResponse> koppel() async {
-    final c = HttpClient();
+    final c = pinHttpClient();
     final req = await c.postUrl(basis.replace(path: '/pair-cloud'));
     req.headers.contentType = ContentType.json;
     req.write(jsonEncode({
@@ -180,7 +185,8 @@ void main() {
     setUp(() async {
       code = 200;
       lijf = jsonEncode({'error': 'Je pc is niet ingelogd. Log op de pc in met hetzelfde account.'});
-      oudePc = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      // Versleuteld: een toestel vraagt het account alleen nog over TLS met de pin.
+      oudePc = await HttpServer.bindSecure(InternetAddress.loopbackIPv4, 0, proefCertificaat.context());
       unawaited(() async {
         await for (final req in oudePc) {
           await req.drain<void>();
@@ -201,6 +207,8 @@ void main() {
           deviceId: 'y',
           deviceName: 'z',
           platform: 'android',
+          pin: proefCertificaat.pin,
+          tlsPoort: oudePc.port,
         );
         return null;
       } catch (e) {

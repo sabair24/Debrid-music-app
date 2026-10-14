@@ -28,10 +28,13 @@ import 'client.dart';
 
 /// Wat een poging opleverde, en hoe het ging -- voor het logboek.
 class Sleutelherstel {
-  const Sleutelherstel(this.sleutel, this.verloop);
+  const Sleutelherstel(this.sleutel, this.verloop, {this.toegang});
 
   /// De nieuwe sleutel, of null als er geen kwam.
   final String? sleutel;
+
+  /// De hele nieuwe koppeling (met de versleutelde sleutel en de pin, sinds uitlevering B), of null.
+  final RemoteEndpoint? toegang;
 
   /// Elke stap in gewone taal. Ook als het lukt: dan staat er via welke weg.
   final List<String> verloop;
@@ -65,8 +68,8 @@ Future<Sleutelherstel> herstelSleutel({
   try {
     final toegang = await viaAccount(basis, sleutel);
     if (toegang != null && toegang.token.isNotEmpty) {
-      verloop.add('accountweg: toegang van ${basis.host}');
-      return Sleutelherstel(toegang.token, verloop);
+      verloop.add('accountweg: toegang van ${basis.host}${toegang.tlsToken.isEmpty ? '' : ', versleuteld'}');
+      return Sleutelherstel(toegang.token, verloop, toegang: toegang);
     }
     verloop.add('accountweg: ${basis.host} kent hem niet (oudere bouw) of antwoordde niet');
   } on RemoteException catch (e) {

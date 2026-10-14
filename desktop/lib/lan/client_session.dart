@@ -5,7 +5,7 @@
 library;
 
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show InternetAddress, Platform;
 
 import 'package:flutter/foundation.dart';
 
@@ -19,6 +19,7 @@ import 'discovery.dart';
 import '../cloud/catalog_mirror.dart';
 import 'adreswedloop.dart';
 import 'client_mode.dart';
+import 'tokens.dart' show toestelWeg;
 import 'uitwijk.dart';
 import 'verbindingsstand.dart';
 
@@ -41,12 +42,24 @@ class ClientSession extends ChangeNotifier {
   /// zet hier iets anders, want op de pc waar hij draait staat vaak de echte app.
   final Future<List<FoundServer>> Function() _zoekOpNetwerk;
 
-  /// Haalt via de cloud een nieuwe sleutel op voor de pc op dit adres. Null = niet gelukt.
+  /// Haalt via het account een nieuwe koppeling op voor deze pc (versleuteld, met beide sleutels en de
+  /// pin). Null = niet gelukt.
   ///
   /// Een callback en niet de [CloudSession] zelf, om dezelfde reden als [applyMediaResolver]: deze
   /// klasse hoort niets van Firebase te weten, en een toets voor het koppelen hoort geen cloud op
   /// te tuigen.
-  final Future<String?> Function(Uri baseUrl)? verseSleutel;
+  final Future<RemoteEndpoint?> Function(RemoteEndpoint huidig)? verseSleutel;
+
+  /// Een waarschuwing voor op dit toestel: iets wat op misbruik van zijn sleutel wijst (een ruil die een
+  /// ander toestel al deed), of een pc die opeens een ander certificaat noemt.
+  final ValueNotifier<String?> waarschuwing = ValueNotifier(null);
+
+  /// Voor de toetsen: de ruil zelf. Null = [RemoteClient.ruil].
+  @visibleForTesting
+  Future<String> Function(RemoteEndpoint huidig)? ruilVoorToets;
+
+  /// Hoogstens één ruil per keer dat de app draait. Lukt hij niet, dan de volgende keer weer.
+  bool _ruilGeprobeerd = false;
 
   final LibraryStore library;
   final AppSettings settings;
@@ -312,19 +325,74 @@ class ClientSession extends ChangeNotifier {
 
   Future<void> _onthoudUitwijkNu(RemoteClient client, RemoteEndpoint endpoint, int ronde) async {
     try {
-      final verse = await client.uitwijkAdressen();
+      final u = await client.uitwijk();
       if (ronde != _koppelRonde) return;
-      if (verse.isEmpty) return;
       // Voortbouwen op de koppeling van NU, niet op die van het begin van [connect]: intussen kan de
       // id van de pc geleerd zijn (zie [connect]), en die mag deze beurt niet weer wegschrijven.
       final basis = _endpoint ?? endpoint;
-      // Op waarde vergelijken en niet met `==`: twee lijsten met dezelfde inhoud zijn niet hetzelfde
-      // object, en dan zou er bij elke start naar schijf geschreven worden.
-      if (verse.join('\n') == basis.uitwijk.join('\n')) return;
-      final bij = basis.met(uitwijk: verse);
-      _endpoint = bij;
-      await savePairedServer(bij);
+      var bij = basis;
+      var veranderd = false;
+      // Een leeg antwoord wist niets; en op waarde vergelijken, niet met `==`: twee lijsten met dezelfde
+      // inhoud zijn niet hetzelfde object, en dan zou er bij elke start naar schijf geschreven worden.
+      if (u.urls.isNotEmpty && u.urls.join('\n') != basis.uitwijk.join('\n')) {
+        bij = bij.met(uitwijk: u.urls);
+        veranderd = true;
+      }
+      // De pin van het certificaat, hier geleerd: over 47820, en dat neemt alleen thuis en Tailscale aan.
+      // Eenmaal bekend wordt hij nooit stil vervangen — een andere pin is precies wat een tussenpersoon
+      // zou sturen. Dan een waarschuwing, en de versleutelde weg blijft dicht tot je opnieuw koppelt.
+      if (u.pin.isNotEmpty) {
+        if (basis.pin.isEmpty) {
+          bij = bij.met(pin: u.pin, tlsPoort: u.tlsPoort > 0 ? u.tlsPoort : null);
+          veranderd = true;
+          _log('pin van de pc geleerd: ${u.pin.substring(0, 12)}…');
+        } else if (basis.pin != u.pin) {
+          _log('LET OP: de pc noemt een ander certificaat (${u.pin.substring(0, 12)}…) dan bekend '
+              '(${basis.pin.substring(0, 12)}…) — niet overgenomen');
+          waarschuwing.value = 'Je pc noemt een ander certificaat dan dit toestel kent. Is DebridMusic op je pc '
+              'opnieuw geïnstalleerd, koppel dan opnieuw; anders klopt er iets niet op je netwerk.';
+        } else if (u.tlsPoort > 0 && u.tlsPoort != basis.tlsPoort) {
+          bij = bij.met(tlsPoort: u.tlsPoort);
+          veranderd = true;
+        }
+      }
+      if (veranderd) {
+        _endpoint = bij;
+        await savePairedServer(bij);
+      }
+      await _misschienRuilen(ronde);
     } catch (_) {/* volgende keer weer */}
+  }
+
+  /// De eenmalige ruil (stap 5.6): zodra dit toestel de pin kent en nog geen versleutelde sleutel heeft,
+  /// vanzelf, thuis of via Tailscale. De versleutelde sleutel wordt bewaard naast de gewone en pas
+  /// gebruikt als de app op de versleutelde weg overgaat.
+  ///
+  /// **Een 409** betekent dat een ander toestel deze sleutel al omruilde: iemand had hem. Dan een
+  /// waarschuwing, en opnieuw koppelen via het account — dat geeft dit toestel een eigen, nieuwe sleutel.
+  Future<void> _misschienRuilen(int ronde) async {
+    final e = _endpoint;
+    if (e == null || owner || e.pin.isEmpty || e.tlsToken.isNotEmpty || _ruilGeprobeerd) return;
+    final ip = InternetAddress.tryParse(e.baseUrl.host);
+    if (ip != null && toestelWeg(ip) == 'buiten') return;
+    _ruilGeprobeerd = true;
+    try {
+      final tls = await (ruilVoorToets ?? RemoteClient.ruil)(e);
+      final nu = _endpoint;
+      if (ronde != _koppelRonde || nu == null) return;
+      final met = nu.met(tlsToken: tls);
+      _endpoint = met;
+      await savePairedServer(met);
+      _log('versleutelde sleutel ontvangen (ruil)');
+    } on RemoteException catch (x) {
+      _log('ruil mislukte: ${x.message}');
+      if (x.statusCode == 409) {
+        waarschuwing.value = 'De sleutel van dit toestel werd al door een ander toestel omgeruild. Trek die '
+            'sleutel in op je pc. Dit toestel koppelt nu opnieuw via je account.';
+        _sleutelGevraagd = false;
+        unawaited(_vernieuwSleutel(waarom: 'de ruil was al door een ander toestel gedaan'));
+      }
+    }
   }
 
   /// Wat dit toestel met zijn pc deed: met welk adres het verbond, wanneer de pc niet antwoordde of
@@ -603,7 +671,7 @@ class ClientSession extends ChangeNotifier {
 
   bool _sleutelGevraagd = false;
 
-  Future<void> _vernieuwSleutel() async {
+  Future<void> _vernieuwSleutel({String? waarom}) async {
     final haal = verseSleutel;
     final huidig = _endpoint;
     if (haal == null || huidig == null || _sleutelGevraagd) return;
@@ -611,17 +679,17 @@ class ClientSession extends ChangeNotifier {
     _sleutelGevraagd = true;
     // Hardop, want op 11-09-2026 ging dit stil: de Shield werd elke vijftien seconden geweigerd, het
     // herstel kreeg niets terug, en in het logboek stond er geen woord over.
-    _log('sleutel geweigerd door ${huidig.baseUrl.host} — een nieuwe halen…');
-    String? verse;
+    _log('${waarom ?? 'sleutel geweigerd door ${huidig.baseUrl.host}'} — een nieuwe halen…');
+    RemoteEndpoint? verse;
     try {
-      verse = await haal(huidig.baseUrl);
+      verse = await haal(huidig);
     } catch (e) {
       _log('verse sleutel halen mislukte: $e');
       return;
     }
     // Dezelfde sleutel terug betekent dat de pc hem nooit had ingetrokken maar kwijt was; opnieuw
     // verbinden lost dat niet op en zou alleen het scherm laten knipperen.
-    if (verse == null || verse.isEmpty || verse == huidig.token) {
+    if (verse == null || verse.token.isEmpty || verse.token == huidig.token) {
       _log('geen nieuwe sleutel gekregen; "Opnieuw proberen" probeert het nog eens');
       return;
     }
@@ -632,12 +700,13 @@ class ClientSession extends ChangeNotifier {
     //
     // De uitwijkadressen gaan mee. Een nieuwe sleutel is geen nieuwe pc: zijn Tailscale-adres is
     // hetzelfde gebleven, en dat is het adres waarmee je buitenshuis binnenkomt. Hier stond een
-    // `RemoteEndpoint` zonder, en dan was dat adres na het herstel weg.
-    await connect(RemoteEndpoint(
-      baseUrl: huidig.baseUrl,
-      token: verse,
-      name: huidig.name,
-      uitwijk: huidig.uitwijk,
+    // `RemoteEndpoint` zonder, en dan was dat adres na het herstel weg — net als de id van de pc,
+    // tot 14-10-2026. Nu de hele koppeling: beide nieuwe sleutels, en de pin (geleerd of al bekend).
+    await connect(huidig.met(
+      token: verse.token,
+      tlsToken: verse.tlsToken,
+      pin: verse.pin.isEmpty ? null : verse.pin,
+      tlsPoort: verse.tlsPoort > 0 ? verse.tlsPoort : null,
     ));
   }
 

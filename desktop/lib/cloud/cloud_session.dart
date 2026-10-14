@@ -48,10 +48,14 @@ class CloudServer {
     required this.urls,
     required this.online,
     required this.lastSeen,
+    this.pin = '',
   });
 
   final String id;
   final String name;
+
+  /// De pin van het certificaat van die pc (stap 5), of leeg voor een pc van vóór uitlevering B.
+  final String pin;
 
   /// Every address this PC believes it is reachable at. More than one because a machine with a VPN
   /// or Hyper-V has several, and only the device trying them knows which one it can actually
@@ -400,6 +404,7 @@ class CloudSession extends ChangeNotifier {
           ],
           online: d.data['online'] == true,
           lastSeen: d.data['lastSeenAt'] is DateTime ? d.data['lastSeenAt'] as DateTime : null,
+          pin: (d.data['pin'] ?? '').toString(),
         ),
     ];
   }

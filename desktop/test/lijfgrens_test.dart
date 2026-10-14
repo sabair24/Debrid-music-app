@@ -10,6 +10,8 @@ import 'package:debridmusic/library.dart';
 import 'package:debridmusic/settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'hulp_tls.dart';
+
 /// Een verzoek kan de pc niet meer laten bufferen tot het geheugen vol is.
 ///
 /// Elke route las het lijf onbegrensd in, ook `/pair` en `/pair-cloud`, die zonder sleutel open
@@ -37,6 +39,8 @@ void main() {
         googleGevraagd++;
         return 'uid';
       },
+      certificaat: proefCertificaat,
+      tlsPoort: 0,
     )
       ..lijfZonderSleutel = 4 * 1024
       ..lijfMetSleutel = 64 * 1024;
@@ -50,13 +54,15 @@ void main() {
     } catch (_) {}
   });
 
-  Uri adres(String pad) => Uri.parse('http://127.0.0.1:${server.boundPort}$pad');
+  Uri adres(String pad, {bool tls = false}) => tls
+      ? Uri.parse('https://127.0.0.1:${server.tlsBoundPort}$pad')
+      : Uri.parse('http://127.0.0.1:${server.boundPort}$pad');
 
   /// Een verzoek met [lengte] bytes, met of zonder Content-Length (dan in stukken).
-  Future<int> stuur(String pad, int lengte, {bool metLengte = true, String? sleutel}) async {
-    final http = HttpClient();
+  Future<int> stuur(String pad, int lengte, {bool metLengte = true, String? sleutel, bool tls = false}) async {
+    final http = tls ? pinHttpClient() : HttpClient();
     try {
-      final req = await http.postUrl(adres(pad));
+      final req = await http.postUrl(adres(pad, tls: tls));
       if (sleutel != null) req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $sleutel');
       req.headers.contentType = ContentType.json;
       final lijf = utf8.encode('{"code":"${'1' * (lengte - 11)}"}');
@@ -91,9 +97,11 @@ void main() {
   });
 
   test('zonder sleutel: /pair-cloud weigert een te groot lijf vóór er iets aan Google gevraagd wordt', () async {
-    expect(await stuur('/pair-cloud', 5000), 413);
-    expect(await stuur('/pair-cloud', 9000, metLengte: false), 413);
+    // Versleuteld (47822): over 47820 bestaat koppelen via het account niet meer.
+    expect(await stuur('/pair-cloud', 5000, tls: true), 413);
+    expect(await stuur('/pair-cloud', 9000, metLengte: false, tls: true), 413);
     expect(googleGevraagd, 0);
+    expect(await stuur('/pair-cloud', 100), 410, reason: 'een inlogsleutel gaat nooit meer onversleuteld');
   });
 
   test('een lijf zonder lengte wordt tijdens het lezen afgebroken', () async {

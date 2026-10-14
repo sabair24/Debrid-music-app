@@ -9,6 +9,8 @@ import 'package:debridmusic/library.dart';
 import 'package:debridmusic/settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'hulp_tls.dart';
+
 /// Elk toestel een sleutel van zichzelf, koppelen geeft altijd een NIEUWE, en intrekken blijft
 /// ingetrokken — ook na een herstart en ook als een tweede kopie van de app een oude momentopname
 /// wegschrijft. Stap 2.2 en 2.3 van het plan "verbinden zoals Roon ARC" (14-10-2026).
@@ -181,16 +183,22 @@ void main() {
         settings: AppSettings(),
         cloudUid: () => 'uid-saber',
         uidVanSleutel: (s) async => s == 'inlog-van-saber' ? 'uid-saber' : 'uid-iemand-anders',
+        certificaat: proefCertificaat,
+        tlsPoort: 0,
       );
       expect(await server.start(), isNull);
     });
 
     tearDown(() => server.dispose());
 
+    // Koppelen via het account alleen nog versleuteld (47822); de code mag over 47820.
     Future<(int, Map<String, dynamic>)> post(String pad, Map<String, dynamic> body) async {
-      final http = HttpClient();
+      final tls = pad == '/pair-cloud';
+      final http = tls ? pinHttpClient() : HttpClient();
       try {
-        final req = await http.postUrl(Uri.parse('http://127.0.0.1:${server.boundPort}$pad'));
+        final req = await http.postUrl(Uri.parse(tls
+            ? 'https://127.0.0.1:${server.tlsBoundPort}$pad'
+            : 'http://127.0.0.1:${server.boundPort}$pad'));
         req.headers.contentType = ContentType.json;
         req.write(jsonEncode(body));
         final res = await req.close();

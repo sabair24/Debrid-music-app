@@ -644,9 +644,16 @@ Future<void> main() async {
     // Een geweigerde sleutel vervangt zichzelf, zolang dit toestel op hetzelfde account ingelogd is
     // als de pc: via het account bij de pc zelf -- zie `lan/sleutelherstel.dart`. De terugval via de
     // accountdatabase is weg sinds 14-10-2026: die zette de sleutel leesbaar in Firestore.
-    verseSleutel: (basis) async {
+    verseSleutel: (huidig) async {
+      // De pin uit je account, voor een koppeling die hem zelf nog niet kent (van vóór uitlevering B).
+      var verwacht = '';
+      if (huidig.pin.isEmpty && huidig.serverId.isNotEmpty && cloud.isSignedIn) {
+        try {
+          verwacht = (await cloud.servers()).where((s) => s.id == huidig.serverId).firstOrNull?.pin ?? '';
+        } catch (_) {/* dan zonder */}
+      }
       final herstel = await herstelSleutel(
-        basis: basis,
+        basis: huidig.baseUrl,
         // Eerst wachten tot de sessie hersteld is. Dit vuurt bij de eerste weigering, en die komt
         // binnen een halve seconde na het opstarten -- ruim vóórdat `cloud.restore()` klaar is, want
         // die wordt bewust niet afgewacht. Zonder dit wachten zei het herstel op 11-09-2026 "niet
@@ -664,11 +671,14 @@ Future<void> main() async {
             deviceId: ik.id,
             deviceName: ik.name,
             platform: ik.platform,
+            pin: huidig.pin,
+            verwachtePin: verwacht,
+            tlsPoort: huidig.tlsBasis.port,
           );
         },
       );
       debugPrint('Sleutelherstel: ${herstel.verloop.join(' → ')}');
-      return herstel.sleutel;
+      return herstel.toegang;
     },
   );
 
@@ -2074,14 +2084,20 @@ class _HomeShellState extends State<HomeShell> {
     unawaited(_radio!.laadOpenstaand());
     _sleutels = context.read<LanSharing>().grants..nieuweSleutelMelding.addListener(_toonSleutelMelding);
     _rood = context.read<LanSharing>().rodeMelding..addListener(_toonRodeMelding);
+    // Op een toestel: misbruik van zijn sleutel, of een pc die een ander certificaat noemt.
+    _waarschuwing = context.read<ClientSession>().waarschuwing..addListener(_toonWaarschuwing);
   }
 
   ValueNotifier<String?>? _rood;
+  ValueNotifier<String?>? _waarschuwing;
+
+  void _toonWaarschuwing() => _toonRood(_waarschuwing?.value);
 
   /// Iets wat op misbruik van een sleutel wijst (zie `LanServer.rodeMelding`). Rood, en een halve minuut
   /// in beeld: dit vraagt iets van je.
-  void _toonRodeMelding() {
-    final tekst = _rood?.value;
+  void _toonRodeMelding() => _toonRood(_rood?.value);
+
+  void _toonRood(String? tekst) {
     if (tekst == null || !mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -2250,6 +2266,7 @@ class _HomeShellState extends State<HomeShell> {
     _radio?.removeListener(_kijkNaarRadio);
     _sleutels?.nieuweSleutelMelding.removeListener(_toonSleutelMelding);
     _rood?.removeListener(_toonRodeMelding);
+    _waarschuwing?.removeListener(_toonWaarschuwing);
     _ruilKlok?.cancel();
     _tvBalk.dispose();
     _tvInhoud.dispose();

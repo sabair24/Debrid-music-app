@@ -12,6 +12,8 @@ import 'package:debridmusic/library.dart';
 import 'package:debridmusic/settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'hulp_tls.dart';
+
 /// Stap 2.5 van "verbinden zoals Roon ARC" (14-10-2026): remmen op verkeerde sleutels en op
 /// koppelen via het account, en nooit op een geldige sleutel.
 String _jwt(Map<String, Object?> inhoud) {
@@ -127,6 +129,8 @@ void main() {
           return 'uid-iemand-anders';
         },
         firebaseProject: () => _project,
+        certificaat: proefCertificaat,
+        tlsPoort: 0,
       );
       expect(await server.start(), isNull);
     });
@@ -153,10 +157,11 @@ void main() {
       }
     }
 
+    // Koppelen via het account alleen nog versleuteld (47822).
     Future<(int, String)> koppel(String idToken) async {
-      final http = HttpClient();
+      final http = pinHttpClient();
       try {
-        final req = await http.postUrl(adres('/pair-cloud'));
+        final req = await http.postUrl(Uri.parse('https://127.0.0.1:${server.tlsBoundPort}/pair-cloud'));
         req.headers.contentType = ContentType.json;
         req.write(jsonEncode({'idToken': idToken, 'deviceId': '0123456789abcdef', 'deviceName': 'x'}));
         final res = await req.close();

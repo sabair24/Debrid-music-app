@@ -36,6 +36,8 @@ import 'pc_bijwerker.dart';
 import 'range.dart';
 import 'state_store.dart';
 import 'tls_ingang.dart';
+import 'poorten.dart';
+export 'poorten.dart';
 import 'tokens.dart';
 import 'transcode.dart';
 import 'upnp.dart';
@@ -44,12 +46,6 @@ import '../artwork.dart';
 /// The port the other devices look for. Fixed on purpose — an ephemeral port would mean every
 /// restart hands out a different address, and anything a client saved would go stale.
 const int kLanPort = 47820;
-
-/// De versleutelde poort voor thuis en Tailscale (alleen privé-adressen), met TLS-sleutels.
-const int kTlsPoort = 47822;
-
-/// De versleutelde poort voor buiten: het enige doel van de deur in de modem (UPnP), met een witte lijst.
-const int kPubliekPoort = 47821;
 
 /// Langs welke ingang een verzoek binnenkwam. Het beleid volgt uit de socket die de verbinding aannam,
 /// nooit uit het bronadres: dat beslist alleen nog of het op een thuisingang mag.
@@ -439,6 +435,14 @@ class LanServer {
     // Dezelfde soort deur, maar met je account in plaats van zes cijfers. Zie
     // `accountkoppeling.dart` voor waarom die er moest komen: zonder deze weg sloot één haperende
     // Firestore je buiten je eigen muziek, ook met de pc op dezelfde wifi.
+    // Koppelen via het account alleen nog versleuteld (47822): een inlogsleutel gaat nooit meer
+    // onversleuteld over de lijn. Een app van vóór uitlevering B hoort dat in gewone taal.
+    if (path == '/pair-cloud' && ingang == Ingang.http) {
+      _koppelLog?.line('PAIR-CLOUD  over 47820 geweigerd (410): een oude app, die moet bijgewerkt worden');
+      return _rauw(req, 410, 'Gone', {
+        'error': 'Werk de app op dit toestel bij: koppelen via je account gaat nu versleuteld.',
+      });
+    }
     if (path == '/pair-cloud') return _pairCloud(req, metTls: ingang == Ingang.tlsThuis);
 
     final van = req.connectionInfo?.remoteAddress.address ?? '?';

@@ -227,14 +227,13 @@ class _LoginScreenState extends State<LoginScreen> {
           deviceId: ik.id,
           deviceName: ik.name,
           platform: ik.platform,
+          // De eerste kennismaking: alleen een pc met de pin die in je account staat.
+          verwachtePin: server.pin,
         );
         if (toegang == null) continue;
         if (!mounted) return;
-        widget.onConnected(RemoteEndpoint(
-          baseUrl: toegang.baseUrl,
-          token: toegang.token,
-          name: toegang.name ?? server.name,
-        ));
+        // De hele koppeling, met de versleutelde sleutel en de pin erin.
+        widget.onConnected(toegang.met(name: toegang.name ?? server.name, serverId: server.id));
         return;
       } on RemoteException catch (e) {
         // De pc antwoordde en zei nee; zijn eigen zin is de enige die verder helpt.
@@ -277,6 +276,13 @@ class _LoginScreenState extends State<LoginScreen> {
       if (sleutel.isEmpty) return false;
       final ik = await thisDevice();
       final gevonden = await LanBrowser.find();
+      // De pins uit je account, per pc: de eerste kennismaking aanvaardt alleen die.
+      final pins = <String, String>{};
+      try {
+        for (final s in await widget.session.servers()) {
+          if (s.pin.isNotEmpty) pins[s.id] = s.pin;
+        }
+      } catch (_) {/* dan zonder */}
       for (final pc in gevonden) {
         RemoteEndpoint? toegang;
         try {
@@ -286,6 +292,7 @@ class _LoginScreenState extends State<LoginScreen> {
             deviceId: ik.id,
             deviceName: ik.name,
             platform: ik.platform,
+            verwachtePin: pins[pc.serverId] ?? '',
           );
         } on RemoteException catch (e) {
           // Deze pc antwoordde en zei nee. Onthouden en verder kijken: op een netwerk met twee
@@ -295,11 +302,7 @@ class _LoginScreenState extends State<LoginScreen> {
         }
         if (toegang == null) continue;
         if (!mounted) return true;
-        widget.onConnected(RemoteEndpoint(
-          baseUrl: toegang.baseUrl,
-          token: toegang.token,
-          name: toegang.name ?? pc.name,
-        ));
+        widget.onConnected(toegang.met(name: toegang.name ?? pc.name, serverId: pc.serverId.isEmpty ? null : pc.serverId));
         return true;
       }
     } catch (_) {/* een tweede kans die niet lukte */}

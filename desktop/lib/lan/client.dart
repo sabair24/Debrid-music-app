@@ -14,6 +14,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -21,6 +22,9 @@ import 'package:http/http.dart' as http;
 
 import '../album_facts.dart';
 import 'dtos.dart';
+import 'pin_client.dart';
+import 'poorten.dart';
+import 'tokens.dart' show toestelWeg;
 import 'vaste_naam.dart';
 
 /// A paired PC: where it is and what proves we may talk to it.
@@ -48,21 +52,51 @@ class RemoteEndpoint {
   /// ook een "pc".
   final String serverId;
 
+  /// De vingerafdruk van het certificaat van de pc (`certificaat.dart`), thuis of via Tailscale geleerd.
+  /// Leeg tot dan. Een versleutelde verbinding met een ander certificaat wordt geweigerd.
+  final String pin;
+
+  /// De versleutelde sleutel (alleen voor 47822/47821), na de eenmalige ruil of het koppelen over
+  /// 47822. Leeg tot dan; [token] blijft de sleutel voor 47820.
+  final String tlsToken;
+
+  /// Waar de pc versleuteld luistert (thuis/Tailscale). 0 = nog niet bekend; dan [kTlsPoort].
+  final int tlsPoort;
+
   const RemoteEndpoint({
     required this.baseUrl,
     required this.token,
     this.name,
     this.uitwijk = const [],
     this.serverId = '',
+    this.pin = '',
+    this.tlsToken = '',
+    this.tlsPoort = 0,
   });
 
-  RemoteEndpoint met({Uri? baseUrl, String? name, List<String>? uitwijk, String? serverId}) => RemoteEndpoint(
+  RemoteEndpoint met({
+    Uri? baseUrl,
+    String? token,
+    String? name,
+    List<String>? uitwijk,
+    String? serverId,
+    String? pin,
+    String? tlsToken,
+    int? tlsPoort,
+  }) =>
+      RemoteEndpoint(
         baseUrl: baseUrl ?? this.baseUrl,
-        token: token,
+        token: token ?? this.token,
         name: name ?? this.name,
         uitwijk: uitwijk ?? this.uitwijk,
         serverId: serverId ?? this.serverId,
+        pin: pin ?? this.pin,
+        tlsToken: tlsToken ?? this.tlsToken,
+        tlsPoort: tlsPoort ?? this.tlsPoort,
       );
+
+  /// De versleutelde ingang op hetzelfde adres (thuis of Tailscale).
+  Uri get tlsBasis => baseUrl.replace(scheme: 'https', port: tlsPoort > 0 ? tlsPoort : kTlsPoort);
 
   /// Accepts what a person types: `192.168.0.216`, `192.168.0.216:47820`, or a full URL.
   /// Returns null when there is nothing usable in it, so the caller can say so plainly.
@@ -85,6 +119,9 @@ class RemoteEndpoint {
         'name': name,
         if (uitwijk.isNotEmpty) 'uitwijk': uitwijk,
         if (serverId.isNotEmpty) 'serverId': serverId,
+        if (pin.isNotEmpty) 'pin': pin,
+        if (tlsToken.isNotEmpty) 'tlsToken': tlsToken,
+        if (tlsPoort > 0) 'tlsPoort': tlsPoort,
       };
 
   static RemoteEndpoint? fromJson(Map<String, dynamic> j) {
@@ -99,6 +136,9 @@ class RemoteEndpoint {
       // dan is de lijst leeg en wordt hij bij de eerste verbinding alsnog opgehaald.
       uitwijk: [for (final u in (j['uitwijk'] as List? ?? const [])) '$u'],
       serverId: (j['serverId'] ?? '').toString(),
+      pin: (j['pin'] ?? '').toString(),
+      tlsToken: (j['tlsToken'] ?? '').toString(),
+      tlsPoort: (j['tlsPoort'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -537,14 +577,22 @@ class RemoteClient {
   /// vóór deze weg (404) en een pc die net omviel geven hier hetzelfde antwoord — we weten geen
   /// uitwijkadres. Wat we al hadden wordt daarom door de aanroeper NIET weggegooid op een lege
   /// lijst; zie `client_session.dart`.
-  Future<List<String>> uitwijkAdressen() async {
+  Future<List<String>> uitwijkAdressen() async => (await uitwijk()).urls;
+
+  /// Waar deze pc nog meer te bereiken is, en de pin van zijn certificaat en zijn versleutelde poort.
+  /// Alles leeg bij álles wat misgaat (zie [uitwijkAdressen]).
+  Future<({List<String> urls, String pin, int tlsPoort})> uitwijk() async {
     try {
       final res = await _get('/api/uitwijk');
       final j = jsonDecode(utf8.decode(res.bodyBytes));
-      if (j is! Map) return const [];
-      return [for (final u in (j['urls'] as List? ?? const [])) '$u'];
+      if (j is! Map) return (urls: const <String>[], pin: '', tlsPoort: 0);
+      return (
+        urls: [for (final u in (j['urls'] as List? ?? const [])) '$u'],
+        pin: (j['pin'] ?? '').toString(),
+        tlsPoort: (j['tlsPoort'] as num?)?.toInt() ?? 0,
+      );
     } catch (_) {
-      return const [];
+      return (urls: const <String>[], pin: '', tlsPoort: 0);
     }
   }
 
@@ -761,20 +809,35 @@ class RemoteClient {
   /// dat is de enige zin die de gebruiker verder helpt. Wie dat wegslikt tot `null` laat op het
   /// scherm "geen pc gevonden" staan terwijl de pc gevonden wérd en antwoordde. `null` betekent
   /// dus alleen: deze machine is geen kandidaat (oudere bouw, kent deze weg nog niet).
+  ///
+  /// **Sinds uitlevering B alleen nog versleuteld**, over 47822 met de pin van de pc: de inlogsleutel
+  /// gaat nooit meer onversleuteld over de lijn. Is de [pin] nog niet bekend (een nieuw toestel), dan
+  /// is dit de eerste kennismaking: alleen op een adres thuis of via Tailscale, en als je account een
+  /// pin noemt ([verwachtePin]) alleen een pc met precies die. Het antwoord bevat beide sleutels en de
+  /// pin. Een pc van vóór uitlevering B luistert niet op 47822: dan een duidelijke zin in plaats van
+  /// een stille terugval naar HTTP.
   static Future<RemoteEndpoint?> pairMetAccount(
     Uri baseUrl, {
     required String idToken,
     required String deviceId,
     required String deviceName,
     required String platform,
+    String pin = '',
+    String verwachtePin = '',
+    int tlsPoort = kTlsPoort,
     http.Client? client,
     Duration timeout = const Duration(seconds: 15),
   }) async {
-    final c = client ?? http.Client();
+    // Eerste kennismaking alleen thuis of via Tailscale; van buiten koppelen komt pas met uitlevering C.
+    final ip = InternetAddress.tryParse(baseUrl.host);
+    if (pin.isEmpty && ip != null && toestelWeg(ip) == 'buiten') return null;
+    var gezien = '';
+    final c = client ?? pinClient(pin: pin, verwacht: verwachtePin, gezien: (p) => gezien = p);
+    final tlsBasis = baseUrl.replace(scheme: 'https', port: tlsPoort);
     try {
       final res = await c
           .post(
-            baseUrl.replace(path: '/pair-cloud'),
+            tlsBasis.replace(path: '/pair-cloud'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'idToken': idToken,
@@ -803,16 +866,57 @@ class RemoteClient {
       }
 
       final j = jsonDecode(res.body);
+      final tls = (j is Map ? j['tlsToken'] : null)?.toString() ?? '';
       return RemoteEndpoint(
         baseUrl: baseUrl,
         token: _sleutelUit(j),
         name: (j is Map ? j['name'] : null)?.toString(),
+        pin: pin.isNotEmpty ? pin : gezien,
+        tlsToken: tls,
+        tlsPoort: tlsPoort,
       );
     } on RemoteException {
       rethrow;
+    } on HandshakeException {
+      // Een ander certificaat dan de pin (of je account) zegt. Geen terugval: wie hier zit, is niet je pc.
+      throw const RemoteException('Op dit adres antwoordt een pc met een ander certificaat dan de jouwe. '
+          'Klopt het adres? Is je pc opnieuw geïnstalleerd, koppel dan opnieuw met de zes cijfers.');
     } catch (_) {
+      // Geen versleutelde ingang. Is het een pc van vóór uitlevering B (47820 antwoordt wel), zeg dat.
+      final h = await health(baseUrl, timeout: const Duration(seconds: 3));
+      if (h != null) {
+        throw RemoteException('${h.name.isEmpty ? 'Je pc' : h.name} heeft een oudere versie van DebridMusic. '
+            'Werk de app op je pc bij: koppelen via je account gaat nu versleuteld.');
+      }
       // Onbereikbaar, of iets anders dat op die poort luistert. Volgende machine.
       return null;
+    } finally {
+      if (client == null) c.close();
+    }
+  }
+
+  /// De eenmalige ruil: de HTTP-sleutel van [huidig] voor een TLS-sleutel, over 47822 met de pin.
+  /// Gooit een [RemoteException] met de statuscode als de pc nee zegt (409: al omgeruild).
+  static Future<String> ruil(RemoteEndpoint huidig, {http.Client? client}) async {
+    if (huidig.pin.isEmpty) throw const RemoteException('Nog geen pin van deze pc.');
+    final c = client ?? pinClient(pin: huidig.pin);
+    try {
+      final res = await c
+          .post(huidig.tlsBasis.replace(path: '/api/sleutel/ruil'),
+              headers: {'Content-Type': 'application/json'}, body: jsonEncode({'sleutel': huidig.token}))
+          .timeout(const Duration(seconds: 10));
+      final j = res.body.isEmpty ? null : jsonDecode(res.body);
+      if (res.statusCode != 200) {
+        final uitleg = (j is Map ? j['error'] : null)?.toString() ?? '';
+        throw RemoteException(uitleg.isEmpty ? 'De ruil mislukte (${res.statusCode}).' : uitleg, statusCode: res.statusCode);
+      }
+      final tls = (j is Map ? j['tlsToken'] : null)?.toString() ?? '';
+      if (tls.isEmpty) throw const RemoteException('De pc gaf geen versleutelde sleutel terug.');
+      return tls;
+    } on RemoteException {
+      rethrow;
+    } catch (e) {
+      throw RemoteException('Geen versleutelde verbinding met de pc: $e');
     } finally {
       if (client == null) c.close();
     }

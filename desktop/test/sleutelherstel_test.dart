@@ -117,11 +117,14 @@ void main() {
     });
 
     test('een nieuwe sleutel neemt de uitwijkadressen mee', () {
-      final start = sessie.indexOf('Future<void> _vernieuwSleutel()');
+      final start = sessie.indexOf('Future<void> _vernieuwSleutel(');
       expect(start, greaterThan(-1), reason: '_vernieuwSleutel is hernoemd of verdwenen');
       final lijf = sessie.substring(start, sessie.indexOf('Future<void> unpair()', start));
-      expect(lijf, contains('uitwijk: huidig.uitwijk'),
+      // Sinds uitlevering B op de HELE koppeling (`huidig.met`): uitwijkadressen, de id van de pc en de pin
+      // gaan mee, en alleen de sleutels zijn nieuw.
+      expect(lijf, contains('connect(huidig.met('),
           reason: 'anders is het Tailscale-adres na het herstel weg, en kom je buitenshuis niet binnen');
+      expect(lijf, isNot(contains('connect(RemoteEndpoint(')), reason: 'een nieuwe koppeling van nul verliest de id en de pin');
       // `_log(` en niet meer `debugPrint(`: sinds 06-10-2026 gaat het ook naar verbinding.log, want
       // debugPrint verdwijnt in een vrijgegeven versie en dan zegt het herstel achteraf niets.
       expect(lijf, contains('_log('), reason: 'het herstel hoort te zeggen wat het doet');
