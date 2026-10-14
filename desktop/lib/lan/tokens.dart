@@ -28,6 +28,7 @@ class DeviceGrant {
     required this.platform,
     required this.grantedAt,
     this.lastSeenAt,
+    this.lastSeenVia,
     this.legacy = false,
   });
 
@@ -37,6 +38,10 @@ class DeviceGrant {
   final String platform;
   final int grantedAt;
   int? lastSeenAt;
+
+  /// Langs welke weg dit toestel het laatst binnenkwam: `thuis`, `Tailscale`, `deze pc` of
+  /// `buiten`. Voor de toestellenlijst op de pc; zie [toestelWeg].
+  String? lastSeenVia;
 
   /// True for the one synthetic grant that stands in for everything paired before grants existed.
   /// Shown in the device list as a single row the user can revoke on purpose, rather than silently
@@ -63,6 +68,7 @@ class DeviceGrant {
         'platform': platform,
         'grantedAt': grantedAt,
         'lastSeenAt': lastSeenAt,
+        if (lastSeenVia != null) 'lastSeenVia': lastSeenVia,
         'legacy': legacy,
         if (oudereTokens.isNotEmpty) 'oudereTokens': oudereTokens,
       };
@@ -78,6 +84,7 @@ class DeviceGrant {
       platform: (j['platform'] ?? '').toString(),
       grantedAt: (j['grantedAt'] as num?)?.toInt() ?? 0,
       lastSeenAt: (j['lastSeenAt'] as num?)?.toInt(),
+      lastSeenVia: j['lastSeenVia'] as String?,
       legacy: j['legacy'] == true,
     );
     for (final t in (j['oudereTokens'] as List<dynamic>? ?? const [])) {
@@ -93,6 +100,28 @@ String generateDeviceToken() {
   final rnd = Random.secure();
   final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
   return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
+
+/// Langs welke weg een verzoek binnenkwam, naar het adres waar het vandaan kwam.
+///
+/// Loopback is deze pc zelf (zijn eigen speakerclient); 100.64/10 is Tailscale; de privé-reeksen zijn
+/// thuis; al de rest is van buiten. Gaat over het ADRES — sinds er later een eigen deur naar buiten
+/// bij komt (stap 7 van het plan), beslist de luisteraar over rechten, nooit dit.
+String toestelWeg(InternetAddress adres) {
+  if (adres.isLoopback) return 'deze pc';
+  final a = adres.type == InternetAddressType.IPv6 && adres.address.startsWith('::ffff:')
+      ? adres.address.substring(7)
+      : adres.address;
+  final d = a.split('.').map(int.tryParse).toList();
+  if (d.length == 4 && d.every((x) => x != null)) {
+    final (x, y) = (d[0]!, d[1]!);
+    if (x == 100 && y >= 64 && y <= 127) return 'Tailscale';
+    if (x == 10 || (x == 172 && y >= 16 && y <= 31) || (x == 192 && y == 168) || (x == 169 && y == 254)) return 'thuis';
+    return 'buiten';
+  }
+  if (a.toLowerCase().startsWith('fd7a:115c:a1e0:')) return 'Tailscale';
+  if (adres.isLinkLocal || a.toLowerCase().startsWith('fc') || a.toLowerCase().startsWith('fd')) return 'thuis';
+  return 'buiten';
 }
 
 /// Mag dit als toestel-id dienen? Letters, cijfers, `_` en `-`, 8 tot 64 tekens.
@@ -236,6 +265,7 @@ class GrantStore {
           nieuw.oudereTokens.add(t);
         }
       }
+      if ((ander.lastSeenAt ?? 0) > (nieuw.lastSeenAt ?? 0)) nieuw.lastSeenVia = ander.lastSeenVia ?? nieuw.lastSeenVia;
       nieuw.lastSeenAt = max(nieuw.lastSeenAt ?? 0, ander.lastSeenAt ?? 0);
     }
     nieuw.oudereTokens.removeWhere(isIngetrokken);
@@ -274,6 +304,7 @@ class GrantStore {
       // kopie op schijf wint zo deze rij, en verhuist de oude sleutel naar `oudereTokens`.
       grantedAt: max(nu, (oud?.grantedAt ?? 0) + 1),
       lastSeenAt: oud?.lastSeenAt,
+      lastSeenVia: oud?.lastSeenVia,
     );
     if (oud != null) {
       for (final t in [oud.token, ...oud.oudereTokens]) {
@@ -586,12 +617,17 @@ class GrantStore {
 
   /// Remember that a token was used, for the device list. Debounced to a minute: this is reached
   /// from every range request of a stream, and a disk write per request would be absurd.
-  bool touch(String token) {
+  ///
+  /// Een andere WEG dan de vorige keer telt meteen, ook binnen de minuut: thuis de deur uit is precies
+  /// het moment dat de lijst moet laten zien.
+  bool touch(String token, {String? via}) {
     final grant = grantFor(token);
     if (grant == null) return false;
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (now - (grant.lastSeenAt ?? 0) < 60000) return false;
+    final andereWeg = via != null && via != grant.lastSeenVia;
+    if (!andereWeg && now - (grant.lastSeenAt ?? 0) < 60000) return false;
     grant.lastSeenAt = now;
+    if (via != null) grant.lastSeenVia = via;
     return true;
   }
 

@@ -135,6 +135,7 @@ import 'torbox.dart';
 import 'torbox_stand.dart';
 import 'redacted.dart';
 import 'torznab.dart';
+import 'toestellen_lijst.dart';
 import 'tv.dart';
 import 'venster_start.dart';
 import 'zoekladder.dart';
@@ -22653,6 +22654,8 @@ class _SharingSectionState extends State<_SharingSection> {
                 child: Text('Typ deze zes cijfers op je Shield of iPad. Vijf minuten geldig.',
                     style: TextStyle(color: _muted, fontSize: 11, height: 1.35)),
               ),
+            const SizedBox(height: 14),
+            ToestellenLijst(grants: sharing.grants),
           ],
         ],
         const SizedBox(height: 12),

@@ -448,8 +448,10 @@ class LanServer {
     // A per-device grant, or the one shared token this used to have. The legacy check stays and is
     // NOT rotated on upgrade: a device paired yesterday must keep working the moment this ships,
     // and unpairing everything at once is exactly what the old design was stuck with.
+    final adres = req.connectionInfo?.remoteAddress;
     if (grants.accepts(offered)) {
-      if (grants.touch(offered)) unawaited(grants.save());
+      if (grants.touch(offered, via: adres == null ? null : toestelWeg(adres))) unawaited(grants.save());
+      if (grants.grantFor(offered)?.legacy ?? false) _gedeeldGebruikt(req);
       return true;
     }
     // De gedeelde sleutel, en bij twijfel die uit de instellingen.
@@ -459,10 +461,35 @@ class LanServer {
     // iets te zien is. Wat er op schijf staat is de waarheid; dit is dezelfde sleutel, niet een
     // tweede.
     final gedeeld = token.isNotEmpty ? token : (settings?.lanToken ?? '');
-    if (gedeeld.isNotEmpty && _constantTimeEquals(offered, gedeeld)) return true;
+    if (gedeeld.isNotEmpty && _constantTimeEquals(offered, gedeeld)) {
+      _gedeeldGebruikt(req);
+      return true;
+    }
     if (!stil) _noteerWeigering(req, offered);
     return false;
   }
+
+  /// Waarvoor de gedeelde sleutel nog gebruikt wordt, en van waar. Eén regel per pad en adres per uur.
+  ///
+  /// **Waarom.** Sinds 14-10-2026 krijgt elk toestel een sleutel van zichzelf, maar de gedeelde blijft
+  /// geldig: de pc zet hem zelf in elke cast-URL naar Sonos en KEF, en een toestel dat nog niet opnieuw
+  /// koppelde gebruikt hem misschien ook. Het plan beperkt hem later tot wat hij werkelijk nodig
+  /// heeft — en dat wordt eerst een week gemeten, hier, in plaats van geraden.
+  void _gedeeldGebruikt(HttpRequest req) {
+    final delen = req.uri.pathSegments;
+    final soort = delen.isEmpty ? '/' : '/${delen.take(delen.length > 1 && delen[0] == 'api' ? 2 : 1).join('/')}';
+    final van = req.connectionInfo?.remoteAddress.address ?? '?';
+    final sleutel = '$soort $van';
+    final nu = DateTime.now();
+    final vorige = _gedeeldGezien[sleutel];
+    if (vorige != null && nu.difference(vorige) < const Duration(hours: 1)) return;
+    if (_gedeeldGezien.length > 500) _gedeeldGezien.clear();
+    _gedeeldGezien[sleutel] = nu;
+    _koppelLog?.line('GEDEELDE SLEUTEL  ${req.method} $soort  van $van'
+        '${req.connectionInfo?.remoteAddress.isLoopback ?? false ? ' (deze pc)' : ''}');
+  }
+
+  final _gedeeldGezien = <String, DateTime>{};
 
   /// Eén regel per weigering, hoogstens één per tien seconden — een client die blijft pollen mag geen
   /// logboek van megabytes maken, en WarmLog schrijft synchroon met een flush per regel.
