@@ -112,8 +112,10 @@ class LanServer {
     this.certificaat,
     this.tlsPoort = kTlsPoort,
     this.publiekPoort,
+    ValueNotifier<String?>? rodeMelding,
     GrantStore? grants,
   })  : grants = grants ?? GrantStore(),
+        rodeMelding = rodeMelding ?? ValueNotifier(null),
         catalog = LanCatalog(library) {
     final dir = library.configDir;
     cast = CastManager(
@@ -163,7 +165,7 @@ class LanServer {
 
   /// Een rode melding voor op de pc: iets wat op misbruik van een sleutel wijst. Zie [_ruil] en de
   /// TLS-sleutel die op 47820 aankwam.
-  final ValueNotifier<String?> rodeMelding = ValueNotifier(null);
+  final ValueNotifier<String?> rodeMelding;
 
   /// Zie `remming.dart`.
   final Remming remming = Remming();
@@ -889,6 +891,15 @@ class LanServer {
         await grants.save();
         _tlsIngang?.geldig(req.connectionInfo);
         _koppelLog?.line('RUIL  "${r.grant!.deviceName}" gebruikt nu een versleutelde verbinding (van $van)');
+        // Een nieuwe sleutel is een melding op de pc, ook deze — met [Intrekken] voor die ene sleutel.
+        grants.nieuweSleutelMelding.value = SleutelMelding(
+          deviceId: r.grant!.deviceId,
+          deviceName: r.grant!.deviceName,
+          bestaand: true,
+          via: 'ruil',
+          van: van,
+          sleutel: r.tls!,
+        );
         return _json(req.response, {'tlsToken': r.tls});
       case 409:
         _koppelLog?.line('RUIL  NOG EENS voor "${r.grant?.deviceName ?? '?'}" (van $van) — geweigerd, rood gemeld');

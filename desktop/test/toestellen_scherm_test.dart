@@ -24,7 +24,7 @@ void main() {
   testWidgets('een toestel intrekken, na bevestigen, en de rest blijft', (tester) async {
     final g = GrantStore(file: File('${map.path}/grants.json'));
     final gsm = g.nieuweSleutel(deviceId: _gsm, deviceName: 'S26').token;
-    final ipad = g.nieuweSleutel(deviceId: 'ipad-van-saber-01', deviceName: 'iPad').token;
+    final ipad = g.nieuweSleutel(deviceId: 'ipad-van-saber-01', deviceName: 'iPad', metTls: true).token;
     g.adoptLegacyToken('de-gedeelde');
     await tester.pumpWidget(
         MaterialApp(home: Scaffold(body: SingleChildScrollView(child: ToestellenLijst(grants: g)))));
@@ -32,6 +32,8 @@ void main() {
     expect(find.text('S26'), findsOneWidget);
     expect(find.text('iPad'), findsOneWidget);
     expect(find.text('Eerder gekoppelde apparaten'), findsOneWidget);
+    // Tot elk toestel 'versleuteld' toont, laat je Tailscale staan: dus per toestel zichtbaar.
+    expect(find.textContaining('versleuteld'), findsOneWidget, reason: 'alleen de iPad heeft een TLS-sleutel');
     expect(find.widgetWithText(TextButton, 'Intrekken'), findsNWidgets(2),
         reason: 'de gedeelde sleutel trek je in met "Nieuwe toegangscode", niet hier');
 

@@ -107,6 +107,8 @@ class _ToestellenLijstState extends State<ToestellenLijst> {
                             : [
                                 if (g.platform.isNotEmpty) g.platform,
                                 laatstGezienTekst(g.lastSeenAt, g.lastSeenVia),
+                                // Tot elk toestel dit toont, laat je Tailscale staan (plan, uitlevering B).
+                                if (g.tlsToken != null) 'versleuteld',
                               ].join(' · '),
                         style: const TextStyle(color: kGedempt, fontSize: 11, height: 1.3),
                       ),

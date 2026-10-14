@@ -255,6 +255,7 @@ void main() {
         addresses: () => ['http://192.168.0.10:8477'],
         grants: grants,
         trackCount: () => 325,
+        pin: () => 'ab' * 32,
       );
       // The first beat is fired, not awaited — the app must not wait on a network to draw.
       await Future<void>.delayed(const Duration(milliseconds: 300));
@@ -266,6 +267,7 @@ void main() {
       expect(doc.data['online'], isTrue);
       expect(doc.data['urls'], contains('http://192.168.0.10:8477'));
       expect(doc.data['trackCount'], 325);
+      expect(doc.data['pin'], 'ab' * 32, reason: 'de pin van het certificaat staat naast de adressen (geen geheim)');
 
       // En de aanvraag die er stond, wordt NIET met een sleutel beantwoord: een toestel komt binnen
       // door de pc zelf te vragen (`/pair-cloud`), en de sleutel staat nergens anders.

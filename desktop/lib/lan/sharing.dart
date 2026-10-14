@@ -8,6 +8,8 @@ import '../musicbrainz.dart';
 import '../online.dart';
 import '../settings.dart';
 import '../warm_log.dart';
+import '../paths.dart';
+import 'certificaat.dart';
 import 'discovery.dart';
 import 'ids.dart';
 import 'net.dart';
@@ -69,6 +71,17 @@ class LanSharing extends ChangeNotifier {
 
   LanServer? _server;
   LanDiscovery? _discovery;
+
+  /// Het eigen certificaat voor de versleutelde ingang 47822 (`certificaat.dart`). Eén keer geladen of
+  /// gemaakt; zonder certificaat draait alleen 47820, zoals voorheen.
+  PcCertificaat? _certificaat;
+
+  /// De pin van dit certificaat, voor de hartslag in het account (geen geheim). Leeg zonder certificaat.
+  String get pin => _certificaat?.pin ?? '';
+
+  /// Een rode melding voor op de pc (misbruik van een sleutel). Leeft hier en niet in de server, zodat
+  /// het scherm er één keer naar luistert, ook als de server herstart.
+  final ValueNotifier<String?> rodeMelding = ValueNotifier(null);
   String? _error;
   List<String> _home = const [];
   /// De eenmalige laadbeurt van state + grants. Een tweede aanroep wacht hierop.
@@ -173,6 +186,14 @@ class LanSharing extends ChangeNotifier {
       settings.serverId = generateDeviceToken().substring(0, 16);
       await settings.save();
     }
+    // Het certificaat, één keer. Mislukt het, dan geen versleutelde ingang — 47820 draait gewoon.
+    if (_certificaat == null) {
+      try {
+        _certificaat = await PcCertificaat.laadOfMaak(appFile('tls_cert.pem').parent, log: grants.meldlog);
+      } catch (e) {
+        grants.meldlog?.call('certificaat niet te laden of te maken: $e — alleen 47820');
+      }
+    }
     final server = LanServer(
       library: library,
       token: settings.lanToken,
@@ -188,6 +209,11 @@ class LanSharing extends ChangeNotifier {
       cloudUid: cloudUid,
       uidVanSleutel: uidVanSleutel,
       firebaseProject: firebaseProject,
+      certificaat: _certificaat,
+      // Poort 0 in een toets: dan ook hier vrij kiezen, en nooit de echte 47822 van de draaiende app.
+      tlsPoort: settings.lanPort == 0 ? 0 : kTlsPoort,
+      // De deur naar buiten (47821) gaat pas open met stap 7, als jij hem aanzet.
+      rodeMelding: rodeMelding,
       grants: grants,
     );
     _error = await server.start();

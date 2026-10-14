@@ -187,7 +187,7 @@ class SleutelMelding {
   /// True als dit toestel al een rij had: een NIEUWE sleutel voor een bestaand toestel.
   final bool bestaand;
 
-  /// 'code' of 'account'.
+  /// 'code', 'account' of 'ruil' (een toestel ging over op een versleutelde verbinding).
   final String via;
 
   /// Het adres waar het verzoek vandaan kwam.
@@ -198,6 +198,7 @@ class SleutelMelding {
   /// "Nieuwe sleutel voor 'S26' (bestaand toestel), via je account, 14:02, van 192.168.0.42".
   String get tekst {
     final tijd = '${op.hour.toString().padLeft(2, '0')}:${op.minute.toString().padLeft(2, '0')}';
+    if (via == 'ruil') return "'$deviceName' gebruikt nu een versleutelde verbinding, $tijd, van $van";
     final wie = bestaand ? "Nieuwe sleutel voor '$deviceName' (bestaand toestel)" : "Nieuw toestel gekoppeld: '$deviceName'";
     return '$wie, via ${via == 'code' ? 'de code' : 'je account'}, $tijd, van $van';
   }

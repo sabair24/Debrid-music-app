@@ -137,6 +137,10 @@ void main() {
       final r = await _vraag(thuis, '/api/sleutel/ruil', pin: _cert.pin, methode: 'POST', json: {'sleutel': g.token});
       expect(r.status, 200);
       final tls = (jsonDecode(r.lijf) as Map)['tlsToken'] as String;
+      final melding = grants.nieuweSleutelMelding.value;
+      expect(melding?.via, 'ruil', reason: 'ook een ruil is een nieuwe sleutel: melding op de pc');
+      expect(melding?.sleutel, tls, reason: '[Intrekken] trekt precies deze sleutel in');
+      expect(melding?.tekst, startsWith("'S26' gebruikt nu een versleutelde verbinding"));
       expect((await _vraag(thuis, '/api/catalog', pin: _cert.pin, sleutel: tls)).status, 200);
       expect((await _vraag(http, '/api/catalog', sleutel: g.token)).status, 200, reason: 'de HTTP-sleutel blijft op 47820');
       // Opnieuw: 409 en rood op de pc.

@@ -273,6 +273,7 @@ class CloudSession extends ChangeNotifier {
     required List<String> Function() addresses,
     required GrantStore grants,
     required int Function() trackCount,
+    String Function()? pin,
   }) {
     _heartbeat?.cancel();
     // Wat er de vorige keer werkelijk geschreven is, en wanneer. Alleen hierdoor kan de slag
@@ -293,6 +294,9 @@ class CloudSession extends ChangeNotifier {
           'urls': addresses(),
           'online': true,
           'trackCount': trackCount(),
+          // De pin van het certificaat (geen geheim): een toestel zonder pin kan hem hier vergelijken met
+          // wat het thuis ziet. Bij elke slag opnieuw, zodat een overschreven waarde er hooguit minuten staat.
+          if ((pin?.call() ?? '').isNotEmpty) 'pin': pin!(),
         };
         // NIET elke slag schrijven. Deze regel bevatte een tijdstempel en werd daarom altijd
         // opnieuw weggeschreven — 2880 keer per dag voor een pc die niets doet, tegen een gratis

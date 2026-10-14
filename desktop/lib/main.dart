@@ -1699,6 +1699,7 @@ Future<void> publishAsOwner(CloudSession cloud, AppSettings settings, LanSharing
     addresses: () => sharing.addresses,
     grants: sharing.grants,
     trackCount: () => library.tracks.length,
+    pin: () => sharing.pin,
   );
 
   // Work through anything chosen on another device while this PC was off. It replays the very
@@ -2072,7 +2073,30 @@ class _HomeShellState extends State<HomeShell> {
     // iemand weet waar ze vandaan komen.
     unawaited(_radio!.laadOpenstaand());
     _sleutels = context.read<LanSharing>().grants..nieuweSleutelMelding.addListener(_toonSleutelMelding);
+    _rood = context.read<LanSharing>().rodeMelding..addListener(_toonRodeMelding);
   }
+
+  ValueNotifier<String?>? _rood;
+
+  /// Iets wat op misbruik van een sleutel wijst (zie `LanServer.rodeMelding`). Rood, en een halve minuut
+  /// in beeld: dit vraagt iets van je.
+  void _toonRodeMelding() {
+    final tekst = _rood?.value;
+    if (tekst == null || !mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: const Color(0xFF8B2E2E),
+        content: Text(tekst, style: const TextStyle(color: Colors.white)),
+        duration: const Duration(seconds: 30),
+      ));
+    });
+  }
+
+  /// Toestellen die vlak na elkaar overgaan op een versleutelde verbinding (de ruil, na een update komen
+  /// ze allemaal tegelijk): één melding in plaats van vier van twintig seconden.
+  final List<SleutelMelding> _ruilen = [];
+  Timer? _ruilKlok;
 
   RadioBesturing? _radio;
   GrantStore? _sleutels;
@@ -2085,6 +2109,12 @@ class _HomeShellState extends State<HomeShell> {
   void _toonSleutelMelding() {
     final m = _sleutels?.nieuweSleutelMelding.value;
     if (m == null || !mounted) return;
+    if (m.via == 'ruil') {
+      _ruilen.add(m);
+      _ruilKlok?.cancel();
+      _ruilKlok = Timer(const Duration(seconds: 4), _toonRuilen);
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final berichten = ScaffoldMessenger.of(context);
@@ -2109,6 +2139,37 @@ class _HomeShellState extends State<HomeShell> {
       ));
     });
   }
+  /// Eén melding voor de ruilen van de laatste seconden. Eén toestel: met [Intrekken] voor die sleutel,
+  /// zoals elke nieuwe sleutel. Meer tegelijk: een opsomming (intrekken kan bij de toestellen).
+  void _toonRuilen() {
+    if (!mounted || _ruilen.isEmpty) return;
+    final lijst = List<SleutelMelding>.of(_ruilen);
+    _ruilen.clear();
+    if (lijst.length == 1) {
+      final m = lijst.single;
+      final berichten = ScaffoldMessenger.of(context);
+      berichten.showSnackBar(SnackBar(
+        content: Text(m.tekst),
+        duration: const Duration(seconds: 12),
+        action: SnackBarAction(
+          label: 'Intrekken',
+          onPressed: () async {
+            final g = _sleutels;
+            if (g == null) return;
+            g.trekSleutelIn(m.sleutel);
+            await g.save();
+          },
+        ),
+      ));
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('${lijst.length} toestellen gebruiken nu een versleutelde verbinding: '
+          '${lijst.map((m) => m.deviceName).join(', ')}. Intrekken kan bij Instellingen → Toestellen.'),
+      duration: const Duration(seconds: 12),
+    ));
+  }
+
   bool _overzichtOpen = false;
 
   /// De notitie die al getoond is. "Later beslissen" laat hem staan — bij de volgende START komt
@@ -2188,6 +2249,8 @@ class _HomeShellState extends State<HomeShell> {
     _zoekPauze?.cancel();
     _radio?.removeListener(_kijkNaarRadio);
     _sleutels?.nieuweSleutelMelding.removeListener(_toonSleutelMelding);
+    _rood?.removeListener(_toonRodeMelding);
+    _ruilKlok?.cancel();
     _tvBalk.dispose();
     _tvInhoud.dispose();
     _tvMelding.dispose();
