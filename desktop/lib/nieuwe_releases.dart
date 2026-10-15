@@ -645,11 +645,16 @@ class NieuweReleasesZoeker {
       // Eerst de buren van wie zelf nieuw werk uitbracht. Gemeten op 15-10-2026: de buren van Michael
       // Jackson leverden een kerstverzamelaar van de Jackson 5 en een jubileum-EP van Stevie Wonder —
       // wie op een artiest van toen lijkt, brengt vooral archief uit.
-      final actief = {for (final g in gekozen) _naamSleutel(g.artiest)};
-      final bronnen = [
-        ...herkend.where((h) => actief.contains(_naamSleutel(h.eigen.naam))),
-        ...herkend.where((h) => !actief.contains(_naamSleutel(h.eigen.naam))),
-      ];
+      //
+      // Actief is wie iets nieuws uitbracht, ook als je het al hebt: op de pc (15-10-2026, 3.9.490)
+      // vielen Céline Dion en Britney Spears er anders uit zodra hun nieuwe nummer gedownload was, en
+      // kwam Michael Jackson als vijfde bron terug — met weer de kerstplaat van de Jackson 5. Alleen als
+      // niemand actief is, de rest.
+      final actief = {
+        for (final g in kiesUitgaven(aanbod, nu: nu, perArtiest: 1, max: 1000)) _naamSleutel(g.artiest)
+      };
+      final actieveBronnen = [...herkend.where((h) => actief.contains(_naamSleutel(h.eigen.naam)))];
+      final bronnen = actieveBronnen.isNotEmpty ? actieveBronnen : herkend;
       // Vier buren per bron, vijf bronnen: twintig artiesten om uit te kiezen, en niet allemaal van één.
       for (final h in bronnen.take(5)) {
         final r = await _haal('/artist/${h.id}/related?limit=10');

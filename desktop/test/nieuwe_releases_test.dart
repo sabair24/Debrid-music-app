@@ -344,6 +344,39 @@ void main() {
     });
   });
 
+  test('buren alleen van wie zelf iets nieuws uitbracht, ook als je dat al hebt', () async {
+    // Op de pc, 15-10-2026: Céline Dions remix was gedownload, en toen leverde Michael Jackson de buren.
+    final eigen = eigenArtiesten([
+      EigenNummer(artiest: 'Michael Jackson', album: 'Thriller', titel: 'Billie Jean', beurten: 119),
+      EigenNummer(artiest: 'Céline Dion', album: "Let's Talk About Love", titel: 'My Heart Will Go On', beurten: 39),
+    ]);
+    final gevraagd = <String>[];
+    final z = NieuweReleasesZoeker((url) async {
+      final pad = url.replaceFirst('https://api.deezer.com', '');
+      gevraagd.add(pad);
+      Map<String, dynamic> albums(List<(String, String)> l) => {
+            'data': [
+              for (final (i, x) in l.indexed)
+                {'id': pad.hashCode.abs() % 1000 + i, 'title': x.$1, 'release_date': x.$2, 'record_type': 'single'}
+            ],
+            'total': l.length,
+          };
+      if (pad.startsWith('/search/artist?q=Michael')) return {'data': [{'id': 1, 'name': 'Michael Jackson'}]};
+      if (pad.startsWith('/search/artist?q=C')) return {'data': [{'id': 2, 'name': 'Céline Dion'}]};
+      if (pad.startsWith('/artist/1/albums')) return albums([('Thriller', '1982-11-30')]);
+      if (pad.startsWith('/artist/2/albums')) {
+        return albums([("Let's Talk About Love", '1997-11-14'), ('Bonjour, Pardon, Merci (Bon Entendeur Remix)', '2026-09-25')]);
+      }
+      if (pad.startsWith('/artist/2/related')) return {'data': [{'id': 30, 'name': 'Natasha St-Pier'}]};
+      if (pad.startsWith('/artist/30/albums')) return albums([('Thérèse, ma petite voie', '2026-10-02')]);
+      return {'data': []};
+    });
+    final u = await z.zoek(relevanteArtiesten(eigen, nuMs: _nu.millisecondsSinceEpoch),
+        nu: _nu, alInBezit: {bezitssleutel('Céline Dion', 'Bonjour, Pardon, Merci (Bon Entendeur Remix)')});
+    expect(_titels(u), ['Thérèse, ma petite voie']);
+    expect(gevraagd, isNot(contains(startsWith('/artist/1/related'))));
+  });
+
   group('bewaren', () {
     test('de lijst gaat heen en terug door JSON', () {
       final l = ReleasesLijst(123, [
