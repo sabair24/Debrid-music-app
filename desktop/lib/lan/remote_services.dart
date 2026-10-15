@@ -33,10 +33,29 @@ import 'client.dart';
 /// pairing screen has been through — and after pairing the very same objects have to start
 /// working, without the provider tree being rebuilt underneath the UI.
 class _Rpc {
-  _Rpc(this._endpointOf, {http.Client? client}) : _http = client ?? http.Client();
+  _Rpc(this._endpointOf, {http.Client? client}) : _vast = client;
 
   final RemoteEndpoint? Function() _endpointOf;
-  final http.Client _http;
+
+  /// Een client van buiten (een toets): die geldt altijd.
+  final http.Client? _vast;
+
+  /// De client voor de verbinding van nu (`clientVoor`): een andere zodra de verbinding versleuteld
+  /// wordt of een andere pin heeft. Een oude gaat pas na even dicht, zodat wat erover liep kan afmaken.
+  http.Client? _client;
+  String _clientVoor = '';
+
+  http.Client get _http {
+    final vast = _vast;
+    if (vast != null) return vast;
+    final e = endpoint;
+    final soort = e.versleuteld ? 'tls:${e.pin}' : 'http';
+    final c = _client;
+    if (c != null && soort == _clientVoor) return c;
+    if (c != null) Timer(const Duration(seconds: 60), c.close);
+    _clientVoor = soort;
+    return _client = clientVoor(e);
+  }
 
   RemoteEndpoint get endpoint {
     final e = _endpointOf();
@@ -44,7 +63,8 @@ class _Rpc {
     return e;
   }
 
-  Map<String, String> get _headers => {'Authorization': 'Bearer ${endpoint.token}'};
+  /// Dezelfde sleutel als `RemoteClient`: versleuteld de TLS-sleutel. Zie [sleutelKop].
+  Map<String, String> get _headers => sleutelKop(endpoint);
 
   Future<Map<String, dynamic>> get(String path,
       {Map<String, String>? query, Duration timeout = const Duration(seconds: 90)}) async {
@@ -88,7 +108,11 @@ class _Rpc {
     );
   }
 
-  void close() => _http.close();
+  void close() {
+    _vast?.close();
+    _client?.close();
+    _client = null;
+  }
 }
 
 class RemoteOnlineService extends OnlineService {

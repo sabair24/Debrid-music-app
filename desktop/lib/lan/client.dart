@@ -161,6 +161,21 @@ class RemoteEndpoint {
   int get hashCode => Object.hash(baseUrl, token);
 }
 
+/// De client om met de pc achter [e] te praten: versleuteld de pin-client — zonder pin aanvaardt hij
+/// niets, nooit "dan maar elk certificaat" — en anders een gewone.
+///
+/// **Eén regel voor iedereen die met de pc praat.** Op 15-10-2026 bleek de downloaddienst op de gsm
+/// (`remote_services.dart`) een eigen `http.Client()` met de HTTP-sleutel te hebben: op de versleutelde
+/// weg (sinds 3.9.482) vertrouwde die het certificaat van de pc niet, en zoeken en downloaden mislukten
+/// thuis én onderweg, terwijl afspelen gewoon werkte.
+http.Client clientVoor(RemoteEndpoint e) =>
+    e.versleuteld ? pinClient(pin: e.pin.isEmpty ? '-' : e.pin) : http.Client();
+
+/// De sleutel in de kop voor [e]: versleuteld de TLS-sleutel, anders de HTTP-sleutel. Nooit door elkaar:
+/// een TLS-sleutel op 47820 wordt door de pc ingetrokken, een HTTP-sleutel op 47822/47821 geweigerd.
+Map<String, String> sleutelKop(RemoteEndpoint e) =>
+    {'Authorization': 'Bearer ${e.versleuteld ? e.tlsToken : e.token}'};
+
 /// Het catalogusantwoord van de pc ontleden, op een ANDERE isolate.
 ///
 /// **Waarom dit niet gewoon op de tekendraad mag.** Bij een gekoppeld toestel doet de pc het werk en
@@ -336,7 +351,7 @@ class RemoteClient {
   /// Zonder pin aanvaardt hij niets — nooit "dan maar elk certificaat".
   RemoteClient(this.endpoint,
       {http.Client? client, this.timeout = const Duration(seconds: 30), this.viaDoorgever, this.vanDoorgever})
-      : _http = client ?? (endpoint.versleuteld ? pinClient(pin: endpoint.pin.isEmpty ? '-' : endpoint.pin) : http.Client());
+      : _http = client ?? clientVoor(endpoint);
 
   /// Het adres voor mpv bij een stroom van de pc, als er versleuteld gepraat wordt: de doorgever op dit
   /// toestel (`doorgever.dart`). mpv kan het certificaat van de pc niet vastpinnen, en de sleutel hoort
@@ -349,10 +364,8 @@ class RemoteClient {
   Uri _api(String path, [Map<String, String>? query]) =>
       endpoint.baseUrl.replace(path: path, queryParameters: query);
 
-  /// Versleuteld de TLS-sleutel, anders de HTTP-sleutel. Nooit door elkaar: een TLS-sleutel op 47820
-  /// wordt door de pc ingetrokken.
-  Map<String, String> get _headers =>
-      {'Authorization': 'Bearer ${endpoint.versleuteld ? endpoint.tlsToken : endpoint.token}'};
+  /// Zie [sleutelKop].
+  Map<String, String> get _headers => sleutelKop(endpoint);
 
   /// The library. Pass the ETag from last time and the PC answers 304 when nothing changed, which
   /// is the ordinary case on every poll — the fingerprint is over the CONTENT, so enriching a
