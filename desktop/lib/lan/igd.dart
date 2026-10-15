@@ -58,6 +58,38 @@ const kIgdDiensten = [
   'urn:schemas-upnp-org:service:WANPPPConnection:1',
 ];
 
+/// Mag de zoektocht naar de modem langs dit adres van deze pc? Alleen het eigen netwerk: geen Tailscale
+/// (100.64/10), geen loopback, geen link-local. Zie [Igd._ssdp] voor waarom er per adres gebonden wordt.
+bool lanAdresVoorSsdp(InternetAddress a) {
+  if (a.type != InternetAddressType.IPv4 || a.isLoopback || a.isLinkLocal) return false;
+  final d = a.rawAddress;
+  return d[0] == 10 || (d[0] == 172 && d[1] >= 16 && d[1] <= 31) || (d[0] == 192 && d[1] == 168);
+}
+
+/// Welk eigen adres bij [host] hoort (de modem): loopback bij loopback (de nep-modem in een toets),
+/// anders het eigen adres in hetzelfde /24, en anders in hetzelfde /16. Null als er geen bij past.
+///
+/// **Waarom niet `Socket.address`.** Dat is in Dart het adres waarmee je verbond — de overkant. Gemeten
+/// op 15-10-2026: het gaf 192.168.0.1, het adres van de modem zelf; de deur zou dan naar de modem
+/// gewezen hebben in plaats van naar deze pc. De nep-modem in de toetsen zag het niet: op 127.0.0.1 zijn
+/// hier en daar hetzelfde.
+String? eigenAdresNaar(String host, Iterable<InternetAddress> eigen) {
+  final h = InternetAddress.tryParse(host);
+  if (h == null || h.type != InternetAddressType.IPv4) return null;
+  if (h.isLoopback) return '127.0.0.1';
+  final v4 = [for (final a in eigen) if (a.type == InternetAddressType.IPv4 && a.address != host) a];
+  for (final n in const [3, 2]) {
+    for (final a in v4) {
+      var gelijk = true;
+      for (var i = 0; i < n; i++) {
+        if (a.rawAddress[i] != h.rawAddress[i]) gelijk = false;
+      }
+      if (gelijk && lanAdresVoorSsdp(a)) return a.address;
+    }
+  }
+  return null;
+}
+
 /// De `LOCATION` uit een SSDP-antwoord, of null.
 Uri? ssdpLocatie(String antwoord) {
   final m = RegExp(r'^location:\s*(\S+)\s*$', caseSensitive: false, multiLine: true).firstMatch(antwoord);
@@ -91,18 +123,19 @@ class Igd {
   /// De modem zoeken: SSDP op het netwerk, of — in een toets — rechtstreeks een beschrijving.
   /// Null als er geen modem met UPnP antwoordt.
   Future<IgdDienst?> zoek({Duration zoektijd = const Duration(seconds: 3), Uri? locatie}) async {
-    final locaties = locatie != null ? [locatie] : await _ssdp(zoektijd);
-    for (final l in locaties) {
+    final locaties = locatie != null ? {locatie: null} : await _ssdp(zoektijd);
+    for (final l in locaties.entries) {
       try {
-        final d = await dienstVan(l);
+        final d = await dienstVan(l.key, lokaal: l.value?.address);
         if (d != null) return d;
       } catch (_) {/* de volgende */}
     }
     return null;
   }
 
-  /// De dienst achter één beschrijving, met het lokale adres van deze pc ernaar toe.
-  Future<IgdDienst?> dienstVan(Uri locatie) async {
+  /// De dienst achter één beschrijving, met het eigen adres van deze pc ernaartoe: [lokaal] (het adres
+  /// waarop de modem op de zoekvraag antwoordde), of anders uit [eigenAdresNaar].
+  Future<IgdDienst?> dienstVan(Uri locatie, {String? lokaal}) async {
     final c = HttpClient()..connectionTimeout = wacht;
     try {
       final req = await c.getUrl(locatie).timeout(wacht);
@@ -111,34 +144,58 @@ class Igd {
       final xml = await utf8.decoder.bind(res).join().timeout(wacht);
       final d = dienstUitBeschrijving(xml, locatie);
       if (d == null) return null;
-      // Welk adres van deze pc de modem ziet: dat van de socket ernaartoe, niet een raadsel uit de
-      // lijst van netwerkkaarten (Tailscale, een VPN, een tweede kaart).
-      final s = await Socket.connect(d.controle.host, d.controle.port, timeout: wacht);
-      final lokaal = s.address.address;
-      s.destroy();
-      return IgdDienst(controle: d.controle, soort: d.soort, lokaal: lokaal);
+      var eigen = lokaal;
+      if (eigen == null) {
+        final alle = <InternetAddress>[];
+        for (final k in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
+          alle.addAll(k.addresses);
+        }
+        eigen = eigenAdresNaar(d.controle.host, alle);
+      }
+      // **Nooit een deur naar de modem zelf**, en nooit zonder eigen adres: dan liever geen modem.
+      // (Loopback is de nep-modem in een toets: daar zijn hier en daar hetzelfde.)
+      if (eigen == null || (eigen == d.controle.host && eigen != '127.0.0.1')) return null;
+      return IgdDienst(controle: d.controle, soort: d.soort, lokaal: eigen);
     } finally {
       c.close(force: true);
     }
   }
 
-  Future<List<Uri>> _ssdp(Duration zoektijd) async {
+  Future<Map<Uri, InternetAddress>> _ssdp(Duration zoektijd) async {
     // **Nooit vanuit een toets.** Een toets mag de echte modem niet vinden, laat staan er een deur in
     // zetten: dat opent Sabers pc voor het internet. Op 14-10-2026 haalde een mutatie de bewaking in
     // `sharing.dart` weg, en toen zocht een toets op het echte netwerk (nagekeken: er kwam geen deur).
     // Toetsen geven de nep-modem met `locatie` mee; zonder die zoekt er niets.
-    if (Platform.environment.containsKey('FLUTTER_TEST')) return const [];
-    final gevonden = <Uri>{};
+    if (Platform.environment.containsKey('FLUTTER_TEST')) return const {};
+    // **Per adres op het eigen netwerk binden, niet aan anyIPv4.** Gemeten op 15-10-2026 op Sabers pc
+    // (Ethernet, Tailscale en een VirtualBox-kaart): gebonden aan anyIPv4 antwoordde er niets, en de
+    // deur bleef elke tien minuten "geen modem met UPnP gevonden" zeggen; gebonden aan 192.168.0.117
+    // antwoordde de F3896LG meteen. De zoekvraag ging de verkeerde kaart uit. De poortproef van 14-10
+    // had het al opgeschreven ("zonder binden vond hij niets") — en toch stond het hier verkeerd.
+    final adressen = <InternetAddress>[];
+    try {
+      for (final k in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
+        adressen.addAll(k.addresses.where(lanAdresVoorSsdp));
+      }
+    } catch (_) {/* dan geen */}
+    // Per beschrijving het eigen adres waarop het antwoord binnenkwam: dat is het adres van deze pc dat
+    // de modem kan bereiken, en dus de NewInternalClient van de deur.
+    final gevonden = <Uri, InternetAddress>{};
+    await Future.wait([for (final a in adressen) _ssdpVia(a, zoektijd, gevonden)]);
+    return gevonden;
+  }
+
+  Future<void> _ssdpVia(InternetAddress adres, Duration zoektijd, Map<Uri, InternetAddress> gevonden) async {
     RawDatagramSocket? s;
     try {
-      s = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      s = await RawDatagramSocket.bind(adres, 0);
       final sock = s;
       sock.listen((e) {
         if (e != RawSocketEvent.read) return;
         final d = sock.receive();
         if (d == null) return;
         final l = ssdpLocatie(utf8.decode(d.data, allowMalformed: true));
-        if (l != null) gevonden.add(l);
+        if (l != null) gevonden.putIfAbsent(l, () => adres);
       });
       for (final st in const [
         'urn:schemas-upnp-org:device:InternetGatewayDevice:2',
@@ -149,11 +206,10 @@ class Igd {
       }
       await Future<void>.delayed(zoektijd);
     } catch (_) {
-      // Geen netwerk of geen multicast: dan geen modem gevonden.
+      // Geen netwerk of geen multicast op deze kaart: dan via deze geen modem.
     } finally {
       s?.close();
     }
-    return gevonden.toList();
   }
 
   /// Eén SOAP-vraag, over een eigen verbinding (de F3896LG wil dat zo). Geeft de velden van het

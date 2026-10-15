@@ -207,6 +207,32 @@ void main() {
       expect(laatstVanBuiten(const []), isNull);
     });
 
+    test('het eigen adres naar de modem: dat van het eigen netwerk, nooit dat van de modem zelf', () {
+      // Sabers pc op 15-10-2026: Ethernet, Tailscale en een VirtualBox-kaart. `Socket.address` gaf hier
+      // 192.168.0.1 — de modem; de deur zou naar de modem gewezen hebben.
+      final eigen = [
+        InternetAddress('100.97.101.113'),
+        InternetAddress('192.168.56.1'),
+        InternetAddress('192.168.0.117'),
+      ];
+      expect(eigenAdresNaar('192.168.0.1', eigen), '192.168.0.117', reason: 'hetzelfde /24 gaat voor');
+      expect(eigenAdresNaar('192.168.0.1', [InternetAddress('192.168.0.1'), ...eigen]), '192.168.0.117',
+          reason: 'het adres van de modem zelf is nooit het eigen adres');
+      expect(eigenAdresNaar('10.0.0.1', eigen), isNull, reason: 'geen eigen adres op dat netwerk: dan geen deur');
+      expect(eigenAdresNaar('127.0.0.1', eigen), '127.0.0.1', reason: 'de nep-modem in een toets');
+      expect(eigenAdresNaar('192.168.5.1', [InternetAddress('100.100.5.2'), InternetAddress('192.168.0.117')]),
+          '192.168.0.117', reason: 'anders hetzelfde /16, en Tailscale nooit');
+    });
+
+    test('de zoektocht gaat alleen langs het eigen netwerk: niet via Tailscale, loopback of link-local', () {
+      expect(lanAdresVoorSsdp(InternetAddress('192.168.0.117')), isTrue);
+      expect(lanAdresVoorSsdp(InternetAddress('10.1.2.3')), isTrue);
+      expect(lanAdresVoorSsdp(InternetAddress('172.20.0.5')), isTrue);
+      for (final a in ['100.97.101.113', '127.0.0.1', '169.254.3.4', '81.82.83.84']) {
+        expect(lanAdresVoorSsdp(InternetAddress(a)), isFalse, reason: a);
+      }
+    });
+
     test('nooit 47820 of 47822 als buitenpoort', () {
       expect(kUitwijkPoorten, isNot(contains(47820)));
       expect(kUitwijkPoorten, isNot(contains(47822)));

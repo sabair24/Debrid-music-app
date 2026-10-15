@@ -12,7 +12,6 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -357,14 +356,4 @@ class DeurNaarBuiten extends ChangeNotifier {
     _volgende?.cancel();
     super.dispose();
   }
-}
-
-/// Voor een toets die op een andere machine draait: het adres waarop deze pc een socket naar [host]
-/// opent. Zelfde manier als [Igd.dienstVan].
-@visibleForTesting
-Future<String> lokaalAdresNaar(String host, int poort) async {
-  final s = await Socket.connect(host, poort, timeout: const Duration(seconds: 3));
-  final a = s.address.address;
-  s.destroy();
-  return a;
 }
