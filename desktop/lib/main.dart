@@ -146,6 +146,7 @@ import 'toestellen_lijst.dart';
 import 'tv.dart';
 import 'venster_start.dart';
 import 'zoekladder.dart';
+import 'zoekplafond.dart';
 import 'zoek_geheugen.dart';
 import 'updater.dart';
 import 'hartslag.dart';
@@ -5789,7 +5790,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     if (_slskLoaded) return Future.value(_albumSlsk);
     return _albumWideBezig ??= () async {
       try {
-        final r = await soulseek.search('${album.artist} ${album.title}');
+        // Zie albumZoekvraag: bij een titel als "V" gaat het jaar mee, anders zoekt dit op de artiest.
+        final r = await soulseek.search(albumZoekvraag(album.artist, album.title, jaar: album.year));
         // De velden ook als de pagina weg is — dat kost niets, en een setState mag dan niet meer.
         _albumSlsk = r;
         _slskLoaded = true;
@@ -8240,7 +8242,7 @@ class _PersonPageState extends State<PersonPage> {
                       (_) => Scaffold(
                         backgroundColor: _bg,
                         appBar: AppBar(backgroundColor: _bg, title: Text(w.title)),
-                        body: SingleChildScrollView(child: SourcesView(query: '${widget.name} ${w.title}')),
+                        body: SingleChildScrollView(child: SourcesView(query: albumZoekvraag(widget.name, w.title, jaar: int.tryParse(w.year ?? '')))),
                       ),
                     ),
                   );
@@ -22054,13 +22056,18 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     return vanPersing;
   }
 
+  /// De vraag voor de hele plaat, voor de telling naast de rijen én voor "Bronnen voor album". Zie
+  /// [albumZoekvraag]: "Live V" werd voor Soulseek "live" — 60.143 bestanden, en een crash.
+  String get _albumVraag => albumZoekvraag(widget.artistName, widget.album.title,
+      jaar: int.tryParse(widget.album.year ?? ''));
+
   Future<void> _preloadSoulseek() async {
     if (!mounted) return;
     final soulseek = context.read<SoulseekService>();
     if (!soulseek.available) return;
     setState(() => _slskBusy = true);
     try {
-      final r = await soulseek.search('${widget.artistName} ${widget.album.title}', onPartial: (p) {
+      final r = await soulseek.search(_albumVraag, onPartial: (p) {
         if (mounted) setState(() => _albumSlsk = p);
       });
       if (mounted) setState(() { _albumSlsk = r; _slskBusy = false; });
@@ -22315,7 +22322,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
           if (_expanded == _albumLevel)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: SourcesView(query: '${widget.artistName} ${al.title}', authority: _release),
+              child: SourcesView(query: _albumVraag, authority: _release),
             ),
           // Geen beschrijving bij een plaat die deze pagina niet heeft kunnen identificeren.
           //

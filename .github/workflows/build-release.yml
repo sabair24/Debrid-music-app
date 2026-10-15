@@ -210,7 +210,7 @@ jobs:
             test/tidal_test.dart test/tidal_zoeken_test.dart \
             test/rutracker_codetabel_test.dart \
             test/slsk_groepen_test.dart \
-            test/versie_uit_map_test.dart test/soulseek_query_test.dart \
+            test/versie_uit_map_test.dart test/soulseek_query_test.dart test/zoekplafond_test.dart \
             test/wat_is_nieuw_test.dart test/heropname_test.dart \
             test/place_file_test.dart test/authority_test.dart \
             test/wat_je_typte_test.dart test/renumber_test.dart \

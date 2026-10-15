@@ -2660,11 +2660,21 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
   // Anything the filename says beyond the title must be the artist, the album, or the folders it
   // sits in — otherwise it is another song sharing a word with this one.
   final known = fileWords(_teVergelijken('$artist ${path.replaceAll(_padScheiding, ' ')}'.replaceAll(baseName(path), '')));
+  // **De naam van de artiest is geen versiewoord.** De band Live heet zo, en elke peer die de artiest
+  // in de bestandsnaam zet — "Live - V - 13 - Overcome.flac", "13-live-overcome.flac" — droeg daardoor
+  // het woord "live", en dat telde als een live-opname. Gemeld op 15-10-2026: "Overcome" kreeg één
+  // bron. Alleen buiten haakjes: "Overcome (Live).flac" blijft een live-opname, ook van deze band.
+  // [mapVerraadtAndereVersie] laat de artiest om dezelfde reden al buiten beschouwing voor de mappen.
+  final vanArtiest = fileWords(_teVergelijken(artist))
+    ..removeAll(fileWords(_teVergelijken([for (final m in _haakjesDeelRe.allMatches(naam)) m[0]!].join(' '))));
   bool klopt(String vergelijkbaar) {
     final tw = fileWords(_teVergelijken(vergelijkbaar));
     if (tw.isEmpty) return false;
     if (tw.intersection(fw).length / tw.length < 0.75) return false;
-    if (tw.difference(fw).union(fw.difference(tw)).any(_versionWordRe.hasMatch)) return false;
+    if (tw.difference(fw).any(_versionWordRe.hasMatch) ||
+        fw.difference(tw).any((w) => _versionWordRe.hasMatch(w) && !vanArtiest.contains(w))) {
+      return false;
+    }
     // Een los getal dat de titel niet noemt, is een volgnummer ("3586. Alana Dante - …"), geen woord.
     return !fw.difference(tw).any((w) => !known.contains(w) && !_alleenCijfers.hasMatch(w));
   }
@@ -2676,6 +2686,7 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
 }
 
 final _alleenCijfers = RegExp(r'^\d+$');
+final _haakjesDeelRe = RegExp(r'[(\[{][^)\]}]*[)\]}]');
 
 /// De titel zonder "(feat. Diam's)", of null als er geen gast in staat. Zie `zeefKandidatenNu`.
 String? titelZonderGast(String titel) {

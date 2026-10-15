@@ -37,6 +37,7 @@ import 'wavpack_kop.dart' show readWvKop;
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
 import 'vervangjacht.dart';
+import 'zoekplafond.dart';
 
 /// Hoort deze bron te worden teruggedeeld nadat je hem hebt binnengehaald?
 ///
@@ -928,12 +929,15 @@ class SoulseekService {
     final blocked = client.whyNotLogin;
     if (blocked != null) throw blocked;
     final rondes = zoekRondes(query);
+    // Nooit meer dan [kZoekPlafond] bestanden, de best passende eerst — zie zoekplafond.dart. "Live V"
+    // gaf 60.143 bestanden: de pc stond 6 s stil om ze te versturen en de gsm crashte erop.
+    final deel = onPartial == null ? null : (List<SoulseekFile> p) => onPartial(beperkZoekuitslag(query, p));
     var laatste = <SoulseekFile>[];
     for (final ronde in rondes) {
       // De RUIMSTE vraag van deze ronde, want daar kunnen de resultaten vandaan komen. Zie
       // [ruimerGezocht]: dat is precies waar het scherm eerlijk over hoort te zijn.
       gebruikteVraag?.call(ronde.last);
-      laatste = await _searchOnce(ronde, onPartial);
+      laatste = beperkZoekuitslag(query, await _searchOnce(ronde, deel));
       if (laatste.isNotEmpty) return laatste;
       if (client.whyNotLogin != null) throw client.whyNotLogin!;
     }
