@@ -80,7 +80,26 @@ class LanSharing extends ChangeNotifier {
 
   /// De deur naar buiten in de modem (`deur.dart`). Alleen aan als "Bereikbaar van buitenaf" aan staat,
   /// de versleutelde verbinding aan staat, en 47821 echt luistert. Nooit in een toets (poort 0).
-  late final DeurNaarBuiten deur = DeurNaarBuiten(log: _upnpLog.line)..addListener(notifyListeners);
+  late final DeurNaarBuiten deur = DeurNaarBuiten(
+    log: _upnpLog.line,
+    // Waar de modem stond, voor de volgende start (geen zoektocht nodig). Geen geheim: een adres op
+    // het eigen netwerk.
+    onthouden: (
+      lees: () {
+        try {
+          final f = File('${_appDir()}${Platform.pathSeparator}upnp_modem.txt');
+          return f.existsSync() ? Uri.tryParse(f.readAsStringSync().trim()) : null;
+        } catch (_) {
+          return null;
+        }
+      },
+      bewaar: (l) {
+        try {
+          File('${_appDir()}${Platform.pathSeparator}upnp_modem.txt').writeAsStringSync('$l');
+        } catch (_) {}
+      },
+    ),
+  )..addListener(notifyListeners);
   late final WarmLog _upnpLog = WarmLog('$logDir${Platform.pathSeparator}upnp.log');
 
   /// Moet de deur naar buiten open? Zie [deur].

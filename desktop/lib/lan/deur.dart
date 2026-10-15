@@ -101,10 +101,32 @@ class DeurNaarBuiten extends ChangeNotifier {
     DateTime Function()? klok,
     this.ronde = const Duration(minutes: 10),
     this.adresElke = const Duration(minutes: 5),
+    this.onthouden,
   })  : igd = igd ?? Igd(),
         _klok = klok ?? DateTime.now {
-    _zoek = zoekModem ?? () => this.igd.zoek();
+    _zoek = zoekModem ??
+        () async {
+          // **Eerst waar hij de vorige keer stond**, zonder zoektocht. Gemeten op 15-10-2026: bij het
+          // opstarten van 3.9.486 vond de zoektocht (SSDP) de modem niet, terwijl vijf losse zoektochten
+          // daarna en de start van 3.9.487 hem wel vonden — bij het opstarten is de app zo druk dat het
+          // antwoord van de modem te laat gelezen wordt. Een vaste vraag naar het bekende adres heeft
+          // daar geen last van.
+          final l = onthouden?.lees();
+          if (l != null) {
+            try {
+              final d = await this.igd.zoek(locatie: l);
+              if (d != null) return d;
+            } catch (_) {/* dan zoeken */}
+          }
+          return this.igd.zoek();
+        };
   }
+
+  /// Waar de modem de vorige keer gevonden werd (een bestand in de app-map). Null in een toets.
+  final ({Uri? Function() lees, void Function(Uri locatie) bewaar})? onthouden;
+
+  /// Hoe vaak de ronde na elkaar mislukte: dan sneller opnieuw (30 s, 1, 2, 5 min, dan [ronde]).
+  int _mislukt = 0;
 
   /// Waar de versleutelde buiteningang op deze pc luistert.
   final int internePoort;
@@ -208,6 +230,10 @@ class DeurNaarBuiten extends ChangeNotifier {
   /// Wanneer de volgende ronde komt: [ronde], maar nooit later dan de halve toegekende lease.
   @visibleForTesting
   Duration get tussenpoos {
+    if (stand == DeurStand.mislukt && _mislukt > 0) {
+      const snel = [Duration(seconds: 30), Duration(minutes: 1), Duration(minutes: 2), Duration(minutes: 5)];
+      return _mislukt <= snel.length ? snel[_mislukt - 1] : ronde;
+    }
     final l = toegekend;
     if (vast || l == null || l <= 0) return ronde;
     final half = Duration(seconds: max(30, l ~/ 2));
@@ -223,9 +249,14 @@ class DeurNaarBuiten extends ChangeNotifier {
   Future<void> _ronde() async {
     if (!_aan) return;
     try {
+      final had = _dienst;
       final d = _dienst ??= await _zoek();
+      if (d != null && had == null) {
+        final l = d.locatie;
+        if (l != null) onthouden?.bewaar(l);
+      }
       if (d == null) {
-        _mislukt('Geen modem met UPnP gevonden. Zet UPnP aan in je modem, of zet de deur met de hand '
+        _misluktMet('Geen modem met UPnP gevonden. Zet UPnP aan in je modem, of zet de deur met de hand '
             '(zie de stappen hieronder).');
         return;
       }
@@ -245,7 +276,7 @@ class DeurNaarBuiten extends ChangeNotifier {
         _adresGevraagd = nu;
         if (ip == null || !isPubliekAdres(ip)) {
           publiekAdres = null;
-          _mislukt('Je modem heeft zelf geen publiek adres (${ip ?? 'geen'}): er zit nog een router of je '
+          _misluktMet('Je modem heeft zelf geen publiek adres (${ip ?? 'geen'}): er zit nog een router of je '
               'provider tussen (dubbele NAT of CGNAT). Rechtstreeks van buiten kan dan niet; Tailscale blijft werken.');
           return;
         }
@@ -258,9 +289,10 @@ class DeurNaarBuiten extends ChangeNotifier {
       if (!_aan) return; // intussen uitgezet
       stand = DeurStand.open;
       waarom = null;
+      _mislukt = 0;
       laatstGezet = _klok();
     } on IgdFout catch (f) {
-      _mislukt(switch (f.code) {
+      _misluktMet(switch (f.code) {
         606 => 'Je modem laat de app geen deur zetten (UPnP-fout 606). Zet de deur met de hand.',
         501 => 'Je modem weigerde de deur (UPnP-fout 501). Zet de deur met de hand.',
         _ => 'De modem weigerde: $f.',
@@ -268,14 +300,15 @@ class DeurNaarBuiten extends ChangeNotifier {
     } on Object catch (e) {
       // Onbereikbaar of iets onverwachts: volgende ronde opnieuw zoeken.
       _dienst = null;
-      _mislukt('De modem antwoordt niet ($e).');
+      _misluktMet('De modem antwoordt niet ($e).');
     } finally {
       notifyListeners();
       _plan();
     }
   }
 
-  void _mislukt(String zin) {
+  void _misluktMet(String zin) {
+    _mislukt++;
     stand = _aan ? DeurStand.mislukt : DeurStand.uit;
     waarom = zin;
     _log('deur naar buiten MISLUKT: $zin');

@@ -19,7 +19,7 @@ import 'dart:io';
 
 /// De dienst in de modem waar de deuren gezet worden.
 class IgdDienst {
-  const IgdDienst({required this.controle, required this.soort, required this.lokaal});
+  const IgdDienst({required this.controle, required this.soort, required this.lokaal, this.locatie});
 
   /// Het adres van de SOAP-ingang (`controlURL`).
   final Uri controle;
@@ -29,6 +29,10 @@ class IgdDienst {
 
   /// Het adres van deze pc zoals de modem hem ziet: de `NewInternalClient` van elke deur.
   final String lokaal;
+
+  /// Waar de beschrijving van de modem staat: om te onthouden, zodat de volgende keer geen zoektocht
+  /// nodig is (zie `DeurNaarBuiten`).
+  final Uri? locatie;
 }
 
 /// Een weigering van de modem, met zijn eigen code.
@@ -155,7 +159,7 @@ class Igd {
       // **Nooit een deur naar de modem zelf**, en nooit zonder eigen adres: dan liever geen modem.
       // (Loopback is de nep-modem in een toets: daar zijn hier en daar hetzelfde.)
       if (eigen == null || (eigen == d.controle.host && eigen != '127.0.0.1')) return null;
-      return IgdDienst(controle: d.controle, soort: d.soort, lokaal: eigen);
+      return IgdDienst(controle: d.controle, soort: d.soort, lokaal: eigen, locatie: locatie);
     } finally {
       c.close(force: true);
     }

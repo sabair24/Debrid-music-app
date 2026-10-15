@@ -374,6 +374,71 @@ void main() {
     expect(deur.stand, DeurStand.open, reason: 'opnieuw gezocht, en gevonden op zijn nieuwe poort');
   });
 
+  test('het adres van de modem onthouden: de volgende start zonder zoektocht', () async {
+    // Zonder `zoekModem`: dan de echte weg — eerst het onthouden adres, dan pas SSDP (die onder een toets
+    // nooit zoekt, zie igd_nooit_echt_test). Zo bewijst dit dat het onthouden adres alleen al volstaat.
+    Uri? bewaard = modem.locatie;
+    final d = DeurNaarBuiten(
+      igd: Igd(wacht: const Duration(seconds: 2)),
+      log: regels.add,
+      klok: () => klok,
+      onthouden: (lees: () => bewaard, bewaar: (l) => bewaard = l),
+    );
+    addTearDown(d.dispose);
+    await d.zetAan();
+    expect(d.stand, DeurStand.open, reason: d.waarom);
+    expect(bewaard, modem.locatie, reason: 'en hij onthoudt waar hij hem vond');
+  });
+
+  test('niets onthouden en geen zoektocht: geen modem, en het onthouden adres blijft leeg', () async {
+    Uri? bewaard;
+    final d = DeurNaarBuiten(log: regels.add, onthouden: (lees: () => bewaard, bewaar: (l) => bewaard = l));
+    addTearDown(d.dispose);
+    await d.zetAan();
+    expect(d.stand, DeurStand.mislukt);
+    expect(bewaard, isNull);
+  });
+
+  test('na een mislukking sneller opnieuw: 30 s, dan 1 min; na een gelukte ronde weer gewoon', () async {
+    var gevonden = false;
+    final d = DeurNaarBuiten(
+      zoekModem: () async => gevonden ? Igd(wacht: const Duration(seconds: 2)).zoek(locatie: modem.locatie) : null,
+      igd: Igd(wacht: const Duration(seconds: 2)),
+      log: regels.add,
+      klok: () => klok,
+    );
+    addTearDown(d.dispose);
+    await d.zetAan();
+    expect(d.tussenpoos, const Duration(seconds: 30));
+    await d.nuEenRonde();
+    expect(d.tussenpoos, const Duration(minutes: 1));
+    gevonden = true;
+    await d.nuEenRonde();
+    expect(d.stand, DeurStand.open);
+    expect(d.tussenpoos, d.ronde, reason: 'lease 3600: de gewone tien minuten');
+    // Weer een storing na een gelukte ronde: opnieuw vanaf 30 s, niet verder waar de vorige reeks stopte.
+    await modem.stop();
+    verder(600);
+    await d.nuEenRonde();
+    expect(d.stand, DeurStand.mislukt);
+    expect(d.tussenpoos, const Duration(seconds: 30));
+    await modem.start();
+  });
+
+  test('wat de zoektocht vond, wordt onthouden voor de volgende start', () async {
+    Uri? bewaard;
+    final d = DeurNaarBuiten(
+      zoekModem: () => Igd(wacht: const Duration(seconds: 2)).zoek(locatie: modem.locatie),
+      igd: Igd(wacht: const Duration(seconds: 2)),
+      log: regels.add,
+      klok: () => klok,
+      onthouden: (lees: () => bewaard, bewaar: (l) => bewaard = l),
+    );
+    addTearDown(d.dispose);
+    await d.zetAan();
+    expect(bewaard, modem.locatie);
+  });
+
   test('geen modem met UPnP: een zin met wat te doen', () async {
     final zonder = DeurNaarBuiten(zoekModem: () async => null, log: regels.add);
     addTearDown(zonder.dispose);
