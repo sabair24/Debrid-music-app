@@ -2676,6 +2676,21 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
 }
 
 final _alleenCijfers = RegExp(r'^\d+$');
+
+/// De titel zonder "(feat. Diam's)", of null als er geen gast in staat. Zie `zeefKandidatenNu`.
+String? titelZonderGast(String titel) {
+  final z = titel.replaceAll(_gastRe, ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+  return z.isEmpty || z == titel.trim() ? null : z;
+}
+
+/// De woorden van de gast in een titel: "À 20 ans (feat. Diam's)" → {diam}.
+Set<String> gastWoorden(String titel) {
+  final uit = <String>{};
+  for (final m in _gastRe.allMatches(titel)) {
+    uit.addAll(fileWords(m[0]!));
+  }
+  return uit..removeAll(const {'feat', 'featuring', 'ft'});
+}
 final _gastRe = RegExp(r'[(\[]\s*(?:feat\.?|featuring|ft\.?)\s[^)\]]*[)\]]|\b(?:feat\.|featuring|ft\.)\s[^(\[]*?(?=\s[-–]\s|[(\[]|$)',
     caseSensitive: false);
 final _afkortingRe = RegExp(r'\b(?:[A-Za-z]\.){2,}');

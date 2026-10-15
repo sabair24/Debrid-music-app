@@ -74,4 +74,66 @@ void main() {
     expect(main.contains('    if (!identical(_slskPerTitelVan, _albumSlsk)) {'), isTrue,
         reason: 'een nieuw zoekresultaat begint het geheugen opnieuw');
   });
+
+  group('een gast in de titel die de bestanden niet noemen', () {
+    SoulseekFile f(String pad, int sec, {String peer = 'p'}) => SoulseekFile(
+        username: peer, filename: pad, size: 30000000, speed: 1000000, queueLength: 0, freeSlots: true, durationSec: sec);
+    // Letterlijk wat Soulseek op 15-10-2026 gaf voor "amel bent 20 ans".
+    final amel = [
+      f(r'music\Amel Bent\A 20 ans [2007]\03. A 20 Ans.flac', 231, peer: 'a'),
+      f(r'music\Amel Bent\A 20 ans [2007]\02. J' "'" r'ai Changé D' "'" r'avis.flac', 208, peer: 'a'),
+      f(r'downloads\Musique\Flac\Français\Amel Bent\Amel Bent - A 20 ans [2007]\03. A 20 Ans.flac', 231, peer: 'b'),
+      f(r'downloads\Musique\Flac\Français\Amel Bent\Amel Bent - A 20 ans [2007]\14. Tu N' "'" r'es Plus Là (Version piano voix).flac', 258, peer: 'b'),
+    ];
+    const titel = "À 20 ans (feat. Diam's)";
+
+    test('Amel Bent: het bestand uit de albummap komt nu door, bij elke peer', () {
+      final uit = zeefKandidatenNu(amel, titel: titel, seconden: 231, artiest: 'Amel Bent', album: 'À 20 ans');
+      expect(uit.map((x) => x.username), ['a', 'b']);
+      expect(uit.every((x) => x.filename.endsWith('03. A 20 Ans.flac')), isTrue);
+    });
+
+    test('maar niet buiten een map die het album noemt', () {
+      final los = [f(r'Diversen\Franse hits\A 20 Ans.flac', 231)];
+      expect(zeefKandidatenNu(los, titel: titel, seconden: 231, artiest: 'Amel Bent', album: 'À 20 ans'), isEmpty);
+    });
+
+    test('en niet met een lengte die meer dan 3 s afwijkt', () {
+      final ander = [f(r'music\Amel Bent\A 20 ans [2007]\03. A 20 Ans.flac', 236)];
+      expect(zeefKandidatenNu(ander, titel: titel, seconden: 231, artiest: 'Amel Bent', album: 'À 20 ans'), isEmpty);
+    });
+
+    test('en niet als dezelfde map de versie mét gast apart heeft — dan is het kale bestand de solo', () {
+      // Adele: "Easy On Me" solo én als duet op dezelfde plaat.
+      final adele = [
+        f(r'Adele\30 (Deluxe)\01 Easy On Me.flac', 224),
+        f(r'Adele\30 (Deluxe)\13 Easy On Me (feat. Chris Stapleton).mp3', 225),
+      ];
+      final uit = zeefKandidatenNu(adele,
+          titel: 'Easy On Me (feat. Chris Stapleton)', seconden: 225, artiest: 'Adele', album: '30 (Deluxe)');
+      expect(uit.map((x) => x.filename), [r'Adele\30 (Deluxe)\13 Easy On Me (feat. Chris Stapleton).mp3'],
+          reason: 'de strenge zeef vindt het duet; de solo komt er nooit bij');
+      // Een albumnaam met een woord erin, anders staat de terugval al uit voor deze regel aan bod komt
+      // (een titel als "30" geeft geen woord om de map aan te herkennen).
+      final zonderDuet = zonderGast([
+        f(r'Adele\Thirty (Deluxe)\01 Easy On Me.flac', 224),
+        f(r'Adele\Thirty (Deluxe)\13 Easy On Me (feat. Chris Stapleton).flac', 260),
+      ], titel: 'Easy On Me (feat. Chris Stapleton)', seconden: 224, artiest: 'Adele', album: 'Thirty (Deluxe)');
+      expect(zonderDuet, isEmpty, reason: 'de map draagt de gast in een andere naam: het kale bestand is de solo');
+      expect(
+          zonderGast([f(r'Adele\Thirty (Deluxe)\01 Easy On Me.flac', 224)],
+              titel: 'Easy On Me (feat. Chris Stapleton)', seconden: 224, artiest: 'Adele', album: 'Thirty (Deluxe)'),
+          hasLength(1),
+          reason: 'zonder aparte gastversie in de map wel — dat is het geval van Amel Bent');
+    });
+
+    test('de knop op de catalogusalbumpagina gaat door dezelfde zeef', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final s = main.indexOf('Future<List<SoulseekFile>> _slskCandidatesForTrack(');
+      final e = main.indexOf('Future<void> _downloadTrack(', s);
+      final bron = main.substring(s, e);
+      expect(bron, contains('await zeefKandidaten(r,'));
+      expect(bron, isNot(contains('fileOffersTitle(')));
+    });
+  });
 }

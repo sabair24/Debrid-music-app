@@ -12,19 +12,66 @@ library;
 
 import 'dart:isolate';
 
-import 'organize.dart' show fileOffersTitle;
+import 'organize.dart' show baseName, fileOffersTitle, fileWords, gastWoorden, titelZonderGast;
 import 'soulseek.dart' show SoulseekFile;
 
 /// De zeef zelf, zonder isolate. Voor wie hem op één titel tegelijk nodig heeft en het resultaat
 /// onthoudt, zoals de telling naast elke rij op de catalogusalbumpagina.
+///
+/// Vindt de strenge zeef niets bij een titel met een gast, dan [zonderGast].
 List<SoulseekFile> zeefKandidatenNu(List<SoulseekFile> files,
-        {required String titel, int? seconden, required String artiest, String? album}) =>
-    [
-      for (final f in files)
-        if (f.isAudio &&
-            fileOffersTitle(titel, seconden, artiest, f.filename, f.durationSec, album: album))
-          f
-    ];
+    {required String titel, int? seconden, required String artiest, String? album}) {
+  final streng = [
+    for (final f in files)
+      if (f.isAudio && fileOffersTitle(titel, seconden, artiest, f.filename, f.durationSec, album: album)) f
+  ];
+  if (streng.isNotEmpty) return streng;
+  return zonderGast(files, titel: titel, seconden: seconden, artiest: artiest, album: album);
+}
+
+String _map(String pad) {
+  final i = pad.lastIndexOf(RegExp(r'[\\/]'));
+  return i < 0 ? '' : pad.substring(0, i);
+}
+
+/// De terugval voor een titel met een gast die de bestandsnamen niet noemen.
+///
+/// **Het gemelde geval, 15-10-2026.** Amel Bent, *À 20 ans* (2007), nummer 3: Deezer noemt het "À 20
+/// ans (feat. Diam's)", en bij elke peer heet het bestand "03. A 20 Ans.flac" — 231 seconden, precies
+/// de 3:51 van de plaat. [fileOffersTitle] eist alle woorden van de titel, dus ook "feat" en "diam", en
+/// hield van de drie woorden er één over: geen enkele bron, terwijl de andere nummers er 13 tot 16 hadden.
+///
+/// **Waarom niet gewoon de gast laten vallen.** Een gast kan het verschil zíjn: "Easy On Me" van Adele
+/// bestaat solo én als duet. Daarom alleen als de strenge zeef niets vond, en dan alleen een bestand
+///
+/// * in een map die het ALBUM noemt — het is nummer zoveel van deze plaat, en op deze plaat is het het
+///   duet;
+/// * met een lengte binnen 3 seconden van de officiële, en beide lengtes bekend;
+/// * in een map waarin géén ander bestand de gast wél noemt — staat daar een aparte versie mét de gast,
+///   dan is het kale bestand de solo.
+List<SoulseekFile> zonderGast(List<SoulseekFile> files,
+    {required String titel, int? seconden, required String artiest, String? album}) {
+  final kaal = titelZonderGast(titel);
+  final a = album?.trim() ?? '';
+  if (kaal == null || a.isEmpty || seconden == null || seconden <= 0) return const [];
+  final albumWoorden = fileWords(a.replaceAll(RegExp(r'\s*[\[(][^\])]*[\])]\s*$'), ''));
+  if (albumWoorden.isEmpty) return const [];
+  final gast = gastWoorden(titel);
+  final mappenMetGast = {
+    for (final f in files)
+      if (f.isAudio && gast.isNotEmpty && fileWords(baseName(f.filename)).containsAll(gast)) _map(f.filename)
+  };
+  return [
+    for (final f in files)
+      if (f.isAudio &&
+          f.durationSec != null &&
+          (f.durationSec! - seconden).abs() <= 3 &&
+          !mappenMetGast.contains(_map(f.filename)) &&
+          fileWords(_map(f.filename).replaceAll(RegExp(r'[\\/]'), ' ')).containsAll(albumWoorden) &&
+          fileOffersTitle(kaal, seconden, artiest, f.filename, f.durationSec, album: album))
+        f
+  ];
+}
 
 /// Dezelfde zeef in een eigen isolate. Altijd, ook voor een korte lijst: een isolate opstarten kost
 /// een paar milliseconden, en dit draait midden in een download die er seconden over doet.
