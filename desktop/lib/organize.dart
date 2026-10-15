@@ -2624,14 +2624,21 @@ bool mapVerraadtAndereVersie(String title, String album, String artist, String p
 /// niet te onderscheiden van "een andere versie".
 bool fileOffersTitle(String title, int? titleDur, String artist, String path, int? fileDur,
     {String? album}) {
-  if (album != null && mapVerraadtAndereVersie(title, album, artist, path)) return false;
+  // **Een nepmerk weegt niet mee**, aan geen van beide kanten. "(Album Version)", "(Album Mix)" en
+  // "(Main Version)" zijn de gewone plaatopname (zie `_geenEchtMerk`), maar hier telden ze als twee
+  // woorden die in de bestandsnaam ontbraken, plus het versiewoord "version". Gemeld op 15-10-2026:
+  // op een album van Marc Lavoine kregen precies de nummers met "(Album Version)" in de titel nul
+  // bronnen, die zonder 21 tot 41 — "Passent Les Nuages (Album Version)" tegen "02 - Passent les
+  // nuages.flac" zei nee. Omgekeerd net zo. Een echt merk blijft staan ([withoutFakeVersion]).
+  final eigenlijk = withoutFakeVersion(title);
+  if (album != null && mapVerraadtAndereVersie(eigenlijk, album, artist, path)) return false;
   // Wat de titel over de VERSIE zegt, kan in de map staan in plaats van in de bestandsnaam. Zie
   // [versieVolgtUitMap]: op *My Songs* heet nummer 7 bij elke peer gewoon "07 Fields of Gold.flac",
   // en het merk "(My Songs Version)" staat één laag hoger. Zonder deze uitzondering werd juist de
   // goede kopie geweigerd en bleef alleen de gewone versie over.
-  final uitMap = versieVolgtUitMap(title, path);
-  final vergelijkbaar = uitMap ? withoutVersionText(title) : title;
-  final tw = fileWords(vergelijkbaar), fw = fileWords(baseName(path));
+  final uitMap = versieVolgtUitMap(eigenlijk, path);
+  final vergelijkbaar = uitMap ? withoutVersionText(eigenlijk) : eigenlijk;
+  final tw = fileWords(vergelijkbaar), fw = fileWords(withoutFakeVersion(baseName(path)));
   if (tw.isEmpty || fw.isEmpty) return false;
   if (tw.intersection(fw).length / tw.length < 0.75) return false;
   if (tw.difference(fw).union(fw.difference(tw)).any(_versionWordRe.hasMatch)) return false;
