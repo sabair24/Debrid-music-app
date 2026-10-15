@@ -16,6 +16,7 @@ import '../kapot_bestand.dart';
 import '../library.dart';
 import '../models.dart';
 import '../musicbrainz.dart';
+import '../nieuwe_releases.dart' show NieuweReleases, ReleasesLijst;
 import '../online.dart';
 import '../organize.dart';
 import '../paths.dart';
@@ -73,7 +74,7 @@ String? weigerVanBuiten(String pad, String methode) {
   const exact = {
     '/health', '/api/catalog', '/api/album/facts', '/api/state', '/api/state/ops', '/api/uitwijk',
     '/api/config', '/api/radio', '/api/jobs', '/api/corrections', '/api/move/plan', '/api/move/apply',
-    '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status',
+    '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
   };
   const voorvoegsels = ['/stream/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
   if (exact.contains(pad) || voorvoegsels.any(pad.startsWith)) return null;
@@ -552,6 +553,8 @@ class LanServer {
         return _onlineSearch(req);
       case '/api/online/bestanden':
         return _onlineBestanden(req);
+      case '/api/releases':
+        return _releases(req);
       case '/api/online/tracklist':
         return _onlineTracklist(req);
       case '/api/online/download':
@@ -1563,6 +1566,25 @@ class LanServer {
   /// difference between "the pc can't do that" and a spinner that never stops.
   Future<void> _unavailable(HttpRequest req, String why) =>
       _json(req.response, {'error': why}, status: HttpStatus.serviceUnavailable);
+
+  /// De balk "Nieuwe release" (`nieuwe_releases.dart`): wat er ligt, meteen. Is het verouderd, dan
+  /// rekent de pc op de achtergrond opnieuw en krijgt het toestel de volgende keer de nieuwe lijst.
+  /// Alleen als er nog niets ligt — of het toestel op Ververs drukte — wacht deze vraag erop, en dan
+  /// hoogstens twintig seconden: de telefoon geeft het na dertig op.
+  Future<void> _releases(HttpRequest req) async {
+    final d = NieuweReleases.pc;
+    if (d == null) return _unavailable(req, 'Deze pc rekent geen nieuwe releases uit.');
+    var l = d.lijst;
+    if (l == null || req.uri.queryParameters['ververs'] == '1') {
+      l = await d.ververs().timeout(const Duration(seconds: 20), onTimeout: () => d.lijst);
+    } else if (d.verouderd) {
+      unawaited(d.ververs());
+    }
+    return _json(req.response, {
+      ...(l ?? ReleasesLijst(0, const [])).toJson(),
+      'bezig': d.bezig,
+    });
+  }
 
   /// Wat er in de gecachte torrents zit, voor de lijst onder een nummer op een toestel. Hoogstens
   /// veertig hashes per vraag, zoals het zoeken zelf ook de bovenste veertig bij TorBox navraagt.

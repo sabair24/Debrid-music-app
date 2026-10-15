@@ -96,6 +96,11 @@ final _verzamelwoord = RegExp(
     r'альбом|сборник|box\s*set|boxset|best\s+of|greatest|\bhits\b|essential)',
     caseSensitive: false);
 
+/// Een versie zonder de zanger, of door iemand anders gezongen.
+final _zonderStem = RegExp(
+    r'\b(instrumental|karaoke|a ?capp?ella|backing track|minus one|in the style of|tribute to|piano version)\b',
+    caseSensitive: false);
+
 /// Een vinylrip per kant: "01. Side A.flac", "Kant B".
 final _kant = RegExp(r'\b(side|kant|face|seite)\s*[a-h1-8]\b', caseSensitive: false);
 
@@ -139,6 +144,10 @@ TorrentPast torrentVoorNummer(
   }
   final woorden = _woorden(naam);
   final artiestErin = _noemtArtiest(woorden, artiest);
+  // Een instrumentale of karaokeversie is een ander nummer, tenzij je die zelf zoekt. Gezien op de pc
+  // (15-10-2026) onder "My Heart Will Go On": "Céline Dion - My Heart Will Go On (Instrumental).mp3".
+  // Remixen en "Mixes" niet: zo'n cd-single draagt meestal ook het origineel.
+  if (_zonderStem.hasMatch(naam) && !_zonderStem.hasMatch(t)) return TorrentPast.anders;
   if (t.isNotEmpty && artiestErin && _noemt(woorden, t)) return TorrentPast.nummer;
   final a = album?.trim() ?? '';
   if (a.isNotEmpty && artiestErin && _noemt(woorden, DiscogsService.plainTitle(a))) {

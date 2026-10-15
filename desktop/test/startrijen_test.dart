@@ -335,10 +335,12 @@ void main() {
 
   test('DE VAL: "Nieuwe release" duwt de eigen rijen niet meer omlaag als hij binnenkomt', () {
     // Hij komt van Deezer, seconden na "Recent toegevoegd" eronder (S26, koude start, 11-10-2026).
-    // Een skelet van precies zijn hoogte houdt de plek vrij zolang hij nog kan komen.
+    // Een skelet van precies zijn hoogte houdt de plek vrij zolang hij nog kan komen. Sinds 15-10-2026
+    // komt hij los van de andere rijen (`nieuwe_releases.dart`), dus hangt het skelet aan zijn eigen
+    // stand en niet meer aan die van de hitlijst.
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(
-        main.contains('        else if (_chartsLoading || _komtNog)\n'
+        main.contains('        else if (_nieuwLaadt || !_nieuwGevraagd)\n'
             '          Padding(\n'
             '            padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),\n'
             '            child: Skelet(breedte: double.infinity, hoogte: HeroCarousel.hoogte(context), radius: 18),'),

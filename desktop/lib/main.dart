@@ -139,6 +139,7 @@ import 'tiddl.dart';
 import 'torbox.dart';
 import 'torbox_stand.dart';
 import 'torrentvoornummer.dart';
+import 'nieuwe_releases.dart';
 import 'redacted.dart';
 import 'torznab.dart';
 import 'toestellen_lijst.dart';
@@ -992,6 +993,13 @@ Future<void> main() async {
   final speelstanden = Speelstanden()..idVanPad = library.gedeeldId;
   if (mode.owner) speelstanden.winkel = sharing.state;
   player.speelstandVan = speelstanden.standVan;
+  // De balk "Nieuwe release": op de pc berekend en bewaard, elke zes uur opnieuw; een toestel vraagt
+  // het de pc (`/api/releases`). Zie `nieuwe_releases.dart`.
+  if (mode.owner) {
+    final releases = maakNieuweReleases(library, speelstanden, naam: 'nieuwe_releases');
+    NieuweReleases.pc = releases;
+    unawaited(releases.laad().then((_) => releases.start()));
+  }
   // Duim omhoog of omlaag. Dezelfde vorm, dezelfde weg, en dezelfde `idVanPad` — zie hierboven.
   final oordelen = Oordelen()..idVanPad = library.gedeeldId;
   if (mode.owner) oordelen.winkel = sharing.state;
@@ -13049,6 +13057,30 @@ bool _genericArtist(String s) {
   return x.isEmpty || x == 'various' || x == 'various artists' || x == 'va' || x == 'onbekende artiest';
 }
 
+/// De releasedienst over deze bibliotheek. Op de pc de echte; op een toestel alleen als de pc te oud
+/// is om het zelf te doen. [naam] is de bestandsnaam van wat hij bewaart.
+NieuweReleases maakNieuweReleases(LibraryStore library, Speelstanden standen, {required String naam}) =>
+    NieuweReleases(
+      zoeker: NieuweReleasesZoeker(DeezerBaan.haal),
+      nummers: () => eigenArtiesten(
+          library.tracks.map((t) {
+            final s = standen.standVan(t);
+            return EigenNummer(
+              artiest: t.artist,
+              album: t.album,
+              titel: t.title,
+              beurten: s?.aantal ?? 0,
+              laatstMs: s?.laatstMs ?? 0,
+              jaar: t.year,
+            );
+          }),
+          overslaan: _genericArtist),
+      bezit: () => {for (final a in library.albums) bezitssleutel(a.artist, a.title)},
+      bestand: appFile('$naam.json'),
+      idsBestand: appFile('${naam}_ids.json'),
+      log: WarmLog('$logDir${Platform.pathSeparator}releases.log').line,
+    );
+
 // ── Tracks (flat, all library songs) ─────────────────────────────────────────
 class TracksView extends StatelessWidget {
   /// Library search + quality filter from the shell (null = show everything).
@@ -13324,8 +13356,16 @@ class _StartCache {
   static int get zaad => _basis + ronde;
 
   static List<CatalogAlbumHit> charts = [];
-  static List<CatalogAlbumHit> releases = [];
   static List<RecTrack> forYou = [];
+
+  /// De balk "Nieuwe release" en de rij eronder, en wanneer die het laatst gevraagd is. NIET in
+  /// [leeg]: hij heeft zijn eigen houdbaarheid (op de pc zes uur, zie `nieuwe_releases.dart`), en een
+  /// Ververs vraagt hem apart opnieuw — zonder eerst een leeg vlak te tonen.
+  static List<NieuweUitgave> nieuw = [];
+  static int nieuwMs = 0;
+
+  /// Op een toestel met een pc die `/api/releases` niet kent: de eigen berekening.
+  static NieuweReleases? eigenReleases;
 
   /// De genres waarop "Top van dit moment" gefilterd is, zodat de kop kan zeggen waar de rij
   /// over gaat in plaats van het alleen te beloven.
@@ -13356,7 +13396,6 @@ class _StartCache {
   /// Ook de artiest-id's van de rijbaan gaan mee: die horen bij de vorige trekking.
   static void leeg() {
     charts = [];
-    releases = [];
     forYou = [];
     genres = [];
     omdatArtiest = '';
@@ -13383,7 +13422,8 @@ class _HomeStartViewState extends State<HomeStartView> {
   final _catalog = CatalogService();
   final _rec = RecommendService();
   List<CatalogAlbumHit> _charts = _StartCache.charts;
-  List<CatalogAlbumHit> _releases = _StartCache.releases;
+  List<NieuweUitgave> _nieuw = _StartCache.nieuw;
+  List<CatalogAlbumHit> get _releases => [for (final u in _nieuw) u.hit];
   List<RecTrack> _forYou = _StartCache.forYou;
   List<int> _genres = _StartCache.genres;
   String _omdatArtiest = _StartCache.omdatArtiest;
@@ -13402,9 +13442,76 @@ class _HomeStartViewState extends State<HomeStartView> {
   /// eronder omlaag duwden.
   bool get _komtNog => _seedsLoading || (!_seedsRequested && _forYou.isEmpty);
 
+  /// De nieuwe releases: gevraagd, en nog onderweg. Los van de andere rijen — de balk wachtte op
+  /// álles, ook op de AI, en dat was de helft van "laadt heel traag".
+  bool _nieuwGevraagd = false, _nieuwLaadt = false;
+
+  void _nieuwBijgewerkt() {
+    final l = NieuweReleases.pc?.lijst;
+    if (l != null && mounted) _toonNieuw(l);
+  }
+
+  void _toonNieuw(ReleasesLijst l) {
+    _StartCache.nieuw = l.uitgaven;
+    _StartCache.nieuwMs = DateTime.now().millisecondsSinceEpoch;
+    setState(() => _nieuw = l.uitgaven);
+  }
+
+  /// Haalt de releases: op de pc uit de dienst (meteen wat er ligt, en opnieuw als het verouderd is),
+  /// op een toestel bij de pc, en alleen bij een pc die de vraag niet kent zelf.
+  Future<void> _laadNieuw({bool dwing = false}) async {
+    final lib = context.read<LibraryStore>();
+    final standen = context.read<Speelstanden>();
+    setState(() {
+      _nieuwGevraagd = true;
+      _nieuwLaadt = true;
+    });
+    try {
+      final pc = NieuweReleases.pc;
+      if (pc != null) {
+        final l = pc.lijst;
+        if (l != null) _toonNieuw(l);
+        if (dwing || l == null || pc.verouderd) {
+          final nieuw = await pc.ververs();
+          if (nieuw != null && mounted) _toonNieuw(nieuw);
+        }
+      } else if (lib.remote != null) {
+        var antwoord = await lib.remote!.nieuweReleases(ververs: dwing);
+        // De pc rekent nog (eerste keer na een herstart): één keer opnieuw vragen.
+        if (antwoord.lijst?['bezig'] == true && (antwoord.lijst?['uitgaven'] as List?)?.isEmpty != false) {
+          await Future<void>.delayed(const Duration(seconds: 15));
+          if (!mounted) return;
+          antwoord = await lib.remote!.nieuweReleases();
+        }
+        final l = ReleasesLijst.fromJson(antwoord.lijst);
+        if (l != null && mounted) {
+          _toonNieuw(l);
+        } else if (antwoord.onbekend) {
+          final eigen = _StartCache.eigenReleases ??=
+              maakNieuweReleases(lib, standen, naam: 'nieuwe_releases_toestel');
+          if (eigen.lijst == null) await eigen.laad();
+          if (eigen.lijst != null && mounted) _toonNieuw(eigen.lijst!);
+          if (dwing || eigen.verouderd) {
+            final n = await eigen.ververs();
+            if (n != null && mounted) _toonNieuw(n);
+          }
+        }
+      }
+    } catch (_) {/* dan blijft staan wat er stond */}
+    if (mounted) setState(() => _nieuwLaadt = false);
+  }
+
+  @override
+  void dispose() {
+    NieuweReleases.pc?.stopLuisteren(_nieuwBijgewerkt);
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    // Rekent de pc op de achtergrond opnieuw, dan staat de nieuwe balk er meteen.
+    NieuweReleases.pc?.luister(_nieuwBijgewerkt);
     // Charts need no library — load them right away. Maar niet opnieuw als ze er al zijn: zie
     // [_StartCache]. Anders haalt elke terugkeer naar Start dezelfde lijst nog een keer op, met een
     // spinner en een andere volgorde dan je net zag.
@@ -13414,7 +13521,6 @@ class _HomeStartViewState extends State<HomeStartView> {
     if (_StartCache.verlopen) {
       _StartCache.leeg();
       _charts = [];
-      _releases = [];
       _forYou = [];
       _chartsLoading = true;
     }
@@ -13450,11 +13556,12 @@ class _HomeStartViewState extends State<HomeStartView> {
     _StartCache.leeg();
     setState(() {
       _charts = [];
-      _releases = [];
       _forYou = [];
       _chartsLoading = true;
       _seedsRequested = false;
     });
+    // De releases opnieuw berekenen, maar de oude laten staan tot de nieuwe er zijn.
+    unawaited(_laadNieuw(dwing: true));
     await _loadCharts();
   }
 
@@ -13509,19 +13616,15 @@ class _HomeStartViewState extends State<HomeStartView> {
         ? Future.value(<AiVoorstel>[])
         : AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
             .maakAanbevelingen(profielVoorAi);
-    final relF = _catalog.latestFromArtists(seeds);
+    // De nieuwe releases staan hier niet meer tussen: die komen apart, en meteen — zie [_laadNieuw].
     final fyF = _rec.discover(seeds.take(6).toList());
     final genreF = profiel.isEmpty
         ? Future.value(<CatalogAlbumHit>[])
         : _catalog.chartPerGenre(profiel);
     final omdatF =
         omdat == null ? Future.value(<RecTrack>[]) : _rec.discover([omdat]);
-    List<CatalogAlbumHit> rel = [];
     List<RecTrack> fy = [];
     List<CatalogAlbumHit> genreLijst = [];
-    try {
-      rel = await relF;
-    } catch (_) {}
     try {
       fy = await fyF;
     } catch (_) {}
@@ -13553,14 +13656,6 @@ class _HomeStartViewState extends State<HomeStartView> {
     // verwante artiesten binnen, en de verwanten van jouw bibliotheek zijn geregeld je bibliotheek.
     // Dezelfde functie als Ontdek gebruikt, zodat de twee schermen niet elk hun eigen antwoord op
     // "heb ik dit al?" krijgen.
-    //
-    // En de oogst van "Nieuw van jouw artiesten" gaat door [nieuwVanJouwArtiesten] vóór hij in de
-    // cache belandt. Hier stond `= rel`, rauw, en dat is precies hoe Dr. Alban uit de jaren 90 in
-    // een rij met de kop "Nieuw" terechtkwam. Filteren bij het OPBERGEN en niet bij het tonen: dan
-    // kan geen enkele volgende bewerking de rauwe lijst nog per ongeluk op het scherm zetten.
-    final ditJaar = DateTime.now().year;
-    _StartCache.releases = nieuwVanJouwArtiesten(rel,
-        jaren: {ditJaar, ditJaar - 1}, alInBezit: eigenPlaten);
     _StartCache.forYou = maxPerArtiest(nogNietInBezit(fy, bezit), (t) => t.artist, 2);
     // De hitlijst van JOUW genres vervangt de wereldlijst, zodra er een is. Eén per artiest, want
     // een hitlijst met dezelfde act op plaats 3 en 7 leest als een fout.
@@ -13581,7 +13676,6 @@ class _HomeStartViewState extends State<HomeStartView> {
     if (uitgezocht.isNotEmpty) _StartCache.uitgezocht = uitgezocht;
     _StartCache.opgehaaldMs = DateTime.now().millisecondsSinceEpoch;
     setState(() {
-      _releases = _StartCache.releases;
       _forYou = _StartCache.forYou;
       _charts = _StartCache.charts;
       _genres = _StartCache.genres;
@@ -13655,10 +13749,23 @@ class _HomeStartViewState extends State<HomeStartView> {
     final artists = lib.artists.where((a) => !_genericArtist(a)).toList();
     // Fire the personal rows the first time the library actually has artists.
     // Alleen als ze er nog niet zijn — een terugkeer naar Start hoeft ze niet opnieuw te halen.
-    if (!_seedsRequested && artists.isNotEmpty && _StartCache.releases.isEmpty && _StartCache.forYou.isEmpty) {
+    if (!_seedsRequested && artists.isNotEmpty && _StartCache.forYou.isEmpty) {
       _seedsRequested = true;
       final seeds = [...artists]..shuffle();
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadSeeds(seeds));
+    }
+    // De nieuwe releases los daarvan, en zodra er een bibliotheek is. Wat er al ligt staat er meteen;
+    // op een toestel hooguit om het halfuur opnieuw gevraagd.
+    if (!_nieuwGevraagd && artists.isNotEmpty) {
+      _nieuwGevraagd = true;
+      final halfuur = const Duration(minutes: 30).inMilliseconds;
+      if (NieuweReleases.pc != null ||
+          _StartCache.nieuw.isEmpty ||
+          DateTime.now().millisecondsSinceEpoch - _StartCache.nieuwMs > halfuur) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_laadNieuw());
+        });
+      }
     }
     final recent = [...lib.albums.where((a) => a.addedMs > 0)]..sort((a, b) => b.addedMs.compareTo(a.addedMs));
 
@@ -13690,16 +13797,11 @@ class _HomeStartViewState extends State<HomeStartView> {
           a,
     ], _StartCache.zaad);
     final anyLoading = _chartsLoading || _seedsLoading || (!_seedsRequested && lib.scanning);
-    // De balk heet NIEUWE RELEASE, dus staat er alleen iets van dit jaar in. Hij toonde albums uit 2011
-    // en 2016 omdat er nergens op jaar gefilterd werd: het nieuwste dat er van een artiest te vinden is,
-    // is iets anders dan nieuw.
-    //
-    // Eerst je eigen artiesten, dan de wereldwijde lijst — maar allebei door hetzelfde jaarfilter, want
-    // een hitlijst vol evergreens hoort hier net zomin. Blijft er dan niets over, dan verdwijnt de balk;
-    // dat is beter dan hem vullen met iets wat niet is wat het belooft.
-    final ditJaar = DateTime.now().year;
-    final eigen = uitJaar(_releases, ditJaar);
-    final hero = eigen.isNotEmpty ? eigen : uitJaar(_charts, ditJaar);
+    // De balk: wat er de laatste drie maanden verscheen bij de artiesten die je draait, en wat er
+    // binnenkort komt. Zie `nieuwe_releases.dart`. Geen terugval op de wereldwijde hitlijst meer — die
+    // zegt niets over jou, en dat was precies de klacht ("niet relevant met mijn artiesten").
+    final nu = DateTime.now();
+    final hero = _nieuw.take(7).toList();
 
     return BinnenkomstGroep(
       child: ListView(
@@ -13744,12 +13846,16 @@ class _HomeStartViewState extends State<HomeStartView> {
         if (hero.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),
-            child: HeroCarousel(hits: hero.take(7).toList()),
+            child: HeroCarousel(
+              hits: [for (final u in hero) u.hit],
+              koppen: {for (final u in hero) u.album.id: releaseKop(u, nu: nu)},
+              onderschriften: {for (final u in hero) u.album.id: releaseOnderschrift(u)},
+            ),
           )
         // Zolang hij nog kan komen, houdt een skelet van precies zijn hoogte de plek vrij. Hij komt
         // van Deezer, seconden na de eigen rijen hieronder, en duwde die dan 300 punten omlaag —
         // gezien op de S26 na een koude start op 11-10-2026, terwijl je net een hoes wilde aantikken.
-        else if (_chartsLoading || _komtNog)
+        else if (_nieuwLaadt || !_nieuwGevraagd)
           Padding(
             padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),
             child: Skelet(breedte: double.infinity, hoogte: HeroCarousel.hoogte(context), radius: 18),
@@ -13782,13 +13888,14 @@ class _HomeStartViewState extends State<HomeStartView> {
           _section('Top van dit moment',
               _charts.isEmpty ? _loadingRow() : _catalogRow(_charts.take(20).toList()),
               bij: _genreBijschrift),
-        if (_releases.isNotEmpty || _komtNog)
+        if (_releases.isNotEmpty || _nieuwLaadt)
           _section('Nieuw van jouw artiesten',
-              _releases.isEmpty ? _loadingRow() : _catalogRow(_releases.take(20).toList())),
-        // De rij is streng geworden — alleen dit jaar en vorig jaar, en geen catalogusherleveringen
-        // meer. Dan is leeg een normale uitkomst, en dan hoort er te staan waarom.
-        if (!anyLoading && _seedsRequested && _releases.isEmpty)
-          _legeRij(_waaromLeeg('Geen nieuwe releases van jouw artiesten dit jaar of vorig jaar.')),
+              _releases.isEmpty ? _loadingRow() : _catalogRow(_releases.take(20).toList()),
+              bij: 'de laatste drie maanden en wat eraan komt'),
+        // Streng: alleen de laatste drie maanden, geen heruitgaven. Dan is leeg een normale uitkomst,
+        // en dan hoort er te staan waarom.
+        if (!_nieuwLaadt && _nieuwGevraagd && _releases.isEmpty)
+          _legeRij('Niets nieuws van jouw artiesten de laatste drie maanden.'),
         if (!anyLoading && _charts.isEmpty && _releases.isEmpty && _forYou.isEmpty && recent.isEmpty)
           LeegVlak(
             teken: Icons.library_music_rounded,
@@ -13894,19 +14001,6 @@ class _HomeStartViewState extends State<HomeStartView> {
         padding: const EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte12),
         child: Text(uitleg, style: kTekstKlein.copyWith(color: _muted)),
       );
-
-  /// Wat er te melden valt over een rij die leeg bleef.
-  ///
-  /// De weigering van Deezer krijgt voorrang op "er is niets": dat is het antwoord waar de
-  /// gebruiker iets aan heeft, en het is ook het antwoord dat te repareren is door even te wachten.
-  String _waaromLeeg(String bijNiets) {
-    final fout = _catalog.laatsteFout.isNotEmpty ? _catalog.laatsteFout : _rec.laatsteFout;
-    if (fout.isEmpty) return bijNiets;
-    if (fout.toLowerCase().contains('quota')) {
-      return 'Even te snel achter elkaar gevraagd — probeer het zo nog eens met de verversknop.';
-    }
-    return 'Deezer gaf niets terug ($fout). Probeer de verversknop.';
-  }
 
   Widget _aiRow(List<({CatalogAlbumHit hit, String reden})> items) => ListView.separated(
         scrollDirection: Axis.horizontal,
@@ -18569,7 +18663,12 @@ class BioText extends StatelessWidget {
 /// the pointer is on it so it can't slide away mid-read.
 class HeroCarousel extends StatefulWidget {
   final List<CatalogAlbumHit> hits;
-  const HeroCarousel({super.key, required this.hits});
+
+  /// Per album-id de kop boven de titel ("NIEUWE SINGLE · VERSCHIJNT 6 NOV") en de regel onder de
+  /// artiest ("9 oktober 2026 · + 2 remixen"). Zie `releaseKop` in `nieuwe_releases.dart`.
+  final Map<int, String> koppen, onderschriften;
+  const HeroCarousel(
+      {super.key, required this.hits, this.koppen = const {}, this.onderschriften = const {}});
 
   /// De hoogte van de balk, ook voor het skelet dat zijn plek vrijhoudt op Start.
   ///
@@ -18774,8 +18873,10 @@ class _HeroCarouselState extends State<HeroCarousel> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('NIEUWE RELEASE',
-                            style: TextStyle(
+                        Text(widget.koppen[hit.album.id] ?? 'NIEUWE RELEASE',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
                                 color: _accent2, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
                         const SizedBox(height: 8),
                         Text(hit.album.title,
@@ -18789,9 +18890,12 @@ class _HeroCarouselState extends State<HeroCarousel> {
                               names: [hit.artist],
                               style: const TextStyle(fontSize: 15, color: Color(0xFFC7CBDA))),
                         )),
-                        if (hit.album.year != null) ...[
+                        if ((widget.onderschriften[hit.album.id] ?? hit.album.year) case final onder?) ...[
                           const SizedBox(height: 2),
-                          Text('${hit.album.year}', style: const TextStyle(fontSize: 12.5, color: _muted)),
+                          Text(onder,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 12.5, color: _muted)),
                         ],
                         const SizedBox(height: 14),
                         FilledButton.icon(
@@ -21675,7 +21779,11 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         break;
     }
     try {
-      final (_, tracks) = await _catalog.albumTracks(widget.album.id);
+      final (album, tracks) = await _catalog.albumTracks(widget.album.id);
+      // Het jaar van Deezer zelf. Een treffer uit "Online zoeken" draagt geen datum, en zonder jaar
+      // kon de torrentlijst een verzameling van 1990–2003 niet uitsluiten onder een remix van 2026
+      // (gezien op de pc, 15-10-2026). Zie [torrentVoorNummer].
+      _deezerJaar = int.tryParse(album?.year ?? '');
       if (mounted) setState(() { _tracks = tracks; _busy = false; });
     } catch (_) {
       if (mounted) setState(() => _busy = false);
@@ -21928,6 +22036,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// came out of three peers stamped 1996, 1998 and 1999.
   int? _officialYear;
 
+  /// Het jaar uit Deezers eigen albumantwoord, voor als MusicBrainz en Discogs de plaat (nog) niet
+  /// kennen — een remix van drie weken oud bijvoorbeeld.
+  int? _deezerJaar;
+
   /// This album, as the official release the sources should be judged against.
   ///
   /// The tracklist here has already been through [_preferOfficialTracklist], so it is MusicBrainz's
@@ -21937,7 +22049,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         artist: widget.artistName,
         album: widget.album.title,
         albumArtist: widget.artistName,
-        year: _officialYear ?? int.tryParse(widget.album.year ?? ''),
+        year: _officialYear ?? _deezerJaar ?? int.tryParse(widget.album.year ?? ''),
         tracks: [
           for (var i = 0; i < _tracks.length; i++)
             ChoiceTrack('${_numberOf(_tracks[i], i)}', _tracks[i].title, _tracks[i].durationSec)
@@ -21967,7 +22079,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         albumArtist: widget.artistName,
         trackNo: _numberOf(t, i),
         trackTotal: _tracks.length,
-        year: _officialYear ?? int.tryParse(widget.album.year ?? ''),
+        year: _officialYear ?? _deezerJaar ?? int.tryParse(widget.album.year ?? ''),
         // De looptijd gaat mee tot in de filer. Zie [TrackTags.seconds].
         seconds: t.durationSec,
       );

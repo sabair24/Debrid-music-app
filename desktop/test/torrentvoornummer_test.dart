@@ -164,6 +164,19 @@ void main() {
       expect(hit('Celine Dion - Collection (1981-1995), FLAC'), TorrentPast.anders);
     });
 
+    test('een instrumentale versie is een ander nummer, tenzij je die zoekt', () {
+      // Op de pc, 15-10-2026, onder "My Heart Will Go On".
+      TorrentPast mhwgo(String naam, {String titel = 'My Heart Will Go On'}) =>
+          torrentVoorNummer(naam, artiest: 'Céline Dion', titel: titel, album: "Let's Talk About Love", jaar: 1997);
+      expect(mhwgo('Céline Dion - My Heart Will Go On (Instrumental).mp3'), TorrentPast.anders);
+      expect(mhwgo('Céline Dion - My Heart Will Go On (Instrumental).mp3', titel: 'My Heart Will Go On (Instrumental)'),
+          TorrentPast.nummer);
+      expect(mhwgo('(Pop) Céline Dion / Celine Dion - My Heart Will Go On (Japan CDS) - 1997, APE (image+.cue), lossless'),
+          TorrentPast.nummer);
+      expect(mhwgo('(Pop/Dance) Celine Dion - My Heart Will Go On (Inc. Inpetto Mixes) CDM 2008, MP3 (tracks)'),
+          TorrentPast.nummer, reason: 'een cd-single met mixen draagt het origineel meestal ook');
+    });
+
     test('dezelfde titel van iemand anders is een ander nummer', () {
       TorrentPast courage(String naam) =>
           torrentVoorNummer(naam, artiest: 'Céline Dion', titel: 'Courage', album: 'Courage', jaar: 2019);
@@ -313,6 +326,13 @@ void main() {
 
     test('de albumpagina neemt geen persing over die een andere opname beschrijft', () {
       expect(main, contains('DiscogsService.zelfdeOpname(widget.album.title, full?.title'));
+    });
+
+    test('de albumpagina kent het jaar ook als alleen Deezer het weet', () {
+      // Gezien op de pc, 15-10-2026: zonder jaar bleven zes verzamelingen tot 2019 onder een remix van
+      // 2026 staan. Een treffer uit "Online zoeken" draagt geen datum.
+      expect(main, contains("_deezerJaar = int.tryParse(album?.year ?? '');"));
+      expect('_officialYear ?? _deezerJaar ??'.allMatches(main).length, 2);
     });
 
     test('de lijst onder een nummer oordeelt, vraagt TorBox en verbergt met een reden', () {

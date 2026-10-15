@@ -323,7 +323,7 @@ jobs:
             test/lege_map_test.dart test/library_isolate_test.dart \
             test/login_budget_test.dart test/magneet_trackers_test.dart \
             test/mb_browse_recordings_test.dart test/media_keys_cast_test.dart \
-            test/merge_plan_test.dart \
+            test/merge_plan_test.dart test/nieuwe_releases_test.dart \
             test/mojibake_test.dart test/mp3_duur_test.dart \
             test/mp3_lezen_vangnet_test.dart test/mp3_write_real_test.dart \
             test/naamschade_test.dart test/no_wav_download_test.dart \
