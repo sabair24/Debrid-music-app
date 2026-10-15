@@ -1311,16 +1311,35 @@ class RuTrackerService {
     return infohashUitBytes(r.bytes);
   }
 
-  String _clean(String s) => s
-      .replaceAll(RegExp(r'<[^>]*>'), '')
-      .replaceAll('&amp;', '&')
-      .replaceAll('&lt;', '<')
-      .replaceAll('&gt;', '>')
-      .replaceAll('&quot;', '"')
-      .replaceAll('&#039;', "'")
-      .replaceAll('&nbsp;', ' ')
-      .trim();
+  String _clean(String s) => rutrackerTitelSchoon(s);
 }
+
+/// Een titel uit de resultatenpagina als gewone tekst: zonder opmaak en met de tekens zelf.
+///
+/// **De getallen erbij, gezien op 15-10-2026.** RuTracker schrijft letters buiten windows-1251 als
+/// getal: "C&#233;line Dion", "Hymne &#224; l'amour", en een Japanse titel helemaal. Alleen de vijf
+/// benoemde vormen werden omgezet, dus stond "C&#233;line" zo op het scherm — en telde het woord
+/// "céline" niet mee bij de vraag of een torrent het gezochte nummer noemt.
+///
+/// `&amp;` als laatste: "&amp;#233;" is de tekst "&#233;" en moet dat blijven.
+String rutrackerTitelSchoon(String s) => s
+    .replaceAll(RegExp(r'<[^>]*>'), '')
+    .replaceAllMapped(RegExp(r'&#(x[0-9a-fA-F]{1,6}|\d{1,7});'), (m) {
+      final g = m.group(1)!;
+      final code = g.startsWith('x') || g.startsWith('X')
+          ? int.tryParse(g.substring(1), radix: 16)
+          : int.tryParse(g);
+      if (code == null || code <= 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) {
+        return m.group(0)!;
+      }
+      return String.fromCharCode(code);
+    })
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&nbsp;', ' ')
+    .replaceAll('&amp;', '&')
+    .trim();
 
 class _Row {
   final String topicId;

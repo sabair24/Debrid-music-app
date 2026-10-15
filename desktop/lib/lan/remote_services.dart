@@ -168,6 +168,26 @@ class RemoteOnlineService extends OnlineService {
     return results;
   }
 
+  /// De bestandenlijsten komen van de pc, want daar staat de TorBox-sleutel. Een oudere pc kent de
+  /// vraag niet; dan blijft het bij wat de torrentnamen zeggen.
+  @override
+  Future<Map<String, List<String>>> bestandenVanGecacht(List<String> hashes) async {
+    if (hashes.isEmpty) return {};
+    try {
+      final j = await _rpc.get('/api/online/bestanden',
+          query: {'h': hashes.join(',')}, timeout: const Duration(seconds: 25));
+      final b = j['bestanden'];
+      if (b is! Map) return {};
+      return {
+        for (final e in b.entries)
+          if (e.key is String && e.value is List)
+            e.key as String: [for (final p in e.value as List) if (p is String) p],
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
   /// De RuTracker-aanmelding van dít toestel doorgeven aan de pc.
   ///
   /// **Waarom dit nodig is.** Het aanmeldvenster staat op de telefoon; het zoeken en het downloaden

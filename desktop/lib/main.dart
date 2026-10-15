@@ -138,6 +138,7 @@ import 'tidal.dart';
 import 'tiddl.dart';
 import 'torbox.dart';
 import 'torbox_stand.dart';
+import 'torrentvoornummer.dart';
 import 'redacted.dart';
 import 'torznab.dart';
 import 'toestellen_lijst.dart';
@@ -16131,7 +16132,7 @@ Widget _sourceHeader(String title, int count, bool loading) => Padding(
 /// gegevens die mogen omlopen, en de drie knoppen op hun eigen regel — mét hun naam erbij, want als
 /// ze toch ruimte krijgen kun je net zo goed zien wat ze doen. Op een breed scherm blijft het de
 /// rij die het was: daar past het ruim, en rijen van gelijke hoogte lezen sneller.
-Widget _torrentTile(BuildContext context, SearchResult r) {
+Widget _torrentTile(BuildContext context, SearchResult r, {String? merk}) {
   final q = qualityFromName(r.name);
   final smal = isCompact(context);
   final meta = '${r.source} · ${r.seeders} seeders · ${_fmtBytes(r.size)}';
@@ -16182,6 +16183,7 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
                   Text(meta, style: const TextStyle(color: _muted, fontSize: 12)),
                   if (r.cached)
                     const Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12)),
+                  if (merk != null) Text(merk, style: const TextStyle(color: _accent2, fontSize: 12)),
                   _qualityBadge(q),
                 ],
               ),
@@ -16232,6 +16234,10 @@ Widget _torrentTile(BuildContext context, SearchResult r) {
                               padding: EdgeInsets.only(left: 8),
                               child:
                                   Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
+                        if (merk != null)
+                          Padding(
+                              padding: const EdgeInsets.only(left: 8),
+                              child: Text(merk, style: const TextStyle(color: _accent2, fontSize: 12))),
                       ],
                     ),
                   ],
@@ -16495,8 +16501,41 @@ class _SourcesViewState extends State<SourcesView> {
         if (mounted && _torrentRem.mag()) setState(() => _torrents = p);
       });
       if (mounted) setState(() => _torrents = r);
+      // Wat er in de gecachte torrents zit, zodat een discografie bewijst dat het nummer erin staat
+      // (of niet). Alleen onder een album- of nummerrij: daar is bekend wat er gezocht wordt. Zie
+      // `torrentvoornummer.dart`.
+      if (widget.authority != null) {
+        final gecacht = [for (final t in r) if (t.cached) t.hash.toLowerCase()].take(40).toList();
+        if (gecacht.isNotEmpty) {
+          final b = await online.bestandenVanGecacht(gecacht);
+          if (mounted && b.isNotEmpty) setState(() => _bestanden = b);
+        }
+      }
     } catch (_) {}
     if (mounted) setState(() => _tBusy = false);
+  }
+
+  /// Infohash → paden, voor de torrents die TorBox al heeft. Zie [OnlineService.bestandenVanGecacht].
+  Map<String, List<String>> _bestanden = const {};
+
+  /// De torrents die dit nummer niet noemen toch tonen. Zie [torrentVoorNummer].
+  bool _toonAndere = false;
+
+  /// Het oordeel per torrent, of null als deze lijst niet onder een album of nummer hangt.
+  Map<SearchResult, TorrentPast>? _oordelen(List<SearchResult> torrents) {
+    final a = widget.authority;
+    if (a == null) return null;
+    final t = widget.track;
+    return {
+      for (final r in torrents)
+        r: torrentVoorNummer(r.name,
+            artiest: a.artist,
+            titel: t?.title,
+            seconden: t?.seconds,
+            album: a.album,
+            jaar: a.year,
+            bestanden: _bestanden[r.hash.toLowerCase()]),
+    };
   }
 
   /// Het geheugen van één: zie [_SlskKlaar]. Zonder dit werd er bij elke tik en elk deelresultaat
@@ -16528,11 +16567,22 @@ class _SourcesViewState extends State<SourcesView> {
     // achter elke bron klopt met wat je te zien krijgt als je erop tikt.
     final naKwaliteit =
         _torrents.where((r) => _filter.matches(qualityFromName(r.name))).toList();
-    final bronKeuzes = bronnenInResultaten(naKwaliteit);
+    // Onder een album of nummer: eerst wat erbij hoort, en wat er niet bij hoort uit beeld — met een
+    // regel die zegt hoeveel en waarom. Zie [torrentVoorNummer].
+    final oordeel = _oordelen(naKwaliteit);
+    final verborgen = oordeel == null
+        ? const <SearchResult>[]
+        : [for (final r in naKwaliteit) if (!oordeel[r]!.zichtbaar) r];
+    final getoond = oordeel == null
+        ? naKwaliteit
+        : opTorrentRang([for (final r in naKwaliteit) if (oordeel[r]!.zichtbaar) r], (r) => oordeel[r]!);
+    final lijst = _toonAndere ? [...getoond, ...verborgen] : getoond;
+    final bronKeuzes = bronnenInResultaten(lijst);
     final bron = geldigeKeuze(_bron, bronKeuzes);
-    final torrents = [for (final r in naKwaliteit) if (pastBijBron(r, bron)) r];
+    final torrents = [for (final r in lijst) if (pastBijBron(r, bron)) r];
     final bronnen = _bronnen;
     final slsk = bronnen.gefilterd;
+    final mist = verborgen.where((r) => oordeel![r] == TorrentPast.mist).length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -16541,7 +16591,23 @@ class _SourcesViewState extends State<SourcesView> {
         _bronChipsRow(bronKeuzes, bron, (b) => setState(() => _bron = b)),
         _sourceHeader('Torrents · TorBox', torrents.length, _tBusy),
         if (!_tBusy) _waaromGeenTorrents(context, leeg: torrents.isEmpty, opnieuw: _run),
-        ...torrents.map((r) => _torrentTile(context, r)),
+        if (verborgen.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 16, 4),
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(verborgenTorrentsZin(verborgen.length, mist: mist, nummer: widget.track != null),
+                    style: const TextStyle(color: _muted, fontSize: 12.5)),
+                TextButton(
+                  onPressed: () => setState(() => _toonAndere = !_toonAndere),
+                  child: Text(_toonAndere ? 'Verberg ze' : 'Toon ze'),
+                ),
+              ],
+            ),
+          ),
+        ...torrents.map((r) => _torrentTile(context, r,
+            merk: oordeel == null ? null : torrentMerk(oordeel[r]!, nummer: widget.track != null))),
         if (ready)
           _soulseekHeader(context, slsk, _sBusy, slsk,
               folder: bronnen.besteMap, authority: widget.authority)
@@ -21737,7 +21803,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       if (hits.isNotEmpty) {
         final full = await mb.release(hits.first.mbid);
         final ts = full?.tracks ?? const <MbTrack>[];
-        if (ts.length == _tracks.length) {
+        // Noemt dit album een andere opname, dan moet de persing die ook noemen. Anders beschrijft hij
+        // het origineel, en neemt deze pagina diens looptijden over — zie [DiscogsService.plainTitle].
+        if (ts.length == _tracks.length &&
+            DiscogsService.zelfdeOpname(widget.album.title, full?.title ?? '')) {
           titles = [for (final t in ts) t.title];
           secs = [for (final t in ts) t.seconds ?? 0];
           // When the RECORD came out, not when this pressing did — a 2009 reissue of a 1996 album

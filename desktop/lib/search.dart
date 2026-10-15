@@ -325,8 +325,11 @@ final _adult = RegExp(
 /// Wat ALTIJD beeld is: een resolutie, een videocodec, een filmcontainer.
 ///
 /// Een muziekuitgave zet geen `1080p` of `x265` in zijn naam. Dit mag dus hard weg.
+///
+/// Plus een rip van een videoband: "Unison Home Video [1991, VHSRip]", gezien onder Céline Dion op
+/// 15-10-2026. Een VHS draagt nooit een geluidsuitgave.
 final _hardBeeld = RegExp(
-    r'(\b(480p|576p|720p|1080p|1080i|2160p|x264|x265|h\.?264|h\.?265|hevc|xvid|divx|uhd)\b'
+    r'(\b(480p|576p|720p|1080p|1080i|2160p|x264|x265|h\.?264|h\.?265|hevc|xvid|divx|uhd|vhs-?rip)\b'
     r'|\bmusic\s*video\b|\bfilm\b|\.(mp4|mkv|avi|m4v|wmv|mov)\b)',
     caseSensitive: false);
 
@@ -339,8 +342,14 @@ final _hardBeeld = RegExp(
 /// stond.
 ///
 /// Dit is dus alleen rommel als er verder NIETS in de naam staat dat naar geluid wijst.
+///
+/// Sinds 15-10-2026 ook "DVDRemux" aan één stuk (daar zag `\bremux\b` niets in: "Live In Memphis
+/// [1997, DVDRemux]"), een thuisvideo, en tekst: "[2022-2025, PDF, ENG]" was een stapel tijdschriften.
+/// Allemaal hier en niet hard, want een echte plaat zet "+PDF" achter zijn boekje en een DVD-Audio
+/// heet soms ook een remux — die noemen er dan een geluidsformaat bij.
 final _herkomst = RegExp(
-    r'\b(blu-?ray|bd-?rip|web-?dl|webrip|hdrip|hdtv|dvdrip|dvd-?rip|remux)\b',
+    r'\b(blu-?ray|bd-?rip|web-?dl|webrip|hdrip|hdtv|dvdrip|dvd-?rip|remux|dvd-?remux|bd-?remux|'
+    r'home\s+video|pdf|epub|djvu)\b',
     caseSensitive: false);
 
 /// Zegt de naam zelf dat het om geluid gaat?

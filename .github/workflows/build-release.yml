@@ -351,7 +351,7 @@ jobs:
             test/sweep_order_test.dart test/tag_cache_test.dart \
             test/titel_rechtzetten_test.dart test/titel_venster_test.dart \
             test/toewijzing_test.dart test/torbox_storing_test.dart \
-            test/torbox_test.dart test/torrentbestand_test.dart \
+            test/torbox_test.dart test/torrentbestand_test.dart test/torrentvoornummer_test.dart \
             test/transport_errors_test.dart test/tv_album_rows_test.dart \
             test/tv_test.dart test/twee_persingen_meting_test.dart \
             test/upgrade_rules_test.dart test/vaste_keuze_beschermd_test.dart \

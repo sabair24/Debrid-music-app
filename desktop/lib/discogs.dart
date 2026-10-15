@@ -582,9 +582,53 @@ class DiscogsService {
   /// An album title with the tags a ripper hung on it stripped off. "Rumours [5.1]" is a folder
   /// name, not a record: Discogs has never heard of it, so nothing matched and the page stayed
   /// blank. What is left is what to search for and what to compare against.
+  ///
+  /// **Een haakje dat een ANDERE OPNAME noemt blijft staan.** Gemeld op 15-10-2026: Céline Dions
+  /// "Bonjour, Pardon, Merci (Bon Entendeur Remix)" werd hier "Bonjour, Pardon, Merci". Daarmee
+  /// vonden MusicBrainz en Discogs het origineel, en de albumpagina nam er de looptijd van over:
+  /// 3:10 boven een remix van 2:55. De remix zelf stond op Soulseek als 2:51, en die viel buiten de
+  /// ±12 s van de bronzeef — "Geen Soulseek-bron gevonden" terwijl een hele rij peers precies dat
+  /// bestand aanbood. Daarbij kwamen de vinylpersing, het catalogusnummer en de achterkant van het
+  /// origineel.
+  /// "(Deluxe Edition)" of "[5.1]" noemt dezelfde plaat en gaat er nog steeds af; zie [opnameMerk].
   static String plainTitle(String album) {
-    final cut = album.replaceAll(RegExp(r'\s*[\[(][^\])]*[\])]\s*$'), '').trim();
+    final m = _staartHaakje.firstMatch(album);
+    if (m == null) return album.trim();
+    if (_opnameWoord.hasMatch(m.group(1)!)) return album.trim();
+    final cut = album.substring(0, m.start).trim();
     return cut.isEmpty ? album.trim() : cut;
+  }
+
+  static final _staartHaakje = RegExp(r'\s*[\[(]([^\])]*)[\])]\s*$');
+
+  /// Woorden die een andere OPNAME aanwijzen en geen andere persing van dezelfde.
+  ///
+  /// Bewust smaller dan de versiewoorden in `organize.dart`: "remaster", "version", "bonus",
+  /// "single", "original", "mono" en "stereo" staan daar wel en hier niet. Die beschrijven een uitgave
+  /// van dezelfde opnames — "Rumours (2004 Remaster)" is gewoon *Rumours* — en zouden het opzoeken
+  /// van zo'n plaat laten mislukken.
+  ///
+  /// Gemeten op de eigen bibliotheek (15-10-2026): 13 van de 703 albums eindigen op zo'n haakje, van
+  /// "Blood On The Dance Floor (HIStory In The Mix)" tot "Trip on This (The Remixes)". Bij elk daarvan
+  /// noemt de officiële titel het haakje zelf ook.
+  static final _opnameWoord = RegExp(
+      r'\b(live|remix(es|ed)?|rmx|edits?|extended|radio|demos?|instrumentals?|ac+ap+ell?a|acoustic|'
+      r'reprise|unplugged|mix(es)?|alternate|alt take|sessions?|karaoke|dub|club)\b',
+      caseSensitive: false);
+
+  /// Het haakje achteraan dat een andere opname noemt ("bon entendeur remix"), of null.
+  static String? opnameMerk(String album) {
+    final m = _staartHaakje.firstMatch(album);
+    if (m == null || !_opnameWoord.hasMatch(m.group(1)!)) return null;
+    final merk = normKey(m.group(1)!);
+    return merk.isEmpty ? null : merk;
+  }
+
+  /// Beschrijft [gevonden] dezelfde opname als [gezocht]? Alleen een vraag als [gezocht] een
+  /// opnamemerk draagt: dan moet de gevonden titel dat merk ook noemen. Zie [plainTitle].
+  static bool zelfdeOpname(String gezocht, String gevonden) {
+    final merk = opnameMerk(gezocht);
+    return merk == null || normKey(gevonden).contains(merk);
   }
 
   /// Words that dress up a title without changing which record it names.
@@ -642,6 +686,9 @@ class DiscogsService {
       // Onder "komt erin voor" (-2) zit alleen nog "een andere plaat" of "gebundeld met een
       // andere" (-6). Uit een losse zoekvraag is dat geen kandidaat maar ruis.
       if (los && titel < -2) continue;
+      // Ook uit een strenge vraag niet, als het album een andere opname noemt: Discogs' titelzoeker
+      // geeft bij "Bonjour, Pardon, Merci (Bon Entendeur Remix)" het origineel terug. Zie [plainTitle].
+      if (titel < -2 && opnameMerk(album) != null) continue;
       final s = titel * 10 + albumScore(formats);
       // Discogs' own relevance order breaks ties: it is a better judge than anything here.
       scored.add((id, s * 100 - i));
@@ -1466,7 +1513,11 @@ String artCacheKey(
   final searchKey =
       (pinned == null && pinnedMbid == null) ? '$artist|$album|$expectedTracks' : '';
   final roleKey = (roles.entries.map((e) => '${e.key}=${e.value}').toList()..sort()).join(',');
-  return sha1.convert(utf8.encode('art|v7|$searchKey|$pinnedKey|$roleKey')).toString();
+  // v8 alleen voor een album dat een andere opname noemt: tot 15-10-2026 kwamen daar de scans van
+  // het ORIGINEEL in (zie [DiscogsService.plainTitle]), en die liggen nog onder de oude sleutel.
+  // Alle andere albums houden hun bewaarde scans.
+  final versie = DiscogsService.opnameMerk(album) == null ? 'v7' : 'v8';
+  return sha1.convert(utf8.encode('art|$versie|$searchKey|$pinnedKey|$roleKey')).toString();
 }
 
 /// The three scans an album page shows: the sleeve, its back, and the disc itself.

@@ -185,6 +185,11 @@ class OnlineService {
     return results;
   }
 
+  /// Wat er in de torrents zit die TorBox al heeft. Zie [TorBox.bestandenVanGecacht] en
+  /// `torrentvoornummer.dart`: zo blijkt of een discografie het gezochte nummer echt bevat.
+  Future<Map<String, List<String>>> bestandenVanGecacht(List<String> hashes) =>
+      torbox.bestandenVanGecacht(hashes);
+
   Future<(int?, String)> _addOrFind(SearchResult r) async {
     // Eerst het BESTAND, als de bron er een heeft — en dat is niet netter, dat is het verschil
     // tussen wel en niet werken.

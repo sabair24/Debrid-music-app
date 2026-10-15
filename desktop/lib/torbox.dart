@@ -300,6 +300,25 @@ class TorBox {
     }
   }
 
+  /// Wat er in de torrents zit die TorBox al heeft: infohash → paden binnen de torrent.
+  ///
+  /// Dezelfde vraag als [checkCached], met `list_files=true`. Gemeten op 15-10-2026: één gecachte
+  /// torrent van zestien bestanden, 309 ms en 3 kB. Wat TorBox niet heeft staat er niet in — daar
+  /// valt zonder downloaden niets over te zeggen. Zie `torrentvoornummer.dart`.
+  Future<Map<String, List<String>>> bestandenVanGecacht(List<String> hashes) async {
+    if (hashes.isEmpty || !hasKey) return {};
+    try {
+      final q = Uri.encodeComponent(hashes.join(','));
+      final r = await http
+          .get(Uri.parse('$_base/torrents/checkcached?hash=$q&format=list&list_files=true'), headers: _auth)
+          .timeout(const Duration(seconds: 15));
+      if (r.statusCode != 200) return {};
+      return torboxBestandenUit(jsonBody(r));
+    } catch (_) {
+      return {};
+    }
+  }
+
   /// Wachtklok voor het aanmelden. Ruim, want een gezonde TorBox antwoordt in een seconde of twee
   /// en een drukke mag even doen — maar niet oneindig, want een dialoog staat erop te wachten.
   ///
@@ -402,4 +421,25 @@ class TorBox {
       return null;
     }
   }
+}
+
+/// Het antwoord van `checkcached?list_files=true` als infohash → paden. Zuiver, voor de toets.
+///
+/// Elk bestand komt als `{"name": "Map/01. Side A.flac", "short_name": "01. Side A.flac", …}`; het
+/// volle pad gaat mee, want de map is bewijs (zie `fileOffersTitle`).
+Map<String, List<String>> torboxBestandenUit(Object? body) {
+  final data = body is Map ? body['data'] : null;
+  final uit = <String, List<String>>{};
+  if (data is! List) return uit;
+  for (final e in data) {
+    if (e is! Map) continue;
+    final hash = (e['hash'] as String?)?.toLowerCase();
+    final files = e['files'];
+    if (hash == null || hash.isEmpty || files is! List) continue;
+    uit[hash] = [
+      for (final f in files)
+        if (f is Map && f['name'] is String && (f['name'] as String).isNotEmpty) f['name'] as String,
+    ];
+  }
+  return uit;
 }

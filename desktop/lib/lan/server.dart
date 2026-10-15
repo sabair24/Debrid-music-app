@@ -550,6 +550,8 @@ class LanServer {
                 withVolume: req.uri.queryParameters['volume'] == '1'));
       case '/api/online/search':
         return _onlineSearch(req);
+      case '/api/online/bestanden':
+        return _onlineBestanden(req);
       case '/api/online/tracklist':
         return _onlineTracklist(req);
       case '/api/online/download':
@@ -1561,6 +1563,21 @@ class LanServer {
   /// difference between "the pc can't do that" and a spinner that never stops.
   Future<void> _unavailable(HttpRequest req, String why) =>
       _json(req.response, {'error': why}, status: HttpStatus.serviceUnavailable);
+
+  /// Wat er in de gecachte torrents zit, voor de lijst onder een nummer op een toestel. Hoogstens
+  /// veertig hashes per vraag, zoals het zoeken zelf ook de bovenste veertig bij TorBox navraagt.
+  Future<void> _onlineBestanden(HttpRequest req) async {
+    final service = online;
+    if (service == null) return _unavailable(req, 'Deze pc kan niet online zoeken.');
+    final hashes = (req.uri.queryParameters['h'] ?? '')
+        .split(',')
+        .map((h) => h.trim().toLowerCase())
+        .where((h) => RegExp(r'^[0-9a-f]{40}$').hasMatch(h))
+        .take(40)
+        .toList();
+    final bestanden = await service.bestandenVanGecacht(hashes);
+    return _json(req.response, {'bestanden': bestanden});
+  }
 
   Future<void> _onlineSearch(HttpRequest req) async {
     final service = online;
