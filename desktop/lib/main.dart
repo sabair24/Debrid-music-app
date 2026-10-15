@@ -2033,7 +2033,11 @@ class _HomeShellState extends State<HomeShell> {
   KeyEventResult _tvSprong(KeyEvent e, LogicalKeyboardKey pijl, TraversalDirection richting,
       List<FocusScopeNode> naar) {
     if (!isTv || e is! KeyDownEvent || e.logicalKey != pijl) return KeyEventResult.ignored;
-    if (FocusManager.instance.primaryFocus?.focusInDirection(richting) ?? false) {
+    // Een scope zonder iets om op te staan NIET eerst laten proberen: daar zegt Flutter "gelukt" en
+    // geeft hij de focus aan zichzelf. Zie [focusZonderDoel] — zo zat je op de Shield vast op de lege
+    // pagina "Op dit toestel" (15-10-2026).
+    final hier = FocusManager.instance.primaryFocus;
+    if (!focusZonderDoel(hier) && (hier?.focusInDirection(richting) ?? false)) {
       return KeyEventResult.handled;
     }
     final vanwaar = FocusManager.instance.primaryFocus?.rect;
@@ -2097,9 +2101,29 @@ class _HomeShellState extends State<HomeShell> {
     return rij.first;
   }
 
+  /// Het vangnet op een tv: staat de focus nergens waar een pijl iets mee kan, dan brengt de
+  /// eerstvolgende pijl of OK hem naar de bovenbalk. Zie [focusZonderDoel].
+  bool _tvVangnet(KeyEvent e) {
+    if (!isTv || e is! KeyDownEvent || !mounted) return false;
+    final toetsen = [
+      LogicalKeyboardKey.arrowUp, LogicalKeyboardKey.arrowDown, LogicalKeyboardKey.arrowLeft,
+      LogicalKeyboardKey.arrowRight, LogicalKeyboardKey.select, LogicalKeyboardKey.enter,
+    ];
+    if (!toetsen.contains(e.logicalKey)) return false;
+    final hier = FocusManager.instance.primaryFocus;
+    if (!focusZonderDoel(hier, wortel: FocusManager.instance.rootScope)) return false;
+    // Alleen als er geen dialoog of menu boven de pagina staat: daar hoort de focus te blijven.
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
+    if (_tvBalk.traversalDescendants.isEmpty) return false;
+    _tvBalk.requestFocus();
+    _landingsplek(_tvBalk, TraversalDirection.up, hier?.rect)?.requestFocus();
+    return true;
+  }
+
   @override
   void initState() {
     super.initState();
+    if (isTv) HardwareKeyboard.instance.addHandler(_tvVangnet);
     // Zodat een leeg scherm een knop kan hebben die ergens heen gaat. Zie `navigatie.dart`.
     gaNaarSectie = _gaNaar;
     _kijkOfErEenNieuweIs();
@@ -2294,6 +2318,7 @@ class _HomeShellState extends State<HomeShell> {
     _rood?.removeListener(_toonRodeMelding);
     _waarschuwing?.removeListener(_toonWaarschuwing);
     _ruilKlok?.cancel();
+    if (isTv) HardwareKeyboard.instance.removeHandler(_tvVangnet);
     _tvBalk.dispose();
     _tvInhoud.dispose();
     _tvMelding.dispose();
@@ -3852,6 +3877,26 @@ class _AlleenOpTv extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => isTv ? bouw(child) : child;
+}
+
+/// Staat de focus ergens waar een pijl niets mee kan?
+///
+/// **Gezien op de Shield, 15-10-2026.** Na OK op "Op dit toestel" ging de focus naar de inhoud, en
+/// die pagina is leeg zolang er niets offline staat. Dan houdt de scope van de inhoud ZELF de focus,
+/// en daar zegt Flutters richtingsnavigatie bij een pijl "gelukt": zonder iets om op te staan geeft
+/// hij de focus aan zichzelf. Geen enkele pijl en geen OK deed nog iets, er stond nergens een
+/// selectie, en terug naar de bovenbalk ging alleen met Terug.
+///
+/// Waar: geen focus, de wortel van de app ([wortel]), of een scope zonder een enkel element om op te
+/// staan.
+@visibleForTesting
+bool focusZonderDoel(FocusNode? n, {FocusScopeNode? wortel}) {
+  if (n == null) return true;
+  if (wortel != null && identical(n, wortel)) return true;
+  if (n is FocusScopeNode) {
+    return !n.traversalDescendants.any((d) => d is! FocusScopeNode && d.canRequestFocus);
+  }
+  return false;
 }
 
 class TvTopBar extends StatefulWidget {

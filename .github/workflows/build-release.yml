@@ -353,7 +353,7 @@ jobs:
             test/toewijzing_test.dart test/torbox_storing_test.dart \
             test/torbox_test.dart test/torrentbestand_test.dart test/torrentvoornummer_test.dart \
             test/transport_errors_test.dart test/tv_album_rows_test.dart \
-            test/tv_test.dart test/twee_persingen_meting_test.dart \
+            test/tv_test.dart test/tv_focus_vast_test.dart test/twee_persingen_meting_test.dart \
             test/upgrade_rules_test.dart test/vaste_keuze_beschermd_test.dart \
             test/vaste_keuze_test.dart test/vervangjacht_strook_test.dart \
             test/vervangjacht_test.dart test/verwijderen_vergeet_meting_test.dart \

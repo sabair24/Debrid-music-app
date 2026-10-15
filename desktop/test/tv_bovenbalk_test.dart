@@ -73,7 +73,8 @@ void main() {
     // Anders spring je vanuit het midden van een lijst meteen naar de balk, en is bladeren stuk.
     final start = bron.indexOf('KeyEventResult _tvSprong');
     expect(start, greaterThan(-1));
-    final body = bron.substring(start, start + 600);
+    final body = bron.substring(start, start + 1400);
+    expect(body.indexOf('scope.requestFocus'), greaterThan(-1));
     expect(body.indexOf('focusInDirection'), lessThan(body.indexOf('scope.requestFocus')));
   });
 }
