@@ -362,9 +362,15 @@ class _PressableState extends State<Pressable> {
               color: _focused && widget.ringOnFocus ? _ring : Colors.transparent,
               width: _ringWidth,
             ),
-            boxShadow: _focused && widget.ringOnFocus
-                ? [BoxShadow(color: _ring.withValues(alpha: .45), blurRadius: 18, spreadRadius: 1)]
-                : null,
+            boxShadow: !_focused
+                ? null
+                : widget.ringOnFocus
+                    ? [BoxShadow(color: _ring.withValues(alpha: isTv ? .28 : .45), blurRadius: 18, spreadRadius: 1)]
+                    // Een hoes krijgt geen kader (zie [ringOnFocus]); op een tv tilt hij wél op: een
+                    // schaduw eronder, zodat de groei leest als "naar je toe" en niet als een sprong.
+                    : isTv && widget.scaleOnFocus
+                        ? const [BoxShadow(color: Color(0x99000000), blurRadius: 26, offset: Offset(0, 10))]
+                        : null,
           ),
           child: content,
         ),
@@ -481,7 +487,7 @@ class _TvLabelledState extends State<TvLabelled> {
                     widget.label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 16, height: 1.1, color: _ring),
+                    style: TextStyle(fontSize: 16, height: 1.1, color: _ring),
                   )
                 : null,
           ),
@@ -525,7 +531,14 @@ class MaybePressable extends StatelessWidget {
 
 /// The app's own accent, not Flutter's default focus colour. From three metres away a thin grey
 /// outline on a dark panel is invisible, and "where am I" is the only question a remote asks.
-const _ring = kAccent;
+///
+/// **Op een tv wit, sinds 15-10-2026.** Saber, op de Shield: *"die paarse randen rond de selectie
+/// zijn lelijk … ik weet nooit welke geselecteerde knoppen het zijn."* Nagekeken met schermafdrukken
+/// via adb: de paarse rand viel weg op precies de knop die het meest gebruikt wordt ("Shuffle alles"
+/// is zelf paars), en een geselecteerde nummerrij was een vierkante paarse balk over de volle breedte.
+/// Wit is wat Google TV en Apple TV doen: het staat los van elke kleur in de app, ook van paars.
+Color get kTvSelectie => isTv ? Colors.white : kAccent;
+Color get _ring => kTvSelectie;
 
 double get _ringWidth => isTv ? 3 : 2;
 

@@ -168,12 +168,16 @@ import 'ui/vlak.dart';
 ///
 /// Only `side` and `overlayColor`, so a button that sets its own colour, padding or shape keeps
 /// all of it — this adds the one thing that was missing rather than taking the styling over.
+///
+/// Op een tv wit, en de knop zelf licht op: een paarse rand viel weg op juist de paarse knoppen
+/// ("Shuffle alles", "Afspelen"). Zie [kTvSelectie].
 final ButtonStyle _focusOutline = ButtonStyle(
   side: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.focused)
-      ? BorderSide(color: _accent, width: isTv ? 3 : 2)
+      ? BorderSide(color: kTvSelectie, width: isTv ? 3 : 2)
       : null),
-  overlayColor: WidgetStateProperty.resolveWith((states) =>
-      states.contains(WidgetState.focused) ? _accent.withValues(alpha: .22) : null),
+  overlayColor: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.focused)
+      ? (isTv ? Colors.white.withValues(alpha: .20) : _accent.withValues(alpha: .22))
+      : null),
 );
 
 const _bg = kAchtergrond;
@@ -1639,7 +1643,9 @@ class DebridApp extends StatelessWidget {
         // was changed. What they could not do was SAY so: the default focus tint is a whisper of
         // white, and on these panels, from a sofa, it is not there at all. One line rather than
         // twenty-five edits, and a mouse never sees it because a mouse never focuses.
-        focusColor: _accent.withValues(alpha: isTv ? .34 : .18),
+        // Op een tv een lichte waas en geen paarse balk: een geselecteerde nummerrij was een vierkant
+        // paars vlak over de volle breedte (gezien op de Shield, 15-10-2026). Zie [kTvSelectie].
+        focusColor: isTv ? Colors.white.withValues(alpha: .12) : _accent.withValues(alpha: .18),
   // Hier stond niets, dus kregen alle zwevende menu's Materials eigen maten: hoeken van VIER punten
   // in een app die overal tussen 10 en 18 zit, en een vlak dat op geen van deze panelen lijkt. Dat
   // gold ook voor de twee sorteerkiezers, en juist die twee liepen uiteen — de ene gaf zichzelf een
@@ -3909,20 +3915,32 @@ class _TvTopBarState extends State<TvTopBar> {
     );
   }
 
+  /// Welk item nu de selectie heeft, op label. Zie [_item].
+  String? _gefocust;
+
   Widget _item(IconData icoon, String label, bool geselecteerd, VoidCallback onTap,
       {int badge = 0}) {
+    // Drie standen die je van de bank af uit elkaar houdt, zoals op Google TV: de selectie is een
+    // WITTE pil met donkere letters, de sectie waar je bent een lichte pil met witte letters, en de
+    // rest gedimd. Hier stond een paarse rand om een paars getinte pil — en dan zie je niet of de
+    // selectie op "Tracks" staat of dat je daar alleen bent.
+    final gefocust = _gefocust == label;
+    final voorgrond = gefocust ? kAchtergrond : (geselecteerd ? Colors.white : _muted);
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: Center(
         child: Builder(builder: (context) {
           return Pressable(
             onPressed: onTap,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(18),
             scaleOnFocus: false,
+            ringOnFocus: false,
             // Wat de focus krijgt moet ook te zien zijn. Zonder dit loop je met RECHTS de balk uit en
             // gebeurt er ogenschijnlijk niets: de knop staat scherp, maar buiten beeld.
             onFocusChange: (heeft) {
-              if (!heeft || !mounted) return;
+              if (!mounted) return;
+              setState(() => _gefocust = heeft ? label : (_gefocust == label ? null : _gefocust));
+              if (!heeft) return;
               final doel = context.findRenderObject();
               if (doel is RenderBox && _rol.hasClients) {
                 _rol.position.ensureVisible(doel,
@@ -3931,16 +3949,20 @@ class _TvTopBarState extends State<TvTopBar> {
                     curve: Curves.easeOut);
               }
             },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 140),
+              curve: Curves.easeOut,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
               decoration: BoxDecoration(
-                color: geselecteerd ? _accent.withValues(alpha: .18) : Colors.transparent,
-                borderRadius: BorderRadius.circular(10),
+                color: gefocust
+                    ? Colors.white
+                    : (geselecteerd ? Colors.white.withValues(alpha: .14) : Colors.transparent),
+                borderRadius: BorderRadius.circular(18),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(icoon, size: 16, color: geselecteerd ? Colors.white : _muted),
+                  Icon(icoon, size: 16, color: voorgrond),
                   if (badge > 0)
                     Transform.translate(
                       offset: const Offset(-4, -6),
@@ -3955,8 +3977,8 @@ class _TvTopBarState extends State<TvTopBar> {
                     label,
                     style: TextStyle(
                       fontSize: 11,
-                      fontWeight: geselecteerd ? FontWeight.w700 : FontWeight.w500,
-                      color: geselecteerd ? Colors.white : _muted,
+                      fontWeight: geselecteerd || gefocust ? FontWeight.w700 : FontWeight.w500,
+                      color: voorgrond,
                     ),
                   ),
                 ],

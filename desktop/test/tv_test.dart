@@ -93,7 +93,7 @@ void main() {
       return side?.color;
     }
 
-    testWidgets('focused draws the accent, unfocused draws nothing', (tester) async {
+    testWidgets('focused draws white, unfocused draws nothing', (tester) async {
       await tester.pumpWidget(_app(Row(children: [
         Pressable(autofocus: true, onPressed: () {}, child: const Text('Start')),
         Pressable(onPressed: () {}, child: const Text('Albums')),
@@ -106,9 +106,10 @@ void main() {
           .map((b) => (b.decoration as BoxDecoration).border?.top.color)
           .toList();
 
-      // The app's own accent, not Flutter's grey default: on a dark panel from three metres away
-      // a thin grey outline is not visible, and "where am I" is the only question a remote asks.
-      expect(rings.first, const Color(0xFF7C5CFF));
+      // Not Flutter's grey default: on a dark panel from three metres away a thin grey outline is not
+      // visible, and "where am I" is the only question a remote asks. Wit en niet het paars van de app
+      // (15-10-2026): op de paarse knoppen viel een paarse rand weg, en Saber vond hem lelijk.
+      expect(rings.first, Colors.white);
       expect(rings.last, Colors.transparent,
           reason: 'transparant, niet afwezig — een rand die verschijnt zou alles verschuiven');
     });
