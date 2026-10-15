@@ -367,6 +367,95 @@ void main() {
       expect(player.playing, isFalse, reason: 'een tik terwijl er muziek klinkt is gewoon pauze');
     });
   });
+
+  group('de wissel tussen twee nummers', () {
+    // Gemeten op de Shield, 15-10-2026 17:03:24: aan het eind van een nummer meldde de sessie 0,2 s
+    // "gepauzeerd", de dienst verliet de voorgrond en het systeem schoot de app af bij geheugentekort.
+    setUp(() => NowPlayingHandler.overgangDuur = const Duration(milliseconds: 150));
+    tearDown(() => NowPlayingHandler.overgangDuur = const Duration(seconds: 6));
+
+    Future<(FakePlayer, NowPlayingHandler)> speelt() async {
+      final player = FakePlayer()
+        ..current = _track('/muziek/01.flac')
+        ..duration = const Duration(seconds: 449)
+        ..position = const Duration(seconds: 440)
+        ..playing = true;
+      final handler = NowPlayingHandler(player, null);
+      await _item(handler, '/muziek/01.flac');
+      return (player, handler);
+    }
+
+    test('DE KERN: een afgelopen nummer is "bezig", geen pauze — tot het volgende speelt', () async {
+      final (player, handler) = await speelt();
+      player
+        ..position = const Duration(milliseconds: 449050)
+        ..playing = false
+        ..tick();
+      expect(handler.playbackState.value.playing, isTrue,
+          reason: 'bij "gepauzeerd" verlaat de dienst de voorgrond, en dan mag het systeem de app afschieten');
+      expect(handler.playbackState.value.processingState, AudioProcessingState.buffering);
+
+      // Het volgende nummer staat er al, op 0, maar klinkt nog niet.
+      player
+        ..current = _track('/muziek/02.flac', title: 'Sour Times')
+        ..position = Duration.zero
+        ..duration = const Duration(seconds: 250)
+        ..tick();
+      expect(handler.playbackState.value.playing, isTrue, reason: 'nog steeds de wissel');
+
+      player
+        ..playing = true
+        ..tick();
+      expect(handler.playbackState.value.playing, isTrue);
+      expect(handler.playbackState.value.processingState, AudioProcessingState.ready);
+    });
+
+    test('DE VAL: het volgende nummer staat al op 0 in dezelfde melding waarin het vorige stopte', () async {
+      final (player, handler) = await speelt();
+      player
+        ..position = const Duration(milliseconds: 448200)
+        ..tick(); // gepubliceerd: 448,2 s van 449
+      player
+        ..current = _track('/muziek/02.flac', title: 'Sour Times')
+        ..position = Duration.zero
+        ..duration = const Duration(seconds: 250)
+        ..playing = false
+        ..tick();
+      expect(handler.playbackState.value.playing, isTrue,
+          reason: 'de vorige positie en lengte zeggen dat het nummer afgelopen was');
+    });
+
+    test('DE GRENS: een pauze midden in het nummer is meteen een pauze', () async {
+      final (player, handler) = await speelt();
+      player
+        ..position = const Duration(seconds: 200)
+        ..playing = false
+        ..tick();
+      expect(handler.playbackState.value.playing, isFalse);
+      expect(handler.playbackState.value.processingState, AudioProcessingState.ready);
+    });
+
+    test('DE GRENS: komt er niets meer (de wachtrij is op), dan toch gepauzeerd', () async {
+      final (player, handler) = await speelt();
+      player
+        ..position = const Duration(seconds: 449)
+        ..playing = false
+        ..tick();
+      expect(handler.playbackState.value.playing, isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(handler.playbackState.value.playing, isFalse, reason: 'na de wissel is het een gewone stilstand');
+    });
+
+    test('DE GRENS: wie tijdens de wissel op pauze drukt, krijgt meteen pauze', () async {
+      final (player, handler) = await speelt();
+      player
+        ..position = const Duration(seconds: 449)
+        ..playing = false
+        ..tick();
+      await handler.pause();
+      expect(handler.playbackState.value.playing, isFalse);
+    });
+  });
 }
 
 /// The handler publishes asynchronously — the artwork has to be written to disk first — so wait

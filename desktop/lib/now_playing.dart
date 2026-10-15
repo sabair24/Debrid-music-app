@@ -546,6 +546,45 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
   /// Of we op stilte wachten terwijl er niets klinkt. Zie [_onderbroken].
   bool get _wacht => _onderbroken && !player.speeltErgens;
 
+  /// Tussen twee nummers: het ene is AFGELOPEN en het volgende opent nog.
+  ///
+  /// **Gemeten op de Shield, 15-10-2026 17:03:24.** Saber keek in de instellingen van de Shield, dus
+  /// speelde de app op de achtergrond. Aan het eind van "What Goes Around" meldde deze handler 0,2 s
+  /// lang "gepauzeerd" (positie 449050 van 449050). audio_service haalt de dienst bij "gepauzeerd"
+  /// van de voorgrond, de app zakte naar oom_adj 700, het systeem kwam geheugen tekort
+  /// (`am_low_memory`) en schoot hem 0,4 s later af (`am_proc_died … com.debridmusic.app,700`). De
+  /// muziek hield op, en bij terugkeer stond er "Niets aan het spelen".
+  ///
+  /// Daarom heet zo'n wissel "bezig", net als het wachten op stilte hierboven: dan blijft de dienst
+  /// op de voorgrond. Een pauze midden in een nummer is gewoon een pauze, en komt er binnen
+  /// [overgangDuur] geen volgend nummer (de wachtrij is op), dan alsnog.
+  bool get _inOvergang => !player.speeltErgens && _overgangTot != null && DateTime.now().isBefore(_overgangTot!);
+  DateTime? _overgangTot;
+  Timer? _overgangKlok;
+
+  /// Hoe lang een wissel "bezig" mag heten. Ruim boven de 0,4 s die het openen op de Shield kostte.
+  @visibleForTesting
+  static Duration overgangDuur = const Duration(seconds: 6);
+
+  /// Stond het nummer aan zijn eind? Met een marge van 2 s: libmpv meldt het einde soms net ervoor.
+  bool _aanHetEind(Duration positie, Duration duur) =>
+      duur > Duration.zero && duur - positie <= const Duration(seconds: 2);
+
+  void _beginOvergang() {
+    _overgangTot = DateTime.now().add(overgangDuur);
+    _overgangKlok?.cancel();
+    // De wissel loopt vanzelf af op [_overgangTot]; de klok zorgt alleen dat de sessie het dan ook hoort.
+    _overgangKlok = Timer(overgangDuur, () {
+      if (player.current != null) _publishState();
+    });
+  }
+
+  void _stopOvergang() {
+    _overgangTot = null;
+    _overgangKlok?.cancel();
+    _overgangKlok = null;
+  }
+
   final NowPlayingSource player;
   final Uint8List? Function(Track)? coverFor;
 
@@ -559,6 +598,7 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
   String? _publishedSig;
   bool _lastPlaying = false;
   Duration _lastPosition = Duration.zero;
+  Duration _lastDuur = Duration.zero;
 
   /// Ook shuffle en herhalen, anders loopt de auto achter op de app.
   ///
@@ -602,8 +642,18 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
         drift > 1200 ||
         player.shuffle != _lastShuffle ||
         player.repeat != _lastRepeat) {
+      // Stil geworden aan het eind van het nummer: een wissel, geen pauze. Zie [_inOvergang]. De
+      // vorige positie telt ook, want bij de melding kan het volgende nummer al op 0 staan.
+      if (_lastPlaying && !player.speeltErgens) {
+        final eind = _aanHetEind(player.positieErgens, player.duurErgens) ||
+            _aanHetEind(_lastPosition, _lastDuur);
+        if (eind) _beginOvergang();
+      } else if (player.speeltErgens) {
+        _stopOvergang();
+      }
       _lastPlaying = player.speeltErgens;
       _lastPosition = player.positieErgens;
+      _lastDuur = player.duurErgens;
       _lastShuffle = player.shuffle;
       _lastRepeat = player.repeat;
       _publishState();
@@ -637,8 +687,8 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
       // Tijdens het wachten op stilte "bezig" en niet "gepauzeerd": dan blijft de mediadienst op de
       // voorgrond, en mag de app straks weer focus vragen. De knop zegt intussen gewoon "speel",
       // want er klinkt niets. Zie [_onderbroken].
-      processingState: _wacht ? AudioProcessingState.buffering : AudioProcessingState.ready,
-      playing: player.speeltErgens || _wacht,
+      processingState: _wacht || _inOvergang ? AudioProcessingState.buffering : AudioProcessingState.ready,
+      playing: player.speeltErgens || _wacht || _inOvergang,
       updatePosition: player.positieErgens,
       bufferedPosition: player.duurErgens,
       speed: player.speeltErgens ? 1.0 : 0.0,
@@ -775,6 +825,11 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> pause() async {
+    // Pauze tijdens een wissel: dan wil je stilte, en meldt de sessie dat ook meteen.
+    if (_inOvergang) {
+      _stopOvergang();
+      _publishState();
+    }
     // Pauze terwijl we op stilte wachten: dan wil je het ook zo laten, en wordt het een gewone pauze.
     if (_wacht) {
       _stopWachtVanBuiten?.call('je drukte zelf op pauze');
