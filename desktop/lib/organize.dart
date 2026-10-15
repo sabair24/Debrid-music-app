@@ -2631,25 +2631,69 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
   // bronnen, die zonder 21 tot 41 — "Passent Les Nuages (Album Version)" tegen "02 - Passent les
   // nuages.flac" zei nee. Omgekeerd net zo. Een echt merk blijft staan ([withoutFakeVersion]).
   final eigenlijk = withoutFakeVersion(title);
+  // **Een ander deel is een ander nummer.** "Love in This Club, Part 2" en "Love in This Club" deelden
+  // hier het bestand "Love in This Club (feat. Young Jeezy).flac" (gemeten op de eigen bibliotheek,
+  // 15-10-2026): het deelnummer werd nergens vergeleken. Nu apart, Romeins of Arabisch als hetzelfde
+  // getal ("Part II" = "Pt. 2"); daarna doet het in de woorden niet meer mee ([_teVergelijken]).
+  if (_partNumber(eigenlijk) != _partNumber(baseName(path))) return false;
   if (album != null && mapVerraadtAndereVersie(eigenlijk, album, artist, path)) return false;
   // Wat de titel over de VERSIE zegt, kan in de map staan in plaats van in de bestandsnaam. Zie
   // [versieVolgtUitMap]: op *My Songs* heet nummer 7 bij elke peer gewoon "07 Fields of Gold.flac",
   // en het merk "(My Songs Version)" staat één laag hoger. Zonder deze uitzondering werd juist de
   // goede kopie geweigerd en bleef alleen de gewone versie over.
+  //
+  // **Staat het merk OOK in de bestandsnaam, dan telt de volle titel.** Gemeten op 15-10-2026: in de map
+  // "MORNING DEW (DONK) REMIX PACK" werd "02 - MORNING DEW (DONK MIX).flac" geweigerd voor precies die
+  // titel — het merk ging eraf omdat de map het droeg, en toen was "mix" in de naam een vreemd
+  // versiewoord. Daarom beide proberen: met en zonder het merk.
   final uitMap = versieVolgtUitMap(eigenlijk, path);
-  final vergelijkbaar = uitMap ? withoutVersionText(eigenlijk) : eigenlijk;
-  final tw = fileWords(vergelijkbaar), fw = fileWords(withoutFakeVersion(baseName(path)));
-  if (tw.isEmpty || fw.isEmpty) return false;
-  if (tw.intersection(fw).length / tw.length < 0.75) return false;
-  if (tw.difference(fw).union(fw.difference(tw)).any(_versionWordRe.hasMatch)) return false;
+  // Een gast in de bestandsnaam van de peer weegt niet mee — maar alleen bij een titel met een ECHTE
+  // versie ("Scream Louder (Flyte Tyme Remix) (feat. Janet Jackson).flac" voor "Scream Louder (Flyte
+  // Tyme remix)"): daar beslist de mixnaam welke opname het is. Bij een kale titel blijft de gast
+  // tellen, want daar kan hij het verschil zíjn: Adele's *30* heeft "Easy On Me" én het duet met Chris
+  // Stapleton. En een gast in de officiële titel telt altijd mee; `matchAlbumTracks` heeft daar een
+  // eigen rem voor (gastartiest_test).
+  final gastWeg = !_gastRe.hasMatch(eigenlijk) && versionMarkers(eigenlijk).isNotEmpty;
+  final naam = withoutFakeVersion(baseName(path));
+  final fw = fileWords(_teVergelijken(gastWeg ? naam.replaceAll(_gastRe, ' ') : naam));
+  if (fw.isEmpty) return false;
   // Anything the filename says beyond the title must be the artist, the album, or the folders it
   // sits in — otherwise it is another song sharing a word with this one.
-  final known = fileWords('$artist ${path.replaceAll(_padScheiding, ' ')}'.replaceAll(baseName(path), ''));
-  if (fw.difference(tw).any((w) => !known.contains(w))) return false;
+  final known = fileWords(_teVergelijken('$artist ${path.replaceAll(_padScheiding, ' ')}'.replaceAll(baseName(path), '')));
+  bool klopt(String vergelijkbaar) {
+    final tw = fileWords(_teVergelijken(vergelijkbaar));
+    if (tw.isEmpty) return false;
+    if (tw.intersection(fw).length / tw.length < 0.75) return false;
+    if (tw.difference(fw).union(fw.difference(tw)).any(_versionWordRe.hasMatch)) return false;
+    // Een los getal dat de titel niet noemt, is een volgnummer ("3586. Alana Dante - …"), geen woord.
+    return !fw.difference(tw).any((w) => !known.contains(w) && !_alleenCijfers.hasMatch(w));
+  }
+
+  if (!klopt(eigenlijk) && !(uitMap && klopt(withoutVersionText(eigenlijk)))) return false;
   final a = titleDur ?? 0, b = fileDur ?? 0;
   if (a > 0 && b > 0) return (a - b).abs() <= 12;
   return true;
 }
+
+final _alleenCijfers = RegExp(r'^\d+$');
+final _gastRe = RegExp(r'[(\[]\s*(?:feat\.?|featuring|ft\.?)\s[^)\]]*[)\]]|\b(?:feat\.|featuring|ft\.)\s[^(\[]*?(?=\s[-–]\s|[(\[]|$)',
+    caseSensitive: false);
+final _afkortingRe = RegExp(r'\b(?:[A-Za-z]\.){2,}');
+final _schijfRe = RegExp(r'\b(?:cd|disc|disk)\s*[-_]?\s*\d{1,2}\b', caseSensitive: false);
+
+/// Een naam zoals hij vergeleken wordt: zonder schijfaanduiding, deelnummer en puntjes in afkortingen.
+/// (De gastartiest gaat er alleen aan de kant van de bestandsnaam af, in [fileOffersTitle].)
+///
+/// Gemeten op 15-10-2026 over de eigen bibliotheek (117 nummers waarvan de gevraagde versie in de map
+/// stond): "Scream Louder (Flyte Tyme Remix) (feat. Janet Jackson).flac" werd geweigerd voor "Scream
+/// Louder (Flyte Tyme remix)" omdat "janet jackson" niet in de titel stond, "Oceans (UHT Radio Mix)"
+/// voor "Oceans (U.H.T. Radio Mix)" omdat de puntjes "uht" in losse letters braken, en "Stromae -
+/// CD-01 - Te quiero (…)" omdat "cd" nergens in de titel stond. Een gastartiest of een schijfnummer
+/// zegt niets over de VERSIE; de versiewoorden en de lengte beslissen dat nog steeds.
+String _teVergelijken(String s) => s
+    .replaceAllMapped(_afkortingRe, (m) => m[0]!.replaceAll('.', ''))
+    .replaceAll(_schijfRe, ' ')
+    .replaceAll(_partRe, ' ');
 
 /// A Soulseek search query for one track — broad enough to be found, so the precise matching can
 /// be left to [fileOffersTitle] afterwards.

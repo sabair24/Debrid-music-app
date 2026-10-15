@@ -46,6 +46,71 @@ void main() {
         reason: 'naast een echt merk wordt niets weggehaald');
   });
 
+  // Hieronder: gemeten over de eigen bibliotheek (15-10-2026, 117 nummers waarvan de gevraagde versie in
+  // de map stond). Voor: 99 aanvaard; na: 109, en nul keer een bestand voor een andere versie.
+  group('een remix of live-versie die je wil, wordt gevonden', () {
+    test('merk in titel, map én bestandsnaam', () {
+      expect(
+          fileOffersTitle('MORNING DEW (DONK MIX)', null, 'Beyoncé',
+              r'@@p\Beyoncé\MORNING DEW (DONK) REMIX PACK\02 - MORNING DEW (DONK MIX).flac', null,
+              album: 'MORNING DEW (DONK) REMIX PACK'),
+          isTrue);
+    });
+
+    test('een gastartiest in de bestandsnaam', () {
+      expect(
+          fileOffersTitle('Scream Louder (Flyte Tyme remix)', null, 'Michael Jackson',
+              r'@@p\Michael Jackson\06 - Scream Louder (Flyte Tyme Remix) (feat. Janet Jackson).flac', null),
+          isTrue);
+      expect(
+          fileOffersTitle('Hold on to the Vision (original mix)', null, 'Frank Harris',
+              r"@@p\Frank Harris\01. Frank Harris – 'Hold On To The Vision' Original Mix (featuring Joe Satriani on Guitar).flac", null),
+          isTrue);
+    });
+
+    test('puntjes in een afkorting, een schijfnummer, een lang volgnummer', () {
+      expect(fileOffersTitle('Oceans (U.H.T. Radio Mix)', null, 'Morimor', r'@@p\x\2. Oceans (UHT Radio Mix).flac', null), isTrue);
+      expect(
+          fileOffersTitle('Te Quiero (Paul Kalkbrenner Remix)', null, 'Stromae',
+              r'@@p\x\15 Stromae - CD-01 - Te quiero (Paul Kalkbrenner remix).flac', null),
+          isTrue);
+      expect(
+          fileOffersTitle('Take Me for a Ride (radio mix)', null, 'Alana Dante',
+              r'@@p\x\3586. Alana Dante - Take Me For A Ride (Radio Mix).flac', null),
+          isTrue);
+    });
+
+    test('een deel: "Part II" is "Pt. 2", en een ander deel is een ander nummer', () {
+      expect(
+          fileOffersTitle('Love the Way You Lie (Part II)', null, 'Rihanna', r'@@p\x\11 - Love the Way You Lie, Pt. 2 (part 2).flac', null),
+          isTrue);
+      expect(fileOffersTitle('Confessions Part II', null, 'Usher', r'@@p\x\05 - Confessions, Part 2.flac', null), isTrue);
+      expect(fileOffersTitle('Love in This Club, Part 2', null, 'Usher', r'@@p\x\02 - Love in This Club.flac', null), isFalse,
+          reason: 'deel 2 is een ander nummer dan het gewone');
+      expect(fileOffersTitle('Love in This Club', null, 'Usher', r'@@p\x\02 - Love in This Club.flac', null), isTrue);
+      expect(fileOffersTitle('Love in This Club, Part 2', null, 'Usher', r'@@p\x\12 - Love in This Club, Part II.flac', null),
+          isTrue);
+      expect(fileOffersTitle('Confessions', null, 'Usher', r'@@p\x\05 - Confessions, Part 2.flac', null), isFalse);
+    });
+
+    test('een andere mix blijft een andere mix, ook met een gastartiest erbij', () {
+      expect(
+          fileOffersTitle('Levels (Skrillex Remix)', null, 'Avicii', r'@@p\x\01 - Levels (Radio Version).flac', null),
+          isFalse);
+      expect(
+          fileOffersTitle('Scream Louder (Flyte Tyme remix)', null, 'Michael Jackson',
+              r'@@p\x\06 - Scream Louder (feat. Janet Jackson).flac', null),
+          isFalse,
+          reason: 'de gast weg, en dan blijft het gewone nummer over: geen remix');
+      expect(fileOffersTitle('Song (with Strings)', null, 'X', r'@@p\x\01 - Song.flac', null), isFalse,
+          reason: '"with" is geen gast: met strijkers is een andere uitvoering');
+      expect(fileOffersTitle('Song (Club Mix)', null, 'X', r'@@p\x\01 - Song (Club Mix) (with Strings).flac', null), isFalse,
+          reason: 'ook in de bestandsnaam is "(with …)" geen gast die weg mag');
+      expect(fileOffersTitle('Easy On Me', 224, 'Adele', r'@@p\x\01 - Easy On Me (feat. Chris Stapleton).flac', 224), isFalse,
+          reason: 'bij een kale titel kan de gast het verschil zijn: het duet is niet het solonummer');
+    });
+  });
+
   test('een ander nummer blijft een ander nummer', () {
     expect(biedt('Passent Les Nuages (Album Version)', '03 - J\'aurais voulu.flac'), isFalse);
   });
