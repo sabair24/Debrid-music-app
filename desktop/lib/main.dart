@@ -161,6 +161,7 @@ import 'ui/skelet.dart';
 import 'ui/speelvlak.dart';
 import 'ui/stijl.dart';
 import 'ui/tegel.dart';
+import 'ui/tv_halo.dart';
 import 'ui/typografie.dart';
 import 'ui/vlak.dart';
 
@@ -1594,6 +1595,9 @@ class DebridApp extends StatelessWidget {
             data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(1.35)),
             child: inhoud,
           );
+          // Een witte rand om een selectie die zichzelf niet laat zien; zie ui/tv_halo.dart.
+          // Hier, boven de Navigator, zodat hij ook over dialogen en geduwde pagina's heen tekent.
+          inhoud = TvFocusHalo(child: inhoud);
         }
         // De eerste sneltoetslaag van deze app, en hij staat hier omdat `builder` BOVEN de
         // Navigator zit: daardoor werkt hij ook terwijl een dialoog openstaat.
