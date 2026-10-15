@@ -40,10 +40,18 @@ Luidheidsstand luidheidsstandUit(String? naam) => switch ((naam ?? '').trim()) {
 /// kwart zou omhoog moeten (dat kan alleen zover de pieken het toelaten). Gesimuleerd: 85 % binnen
 /// 1 dB van het doel, restspreiding 1,9 dB (was 8,8), mediane verandering −3,3 dB.
 ///
-/// **−11 ("Luider") is gemiddeld even hard als vroeger** (mediane verandering 0,0 dB): alleen de
-/// uitschieters gaan omlaag. Minder gelijk (60 % binnen 1 dB), want zachte opnames kunnen zonder
-/// begrenzer niet mee omhoog.
-double doelVoor(Luidheidsstand s) => s == Luidheidsstand.luid ? -11.0 : -14.0;
+/// **−8 ("Luider") is even hard als zonder Gelijk volume**, en dat is zo gekozen op 15-10-2026. Saber:
+/// *"algemeen mag het luider, ik moet vaak in men camionette de volume op max zetten … Muziek mag wel
+/// niet vervormen. Kwaliteit gaat voor."* Luider stond op −11, en nagerekend op 1627 metingen zette dat
+/// 813 nummers zachter, gemiddeld 2,4 dB (mediaan wat je hoort: −11,1 LUFS). Op −8 zijn dat er 97,
+/// gemiddeld 1,5 dB, en is de mediaan −10,3 — precies die van Uit. Alleen de allerhardste masters gaan
+/// nog wat omlaag; 237 zachte nummers gaan omhoog voor zover hun pieken het toelaten. Luider dan dit
+/// kan niet zonder begrenzer: 1388 van de 1627 nummers pieken al boven −1 dBTP.
+///
+/// Er komt dus geen enkele versterking bij die kan vervormen — de klem en het plafond van −1 dBTP
+/// hieronder blijven. Wat er verandert, is alleen hoeveel er omlaag gaat. De prijs is minder gelijk:
+/// tussen het 10e en het 90e percentiel 7,9 dB in plaats van 4,9. Wie gelijk wil, heeft Gelijk.
+double doelVoor(Luidheidsstand s) => s == Luidheidsstand.luid ? -8.0 : -14.0;
 
 /// Hoe ver een ophoging mag gaan: de ware piek eindigt op hooguit −1 dBTP. DAC-reconstructie,
 /// Bluetooth (SBC/AAC/LDAC) en Android Auto coderen opnieuw; AES TD1004 en EBU R128 s1 noemen −1.

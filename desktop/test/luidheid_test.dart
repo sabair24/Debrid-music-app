@@ -70,7 +70,7 @@ void main() {
     test('DE KERN: over een raster van luidheid en piek knipt niets ooit af', () {
       for (var i = -30.0; i <= -3.0; i += 0.25) {
         for (var p = -12.0; p <= 4.0; p += 0.15) {
-          for (final doel in [-14.0, -11.0]) {
+          for (final doel in [-14.0, -11.0, -8.0]) {
             final g = versterking(m(i, p), doel).db;
             if (g == 0) continue;
             expect(p + g, lessThanOrEqualTo(kKlemMarge + 1e-9),
@@ -302,6 +302,19 @@ Output #0, null, to 'pipe:':
     expect(luidheidsstandUit('iets nieuws'), Luidheidsstand.normaal,
         reason: 'een onbekende waarde mag de functie niet stilletjes uitzetten');
     expect(doelVoor(Luidheidsstand.normaal), -14);
-    expect(doelVoor(Luidheidsstand.luid), -11);
+    expect(doelVoor(Luidheidsstand.luid), -8);
+  });
+
+  test('Luider (15-10-2026) is voor geen enkel nummer zachter dan het oude Luider of dan Gelijk', () {
+    // "Algemeen mag het luider … muziek mag wel niet vervormen." Het nieuwe doel mag alleen minder
+    // omlaag zetten; het raster hierboven bewijst dat er niets bij komt dat afknipt.
+    final luider = doelVoor(Luidheidsstand.luid), gelijk = doelVoor(Luidheidsstand.normaal);
+    for (var i = -30.0; i <= -3.0; i += 0.25) {
+      for (var p = -12.0; p <= 4.0; p += 0.15) {
+        final nu = versterking(m(i, p), luider).db;
+        expect(nu, greaterThanOrEqualTo(versterking(m(i, p), -11).db - 1e-9), reason: 'I $i, P $p tegen het oude −11');
+        expect(nu, greaterThanOrEqualTo(versterking(m(i, p), gelijk).db - 1e-9), reason: 'I $i, P $p tegen Gelijk');
+      }
+    }
   });
 }

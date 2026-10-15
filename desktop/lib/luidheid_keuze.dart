@@ -260,8 +260,8 @@ class _Keuzes extends StatelessWidget {
 const String luidheidInstellingUitleg =
     'Alles even hard zonder vervorming kan alleen door luide nummers zachter te zetten — gemiddeld '
     "zo'n 3 dB, één volumestap. Geen compressie, geen begrenzer: hetzelfde als aan de volumeknop "
-    'draaien. Gelijk = zoals Spotify en TIDAL (−14 LUFS). Luider = gemiddeld even hard als vroeger, '
-    'alleen uitschieters gaan omlaag; zachte opnames blijven dan wat achter (−11 LUFS). Let op bij '
+    'draaien. Gelijk = zoals Spotify en TIDAL (−14 LUFS). Luider = even hard als zonder Gelijk volume: '
+    'alleen de allerhardste nummers gaan iets omlaag, zachte omhoog waar het kan (−8 LUFS). Let op bij '
     'vergelijken: Uit klinkt harder, niet beter — zet bij Gelijk je volume een stap hoger. Speakers '
     "(Sonos, KEF) krijgen het origineel. Op Windows: laat 'Luidheidsvereffening' en andere "
     'geluidsverbeteringen uit.';

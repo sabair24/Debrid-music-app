@@ -171,7 +171,7 @@ class AppSettings extends ChangeNotifier {
   /// zoals hij was voordat deze keuze bestond.
   String radioSmaak = 'gemengd';
 
-  /// Gelijk volume: 'uit', 'normaal' (Gelijk, −14 LUFS) of 'luid' (Luider, −11). Per toestel — net
+  /// Gelijk volume: 'uit', 'normaal' (Gelijk, −14 LUFS) of 'luid' (Luider, −8). Per toestel — net
   /// als de stroomstand staat dit buiten `_synced` en `_config`. Zie `luidheid.dart`.
   String luidheid = 'normaal';
 
