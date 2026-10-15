@@ -160,16 +160,25 @@ class SlskQueued extends SlskResult {
 /// WAV still won, and won a copy of the record that the app could never label.
 ///
 /// Everything already on disk keeps playing — this is about what is offered, not about what you have.
+///
+/// **De soort één keer per bestand.** [SoulseekFile.ext] knipt bij elke vraag het hele pad op
+/// ([SoulseekFile.displayName]), en in de vergelijker gebeurde dat twee keer per vergelijking: 1,3 s
+/// voor de 60.143 treffers van "Live V" (gemeten 15-10-2026), op de draad van de pc die ook de muziek
+/// naar de toestellen stuurt — en bij een zoektocht op de pc zelf elke 300 ms opnieuw ([_SearchRun]).
 List<SoulseekFile> sortSoulseek(Iterable<SoulseekFile> files) {
-  final audio = files.where((f) => f.isAudio && f.ext != 'wav').toList();
-  audio.sort((a, b) {
-    final fa = a.isFlac ? 1 : 0, fb = b.isFlac ? 1 : 0;
-    if (fa != fb) return fb - fa;
+  final audio = <(SoulseekFile, bool)>[
+    for (final f in files)
+      if (f.ext case final e when e != 'wav' && audioSoorten.contains(e)) (f, e == 'flac'),
+  ];
+  audio.sort((x, y) {
+    final (a, fa) = x;
+    final (b, fb) = y;
+    if (fa != fb) return fa ? -1 : 1;
     if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
     if (a.speed != b.speed) return b.speed.compareTo(a.speed);
     return b.size.compareTo(a.size);
   });
-  return audio;
+  return [for (final (f, _) in audio) f];
 }
 
 /// Why the app is not talking to Soulseek right now.
