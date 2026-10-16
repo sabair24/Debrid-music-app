@@ -70,7 +70,8 @@ void main() {
 
   test('op glas doorschijnend, plat glas dicht', () {
     GlasKwaliteit.stand.value = GlasStand.mat;
-    expect(balkOpGlas(0xFFCC2222).a, closeTo(.58, .01));
+    expect(balkOpGlas(0xFFCC2222).a, closeTo(kGlasDekking, .01));
+    expect(kGlasDekking, greaterThanOrEqualTo(.8), reason: 'Saber, 16-10-2026: "alles is veel te transparant" (bij 58 %)');
     GlasKwaliteit.stand.value = GlasStand.plat;
     expect(balkOpGlas(0xFFCC2222), balkKleur(0xFFCC2222));
   });

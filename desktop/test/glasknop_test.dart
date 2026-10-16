@@ -103,6 +103,9 @@ void main() {
     t.view.physicalSize = const Size(1400, 900);
     await zet(t, radio());
     expect(onderlaag, findsNothing, reason: 'op een pc vervaagt het glas zelf');
+    // Maar ook vervaagd ligt het witte waas op een donkere grond (16-10-2026): anders is een witte
+    // pijl op een lichte hoes wit op wit.
+    expect(find.byWidgetPredicate((w) => w is ColoredBox && w.color == kGlasOnderlaagMat), findsOneWidget);
 
     setTvModeForTest(true);
     await zet(t, radio());

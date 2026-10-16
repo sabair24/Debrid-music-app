@@ -17,8 +17,16 @@
 ///   bovenknoppen van een albumpagina. Alleen onder Impeller (gsm, iPad, Mac).
 ///
 /// **De bewaker ([GlasKwaliteit.bewaak])** leest de tekentijd van elk beeld zolang er glas op het
-/// scherm staat. Is het 90e percentiel van twee meetvensters op rij hoger dan [kGlasBudget], dan gaat
-/// het glas één stand omlaag, tot het einde van de sessie. Liever minder glas dan haperen.
+/// scherm staat. Is het 90e percentiel van [kGlasTeZwaar] meetvensters op rij hoger dan [kGlasBudget],
+/// dan gaat het glas één stand omlaag, tot het einde van de sessie. Liever minder glas dan haperen. De
+/// eerste [kGlasAanloop] na het opstarten telt hij niet mee.
+///
+/// **Dicht, zoals Somati (16-10-2026, 3.9.499).** Saber, met twee schermafdrukken van het menu naast
+/// twee van zijn Somati-app: *"Alles is veel te transparant."* Onder het menu stond de lijst
+/// haarscherp — "Eyes Closed", "FLAC · 24/48" — door een vulling van 74 % en zonder enige vervaging.
+/// Somati's regel (zijn CLAUDE.md, "Glas-effect & sheets"): leesbaarheid gaat vóór alles, zware
+/// vervaging, een vulling waar je geen tekst meer door leest, en een heldere glasrand. Vandaar
+/// [glasVulling] met [kGlasDekking], en [kGlasDekkingPlat] als de vervaging er niet is.
 library;
 
 import 'dart:ui' as ui;
@@ -38,6 +46,51 @@ const kGlasBudget = Duration(microseconds: 7000);
 /// Hoeveel beelden één meetvenster telt.
 const kGlasVenster = 90;
 
+/// Hoeveel te zware meetvensters op rij voor het glas een stand zakt. Drie vensters zijn ruim twee
+/// seconden aan beelden: een pagina die opengaat en zijn hoezen binnenkrijgt, haalt dat niet.
+const kGlasTeZwaar = 3;
+
+/// Hoe lang na het opstarten de bewaker niet meetelt.
+///
+/// De eerste seconden zijn zwaar om redenen die niets met glas te maken hebben: shaders die voor het
+/// eerst gebouwd worden, hoezen die binnenkomen, de catalogus. Met twee vensters op rij en zonder
+/// aanloop kon het glas zo binnen drie seconden van vloeibaar naar plat zakken, voor de hele sessie —
+/// en een menu zonder enige vervaging is precies wat de schermafdrukken van 16-10-2026 tonen.
+const kGlasAanloop = Duration(seconds: 10);
+
+/// Hoe dicht een donker glasvlak is (menu, minispeler, onderbalk), mét vervaging: de achtergrond
+/// wordt een gekleurde waas, er valt niets meer door te lezen. Zie de uitleg bovenaan.
+const kGlasDekking = .80;
+
+/// Hoe dicht hetzelfde vlak is als de vervaging er niet is ([GlasStand.plat]): helemaal. Dan is de
+/// vulling het enige wat tegenhoudt; 74 % liet de lijst eronder gewoon leesbaar, en zelfs bij 96 %
+/// schemerde witte tekst op zwart nog door (getekend op 16-10-2026).
+const kGlasDekkingPlat = 1.0;
+
+/// De dekking voor deze stand.
+double glasDekking(GlasStand stand) => stand == GlasStand.plat ? kGlasDekkingPlat : kGlasDekking;
+
+/// De vulling van een donker glasvlak in [kleur], naar het voorbeeld van Somati's `GlassSheet`: een
+/// diagonaal verloop, linksboven een tikje lichter en dichter (waar glas het licht vangt), in het
+/// midden het dunst. Gemiddeld [glasDekking].
+BoxDecoration glasVulling(Color kleur, GlasStand stand) {
+  final a = glasDekking(stand);
+  // Plat: overal dicht, alleen het licht verloopt nog.
+  final speling = stand == GlasStand.plat ? 0.0 : .04;
+  return BoxDecoration(
+    gradient: LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      stops: const [0, .55, 1],
+      colors: [
+        Color.lerp(kleur, const Color(0xFFFFFFFF), .05)!.withValues(alpha: (a + speling).clamp(0.0, 1.0)),
+        kleur.withValues(alpha: a - speling),
+        Color.lerp(kleur, const Color(0xFF000000), .12)!.withValues(alpha: a),
+      ],
+    ),
+  );
+}
+
 /// Verzadiging: kleur die door glas komt, wordt voller (wat echt glas met licht doet).
 List<double> _verzadig(double s) {
   const r = .2126, g = .7152, b = .0722;
@@ -53,10 +106,14 @@ List<double> _verzadig(double s) {
 /// HET filter van matglas: vervaging (iets breder dan hoog, als een gebogen ruit), een tikje
 /// `dilate` zodat het licht uitloopt, en meer verzadiging. Eén object voor de hele app — de engine
 /// voegt alleen GELIJKE filters in een `BackdropGroup` samen.
+///
+/// Zwaar vervaagd (24 bij 20, was 16 bij 12): Somati's "zware blur — de drukke achtergrond wordt een
+/// zachte waas". Impeller verkleint het beeld eerst naar de sterkte, dus zwaarder hoort nauwelijks
+/// meer te kosten — nagelezen, niet gemeten; de bewaker meet het wel.
 final ui.ImageFilter glasMat = ui.ImageFilter.compose(
   outer: ui.ColorFilter.matrix(_verzadig(1.35)),
   inner: ui.ImageFilter.compose(
-    outer: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 12, tileMode: TileMode.clamp),
+    outer: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 20, tileMode: TileMode.clamp),
     inner: ui.ImageFilter.dilate(radiusX: 2, radiusY: 2),
   ),
 );
@@ -78,6 +135,16 @@ class GlasKwaliteit {
   static final _tijden = <int>[];
   static int _teZwaar = 0;
   static bool _bewaakt = false;
+  static Stopwatch? _sinds;
+  static String? _wissel;
+
+  /// Voor `warmte.log` (de gsm schrijft daar elke tien seconden een regel op de pc): de stand, en één
+  /// keer waarom hij laatst zakte. Zo zie je ook zonder kabel of het glas nog vervaagt.
+  static String verslag() {
+    final w = _wissel;
+    _wissel = null;
+    return 'glasstand ${stand.value.name}${w == null ? '' : ' ($w)'}';
+  }
 
   /// Hoeveel glasvlakken er nu op het scherm staan. Alleen dan meet de bewaker.
   static int get actief => _actief;
@@ -106,13 +173,16 @@ class GlasKwaliteit {
   static void bewaak() {
     if (_bewaakt) return;
     _bewaakt = true;
+    _sinds = Stopwatch()..start();
     SchedulerBinding.instance.addTimingsCallback(opBeelden);
   }
 
-  /// Wat de bewaker met een rij beelden doet. Publiek voor de toets.
+  /// Wat de bewaker met een rij beelden doet. Publiek voor de toets; [verstreken] is de tijd sinds
+  /// [bewaak] (in de app de klok, in een toets opgegeven — zonder telt alles mee).
   @visibleForTesting
-  static void opBeelden(List<ui.FrameTiming> beelden) {
-    if (_actief == 0 || stand.value == GlasStand.plat) {
+  static void opBeelden(List<ui.FrameTiming> beelden, {Duration? verstreken}) {
+    final sinds = verstreken ?? _sinds?.elapsed;
+    if (_actief == 0 || stand.value == GlasStand.plat || (sinds != null && sinds < kGlasAanloop)) {
       _tijden.clear();
       return;
     }
@@ -126,13 +196,15 @@ class GlasKwaliteit {
       _teZwaar = 0;
       return;
     }
-    if (++_teZwaar < 2) return;
+    if (++_teZwaar < kGlasTeZwaar) return;
     _teZwaar = 0;
     final van = stand.value;
     final naar = van == GlasStand.vloeibaar ? GlasStand.mat : GlasStand.plat;
     stand.value = naar;
-    meld?.call('glas: ${van.name} → ${naar.name}, 90e percentiel ${(p90 / 1000).toStringAsFixed(1)} ms '
-        'per beeld met $_actief glasvlakken');
+    final waarom = '${van.name} → ${naar.name}, 90e percentiel ${(p90 / 1000).toStringAsFixed(1)} ms '
+        'per beeld met $_actief glasvlakken';
+    _wissel = waarom;
+    meld?.call('glas: $waarom');
   }
 
   /// Het 90e percentiel van [microseconden].
@@ -148,6 +220,7 @@ class GlasKwaliteit {
     _actief = 0;
     _tijden.clear();
     _teZwaar = 0;
+    _wissel = null;
     stand.value = GlasStand.mat;
   }
 }
@@ -160,17 +233,22 @@ class GlasVlak extends StatefulWidget {
   const GlasVlak({
     super.key,
     this.vorm = BorderRadius.zero,
-    required this.vulling,
+    this.vulling,
+    this.kleur,
     this.lens = false,
     this.lichtrand = true,
     this.child,
-  });
+  }) : assert(vulling != null || kleur != null, 'een glasvlak zonder vulling is een gat');
 
   /// De ronding van het vlak.
   final BorderRadius vorm;
 
-  /// De kleur(en) over de vervaging. In plat glas het hele vlak.
-  final Decoration vulling;
+  /// De kleur(en) over de vervaging, zoals ze zijn. In plat glas het hele vlak.
+  final Decoration? vulling;
+
+  /// Of: één kleur, en het vlak maakt er zelf [glasVulling] van — dicht volgens de stand. Gaat voor
+  /// [vulling].
+  final Color? kleur;
 
   /// Een lensrand erbij in de stand vloeibaar. Alleen voor glas dat stil staat — zie [GlasLens].
   final bool lens;
@@ -201,7 +279,8 @@ class _GlasVlakState extends State<GlasVlak> {
   Widget build(BuildContext context) => ValueListenableBuilder<GlasStand>(
         valueListenable: GlasKwaliteit.stand,
         builder: (context, stand, _) {
-          final vulling = DecoratedBox(decoration: widget.vulling);
+          final k = widget.kleur;
+          final vulling = DecoratedBox(decoration: k != null ? glasVulling(k, stand) : widget.vulling!);
           final rand = widget.lichtrand ? CustomPaint(painter: _Lichtrand(widget.vorm)) : null;
           return ClipRRect(
             borderRadius: widget.vorm,
@@ -225,20 +304,23 @@ class _GlasVlakState extends State<GlasVlak> {
 }
 
 /// De lichtrand: een streep die linksboven helder is en naar rechtsonder uitdooft.
+///
+/// Helderder sinds 16-10-2026, en nergens helemaal weg: Somati's "heldere glas-rand-gloed" (wit 45 %
+/// rondom op donker) is wat daar het glas tot glas maakt in plaats van een donker paneel.
 class _Lichtrand extends CustomPainter {
   _Lichtrand(this.vorm);
   final BorderRadius vorm;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final r = vorm.toRRect(Offset.zero & size).deflate(.5);
+    final r = vorm.toRRect(Offset.zero & size).deflate(.6);
     final p = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1
+      ..strokeWidth = 1.2
       ..shader = ui.Gradient.linear(Offset.zero, Offset(size.width, size.height), const [
-        Color(0x8CFFFFFF),
+        Color(0xB3FFFFFF),
+        Color(0x3DFFFFFF),
         Color(0x1FFFFFFF),
-        Color(0x0AFFFFFF),
       ], const [0, .45, 1]);
     canvas.drawRRect(r, p);
   }

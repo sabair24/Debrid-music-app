@@ -1086,7 +1086,8 @@ Future<void> main() async {
           c.close();
         }
       },
-      extra: () => player.playing ? 'speelt' : 'stil',
+      // En de stand van het glas: of het nog vervaagt, en zo niet, waarom de bewaker het terugzette.
+      extra: () => '${player.playing ? 'speelt' : 'stil'} | ${GlasKwaliteit.verslag()}',
     ).start();
   }
 
@@ -2058,7 +2059,10 @@ EdgeInsets onderOp(BuildContext context, EdgeInsets e) =>
 
 /// De kleur van een balk op glas: dezelfde tint als zonder ([balkKleur]), maar doorschijnend, zodat
 /// het glas eronder te zien is. Staat het glas plat (tv of de bewaker), dan dicht zoals altijd.
-Color balkOpGlas(int? was) => glasZonderVervaging ? balkKleur(was) : balkKleur(was).withValues(alpha: .58);
+///
+/// [kGlasDekking] (80 %) en niet meer 58: "alles is veel te transparant" (Saber, 16-10-2026).
+Color balkOpGlas(int? was) =>
+    glasZonderVervaging ? balkKleur(was) : balkKleur(was).withValues(alpha: kGlasDekking);
 
 /// De pagina's met de glazen balken eroverheen, of gewoon de pagina's.
 ///

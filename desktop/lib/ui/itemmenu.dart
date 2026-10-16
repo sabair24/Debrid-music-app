@@ -141,10 +141,14 @@ Future<MenuRegel?> _viaBlad(BuildContext context, ItemMenu menu) async {
       route ??= ModalRoute.of(bladContext);
       // Een eigen groep: het blad ligt óver de glazen balken, en glas dat elkaar overlapt hoort niet
       // in dezelfde groep (dan ziet het ene het andere niet). Op een tv ondoorzichtig, zoals altijd.
+      //
+      // Dicht zoals Somati (16-10-2026): met 74 % las Saber de lijst eronder haarscherp. Zie
+      // [glasVulling].
       return BackdropGroup(
         child: GlasVlak(
           vorm: const BorderRadius.vertical(top: Radius.circular(16)),
-          vulling: BoxDecoration(color: isTv ? kBovenop : kBovenop.withValues(alpha: .74)),
+          vulling: isTv ? const BoxDecoration(color: kBovenop) : null,
+          kleur: isTv ? null : kBovenop,
           child: ItemMenuBlad(menu: menu),
         ),
       );

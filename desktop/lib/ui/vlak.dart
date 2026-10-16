@@ -293,11 +293,14 @@ Widget balkGlas(Color tint, double op, {bool dicht = false, bool plat = false}) 
   // Helemaal niets, en niet "een doorzichtig vlak": een BackdropFilter met sigma 0 is nog steeds een
   // laag die de achtergrond leest, en dat is op een Shield het duurste wat er op het scherm staat.
   if (op <= .01) return const SizedBox.shrink();
-  final vol = isTv
+  // Dichter sinds 16-10-2026 (Saber: "alles is veel te transparant", met Somati als voorbeeld): .88
+  // en .80, waar het .78 en .62 was. En zonder vervaging dicht zoals op de tv — dan is de vulling het
+  // enige wat de alinea eronder tegenhoudt.
+  final vol = isTv || plat || glasZonderVervaging
       ? .96
       : dicht
-          ? .78
-          : .62;
+          ? .88
+          : .80;
   final vulling = DecoratedBox(
     decoration: BoxDecoration(
       gradient: LinearGradient(
@@ -388,8 +391,14 @@ final ImageFilter glasVervorming = ImageFilter.compose(
 /// * [plat] is de uitweg voor een televisie, om de reden die bij [balkGlas] staat: geen vervaging, wel
 ///   meer dekking, met dezelfde ophogingen als `glassSurface` — anders lost de pil van drie meter
 ///   afstand op in het donker.
-/// De donkere laag onder plat glas buiten de tv, zie [glasRuit]: de achtergrondkleur op 60 procent.
-const kGlasOnderlaag = Color(0x9907080C);
+/// De donkere laag onder plat glas buiten de tv, zie [glasRuit]: de achtergrondkleur op 80 procent
+/// (was 60 — "alles is veel te transparant", 16-10-2026).
+const kGlasOnderlaag = Color(0xCC07080C);
+
+/// De donkere laag onder VERVAAGD glas: 45 procent. Zonder lag het witte waas direct op de vervaagde
+/// foto, en een witte pijl op een lichte hoes is dan een witte pijl op wit. Somati legt zijn witte
+/// glans ook over een donkere grond.
+const kGlasOnderlaagMat = Color(0x7307080C);
 
 Widget glasRuit({bool? plat, bool lens = false}) {
   // Volgt de stand van het glas: verandert die (de bewaker in ui/glas.dart), dan tekent de ruit
@@ -459,6 +468,7 @@ Widget _glasRuit({bool? plat, required bool lens}) {
                 BackdropFilter.grouped(filter: glasMat, child: const SizedBox.expand()),
                 // De lensrand, alleen als vloeibaar glas en alleen voor een ruit die stil staat.
                 if (lens && GlasKwaliteit.stand.value == GlasStand.vloeibaar) const GlasLens(hoek: kHoekRond),
+                const ColoredBox(color: kGlasOnderlaagMat),
                 vulling,
               ],
             ),
