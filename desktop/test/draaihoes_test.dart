@@ -210,7 +210,128 @@ void main() {
     expect(main, contains('achterkant: () => achterkantVan(context, a),'));
     // Geen los plaatje van de achterkant meer in het infoblok.
     expect(main, isNot(contains('height: 116, fit: BoxFit.contain')));
-    // Omgedraaid staat de cd stil en schuift hij terug.
-    expect(main, contains('if (widget.draai?.omgedraaid ?? false) {\n      _slide.reverse();\n      _spin.stop();'));
+    // Omgedraaid staat de cd stil en schuift hij terug — en pas als de hoes helemaal terug is, mag
+    // hij weer uit en zichtbaar worden.
+    expect(main, contains('if (!_voorInRust) {\n      _slide.reverse();\n      _spin.stop();'));
+    expect(main, contains('offstage: !_voorInRust,'));
+    expect(main, contains('widget.draai?.voorInRust.addListener(_opDraai);'));
+    expect(main, contains('widget.draai?.voorInRust.removeListener(_opDraai);'));
+    // De achterkant helemaal, in zijn eigen vorm; de schaduw volgt hem.
+    expect('AchterkantBeeld('.allMatches(main).length, 2);
+    expect(main, contains('schaduw: widget.achterSchaduw'));
+    expect(main, contains('achterSchaduw: kNuSpeeltAchterSchaduw,'));
+    expect(main, contains('valueListenable: _draai.voorInRust,'));
+    final tegel = File('lib/ui/tegel.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(tegel, contains('AchterkantBeeld('));
+    expect(tegel, contains('boxShadow: !_draai.voorInRust.value ? const [] : (_aan ? kSchaduw2 : kSchaduw1),'));
+  });
+
+  group('de achterkant in zijn eigen vorm (Saber, 16-10-2026: "wordt die teveel afgesneden")', () {
+    test('een cd-achterkant is breder dan hoog: helemaal in beeld, gecentreerd in het vak', () {
+      // De meest voorkomende verhouding bij hem: 283 van de 485 tussen 1,22 en 1,35.
+      expect(achterkantMaat(300, 1200 / 944), const Size(300, 300 * 944 / 1200));
+      expect(achterkantMaat(300, 1200 / 351).height, closeTo(87.75, .01), reason: 'heel breed blijft heel breed');
+      expect(achterkantMaat(300, 433 / 599), const Size(300 * 433 / 599, 300), reason: 'staand: de hoogte vult');
+    });
+
+    test('vinyl en singles (vierkant) vullen het vak zoals altijd; onbekend ook', () {
+      expect(achterkantMaat(300, 1), const Size(300, 300));
+      expect(achterkantMaat(300, 593 / 599), const Size(300, 300));
+      expect(achterkantMaat(300, 1.03), const Size(300, 300));
+      expect(achterkantMaat(300, null), const Size(300, 300));
+      expect(achterkantMaat(300, double.nan), const Size(300, 300));
+      expect(achterkantMaat(300, 1.06).height, lessThan(300), reason: 'licht breed is geen vierkant');
+    });
+
+    Uint8List pngVan(int w, int h) {
+      final b = Uint8List.fromList(_png);
+      ByteData.sublistView(b)
+        ..setUint32(16, w)
+        ..setUint32(20, h);
+      return b;
+    }
+
+    test('de verhouding komt uit de kop van het bestand', () {
+      expect(beeldVerhouding(pngVan(1200, 944)), closeTo(1200 / 944, 1e-9));
+      expect(beeldVerhouding(_png), 1);
+      expect(beeldVerhouding(Uint8List.fromList([1, 2, 3])), isNull);
+    });
+
+    testWidgets('het beeld krijgt die maat, met de schaduw om zichzelf', (t) async {
+      await t.pumpWidget(Directionality(
+        textDirection: TextDirection.ltr,
+        child: Center(
+          child: AchterkantBeeld(
+              beeld: pngVan(1200, 944), maat: 300, hoek: 10, decodeerBreedte: 300, schaduw: const [BoxShadow(blurRadius: 4)]),
+        ),
+      ));
+      expect(t.getSize(find.byType(AchterkantBeeld)), const Size(300, 300), reason: 'het vak blijft dat van de voorkant');
+      final beeld = t.widget<Image>(find.byType(Image));
+      expect(beeld.width, 300);
+      expect(beeld.height, closeTo(300 * 944 / 1200, .01));
+      final schaduw = find.byWidgetPredicate(
+          (w) => w is DecoratedBox && w.decoration is BoxDecoration && (w.decoration as BoxDecoration).boxShadow != null);
+      expect(t.getSize(schaduw).height, closeTo(300 * 944 / 1200, .01), reason: 'de schaduw volgt de achterkant');
+    });
+  });
+
+  group('wat achter de hoes zit (de cd), terug na het omdraaien', () {
+    // Saber, 16-10-2026: "van de achterkant terug flippen naar de voorkant, dan zie ik voor een
+    // seconde de cd er volledig door, dat mag niet".
+    Widget hoes(DraaiHoesController c, {bool metAchter = true}) => Directionality(
+          textDirection: TextDirection.ltr,
+          child: DraaiHoes(
+            controller: c,
+            voor: const SizedBox(width: 100, height: 100),
+            achter: metAchter ? const SizedBox(width: 100, height: 80) : null,
+          ),
+        );
+
+    testWidgets('verborgen vanaf de eerste draai tot de voorkant helemaal terug is', (t) async {
+      final c = DraaiHoesController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(hoes(c));
+      expect(c.voorInRust.value, isTrue);
+      c.draai(heeftAchterkant: true);
+      expect(c.voorInRust.value, isFalse, reason: 'meteen weg bij het omdraaien');
+      await t.pumpAndSettle();
+      expect(c.voorInRust.value, isFalse, reason: 'de achterkant staat voor');
+
+      c.draai(heeftAchterkant: true);
+      expect(c.omgedraaid, isFalse);
+      expect(c.voorInRust.value, isFalse, reason: 'het terugdraaien begint pas');
+      await t.pump();
+      await t.pump(kDraaiDuur * .5);
+      expect(c.voorInRust.value, isFalse, reason: 'halverwege staat de hoes op zijn kant: hier zag hij de cd');
+      await t.pump(kDraaiDuur * .45);
+      expect(c.voorInRust.value, isFalse);
+      await t.pumpAndSettle();
+      expect(c.voorInRust.value, isTrue, reason: 'helemaal terug: nu mag de cd weer');
+    });
+
+    testWidgets('een wiebel (geen achterkant) verbergt niets', (t) async {
+      final c = DraaiHoesController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(hoes(c, metAchter: false));
+      c.draai(heeftAchterkant: false);
+      await t.pump(const Duration(milliseconds: 100));
+      expect(c.voorInRust.value, isTrue);
+      await t.pumpAndSettle();
+    });
+
+    testWidgets('halverwege terug weer omdraaien: blijft verborgen', (t) async {
+      final c = DraaiHoesController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(hoes(c));
+      c.draai(heeftAchterkant: true);
+      await t.pumpAndSettle();
+      c.draai(heeftAchterkant: true);
+      await t.pump();
+      await t.pump(kDraaiDuur * .3);
+      c.draai(heeftAchterkant: true);
+      await t.pumpAndSettle();
+      expect(c.omgedraaid, isTrue);
+      expect(c.voorInRust.value, isFalse);
+    });
   });
 }

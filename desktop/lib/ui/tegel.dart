@@ -196,7 +196,19 @@ class _AlbumTegelState extends State<AlbumTegel> {
   int _decodeer(double maat) => (maat * MediaQuery.devicePixelRatioOf(context)).round();
 
   @override
+  void initState() {
+    super.initState();
+    // De schaduw onder de tegel is vierkant; staat de achterkant voor, dan draagt die zijn eigen.
+    _draai.voorInRust.addListener(_opRust);
+  }
+
+  void _opRust() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   void dispose() {
+    _draai.voorInRust.removeListener(_opRust);
     _draai.dispose();
     _tikken.dispose();
     super.dispose();
@@ -233,20 +245,19 @@ class _AlbumTegelState extends State<AlbumTegel> {
         : DraaiHoes(
             controller: _draai,
             voor: kaal,
+            // Helemaal, in zijn eigen vorm (zie [achterkantMaat]).
             achter: _achter == null
                 ? null
-                : ClipRRect(
-                    borderRadius: vorm,
-                    child: Image.memory(_achter!,
-                        width: maat, height: maat, fit: BoxFit.cover, cacheWidth: _decodeer(maat)),
-                  ),
+                : AchterkantBeeld(
+                    beeld: _achter!, maat: maat, hoek: kHoek12, decodeerBreedte: _decodeer(maat), schaduw: kSchaduw1),
           );
     return AnimatedContainer(
       duration: kGebaar,
       curve: Curves.easeOut,
       decoration: BoxDecoration(
         borderRadius: vorm,
-        boxShadow: _aan ? kSchaduw2 : kSchaduw1,
+        // Geen vierkante schaduw onder een achterkant die breder is dan hoog: die draagt zijn eigen.
+        boxShadow: !_draai.voorInRust.value ? const [] : (_aan ? kSchaduw2 : kSchaduw1),
       ),
       child: widget.heroTag == null
           ? hoes

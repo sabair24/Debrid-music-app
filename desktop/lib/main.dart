@@ -10619,6 +10619,10 @@ class _SpeakerButton extends StatelessWidget {
 /// Het label waarmee de hoes van de minispeler naar Nu speelt vliegt (Saber, 16-10-2026).
 const kNuSpeeltHoes = 'nu-speelt-hoes';
 
+/// De schaduw van de achterkant op Nu speelt: dezelfde als onder de voorkant, maar om de achterkant
+/// zelf (zie [AchterkantBeeld.schaduw]).
+const kNuSpeeltAchterSchaduw = [BoxShadow(color: Color(0x80000000), blurRadius: 44, offset: Offset(0, 22))];
+
 /// Hoe ver je de minispeler opzij moet vegen voor het volgende of vorige nummer.
 const double kVeegDrempel = 72;
 
@@ -11876,12 +11880,21 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
         cursor: (_shown ?? p.currentCover) == null
             ? MouseCursor.defer
             : SystemMouseCursors.zoomIn,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withValues(alpha: .5), blurRadius: 44, offset: const Offset(0, 22))
-            ],
+        // De grote schaduw hoort bij de voorkant (met de cd ernaast). Staat de achterkant voor, dan
+        // draagt die zijn eigen schaduw in zijn eigen vorm: een cd-achterkant is breder dan hoog, en
+        // onder hem lag anders een donkere strook (16-10-2026).
+        child: ValueListenableBuilder<bool>(
+          valueListenable: _draai.voorInRust,
+          builder: (_, rust, kind) => AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withValues(alpha: rust ? .5 : 0), blurRadius: 44, offset: const Offset(0, 22))
+              ],
+            ),
+            child: kind,
           ),
           // Same sleeve-and-disc as the album page, at the size this screen deserves.
           // The album is taken from the track that is playing, so the disc that comes
@@ -11931,6 +11944,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     },
                     draai: isTv ? null : _draai,
                     onAchter: (b) => _achterNu = b,
+                    achterSchaduw: kNuSpeeltAchterSchaduw,
                     // De hoes van de minispeler groeit hierheen uit (zie [kNuSpeeltHoes]).
                     heroTag: kNuSpeeltHoes,
                     // De hoes en cd van het volgende nummer alvast klaarzetten — anders staat er bij
@@ -22730,11 +22744,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                           : Hero(tag: widget.heroTag!, child: _netCover(al.cover, size: 128)),
                       achter: _achter == null
                           ? null
-                          : ClipRRect(
-                              borderRadius: BorderRadius.circular(kHoek12),
-                              child: Image.memory(_achter!,
-                                  width: 128, height: 128, fit: BoxFit.cover, cacheWidth: decodeWidth(128)),
-                            ),
+                          : AchterkantBeeld(
+                              beeld: _achter!, maat: 128, hoek: kHoek12, decodeerBreedte: decodeWidth(128)),
                     ),
                   ),
                 const SizedBox(width: 16),
@@ -25130,6 +25141,10 @@ class AlbumArt extends StatefulWidget {
   /// De achterkant die deze hoes zou tonen (of null), zodra hij bekend is: voor wie hem wil
   /// vergroten, en om te weten of er iets te draaien valt.
   final ValueChanged<Uint8List?>? onAchter;
+
+  /// Een schaduw om de achterkant, in zijn eigen vorm (zie [AchterkantBeeld.schaduw]). Voor wie de
+  /// voorkant van buitenaf een schaduw geeft en die weghaalt zolang de achterkant voor staat.
+  final List<BoxShadow>? achterSchaduw;
   const AlbumArt({
     super.key,
     required this.artist,
@@ -25151,6 +25166,7 @@ class AlbumArt extends StatefulWidget {
     this.volgende,
     this.draai,
     this.onAchter,
+    this.achterSchaduw,
   });
 
   @override
@@ -25250,6 +25266,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     widget.draai?.addListener(_opDraai);
+    widget.draai?.voorInRust.addListener(_opDraai);
     _load();
     _sync();
     _zetVolgendeKlaar();
@@ -25260,6 +25277,9 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     setState(() {});
     _sync();
   }
+
+  /// Ligt de voorkant stil vooraan? Zonder draai altijd.
+  bool get _voorInRust => widget.draai?.voorInRust.value ?? true;
 
   /// De achterkant die al gemeld en voorgeladen is, zodat dat één keer per beeld gebeurt.
   Uint8List? _gemeldAchter;
@@ -25300,7 +25320,9 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     super.didUpdateWidget(old);
     if (old.draai != widget.draai) {
       old.draai?.removeListener(_opDraai);
+      old.draai?.voorInRust.removeListener(_opDraai);
       widget.draai?.addListener(_opDraai);
+      widget.draai?.voorInRust.addListener(_opDraai);
     }
     _zetVolgendeKlaar();
     // Same as the info panel: a new pin is a new set of scans, even when the album's name is
@@ -25355,8 +25377,9 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
 
   void _sync() {
     // Omgedraaid: de achterkant staat voor. Een cd die daarachter doordraait kost zestig beelden per
-    // seconde die niemand ziet, dus hij schuift terug en staat stil tot de hoes weer omkeert.
-    if (widget.draai?.omgedraaid ?? false) {
+    // seconde die niemand ziet, dus hij schuift terug en staat stil tot de hoes weer omkeert — en
+    // pas weer uit als hij helemaal terug is ([DraaiHoesController.voorInRust]).
+    if (!_voorInRust) {
       _slide.reverse();
       _spin.stop();
       _fps.stop();
@@ -25453,6 +25476,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     // weg is. Blijft hij hangen, dan telt hij het hele scherm mee en klopt de volgende meting niet.
     _fps.stop();
     widget.draai?.removeListener(_opDraai);
+    widget.draai?.voorInRust.removeListener(_opDraai);
     _slide.dispose();
     _spin.dispose();
     super.dispose();
@@ -25498,19 +25522,17 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
         if (mounted) widget.onAchter?.call(achter);
       });
     }
-    final omgedraaid = widget.draai?.omgedraaid ?? false;
     final kaart = widget.draai == null
         ? vliegend
         : DraaiHoes(
             controller: widget.draai!,
             voor: vliegend,
+            // Helemaal, in zijn eigen vorm: een cd-achterkant is breder dan hoog (zie
+            // [achterkantMaat]).
             achter: achter == null
                 ? null
-                : ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: Image.memory(achter,
-                        width: s, height: s, fit: BoxFit.cover, cacheWidth: decodeWidth(s), gaplessPlayback: true),
-                  ),
+                : AchterkantBeeld(
+                    beeld: achter, maat: s, hoek: 10, decodeerBreedte: decodeWidth(s), schaduw: widget.achterSchaduw),
           );
 
     // **Geen scan? Dan een schijf met de vóórkant als etiket.**
@@ -25581,10 +25603,11 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           Positioned(
             left: 0,
             top: s * .04,
-            // Weg zolang de achterkant voor staat: anders zie je hem halverwege de draai achter een
-            // hoes die op zijn kant staat.
+            // Weg zolang de achterkant voor staat, en tot de hoes helemaal TERUG is: anders zie je
+            // hem halverwege de draai achter een hoes die op zijn kant staat — op de terugweg stond
+            // hij zo een tel volledig in beeld (Saber, 16-10-2026).
             child: Offstage(
-            offstage: omgedraaid,
+            offstage: !_voorInRust,
             // The disc's own clip is cached below; this boundary is about everything ABOVE it.
             // RenderTransform is not a repaint boundary, so a moving disc marked the nearest one
             // above — the route — and the whole screen was re-recorded every frame, including the

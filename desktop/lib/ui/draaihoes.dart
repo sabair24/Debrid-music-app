@@ -17,8 +17,11 @@ library;
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
+
+import '../booklet.dart' show imageSize;
 
 /// Hoe lang er na een tik op een tweede gewacht wordt (van loslaten tot opnieuw neerdrukken).
 const kTweedeTik = Duration(milliseconds: 200);
@@ -152,9 +155,21 @@ class _DubbelTikVlakState extends State<DubbelTikVlak> {
 class DraaiHoesController extends ChangeNotifier {
   bool _omgedraaid = false;
   int _wiebels = 0;
+  bool _weg = false;
+  final _voorInRust = ValueNotifier<bool>(true);
 
   /// Staat de achterkant voor?
   bool get omgedraaid => _omgedraaid;
+
+  /// Ligt de voorkant stil vooraan? Niet zolang de achterkant voor staat, en ook niet zolang hij nog
+  /// TERUGdraait.
+  ///
+  /// **Waarom dat tweede.** Saber, 16-10-2026, over Nu speelt: *"van de achterkant terug flippen naar
+  /// de voorkant, dan zie ik voor een seconde de cd er volledig door, dat mag niet, is niet realistisch
+  /// en niet mooi."* De cd achter de hoes keek naar [omgedraaid], en dat gaat op onwaar zodra het
+  /// terugdraaien BEGINT: halverwege, met de hoes op zijn kant, stond de hele cd in beeld. Wat achter de
+  /// hoes zit, hoort pas weer te verschijnen als hij helemaal terug is — dit.
+  ValueListenable<bool> get voorInRust => _voorInRust;
 
   /// Telt op bij elke wiebel, zodat de hoes weet dat hij er een moet spelen.
   int get wiebels => _wiebels;
@@ -163,10 +178,23 @@ class DraaiHoesController extends ChangeNotifier {
   void draai({required bool heeftAchterkant}) {
     if (heeftAchterkant || _omgedraaid) {
       _omgedraaid = !_omgedraaid;
+      if (_omgedraaid) _voorInRust.value = false;
     } else {
       _wiebels++;
     }
     notifyListeners();
+  }
+
+  /// De [DraaiHoes] meldt dat hij weer helemaal op zijn voorkant ligt.
+  void _terugOpVoorkant() {
+    if (!_weg && !_omgedraaid) _voorInRust.value = true;
+  }
+
+  @override
+  void dispose() {
+    _weg = true;
+    _voorInRust.dispose();
+    super.dispose();
   }
 
   /// Terug naar de voorkant, zonder animatie-eisen (bij een andere plaat).
@@ -174,6 +202,77 @@ class DraaiHoesController extends ChangeNotifier {
     if (!_omgedraaid) return;
     _omgedraaid = false;
     notifyListeners();
+  }
+}
+
+/// Onder dit verschil met 1 telt een achterkant als vierkant (vinyl, een single) en vult hij het vak.
+const _bijnaVierkant = .04;
+
+/// Waar een achterkant met [verhouding] (breedte gedeeld door hoogte) komt in het vak van de hoes,
+/// [maat] bij [maat]: helemaal zichtbaar, in zijn eigen vorm, gecentreerd. Onbekend = het hele vak.
+///
+/// **Waarom niet gewoon vullen.** Saber, 16-10-2026: *"als ik de hoes flip voor de achterkant wordt
+/// die teveel afgesneden (achterkant heeft ander formaat e) ten ware bij vinyl of single soms."*
+/// Gemeten op zijn 485 bewaarde achterkanten: 283 hebben de verhouding van een cd-achterkant (1,22 tot
+/// 1,35 — het inlegvel met de twee ruggen), 97 zijn breed, 15 heel breed, 85 vierkant en 5 staand.
+/// Vullen in een vierkant sneed bij een gewone cd een vijfde van de breedte weg: precies de ruggen en
+/// de randen met de tekst.
+Size achterkantMaat(double maat, double? verhouding) {
+  if (verhouding == null || !verhouding.isFinite || verhouding <= 0 || (verhouding - 1).abs() < _bijnaVierkant) {
+    return Size.square(maat);
+  }
+  return verhouding > 1 ? Size(maat, maat / verhouding) : Size(maat * verhouding, maat);
+}
+
+final _verhoudingen = Expando<double>('verhouding van een achterkant');
+
+/// Breedte gedeeld door hoogte van een beeld, uit zijn kop (zonder te decoderen), één keer per beeld.
+double? beeldVerhouding(Uint8List beeld) {
+  final al = _verhoudingen[beeld];
+  if (al != null) return al.isNaN ? null : al;
+  final m = imageSize(beeld);
+  final v = (m == null || m.w <= 0 || m.h <= 0) ? double.nan : m.w / m.h;
+  _verhoudingen[beeld] = v;
+  return v.isNaN ? null : v;
+}
+
+/// Een achterkant in het vak van de hoes: helemaal, in zijn eigen vorm ([achterkantMaat]).
+class AchterkantBeeld extends StatelessWidget {
+  const AchterkantBeeld({
+    super.key,
+    required this.beeld,
+    required this.maat,
+    required this.hoek,
+    required this.decodeerBreedte,
+    this.schaduw,
+  });
+
+  final Uint8List beeld;
+
+  /// De zijde van het vak, gelijk aan die van de voorkant.
+  final double maat;
+  final double hoek;
+
+  /// Zoals de voorlader hem decodeerde: dezelfde sleutel, dus geen tweede keer.
+  final int decodeerBreedte;
+
+  /// Een schaduw om de achterkant zelf, in ZIJN vorm. Wie de voorkant een schaduw geeft, haalt die weg
+  /// zolang de achterkant voor staat ([DraaiHoesController.voorInRust]): een vierkante schaduw onder
+  /// een brede achterkant is een donkere strook boven en onder.
+  final List<BoxShadow>? schaduw;
+
+  @override
+  Widget build(BuildContext context) {
+    final m = achterkantMaat(maat, beeldVerhouding(beeld));
+    final vorm = BorderRadius.circular(hoek);
+    Widget beeldje = ClipRRect(
+      borderRadius: vorm,
+      child: Image.memory(beeld,
+          width: m.width, height: m.height, fit: BoxFit.cover, cacheWidth: decodeerBreedte, gaplessPlayback: true),
+    );
+    final s = schaduw;
+    if (s != null) beeldje = DecoratedBox(decoration: BoxDecoration(borderRadius: vorm, boxShadow: s), child: beeldje);
+    return SizedBox.square(dimension: maat, child: Center(child: beeldje));
   }
 }
 
@@ -224,10 +323,16 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-    _draai = AnimationController(vsync: this, duration: kDraaiDuur, value: widget.controller.omgedraaid ? 1 : 0);
+    _draai = AnimationController(vsync: this, duration: kDraaiDuur, value: widget.controller.omgedraaid ? 1 : 0)
+      ..addStatusListener(_opStand);
     _wiebel = AnimationController(vsync: this, duration: const Duration(milliseconds: 380));
     _wiebels = widget.controller.wiebels;
     widget.controller.addListener(_opController);
+  }
+
+  /// Helemaal terug op de voorkant: zeg het de controller, zodat wat achter de hoes zit weer mag.
+  void _opStand(AnimationStatus s) {
+    if (s == AnimationStatus.dismissed) widget.controller._terugOpVoorkant();
   }
 
   @override
@@ -238,6 +343,10 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
       widget.controller.addListener(_opController);
       _wiebels = widget.controller.wiebels;
       _draai.value = widget.controller.omgedraaid ? 1 : 0;
+      // Na dit beeld: wie meeluistert (de cd) zit boven deze hoes, en die mag niet tijdens de opbouw
+      // opnieuw gemarkeerd worden.
+      final c = widget.controller;
+      if (_draai.value == 0) WidgetsBinding.instance.addPostFrameCallback((_) => c._terugOpVoorkant());
     }
   }
 
