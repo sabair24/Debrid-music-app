@@ -235,9 +235,16 @@ LinearGradient? kleurWas(Color? basis) {
 /// hoort, en te weinig om hem te laten schreeuwen.
 ///
 /// Geen kleur betekent gewoon [kVerzonken] — dat is de vloer waar hij altijd op stond.
+///
+/// **Een kwart, sinds 16-10-2026.** Saber koos "minispeler en onderbalk kleuren sterker mee met de hoes
+/// die speelt (nu 10 %)". Een tiende viel op een gsm weg tegen de zwarte vloer; een kwart zegt bij
+/// welke plaat je bent zonder dat de balk een gekleurd blok wordt. De onderbalk krijgt dezelfde tint,
+/// zodat speler en navigatie samen één vlak zijn.
+const double kBalkZweem = .24;
+
 Color balkKleur(int? kleur) {
   final basis = wasBasis(kleur);
-  return basis == null ? kVerzonken : Color.lerp(kVerzonken, basis, .10)!;
+  return basis == null ? kVerzonken : Color.lerp(kVerzonken, basis, kBalkZweem)!;
 }
 
 /// De vastgezette balk boven een pagina — glas dat er alleen is als er iets onder doorschuift.
@@ -463,7 +470,18 @@ Widget glasRuit({bool? plat}) {
 /// punten 48 hoog om hem raakbaar te houden, maar tekent hij zijn inkt op 40 — en dan licht er bij
 /// aanwijzen een kleinere pil op binnen een grotere. Dus een vaste 44, zonder die opvulling: het
 /// kleinste wat Apple een vinger laat raken, en ruit en knop vallen samen.
-class GlasKnop extends StatelessWidget {
+/// Hoe lang een ingedrukte glasknop minstens ingedrukt blijft ogen.
+///
+/// Saber, 16-10-2026: *"Ik zie nooit welke knop Ik intik, is niet duidelijk."* Een vlugge tik duurt
+/// 40 tot 80 ms van neer tot los, en de standaardoplichting van Material is boven glas bijna
+/// onzichtbaar. Zo lang blijft de knop dus ingeveerd en opgelicht, ook als de vinger al weg is.
+const kKnopIngedrukt = Duration(milliseconds: 110);
+
+/// Hoe ver een ingedrukte glasknop inveert, en hoe sterk hij oplicht.
+const double kKnopVeer = .94;
+const double kKnopLicht = .18;
+
+class GlasKnop extends StatefulWidget {
   const GlasKnop({
     super.key,
     required this.icoon,
@@ -505,8 +523,34 @@ class GlasKnop extends StatelessWidget {
   final bool _rond;
 
   @override
+  State<GlasKnop> createState() => _GlasKnopState();
+}
+
+class _GlasKnopState extends State<GlasKnop> {
+  bool _in = false;
+  DateTime? _neer;
+
+  void _zet(bool v) {
+    if (mounted && v != _in) setState(() => _in = v);
+  }
+
+  Future<void> _los() async {
+    // Minstens [kKnopIngedrukt] zichtbaar, ook bij een vlugge tik.
+    final neer = _neer;
+    if (neer != null) {
+      final rest = kKnopIngedrukt - DateTime.now().difference(neer);
+      if (rest > Duration.zero) await Future<void>.delayed(rest);
+    }
+    _zet(false);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final knop = _rond
+    final w = widget;
+    final onPressed = w.onPressed;
+    final icoon = w.icoon, label = w.label, tooltip = w.tooltip, teken = w.teken, autofocus = w.autofocus;
+    final kleur = w.kleur;
+    final knop = w._rond
         ? IconButton(
             onPressed: onPressed,
             tooltip: tooltip,
@@ -536,11 +580,43 @@ class GlasKnop extends StatelessWidget {
             icon: Icon(icoon, size: 18, color: onPressed == null ? null : kleur),
             label: Text(label!),
           );
-    return Stack(
-      children: [
-        Positioned.fill(child: IgnorePointer(child: glasRuit(plat: isTv || isCompact(context)))),
-        knop,
-      ],
+    final aan = _in && onPressed != null;
+    // Inveren en oplichten. Alleen een schaal en een doorzichtigheid: geen opbouw van de knop zelf
+    // per beeld, en in rust (schaal 1, licht 0) geen enkele extra laag.
+    return Listener(
+      onPointerDown: onPressed == null
+          ? null
+          : (_) {
+              _neer = DateTime.now();
+              _zet(true);
+            },
+      onPointerUp: (_) => _los(),
+      onPointerCancel: (_) => _zet(false),
+      child: AnimatedScale(
+        scale: aan ? kKnopVeer : 1,
+        duration: aan ? const Duration(milliseconds: 70) : const Duration(milliseconds: 220),
+        curve: aan ? Curves.easeOut : Curves.easeOutBack,
+        child: Stack(
+          children: [
+            Positioned.fill(child: IgnorePointer(child: glasRuit(plat: isTv || isCompact(context)))),
+            Positioned.fill(
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: aan ? 1 : 0,
+                  duration: aan ? const Duration(milliseconds: 60) : const Duration(milliseconds: 260),
+                  child: const DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Color.fromRGBO(255, 255, 255, kKnopLicht),
+                      borderRadius: BorderRadius.all(Radius.circular(999)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            knop,
+          ],
+        ),
+      ),
     );
   }
 }

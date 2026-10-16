@@ -2915,7 +2915,12 @@ class _HomeShellState extends State<HomeShell> {
             // heeft.
             // Ook deze weg als het toetsenbord op is — zie de uitleg bij de spelerbalk hierboven.
             if (isCompact(context) && MediaQuery.viewInsetsOf(context).bottom == 0)
-              Onderbalk(view: _view, onPick: _gaNaar),
+              // Alleen de KLEUR van de speler gevolgd, niet de hele speler: zo bouwt de balk opnieuw
+              // bij een andere plaat, niet bij elke tik van de klok.
+              Selector<PlayerStore, int?>(
+                selector: (_, p) => p.wasKleur,
+                builder: (_, was, __) => Onderbalk(view: _view, onPick: _gaNaar, wasKleur: was),
+              ),
           ],
         ),
             // DE BALK, BOVEN ALLES — als hij zweeft.
@@ -4188,7 +4193,10 @@ class NavSections {
 /// een release te draaien en die op een telefoon te zetten. Als losse widget past hij wél in een
 /// toets die hem opmeet — zie test/onderbalk_test.dart.
 class Onderbalk extends StatelessWidget {
-  const Onderbalk({super.key, required this.view, required this.onPick});
+  const Onderbalk({super.key, required this.view, required this.onPick, this.wasKleur});
+
+  /// De kleur van wat er speelt, voor dezelfde tint als de minispeler. Zie [balkKleur].
+  final int? wasKleur;
 
   /// Het `_view`-nummer van de sectie die nu open staat. Staat die niet in [NavSections.balk] —
   /// je komt uit de la — dan licht er hier niets op. Dat is met opzet: geen aanwijzing is beter
@@ -4206,8 +4214,11 @@ class Onderbalk extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: _panel,
+    // Dezelfde tint als de minispeler erboven (zie [balkKleur]).
+    return AnimatedContainer(
+      duration: kWas,
+      curve: Curves.easeOut,
+      color: balkKleur(wasKleur),
       // De systeeminzet hoort bij de ONDERSTE balk, en dat is deze. `SafeArea` en geen eigen
       // rekensom: op een toestel met drie knoppen is die inzet twee keer zo hoog als op een met
       // veegbediening, en een vast getal zou de knoppen daar half onder de systeembalk zetten.
@@ -5212,7 +5223,11 @@ class AlbumCard extends StatelessWidget {
 // ── Album detail ─────────────────────────────────────────────────────────────
 class AlbumDetailPage extends StatefulWidget implements OnderDeBalk {
   final Album album;
-  const AlbumDetailPage({super.key, required this.album});
+
+  /// Het label van de tegel waar je vandaan kwam, als dat niet het standaardlabel is: op Start kan
+  /// dezelfde plaat in twee rijen staan, en twee gelijke labels op één scherm vliegen niet.
+  final String? heroTag;
+  const AlbumDetailPage({super.key, required this.album, this.heroTag});
   @override
   State<AlbumDetailPage> createState() => _AlbumDetailPageState();
 }
@@ -6718,7 +6733,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
             identity: context.watch<LibraryStore>().uidOf(album),
             // Het label van de tegel waar je vandaan kwam: de hoes groeit door in plaats van dat
             // het ene scherm hard door het andere vervangen wordt. Zelfde uid als in AlbumCard.
-            heroTag: 'hoes:${context.watch<LibraryStore>().uidOf(album)}',
+            heroTag: widget.heroTag ?? 'hoes:${context.watch<LibraryStore>().uidOf(album)}',
             size: artSize,
             fallback: album.cover,
             chosen: album.correctedCover,
@@ -9482,11 +9497,13 @@ class FavorietenView extends StatelessWidget {
             if (!narrow) const Spacer(),
             if (nummers.isNotEmpty) ...[
               SizedBox(height: narrow ? 12 : 0),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(backgroundColor: _accent),
-                onPressed: () => p.shuffleAll(nummers),
-                icon: const Icon(Icons.shuffle_rounded, size: 18),
-                label: const Text('Shuffle alles'),
+              GlasKnop(
+                onPressed: () {
+                  p.shuffleAll(nummers);
+                  _srcToast(context, 'Shuffle · ${nummers.length} ${nummers.length == 1 ? 'nummer' : 'nummers'}');
+                },
+                icoon: Icons.shuffle_rounded,
+                label: 'Shuffle alles',
               ),
             ],
           ],
@@ -9880,6 +9897,22 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
     ],
   );
 }
+
+/// Het menu voor een plaat van online (Start, zoeken): openen, de artiest, een radio.
+///
+/// Afspelen staat er niet in: een plaat van online moet eerst gevonden en binnengehaald worden, en
+/// dat gebeurt op zijn pagina ("Bronnen").
+ItemMenu _netAlbumMenu(BuildContext context, String artiest, CatalogAlbum al) => ItemMenu(
+      titel: al.title,
+      ondertitel: artiest,
+      blokken: [
+        [
+          MenuRegel(Icons.album_rounded, 'Album openen', () => openPagina(context, (_) => AlbumBrowsePage(artiest, al))),
+          MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, artiest)),
+          MenuRegel(Icons.radio_rounded, 'Radio van deze artiest', () => startRadio(context, artiest)),
+        ],
+      ],
+    );
 
 /// Het menu voor een heel album. Dezelfde acties, alleen met alle nummers tegelijk.
 ItemMenu _albumMenu(BuildContext context, Album a) {
@@ -10446,6 +10479,97 @@ class _SpeakerButton extends StatelessWidget {
   }
 }
 
+/// Het label waarmee de hoes van de minispeler naar Nu speelt vliegt (Saber, 16-10-2026).
+const kNuSpeeltHoes = 'nu-speelt-hoes';
+
+/// Hoe ver je de minispeler opzij moet vegen voor het volgende of vorige nummer.
+const double kVeegDrempel = 72;
+
+/// Vegen over de minispeler: links of rechts naar het volgende of vorige nummer, omhoog naar Nu speelt.
+///
+/// Saber, 16-10-2026, koos dit uit vier gebaren. Alleen de hoes en de titel schuiven mee met de
+/// vinger; de knoppen rechts blijven staan. De verschuiving loopt via een [AnimationController] met de
+/// inhoud als vast kind, zodat er per beeld alleen een transform verandert en niets opnieuw gebouwd
+/// wordt. Is er geen volgend of vorig nummer, dan geeft hij mee met weerstand en veert hij terug.
+class _VeegMinispeler extends StatefulWidget {
+  const _VeegMinispeler({required this.child, this.volgende, this.vorige, this.open});
+
+  final Widget child;
+  final VoidCallback? volgende, vorige, open;
+
+  @override
+  State<_VeegMinispeler> createState() => _VeegMinispelerState();
+}
+
+/// Wat een losgelaten veeg doet. Publiek voor de toets: [dx] is hoe ver hij opzij ging, [snelheid]
+/// de snelheid bij het loslaten (punten per seconde).
+@visibleForTesting
+enum VeegUitkomst { volgende, vorige, terug }
+
+@visibleForTesting
+VeegUitkomst veegUitkomst(double dx, double snelheid, {required bool heeftVolgende, required bool heeftVorige}) {
+  if ((dx < -kVeegDrempel || snelheid < -700) && heeftVolgende) return VeegUitkomst.volgende;
+  if ((dx > kVeegDrempel || snelheid > 700) && heeftVorige) return VeegUitkomst.vorige;
+  return VeegUitkomst.terug;
+}
+
+class _VeegMinispelerState extends State<_VeegMinispeler> with SingleTickerProviderStateMixin {
+  late final AnimationController _x =
+      AnimationController.unbounded(vsync: this, duration: const Duration(milliseconds: 200));
+  double _breed = 300;
+
+  @override
+  void dispose() {
+    _x.dispose();
+    super.dispose();
+  }
+
+  void _schuif(double delta) {
+    final kanNaar = delta < 0 ? widget.volgende != null : widget.vorige != null;
+    // Zonder nummer in die richting: weerstand, zodat je voelt dat er niets is.
+    _x.value += kanNaar ? delta : delta * .25;
+  }
+
+  Future<void> _los(double snelheid) async {
+    final uit = veegUitkomst(_x.value, snelheid,
+        heeftVolgende: widget.volgende != null, heeftVorige: widget.vorige != null);
+    if (uit == VeegUitkomst.terug) {
+      await _x.animateTo(0, curve: Curves.easeOutBack);
+      return;
+    }
+    final naar = uit == VeegUitkomst.volgende ? -_breed : _breed;
+    await _x.animateTo(naar, duration: const Duration(milliseconds: 140), curve: Curves.easeIn);
+    (uit == VeegUitkomst.volgende ? widget.volgende : widget.vorige)?.call();
+    // Het nieuwe nummer komt van de andere kant binnen.
+    _x.value = -naar * .35;
+    if (mounted) await _x.animateTo(0, duration: const Duration(milliseconds: 220), curve: Curves.easeOutCubic);
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, c) {
+        if (c.hasBoundedWidth) _breed = c.maxWidth;
+        return GestureDetector(
+          onHorizontalDragUpdate: (d) => _schuif(d.delta.dx),
+          onHorizontalDragEnd: (d) => _los(d.primaryVelocity ?? 0),
+          onHorizontalDragCancel: () => _x.animateTo(0),
+          // Omhoog vegen opent Nu speelt, net als erop tikken.
+          onVerticalDragEnd: (d) {
+            if ((d.primaryVelocity ?? 0) < -350) widget.open?.call();
+          },
+          child: AnimatedBuilder(
+            animation: _x,
+            child: widget.child,
+            builder: (_, kind) => _x.value == 0
+                ? kind!
+                : Transform.translate(
+                    offset: Offset(_x.value, 0),
+                    child: Opacity(opacity: (1 - _x.value.abs() / _breed).clamp(.25, 1.0), child: kind),
+                  ),
+          ),
+        );
+      });
+}
+
 /// The mini player a phone gets: the track, one button, and the whole thing opens the full player.
 ///
 /// Not the desktop bar with smaller numbers. On a phone there is room for a cover, a title and one
@@ -10494,14 +10618,19 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
           child: Row(
             children: [
               Expanded(
-                child: Pressable(
+                child: _VeegMinispeler(
+                  volgende: x.next,
+                  vorige: x.previous,
+                  open: open,
+                  child: Pressable(
                   onPressed: open,
                   borderRadius: BorderRadius.circular(10),
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
                     child: Row(
                       children: [
-                        cover(p.currentCover, size: 40, radius: 6),
+                        // Vliegt naar de grote hoes in Nu speelt, en terug.
+                        Hero(tag: kNuSpeeltHoes, child: cover(p.currentCover, size: 40, radius: 6)),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(
@@ -10547,6 +10676,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
                       ],
                     ),
                   ),
+                ),
                 ),
               ),
               IconButton(
@@ -11618,7 +11748,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
           // The album is taken from the track that is playing, so the disc that comes
           // out is the one this song is actually on.
           child: t == null
-              ? cover(p.currentCover, size: hoesMaat, radius: 16)
+              ? Hero(tag: kNuSpeeltHoes, child: cover(p.currentCover, size: hoesMaat, radius: 16))
               : Builder(builder: (context) {
                   // De plaat (`al`) komt van boven in `build` — zie daar waarom hij niet meer hier
                   // wordt opgezocht. Ask the library which album this track is on, rather than
@@ -11662,6 +11792,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     },
                     draai: isTv ? null : _draai,
                     onAchter: (b) => _achterNu = b,
+                    // De hoes van de minispeler groeit hierheen uit (zie [kNuSpeeltHoes]).
+                    heroTag: kNuSpeeltHoes,
                     // De hoes en cd van het volgende nummer alvast klaarzetten — anders staat er bij
                     // de wissel even de hoes uit het bestand met een getekende schijf.
                     volgende: volgendAlbum == null ? null : albumArtVooruit(bib, volgendAlbum),
@@ -13232,24 +13364,25 @@ class TracksView extends StatelessWidget {
             const SizedBox(width: 10),
             Text('${tracks.length}', style: const TextStyle(color: _muted, fontSize: 14)),
           ]);
+          // Allebei hetzelfde glas, en allebei zeggen ze wat ze deden (Saber, 16-10-2026: "Ik zie nooit
+          // welke knop Ik intik"). Eerst was de ene paars en de andere donker, zonder iets terug.
           final buttons = [
-            FilledButton.icon(
-              style: FilledButton.styleFrom(
-                  backgroundColor: _accent,
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12)),
-              onPressed: () => player.shuffleAll(tracks),
-              icon: const Icon(Icons.shuffle_rounded, size: 18),
-              label: const Text('Shuffle alles'),
+            GlasKnop(
+              onPressed: () {
+                player.shuffleAll(tracks);
+                _srcToast(context, 'Shuffle · ${tracks.length} ${tracks.length == 1 ? 'nummer' : 'nummers'}');
+              },
+              icoon: Icons.shuffle_rounded,
+              label: 'Shuffle alles',
             ),
             const SizedBox(width: 8),
-            FilledButton.icon(
-              style: FilledButton.styleFrom(
-                  backgroundColor: _panel2,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12)),
-              onPressed: () => player.playQueue(tracks, 0),
-              icon: const Icon(Icons.play_arrow_rounded, size: 18),
-              label: const Text('Speel alles'),
+            GlasKnop(
+              onPressed: () {
+                player.playQueue(tracks, 0);
+                _srcToast(context, 'Speelt alles vanaf “${tracks.first.title}”');
+              },
+              icoon: Icons.play_arrow_rounded,
+              label: 'Speel alles',
             ),
           ];
           return Padding(
@@ -13869,8 +14002,16 @@ class _HomeStartViewState extends State<HomeStartView> {
     final nu = DateTime.now();
     final hero = _nieuw.take(7).toList();
 
-    return BinnenkomstGroep(
+    // Omlaag trekken ververst alles (Saber, 16-10-2026: "in plaats van het knopje"). Met een muis
+    // valt er niet te trekken, dus daar blijft het knopje staan.
+    return RefreshIndicator(
+      onRefresh: _ververs,
+      color: _accent,
+      backgroundColor: _panel,
+      child: BinnenkomstGroep(
       child: ListView(
+      // Ook als de lijst korter is dan het scherm moet trekken werken.
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 32),
       children: [
         // 28 werd 24: alles op dit scherm staat vanaf hier op dezelfde goot als de rijen hoezen
@@ -13885,7 +14026,7 @@ class _HomeStartViewState extends State<HomeStartView> {
               ),
               // Niet op een tv: daar is dit geen knop maar een extra halte op de weg naar beneden,
               // en de afstandsbediening heeft er niets aan.
-              if (!isTv)
+              if (!isTv && !_isTouch)
                 TvLabelled(
                   label: 'Ververs',
                   child: IconButton(
@@ -13926,18 +14067,18 @@ class _HomeStartViewState extends State<HomeStartView> {
             padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),
             child: Skelet(breedte: double.infinity, hoogte: HeroCarousel.hoogte(context), radius: 18),
           ),
-        if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList())),
+        if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList(), rij: 'recent')),
         // Boven de netwerkrijen: deze twee staan er meteen en zijn altijd raak.
         if (uitDecennium.length >= 4)
-          _section(jarenKop(decennium!), _localRow(uitDecennium.take(20).toList()),
+          _section(jarenKop(decennium!), _localRow(uitDecennium.take(20).toList(), rij: 'decennium'),
               bij: '${uitDecennium.length} platen'),
         if (vergeten.length >= 4)
-          _section('Lang niet gedraaid', _localRow(vergeten.take(20).toList()),
+          _section('Lang niet gedraaid', _localRow(vergeten.take(20).toList(), rij: 'vergeten'),
               bij: 'meer dan een half jaar geleden'),
         // De enige rij die de AANLEIDING erbij zet. Dat is niet alleen aardiger — het maakt ook
         // controleerbaar waaróm iets wordt voorgesteld, en dat was precies de klacht.
         if (_omdat.isNotEmpty && _omdatArtiest.isNotEmpty)
-          _section('Omdat je $_omdatArtiest draaide', _recRow(_omdat.take(20).toList())),
+          _section('Omdat je $_omdatArtiest draaide', _recRow(_omdat.take(20).toList(), rij: 'omdat')),
         // De rij van het taalmodel. Blijft weg zonder AI-sleutel, en dat is geen fout maar de
         // afspraak: zie [AiService.maakAanbevelingen].
         if (_uitgezocht.isNotEmpty)
@@ -13949,14 +14090,14 @@ class _HomeStartViewState extends State<HomeStartView> {
         // Nu staat het skelet er meteen, en het vult zich in plaats van in te schuiven.
         if (_forYou.isNotEmpty || _komtNog)
           _section('Aanbevolen voor jou',
-              _forYou.isEmpty ? _loadingRow() : _recRow(_forYou.take(15).toList())),
+              _forYou.isEmpty ? _loadingRow() : _recRow(_forYou.take(15).toList(), rij: 'voorjou')),
         if (_charts.isNotEmpty || _chartsLoading)
           _section('Top van dit moment',
-              _charts.isEmpty ? _loadingRow() : _catalogRow(_charts.take(20).toList()),
+              _charts.isEmpty ? _loadingRow() : _catalogRow(_charts.take(20).toList(), rij: 'top'),
               bij: _genreBijschrift),
         if (_releases.isNotEmpty || _nieuwLaadt)
           _section('Nieuw van jouw artiesten',
-              _releases.isEmpty ? _loadingRow() : _catalogRow(_releases.take(20).toList()),
+              _releases.isEmpty ? _loadingRow() : _catalogRow(_releases.take(20).toList(), rij: 'nieuw'),
               bij: 'de laatste drie maanden en wat eraan komt'),
         // Streng: alleen de laatste drie maanden, geen heruitgaven. Dan is leeg een normale uitkomst,
         // en dan hoort er te staan waarom.
@@ -13974,6 +14115,7 @@ class _HomeStartViewState extends State<HomeStartView> {
             gecentreerd: false,
           ),
       ],
+      ),
       ),
     );
   }
@@ -14006,18 +14148,25 @@ class _HomeStartViewState extends State<HomeStartView> {
   /// op hun eigen moment landen, en het startscherm stond te springen terwijl je las.
   Widget _loadingRow() => const SkeletRij();
 
-  Widget _localRow(List<Album> albums) => ListView.separated(
+  Widget _localRow(List<Album> albums, {required String rij}) => ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: kGoot),
         itemCount: albums.length,
         separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
         itemBuilder: (_, i) => Binnenkomst(
           index: i,
-          child: _card(
-              cover(albums[i].cover, size: kTegelHoes), albums[i].title, albums[i].artist,
-              () => openPagina(context, (_) => AlbumDetailPage(album: albums[i])),
-              artist: albums[i].artist,
-              achterkant: () => achterkantVan(context, albums[i])),
+          child: Builder(builder: (context) {
+            // Eén label per rij: dezelfde plaat kan in "Recent toegevoegd" én in een decennium staan.
+            final tag = 'hoes:${context.read<LibraryStore>().uidOf(albums[i])}@$rij';
+            return _card(
+                cover(albums[i].cover, size: kTegelHoes), albums[i].title, albums[i].artist,
+                () => openPagina(context, (_) => AlbumDetailPage(album: albums[i], heroTag: tag)),
+                artist: albums[i].artist,
+                achterkant: () => achterkantVan(context, albums[i]),
+                heroTag: tag,
+                // Lang indrukken: hetzelfde menu als op Albums (16-10-2026, "op elke tegel en rij").
+                onLongPress: () => _toonItemMenu(context, _albumMenu(context, albums[i])));
+          }),
         ),
       );
 
@@ -14032,7 +14181,7 @@ class _HomeStartViewState extends State<HomeStartView> {
         style: const TextStyle(color: _muted, fontSize: 12),
       );
 
-  Widget _catalogRow(List<CatalogAlbumHit> hits) => ListView.separated(
+  Widget _catalogRow(List<CatalogAlbumHit> hits, {required String rij}) => ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: kGoot),
         itemCount: hits.length,
@@ -14043,8 +14192,11 @@ class _HomeStartViewState extends State<HomeStartView> {
           index: i,
           child: _card(
               _netCover(hits[i].album.cover, size: kTegelHoes), hits[i].album.title, hits[i].artist,
-              () => openPagina(context, (_) => AlbumBrowsePage(hits[i].artist, hits[i].album)),
-              artist: hits[i].artist),
+              () => openPagina(context,
+                  (_) => AlbumBrowsePage(hits[i].artist, hits[i].album, heroTag: 'net:${hits[i].album.id}@$rij')),
+              artist: hits[i].artist,
+              heroTag: 'net:${hits[i].album.id}@$rij',
+              onLongPress: () => _toonItemMenu(context, _netAlbumMenu(context, hits[i].artist, hits[i].album))),
         ),
       );
 
@@ -14081,13 +14233,16 @@ class _HomeStartViewState extends State<HomeStartView> {
             items[i].hit.album.title,
             // Geen reden meegekregen? Dan de artiest, zodat er nooit een lege regel staat.
             items[i].reden.isEmpty ? items[i].hit.artist : items[i].reden,
-            () => openPagina(
-                context, (_) => AlbumBrowsePage(items[i].hit.artist, items[i].hit.album)),
+            () => openPagina(context,
+                (_) => AlbumBrowsePage(items[i].hit.artist, items[i].hit.album, heroTag: 'net:${items[i].hit.album.id}@ai')),
+            heroTag: 'net:${items[i].hit.album.id}@ai',
+            onLongPress: () =>
+                _toonItemMenu(context, _netAlbumMenu(context, items[i].hit.artist, items[i].hit.album)),
           ),
         ),
       );
 
-  Widget _recRow(List<RecTrack> ts) => ListView.separated(
+  Widget _recRow(List<RecTrack> ts, {required String rij}) => ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: kGoot),
         itemCount: ts.length,
@@ -14106,15 +14261,27 @@ class _HomeStartViewState extends State<HomeStartView> {
           // Juist hier: een aanbeveling gaat over een artiest die je NIET kent, en dan wil je als
           // eerste weten wie dat is. `RecTrack` draagt alleen een naam, en dat is genoeg.
           subtitleWidget: ts[i].artist.trim().isEmpty ? null : _naamLink(ts[i].artist),
-          onTap: () => _openRec(ts[i]),
-          onLongPress: () => _playRec(ts[i]),
+          onTap: () => _openRec(ts[i], heroTag: 'net:${ts[i].albumId}@$rij'),
+          onLongPress: () => _toonItemMenu(
+              context,
+              ItemMenu(titel: ts[i].title, ondertitel: ts[i].artist, blokken: [
+                [MenuRegel(Icons.play_arrow_rounded, 'Afspelen', () => _playRec(ts[i]))],
+                [
+                  if (ts[i].hasAlbum)
+                    MenuRegel(Icons.album_rounded, 'Album openen', () => _openRec(ts[i])),
+                  MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, ts[i].artist)),
+                  MenuRegel(Icons.radio_rounded, 'Radio vanaf hier',
+                      () => startRadio(context, ts[i].artist, titel: ts[i].title)),
+                ],
+              ])),
+          heroTag: ts[i].hasAlbum ? 'net:${ts[i].albumId}@$rij' : null,
         ),
         ),
       );
 
   /// Where a recommended track lives. Deezer names the album it came from; when it does not, the
   /// track itself is still worth hearing, so that falls back to playing it.
-  void _openRec(RecTrack t) {
+  void _openRec(RecTrack t, {Object? heroTag}) {
     if (!t.hasAlbum) {
       unawaited(_playRec(t));
       return;
@@ -14122,12 +14289,12 @@ class _HomeStartViewState extends State<HomeStartView> {
     // A positive id is a Deezer one — see CatalogAlbum.ref — and this hit came from Deezer. The
     // tracklist and the year are fetched by the page itself, so nothing is invented here.
     final album = CatalogAlbum(t.albumId, t.album, t.cover, null, 0, 'album');
-    openPagina(context, (_) => AlbumBrowsePage(t.artist, album));
+    openPagina(context, (_) => AlbumBrowsePage(t.artist, album, heroTag: heroTag));
   }
 
   /// [subtitle] blijft de kale tekst voor het geval de widget niets kan; [artist] maakt hem klikbaar.
   Widget _card(Widget art, String title, String subtitle, VoidCallback onTap,
-          {String? artist, Future<Uint8List?> Function()? achterkant}) =>
+          {String? artist, Future<Uint8List?> Function()? achterkant, Object? heroTag, VoidCallback? onLongPress}) =>
       _HoverCard(
         art: art,
         title: title,
@@ -14135,6 +14302,8 @@ class _HomeStartViewState extends State<HomeStartView> {
         subtitleWidget: artist == null || artist.trim().isEmpty ? null : _naamLink(artist),
         onTap: onTap,
         achterkant: achterkant,
+        heroTag: heroTag,
+        onLongPress: onLongPress,
       );
 }
 
@@ -14165,7 +14334,11 @@ class _HoverCard extends StatelessWidget {
       required this.onTap,
       this.subtitleWidget,
       this.onLongPress,
-      this.achterkant});
+      this.achterkant,
+      this.heroTag});
+
+  /// Laat de hoes naar de albumpagina vliegen; zie [AlbumTegel.heroTag].
+  final Object? heroTag;
 
   @override
   Widget build(BuildContext context) => AlbumTegel(
@@ -14186,6 +14359,7 @@ class _HoverCard extends StatelessWidget {
         // Twee tikken draaien de tegel om (Saber, 16-10-2026: ook op Start).
         draaibaar: true,
         achterkant: achterkant,
+        heroTag: heroTag,
       );
 }
 
@@ -21806,7 +21980,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 class AlbumBrowsePage extends StatefulWidget implements OnderDeBalk {
   final String artistName;
   final CatalogAlbum album;
-  const AlbumBrowsePage(this.artistName, this.album, {super.key});
+
+  /// Het label van de tegel waar je vandaan kwam: de hoes vliegt mee (16-10-2026). Null = geen vlucht.
+  final Object? heroTag;
+  const AlbumBrowsePage(this.artistName, this.album, {super.key, this.heroTag});
   @override
   State<AlbumBrowsePage> createState() => _AlbumBrowsePageState();
 }
@@ -22305,7 +22482,9 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                     onDubbel: () => _draai.draai(heeftAchterkant: _achter != null),
                     child: DraaiHoes(
                       controller: _draai,
-                      voor: _netCover(al.cover, size: 128),
+                      voor: widget.heroTag == null
+                          ? _netCover(al.cover, size: 128)
+                          : Hero(tag: widget.heroTag!, child: _netCover(al.cover, size: 128)),
                       achter: _achter == null
                           ? null
                           : ClipRRect(
