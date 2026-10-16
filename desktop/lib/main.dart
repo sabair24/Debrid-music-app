@@ -2156,10 +2156,11 @@ class _HomeShellState extends State<HomeShell> {
       return KeyEventResult.handled;
     }
     final vanwaar = FocusManager.instance.primaryFocus?.rect;
+    final uitBalk = _tvBalk.hasFocus;
     for (final scope in naar) {
       if (scope.traversalDescendants.isNotEmpty) {
         scope.requestFocus();
-        _landingsplek(scope, richting, vanwaar)?.requestFocus();
+        _landingsplek(scope, richting, vanwaar, links: uitBalk)?.requestFocus();
         break;
       }
     }
@@ -2178,7 +2179,13 @@ class _HomeShellState extends State<HomeShell> {
   /// precies goed. Anders het zichtbare element aan de rand waar je binnenkomt -- de bovenste rij bij
   /// omlaag, de onderste bij omhoog -- en daarvan het element recht onder of boven waar je vandaan
   /// kwam. Uit het menu op "Albums" naar beneden kom je dan op de plaat eronder, niet op de eerste.
-  FocusNode? _landingsplek(FocusScopeNode scope, TraversalDirection richting, Rect? vanwaar) {
+  ///
+  /// [links]: vanuit de bovenbalk de pagina in. Dan het eerste element van de bovenste rij, links,
+  /// en niet wat recht onder het tabblad staat (Saber, 16-10-2026: "de eerste keer de eerste hoes").
+  /// Vanaf "Artiesten" kwam je anders op de middelste artiest, vanaf "Ontdek" op de knop helemaal
+  /// rechts.
+  FocusNode? _landingsplek(FocusScopeNode scope, TraversalDirection richting, Rect? vanwaar,
+      {bool links = false}) {
     // Naar de bovenbalk: altijd het tabblad van de pagina waar je bent (Saber, 16-10-2026). Recht
     // boven je was op Start "Artiesten", omdat die toevallig boven het midden van de kaart stond.
     if (identical(scope, _tvBalk)) {
@@ -2217,6 +2224,10 @@ class _HomeShellState extends State<HomeShell> {
       for (final n in kandidaten)
         if (omlaag ? n.rect.top <= rand + 40 : n.rect.bottom >= rand - 40) n,
     ];
+    if (links) {
+      rij.sort((a, b) => a.rect.left.compareTo(b.rect.left));
+      return rij.first;
+    }
     final x = vanwaar?.center.dx ?? 0;
     rij.sort((a, b) => (a.rect.center.dx - x).abs().compareTo((b.rect.center.dx - x).abs()));
     return rij.first;
@@ -2231,7 +2242,7 @@ class _HomeShellState extends State<HomeShell> {
       for (final scope in [_tvMelding, _tvInhoud, _tvSpeler]) {
         if (scope.traversalDescendants.isNotEmpty) {
           scope.requestFocus();
-          _landingsplek(scope, TraversalDirection.down, vanwaar)?.requestFocus();
+          _landingsplek(scope, TraversalDirection.down, vanwaar, links: true)?.requestFocus();
           break;
         }
       }
@@ -5314,17 +5325,23 @@ List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
         // Deze twee getallen stonden met de hand op 253 en 300, met "180 hoes, 20 vulling, twee
         // regels geschaalde tekst" erbij. Die vulling bestaat niet meer en die tekst schaalt met het
         // toestel mee, dus ze worden nu uitgerekend. Zie `ui/tegel.dart`.
+        //
+        // Een hoes van 180 en niet meer 200, sinds de titel twee regels heeft (16-10-2026): met 200
+        // viel de artiestnaam van de gemarkeerde tegel op de Shield onder de spelerbalk.
         child: Builder(builder: (context) {
-          final hoog = hoogteVanTegel(context, hoes: 200);
+          final hoog = hoogteVanTegel(context, hoes: kTvAlbumHoes);
           return SizedBox(
-            height: hoogteVanTegelrij(context, hoes: 200),
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 40),
-              itemCount: g.$2.length,
-              separatorBuilder: (_, __) => const SizedBox(width: kRuimte16),
-              itemBuilder: (_, i) => Center(
-                child: SizedBox(width: 200, height: hoog, child: AlbumCard(album: g.$2[i])),
+            height: hoogteVanTegelrij(context, hoes: kTvAlbumHoes),
+            // Onthoudt waar je stond, zoals de rijen van Start (16-10-2026). Zie `ui/tv_rij.dart`.
+            child: TvRij(
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 40),
+                itemCount: g.$2.length,
+                separatorBuilder: (_, __) => const SizedBox(width: kRuimte16),
+                itemBuilder: (_, i) => Center(
+                  child: SizedBox(width: kTvAlbumHoes, height: hoog, child: AlbumCard(album: g.$2[i])),
+                ),
               ),
             ),
           );
@@ -5334,6 +5351,9 @@ List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
     const SliverToBoxAdapter(child: SizedBox(height: 16)),
   ];
 }
+
+/// De hoes in de rijen van Albums op een tv. Zie de uitleg bij die rij.
+const double kTvAlbumHoes = 180;
 
 /// Which row each album belongs in, and what that row is called.
 ///
@@ -13807,6 +13827,9 @@ class TracksView extends StatelessWidget {
                 });
                 return InkWell(
                 onTap: () => player.playQueue(tracks, i),
+                // Op een tv de selectie op een vaste plek, zoals elke andere lijst (16-10-2026). Een
+                // InkWell is geen Pressable, dus hier stond de vierde rij half onder de spelerbalk.
+                onFocusChange: tvVolgFocus(rij),
                 onLongPress:
                     _menuOpHouden ? () => _toonItemMenu(rij, _nummerMenu(rij, t)) : null,
                 onSecondaryTapDown: (d) =>
@@ -22208,22 +22231,25 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             SliverToBoxAdapter(
               child: SizedBox(
                 height: 176,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: EdgeInsets.symmetric(horizontal: _marge),
-                  itemCount: _related.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
-                  itemBuilder: (_, i) {
-                    final r = _related[i];
-                    return _RelatedArtistCard(
-                      artist: r,
-                      inLibrary: lib.hasArtist(r.name),
-                      // Eén bestemming, ook hier: iemand die je zelf hebt en iemand die je niet hebt
-                      // openen dezelfde pagina. Dat verschil was juist de reden dat er twee waren.
-                      onTap: () => openArtist(
-                          context, lib.hasArtist(r.name) ? lib.displayArtist(r.name) : r.name),
-                    );
-                  },
+                // Onthoudt waar je stond op een tv (16-10-2026). Zie `ui/tv_rij.dart`.
+                child: TvRij(
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: EdgeInsets.symmetric(horizontal: _marge),
+                    itemCount: _related.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
+                    itemBuilder: (_, i) {
+                      final r = _related[i];
+                      return _RelatedArtistCard(
+                        artist: r,
+                        inLibrary: lib.hasArtist(r.name),
+                        // Eén bestemming, ook hier: iemand die je zelf hebt en iemand die je niet hebt
+                        // openen dezelfde pagina. Dat verschil was juist de reden dat er twee waren.
+                        onTap: () => openArtist(
+                            context, lib.hasArtist(r.name) ? lib.displayArtist(r.name) : r.name),
+                      );
+                    },
+                  ),
                 ),
               ),
             ),

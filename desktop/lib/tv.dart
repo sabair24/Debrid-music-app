@@ -490,32 +490,44 @@ class _TvLabelledState extends State<TvLabelled> {
       canRequestFocus: false,
       skipTraversal: true,
       onFocusChange: (v) => v == _focused ? null : setState(() => _focused = v),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      // **Het onderschrift telt niet mee voor de breedte.** Het stond als gewone regel in de kolom, en
+      // dan werd de kolom zo breed als "10 seconden terug": op de Shield schoof bij elke stap door de
+      // spelerbalk de hele rij knoppen opzij — de afspeelknop sprong 190 punten naar rechts
+      // (16-10-2026). Nu ligt het ONDER de knop, gecentreerd, en mag het breder zijn dan de knop.
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.topCenter,
         children: [
-          widget.child,
-          // Reserved whether or not it is shown, so a row of icons does not jump in height as the
-          // highlight runs along it.
-          SizedBox(
-            // 16, not the 11 it started at: this label exists BECAUSE a tooltip cannot be read from
-            // a couch, and 11 points on a 960-wide canvas cannot be read from a couch either. It
-            // would have been the smallest text on the screen while being the only thing explaining
-            // what the icon above it does.
-            // En de hoogte in GESCHAALDE punten. Hier stond 20, en op de Shield staat de tekst op
-            // 1,35: 16 × 1,35 × 1,1 is bijna 24 punten tekst in een vak van 20. Een Text met
-            // ellipsis knipt dan af, precies onder de grondlijn -- "Wachtrij" werd "Wachtrii", en
-            // elk onderschrift met een g, j, p of y verloor zijn staart. Gezien op 11-09-2026.
-            height: (MediaQuery.textScalerOf(context).scale(16) * 1.1).ceilToDouble() + 2,
-            child: _focused
-                ? Text(
-                    widget.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    // Paars, zoals de letters van elke geselecteerde knop op een tv (16-10-2026).
-                    style: const TextStyle(fontSize: 16, height: 1.1, color: kAccent),
-                  )
-                : null,
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              widget.child,
+              // De hoogte blijft gereserveerd, zichtbaar of niet: anders verspringt de rij in hoogte.
+              SizedBox(height: (MediaQuery.textScalerOf(context).scale(16) * 1.1).ceilToDouble() + 2),
+            ],
           ),
+          // 16, not the 11 it started at: this label exists BECAUSE a tooltip cannot be read from a
+          // couch, and 11 points on a 960-wide canvas cannot be read from a couch either. It would
+          // have been the smallest text on the screen while being the only thing explaining what the
+          // icon above it does.
+          // En de hoogte in GESCHAALDE punten. Hier stond 20, en op de Shield staat de tekst op 1,35:
+          // 16 × 1,35 × 1,1 is bijna 24 punten tekst in een vak van 20. Een Text met ellipsis knipt
+          // dan af, precies onder de grondlijn -- "Wachtrij" werd "Wachtrii", en elk onderschrift met
+          // een g, j, p of y verloor zijn staart. Gezien op 11-09-2026.
+          if (_focused)
+            Positioned(
+              bottom: 0,
+              child: SizedBox(
+                height: (MediaQuery.textScalerOf(context).scale(16) * 1.1).ceilToDouble() + 2,
+                child: Text(
+                  widget.label,
+                  maxLines: 1,
+                  softWrap: false,
+                  // Paars, zoals de letters van elke geselecteerde knop op een tv (16-10-2026).
+                  style: const TextStyle(fontSize: 16, height: 1.1, color: kAccent),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -624,6 +636,26 @@ void tvVastePlek(BuildContext context, {Duration duur = const Duration(milliseco
     lijst = Scrollable.maybeOf(lijst.context);
   }
 }
+
+/// [tvVastePlek] voor iets dat geen [Pressable] is (een InkWell, een rij met een eigen achtergrond):
+/// `onFocusChange: tvVolgFocus(context)`, met de context van het element zelf of van een Builder er
+/// net boven. Alleen op een tv, en na het beeld alleen als de selectie er nog binnen staat.
+ValueChanged<bool> tvVolgFocus(BuildContext context) => (heeft) {
+      if (!isTv || !heeft) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        final hier = FocusManager.instance.primaryFocus?.context;
+        if (hier == null) return;
+        var binnen = identical(hier, context);
+        if (!binnen) {
+          hier.visitAncestorElements((e) {
+            if (identical(e, context)) binnen = true;
+            return !binnen;
+          });
+        }
+        if (binnen) tvVastePlek(context);
+      });
+    };
 
 /// De marge aan het begin van een lijst (`ListView(padding: …)` wordt een [RenderSliverPadding]).
 double _binnenmarge(RenderAbstractViewport viewport) {

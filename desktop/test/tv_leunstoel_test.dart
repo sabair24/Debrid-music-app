@@ -84,6 +84,33 @@ void main() {
           reason: 'de volgende rij komt op dezelfde plek: de lijst schuift, niet de selectie');
     });
 
+    testWidgets('ook een InkWell-rij (Tracks) krijgt de vaste plek', (t) async {
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: ListView.builder(
+            itemCount: 40,
+            itemExtent: 76,
+            itemBuilder: (_, i) => Builder(
+              builder: (rij) => InkWell(
+                key: ValueKey('i$i'),
+                onTap: () {},
+                onFocusChange: tvVolgFocus(rij),
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ),
+        ),
+      ));
+      Focus.of(t.element(find.descendant(of: find.byKey(const ValueKey('i5')), matching: find.byType(SizedBox)).first))
+          .requestFocus();
+      await t.pumpAndSettle();
+      expect(t.getTopLeft(find.byKey(const ValueKey('i5'))).dy, closeTo(kTvBovenruimte, 1),
+          reason: 'hier stond de vierde rij half onder de spelerbalk');
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(main, contains('                onFocusChange: tvVolgFocus(rij),'));
+      expect(main, contains('const double kTvAlbumHoes = 180;'));
+    });
+
     testWidgets('wie het uitzet (de bovenbalk), krijgt het midden', (t) async {
       await t.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -277,6 +304,35 @@ void main() {
       expect('style: tvIcoonStijl('.allMatches(main).length, greaterThanOrEqualTo(9));
       expect(main, contains("SizedBox(height: hoogteVanTegelrij(context), child: TvRij(child: row)),"));
     });
+  });
+
+  testWidgets('het onderschrift onder een pictogram duwt de buren niet opzij', (t) async {
+    // Op de Shield sprong de afspeelknop 190 punten naar rechts als "10 seconden terug" de selectie
+    // kreeg: het onderschrift maakte zijn kolom zo breed als de tekst.
+    await t.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Row(children: [
+          TvLabelled(
+            label: '10 seconden terug',
+            child: IconButton(icon: const Icon(Icons.replay_10_rounded), onPressed: () {}),
+          ),
+          const SizedBox(key: ValueKey('buur'), width: 40, height: 40),
+        ]),
+      ),
+    ));
+    final voor = t.getTopLeft(find.byKey(const ValueKey('buur'))).dx;
+    Focus.of(t.element(find.byIcon(Icons.replay_10_rounded))).requestFocus();
+    await t.pump();
+    expect(find.text('10 seconden terug'), findsOneWidget);
+    expect(t.getTopLeft(find.byKey(const ValueKey('buur'))).dx, voor);
+    expect(t.widget<Text>(find.text('10 seconden terug')).style!.color, kAccent);
+  });
+
+  test('vanuit de bovenbalk de pagina in: het eerste element links, niet wat onder het tabblad staat', () {
+    final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(main, contains('        _landingsplek(scope, richting, vanwaar, links: uitBalk)?.requestFocus();'));
+    expect(main, contains('          _landingsplek(scope, TraversalDirection.down, vanwaar, links: true)?.requestFocus();'));
+    expect(main, contains('    if (links) {\n      rij.sort((a, b) => a.rect.left.compareTo(b.rect.left));'));
   });
 
   group('na twee minuten stilstand: Nu speelt', () {
