@@ -23,10 +23,38 @@ List<SoulseekFile> zeefKandidatenNu(List<SoulseekFile> files,
     {required String titel, int? seconden, required String artiest, String? album}) {
   final streng = [
     for (final f in files)
-      if (f.isAudio && fileOffersTitle(titel, seconden, artiest, f.filename, f.durationSec, album: album)) f
+      if (f.isAudio &&
+          fileOffersTitle(titel, seconden, artiest, f.filename, f.durationSec, album: album) &&
+          !algemeneTitelZonderAlbum(titel, album, f.filename))
+        f
   ];
   if (streng.isNotEmpty) return streng;
   return zonderGast(files, titel: titel, seconden: seconden, artiest: artiest, album: album);
+}
+
+/// Titels die op duizenden platen staan. Daar zegt de titel samen met de lengte niet welk nummer het is.
+const _algemeen = {
+  'intro', 'introduction', 'outro', 'interlude', 'skit', 'prelude', 'prologue', 'epilogue', 'overture',
+  'intermission', 'segue', 'opening', 'finale', 'coda', 'untitled', 'hidden track', 'bonus track',
+};
+
+final _nietWoord = RegExp(r'[^a-z0-9]+');
+
+List<String> _woorden(String s) => s.toLowerCase().split(_nietWoord).where((w) => w.isNotEmpty).toList();
+
+/// Is [titel] een titel als "Intro", en noemen de mappen boven [pad] het [album] niet?
+///
+/// **Gemeld op 15-10-2026:** op *V* van Live stonden naast "Intro" (0:37) 16 bronnen, en de meeste
+/// waren intro's van live-albums van anderen: de titel klopt, de lengte valt binnen 12 seconden, en de
+/// artiest wordt in het pad niet gecontroleerd — bij de band Live staat "live" bovendien overal. Bij
+/// zo'n titel telt een bestand dus alleen als zijn mappen alle woorden van het album noemen, ook een
+/// woord van één letter ("V"). Liever geen bron dan het intro van een andere plaat.
+bool algemeneTitelZonderAlbum(String titel, String? album, String pad) {
+  if (!_algemeen.contains(_woorden(titel).join(' '))) return false;
+  final a = _woorden((album ?? '').replaceAll(RegExp(r'\s*[\[(][^\])]*[\])]\s*$'), ''));
+  if (a.isEmpty) return false;
+  final mappen = _woorden(_map(pad)).toSet();
+  return !mappen.containsAll(a);
 }
 
 String _map(String pad) {

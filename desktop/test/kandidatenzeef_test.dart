@@ -136,4 +136,31 @@ void main() {
       expect(bron, isNot(contains('fileOffersTitle(')));
     });
   });
+
+  // Live — V (15-10-2026): naast "Intro" (0:37) 16 bronnen, de meeste intro's van live-albums van
+  // anderen. Op het bewaarde antwoord van "Live V 2001" bleven er na deze regel 11, alle uit een V-map.
+  group('een titel als "Intro"', () {
+    SoulseekFile f(String pad, int sec) => SoulseekFile(
+        username: 'p', filename: pad, size: 1000000, speed: 1000, queueLength: 0, freeSlots: true, durationSec: sec);
+
+    test('telt alleen in een map die het album noemt, ook een album van één letter', () {
+      final uit = zeefKandidatenNu([
+        f(r'music\Live\V (2001)\Live - V - 01 - Intro.flac', 37),
+        f(r'music\Live\[2001] V\01 - Intro.mp3', 37),
+        f(r'music\Iemand\Live at Wembley\01 Intro.flac', 40),
+        f(r'music\Live\Live at the Paradiso\01 Intro.flac', 38),
+      ], titel: 'Intro', seconden: 37, artiest: 'Live', album: 'V');
+      expect([for (final x in uit) x.filename], [
+        r'music\Live\V (2001)\Live - V - 01 - Intro.flac',
+        r'music\Live\[2001] V\01 - Intro.mp3',
+      ]);
+    });
+
+    test('een gewone titel blijft zoals hij was', () {
+      expect(algemeneTitelZonderAlbum('Overcome', 'V', r'music\Top 100 Van 2001\035 - Live - Overcome.flac'), isFalse);
+      expect(algemeneTitelZonderAlbum('Intro', 'V', r'music\Top 100 Van 2001\001 - Intro.flac'), isTrue);
+      expect(algemeneTitelZonderAlbum('Interlude', 'Lemonade', r'Beyonce\Lemonade\05 Interlude.flac'), isFalse);
+      expect(algemeneTitelZonderAlbum('Intro', null, r'x\01 Intro.flac'), isFalse, reason: 'zonder album geen regel');
+    });
+  });
 }

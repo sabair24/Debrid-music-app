@@ -147,6 +147,7 @@ import 'toestellen_lijst.dart';
 import 'tv.dart';
 import 'venster_start.dart';
 import 'zoekladder.dart';
+import 'vertaler.dart';
 import 'zoekplafond.dart';
 import 'zoek_geheugen.dart';
 import 'updater.dart';
@@ -1000,6 +1001,20 @@ Future<void> main() async {
   final speelstanden = Speelstanden()..idVanPad = library.gedeeldId;
   if (mode.owner) speelstanden.winkel = sharing.state;
   player.speelstandVan = speelstanden.standVan;
+  // Engelse beschrijvingen in het Nederlands: de pc vertaalt met zijn AI-sleutel, een toestel vraagt het
+  // de pc. Allebei bewaren ze wat ze kregen. Zie `vertaler.dart`.
+  Vertaler.instantie
+    ..map = '$appDir${Platform.pathSeparator}vertalingen'
+    ..vraag = mode.owner
+        ? (t) => AiService(() => settings.anthropicKey, werkruimteVan: () => settings.anthropicWorkspace)
+            .vertaalNaarNederlands(t)
+        : (t) async {
+            final c = library.remote;
+            if (c == null) return null;
+            final j = await c.ask('/api/vertaal', {'tekst': t});
+            final nl = j['nl'];
+            return nl is String && nl.trim().isNotEmpty ? nl : null;
+          };
   // De balk "Nieuwe release": op de pc berekend en bewaard, elke zes uur opnieuw; een toestel vraagt
   // het de pc (`/api/releases`). Zie `nieuwe_releases.dart`.
   if (mode.owner) {
@@ -6310,6 +6325,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                     child: AlbumInfoPanel(
                         artist: album.artist,
                         album: album.title,
+                        eersteJaar: _officialYear,
                         trackCount: album.tracks.length,
                         pinned: context.watch<LibraryStore>().pinnedRelease(album),
                         pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album),
@@ -6781,7 +6797,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                   artiest: ArtistNames(names: [album.artist], style: const TextStyle(color: _muted)),
                   artiestTekst: album.artist,
                   feiten: [
-                    if (album.year != null) '${album.year}',
+                    // Het jaar van de PLAAT, niet van je bestand (Saber, 16-10-2026: bovenaan 2006 uit
+                    // de tags en onderaan 2007 van de persing). Zie [AlbumFacts.year]; zolang dat er
+                    // niet is, wat het bestand zegt.
+                    if ((_officialYear ?? album.year) != null) '${_officialYear ?? album.year}',
                     if (album.genre != null) album.genre!,
                     '${album.tracks.length} ${album.tracks.length == 1 ? 'nummer' : 'nummers'}',
                   ],
@@ -18866,12 +18885,52 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
 }
 
 /// Collapsed artist bio (3 lines) that opens the full text in a dialog on tap.
-class BioText extends StatelessWidget {
+class BioText extends StatefulWidget {
   final String artist;
   final String text;
   const BioText(this.artist, this.text, {super.key});
+
+  @override
+  State<BioText> createState() => _BioTextState();
+}
+
+/// Een Engelse beschrijving wordt Nederlands (Saber, 16-10-2026): eerst wat er is, en zodra de
+/// vertaling er is die — één keer per tekst, daarna uit het geheugen of van schijf. Zie `vertaler.dart`.
+class _BioTextState extends State<BioText> {
+  late String _tekst;
+  bool _vertaald = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _begin();
+  }
+
+  @override
+  void didUpdateWidget(BioText oud) {
+    super.didUpdateWidget(oud);
+    if (oud.text != widget.text) _begin();
+  }
+
+  void _begin() {
+    final klaar = Vertaler.instantie.alKlaar(widget.text);
+    _tekst = klaar ?? widget.text;
+    _vertaald = klaar != null && klaar != widget.text;
+    if (klaar == null && !lijktNederlands(widget.text)) unawaited(_vertaal(widget.text));
+  }
+
+  Future<void> _vertaal(String bron) async {
+    final nl = await Vertaler.instantie.naarNederlands(bron);
+    if (!mounted || bron != widget.text || nl == null || nl == bron) return;
+    setState(() {
+      _tekst = nl;
+      _vertaald = true;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final artist = widget.artist, text = _tekst;
     // Capped where the long text actually lives, so artist bios and album blurbs both get it.
     // Align is load-bearing: a list hands its children a TIGHT width and a bare ConstrainedBox
     // cannot shrink below that — without it the cap silently does nothing.
@@ -18905,10 +18964,16 @@ class BioText extends StatelessWidget {
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: _muted, fontSize: 13, height: 1.45)),
-              const Padding(
-                padding: EdgeInsets.only(top: 3),
-                child: Text('Lees meer',
-                    style: TextStyle(color: _accent, fontSize: 12.5, fontWeight: FontWeight.w600)),
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Text.rich(TextSpan(children: [
+                  const TextSpan(
+                      text: 'Lees meer',
+                      style: TextStyle(color: _accent, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                  // Eerlijk zeggen dat dit niet de oorspronkelijke tekst is.
+                  if (_vertaald)
+                    const TextSpan(text: ' · vertaald', style: TextStyle(color: _muted, fontSize: 12)),
+                ])),
               ),
             ],
           ),
@@ -20443,6 +20508,10 @@ class AlbumInfoPanel extends StatefulWidget {
   /// Images the user assigned by hand — the back cover found here is one of them.
   final Map<String, String> roles;
 
+  /// Het jaar van de eerste uitgave, zoals de kop van de pagina het toont. Leidt boven het jaar van de
+  /// persing; dat staat dan alleen in de regel "Uitgave", als het afwijkt (zie [pressingFacts]).
+  final int? eersteJaar;
+
   /// De achterkant zodra hij gevonden is. Hij staat hier niet meer als los plaatje (Saber,
   /// 16-10-2026: "ik wil de achterkant van de cd weg"); wie de hoes laat omdraaien krijgt hem zo.
   final ValueChanged<Uint8List>? onAchterkant;
@@ -20456,7 +20525,8 @@ class AlbumInfoPanel extends StatefulWidget {
       this.pinned,
       this.pinnedMbid,
       this.roles = const {},
-      this.onAchterkant});
+      this.onAchterkant,
+      this.eersteJaar});
 
   @override
   State<AlbumInfoPanel> createState() => _AlbumInfoPanelState();
@@ -20622,7 +20692,10 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     }
     // The RECORD's year leads, not the pressing's: Demon Days is a 2005 album, even when the copy
     // being described is the 2014 digital reissue.
-    final year = ed?.albumYear ?? ed?.year ?? info?.year;
+    // En het jaar van de eerste uitgave, als de pagina het kent, vóór alles: anders stond hier de
+    // persing (2007) onder een kop die 2006 zei. TheAudioDB's jaar is dat van het album, en gaat dus
+    // ook vóór het jaar van een persing.
+    final year = widget.eersteJaar ?? ed?.albumYear ?? info?.year ?? ed?.year;
     final facts = <String>[
       if (year != null) '$year',
       ...genres.take(4),
@@ -22514,7 +22587,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                             style: const TextStyle(color: _muted, fontSize: 13)),
                         artiestTekst: widget.artistName,
                         feiten: [
-                          if (al.year != null) '${al.year}',
+                          if ((_officialYear ?? al.year) != null) '${_officialYear ?? al.year}',
                           if (_tracks.isNotEmpty) '${_tracks.length} ${_tracks.length == 1 ? 'nummer' : 'nummers'}',
                         ],
                         stijl: const TextStyle(color: _muted, fontSize: 13),
@@ -22556,6 +22629,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
             AlbumInfoPanel(
                 artist: widget.artistName,
                 album: al.title,
+                eersteJaar: _officialYear,
                 // Zonder dit stond de vormcontrole UIT: DiscogsService.edition weegt alleen op
                 // aantal als expectedTracks > 0, en deze pagina gaf altijd nul door.
                 trackCount: _tracks.length,

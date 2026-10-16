@@ -48,6 +48,35 @@ Map<String, dynamic> anthropicBody(String zin) => {
       ],
     };
 
+/// Het model voor vertalingen. Vertalen is geen denkwerk: het snelle model doet het in een paar
+/// tellen en kost een fractie, en een beschrijving wordt per album maar één keer vertaald.
+const String kVertaalModel = 'claude-haiku-5-5';
+
+/// De vraag om een beschrijving van een plaat of artiest in het Nederlands te zetten.
+///
+/// Saber, 16-10-2026: "De beschrijving van een album is vaak Engels" — hij koos vertalen, één keer per
+/// album bewaard. Namen, titels en jaartallen blijven staan; alleen de vertaling komt terug.
+Map<String, dynamic> vertaalBody(String tekst) => {
+      'model': kVertaalModel,
+      'max_tokens': 2000,
+      'system': 'Je vertaalt beschrijvingen van muziekalbums en artiesten naar vlot, natuurlijk '
+          'Nederlands. Laat namen van artiesten, albums, nummers, labels en plaatsen staan zoals ze zijn, '
+          'en ook jaartallen en hitlijstposities. Geef alleen de vertaling, zonder inleiding of uitleg.',
+      'messages': [
+        {'role': 'user', 'content': tekst}
+      ],
+    };
+
+/// De tekst uit een antwoord van de Messages-API, alle tekstblokken achter elkaar.
+String tekstUitAntwoord(Object? antwoord) {
+  if (antwoord is! Map) return '';
+  final buf = StringBuffer();
+  for (final blok in (antwoord['content'] is List ? antwoord['content'] as List : const [])) {
+    if (blok is Map && blok['type'] == 'text' && blok['text'] is String) buf.write(blok['text'] as String);
+  }
+  return buf.toString().trim();
+}
+
 /// Haal de JSON uit een antwoord van de Messages-API.
 ///
 /// Met een schema staat het antwoord gewoon in de tekstblokken; ze worden aan elkaar geplakt omdat
@@ -114,6 +143,15 @@ class AiService {
   final http.Client _http;
 
   bool get beschikbaar => sleutelVan().trim().isNotEmpty;
+
+  /// Een beschrijving in het Nederlands. Gooit [AiFout] met een leesbare reden; zie [vertaalBody].
+  Future<String> vertaalNaarNederlands(String tekst) async {
+    final sleutel = sleutelVan().trim();
+    if (sleutel.isEmpty) throw const AiFout('Er staat geen AI-sleutel in Instellingen.');
+    final uit = tekstUitAntwoord(await _verstuur(vertaalBody(tekst), sleutel, werkruimteVan().trim()));
+    if (uit.isEmpty) throw const AiFout('Het taalmodel gaf geen vertaling terug.');
+    return uit;
+  }
 
   /// Van een zin naar een opdracht. Gooit [AiFout] met een leesbare reden.
   Future<RadioOpdracht> maakRadioplan(String zin) async {

@@ -106,7 +106,7 @@ class CreditsService {
           final m = e as Map;
           final role = ((m['role'] ?? '') as String).trim();
           // Discogs writes "Producer", but also "Recorded By, Mixed By" — take the leading role.
-          final lead = role.split(',').first.trim();
+          final lead = hoofdRol(role);
           if (!_interesting.hasMatch(lead)) continue;
           // "Louis Johnson (2)" — the number disambiguates on Discogs, it isn't part of the name.
           final name = ((m['name'] ?? '') as String).replaceAll(RegExp(r'\s*\(\d+\)$'), '').trim();
@@ -207,4 +207,19 @@ SELECT DISTINCT ?workLabel ?date WHERE {
     }
     return hits.isEmpty ? null : (hits.first as Map)['id'] as String?;
   }
+}
+
+/// De eerste rol uit een Discogs-rol: "Recorded By, Mixed By" → "Recorded By".
+///
+/// Alleen op een komma BUITEN haakjes. Op de komma binnen "Arranged By [Strings, Horns]" knippen gaf
+/// "Arranged By [Strings" — zonder sluithaakje, gezien bij Patrick Hernandez (16-10-2026).
+String hoofdRol(String rol) {
+  var diepte = 0;
+  for (var i = 0; i < rol.length; i++) {
+    final c = rol[i];
+    if (c == '[' || c == '(') diepte++;
+    if ((c == ']' || c == ')') && diepte > 0) diepte--;
+    if (c == ',' && diepte == 0) return rol.substring(0, i).trim();
+  }
+  return rol.trim();
 }

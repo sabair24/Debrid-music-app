@@ -45,6 +45,7 @@ import 'tokens.dart';
 import 'transcode.dart';
 import 'upnp.dart';
 import '../artwork.dart';
+import '../vertaler.dart';
 
 /// The port the other devices look for. Fixed on purpose — an ephemeral port would mean every
 /// restart hands out a different address, and anything a client saved would go stale.
@@ -555,6 +556,8 @@ class LanServer {
         return _onlineBestanden(req);
       case '/api/releases':
         return _releases(req);
+      case '/api/vertaal':
+        return _vertaal(req);
       case '/api/online/tracklist':
         return _onlineTracklist(req);
       case '/api/online/download':
@@ -1584,6 +1587,23 @@ class LanServer {
       ...(l ?? ReleasesLijst(0, const [])).toJson(),
       'bezig': d.bezig,
     });
+  }
+
+  /// Een beschrijving in het Nederlands, voor een toestel (16-10-2026). De AI-sleutel blijft op de pc;
+  /// de vertaling wordt hier bewaard, dus elk toestel krijgt dezelfde en de tweede vraag kost niets.
+  Future<void> _vertaal(HttpRequest req) async {
+    if (req.method != 'POST') {
+      req.response.statusCode = HttpStatus.methodNotAllowed;
+      return req.response.close();
+    }
+    final map = await _body(req);
+    if (map == null) return;
+    final tekst = ((map['tekst'] ?? '') as String).trim();
+    if (tekst.isEmpty) return _json(req.response, {'nl': ''});
+    if (tekst.length > 12000) return _json(req.response, {'error': 'Te lang om te vertalen.'}, status: HttpStatus.badRequest);
+    final nl = await Vertaler.instantie.naarNederlands(tekst);
+    if (nl == null) return _unavailable(req, 'Vertalen lukte niet.');
+    return _json(req.response, {'nl': nl});
   }
 
   /// Wat er in de gecachte torrents zit, voor de lijst onder een nummer op een toestel. Hoogstens
