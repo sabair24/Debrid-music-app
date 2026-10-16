@@ -25,6 +25,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../tv.dart';
+import 'glas.dart';
 import 'kleuren.dart';
 
 /// Eén regel in het menu.
@@ -126,9 +127,10 @@ Future<MenuRegel?> _viaBlad(BuildContext context, ItemMenu menu) async {
     // Mag, omdat de providers bóven de MaterialApp staan. Wat er niet doorheen komt zijn de
     // handelingen, en die zitten al gebonden in de gegevens: zie [MenuRegel.doen].
     useRootNavigator: true,
-    // [kBovenop] en niet [kPaneel]: dit blad ligt óver de app, en op de kleur van een gewone rij
-    // leest het als een rij die per ongeluk heel groot geworden is.
-    backgroundColor: kBovenop,
+    // Doorzichtig: het glas eronder tekent het blad (16-10-2026, Saber koos "menu bij lang indrukken
+    // = glas"). De kleur blijft [kBovenop] en niet [kPaneel]: dit blad ligt óver de app, en op de
+    // kleur van een gewone rij leest het als een rij die per ongeluk heel groot geworden is.
+    backgroundColor: Colors.transparent,
     // Anders knipt Flutter het blad af op 9/16 van het scherm. Op een Shield van 540 punten met
     // tekstschaal 1,35 zie je dan vijf van de veertien regels.
     isScrollControlled: true,
@@ -137,7 +139,15 @@ Future<MenuRegel?> _viaBlad(BuildContext context, ItemMenu menu) async {
     ),
     builder: (bladContext) {
       route ??= ModalRoute.of(bladContext);
-      return ItemMenuBlad(menu: menu);
+      // Een eigen groep: het blad ligt óver de glazen balken, en glas dat elkaar overlapt hoort niet
+      // in dezelfde groep (dan ziet het ene het andere niet). Op een tv ondoorzichtig, zoals altijd.
+      return BackdropGroup(
+        child: GlasVlak(
+          vorm: const BorderRadius.vertical(top: Radius.circular(16)),
+          vulling: BoxDecoration(color: isTv ? kBovenop : kBovenop.withValues(alpha: .74)),
+          child: ItemMenuBlad(menu: menu),
+        ),
+      );
     },
   );
 

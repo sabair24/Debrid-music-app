@@ -38,6 +38,7 @@ import 'prullenbak.dart' show heeftPrullenbak;
 import 'radiosessie.dart';
 import 'ui/draaihoes.dart';
 import 'ui/duim.dart';
+import 'ui/glas.dart';
 import 'lan/pc_radiobron.dart';
 import 'auto_hoezen.dart';
 import 'bestandsbeheer.dart';
@@ -462,6 +463,9 @@ Future<void> main() async {
   // Before the first widget: whether this is a television decides focus rings, overscan margins
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
+  // Welk glas dit toestel tekent, en de bewaker die het terugzet als het te veel kost (ui/glas.dart).
+  GlasKwaliteit.meld = (r) => debugPrint(r);
+  unawaited(GlasKwaliteit.inrichten());
   // And what this device is called, before it publishes that name anywhere. Same channel, same
   // race — and on Android the alternative is a device list in which every phone reads "localhost".
   await initDeviceName();
@@ -1634,6 +1638,9 @@ class DebridApp extends StatelessWidget {
       // Medium 18) without the 1.45 that would push two-line titles out of every tile.
       builder: (context, child) {
         var inhoud = child ?? const SizedBox.shrink();
+        // Eén terugleesbeurt voor al het matglas op het scherm. Zie `ui/glas.dart`: tien tot veertien
+        // losse vervagingen maakten de iPad heet (10-10-2026).
+        inhoud = BackdropGroup(child: inhoud);
         if (isTv) {
           inhoud = MediaQuery(
             data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(1.35)),
@@ -1925,10 +1932,11 @@ class _MeeschuivendGlas extends StatelessWidget {
     // leesbaarheid. Zie [glasZonderVervaging].
     final dicht = isCompact(context) || glasZonderVervaging;
     return AnimatedBuilder(
-      animation: rol,
+      animation: Listenable.merge([rol, GlasKwaliteit.stand]),
       builder: (_, __) => balkGlas(
           tint, !rol.hasClients ? 0 : (rol.offset / aanloop).clamp(0.0, 1.0),
-          dicht: dicht, plat: dicht),
+          // Plat alleen als het glas plat staat (tv, of de bewaker). Op een gsm was dit altijd plat.
+          dicht: dicht, plat: glasZonderVervaging),
     );
   }
 }
@@ -2015,21 +2023,26 @@ Widget glassSurface({
   // stond er al; die voor een telefoon ontbrak.
   //
   // En sinds 10-10-2026 ook de iPad: zie [glasZonderVervaging] voor de meting.
-  if (glasZonderVervaging || zonderBlur) {
-    return DecoratedBox(
-      decoration: schaduw,
-      child: ClipRRect(borderRadius: BorderRadius.circular(999), child: surface),
-    );
-  }
-  return DecoratedBox(
-    decoration: schaduw,
-    child: ClipRRect(
-      borderRadius: BorderRadius.circular(999),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: surface,
-      ),
-    ),
+  //
+  // Sinds 16-10-2026 wel op een gsm en een iPad, met het gedeelde filter onder één groep (zie
+  // `ui/glas.dart`). [blur] doet daarom niet meer mee: een ander getal is een ander filter.
+  return ValueListenableBuilder<GlasStand>(
+    valueListenable: GlasKwaliteit.stand,
+    builder: (_, __, ___) => (glasZonderVervaging || zonderBlur)
+        ? DecoratedBox(
+            decoration: schaduw,
+            child: ClipRRect(borderRadius: BorderRadius.circular(999), child: surface),
+          )
+        : DecoratedBox(
+            decoration: schaduw,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: Stack(children: [
+                Positioned.fill(child: BackdropFilter.grouped(filter: glasMat, child: const SizedBox.expand())),
+                surface,
+              ]),
+            ),
+          ),
   );
 }
 
@@ -2518,7 +2531,7 @@ class _HomeShellState extends State<HomeShell> {
           padding: const EdgeInsets.fromLTRB(8, 7, 10, 7),
           // Op een telefoon zonder blur: deze balk staat permanent boven drie schermen, en een
           // BackdropFilter is de enige laag die niet raster-gecachet kan worden.
-          zonderBlur: isCompact(context),
+          zonderBlur: false,
           child: child,
         ),
       );

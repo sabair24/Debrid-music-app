@@ -12,6 +12,7 @@ library;
 import 'dart:ui' show ImageFilter;
 
 import 'package:debridmusic/tv.dart';
+import 'package:debridmusic/ui/glas.dart';
 import 'package:debridmusic/ui/vlak.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -37,12 +38,14 @@ void main() {
   double dekking(WidgetTester t) =>
       (t.widget<DecoratedBox>(gekleurd).decoration as BoxDecoration).gradient!.colors.first.a;
 
-  testWidgets('DE KERN: de ruit vervormt, hij vervaagt niet alleen', (t) async {
+  testWidgets('DE KERN: de ruit vervormt, en met HET gedeelde filter', (t) async {
+    // Sinds 16-10-2026 (ui/glas.dart): vervagen, uitlopen (dilate) en verzadigen, en voor elke ruit
+    // hetzelfde object — alleen gelijke filters worden in een BackdropGroup samen teruggelezen.
     await zet(t, radio());
     final filter = t.widget<BackdropFilter>(find.byType(BackdropFilter)).filter;
-    expect(filter, glasVervorming);
-    expect(filter, isNot(ImageFilter.blur(sigmaX: 14, sigmaY: 10)),
-        reason: 'alleen vervagen is matglas: de achtergrond wordt vaag, niet vervormd');
+    expect(identical(filter, glasMat), isTrue);
+    expect(filter, isNot(ImageFilter.blur(sigmaX: 16, sigmaY: 12)),
+        reason: 'alleen vervagen is matglas zonder licht: de achtergrond wordt vaag, niet vervormd');
   });
 
   testWidgets('DE VAL: de vulling is GEEN kind van de vervaging', (t) async {

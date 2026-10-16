@@ -22,6 +22,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 
 import '../tv.dart';
+import 'glas.dart';
 import 'kleuren.dart';
 import 'maten.dart';
 
@@ -314,9 +315,6 @@ Widget balkGlas(Color tint, double op, {bool dicht = false, bool plat = false}) 
     ),
   );
   if (isTv) return vulling;
-  // Meer vervaging waar de balk krapper is. Zes punten meer kost niets extra — het is dezelfde ene
-  // laag — en het is wat kleine letters van "vager" naar "onleesbaar" brengt.
-  final wazig = (dicht ? 30 : 24) * op;
   // Op een telefoon (en op een televisie) alleen de vulling: geen laag die het scherm terugleest.
   //
   // Saber op 12-09-2026 over zijn telefoon: "album pagina heel traag (...) artist pagina scrollen
@@ -329,16 +327,17 @@ Widget balkGlas(Color tint, double op, {bool dicht = false, bool plat = false}) 
   // dekking, dus van wat eronder vervaagd werd kwam toch nauwelijks iets door.
   // En op elk toestel dat geen bureaublad is: zie [glasZonderVervaging] voor de meting op de iPad.
   if (plat || glasZonderVervaging) return vulling;
+  // Pas als er echt iets onder doorschuift. De sterkte groeide hier mee met het scrollen
+  // (24 of 30 × [op]), maar elk ander getal is een ander filter, en die worden niet samen
+  // teruggelezen. Nu het gedeelde [glasMat], en alleen de kleur loopt mee.
+  if (op < .2) return vulling;
   return Stack(
     fit: StackFit.expand,
     children: [
       // Eerst de vervaging, met een LEEG kind: hij hoeft niets te tekenen, alleen te vervagen wat
       // erachter langs schuift.
       ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: wazig, sigmaY: wazig),
-          child: const SizedBox.expand(),
-        ),
+        child: BackdropFilter.grouped(filter: glasMat, child: const SizedBox.expand()),
       ),
       // En dan de kleur eroverheen, als eigen laag. Sneuvelt de vervaging op een toestel, dan staat
       // deze er nog steeds.
@@ -392,9 +391,19 @@ final ImageFilter glasVervorming = ImageFilter.compose(
 /// De donkere laag onder plat glas buiten de tv, zie [glasRuit]: de achtergrondkleur op 60 procent.
 const kGlasOnderlaag = Color(0x9907080C);
 
-Widget glasRuit({bool? plat}) {
-  // Zonder vervaging ook buiten de tv, met de stevigere vulling die daarbij hoort — de glazen knoppen
-  // stonden met tien tot veertien tegelijk op de albumpagina van de iPad. Zie [glasZonderVervaging].
+Widget glasRuit({bool? plat, bool lens = false}) {
+  // Volgt de stand van het glas: verandert die (de bewaker in ui/glas.dart), dan tekent de ruit
+  // meteen opnieuw, en niet pas bij de volgende opbouw van zijn pagina.
+  return ValueListenableBuilder<GlasStand>(
+    valueListenable: GlasKwaliteit.stand,
+    builder: (_, __, ___) => _glasRuit(plat: plat, lens: lens),
+  );
+}
+
+Widget _glasRuit({bool? plat, required bool lens}) {
+  // Zonder vervaging op een tv, of als de bewaker het glas plat zette. Sinds 16-10-2026 wél op een
+  // gsm en een iPad: alle ruiten delen nu één vervaging ([glasMat] onder één `BackdropGroup`), waar
+  // het er tien tot veertien waren. Zie [glasZonderVervaging].
   final tv = (plat ?? isTv) || glasZonderVervaging;
   const hoek = BorderRadius.all(Radius.circular(kHoekRond));
   final vulling = DecoratedBox(
@@ -446,8 +455,10 @@ Widget glasRuit({bool? plat}) {
               fit: StackFit.expand,
               children: [
                 // Eerst de vervaging, met een LEEG kind: zij hoeft niets te tekenen, alleen te
-                // vervormen wat erachter ligt.
-                BackdropFilter(filter: glasVervorming, child: const SizedBox.expand()),
+                // vervormen wat erachter ligt. Gegroepeerd en met het gedeelde filter: zie [glasMat].
+                BackdropFilter.grouped(filter: glasMat, child: const SizedBox.expand()),
+                // De lensrand, alleen als vloeibaar glas en alleen voor een ruit die stil staat.
+                if (lens && GlasKwaliteit.stand.value == GlasStand.vloeibaar) const GlasLens(hoek: kHoekRond),
                 vulling,
               ],
             ),
@@ -651,7 +662,8 @@ Widget glasInBalk(Widget knop, {bool plat = false}) {
       padding: const EdgeInsets.symmetric(horizontal: 3),
       child: Stack(
         children: [
-          Positioned.fill(child: IgnorePointer(child: glasRuit(plat: plat))),
+          // Een vastgezette werkbalk staat stil: daar mag de lensrand bij.
+          Positioned.fill(child: IgnorePointer(child: glasRuit(plat: plat, lens: true))),
           knop,
         ],
       ),

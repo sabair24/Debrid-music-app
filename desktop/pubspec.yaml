@@ -108,6 +108,11 @@ flutter:
     # cannot drift apart again.
     - assets/icon/app_icon.png
 
+  # Het vloeibare glas (16-10-2026): de lensrand van de minispeler, de onderbalk en de bovenknoppen.
+  # Alleen onder Impeller; zie lib/ui/glas.dart.
+  shaders:
+    - shaders/glas_lens.frag
+
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
 

@@ -1,23 +1,27 @@
-/// Op een iPad vervaagt het glas niets meer — net als op de telefoon en de televisie.
+/// Glas op een iPad en een gsm: echte vervaging, maar GEDEELD — en plat zodra het te veel kost.
 ///
-/// **Waarom.** De warmtemeter van 3.9.458 mat op 10-10-2026 op de iPad (120 Hz, 1668×2388 px) per
-/// beeld 1,4 ms rasteren op schermen met 0–2 glasvlakken, en gemiddeld 6,5 ms (tot 24 ms) met 8 of
-/// meer — de albumpagina en Nu speelt, waar de cd 60 keer per seconde om een beeld vraagt. Een
-/// `BackdropFilter` leest bij elk beeld het scherm terug en vervaagt het opnieuw; de GPU stond tot
-/// 100 % en de batterij zakte 10 % in elf minuten. Het glas hing aan de BREEDTE (`isCompact`), en een
-/// iPad is breed. Nu hangt het aan het soort toestel: vervagen alleen op een bureaublad.
+/// **Waarom het eerst plat was.** De warmtemeter van 3.9.458 mat op 10-10-2026 op de iPad (120 Hz,
+/// 1668×2388 px) per beeld 1,4 ms rasteren op schermen met 0–2 glasvlakken, en gemiddeld 6,5 ms (tot
+/// 24 ms) met 8 of meer — de albumpagina en Nu speelt, waar de cd 60 keer per seconde om een beeld
+/// vraagt. Elke `BackdropFilter` las het scherm apart terug; de GPU stond tot 100 %.
+///
+/// **Waarom het nu weer mag (16-10-2026).** Saber koos vloeibaar glas, overal. Alle matte vlakken
+/// hebben nu één filter ([glasMat]) onder één `BackdropGroup`: één terugleesbeurt voor allemaal. En
+/// de bewaker in `ui/glas.dart` zet het glas plat als de tekentijd te hoog wordt — dan geldt de oude
+/// regel weer: geen enkel glas leest het scherm terug.
 library;
 
 import 'dart:io';
 
 import 'package:debridmusic/main.dart' show glassSurface;
 import 'package:debridmusic/tv.dart';
+import 'package:debridmusic/ui/glas.dart';
 import 'package:debridmusic/ui/vlak.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een iPad liggend: 1194 punten breed, dus níét compact.
-Future<int> _lagen(WidgetTester t, Widget kind, {double breed = 1194}) async {
+Future<List<BackdropFilter>> _lagen(WidgetTester t, Widget kind, {double breed = 1194}) async {
   await t.pumpWidget(MediaQuery(
     data: MediaQueryData(size: Size(breed, 834)),
     child: Directionality(
@@ -26,7 +30,7 @@ Future<int> _lagen(WidgetTester t, Widget kind, {double breed = 1194}) async {
     ),
   ));
   await t.pump();
-  return t.widgetList(find.byType(BackdropFilter)).length;
+  return t.widgetList<BackdropFilter>(find.byType(BackdropFilter)).toList();
 }
 
 Widget get _knop => GlasKnop(icoon: Icons.radio_rounded, label: 'Radio', onPressed: () {});
@@ -34,55 +38,61 @@ Widget get _pil => glassSurface(child: const SizedBox(width: 200, height: 40));
 Widget get _balk => SizedBox(width: 600, height: 60, child: balkGlas(const Color(0xFF07080C), 1));
 
 void main() {
-  tearDown(() => bureaubladVoorToets = null);
+  setUp(() {
+    bureaubladVoorToets = false;
+    GlasKwaliteit.vergeet();
+  });
+  tearDown(() {
+    bureaubladVoorToets = null;
+    setTvModeForTest(false);
+    GlasKwaliteit.vergeet();
+  });
 
-  group('DE KERN: op een iPad leest geen enkel glas het scherm terug', () {
-    setUp(() => bureaubladVoorToets = false);
+  group('matglas op een iPad: echt, en allemaal met hetzelfde filter', () {
+    testWidgets('knop, pil en balk vervagen, en alle drie met glasMat', (t) async {
+      for (final w in [_knop, _pil, _balk]) {
+        final l = await _lagen(t, w);
+        expect(l, hasLength(1));
+        expect(identical(l.single.filter, glasMat), isTrue,
+            reason: 'alleen GELIJKE filters worden in een BackdropGroup samen teruggelezen');
+      }
+    });
+  });
 
-    testWidgets('de glazen knop (tien tot veertien op de albumpagina)', (t) async {
-      expect(await _lagen(t, _knop), 0);
+  group('DE KERN van 10-10-2026 blijft: plat glas leest niets terug', () {
+    testWidgets('als de bewaker het glas plat zet', (t) async {
+      GlasKwaliteit.stand.value = GlasStand.plat;
+      expect(await _lagen(t, _knop), isEmpty);
+      expect(await _lagen(t, _pil), isEmpty);
+      expect(await _lagen(t, _balk), isEmpty);
     });
 
-    testWidgets('de pil bovenaan', (t) async {
-      expect(await _lagen(t, _pil), 0);
+    testWidgets('en op een televisie altijd', (t) async {
+      setTvModeForTest(true);
+      await GlasKwaliteit.inrichten();
+      expect(GlasKwaliteit.stand.value, GlasStand.plat);
+      expect(glasZonderVervaging, isTrue);
     });
-
-    testWidgets('de meeschuivende balk', (t) async {
-      expect(await _lagen(t, _balk), 0);
-    });
-
   });
 
   test('de balk boven de albumpagina krijgt zonder vervaging de dichte vulling', () {
-    // Zonder vervaging draagt alleen de kleur nog de leesbaarheid; met 62 % las je op de telefoon
-    // de albumbeschrijving dwars door de knoppen heen. Dus dezelfde 78 % als daar.
     final main = File('lib/main.dart').readAsStringSync();
     expect(main.contains('final dicht = isCompact(context) || glasZonderVervaging;'), isTrue);
   });
 
-  group('DE GRENS: op een bureaublad blijft het echt glas', () {
-    setUp(() => bureaubladVoorToets = true);
-
-    testWidgets('knop, pil en balk vervagen daar wel', (t) async {
-      expect(await _lagen(t, _knop), 1);
-      expect(await _lagen(t, _pil), 1);
-      expect(await _lagen(t, _balk), 1);
-    });
-  });
-
-  test('zonder vastzetten kijkt de regel naar het echte platform', () {
-    // Deze toetsen draaien op een bureaublad (Windows hier, Linux op de bouwstraat): daar hoort het
-    // glas aan te blijven. Zonder deze toets kon "bureaublad" stil op onwaar vallen en verdween het
-    // glas ook van de pc.
-    bureaubladVoorToets = null;
-    expect(isBureaublad, isTrue);
-    expect(glasZonderVervaging, isFalse);
-  });
-
-  test('de regel zelf', () {
+  test('de regel: plat op een tv of als de bewaker het zegt, niet meer per soort toestel', () {
+    GlasKwaliteit.stand.value = GlasStand.mat;
     bureaubladVoorToets = false;
-    expect(glasZonderVervaging, isTrue, reason: 'een iPad, een telefoon');
+    expect(glasZonderVervaging, isFalse, reason: 'een iPad, een telefoon: nu wel glas');
     bureaubladVoorToets = true;
     expect(glasZonderVervaging, isFalse, reason: 'Windows, Mac, Linux');
+    GlasKwaliteit.stand.value = GlasStand.plat;
+    expect(glasZonderVervaging, isTrue);
+  });
+
+  test('één groep bovenaan de app, boven de Navigator', () {
+    final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(main, contains('inhoud = BackdropGroup(child: inhoud);'));
+    expect(main, contains('unawaited(GlasKwaliteit.inrichten());'));
   });
 }

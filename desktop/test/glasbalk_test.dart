@@ -16,6 +16,7 @@ library;
 import 'dart:ui' show ImageFilter;
 
 import 'package:debridmusic/tv.dart';
+import 'package:debridmusic/ui/glas.dart';
 import 'package:debridmusic/ui/vlak.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -73,14 +74,17 @@ void main() {
         reason: 'volledig doorzichtig aan de onderkant, anders is er alsnog een rand');
   });
 
-  testWidgets('de vervaging groeit mee met het scrollen', (t) async {
+  testWidgets('de KLEUR groeit mee met het scrollen; de vervaging is het gedeelde filter', (t) async {
+    // Tot 16-10-2026 groeide de vervaging mee (24 × op). Maar elk ander getal is een ander filter, en
+    // dan worden ze niet samen teruggelezen (ui/glas.dart). Nu loopt de vulling mee, en komt de
+    // vervaging pas als er echt iets onder doorschuift.
     await zet(t, 1);
-    final volle = t.widget<BackdropFilter>(find.byType(BackdropFilter)).filter;
+    expect(identical(t.widget<BackdropFilter>(find.byType(BackdropFilter)).filter, glasMat), isTrue);
+    final vol = verloop(t)!.colors.first.a;
     await zet(t, .25);
-    final zwakke = t.widget<BackdropFilter>(find.byType(BackdropFilter)).filter;
-    expect(volle, isNot(equals(zwakke)),
-        reason: 'zou de vervaging vast staan, dan sprong de leesbaarheid bij de eerste pixel scroll');
-    expect(volle, ImageFilter.blur(sigmaX: 24, sigmaY: 24));
+    expect(verloop(t)!.colors.first.a, lessThan(vol), reason: 'de kleur komt geleidelijk op');
+    await zet(t, .1);
+    expect(find.byType(BackdropFilter), findsNothing, reason: 'nauwelijks iets eronder: alleen kleur');
   });
 
   testWidgets('op een televisie geen vervaging, wel een dichtere vulling', (t) async {
@@ -143,12 +147,11 @@ void main() {
       expect(smal, greaterThan(.7), reason: 'genoeg om een alinea eronder te dempen');
     });
 
-    testWidgets('en meer vervaging, want dát is wat letters onleesbaar maakt', (t) async {
+    testWidgets('en echte vervaging, want dát is wat letters onleesbaar maakt', (t) async {
       // Alleen dekking erbij zou de knoppen op een BALK zetten, en dat is precies wat er niet mag
-      // zijn. Het is de vervaging die het glas maakt.
+      // zijn. Het is de vervaging die het glas maakt — het gedeelde filter, ook hier.
       await zet(t, 1, dicht: true);
-      expect(t.widget<BackdropFilter>(find.byType(BackdropFilter)).filter,
-          ImageFilter.blur(sigmaX: 30, sigmaY: 30));
+      expect(identical(t.widget<BackdropFilter>(find.byType(BackdropFilter)).filter, glasMat), isTrue);
     });
 
     testWidgets('bij stilstand nog steeds helemaal niets', (t) async {

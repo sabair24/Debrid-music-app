@@ -14,6 +14,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'ui/glas.dart';
 import 'ui/kleuren.dart';
 
 /// Is this a television? Read once at startup by [initTvMode].
@@ -120,7 +121,13 @@ bool? bureaubladVoorToets;
 /// De telefoon kreeg zijn glas om dezelfde reden al zonder vervaging (`isCompact`), en de
 /// televisie (`isTv`) ook. Breedte was de verkeerde maat: een iPad is breed, maar heeft net zo goed
 /// een batterij en een GPU die warm wordt. Op een pc kost het niets wat telt.
-bool get glasZonderVervaging => isTv || !isBureaublad;
+///
+/// **Sinds 16-10-2026 wél vervaging op een toestel, en die meting is precies waarom het nu kan.** Het
+/// waren tien tot veertien vervagingen die elk apart het scherm teruglazen. Nu hebben alle matte
+/// vlakken hetzelfde filter onder één `BackdropGroup`: één terugleesbeurt voor allemaal (zie
+/// `ui/glas.dart`). En een bewaker meet de tekentijd: wordt het te zwaar, dan gaat het glas terug naar
+/// mat en daarna naar plat — en dan geldt dit weer. Saber koos dat zo: vloeibaar glas, overal.
+bool get glasZonderVervaging => isTv || GlasKwaliteit.stand.value == GlasStand.plat;
 
 /// How far the disc slides out from behind the sleeve, as a fraction of the sleeve's width.
 ///
