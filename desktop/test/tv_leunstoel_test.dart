@@ -250,18 +250,38 @@ void main() {
       expect(gekozen, [4], reason: 'na OK niet nog eens vanzelf');
     });
 
-    testWidgets('geselecteerd: glas met paarse letters; de pagina waar je bent: wit op grijs', (t) async {
+    testWidgets('één pil die schuift, zoals in Debrid Media: op de pagina waar je bent, of op de selectie', (t) async {
+      // Saber, 16-10-2026: "voor de menu wil ik eigenlijk zelfde effect als men debrid media app op
+      // de shield, een pill dat verschuift".
       final (_, _, knoppen) = await balk(t);
-      Color kleurVan(String label) => t.widget<Text>(find.text(label)).style!.color!;
-      expect(kleurVan('Start'), Colors.white);
-      knoppen.voor(0).requestFocus();
+      await t.pumpAndSettle();
+      final pil = find.byKey(const ValueKey('tv-menu-pil'));
+      expect(pil, findsOneWidget, reason: 'één pil, geen pil per tabblad');
+      double midden(Finder f) => t.getCenter(f).dx;
+      Color kleur(String label) => t.widget<DefaultTextStyle>(
+              find.ancestor(of: find.text(label), matching: find.byType(DefaultTextStyle)).first)
+          .style
+          .color!;
+      expect(midden(pil), closeTo(midden(find.text('Start')), 2), reason: 'in rust op de pagina waar je bent');
+      expect(kleur('Start'), kTvMenuLicht);
+      expect(kleur('Albums'), isNot(kTvMenuLicht));
+
+      knoppen.voor(4).requestFocus(); // Tracks
+      // Selectie, opbouw, meting na het beeld, en dan pas begint hij te schuiven.
       await t.pump();
-      expect(kleurVan('Albums'), kAccent);
-      final pil = t.widget<AnimatedContainer>(
-          find.ancestor(of: find.text('Albums'), matching: find.byType(AnimatedContainer)).first);
-      final deco = pil.decoration! as BoxDecoration;
-      expect(deco.gradient, kTvTabbladGlas, reason: 'glas, geen witte pil meer');
-      expect(deco.color, isNull);
+      await t.pump();
+      await t.pump();
+      final start = midden(find.text('Start')), tracks = midden(find.text('Tracks'));
+      await t.pump(kTvMenuSchuif * .15);
+      final halfweg = midden(pil);
+      expect(halfweg, greaterThan(start + 5), reason: 'hij schuift, hij springt niet');
+      expect(halfweg, lessThan(tracks - 5));
+      await t.pumpAndSettle();
+      expect(midden(pil), closeTo(tracks, 2));
+      expect(kleur('Tracks'), kTvMenuLicht);
+      expect(kleur('Start'), isNot(kTvMenuLicht), reason: 'één woord licht op: dat onder de pil');
+      final deco = t.widget<DecoratedBox>(find.descendant(of: pil, matching: find.byType(DecoratedBox))).decoration;
+      expect(deco, kTvMenuPil);
     });
 
     testWidgets('het tabblad van de pagina waar je bent staat in beeld, ook na een wissel', (t) async {

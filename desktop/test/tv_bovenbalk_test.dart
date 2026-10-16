@@ -43,9 +43,9 @@ void main() {
     // Op een tv is de app een speler: Online zoeken, Mijn downloads en Kwaliteit horen daar niet.
     // De balk moet die keuze uit NavSections.voorTv halen en niet zelf een lijstje bijhouden --
     // anders lopen de twee uit elkaar zodra er een sectie bijkomt.
-    expect(balkBron(), contains('for (final (id, label, icoon) in NavSections.voorTv)'));
-    expect(balkBron(), contains("_item(Icons.search_rounded, 'Zoeken'"));
-    expect(balkBron(), contains("_item(Icons.settings_rounded, 'Instellingen'"));
+    expect(balkBron(), contains('for (final (id, label, _) in NavSections.voorTv)'));
+    expect(balkBron(), contains("_item('Zoeken', widget.onSearch)"));
+    expect(balkBron(), contains("_item('Instellingen', widget.onSettings)"));
   });
 
   test('de tv-lijst laat ophalen en opruimen weg, en verder niets', () {

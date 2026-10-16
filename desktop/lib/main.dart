@@ -4150,12 +4150,36 @@ bool focusZonderDoel(FocusNode? n, {FocusScopeNode? wortel}) {
 /// niets.
 const kTvTabbladWacht = Duration(milliseconds: 500);
 
-/// Het glas van een geselecteerd tabblad op de tv: bovenaan lichter dan onderaan.
-const kTvTabbladGlas = LinearGradient(
-  begin: Alignment.topCenter,
-  end: Alignment.bottomCenter,
-  colors: [Color(0x47FFFFFF), Color(0x1FFFFFFF)],
+/// De capsule van het menu op de tv, zoals in Debrid Media: donker en doorschijnend (op een Shield
+/// geen vervaging, die is daar te duur), een haarfijne lichte rand en een schaduw eronder.
+const kTvMenuCapsule = BoxDecoration(
+  color: Color(0x9912121A),
+  borderRadius: BorderRadius.all(Radius.circular(999)),
+  border: Border.fromBorderSide(BorderSide(color: Color(0x1AFFFFFF))),
+  boxShadow: [BoxShadow(color: Color(0x59000000), blurRadius: 30, offset: Offset(0, 8))],
 );
+
+/// De gloed rond de pil en achter het woord eronder: het paars van de app op 45 %.
+const kTvMenuGloed = Color(0x737C5CFF);
+
+/// De letters onder de pil: lichtpaars.
+const kTvMenuLicht = Color(0xFFB3A2FF);
+
+/// De pil die achter de woorden schuift: licht glas, bovenaan een lichtrandje, een paarse gloed.
+const kTvMenuPil = BoxDecoration(
+  borderRadius: BorderRadius.all(Radius.circular(999)),
+  gradient: LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [Color(0x38FFFFFF), Color(0x1AFFFFFF)],
+  ),
+  boxShadow: [BoxShadow(color: kTvMenuGloed, blurRadius: 18)],
+);
+
+/// Hoe lang de pil over doet naar het volgende woord, en met welke veer (een tikje voorbij en terug),
+/// zoals in Debrid Media: 0,32 s, cubic-bezier(.34, 1.2, .4, 1).
+const kTvMenuSchuif = Duration(milliseconds: 320);
+const kTvMenuVeer = Cubic(.34, 1.2, .4, 1);
 
 /// De tabbladen van de tv-bovenbalk, per sectie. De schil houdt ze, zodat hij weet waar "omhoog"
 /// hoort te landen; de balk hangt ze aan zijn knoppen.
@@ -4271,30 +4295,58 @@ class _TvTopBarState extends State<TvTopBar> {
 
   @override
   Widget build(BuildContext context) {
-    // `select` en geen `watch`: deze balk hoeft alleen opnieuw als het GETAL verandert, en de
-    // downloadlijst meldt tijdens het ophalen tot vijf keer per seconde. Zie [_DownloadBadge].
-    final badge = context.select<DownloadManager, int>((d) => d.jobs.where((j) => j.busy).length);
-    return Container(
+    // De balk van Debrid Media op de Shield, zoals Saber hem wou (16-10-2026: "voor de menu wil ik
+    // eigenlijk zelfde effect als men debrid media app op de shield, een pill dat verschuift"): één
+    // zwevende capsule, en daarin één pil die van het ene woord naar het volgende schuift.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _meetPil());
+    final pil = _pil;
+    return SizedBox(
       height: TvTopBar.hoogte + tvOverscan.top,
-      padding: EdgeInsets.only(top: tvOverscan.top),
-      decoration: const BoxDecoration(
-        color: _panel,
-        border: Border(bottom: BorderSide(color: _line)),
-      ),
-      child: ListView(
-        controller: _rol,
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.symmetric(horizontal: tvOverscan.left),
-        children: [
-          _item(Icons.search_rounded, 'Zoeken', false, widget.onSearch),
-          for (final (id, label, icoon) in NavSections.voorTv)
-            _item(icoon, label, widget.view == id, () {
-              _wissel?.cancel();
-              widget.onPick(id);
-              widget.onIn?.call();
-            }, badge: id == 6 ? badge : 0, sectie: id),
-          _item(Icons.settings_rounded, 'Instellingen', false, widget.onSettings),
-        ],
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(tvOverscan.left, tvOverscan.top - 4, tvOverscan.right, 0),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: DecoratedBox(
+            decoration: kTvMenuCapsule,
+            child: Padding(
+              padding: const EdgeInsets.all(3),
+              child: SingleChildScrollView(
+                controller: _rol,
+                scrollDirection: Axis.horizontal,
+                child: Stack(
+                  children: [
+                    // De pil, achter de woorden. De eerste keer meteen op zijn plek, daarna schuivend.
+                    if (pil != null)
+                      AnimatedPositioned(
+                        key: const ValueKey('tv-menu-pil'),
+                        duration: _geplaatst ? kTvMenuSchuif : Duration.zero,
+                        curve: kTvMenuVeer,
+                        left: pil.left,
+                        width: pil.width,
+                        top: 0,
+                        bottom: 0,
+                        child: const DecoratedBox(decoration: kTvMenuPil),
+                      ),
+                    Row(
+                      key: _rij,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _item('Zoeken', widget.onSearch),
+                        for (final (id, label, _) in NavSections.voorTv)
+                          _item(label, () {
+                            _wissel?.cancel();
+                            widget.onPick(id);
+                            widget.onIn?.call();
+                          }, sectie: id),
+                        _item('Instellingen', widget.onSettings),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -4302,89 +4354,86 @@ class _TvTopBarState extends State<TvTopBar> {
   /// Welk item nu de selectie heeft, op label. Zie [_item].
   String? _gefocust;
 
-  Widget _item(IconData icoon, String label, bool geselecteerd, VoidCallback onTap,
-      {int badge = 0, int? sectie}) {
-    // Drie standen die je van de bank af uit elkaar houdt: de selectie is een GLAZEN pil met paarse
-    // letters (Saber, 16-10-2026: "glas met paarse tekst", zoals elke geselecteerde knop op de tv),
-    // de sectie waar je bent een zachte grijze pil met witte letters, en de rest gedimd. Daarvoor was
-    // de selectie een witte pil met zwarte letters, en nog eerder een paarse rand om een paars
-    // getinte pil — dan zag je niet of de selectie op "Tracks" stond of dat je daar alleen was.
-    final gefocust = _gefocust == label;
-    final voorgrond = gefocust ? kAccent : (geselecteerd ? Colors.white : _muted);
+  /// Waar de pil staat, binnen de rij met woorden.
+  Rect? _pil;
+
+  /// Pas na de eerste plaatsing schuift hij: bij het openen hoort hij er gewoon te staan.
+  bool _geplaatst = false;
+
+  final _rij = GlobalKey();
+  final _sleutels = <String, GlobalKey>{};
+
+  /// Het woord waar de pil hoort: wat de selectie heeft, en anders de pagina waar je bent.
+  String? get _pilOp =>
+      _gefocust ?? NavSections.voorTv.where((s) => s.$1 == widget.view).map((s) => s.$2).firstOrNull;
+
+  void _meetPil() {
+    if (!mounted) return;
+    final label = _pilOp;
+    final rij = _rij.currentContext?.findRenderObject();
+    final doel = label == null ? null : _sleutels[label]?.currentContext?.findRenderObject();
+    if (rij is! RenderBox || doel is! RenderBox || !rij.attached || !doel.attached) return;
+    final links = doel.localToGlobal(Offset.zero, ancestor: rij);
+    final nieuw = links & doel.size;
+    if (nieuw == _pil) {
+      if (!_geplaatst) setState(() => _geplaatst = true);
+      return;
+    }
+    setState(() => _pil = nieuw);
+  }
+
+  Widget _item(String label, VoidCallback onTap, {int? sectie}) {
     final knop = sectie == null ? null : widget.knoppen?.voor(sectie);
-    return Padding(
-      padding: const EdgeInsets.only(right: 6),
-      child: Center(
-        child: Builder(builder: (context) {
-          return Pressable(
-            onPressed: onTap,
-            focusNode: knop,
-            borderRadius: BorderRadius.circular(18),
-            scaleOnFocus: false,
-            ringOnFocus: false,
-            // De balk zet zelf in het midden wat de selectie krijgt (hieronder).
-            vastePlek: false,
-            // Wat de focus krijgt moet ook te zien zijn. Zonder dit loop je met RECHTS de balk uit en
-            // gebeurt er ogenschijnlijk niets: de knop staat scherp, maar buiten beeld.
-            onFocusChange: (heeft) {
-              if (!mounted) return;
-              setState(() => _gefocust = heeft ? label : (_gefocust == label ? null : _gefocust));
-              if (!heeft) {
-                if (_gefocust == null) _wissel?.cancel();
-                return;
-              }
-              if (sectie != null) {
-                _wachtEnWissel(sectie, knop);
-              } else {
-                _wissel?.cancel();
-              }
-              final doel = context.findRenderObject();
-              if (doel is RenderBox && _rol.hasClients) {
-                _rol.position.ensureVisible(doel,
-                    alignment: 0.5,
-                    duration: const Duration(milliseconds: 180),
-                    curve: Curves.easeOut);
-              }
-            },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 140),
-              curve: Curves.easeOut,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-              decoration: BoxDecoration(
-                // Glas: lichter aan de bovenkant, waar het licht vangt, met een haarfijne rand.
-                gradient: gefocust ? kTvTabbladGlas : null,
-                color: gefocust ? null : (geselecteerd ? Colors.white.withValues(alpha: .14) : Colors.transparent),
-                border: Border.all(color: gefocust ? const Color(0x52FFFFFF) : Colors.transparent),
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icoon, size: 16, color: voorgrond),
-                  if (badge > 0)
-                    Transform.translate(
-                      offset: const Offset(-4, -6),
-                      child: Container(
-                        width: 7,
-                        height: 7,
-                        decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
-                      ),
-                    ),
-                  const SizedBox(width: 6),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: geselecteerd || gefocust ? FontWeight.w700 : FontWeight.w500,
-                      color: voorgrond,
-                    ),
-                  ),
-                ],
-              ),
+    final onderPil = _pilOp == label;
+    return KeyedSubtree(
+      key: _sleutels.putIfAbsent(label, () => GlobalKey()),
+      child: Builder(builder: (context) {
+        return Pressable(
+          onPressed: onTap,
+          focusNode: knop,
+          borderRadius: BorderRadius.circular(999),
+          scaleOnFocus: false,
+          // Geen eigen glas: de pil is de selectie.
+          ringOnFocus: false,
+          // De balk zet zelf in het midden wat de selectie krijgt (hieronder).
+          vastePlek: false,
+          // Wat de focus krijgt moet ook te zien zijn. Zonder dit loop je met RECHTS de balk uit en
+          // gebeurt er ogenschijnlijk niets: de knop staat scherp, maar buiten beeld.
+          onFocusChange: (heeft) {
+            if (!mounted) return;
+            setState(() => _gefocust = heeft ? label : (_gefocust == label ? null : _gefocust));
+            if (!heeft) {
+              if (_gefocust == null) _wissel?.cancel();
+              return;
+            }
+            if (sectie != null) {
+              _wachtEnWissel(sectie, knop);
+            } else {
+              _wissel?.cancel();
+            }
+            final doel = context.findRenderObject();
+            if (doel is RenderBox && _rol.hasClients) {
+              _rol.position.ensureVisible(doel,
+                  alignment: 0.5, duration: const Duration(milliseconds: 180), curve: Curves.easeOut);
+            }
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            // Samengevoegd met de stijl eromheen, niet in de plaats ervan: een losse TextStyle zonder
+            // lettertype viel terug op dat van het toestel (Roboto) in plaats van Inter.
+            child: AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 200),
+              style: DefaultTextStyle.of(context).style.merge(TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w500,
+                    color: onderPil ? kTvMenuLicht : _muted,
+                    shadows: onderPil ? const [Shadow(color: kTvMenuGloed, blurRadius: 12)] : const [],
+                  )),
+              child: Text(label),
             ),
-          );
-        }),
-      ),
+          ),
+        );
+      }),
     );
   }
 }
