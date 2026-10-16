@@ -62,7 +62,9 @@ void main() {
     final i = hoofd.indexOf('ArtistNames(names: [album.artist], style: const TextStyle(color: _muted)),');
     expect(i, greaterThan(-1), reason: 'de metaregel van de albumkop is verdwenen');
     final ervoor = hoofd.substring(i - 400, i);
-    expect(ervoor.lastIndexOf('Wrap('), greaterThan(ervoor.lastIndexOf('Row(')),
+    // Sinds 16-10-2026 via KopFeiten (ui/kopfeiten.dart): die meet en zet de feiten onder de artiest
+    // als ze niet passen — zonder afkappen, en zonder " · " vooraan een regel. Zie afkappen_test.dart.
+    expect(ervoor, contains('KopFeiten('),
         reason: 'een Row knipt artiest · jaar · genre · aantal rechts af zodra het niet past');
   });
 
@@ -97,7 +99,7 @@ void main() {
     expect(a, greaterThan(-1), reason: 'de State van AlbumBrowsePage is niet te vinden');
     final e = hoofd.indexOf('\nclass ', a + 10);
     final staat = hoofd.substring(a, e < 0 ? hoofd.length : e);
-    final w = staat.indexOf('_maybeFocusable(Wrap(');
+    final w = staat.indexOf('_maybeFocusable(KopFeiten(');
     expect(w, greaterThan(-1),
         reason: 'een Row met een beletselteken knipt artiest · jaar · aantal af zodra het niet past');
     expect(staat.substring(w, w + 300), contains('names: [widget.artistName]'));

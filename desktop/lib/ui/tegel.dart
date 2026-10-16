@@ -23,9 +23,12 @@
 /// erbinnen past.
 library;
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../tv.dart';
+import 'draaihoes.dart';
 import 'maten.dart';
 import 'typografie.dart';
 
@@ -135,6 +138,8 @@ class AlbumTegel extends StatefulWidget {
     this.onSecondaryTap,
     this.breedte,
     this.heroTag,
+    this.draaibaar = false,
+    this.achterkant,
   });
 
   /// De hoes, gebouwd op de maat die hier bepaald wordt.
@@ -164,12 +169,55 @@ class AlbumTegel extends StatefulWidget {
   /// Laat de hoes naar de albumpagina vliegen in plaats van te knippen.
   final Object? heroTag;
 
+  /// Twee tikken draaien de hoes om (16-10-2026). Een gewone tik wacht dan [kTweedeTik]; zonder
+  /// [draaibaar] verandert er niets en opent een tik meteen. Nooit op een tv.
+  final bool draaibaar;
+
+  /// Haalt de achterkant op bij de eerste dubbeltik (van schijf). Null of niets gevonden = wiebelen.
+  final Future<Uint8List?> Function()? achterkant;
+
   @override
   State<AlbumTegel> createState() => _AlbumTegelState();
 }
 
 class _AlbumTegelState extends State<AlbumTegel> {
   bool _aan = false;
+
+  final _draai = DraaiHoesController();
+  final _tikken = TweeTikken();
+  Uint8List? _achter;
+  bool _zoekt = false;
+
+  bool get _draaien => widget.draaibaar && !isTv;
+
+  /// De maat waarop de hoes laatst getekend is: de achterkant wordt op dezelfde maat gedecodeerd.
+  double _maat = kTegelHoes;
+
+  int _decodeer(double maat) => (maat * MediaQuery.devicePixelRatioOf(context)).round();
+
+  @override
+  void dispose() {
+    _draai.dispose();
+    _tikken.dispose();
+    super.dispose();
+  }
+
+  Future<void> _dubbel() async {
+    if (_achter == null && !_zoekt && widget.achterkant != null) {
+      _zoekt = true;
+      try {
+        final b = await widget.achterkant!();
+        if (b != null && mounted) {
+          // Gedecodeerd vóór de draai, anders staat er halverwege een leeg vlak.
+          await precacheImage(ResizeImage(MemoryImage(b), width: _decodeer(_maat)), context);
+          if (mounted) setState(() => _achter = b);
+        }
+      } catch (_) {/* geen achterkant: dan wiebelt hij */} finally {
+        _zoekt = false;
+      }
+    }
+    if (mounted) _draai.draai(heeftAchterkant: _achter != null);
+  }
 
   /// De hoes met zijn schaduw eronder.
   ///
@@ -178,7 +226,21 @@ class _AlbumTegelState extends State<AlbumTegel> {
   /// scrollende lijst staan er zestien tegelijk in beeld.
   Widget _hoesMet(double maat) {
     final vorm = BorderRadius.circular(kHoek12);
-    final hoes = widget.hoes(maat);
+    _maat = maat;
+    final kaal = widget.hoes(maat);
+    final hoes = !_draaien
+        ? kaal
+        : DraaiHoes(
+            controller: _draai,
+            voor: kaal,
+            achter: _achter == null
+                ? null
+                : ClipRRect(
+                    borderRadius: vorm,
+                    child: Image.memory(_achter!,
+                        width: maat, height: maat, fit: BoxFit.cover, cacheWidth: _decodeer(maat)),
+                  ),
+          );
     return AnimatedContainer(
       duration: kGebaar,
       curve: Curves.easeOut,
@@ -206,7 +268,8 @@ class _AlbumTegelState extends State<AlbumTegel> {
       onEnter: (_) => setState(() => _aan = true),
       onExit: (_) => setState(() => _aan = false),
       child: Pressable(
-        onPressed: widget.onTap,
+        // Wacht op een mogelijke tweede tik alleen als er iets te draaien valt.
+        onPressed: _draaien ? () => _tikken.enkel(widget.onTap) : widget.onTap,
         onLongPress: widget.onLongPress,
         onSecondaryTap: widget.onSecondaryTap,
         borderRadius: BorderRadius.circular(kHoek12),
@@ -256,6 +319,7 @@ class _AlbumTegelState extends State<AlbumTegel> {
         ),
       ),
     );
-    return vast == null ? tegel : SizedBox(width: vast, child: tegel);
+    final metTikken = _draaien ? DubbelTikVlak(tikken: _tikken, onDubbel: _dubbel, child: tegel) : tegel;
+    return vast == null ? metTikken : SizedBox(width: vast, child: metTikken);
   }
 }

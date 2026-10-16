@@ -35,6 +35,7 @@ import 'radioplan.dart';
 import 'oordelen.dart';
 import 'prullenbak.dart' show heeftPrullenbak;
 import 'radiosessie.dart';
+import 'ui/draaihoes.dart';
 import 'ui/duim.dart';
 import 'lan/pc_radiobron.dart';
 import 'auto_hoezen.dart';
@@ -5134,6 +5135,26 @@ class WarmingLine extends StatelessWidget {
       );
 }
 
+/// De achterkant van een album uit je bibliotheek, als die al eens op schijf bewaard is.
+///
+/// Alleen van schijf: twee tikken op een tegel moeten meteen draaien, niet wachten op Discogs. Ligt
+/// hij er niet, dan wiebelt de tegel, en loopt de gewone zoektocht op de achtergrond — zodat het de
+/// volgende keer wél draait. Met dezelfde gegevens als Nu speelt ([albumArtVooruit]), anders zoekt
+/// dit in een andere map dan waar de scans liggen.
+Future<Uint8List?> achterkantVan(BuildContext context, Album al) async {
+  final v = albumArtVooruit(context.read<LibraryStore>(), al);
+  final dienst = DiscogsService(context.read<AppSettings>());
+  final uit = await dienst.cachedReleaseArt(v.artist, v.album,
+      expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+  if (uit?.back == null) {
+    unawaited(dienst
+        .releaseArt(v.artist, v.album,
+            expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles)
+        .then((_) {}, onError: (_) {}));
+  }
+  return uit?.back;
+}
+
 /// Een album in het raster op Albums.
 ///
 /// Sinds `ui/tegel.dart` bestaat is dit alleen nog de knoop tussen een `Album` en de gedeelde
@@ -5178,6 +5199,8 @@ class AlbumCard extends StatelessWidget {
         ],
       )),
       onTap: () => openPagina(context, (_) => AlbumDetailPage(album: a)),
+      draaibaar: true,
+      achterkant: () => achterkantVan(context, a),
       // Tot nu toe kon een albumtegel precies één ding: opengaan. Afspelen, in de wachtrij zetten,
       // radio en verwijderen zaten allemaal een navigatiestap dieper.
       onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
@@ -5250,6 +5273,61 @@ class VergelijkingGeheugen {
 
 class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumDetailPage> {
   late Album album = widget.album;
+
+  /// Twee tikken op de hoes draaien hem om (16-10-2026). Zie `ui/draaihoes.dart`.
+  final _draai = DraaiHoesController();
+
+  /// Wat er achter ⋯ in de kop staat. Dezelfde acties en voorwaarden als de knoppen die er stonden.
+  ItemMenu _albumKopMenu() {
+    final lib = context.read<LibraryStore>();
+    final lokaal = !lib.isRemote;
+    return ItemMenu(
+      titel: album.title,
+      ondertitel: album.artist,
+      blokken: [
+        [
+          if (!album.isSingle)
+            MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…', () async {
+              final picked = await showDialog<bool>(context: context, builder: (_) => ReleaseGallery(album));
+              if (picked == true && mounted) _refresh();
+            }),
+          // De enige knop hier die de BESTANDEN verandert in plaats van eromheen te werken.
+          if (!album.isSingle && lokaal)
+            MenuRegel(Icons.label_outline_rounded, 'Tags gelijktrekken', _official.isEmpty ? () {} : _normaliseTags,
+                uit: _official.isEmpty),
+          // Juist niet aan een tracklijst gebonden: dit is waar je naar grijpt als die er niet is.
+          if (lokaal)
+            MenuRegel(Icons.graphic_eq_rounded, _recognising ? 'Herkennen loopt…' : 'Herkennen op geluid',
+                _recognising ? () {} : _recogniseTracks,
+                uit: _recognising),
+          // Alleen als er iets terug te zetten valt.
+          if (!album.isSingle && lokaal && lib.undoableTagWrites(album) > 0)
+            MenuRegel(Icons.undo_rounded, 'Tags terugzetten', _undoTagWrites),
+        ],
+        [
+          if (!album.isSingle)
+            MenuRegel(Icons.merge_rounded, 'Ander album hierin samenvoegen…', () async {
+              final source = await showDialog<Album>(context: context, builder: (_) => PickAlbumDialog(exclude: album));
+              if (source == null || !mounted) return;
+              final done = await showDialog<bool>(
+                  context: context, builder: (_) => MergeAlbumsDialog(album: album, absorb: source));
+              if (done == true && mounted) _refresh();
+            }),
+          MenuRegel(Icons.edit_rounded, 'Metadata corrigeren…', _edit),
+        ],
+        [
+          MenuRegel(Icons.delete_outline_rounded, album.isSingle ? 'Nummer verwijderen…' : 'Album verwijderen…',
+              () async {
+            await _confirmDelete(context, '“${album.title}”', album.tracks.map((t) => t.path).toList());
+            if (mounted) Navigator.of(context).maybePop();
+          }),
+        ],
+      ],
+    );
+  }
+
+  /// Of de hoes een achterkant heeft om naartoe te draaien; anders wiebelt hij.
+  bool _heeftAchter = false;
 
   /// The record as its label pressed it, so the page can show what is MISSING and not only what
   /// happens to be on disk. Empty until it lands — and empty is harmless: the tracklist then
@@ -5368,6 +5446,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
   void dispose() {
     // De kleur trekt [WasHouder] zelf in: hier, en al eerder, zodra er een pagina op deze komt.
     _rol.dispose();
+    _draai.dispose();
     super.dispose();
   }
 
@@ -6188,104 +6267,24 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                         },
                       ),
                       ),
-                    if (!isTv && !album.isSingle)
-                      TvLabelled(
-                        label: 'Uitgave kiezen — met hoes, achterkant en cd',
-                        child: IconButton(
-                        icon: const Icon(Icons.photo_library_outlined),
-                        tooltip: 'Uitgave kiezen — met hoes, achterkant en cd',
-                        onPressed: () async {
-                          final picked = await showDialog<bool>(
-                              context: context, builder: (_) => ReleaseGallery(album));
-                          if (picked == true && mounted) _refresh();
-                        },
-                      ),
-                      ),
-                    // The only button here that changes the FILES rather than working around them.
-                    // Everything else on this page paints over disagreeing tags; this pulls them
-                    // into line, so anything else reading the folder sees one record too.
-                    if (!isTv && !album.isSingle && !context.read<LibraryStore>().isRemote)
-                      TvLabelled(
-                        label: 'Tags gelijktrekken — één album, één nummering, in de bestanden',
-                        child: IconButton(
-                        icon: const Icon(Icons.label_outline_rounded),
-                        tooltip: 'Tags gelijktrekken — één album, één nummering, in de bestanden',
-                        onPressed: _official.isEmpty ? null : _normaliseTags,
-                      ),
-                      ),
-                    // Deliberately NOT gated on a tracklist: this is what to reach for exactly when
-                    // there isn't one. A file whose album is a compilation nobody can find is the
-                    // case the catalogues cannot answer and the audio can.
-                    if (!isTv && !context.read<LibraryStore>().isRemote)
-                      TvLabelled(
-                        label: 'Herkennen op geluid — wat zegt de audio dat dit is?',
-                        child: IconButton(
-                        icon: _recognising
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2, color: _accent))
-                            : const Icon(Icons.graphic_eq_rounded),
-                        tooltip: 'Herkennen op geluid — wat zegt de audio dat dit is?',
-                        onPressed: _recognising ? null : _recogniseTracks,
-                      ),
-                      ),
-                    // Only appears once there is something to undo. A button that is there but does
-                    // nothing teaches you not to trust it.
-                    if (!isTv &&
-                        !album.isSingle &&
-                        !context.read<LibraryStore>().isRemote &&
-                        context.read<LibraryStore>().undoableTagWrites(album) > 0)
-                      TvLabelled(
-                        label: 'Tags terugzetten zoals ze waren voor het gelijktrekken',
-                        child: IconButton(
-                        icon: const Icon(Icons.undo_rounded),
-                        tooltip: 'Tags terugzetten zoals ze waren voor het gelijktrekken',
-                        onPressed: _undoTagWrites,
-                      ),
-                      ),
-                    if (!isTv && !album.isSingle)
-                      TvLabelled(
-                        label: 'Een ander album hierin samenvoegen',
-                        child: IconButton(
-                        icon: const Icon(Icons.merge_rounded),
-                        tooltip: 'Een ander album hierin samenvoegen',
-                        onPressed: () async {
-                          final source = await showDialog<Album>(
-                              context: context, builder: (_) => PickAlbumDialog(exclude: album));
-                          if (source == null || !context.mounted) return;
-                          final done = await showDialog<bool>(
-                              context: context,
-                              builder: (_) => MergeAlbumsDialog(album: album, absorb: source));
-                          if (done == true && mounted) _refresh();
-                        },
-                      ),
-                      ),
-                    // Corrigeren en verwijderen zijn geen speelwerk, en op een afstandsbediening
-                    // vooral moeizaam. Op een tv staan ze er daarom niet; op elk ander scherm wel.
+                    // Terug, boekje en ⋯ — de rest in een menu (Saber, 16-10-2026). Er stonden tot negen
+                    // ronde knoppen over de hoes; op een gsm zag je de hoes zelf nauwelijks nog.
+                    // Dezelfde acties met dezelfde voorwaarden, alleen een tik verder.
                     if (!isTv)
                       TvLabelled(
-                        label: 'Metadata corrigeren',
-                        child: IconButton(
-                        icon: const Icon(Icons.edit_rounded),
-                        tooltip: 'Metadata corrigeren',
-                        onPressed: _edit,
+                        label: 'Meer',
+                        child: Builder(
+                          builder: (knop) => IconButton(
+                            icon: const Icon(Icons.more_horiz_rounded),
+                            tooltip: 'Meer',
+                            onPressed: () {
+                              final doos = knop.findRenderObject();
+                              final bij = doos is RenderBox ? doos.localToGlobal(doos.size.bottomRight(Offset.zero)) : null;
+                              _toonItemMenu(context, _albumKopMenu(), bij: _isTouch ? null : bij);
+                            },
+                          ),
+                        ),
                       ),
-                      ),
-                    if (!isTv)
-                    TvLabelled(
-                      label: album.isSingle ? 'Nummer verwijderen' : 'Album verwijderen',
-                      child: IconButton(
-                      icon: const Icon(Icons.delete_outline_rounded),
-                      tooltip: album.isSingle ? 'Nummer verwijderen' : 'Album verwijderen',
-                      onPressed: () async {
-                        await _confirmDelete(context, '“${album.title}”',
-                            album.tracks.map((t) => t.path).toList());
-                        if (context.mounted) Navigator.of(context).maybePop();
-                      },
-                    ),
-                    ),
                     ]) glasInBalk(actie, plat: isCompact(context)),
                     const SizedBox(width: 8),
                   ],
@@ -6742,7 +6741,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
             // zelf tussen jouw gekozen scan, de gepinde persing en het bestand, en de was moet bij het
             // plaatje horen dat je ziet.
             onFront: _kleurUitHoes,
+            draai: isTv ? null : _draai,
+            onAchter: (b) => _heeftAchter = b != null,
           );
+    // Twee tikken draaien de hoes om; een gewone tik doet hier niets, dus er hoeft niets te wachten.
+    final hoes = isTv ? art : DubbelTikVlak(onDubbel: () => _draai.draai(heeftAchterkant: _heeftAchter), child: art);
 
     final details = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -6839,11 +6842,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
       child: narrow
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [art, const SizedBox(height: 16), details],
+              children: [hoes, const SizedBox(height: 16), details],
             )
           : Row(
               crossAxisAlignment: CrossAxisAlignment.end,
-              children: [art, const SizedBox(width: 24), Expanded(child: details)],
+              children: [hoes, const SizedBox(width: 24), Expanded(child: details)],
             ),
     );
   }
@@ -11445,6 +11448,12 @@ class NowPlayingScreen extends StatefulWidget {
 }
 
 class _NowPlayingScreenState extends State<NowPlayingScreen> {
+  /// Twee tikken op de hoes draaien hem om; één tik vergroot (wat er voor staat). Saber koos dat op
+  /// 16-10-2026. De gewone tik wacht daarvoor [kTweedeTik] — zie `ui/draaihoes.dart`.
+  final _draai = DraaiHoesController();
+  final _tikken = TweeTikken();
+  Uint8List? _achterNu;
+
   /// Gelijk volume: de eenmalige aankondiging ("dit nummer speelt 6,2 dB zachter…"), hooguit één keer
   /// per scherm, alleen bij een VERLAGING, niet op de tv. Aflopen telt alleen als gezien als de app die
   /// twintig seconden op de voorgrond stond — anders komt hij de volgende keer terug.
@@ -11492,6 +11501,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
   @override
   void dispose() {
     _levensloop?.dispose();
+    _draai.dispose();
+    _tikken.dispose();
     super.dispose();
   }
 
@@ -11579,9 +11590,14 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
           ? (t == null ? null : (casting ? cast.playPause : p.playPause))
           : ((_shown ?? p.currentCover) == null
               ? null
-              : () => showDialog(
-                  context: context,
-                  builder: (_) => _ZoomView((_shown ?? p.currentCover)!))),
+              // Vergroot wat er voor staat: de achterkant als je hem omdraaide.
+              : () => _tikken.enkel(() {
+                    if (!mounted) return;
+                    final achter = _draai.omgedraaid ? _achterNu : null;
+                    showDialog(
+                        context: context,
+                        builder: (_) => _ZoomView(achter ?? (_shown ?? p.currentCover)!));
+                  })),
       onLongPress: isTv && (_shown ?? p.currentCover) != null
           ? () => showDialog(
               context: context, builder: (_) => _ZoomView((_shown ?? p.currentCover)!))
@@ -11644,6 +11660,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         setState(() => _shown = f);
                       }
                     },
+                    draai: isTv ? null : _draai,
+                    onAchter: (b) => _achterNu = b,
                     // De hoes en cd van het volgende nummer alvast klaarzetten — anders staat er bij
                     // de wissel even de hoes uit het bestand met een getekende schijf.
                     volgende: volgendAlbum == null ? null : albumArtVooruit(bib, volgendAlbum),
@@ -11652,6 +11670,15 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
         ),
       ),
     );
+
+    // Twee tikken draaien de hoes om; niet op een tv (daar is OK afspelen en pauzeren).
+    final hoesMetTikken = isTv
+        ? hoesBlok
+        : DubbelTikVlak(
+            tikken: _tikken,
+            onDubbel: () => _draai.draai(heeftAchterkant: _achterNu != null),
+            child: hoesBlok,
+          );
 
     // De hoes met de artiest erboven en de plaat eronder.
     //
@@ -11666,7 +11693,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     final artiestVanPlaat = al?.artist ?? t?.artist ?? '';
     final albumNaam = (al?.title ?? t?.album ?? '').trim();
     final hoesKolom = isTv
-        ? hoesBlok
+        ? hoesMetTikken
         : Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment:
@@ -11686,7 +11713,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                 ),
                 const SizedBox(height: 14),
               ],
-              hoesBlok,
+              hoesMetTikken,
               if (albumNaam.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 SizedBox(
@@ -13989,7 +14016,8 @@ class _HomeStartViewState extends State<HomeStartView> {
           child: _card(
               cover(albums[i].cover, size: kTegelHoes), albums[i].title, albums[i].artist,
               () => openPagina(context, (_) => AlbumDetailPage(album: albums[i])),
-              artist: albums[i].artist),
+              artist: albums[i].artist,
+              achterkant: () => achterkantVan(context, albums[i])),
         ),
       );
 
@@ -14098,13 +14126,15 @@ class _HomeStartViewState extends State<HomeStartView> {
   }
 
   /// [subtitle] blijft de kale tekst voor het geval de widget niets kan; [artist] maakt hem klikbaar.
-  Widget _card(Widget art, String title, String subtitle, VoidCallback onTap, {String? artist}) =>
+  Widget _card(Widget art, String title, String subtitle, VoidCallback onTap,
+          {String? artist, Future<Uint8List?> Function()? achterkant}) =>
       _HoverCard(
         art: art,
         title: title,
         subtitle: subtitle,
         subtitleWidget: artist == null || artist.trim().isEmpty ? null : _naamLink(artist),
         onTap: onTap,
+        achterkant: achterkant,
       );
 }
 
@@ -14125,13 +14155,17 @@ class _HoverCard extends StatelessWidget {
   /// de plaat openen waar hij op staat. Overal elders leeg, en dan verandert er niets.
   final VoidCallback? onLongPress;
 
+  /// De achterkant voor twee tikken; leeg bij een plaat van online (die wiebelt dan).
+  final Future<Uint8List?> Function()? achterkant;
+
   const _HoverCard(
       {required this.art,
       required this.title,
       required this.subtitle,
       required this.onTap,
       this.subtitleWidget,
-      this.onLongPress});
+      this.onLongPress,
+      this.achterkant});
 
   @override
   Widget build(BuildContext context) => AlbumTegel(
@@ -14149,6 +14183,9 @@ class _HoverCard extends StatelessWidget {
             subtitleWidget == null ? null : _maybeFocusable(subtitleWidget!),
         onTap: onTap,
         onLongPress: onLongPress,
+        // Twee tikken draaien de tegel om (Saber, 16-10-2026: ook op Start).
+        draaibaar: true,
+        achterkant: achterkant,
       );
 }
 
@@ -20229,8 +20266,12 @@ class AlbumInfoPanel extends StatefulWidget {
   /// Or the MusicBrainz one, when they pinned there instead.
   final String? pinnedMbid;
 
-  /// Images the user assigned by hand — the back cover shown here is one of them.
+  /// Images the user assigned by hand — the back cover found here is one of them.
   final Map<String, String> roles;
+
+  /// De achterkant zodra hij gevonden is. Hij staat hier niet meer als los plaatje (Saber,
+  /// 16-10-2026: "ik wil de achterkant van de cd weg"); wie de hoes laat omdraaien krijgt hem zo.
+  final ValueChanged<Uint8List>? onAchterkant;
 
   const AlbumInfoPanel(
       {super.key,
@@ -20240,7 +20281,8 @@ class AlbumInfoPanel extends StatefulWidget {
       this.completeTracklist = false,
       this.pinned,
       this.pinnedMbid,
-      this.roles = const {}});
+      this.roles = const {},
+      this.onAchterkant});
 
   @override
   State<AlbumInfoPanel> createState() => _AlbumInfoPanelState();
@@ -20249,7 +20291,6 @@ class AlbumInfoPanel extends StatefulWidget {
 class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
   AlbumInfo? _info;
   DiscogsEdition? _edition;
-  Uint8List? _back;
 
   /// The pressing the user pinned on MusicBrainz, when that is where they pinned it.
   ///
@@ -20328,7 +20369,9 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
             pinnedMbid: widget.pinnedMbid,
             roles: widget.roles)
         .then((uitCache) {
-          if (uitCache?.back != null && stillHere()) setState(() => _back = uitCache!.back);
+          if (uitCache?.back != null && stillHere()) {
+            widget.onAchterkant?.call(uitCache!.back!);
+          }
         })
         .catchError((_) {}));
 
@@ -20374,7 +20417,9 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     }));
 
     unawaited(scans.then((art) {
-      if (art?.back != null && stillHere()) setState(() => _back = art!.back);
+      if (art?.back != null && stillHere()) {
+        widget.onAchterkant?.call(art!.back!);
+      }
     }));
   }
 
@@ -20482,33 +20527,15 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
                     // they chose one reads as the app ignoring them, which is what it was doing.
                     '${widget.pinned != null || (widget.pinnedMbid ?? '').isNotEmpty ? "Jouw uitgave" : "Uitgave"}'
                     ': ${pressing.join(' · ')}',
-                    maxLines: 1,
+                    // Twee regels: "Uitgave: cd · 0825646404124 · France" is op een gsm net te lang.
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: _muted, fontSize: 12)),
               ),
             ]),
           ],
-          // The back of the sleeve, next to the line describing the pressing it belongs to. Click
-          // to see it full size — the track list and the small print are the reason to look.
-          if (_back != null) ...[
-            const SizedBox(height: 10),
-            InkWell(
-              onTap: () => showDialog<void>(
-                context: context,
-                builder: (_) => Dialog(
-                  backgroundColor: Colors.transparent,
-                  insetPadding: const EdgeInsets.all(40),
-                  child: InteractiveViewer(child: Image.memory(_back!)),
-                ),
-              ),
-              borderRadius: BorderRadius.circular(6),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: Image.memory(_back!,
-                    height: 116, fit: BoxFit.contain, cacheWidth: decodeWidth(200)),
-              ),
-            ),
-          ],
+          // Hier stond de achterkant als los plaatje. Saber (16-10-2026) wilde hem weg: twee tikken
+          // op de hoes draaien die nu om naar diezelfde achterkant ([onAchterkant]).
           if (text != null && text.isNotEmpty) ...[
             const SizedBox(height: 8),
             BioText('${widget.artist} — ${widget.album}', text),
@@ -21787,6 +21814,10 @@ class AlbumBrowsePage extends StatefulWidget implements OnderDeBalk {
 class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   static const _albumLevel = -1;
 
+  /// Twee tikken op de hoes draaien hem om (16-10-2026), naar de achterkant die het infoblok vindt.
+  final _draai = DraaiHoesController();
+  Uint8List? _achter;
+
   /// De scroller van deze pagina: de vervaagde hoes schuift mee, en het glas achter de balk komt op.
   final _rol = ScrollController();
   final _catalog = CatalogService();
@@ -21810,6 +21841,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   @override
   void dispose() {
     _rol.dispose();
+    _draai.dispose();
     super.dispose();
   }
 
@@ -22265,7 +22297,24 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                     tooltip: 'Terug',
                     onPressed: () => Navigator.pop(context)),
                 const SizedBox(width: 4),
-                _netCover(al.cover, size: 128),
+                // Twee tikken: omdraaien naar de achterkant, of wiebelen als die er (nog) niet is.
+                if (isTv)
+                  _netCover(al.cover, size: 128)
+                else
+                  DubbelTikVlak(
+                    onDubbel: () => _draai.draai(heeftAchterkant: _achter != null),
+                    child: DraaiHoes(
+                      controller: _draai,
+                      voor: _netCover(al.cover, size: 128),
+                      achter: _achter == null
+                          ? null
+                          : ClipRRect(
+                              borderRadius: BorderRadius.circular(kHoek12),
+                              child: Image.memory(_achter!,
+                                  width: 128, height: 128, fit: BoxFit.cover, cacheWidth: decodeWidth(128)),
+                            ),
+                    ),
+                  ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
@@ -22333,7 +22382,13 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 trackCount: _tracks.length,
                 // En dit aantal is de HELE plaat — het is de tracklijst die hieronder staat, niet
                 // wat er van op schijf staat. Alleen daarom mag een te lange uitgave hier afvallen.
-                completeTracklist: true),
+                completeTracklist: true,
+                // Voorgedecodeerd, zodat twee tikken meteen draaien.
+                onAchterkant: (b) {
+                  if (!mounted || identical(b, _achter)) return;
+                  precacheImage(ResizeImage(MemoryImage(b), width: decodeWidth(128)), context).ignore();
+                  setState(() => _achter = b);
+                }),
             CreditsPanel(
                 artist: widget.artistName, album: al.title, volledigAantal: _tracks.length),
           ],
@@ -24645,6 +24700,13 @@ class AlbumArt extends StatefulWidget {
   /// Zijn scans worden alvast van schijf gelezen en gedecodeerd, zodat ze er bij de wissel in
   /// hetzelfde beeld staan. Null = niets klaarzetten. Zie [DiscogsService.artInGeheugen].
   final AlbumArtVooruit? volgende;
+
+  /// Omdraaien naar de achterkant: dubbel tikken, zie `ui/draaihoes.dart`. Null = deze hoes draait niet.
+  final DraaiHoesController? draai;
+
+  /// De achterkant die deze hoes zou tonen (of null), zodra hij bekend is: voor wie hem wil
+  /// vergroten, en om te weten of er iets te draaien valt.
+  final ValueChanged<Uint8List?>? onAchter;
   const AlbumArt({
     super.key,
     required this.artist,
@@ -24664,6 +24726,8 @@ class AlbumArt extends StatefulWidget {
     this.roles = const {},
     this.heroTag,
     this.volgende,
+    this.draai,
+    this.onAchter,
   });
 
   @override
@@ -24762,10 +24826,20 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    widget.draai?.addListener(_opDraai);
     _load();
     _sync();
     _zetVolgendeKlaar();
   }
+
+  void _opDraai() {
+    if (!mounted) return;
+    setState(() {});
+    _sync();
+  }
+
+  /// De achterkant die al gemeld en voorgeladen is, zodat dat één keer per beeld gebeurt.
+  Uint8List? _gemeldAchter;
 
   /// Welke volgende plaat er al klaargezet is, zodat 4 hertekeningen per seconde niet 4 keer lezen.
   String? _klaargezet;
@@ -24801,6 +24875,10 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   @override
   void didUpdateWidget(AlbumArt old) {
     super.didUpdateWidget(old);
+    if (old.draai != widget.draai) {
+      old.draai?.removeListener(_opDraai);
+      widget.draai?.addListener(_opDraai);
+    }
     _zetVolgendeKlaar();
     // Same as the info panel: a new pin is a new set of scans, even when the album's name is
     // unchanged. This is why the disc never followed the release you picked.
@@ -24809,6 +24887,12 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
         old.pinned != widget.pinned ||
         old.pinnedMbid != widget.pinnedMbid ||
         !mapEquals(old.roles, widget.roles)) {
+      // Een andere plaat begint met zijn voorkant, ook als de vorige omgedraaid stond. Na dit beeld:
+      // het seintje laat luisteraars opnieuw bouwen, en dat hoort niet midden in een opbouw.
+      final draai = widget.draai;
+      if (draai != null && draai.omgedraaid) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => draai.voorkant());
+      }
       // **Eerst kijken of de scans van deze plaat al in het geheugen liggen.** Dan staan ze er in
       // hetzelfde beeld, zonder tussenstap. Saber op 10-10-2026: "bij het laden van de hoes en cd
       // zie je een lichte verspringing als je naar het volgende liedje gaat" — eerst de hoes uit
@@ -24847,6 +24931,14 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   }
 
   void _sync() {
+    // Omgedraaid: de achterkant staat voor. Een cd die daarachter doordraait kost zestig beelden per
+    // seconde die niemand ziet, dus hij schuift terug en staat stil tot de hoes weer omkeert.
+    if (widget.draai?.omgedraaid ?? false) {
+      _slide.reverse();
+      _spin.stop();
+      _fps.stop();
+      return;
+    }
     // Uitschuiven en draaien zijn twee dingen. Wat speelt doet allebei; wat alleen aangetikt is
     // schuift enkel uit — zie [AlbumArt.uitgeschoven].
     if (!widget.playing && widget.uitgeschoven) {
@@ -24937,6 +25029,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     // Vóór de controllers: de haak hangt aan de SchedulerBinding en die leeft door als deze widget
     // weg is. Blijft hij hangen, dan telt hij het hele scherm mee en klopt de volgende meting niet.
     _fps.stop();
+    widget.draai?.removeListener(_opDraai);
     _slide.dispose();
     _spin.dispose();
     super.dispose();
@@ -24970,6 +25063,33 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     final vliegend =
         widget.heroTag == null ? sleeve : Hero(tag: widget.heroTag!, child: sleeve);
 
+    // De achterkant, op dezelfde maat en vooraf gedecodeerd: twee tikken moeten meteen draaien, niet
+    // eerst een plaatje van schijf lezen. Gemeld na dit beeld, nooit tijdens de opbouw.
+    final achter = _art?.back;
+    if (!identical(achter, _gemeldAchter)) {
+      _gemeldAchter = achter;
+      if (achter != null && widget.draai != null) {
+        precacheImage(ResizeImage(MemoryImage(achter), width: decodeWidth(s)), context).ignore();
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onAchter?.call(achter);
+      });
+    }
+    final omgedraaid = widget.draai?.omgedraaid ?? false;
+    final kaart = widget.draai == null
+        ? vliegend
+        : DraaiHoes(
+            controller: widget.draai!,
+            voor: vliegend,
+            achter: achter == null
+                ? null
+                : ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.memory(achter,
+                        width: s, height: s, fit: BoxFit.cover, cacheWidth: decodeWidth(s), gaplessPlayback: true),
+                  ),
+          );
+
     // **Geen scan? Dan een schijf met de vóórkant als etiket.**
     //
     // Hier stond `if (disc == null) return vliegend;` — geen scan, geen plaat, en dat was een
@@ -24992,7 +25112,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
             cacheWidth: decodeWidth(s * .92),
             gaplessPlayback: true)
         : (front == null ? null : _GetekendeSchijf(label: front, maat: s * .92));
-    if (schijf == null) return vliegend;
+    if (schijf == null) return kaart;
 
     // Built once and handed to the animation as a child, so none of this is rebuilt per frame.
     //
@@ -25038,6 +25158,10 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           Positioned(
             left: 0,
             top: s * .04,
+            // Weg zolang de achterkant voor staat: anders zie je hem halverwege de draai achter een
+            // hoes die op zijn kant staat.
+            child: Offstage(
+            offstage: omgedraaid,
             // The disc's own clip is cached below; this boundary is about everything ABOVE it.
             // RenderTransform is not a repaint boundary, so a moving disc marked the nearest one
             // above — the route — and the whole screen was re-recorded every frame, including the
@@ -25061,10 +25185,11 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               ),
               child: spinningDisc,
             )),
+            ),
           ),
           // Never rebuilt: it is outside the builder entirely, and it never changes while a record
           // plays.
-          Positioned(left: 0, top: 0, child: sleeve),
+          Positioned(left: 0, top: 0, child: kaart),
         ],
       ),
     );
