@@ -380,23 +380,28 @@ class _PressableState extends State<Pressable> {
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: widget.borderRadius,
+            // Op een tv GEEN rand en geen gloed, maar een zachte glazen pil (Saber, 16-10-2026: "te
+            // veel witte schijn rond de knop, is lelijk" — en eerder "paars gekleurde tekst, geen
+            // rand, glass look"). De letters worden paars waar ze zelf geen kleur zetten (zie
+            // [_paarsBijSelectie]).
+            color: isTv && _focused && widget.ringOnFocus ? kTvSelectieGlas : null,
             border: Border.all(
               // Transparent rather than absent, so the ring appearing does not change the widget's
               // size and shift everything around it by two pixels.
-              color: _focused && widget.ringOnFocus ? _ring : Colors.transparent,
+              color: _focused && widget.ringOnFocus && !isTv ? _ring : Colors.transparent,
               width: _ringWidth,
             ),
             boxShadow: !_focused
                 ? null
                 : widget.ringOnFocus
-                    ? [BoxShadow(color: _ring.withValues(alpha: isTv ? .28 : .45), blurRadius: 18, spreadRadius: 1)]
+                    ? (isTv ? null : [BoxShadow(color: _ring.withValues(alpha: .45), blurRadius: 18, spreadRadius: 1)])
                     // Een hoes krijgt geen kader (zie [ringOnFocus]); op een tv tilt hij wél op: een
                     // schaduw eronder, zodat de groei leest als "naar je toe" en niet als een sprong.
                     : isTv && widget.scaleOnFocus
                         ? const [BoxShadow(color: Color(0x99000000), blurRadius: 26, offset: Offset(0, 10))]
                         : null,
           ),
-          child: content,
+          child: _paarsBijSelectie(content),
         ),
       ),
     );
@@ -410,6 +415,16 @@ class _PressableState extends State<Pressable> {
       skipTraversal: true,
       onKeyEvent: _onHoldKey,
       child: detector,
+    );
+  }
+
+  /// Op een tv met de selectie: letters en pictogrammen paars, behalve waar ze zelf een kleur zetten.
+  /// Alleen voor wat een rand zou krijgen ([Pressable.ringOnFocus]); een hoes houdt zijn kleuren.
+  Widget _paarsBijSelectie(Widget kind) {
+    if (!isTv || !_focused || !widget.ringOnFocus) return kind;
+    return DefaultTextStyle.merge(
+      style: const TextStyle(color: kAccent),
+      child: IconTheme.merge(data: const IconThemeData(color: kAccent), child: kind),
     );
   }
 
@@ -594,6 +609,10 @@ double get tileFocusScale => isTv ? 1.14 : 1.06;
 /// horen"). Een hoes groeit 14 %; een kaart van 860 punten zou dan 120 punten het scherm uit lopen.
 const double kTvKaartGroei = 1.03;
 
+/// De glazen pil onder wat op een tv de selectie heeft en niet groeit (een link, een chip, een
+/// knop): wit op 14 %, geen rand, geen gloed.
+const kTvSelectieGlas = Color(0x24FFFFFF);
+
 /// Hoeveel ruimte er op een tv boven de selectie blijft in een lijst die omhoog en omlaag schuift:
 /// genoeg voor de kop van een rij ("Recent toegevoegd") met wat lucht. Zie [tvVastePlek].
 const double kTvBovenruimte = 56;
@@ -656,6 +675,87 @@ ValueChanged<bool> tvVolgFocus(BuildContext context) => (heeft) {
         if (binnen) tvVastePlek(context);
       });
     };
+
+/// Na hoe lang ingedrukt houden een pijl gaat spoelen in plaats van een nummer verder te gaan.
+const kSpoelNa = Duration(milliseconds: 350);
+
+/// Hoe vaak er gespoeld wordt zolang je hem vasthoudt. Een afstandsbediening herhaalt een toets
+/// twintig keer per seconde; zoveel sprongen naar de pc zou de stroom laten haperen.
+const kSpoelTussen = Duration(milliseconds: 250);
+
+/// Hoeveel seconden één sprong is, na zo lang vasthouden: eerst fijn, dan steeds sneller.
+int spoelStap(Duration ingedrukt) => ingedrukt < const Duration(seconds: 2)
+    ? 5
+    : ingedrukt < const Duration(seconds: 5)
+        ? 10
+        : 20;
+
+/// Links en rechts op de hoes van Nu speelt op een tv: even tikken = vorige of volgende, ingedrukt
+/// houden = spoelen (Saber, 16-10-2026: "die vooruit en achteruitspoelen knoppen mogen weg, is te
+/// druk, ik wil dit doen met de afstandsbediening door blijven drukken").
+///
+/// Het nummer wisselt daarom bij het LOSLATEN en niet meer bij het neerdrukken: pas dan weet je dat
+/// het geen vasthouden was. [klok] alleen voor de toets.
+class SpoelPijlen {
+  SpoelPijlen({required this.vorige, required this.volgende, required this.spoel, Duration Function()? klok})
+      : _klok = klok ?? _wandklok();
+
+  final VoidCallback vorige, volgende;
+
+  /// Spoel zoveel seconden (negatief = terug).
+  final void Function(int seconden) spoel;
+
+  final Duration Function() _klok;
+
+  static Duration Function() _wandklok() {
+    final s = Stopwatch()..start();
+    return () => s.elapsed;
+  }
+
+  LogicalKeyboardKey? _neer;
+  Duration _sinds = Duration.zero;
+  Duration? _laatste;
+  bool _gespoeld = false;
+
+  /// Een toets die nog neer was, telt niet meer (de selectie ging van de hoes af).
+  void vergeet() {
+    _neer = null;
+    _laatste = null;
+    _gespoeld = false;
+  }
+
+  KeyEventResult opToets(KeyEvent e) {
+    final k = e.logicalKey;
+    if (k != LogicalKeyboardKey.arrowLeft && k != LogicalKeyboardKey.arrowRight) return KeyEventResult.ignored;
+    final vooruit = k == LogicalKeyboardKey.arrowRight;
+    final nu = _klok();
+    if (e is KeyDownEvent) {
+      _neer = k;
+      _sinds = nu;
+      _laatste = null;
+      _gespoeld = false;
+      return KeyEventResult.handled;
+    }
+    if (_neer != k) return KeyEventResult.ignored;
+    if (e is KeyRepeatEvent) {
+      final ingedrukt = nu - _sinds;
+      if (ingedrukt < kSpoelNa) return KeyEventResult.handled;
+      final l = _laatste;
+      if (l != null && nu - l < kSpoelTussen) return KeyEventResult.handled;
+      _laatste = nu;
+      _gespoeld = true;
+      final stap = spoelStap(ingedrukt);
+      spoel(vooruit ? stap : -stap);
+      return KeyEventResult.handled;
+    }
+    if (e is KeyUpEvent) {
+      _neer = null;
+      if (!_gespoeld) (vooruit ? volgende : vorige)();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+}
 
 /// De marge aan het begin van een lijst (`ListView(padding: …)` wordt een [RenderSliverPadding]).
 double _binnenmarge(RenderAbstractViewport viewport) {

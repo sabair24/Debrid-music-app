@@ -7981,6 +7981,9 @@ class _TrackRowState extends State<TrackRow> {
         // A list of rows: one growing would push every row under it down as the highlight runs
         // through the album. The row already lights up on hover, and focus drives that.
         scaleOnFocus: false,
+        // Alleen de grijze balk (Saber, 16-10-2026: rijen "grijze balk zoals nu"), geen glazen pil
+        // er nog eens bovenop.
+        ringOnFocus: false,
         onFocusChange: (v) => setState(() => _hover = v),
         child: AnimatedContainer(
           duration: kSnel,
@@ -9067,26 +9070,6 @@ void _nudge(PlayerStore p, int seconds) {
   p.seek(target);
 }
 
-/// Whether the ten-second buttons on the Now Playing screen have anything to act on.
-///
-/// The same condition the seek bar next to them uses: a length, and either a local track or a
-/// speaker that reports where it is.
-bool _canSeekHere(Duration duration, bool casting, Track? track) =>
-    duration.inMilliseconds > 0 && (casting || track != null);
-
-/// Ten seconds, wherever the music is coming out.
-///
-/// Clamped here rather than in the player for the same reason [_nudge] clamps: seeking past the end
-/// restarts the queue on some backends and stalls on others.
-void _seekBy(PlayerStore p, SpeakerTarget cast, bool casting, Duration position, Duration duration,
-    int seconds) {
-  if (!casting) return _nudge(p, seconds);
-  var target = position + Duration(seconds: seconds);
-  if (target < Duration.zero) target = Duration.zero;
-  if (target > duration) target = duration;
-  cast.seekTo(target);
-}
-
 /// The transport, wherever the music actually is.
 ///
 /// Casting moves the remote. Every one of these controls used to speak to the local libmpv, which
@@ -9335,27 +9318,8 @@ class PlayerBar extends StatelessWidget {
                       style: tvIcoonStijl(_muted),
                       onPressed: x.previous,
                     ),
-                    // Seeking, for a remote.
-                    //
-                    // The progress bar below is a Slider, and a Slider binds all FOUR arrows to
-                    // changing its value — so the highlight goes in and cannot come out. It is
-                    // therefore skipped on a television, which left no way to seek at all. Two
-                    // buttons are the honest answer: they are reachable, they say what they do,
-                    // and they cost a mouse nothing because they are not built for it.
-                    // No TvLabelled here: the bar is 84 points tall and a caption under the icon
-                    // overflowed it by three pixels. These two glyphs carry a "10" on their face,
-                    // which is the label.
-                    if (isTv)
-                      TvLabelled(
-                        label: '10 seconden terug',
-                        child: IconButton(
-                        icon: const Icon(Icons.replay_10_rounded, size: 22),
-                        color: _muted,
-                        style: tvIcoonStijl(_muted),
-                        tooltip: '10 seconden terug',
-                        onPressed: x.canSeek ? () => x.nudge(-10) : null,
-                      ),
-                      ),
+                    // Geen ±10-knoppen meer op een tv (Saber, 16-10-2026: "te druk"). Spoelen doe je
+                    // in Nu speelt door links of rechts ingedrukt te houden op de hoes (SpoelPijlen).
                     const SizedBox(width: 2),
                     Container(
                       decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
@@ -9368,17 +9332,6 @@ class PlayerBar extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 2),
-                    if (isTv)
-                      TvLabelled(
-                        label: '10 seconden vooruit',
-                        child: IconButton(
-                        icon: const Icon(Icons.forward_10_rounded, size: 22),
-                        color: _muted,
-                        style: tvIcoonStijl(_muted),
-                        tooltip: '10 seconden vooruit',
-                        onPressed: x.canSeek ? () => x.nudge(10) : null,
-                      ),
-                      ),
                     IconButton(
                       icon: const Icon(Icons.skip_next_rounded),
                       color: _muted,
@@ -12444,22 +12397,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
               color: p.shuffle ? _accent : _muted,
               onPressed: p.toggleShuffle),
           const SizedBox(width: 8),
-          // Spoelen staat hier, naast vorige en volgende, en niet meer bij de schuifbalk.
-          //
-          // Daar zat het in een `TvLabelled`, en dat reserveert altijd 20 punten voor zijn
-          // bijschrift — ook als er niets getoond wordt. Die 20 punten waren precies wat
-          // deze rij van het scherm duwde. Naast de andere transportknoppen kost het niets
-          // extra en staat het bovendien waar je het zoekt.
-          if (isTv)
-            IconButton(
-                icon: const Icon(Icons.replay_10_rounded),
-                iconSize: 24,
-                color: _muted,
-                tooltip: '10 seconden terug',
-                onPressed: _canSeekHere(duration, casting, t)
-                    ? () => _seekBy(p, cast, casting, position, duration, -10)
-                    : null),
-          if (isTv) const SizedBox(width: 6),
+          // Geen ±10-knoppen op een tv meer (16-10-2026, "te druk"): links en rechts ingedrukt
+          // houden op de hoes spoelt (zie [_pijlAlsNummerknop]).
           IconButton(
               icon: const Icon(Icons.skip_previous_rounded),
               iconSize: 34,
@@ -12491,16 +12430,6 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
               iconSize: 34,
               color: _text,
               onPressed: x.next),
-          if (isTv) const SizedBox(width: 6),
-          if (isTv)
-            IconButton(
-                icon: const Icon(Icons.forward_10_rounded),
-                iconSize: 24,
-                color: _muted,
-                tooltip: '10 seconden vooruit',
-                onPressed: _canSeekHere(duration, casting, t)
-                    ? () => _seekBy(p, cast, casting, position, duration, 10)
-                    : null),
           const SizedBox(width: 8),
           // Shuffle and repeat stay local on purpose: the speaker plays the queue the PC
           // hands it one track at a time, so changing the order here would take effect on
@@ -12792,17 +12721,31 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
   /// `KeyRepeatEvent` telt niet mee: een pijl ingedrukt houden zou anders door de hele wachtrij
   /// razen. En is er geen volgende (of geen vorige), dan gaat de toets terug naar de markering in
   /// plaats van opgeslokt te worden — een dode toets voelt kapot.
+  ///
+  /// **Ingedrukt houden spoelt** (Saber, 16-10-2026: "ik wil dit doen met de afstandsbediening door
+  /// blijven drukken"), en daarom wisselt het nummer pas bij het loslaten. Zie [SpoelPijlen].
   KeyEventResult _pijlAlsNummerknop(KeyEvent e, _Transport x) {
-    if (!isTv || !_opHoes || e is! KeyDownEvent) return KeyEventResult.ignored;
-    final actie = e.logicalKey == LogicalKeyboardKey.arrowRight
-        ? x.next
-        : e.logicalKey == LogicalKeyboardKey.arrowLeft
-            ? x.previous
-            : null;
-    if (actie == null) return KeyEventResult.ignored;
-    actie();
-    return KeyEventResult.handled;
+    _transportNu = x;
+    if (!isTv) return KeyEventResult.ignored;
+    // Niet meer op de hoes? Dan mag een loslaten dat nog onderweg is ook niets meer doen.
+    if (!_opHoes) {
+      _spoelPijlen.vergeet();
+      return KeyEventResult.ignored;
+    }
+    return _spoelPijlen.opToets(e);
   }
+
+  /// De speler zoals die bij de laatste toets was: de pijlen lezen hem pas als ze iets doen.
+  _Transport? _transportNu;
+
+  late final _spoelPijlen = SpoelPijlen(
+    vorige: () => _transportNu?.previous?.call(),
+    volgende: () => _transportNu?.next?.call(),
+    spoel: (seconden) {
+      final x = _transportNu;
+      if (x != null && x.canSeek) x.nudge(seconden);
+    },
+  );
 }
 
 

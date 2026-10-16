@@ -335,7 +335,7 @@ void main() {
       expect(main, contains('Color get _knopVulling => isTv ? kTvKnopGlas : _accent;'));
       expect('backgroundColor: _knopVulling'.allMatches(main).length, greaterThanOrEqualTo(30));
       expect(main, isNot(contains('backgroundColor: _accent,')), reason: 'geen paars gevulde knop meer op een tv');
-      expect('style: tvIcoonStijl('.allMatches(main).length, greaterThanOrEqualTo(9));
+      expect('style: tvIcoonStijl('.allMatches(main).length, greaterThanOrEqualTo(7));
       expect(main, contains("SizedBox(height: hoogteVanTegelrij(context), child: TvRij(child: row)),"));
     });
   });
@@ -371,6 +371,84 @@ void main() {
     // spelerbalk: daarna deed geen enkele pijl nog iets).
     expect(main, contains('&& _opScherm(hier!)) return false;'));
     expect('if (_heeftZichtbaar(scope)) {'.allMatches(main).length, 2);
+  });
+
+  group('spoelen door vast te houden (Saber, 16-10-2026: "door blijven drukken")', () {
+    late Duration nu;
+    late List<String> gedaan;
+    late SpoelPijlen pijlen;
+    setUp(() {
+      nu = Duration.zero;
+      gedaan = [];
+      pijlen = SpoelPijlen(
+        vorige: () => gedaan.add('vorige'),
+        volgende: () => gedaan.add('volgende'),
+        spoel: (s) => gedaan.add('spoel $s'),
+        klok: () => nu,
+      );
+    });
+    KeyEvent neer(LogicalKeyboardKey k) =>
+        KeyDownEvent(physicalKey: PhysicalKeyboardKey.arrowRight, logicalKey: k, timeStamp: nu);
+    KeyEvent herhaal(LogicalKeyboardKey k) =>
+        KeyRepeatEvent(physicalKey: PhysicalKeyboardKey.arrowRight, logicalKey: k, timeStamp: nu);
+    KeyEvent los(LogicalKeyboardKey k) =>
+        KeyUpEvent(physicalKey: PhysicalKeyboardKey.arrowRight, logicalKey: k, timeStamp: nu);
+
+    test('even tikken: het volgende of vorige nummer, bij het loslaten', () {
+      const r = LogicalKeyboardKey.arrowRight, l = LogicalKeyboardKey.arrowLeft;
+      expect(pijlen.opToets(neer(r)), KeyEventResult.handled);
+      expect(gedaan, isEmpty, reason: 'nog niet: het kan vasthouden worden');
+      nu += const Duration(milliseconds: 120);
+      pijlen.opToets(los(r));
+      expect(gedaan, ['volgende']);
+      pijlen.opToets(neer(l));
+      pijlen.opToets(los(l));
+      expect(gedaan, ['volgende', 'vorige']);
+    });
+
+    test('vasthouden spoelt, steeds sneller, en wisselt geen nummer', () {
+      const r = LogicalKeyboardKey.arrowRight;
+      pijlen.opToets(neer(r));
+      // De afstandsbediening herhaalt twintig keer per seconde.
+      for (var i = 0; i < 160; i++) {
+        nu += const Duration(milliseconds: 50);
+        pijlen.opToets(herhaal(r));
+      }
+      pijlen.opToets(los(r));
+      expect(gedaan, isNot(contains('volgende')));
+      final sprongen = gedaan.map((g) => int.parse(g.split(' ')[1])).toList();
+      expect(sprongen.first, 5, reason: 'eerst fijn');
+      expect(sprongen.last, 20, reason: 'na vijf seconden snel');
+      expect(sprongen.length, lessThanOrEqualTo(8 * 1000 ~/ kSpoelTussen.inMilliseconds + 1),
+          reason: 'hoogstens vier sprongen per seconde, niet twintig');
+      expect(sprongen.first, isPositive);
+    });
+
+    test('links vasthouden spoelt terug', () {
+      const l = LogicalKeyboardKey.arrowLeft;
+      pijlen.opToets(neer(l));
+      for (var i = 0; i < 12; i++) {
+        nu += const Duration(milliseconds: 50);
+        pijlen.opToets(herhaal(l));
+      }
+      expect(gedaan, isNotEmpty);
+      expect(gedaan.every((g) => g.startsWith('spoel -')), isTrue);
+    });
+
+    test('andere toetsen laat hij door; een vergeten toets wisselt niets bij loslaten', () {
+      expect(pijlen.opToets(neer(LogicalKeyboardKey.arrowUp)), KeyEventResult.ignored);
+      pijlen.opToets(neer(LogicalKeyboardKey.arrowRight));
+      pijlen.vergeet();
+      expect(pijlen.opToets(los(LogicalKeyboardKey.arrowRight)), KeyEventResult.ignored);
+      expect(gedaan, isEmpty);
+    });
+
+    test('de ±10-knoppen zijn weg; Nu speelt gebruikt de pijlen', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(main, isNot(contains('Icons.replay_10_rounded')));
+      expect(main, isNot(contains('Icons.forward_10_rounded')));
+      expect(main, contains('    return _spoelPijlen.opToets(e);'));
+    });
   });
 
   group('na twee minuten stilstand: Nu speelt', () {

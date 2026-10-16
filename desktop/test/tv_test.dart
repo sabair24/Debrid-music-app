@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/tv.dart';
+import 'package:debridmusic/ui/kleuren.dart';
 
 /// A [Pressable] alone on a screen, with the focus highlight forced on as it is on a television.
 Widget _app(Widget child) => MaterialApp(
@@ -93,25 +94,31 @@ void main() {
       return side?.color;
     }
 
-    testWidgets('focused draws white, unfocused draws nothing', (tester) async {
+    testWidgets('geselecteerd: een glazen pil met paarse letters, geen rand en geen gloed', (tester) async {
+      // Eerst paars (15-10-2026 lelijk gevonden), toen wit met een gloed eromheen — en die gloed vond
+      // Saber op 16-10-2026 ook lelijk: "te veel witte schijn rond de knop". Hij koos voor knoppen
+      // "paars gekleurde tekst, geen rand, glass look".
       await tester.pumpWidget(_app(Row(children: [
         Pressable(autofocus: true, onPressed: () {}, child: const Text('Start')),
         Pressable(onPressed: () {}, child: const Text('Albums')),
       ])));
       await tester.pumpAndSettle();
 
-      final rings = tester
+      final dozen = tester
           .widgetList<DecoratedBox>(find
               .descendant(of: find.byType(Pressable), matching: find.byType(DecoratedBox)))
-          .map((b) => (b.decoration as BoxDecoration).border?.top.color)
+          .map((b) => b.decoration as BoxDecoration)
           .toList();
-
-      // Not Flutter's grey default: on a dark panel from three metres away a thin grey outline is not
-      // visible, and "where am I" is the only question a remote asks. Wit en niet het paars van de app
-      // (15-10-2026): op de paarse knoppen viel een paarse rand weg, en Saber vond hem lelijk.
-      expect(rings.first, Colors.white);
-      expect(rings.last, Colors.transparent,
+      expect(dozen.first.border?.top.color, Colors.transparent, reason: 'geen rand');
+      expect(dozen.first.boxShadow, isNull, reason: 'geen witte schijn');
+      expect(dozen.first.color, kTvSelectieGlas, reason: 'wel glas');
+      expect(dozen.last.color, isNull);
+      expect(dozen.last.border?.top.color, Colors.transparent,
           reason: 'transparant, niet afwezig — een rand die verschijnt zou alles verschuiven');
+      final start = tester.widget<RichText>(find.descendant(of: find.text('Start'), matching: find.byType(RichText)));
+      expect(start.text.style?.color, kAccent, reason: 'paarse letters');
+      final albums = tester.widget<RichText>(find.descendant(of: find.text('Albums'), matching: find.byType(RichText)));
+      expect(albums.text.style?.color, isNot(kAccent));
     });
 
     testWidgets('the ring never changes the size of what it wraps', (tester) async {
