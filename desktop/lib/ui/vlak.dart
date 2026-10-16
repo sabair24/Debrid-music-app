@@ -551,6 +551,14 @@ class GlasKnop extends StatefulWidget {
 class _GlasKnopState extends State<GlasKnop> {
   bool _in = false;
 
+  /// Heeft hij de selectie van de afstandsbediening? Op een tv worden letters en pictogram dan paars
+  /// (Saber, 16-10-2026: "paars gekleurde tekst, geen rand, glass look").
+  bool _focus = false;
+
+  void _opFocus(bool f) {
+    if (mounted && f != _focus) setState(() => _focus = f);
+  }
+
   void _zet(bool v) {
     if (mounted && v != _in) setState(() => _in = v);
   }
@@ -597,21 +605,29 @@ class _GlasKnopState extends State<GlasKnop> {
     final w = widget;
     final onPressed = w.onPressed;
     final icoon = w.icoon, label = w.label, tooltip = w.tooltip, teken = w.teken, autofocus = w.autofocus;
-    final kleur = w.kleur;
+    final tvSelectie = isTv && _focus && onPressed != null;
+    final kleur = tvSelectie ? kAccent : w.kleur;
     final knop = w._rond
-        ? IconButton(
-            onPressed: onPressed,
-            tooltip: tooltip,
-            autofocus: autofocus,
-            style: IconButton.styleFrom(
-              foregroundColor: Colors.white,
-              minimumSize: const Size(44, 44),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        // Een IconButton kent geen onFocusChange: een Focus erom die alleen meekijkt.
+        ? Focus(
+            canRequestFocus: false,
+            skipTraversal: true,
+            onFocusChange: _opFocus,
+            child: IconButton(
+              onPressed: onPressed,
+              tooltip: tooltip,
+              autofocus: autofocus,
+              style: IconButton.styleFrom(
+                foregroundColor: tvSelectie ? kAccent : Colors.white,
+                minimumSize: const Size(44, 44),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              icon: teken ?? Icon(icoon),
             ),
-            icon: teken ?? Icon(icoon),
           )
         : FilledButton.icon(
             autofocus: autofocus,
+            onFocusChange: _opFocus,
             style: FilledButton.styleFrom(
               backgroundColor: Colors.transparent,
               disabledBackgroundColor: Colors.transparent,

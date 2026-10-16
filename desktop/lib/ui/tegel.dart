@@ -53,15 +53,15 @@ const double _lucht = 10;
 
 /// Hoeveel regels de titel onder een hoes krijgt.
 ///
-/// **Twee, behalve op een tv.** Saber op de S26, 16-10-2026: "I Just Called To S…", "Danse
-/// Méditerran…" — op 140 punten passen 17 à 18 tekens, en dan is de helft van de titels weg. Twee
-/// regels kosten een rij 19 punten. Op de tv blijft het één: daar staat de tekst 1,35× groter en is
-/// de rijhoogte op de Shield afgesteld.
+/// **Twee, overal.** Saber op de S26, 16-10-2026: "I Just Called To S…", "Danse Méditerran…" — op
+/// 140 punten passen 17 à 18 tekens, en dan is de helft van de titels weg. Twee regels kosten een rij
+/// 19 punten. Op de tv bleef het eerst één (de tekst staat daar 1,35× groter), tot Saber dezelfde dag
+/// op de Shield ook "twee regels, zoals de gsm" koos: daar stond "The Platinu…" en "Songs About…".
 ///
 /// De ruimte voor die twee regels is er ook als de titel kort is: een liggende rij geeft elke tegel
 /// dezelfde vaste hoogte en centreert de inhoud, dus een tegel met één regel zou anders een halve
 /// regel lager staan dan zijn buren.
-int get kTegelTitelRegels => isTv ? 1 : 2;
+int get kTegelTitelRegels => 2;
 
 /// De hoogte die een liggende rij tegels nodig heeft.
 ///

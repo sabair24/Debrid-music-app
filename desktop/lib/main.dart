@@ -37,6 +37,7 @@ import 'oordelen.dart';
 import 'prullenbak.dart' show heeftPrullenbak;
 import 'radiosessie.dart';
 import 'ui/draaihoes.dart';
+import 'ui/tv_rij.dart';
 import 'ui/duim.dart';
 import 'ui/glas.dart';
 import 'lan/pc_radiobron.dart';
@@ -176,16 +177,28 @@ import 'ui/vlak.dart';
 /// Only `side` and `overlayColor`, so a button that sets its own colour, padding or shape keeps
 /// all of it — this adds the one thing that was missing rather than taking the styling over.
 ///
-/// Op een tv wit, en de knop zelf licht op: een paarse rand viel weg op juist de paarse knoppen
-/// ("Shuffle alles", "Afspelen"). Zie [kTvSelectie].
+/// Op een tv **geen rand, paarse letters en glas** (Saber, 16-10-2026: "paars gekleurde tekst, geen
+/// rand, glass look"): de knop licht op als een glazen pil en zijn tekst en pictogram worden paars.
+/// Daarvoor was het een witte rand van 3 punten, en nog eerder een paarse die op de paarse knoppen
+/// wegviel. Paars gevulde knoppen zijn op een tv daarom glas geworden ([_knopVulling]): paarse letters
+/// op paars zou je niet zien. Een knop die zelf een vaste tekstkleur zet, krijgt alleen het glas —
+/// voor pictogramknoppen is er [tvIcoonStijl].
 final ButtonStyle _focusOutline = ButtonStyle(
-  side: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.focused)
-      ? BorderSide(color: kTvSelectie, width: isTv ? 3 : 2)
-      : null),
+  side: WidgetStateProperty.resolveWith((states) =>
+      !isTv && states.contains(WidgetState.focused) ? BorderSide(color: kTvSelectie, width: 2) : null),
+  foregroundColor: WidgetStateProperty.resolveWith(
+      (states) => isTv && states.contains(WidgetState.focused) ? kAccent : null),
   overlayColor: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.focused)
-      ? (isTv ? Colors.white.withValues(alpha: .20) : _accent.withValues(alpha: .22))
+      ? (isTv ? Colors.white.withValues(alpha: .16) : _accent.withValues(alpha: .22))
       : null),
 );
+
+/// De vulling van een knop die elders paars gevuld is: op een tv glas (16-10-2026, "Bekijken" en
+/// alle andere knoppen hetzelfde), zodat zijn paarse letters bij selectie te zien zijn.
+Color get _knopVulling => isTv ? kTvKnopGlas : _accent;
+
+/// Het glas van een knop op een tv: wit op 14 %, zoals de pil van de sectie waar je bent.
+const kTvKnopGlas = Color(0x24FFFFFF);
 
 const _bg = kAchtergrond;
 const _panel = kPaneel;
@@ -2110,6 +2123,10 @@ class _HomeShellState extends State<HomeShell> {
   final _tvInhoud = FocusScopeNode(debugLabel: 'tv-inhoud');
   final _tvSpeler = FocusScopeNode(debugLabel: 'tv-spelerbalk');
 
+  /// De tabbladen van de tv-bovenbalk, per sectie: omhoog naar de balk landt op dat van de pagina
+  /// waar je bent ([_landingsplek]).
+  final _tvKnoppen = TvBalkKnoppen();
+
   /// De meldingsbalk tussen de navigatie en de inhoud.
   ///
   /// **Waarom die een eigen scope nodig had.** Hij stond in géén enkele scope, en de sprongen
@@ -2162,6 +2179,12 @@ class _HomeShellState extends State<HomeShell> {
   /// omlaag, de onderste bij omhoog -- en daarvan het element recht onder of boven waar je vandaan
   /// kwam. Uit het menu op "Albums" naar beneden kom je dan op de plaat eronder, niet op de eerste.
   FocusNode? _landingsplek(FocusScopeNode scope, TraversalDirection richting, Rect? vanwaar) {
+    // Naar de bovenbalk: altijd het tabblad van de pagina waar je bent (Saber, 16-10-2026). Recht
+    // boven je was op Start "Artiesten", omdat die toevallig boven het midden van de kaart stond.
+    if (identical(scope, _tvBalk)) {
+      final actief = _tvKnoppen.actief(_view);
+      if (actief != null && actief.context != null && actief.canRequestFocus) return actief;
+    }
     final scherm = Offset.zero & MediaQuery.sizeOf(context);
     bool zichtbaar(FocusNode n) {
       final r = n.rect;
@@ -2199,9 +2222,59 @@ class _HomeShellState extends State<HomeShell> {
     return rij.first;
   }
 
+  /// OK op een tabblad: de pagina in, op de eerste rij die in beeld staat. Na dit beeld, want de
+  /// pagina wordt in dezelfde beurt pas gebouwd.
+  void _tvNaarInhoud() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final vanwaar = FocusManager.instance.primaryFocus?.rect;
+      for (final scope in [_tvMelding, _tvInhoud, _tvSpeler]) {
+        if (scope.traversalDescendants.isNotEmpty) {
+          scope.requestFocus();
+          _landingsplek(scope, TraversalDirection.down, vanwaar)?.requestFocus();
+          break;
+        }
+      }
+    });
+  }
+
+  /// Hoe lang er geen toets is ingedrukt (alleen op een tv). Zie [kTvStilstand].
+  final _stil = Stopwatch();
+  Timer? _stilKlok;
+
+  /// Nu speelt, als dat door stilstand geopend werd: de eerste toets doet het dan weer dicht.
+  Route<void>? _stilRoute;
+
+  void _kijkStilstand() {
+    if (!mounted || _stilRoute != null) return;
+    final speelt = context.read<PlayerStore>().playing || context.read<SpeakerTarget>().isCasting;
+    final bovenaan = ModalRoute.of(context)?.isCurrent ?? false;
+    if (!naarNuSpeeltNaStilstand(stil: _stil.elapsed, speelt: speelt, bovenaan: bovenaan)) return;
+    final r = nuSpeeltRoute();
+    _stilRoute = r;
+    Navigator.of(context, rootNavigator: true).push(r).then((_) {
+      if (identical(_stilRoute, r)) _stilRoute = null;
+      _stil.reset();
+    });
+  }
+
+  /// Een toets op een tv: de stilstand begint opnieuw, en stond Nu speelt er door stilstand, dan gaat
+  /// het dicht en doet de toets verder niets — zoals een schermbeveiliging. Behalve de mediatoetsen
+  /// van de afstandsbediening: pauzeren mag gewoon pauzeren.
+  bool _tvStilWekker(KeyEvent e) {
+    if (e is KeyUpEvent) return false;
+    _stil.reset();
+    final r = _stilRoute;
+    if (r == null || !r.isCurrent || e is! KeyDownEvent || kMediatoetsen.contains(e.logicalKey)) return false;
+    _stilRoute = null;
+    Navigator.of(context, rootNavigator: true).pop();
+    return true;
+  }
+
   /// Het vangnet op een tv: staat de focus nergens waar een pijl iets mee kan, dan brengt de
   /// eerstvolgende pijl of OK hem naar de bovenbalk. Zie [focusZonderDoel].
   bool _tvVangnet(KeyEvent e) {
+    if (isTv && mounted && _tvStilWekker(e)) return true;
     if (!isTv || e is! KeyDownEvent || !mounted) return false;
     final toetsen = [
       LogicalKeyboardKey.arrowUp, LogicalKeyboardKey.arrowDown, LogicalKeyboardKey.arrowLeft,
@@ -2222,6 +2295,11 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     if (isTv) HardwareKeyboard.instance.addHandler(_tvVangnet);
+    // Stilstand: zie [kTvStilstand]. Elke tien seconden kijken is ruim genoeg voor twee minuten.
+    if (isTv) {
+      _stil.start();
+      _stilKlok = Timer.periodic(const Duration(seconds: 10), (_) => _kijkStilstand());
+    }
     // Zodat een leeg scherm een knop kan hebben die ergens heen gaat. Zie `navigatie.dart`.
     gaNaarSectie = _gaNaar;
     _kijkOfErEenNieuweIs();
@@ -2417,7 +2495,9 @@ class _HomeShellState extends State<HomeShell> {
     _waarschuwing?.removeListener(_toonWaarschuwing);
     _ruilKlok?.cancel();
     if (isTv) HardwareKeyboard.instance.removeHandler(_tvVangnet);
+    _stilKlok?.cancel();
     _tvBalk.dispose();
+    _tvKnoppen.dispose();
     _tvInhoud.dispose();
     _tvMelding.dispose();
     _tvSpeler.dispose();
@@ -2865,7 +2945,9 @@ class _HomeShellState extends State<HomeShell> {
                   child: RepaintBoundary(
                   child: TvTopBar(
                     view: _view,
+                    knoppen: _tvKnoppen,
                     onPick: _gaNaar,
+                    onIn: _tvNaarInhoud,
                     onSearch: _tvSearch,
                     onSettings: () =>
                         showDialog(context: context, builder: (_) => const SettingsDialog()),
@@ -4032,6 +4114,37 @@ bool focusZonderDoel(FocusNode? n, {FocusScopeNode? wortel}) {
   return false;
 }
 
+/// Hoe lang de selectie op een tabblad moet blijven staan voor de pagina vanzelf wisselt (Saber,
+/// 16-10-2026: "vanzelf na een halve tel", zoals Google TV en Netflix). Snel voorbij schuiven laadt
+/// niets.
+const kTvTabbladWacht = Duration(milliseconds: 500);
+
+/// Het glas van een geselecteerd tabblad op de tv: bovenaan lichter dan onderaan.
+const kTvTabbladGlas = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [Color(0x47FFFFFF), Color(0x1FFFFFFF)],
+);
+
+/// De tabbladen van de tv-bovenbalk, per sectie. De schil houdt ze, zodat hij weet waar "omhoog"
+/// hoort te landen; de balk hangt ze aan zijn knoppen.
+class TvBalkKnoppen {
+  final _knopen = <int, FocusNode>{};
+
+  /// Het tabblad van sectie [id] (gemaakt bij de eerste vraag).
+  FocusNode voor(int id) => _knopen.putIfAbsent(id, () => FocusNode(debugLabel: 'tv-tabblad $id'));
+
+  /// Het tabblad van de pagina waar je bent, als de balk het al getekend heeft.
+  FocusNode? actief(int view) => _knopen[view];
+
+  void dispose() {
+    for (final n in _knopen.values) {
+      n.dispose();
+    }
+    _knopen.clear();
+  }
+}
+
 class TvTopBar extends StatefulWidget {
   const TvTopBar({
     super.key,
@@ -4039,10 +4152,22 @@ class TvTopBar extends StatefulWidget {
     required this.onPick,
     required this.onSearch,
     required this.onSettings,
+    this.knoppen,
+    this.onIn,
+    this.wacht = kTvTabbladWacht,
   });
 
   final int view;
   final ValueChanged<int> onPick;
+
+  /// Zie [TvBalkKnoppen]. Null in een toets die alleen de balk bekijkt.
+  final TvBalkKnoppen? knoppen;
+
+  /// OK op een tabblad: de pagina in (na het wisselen).
+  final VoidCallback? onIn;
+
+  /// Zie [kTvTabbladWacht].
+  final Duration wacht;
   final VoidCallback onSearch;
   final VoidCallback onSettings;
 
@@ -4060,10 +4185,32 @@ class TvTopBar extends StatefulWidget {
 class _TvTopBarState extends State<TvTopBar> {
   final _rol = ScrollController();
 
+  /// Wisselt de pagina als de selectie [TvTopBar.wacht] op een tabblad blijft staan.
+  Timer? _wissel;
+
   @override
   void dispose() {
+    _wissel?.cancel();
     _rol.dispose();
     super.dispose();
+  }
+
+  /// De selectie kwam op het tabblad van sectie [id] (met [knop]): na een halve tel wisselen.
+  void _wachtEnWissel(int id, FocusNode? knop) {
+    _wissel?.cancel();
+    if (id == widget.view) return;
+    _wissel = Timer(widget.wacht, () {
+      if (!mounted || knop == null || !knop.hasPrimaryFocus) return;
+      final balk = FocusScope.of(context);
+      widget.onPick(id);
+      // Een pagina die bij het bouwen zelf de selectie pakt (autofocus), trekt hem uit de balk terwijl
+      // je nog over de tabbladen beweegt. Na het beeld terug, als hij weg is.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final hier = FocusManager.instance.primaryFocus;
+        if (!mounted || knop.context == null || knop.hasPrimaryFocus) return;
+        if (hier != null && !hier.ancestors.contains(balk)) knop.requestFocus();
+      });
+    });
   }
 
   @override
@@ -4085,8 +4232,11 @@ class _TvTopBarState extends State<TvTopBar> {
         children: [
           _item(Icons.search_rounded, 'Zoeken', false, widget.onSearch),
           for (final (id, label, icoon) in NavSections.voorTv)
-            _item(icoon, label, widget.view == id, () => widget.onPick(id),
-                badge: id == 6 ? badge : 0),
+            _item(icoon, label, widget.view == id, () {
+              _wissel?.cancel();
+              widget.onPick(id);
+              widget.onIn?.call();
+            }, badge: id == 6 ? badge : 0, sectie: id),
           _item(Icons.settings_rounded, 'Instellingen', false, widget.onSettings),
         ],
       ),
@@ -4097,28 +4247,41 @@ class _TvTopBarState extends State<TvTopBar> {
   String? _gefocust;
 
   Widget _item(IconData icoon, String label, bool geselecteerd, VoidCallback onTap,
-      {int badge = 0}) {
-    // Drie standen die je van de bank af uit elkaar houdt, zoals op Google TV: de selectie is een
-    // WITTE pil met donkere letters, de sectie waar je bent een lichte pil met witte letters, en de
-    // rest gedimd. Hier stond een paarse rand om een paars getinte pil — en dan zie je niet of de
-    // selectie op "Tracks" staat of dat je daar alleen bent.
+      {int badge = 0, int? sectie}) {
+    // Drie standen die je van de bank af uit elkaar houdt: de selectie is een GLAZEN pil met paarse
+    // letters (Saber, 16-10-2026: "glas met paarse tekst", zoals elke geselecteerde knop op de tv),
+    // de sectie waar je bent een zachte grijze pil met witte letters, en de rest gedimd. Daarvoor was
+    // de selectie een witte pil met zwarte letters, en nog eerder een paarse rand om een paars
+    // getinte pil — dan zag je niet of de selectie op "Tracks" stond of dat je daar alleen was.
     final gefocust = _gefocust == label;
-    final voorgrond = gefocust ? kAchtergrond : (geselecteerd ? Colors.white : _muted);
+    final voorgrond = gefocust ? kAccent : (geselecteerd ? Colors.white : _muted);
+    final knop = sectie == null ? null : widget.knoppen?.voor(sectie);
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: Center(
         child: Builder(builder: (context) {
           return Pressable(
             onPressed: onTap,
+            focusNode: knop,
             borderRadius: BorderRadius.circular(18),
             scaleOnFocus: false,
             ringOnFocus: false,
+            // De balk zet zelf in het midden wat de selectie krijgt (hieronder).
+            vastePlek: false,
             // Wat de focus krijgt moet ook te zien zijn. Zonder dit loop je met RECHTS de balk uit en
             // gebeurt er ogenschijnlijk niets: de knop staat scherp, maar buiten beeld.
             onFocusChange: (heeft) {
               if (!mounted) return;
               setState(() => _gefocust = heeft ? label : (_gefocust == label ? null : _gefocust));
-              if (!heeft) return;
+              if (!heeft) {
+                if (_gefocust == null) _wissel?.cancel();
+                return;
+              }
+              if (sectie != null) {
+                _wachtEnWissel(sectie, knop);
+              } else {
+                _wissel?.cancel();
+              }
               final doel = context.findRenderObject();
               if (doel is RenderBox && _rol.hasClients) {
                 _rol.position.ensureVisible(doel,
@@ -4132,9 +4295,10 @@ class _TvTopBarState extends State<TvTopBar> {
               curve: Curves.easeOut,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
               decoration: BoxDecoration(
-                color: gefocust
-                    ? Colors.white
-                    : (geselecteerd ? Colors.white.withValues(alpha: .14) : Colors.transparent),
+                // Glas: lichter aan de bovenkant, waar het licht vangt, met een haarfijne rand.
+                gradient: gefocust ? kTvTabbladGlas : null,
+                color: gefocust ? null : (geselecteerd ? Colors.white.withValues(alpha: .14) : Colors.transparent),
+                border: Border.all(color: gefocust ? const Color(0x52FFFFFF) : Colors.transparent),
                 borderRadius: BorderRadius.circular(18),
               ),
               child: Row(
@@ -5953,7 +6117,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Annuleren')),
           FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: _accent),
+              style: FilledButton.styleFrom(backgroundColor: _knopVulling),
               onPressed: () => Navigator.pop(c, true),
               child: const Text('Terugzetten')),
         ],
@@ -6786,7 +6950,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
           if (!isTv)
           FilledButton.icon(
             style: FilledButton.styleFrom(
-                backgroundColor: _accent,
+                backgroundColor: _knopVulling,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10)),
             onPressed: () => _downloadAllMissing(missing),
@@ -7422,7 +7586,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
                   decoration: _inputDeco('Zoeken…'),
                 );
                 final button = FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                   onPressed: _searching ? null : _search,
                   child: const Text('Zoeken'),
                 );
@@ -7580,7 +7744,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
                     ),
                   const SizedBox(width: 8),
                   FilledButton(
-                    style: FilledButton.styleFrom(backgroundColor: _accent),
+                    style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                     onPressed: _applying || !_kanToepassen ? null : _apply,
                     child: _applying
                         ? const SizedBox(
@@ -9099,11 +9263,13 @@ class PlayerBar extends StatelessWidget {
                     IconButton(
                       icon: const Icon(Icons.shuffle_rounded, size: 20),
                       color: p.shuffle ? _accent : _muted,
+                      style: tvIcoonStijl(p.shuffle ? _accent : _muted),
                       onPressed: p.toggleShuffle,
                     ),
                     IconButton(
                       icon: const Icon(Icons.skip_previous_rounded),
                       color: _muted,
+                      style: tvIcoonStijl(_muted),
                       onPressed: x.previous,
                     ),
                     // Seeking, for a remote.
@@ -9122,6 +9288,7 @@ class PlayerBar extends StatelessWidget {
                         child: IconButton(
                         icon: const Icon(Icons.replay_10_rounded, size: 22),
                         color: _muted,
+                        style: tvIcoonStijl(_muted),
                         tooltip: '10 seconden terug',
                         onPressed: x.canSeek ? () => x.nudge(-10) : null,
                       ),
@@ -9132,6 +9299,7 @@ class PlayerBar extends StatelessWidget {
                       child: IconButton(
                         icon: Icon(x.playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
                         color: _bg,
+                        style: tvIcoonStijl(_bg),
                         iconSize: 26,
                         onPressed: x.playPause,
                       ),
@@ -9143,6 +9311,7 @@ class PlayerBar extends StatelessWidget {
                         child: IconButton(
                         icon: const Icon(Icons.forward_10_rounded, size: 22),
                         color: _muted,
+                        style: tvIcoonStijl(_muted),
                         tooltip: '10 seconden vooruit',
                         onPressed: x.canSeek ? () => x.nudge(10) : null,
                       ),
@@ -9150,6 +9319,7 @@ class PlayerBar extends StatelessWidget {
                     IconButton(
                       icon: const Icon(Icons.skip_next_rounded),
                       color: _muted,
+                      style: tvIcoonStijl(_muted),
                       onPressed: x.next,
                     ),
                     if (!isCompact(context))
@@ -9157,6 +9327,7 @@ class PlayerBar extends StatelessWidget {
                       icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
                           size: 20),
                       color: p.repeat == RepeatMode.off ? _muted : _accent,
+                      style: tvIcoonStijl(p.repeat == RepeatMode.off ? _muted : _accent),
                       // Local only: the speaker is handed one track at a time, so a change here
                       // would take effect on whatever is sent next and look like it did nothing.
                       onPressed: x.casting ? null : p.cycleRepeat,
@@ -9280,7 +9451,7 @@ Future<String?> _vraagNaam(BuildContext context, String titel, String begin) {
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuleren')),
         FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _accent),
+            style: FilledButton.styleFrom(backgroundColor: _knopVulling),
             onPressed: () => Navigator.pop(ctx, c.text),
             child: const Text('Bewaren')),
       ],
@@ -9308,7 +9479,7 @@ class AfspeellijstenView extends StatelessWidget {
                 style: const TextStyle(color: _muted, fontSize: 12.5)),
             const Spacer(),
             FilledButton.icon(
-              style: FilledButton.styleFrom(backgroundColor: _accent),
+              style: FilledButton.styleFrom(backgroundColor: _knopVulling),
               onPressed: () async {
                 final naam = await _vraagNaam(context, 'Nieuwe afspeellijst', '');
                 if (naam != null && naam.trim().isNotEmpty) await lijsten.maak(naam.trim());
@@ -10124,6 +10295,7 @@ class _WachtrijKnop extends StatelessWidget {
       child: IconButton(
         icon: const Icon(Icons.queue_music_rounded, size: 20),
         color: !compact && paneel.open ? _accent : _muted,
+        style: tvIcoonStijl(!compact && paneel.open ? _accent : _muted),
         tooltip: 'Wachtrij',
         onPressed: () {
           if (!compact) {
@@ -10568,6 +10740,7 @@ class _SpeakerButton extends StatelessWidget {
       child: IconButton(
         icon: Icon(casting ? Icons.speaker_rounded : Icons.speaker_group_outlined, size: iconSize),
         color: casting ? _accent : _muted,
+        style: tvIcoonStijl(casting ? _accent : _muted),
         tooltip: casting ? 'Speelt op ${target.device!.name}' : 'Afspelen op…',
         onPressed: () => showSpeakerPicker(
           context,
@@ -10890,18 +11063,39 @@ Widget _albumRegel(BuildContext context, String naam, Album? album,
 ///
 /// Bovenaan, want dit is het snelste wat je op dat scherm kunt doen. Alles eronder vraagt eerst dat
 /// je ergens doorheen bladert om iets te vinden om op te klikken.
-class _RadioUitEenZinKaart extends StatelessWidget {
+class _RadioUitEenZinKaart extends StatefulWidget {
   const _RadioUitEenZinKaart();
 
   @override
+  State<_RadioUitEenZinKaart> createState() => _RadioUitEenZinKaartState();
+}
+
+class _RadioUitEenZinKaartState extends State<_RadioUitEenZinKaart> {
+  /// Heeft de kaart de selectie van de afstandsbediening?
+  bool _focus = false;
+
+  @override
   Widget build(BuildContext context) {
-    return InkWell(
+    // Een [Pressable] en geen InkWell, en dat is op de tv het hele punt. Een InkWell tekent zijn
+    // selectie ONDER zijn kind, en dit kind heeft een eigen achtergrond: op de Shield stond de
+    // selectie op deze kaart en zag je niets (15-10-2026). Saber koos voor kaarten "iets groter +
+    // schaduw" (16-10-2026): hij groeit 3 % ([kTvKaartGroei]), krijgt de schaduw van een hoes en
+    // wordt lichter. Op een telefoon veert hij in bij een tik, zoals elke tegel.
+    final aan = isTv && _focus;
+    return Pressable(
       borderRadius: BorderRadius.circular(kHoek12),
-      onTap: () => toonRadioUitZin(context),
-      child: Container(
+      onPressed: () => toonRadioUitZin(context),
+      focusScale: kTvKaartGroei,
+      ringOnFocus: false,
+      onFocusChange: (v) {
+        if (mounted && v != _focus) setState(() => _focus = v);
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 130),
+        curve: Curves.easeOut,
         padding: const EdgeInsets.all(kRuimte16),
         decoration: BoxDecoration(
-          color: kVerzonken,
+          color: aan ? kPaneelHoog : kVerzonken,
           borderRadius: BorderRadius.circular(kHoek12),
           border: Border.all(color: kAccent2.withValues(alpha: .30)),
         ),
@@ -12578,6 +12772,24 @@ void naarNuSpeelt(BuildContext context) {
 }
 
 const _nuSpeeltRoute = 'nu-speelt';
+
+/// Na hoe lang zonder toets een tv vanzelf naar Nu speelt gaat, als er muziek speelt (Saber,
+/// 16-10-2026: "Nu speelt schermvullend" — grote hoes, draaiende cd, de kleuren van de hoes; een
+/// toets brengt je terug waar je was).
+const kTvStilstand = Duration(minutes: 2);
+
+/// De toetsen die bij stilstand gewoon doen wat ze doen, in plaats van Nu speelt te sluiten.
+final kMediatoetsen = <LogicalKeyboardKey>{
+  LogicalKeyboardKey.mediaPlayPause, LogicalKeyboardKey.mediaPlay, LogicalKeyboardKey.mediaPause,
+  LogicalKeyboardKey.mediaTrackNext, LogicalKeyboardKey.mediaTrackPrevious, LogicalKeyboardKey.mediaFastForward,
+  LogicalKeyboardKey.mediaRewind, LogicalKeyboardKey.mediaStop, LogicalKeyboardKey.audioVolumeUp,
+  LogicalKeyboardKey.audioVolumeDown, LogicalKeyboardKey.audioVolumeMute,
+};
+
+/// Moet de tv nu naar Nu speelt? Alleen als er [kTvStilstand] lang niets ingedrukt is, er muziek
+/// speelt, en er niets over de pagina ligt ([bovenaan]: geen menu, geen dialoog, niet al Nu speelt).
+bool naarNuSpeeltNaStilstand({required Duration stil, required bool speelt, required bool bovenaan}) =>
+    speelt && bovenaan && stil >= kTvStilstand;
 
 /// Het nu-speelt-scherm, van onderen.
 ///
@@ -14340,7 +14552,8 @@ class _HomeStartViewState extends State<HomeStartView> {
           // Stond met de hand op 204 (236 op tv), met een commentaar erbij dat dat "maar net"
           // genoeg was. Nu berekend — inclusief de tekstschaal van het toestel, want juist die
           // maakt op een televisie het verschil. Zie `ui/tegel.dart`.
-          SizedBox(height: hoogteVanTegelrij(context), child: row),
+          // Op een tv onthoudt de rij waar je stond (16-10-2026). Zie `ui/tv_rij.dart`.
+          SizedBox(height: hoogteVanTegelrij(context), child: TvRij(child: row)),
         ],
       );
 
@@ -15082,7 +15295,7 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                     ),
                     const SizedBox(width: kRuimte8),
                     FilledButton(
-                      style: FilledButton.styleFrom(backgroundColor: _accent),
+                      style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                       onPressed: _bezig ? null : _ophalen,
                       child: const Text('Ophalen'),
                     ),
@@ -17896,7 +18109,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuleren')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _accent),
+            style: FilledButton.styleFrom(backgroundColor: _knopVulling),
             onPressed: () => Navigator.pop(context, ctrl.text.trim()),
             child: const Text('Verbind'),
           ),
@@ -18298,7 +18511,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               const SizedBox(width: 10),
               FilledButton(
                 style: FilledButton.styleFrom(
-                    backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18)),
+                    backgroundColor: _knopVulling, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18)),
                 // Guarded on a television, disabled everywhere else.
                 //
                 // Disabling it is right under a mouse — the button greys out and the cursor says
@@ -18459,7 +18672,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             ),
             const SizedBox(height: 16),
             FilledButton.icon(
-              style: FilledButton.styleFrom(backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14)),
+              style: FilledButton.styleFrom(backgroundColor: _knopVulling, padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14)),
               icon: _tidalConnecting
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.open_in_browser_rounded, size: 18),
@@ -19411,7 +19624,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
                         const SizedBox(height: 14),
                         FilledButton.icon(
                           style: FilledButton.styleFrom(
-                              backgroundColor: _accent, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
+                              backgroundColor: _knopVulling, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
                           onPressed: () =>
                               openPagina(context, (_) => AlbumBrowsePage(hit.artist, hit.album)),
                           icon: const Icon(Icons.playlist_add_rounded, size: 18),
@@ -23274,7 +23487,7 @@ class _SharingSectionState extends State<_SharingSection> {
           Row(
             children: [
               FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: _accent),
+                style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                 onPressed: _cloudBusy ? null : _cloudSubmit,
                 child: Text(_cloudBusy
                     ? 'Bezig…'
@@ -23690,7 +23903,7 @@ class _SharingSectionState extends State<_SharingSection> {
                 children: [
                   FilledButton.icon(
                     style: FilledButton.styleFrom(
-                        backgroundColor: _accent, textStyle: const TextStyle(fontSize: 12.5)),
+                        backgroundColor: _knopVulling, textStyle: const TextStyle(fontSize: 12.5)),
                     onPressed: sharing.startPairing,
                     icon: const Icon(Icons.add_link_rounded, size: 16),
                     label: const Text('Apparaat koppelen'),
@@ -23780,7 +23993,7 @@ class _SharingSectionState extends State<_SharingSection> {
               onPressed: () => Navigator.pop(context, false),
               child: const Text('Annuleren')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _accent),
+            style: FilledButton.styleFrom(backgroundColor: _knopVulling),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Vervangen'),
           ),
@@ -24347,7 +24560,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuleren')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _accent),
+            style: FilledButton.styleFrom(backgroundColor: _knopVulling),
             onPressed: () => Navigator.pop(context, ctrl.text.trim()),
             child: const Text('Verstuur'),
           ),
@@ -25005,7 +25218,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuleren')),
                 const SizedBox(width: 8),
                 FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                   onPressed: () async {
                     final s = context.read<AppSettings>();
                     final lib = context.read<LibraryStore>();
@@ -25683,7 +25896,7 @@ class OvernemenBalk extends StatelessWidget {
     final uitleg = Text(tekst, style: const TextStyle(color: _muted, fontSize: 12));
     final ongedaan = TextButton(onPressed: bezig ? null : onOngedaan, child: const Text('Ongedaan maken'));
     final opslaan = FilledButton.icon(
-      style: FilledButton.styleFrom(backgroundColor: _accent),
+      style: FilledButton.styleFrom(backgroundColor: _knopVulling),
       onPressed: bezig ? null : onOpslaan,
       icon: bezig
           ? const SizedBox(
@@ -26734,7 +26947,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
         const SizedBox(width: 8),
         FilledButton(
           style: FilledButton.styleFrom(
-            backgroundColor: _accent,
+            backgroundColor: _knopVulling,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           ),
           onPressed: _zoeken ? null : _haalNummer,
@@ -27491,7 +27704,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                   // dan is er niets veranderd — en dat is een antwoord op "heeft het iets gedaan?"
                   // nog vóór je hem indrukt.
                   FilledButton.icon(
-                    style: FilledButton.styleFrom(backgroundColor: _accent),
+                    style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                     onPressed: !_gewijzigd || _opslaan ? null : _bewaar,
                     icon: _opslaan
                         ? const SizedBox(
@@ -27727,7 +27940,7 @@ class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
           child: const Text('Annuleren'),
         ),
         FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: _accent),
+          style: FilledButton.styleFrom(backgroundColor: _knopVulling),
           onPressed: _bezig || _naar.text.trim().isEmpty || _naar.text.trim() == widget.name
               ? null
               : _toepassen,
@@ -28160,7 +28373,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
                   child: const Text('Annuleren')),
               const SizedBox(width: 8),
               FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: _accent),
+                style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                 onPressed: (_target == null || _busy || _planning) ? null : _go,
                 child: _busy
                     ? const SizedBox(
@@ -28451,7 +28664,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                   child: const Text('Annuleren')),
               const SizedBox(width: 6),
               FilledButton.icon(
-                style: FilledButton.styleFrom(backgroundColor: _accent),
+                style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                 onPressed: (_busy || blocked || !plan.safe) ? null : _go,
                 icon: _busy
                     ? const SizedBox(
@@ -28582,7 +28795,7 @@ class _RenumberDialogState extends State<RenumberDialog> {
                   onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
               const SizedBox(width: 8),
               FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: _accent),
+                style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                 onPressed: (_busy || blocked || plan.changing.isEmpty) ? null : _go,
                 child: _busy
                     ? const SizedBox(
@@ -28918,7 +29131,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
               if (_changes.isNotEmpty) ...[
                 const SizedBox(width: 8),
                 FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                   onPressed: _busy || _chosen.isEmpty ? null : _go,
                   child: _busy
                       ? const SizedBox(
@@ -29271,7 +29484,7 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
                       onPressed: () => Navigator.of(context).pop(false),
                       child: const Text('Annuleren')),
                   FilledButton(
-                    style: FilledButton.styleFrom(backgroundColor: _accent),
+                    style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                     onPressed: _busy || _titel.text.trim().isEmpty ? null : _pas,
                     child: _busy
                         ? const SizedBox(
@@ -29481,7 +29694,7 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
                     onPressed: () => Navigator.of(context).pop(false),
                     child: const Text('Annuleren')),
                 FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                   onPressed: _busy || geblokkeerd || _gekozen.isEmpty ? null : _pas,
                   child: _busy
                       ? const SizedBox(
@@ -29804,7 +30017,7 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
                   child: Text(_vuil ? 'Annuleren' : 'Sluiten'),
                 ),
                 FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                   onPressed: (_busy || !_vuil) ? null : _bewaar,
                   child: _busy
                       ? const SizedBox(
@@ -29962,7 +30175,7 @@ class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
               if (ps.isNotEmpty) ...[
                 const SizedBox(width: 8),
                 FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                   onPressed: _busy || _chosen.isEmpty ? null : _go,
                   child: _busy
                       ? const SizedBox(
@@ -30082,7 +30295,7 @@ class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
                   onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
               const SizedBox(width: 8),
               FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: _accent),
+                style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                 onPressed: _busy ? null : _go,
                 child: _busy
                     ? const SizedBox(
@@ -30285,7 +30498,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
                   onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
               const SizedBox(width: 8),
               FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: _accent),
+                style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                 onPressed: (_busy || _planning) ? null : _go,
                 child: _busy
                     ? const SizedBox(
@@ -31086,7 +31299,7 @@ class _RuTrackerKoekjeDialoogState extends State<RuTrackerKoekjeDialoog> {
                       child: Text(_gelukt ? 'Klaar' : 'Annuleren')),
                   const SizedBox(width: 8),
                   FilledButton(
-                    style: FilledButton.styleFrom(backgroundColor: _accent),
+                    style: FilledButton.styleFrom(backgroundColor: _knopVulling),
                     onPressed: _bezig ? null : _gebruik,
                     child: _bezig
                         ? const SizedBox(

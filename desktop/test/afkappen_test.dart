@@ -53,9 +53,9 @@ void main() {
       expect(t.getTopLeft(find.text('Stevie Wonder').first).dy, t.getTopLeft(find.text('Stevie Wonder').last).dy);
     });
 
-    testWidgets('op een tv blijft het één regel', (t) async {
+    testWidgets('ook op een tv twee regels (Saber, 16-10-2026: "twee regels, zoals de gsm")', (t) async {
       setTvModeForTest(true);
-      expect(kTegelTitelRegels, 1);
+      expect(kTegelTitelRegels, 2);
       setTvModeForTest(false);
       expect(kTegelTitelRegels, 2);
     });

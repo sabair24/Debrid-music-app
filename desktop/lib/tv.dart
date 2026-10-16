@@ -13,6 +13,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'ui/glas.dart';
 import 'ui/kleuren.dart';
@@ -193,6 +194,8 @@ class Pressable extends StatefulWidget {
     this.ringOnFocus = true,
     this.cursor = SystemMouseCursors.click,
     this.onFocusChange,
+    this.focusScale,
+    this.vastePlek = true,
   });
 
   final Widget child;
@@ -230,6 +233,14 @@ class Pressable extends StatefulWidget {
 
   final MouseCursor cursor;
   final ValueChanged<bool>? onFocusChange;
+
+  /// Hoeveel hij groeit met de selectie op een tv. Null = [tileFocusScale], de maat van een hoes;
+  /// een kaart over de volle breedte groeit minder, anders loopt hij het scherm uit.
+  final double? focusScale;
+
+  /// Op een tv: de selectie op een vaste plek houden ([tvVastePlek]) in plaats van in het midden.
+  /// Uit voor wat zelf al beslist waar het hoort, zoals de bovenbalk.
+  final bool vastePlek;
 
   @override
   State<Pressable> createState() => _PressableState();
@@ -269,7 +280,13 @@ class _PressableState extends State<Pressable> {
     // After the frame: the highlight often arrives during a build, and asking a scrollable to move
     // mid-layout throws.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      // Nog steeds de selectie? Een rij die je naar de onthouden hoes stuurt ([TvRij]), geeft de
+      // selectie in dezelfde beurt door: de eerste landing mag de lijst dan niet meer verschuiven.
+      if (!mounted || !_focused) return;
+      if (widget.vastePlek) {
+        tvVastePlek(context);
+        return;
+      }
       Scrollable.ensureVisible(
         context,
         alignment: 0.5,
@@ -293,7 +310,7 @@ class _PressableState extends State<Pressable> {
     // created and disposed for every tile you scroll past, and that is most of the app.
     if (isTv && widget.scaleOnFocus) {
       content = AnimatedScale(
-        scale: _focused ? tileFocusScale : 1.0,
+        scale: _focused ? (widget.focusScale ?? tileFocusScale) : 1.0,
         duration: const Duration(milliseconds: 130),
         curve: Curves.easeOut,
         child: content,
@@ -494,7 +511,8 @@ class _TvLabelledState extends State<TvLabelled> {
                     widget.label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 16, height: 1.1, color: _ring),
+                    // Paars, zoals de letters van elke geselecteerde knop op een tv (16-10-2026).
+                    style: const TextStyle(fontSize: 16, height: 1.1, color: kAccent),
                   )
                 : null,
           ),
@@ -559,6 +577,76 @@ double get _ringWidth => isTv ? 3 : 2;
 /// Anything that uses this must leave room for it — a horizontal list hands its children a tight
 /// height and clips whatever grows past it. See the row height in `_section`.
 double get tileFocusScale => isTv ? 1.14 : 1.06;
+
+/// Hoeveel een kaart over de volle breedte groeit met de selectie op een tv ("Zeg wat je wil
+/// horen"). Een hoes groeit 14 %; een kaart van 860 punten zou dan 120 punten het scherm uit lopen.
+const double kTvKaartGroei = 1.03;
+
+/// Hoeveel ruimte er op een tv boven de selectie blijft in een lijst die omhoog en omlaag schuift:
+/// genoeg voor de kop van een rij ("Recent toegevoegd") met wat lucht. Zie [tvVastePlek].
+const double kTvBovenruimte = 56;
+
+/// Waar een lijst heen moet om een element op de vaste plek te zetten.
+///
+/// [onthul] is de stand waarbij het element precies tegen de voorrand staat, [voorrand] hoeveel
+/// ruimte ervoor moet blijven; [min] en [max] zijn de grenzen van de lijst. Zuiver, voor de toets.
+double vastePlekDoel({required double onthul, required double voorrand, required double min, required double max}) =>
+    (onthul - voorrand).clamp(min, max);
+
+/// Brengt wat de selectie heeft naar zijn vaste plek, in elke lijst eromheen.
+///
+/// **Waarom (Saber, 16-10-2026).** Hij koos "selectie op een vaste plek", zoals Netflix en Apple TV:
+/// de rij waar je op staat blijft bovenaan in beeld en de pagina schuift eronder door, en in een rij
+/// blijft de gekozen hoes links staan terwijl de andere schuiven. Het was het midden
+/// (`ensureVisible` met 0,5): dan dwaalde de selectie over het scherm, en op Tracks viel de vierde
+/// rij half onder de spelerbalk.
+///
+/// In een liggende lijst komt het element waar de eerste staat als de lijst in rust is (de
+/// binnenmarge van de lijst); in een staande lijst [kTvBovenruimte] onder de bovenrand, zodat de kop
+/// van de rij erboven nog leesbaar is. Een lijst die niet verder kan, blijft staan.
+void tvVastePlek(BuildContext context, {Duration duur = const Duration(milliseconds: 220)}) {
+  RenderObject? doel = context.findRenderObject();
+  var lijst = Scrollable.maybeOf(context);
+  while (lijst != null && doel != null && doel.attached) {
+    final pos = lijst.position;
+    final viewport = RenderAbstractViewport.maybeOf(doel);
+    if (viewport != null && pos.hasContentDimensions) {
+      final liggend = pos.axis == Axis.horizontal;
+      final naar = vastePlekDoel(
+        onthul: viewport.getOffsetToReveal(doel, 0).offset,
+        voorrand: liggend ? _binnenmarge(viewport) : kTvBovenruimte,
+        min: pos.minScrollExtent,
+        max: pos.maxScrollExtent,
+      );
+      if ((naar - pos.pixels).abs() > .5) pos.animateTo(naar, duration: duur, curve: Curves.easeOutCubic);
+    }
+    doel = lijst.context.findRenderObject();
+    lijst = Scrollable.maybeOf(lijst.context);
+  }
+}
+
+/// De marge aan het begin van een lijst (`ListView(padding: …)` wordt een [RenderSliverPadding]).
+double _binnenmarge(RenderAbstractViewport viewport) {
+  if (viewport is RenderViewportBase) {
+    final eerste = viewport.firstChild;
+    if (eerste is RenderSliverPadding) {
+      final p = eerste.resolvedPadding;
+      if (p != null) return viewport.axis == Axis.horizontal ? p.left : p.top;
+    }
+  }
+  return 0;
+}
+
+/// De kleur van een pictogramknop met een eigen vaste kleur, die op een tv paars wordt als hij de
+/// selectie heeft (Saber, 16-10-2026: "paars gekleurde tekst, geen rand, glass look").
+///
+/// Nodig omdat `IconButton(color: …)` een vaste kleur is voor élke stand: de themaregel die een
+/// geselecteerde knop paars maakt, komt daar nooit doorheen. Een `style` gaat wél boven `color`.
+ButtonStyle tvIcoonStijl(Color kleur) => ButtonStyle(
+      foregroundColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.disabled)
+          ? null
+          : (isTv && s.contains(WidgetState.focused) ? kAccent : kleur)),
+    );
 
 /// What counts as "press this".
 ///
