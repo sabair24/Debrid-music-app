@@ -40,7 +40,7 @@ void main() {
       await g.up();
       await t.pump(const Duration(milliseconds: 30));
       expect(schaal(), kKnopVeer, reason: 'een vlugge tik blijft $kKnopIngedrukt zichtbaar');
-      await t.runAsync(() => Future<void>.delayed(kKnopIngedrukt));
+      await t.pump(kKnopIngedrukt);
       await t.pumpAndSettle();
       expect(schaal(), 1);
       expect(licht(), 0);

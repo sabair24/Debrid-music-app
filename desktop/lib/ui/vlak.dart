@@ -14,6 +14,7 @@
 /// dezelfde tv-uitweg die `glassSurface` al documenteert.
 library;
 
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:ui' show ImageFilter;
@@ -534,14 +535,22 @@ class _GlasKnopState extends State<GlasKnop> {
     if (mounted && v != _in) setState(() => _in = v);
   }
 
-  Future<void> _los() async {
-    // Minstens [kKnopIngedrukt] zichtbaar, ook bij een vlugge tik.
+  Timer? _losKlok;
+
+  @override
+  void dispose() {
+    _losKlok?.cancel();
+    super.dispose();
+  }
+
+  void _los() {
+    // Minstens [kKnopIngedrukt] zichtbaar, ook bij een vlugge tik. Een Timer en geen Future.delayed:
+    // die laatste loopt door als de knop al weg is.
     final neer = _neer;
-    if (neer != null) {
-      final rest = kKnopIngedrukt - DateTime.now().difference(neer);
-      if (rest > Duration.zero) await Future<void>.delayed(rest);
-    }
-    _zet(false);
+    final rest = neer == null ? Duration.zero : kKnopIngedrukt - DateTime.now().difference(neer);
+    _losKlok?.cancel();
+    if (rest <= Duration.zero) return _zet(false);
+    _losKlok = Timer(rest, () => _zet(false));
   }
 
   @override
