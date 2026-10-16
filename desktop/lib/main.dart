@@ -4214,6 +4214,31 @@ class TvTopBar extends StatefulWidget {
 class _TvTopBarState extends State<TvTopBar> {
   final _rol = ScrollController();
 
+  @override
+  void initState() {
+    super.initState();
+    _toonActief();
+  }
+
+  @override
+  void didUpdateWidget(TvTopBar oud) {
+    super.didUpdateWidget(oud);
+    if (oud.view != widget.view) _toonActief();
+  }
+
+  /// Het tabblad van de pagina waar je bent, in beeld. Na Terug naar Start stond "Start" buiten de
+  /// balk als je eerder rechts in de balk was geweest: dan zag je niet waar je was (gemeld op
+  /// 15-10-2026, gezien op de Shield op 16-10-2026).
+  void _toonActief() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final knop = widget.knoppen?.actief(widget.view);
+      final doel = knop?.context?.findRenderObject();
+      if (!mounted || doel is! RenderBox || !doel.attached || !_rol.hasClients) return;
+      _rol.position.ensureVisible(doel,
+          alignment: 0.5, duration: const Duration(milliseconds: 180), curve: Curves.easeOut);
+    });
+  }
+
   /// Wisselt de pagina als de selectie [TvTopBar.wacht] op een tabblad blijft staan.
   Timer? _wissel;
 

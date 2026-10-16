@@ -59,7 +59,9 @@ void main() {
       final start = bron.indexOf('KeyEventResult _tvSprong');
       expect(start, greaterThan(-1), reason: '_tvSprong is hernoemd of verdwenen');
       final lijf = bron.substring(start, start + 900);
-      expect(lijf, contains('traversalDescendants.isNotEmpty'),
+      // Sinds 16-10-2026 strenger: iets dat ook IN BEELD staat. Een lege Favorieten-pagina droeg
+      // onzichtbare elementen, en dan landde de selectie daarop (zie `_heeftZichtbaar`).
+      expect(lijf, contains('_heeftZichtbaar(scope)'),
           reason: 'zonder deze toets landt de focus in een lege scope en verroert zich niets');
       // Eerst de pagina zelf laten proberen; pas als die niets meer heeft is de rand bereikt.
       expect(lijf.indexOf('focusInDirection'), lessThan(lijf.indexOf('requestFocus')),

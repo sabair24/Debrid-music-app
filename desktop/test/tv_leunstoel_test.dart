@@ -8,6 +8,7 @@ import 'package:debridmusic/online.dart';
 import 'package:debridmusic/settings.dart';
 import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/kleuren.dart';
+import 'package:debridmusic/ui/kopfeiten.dart';
 import 'package:debridmusic/ui/tv_rij.dart';
 import 'package:debridmusic/ui/vlak.dart';
 import 'package:flutter/material.dart';
@@ -263,6 +264,39 @@ void main() {
       expect(deco.color, isNull);
     });
 
+    testWidgets('het tabblad van de pagina waar je bent staat in beeld, ook na een wissel', (t) async {
+      // Na Terug naar Start stond "Start" buiten de balk als je eerder rechts was geweest.
+      final knoppen = TvBalkKnoppen();
+      addTearDown(knoppen.dispose);
+      final cfg = AppSettings();
+      final d = DownloadManager(OnlineService(cfg), SoulseekService(cfg), Directory.systemTemp.path, () async {});
+      t.view.physicalSize = const Size(600, 300);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.reset);
+      Widget balk(int view) => ChangeNotifierProvider<DownloadManager>.value(
+            value: d,
+            child: MaterialApp(
+              home: Scaffold(
+                body: TvTopBar(view: view, knoppen: knoppen, onPick: (_) {}, onSearch: () {}, onSettings: () {}),
+              ),
+            ),
+          );
+      bool inBeeld(String label) {
+        final r = t.getRect(find.text(label, skipOffstage: false));
+        return r.left >= 0 && r.right <= 600;
+      }
+
+      await t.pumpWidget(balk(5));
+      await t.pumpAndSettle();
+      expect(inBeeld('Ontdek'), isFalse, reason: 'anders bewijst deze toets niets');
+      await t.pumpWidget(balk(3)); // Ontdek, rechts buiten beeld
+      await t.pumpAndSettle();
+      expect(inBeeld('Ontdek'), isTrue);
+      await t.pumpWidget(balk(5)); // terug naar Start
+      await t.pumpAndSettle();
+      expect(inBeeld('Start'), isTrue);
+    });
+
     testWidgets('omhoog naar de balk landt op het tabblad van de pagina waar je bent', (t) async {
       // De regel zelf staat in de schil ([_landingsplek]); hier: de balk geeft dat tabblad terug.
       final (_, _, knoppen) = await balk(t);
@@ -357,6 +391,20 @@ void main() {
       expect(main, contains('    if (isTv && mounted && _tvStilWekker(e)) return true;'));
       expect(main, contains("_stilKlok = Timer.periodic(const Duration(seconds: 10), (_) => _kijkStilstand());"));
     });
+  });
+
+  test('een lange genrelijst breekt tussen zijn woorden, een kort feit blijft heel', () {
+    // Op de Shield: "Compilation Electronic MoS; House; Eurodance; Br|eakbeat".
+    expect(kopFeitVast('2 nummers'), '2 nummers');
+    expect(kopFeitVast('Variété française'), 'Variété française');
+    const lang = 'Compilation Electronic MoS; House; Eurodance; Breakbeat';
+    expect(kopFeitVast(lang), lang);
+  });
+
+  test('het menu tekent zijn selectie boven de vulling van het glas', () {
+    final menu = File('lib/ui/itemmenu.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(menu, contains('child: Material(type: MaterialType.transparency, child: ItemMenuBlad(menu: menu)),'),
+        reason: 'de regels zijn InkWells: zonder dit lag hun selectie onder de vulling, onzichtbaar');
   });
 
   test('kaarten groeien een beetje, met de schaduw van een hoes; tegeltitels twee regels', () {

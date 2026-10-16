@@ -25,6 +25,12 @@ bool kopFeitenOpEenRegel(String artiest, List<String> feiten, TextStyle stijl, T
   return past;
 }
 
+/// Hoe lang een feit mag zijn om nog als één geheel te breken.
+const kKopFeitVastTot = 24;
+
+/// [feit] met vaste spaties als het kort is, anders zoals het is. Zie [KopFeiten].
+String kopFeitVast(String feit) => feit.length <= kKopFeitVastTot ? feit.replaceAll(' ', ' ') : feit;
+
 class KopFeiten extends StatelessWidget {
   const KopFeiten({
     super.key,
@@ -60,10 +66,12 @@ class KopFeiten extends StatelessWidget {
       return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
         artiest,
         const SizedBox(height: 2),
-        // Een vaste spatie in een feit ("2 nummers", "Variété française") en een gewone na elke
+        // Een vaste spatie in een kort feit ("2 nummers", "Variété française") en een gewone na elke
         // punt: zo breekt de regel alleen tússen twee feiten, en begint een nieuwe regel nooit met " · ".
+        // Een lang feit (een genrelijst) mag wél tussen zijn woorden breken: onbreekbaar brak Flutter
+        // hem midden in een woord, "Br|eakbeat" (Shield, 16-10-2026). Zie [kopFeitVast].
         Text(
-          [for (final x in f) x.replaceAll(' ', ' ')].join(' · '),
+          [for (final x in f) kopFeitVast(x)].join(' · '),
           style: stijl,
         ),
       ]);

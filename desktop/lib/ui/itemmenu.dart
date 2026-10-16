@@ -149,7 +149,11 @@ Future<MenuRegel?> _viaBlad(BuildContext context, ItemMenu menu) async {
           vorm: const BorderRadius.vertical(top: Radius.circular(16)),
           vulling: isTv ? const BoxDecoration(color: kBovenop) : null,
           kleur: isTv ? null : kBovenop,
-          child: ItemMenuBlad(menu: menu),
+          // Een eigen doorzichtig Material BOVEN de vulling. De regels zijn InkWells, en die tekenen
+          // hun selectie en rimpeling op het Material van het blad — en dat ligt ONDER de vulling van
+          // het glas. Op de Shield (16-10-2026) zag je in dit menu daardoor niet welke regel de
+          // selectie had, en op een telefoon geen rimpeling bij een tik.
+          child: Material(type: MaterialType.transparency, child: ItemMenuBlad(menu: menu)),
         ),
       );
     },
