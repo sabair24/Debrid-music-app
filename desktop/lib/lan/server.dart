@@ -45,6 +45,7 @@ import 'tokens.dart';
 import 'transcode.dart';
 import 'upnp.dart';
 import '../artwork.dart';
+import '../aanbevolen.dart';
 import '../vertaler.dart';
 
 /// The port the other devices look for. Fixed on purpose — an ephemeral port would mean every
@@ -558,6 +559,8 @@ class LanServer {
         return _releases(req);
       case '/api/vertaal':
         return _vertaal(req);
+      case '/api/aanbevolen':
+        return _aanbevolen(req);
       case '/api/online/tracklist':
         return _onlineTracklist(req);
       case '/api/online/download':
@@ -1587,6 +1590,20 @@ class LanServer {
       ...(l ?? ReleasesLijst(0, const [])).toJson(),
       'bezig': d.bezig,
     });
+  }
+
+  /// "Aanbevolen voor jou" voor een toestel: wat de pc berekend en bewaard heeft, meteen. Alleen bij
+  /// `ververs=1` of als er nog niets ligt wordt er gewacht (hoogstens 20 s) op een nieuwe berekening.
+  Future<void> _aanbevolen(HttpRequest req) async {
+    final d = AanbevolenVoorJou.pc;
+    if (d == null) return _unavailable(req, 'Deze pc rekent geen aanbevelingen uit.');
+    var l = d.lijst;
+    if (l == null || req.uri.queryParameters['ververs'] == '1') {
+      l = await d.ververs().timeout(const Duration(seconds: 20), onTimeout: () => d.lijst);
+    } else if (d.verouderd) {
+      unawaited(d.ververs());
+    }
+    return _json(req.response, {...(l ?? const AanbevolenLijst(0, [])).toJson(), 'bezig': d.bezig});
   }
 
   /// Een beschrijving in het Nederlands, voor een toestel (16-10-2026). De AI-sleutel blijft op de pc;

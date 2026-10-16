@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
@@ -60,6 +61,7 @@ import 'ffmpeg.dart';
 import 'fingerprint.dart';
 import 'flac_tags.dart';
 import 'mp3_tags.dart';
+import 'aanbevolen.dart' show AanbevolenLijst, AanbevolenVoorJou;
 import 'afspeellijsten.dart';
 import 'favorieten.dart';
 import 'lan/ids.dart';
@@ -1037,6 +1039,31 @@ Future<void> main() async {
   };
   // Groen gaat bij het herhalen voor — zie [RadioBesturing.voegHerhalingBij].
   radio.isGroen = (t) => oordelen.vanTrack(t) == Oordeel.omhoog;
+  // "Aanbevolen voor jou": op de pc berekend en bewaard, elke zes uur; een toestel vraagt het de pc
+  // (`/api/aanbevolen`). Zie `aanbevolen.dart` — Saber, 16-10-2026: "laadt heel traag … ik wil
+  // nieuwe muziek ontdekken".
+  if (mode.owner) {
+    final rec = RecommendService();
+    final aanbevolen = AanbevolenVoorJou(
+      zoeker: (zaden, bezit) => rec.ontdekVoorJou(zaden, bezit),
+      artiesten: () => eigenArtiesten(
+          library.tracks.map((t) {
+            final s = speelstanden.standVan(t);
+            return EigenNummer(
+                artiest: t.artist, album: t.album, titel: t.title, beurten: s?.aantal ?? 0, laatstMs: s?.laatstMs ?? 0);
+          }),
+          overslaan: _genericArtist),
+      groen: () => {
+        for (final t in library.tracks)
+          if (oordelen.vanTrack(t) == Oordeel.omhoog) artistKey(hoofdartiest(t.artist)),
+      },
+      bezit: () => {for (final t in library.tracks) artistKey(hoofdartiest(t.artist))},
+      bestand: appFile('aanbevolen.json'),
+      log: WarmLog('$logDir${Platform.pathSeparator}releases.log').line,
+    );
+    AanbevolenVoorJou.pc = aanbevolen;
+    unawaited(aanbevolen.laad().then((_) => aanbevolen.start()));
+  }
 
   // Wat dit toestel tekent en hoe warm het wordt, naar `warmte.log` op de pc. Zie warmtemeter.dart:
   // de iPad werd heet en kon niet gemeten worden. Alleen op een toestel dat met een pc praat; de pc
@@ -13576,6 +13603,9 @@ class _StartCache {
   static List<CatalogAlbumHit> charts = [];
   static List<RecTrack> forYou = [];
 
+  /// Vraagt bij de volgende lading een VERSE lijst "Aanbevolen voor jou" (omlaag trekken).
+  static bool aanbevolenDwingen = false;
+
   /// De balk "Nieuwe release" en de rij eronder, en wanneer die het laatst gevraagd is. NIET in
   /// [leeg]: hij heeft zijn eigen houdbaarheid (op de pc zes uur, zie `nieuwe_releases.dart`), en een
   /// Ververs vraagt hem apart opnieuw — zonder eerst een leeg vlak te tonen.
@@ -13730,6 +13760,9 @@ class _HomeStartViewState extends State<HomeStartView> {
     super.initState();
     // Rekent de pc op de achtergrond opnieuw, dan staat de nieuwe balk er meteen.
     NieuweReleases.pc?.luister(_nieuwBijgewerkt);
+    // "Aanbevolen voor jou" meteen met wat er ligt: op de pc uit de dienst, op een toestel van
+    // schijf. Vernieuwen gebeurt daarna, in [_loadSeeds] — de rij wacht er niet meer op.
+    if (_forYou.isEmpty) unawaited(_aanbevolenUitVoorraad());
     // Charts need no library — load them right away. Maar niet opnieuw als ze er al zijn: zie
     // [_StartCache]. Anders haalt elke terugkeer naar Start dezelfde lijst nog een keer op, met een
     // spinner en een andere volgorde dan je net zag.
@@ -13771,16 +13804,60 @@ class _HomeStartViewState extends State<HomeStartView> {
   /// terug, en dat is erger dan geen knop.
   Future<void> _ververs() async {
     if (_chartsLoading || _seedsLoading) return;
+    // Aanbevolen blijft staan tot de nieuwe lijst er is: omlaag trekken mag de rij niet leeg maken.
+    final hield = _forYou;
     _StartCache.leeg();
+    _StartCache.forYou = hield;
+    _StartCache.aanbevolenDwingen = true;
     setState(() {
       _charts = [];
-      _forYou = [];
       _chartsLoading = true;
       _seedsRequested = false;
     });
     // De releases opnieuw berekenen, maar de oude laten staan tot de nieuwe er zijn.
     unawaited(_laadNieuw(dwing: true));
     await _loadCharts();
+  }
+
+  /// Wat er al ligt voor "Aanbevolen voor jou", zonder te wachten op Deezer.
+  Future<void> _aanbevolenUitVoorraad() async {
+    List<RecTrack> lijst = AanbevolenVoorJou.pc?.lijst?.nummers ?? const [];
+    if (lijst.isEmpty && AanbevolenVoorJou.pc == null) {
+      try {
+        final f = appFile('aanbevolen.json');
+        if (await f.exists()) lijst = AanbevolenLijst.fromJson(jsonDecode(await f.readAsString()))?.nummers ?? const [];
+      } catch (_) {}
+    }
+    if (!mounted || lijst.isEmpty || _forYou.isNotEmpty) return;
+    final lib = context.read<LibraryStore>();
+    final schoon = maxPerArtiest(nogNietInBezit(lijst, bezitSleutels(lib.tracks)), (t) => t.artist, 2);
+    if (schoon.isEmpty) return;
+    _StartCache.forYou = schoon;
+    setState(() => _forYou = schoon);
+  }
+
+  /// "Aanbevolen voor jou" vers: op de pc uit de dienst (opnieuw als hij verouderd is of je trok),
+  /// op een toestel van de pc — en die wordt op schijf bewaard voor de volgende start. Kent de pc
+  /// `/api/aanbevolen` nog niet, dan zoals vroeger op dit toestel zelf.
+  Future<List<RecTrack>> _haalAanbevolen(List<String> seeds) async {
+    final dwing = _StartCache.aanbevolenDwingen;
+    _StartCache.aanbevolenDwingen = false;
+    final pc = AanbevolenVoorJou.pc;
+    if (pc != null) {
+      if (dwing || pc.verouderd) await pc.ververs();
+      return pc.lijst?.nummers ?? const [];
+    }
+    final client = context.read<LibraryStore>().remote;
+    if (client != null) {
+      final r = await client.aanbevolen(ververs: dwing);
+      final lijst = AanbevolenLijst.fromJson(r.lijst);
+      if (lijst != null) {
+        unawaited(appFile('aanbevolen.json').writeAsString(jsonEncode(lijst.toJson())).then((_) {}, onError: (_) {}));
+        return lijst.nummers;
+      }
+      if (!r.onbekend) return _forYou;
+    }
+    return _rec.discover(seeds.take(6).toList());
   }
 
   /// The personal rows depend on the scanned library. On a cold start the scan is still running
@@ -13835,7 +13912,7 @@ class _HomeStartViewState extends State<HomeStartView> {
         : AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
             .maakAanbevelingen(profielVoorAi);
     // De nieuwe releases staan hier niet meer tussen: die komen apart, en meteen — zie [_laadNieuw].
-    final fyF = _rec.discover(seeds.take(6).toList());
+    final fyF = _haalAanbevolen(seeds);
     final genreF = profiel.isEmpty
         ? Future.value(<CatalogAlbumHit>[])
         : _catalog.chartPerGenre(profiel);

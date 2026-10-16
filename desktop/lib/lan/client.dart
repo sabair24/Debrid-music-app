@@ -688,6 +688,19 @@ class RemoteClient {
   /// [onbekend] is waar als de pc de vraag niet kent — een oudere pc. Dan rekent dit toestel zelf;
   /// bij een pc die gewoon even niet antwoordt niet, want dat kost honderd vragen aan Deezer voor iets
   /// wat de pc straks gewoon heeft.
+  /// "Aanbevolen voor jou" van de pc. [onbekend] = de pc kent `/api/aanbevolen` nog niet (oude versie).
+  Future<({Map<String, dynamic>? lijst, bool onbekend})> aanbevolen({bool ververs = false}) async {
+    try {
+      final res = await _get('/api/aanbevolen', query: ververs ? const {'ververs': '1'} : null);
+      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      return (lijst: j is Map<String, dynamic> ? j : null, onbekend: false);
+    } on RemoteException catch (e) {
+      return (lijst: null, onbekend: e.statusCode == 404);
+    } catch (_) {
+      return (lijst: null, onbekend: false);
+    }
+  }
+
   Future<({Map<String, dynamic>? lijst, bool onbekend})> nieuweReleases({bool ververs = false}) async {
     try {
       final res = await _get('/api/releases', query: ververs ? const {'ververs': '1'} : null);

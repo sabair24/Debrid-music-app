@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'aanbevolen.dart' show kiesNummers, rangschikKandidaten;
 
 import 'deezerbaan.dart';
 import 'radiobuurt.dart';
@@ -534,6 +535,36 @@ class RecommendService {
     spoor?.call('radio-buurt: $erbij nummers uit ${gekend.length} van de ${gekozen.length} gekozen '
         'namen — ${gekend.join(', ')}'
         '${onbekend.isEmpty ? '' : ' | Deezer kende niet: ${onbekend.join(', ')}'}');
+  }
+
+  /// "Aanbevolen voor jou" (16-10-2026): zie `aanbevolen.dart` voor het waarom.
+  ///
+  /// Alle zaden TEGELIJK (eerst stond hier elk zaad na het vorige), dan de bovenste [kandidaten]
+  /// verwante artiesten die je nog niet hebt, ook tegelijk. Zes zaden en twaalf kandidaten zijn
+  /// samen 24 vragen in twee golven, in plaats van zes keer na elkaar zes.
+  Future<List<RecTrack>> ontdekVoorJou(List<({String naam, double gewicht})> zaden, Set<String> bezit,
+      {int kandidaten = 12, int max = 15}) async {
+    final verwant = await Future.wait([
+      for (final z in zaden)
+        () async {
+          final id = await _artistId(z.naam);
+          if (id == null) return (z.naam, const <({int id, String naam})>[]);
+          final rel = ((await _get('$_base/artist/$id/related?limit=20'))?['data'] as List?) ?? const [];
+          return (
+            z.naam,
+            [
+              for (final a in rel)
+                if (a is Map && a['id'] is num) (id: (a['id'] as num).toInt(), naam: '${a['name'] ?? ''}'),
+            ]
+          );
+        }(),
+    ]);
+    final rang = rangschikKandidaten({for (final (zaad, lijst) in verwant) zaad: lijst},
+        gewicht: {for (final z in zaden) z.naam: z.gewicht}, bezit: bezit);
+    final top = rang.take(kandidaten).toList();
+    final toppers = await Future.wait([for (final k in top) _top(k.id, k.naam, limit: 8)]);
+    return kiesNummers([for (var i = 0; i < top.length; i++) (kandidaat: top[i], toppers: _tracks(toppers[i]))],
+        max: max);
   }
 
   /// Discovery feed: top tracks from artists related to the given library seeds.
