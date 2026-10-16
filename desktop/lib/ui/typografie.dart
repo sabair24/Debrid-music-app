@@ -54,6 +54,9 @@ const kDisplayKlein = TextStyle(
 /// bureaublad, 84 op een iPad liggend, 76 staand, 46 op een telefoon of televisie. Alles daarbuiten
 /// schaalt mee met de breedte, met een bodem zodat een heel smal venster niet in onleesbaarheid
 /// eindigt.
+///
+/// Een televisie hoort hier niet in: een Shield is 960 punten breed en zou de maat van een iPad
+/// krijgen. Die gebruikt [kTvArtiestNaam].
 double artiestNaamGrootte(double breedte) {
   if (breedte >= 1280) return 132;
   if (breedte >= 1100) return 96;
@@ -62,6 +65,11 @@ double artiestNaamGrootte(double breedte) {
   if (breedte >= 500) return 58;
   return (breedte * .118).clamp(34, 46);
 }
+
+/// De artiestnaam op een televisie: de 46 uit de ontwerpschets. Met de 1,35 waarmee een tv alle
+/// tekst vergroot, zijn de letters 62 punten — ongeveer de helft van de 113 die er stonden (Saber,
+/// 16-10-2026: "naam text is veel te groot").
+const double kTvArtiestNaam = 46;
 
 /// De naam van een scherm, of van een album op zijn eigen pagina.
 const kKopGroot = TextStyle(

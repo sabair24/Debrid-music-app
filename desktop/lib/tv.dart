@@ -16,6 +16,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'navigatie.dart' show BalkRuimte;
 import 'ui/glas.dart';
 import 'ui/kleuren.dart';
 
@@ -197,6 +198,7 @@ class Pressable extends StatefulWidget {
     this.onFocusChange,
     this.focusScale,
     this.vastePlek = true,
+    this.schuifInBeeld = true,
   });
 
   final Widget child;
@@ -243,6 +245,11 @@ class Pressable extends StatefulWidget {
   /// Uit voor wat zelf al beslist waar het hoort, zoals de bovenbalk.
   final bool vastePlek;
 
+  /// Op een tv: de lijst eromheen laten schuiven als dit de selectie krijgt. Uit waar de omgeving
+  /// dat zelf regelt — de kop van de artiestpagina gaat in zijn geheel naar boven zodra de selectie
+  /// erin komt, en een link die zichzelf daarna nog naar zijn vaste plek trekt, schuift hem weer weg.
+  final bool schuifInBeeld;
+
   @override
   State<Pressable> createState() => _PressableState();
 }
@@ -275,7 +282,7 @@ class _PressableState extends State<Pressable> {
   /// Here rather than at forty call sites, and only on a television: with a mouse the pointer is
   /// already the answer, and a list that scrolls itself under the cursor would be maddening.
   void _bringIntoView() {
-    if (!isTv) return;
+    if (!isTv || !widget.schuifInBeeld) return;
     final scrollable = Scrollable.maybeOf(context);
     if (scrollable == null) return;
     // After the frame: the highlight often arrives during a build, and asking a scrollable to move
@@ -614,6 +621,64 @@ const double kTvKaartGroei = 1.03;
 /// knop): wit op 14 %, geen rand, geen gloed.
 const kTvSelectieGlas = Color(0x24FFFFFF);
 
+/// Een tekstlink: een naam onder "Ook in", "Toon alles", "Meer lezen".
+///
+/// Op een tv zonder vak en zonder paars: met de selectie worden de letters wit, met een witte lijn
+/// eronder, net als een gekozen regel van "In mijn bibliotheek" (Saber, 16-10-2026: "witte tekst,
+/// onderstreept"). Het grijze vak dat hij hiervoor kreeg stond soms scheef over de letters. Elders
+/// verandert er niets: daar zegt de muis waar je bent.
+///
+/// [bouw] krijgt mee of de link nu de selectie heeft; [tvLinkStijl] maakt daar de letters bij.
+class TekstLink extends StatefulWidget {
+  const TekstLink({
+    super.key,
+    required this.onPressed,
+    required this.bouw,
+    this.borderRadius = const BorderRadius.all(Radius.circular(4)),
+    this.schuifInBeeld = true,
+  });
+
+  final VoidCallback? onPressed;
+  final Widget Function(bool gekozen) bouw;
+  final BorderRadius borderRadius;
+
+  /// Zie [Pressable.schuifInBeeld].
+  final bool schuifInBeeld;
+
+  @override
+  State<TekstLink> createState() => _TekstLinkState();
+}
+
+class _TekstLinkState extends State<TekstLink> {
+  bool _gekozen = false;
+
+  @override
+  Widget build(BuildContext context) => Pressable(
+        onPressed: widget.onPressed,
+        borderRadius: widget.borderRadius,
+        // Op een tv is de lijn onder de letters de selectie; elders de ring, zoals altijd.
+        ringOnFocus: !isTv,
+        // Een tekstlink en geen tegel: uitvergroot duwt hij tegen zijn buurman en valt de rand scheef
+        // over de letters. Gezien op de Shield, 11-09-2026.
+        scaleOnFocus: false,
+        schuifInBeeld: widget.schuifInBeeld,
+        onFocusChange: (heeft) {
+          if (isTv && heeft != _gekozen && mounted) setState(() => _gekozen = heeft);
+        },
+        child: widget.bouw(isTv && _gekozen),
+      );
+}
+
+/// De letters van een [TekstLink]: gekozen wit met een witte lijn eronder, anders [basis].
+TextStyle tvLinkStijl(TextStyle basis, bool gekozen) => gekozen
+    ? basis.copyWith(
+        color: kTekst,
+        decoration: TextDecoration.underline,
+        decorationColor: kTekst,
+        decorationThickness: 2,
+      )
+    : basis;
+
 /// Hoeveel ruimte er op een tv boven de selectie blijft in een lijst die omhoog en omlaag schuift:
 /// genoeg voor de kop van een rij ("Recent toegevoegd") met wat lucht. Zie [tvVastePlek].
 const double kTvBovenruimte = 56;
@@ -642,11 +707,17 @@ void tvVastePlek(BuildContext context, {Duration duur = const Duration(milliseco
   while (lijst != null && doel != null && doel.attached) {
     final pos = lijst.position;
     final viewport = RenderAbstractViewport.maybeOf(doel);
+    // De balk telt alleen voor de buitenste lijst, de pagina zelf. Een lijst ín de pagina (de albums
+    // van "In mijn bibliotheek" op een tv) schuift tegelijk met de pagina, en waar die nu staat zegt
+    // niets over waar hij zo meteen staat.
+    final pagina = Scrollable.maybeOf(lijst.context) == null;
     if (viewport != null && pos.hasContentDimensions) {
       final liggend = pos.axis == Axis.horizontal;
       final naar = vastePlekDoel(
         onthul: viewport.getOffsetToReveal(doel, 0).offset,
-        voorrand: liggend ? _binnenmarge(viewport) : kTvBovenruimte,
+        voorrand: liggend
+            ? _binnenmarge(viewport)
+            : kTvBovenruimte + (pagina ? _onderDeBalk(context, viewport) : 0),
         min: pos.minScrollExtent,
         max: pos.maxScrollExtent,
       );
@@ -758,6 +829,20 @@ class SpoelPijlen {
     _neer = null;
     _sprongen = 0;
   }
+}
+
+/// Hoeveel van een staande lijst achter de zwevende balk ligt.
+///
+/// Op een pagina die onder de balk door tekent (de artiestpagina, sinds de balk ook op een tv zweeft)
+/// begint de lijst bovenaan het venster. Zonder dit kwam de vaste plek van de selectie 56 punten onder
+/// de bovenrand — achter de capsule. Elke andere pagina begint al onder de balk, en daar is dit nul.
+double _onderDeBalk(BuildContext context, RenderAbstractViewport viewport) {
+  final ruimte = BalkRuimte.van(context);
+  if (ruimte <= 0 || viewport is! RenderBox) return 0;
+  final vak = viewport as RenderBox;
+  if (!vak.hasSize) return 0;
+  final boven = vak.localToGlobal(Offset.zero).dy;
+  return boven >= ruimte ? 0 : ruimte - boven;
 }
 
 /// De marge aan het begin van een lijst (`ListView(padding: …)` wordt een [RenderSliverPadding]).

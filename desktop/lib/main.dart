@@ -13,6 +13,7 @@ import 'dart:ui' show AppExitResponse, PlatformDispatcher;
 // For PointerDeviceKind: the nav chip is drag-scrolled with a mouse, which Flutter leaves out of
 // the default set on purpose.
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
+import 'package:flutter/rendering.dart' show RenderProxyBox;
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
@@ -2137,6 +2138,76 @@ class _HomeShellState extends State<HomeShell> {
   /// precies de knop die je niet kon indrukken.
   final _tvMelding = FocusScopeNode(debugLabel: 'tv-melding');
 
+  /// Hoe hoog de melding en de statusregel onder de zwevende tv-balk samen zijn (nul als er niets
+  /// staat). De pagina's houden zoveel extra vrij; zie de berekening van `ruimte` in [build].
+  double _tvMeldingHoogte = 0;
+
+  void _zetTvMeldingHoogte(double h) {
+    if (mounted && h != _tvMeldingHoogte) setState(() => _tvMeldingHoogte = h);
+  }
+
+  /// De zwevende laag van een tv: de capsule met de tabbladen, en eronder de melding en de
+  /// statusregel als die er zijn.
+  ///
+  /// **Waarom hij zweeft (Saber, 16-10-2026: "zie je foto loopt ook niet door tot boven").** Hij stond
+  /// als bovenste kind in de kolom, en een pagina kan niet boven haar ouder uit tekenen: de foto van
+  /// een artiest begon 75 punten lager, met in de tv-rand ertussen een wazige band van de achtergrond.
+  /// Nu ligt hij over de pagina's heen, zoals op de pc. Wat er niet onderdoor wil, schuift er via
+  /// [BalkRuimte] onder vandaan en staat precies waar het stond.
+  ///
+  /// De melding en de statusregel krijgen hier een donkere grond: ze liggen nu over een foto, en hun
+  /// grijze letters stonden tot nu toe op de effen achtergrond van de schil.
+  Widget _tvBovenlaag() => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FocusScope(
+            node: _tvBalk,
+            // De spelerbalk als laatste: op een lege pagina (Favorieten zonder favorieten) is er
+            // anders vanuit de balk geen weg naar beneden.
+            onKeyEvent: (_, e) => _tvSprong(e, LogicalKeyboardKey.arrowDown, TraversalDirection.down,
+                [_tvMelding, _tvInhoud, _tvSpeler]),
+            child: RepaintBoundary(
+              child: TvTopBar(
+                view: _view,
+                knoppen: _tvKnoppen,
+                onPick: _gaNaar,
+                onIn: _tvNaarInhoud,
+                onSearch: _tvSearch,
+                onSettings: () => showDialog(context: context, builder: (_) => const SettingsDialog()),
+              ),
+            ),
+          ),
+          _MeetHoogte(
+            onHoogte: _zetTvMeldingHoogte,
+            child: DecoratedBox(
+              decoration: const BoxDecoration(color: Color(0xE607080C)),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // De melding krijgt op een tv een eigen halte tussen de navigatie en de inhoud.
+                  // Staat er geen melding, dan is deze scope leeg en slaat [_tvSprong] hem over; je
+                  // merkt er dus niets van zolang alles het doet.
+                  FocusScope(
+                    node: _tvMelding,
+                    onKeyEvent: (_, e) {
+                      final omhoog =
+                          _tvSprong(e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, [_tvBalk]);
+                      if (omhoog != KeyEventResult.ignored) return omhoog;
+                      return _tvSprong(e, LogicalKeyboardKey.arrowDown, TraversalDirection.down,
+                          [_tvInhoud, _tvSpeler]);
+                    },
+                    child: const _OfflineBanner(),
+                  ),
+                  const _TvStatusStrip(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+
   /// Vangt de pijl die de scope uit wil.
   ///
   /// Eerst de pagina zelf laten proberen: is er binnen de inhoud nog iets boven je, dan hoort de
@@ -2836,7 +2907,13 @@ class _HomeShellState extends State<HomeShell> {
     final zweeft = !isTv &&
         !isCompact(context) &&
         !context.select<LibraryStore, bool>((l) => l.fromCloudMirror);
-    final ruimte = zweeft ? _breedeBalkHoogte(context) : 0.0;
+    // Op een tv zweeft de capsule ook, sinds 16-10-2026 (Saber: "zie je foto loopt ook niet door tot
+    // boven"). Daar stond hij als strook in de kolom, en de foto van een artiest begon 75 punten lager.
+    // Een melding of de statusregel komt er ONDER, mee in de zwevende laag; de ruimte die de pagina's
+    // vrijhouden groeit dan met hun hoogte, zodat er niets achter verdwijnt. Zie [_MeetHoogte].
+    final ruimte = zweeft
+        ? _breedeBalkHoogte(context)
+        : (isTv ? TvTopBar.hoogte + tvOverscan.top + _tvMeldingHoogte : 0.0);
     // Op een gsm (staand, geen tv) liggen de spelerbalk en de onderbalk als glas óver de pagina's
     // (Saber, 16-10-2026: "minispeler en onderbalk" van glas, de inhoud schuift eronder door). Niet
     // terwijl het toetsenbord open is: dan zijn de balken er niet. Zie [metGlasBalken].
@@ -2964,45 +3041,9 @@ class _HomeShellState extends State<HomeShell> {
               // Alleen nog hier als hij NIET zweeft: op een telefoon, en op de pc zolang de
               // offline-melding er staat. Anders ligt hij als laatste laag over de Stack heen.
               if (!isTv && !zweeft) RepaintBoundary(child: _topBar()),
-              // Op een tv staat de navigatie BOVENAAN in plaats van in een rail links. Zie TvTopBar
-              // voor waarom hij daar weg moest: hij was met de afstandsbediening niet te bereiken.
-              if (isTv)
-                FocusScope(
-                  node: _tvBalk,
-                  // De spelerbalk als laatste: op een lege pagina (Favorieten zonder favorieten) is er
-                  // anders vanuit de balk geen weg naar beneden.
-                  onKeyEvent: (_, e) => _tvSprong(e, LogicalKeyboardKey.arrowDown,
-                      TraversalDirection.down, [_tvMelding, _tvInhoud, _tvSpeler]),
-                  child: RepaintBoundary(
-                  child: TvTopBar(
-                    view: _view,
-                    knoppen: _tvKnoppen,
-                    onPick: _gaNaar,
-                    onIn: _tvNaarInhoud,
-                    onSearch: _tvSearch,
-                    onSettings: () =>
-                        showDialog(context: context, builder: (_) => const SettingsDialog()),
-                  ),
-                ),
-                ),
-              // De melding krijgt op een tv een eigen halte tussen de navigatie en de inhoud. Staat
-              // er geen melding, dan is deze scope leeg en slaat [_tvSprong] hem over; je merkt er
-              // dus niets van zolang alles het doet.
-              _AlleenOpTv(
-                bouw: (kind) => FocusScope(
-                  node: _tvMelding,
-                  onKeyEvent: (_, e) {
-                    final omhoog = _tvSprong(
-                        e, LogicalKeyboardKey.arrowUp, TraversalDirection.up, [_tvBalk]);
-                    if (omhoog != KeyEventResult.ignored) return omhoog;
-                    return _tvSprong(e, LogicalKeyboardKey.arrowDown, TraversalDirection.down,
-                        [_tvInhoud, _tvSpeler]);
-                  },
-                  child: kind,
-                ),
-                child: const _OfflineBanner(),
-              ),
-              const _TvStatusStrip(),
+              // Op een tv staan de navigatie, de melding en de statusregel in de zwevende laag
+              // onderaan deze Stack — zie [_tvBovenlaag].
+              if (!isTv) const _OfflineBanner(),
             ],
             Expanded(
               // De wachtrij staat NAAST de inhoud en niet erboven: een venster zou dichtgaan zodra
@@ -3148,6 +3189,7 @@ class _HomeShellState extends State<HomeShell> {
             // scrollstap opnieuw gebouwd — het glas dat bij scrollen opkomt hoort bij de pagina zelf.
             if (zweeft)
               Positioned(top: 0, left: 0, right: 0, child: RepaintBoundary(child: _topBar())),
+            if (isTv) Positioned(top: 0, left: 0, right: 0, child: _tvBovenlaag()),
           ],
         ),
       ),
@@ -4123,6 +4165,39 @@ class _AlleenOpTv extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => isTv ? bouw(child) : child;
+}
+
+/// Meldt de hoogte van zijn kind, na elk beeld waarin die veranderde.
+///
+/// Voor de melding onder de zwevende tv-balk: hoe hoog die is, weet alleen de opmaak, en de pagina's
+/// moeten er zoveel extra voor vrijhouden. Eén beeld later dan de opmaak zelf; dat zie je niet.
+class _MeetHoogte extends SingleChildRenderObjectWidget {
+  const _MeetHoogte({required this.onHoogte, super.child});
+
+  final ValueChanged<double> onHoogte;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderMeetHoogte(onHoogte);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderMeetHoogte renderObject) =>
+      renderObject.onHoogte = onHoogte;
+}
+
+class _RenderMeetHoogte extends RenderProxyBox {
+  _RenderMeetHoogte(this.onHoogte);
+
+  ValueChanged<double> onHoogte;
+  double? _laatste;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final h = size.height;
+    if (h == _laatste) return;
+    _laatste = h;
+    WidgetsBinding.instance.addPostFrameCallback((_) => onHoogte(h));
+  }
 }
 
 /// Staat de focus ergens waar een pijl niets mee kan?
@@ -8684,7 +8759,8 @@ class _PersonPageState extends State<PersonPage> {
         ),
       ),
           // Het glas achter de zwevende balk, en het hoort bij deze pagina — zie de artiestpagina.
-          if (BalkRuimte.van(context) > 0)
+          // Daar ook waarom niet op een tv.
+          if (BalkRuimte.van(context) > 0 && !isTv)
             Positioned(
               top: 0,
               left: 0,
@@ -20241,6 +20317,17 @@ class _GetekendeSchijf extends StatelessWidget {
   }
 }
 
+/// De hoes in het paneel naast "In mijn bibliotheek" op een tv.
+///
+/// Zo groot als past (Saber, 16-10-2026): tussen de onderkant van de balk plus de vaste plek (131) en
+/// de spelerbalk (436) is 305 punten, en daarin moeten de hoes, de titel in twee regels en het jaartal.
+/// De cd ernaast krijgt 85 % van deze breedte.
+const double kTvPaneelHoes = 180;
+
+/// Hoe hoog de lijst naast dat paneel hoogstens wordt voor hij zelf schuift: dezelfde 305 punten,
+/// zodat lijst en hoes samen in één scherm staan.
+const double kTvLijstHoogte = 300;
+
 /// De platen die je van deze artiest hebt, als getrapte genummerde lijst.
 ///
 /// **Waarom een lijst en geen raster.** Een raster van vierkante tegels zegt over elke plaat
@@ -20249,13 +20336,15 @@ class _GetekendeSchijf extends StatelessWidget {
 /// discografie blijft wél een raster — eenenzestig getrapte regels zijn een muur.
 ///
 /// **De trap.** Elke regel springt een stukje verder in en dan weer terug: 0 / 72 / 24 / 128 / 48 /
-/// 96, herhalend. Dat ritme komt uit het ontwerp waar Saber om vroeg. Het is versiering, en daarom
-/// gaat hij eraf zodra hij in de weg zit:
+/// 96, herhalend. Dat ritme komt uit het ontwerp waar Saber om vroeg. Op een telefoon wordt de trap
+/// halfzo diep (0 / 20), want meer inspringing eet de titel op en dan is de speelsheid het lezen niet
+/// meer waard.
 ///
-///   * **op een televisie** staat de lijst RECHT. Met vier pijltjes moet de markering
-///     voorspelbaar omlaag lopen; schuin springen is daar geen speelsheid maar een doolhof.
-///   * **op een telefoon** wordt de trap halfzo diep (0 / 20), want meer inspringing eet de titel
-///     op en dan is de speelsheid het lezen niet meer waard.
+/// **Op een televisie zoals op de pc** (Saber, 16-10-2026: "ik wil de album zien met de cd die eruit
+/// schuift net zoals pc, mac"): getrapt, met het paneel ernaast, en de selectie is wat op de pc het
+/// aanwijzen is — de cd komt bij elke regel uit de hoes, OK opent de plaat. Daarvoor stond de lijst
+/// daar recht, met een duimnagel voor elke titel en een grijze glasbalk als selectie. Omlaag loopt
+/// ook getrapt gewoon naar de volgende regel: ze staan onder elkaar, alleen niet even ver.
 class GetrapteLijst extends StatefulWidget {
   const GetrapteLijst({super.key, required this.albums});
   final List<Album> albums;
@@ -20281,6 +20370,20 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
 
   /// Zodat een tweede tik tijdens het schuiven geen tweede pagina opent.
   bool _bezig = false;
+
+  /// Welke regel op een tv nu de selectie heeft; null als die buiten de lijst staat. Daar ÍS de witte,
+  /// onderstreepte titel de selectie, dus hoort hij weg te gaan zodra de selectie weggaat — anders
+  /// lijkt hij nog in de lijst te staan terwijl je op Radio staat.
+  int? _focus;
+
+  /// De lijst op een tv schuift zelf, naast het paneel — zie [_tvLijst].
+  final _tvRol = ScrollController();
+
+  @override
+  void dispose() {
+    _tvRol.dispose();
+    super.dispose();
+  }
 
   /// Hoe lang de cd erover doet als hij nog IN de hoes zat. Gelijk aan de uitschuif van [AlbumArt]
   /// zelf (750 ms) zou hier te lang zijn — je wacht erop voor je verder mag.
@@ -20332,7 +20435,9 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
   @override
   Widget build(BuildContext context) {
     final smal = isCompact(context);
-    final breed = !smal && !isTv && MediaQuery.sizeOf(context).width >= 1000;
+    // Op een tv altijd met het paneel: 960 punten is genoeg voor lijst én hoes, als de hoes de maat
+    // krijgt die tussen de balk en de spelerbalk past ([kTvPaneelHoes]).
+    final breed = isTv || (!smal && MediaQuery.sizeOf(context).width >= 1000);
     final marge = smal ? 18.0 : (isTablet(context) ? 28.0 : 56.0);
     final aan = _aan.clamp(0, widget.albums.length - 1);
 
@@ -20341,7 +20446,7 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
       mainAxisSize: MainAxisSize.min,
       children: [
         for (var i = 0; i < widget.albums.length; i++)
-          _rij(context, i, aan, smal: smal, recht: isTv, metPaneel: breed),
+          _rij(context, i, aan, smal: smal, metPaneel: breed),
       ],
     );
 
@@ -20354,14 +20459,16 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
                 // Weg van de lijst is de plaat weer in de hoes. Zonder dit blijft de laatste die je
                 // aanwees eeuwig uitgeschoven staan, en dan is het geen gebaar meer maar een stand.
                 Expanded(
-                  child: MouseRegion(
-                    onExit: (_) {
-                      if (mounted) setState(() => _schuift = false);
-                    },
-                    child: lijst,
-                  ),
+                  child: isTv
+                      ? _tvLijst(lijst)
+                      : MouseRegion(
+                          onExit: (_) {
+                            if (mounted) setState(() => _schuift = false);
+                          },
+                          child: lijst,
+                        ),
                 ),
-                const SizedBox(width: 56),
+                SizedBox(width: isTv ? 32 : 56),
                 _paneel(widget.albums[aan]),
               ],
             )
@@ -20369,12 +20476,70 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
     );
   }
 
-  Widget _rij(BuildContext context, int i, int aan,
-      {required bool smal, required bool recht, required bool metPaneel}) {
+  /// De lijst op een tv: in een eigen vak naast het paneel, dat zelf schuift.
+  ///
+  /// Saber koos op 16-10-2026 "hoes blijft staan, lijst schuift": de lijst en de hoes passen samen in
+  /// één scherm, en in een lange lijst schuiven alleen de regels — de hoes blijft op zijn plek. Zonder
+  /// eigen vak zou de vaste plek van de selectie ([tvVastePlek]) bij de zevende plaat de hele pagina
+  /// verschuiven, en dan stond het paneel bovenaan de lijst uit beeld.
+  ///
+  /// Gaat de selectie de lijst uit (omhoog naar Radio, omlaag naar de discografie), dan gaat de cd
+  /// terug in de hoes, net als op de pc wanneer de muis de lijst verlaat.
+  Widget _tvLijst(Widget lijst) => Focus(
+        canRequestFocus: false,
+        skipTraversal: true,
+        onFocusChange: (heeft) {
+          if (!heeft && mounted) {
+            setState(() {
+              _focus = null;
+              _schuift = false;
+            });
+          }
+        },
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: kTvLijstHoogte),
+          // Waar er nog regels boven of onder staan, lopen ze zacht uit in plaats van dat er een halve
+          // titel afgesneden staat. Altijd dezelfde ShaderMask, ook zonder uitloop: een omhulsel dat
+          // er soms wel en soms niet is, bouwt de lijst opnieuw op en gooit de selectie weg. Het
+          // verloop wordt pas bij het tekenen uitgerekend, dus het volgt elke schuifstap.
+          child: ListenableBuilder(
+            listenable: _tvRol,
+            builder: (_, kind) => ShaderMask(
+              blendMode: BlendMode.dstIn,
+              shaderCallback: (r) {
+                final p = _tvRol.hasClients ? _tvRol.position : null;
+                final heeft = p != null && p.hasContentDimensions;
+                final boven = heeft && p.pixels > .5;
+                final onder = heeft && p.pixels < p.maxScrollExtent - .5;
+                final uitloop = r.height <= 0 ? 0.0 : (28 / r.height).clamp(0.0, .5);
+                return LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    boven ? const Color(0x00000000) : const Color(0xFF000000),
+                    const Color(0xFF000000),
+                    const Color(0xFF000000),
+                    onder ? const Color(0x00000000) : const Color(0xFF000000),
+                  ],
+                  stops: [0, uitloop, 1 - uitloop, 1],
+                ).createShader(r);
+              },
+              child: kind,
+            ),
+            child: SingleChildScrollView(controller: _tvRol, child: lijst),
+          ),
+        ),
+      );
+
+  Widget _rij(BuildContext context, int i, int aan, {required bool smal, required bool metPaneel}) {
     final a = widget.albums[i];
-    final gekozen = i == aan;
-    final inspring = recht ? 0.0 : (smal ? (i.isEven ? 0.0 : 20.0) : _trap[i % _trap.length]);
+    // Op een tv is gekozen wat de selectie heeft, en verder niets; elders wat je het laatst aanwees.
+    final gekozen = isTv ? i == _focus : i == aan;
+    final inspring = smal ? (i.isEven ? 0.0 : 20.0) : _trap[i % _trap.length];
     final jaar = a.year;
+    // Waar het nummer en het jaartal naast de titel staan: op de eerste regel, ongeveer op de hoogte
+    // van de letters. Op een tv is de titel kleiner, dus ook de afstand.
+    final naastTitel = smal || isTv ? 7.0 : 11.0;
 
     final regel = Padding(
       padding: EdgeInsets.only(left: inspring),
@@ -20383,35 +20548,27 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
-            padding: EdgeInsets.only(top: smal ? 7 : 11),
+            padding: EdgeInsets.only(top: naastTitel),
             child: SizedBox(
-              width: 26,
+              width: isTv ? 32 : 26,
               child: Text('${i + 1}'.padLeft(2, '0'),
                   style: kOpschrift.copyWith(color: gekozen ? kTekst : kUitgezet)),
             ),
           ),
-          // Op een televisie een duimnagel erbij: daar is geen paneel ernaast, en zonder beeld is
-          // een lijst met vier pijltjes wel erg kaal.
-          if (recht) ...[
-            SizedBox(
-              width: 44,
-              height: 44,
-              child: cover(a.cover, size: 44, radius: 2),
-            ),
-            const SizedBox(width: 14),
-          ],
           Flexible(
             child: Text(
               a.title.toUpperCase(),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: smal ? 19 : (isTv ? 24 : 34),
+                // Op een tv 20 (27 punten na de vergroting van 1,35): de lijst deelt het scherm daar
+                // met de hoes en de cd ernaast.
+                fontSize: smal ? 19 : (isTv ? 20 : 34),
                 fontWeight: FontWeight.w700,
                 letterSpacing: smal ? -.4 : -.8,
                 height: 1.05,
                 color: gekozen ? kTekst : kGedempt,
-                decoration: gekozen && !recht ? TextDecoration.underline : null,
+                decoration: gekozen ? TextDecoration.underline : null,
                 decorationColor: kTekst,
                 decorationThickness: 2,
               ),
@@ -20420,7 +20577,7 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
           if (jaar != null) ...[
             const SizedBox(width: 12),
             Padding(
-              padding: EdgeInsets.only(top: smal ? 7 : 11),
+              padding: EdgeInsets.only(top: naastTitel),
               child: Text('[ $jaar ]', style: kOpschrift),
             ),
           ],
@@ -20434,15 +20591,30 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
       onEnter: (_) => metPaneel ? _wijsAan(i) : setState(() => _aan = i),
       child: Pressable(
         onPressed: () => unawaited(_open(a, i, metPaneel: metPaneel)),
+        // Lang OK op een tv: hetzelfde menu als lang drukken op een hoes elders — afspelen, shuffle,
+        // wachtrij (Saber, 16-10-2026).
+        onLongPress: isTv ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
         borderRadius: BorderRadius.circular(6),
-        // Geen ring om een regel die al onderstreept wordt; op tv wél, want daar is de ring het
-        // enige dat zegt waar je bent.
-        ringOnFocus: isTv,
+        // Geen ring, en op een tv ook geen glas: de witte, onderstreepte titel is de selectie, zoals
+        // op de pc (Saber, 16-10-2026: "witte titel, onderstreept"). Het grijze glas dat hier op een
+        // tv stond, met "01" erbuiten, vond hij niet goed.
+        ringOnFocus: false,
+        // En niet groeien: een regel over de halve breedte die 14 % groeit, schoof met zijn nummer de
+        // marge in.
+        scaleOnFocus: !isTv,
         onFocusChange: (heeft) {
-          if (heeft && mounted) setState(() => _aan = i);
+          if (!heeft || !mounted) return;
+          if (isTv) {
+            // De selectie is op een tv wat op de pc het aanwijzen is: de cd komt uit de hoes, bij
+            // elke regel opnieuw (Saber: "meteen bij elke selectie").
+            _focus = i;
+            _wijsAan(i);
+          } else {
+            setState(() => _aan = i);
+          }
         },
         child: Padding(
-          padding: EdgeInsets.symmetric(vertical: smal ? 5 : 9),
+          padding: EdgeInsets.symmetric(vertical: smal ? 5 : (isTv ? 7 : 9)),
           child: regel,
         ),
       ),
@@ -20454,7 +20626,11 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
     // Breder waar het kan, want de plaat komt nu bijna helemaal vrij en moet ergens heen. Op een
     // scherm van 1240 punten en meer past 520 zonder dat de titels ernaast in de knel komen; daar
     // staan namen als "BLOOD ON THE DANCE FLOOR (HISTORY IN THE MIX)" en die zijn lang.
-    final vak = MediaQuery.sizeOf(context).width >= 1240 ? 520.0 : 420.0;
+    //
+    // Op een tv volgt het uit de hoes: die is zo groot als er tussen de balk en de spelerbalk past.
+    final vak = isTv
+        ? kTvPaneelHoes * (1 + _reis)
+        : (MediaQuery.sizeOf(context).width >= 1240 ? 520.0 : 420.0);
     // De hoes is smaller dan het paneel, want de cd moet ergens heen. Dezelfde rekensom als op het
     // speelscherm: `AlbumArt` reserveert `maat × (1 + reisfactor)` aan breedte.
     final hoes = vak / (1 + _reis);
@@ -20481,11 +20657,14 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
               uitgeschoven: _schuift,
               reisFactor: _reis,
             ),
-            const SizedBox(height: 18),
+            SizedBox(height: isTv ? 12 : 18),
+            // Op een tv 18 (24 punten na de vergroting): het paneel is daar 333 punten breed, en in
+            // 22 brak "NO STRINGS ATTACHED" al in twee regels die het jaartal tegen de spelerbalk
+            // duwden.
             Text(a.title.toUpperCase(),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: kKop.copyWith(letterSpacing: -.4)),
+                style: kKop.copyWith(letterSpacing: -.4, fontSize: isTv ? 18 : null)),
             const SizedBox(height: 8),
             Text(
               [
@@ -20499,6 +20678,10 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
         ));
   }
 }
+
+/// Hoeveel punten van een tv-scherm er tussen de zwevende balk en de spelerbalk liggen: 540 min 75
+/// voor de balk min 105 voor de spelerbalk. Zo hoog is de kop van de artiestpagina daar minstens.
+const double kTvKopZicht = 360;
 
 /// De kop van de artiestpagina: de naam paginabreed, met de artiest ernaast uitgeknipt.
 ///
@@ -20578,7 +20761,10 @@ class EditorialeKop extends StatelessWidget {
     // Plus de zijmarge van de tv. De artiestpagina geeft die hier niet meer mee, zodat de foto tot
     // de rand loopt; de tekst hoort wel binnen wat een tv laat zien. Elders is hij nul.
     final marge = (smal ? 18.0 : (tablet ? 28.0 : 56.0)) + tvOverscan.left;
-    final naamGrootte = artiestNaamGrootte(breedte);
+    // Op een tv de maat uit de ontwerpschets, 46. Een Shield is 960 punten breed en kreeg daardoor
+    // de maat van een iPad (84) — en vergroot alle tekst nog eens 1,35 keer: letters van 113 punten,
+    // een vijfde van het scherm (Saber, 16-10-2026: "naam text is veel te groot"; hij koos de helft).
+    final naamGrootte = isTv ? kTvArtiestNaam : artiestNaamGrootte(breedte);
 
     // Eén beeld en niet twee. Hier stond een BEELDLADDER — de artiest vrijstaand uitgeknipt
     // (`cutout`, anders `clearart`), en als die er niet was een rond portret rechtsonder. Saber
@@ -20624,7 +20810,10 @@ class EditorialeKop extends StatelessWidget {
           // de inhoud zelf nodig heeft — anders staat er onder de knoppen honderddertig punten niets.
           // Plus het stuk achter de zwevende balk: de ondergrens zegt hoeveel FOTO je ziet, en de
           // bloeding voegt foto toe. Zonder dit at de ondergrens het bloeden op waar hij bindt.
-          minHeight: (smal ? 0 : (breedte * .40).clamp(340.0, 620.0)) + bovenBloed,
+          //
+          // Op een tv precies het eerste scherm tussen de balk en de spelerbalk: de foto vult wat je
+          // ziet, en alles van de kop staat erin (Saber, 16-10-2026: "alles in één scherm").
+          minHeight: (smal ? 0 : (isTv ? kTvKopZicht : (breedte * .40).clamp(340.0, 620.0))) + bovenBloed,
           // En de volle breedte, EXPLICIET. Dit stond nergens: een `Stack` meet zich aan zijn
           // niet-gepositioneerde kinderen, en `Positioned.fill` telt daarin niet mee. Op de pagina
           // staat deze kop zélf in een `Stack` (naast de terugpijl), en die geeft LOSSE maten door —
@@ -20721,13 +20910,25 @@ class EditorialeKop extends StatelessWidget {
               // Op een gsm onder de ronde terugknop (8 + 44 punten): op 44 viel "[ Artiest ]" er half
               // onder (gezien op 11-10-2026). Wat het kopje zakt, gaat van de witruimte eronder af,
               // zodat de naam op dezelfde plek in de foto blijft.
-              padding: EdgeInsets.fromLTRB(marge, (smal ? 60 : 56) + bovenBloed, marge, smal ? 18 : 28),
+              //
+              // Op een tv krapper, zodat foto, naam, genre, "Ook in" en Radio samen in het eerste
+              // scherm passen. Daar stond de naam 150 punten onder het kopje, en dan bleef er onder de
+              // naam niets over: genre en Radio kwamen pas na twee keer omlaag.
+              //
+              // Het kopje staat daar NAAST de terugknop van de pagina (8 punten onder de balk, 44
+              // hoog, vanaf 10 + de zijmarge) en niet eronder: een naam van twee regels ("MICHAEL /
+              // JACKSON") duwde Radio anders net onder de spelerbalk.
+              padding: EdgeInsets.fromLTRB(
+                  marge, (smal ? 60 : (isTv ? 21 : 56)) + bovenBloed, marge, smal ? 18 : (isTv ? 14 : 28)),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('[ Artiest ]', style: kOpschrift),
-                  SizedBox(height: smal ? 104 : 150),
+                  Padding(
+                    padding: EdgeInsets.only(left: isTv ? 10 + tvOverscan.left + 44 + 12 - marge : 0),
+                    child: Text('[ Artiest ]', style: kOpschrift),
+                  ),
+                  SizedBox(height: smal ? 104 : (isTv ? 14 : 150)),
                   // De naam. Geen laatste trap nodig als er geen beeld is: dan draagt hij het
                   // kader alleen, en dat is een compositie in plaats van een gat.
                   for (var i = 0; i < kop.length; i++)
@@ -20758,13 +20959,15 @@ class EditorialeKop extends StatelessWidget {
                     ),
                   ],
 
-                  SizedBox(height: smal ? 20 : 30),
+                  SizedBox(height: smal ? 20 : (isTv ? 14 : 30)),
                   // De rechtermarge hield ruimte vrij voor de figuur die hier stond. Nu er niets
                   // meer rechts staat, mag de feitenstrook de breedte hebben — maar niet de hele:
                   // vier kolommen over tweeduizend punten lezen als losse eilanden. Een derde vrij
-                  // laten houdt ze bij elkaar, en de foto blijft daar zichtbaar.
+                  // laten houdt ze bij elkaar, en de foto blijft daar zichtbaar. Op een tv minder:
+                  // daar is het scherm geen tweeduizend punten, en elke regel feiten die er
+                  // bijkomt, duwt Radio onder de spelerbalk.
                   Padding(
-                    padding: EdgeInsets.only(right: smal ? 0 : breedte * .30),
+                    padding: EdgeInsets.only(right: smal ? 0 : breedte * (isTv ? .12 : .30)),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
@@ -20773,10 +20976,10 @@ class EditorialeKop extends StatelessWidget {
                         // wees hem aan op 06-09-2026: hij loopt dwars door de kop en langs de
                         // artiest, en hij scheidt niets wat niet al door de witruimte gescheiden is.
                         // De sectiekoppen hebben er wél een — daar staat hij tússen twee blokken.
-                        const SizedBox(height: 19),
+                        SizedBox(height: isTv ? 0 : 19),
                         Wrap(
-                          spacing: 40,
-                          runSpacing: 16,
+                          spacing: isTv ? 32 : 40,
+                          runSpacing: isTv ? 10 : 16,
                           children: [
                             if (soort != null && soort!.trim().isNotEmpty)
                               _Feit('Soort', tekst: soort),
@@ -20789,19 +20992,22 @@ class EditorialeKop extends StatelessWidget {
                                     spacing: 12,
                                     children: [
                                       for (final g in groepen.take(3))
-                                        Pressable(
+                                        // Niet zelf schuiven: de kop gaat in zijn geheel naar boven
+                                        // zodra de selectie erin komt (zie de artiestpagina).
+                                        TekstLink(
                                           onPressed: onGroep == null ? null : () => onGroep!(g),
-                                          borderRadius: BorderRadius.circular(4),
-                                          ringOnFocus: true,
-                                          // Een tekstlink en geen tegel: uitvergroot duwt hij tegen zijn buurman en valt de
-                                          // rand scheef over de letters. Gezien op de Shield, 11-09-2026.
-                                          scaleOnFocus: false,
-                                          child: Text(g,
-                                              style: kTekstNormaal.copyWith(
-                                                fontSize: 13.5,
-                                                decoration: TextDecoration.underline,
-                                                decorationColor: kLijn,
-                                              )),
+                                          schuifInBeeld: false,
+                                          bouw: (gekozen) => Text(g,
+                                              style: tvLinkStijl(
+                                                  kTekstNormaal.copyWith(
+                                                    fontSize: 13.5,
+                                                    // Op een tv grijs tot hij de selectie heeft: wit
+                                                    // met een witte lijn is dan het verschil.
+                                                    color: isTv ? kGedempt : null,
+                                                    decoration: TextDecoration.underline,
+                                                    decorationColor: kLijn,
+                                                  ),
+                                                  gekozen)),
                                         ),
                                     ],
                                   )),
@@ -20812,7 +21018,7 @@ class EditorialeKop extends StatelessWidget {
                   ),
 
                   if (actions.isNotEmpty) ...[
-                    SizedBox(height: smal ? 18 : 26),
+                    SizedBox(height: smal ? 18 : (isTv ? 16 : 26)),
                     // Een Wrap, om exact de reden die in [ArtistHero] staat: drie knoppen naast
                     // elkaar passen niet op 411 punten, en een knop die van het vak afloopt vangt
                     // geen tik meer.
@@ -21391,6 +21597,26 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
   /// De scroller van deze pagina: het glas achter de zwevende balk komt op naarmate je scrolt.
   final _rol = ScrollController();
+
+  /// De kop, om te meten hoe hoog hij is: zie [_kopInBeeld].
+  final _kopSleutel = GlobalKey();
+
+  /// Op een tv: de selectie komt in de kop, dus de kop in zijn geheel in beeld.
+  ///
+  /// Helemaal naar boven als hij past — en dat doet hij, daar is hij op afgesteld (Saber, 16-10-2026:
+  /// "alles in één scherm"). Is hij toch hoger dan wat er tussen de bovenrand en de spelerbalk past,
+  /// dan net zo ver dat zijn onderkant erboven staat: dan blijft Radio zichtbaar in plaats van achter
+  /// de spelerbalk, en valt de bovenkant van de foto weg.
+  void _kopInBeeld() {
+    if (!isTv || !_rol.hasClients) return;
+    final kop = _kopSleutel.currentContext?.size?.height;
+    final pos = _rol.position;
+    if (kop == null || !pos.hasContentDimensions) return;
+    final doel = (kop - pos.viewportDimension).clamp(0.0, pos.maxScrollExtent);
+    if ((pos.pixels - doel).abs() > .5) {
+      _rol.animateTo(doel, duration: const Duration(milliseconds: 220), curve: Curves.easeOutCubic);
+    }
+  }
 
   @override
   void initState() {
@@ -22015,7 +22241,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             // een tv 48 punten voor de rand op, met een strook van de schil ernaast -- gezien op de
             // Shield op 11-09-2026. De zijmarge zit nu op de inhoud: de tekst van de kop, de
             // terugpijl, en de groep onder de kop.
-            minimum: EdgeInsets.only(top: tvOverscan.top),
+            //
+            // En nul zodra de balk zweeft — sinds 16-10-2026 ook op een tv. `minimum` geldt óók als
+            // `top` uit staat, en dan begon de foto 27 punten onder de bovenrand.
+            minimum: EdgeInsets.only(top: ruimte > 0 ? 0 : tvOverscan.top),
         bottom: false,
         // Niet bovenaan als de balk zweeft: die houdt de statusbalk van een iPad al zelf vrij, en de
         // foto hoort daar juist onderdoor te lopen. [EditorialeKop] schuift de tekst omlaag.
@@ -22024,7 +22253,18 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         controller: _rol,
         slivers: [
           SliverToBoxAdapter(
-            child: Stack(
+            // Op een tv: komt de selectie in de kop (terug, Radio, een naam onder "Ook in"), dan gaat
+            // de pagina helemaal naar boven. De kop past in één scherm (Saber, 16-10-2026: "alles in
+            // één scherm"), en zo staat hij er ook heel als je er vanuit de albums naar terugkeert —
+            // de vaste plek zou Radio bovenaan zetten en de foto en de naam eruit schuiven.
+            child: Focus(
+              canRequestFocus: false,
+              skipTraversal: true,
+              onFocusChange: (heeft) {
+                if (heeft) _kopInBeeld();
+              },
+              child: Stack(
+              key: _kopSleutel,
               children: [
                 EditorialeKop(
                   naam: widget.artist.name,
@@ -22106,6 +22346,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 ),
               ],
             ),
+            ),
           ),
           // Alles onder de kop in één groep met de zijmarge van de tv: de kop zelf loopt tot de rand,
           // de rest blijft binnen wat een tv laat zien. Op elk ander toestel is die marge nul.
@@ -22179,20 +22420,18 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                     children: [
                       Text(_verborgenRegel(zeef),
                           style: const TextStyle(color: _muted, fontSize: 11.5)),
-                      Pressable(
+                      TekstLink(
                         onPressed: () => setState(() => _toonAlles = !_toonAlles),
-                        borderRadius: BorderRadius.circular(4),
-                        ringOnFocus: true,
-                        // Een tekstlink en geen tegel: uitvergroot duwt hij tegen zijn buurman en valt de
-                        // rand scheef over de letters. Gezien op de Shield, 11-09-2026.
-                        scaleOnFocus: false,
-                        child: Text(
+                        bouw: (gekozen) => Text(
                           _toonAlles ? 'Opruimen' : 'Toon alles',
-                          style: kTekstNormaal.copyWith(
-                            fontSize: 11.5,
-                            decoration: TextDecoration.underline,
-                            decorationColor: kLijn,
-                          ),
+                          style: tvLinkStijl(
+                              kTekstNormaal.copyWith(
+                                fontSize: 11.5,
+                                color: isTv ? kGedempt : null,
+                                decoration: TextDecoration.underline,
+                                decorationColor: kLijn,
+                              ),
+                              gekozen),
                         ),
                       ),
                     ],
@@ -22337,7 +22576,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           // de albumpagina: bij stilstand tekent hij niets, en de foto blijft onaangeroerd. Hij staat
           // hier en niet in de schil, zodat hij met deze pagina mee in- en uitschuift en nooit bij
           // een andere pagina achterblijft.
-          if (ruimte > 0)
+          //
+          // Niet op een tv: daar schuift de inhoud zichtbaar onder de capsule door (Saber,
+          // 16-10-2026), en matglas is op een Shield de duurste laag die er is.
+          if (ruimte > 0 && !isTv)
             Positioned(
               top: 0,
               left: 0,
@@ -22418,7 +22660,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final al = r.toCatalogAlbum();
     // Het merkje: welke catalogi deze plaat kennen. Alleen tonen als het iets toevoegt — bij één bron
     // zegt het niets, en drie letters onder elke tegel is ruis.
-    final merk = r.sources.length > 1
+    //
+    // Niet op een tv (Saber, 16-10-2026: "bronlabels weg"). Daar valt er niets mee te doen, en het
+    // groeide niet mee met een geselecteerde hoes: het bleef los in de hoek van de kleinere hoes staan.
+    final merk = !isTv && r.sources.length > 1
         ? r.sources.map((s) => switch (s) {
               DiscoSource.deezer => 'D',
               DiscoSource.musicbrainz => 'MB',
@@ -22511,19 +22756,20 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final smal = isCompact(context);
     final marge = _marge;
     final kop = Text(title.toUpperCase(),
-        // Twee regels op een tv. Een Shield vergroot tekst 1,35 keer, en dan past "VOLLEDIGE
-        // DISCOGRAFIE" niet meer naast de telling en de sorteerpil: er stond "VOLLEDIGE DISCOG..."
-        // (gezien op 12-09-2026). Elders blijft het één regel, want daar past het.
-        maxLines: isTv ? 2 : 1,
+        // Op een tv 20, en daarmee altijd één regel. Het was 30 in twee regels: een Shield vergroot
+        // tekst 1,35 keer, en dan paste "VOLLEDIGE DISCOGRAFIE" niet naast de telling en de
+        // sorteerpil (12-09-2026). Saber vond de koppen op 16-10-2026 te groot naast de kleinere naam
+        // ("kleiner, altijd één regel").
+        maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: kDisplayKlein.copyWith(fontSize: smal ? 28 : (isTv ? 30 : 56)));
+        style: kDisplayKlein.copyWith(fontSize: smal ? 28 : (isTv ? 20 : 56)));
     return Padding(
-      padding: EdgeInsets.fromLTRB(marge, smal ? 26 : 46, marge, smal ? 10 : 18),
+      padding: EdgeInsets.fromLTRB(marge, smal ? 26 : (isTv ? 28 : 46), marge, smal ? 10 : (isTv ? 12 : 18)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Divider(height: 1, thickness: 1, color: kLijn),
-          SizedBox(height: smal ? 16 : 26),
+          SizedBox(height: smal ? 16 : (isTv ? 16 : 26)),
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
             // Flexible, want een Row die niet past tekent gewoon door over wat ernaast staat — geen
             // melding, geen streepjes, in een release-bouw alleen twee teksten over elkaar heen.
@@ -23021,7 +23267,11 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       SafeArea(
           // A television reports no insets, so SafeArea alone is a no-op there; this is the
           // margin that keeps the back arrow off the part of the picture a set cuts away.
-          minimum: tvOverscan,
+          //
+          // Bovenaan niet zodra de balk zweeft (sinds 16-10-2026 ook op een tv): die ruimte zit al in
+          // [ruimte], en met de marge erbij werd de lijst 27 punten onder de bovenrand afgesneden in
+          // plaats van onder de capsule door te schuiven.
+          minimum: ruimte > 0 ? tvOverscan.copyWith(top: 0) : tvOverscan,
         bottom: false,
         // Niet bovenaan als de balk zweeft: de pagina loopt er juist onderdoor.
         top: ruimte == 0,
@@ -23146,7 +23396,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         ],
         ),
       ),
-          if (ruimte > 0)
+          // Zie de artiestpagina, ook voor waarom niet op een tv.
+          if (ruimte > 0 && !isTv)
             Positioned(
               top: 0,
               left: 0,
