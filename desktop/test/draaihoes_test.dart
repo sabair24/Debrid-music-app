@@ -196,7 +196,8 @@ void main() {
   test('aangesloten: albumpagina, online album, Nu speelt, tegels; het losse achterkantbeeld is weg', () {
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     // De bibliotheekpagina en Nu speelt draaien de hoes met cd (AlbumArt).
-    expect('draai: isTv ? null : _draai,'.allMatches(main).length, 2);
+    expect('draai: isTv ? null : _draai,'.allMatches(main).length, 1, reason: 'de albumpagina; Nu speelt draait sinds 16-10-2026 ook op een tv');
+    expect(main, contains('                    draai: _draai,\n                    uitgelicht: isTv && _opHoes,'));
     expect(main, contains('final hoes = isTv ? art : DubbelTikVlak(onDubbel: () => _draai.draai(heeftAchterkant: _heeftAchter), child: art);'));
     expect(main, contains('onDubbel: () => _draai.draai(heeftAchterkant: _achterNu != null),'));
     // Eén tik in Nu speelt wacht op een mogelijke tweede, en vergroot wat er voor staat.

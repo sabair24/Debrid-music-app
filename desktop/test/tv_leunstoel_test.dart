@@ -374,80 +374,104 @@ void main() {
   });
 
   group('spoelen door vast te houden (Saber, 16-10-2026: "door blijven drukken")', () {
-    late Duration nu;
     late List<String> gedaan;
     late SpoelPijlen pijlen;
     setUp(() {
-      nu = Duration.zero;
       gedaan = [];
       pijlen = SpoelPijlen(
         vorige: () => gedaan.add('vorige'),
         volgende: () => gedaan.add('volgende'),
         spoel: (s) => gedaan.add('spoel $s'),
-        klok: () => nu,
       );
     });
+    tearDown(() => pijlen.vergeet());
     KeyEvent neer(LogicalKeyboardKey k) =>
-        KeyDownEvent(physicalKey: PhysicalKeyboardKey.arrowRight, logicalKey: k, timeStamp: nu);
+        KeyDownEvent(physicalKey: PhysicalKeyboardKey.arrowRight, logicalKey: k, timeStamp: Duration.zero);
     KeyEvent herhaal(LogicalKeyboardKey k) =>
-        KeyRepeatEvent(physicalKey: PhysicalKeyboardKey.arrowRight, logicalKey: k, timeStamp: nu);
+        KeyRepeatEvent(physicalKey: PhysicalKeyboardKey.arrowRight, logicalKey: k, timeStamp: Duration.zero);
     KeyEvent los(LogicalKeyboardKey k) =>
-        KeyUpEvent(physicalKey: PhysicalKeyboardKey.arrowRight, logicalKey: k, timeStamp: nu);
+        KeyUpEvent(physicalKey: PhysicalKeyboardKey.arrowRight, logicalKey: k, timeStamp: Duration.zero);
 
-    test('even tikken: het volgende of vorige nummer, bij het loslaten', () {
+    testWidgets('even tikken: het volgende of vorige nummer, bij het loslaten', (t) async {
       const r = LogicalKeyboardKey.arrowRight, l = LogicalKeyboardKey.arrowLeft;
       expect(pijlen.opToets(neer(r)), KeyEventResult.handled);
       expect(gedaan, isEmpty, reason: 'nog niet: het kan vasthouden worden');
-      nu += const Duration(milliseconds: 120);
+      await t.pump(const Duration(milliseconds: 120));
       pijlen.opToets(los(r));
       expect(gedaan, ['volgende']);
       pijlen.opToets(neer(l));
       pijlen.opToets(los(l));
       expect(gedaan, ['volgende', 'vorige']);
+      await t.pump(const Duration(seconds: 1));
+      expect(gedaan, ['volgende', 'vorige'], reason: 'losgelaten: geen klok meer die spoelt');
     });
 
-    test('vasthouden spoelt, steeds sneller, en wisselt geen nummer', () {
+    testWidgets('vasthouden spoelt, ook zonder herhalingen van de toets, steeds sneller', (t) async {
+      // Via adb (en misschien op sommige afstandsbedieningen) komen er geen herhalingen: alleen neer
+      // en los. Op de Shield sprong hij dan naar het volgende nummer in plaats van te spoelen.
       const r = LogicalKeyboardKey.arrowRight;
       pijlen.opToets(neer(r));
-      // De afstandsbediening herhaalt twintig keer per seconde.
-      for (var i = 0; i < 160; i++) {
-        nu += const Duration(milliseconds: 50);
-        pijlen.opToets(herhaal(r));
-      }
+      await t.pump(const Duration(seconds: 8));
       pijlen.opToets(los(r));
       expect(gedaan, isNot(contains('volgende')));
       final sprongen = gedaan.map((g) => int.parse(g.split(' ')[1])).toList();
       expect(sprongen.first, 5, reason: 'eerst fijn');
       expect(sprongen.last, 20, reason: 'na vijf seconden snel');
-      expect(sprongen.length, lessThanOrEqualTo(8 * 1000 ~/ kSpoelTussen.inMilliseconds + 1),
-          reason: 'hoogstens vier sprongen per seconde, niet twintig');
-      expect(sprongen.first, isPositive);
+      expect(sprongen.length, inInclusiveRange(28, 32), reason: 'vier sprongen per seconde, niet twintig');
+      final na = gedaan.length;
+      await t.pump(const Duration(seconds: 2));
+      expect(gedaan.length, na, reason: 'losgelaten: stil');
     });
 
-    test('links vasthouden spoelt terug', () {
+    testWidgets('herhalingen van de toets versnellen niets', (t) async {
+      const r = LogicalKeyboardKey.arrowRight;
+      pijlen.opToets(neer(r));
+      for (var i = 0; i < 20; i++) {
+        await t.pump(const Duration(milliseconds: 50));
+        pijlen.opToets(herhaal(r));
+      }
+      pijlen.opToets(los(r));
+      expect(gedaan.length, lessThanOrEqualTo(4));
+    });
+
+    testWidgets('links vasthouden spoelt terug', (t) async {
       const l = LogicalKeyboardKey.arrowLeft;
       pijlen.opToets(neer(l));
-      for (var i = 0; i < 12; i++) {
-        nu += const Duration(milliseconds: 50);
-        pijlen.opToets(herhaal(l));
-      }
+      await t.pump(const Duration(seconds: 1));
+      pijlen.opToets(los(l));
       expect(gedaan, isNotEmpty);
       expect(gedaan.every((g) => g.startsWith('spoel -')), isTrue);
     });
 
-    test('andere toetsen laat hij door; een vergeten toets wisselt niets bij loslaten', () {
+    testWidgets('komt het loslaten nooit, dan houdt hij na dertig seconden zelf op', (t) async {
+      pijlen.opToets(neer(LogicalKeyboardKey.arrowRight));
+      await t.pump(const Duration(seconds: 40));
+      expect(gedaan.length, lessThanOrEqualTo(kSpoelHoogstens));
+      final na = gedaan.length;
+      await t.pump(const Duration(seconds: 5));
+      expect(gedaan.length, na);
+    });
+
+    testWidgets('andere toetsen laat hij door; een vergeten toets wisselt niets bij loslaten', (t) async {
       expect(pijlen.opToets(neer(LogicalKeyboardKey.arrowUp)), KeyEventResult.ignored);
       pijlen.opToets(neer(LogicalKeyboardKey.arrowRight));
       pijlen.vergeet();
       expect(pijlen.opToets(los(LogicalKeyboardKey.arrowRight)), KeyEventResult.ignored);
+      await t.pump(const Duration(seconds: 1));
       expect(gedaan, isEmpty);
     });
 
-    test('de ±10-knoppen zijn weg; Nu speelt gebruikt de pijlen', () {
+    test('de ±10-knoppen zijn weg; Nu speelt gebruikt de pijlen; alleen de hoes licht op', () {
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(main, isNot(contains('Icons.replay_10_rounded')));
       expect(main, isNot(contains('Icons.forward_10_rounded')));
       expect(main, contains('    return _spoelPijlen.opToets(e);'));
+      // "De cd in de hoes moet niet selecteerbaar zijn, enkel de hoes voor de achterkant te zien bij
+      // dubbele tab" (Saber, 16-10-2026).
+      expect(main, contains('      scaleOnFocus: !isTv,\n      ringOnFocus: !isTv,'));
+      expect(main, contains('                    uitgelicht: isTv && _opHoes,'));
+      expect(main, contains('          ? (t == null ? null : () => _okOpHoes(casting ? cast.playPause : p.playPause))'));
+      expect(main, contains('      _draai.draai(heeftAchterkant: _achterNu != null);\n      return;'));
     });
   });
 

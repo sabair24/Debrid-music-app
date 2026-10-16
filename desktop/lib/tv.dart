@@ -10,6 +10,7 @@
 /// than forty slightly different ways.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -683,6 +684,9 @@ const kSpoelNa = Duration(milliseconds: 350);
 /// twintig keer per seconde; zoveel sprongen naar de pc zou de stroom laten haperen.
 const kSpoelTussen = Duration(milliseconds: 250);
 
+/// Na hoeveel sprongen spoelen uit zichzelf ophoudt (30 seconden vasthouden).
+const kSpoelHoogstens = 120;
+
 /// Hoeveel seconden één sprong is, na zo lang vasthouden: eerst fijn, dan steeds sneller.
 int spoelStap(Duration ingedrukt) => ingedrukt < const Duration(seconds: 2)
     ? 5
@@ -695,65 +699,64 @@ int spoelStap(Duration ingedrukt) => ingedrukt < const Duration(seconds: 2)
 /// druk, ik wil dit doen met de afstandsbediening door blijven drukken").
 ///
 /// Het nummer wisselt daarom bij het LOSLATEN en niet meer bij het neerdrukken: pas dan weet je dat
-/// het geen vasthouden was. [klok] alleen voor de toets.
+/// het geen vasthouden was.
+///
+/// **Op een eigen klok, niet op de herhaling van de toets.** Eerst spoelde hij bij elke herhaling die
+/// de afstandsbediening stuurt. Een ingedrukte toets via adb stuurt alleen neer en los, zonder
+/// herhalingen, en dan sprong hij op de Shield naar het volgende nummer in plaats van te spoelen. Nu
+/// loopt er een klok zolang de toets neer is; herhalingen tellen niet. Na [kSpoelHoogstens] sprongen
+/// houdt hij uit zichzelf op, voor het geval het loslaten nooit aankomt.
 class SpoelPijlen {
-  SpoelPijlen({required this.vorige, required this.volgende, required this.spoel, Duration Function()? klok})
-      : _klok = klok ?? _wandklok();
+  SpoelPijlen({required this.vorige, required this.volgende, required this.spoel});
 
   final VoidCallback vorige, volgende;
 
   /// Spoel zoveel seconden (negatief = terug).
   final void Function(int seconden) spoel;
 
-  final Duration Function() _klok;
-
-  static Duration Function() _wandklok() {
-    final s = Stopwatch()..start();
-    return () => s.elapsed;
-  }
-
   LogicalKeyboardKey? _neer;
-  Duration _sinds = Duration.zero;
-  Duration? _laatste;
-  bool _gespoeld = false;
-
-  /// Een toets die nog neer was, telt niet meer (de selectie ging van de hoes af).
-  void vergeet() {
-    _neer = null;
-    _laatste = null;
-    _gespoeld = false;
-  }
+  Timer? _wacht, _herhaal;
+  int _sprongen = 0;
 
   KeyEventResult opToets(KeyEvent e) {
     final k = e.logicalKey;
     if (k != LogicalKeyboardKey.arrowLeft && k != LogicalKeyboardKey.arrowRight) return KeyEventResult.ignored;
     final vooruit = k == LogicalKeyboardKey.arrowRight;
-    final nu = _klok();
     if (e is KeyDownEvent) {
+      vergeet();
       _neer = k;
-      _sinds = nu;
-      _laatste = null;
-      _gespoeld = false;
+      _wacht = Timer(kSpoelNa, () {
+        _spring(vooruit);
+        _herhaal = Timer.periodic(kSpoelTussen, (_) => _spring(vooruit));
+      });
       return KeyEventResult.handled;
     }
     if (_neer != k) return KeyEventResult.ignored;
-    if (e is KeyRepeatEvent) {
-      final ingedrukt = nu - _sinds;
-      if (ingedrukt < kSpoelNa) return KeyEventResult.handled;
-      final l = _laatste;
-      if (l != null && nu - l < kSpoelTussen) return KeyEventResult.handled;
-      _laatste = nu;
-      _gespoeld = true;
-      final stap = spoelStap(ingedrukt);
-      spoel(vooruit ? stap : -stap);
-      return KeyEventResult.handled;
-    }
+    if (e is KeyRepeatEvent) return KeyEventResult.handled;
     if (e is KeyUpEvent) {
-      _neer = null;
-      if (!_gespoeld) (vooruit ? volgende : vorige)();
+      final gespoeld = _sprongen > 0;
+      vergeet();
+      if (!gespoeld) (vooruit ? volgende : vorige)();
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
+  }
+
+  void _spring(bool vooruit) {
+    if (_sprongen >= kSpoelHoogstens) return vergeet();
+    final ingedrukt = kSpoelNa + kSpoelTussen * _sprongen;
+    _sprongen++;
+    final stap = spoelStap(ingedrukt);
+    spoel(vooruit ? stap : -stap);
+  }
+
+  /// Een toets die nog neer was, telt niet meer (de selectie ging van de hoes af, of het scherm sluit).
+  void vergeet() {
+    _wacht?.cancel();
+    _herhaal?.cancel();
+    _wacht = _herhaal = null;
+    _neer = null;
+    _sprongen = 0;
   }
 }
 

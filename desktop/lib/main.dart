@@ -11984,9 +11984,31 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
   @override
   void dispose() {
     _levensloop?.dispose();
+    _spoelPijlen.vergeet();
+    _okKlok?.cancel();
     _draai.dispose();
     _tikken.dispose();
     super.dispose();
+  }
+
+  /// Loopt na een eerste OK op de hoes: komt er binnen [kTvTweedeOk] een tweede, dan draait de hoes
+  /// om; anders pauzeert (of speelt) hij.
+  Timer? _okKlok;
+
+  /// OK op de hoes, op een tv. Twee keer kort na elkaar draait hem om (zoals twee tikken op een gsm);
+  /// één keer pauzeert of speelt, een tel later — pas dan weet je dat er geen tweede kwam.
+  void _okOpHoes(VoidCallback? speel) {
+    final klok = _okKlok;
+    if (klok != null && klok.isActive) {
+      klok.cancel();
+      _okKlok = null;
+      _draai.draai(heeftAchterkant: _achterNu != null);
+      return;
+    }
+    _okKlok = Timer(kTvTweedeOk, () {
+      _okKlok = null;
+      speel?.call();
+    });
   }
 
   /// Staat de markering op de hoes? Dan — en alleen dan — zijn links en rechts vorige en volgende.
@@ -12064,13 +12086,18 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
       // en links/rechts zijn vorige en volgende. Uitvergroten is een muisgebaar — er
       // hoort een vergrootglas-cursor bij — en verhuist daarom naar een lange druk.
       autofocus: isTv,
+      // Op een tv niet het hele blok met de cd erbij oplichten: alleen de hoes groeit
+      // ([AlbumArt.uitgelicht]). "De cd in de hoes moet niet selecteerbaar zijn" (Saber, 16-10-2026).
+      scaleOnFocus: !isTv,
+      ringOnFocus: !isTv,
       onFocusChange: (v) {
         if (v != _opHoes) setState(() => _opHoes = v);
+        if (!v) _spoelPijlen.vergeet();
       },
       // What the sleeve is actually drawing wins; the player's snapshot is only the
       // fallback for a track whose art has not resolved yet.
       onPressed: isTv
-          ? (t == null ? null : (casting ? cast.playPause : p.playPause))
+          ? (t == null ? null : () => _okOpHoes(casting ? cast.playPause : p.playPause))
           : ((_shown ?? p.currentCover) == null
               ? null
               // Vergroot wat er voor staat: de achterkant als je hem omdraaide.
@@ -12152,7 +12179,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         setState(() => _shown = f);
                       }
                     },
-                    draai: isTv ? null : _draai,
+                    draai: _draai,
+                    uitgelicht: isTv && _opHoes,
                     onAchter: (b) => _achterNu = b,
                     achterSchaduw: kNuSpeeltAchterSchaduw,
                     // De hoes van de minispeler groeit hierheen uit (zie [kNuSpeeltHoes]).
@@ -12778,6 +12806,10 @@ void naarNuSpeelt(BuildContext context) {
 }
 
 const _nuSpeeltRoute = 'nu-speelt';
+
+/// Hoe lang er na een OK op de hoes van Nu speelt op een tweede gewacht wordt. Langer dan de 0,2 s van
+/// twee tikken op een scherm: een knop van een afstandsbediening veert trager terug dan een vinger.
+const kTvTweedeOk = Duration(milliseconds: 350);
 
 /// Na hoe lang zonder toets een tv vanzelf naar Nu speelt gaat, als er muziek speelt (Saber,
 /// 16-10-2026: "Nu speelt schermvullend" — grote hoes, draaiende cd, de kleuren van de hoes; een
@@ -25370,6 +25402,10 @@ class AlbumArt extends StatefulWidget {
   /// Een schaduw om de achterkant, in zijn eigen vorm (zie [AchterkantBeeld.schaduw]). Voor wie de
   /// voorkant van buitenaf een schaduw geeft en die weghaalt zolang de achterkant voor staat.
   final List<BoxShadow>? achterSchaduw;
+
+  /// Heeft de hoes de selectie (op een tv, in Nu speelt)? Dan groeit de HOES een tikje, en niet de cd
+  /// ernaast: wie het hele blok laat oplichten, laat de cd selecteerbaar lijken.
+  final bool uitgelicht;
   const AlbumArt({
     super.key,
     required this.artist,
@@ -25392,6 +25428,7 @@ class AlbumArt extends StatefulWidget {
     this.draai,
     this.onAchter,
     this.achterSchaduw,
+    this.uitgelicht = false,
   });
 
   @override
@@ -25747,7 +25784,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
         if (mounted) widget.onAchter?.call(achter);
       });
     }
-    final kaart = widget.draai == null
+    final kaart0 = widget.draai == null
         ? vliegend
         : DraaiHoes(
             controller: widget.draai!,
@@ -25759,6 +25796,16 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
                 : AchterkantBeeld(
                     beeld: achter, maat: s, hoek: 10, decodeerBreedte: decodeWidth(s), schaduw: widget.achterSchaduw),
           );
+
+    // Op een tv groeit de hoes met de selectie, en alleen de hoes (zie [AlbumArt.uitgelicht]).
+    final kaart = isTv
+        ? AnimatedScale(
+            scale: widget.uitgelicht ? 1.06 : 1,
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOut,
+            child: kaart0,
+          )
+        : kaart0;
 
     // **Geen scan? Dan een schijf met de vóórkant als etiket.**
     //
