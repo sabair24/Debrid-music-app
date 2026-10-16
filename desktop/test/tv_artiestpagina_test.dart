@@ -1,0 +1,335 @@
+// De artiestpagina op een tv (Saber, 16-10-2026, vier rondes vragen): de foto loopt onder het zwevende
+// menu door tot de bovenrand, de naam is half zo groot, "In mijn bibliotheek" heeft het paneel van de
+// pc waar de cd uit de hoes schuift, en een gekozen link is wit en onderstreept, zonder vak.
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:debridmusic/library.dart';
+import 'package:debridmusic/main.dart';
+import 'package:debridmusic/models.dart';
+import 'package:debridmusic/navigatie.dart';
+import 'package:debridmusic/paths.dart';
+import 'package:debridmusic/settings.dart';
+import 'package:debridmusic/tv.dart';
+import 'package:debridmusic/ui/kleuren.dart';
+import 'package:debridmusic/ui/typografie.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show FontLoader;
+import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
+
+/// Een geldige PNG van één doorzichtige pixel: genoeg voor een hoes, en daarmee een schijf ernaast.
+final _pixel = Uint8List.fromList([
+  0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, //
+  0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89,
+  0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54,
+  0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01,
+  0x0D, 0x0A, 0x2D, 0xB4,
+  0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+]);
+
+const _titels = ['Bad', 'Thriller', 'Off The Wall', 'Dangerous', 'Ben', 'Got To Be There', 'Invincible',
+  'Xscape', 'Michael', 'Scream'];
+
+List<Album> _albums(int n) => [
+      for (var i = 0; i < n; i++)
+        Album(_titels[i], 'Michael Jackson', [
+          for (var j = 0; j < 3; j++)
+            Track(path: 'x/${_titels[i]}/$j.flac', title: 'n$j', artist: 'Michael Jackson', album: _titels[i], year: 2000 - i),
+        ])
+          ..embeddedCover = _pixel,
+    ];
+
+/// Zoals op de Shield: 960 bij 540 punten.
+Future<void> _scherm(WidgetTester t) async {
+  t.view.physicalSize = const Size(960, 540);
+  t.view.devicePixelRatio = 1;
+  addTearDown(t.view.reset);
+}
+
+Widget _omhulsel(Widget kind) => MultiProvider(
+      providers: [
+        ChangeNotifierProvider<LibraryStore>(create: (_) => LibraryStore()),
+        ChangeNotifierProvider<AppSettings>(create: (_) => AppSettings()),
+      ],
+      child: MaterialApp(home: Scaffold(body: kind)),
+    );
+
+FocusNode _knoopVan(WidgetTester t, Finder f) => Focus.of(t.element(f));
+
+Finder _titel(String t) => find.text(t.toUpperCase()).first;
+
+Pressable _regel(WidgetTester t, String titel) =>
+    t.widget<Pressable>(find.ancestor(of: _titel(titel), matching: find.byType(Pressable)).first);
+
+void main() {
+  setUpAll(() => setAppDirForTest(Directory.systemTemp.createTempSync('tv_artiestpagina').path));
+  setUp(() {
+    setTvModeForTest(true);
+    FocusManager.instance.highlightStrategy = FocusHighlightStrategy.alwaysTraditional;
+  });
+  tearDown(() {
+    setTvModeForTest(false);
+    FocusManager.instance.highlightStrategy = FocusHighlightStrategy.automatic;
+  });
+
+  group('de selectie onder het zwevende menu', () {
+    testWidgets('een pagina die onder het menu door tekent: de vaste plek ligt onder de capsule, niet erachter',
+        (t) async {
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: BalkRuimte(
+            hoogte: 75,
+            child: ListView(children: [
+              for (var i = 0; i < 30; i++)
+                Pressable(key: ValueKey('r$i'), onPressed: () {}, child: const SizedBox(height: 60, width: 300)),
+            ]),
+          ),
+        ),
+      ));
+      _knoopVan(t, find.descendant(of: find.byKey(const ValueKey('r8')), matching: find.byType(GestureDetector)).first)
+          .requestFocus();
+      await t.pumpAndSettle();
+      expect(t.getTopLeft(find.byKey(const ValueKey('r8'))).dy, closeTo(75 + kTvBovenruimte, 1),
+          reason: 'de lijst begint bovenaan het venster; op 56 stond de selectie achter de capsule');
+    });
+
+    testWidgets('een lijst ín de pagina rekent het menu niet mee, de pagina zelf wel', (t) async {
+      final pagina = ScrollController();
+      addTearDown(pagina.dispose);
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: BalkRuimte(
+            hoogte: 75,
+            child: ListView(controller: pagina, children: [
+              const SizedBox(height: 700),
+              SizedBox(
+                key: const ValueKey('binnen'),
+                height: 200,
+                child: ListView(children: [
+                  for (var i = 0; i < 10; i++)
+                    Pressable(key: ValueKey('b$i'), onPressed: () {}, child: const SizedBox(height: 60, width: 300)),
+                ]),
+              ),
+              const SizedBox(height: 900),
+            ]),
+          ),
+        ),
+      ));
+      // Eerst de lijst in beeld, anders is hij nog niet gebouwd.
+      pagina.jumpTo(500);
+      await t.pump();
+      _knoopVan(t, find.descendant(of: find.byKey(const ValueKey('b5'), skipOffstage: false), matching: find.byType(SizedBox, skipOffstage: false), skipOffstage: false).last)
+          .requestFocus();
+      await t.pumpAndSettle();
+      final binnen = t.getTopLeft(find.byKey(const ValueKey('binnen'))).dy;
+      expect(binnen, closeTo(75 + kTvBovenruimte, 1), reason: 'de pagina zet de lijst onder de capsule');
+      expect(t.getTopLeft(find.byKey(const ValueKey('b5'))).dy - binnen, closeTo(kTvBovenruimte, 1),
+          reason: 'binnen de lijst telt het menu niet: die schuift mee met de pagina');
+    });
+  });
+
+  group('In mijn bibliotheek (Saber: "net zoals pc, mac")', () {
+    Future<void> bouw(WidgetTester t, int n) async {
+      await _scherm(t);
+      await t.pumpWidget(_omhulsel(SingleChildScrollView(
+        child: Column(children: [
+          FilledButton(key: const ValueKey('radio'), onPressed: () {}, child: const Text('Radio')),
+          GetrapteLijst(albums: _albums(n)),
+        ]),
+      )));
+      await t.pump();
+    }
+
+    AlbumArt paneel(WidgetTester t) => t.widget<AlbumArt>(find.byType(AlbumArt));
+
+    testWidgets('het paneel staat er, en de cd schuift uit bij elke selectie', (t) async {
+      await bouw(t, 3);
+      expect(find.byType(AlbumArt), findsOneWidget, reason: 'op een tv stond er geen paneel, alleen duimnagels');
+      expect(paneel(t).uitgeschoven, isFalse);
+      _knoopVan(t, _titel('Thriller')).requestFocus();
+      await t.pump();
+      await t.pump();
+      expect(paneel(t).album, 'Thriller');
+      expect(paneel(t).uitgeschoven, isTrue, reason: 'de selectie is op een tv wat op de pc het aanwijzen is');
+      _knoopVan(t, _titel('Off The Wall')).requestFocus();
+      await t.pump();
+      await t.pump();
+      expect(paneel(t).album, 'Off The Wall');
+      expect(paneel(t).uitgeschoven, isTrue);
+      await t.pumpAndSettle();
+    });
+
+    testWidgets('de selectie de lijst uit: de cd terug in de hoes, en geen gekozen titel meer', (t) async {
+      await bouw(t, 3);
+      _knoopVan(t, _titel('Thriller')).requestFocus();
+      await t.pump();
+      await t.pump();
+      _knoopVan(t, find.text('Radio')).requestFocus();
+      await t.pump();
+      await t.pump();
+      expect(paneel(t).uitgeschoven, isFalse);
+      expect(t.widget<Text>(_titel('Thriller')).style?.decoration, isNot(TextDecoration.underline),
+          reason: 'een onderstreepte titel zegt dat de selectie daar staat, en hij stond op Radio');
+      await t.pumpAndSettle();
+    });
+
+    testWidgets('gekozen = witte titel met een lijn eronder, zonder glas en zonder te groeien', (t) async {
+      await bouw(t, 3);
+      _knoopVan(t, _titel('Thriller')).requestFocus();
+      await t.pump();
+      await t.pump();
+      final gekozen = t.widget<Text>(_titel('Thriller')).style!;
+      expect(gekozen.decoration, TextDecoration.underline);
+      expect(gekozen.color, kTekst);
+      final ander = t.widget<Text>(_titel('Bad')).style!;
+      expect(ander.decoration, isNot(TextDecoration.underline));
+      expect(ander.color, kGedempt);
+      final p = _regel(t, 'Thriller');
+      expect(p.ringOnFocus, isFalse, reason: 'het grijze glas, met "01" erbuiten, vond Saber niet goed');
+      expect(p.scaleOnFocus, isFalse, reason: 'een groeiende regel schoof met zijn nummer de marge in');
+      expect(p.onLongPress, isNotNull, reason: 'lang OK: hetzelfde menu als een hoes elders');
+      await t.pumpAndSettle();
+    });
+
+    testWidgets('getrapt zoals op de pc, zonder duimnagel', (t) async {
+      await bouw(t, 3);
+      final een = t.getTopLeft(find.text('01')).dx;
+      final twee = t.getTopLeft(find.text('02')).dx;
+      expect(twee - een, closeTo(72, .5), reason: 'het ritme van de pc: 0 / 72 / 24 …');
+      // Alleen de hoes in het paneel: geen kleine hoesjes van 44 voor de titels.
+      expect(find.byWidgetPredicate((w) => w is SizedBox && w.width == 44 && w.height == 44), findsNothing);
+    });
+
+    testWidgets('een lange lijst schuift zelf, en de hoes blijft op zijn plek', (t) async {
+      await bouw(t, 10);
+      _knoopVan(t, _titel('Bad')).requestFocus();
+      await t.pumpAndSettle();
+      final hoes = t.getTopLeft(find.byType(AlbumArt));
+      _knoopVan(t, _titel('Scream')).requestFocus();
+      await t.pumpAndSettle();
+      expect(t.getTopLeft(find.byType(AlbumArt)), hoes, reason: 'Saber: "hoes blijft staan, lijst schuift"');
+      final lijst = find.descendant(of: find.byType(GetrapteLijst), matching: find.byType(Scrollable)).first;
+      expect(t.state<ScrollableState>(lijst).position.pixels, greaterThan(0),
+          reason: 'de tiende plaat staat onder de rand van de lijst; die hoort er zelf heen te schuiven');
+    });
+
+    testWidgets('buiten een tv: geen eigen schuifvak, en de regels groeien zoals voorheen', (t) async {
+      setTvModeForTest(false);
+      await bouw(t, 3);
+      expect(find.descendant(of: find.byType(GetrapteLijst), matching: find.byType(Scrollable)), findsNothing);
+      expect(_regel(t, 'Bad').scaleOnFocus, isTrue);
+      expect(_regel(t, 'Bad').onLongPress, isNull);
+    });
+  });
+
+  group('de kop', () {
+    testWidgets('de naam is op een tv de maat uit de ontwerpschets, niet die van een iPad', (t) async {
+      await _scherm(t);
+      await t.pumpWidget(_omhulsel(const EditorialeKop(naam: 'Michael Jackson')));
+      expect(t.widget<Text>(find.text('MICHAEL')).style?.fontSize, kTvArtiestNaam);
+      setTvModeForTest(false);
+      await t.pumpWidget(_omhulsel(const EditorialeKop(naam: 'Michael Jackson', key: ValueKey('pc'))));
+      expect(t.widget<Text>(find.text('MICHAEL')).style?.fontSize, artiestNaamGrootte(960),
+          reason: 'buiten een tv verandert er niets');
+    });
+
+    testWidgets('met de balk erboven loopt de foto tot de bovenrand, en de naam staat er net zo ver onder', (t) async {
+      await _scherm(t);
+      Future<double> naam(double bloed) async {
+        await t.pumpWidget(_omhulsel(Align(
+            alignment: Alignment.topLeft, child: EditorialeKop(naam: '*NSYNC', key: ValueKey(bloed), bovenBloed: bloed))));
+        return t.getTopLeft(find.text('*NSYNC')).dy;
+      }
+
+      final zonder = await naam(0);
+      final met = await naam(75);
+      expect(met - zonder, closeTo(75, .5));
+      expect(t.getSize(find.byType(EditorialeKop)).height, greaterThanOrEqualTo(kTvKopZicht + 75));
+    });
+  });
+
+  testWidgets('VOLLEDIGE DISCOGRAFIE past op een tv op één regel, naast de telling en de sorteerpil', (t) async {
+    // Met het echte lettertype: in een toets is elke letter anders een vierkantje van één em breed.
+    await t.runAsync(() async {
+      final inter = FontLoader('Inter');
+      for (final w in ['Regular', 'Medium', 'SemiBold', 'Bold', 'ExtraBold']) {
+        inter.addFont(Future.value(ByteData.sublistView(File('fonts/Inter-$w.ttf').readAsBytesSync())));
+      }
+      await inter.load();
+    });
+    double breed(String s, TextStyle stijl) => (TextPainter(
+          text: TextSpan(text: s, style: stijl.copyWith(fontFamily: 'Inter')),
+          textDirection: TextDirection.ltr,
+          textScaler: const TextScaler.linear(1.35),
+        )..layout())
+            .width;
+    final kop = breed('VOLLEDIGE DISCOGRAFIE', kDisplayKlein.copyWith(fontSize: 20));
+    final telling = breed('53 in 7 blokken', kOpschrift);
+    // 960 min de tv-marge (2 × 48), de marge van de kop (2 × 28), de marge achter de pil (28) en de pil
+    // zelf: 231 punten breed, gemeten op de Shield (16-10-2026).
+    expect(kop + 12 + telling, lessThan(960 - 96 - 56 - 28 - 231),
+        reason: 'op 30 brak hij in twee regels, en op één regel zou hij afgekapt worden');
+  });
+
+  group('tekstlinks', () {
+    Future<void> link(WidgetTester t) async {
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Column(children: [
+            FilledButton(onPressed: () {}, child: const Text('ander')),
+            TekstLink(
+              onPressed: () {},
+              bouw: (g) => Text('JC Chasez', style: tvLinkStijl(const TextStyle(color: kGedempt), g)),
+            ),
+          ]),
+        ),
+      ));
+    }
+
+    testWidgets('op een tv: gekozen = wit en onderstreept, zonder vak', (t) async {
+      await link(t);
+      expect(t.widget<Text>(find.text('JC Chasez')).style?.decoration, isNot(TextDecoration.underline));
+      _knoopVan(t, find.text('JC Chasez')).requestFocus();
+      await t.pump();
+      await t.pump();
+      final s = t.widget<Text>(find.text('JC Chasez')).style!;
+      expect(s.decoration, TextDecoration.underline);
+      expect(s.color, kTekst);
+      expect(t.widget<Pressable>(find.byType(Pressable)).ringOnFocus, isFalse,
+          reason: 'het grijze vak stond soms scheef over de letters');
+    });
+
+    testWidgets('buiten een tv: de ring zoals altijd, en de letters veranderen niet', (t) async {
+      setTvModeForTest(false);
+      await link(t);
+      _knoopVan(t, find.text('JC Chasez')).requestFocus();
+      await t.pump();
+      await t.pump();
+      expect(t.widget<Text>(find.text('JC Chasez')).style?.decoration, isNot(TextDecoration.underline));
+      expect(t.widget<Pressable>(find.byType(Pressable)).ringOnFocus, isTrue);
+    });
+  });
+
+  group('bedrading (gelezen uit lib/main.dart)', () {
+    final bron = File('lib/main.dart').readAsStringSync();
+
+    test('de tv-balk zweeft, met de melding mee in de zwevende laag', () {
+      expect(bron, contains('if (isTv) Positioned(top: 0, left: 0, right: 0, child: _tvBovenlaag()),'));
+      expect(bron, contains('(isTv ? TvTopBar.hoogte + tvOverscan.top + _tvMeldingHoogte : 0.0)'));
+      expect(bron, contains('_MeetHoogte(\n            onHoogte: _zetTvMeldingHoogte,'));
+    });
+
+    test('de artiestpagina laat de tv-marge bovenaan weg zodra de balk zweeft', () {
+      expect(bron, contains('minimum: EdgeInsets.only(top: ruimte > 0 ? 0 : tvOverscan.top),'));
+    });
+
+    test('geen bronlabels en geen meeschuivend glas op een tv', () {
+      expect(bron, contains('final merk = !isTv && r.sources.length > 1'));
+      expect('if (ruimte > 0 && !isTv)'.allMatches(bron).length, 2);
+      expect(bron, contains('if (BalkRuimte.van(context) > 0 && !isTv)'));
+    });
+  });
+}

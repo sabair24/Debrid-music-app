@@ -37,12 +37,16 @@ void main() {
       final start = bron.indexOf('node: _tvMelding');
       expect(start, greaterThan(-1), reason: '_tvMelding wordt nergens om iets heen gezet');
 
-      // Het stuk rond de melding: van de bovenbalk tot net na de statusstrook.
+      // Het stuk rond de melding: van de bovenbalk tot net na de statusstrook. Sinds 16-10-2026 staat
+      // dat in de zwevende laag van de tv ([_tvBovenlaag]); die wordt alleen op een tv gebouwd, en
+      // een pc en een telefoon krijgen de melding zonder scope in hun kolom.
       final blok = bron.substring(
           bron.indexOf('node: _tvBalk'), bron.indexOf('const _TvStatusStrip()'));
-      expect(blok, contains('_AlleenOpTv'),
+      expect(bron, contains('if (isTv) Positioned(top: 0, left: 0, right: 0, child: _tvBovenlaag()),'),
           reason: 'op een pc en een telefoon mag hier geen extra scope bij — daar is de tab-volgorde '
               'in orde en zou dit hem veranderen');
+      expect(bron, contains('if (!isTv) const _OfflineBanner(),'),
+          reason: 'buiten een tv hoort de melding gewoon in de kolom, zonder scope');
       expect(blok, contains('child: const _OfflineBanner()'),
           reason: 'de scope hoort ÓM de meldingsbalk te zitten, anders is er niets te bereiken');
     });

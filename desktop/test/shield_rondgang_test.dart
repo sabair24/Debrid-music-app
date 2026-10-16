@@ -63,15 +63,22 @@ void main() {
   });
 
   test('3. tekstlinks vergroten niet uit bij focus', () {
+    // Sinds 16-10-2026 zijn het allebei een [TekstLink] (op een tv wit en onderstreept, zonder vak),
+    // en die zet het uitvergroten zelf uit — zie tv_artiestpagina_test.dart voor hoe hij eruitziet.
     for (final anker in [
       'onPressed: onGroep == null ? null : () => onGroep!(g),',
       'onPressed: () => setState(() => _toonAlles = !_toonAlles),',
     ]) {
       final i = bron.indexOf(anker);
       expect(i, greaterThan(-1), reason: '"$anker" is verdwenen');
-      expect(bron.substring(i, i + 700), contains('scaleOnFocus: false'),
-          reason: 'uitvergroot duwt een tekstlink tegen zijn buurman en valt de rand scheef');
+      expect(bron.substring(i - 200, i), contains('TekstLink('),
+          reason: 'een gewone Pressable groeit mee met de selectie');
     }
+    final tv = File('lib/tv.dart').readAsStringSync();
+    final a = tv.indexOf('class _TekstLinkState');
+    expect(a, greaterThan(-1), reason: 'TekstLink is hernoemd of verdwenen');
+    expect(tv.substring(a, tv.indexOf('\n}\n', a)), contains('scaleOnFocus: false'),
+        reason: 'uitvergroot duwt een tekstlink tegen zijn buurman en valt de rand scheef');
   });
 
   test('4. één album, één nummer', () {

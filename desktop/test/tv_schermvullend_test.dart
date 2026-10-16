@@ -78,7 +78,9 @@ void main() {
     final staat = hoofd.substring(a, e < 0 ? hoofd.length : e);
     expect(staat, isNot(contains('minimum: tvOverscan,')),
         reason: 'de hele marge op de SafeArea houdt ook de foto van de kop van de rand weg');
-    expect(staat, contains('minimum: EdgeInsets.only(top: tvOverscan.top)'),
+    // De bovenkant van de marge blijft — behalve als de balk zweeft (sinds 16-10-2026 ook op een tv):
+    // dan zit die marge al in de ruimte van de balk, en hoort de foto tot de bovenrand te lopen.
+    expect(staat, contains('minimum: EdgeInsets.only(top: ruimte > 0 ? 0 : tvOverscan.top)'),
         reason: 'de bovenkant van de marge blijft: daar snijdt een tv net zo goed weg');
     final g = staat.indexOf('SliverMainAxisGroup(');
     expect(g, greaterThan(-1), reason: 'de inhoud onder de kop staat niet meer in één groep');
@@ -124,9 +126,13 @@ void main() {
   test('een sectiekop knipt niet af op een tv', () {
     final a = hoofd.indexOf('Widget _sectionTitle(');
     expect(a, greaterThan(-1), reason: '_sectionTitle is hernoemd of verdwenen');
-    final kop = hoofd.substring(a, a + 800);
-    expect(kop, contains('maxLines: isTv ? 2 : 1'),
-        reason: 'op de Shield staat de tekst 1,35 keer zo groot, en dan paste "VOLLEDIGE '
-            'DISCOGRAFIE" niet op één regel naast de telling en de sorteerpil');
+    final kop = hoofd.substring(a, a + 900);
+    // Eerst stond hier `maxLines: isTv ? 2 : 1` met 30 punten: op de Shield staat de tekst 1,35 keer
+    // zo groot, en dan paste "VOLLEDIGE DISCOGRAFIE" niet op één regel naast de telling en de
+    // sorteerpil. Sinds 16-10-2026 is de kop op een tv 20 (Saber: "kleiner, altijd één regel"); dat
+    // het dan past, meet tv_artiestpagina_test.dart met het echte lettertype.
+    expect(kop, contains('maxLines: 1,'));
+    expect(kop, contains('isTv ? 20 : 56'),
+        reason: 'op één regel past de kop alleen in de kleinere maat');
   });
 }

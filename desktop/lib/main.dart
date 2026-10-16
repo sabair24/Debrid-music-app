@@ -2165,8 +2165,8 @@ class _HomeShellState extends State<HomeShell> {
             node: _tvBalk,
             // De spelerbalk als laatste: op een lege pagina (Favorieten zonder favorieten) is er
             // anders vanuit de balk geen weg naar beneden.
-            onKeyEvent: (_, e) => _tvSprong(e, LogicalKeyboardKey.arrowDown, TraversalDirection.down,
-                [_tvMelding, _tvInhoud, _tvSpeler]),
+            onKeyEvent: (_, e) => _tvSprong(e, LogicalKeyboardKey.arrowDown,
+                TraversalDirection.down, [_tvMelding, _tvInhoud, _tvSpeler]),
             child: RepaintBoundary(
               child: TvTopBar(
                 view: _view,
