@@ -145,7 +145,7 @@ void main() {
       final nogEens = leg(keuring('BOTDF2'), '06 - Scream Louder.flac', flac('Scream Louder', nr: 6));
       final r2 = await bergMapOp(keuring('BOTDF2'), downloads);
       expect(r2.duplicates, 1);
-      expect(r2.uitkomst[nogEens.path], contains('minstens even goede kwaliteit'));
+      expect(r2.uitkomst[nogEens.path], contains('had je al, even goed of beter'));
 
       // Een mp3 waar niets uit te lezen valt: dan weet niemand waar hij heen moet.
       final onleesbaar = leg(keuring('BOTDF3'), 'track.mp3', List<int>.filled(4000, 0));

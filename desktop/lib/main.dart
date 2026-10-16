@@ -153,6 +153,7 @@ import 'hartslag.dart';
 import 'ui/binnenkomst.dart';
 import 'ui/kleuren.dart';
 import 'ui/kop.dart';
+import 'ui/kopfeiten.dart';
 import 'ui/langzame_draai.dart';
 import 'ui/leeg.dart';
 import 'ui/maten.dart';
@@ -4965,16 +4966,14 @@ class AlbumsGrid extends StatelessWidget {
         else
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-            sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 190,
-                mainAxisSpacing: 20,
-                crossAxisSpacing: 20,
-                childAspectRatio: .78,
-              ),
-              delegate: SliverChildBuilderDelegate(
-                (_, i) => Binnenkomst(index: i, child: AlbumCard(album: albums[i])),
-                childCount: albums.length,
+            // De hoogte uit de echte celbreedte, zodat de hoes vierkant blijft: zie [tegelRaster].
+            sliver: SliverLayoutBuilder(
+              builder: (context, c) => SliverGrid(
+                gridDelegate: tegelRaster(context, c.crossAxisExtent, extra: 2),
+                delegate: SliverChildBuilderDelegate(
+                  (_, i) => Binnenkomst(index: i, child: AlbumCard(album: albums[i])),
+                  childCount: albums.length,
+                ),
               ),
             ),
           ),
@@ -6758,20 +6757,17 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                 // Een Wrap en geen Row: artiest, jaar, genre en aantal zijn samen soms breder dan de
                 // kolom, en een Row knipte dan af -- "2 nummeı", op de Shield gezien op 11-09-2026.
                 // Zo loopt wat niet past door naar de volgende regel en valt er niets weg.
-                Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    ArtistNames(names: [album.artist], style: const TextStyle(color: _muted)),
-                    Text(
-                      [
-                        '',
-                        if (album.year != null) '${album.year}',
-                        if (album.genre != null) album.genre!,
-                        '${album.tracks.length} ${album.tracks.length == 1 ? 'nummer' : 'nummers'}',
-                      ].join(' · '),
-                      style: const TextStyle(color: _muted),
-                    ),
+                // Zie ui/kopfeiten.dart: de feiten begonnen hier met " · ", en als ze niet naast de
+                // artiest pasten stond die punt vooraan een nieuwe regel.
+                KopFeiten(
+                  artiest: ArtistNames(names: [album.artist], style: const TextStyle(color: _muted)),
+                  artiestTekst: album.artist,
+                  feiten: [
+                    if (album.year != null) '${album.year}',
+                    if (album.genre != null) album.genre!,
+                    '${album.tracks.length} ${album.tracks.length == 1 ? 'nummer' : 'nummers'}',
                   ],
+                  stijl: const TextStyle(color: _muted),
                 ),
                 const SizedBox(height: 18),
                 // Wrapped on a phone rather than a Row. Afspelen, Offline bewaren and Radio are
@@ -13337,37 +13333,11 @@ class TracksView extends StatelessWidget {
                             style: const TextStyle(color: _muted, fontSize: 12)),
                         const SizedBox(width: 6),
                       ],
-                      // Verwijderen wáár je zoekt. De prullenbak stond alleen op de albumpagina, en
-                      // een los nummer terugvinden via zijn album is precies de omweg die dit scherm
-                      // moet wegnemen — je filtert hier op "uit mp3" of op een naam en wil er dan
-                      // meteen iets mee kunnen.
-                      //
-                      // Geen hover-voorwaarde zoals daar: dit is ook het scherm dat op een tablet en
-                      // op de televisie draait, en daar bestaat zweven niet. Wel dezelfde bevestiging
-                      // met dezelfde twee keuzes — uit de bibliotheek halen en van schijf wissen
-                      // horen nooit hetzelfde te betekenen.
-                      // Niet op een tv: daar is de app een speler, en een verwijderknop op elke
-                      // regel is precies wat je met een afstandsbediening niet wilt tegenkomen.
-                      if (!isTv)
-                      SizedBox(
-                        width: 34,
-                        child: TvLabelled(
-                                 label: 'Nummer verwijderen',
-                                 child: IconButton(
-                          icon: const Icon(Icons.delete_outline_rounded, size: 17),
-                          color: _muted,
-                          tooltip: 'Nummer verwijderen',
-                          padding: EdgeInsets.zero,
-                          // 48 en niet 32. Android houdt 48 aan als ondergrens voor iets dat met
-                          // een vinger geraakt moet worden, en dit is een VERWIJDERKNOP die twee
-                          // punten naast de afspeel-aanduiding staat in een rij van 56 hoog. Een
-                          // misser hier start niet alleen het verkeerde nummer.
-                          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-                          onPressed: () => _confirmDelete(context, '“${t.title}”', [t.path]),
-                        ),
-                               ),
-                      ),
-                      const SizedBox(width: 2),
+                      // Geen prullenbak meer in de rij. Hij stond twee punten naast afspelen, in elke
+                      // rij, en één misser gooide een nummer weg. Saber (16-10-2026) koos: naar het
+                      // menu. Daar staat "Verwijderen…" al, met dezelfde bevestiging — lang indrukken
+                      // op een gsm, rechtsklikken met een muis. De titel krijgt de 36 punten erbij.
+                      const SizedBox(width: 6),
                       Icon(speeltHier ? Icons.volume_up_rounded : Icons.play_arrow_rounded,
                           color: isCurrent ? _accent : _muted, size: 19),
                     ],
@@ -14887,6 +14857,18 @@ class _DlHeader extends StatelessWidget {
 /// Niet privé, omdat er een toets op staat die hem op telefoonbreedte pompt — zie
 /// `test/download_regel_test.dart`. Een `_`-klasse is per bestand afgeschermd en dan kan geen enkele
 /// toets erbij; die afscherming was hier het verschil tussen "gemeten" en "het lijkt te kloppen".
+/// Hoeveel regels de melding onder een download krijgt.
+///
+/// Een mislukking vier: dan is die regel het enige dat zegt waarom. Een afgeronde twee: daar staat
+/// wat er met het bestand gebeurde ("had je al, even goed of beter — niet bewaard"), en dat werd op een
+/// gsm na "had je al in minstens even goed…" afgekapt (S26, 16-10-2026). Een lopende één: "12 seeders ·
+/// 30 verbindingen" past.
+int detailRegels(String status) => switch (status) {
+      'failed' => 4,
+      'done' => 2,
+      _ => 1,
+    };
+
 class DlRow extends StatelessWidget {
   final DownloadJob job;
   const DlRow({super.key, required this.job});
@@ -14912,7 +14894,7 @@ class DlRow extends StatelessWidget {
               // een infohash, een pad. Op 26-08-2026 stond er "InfoHash 5bdcf1b4…" en was de reden
               // precies achter dat afkapstreepje verdwenen. Bij een lopende download blijft het één
               // regel: daar staat "12 seeders · 30 verbindingen" en dat past.
-              maxLines: job.status == 'failed' ? 4 : 1,
+              maxLines: detailRegels(job.status),
               overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 11, color: job.status == 'failed' ? Colors.red.shade300 : _muted)),
         ],
@@ -17978,7 +17960,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                                         Text(j.detail!,
                                             // Zie `_DlRow`: een mislukking mag zijn reden niet
                                             // kwijtraken aan een afkapstreepje.
-                                            maxLines: j.status == 'failed' ? 4 : 1,
+                                            maxLines: detailRegels(j.status),
                                             overflow: TextOverflow.ellipsis,
                                             style: kLabel.copyWith(
                                                 fontWeight: FontWeight.w400,
@@ -19986,14 +19968,20 @@ class EditorialeKop extends StatelessWidget {
                   for (var i = 0; i < kop.length; i++)
                     Padding(
                       padding: EdgeInsets.only(left: i == 0 ? 0 : naamGrootte * .52),
-                      child: Text(
-                        kop[i].toUpperCase(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: kDisplay.copyWith(
-                          fontSize: naamGrootte,
-                          letterSpacing: -naamGrootte * .027,
-                          color: naamKleur,
+                      // Krimpen in plaats van afkappen: de tweede regel is "de rest van de naam", en
+                      // op een gsm van 46 punten in hoofdletters viel daar het einde af ("AND THE
+                      // WAILE…"). Een naam die je niet helemaal kunt lezen is geen kop.
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          kop[i].toUpperCase(),
+                          maxLines: 1,
+                          style: kDisplay.copyWith(
+                            fontSize: naamGrootte,
+                            letterSpacing: -naamGrootte * .027,
+                            color: naamKleur,
+                          ),
                         ),
                       ),
                     ),
@@ -22292,15 +22280,17 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                       // artiest, jaar en aantal samen breder waren dan de kolom -- en op een tv, met
                       // de tekst 1,35 keer zo groot, is dat snel. Nu loopt wat niet past door naar de
                       // volgende regel, net als in de kop van je eigen albums.
-                      _maybeFocusable(Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
-                        ArtistNames(
+                      _maybeFocusable(KopFeiten(
+                        artiest: ArtistNames(
                             names: [widget.artistName],
                             style: const TextStyle(color: _muted, fontSize: 13)),
-                        Text(
-                            '${al.year != null ? " · ${al.year}" : ""}'
-                            '${_tracks.isNotEmpty ? " · ${_tracks.length} ${_tracks.length == 1 ? 'nummer' : 'nummers'}" : ""}',
-                            style: const TextStyle(color: _muted, fontSize: 13)),
-                      ])),
+                        artiestTekst: widget.artistName,
+                        feiten: [
+                          if (al.year != null) '${al.year}',
+                          if (_tracks.isNotEmpty) '${_tracks.length} ${_tracks.length == 1 ? 'nummer' : 'nummers'}',
+                        ],
+                        stijl: const TextStyle(color: _muted, fontSize: 13),
+                      )),
                       const SizedBox(height: 12),
                       GlasKnop(
                         // The one action of this page, and where the highlight starts on a
@@ -22310,7 +22300,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                         icoon: _expanded == _albumLevel
                             ? Icons.expand_less_rounded
                             : Icons.travel_explore_rounded,
-                        label: 'Bronnen voor album',
+                        // Op een gsm is de kolom naast de hoes ~184 punten, en "Bronnen voor album"
+                        // brak daar over twee regels (S26, 16-10-2026). Naast een albumkop is
+                        // "Bronnen" even duidelijk.
+                        label: isCompact(context) ? 'Bronnen' : 'Bronnen voor album',
                         onPressed: () => _toggle(_albumLevel),
                       ),
                     ],
@@ -29829,10 +29822,11 @@ class _StylePageState extends State<StylePage> {
           SliverToBoxAdapter(child: _sectionTitle('In mijn bibliotheek', '${mine.length}')),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 18),
-            sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 175, mainAxisSpacing: 18, crossAxisSpacing: 18, childAspectRatio: .78),
-              delegate: SliverChildBuilderDelegate((_, i) => AlbumCard(album: mine[i]), childCount: mine.length),
+            sliver: SliverLayoutBuilder(
+              builder: (context, c) => SliverGrid(
+                gridDelegate: tegelRaster(context, c.crossAxisExtent, maxBreedte: 175, tussen: 18, extra: 2),
+                delegate: SliverChildBuilderDelegate((_, i) => AlbumCard(album: mine[i]), childCount: mine.length),
+              ),
             ),
           ),
         ],

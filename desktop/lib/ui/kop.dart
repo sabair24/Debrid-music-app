@@ -43,19 +43,31 @@ class SectieKop extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Flexible(
-              child: Text(
-                titel,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: kKopKlein,
+            // **De titel gaat voor.** Het grijze bijschrift nam eerst zijn volle breedte en de titel
+            // kreeg de rest: op de S26 (16-10-2026) stond er "Nieuw…" naast "de laatste drie maanden
+            // en wat eraan komt". Nu schuift het bijschrift onder de titel zodra ze samen niet passen.
+            Expanded(
+              child: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.end,
+                spacing: kRuimte8,
+                runSpacing: 2,
+                children: [
+                  Text(
+                    titel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: kKopKlein,
+                  ),
+                  if (bij != null)
+                    Padding(
+                      // Op de grondlijn van de titel, niet tegen de onderkant van zijn regel.
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: Text(bij!, style: kTekstKlein),
+                    ),
+                ],
               ),
             ),
-            if (bij != null) ...[
-              const SizedBox(width: kRuimte8),
-              Text(bij!, style: kTekstKlein),
-            ],
-            if (rechts != null) ...[const Spacer(), rechts!],
+            if (rechts != null) ...[const SizedBox(width: kRuimte8), rechts!],
           ],
         ),
       );

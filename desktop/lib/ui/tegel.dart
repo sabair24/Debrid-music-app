@@ -48,6 +48,18 @@ const double _regel = 1.35;
 /// Lucht boven en onder de tegel in een rij: wat de schaduw nodig heeft om niet afgeknipt te worden.
 const double _lucht = 10;
 
+/// Hoeveel regels de titel onder een hoes krijgt.
+///
+/// **Twee, behalve op een tv.** Saber op de S26, 16-10-2026: "I Just Called To S…", "Danse
+/// Méditerran…" — op 140 punten passen 17 à 18 tekens, en dan is de helft van de titels weg. Twee
+/// regels kosten een rij 19 punten. Op de tv blijft het één: daar staat de tekst 1,35× groter en is
+/// de rijhoogte op de Shield afgesteld.
+///
+/// De ruimte voor die twee regels is er ook als de titel kort is: een liggende rij geeft elke tegel
+/// dezelfde vaste hoogte en centreert de inhoud, dus een tegel met één regel zou anders een halve
+/// regel lager staan dan zijn buren.
+int get kTegelTitelRegels => isTv ? 1 : 2;
+
 /// De hoogte die een liggende rij tegels nodig heeft.
 ///
 /// De tegel zelf plus de groei bij aanwijzen. Dat vermenigvuldigen is geen marge maar rekenwerk:
@@ -68,7 +80,7 @@ double hoogteVanTegelrij(BuildContext context, {double hoes = kTegelHoes}) =>
 /// `Expanded`: wat de streep inneemt gaat daar van de hoes af, niet van de rij.
 double hoogteVanTegel(BuildContext context, {double hoes = kTegelHoes}) {
   final schaal = MediaQuery.textScalerOf(context);
-  return hoes + kRuimte8 + _regelhoogte(schaal, kTegelTitel) + _regelhoogte(schaal, kTegelOnder);
+  return hoes + kRuimte8 + kTegelTitelRegels * _regelhoogte(schaal, kTegelTitel) + _regelhoogte(schaal, kTegelOnder);
 }
 
 /// De hoogte die één tekstregel werkelijk inneemt.
@@ -80,6 +92,28 @@ double hoogteVanTegel(BuildContext context, {double hoes = kTegelHoes}) {
 /// af. Zonder afronding is dit geen bovengrens en dus geen bruikbare formule.
 double _regelhoogte(TextScaler schaal, TextStyle stijl) =>
     (schaal.scale(stijl.fontSize!) * _regel).ceilToDouble();
+
+/// Een raster van tegels waarin de hoes vierkant blijft.
+///
+/// Een vaste verhouding (`childAspectRatio: .78`) gaf de tegel een vaste hoogte per breedte, en de
+/// hoes ligt in een `Expanded`: wat de tekst eronder meer nodig heeft gaat van de hoes af. Met twee
+/// titelregels ([kTegelTitelRegels]) werd een hoes van 171 punten breed daardoor 155 hoog. Hier wordt de
+/// celhoogte uitgerekend uit de echte celbreedte, met dezelfde formule als de liggende rijen.
+///
+/// Hetzelfde aantal kolommen als `SliverGridDelegateWithMaxCrossAxisExtent` met [maxBreedte] en
+/// [tussen] — die rekent `(breedte / (max + tussen)).ceil()`. [extra] is wat er nog onder de hoes
+/// kan staan (de streep van `BusyLine`).
+SliverGridDelegate tegelRaster(BuildContext context, double breedte,
+    {double maxBreedte = 190, double tussen = 20, double extra = 0}) {
+  final n = (breedte / (maxBreedte + tussen)).ceil().clamp(1, 99);
+  final cel = (breedte - (n - 1) * tussen) / n;
+  return SliverGridDelegateWithFixedCrossAxisCount(
+    crossAxisCount: n,
+    mainAxisSpacing: tussen,
+    crossAxisSpacing: tussen,
+    mainAxisExtent: hoogteVanTegel(context, hoes: cel) + extra,
+  );
+}
 
 /// De hoes, op de maat die de tegel hem geeft.
 typedef HoesBouwer = Widget Function(double maat);
@@ -199,11 +233,14 @@ class _AlbumTegelState extends State<AlbumTegel> {
                 _hoesMet(vast),
               if (widget.onderHoes != null) widget.onderHoes!,
               const SizedBox(height: kRuimte8),
-              Text(
-                widget.titel,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: _aan ? kTegelTitel.copyWith(color: Colors.white) : kTegelTitel,
+              SizedBox(
+                height: kTegelTitelRegels * _regelhoogte(MediaQuery.textScalerOf(context), kTegelTitel),
+                child: Text(
+                  widget.titel,
+                  maxLines: kTegelTitelRegels,
+                  overflow: TextOverflow.ellipsis,
+                  style: _aan ? kTegelTitel.copyWith(color: Colors.white) : kTegelTitel,
+                ),
               ),
               if (widget.ondertitelWidget != null)
                 Align(alignment: Alignment.centerLeft, child: widget.ondertitelWidget!)

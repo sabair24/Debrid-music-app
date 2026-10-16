@@ -2018,7 +2018,9 @@ class DownloadManager extends ChangeNotifier {
       // (and was therefore discarded) reads as "added to your library" when nothing was added.
       job.detail = switch (how) {
         Placement.moved => null,
-        Placement.duplicate => 'had je al in minstens even goede kwaliteit — de nieuwe is weggegooid',
+        // Kort, want op een gsm is deze regel 211 punten: "had je al in minstens even goede…" zei
+        // niet wát er gebeurde (S26, 16-10-2026). Zie [detailRegels].
+        Placement.duplicate => 'had je al, even goed of beter — niet bewaard',
         Placement.stuck => 'gedownload, maar tags onleesbaar — staat in _inkomend',
       };
       notifyListeners();

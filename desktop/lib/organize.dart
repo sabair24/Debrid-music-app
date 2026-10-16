@@ -2281,11 +2281,11 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
         try {
           await _parkeer(f, '$downloadsRoot$sep$parkeerMap$sep$parkeerBinnenkomer');
           report.uitkomst[before] =
-              'had je al in minstens even goede kwaliteit, onder een andere titel — deze staat in $parkeerMap';
+              'had je al onder een andere titel, even goed of beter — kopie in $parkeerMap';
         } catch (_) {
           // Niet op te bergen én niet opzij te zetten: dan hoort hij ook niet zichtbaar te worden.
           report.tegengehouden.add(before);
-          report.uitkomst[before] = 'had je al in minstens even goede kwaliteit, onder een andere titel';
+          report.uitkomst[before] = 'had je al onder een andere titel, even goed of beter';
         }
         continue;
       }
@@ -2324,7 +2324,7 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
             : 'opgeborgen in je bibliotheek';
       case Placement.duplicate:
         report.duplicates++;
-        report.uitkomst[before] = 'had je al in minstens even goede kwaliteit — deze staat in $parkeerMap';
+        report.uitkomst[before] = 'had je al, even goed of beter — kopie in $parkeerMap';
       case Placement.stuck:
         report.skipped++;
         report.uitkomst[before] = 'niet op te bergen — de tags zijn niet te lezen';
