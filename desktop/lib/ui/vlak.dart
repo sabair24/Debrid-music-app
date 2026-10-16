@@ -540,28 +540,46 @@ class GlasKnop extends StatefulWidget {
 
 class _GlasKnopState extends State<GlasKnop> {
   bool _in = false;
-  DateTime? _neer;
 
   void _zet(bool v) {
     if (mounted && v != _in) setState(() => _in = v);
   }
 
-  Timer? _losKlok;
+  /// Loopt vanaf het neerdrukken [kKnopIngedrukt] lang; zolang hij loopt, blijft de knop ingedrukt
+  /// ogen, ook als de vinger al los is.
+  ///
+  /// **Een klok en geen wandklok.** Eerst werd hier `DateTime.now()` bij het neerdrukken onthouden en
+  /// bij het loslaten afgetrokken. Op de bouwstraat (16-10-2026) zat er tussen die twee in een toets
+  /// echt meer dan 110 ms, terwijl de toets maar 30 ms liet verstrijken: de knop schoot te vroeg
+  /// terug. Een Timer loopt in een toets op de nagebootste tijd, en in de app gewoon.
+  Timer? _minimum;
+  bool _losGevraagd = false;
 
   @override
   void dispose() {
-    _losKlok?.cancel();
+    _minimum?.cancel();
     super.dispose();
   }
 
+  void _neer() {
+    _losGevraagd = false;
+    _minimum?.cancel();
+    _minimum = Timer(kKnopIngedrukt, () {
+      _minimum = null;
+      if (_losGevraagd) _zet(false);
+    });
+    _zet(true);
+  }
+
   void _los() {
-    // Minstens [kKnopIngedrukt] zichtbaar, ook bij een vlugge tik. Een Timer en geen Future.delayed:
-    // die laatste loopt door als de knop al weg is.
-    final neer = _neer;
-    final rest = neer == null ? Duration.zero : kKnopIngedrukt - DateTime.now().difference(neer);
-    _losKlok?.cancel();
-    if (rest <= Duration.zero) return _zet(false);
-    _losKlok = Timer(rest, () => _zet(false));
+    if (_minimum == null) return _zet(false);
+    _losGevraagd = true;
+  }
+
+  void _weg() {
+    _minimum?.cancel();
+    _minimum = null;
+    _zet(false);
   }
 
   @override
@@ -604,14 +622,9 @@ class _GlasKnopState extends State<GlasKnop> {
     // Inveren en oplichten. Alleen een schaal en een doorzichtigheid: geen opbouw van de knop zelf
     // per beeld, en in rust (schaal 1, licht 0) geen enkele extra laag.
     return Listener(
-      onPointerDown: onPressed == null
-          ? null
-          : (_) {
-              _neer = DateTime.now();
-              _zet(true);
-            },
+      onPointerDown: onPressed == null ? null : (_) => _neer(),
       onPointerUp: (_) => _los(),
-      onPointerCancel: (_) => _zet(false),
+      onPointerCancel: (_) => _weg(),
       child: AnimatedScale(
         scale: aan ? kKnopVeer : 1,
         duration: aan ? const Duration(milliseconds: 70) : const Duration(milliseconds: 220),

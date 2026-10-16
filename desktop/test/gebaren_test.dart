@@ -46,6 +46,23 @@ void main() {
       expect(licht(), 0);
     });
 
+    testWidgets('ook als er tussen neer en los echt tijd verstrijkt (een trage machine)', (t) async {
+      // De bouwstraat ving het op 16-10-2026: met een wandklok schoot de knop terug zodra er tussen
+      // neerdrukken en loslaten echt meer dan 110 ms zat, ook al liet de toets maar 30 ms verstrijken.
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(body: Center(child: GlasKnop(icoon: Icons.shuffle_rounded, label: 'Shuffle alles', onPressed: () {})))));
+      double schaal() => t.widget<AnimatedScale>(find.byType(AnimatedScale)).scale;
+      final g = await t.startGesture(t.getCenter(find.text('Shuffle alles')));
+      await t.pump(const Duration(milliseconds: 20));
+      await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 160)));
+      await g.up();
+      await t.pump(const Duration(milliseconds: 30));
+      expect(schaal(), kKnopVeer, reason: 'de nagebootste tijd telt, niet de echte');
+      await t.pump(kKnopIngedrukt);
+      await t.pumpAndSettle();
+      expect(schaal(), 1);
+    });
+
     testWidgets('een uitgeschakelde knop veert niet', (t) async {
       await t.pumpWidget(const MaterialApp(
           home: Scaffold(body: Center(child: GlasKnop(icoon: Icons.shuffle_rounded, label: 'Shuffle alles', onPressed: null)))));

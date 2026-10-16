@@ -2046,6 +2046,42 @@ Widget glassSurface({
   );
 }
 
+/// Hoe hoog de glazen balken op een gsm samen zijn, zonder de systeembalk: de minispeler (52) en de
+/// onderbalk ([Onderbalk.hoogte]).
+const double kGlasBalkenHoogte = 52 + Onderbalk.hoogte;
+
+/// Een ondermarge plus wat er onderaan over de pagina ligt: de systeembalk, en op een gsm de glazen
+/// balken ([metGlasBalken]). Een lijst met een EIGEN marge krijgt die ruimte anders niet: Flutter
+/// telt hem er alleen bij als er geen marge is opgegeven.
+EdgeInsets onderOp(BuildContext context, EdgeInsets e) =>
+    e.copyWith(bottom: e.bottom + MediaQuery.paddingOf(context).bottom);
+
+/// De kleur van een balk op glas: dezelfde tint als zonder ([balkKleur]), maar doorschijnend, zodat
+/// het glas eronder te zien is. Staat het glas plat (tv of de bewaker), dan dicht zoals altijd.
+Color balkOpGlas(int? was) => glasZonderVervaging ? balkKleur(was) : balkKleur(was).withValues(alpha: .58);
+
+/// De pagina's met de glazen balken eroverheen, of gewoon de pagina's.
+///
+/// De pagina's krijgen de hoogte van de balken als extra `MediaQuery.padding.bottom`, en dat al
+/// BOVEN de navigator: zo houden ook een uitklapmenu en een blad van de binnenste navigator er
+/// rekening mee. Elke lijst telt hem mee via [onderOp].
+@visibleForTesting
+Widget metGlasBalken(BuildContext context, {required bool glas, required Widget balken, required Widget pagina}) {
+  if (!glas) return pagina;
+  final mq = MediaQuery.of(context);
+  return Stack(
+    children: [
+      Positioned.fill(
+        child: MediaQuery(
+          data: mq.copyWith(padding: mq.padding.copyWith(bottom: mq.padding.bottom + kGlasBalkenHoogte)),
+          child: pagina,
+        ),
+      ),
+      Positioned(left: 0, right: 0, bottom: 0, child: balken),
+    ],
+  );
+}
+
 // ── Home shell ───────────────────────────────────────────────────────────────
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -2688,6 +2724,10 @@ class _HomeShellState extends State<HomeShell> {
         !isCompact(context) &&
         !context.select<LibraryStore, bool>((l) => l.fromCloudMirror);
     final ruimte = zweeft ? _breedeBalkHoogte(context) : 0.0;
+    // Op een gsm (staand, geen tv) liggen de spelerbalk en de onderbalk als glas óver de pagina's
+    // (Saber, 16-10-2026: "minispeler en onderbalk" van glas, de inhoud schuift eronder door). Niet
+    // terwijl het toetsenbord open is: dan zijn de balken er niet. Zie [metGlasBalken].
+    final glasBalken = isCompact(context) && !isTv && MediaQuery.viewInsetsOf(context).bottom == 0;
     // BACK, on a television, must go back.
     //
     // The seven sections are a number in this state, not routes, so Flutter's navigator has
@@ -2853,7 +2893,11 @@ class _HomeShellState extends State<HomeShell> {
               //
               // Op een telefoon zou 340 punten naast een scherm van 411 niets overlaten; daar opent
               // dezelfde lijst als een blad van onderen (zie de knop in `_compactBar`).
-              child: BalkRuimte(
+              child: metGlasBalken(
+                context,
+                glas: glasBalken,
+                balken: glasBalken ? _glasBalken() : const SizedBox.shrink(),
+                pagina: BalkRuimte(
                 // Zolang de balk zweeft, houdt elke pagina zelf deze ruimte eronder vrij — per route,
                 // en daarom verspringt er bij een paginawissel niets. Zie [BalkRuimte].
                 hoogte: ruimte,
@@ -2924,6 +2968,7 @@ class _HomeShellState extends State<HomeShell> {
                 ],
               ),
               ),
+              ),
             ),
             // ALLEBEI WEG ZODRA HET TOETSENBORD OPEN IS.
             //
@@ -2940,7 +2985,7 @@ class _HomeShellState extends State<HomeShell> {
             // `viewInsets` en niet `viewPadding`: de eerste is wat er nú over het venster ligt (het
             // toetsenbord), de tweede is wat er permanent onderaan zit (de systeembalk). Ze
             // verwisselen zou de balken voorgoed verbergen.
-            if (MediaQuery.viewInsetsOf(context).bottom == 0) ...[
+            if (MediaQuery.viewInsetsOf(context).bottom == 0 && !glasBalken) ...[
               // De inzet voor de systeembalk hoort bij de ONDERSTE balk. Staat de navigatiebalk
               // eronder (alleen op een telefoon), dan rekent die hem al mee.
               // Op een tv een eigen scope, net als de bovenbalk. Zonder dit is de spelerbalk met de
@@ -2969,7 +3014,7 @@ class _HomeShellState extends State<HomeShell> {
             // navigatie half omzetten levert een app op met twee navigaties waarvan er één gaten
             // heeft.
             // Ook deze weg als het toetsenbord op is — zie de uitleg bij de spelerbalk hierboven.
-            if (isCompact(context) && MediaQuery.viewInsetsOf(context).bottom == 0)
+            if (isCompact(context) && MediaQuery.viewInsetsOf(context).bottom == 0 && !glasBalken)
               // Alleen de KLEUR van de speler gevolgd, niet de hele speler: zo bouwt de balk opnieuw
               // bij een andere plaat, niet bij elke tik van de klok.
               Selector<PlayerStore, int?>(
@@ -3014,6 +3059,27 @@ class _HomeShellState extends State<HomeShell> {
   /// controls sitting on it keep working: DragToMoveArea only claims what no child handled.
   /// On an iPad there is no window to drag and no `window_manager` behind these calls — the bar is
   /// just a bar there.
+  /// De spelerbalk en de onderbalk als één glasvlak, met de lensrand: ze staan stil, dus dat mag.
+  Widget _glasBalken() => ValueListenableBuilder<GlasStand>(
+        valueListenable: GlasKwaliteit.stand,
+        builder: (context, _, __) => GlasVlak(
+          lens: true,
+          lichtrand: false,
+          // De balken dragen zelf hun (doorschijnende) tint: zie [balkOpGlas].
+          vulling: const BoxDecoration(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const RepaintBoundary(child: PlayerBar(metSysteeminzet: false, opGlas: true)),
+              Selector<PlayerStore, int?>(
+                selector: (_, p) => p.wasKleur,
+                builder: (_, was, __) => Onderbalk(view: _view, onPick: _gaNaar, wasKleur: was, opGlas: true),
+              ),
+            ],
+          ),
+        ),
+      );
+
   Widget _topBar() => isCompact(context)
       ? _compactTopBar()
       : _isDesktop
@@ -4248,7 +4314,10 @@ class NavSections {
 /// een release te draaien en die op een telefoon te zetten. Als losse widget past hij wél in een
 /// toets die hem opmeet — zie test/onderbalk_test.dart.
 class Onderbalk extends StatelessWidget {
-  const Onderbalk({super.key, required this.view, required this.onPick, this.wasKleur});
+  const Onderbalk({super.key, required this.view, required this.onPick, this.wasKleur, this.opGlas = false});
+
+  /// Ligt deze balk op glas ([metGlasBalken])? Dan is zijn kleur doorschijnend.
+  final bool opGlas;
 
   /// De kleur van wat er speelt, voor dezelfde tint als de minispeler. Zie [balkKleur].
   final int? wasKleur;
@@ -4273,7 +4342,7 @@ class Onderbalk extends StatelessWidget {
     return AnimatedContainer(
       duration: kWas,
       curve: Curves.easeOut,
-      color: balkKleur(wasKleur),
+      color: opGlas ? balkOpGlas(wasKleur) : balkKleur(wasKleur),
       // De systeeminzet hoort bij de ONDERSTE balk, en dat is deze. `SafeArea` en geen eigen
       // rekensom: op een toestel met drie knoppen is die inzet twee keer zo hoog als op een met
       // veegbediening, en een vast getal zou de knoppen daar half onder de systeembalk zetten.
@@ -5032,7 +5101,7 @@ class AlbumsGrid extends StatelessWidget {
           ..._albumRowSlivers(albums, sort)
         else
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            padding: onderOp(context, const EdgeInsets.fromLTRB(24, 0, 24, 24)),
             // De hoogte uit de echte celbreedte, zodat de hoes vierkant blijft: zie [tegelRaster].
             sliver: SliverLayoutBuilder(
               builder: (context, c) => SliverGrid(
@@ -6532,7 +6601,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                   ),
                 ),
                 if (_officialBonus.isNotEmpty) SliverToBoxAdapter(child: _bonusSection()),
-                const SliverToBoxAdapter(child: SizedBox(height: 24)),
+                SliverToBoxAdapter(child: SizedBox(height: 24 + MediaQuery.paddingOf(context).bottom)),
               ],
               ),
               ),
@@ -8032,7 +8101,7 @@ class _ArtistsViewState extends State<ArtistsView> {
           ),
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          padding: onderOp(context, const EdgeInsets.fromLTRB(24, 0, 24, 24)),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                 maxCrossAxisExtent: 180,
@@ -8315,7 +8384,7 @@ class _PersonPageState extends State<PersonPage> {
                       (_) => Scaffold(
                         backgroundColor: _bg,
                         appBar: AppBar(backgroundColor: _bg, title: Text(w.title)),
-                        body: SingleChildScrollView(child: SourcesView(query: albumZoekvraag(widget.name, w.title, jaar: int.tryParse(w.year ?? '')))),
+                        body: SingleChildScrollView(padding: onderOp(context, EdgeInsets.zero), child: SourcesView(query: albumZoekvraag(widget.name, w.title, jaar: int.tryParse(w.year ?? '')))),
                       ),
                     ),
                   );
@@ -8324,7 +8393,7 @@ class _PersonPageState extends State<PersonPage> {
               ),
             ),
           ],
-          const SliverToBoxAdapter(child: SizedBox(height: 24)),
+          SliverToBoxAdapter(child: SizedBox(height: 24 + MediaQuery.paddingOf(context).bottom)),
         ],
         ),
         ),
@@ -8865,7 +8934,10 @@ class _Transport {
 
 // ── Now-playing bar ──────────────────────────────────────────────────────────
 class PlayerBar extends StatelessWidget {
-  const PlayerBar({super.key, this.metSysteeminzet = true});
+  const PlayerBar({super.key, this.metSysteeminzet = true, this.opGlas = false});
+
+  /// Ligt deze balk op glas ([metGlasBalken])? Dan is zijn kleur doorschijnend.
+  final bool opGlas;
 
   /// Houdt deze balk zélf ruimte vrij voor de systeembalk onderaan?
   ///
@@ -8896,7 +8968,7 @@ class PlayerBar extends StatelessWidget {
     // left. At 411 points that block bottoms out at its 96-point floor, of which the cover takes 54
     // and the gap 12 — leaving thirty points for the title, which printed "Niets aan het spelen"
     // one letter per line and overflowed the bar by 45 pixels.
-    if (isCompact(context)) return _compactBar(context, x, bottomInset);
+    if (isCompact(context)) return _compactBar(context, x, bottomInset, opGlas: opGlas);
 
     final side = math.min(280.0, math.max(96.0, (width - 336) / 2));
     return AnimatedContainer(
@@ -9221,7 +9293,7 @@ class AfspeellijstenView extends StatelessWidget {
     final lijsten = context.watch<Afspeellijsten>();
     final narrow = isCompact(context);
     return ListView(
-      padding: EdgeInsets.fromLTRB(narrow ? 18 : 28, 22, narrow ? 18 : 24, 30),
+      padding: onderOp(context, EdgeInsets.fromLTRB(narrow ? 18 : 28, 22, narrow ? 18 : 24, 30)),
       children: [
         Row(
           children: [
@@ -9446,7 +9518,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
               // De lijst loopt onder de doorzichtige balk door, dus de eerste regel begint zelf pas
               // onder die balk: zijn werkbalk, plus wat er aan statusbalk boven zit.
               padding: EdgeInsets.fromLTRB(
-                  20, 12 + kToolbarHeight + MediaQuery.paddingOf(context).top, 20, 12),
+                  20, 12 + kToolbarHeight + MediaQuery.paddingOf(context).top, 20, 12 + MediaQuery.paddingOf(context).bottom),
               itemCount: nummers.length,
               onReorder: (van, naar) {
                 final doel = van < naar ? naar - 1 : naar;
@@ -9538,7 +9610,7 @@ class FavorietenView extends StatelessWidget {
     }
 
     return ListView(
-      padding: EdgeInsets.fromLTRB(narrow ? 18 : 28, 22, narrow ? 18 : 24, 30),
+      padding: onderOp(context, EdgeInsets.fromLTRB(narrow ? 18 : 28, 22, narrow ? 18 : 24, 30)),
       children: [
         // Op een telefoon onder elkaar. Titel (25 punten, vet), telling en een knop naast elkaar
         // vragen samen ruim meer dan de 375 punten die er zijn — het nummerscherm had die
@@ -9676,7 +9748,9 @@ Future<void> _toonItemMenu(BuildContext context, ItemMenu menu, {Offset? bij}) =
 Widget _bronnenPagina(String titel, String vraag, {TrackTags? tags}) => Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(backgroundColor: _bg, title: Text(titel)),
-      body: SingleChildScrollView(child: SourcesView(query: vraag, tags: tags)),
+      body: Builder(
+          builder: (context) => SingleChildScrollView(
+              padding: onderOp(context, EdgeInsets.zero), child: SourcesView(query: vraag, tags: tags))),
     );
 
 /// De Cloudflare-controle van RuTracker doen en de doorgang bewaren — zie `doeRutrackerControle`.
@@ -10635,7 +10709,7 @@ class _VeegMinispelerState extends State<_VeegMinispeler> with SingleTickerProvi
 /// control — shuffle, repeat, skip-back and the seek bar all live on the full player, which is now
 /// one tap away because the entire bar is the tap target rather than the 54-point cover on the far
 /// left.
-Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
+Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool opGlas = false}) {
   final p = x.player;
   final t = x.track;
   final open = t == null
@@ -10656,7 +10730,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset) {
     // De hoes zakt mee van 44 naar 40 — anders raakt hij de randen en leest de rij als propvol.
     height: 52 + bottomInset,
     decoration: BoxDecoration(
-      color: balkKleur(p.wasKleur),
+      color: opGlas ? balkOpGlas(p.wasKleur) : balkKleur(p.wasKleur),
       border: const Border(top: BorderSide(color: _line)),
     ),
     padding: EdgeInsets.only(bottom: bottomInset),
@@ -10911,6 +10985,8 @@ Future<void> toonRadioUitZin(BuildContext context) async {
   final ctl = TextEditingController();
   await showModalBottomSheet<void>(
     context: context,
+    // Over de glazen balken heen, niet eronder: die liggen sinds 16-10-2026 óver de pagina's.
+    useRootNavigator: true,
     backgroundColor: _panel,
     isScrollControlled: true,
     shape: const RoundedRectangleBorder(
@@ -13462,7 +13538,7 @@ class TracksView extends StatelessWidget {
           child: ListView.builder(
             // Zie het albumraster: waar je was blijft staan bij een wissel naar een ander scherm.
             key: const PageStorageKey('nummerlijst'),
-            padding: const EdgeInsets.only(bottom: 12),
+            padding: onderOp(context, const EdgeInsets.only(bottom: 12)),
             itemCount: tracks.length,
             // Fixed height → smooth scrolling at 10k+ tracks. Taller on a television because the
             // text in the row is scaled 1.35x there and 56 would cut the second line off.
@@ -14121,7 +14197,7 @@ class _HomeStartViewState extends State<HomeStartView> {
       child: ListView(
       // Ook als de lijst korter is dan het scherm moet trekken werken.
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 32),
+      padding: onderOp(context, const EdgeInsets.only(bottom: 32)),
       children: [
         // 28 werd 24: alles op dit scherm staat vanaf hier op dezelfde goot als de rijen hoezen
         // eronder. Zie `ui/maten.dart`.
@@ -14615,7 +14691,7 @@ class _OntdekViewState extends State<OntdekView> {
         else
           Expanded(
             child: ListView.builder(
-              padding: const EdgeInsets.only(bottom: 24),
+              padding: onderOp(context, const EdgeInsets.only(bottom: 24)),
               itemCount: _tracks.length,
               itemBuilder: (_, i) => _row(i, _tracks[i]),
             ),
@@ -15054,7 +15130,7 @@ class DownloadsView extends StatelessWidget {
         final later = dm.jobs.where((j) => j.status == 'later').toList();
         final finished = dm.jobs.where((j) => !j.busy && j.status != 'later').toList();
         return ListView(
-          padding: const EdgeInsets.fromLTRB(28, 22, 28, 30),
+          padding: onderOp(context, const EdgeInsets.fromLTRB(28, 22, 28, 30)),
           children: [
             // What is kept on THIS device, above what is being fetched onto the PC. Two different
             // things that both live under "downloads": one is music arriving into your library,
@@ -16007,7 +16083,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
     final eigenKeuzes = lib.eigenKeuzesDieNepZijn();
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(28, 22, 28, 30),
+      padding: onderOp(context, const EdgeInsets.fromLTRB(28, 22, 28, 30)),
       children: [
         Wrap(
           crossAxisAlignment: WrapCrossAlignment.center,
@@ -18410,7 +18486,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       // overleeft de sectiewissel, dus die bewaart de scrolstand — zelfde truc als bij het
       // albumraster en de nummerlijst.
       key: const PageStorageKey('online-tidal'),
-      padding: const EdgeInsets.only(bottom: 24),
+      padding: onderOp(context, const EdgeInsets.only(bottom: 24)),
       children: [
         if (_tidalAlbums.isNotEmpty) ...[
           _browseHeader('Albums', _tidalAlbums.length),
@@ -18553,7 +18629,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       // overleeft de sectiewissel, dus die bewaart de scrolstand — zelfde truc als bij het
       // albumraster en de nummerlijst.
       key: const PageStorageKey('online-bladeren'),
-      padding: const EdgeInsets.only(bottom: 24),
+      padding: onderOp(context, const EdgeInsets.only(bottom: 24)),
       children: [
         if (_artists.isNotEmpty) ...[
           _browseHeader('Artiesten', _artists.length),
@@ -18726,7 +18802,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       // overleeft de sectiewissel, dus die bewaart de scrolstand — zelfde truc als bij het
       // albumraster en de nummerlijst.
       key: const PageStorageKey('online-direct'),
-      padding: const EdgeInsets.only(bottom: 24),
+      padding: onderOp(context, const EdgeInsets.only(bottom: 24)),
       children: [
         if (_torrents.isNotEmpty || _slsk.isNotEmpty)
           _filterChipsRow(_filter, (f) => setState(() => _filter = f)),
@@ -21921,7 +21997,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
               ),
             ),
           ],
-          const SliverToBoxAdapter(child: SizedBox(height: 24)),
+          SliverToBoxAdapter(child: SizedBox(height: 24 + MediaQuery.paddingOf(context).bottom)),
             ]),
           ),
         ],
@@ -22625,7 +22701,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         top: ruimte == 0,
         child: ListView(
         controller: _rol,
-        padding: const EdgeInsets.only(bottom: 40),
+        padding: onderOp(context, const EdgeInsets.only(bottom: 40)),
         children: [
           Padding(
             padding: EdgeInsets.fromLTRB(16, 16 + ruimte, 20, 8),
@@ -30354,7 +30430,7 @@ class _StylePageState extends State<StylePage> {
           )
         else
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 30),
+            padding: onderOp(context, const EdgeInsets.fromLTRB(24, 0, 24, 30)),
             sliver: SliverGrid(
               gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                   maxCrossAxisExtent: 175, mainAxisSpacing: 18, crossAxisSpacing: 18, childAspectRatio: .78),
