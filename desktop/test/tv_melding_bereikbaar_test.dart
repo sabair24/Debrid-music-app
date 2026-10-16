@@ -69,7 +69,7 @@ void main() {
     });
 
     test('omlaag vanuit het menu komt eerst bij de melding, omhoog vanuit de inhoud ook', () {
-      expect(bron, contains('[_tvMelding, _tvInhoud]'),
+      expect(bron, contains('[_tvMelding, _tvInhoud, _tvSpeler]'),
           reason: 'omlaag vanuit de bovenbalk moet de melding vóór de inhoud proberen');
       expect(bron, contains('[_tvMelding, _tvBalk]'),
           reason: 'omhoog vanuit de inhoud moet de melding vóór de bovenbalk proberen');

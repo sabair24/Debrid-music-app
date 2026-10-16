@@ -65,7 +65,7 @@ void main() {
     // wordt is dat de bestemming er nog in zit, niet hoe het rijtje eruitziet.
     expect(bron, contains('TraversalDirection.up, [_tvMelding, _tvBalk]'),
         reason: 'omhoog vanuit de inhoud moet nog steeds bij de bovenbalk uitkomen');
-    expect(bron, contains('TraversalDirection.down, [_tvMelding, _tvInhoud]'),
+    expect(bron, contains('TraversalDirection.down, [_tvMelding, _tvInhoud, _tvSpeler]'),
         reason: 'omlaag vanuit de bovenbalk moet nog steeds bij de inhoud uitkomen');
   });
 
