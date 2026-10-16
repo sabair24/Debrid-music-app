@@ -46,15 +46,20 @@ void main() {
 
   test('2. een sprong landt op iets dat in beeld staat', () {
     final sprong = stuk('KeyEventResult _tvSprong', 'FocusNode? _landingsplek(');
-    expect(sprong, contains('_landingsplek(scope, richting, vanwaar)?.requestFocus()'),
+    expect(sprong, contains('_landingsplek(scope, richting, vanwaar, links: uitBalk)?.requestFocus()'),
         reason: 'zonder landingsplek krijgt de scope zelf de focus, en die tekent geen rand');
+    expect(sprong, contains('if (_heeftZichtbaar(scope)) {'),
+        reason: 'een scope met alleen onzichtbare elementen gaf de selectie aan iets dat je niet ziet '
+            '(lege Favorieten, Shield, 16-10-2026)');
     final landing = stuk('FocusNode? _landingsplek(', '\n  }\n');
     expect(landing, contains('scherm.overlaps(r)'),
         reason: 'wat onthouden was mag alleen winnen als het in beeld staat');
     expect(landing, contains('scope.focusedChild'),
         reason: 'terug naar waar je in een lange lijst was blijft het eerste antwoord');
-    expect(landing, contains('vanwaar?.center.dx'),
-        reason: 'uit het menu recht naar beneden, niet naar de eerste tegel van de rij');
+    // Van onderen (de spelerbalk) recht omhoog; vanuit de bovenbalk het eerste element links (Saber,
+    // 16-10-2026: "de eerste keer de eerste hoes").
+    expect(landing, contains('vanwaar?.center.dx'));
+    expect(landing, contains('rij.sort((a, b) => a.rect.left.compareTo(b.rect.left));'));
   });
 
   test('3. tekstlinks vergroten niet uit bij focus', () {

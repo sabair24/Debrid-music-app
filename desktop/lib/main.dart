@@ -2158,7 +2158,7 @@ class _HomeShellState extends State<HomeShell> {
     final vanwaar = FocusManager.instance.primaryFocus?.rect;
     final uitBalk = _tvBalk.hasFocus;
     for (final scope in naar) {
-      if (scope.traversalDescendants.isNotEmpty) {
+      if (_heeftZichtbaar(scope)) {
         scope.requestFocus();
         _landingsplek(scope, richting, vanwaar, links: uitBalk)?.requestFocus();
         break;
@@ -2166,6 +2166,22 @@ class _HomeShellState extends State<HomeShell> {
     }
     return KeyEventResult.handled;
   }
+
+  /// Staat [n] (een deel van) in beeld?
+  bool _opScherm(FocusNode n) {
+    final r = n.rect;
+    return r.width > 0 && r.height > 0 && (Offset.zero & MediaQuery.sizeOf(context)).overlaps(r);
+  }
+
+  /// Staat er in [scope] iets om op te staan dat ook in beeld is?
+  ///
+  /// **Waarom niet gewoon "staat er iets".** Een lege pagina (Favorieten zonder favorieten) kan
+  /// elementen dragen die niet in beeld staan, van een route die eronder ligt. `requestFocus` op de
+  /// scope gaf de selectie dan daaraan: op de Shield (16-10-2026) stond na omhoog vanuit de
+  /// spelerbalk de selectie nergens te zien, en links, rechts en omhoog deden niets meer. Zo'n scope
+  /// wordt nu overgeslagen, en de sprong gaat door naar de volgende (de bovenbalk).
+  bool _heeftZichtbaar(FocusScopeNode scope) =>
+      scope.traversalDescendants.any((n) => n is! FocusScopeNode && n.canRequestFocus && _opScherm(n));
 
   /// Waar de focus na een sprong hoort te landen, of null als [scope] dat zelf goed doet.
   ///
@@ -2240,7 +2256,7 @@ class _HomeShellState extends State<HomeShell> {
       if (!mounted) return;
       final vanwaar = FocusManager.instance.primaryFocus?.rect;
       for (final scope in [_tvMelding, _tvInhoud, _tvSpeler]) {
-        if (scope.traversalDescendants.isNotEmpty) {
+        if (_heeftZichtbaar(scope)) {
           scope.requestFocus();
           _landingsplek(scope, TraversalDirection.down, vanwaar, links: true)?.requestFocus();
           break;
@@ -2293,7 +2309,9 @@ class _HomeShellState extends State<HomeShell> {
     ];
     if (!toetsen.contains(e.logicalKey)) return false;
     final hier = FocusManager.instance.primaryFocus;
-    if (!focusZonderDoel(hier, wortel: FocusManager.instance.rootScope)) return false;
+    // Ook een selectie op iets dat niet in beeld staat: dan ziet niemand waar hij is, en een pijl
+    // brengt hem naar een buur die evenmin in beeld staat.
+    if (!focusZonderDoel(hier, wortel: FocusManager.instance.rootScope) && _opScherm(hier!)) return false;
     // Alleen als er geen dialoog of menu boven de pagina staat: daar hoort de focus te blijven.
     if (ModalRoute.of(context)?.isCurrent == false) return false;
     if (_tvBalk.traversalDescendants.isEmpty) return false;

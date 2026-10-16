@@ -333,6 +333,10 @@ void main() {
     expect(main, contains('        _landingsplek(scope, richting, vanwaar, links: uitBalk)?.requestFocus();'));
     expect(main, contains('          _landingsplek(scope, TraversalDirection.down, vanwaar, links: true)?.requestFocus();'));
     expect(main, contains('    if (links) {\n      rij.sort((a, b) => a.rect.left.compareTo(b.rect.left));'));
+    // Een selectie op iets onzichtbaars telt als "nergens" (lege Favorieten, omhoog vanuit de
+    // spelerbalk: daarna deed geen enkele pijl nog iets).
+    expect(main, contains('&& _opScherm(hier!)) return false;'));
+    expect('if (_heeftZichtbaar(scope)) {'.allMatches(main).length, 2);
   });
 
   group('na twee minuten stilstand: Nu speelt', () {
