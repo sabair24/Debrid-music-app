@@ -67,7 +67,8 @@ void main() {
     });
 
     test('de app start hem bij het opstarten', () {
-      expect(hoofd, contains('Mediabediening.start(speler: player, speaker: speakers);'));
+      expect(hoofd, contains('Mediabediening.start(speler: player, speaker: speakers, meld: startLog.line);'),
+          reason: 'en wat er binnenkomt staat in start.log');
     });
   });
 }
