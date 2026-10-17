@@ -1238,6 +1238,10 @@ Future<void> main() async {
     // De speeltelling stond hier ook, en is verhuisd naar `Speelstanden` hierboven: die hoort NIET
     // achter `mode.owner`, want dan telt een gekoppelde telefoon nooit iets mee.
     player.onProgress = (track, position, playing, queue, index) {
+      // Niets melden zolang alleen de oude stand teruggezet is (bij het opstarten, gepauzeerd): dat
+      // is niet "waar je nu bent". Op de proef overschreef de Shield zo bij het opstarten wat de pc een
+      // minuut eerder speelde, met een nummer van dagen geleden (17-10-2026).
+      if (player.resumedPaused) return;
       // Even niet na een overname (zie [VerderLuisteren.meldNu]); en de eerste melding na zelf
       // overnemen zegt van welk toestel, zodat dat pauzeert.
       final m = verder.meldNu();
@@ -1457,7 +1461,8 @@ Future<void> main() async {
       // "Hier verder luisteren" aanbieden (Saber, 17-10-2026). Tot nu toe meldde alleen de pc.
       player.onProgress = (track, position, playing, queue, index) {
         final c = library.remote;
-        if (c == null) return;
+        // Zie de pc hierboven: een alleen teruggezette stand is geen melding.
+        if (c == null || player.resumedPaused) return;
         final m = verder.meldNu();
         if (m == null) return;
         final id = library.gedeeldId(track.path);

@@ -232,6 +232,12 @@ void main() {
     });
   });
 
+  test('een alleen teruggezette stand wordt niet gemeld, op de pc en op een toestel', () {
+    final hoofd = File('lib/main.dart').readAsStringSync();
+    expect(hoofd, contains('      if (player.resumedPaused) return;\n'));
+    expect(hoofd, contains('        if (c == null || player.resumedPaused) return;\n'));
+  });
+
   group('de gedeelde staat op de pc', () {
     LanStateStore staat() => LanStateStore(File('${Directory.systemTemp.path}/verder_staat_${DateTime.now().microsecondsSinceEpoch}.json'));
 
