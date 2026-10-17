@@ -61,6 +61,12 @@ void main() {
     await t.pump();
     final gsm = kader(KopScherm.gsm);
     expect(gsm.width / (gsm.height - 24), closeTo(411 / 520, .02));
+    // Een iPad rechtop: een eigen, bijna vierkant kader (Saber, 17-10-2026).
+    await t.tap(find.byKey(const ValueKey('kop-scherm-staand')));
+    await t.pump();
+    final staand = kader(KopScherm.staand);
+    expect(staand.width / (staand.height - 24), closeTo(834 / 828, .02));
+    expect(find.text('iPad rechtop'), findsOneWidget);
   });
 
   testWidgets('slepen verschuift de foto, en Opslaan bewaart alleen dat scherm', (t) async {

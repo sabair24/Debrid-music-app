@@ -24,16 +24,21 @@ import 'kopfoto.dart';
 /// Gemeten in de echte app: een tv is 960 breed en de kop 360 + 75 (zie `kTvKopZicht`); op de pc is
 /// de kop op een venster van 1440 zo'n 700 hoog met de balk van 64 erboven; een gsm is 411 breed en de
 /// kop daar ongeveer 520.
+///
+/// Een iPad rechtop: 834 breed, de kop gemeten op zo'n 740 hoog (zie `beeldvorm.dart`), met de
+/// zwevende balk en de statusbalk (64 + 24) erboven.
 ({Size maat, double balk, bool smal}) kopKader(KopScherm s) => switch (s) {
       KopScherm.pc => (maat: const Size(1440, 700), balk: 64, smal: false),
       KopScherm.tv => (maat: const Size(960, 435), balk: 75, smal: false),
       KopScherm.gsm => (maat: const Size(411, 520), balk: 0, smal: true),
+      KopScherm.staand => (maat: const Size(834, 828), balk: 88, smal: false),
     };
 
 String kopSchermNaam(KopScherm s) => switch (s) {
       KopScherm.pc => 'Pc · Mac · iPad',
       KopScherm.tv => 'Tv',
       KopScherm.gsm => 'Gsm',
+      KopScherm.staand => 'iPad rechtop',
     };
 
 /// De bewerker. [huidig] is wat er per scherm bewaard is (null = de app kiest zelf); [bewaar] krijgt

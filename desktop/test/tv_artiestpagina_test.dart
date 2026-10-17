@@ -446,6 +446,26 @@ void main() {
       expect(bron, contains('if (vorige != null && _zelfdeInvoer(invoer, _discoInvoer)) return vorige;'));
     });
 
+    // Saber, 17-10-2026: "de balk bovenaan is veel te hoog" — capsule en albumwerkbalk vastgezet
+    // waren samen 150 punten donker. Op een tv schuift de werkbalk mee, de strook dekt de capsule.
+    test('albumpagina op tv: werkbalk niet vast, strook alleen achter de capsule', () {
+      expect(bron, contains('flexibleSpace: isTv ? null : _MeeschuivendGlas(tint: wasTop, rol: _rol),'));
+      expect(bron, contains('pinned: !isTv,'));
+      expect(bron, contains('if (isTv && ruimte > 0)\n            Positioned(\n              top: 0,\n              left: 0,\n              right: 0,\n              height: ruimte,'));
+    });
+
+    test('op een tv is de zoekterm weg zodra je van tabblad wisselt', () {
+      final i = bron.indexOf('  void _gaNaar(int id) {');
+      final lijf = bron.substring(i, bron.indexOf('\n  }\n', i));
+      expect(lijf, contains("if (isTv && _q.isNotEmpty) {"));
+      expect(lijf, contains("_leggenZoekterm('');"));
+    });
+
+    test('een kop zonder foto krijgt die van Deezer', () {
+      expect(bron, contains('fallbackImage: _wachtOpKeuze ? null : _deezerFoto,'));
+      expect(bron, contains('if (art?.backdropBytes != null || _keuzeUrl != null) return;'));
+    });
+
     test('bij openen staat de selectie op Radio', () {
       expect(bron, contains('autofocus: isTv,\n                      onPressed: () => startRadio(context, widget.artist.name),'));
     });

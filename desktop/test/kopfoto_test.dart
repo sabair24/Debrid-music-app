@@ -54,7 +54,7 @@ void main() {
     });
 
     test('elk scherm zijn eigen soort, en alle drie reizen ze mee met de catalogus', () {
-      expect({for (final s in KopScherm.values) kopSoort(s)}, {'kop_pc', 'kop_tv', 'kop_gsm'});
+      expect({for (final s in KopScherm.values) kopSoort(s)}, {'kop_pc', 'kop_tv', 'kop_gsm', 'kop_staand'});
       for (final s in KopScherm.values) {
         expect(kArtSoorten, contains(kopSoort(s)), reason: 'anders komt de ${s.name}-kop nooit op dat toestel aan');
       }
@@ -267,7 +267,7 @@ void main() {
     });
 
     test('Kop aanpassen alleen op pc, Mac en iPad', () {
-      expect(bron, contains('if (!isTv && !isCompact(context) && (_keuzeBytes ?? _art?.backdropBytes) != null)'));
+      expect(bron, contains('if (!isTv && !isCompact(context) && (_keuzeBytes ?? _art?.backdropBytes ?? _deezerFoto) != null)'));
     });
 
     test('wat over een foto bekend is, wordt bewaard — één keer per foto', () {

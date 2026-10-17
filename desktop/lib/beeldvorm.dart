@@ -68,6 +68,7 @@ const List<String> kArtSoorten = <String>[
   'kop_pc',
   'kop_tv',
   'kop_gsm',
+  'kop_staand',
 ];
 
 /// Welke vorm dit scherm heeft.
@@ -111,7 +112,10 @@ List<String> achtergrondSoorten(Beeldvorm vorm) => switch (vorm) {
 /// Apart bewaard (Saber, 17-10-2026: "alles per toestel apart"): een tv-kop is ruim twee keer zo
 /// breed als hoog, een gsm-kop bijna vierkant, dus wat op de tv goed staat, snijdt op de gsm de
 /// helft van de groep weg. Op de pc kies je voor welk scherm je hem instelt.
-enum KopScherm { pc, tv, gsm }
+///
+/// [staand] is een iPad die je rechtop houdt (en een venster dat hoger is dan breed): daar is de kop
+/// bijna vierkant, en Saber koos daar een eigen instelling voor (17-10-2026).
+enum KopScherm { pc, tv, gsm, staand }
 
 /// Onder welke soort de kopinstelling bij de artiest bewaard wordt: naast de gekozen foto's, in
 /// `artist_art_choice.json`, en zo met de catalogus mee naar elk toestel (zie [kArtSoorten]).

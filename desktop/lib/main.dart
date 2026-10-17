@@ -1980,29 +1980,6 @@ class _MeeschuivendGlas extends StatelessWidget {
   }
 }
 
-/// De strook achter de balken van de albumpagina op een tv: donker en schermbreed.
-///
-/// Saber koos "donkere strook achter de balk" (17-10-2026). In de balk van de albumpagina zelf was hij
-/// eerst een rood blok met harde randen: de lijst staat op een tv binnen de zijmarge (48 punten) en
-/// knipt daar af, dus eindigde de strook 48 punten voor elke rand, in de kleur van de hoes. Nu loopt
-/// hij door de marge heen tot de rand, en boven tot de bovenrand van het scherm, in de kleur van de
-/// pagina eronder.
-class _TvAlbumStrook extends StatelessWidget {
-  const _TvAlbumStrook({required this.rol});
-  final ScrollController rol;
-
-  @override
-  Widget build(BuildContext context) => Stack(clipBehavior: Clip.none, children: [
-        Positioned(
-          left: -tvOverscan.left,
-          right: -tvOverscan.right,
-          top: -tvOverscan.top,
-          bottom: 0,
-          child: _MeeschuivendGlas(tint: _bg, rol: rol),
-        ),
-      ]);
-}
-
 /// Een ruit matglas: hij vervaagt écht wat erachter langs schuift.
 ///
 /// Eén recept, want het stond twee keer woordelijk in dit bestand — op de balk bovenaan en op de
@@ -3254,7 +3231,19 @@ class _HomeShellState extends State<HomeShell> {
   /// brengt je terug naar de bovenkant van die sectie.
   void _gaNaar(int id) {
     binnenNav.currentState?.popUntil((r) => r.isFirst);
-    if (_view != id) setState(() => _view = id);
+    if (_view != id) {
+      setState(() {
+        _view = id;
+        // Op een tv is de zoekterm weg zodra je naar een ander tabblad gaat. Hij bleef staan, en dan
+        // stond er op Artiesten "Artiesten · 1" — alleen wie je net gezocht had, zonder dat er
+        // ergens een zoekveld te zien was (Saber, 17-10-2026: "wissen na Zoeken"). Op de pc staat
+        // het zoekveld in de balk en zie je dus altijd waarop er gefilterd wordt.
+        if (isTv && _q.isNotEmpty) {
+          _leggenZoekterm('');
+          _searchCtl.text = '';
+        }
+      });
+    }
   }
 
   /// Brand, the navigation pill bar, and the library count — the old left rail, laid out
@@ -6719,10 +6708,6 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                     : MediaQuery.of(context),
                 child: CustomScrollView(
               controller: _rol,
-              // Op een tv niet afknippen, zodat de strook achter de balk door de tv-marge heen tot de
-              // rand van het scherm kan lopen (zie [_TvAlbumStrook]). Wat erboven uit de lijst schuift,
-              // valt dan achter die strook; onderaan ligt de spelerbalk eroverheen.
-              clipBehavior: isTv ? Clip.none : Clip.hardEdge,
               slivers: [
                 SliverAppBar(
                   // Matglas in plaats van een dichte kleur.
@@ -6742,10 +6727,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                   scrolledUnderElevation: 0,
                   surfaceTintColor: Colors.transparent,
                   shadowColor: Colors.transparent,
-                  flexibleSpace: isTv
-                      ? _TvAlbumStrook(rol: _rol)
-                      : _MeeschuivendGlas(tint: wasTop, rol: _rol),
-                  pinned: true,
+                  // Op een tv geen glas in deze balk en niet vastgezet: dan schuift hij mee weg (bovenaan de
+                  // pagina is hij er gewoon, en TERUG doet wat de pijl doet), en de donkere strook dekt
+                  // alleen de zwevende balk — zie onderaan deze pagina. Vastgezet waren capsule en
+                  // werkbalk samen een strook van 150 punten, een kwart van het scherm (Saber,
+                  // 17-10-2026: "de balk bovenaan is veel te hoog").
+                  flexibleSpace: isTv ? null : _MeeschuivendGlas(tint: wasTop, rol: _rol),
+                  pinned: !isTv,
                   // Glas onder elk pictogram, en de knoppen zelf zoals ze waren. Zie [glasInBalk].
                   leading: glasInBalk(plat: isCompact(context), IconButton(
                     icon: const Icon(Icons.arrow_back_rounded),
@@ -6981,6 +6969,17 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
           ),
         ],
           ),
+          // Op een tv de donkere strook alleen achter de zwevende balk, over de volle breedte — zoals
+          // op de artiestpagina. Hij komt op met het scrollen ([_MeeschuivendGlas]), dus in rust loopt
+          // de hoes gewoon tot boven.
+          if (isTv && ruimte > 0)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: ruimte,
+              child: IgnorePointer(child: _MeeschuivendGlas(tint: _bg, rol: _rol)),
+            ),
         ],
       ),
     );
@@ -21020,10 +21019,16 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
 /// voor de balk min 105 voor de spelerbalk. Zo hoog is de kop van de artiestpagina daar minstens.
 const double kTvKopZicht = 360;
 
-/// Voor welk soort scherm de kop hier getekend wordt — welke van de drie instellingen telt (zie
-/// [KopScherm]). Een iPad en een Mac tellen als pc: ze hebben dezelfde brede kop met de naam links.
-KopScherm kopSchermVan(BuildContext context) =>
-    isTv ? KopScherm.tv : (isCompact(context) ? KopScherm.gsm : KopScherm.pc);
+/// Voor welk soort scherm de kop hier getekend wordt — welke van de instellingen telt (zie
+/// [KopScherm]). Een iPad en een Mac tellen als pc: ze hebben dezelfde brede kop met de naam links —
+/// behalve een iPad die je rechtop houdt, die heeft zijn eigen ([KopScherm.staand]).
+KopScherm kopSchermVan(BuildContext context) {
+  if (isTv) return KopScherm.tv;
+  if (isCompact(context)) return KopScherm.gsm;
+  return beeldvormVan(scherm: MediaQuery.sizeOf(context), tv: false) == Beeldvorm.staand
+      ? KopScherm.staand
+      : KopScherm.pc;
+}
 
 /// Open "Kop aanpassen" voor [naam], met [beeld] — de foto die de kop nu toont.
 Future<void> toonKopBewerker(BuildContext context, String naam, Uint8List beeld) {
@@ -22473,10 +22478,24 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   Future<void> _loadArt() async {
     final naam = widget.artist.name;
     final settings = context.read<AppSettings>();
-    final art = await CoverEnricher(settings).artistArt(naam);
+    final enr = CoverEnricher(settings);
+    final art = await enr.artistArt(naam);
     if (!mounted || naam != widget.artist.name) return;
     setState(() => _art = art);
+    // Geen achtergrond bij TheAudioDB en geen eigen keuze: dan de foto van Deezer als kop (Saber,
+    // 17-10-2026, bij Blue Boy: anders alleen een donkere gloed achter de naam). Eerst van schijf,
+    // anders één vraag via de rijbaan van Deezer. Slim uitgesneden zoals elke kopfoto.
+    if (art?.backdropBytes != null || _keuzeUrl != null) return;
+    Uint8List? b;
+    try {
+      b = context.read<LibraryStore>().artistImages[naam] ?? await enr.cachedArtist(naam) ?? await enr.fetchArtistImage(naam);
+    } catch (_) {/* geen foto is een kop met alleen de naam, zoals voorheen */}
+    if (!mounted || naam != widget.artist.name || b == null) return;
+    setState(() => _deezerFoto = b);
   }
+
+  /// De foto van Deezer, voor een kop waar verder geen foto voor is — zie [_loadArt].
+  Uint8List? _deezerFoto;
 
   /// De achtergrond die de gebruiker zelf koos, in bytes. Zie de uitleg in `build`.
   String? _keuzeUrl;
@@ -22759,6 +22778,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   achtergrondKeuze: _keuzeBytes,
                   // Zie [_wachtOpKeuze]: geen tussenfoto als er een eigen keuze onderweg is.
                   art: _wachtOpKeuze ? null : _art,
+                  fallbackImage: _wachtOpKeuze ? null : _deezerFoto,
                   soort: widget.artist.detail,
                   bibliotheek: _busy
                       ? 'Albums laden…'
@@ -22805,12 +22825,12 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                     // De kop zelf uitsnijden, per soort scherm (Saber, 17-10-2026: "op pc, Mac en
                     // iPad"). Niet op een gsm: daar is geen ruimte voor drie kaders, en wat je daar
                     // ziet stel je op de pc in onder "Gsm".
-                    if (!isTv && !isCompact(context) && (_keuzeBytes ?? _art?.backdropBytes) != null)
+                    if (!isTv && !isCompact(context) && (_keuzeBytes ?? _art?.backdropBytes ?? _deezerFoto) != null)
                       GlasKnop(
                         icoon: Icons.crop_rounded,
                         label: 'Kop aanpassen',
                         onPressed: () => toonKopBewerker(
-                            context, widget.artist.name, (_keuzeBytes ?? _art?.backdropBytes)!),
+                            context, widget.artist.name, (_keuzeBytes ?? _art?.backdropBytes ?? _deezerFoto)!),
                       ),
                     // Alleen waar er iets te hernoemen valt: een artiest uit de catalogus waarvan
                     // je niets hebt, heeft geen tags om te corrigeren.
