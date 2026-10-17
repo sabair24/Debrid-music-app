@@ -43,21 +43,26 @@ MediaActie? mediaKnopActie(String? knop, {required bool speelt}) => switch (knop
 
 /// De verbinding met de mediabediening van Windows. Eén per app, zie [start].
 class Mediabediening {
-  Mediabediening._(this._speler, this._speaker);
+  Mediabediening._(this._speler, this._speaker, this._spoor);
 
   static const _kanaal = MethodChannel('debridmusic/mediabediening');
 
   final PlayerStore _speler;
   final SpeakerTarget _speaker;
 
+  /// Een regel in start.log: wat er binnenkwam en wat ermee gebeurde. Zonder dit is "de toets doet
+  /// niets" niet te onderscheiden van "de toets komt niet aan" (17-10-2026, op de proef gemeten).
+  final void Function(String regel)? _spoor;
+
   String? _pad;
   bool? _speelt;
   Uint8List? _hoes;
 
   /// Begint met melden en luisteren; alleen op Windows (elders null).
-  static Mediabediening? start({required PlayerStore speler, required SpeakerTarget speaker}) {
+  static Mediabediening? start(
+      {required PlayerStore speler, required SpeakerTarget speaker, void Function(String regel)? meld}) {
     if (!Platform.isWindows) return null;
-    final m = Mediabediening._(speler, speaker);
+    final m = Mediabediening._(speler, speaker, meld);
     _kanaal.setMethodCallHandler(m._opOproep);
     speler.addListener(m._meld);
     speaker.addListener(m._meld);
@@ -70,7 +75,9 @@ class Mediabediening {
 
   Future<void> _opOproep(MethodCall oproep) async {
     if (oproep.method != 'knop') return;
-    switch (mediaKnopActie(oproep.arguments as String?, speelt: _speeltNu)) {
+    final actie = mediaKnopActie(oproep.arguments as String?, speelt: _speeltNu);
+    _spoor?.call('media: knop ${oproep.arguments} → ${actie?.name ?? 'niets'} (speelt: $_speeltNu)');
+    switch (actie) {
       // Als opdracht en niet als schakelaar, op de plek waar de muziek is: zie [PlayerStore.speelAf].
       case MediaActie.speelPauze:
         if (_speler.current == null && !_speaker.isCasting) return;

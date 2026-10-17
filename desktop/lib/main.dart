@@ -824,7 +824,7 @@ Future<void> main() async {
   // plek zijn waar dit stuk kapot kan.
   player.onHapering = netStore.hapering;
   // De mediatoetsen van het toetsenbord en de knoppen in de taakbalk, op Windows. Zie mediabediening.dart.
-  Mediabediening.start(speler: player, speaker: speakers);
+  Mediabediening.start(speler: player, speaker: speakers, meld: startLog.line);
   // Wisselt het toestel van netwerk (wifi weg, mobiel erbij, Tailscale aan of uit), dan meteen
   // opnieuw een adres van de pc kiezen in plaats van te wachten tot een verzoek vastloopt — en de
   // netsoort (de 5G-stand) mee. Zie `netwerkwissel.dart`. Alleen op een toestel: de pc zelf hoeft

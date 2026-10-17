@@ -18,6 +18,8 @@
 
 #include <flutter/standard_method_codec.h>
 
+#include "utils.h"
+
 #include <map>
 #include <variant>
 
@@ -158,10 +160,12 @@ struct Mediabediening::Binnen {
         HStringReference(RuntimeClass_Windows_Media_SystemMediaTransportControls).Get(),
         IID_PPV_ARGS(&interop));
     if (FAILED(hr) || !interop) {
+      StartLogRegel("media: geen mediabediening van Windows (fabriek, hr=0x%08lX)", static_cast<unsigned long>(hr));
       return;
     }
     hr = interop->GetForWindow(venster, IID_PPV_ARGS(&smtc));
     if (FAILED(hr) || !smtc) {
+      StartLogRegel("media: geen mediabediening van Windows (venster, hr=0x%08lX)", static_cast<unsigned long>(hr));
       smtc.Reset();
       return;
     }
@@ -185,7 +189,9 @@ struct Mediabediening::Binnen {
           PostMessageW(doel, kMediaKnopBericht, static_cast<WPARAM>(knop), 0);
           return S_OK;
         });
-    smtc->add_ButtonPressed(opKnop.Get(), &knopToken);
+    hr = smtc->add_ButtonPressed(opKnop.Get(), &knopToken);
+    StartLogRegel("media: aangemeld bij de mediabediening van Windows (knoppen hr=0x%08lX)",
+                  static_cast<unsigned long>(hr));
     smtc->get_DisplayUpdater(&scherm);
   }
 
@@ -271,7 +277,10 @@ struct Mediabediening::Binnen {
     Vul(knoppen[0], kKnopVorige, icoonVorige, L"Vorige");
     Vul(knoppen[1], kKnopSpeel, speelt ? icoonPauze : icoonSpeel, speelt ? L"Pauzeren" : L"Afspelen");
     Vul(knoppen[2], kKnopVolgende, icoonVolgende, L"Volgende");
-    knoppenStaan = SUCCEEDED(taakbalk->ThumbBarAddButtons(venster, 3, knoppen));
+    const HRESULT hr = taakbalk->ThumbBarAddButtons(venster, 3, knoppen);
+    knoppenStaan = SUCCEEDED(hr);
+    StartLogRegel("media: knoppen in de taakbalk %s (hr=0x%08lX)", knoppenStaan ? "gezet" : "NIET gezet",
+                  static_cast<unsigned long>(hr));
   }
 
   void WerkTaakbalkBij() {
@@ -292,6 +301,8 @@ struct Mediabediening::Binnen {
   }
 
   void Stuur(const char* knop) {
+    StartLogRegel("media: knop %s naar de app%s", knop == nullptr ? "(onbekend)" : knop,
+                  kanaal ? "" : " -- GEEN KANAAL");
     if (kanaal && knop != nullptr) {
       kanaal->InvokeMethod("knop", std::make_unique<flutter::EncodableValue>(std::string(knop)));
     }
@@ -358,6 +369,7 @@ Mediabediening::~Mediabediening() {
 bool Mediabediening::Bericht(UINT bericht, WPARAM wparam, LPARAM lparam) {
   (void)lparam;
   if (bericht == kMediaKnopBericht) {
+    StartLogRegel("media: bericht van Windows binnen (knop %d)", static_cast<int>(wparam));
     binnen_->Stuur(KnopNaam(static_cast<wm::SystemMediaTransportControlsButton>(wparam)));
     return true;
   }

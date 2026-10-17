@@ -359,6 +359,12 @@ class ZwevendMenuState extends State<ZwevendMenu> with SingleTickerProviderState
     if (widget.actief != oud.actief && widget.actief != _doel && _sleep == null && _naSchuif == null && _wiel == null) {
       _schuifNaar(widget.actief);
     }
+    // Verdwijnen de woorden (zoekveld, ingeklapt), dan komt er geen onExit: het woord onder de muis
+    // bleef daarna wit staan alsof je het aanwees (op de proef gezien, 17-10-2026).
+    if ((widget.zoekbalk != null) != (oud.zoekbalk != null) || widget.gekrompen != oud.gekrompen) {
+      _aangewezen = null;
+      _gefocust = null;
+    }
   }
 
   @override
