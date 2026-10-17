@@ -1980,6 +1980,29 @@ class _MeeschuivendGlas extends StatelessWidget {
   }
 }
 
+/// De strook achter de balken van de albumpagina op een tv: donker en schermbreed.
+///
+/// Saber koos "donkere strook achter de balk" (17-10-2026). In de balk van de albumpagina zelf was hij
+/// eerst een rood blok met harde randen: de lijst staat op een tv binnen de zijmarge (48 punten) en
+/// knipt daar af, dus eindigde de strook 48 punten voor elke rand, in de kleur van de hoes. Nu loopt
+/// hij door de marge heen tot de rand, en boven tot de bovenrand van het scherm, in de kleur van de
+/// pagina eronder.
+class _TvAlbumStrook extends StatelessWidget {
+  const _TvAlbumStrook({required this.rol});
+  final ScrollController rol;
+
+  @override
+  Widget build(BuildContext context) => Stack(clipBehavior: Clip.none, children: [
+        Positioned(
+          left: -tvOverscan.left,
+          right: -tvOverscan.right,
+          top: -tvOverscan.top,
+          bottom: 0,
+          child: _MeeschuivendGlas(tint: _bg, rol: rol),
+        ),
+      ]);
+}
+
 /// Een ruit matglas: hij vervaagt écht wat erachter langs schuift.
 ///
 /// Eén recept, want het stond twee keer woordelijk in dit bestand — op de balk bovenaan en op de
@@ -6696,6 +6719,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                     : MediaQuery.of(context),
                 child: CustomScrollView(
               controller: _rol,
+              // Op een tv niet afknippen, zodat de strook achter de balk door de tv-marge heen tot de
+              // rand van het scherm kan lopen (zie [_TvAlbumStrook]). Wat erboven uit de lijst schuift,
+              // valt dan achter die strook; onderaan ligt de spelerbalk eroverheen.
+              clipBehavior: isTv ? Clip.none : Clip.hardEdge,
               slivers: [
                 SliverAppBar(
                   // Matglas in plaats van een dichte kleur.
@@ -6715,7 +6742,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                   scrolledUnderElevation: 0,
                   surfaceTintColor: Colors.transparent,
                   shadowColor: Colors.transparent,
-                  flexibleSpace: _MeeschuivendGlas(tint: wasTop, rol: _rol),
+                  flexibleSpace: isTv
+                      ? _TvAlbumStrook(rol: _rol)
+                      : _MeeschuivendGlas(tint: wasTop, rol: _rol),
                   pinned: true,
                   // Glas onder elk pictogram, en de knoppen zelf zoals ze waren. Zie [glasInBalk].
                   leading: glasInBalk(plat: isCompact(context), IconButton(
@@ -22518,8 +22547,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // The records of this artist you actually hold. Matched on the normalised artist name, the same
     // key the library groups by, so a stray capital or accent doesn't hide your own albums.
     final lib = context.watch<LibraryStore>();
+    // De sleutel van deze artiest één keer, niet per album opnieuw: zie [normKey] voor wat dat kostte.
+    final eigenSleutel = artistKey(widget.artist.name);
     final mine = lib.albums
-        .where((a) => artistKey(a.artist) == artistKey(widget.artist.name))
+        .where((a) => artistKey(a.artist) == eigenSleutel)
         .toList()
       ..sort((a, b) => (b.year ?? 0).compareTo(a.year ?? 0));
 

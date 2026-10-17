@@ -47,7 +47,29 @@ final _bestandsExtensie = RegExp(r'\.[a-z0-9]{2,4}$');
 final _kaalTracknummer = RegExp(r'^\d{1,3}$');
 final _padScheiding = RegExp(r'[\\/]');
 
+/// Wat [normKey] al eens uitrekende, per invoer. De functie is zuiver, dus onthouden is altijd juist.
+///
+/// **Waarom (Shield, 17-10-2026).** Een artiestpagina bouwt zich bij het openen een keer of twintig
+/// opnieuw op (elke bron die binnenkomt), en elke keer zocht ze haar albums door van ÉLK album
+/// `artistKey` uit te rekenen — vijf regex-vervangingen plus het vouwen van accenten, voor duizenden
+/// albums. Gemeten in de meetbouw b11980: twintig keer bouwen kostte samen 1,3 s op de hoofddraad, en
+/// het openen haperde daardoor tot 150 ms per beeld. Een opzoeking in een map is een fractie daarvan.
+///
+/// Begrensd: vol is leeg, en dan wordt er gewoon weer gerekend. Zo groeit het geheugen nooit mee met
+/// een zoeksessie over honderdduizend bestandsnamen.
+final Map<String, String> _normGeheugen = <String, String>{};
+const int kNormGeheugenMax = 20000;
+
 String normKey(String s) {
+  final al = _normGeheugen[s];
+  if (al != null) return al;
+  final k = _normKeyVers(s);
+  if (_normGeheugen.length >= kNormGeheugenMax) _normGeheugen.clear();
+  _normGeheugen[s] = k;
+  return k;
+}
+
+String _normKeyVers(String s) {
   final unified = _fold(s
       .toLowerCase()
       .replaceAll(_krulQuote, "'")
