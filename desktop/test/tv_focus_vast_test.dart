@@ -48,7 +48,8 @@ void main() {
 
   test('aangesloten: de sprong slaat een lege scope over, en het vangnet hangt aan het toetsenbord', () {
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
-    expect(main, contains('if (!focusZonderDoel(hier) && (hier?.focusInDirection(richting) ?? false)) {'));
+    // Sinds 17-10-2026 via [tvPijlStap]: die laat knoppen zonder plek op de pagina buiten de stap.
+    expect(main, contains('if (!focusZonderDoel(hier) && hier != null && tvPijlStap(hier, richting)) {'));
     expect(main, contains('if (isTv) HardwareKeyboard.instance.addHandler(_tvVangnet);'));
     expect(main, contains('if (isTv) HardwareKeyboard.instance.removeHandler(_tvVangnet);'));
   });

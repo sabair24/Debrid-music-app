@@ -68,7 +68,7 @@ void main() {
       expect(lijf, contains('_heeftZichtbaar(scope)'),
           reason: 'zonder deze toets landt de focus in een lege scope en verroert zich niets');
       // Eerst de pagina zelf laten proberen; pas als die niets meer heeft is de rand bereikt.
-      expect(lijf.indexOf('focusInDirection'), lessThan(lijf.indexOf('requestFocus')),
+      expect(lijf.indexOf('tvPijlStap('), allOf(greaterThan(-1), lessThan(lijf.indexOf('requestFocus'))),
           reason: 'binnen een pagina hoort de pijl gewoon te doen wat hij altijd deed');
     });
 

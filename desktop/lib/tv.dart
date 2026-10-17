@@ -831,6 +831,50 @@ class SpoelPijlen {
   }
 }
 
+/// Eén stap met een pijl, maar alleen naar iets dat werkelijk een plek op de pagina heeft.
+///
+/// **Waarom niet gewoon `focusInDirection`.** Gemeten op de Shield (17-10-2026, meetversie b11975):
+/// alles in een sliver die verder dan het voorraadstuk onder (of boven) het beeld ligt, wordt niet
+/// opgemaakt — maar een `SliverToBoxAdapter` bouwt zijn kind wél, en die knop bestaat dus, met als
+/// plek de ONDERRAND van het beeld. Op de artiestpagina stonden zo "Toon alle 29", de albums en heel
+/// "Klinkt als" op y = 436, vlak onder Radio; de eerste plaat van "In mijn bibliotheek" echt op 444.
+/// Op het midden gemeten lag "Toon alle 29" vijf punten dichterbij, en omlaag sprong daarheen.
+///
+/// Zulke knoppen tellen voor deze ene stap niet mee (even `skipTraversal`, daarna meteen terug). Wie
+/// echt dichtbij ligt, staat binnen het voorraadstuk en heeft zijn ware plek; verder dan dat ga je
+/// met een pijl nooit in één stap.
+bool tvPijlStap(FocusNode hier, TraversalDirection richting) {
+  final weg = <FocusNode>[
+    for (final n in hier.nearestScope?.traversalDescendants ?? const <FocusNode>[])
+      if (!identical(n, hier) && nietOpgemaakt(n)) n,
+  ];
+  for (final n in weg) {
+    n.skipTraversal = true;
+  }
+  try {
+    return hier.focusInDirection(richting);
+  } finally {
+    for (final n in weg) {
+      n.skipTraversal = false;
+    }
+  }
+}
+
+/// Staat [n] in een sliver die in deze opmaak niet aan de beurt kwam (buiten beeld én buiten het
+/// voorraadstuk)? Dan is zijn plek op het scherm verzonnen: zie [tvPijlStap].
+@visibleForTesting
+bool nietOpgemaakt(FocusNode n) {
+  RenderObject? r = n.context?.findRenderObject();
+  while (r != null) {
+    if (r is RenderSliver) {
+      final g = r.geometry;
+      if (g == null || (g.cacheExtent <= 0 && g.paintExtent <= 0)) return true;
+    }
+    r = r.parent;
+  }
+  return false;
+}
+
 /// Hoeveel ruimte er in de staande lijst rond [context] boven de selectie blijft: [kTvBovenruimte],
 /// plus wat er van die lijst achter de zwevende balk ligt. Voor wie zelf zijn lijst laat schuiven, zoals
 /// "In mijn bibliotheek" op de artiestpagina.

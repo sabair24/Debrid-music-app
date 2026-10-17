@@ -131,6 +131,59 @@ void main() {
     });
   });
 
+  group('een pijl kiest niets dat nog geen plek op de pagina heeft', () {
+    // Gemeten op de Shield (17-10-2026): knoppen in een sliver ver onder het beeld stonden voor de
+    // pijl op de onderrand van het beeld, en "Toon alle 29" won zo van de eerste plaat eronder.
+    // Alleen Flutter 3.41 (de bouwstraat) zet zo'n knop op de onderrand; 3.35 (lokaal) geeft hem zijn
+    // ware plek. De tweede toets vangt de fout dus pas in de bouwstraat — de eerste ook hier.
+    Future<({FocusNode radio, FocusNode dichtbij, FocusNode ver})> pagina(WidgetTester t) async {
+      t.view.physicalSize = const Size(960, 436);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.reset);
+      final k = (radio: FocusNode(), dichtbij: FocusNode(), ver: FocusNode());
+      addTearDown(() {
+        k.radio.dispose();
+        k.dichtbij.dispose();
+        k.ver.dispose();
+      });
+      Widget knop(FocusNode n, double b, double h) =>
+          Pressable(focusNode: n, onPressed: () {}, child: SizedBox(width: b, height: h));
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: CustomScrollView(slivers: [
+            SliverToBoxAdapter(
+                child: SizedBox(height: 400, child: Align(alignment: Alignment.bottomLeft, child: knop(k.radio, 110, 40)))),
+            // Net onder het beeld, binnen het voorraadstuk: echt opgemaakt, met zijn ware plek.
+            SliverToBoxAdapter(
+                child: SizedBox(height: 120, child: Align(alignment: Alignment.bottomLeft, child: knop(k.dichtbij, 240, 40)))),
+            const SliverToBoxAdapter(child: SizedBox(height: 3000)),
+            // Ver weg: gebouwd (een SliverToBoxAdapter bouwt altijd), maar niet opgemaakt.
+            SliverToBoxAdapter(child: Align(alignment: Alignment.centerLeft, child: knop(k.ver, 100, 24))),
+          ]),
+        ),
+      ));
+      k.radio.requestFocus();
+      await t.pumpAndSettle();
+      return k;
+    }
+
+    testWidgets('wat ver buiten beeld staat, telt niet als opgemaakt; wat net buiten beeld staat wel', (t) async {
+      final k = await pagina(t);
+      expect(nietOpgemaakt(k.ver), isTrue);
+      expect(nietOpgemaakt(k.dichtbij), isFalse);
+      expect(nietOpgemaakt(k.radio), isFalse);
+    });
+
+    testWidgets('omlaag gaat naar de knop vlak eronder, niet naar die van ver weg', (t) async {
+      final k = await pagina(t);
+      expect(tvPijlStap(k.radio, TraversalDirection.down), isTrue);
+      await t.pumpAndSettle();
+      expect(k.dichtbij.hasPrimaryFocus, isTrue,
+          reason: 'zo sprong omlaag vanaf Radio naar "Toon alle 29" in plaats van naar de lijst');
+      expect(k.ver.skipTraversal, isFalse, reason: 'na de stap hoort alles weer mee te tellen');
+    });
+  });
+
   group('In mijn bibliotheek (Saber: "net zoals pc, mac")', () {
     Future<void> bouw(WidgetTester t, int n) async {
       await _scherm(t);

@@ -75,6 +75,7 @@ void main() {
     expect(start, greaterThan(-1));
     final body = bron.substring(start, start + 1400);
     expect(body.indexOf('scope.requestFocus'), greaterThan(-1));
-    expect(body.indexOf('focusInDirection'), lessThan(body.indexOf('scope.requestFocus')));
+    // Via [tvPijlStap] (17-10-2026): focusInDirection, zonder de knoppen die nog geen plek hebben.
+    expect(body.indexOf('tvPijlStap('), allOf(greaterThan(-1), lessThan(body.indexOf('scope.requestFocus'))));
   });
 }

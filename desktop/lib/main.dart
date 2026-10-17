@@ -2223,7 +2223,7 @@ class _HomeShellState extends State<HomeShell> {
     // geeft hij de focus aan zichzelf. Zie [focusZonderDoel] — zo zat je op de Shield vast op de lege
     // pagina "Op dit toestel" (15-10-2026).
     final hier = FocusManager.instance.primaryFocus;
-    if (!focusZonderDoel(hier) && (hier?.focusInDirection(richting) ?? false)) {
+    if (!focusZonderDoel(hier) && hier != null && tvPijlStap(hier, richting)) {
       return KeyEventResult.handled;
     }
     final vanwaar = FocusManager.instance.primaryFocus?.rect;
