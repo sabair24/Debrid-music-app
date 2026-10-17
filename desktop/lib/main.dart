@@ -42,6 +42,8 @@ import 'ui/tv_rij.dart';
 import 'ui/duim.dart';
 import 'ui/glas.dart';
 import 'ui/menu.dart';
+import 'mediabediening.dart';
+import 'ui/knopbewegingen.dart';
 import 'ui/menu_iconen.dart';
 import 'lan/pc_radiobron.dart';
 import 'auto_hoezen.dart';
@@ -820,6 +822,8 @@ Future<void> main() async {
   // dan raakt `metStand` de URL niet aan. Een `if (mode.owner)` eromheen zou alleen een tweede
   // plek zijn waar dit stuk kapot kan.
   player.onHapering = netStore.hapering;
+  // De mediatoetsen van het toetsenbord en de knoppen in de taakbalk, op Windows. Zie mediabediening.dart.
+  Mediabediening.start(speler: player, speaker: speakers);
   // Wisselt het toestel van netwerk (wifi weg, mobiel erbij, Tailscale aan of uit), dan meteen
   // opnieuw een adres van de pc kiezen in plaats van te wachten tot een verzoek vastloopt — en de
   // netsoort (de 5G-stand) mee. Zie `netwerkwissel.dart`. Alleen op een toestel: de pc zelf hoeft
@@ -1705,7 +1709,10 @@ class DebridApp extends StatelessWidget {
               // Een actie die "niets" doet, slikt hem in, en dan kwam er geen spatie in de zoekterm.
               SpeelPauzeIntent: AlsNietTypend<SpeelPauzeIntent>(() {
                 final ctx = appNavigator.currentContext;
-                if (ctx != null) ctx.read<PlayerStore>().playPause();
+                if (ctx == null) return;
+                final p = ctx.read<PlayerStore>();
+                // Op de plek waar de muziek is, ook als hij op een speaker staat.
+                p.speeltErgens ? p.pauzeer() : p.speelAf();
               }),
               NaarNuSpeeltIntent: CallbackAction<NaarNuSpeeltIntent>(onInvoke: (_) {
                 if (TvTextFieldEscape.editingText()) return null;
@@ -1928,6 +1935,17 @@ extension AlbumSortX on AlbumSort {
       };
 }
 
+/// Waar een sectie vandaan komt als ze binnenschuift ([binnen]) of heen gaat als ze wegschuift, als
+/// deel van haar breedte. Buiten de tv opzij in de richting van de pil ([richting] 1 = de pil ging naar
+/// rechts): de nieuwe komt van rechts, de oude gaat naar links. Op een tv het kleine zetje omhoog van
+/// vroeger.
+@visibleForTesting
+Offset sectieOvergangBegin({required bool tv, required int richting, required bool binnen}) {
+  if (tv) return const Offset(0, .012);
+  const ver = .06;
+  return Offset((binnen ? ver : -ver) * richting, 0);
+}
+
 /// Hoe hoog de bovenbalk van de schil is — de afstand tussen de bovenrand van het VENSTER en de
 /// bovenrand van een pagina die in de binnennavigator leeft.
 ///
@@ -2128,14 +2146,15 @@ Color balkOpGlas(int? was) =>
 /// BOVEN de navigator: zo houden ook een uitklapmenu en een blad van de binnenste navigator er
 /// rekening mee. Elke lijst telt hem mee via [onderOp].
 @visibleForTesting
-Widget metGlasBalken(BuildContext context, {required bool glas, required Widget balken, required Widget pagina}) {
+Widget metGlasBalken(BuildContext context,
+    {required bool glas, required Widget balken, required Widget pagina, double hoogte = kGlasBalkenHoogte}) {
   if (!glas) return pagina;
   final mq = MediaQuery.of(context);
   return Stack(
     children: [
       Positioned.fill(
         child: MediaQuery(
-          data: mq.copyWith(padding: mq.padding.copyWith(bottom: mq.padding.bottom + kGlasBalkenHoogte)),
+          data: mq.copyWith(padding: mq.padding.copyWith(bottom: mq.padding.bottom + hoogte)),
           child: pagina,
         ),
       ),
@@ -2966,6 +2985,10 @@ class _HomeShellState extends State<HomeShell> {
     // (Saber, 16-10-2026: "minispeler en onderbalk" van glas, de inhoud schuift eronder door). Niet
     // terwijl het toetsenbord open is: dan zijn de balken er niet. Zie [metGlasBalken].
     final glasBalken = isCompact(context) && !isTv && MediaQuery.viewInsetsOf(context).bottom == 0;
+    // Op een pc, Mac en iPad is de spelerbalk ook van glas, over de volle breedte, en schuift de pagina
+    // eronder door (Saber, 17-10-2026: "balk, maar van glas", hetzelfde vloeibare glas als het menu).
+    // Niet op een tv: daar blijft hij een vaste balk onder de inhoud.
+    final glasSpeler = !isTv && !isCompact(context);
     // BACK, on a television, must go back.
     //
     // The seven sections are a number in this state, not routes, so Flutter's navigator has
@@ -3101,8 +3124,13 @@ class _HomeShellState extends State<HomeShell> {
               // dezelfde lijst als een blad van onderen (zie de knop in `_compactBar`).
               child: metGlasBalken(
                 context,
-                glas: glasBalken,
-                balken: glasBalken ? _glasBalken() : const SizedBox.shrink(),
+                glas: glasBalken || glasSpeler,
+                hoogte: glasSpeler ? _spelerHoogte(context) : kGlasBalkenHoogte,
+                balken: glasBalken
+                    ? _glasBalken()
+                    : glasSpeler
+                        ? _glasSpeler()
+                        : const SizedBox.shrink(),
                 pagina: BalkRuimte(
                 // Zolang de balk zweeft, houdt elke pagina zelf deze ruimte eronder vrij — per route,
                 // en daarom verspringt er bij een paginawissel niets. Zie [BalkRuimte].
@@ -3195,7 +3223,7 @@ class _HomeShellState extends State<HomeShell> {
             // `viewInsets` en niet `viewPadding`: de eerste is wat er nú over het venster ligt (het
             // toetsenbord), de tweede is wat er permanent onderaan zit (de systeembalk). Ze
             // verwisselen zou de balken voorgoed verbergen.
-            if (MediaQuery.viewInsetsOf(context).bottom == 0 && !glasBalken) ...[
+            if (MediaQuery.viewInsetsOf(context).bottom == 0 && !glasBalken && !glasSpeler) ...[
               // De inzet voor de systeembalk hoort bij de ONDERSTE balk. Staat de navigatiebalk
               // eronder (alleen op een telefoon), dan rekent die hem al mee.
               // Op een tv een eigen scope, net als de bovenbalk. Zonder dit is de spelerbalk met de
@@ -3259,6 +3287,9 @@ class _HomeShellState extends State<HomeShell> {
     binnenNav.currentState?.popUntil((r) => r.isFirst);
     if (_menuIn) setState(() => _menuIn = false);
     if (_view != id) {
+      final van = NavSections.items.indexWhere((s) => s.$1 == _view);
+      final naar = NavSections.items.indexWhere((s) => s.$1 == id);
+      _richting = naar >= van ? 1 : -1;
       setState(() {
         _view = id;
         if (_zoekOpen && !(id == 0 || id == 1 || id == 4)) {
@@ -3307,6 +3338,19 @@ class _HomeShellState extends State<HomeShell> {
             ],
           ),
         ),
+      );
+
+  /// Hoe hoog de brede spelerbalk is: 84, en op een iPad de inzet van de thuisstreep eronder.
+  double _spelerHoogte(BuildContext context) =>
+      84.0 + (_isTouch ? MediaQuery.viewPaddingOf(context).bottom : 0.0);
+
+  /// De brede spelerbalk als één glasvlak, met de lensrand: hij staat stil, dus dat mag.
+  Widget _glasSpeler() => const GlasVlak(
+        lens: true,
+        balk: true,
+        // De balk draagt zelf zijn (doorschijnende) tint: zie [balkOpGlas].
+        vulling: BoxDecoration(),
+        child: RepaintBoundary(child: PlayerBar(opGlas: true)),
       );
 
   Widget _topBar() => isCompact(context) ? _compactTopBar() : _pcBovenlaag();
@@ -3392,6 +3436,9 @@ class _HomeShellState extends State<HomeShell> {
 
   /// Het menu ingeklapt, omdat je omlaag scrolde (alleen pc, Mac en iPad). Zie [_opScrol].
   bool _menuIn = false;
+
+  /// Waar de pil bij de laatste sectiewissel heen ging: 1 = naar rechts, -1 = naar links.
+  int _richting = 1;
 
   /// Het zoekveld staat in de capsule (pc, Mac en iPad). Zie [_openZoeken].
   bool _zoekOpen = false;
@@ -3631,14 +3678,23 @@ class _HomeShellState extends State<HomeShell> {
           // De navigatiepil schuift al 300 ms naar zijn nieuwe plek terwijl de inhoud eronder al
           // gewisseld wás — die mismatch zie je. Kort en met een klein zetje omhoog, zodat het als
           // een wissel leest en niet als een aarzeling.
+          //
+          // Buiten de tv sinds 17-10-2026 opzij, in de richting waarin de pil gaat (Saber: "schuiven in
+          // de richting van de pil"): gaat de pil naar rechts, dan komt de nieuwe pagina van rechts
+          // binnen en schuift de oude naar links weg. Kort, zodat je voelt waar je heen gaat.
           Expanded(
             child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 160),
-              switchInCurve: Curves.easeOut,
+              duration: Duration(milliseconds: isTv ? 160 : 250),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
               transitionBuilder: (kind, animatie) => FadeTransition(
                 opacity: animatie,
                 child: SlideTransition(
-                  position: Tween(begin: const Offset(0, .012), end: Offset.zero).animate(animatie),
+                  position: Tween(
+                    begin: sectieOvergangBegin(
+                        tv: isTv, richting: _richting, binnen: kind.key == ValueKey(_view)),
+                    end: Offset.zero,
+                  ).animate(animatie),
                   child: kind,
                 ),
               ),
@@ -5516,6 +5572,11 @@ class AlbumCard extends StatelessWidget {
       onTap: () => openPagina(context, (_) => AlbumDetailPage(album: a)),
       draaibaar: true,
       achterkant: () => achterkantVan(context, a),
+      // De muis op de hoes: de cd schuift uit en er komt een afspeelknop (Saber, 17-10-2026).
+      schijf: a.cover == null ? null : (maat) => TegelSchijf(etiket: a.cover!, maat: maat),
+      onAfspelen: a.tracks.isEmpty
+          ? null
+          : () => context.read<PlayerStore>().playQueue(a.tracks, 0, cover: a.cover),
       // Tot nu toe kon een albumtegel precies één ding: opengaan. Afspelen, in de wachtrij zetten,
       // radio en verwijderen zaten allemaal een navigatiestap dieper.
       onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
@@ -9444,9 +9505,10 @@ class PlayerBar extends StatelessWidget {
       // Taller on a television: the text is scaled there, and the bottom row (position, slider,
       // duration) sat flush against the panel edge — the first strip a set overscans away.
       height: (isTv ? 104 : 84) + bottomInset,
+      // Op glas doorschijnend en zonder streep: de lichtrand van het glas is de bovenrand.
       decoration: BoxDecoration(
-        color: balkKleur(x.player.wasKleur),
-        border: const Border(top: BorderSide(color: _line)),
+        color: opGlas ? balkOpGlas(x.player.wasKleur) : balkKleur(x.player.wasKleur),
+        border: opGlas ? null : const Border(top: BorderSide(color: _line)),
       ),
       // The panel runs to the edge; only what you read and press comes in. On a television the
       // bottom row of this bar is the first thing a set overscans away, so it gets tvOverscan
@@ -9475,6 +9537,9 @@ class PlayerBar extends StatelessWidget {
                 ),
                 const SizedBox(width: 12),
                 Expanded(
+                  // Een ander nummer: titel en artiest schuiven weg en de nieuwe schuiven binnen.
+                  child: SchuifTekst(
+                  sleutel: t?.path,
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -9487,6 +9552,8 @@ class PlayerBar extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontWeight: FontWeight.w600)),
                           ),
+                          // Het hart: vol als het een favoriet is, en het klopt als het er een wordt.
+                          if (t != null && !isTv) _HartKnop(track: t),
                           // What quality am I actually hearing? (local files only — a streamed
                           // source's real quality isn't known here.)
                           //
@@ -9542,6 +9609,7 @@ class PlayerBar extends StatelessWidget {
                         ),
                     ],
                   ),
+                  ),
                 ),
               ],
             ),
@@ -9558,14 +9626,16 @@ class PlayerBar extends StatelessWidget {
                     // which is one tap away.
                     if (!isCompact(context))
                     IconButton(
-                      icon: const Icon(Icons.shuffle_rounded, size: 20),
+                      // Klapt even om als hij aan gaat (Saber, 17-10-2026). Zie ui/knopbewegingen.dart.
+                      icon: ShuffleIcoon(aan: p.shuffle, maat: 20),
                       color: p.shuffle ? _accent : _muted,
                       style: tvIcoonStijl(p.shuffle ? _accent : _muted),
                       onPressed: p.toggleShuffle,
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.skip_previous_rounded),
-                      color: _muted,
+                    DuwKnop(
+                      icoon: Icons.skip_previous_rounded,
+                      richting: -1,
+                      kleur: _muted,
                       style: tvIcoonStijl(_muted),
                       onPressed: x.previous,
                     ),
@@ -9575,7 +9645,8 @@ class PlayerBar extends StatelessWidget {
                     Container(
                       decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
                       child: IconButton(
-                        icon: Icon(x.playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                        // Het driehoekje vloeit over in de twee streepjes, en terug.
+                        icon: SpeelPauzeIcoon(speelt: x.playing, maat: 26),
                         color: _bg,
                         style: tvIcoonStijl(_bg),
                         iconSize: 26,
@@ -9583,16 +9654,18 @@ class PlayerBar extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 2),
-                    IconButton(
-                      icon: const Icon(Icons.skip_next_rounded),
-                      color: _muted,
+                    DuwKnop(
+                      icoon: Icons.skip_next_rounded,
+                      kleur: _muted,
                       style: tvIcoonStijl(_muted),
                       onPressed: x.next,
                     ),
                     if (!isCompact(context))
                     IconButton(
-                      icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
-                          size: 20),
+                      icon: HerhaalIcoon(
+                          stand: p.repeat,
+                          icoon: p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
+                          maat: 20),
                       color: p.repeat == RepeatMode.off ? _muted : _accent,
                       style: tvIcoonStijl(p.repeat == RepeatMode.off ? _muted : _accent),
                       // Local only: the speaker is handed one track at a time, so a change here
@@ -9636,6 +9709,31 @@ class PlayerBar extends StatelessWidget {
     );
   }
 
+}
+
+/// Het hart naast de titel in de spelerbalk: vol als dit nummer een favoriet is, en het klopt met
+/// deeltjes als het er een wordt (Saber, 17-10-2026). Een tik zet het aan of uit.
+class _HartKnop extends StatelessWidget {
+  const _HartKnop({required this.track});
+
+  final Track track;
+
+  @override
+  Widget build(BuildContext context) {
+    final fav = context.watch<Favorieten>();
+    final aan = fav.isFavorietTrack(track);
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: IconButton(
+        tooltip: aan ? 'Uit favorieten' : 'Favoriet',
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+        icon: HartIcoon(aan: aan, maat: 17, kleurUit: _muted),
+        onPressed: () => fav.wisselTrack(track),
+      ),
+    );
+  }
 }
 
 /// Kies een afspeellijst om [nummers] in te zetten — of maak er ter plekke een.
@@ -10560,7 +10658,13 @@ class _WachtrijKnop extends StatelessWidget {
     return TvLabelled(
       label: 'Wachtrij',
       child: IconButton(
-        icon: const Icon(Icons.queue_music_rounded, size: 20),
+        // De regels schuiven binnen als het paneel opengaat (Saber, 17-10-2026).
+        icon: MenuIcoon(
+          soort: MenuIcoonSoort.afspeellijsten,
+          kleur: !compact && paneel.open ? _accent : _muted,
+          gekozen: !compact && paneel.open,
+          maat: 20,
+        ),
         color: !compact && paneel.open ? _accent : _muted,
         style: tvIcoonStijl(!compact && paneel.open ? _accent : _muted),
         tooltip: 'Wachtrij',
@@ -10648,14 +10752,63 @@ class _RadioAfstemming extends StatelessWidget {
   }
 }
 
-class WachtrijPaneelView extends StatelessWidget {
-  const WachtrijPaneelView({super.key, this.inBlad = false});
+class WachtrijPaneelView extends StatefulWidget {
+  const WachtrijPaneelView({super.key, this.inBlad = false, this.onSluit, this.opGlas = false});
 
   /// True als hij als blad van onderen komt (telefoon). Dan geen vaste breedte en geen linkerrand,
   /// en sluiten gaat via de bladbeweging in plaats van via het kruisje.
   final bool inBlad;
 
+  /// Wat het kruisje doet. Null = het paneel naast de inhoud sluiten ([WachtrijPaneel.sluit]); Nu
+  /// speelt geeft zijn eigen mee, want daar is het een paneel van dat scherm.
+  final VoidCallback? onSluit;
+
+  /// Ligt hij op glas (Nu speelt)? Dan geen eigen dichte vulling.
+  final bool opGlas;
+
   static const breedte = 340.0;
+
+  @override
+  State<WachtrijPaneelView> createState() => _WachtrijPaneelViewState();
+}
+
+/// De wachtrij in drie stukken (Saber, 17-10-2026: "ik moet ook duidelijk kunnen zien wat er nu
+/// speelt, wat er nog komt, en wat er al afgespeeld heeft, maar bij het openen altijd naar het
+/// liedje gaan die bezig is").
+///
+/// **Eén lijst, drie zones.** Bovenaan gedimd wat al speelde, dan groot het nummer dat nu speelt
+/// (met hoes en bewegende balkjes), daaronder "Hierna". De lijst draait om het spelende nummer: dat
+/// is het MIDDEN van de `CustomScrollView` ([CustomScrollView.center]), dus bij het openen staat het
+/// bovenaan, en wat al speelde staat erboven — omhoog scrollen.
+///
+/// **Bewegen.** Een nummer dat erbij komt schuift zacht binnen, wat eruit gaat klapt dicht, en begint
+/// het volgende nummer, dan schuift de hele lijst één plek omhoog in plaats van te verspringen.
+class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTickerProviderStateMixin {
+  final _rol = ScrollController();
+
+  /// Schuift de lijst één regel omhoog als het volgende nummer begint.
+  late final AnimationController _op =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 360), value: 1);
+  int? _vorigeNu;
+
+  /// Wat er bij het eerste beeld al stond: dat schuift niet binnen, alleen wat er daarna bij komt.
+  Set<String>? _gezien;
+
+  @override
+  void dispose() {
+    _op.dispose();
+    _rol.dispose();
+    super.dispose();
+  }
+
+  /// Sleutels die niet verschuiven als er iets voor wegvalt: het pad en de hoeveelste keer dat het
+  /// in de lijst staat.
+  static List<String> _sleutels(List<Track> rij) {
+    final tel = <String, int>{};
+    return [
+      for (final t in rij) '${t.path}#${tel[t.path] = (tel[t.path] ?? -1) + 1}',
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -10665,150 +10818,399 @@ class WachtrijPaneelView extends StatelessWidget {
     final radio = p.radioMode;
     final regels = radio ? radioAlsRij(p.radioQueue) : const <Radioregel>[];
     final rij = radio ? [for (final r in regels) r.nummer] : p.queueTracks;
-    final nu = p.currentIndex;
+    final nu = rij.isEmpty ? -1 : p.currentIndex.clamp(0, rij.length - 1);
+    final sleutels = _sleutels(rij);
+
+    final eerste = _gezien == null;
+    final gezien = _gezien ??= {...sleutels};
+    final nieuw = {for (final s in sleutels) if (!gezien.contains(s)) s};
+    if (nieuw.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => gezien.addAll(nieuw));
+    }
+    // Het volgende nummer begon: de lijst schuift één plek op.
+    final vorige = _vorigeNu;
+    if (!eerste && vorige != null && nu == vorige + 1) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _op.forward(from: 0);
+      });
+    }
+    _vorigeNu = nu;
+
+    Widget regel(int i, {bool gespeeld = false, int? sleep}) {
+      Widget r = _WachtrijRij(
+        key: ValueKey(sleutels[i]),
+        track: rij[i],
+        plek: i,
+        speeltNu: false,
+        gespeeld: gespeeld,
+        sleepIndex: sleep,
+        cover: radio && !regels[i].eigen ? null : lib.coverForTrack(rij[i]),
+        regel: radio ? regels[i] : null,
+      );
+      return _Uitklap(key: ValueKey('uit-${sleutels[i]}'), binnenschuiven: nieuw.contains(sleutels[i]), child: r);
+    }
+
+    final hierna = nu < 0 ? 0 : rij.length - nu - 1;
+    final kop = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
+      child: Row(
+        children: [
+          // Bij een radio de stand op een eigen regel onder "Radio": naast "Radio afsluiten" en het
+          // kruisje paste "12 hierna · 6 onderweg" op 340 punt maar net, en op de tv (tekstschaal
+          // 1,35) bleef er "12 hierna…" van over (beoordeling van 08-10-2026).
+          Expanded(
+            child: radio
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Radio', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      if (rij.isNotEmpty)
+                        Text(
+                            radioKop(
+                                hierna: hierna,
+                                onderweg: context.watch<RadioBesturing>().onderweg,
+                                loopt: context.watch<RadioBesturing>().loopt,
+                                zoekt: !context.watch<RadioBesturing>().aantalBereikt &&
+                                    context.watch<RadioBesturing>().pauze == null),
+                            // Op de tv (tekstschaal 1,35) past "12 hierna · 6 onderweg" niet op één regel.
+                            maxLines: isTv ? 2 : 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: _muted, fontSize: 12)),
+                    ],
+                  )
+                : const Text('Wachtrij', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          ),
+          // Het genoemde aantal van een radio uit een zin is gespeeld: hier ook verder, niet alleen
+          // op het speelscherm.
+          if (radio && context.watch<RadioBesturing>().aantalOp && (p.radioDroog || p.wilVerder))
+            TextButton(
+              onPressed: context.read<RadioBesturing>().gaDoor,
+              style: TextButton.styleFrom(
+                  foregroundColor: _accent,
+                  padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
+                  minimumSize: const Size(0, 30)),
+              child: const Text('Ga door', style: TextStyle(fontSize: 12)),
+            ),
+          // De weg uit de radio, hier en niet alleen op het speelscherm.
+          //
+          // **Waarom dit erbij moest.** Het kruisje hiernaast sluit het PANEEL, en dat ziet
+          // er precies zo uit als "stop de radio". Wie de radio wil beëindigen drukt daarop,
+          // ziet de lijst verdwijnen, en de radio speelt gewoon door — met het overzicht van
+          // wat er opgehaald is nog altijd niet in beeld. Gemeld op 28-08-2026, en terecht:
+          // de knop die het wél doet stond op een scherm dat je vanaf hier niet ziet.
+          if (radio)
+            TextButton(
+              onPressed: context.read<RadioBesturing>().stop,
+              style: TextButton.styleFrom(
+                  foregroundColor: _muted,
+                  padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
+                  minimumSize: const Size(0, 30)),
+              child: const Text('Radio afsluiten', style: TextStyle(fontSize: 12)),
+            ),
+          if (!widget.inBlad)
+            TvLabelled(
+              label: radio ? 'Paneel sluiten' : 'Sluiten',
+              child: IconButton(
+                icon: const Icon(Icons.close_rounded, size: 18),
+                color: _muted,
+                // Uitgeschreven tijdens een radio, want daar is "Sluiten" dubbelzinnig: het
+                // sluit de lijst en niet de radio.
+                tooltip: radio ? 'Paneel sluiten' : 'Sluiten',
+                onPressed: widget.onSluit ?? paneel.sluit,
+              ),
+            ),
+        ],
+      ),
+    );
+
+    Widget zoneKop(String tekst, {String? extra}) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+          child: Row(children: [
+            Text(tekst.toUpperCase(),
+                style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: .8, color: _muted)),
+            if (extra != null) ...[
+              const SizedBox(width: 6),
+              Text(extra, style: const TextStyle(fontSize: 10.5, color: _muted)),
+            ],
+          ]),
+        );
+
+    final Widget lijst;
+    if (rij.isEmpty) {
+      lijst = Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(radio ? 'De radio zoekt nog wat hij zal spelen.' : 'Nog niets in de wachtrij.',
+              textAlign: TextAlign.center, style: const TextStyle(color: _muted, fontSize: 12.5)),
+        ),
+      );
+    } else {
+      final huidig = nu;
+      lijst = AnimatedBuilder(
+        animation: _op,
+        builder: (_, kind) => Transform.translate(
+          // Eén regel lager beginnen en omhoog schuiven: zo leest de wissel als "alles schuift op".
+          offset: Offset(0, kWachtrijRegel * (1 - Curves.easeOutCubic.transform(_op.value))),
+          child: kind,
+        ),
+        child: CustomScrollView(
+          controller: _rol,
+          // Het spelende nummer is het midden: bij openen bovenaan, wat al speelde erboven.
+          center: const ValueKey('wachtrij-nu'),
+          slivers: [
+            if (huidig > 0) ...[
+              SliverToBoxAdapter(child: zoneKop('Eerder gespeeld', extra: '$huidig')),
+              // Vóór het midden groeit een lijst naar boven: het eerste kind staat het dichtst bij het
+              // spelende nummer. Dus het laatst gespeelde eerst.
+              SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (_, j) => regel(huidig - 1 - j, gespeeld: true),
+                  childCount: huidig,
+                ),
+              ),
+            ],
+            SliverToBoxAdapter(
+              key: const ValueKey('wachtrij-nu'),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  zoneKop('Nu speelt'),
+                  _NuSpeeltRegel(
+                    track: rij[huidig],
+                    cover: radio && !regels[huidig].eigen ? null : lib.coverForTrack(rij[huidig]),
+                    speelt: p.playing || context.watch<SpeakerTarget>().isCasting,
+                    regel: radio ? regels[huidig] : null,
+                  ),
+                  if (hierna > 0) zoneKop('Hierna', extra: '$hierna'),
+                ],
+              ),
+            ),
+            // Een radio is geen wachtrij: je kunt er niet in slepen en er niets uit halen. Een gewone
+            // lijst dus, en een tik springt binnen de radio in plaats van hem te verlaten — zie
+            // [PlayerStore.springInRadio].
+            if (radio)
+              SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (_, j) => regel(huidig + 1 + j),
+                  childCount: hierna,
+                ),
+              )
+            else
+              SliverReorderableList(
+                itemCount: hierna,
+                onReorder: (van, naar) {
+                  // Telt de doelplek alsof het gesleepte item er nog staat; één eraf zodra je naar
+                  // beneden sleept, anders landt alles één te ver. En "Hierna" begint na het spelende.
+                  p.verplaatsInWachtrij(huidig + 1 + van, huidig + 1 + (van < naar ? naar - 1 : naar));
+                },
+                itemBuilder: (_, j) => regel(huidig + 1 + j, sleep: j),
+              ),
+            SliverToBoxAdapter(child: SizedBox(height: 16 + MediaQuery.paddingOf(context).bottom)),
+          ],
+        ),
+      );
+    }
 
     return Container(
-      width: inBlad ? null : breedte,
-      decoration: BoxDecoration(
-        color: _panel,
-        border: inBlad ? null : const Border(left: BorderSide(color: _line)),
-      ),
+      width: widget.inBlad || widget.opGlas ? null : WachtrijPaneelView.breedte,
+      decoration: widget.opGlas
+          ? null
+          : BoxDecoration(
+              color: _panel,
+              border: widget.inBlad ? null : const Border(left: BorderSide(color: _line)),
+            ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
-            child: Row(
-              children: [
-                // Bij een radio de stand op een eigen regel onder "Radio": naast "Radio afsluiten" en het
-                // kruisje paste "12 hierna · 6 onderweg" op 340 punt maar net, en op de tv (tekstschaal
-                // 1,35) bleef er "12 hierna…" van over (beoordeling van 08-10-2026).
-                Expanded(
-                  child: radio
-                      ? Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text('Radio', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                            if (rij.isNotEmpty)
-                              Text(
-                                  radioKop(
-                                      hierna: rij.length - nu - 1,
-                                      onderweg: context.watch<RadioBesturing>().onderweg,
-                                      loopt: context.watch<RadioBesturing>().loopt,
-                                      zoekt: !context.watch<RadioBesturing>().aantalBereikt &&
-                                          context.watch<RadioBesturing>().pauze == null),
-                                  // Op de tv (tekstschaal 1,35) past "12 hierna · 6 onderweg" niet op één regel.
-                                  maxLines: isTv ? 2 : 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: _muted, fontSize: 12)),
-                          ],
-                        )
-                      : Row(children: [
-                          const Text('Wachtrij', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(rij.isEmpty ? '' : '${rij.length - nu - 1} hierna',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: _muted, fontSize: 12)),
-                          ),
-                        ]),
-                ),
-                // Het genoemde aantal van een radio uit een zin is gespeeld: hier ook verder, niet alleen
-                // op het speelscherm.
-                if (radio && context.watch<RadioBesturing>().aantalOp && (p.radioDroog || p.wilVerder))
-                  TextButton(
-                    onPressed: context.read<RadioBesturing>().gaDoor,
-                    style: TextButton.styleFrom(
-                        foregroundColor: _accent,
-                        padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
-                        minimumSize: const Size(0, 30)),
-                    child: const Text('Ga door', style: TextStyle(fontSize: 12)),
-                  ),
-                // De weg uit de radio, hier en niet alleen op het speelscherm.
-                //
-                // **Waarom dit erbij moest.** Het kruisje hiernaast sluit het PANEEL, en dat ziet
-                // er precies zo uit als "stop de radio". Wie de radio wil beëindigen drukt daarop,
-                // ziet de lijst verdwijnen, en de radio speelt gewoon door — met het overzicht van
-                // wat er opgehaald is nog altijd niet in beeld. Gemeld op 28-08-2026, en terecht:
-                // de knop die het wél doet stond op een scherm dat je vanaf hier niet ziet.
-                if (radio)
-                  TextButton(
-                    onPressed: context.read<RadioBesturing>().stop,
-                    style: TextButton.styleFrom(
-                        foregroundColor: _muted,
-                        padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
-                        minimumSize: const Size(0, 30)),
-                    child: const Text('Radio afsluiten', style: TextStyle(fontSize: 12)),
-                  ),
-                if (!inBlad)
-                  TvLabelled(
-                    label: radio ? 'Paneel sluiten' : 'Sluiten',
-                    child: IconButton(
-                    icon: const Icon(Icons.close_rounded, size: 18),
-                    color: _muted,
-                    // Uitgeschreven tijdens een radio, want daar is "Sluiten" dubbelzinnig: het
-                    // sluit de lijst en niet de radio.
-                    tooltip: radio ? 'Paneel sluiten' : 'Sluiten',
-                    onPressed: paneel.sluit,
-                  ),
-                  ),
-              ],
-            ),
-          ),
+          kop,
           if (radio) const _RadioAfstemming(),
-          Expanded(
-            child: rij.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                          radio
-                              ? 'De radio zoekt nog wat hij zal spelen.'
-                              : 'Nog niets in de wachtrij.',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: _muted, fontSize: 12.5)),
-                    ),
-                  )
-                // Een radio is geen wachtrij: je kunt er niet in slepen en er niets uit halen.
-                // Een gewone lijst dus, en een tik springt binnen de radio in plaats van hem te
-                // verlaten — zie [PlayerStore.springInRadio].
-                : radio
-                    ? ListView.builder(
-                        padding: const EdgeInsets.only(bottom: 16),
-                        itemCount: rij.length,
-                        itemBuilder: (_, i) => _WachtrijRij(
-                          key: ValueKey('${rij[i].path}#$i'),
-                          track: rij[i],
-                          plek: i,
-                          speeltNu: i == nu,
-                          cover: regels[i].eigen ? lib.coverForTrack(rij[i]) : null,
-                          regel: regels[i],
-                        ),
-                      )
-                    : ReorderableListView.builder(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    buildDefaultDragHandles: false,
-                    itemCount: rij.length,
-                    onReorder: (van, naar) {
-                      // ReorderableListView telt de doelplek alsof het gesleepte item er nog staat;
-                      // één eraf zodra je naar beneden sleept, anders landt alles één te ver.
-                      p.verplaatsInWachtrij(van, van < naar ? naar - 1 : naar);
-                    },
-                    itemBuilder: (_, i) => _WachtrijRij(
-                      key: ValueKey('${rij[i].path}#$i'),
-                      track: rij[i],
-                      plek: i,
-                      speeltNu: i == nu,
-                      cover: lib.coverForTrack(rij[i]),
-                    ),
-                  ),
-          ),
+          Expanded(child: ClipRect(child: lijst)),
         ],
       ),
     );
   }
+}
+
+/// Ongeveer hoe hoog een regel in de wachtrij is: zoveel schuift de lijst op als het volgende nummer
+/// begint.
+const kWachtrijRegel = 54.0;
+
+/// Een regel die binnenschuift als hij nieuw is, en dichtklapt voor hij weggaat
+/// ([_UitklapState.klapDicht]).
+class _Uitklap extends StatefulWidget {
+  const _Uitklap({super.key, required this.binnenschuiven, required this.child});
+
+  final bool binnenschuiven;
+  final Widget child;
+
+  @override
+  State<_Uitklap> createState() => _UitklapState();
+}
+
+class _UitklapState extends State<_Uitklap> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 240),
+    value: widget.binnenschuiven ? 0 : 1,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.binnenschuiven) _c.forward();
+  }
+
+  /// Dichtklappen, en dan [daarna] (het nummer echt uit de wachtrij halen).
+  Future<void> klapDicht(VoidCallback daarna) async {
+    await _c.reverse();
+    daarna();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SizeTransition(
+        sizeFactor: CurvedAnimation(parent: _c, curve: Curves.easeOutCubic),
+        child: FadeTransition(opacity: _c, child: widget.child),
+      );
+}
+
+/// Het nummer dat nu speelt, groot: hoes, titel, artiest en drie balkjes die meebewegen zolang het
+/// speelt.
+class _NuSpeeltRegel extends StatelessWidget {
+  const _NuSpeeltRegel({required this.track, required this.cover, required this.speelt, this.regel});
+
+  final Track track;
+  final Uint8List? cover;
+  final bool speelt;
+  final Radioregel? regel;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.symmetric(horizontal: 10),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: _accent.withValues(alpha: .14),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _accent.withValues(alpha: .28)),
+        ),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: cover != null
+                  ? Image.memory(cover!, width: 52, height: 52, cacheWidth: decodeWidth(52), fit: BoxFit.cover)
+                  : Container(
+                      width: 52,
+                      height: 52,
+                      color: _panel2,
+                      child: const Icon(Icons.music_note_rounded, size: 20, color: _muted),
+                    ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(track.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: Colors.white)),
+                  const SizedBox(height: 2),
+                  Text(track.artist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: _muted)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            _Balkjes(speelt: speelt),
+            const SizedBox(width: 6),
+          ],
+        ),
+      );
+}
+
+/// Drie balkjes die op en neer gaan zolang er muziek speelt; stil en laag als het gepauzeerd is. Op
+/// een tv stil: een lus van 60 beelden per seconde kost de Shield meer dan hij hier oplevert.
+class _Balkjes extends StatefulWidget {
+  const _Balkjes({required this.speelt});
+
+  final bool speelt;
+
+  @override
+  State<_Balkjes> createState() => _BalkjesState();
+}
+
+class _BalkjesState extends State<_Balkjes> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+
+  @override
+  void initState() {
+    super.initState();
+    _zet();
+  }
+
+  @override
+  void didUpdateWidget(_Balkjes oud) {
+    super.didUpdateWidget(oud);
+    if (oud.speelt != widget.speelt) _zet();
+  }
+
+  void _zet() {
+    if (widget.speelt && !isTv) {
+      _c.repeat();
+    } else {
+      _c.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: 18,
+        height: 18,
+        child: AnimatedBuilder(
+          animation: _c,
+          builder: (_, __) => CustomPaint(painter: _BalkjesSchilder(t: _c.value, speelt: widget.speelt && !isTv)),
+        ),
+      );
+}
+
+class _BalkjesSchilder extends CustomPainter {
+  _BalkjesSchilder({required this.t, required this.speelt});
+
+  final double t;
+  final bool speelt;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()..color = _accent;
+    final b = size.width / 5;
+    for (var i = 0; i < 3; i++) {
+      final fase = t * math.pi * 2 + i * 2.1;
+      final h = speelt ? size.height * (.35 + .65 * (.5 + .5 * math.sin(fase * (1 + i * .3)))) : size.height * .3;
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromLTWH(i * b * 2, size.height - h, b, h), Radius.circular(b / 2)),
+          p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_BalkjesSchilder oud) => oud.t != t || oud.speelt != speelt;
 }
 
 class _WachtrijRij extends StatelessWidget {
@@ -10819,12 +11221,20 @@ class _WachtrijRij extends StatelessWidget {
     required this.speeltNu,
     required this.cover,
     this.regel,
+    this.gespeeld = false,
+    this.sleepIndex,
   });
 
   final Track track;
   final int plek;
   final bool speeltNu;
   final Uint8List? cover;
+
+  /// Al gespeeld: gedimd, en zonder greep (slepen kan alleen in "Hierna").
+  final bool gespeeld;
+
+  /// De plek binnen "Hierna", voor de greep. Null = geen greep.
+  final int? sleepIndex;
 
   /// Niet-null als deze regel bij een RADIO hoort. Dan geen greep, geen kruisje, en een tik springt
   /// binnen de radio in plaats van hem te verlaten.
@@ -10839,7 +11249,10 @@ class _WachtrijRij extends StatelessWidget {
     final menu = r != null && !r.eigen
         ? null
         : () => _toonItemMenu(context, _nummerMenu(context, track));
-    return Container(
+    final sleep = sleepIndex;
+    return Opacity(
+      opacity: gespeeld ? .5 : 1,
+      child: Container(
       color: speeltNu ? _panel2 : Colors.transparent,
       child: InkWell(
         onTap: () => r != null ? p.springInRadio(plek) : p.playQueue(p.queueTracks, plek),
@@ -10871,9 +11284,11 @@ class _WachtrijRij extends StatelessWidget {
                             fontSize: 11, color: speeltNu ? _accent : _muted)),
                   ),
                 )
+              else if (sleep == null)
+                const SizedBox(width: 34, height: 40)
               else
                 ReorderableDragStartListener(
-                  index: plek,
+                  index: sleep,
                   child: MouseRegion(
                     cursor: SystemMouseCursors.grab,
                     child: Container(
@@ -10969,13 +11384,32 @@ class _WachtrijRij extends StatelessWidget {
                         tooltip: 'Uit de wachtrij halen',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
-                        onPressed: () => p.haalUitWachtrij(plek),
+                        onPressed: () {
+                          // Eerst dichtklappen, dan pas eruit (Saber, 17-10-2026: "wat weggaat,
+                          // klapt dicht"). Is er intussen een ander nummer begonnen, dan het nummer
+                          // zelf weer opzoeken: de plek kan verschoven zijn.
+                          void weg() {
+                            final rij = p.queueTracks;
+                            final i = plek < rij.length && rij[plek].path == track.path
+                                ? plek
+                                : rij.indexWhere((t) => t.path == track.path);
+                            if (i >= 0) p.haalUitWachtrij(i);
+                          }
+
+                          final uitklap = context.findAncestorStateOfType<_UitklapState>();
+                          if (uitklap != null) {
+                            uitklap.klapDicht(weg);
+                          } else {
+                            weg();
+                          }
+                        },
                       ),
                       ),
               ),
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -11055,6 +11489,9 @@ class _SpeakerButton extends StatelessWidget {
     );
   }
 }
+
+/// Hoe breed de wachtrij in Nu speelt is, met de ruimte ervoor.
+const kNuSpeeltWachtrij = 404.0;
 
 /// Het label waarmee de hoes van de minispeler naar Nu speelt vliegt (Saber, 16-10-2026).
 const kNuSpeeltHoes = 'nu-speelt-hoes';
@@ -11214,6 +11651,8 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
                         Hero(tag: kNuSpeeltHoes, child: cover(p.currentCover, size: 40, radius: 6)),
                         const SizedBox(width: 12),
                         Expanded(
+                          child: SchuifTekst(
+                          sleutel: t?.path,
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -11253,6 +11692,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
                                     const TextStyle(color: _muted, fontSize: 12)),
                             ],
                           ),
+                          ),
                         ),
                       ],
                     ),
@@ -11261,15 +11701,11 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
                 ),
               ),
               IconButton(
-                icon: Icon(x.playing ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 30),
+                icon: SpeelPauzeIcoon(speelt: x.playing, maat: 30),
                 color: Colors.white,
                 onPressed: x.playPause,
               ),
-              IconButton(
-                icon: const Icon(Icons.skip_next_rounded, size: 26),
-                color: _muted,
-                onPressed: x.next,
-              ),
+              DuwKnop(icoon: Icons.skip_next_rounded, maat: 26, kleur: _muted, onPressed: x.next),
               const _WachtrijKnop(),
               const _SpeakerButton(iconSize: 22),
               const SizedBox(width: 2),
@@ -12181,7 +12617,20 @@ class NowPlayingScreen extends StatefulWidget {
   State<NowPlayingScreen> createState() => _NowPlayingScreenState();
 }
 
-class _NowPlayingScreenState extends State<NowPlayingScreen> {
+class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerProviderStateMixin {
+  /// De wachtrij als glaspaneel rechts, op een breed scherm (Saber, 17-10-2026: "die moet trouwens ook
+  /// in de now playing screen staan als ik die wil openen vanuit dit venster"). Gaat hij open, dan
+  /// schuift de hoes met de cd naar links en komt het paneel rechts binnen; nog een klik schuift alles
+  /// terug. Hoort bij dit scherm: het paneel naast de pagina's ([WachtrijPaneel]) blijft wat het was.
+  bool _wachtrij = false;
+  late final AnimationController _paneel =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 380))..addListener(() => setState(() {}));
+
+  void _wisselWachtrij() {
+    setState(() => _wachtrij = !_wachtrij);
+    _wachtrij ? _paneel.forward() : _paneel.reverse();
+  }
+
   /// Twee tikken op de hoes draaien hem om; één tik vergroot (wat er voor staat). Saber koos dat op
   /// 16-10-2026. De gewone tik wacht daarvoor [kTweedeTik] — zie `ui/draaihoes.dart`.
   final _draai = DraaiHoesController();
@@ -12234,6 +12683,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
 
   @override
   void dispose() {
+    _paneel.dispose();
     _levensloop?.dispose();
     _spoelPijlen.vergeet();
     _okKlok?.cancel();
@@ -12311,8 +12761,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     final bruikbaar = Size(schermmaat.width - rand.horizontal, schermmaat.height - rand.vertical);
     // Naast elkaar of dwars: in allebei staat de tekst links uitgelijnd naast de hoes.
     final zij = naast || dwars;
+    // Hoe breed het wachtrijpaneel nu is (schuivend tussen 0 en [kNuSpeeltWachtrij]); de hoes rekent
+    // met wat er naast het paneel overblijft.
+    final paneelBreedte = naast ? Curves.easeOutCubic.transform(_paneel.value) * kNuSpeeltWachtrij : 0.0;
     final hoesMaat = naast
-        ? hoesNaast(scherm: schermmaat, reisfactor: discTravelFactor(context))
+        ? hoesNaast(
+            scherm: Size(schermmaat.width - paneelBreedte, schermmaat.height),
+            reisfactor: discTravelFactor(context))
         : dwars
             ? hoesLiggend(bruikbaar: bruikbaar)
             : _sleeve(context);
@@ -12679,17 +13134,18 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
         mainAxisAlignment: zij ? MainAxisAlignment.start : MainAxisAlignment.center,
         children: [
           IconButton(
-              icon: const Icon(Icons.shuffle_rounded),
+              icon: ShuffleIcoon(aan: p.shuffle, maat: 24),
               iconSize: 24,
               color: p.shuffle ? _accent : _muted,
               onPressed: p.toggleShuffle),
           const SizedBox(width: 8),
           // Geen ±10-knoppen op een tv meer (16-10-2026, "te druk"): links en rechts ingedrukt
           // houden op de hoes spoelt (zie [_pijlAlsNummerknop]).
-          IconButton(
-              icon: const Icon(Icons.skip_previous_rounded),
-              iconSize: 34,
-              color: _text,
+          DuwKnop(
+              icoon: Icons.skip_previous_rounded,
+              richting: -1,
+              maat: 34,
+              kleur: _text,
               // Door `_Transport` en niet met een eigen `?? false`.
               //
               // Deze twee knoppen herhaalden de oude logica die grijs werd zodra de
@@ -12705,27 +13161,43 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
               // knop, maar die stond op de Shield 80 punten onder de schermrand — dus
               // begon het scherm met een ring die je niet kon zien. De hoes staat altijd
               // in beeld, en van daaruit zijn links en rechts vorige en volgende.
-              icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+              icon: SpeelPauzeIcoon(speelt: playing, maat: 40),
               color: _bg,
               iconSize: 40,
               onPressed: casting ? cast.playPause : (t == null ? null : p.playPause),
             ),
           ),
           const SizedBox(width: 8),
-          IconButton(
-              icon: const Icon(Icons.skip_next_rounded),
-              iconSize: 34,
-              color: _text,
-              onPressed: x.next),
+          DuwKnop(icoon: Icons.skip_next_rounded, maat: 34, kleur: _text, onPressed: x.next),
           const SizedBox(width: 8),
           // Shuffle and repeat stay local on purpose: the speaker plays the queue the PC
           // hands it one track at a time, so changing the order here would take effect on
           // whatever is sent NEXT and look like it did nothing now.
           IconButton(
-              icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded),
+              icon: HerhaalIcoon(
+                  stand: p.repeat,
+                  icoon: p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
+                  maat: 24),
               iconSize: 24,
               color: p.repeat == RepeatMode.off ? _muted : _accent,
               onPressed: casting ? null : p.cycleRepeat),
+          // De wachtrij naast de hoes, op een breed scherm. Het icoon van Afspeellijsten: de regels
+          // schuiven binnen als het paneel opengaat.
+          if (naast) ...[
+            const SizedBox(width: 8),
+            IconButton(
+              key: const ValueKey('np-wachtrij'),
+              tooltip: _wachtrij ? 'Wachtrij sluiten' : 'Wachtrij',
+              iconSize: 24,
+              icon: MenuIcoon(
+                soort: MenuIcoonSoort.afspeellijsten,
+                kleur: _wachtrij ? _accent : _muted,
+                gekozen: _wachtrij,
+                maat: 24,
+              ),
+              onPressed: _wisselWachtrij,
+            ),
+          ],
           const SizedBox(width: 12),
           const _SpeakerButton(iconSize: 24),
         ],
@@ -12938,18 +13410,49 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte32),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          hoesKolom,
-                          const SizedBox(width: kSpeelGat),
-                          SizedBox(
-                            width: kSpeelKolom,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: onder,
+                          Expanded(
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                hoesKolom,
+                                const SizedBox(width: kSpeelGat),
+                                SizedBox(
+                                  width: kSpeelKolom,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: onder,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
+                          // Het paneel schuift van rechts binnen: zijn vak groeit, en het paneel hangt
+                          // aan de linkerkant van dat vak.
+                          if (paneelBreedte > 0)
+                            SizedBox(
+                              width: paneelBreedte,
+                              child: ClipRect(
+                                child: OverflowBox(
+                                  alignment: Alignment.centerLeft,
+                                  minWidth: kNuSpeeltWachtrij,
+                                  maxWidth: kNuSpeeltWachtrij,
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(kRuimte24, kRuimte8, 0, kRuimte8),
+                                    child: GlasVlak(
+                                      key: const ValueKey('np-wachtrijpaneel'),
+                                      vorm: const BorderRadius.all(Radius.circular(18)),
+                                      kleur: _panel,
+                                      child: WachtrijPaneelView(
+                                        opGlas: true,
+                                        onSluit: _wachtrij ? _wisselWachtrij : null,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ),

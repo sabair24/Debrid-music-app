@@ -30,6 +30,7 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  media_ = std::make_unique<Mediabediening>(GetHandle(), flutter_controller_->engine()->messenger());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -104,6 +105,8 @@ void FlutterWindow::LogVensterBericht(UINT const message, WPARAM const wparam,
 void FlutterWindow::OnDestroy() {
   // Eerst de vlag, dan pas opruimen: het opruimen zelf brengt ons hieronder terug.
   tearing_down_ = true;
+  // Vóór de controller: de mediabediening praat over zijn kanaal met de engine.
+  media_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -186,6 +189,11 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   //
   // Waarom dit zeven keer "willekeurig" leek: er is niets mis vóór de crash, dus in de logboeken
   // staat niets, en het gebeurt op het moment dat je de app toch al wegklikt.
+  // De mediatoetsen (van de draad van Windows doorgegeven) en de knoppen in de taakbalk.
+  if (!tearing_down_ && media_ && media_->Bericht(message, wparam, lparam)) {
+    return 0;
+  }
+
   if (!tearing_down_ && flutter_controller_) {
     // Give Flutter, including plugins, an opportunity to handle window messages.
     std::optional<LRESULT> result =
