@@ -2654,7 +2654,18 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   }
 
   Future<void> _saveProgress({bool force = false}) async {
-    if (!_resumable || _restoring) return;
+    if (_restoring) return;
+    if (!_resumable) {
+      // Een radio wordt niet bewaard (hij is niet te herstellen), maar wel gemeld: "Hier verder
+      // luisteren" neemt ook een radio over (Saber, 17-10-2026). Alleen het nummer dat nu speelt.
+      if (!radioMode) return;
+      final nu = DateTime.now();
+      if (!force && nu.difference(_lastPosSave).inSeconds < 5) return;
+      _lastPosSave = nu;
+      final t = current;
+      if (t != null) onProgress?.call(t, position, playing, [t], 0);
+      return;
+    }
     final now = DateTime.now();
     if (!force && now.difference(_lastPosSave).inSeconds < 5) return; // throttle
     _lastPosSave = now;

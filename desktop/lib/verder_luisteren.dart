@@ -48,7 +48,12 @@ class VerderAanbod {
     required this.opMs,
     this.shuffle = false,
     this.herhaal = RepeatMode.off,
+    this.radioArtiest,
   });
+
+  /// Speelde er een radio: rond welke artiest. Dan start dit toestel dezelfde radio, met [nummer]
+  /// eerst. Null zonder radio.
+  final String? radioArtiest;
 
   final String toestel;
   final String toestelNaam;
@@ -126,6 +131,10 @@ VerderAanbod? aanbodUit(
     opMs: op,
     shuffle: p['shuffle'] == true,
     herhaal: herhaal,
+    radioArtiest: switch ((p['radio'] as Map?)?['artiest']) {
+      final String r when r.trim().isNotEmpty => r,
+      _ => null,
+    },
   );
   if (afgewezen.contains(a.sleutel)) return null;
   return a;
@@ -167,9 +176,10 @@ abstract class VerderBron {
   /// De laatst bekende stand en het laatste verzoek, of null als de pc er niet is.
   Future<({Map<String, dynamic>? stand, Map<String, dynamic>? verzoek})?> haal();
 
-  /// Speel [rij] vanaf [index], op [positie].
+  /// Speel [rij] vanaf [index], op [positie]. Met [radioArtiest] een radio rond die artiest, met het
+  /// nummer op [index] eerst.
   Future<void> speel(List<Track> rij, int index, Duration positie,
-      {required bool spelen, required bool shuffle, required RepeatMode herhaal});
+      {required bool spelen, required bool shuffle, required RepeatMode herhaal, String? radioArtiest});
 
   /// Pauzeer hier.
   void pauzeer();
@@ -268,7 +278,7 @@ class VerderLuisteren extends ChangeNotifier {
     notifyListeners();
     _overnameVan = a.toestel;
     await bron.speel(a.rij, a.index, startPositie(a, _nu),
-        spelen: true, shuffle: a.shuffle, herhaal: a.herhaal);
+        spelen: true, shuffle: a.shuffle, herhaal: a.herhaal, radioArtiest: a.radioArtiest);
   }
 
   /// Het kruisje: dit nummer van dit toestel niet meer aanbieden.

@@ -55,7 +55,8 @@ class _Nep implements VerderBron {
   Map<String, dynamic>? stand;
   Map<String, dynamic>? verzoek;
   int pauzes = 0;
-  final gespeeld = <({List<Track> rij, int index, Duration positie, bool shuffle, RepeatMode herhaal})>[];
+  final gespeeld =
+      <({List<Track> rij, int index, Duration positie, bool shuffle, RepeatMode herhaal, String? radio})>[];
 
   @override
   String get mijnId => 'gsm-1';
@@ -72,8 +73,8 @@ class _Nep implements VerderBron {
 
   @override
   Future<void> speel(List<Track> rij, int index, Duration positie,
-      {required bool spelen, required bool shuffle, required RepeatMode herhaal}) async {
-    gespeeld.add((rij: rij, index: index, positie: positie, shuffle: shuffle, herhaal: herhaal));
+      {required bool spelen, required bool shuffle, required RepeatMode herhaal, String? radioArtiest}) async {
+    gespeeld.add((rij: rij, index: index, positie: positie, shuffle: shuffle, herhaal: herhaal, radio: radioArtiest));
     speelt = true;
   }
 
@@ -193,6 +194,25 @@ void main() {
       n.speelt = true;
       v.spelerVeranderd();
       expect(v.aanbod, isNull);
+    });
+  });
+
+  group('de radio', () {
+    test('een radio gaat mee: rond dezelfde artiest, met het nummer dat speelde eerst', () async {
+      final n = _Nep();
+      final v = VerderLuisteren(n, klok: () => 1005000);
+      await v.opStand({
+        ..._stand(rij: const ['b'], index: 0),
+        'radio': {'artiest': "Destiny's Child", 'naam': "Radio Destiny's Child"},
+      });
+      expect(v.aanbod?.radioArtiest, "Destiny's Child");
+      await v.neemOver();
+      expect(n.gespeeld.single.radio, "Destiny's Child");
+      expect(n.gespeeld.single.rij.single, _bib['b']);
+    });
+
+    test('een lege radio-artiest is geen radio', () {
+      expect(_aanbod({..._stand(), 'radio': {'artiest': '  '}})!.radioArtiest, isNull);
     });
   });
 

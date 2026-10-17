@@ -316,9 +316,10 @@ class LanSharing extends ChangeNotifier {
     bool shuffle = false,
     String herhaal = 'off',
     String overname = '',
+    Map<String, dynamic>? radio,
   }) {
     final op = progressOp(trackPath, position, playing, queuePaths, index,
-        shuffle: shuffle, herhaal: herhaal, overname: overname);
+        shuffle: shuffle, herhaal: herhaal, overname: overname, radio: radio);
     if (op == null) return;
     state.applyOps([op], deviceId: mijnId, deviceName: deviceName());
   }
@@ -336,6 +337,7 @@ class LanSharing extends ChangeNotifier {
     bool shuffle = false,
     String herhaal = 'off',
     String overname = '',
+    Map<String, dynamic>? radio,
   }) {
     final id = _trackId(trackPath);
     if (id == null) return null;
@@ -349,6 +351,7 @@ class LanSharing extends ChangeNotifier {
       'shuffle': shuffle,
       'repeat': herhaal,
       if (overname.isNotEmpty) 'overname': overname,
+      if (radio != null) 'radio': radio,
       'at': DateTime.now().millisecondsSinceEpoch,
     };
   }
@@ -357,8 +360,9 @@ class LanSharing extends ChangeNotifier {
   /// Het neemt over zodra het weer naar de stand kijkt (binnen een paar seconden), en meldt dan dat het
   /// van deze pc overnam; dan pauzeert deze pc vanzelf. Zie verder_luisteren.dart.
   bool stuurNaar(String naar, String trackPath, Duration position, List<String> queuePaths, int index,
-      {bool shuffle = false, String herhaal = 'off'}) {
-    final op = progressOp(trackPath, position, true, queuePaths, index, shuffle: shuffle, herhaal: herhaal);
+      {bool shuffle = false, String herhaal = 'off', Map<String, dynamic>? radio}) {
+    final op = progressOp(trackPath, position, true, queuePaths, index,
+        shuffle: shuffle, herhaal: herhaal, radio: radio);
     if (op == null) return false;
     state.applyOps([
       {...op, 'type': 'verzoek', 'naar': naar}

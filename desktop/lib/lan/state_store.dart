@@ -56,7 +56,12 @@ class PlaybackProgress {
     this.shuffle = false,
     this.repeat = 'off',
     this.overname = '',
+    this.radio,
   });
+
+  /// Speelt er een radio: rond welke artiest (`artiest`) en hoe hij heet (`naam`). Neemt een ander
+  /// toestel over, dan start het dezelfde radio. Null zonder radio.
+  final Map<String, dynamic>? radio;
 
   /// Shuffle en herhalen ('off', 'all', 'one'), zodat ze meegaan als een ander toestel overneemt
   /// (Saber, 17-10-2026).
@@ -88,6 +93,7 @@ class PlaybackProgress {
         'shuffle': shuffle,
         'repeat': repeat,
         if (overname.isNotEmpty) 'overname': overname,
+        if (radio != null) 'radio': radio,
       };
 
   static PlaybackProgress fromJson(Map<String, dynamic> m) => PlaybackProgress(
@@ -102,6 +108,7 @@ class PlaybackProgress {
         shuffle: m['shuffle'] == true,
         repeat: (m['repeat'] ?? 'off') as String,
         overname: (m['overname'] ?? '') as String,
+        radio: (m['radio'] as Map?)?.cast<String, dynamic>(),
       );
 }
 
@@ -338,6 +345,7 @@ class LanStateStore {
             shuffle: op['shuffle'] == true,
             repeat: (op['repeat'] ?? 'off') as String,
             overname: (op['overname'] ?? '') as String,
+            radio: (op['radio'] as Map?)?.cast<String, dynamic>(),
           );
           progressChanged = true;
 

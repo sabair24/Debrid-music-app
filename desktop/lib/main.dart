@@ -1243,7 +1243,10 @@ Future<void> main() async {
       final m = verder.meldNu();
       if (m == null) return;
       sharing.reportProgress(track.path, position, playing, [for (final t in queue) t.path], index,
-          shuffle: player.shuffle, herhaal: player.repeat.name, overname: m.overname ?? '');
+          shuffle: player.shuffle,
+          herhaal: player.repeat.name,
+          overname: m.overname ?? '',
+          radio: player.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null);
     };
     // De pc hoeft niet te vragen: hij houdt de stand zelf bij.
     sharing.state.changes.listen((e) {
@@ -1471,6 +1474,7 @@ Future<void> main() async {
               'shuffle': player.shuffle,
               'repeat': player.repeat.name,
               if (m.overname != null) 'overname': m.overname,
+              if (player.radioMode) 'radio': {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam},
             }
           ],
           'deviceId': ik!.id,
@@ -9842,8 +9846,11 @@ class _SpeelOpKnop extends StatelessWidget {
         if (t == null) return;
         final rij = p.queueTracks;
         final naam = server.aanwezigeToestellen().where((x) => x.id == id).map((x) => x.naam).firstOrNull ?? '';
+        final radio = context.read<RadioBesturing>();
         final ok = sharing.stuurNaar(id, t.path, p.position, [for (final x in rij) x.path], p.currentIndex,
-            shuffle: p.shuffle, herhaal: p.repeat.name);
+            shuffle: p.shuffle,
+            herhaal: p.repeat.name,
+            radio: p.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null);
         _srcToast(context, ok ? 'Naar $naam gestuurd — de pc pauzeert zodra het daar speelt.' : 'Dit nummer kan niet mee (het staat niet in je bibliotheek).');
       },
     );
@@ -13803,8 +13810,9 @@ class _PcVerderBron implements VerderBron {
 
   @override
   Future<void> speel(List<Track> rij, int index, Duration positie,
-          {required bool spelen, required bool shuffle, required RepeatMode herhaal}) =>
-      player.neemOver(rij, index, positie, spelen: spelen, shuffle: shuffle, herhaal: herhaal);
+          {required bool spelen, required bool shuffle, required RepeatMode herhaal, String? radioArtiest}) =>
+      _verderSpelen(player, rij, index, positie,
+          spelen: spelen, shuffle: shuffle, herhaal: herhaal, radioArtiest: radioArtiest);
 
   @override
   void pauzeer() => player.pauzeer();
@@ -13858,11 +13866,30 @@ class _ToestelVerderBron implements VerderBron {
 
   @override
   Future<void> speel(List<Track> rij, int index, Duration positie,
-          {required bool spelen, required bool shuffle, required RepeatMode herhaal}) =>
-      player.neemOver(rij, index, positie, spelen: spelen, shuffle: shuffle, herhaal: herhaal);
+          {required bool spelen, required bool shuffle, required RepeatMode herhaal, String? radioArtiest}) =>
+      _verderSpelen(player, rij, index, positie,
+          spelen: spelen, shuffle: shuffle, herhaal: herhaal, radioArtiest: radioArtiest);
 
   @override
   void pauzeer() => player.pauzeer();
+}
+
+/// Overnemen wat een ander toestel speelde: de wachtrij op zijn plek, of een radio rond dezelfde artiest
+/// met het nummer dat speelde als eerste, op dezelfde plek (Saber, 17-10-2026: "ook de radio").
+Future<void> _verderSpelen(PlayerStore player, List<Track> rij, int index, Duration positie,
+    {required bool spelen, required bool shuffle, required RepeatMode herhaal, String? radioArtiest}) async {
+  final ctx = appNavigator.currentContext;
+  if (radioArtiest == null || ctx == null || rij.isEmpty) {
+    return player.neemOver(rij, index, positie, spelen: spelen, shuffle: shuffle, herhaal: herhaal);
+  }
+  final zaad = rij[index.clamp(0, rij.length - 1)];
+  await startRadio(ctx, radioArtiest, zaad: zaad);
+  // Het zaad klinkt als eerste; zodra libmpv het kent, naar de plek waar het andere toestel was.
+  for (var i = 0; i < 60; i++) {
+    if (player.current?.path == zaad.path && player.duration > Duration.zero) break;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+  if (player.current?.path == zaad.path && positie > const Duration(seconds: 1)) player.seek(positie);
 }
 
 /// De balk "Hier verder luisteren" (Saber, 17-10-2026): speelt er op een ander toestel iets, of
@@ -13892,7 +13919,9 @@ class VerderBalk extends StatelessWidget {
     final t = a.nummer;
     final hoes = context.read<LibraryStore>().coverForTrack(t);
     final waar = a.toestelNaam.isEmpty ? 'een ander toestel' : a.toestelNaam;
-    final kop = a.speelde ? 'Speelt op $waar' : 'Verder waar je was · op $waar';
+    final kop = a.radioArtiest != null
+        ? (a.speelde ? 'Radio op $waar' : 'Verder met de radio · op $waar')
+        : (a.speelde ? 'Speelt op $waar' : 'Verder waar je was · op $waar');
     final knop = a.speelde ? 'Hier verder luisteren' : 'Verder luisteren';
     return ConstrainedBox(
       key: ValueKey('verder-${a.sleutel}'),
