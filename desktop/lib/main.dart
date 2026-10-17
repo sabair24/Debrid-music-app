@@ -2223,7 +2223,10 @@ class _HomeShellState extends State<HomeShell> {
     // geeft hij de focus aan zichzelf. Zie [focusZonderDoel] — zo zat je op de Shield vast op de lege
     // pagina "Op dit toestel" (15-10-2026).
     final hier = FocusManager.instance.primaryFocus;
+    _tvSpoorKandidaten(hier, richting);
     if (!focusZonderDoel(hier) && (hier?.focusInDirection(richting) ?? false)) {
+      // ignore: avoid_print
+      print('ZZSPOOR na: ${_tvSpoorNaam(FocusManager.instance.primaryFocus)}');
       return KeyEventResult.handled;
     }
     final vanwaar = FocusManager.instance.primaryFocus?.rect;
@@ -2236,6 +2239,35 @@ class _HomeShellState extends State<HomeShell> {
       }
     }
     return KeyEventResult.handled;
+  }
+
+  // TIJDELIJK (meetversie 17-10-2026, niet uitgeven): wat de pijl ziet.
+  String _tvSpoorNaam(FocusNode? n) {
+    if (n?.context == null) return '${n?.debugLabel}';
+    String? tekst;
+    void zoek(Element e) {
+      if (tekst != null) return;
+      final w = e.widget;
+      if (w is Text) tekst = w.data;
+      e.visitChildren(zoek);
+    }
+    (n!.context! as Element).visitChildren(zoek);
+    final s = Scrollable.maybeOf(n.context!, axis: Axis.vertical);
+    final r = n.rect;
+    return '"${tekst ?? n.debugLabel}" rect=${r.left.round()},${r.top.round()} ${r.width.round()}x${r.height.round()} '
+        'lijst=${s == null ? '-' : identityHashCode(s)} kan=${n.canRequestFocus} sla=${n.skipTraversal}';
+  }
+
+  void _tvSpoorKandidaten(FocusNode? hier, TraversalDirection richting) {
+    if (hier == null || (richting != TraversalDirection.down && richting != TraversalDirection.up)) return;
+    // ignore: avoid_print
+    print('ZZSPOOR van: ${_tvSpoorNaam(hier)} scope=${hier.nearestScope?.debugLabel}');
+    var i = 0;
+    for (final n in hier.nearestScope?.traversalDescendants ?? const <FocusNode>[]) {
+      if (i++ > 60) break;
+      // ignore: avoid_print
+      print('ZZSPOOR  kandidaat: ${_tvSpoorNaam(n)}');
+    }
   }
 
   /// Staat [n] (een deel van) in beeld?
