@@ -455,6 +455,10 @@ void _logStapel(WarmLog log, StackTrace? stapel) {
 /// tag en is dus overal waar.
 String gAppBouw = '';
 
+/// PROEF (17-10-2026), weer weg vóór de uitgave: woorden uit proef.txt in de logmap, om op een tv elk
+/// nieuw onderdeel van de artiestpagina apart uit te zetten en het openen te meten. Zonder bestand leeg.
+Set<String> gProef = const {};
+
 /// De versieregel zoals hij op het scherm komt: `3.9.220 (11408)`, of alleen wat er is.
 ///
 /// Zuiver, want de reden dat dit misging valt hier na te meten en nergens anders: op Windows is het
@@ -481,6 +485,10 @@ Future<void> main() async {
   // Waar de gezichten op de artiestfoto's staan, zodat elke foto maar één keer bekeken wordt (zie
   // `ui/kopfoto.dart`). Hier om dezelfde reden als de scanmaten hierboven.
   await bewaarFotoBlikkenIn(appFile('fotoblikken.json'));
+  try {
+    final p = File('$logDir${Platform.pathSeparator}proef.txt');
+    if (p.existsSync()) gProef = p.readAsStringSync().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toSet();
+  } catch (_) {}
   // En hoe lang dat kijken duurt, in kop.log naast de andere logboeken. Buiten het beeld geschreven:
   // WarmLog schrijft gespoeld en synchroon.
   final kopLog = WarmLog('$logDir${Platform.pathSeparator}kop.log');
@@ -8916,6 +8924,7 @@ class _ArtiestPortretState extends State<ArtiestPortret> {
   }
 
   void _start() {
+    if (gProef.contains('portret-uit')) return;
     final enr = CoverEnricher(context.read<AppSettings>());
     _beeld = enr.artistThumbInGeheugen(widget.naam);
     if (_beeld == null) unawaited(_zoek(enr));
@@ -21203,7 +21212,15 @@ class EditorialeKop extends StatelessWidget {
         child: Stack(
           fit: StackFit.loose,
           children: [
-            if (achtergrond != null)
+            if (achtergrond != null && gProef.contains('kop-uit'))
+              Positioned.fill(
+                child: grijs(Image.memory(achtergrond,
+                    fit: BoxFit.cover,
+                    cacheWidth: decodeWidth(breedte).clamp(64, 1920),
+                    alignment: const Alignment(0, -.35),
+                    errorBuilder: (_, __, ___) => const SizedBox())),
+              )
+            else if (achtergrond != null)
               Positioned.fill(
                 // Over de volle breedte en slim uitgesneden: op de gezichten, of zoals jij hem op de pc
                 // instelde (zie [uitsnede] en `ui/kopfoto.dart`). Hier stond een vaste uitlijning iets boven
@@ -22041,7 +22058,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // zonder dit onderscheid is niet te zeggen of dat de hoofddraad is of het tekenen.
     if (isTv) {
       _fps.start('artiest ${widget.artist.name}');
-      _fpsKlok = Timer(const Duration(seconds: 5), _fps.stop);
+      _fpsKlok = Timer(const Duration(seconds: 5), () {
+        _fps.stop();
+        FotoBlikGeheugen.meld?.call('artiestpagina: ${widget.artist.name} — $_gebouwd keer gebouwd, '
+            '${_bouwUs ~/ 1000} ms in build · proef ${gProef.join(' ')}');
+      });
     }
   }
 
@@ -22539,8 +22560,23 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     } catch (_) {/* een pagina zonder "klinkt als" is nog steeds een goede pagina */}
   }
 
+  /// Hoe vaak deze pagina gebouwd is in de vijf meettellen, en hoe lang [_bouw] daarover deed.
+  int _gebouwd = 0;
+  int _bouwUs = 0;
+
   @override
   Widget build(BuildContext context) {
+    if (_fpsKlok?.isActive != true) return _bouw(context);
+    final klok = Stopwatch()..start();
+    try {
+      return _bouw(context);
+    } finally {
+      _gebouwd++;
+      _bouwUs += klok.elapsedMicroseconds;
+    }
+  }
+
+  Widget _bouw(BuildContext context) {
     // Hoeveel van deze pagina achter de zwevende balk ligt. Nul op een televisie, een telefoon, en
     // op de pc zolang de offline-melding er staat — dan is alles hieronder zoals het altijd was.
     final ruimte = BalkRuimte.van(context);
@@ -22721,7 +22757,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                       // Op een tv staat de selectie bij het openen hier, zoals op een albumpagina op
                       // Afspelen. Zonder had niets de selectie: je zag nergens waar je stond, en de
                       // eerste pijl koos dan iets willekeurigs (Shield, 17-10-2026).
-                      autofocus: isTv,
+                      autofocus: isTv && !gProef.contains('radio-uit'),
                       onPressed: () => startRadio(context, widget.artist.name),
                     ),
                     // De app raadt portret-of-achtergrond uit de vorm van een plaatje, en juist een
@@ -23027,7 +23063,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           // PRESENT AND FUTURE" toen dwars door "Zoeken · Start · Albums" (Saber, 17-10-2026: "de
           // menubar is te transparant, de tekst loopt door elkaar"). Op een tv is dit glas plat (geen
           // vervaging, zie [glasZonderVervaging]), dus het kost daar één gevulde rechthoek.
-          if (ruimte > 0)
+          if (ruimte > 0 && !(isTv && gProef.contains('strook-uit')))
             Positioned(
               top: 0,
               left: 0,
