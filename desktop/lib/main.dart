@@ -2223,10 +2223,7 @@ class _HomeShellState extends State<HomeShell> {
     // geeft hij de focus aan zichzelf. Zie [focusZonderDoel] — zo zat je op de Shield vast op de lege
     // pagina "Op dit toestel" (15-10-2026).
     final hier = FocusManager.instance.primaryFocus;
-    _tvSpoorKandidaten(hier, richting);
     if (!focusZonderDoel(hier) && (hier?.focusInDirection(richting) ?? false)) {
-      // ignore: avoid_print
-      print('ZZSPOOR na: ${_tvSpoorNaam(FocusManager.instance.primaryFocus)}');
       return KeyEventResult.handled;
     }
     final vanwaar = FocusManager.instance.primaryFocus?.rect;
@@ -2412,6 +2409,14 @@ class _HomeShellState extends State<HomeShell> {
     ];
     if (!toetsen.contains(e.logicalKey)) return false;
     final hier = FocusManager.instance.primaryFocus;
+    if (e.logicalKey == LogicalKeyboardKey.arrowDown || e.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _tvSpoorKandidaten(hier,
+          e.logicalKey == LogicalKeyboardKey.arrowDown ? TraversalDirection.down : TraversalDirection.up);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // ignore: avoid_print
+        print('ZZSPOOR na: ${_tvSpoorNaam(FocusManager.instance.primaryFocus)}');
+      });
+    }
     // Ook een selectie op iets dat niet in beeld staat: dan ziet niemand waar hij is, en een pijl
     // brengt hem naar een buur die evenmin in beeld staat.
     if (!focusZonderDoel(hier, wortel: FocusManager.instance.rootScope) && _opScherm(hier!)) return false;
