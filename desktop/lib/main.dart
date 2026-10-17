@@ -13954,13 +13954,13 @@ class VerderBalk extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              FilledButton.icon(
+              // Glas met paarse tekst, zoals elke knop in de app: geen paars gevuld vlak.
+              GlasKnop(
                 key: const ValueKey('verder-knop'),
+                icoon: Icons.play_arrow_rounded,
+                label: knop,
                 autofocus: isTv,
-                style: FilledButton.styleFrom(backgroundColor: _accent),
                 onPressed: () => v.neemOver(),
-                icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                label: Text(knop),
               ),
               TvLabelled(
                 label: 'Niet nu',

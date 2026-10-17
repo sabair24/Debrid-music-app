@@ -186,9 +186,12 @@ class MenuWoord extends StatelessWidget {
         : aangewezen
             ? const Color(0xFFFFFFFF)
             : kGedempt;
+    // Het icoon groeit mee met de letters: op een tv zijn die 1,35 keer zo groot, en zonder dit stond
+    // er een klein icoontje naast een groot woord (voorbeeld van 17-10-2026).
+    final maat = MediaQuery.textScalerOf(context).scale(maten.icoon);
     final icoon = statisch
         ? SizedBox.square(
-            dimension: maten.icoon,
+            dimension: maat,
             child: CustomPaint(painter: MenuIcoonSchilder(soort: punt.icoon, kleur: kleur, vul: onderPil ? 1 : 0)),
           )
         : MenuIcoon(
@@ -197,7 +200,7 @@ class MenuWoord extends StatelessWidget {
             gekozen: onderPil,
             aangewezen: aangewezen,
             bezig: punt.bezig,
-            maat: maten.icoon,
+            maat: maat,
           );
     final stijl = DefaultTextStyle.of(context).style.merge(TextStyle(
           fontSize: maten.lettergrootte,
@@ -213,7 +216,7 @@ class MenuWoord extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           icoon,
-          SizedBox(width: maten.icoon * .38),
+          SizedBox(width: maat * .38),
           statisch
               ? Text(punt.label, style: stijl, maxLines: 1)
               : AnimatedDefaultTextStyle(
