@@ -44,8 +44,8 @@ void main() {
     // De balk moet die keuze uit NavSections.voorTv halen en niet zelf een lijstje bijhouden --
     // anders lopen de twee uit elkaar zodra er een sectie bijkomt.
     expect(balkBron(), contains('for (final (id, label, _) in NavSections.voorTv)'));
-    expect(balkBron(), contains("_item('Zoeken', widget.onSearch)"));
-    expect(balkBron(), contains("_item('Instellingen', widget.onSettings)"));
+    expect(balkBron(), contains("_item('Zoeken', widget.onSearch, tint, icoon: MenuIcoonSoort.zoeken)"));
+    expect(balkBron(), contains("_item('Instellingen', widget.onSettings, tint, icoon: MenuIcoonSoort.instellingen)"));
   });
 
   test('de tv-lijst laat ophalen en opruimen weg, en verder niets', () {

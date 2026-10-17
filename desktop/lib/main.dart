@@ -10,9 +10,6 @@ import 'package:flutter/foundation.dart' show mapEquals, visibleForTesting;
 // AppExitResponse hoort bij de haak die Windows gebruikt als het de app wil beëindigen — zie
 // _saveOnLeaving. Hij woont in dart:ui; material.dart exporteert hem niet.
 import 'dart:ui' show AppExitResponse, PlatformDispatcher;
-// For PointerDeviceKind: the nav chip is drag-scrolled with a mouse, which Flutter leaves out of
-// the default set on purpose.
-import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/rendering.dart' show RenderAbstractViewport, RenderProxyBox;
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -44,6 +41,8 @@ import 'ui/draaihoes.dart';
 import 'ui/tv_rij.dart';
 import 'ui/duim.dart';
 import 'ui/glas.dart';
+import 'ui/menu.dart';
+import 'ui/menu_iconen.dart';
 import 'lan/pc_radiobron.dart';
 import 'auto_hoezen.dart';
 import 'bestandsbeheer.dart';
@@ -1684,13 +1683,30 @@ class DebridApp extends StatelessWidget {
         //
         // Niet vuren terwijl je typt: anders steelt de sneltoets een aanslag uit een tekstveld.
         return Shortcuts(
-          shortcuts: const <ShortcutActivator, Intent>{
-            SingleActivator(LogicalKeyboardKey.keyP, control: true): NaarNuSpeeltIntent(),
-            SingleActivator(LogicalKeyboardKey.keyP, meta: true): NaarNuSpeeltIntent(),
-            SingleActivator(LogicalKeyboardKey.gameButtonY): NaarNuSpeeltIntent(),
+          shortcuts: <ShortcutActivator, Intent>{
+            const SingleActivator(LogicalKeyboardKey.keyP, control: true): const NaarNuSpeeltIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyP, meta: true): const NaarNuSpeeltIntent(),
+            const SingleActivator(LogicalKeyboardKey.gameButtonY): const NaarNuSpeeltIntent(),
+            // Ctrl/Cmd+F opent het zoekveld in het menu, Spatie speelt of pauzeert (Saber,
+            // 17-10-2026). Niet op een tv: daar heeft de afstandsbediening zijn eigen knoppen.
+            if (!isTv) ...{
+              const SingleActivator(LogicalKeyboardKey.keyF, control: true): const ZoekIntent(),
+              const SingleActivator(LogicalKeyboardKey.keyF, meta: true): const ZoekIntent(),
+              const SingleActivator(LogicalKeyboardKey.space): const SpeelPauzeIntent(),
+            },
           },
           child: Actions(
             actions: <Type, Action<Intent>>{
+              ZoekIntent: CallbackAction<ZoekIntent>(onInvoke: (_) {
+                openZoekveld?.call();
+                return null;
+              }),
+              // Alleen als je niet typt: een uitgeschakelde actie laat de toets door naar het veld.
+              // Een actie die "niets" doet, slikt hem in, en dan kwam er geen spatie in de zoekterm.
+              SpeelPauzeIntent: AlsNietTypend<SpeelPauzeIntent>(() {
+                final ctx = appNavigator.currentContext;
+                if (ctx != null) ctx.read<PlayerStore>().playPause();
+              }),
               NaarNuSpeeltIntent: CallbackAction<NaarNuSpeeltIntent>(onInvoke: (_) {
                 if (TvTextFieldEscape.editingText()) return null;
                 final ctx = appNavigator.currentContext;
@@ -1956,6 +1972,10 @@ class _MeeschuivendGlas extends StatelessWidget {
     //
     // Zonder vervaging (iPad, telefoon, tv) ook de dichtere vulling: dan draagt de kleur alleen de
     // leesbaarheid. Zie [glasZonderVervaging].
+    // Op een pc, Mac en iPad helemaal niet meer (Saber, 17-10-2026: "er is een soort van doorlopende
+    // balk dit wil ik niet"). Het menu zweeft daar als losse capsule over de pagina, en de pagina
+    // schuift er gewoon onderdoor. Op een tv en een gsm blijft hij, om de reden hieronder.
+    if (!isTv && !isCompact(context)) return const SizedBox.shrink();
     final dicht = isCompact(context) || glasZonderVervaging;
     // Op een tv vol tot net onder de knoppen. Daar loopt deze balk sinds 17-10-2026 onder het zwevende
     // menu door (131 punten in plaats van 56), en dan loste de kleur op ter hoogte van de terugpijl: bij
@@ -2428,6 +2448,7 @@ class _HomeShellState extends State<HomeShell> {
     }
     // Zodat een leeg scherm een knop kan hebben die ergens heen gaat. Zie `navigatie.dart`.
     gaNaarSectie = _gaNaar;
+    openZoekveld = _openZoeken;
     _kijkOfErEenNieuweIs();
     _radio = context.read<RadioBesturing>()..addListener(_kijkNaarRadio);
     // De notitie van de vorige keer. Legde je je telefoon weg terwijl er een radio liep, dan komt het
@@ -2633,6 +2654,7 @@ class _HomeShellState extends State<HomeShell> {
     // Alleen loslaten als deze schil hem nog vasthoudt: bij een herstart van de app staat de
     // nieuwe schil er al voordat de oude afgebroken wordt.
     if (gaNaarSectie == _gaNaar) gaNaarSectie = null;
+    if (openZoekveld == _openZoeken) openZoekveld = null;
     super.dispose();
   }
 
@@ -3134,10 +3156,14 @@ class _HomeShellState extends State<HomeShell> {
                         filter: _qFilter,
                         sort: _sort,
                         bouw: _sectieKolom,
-                        child: BinnenNavigator(
-                          navigatorKey: binnenNav,
-                          kanTerug: _kanTerug,
-                          wortel: const _SectieHost(),
+                        // Omlaag scrollen klapt het menu in, omhoog klapt het open. Zie [_opScrol].
+                        child: NotificationListener<ScrollUpdateNotification>(
+                          onNotification: _opScrol,
+                          child: BinnenNavigator(
+                            navigatorKey: binnenNav,
+                            kanTerug: _kanTerug,
+                            wortel: const _SectieHost(),
+                          ),
                         ),
                       ),
                     ),
@@ -3231,9 +3257,15 @@ class _HomeShellState extends State<HomeShell> {
   /// brengt je terug naar de bovenkant van die sectie.
   void _gaNaar(int id) {
     binnenNav.currentState?.popUntil((r) => r.isFirst);
+    if (_menuIn) setState(() => _menuIn = false);
     if (_view != id) {
       setState(() {
         _view = id;
+        if (_zoekOpen && !(id == 0 || id == 1 || id == 4)) {
+          _zoekOpen = false;
+          _leggenZoekterm('');
+          _searchCtl.text = '';
+        }
         // Op een tv is de zoekterm weg zodra je naar een ander tabblad gaat. Hij bleef staan, en dan
         // stond er op Artiesten "Artiesten · 1" — alleen wie je net gezocht had, zonder dat er
         // ergens een zoekveld te zien was (Saber, 17-10-2026: "wissen na Zoeken"). Op de pc staat
@@ -3277,19 +3309,7 @@ class _HomeShellState extends State<HomeShell> {
         ),
       );
 
-  Widget _topBar() => isCompact(context)
-      ? _compactTopBar()
-      : _isDesktop
-      ? DragToMoveArea(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onDoubleTap: () async => await windowManager.isMaximized()
-                ? windowManager.unmaximize()
-                : windowManager.maximize(),
-            child: _topBarBody(),
-          ),
-        )
-      : _topBarBody();
+  Widget _topBar() => isCompact(context) ? _compactTopBar() : _pcBovenlaag();
 
   /// The section name and a way into the drawer — what a phone gets instead of the pill strip.
   Widget _compactTopBar() {
@@ -3370,197 +3390,229 @@ class _HomeShellState extends State<HomeShell> {
         ],
       );
 
-  Widget _topBarBody() => SizedBox(
-        // The glow keeps running behind the status bar; only the contents move down, so the top of
-        // the screen still looks like one piece rather than a black strip above the app.
-        //
-        // Uit [_breedeBalkHoogte], want een pagina in de binnennavigator moet via [_balkBoven] exact
-        // ditzelfde getal weten om zijn was op die van de schil te laten passen. Twee kopieën lopen
-        // uiteen zodra er één wordt bijgesteld, en dan staat er weer een rand dwars over het scherm.
-        height: _breedeBalkHoogte(context),
-        child: Stack(
-          children: [
-            // De gloed van het merk stond hier. Hij ligt nu achter de pagina's — zie [_merkGloed].
-            Padding(
-              // The glow behind runs to the edge; the contents come in by tvOverscan. 11 points of
-              // top inset on a set that overscans 5% puts the navigation strip's top edge off the
-              // screen, and this bar is how you reach every section of the app.
-              padding: EdgeInsets.fromLTRB(
-                  18 + tvOverscan.left,
-                  11 + tvOverscan.top + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0),
-                  18 + tvOverscan.right,
-                  8),
-              // The bar was built for a 1240-point window. An iPad in portrait is 834, and there
-              // it would simply overflow. Rather than a second navigation for touch — which is
-              // exactly the divergence this whole change is removing — the same bar drops what is
-              // decoration (the wordmark, the counts) and lets the sections scroll.
-              child: LayoutBuilder(
-                builder: (context, box) {
-                  // GEMETEN, niet geraden. Hier stond `box.maxWidth < 1040`, een getal uit de tijd
-                  // dat deze balk zeven secties had. Met elf secties schoof "Kwaliteit" op een Mac
-                  // uit beeld terwijl het woordmerk en de telling er gewoon bij stonden -- de balk
-                  // leek dus compleet en was het niet (Saber, 12-09-2026).
-                  final schaal = MediaQuery.textScalerOf(context);
-                  final secties = _NavPillsState.benodigdeBreedte(schaal: schaal);
-                  // Wat er sowieso naast staat: het icoon, de twee gaten om de secties, het tandwiel
-                  // (44 onder een vinger, 48 onder een muis) en op een pc de vensterknoppen.
-                  final vast = 28 +
-                      10 +
-                      10 +
-                      (_isTouch ? 44.0 : 48.0) +
-                      (_isDesktop ? 4 + _WindowButtonsState.breedte : 0.0);
-                  // Het blok links is zo breed als de breedste van zijn twee regels. De telling meet
-                  // ik op een ruime voorbeeldtekst, zodat de balk niet verspringt als er een album
-                  // bij komt.
-                  final blok = math.max(
-                    _tekstbreedte('DebridMusic',
-                        const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5), schaal),
-                    isTv
-                        ? 0.0
-                        : _tekstbreedte('8888 albums · 88888 nummers',
-                            const TextStyle(fontSize: 10.5), schaal),
-                  );
-                  final compact = box.maxWidth - vast - secties < blok + 9;
-                  return Row(
-                    children: [
-                      // The app's real icon, not an impression of it. This used to be a gradient
-                      // square with a music note drawn to look like the old mark, so when the
-                      // icon was redrawn everywhere else the top bar kept showing the old one.
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.asset('assets/icon/app_icon.png',
-                            width: 28, height: 28, filterQuality: FilterQuality.medium),
-                      ),
-                      if (!compact) ...[
-                        const SizedBox(width: 9),
-                        // Het woordmerk en de telling ONDER elkaar, niet links én rechts van de
-                        // secties. Naast elkaar kostten ze samen ruim 250 punten midden in de rij --
-                        // en die punten gingen af van precies het enige dat hier moet staan: de
-                        // secties. Gestapeld kosten ze de breedte van de breedste van de twee, en de
-                        // regel eronder is ook de plek waar "Scannen… 1234" nu verschijnt.
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('DebridMusic',
-                                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
-                            if (!isTv)
-                              Consumer2<LibraryStore, FactsWarmer>(
-                                builder: (_, lib, warmer, __) => Text(
-                                  lib.scanning
-                                      ? 'Scannen… ${lib.scanned}'
-                                      : (lib.enriching
-                                          ? 'Covers ophalen…'
-                                          : (warmer.status.isNotEmpty
-                                              ? warmer.status
-                                              : '${lib.albums.length} ${lib.albums.length == 1 ? 'album' : 'albums'} · '
-                                                  '${lib.tracks.length} ${lib.tracks.length == 1 ? 'nummer' : 'nummers'}')),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: _muted, fontSize: 10.5),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ],
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Center(
-                          // Draggable with a mouse, not only with a wheel or a finger.
-                          //
-                          // Flutter leaves the mouse out of dragDevices on purpose — on a page, a
-                          // mouse-drag is a text selection, not a scroll. Here there is no text to
-                          // select and the wheel is the only way to reach a section that does not
-                          // fit, which on a narrow window is most of them.
-                          child: ScrollConfiguration(
-                            behavior: ScrollConfiguration.of(context).copyWith(
-                              dragDevices: {
-                                PointerDeviceKind.touch,
-                                PointerDeviceKind.mouse,
-                                PointerDeviceKind.stylus,
-                                PointerDeviceKind.trackpad,
-                              },
-                              scrollbars: false,
-                            ),
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              // Every section stays reachable when they no longer fit side by side.
-                              // A menu would hide them; scrolling keeps them where they were.
-                              child: Consumer<DownloadManager>(
-                                builder: (_, dm, __) => _NavPills(
-                                  active: _view,
-                                  onSelect: _gaNaar,
-                                  badge: dm.jobs.where((j) => j.busy).length,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      // On a television this line is conditional on there being NEWS.
-                      //
-                      // `compact` is always true at 960 points, so the line was simply never shown
-                      // there — and it is the only thing that says "Scannen… 1234" or that the PC is
-                      // working through records nobody has opened. But showing the idle count as
-                      // well ate 200 points of a strip that already does not fit ten sections, and
-                      // cut "Online zoeken" off mid-word. So: on a TV, speak only when there is
-                      // something to say.
-                      // Op een pc staat deze regel nu LINKS onder het woordmerk; rechts hield hij de
-                      // secties uit beeld. Op een televisie blijft hij hier, en alleen bij nieuws.
-                      if (isTv)
-                        Consumer2<LibraryStore, FactsWarmer>(
-                          builder: (_, lib, warmer, __) => (isTv &&
-                                  !lib.scanning &&
-                                  !lib.enriching &&
-                                  warmer.status.isEmpty)
-                              ? const SizedBox.shrink()
-                              : Text(
-                            lib.scanning
-                                ? 'Scannen… ${lib.scanned}'
-                                : (lib.enriching
-                                    ? 'Covers ophalen…'
-                                    // Fourth state, after the two that were already here. The PC
-                                    // works through the records nobody has opened yet; without a
-                                    // line saying so it is invisible work that writes files into
-                                    // the music folder, which is the kind of thing you find out
-                                    // about at the wrong moment.
-                                    : (warmer.status.isNotEmpty
-                                        ? warmer.status
-                                        : '${lib.albums.length} ${lib.albums.length == 1 ? 'album' : 'albums'} · '
-                                            '${lib.tracks.length} ${lib.tracks.length == 1 ? 'nummer' : 'nummers'}')),
-                            style: TextStyle(color: _muted, fontSize: isTv ? 14 : 11.5),
-                          ),
-                        ),
-                      if (isTv) const SizedBox(width: 12),
-                      TvLabelled(
-                        label: 'Instellingen',
-                        child: IconButton(
-                        icon: const Icon(Icons.settings_rounded, size: 19),
-                        color: _muted,
-                        tooltip: 'Instellingen',
-                        // 44 points on a touch screen — the smallest thing Apple expects a finger
-                        // to hit, and a 19-point icon with default padding is under it.
-                        constraints: _isTouch ? const BoxConstraints.tightFor(width: 44, height: 44) : null,
-                        onPressed: () =>
-                            showDialog(context: context, builder: (_) => const SettingsDialog()),
-                      ),
-                      ),
-                      // Only where there is a window to close: on the iPad these would be three
-                      // buttons wired to a plugin that does not exist there.
-                      if (_isDesktop) ...[
-                        const SizedBox(width: 4),
-                        const _WindowButtons(),
-                      ],
-                    ],
-                  );
-                },
+  /// Het menu ingeklapt, omdat je omlaag scrolde (alleen pc, Mac en iPad). Zie [_opScrol].
+  bool _menuIn = false;
+
+  /// Het zoekveld staat in de capsule (pc, Mac en iPad). Zie [_openZoeken].
+  bool _zoekOpen = false;
+
+  /// De bovenkant van een pc, Mac of iPad: het zwevende menu, en verder niets dat een balk vormt.
+  ///
+  /// **Waarom zo (Saber, 17-10-2026).** Hier stond een balk met links het woordmerk en de telling, in
+  /// het midden de secties en rechts het tandwiel, en bij scrollen legde elke pagina er een strook glas
+  /// achter: "die staat op pc niet los zie je? er is een soort van doorlopende balk dit wil ik niet".
+  /// Nu is het één capsule zoals op de Shield ([ZwevendMenu], met Zoeken en Instellingen erin), een
+  /// kleine capsule met de vensterknoppen rechts, en alleen bij nieuws een regeltje eronder.
+  ///
+  /// Wat naast de capsules ligt, is nog steeds de titelbalk van het venster: slepen verplaatst het,
+  /// dubbelklikken maximaliseert. Dat vlak ligt ACHTER de capsules, zodat een klik op een woord niet
+  /// eerst op een mogelijke dubbelklik hoeft te wachten.
+  Widget _pcBovenlaag() {
+    final hoogte = _breedeBalkHoogte(context);
+    final boven = 11.0 + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0.0);
+    final maten = _isTouch ? MenuMaten.vinger : MenuMaten.muis;
+    final capsule = maten.hoogte + MenuMaten.rand * 2;
+    return SizedBox(
+      height: hoogte,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          if (_isDesktop)
+            Positioned.fill(
+              child: DragToMoveArea(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onDoubleTap: () async =>
+                      await windowManager.isMaximized() ? windowManager.unmaximize() : windowManager.maximize(),
+                  child: const SizedBox.expand(),
+                ),
               ),
             ),
-          ],
+          Positioned(
+            top: boven,
+            left: 0,
+            right: 0,
+            child: LayoutBuilder(builder: (context, box) {
+              // Aan beide kanten ruimte voor de vensterknoppen, zodat de capsule in het midden blijft.
+              final opzij = _isDesktop ? _VensterCapsule.breedte + 24 : 18.0;
+              return Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: math.max(240.0, box.maxWidth - 2 * opzij)),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(child: _pcMenu(maten)),
+                      if (_menuIn && !_zoekOpen) ...[
+                        const SizedBox(width: 8),
+                        MenuRondje(
+                          key: const ValueKey('menu-zoekrondje'),
+                          icoon: MenuIcoonSoort.zoeken,
+                          tooltip: 'Zoeken (Ctrl+F)',
+                          maten: maten,
+                          onTap: _openZoeken,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ),
+          if (_isDesktop) Positioned(top: boven, right: 12, child: _VensterCapsule(hoogte: capsule)),
+          // Alleen bij nieuws: Scannen…, Covers ophalen…, of wat de pc nu met de platen doet.
+          Positioned(top: boven + capsule + 6, left: 0, right: 0, child: const Center(child: _MenuStatus())),
+        ],
+      ),
+    );
+  }
+
+  /// De punten van het menu op een pc, Mac of iPad: Zoeken, de elf secties, Instellingen.
+  List<MenuPunt> _menuPunten(int bezig) => [
+        const MenuPunt(sleutel: 'zoeken', label: 'Zoeken', icoon: MenuIcoonSoort.zoeken),
+        for (final (id, label, _) in NavSections.items)
+          MenuPunt(
+            sleutel: MenuPunt.voorSectie(id),
+            label: label,
+            icoon: menuIcoonVoorSectie(id)!,
+            sectie: id,
+            badge: id == 6 ? bezig : 0,
+            bezig: id == 6 && bezig > 0,
+          ),
+        const MenuPunt(sleutel: 'instellingen', label: 'Instellingen', icoon: MenuIcoonSoort.instellingen),
+      ];
+
+  Widget _pcMenu(MenuMaten maten) => Selector<DownloadManager, int>(
+          selector: (_, dm) => dm.jobs.where((j) => j.busy).length,
+          builder: (_, bezig, __) => ZwevendMenu(
+            punten: _menuPunten(bezig),
+            actief: MenuPunt.voorSectie(_view),
+            maten: maten,
+            gekrompen: _menuIn && !_zoekOpen,
+            onUitklappen: () => setState(() => _menuIn = false),
+            zoekbalk: _zoekOpen ? _capsuleZoekbalk(maten) : null,
+            onKies: (p) {
+              switch (p.sleutel) {
+                case 'zoeken':
+                  _openZoeken();
+                case 'instellingen':
+                  showDialog(context: context, builder: (_) => const SettingsDialog());
+                default:
+                  if (p.sectie != null) _gaNaar(p.sectie!);
+              }
+            },
+          ),
+      );
+
+  /// Zoeken in de capsule (Ctrl+F of de knop): de capsule wordt een zoekveld, en de sectie waar je
+  /// bent filtert. Staat die sectie niets te zoeken (Start, Ontdek…), dan naar Albums: een uitslag die
+  /// je niet ziet, is geen uitslag.
+  void _openZoeken() {
+    if (isTv) {
+      _tvSearch();
+      return;
+    }
+    if (isCompact(context)) {
+      if (!_searchable) _gaNaar(0);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _searchFocus.requestFocus();
+      });
+      return;
+    }
+    if (!_searchable) _gaNaar(0);
+    setState(() {
+      _zoekOpen = true;
+      _menuIn = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
+    });
+  }
+
+  /// Het zoekveld dicht (Escape of het kruisje), en de zoekterm weg: anders filtert de lijst op iets
+  /// wat nergens meer te zien is.
+  void _sluitZoeken() {
+    _zoekPauze?.cancel();
+    setState(() {
+      _zoekOpen = false;
+      _leggenZoekterm('');
+      _searchCtl.clear();
+    });
+  }
+
+  /// Het zoekveld zoals het in de capsule staat: het veld, het kwaliteitsfilter, op Albums de
+  /// sortering, en een kruisje.
+  Widget _capsuleZoekbalk(MenuMaten maten) => LayoutBuilder(
+        builder: (context, box) => SizedBox(
+          width: math.min(720.0, box.maxWidth.isFinite ? box.maxWidth : 720.0),
+          height: maten.hoogte,
+          child: CallbackShortcuts(
+            bindings: {const SingleActivator(LogicalKeyboardKey.escape): _sluitZoeken},
+            child: Row(
+              children: [
+                const SizedBox(width: 12),
+                const Icon(Icons.search_rounded, size: 18, color: _muted),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    key: const ValueKey('menu-zoekveld'),
+                    controller: _searchCtl,
+                    focusNode: _searchFocus,
+                    onChanged: _zetZoekterm,
+                    style: const TextStyle(fontSize: 14),
+                    decoration: const InputDecoration.collapsed(
+                      hintText: 'Zoek in je bibliotheek — artiest, album of nummer…',
+                      hintStyle: TextStyle(color: _muted, fontSize: 13.5),
+                    ),
+                  ),
+                ),
+                _filterKeuze(),
+                ..._sortControl(),
+                IconButton(
+                  key: const ValueKey('menu-zoek-sluiten'),
+                  icon: const Icon(Icons.close_rounded, size: 18, color: _muted),
+                  tooltip: 'Sluiten (Esc)',
+                  onPressed: _sluitZoeken,
+                ),
+              ],
+            ),
+          ),
         ),
       );
 
+  /// Het kwaliteitsfilter als één knop met een lijstje, voor in de capsule: vier chips naast een
+  /// zoekveld passen daar niet.
+  Widget _filterKeuze() => PopupMenuButton<QFilter>(
+        tooltip: 'Kwaliteit',
+        initialValue: _qFilter,
+        onSelected: (f) => setState(() => _qFilter = f),
+        color: _panel,
+        position: PopupMenuPosition.under,
+        itemBuilder: (_) => [
+          for (final f in QFilter.values)
+            PopupMenuItem(value: f, child: Text(_qFilterLabel(f), style: const TextStyle(fontSize: 13))),
+        ],
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: _qFilter == QFilter.all ? Colors.white.withValues(alpha: .06) : _accent.withValues(alpha: .28),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white.withValues(alpha: .12)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(_qFilterLabel(_qFilter), style: const TextStyle(fontSize: 12.5, color: _muted)),
+            const Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
+          ]),
+        ),
+      );
+
+  /// Omlaag scrollen klapt het menu in, omhoog klapt het open (Saber, 17-10-2026, zoals iOS 26).
+  /// Alleen pc, Mac en iPad; bovenaan de pagina staat het altijd open. Zie [menuInklappen].
+  bool _opScrol(ScrollUpdateNotification n) {
+    if (isTv || isCompact(context) || n.metrics.axis != Axis.vertical || _zoekOpen) return false;
+    final inklappen = menuInklappen(nu: _menuIn, positie: n.metrics.pixels, stap: n.scrollDelta ?? 0);
+    if (inklappen != _menuIn) setState(() => _menuIn = inklappen);
+    return false;
+  }
 
   /// De sectie zoals hij op het scherm staat: het zoekveld en daaronder de sectie zelf.
   ///
@@ -3572,7 +3624,8 @@ class _HomeShellState extends State<HomeShell> {
           // No permanent search field on a television. It cost 75 points of height for a control
           // you cannot type into without the on-screen keyboard taking over the screen — and the
           // rail has a "Zoeken" entry that asks for the words once and then gets out of the way.
-          if (_searchable && !isTv) _searchBar(context),
+          // Op een pc, Mac en iPad staat het zoekveld sinds 17-10-2026 in de capsule ([_openZoeken]).
+          if (_searchable && !isTv && isCompact(context)) _searchBar(context),
           // Een korte overvloeier in plaats van een harde knip.
           //
           // De navigatiepil schuift al 300 ms naar zijn nieuwe plek terwijl de inhoud eronder al
@@ -3807,7 +3860,11 @@ class _SectionsDrawer extends StatelessWidget {
                       selected: huidig == id,
                       selectedTileColor: _accent.withValues(alpha: .16),
                       selectedColor: Colors.white,
-                      leading: Icon(icoon, size: 20),
+                      leading: switch (menuIcoonVoorSectie(id)) {
+                        final soort? => MenuIcoon(
+                            soort: soort, kleur: huidig == id ? Colors.white : _muted, gekozen: huidig == id, maat: 20),
+                        null => Icon(icoon, size: 20),
+                      },
                       title: Text(label),
                       trailing: id == 6 ? const _DownloadBadge.la() : null,
                       onTap: () {
@@ -3820,7 +3877,7 @@ class _SectionsDrawer extends StatelessWidget {
             ),
             const Divider(color: _line, height: 1),
             ListTile(
-              leading: const Icon(Icons.settings_rounded, size: 20),
+              leading: const MenuIcoon(soort: MenuIcoonSoort.instellingen, kleur: _muted, maat: 20),
               title: const Text('Instellingen'),
               onTap: () {
                 Navigator.pop(context);
@@ -4219,35 +4276,13 @@ bool focusZonderDoel(FocusNode? n, {FocusScopeNode? wortel}) {
 /// niets.
 const kTvTabbladWacht = Duration(milliseconds: 500);
 
-/// De capsule van het menu op de tv, zoals in Debrid Media: donker (op een Shield geen vervaging, die
-/// is daar te duur), een haarfijne lichte rand en een schaduw eronder.
+/// De capsule van het menu op de tv is sinds 17-10-2026 van glas ([MenuGlas]), met een pil van helder
+/// glas en lichtpaarse letters eronder ([MenuTint.paars]) — dezelfde onderdelen als op de pc. Kost het
+/// glas de Shield te veel, dan zakt het via matglas naar een dichte vulling ([GlasKwaliteit.tvBalk]).
 ///
-/// Bijna dicht, 90 %. Hij was 60 % doorschijnend, en zonder vervaging is dat te weinig: een titel die
-/// eronder door schoof las je dwars door de woorden heen (Saber, 17-10-2026: "de menubar is te
-/// transparant, de tekst loopt door elkaar"). Wat er nog doorkomt is kleur, geen letters.
-const kTvMenuCapsule = BoxDecoration(
-  color: Color(0xE612121A),
-  borderRadius: BorderRadius.all(Radius.circular(999)),
-  border: Border.fromBorderSide(BorderSide(color: Color(0x1AFFFFFF))),
-  boxShadow: [BoxShadow(color: Color(0x59000000), blurRadius: 30, offset: Offset(0, 8))],
-);
-
-/// De gloed rond de pil en achter het woord eronder: het paars van de app op 45 %.
-const kTvMenuGloed = Color(0x737C5CFF);
-
-/// De letters onder de pil: lichtpaars.
-const kTvMenuLicht = Color(0xFFB3A2FF);
-
-/// De pil die achter de woorden schuift: licht glas, bovenaan een lichtrandje, een paarse gloed.
-const kTvMenuPil = BoxDecoration(
-  borderRadius: BorderRadius.all(Radius.circular(999)),
-  gradient: LinearGradient(
-    begin: Alignment.topCenter,
-    end: Alignment.bottomCenter,
-    colors: [Color(0x38FFFFFF), Color(0x1AFFFFFF)],
-  ),
-  boxShadow: [BoxShadow(color: kTvMenuGloed, blurRadius: 18)],
-);
+/// De maten van icoon en woord in de tv-capsule: 11,5 punten letters (15 op het scherm met de
+/// tv-tekstschaal) en een icoon van 13.
+const kTvMenuMaten = MenuMaten(hoogte: 0, lettergrootte: 11.5, icoon: 13, opzij: 13);
 
 /// Hoe lang de pil over doet naar het volgende woord, en met welke veer (een tikje voorbij en terug),
 /// zoals in Debrid Media: 0,32 s, cubic-bezier(.34, 1.2, .4, 1).
@@ -4373,14 +4408,17 @@ class _TvTopBarState extends State<TvTopBar> {
     // zwevende capsule, en daarin één pil die van het ene woord naar het volgende schuift.
     WidgetsBinding.instance.addPostFrameCallback((_) => _meetPil());
     final pil = _pil;
+    const tint = MenuTint.paars;
     return SizedBox(
       height: TvTopBar.hoogte + tvOverscan.top,
       child: Padding(
         padding: EdgeInsets.fromLTRB(tvOverscan.left, tvOverscan.top - 4, tvOverscan.right, 0),
         child: Align(
           alignment: Alignment.topCenter,
-          child: DecoratedBox(
-            decoration: kTvMenuCapsule,
+          // Vloeibaar glas, ook hier (Saber, 17-10-2026: "overal glas, ook de Shield"). Kost het de
+          // Shield te veel, dan zet de bewaker het terug naar matglas en daarna naar een dichte
+          // vulling — zie [GlasKwaliteit.tvBalk].
+          child: MenuGlas(
             child: Padding(
               padding: const EdgeInsets.all(3),
               child: SingleChildScrollView(
@@ -4398,20 +4436,20 @@ class _TvTopBarState extends State<TvTopBar> {
                         width: pil.width,
                         top: 0,
                         bottom: 0,
-                        child: const DecoratedBox(decoration: kTvMenuPil),
+                        child: DecoratedBox(decoration: menuPilVorm(tint)),
                       ),
                     Row(
                       key: _rij,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        _item('Zoeken', widget.onSearch),
+                        _item('Zoeken', widget.onSearch, tint, icoon: MenuIcoonSoort.zoeken),
                         for (final (id, label, _) in NavSections.voorTv)
                           _item(label, () {
                             _wissel?.cancel();
                             widget.onPick(id);
                             widget.onIn?.call();
-                          }, sectie: id),
-                        _item('Instellingen', widget.onSettings),
+                          }, tint, sectie: id, icoon: menuIcoonVoorSectie(id)!),
+                        _item('Instellingen', widget.onSettings, tint, icoon: MenuIcoonSoort.instellingen),
                       ],
                     ),
                   ],
@@ -4455,7 +4493,7 @@ class _TvTopBarState extends State<TvTopBar> {
     setState(() => _pil = nieuw);
   }
 
-  Widget _item(String label, VoidCallback onTap, {int? sectie}) {
+  Widget _item(String label, VoidCallback onTap, MenuTint tint, {int? sectie, required MenuIcoonSoort icoon}) {
     final knop = sectie == null ? null : widget.knoppen?.voor(sectie);
     final onderPil = _pilOp == label;
     return KeyedSubtree(
@@ -4490,19 +4528,15 @@ class _TvTopBarState extends State<TvTopBar> {
                   alignment: 0.5, duration: const Duration(milliseconds: 180), curve: Curves.easeOut);
             }
           },
+          // Icoon en woord zoals op de pc ([MenuWoord]): het icoon loopt vol en beweegt als de pil
+          // erop komt. De stijl wordt samengevoegd met die eromheen, zodat het Inter blijft.
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-            // Samengevoegd met de stijl eromheen, niet in de plaats ervan: een losse TextStyle zonder
-            // lettertype viel terug op dat van het toestel (Roboto) in plaats van Inter.
-            child: AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 200),
-              style: DefaultTextStyle.of(context).style.merge(TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w500,
-                    color: onderPil ? kTvMenuLicht : _muted,
-                    shadows: onderPil ? const [Shadow(color: kTvMenuGloed, blurRadius: 12)] : const [],
-                  )),
-              child: Text(label),
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: MenuWoord(
+              punt: MenuPunt(sleutel: label, label: label, icoon: icoon, sectie: sectie),
+              tint: tint,
+              maten: kTvMenuMaten,
+              onderPil: onderPil,
             ),
           ),
         );
@@ -4511,43 +4545,6 @@ class _TvTopBarState extends State<TvTopBar> {
   }
 }
 
-
-/// Hoe breed een stuk tekst wordt vóórdat het getekend is.
-///
-/// De bovenbalk moet WETEN of alles past. Hij hing aan een vast getal (1040 punten), en dat klopte
-/// niet meer sinds er elf secties in staan: op een Mac van 1440 punten viel "Kwaliteit" weg terwijl
-/// de balk er volledig op leek te staan. Gemeten tekst weet dat wél, en verandert vanzelf mee als er
-/// een sectie bij komt of als iemand zijn systeemletters groter zet.
-double _tekstbreedte(String tekst, TextStyle stijl, TextScaler schaal) {
-  final tp = TextPainter(
-    text: TextSpan(text: tekst, style: stijl),
-    textScaler: schaal,
-    textDirection: TextDirection.ltr,
-  )..layout();
-  return tp.width;
-}
-
-/// Wat de secties in de bovenbalk samen nodig hebben, in punten.
-///
-/// Publiek zodat een toets het kan narekenen: de balk mag niet stilletjes weer te krap worden als er
-/// een sectie bij komt of als een label langer wordt.
-double sectiesBreedte({TextScaler schaal = TextScaler.noScaling}) =>
-    _NavPillsState.benodigdeBreedte(schaal: schaal);
-
-/// Wat er in de bovenbalk NAAST de secties staat: het icoon, de gaten, het tandwiel en op een pc de
-/// vensterknoppen. Zie [sectiesBreedte].
-double balkVasteBreedte({required bool desktop, required bool touch}) =>
-    28 + 10 + 10 + (touch ? 44.0 : 48.0) + (desktop ? 4 + _WindowButtonsState.breedte : 0.0);
-
-class _NavPills extends StatefulWidget {
-  final int active;
-  final ValueChanged<int> onSelect;
-  final int badge; // downloads in progress, shown on "Mijn downloads"
-  const _NavPills({required this.active, required this.onSelect, required this.badge});
-
-  @override
-  State<_NavPills> createState() => _NavPillsState();
-}
 
 /// The seven sections, in one place.
 ///
@@ -4742,7 +4739,13 @@ class Onderbalk extends StatelessWidget {
                       borderRadius: BorderRadius.circular(999),
                     )
                   : null,
-              child: Icon(icoon, size: 21, color: gekozen ? _accent : _muted),
+              // De lijniconen van het menu: vol als ze gekozen zijn, met hun eigen beweging (Saber,
+              // 17-10-2026: ook in de onderbalk van de gsm). Een sectie zonder eigen icoon houdt het
+              // icoon uit de lijst.
+              child: switch (menuIcoonVoorSectie(id)) {
+                final soort? => MenuIcoon(soort: soort, kleur: gekozen ? _accent : _muted, gekozen: gekozen, maat: 21),
+                null => Icon(icoon, size: 21, color: gekozen ? _accent : _muted),
+              },
             ),
             // Alleen onder de gekozen sectie een naam. Vijf bijschriften vragen vier punten hoogte
             // extra om te vertellen wat de pictogrammen al zeggen; die ene vertelt waar je bent.
@@ -4760,184 +4763,6 @@ class Onderbalk extends StatelessWidget {
                   ),
                 ),
               ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _NavPillsState extends State<_NavPills> {
-  int? _hover;
-
-  static const _items = NavSections.items;
-
-  /// `leadingDistribution: even` verdeelt de speling BINNEN de regelbox.
-  ///
-  /// Een regelbox is hoger dan de letters, en standaard komt die hele speling bóven de basislijn te
-  /// staan — dan hangen de letters hoog in hun eigen boxje. Even verdelen zet ze waar het oog ze
-  /// verwacht. Een vaste verschuiving had het op dit lettertype op deze grootte ook gedaan, en op het
-  /// volgende weer niet.
-  ///
-  /// Hier stond dat dit "the whole fix" was voor tekst die te hoog in de pil staat. Dat was het niet:
-  /// het zet de letters goed in hun regelbox, maar die box hing daarna nog steeds tegen de bovenkant
-  /// van de pil. De andere helft staat bij de [Stack] in [build].
-  static const _style = TextStyle(
-    fontSize: 13,
-    fontWeight: FontWeight.w600,
-    height: 1.2,
-    leadingDistribution: TextLeadingDistribution.even,
-  );
-  static final _padH = _isTouch ? 20.0 : 15.0;
-  static const _badgeW = 21.0;
-
-  /// 44 points under a finger, 32 under a mouse. The pill that slides behind the active section
-  /// is measured from these, so both have to come from the same place.
-  static final _height = _isTouch ? 44.0 : 32.0;
-
-  double _width(int i) => pilBreedte(_items[i],
-      metBadge: _items[i].$1 == 6 && widget.badge > 0,
-      schaal: MediaQuery.textScalerOf(context));
-
-  /// Eén pil, gemeten. Statisch, want de balk hierboven moet dezelfde maat kunnen uitrekenen zonder
-  /// deze pillen al te hebben gebouwd -- twee plekken die apart rekenen lopen uiteen.
-  ///
-  /// De tekstschaal telt mee: op een iPad met grotere systeemletters is een pil breder dan zijn
-  /// ontwerpmaat, en een meting zonder die schaal zegt dan dat iets past wat niet past.
-  static double pilBreedte((int, String, IconData) item,
-      {required bool metBadge, required TextScaler schaal}) {
-    final tp = TextPainter(
-      text: TextSpan(text: item.$2, style: _style),
-      textScaler: schaal,
-      textDirection: TextDirection.ltr,
-    )..layout();
-    return tp.width + _padH * 2 + (metBadge ? _badgeW : 0.0);
-  }
-
-  /// Wat alle secties SAMEN nodig hebben om volledig te passen.
-  ///
-  /// De stip bij "Mijn downloads" telt altijd mee. Anders zou de balk anders gaan staan op het moment
-  /// dat er een download begint, en dat is precies het verkeerde moment om te verspringen.
-  static double benodigdeBreedte({required TextScaler schaal}) {
-    var totaal = 0.0;
-    for (final item in _items) {
-      totaal += pilBreedte(item, metBadge: item.$1 == 6, schaal: schaal);
-    }
-    return totaal;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final widths = [for (var i = 0; i < _items.length; i++) _width(i)];
-    final offsets = <double>[];
-    var total = 0.0;
-    for (final w in widths) {
-      offsets.add(total);
-      total += w;
-    }
-    final activeIdx = _items.indexWhere((e) => e.$1 == widget.active);
-
-    return glassSurface(
-      child: SizedBox(
-        height: _height,
-        width: total,
-        // `fit: expand` en niet de standaard `loose` — dít is de andere helft van de tekst die te hoog
-        // stond. Een niet-gepositioneerd kind in een losse Stack krimpt tot zijn eigen hoogte (13pt maal
-        // 1.2, dus krap 16) en wordt daarna naar de BOVENkant van het vak van 32 (muis) of 44 (vinger)
-        // gelegd. De pil erachter staat op `top: 0, bottom: 0` en vult wél alles — en zo hangt het label
-        // tegen de bovenrand van een pil die twee keer zo hoog is.
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (activeIdx >= 0)
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeOutCubic,
-                left: offsets[activeIdx],
-                width: widths[activeIdx],
-                top: 0,
-                bottom: 0,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(999),
-                    // Drie stops en niet twee. De eerste twee liggen vlak bij elkaar en maken een
-                    // haarfijne lichte rand langs de bovenkant — daar waar glas het licht vangt. Dat
-                    // kan hier niet met een échte rand: een BoxDecoration met een borderRadius eist een
-                    // gelijke rand rondom, dus een lichtere bovenzijde moet uit het verloop komen.
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      stops: const [0, .10, 1],
-                      colors: [
-                        Colors.white.withValues(alpha: .34),
-                        Colors.white.withValues(alpha: .19),
-                        Colors.white.withValues(alpha: .075),
-                      ],
-                    ),
-                    border: Border.all(color: Colors.white.withValues(alpha: .22)),
-                    // Zacht en dichtbij: de pil moet van de strip getild worden, niet ervan losgemaakt.
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: .28),
-                        blurRadius: 10,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            Row(
-              // Rekken, zodat elke chip de volle hoogte van de strip krijgt. Zonder dit staat er alleen
-              // een breedte op elk vakje en is het aanraakgebied maar zo hoog als de letters — dan tik je
-              // naast een tab terwijl je hem raakt.
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (var i = 0; i < _items.length; i++)
-                  SizedBox(
-                    width: widths[i],
-                    child: MouseRegion(
-                      onEnter: (_) => setState(() => _hover = i),
-                      onExit: (_) => setState(() => _hover = _hover == i ? null : _hover),
-                      child: Pressable(
-                        // The row is tight and measured to the pixel; a growing pill would
-                        // shove its neighbours sideways as the highlight moves.
-                        scaleOnFocus: false,
-                        borderRadius: BorderRadius.circular(999),
-                        // The first thing a remote should land on. Without it the app starts
-                        // with the highlight nowhere and the first press appears to do nothing.
-                        autofocus: isTv && i == 0,
-                        onPressed: () => widget.onSelect(_items[i].$1),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              _items[i].$2,
-                              style: _style.copyWith(
-                                color: _items[i].$1 == widget.active
-                                    ? Colors.white
-                                    : (_hover == i ? Colors.white70 : _muted),
-                              ),
-                            ),
-                            if (_items[i].$1 == 6 && widget.badge > 0) ...[
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                decoration: BoxDecoration(
-                                  color: _accent,
-                                  borderRadius: BorderRadius.circular(9),
-                                ),
-                                child: Text('${widget.badge}',
-                                    style: const TextStyle(
-                                        fontSize: 10, fontWeight: FontWeight.w800, color: Colors.white)),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
           ],
         ),
       ),
@@ -9215,7 +9040,8 @@ class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
         waitDuration: const Duration(milliseconds: 600),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(7),
+          // Rond, nu ze in een capsule staan.
+          borderRadius: BorderRadius.circular(999),
           // Red on hover for close, the one that loses work if hit by accident.
           hoverColor: danger ? const Color(0xFFE81123) : Colors.white.withValues(alpha: .10),
           child: SizedBox(
@@ -9224,6 +9050,54 @@ class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
             child: Icon(icon, size: size, color: _muted),
           ),
         ),
+      );
+}
+
+/// De vensterknoppen in een eigen kleine glascapsule, rechtsboven (Saber, 17-10-2026).
+class _VensterCapsule extends StatelessWidget {
+  const _VensterCapsule({required this.hoogte});
+
+  final double hoogte;
+
+  /// Hoe breed hij is: de drie knoppen en de rand van de capsule.
+  static const breedte = _WindowButtonsState.breedte + 2 * MenuMaten.rand;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: hoogte,
+        width: breedte,
+        child: const MenuGlas(
+          child: Padding(
+            padding: EdgeInsets.all(MenuMaten.rand),
+            child: Center(child: _WindowButtons()),
+          ),
+        ),
+      );
+}
+
+/// Het regeltje onder het menu, alleen als er iets gebeurt: Scannen…, Covers ophalen…, of wat de pc nu
+/// met de platen doet. In rust staat er niets (Saber, 17-10-2026: "alleen bij nieuws").
+class _MenuStatus extends StatelessWidget {
+  const _MenuStatus();
+
+  @override
+  Widget build(BuildContext context) => Consumer2<LibraryStore, FactsWarmer>(
+        builder: (_, lib, warmer, __) {
+          final tekst = lib.scanning
+              ? 'Scannen… ${lib.scanned}'
+              : lib.enriching
+                  ? 'Covers ophalen…'
+                  : warmer.status;
+          if (tekst.isEmpty) return const SizedBox.shrink();
+          return IgnorePointer(
+            child: MenuGlas(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Text(tekst, maxLines: 1, style: const TextStyle(fontSize: 11, color: _muted)),
+              ),
+            ),
+          );
+        },
       );
 }
 
@@ -13263,6 +13137,36 @@ Route<void> nuSpeeltRoute({WidgetBuilder? scherm}) => PageRouteBuilder<void>(
 /// Wat de sneltoets vraagt.
 class NaarNuSpeeltIntent extends Intent {
   const NaarNuSpeeltIntent();
+}
+
+/// Ctrl/Cmd+F: het zoekveld in het menu.
+class ZoekIntent extends Intent {
+  const ZoekIntent();
+}
+
+/// Spatie: afspelen of pauzeren.
+class SpeelPauzeIntent extends Intent {
+  const SpeelPauzeIntent();
+}
+
+/// Het zoekveld van de schil, voor Ctrl+F (die buiten de schil zit). Zoals [gaNaarSectie].
+void Function()? openZoekveld;
+
+/// Een sneltoets die niets doet zolang je in een tekstveld typt. Uitgeschakeld en niet "doet niets":
+/// een ingeschakelde actie slikt de toets in, en dan komt de spatie niet meer in het veld.
+class AlsNietTypend<T extends Intent> extends Action<T> {
+  AlsNietTypend(this.doe);
+
+  final void Function() doe;
+
+  @override
+  bool isEnabled(T intent) => !TvTextFieldEscape.editingText();
+
+  @override
+  Object? invoke(T intent) {
+    doe();
+    return null;
+  }
 }
 
 class _ZoomView extends StatelessWidget {

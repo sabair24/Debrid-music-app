@@ -11,6 +11,7 @@ import 'package:debridmusic/navigatie.dart';
 import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/settings.dart';
 import 'package:debridmusic/tv.dart';
+import 'package:debridmusic/ui/glas.dart' show kGlasDekkingPlat;
 import 'package:debridmusic/ui/kleuren.dart';
 import 'package:debridmusic/ui/typografie.dart';
 import 'package:flutter/material.dart';
@@ -496,11 +497,11 @@ void main() {
       expect(bron, isNot(contains('if (BalkRuimte.van(context) > 0 && !isTv)')));
       expect('if (ruimte > 0)\n'.allMatches(bron).length, 2);
       expect(bron, contains('if (BalkRuimte.van(context) > 0)\n'));
-      final capsule = RegExp(r'const kTvMenuCapsule = BoxDecoration\(\s*color: Color\(0x([0-9A-F]{2})')
-          .firstMatch(bron);
-      expect(capsule, isNotNull);
-      expect(int.parse(capsule!.group(1)!, radix: 16), greaterThanOrEqualTo(0xE0),
-          reason: 'zonder vervaging leest tekst door een capsule van minder dan 88 % heen');
+      // Sinds 17-10-2026 is de capsule van glas ("overal glas, ook de Shield"). Wat er dan tegenhoudt
+      // dat je de tekst eronder leest: de vervaging, en zonder vervaging een dichte vulling.
+      final balk = bron.indexOf('class _TvTopBarState');
+      expect(bron.indexOf('child: MenuGlas(', balk), greaterThan(balk));
+      expect(kGlasDekkingPlat, 1.0, reason: 'zonder vervaging leest tekst door een doorschijnende capsule heen');
     });
   });
 }

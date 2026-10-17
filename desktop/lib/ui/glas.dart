@@ -125,6 +125,17 @@ class GlasKwaliteit {
   /// Wat er nu getekend wordt. Glas luistert hiernaar en tekent opnieuw als het verandert.
   static final stand = ValueNotifier<GlasStand>(GlasStand.mat);
 
+  /// Het glas van het menu en de spelerbalk op een tv ([GlasVlak.balk]).
+  ///
+  /// Op een tv is al het andere glas plat (de Shield is daar te zwak voor, en [glasZonderVervaging]
+  /// hangt eraan), maar Saber koos op 17-10-2026 vloeibaar glas "overal, ook de Shield" voor het menu
+  /// en de spelerbalk. Die twee volgen daarom deze stand, en op een tv bewaakt de bewaker deze in
+  /// plaats van [stand]. Elders is hij gelijk aan [stand].
+  static final tvBalk = ValueNotifier<GlasStand>(GlasStand.plat);
+
+  /// De stand die de bewaker laat zakken.
+  static ValueNotifier<GlasStand> get _bewaakte => isTv ? tvBalk : stand;
+
   /// Waarom de stand de laatste keer veranderde, voor de log (`ui.log`).
   static void Function(String regel)? meld;
 
@@ -143,7 +154,7 @@ class GlasKwaliteit {
   static String verslag() {
     final w = _wissel;
     _wissel = null;
-    return 'glasstand ${stand.value.name}${w == null ? '' : ' ($w)'}';
+    return 'glasstand ${_bewaakte.value.name}${w == null ? '' : ' ($w)'}';
   }
 
   /// Hoeveel glasvlakken er nu op het scherm staan. Alleen dan meet de bewaker.
@@ -153,15 +164,13 @@ class GlasKwaliteit {
 
   /// Kiest de beginstand voor dit toestel en start de bewaker. Eén keer, bij het opstarten.
   static Future<void> inrichten() async {
-    if (isTv) {
-      stand.value = GlasStand.plat;
-      return;
-    }
-    stand.value = GlasStand.mat;
+    if (isTv) stand.value = GlasStand.plat;
+    final doel = _bewaakte;
+    doel.value = GlasStand.mat;
     if (ui.ImageFilter.isShaderFilterSupported) {
       try {
         lens = await ui.FragmentProgram.fromAsset('shaders/glas_lens.frag');
-        stand.value = GlasStand.vloeibaar;
+        doel.value = GlasStand.vloeibaar;
       } catch (e) {
         meld?.call('glas: lensshader niet geladen ($e) — matglas');
       }
@@ -182,7 +191,8 @@ class GlasKwaliteit {
   @visibleForTesting
   static void opBeelden(List<ui.FrameTiming> beelden, {Duration? verstreken}) {
     final sinds = verstreken ?? _sinds?.elapsed;
-    if (_actief == 0 || stand.value == GlasStand.plat || (sinds != null && sinds < kGlasAanloop)) {
+    final doel = _bewaakte;
+    if (_actief == 0 || doel.value == GlasStand.plat || (sinds != null && sinds < kGlasAanloop)) {
       _tijden.clear();
       return;
     }
@@ -198,9 +208,9 @@ class GlasKwaliteit {
     }
     if (++_teZwaar < kGlasTeZwaar) return;
     _teZwaar = 0;
-    final van = stand.value;
+    final van = doel.value;
     final naar = van == GlasStand.vloeibaar ? GlasStand.mat : GlasStand.plat;
-    stand.value = naar;
+    doel.value = naar;
     final waarom = '${van.name} → ${naar.name}, 90e percentiel ${(p90 / 1000).toStringAsFixed(1)} ms '
         'per beeld met $_actief glasvlakken';
     _wissel = waarom;
@@ -237,6 +247,7 @@ class GlasVlak extends StatefulWidget {
     this.kleur,
     this.lens = false,
     this.lichtrand = true,
+    this.balk = false,
     this.child,
   }) : assert(vulling != null || kleur != null, 'een glasvlak zonder vulling is een gat');
 
@@ -255,6 +266,10 @@ class GlasVlak extends StatefulWidget {
 
   /// De smalle heldere rand linksboven, zoals glas het licht vangt.
   final bool lichtrand;
+
+  /// Het menu of de spelerbalk: op een tv volgt dit [GlasKwaliteit.tvBalk] in plaats van de platte
+  /// stand van de rest.
+  final bool balk;
 
   final Widget? child;
 
@@ -277,7 +292,7 @@ class _GlasVlakState extends State<GlasVlak> {
 
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<GlasStand>(
-        valueListenable: GlasKwaliteit.stand,
+        valueListenable: widget.balk && isTv ? GlasKwaliteit.tvBalk : GlasKwaliteit.stand,
         builder: (context, stand, _) {
           final k = widget.kleur;
           final vulling = DecoratedBox(decoration: k != null ? glasVulling(k, stand) : widget.vulling!);

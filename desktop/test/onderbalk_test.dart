@@ -14,6 +14,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:debridmusic/ui/menu_iconen.dart' show MenuIcoon;
 
 import 'package:debridmusic/main.dart';
 import 'package:debridmusic/tv.dart';
@@ -76,7 +77,8 @@ void main() {
     final getikt = <int>[];
     await tester.pumpWidget(omhulsel(Onderbalk(view: 5, onPick: getikt.add)));
 
-    expect(find.byType(Icon), findsNWidgets(NavSections.balk.length));
+    expect(find.byType(MenuIcoon), findsNWidgets(NavSections.balk.length),
+        reason: 'de bewegende lijniconen van het menu (17-10-2026)');
 
     // Elk vak is de volle balk hoog en niet alleen zijn pictogram. Een knop van 26 punten in een
     // balk van 48 laat de helft van wat eruitziet als een knop geen tik vangen, en dat leest als
@@ -87,9 +89,8 @@ void main() {
 
     // `tap` weigert een plek die geen tik kan vangen, dus dit is meteen de controle dat er niets
     // buiten de balk valt — de fout die op de artiestpagina twee keer gemaakt is.
-    for (final id in NavSections.balk) {
-      final s = NavSections.items.firstWhere((e) => e.$1 == id);
-      await tester.tap(find.byIcon(s.$3));
+    for (var i = 0; i < NavSections.balk.length; i++) {
+      await tester.tap(find.byType(MenuIcoon).at(i));
     }
     expect(getikt, NavSections.balk);
   });
@@ -113,7 +114,7 @@ void main() {
 
     // Het bijschrift is wat oplicht; staat er geen enkel, dan wijst de balk nergens naar.
     expect(find.byType(Text), findsNothing);
-    expect(find.byType(Icon), findsNWidgets(NavSections.balk.length));
+    expect(find.byType(MenuIcoon), findsNWidgets(NavSections.balk.length));
   });
 
   testWidgets('grotere systeemletters laten de balk niet overlopen', (tester) async {

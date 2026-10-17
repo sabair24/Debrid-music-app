@@ -3,6 +3,7 @@
 // paarse letters zonder rand, en na twee minuten stilstand Nu speelt.
 import 'dart:io';
 
+import 'package:debridmusic/ui/menu.dart' show MenuTint, MenuWoord, menuPilVorm;
 import 'package:debridmusic/main.dart';
 import 'package:debridmusic/online.dart';
 import 'package:debridmusic/settings.dart';
@@ -268,14 +269,19 @@ void main() {
       await t.pumpAndSettle();
       final pil = find.byKey(const ValueKey('tv-menu-pil'));
       expect(pil, findsOneWidget, reason: 'één pil, geen pil per tabblad');
-      double midden(Finder f) => t.getCenter(f).dx;
+      // Het midden van icoon en woord samen: de pil staat om allebei heen.
+      double midden(Finder f) => t
+          .getCenter(f.evaluate().first.widget is Text
+              ? find.ancestor(of: f, matching: find.byType(MenuWoord)).first
+              : f)
+          .dx;
       Color kleur(String label) => t.widget<DefaultTextStyle>(
               find.ancestor(of: find.text(label), matching: find.byType(DefaultTextStyle)).first)
           .style
           .color!;
       expect(midden(pil), closeTo(midden(find.text('Start')), 2), reason: 'in rust op de pagina waar je bent');
-      expect(kleur('Start'), kTvMenuLicht);
-      expect(kleur('Albums'), isNot(kTvMenuLicht));
+      expect(kleur('Start'), MenuTint.paars.tekst);
+      expect(kleur('Albums'), isNot(MenuTint.paars.tekst));
 
       knoppen.voor(4).requestFocus(); // Tracks
       // Selectie, opbouw, meting na het beeld, en dan pas begint hij te schuiven.
@@ -289,10 +295,11 @@ void main() {
       expect(halfweg, lessThan(tracks - 5));
       await t.pumpAndSettle();
       expect(midden(pil), closeTo(tracks, 2));
-      expect(kleur('Tracks'), kTvMenuLicht);
-      expect(kleur('Start'), isNot(kTvMenuLicht), reason: 'één woord licht op: dat onder de pil');
+      expect(kleur('Tracks'), MenuTint.paars.tekst);
+      expect(kleur('Start'), isNot(MenuTint.paars.tekst), reason: 'één woord licht op: dat onder de pil');
       final deco = t.widget<DecoratedBox>(find.descendant(of: pil, matching: find.byType(DecoratedBox))).decoration;
-      expect(deco, kTvMenuPil);
+      expect(deco, menuPilVorm(MenuTint.paars),
+          reason: 'helder glas, alleen de letters paars (Saber, 17-10-2026: "doe enkel de tekst paars")');
     });
 
     testWidgets('het tabblad van de pagina waar je bent staat in beeld, ook na een wissel', (t) async {
