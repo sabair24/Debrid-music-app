@@ -21252,16 +21252,30 @@ class EditorialeKop extends StatelessWidget {
               // hoog, vanaf 10 + de zijmarge) en niet eronder: een naam van twee regels ("MICHAEL /
               // JACKSON") duwde Radio anders net onder de spelerbalk.
               padding: EdgeInsets.fromLTRB(
-                  marge, (smal ? 60 : (isTv ? 21 : 56)) + bovenBloed, marge, smal ? 18 : (isTv ? 14 : 28)),
+                  marge, (smal ? 60 : (isTv ? 18 : 56)) + bovenBloed, marge, smal ? 18 : (isTv ? 14 : 28)),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Padding(
                     padding: EdgeInsets.only(left: isTv ? 10 + tvOverscan.left + 44 + 12 - marge : 0),
-                    child: Text('[ Artiest ]', style: kOpschrift),
+                    // Op een tv de echte naam op deze regel, naast de terugknop, en niet onder de
+                    // naam. Daar kostte hij 31 punten, en bij een naam van twee regels ("MICHAEL /
+                    // JACKSON", met "Michael Joseph Jackson" eronder) stond Radio daardoor bij het
+                    // openen half onder de spelerbalk (Shield, 17-10-2026) — terwijl de keuze was:
+                    // alles van de kop in één scherm.
+                    child: isTv && (echteNaam?.trim().isNotEmpty ?? false)
+                        ? Row(children: [
+                            Text('[ Artiest ]', style: kOpschrift),
+                            const SizedBox(width: 14),
+                            Flexible(
+                              child: Text(echteNaam!.trim(),
+                                  maxLines: 1, overflow: TextOverflow.ellipsis, style: kOpschrift),
+                            ),
+                          ])
+                        : Text('[ Artiest ]', style: kOpschrift),
                   ),
-                  SizedBox(height: smal ? 104 : (isTv ? 14 : 150)),
+                  SizedBox(height: smal ? 104 : (isTv ? 10 : 150)),
                   // De naam. Geen laatste trap nodig als er geen beeld is: dan draagt hij het
                   // kader alleen, en dat is een compositie in plaats van een gat.
                   for (var i = 0; i < kop.length; i++)
@@ -21284,7 +21298,7 @@ class EditorialeKop extends StatelessWidget {
                         ),
                       ),
                     ),
-                  if (echteNaam != null && echteNaam!.trim().isNotEmpty) ...[
+                  if (!isTv && echteNaam != null && echteNaam!.trim().isNotEmpty) ...[
                     const SizedBox(height: 12),
                     Padding(
                       padding: EdgeInsets.only(left: naamGrootte * .55),
@@ -21292,7 +21306,7 @@ class EditorialeKop extends StatelessWidget {
                     ),
                   ],
 
-                  SizedBox(height: smal ? 20 : (isTv ? 14 : 30)),
+                  SizedBox(height: smal ? 20 : (isTv ? 10 : 30)),
                   // De rechtermarge hield ruimte vrij voor de figuur die hier stond. Nu er niets
                   // meer rechts staat, mag de feitenstrook de breedte hebben — maar niet de hele:
                   // vier kolommen over tweeduizend punten lezen als losse eilanden. Een derde vrij
@@ -21312,7 +21326,7 @@ class EditorialeKop extends StatelessWidget {
                         SizedBox(height: isTv ? 0 : 19),
                         Wrap(
                           spacing: isTv ? 32 : 40,
-                          runSpacing: isTv ? 10 : 16,
+                          runSpacing: isTv ? 8 : 16,
                           children: [
                             if (soort != null && soort!.trim().isNotEmpty)
                               _Feit('Soort', tekst: soort),
@@ -21354,7 +21368,9 @@ class EditorialeKop extends StatelessWidget {
                   ),
 
                   if (actions.isNotEmpty) ...[
-                    SizedBox(height: smal ? 18 : (isTv ? 16 : 26)),
+                    // Op een tv krap: zie tv_kop_past_test — met 16 en de ruimtes hierboven eindigde Radio
+                    // bij Michael Jackson 3 punten boven de spelerbalk.
+                    SizedBox(height: smal ? 18 : (isTv ? 12 : 26)),
                     // Een Wrap, om exact de reden die in [ArtistHero] staat: drie knoppen naast
                     // elkaar passen niet op 411 punten, en een knop die van het vak afloopt vangt
                     // geen tik meer.
