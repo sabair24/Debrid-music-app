@@ -22061,7 +22061,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       _fpsKlok = Timer(const Duration(seconds: 5), () {
         _fps.stop();
         FotoBlikGeheugen.meld?.call('artiestpagina: ${widget.artist.name} — $_gebouwd keer gebouwd, '
-            '${_bouwUs ~/ 1000} ms in build · proef ${gProef.join(' ')}');
+            '${_bouwUs ~/ 1000} ms in build (eigen albums ${_eigenUs ~/ 1000} ms, discografie ${_discoUs ~/ 1000} ms) · proef ${gProef.join(' ')}');
       });
     }
   }
@@ -22563,6 +22563,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// Hoe vaak deze pagina gebouwd is in de vijf meettellen, en hoe lang [_bouw] daarover deed.
   int _gebouwd = 0;
   int _bouwUs = 0;
+  int _eigenUs = 0, _discoUs = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -22583,6 +22584,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // The records of this artist you actually hold. Matched on the normalised artist name, the same
     // key the library groups by, so a stray capital or accent doesn't hide your own albums.
     final lib = context.watch<LibraryStore>();
+    final deelklok = Stopwatch()..start();
     // De sleutel van deze artiest één keer, niet per album opnieuw: zie [normKey] voor wat dat kostte.
     final eigenSleutel = artistKey(widget.artist.name);
     final mine = lib.albums
@@ -22639,6 +22641,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     //
     // Bezit langs dezelfde sleutel als de rest, want anders is "heb ik dit" een andere vraag dan "is
     // dit dezelfde plaat" en vink je twee regels af voor één album.
+    _eigenUs += deelklok.elapsedMicroseconds;
+    deelklok.reset();
     final bezit = {for (final a in mine) discoKey(a.title)};
     // Dezelfde sleutel, maar mét de plaat erachter — dat is wat het jaarlint nodig heeft om van een
     // jaartal naar jouw eigen exemplaar te komen. Bewust uit dezelfde uitdrukking afgeleid: een
@@ -22670,6 +22674,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // bouwen zou twee lijsten geven die uit elkaar kunnen lopen zodra er een bron bijkomt.
     final lint = bouwJaarlint(platen: rijen, feiten: _feiten);
     final blokken = inBlokken(rijen, _sort, bezit);
+    _discoUs += deelklok.elapsedMicroseconds;
 
     return Scaffold(
       backgroundColor: _bg,
