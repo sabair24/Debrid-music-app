@@ -13,7 +13,7 @@ import 'dart:ui' show AppExitResponse, PlatformDispatcher;
 // For PointerDeviceKind: the nav chip is drag-scrolled with a mouse, which Flutter leaves out of
 // the default set on purpose.
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
-import 'package:flutter/rendering.dart' show RenderProxyBox;
+import 'package:flutter/rendering.dart' show RenderAbstractViewport, RenderProxyBox;
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
@@ -20324,10 +20324,6 @@ class _GetekendeSchijf extends StatelessWidget {
 /// De cd ernaast krijgt 85 % van deze breedte.
 const double kTvPaneelHoes = 180;
 
-/// Hoe hoog de lijst naast dat paneel hoogstens wordt voor hij zelf schuift: dezelfde 305 punten,
-/// zodat lijst en hoes samen in één scherm staan.
-const double kTvLijstHoogte = 300;
-
 /// De platen die je van deze artiest hebt, als getrapte genummerde lijst.
 ///
 /// **Waarom een lijst en geen raster.** Een raster van vierkante tegels zegt over elke plaat
@@ -20376,13 +20372,83 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
   /// lijkt hij nog in de lijst te staan terwijl je op Radio staat.
   int? _focus;
 
-  /// De lijst op een tv schuift zelf, naast het paneel — zie [_tvLijst].
-  final _tvRol = ScrollController();
+  /// Op een tv: lijst en paneel samen (om te meten waar het blok staat), en het paneel zelf (om te
+  /// weten hoe hoog het is). Zie [_kleef].
+  final _blok = GlobalKey();
+  final _paneelSleutel = GlobalKey();
+
+  /// Hoe ver het paneel binnen het blok omlaag geschoven is, zodat het op zijn vaste plek in beeld
+  /// blijft terwijl de lijst ernaast met de pagina meeschuift.
+  final _paneelDy = ValueNotifier<double>(0);
+
+  /// De lijst van de pagina waar dit blok in staat; op een tv gevolgd door [_kleef].
+  ScrollPosition? _pagina;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final p = isTv ? Scrollable.maybeOf(context)?.position : null;
+    if (!identical(p, _pagina)) {
+      _pagina?.removeListener(_kleef);
+      _pagina = p?..addListener(_kleef);
+    }
+  }
 
   @override
   void dispose() {
-    _tvRol.dispose();
+    _pagina?.removeListener(_kleef);
+    _paneelDy.dispose();
     super.dispose();
+  }
+
+  /// De hoes blijft staan, de lijst schuift (Saber, 16-10-2026) — op een tv.
+  ///
+  /// **Waarom de lijst geen eigen schuiflijst meer heeft.** Dat was de eerste vorm: de regels in een
+  /// eigen vak dat zelf schoof, naast een vaste hoes. Op de Shield (17-10-2026) kon je de lijst
+  /// daardoor niet meer in: sinds Flutter 3.41 kiest omhoog en omlaag ALLEEN nog iets uit dezelfde
+  /// schuiflijst zolang daar iets te vinden is (`focus_traversal.dart`, `Scrollable.maybeOf(…, axis:
+  /// Axis.vertical) == focusedScrollable`). Van Radio omlaag sprong de selectie zo over de lijst én de
+  /// albums heen naar "Toon alle 29". In 3.35, waar de toetsen hier draaien, viel dat niet op.
+  ///
+  /// Nu schuiven de regels met de pagina mee, en kleeft het paneel: zijn bovenkant blijft op de vaste
+  /// plek van de selectie staan zolang het blok daar langs schuift, en gaat pas mee omhoog als het
+  /// blok op is. Op het scherm is het hetzelfde gebaar.
+  void _kleef() {
+    final blok = _blok.currentContext?.findRenderObject();
+    final paneel = _paneelSleutel.currentContext?.size?.height;
+    final pos = _pagina;
+    if (blok is! RenderBox || !blok.attached || !blok.hasSize || paneel == null || pos == null) return;
+    if (!pos.hasPixels) return;
+    final vp = RenderAbstractViewport.maybeOf(blok);
+    if (vp == null) return;
+    final bovenkant = vp.getOffsetToReveal(blok, 0).offset;
+    final dy = (pos.pixels + tvBovenruimteIn(context) - bovenkant)
+        .clamp(0.0, math.max(0.0, blok.size.height - paneel))
+        .toDouble();
+    if ((dy - _paneelDy.value).abs() > .25) _paneelDy.value = dy;
+  }
+
+  /// Een regel op een tv naar zijn plek: op de vaste plek van de selectie, behalve aan het eind van
+  /// een lange lijst — daar niet verder dan nodig om het paneel er nog helemaal naast te laten staan.
+  /// Anders schoof het paneel met het blok mee omhoog, de balk in.
+  void _naarRij(BuildContext rij) {
+    final r = rij.findRenderObject();
+    final blok = _blok.currentContext?.findRenderObject();
+    final paneel = _paneelSleutel.currentContext?.size?.height;
+    final pos = _pagina;
+    if (r == null || blok is! RenderBox || paneel == null || pos == null || !pos.hasContentDimensions) return;
+    final vp = RenderAbstractViewport.maybeOf(r);
+    if (vp == null) return;
+    final voor = tvBovenruimteIn(context);
+    final bovenkant = vp.getOffsetToReveal(blok, 0).offset;
+    final laagst = bovenkant - voor;
+    final hoogst = math.max(laagst, bovenkant + blok.size.height - paneel - voor);
+    final doel = (vp.getOffsetToReveal(r, 0).offset - voor)
+        .clamp(laagst, hoogst)
+        .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+    if ((pos.pixels - doel).abs() > .5) {
+      pos.animateTo(doel, duration: const Duration(milliseconds: 220), curve: Curves.easeOutCubic);
+    }
   }
 
   /// Hoe lang de cd erover doet als hij nog IN de hoes zat. Gelijk aan de uitschuif van [AlbumArt]
@@ -20450,10 +20516,15 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
       ],
     );
 
+    // Op een tv na elk beeld het paneel op zijn plek: na een nieuwe plaat of een andere hoogte staat
+    // het blok anders, ook zonder dat de pagina schuift.
+    if (isTv) WidgetsBinding.instance.addPostFrameCallback((_) => _kleef());
+
     return Padding(
       padding: EdgeInsets.fromLTRB(marge, 8, marge, 24),
       child: breed
           ? Row(
+              key: _blok,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Weg van de lijst is de plaat weer in de hoes. Zonder dit blijft de laatste die je
@@ -20469,22 +20540,27 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
                         ),
                 ),
                 SizedBox(width: isTv ? 32 : 56),
-                _paneel(widget.albums[aan]),
+                if (isTv)
+                  // Verschoven bij het tekenen, niet in de opmaak: per schuifstap verandert er dan
+                  // niets aan de maat van het blok, en wordt alleen dit stuk opnieuw getekend.
+                  ValueListenableBuilder<double>(
+                    valueListenable: _paneelDy,
+                    builder: (_, dy, kind) => Transform.translate(offset: Offset(0, dy), child: kind),
+                    child: RepaintBoundary(
+                      child: KeyedSubtree(key: _paneelSleutel, child: _paneel(widget.albums[aan])),
+                    ),
+                  )
+                else
+                  _paneel(widget.albums[aan]),
               ],
             )
           : lijst,
     );
   }
 
-  /// De lijst op een tv: in een eigen vak naast het paneel, dat zelf schuift.
-  ///
-  /// Saber koos op 16-10-2026 "hoes blijft staan, lijst schuift": de lijst en de hoes passen samen in
-  /// één scherm, en in een lange lijst schuiven alleen de regels — de hoes blijft op zijn plek. Zonder
-  /// eigen vak zou de vaste plek van de selectie ([tvVastePlek]) bij de zevende plaat de hele pagina
-  /// verschuiven, en dan stond het paneel bovenaan de lijst uit beeld.
-  ///
-  /// Gaat de selectie de lijst uit (omhoog naar Radio, omlaag naar de discografie), dan gaat de cd
-  /// terug in de hoes, net als op de pc wanneer de muis de lijst verlaat.
+  /// De lijst op een tv. Gaat de selectie eruit (omhoog naar Radio, omlaag naar de discografie), dan
+  /// gaat de cd terug in de hoes, net als op de pc wanneer de muis de lijst verlaat. Hoe de lijst
+  /// schuift en de hoes blijft staan: zie [_kleef].
   Widget _tvLijst(Widget lijst) => Focus(
         canRequestFocus: false,
         skipTraversal: true,
@@ -20496,39 +20572,7 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
             });
           }
         },
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: kTvLijstHoogte),
-          // Waar er nog regels boven of onder staan, lopen ze zacht uit in plaats van dat er een halve
-          // titel afgesneden staat. Altijd dezelfde ShaderMask, ook zonder uitloop: een omhulsel dat
-          // er soms wel en soms niet is, bouwt de lijst opnieuw op en gooit de selectie weg. Het
-          // verloop wordt pas bij het tekenen uitgerekend, dus het volgt elke schuifstap.
-          child: ListenableBuilder(
-            listenable: _tvRol,
-            builder: (_, kind) => ShaderMask(
-              blendMode: BlendMode.dstIn,
-              shaderCallback: (r) {
-                final p = _tvRol.hasClients ? _tvRol.position : null;
-                final heeft = p != null && p.hasContentDimensions;
-                final boven = heeft && p.pixels > .5;
-                final onder = heeft && p.pixels < p.maxScrollExtent - .5;
-                final uitloop = r.height <= 0 ? 0.0 : (28 / r.height).clamp(0.0, .5);
-                return LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    boven ? const Color(0x00000000) : const Color(0xFF000000),
-                    const Color(0xFF000000),
-                    const Color(0xFF000000),
-                    onder ? const Color(0x00000000) : const Color(0xFF000000),
-                  ],
-                  stops: [0, uitloop, 1 - uitloop, 1],
-                ).createShader(r);
-              },
-              child: kind,
-            ),
-            child: SingleChildScrollView(controller: _tvRol, child: lijst),
-          ),
-        ),
+        child: lijst,
       );
 
   Widget _rij(BuildContext context, int i, int aan, {required bool smal, required bool metPaneel}) {
@@ -20589,33 +20633,43 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
     // zonder muis gebeurt het eerste nooit en blijft de nieuwste plaat in het paneel staan.
     return MouseRegion(
       onEnter: (_) => metPaneel ? _wijsAan(i) : setState(() => _aan = i),
-      child: Pressable(
-        onPressed: () => unawaited(_open(a, i, metPaneel: metPaneel)),
-        // Lang OK op een tv: hetzelfde menu als lang drukken op een hoes elders — afspelen, shuffle,
-        // wachtrij (Saber, 16-10-2026).
-        onLongPress: isTv ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
-        borderRadius: BorderRadius.circular(6),
-        // Geen ring, en op een tv ook geen glas: de witte, onderstreepte titel is de selectie, zoals
-        // op de pc (Saber, 16-10-2026: "witte titel, onderstreept"). Het grijze glas dat hier op een
-        // tv stond, met "01" erbuiten, vond hij niet goed.
-        ringOnFocus: false,
-        // En niet groeien: een regel over de halve breedte die 14 % groeit, schoof met zijn nummer de
-        // marge in.
-        scaleOnFocus: !isTv,
-        onFocusChange: (heeft) {
-          if (!heeft || !mounted) return;
-          if (isTv) {
-            // De selectie is op een tv wat op de pc het aanwijzen is: de cd komt uit de hoes, bij
-            // elke regel opnieuw (Saber: "meteen bij elke selectie").
-            _focus = i;
-            _wijsAan(i);
-          } else {
-            setState(() => _aan = i);
-          }
-        },
-        child: Padding(
-          padding: EdgeInsets.symmetric(vertical: smal ? 5 : (isTv ? 7 : 9)),
-          child: regel,
+      child: Builder(
+        builder: (rij) => Pressable(
+          onPressed: () => unawaited(_open(a, i, metPaneel: metPaneel)),
+          // Lang OK op een tv: hetzelfde menu als lang drukken op een hoes elders — afspelen,
+          // shuffle, wachtrij (Saber, 16-10-2026).
+          onLongPress: isTv ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
+          borderRadius: BorderRadius.circular(6),
+          // Geen ring, en op een tv ook geen glas: de witte, onderstreepte titel is de selectie,
+          // zoals op de pc (Saber, 16-10-2026: "witte titel, onderstreept"). Het grijze glas dat hier
+          // op een tv stond, met "01" erbuiten, vond hij niet goed.
+          ringOnFocus: false,
+          // En niet groeien: een regel over de halve breedte die 14 % groeit, schoof met zijn nummer
+          // de marge in.
+          scaleOnFocus: !isTv,
+          // Op een tv schuift deze lijst zelf naar zijn plek, zodat het paneel ernaast kan blijven
+          // staan: zie [_naarRij].
+          schuifInBeeld: !isTv,
+          onFocusChange: (heeft) {
+            if (!heeft || !mounted) return;
+            if (isTv) {
+              // De selectie is op een tv wat op de pc het aanwijzen is: de cd komt uit de hoes, bij
+              // elke regel opnieuw (Saber: "meteen bij elke selectie").
+              _focus = i;
+              _wijsAan(i);
+              // Na het beeld: de selectie komt vaak binnen tijdens een opbouw, en een lijst laten
+              // schuiven midden in de opmaak gooit een fout.
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted && rij.mounted && _focus == i) _naarRij(rij);
+              });
+            } else {
+              setState(() => _aan = i);
+            }
+          },
+          child: Padding(
+            padding: EdgeInsets.symmetric(vertical: smal ? 5 : (isTv ? 7 : 9)),
+            child: regel,
+          ),
         ),
       ),
     );
@@ -22474,20 +22528,23 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                           padding: const EdgeInsets.only(top: 12),
                           child: Align(
                             alignment: Alignment.centerLeft,
-                            child: Pressable(
+                            // Een [TekstLink], zoals "Toon alles" hierboven: op een tv wit en
+                            // onderstreept als hij gekozen is, zonder vak (gezien op de Shield,
+                            // 17-10-2026: dit was nog de enige link met het grijze vak).
+                            child: TekstLink(
                               onPressed: () => setState(() => open
                                   ? _openBlokken.remove(blok.soort)
                                   : _openBlokken.add(blok.soort)),
-                              borderRadius: BorderRadius.circular(4),
-                              ringOnFocus: true,
-                              scaleOnFocus: false,
-                              child: Text(
+                              bouw: (gekozen) => Text(
                                 open ? 'Minder tonen' : 'Toon alle ${blok.rijen.length}',
-                                style: kTekstNormaal.copyWith(
-                                  fontSize: 12.5,
-                                  decoration: TextDecoration.underline,
-                                  decorationColor: kLijn,
-                                ),
+                                style: tvLinkStijl(
+                                    kTekstNormaal.copyWith(
+                                      fontSize: 12.5,
+                                      color: isTv ? kGedempt : null,
+                                      decoration: TextDecoration.underline,
+                                      decorationColor: kLijn,
+                                    ),
+                                    gekozen),
                               ),
                             ),
                           ),

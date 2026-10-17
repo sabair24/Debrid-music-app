@@ -831,6 +831,15 @@ class SpoelPijlen {
   }
 }
 
+/// Hoeveel ruimte er in de staande lijst rond [context] boven de selectie blijft: [kTvBovenruimte],
+/// plus wat er van die lijst achter de zwevende balk ligt. Voor wie zelf zijn lijst laat schuiven, zoals
+/// "In mijn bibliotheek" op de artiestpagina.
+double tvBovenruimteIn(BuildContext context) {
+  final ro = context.findRenderObject();
+  final vp = ro == null ? null : RenderAbstractViewport.maybeOf(ro);
+  return kTvBovenruimte + (vp == null ? 0 : _onderDeBalk(context, vp));
+}
+
 /// Hoeveel van een staande lijst achter de zwevende balk ligt.
 ///
 /// Op een pagina die onder de balk door tekent (de artiestpagina, sinds de balk ook op een tv zweeft)

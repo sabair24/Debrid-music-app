@@ -14,7 +14,7 @@ import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/kleuren.dart';
 import 'package:debridmusic/ui/typografie.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show FontLoader;
+import 'package:flutter/services.dart' show FontLoader, LogicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
@@ -203,25 +203,78 @@ void main() {
       expect(find.byWidgetPredicate((w) => w is SizedBox && w.width == 44 && w.height == 44), findsNothing);
     });
 
-    testWidgets('een lange lijst schuift zelf, en de hoes blijft op zijn plek', (t) async {
-      await bouw(t, 10);
-      _knoopVan(t, _titel('Bad')).requestFocus();
+    /// Zoals op de artiestpagina: een kop erboven, de pagina onder het zwevende menu door, en de lijst
+    /// in diezelfde pagina.
+    Future<void> pagina(WidgetTester t, int n) async {
+      await _scherm(t);
+      await t.pumpWidget(_omhulsel(BalkRuimte(
+        hoogte: 75,
+        child: CustomScrollView(slivers: [
+          SliverToBoxAdapter(
+            child: SizedBox(
+              height: 400,
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: FilledButton(onPressed: () {}, child: const Text('Radio')),
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(child: GetrapteLijst(albums: _albums(n))),
+          SliverToBoxAdapter(child: FilledButton(onPressed: () {}, child: const Text('Toon alles'))),
+          const SliverToBoxAdapter(child: SizedBox(height: 900)),
+        ]),
+      )));
+      await t.pump();
+    }
+
+    testWidgets('omlaag vanaf de knop erboven komt in de lijst, en daarna eruit', (t) async {
+      // Op de Shield (17-10-2026) sprong omlaag vanaf Radio over de lijst heen: hij had een eigen
+      // schuiflijst, en sinds Flutter 3.41 blijft omlaag in dezelfde schuiflijst zolang daar iets is.
+      await pagina(t, 2);
+      _knoopVan(t, find.text('Radio')).requestFocus();
       await t.pumpAndSettle();
-      final hoes = t.getTopLeft(find.byType(AlbumArt));
-      _knoopVan(t, _titel('Scream')).requestFocus();
+      await t.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await t.pumpAndSettle();
-      expect(t.getTopLeft(find.byType(AlbumArt)), hoes, reason: 'Saber: "hoes blijft staan, lijst schuift"');
-      final lijst = find.descendant(of: find.byType(GetrapteLijst), matching: find.byType(Scrollable)).first;
-      expect(t.state<ScrollableState>(lijst).position.pixels, greaterThan(0),
-          reason: 'de tiende plaat staat onder de rand van de lijst; die hoort er zelf heen te schuiven');
+      expect(paneel(t).album, 'Bad', reason: 'de selectie hoort op de eerste plaat van de lijst');
+      expect(t.widget<Text>(_titel('Bad')).style?.decoration, TextDecoration.underline);
+      await t.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await t.pumpAndSettle();
+      expect(paneel(t).album, 'Thriller');
+      await t.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await t.pumpAndSettle();
+      expect(FocusManager.instance.primaryFocus, _knoopVan(t, find.text('Toon alles')),
+          reason: 'na de laatste plaat gaat omlaag gewoon verder de pagina af');
+      expect(paneel(t).uitgeschoven, isFalse);
     });
 
-    testWidgets('buiten een tv: geen eigen schuifvak, en de regels groeien zoals voorheen', (t) async {
+    testWidgets('op een tv geen eigen schuiflijst in de lijst', (t) async {
+      await bouw(t, 10);
+      expect(find.descendant(of: find.byType(GetrapteLijst), matching: find.byType(Scrollable)), findsNothing,
+          reason: 'een schuiflijst in de pagina is sinds Flutter 3.41 met de pijlen niet meer in te komen');
+    });
+
+    testWidgets('de lijst schuift met de pagina mee, en de hoes blijft op zijn plek', (t) async {
+      await pagina(t, 10);
+      final hoes = find.byType(AlbumArt);
+      final plek = 75 + kTvBovenruimte;
+      for (final titel in ['Bad', 'Off The Wall', 'Ben', 'Michael', 'Scream']) {
+        _knoopVan(t, _titel(titel)).requestFocus();
+        await t.pumpAndSettle();
+        expect(t.getTopLeft(hoes).dy, closeTo(plek, 1.5),
+            reason: 'Saber: "hoes blijft staan, lijst schuift" — en bij $titel stond hij ergens anders');
+        final regel = t.getRect(_titel(titel));
+        expect(regel.top, greaterThanOrEqualTo(plek - 1), reason: '$titel staat achter de balk');
+        expect(regel.bottom, lessThan(540), reason: '$titel staat onder het scherm');
+      }
+    });
+
+    testWidgets('buiten een tv: de regels groeien zoals voorheen, en het paneel kleeft niet', (t) async {
       setTvModeForTest(false);
       await bouw(t, 3);
-      expect(find.descendant(of: find.byType(GetrapteLijst), matching: find.byType(Scrollable)), findsNothing);
       expect(_regel(t, 'Bad').scaleOnFocus, isTrue);
       expect(_regel(t, 'Bad').onLongPress, isNull);
+      expect(find.descendant(of: find.byType(GetrapteLijst), matching: find.byType(ValueListenableBuilder<double>)),
+          findsNothing);
     });
   });
 
