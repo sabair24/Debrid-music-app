@@ -435,6 +435,17 @@ void main() {
     // Shield, 17-10-2026: na het openen van een artiest had niets de selectie; op de albumpagina
     // stond de selectie op een uitklaprij zonder zichtbaar teken; en de beschrijving vergrootte bij
     // selectie over de schermrand.
+    // Meetbouw b11980/b11981 (Shield, 17-10-2026): twintig keer bouwen bij het openen kostte 1,3 s,
+    // vooral door bij elke herbouw van alle albums artistKey uit te rekenen; daarna 100 ms, waarvan
+    // 90 voor het steeds opnieuw samenstellen van de discografie.
+    test('de pagina rekent bij een herbouw niet alles opnieuw uit', () {
+      expect(bron, contains('final eigenSleutel = artistKey(widget.artist.name);'));
+      expect(bron, contains('.where((a) => artistKey(a.artist) == eigenSleutel)'));
+      expect(bron, contains('final disco = _discografie(bezit);'));
+      expect('vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), {..._hoezen, ..._groepHoezen})'.allMatches(bron).length, 1);
+      expect(bron, contains('if (vorige != null && _zelfdeInvoer(invoer, _discoInvoer)) return vorige;'));
+    });
+
     test('bij openen staat de selectie op Radio', () {
       expect(bron, contains('autofocus: isTv,\n                      onPressed: () => startRadio(context, widget.artist.name),'));
     });

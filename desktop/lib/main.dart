@@ -22485,13 +22485,30 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   Future<void> _laadGekozenAchtergrond(String? url) async {
     final naam = widget.artist.name;
     if (url == null) {
-      if (mounted && _keuzeBytes != null) setState(() => _keuzeBytes = null);
+      if (mounted && (_keuzeBytes != null || _keuzeMislukt)) {
+        setState(() {
+          _keuzeBytes = null;
+          _keuzeMislukt = false;
+        });
+      }
       return;
     }
     final bytes = await CoverEnricher(context.read<AppSettings>()).downloadImage(url);
-    if (!mounted || naam != widget.artist.name || bytes == null) return;
-    setState(() => _keuzeBytes = bytes);
+    if (!mounted || naam != widget.artist.name || url != _keuzeUrl) return;
+    setState(() {
+      _keuzeBytes = bytes;
+      _keuzeMislukt = bytes == null;
+    });
   }
+
+  /// De gekozen foto kwam niet binnen: dan mag de kop toch terugvallen op die van TheAudioDB.
+  bool _keuzeMislukt = false;
+
+  /// Is er een eigen foto gekozen die nog onderweg is? Dan toont de kop nog niets in plaats van eerst
+  /// de foto van TheAudioDB en een tel later de gekozen: dat was een wissel van foto die je zag, en op
+  /// een Shield kostte het uploaden van die eerste (1 MB, 1920 breed) een beeld van 78 ms tekenen
+  /// (meetbouw b11981, 17-10-2026). De gekozen foto komt van schijf en is er een paar beelden later.
+  bool get _wachtOpKeuze => _keuzeUrl != null && _keuzeBytes == null && !_keuzeMislukt;
 
   /// Wie deze artiest verder nog is: echte naam en de groepen waar hij in speelde.
   ///
@@ -22537,6 +22554,68 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       final r = await _catalog.relatedArtists(id);
       if (mounted && naam == widget.artist.name) setState(() => _related = r);
     } catch (_) {/* een pagina zonder "klinkt als" is nog steeds een goede pagina */}
+  }
+
+  /// Wat de discografie de vorige keer opleverde, en waaruit (zie [_discografie]).
+  List<Object?> _discoInvoer = const [];
+  ({
+    List<DiscoRelease> samen,
+    DiscoZeef zeef,
+    List<Jaarpunt> lint,
+    List<({RecordKind soort, List<DiscoRelease> rijen})> blokken,
+  })? _discoUit;
+
+  /// De discografie zoals de pagina hem toont — alleen opnieuw samengesteld als er iets veranderde.
+  ///
+  /// Deze pagina bouwt zich bij het openen een keer of vijftien opnieuw op (elke bron, elke hoes die
+  /// binnenkomt), en elke keer werden drie bronnen samengevoegd, gevouwen, gezeefd en in blokken
+  /// gezet: zo'n 7 ms op een Shield, samen 90 tot 100 ms op de hoofddraad tijdens het openen
+  /// (meetbouw b11981, 17-10-2026). De invoer zijn velden die bij een update VERVANGEN worden (nooit
+  /// ter plekke aangepast), dus gelijk op identiteit is gelijk; schakelaars en het eigen bezit op waarde.
+  ({
+    List<DiscoRelease> samen,
+    DiscoZeef zeef,
+    List<Jaarpunt> lint,
+    List<({RecordKind soort, List<DiscoRelease> rijen})> blokken,
+  }) _discografie(Set<String> bezit) {
+    final zeefHoezen = (_dgStatus != BronStatus.geenToken && _hoezen.isNotEmpty) || _groepKlaar;
+    final invoer = <Object?>[
+      _dz, _mb, _dg, _hoezen, _groepHoezen, _gasten, _feiten, //
+      _toonAlles, zeefHoezen, _sort, (bezit.toList()..sort()).join('\n'),
+    ];
+    final vorige = _discoUit;
+    if (vorige != null && _zelfdeInvoer(invoer, _discoInvoer)) return vorige;
+    final samen = vouwHeruitgaves(
+        vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), {..._hoezen, ..._groepHoezen})
+            .where((r) => !_gasten.contains(r.key))
+            .toList());
+    // De hoesregel alleen als er iets IS om hoezen mee aan te vullen. Zonder Discogs-token draait de
+    // zoeksweep niet, en dan zou hij elke plaat wegvegen die alleen MusicBrainz kent — dat zijn bij
+    // Michael Jackson Off The Wall, Dangerous en Invincible. Diezelfde voorwaarde vangt ook de race:
+    // zolang Discogs nog niet geantwoord heeft is `_hoezen` leeg, en dan verschijnen regels alleen,
+    // ze knipperen nooit weg.
+    //
+    // Het archief telt pas mee als zijn ronde rond is ([_groepKlaar]), en alleen als het iets vond:
+    // daarvóór zou een plaat verdwijnen die zijn antwoord nog niet had, en bij een artiest waar het
+    // archief niets kent blijft alles staan — met een [PlaatTegel] in plaats van een grijs vak.
+    final zeef = zeefDiscografie(samen, toonAlles: _toonAlles, zeefHoezen: zeefHoezen);
+    final rijen = zeef.rijen;
+    // Eén keer opbouwen en twee keer gebruiken: het lint zelf, en de openingszet eronder. Twee keer
+    // bouwen zou twee lijsten geven die uit elkaar kunnen lopen zodra er een bron bijkomt.
+    final lint = bouwJaarlint(platen: rijen, feiten: _feiten);
+    final blokken = inBlokken(rijen, _sort, bezit);
+    final uit = (samen: samen, zeef: zeef, lint: lint, blokken: blokken);
+    _discoInvoer = invoer;
+    _discoUit = uit;
+    return uit;
+  }
+
+  static bool _zelfdeInvoer(List<Object?> a, List<Object?> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!identical(a[i], b[i]) && a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   @override
@@ -22613,27 +22692,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // zodat elke hertekening hetzelfde antwoord geeft ongeacht wat er wanneer binnenkwam.
     // Het archief na Discogs, zodat het wint: dat koppelt op het NUMMER van de releasegroep, Discogs
     // op de titel.
-    final samen = vouwHeruitgaves(
-        vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), {..._hoezen, ..._groepHoezen})
-            .where((r) => !_gasten.contains(r.key))
-            .toList());
-    // De hoesregel alleen als er iets IS om hoezen mee aan te vullen. Zonder Discogs-token draait de
-    // zoeksweep niet, en dan zou hij elke plaat wegvegen die alleen MusicBrainz kent — dat zijn bij
-    // Michael Jackson Off The Wall, Dangerous en Invincible. Diezelfde voorwaarde vangt ook de race:
-    // zolang Discogs nog niet geantwoord heeft is `_hoezen` leeg, en dan verschijnen regels alleen,
-    // ze knipperen nooit weg.
-    //
-    // Het archief telt pas mee als zijn ronde rond is ([_groepKlaar]), en alleen als het iets vond:
-    // daarvóór zou een plaat verdwijnen die zijn antwoord nog niet had, en bij een artiest waar het
-    // archief niets kent blijft alles staan — met een [PlaatTegel] in plaats van een grijs vak.
-    final zeef = zeefDiscografie(samen,
-        toonAlles: _toonAlles,
-        zeefHoezen: (_dgStatus != BronStatus.geenToken && _hoezen.isNotEmpty) || _groepKlaar);
+    final disco = _discografie(bezit);
+    final zeef = disco.zeef;
     final rijen = zeef.rijen;
-    // Eén keer opbouwen en twee keer gebruiken: het lint zelf, en de openingszet eronder. Twee keer
-    // bouwen zou twee lijsten geven die uit elkaar kunnen lopen zodra er een bron bijkomt.
-    final lint = bouwJaarlint(platen: rijen, feiten: _feiten);
-    final blokken = inBlokken(rijen, _sort, bezit);
+    final lint = disco.lint;
+    final blokken = disco.blokken;
 
     return Scaffold(
       backgroundColor: _bg,
@@ -22693,8 +22756,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
               children: [
                 EditorialeKop(
                   naam: widget.artist.name,
-                  art: _art,
                   achtergrondKeuze: _keuzeBytes,
+                  // Zie [_wachtOpKeuze]: geen tussenfoto als er een eigen keuze onderweg is.
+                  art: _wachtOpKeuze ? null : _art,
                   soort: widget.artist.detail,
                   bibliotheek: _busy
                       ? 'Albums laden…'
