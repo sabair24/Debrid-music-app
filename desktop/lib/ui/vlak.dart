@@ -289,7 +289,11 @@ Color balkKleur(int? kleur) {
 /// [dicht] maakt het glas sterker, en dat is voor de telefoon. Op een pc is deze balk 64 punten hoog
 /// boven een breed venster; er schuift per keer weinig onderdoor. Op een telefoon staat de tekst van
 /// rand tot rand en is de balk het enige tussen zes witte pictogrammen en een lopende alinea.
-Widget balkGlas(Color tint, double op, {bool dicht = false, bool plat = false}) {
+///
+/// [dichtTot]: tot waar (als deel van de hoogte) de kleur vol blijft voor hij oplost. Standaard twee
+/// derde; de albumbalk op een tv loopt sinds 17-10-2026 onder het zwevende menu door en is daardoor
+/// 131 punten hoog in plaats van 56, en dan loste hij op precies waar de terugpijl staat.
+Widget balkGlas(Color tint, double op, {bool dicht = false, bool plat = false, double dichtTot = .66}) {
   // Helemaal niets, en niet "een doorzichtig vlak": een BackdropFilter met sigma 0 is nog steeds een
   // laag die de achtergrond leest, en dat is op een Shield het duurste wat er op het scherm staat.
   if (op <= .01) return const SizedBox.shrink();
@@ -308,7 +312,7 @@ Widget balkGlas(Color tint, double op, {bool dicht = false, bool plat = false}) 
         end: Alignment.bottomCenter,
         // Drie stops: bijna de hele hoogte draagt de kleur, en pas het laatste stuk lost op. Recht
         // van vol naar nul zou de knoppen zelf al halverwege hun contrast afnemen.
-        stops: const [0, .66, 1],
+        stops: [0, dichtTot, 1],
         colors: [
           tint.withValues(alpha: vol * op),
           tint.withValues(alpha: vol * .82 * op),

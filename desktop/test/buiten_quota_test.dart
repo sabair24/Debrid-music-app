@@ -15,6 +15,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
+import 'package:debridmusic/beeldvorm.dart';
 import 'package:debridmusic/lan/certificaat.dart';
 import 'package:debridmusic/lan/pairing.dart';
 import 'package:debridmusic/lan/quota.dart';
@@ -236,6 +237,23 @@ void main() {
       final t = await _vraag(thuis, '/api/corrections', sleutel: tls, methode: 'POST',
           json: {'op': 'artistArt', 'artist': 'Portishead', 'kind': 'portrait', 'url': 'http://192.168.0.1/'});
       expect(t.status, 200, reason: t.lijf);
+    });
+
+    // "Kop aanpassen" op een iPad (17-10-2026): vier getallen, geen adres. Via `artistArt` met de
+    // getallen als 'url' gaf dat van buiten een 403; daarom een eigen bewerking, met een eigen controle.
+    test('een kopinstelling van buiten komt aan; wat geen instelling is, niet', () async {
+      Future<int> stuur(Map<String, Object?> json) async =>
+          (await _vraag(buiten, '/api/corrections', sleutel: tls, methode: 'POST', json: json)).status;
+      expect(await stuur({'op': 'artistKop', 'artist': 'Portishead', 'scherm': 'tv', 'waarde': '0.6,0.3,1.2,400'}), 200);
+      expect(lib.kopVoor('Portishead', KopScherm.tv), const KopInstelling(fx: .6, fy: .3, zoom: 1.2, hoogte: 400));
+      expect(lib.kopVoor('Portishead', KopScherm.gsm), isNull, reason: 'elk scherm apart');
+      expect(await stuur({'op': 'artistKop', 'artist': 'Portishead', 'scherm': 'tv', 'waarde': 'http://192.168.0.1/'}), 400);
+      expect(await stuur({'op': 'artistKop', 'artist': 'Portishead', 'scherm': 'koelkast', 'waarde': '0.5,0.5,1'}), 400);
+      expect(await stuur({'op': 'artistKop', 'artist': '', 'scherm': 'tv', 'waarde': '0.5,0.5,1'}), 400);
+      expect(lib.kopVoor('Portishead', KopScherm.tv)?.hoogte, 400, reason: 'een geweigerde bewerking verandert niets');
+      // Leeg is Herstel: dan kiest de kop weer zelf.
+      expect(await stuur({'op': 'artistKop', 'artist': 'Portishead', 'scherm': 'tv', 'waarde': ''}), 200);
+      expect(lib.kopVoor('Portishead', KopScherm.tv), isNull);
     });
 
     test('hoezen verkleinen met een geraakt plafond: de volle hoes, met haar eigen merkteken', () async {

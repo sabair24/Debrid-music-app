@@ -567,6 +567,81 @@ class CoverEnricher {
   static final _artistArtInFlight = <String, Future<ArtistArt?>>{};
 
   Future<ArtistArt?> _artistArtVers(String name) async {
+    final art = await _artiestMeta(name);
+    if (art == null) return null;
+    // Keep the bytes locally too: these render on every visit and shouldn't refetch each time.
+    final logo = await _cachedArt(name, 'logo', art.logo);
+    final backdrop = await _cachedArt(name, 'backdrop', art.backdrop);
+    final thumb = await _cachedArt(name, 'thumb', art.thumb);
+    final cutout = await _cachedArt(name, 'cutout', art.cutout);
+    final clearart = await _cachedArt(name, 'clearart', art.clearart);
+    return ArtistArt(
+      logo: art.logo,
+      backdrop: art.backdrop,
+      thumb: art.thumb,
+      cutout: art.cutout,
+      clearart: art.clearart,
+      logoBytes: logo,
+      backdropBytes: backdrop,
+      thumbBytes: thumb,
+      cutoutBytes: cutout,
+      clearartBytes: clearart,
+    );
+  }
+
+  /// Alleen het portret van een artiest (TheAudioDB `strArtistThumb`, 700×700): voor het
+  /// artiestenraster en "Klinkt als" (Saber, 17-10-2026: "met effectief de artiest in, niet de album
+  /// hoes"). Dezelfde zoektocht en dezelfde map op schijf als [artistArt], maar zonder de vier andere
+  /// beelden: voor een raster van tweehonderdzeventig artiesten zou dat op een Shield honderden
+  /// megabytes aan achtergronden en logo's zijn die niemand daar ziet.
+  Future<Uint8List?> artistThumb(String name) async {
+    final sleutel = name.toLowerCase();
+    final al = _artiestUitGeheugen(sleutel)?.thumbBytes ?? artistThumbInGeheugen(name);
+    if (al != null) return al;
+    final art = await _artiestMeta(name);
+    if (art == null) return null;
+    final b = await _cachedArt(name, 'thumb', art.thumb);
+    if (b != null) {
+      // HETZELFDE object bij de volgende vraag: een `Image.memory` herkent een beeld aan zijn
+      // bytes-object, en zo hoeft heen en weer scrollen in het raster niets opnieuw te decoderen.
+      _portretGelezen.remove(sleutel);
+      _portretGelezen[sleutel] = b;
+      while (_portretGelezen.length > kPortretGelezenMax) {
+        _portretGelezen.remove(_portretGelezen.keys.first);
+      }
+    }
+    return b;
+  }
+
+  /// Het portret als het al in het geheugen ligt — meteen, voor het eerste beeld van een tegel.
+  Uint8List? artistThumbInGeheugen(String name) {
+    final sleutel = name.toLowerCase();
+    final b = _portretGelezen.remove(sleutel);
+    if (b != null) _portretGelezen[sleutel] = b; // weer achteraan: het laatst gebruikt
+    return b ?? _artiestUitGeheugen(sleutel)?.thumbBytes;
+  }
+
+  /// Zo'n honderd portretten van 700×700 als jpg: een paar MB, genoeg voor een paar schermen raster.
+  static final Map<String, Uint8List> _portretGelezen = <String, Uint8List>{};
+  static const int kPortretGelezenMax = 120;
+
+  /// Wie tegelijk naar dezelfde artiest zoekt (raster en pagina), wacht op hetzelfde antwoord. Zie
+  /// [_artistArtInFlight], en de waarschuwing daar over de pijlvorm in `whenComplete`.
+  static final _metaInFlight = <String, Future<ArtistArt?>>{};
+
+  /// Wat TheAudioDB van deze artiest heeft (alleen de adressen): van schijf, of één zoekopdracht.
+  Future<ArtistArt?> _artiestMeta(String name) {
+    final sleutel = name.toLowerCase();
+    final loopt = _metaInFlight[sleutel];
+    if (loopt != null) return loopt;
+    final werk = _artiestMetaVers(name).whenComplete(() {
+      _metaInFlight.remove(sleutel);
+    });
+    _metaInFlight[sleutel] = werk;
+    return werk;
+  }
+
+  Future<ArtistArt?> _artiestMetaVers(String name) async {
     final meta = _artistArtFile(name);
     ArtistArt? art;
     if (await meta.exists()) {
@@ -610,24 +685,7 @@ class CoverEnricher {
         return null;
       }
     }
-    // Keep the bytes locally too: these render on every visit and shouldn't refetch each time.
-    final logo = await _cachedArt(name, 'logo', art.logo);
-    final backdrop = await _cachedArt(name, 'backdrop', art.backdrop);
-    final thumb = await _cachedArt(name, 'thumb', art.thumb);
-    final cutout = await _cachedArt(name, 'cutout', art.cutout);
-    final clearart = await _cachedArt(name, 'clearart', art.clearart);
-    return ArtistArt(
-      logo: art.logo,
-      backdrop: art.backdrop,
-      thumb: art.thumb,
-      cutout: art.cutout,
-      clearart: art.clearart,
-      logoBytes: logo,
-      backdropBytes: backdrop,
-      thumbBytes: thumb,
-      cutoutBytes: cutout,
-      clearartBytes: clearart,
-    );
+    return art;
   }
 
   /// Eén zoekopdracht bij TheAudioDB. Null als er niets is — dan probeert de aanroeper het nog

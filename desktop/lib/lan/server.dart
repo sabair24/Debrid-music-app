@@ -7,6 +7,7 @@ import 'dart:typed_data' show BytesBuilder;
 import 'package:flutter/foundation.dart';
 
 import '../ai.dart';
+import '../beeldvorm.dart' show KopInstelling, KopScherm, kopSoort;
 import '../album_facts.dart';
 import '../cloud/device_identity.dart';
 import '../downloadbron.dart';
@@ -2135,6 +2136,7 @@ class LanServer {
     // client een 404 op een album dat de client niet meestuurt.
     if (op != 'removeTracks' &&
         op != 'artistArt' &&
+        op != 'artistKop' &&
         op != 'albumArtRole' &&
         op != 'renumber' &&
         op != 'assignRows' &&
@@ -2196,6 +2198,20 @@ class LanServer {
           }
           await library.setArtistArt(
               artist, (body['kind'] ?? 'portrait') as String, (body['url'] ?? '') as String);
+        case 'artistKop':
+          // Hoe de kop van een artiest is uitgesneden, voor één soort scherm (pc, tv of gsm) — ingesteld
+          // op een Mac of iPad en hier bewaard naast de gekozen foto's, zodat elk toestel hem krijgt.
+          // Een eigen bewerking en niet `artistArt` met de getallen in 'url': die gaat van buiten door
+          // [adresVanBuitenMag], en vier getallen zijn geen adres. Hier gaat hij door [KopInstelling.lees]:
+          // wat daar niet doorheen komt, wordt niet bewaard.
+          final artist = (body['artist'] ?? '') as String;
+          final scherm = KopScherm.values.where((s) => s.name == body['scherm']).firstOrNull;
+          final waarde = (body['waarde'] ?? '') as String;
+          final instelling = KopInstelling.lees(waarde);
+          if (artist.isEmpty || scherm == null || (waarde.isNotEmpty && instelling == null)) {
+            return _json(req.response, {'error': 'Ongeldige kopinstelling.'}, status: HttpStatus.badRequest);
+          }
+          await library.setArtistArt(artist, kopSoort(scherm), instelling?.schrijf() ?? '');
         case 'renumber':
           // Hernummeren namens een ander toestel. Kon hier niet aankomen: op een client schreef dit
           // alleen `corrections.json` op dát toestel, terwijl de bibliotheek daar uit de catalogus

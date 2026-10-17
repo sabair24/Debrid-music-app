@@ -508,6 +508,29 @@ void main() {
       expect(c.edits.single['url'], 'https://ergens/portret.jpg');
     });
 
+    test('een kop die je op de iPad instelt, gaat naar de pc en staat hier meteen goed', () async {
+      // Zelfde val als de artiestfoto hierboven, plus één: tot de catalogus terug is, sprong de kop
+      // anders even terug naar wat hij was — en een knop die even het omgekeerde doet, leest als stuk.
+      final pc = _pc();
+      final c = _client(pc.library);
+      await c.library.loadRemote();
+      const kop = KopInstelling(fx: .62, fy: .31, zoom: 1.25, hoogte: 380);
+
+      var gemeld = 0;
+      c.library.addListener(() => gemeld++);
+      final klaar = c.library.setKop('Portishead', KopScherm.tv, kop);
+      expect(c.library.kopVoor('Portishead', KopScherm.tv), kop, reason: 'meteen, niet pas na de catalogus');
+      expect(gemeld, greaterThan(0), reason: 'en het scherm hoort dat meteen te weten');
+      await klaar;
+
+      final e = c.edits.single;
+      expect(e['op'], 'artistKop');
+      expect(e['artist'], 'Portishead');
+      expect(e['scherm'], 'tv');
+      expect(e['waarde'], '0.620,0.310,1.250,380');
+      expect(e.containsKey('url'), isFalse, reason: 'een url gaat van buiten door de adrescontrole');
+    });
+
     test('de pc komt terug terwijl er niets veranderde: de offlinemelding gaat weg', () async {
       // Zo bleef die balk hangen. De ETag is van vóór de storing en de pc heeft in de tussentijd
       // niets aan zijn bibliotheek veranderd, dus antwoordt hij 304 — en op dat pad stond niets dat
@@ -909,6 +932,18 @@ void _editingTests() {
     // keuzes uit de catalogus komen in plaats van uit een eigen bestand.
     expect(mac.achtergrondVoor('Portishead', Beeldvorm.staand), 'https://example.test/staand.jpg');
     expect(mac.achtergrondVoor('Portishead', Beeldvorm.liggend), 'https://example.test/liggend.jpg');
+  });
+
+  test('de kop per scherm reist met de catalogus mee, elk scherm apart', () async {
+    await pcLibrary.setKop('Portishead', KopScherm.gsm, const KopInstelling(fx: .5, fy: .2, zoom: 1.5));
+    await pcLibrary.setKop('Portishead', KopScherm.tv, const KopInstelling(fx: .7, fy: .3, hoogte: 420));
+    pcLibrary.notifyListeners();
+    await mac.loadRemote();
+
+    expect(mac.kopVoor('Portishead', KopScherm.gsm), const KopInstelling(fx: .5, fy: .2, zoom: 1.5));
+    expect(mac.kopVoor('Portishead', KopScherm.tv), const KopInstelling(fx: .7, fy: .3, hoogte: 420));
+    expect(mac.kopVoor('Portishead', KopScherm.pc), isNull);
+    expect(mac.chosenArtistArt('Portishead', kSoortLiggend), isNull, reason: 'een kop is geen foto');
   });
 
   test('DE GRENS: zonder staande keuze valt een staand scherm terug op de liggende', () async {

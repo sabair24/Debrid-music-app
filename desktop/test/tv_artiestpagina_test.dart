@@ -432,10 +432,22 @@ void main() {
       expect(bron, contains('minimum: EdgeInsets.only(top: ruimte > 0 ? 0 : tvOverscan.top),'));
     });
 
-    test('geen bronlabels en geen meeschuivend glas op een tv', () {
+    test('geen bronlabels op een tv', () {
       expect(bron, contains('final merk = !isTv && r.sources.length > 1'));
-      expect('if (ruimte > 0 && !isTv)'.allMatches(bron).length, 2);
-      expect(bron, contains('if (BalkRuimte.van(context) > 0 && !isTv)'));
+    });
+
+    // Saber, 17-10-2026: "de menubar is te transparant, de tekst loopt door elkaar". Op alle vier de
+    // pagina's die onder de balk door tekenen komt bij scrollen de donkere strook, ook op een tv.
+    test('meeschuivend glas ook op een tv, en een capsule die bijna dicht is', () {
+      expect('if (ruimte > 0 && !isTv)'.allMatches(bron).length, 0);
+      expect(bron, isNot(contains('if (BalkRuimte.van(context) > 0 && !isTv)')));
+      expect('if (ruimte > 0)\n'.allMatches(bron).length, 2);
+      expect(bron, contains('if (BalkRuimte.van(context) > 0)\n'));
+      final capsule = RegExp(r'const kTvMenuCapsule = BoxDecoration\(\s*color: Color\(0x([0-9A-F]{2})')
+          .firstMatch(bron);
+      expect(capsule, isNotNull);
+      expect(int.parse(capsule!.group(1)!, radix: 16), greaterThanOrEqualTo(0xE0),
+          reason: 'zonder vervaging leest tekst door een capsule van minder dan 88 % heen');
     });
   });
 }

@@ -64,6 +64,10 @@ const List<String> kArtSoorten = <String>[
   kSoortLiggend,
   kSoortStaand,
   'logo',
+  // Hoe de kop per soort scherm is uitgesneden — zie [KopInstelling]. Geen url maar vier getallen.
+  'kop_pc',
+  'kop_tv',
+  'kop_gsm',
 ];
 
 /// Welke vorm dit scherm heeft.
@@ -101,3 +105,77 @@ List<String> achtergrondSoorten(Beeldvorm vorm) => switch (vorm) {
       Beeldvorm.staand => const <String>[kSoortStaand, kSoortLiggend],
       Beeldvorm.liggend => const <String>[kSoortLiggend],
     };
+
+/// Voor welk soort scherm een instelling van de artiestkop geldt.
+///
+/// Apart bewaard (Saber, 17-10-2026: "alles per toestel apart"): een tv-kop is ruim twee keer zo
+/// breed als hoog, een gsm-kop bijna vierkant, dus wat op de tv goed staat, snijdt op de gsm de
+/// helft van de groep weg. Op de pc kies je voor welk scherm je hem instelt.
+enum KopScherm { pc, tv, gsm }
+
+/// Onder welke soort de kopinstelling bij de artiest bewaard wordt: naast de gekozen foto's, in
+/// `artist_art_choice.json`, en zo met de catalogus mee naar elk toestel (zie [kArtSoorten]).
+String kopSoort(KopScherm s) => 'kop_${s.name}';
+
+/// Hoe jij de kop voor één soort scherm hebt ingesteld.
+///
+/// [fx] en [fy] zijn het punt in de foto (0..1) dat op de vaste plek in de kop komt — rechts van de
+/// naam, onder het menu. [zoom] is hoeveel verder dan "net vullend" (1 = niet), en [hoogte] de
+/// hoogte van de kop in punten (null = de gewone hoogte van dat scherm).
+class KopInstelling {
+  const KopInstelling({required this.fx, required this.fy, this.zoom = 1, this.hoogte});
+
+  final double fx, fy, zoom;
+  final double? hoogte;
+
+  static const double kZoomTot = 4;
+
+  /// De laagste kop die je kunt maken. Lager en de naam en Radio passen er niet meer in, en dan duwt
+  /// de inhoud hem toch weer op.
+  static const double kHoogteVanaf = 180;
+  static const double kHoogteTot = 1400;
+
+  /// "0.620,0.310,1.250,380" — zo staat hij in de keuzelijst van de artiest. Ongeldig geeft null,
+  /// zodat een kapotte regel in een bestand nooit een vreemde uitsnede wordt.
+  static KopInstelling? lees(String? s) {
+    if (s == null || s.isEmpty) return null;
+    final d = s.split(',');
+    if (d.length < 3 || d.length > 4) return null;
+    final fx = double.tryParse(d[0]), fy = double.tryParse(d[1]), zoom = double.tryParse(d[2]);
+    if (fx == null || fy == null || zoom == null) return null;
+    if (!fx.isFinite || !fy.isFinite || !zoom.isFinite) return null;
+    final h = d.length > 3 ? double.tryParse(d[3]) : null;
+    if (d.length > 3 && (h == null || !h.isFinite)) return null;
+    return KopInstelling(
+      fx: fx.clamp(0.0, 1.0),
+      fy: fy.clamp(0.0, 1.0),
+      zoom: zoom.clamp(1.0, kZoomTot),
+      hoogte: h?.clamp(kHoogteVanaf, kHoogteTot),
+    );
+  }
+
+  String schrijf() => [
+        fx.toStringAsFixed(3),
+        fy.toStringAsFixed(3),
+        zoom.toStringAsFixed(3),
+        if (hoogte != null) hoogte!.round().toString(),
+      ].join(',');
+
+  KopInstelling met({double? fx, double? fy, double? zoom, double? hoogte, bool geenHoogte = false}) =>
+      KopInstelling(
+        fx: (fx ?? this.fx).clamp(0.0, 1.0),
+        fy: (fy ?? this.fy).clamp(0.0, 1.0),
+        zoom: (zoom ?? this.zoom).clamp(1.0, kZoomTot),
+        hoogte: geenHoogte ? null : (hoogte ?? this.hoogte)?.clamp(kHoogteVanaf, kHoogteTot),
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is KopInstelling && other.fx == fx && other.fy == fy && other.zoom == zoom && other.hoogte == hoogte;
+
+  @override
+  int get hashCode => Object.hash(fx, fy, zoom, hoogte);
+
+  @override
+  String toString() => 'KopInstelling(${schrijf()})';
+}

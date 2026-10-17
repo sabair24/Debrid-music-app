@@ -28,6 +28,9 @@ import 'radiobijvuller.dart';
 import 'radiokeuze.dart';
 import 'radiobestand.dart' show kRadioSpeling;
 import 'scanmaat.dart';
+import 'booklet.dart' show imageSize;
+import 'ui/kopfoto.dart';
+import 'ui/kopbewerker.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
 import 'radiostijl.dart'
@@ -112,6 +115,7 @@ import 'library.dart';
 import 'metadata.dart';
 import 'models.dart';
 import 'paths.dart';
+import 'fotoblik_bestand.dart';
 import 'musicbrainz.dart';
 import 'navigatie.dart';
 import 'ui/itemmenu.dart';
@@ -474,6 +478,9 @@ Future<void> main() async {
   // Gemeten hoesmaten van "Uitgave kiezen" bewaren. Hier en niet in scanmaat.dart zelf, zodat een
   // toets die de map vergeet niet in de echte app-map schrijft. Zie `scanmaat.dart`.
   bewaarScanmatenIn(appFile('scanmaten.json'));
+  // Waar de gezichten op de artiestfoto's staan, zodat elke foto maar één keer bekeken wordt (zie
+  // `ui/kopfoto.dart`). Hier om dezelfde reden als de scanmaten hierboven.
+  await bewaarFotoBlikkenIn(appFile('fotoblikken.json'));
   // Before the first widget: whether this is a television decides focus rings, overscan margins
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
@@ -1946,12 +1953,21 @@ class _MeeschuivendGlas extends StatelessWidget {
     // Zonder vervaging (iPad, telefoon, tv) ook de dichtere vulling: dan draagt de kleur alleen de
     // leesbaarheid. Zie [glasZonderVervaging].
     final dicht = isCompact(context) || glasZonderVervaging;
-    return AnimatedBuilder(
-      animation: Listenable.merge([rol, GlasKwaliteit.stand]),
-      builder: (_, __) => balkGlas(
-          tint, !rol.hasClients ? 0 : (rol.offset / aanloop).clamp(0.0, 1.0),
-          // Plat alleen als het glas plat staat (tv, of de bewaker). Op een gsm was dit altijd plat.
-          dicht: dicht, plat: glasZonderVervaging),
+    // Op een tv vol tot net onder de knoppen. Daar loopt deze balk sinds 17-10-2026 onder het zwevende
+    // menu door (131 punten in plaats van 56), en dan loste de kleur op ter hoogte van de terugpijl: bij
+    // scrollen stond die dwars over de tekst (Saber: "donkere strook achter de balk").
+    return LayoutBuilder(
+      builder: (_, c) => AnimatedBuilder(
+        animation: Listenable.merge([rol, GlasKwaliteit.stand]),
+        builder: (_, __) => balkGlas(
+            tint, !rol.hasClients ? 0 : (rol.offset / aanloop).clamp(0.0, 1.0),
+            // Plat alleen als het glas plat staat (tv, of de bewaker). Op een gsm was dit altijd plat.
+            dicht: dicht,
+            plat: glasZonderVervaging,
+            dichtTot: isTv && c.maxHeight.isFinite && c.maxHeight > 0
+                ? ((c.maxHeight - 14) / c.maxHeight).clamp(.66, .95)
+                : .66),
+      ),
     );
   }
 }
@@ -2200,7 +2216,9 @@ class _HomeShellState extends State<HomeShell> {
                     },
                     child: const _OfflineBanner(),
                   ),
-                  const _TvStatusStrip(),
+                  // Geen statusregel meer ("Covers ophalen…", "Scannen…"): Saber koos op 17-10-2026
+                  // "weg op de tv". Hij duwde elke pagina een stukje omlaag zolang hij er stond, en
+                  // zijn draaiende rondje tekende 60 beelden per seconde.
                 ],
               ),
             ),
@@ -4088,50 +4106,6 @@ class _BannerKnop extends StatelessWidget {
 /// of covers every time the highlight enters the rail is exactly the kind of hitch this whole
 /// change is trying to remove.
 
-/// What the app is doing, on a television.
-///
-/// The top bar carried this line, and a television no longer has one — the sections moved to the
-/// rail. Putting it in the rail would hide it behind a highlight you have to walk into, and this is
-/// exactly the thing you want to see without going looking: the PC scanning, covers arriving, the
-/// warmer working through records nobody has opened yet.
-///
-/// So a strip, full width, and only when there is something to say. Silent the rest of the time,
-/// which is most of the time.
-class _TvStatusStrip extends StatelessWidget {
-  const _TvStatusStrip();
-
-  @override
-  Widget build(BuildContext context) {
-    if (!isTv) return const SizedBox.shrink();
-    return Consumer2<LibraryStore, FactsWarmer>(
-      builder: (_, lib, warmer, __) {
-        final tekst = lib.scanning
-            ? 'Scannen… ${lib.scanned}'
-            : lib.enriching
-                ? 'Covers ophalen…'
-                : warmer.status;
-        if (tekst.isEmpty) return const SizedBox.shrink();
-        return Padding(
-          padding: EdgeInsets.fromLTRB(tvOverscan.left, 6, tvOverscan.right, 0),
-          child: Row(children: [
-            const SizedBox(
-              width: 13,
-              height: 13,
-              child: CircularProgressIndicator(strokeWidth: 2, color: _accent),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(tekst,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _muted, fontSize: 14)),
-            ),
-          ]),
-        );
-      },
-    );
-  }
-}
 
 
 /// De navigatie op een televisie: bovenaan, en met de afstandsbediening te bereiken.
@@ -4225,10 +4199,14 @@ bool focusZonderDoel(FocusNode? n, {FocusScopeNode? wortel}) {
 /// niets.
 const kTvTabbladWacht = Duration(milliseconds: 500);
 
-/// De capsule van het menu op de tv, zoals in Debrid Media: donker en doorschijnend (op een Shield
-/// geen vervaging, die is daar te duur), een haarfijne lichte rand en een schaduw eronder.
+/// De capsule van het menu op de tv, zoals in Debrid Media: donker (op een Shield geen vervaging, die
+/// is daar te duur), een haarfijne lichte rand en een schaduw eronder.
+///
+/// Bijna dicht, 90 %. Hij was 60 % doorschijnend, en zonder vervaging is dat te weinig: een titel die
+/// eronder door schoof las je dwars door de woorden heen (Saber, 17-10-2026: "de menubar is te
+/// transparant, de tekst loopt door elkaar"). Wat er nog doorkomt is kleur, geen letters.
 const kTvMenuCapsule = BoxDecoration(
-  color: Color(0x9912121A),
+  color: Color(0xE612121A),
   borderRadius: BorderRadius.all(Radius.circular(999)),
   border: Border.fromBorderSide(BorderSide(color: Color(0x1AFFFFFF))),
   boxShadow: [BoxShadow(color: Color(0x59000000), blurRadius: 30, offset: Offset(0, 8))],
@@ -8470,7 +8448,9 @@ class _ArtistsViewState extends State<ArtistsView> {
                 childAspectRatio: .82),
             delegate: SliverChildBuilderDelegate((_, i) {
               final name = artists[i];
-              final art = widget.lib.artistImages[name] ?? hoesVanArtiest[name];
+              // De albumhoes is alleen nog de terugval: het portret zoekt [ArtiestPortret] zelf, ook
+              // op een gsm en een tv (Saber, 17-10-2026).
+              final art = hoesVanArtiest[name];
               return _ArtistCard(
                 name: name,
                 image: art,
@@ -8759,8 +8739,8 @@ class _PersonPageState extends State<PersonPage> {
         ),
       ),
           // Het glas achter de zwevende balk, en het hoort bij deze pagina — zie de artiestpagina.
-          // Daar ook waarom niet op een tv.
-          if (BalkRuimte.van(context) > 0 && !isTv)
+          // Daar ook waarom ook op een tv.
+          if (BalkRuimte.van(context) > 0)
             Positioned(
               top: 0,
               left: 0,
@@ -8811,7 +8791,9 @@ class _RelatedArtistCardState extends State<_RelatedArtistCard> {
               children: [
                 Stack(
                   children: [
-                    _netCover(widget.artist.picture, size: 118, circle: true),
+                    // Hetzelfde afgeronde portret als in het artiestenraster (Saber, 17-10-2026: "ja,
+                    // zelfde vorm"). De Deezer-foto van de catalogus is de terugval.
+                    ArtiestPortret(naam: widget.artist.name, maat: 118, terugvalUrl: widget.artist.picture),
                     if (widget.inLibrary)
                       Positioned(
                         right: 2,
@@ -8841,6 +8823,204 @@ class _RelatedArtistCardState extends State<_RelatedArtistCard> {
 }
 
 /// An artist in the grid. Grows on hover like the album cards, so both grids behave the same.
+/// Hoe rond de hoeken van een artiesttegel zijn: dezelfde als een albumhoes in een raster.
+const double kArtiestHoek = 12;
+
+/// Het portret van een artiest, als afgeronde tegel: in het artiestenraster, in "Klinkt als" en bij
+/// gevonden artiesten.
+///
+/// **Waarom (Saber, 17-10-2026):** "afgeronde vierkanten, met effectief de artiest in, niet de album
+/// hoes, en dat ze niet worden afgekapt, vooral een groep zoals Nsync, of backstreet boys". Een
+/// cirkel snijdt van een groepsfoto de buitenste leden weg; een vierkant met het vierkante portret
+/// van TheAudioDB laat de hele groep staan. Op een gsm en een tv stond er bovendien altijd een
+/// albumhoes: daar werden de artiestfoto's nooit opgehaald (alleen de pc deed dat bij het opstarten).
+///
+/// De volgorde: het TheAudioDB-portret, anders de Deezer-foto (die is soms bijgesneden of een hoes
+/// met tekst, zoals bij 2 Be 3), en pas als er niets is [terugval] of [terugvalUrl].
+class ArtiestPortret extends StatefulWidget {
+  const ArtiestPortret({
+    super.key,
+    required this.naam,
+    required this.maat,
+    this.terugval,
+    this.terugvalUrl,
+    this.hoek = kArtiestHoek,
+  });
+
+  final String naam;
+  final double maat;
+
+  /// De ronding van de hoeken; [maat] / 2 is een cirkel (de rondjes op Nu speelt).
+  final double hoek;
+  final Uint8List? terugval;
+  final String? terugvalUrl;
+
+  @override
+  State<ArtiestPortret> createState() => _ArtiestPortretState();
+}
+
+class _ArtiestPortretState extends State<ArtiestPortret> {
+  Uint8List? _beeld;
+
+  @override
+  void initState() {
+    super.initState();
+    _start();
+  }
+
+  @override
+  void didUpdateWidget(ArtiestPortret oud) {
+    super.didUpdateWidget(oud);
+    if (oud.naam != widget.naam) _start();
+  }
+
+  void _start() {
+    final enr = CoverEnricher(context.read<AppSettings>());
+    _beeld = enr.artistThumbInGeheugen(widget.naam);
+    if (_beeld == null) unawaited(_zoek(enr));
+  }
+
+  Future<void> _zoek(CoverEnricher enr) async {
+    final naam = widget.naam;
+    Uint8List? b;
+    try {
+      b = await enr.artistThumb(naam);
+    } catch (_) {/* geen net: dan Deezer of de terugval */}
+    if (!mounted || naam != widget.naam) return;
+    if (b == null) {
+      b = context.read<LibraryStore>().artistImages[naam];
+      try {
+        b ??= await enr.cachedArtist(naam);
+        b ??= await enr.fetchArtistImage(naam);
+      } catch (_) {/* idem */}
+      if (!mounted || naam != widget.naam) return;
+    }
+    if (b != null) setState(() => _beeld = b);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final b = _beeld;
+    final m = widget.maat;
+    final hoek = widget.hoek;
+    if (b != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(hoek),
+        child: Image.memory(b,
+            width: m,
+            height: m,
+            fit: BoxFit.cover,
+            cacheWidth: decodeWidth(m),
+            gaplessPlayback: true,
+            errorBuilder: (_, __, ___) => cover(widget.terugval, size: m, radius: hoek)),
+      );
+    }
+    if (widget.terugval == null && widget.terugvalUrl != null) {
+      return _netCover(widget.terugvalUrl, size: m, radius: hoek);
+    }
+    return cover(widget.terugval, size: m, radius: hoek);
+  }
+}
+
+/// De kleine ronde portretten vóór de artiestnaam op Nu speelt, zoals Tidal ze toont: tot vier,
+/// overlappend, elk aanklikbaar naar de artiestpagina.
+///
+/// Saber, 17-10-2026: "in de now playing screen, alle platforms, wil ik een klein rondje met de artist,
+/// of artisten (zoals tidal dit doet) zodanig dat ik ook kan klikken en zo naar artist gaan". Rond, en
+/// alleen hier: elders zijn artiesten afgeronde vierkanten ([ArtiestPortret]), want een cirkel snijdt
+/// van een groepsfoto de buitenste leden weg — op deze maat is het een herkenningsteken, geen foto.
+///
+/// Op een tv kom je er met OMHOOG vanaf de hoes (zie [eerste]); OK opent de artiest.
+class ArtiestRondjes extends StatelessWidget {
+  const ArtiestRondjes({super.key, required this.namen, this.maat = 28, this.eerste});
+
+  final List<String> namen;
+  final double maat;
+  final FocusNode? eerste;
+
+  static const int kHoogstens = 4;
+
+  @override
+  Widget build(BuildContext context) {
+    final n = [
+      for (final naam in namen)
+        if (naam.trim().isNotEmpty) naam,
+    ].take(kHoogstens).toList();
+    if (n.isEmpty) return const SizedBox.shrink();
+    // Een derde over elkaar, zoals bij Tidal: genoeg om bij elkaar te horen, en elk gezicht blijft te zien.
+    final stap = maat * .7;
+    return SizedBox(
+      width: maat + (n.length - 1) * stap,
+      height: maat,
+      child: Stack(clipBehavior: Clip.none, children: [
+        // Van achter naar voor: de eerste artiest ligt bovenop.
+        for (var i = n.length - 1; i >= 0; i--)
+          Positioned(
+            left: i * stap,
+            top: 0,
+            child: _Rondje(
+              key: ValueKey('np-rondje-${n[i]}'),
+              naam: n[i],
+              maat: maat,
+              focusNode: i == 0 ? eerste : null,
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+class _Rondje extends StatefulWidget {
+  const _Rondje({super.key, required this.naam, required this.maat, this.focusNode});
+  final String naam;
+  final double maat;
+  final FocusNode? focusNode;
+
+  @override
+  State<_Rondje> createState() => _RondjeState();
+}
+
+class _RondjeState extends State<_Rondje> {
+  bool _licht = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final m = widget.maat;
+    return Tooltip(
+      message: widget.naam,
+      // Zelf de kleur: de standaardtip is wit in een donker thema.
+      decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(6)),
+      textStyle: const TextStyle(color: kTekst, fontSize: 12),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _licht = true),
+        onExit: (_) => setState(() => _licht = false),
+        child: Pressable(
+          focusNode: widget.focusNode,
+          onPressed: () => openArtist(context, widget.naam),
+          borderRadius: BorderRadius.circular(m),
+          scaleOnFocus: false,
+          ringOnFocus: false,
+          vastePlek: false,
+          onFocusChange: (v) => setState(() => _licht = v),
+          child: AnimatedScale(
+            scale: _licht ? 1.18 : 1,
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOut,
+            child: Container(
+              // Een rand in de achtergrondkleur scheidt de rondjes die over elkaar liggen; geselecteerd
+              // wordt hij wit, zodat je op een tv ziet welke artiest OK opent.
+              padding: const EdgeInsets.all(1.5),
+              decoration: BoxDecoration(shape: BoxShape.circle, color: _licht ? Colors.white : _bg),
+              child: ArtiestPortret(naam: widget.naam, maat: m - 3, hoek: m),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ArtistCard extends StatefulWidget {
   final String name;
   final Uint8List? image;
@@ -8877,8 +9057,9 @@ class _ArtistCardState extends State<_ArtistCard> {
                   builder: (_, c) => AnimatedContainer(
                     duration: const Duration(milliseconds: 170),
                     curve: Curves.easeOut,
+                    // Een afgerond vierkant en geen cirkel meer: zie [ArtiestPortret].
                     decoration: BoxDecoration(
-                      shape: BoxShape.circle,
+                      borderRadius: BorderRadius.circular(kArtiestHoek),
                       boxShadow: _hover
                           ? [
                               BoxShadow(
@@ -8888,7 +9069,7 @@ class _ArtistCardState extends State<_ArtistCard> {
                             ]
                           : const [],
                     ),
-                    child: cover(widget.image, size: c.maxWidth, circle: true),
+                    child: ArtiestPortret(naam: widget.name, maat: c.maxWidth, terugval: widget.image),
                   ),
                 ),
               ),
@@ -8925,7 +9106,10 @@ class _ArtistCardState extends State<_ArtistCard> {
 /// stond, en `_loadRelated` zoekt het Deezer-nummer zelf als het er niet is. Dus de pagina gaat nu
 /// open en vult zich; wat je al in je bibliotheek hebt staat er meteen.
 Future<void> openArtist(BuildContext context, String name) async {
-  openOp(Navigator.of(context), (_) => ArtistBrowsePage(CatalogArtist(0, name, null, 0)));
+  // Zonder het volgnummer van Discogs ("Nick Carter (2)"): op die naam vond de pagina geen foto en
+  // geen platen, en hij stond zo in de kop (Shield, 17-10-2026).
+  openOp(Navigator.of(context),
+      (_) => ArtistBrowsePage(CatalogArtist(0, zonderDiscogsNummer(name), null, 0)));
 }
 
 /// Minimise, maximise/restore and close, drawn by the app.
@@ -9013,6 +9197,12 @@ class ArtistLine extends StatefulWidget {
   /// Doorgegeven aan [ArtistNames]; zie daar waarom dit standaard uit staat.
   final bool omvouwen;
 
+  /// De ronde portretjes van de artiesten vóór de namen — zie [ArtiestRondjes]. Alleen op Nu speelt.
+  final bool rondjes;
+
+  /// De selectie van het eerste rondje, zodat de hoes op een tv er met OMHOOG naartoe kan.
+  final FocusNode? eersteRondje;
+
   const ArtistLine({
     super.key,
     required this.artist,
@@ -9020,6 +9210,8 @@ class ArtistLine extends StatefulWidget {
     required this.style,
     this.lookup = false,
     this.omvouwen = false,
+    this.rondjes = false,
+    this.eersteRondje,
   });
 
   @override
@@ -9059,10 +9251,18 @@ class _ArtistLineState extends State<ArtistLine> {
   Widget build(BuildContext context) {
     final split = splitFeatured(widget.artist, widget.title);
     final lib = context.watch<LibraryStore>();
-    return ArtistNames(
-      names: [lib.displayArtist(split.main), ...split.featured, ..._extra],
-      style: widget.style,
-      omvouwen: widget.omvouwen,
+    final namen = [lib.displayArtist(split.main), ...split.featured, ..._extra];
+    final regel = ArtistNames(names: namen, style: widget.style, omvouwen: widget.omvouwen);
+    if (!widget.rondjes || namen.every((n) => n.trim().isEmpty)) return regel;
+    // Dezelfde namen als de regel ernaast, ook de gasten die pas na het opzoeken binnenkomen: één lijst,
+    // zodat een rondje nooit een andere artiest is dan de naam ernaast.
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ArtiestRondjes(namen: namen, maat: isTv ? 22 : 28, eerste: widget.eersteRondje),
+        const SizedBox(width: 10),
+        Flexible(child: regel),
+      ],
     );
   }
 }
@@ -9127,6 +9327,10 @@ class _ArtistNamesState extends State<ArtistNames> {
           onPressed: () => openArtist(context, naam),
           borderRadius: BorderRadius.circular(6),
           scaleOnFocus: false,
+          // Op een tv geen vak: een gekozen naam is wit en onderstreept, zoals elke andere link (Saber,
+          // 17-10-2026: "alle links dezelfde stijl" — in de spelerbalk en op de albumpagina stond hier
+          // nog het grijze vak).
+          ringOnFocus: !isTv,
           // The name is underlined on hover; focus does the same, so a remote sees the link
           // as a link rather than as a ring around a piece of prose.
           onFocusChange: (v) => setState(() => _hover = v ? naam : null),
@@ -9135,7 +9339,9 @@ class _ArtistNamesState extends State<ArtistNames> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: _hover == naam
-                ? widget.style.copyWith(color: Colors.white, decoration: TextDecoration.underline)
+                ? (isTv
+                    ? tvLinkStijl(widget.style, true)
+                    : widget.style.copyWith(color: Colors.white, decoration: TextDecoration.underline))
                 : widget.style,
           ),
         ),
@@ -12115,8 +12321,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     _okKlok?.cancel();
     _draai.dispose();
     _tikken.dispose();
+    _eersteRondje.dispose();
     super.dispose();
   }
+
+  /// Het eerste artiestrondje vóór de naam (zie [ArtiestRondjes]): op een tv de plek waar OMHOOG
+  /// vanaf de hoes naartoe gaat.
+  final _eersteRondje = FocusNode(debugLabel: 'np-eerste-rondje');
 
   /// Loopt na een eerste OK op de hoes: komt er binnen [kTvTweedeOk] een tweede, dan draait de hoes
   /// om; anders pauzeert (of speelt) hij.
@@ -12415,6 +12626,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                   lookup: true,
                   omvouwen: true,
                   style: const TextStyle(color: _muted, fontSize: 15),
+                  // De artiesten als rondjes vóór hun naam, elk naar hun pagina (Saber, 17-10-2026).
+                  rondjes: true,
+                  eersteRondje: _eersteRondje,
                 ),
           echtheid: t == null ? null : _echtheidMerk(t),
           // Wat je NU hoort, en niet wat er op de schijf van de pc staat. Zie [_stroomKwaliteit]:
@@ -12879,6 +13093,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
   ///
   /// **Ingedrukt houden spoelt** (Saber, 16-10-2026: "ik wil dit doen met de afstandsbediening door
   /// blijven drukken"), en daarom wisselt het nummer pas bij het loslaten. Zie [SpoelPijlen].
+  ///
+  /// **Omhoog gaat naar de artiest** (Saber, 17-10-2026: "ja, omhoog vanaf de hoes"): naar het eerste
+  /// rondje vóór de artiestnaam, en OK opent dan de artiestpagina. Boven de hoes staat niets, dus deze
+  /// pijl deed hier tot nu toe niets.
   KeyEventResult _pijlAlsNummerknop(KeyEvent e, _Transport x) {
     _transportNu = x;
     if (!isTv) return KeyEventResult.ignored;
@@ -12886,6 +13104,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     if (!_opHoes) {
       _spoelPijlen.vergeet();
       return KeyEventResult.ignored;
+    }
+    if (e.logicalKey == LogicalKeyboardKey.arrowUp) {
+      if (e is KeyDownEvent && _eersteRondje.context != null && _eersteRondje.canRequestFocus) {
+        _eersteRondje.requestFocus();
+        return KeyEventResult.handled;
+      }
+      return e is KeyRepeatEvent ? KeyEventResult.handled : KeyEventResult.ignored;
     }
     return _spoelPijlen.opToets(e);
   }
@@ -19049,7 +19274,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     width: 116,
                     child: Column(
                       children: [
-                        _netCover(a.picture, size: 116, circle: true),
+                        // Dezelfde vorm als het artiestenraster, maar de foto van precies deze
+                        // gevonden artiest (Deezer): op naam zoeken bij TheAudioDB kan hier een
+                        // naamgenoot opleveren.
+                        _netCover(a.picture, size: 116, radius: kArtiestHoek),
                         const SizedBox(height: 6),
                         Text(a.name,
                             maxLines: 1,
@@ -20737,6 +20965,30 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
 /// voor de balk min 105 voor de spelerbalk. Zo hoog is de kop van de artiestpagina daar minstens.
 const double kTvKopZicht = 360;
 
+/// Voor welk soort scherm de kop hier getekend wordt — welke van de drie instellingen telt (zie
+/// [KopScherm]). Een iPad en een Mac tellen als pc: ze hebben dezelfde brede kop met de naam links.
+KopScherm kopSchermVan(BuildContext context) =>
+    isTv ? KopScherm.tv : (isCompact(context) ? KopScherm.gsm : KopScherm.pc);
+
+/// Open "Kop aanpassen" voor [naam], met [beeld] — de foto die de kop nu toont.
+Future<void> toonKopBewerker(BuildContext context, String naam, Uint8List beeld) {
+  final lib = context.read<LibraryStore>();
+  return showDialog<void>(
+    context: context,
+    builder: (_) => KopBewerker(
+      naam: naam,
+      beeld: beeld,
+      huidig: {for (final s in KopScherm.values) s: lib.kopVoor(naam, s)},
+      bewaar: (s, i) => lib.setKop(naam, s, i),
+      begin: kopSchermVan(context),
+      bronMaat: switch (imageSize(beeld)) {
+        (:final w, :final h) => Size(w.toDouble(), h.toDouble()),
+        null => null,
+      },
+    ),
+  );
+}
+
 /// De kop van de artiestpagina: de naam paginabreed, met de artiest ernaast uitgeknipt.
 ///
 /// **Waarom dit naast [ArtistHero] staat en die niet vervangt.** Die kop wordt ook door de
@@ -20773,14 +21025,20 @@ class EditorialeKop extends StatelessWidget {
     this.bibliotheek,
     this.genres = const [],
     this.groepen = const [],
+    this.zijnLeden = false,
     this.onGroep,
     this.echteNaam,
     this.actions = const [],
     this.bovenBloed = 0,
+    this.uitsnede,
   });
 
   final String naam;
   final ArtistArt? art;
+
+  /// Hoe jij deze kop op de pc hebt ingesteld voor dit soort scherm (zie [kopSchermVan]), of null:
+  /// dan kiest [KopFoto] zelf, op de gezichten. Een eigen hoogte gaat boven de gewone ondergrens.
+  final KopInstelling? uitsnede;
   final Uint8List? fallbackImage;
 
   /// De achtergrond die de gebruiker zelf koos in "Foto kiezen". Wint van [art], want een keuze is
@@ -20795,6 +21053,11 @@ class EditorialeKop extends StatelessWidget {
   /// Discogs' `groups` (of `members` bij een band) — opgehaald bij elke opening van de fotokiezer
   /// en daar meteen weggegooid.
   final List<String> groepen;
+
+  /// Of [groepen] de leden van een band zijn in plaats van de groepen waar een persoon in speelde. Dan
+  /// staat er "Leden" boven en niet "Ook in" (Saber, 17-10-2026: bij de Backstreet Boys stonden de
+  /// leden onder "Ook in").
+  final bool zijnLeden;
   final void Function(String)? onGroep;
   final String? echteNaam;
   final List<Widget> actions;
@@ -20867,7 +21130,11 @@ class EditorialeKop extends StatelessWidget {
           //
           // Op een tv precies het eerste scherm tussen de balk en de spelerbalk: de foto vult wat je
           // ziet, en alles van de kop staat erin (Saber, 16-10-2026: "alles in één scherm").
-          minHeight: (smal ? 0 : (isTv ? kTvKopZicht : (breedte * .40).clamp(340.0, 620.0))) + bovenBloed,
+          //
+          // Een hoogte die je zelf instelde gaat voor (Saber, 17-10-2026: "zelf de hero van hoogte
+          // veranderen"). Ook dat is een ondergrens: lager dan de inhoud nodig heeft kan hij niet.
+          minHeight: (uitsnede?.hoogte ?? (smal ? 0 : (isTv ? kTvKopZicht : (breedte * .40).clamp(340.0, 620.0)))) +
+              bovenBloed,
           // En de volle breedte, EXPLICIET. Dit stond nergens: een `Stack` meet zich aan zijn
           // niet-gepositioneerde kinderen, en `Positioned.fill` telt daarin niet mee. Op de pagina
           // staat deze kop zélf in een `Stack` (naast de terugpijl), en die geeft LOSSE maten door —
@@ -20883,25 +21150,37 @@ class EditorialeKop extends StatelessWidget {
           children: [
             if (achtergrond != null)
               Positioned.fill(
-                child: grijs(Image.memory(achtergrond,
-                    fit: BoxFit.cover,
-                    // Zo breed als het VENSTER, niet een vaste 520. Dat getal stamt uit de tijd dat
-                    // dit een smalle strook achter een portret was; sinds de kop het hele scherm
-                    // vult werd hetzelfde plaatje bijna vier keer opgerekt, en dat zag Saber meteen
-                    // ("blokkerig").
-                    //
-                    // Het plafond staat op 1920 en niet op 1280, en dat scheelde precies bij de
-                    // artiest waar de klacht over ging. GEMETEN over de 115 bewaarde achtergronden:
-                    // 106 zijn 1280×720 en negen zijn 1920×1080 — en Michael Jackson is er één van
-                    // de negen (`2a6c02d3_backdrop.img`, 1920×1080). Een plafond van 1280 had daar
-                    // dus 640 pixels weggegooid van precies de foto die te grof gevonden werd.
-                    //
-                    // Het kost niets voor de andere honderdzes: `cacheWidth` verkleint alleen, dus
-                    // een 1280 brede bron wordt gewoon op 1280 gedecodeerd. Alleen die negen kosten
-                    // meer geheugen (1920×1080 is 8,3 MB als bitmap), en dat is er één per pagina.
-                    cacheWidth: decodeWidth(breedte).clamp(64, 1920),
-                    alignment: const Alignment(0, -.35),
-                    errorBuilder: (_, __, ___) => const SizedBox())),
+                // Over de volle breedte en slim uitgesneden: op de gezichten, of zoals jij hem op de pc
+                // instelde (zie [uitsnede] en `ui/kopfoto.dart`). Hier stond een vaste uitlijning iets boven
+                // het midden, en bij een staande foto in een brede kop vielen de hoofden van een groep
+                // dan half achter het menu (Saber, 17-10-2026: "wordt vaak afgekapt … vooral een groep
+                // zoals Nsync of Backstreet Boys").
+                //
+                // De decodeerbreedte (zie [decodeerBreedte]) is zo breed als de foto getekend wordt,
+                // niet een vaste 520. Dat getal stamt uit de tijd dat
+                // dit een smalle strook achter een portret was; sinds de kop het hele scherm
+                // vult werd hetzelfde plaatje bijna vier keer opgerekt, en dat zag Saber meteen
+                // ("blokkerig").
+                //
+                // Het plafond staat op 1920 en niet op 1280, en dat scheelde precies bij de
+                // artiest waar de klacht over ging. GEMETEN over de 115 bewaarde achtergronden:
+                // 106 zijn 1280×720 en negen zijn 1920×1080 — en Michael Jackson is er één van
+                // de negen (`2a6c02d3_backdrop.img`, 1920×1080). Een plafond van 1280 had daar
+                // dus 640 pixels weggegooid van precies de foto die te grof gevonden werd.
+                //
+                // Het kost niets voor de andere honderdzes: `cacheWidth` verkleint alleen, dus
+                // een 1280 brede bron wordt gewoon op 1280 gedecodeerd. Alleen die negen kosten
+                // meer geheugen (1920×1080 is 8,3 MB als bitmap), en dat is er één per pagina.
+                child: grijs(KopFoto(
+                  beeld: achtergrond,
+                  smal: smal,
+                  bronMaat: switch (imageSize(achtergrond)) {
+                    (:final w, :final h) => Size(w.toDouble(), h.toDouble()),
+                    null => null,
+                  },
+                  instelling: uitsnede,
+                  bovenRand: bovenBloed,
+                )),
               ),
             // Het verloop hieronder begint ONDER de balk, niet bovenaan het vak. Het is afgesteld op
             // waar de naam en de knoppen staan, en die schuiven met [bovenBloed] mee omlaag — dus
@@ -21037,11 +21316,14 @@ class EditorialeKop extends StatelessWidget {
                           children: [
                             if (soort != null && soort!.trim().isNotEmpty)
                               _Feit('Soort', tekst: soort),
-                            if (bibliotheek != null) _Feit('In je bibliotheek', tekst: bibliotheek),
+                            // Leeg niet tonen: bij een artiest waar je niets van hebt stond hier een
+                            // kopje zonder inhoud (Shield, 17-10-2026).
+                            if (bibliotheek != null && bibliotheek!.trim().isNotEmpty)
+                              _Feit('In je bibliotheek', tekst: bibliotheek),
                             if (genres.isNotEmpty)
                               _Feit('Genre', tekst: genres.take(3).join(' · ')),
                             if (groepen.isNotEmpty)
-                              _Feit('Ook in',
+                              _Feit(zijnLeden ? 'Leden' : 'Ook in',
                                   kind: Wrap(
                                     spacing: 12,
                                     children: [
@@ -21642,6 +21924,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   String? _echteNaam;
   List<String> _groepen = const [];
 
+  /// Of [_groepen] de leden van deze band zijn (Discogs `members`) en niet zijn groepen.
+  bool _zijnLeden = false;
+
   /// "Klinkt als" — overgenomen van de oude, tweede artiestpagina.
   ///
   /// Die pagina kreeg je via Bibliotheek → Artiesten en had als enige dit blok én "Foto kiezen";
@@ -22147,6 +22432,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         _echteNaam = (echt.isEmpty || artistKey(echt) == artistKey(naam)) ? null : echt;
         // Precies één van de twee is gevuld: `groups` op een persoon, `members` op een band.
         _groepen = a.groups.isNotEmpty ? a.groups : a.members;
+        _zijnLeden = a.groups.isEmpty && a.members.isNotEmpty;
       });
     } catch (_) {/* geen token, of Discogs ligt eruit */}
   }
@@ -22334,9 +22620,12 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                         ].join(' · '),
                   genres: [for (final e in _eigenGenres) e.key],
                   groepen: _groepen,
+                  zijnLeden: _zijnLeden,
                   onGroep: (g) => openArtist(context, g),
                   echteNaam: _echteNaam,
                   bovenBloed: ruimte,
+                  // Zoals je hem op de pc instelde voor dit soort scherm; anders kiest de kop zelf.
+                  uitsnede: lib.kopVoor(widget.artist.name, kopSchermVan(context)),
                   // Glas, alle drie hetzelfde (Saber, 11-09-2026: "alle drie neutraal glas"). Radio
                   // was paars; dat kleurverschil is er niet meer, en dat is zijn keuze. Wat Radio nog
                   // als eerste aanwijst is zijn plek vooraan en zijn pictogram.
@@ -22359,6 +22648,16 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                         label: 'Foto kiezen',
                         onPressed: () => showDialog<void>(
                             context: context, builder: (_) => ArtistArtGallery(widget.artist.name)),
+                      ),
+                    // De kop zelf uitsnijden, per soort scherm (Saber, 17-10-2026: "op pc, Mac en
+                    // iPad"). Niet op een gsm: daar is geen ruimte voor drie kaders, en wat je daar
+                    // ziet stel je op de pc in onder "Gsm".
+                    if (!isTv && !isCompact(context) && (_keuzeBytes ?? _art?.backdropBytes) != null)
+                      GlasKnop(
+                        icoon: Icons.crop_rounded,
+                        label: 'Kop aanpassen',
+                        onPressed: () => toonKopBewerker(
+                            context, widget.artist.name, (_keuzeBytes ?? _art?.backdropBytes)!),
                       ),
                     // Alleen waar er iets te hernoemen valt: een artiest uit de catalogus waarvan
                     // je niets hebt, heeft geen tags om te corrigeren.
@@ -22634,9 +22933,12 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           // hier en niet in de schil, zodat hij met deze pagina mee in- en uitschuift en nooit bij
           // een andere pagina achterblijft.
           //
-          // Niet op een tv: daar schuift de inhoud zichtbaar onder de capsule door (Saber,
-          // 16-10-2026), en matglas is op een Shield de duurste laag die er is.
-          if (ruimte > 0 && !isTv)
+          // Ook op een tv, sinds 17-10-2026. Daar stond hij eerst niet, zodat de inhoud zichtbaar onder
+          // de capsule door schoof (Saber, 16-10-2026) — maar op de Shield liep "HISTORY - PAST,
+          // PRESENT AND FUTURE" toen dwars door "Zoeken · Start · Albums" (Saber, 17-10-2026: "de
+          // menubar is te transparant, de tekst loopt door elkaar"). Op een tv is dit glas plat (geen
+          // vervaging, zie [glasZonderVervaging]), dus het kost daar één gevulde rechthoek.
+          if (ruimte > 0)
             Positioned(
               top: 0,
               left: 0,
@@ -23453,8 +23755,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         ],
         ),
       ),
-          // Zie de artiestpagina, ook voor waarom niet op een tv.
-          if (ruimte > 0 && !isTv)
+          // Zie de artiestpagina, ook voor waarom ook op een tv.
+          if (ruimte > 0)
             Positioned(
               top: 0,
               left: 0,

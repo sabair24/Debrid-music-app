@@ -41,7 +41,8 @@ void main() {
       // dat in de zwevende laag van de tv ([_tvBovenlaag]); die wordt alleen op een tv gebouwd, en
       // een pc en een telefoon krijgen de melding zonder scope in hun kolom.
       final blok = bron.substring(
-          bron.indexOf('node: _tvBalk'), bron.indexOf('const _TvStatusStrip()'));
+          bron.indexOf('node: _tvBalk'),
+          bron.indexOf('child: const _OfflineBanner()') + 'child: const _OfflineBanner()'.length);
       expect(bron, contains('if (isTv) Positioned(top: 0, left: 0, right: 0, child: _tvBovenlaag()),'),
           reason: 'op een pc en een telefoon mag hier geen extra scope bij — daar is de tab-volgorde '
               'in orde en zou dit hem veranderen');

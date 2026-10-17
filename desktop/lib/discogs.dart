@@ -1052,7 +1052,7 @@ class DiscogsService {
               t['duration'] as String? ?? '',
               [
                 for (final a in (t['artists'] as List<dynamic>? ?? const []))
-                  if (a is Map<String, dynamic>) (a['name'] as String? ?? ''),
+                  if (a is Map<String, dynamic>) zonderDiscogsNummer(a['name'] as String? ?? ''),
               ]..removeWhere((s) => s.isEmpty),
             ),
       ],
@@ -1362,21 +1362,21 @@ class DiscogsService {
     if (b == null) return null;
     return DiscogsArtist(
       id: id,
-      name: (b['name'] as String?)?.trim() ?? name,
+      name: zonderDiscogsNummer((b['name'] as String?)?.trim() ?? name),
       // Discogs marks up its profiles with [a=Name] and [l=Label] links; readable text wins here.
       profile: _plain((b['profile'] as String?)?.trim() ?? ''),
       realname: (b['realname'] as String?)?.trim() ?? '',
       groups: [
         for (final g in (b['groups'] as List<dynamic>? ?? const []))
-          if (g is Map<String, dynamic> && (g['name'] as String?) != null) g['name'] as String,
+          if (g is Map<String, dynamic> && (g['name'] as String?) != null) zonderDiscogsNummer(g['name'] as String),
       ],
       members: [
         for (final m in (b['members'] as List<dynamic>? ?? const []))
-          if (m is Map<String, dynamic> && (m['name'] as String?) != null) m['name'] as String,
+          if (m is Map<String, dynamic> && (m['name'] as String?) != null) zonderDiscogsNummer(m['name'] as String),
       ],
       aliases: [
         for (final a in (b['aliases'] as List<dynamic>? ?? const []))
-          if (a is Map<String, dynamic> && (a['name'] as String?) != null) a['name'] as String,
+          if (a is Map<String, dynamic> && (a['name'] as String?) != null) zonderDiscogsNummer(a['name'] as String),
       ],
       images: [
         for (final i in (b['images'] as List<dynamic>? ?? const []))
@@ -1394,6 +1394,11 @@ class DiscogsService {
       .replaceAll('[/url]', '')
       .trim();
 }
+
+/// Een naam zoals Discogs hem geeft, zonder het volgnummer waarmee Discogs naamgenoten uit elkaar
+/// houdt: "Nick Carter (2)" wordt "Nick Carter". Dat nummer is geen deel van de naam. Op de artiestpagina
+/// stond het in beeld (Shield, 17-10-2026), en een pagina op die naam vond geen foto en geen platen.
+String zonderDiscogsNummer(String naam) => naam.replaceFirst(RegExp(r'\s*\(\d+\)$'), '').trim();
 
 class DiscogsArtist {
   final int id;

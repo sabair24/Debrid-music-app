@@ -1569,6 +1569,32 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Hoe jij de kop van [artist] voor [scherm] hebt uitgesneden, of null (dan kiest de app zelf, op
+  /// de gezichten in de foto). Zie [KopInstelling].
+  KopInstelling? kopVoor(String artist, KopScherm scherm) =>
+      KopInstelling.lees(chosenArtistArt(artist, kopSoort(scherm)));
+
+  /// Bewaar de kop van [artist] voor [scherm]; null laat de app weer zelf kiezen.
+  ///
+  /// Op een client naar de pc, met een eigen bewerking (zie `artistKop` in `lan/server.dart`), en
+  /// meteen ook hier: [_editOnPc] haalt daarna de catalogus opnieuw op, maar tot die binnen is zou de
+  /// kop terugspringen naar wat hij was — en een knop die even het omgekeerde doet, leest als stuk.
+  Future<void> setKop(String artist, KopScherm scherm, KopInstelling? kop) async {
+    final waarde = kop?.schrijf() ?? '';
+    if (isRemote) {
+      // Een kopie: wat uit de catalogus komt, hoort niet ter plekke verbouwd te worden.
+      final vak = _remoteArtistArt[artistKey(artist)] = {...?_remoteArtistArt[artistKey(artist)]};
+      if (waarde.isEmpty) {
+        vak.remove(kopSoort(scherm));
+      } else {
+        vak[kopSoort(scherm)] = waarde;
+      }
+      notifyListeners();
+      return _editOnPc({'op': 'artistKop', 'artist': artist, 'scherm': scherm.name, 'waarde': waarde});
+    }
+    return setArtistArt(artist, kopSoort(scherm), waarde);
+  }
+
   // ── Styles ────────────────────────────────────────────────────────────────
   // A Discogs style is far finer than a genre: an album is not just "Electronic" but "House,
   // Disco, Synth-pop". That is what makes browsing by feel possible instead of by category, so

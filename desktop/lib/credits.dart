@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import 'discogs.dart' show zonderDiscogsNummer;
 import 'release_format.dart';
 import 'settings.dart';
 
@@ -109,7 +110,7 @@ class CreditsService {
           final lead = hoofdRol(role);
           if (!_interesting.hasMatch(lead)) continue;
           // "Louis Johnson (2)" — the number disambiguates on Discogs, it isn't part of the name.
-          final name = ((m['name'] ?? '') as String).replaceAll(RegExp(r'\s*\(\d+\)$'), '').trim();
+          final name = zonderDiscogsNummer((m['name'] ?? '') as String);
           if (name.isEmpty || !seen.add('$lead|${name.toLowerCase()}')) continue;
           out.add(Credit(lead, name));
         }
