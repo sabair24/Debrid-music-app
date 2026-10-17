@@ -53,7 +53,19 @@ class PlaybackProgress {
     this.updatedAt = 0,
     this.deviceId = '',
     this.deviceName = '',
+    this.shuffle = false,
+    this.repeat = 'off',
+    this.overname = '',
   });
+
+  /// Shuffle en herhalen ('off', 'all', 'one'), zodat ze meegaan als een ander toestel overneemt
+  /// (Saber, 17-10-2026).
+  final bool shuffle;
+  final String repeat;
+
+  /// Van welk toestel dit toestel net overnam ("Hier verder luisteren"): dat toestel pauzeert als
+  /// het zichzelf hier ziet staan. Leeg bij een gewone melding. Zie verder_luisteren.dart.
+  final String overname;
 
   final String trackId;
   final int positionMs;
@@ -73,6 +85,9 @@ class PlaybackProgress {
         'updatedAt': updatedAt,
         'deviceId': deviceId,
         'deviceName': deviceName,
+        'shuffle': shuffle,
+        'repeat': repeat,
+        if (overname.isNotEmpty) 'overname': overname,
       };
 
   static PlaybackProgress fromJson(Map<String, dynamic> m) => PlaybackProgress(
@@ -84,6 +99,9 @@ class PlaybackProgress {
         updatedAt: (m['updatedAt'] as int?) ?? 0,
         deviceId: (m['deviceId'] ?? '') as String,
         deviceName: (m['deviceName'] ?? '') as String,
+        shuffle: m['shuffle'] == true,
+        repeat: (m['repeat'] ?? 'off') as String,
+        overname: (m['overname'] ?? '') as String,
       );
 }
 
@@ -124,6 +142,13 @@ class LanStateStore {
   /// verzamelingen kan het in allebei staan en is er geen antwoord op de vraag wat je ervan vindt.
   final Map<String, String> ratings = {};
   PlaybackProgress progress = PlaybackProgress();
+
+  /// Per toestel hoeveel zijn klok afwijkt van die van de pc (pc min toestel), voor de speelstand.
+  final Map<String, int> _klokVerschil = {};
+
+  /// Het laatste "Speel op …" van de pc: welk toestel moet overnemen, met de stand erbij. Niet op
+  /// schijf: een verzoek van gisteren voert niemand meer uit. Zie verder_luisteren.dart.
+  Map<String, dynamic>? verzoek;
 
   int rev = 0;
   int progressRev = 0;
@@ -188,6 +213,7 @@ class LanStateStore {
         'plays': {for (final e in plays.entries) e.key: e.value.toJson()},
         'ratings': ratings,
         'progress': progress.toJson(),
+        if (verzoek != null) 'verzoek': verzoek,
       };
 
   /// Apply a batch of operations from one device. Returns the resulting revisions.
@@ -288,17 +314,38 @@ class LanStateStore {
         case 'progress':
           // Only ever moves forward. Two devices both reporting means the most recent one is
           // where you actually are; an older report arriving late must not drag you backwards.
-          if (at < progress.updatedAt) break;
+          //
+          // Op de klok van de PC, sinds 17-10-2026 ("Hier verder luisteren"): een toestel waarvan
+          // de klok achterloopt, werd anders stil genegeerd, en dan kon het nooit overnemen. Per
+          // toestel wordt onthouden hoeveel zijn klok afwijkt ([_klokVerschil], het kleinste verschil
+          // dat ooit gezien is: onderweg komt er alleen vertraging bij). Zo blijft een te late melding
+          // van hetzelfde toestel achter, en telt een scheve klok niet meer.
+          final verschil = now - at;
+          final bekend = _klokVerschil[deviceId];
+          final schatting = bekend == null || verschil < bekend ? verschil : bekend;
+          _klokVerschil[deviceId] = schatting;
+          final opPc = at + schatting;
+          if (opPc < progress.updatedAt) break;
           progress = PlaybackProgress(
             trackId: (op['trackId'] ?? '') as String,
             positionMs: (op['positionMs'] as int?) ?? 0,
             queue: [for (final t in (op['queue'] as List? ?? const [])) t.toString()],
             index: (op['index'] as int?) ?? 0,
             playing: (op['playing'] ?? false) as bool,
-            updatedAt: at,
+            updatedAt: opPc,
             deviceId: deviceId,
             deviceName: deviceName,
+            shuffle: op['shuffle'] == true,
+            repeat: (op['repeat'] ?? 'off') as String,
+            overname: (op['overname'] ?? '') as String,
           );
+          progressChanged = true;
+
+        case 'verzoek':
+          // "Speel op …": het toestel [naar] neemt over, met de stand die erbij staat.
+          final naar = (op['naar'] ?? '') as String;
+          if (naar.isEmpty) break;
+          verzoek = {...op, 'at': now, 'deviceId': deviceId, 'deviceName': deviceName}..remove('type');
           progressChanged = true;
       }
     }
@@ -312,6 +359,7 @@ class LanStateStore {
         'rev': rev,
         'progressRev': progressRev,
         if (progressChanged) 'progress': progress.toJson(),
+        if (progressChanged && verzoek != null) 'verzoek': verzoek,
         'from': deviceId,
       });
     }

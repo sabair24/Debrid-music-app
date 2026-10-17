@@ -40,16 +40,19 @@ void main() {
       // Het stuk rond de melding: van de bovenbalk tot net na de statusstrook. Sinds 16-10-2026 staat
       // dat in de zwevende laag van de tv ([_tvBovenlaag]); die wordt alleen op een tv gebouwd, en
       // een pc en een telefoon krijgen de melding zonder scope in hun kolom.
+      // Sinds 17-10-2026 staat "Hier verder luisteren" in dezelfde halte, onder de melding.
       final blok = bron.substring(
           bron.indexOf('node: _tvBalk'),
-          bron.indexOf('child: const _OfflineBanner()') + 'child: const _OfflineBanner()'.length);
+          bron.indexOf('child: Center(child: VerderBalk())') + 'child: Center(child: VerderBalk())'.length);
       expect(bron, contains('if (isTv) Positioned(top: 0, left: 0, right: 0, child: _tvBovenlaag()),'),
           reason: 'op een pc en een telefoon mag hier geen extra scope bij — daar is de tab-volgorde '
               'in orde en zou dit hem veranderen');
       expect(bron, contains('if (!isTv) const _OfflineBanner(),'),
           reason: 'buiten een tv hoort de melding gewoon in de kolom, zonder scope');
-      expect(blok, contains('child: const _OfflineBanner()'),
+      expect(blok, contains('_OfflineBanner(),'),
           reason: 'de scope hoort ÓM de meldingsbalk te zitten, anders is er niets te bereiken');
+      expect(blok.indexOf('node: _tvMelding'), lessThan(blok.indexOf('VerderBalk()')),
+          reason: 'de verderbalk hoort in dezelfde halte, anders is hij met OMHOOG niet te bereiken');
     });
   });
 

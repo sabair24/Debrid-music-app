@@ -43,6 +43,7 @@ import 'ui/duim.dart';
 import 'ui/glas.dart';
 import 'ui/menu.dart';
 import 'mediabediening.dart';
+import 'verder_luisteren.dart';
 import 'ui/knopbewegingen.dart';
 import 'ui/menu_iconen.dart';
 import 'lan/pc_radiobron.dart';
@@ -1220,6 +1221,15 @@ Future<void> main() async {
       // Not knowing the version is a worse answer than none, but not a reason to fail to start.
     }
   }());
+  // "Hier verder luisteren": verder spelen op een ander toestel, van elk toestel naar elk (Saber,
+  // 17-10-2026: "als music afspeelt op pc, en ik ga op men mac, gsm, ipad of shield, dat die hervat
+  // waar ik zat"). Zie verder_luisteren.dart.
+  final ik = mode.owner ? null : await thisDevice();
+  final verder = VerderLuisteren(mode.owner
+      ? _PcVerderBron(sharing, player)
+      : _ToestelVerderBron(library, player, ik!.id));
+  player.addListener(verder.spelerVeranderd);
+  AppLifecycleListener(onResume: () => unawaited(verder.kijkNu()));
   if (mode.owner) {
     unawaited(sharing.applySettings());
     // Waar je gebleven bent gaat naar dezelfde gedeelde staat die de iPad en de Shield lezen, zodat
@@ -1228,9 +1238,21 @@ Future<void> main() async {
     // De speeltelling stond hier ook, en is verhuisd naar `Speelstanden` hierboven: die hoort NIET
     // achter `mode.owner`, want dan telt een gekoppelde telefoon nooit iets mee.
     player.onProgress = (track, position, playing, queue, index) {
-      sharing.reportProgress(
-          track.path, position, playing, [for (final t in queue) t.path], index);
+      // Even niet na een overname (zie [VerderLuisteren.meldNu]); en de eerste melding na zelf
+      // overnemen zegt van welk toestel, zodat dat pauzeert.
+      final m = verder.meldNu();
+      if (m == null) return;
+      sharing.reportProgress(track.path, position, playing, [for (final t in queue) t.path], index,
+          shuffle: player.shuffle, herhaal: player.repeat.name, overname: m.overname ?? '');
     };
+    // De pc hoeft niet te vragen: hij houdt de stand zelf bij.
+    sharing.state.changes.listen((e) {
+      final stand = e['progress'];
+      if (stand is! Map) return;
+      unawaited(verder.opStand(stand.cast<String, dynamic>(),
+          verzoek: (e['verzoek'] as Map?)?.cast<String, dynamic>()));
+    });
+    verder.start(zelfKijken: false);
   }
 
   // Write what has been learned before the app goes away.
@@ -1296,6 +1318,7 @@ Future<void> main() async {
         // SCHIL hem tekent — achter de bovenbalk langs tot aan de schermrand. Zie [PaginaWas].
         ChangeNotifierProvider<PaginaWas>(create: (_) => PaginaWas()),
         ChangeNotifierProvider<Favorieten>.value(value: favorieten),
+        ChangeNotifierProvider<VerderLuisteren>.value(value: verder),
         // Wat je werkelijk gedraaid hebt, bereikbaar voor de schermen.
         //
         // Dit object bestond al — het wordt hierboven aan de speler gegeven — maar stond in geen
@@ -1427,6 +1450,37 @@ Future<void> main() async {
       lijsten.duwOps = duw;
       speelstanden.duwOps = duw;
       oordelen.duwOps = duw;
+      // Wat er hier speelt, naar de pc, onder het eigen id van dit toestel: zo kan elk ander toestel
+      // "Hier verder luisteren" aanbieden (Saber, 17-10-2026). Tot nu toe meldde alleen de pc.
+      player.onProgress = (track, position, playing, queue, index) {
+        final c = library.remote;
+        if (c == null) return;
+        final m = verder.meldNu();
+        if (m == null) return;
+        final id = library.gedeeldId(track.path);
+        if (id == null) return;
+        unawaited(c.ask('/api/state/ops', {
+          'ops': [
+            {
+              'type': 'progress',
+              'trackId': id,
+              'positionMs': position.inMilliseconds,
+              'queue': [for (final t in queue) library.gedeeldId(t.path) ?? ''],
+              'index': index,
+              'playing': playing,
+              'shuffle': player.shuffle,
+              'repeat': player.repeat.name,
+              if (m.overname != null) 'overname': m.overname,
+            }
+          ],
+          'deviceId': ik!.id,
+          'deviceName': deviceName(),
+        }).then((_) {}, onError: (Object _) {}));
+      };
+      session.addListener(() {
+        if (session.ready) unawaited(verder.kijkNu());
+      });
+      verder.start();
       session.addListener(() {
         if (session.ready) {
           unawaited(haalFavorieten());
@@ -2261,7 +2315,18 @@ class _HomeShellState extends State<HomeShell> {
                       return _tvSprong(e, LogicalKeyboardKey.arrowDown, TraversalDirection.down,
                           [_tvInhoud, _tvSpeler]);
                     },
-                    child: const _OfflineBanner(),
+                    child: const Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _OfflineBanner(),
+                        // "Hier verder luisteren", in de halte tussen de navigatie en de inhoud.
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 48, vertical: 4),
+                          child: Center(child: VerderBalk()),
+                        ),
+                      ],
+                    ),
                   ),
                   // Geen statusregel meer ("Covers ophalen…", "Scannen…"): Saber koos op 17-10-2026
                   // "weg op de tv". Hij duwde elke pagina een stukje omlaag zolang hij er stond, en
@@ -3270,6 +3335,20 @@ class _HomeShellState extends State<HomeShell> {
             if (zweeft)
               Positioned(top: 0, left: 0, right: 0, child: RepaintBoundary(child: _topBar())),
             if (isTv) Positioned(top: 0, left: 0, right: 0, child: _tvBovenlaag()),
+            // "Hier verder luisteren", boven de spelerbalk (Saber, 17-10-2026). Op een tv staat hij
+            // onder de capsule, in [_tvBovenlaag].
+            if (!isTv)
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 12 +
+                    (glasSpeler
+                        ? _spelerHoogte(context)
+                        : glasBalken
+                            ? kGlasBalkenHoogte + MediaQuery.paddingOf(context).bottom
+                            : 0),
+                child: const Center(child: VerderBalk()),
+              ),
           ],
         ),
       ),
@@ -9674,6 +9753,8 @@ class PlayerBar extends StatelessWidget {
                     ),
                     const _WachtrijKnop(),
                     const _SpeakerButton(),
+                    // "Speel op …": naar een ander toestel waarop de app open staat (alleen op de pc).
+                    if (!isTv) const _SpeelOpKnop(),
                   ],
                 ),
                 Row(
@@ -9709,6 +9790,64 @@ class PlayerBar extends StatelessWidget {
     );
   }
 
+}
+
+/// "Speel op …" (Saber, 17-10-2026): stuurt wat hier speelt naar een gsm, iPad, Mac of Shield waarop
+/// de app open staat, op dezelfde plek in het nummer. Alleen op de pc: hij houdt de gedeelde stand bij
+/// en weet wie er net nog keek. Zie verder_luisteren.dart.
+class _SpeelOpKnop extends StatelessWidget {
+  const _SpeelOpKnop();
+
+  @override
+  Widget build(BuildContext context) {
+    final sharing = context.read<LanSharing>();
+    final server = sharing.server;
+    final p = context.read<PlayerStore>();
+    if (server == null || p.current == null) return const SizedBox.shrink();
+    return PopupMenuButton<String>(
+      tooltip: 'Speel op …',
+      color: _panel,
+      position: PopupMenuPosition.over,
+      icon: const Icon(Icons.devices_rounded, size: 20, color: _muted),
+      itemBuilder: (_) {
+        final toestellen = server.aanwezigeToestellen();
+        if (toestellen.isEmpty) {
+          return const [
+            PopupMenuItem<String>(
+              enabled: false,
+              child: Text('Open de app op je gsm, iPad, Mac of Shield',
+                  style: TextStyle(fontSize: 13, color: _muted)),
+            ),
+          ];
+        }
+        return [
+          const PopupMenuItem<String>(
+            enabled: false,
+            height: 28,
+            child: Text('SPEEL OP', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: _muted)),
+          ),
+          for (final t in toestellen)
+            PopupMenuItem<String>(
+              value: t.id,
+              child: Row(children: [
+                const Icon(Icons.phonelink_rounded, size: 18, color: _muted),
+                const SizedBox(width: 10),
+                Text(t.naam, style: const TextStyle(fontSize: 13.5)),
+              ]),
+            ),
+        ];
+      },
+      onSelected: (id) {
+        final t = p.current;
+        if (t == null) return;
+        final rij = p.queueTracks;
+        final naam = server.aanwezigeToestellen().where((x) => x.id == id).map((x) => x.naam).firstOrNull ?? '';
+        final ok = sharing.stuurNaar(id, t.path, p.position, [for (final x in rij) x.path], p.currentIndex,
+            shuffle: p.shuffle, herhaal: p.repeat.name);
+        _srcToast(context, ok ? 'Naar $naam gestuurd — de pc pauzeert zodra het daar speelt.' : 'Dit nummer kan niet mee (het staat niet in je bibliotheek).');
+      },
+    );
+  }
 }
 
 /// Het hart naast de titel in de spelerbalk: vol als dit nummer een favoriet is, en het klopt met
@@ -13640,6 +13779,176 @@ Route<void> nuSpeeltRoute({WidgetBuilder? scherm}) => PageRouteBuilder<void>(
 /// Wat de sneltoets vraagt.
 class NaarNuSpeeltIntent extends Intent {
   const NaarNuSpeeltIntent();
+}
+
+/// "Hier verder luisteren" op de pc: hij houdt de stand zelf bij (zie verder_luisteren.dart).
+class _PcVerderBron implements VerderBron {
+  _PcVerderBron(this.sharing, this.player);
+
+  final LanSharing sharing;
+  final PlayerStore player;
+
+  @override
+  String get mijnId => sharing.mijnId;
+
+  @override
+  bool get ikSpeel => player.speeltErgens;
+
+  @override
+  Track? nummer(String id) => sharing.nummerVoorId(id);
+
+  @override
+  Future<({Map<String, dynamic>? stand, Map<String, dynamic>? verzoek})?> haal() async =>
+      (stand: sharing.state.progress.toJson(), verzoek: sharing.state.verzoek);
+
+  @override
+  Future<void> speel(List<Track> rij, int index, Duration positie,
+          {required bool spelen, required bool shuffle, required RepeatMode herhaal}) =>
+      player.neemOver(rij, index, positie, spelen: spelen, shuffle: shuffle, herhaal: herhaal);
+
+  @override
+  void pauzeer() => player.pauzeer();
+}
+
+/// "Hier verder luisteren" op een gsm, iPad, Mac of Shield: vraagt de stand aan de pc.
+class _ToestelVerderBron implements VerderBron {
+  _ToestelVerderBron(this.library, this.player, this.mijnId);
+
+  final LibraryStore library;
+  final PlayerStore player;
+
+  @override
+  final String mijnId;
+
+  @override
+  bool get ikSpeel => player.speeltErgens;
+
+  /// Welke revisie van de gedeelde staat dit toestel kent: dan stuurt de pc alleen de stand mee.
+  int? _rev;
+
+  final Map<String, Track> _nummers = {};
+  int _idsVoor = -1;
+
+  @override
+  Track? nummer(String id) {
+    final tracks = library.tracks;
+    if (_idsVoor != tracks.length) {
+      _idsVoor = tracks.length;
+      _nummers
+        ..clear()
+        ..addEntries([
+          for (final t in tracks)
+            if (library.gedeeldId(t.path) case final i?) MapEntry(i, t),
+        ]);
+    }
+    return _nummers[id];
+  }
+
+  @override
+  Future<({Map<String, dynamic>? stand, Map<String, dynamic>? verzoek})?> haal() async {
+    final c = library.remote;
+    if (c == null) return null;
+    final s = await c.speelstand(sinds: _rev, toestel: mijnId, naam: deviceName());
+    _rev = (s['rev'] as num?)?.toInt() ?? _rev;
+    return (
+      stand: (s['progress'] as Map?)?.cast<String, dynamic>(),
+      verzoek: (s['verzoek'] as Map?)?.cast<String, dynamic>(),
+    );
+  }
+
+  @override
+  Future<void> speel(List<Track> rij, int index, Duration positie,
+          {required bool spelen, required bool shuffle, required RepeatMode herhaal}) =>
+      player.neemOver(rij, index, positie, spelen: spelen, shuffle: shuffle, herhaal: herhaal);
+
+  @override
+  void pauzeer() => player.pauzeer();
+}
+
+/// De balk "Hier verder luisteren" (Saber, 17-10-2026): speelt er op een ander toestel iets, of
+/// speelde er kort geleden iets, dan biedt hij aan om hier verder te gaan. Zie verder_luisteren.dart.
+class VerderBalk extends StatelessWidget {
+  const VerderBalk({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final v = context.watch<VerderLuisteren>();
+    final a = v.aanbod;
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 260),
+      switchInCurve: Curves.easeOutCubic,
+      transitionBuilder: (kind, anim) => FadeTransition(
+        opacity: anim,
+        child: SlideTransition(
+          position: Tween(begin: const Offset(0, .35), end: Offset.zero).animate(anim),
+          child: kind,
+        ),
+      ),
+      child: a == null ? const SizedBox.shrink(key: ValueKey('verder-geen')) : _kaart(context, v, a),
+    );
+  }
+
+  Widget _kaart(BuildContext context, VerderLuisteren v, VerderAanbod a) {
+    final t = a.nummer;
+    final hoes = context.read<LibraryStore>().coverForTrack(t);
+    final waar = a.toestelNaam.isEmpty ? 'een ander toestel' : a.toestelNaam;
+    final kop = a.speelde ? 'Speelt op $waar' : 'Verder waar je was · op $waar';
+    final knop = a.speelde ? 'Hier verder luisteren' : 'Verder luisteren';
+    return ConstrainedBox(
+      key: ValueKey('verder-${a.sleutel}'),
+      constraints: const BoxConstraints(maxWidth: 600),
+      child: GlasVlak(
+        vorm: const BorderRadius.all(Radius.circular(18)),
+        kleur: _panel,
+        balk: true,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 10, 6, 10),
+          child: Row(
+            children: [
+              cover(hoes, size: 46, radius: 8),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(kop, maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: _accent2, fontSize: 11.5, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 2),
+                    Text('${t.title} — ${t.artist}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+                    Text(_fmt(startPositie(a, DateTime.now().millisecondsSinceEpoch)),
+                        style: const TextStyle(color: _muted, fontSize: 11.5)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                key: const ValueKey('verder-knop'),
+                autofocus: isTv,
+                style: FilledButton.styleFrom(backgroundColor: _accent),
+                onPressed: () => v.neemOver(),
+                icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                label: Text(knop),
+              ),
+              TvLabelled(
+                label: 'Niet nu',
+                child: IconButton(
+                  key: const ValueKey('verder-weg'),
+                  tooltip: 'Niet nu',
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                  color: _muted,
+                  onPressed: v.wijsAf,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Ctrl/Cmd+F: het zoekveld in het menu.

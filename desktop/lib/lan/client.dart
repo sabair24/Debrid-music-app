@@ -727,6 +727,22 @@ class RemoteClient {
     return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
   }
 
+  /// De speelstand van de pc, en wie wat speelt ("Hier verder luisteren"). Met [sinds] de revisie die
+  /// dit toestel kent: dan komt alleen de stand mee zolang er verder niets veranderde. [toestel] en
+  /// [naam] zeggen de pc dat dit toestel er is, voor "Speel op …".
+  Future<Map<String, dynamic>> speelstand({int? sinds, required String toestel, required String naam}) async {
+    final res = await _get('/api/state', query: {
+      if (sinds != null) 'since': '$sinds',
+      'toestel': toestel,
+      'naam': naam,
+    });
+    if (res.statusCode != 200) {
+      throw RemoteException('De pc antwoordde met ${res.statusCode}.', statusCode: res.statusCode);
+    }
+    final decoded = res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
+    return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+  }
+
   /// Ask the PC a question whose answer is a JSON object. Same shape as [edit], but the body
   /// matters — a move plan is the whole point of the call.
   Future<Map<String, dynamic>> ask(String path, Map<String, dynamic> body) async {

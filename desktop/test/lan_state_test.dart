@@ -109,15 +109,28 @@ void main() {
     expect(store.progress.positionMs, 60000);
     expect(store.progress.deviceName, 'Mac');
 
-    // A late report from the iPad about where it was a minute ago must not drag you back.
-    store.applyOps([_op('progress', {'trackId': 't1', 'positionMs': 10000, 'at': 400})],
-        deviceId: 'ipad');
-    expect(store.progress.positionMs, 60000);
-
     store.applyOps([_op('progress', {'trackId': 't1', 'positionMs': 90000, 'at': 600})],
         deviceId: 'ipad', deviceName: 'iPad');
     expect(store.progress.positionMs, 90000);
     expect(store.progress.deviceName, 'iPad');
+
+    // A late report from the iPad about where it was a moment ago must not drag you back. Sinds
+    // 17-10-2026 vergeleken op de klok van DAT toestel ("Hier verder luisteren"): de klokken van twee
+    // toestellen zeggen niets over elkaar, en een achterlopende klok kon zo nooit overnemen.
+    store.applyOps([_op('progress', {'trackId': 't1', 'positionMs': 10000, 'at': 400})],
+        deviceId: 'ipad');
+    expect(store.progress.positionMs, 90000);
+  });
+
+  test('een toestel met een scheve klok kan toch overnemen', () {
+    final nu = DateTime.now().millisecondsSinceEpoch;
+    store.applyOps([_op('progress', {'trackId': 't1', 'positionMs': 60000, 'at': nu})],
+        deviceId: 'pc', deviceName: 'pc');
+    // De gsm loopt een uur achter, en meldt daarna wat hij speelt.
+    store.applyOps([_op('progress', {'trackId': 't2', 'positionMs': 5000, 'at': nu - 3600 * 1000})],
+        deviceId: 'gsm', deviceName: 'S26');
+    expect(store.progress.trackId, 't2');
+    expect(store.progress.deviceName, 'S26');
   });
 
   test('the position has its own counter, so a playing track does not spam re-syncs', () {

@@ -1846,6 +1846,45 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _saveQueue();
   }
 
+  /// Verder luisteren waar een ander toestel was (Saber, 17-10-2026): dezelfde wachtrij in dezelfde
+  /// volgorde, op dezelfde plek in het nummer, met dezelfde shuffle en herhalen. Zie
+  /// verder_luisteren.dart.
+  ///
+  /// De volgorde komt al geschud binnen (het andere toestel meldt zijn speelvolgorde), dus hier wordt
+  /// niet opnieuw geschud: shuffle gaat alleen als STAND mee. Staat er een speaker klaar, dan gaat het
+  /// daarheen, zoals bij elke andere wachtrij.
+  Future<void> neemOver(List<Track> rij, int index, Duration positie,
+      {bool spelen = true, bool shuffle = false, RepeatMode herhaal = RepeatMode.off}) async {
+    if (rij.isEmpty) return;
+    final plek = index.clamp(0, rij.length - 1);
+    if (_bijSpeaker != null) {
+      await playQueue(rij, plek);
+      if (positie > const Duration(seconds: 1)) seek(positie);
+      return;
+    }
+    _verlaatRadio();
+    _resumable = true;
+    resumedPaused = false;
+    currentCover = null;
+    this.shuffle = shuffle;
+    repeat = herhaal;
+    _original = List.of(rij);
+    _order = List.of(rij);
+    _index = plek;
+    await _openCurrent();
+    if (positie > const Duration(seconds: 1)) {
+      // Pas als libmpv het bestand kent (de duur is er), anders valt het zoeken stil weg — zie
+      // [restore].
+      for (var i = 0; i < 40 && duration <= Duration.zero; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 75));
+      }
+      if (duration <= Duration.zero || positie < duration) await _player.seek(positie);
+    }
+    if (!spelen && playing) await _player.pause();
+    _saveQueue();
+    notifyListeners();
+  }
+
   /// Hand a queue to the speaker, and keep it here WITHOUT opening it.
   ///
   /// The queue and the cover still live locally, because every screen reads the title, the artist
