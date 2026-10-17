@@ -481,6 +481,10 @@ Future<void> main() async {
   // Waar de gezichten op de artiestfoto's staan, zodat elke foto maar één keer bekeken wordt (zie
   // `ui/kopfoto.dart`). Hier om dezelfde reden als de scanmaten hierboven.
   await bewaarFotoBlikkenIn(appFile('fotoblikken.json'));
+  // En hoe lang dat kijken duurt, in kop.log naast de andere logboeken. Buiten het beeld geschreven:
+  // WarmLog schrijft gespoeld en synchroon.
+  final kopLog = WarmLog('$logDir${Platform.pathSeparator}kop.log');
+  FotoBlikGeheugen.meld = (r) => Timer.run(() => kopLog.line(r));
   // Before the first widget: whether this is a television decides focus rings, overscan margins
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
@@ -1964,8 +1968,12 @@ class _MeeschuivendGlas extends StatelessWidget {
             // Plat alleen als het glas plat staat (tv, of de bewaker). Op een gsm was dit altijd plat.
             dicht: dicht,
             plat: glasZonderVervaging,
+            //
+            // Dicht tot 6 punten boven de onderrand en niet 14: op de artiestpagina is deze strook 75
+            // hoog en eindigt de capsule op 69, dus met 14 loste hij al op ónder de capsule en las je
+            // daar nog een regel van de biografie (Shield, 17-10-2026).
             dichtTot: isTv && c.maxHeight.isFinite && c.maxHeight > 0
-                ? ((c.maxHeight - 14) / c.maxHeight).clamp(.66, .95)
+                ? ((c.maxHeight - 6) / c.maxHeight).clamp(.66, .97)
                 : .66),
       ),
     );
@@ -7013,9 +7021,13 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          InkWell(
+          // Een Pressable en geen InkWell: op een tv gaf een InkWell als selectie alleen de focuskleur
+          // van Material, en die is op deze donkere pagina onzichtbaar. De selectie stond hier, en OK
+          // klapte de rij open, zonder dat je kon zien waar je stond (Shield, 17-10-2026).
+          Pressable(
             borderRadius: BorderRadius.circular(8),
-            onTap: () => setState(() => _showBonus = !_showBonus),
+            scaleOnFocus: false,
+            onPressed: () => setState(() => _showBonus = !_showBonus),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               child: Row(children: [
@@ -8882,12 +8894,15 @@ class _ArtiestPortretState extends State<ArtiestPortret> {
 
   Future<void> _zoek(CoverEnricher enr) async {
     final naam = widget.naam;
+    final klok = Stopwatch()..start();
+    var bron = 'TheAudioDB';
     Uint8List? b;
     try {
       b = await enr.artistThumb(naam);
     } catch (_) {/* geen net: dan Deezer of de terugval */}
     if (!mounted || naam != widget.naam) return;
     if (b == null) {
+      bron = 'Deezer';
       b = context.read<LibraryStore>().artistImages[naam];
       try {
         b ??= await enr.cachedArtist(naam);
@@ -8895,6 +8910,7 @@ class _ArtiestPortretState extends State<ArtiestPortret> {
       } catch (_) {/* idem */}
       if (!mounted || naam != widget.naam) return;
     }
+    FotoBlikGeheugen.meld?.call('portret: $naam — ${b == null ? 'niets' : bron} na ${klok.elapsedMilliseconds} ms');
     if (b != null) setState(() => _beeld = b);
   }
 
@@ -19693,6 +19709,9 @@ class _BioTextState extends State<BioText> {
   late String _tekst;
   bool _vertaald = false;
 
+  /// Op een tv: heeft deze tekst de selectie? Dan wordt "Lees meer" wit en onderstreept.
+  bool _gekozen = false;
+
   @override
   void initState() {
     super.initState();
@@ -19734,6 +19753,12 @@ class _BioTextState extends State<BioText> {
     return Align(
       alignment: Alignment.topLeft,
       child: Pressable(
+        // Op een tv als een tekstlink: geen vergroting en geen vak, wel "Lees meer" wit onderstreept
+        // (Saber, 16-10-2026: "witte tekst onderstreept, geen vak"). Vergroot liep een blok van 820
+        // breed links van het scherm af — "l is het zevende studioalbum" (Shield, 17-10-2026).
+        scaleOnFocus: !isTv,
+        ringOnFocus: !isTv,
+        onFocusChange: isTv ? (v) => setState(() => _gekozen = v) : null,
         onPressed: () => showDialog(
           context: context,
           builder: (_) => AlertDialog(
@@ -19760,9 +19785,10 @@ class _BioTextState extends State<BioText> {
               Padding(
                 padding: const EdgeInsets.only(top: 3),
                 child: Text.rich(TextSpan(children: [
-                  const TextSpan(
+                  TextSpan(
                       text: 'Lees meer',
-                      style: TextStyle(color: _accent, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                      style: tvLinkStijl(
+                          const TextStyle(color: _accent, fontSize: 12.5, fontWeight: FontWeight.w600), _gekozen)),
                   // Eerlijk zeggen dat dit niet de oorspronkelijke tekst is.
                   if (_vertaald)
                     const TextSpan(text: ' · vertaald', style: TextStyle(color: _muted, fontSize: 12)),
@@ -21981,10 +22007,22 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     _loadRelated();
     _loadArt();
     _loadWie();
+    // Op een tv vijf tellen beeldtijden in fps.log: bouwen, tekenen en "wacht op start". Het openen
+    // van een artiest kostte op de Shield na 17-10-2026 opeens 8 tot 12 beelden boven 17 ms, en
+    // zonder dit onderscheid is niet te zeggen of dat de hoofddraad is of het tekenen.
+    if (isTv) {
+      _fps.start('artiest ${widget.artist.name}');
+      _fpsKlok = Timer(const Duration(seconds: 5), _fps.stop);
+    }
   }
+
+  late final FpsProbe _fps = FpsProbe(WarmLog('$logDir${Platform.pathSeparator}fps.log'));
+  Timer? _fpsKlok;
 
   @override
   void dispose() {
+    _fpsKlok?.cancel();
+    _fps.stop();
     _rol.dispose();
     super.dispose();
   }
@@ -22649,6 +22687,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                     GlasKnop(
                       icoon: Icons.radio_rounded,
                       label: 'Radio',
+                      // Op een tv staat de selectie bij het openen hier, zoals op een albumpagina op
+                      // Afspelen. Zonder had niets de selectie: je zag nergens waar je stond, en de
+                      // eerste pijl koos dan iets willekeurigs (Shield, 17-10-2026).
+                      autofocus: isTv,
                       onPressed: () => startRadio(context, widget.artist.name),
                     ),
                     // De app raadt portret-of-achtergrond uit de vorm van een plaatje, en juist een

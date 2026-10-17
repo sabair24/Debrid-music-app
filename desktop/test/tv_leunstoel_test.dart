@@ -57,6 +57,17 @@ void main() {
       expect(vastePlekDoel(onthul: 1200, voorrand: 24, min: 0, max: 1000), 1000, reason: 'het einde ook niet');
     });
 
+    test('DE VAL: een klein stukje schuiven knipt de paginakop doormidden — dan blijft hij bovenaan', () {
+      // Start op de Shield: "Zeg wat je wil horen" 120 punten onder het begin, vaste plek 56 → 64
+      // verschoven, en "Goedemorgen" hing half onder de balk.
+      expect(vastePlekDoel(onthul: 120, voorrand: kTvBovenruimte, min: 0, max: 2000, bovenaanTot: kTvBovenaanTot), 0);
+      // Verder in de lijst gewoon de vaste plek.
+      expect(vastePlekDoel(onthul: 400, voorrand: kTvBovenruimte, min: 0, max: 2000, bovenaanTot: kTvBovenaanTot),
+          400 - kTvBovenruimte);
+      expect(kTvBovenaanTot, lessThan(2 * 60 + kTvBovenruimte - kTvBovenruimte),
+          reason: 'de derde rij van 60 hoog hoort weer naar de vaste plek te schuiven');
+    });
+
     testWidgets('in een rij staat de gekozen hoes waar de eerste in rust staat', (t) async {
       await t.pumpWidget(MaterialApp(home: Scaffold(body: Align(alignment: Alignment.topLeft, child: _rij('a')))));
       final rust = t.getTopLeft(find.byKey(const ValueKey('a0'))).dx;

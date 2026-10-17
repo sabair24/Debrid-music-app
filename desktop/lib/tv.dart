@@ -687,8 +687,28 @@ const double kTvBovenruimte = 56;
 ///
 /// [onthul] is de stand waarbij het element precies tegen de voorrand staat, [voorrand] hoeveel
 /// ruimte ervoor moet blijven; [min] en [max] zijn de grenzen van de lijst. Zuiver, voor de toets.
-double vastePlekDoel({required double onthul, required double voorrand, required double min, required double max}) =>
-    (onthul - voorrand).clamp(min, max);
+///
+/// **Blijf bovenaan als het maar een stukje is** ([bovenaanTot]). Zou de lijst voor de vaste plek
+/// maar een klein eind van het begin af hoeven, dan blijft hij aan het begin: anders knipt die
+/// verschuiving de kop van de pagina doormidden. Op Start stond "Goedemorgen" zo half onder de balk
+/// zodra de selectie op "Zeg wat je wil horen" kwam — 64 punten verschoven, en de kop is 70 hoog
+/// (Shield, 17-10-2026). De selectie staat aan het begin toch ruim in beeld.
+double vastePlekDoel({
+  required double onthul,
+  required double voorrand,
+  required double min,
+  required double max,
+  double bovenaanTot = 0,
+}) {
+  final naar = (onthul - voorrand).clamp(min, max).toDouble();
+  return naar - min <= bovenaanTot ? min : naar;
+}
+
+/// Hoe ver een staande lijst hoogstens van zijn begin af hoeft voor de vaste plek, en dan toch aan
+/// het begin blijft — zie [vastePlekDoel]. Anderhalve [kTvBovenruimte]: de kop van Start (begroeting
+/// en onderregel) en de kop van Tracks (titel, telling, knoppen) vallen erbinnen, de derde rij van een
+/// lijst niet meer — die schuift gewoon naar zijn vaste plek.
+const double kTvBovenaanTot = kTvBovenruimte * 1.5;
 
 /// Brengt wat de selectie heeft naar zijn vaste plek, in elke lijst eromheen.
 ///
@@ -720,6 +740,7 @@ void tvVastePlek(BuildContext context, {Duration duur = const Duration(milliseco
             : kTvBovenruimte + (pagina ? _onderDeBalk(context, viewport) : 0),
         min: pos.minScrollExtent,
         max: pos.maxScrollExtent,
+        bovenaanTot: liggend ? 0 : kTvBovenaanTot,
       );
       if ((naar - pos.pixels).abs() > .5) pos.animateTo(naar, duration: duur, curve: Curves.easeOutCubic);
     }

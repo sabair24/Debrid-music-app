@@ -432,6 +432,28 @@ void main() {
       expect(bron, contains('minimum: EdgeInsets.only(top: ruimte > 0 ? 0 : tvOverscan.top),'));
     });
 
+    // Shield, 17-10-2026: na het openen van een artiest had niets de selectie; op de albumpagina
+    // stond de selectie op een uitklaprij zonder zichtbaar teken; en de beschrijving vergrootte bij
+    // selectie over de schermrand.
+    test('bij openen staat de selectie op Radio', () {
+      expect(bron, contains('autofocus: isTv,\n                      onPressed: () => startRadio(context, widget.artist.name),'));
+    });
+
+    test('"Op andere uitgaves" laat zien dat hij de selectie heeft', () {
+      final i = bron.indexOf("Text('Op andere uitgaves");
+      final rij = bron.substring(i - 900, i);
+      expect(rij, contains('Pressable('));
+      expect(rij, isNot(contains('InkWell(')));
+    });
+
+    test('de beschrijving is op een tv een tekstlink: niet vergroten, geen vak', () {
+      final i = bron.indexOf('class _BioTextState');
+      final lijf = bron.substring(i, bron.indexOf('class HeroCarousel', i));
+      expect(lijf, contains('scaleOnFocus: !isTv,'));
+      expect(lijf, contains('ringOnFocus: !isTv,'));
+      expect(lijf, contains('tvLinkStijl('));
+    });
+
     test('geen bronlabels op een tv', () {
       expect(bron, contains('final merk = !isTv && r.sources.length > 1'));
     });

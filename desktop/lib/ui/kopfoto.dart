@@ -276,6 +276,9 @@ bool isHuid(int r, int g, int b) {
 abstract final class FotoBlikGeheugen {
   static String? Function(String sleutel)? lees;
   static void Function(String sleutel, String waarde)? schrijf;
+
+  /// Een regel voor kop.log: hoe lang het kijken duurde, en waar. Zie `main()`.
+  static void Function(String regel)? meld;
 }
 
 /// De sleutel van een foto in [FotoBlikGeheugen]: de lengte en een FNV-1a over alle bytes, met de
@@ -307,8 +310,11 @@ FotoBlik? bekendeBlik(Uint8List beeld) {
   if (al != null) return al;
   final lees = FotoBlikGeheugen.lees;
   if (lees == null) return null;
+  final klok = Stopwatch()..start();
   final bewaard = FotoBlik.lees(lees(_sleutels[beeld] ??= fotoSleutel(beeld)));
   if (bewaard != null) _blikken[beeld] = bewaard;
+  FotoBlikGeheugen.meld?.call('kop: ${beeld.length ~/ 1024} KB ${bewaard == null ? 'nog niet bekeken' : 'uit het geheugen'} '
+      '(sleutel ${klok.elapsedMicroseconds} µs)');
   return bewaard;
 }
 
@@ -318,6 +324,7 @@ final _blikBezig = Expando<Future<FotoBlik?>>('fotoblik-bezig');
 final _sleutels = Expando<String>('fotosleutel');
 
 Future<FotoBlik?> _bekijkVers(Uint8List beeld) async {
+  final klok = Stopwatch()..start();
   try {
     final buffer = await ui.ImmutableBuffer.fromUint8List(beeld);
     final beschrijving = await ui.ImageDescriptor.encoded(buffer);
@@ -333,9 +340,12 @@ Future<FotoBlik?> _bekijkVers(Uint8List beeld) async {
     codec.dispose();
     if (data == null || w <= 0 || h <= 0) return null;
     final rgba = data.buffer.asUint8List();
+    final gelezen = klok.elapsedMilliseconds;
     // In een eigen draad: op een Shield duurt dit een paar honderd milliseconden, en in de hoofddraad
     // zou de pagina daar net bij het openen op haperen.
     final blik = await Isolate.run(() => ontleedFoto(rgba, w, h));
+    FotoBlikGeheugen.meld?.call('kop: bekeken ${beeld.length ~/ 1024} KB als ${w}×$h — decoderen $gelezen ms, '
+        'zoeken ${klok.elapsedMilliseconds - gelezen} ms · ${blik.gezichten == null ? 'geen gezicht' : 'gezichten'}');
     _blikken[beeld] = blik;
     FotoBlikGeheugen.schrijf?.call(_sleutels[beeld] ??= fotoSleutel(beeld), blik.schrijf());
     return blik;

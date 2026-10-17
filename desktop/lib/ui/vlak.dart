@@ -300,24 +300,37 @@ Widget balkGlas(Color tint, double op, {bool dicht = false, bool plat = false, d
   // Dichter sinds 16-10-2026 (Saber: "alles is veel te transparant", met Somati als voorbeeld): .88
   // en .80, waar het .78 en .62 was. En zonder vervaging dicht zoals op de tv — dan is de vulling het
   // enige wat de alinea eronder tegenhoudt.
-  final vol = isTv || plat || glasZonderVervaging
-      ? .96
-      : dicht
-          ? .88
-          : .80;
-  final vulling = DecoratedBox(
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        // Drie stops: bijna de hele hoogte draagt de kleur, en pas het laatste stuk lost op. Recht
-        // van vol naar nul zou de knoppen zelf al halverwege hun contrast afnemen.
-        stops: [0, dichtTot, 1],
-        colors: [
-          tint.withValues(alpha: vol * op),
-          tint.withValues(alpha: vol * .82 * op),
-          tint.withValues(alpha: 0),
-        ],
+  // Op een tv helemaal dicht, en dicht tot [dichtTot] in plaats van daar al 82 %: met 96 % bovenaan en
+  // 79 % halverwege schemerde een witte regel ("2000 · 4 nummers") nog boven de capsule door (Shield,
+  // 17-10-2026, na "de menubar is te transparant").
+  final vol = isTv
+      ? 1.0
+      : plat || glasZonderVervaging
+          ? .96
+          : dicht
+              ? .88
+              : .80;
+  final midden = isTv ? vol : vol * .82;
+  // In een SizedBox.expand, en dat is de reparatie van een balk die er nooit was (Shield, 17-10-2026).
+  // Als `flexibleSpace` van een vastgezette SliverAppBar krijgt dit LOSSE randvoorwaarden (gemeten:
+  // 0 ≤ h ≤ 131), en een DecoratedBox zonder kind wordt dan 0 hoog — precies de valkuil die hieronder
+  // bij de Stack al beschreven staat. Op de pc ging het goed omdat die Stack eromheen staat; op een tv,
+  // een gsm en een iPad komt de vulling kaal terug, en daar liep de albumtekst door de balk heen.
+  final vulling = SizedBox.expand(
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          // Drie stops: bijna de hele hoogte draagt de kleur, en pas het laatste stuk lost op. Recht
+          // van vol naar nul zou de knoppen zelf al halverwege hun contrast afnemen.
+          stops: [0, dichtTot, 1],
+          colors: [
+            tint.withValues(alpha: vol * op),
+            tint.withValues(alpha: midden * op),
+            tint.withValues(alpha: 0),
+          ],
+        ),
       ),
     ),
   );

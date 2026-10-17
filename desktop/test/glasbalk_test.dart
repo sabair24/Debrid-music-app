@@ -21,7 +21,35 @@ import 'package:debridmusic/ui/vlak.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// De balk zoals de albumpagina hem gebruikt: als `flexibleSpace` van een vastgezette SliverAppBar,
+/// met de ruimte van de zwevende balk als inzet bovenaan. Daar zijn de randvoorwaarden LOS.
+Widget _inAlbumbalk(Widget glas) => MaterialApp(
+      home: MediaQuery(
+        data: const MediaQueryData(size: Size(960, 540), padding: EdgeInsets.only(top: 75)),
+        child: Scaffold(
+          body: CustomScrollView(slivers: [
+            SliverAppBar(pinned: true, flexibleSpace: glas),
+            const SliverToBoxAdapter(child: SizedBox(height: 2000)),
+          ]),
+        ),
+      ),
+    );
+
 void main() {
+  // Shield, 17-10-2026: op de albumpagina liep de beschrijving dwars door de capsule en de terugpijl,
+  // ook nadat de strook "dicht" was gezet. Hij tekende niet: 0 hoog in de losse flexibleSpace.
+  group('DE VAL: in een echte albumbalk is de strook er ook', () {
+    for (final (naam, tv, plat) in [('tv', true, false), ('zonder vervaging (gsm, iPad)', false, true)]) {
+      testWidgets(naam, (t) async {
+        setTvModeForTest(tv);
+        addTearDown(() => setTvModeForTest(false));
+        await t.pumpWidget(_inAlbumbalk(balkGlas(const Color(0xFF07080C), 1, dicht: true, plat: plat)));
+        final vulling = find.descendant(of: find.byType(SliverAppBar), matching: find.byType(DecoratedBox)).first;
+        expect(t.getSize(vulling).height, 131, reason: 'de strook hoort de hele balk te dekken, niet 0 hoog te zijn');
+      });
+    }
+  });
+
   const tint = Color(0xFF3A1D22);
 
   tearDown(() => setTvModeForTest(false));
