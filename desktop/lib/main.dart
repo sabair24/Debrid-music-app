@@ -9886,6 +9886,18 @@ class PlayerBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Op glas hangt de kleur aan de glasstand ([balkOpGlas]): zet de bewaker het glas plat, dan gaat
+    // de vervaging eronder weg en moet de balk dicht worden. Maar deze balk staat als `const` in de
+    // glasbalken en werd bij die wissel niet opnieuw gebouwd: doorschijnend zonder vervaging, en de
+    // tekst van de pagina leesbaar dwars door de titel (gsm, 18-10-2026).
+    if (opGlas) {
+      return ValueListenableBuilder<GlasStand>(
+          valueListenable: GlasKwaliteit.stand, builder: (context, _, __) => _bouw(context));
+    }
+    return _bouw(context);
+  }
+
+  Widget _bouw(BuildContext context) {
     final x = _Transport(context);
     final p = x.player;
     final t = x.track;

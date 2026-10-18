@@ -76,6 +76,18 @@ void main() {
     expect(balkOpGlas(0xFFCC2222), balkKleur(0xFFCC2222));
   });
 
+  test('de spelerbalk op glas volgt een wissel van de glasstand, ook als const in de glasbalken', () {
+    // Gsm, 18-10-2026: de bewaker zette het glas plat, de vervaging ging weg, en de minispeler bleef
+    // doorschijnend — de tekst van de albumpagina las je dwars door "Michael Jackson".
+    final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    final begin = main.indexOf('class PlayerBar extends StatelessWidget {');
+    final bouw = main.indexOf('  Widget _bouw(BuildContext context) {', begin);
+    expect(bouw, greaterThan(begin));
+    final lijf = main.substring(begin, bouw);
+    expect(lijf, contains('if (opGlas) {'));
+    expect(lijf, contains('valueListenable: GlasKwaliteit.stand, builder: (context, _, __) => _bouw(context));'));
+  });
+
   test('aangesloten: op een gsm staand de twee balken, op een breed scherm de spelerbalk, en elke lijst telt mee', () {
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(main, contains('final glasBalken = isCompact(context) && !isTv && MediaQuery.viewInsetsOf(context).bottom == 0;'));
