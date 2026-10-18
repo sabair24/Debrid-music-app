@@ -19,6 +19,7 @@ library;
 import 'package:flutter/material.dart';
 
 import 'tv.dart';
+import 'ui/glas.dart';
 import 'ui/maten.dart';
 
 /// De navigator binnen de schil. De chrome staat erbuiten en blijft dus staan.
@@ -299,6 +300,8 @@ class StapelDiepte extends NavigatorObserver {
     // hertekening tijdens het bouwen aanvragen. De wortel kan niet terug, de beginwaarde is onwaar,
     // dus die eerste meting is stil.
     kanTerug.value = n != null && n.canPop();
+    // Een andere pagina: het glas mag na een terugval opnieuw proberen (zie [GlasKwaliteit]).
+    GlasKwaliteit.paginaGewisseld();
   }
 
   @override

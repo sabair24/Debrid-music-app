@@ -508,7 +508,11 @@ Future<void> main() async {
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
   // Welk glas dit toestel tekent, en de bewaker die het terugzet als het te veel kost (ui/glas.dart).
-  GlasKwaliteit.meld = (r) => debugPrint(r);
+  // De meldingen ook in kop.log: debugPrint alleen zag je in een uitgave nergens (18-10-2026).
+  GlasKwaliteit.meld = (r) {
+    debugPrint(r);
+    Timer.run(() => kopLog.line(r));
+  };
   unawaited(GlasKwaliteit.inrichten());
   // And what this device is called, before it publishes that name anywhere. Same channel, same
   // race — and on Android the alternative is a device list in which every phone reads "localhost".
@@ -3409,6 +3413,7 @@ class _HomeShellState extends State<HomeShell> {
   /// brengt je terug naar de bovenkant van die sectie.
   void _gaNaar(int id) {
     binnenNav.currentState?.popUntil((r) => r.isFirst);
+    if (_view != id) GlasKwaliteit.paginaGewisseld();
     if (_menuIn) setState(() => _menuIn = false);
     if (_view != id) {
       final van = NavSections.items.indexWhere((s) => s.$1 == _view);
@@ -26772,6 +26777,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // het staat op pc, telefoon en tv in hetzelfde venster. Zie luidheid_keuze.dart.
                     const _LuidheidSectie(),
                     const Divider(color: _line, height: 1),
+                    const SizedBox(height: 12),
+                    // Weergave: het glas en waarom het lichter staat (Saber, 18-10-2026).
+                    const GlasRegel(),
                     const SizedBox(height: 12),
                     _field('TorBox API-sleutel', _torbox),
                     const TorrentmotorKeuze(),

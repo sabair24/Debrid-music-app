@@ -25,7 +25,12 @@ Widget _vlak() => const Directionality(
     child: GlasVlak(vorm: BorderRadius.all(Radius.circular(12)), vulling: BoxDecoration(color: Color(0x80101219))));
 
 void main() {
-  setUp(GlasKwaliteit.vergeet);
+  // Op 120 Hz, zoals de gsm: het budget is dan de ondergrens van 7 ms. Het nepscherm van flutter_test
+  // zegt 60 Hz, en dan is 9 ms per beeld gewoon op tijd.
+  setUp(() {
+    GlasKwaliteit.vergeet();
+    GlasKwaliteit.hzVoorToets = 120;
+  });
   tearDown(GlasKwaliteit.vergeet);
 
   test('het 90e percentiel', () {
@@ -50,6 +55,7 @@ void main() {
       GlasKwaliteit.opBeelden(beelden(kGlasVenster, 9000));
     }
     expect(GlasKwaliteit.stand.value, GlasStand.plat);
+    GlasKwaliteit.vergeet(); // de klok voor opnieuw proberen mag niet blijven lopen
   });
 
   testWidgets('een licht venster ertussen begint de telling opnieuw', (t) async {
@@ -76,6 +82,7 @@ void main() {
       GlasKwaliteit.opBeelden(beelden(kGlasVenster, 20000), verstreken: kGlasAanloop);
     }
     expect(GlasKwaliteit.stand.value, GlasStand.mat, reason: 'daarna wel');
+    GlasKwaliteit.vergeet(); // de klok voor opnieuw proberen mag niet blijven lopen
   });
 
   testWidgets('het verslag voor warmte.log: de stand, en één keer waarom hij zakte', (t) async {
@@ -88,6 +95,7 @@ void main() {
     final v = GlasKwaliteit.verslag();
     expect(v, startsWith('glasstand mat (vloeibaar → mat, 90e percentiel 9.0 ms'));
     expect(GlasKwaliteit.verslag(), 'glasstand mat', reason: 'de reden staat één keer in de log');
+    GlasKwaliteit.vergeet(); // de klok voor opnieuw proberen mag niet blijven lopen
   });
 
   group('dicht genoeg (Saber, 16-10-2026: "alles is veel te transparant")', () {
@@ -174,4 +182,105 @@ void main() {
           reason: '$werk: de shader is geschreven voor 3.47; op 3.41 zou hij op GLES op zijn kop staan');
     }
   });
+
+  group('per schermritme, met een weg terug (Saber, 18-10-2026)', () {
+    test('het budget: 85 % van een beeld, nooit krapper dan 7 ms', () {
+      expect(glasBudgetVoor(60).inMicroseconds, 14167, reason: 'de Shield: 16,7 ms per beeld');
+      expect(glasBudgetVoor(120).inMicroseconds, 7083, reason: 'gsm en iPad');
+      expect(glasBudgetVoor(144), kGlasBudget, reason: 'de pc: de ondergrens');
+      expect(glasBudgetVoor(0), kGlasBudget, reason: 'onbekend ritme');
+    });
+
+    testWidgets('op een scherm van 60 Hz is 12 ms per beeld op tijd', (t) async {
+      // De Shield zakte zo binnen een halve minuut naar plat, bij 10 tot 14 ms (warmte.log, 18-10).
+      await t.pumpWidget(_vlak());
+      GlasKwaliteit.stand.value = GlasStand.vloeibaar;
+      GlasKwaliteit.hzVoorToets = 60;
+      for (var i = 0; i < 2 * kGlasTeZwaar; i++) {
+        GlasKwaliteit.opBeelden(beelden(kGlasVenster, 12000));
+      }
+      expect(GlasKwaliteit.stand.value, GlasStand.vloeibaar);
+      GlasKwaliteit.hzVoorToets = 120;
+      for (var i = 0; i < kGlasTeZwaar; i++) {
+        GlasKwaliteit.opBeelden(beelden(kGlasVenster, 12000));
+      }
+      expect(GlasKwaliteit.stand.value, GlasStand.mat, reason: 'op 120 Hz is 12 ms te laat');
+      GlasKwaliteit.vergeet(); // de klok voor opnieuw proberen mag niet blijven lopen
+    });
+
+    testWidgets('een terugval staat in Instellingen, met een knop die het opnieuw probeert', (t) async {
+      GlasKwaliteit.hoogste = GlasStand.vloeibaar;
+      GlasKwaliteit.stand.value = GlasStand.vloeibaar;
+      GlasKwaliteit.hzVoorToets = 120;
+      GlasKwaliteit.klok = () => DateTime(2026, 10, 18, 10, 42);
+      await t.pumpWidget(const Directionality(
+          textDirection: TextDirection.ltr,
+          child: Column(children: [
+            GlasVlak(kleur: Color(0xFF2B3142), child: SizedBox(width: 50, height: 50)),
+            GlasRegel(),
+          ])));
+      expect(find.text('Glas: vloeibaar'), findsOneWidget);
+      expect(find.byKey(const ValueKey('glas-opnieuw')), findsNothing);
+      for (var i = 0; i < kGlasTeZwaar; i++) {
+        GlasKwaliteit.opBeelden(beelden(kGlasVenster, 9100));
+      }
+      await t.pump();
+      expect(find.text('Glas: mat — te zwaar op dit toestel (10:42, 9,1 ms per beeld)'), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('glas-opnieuw')));
+      await t.pump();
+      expect(GlasKwaliteit.stand.value, GlasStand.vloeibaar);
+      expect(find.text('Glas: vloeibaar'), findsOneWidget);
+      GlasKwaliteit.stand.value = GlasStand.mat; // zodat de toets niet met een open klok eindigt
+    });
+
+    testWidgets('vanzelf opnieuw: bij een paginawissel na de wachttijd, of na tien minuten', (t) async {
+      await t.pumpWidget(_vlak());
+      var nu = DateTime(2026, 10, 18, 10);
+      GlasKwaliteit.klok = () => nu;
+      GlasKwaliteit.hoogste = GlasStand.vloeibaar;
+      GlasKwaliteit.stand.value = GlasStand.vloeibaar;
+      GlasKwaliteit.hzVoorToets = 120;
+      void zwaar() {
+        for (var i = 0; i < kGlasTeZwaar; i++) {
+          GlasKwaliteit.opBeelden(beelden(kGlasVenster, 9000));
+        }
+      }
+
+      zwaar();
+      expect(GlasKwaliteit.stand.value, GlasStand.mat);
+      nu = nu.add(const Duration(seconds: 30));
+      GlasKwaliteit.paginaGewisseld();
+      expect(GlasKwaliteit.stand.value, GlasStand.mat, reason: 'binnen de eerste minuut niet');
+      nu = nu.add(const Duration(seconds: 31));
+      GlasKwaliteit.paginaGewisseld();
+      expect(GlasKwaliteit.stand.value, GlasStand.vloeibaar, reason: 'na een minuut, bij een andere pagina');
+
+      // Weer te zwaar: nu wacht hij twee minuten.
+      zwaar();
+      expect(GlasKwaliteit.stand.value, GlasStand.mat);
+      nu = nu.add(const Duration(seconds: 90));
+      GlasKwaliteit.paginaGewisseld();
+      expect(GlasKwaliteit.stand.value, GlasStand.mat, reason: 'de wachttijd verdubbelde');
+      nu = nu.add(const Duration(seconds: 31));
+      GlasKwaliteit.paginaGewisseld();
+      expect(GlasKwaliteit.stand.value, GlasStand.vloeibaar);
+
+      // Zonder paginawissel: na tien minuten vanzelf.
+      zwaar();
+      expect(GlasKwaliteit.stand.value, GlasStand.mat);
+      await t.pump(const Duration(minutes: 9));
+      expect(GlasKwaliteit.stand.value, GlasStand.mat);
+      await t.pump(const Duration(minutes: 1, seconds: 1));
+      expect(GlasKwaliteit.stand.value, GlasStand.vloeibaar);
+    });
+
+    test('aangesloten: paginawissels en meldingen in kop.log', () {
+      final main = File('lib/main.dart').readAsStringSync();
+      expect(main, contains('    if (_view != id) GlasKwaliteit.paginaGewisseld();'));
+      expect(main, contains('    Timer.run(() => kopLog.line(r));'));
+      expect(main, contains('                    const GlasRegel(),'));
+      expect(File('lib/navigatie.dart').readAsStringSync(), contains('    GlasKwaliteit.paginaGewisseld();'));
+    });
+  });
+
 }

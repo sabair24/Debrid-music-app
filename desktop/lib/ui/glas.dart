@@ -29,6 +29,8 @@
 /// [glasVulling] met [kGlasDekking], en [kGlasDekkingPlat] als de vervaging er niet is.
 library;
 
+import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/rendering.dart';
@@ -39,9 +41,49 @@ import '../tv.dart';
 
 enum GlasStand { plat, mat, vloeibaar }
 
-/// Hoeveel een beeld mag kosten om te tekenen (het 90e percentiel), voor het glas terugschakelt. Een
-/// scherm van 120 Hz heeft 8,3 ms per beeld; dit laat ruimte voor de rest.
+/// De ondergrens van wat een beeld mag kosten om te tekenen (het 90e percentiel), voor het glas
+/// terugschakelt. Een scherm van 120 Hz heeft 8,3 ms per beeld; dit laat ruimte voor de rest.
 const kGlasBudget = Duration(microseconds: 7000);
+
+/// Welk deel van één beeld het tekenen mag kosten (zie [glasBudgetVoor]).
+const kGlasBudgetDeel = .85;
+
+/// Het budget voor een scherm van [hz] beelden per seconde: [kGlasBudgetDeel] van één beeld, nooit
+/// krapper dan [kGlasBudget].
+///
+/// **Waarom per scherm (Saber, 18-10-2026: "per schermritme").** Het budget stond overal op 7 ms,
+/// gemaakt voor 120 Hz. De Shield heeft op 60 Hz 16,7 ms per beeld, en zakte zo binnen een halve
+/// minuut naar plat glas bij 10 tot 14 ms per beeld — ruim op tijd voor zijn eigen scherm (warmte.log,
+/// 18-10). Een onbekend ritme (0) houdt de ondergrens.
+Duration glasBudgetVoor(double hz) {
+  if (hz <= 0) return kGlasBudget;
+  final deel = (1e6 / hz * kGlasBudgetDeel).round();
+  return Duration(microseconds: math.max(kGlasBudget.inMicroseconds, deel));
+}
+
+/// Hoe lang het glas na de eerste terugval minstens wacht voor het opnieuw probeert; elke volgende
+/// terugval verdubbelt dit, tot [kGlasWachtHoogstens].
+const kGlasWachtEerst = Duration(minutes: 1);
+const kGlasWachtHoogstens = Duration(minutes: 30);
+
+/// Na hoe lang hij het hoe dan ook opnieuw probeert, ook zonder paginawissel (minstens de wachttijd).
+const kGlasProbeerNa = Duration(minutes: 10);
+
+/// De laatste keer dat het glas lichter werd: van welke stand naar welke, wanneer, en waarom.
+class GlasTerugval {
+  const GlasTerugval({required this.van, required this.naar, required this.om, required this.p90Ms, required this.vlakken});
+  final GlasStand van, naar;
+  final DateTime om;
+  final double p90Ms;
+  final int vlakken;
+
+  /// Voor Instellingen: "Glas: mat — te zwaar op dit toestel (10:42, 9,1 ms per beeld)".
+  String get zin {
+    String twee(int n) => n.toString().padLeft(2, '0');
+    final ms = p90Ms.toStringAsFixed(1).replaceAll('.', ',');
+    return 'Glas: ${naar.name} — te zwaar op dit toestel (${twee(om.hour)}:${twee(om.minute)}, $ms ms per beeld)';
+  }
+}
 
 /// Hoeveel beelden één meetvenster telt.
 const kGlasVenster = 90;
@@ -136,6 +178,56 @@ class GlasKwaliteit {
   /// De stand die de bewaker laat zakken.
   static ValueNotifier<GlasStand> get _bewaakte => isTv ? tvBalk : stand;
 
+  /// De laatste terugval, of null zolang het glas op zijn hoogste stand staat. Voor Instellingen.
+  static final terugval = ValueNotifier<GlasTerugval?>(null);
+
+  /// De hoogste stand die dit toestel kan (vloeibaar met een lens, anders mat). Daar gaat
+  /// [probeerOpnieuw] heen.
+  static GlasStand hoogste = GlasStand.mat;
+
+  /// Het schermritme voor [glasBudgetVoor]. Null = van het scherm zelf; een toets zet het vast.
+  @visibleForTesting
+  static double? hzVoorToets;
+
+  static double get _hz {
+    final vast = hzVoorToets;
+    if (vast != null) return vast;
+    final views = ui.PlatformDispatcher.instance.views;
+    return views.isEmpty ? 0 : views.first.display.refreshRate;
+  }
+
+  /// De klok, voor toetsen.
+  @visibleForTesting
+  static DateTime Function() klok = DateTime.now;
+
+  static Duration _wacht = Duration.zero;
+  static Timer? _later;
+
+  /// Probeer de hoogste stand opnieuw. Vanuit Instellingen ([handmatig]) begint de wachttijd weer
+  /// klein; vanzelf (na de wachttijd) blijft hij staan, zodat een toestel dat het echt niet trekt
+  /// niet elke minuut hapert.
+  static void probeerOpnieuw({bool handmatig = false}) {
+    _later?.cancel();
+    _later = null;
+    if (handmatig) _wacht = Duration.zero;
+    if (_bewaakte.value == hoogste) return;
+    final van = _bewaakte.value;
+    _bewaakte.value = hoogste;
+    _tijden.clear();
+    _teZwaar = 0;
+    terugval.value = null;
+    final waarom = '${van.name} → ${hoogste.name}, ${handmatig ? 'opnieuw geprobeerd' : 'na ${_wacht.inMinutes} min opnieuw'}';
+    _wissel = waarom;
+    meld?.call('glas: $waarom');
+  }
+
+  /// Een andere pagina: is de wachttijd na de laatste terugval voorbij, dan nog eens proberen.
+  static void paginaGewisseld() {
+    final t = terugval.value;
+    if (t == null || _bewaakte.value == hoogste) return;
+    if (klok().difference(t.om) >= _wacht) probeerOpnieuw();
+  }
+
   /// Waarom de stand de laatste keer veranderde, voor de log (`ui.log`).
   static void Function(String regel)? meld;
 
@@ -167,10 +259,12 @@ class GlasKwaliteit {
     if (isTv) stand.value = GlasStand.plat;
     final doel = _bewaakte;
     doel.value = GlasStand.mat;
+    hoogste = GlasStand.mat;
     if (ui.ImageFilter.isShaderFilterSupported) {
       try {
         lens = await ui.FragmentProgram.fromAsset('shaders/glas_lens.frag');
         doel.value = GlasStand.vloeibaar;
+        hoogste = GlasStand.vloeibaar;
       } catch (e) {
         meld?.call('glas: lensshader niet geladen ($e) — matglas');
       }
@@ -202,7 +296,8 @@ class GlasKwaliteit {
     if (_tijden.length < kGlasVenster) return;
     final p90 = negentigste(_tijden);
     _tijden.clear();
-    if (p90 <= kGlasBudget.inMicroseconds) {
+    final budget = glasBudgetVoor(_hz);
+    if (p90 <= budget.inMicroseconds) {
       _teZwaar = 0;
       return;
     }
@@ -212,9 +307,16 @@ class GlasKwaliteit {
     final naar = van == GlasStand.vloeibaar ? GlasStand.mat : GlasStand.plat;
     doel.value = naar;
     final waarom = '${van.name} → ${naar.name}, 90e percentiel ${(p90 / 1000).toStringAsFixed(1)} ms '
-        'per beeld met $_actief glasvlakken';
+        'per beeld met $_actief glasvlakken (budget ${(budget.inMicroseconds / 1000).toStringAsFixed(1)} ms)';
     _wissel = waarom;
     meld?.call('glas: $waarom');
+    terugval.value = GlasTerugval(van: van, naar: naar, om: klok(), p90Ms: p90 / 1000, vlakken: _actief);
+    // Elke terugval verdubbelt de wachttijd voor het opnieuw proberen.
+    _wacht = _wacht == Duration.zero
+        ? kGlasWachtEerst
+        : Duration(microseconds: math.min(_wacht.inMicroseconds * 2, kGlasWachtHoogstens.inMicroseconds));
+    _later?.cancel();
+    _later = Timer(_wacht > kGlasProbeerNa ? _wacht : kGlasProbeerNa, probeerOpnieuw);
   }
 
   /// Het 90e percentiel van [microseconden].
@@ -232,6 +334,13 @@ class GlasKwaliteit {
     _teZwaar = 0;
     _wissel = null;
     stand.value = GlasStand.mat;
+    hoogste = GlasStand.mat;
+    terugval.value = null;
+    _wacht = Duration.zero;
+    _later?.cancel();
+    _later = null;
+    hzVoorToets = null;
+    klok = DateTime.now;
   }
 }
 
@@ -314,6 +423,40 @@ class _GlasVlakState extends State<GlasVlak> {
               ],
             ),
           );
+        },
+      );
+}
+
+/// Een regel voor Instellingen: welk glas er staat, en als het lichter staat waarom, met een knop om
+/// het opnieuw te proberen (Saber, 18-10-2026: "regel in Instellingen + opnieuw proberen").
+class GlasRegel extends StatelessWidget {
+  const GlasRegel({super.key});
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: Listenable.merge([GlasKwaliteit.terugval, GlasKwaliteit.stand, GlasKwaliteit.tvBalk]),
+        builder: (context, _) {
+          final t = GlasKwaliteit.terugval.value;
+          final stand = (isTv ? GlasKwaliteit.tvBalk : GlasKwaliteit.stand).value;
+          final tekst = t?.zin ?? 'Glas: ${stand.name}';
+          final stijl = DefaultTextStyle.of(context).style;
+          return Row(children: [
+            Expanded(
+              child: Text(tekst,
+                  key: const ValueKey('glasregel'),
+                  style: stijl.copyWith(fontSize: 12.5, color: stijl.color?.withValues(alpha: .75))),
+            ),
+            if (t != null)
+              GestureDetector(
+                key: const ValueKey('glas-opnieuw'),
+                onTap: () => GlasKwaliteit.probeerOpnieuw(handmatig: true),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Text('Opnieuw proberen',
+                      style: stijl.copyWith(fontSize: 12.5, fontWeight: FontWeight.w600, decoration: TextDecoration.underline)),
+                ),
+              ),
+          ]);
         },
       );
 }
