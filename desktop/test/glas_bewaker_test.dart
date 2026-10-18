@@ -294,8 +294,15 @@ void main() {
         expect(a[i], 5, reason: '2 % van 255');
       }
       expect(GlasKorrel.pixels(), a, reason: 'een vaste zaadwaarde: overal en altijd dezelfde ruis');
-      final grijs = {for (var i = 0; i < a.length; i += 4) a[i]};
-      expect(grijs.length, greaterThan(200), reason: 'echte ruis, geen vlak');
+      // Voorvermenigvuldigd: de grijswaarde is al maal de dekking (0 tot 5). Een waarde boven de
+      // dekking tekende helder op (voorbeeld van 18-10-2026: vol ruis in plaats van 2 %).
+      final grijs = <int, int>{};
+      for (var i = 0; i < a.length; i += 4) {
+        expect(a[i], lessThanOrEqualTo(a[i + 3]), reason: 'voorvermenigvuldigd: nooit lichter dan de dekking');
+        grijs[a[i]] = (grijs[a[i]] ?? 0) + 1;
+      }
+      expect(grijs.keys.toSet(), {0, 1, 2, 3, 4, 5});
+      expect(grijs.values.every((n) => n > 300), isTrue, reason: 'echte ruis over alle waarden, geen vlak');
     });
 
     testWidgets('in elk glasvlak en elke glasknop, niet op een tv', (t) async {
