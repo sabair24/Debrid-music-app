@@ -197,6 +197,9 @@ class GlasKwaliteit {
   /// De laatste terugval, of null zolang het glas op zijn hoogste stand staat. Voor Instellingen.
   static final terugval = ValueNotifier<GlasTerugval?>(null);
 
+  /// De kleurvlekken van wat er speelt, voor het nep-glas op een tv ([GlasVlak.balk]). Zie [inrichten].
+  static final micaVlekken = ValueNotifier<List<HoesVlek>>(const []);
+
   /// Hoeveel glasvlakken er nu BOVENOP liggen (een menu of blad: [GlasVlak.bovenop]). Zolang dat er
   /// één of meer zijn, is het glas eronder dicht: nooit glas op glas (Apple's regel; Saber koos
   /// 18-10-2026 "onderste wordt dicht").
@@ -304,7 +307,16 @@ class GlasKwaliteit {
   /// Kiest de beginstand voor dit toestel en start de bewaker. Eén keer, bij het opstarten.
   static Future<void> inrichten() async {
     if (!isTv) await GlasKorrel.maak();
-    if (isTv) stand.value = GlasStand.plat;
+    if (isTv) {
+      // Nep-glas zoals Windows Mica (Saber, 18-10-2026): op de tv geen live vervaging meer, ook niet
+      // onder het menu en de spelerbalk. Gemeten op de Shield: met twee glasvlakken 17 tot 20 ms per
+      // beeld, en de bewaker zette het binnen een halve minuut plat. Het menu en de balk krijgen in
+      // plaats daarvan de stilstaande kleurvlekken van wat er speelt ([micaVlekken]).
+      stand.value = GlasStand.plat;
+      tvBalk.value = GlasStand.plat;
+      hoogste = GlasStand.plat;
+      return;
+    }
     final doel = _bewaakte;
     doel.value = GlasStand.mat;
     hoogste = GlasStand.mat;
@@ -392,6 +404,7 @@ class GlasKwaliteit {
     systeemDicht.value = false;
     _voorSysteem = null;
     bovenop.value = 0;
+    micaVlekken.value = const [];
   }
 }
 
@@ -520,6 +533,14 @@ class _GlasVlakState extends State<GlasVlak> {
                 if (stand == GlasStand.vloeibaar && widget.lens)
                   Positioned.fill(child: GlasLens(hoek: widget.vorm.topLeft.x)),
                 Positioned.fill(child: vulling),
+                // Het nep-glas van de tv: de kleurvlekken van wat er speelt, over de dichte vulling.
+                if (isTv && widget.balk)
+                  Positioned.fill(
+                    child: ValueListenableBuilder<List<HoesVlek>>(
+                      valueListenable: GlasKwaliteit.micaVlekken,
+                      builder: (_, v, __) => HoesVlekkenLaag(v, sterkte: kMicaSterkte),
+                    ),
+                  ),
                 if (widget.korrel && !isTv) const Positioned.fill(child: GlasKorrelLaag()),
                 if (rand != null) Positioned.fill(child: IgnorePointer(child: rand)),
                 _BinnenGlas(child: widget.child ?? const SizedBox.shrink()),
@@ -584,6 +605,9 @@ class HoesVlekkenLaag extends StatelessWidget {
 
 /// Hoe sterk een vlek op zijn zwaarst is.
 const double kVlekSterkte = .30;
+
+/// En in het nep-glas van een tv, waar de vulling dicht is en niets van de pagina doorschijnt.
+const double kMicaSterkte = .38;
 
 /// Tekent [HoesVlek]ken. Als achtergrond van een rij (`CustomPaint(painter: …, child: rij)`) staan ze
 /// boven de kleur van de balk en onder de knoppen; [uitloop] laat ze doorlopen tot in de binnenmarge

@@ -3,6 +3,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:debridmusic/artwork.dart' show HoesVlek;
 import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/glas.dart';
 import 'package:debridmusic/ui/vlak.dart';
@@ -402,6 +403,40 @@ void main() {
     test('aangesloten: het menu bij lang indrukken en het blad Verder liggen bovenop', () {
       expect(File('lib/ui/itemmenu.dart').readAsStringSync(), contains('          bovenop: true,'));
       expect(File('lib/main.dart').readAsStringSync(), contains('        bovenop: true,'));
+    });
+  });
+
+
+  group('nep-glas op de tv, zoals Windows Mica (Saber, 18-10-2026)', () {
+    tearDown(() => setTvModeForTest(false));
+
+    testWidgets('geen live vervaging meer, ook niet onder menu en balk; wel de vlekken van wat er speelt', (t) async {
+      setTvModeForTest(true);
+      await GlasKwaliteit.inrichten();
+      expect(GlasKwaliteit.tvBalk.value, GlasStand.plat, reason: 'de Shield haalde 17-20 ms per beeld met glas');
+      expect(GlasKwaliteit.hoogste, GlasStand.plat, reason: 'en dus ook nooit opnieuw proberen');
+      GlasKwaliteit.micaVlekken.value = const [HoesVlek(.3, .5, 0xFFCC3322, 1)];
+      await t.pumpWidget(const Directionality(
+          textDirection: TextDirection.ltr,
+          child: GlasVlak(kleur: Color(0xFF1A1D27), balk: true, child: SizedBox(width: 300, height: 56))));
+      expect(find.byType(BackdropFilter), findsNothing);
+      final laag = t.widget<HoesVlekkenLaag>(find.byType(HoesVlekkenLaag));
+      expect(laag.vlekken, hasLength(1));
+      expect(laag.sterkte, kMicaSterkte);
+    });
+
+    testWidgets('buiten de tv geen nep-glas: daar is het echte glas', (t) async {
+      GlasKwaliteit.stand.value = GlasStand.mat;
+      GlasKwaliteit.micaVlekken.value = const [HoesVlek(.3, .5, 0xFFCC3322, 1)];
+      await t.pumpWidget(const Directionality(
+          textDirection: TextDirection.ltr,
+          child: GlasVlak(kleur: Color(0xFF1A1D27), balk: true, child: SizedBox(width: 300, height: 56))));
+      expect(find.byType(HoesVlekkenLaag), findsNothing);
+      expect(find.byType(BackdropFilter), findsOneWidget);
+    });
+
+    test('aangesloten: de speler geeft zijn vlekken door op een tv', () {
+      expect(File('lib/main.dart').readAsStringSync(), contains('GlasKwaliteit.micaVlekken.value = player.hoesVlekken;'));
     });
   });
 

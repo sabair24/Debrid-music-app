@@ -841,6 +841,15 @@ Future<void> main() async {
     player.refreshCover();
     player.refreshTracks();
   });
+  // Het nep-glas van de tv kleurt mee met wat er speelt: de vlekken van de hoes onder het menu
+  // (GlasKwaliteit.micaVlekken). De spelerbalk tekent ze zelf al.
+  if (isTv) {
+    player.addListener(() {
+      if (!identical(GlasKwaliteit.micaVlekken.value, player.hoesVlekken)) {
+        GlasKwaliteit.micaVlekken.value = player.hoesVlekken;
+      }
+    });
+  }
   // **De vier draden van de streamkwaliteit.** Zie `netsoort.dart` en `lan/stroomstand.dart`.
   //
   // Alle vier ook op de pc ingehangen, en dat kost daar niets: `leesNetsoort()` antwoordt buiten
