@@ -404,7 +404,7 @@ class _Voorbeeld extends StatelessWidget {
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [Color(0x44000000), Color(0x66000000), Color(0xDB07080C), kAchtergrond, kAchtergrond],
+              colors: [paginaWaas(0x44, donker: Colors.black), paginaWaas(0x66, donker: Colors.black), paginaWaas(0xDB), kAchtergrond, kAchtergrond],
               stops: [0, .30, .58, .92, 1],
             ),
           ),
@@ -414,7 +414,7 @@ class _Voorbeeld extends StatelessWidget {
         DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [kAchtergrond, Color(0x5907080C), Color(0x0007080C)],
+              colors: [kAchtergrond, paginaWaas(0x59), paginaWaas(0x00)],
               stops: [0, .44, .74],
             ),
           ),
@@ -425,7 +425,7 @@ class _Voorbeeld extends StatelessWidget {
           left: 0,
           right: 0,
           height: balk * s,
-          child: const ColoredBox(color: Color(0x6607080C)),
+          child: ColoredBox(color: paginaWaas(0x66)),
         ),
       // De naam, ongeveer waar hij in de echte kop staat — om te zien wat hij bedekt.
       Positioned(

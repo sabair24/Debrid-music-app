@@ -367,15 +367,15 @@ class _ErrorBox extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF3A1E24),
+        color: vlakOpThema(const Color(0xFF3A1E24)),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Icon(Icons.error_outline_rounded, color: Color(0xFFFF8A9B), size: 20),
+        Icon(Icons.error_outline_rounded, color: leesbaar(const Color(0xFFFF8A9B)), size: 20),
         const SizedBox(width: 10),
         Expanded(
           child: Text(message,
-              style: const TextStyle(color: Color(0xFFFFC9D1), height: 1.4, fontSize: 13.5)),
+              style: TextStyle(color: leesbaar(const Color(0xFFFFC9D1)), height: 1.4, fontSize: 13.5)),
         ),
       ]),
     );

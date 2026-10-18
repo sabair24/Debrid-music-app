@@ -431,7 +431,8 @@ class KnopGrond extends InheritedWidget {
   final double helderheid;
 
   static double van(BuildContext context) =>
-      context.dependOnInheritedWidgetOfExactType<KnopGrond>()?.helderheid ?? kGrondDonkereKop;
+      context.dependOnInheritedWidgetOfExactType<KnopGrond>()?.helderheid ??
+      (Thema.licht ? kGrondLichteKop : kGrondDonkereKop);
 
   @override
   bool updateShouldNotify(KnopGrond oud) => oud.helderheid != helderheid;
@@ -440,6 +441,10 @@ class KnopGrond extends InheritedWidget {
 /// De helderheid onder de knoppen van een albumkop in het slechtste geval: een witte hoes onder de
 /// donkering van [HoesAchtergrond] (70 % #07080C): 0,30 + 0,70 x 0,03.
 const double kGrondDonkereKop = .321;
+
+/// Hetzelfde op licht: een witte hoes onder de waas van gebroken wit (70 % #F3EFE7): 0,30 + 0,70 x 0,94.
+/// Daar wordt de onderlaag van een glasknop dus zo dicht als hij kan ([glasOnderlaagVoor]).
+const double kGrondLichteKop = .958;
 
 /// De dekking van de donkere onderlaag onder vervaagd glas, voor een grond van [helderheid]: 45 % op een
 /// donkere grond (zoals altijd), oplopend tot 82 % boven wit.
@@ -879,9 +884,9 @@ Widget randAchterDeBalk(double hoogte, {bool naarWaas = false}) => Positioned(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                const Color(0xD9000000),
-                const Color(0xC7000000),
-                naarWaas ? const Color(0x44000000) : const Color(0x00000000),
+                paginaWaas(0xD9, donker: Colors.black),
+                paginaWaas(0xC7, donker: Colors.black),
+                paginaWaas(naarWaas ? 0x44 : 0x00, donker: Colors.black),
               ],
               stops: const [0, .55, 1],
             ),
@@ -955,7 +960,10 @@ class HoesAchtergrond extends StatefulWidget {
   static const double uitvergroting = 1.2;
 
   /// De donkering die mee oplost — zie de klasse: een witte titel moet er altijd op lezen.
-  static const Color donkering = Color(0xB307080C);
+  ///
+  /// Op licht is het een waas van gebroken wit, om dezelfde reden andersom: daar staat de titel in
+  /// donkere letters, en die moeten ook boven een zwarte hoes lezen (Saber, 18-10-2026).
+  static Color get donkering => Thema.licht ? const Color(0xB3F3EFE7) : const Color(0xB307080C);
 
   /// Het masker: tot iets over de helft het volle beeld, daarna naar niets.
   static const LinearGradient vervloeiing = LinearGradient(
@@ -985,7 +993,10 @@ class HoesAchtergrond extends StatefulWidget {
 /// te bevatten wat hij nodig heeft, pas dan uitsnijden. Een vervaging binnen een uitsnede vraagt de
 /// tekenmotor om zelf te bepalen hoeveel er buiten die uitsnede meedoet, en dat doen Skia en Impeller
 /// niet gelijk — dan krijg je donkere randen op het ene toestel en niet op het andere.
-Future<ui.Image> bakHoesAchtergrond(ui.Image hoes, {required Size vak, required double schaal}) async {
+Future<ui.Image> bakHoesAchtergrond(ui.Image hoes, {required Size vak, required double schaal, Color? donkering}) async {
+  // Bij het vragen vastgelegd en niet pas na het eerste await: wisselt het thema intussen, dan hoort
+  // dit beeld nog bij het oude, en vraagt de kop zelf een nieuw.
+  final waas = donkering ?? HoesAchtergrond.donkering;
   final w = (vak.width * schaal).ceil().clamp(1, 4096);
   final h = (vak.height * schaal).ceil().clamp(1, 4096);
   final doel = Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble());
@@ -1011,7 +1022,7 @@ Future<ui.Image> bakHoesAchtergrond(ui.Image hoes, {required Size vak, required 
     d.saveLayer(doel, Paint());
     d.drawImageRect(vervaagd, doel.shift(Offset(rand.toDouble(), rand.toDouble())), doel,
         Paint()..filterQuality = FilterQuality.low);
-    d.drawRect(doel, Paint()..color = HoesAchtergrond.donkering);
+    d.drawRect(doel, Paint()..color = waas);
     d.drawRect(doel,
         Paint()
           ..blendMode = BlendMode.dstIn
@@ -1035,6 +1046,10 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
   ui.Image? _gebakken;
   Size? _gebakkenVoor;
   Size? _gevraagdVoor;
+
+  /// Voor licht of donker gebakken: de waas erin verschilt ([HoesAchtergrond.donkering]).
+  bool? _gebakkenLicht;
+  bool? _gevraagdLicht;
 
   /// Welke bakbeurt de laatste is. Een venster dat wordt versleept vraagt er veel achter elkaar, en
   /// zonder dit landt een trage oude beurt als laatste.
@@ -1098,12 +1113,13 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
 
   void _bak(Size vak, double dpr) {
     final hoes = _hoes;
-    if (hoes == null || vak.isEmpty || vak == _gevraagdVoor) return;
+    if (hoes == null || vak.isEmpty || (vak == _gevraagdVoor && _gevraagdLicht == Thema.licht)) return;
     _gevraagdVoor = vak;
+    final licht = _gevraagdLicht = Thema.licht;
     final beurt = ++_beurt;
     final schaal = math.min(dpr, HoesAchtergrond.gebakkenBreedte / vak.width);
     final bron = hoes.image.clone();
-    bakHoesAchtergrond(bron, vak: vak, schaal: schaal).then((beeld) {
+    bakHoesAchtergrond(bron, vak: vak, schaal: schaal, donkering: HoesAchtergrond.donkering).then((beeld) {
       if (!mounted || beurt != _beurt) {
         beeld.dispose();
         return;
@@ -1112,6 +1128,7 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
         _gebakken?.dispose();
         _gebakken = beeld;
         _gebakkenVoor = vak;
+        _gebakkenLicht = licht;
       });
     }, onError: (Object _) {}).whenComplete(bron.dispose);
   }
@@ -1133,7 +1150,7 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
         width: double.infinity,
         child: LayoutBuilder(builder: (context, maat) {
           final grootte = Size(maat.maxWidth, widget.hoogte);
-          if (grootte != _gebakkenVoor) {
+          if (grootte != _gebakkenVoor || _gebakkenLicht != Thema.licht) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) _bak(grootte, dpr);
             });

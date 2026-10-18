@@ -107,6 +107,13 @@ Color get kAccent2 => Thema.licht ? const Color(0xFF00796F) : const Color(0xFF00
 /// Niet voor tekst of iconen bovenop een hoes of een paarse knop — daar blijft het wit.
 Color get kInkt => Thema.licht ? const Color(0xFF000000) : const Color(0xFFFFFFFF);
 
+/// Het felste wat er op een laag kan: wit op donker, de tekstkleur op licht.
+///
+/// Voor alles wat op donker wit was OMDAT wit daar het meest opvalt: een tekst die oplicht bij
+/// aanwijzen, de titel van een geselecteerde regel, de ronde speelknop, de knop op een grijs vlak.
+/// Op licht valt juist donker het meest op. Tekst op paars of op een hoes blijft gewoon wit.
+Color get kFel => Thema.licht ? const Color(0xFF1E1B16) : const Color(0xFFFFFFFF);
+
 /// De helderheid van een kleur volgens CIE Lab — L*, van 0 (zwart) tot 100 (wit).
 ///
 /// **Waarom L\* en niet de WCAG-verhouding.** Die laatste is gemaakt voor tekst op een vlak en zegt
@@ -143,3 +150,48 @@ double contrast(Color voor, Color achter) {
   final hoog = a > b ? a : b, laag = a > b ? b : a;
   return (hoog + .05) / (laag + .05);
 }
+
+// ── Kleuren die voor donker gekozen zijn ─────────────────────────────────────
+//
+// In de schermen staan tientallen losse kleuren voor waarschuwingen, fouten, "gelukt" en zachte
+// tekst: amber #E8913A, rood #FF6B6B, groen #6BCB8B, lichtgrijs #C7CBDA. Allemaal gekozen om op
+// zwart te lezen, en op gebroken wit haalt amber nauwelijks 2:1. Veertig lichte tegenhangers met de
+// hand kiezen is veertig kansen om er één te vergeten; deze drie regels doen het voor allemaal
+// (18-10-2026, licht thema). Op donker geven ze precies terug wat erin gaat.
+
+/// Op donker [donker], op licht [licht].
+Color perThema(Color donker, Color licht) => Thema.licht ? licht : donker;
+
+/// Tekst of een teken in een kleur die voor donker gekozen is: op donker ongewijzigd, op licht
+/// dezelfde tint zo ver donkerder dat hij 4,5:1 haalt op het donkerste lichte vlak ([kPaneelHoog]).
+Color leesbaar(Color c) {
+  if (!Thema.licht) return c;
+  return _leesbaar.putIfAbsent(c.toARGB32(), () {
+    const op = Color(0xFFE6E0D3);
+    var h = HSLColor.fromColor(c.withValues(alpha: 1));
+    while (contrast(h.toColor(), op) < 4.5 && h.lightness > .02) {
+      h = h.withLightness((h.lightness - .02).clamp(0.0, 1.0));
+    }
+    return h.toColor().withValues(alpha: c.a);
+  });
+}
+
+final _leesbaar = <int, Color>{};
+
+/// Een vlak in een kleur die voor donker gekozen is (de donkerrode grond van een foutmelding, het
+/// donkergouden randje van een hi-res-merkje): op licht dezelfde tint, heel licht. [rand]: voor een
+/// randje, dat iets donkerder moet blijven dan het vlak dat het omringt.
+Color vlakOpThema(Color c, {bool rand = false}) {
+  if (!Thema.licht) return c;
+  final h = HSLColor.fromColor(c);
+  return h.withLightness(((rand ? .80 : .94) - h.lightness * .25).clamp(0.0, 1.0)).toColor();
+}
+
+/// Een waas in de kleur van de pagina, voor de verlopen waarmee een foto in de pagina oplost: op
+/// donker zoals hij altijd was ([donker], #07080C of zwart), op licht gebroken wit met dezelfde dekking.
+Color paginaWaas(int alpha, {Color donker = const Color(0xFF07080C)}) =>
+    (Thema.licht ? kAchtergrond : donker).withAlpha(alpha);
+
+/// Hetzelfde als [paginaWaas], met de dekking als getal van 0 tot 1.
+Color paginaWaasOp(double dekking, {Color donker = const Color(0xFF07080C)}) =>
+    (Thema.licht ? kAchtergrond : donker).withValues(alpha: dekking);

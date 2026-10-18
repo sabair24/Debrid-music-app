@@ -86,13 +86,25 @@ class MenuTint {
   /// Het glas van de pil, boven en onder: wit, geen kleur.
   final Color boven, onder;
 
-  /// De enige: lichtpaars op helder glas.
+  /// Op donker: lichtpaars op helder glas.
   static const paars = MenuTint._(
     tekst: Color(0xFFB3A2FF),
     gloed: Color(0x737C5CFF),
     boven: Color(0x3DFFFFFF),
     onder: Color(0x14FFFFFF),
   );
+
+  /// Op licht: het donkere merkpaars op een witte pil, met een zachtere gloed (Saber, 18-10-2026:
+  /// "paars blijft in beide").
+  static const paarsLicht = MenuTint._(
+    tekst: Color(0xFF5B3CE0),
+    gloed: Color(0x405B3CE0),
+    boven: Color(0xFFFFFFFF),
+    onder: Color(0xEBFFFFFF),
+  );
+
+  /// Die van het thema van nu.
+  static MenuTint get nu => Thema.licht ? paarsLicht : paars;
 }
 
 /// Het glas van de pil: helder, zonder kleur. [lens]: terwijl je sleept — helderder rand en een
@@ -109,9 +121,14 @@ BoxDecoration menuPilVorm(MenuTint t, {bool lens = false}) => BoxDecoration(
           t.onder,
         ],
       ),
-      border: Border.all(color: Color.fromRGBO(255, 255, 255, lens ? .50 : .22), width: lens ? 1.3 : 1),
+      // Op licht een donker haarrandje en altijd een zachte schaduw: een witte pil in een witte capsule
+      // is anders onzichtbaar.
+      border: Border.all(
+          color: Thema.licht ? Color.fromRGBO(0, 0, 0, lens ? .16 : .08) : Color.fromRGBO(255, 255, 255, lens ? .50 : .22),
+          width: lens ? 1.3 : 1),
       boxShadow: [
-        if (lens) const BoxShadow(color: Color(0x59000000), blurRadius: 14, offset: Offset(0, 6)),
+        if (lens) BoxShadow(color: Thema.licht ? const Color(0x2E000000) : const Color(0x59000000), blurRadius: 14, offset: const Offset(0, 6)),
+        if (!lens && Thema.licht) const BoxShadow(color: Color(0x1F000000), blurRadius: 6, offset: Offset(0, 1)),
       ],
     );
 
@@ -124,15 +141,19 @@ class MenuGlas extends StatelessWidget {
   final Widget child;
   final BorderRadius vorm;
 
-  /// De kleur onder het glas.
-  static const kleur = Color(0xFF12121A);
+  /// De kleur onder het glas: bijna zwart, of op licht warm wit.
+  static Color get kleur => Thema.licht ? const Color(0xFFF7F4EE) : const Color(0xFF12121A);
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
         decoration: BoxDecoration(
           borderRadius: vorm,
-          boxShadow: const [
-            BoxShadow(color: Color(0x59000000), blurRadius: 30, offset: Offset(0, 8), blurStyle: BlurStyle.outer),
+          boxShadow: [
+            BoxShadow(
+                color: Thema.licht ? const Color(0x24000000) : const Color(0x59000000),
+                blurRadius: 30,
+                offset: const Offset(0, 8),
+                blurStyle: BlurStyle.outer),
           ],
         ),
         child: GlasVlak(vorm: vorm, kleur: kleur, lens: true, balk: true, child: child),
@@ -185,7 +206,7 @@ class MenuWoord extends StatelessWidget {
     final kleur = onderPil
         ? tint.tekst
         : aangewezen
-            ? const Color(0xFFFFFFFF)
+            ? kFel
             : kGedempt;
     // Het icoon groeit mee met de letters: op een tv zijn die 1,35 keer zo groot, en zonder dit stond
     // er een klein icoontje naast een groot woord (voorbeeld van 17-10-2026).
@@ -352,7 +373,7 @@ class ZwevendMenu extends StatefulWidget {
     required this.punten,
     required this.actief,
     required this.onKies,
-    this.tint = MenuTint.paars,
+    this.tint,
     this.maten = MenuMaten.muis,
     this.gekrompen = false,
     this.onUitklappen,
@@ -368,7 +389,8 @@ class ZwevendMenu extends StatefulWidget {
   /// Er is gekozen: met een klik, na het slepen, of na het wiel.
   final ValueChanged<MenuPunt> onKies;
 
-  final MenuTint tint;
+  /// Zonder: die van het thema ([MenuTint.nu]).
+  final MenuTint? tint;
   final MenuMaten maten;
 
   /// Ingeklapt tot de sectie waar je bent, plus een los vergrootglas.
@@ -671,7 +693,7 @@ class ZwevendMenuState extends State<ZwevendMenu> with SingleTickerProviderState
                 widthFactor: 1,
                 child: MenuWoord(
                   punt: p,
-                  tint: widget.tint,
+                  tint: (widget.tint ?? MenuTint.nu),
                   maten: widget.maten,
                   onderPil: onder,
                   aangewezen: !onder && (_aangewezen == p.sleutel || _gefocust == p.sleutel),
@@ -689,12 +711,12 @@ class ZwevendMenuState extends State<ZwevendMenu> with SingleTickerProviderState
     final onder = _onderPil;
     // Een dichte bodem onder de vergrote kopie: anders schemert het gewone woord erdoorheen en staat
     // het er twee keer, in twee maten.
-    final glas = menuPilVorm(widget.tint, lens: true);
+    final glas = menuPilVorm((widget.tint ?? MenuTint.nu), lens: true);
     return IgnorePointer(
       child: ClipRRect(
         borderRadius: BorderRadius.circular(999),
         child: Stack(fit: StackFit.expand, children: [
-          const ColoredBox(color: MenuGlas.kleur),
+          ColoredBox(color: MenuGlas.kleur),
           DecoratedBox(decoration: BoxDecoration(gradient: glas.gradient)),
           OverflowBox(
           alignment: Alignment.topLeft,
@@ -719,7 +741,7 @@ class ZwevendMenuState extends State<ZwevendMenu> with SingleTickerProviderState
                     child: Center(
                       child: MenuWoord(
                         punt: p,
-                        tint: widget.tint,
+                        tint: (widget.tint ?? MenuTint.nu),
                         maten: widget.maten,
                         onderPil: p.sleutel == onder,
                         statisch: true,
@@ -754,7 +776,7 @@ class ZwevendMenuState extends State<ZwevendMenu> with SingleTickerProviderState
           Positioned.fromRect(
             key: const ValueKey('menu-pil'),
             rect: getekend,
-            child: DecoratedBox(decoration: menuPilVorm(widget.tint, lens: lens)),
+            child: DecoratedBox(decoration: menuPilVorm((widget.tint ?? MenuTint.nu), lens: lens)),
           ),
         Row(key: _rij, mainAxisSize: MainAxisSize.min, children: [for (final p in widget.punten) _woord(p)]),
         if (lens)
@@ -802,10 +824,10 @@ class ZwevendMenuState extends State<ZwevendMenu> with SingleTickerProviderState
         child: SizedBox(
           height: widget.maten.hoogte,
           child: DecoratedBox(
-            decoration: menuPilVorm(widget.tint),
+            decoration: menuPilVorm((widget.tint ?? MenuTint.nu)),
             child: Center(
               widthFactor: 1,
-              child: MenuWoord(punt: p, tint: widget.tint, maten: widget.maten, onderPil: true),
+              child: MenuWoord(punt: p, tint: (widget.tint ?? MenuTint.nu), maten: widget.maten, onderPil: true),
             ),
           ),
         ),
@@ -874,7 +896,7 @@ class _MenuRondjeState extends State<MenuRondje> {
             child: Center(
               child: MenuIcoon(
                 soort: widget.icoon,
-                kleur: _aangewezen ? const Color(0xFFFFFFFF) : kGedempt,
+                kleur: _aangewezen ? kFel : kGedempt,
                 aangewezen: _aangewezen,
                 maat: widget.maten.icoon,
               ),

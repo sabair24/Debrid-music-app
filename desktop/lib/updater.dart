@@ -698,7 +698,7 @@ Future<void> toonUpdate(BuildContext context, Uitgave u, {Updater updater = cons
               const SizedBox(height: 12),
               Text(
                 u.grootte.isEmpty ? watErGebeurt() : 'Hij is ${u.grootte} groot. ${watErGebeurt()}',
-                style: const TextStyle(color: Color(0xFF8A90A6), fontSize: 12.5),
+                style: TextStyle(color: leesbaar(const Color(0xFF8A90A6)), fontSize: 12.5),
               ),
             ],
           ),
@@ -767,7 +767,7 @@ Future<void> _haalEnInstalleer(BuildContext context, Uitgave u, Updater updater)
             LinearProgressIndicator(value: p == 0 ? null : p),
             const SizedBox(height: 10),
             Text('${(p * 100).clamp(0, 100).toStringAsFixed(0)}%',
-                style: const TextStyle(color: Color(0xFF8A90A6), fontSize: 12.5)),
+                style: TextStyle(color: leesbaar(const Color(0xFF8A90A6)), fontSize: 12.5)),
           ],
         ),
       ),

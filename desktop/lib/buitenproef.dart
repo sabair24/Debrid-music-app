@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'lan/adreswedloop.dart' show AdresSoort, adresSoort;
 import 'lan/client_session.dart';
 import 'lan/poorten.dart';
+import 'ui/kleuren.dart';
 
 /// De eigen deur naar buiten uit de adressen van een koppeling: https, niet thuis en niet Tailscale.
 Uri? publiekeDeur(Iterable<String> adressen) {
@@ -72,9 +73,11 @@ Uri? publiekeDeur(Iterable<String> adressen) {
 
 /// De knop in de instellingen van een gekoppeld toestel.
 class BuitenproefKnop extends StatefulWidget {
-  const BuitenproefKnop({super.key, required this.session, this.gedempt = const Color(0xFF8A8F98)});
+  const BuitenproefKnop({super.key, required this.session, this.gedempt});
   final ClientSession session;
-  final Color gedempt;
+
+  /// De kleur van de uitleg; zonder: een zacht grijs dat op dit thema leest.
+  final Color? gedempt;
 
   @override
   State<BuitenproefKnop> createState() => _BuitenproefKnopState();
@@ -140,15 +143,15 @@ class _BuitenproefKnopState extends State<BuitenproefKnop> {
             ? 'Probeert je pc over mobiele data, zoals onderweg, ook als je thuis op wifi zit. Onderweg kost '
                 'luisteren ongeveer 1,4 GB per uur in 24/96, en 0,4 GB per uur in cd-kwaliteit.'
             : 'Kan alleen op een toestel met mobiele data.',
-        style: TextStyle(color: widget.gedempt, fontSize: 12, height: 1.4),
+        style: TextStyle(color: widget.gedempt ?? leesbaar(const Color(0xFF8A8F98)), fontSize: 12, height: 1.4),
       ),
       if (u != null) ...[
         const SizedBox(height: 6),
         Text(u.zin,
             style: TextStyle(
                 color: u.rood
-                    ? const Color(0xFFFF6B6B)
-                    : (u.gelukt ? const Color(0xFF6BD49A) : const Color(0xFFFFB454)),
+                    ? leesbaar(const Color(0xFFFF6B6B))
+                    : (u.gelukt ? leesbaar(const Color(0xFF6BD49A)) : leesbaar(const Color(0xFFFFB454))),
                 fontSize: 12.5,
                 height: 1.4)),
       ],

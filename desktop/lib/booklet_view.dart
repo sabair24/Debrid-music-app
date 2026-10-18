@@ -686,7 +686,7 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
                     decoration: BoxDecoration(
                       color: _panel,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: current ? _accent : Colors.white10),
+                      border: Border.all(color: current ? _accent : kInkt.withValues(alpha: .10)),
                     ),
                     padding: const EdgeInsets.all(6),
                     child: Column(

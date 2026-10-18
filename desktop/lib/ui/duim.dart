@@ -36,8 +36,8 @@ enum Duimkant { omhoog, omlaag }
 /// dat is hier niet aan de orde. Dit zijn OORDEELkleuren: ze betekenen iets, net als het amber van een
 /// mislukte download. Zusjes van [kAccent2] in dezelfde chroma, zodat ze bij de app horen in plaats van
 /// eruit te springen als de standaardkleuren van een systeem.
-const Color kHouden = Color(0xFF00D48C);
-const Color kWeg = Color(0xFFFF4E63);
+Color get kHouden => leesbaar(const Color(0xFF00D48C));
+Color get kWeg => leesbaar(const Color(0xFFFF4E63));
 
 class Duim extends StatefulWidget {
   const Duim({

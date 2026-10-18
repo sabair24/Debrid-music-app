@@ -13,6 +13,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'menu_iconen.dart';
+import 'kleuren.dart';
 
 /// Het driehoekje dat vloeiend overgaat in de twee streepjes, en terug.
 class SpeelPauzeIcoon extends StatefulWidget {
@@ -58,11 +59,12 @@ class _SpeelPauzeIcoonState extends State<SpeelPauzeIcoon> with SingleTickerProv
 /// Het hart: vol als het een favoriet is. Wordt het er een, dan klopt het twee keer en springen er
 /// kleine deeltjes uit.
 class HartIcoon extends StatefulWidget {
-  const HartIcoon({super.key, required this.aan, this.maat = 22, this.kleurAan = kHartKleur, this.kleurUit});
+  const HartIcoon({super.key, required this.aan, this.maat = 22, this.kleurAan, this.kleurUit});
 
   final bool aan;
   final double maat;
-  final Color kleurAan;
+  /// Zonder: [kHartKleur].
+  final Color? kleurAan;
   final Color? kleurUit;
 
   @override
@@ -70,7 +72,7 @@ class HartIcoon extends StatefulWidget {
 }
 
 /// Het rood van een favoriet.
-const kHartKleur = Color(0xFFFF5C8A);
+Color get kHartKleur => leesbaar(const Color(0xFFFF5C8A));
 
 class _HartIcoonState extends State<HartIcoon> with SingleTickerProviderStateMixin {
   late final AnimationController _vonk =
@@ -90,7 +92,7 @@ class _HartIcoonState extends State<HartIcoon> with SingleTickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
-    final uit = widget.kleurUit ?? IconTheme.of(context).color ?? const Color(0xFF8A8FA3);
+    final uit = widget.kleurUit ?? IconTheme.of(context).color ?? leesbaar(const Color(0xFF8A8FA3));
     return SizedBox.square(
       dimension: widget.maat,
       child: Stack(
@@ -102,14 +104,14 @@ class _HartIcoonState extends State<HartIcoon> with SingleTickerProviderStateMix
               child: AnimatedBuilder(
                 animation: _vonk,
                 builder: (_, __) => CustomPaint(
-                  painter: _Vonken(t: _vonk.value, kleur: widget.kleurAan),
+                  painter: _Vonken(t: _vonk.value, kleur: widget.kleurAan ?? kHartKleur),
                 ),
               ),
             ),
           ),
           MenuIcoon(
             soort: MenuIcoonSoort.favorieten,
-            kleur: widget.aan ? widget.kleurAan : uit,
+            kleur: widget.aan ? (widget.kleurAan ?? kHartKleur) : uit,
             gekozen: widget.aan,
             maat: widget.maat,
           ),

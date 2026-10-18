@@ -121,7 +121,7 @@ class _ToestellenLijstState extends State<ToestellenLijst> {
                     child: TextButton(
                       onPressed: () => _trekIn(g),
                       style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xFFE07A7A), textStyle: const TextStyle(fontSize: 12)),
+                          foregroundColor: leesbaar(const Color(0xFFE07A7A)), textStyle: const TextStyle(fontSize: 12)),
                       child: const Text('Intrekken'),
                     ),
                   ),

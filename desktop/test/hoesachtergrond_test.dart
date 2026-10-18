@@ -193,7 +193,7 @@ Future<ui.Image> _oudeOpbouw(WidgetTester t, ui.Image bron, Size vak) async {
                     ),
                   ),
                 ),
-                const ColoredBox(color: HoesAchtergrond.donkering),
+                ColoredBox(color: HoesAchtergrond.donkering),
               ],
             ),
           ),

@@ -429,8 +429,8 @@ class _OverBlokState extends State<OverBlok> with SingleTickerProviderStateMixin
   }
 }
 
-const TextStyle _bioStijl =
-    TextStyle(fontSize: 13.5, height: 1.68, color: Color(0xFFC7CBDA));
+TextStyle get _bioStijl =>
+    TextStyle(fontSize: 13.5, height: 1.68, color: leesbaar(const Color(0xFFC7CBDA)));
 
 /// Tekst met LUCHT tussen de alinea's.
 ///
@@ -565,7 +565,7 @@ class _JaarLint extends StatelessWidget {
                     p.label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 11, color: aan ? kAccent : const Color(0xFF6C7387)),
+                    style: TextStyle(fontSize: 11, color: aan ? kAccent : leesbaar(const Color(0xFF6C7387))),
                   ),
                   const SizedBox(height: 6),
                   // Het spoor loopt door onder alle blokjes; alleen het gekozen punt heeft een stip.

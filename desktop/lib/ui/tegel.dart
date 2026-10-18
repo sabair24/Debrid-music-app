@@ -30,6 +30,7 @@ import 'package:flutter/material.dart';
 
 import '../tv.dart';
 import 'draaihoes.dart';
+import 'kleuren.dart';
 import 'maten.dart';
 import 'typografie.dart';
 
@@ -558,7 +559,7 @@ class _AlbumTegelState extends State<AlbumTegel> {
                   widget.titel,
                   maxLines: kTegelTitelRegels,
                   overflow: TextOverflow.ellipsis,
-                  style: _aan ? kTegelTitel.copyWith(color: Colors.white) : kTegelTitel,
+                  style: _aan ? kTegelTitel.copyWith(color: kFel) : kTegelTitel,
                 ),
               ),
               if (widget.ondertitelWidget != null)
