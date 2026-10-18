@@ -182,6 +182,7 @@ import 'ui/speelvlak.dart';
 import 'ui/stijl.dart';
 import 'ui/tegel.dart';
 import 'ui/getekende_schijf.dart';
+import 'ui/glasproef.dart';
 import 'ui/kantel_hoes.dart';
 import 'ui/thema.dart';
 import 'ui/wachtrij_eiland.dart';
@@ -513,6 +514,11 @@ Future<void> main() async {
   // Licht of donker, vóór het eerste beeld: anders flitst een lichte app eerst donker (ui/thema.dart).
   ThemaStand.meld = (r) => Timer.run(() => kopLog.line(r));
   ThemaStand.laad();
+  // Het oordeel van de glasproef (ui/glasproef.dart) ook in kop.log, en in logcat via debugPrint.
+  Glasproef.meld = (r) {
+    debugPrint(r);
+    Timer.run(() => kopLog.line(r));
+  };
   // Before the first widget: whether this is a television decides focus rings, overscan margins
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
@@ -26809,6 +26815,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // Weergave: licht of donker, het glas en waarom het lichter staat (Saber, 18-10-2026).
                     const ThemaKeuzeRegel(),
                     const GlasRegel(),
+                    // Alle effecten tegelijk, met een meting (Saber, 18-10-2026: "proefpagina").
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        key: const ValueKey('glasproef-knop'),
+                        icon: const Icon(Icons.speed_rounded, size: 18),
+                        label: const Text('Glasproef'),
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                            builder: (_) => Glasproef(hoes: context.read<PlayerStore>().currentCover))),
+                      ),
+                    ),
                     const SizedBox(height: 12),
                     _field('TorBox API-sleutel', _torbox),
                     const TorrentmotorKeuze(),
