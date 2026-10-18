@@ -6,6 +6,7 @@ import 'package:debridmusic/ui/glas.dart' show kVlekLicht;
 import 'package:debridmusic/ui/kleuren.dart';
 import 'package:debridmusic/ui/maten.dart';
 import 'package:debridmusic/ui/menu.dart';
+import 'package:debridmusic/ui/tegel.dart' show kTegelTitel, kTegelOnder;
 import 'package:debridmusic/ui/vlak.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -114,6 +115,36 @@ void main() {
     expect(kVlekLicht, lessThan(.5));
     expect(File('lib/ui/getekende_schijf.dart').readAsStringSync(), isNot(contains('BlendMode.softLight')),
         reason: 'een menging die de draaiende schijf eronder terugleest, kost elk beeld een schermkopie');
+  });
+
+
+  test('de tegeltitel volgt een wissel (gsm, 18-10-2026: titels lichtgrijs op wit na omschakelen)', () {
+    Thema.licht = false;
+    final donker = kTegelTitel.color;
+    Thema.licht = true;
+    expect(kTegelTitel.color, isNot(donker));
+    expect(kTegelTitel.color, kTekst);
+    expect(kTegelOnder.color, kGedempt);
+  });
+
+  test('geen vaste waarde die een kleur van het thema vasthoudt', () {
+    // Een `final` bovenaan een bestand wordt één keer uitgerekend: met de kleur van dat moment. Na een
+    // wissel blijft hij dan de oude kleur houden (kTegelTitel deed dat).
+    final namen = RegExp(r'\b(kTekst|kGedempt|kUitgezet|kAccent2?|kPaneel(Hoog)?|kBovenop|kAchtergrond|kVerzonken|'
+        r'kLijn(Zacht)?|kInkt|kFel|kKop(Groot|Klein)?|kTekst(Bij|Klein|Normaal|Basis)|kLabel|kOpschrift|kDisplay(Klein)?|'
+        r'_bg|_panel2?|_line|_text|_muted|_accent2?|leesbaar|vlakOpThema|paginaWaas(Op)?)\b');
+    final fout = <String>[];
+    for (final f in Directory('lib').listSync(recursive: true).whereType<File>()) {
+      final pad = f.path.replaceAll(r'\', '/');
+      if (!pad.endsWith('.dart') || pad.endsWith('ui/kleuren.dart')) continue;
+      final regels = f.readAsLinesSync();
+      for (var i = 0; i < regels.length; i++) {
+        final r = regels[i];
+        if (!RegExp(r'^(final|  static final|late final) ').hasMatch(r)) continue;
+        if (namen.hasMatch(r)) fout.add('$pad:${i + 1}: ${r.trim()}');
+      }
+    }
+    expect(fout, isEmpty);
   });
 
 }

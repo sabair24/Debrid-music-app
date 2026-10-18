@@ -43,10 +43,10 @@ const double kTegelHoes = 140;
 /// Uit `ui/typografie.dart` en niet als eigen getal: dit is precies waar de 24 verschillende
 /// tekstgroottes vandaan kwamen — elke widget die zijn eigen maat verzon omdat er niets was om naar
 /// te wijzen.
-final kTegelTitel = kTekstNormaal.copyWith(height: _regel);
+TextStyle get kTegelTitel => kTekstNormaal.copyWith(height: _regel);
 
 /// Wat onder de titel staat: de artiest.
-final kTegelOnder = kTekstKlein.copyWith(height: _regel);
+TextStyle get kTegelOnder => kTekstKlein.copyWith(height: _regel);
 
 /// De regelhoogte waarmee [hoogteVanTegelrij] rekent, en die de tegel zelf ook aanhoudt.
 const double _regel = 1.35;
