@@ -44,7 +44,7 @@ jobs:
           # Dat wijst onder Dart, naar de framescheduling van de embedder.
           #
           # Een versie die op twee andere platforms al bouwt is de goedkoopste toets die er is.
-          flutter-version: '3.41.9'
+          flutter-version: '3.47.7'
           channel: 'stable'
           cache: true
 

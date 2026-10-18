@@ -63,11 +63,11 @@ class CastReceiver {
         case '/ping':
           await _json(req, {'app': 'debridmusic', 'ready': true, 'name': deviceName()});
         case '/play':
-          if (req.method != 'POST') return _notFound(req);
+          if (req.method != 'POST') return await _notFound(req);
           final body = await utf8.decoder.bind(req).join();
           final decoded = jsonDecode(body);
           if (decoded is! Map<String, dynamic>) {
-            return _json(req, {'error': 'empty request'}, status: HttpStatus.badRequest);
+            return await _json(req, {'error': 'empty request'}, status: HttpStatus.badRequest);
           }
           final ruw = [for (final u in (decoded['streamUrls'] as List? ?? const [])) '$u'];
           // Gelijk volume: de opgave per adres, parallel aan streamUrls — gekoppeld VÓÓR het
@@ -83,7 +83,7 @@ class CastReceiver {
           });
           final urls = ruw..removeWhere((u) => u.isEmpty);
           if (urls.isEmpty) {
-            return _json(req, {'error': 'empty request'}, status: HttpStatus.badRequest);
+            return await _json(req, {'error': 'empty request'}, status: HttpStatus.badRequest);
           }
 
           // Answered BEFORE playing. Starting playback pulls the first bytes over the network, and
@@ -111,7 +111,7 @@ class CastReceiver {
           ];
           onPlay(tracks, index);
         case '/stop':
-          if (req.method != 'POST') return _notFound(req);
+          if (req.method != 'POST') return await _notFound(req);
           await _json(req, {'ok': true});
           onStop();
         default:

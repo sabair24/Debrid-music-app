@@ -3937,13 +3937,11 @@ class _HomeShellState extends State<HomeShell> {
 /// GETAL verandert, en dan alleen dit hoekje. Een download van twintig nummers kost zo twintig
 /// hertekeningen van een pilletje in plaats van duizenden van het hele scherm.
 class _DownloadBadge extends StatelessWidget {
-  const _DownloadBadge({
-    this.horizontaal = 8,
-    this.verticaal = 3,
-    this.tekstmaat = 11.5,
-    this.ronding = 10,
-    this.marge = EdgeInsets.zero,
-  });
+  const _DownloadBadge({this.marge = EdgeInsets.zero})
+      : horizontaal = 8,
+        verticaal = 3,
+        tekstmaat = 11.5,
+        ronding = 10;
 
   final double horizontaal;
   final double verticaal;
@@ -3955,7 +3953,12 @@ class _DownloadBadge extends StatelessWidget {
   final EdgeInsets marge;
 
   /// De maat zoals hij in de la staat, naast "Downloads".
-  const _DownloadBadge.la() : this(horizontaal: 7, verticaal: 2, tekstmaat: 11, ronding: 9);
+  const _DownloadBadge.la()
+      : horizontaal = 7,
+        verticaal = 2,
+        tekstmaat = 11,
+        ronding = 9,
+        marge = EdgeInsets.zero;
 
   @override
   Widget build(BuildContext context) {

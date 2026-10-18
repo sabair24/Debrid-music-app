@@ -162,4 +162,16 @@ void main() {
         reason: 'een andere volgorde geeft in Flutter 3.41.9 geen fout, alleen een leeg vlak');
     expect(File('pubspec.yaml').readAsStringSync(), contains('- shaders/glas_lens.frag'));
   });
+
+  test('geen eigen y-omkering op GLES: sinds Flutter 3.47 doet de engine dat zelf', () {
+    // flutter#186554: een offscreen-pass keert op GLES de y om in de vertex-shader. Kwam de oude
+    // omkering terug, dan stond de lens op Windows (ANGLE) en oudere Androids op zijn kop.
+    final frag = File('shaders/glas_lens.frag').readAsStringSync();
+    expect(frag, isNot(contains('uv.y = 1.0 - uv.y;')));
+    expect(frag, isNot(contains('#ifdef IMPELLER_TARGET_OPENGLES')));
+    for (final werk in ['build-release.yml', 'windows_build.yml', 'apple_build.yml']) {
+      expect(File('../.github/workflows/$werk').readAsStringSync(), contains("flutter-version: '3.47.7'"),
+          reason: '$werk: de shader is geschreven voor 3.47; op 3.41 zou hij op GLES op zijn kop staan');
+    }
+  });
 }
