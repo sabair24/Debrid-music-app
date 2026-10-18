@@ -396,54 +396,58 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
             // Gespiegeld, zodat hij na een halve slag leesbaar staat.
             child: Transform(alignment: Alignment.center, transform: Matrix4.rotationY(math.pi), child: widget.achter),
           );
+    // **Altijd dezelfde vorm**, in rust en tijdens het draaien. Eerst gaf dit in rust de kant zelf terug
+    // en tijdens het draaien een Stack met de kant erin: dan verhuist de hoes bij elk begin en eind van
+    // een draai naar een andere plek in de boom, en Flutter gooit hem dan weg en bouwt hem opnieuw — met
+    // zijn Hero, zijn beeld en alles wat eronder hing (gsm 18-10-2026: "de hoes flipt niet om"). Nu
+    // staan voor- en achterkant er allebei, met een sleutel, en wisselt alleen welke zichtbaar is.
     return AnimatedBuilder(
       animation: Listenable.merge([_draai, _wiebel]),
       builder: (context, _) {
         final t = _draai.value;
         final w = _wiebel.isAnimating ? wiebelHoek(_wiebel.value) : 0.0;
         final rust = t == 0 && w == 0;
-        if (rust) return voor;
-        final kant = (t < .5 || achter == null) ? voor : achter;
-        // Een wiebel blijft wat hij was: een tikje heen en weer, zonder dikte of veeg.
-        // In rust (voor- of achterkant) alleen de kant: dikte, schaduw en veeg horen bij het draaien. Op
-        // de achterkant bleven de randen anders als twee donkere strepen naast een cd-achterkant staan
-        // die breder is dan hoog (Saber, gsm, 18-10-2026).
-        if (t <= 0 || t >= 1) {
-          return Transform(alignment: Alignment.center, transform: draaiMatrix(t)..rotateY(w), child: kant);
-        }
-        // Omdraaien: de schaduw eronder wordt smaller naarmate de hoes op zijn kant staat, de rand
-        // (dikte) is te zien als hij schuin staat, en er gaat één keer een glansveeg over.
+        final achterOp = achter != null && t >= .5;
+        // Dikte, schaduw en veeg alleen tijdens het omdraaien. Een wiebel blijft wat hij was, en een
+        // achterkant in rust krijgt geen randen (die bleven anders als twee strepen naast een
+        // cd-achterkant staan die breder is dan hoog, gsm 18-10-2026).
+        final draait = t > 0 && t < 1;
         final dwars = math.cos(math.pi * t).abs();
         return Stack(clipBehavior: Clip.none, fit: StackFit.passthrough, children: [
-          Positioned.fill(
-            child: IgnorePointer(
-              child: Transform.scale(
-                scaleX: math.max(dwars, .08),
-                child: const DecoratedBox(
-                  key: ValueKey('draai-schaduw'),
-                  decoration: BoxDecoration(boxShadow: [
-                    BoxShadow(color: Color(0x59000000), blurRadius: 18, offset: Offset(0, 10)),
-                  ]),
+          if (draait)
+            Positioned.fill(
+              key: const ValueKey('draai-schaduw-laag'),
+              child: IgnorePointer(
+                child: Transform.scale(
+                  scaleX: math.max(dwars, .08),
+                  child: const DecoratedBox(
+                    key: ValueKey('draai-schaduw'),
+                    decoration: BoxDecoration(boxShadow: [
+                      BoxShadow(color: Color(0x59000000), blurRadius: 18, offset: Offset(0, 10)),
+                    ]),
+                  ),
                 ),
               ),
             ),
-          ),
           // Beide randen vóór de hoes getekend: de rand die van je af staat, valt dan achter de hoes.
-          for (final k in const [-1, 1])
-            Positioned.fill(
-              child: IgnorePointer(
-                child: LayoutBuilder(
-                  builder: (_, c) => Transform(
-                    alignment: Alignment.center,
-                    transform: randMatrix(t, c.maxWidth, k),
-                    child: Center(
-                      child: SizedBox(
-                        key: ValueKey('draai-rand-$k'),
-                        width: c.maxWidth * kHoesDikte,
-                        height: c.maxHeight,
-                        child: const DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(colors: [Color(0xFF2A2B30), Color(0xFF4A4C54), Color(0xFF2A2B30)]),
+          if (draait)
+            for (final k in const [-1, 1])
+              Positioned.fill(
+                key: ValueKey('draai-rand-laag-$k'),
+                child: IgnorePointer(
+                  child: LayoutBuilder(
+                    builder: (_, c) => Transform(
+                      alignment: Alignment.center,
+                      transform: randMatrix(t, c.maxWidth, k),
+                      child: Center(
+                        child: SizedBox(
+                          key: ValueKey('draai-rand-$k'),
+                          width: c.maxWidth * kHoesDikte,
+                          height: c.maxHeight,
+                          child: const DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(colors: [Color(0xFF2A2B30), Color(0xFF4A4C54), Color(0xFF2A2B30)]),
+                            ),
                           ),
                         ),
                       ),
@@ -451,17 +455,21 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
                   ),
                 ),
               ),
-            ),
           Transform(
+            key: const ValueKey('draai-kant'),
             alignment: Alignment.center,
-            transform: draaiMatrix(t)..rotateY(w),
+            // In rust de eenheid: een rechte hoes, niets te verrekenen.
+            transform: rust ? Matrix4.identity() : (draaiMatrix(t)..rotateY(w)),
             child: Stack(fit: StackFit.passthrough, children: [
-              kant,
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: CustomPaint(key: const ValueKey('draai-veeg'), painter: _Veeg(t)),
+              Offstage(key: const ValueKey('draai-voor'), offstage: achterOp, child: voor),
+              if (achter != null) Offstage(key: const ValueKey('draai-achter'), offstage: !achterOp, child: achter),
+              if (draait)
+                Positioned.fill(
+                  key: const ValueKey('draai-veeg-laag'),
+                  child: IgnorePointer(
+                    child: CustomPaint(key: const ValueKey('draai-veeg'), painter: _Veeg(t)),
+                  ),
                 ),
-              ),
             ]),
           ),
         ]);

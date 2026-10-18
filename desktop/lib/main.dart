@@ -27995,10 +27995,19 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
         children: [
           // De spiegeling onder de hoes, buiten de maat van het blok: hij neemt geen ruimte in en
           // ligt onder wat eronder staat. Alleen zolang de voorkant voor staat.
+          //
+          // Elke laag hier met een sleutel. Zonder schoof alles één plek op zodra de spiegeling bij het
+          // omdraaien verdween, en dan werd de hoes zelf (met zijn draai) weggegooid en opnieuw
+          // gebouwd: "de hoes flipt niet om" (gsm, 18-10-2026).
           if (widget.spiegel && front != null && _voorInRust)
-            Positioned(left: 0, top: s + kSpiegelAfstand, child: HoesSpiegel(beeld: front, maat: s)),
+            Positioned(
+                key: const ValueKey('albumart-spiegel'),
+                left: 0,
+                top: s + kSpiegelAfstand,
+                child: HoesSpiegel(beeld: front, maat: s)),
           // Behind the sleeve, and drawn first so it stays there.
           Positioned(
+            key: const ValueKey('albumart-schijf'),
             left: 0,
             top: s * .04,
             // Weg zolang de achterkant voor staat, en tot de hoes helemaal TERUG is: anders zie je
@@ -28041,7 +28050,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           ),
           // Never rebuilt: it is outside the builder entirely, and it never changes while a record
           // plays.
-          Positioned(left: 0, top: 0, child: kaartGekanteld),
+          Positioned(key: const ValueKey('albumart-hoes'), left: 0, top: 0, child: kaartGekanteld),
         ],
       ),
     );

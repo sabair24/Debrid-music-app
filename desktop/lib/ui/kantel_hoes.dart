@@ -222,14 +222,17 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
       child: kind,
       builder: (context, kind) {
         final o = _stand;
-        // In rust: precies de hoes, zonder iets erbij.
-        if (o.distance < .002) return kind!;
+        // In rust een rechte transform en geen glans — maar altijd DEZELFDE vorm: wisselde die tussen
+        // "kaal" en "Transform met Stack", dan werd de hoes eronder (met zijn draai, zijn Hero en zijn
+        // beeld) bij elke beweging van de gsm weggegooid en opnieuw gebouwd (18-10-2026).
+        final rust = o.distance < .002;
         return Transform(
           alignment: Alignment.center,
-          transform: kantelMatrix(o),
+          transform: rust ? Matrix4.identity() : kantelMatrix(o),
           child: Stack(fit: StackFit.passthrough, children: [
             kind!,
-            Positioned.fill(
+            if (!rust)
+              Positioned.fill(
               child: IgnorePointer(
                 child: ClipRRect(
                   borderRadius: widget.vorm,
