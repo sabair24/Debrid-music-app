@@ -522,9 +522,6 @@ Future<void> main() async {
   // WarmLog schrijft gespoeld en synchroon.
   final kopLog = WarmLog('$logDir${Platform.pathSeparator}kop.log');
   FotoBlikGeheugen.meld = (r) => Timer.run(() => kopLog.line(r));
-  // Licht of donker, vóór het eerste beeld: anders flitst een lichte app eerst donker (ui/thema.dart).
-  ThemaStand.meld = (r) => Timer.run(() => kopLog.line(r));
-  ThemaStand.laad();
   // Het oordeel van de glasproef (ui/glasproef.dart) ook in kop.log, en in logcat via debugPrint.
   Glasproef.meld = (r) {
     debugPrint(r);
@@ -533,6 +530,10 @@ Future<void> main() async {
   // Before the first widget: whether this is a television decides focus rings, overscan margins
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
+  // Licht of donker, vóór het eerste beeld: anders flitst een lichte app eerst donker (ui/thema.dart).
+  // Na initTvMode: op een tv is "volgens systeem" donker.
+  ThemaStand.meld = (r) => Timer.run(() => kopLog.line(r));
+  ThemaStand.laad();
   // Welk glas dit toestel tekent, en de bewaker die het terugzet als het te veel kost (ui/glas.dart).
   // De meldingen ook in kop.log: debugPrint alleen zag je in een uitgave nergens (18-10-2026).
   GlasKwaliteit.meld = (r) {
@@ -33494,7 +33495,8 @@ class ThemaKeuzeRegel extends StatelessWidget {
                   for (final k in ThemaKeuze.values)
                     ChoiceChip(
                       key: ValueKey('thema-${k.name}'),
-                      label: Text(k.label),
+                      // Op een tv is "volgens systeem" donker (zie themaIsLicht): dat staat er dan ook.
+                      label: Text(k == ThemaKeuze.systeem && isTv ? 'Standaard (donker)' : k.label),
                       selected: huidig == k,
                       onSelected: (aan) {
                         if (aan) unawaited(ThemaStand.zet(k));

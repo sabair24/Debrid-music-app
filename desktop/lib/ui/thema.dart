@@ -22,6 +22,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../paths.dart';
+import '../tv.dart';
 import 'kleuren.dart';
 
 /// Wat er in Instellingen gekozen is.
@@ -37,10 +38,14 @@ enum ThemaKeuze {
 }
 
 /// Is het licht, bij deze keuze en deze systeemstand?
-bool themaIsLicht(ThemaKeuze keuze, Brightness systeem) => switch (keuze) {
+///
+/// **Op een tv is "volgens systeem" donker** (Saber, 18-10-2026, na de Shield-proef: "tv standaard
+/// donker"). Android TV kent geen donkere systeemstand en meldt altijd licht, dus "volgens systeem"
+/// zette de tv in de woonkamer na de update ongevraagd op wit. Kiezen voor Licht kan er gewoon.
+bool themaIsLicht(ThemaKeuze keuze, Brightness systeem, {bool tv = false}) => switch (keuze) {
       ThemaKeuze.licht => true,
       ThemaKeuze.donker => false,
-      ThemaKeuze.systeem => systeem == Brightness.light,
+      ThemaKeuze.systeem => !tv && systeem == Brightness.light,
     };
 
 /// De keuze van dit toestel, en het omzetten.
@@ -66,7 +71,8 @@ class ThemaStand {
 
   static Brightness get _systeem => systeemVoorToets ?? PlatformDispatcher.instance.platformBrightness;
 
-  /// Bij de start, vóór `runApp`: de keuze van schijf, en meteen de juiste kleuren.
+  /// Bij de start, vóór `runApp` en NA `initTvMode` (een tv rekent anders): de keuze van schijf, en
+  /// meteen de juiste kleuren.
   static void laad() {
     try {
       final j = jsonDecode(_bestand.readAsStringSync());
@@ -76,7 +82,7 @@ class ThemaStand {
     } catch (_) {
       // Geen bestand of onleesbaar: de standaard.
     }
-    Thema.licht = themaIsLicht(keuze.value, _systeem);
+    Thema.licht = themaIsLicht(keuze.value, _systeem, tv: isTv);
     _balken();
     if (_waarnemer == null) {
       _waarnemer = _Waarnemer();
@@ -99,7 +105,7 @@ class ThemaStand {
 
   /// Kijkt opnieuw en bouwt alles opnieuw op als licht of donker daardoor verandert.
   static void pasToe({String waarom = 'systeem'}) {
-    final licht = themaIsLicht(keuze.value, _systeem);
+    final licht = themaIsLicht(keuze.value, _systeem, tv: isTv);
     if (licht == Thema.licht) return;
     Thema.licht = licht;
     _balken();

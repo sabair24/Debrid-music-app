@@ -4,6 +4,7 @@ import 'dart:ui' show Brightness;
 
 import 'package:debridmusic/main.dart' show ThemaKeuzeRegel;
 import 'package:debridmusic/paths.dart';
+import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/kleuren.dart';
 import 'package:debridmusic/ui/thema.dart';
 import 'package:flutter/material.dart';
@@ -39,6 +40,19 @@ void main() {
     expect(themaIsLicht(ThemaKeuze.donker, Brightness.light), isFalse);
     expect(themaIsLicht(ThemaKeuze.systeem, Brightness.light), isTrue);
     expect(themaIsLicht(ThemaKeuze.systeem, Brightness.dark), isFalse);
+  });
+
+  test('op een tv is volgens systeem donker, ook als het systeem licht meldt; Licht kiezen kan wel', () {
+    expect(themaIsLicht(ThemaKeuze.systeem, Brightness.light, tv: true), isFalse);
+    expect(themaIsLicht(ThemaKeuze.licht, Brightness.light, tv: true), isTrue);
+  });
+
+  test('een tv start donker', () {
+    setTvModeForTest(true);
+    addTearDown(() => setTvModeForTest(false));
+    ThemaStand.systeemVoorToets = Brightness.light;
+    ThemaStand.laad();
+    expect(Thema.licht, isFalse);
   });
 
   test('zonder bestand: volgens het systeem, en meteen de goede kleuren', () {
@@ -118,6 +132,7 @@ void main() {
     final laad = bron.indexOf('ThemaStand.laad();');
     expect(laad, greaterThan(0));
     expect(laad, lessThan(bron.indexOf('  runApp(')), reason: 'anders flitst een lichte app eerst donker');
+    expect(laad, greaterThan(bron.indexOf('  await initTvMode();')), reason: 'een tv rekent anders');
     expect(bron, contains('const ThemaKeuzeRegel(),'));
     expect(bron, contains('brightness: Thema.licht ? Brightness.light : Brightness.dark,'));
   });
