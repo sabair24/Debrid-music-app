@@ -36,7 +36,13 @@ const Duration kBinnenkomstVenster = Duration(milliseconds: 700);
 ///
 /// Klein, en met een dak erop: bij veertig zichtbare tegels zou 40 × 30 ms betekenen dat de laatste
 /// pas na ruim een seconde staat, en dan wacht je op een animatie in plaats van dat je hem opmerkt.
-const Duration kTrapje = Duration(milliseconds: 26);
+///
+/// Sinds 18-10-2026 12 ms en niet 26: Saber koos "tegels één keer gespreid binnen, hooguit 250 ms" —
+/// het hele trapje plus de laatste beweging ([kBinnenkomstDuur]) blijft daaronder.
+const Duration kTrapje = Duration(milliseconds: 12);
+
+/// Hoe lang één tegel over zijn stukje omhoog doet.
+const Duration kBinnenkomstDuur = Duration(milliseconds: 150);
 
 /// Na hoeveel regels het trapje ophoudt met oplopen.
 const int kTrapjeDak = 8;
@@ -151,7 +157,7 @@ class _BinnenkomstState extends State<Binnenkomst> with SingleTickerProviderStat
     // tegelijk bewegen kost beelden op een Tegra X1 — dezelfde afweging als bij de matglas-balk en
     // bij `paneelDecoratie`.
     if (isTv || !BinnenkomstGroep.magNog(context)) return;
-    final c = AnimationController(vsync: this, duration: kOvergang);
+    final c = AnimationController(vsync: this, duration: kBinnenkomstDuur);
     final curve = CurvedAnimation(parent: c, curve: Curves.easeOutCubic);
     _c = c;
     _curve = curve;

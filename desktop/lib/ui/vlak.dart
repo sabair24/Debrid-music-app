@@ -927,6 +927,9 @@ Widget randAchterDeBalk(double hoogte, {bool naarWaas = false}) => Positioned(
 /// bewaart geen getekend beeld tussen twee frames, dus elke scrollstap vervaagde ruim een miljoen
 /// pixels opnieuw en legde er een masker overheen. Nu wordt vervaging, donkering en uitvloeiing
 /// één keer in een klein beeld gebakken, en tekent elke stap alleen dat beeld.
+/// Hoe snel de kop achter een albumpagina meeschuift, als deel van de pagina: half zo snel.
+const double kParallax = .5;
+
 class HoesAchtergrond extends StatefulWidget {
   const HoesAchtergrond({
     super.key,
@@ -1175,9 +1178,15 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
           : AnimatedBuilder(
               animation: rol,
               child: vak,
-              builder: (_, kind) {
+              builder: (context, kind) {
                 // Nooit omlaag: trek je een lijst voorbij zijn bovenrand, dan blijft het beeld staan.
-                final schuif = rol.hasClients ? rol.offset.clamp(0.0, widget.hoogte) : 0.0;
+                //
+                // Parallax (Saber, 18-10-2026: "parallax-kop"): het beeld schuift half zo snel als de
+                // pagina, dus de kop lijkt dieper te liggen dan wat eroverheen gaat. Niet op een tv
+                // en niet bij minder beweging: daar schuift hij gewoon mee, zoals altijd.
+                final traag = !isTv && !MediaQuery.disableAnimationsOf(context);
+                final f = traag ? kParallax : 1.0;
+                final schuif = rol.hasClients ? rol.offset.clamp(0.0, widget.hoogte / f) * f : 0.0;
                 return Transform.translate(offset: Offset(0, -schuif), child: kind);
               },
             ),

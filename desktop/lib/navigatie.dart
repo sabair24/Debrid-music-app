@@ -182,6 +182,15 @@ class _BovenKnip extends CustomClipper<Rect> {
 /// scherm even lang klaar.
 const double _afstand = .06;
 
+/// Hoe ver de pagina eronder terugwijkt bij een diepte-overgang: 4 %.
+const double kDiepteTerug = .96;
+
+/// Hoe stil hij daarbij wordt: nog 55 % zichtbaar.
+const double kDiepteStil = .55;
+
+/// Van hoe klein de nieuwe pagina naar voren komt.
+const double kDiepteVoor = .97;
+
 Widget _schuif(
   BuildContext context,
   Animation<double> animatie,
@@ -196,6 +205,27 @@ Widget _schuif(
   // eigen `dispose`, en eentje maken in een bouwer die per beeld draait is een lek dat de
   // lekopsporing in een toets terecht meldt. Een tween met een curve erin heeft geen levensloop.
   final curve = CurveTween(curve: Curves.easeOutCubic);
+  // Diepte (Saber, 18-10-2026: "diepte-overgang"): de pagina eronder wijkt een tikje terug en wordt
+  // stiller, de nieuwe komt van iets kleiner naar voren. Niet op een tv: daar kost een doorzichtige
+  // volle pagina elk beeld een kopie van het scherm, en de Shield heeft die marge niet.
+  if (!isTv) {
+    return SlideTransition(
+      position: Tween(begin: Offset.zero, end: const Offset(-_afstand / 3, 0)).chain(curve).animate(terug),
+      child: ScaleTransition(
+        scale: Tween(begin: 1.0, end: kDiepteTerug).chain(curve).animate(terug),
+        child: FadeTransition(
+          opacity: Tween(begin: 1.0, end: kDiepteStil).chain(curve).animate(terug),
+          child: SlideTransition(
+            position: Tween(begin: const Offset(_afstand / 2, 0), end: Offset.zero).chain(curve).animate(animatie),
+            child: ScaleTransition(
+              scale: Tween(begin: kDiepteVoor, end: 1.0).chain(curve).animate(animatie),
+              child: FadeTransition(opacity: animatie.drive(curve), child: kind),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
   return SlideTransition(
     // De pagina ONDER deze wijkt naar links zodra er een nieuwe overheen komt.
     position: Tween(begin: Offset.zero, end: const Offset(-_afstand / 2, 0))
