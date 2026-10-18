@@ -317,10 +317,12 @@ class _PressableState extends State<Pressable> {
     // AnimationController and Ticker. They never animate, so they cost no frame time — but they are
     // created and disposed for every tile you scroll past, and that is most of the app.
     if (isTv && widget.scaleOnFocus) {
+      // 200 ms en zacht uitlopend, niet 130 ms (Saber, 18-10-2026: "te bruut"). Even lang als de lijst
+      // erachter onderweg is naar de vaste plek ([tvVastePlek]), zodat groeien en schuiven samen landen.
       content = AnimatedScale(
         scale: _focused ? (widget.focusScale ?? tileFocusScale) : 1.0,
-        duration: const Duration(milliseconds: 130),
-        curve: Curves.easeOut,
+        duration: kTvFocusGroei,
+        curve: Curves.easeOutCubic,
         child: content,
       );
     } else if (!isTv && widget.onPressed != null) {
@@ -613,6 +615,9 @@ double get _ringWidth => isTv ? 3 : 2;
 /// height and clips whatever grows past it. See the row height in `_section`.
 double get tileFocusScale => isTv ? 1.14 : 1.06;
 
+/// Hoe lang een hoes op een tv over het groeien doet. Zie [Pressable].
+const kTvFocusGroei = Duration(milliseconds: 200);
+
 /// Hoeveel een kaart over de volle breedte groeit met de selectie op een tv ("Zeg wat je wil
 /// horen"). Een hoes groeit 14 %; een kaart van 860 punten zou dan 120 punten het scherm uit lopen.
 const double kTvKaartGroei = 1.03;
@@ -693,15 +698,26 @@ const double kTvBovenruimte = 56;
 /// verschuiving de kop van de pagina doormidden. Op Start stond "Goedemorgen" zo half onder de balk
 /// zodra de selectie op "Zeg wat je wil horen" kwam — 64 punten verschoven, en de kop is 70 hoog
 /// (Shield, 17-10-2026). De selectie staat aan het begin toch ruim in beeld.
+///
+/// **Maar niet onder de onderrand ([onthulEinde]).** Op Albums (Shield, 18-10-2026) stond de eerste
+/// rij onder de paginatitel en de kop "#", en bleef hij dus bovenaan — met de artiestnamen onder de
+/// spelerbalk. [onthulEinde] is de stand waarbij de onderkant van het element precies tegen de
+/// onderrand staat, [eindmarge] wat hij daaronder nog nodig heeft (zijn groei met de selectie). Dan
+/// schuift de lijst net zo ver als nodig, nooit verder dan de vaste plek, en blijft de kop zoveel
+/// mogelijk staan.
 double vastePlekDoel({
   required double onthul,
   required double voorrand,
   required double min,
   required double max,
   double bovenaanTot = 0,
+  double? onthulEinde,
+  double eindmarge = 0,
 }) {
   final naar = (onthul - voorrand).clamp(min, max).toDouble();
-  return naar - min <= bovenaanTot ? min : naar;
+  if (naar - min > bovenaanTot) return naar;
+  if (onthulEinde == null) return min;
+  return (onthulEinde + eindmarge).clamp(min, naar).toDouble();
 }
 
 /// Hoe ver een staande lijst hoogstens van zijn begin af hoeft voor de vaste plek, en dan toch aan
@@ -735,6 +751,8 @@ void tvVastePlek(BuildContext context, {Duration duur = const Duration(milliseco
       final liggend = pos.axis == Axis.horizontal;
       final naar = vastePlekDoel(
         onthul: viewport.getOffsetToReveal(doel, 0).offset,
+        onthulEinde: liggend ? null : viewport.getOffsetToReveal(doel, 1).offset,
+        eindmarge: liggend ? 0 : _groeiOnder(doel),
         voorrand: liggend
             ? _binnenmarge(viewport)
             : kTvBovenruimte + (pagina ? _onderDeBalk(context, viewport) : 0),
@@ -748,6 +766,56 @@ void tvVastePlek(BuildContext context, {Duration duur = const Duration(milliseco
     lijst = Scrollable.maybeOf(lijst.context);
   }
 }
+
+/// Het focusverzoek van een pijlstap op een tv: de selectie verhuist, en de lijst schuift ZACHT mee.
+///
+/// **Waarom (Saber, 18-10-2026: "bij het navigeren van links naar rechts springen de hoezen, is te
+/// bruut").** Flutter schuift bij elke pijl eerst zelf: `ensureVisible` met duur nul, in één beeld.
+/// Daarna schoof [Pressable] de lijst naar de vaste plek, in 220 ms. Op de Shield gefilmd (b12000):
+/// een rij hoezen stond net te hoog voor het beeld, dus elke pijl naar rechts sprong de pagina 35
+/// punten omhoog en gleed hij daarna terug. Een sprong en een terugweg voor een stap die niets hoefde.
+///
+/// Hier dus geen sprong. Een [Pressable] die zelf schuift ([Pressable.schuifInBeeld]) regelt het
+/// helemaal; voor al het andere (een InkWell, een veld) schuift dezelfde `ensureVisible` als die van
+/// Flutter, maar in 220 ms. Na het beeld: de selectie wordt pas in een microtaak doorgegeven, en pas
+/// dan weet een [Pressable] dat hij hem heeft.
+void tvFocusZonderSprong(
+  FocusNode node, {
+  ScrollPositionAlignmentPolicy? alignmentPolicy,
+  double? alignment,
+  Duration? duration,
+  Curve? curve,
+}) {
+  node.requestFocus();
+  final ctx = node.context;
+  if (ctx == null) return;
+  // Een beeld vragen: zonder zichtbare verandering komt er geen, en dan schoof de lijst nooit.
+  WidgetsBinding.instance.ensureVisualUpdate();
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!ctx.mounted || !node.hasPrimaryFocus) return;
+    if (schuiftZelf(ctx)) return;
+    Scrollable.ensureVisible(
+      ctx,
+      alignment: alignment ?? 1,
+      alignmentPolicy: alignmentPolicy ?? ScrollPositionAlignmentPolicy.explicit,
+      duration: duration ?? const Duration(milliseconds: 220),
+      curve: curve ?? Curves.easeOutCubic,
+    );
+  });
+}
+
+/// Brengt de [Pressable] rond [ctx] zichzelf in beeld? Alleen als HIJ de selectie heeft: een knop
+/// ín een tegel die zelf niet geselecteerd is, schuift niets.
+@visibleForTesting
+bool schuiftZelf(BuildContext ctx) {
+  final p = ctx.findAncestorStateOfType<_PressableState>();
+  return p != null && p._focused && p.widget.schuifInBeeld;
+}
+
+/// Hoeveel een element met de selectie onder zijn eigen onderkant uitgroeit: de helft van wat
+/// [tileFocusScale] erbij doet (hij groeit om het midden), plus wat lucht voor de schaduw.
+double _groeiOnder(RenderObject doel) =>
+    doel is RenderBox && doel.hasSize ? doel.size.height * (tileFocusScale - 1) / 2 + 8 : 0;
 
 /// [tvVastePlek] voor iets dat geen [Pressable] is (een InkWell, een rij met een eigen achtergrond):
 /// `onFocusChange: tvVolgFocus(context)`, met de context van het element zelf of van een Builder er

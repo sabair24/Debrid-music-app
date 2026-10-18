@@ -326,6 +326,148 @@ void main() {
       await ronde;
     });
 
+    test('VOORRANG: wat op het scherm staat heeft bij de eerste melding al zijn hoes', () async {
+      // Gemeten op de Shield bij een koude start (18-10-2026): de app stond er na 1,5 s, de hoes in
+      // de spelerbalk kwam na ~10 s. De ronde las de albums "nieuwste eerst" en kwam pas laat bij het
+      // album dat speelde. Hier: dertig albums, en het OUDSTE (dat de ronde als laatste zou lezen)
+      // vraagt voorrang.
+      final root = Directory.systemTemp.createTempSync('dm_voorrang_');
+      final pcLib = LibraryStore()
+        ..rootPath = root.path
+        ..configDirOverride = root.path;
+      for (var i = 1; i <= 30; i++) {
+        pcLib.tracks.add(_t('${root.path}/A$i/01.flac', 'Nummer $i', 'Artiest $i', 'Album $i', no: i, total: 1));
+      }
+      pcLib.rebuildAlbums();
+      for (final a in pcLib.albums) {
+        final i = int.parse(a.title.split(' ').last);
+        a.embeddedCover = Uint8List.fromList(List.generate(600, (k) => (k * i + i) % 256));
+      }
+      final eerste = _client(pcLib);
+      await eerste.library.loadRemote();
+      await eerste.library.loadRemoteCovers(AppSettings());
+
+      final tweede = _client(pcLib);
+      await tweede.library.loadRemote();
+      final oudste = tweede.library.albums.firstWhere((a) => a.title == 'Album 1');
+      expect(hoesVolgorde(tweede.library.albums).last, same(oudste), reason: 'zonder voorrang kwam hij als laatste');
+      expect(oudste.cover, isNull);
+      tweede.library.hoesVoorrang(oudste);
+      bool? hadHem;
+      var zonder = 0;
+      void bijMelding() {
+        // De eerste melding waarbij er hoezen bij kwamen; die van het begin ("bezig") telt niet.
+        if (hadHem != null || tweede.library.albums.every((a) => a.cover == null)) return;
+        hadHem = oudste.cover != null;
+        zonder = tweede.library.albums.where((a) => a.cover == null).length;
+      }
+
+      tweede.library.addListener(bijMelding);
+      await tweede.library.loadRemoteCovers(AppSettings());
+      tweede.library.removeListener(bijMelding);
+      expect(hadHem, isTrue, reason: 'bij de eerste melding stond de gevraagde hoes er al');
+      expect(zonder, greaterThan(20), reason: 'en dat kwam door de voorrang, niet doordat alles er al was');
+      root.deleteSync(recursive: true);
+    });
+
+    /// Dertig albums met elk een eigen hoes op de pc. Een eerste toestel legt ze op schijf, behalve
+    /// die van het oudste album ("Album 1"): die krijgt de pc pas daarna, zoals een plaat die net
+    /// binnenkwam. Daarna een tweede toestel met diezelfde schijf.
+    Future<({LibraryStore pc, Directory root})> dertigMetEenNieuwe() async {
+      final root = Directory.systemTemp.createTempSync('dm_voorrang_pc_');
+      final pcLib = LibraryStore()
+        ..rootPath = root.path
+        ..configDirOverride = root.path;
+      for (var i = 1; i <= 30; i++) {
+        pcLib.tracks.add(_t('${root.path}/A$i/01.flac', 'Nummer $i', 'Artiest $i', 'Album $i', no: i, total: 1));
+      }
+      pcLib.rebuildAlbums();
+      Uint8List hoes(int i) => Uint8List.fromList(List.generate(600, (k) => (k * i + i) % 256));
+      for (final a in pcLib.albums) {
+        final i = int.parse(a.title.split(' ').last);
+        if (i != 1) a.embeddedCover = hoes(i);
+      }
+      final eerste = _client(pcLib);
+      await eerste.library.loadRemote();
+      await eerste.library.loadRemoteCovers(AppSettings());
+      pcLib.albums.firstWhere((a) => a.title == 'Album 1').embeddedCover = hoes(1);
+      return (pc: pcLib, root: root);
+    }
+
+    /// Op welke plek onder de hoezenverzoeken de enige echte download kwam.
+    int plekVanDeDownload(({List<String> requests, List<String> uitgeleverd}) c) {
+      final hoezen = c.requests.where((r) => r.startsWith('/art/')).toList();
+      final ref = c.uitgeleverd.single;
+      return hoezen.indexWhere((r) => r.contains(ref));
+    }
+
+    test('VOORRANG BIJ DE PC: op het scherm en nog niet op dit toestel, dan eerst', () async {
+      // Gemeten op de Shield (18-10-2026): de hoes in de spelerbalk kwam ~6 s na de app. Hij lag niet
+      // op het toestel, en de navraag bij de pc begon pas als alles van schijf gelezen was — en dan in
+      // de vaste volgorde, met het oudste album als laatste.
+      final opzet = await dertigMetEenNieuwe();
+      final tweede = _client(opzet.pc);
+      await tweede.library.loadRemote();
+      final oudste = tweede.library.albums.firstWhere((a) => a.title == 'Album 1');
+      tweede.library.hoesVoorrang(oudste);
+      await tweede.library.loadRemoteCovers(AppSettings());
+      expect(tweede.uitgeleverd, hasLength(1), reason: 'alleen de nieuwe hoes komt als bytes, de rest is een 304');
+      expect(plekVanDeDownload((requests: tweede.requests, uitgeleverd: tweede.uitgeleverd)), 0,
+          reason: 'het eerste verzoek bij de pc, vóór de navraag van de 29 andere');
+      expect(oudste.cover, isNotNull);
+      opzet.root.deleteSync(recursive: true);
+    });
+
+    test('VOORRANG BIJ DE PC: wat pas tijdens de navraag in beeld komt, gaat voor', () async {
+      final opzet = await dertigMetEenNieuwe();
+      final pcStil = Completer<void>();
+      final tweede = _client(opzet.pc, hoesWacht: pcStil.future);
+      await tweede.library.loadRemote();
+      final ronde = tweede.library.loadRemoteCovers(AppSettings());
+      // De leesronde is klaar en de zes navragers wachten op de pc.
+      for (var i = 0; i < 400 && tweede.requests.where((r) => r.startsWith('/art/')).length < 6; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(tweede.requests.where((r) => r.startsWith('/art/')), hasLength(6));
+      // Nu scrolt hij in beeld.
+      final oudste = tweede.library.albums.firstWhere((a) => a.title == 'Album 1');
+      tweede.library.hoesVoorrang(oudste);
+      pcStil.complete();
+      await ronde;
+      expect(plekVanDeDownload((requests: tweede.requests, uitgeleverd: tweede.uitgeleverd)), lessThan(12),
+          reason: 'zodra er een navrager vrij is, niet pas als 30e');
+      expect(oudste.cover, isNotNull);
+      opzet.root.deleteSync(recursive: true);
+    });
+
+    test('een nieuwe catalogus neemt de hoezen mee die deze zitting al binnenkwamen', () async {
+      // Op de Shield verdween de hoes in de verderbalk even en kwam hij terug: wat de ronde las,
+      // landde op albumobjecten die de verse catalogus net had vervangen.
+      final pc = _pc();
+      pc.library.albums.firstWhere((a) => a.title == 'Dummy').embeddedCover =
+          Uint8List.fromList(List.generate(600, (i) => (i * 3) % 256));
+      final c = _client(pc.library);
+      await c.library.loadRemote();
+      await c.library.loadRemoteCovers(AppSettings());
+      final oud = c.library.albums.firstWhere((a) => a.title == 'Dummy');
+      final bytes = oud.cover;
+      expect(bytes, isNotNull);
+      // De oude objecten zijn hun hoes kwijt, zoals wanneer de ronde ze vulde ná de momentopname.
+      oud
+        ..enriched = null
+        ..embeddedCover = null;
+      // Een verse catalogus: de pc kreeg er een nummer bij.
+      pc.library.tracks.add(_t('${pc.root.path}/Portishead/Dummy/03.flac', 'Strangers', 'Portishead', 'Dummy',
+          no: 3, total: 11));
+      pc.library.rebuildAlbums();
+      // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+      pc.library.notifyListeners();
+      await c.library.loadRemote();
+      final nieuw = c.library.albums.firstWhere((a) => a.title == 'Dummy');
+      expect(identical(nieuw, oud), isFalse, reason: 'een nieuw object, zoals bij elke verse catalogus');
+      expect(nieuw.cover, bytes, reason: 'meteen, zonder op een nieuwe ronde te wachten');
+    });
+
     test('DE VAL: een nieuwe hoes van de pc verdringt wat de leesronde al neerzette', () async {
       // Bij `embeddedIsVanEenAndere` wint `enriched` van `embeddedCover`. De leesronde zet daar
       // de oude hoes in; kwam de nieuwe alleen in `embeddedCover`, dan bleef de oude staan.

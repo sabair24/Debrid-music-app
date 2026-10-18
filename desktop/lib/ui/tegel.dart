@@ -23,6 +23,7 @@
 /// erbinnen past.
 library;
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -121,6 +122,110 @@ SliverGridDelegate tegelRaster(BuildContext context, double breedte,
 /// De hoes, op de maat die de tegel hem geeft.
 typedef HoesBouwer = Widget Function(double maat);
 
+/// Hoe ver de cd uit de hoes schuift als de muis erop staat, als deel van de hoes.
+const kTegelSchijfUit = .22;
+
+/// De cd achter een tegel: zilver met een regenboogglans, de hoes als etiket in het midden en een gat.
+///
+/// Lichter dan de zwarte schijf van Nu speelt, met opzet: op de donkere achtergrond van het raster
+/// was een zwarte schijf die er een stuk uit schuift nauwelijks te zien (voorbeeld van 17-10-2026).
+class TegelSchijf extends StatelessWidget {
+  const TegelSchijf({super.key, required this.etiket, required this.maat, this.decodeerBreedte});
+
+  final Uint8List etiket;
+  final double maat;
+
+  /// Op welke breedte het etiket gedecodeerd wordt. Geef de breedte van de hoes zelf mee: dan is het
+  /// hetzelfde beeld in de cache en wordt de hoes niet een tweede keer gedecodeerd (en naar de
+  /// videokaart gestuurd) alleen voor een etiket van een derde van zijn maat. Tijdens het scrollen
+  /// was dat per nieuwe tegel een volledige JPEG-decodering extra (17-10-2026).
+  final int? decodeerBreedte;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = maat * .36;
+    return SizedBox.square(
+      dimension: maat,
+      child: Stack(alignment: Alignment.center, children: [
+        DecoratedBox(
+          decoration: const BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: SweepGradient(colors: [
+              Color(0xFFC9CED8), Color(0xFF8E96A6), Color(0xFFD9D2E8), Color(0xFF9FB4C8),
+              Color(0xFFE2E5EC), Color(0xFF8A90A0), Color(0xFFCFC6E0), Color(0xFFC9CED8),
+            ]),
+            boxShadow: [BoxShadow(color: Color(0x66000000), blurRadius: 12, offset: Offset(0, 4))],
+          ),
+          child: SizedBox.square(dimension: maat),
+        ),
+        // Een zachte donkere ring halverwege: de groef tussen het bespeelde deel en het etiket.
+        Container(
+          width: maat * .5,
+          height: maat * .5,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: const Color(0x33000000), width: maat * .02),
+          ),
+        ),
+        ClipOval(
+          child: Image.memory(etiket,
+              width: label,
+              height: label,
+              fit: BoxFit.cover,
+              cacheWidth: decodeerBreedte ?? (label * MediaQuery.devicePixelRatioOf(context)).round(),
+              errorBuilder: (_, __, ___) => const SizedBox()),
+        ),
+        Container(
+          width: maat * .07,
+          height: maat * .07,
+          decoration: const BoxDecoration(color: Color(0xFF07080C), shape: BoxShape.circle),
+        ),
+      ]),
+    );
+  }
+}
+
+/// De ronde witte afspeelknop op een tegel.
+class _AfspeelRondje extends StatefulWidget {
+  const _AfspeelRondje({required this.maat, required this.onTap});
+
+  final double maat;
+  final VoidCallback onTap;
+
+  @override
+  State<_AfspeelRondje> createState() => _AfspeelRondjeState();
+}
+
+class _AfspeelRondjeState extends State<_AfspeelRondje> {
+  bool _aan = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _aan = true),
+        onExit: (_) => setState(() => _aan = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: AnimatedScale(
+            scale: _aan ? 1.08 : 1,
+            duration: const Duration(milliseconds: 140),
+            child: Container(
+              key: const ValueKey('tegel-afspelen'),
+              width: widget.maat,
+              height: widget.maat,
+              decoration: BoxDecoration(
+                color: _aan ? Colors.white : const Color(0xF2FFFFFF),
+                shape: BoxShape.circle,
+                boxShadow: const [BoxShadow(color: Color(0x73000000), blurRadius: 14, offset: Offset(0, 4))],
+              ),
+              child: Icon(Icons.play_arrow_rounded, size: widget.maat * .62, color: const Color(0xFF07080C)),
+            ),
+          ),
+        ),
+      );
+}
+
 /// Een album (of een nummer, of een aanbeveling) als tegel.
 ///
 /// [breedte] leeg laten betekent "vul de cel waarin je staat" — dat is het raster op Albums. Een
@@ -140,7 +245,22 @@ class AlbumTegel extends StatefulWidget {
     this.heroTag,
     this.draaibaar = false,
     this.achterkant,
+    this.schijf,
+    this.onAfspelen,
+    this.voorladen,
   });
+
+  /// Bij de eerste keer aanwijzen: alvast klaarleggen wat een klik of twee tikken straks nodig
+  /// hebben (van schijf, nooit van het net). Geeft de achterkant terug als die er is; die wordt dan
+  /// meteen op deze maat gedecodeerd, zodat twee tikken zonder wachten draaien.
+  final Future<Uint8List?> Function()? voorladen;
+
+  /// De cd achter de hoes, die er een stuk uit schuift als de muis erop staat (Saber, 17-10-2026:
+  /// "cd schuift uit + afspeelknop"). Null = geen cd.
+  final HoesBouwer? schijf;
+
+  /// De ronde afspeelknop op de hoes, die verschijnt als de muis erop staat. Null = geen knop.
+  final VoidCallback? onAfspelen;
 
   /// De hoes, gebouwd op de maat die hier bepaald wordt.
   final HoesBouwer hoes;
@@ -183,10 +303,41 @@ class AlbumTegel extends StatefulWidget {
 class _AlbumTegelState extends State<AlbumTegel> {
   bool _aan = false;
 
+  /// Staat de MUIS erop (niet de selectie van een tv): alleen dan schuift de cd uit en komt de knop.
+  bool _muis = false;
+
   final _draai = DraaiHoesController();
   final _tikken = TweeTikken();
   Uint8List? _achter;
   bool _zoekt = false;
+  bool _voorgeladen = false;
+
+  /// De cd schuift nog terug: tot dan blijft hij zichtbaar. Daarna tekent hij niets meer — hij ligt
+  /// in rust achter een dichte hoes, en zijn wazige schaduw werd anders in elk beeld van elke tegel
+  /// gerasterd.
+  bool _schijfTerug = false;
+  Timer? _terugKlok;
+
+  /// De cd en de afspeelknop bestaan pas na de eerste keer aanwijzen. Daarvoor zijn ze nergens voor
+  /// nodig, en een rij van twaalf nieuwe tegels bouwde ze anders allemaal tegelijk mee in het beeld
+  /// waarin de rij in zicht scrolde (warmte.log, 17-10-2026: pieken van 24 ms bouwen).
+  bool _extraGebouwd = false;
+
+  /// Staat de muis er nu werkelijk op? [_muis] volgt een beeld later bij het eerste aanwijzen.
+  bool _erop = false;
+
+  /// De eerste keer dat de muis erop komt: [AlbumTegel.voorladen], één keer per tegel.
+  Future<void> _laadVoor() async {
+    final laad = widget.voorladen;
+    if (_voorgeladen || laad == null || isTv) return;
+    _voorgeladen = true;
+    try {
+      final b = await laad();
+      if (b == null || !mounted || _achter != null || !_draaien) return;
+      await precacheImage(ResizeImage(MemoryImage(b), width: _decodeer(_maat)), context);
+      if (mounted && _achter == null) setState(() => _achter = b);
+    } catch (_) {/* niets klaar is geen fout: dan haalt de dubbeltik hem zoals vroeger */}
+  }
 
   bool get _draaien => widget.draaibaar && !isTv;
 
@@ -208,6 +359,7 @@ class _AlbumTegelState extends State<AlbumTegel> {
 
   @override
   void dispose() {
+    _terugKlok?.cancel();
     _draai.voorInRust.removeListener(_opRust);
     _draai.dispose();
     _tikken.dispose();
@@ -251,7 +403,7 @@ class _AlbumTegelState extends State<AlbumTegel> {
                 : AchterkantBeeld(
                     beeld: _achter!, maat: maat, hoek: kHoek12, decodeerBreedte: _decodeer(maat), schaduw: kSchaduw1),
           );
-    return AnimatedContainer(
+    final metSchaduw = AnimatedContainer(
       duration: kGebaar,
       curve: Curves.easeOut,
       decoration: BoxDecoration(
@@ -269,6 +421,72 @@ class _AlbumTegelState extends State<AlbumTegel> {
               child: hoes,
             ),
     );
+    final schijf = widget.schijf;
+    final speel = widget.onAfspelen;
+    if (isTv || (schijf == null && speel == null)) return metSchaduw;
+    // De muis op de hoes: de cd schuift er een stuk rechts uit (zoals in de lijst op de artiestpagina)
+    // en er komt een ronde afspeelknop op. Niet zolang de achterkant voor staat.
+    //
+    // De hoes gaat zelf de helft van de weg naar links. In een raster tekent de tegel rechts ervan
+    // later, en die dekte een cd die alleen naar rechts schoof voor het grootste deel af; zo blijft
+    // hij binnen de eigen cel plus de tussenruimte.
+    final uit = _muis && _draai.voorInRust.value;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        if (schijf != null && _extraGebouwd)
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOutBack,
+            left: uit ? maat * kTegelSchijfUit / 2 : maat * .02,
+            top: maat * .02,
+            width: maat * .96,
+            height: maat * .96,
+            // Opgebouwd maar onzichtbaar in rust: zo schuift hij vloeiend uit (de animatie heeft een
+            // beginstand) en kost hij niets zolang hij achter de hoes ligt. Opacity 0 tekent niets.
+            child: Visibility(
+              visible: uit || _schijfTerug,
+              maintainState: true,
+              maintainAnimation: true,
+              maintainSize: true,
+              child: IgnorePointer(
+              child: AnimatedRotation(
+                turns: uit ? .12 : 0,
+                duration: const Duration(milliseconds: 420),
+                curve: Curves.easeOutCubic,
+                child: schijf(maat * .96),
+              ),
+            ),
+            ),
+          ),
+        AnimatedSlide(
+          offset: Offset(uit ? -kTegelSchijfUit / 2 : 0, 0),
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutBack,
+          child: Stack(clipBehavior: Clip.none, children: [
+        metSchaduw,
+        if (speel != null && _extraGebouwd)
+          Positioned(
+            right: maat * .06,
+            bottom: maat * .06,
+            child: AnimatedScale(
+              scale: uit ? 1 : .6,
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutBack,
+              child: AnimatedOpacity(
+                opacity: uit ? 1 : 0,
+                duration: const Duration(milliseconds: 160),
+                child: IgnorePointer(
+                  ignoring: !uit,
+                  child: _AfspeelRondje(maat: (maat * .26).clamp(34.0, 52.0), onTap: speel),
+                ),
+              ),
+            ),
+          ),
+          ]),
+        ),
+      ],
+    );
   }
 
   @override
@@ -276,8 +494,35 @@ class _AlbumTegelState extends State<AlbumTegel> {
     final vast = widget.breedte;
     final tegel = MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _aan = true),
-      onExit: (_) => setState(() => _aan = false),
+      onEnter: (_) {
+        _terugKlok?.cancel();
+        _erop = true;
+        if (_extraGebouwd) {
+          setState(() => _aan = _muis = true);
+        } else {
+          // Eerst bouwen in rust, en een beeld later pas uit: anders heeft het uitschuiven geen
+          // beginstand en staat de cd er meteen.
+          setState(() {
+            _aan = true;
+            _extraGebouwd = true;
+          });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _erop) setState(() => _muis = true);
+          });
+        }
+        unawaited(_laadVoor());
+      },
+      onExit: (_) {
+        _erop = false;
+        _terugKlok?.cancel();
+        _terugKlok = Timer(const Duration(milliseconds: 460), () {
+          if (mounted) setState(() => _schijfTerug = false);
+        });
+        setState(() {
+          _aan = _muis = false;
+          _schijfTerug = true;
+        });
+      },
       child: Pressable(
         // Wacht op een mogelijke tweede tik alleen als er iets te draaien valt.
         onPressed: _draaien ? () => _tikken.enkel(widget.onTap) : widget.onTap,

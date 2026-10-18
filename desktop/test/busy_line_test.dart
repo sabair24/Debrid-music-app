@@ -11,38 +11,41 @@ import 'package:flutter_test/flutter_test.dart';
 
 Widget _omhulsel(Widget kind) => MaterialApp(home: Scaffold(body: Center(child: kind)));
 
+/// Het lopende streepje van [BusyLine].
+final _streep = find.byKey(const ValueKey('werkstreep'));
+
 void main() {
   setUp(() => FactsWarmer.busyAlbum.value = null);
   tearDown(() => FactsWarmer.busyAlbum.value = null);
 
   testWidgets('niets aan de hand, dus geen balk en geen ruimte', (t) async {
     await t.pumpWidget(_omhulsel(const BusyLine(busy: false)));
-    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(_streep, findsNothing);
     // Geen hoogte: anders verschuift een tegel twee pixels op het moment dat hij aan de beurt komt.
     expect(t.getSize(find.byType(SizedBox).first).height, 0);
   });
 
   testWidgets('bezig, dus een balk van twee pixels', (t) async {
     await t.pumpWidget(_omhulsel(const BusyLine(busy: true)));
-    expect(find.byType(LinearProgressIndicator), findsOneWidget);
-    expect(t.getSize(find.byType(LinearProgressIndicator)).height, 2);
+    expect(_streep, findsOneWidget);
+    expect(t.getSize(_streep).height, 2);
   });
 
   testWidgets('de warmer stuurt hem aan, en alleen voor de juiste plaat', (t) async {
     await t.pumpWidget(_omhulsel(const WarmingLine(uid: 'abc')));
-    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(_streep, findsNothing);
 
     FactsWarmer.busyAlbum.value = 'xyz'; // een andere plaat
     await t.pump();
-    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(_streep, findsNothing);
 
     FactsWarmer.busyAlbum.value = 'abc';
     await t.pump();
-    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    expect(_streep, findsOneWidget);
 
     FactsWarmer.busyAlbum.value = null;
     await t.pump();
-    expect(find.byType(LinearProgressIndicator), findsNothing,
+    expect(_streep, findsNothing,
         reason: 'klaar is klaar — de balk hoort te verdwijnen, niet te blijven staan');
   });
 
@@ -52,6 +55,14 @@ void main() {
     await t.pumpWidget(_omhulsel(const WarmingLine(uid: '')));
     FactsWarmer.busyAlbum.value = '';
     await t.pump();
+    expect(_streep, findsNothing);
+  });
+
+  testWidgets('het streepje vraagt geen beeld per schermtik', (t) async {
+    // Een LinearProgressIndicator liet op 144 Hz het hele scherm 144 keer per seconde tekenen.
+    await t.pumpWidget(_omhulsel(const BusyLine(busy: true)));
     expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(_streep, findsOneWidget);
+    await t.pumpWidget(_omhulsel(const BusyLine(busy: false)));
   });
 }

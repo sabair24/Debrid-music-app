@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- De achtergrond van de app (kAchtergrond in lib/ui/kleuren.dart). Ook het startscherm: dat
+         was wit, en op de Shield gaf dat bij elke start een witte flits in een donkere woonkamer
+         (gefilmd op 18-10-2026). -->
+    <color name="dm_achtergrond">#FF07080C</color>
+</resources>

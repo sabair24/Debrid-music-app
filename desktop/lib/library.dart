@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -1090,7 +1091,42 @@ class LibraryStore extends ChangeNotifier {
   final Map<String, Track> _trackByPath = {};
 
   /// The album cover for a track (covers live on the Album, not the Track).
-  Uint8List? coverForTrack(Track t) => _albumByPath[t.path]?.cover;
+  Uint8List? coverForTrack(Track t) {
+    final album = _albumByPath[t.path];
+    final c = album?.cover;
+    // Gevraagd en er nog niet: dan staat hij op het scherm (spelerbalk, verderbalk, wachtrij), en
+    // haalt de hoezenronde hem vóór de rest. Zie [hoesVoorrang].
+    if (c == null && album != null) hoesVoorrang(album);
+    return c;
+  }
+
+  /// Hoezen die deze zitting al binnenkwamen (van schijf of van de pc), per pad van het eerste nummer
+  /// van het album.
+  ///
+  /// [_adoptCatalog] bouwt bij elke verse catalogus NIEUWE albumobjecten. Wat de hoezenronde intussen
+  /// had gelezen landde op de oude, en dan stond er even niets en begon de ronde opnieuw — op de
+  /// Shield gefilmd op 18-10-2026: de hoes in de verderbalk kwam na 7,5 s, verdween, en kwam terug.
+  /// Hiermee neemt de nieuwe catalogus alles mee wat er al was, ook wat er tijdens het ophalen bij kwam.
+  final Map<String, Uint8List> _hoesPerPad = {};
+
+  void _onthoudHoes(Album a, Uint8List bytes) {
+    if (a.tracks.isNotEmpty) _hoesPerPad[a.tracks.first.path] = bytes;
+  }
+
+  /// Albums die nu op het scherm staan zonder hoes, in volgorde van vragen: de lopende hoezenronde
+  /// leest die eerst. Op pad, want het album kan intussen een nieuw object zijn.
+  final LinkedHashSet<String> _voorrang = LinkedHashSet();
+
+  /// Haal de hoes van [a] vóór de rest. Kost niets als hij er al is; alleen op een toestel.
+  ///
+  /// Saber op 18-10-2026: *"dit moet dus echt sneller, die moeten er direct zijn"*. Gemeten op de
+  /// Shield bij een koude start: de app stond er na 1,5 s, maar de hoes in de spelerbalk kwam na
+  /// ~10 s. Hij lag al op het toestel; de ronde las 730 albums in de volgorde "nieuwste eerst" en kwam
+  /// pas laat bij het album dat speelde. Nu meldt wat getekend wordt zijn album, en dat komt eerst.
+  void hoesVoorrang(Album a) {
+    if (!isRemote || a.cover != null || a.tracks.isEmpty) return;
+    _voorrang.add(a.tracks.first.path);
+  }
 
   /// The album a playing track belongs to. The now-playing screen needs the album, not just the
   /// track: the pressing the user pinned and the cover they picked both live on it, and without
@@ -2907,6 +2943,12 @@ class LibraryStore extends ChangeNotifier {
         saved.applyTo(al);
         break;
       }
+      // Wat de hoezenronde las terwijl deze catalogus onderweg was, landde op de oude objecten en
+      // staat dus niet in [coversByPath]. Zie [_hoesPerPad].
+      if (al.cover == null) {
+        final eerder = _hoesPerPad[ts.first.path];
+        if (eerder != null) al.enriched = eerder;
+      }
       _remoteAlbums[al] = (
         id: dto.id,
         artRef: dto.artworkRef ?? dto.id,
@@ -3242,19 +3284,177 @@ class LibraryStore extends ChangeNotifier {
     final uitSchijf = <Album, Uint8List>{};
     final bewaardeMerken = <Album, String>{};
     var gelezen = 0;
-    Future<void> lezer() async {
+    // Wat er op het scherm staat eerst ([hoesVoorrang]), dan de rest in de vaste volgorde.
+    final perPad = {for (final a in volgorde) if (a.tracks.isNotEmpty) a.tracks.first.path: a};
+    final gedaan = <Album>{};
+    // Elk album hoogstens één keer bij de pc: wat de leesronde er al heen stuurde, slaat de navraag over.
+    final bijPc = <Album>{};
+
+    // Eén album bij de pc navragen of ophalen. [meteen]: het staat op het scherm, dus niet bundelen.
+    Future<void> haalBijPc(Album album, {bool meteen = false}) async {
+      // Het merkteken van de hoes die de eigenaar op de pc GEKOZEN heeft. Wijkt dat af van wat
+      // hier in de cache ligt, dan is die cache achterhaald en moet hij wijken.
+      //
+      // **Dit was het gat.** De cache heet naar `artiest|titel`, en die naam beweegt niet als je
+      // een andere afbeelding kiest. Het bestand lag er dus nog, met de goede naam en de foute
+      // inhoud, en werd bij élke start opnieuw als waarheid genomen. Gemeten op 13-08-2026: op de
+      // pc de juiste Whitney-hoes, op de telefoon het logo van een verzamelaar — telkens weer, hoe
+      // vaak de eigenaar het ook corrigeerde.
+      final merk = _remoteAlbums[album]?.artTag ?? '';
+      final bewaard = bewaardeMerken[album] ?? await enricher.bewaardMerk(album);
+      final verouderd = merk.isNotEmpty && bewaard != merk;
+      // Er staat al iets én het klopt: niets te doen. Deze uitgang stond vroeger in de wachtrij
+      // zelf, en daarom werd `verouderd` hierboven nooit voor zo'n album berekend. Wat de
+      // leesronde hierboven net van schijf zette telt niet als "klopt": dat moet nog nagevraagd.
+      if (album.zekereHoes != null && !verouderd && !uitSchijf.containsKey(album)) return;
+      if (verouderd) {
+        // De pc heeft een ANDERE bewuste keuze dan hier ligt, en de pc houdt de boeken bij. Alles
+        // wat hier lokaal voorrang had is daarmee achterhaald — laat je dat staan, dan wint het
+        // straks weer van de bytes die zo binnenkomen en verandert er zichtbaar niets.
+        album.correctedCover = null;
+        album.resolvedCover = null;
+      }
+      final ref = _remoteAlbums[album]?.artRef;
+      final cached = verouderd ? null : (uitSchijf[album] ?? await enricher.cached(album));
+
+      // Er ligt hier al een hoes. Klopt hij nog met wat de pc toont?
+      //
+      // **Dit was het laatste gat, en het grootste.** De vorige controle keek naar `artTag`, en die
+      // is er alleen bij een BEWUSTE keuze. Kwam de hoes van de pc uit de tags van het bestand of
+      // uit het verrijken — het gewone geval — dan stond er nergens iets om het cachebestand
+      // tegenaan te houden. Dat bestand heet naar `artiest|titel` en die naam beweegt nooit, dus
+      // wat er één keer in beland was bleef er staan. Zo hield de Mac maandenlang een andere
+      // clownhoes vast dan de pc, en hielp corrigeren op de pc niets: de Mac keek er niet meer
+      // naar.
+      //
+      // Navragen kost één rit: klopt het, dan komt er een lege 304 terug; klopt het niet, dan
+      // meteen de juiste bytes. Dat is niet duurder dan de download die anders zou volgen.
+      if (cached != null && ref != null && pcKentMerken) {
+        gevraagd++;
+        final antwoord = await client.artAls(ref, bewaard, maxZijde: kHoesPlafond);
+        // Een lege 304 telt hier als geslaagd, en dat is geen boekhoudkundige truc: de vraag die
+        // `hoezenMislukt` stelt is "antwoordt de pc nog?". Een bibliotheek die volledig in de cache
+        // staat vraagt hier alleen maar na, krijgt alleen maar 304'jes, en zou anders bij elke
+        // start melden dat de pc onbereikbaar is terwijl alles werkt.
+        if (antwoord != null) gelukt++;
+        if (antwoord != null && antwoord.etag == null) pcKentMerken = false;
+        final verse = antwoord?.bytes;
+        if (verse != null && verse.isNotEmpty) {
+          _onthoudHoes(album, verse);
+          album.embeddedCover = verse;
+          // Ook hier: de leesronde zette de oude al neer, en bij `embeddedIsVanEenAndere` wint
+          // `enriched` van `embeddedCover` — dan bleef de achterhaalde staan.
+          album.enriched = verse;
+          await enricher.putCached(album, verse);
+          final versMerk = antwoord!.etag ?? merk;
+          if (versMerk.isNotEmpty) await enricher.schrijfMerk(album, versMerk);
+          if (meteen || ++since >= 24) {
+            since = 0;
+            notifyListeners();
+          }
+          return;
+        }
+        // 304, of geen antwoord. In beide gevallen houden we wat we hebben — een pc die even niet
+        // opneemt mag geen hoezen van het scherm halen. Wél het merkteken bijwerken als de pc er
+        // een gaf, want dan weten we voortaan wat we vasthouden.
+        final gekregen = antwoord?.etag ?? '';
+        if (gekregen.isNotEmpty && gekregen != bewaard) {
+          await enricher.schrijfMerk(album, gekregen);
+        }
+      }
+
+      if (cached != null) {
+        // Staat er al sinds de leesronde, en de pc zei dat hij klopt: niets veranderd, dus ook
+        // niets melden. Elke melding bouwt elk scherm dat naar de bibliotheek kijkt opnieuw op — op
+        // de artiestpagina tot 33 ms per keer (S26, 11-10-2026) — en zo meldde deze lus na elke
+        // koude start nog ~28 keer "alles anders" over 680 hoezen die al op het scherm stonden.
+        if (identical(uitSchijf[album], cached)) return;
+        album.enriched = cached;
+        if (meteen || ++since >= 24) {
+          since = 0;
+          notifyListeners();
+        }
+        return;
+      }
+      if (ref != null) gevraagd++;
+      final antwoord = ref == null ? null : await client.artAls(ref, '', maxZijde: kHoesPlafond);
+      if (antwoord != null && antwoord.etag == null) pcKentMerken = false;
+      final bytes = antwoord?.bytes;
+      if (bytes == null || bytes.isEmpty) return;
+      gelukt++;
+      album.embeddedCover = bytes;
+      _onthoudHoes(album, bytes);
+      await enricher.putCached(album, bytes);
+      // Pas ná het wegschrijven, zodat een afgebroken download geen merkteken achterlaat dat zegt
+      // "deze is bij" terwijl er iets ouds op schijf staat.
+      //
+      // Het merkteken van de pc gaat vóór dat van de bewuste keuze: het beschrijft precies de
+      // bytes die hier zojuist geland zijn, ook als de hoes helemaal geen bewuste keuze was. Een
+      // oudere pc geeft er geen, en dan valt dit terug op het oude gedrag.
+      final teBewaren = antwoord?.etag ?? merk;
+      if (teBewaren.isNotEmpty) await enricher.schrijfMerk(album, teBewaren);
+      // Gebundeld, net als de tak hierboven: elke melding tekent de startpagina opnieuw. Eén
+      // melding per binnenkomende hoes betekende honderden volledige hertekeningen in de eerste
+      // minuut op de Shield — precies wanneer je wilt gaan bladeren.
+      if (meteen || ++since >= 24) {
+        since = 0;
+        notifyListeners();
+      }
+    }
+
+    ({Album album, bool voorrang, bool gelezen})? volgendeAlbum() {
+      while (_voorrang.isNotEmpty) {
+        final pad = _voorrang.first;
+        _voorrang.remove(pad);
+        final a = perPad[pad];
+        if (a == null) continue;
+        if (gedaan.add(a)) return (album: a, voorrang: true, gelezen: false);
+        // Al van schijf gelezen en nog steeds zonder hoes: die ligt niet op dit toestel.
+        if (a.cover == null && !bijPc.contains(a)) return (album: a, voorrang: true, gelezen: true);
+      }
       while (gelezen < volgorde.length) {
-        final album = volgorde[gelezen++];
+        final a = volgorde[gelezen++];
+        if (gedaan.add(a)) return (album: a, voorrang: false, gelezen: false);
+      }
+      return null;
+    }
+
+    Future<void> lezer() async {
+      while (true) {
+        final volgende = volgendeAlbum();
+        if (volgende == null) return;
+        final album = volgende.album;
+        if (volgende.gelezen) {
+          if (bijPc.add(album)) await haalBijPc(album, meteen: true);
+          continue;
+        }
         final merk = _remoteAlbums[album]?.artTag ?? '';
-        final bewaard = await enricher.bewaardMerk(album);
-        bewaardeMerken[album] = bewaard;
-        if (merk.isNotEmpty && bewaard != merk) continue;
+        // Het merkteken alleen lezen waar de pc er een heeft: dat is de enige vergelijking die hier
+        // gebeurt. De werker hieronder leest het voor de rest zelf, op de achtergrond. Zo kost een
+        // gewoon album in deze ronde één bestand in plaats van twee.
+        if (merk.isNotEmpty) {
+          final bewaard = await enricher.bewaardMerk(album);
+          bewaardeMerken[album] = bewaard;
+          if (bewaard != merk) {
+            // Op het scherm en achterhaald: meteen de goede bij de pc, niet achteraan in de navraag.
+            if (volgende.voorrang && bijPc.add(album)) await haalBijPc(album, meteen: true);
+            continue;
+          }
+        }
         if (album.zekereHoes != null) continue;
         final c = await enricher.cached(album);
-        if (c == null) continue;
+        if (c == null) {
+          // Op het scherm en nog nooit op dit toestel geweest (een nieuwe plaat): meteen bij de pc.
+          // Anders wachtte hij tot alles van schijf gelezen was en de navraag hem in de vaste
+          // volgorde tegenkwam — op de Shield ~6 s voor de hoes in de spelerbalk (18-10-2026).
+          if (volgende.voorrang && bijPc.add(album)) await haalBijPc(album, meteen: true);
+          continue;
+        }
         uitSchijf[album] = c;
         album.enriched = c;
-        if (++since >= 24) {
+        _onthoudHoes(album, c);
+        // Wat op het scherm staat meteen, de rest gebundeld per 24.
+        if (volgende.voorrang || ++since >= 24) {
           since = 0;
           notifyListeners();
         }
@@ -3267,116 +3467,27 @@ class LibraryStore extends ChangeNotifier {
       notifyListeners();
     }
 
+    // Wat er op het scherm staat eerst, ook bij de pc: wat de leesronde niet van schijf kon halen en
+    // wat er sinds de leesronde in beeld kwam ([hoesVoorrang]). Dan de rest in de vaste volgorde.
+    ({Album album, bool voorrang})? volgendeVoorPc() {
+      while (_voorrang.isNotEmpty) {
+        final pad = _voorrang.first;
+        _voorrang.remove(pad);
+        final a = perPad[pad];
+        if (a != null && bijPc.add(a)) return (album: a, voorrang: true);
+      }
+      while (volgende < volgorde.length) {
+        final a = volgorde[volgende++];
+        if (bijPc.add(a)) return (album: a, voorrang: false);
+      }
+      return null;
+    }
+
     Future<void> werker() async {
       while (true) {
-        if (volgende >= volgorde.length) return;
-        final album = volgorde[volgende++];
-        // Het merkteken van de hoes die de eigenaar op de pc GEKOZEN heeft. Wijkt dat af van wat
-        // hier in de cache ligt, dan is die cache achterhaald en moet hij wijken.
-        //
-        // **Dit was het gat.** De cache heet naar `artiest|titel`, en die naam beweegt niet als je
-        // een andere afbeelding kiest. Het bestand lag er dus nog, met de goede naam en de foute
-        // inhoud, en werd bij élke start opnieuw als waarheid genomen. Gemeten op 13-08-2026: op de
-        // pc de juiste Whitney-hoes, op de telefoon het logo van een verzamelaar — telkens weer, hoe
-        // vaak de eigenaar het ook corrigeerde.
-        final merk = _remoteAlbums[album]?.artTag ?? '';
-        final bewaard = bewaardeMerken[album] ?? await enricher.bewaardMerk(album);
-        final verouderd = merk.isNotEmpty && bewaard != merk;
-        // Er staat al iets én het klopt: niets te doen. Deze uitgang stond vroeger in de wachtrij
-        // zelf, en daarom werd `verouderd` hierboven nooit voor zo'n album berekend. Wat de
-        // leesronde hierboven net van schijf zette telt niet als "klopt": dat moet nog nagevraagd.
-        if (album.zekereHoes != null && !verouderd && !uitSchijf.containsKey(album)) continue;
-        if (verouderd) {
-          // De pc heeft een ANDERE bewuste keuze dan hier ligt, en de pc houdt de boeken bij. Alles
-          // wat hier lokaal voorrang had is daarmee achterhaald — laat je dat staan, dan wint het
-          // straks weer van de bytes die zo binnenkomen en verandert er zichtbaar niets.
-          album.correctedCover = null;
-          album.resolvedCover = null;
-        }
-        final ref = _remoteAlbums[album]?.artRef;
-        final cached = verouderd ? null : (uitSchijf[album] ?? await enricher.cached(album));
-
-        // Er ligt hier al een hoes. Klopt hij nog met wat de pc toont?
-        //
-        // **Dit was het laatste gat, en het grootste.** De vorige controle keek naar `artTag`, en die
-        // is er alleen bij een BEWUSTE keuze. Kwam de hoes van de pc uit de tags van het bestand of
-        // uit het verrijken — het gewone geval — dan stond er nergens iets om het cachebestand
-        // tegenaan te houden. Dat bestand heet naar `artiest|titel` en die naam beweegt nooit, dus
-        // wat er één keer in beland was bleef er staan. Zo hield de Mac maandenlang een andere
-        // clownhoes vast dan de pc, en hielp corrigeren op de pc niets: de Mac keek er niet meer
-        // naar.
-        //
-        // Navragen kost één rit: klopt het, dan komt er een lege 304 terug; klopt het niet, dan
-        // meteen de juiste bytes. Dat is niet duurder dan de download die anders zou volgen.
-        if (cached != null && ref != null && pcKentMerken) {
-          gevraagd++;
-          final antwoord = await client.artAls(ref, bewaard, maxZijde: kHoesPlafond);
-          // Een lege 304 telt hier als geslaagd, en dat is geen boekhoudkundige truc: de vraag die
-          // `hoezenMislukt` stelt is "antwoordt de pc nog?". Een bibliotheek die volledig in de cache
-          // staat vraagt hier alleen maar na, krijgt alleen maar 304'jes, en zou anders bij elke
-          // start melden dat de pc onbereikbaar is terwijl alles werkt.
-          if (antwoord != null) gelukt++;
-          if (antwoord != null && antwoord.etag == null) pcKentMerken = false;
-          final verse = antwoord?.bytes;
-          if (verse != null && verse.isNotEmpty) {
-            album.embeddedCover = verse;
-            // Ook hier: de leesronde zette de oude al neer, en bij `embeddedIsVanEenAndere` wint
-            // `enriched` van `embeddedCover` — dan bleef de achterhaalde staan.
-            album.enriched = verse;
-            await enricher.putCached(album, verse);
-            final versMerk = antwoord!.etag ?? merk;
-            if (versMerk.isNotEmpty) await enricher.schrijfMerk(album, versMerk);
-            if (++since >= 24) {
-              since = 0;
-              notifyListeners();
-            }
-            continue;
-          }
-          // 304, of geen antwoord. In beide gevallen houden we wat we hebben — een pc die even niet
-          // opneemt mag geen hoezen van het scherm halen. Wél het merkteken bijwerken als de pc er
-          // een gaf, want dan weten we voortaan wat we vasthouden.
-          final gekregen = antwoord?.etag ?? '';
-          if (gekregen.isNotEmpty && gekregen != bewaard) {
-            await enricher.schrijfMerk(album, gekregen);
-          }
-        }
-
-        if (cached != null) {
-          // Staat er al sinds de leesronde, en de pc zei dat hij klopt: niets veranderd, dus ook
-          // niets melden. Elke melding bouwt elk scherm dat naar de bibliotheek kijkt opnieuw op — op
-          // de artiestpagina tot 33 ms per keer (S26, 11-10-2026) — en zo meldde deze lus na elke
-          // koude start nog ~28 keer "alles anders" over 680 hoezen die al op het scherm stonden.
-          if (identical(uitSchijf[album], cached)) continue;
-          album.enriched = cached;
-          if (++since >= 24) {
-            since = 0;
-            notifyListeners();
-          }
-          continue;
-        }
-        if (ref != null) gevraagd++;
-        final antwoord = ref == null ? null : await client.artAls(ref, '', maxZijde: kHoesPlafond);
-        if (antwoord != null && antwoord.etag == null) pcKentMerken = false;
-        final bytes = antwoord?.bytes;
-        if (bytes == null || bytes.isEmpty) continue;
-        gelukt++;
-        album.embeddedCover = bytes;
-        await enricher.putCached(album, bytes);
-        // Pas ná het wegschrijven, zodat een afgebroken download geen merkteken achterlaat dat zegt
-        // "deze is bij" terwijl er iets ouds op schijf staat.
-        //
-        // Het merkteken van de pc gaat vóór dat van de bewuste keuze: het beschrijft precies de
-        // bytes die hier zojuist geland zijn, ook als de hoes helemaal geen bewuste keuze was. Een
-        // oudere pc geeft er geen, en dan valt dit terug op het oude gedrag.
-        final teBewaren = antwoord?.etag ?? merk;
-        if (teBewaren.isNotEmpty) await enricher.schrijfMerk(album, teBewaren);
-        // Gebundeld, net als de tak hierboven: elke melding tekent de startpagina opnieuw. Eén
-        // melding per binnenkomende hoes betekende honderden volledige hertekeningen in de eerste
-        // minuut op de Shield — precies wanneer je wilt gaan bladeren.
-        if (++since >= 24) {
-          since = 0;
-          notifyListeners();
-        }
+        final klus = volgendeVoorPc();
+        if (klus == null) return;
+        await haalBijPc(klus.album, meteen: klus.voorrang);
       }
     }
 

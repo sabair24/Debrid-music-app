@@ -16,13 +16,17 @@ import 'package:flutter_test/flutter_test.dart';
 /// Een kind dat opvalt in de boom, zodat de laag eromheen te vinden is.
 const _kind = SizedBox(width: 40, height: 40, key: ValueKey('kind'));
 
-/// De vervaging die [Binnenkomst] zélf zet.
+/// De verschuiving die [Binnenkomst] zélf zet.
 ///
 /// **Binnen `Binnenkomst` zoeken en niet boven het kind.** Een `MaterialApp` hangt zijn eigen
 /// route-overgangen in de boom, en dat zijn óók `FadeTransition`s — vier stuks, boven alles wat je
 /// neerzet. Zoeken op "staat er een vervaging boven dit kind" vindt die dus altijd, met of zonder
 /// animatie, en dan meet deze toets het raamwerk in plaats van deze widget.
 Finder get _laag =>
+    find.descendant(of: find.byType(Binnenkomst), matching: find.byType(SlideTransition));
+
+/// Een vervaging binnen [Binnenkomst]: die hoort er nooit te zijn (zie de toets hieronder).
+Finder get _vervaging =>
     find.descendant(of: find.byType(Binnenkomst), matching: find.byType(FadeTransition));
 
 void main() {
@@ -40,17 +44,28 @@ void main() {
     await t.pumpWidget(const MaterialApp(
       home: Scaffold(body: BinnenkomstGroep(child: Binnenkomst(child: _kind))),
     ));
-    // Twee beelden: het eerste roept de terugroep-na-het-beeld aan, die zet de animatie op en vraagt
-    // een hertekening aan; het tweede is die hertekening.
-    await t.pump();
-    await t.pump();
+    // Al in het EERSTE beeld: de beslissing valt vóór de eerste build.
     expect(_laag, findsOneWidget, reason: 'er hoort een overgang omheen te staan');
 
     await t.pumpAndSettle();
-    // Volledig zichtbaar als hij klaar is — een animatie die halverwege blijft hangen is erger dan
-    // geen animatie.
-    final vervaging = t.widget<FadeTransition>(_laag);
-    expect(vervaging.opacity.value, 1.0);
+    // Op zijn plek als hij klaar is — een animatie die halverwege blijft hangen is erger dan geen
+    // animatie.
+    final schuif = t.widget<SlideTransition>(_laag);
+    expect(schuif.position.value, Offset.zero);
+  });
+
+  testWidgets('een hoes is vanaf het eerste beeld te zien: geen flits en geen vervaging', (t) async {
+    // Tot 17-10-2026 stond de tegel in het eerste beeld vol, in het tweede op onzichtbaar, en vaagde
+    // hij daarna pas in: bij elke tabwissel een flits en een halve tel wachten op de hoezen.
+    await t.pumpWidget(const MaterialApp(
+      home: Scaffold(body: BinnenkomstGroep(child: Binnenkomst(index: 3, child: _kind))),
+    ));
+    for (var i = 0; i < 40; i++) {
+      expect(_vervaging, findsNothing, reason: 'beeld $i');
+      expect(find.byKey(const ValueKey('kind')), findsOneWidget, reason: 'beeld $i');
+      await t.pump(const Duration(milliseconds: 16));
+    }
+    await t.pumpAndSettle();
   });
 
   testWidgets('wat later gebouwd wordt animeert niet meer', (t) async {

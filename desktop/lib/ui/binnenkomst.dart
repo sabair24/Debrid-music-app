@@ -105,7 +105,7 @@ class _Groep extends InheritedWidget {
   bool updateShouldNotify(_Groep oud) => false;
 }
 
-/// Laat zijn kind één keer binnenkomen: acht punten omhoog, en van niets naar vol.
+/// Laat zijn kind één keer binnenkomen: een klein stukje omhoog, en vanaf het eerste beeld zichtbaar.
 ///
 /// [index] bepaalt hoeveel later hij begint dan zijn buren, zodat een rij niet als één blok
 /// verschijnt maar als een rij.
@@ -123,6 +123,7 @@ class _BinnenkomstState extends State<Binnenkomst> with SingleTickerProviderStat
   AnimationController? _c;
   CurvedAnimation? _curve;
   Animation<Offset>? _schuif;
+  bool _beslist = false;
 
   /// Het trapje: wachten tot deze tegel aan de beurt is.
   ///
@@ -133,30 +134,34 @@ class _BinnenkomstState extends State<Binnenkomst> with SingleTickerProviderStat
   /// stuk, en omdat die toets niet in de bouwstraat stond bleef de bouw al die tijd groen.
   Timer? _wekker;
 
+  /// Hier en niet na het eerste beeld, en zonder vervaging.
+  ///
+  /// Tot 17-10-2026 viel de beslissing in een terugroep NA het eerste beeld, met de vervaging op 0:
+  /// het eerste beeld toonde de tegel vol, het tweede niets, en daarna vaagde hij in 260 ms in, met
+  /// tot 208 ms trapje ervoor. Bij elke tabwissel een flits en een halve tel wachten op de hoezen,
+  /// terwijl Saber vroeg om "direct tonen van alle covers". `didChangeDependencies` mag de groep wél
+  /// lezen en loopt vóór de eerste `build`, dus het eerste beeld staat al in de beginstand; en de
+  /// hoes is er vanaf dat beeld, hij schuift alleen nog een klein stukje op zijn plek.
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_beslist) return;
+    _beslist = true;
     // Op een televisie niets: daar staat de markering al voor "waar ben ik", en veertig tegels die
     // tegelijk bewegen kost beelden op een Tegra X1 — dezelfde afweging als bij de matglas-balk en
     // bij `paneelDecoratie`.
-    if (isTv) return;
-    // Na het eerste beeld, want dit leest de groep uit de context en dat kan niet in initState.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !BinnenkomstGroep.magNog(context)) return;
-      final c = AnimationController(vsync: this, duration: kOvergang);
-      final curve = CurvedAnimation(parent: c, curve: Curves.easeOutCubic);
-      setState(() {
-        _c = c;
-        _curve = curve;
-        // Als BREUK van de eigen hoogte en niet in punten: een tegel van 180 komt zo een stukje
-        // verder van beneden dan een regel van 42, en dat leest natuurlijker dan wanneer allebei
-        // exact evenveel bewegen.
-        _schuif = Tween(begin: const Offset(0, .08), end: Offset.zero).animate(curve);
-      });
-      final wacht = kTrapje * (widget.index < kTrapjeDak ? widget.index : kTrapjeDak);
-      _wekker = Timer(wacht, () {
-        if (mounted) c.forward();
-      });
+    if (isTv || !BinnenkomstGroep.magNog(context)) return;
+    final c = AnimationController(vsync: this, duration: kOvergang);
+    final curve = CurvedAnimation(parent: c, curve: Curves.easeOutCubic);
+    _c = c;
+    _curve = curve;
+    // Als BREUK van de eigen hoogte en niet in punten: een tegel van 180 komt zo een stukje
+    // verder van beneden dan een regel van 42, en dat leest natuurlijker dan wanneer allebei
+    // exact evenveel bewegen.
+    _schuif = Tween(begin: const Offset(0, .05), end: Offset.zero).animate(curve);
+    final wacht = kTrapje * (widget.index < kTrapjeDak ? widget.index : kTrapjeDak);
+    _wekker = Timer(wacht, () {
+      if (mounted) c.forward();
     });
   }
 
@@ -172,15 +177,11 @@ class _BinnenkomstState extends State<Binnenkomst> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
-    final curve = _curve;
+    final schuif = _schuif;
     // Geen animatie: gewoon zichtbaar. Dit is het pad voor alles wat je zelf in beeld scrollt, en
     // het kost precies niets — geen controller, geen laag, geen extra widget.
-    if (curve == null) return widget.child;
-    // De eigen overgangen van het raamwerk en geen `Opacity` met een `Transform` erin: die eerste
-    // zet een `saveLayer` op, en dat is de duurste laag die er is — hier per tegel van een raster.
-    return FadeTransition(
-      opacity: curve,
-      child: SlideTransition(position: _schuif!, child: widget.child),
-    );
+    if (schuif == null) return widget.child;
+    // Alleen schuiven: een `SlideTransition` is een verschuiving bij het tekenen, geen laag.
+    return SlideTransition(position: schuif, child: widget.child);
   }
 }

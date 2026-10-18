@@ -214,4 +214,86 @@ void main() {
       expect(s.isSignedIn, isFalse);
     });
   });
+
+  group('zonder netwerk geen storm van verversingen', () {
+    // Op de Shield in slaapstand (18-10-2026): ~110 naamopzoekingen van securetoken.googleapis.com per
+    // seconde en de app in drie minuten naar 1,8 GB. Een mislukte verversing meldde zich, twee
+    // luisteraars in main.dart vroegen dan meteen db() — en elke mislukking zette er twee nieuwe in gang.
+
+    /// Zoals main.dart: `syncSettings` en `refreshQueue` vragen bij elke melding `db()`.
+    void zoalsDeApp(CloudSession s) {
+      s.addListener(() => unawaited(s.db()));
+      s.addListener(() => unawaited(s.db()));
+    }
+
+    test('herstellen zonder netwerk: hoogstens een handvol pogingen, geen kettingreactie', () async {
+      await meldAan();
+      var pogingen = 0;
+      final s = sessie(ververs: () {
+        pogingen++;
+        throw SocketException('Failed host lookup: securetoken.googleapis.com');
+      });
+      zoalsDeApp(s);
+      await s.restore();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(pogingen, lessThanOrEqualTo(2),
+          reason: 'zonder de pauze verdubbelde dit bij elke mislukking, honderden in deze 300 ms');
+      expect(s.isSignedIn, isTrue, reason: 'en nog steeds niet uitgelogd');
+    });
+
+    test('vijf tegelijk vragen is één verversing', () async {
+      await meldAan();
+      var netwerk = false;
+      var pogingen = 0;
+      final traag = Completer<void>();
+      final s = CloudSession(
+        config: _config,
+        auth: CloudAuth(
+            config: _config,
+            client: MockClient((req) async {
+              if (!req.url.host.startsWith('securetoken')) return http.Response('{}', 404);
+              if (!netwerk) throw SocketException('geen netwerk');
+              pogingen++;
+              await traag.future;
+              return _versGoed();
+            })),
+        firestoreClient: db.client(),
+      );
+      await s.restore(); // zonder netwerk: een verlopen sleutel, zoals op de Shield na de slaapstand
+      netwerk = true;
+      s.netwerkVeranderd();
+      final vragen = [for (var i = 0; i < 5; i++) s.idToken()];
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      traag.complete();
+      expect((await Future.wait(vragen)).toSet(), {'id-token-2'});
+      expect(pogingen, 1, reason: 'iedereen wacht op dezelfde verversing');
+    });
+
+    test('na de pauze, of na een netwerkwissel, mag hij weer', () async {
+      await meldAan();
+      var pogingen = 0;
+      var nu = DateTime(2026, 10, 18, 9);
+      final s = sessie(ververs: () {
+        pogingen++;
+        throw SocketException('geen netwerk');
+      });
+      s.klok = () => nu;
+      await s.restore();
+      final na = pogingen;
+      expect(await s.db(), isNull);
+      expect(pogingen, na, reason: 'vlak na een netwerkfout: niet meteen opnieuw');
+      nu = nu.add(const Duration(seconds: 6));
+      expect(await s.db(), isNull);
+      expect(pogingen, na + 1, reason: 'na de pauze wel');
+      expect(await s.db(), isNull);
+      expect(pogingen, na + 1, reason: 'en dan een langere pauze (10 s)');
+      nu = nu.add(const Duration(seconds: 6));
+      expect(await s.db(), isNull);
+      expect(pogingen, na + 1, reason: '6 s is nog binnen die 10');
+      s.netwerkVeranderd();
+      expect(await s.db(), isNull);
+      expect(pogingen, na + 2, reason: 'een netwerkwissel: meteen weer proberen');
+    });
+  });
+
 }

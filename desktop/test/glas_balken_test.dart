@@ -76,11 +76,14 @@ void main() {
     expect(balkOpGlas(0xFFCC2222), balkKleur(0xFFCC2222));
   });
 
-  test('aangesloten: alleen op een gsm staand, en elke lijst onder de schil telt mee', () {
+  test('aangesloten: op een gsm staand de twee balken, op een breed scherm de spelerbalk, en elke lijst telt mee', () {
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(main, contains('final glasBalken = isCompact(context) && !isTv && MediaQuery.viewInsetsOf(context).bottom == 0;'));
-    expect(main, contains('child: metGlasBalken(\n                context,\n                glas: glasBalken,'));
-    expect(main, contains('if (MediaQuery.viewInsetsOf(context).bottom == 0 && !glasBalken) ...['));
+    // Sinds 17-10-2026 ook de brede spelerbalk van glas op pc, Mac en iPad ("balk, maar van glas").
+    expect(main, contains('final glasSpeler = !isTv && !isCompact(context);'));
+    expect(main, contains('child: metGlasBalken(\n                context,\n                glas: glasBalken || glasSpeler,'));
+    expect(main, contains('if (MediaQuery.viewInsetsOf(context).bottom == 0 && !glasBalken && !glasSpeler) ...['));
+    expect(main, contains('child: RepaintBoundary(child: PlayerBar(opGlas: true)),'));
     expect(main, contains('PlayerBar(metSysteeminzet: false, opGlas: true)'));
     // Twintig lijsten en pagina's onder de schil (geteld op 16-10-2026): zestien met onderOp, drie
     // met een laatste SizedBox, en de afspeellijst die zijn marge zelf uitrekent.

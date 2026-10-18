@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "mediabediening.h"
 #include "win32_window.h"
 
 // A window that does nothing but host a Flutter view.
@@ -28,6 +29,9 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // De mediatoetsen en de knoppen in de taakbalk. Zie mediabediening.h.
+  std::unique_ptr<Mediabediening> media_;
 
   // Is het opruimen al begonnen?
   //

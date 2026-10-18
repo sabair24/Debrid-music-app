@@ -132,21 +132,62 @@ class CloudSession extends ChangeNotifier {
         : Firestore(token: u.idToken, config: config, client: _firestoreClient);
   }
 
+  /// De verversing die nu loopt; wie intussen ook een sleutel vraagt, wacht op dezelfde.
+  Future<CloudUser?>? _verversing;
+
+  /// Tot wanneer er na een netwerkfout niet opnieuw ververst wordt, en hoe lang die pauze was.
+  DateTime? _rustTot;
+  Duration _rust = Duration.zero;
+
+  /// De klok voor die pauze. Een toets zet hem vooruit.
+  @visibleForTesting
+  DateTime Function() klok = DateTime.now;
+
+  /// Het netwerk is gewisseld of terug (zie `Netwerkwacht`): de pauze na een netwerkfout geldt niet
+  /// meer, de volgende vraag mag meteen weer verversen.
+  void netwerkVeranderd() {
+    _rustTot = null;
+    _rust = Duration.zero;
+  }
+
   /// The current user with a token that is good for at least another minute, refreshing if not.
-  Future<CloudUser?> _fresh() async {
+  ///
+  /// **Eén tegelijk, en na een netwerkfout even niet (18-10-2026).** Een mislukte verversing meldt
+  /// zich ([notifyListeners]), en twee luisteraars in main.dart (`syncSettings` en `refreshQueue`)
+  /// vragen dan meteen `db()` — dus weer een verversing. Zonder netwerk mislukt die direct, en elke
+  /// mislukking zette er zo twee nieuwe in gang. Gemeten op de Shield in slaapstand: ~110
+  /// naamopzoekingen van securetoken.googleapis.com per seconde, netd op 140 % en de app in drie
+  /// minuten naar 1,8 GB tot Android hem afschoot. Ook buiten de slaapstand kon het: een sleutel
+  /// ouder dan een uur en een wifi die even wegvalt. Nu wacht iedereen op dezelfde verversing, en na
+  /// een netwerkfout volgt een pauze van 5 s, telkens dubbel tot een minuut.
+  Future<CloudUser?> _fresh() {
     final u = user;
-    if (u == null) return null;
-    if (!u.isExpired) return u;
+    if (u == null) return Future.value(null);
+    if (!u.isExpired) return Future.value(u);
+    final rust = _rustTot;
+    if (rust != null && klok().isBefore(rust)) return Future.value(null);
+    return _verversing ??= _ververs(u).whenComplete(() => _verversing = null);
+  }
+
+  Future<CloudUser?> _ververs(CloudUser u) async {
     try {
       final next = await _auth.refresh(u.refreshToken, uid: u.uid, email: u.email);
       user = next;
+      _rustTot = null;
+      _rust = Duration.zero;
       await _persist(next);
       return next;
     } on CloudAuthException catch (e) {
       lastError = e.message;
       // Only a refusal means the session is really gone. A flat network must not sign you out —
       // that would log you out of your own PC every time the wifi hiccups.
-      if (e.code != 'NETWORK') await signOut();
+      if (e.code != 'NETWORK') {
+        await signOut();
+      } else {
+        final s = _rust.inSeconds;
+        _rust = Duration(seconds: s == 0 ? 5 : (s * 2).clamp(5, 60));
+        _rustTot = klok().add(_rust);
+      }
       notifyListeners();
       return null;
     }
@@ -212,6 +253,9 @@ class CloudSession extends ChangeNotifier {
           refreshToken: bewaard.refreshToken,
           expiresAt: DateTime.fromMillisecondsSinceEpoch(0),
         );
+        // Net mislukt: niet meteen opnieuw. Zie [_fresh].
+        _rust = const Duration(seconds: 5);
+        _rustTot = klok().add(_rust);
       } else {
         // Een echte weigering: de sleutel is ingetrokken, het account uitgezet. Dán ben je uit.
         lastError = e.message;

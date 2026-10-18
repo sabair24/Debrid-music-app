@@ -40,16 +40,21 @@ void main() {
       // Het stuk rond de melding: van de bovenbalk tot net na de statusstrook. Sinds 16-10-2026 staat
       // dat in de zwevende laag van de tv ([_tvBovenlaag]); die wordt alleen op een tv gebouwd, en
       // een pc en een telefoon krijgen de melding zonder scope in hun kolom.
-      final blok = bron.substring(
-          bron.indexOf('node: _tvBalk'),
-          bron.indexOf('child: const _OfflineBanner()') + 'child: const _OfflineBanner()'.length);
+      // "Hier verder luisteren" stond van 17 tot 18-10-2026 ook in deze halte; nu in de spelerbalk.
+      final blok = bron.substring(bron.indexOf('node: _tvBalk'), bron.indexOf('Widget _tvBovenlaag()') + 4000);
       expect(bron, contains('if (isTv) Positioned(top: 0, left: 0, right: 0, child: _tvBovenlaag()),'),
           reason: 'op een pc en een telefoon mag hier geen extra scope bij — daar is de tab-volgorde '
               'in orde en zou dit hem veranderen');
       expect(bron, contains('if (!isTv) const _OfflineBanner(),'),
           reason: 'buiten een tv hoort de melding gewoon in de kolom, zonder scope');
-      expect(blok, contains('child: const _OfflineBanner()'),
+      expect(blok, contains('_OfflineBanner(),'),
           reason: 'de scope hoort ÓM de meldingsbalk te zitten, anders is er niets te bereiken');
+      // Niet meer in de halte: die houdt op elke pagina zijn hoogte vrij, en op de Shield duwde de balk
+      // een albumpagina 130 punten omlaag (18-10-2026). Saber koos de spelerbalk.
+      expect(bron, isNot(contains('child: Center(child: VerderBalk())')));
+      expect(bron, contains('child: const Align(alignment: Alignment.centerRight, child: VerderKnop()),'),
+          reason: 'rechts in de brede spelerbalk (pc, tv)');
+      expect(bron, contains('const VerderKnop(smal: true),'), reason: 'als icoon in de balk van de telefoon');
     });
   });
 

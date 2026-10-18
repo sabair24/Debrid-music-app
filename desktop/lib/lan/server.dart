@@ -1267,8 +1267,28 @@ class LanServer {
     return decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{};
   }
 
+  /// Wie er net nog keek: toestel-id → naam en wanneer. Voor "Speel op …" op de pc (Saber, 17-10-2026):
+  /// alleen een toestel waarop de app open staat, kan overnemen. Zie verder_luisteren.dart.
+  final Map<String, ({String naam, int op})> aanwezig = {};
+
+  /// De toestellen die de laatste [binnen] naar de stand keken.
+  List<({String id, String naam})> aanwezigeToestellen({Duration binnen = const Duration(seconds: 15)}) {
+    final grens = DateTime.now().millisecondsSinceEpoch - binnen.inMilliseconds;
+    return [
+      for (final e in aanwezig.entries)
+        if (e.value.op >= grens) (id: e.key, naam: e.value.naam),
+    ];
+  }
+
   Future<void> _state(HttpRequest req) async {
     final since = int.tryParse(req.uri.queryParameters['since'] ?? '');
+    final toestel = req.uri.queryParameters['toestel'] ?? '';
+    if (toestel.isNotEmpty) {
+      aanwezig[toestel] = (
+        naam: req.uri.queryParameters['naam'] ?? toestel,
+        op: DateTime.now().millisecondsSinceEpoch,
+      );
+    }
     // Nothing durable has changed since the client last looked. The position may well have, so
     // it rides along — it is a handful of bytes and saves a second round trip.
     if (since != null && since == state.rev) {
@@ -1277,6 +1297,7 @@ class LanServer {
         'progressRev': state.progressRev,
         'unchanged': true,
         'progress': state.progress.toJson(),
+        if (state.verzoek != null) 'verzoek': state.verzoek,
       });
     }
     return _json(req.response, state.snapshot());

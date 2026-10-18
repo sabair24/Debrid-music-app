@@ -1,45 +1,52 @@
-/// Wat de terugknop doet, in vier gevallen.
-///
-/// **Waarom dit zo klein is en toch de moeite waard.** De fout die deze toets tegenhoudt is stil: de
-/// `canPop` van een `PopScope` wordt vastgelegd op het moment dat hij gebouwd wordt, en een pagina
-/// die in de binnennavigator geopend wordt hertekent de schil niet. Zonder tegenmaatregel blijft die
-/// waarde op Start `true` staan — en dan verlaat één druk op TERUG de app terwijl er een albumpagina
-/// openstaat. Op een afstandsbediening, waar TERUG de knop is die je constant gebruikt, leest dat als
-/// een app die crasht.
-///
-/// De regel staat daarom als zuivere functie apart, en zowel `canPop` als de afhandelaar leidt
-/// eruit af. Dan is dit een gezakte toets in plaats van iets wat je op het toestel ontdekt.
+/// Escape en de terugknop van de muis zijn op de pc een stap terug (17-10-2026: Escape deed niets op
+/// Nu speelt of een albumpagina).
 library;
 
+import 'dart:io';
+
+import 'package:debridmusic/main.dart' show appNavigator, stapTerug;
+import 'package:debridmusic/navigatie.dart' show binnenNav;
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:debridmusic/navigatie.dart';
-
 void main() {
-  group('drie lagen, één knop', () {
-    test('een pagina over de sectie heen gaat als eerste dicht', () {
-      // Ook op Start: open je vanaf Start een album, dan hoort TERUG dat album te sluiten en niet
-      // de app. Dit is het geval dat het meest voorkomt en dat zonder deze regel misgaat.
-      expect(terugVanaf(paginaOpen: true, sectie: startSectie), TerugActie.paginaSluiten);
-      expect(terugVanaf(paginaOpen: true, sectie: 0), TerugActie.paginaSluiten);
-    });
+  testWidgets('eerst wat bovenop de app ligt, dan binnen de sectie', (t) async {
+    await t.pumpWidget(MaterialApp(
+      navigatorKey: appNavigator,
+      home: Navigator(
+        key: binnenNav,
+        onGenerateRoute: (_) => MaterialPageRoute(builder: (_) => const Text('sectie')),
+      ),
+    ));
+    binnenNav.currentState!.push(MaterialPageRoute(builder: (_) => const Text('albumpagina')));
+    await t.pumpAndSettle();
+    appNavigator.currentState!.push(MaterialPageRoute(builder: (_) => const Text('nu speelt')));
+    await t.pumpAndSettle();
+    expect(find.text('nu speelt'), findsOneWidget);
 
-    test('daarna brengt hij je naar Start', () {
-      // De secties zijn geen routes maar een getal, dus Flutter heeft hier niets te sluiten. Zonder
-      // deze regel viel je vanaf Albums meteen de app uit.
-      expect(terugVanaf(paginaOpen: false, sectie: 0), TerugActie.naarStart);
-      expect(terugVanaf(paginaOpen: false, sectie: 9), TerugActie.naarStart);
-    });
+    stapTerug();
+    await t.pumpAndSettle();
+    expect(find.text('nu speelt'), findsNothing);
+    expect(find.text('albumpagina'), findsOneWidget);
 
-    test('en pas op Start, met niets eroverheen, mag de app dicht', () {
-      // De andere helft van dezelfde fout: een app waar je niet uit komt.
-      expect(terugVanaf(paginaOpen: false, sectie: startSectie), TerugActie.appVerlaten);
-    });
+    stapTerug();
+    await t.pumpAndSettle();
+    expect(find.text('albumpagina'), findsNothing);
+    expect(find.text('sectie'), findsOneWidget);
 
-    test('Start is sectie 5, en dat staat op één plek', () {
-      // Het getal komt uit NavSections.items; staat het hier anders, dan brengt de terugknop je naar
-      // een andere sectie dan de knop "Start".
-      expect(startSectie, 5);
-    });
+    // Niets meer om terug te gaan: dan gebeurt er niets.
+    stapTerug();
+    await t.pumpAndSettle();
+    expect(find.text('sectie'), findsOneWidget);
+  });
+
+  test('Escape en de terugknop van de muis zijn aangesloten, niet op een tv', () {
+    final hoofd = File('lib/main.dart').readAsStringSync();
+    final escape = hoofd.indexOf('const SingleActivator(LogicalKeyboardKey.escape): const TerugIntent(),');
+    expect(escape, greaterThan(-1));
+    expect(hoofd.lastIndexOf('if (!isTv) ...{', escape), greaterThan(-1));
+    expect(hoofd, contains('TerugIntent: AlsNietTypend<TerugIntent>(stapTerug),'),
+        reason: 'tijdens het typen laat hij Escape aan het veld');
+    expect(hoofd, contains('e.buttons & kBackMouseButton != 0) stapTerug();'));
   });
 }

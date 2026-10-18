@@ -1,82 +1,287 @@
-/// De bovenbalk op een pc: alle secties passen, en de telling duwt ze er niet uit.
+/// Het zwevende menu van pc, Mac en iPad (Saber, 17-10-2026).
 ///
-/// **Waarom dit bestaat.** Op een Mac stond "Kwaliteit" half buiten beeld terwijl de balk er compleet
-/// uitzag: het woordmerk links en de telling ("530 albums · 1326 nummers") rechts aten samen ruim 250
-/// punten uit de rij, en de secties schoven weg in hun schuifvak. Gemeld door Saber op 12-09-2026.
+/// **Waarom dit bestaat.** Op de pc stond de navigatie in een balk met het woordmerk en de telling, en
+/// elke pagina legde er bij scrollen een strook glas achter: *"er is een soort van doorlopende balk dit
+/// wil ik niet, ook met de verschuifbare pill erin, slepen met muis, of gewoon klikken"*. Nu is het één
+/// capsule zoals op de Shield. Wat hier vastligt:
 ///
-/// De reparatie heeft twee helften, en allebei staan ze hier vast:
-/// * de twee regels staan nu GESTAPELD links, zodat ze samen zo breed zijn als de breedste;
-/// * of alles past wordt GEMETEN ([sectiesBreedte]) in plaats van opgehangen aan een vast getal --
-///   dat getal (1040) stamde uit de tijd dat deze balk zeven secties had.
+/// * alles staat in de capsule: Zoeken, de elf secties en Instellingen, en geen woordmerk meer;
+/// * klikken opent meteen; slepen neemt de pil mee als lens, en pas na de veer opent de sectie;
+/// * het muiswiel schuift de pil één sectie per tik en opent na een halve tel stilte;
+/// * omlaag scrollen klapt hem in, bovenaan staat hij altijd open;
+/// * op een breed scherm geen strook meer achter de capsule;
+/// * de pil is helder glas, alleen tekst en icoon zijn paars ("doe enkel de tekst paars").
 ///
-/// **Geen absolute punten in deze toets.** In een toets is elk letterteken een vierkant van de
-/// lettergrootte, dus "past het op 1440 punten" zou hier iets heel anders meten dan op een echte Mac.
-/// Wat wél klopt in allebei de werelden is de VERGELIJKING: gestapeld is smaller dan naast elkaar.
+/// (Dit bestand heette al zo toen het nog over de oude balk ging; de naam staat in de lijst van de
+/// bouwstraat.)
 library;
 
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:debridmusic/main.dart';
+import 'package:debridmusic/main.dart' show NavSections;
+import 'package:debridmusic/ui/menu.dart';
+import 'package:debridmusic/ui/menu_iconen.dart';
+import 'package:debridmusic/zacht_wiel.dart';
+
+List<MenuPunt> _punten() => [
+      const MenuPunt(sleutel: 'zoeken', label: 'Zoeken', icoon: MenuIcoonSoort.zoeken),
+      for (final (id, label, _) in NavSections.items)
+        MenuPunt(sleutel: MenuPunt.voorSectie(id), label: label, icoon: menuIcoonVoorSectie(id)!, sectie: id),
+      const MenuPunt(sleutel: 'instellingen', label: 'Instellingen', icoon: MenuIcoonSoort.instellingen),
+    ];
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   late final String hoofd = File('lib/main.dart').readAsStringSync();
 
-  final woordmerk =
-      _breedte('DebridMusic', const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5));
-  final telling = _breedte('8888 albums · 88888 nummers', const TextStyle(fontSize: 10.5));
+  Future<List<MenuPunt>> menu(WidgetTester t,
+      {double breedte = 2400, String actief = 'sectie-5', Duration wiel = kMenuWielWacht, bool in_ = false}) async {
+    final gekozen = <MenuPunt>[];
+    t.view.physicalSize = Size(breedte, 120);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.reset);
+    await t.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.topCenter,
+          child: ZwevendMenu(
+            punten: _punten(),
+            actief: actief,
+            onKies: gekozen.add,
+            wielWacht: wiel,
+            gekrompen: in_,
+          ),
+        ),
+      ),
+    ));
+    await t.pump();
+    await t.pump(const Duration(seconds: 2));
+    return gekozen;
+  }
 
-  test('gestapeld scheelt de secties een hoop breedte', () {
-    final vast = balkVasteBreedte(desktop: true, touch: false);
-    final gestapeld = vast + (woordmerk > telling ? woordmerk : telling) + 9;
-    // De oude indeling: woordmerk links, telling rechts, met de gaten die daarbij hoorden.
-    final naastElkaar = vast + woordmerk + 9 + telling + 10 + 12;
+  Rect pil(WidgetTester t) => t.getRect(find.byKey(const ValueKey('menu-pil')));
 
-    expect(gestapeld, lessThan(naastElkaar),
-        reason: 'als stapelen niets scheelt, is de reparatie zinloos');
-    expect(naastElkaar - gestapeld, greaterThan(woordmerk),
-        reason: 'de winst hoort minstens de breedte van het woordmerk te zijn -- dat is wat er '
-            'uit de rij verdwijnt');
+  group('wat er in staat', () {
+    testWidgets('Zoeken, alle elf secties en Instellingen', (t) async {
+      await menu(t);
+      for (final p in _punten()) {
+        expect(find.text(p.label), findsOneWidget, reason: '${p.label} hoort in de capsule');
+      }
+    });
+
+    test('de schil geeft alle secties door, en het woordmerk staat niet meer in de balk', () {
+      final a = hoofd.indexOf('List<MenuPunt> _menuPunten(int bezig)');
+      expect(a, greaterThan(-1));
+      final stuk = hoofd.substring(a, a + 900);
+      expect(stuk, contains('for (final (id, label, _) in NavSections.items)'));
+      expect(stuk, contains("sleutel: 'zoeken'"));
+      expect(stuk, contains("sleutel: 'instellingen'"));
+      final b = hoofd.indexOf('  Widget _pcBovenlaag() {');
+      expect(b, greaterThan(-1));
+      final balk = hoofd.substring(b, a);
+      expect(balk, isNot(contains("'DebridMusic'")),
+          reason: 'het woordmerk en de telling zijn uit de balk (Saber koos "alles erin, zoals Shield")');
+      expect(balk, isNot(contains('albums · ')));
+      expect(hoofd, contains('Widget _topBar() => isCompact(context) ? _compactTopBar() : _pcBovenlaag();'));
+    });
+
+    test('op een breed scherm geen strook achter de capsule', () {
+      expect(hoofd, contains('if (!isTv && !isCompact(context)) return const SizedBox.shrink();'),
+          reason: '_MeeschuivendGlas tekende de "doorlopende balk" die Saber niet wil');
+    });
+
+    test('de pil is helder glas, alleen de tekst is paars', () {
+      const t = MenuTint.paars;
+      expect(t.tekst, const Color(0xFFB3A2FF));
+      for (final c in [t.boven, t.onder]) {
+        expect(c.r, c.g, reason: 'geen kleur in het glas van de pil');
+        expect(c.g, c.b);
+      }
+      final vorm = menuPilVorm(t);
+      expect(vorm.boxShadow, isEmpty, reason: 'geen gekleurde gloed rond de pil');
+    });
   });
 
-  test('de secties hebben een echte maat, en de tekstschaal telt mee', () {
-    expect(sectiesBreedte(), greaterThan(0));
-    expect(sectiesBreedte(schaal: const TextScaler.linear(1.35)), greaterThan(sectiesBreedte()),
-        reason: 'meet je zonder de schaal, dan zegt de balk dat iets past wat op een scherm met '
-            'grotere systeemletters niet past');
+  group('klikken en slepen', () {
+    testWidgets('klik: de sectie opent meteen en de pil schuift erheen', (t) async {
+      final gekozen = await menu(t);
+      await t.tap(find.text('Albums'));
+      expect(gekozen.map((p) => p.sectie), [0]);
+      await t.pumpAndSettle();
+      expect(pil(t).center.dx, closeTo(t.getCenter(find.text('Albums')).dx, 14));
+    });
+
+    testWidgets('Zoeken en Instellingen verschuiven de pil niet', (t) async {
+      final gekozen = await menu(t);
+      final voor = pil(t);
+      await t.tap(find.text('Instellingen'));
+      await t.pumpAndSettle();
+      expect(gekozen.map((p) => p.sleutel), ['instellingen']);
+      expect(pil(t), voor);
+    });
+
+    testWidgets('slepen: de pil gaat mee als lens, en pas na de veer opent de sectie', (t) async {
+      final gekozen = await menu(t);
+      final van = t.getCenter(find.text('Start'));
+      final naar = t.getCenter(find.text('Artiesten'));
+      final g = await t.startGesture(van, kind: PointerDeviceKind.mouse);
+      for (var i = 1; i <= 8; i++) {
+        await g.moveTo(Offset.lerp(van, naar, i / 8)!);
+        await t.pump(const Duration(milliseconds: 16));
+      }
+      expect(find.byKey(const ValueKey('menu-lens')), findsOneWidget, reason: 'tijdens het slepen een lens');
+      expect(pil(t).center.dx, closeTo(naar.dx, 30), reason: 'de pil volgt de muis');
+      expect(pil(t).height, greaterThan(34), reason: 'de lens zwelt op');
+      expect(gekozen, isEmpty, reason: 'tijdens het slepen opent er niets');
+      await g.up();
+      await t.pump();
+      expect(gekozen, isEmpty, reason: 'eerst de veer, dan pas de sectie');
+      expect(find.byKey(const ValueKey('menu-lens')), findsNothing);
+      await t.pump(kMenuSchuif + const Duration(milliseconds: 20));
+      expect(gekozen.map((p) => p.sectie), [1]);
+    });
+
+    testWidgets('loslaten tussen twee woorden: het dichtstbijzijnde', (t) async {
+      final gekozen = await menu(t);
+      final van = t.getCenter(find.text('Start'));
+      final a = t.getRect(find.text('Tracks'));
+      // Net rechts van het midden van Tracks, vóór Artiesten.
+      final g = await t.startGesture(van, kind: PointerDeviceKind.mouse);
+      await g.moveTo(Offset(a.center.dx + 6, van.dy));
+      await t.pump();
+      await g.up();
+      await t.pumpAndSettle();
+      expect(gekozen.map((p) => p.sectie), [4]);
+    });
+
+    testWidgets('loslaten op de sectie waar je al bent opent niets', (t) async {
+      final gekozen = await menu(t);
+      final van = t.getCenter(find.text('Start'));
+      final g = await t.startGesture(van, kind: PointerDeviceKind.mouse);
+      await g.moveTo(van + const Offset(30, 0));
+      await t.pump();
+      await g.moveTo(van);
+      await t.pump();
+      await g.up();
+      await t.pumpAndSettle();
+      expect(gekozen, isEmpty);
+    });
   });
 
-  test('de balk meet of alles past, en hangt niet aan een vast getal', () {
-    // Zonder de toelichtingsregels: die citeren de oude regel met opzet, en een wacht die daarover
-    // struikelt zou je leren om de uitleg maar weg te halen.
-    final code = hoofd
-        .split('\n')
-        .where((r) => !r.trimLeft().startsWith('//') && !r.trimLeft().startsWith('///'))
-        .join('\n');
-    expect(code, isNot(contains('box.maxWidth < 1040')),
-        reason: 'een vaste drempel klopt niet meer zodra er een sectie bij komt');
-    expect(hoofd, contains('_NavPillsState.benodigdeBreedte(schaal: schaal)'),
-        reason: 'de balk hoort te rekenen met wat de secties echt nodig hebben');
+  group('het muiswiel', () {
+    testWidgets('één sectie per tik, en pas na een halve tel stil opent die', (t) async {
+      final gekozen = await menu(t);
+      final hier = t.getCenter(find.text('Tracks'));
+      final muis = TestPointer(1, PointerDeviceKind.mouse);
+      await t.sendEventToBinding(muis.hover(hier));
+      await t.sendEventToBinding(muis.scroll(const Offset(0, 100)));
+      await t.pump(const Duration(milliseconds: 200));
+      await t.sendEventToBinding(muis.scroll(const Offset(0, 100)));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(gekozen, isEmpty, reason: 'de pil schoof door, nog niet stil');
+      await t.pump(kMenuWielWacht);
+      expect(gekozen.map((p) => p.sectie), [4], reason: 'Start → Albums → Tracks');
+    });
+
+    testWidgets('een andere sectie: het icoon blijft hetzelfde (en kan dus bewegen)', (t) async {
+      // De onderbalk van de gsm maakte het icoon bij het kiezen opnieuw (een Container-decoratie die
+      // erbij kwam), en dan sprong het nooit (S26, 18-10-2026). Hier mag dat ook niet.
+      await menu(t, actief: 'sectie-5');
+      Finder icoonVan(String woord) =>
+          find.descendant(of: find.ancestor(of: find.text(woord), matching: find.byType(MenuWoord)), matching: find.byType(MenuIcoon));
+      final voor = t.state(icoonVan('Tracks'));
+      await menu(t, actief: MenuPunt.voorSectie(4));
+      expect(t.state(icoonVan('Tracks')), same(voor));
+    });
+
+    testWidgets('een uitgesmeerde wieltik is één tik: de vervolgstappen verspringen niets', (t) async {
+      final gekozen = await menu(t);
+      final hier = t.getCenter(find.text('Tracks'));
+      final muis = TestPointer(1, PointerDeviceKind.mouse);
+      await t.sendEventToBinding(muis.hover(hier));
+      await t.sendEventToBinding(muis.scroll(const Offset(0, 35)));
+      for (var i = 0; i < 6; i++) {
+        await t.sendEventToBinding(
+            PointerScrollEvent(embedderId: kZachtWielVervolg, position: hier, scrollDelta: const Offset(0, 11)));
+        await t.pump(const Duration(milliseconds: 7));
+      }
+      await t.pump(kMenuWielWacht + const Duration(milliseconds: 50));
+      expect(gekozen.map((p) => p.sectie), [0], reason: 'Start → Albums, niet zeven secties verder');
+    });
   });
 
-  test('de telling staat links onder het woordmerk, niet naast de secties', () {
-    final a = hoofd.indexOf("const Text('DebridMusic',");
-    expect(a, greaterThan(-1), reason: 'het woordmerk in de balk is verdwenen');
-    expect(hoofd.substring(a, a + 1200), contains('Consumer2<LibraryStore, FactsWarmer>'),
-        reason: 'de telling hoort in hetzelfde blok als het woordmerk te staan');
-    expect(hoofd, isNot(contains('if (!compact || isTv)')),
-        reason: 'rechts naast de secties hield deze regel juist "Kwaliteit" uit beeld');
-  });
-}
+  group('inklappen', () {
+    test('bovenaan altijd open, omlaag in, omhoog uit, trillen verandert niets', () {
+      expect(menuInklappen(nu: true, positie: 10, stap: 30), isFalse);
+      expect(menuInklappen(nu: false, positie: 400, stap: 12), isTrue);
+      expect(menuInklappen(nu: true, positie: 400, stap: -12), isFalse);
+      expect(menuInklappen(nu: true, positie: 400, stap: 2), isTrue);
+      expect(menuInklappen(nu: false, positie: 400, stap: -2), isFalse);
+    });
 
-double _breedte(String tekst, TextStyle stijl) {
-  final tp = TextPainter(
-    text: TextSpan(text: tekst, style: stijl),
-    textDirection: TextDirection.ltr,
-  )..layout();
-  return tp.width;
+    testWidgets('smal venster: een zachte rand waar woorden buiten beeld staan, en scrollen houdt zijn plek',
+        (t) async {
+      // Tot 17-10-2026 viel "Mijn downlo" hard af tegen de vensterknoppen.
+      await menu(t, breedte: 700);
+      final rand = find.descendant(of: find.byType(ZwevendMenu), matching: find.byType(ShaderMask));
+      expect(rand, findsOneWidget);
+      final rol = t.widget<SingleChildScrollView>(
+          find.descendant(of: find.byType(ZwevendMenu), matching: find.byType(SingleChildScrollView)));
+      final c = rol.controller!;
+      expect(c.position.maxScrollExtent, greaterThan(0));
+      c.jumpTo(120);
+      await t.pump();
+      await t.pump();
+      expect(c.position.pixels, 120, reason: 'de laag mag de rij niet opnieuw laten beginnen');
+      expect(rand, findsOneWidget);
+    });
+
+    testWidgets('de rand komt erbij zonder dat de rij opnieuw begint (tv: net in beeld geschoven)', (t) async {
+      final rol = ScrollController();
+      addTearDown(rol.dispose);
+      await t.pumpWidget(MaterialApp(
+        home: Center(
+          child: SizedBox(
+            width: 300,
+            height: 40,
+            child: MenuRanden(
+              child: SingleChildScrollView(
+                controller: rol,
+                scrollDirection: Axis.horizontal,
+                child: const SizedBox(width: 1200, height: 40),
+              ),
+            ),
+          ),
+        ),
+      ));
+      // Het eerste beeld heeft nog geen laag: die komt pas als de maten bekend zijn. Precies dan schuift
+      // een tv het gekozen woord in beeld.
+      expect(find.byType(ShaderMask), findsNothing);
+      rol.jumpTo(250);
+      await t.pump();
+      await t.pump();
+      expect(find.byType(ShaderMask), findsOneWidget);
+      expect(rol.position.pixels, 250, reason: 'dezelfde rij, met zijn scrollstand');
+    });
+
+    testWidgets('breed venster: geen rand en geen extra laag', (t) async {
+      await menu(t);
+      expect(find.descendant(of: find.byType(ZwevendMenu), matching: find.byType(ShaderMask)), findsNothing);
+    });
+
+    testWidgets('ingeklapt: alleen de sectie waar je bent', (t) async {
+      await menu(t, actief: 'sectie-0', in_: true);
+      expect(find.byKey(const ValueKey('menu-ingeklapt')), findsOneWidget);
+      expect(find.text('Albums'), findsOneWidget);
+      expect(find.text('Tracks'), findsNothing);
+    });
+
+    test('de schil luistert naar het scrollen van de pagina\'s', () {
+      expect(hoofd, contains('child: NotificationListener<ScrollUpdateNotification>(\n'
+          '                          onNotification: _opScrol,'));
+    });
+  });
 }

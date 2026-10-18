@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../cloud/device_identity.dart';
 import '../library.dart';
+import '../models.dart' show Track;
 import '../musicbrainz.dart';
 import '../online.dart';
 import '../settings.dart';
@@ -311,22 +312,81 @@ class LanSharing extends ChangeNotifier {
     Duration position,
     bool playing,
     List<String> queuePaths,
-    int index,
-  ) {
-    final id = _trackId(trackPath);
-    if (id == null) return;
-    state.applyOps([
-      {
-        'type': 'progress',
-        'trackId': id,
-        'positionMs': position.inMilliseconds,
-        'queue': [for (final p in queuePaths) _trackId(p) ?? ''],
-        'index': index,
-        'playing': playing,
-        'at': DateTime.now().millisecondsSinceEpoch,
-      }
-    ], deviceId: 'pc-${deviceName()}', deviceName: deviceName());
+    int index, {
+    bool shuffle = false,
+    String herhaal = 'off',
+    String overname = '',
+    Map<String, dynamic>? radio,
+  }) {
+    final op = progressOp(trackPath, position, playing, queuePaths, index,
+        shuffle: shuffle, herhaal: herhaal, overname: overname, radio: radio);
+    if (op == null) return;
+    state.applyOps([op], deviceId: mijnId, deviceName: deviceName());
   }
+
+  /// Hoe deze pc zichzelf noemt in de gedeelde staat ("Hier verder luisteren").
+  String get mijnId => 'pc-${deviceName()}';
+
+  /// Een op `progress` voor dit nummer, of null als het geen nummer uit de bibliotheek is.
+  Map<String, dynamic>? progressOp(
+    String trackPath,
+    Duration position,
+    bool playing,
+    List<String> queuePaths,
+    int index, {
+    bool shuffle = false,
+    String herhaal = 'off',
+    String overname = '',
+    Map<String, dynamic>? radio,
+  }) {
+    final id = _trackId(trackPath);
+    if (id == null) return null;
+    return {
+      'type': 'progress',
+      'trackId': id,
+      'positionMs': position.inMilliseconds,
+      'queue': [for (final p in queuePaths) _trackId(p) ?? ''],
+      'index': index,
+      'playing': playing,
+      'shuffle': shuffle,
+      'repeat': herhaal,
+      if (overname.isNotEmpty) 'overname': overname,
+      if (radio != null) 'radio': radio,
+      'at': DateTime.now().millisecondsSinceEpoch,
+    };
+  }
+
+  /// "Speel op …" (Saber, 17-10-2026): het toestel [naar] neemt over wat hier speelt, op dezelfde plek.
+  /// Het neemt over zodra het weer naar de stand kijkt (binnen een paar seconden), en meldt dan dat het
+  /// van deze pc overnam; dan pauzeert deze pc vanzelf. Zie verder_luisteren.dart.
+  bool stuurNaar(String naar, String trackPath, Duration position, List<String> queuePaths, int index,
+      {bool shuffle = false, String herhaal = 'off', Map<String, dynamic>? radio}) {
+    final op = progressOp(trackPath, position, true, queuePaths, index,
+        shuffle: shuffle, herhaal: herhaal, radio: radio);
+    if (op == null) return false;
+    state.applyOps([
+      {...op, 'type': 'verzoek', 'naar': naar}
+    ], deviceId: mijnId, deviceName: deviceName());
+    return true;
+  }
+
+  /// Een id van de gedeelde staat als nummer hier (op de pc: een bestand in de bibliotheek).
+  Track? nummerVoorId(String id) {
+    final tracks = library.tracks;
+    if (_idsVoor != tracks.length) {
+      _idsVoor = tracks.length;
+      _nummers
+        ..clear()
+        ..addEntries([
+          for (final t in tracks)
+            if (_trackId(t.path) case final i?) MapEntry(i, t),
+        ]);
+    }
+    return _nummers[id];
+  }
+
+  final Map<String, Track> _nummers = {};
+  int _idsVoor = -1;
 
   // `reportPlayed` stond hier, en is op 28-08-2026 weggehaald. Hij telde een beluistering bij het
   // OPENEN van een nummer, hij hing alleen op de pc ingehangen, en hij was een tweede schrijver naar

@@ -6,15 +6,14 @@ import 'dart:ui' show ImageFilter;
 // Flutter 3.36+ exports a RepeatMode of its own (for RepeatingAnimationBuilder), which collides
 // with the player's. Ours is the one this app means everywhere.
 import 'package:flutter/material.dart' hide RepeatMode;
+import 'package:flutter/gestures.dart' show PointerDeviceKind, kBackMouseButton;
 import 'package:flutter/foundation.dart' show mapEquals, visibleForTesting;
 // AppExitResponse hoort bij de haak die Windows gebruikt als het de app wil beëindigen — zie
 // _saveOnLeaving. Hij woont in dart:ui; material.dart exporteert hem niet.
 import 'dart:ui' show AppExitResponse, PlatformDispatcher;
-// For PointerDeviceKind: the nav chip is drag-scrolled with a mouse, which Flutter leaves out of
-// the default set on purpose.
-import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/rendering.dart' show RenderAbstractViewport, RenderProxyBox;
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart' show launchUrl, LaunchMode;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:provider/provider.dart';
@@ -44,6 +43,11 @@ import 'ui/draaihoes.dart';
 import 'ui/tv_rij.dart';
 import 'ui/duim.dart';
 import 'ui/glas.dart';
+import 'ui/menu.dart';
+import 'mediabediening.dart';
+import 'verder_luisteren.dart';
+import 'ui/knopbewegingen.dart';
+import 'ui/menu_iconen.dart';
 import 'lan/pc_radiobron.dart';
 import 'auto_hoezen.dart';
 import 'bestandsbeheer.dart';
@@ -111,6 +115,8 @@ import 'wikifotos.dart';
 import 'wikipedia.dart';
 import 'warm_log.dart' show WarmLog;
 import 'warmtemeter.dart';
+import 'zacht_wiel.dart';
+import 'eigen_foto.dart';
 import 'library.dart';
 import 'metadata.dart';
 import 'models.dart';
@@ -471,6 +477,19 @@ String versieRegel(String versie, String bouw) {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Op een bureaublad mag de beeldcache ruim. Standaard houdt Flutter 100 MB aan gedecodeerde beelden
+  // vast; een hoes op tegelmaat is daar ~325 KB, met de cd en de albumpagina erbij op andere maten,
+  // en een bibliotheek van 726 hoezen past er dan niet in: terugscrollen decodeerde opnieuw, en
+  // een vers gedecodeerde hoes is een beeld lang een leeg vak (17-10-2026). Een telefoon, iPad of tv
+  // houdt het standaardplafond.
+  if (_isDesktop) {
+    PaintingBinding.instance.imageCache
+      ..maximumSizeBytes = 512 << 20
+      ..maximumSize = 4000;
+  }
+  // Wieltikken van de muis uitgesmeerd over een paar beelden in plaats van één sprong. Zie
+  // zacht_wiel.dart. Alleen Windows: macOS levert zelf al vloeiend scrollen.
+  if (Platform.isWindows) ZachtWiel.installeer();
   MediaKit.ensureInitialized();
   // Before anything reads a setting or a cache: on iOS the app's own folder cannot be worked out
   // from the environment, it has to be asked for.
@@ -821,6 +840,8 @@ Future<void> main() async {
   // dan raakt `metStand` de URL niet aan. Een `if (mode.owner)` eromheen zou alleen een tweede
   // plek zijn waar dit stuk kapot kan.
   player.onHapering = netStore.hapering;
+  // De mediatoetsen van het toetsenbord en de knoppen in de taakbalk, op Windows. Zie mediabediening.dart.
+  Mediabediening.start(speler: player, speaker: speakers, meld: startLog.line);
   // Wisselt het toestel van netwerk (wifi weg, mobiel erbij, Tailscale aan of uit), dan meteen
   // opnieuw een adres van de pc kiezen in plaats van te wachten tot een verzoek vastloopt — en de
   // netsoort (de 5G-stand) mee. Zie `netwerkwissel.dart`. Alleen op een toestel: de pc zelf hoeft
@@ -831,6 +852,9 @@ Future<void> main() async {
       log: ClientSession.logRegel,
       bijWissel: (waarom) async {
         unawaited(netStore.ververs());
+        // De pauze na een mislukte inlogverversing vervalt: het netwerk is er (weer). Zie
+        // [CloudSession.netwerkVeranderd].
+        cloud.netwerkVeranderd();
         await session.netwerkVeranderd(waarom);
       },
     )..start();
@@ -1114,6 +1138,19 @@ Future<void> main() async {
       // En de stand van het glas: of het nog vervaagt, en zo niet, waarom de bewaker het terugzette.
       extra: () => '${player.playing ? 'speelt' : 'stil'} | ${GlasKwaliteit.verslag()}',
     ).start();
+  } else if (_isDesktop) {
+    // De pc schrijft dezelfde regels in zijn eigen warmte.log. fps.log meet alleen terwijl er een
+    // plaat draait; voor het glas van menu en spelerbalk, het scrollen en het slepen was er op de pc
+    // geen beeldtijd te lezen (17-10-2026: "performance van de glass, in detail").
+    final log = WarmLog('$logDir${Platform.pathSeparator}warmte.log');
+    Warmtemeter(
+      stuur: (regels) async {
+        for (final r in regels) {
+          log.line('[pc] $r');
+        }
+      },
+      extra: () => '${player.playing ? 'speelt' : 'stil'} | ${GlasKwaliteit.verslag()}',
+    ).start();
   }
 
   // Wat er in de AUTO te bladeren valt. Dit is de enige plek waar de boom aan de echte bibliotheek
@@ -1217,6 +1254,15 @@ Future<void> main() async {
       // Not knowing the version is a worse answer than none, but not a reason to fail to start.
     }
   }());
+  // "Hier verder luisteren": verder spelen op een ander toestel, van elk toestel naar elk (Saber,
+  // 17-10-2026: "als music afspeelt op pc, en ik ga op men mac, gsm, ipad of shield, dat die hervat
+  // waar ik zat"). Zie verder_luisteren.dart.
+  final ik = mode.owner ? null : await thisDevice();
+  final verder = VerderLuisteren(mode.owner
+      ? _PcVerderBron(sharing, player)
+      : _ToestelVerderBron(library, player, ik!.id));
+  player.addListener(verder.spelerVeranderd);
+  AppLifecycleListener(onResume: () => unawaited(verder.kijkNu()));
   if (mode.owner) {
     unawaited(sharing.applySettings());
     // Waar je gebleven bent gaat naar dezelfde gedeelde staat die de iPad en de Shield lezen, zodat
@@ -1225,9 +1271,28 @@ Future<void> main() async {
     // De speeltelling stond hier ook, en is verhuisd naar `Speelstanden` hierboven: die hoort NIET
     // achter `mode.owner`, want dan telt een gekoppelde telefoon nooit iets mee.
     player.onProgress = (track, position, playing, queue, index) {
-      sharing.reportProgress(
-          track.path, position, playing, [for (final t in queue) t.path], index);
+      // Niets melden zolang alleen de oude stand teruggezet is (bij het opstarten, gepauzeerd): dat
+      // is niet "waar je nu bent". Op de proef overschreef de Shield zo bij het opstarten wat de pc een
+      // minuut eerder speelde, met een nummer van dagen geleden (17-10-2026).
+      if (player.resumedPaused) return;
+      // Even niet na een overname (zie [VerderLuisteren.meldNu]); en de eerste melding na zelf
+      // overnemen zegt van welk toestel, zodat dat pauzeert.
+      final m = verder.meldNu();
+      if (m == null) return;
+      sharing.reportProgress(track.path, position, playing, [for (final t in queue) t.path], index,
+          shuffle: player.shuffle,
+          herhaal: player.repeat.name,
+          overname: m.overname ?? '',
+          radio: player.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null);
     };
+    // De pc hoeft niet te vragen: hij houdt de stand zelf bij.
+    sharing.state.changes.listen((e) {
+      final stand = e['progress'];
+      if (stand is! Map) return;
+      unawaited(verder.opStand(stand.cast<String, dynamic>(),
+          verzoek: (e['verzoek'] as Map?)?.cast<String, dynamic>()));
+    });
+    verder.start(zelfKijken: false);
   }
 
   // Write what has been learned before the app goes away.
@@ -1293,6 +1358,7 @@ Future<void> main() async {
         // SCHIL hem tekent — achter de bovenbalk langs tot aan de schermrand. Zie [PaginaWas].
         ChangeNotifierProvider<PaginaWas>(create: (_) => PaginaWas()),
         ChangeNotifierProvider<Favorieten>.value(value: favorieten),
+        ChangeNotifierProvider<VerderLuisteren>.value(value: verder),
         // Wat je werkelijk gedraaid hebt, bereikbaar voor de schermen.
         //
         // Dit object bestond al — het wordt hierboven aan de speler gegeven — maar stond in geen
@@ -1424,6 +1490,39 @@ Future<void> main() async {
       lijsten.duwOps = duw;
       speelstanden.duwOps = duw;
       oordelen.duwOps = duw;
+      // Wat er hier speelt, naar de pc, onder het eigen id van dit toestel: zo kan elk ander toestel
+      // "Hier verder luisteren" aanbieden (Saber, 17-10-2026). Tot nu toe meldde alleen de pc.
+      player.onProgress = (track, position, playing, queue, index) {
+        final c = library.remote;
+        // Zie de pc hierboven: een alleen teruggezette stand is geen melding.
+        if (c == null || player.resumedPaused) return;
+        final m = verder.meldNu();
+        if (m == null) return;
+        final id = library.gedeeldId(track.path);
+        if (id == null) return;
+        unawaited(c.ask('/api/state/ops', {
+          'ops': [
+            {
+              'type': 'progress',
+              'trackId': id,
+              'positionMs': position.inMilliseconds,
+              'queue': [for (final t in queue) library.gedeeldId(t.path) ?? ''],
+              'index': index,
+              'playing': playing,
+              'shuffle': player.shuffle,
+              'repeat': player.repeat.name,
+              if (m.overname != null) 'overname': m.overname,
+              if (player.radioMode) 'radio': {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam},
+            }
+          ],
+          'deviceId': ik!.id,
+          'deviceName': deviceName(),
+        }).then((_) {}, onError: (Object _) {}));
+      };
+      session.addListener(() {
+        if (session.ready) unawaited(verder.kijkNu());
+      });
+      verder.start();
       session.addListener(() {
         if (session.ready) {
           unawaited(haalFavorieten());
@@ -1684,13 +1783,37 @@ class DebridApp extends StatelessWidget {
         //
         // Niet vuren terwijl je typt: anders steelt de sneltoets een aanslag uit een tekstveld.
         return Shortcuts(
-          shortcuts: const <ShortcutActivator, Intent>{
-            SingleActivator(LogicalKeyboardKey.keyP, control: true): NaarNuSpeeltIntent(),
-            SingleActivator(LogicalKeyboardKey.keyP, meta: true): NaarNuSpeeltIntent(),
-            SingleActivator(LogicalKeyboardKey.gameButtonY): NaarNuSpeeltIntent(),
+          shortcuts: <ShortcutActivator, Intent>{
+            const SingleActivator(LogicalKeyboardKey.keyP, control: true): const NaarNuSpeeltIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyP, meta: true): const NaarNuSpeeltIntent(),
+            const SingleActivator(LogicalKeyboardKey.gameButtonY): const NaarNuSpeeltIntent(),
+            // Ctrl/Cmd+F opent het zoekveld in het menu, Spatie speelt of pauzeert (Saber,
+            // 17-10-2026). Niet op een tv: daar heeft de afstandsbediening zijn eigen knoppen.
+            if (!isTv) ...{
+              const SingleActivator(LogicalKeyboardKey.keyF, control: true): const ZoekIntent(),
+              const SingleActivator(LogicalKeyboardKey.keyF, meta: true): const ZoekIntent(),
+              const SingleActivator(LogicalKeyboardKey.space): const SpeelPauzeIntent(),
+              // Escape is een stap terug, zoals in elk ander venster op de pc: Nu speelt dicht, of
+              // terug van een albumpagina. Een open zoekveld of menu vangt hem eerder af.
+              const SingleActivator(LogicalKeyboardKey.escape): const TerugIntent(),
+            },
           },
           child: Actions(
             actions: <Type, Action<Intent>>{
+              ZoekIntent: CallbackAction<ZoekIntent>(onInvoke: (_) {
+                openZoekveld?.call();
+                return null;
+              }),
+              // Alleen als je niet typt: een uitgeschakelde actie laat de toets door naar het veld.
+              // Een actie die "niets" doet, slikt hem in, en dan kwam er geen spatie in de zoekterm.
+              SpeelPauzeIntent: AlsNietTypend<SpeelPauzeIntent>(() {
+                final ctx = appNavigator.currentContext;
+                if (ctx == null) return;
+                final p = ctx.read<PlayerStore>();
+                // Op de plek waar de muziek is, ook als hij op een speaker staat.
+                p.speeltErgens ? p.pauzeer() : p.speelAf();
+              }),
+              TerugIntent: AlsNietTypend<TerugIntent>(stapTerug),
               NaarNuSpeeltIntent: CallbackAction<NaarNuSpeeltIntent>(onInvoke: (_) {
                 if (TvTextFieldEscape.editingText()) return null;
                 final ctx = appNavigator.currentContext;
@@ -1698,7 +1821,19 @@ class DebridApp extends StatelessWidget {
                 return null;
               }),
             },
-            child: inhoud,
+            // De terugknop van de muis doet hetzelfde als Escape. Op een tv een eigen focusverzoek: de
+            // lijst schuift zacht mee met de pijl, zonder Flutters sprong ervoor ([tvFocusZonderSprong]).
+            child: isTv
+                ? FocusTraversalGroup(
+                    policy: ReadingOrderTraversalPolicy(requestFocusCallback: tvFocusZonderSprong),
+                    child: inhoud,
+                  )
+                : Listener(
+                    onPointerDown: (e) {
+                      if (e.kind == PointerDeviceKind.mouse && e.buttons & kBackMouseButton != 0) stapTerug();
+                    },
+                    child: inhoud,
+                  ),
           ),
         );
       },
@@ -1912,6 +2047,17 @@ extension AlbumSortX on AlbumSort {
       };
 }
 
+/// Waar een sectie vandaan komt als ze binnenschuift ([binnen]) of heen gaat als ze wegschuift, als
+/// deel van haar breedte. Buiten de tv opzij in de richting van de pil ([richting] 1 = de pil ging naar
+/// rechts): de nieuwe komt van rechts, de oude gaat naar links. Op een tv het kleine zetje omhoog van
+/// vroeger.
+@visibleForTesting
+Offset sectieOvergangBegin({required bool tv, required int richting, required bool binnen}) {
+  if (tv) return const Offset(0, .012);
+  const ver = .06;
+  return Offset((binnen ? ver : -ver) * richting, 0);
+}
+
 /// Hoe hoog de bovenbalk van de schil is — de afstand tussen de bovenrand van het VENSTER en de
 /// bovenrand van een pagina die in de binnennavigator leeft.
 ///
@@ -1956,6 +2102,10 @@ class _MeeschuivendGlas extends StatelessWidget {
     //
     // Zonder vervaging (iPad, telefoon, tv) ook de dichtere vulling: dan draagt de kleur alleen de
     // leesbaarheid. Zie [glasZonderVervaging].
+    // Op een pc, Mac en iPad helemaal niet meer (Saber, 17-10-2026: "er is een soort van doorlopende
+    // balk dit wil ik niet"). Het menu zweeft daar als losse capsule over de pagina, en de pagina
+    // schuift er gewoon onderdoor. Op een tv en een gsm blijft hij, om de reden hieronder.
+    if (!isTv && !isCompact(context)) return const SizedBox.shrink();
     final dicht = isCompact(context) || glasZonderVervaging;
     // Op een tv vol tot net onder de knoppen. Daar loopt deze balk sinds 17-10-2026 onder het zwevende
     // menu door (131 punten in plaats van 56), en dan loste de kleur op ter hoogte van de terugpijl: bij
@@ -2108,14 +2258,15 @@ Color balkOpGlas(int? was) =>
 /// BOVEN de navigator: zo houden ook een uitklapmenu en een blad van de binnenste navigator er
 /// rekening mee. Elke lijst telt hem mee via [onderOp].
 @visibleForTesting
-Widget metGlasBalken(BuildContext context, {required bool glas, required Widget balken, required Widget pagina}) {
+Widget metGlasBalken(BuildContext context,
+    {required bool glas, required Widget balken, required Widget pagina, double hoogte = kGlasBalkenHoogte}) {
   if (!glas) return pagina;
   final mq = MediaQuery.of(context);
   return Stack(
     children: [
       Positioned.fill(
         child: MediaQuery(
-          data: mq.copyWith(padding: mq.padding.copyWith(bottom: mq.padding.bottom + kGlasBalkenHoogte)),
+          data: mq.copyWith(padding: mq.padding.copyWith(bottom: mq.padding.bottom + hoogte)),
           child: pagina,
         ),
       ),
@@ -2222,7 +2373,16 @@ class _HomeShellState extends State<HomeShell> {
                       return _tvSprong(e, LogicalKeyboardKey.arrowDown, TraversalDirection.down,
                           [_tvInhoud, _tvSpeler]);
                     },
-                    child: const _OfflineBanner(),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const _OfflineBanner(),
+                        // "Hier verder luisteren" stond hier, in de halte onder de capsule. Die laag
+                        // houdt op elke pagina zijn hoogte vrij, en zo duwde de balk een albumpagina
+                        // 130 punten omlaag. Hij staat nu in de spelerbalk ([VerderKnop]).
+                      ],
+                    ),
                   ),
                   // Geen statusregel meer ("Covers ophalen…", "Scannen…"): Saber koos op 17-10-2026
                   // "weg op de tv". Hij duwde elke pagina een stukje omlaag zolang hij er stond, en
@@ -2428,6 +2588,7 @@ class _HomeShellState extends State<HomeShell> {
     }
     // Zodat een leeg scherm een knop kan hebben die ergens heen gaat. Zie `navigatie.dart`.
     gaNaarSectie = _gaNaar;
+    openZoekveld = _openZoeken;
     _kijkOfErEenNieuweIs();
     _radio = context.read<RadioBesturing>()..addListener(_kijkNaarRadio);
     // De notitie van de vorige keer. Legde je je telefoon weg terwijl er een radio liep, dan komt het
@@ -2633,6 +2794,7 @@ class _HomeShellState extends State<HomeShell> {
     // Alleen loslaten als deze schil hem nog vasthoudt: bij een herstart van de app staat de
     // nieuwe schil er al voordat de oude afgebroken wordt.
     if (gaNaarSectie == _gaNaar) gaNaarSectie = null;
+    if (openZoekveld == _openZoeken) openZoekveld = null;
     super.dispose();
   }
 
@@ -2944,6 +3106,10 @@ class _HomeShellState extends State<HomeShell> {
     // (Saber, 16-10-2026: "minispeler en onderbalk" van glas, de inhoud schuift eronder door). Niet
     // terwijl het toetsenbord open is: dan zijn de balken er niet. Zie [metGlasBalken].
     final glasBalken = isCompact(context) && !isTv && MediaQuery.viewInsetsOf(context).bottom == 0;
+    // Op een pc, Mac en iPad is de spelerbalk ook van glas, over de volle breedte, en schuift de pagina
+    // eronder door (Saber, 17-10-2026: "balk, maar van glas", hetzelfde vloeibare glas als het menu).
+    // Niet op een tv: daar blijft hij een vaste balk onder de inhoud.
+    final glasSpeler = !isTv && !isCompact(context);
     // BACK, on a television, must go back.
     //
     // The seven sections are a number in this state, not routes, so Flutter's navigator has
@@ -3079,8 +3245,13 @@ class _HomeShellState extends State<HomeShell> {
               // dezelfde lijst als een blad van onderen (zie de knop in `_compactBar`).
               child: metGlasBalken(
                 context,
-                glas: glasBalken,
-                balken: glasBalken ? _glasBalken() : const SizedBox.shrink(),
+                glas: glasBalken || glasSpeler,
+                hoogte: glasSpeler ? _spelerHoogte(context) : kGlasBalkenHoogte,
+                balken: glasBalken
+                    ? _glasBalken()
+                    : glasSpeler
+                        ? _glasSpeler()
+                        : const SizedBox.shrink(),
                 pagina: BalkRuimte(
                 // Zolang de balk zweeft, houdt elke pagina zelf deze ruimte eronder vrij — per route,
                 // en daarom verspringt er bij een paginawissel niets. Zie [BalkRuimte].
@@ -3134,10 +3305,14 @@ class _HomeShellState extends State<HomeShell> {
                         filter: _qFilter,
                         sort: _sort,
                         bouw: _sectieKolom,
-                        child: BinnenNavigator(
-                          navigatorKey: binnenNav,
-                          kanTerug: _kanTerug,
-                          wortel: const _SectieHost(),
+                        // Omlaag scrollen klapt het menu in, omhoog klapt het open. Zie [_opScrol].
+                        child: NotificationListener<ScrollUpdateNotification>(
+                          onNotification: _opScrol,
+                          child: BinnenNavigator(
+                            navigatorKey: binnenNav,
+                            kanTerug: _kanTerug,
+                            wortel: const _SectieHost(),
+                          ),
                         ),
                       ),
                     ),
@@ -3169,7 +3344,7 @@ class _HomeShellState extends State<HomeShell> {
             // `viewInsets` en niet `viewPadding`: de eerste is wat er nú over het venster ligt (het
             // toetsenbord), de tweede is wat er permanent onderaan zit (de systeembalk). Ze
             // verwisselen zou de balken voorgoed verbergen.
-            if (MediaQuery.viewInsetsOf(context).bottom == 0 && !glasBalken) ...[
+            if (MediaQuery.viewInsetsOf(context).bottom == 0 && !glasBalken && !glasSpeler) ...[
               // De inzet voor de systeembalk hoort bij de ONDERSTE balk. Staat de navigatiebalk
               // eronder (alleen op een telefoon), dan rekent die hem al mee.
               // Op een tv een eigen scope, net als de bovenbalk. Zonder dit is de spelerbalk met de
@@ -3216,6 +3391,9 @@ class _HomeShellState extends State<HomeShell> {
             if (zweeft)
               Positioned(top: 0, left: 0, right: 0, child: RepaintBoundary(child: _topBar())),
             if (isTv) Positioned(top: 0, left: 0, right: 0, child: _tvBovenlaag()),
+            // "Hier verder luisteren" stond hier, als balk boven de spelerbalk. Saber, 18-10-2026:
+            // "het stoort, en als ik het wegklik kan ik het niet meer selecteren". Nu in de spelerbalk
+            // zelf ([VerderKnop]).
           ],
         ),
       ),
@@ -3231,9 +3409,18 @@ class _HomeShellState extends State<HomeShell> {
   /// brengt je terug naar de bovenkant van die sectie.
   void _gaNaar(int id) {
     binnenNav.currentState?.popUntil((r) => r.isFirst);
+    if (_menuIn) setState(() => _menuIn = false);
     if (_view != id) {
+      final van = NavSections.items.indexWhere((s) => s.$1 == _view);
+      final naar = NavSections.items.indexWhere((s) => s.$1 == id);
+      _richting = naar >= van ? 1 : -1;
       setState(() {
         _view = id;
+        if (_zoekOpen && !(id == 0 || id == 1 || id == 4)) {
+          _zoekOpen = false;
+          _leggenZoekterm('');
+          _searchCtl.text = '';
+        }
         // Op een tv is de zoekterm weg zodra je naar een ander tabblad gaat. Hij bleef staan, en dan
         // stond er op Artiesten "Artiesten · 1" — alleen wie je net gezocht had, zonder dat er
         // ergens een zoekveld te zien was (Saber, 17-10-2026: "wissen na Zoeken"). Op de pc staat
@@ -3277,19 +3464,20 @@ class _HomeShellState extends State<HomeShell> {
         ),
       );
 
-  Widget _topBar() => isCompact(context)
-      ? _compactTopBar()
-      : _isDesktop
-      ? DragToMoveArea(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onDoubleTap: () async => await windowManager.isMaximized()
-                ? windowManager.unmaximize()
-                : windowManager.maximize(),
-            child: _topBarBody(),
-          ),
-        )
-      : _topBarBody();
+  /// Hoe hoog de brede spelerbalk is: 84, en op een iPad de inzet van de thuisstreep eronder.
+  double _spelerHoogte(BuildContext context) =>
+      84.0 + (_isTouch ? MediaQuery.viewPaddingOf(context).bottom : 0.0);
+
+  /// De brede spelerbalk als één glasvlak, met de lensrand: hij staat stil, dus dat mag.
+  Widget _glasSpeler() => const GlasVlak(
+        lens: true,
+        balk: true,
+        // De balk draagt zelf zijn (doorschijnende) tint: zie [balkOpGlas].
+        vulling: BoxDecoration(),
+        child: RepaintBoundary(child: PlayerBar(opGlas: true)),
+      );
+
+  Widget _topBar() => isCompact(context) ? _compactTopBar() : _pcBovenlaag();
 
   /// The section name and a way into the drawer — what a phone gets instead of the pill strip.
   Widget _compactTopBar() {
@@ -3370,197 +3558,232 @@ class _HomeShellState extends State<HomeShell> {
         ],
       );
 
-  Widget _topBarBody() => SizedBox(
-        // The glow keeps running behind the status bar; only the contents move down, so the top of
-        // the screen still looks like one piece rather than a black strip above the app.
-        //
-        // Uit [_breedeBalkHoogte], want een pagina in de binnennavigator moet via [_balkBoven] exact
-        // ditzelfde getal weten om zijn was op die van de schil te laten passen. Twee kopieën lopen
-        // uiteen zodra er één wordt bijgesteld, en dan staat er weer een rand dwars over het scherm.
-        height: _breedeBalkHoogte(context),
-        child: Stack(
-          children: [
-            // De gloed van het merk stond hier. Hij ligt nu achter de pagina's — zie [_merkGloed].
-            Padding(
-              // The glow behind runs to the edge; the contents come in by tvOverscan. 11 points of
-              // top inset on a set that overscans 5% puts the navigation strip's top edge off the
-              // screen, and this bar is how you reach every section of the app.
-              padding: EdgeInsets.fromLTRB(
-                  18 + tvOverscan.left,
-                  11 + tvOverscan.top + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0),
-                  18 + tvOverscan.right,
-                  8),
-              // The bar was built for a 1240-point window. An iPad in portrait is 834, and there
-              // it would simply overflow. Rather than a second navigation for touch — which is
-              // exactly the divergence this whole change is removing — the same bar drops what is
-              // decoration (the wordmark, the counts) and lets the sections scroll.
-              child: LayoutBuilder(
-                builder: (context, box) {
-                  // GEMETEN, niet geraden. Hier stond `box.maxWidth < 1040`, een getal uit de tijd
-                  // dat deze balk zeven secties had. Met elf secties schoof "Kwaliteit" op een Mac
-                  // uit beeld terwijl het woordmerk en de telling er gewoon bij stonden -- de balk
-                  // leek dus compleet en was het niet (Saber, 12-09-2026).
-                  final schaal = MediaQuery.textScalerOf(context);
-                  final secties = _NavPillsState.benodigdeBreedte(schaal: schaal);
-                  // Wat er sowieso naast staat: het icoon, de twee gaten om de secties, het tandwiel
-                  // (44 onder een vinger, 48 onder een muis) en op een pc de vensterknoppen.
-                  final vast = 28 +
-                      10 +
-                      10 +
-                      (_isTouch ? 44.0 : 48.0) +
-                      (_isDesktop ? 4 + _WindowButtonsState.breedte : 0.0);
-                  // Het blok links is zo breed als de breedste van zijn twee regels. De telling meet
-                  // ik op een ruime voorbeeldtekst, zodat de balk niet verspringt als er een album
-                  // bij komt.
-                  final blok = math.max(
-                    _tekstbreedte('DebridMusic',
-                        const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5), schaal),
-                    isTv
-                        ? 0.0
-                        : _tekstbreedte('8888 albums · 88888 nummers',
-                            const TextStyle(fontSize: 10.5), schaal),
-                  );
-                  final compact = box.maxWidth - vast - secties < blok + 9;
-                  return Row(
-                    children: [
-                      // The app's real icon, not an impression of it. This used to be a gradient
-                      // square with a music note drawn to look like the old mark, so when the
-                      // icon was redrawn everywhere else the top bar kept showing the old one.
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.asset('assets/icon/app_icon.png',
-                            width: 28, height: 28, filterQuality: FilterQuality.medium),
-                      ),
-                      if (!compact) ...[
-                        const SizedBox(width: 9),
-                        // Het woordmerk en de telling ONDER elkaar, niet links én rechts van de
-                        // secties. Naast elkaar kostten ze samen ruim 250 punten midden in de rij --
-                        // en die punten gingen af van precies het enige dat hier moet staan: de
-                        // secties. Gestapeld kosten ze de breedte van de breedste van de twee, en de
-                        // regel eronder is ook de plek waar "Scannen… 1234" nu verschijnt.
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('DebridMusic',
-                                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
-                            if (!isTv)
-                              Consumer2<LibraryStore, FactsWarmer>(
-                                builder: (_, lib, warmer, __) => Text(
-                                  lib.scanning
-                                      ? 'Scannen… ${lib.scanned}'
-                                      : (lib.enriching
-                                          ? 'Covers ophalen…'
-                                          : (warmer.status.isNotEmpty
-                                              ? warmer.status
-                                              : '${lib.albums.length} ${lib.albums.length == 1 ? 'album' : 'albums'} · '
-                                                  '${lib.tracks.length} ${lib.tracks.length == 1 ? 'nummer' : 'nummers'}')),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: _muted, fontSize: 10.5),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ],
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Center(
-                          // Draggable with a mouse, not only with a wheel or a finger.
-                          //
-                          // Flutter leaves the mouse out of dragDevices on purpose — on a page, a
-                          // mouse-drag is a text selection, not a scroll. Here there is no text to
-                          // select and the wheel is the only way to reach a section that does not
-                          // fit, which on a narrow window is most of them.
-                          child: ScrollConfiguration(
-                            behavior: ScrollConfiguration.of(context).copyWith(
-                              dragDevices: {
-                                PointerDeviceKind.touch,
-                                PointerDeviceKind.mouse,
-                                PointerDeviceKind.stylus,
-                                PointerDeviceKind.trackpad,
-                              },
-                              scrollbars: false,
-                            ),
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              // Every section stays reachable when they no longer fit side by side.
-                              // A menu would hide them; scrolling keeps them where they were.
-                              child: Consumer<DownloadManager>(
-                                builder: (_, dm, __) => _NavPills(
-                                  active: _view,
-                                  onSelect: _gaNaar,
-                                  badge: dm.jobs.where((j) => j.busy).length,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      // On a television this line is conditional on there being NEWS.
-                      //
-                      // `compact` is always true at 960 points, so the line was simply never shown
-                      // there — and it is the only thing that says "Scannen… 1234" or that the PC is
-                      // working through records nobody has opened. But showing the idle count as
-                      // well ate 200 points of a strip that already does not fit ten sections, and
-                      // cut "Online zoeken" off mid-word. So: on a TV, speak only when there is
-                      // something to say.
-                      // Op een pc staat deze regel nu LINKS onder het woordmerk; rechts hield hij de
-                      // secties uit beeld. Op een televisie blijft hij hier, en alleen bij nieuws.
-                      if (isTv)
-                        Consumer2<LibraryStore, FactsWarmer>(
-                          builder: (_, lib, warmer, __) => (isTv &&
-                                  !lib.scanning &&
-                                  !lib.enriching &&
-                                  warmer.status.isEmpty)
-                              ? const SizedBox.shrink()
-                              : Text(
-                            lib.scanning
-                                ? 'Scannen… ${lib.scanned}'
-                                : (lib.enriching
-                                    ? 'Covers ophalen…'
-                                    // Fourth state, after the two that were already here. The PC
-                                    // works through the records nobody has opened yet; without a
-                                    // line saying so it is invisible work that writes files into
-                                    // the music folder, which is the kind of thing you find out
-                                    // about at the wrong moment.
-                                    : (warmer.status.isNotEmpty
-                                        ? warmer.status
-                                        : '${lib.albums.length} ${lib.albums.length == 1 ? 'album' : 'albums'} · '
-                                            '${lib.tracks.length} ${lib.tracks.length == 1 ? 'nummer' : 'nummers'}')),
-                            style: TextStyle(color: _muted, fontSize: isTv ? 14 : 11.5),
-                          ),
-                        ),
-                      if (isTv) const SizedBox(width: 12),
-                      TvLabelled(
-                        label: 'Instellingen',
-                        child: IconButton(
-                        icon: const Icon(Icons.settings_rounded, size: 19),
-                        color: _muted,
-                        tooltip: 'Instellingen',
-                        // 44 points on a touch screen — the smallest thing Apple expects a finger
-                        // to hit, and a 19-point icon with default padding is under it.
-                        constraints: _isTouch ? const BoxConstraints.tightFor(width: 44, height: 44) : null,
-                        onPressed: () =>
-                            showDialog(context: context, builder: (_) => const SettingsDialog()),
-                      ),
-                      ),
-                      // Only where there is a window to close: on the iPad these would be three
-                      // buttons wired to a plugin that does not exist there.
-                      if (_isDesktop) ...[
-                        const SizedBox(width: 4),
-                        const _WindowButtons(),
-                      ],
-                    ],
-                  );
-                },
+  /// Het menu ingeklapt, omdat je omlaag scrolde (alleen pc, Mac en iPad). Zie [_opScrol].
+  bool _menuIn = false;
+
+  /// Waar de pil bij de laatste sectiewissel heen ging: 1 = naar rechts, -1 = naar links.
+  int _richting = 1;
+
+  /// Het zoekveld staat in de capsule (pc, Mac en iPad). Zie [_openZoeken].
+  bool _zoekOpen = false;
+
+  /// De bovenkant van een pc, Mac of iPad: het zwevende menu, en verder niets dat een balk vormt.
+  ///
+  /// **Waarom zo (Saber, 17-10-2026).** Hier stond een balk met links het woordmerk en de telling, in
+  /// het midden de secties en rechts het tandwiel, en bij scrollen legde elke pagina er een strook glas
+  /// achter: "die staat op pc niet los zie je? er is een soort van doorlopende balk dit wil ik niet".
+  /// Nu is het één capsule zoals op de Shield ([ZwevendMenu], met Zoeken en Instellingen erin), een
+  /// kleine capsule met de vensterknoppen rechts, en alleen bij nieuws een regeltje eronder.
+  ///
+  /// Wat naast de capsules ligt, is nog steeds de titelbalk van het venster: slepen verplaatst het,
+  /// dubbelklikken maximaliseert. Dat vlak ligt ACHTER de capsules, zodat een klik op een woord niet
+  /// eerst op een mogelijke dubbelklik hoeft te wachten.
+  Widget _pcBovenlaag() {
+    final hoogte = _breedeBalkHoogte(context);
+    final boven = 11.0 + (_isTouch ? MediaQuery.viewPaddingOf(context).top : 0.0);
+    final maten = _isTouch ? MenuMaten.vinger : MenuMaten.muis;
+    final capsule = maten.hoogte + MenuMaten.rand * 2;
+    return SizedBox(
+      height: hoogte,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          if (_isDesktop)
+            Positioned.fill(
+              child: DragToMoveArea(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onDoubleTap: () async =>
+                      await windowManager.isMaximized() ? windowManager.unmaximize() : windowManager.maximize(),
+                  child: const SizedBox.expand(),
+                ),
               ),
             ),
-          ],
+          Positioned(
+            top: boven,
+            left: 0,
+            right: 0,
+            child: LayoutBuilder(builder: (context, box) {
+              // Aan beide kanten ruimte voor de vensterknoppen, zodat de capsule in het midden blijft.
+              final opzij = _isDesktop ? _VensterCapsule.breedte + 24 : 18.0;
+              return Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: math.max(240.0, box.maxWidth - 2 * opzij)),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(child: _pcMenu(maten)),
+                      if (_menuIn && !_zoekOpen) ...[
+                        const SizedBox(width: 8),
+                        MenuRondje(
+                          key: const ValueKey('menu-zoekrondje'),
+                          icoon: MenuIcoonSoort.zoeken,
+                          tooltip: 'Zoeken (Ctrl+F)',
+                          maten: maten,
+                          onTap: _openZoeken,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ),
+          if (_isDesktop) Positioned(top: boven, right: 12, child: _VensterCapsule(hoogte: capsule)),
+          // Alleen bij nieuws: Scannen…, Covers ophalen…, of wat de pc nu met de platen doet.
+          Positioned(top: boven + capsule + 6, left: 0, right: 0, child: const Center(child: _MenuStatus())),
+        ],
+      ),
+    );
+  }
+
+  /// De punten van het menu op een pc, Mac of iPad: Zoeken, de elf secties, Instellingen.
+  List<MenuPunt> _menuPunten(int bezig) => [
+        const MenuPunt(sleutel: 'zoeken', label: 'Zoeken', icoon: MenuIcoonSoort.zoeken),
+        for (final (id, label, _) in NavSections.items)
+          MenuPunt(
+            sleutel: MenuPunt.voorSectie(id),
+            label: label,
+            icoon: menuIcoonVoorSectie(id)!,
+            sectie: id,
+            badge: id == 6 ? bezig : 0,
+            bezig: id == 6 && bezig > 0,
+          ),
+        const MenuPunt(sleutel: 'instellingen', label: 'Instellingen', icoon: MenuIcoonSoort.instellingen),
+      ];
+
+  Widget _pcMenu(MenuMaten maten) => Selector<DownloadManager, int>(
+          selector: (_, dm) => dm.jobs.where((j) => j.busy).length,
+          builder: (_, bezig, __) => ZwevendMenu(
+            punten: _menuPunten(bezig),
+            actief: MenuPunt.voorSectie(_view),
+            maten: maten,
+            gekrompen: _menuIn && !_zoekOpen,
+            onUitklappen: () => setState(() => _menuIn = false),
+            zoekbalk: _zoekOpen ? _capsuleZoekbalk(maten) : null,
+            onKies: (p) {
+              switch (p.sleutel) {
+                case 'zoeken':
+                  _openZoeken();
+                case 'instellingen':
+                  showDialog(context: context, builder: (_) => const SettingsDialog());
+                default:
+                  if (p.sectie != null) _gaNaar(p.sectie!);
+              }
+            },
+          ),
+      );
+
+  /// Zoeken in de capsule (Ctrl+F of de knop): de capsule wordt een zoekveld, en de sectie waar je
+  /// bent filtert. Staat die sectie niets te zoeken (Start, Ontdek…), dan naar Albums: een uitslag die
+  /// je niet ziet, is geen uitslag.
+  void _openZoeken() {
+    if (isTv) {
+      _tvSearch();
+      return;
+    }
+    if (isCompact(context)) {
+      if (!_searchable) _gaNaar(0);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _searchFocus.requestFocus();
+      });
+      return;
+    }
+    if (!_searchable) _gaNaar(0);
+    setState(() {
+      _zoekOpen = true;
+      _menuIn = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
+    });
+  }
+
+  /// Het zoekveld dicht (Escape of het kruisje), en de zoekterm weg: anders filtert de lijst op iets
+  /// wat nergens meer te zien is.
+  void _sluitZoeken() {
+    _zoekPauze?.cancel();
+    setState(() {
+      _zoekOpen = false;
+      _leggenZoekterm('');
+      _searchCtl.clear();
+    });
+  }
+
+  /// Het zoekveld zoals het in de capsule staat: het veld, het kwaliteitsfilter, op Albums de
+  /// sortering, en een kruisje.
+  Widget _capsuleZoekbalk(MenuMaten maten) => LayoutBuilder(
+        builder: (context, box) => SizedBox(
+          width: math.min(720.0, box.maxWidth.isFinite ? box.maxWidth : 720.0),
+          height: maten.hoogte,
+          child: CallbackShortcuts(
+            bindings: {const SingleActivator(LogicalKeyboardKey.escape): _sluitZoeken},
+            child: Row(
+              children: [
+                const SizedBox(width: 12),
+                const Icon(Icons.search_rounded, size: 18, color: _muted),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    key: const ValueKey('menu-zoekveld'),
+                    controller: _searchCtl,
+                    focusNode: _searchFocus,
+                    onChanged: _zetZoekterm,
+                    style: const TextStyle(fontSize: 14),
+                    decoration: const InputDecoration.collapsed(
+                      hintText: 'Zoek in je bibliotheek — artiest, album of nummer…',
+                      hintStyle: TextStyle(color: _muted, fontSize: 13.5),
+                    ),
+                  ),
+                ),
+                _filterKeuze(),
+                ..._sortControl(),
+                IconButton(
+                  key: const ValueKey('menu-zoek-sluiten'),
+                  icon: const Icon(Icons.close_rounded, size: 18, color: _muted),
+                  tooltip: 'Sluiten (Esc)',
+                  onPressed: _sluitZoeken,
+                ),
+              ],
+            ),
+          ),
         ),
       );
 
+  /// Het kwaliteitsfilter als één knop met een lijstje, voor in de capsule: vier chips naast een
+  /// zoekveld passen daar niet.
+  Widget _filterKeuze() => PopupMenuButton<QFilter>(
+        tooltip: 'Kwaliteit',
+        initialValue: _qFilter,
+        onSelected: (f) => setState(() => _qFilter = f),
+        color: _panel,
+        position: PopupMenuPosition.under,
+        itemBuilder: (_) => [
+          for (final f in QFilter.values)
+            PopupMenuItem(value: f, child: Text(_qFilterLabel(f), style: const TextStyle(fontSize: 13))),
+        ],
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: _qFilter == QFilter.all ? Colors.white.withValues(alpha: .06) : _accent.withValues(alpha: .28),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white.withValues(alpha: .12)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(_qFilterLabel(_qFilter), style: const TextStyle(fontSize: 12.5, color: _muted)),
+            const Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
+          ]),
+        ),
+      );
+
+  /// Omlaag scrollen klapt het menu in, omhoog klapt het open (Saber, 17-10-2026, zoals iOS 26).
+  /// Alleen pc, Mac en iPad; bovenaan de pagina staat het altijd open. Zie [menuInklappen].
+  bool _opScrol(ScrollUpdateNotification n) {
+    if (isTv || isCompact(context) || n.metrics.axis != Axis.vertical || _zoekOpen) return false;
+    final inklappen = menuInklappen(nu: _menuIn, positie: n.metrics.pixels, stap: n.scrollDelta ?? 0);
+    if (inklappen != _menuIn) setState(() => _menuIn = inklappen);
+    return false;
+  }
 
   /// De sectie zoals hij op het scherm staat: het zoekveld en daaronder de sectie zelf.
   ///
@@ -3572,20 +3795,30 @@ class _HomeShellState extends State<HomeShell> {
           // No permanent search field on a television. It cost 75 points of height for a control
           // you cannot type into without the on-screen keyboard taking over the screen — and the
           // rail has a "Zoeken" entry that asks for the words once and then gets out of the way.
-          if (_searchable && !isTv) _searchBar(context),
+          // Op een pc, Mac en iPad staat het zoekveld sinds 17-10-2026 in de capsule ([_openZoeken]).
+          if (_searchable && !isTv && isCompact(context)) _searchBar(context),
           // Een korte overvloeier in plaats van een harde knip.
           //
           // De navigatiepil schuift al 300 ms naar zijn nieuwe plek terwijl de inhoud eronder al
           // gewisseld wás — die mismatch zie je. Kort en met een klein zetje omhoog, zodat het als
           // een wissel leest en niet als een aarzeling.
+          //
+          // Buiten de tv sinds 17-10-2026 opzij, in de richting waarin de pil gaat (Saber: "schuiven in
+          // de richting van de pil"): gaat de pil naar rechts, dan komt de nieuwe pagina van rechts
+          // binnen en schuift de oude naar links weg. Kort, zodat je voelt waar je heen gaat.
           Expanded(
             child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 160),
-              switchInCurve: Curves.easeOut,
+              duration: Duration(milliseconds: isTv ? 160 : 250),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
               transitionBuilder: (kind, animatie) => FadeTransition(
                 opacity: animatie,
                 child: SlideTransition(
-                  position: Tween(begin: const Offset(0, .012), end: Offset.zero).animate(animatie),
+                  position: Tween(
+                    begin: sectieOvergangBegin(
+                        tv: isTv, richting: _richting, binnen: kind.key == ValueKey(_view)),
+                    end: Offset.zero,
+                  ).animate(animatie),
                   child: kind,
                 ),
               ),
@@ -3807,7 +4040,11 @@ class _SectionsDrawer extends StatelessWidget {
                       selected: huidig == id,
                       selectedTileColor: _accent.withValues(alpha: .16),
                       selectedColor: Colors.white,
-                      leading: Icon(icoon, size: 20),
+                      leading: switch (menuIcoonVoorSectie(id)) {
+                        final soort? => MenuIcoon(
+                            soort: soort, kleur: huidig == id ? Colors.white : _muted, gekozen: huidig == id, maat: 20),
+                        null => Icon(icoon, size: 20),
+                      },
                       title: Text(label),
                       trailing: id == 6 ? const _DownloadBadge.la() : null,
                       onTap: () {
@@ -3820,7 +4057,7 @@ class _SectionsDrawer extends StatelessWidget {
             ),
             const Divider(color: _line, height: 1),
             ListTile(
-              leading: const Icon(Icons.settings_rounded, size: 20),
+              leading: const MenuIcoon(soort: MenuIcoonSoort.instellingen, kleur: _muted, maat: 20),
               title: const Text('Instellingen'),
               onTap: () {
                 Navigator.pop(context);
@@ -4219,35 +4456,13 @@ bool focusZonderDoel(FocusNode? n, {FocusScopeNode? wortel}) {
 /// niets.
 const kTvTabbladWacht = Duration(milliseconds: 500);
 
-/// De capsule van het menu op de tv, zoals in Debrid Media: donker (op een Shield geen vervaging, die
-/// is daar te duur), een haarfijne lichte rand en een schaduw eronder.
+/// De capsule van het menu op de tv is sinds 17-10-2026 van glas ([MenuGlas]), met een pil van helder
+/// glas en lichtpaarse letters eronder ([MenuTint.paars]) — dezelfde onderdelen als op de pc. Kost het
+/// glas de Shield te veel, dan zakt het via matglas naar een dichte vulling ([GlasKwaliteit.tvBalk]).
 ///
-/// Bijna dicht, 90 %. Hij was 60 % doorschijnend, en zonder vervaging is dat te weinig: een titel die
-/// eronder door schoof las je dwars door de woorden heen (Saber, 17-10-2026: "de menubar is te
-/// transparant, de tekst loopt door elkaar"). Wat er nog doorkomt is kleur, geen letters.
-const kTvMenuCapsule = BoxDecoration(
-  color: Color(0xE612121A),
-  borderRadius: BorderRadius.all(Radius.circular(999)),
-  border: Border.fromBorderSide(BorderSide(color: Color(0x1AFFFFFF))),
-  boxShadow: [BoxShadow(color: Color(0x59000000), blurRadius: 30, offset: Offset(0, 8))],
-);
-
-/// De gloed rond de pil en achter het woord eronder: het paars van de app op 45 %.
-const kTvMenuGloed = Color(0x737C5CFF);
-
-/// De letters onder de pil: lichtpaars.
-const kTvMenuLicht = Color(0xFFB3A2FF);
-
-/// De pil die achter de woorden schuift: licht glas, bovenaan een lichtrandje, een paarse gloed.
-const kTvMenuPil = BoxDecoration(
-  borderRadius: BorderRadius.all(Radius.circular(999)),
-  gradient: LinearGradient(
-    begin: Alignment.topCenter,
-    end: Alignment.bottomCenter,
-    colors: [Color(0x38FFFFFF), Color(0x1AFFFFFF)],
-  ),
-  boxShadow: [BoxShadow(color: kTvMenuGloed, blurRadius: 18)],
-);
+/// De maten van icoon en woord in de tv-capsule: 11,5 punten letters (15 op het scherm met de
+/// tv-tekstschaal) en een icoon van 13.
+const kTvMenuMaten = MenuMaten(hoogte: 0, lettergrootte: 11.5, icoon: 13, opzij: 13);
 
 /// Hoe lang de pil over doet naar het volgende woord, en met welke veer (een tikje voorbij en terug),
 /// zoals in Debrid Media: 0,32 s, cubic-bezier(.34, 1.2, .4, 1).
@@ -4373,17 +4588,22 @@ class _TvTopBarState extends State<TvTopBar> {
     // zwevende capsule, en daarin één pil die van het ene woord naar het volgende schuift.
     WidgetsBinding.instance.addPostFrameCallback((_) => _meetPil());
     final pil = _pil;
+    const tint = MenuTint.paars;
     return SizedBox(
       height: TvTopBar.hoogte + tvOverscan.top,
       child: Padding(
         padding: EdgeInsets.fromLTRB(tvOverscan.left, tvOverscan.top - 4, tvOverscan.right, 0),
         child: Align(
           alignment: Alignment.topCenter,
-          child: DecoratedBox(
-            decoration: kTvMenuCapsule,
+          // Vloeibaar glas, ook hier (Saber, 17-10-2026: "overal glas, ook de Shield"). Kost het de
+          // Shield te veel, dan zet de bewaker het terug naar matglas en daarna naar een dichte
+          // vulling — zie [GlasKwaliteit.tvBalk].
+          child: MenuGlas(
             child: Padding(
               padding: const EdgeInsets.all(3),
-              child: SingleChildScrollView(
+              // Een zachte rand waar het menu buiten beeld loopt (18-10-2026: "acks" aan de linkerkant).
+              child: MenuRanden(
+                child: SingleChildScrollView(
                 controller: _rol,
                 scrollDirection: Axis.horizontal,
                 child: Stack(
@@ -4398,24 +4618,25 @@ class _TvTopBarState extends State<TvTopBar> {
                         width: pil.width,
                         top: 0,
                         bottom: 0,
-                        child: const DecoratedBox(decoration: kTvMenuPil),
+                        child: DecoratedBox(decoration: menuPilVorm(tint)),
                       ),
                     Row(
                       key: _rij,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        _item('Zoeken', widget.onSearch),
+                        _item('Zoeken', widget.onSearch, tint, icoon: MenuIcoonSoort.zoeken),
                         for (final (id, label, _) in NavSections.voorTv)
                           _item(label, () {
                             _wissel?.cancel();
                             widget.onPick(id);
                             widget.onIn?.call();
-                          }, sectie: id),
-                        _item('Instellingen', widget.onSettings),
+                          }, tint, sectie: id, icoon: menuIcoonVoorSectie(id)!),
+                        _item('Instellingen', widget.onSettings, tint, icoon: MenuIcoonSoort.instellingen),
                       ],
                     ),
                   ],
                 ),
+              ),
               ),
             ),
           ),
@@ -4455,7 +4676,7 @@ class _TvTopBarState extends State<TvTopBar> {
     setState(() => _pil = nieuw);
   }
 
-  Widget _item(String label, VoidCallback onTap, {int? sectie}) {
+  Widget _item(String label, VoidCallback onTap, MenuTint tint, {int? sectie, required MenuIcoonSoort icoon}) {
     final knop = sectie == null ? null : widget.knoppen?.voor(sectie);
     final onderPil = _pilOp == label;
     return KeyedSubtree(
@@ -4490,19 +4711,15 @@ class _TvTopBarState extends State<TvTopBar> {
                   alignment: 0.5, duration: const Duration(milliseconds: 180), curve: Curves.easeOut);
             }
           },
+          // Icoon en woord zoals op de pc ([MenuWoord]): het icoon loopt vol en beweegt als de pil
+          // erop komt. De stijl wordt samengevoegd met die eromheen, zodat het Inter blijft.
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-            // Samengevoegd met de stijl eromheen, niet in de plaats ervan: een losse TextStyle zonder
-            // lettertype viel terug op dat van het toestel (Roboto) in plaats van Inter.
-            child: AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 200),
-              style: DefaultTextStyle.of(context).style.merge(TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w500,
-                    color: onderPil ? kTvMenuLicht : _muted,
-                    shadows: onderPil ? const [Shadow(color: kTvMenuGloed, blurRadius: 12)] : const [],
-                  )),
-              child: Text(label),
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: MenuWoord(
+              punt: MenuPunt(sleutel: label, label: label, icoon: icoon, sectie: sectie),
+              tint: tint,
+              maten: kTvMenuMaten,
+              onderPil: onderPil,
             ),
           ),
         );
@@ -4511,43 +4728,6 @@ class _TvTopBarState extends State<TvTopBar> {
   }
 }
 
-
-/// Hoe breed een stuk tekst wordt vóórdat het getekend is.
-///
-/// De bovenbalk moet WETEN of alles past. Hij hing aan een vast getal (1040 punten), en dat klopte
-/// niet meer sinds er elf secties in staan: op een Mac van 1440 punten viel "Kwaliteit" weg terwijl
-/// de balk er volledig op leek te staan. Gemeten tekst weet dat wél, en verandert vanzelf mee als er
-/// een sectie bij komt of als iemand zijn systeemletters groter zet.
-double _tekstbreedte(String tekst, TextStyle stijl, TextScaler schaal) {
-  final tp = TextPainter(
-    text: TextSpan(text: tekst, style: stijl),
-    textScaler: schaal,
-    textDirection: TextDirection.ltr,
-  )..layout();
-  return tp.width;
-}
-
-/// Wat de secties in de bovenbalk samen nodig hebben, in punten.
-///
-/// Publiek zodat een toets het kan narekenen: de balk mag niet stilletjes weer te krap worden als er
-/// een sectie bij komt of als een label langer wordt.
-double sectiesBreedte({TextScaler schaal = TextScaler.noScaling}) =>
-    _NavPillsState.benodigdeBreedte(schaal: schaal);
-
-/// Wat er in de bovenbalk NAAST de secties staat: het icoon, de gaten, het tandwiel en op een pc de
-/// vensterknoppen. Zie [sectiesBreedte].
-double balkVasteBreedte({required bool desktop, required bool touch}) =>
-    28 + 10 + 10 + (touch ? 44.0 : 48.0) + (desktop ? 4 + _WindowButtonsState.breedte : 0.0);
-
-class _NavPills extends StatefulWidget {
-  final int active;
-  final ValueChanged<int> onSelect;
-  final int badge; // downloads in progress, shown on "Mijn downloads"
-  const _NavPills({required this.active, required this.onSelect, required this.badge});
-
-  @override
-  State<_NavPills> createState() => _NavPillsState();
-}
 
 /// The seven sections, in one place.
 ///
@@ -4732,17 +4912,29 @@ class Onderbalk extends StatelessWidget {
           children: [
             // De pil om het pictogram: 26 hoog en 40 breed. Hij hoeft de 21 van het pictogram maar
             // net te omsluiten — Material's 32 was ruimte om de ruimte.
-            Container(
+            //
+            // ALTIJD een decoratie, doorzichtig als het vak niet gekozen is. Een `Container` zet zijn
+            // `DecoratedBox` er alleen bij als er een decoratie is: wisselde die van niets naar de pil,
+            // dan veranderde de boom van vorm en werd het icoon opnieuw gemaakt, al vol en in rust.
+            // Op de S26 gefilmd op 18-10-2026: de noot van Tracks sprong nooit. Nu blijft het icoon
+            // hetzelfde en speelt zijn beweging; en de pil vaagt in in plaats van te verschijnen.
+            AnimatedContainer(
+              duration: kMenuIcoonVullen,
+              curve: Curves.easeOut,
               height: 26,
               width: 40,
               alignment: Alignment.center,
-              decoration: gekozen
-                  ? BoxDecoration(
-                      color: _accent.withValues(alpha: .22),
-                      borderRadius: BorderRadius.circular(999),
-                    )
-                  : null,
-              child: Icon(icoon, size: 21, color: gekozen ? _accent : _muted),
+              decoration: BoxDecoration(
+                color: _accent.withValues(alpha: gekozen ? .22 : 0),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              // De lijniconen van het menu: vol als ze gekozen zijn, met hun eigen beweging (Saber,
+              // 17-10-2026: ook in de onderbalk van de gsm). Een sectie zonder eigen icoon houdt het
+              // icoon uit de lijst.
+              child: switch (menuIcoonVoorSectie(id)) {
+                final soort? => MenuIcoon(soort: soort, kleur: gekozen ? _accent : _muted, gekozen: gekozen, maat: 21),
+                null => Icon(icoon, size: 21, color: gekozen ? _accent : _muted),
+              },
             ),
             // Alleen onder de gekozen sectie een naam. Vijf bijschriften vragen vier punten hoogte
             // extra om te vertellen wat de pictogrammen al zeggen; die ene vertelt waar je bent.
@@ -4760,184 +4952,6 @@ class Onderbalk extends StatelessWidget {
                   ),
                 ),
               ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _NavPillsState extends State<_NavPills> {
-  int? _hover;
-
-  static const _items = NavSections.items;
-
-  /// `leadingDistribution: even` verdeelt de speling BINNEN de regelbox.
-  ///
-  /// Een regelbox is hoger dan de letters, en standaard komt die hele speling bóven de basislijn te
-  /// staan — dan hangen de letters hoog in hun eigen boxje. Even verdelen zet ze waar het oog ze
-  /// verwacht. Een vaste verschuiving had het op dit lettertype op deze grootte ook gedaan, en op het
-  /// volgende weer niet.
-  ///
-  /// Hier stond dat dit "the whole fix" was voor tekst die te hoog in de pil staat. Dat was het niet:
-  /// het zet de letters goed in hun regelbox, maar die box hing daarna nog steeds tegen de bovenkant
-  /// van de pil. De andere helft staat bij de [Stack] in [build].
-  static const _style = TextStyle(
-    fontSize: 13,
-    fontWeight: FontWeight.w600,
-    height: 1.2,
-    leadingDistribution: TextLeadingDistribution.even,
-  );
-  static final _padH = _isTouch ? 20.0 : 15.0;
-  static const _badgeW = 21.0;
-
-  /// 44 points under a finger, 32 under a mouse. The pill that slides behind the active section
-  /// is measured from these, so both have to come from the same place.
-  static final _height = _isTouch ? 44.0 : 32.0;
-
-  double _width(int i) => pilBreedte(_items[i],
-      metBadge: _items[i].$1 == 6 && widget.badge > 0,
-      schaal: MediaQuery.textScalerOf(context));
-
-  /// Eén pil, gemeten. Statisch, want de balk hierboven moet dezelfde maat kunnen uitrekenen zonder
-  /// deze pillen al te hebben gebouwd -- twee plekken die apart rekenen lopen uiteen.
-  ///
-  /// De tekstschaal telt mee: op een iPad met grotere systeemletters is een pil breder dan zijn
-  /// ontwerpmaat, en een meting zonder die schaal zegt dan dat iets past wat niet past.
-  static double pilBreedte((int, String, IconData) item,
-      {required bool metBadge, required TextScaler schaal}) {
-    final tp = TextPainter(
-      text: TextSpan(text: item.$2, style: _style),
-      textScaler: schaal,
-      textDirection: TextDirection.ltr,
-    )..layout();
-    return tp.width + _padH * 2 + (metBadge ? _badgeW : 0.0);
-  }
-
-  /// Wat alle secties SAMEN nodig hebben om volledig te passen.
-  ///
-  /// De stip bij "Mijn downloads" telt altijd mee. Anders zou de balk anders gaan staan op het moment
-  /// dat er een download begint, en dat is precies het verkeerde moment om te verspringen.
-  static double benodigdeBreedte({required TextScaler schaal}) {
-    var totaal = 0.0;
-    for (final item in _items) {
-      totaal += pilBreedte(item, metBadge: item.$1 == 6, schaal: schaal);
-    }
-    return totaal;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final widths = [for (var i = 0; i < _items.length; i++) _width(i)];
-    final offsets = <double>[];
-    var total = 0.0;
-    for (final w in widths) {
-      offsets.add(total);
-      total += w;
-    }
-    final activeIdx = _items.indexWhere((e) => e.$1 == widget.active);
-
-    return glassSurface(
-      child: SizedBox(
-        height: _height,
-        width: total,
-        // `fit: expand` en niet de standaard `loose` — dít is de andere helft van de tekst die te hoog
-        // stond. Een niet-gepositioneerd kind in een losse Stack krimpt tot zijn eigen hoogte (13pt maal
-        // 1.2, dus krap 16) en wordt daarna naar de BOVENkant van het vak van 32 (muis) of 44 (vinger)
-        // gelegd. De pil erachter staat op `top: 0, bottom: 0` en vult wél alles — en zo hangt het label
-        // tegen de bovenrand van een pil die twee keer zo hoog is.
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (activeIdx >= 0)
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeOutCubic,
-                left: offsets[activeIdx],
-                width: widths[activeIdx],
-                top: 0,
-                bottom: 0,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(999),
-                    // Drie stops en niet twee. De eerste twee liggen vlak bij elkaar en maken een
-                    // haarfijne lichte rand langs de bovenkant — daar waar glas het licht vangt. Dat
-                    // kan hier niet met een échte rand: een BoxDecoration met een borderRadius eist een
-                    // gelijke rand rondom, dus een lichtere bovenzijde moet uit het verloop komen.
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      stops: const [0, .10, 1],
-                      colors: [
-                        Colors.white.withValues(alpha: .34),
-                        Colors.white.withValues(alpha: .19),
-                        Colors.white.withValues(alpha: .075),
-                      ],
-                    ),
-                    border: Border.all(color: Colors.white.withValues(alpha: .22)),
-                    // Zacht en dichtbij: de pil moet van de strip getild worden, niet ervan losgemaakt.
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: .28),
-                        blurRadius: 10,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            Row(
-              // Rekken, zodat elke chip de volle hoogte van de strip krijgt. Zonder dit staat er alleen
-              // een breedte op elk vakje en is het aanraakgebied maar zo hoog als de letters — dan tik je
-              // naast een tab terwijl je hem raakt.
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (var i = 0; i < _items.length; i++)
-                  SizedBox(
-                    width: widths[i],
-                    child: MouseRegion(
-                      onEnter: (_) => setState(() => _hover = i),
-                      onExit: (_) => setState(() => _hover = _hover == i ? null : _hover),
-                      child: Pressable(
-                        // The row is tight and measured to the pixel; a growing pill would
-                        // shove its neighbours sideways as the highlight moves.
-                        scaleOnFocus: false,
-                        borderRadius: BorderRadius.circular(999),
-                        // The first thing a remote should land on. Without it the app starts
-                        // with the highlight nowhere and the first press appears to do nothing.
-                        autofocus: isTv && i == 0,
-                        onPressed: () => widget.onSelect(_items[i].$1),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              _items[i].$2,
-                              style: _style.copyWith(
-                                color: _items[i].$1 == widget.active
-                                    ? Colors.white
-                                    : (_hover == i ? Colors.white70 : _muted),
-                              ),
-                            ),
-                            if (_items[i].$1 == 6 && widget.badge > 0) ...[
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                decoration: BoxDecoration(
-                                  color: _accent,
-                                  borderRadius: BorderRadius.circular(9),
-                                ),
-                                child: Text('${widget.badge}',
-                                    style: const TextStyle(
-                                        fontSize: 10, fontWeight: FontWeight.w800, color: Colors.white)),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
           ],
         ),
       ),
@@ -5494,7 +5508,9 @@ List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
         // toestel mee, dus ze worden nu uitgerekend. Zie `ui/tegel.dart`.
         //
         // Een hoes van 180 en niet meer 200, sinds de titel twee regels heeft (16-10-2026): met 200
-        // viel de artiestnaam van de gemarkeerde tegel op de Shield onder de spelerbalk.
+        // viel de artiestnaam van de gemarkeerde tegel op de Shield onder de spelerbalk. En sinds
+        // 18-10-2026 140, de maat van de rijen op Start: op de Shield stond de rij met 180 zo laag dat
+        // de titels onder de spelerbalk lagen ("album raster is te groot").
         child: Builder(builder: (context) {
           final hoog = hoogteVanTegel(context, hoes: kTvAlbumHoes);
           return SizedBox(
@@ -5520,7 +5536,7 @@ List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
 }
 
 /// De hoes in de rijen van Albums op een tv. Zie de uitleg bij die rij.
-const double kTvAlbumHoes = 180;
+const double kTvAlbumHoes = kTegelHoes;
 
 /// Which row each album belongs in, and what that row is called.
 ///
@@ -5596,15 +5612,56 @@ class BusyLine extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!busy) return const SizedBox.shrink();
     return SizedBox(
-      width: width,
-      height: 2,
-      child: LinearProgressIndicator(
-        minHeight: 2,
-        backgroundColor: Colors.white.withValues(alpha: .06),
-        valueColor: AlwaysStoppedAnimation(_accent.withValues(alpha: .55)),
-      ),
-    );
+        key: const ValueKey('werkstreep'), width: width, height: 2, child: const RepaintBoundary(child: _Werkstreep()));
   }
+}
+
+/// Het lopende stukje in [BusyLine], op hooguit 30 beelden per seconde.
+///
+/// Was een `LinearProgressIndicator`: die vraagt elk schermbeeld een nieuw beeld, en op de pc van
+/// 144 Hz liet één tegel waarvan de scans gewarmd werden het hele scherm — met het glas van menu en
+/// spelerbalk — 144 keer per seconde opnieuw tekenen terwijl je niets deed (warmte.log, 17-10-2026:
+/// "144.4 beelden/s … LinearProgressIndicator (eindeloos) in BusyLine"). De warmer loopt lang door,
+/// dus dat was bijna altijd. Een streep van twee punten heeft geen 144 beelden nodig.
+class _Werkstreep extends StatefulWidget {
+  const _Werkstreep();
+
+  @override
+  State<_Werkstreep> createState() => _WerkstreepState();
+}
+
+class _WerkstreepState extends State<_Werkstreep> with SingleTickerProviderStateMixin {
+  late final LangzameDraai _loop =
+      LangzameDraai(this, omwenteling: const Duration(milliseconds: 1400), maxBeeldenPerSeconde: 30)..start();
+
+  @override
+  void dispose() {
+    _loop.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      CustomPaint(painter: _WerkstreepSchilder(_loop, _accent.withValues(alpha: .55)), size: Size.infinite);
+}
+
+class _WerkstreepSchilder extends CustomPainter {
+  _WerkstreepSchilder(this.loop, this.kleur) : super(repaint: loop);
+
+  final LangzameDraai loop;
+  final Color kleur;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(Offset.zero & size, Paint()..color = Colors.white.withValues(alpha: .06));
+    // Een stuk van een derde dat van links naar rechts loopt en aan de rand verdwijnt.
+    final breed = size.width / 3;
+    final x = -breed + (size.width + breed) * Curves.easeInOut.transform(loop.value);
+    canvas.drawRect(Rect.fromLTWH(x, 0, breed, size.height).intersect(Offset.zero & size), Paint()..color = kleur);
+  }
+
+  @override
+  bool shouldRepaint(_WerkstreepSchilder oud) => oud.kleur != kleur || oud.loop != loop;
 }
 
 /// The same line, wired to whichever record the warmer is working on right now.
@@ -5645,6 +5702,115 @@ Future<Uint8List?> achterkantVan(BuildContext context, Album al) async {
   return uit?.back;
 }
 
+/// De maat van de hoes op een albumpagina op de pc (zie [AlbumDetailPage]: `artSize`).
+const double kAlbumKopHoes = 200;
+
+/// Bij het aanwijzen van een tegel: wat een klik of twee tikken straks nodig hebben, alvast klaar.
+///
+/// De scans gaan van schijf het geheugen in (dan vindt [AlbumArt] ze in zijn eerste beeld), en de
+/// voorkant en de cd worden gedecodeerd op precies de maat van de albumpagina (dan staat er geen
+/// leeg vlak tijdens het decoderen). Geeft de achterkant terug, zodat de tegel die op zijn eigen maat
+/// kan klaarleggen. Alleen van schijf, nooit een zoektocht op het net: met de muis over een raster
+/// gaan zou anders tientallen Discogs-vragen per minuut afvuren.
+Future<Uint8List?> voorladenVan(BuildContext context, Album al) async {
+  final v = albumArtVooruit(context.read<LibraryStore>(), al);
+  final art = await DiscogsService(context.read<AppSettings>()).cachedReleaseArt(v.artist, v.album,
+      expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+  if (art == null || !context.mounted) return null;
+  final f = art.front, d = art.disc;
+  if (f != null) {
+    await precacheImage(ResizeImage(MemoryImage(f), width: decodeWidth(kAlbumKopHoes)), context);
+  }
+  if (d != null && context.mounted) {
+    await precacheImage(ResizeImage(MemoryImage(d), width: decodeWidth(kAlbumKopHoes * .92)), context);
+  }
+  return art.back;
+}
+
+/// De cd die uit een tegel schuift: de echte cd-scan als die er is, anders de getekende schijf met
+/// de hoes als etiket.
+///
+/// Saber, 18-10-2026: *"in de album screen moeten de cd afbeeldingen ook zichtbaar zijn"* — de tegel
+/// liet altijd de getekende zilveren schijf zien, ook bij een plaat waarvan de albumpagina de echte
+/// cd draaide. Zelfde knip met gat als daar ([_DiscClipper]), zelfde map ([albumArtVooruit]).
+///
+/// Ligt de scan al in het geheugen (het aanwijzen laadt hem voor, zie [voorladenVan]), dan staat hij
+/// er in het eerste beeld; anders wordt hij van schijf gelezen — nooit van het net — en vaagt de
+/// getekende schijf er in [_kTegelCdWissel] in over, terwijl de cd nog uitschuift.
+class _TegelCd extends StatefulWidget {
+  const _TegelCd({required this.album, required this.maat});
+
+  final Album album;
+  final double maat;
+
+  @override
+  State<_TegelCd> createState() => _TegelCdState();
+}
+
+const _kTegelCdWissel = Duration(milliseconds: 180);
+
+class _TegelCdState extends State<_TegelCd> {
+  Uint8List? _scan;
+
+  @override
+  void initState() {
+    super.initState();
+    final v = albumArtVooruit(context.read<LibraryStore>(), widget.album);
+    final dienst = DiscogsService(context.read<AppSettings>());
+    _scan = dienst
+        .artInGeheugen(v.artist, v.album,
+            expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles)
+        ?.disc;
+    if (_scan == null) unawaited(_lees(dienst, v));
+  }
+
+  Future<void> _lees(DiscogsService dienst, AlbumArtVooruit v) async {
+    try {
+      final art = await dienst.cachedReleaseArt(v.artist, v.album,
+          expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+      final d = art?.disc;
+      if (d != null && mounted) setState(() => _scan = d);
+    } catch (_) {/* geen scan: dan blijft de getekende schijf */}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final m = widget.maat;
+    final scan = _scan;
+    return AnimatedSwitcher(
+      duration: _kTegelCdWissel,
+      child: scan == null
+          ? KeyedSubtree(
+              key: const ValueKey('tegel-cd-getekend'),
+              // Het etiket op de decodeermaat van de hoes: één decodering voor allebei. De tegel
+              // tekent de cd op 0,96 van zijn eigen maat.
+              child: TegelSchijf(etiket: widget.album.cover!, maat: m, decodeerBreedte: decodeWidth(m / .96)),
+            )
+          : SizedBox.square(
+              key: const ValueKey('tegel-cd-scan'),
+              dimension: m,
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  boxShadow: [BoxShadow(color: Color(0x66000000), blurRadius: 12, offset: Offset(0, 4))],
+                ),
+                child: ClipPath(
+                  clipper: const _DiscClipper(),
+                  child: Image.memory(scan,
+                      width: m,
+                      height: m,
+                      fit: BoxFit.cover,
+                      cacheWidth: decodeWidth(m),
+                      gaplessPlayback: true,
+                      errorBuilder: (_, __, ___) =>
+                          TegelSchijf(etiket: widget.album.cover!, maat: m, decodeerBreedte: decodeWidth(m / .96))),
+                ),
+              ),
+            ),
+    );
+  }
+}
+
 /// Een album in het raster op Albums.
 ///
 /// Sinds `ui/tegel.dart` bestaat is dit alleen nog de knoop tussen een `Album` en de gedeelde
@@ -5660,7 +5826,11 @@ class AlbumCard extends StatelessWidget {
     final a = album;
     final uid = context.read<LibraryStore>().uidOf(a);
     return AlbumTegel(
-      hoes: (maat) => cover(a.cover, size: maat),
+      hoes: (maat) {
+        // Staat hij op het scherm zonder hoes, dan haalt de ronde hem eerst (zie [LibraryStore.hoesVoorrang]).
+        if (a.cover == null) context.read<LibraryStore>().hoesVoorrang(a);
+        return cover(a.cover, size: maat);
+      },
       // De hoes VLIEGT naar de albumpagina in plaats van te knippen. Het label is wat de app zelf
       // als vaste naam voor een album gebruikt, zodat twee persingen van dezelfde plaat niet met
       // elkaar verwisseld worden.
@@ -5691,6 +5861,13 @@ class AlbumCard extends StatelessWidget {
       onTap: () => openPagina(context, (_) => AlbumDetailPage(album: a)),
       draaibaar: true,
       achterkant: () => achterkantVan(context, a),
+      voorladen: () => voorladenVan(context, a),
+      // De muis op de hoes: de cd schuift uit en er komt een afspeelknop (Saber, 17-10-2026).
+      // De echte cd-scan als die er is, anders de getekende schijf (zie [_TegelCd]).
+      schijf: a.cover == null ? null : (maat) => _TegelCd(album: a, maat: maat),
+      onAfspelen: a.tracks.isEmpty
+          ? null
+          : () => context.read<PlayerStore>().playQueue(a.tracks, 0, cover: a.cover),
       // Tot nu toe kon een albumtegel precies één ding: opengaan. Afspelen, in de wachtrij zetten,
       // radio en verwijderen zaten allemaal een navigatiestap dieper.
       onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
@@ -5902,6 +6079,19 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
       // moment al een andere pagina op, dan wacht hij tot je terug bent.
       zetWas(kleur);
     }
+  }
+
+  /// Heeft de kop ([AlbumArt.onFront]) al een voorkant gemeld? Dan beslist die over de achtergrond.
+  bool _kopGafHoes = false;
+
+  /// De voorkant die de kop werkelijk tekent. Vanaf dan komt de achtergrond alleen nog hier vandaan.
+  ///
+  /// Twee bronnen voor één achtergrond sprongen heen en weer: elke build zette de hoes uit het
+  /// bestand, de kop daarna de scan, en verschilden die twee, dan wiste [HoesAchtergrond] zich bij
+  /// elke build en bakte hij opnieuw (17-10-2026).
+  void _kleurUitKop(Uint8List? bytes) {
+    if (bytes != null) _kopGafHoes = true;
+    _kleurUitHoes(bytes);
   }
 
   /// Ontbrekende nummers staan standaard INGEKLAPT.
@@ -6618,7 +6808,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     // Vanuit build en niet vanuit initState, want `album` wordt per build opnieuw opgezocht (een
     // download die landt herschikt de groepering). Het kost niets: [_kleurUitHoes] stopt meteen als het
     // om dezelfde bytes gaat, en dat is bij elke volgende build zo.
-    _kleurUitHoes(album.correctedCover ?? album.cover);
+    if (!_kopGafHoes) _kleurUitHoes(album.correctedCover ?? album.cover);
     // De bovenkant van de was, voor de glazen balk hieronder. Uit hetzelfde verloop en niet nog eens
     // apart uitgerekend, want dan lopen die twee uiteen zodra er aan de was gesleuteld wordt — en dat
     // is precies de rand die je dán ziet. Het recept staat in `ui/vlak.dart`, want het speelscherm
@@ -7225,7 +7415,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     // cut to .30 in portrait this still said 1.62, so the sleeve was sized for a stride the disc no
     // longer takes and left a band of empty screen beside it.
     final artSize =
-        narrow ? (available / (1 + discTravelFactor(context))).clamp(120.0, 260.0) : 200.0;
+        narrow ? (available / (1 + discTravelFactor(context))).clamp(120.0, 260.0) : kAlbumKopHoes;
 
     final art = AlbumArt(
             artist: album.artist,
@@ -7255,7 +7445,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
             // kleur uit haalt. Vandaar via deze terugroep en niet uit album.cover: dit widget kiest
             // zelf tussen jouw gekozen scan, de gepinde persing en het bestand, en de was moet bij het
             // plaatje horen dat je ziet.
-            onFront: _kleurUitHoes,
+            onFront: _kleurUitKop,
             draai: isTv ? null : _draai,
             onAchter: (b) => _heeftAchter = b != null,
           );
@@ -8548,9 +8738,18 @@ class _CreditsPanelState extends State<CreditsPanel> {
     setState(() => _credits = c);
   }
 
+  /// Openschuiven in plaats van verschijnen. De credits komen een tel na de pagina binnen, en dan
+  /// sprong alles eronder (de tracklijst) in één beeld ~24 punten omlaag (op de pc gezien,
+  /// 17-10-2026). Nu glijdt het er in [kOvergang] heen.
   @override
-  Widget build(BuildContext context) {
-    if (_credits.isEmpty) return const SizedBox.shrink();
+  Widget build(BuildContext context) => AnimatedSize(
+        duration: kOvergang,
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topLeft,
+        child: _credits.isEmpty ? const SizedBox(width: double.infinity) : _inhoud(),
+      );
+
+  Widget _inhoud() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 4, 24, 16),
       child: Column(
@@ -9215,7 +9414,8 @@ class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
         waitDuration: const Duration(milliseconds: 600),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(7),
+          // Rond, nu ze in een capsule staan.
+          borderRadius: BorderRadius.circular(999),
           // Red on hover for close, the one that loses work if hit by accident.
           hoverColor: danger ? const Color(0xFFE81123) : Colors.white.withValues(alpha: .10),
           child: SizedBox(
@@ -9224,6 +9424,54 @@ class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
             child: Icon(icon, size: size, color: _muted),
           ),
         ),
+      );
+}
+
+/// De vensterknoppen in een eigen kleine glascapsule, rechtsboven (Saber, 17-10-2026).
+class _VensterCapsule extends StatelessWidget {
+  const _VensterCapsule({required this.hoogte});
+
+  final double hoogte;
+
+  /// Hoe breed hij is: de drie knoppen en de rand van de capsule.
+  static const breedte = _WindowButtonsState.breedte + 2 * MenuMaten.rand;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: hoogte,
+        width: breedte,
+        child: const MenuGlas(
+          child: Padding(
+            padding: EdgeInsets.all(MenuMaten.rand),
+            child: Center(child: _WindowButtons()),
+          ),
+        ),
+      );
+}
+
+/// Het regeltje onder het menu, alleen als er iets gebeurt: Scannen…, Covers ophalen…, of wat de pc nu
+/// met de platen doet. In rust staat er niets (Saber, 17-10-2026: "alleen bij nieuws").
+class _MenuStatus extends StatelessWidget {
+  const _MenuStatus();
+
+  @override
+  Widget build(BuildContext context) => Consumer2<LibraryStore, FactsWarmer>(
+        builder: (_, lib, warmer, __) {
+          final tekst = lib.scanning
+              ? 'Scannen… ${lib.scanned}'
+              : lib.enriching
+                  ? 'Covers ophalen…'
+                  : warmer.status;
+          if (tekst.isEmpty) return const SizedBox.shrink();
+          return IgnorePointer(
+            child: MenuGlas(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Text(tekst, maxLines: 1, style: const TextStyle(fontSize: 11, color: _muted)),
+              ),
+            ),
+          );
+        },
       );
 }
 
@@ -9524,6 +9772,22 @@ class _Transport {
 }
 
 // ── Now-playing bar ──────────────────────────────────────────────────────────
+/// Hoe breed de knoppen in het midden van de brede spelerbalk hoogstens zijn: shuffle, vorige,
+/// afspelen, volgende, herhalen, wachtrij, speaker en "Speel op …" — acht van 48 plus de tussenruimte.
+const double kSpelerKnoppen = 8 * 48 + 8;
+
+/// Het vak links (het nummer) en rechts ("Verder op …") van de brede spelerbalk; wat overblijft is
+/// voor de knoppen.
+///
+/// **Waarom uitgerekend (18-10-2026).** Dit was `(breedte - 336) / 2`, zonder de randen van de balk en
+/// met minder knoppen dan er staan. Op de Shield (960 punten, 48 overscan aan elke kant) bleef er zo
+/// 268 over voor 340 aan knoppen: ze liepen aan beide kanten het vak in. Zolang het rechtervak leeg
+/// was zag je dat niet; met "Verder op …" erin lag de wachtrijknop half en de speakerknop helemaal
+/// eronder.
+@visibleForTesting
+double spelerZijvak(double breedte, {required double rand}) =>
+    math.min(280.0, math.max(96.0, (breedte - rand - kSpelerKnoppen) / 2));
+
 class PlayerBar extends StatelessWidget {
   const PlayerBar({super.key, this.metSysteeminzet = true, this.opGlas = false});
 
@@ -9561,7 +9825,7 @@ class PlayerBar extends StatelessWidget {
     // one letter per line and overflowed the bar by 45 pixels.
     if (isCompact(context)) return _compactBar(context, x, bottomInset, opGlas: opGlas);
 
-    final side = math.min(280.0, math.max(96.0, (width - 336) / 2));
+    final side = spelerZijvak(width, rand: 36 + tvOverscan.horizontal);
     return AnimatedContainer(
       // Overvloeien en niet omslaan: deze balk staat permanent in beeld, en een kleur die per nummer
       // omspringt trekt aandacht op de plek waar je juist niet kijkt.
@@ -9570,9 +9834,10 @@ class PlayerBar extends StatelessWidget {
       // Taller on a television: the text is scaled there, and the bottom row (position, slider,
       // duration) sat flush against the panel edge — the first strip a set overscans away.
       height: (isTv ? 104 : 84) + bottomInset,
+      // Op glas doorschijnend en zonder streep: de lichtrand van het glas is de bovenrand.
       decoration: BoxDecoration(
-        color: balkKleur(x.player.wasKleur),
-        border: const Border(top: BorderSide(color: _line)),
+        color: opGlas ? balkOpGlas(x.player.wasKleur) : balkKleur(x.player.wasKleur),
+        border: opGlas ? null : const Border(top: BorderSide(color: _line)),
       ),
       // The panel runs to the edge; only what you read and press comes in. On a television the
       // bottom row of this bar is the first thing a set overscans away, so it gets tvOverscan
@@ -9601,6 +9866,9 @@ class PlayerBar extends StatelessWidget {
                 ),
                 const SizedBox(width: 12),
                 Expanded(
+                  // Een ander nummer: titel en artiest schuiven weg en de nieuwe schuiven binnen.
+                  child: SchuifTekst(
+                  sleutel: t?.path,
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -9613,6 +9881,8 @@ class PlayerBar extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontWeight: FontWeight.w600)),
                           ),
+                          // Het hart: vol als het een favoriet is, en het klopt als het er een wordt.
+                          if (t != null && !isTv) _HartKnop(track: t),
                           // What quality am I actually hearing? (local files only — a streamed
                           // source's real quality isn't known here.)
                           //
@@ -9668,6 +9938,7 @@ class PlayerBar extends StatelessWidget {
                         ),
                     ],
                   ),
+                  ),
                 ),
               ],
             ),
@@ -9684,14 +9955,16 @@ class PlayerBar extends StatelessWidget {
                     // which is one tap away.
                     if (!isCompact(context))
                     IconButton(
-                      icon: const Icon(Icons.shuffle_rounded, size: 20),
+                      // Klapt even om als hij aan gaat (Saber, 17-10-2026). Zie ui/knopbewegingen.dart.
+                      icon: ShuffleIcoon(aan: p.shuffle, maat: 20),
                       color: p.shuffle ? _accent : _muted,
                       style: tvIcoonStijl(p.shuffle ? _accent : _muted),
                       onPressed: p.toggleShuffle,
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.skip_previous_rounded),
-                      color: _muted,
+                    DuwKnop(
+                      icoon: Icons.skip_previous_rounded,
+                      richting: -1,
+                      kleur: _muted,
                       style: tvIcoonStijl(_muted),
                       onPressed: x.previous,
                     ),
@@ -9701,7 +9974,8 @@ class PlayerBar extends StatelessWidget {
                     Container(
                       decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
                       child: IconButton(
-                        icon: Icon(x.playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                        // Het driehoekje vloeit over in de twee streepjes, en terug.
+                        icon: SpeelPauzeIcoon(speelt: x.playing, maat: 26),
                         color: _bg,
                         style: tvIcoonStijl(_bg),
                         iconSize: 26,
@@ -9709,16 +9983,18 @@ class PlayerBar extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 2),
-                    IconButton(
-                      icon: const Icon(Icons.skip_next_rounded),
-                      color: _muted,
+                    DuwKnop(
+                      icoon: Icons.skip_next_rounded,
+                      kleur: _muted,
                       style: tvIcoonStijl(_muted),
                       onPressed: x.next,
                     ),
                     if (!isCompact(context))
                     IconButton(
-                      icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
-                          size: 20),
+                      icon: HerhaalIcoon(
+                          stand: p.repeat,
+                          icoon: p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
+                          maat: 20),
                       color: p.repeat == RepeatMode.off ? _muted : _accent,
                       style: tvIcoonStijl(p.repeat == RepeatMode.off ? _muted : _accent),
                       // Local only: the speaker is handed one track at a time, so a change here
@@ -9727,6 +10003,8 @@ class PlayerBar extends StatelessWidget {
                     ),
                     const _WachtrijKnop(),
                     const _SpeakerButton(),
+                    // "Speel op …": naar een ander toestel waarop de app open staat (alleen op de pc).
+                    if (!isTv) const _SpeelOpKnop(),
                   ],
                 ),
                 Row(
@@ -9755,13 +10033,105 @@ class PlayerBar extends StatelessWidget {
               ],
             ),
           ),
-          // The mirror of the leading block: it is what keeps the transport in the middle.
-          SizedBox(width: side),
+          // The mirror of the leading block: it is what keeps the transport in the middle. En de plek
+          // van "Verder op …" (Saber, 18-10-2026): bedekt niets en is altijd te vinden.
+          SizedBox(
+            width: side,
+            child: const Align(alignment: Alignment.centerRight, child: VerderKnop()),
+          ),
         ],
       ),
     );
   }
 
+}
+
+/// "Speel op …" (Saber, 17-10-2026): stuurt wat hier speelt naar een gsm, iPad, Mac of Shield waarop
+/// de app open staat, op dezelfde plek in het nummer. Alleen op de pc: hij houdt de gedeelde stand bij
+/// en weet wie er net nog keek. Zie verder_luisteren.dart.
+class _SpeelOpKnop extends StatelessWidget {
+  const _SpeelOpKnop();
+
+  @override
+  Widget build(BuildContext context) {
+    // Meekijken met de deelservice: de server start pas na het eerste beeld, en met read stond de knop
+    // er daardoor nooit (op de proef gezien, 17-10-2026).
+    final sharing = context.watch<LanSharing>();
+    final server = sharing.server;
+    final p = context.read<PlayerStore>();
+    if (server == null || p.current == null) return const SizedBox.shrink();
+    return PopupMenuButton<String>(
+      tooltip: 'Speel op …',
+      color: _panel,
+      position: PopupMenuPosition.over,
+      icon: const Icon(Icons.devices_rounded, size: 20, color: _muted),
+      itemBuilder: (_) {
+        final toestellen = server.aanwezigeToestellen();
+        if (toestellen.isEmpty) {
+          return const [
+            PopupMenuItem<String>(
+              enabled: false,
+              child: Text('Open de app op je gsm, iPad, Mac of Shield',
+                  style: TextStyle(fontSize: 13, color: _muted)),
+            ),
+          ];
+        }
+        return [
+          const PopupMenuItem<String>(
+            enabled: false,
+            height: 28,
+            child: Text('SPEEL OP', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: _muted)),
+          ),
+          for (final t in toestellen)
+            PopupMenuItem<String>(
+              value: t.id,
+              child: Row(children: [
+                const Icon(Icons.phonelink_rounded, size: 18, color: _muted),
+                const SizedBox(width: 10),
+                Text(t.naam, style: const TextStyle(fontSize: 13.5)),
+              ]),
+            ),
+        ];
+      },
+      onSelected: (id) {
+        final t = p.current;
+        if (t == null) return;
+        final rij = p.queueTracks;
+        final naam = server.aanwezigeToestellen().where((x) => x.id == id).map((x) => x.naam).firstOrNull ?? '';
+        final radio = context.read<RadioBesturing>();
+        final ok = sharing.stuurNaar(id, t.path, p.position, [for (final x in rij) x.path], p.currentIndex,
+            shuffle: p.shuffle,
+            herhaal: p.repeat.name,
+            radio: p.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null);
+        _srcToast(context, ok ? 'Naar $naam gestuurd — de pc pauzeert zodra het daar speelt.' : 'Dit nummer kan niet mee (het staat niet in je bibliotheek).');
+      },
+    );
+  }
+}
+
+/// Het hart naast de titel in de spelerbalk: vol als dit nummer een favoriet is, en het klopt met
+/// deeltjes als het er een wordt (Saber, 17-10-2026). Een tik zet het aan of uit.
+class _HartKnop extends StatelessWidget {
+  const _HartKnop({required this.track});
+
+  final Track track;
+
+  @override
+  Widget build(BuildContext context) {
+    final fav = context.watch<Favorieten>();
+    final aan = fav.isFavorietTrack(track);
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: IconButton(
+        tooltip: aan ? 'Uit favorieten' : 'Favoriet',
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+        icon: HartIcoon(aan: aan, maat: 17, kleurUit: _muted),
+        onPressed: () => fav.wisselTrack(track),
+      ),
+    );
+  }
 }
 
 /// Kies een afspeellijst om [nummers] in te zetten — of maak er ter plekke een.
@@ -10677,7 +11047,10 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
 /// scherm van 411 niets overlaten, dus komt daar dezelfde lijst als een blad van onderen. Eén knop,
 /// twee vormen — dat is beter dan een knop die op een telefoon niets doet.
 class _WachtrijKnop extends StatelessWidget {
-  const _WachtrijKnop();
+  const _WachtrijKnop({this.maat = 20});
+
+  /// De grootte van het icoon: 20 in de spelerbalk, 24 tussen de knoppen van Nu speelt.
+  final double maat;
 
   @override
   Widget build(BuildContext context) {
@@ -10686,7 +11059,13 @@ class _WachtrijKnop extends StatelessWidget {
     return TvLabelled(
       label: 'Wachtrij',
       child: IconButton(
-        icon: const Icon(Icons.queue_music_rounded, size: 20),
+        // De regels schuiven binnen als het paneel opengaat (Saber, 17-10-2026).
+        icon: MenuIcoon(
+          soort: MenuIcoonSoort.afspeellijsten,
+          kleur: !compact && paneel.open ? _accent : _muted,
+          gekozen: !compact && paneel.open,
+          maat: maat,
+        ),
         color: !compact && paneel.open ? _accent : _muted,
         style: tvIcoonStijl(!compact && paneel.open ? _accent : _muted),
         tooltip: 'Wachtrij',
@@ -10774,14 +11153,63 @@ class _RadioAfstemming extends StatelessWidget {
   }
 }
 
-class WachtrijPaneelView extends StatelessWidget {
-  const WachtrijPaneelView({super.key, this.inBlad = false});
+class WachtrijPaneelView extends StatefulWidget {
+  const WachtrijPaneelView({super.key, this.inBlad = false, this.onSluit, this.opGlas = false});
 
   /// True als hij als blad van onderen komt (telefoon). Dan geen vaste breedte en geen linkerrand,
   /// en sluiten gaat via de bladbeweging in plaats van via het kruisje.
   final bool inBlad;
 
+  /// Wat het kruisje doet. Null = het paneel naast de inhoud sluiten ([WachtrijPaneel.sluit]); Nu
+  /// speelt geeft zijn eigen mee, want daar is het een paneel van dat scherm.
+  final VoidCallback? onSluit;
+
+  /// Ligt hij op glas (Nu speelt)? Dan geen eigen dichte vulling.
+  final bool opGlas;
+
   static const breedte = 340.0;
+
+  @override
+  State<WachtrijPaneelView> createState() => _WachtrijPaneelViewState();
+}
+
+/// De wachtrij in drie stukken (Saber, 17-10-2026: "ik moet ook duidelijk kunnen zien wat er nu
+/// speelt, wat er nog komt, en wat er al afgespeeld heeft, maar bij het openen altijd naar het
+/// liedje gaan die bezig is").
+///
+/// **Eén lijst, drie zones.** Bovenaan gedimd wat al speelde, dan groot het nummer dat nu speelt
+/// (met hoes en bewegende balkjes), daaronder "Hierna". De lijst draait om het spelende nummer: dat
+/// is het MIDDEN van de `CustomScrollView` ([CustomScrollView.center]), dus bij het openen staat het
+/// bovenaan, en wat al speelde staat erboven — omhoog scrollen.
+///
+/// **Bewegen.** Een nummer dat erbij komt schuift zacht binnen, wat eruit gaat klapt dicht, en begint
+/// het volgende nummer, dan schuift de hele lijst één plek omhoog in plaats van te verspringen.
+class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTickerProviderStateMixin {
+  final _rol = ScrollController();
+
+  /// Schuift de lijst één regel omhoog als het volgende nummer begint.
+  late final AnimationController _op =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 360), value: 1);
+  int? _vorigeNu;
+
+  /// Wat er bij het eerste beeld al stond: dat schuift niet binnen, alleen wat er daarna bij komt.
+  Set<String>? _gezien;
+
+  @override
+  void dispose() {
+    _op.dispose();
+    _rol.dispose();
+    super.dispose();
+  }
+
+  /// Sleutels die niet verschuiven als er iets voor wegvalt: het pad en de hoeveelste keer dat het
+  /// in de lijst staat.
+  static List<String> _sleutels(List<Track> rij) {
+    final tel = <String, int>{};
+    return [
+      for (final t in rij) '${t.path}#${tel[t.path] = (tel[t.path] ?? -1) + 1}',
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -10791,150 +11219,399 @@ class WachtrijPaneelView extends StatelessWidget {
     final radio = p.radioMode;
     final regels = radio ? radioAlsRij(p.radioQueue) : const <Radioregel>[];
     final rij = radio ? [for (final r in regels) r.nummer] : p.queueTracks;
-    final nu = p.currentIndex;
+    final nu = rij.isEmpty ? -1 : p.currentIndex.clamp(0, rij.length - 1);
+    final sleutels = _sleutels(rij);
+
+    final eerste = _gezien == null;
+    final gezien = _gezien ??= {...sleutels};
+    final nieuw = {for (final s in sleutels) if (!gezien.contains(s)) s};
+    if (nieuw.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => gezien.addAll(nieuw));
+    }
+    // Het volgende nummer begon: de lijst schuift één plek op.
+    final vorige = _vorigeNu;
+    if (!eerste && vorige != null && nu == vorige + 1) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _op.forward(from: 0);
+      });
+    }
+    _vorigeNu = nu;
+
+    Widget regel(int i, {bool gespeeld = false, int? sleep}) {
+      Widget r = _WachtrijRij(
+        key: ValueKey(sleutels[i]),
+        track: rij[i],
+        plek: i,
+        speeltNu: false,
+        gespeeld: gespeeld,
+        sleepIndex: sleep,
+        cover: radio && !regels[i].eigen ? null : lib.coverForTrack(rij[i]),
+        regel: radio ? regels[i] : null,
+      );
+      return _Uitklap(key: ValueKey('uit-${sleutels[i]}'), binnenschuiven: nieuw.contains(sleutels[i]), child: r);
+    }
+
+    final hierna = nu < 0 ? 0 : rij.length - nu - 1;
+    final kop = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
+      child: Row(
+        children: [
+          // Bij een radio de stand op een eigen regel onder "Radio": naast "Radio afsluiten" en het
+          // kruisje paste "12 hierna · 6 onderweg" op 340 punt maar net, en op de tv (tekstschaal
+          // 1,35) bleef er "12 hierna…" van over (beoordeling van 08-10-2026).
+          Expanded(
+            child: radio
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Radio', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      if (rij.isNotEmpty)
+                        Text(
+                            radioKop(
+                                hierna: hierna,
+                                onderweg: context.watch<RadioBesturing>().onderweg,
+                                loopt: context.watch<RadioBesturing>().loopt,
+                                zoekt: !context.watch<RadioBesturing>().aantalBereikt &&
+                                    context.watch<RadioBesturing>().pauze == null),
+                            // Op de tv (tekstschaal 1,35) past "12 hierna · 6 onderweg" niet op één regel.
+                            maxLines: isTv ? 2 : 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: _muted, fontSize: 12)),
+                    ],
+                  )
+                : const Text('Wachtrij', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          ),
+          // Het genoemde aantal van een radio uit een zin is gespeeld: hier ook verder, niet alleen
+          // op het speelscherm.
+          if (radio && context.watch<RadioBesturing>().aantalOp && (p.radioDroog || p.wilVerder))
+            TextButton(
+              onPressed: context.read<RadioBesturing>().gaDoor,
+              style: TextButton.styleFrom(
+                  foregroundColor: _accent,
+                  padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
+                  minimumSize: const Size(0, 30)),
+              child: const Text('Ga door', style: TextStyle(fontSize: 12)),
+            ),
+          // De weg uit de radio, hier en niet alleen op het speelscherm.
+          //
+          // **Waarom dit erbij moest.** Het kruisje hiernaast sluit het PANEEL, en dat ziet
+          // er precies zo uit als "stop de radio". Wie de radio wil beëindigen drukt daarop,
+          // ziet de lijst verdwijnen, en de radio speelt gewoon door — met het overzicht van
+          // wat er opgehaald is nog altijd niet in beeld. Gemeld op 28-08-2026, en terecht:
+          // de knop die het wél doet stond op een scherm dat je vanaf hier niet ziet.
+          if (radio)
+            TextButton(
+              onPressed: context.read<RadioBesturing>().stop,
+              style: TextButton.styleFrom(
+                  foregroundColor: _muted,
+                  padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
+                  minimumSize: const Size(0, 30)),
+              child: const Text('Radio afsluiten', style: TextStyle(fontSize: 12)),
+            ),
+          if (!widget.inBlad)
+            TvLabelled(
+              label: radio ? 'Paneel sluiten' : 'Sluiten',
+              child: IconButton(
+                icon: const Icon(Icons.close_rounded, size: 18),
+                color: _muted,
+                // Uitgeschreven tijdens een radio, want daar is "Sluiten" dubbelzinnig: het
+                // sluit de lijst en niet de radio.
+                tooltip: radio ? 'Paneel sluiten' : 'Sluiten',
+                onPressed: widget.onSluit ?? paneel.sluit,
+              ),
+            ),
+        ],
+      ),
+    );
+
+    Widget zoneKop(String tekst, {String? extra}) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+          child: Row(children: [
+            Text(tekst.toUpperCase(),
+                style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: .8, color: _muted)),
+            if (extra != null) ...[
+              const SizedBox(width: 6),
+              Text(extra, style: const TextStyle(fontSize: 10.5, color: _muted)),
+            ],
+          ]),
+        );
+
+    final Widget lijst;
+    if (rij.isEmpty) {
+      lijst = Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(radio ? 'De radio zoekt nog wat hij zal spelen.' : 'Nog niets in de wachtrij.',
+              textAlign: TextAlign.center, style: const TextStyle(color: _muted, fontSize: 12.5)),
+        ),
+      );
+    } else {
+      final huidig = nu;
+      lijst = AnimatedBuilder(
+        animation: _op,
+        builder: (_, kind) => Transform.translate(
+          // Eén regel lager beginnen en omhoog schuiven: zo leest de wissel als "alles schuift op".
+          offset: Offset(0, kWachtrijRegel * (1 - Curves.easeOutCubic.transform(_op.value))),
+          child: kind,
+        ),
+        child: CustomScrollView(
+          controller: _rol,
+          // Het spelende nummer is het midden: bij openen bovenaan, wat al speelde erboven.
+          center: const ValueKey('wachtrij-nu'),
+          slivers: [
+            if (huidig > 0) ...[
+              SliverToBoxAdapter(child: zoneKop('Eerder gespeeld', extra: '$huidig')),
+              // Vóór het midden groeit een lijst naar boven: het eerste kind staat het dichtst bij het
+              // spelende nummer. Dus het laatst gespeelde eerst.
+              SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (_, j) => regel(huidig - 1 - j, gespeeld: true),
+                  childCount: huidig,
+                ),
+              ),
+            ],
+            SliverToBoxAdapter(
+              key: const ValueKey('wachtrij-nu'),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  zoneKop('Nu speelt'),
+                  _NuSpeeltRegel(
+                    track: rij[huidig],
+                    cover: radio && !regels[huidig].eigen ? null : lib.coverForTrack(rij[huidig]),
+                    speelt: p.playing || context.watch<SpeakerTarget>().isCasting,
+                    regel: radio ? regels[huidig] : null,
+                  ),
+                  if (hierna > 0) zoneKop('Hierna', extra: '$hierna'),
+                ],
+              ),
+            ),
+            // Een radio is geen wachtrij: je kunt er niet in slepen en er niets uit halen. Een gewone
+            // lijst dus, en een tik springt binnen de radio in plaats van hem te verlaten — zie
+            // [PlayerStore.springInRadio].
+            if (radio)
+              SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (_, j) => regel(huidig + 1 + j),
+                  childCount: hierna,
+                ),
+              )
+            else
+              SliverReorderableList(
+                itemCount: hierna,
+                onReorder: (van, naar) {
+                  // Telt de doelplek alsof het gesleepte item er nog staat; één eraf zodra je naar
+                  // beneden sleept, anders landt alles één te ver. En "Hierna" begint na het spelende.
+                  p.verplaatsInWachtrij(huidig + 1 + van, huidig + 1 + (van < naar ? naar - 1 : naar));
+                },
+                itemBuilder: (_, j) => regel(huidig + 1 + j, sleep: j),
+              ),
+            SliverToBoxAdapter(child: SizedBox(height: 16 + MediaQuery.paddingOf(context).bottom)),
+          ],
+        ),
+      );
+    }
 
     return Container(
-      width: inBlad ? null : breedte,
-      decoration: BoxDecoration(
-        color: _panel,
-        border: inBlad ? null : const Border(left: BorderSide(color: _line)),
-      ),
+      width: widget.inBlad || widget.opGlas ? null : WachtrijPaneelView.breedte,
+      decoration: widget.opGlas
+          ? null
+          : BoxDecoration(
+              color: _panel,
+              border: widget.inBlad ? null : const Border(left: BorderSide(color: _line)),
+            ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
-            child: Row(
-              children: [
-                // Bij een radio de stand op een eigen regel onder "Radio": naast "Radio afsluiten" en het
-                // kruisje paste "12 hierna · 6 onderweg" op 340 punt maar net, en op de tv (tekstschaal
-                // 1,35) bleef er "12 hierna…" van over (beoordeling van 08-10-2026).
-                Expanded(
-                  child: radio
-                      ? Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text('Radio', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                            if (rij.isNotEmpty)
-                              Text(
-                                  radioKop(
-                                      hierna: rij.length - nu - 1,
-                                      onderweg: context.watch<RadioBesturing>().onderweg,
-                                      loopt: context.watch<RadioBesturing>().loopt,
-                                      zoekt: !context.watch<RadioBesturing>().aantalBereikt &&
-                                          context.watch<RadioBesturing>().pauze == null),
-                                  // Op de tv (tekstschaal 1,35) past "12 hierna · 6 onderweg" niet op één regel.
-                                  maxLines: isTv ? 2 : 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: _muted, fontSize: 12)),
-                          ],
-                        )
-                      : Row(children: [
-                          const Text('Wachtrij', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(rij.isEmpty ? '' : '${rij.length - nu - 1} hierna',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: _muted, fontSize: 12)),
-                          ),
-                        ]),
-                ),
-                // Het genoemde aantal van een radio uit een zin is gespeeld: hier ook verder, niet alleen
-                // op het speelscherm.
-                if (radio && context.watch<RadioBesturing>().aantalOp && (p.radioDroog || p.wilVerder))
-                  TextButton(
-                    onPressed: context.read<RadioBesturing>().gaDoor,
-                    style: TextButton.styleFrom(
-                        foregroundColor: _accent,
-                        padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
-                        minimumSize: const Size(0, 30)),
-                    child: const Text('Ga door', style: TextStyle(fontSize: 12)),
-                  ),
-                // De weg uit de radio, hier en niet alleen op het speelscherm.
-                //
-                // **Waarom dit erbij moest.** Het kruisje hiernaast sluit het PANEEL, en dat ziet
-                // er precies zo uit als "stop de radio". Wie de radio wil beëindigen drukt daarop,
-                // ziet de lijst verdwijnen, en de radio speelt gewoon door — met het overzicht van
-                // wat er opgehaald is nog altijd niet in beeld. Gemeld op 28-08-2026, en terecht:
-                // de knop die het wél doet stond op een scherm dat je vanaf hier niet ziet.
-                if (radio)
-                  TextButton(
-                    onPressed: context.read<RadioBesturing>().stop,
-                    style: TextButton.styleFrom(
-                        foregroundColor: _muted,
-                        padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
-                        minimumSize: const Size(0, 30)),
-                    child: const Text('Radio afsluiten', style: TextStyle(fontSize: 12)),
-                  ),
-                if (!inBlad)
-                  TvLabelled(
-                    label: radio ? 'Paneel sluiten' : 'Sluiten',
-                    child: IconButton(
-                    icon: const Icon(Icons.close_rounded, size: 18),
-                    color: _muted,
-                    // Uitgeschreven tijdens een radio, want daar is "Sluiten" dubbelzinnig: het
-                    // sluit de lijst en niet de radio.
-                    tooltip: radio ? 'Paneel sluiten' : 'Sluiten',
-                    onPressed: paneel.sluit,
-                  ),
-                  ),
-              ],
-            ),
-          ),
+          kop,
           if (radio) const _RadioAfstemming(),
-          Expanded(
-            child: rij.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                          radio
-                              ? 'De radio zoekt nog wat hij zal spelen.'
-                              : 'Nog niets in de wachtrij.',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: _muted, fontSize: 12.5)),
-                    ),
-                  )
-                // Een radio is geen wachtrij: je kunt er niet in slepen en er niets uit halen.
-                // Een gewone lijst dus, en een tik springt binnen de radio in plaats van hem te
-                // verlaten — zie [PlayerStore.springInRadio].
-                : radio
-                    ? ListView.builder(
-                        padding: const EdgeInsets.only(bottom: 16),
-                        itemCount: rij.length,
-                        itemBuilder: (_, i) => _WachtrijRij(
-                          key: ValueKey('${rij[i].path}#$i'),
-                          track: rij[i],
-                          plek: i,
-                          speeltNu: i == nu,
-                          cover: regels[i].eigen ? lib.coverForTrack(rij[i]) : null,
-                          regel: regels[i],
-                        ),
-                      )
-                    : ReorderableListView.builder(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    buildDefaultDragHandles: false,
-                    itemCount: rij.length,
-                    onReorder: (van, naar) {
-                      // ReorderableListView telt de doelplek alsof het gesleepte item er nog staat;
-                      // één eraf zodra je naar beneden sleept, anders landt alles één te ver.
-                      p.verplaatsInWachtrij(van, van < naar ? naar - 1 : naar);
-                    },
-                    itemBuilder: (_, i) => _WachtrijRij(
-                      key: ValueKey('${rij[i].path}#$i'),
-                      track: rij[i],
-                      plek: i,
-                      speeltNu: i == nu,
-                      cover: lib.coverForTrack(rij[i]),
-                    ),
-                  ),
-          ),
+          Expanded(child: ClipRect(child: lijst)),
         ],
       ),
     );
   }
+}
+
+/// Ongeveer hoe hoog een regel in de wachtrij is: zoveel schuift de lijst op als het volgende nummer
+/// begint.
+const kWachtrijRegel = 54.0;
+
+/// Een regel die binnenschuift als hij nieuw is, en dichtklapt voor hij weggaat
+/// ([_UitklapState.klapDicht]).
+class _Uitklap extends StatefulWidget {
+  const _Uitklap({super.key, required this.binnenschuiven, required this.child});
+
+  final bool binnenschuiven;
+  final Widget child;
+
+  @override
+  State<_Uitklap> createState() => _UitklapState();
+}
+
+class _UitklapState extends State<_Uitklap> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 240),
+    value: widget.binnenschuiven ? 0 : 1,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.binnenschuiven) _c.forward();
+  }
+
+  /// Dichtklappen, en dan [daarna] (het nummer echt uit de wachtrij halen).
+  Future<void> klapDicht(VoidCallback daarna) async {
+    await _c.reverse();
+    daarna();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SizeTransition(
+        sizeFactor: CurvedAnimation(parent: _c, curve: Curves.easeOutCubic),
+        child: FadeTransition(opacity: _c, child: widget.child),
+      );
+}
+
+/// Het nummer dat nu speelt, groot: hoes, titel, artiest en drie balkjes die meebewegen zolang het
+/// speelt.
+class _NuSpeeltRegel extends StatelessWidget {
+  const _NuSpeeltRegel({required this.track, required this.cover, required this.speelt, this.regel});
+
+  final Track track;
+  final Uint8List? cover;
+  final bool speelt;
+  final Radioregel? regel;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.symmetric(horizontal: 10),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: _accent.withValues(alpha: .14),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _accent.withValues(alpha: .28)),
+        ),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: cover != null
+                  ? Image.memory(cover!, width: 52, height: 52, cacheWidth: decodeWidth(52), fit: BoxFit.cover)
+                  : Container(
+                      width: 52,
+                      height: 52,
+                      color: _panel2,
+                      child: const Icon(Icons.music_note_rounded, size: 20, color: _muted),
+                    ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(track.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: Colors.white)),
+                  const SizedBox(height: 2),
+                  Text(track.artist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: _muted)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            _Balkjes(speelt: speelt),
+            const SizedBox(width: 6),
+          ],
+        ),
+      );
+}
+
+/// Drie balkjes die op en neer gaan zolang er muziek speelt; stil en laag als het gepauzeerd is. Op
+/// een tv stil: een lus van 60 beelden per seconde kost de Shield meer dan hij hier oplevert.
+class _Balkjes extends StatefulWidget {
+  const _Balkjes({required this.speelt});
+
+  final bool speelt;
+
+  @override
+  State<_Balkjes> createState() => _BalkjesState();
+}
+
+class _BalkjesState extends State<_Balkjes> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+
+  @override
+  void initState() {
+    super.initState();
+    _zet();
+  }
+
+  @override
+  void didUpdateWidget(_Balkjes oud) {
+    super.didUpdateWidget(oud);
+    if (oud.speelt != widget.speelt) _zet();
+  }
+
+  void _zet() {
+    if (widget.speelt && !isTv) {
+      _c.repeat();
+    } else {
+      _c.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: 18,
+        height: 18,
+        child: AnimatedBuilder(
+          animation: _c,
+          builder: (_, __) => CustomPaint(painter: _BalkjesSchilder(t: _c.value, speelt: widget.speelt && !isTv)),
+        ),
+      );
+}
+
+class _BalkjesSchilder extends CustomPainter {
+  _BalkjesSchilder({required this.t, required this.speelt});
+
+  final double t;
+  final bool speelt;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()..color = _accent;
+    final b = size.width / 5;
+    for (var i = 0; i < 3; i++) {
+      final fase = t * math.pi * 2 + i * 2.1;
+      final h = speelt ? size.height * (.35 + .65 * (.5 + .5 * math.sin(fase * (1 + i * .3)))) : size.height * .3;
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromLTWH(i * b * 2, size.height - h, b, h), Radius.circular(b / 2)),
+          p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_BalkjesSchilder oud) => oud.t != t || oud.speelt != speelt;
 }
 
 class _WachtrijRij extends StatelessWidget {
@@ -10945,12 +11622,20 @@ class _WachtrijRij extends StatelessWidget {
     required this.speeltNu,
     required this.cover,
     this.regel,
+    this.gespeeld = false,
+    this.sleepIndex,
   });
 
   final Track track;
   final int plek;
   final bool speeltNu;
   final Uint8List? cover;
+
+  /// Al gespeeld: gedimd, en zonder greep (slepen kan alleen in "Hierna").
+  final bool gespeeld;
+
+  /// De plek binnen "Hierna", voor de greep. Null = geen greep.
+  final int? sleepIndex;
 
   /// Niet-null als deze regel bij een RADIO hoort. Dan geen greep, geen kruisje, en een tik springt
   /// binnen de radio in plaats van hem te verlaten.
@@ -10965,7 +11650,10 @@ class _WachtrijRij extends StatelessWidget {
     final menu = r != null && !r.eigen
         ? null
         : () => _toonItemMenu(context, _nummerMenu(context, track));
-    return Container(
+    final sleep = sleepIndex;
+    return Opacity(
+      opacity: gespeeld ? .5 : 1,
+      child: Container(
       color: speeltNu ? _panel2 : Colors.transparent,
       child: InkWell(
         onTap: () => r != null ? p.springInRadio(plek) : p.playQueue(p.queueTracks, plek),
@@ -10997,9 +11685,11 @@ class _WachtrijRij extends StatelessWidget {
                             fontSize: 11, color: speeltNu ? _accent : _muted)),
                   ),
                 )
+              else if (sleep == null)
+                const SizedBox(width: 34, height: 40)
               else
                 ReorderableDragStartListener(
-                  index: plek,
+                  index: sleep,
                   child: MouseRegion(
                     cursor: SystemMouseCursors.grab,
                     child: Container(
@@ -11095,13 +11785,32 @@ class _WachtrijRij extends StatelessWidget {
                         tooltip: 'Uit de wachtrij halen',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
-                        onPressed: () => p.haalUitWachtrij(plek),
+                        onPressed: () {
+                          // Eerst dichtklappen, dan pas eruit (Saber, 17-10-2026: "wat weggaat,
+                          // klapt dicht"). Is er intussen een ander nummer begonnen, dan het nummer
+                          // zelf weer opzoeken: de plek kan verschoven zijn.
+                          void weg() {
+                            final rij = p.queueTracks;
+                            final i = plek < rij.length && rij[plek].path == track.path
+                                ? plek
+                                : rij.indexWhere((t) => t.path == track.path);
+                            if (i >= 0) p.haalUitWachtrij(i);
+                          }
+
+                          final uitklap = context.findAncestorStateOfType<_UitklapState>();
+                          if (uitklap != null) {
+                            uitklap.klapDicht(weg);
+                          } else {
+                            weg();
+                          }
+                        },
                       ),
                       ),
               ),
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -11181,6 +11890,9 @@ class _SpeakerButton extends StatelessWidget {
     );
   }
 }
+
+/// Hoe breed de wachtrij in Nu speelt is, met de ruimte ervoor.
+const kNuSpeeltWachtrij = 404.0;
 
 /// Het label waarmee de hoes van de minispeler naar Nu speelt vliegt (Saber, 16-10-2026).
 const kNuSpeeltHoes = 'nu-speelt-hoes';
@@ -11340,6 +12052,8 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
                         Hero(tag: kNuSpeeltHoes, child: cover(p.currentCover, size: 40, radius: 6)),
                         const SizedBox(width: 12),
                         Expanded(
+                          child: SchuifTekst(
+                          sleutel: t?.path,
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -11379,6 +12093,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
                                     const TextStyle(color: _muted, fontSize: 12)),
                             ],
                           ),
+                          ),
                         ),
                       ],
                     ),
@@ -11387,15 +12102,12 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
                 ),
               ),
               IconButton(
-                icon: Icon(x.playing ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 30),
+                icon: SpeelPauzeIcoon(speelt: x.playing, maat: 30),
                 color: Colors.white,
                 onPressed: x.playPause,
               ),
-              IconButton(
-                icon: const Icon(Icons.skip_next_rounded, size: 26),
-                color: _muted,
-                onPressed: x.next,
-              ),
+              DuwKnop(icoon: Icons.skip_next_rounded, maat: 26, kleur: _muted, onPressed: x.next),
+              const VerderKnop(smal: true),
               const _WachtrijKnop(),
               const _SpeakerButton(iconSize: 22),
               const SizedBox(width: 2),
@@ -12307,7 +13019,20 @@ class NowPlayingScreen extends StatefulWidget {
   State<NowPlayingScreen> createState() => _NowPlayingScreenState();
 }
 
-class _NowPlayingScreenState extends State<NowPlayingScreen> {
+class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerProviderStateMixin {
+  /// De wachtrij als glaspaneel rechts, op een breed scherm (Saber, 17-10-2026: "die moet trouwens ook
+  /// in de now playing screen staan als ik die wil openen vanuit dit venster"). Gaat hij open, dan
+  /// schuift de hoes met de cd naar links en komt het paneel rechts binnen; nog een klik schuift alles
+  /// terug. Hoort bij dit scherm: het paneel naast de pagina's ([WachtrijPaneel]) blijft wat het was.
+  bool _wachtrij = false;
+  late final AnimationController _paneel =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 380))..addListener(() => setState(() {}));
+
+  void _wisselWachtrij() {
+    setState(() => _wachtrij = !_wachtrij);
+    _wachtrij ? _paneel.forward() : _paneel.reverse();
+  }
+
   /// Twee tikken op de hoes draaien hem om; één tik vergroot (wat er voor staat). Saber koos dat op
   /// 16-10-2026. De gewone tik wacht daarvoor [kTweedeTik] — zie `ui/draaihoes.dart`.
   final _draai = DraaiHoesController();
@@ -12360,6 +13085,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
 
   @override
   void dispose() {
+    _paneel.dispose();
     _levensloop?.dispose();
     _spoelPijlen.vergeet();
     _okKlok?.cancel();
@@ -12437,8 +13163,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
     final bruikbaar = Size(schermmaat.width - rand.horizontal, schermmaat.height - rand.vertical);
     // Naast elkaar of dwars: in allebei staat de tekst links uitgelijnd naast de hoes.
     final zij = naast || dwars;
+    // Hoe breed het wachtrijpaneel nu is (schuivend tussen 0 en [kNuSpeeltWachtrij]); de hoes rekent
+    // met wat er naast het paneel overblijft.
+    final paneelBreedte = naast ? Curves.easeOutCubic.transform(_paneel.value) * kNuSpeeltWachtrij : 0.0;
     final hoesMaat = naast
-        ? hoesNaast(scherm: schermmaat, reisfactor: discTravelFactor(context))
+        ? hoesNaast(
+            scherm: Size(schermmaat.width - paneelBreedte, schermmaat.height),
+            reisfactor: discTravelFactor(context))
         : dwars
             ? hoesLiggend(bruikbaar: bruikbaar)
             : _sleeve(context);
@@ -12545,9 +13276,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     pinned: al == null
                         ? null
                         : bib.pinnedRelease(al) ?? persingUitHerkomst(al.resolvedFrom).release,
-                    pinnedMbid: al == null
-                        ? null
-                        : bib.pinnedMbid(al) ?? persingUitHerkomst(al.resolvedFrom).mbid,
+                    // En de uitgave uit de bekende feiten, zoals de albumpagina en de warmer: zonder
+                    // zocht dit scherm in een andere map dan waar de scans liggen. Zie
+                    // [albumArtVooruit].
+                    pinnedMbid: al == null ? null : albumArtVooruit(bib, al).pinnedMbid,
                     roles: al == null
                         ? const {}
                         : bib.albumArtRoles(al.artist, al.title),
@@ -12801,21 +13533,28 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
       }),
       // De duimen. Alleen bij een nummer dat DEZE radio heeft opgehaald — zie [_RadioOordeel].
       _RadioOordeel(track: t, naast: zij),
-      Row(
-        mainAxisAlignment: zij ? MainAxisAlignment.start : MainAxisAlignment.center,
+      // Krimpen als het niet past: met de wachtrijknop erbij is de rij ~400 punten, en een telefoon
+      // heeft er na de marges minder. Op een breed scherm staat hij gewoon op ware grootte.
+      Align(
+        alignment: zij ? Alignment.centerLeft : Alignment.center,
+        child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-              icon: const Icon(Icons.shuffle_rounded),
+              icon: ShuffleIcoon(aan: p.shuffle, maat: 24),
               iconSize: 24,
               color: p.shuffle ? _accent : _muted,
               onPressed: p.toggleShuffle),
           const SizedBox(width: 8),
           // Geen ±10-knoppen op een tv meer (16-10-2026, "te druk"): links en rechts ingedrukt
           // houden op de hoes spoelt (zie [_pijlAlsNummerknop]).
-          IconButton(
-              icon: const Icon(Icons.skip_previous_rounded),
-              iconSize: 34,
-              color: _text,
+          DuwKnop(
+              icoon: Icons.skip_previous_rounded,
+              richting: -1,
+              maat: 34,
+              kleur: _text,
               // Door `_Transport` en niet met een eigen `?? false`.
               //
               // Deze twee knoppen herhaalden de oude logica die grijs werd zodra de
@@ -12831,30 +13570,54 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
               // knop, maar die stond op de Shield 80 punten onder de schermrand — dus
               // begon het scherm met een ring die je niet kon zien. De hoes staat altijd
               // in beeld, en van daaruit zijn links en rechts vorige en volgende.
-              icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+              icon: SpeelPauzeIcoon(speelt: playing, maat: 40),
               color: _bg,
               iconSize: 40,
               onPressed: casting ? cast.playPause : (t == null ? null : p.playPause),
             ),
           ),
           const SizedBox(width: 8),
-          IconButton(
-              icon: const Icon(Icons.skip_next_rounded),
-              iconSize: 34,
-              color: _text,
-              onPressed: x.next),
+          DuwKnop(icoon: Icons.skip_next_rounded, maat: 34, kleur: _text, onPressed: x.next),
           const SizedBox(width: 8),
           // Shuffle and repeat stay local on purpose: the speaker plays the queue the PC
           // hands it one track at a time, so changing the order here would take effect on
           // whatever is sent NEXT and look like it did nothing now.
           IconButton(
-              icon: Icon(p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded),
+              icon: HerhaalIcoon(
+                  stand: p.repeat,
+                  icoon: p.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
+                  maat: 24),
               iconSize: 24,
               color: p.repeat == RepeatMode.off ? _muted : _accent,
               onPressed: casting ? null : p.cycleRepeat),
+          // De wachtrij naast de hoes, op een breed scherm. Het icoon van Afspeellijsten: de regels
+          // schuiven binnen als het paneel opengaat.
+          if (naast) ...[
+            const SizedBox(width: 8),
+            IconButton(
+              key: const ValueKey('np-wachtrij'),
+              tooltip: _wachtrij ? 'Wachtrij sluiten' : 'Wachtrij',
+              iconSize: 24,
+              icon: MenuIcoon(
+                soort: MenuIcoonSoort.afspeellijsten,
+                kleur: _wachtrij ? _accent : _muted,
+                gekozen: _wachtrij,
+                maat: 24,
+              ),
+              onPressed: _wisselWachtrij,
+            ),
+          ] else if (!isTv) ...[
+            // Op een telefoon past het paneel er niet naast: dan dezelfde lijst als blad van onderen,
+            // zoals vanuit de minispeler. Daarvoor stond er in Nu speelt geen wachtrijknop
+            // (S26, 18-10-2026; Saber: "die moet ook in de now playing screen staan").
+            const SizedBox(width: 8),
+            const _WachtrijKnop(maat: 24),
+          ],
           const SizedBox(width: 12),
           const _SpeakerButton(iconSize: 24),
         ],
+      ),
+      ),
       ),
       // The speaker's own volume, and only when it says it has one. A Sonos and the KEF
       // both do; a renderer without RenderingControl simply shows nothing here rather
@@ -13064,18 +13827,49 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte32),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          hoesKolom,
-                          const SizedBox(width: kSpeelGat),
-                          SizedBox(
-                            width: kSpeelKolom,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: onder,
+                          Expanded(
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                hoesKolom,
+                                const SizedBox(width: kSpeelGat),
+                                SizedBox(
+                                  width: kSpeelKolom,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: onder,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
+                          // Het paneel schuift van rechts binnen: zijn vak groeit, en het paneel hangt
+                          // aan de linkerkant van dat vak.
+                          if (paneelBreedte > 0)
+                            SizedBox(
+                              width: paneelBreedte,
+                              child: ClipRect(
+                                child: OverflowBox(
+                                  alignment: Alignment.centerLeft,
+                                  minWidth: kNuSpeeltWachtrij,
+                                  maxWidth: kNuSpeeltWachtrij,
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(kRuimte24, kRuimte8, 0, kRuimte8),
+                                    child: GlasVlak(
+                                      key: const ValueKey('np-wachtrijpaneel'),
+                                      vorm: const BorderRadius.all(Radius.circular(18)),
+                                      kleur: _panel,
+                                      child: WachtrijPaneelView(
+                                        opGlas: true,
+                                        onSluit: _wachtrij ? _wisselWachtrij : null,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -13263,6 +14057,376 @@ Route<void> nuSpeeltRoute({WidgetBuilder? scherm}) => PageRouteBuilder<void>(
 /// Wat de sneltoets vraagt.
 class NaarNuSpeeltIntent extends Intent {
   const NaarNuSpeeltIntent();
+}
+
+/// "Hier verder luisteren" op de pc: hij houdt de stand zelf bij (zie verder_luisteren.dart).
+class _PcVerderBron implements VerderBron {
+  _PcVerderBron(this.sharing, this.player);
+
+  final LanSharing sharing;
+  final PlayerStore player;
+
+  @override
+  String get mijnId => sharing.mijnId;
+
+  @override
+  bool get ikSpeel => player.speeltErgens;
+
+  @override
+  Track? nummer(String id) => sharing.nummerVoorId(id);
+
+  @override
+  Future<({Map<String, dynamic>? stand, Map<String, dynamic>? verzoek})?> haal() async =>
+      (stand: sharing.state.progress.toJson(), verzoek: sharing.state.verzoek);
+
+  @override
+  Future<void> speel(List<Track> rij, int index, Duration positie,
+          {required bool spelen, required bool shuffle, required RepeatMode herhaal, String? radioArtiest}) =>
+      _verderSpelen(player, rij, index, positie,
+          spelen: spelen, shuffle: shuffle, herhaal: herhaal, radioArtiest: radioArtiest);
+
+  @override
+  void pauzeer() => player.pauzeer();
+}
+
+/// "Hier verder luisteren" op een gsm, iPad, Mac of Shield: vraagt de stand aan de pc.
+class _ToestelVerderBron implements VerderBron {
+  _ToestelVerderBron(this.library, this.player, this.mijnId);
+
+  final LibraryStore library;
+  final PlayerStore player;
+
+  @override
+  final String mijnId;
+
+  @override
+  bool get ikSpeel => player.speeltErgens;
+
+  /// Welke revisie van de gedeelde staat dit toestel kent: dan stuurt de pc alleen de stand mee.
+  int? _rev;
+
+  final Map<String, Track> _nummers = {};
+  int _idsVoor = -1;
+
+  @override
+  Track? nummer(String id) {
+    final tracks = library.tracks;
+    if (_idsVoor != tracks.length) {
+      _idsVoor = tracks.length;
+      _nummers
+        ..clear()
+        ..addEntries([
+          for (final t in tracks)
+            if (library.gedeeldId(t.path) case final i?) MapEntry(i, t),
+        ]);
+    }
+    return _nummers[id];
+  }
+
+  @override
+  Future<({Map<String, dynamic>? stand, Map<String, dynamic>? verzoek})?> haal() async {
+    final c = library.remote;
+    if (c == null) return null;
+    final s = await c.speelstand(sinds: _rev, toestel: mijnId, naam: deviceName());
+    _rev = (s['rev'] as num?)?.toInt() ?? _rev;
+    return (
+      stand: (s['progress'] as Map?)?.cast<String, dynamic>(),
+      verzoek: (s['verzoek'] as Map?)?.cast<String, dynamic>(),
+    );
+  }
+
+  @override
+  Future<void> speel(List<Track> rij, int index, Duration positie,
+          {required bool spelen, required bool shuffle, required RepeatMode herhaal, String? radioArtiest}) =>
+      _verderSpelen(player, rij, index, positie,
+          spelen: spelen, shuffle: shuffle, herhaal: herhaal, radioArtiest: radioArtiest);
+
+  @override
+  void pauzeer() => player.pauzeer();
+}
+
+/// Overnemen wat een ander toestel speelde: de wachtrij op zijn plek, of een radio rond dezelfde artiest
+/// met het nummer dat speelde als eerste, op dezelfde plek (Saber, 17-10-2026: "ook de radio").
+Future<void> _verderSpelen(PlayerStore player, List<Track> rij, int index, Duration positie,
+    {required bool spelen, required bool shuffle, required RepeatMode herhaal, String? radioArtiest}) async {
+  final ctx = appNavigator.currentContext;
+  if (radioArtiest == null || ctx == null || rij.isEmpty) {
+    return player.neemOver(rij, index, positie, spelen: spelen, shuffle: shuffle, herhaal: herhaal);
+  }
+  final zaad = rij[index.clamp(0, rij.length - 1)];
+  await startRadio(ctx, radioArtiest, zaad: zaad);
+  // Het zaad klinkt als eerste; zodra libmpv het kent, naar de plek waar het andere toestel was.
+  for (var i = 0; i < 60; i++) {
+    if (player.current?.path == zaad.path && player.duration > Duration.zero) break;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+  if (player.current?.path == zaad.path && positie > const Duration(seconds: 1)) player.seek(positie);
+}
+
+/// De balk "Hier verder luisteren" (Saber, 17-10-2026): speelt er op een ander toestel iets, of
+/// speelde er kort geleden iets, dan biedt hij aan om hier verder te gaan. Zie verder_luisteren.dart.
+class VerderBalk extends StatelessWidget {
+  const VerderBalk({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final v = context.watch<VerderLuisteren>();
+    final a = v.aanbod;
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 260),
+      switchInCurve: Curves.easeOutCubic,
+      transitionBuilder: (kind, anim) => FadeTransition(
+        opacity: anim,
+        child: SlideTransition(
+          position: Tween(begin: const Offset(0, .35), end: Offset.zero).animate(anim),
+          child: kind,
+        ),
+      ),
+      child: a == null ? const SizedBox.shrink(key: ValueKey('verder-geen')) : _kaart(context, v, a),
+    );
+  }
+
+  Widget _kaart(BuildContext context, VerderLuisteren v, VerderAanbod a) {
+    final t = a.nummer;
+    // Meeluisteren en niet één keer lezen: op een toestel komen de hoezen via een ronde van de pc
+    // binnen, en de balk staat er vaak al eerder. Met `read` bleef hij leeg (S26, 18-10-2026).
+    final hoes = context.select<LibraryStore, Uint8List?>((l) => l.coverForTrack(t));
+    // Op een telefoon een rond knopje: met "Verder luisteren" erop bleef er van de titel "Skinn…"
+    // over (S26, 18-10-2026).
+    final smal = isCompact(context);
+    final waar = a.toestelNaam.isEmpty ? 'een ander toestel' : a.toestelNaam;
+    final kop = a.radioArtiest != null
+        ? (a.speelde ? 'Radio op $waar' : 'Verder met de radio · op $waar')
+        : (a.speelde ? 'Speelt op $waar' : 'Verder waar je was · op $waar');
+    final knop = a.speelde ? 'Hier verder luisteren' : 'Verder luisteren';
+    return ConstrainedBox(
+      key: ValueKey('verder-${a.sleutel}'),
+      constraints: const BoxConstraints(maxWidth: 600),
+      child: GlasVlak(
+        vorm: const BorderRadius.all(Radius.circular(18)),
+        kleur: _panel,
+        balk: true,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 10, 6, 10),
+          child: Row(
+            children: [
+              cover(hoes, size: 46, radius: 8),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(kop, maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: _accent2, fontSize: 11.5, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 2),
+                    Text('${t.title} — ${t.artist}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+                    Text(_fmt(startPositie(a, DateTime.now().millisecondsSinceEpoch)),
+                        style: const TextStyle(color: _muted, fontSize: 11.5)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Glas met paarse tekst, zoals elke knop in de app: geen paars gevuld vlak.
+              if (smal)
+                GlasKnop.rond(
+                  key: const ValueKey('verder-knop'),
+                  icoon: Icons.play_arrow_rounded,
+                  tooltip: knop,
+                  onPressed: () => v.neemOver(),
+                )
+              else
+                GlasKnop(
+                  key: const ValueKey('verder-knop'),
+                  icoon: Icons.play_arrow_rounded,
+                  label: knop,
+                  autofocus: isTv,
+                  onPressed: () => v.neemOver(),
+                ),
+              TvLabelled(
+                label: 'Niet nu',
+                child: IconButton(
+                  key: const ValueKey('verder-weg'),
+                  tooltip: 'Niet nu',
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                  color: _muted,
+                  onPressed: v.wijsAf,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "Verder op …" in de spelerbalk (Saber, 18-10-2026).
+///
+/// De balk boven de inhoud stoorde ("het zit echt op een slechte plaats"), en wie hem wegklikte kon
+/// er niet meer bij. Hier bedekt hij niets en blijft hij staan zolang er een aanbod is: hij gaat weg
+/// als je overneemt of als het aanbod verloopt ([kVerderTotEenDag]).
+///
+/// - Op een breed scherm (pc, Mac, iPad, tv): een glazen knopje rechts in de balk met het toestel en
+///   het nummer. Eén klik of OK neemt over.
+/// - Op een telefoon ([smal]): een icoon met een stipje; tikken toont het aanbod als blad, met
+///   "Niet nu" ([VerderBalk]).
+class VerderKnop extends StatelessWidget {
+  const VerderKnop({super.key, this.smal = false});
+
+  final bool smal;
+
+  @override
+  Widget build(BuildContext context) {
+    final v = context.watch<VerderLuisteren>();
+    final a = v.aanbod;
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      switchInCurve: Curves.easeOutCubic,
+      child: a == null
+          ? const SizedBox.shrink(key: ValueKey('verder-geen'))
+          : smal
+              ? _icoon(context, a)
+              : _knop(context, v, a),
+    );
+  }
+
+  static String _waar(VerderAanbod a) => a.toestelNaam.isEmpty ? 'een ander toestel' : a.toestelNaam;
+
+  Widget _icoon(BuildContext context, VerderAanbod a) => IconButton(
+        key: ValueKey('verder-icoon-${a.sleutel}'),
+        tooltip: 'Verder van ${_waar(a)}',
+        onPressed: () => showModalBottomSheet<void>(
+          context: context,
+          backgroundColor: Colors.transparent,
+          builder: (_) => const _VerderBlad(),
+        ),
+        icon: Stack(clipBehavior: Clip.none, children: [
+          const Icon(Icons.devices_rounded, size: 22, color: _muted),
+          Positioned(
+            right: -2,
+            top: -2,
+            child: Container(
+              width: 8,
+              height: 8,
+              decoration: const BoxDecoration(color: _accent2, shape: BoxShape.circle),
+            ),
+          ),
+        ]),
+      );
+
+  Widget _knop(BuildContext context, VerderLuisteren v, VerderAanbod a) {
+    final t = a.nummer;
+    final kop = a.speelde ? 'Speelt op ${_waar(a)}' : 'Verder op ${_waar(a)}';
+    final tijd = _fmt(startPositie(a, DateTime.now().millisecondsSinceEpoch));
+    return Tooltip(
+      key: ValueKey('verder-knop-${a.sleutel}'),
+      message: a.speelde ? 'Hier verder luisteren' : 'Verder luisteren',
+      child: Pressable(
+        key: const ValueKey('verder-knop'),
+        onPressed: () => v.neemOver(),
+        borderRadius: BorderRadius.circular(999),
+        scaleOnFocus: false,
+        vastePlek: false,
+        child: GlasVlak(
+          vorm: const BorderRadius.all(Radius.circular(999)),
+          kleur: _panel,
+          balk: true,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 6, 14, 6),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.devices_rounded, size: 18, color: _accent2),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(kop,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
+                    Text('${t.title} · $tijd',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: MenuTint.paars.tekst, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Het blad van de telefoon: het aanbod met "Verder luisteren" en "Niet nu". Gaat vanzelf dicht als
+/// er geen aanbod meer is (overgenomen of weggeklikt).
+class _VerderBlad extends StatelessWidget {
+  const _VerderBlad();
+
+  @override
+  Widget build(BuildContext context) {
+    final a = context.watch<VerderLuisteren>().aanbod;
+    if (a == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) Navigator.of(context).maybePop();
+      });
+    }
+    return const SafeArea(
+      child: Padding(padding: EdgeInsets.fromLTRB(12, 0, 12, 12), child: VerderBalk()),
+    );
+  }
+}
+
+/// Ctrl/Cmd+F: het zoekveld in het menu.
+class ZoekIntent extends Intent {
+  const ZoekIntent();
+}
+
+/// Spatie: afspelen of pauzeren.
+class SpeelPauzeIntent extends Intent {
+  const SpeelPauzeIntent();
+}
+
+/// Escape of de terugknop van de muis: een stap terug.
+class TerugIntent extends Intent {
+  const TerugIntent();
+}
+
+/// Een stap terug: eerst wat er bovenop de hele app ligt (Nu speelt, een dialoog), anders binnen de
+/// sectie (een albumpagina). Op 17-10-2026 deed Escape op de pc niets op beide.
+void stapTerug() {
+  final boven = appNavigator.currentState;
+  if (boven != null && boven.canPop()) {
+    unawaited(boven.maybePop());
+    return;
+  }
+  unawaited(binnenNav.currentState?.maybePop());
+}
+
+/// Het zoekveld van de schil, voor Ctrl+F (die buiten de schil zit). Zoals [gaNaarSectie].
+void Function()? openZoekveld;
+
+/// Een sneltoets die niets doet zolang je in een tekstveld typt. Uitgeschakeld en niet "doet niets":
+/// een ingeschakelde actie slikt de toets in, en dan komt de spatie niet meer in het veld.
+class AlsNietTypend<T extends Intent> extends Action<T> {
+  AlsNietTypend(this.doe);
+
+  final void Function() doe;
+
+  @override
+  bool isEnabled(T intent) => !TvTextFieldEscape.editingText();
+
+  @override
+  Object? invoke(T intent) {
+    doe();
+    return null;
+  }
 }
 
 class _ZoomView extends StatelessWidget {
@@ -15012,7 +16176,11 @@ class _HomeStartViewState extends State<HomeStartView> {
             // Eén label per rij: dezelfde plaat kan in "Recent toegevoegd" én in een decennium staan.
             final tag = 'hoes:${context.read<LibraryStore>().uidOf(albums[i])}@$rij';
             return _card(
-                cover(albums[i].cover, size: kTegelHoes), albums[i].title, albums[i].artist,
+                (() {
+                  if (albums[i].cover == null) context.read<LibraryStore>().hoesVoorrang(albums[i]);
+                  return cover(albums[i].cover, size: kTegelHoes);
+                })(),
+                albums[i].title, albums[i].artist,
                 () => openPagina(context, (_) => AlbumDetailPage(album: albums[i], heroTag: tag)),
                 artist: albums[i].artist,
                 achterkant: () => achterkantVan(context, albums[i]),
@@ -26282,12 +27450,20 @@ typedef AlbumArtVooruit = ({
 
 /// De gegevens van [AlbumArt] voor dit album, zoals Nu speelt ze voor het huidige nummer bepaalt —
 /// voor het volgende nummer met dezelfde regels, anders zet het klaarzetten een andere map klaar.
+///
+/// **De uitgave uit de bekende feiten hoort erbij.** De warmer haalt de scans op onder
+/// `pinnedMbid ?? facts.mbid` en de albumpagina leest ze daar ook ([AlbumDetailPage]: `_officialMbid`).
+/// Zonder die laatste viel deze sleutel terug op artiest, titel en het aantal BESTANDEN — een andere
+/// map. Gemeten op 17-10-2026: twee tikken op de tegel van *NSYNC (2 bestanden) vonden geen
+/// achterkant, op de albumpagina stond hij er wel (14 nummers, mbid uit de feiten).
 AlbumArtVooruit albumArtVooruit(LibraryStore bib, Album al) => (
       artist: al.artist,
       album: al.title,
       trackCount: al.tracks.length,
       pinned: bib.pinnedRelease(al) ?? persingUitHerkomst(al.resolvedFrom).release,
-      pinnedMbid: bib.pinnedMbid(al) ?? persingUitHerkomst(al.resolvedFrom).mbid,
+      pinnedMbid: bib.pinnedMbid(al) ??
+          persingUitHerkomst(al.resolvedFrom).mbid ??
+          bib.facts.get(bib.uidOf(al))?.mbid,
       roles: bib.albumArtRoles(al.artist, al.title),
     );
 
@@ -26363,6 +27539,16 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     super.initState();
     widget.draai?.addListener(_opDraai);
     widget.draai?.voorInRust.addListener(_opDraai);
+    // Liggen de scans al in het geheugen, dan staan ze er in het EERSTE beeld. Dezelfde controle als
+    // in [didUpdateWidget], die hier ontbrak: een albumpagina of Nu speelt begon daardoor altijd met
+    // de hoes uit het bestand en een getekende schijf, en wisselde een beeld later naar de scans
+    // (17-10-2026; Saber: "direct tonen van alle covers, backcover, cd hoes"). Het aanwijzen van
+    // een tegel legt ze hier klaar ([voorladenVan]).
+    _art = DiscogsService(context.read<AppSettings>()).artInGeheugen(widget.artist, widget.album,
+        expectedTracks: widget.trackCount,
+        pinned: widget.pinned,
+        pinnedMbid: widget.pinnedMbid,
+        roles: widget.roles);
     _load();
     _sync();
     _zetVolgendeKlaar();
@@ -28866,6 +30052,137 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
   List<DiscogsImage>? _images;
   String? _error;
 
+  /// Eigen foto's die je in dit venster van internet toevoegde ([_voegToe]).
+  final List<DiscogsImage> _eigen = [];
+  final _adres = TextEditingController();
+  bool _haalt = false;
+  String? _melding;
+
+  @override
+  void dispose() {
+    _adres.dispose();
+    super.dispose();
+  }
+
+  Future<void> _plak() async {
+    final d = await Clipboard.getData(Clipboard.kTextPlain);
+    final t = d?.text?.trim();
+    if (t == null || t.isEmpty || !mounted) return;
+    setState(() {
+      _adres.text = t;
+      _melding = null;
+    });
+  }
+
+  /// De afbeeldingen van deze artiest in je browser, om er zelf een te kiezen.
+  Future<void> _zoekOpInternet() async {
+    await launchUrl(Uri.https('www.google.com', '/search', {'tbm': 'isch', 'q': widget.artist}),
+        mode: LaunchMode.externalApplication);
+  }
+
+  /// Een foto van internet toevoegen: eerst nagaan dat er echt een afbeelding staat (met dezelfde
+  /// ophaler als de pagina straks gebruikt), dan in het vak dat bij zijn vorm hoort meteen kiezen.
+  Future<void> _voegToe() async {
+    final invoer = _adres.text;
+    final adres = echtAfbeeldingsadres(invoer);
+    if (adres == null) {
+      setState(() => _melding = waaromGeenAdres(invoer));
+      return;
+    }
+    setState(() {
+      _haalt = true;
+      _melding = 'Ophalen…';
+    });
+    final settings = context.read<AppSettings>();
+    final lib = context.read<LibraryStore>();
+    final bytes = await CoverEnricher(settings).downloadImage(adres);
+    var w = 0, h = 0;
+    if (bytes != null) {
+      try {
+        final beeld = await decodeImageFromList(bytes);
+        w = beeld.width;
+        h = beeld.height;
+        beeld.dispose();
+      } catch (_) {/* dan blijft het 0 en zegt de melding het */}
+    }
+    if (!mounted) return;
+    if (bytes == null || w == 0 || h == 0) {
+      setState(() {
+        _haalt = false;
+        _melding = 'Op dat adres staat geen foto die de app kan lezen. Kopieer het adres van de foto '
+            'zelf, niet van de pagina eromheen.';
+      });
+      return;
+    }
+    final nieuw = DiscogsImage(adres, adres, w, h, false);
+    await lib.setArtistArt(widget.artist, nieuw.isWide ? kSoortLiggend : kSoortStaand, adres);
+    if (!mounted) return;
+    setState(() {
+      _eigen
+        ..removeWhere((e) => e.uri == adres)
+        ..insert(0, nieuw);
+      _haalt = false;
+      _adres.clear();
+      _melding = 'Toegevoegd en gekozen als ${nieuw.isWide ? 'liggende' : 'staande'} achtergrond '
+          '($w × $h). Hij staat ook in het andere vak, als je hem daar wilt.';
+    });
+  }
+
+  /// Het plakveld boven de foto's.
+  Widget _vanInternet() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Expanded(
+            child: TextField(
+              key: const ValueKey('foto-adres'),
+              controller: _adres,
+              enabled: !_haalt,
+              style: const TextStyle(fontSize: 13),
+              onSubmitted: (_) => _voegToe(),
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: .06),
+                hintText: 'Plak het adres van een foto van internet',
+                hintStyle: const TextStyle(color: _muted, fontSize: 13),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Plakken',
+            icon: const Icon(Icons.content_paste_rounded, size: 20),
+            color: _muted,
+            onPressed: _haalt ? null : _plak,
+          ),
+          GlasKnop(
+            key: const ValueKey('foto-toevoegen'),
+            icoon: Icons.add_photo_alternate_outlined,
+            label: 'Toevoegen',
+            onPressed: _haalt ? null : _voegToe,
+          ),
+        ]),
+        const SizedBox(height: 4),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            child: Text(
+              _melding ?? 'Rechtsklik op een foto in je browser → "Afbeeldingsadres kopiëren", en plak het hier.',
+              maxLines: 3,
+              style: const TextStyle(color: _muted, fontSize: 11.5),
+            ),
+          ),
+          TextButton.icon(
+            onPressed: _zoekOpInternet,
+            icon: const Icon(Icons.travel_explore_rounded, size: 16),
+            label: const Text('Zoeken op internet', style: TextStyle(fontSize: 12)),
+          ),
+        ]),
+      ],
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -28934,7 +30251,9 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
                   'Klik in LIGGEND voor een breed scherm, in STAAND voor een iPad die je rechtop '
                   'houdt · rechtsklik voor het portret',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
+              _vanInternet(),
+              const SizedBox(height: 6),
               Expanded(child: _body(portrait, liggend, staand)),
             ],
           ),
@@ -28949,17 +30268,32 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
     if (list == null) {
       return const Center(child: CircularProgressIndicator(strokeWidth: 2, color: _accent));
     }
-    if (list.isEmpty) return const Center(child: Text('Geen foto\'s gevonden.', style: TextStyle(color: _muted)));
+    // Eigen foto's vooraan, in BEIDE vakken: je hebt ze zelf gekozen, dus jij zegt waar ze horen —
+    // ook een foto van 4:3 die je toch liever als brede achtergrond wilt. Een eerder gekozen adres
+    // dat geen van de bronnen kent (een eigen foto van een vorige keer) staat er ook bij, anders zou
+    // je keuze nergens te zien zijn.
+    final bekend = {for (final i in list) i.uri, for (final e in _eigen) e.uri};
+    final eigen = [
+      ..._eigen,
+      for (final u in {liggendKeuze, staandKeuze, portrait})
+        if (u != null && u.isNotEmpty && !bekend.contains(u)) DiscogsImage(u, u, 0, 0, false),
+    ];
+    if (list.isEmpty && eigen.isEmpty) {
+      return const Center(
+          child: Text('Geen foto\'s gevonden. Voeg er hierboven zelf een toe.', style: TextStyle(color: _muted)));
+    }
 
     // Twee vakken in ÉÉN schuiflijst, niet twee losse rasters: met een eigen schuifbalk per vak
     // staat STAAND achter een balk die je pas vindt als je weet dat hij er is.
     final vorm = splitsOpVorm(list);
+    final liggend = [...eigen, ...vorm.liggend];
+    final staand = [...eigen, ...vorm.staand];
     return CustomScrollView(
       slivers: [
-        _sectieKop('LIGGEND', vorm.liggend.length),
-        _raster(vorm.liggend, breed: true, gekozen: liggendKeuze, portrait: portrait),
-        _sectieKop('STAAND', vorm.staand.length),
-        _raster(vorm.staand, breed: false, gekozen: staandKeuze, portrait: portrait),
+        _sectieKop('LIGGEND', liggend.length),
+        _raster(liggend, breed: true, gekozen: liggendKeuze, portrait: portrait),
+        _sectieKop('STAAND', staand.length),
+        _raster(staand, breed: false, gekozen: staandKeuze, portrait: portrait),
         const SliverToBoxAdapter(child: SizedBox(height: 8)),
       ],
     );

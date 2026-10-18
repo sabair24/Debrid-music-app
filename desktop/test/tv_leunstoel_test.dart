@@ -3,6 +3,7 @@
 // paarse letters zonder rand, en na twee minuten stilstand Nu speelt.
 import 'dart:io';
 
+import 'package:debridmusic/ui/menu.dart' show MenuTint, MenuWoord, menuPilVorm;
 import 'package:debridmusic/main.dart';
 import 'package:debridmusic/online.dart';
 import 'package:debridmusic/settings.dart';
@@ -68,6 +69,57 @@ void main() {
           reason: 'de derde rij van 60 hoog hoort weer naar de vaste plek te schuiven');
     });
 
+    test('bovenaan blijven, maar niet met de onderkant onder de rand', () {
+      // Albums op de Shield (18-10-2026): de eerste rij onder de titel en de kop "#" bleef bovenaan,
+      // met de artiestnamen onder de spelerbalk.
+      expect(
+          vastePlekDoel(
+              onthul: 120, voorrand: kTvBovenruimte, min: 0, max: 2000, bovenaanTot: kTvBovenaanTot,
+              onthulEinde: 20, eindmarge: 22),
+          42,
+          reason: 'net zo ver als nodig om hem helemaal te zien');
+      expect(
+          vastePlekDoel(
+              onthul: 120, voorrand: kTvBovenruimte, min: 0, max: 2000, bovenaanTot: kTvBovenaanTot,
+              onthulEinde: -50, eindmarge: 22),
+          0,
+          reason: 'past hij al, dan blijft de kop helemaal staan');
+      expect(
+          vastePlekDoel(
+              onthul: 120, voorrand: kTvBovenruimte, min: 0, max: 2000, bovenaanTot: kTvBovenaanTot,
+              onthulEinde: 300, eindmarge: 22),
+          120 - kTvBovenruimte,
+          reason: 'nooit verder dan de vaste plek');
+    });
+
+    testWidgets('een eerste rij onder een paginakop komt helemaal in beeld, met zijn groei', (t) async {
+      final c = ScrollController();
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              height: 300,
+              child: ListView(controller: c, children: [
+                const SizedBox(height: 120), // de paginatitel en de kop van de groep
+                Align(
+                  alignment: Alignment.topLeft,
+                  child: Pressable(
+                      key: const ValueKey('eerste'), onPressed: () {}, child: const SizedBox(width: 100, height: 200)),
+                ),
+                const SizedBox(height: 1000),
+              ]),
+            ),
+          ),
+        ),
+      ));
+      _knoop(t, 'eerste').requestFocus();
+      await t.pumpAndSettle();
+      final onder = t.getBottomLeft(find.byKey(const ValueKey('eerste'))).dy + 200 * (tileFocusScale - 1) / 2;
+      expect(onder, lessThanOrEqualTo(300), reason: 'de onderkant (met de groei) boven de rand van de lijst');
+      expect(c.offset, lessThan(120 - kTvBovenruimte), reason: 'en niet verder dan nodig: de kop blijft zoveel mogelijk');
+    });
+
     testWidgets('in een rij staat de gekozen hoes waar de eerste in rust staat', (t) async {
       await t.pumpWidget(MaterialApp(home: Scaffold(body: Align(alignment: Alignment.topLeft, child: _rij('a')))));
       final rust = t.getTopLeft(find.byKey(const ValueKey('a0'))).dx;
@@ -120,7 +172,8 @@ void main() {
           reason: 'hier stond de vierde rij half onder de spelerbalk');
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(main, contains('                onFocusChange: tvVolgFocus(rij),'));
-      expect(main, contains('const double kTvAlbumHoes = 180;'));
+      expect(main, contains('const double kTvAlbumHoes = kTegelHoes;'),
+          reason: 'de rijen van Albums op de maat van Start: met 180 lagen de titels onder de spelerbalk');
     });
 
     testWidgets('wie het uitzet (de bovenbalk), krijgt het midden', (t) async {
@@ -268,14 +321,19 @@ void main() {
       await t.pumpAndSettle();
       final pil = find.byKey(const ValueKey('tv-menu-pil'));
       expect(pil, findsOneWidget, reason: 'één pil, geen pil per tabblad');
-      double midden(Finder f) => t.getCenter(f).dx;
+      // Het midden van icoon en woord samen: de pil staat om allebei heen.
+      double midden(Finder f) => t
+          .getCenter(f.evaluate().first.widget is Text
+              ? find.ancestor(of: f, matching: find.byType(MenuWoord)).first
+              : f)
+          .dx;
       Color kleur(String label) => t.widget<DefaultTextStyle>(
               find.ancestor(of: find.text(label), matching: find.byType(DefaultTextStyle)).first)
           .style
           .color!;
       expect(midden(pil), closeTo(midden(find.text('Start')), 2), reason: 'in rust op de pagina waar je bent');
-      expect(kleur('Start'), kTvMenuLicht);
-      expect(kleur('Albums'), isNot(kTvMenuLicht));
+      expect(kleur('Start'), MenuTint.paars.tekst);
+      expect(kleur('Albums'), isNot(MenuTint.paars.tekst));
 
       knoppen.voor(4).requestFocus(); // Tracks
       // Selectie, opbouw, meting na het beeld, en dan pas begint hij te schuiven.
@@ -289,10 +347,11 @@ void main() {
       expect(halfweg, lessThan(tracks - 5));
       await t.pumpAndSettle();
       expect(midden(pil), closeTo(tracks, 2));
-      expect(kleur('Tracks'), kTvMenuLicht);
-      expect(kleur('Start'), isNot(kTvMenuLicht), reason: 'één woord licht op: dat onder de pil');
+      expect(kleur('Tracks'), MenuTint.paars.tekst);
+      expect(kleur('Start'), isNot(MenuTint.paars.tekst), reason: 'één woord licht op: dat onder de pil');
       final deco = t.widget<DecoratedBox>(find.descendant(of: pil, matching: find.byType(DecoratedBox))).decoration;
-      expect(deco, kTvMenuPil);
+      expect(deco, menuPilVorm(MenuTint.paars),
+          reason: 'helder glas, alleen de letters paars (Saber, 17-10-2026: "doe enkel de tekst paars")');
     });
 
     testWidgets('het tabblad van de pagina waar je bent staat in beeld, ook na een wissel', (t) async {
