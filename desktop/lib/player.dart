@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
-import 'artwork.dart' show kleurBuitenDeTekendraad;
+import 'artwork.dart' show HoesVlek, kleurEnVlekkenBuitenDeTekendraad;
 import 'kapot_bestand.dart' show waaromNietTeOpenen;
 import 'lan/stroomstand.dart' show grensUitUrl;
 import 'luidheid.dart' show Bijstelbron, Bijstelling, adresSleutel;
@@ -821,6 +821,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _hoesNu = bytes;
     // De kleur van de vorige plaat hoort niet bij deze. Liever even geen was dan de verkeerde.
     wasKleur = null;
+    hoesVlekken = const [];
     if (bytes != null) unawaited(_wasUitHoes(bytes));
   }
 
@@ -834,16 +835,22 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// Null bij een zwart-witte hoes; zie `dominantColour`. Geen was is beter dan een grijze.
   int? wasKleur;
 
+  /// De kleurvlekken van de hoes die nu speelt, voor het glas van de balk (zie `hoesVlekken` in
+  /// artwork.dart). Leeg zolang ze er niet zijn, of als de hoes geen kleur heeft.
+  List<HoesVlek> hoesVlekken = const [];
+
   Future<void> _wasUitHoes(Uint8List bytes) async {
-    int? kleur;
+    ({int? kleur, List<HoesVlek> vlekken}) uit;
     try {
-      kleur = await kleurBuitenDeTekendraad(bytes);
+      uit = await kleurEnVlekkenBuitenDeTekendraad(bytes);
     } catch (_) {
       return; // een hoes die niet te lezen is laat de schermen gewoon zoals ze waren
     }
     // Er speelt intussen iets anders: dit antwoord is van de vorige plaat.
-    if (!identical(bytes, _hoesNu) || kleur == wasKleur) return;
-    wasKleur = kleur;
+    if (!identical(bytes, _hoesNu)) return;
+    if (uit.kleur == wasKleur && uit.vlekken.isEmpty && hoesVlekken.isEmpty) return;
+    wasKleur = uit.kleur;
+    hoesVlekken = uit.vlekken;
     notifyListeners();
   }
 

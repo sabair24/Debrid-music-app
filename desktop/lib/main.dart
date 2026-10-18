@@ -9859,7 +9859,13 @@ class PlayerBar extends StatelessWidget {
       // rather than the 0 it had — SafeArea is no help here, a TV reports no insets at all.
       padding: EdgeInsets.fromLTRB(
           18 + tvOverscan.left, 0, 18 + tvOverscan.right, bottomInset + tvOverscan.bottom),
-      child: Row(
+      // De kleurvlekken van de hoes, boven de kleur van de balk en onder de knoppen (Saber,
+      // 18-10-2026). Ze lopen door tot in de binnenmarge, tot de rand van de balk.
+      child: CustomPaint(
+        painter: HoesVlekkenSchilder(p.hoesVlekken,
+            uitloop: EdgeInsets.fromLTRB(
+                18 + tvOverscan.left, 0, 18 + tvOverscan.right, bottomInset + tvOverscan.bottom)),
+        child: Row(
         children: [
           SizedBox(
             width: side,
@@ -10055,6 +10061,7 @@ class PlayerBar extends StatelessWidget {
             child: const Align(alignment: Alignment.centerRight, child: VerderKnop()),
           ),
         ],
+      ),
       ),
     );
   }
@@ -12035,7 +12042,10 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
       border: const Border(top: BorderSide(color: _line)),
     ),
     padding: EdgeInsets.only(bottom: bottomInset),
-    child: Column(
+    // De kleurvlekken van de hoes, zoals in de brede balk.
+    child: CustomPaint(
+      painter: HoesVlekkenSchilder(p.hoesVlekken, uitloop: EdgeInsets.only(bottom: bottomInset)),
+      child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         // The progress line, full width and two points tall. A draggable slider needs a thumb and
@@ -12130,6 +12140,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
           ),
         ),
       ],
+    ),
     ),
   );
 }

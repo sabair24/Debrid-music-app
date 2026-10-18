@@ -38,6 +38,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
+import '../artwork.dart' show HoesVlek;
 import '../tv.dart';
 
 enum GlasStand { plat, mat, vloeibaar }
@@ -514,6 +515,61 @@ class GlasRegel extends StatelessWidget {
           ]);
         },
       );
+}
+
+/// De stilstaande kleurvlekken van een hoes in het glas (Saber, 18-10-2026): zachte ronde vlekken in
+/// de kleuren van de plaat, op de plek waar ze op de hoes liggen (over de breedte uitgerekt). Boven de
+/// vulling van de balk en onder de knoppen. Leeg = niets.
+class HoesVlekkenLaag extends StatelessWidget {
+  const HoesVlekkenLaag(this.vlekken, {super.key, this.sterkte = kVlekSterkte});
+  final List<HoesVlek> vlekken;
+  final double sterkte;
+
+  @override
+  Widget build(BuildContext context) => vlekken.isEmpty
+      ? const SizedBox.shrink()
+      : IgnorePointer(child: RepaintBoundary(child: CustomPaint(painter: HoesVlekkenSchilder(vlekken, sterkte: sterkte))));
+}
+
+/// Hoe sterk een vlek op zijn zwaarst is.
+const double kVlekSterkte = .30;
+
+/// Tekent [HoesVlek]ken. Als achtergrond van een rij (`CustomPaint(painter: …, child: rij)`) staan ze
+/// boven de kleur van de balk en onder de knoppen; [uitloop] laat ze doorlopen tot in de binnenmarge
+/// van de balk eromheen.
+class HoesVlekkenSchilder extends CustomPainter {
+  HoesVlekkenSchilder(this.vlekken, {this.sterkte = kVlekSterkte, this.uitloop = EdgeInsets.zero});
+  final List<HoesVlek> vlekken;
+  final double sterkte;
+  final EdgeInsets uitloop;
+
+  @override
+  void paint(Canvas canvas, Size binnen) {
+    if (binnen.isEmpty || vlekken.isEmpty) return;
+    canvas.save();
+    canvas.translate(-uitloop.left, -uitloop.top);
+    final size = Size(binnen.width + uitloop.horizontal, binnen.height + uitloop.vertical);
+    final basis = math.max(size.width, size.height);
+    // De lichtste eerst, de zwaarste bovenop.
+    for (final v in vlekken.reversed) {
+      final midden = Offset(v.x * size.width, v.y * size.height);
+      final straal = basis * (.18 + .22 * v.gewicht);
+      final kleur = Color(v.kleur);
+      canvas.drawRect(
+        Offset.zero & size,
+        Paint()
+          ..shader = ui.Gradient.radial(midden, straal, [
+            kleur.withValues(alpha: sterkte * (.55 + .45 * v.gewicht)),
+            kleur.withValues(alpha: 0),
+          ]),
+      );
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(HoesVlekkenSchilder oud) =>
+      !identical(oud.vlekken, vlekken) || oud.sterkte != sterkte || oud.uitloop != uitloop;
 }
 
 /// De korrel van glas: een fijne ruis op 2 %, zoals Windows Acrylic (Saber, 18-10-2026: "ook op de

@@ -64,18 +64,80 @@ int? dominantColour(Uint8List bytes) {
       (beste.b / beste.aantal).round();
 }
 
-/// Eén emmer van het kleurenraster: hoe zwaar er op gestemd is, en het gemiddelde eronder.
+/// Eén emmer van het kleurenraster: hoe zwaar er op gestemd is, het gemiddelde eronder, en waar op de
+/// hoes die pixels lagen.
 class _Emmer {
-  double gewicht = 0, r = 0, g = 0, b = 0;
+  double gewicht = 0, r = 0, g = 0, b = 0, x = 0, y = 0;
   int aantal = 0;
 
-  void stem(double pr, double pg, double pb, double verzadiging) {
+  void stem(double pr, double pg, double pb, double verzadiging, [double px = 0, double py = 0]) {
     gewicht += verzadiging;
     r += pr;
     g += pg;
     b += pb;
+    x += px;
+    y += py;
     aantal++;
   }
+
+  int get kleur =>
+      0xFF000000 | ((r / aantal).round() << 16) | ((g / aantal).round() << 8) | (b / aantal).round();
+}
+
+/// Een kleurvlek uit een hoes: waar hij ligt (0 tot 1 over de breedte en de hoogte), welke kleur, en
+/// hoe zwaar hij weegt tegenover de zwaarste (0 tot 1).
+class HoesVlek {
+  const HoesVlek(this.x, this.y, this.kleur, this.gewicht);
+  final double x, y, gewicht;
+  final int kleur;
+}
+
+/// De zwaarste kleuren van een hoes als vlekken, hoogstens [hoeveel], voor de stilstaande kleurvlekken
+/// achter het glas (Saber, 18-10-2026: "stilstaande vlekken uit de hoes, achter de balk en Nu speelt").
+///
+/// Hetzelfde raster als [dominantColour]: bijna zwart, bijna wit en grijs tellen niet. Twee emmers die
+/// op elkaar lijken worden er één (anders vier tinten van hetzelfde rood). Leeg als de hoes geen kleur
+/// heeft; dan blijft de balk gewoon zijn eigen tint.
+List<HoesVlek> hoesVlekken(Uint8List bytes, {int hoeveel = 4}) {
+  img.Image? im;
+  try {
+    im = img.decodeImage(bytes);
+  } catch (_) {
+    return const [];
+  }
+  if (im == null || im.width < 8 || im.height < 8) return const [];
+  const n = 48;
+  final t = img.copyResize(im, width: n, height: n);
+  final emmers = <int, _Emmer>{};
+  for (var y = 0; y < n; y++) {
+    for (var x = 0; x < n; x++) {
+      final p = t.getPixel(x, y);
+      final r = p.r.toDouble(), g = p.g.toDouble(), b = p.b.toDouble();
+      final hoog = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      final laag = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      if (hoog < 40 || laag > 215) continue;
+      final verzadiging = (hoog - laag) / hoog;
+      if (verzadiging < .22) continue;
+      final sleutel = ((r ~/ 32) << 6) | ((g ~/ 32) << 3) | (b ~/ 32);
+      (emmers[sleutel] ??= _Emmer()).stem(r, g, b, verzadiging, (x + .5) / n, (y + .5) / n);
+    }
+  }
+  final rij = emmers.values.where((e) => e.aantal >= 8).toList()..sort((a, b) => b.gewicht.compareTo(a.gewicht));
+  final gekozen = <_Emmer>[];
+  for (final e in rij) {
+    final lijkt = gekozen.any((k) {
+      final dr = k.r / k.aantal - e.r / e.aantal, dg = k.g / k.aantal - e.g / e.aantal, db = k.b / k.aantal - e.b / e.aantal;
+      return dr * dr + dg * dg + db * db < 48 * 48;
+    });
+    if (lijkt) continue;
+    gekozen.add(e);
+    if (gekozen.length == hoeveel) break;
+  }
+  if (gekozen.isEmpty) return const [];
+  final zwaarst = gekozen.first.gewicht;
+  return [
+    for (final e in gekozen) HoesVlek(e.x / e.aantal, e.y / e.aantal, e.kleur, e.gewicht / zwaarst),
+  ];
 }
 
 /// What a scan of a release actually shows.
@@ -395,6 +457,11 @@ Future<({int? front, int? back, int? disc})> rollenBuitenDeTekendraad(
 /// verdachte niet meer deze.
 Future<int?> kleurBuitenDeTekendraad(Uint8List bytes) =>
     _opDeRij(() => Isolate.run(() => dominantColour(bytes)));
+
+/// De hoofdkleur en de vlekken van een hoes in één keer, buiten de tekendraad en op dezelfde rij als
+/// [kleurBuitenDeTekendraad]: één keer decoderen in plaats van twee.
+Future<({int? kleur, List<HoesVlek> vlekken})> kleurEnVlekkenBuitenDeTekendraad(Uint8List bytes) =>
+    _opDeRij(() => Isolate.run(() => (kleur: dominantColour(bytes), vlekken: hoesVlekken(bytes))));
 
 /// Hoeveel pixel een hoes hoogstens breed of hoog hoeft te zijn om naar een toestel te sturen.
 ///
