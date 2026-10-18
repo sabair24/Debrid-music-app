@@ -58,6 +58,7 @@ final class NetwerkWacht: NSObject, FlutterStreamHandler {
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   /// Vastgehouden, zodat het kanaal blijft bestaan zolang de app draait.
   private var warmteKanaal: FlutterMethodChannel?
+  private var systeemKanaal: FlutterMethodChannel?
   private var netwerkKanaal: FlutterEventChannel?
   private let netwerkWacht = NetwerkWacht()
 
@@ -90,6 +91,21 @@ final class NetwerkWacht: NSObject, FlutterStreamHandler {
         ])
       }
       warmteKanaal = kanaal
+    }
+
+    // Wil het systeem dicht glas? "Minder transparantie" of de energiebesparingsmodus. Zie
+    // lib/systeem_glas.dart.
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "DebridMusicSysteem") {
+      let kanaal = FlutterMethodChannel(
+        name: "debridmusic/systeem", binaryMessenger: registrar.messenger())
+      kanaal.setMethodCallHandler { call, result in
+        guard call.method == "dichtGlas" else {
+          result(FlutterMethodNotImplemented)
+          return
+        }
+        result(UIAccessibility.isReduceTransparencyEnabled || ProcessInfo.processInfo.isLowPowerModeEnabled)
+      }
+      systeemKanaal = kanaal
     }
 
     // Netwerkwissels, zie NetwerkWacht hierboven.

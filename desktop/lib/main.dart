@@ -146,6 +146,7 @@ import 'rutracker_venster.dart';
 import 'netsoort.dart';
 import 'netwerkwissel.dart';
 import 'settings.dart';
+import 'systeem_glas.dart';
 import 'speelstanden.dart';
 import 'slsk_groepen.dart';
 import 'speakers.dart';
@@ -513,7 +514,8 @@ Future<void> main() async {
     debugPrint(r);
     Timer.run(() => kopLog.line(r));
   };
-  unawaited(GlasKwaliteit.inrichten());
+  // En of het systeem dicht glas vraagt (minder transparantie, batterijbesparing): systeem_glas.dart.
+  unawaited(GlasKwaliteit.inrichten().then((_) => SysteemGlas.start()));
   // And what this device is called, before it publishes that name anywhere. Same channel, same
   // race — and on Android the alternative is a device list in which every phone reads "localhost".
   await initDeviceName();

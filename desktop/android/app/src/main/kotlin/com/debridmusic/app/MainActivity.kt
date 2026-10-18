@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.ryanheise.audioservice.AudioServiceActivity
@@ -192,6 +193,27 @@ class MainActivity : AudioServiceActivity() {
                     )
                     "deviceName" -> result.success(deviceName())
                     "netsoort" -> result.success(netsoort())
+                    else -> result.notImplemented()
+                }
+            }
+
+        // Wil het systeem dicht glas? Batterijbesparing, of Samsungs "Transparantie en vervaging
+        // verminderen" (Toegankelijkheid). Zie lib/systeem_glas.dart.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "debridmusic/systeem")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "dichtGlas" -> {
+                        val stroom = getSystemService(Context.POWER_SERVICE) as PowerManager
+                        val minder = listOf("accessibility_reduce_transparency", "reduce_transparency").any { sleutel ->
+                            try {
+                                Settings.System.getInt(contentResolver, sleutel, 0) == 1 ||
+                                    Settings.Secure.getInt(contentResolver, sleutel, 0) == 1
+                            } catch (e: Exception) {
+                                false
+                            }
+                        }
+                        result.success(stroom.isPowerSaveMode || minder)
+                    }
                     else -> result.notImplemented()
                 }
             }

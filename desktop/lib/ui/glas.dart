@@ -203,12 +203,35 @@ class GlasKwaliteit {
   static Duration _wacht = Duration.zero;
   static Timer? _later;
 
+  /// Vraagt het systeem om dicht glas ("Minder transparantie", batterijbesparing)? Zie
+  /// `systeem_glas.dart`. Dan staat het glas plat tot het systeem het weer toestaat.
+  static final systeemDicht = ValueNotifier<bool>(false);
+  static GlasStand? _voorSysteem;
+
+  static void zetSysteemDicht(bool dicht) {
+    if (dicht == systeemDicht.value) return;
+    systeemDicht.value = dicht;
+    final doel = _bewaakte;
+    if (dicht) {
+      _voorSysteem = doel.value;
+      doel.value = GlasStand.plat;
+      _wissel = '${_voorSysteem!.name} → plat, het systeem vraagt dicht glas';
+      meld?.call('glas: het systeem vraagt dicht glas (minder transparantie of batterijbesparing)');
+    } else {
+      doel.value = _voorSysteem ?? hoogste;
+      _voorSysteem = null;
+      _wissel = 'het systeem staat weer glas toe → ${doel.value.name}';
+      meld?.call('glas: $_wissel');
+    }
+  }
+
   /// Probeer de hoogste stand opnieuw. Vanuit Instellingen ([handmatig]) begint de wachttijd weer
   /// klein; vanzelf (na de wachttijd) blijft hij staan, zodat een toestel dat het echt niet trekt
   /// niet elke minuut hapert.
   static void probeerOpnieuw({bool handmatig = false}) {
     _later?.cancel();
     _later = null;
+    if (systeemDicht.value) return;
     if (handmatig) _wacht = Duration.zero;
     if (_bewaakte.value == hoogste) return;
     final van = _bewaakte.value;
@@ -341,6 +364,8 @@ class GlasKwaliteit {
     _later = null;
     hzVoorToets = null;
     klok = DateTime.now;
+    systeemDicht.value = false;
+    _voorSysteem = null;
   }
 }
 
@@ -434,11 +459,15 @@ class GlasRegel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-        animation: Listenable.merge([GlasKwaliteit.terugval, GlasKwaliteit.stand, GlasKwaliteit.tvBalk]),
+        animation: Listenable.merge(
+            [GlasKwaliteit.terugval, GlasKwaliteit.stand, GlasKwaliteit.tvBalk, GlasKwaliteit.systeemDicht]),
         builder: (context, _) {
-          final t = GlasKwaliteit.terugval.value;
+          final systeem = GlasKwaliteit.systeemDicht.value;
+          final t = systeem ? null : GlasKwaliteit.terugval.value;
           final stand = (isTv ? GlasKwaliteit.tvBalk : GlasKwaliteit.stand).value;
-          final tekst = t?.zin ?? 'Glas: ${stand.name}';
+          final tekst = systeem
+              ? 'Glas: dicht — minder transparantie of batterijbesparing staat aan op dit toestel'
+              : t?.zin ?? 'Glas: ${stand.name}';
           final stijl = DefaultTextStyle.of(context).style;
           return Row(children: [
             Expanded(

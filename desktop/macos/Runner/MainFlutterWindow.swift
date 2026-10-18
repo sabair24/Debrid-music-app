@@ -57,6 +57,7 @@ final class NetwerkWacht: NSObject, FlutterStreamHandler {
 class MainFlutterWindow: NSWindow {
   private let netwerkWacht = NetwerkWacht()
   private var netwerkKanaal: FlutterEventChannel?
+  private var systeemKanaal: FlutterMethodChannel?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -71,6 +72,23 @@ class MainFlutterWindow: NSWindow {
       name: "debridmusic/netwerk", binaryMessenger: flutterViewController.engine.binaryMessenger)
     kanaal.setStreamHandler(netwerkWacht)
     netwerkKanaal = kanaal
+
+    // Wil het systeem dicht glas? "Transparantie verminderen" of de energiebesparingsmodus. Zie
+    // lib/systeem_glas.dart.
+    let systeem = FlutterMethodChannel(
+      name: "debridmusic/systeem", binaryMessenger: flutterViewController.engine.binaryMessenger)
+    systeem.setMethodCallHandler { call, result in
+      guard call.method == "dichtGlas" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      var zuinig = false
+      if #available(macOS 12.0, *) {
+        zuinig = ProcessInfo.processInfo.isLowPowerModeEnabled
+      }
+      result(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency || zuinig)
+    }
+    systeemKanaal = systeem
 
     super.awakeFromNib()
   }
