@@ -405,7 +405,10 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
         if (rust) return voor;
         final kant = (t < .5 || achter == null) ? voor : achter;
         // Een wiebel blijft wat hij was: een tikje heen en weer, zonder dikte of veeg.
-        if (t == 0) {
+        // In rust (voor- of achterkant) alleen de kant: dikte, schaduw en veeg horen bij het draaien. Op
+        // de achterkant bleven de randen anders als twee donkere strepen naast een cd-achterkant staan
+        // die breder is dan hoog (Saber, gsm, 18-10-2026).
+        if (t <= 0 || t >= 1) {
           return Transform(alignment: Alignment.center, transform: draaiMatrix(t)..rotateY(w), child: kant);
         }
         // Omdraaien: de schaduw eronder wordt smaller naarmate de hoes op zijn kant staat, de rand

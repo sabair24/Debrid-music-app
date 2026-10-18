@@ -26,6 +26,9 @@ const double kKantelHoek = 6 * math.pi / 180;
 /// Hoe snel hij een nieuwe stand volgt.
 const Duration kKantelVolg = Duration(milliseconds: 160);
 
+/// Hoe lang er minstens tussen twee standen van het toestel zit: 33 ms, hooguit 30 per seconde.
+const Duration kToestelStap = Duration(milliseconds: 33);
+
 /// Hoe ver een telefoon moet kantelen (als deel van de zwaartekracht, ≈ sin van de hoek) voor de
 /// volle zes graden van de hoes: tien graden toestel is zes graden hoes.
 const double kToestelVol = .17;
@@ -127,6 +130,7 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _melder?.cancel();
+    _wachtToestel?.cancel();
     _c.dispose();
     super.dispose();
   }
@@ -176,8 +180,33 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
     _rust = r;
     final d = g - r;
     // Op een telefoon is x naar rechts en y naar boven; links kantelen = de linkerkant zakt.
-    _naarStand(Offset((-d.dx / kToestelVol).clamp(-1.0, 1.0), (d.dy / kToestelVol).clamp(-1.0, 1.0)));
+    _zetToestel(Offset((-d.dx / kToestelVol).clamp(-1.0, 1.0), (d.dy / kToestelVol).clamp(-1.0, 1.0)));
   }
+
+  /// Een nieuwe stand van het toestel: meteen, zonder animatie (de melding is al glad), en hooguit
+  /// [kToestelStap] keer per seconde. Met een animatie per melding tekende Nu speelt 120 beelden per
+  /// seconde zolang de gsm in de hand lag (fps.log, 18-10-2026) — de cd ernaast doet er 60.
+  void _zetToestel(Offset doel) {
+    if (!_mag(context)) doel = Offset.zero;
+    if (_wachtToestel != null) {
+      _volgendeToestel = doel;
+      return;
+    }
+    if ((doel - _naar).distance < .035 && doel != Offset.zero) return;
+    if (doel == _naar && _c.value == 1) return;
+    _van = doel;
+    _naar = doel;
+    _c.value = 1;
+    _wachtToestel = Timer(kToestelStap, () {
+      _wachtToestel = null;
+      final v = _volgendeToestel;
+      _volgendeToestel = null;
+      if (v != null && mounted) _zetToestel(v);
+    });
+  }
+
+  Timer? _wachtToestel;
+  Offset? _volgendeToestel;
 
   void _opMuis(PointerEvent e, Size maat) {
     if (maat.isEmpty) return;

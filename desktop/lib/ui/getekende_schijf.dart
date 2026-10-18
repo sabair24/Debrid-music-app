@@ -133,7 +133,8 @@ class _GlansSchilder extends CustomPainter {
     canvas.clipPath(ring);
     // De regenboog: twee keer rond, zacht, zoals licht in de sporen breekt. Gewoon erover gelegd en
     // niet met een menging als zachtlicht: zo'n menging leest de draaiende schijf eronder elk beeld
-    // terug, en dat kostte de Shield een kopie van dat stuk scherm per beeld (18-10-2026).
+    // terug, en zonder framebuffer-fetch is dat een kopie van dat stuk scherm per beeld. Op de Shield
+    // ging de glasproef van 16,8 naar 7,3 ms toen dit samen met twee andere dingen veranderde (18-10-2026).
     canvas.drawRect(
         vak,
         Paint()

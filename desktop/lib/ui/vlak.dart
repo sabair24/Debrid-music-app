@@ -420,6 +420,9 @@ const kGlasOnderlaag = Color(0xCC07080C);
 /// glans ook over een donkere grond.
 const kGlasOnderlaagMat = Color(0x7307080C);
 
+/// Op licht: wit glas. Dicht genoeg dat paarse letters er 4,5:1 halen, ook boven een donkere hoes.
+const kGlasOnderlaagLicht = Color(0xC7FFFFFF);
+
 /// Hoe licht het is onder de glasknoppen hier (0 = zwart, 1 = wit; de sRGB-helderheid van de grond).
 ///
 /// Zet een scherm met een lichte grond onder zijn knoppen: dan wordt de donkere onderlaag van elke
@@ -500,17 +503,19 @@ Widget _glasRuit({bool? plat, required bool lens}) {
           Colors.white.withValues(alpha: tv ? .10 : .07),
         ],
       ),
-      border: Border.all(color: Colors.white.withValues(alpha: tv ? .32 : .20)),
+      // Op licht een donker haarrandje: een wit randje op wit glas is er niet.
+      border: Border.all(
+          color: Thema.licht ? Colors.black.withValues(alpha: .10) : Colors.white.withValues(alpha: tv ? .32 : .20)),
     ),
   );
   return DecoratedBox(
-    decoration: const BoxDecoration(
+    decoration: BoxDecoration(
       borderRadius: hoek,
       boxShadow: [
         BoxShadow(
-          color: Color(0x47000000),
+          color: Thema.licht ? const Color(0x24000000) : const Color(0x47000000),
           blurRadius: 10,
-          offset: Offset(0, 3),
+          offset: const Offset(0, 3),
           blurStyle: BlurStyle.outer,
         ),
       ],
@@ -526,7 +531,7 @@ Widget _glasRuit({bool? plat, required bool lens}) {
               // goedgekeurd is: daar schuift niets onder een knop door.
               : Stack(
                   fit: StackFit.expand,
-                  children: [const ColoredBox(color: kGlasOnderlaag), vulling],
+                  children: [ColoredBox(color: Thema.licht ? kGlasOnderlaagLicht : kGlasOnderlaag), vulling],
                 ))
           : Stack(
               fit: StackFit.expand,
@@ -539,6 +544,10 @@ Widget _glasRuit({bool? plat, required bool lens}) {
                 // Dichter boven een lichte grond ([KnopGrond]); op een donkere 45 %, zoals altijd.
                 Builder(
                   builder: (context) {
+                    // Op licht wit glas met paarse letters (Saber, gsm, 18-10-2026: "zwarte buttons vind
+                    // ik niet mooi"). Op licht is ook de grond licht, dus de donkere onderlaag die hier
+                    // witte letters leesbaar hield, hoeft niet meer.
+                    if (Thema.licht) return const ColoredBox(color: kGlasOnderlaagLicht);
                     final a = glasOnderlaagVoor(KnopGrond.van(context));
                     return ColoredBox(
                         color: a <= .4501 ? kGlasOnderlaagMat : kGlasOnderlaagMat.withValues(alpha: a));
@@ -695,7 +704,11 @@ class _GlasKnopState extends State<GlasKnop> {
     final kleur = tvSelectie ? kAccent : w.kleur;
     // Op een tv is de ruit plat glas zonder donkere onderlaag; in het lichte thema zijn witte letters
     // daarop onleesbaar ("Afspelen" en "Radio" in de glasproef op de Shield, 18-10-2026).
-    final letters = isTv && Thema.licht ? kTekst : Colors.white;
+    final letters = !Thema.licht
+        ? Colors.white
+        : isTv || w._rond
+            ? kTekst
+            : kAccent;
     final knop = w._rond
         // Een IconButton kent geen onFocusChange: een Focus erom die alleen meekijkt.
         ? Focus(

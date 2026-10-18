@@ -102,6 +102,24 @@ void main() {
     expect(melder.hasListener, isFalse, reason: 'weg uit Nu speelt: de melder luistert niet meer');
   });
 
+  testWidgets('een bewegende hand: hooguit dertig nieuwe standen per seconde, geen eigen animatie', (t) async {
+    // Gsm, 18-10-2026: Nu speelt tekende 120 beelden per seconde zolang de gsm in de hand lag.
+    final melder = StreamController<Offset>();
+    KantelHoes.toestelVoorToets = () => melder.stream;
+    await t.pumpWidget(_doos(const KantelHoes(bron: KantelBron.toestel, child: _hoes)));
+    melder.add(const Offset(0, .5));
+    await t.pump(const Duration(milliseconds: 16));
+    final standen = <double?>{};
+    for (var i = 0; i < 60; i++) {
+      // Een flinke, doorlopende beweging: elke melding is een andere stand.
+      melder.add(Offset(.15 * math.sin(i / 6), .5));
+      await t.pump(const Duration(milliseconds: 16));
+      standen.add(_hoekY(t));
+    }
+    expect(standen.length, inInclusiveRange(10, 31), reason: 'een seconde bewegen: tien tot dertig standen');
+    await t.pumpWidget(const SizedBox());
+  });
+
   testWidgets('de app naar de achtergrond: de melder stopt; terug: hij luistert weer', (t) async {
     final melder = StreamController<Offset>.broadcast();
     KantelHoes.toestelVoorToets = () => melder.stream;
