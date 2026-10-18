@@ -693,6 +693,9 @@ class _GlasKnopState extends State<GlasKnop> {
     final icoon = w.icoon, label = w.label, tooltip = w.tooltip, teken = w.teken, autofocus = w.autofocus;
     final tvSelectie = isTv && _focus && onPressed != null;
     final kleur = tvSelectie ? kAccent : w.kleur;
+    // Op een tv is de ruit plat glas zonder donkere onderlaag; in het lichte thema zijn witte letters
+    // daarop onleesbaar ("Afspelen" en "Radio" in de glasproef op de Shield, 18-10-2026).
+    final letters = isTv && Thema.licht ? kTekst : Colors.white;
     final knop = w._rond
         // Een IconButton kent geen onFocusChange: een Focus erom die alleen meekijkt.
         ? Focus(
@@ -704,7 +707,7 @@ class _GlasKnopState extends State<GlasKnop> {
               tooltip: tooltip,
               autofocus: autofocus,
               style: IconButton.styleFrom(
-                foregroundColor: tvSelectie ? kAccent : Colors.white,
+                foregroundColor: tvSelectie ? kAccent : letters,
                 minimumSize: const Size(44, 44),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
@@ -717,7 +720,7 @@ class _GlasKnopState extends State<GlasKnop> {
             style: FilledButton.styleFrom(
               backgroundColor: Colors.transparent,
               disabledBackgroundColor: Colors.transparent,
-              foregroundColor: kleur ?? Colors.white,
+              foregroundColor: kleur ?? letters,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
               minimumSize: const Size(64, 44),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
