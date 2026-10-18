@@ -455,7 +455,7 @@ class _GlasVlakState extends State<GlasVlak> {
           final k = widget.kleur;
           final vulling = DecoratedBox(
               decoration: k != null ? glasVulling(k, stand, ondergrond: widget.ondergrond) : widget.vulling!);
-          final rand = widget.lichtrand ? CustomPaint(painter: _Lichtrand(widget.vorm)) : null;
+          final rand = widget.lichtrand ? RepaintBoundary(child: GlasGlans(vorm: widget.vorm)) : null;
           return ClipRRect(
             borderRadius: widget.vorm,
             child: Stack(
@@ -539,7 +539,10 @@ class GlasKorrel {
     final p = Uint8List(zijde * zijde * 4);
     final a = (sterkte * 255).round();
     for (var i = 0; i < zijde * zijde; i++) {
-      final v = kans.nextInt(256);
+      // Voorvermenigvuldigd: Flutter leest rgba8888 zo, dus de grijswaarde is al maal de dekking. Een
+      // gewone waarde (tot 255 op een dekking van 5) telde helder op: het voorbeeld van 18-10-2026
+      // stond vol ruis in plaats van 2 %.
+      final v = (kans.nextInt(256) * a / 255).round();
       p[i * 4] = v;
       p[i * 4 + 1] = v;
       p[i * 4 + 2] = v;
@@ -586,30 +589,158 @@ class _KorrelSchilder extends CustomPainter {
   bool shouldRepaint(_KorrelSchilder oud) => oud.dpr != dpr;
 }
 
-/// De lichtrand: een streep die linksboven helder is en naar rechtsonder uitdooft.
+/// Waar het licht vandaan komt dat over de glasranden glijdt (Saber, 18-10-2026: "een glans die
+/// meebeweegt — muis op de pc, kanteling op gsm en iPad, selectie op de tv").
 ///
-/// Helderder sinds 16-10-2026, en nergens helemaal weg: Somati's "heldere glas-rand-gloed" (wit 45 %
-/// rondom op donker) is wat daar het glas tot glas maakt in plaats van een donker paneel.
-class _Lichtrand extends CustomPainter {
-  _Lichtrand(this.vorm);
+/// Eén bron voor de hele app, in logische punten op het scherm. Null = het vaste licht linksboven,
+/// zoals vroeger. Wie het licht zet:
+/// - de muis (pc, Mac): de builder van de app, bij elke beweging ([GlasLicht.muis]);
+/// - de selectie op een tv: het midden van wat de selectie heeft ([GlasLicht.volgSelectie]);
+/// - de kanteling van een gsm of iPad (stap 5 van het glasplan).
+/// Bij "Minder beweging" van het systeem blijft het licht linksboven ([GlasGlans]).
+class GlasLicht {
+  GlasLicht._();
+
+  static final bron = ValueNotifier<Offset?>(null);
+
+  /// De muis bewoog naar [plek] (globale punten).
+  static void muis(Offset plek) => bron.value = plek;
+
+  static bool _volgt = false;
+
+  /// Op een tv: het licht staat bij wat de selectie heeft.
+  static void volgSelectie() {
+    if (_volgt) return;
+    _volgt = true;
+    FocusManager.instance.addListener(() {
+      final r = FocusManager.instance.primaryFocus?.rect;
+      if (r != null && r.isFinite && !r.isEmpty) bron.value = r.center;
+    });
+  }
+
+  /// Voor toetsen.
+  @visibleForTesting
+  static void vergeet() => bron.value = null;
+}
+
+/// De rand van glas met de glans erop: een dunne lijn rondom (wit 14 %) en een heldere vlek op de
+/// plek van de rand die het dichtst bij het licht ligt ([GlasLicht.bron]). Hoe verder het licht, hoe
+/// zachter de vlek. Zonder bron, of bij "Minder beweging", staat het licht linksboven buiten het vlak
+/// — de oude lichtrand.
+class GlasGlans extends LeafRenderObjectWidget {
+  const GlasGlans({super.key, required this.vorm});
   final BorderRadius vorm;
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final r = vorm.toRRect(Offset.zero & size).deflate(.6);
-    final p = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
-      ..shader = ui.Gradient.linear(Offset.zero, Offset(size.width, size.height), const [
-        Color(0xB3FFFFFF),
-        Color(0x3DFFFFFF),
-        Color(0x1FFFFFFF),
-      ], const [0, .45, 1]);
-    canvas.drawRRect(r, p);
+  RenderObject createRenderObject(BuildContext context) =>
+      RenderGlasGlans(vorm, stil: MediaQuery.maybeDisableAnimationsOf(context) ?? false);
+
+  @override
+  void updateRenderObject(BuildContext context, RenderGlasGlans renderObject) => renderObject
+    ..vorm = vorm
+    ..stil = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+}
+
+/// Hoe licht de lijn rondom is, en de vlek op zijn felst (vlak bij het licht) en op zijn zachtst.
+const double kGlansRand = .14;
+const double kGlansVol = .80;
+const double kGlansZacht = .32;
+
+/// Hoe licht de vlek in het glas is waar het licht valt (op zijn felst).
+const double kGlansVlek = .16;
+
+/// Waar de glans op de rand van [vak] valt voor een licht op [licht] (beide lokaal), en hoe fel: de
+/// plek is het dichtstbijzijnde punt van het vak, de sterkte loopt van [kGlansVol] (licht erop of
+/// erin) naar [kGlansZacht] (400 punten of verder weg). Zuiver, voor de toets.
+@visibleForTesting
+({Offset plek, double sterkte}) glansOp(Rect vak, Offset licht) {
+  final plek = Offset(licht.dx.clamp(vak.left, vak.right), licht.dy.clamp(vak.top, vak.bottom));
+  final afstand = (licht - plek).distance;
+  final t = (afstand / 400).clamp(0.0, 1.0);
+  return (plek: plek, sterkte: kGlansVol + (kGlansZacht - kGlansVol) * t);
+}
+
+class RenderGlasGlans extends RenderBox {
+  RenderGlasGlans(this._vorm, {required bool stil}) : _stil = stil;
+
+  BorderRadius _vorm;
+  set vorm(BorderRadius v) {
+    if (v == _vorm) return;
+    _vorm = v;
+    markNeedsPaint();
+  }
+
+  bool _stil;
+  set stil(bool v) {
+    if (v == _stil) return;
+    _stil = v;
+    markNeedsPaint();
   }
 
   @override
-  bool shouldRepaint(_Lichtrand oud) => oud.vorm != vorm;
+  bool get sizedByParent => true;
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) => constraints.biggest;
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    GlasLicht.bron.addListener(markNeedsPaint);
+  }
+
+  @override
+  void detach() {
+    GlasLicht.bron.removeListener(markNeedsPaint);
+    super.detach();
+  }
+
+  @override
+  bool hitTestSelf(Offset position) => false;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (size.isEmpty) return;
+    final canvas = context.canvas;
+    final vak = offset & size;
+    final r = _vorm.toRRect(vak).deflate(.6);
+    canvas.drawRRect(
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = const Color(0xFFFFFFFF).withValues(alpha: kGlansRand),
+    );
+    // Het licht in de coördinaten van dit vak: de bron op het scherm, terug naar hier.
+    final bron = _stil ? null : GlasLicht.bron.value;
+    final licht = bron == null ? vak.topLeft - const Offset(120, 120) : globalToLocal(bron) + offset;
+    final g = glansOp(vak, licht);
+    final straal = math.max(48.0, math.min(220.0, math.max(size.width, size.height) * .45));
+    // De vlek IN het glas: een zachte lichtplek waar het licht valt. Zonder bleef het bij een lijntje
+    // van anderhalve punt, en dat zag je op een voorbeeld van 18-10-2026 niet bewegen.
+    canvas.save();
+    canvas.clipRRect(r);
+    canvas.drawRect(
+      vak,
+      Paint()
+        ..shader = ui.Gradient.radial(g.plek, straal * 1.3, [
+          const Color(0xFFFFFFFF).withValues(alpha: kGlansVlek * g.sterkte / kGlansVol),
+          const Color(0x00FFFFFF),
+        ]),
+    );
+    canvas.restore();
+    // En de rand zelf licht daar op.
+    canvas.drawRRect(
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6
+        ..shader = ui.Gradient.radial(g.plek, straal, [
+          const Color(0xFFFFFFFF).withValues(alpha: g.sterkte),
+          const Color(0x00FFFFFF),
+        ]),
+    );
+  }
 }
 
 /// De lensrand: buigt de (al vervaagde) achtergrond aan de rand van het vlak.

@@ -322,4 +322,40 @@ void main() {
     });
   });
 
+
+  group('de glans volgt het licht (Saber, 18-10-2026)', () {
+    tearDown(GlasLicht.vergeet);
+
+    test('de vlek valt op het dichtste punt van de rand, en is feller naarmate het licht dichterbij is', () {
+      const vak = Rect.fromLTWH(0, 0, 400, 80);
+      final boven = glansOp(vak, const Offset(100, -50));
+      expect(boven.plek, const Offset(100, 0));
+      final erin = glansOp(vak, const Offset(200, 40));
+      expect(erin.plek, const Offset(200, 40));
+      expect(erin.sterkte, kGlansVol, reason: 'de muis op het glas: op zijn felst');
+      final ver = glansOp(vak, const Offset(1400, 900));
+      expect(ver.plek, const Offset(400, 80), reason: 'rechtsonder: de hoek die het dichtst bij is');
+      expect(ver.sterkte, kGlansZacht, reason: 'ver weg: zacht, maar nooit weg');
+      expect(boven.sterkte, lessThan(erin.sterkte));
+      expect(boven.sterkte, greaterThan(ver.sterkte));
+    });
+
+    testWidgets('elk glasvlak tekent opnieuw als het licht beweegt, en bij Minder beweging niet', (t) async {
+      await t.pumpWidget(_vlak());
+      final r = t.renderObject<RenderGlasGlans>(find.byType(GlasGlans));
+      expect(r.debugNeedsPaint, isFalse);
+      GlasLicht.muis(const Offset(30, 30));
+      expect(r.debugNeedsPaint, isTrue, reason: 'de vlek schuift mee met de muis');
+      await t.pump();
+      expect(r.debugNeedsPaint, isFalse);
+    });
+
+    test('aangesloten: de muis op de pc, de selectie op een tv, en op de knoppen', () {
+      final main = File('lib/main.dart').readAsStringSync();
+      expect(main, contains('onPointerHover: (e) => GlasLicht.muis(e.position),'));
+      expect(main, contains('if (isTv) GlasLicht.volgSelectie();'));
+      expect(File('lib/ui/vlak.dart').readAsStringSync(), contains('const RepaintBoundary(child: GlasGlans(vorm: hoek)),'));
+    });
+  });
+
 }

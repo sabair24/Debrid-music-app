@@ -514,6 +514,8 @@ Future<void> main() async {
     debugPrint(r);
     Timer.run(() => kopLog.line(r));
   };
+  // Op een tv volgt het licht over het glas de selectie (GlasLicht).
+  if (isTv) GlasLicht.volgSelectie();
   // En of het systeem dicht glas vraagt (minder transparantie, batterijbesparing): systeem_glas.dart.
   unawaited(GlasKwaliteit.inrichten().then((_) => SysteemGlas.start()));
   // And what this device is called, before it publishes that name anywhere. Same channel, same
@@ -1835,6 +1837,9 @@ class DebridApp extends StatelessWidget {
                     child: inhoud,
                   )
                 : Listener(
+                    // De muis is het licht dat over de glasranden glijdt (ui/glas.dart, GlasLicht).
+                    onPointerHover: (e) => GlasLicht.muis(e.position),
+                    onPointerMove: (e) => GlasLicht.muis(e.position),
                     onPointerDown: (e) {
                       if (e.kind == PointerDeviceKind.mouse && e.buttons & kBackMouseButton != 0) stapTerug();
                     },

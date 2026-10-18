@@ -491,6 +491,7 @@ Widget _glasRuit({bool? plat, required bool lens}) {
                 const ColoredBox(color: kGlasOnderlaagMat),
                 vulling,
                 const GlasKorrelLaag(),
+                const RepaintBoundary(child: GlasGlans(vorm: hoek)),
               ],
             ),
     ),
