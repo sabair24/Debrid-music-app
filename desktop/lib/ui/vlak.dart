@@ -420,6 +420,48 @@ const kGlasOnderlaag = Color(0xCC07080C);
 /// glans ook over een donkere grond.
 const kGlasOnderlaagMat = Color(0x7307080C);
 
+/// Hoe licht het is onder de glasknoppen hier (0 = zwart, 1 = wit; de sRGB-helderheid van de grond).
+///
+/// Zet een scherm met een lichte grond onder zijn knoppen: dan wordt de donkere onderlaag van elke
+/// [GlasKnop] daar dichter ([glasOnderlaagVoor]), zodat witte letters 4,5:1 houden (Saber, 18-10-2026:
+/// "automatisch dichter boven licht"). Zonder staat er het donkerste wat de app nu heeft: de kop van
+/// een albumpagina, waar zelfs boven een witte hoes 70 % donkering ligt ([kGrondDonkereKop]).
+class KnopGrond extends InheritedWidget {
+  const KnopGrond({super.key, required this.helderheid, required super.child});
+  final double helderheid;
+
+  static double van(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<KnopGrond>()?.helderheid ?? kGrondDonkereKop;
+
+  @override
+  bool updateShouldNotify(KnopGrond oud) => oud.helderheid != helderheid;
+}
+
+/// De helderheid onder de knoppen van een albumkop in het slechtste geval: een witte hoes onder de
+/// donkering van [HoesAchtergrond] (70 % #07080C): 0,30 + 0,70 x 0,03.
+const double kGrondDonkereKop = .321;
+
+/// De dekking van de donkere onderlaag onder vervaagd glas, voor een grond van [helderheid]: 45 % op een
+/// donkere grond (zoals altijd), oplopend tot 82 % boven wit.
+double glasOnderlaagVoor(double helderheid) {
+  final t = ((helderheid - .35) / .40).clamp(0.0, 1.0);
+  return .45 + (.82 - .45) * t;
+}
+
+/// Het contrast van witte letters op een glasknop boven een grond van [helderheid], in het slechtste
+/// punt van de knop (bovenaan, waar het witte waas 30 % is). Zuiver, voor de toets: in sRGB gemengd,
+/// zoals Flutter mengt, en dan de WCAG-formule.
+double glasKnopContrast(double helderheid, {double? onderlaag}) {
+  final a = onderlaag ?? glasOnderlaagVoor(helderheid);
+  const zwart = 0x0C / 255;
+  const waas = .30;
+  final c1 = helderheid * (1 - a) + zwart * a;
+  final c2 = c1 * (1 - waas) + waas;
+  double lineair(double c) => c <= .04045 ? c / 12.92 : math.pow((c + .055) / 1.055, 2.4).toDouble();
+  final l = lineair(c2);
+  return 1.05 / (l + .05);
+}
+
 Widget glasRuit({bool? plat, bool lens = false}) {
   // Volgt de stand van het glas: verandert die (de bewaker in ui/glas.dart), dan tekent de ruit
   // meteen opnieuw, en niet pas bij de volgende opbouw van zijn pagina.
@@ -489,7 +531,14 @@ Widget _glasRuit({bool? plat, required bool lens}) {
                 BackdropFilter.grouped(filter: glasMat, child: const SizedBox.expand()),
                 // De lensrand, alleen als vloeibaar glas en alleen voor een ruit die stil staat.
                 if (lens && GlasKwaliteit.stand.value == GlasStand.vloeibaar) const GlasLens(hoek: kHoekRond),
-                const ColoredBox(color: kGlasOnderlaagMat),
+                // Dichter boven een lichte grond ([KnopGrond]); op een donkere 45 %, zoals altijd.
+                Builder(
+                  builder: (context) {
+                    final a = glasOnderlaagVoor(KnopGrond.van(context));
+                    return ColoredBox(
+                        color: a <= .4501 ? kGlasOnderlaagMat : kGlasOnderlaagMat.withValues(alpha: a));
+                  },
+                ),
                 vulling,
                 const GlasKorrelLaag(),
                 const RepaintBoundary(child: GlasGlans(vorm: hoek)),
@@ -524,7 +573,12 @@ const kKnopIngedrukt = Duration(milliseconds: 110);
 
 /// Hoe ver een ingedrukte glasknop inveert, en hoe sterk hij oplicht.
 const double kKnopVeer = .94;
-const double kKnopLicht = .18;
+const double kKnopLicht = .10;
+
+/// De lichtvlek die vanaf de vinger door de knop uitwaaiert (Saber, 18-10-2026, zoals iOS 26): hoe
+/// lang hij loopt en hoe fel hij begint.
+const kKnopVlekDuur = Duration(milliseconds: 520);
+const double kKnopVlekLicht = .42;
 
 class GlasKnop extends StatefulWidget {
   const GlasKnop({
@@ -585,6 +639,10 @@ class _GlasKnopState extends State<GlasKnop> {
   void _zet(bool v) {
     if (mounted && v != _in) setState(() => _in = v);
   }
+
+  /// Waar de vinger neerkwam, en de hoeveelste keer: elke tik start de lichtvlek opnieuw.
+  Offset? _plek;
+  int _tik = 0;
 
   /// Loopt vanaf het neerdrukken [kKnopIngedrukt] lang; zolang hij loopt, blijft de knop ingedrukt
   /// ogen, ook als de vinger al los is.
@@ -671,7 +729,15 @@ class _GlasKnopState extends State<GlasKnop> {
     // Inveren en oplichten. Alleen een schaal en een doorzichtigheid: geen opbouw van de knop zelf
     // per beeld, en in rust (schaal 1, licht 0) geen enkele extra laag.
     return Listener(
-      onPointerDown: onPressed == null ? null : (_) => _neer(),
+      onPointerDown: onPressed == null
+          ? null
+          : (e) {
+              setState(() {
+                _plek = e.localPosition;
+                _tik++;
+              });
+              _neer();
+            },
       onPointerUp: (_) => _los(),
       onPointerCancel: (_) => _weg(),
       child: AnimatedScale(
@@ -697,12 +763,60 @@ class _GlasKnopState extends State<GlasKnop> {
                 ),
               ),
             ),
+            // De lichtvlek vanaf de vinger: een zachte ronde gloed die uitwaaiert en uitdooft.
+            if (_plek != null)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.all(Radius.circular(999)),
+                    child: TweenAnimationBuilder<double>(
+                      key: ValueKey(_tik),
+                      tween: Tween(begin: 0, end: 1),
+                      duration: kKnopVlekDuur,
+                      curve: Curves.easeOutCubic,
+                      builder: (_, t, __) => t >= 1
+                          ? const SizedBox.shrink()
+                          : CustomPaint(painter: KnopLichtvlek(_plek!, t)),
+                    ),
+                  ),
+                ),
+              ),
             knop,
           ],
         ),
       ),
     );
   }
+}
+
+/// De lichtvlek van een ingedrukte glasknop op moment [t] (0 tot 1): rond [plek], groeit van klein naar
+/// ruim de knop, en dooft van [kKnopVlekLicht] naar niets.
+class KnopLichtvlek extends CustomPainter {
+  KnopLichtvlek(this.plek, this.t);
+  final Offset plek;
+  final double t;
+
+  /// De straal en de felheid op moment [t]. Publiek voor de toets.
+  static ({double straal, double licht}) op(Size size, double t) => (
+        straal: 12 + (size.longestSide * 1.3 - 12) * t,
+        licht: kKnopVlekLicht * (1 - t),
+      );
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final o = op(size, t);
+    if (o.licht <= 0) return;
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [Colors.white.withValues(alpha: o.licht), Colors.white.withValues(alpha: 0)],
+        ).createShader(Rect.fromCircle(center: plek, radius: o.straal)),
+    );
+  }
+
+  @override
+  bool shouldRepaint(KnopLichtvlek oud) => oud.t != t || oud.plek != plek;
 }
 
 /// Een ruit ONDER een knop die er al is — voor de pictogrammen in een werkbalk.
