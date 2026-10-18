@@ -181,6 +181,7 @@ import 'ui/skelet.dart';
 import 'ui/speelvlak.dart';
 import 'ui/stijl.dart';
 import 'ui/tegel.dart';
+import 'ui/kantel_hoes.dart';
 import 'ui/thema.dart';
 import 'ui/wachtrij_eiland.dart';
 import 'ui/typografie.dart';
@@ -7500,6 +7501,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
             onFront: _kleurUitKop,
             draai: isTv ? null : _draai,
             onAchter: (b) => _heeftAchter = b != null,
+            kantel: _isDesktop ? KantelBron.muis : null,
+            spiegel: !isTv,
           );
     // Twee tikken draaien de hoes om; een gewone tik doet hier niets, dus er hoeft niets te wachten.
     final hoes = isTv ? art : DubbelTikVlak(onDubbel: () => _draai.draai(heeftAchterkant: _heeftAchter), child: art);
@@ -13351,6 +13354,12 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                     uitgelicht: isTv && _opHoes,
                     onAchter: (b) => _achterNu = b,
                     achterSchaduw: kNuSpeeltAchterSchaduw,
+                    kantel: isTv
+                        ? KantelBron.selectie
+                        : _isDesktop
+                            ? KantelBron.muis
+                            : KantelBron.toestel,
+                    spiegel: !isTv && !dwars,
                     // De hoes van de minispeler groeit hierheen uit (zie [kNuSpeeltHoes]).
                     heroTag: kNuSpeeltHoes,
                     // De hoes en cd van het volgende nummer alvast klaarzetten — anders staat er bij
@@ -27469,6 +27478,12 @@ class AlbumArt extends StatefulWidget {
   /// Heeft de hoes de selectie (op een tv, in Nu speelt)? Dan groeit de HOES een tikje, en niet de cd
   /// ernaast: wie het hele blok laat oplichten, laat de cd selecteerbaar lijken.
   final bool uitgelicht;
+
+  /// Kantelt de hoes ±6° met een glans (Saber, 18-10-2026)? Null = nee. Zie ui/kantel_hoes.dart.
+  final KantelBron? kantel;
+
+  /// Een spiegeling onder de hoes: alleen de grote hoes in Nu speelt en op de albumpagina.
+  final bool spiegel;
   const AlbumArt({
     super.key,
     required this.artist,
@@ -27492,6 +27507,8 @@ class AlbumArt extends StatefulWidget {
     this.onAchter,
     this.achterSchaduw,
     this.uitgelicht = false,
+    this.kantel,
+    this.spiegel = false,
   });
 
   @override
@@ -27910,7 +27927,10 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
             cacheWidth: decodeWidth(s * .92),
             gaplessPlayback: true)
         : (front == null ? null : _GetekendeSchijf(label: front, maat: s * .92));
-    if (schijf == null) return kaart;
+    if (schijf == null) {
+      final k = widget.kantel;
+      return k == null ? kaart : KantelHoes(bron: k, aan: widget.uitgelicht, vorm: BorderRadius.circular(10), child: kaart);
+    }
 
     // Built once and handed to the animation as a child, so none of this is rebuilt per frame.
     //
@@ -27946,12 +27966,25 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       child: gedraaid,
     );
 
+    final kantel = widget.kantel;
+    final kaartGekanteld = kantel == null
+        ? kaart
+        : KantelHoes(
+            bron: kantel,
+            aan: widget.uitgelicht,
+            vorm: BorderRadius.circular(10),
+            child: kaart,
+          );
     return SizedBox(
       width: s + travel,
       height: s,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
+          // De spiegeling onder de hoes, buiten de maat van het blok: hij neemt geen ruimte in en
+          // ligt onder wat eronder staat. Alleen zolang de voorkant voor staat.
+          if (widget.spiegel && front != null && _voorInRust)
+            Positioned(left: 0, top: s + kSpiegelAfstand, child: HoesSpiegel(beeld: front, maat: s)),
           // Behind the sleeve, and drawn first so it stays there.
           Positioned(
             left: 0,
@@ -27988,7 +28021,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           ),
           // Never rebuilt: it is outside the builder entirely, and it never changes while a record
           // plays.
-          Positioned(left: 0, top: 0, child: kaart),
+          Positioned(left: 0, top: 0, child: kaartGekanteld),
         ],
       ),
     );

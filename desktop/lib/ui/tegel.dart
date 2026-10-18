@@ -30,6 +30,7 @@ import 'package:flutter/material.dart';
 
 import '../tv.dart';
 import 'draaihoes.dart';
+import 'kantel_hoes.dart';
 import 'kleuren.dart';
 import 'maten.dart';
 import 'typografie.dart';
@@ -404,6 +405,13 @@ class _AlbumTegelState extends State<AlbumTegel> {
                 : AchterkantBeeld(
                     beeld: _achter!, maat: maat, hoek: kHoek12, decodeerBreedte: _decodeer(maat), schaduw: kSchaduw1),
           );
+    // Kantelen ±6° met een glans (Saber, 18-10-2026): de schaduw blijft plat liggen, de hoes kantelt.
+    final gekanteld = KantelHoes(
+      bron: isTv ? KantelBron.selectie : KantelBron.muis,
+      aan: _aan,
+      vorm: vorm,
+      child: hoes,
+    );
     final metSchaduw = AnimatedContainer(
       duration: kGebaar,
       curve: Curves.easeOut,
@@ -413,13 +421,13 @@ class _AlbumTegelState extends State<AlbumTegel> {
         boxShadow: !_draai.voorInRust.value ? const [] : (_aan ? kSchaduw2 : kSchaduw1),
       ),
       child: widget.heroTag == null
-          ? hoes
+          ? gekanteld
           : Hero(
               tag: widget.heroTag!,
               // Tijdens de vlucht alleen de hoes, zonder de schaduw eromheen: die zou meeschalen en
               // onderweg een zwarte vlek onder een groeiend vierkant worden.
               flightShuttleBuilder: (_, __, ___, ____, _____) => widget.hoes(maat),
-              child: hoes,
+              child: gekanteld,
             ),
     );
     final schijf = widget.schijf;

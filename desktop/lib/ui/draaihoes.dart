@@ -312,6 +312,21 @@ Matrix4 draaiMatrix(double t) {
     ..scaleByDouble(til, til, 1, 1);
 }
 
+/// Hoe dik een hoes is, als deel van zijn breedte: een cd-doosje of een plaathoes van karton.
+const double kHoesDikte = .03;
+
+/// De transform van de rand (de dikte) aan kant [kant] (-1 links, 1 rechts) van een hoes die
+/// [breedte] breed is, op moment [t]: loodrecht op de hoes, aan zijn rand, en meegedraaid.
+@visibleForTesting
+Matrix4 randMatrix(double t, double breedte, int kant) =>
+    draaiMatrix(t)
+      ..translateByDouble(kant * breedte / 2, 0, 0, 1)
+      ..rotateY(math.pi / 2);
+
+/// Hoe fel de glansveeg is op moment [t]: niets in rust, het felst halverwege.
+@visibleForTesting
+double veegSterkte(double t) => .32 * math.sin(math.pi * t.clamp(0.0, 1.0));
+
 class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
   late final AnimationController _draai;
   late final AnimationController _wiebel;
@@ -389,12 +404,91 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
         final rust = t == 0 && w == 0;
         if (rust) return voor;
         final kant = (t < .5 || achter == null) ? voor : achter;
-        return Transform(
-          alignment: Alignment.center,
-          transform: draaiMatrix(t)..rotateY(w),
-          child: kant,
-        );
+        // Een wiebel blijft wat hij was: een tikje heen en weer, zonder dikte of veeg.
+        if (t == 0) {
+          return Transform(alignment: Alignment.center, transform: draaiMatrix(t)..rotateY(w), child: kant);
+        }
+        // Omdraaien: de schaduw eronder wordt smaller naarmate de hoes op zijn kant staat, de rand
+        // (dikte) is te zien als hij schuin staat, en er gaat één keer een glansveeg over.
+        final dwars = math.cos(math.pi * t).abs();
+        return Stack(clipBehavior: Clip.none, fit: StackFit.passthrough, children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Transform.scale(
+                scaleX: math.max(dwars, .08),
+                child: const DecoratedBox(
+                  key: ValueKey('draai-schaduw'),
+                  decoration: BoxDecoration(boxShadow: [
+                    BoxShadow(color: Color(0x59000000), blurRadius: 18, offset: Offset(0, 10)),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+          // Beide randen vóór de hoes getekend: de rand die van je af staat, valt dan achter de hoes.
+          for (final k in const [-1, 1])
+            Positioned.fill(
+              child: IgnorePointer(
+                child: LayoutBuilder(
+                  builder: (_, c) => Transform(
+                    alignment: Alignment.center,
+                    transform: randMatrix(t, c.maxWidth, k),
+                    child: Center(
+                      child: SizedBox(
+                        key: ValueKey('draai-rand-$k'),
+                        width: c.maxWidth * kHoesDikte,
+                        height: c.maxHeight,
+                        child: const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(colors: [Color(0xFF2A2B30), Color(0xFF4A4C54), Color(0xFF2A2B30)]),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          Transform(
+            alignment: Alignment.center,
+            transform: draaiMatrix(t)..rotateY(w),
+            child: Stack(fit: StackFit.passthrough, children: [
+              kant,
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(key: const ValueKey('draai-veeg'), painter: _Veeg(t)),
+                ),
+              ),
+            ]),
+          ),
+        ]);
       },
     );
   }
+}
+
+/// De glansveeg over een hoes die omdraait: een schuine band licht die in één keer van links naar
+/// rechts over de voorkant gaat, en dan over de achterkant verder.
+class _Veeg extends CustomPainter {
+  _Veeg(this.t);
+  final double t;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = veegSterkte(t);
+    if (a <= 0) return;
+    final x = -1.4 + 2.8 * t;
+    final vak = Offset.zero & size;
+    canvas.drawRect(
+        vak,
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment(x - .5, -1),
+            end: Alignment(x + .5, 1),
+            colors: [const Color(0x00FFFFFF), Color.fromRGBO(255, 255, 255, a), const Color(0x00FFFFFF)],
+          ).createShader(vak));
+  }
+
+  @override
+  bool shouldRepaint(_Veeg oud) => oud.t != t;
 }
