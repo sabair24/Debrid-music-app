@@ -11982,7 +11982,8 @@ const kNuSpeeltHoes = 'nu-speelt-hoes';
 /// liggen ze over het hele scherm.
 const double kNuSpeeltVlekken = .22;
 
-const kNuSpeeltAchterSchaduw = [BoxShadow(color: Color(0x80000000), blurRadius: 44, offset: Offset(0, 22))];
+List<BoxShadow> get kNuSpeeltAchterSchaduw =>
+    [BoxShadow(color: Thema.licht ? const Color(0x2E000000) : const Color(0x80000000), blurRadius: 44, offset: const Offset(0, 22))];
 
 /// Hoe ver je de minispeler opzij moet vegen voor het volgende of vorige nummer.
 const double kVeegDrempel = 72;
@@ -13328,7 +13329,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                    color: Colors.black.withValues(alpha: rust ? .5 : 0), blurRadius: 44, offset: const Offset(0, 22))
+                    // Op licht een derde: 50 % zwart was naast de hoes een grijze vlek (gsm, 18-10-2026).
+                    color: Colors.black.withValues(alpha: rust ? (Thema.licht ? .18 : .5) : 0), blurRadius: 44, offset: const Offset(0, 22))
               ],
             ),
             child: kind,
