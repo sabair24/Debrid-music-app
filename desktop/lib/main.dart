@@ -7526,7 +7526,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
             draai: isTv ? null : _draai,
             onAchter: (b) => _heeftAchter = b != null,
             kantel: _isDesktop ? KantelBron.muis : null,
-            spiegel: !isTv,
+            // Niet in de smalle indeling: daar staan "Album" en de titel vlak onder de hoes, en lag de
+            // spiegeling eroverheen (gsm, 18-10-2026).
+            spiegel: !isTv && !narrow,
           );
     // Twee tikken draaien de hoes om; een gewone tik doet hier niets, dus er hoeft niets te wachten.
     final hoes = isTv ? art : DubbelTikVlak(onDubbel: () => _draai.draai(heeftAchterkant: _heeftAchter), child: art);
@@ -13387,7 +13389,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                         : _isDesktop
                             ? KantelBron.muis
                             : KantelBron.toestel,
-                    spiegel: !isTv && !dwars,
+                    // Alleen als de tekst naast de hoes staat: op een gsm staand staat de plaatnaam er
+                    // vlak onder, en dan lag de spiegeling eroverheen (gsm, 18-10-2026).
+                    spiegel: !isTv && naast,
                     // De hoes van de minispeler groeit hierheen uit (zie [kNuSpeeltHoes]).
                     heroTag: kNuSpeeltHoes,
                     // De hoes en cd van het volgende nummer alvast klaarzetten — anders staat er bij

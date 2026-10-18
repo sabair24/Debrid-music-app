@@ -186,8 +186,9 @@ void main() {
 
   test('aangesloten: Nu speelt en de albumpagina spiegelen, de tegel kantelt', () {
     final bron = File('lib/main.dart').readAsStringSync();
-    expect(bron, contains('spiegel: !isTv && !dwars,'));
-    expect(bron, contains('kantel: _isDesktop ? KantelBron.muis : null,\n            spiegel: !isTv,'));
+    // Alleen waar de tekst naast de hoes staat (gsm, 18-10-2026: hij lag over "Album" en de plaatnaam).
+    expect(bron, contains('spiegel: !isTv && naast,'));
+    expect(bron, contains('spiegel: !isTv && !narrow,'));
     expect(bron, contains('''kantel: isTv
                         ? KantelBron.selectie
                         : _isDesktop
