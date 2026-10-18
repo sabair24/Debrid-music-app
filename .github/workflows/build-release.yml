@@ -203,7 +203,7 @@ jobs:
             test/sleutelherstel_test.dart \
             test/shield_rondgang_test.dart \
             test/tv_schermvullend_test.dart \
-            test/bovenbalk_past_test.dart test/menu_iconen_test.dart test/mediabediening_test.dart test/hoes_meteen_test.dart test/zacht_wiel_test.dart test/terug_test.dart test/eigen_foto_test.dart test/start_donker_test.dart test/verder_knop_test.dart test/tv_zonder_sprong_test.dart test/spelerbalk_zijvak_test.dart test/systeem_glas_test.dart test/hoes_vlekken_test.dart test/thema_keuze_test.dart test/licht_thema_test.dart \
+            test/bovenbalk_past_test.dart test/menu_iconen_test.dart test/mediabediening_test.dart test/hoes_meteen_test.dart test/zacht_wiel_test.dart test/terug_test.dart test/eigen_foto_test.dart test/start_donker_test.dart test/verder_knop_test.dart test/tv_zonder_sprong_test.dart test/spelerbalk_zijvak_test.dart test/systeem_glas_test.dart test/hoes_vlekken_test.dart test/thema_keuze_test.dart test/licht_thema_test.dart test/wachtrij_glas_test.dart \
             test/verder_luisteren_test.dart \
             test/albumraster_ingebed_test.dart \
             test/bestandsbeheer_test.dart test/hoesherkomst_test.dart \

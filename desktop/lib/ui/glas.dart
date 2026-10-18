@@ -40,6 +40,7 @@ import 'package:flutter/widgets.dart';
 
 import '../artwork.dart' show HoesVlek;
 import '../tv.dart';
+import 'kleuren.dart';
 
 enum GlasStand { plat, mat, vloeibaar }
 
@@ -143,7 +144,10 @@ BoxDecoration glasVulling(Color kleur, GlasStand stand, {GlasOndergrond ondergro
       colors: [
         Color.lerp(kleur, const Color(0xFFFFFFFF), .05)!.withValues(alpha: (a + speling).clamp(0.0, 1.0)),
         kleur.withValues(alpha: a - speling),
-        Color.lerp(kleur, const Color(0xFF000000), .12)!.withValues(alpha: a),
+        // Op licht naar een warme tint en minder ver: twaalf procent zwart is op wit een koud grijs
+        // vlak in de hoek (gezien in het voorbeeld van 18-10-2026).
+        (Thema.licht ? Color.lerp(kleur, const Color(0xFF6B5A44), .07)! : Color.lerp(kleur, const Color(0xFF000000), .12)!)
+            .withValues(alpha: a),
       ],
     ),
   );

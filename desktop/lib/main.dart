@@ -182,6 +182,7 @@ import 'ui/speelvlak.dart';
 import 'ui/stijl.dart';
 import 'ui/tegel.dart';
 import 'ui/thema.dart';
+import 'ui/wachtrij_eiland.dart';
 import 'ui/typografie.dart';
 import 'ui/vlak.dart';
 
@@ -3356,10 +3357,20 @@ class _HomeShellState extends State<HomeShell> {
                   ),
                   // De wachtrij staat NAAST de pagina's en niet in de navigator, dus hij krijgt de
                   // ruimte onder de balk hier: anders begint zijn kop achter de pillen.
+                  // Een glazen paneel en geen dichte strook (Saber, 18-10-2026: "wachtrij op de pc = glas
+                  // naast de inhoud"): los van de rand, met ronde hoeken, zoals in Nu speelt.
                   if (!isCompact(context) && context.watch<WachtrijPaneel>().open)
                     Padding(
-                      padding: EdgeInsets.only(top: ruimte),
-                      child: const WachtrijPaneelView(),
+                      padding: EdgeInsets.fromLTRB(kRuimte8, ruimte, kRuimte12, kRuimte12),
+                      child: SizedBox(
+                        width: WachtrijPaneelView.breedte,
+                        child: GlasVlak(
+                          key: const ValueKey('wachtrij-glas'),
+                          vorm: const BorderRadius.all(Radius.circular(18)),
+                          kleur: _panel,
+                          child: const WachtrijPaneelView(opGlas: true),
+                        ),
+                      ),
                     ),
                 ],
               ),
@@ -11122,15 +11133,22 @@ class _WachtrijKnop extends StatelessWidget {
             paneel.wissel();
             return;
           }
+          // Een glazen blad (Saber, 18-10-2026). Het blad ligt over ander glas (de spelerbalk):
+          // `bovenop`, dus dat wordt zolang dicht — nooit glas op glas.
           showModalBottomSheet<void>(
             context: context,
-            backgroundColor: _panel,
+            backgroundColor: Colors.transparent,
+            elevation: 0,
             isScrollControlled: true,
-            shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
             builder: (_) => SizedBox(
               height: MediaQuery.sizeOf(context).height * .7,
-              child: const WachtrijPaneelView(inBlad: true),
+              child: GlasVlak(
+                key: const ValueKey('wachtrij-blad'),
+                vorm: const BorderRadius.vertical(top: Radius.circular(20)),
+                kleur: _panel,
+                bovenop: true,
+                child: const WachtrijPaneelView(inBlad: true, opGlas: true),
+              ),
             ),
           );
         },
@@ -11539,29 +11557,13 @@ class _NuSpeeltRegel extends StatelessWidget {
   final bool speelt;
   final Radioregel? regel;
 
+  // Een glazen eiland met een gekantelde hoes en een draaiend plaatje: ui/wachtrij_eiland.dart.
   @override
-  Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.symmetric(horizontal: 10),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: _accent.withValues(alpha: .14),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _accent.withValues(alpha: .28)),
-        ),
+  Widget build(BuildContext context) => WachtrijEiland(
+        hoes: cover,
+        speelt: speelt,
         child: Row(
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: cover != null
-                  ? Image.memory(cover!, width: 52, height: 52, cacheWidth: decodeWidth(52), fit: BoxFit.cover)
-                  : Container(
-                      width: 52,
-                      height: 52,
-                      color: _panel2,
-                      child: Icon(Icons.music_note_rounded, size: 20, color: _muted),
-                    ),
-            ),
-            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
