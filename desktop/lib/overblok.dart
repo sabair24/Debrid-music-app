@@ -794,7 +794,7 @@ class _SectieRij extends StatelessWidget {
                     turns: open ? .5 : 0,
                     duration: kSnel,
                     curve: Curves.easeOut,
-                    child: const Icon(Icons.keyboard_arrow_down_rounded,
+                    child: Icon(Icons.keyboard_arrow_down_rounded,
                         size: 16, color: kGedempt),
                   ),
                 ]),
@@ -877,7 +877,7 @@ class _MeerLezen extends StatelessWidget {
         bouw: (gekozen) => Row(mainAxisSize: MainAxisSize.min, children: [
           Text(open ? 'Minder lezen' : 'Meer lezen',
               style: tvLinkStijl(
-                  const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: kAccent),
+                  TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: kAccent),
                   gekozen)),
           const SizedBox(width: 4),
           AnimatedRotation(

@@ -131,7 +131,7 @@ void main() {
 
     test('het menu bij lang indrukken gebruikt die vulling, de tv blijft dicht', () {
       final menu = File('lib/ui/itemmenu.dart').readAsStringSync().replaceAll('\r\n', '\n');
-      expect(menu, contains('vulling: isTv ? const BoxDecoration(color: kBovenop) : null,\n          kleur: isTv ? null : kBovenop,'));
+      expect(menu, contains('vulling: isTv ? BoxDecoration(color: kBovenop) : null,\n          kleur: isTv ? null : kBovenop,'));
       expect(menu, isNot(contains('alpha: .74')));
     });
   });

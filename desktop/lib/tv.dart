@@ -433,8 +433,8 @@ class _PressableState extends State<Pressable> {
   Widget _paarsBijSelectie(Widget kind) {
     if (!isTv || !_focused || !widget.ringOnFocus) return kind;
     return DefaultTextStyle.merge(
-      style: const TextStyle(color: kAccent),
-      child: IconTheme.merge(data: const IconThemeData(color: kAccent), child: kind),
+      style: TextStyle(color: kAccent),
+      child: IconTheme.merge(data: IconThemeData(color: kAccent), child: kind),
     );
   }
 
@@ -549,7 +549,7 @@ class _TvLabelledState extends State<TvLabelled> {
                   maxLines: 1,
                   softWrap: false,
                   // Paars, zoals de letters van elke geselecteerde knop op een tv (16-10-2026).
-                  style: const TextStyle(fontSize: 16, height: 1.1, color: kAccent),
+                  style: TextStyle(fontSize: 16, height: 1.1, color: kAccent),
                 ),
               ),
             ),

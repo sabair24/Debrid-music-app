@@ -20,6 +20,19 @@ import 'dart:math' as wiskunde;
 
 import 'package:flutter/material.dart';
 
+/// Licht of donker (Saber, 18-10-2026: "licht thema als keuze — Licht, Donker of Volgens systeem").
+///
+/// **Waarom getters en geen constanten meer.** Een kleur die tijdens het draaien kan wisselen kan geen
+/// `const` zijn. De keuze zelf staat in `ui/thema.dart`; hier alleen of het NU licht is
+/// (`thema.dart` bouwt bij een wissel het hele scherm opnieuw op, met de pagina's, de scrollstand en
+/// de speler gewoon waar ze waren).
+class Thema {
+  Thema._();
+
+  /// Is het nu licht?
+  static bool licht = false;
+}
+
 // ── De grijstrap ─────────────────────────────────────────────────────────────
 //
 // **Waarom hij verschoven is.** Gemeten in CIE Lab lagen de drie lagen op ΔL* 6,3 en **4,0** uit
@@ -40,50 +53,59 @@ import 'package:flutter/material.dart';
 // [kTekst] tegen élke laag 4,5:1 haalt. "Even het paneel wat lichter" is vanaf nu een gezakte toets.
 
 /// De diepste achtergrond — waar niets overheen ligt.
-const kAchtergrond = Color(0xFF07080C);
+Color get kAchtergrond => Thema.licht ? const Color(0xFFF3EFE7) : const Color(0xFF07080C);
 
 /// Een vlak dat juist NAAR BINNEN ligt: een zoekveld, een voortgangsbaan, de goot achter een lijst.
 ///
 /// Nieuw. Deze bestond niet, en daardoor werd een tekstveld getekend als een paneel — iets wat van
 /// de pagina af komt terwijl je erin typt.
-const kVerzonken = Color(0xFF101219);
+Color get kVerzonken => Thema.licht ? const Color(0xFFE9E4DA) : const Color(0xFF101219);
 
 /// Een paneel: kaartjes, rijen, alles wat van de achtergrond af komt.
-const kPaneel = Color(0xFF171A24);
+Color get kPaneel => Thema.licht ? const Color(0xFFFBF9F5) : const Color(0xFF171A24);
 
 /// Een paneel dat aandacht heeft (aangewezen, geopend, actief).
-const kPaneelHoog = Color(0xFF222736);
+Color get kPaneelHoog => Thema.licht ? const Color(0xFFE6E0D3) : const Color(0xFF222736);
 
 /// Wat óver de app heen ligt: een menu, een blad, een dialoog.
 ///
 /// Nieuw. Menu's stonden op [kPaneelHoog], dus een menu boven een aangewezen rij had exact de kleur
 /// van die rij.
-const kBovenop = Color(0xFF2B3142);
+Color get kBovenop => Thema.licht ? const Color(0xFFFFFFFF) : const Color(0xFF2B3142);
 
 /// Scheidingslijnen en randen.
-const kLijn = Color(0xFF2A2F3F);
+Color get kLijn => Thema.licht ? const Color(0xFFD6CEC0) : const Color(0xFF2A2F3F);
 
 /// Een scheiding die er hoort te zijn zonder dat je hem opmerkt: tussen twee regels in een lijst.
-const kLijnZacht = Color(0xFF1E222E);
+Color get kLijnZacht => Thema.licht ? const Color(0xFFE4DDD1) : const Color(0xFF1E222E);
 
 /// Gewone tekst.
-const kTekst = Color(0xFFE8EAF2);
+Color get kTekst => Thema.licht ? const Color(0xFF1E1B16) : const Color(0xFFE8EAF2);
 
 /// Bijzaken: artiestnamen onder een titel, tellingen, tijden.
-const kGedempt = Color(0xFF9AA0B4);
+Color get kGedempt => Thema.licht ? const Color(0xFF655E53) : const Color(0xFF9AA0B4);
 
 /// Wat er wél staat maar niet kan: een menuregel die voor dít ding niets betekent.
 ///
 /// Lichter dan [kGedempt], want gedempt is nog steeds tekst die je hoort te lezen — dit is tekst
 /// die je hoort over te slaan. Zie [MenuRegel.uit]: bij een ontbrekend nummer werkt de helft van het
 /// menu niet, en die regels weglaten zou het menu elke keer een andere vorm geven.
-const kUitgezet = Color(0xFF5A6076);
+Color get kUitgezet => Thema.licht ? const Color(0xFFA39B8E) : const Color(0xFF5A6076);
 
 /// Het merkpaars. Knoppen die iets dóén, de actieve navigatiepil, de focusring.
-const kAccent = Color(0xFF7C5CFF);
+Color get kAccent => Thema.licht ? const Color(0xFF5B3CE0) : const Color(0xFF7C5CFF);
 
 /// De tweede accentkleur, voor wat leeft: radiostatus, "nu bezig".
-const kAccent2 = Color(0xFF00D4C8);
+Color get kAccent2 => Thema.licht ? const Color(0xFF00796F) : const Color(0xFF00D4C8);
+
+/// De kleur van een waas of een oplichtend randje bovenop een paneel: wit op donker, zwart op licht.
+///
+/// **Waarom dit er sinds het lichte thema bij moest.** Overal stond `Colors.white.withValues(alpha:
+/// .06)` voor "dit vlak licht een tikje op". Op een gebroken witte pagina is dat wit op wit: niets.
+/// Wat bedoeld is, is "een tikje meer contrast met de laag eronder", en dat is op licht zwart.
+///
+/// Niet voor tekst of iconen bovenop een hoes of een paarse knop — daar blijft het wit.
+Color get kInkt => Thema.licht ? const Color(0xFF000000) : const Color(0xFFFFFFFF);
 
 /// De helderheid van een kleur volgens CIE Lab — L*, van 0 (zwart) tot 100 (wit).
 ///

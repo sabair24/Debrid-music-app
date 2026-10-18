@@ -236,7 +236,7 @@ class _Keuzes extends StatelessWidget {
           contentPadding: EdgeInsets.zero,
           dense: true,
           title: const Text('Albums als geheel', style: TextStyle(fontSize: 12.5)),
-          subtitle: const Text(
+          subtitle: Text(
             'Speel je een album op volgorde, dan blijven de verschillen tussen de nummers op die plaat '
             'zoals de artiest ze bedoelde; de plaat als geheel is even hard als de rest. '
             'Verzamelalbums gaan altijd per nummer.',
@@ -323,11 +323,11 @@ class LuidheidKeuze extends StatelessWidget {
           const SizedBox(height: 6),
           _Keuzes(settings: settings, naWijziging: naWijziging),
           const SizedBox(height: 4),
-          const Text(luidheidInstellingUitleg,
+          Text(luidheidInstellingUitleg,
               style: TextStyle(color: kGedempt, fontSize: 11.5, height: 1.35)),
           if (status.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text(status, style: const TextStyle(color: kGedempt, fontSize: 11.5, height: 1.35)),
+            Text(status, style: TextStyle(color: kGedempt, fontSize: 11.5, height: 1.35)),
           ],
         ],
       ),

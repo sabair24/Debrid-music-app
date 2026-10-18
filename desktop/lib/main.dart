@@ -181,6 +181,7 @@ import 'ui/skelet.dart';
 import 'ui/speelvlak.dart';
 import 'ui/stijl.dart';
 import 'ui/tegel.dart';
+import 'ui/thema.dart';
 import 'ui/typografie.dart';
 import 'ui/vlak.dart';
 
@@ -201,7 +202,7 @@ final ButtonStyle _focusOutline = ButtonStyle(
   foregroundColor: WidgetStateProperty.resolveWith(
       (states) => isTv && states.contains(WidgetState.focused) ? kAccent : null),
   overlayColor: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.focused)
-      ? (isTv ? Colors.white.withValues(alpha: .16) : _accent.withValues(alpha: .22))
+      ? (isTv ? kInkt.withValues(alpha: .16) : _accent.withValues(alpha: .22))
       : null),
 );
 
@@ -212,14 +213,14 @@ Color get _knopVulling => isTv ? kTvKnopGlas : _accent;
 /// Het glas van een knop op een tv: wit op 14 %, zoals de pil van de sectie waar je bent.
 const kTvKnopGlas = Color(0x24FFFFFF);
 
-const _bg = kAchtergrond;
-const _panel = kPaneel;
-const _panel2 = kPaneelHoog;
-const _line = kLijn;
-const _text = kTekst;
-const _muted = kGedempt;
-const _accent = kAccent;
-const _accent2 = kAccent2;
+Color get _bg => kAchtergrond;
+Color get _panel => kPaneel;
+Color get _panel2 => kPaneelHoog;
+Color get _line => kLijn;
+Color get _text => kTekst;
+Color get _muted => kGedempt;
+Color get _accent => kAccent;
+Color get _accent2 => kAccent2;
 
 /// Windows and macOS have windows to manage and one app instance per machine; iOS and Android
 /// have neither. Everything below that touches window_manager or the instance lock asks this
@@ -505,6 +506,9 @@ Future<void> main() async {
   // WarmLog schrijft gespoeld en synchroon.
   final kopLog = WarmLog('$logDir${Platform.pathSeparator}kop.log');
   FotoBlikGeheugen.meld = (r) => Timer.run(() => kopLog.line(r));
+  // Licht of donker, vóór het eerste beeld: anders flitst een lichte app eerst donker (ui/thema.dart).
+  ThemaStand.meld = (r) => Timer.run(() => kopLog.line(r));
+  ThemaStand.laad();
   // Before the first widget: whether this is a television decides focus rings, overscan margins
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
@@ -1859,18 +1863,22 @@ class DebridApp extends StatelessWidget {
       },
       theme: ThemeData(
         useMaterial3: true,
-        brightness: Brightness.dark,
+        // Licht of donker volgt de keuze in Instellingen (ui/thema.dart). Bij een wissel wordt dit
+        // hele thema opnieuw gebouwd, net als elke kleur in de app.
+        brightness: Thema.licht ? Brightness.light : Brightness.dark,
         scaffoldBackgroundColor: _bg,
         // De tekstrollen van de app. Hiervoor stond hier NIETS, en dus gaf
         // `Theme.of(context).textTheme` het standaardpalet van Material terug — 14 punten in een
         // kleur die niet in dit palet staat. Precies daarom bouwde elke widget zijn eigen
         // TextStyle: er was niets om op terug te vallen. Zie ui/typografie.dart voor de telling.
         textTheme: kTekstThema,
-        colorScheme: const ColorScheme.dark(
-          primary: _accent,
-          secondary: _accent2,
-          surface: _panel,
-        ),
+        colorScheme: Thema.licht
+            ? ColorScheme.light(primary: _accent, secondary: _accent2, surface: _panel, onSurface: _text)
+            : ColorScheme.dark(
+                primary: _accent,
+                secondary: _accent2,
+                surface: _panel,
+              ),
         // Every InkWell, ListTile and Material button in the app can already take focus — Flutter
         // gives them that for free, which is why they were reachable with a remote before anything
         // was changed. What they could not do was SAY so: the default focus tint is a whisper of
@@ -1878,7 +1886,7 @@ class DebridApp extends StatelessWidget {
         // twenty-five edits, and a mouse never sees it because a mouse never focuses.
         // Op een tv een lichte waas en geen paarse balk: een geselecteerde nummerrij was een vierkant
         // paars vlak over de volle breedte (gezien op de Shield, 15-10-2026). Zie [kTvSelectie].
-        focusColor: isTv ? Colors.white.withValues(alpha: .12) : _accent.withValues(alpha: .18),
+        focusColor: isTv ? kInkt.withValues(alpha: .12) : _accent.withValues(alpha: .18),
   // Hier stond niets, dus kregen alle zwevende menu's Materials eigen maten: hoeken van VIER punten
   // in een app die overal tussen 10 en 18 zit, en een vlak dat op geen van deze panelen lijkt. Dat
   // gold ook voor de twee sorteerkiezers, en juist die twee liepen uiteen — de ene gaf zichzelf een
@@ -1926,7 +1934,7 @@ class DebridApp extends StatelessWidget {
             );
           }
           if (cloud.state == CloudState.restoring) {
-            return const Scaffold(
+            return Scaffold(
               backgroundColor: _bg,
               body: Center(child: CircularProgressIndicator(color: _accent)),
             );
@@ -2048,7 +2056,7 @@ Widget cover(Uint8List? bytes, {double size = 160, double radius = 12, bool circ
     decoration: BoxDecoration(
       shape: shape,
       borderRadius: br,
-      gradient: const LinearGradient(colors: [kPaneelHoog, kPaneel]),
+      gradient: LinearGradient(colors: [kPaneelHoog, kPaneel]),
     ),
     child: Icon(Icons.music_note_rounded, color: _muted.withValues(alpha: .4), size: size * .34),
   );
@@ -2842,7 +2850,7 @@ class _HomeShellState extends State<HomeShell> {
             controller: ctl,
             autofocus: true,
             style: const TextStyle(fontSize: 16),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               hintText: 'Artiest, album of nummer…',
               hintStyle: TextStyle(color: _muted),
             ),
@@ -3019,14 +3027,14 @@ class _HomeShellState extends State<HomeShell> {
                 decoration: InputDecoration(
                   isDense: true,
                   hintText: 'Zoek in je bibliotheek — artiest, album of nummer…',
-                  hintStyle: const TextStyle(color: _muted, fontSize: 13.5),
-                  prefixIcon: const Icon(Icons.search_rounded, size: 19, color: _muted),
+                  hintStyle: TextStyle(color: _muted, fontSize: 13.5),
+                  prefixIcon: Icon(Icons.search_rounded, size: 19, color: _muted),
                   suffixIcon: _q.isEmpty
                       ? null
                       : TvLabelled(
                           label: 'Wissen',
                           child: IconButton(
-                          icon: const Icon(Icons.close_rounded, size: 17, color: _muted),
+                          icon: Icon(Icons.close_rounded, size: 17, color: _muted),
                           tooltip: 'Wissen',
                           onPressed: () => setState(() {
                             _zoekPauze?.cancel();
@@ -3089,10 +3097,10 @@ class _HomeShellState extends State<HomeShell> {
                     border: Border.all(color: Colors.white.withValues(alpha: .12)),
                   ),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    const Icon(Icons.sort_rounded, size: 16, color: _muted),
+                    Icon(Icons.sort_rounded, size: 16, color: _muted),
                     const SizedBox(width: 6),
-                    Text(_sort.label, style: const TextStyle(fontSize: 12.5, color: _muted)),
-                    const Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
+                    Text(_sort.label, style: TextStyle(fontSize: 12.5, color: _muted)),
+                    Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
                   ]),
                 ),
               ),
@@ -3742,7 +3750,7 @@ class _HomeShellState extends State<HomeShell> {
             child: Row(
               children: [
                 const SizedBox(width: 12),
-                const Icon(Icons.search_rounded, size: 18, color: _muted),
+                Icon(Icons.search_rounded, size: 18, color: _muted),
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
@@ -3751,7 +3759,7 @@ class _HomeShellState extends State<HomeShell> {
                     focusNode: _searchFocus,
                     onChanged: _zetZoekterm,
                     style: const TextStyle(fontSize: 14),
-                    decoration: const InputDecoration.collapsed(
+                    decoration: InputDecoration.collapsed(
                       hintText: 'Zoek in je bibliotheek — artiest, album of nummer…',
                       hintStyle: TextStyle(color: _muted, fontSize: 13.5),
                     ),
@@ -3761,7 +3769,7 @@ class _HomeShellState extends State<HomeShell> {
                 ..._sortControl(),
                 IconButton(
                   key: const ValueKey('menu-zoek-sluiten'),
-                  icon: const Icon(Icons.close_rounded, size: 18, color: _muted),
+                  icon: Icon(Icons.close_rounded, size: 18, color: _muted),
                   tooltip: 'Sluiten (Esc)',
                   onPressed: _sluitZoeken,
                 ),
@@ -3791,8 +3799,8 @@ class _HomeShellState extends State<HomeShell> {
             border: Border.all(color: Colors.white.withValues(alpha: .12)),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Text(_qFilterLabel(_qFilter), style: const TextStyle(fontSize: 12.5, color: _muted)),
-            const Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
+            Text(_qFilterLabel(_qFilter), style: TextStyle(fontSize: 12.5, color: _muted)),
+            Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
           ]),
         ),
       );
@@ -4044,9 +4052,9 @@ class _SectionsDrawer extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
               child: Text('${maten.$1} ${maten.$1 == 1 ? 'album' : 'albums'} · '
                   '${maten.$2} ${maten.$2 == 1 ? 'nummer' : 'nummers'}',
-                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+                  style: TextStyle(color: _muted, fontSize: 12.5)),
             ),
-            const Divider(color: _line, height: 1),
+            Divider(color: _line, height: 1),
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
@@ -4079,9 +4087,9 @@ class _SectionsDrawer extends StatelessWidget {
                 ],
               ),
             ),
-            const Divider(color: _line, height: 1),
+            Divider(color: _line, height: 1),
             ListTile(
-              leading: const MenuIcoon(soort: MenuIcoonSoort.instellingen, kleur: _muted, maat: 20),
+              leading: MenuIcoon(soort: MenuIcoonSoort.instellingen, kleur: _muted, maat: 20),
               title: const Text('Instellingen'),
               onTap: () {
                 Navigator.pop(context);
@@ -4968,7 +4976,7 @@ class Onderbalk extends StatelessWidget {
                 child: Text(
                   label,
                   maxLines: 1,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 10,
                     height: 1.1,
                     fontWeight: FontWeight.w600,
@@ -5034,7 +5042,7 @@ class _OfflineSection extends StatelessWidget {
             const Text('Op dit toestel',
                 style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
             Text('${tracks.length} nummers · ${_size(offline.bytes)}',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             if (tracks.isNotEmpty)
               TextButton.icon(
                 onPressed: () async {
@@ -5044,7 +5052,7 @@ class _OfflineSection extends StatelessWidget {
                       backgroundColor: _panel,
                       title: const Text('Alles van dit toestel halen?',
                           style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-                      content: const Text(
+                      content: Text(
                           'Je muziek blijft gewoon op je pc staan. Alleen de kopieën op dit '
                           'toestel gaan weg.',
                           style: TextStyle(color: _muted, height: 1.4)),
@@ -5098,7 +5106,7 @@ class _OfflineSection extends StatelessWidget {
               ),
               if (job.bezig)
                 Text(job.progress == null ? '' : '${(job.progress! * 100).round()}%',
-                    style: const TextStyle(color: _muted, fontSize: 12.5))
+                    style: TextStyle(color: _muted, fontSize: 12.5))
               else ...[
                 TvLabelled(
                   label: 'Opnieuw',
@@ -5133,7 +5141,7 @@ class _OfflineSection extends StatelessWidget {
                 border: Border.all(color: _line),
               ),
               child: Row(children: [
-                const Icon(Icons.offline_pin_rounded, size: 18, color: _accent2),
+                Icon(Icons.offline_pin_rounded, size: 18, color: _accent2),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -5148,7 +5156,7 @@ class _OfflineSection extends StatelessWidget {
                           '${_size(entry.value.fold(0, (n, t) => n + t.bytes))}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _muted, fontSize: 12)),
+                          style: TextStyle(color: _muted, fontSize: 12)),
                     ],
                   ),
                 ),
@@ -5351,7 +5359,7 @@ class OpDitToestelView extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.offline_pin_outlined, size: 44, color: _muted),
+              Icon(Icons.offline_pin_outlined, size: 44, color: _muted),
               const SizedBox(height: 16),
               const Text('Nog niets op dit toestel',
                   textAlign: TextAlign.center,
@@ -5458,7 +5466,7 @@ class AlbumsGrid extends StatelessWidget {
                     border: Border.all(color: _accent.withValues(alpha: .4)),
                   ),
                   child: Row(children: [
-                    const Icon(Icons.auto_delete_outlined, size: 18, color: _accent),
+                    Icon(Icons.auto_delete_outlined, size: 18, color: _accent),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
@@ -5468,7 +5476,7 @@ class AlbumsGrid extends StatelessWidget {
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                       ),
                     ),
-                    const Icon(Icons.chevron_right_rounded, color: _muted),
+                    Icon(Icons.chevron_right_rounded, color: _muted),
                   ]),
                 ),
               ),
@@ -5872,14 +5880,14 @@ class AlbumCard extends StatelessWidget {
         children: [
           Flexible(
               child: ArtistNames(
-                  names: [a.artist], style: const TextStyle(color: _muted, fontSize: 12))),
+                  names: [a.artist], style: TextStyle(color: _muted, fontSize: 12))),
           if (a.edition != null)
             // Ook Flexible, anders loopt de rij over zodra de artiestnaam wat langer is.
             Flexible(
                 child: Text(' · ${a.edition}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: _muted, fontSize: 12))),
+                    style: TextStyle(color: _muted, fontSize: 12))),
         ],
       )),
       onTap: () => openPagina(context, (_) => AlbumDetailPage(album: a)),
@@ -7035,7 +7043,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                   ),
                 ),
                 if (_officialBusy && _official.isEmpty && !album.isSingle)
-                  const SliverToBoxAdapter(
+                  SliverToBoxAdapter(
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(kGoot, kRuimte4, kGoot, kRuimte8),
                       child: Row(children: [
@@ -7279,7 +7287,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                 Text('Op andere uitgaves · ${_officialBonus.length}',
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                 const SizedBox(width: 8),
-                const Text('niet op jouw persing, wel op deze plaat',
+                Text('niet op jouw persing, wel op deze plaat',
                     style: TextStyle(color: _muted, fontSize: 11.5)),
               ]),
             ),
@@ -7328,7 +7336,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
         crossAxisAlignment: narrow ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
           Row(children: [
-          const Icon(Icons.playlist_add_check_rounded, size: 18, color: _accent2),
+          Icon(Icons.playlist_add_check_rounded, size: 18, color: _accent2),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -7479,7 +7487,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     final details = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(album.isSingle ? 'Single' : 'Album', style: const TextStyle(color: _muted)),
+                Text(album.isSingle ? 'Single' : 'Album', style: TextStyle(color: _muted)),
                 const SizedBox(height: 6),
                 Text(album.title,
                     style: TextStyle(fontSize: narrow ? 24 : 30, fontWeight: FontWeight.w800)),
@@ -7492,7 +7500,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                 // Zie ui/kopfeiten.dart: de feiten begonnen hier met " · ", en als ze niet naast de
                 // artiest pasten stond die punt vooraan een nieuwe regel.
                 KopFeiten(
-                  artiest: ArtistNames(names: [album.artist], style: const TextStyle(color: _muted)),
+                  artiest: ArtistNames(names: [album.artist], style: TextStyle(color: _muted)),
                   artiestTekst: album.artist,
                   feiten: [
                     // Het jaar van de PLAAT, niet van je bestand (Saber, 16-10-2026: bovenaan 2006 uit
@@ -7502,7 +7510,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                     if (album.genre != null) album.genre!,
                     '${album.tracks.length} ${album.tracks.length == 1 ? 'nummer' : 'nummers'}',
                   ],
-                  stijl: const TextStyle(color: _muted),
+                  stijl: TextStyle(color: _muted),
                 ),
                 const SizedBox(height: 18),
                 // Wrapped on a phone rather than a Row. Afspelen, Offline bewaren and Radio are
@@ -7727,7 +7735,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
   /// erger dan geen venster.
   Widget _tracklijst(List<ChoiceTrack> lijst) {
     if (lijst.isEmpty) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.fromLTRB(54, 0, 8, 8),
         child: Text('Deze bron geeft geen tracklijst voor deze uitgave.',
             style: TextStyle(color: _muted, fontSize: 12)),
@@ -8036,13 +8044,13 @@ class _MetadataEditorState extends State<MetadataEditor> {
               // Er staan al treffers, maar een bron zoekt nog: een dun streepje erboven, geen molen
               // eroverheen.
               if (_searching && _results.isNotEmpty)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.only(bottom: 6),
                   child: LinearProgressIndicator(minHeight: 2, color: _accent, backgroundColor: Colors.transparent),
                 ),
               Expanded(
                 child: _searching && _results.isEmpty
-                    ? const Center(child: CircularProgressIndicator(color: _accent))
+                    ? Center(child: CircularProgressIndicator(color: _accent))
                     : _results.isEmpty
                         ? Center(
                             child: Padding(
@@ -8098,13 +8106,13 @@ class _MetadataEditorState extends State<MetadataEditor> {
                                                           (m.artist.isEmpty ? '—' : m.artist),
                                                       maxLines: 1,
                                                       overflow: TextOverflow.ellipsis,
-                                                      style: const TextStyle(
+                                                      style: TextStyle(
                                                           color: _muted, fontSize: 12)),
                                                 ],
                                               ),
                                             ),
                                             if (sel)
-                                              const Icon(Icons.check_circle_rounded,
+                                              Icon(Icons.check_circle_rounded,
                                                   color: _accent),
                                             // Een EIGEN raakvlak, naast dat van de regel. Openklappen
                                             // is kijken; de regel aantikken is kiezen. Zaten die op
@@ -8116,7 +8124,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
                                                   ? 'Tracklijst verbergen'
                                                   : 'Tracklijst tonen — staan jouw versies erop?',
                                               icon: _laden.contains(k)
-                                                  ? const SizedBox(
+                                                  ? SizedBox(
                                                       width: 16,
                                                       height: 16,
                                                       child: CircularProgressIndicator(
@@ -8152,12 +8160,12 @@ class _MetadataEditorState extends State<MetadataEditor> {
                 children: [
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(false),
-                    child: const Text('Annuleren', style: TextStyle(color: _muted)),
+                    child: Text('Annuleren', style: TextStyle(color: _muted)),
                   ),
                   // Zeggen WAAROM de knop uit staat. Een dode knop zonder uitleg is precies zo
                   // verwarrend als een knop die "Aangepast" zegt en niets doet.
                   if (!_kanToepassen)
-                    const Expanded(
+                    Expanded(
                       child: Text('Kies eerst een uitgave, of vul zelf een album in',
                           textAlign: TextAlign.right,
                           maxLines: 2,
@@ -8221,7 +8229,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
 
   InputDecoration _inputDeco(String label) => InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(color: _muted),
+        labelStyle: TextStyle(color: _muted),
         isDense: true,
         filled: true,
         fillColor: _panel2,
@@ -8372,7 +8380,7 @@ class _TrackRowState extends State<TrackRow> {
               SizedBox(
                 width: 28,
                 child: _hover
-                    ? const Icon(Icons.play_arrow_rounded, size: 18, color: _accent)
+                    ? Icon(Icons.play_arrow_rounded, size: 18, color: _accent)
                     : Text(widget.label ?? '${t.trackNo > 0 ? t.trackNo : widget.index + 1}',
                         textAlign: TextAlign.right,
                         style: kTekstKlein),
@@ -8679,7 +8687,7 @@ class _ArtistsViewState extends State<ArtistsView> {
       hoesVanArtiest.putIfAbsent(a.artist, () => a.cover);
     }
     if (artists.isEmpty) {
-      return const Center(child: Text('Geen artiesten gevonden.', style: TextStyle(color: _muted)));
+      return Center(child: Text('Geen artiesten gevonden.', style: TextStyle(color: _muted)));
     }
     return CustomScrollView(
       // Zie het albumraster: de plek waar je was overleeft een wissel naar een ander scherm.
@@ -8779,7 +8787,7 @@ class _CreditsPanelState extends State<CreditsPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('CREDITS',
+          Text('CREDITS',
               style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8)),
           const SizedBox(height: 8),
           Wrap(
@@ -8830,7 +8838,7 @@ class _CreditChipState extends State<_CreditChip> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(widget.credit.role,
-                  style: const TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w600)),
+                  style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w600)),
               const SizedBox(width: 7),
               Text(widget.credit.name,
                   style: TextStyle(
@@ -8948,7 +8956,7 @@ class _PersonPageState extends State<PersonPage> {
             ),
           ),
           if (_busy)
-            const SliverToBoxAdapter(
+            SliverToBoxAdapter(
               child: Padding(
                 padding: EdgeInsets.all(40),
                 child: Center(child: CircularProgressIndicator(color: _accent)),
@@ -8963,7 +8971,7 @@ class _PersonPageState extends State<PersonPage> {
                         ? 'De producties konden niet worden opgehaald. Wikidata antwoordde niet — '
                             'probeer het straks nog eens.'
                         : 'Geen verdere producties gevonden voor deze naam.',
-                    style: const TextStyle(color: _muted)),
+                    style: TextStyle(color: _muted)),
               ),
             )
           else ...[
@@ -8980,8 +8988,8 @@ class _PersonPageState extends State<PersonPage> {
                   final w = _works[i];
                   return ListTile(
                     title: Text(w.title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                    subtitle: w.year == null ? null : Text(w.year!, style: const TextStyle(color: _muted, fontSize: 12)),
-                    trailing: const Icon(Icons.search_rounded, size: 17, color: _muted),
+                    subtitle: w.year == null ? null : Text(w.year!, style: TextStyle(color: _muted, fontSize: 12)),
+                    trailing: Icon(Icons.search_rounded, size: 17, color: _muted),
                     onTap: () => openPagina(
                       context,
                       (_) => Scaffold(
@@ -9063,7 +9071,7 @@ class _RelatedArtistCardState extends State<_RelatedArtistCard> {
                         bottom: 2,
                         child: Container(
                           padding: const EdgeInsets.all(3),
-                          decoration: const BoxDecoration(color: _accent2, shape: BoxShape.circle),
+                          decoration: BoxDecoration(color: _accent2, shape: BoxShape.circle),
                           child: const Icon(Icons.check_rounded, size: 12, color: Colors.black),
                         ),
                       ),
@@ -9257,7 +9265,7 @@ class _RondjeState extends State<_Rondje> {
       message: widget.naam,
       // Zelf de kleur: de standaardtip is wit in een donker thema.
       decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(6)),
-      textStyle: const TextStyle(color: kTekst, fontSize: 12),
+      textStyle: TextStyle(color: kTekst, fontSize: 12),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => _licht = true),
@@ -9491,7 +9499,7 @@ class _MenuStatus extends StatelessWidget {
             child: MenuGlas(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                child: Text(tekst, maxLines: 1, style: const TextStyle(fontSize: 11, color: _muted)),
+                child: Text(tekst, maxLines: 1, style: TextStyle(fontSize: 11, color: _muted)),
               ),
             ),
           );
@@ -9861,7 +9869,7 @@ class PlayerBar extends StatelessWidget {
       // Op glas doorschijnend en zonder streep: de lichtrand van het glas is de bovenrand.
       decoration: BoxDecoration(
         color: opGlas ? balkOpGlas(x.player.wasKleur) : balkKleur(x.player.wasKleur),
-        border: opGlas ? null : const Border(top: BorderSide(color: _line)),
+        border: opGlas ? null : Border(top: BorderSide(color: _line)),
       ),
       // The panel runs to the edge; only what you read and press comes in. On a television the
       // bottom row of this bar is the first thing a set overscans away, so it gets tvOverscan
@@ -9940,9 +9948,9 @@ class PlayerBar extends StatelessWidget {
                         Text(s,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: _accent2, fontSize: 12.5))
+                            style: TextStyle(color: _accent2, fontSize: 12.5))
                       else if (t == null)
-                        const Text('Niets aan het spelen',
+                        Text('Niets aan het spelen',
                             style: TextStyle(color: _muted, fontSize: 12.5))
                       // Een herhaling vervangt de artiest niet: "opnieuw" komt erachter.
                       else if (p.speeltHerhaling)
@@ -9952,10 +9960,10 @@ class PlayerBar extends StatelessWidget {
                               artist: t.artist,
                               title: t.title,
                               lookup: true,
-                              style: const TextStyle(color: _muted, fontSize: 12.5),
+                              style: TextStyle(color: _muted, fontSize: 12.5),
                             ),
                           ),
-                          const Text(' · opnieuw', style: TextStyle(color: _accent2, fontSize: 12.5)),
+                          Text(' · opnieuw', style: TextStyle(color: _accent2, fontSize: 12.5)),
                         ])
                       else
                         // Everyone on the track, each name tappable — a guest artist is exactly
@@ -9964,7 +9972,7 @@ class PlayerBar extends StatelessWidget {
                           artist: t.artist,
                           title: t.title,
                           lookup: true,
-                          style: const TextStyle(color: _muted, fontSize: 12.5),
+                          style: TextStyle(color: _muted, fontSize: 12.5),
                         ),
                     ],
                   ),
@@ -10039,7 +10047,7 @@ class PlayerBar extends StatelessWidget {
                 ),
                 Row(
                   children: [
-                    Text(_fmt(x.position), style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    Text(_fmt(x.position), style: TextStyle(color: _muted, fontSize: 11.5)),
                     Expanded(
                       child: SliderTheme(
                         data: SliderTheme.of(context).copyWith(
@@ -10057,7 +10065,7 @@ class PlayerBar extends StatelessWidget {
                         )),
                       ),
                     ),
-                    Text(_fmt(x.duration), style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    Text(_fmt(x.duration), style: TextStyle(color: _muted, fontSize: 11.5)),
                   ],
                 ),
               ],
@@ -10095,11 +10103,11 @@ class _SpeelOpKnop extends StatelessWidget {
       tooltip: 'Speel op …',
       color: _panel,
       position: PopupMenuPosition.over,
-      icon: const Icon(Icons.devices_rounded, size: 20, color: _muted),
+      icon: Icon(Icons.devices_rounded, size: 20, color: _muted),
       itemBuilder: (_) {
         final toestellen = server.aanwezigeToestellen();
         if (toestellen.isEmpty) {
-          return const [
+          return [
             PopupMenuItem<String>(
               enabled: false,
               child: Text('Open de app op je gsm, iPad, Mac of Shield',
@@ -10108,7 +10116,7 @@ class _SpeelOpKnop extends StatelessWidget {
           ];
         }
         return [
-          const PopupMenuItem<String>(
+          PopupMenuItem<String>(
             enabled: false,
             height: 28,
             child: Text('SPEEL OP', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: _muted)),
@@ -10117,7 +10125,7 @@ class _SpeelOpKnop extends StatelessWidget {
             PopupMenuItem<String>(
               value: t.id,
               child: Row(children: [
-                const Icon(Icons.phonelink_rounded, size: 18, color: _muted),
+                Icon(Icons.phonelink_rounded, size: 18, color: _muted),
                 const SizedBox(width: 10),
                 Text(t.naam, style: const TextStyle(fontSize: 13.5)),
               ]),
@@ -10188,22 +10196,22 @@ Future<void> _kiesAfspeellijst(BuildContext context, List<String> nummers) async
           children: [
             ListTile(
               autofocus: true,
-              leading: const Icon(Icons.add_rounded, color: _accent),
-              title: const Text('Nieuwe afspeellijst…', style: TextStyle(color: _accent)),
+              leading: Icon(Icons.add_rounded, color: _accent),
+              title: Text('Nieuwe afspeellijst…', style: TextStyle(color: _accent)),
               onTap: () => Navigator.pop(ctx, ''),
             ),
             if (lijsten.leeg)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(24, 8, 24, 16),
                 child: Text('Je hebt er nog geen.',
                     style: TextStyle(color: _muted, fontSize: 12.5)),
               ),
             for (final p in lijsten.lijsten)
               ListTile(
-                leading: const Icon(Icons.queue_music_rounded, color: _muted),
+                leading: Icon(Icons.queue_music_rounded, color: _muted),
                 title: Text(p.name),
                 subtitle: Text('${p.trackIds.length} nummers',
-                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    style: TextStyle(color: _muted, fontSize: 11.5)),
                 onTap: () => Navigator.pop(ctx, p.id),
               ),
           ],
@@ -10270,7 +10278,7 @@ class AfspeellijstenView extends StatelessWidget {
                 style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
             const SizedBox(width: 12),
             Text('${lijsten.lijsten.length}',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             const Spacer(),
             FilledButton.icon(
               style: FilledButton.styleFrom(backgroundColor: _knopVulling),
@@ -10316,10 +10324,10 @@ class _AfspeellijstRij extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(10)),
       child: ListTile(
-        leading: const Icon(Icons.queue_music_rounded, color: _accent),
+        leading: Icon(Icons.queue_music_rounded, color: _accent),
         title: Text(lijst.name, style: const TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Text('${lijst.trackIds.length} nummers',
-            style: const TextStyle(color: _muted, fontSize: 12)),
+            style: TextStyle(color: _muted, fontSize: 12)),
         onTap: () => openPagina(context, (_) => AfspeellijstPagina(id: lijst.id)),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
@@ -10353,7 +10361,7 @@ class _AfspeellijstRij extends StatelessWidget {
                     backgroundColor: _panel,
                     title: Text('“${lijst.name}” verwijderen?',
                         style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-                    content: const Text('Alleen de lijst verdwijnt. Je nummers blijven staan.',
+                    content: Text('Alleen de lijst verdwijnt. Je nummers blijven staan.',
                         style: TextStyle(color: _muted, height: 1.4)),
                     actions: [
                       TextButton(
@@ -10407,7 +10415,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
     final p = context.read<PlayerStore>();
     final lijst = lijsten.byId(id);
     if (lijst == null) {
-      return const Scaffold(
+      return Scaffold(
           backgroundColor: _bg,
           body: Center(child: Text('Deze afspeellijst bestaat niet meer.',
               style: TextStyle(color: _muted))));
@@ -10512,7 +10520,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
                 subtitle: Text(lib.displayArtist(nummers[i].artist),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: _muted)),
+                    style: TextStyle(fontSize: 12, color: _muted)),
                 onTap: () => p.playQueue(nummers, i),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -10542,7 +10550,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
                         height: 40,
                         alignment: Alignment.center,
                         color: Colors.transparent,
-                        child: const Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
+                        child: Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
                       ),
                     ),
                   ],
@@ -10593,7 +10601,7 @@ class FavorietenView extends StatelessWidget {
             SizedBox(width: narrow ? 0 : 12, height: narrow ? 4 : 0),
             Text('${albums.length} ${albums.length == 1 ? 'album' : 'albums'} · '
                 '${nummers.length} ${nummers.length == 1 ? 'nummer' : 'nummers'}',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             if (!narrow) const Spacer(),
             if (nummers.isNotEmpty) ...[
               SizedBox(height: narrow ? 12 : 0),
@@ -10659,14 +10667,14 @@ class _FavorietRij extends StatelessWidget {
                   Text(lib.displayArtist(track.artist),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: _muted)),
+                      style: TextStyle(fontSize: 12, color: _muted)),
                 ],
               ),
             ),
             _echtheidMerk(track),
             _qualityBadge(_trackQuality(track)),
             const SizedBox(width: 4),
-            Text(_fmt(track.duration), style: const TextStyle(color: _muted, fontSize: 12)),
+            Text(_fmt(track.duration), style: TextStyle(color: _muted, fontSize: 12)),
             const SizedBox(width: 6),
             // Het hartje is hier gevuld — je kijkt naar je favorieten — en dus de weg eruit.
             TvLabelled(
@@ -10838,7 +10846,7 @@ Widget _waaromGeenTorrents(BuildContext context, {required bool leeg, VoidCallba
         if (bronnen.isNotEmpty)
           Text(
             bronnen.join('  ·  '),
-            style: const TextStyle(color: _muted, fontSize: 11.5),
+            style: TextStyle(color: _muted, fontSize: 11.5),
           ),
         // De zin zegt wat er scheelt; deze knop is waar je het oplost. Zie [rutrackerControle].
         if (rt.vraagtControle && rutrackerVensterKan)
@@ -11176,7 +11184,7 @@ class _RadioAfstemming extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text('Ophalen staat even stil: $pauze',
-                  style: const TextStyle(color: _muted, fontSize: 12)),
+                  style: TextStyle(color: _muted, fontSize: 12)),
             ),
         ],
       ),
@@ -11308,7 +11316,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                             // Op de tv (tekstschaal 1,35) past "12 hierna · 6 onderweg" niet op één regel.
                             maxLines: isTv ? 2 : 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: _muted, fontSize: 12)),
+                            style: TextStyle(color: _muted, fontSize: 12)),
                     ],
                   )
                 : const Text('Wachtrij', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
@@ -11360,10 +11368,10 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
           child: Row(children: [
             Text(tekst.toUpperCase(),
-                style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: .8, color: _muted)),
+                style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: .8, color: _muted)),
             if (extra != null) ...[
               const SizedBox(width: 6),
-              Text(extra, style: const TextStyle(fontSize: 10.5, color: _muted)),
+              Text(extra, style: TextStyle(fontSize: 10.5, color: _muted)),
             ],
           ]),
         );
@@ -11374,7 +11382,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(radio ? 'De radio zoekt nog wat hij zal spelen.' : 'Nog niets in de wachtrij.',
-              textAlign: TextAlign.center, style: const TextStyle(color: _muted, fontSize: 12.5)),
+              textAlign: TextAlign.center, style: TextStyle(color: _muted, fontSize: 12.5)),
         ),
       );
     } else {
@@ -11450,7 +11458,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
           ? null
           : BoxDecoration(
               color: _panel,
-              border: widget.inBlad ? null : const Border(left: BorderSide(color: _line)),
+              border: widget.inBlad ? null : Border(left: BorderSide(color: _line)),
             ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -11541,7 +11549,7 @@ class _NuSpeeltRegel extends StatelessWidget {
                       width: 52,
                       height: 52,
                       color: _panel2,
-                      child: const Icon(Icons.music_note_rounded, size: 20, color: _muted),
+                      child: Icon(Icons.music_note_rounded, size: 20, color: _muted),
                     ),
             ),
             const SizedBox(width: 12),
@@ -11558,7 +11566,7 @@ class _NuSpeeltRegel extends StatelessWidget {
                   Text(track.artist,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: _muted)),
+                      style: TextStyle(fontSize: 12, color: _muted)),
                 ],
               ),
             ),
@@ -11730,7 +11738,7 @@ class _WachtrijRij extends StatelessWidget {
                       // Zonder kleur vangt een Container geen aanwijzer, en dan is alleen het icoon
                       // zelf het doelwit — precies wat hier weg moest.
                       color: Colors.transparent,
-                      child: const Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
+                      child: Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
                     ),
                   ),
                 ),
@@ -11755,7 +11763,7 @@ class _WachtrijRij extends StatelessWidget {
                       height: 34,
                       decoration: BoxDecoration(
                           color: _panel2, borderRadius: BorderRadius.circular(4)),
-                      child: const Icon(Icons.music_note_rounded, size: 15, color: _muted),
+                      child: Icon(Icons.music_note_rounded, size: 15, color: _muted),
                     ),
               const SizedBox(width: 10),
               Expanded(
@@ -11775,11 +11783,11 @@ class _WachtrijRij extends StatelessWidget {
                         child: Text(track.artist,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 11, color: _muted)),
+                            style: TextStyle(fontSize: 11, color: _muted)),
                       ),
                       // Achter de naam en niet erin: een lange naam kortte "opnieuw" anders juist weg.
                       if (r != null && r.herhaling)
-                        const Text(' · opnieuw', style: TextStyle(fontSize: 11, color: _accent2)),
+                        Text(' · opnieuw', style: TextStyle(fontSize: 11, color: _accent2)),
                     ]),
                   ],
                 ),
@@ -11798,7 +11806,7 @@ class _WachtrijRij extends StatelessWidget {
               SizedBox(
                 width: 28,
                 child: speeltNu
-                    ? const Icon(Icons.volume_up_rounded, size: 15, color: _accent)
+                    ? Icon(Icons.volume_up_rounded, size: 15, color: _accent)
                     : r != null
                         ? Icon(
                             r.mislukt
@@ -12048,7 +12056,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
     height: 52 + bottomInset,
     decoration: BoxDecoration(
       color: opGlas ? balkOpGlas(p.wasKleur) : balkKleur(p.wasKleur),
-      border: const Border(top: BorderSide(color: _line)),
+      border: Border(top: BorderSide(color: _line)),
     ),
     padding: EdgeInsets.only(bottom: bottomInset),
     // De kleurvlekken van de hoes, zoals in de brede balk.
@@ -12064,7 +12072,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
           child: LinearProgressIndicator(
             value: x.progress,
             backgroundColor: kLijn,
-            valueColor: const AlwaysStoppedAnimation(_accent),
+            valueColor: AlwaysStoppedAnimation(_accent),
           ),
         ),
         Expanded(
@@ -12112,19 +12120,19 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
                                     t == null ? 'Niets aan het spelen' : _radioRegel(context, p)!,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(color: _muted, fontSize: 12))
+                                    style: TextStyle(color: _muted, fontSize: 12))
                               // Een herhaling: "opnieuw" achter de artiest, zoals in de brede balk.
                               else if (p.speeltHerhaling)
                                 Row(children: [
                                   Flexible(
                                     child: _artistLine(splitFeatured(t.artist, t.title),
-                                        const TextStyle(color: _muted, fontSize: 12)),
+                                        TextStyle(color: _muted, fontSize: 12)),
                                   ),
-                                  const Text(' · opnieuw', style: TextStyle(color: _accent2, fontSize: 12)),
+                                  Text(' · opnieuw', style: TextStyle(color: _accent2, fontSize: 12)),
                                 ])
                               else
                                 _artistLine(splitFeatured(t.artist, t.title),
-                                    const TextStyle(color: _muted, fontSize: 12)),
+                                    TextStyle(color: _muted, fontSize: 12)),
                             ],
                           ),
                           ),
@@ -12186,7 +12194,7 @@ Widget _albumRegel(BuildContext context, String naam, Album? album,
     maxLines: 2,
     overflow: TextOverflow.ellipsis,
     textAlign: gecentreerd ? TextAlign.center : TextAlign.left,
-    style: const TextStyle(color: _muted, fontSize: 13.5, fontWeight: FontWeight.w600),
+    style: TextStyle(color: _muted, fontSize: 13.5, fontWeight: FontWeight.w600),
   );
   if (album == null) return tekst;
   return Pressable(
@@ -12241,9 +12249,9 @@ class _RadioUitEenZinKaartState extends State<_RadioUitEenZinKaart> {
         ),
         child: Row(
           children: [
-            const Icon(Icons.auto_awesome_rounded, size: 18, color: kAccent2),
+            Icon(Icons.auto_awesome_rounded, size: 18, color: kAccent2),
             const SizedBox(width: kRuimte12),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -12257,7 +12265,7 @@ class _RadioUitEenZinKaartState extends State<_RadioUitEenZinKaart> {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right_rounded, size: 20, color: _muted),
+            Icon(Icons.chevron_right_rounded, size: 20, color: _muted),
           ],
         ),
       ),
@@ -12453,14 +12461,14 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('NIEUWE RADIO',
+            Text('NIEUWE RADIO',
                 style: TextStyle(
                     fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .6, color: kAccent2)),
             const SizedBox(height: kRuimte8),
             const Text('Zeg wat je wil horen',
                 style: TextStyle(fontSize: 25, fontWeight: FontWeight.w700, letterSpacing: -.4)),
             const SizedBox(height: kRuimte6),
-            const Text('Gewoon een zin. De rest zoekt hij zelf uit.',
+            Text('Gewoon een zin. De rest zoekt hij zelf uit.',
                 style: TextStyle(fontSize: 13.5, color: _muted)),
             const SizedBox(height: kRuimte16),
             TextField(
@@ -12470,7 +12478,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
               minLines: 2,
               textInputAction: TextInputAction.done,
               onSubmitted: (_) => _bezig ? null : _denk(),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 hintText: 'maak me een radio met 300 liedjes van de jaren 90, genre eurodance',
                 filled: true,
                 fillColor: kVerzonken,
@@ -12523,7 +12531,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
           Text(o.naam, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
           const SizedBox(height: kRuimte4),
           Text('${o.aantal} nummers · begint bij ${o.zaadArtiesten.length} artiesten',
-              style: const TextStyle(fontSize: 12, color: _muted)),
+              style: TextStyle(fontSize: 12, color: _muted)),
           const SizedBox(height: kRuimte8),
           Wrap(
             spacing: kRuimte6,
@@ -12542,7 +12550,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   child: Text('+${o.zaadArtiesten.length - 7} meer',
-                      style: const TextStyle(fontSize: 11, color: _muted)),
+                      style: TextStyle(fontSize: 11, color: _muted)),
                 ),
             ],
           ),
@@ -12552,7 +12560,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
                 '${o.aantal} nummers is ongeveer $uren uur muziek en zo’n $gb GB op je pc. Hij '
                 'haalt ze pas op terwijl je luistert, en wat je niet groen geeft ruimt hij achteraf '
                 'weer op.',
-                style: const TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
+                style: TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
           ],
         ],
       ),
@@ -12665,7 +12673,7 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('Radio afsluiten'.toUpperCase(),
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                               letterSpacing: .6,
@@ -12678,7 +12686,7 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
                       Text(
                           'Deze radio haalde ${aanwezig.length} '
                           '${aanwezig.length == 1 ? "nummer" : "nummers"} voor je op.',
-                          style: const TextStyle(fontSize: 13.5, color: _muted, height: 1.4)),
+                          style: TextStyle(fontSize: 13.5, color: _muted, height: 1.4)),
                     ],
                   ),
                 ),
@@ -12712,7 +12720,7 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
                                   'raakt de radio niet aan.'
                               : 'Weggaan is van dit toestel af, niet alleen uit deze lijst. Wat je '
                                   'zelf al had blijft hoe dan ook staan — die raakt de radio niet aan.',
-                          style: const TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
+                          style: TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
                       const SizedBox(height: kRuimte12),
                       // NAAST elkaar en niet onder elkaar. Op 26-09-2026 stonden ze twintig punten
                       // boven elkaar, en een klik die voor "Later beslissen" bedoeld was werd
@@ -12815,10 +12823,10 @@ Widget _overzichtKop(String tekst, Color kleur, int aantal) => Padding(
               decoration: BoxDecoration(color: kleur, shape: BoxShape.circle)),
           const SizedBox(width: kRuimte8),
           Text(tekst.toUpperCase(),
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .6, color: kUitgezet)),
           const Spacer(),
-          Text('$aantal', style: const TextStyle(fontSize: 12, color: _muted)),
+          Text('$aantal', style: TextStyle(fontSize: 12, color: _muted)),
         ],
       ),
     );
@@ -12838,7 +12846,7 @@ Widget _overzichtRegel(Gehaald g, VoidCallback? redden) => Padding(
                 Text(g.artiest,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11, color: _muted)),
+                    style: TextStyle(fontSize: 11, color: _muted)),
               ],
             ),
           ),
@@ -12971,7 +12979,7 @@ class _RadioOordeel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: naast ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
-          const Text('Houden of weg?',
+          Text('Houden of weg?',
               style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
@@ -13436,7 +13444,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   title: t.title,
                   lookup: true,
                   omvouwen: true,
-                  style: const TextStyle(color: _muted, fontSize: 15),
+                  style: TextStyle(color: _muted, fontSize: 15),
                   // De artiesten als rondjes vóór hun naam, elk naar hun pagina (Saber, 17-10-2026).
                   rondjes: true,
                   eersteRondje: _eersteRondje,
@@ -13470,7 +13478,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           width: kolom,
           child: Text(status,
               textAlign: zij ? TextAlign.start : TextAlign.center,
-              style: const TextStyle(color: _accent2, fontSize: 12.5)),
+              style: TextStyle(color: _accent2, fontSize: 12.5)),
         ),
       ] else if (p.speeltHerhaling) ...[
         const SizedBox(height: kRuimte8),
@@ -13481,7 +13489,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   ? 'Opnieuw · ${_stroomUitleg(p, t)}'
                   : 'Opnieuw — dit nummer speelde eerder in deze radio',
               textAlign: zij ? TextAlign.start : TextAlign.center,
-              style: const TextStyle(color: kGedempt, fontSize: 11.5)),
+              style: TextStyle(color: kGedempt, fontSize: 11.5)),
         ),
       ] else if (p.stroomGrens != null && t != null) ...[
         const SizedBox(height: kRuimte8),
@@ -13489,7 +13497,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           width: kolom,
           child: Text(_stroomUitleg(p, t),
               textAlign: zij ? TextAlign.start : TextAlign.center,
-              style: const TextStyle(color: kUitgezet, fontSize: 11.5)),
+              style: TextStyle(color: kUitgezet, fontSize: 11.5)),
         ),
       ],
       SizedBox(height: isTv ? 14 : 26),
@@ -13497,7 +13505,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         width: kolom,
         child: Row(
           children: [
-            Text(_fmt(position), style: const TextStyle(color: _muted, fontSize: 12)),
+            Text(_fmt(position), style: TextStyle(color: _muted, fontSize: 12)),
 
             Expanded(
               child: SliderTheme(
@@ -13524,7 +13532,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                 )),
               ),
             ),
-            Text(_fmt(duration), style: const TextStyle(color: _muted, fontSize: 12)),
+            Text(_fmt(duration), style: TextStyle(color: _muted, fontSize: 12)),
           ],
         ),
       ),
@@ -13555,13 +13563,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         return Padding(
           padding: const EdgeInsets.only(top: 4, bottom: 4),
           child: Row(mainAxisAlignment: zij ? MainAxisAlignment.start : MainAxisAlignment.center, children: [
-            const Icon(Icons.speaker_rounded, size: 16, color: _accent),
+            Icon(Icons.speaker_rounded, size: 16, color: _accent),
             const SizedBox(width: 8),
             Flexible(
               child: Text('Speelt op ${target.device!.name}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _accent, fontSize: 13.5)),
+                  style: TextStyle(color: _accent, fontSize: 13.5)),
             ),
           ]),
         );
@@ -13679,7 +13687,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   ),
                   )
                 else
-                  const Icon(Icons.volume_down_rounded, size: 19, color: _muted),
+                  Icon(Icons.volume_down_rounded, size: 19, color: _muted),
                 Expanded(
                   child: SliderTheme(
                     data: SliderTheme.of(context).copyWith(
@@ -13707,13 +13715,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   ),
                   )
                 else
-                  const Icon(Icons.volume_up_rounded, size: 19, color: _muted),
+                  Icon(Icons.volume_up_rounded, size: 19, color: _muted),
                 const SizedBox(width: 6),
                 SizedBox(
                   width: 30,
                   child: Text('${cast.volume}',
                       textAlign: TextAlign.right,
-                      style: const TextStyle(color: _muted, fontSize: 12)),
+                      style: TextStyle(color: _muted, fontSize: 12)),
                 ),
               ],
             ),
@@ -14255,14 +14263,14 @@ class VerderBalk extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(kop, maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _accent2, fontSize: 11.5, fontWeight: FontWeight.w600)),
+                        style: TextStyle(color: _accent2, fontSize: 11.5, fontWeight: FontWeight.w600)),
                     const SizedBox(height: 2),
                     Text('${t.title} — ${t.artist}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
                     Text(_fmt(startPositie(a, DateTime.now().millisecondsSinceEpoch)),
-                        style: const TextStyle(color: _muted, fontSize: 11.5)),
+                        style: TextStyle(color: _muted, fontSize: 11.5)),
                   ],
                 ),
               ),
@@ -14342,14 +14350,14 @@ class VerderKnop extends StatelessWidget {
           builder: (_) => const _VerderBlad(),
         ),
         icon: Stack(clipBehavior: Clip.none, children: [
-          const Icon(Icons.devices_rounded, size: 22, color: _muted),
+          Icon(Icons.devices_rounded, size: 22, color: _muted),
           Positioned(
             right: -2,
             top: -2,
             child: Container(
               width: 8,
               height: 8,
-              decoration: const BoxDecoration(color: _accent2, shape: BoxShape.circle),
+              decoration: BoxDecoration(color: _accent2, shape: BoxShape.circle),
             ),
           ),
         ]),
@@ -14375,7 +14383,7 @@ class VerderKnop extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(10, 6, 14, 6),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.devices_rounded, size: 18, color: _accent2),
+              Icon(Icons.devices_rounded, size: 18, color: _accent2),
               const SizedBox(width: 8),
               Flexible(
                 child: Column(
@@ -14385,7 +14393,7 @@ class VerderKnop extends StatelessWidget {
                     Text(kop,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
+                        style: TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
                     Text('${t.title} · $tijd',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -15362,7 +15370,7 @@ class TracksView extends StatelessWidget {
           final title = Row(mainAxisSize: MainAxisSize.min, children: [
             const Text('Tracks', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
-            Text('${tracks.length}', style: const TextStyle(color: _muted, fontSize: 14)),
+            Text('${tracks.length}', style: TextStyle(color: _muted, fontSize: 14)),
           ]);
           // Allebei hetzelfde glas, en allebei zeggen ze wat ze deden (Saber, 16-10-2026: "Ik zie nooit
           // welke knop Ik intik"). Eerst was de ene paars en de andere donker, zonder iets terug.
@@ -15454,7 +15462,7 @@ class TracksView extends StatelessWidget {
                   color: isCurrent ? _panel : Colors.transparent,
                   child: Row(
                     children: [
-                      SizedBox(width: 22, child: Text('${i + 1}', style: const TextStyle(color: _muted, fontSize: 11))),
+                      SizedBox(width: 22, child: Text('${i + 1}', style: TextStyle(color: _muted, fontSize: 11))),
                       cover(lib.coverForTrack(t), size: 40, radius: 6),
                       const SizedBox(width: 12),
                       Expanded(
@@ -15477,7 +15485,7 @@ class TracksView extends StatelessWidget {
                             // differently from the name shown everywhere else. Split so a guest
                             // is their own name here, not part of one long unclickable string.
                             _artistLine(splitFeatured(lib.displayArtist(t.artist), t.title),
-                                const TextStyle(fontSize: 12, color: _muted)),
+                                TextStyle(fontSize: 12, color: _muted)),
                           ],
                         ),
                       ),
@@ -15493,7 +15501,7 @@ class TracksView extends StatelessWidget {
                       // in de wachtrij. Op een breder scherm blijft hij gewoon staan.
                       if (!isCompact(context)) ...[
                         Text(_fmt(t.duration),
-                            style: const TextStyle(color: _muted, fontSize: 12)),
+                            style: TextStyle(color: _muted, fontSize: 12)),
                         const SizedBox(width: 6),
                       ],
                       // Geen prullenbak meer in de rij. Hij stond twee punten naast afspelen, in elke
@@ -16092,7 +16100,7 @@ class _HomeStartViewState extends State<HomeStartView> {
             ],
           ),
         ),
-        const Padding(
+        Padding(
           padding: EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte6),
           child: Text('Ontdek nieuwe muziek en pak op waar je gebleven was',
               style: TextStyle(color: _muted, fontSize: 13.5)),
@@ -16236,7 +16244,7 @@ class _HomeStartViewState extends State<HomeStartView> {
   /// widget neer te zetten.
   static Widget _naamLink(String naam) => ArtistNames(
         names: [naam],
-        style: const TextStyle(color: _muted, fontSize: 12),
+        style: TextStyle(color: _muted, fontSize: 12),
       );
 
   Widget _catalogRow(List<CatalogAlbumHit> hits, {required String rij}) => ListView.separated(
@@ -16543,7 +16551,7 @@ class _OntdekViewState extends State<OntdekView> {
             children: [
               const Text('Ontdek', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
               const SizedBox(width: 12),
-              const Expanded(
+              Expanded(
                   child: Text('Nieuwe muziek op basis van je bibliotheek',
                       style: TextStyle(color: _muted, fontSize: 13))),
               TvLabelled(
@@ -16558,9 +16566,9 @@ class _OntdekViewState extends State<OntdekView> {
           ),
         ),
         if (_status != null)
-          Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: const TextStyle(color: _muted))),
+          Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: TextStyle(color: _muted))),
         if (_busy)
-          const Expanded(child: Center(child: CircularProgressIndicator(color: _accent)))
+          Expanded(child: Center(child: CircularProgressIndicator(color: _accent)))
         else
           Expanded(
             child: ListView.builder(
@@ -16591,12 +16599,12 @@ class _OntdekViewState extends State<OntdekView> {
                   children: [
                     Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
                     _artistLine(splitFeatured(t.artist, t.title),
-                        const TextStyle(color: _muted, fontSize: 12)),
+                        TextStyle(color: _muted, fontSize: 12)),
                   ],
                 ),
               ),
               _playing == i
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 48,
                       height: 48,
                       child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))))
@@ -16665,7 +16673,7 @@ Future<void> _confirmDelete(BuildContext context, String what, List<String> path
         'Dit gaat over $n bestand${n == 1 ? "" : "en"}.\n\n'
         '• Alleen uit bibliotheek: het blijft op je pc staan, maar verdwijnt uit de app.\n'
         '• Ook van pc: de bestanden worden definitief verwijderd.',
-        style: const TextStyle(color: _muted, fontSize: 13, height: 1.45),
+        style: TextStyle(color: _muted, fontSize: 13, height: 1.45),
       ),
       actions: [
         // Where the highlight starts, said out loud rather than left to whatever Flutter picks.
@@ -16837,7 +16845,7 @@ class _TidalOphalenState extends State<_TidalOphalen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Ophalen van Tidal', style: kKop),
+                Text('Ophalen van Tidal', style: kKop),
                 const SizedBox(height: kRuimte6),
                 Text(
                   widget.doel == null
@@ -16867,7 +16875,7 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                 ],
                 Row(
                   children: [
-                    const Text('Kwaliteit', style: kTekstKlein),
+                    Text('Kwaliteit', style: kTekstKlein),
                     const SizedBox(width: kRuimte8),
                     Container(
                       decoration: BoxDecoration(
@@ -16890,7 +16898,7 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                     // Waarom dit erbij staat: `low` en `normal` zijn m4a van 96 en 320 kbps, en dus
                     // slechter dan wat deze bibliotheek al heeft. Wie ze kiest hoort te weten dat
                     // hij zichzelf een slechtere kopie bezorgt.
-                    const Expanded(
+                    Expanded(
                       child: Text('max = 24 bit tot 192 kHz · low en normal zijn m4a',
                           style: kTekstKlein),
                     ),
@@ -16920,14 +16928,14 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     if (_bezig) ...[
-                      const SizedBox(
+                      SizedBox(
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2, color: _accent)),
                       const SizedBox(width: kRuimte8),
                       // Een plaat van 24 bit is honderden megabytes; zonder deze regel lijkt het
                       // venster na een halve minuut vast te staan.
-                      const Expanded(
+                      Expanded(
                           child: Text('Bezig met ophalen — dit kan even duren.',
                               style: kTekstKlein)),
                     ],
@@ -17024,7 +17032,7 @@ class DownloadsView extends StatelessWidget {
                   // handed its parallel slot back, so the scheduler's counters would read 0 here.
                   Text('${active.where((j) => j.status == 'downloading' || j.status == 'preparing').length} bezig'
                       ' · ${active.where((j) => j.status == 'waiting' || j.status == 'queued').length} wachtend',
-                      style: const TextStyle(color: _muted, fontSize: 12.5)),
+                      style: TextStyle(color: _muted, fontSize: 12.5)),
                 if (finished.isNotEmpty)
                   TextButton.icon(
                     onPressed: dm.clearFinished,
@@ -17061,14 +17069,14 @@ class DownloadsView extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 10),
                 child: Row(
                   children: [
-                    const Icon(Icons.history_rounded, size: 16, color: _muted),
+                    Icon(Icons.history_rounded, size: 16, color: _muted),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         '${dm.wachtendeHervattingen} onderbroken download'
                         '${dm.wachtendeHervattingen == 1 ? "" : "s"} — gaan vanzelf verder zodra je '
                         'Soulseek gebruikt',
-                        style: const TextStyle(color: _muted, fontSize: 12.5),
+                        style: TextStyle(color: _muted, fontSize: 12.5),
                       ),
                     ),
                     TextButton(
@@ -17117,7 +17125,7 @@ class _DlHeader extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Text(text,
-            style: const TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8)),
+            style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8)),
       );
 }
 
@@ -17278,7 +17286,7 @@ Widget _downloadControl(BuildContext context,
       if (status == 'queued') {
         // Waiting for a download slot — show a queue clock, NOT a spinner (a spinning ring here
         // looked like a stuck download when several tracks were started at once).
-        return const Padding(
+        return Padding(
           padding: EdgeInsets.all(9),
           child: Tooltip(
             message: 'In wachtrij…',
@@ -17301,7 +17309,7 @@ Widget _downloadControl(BuildContext context,
                 Positioned(
                   bottom: 2,
                   child: Text('$place',
-                      style: const TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
+                      style: TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
                 ),
             ]),
           ),
@@ -17324,7 +17332,7 @@ Widget _downloadControl(BuildContext context,
                     color: _accent,
                     backgroundColor: kLijn),
               ),
-              Text('$pct', style: const TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
+              Text('$pct', style: TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
             ]),
           ),
         );
@@ -17333,14 +17341,14 @@ Widget _downloadControl(BuildContext context,
         // Downloaded and playable — the arrow says a better copy is still being fetched.
         return Tooltip(
           message: job?.detail ?? 'Speelbaar · betere kwaliteit onderweg',
-          child: const Padding(
+          child: Padding(
             padding: EdgeInsets.all(9),
             child: Icon(Icons.upgrade_rounded, color: _accent2, size: 20),
           ),
         );
       }
       if (status == 'done') {
-        return const Padding(padding: EdgeInsets.all(9), child: Icon(Icons.check_circle_rounded, color: _accent2, size: 20));
+        return Padding(padding: EdgeInsets.all(9), child: Icon(Icons.check_circle_rounded, color: _accent2, size: 20));
       }
       // Niemand leverde, maar het staat op de wenslijst: de app klopt er vanzelf weer aan. Deze knop
       // is dan "nu meteen", niet "anders gebeurt er niets" — vandaar amber en niet rood.
@@ -17489,15 +17497,15 @@ Widget _soulseekHeader(
       spacing: 4,
       runSpacing: 2,
       children: [
-        const Text('SOULSEEK · P2P',
+        Text('SOULSEEK · P2P',
             style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
         const SizedBox(width: 8),
-        Text('${slsk.length}', style: const TextStyle(color: _muted, fontSize: 11.5)),
+        Text('${slsk.length}', style: TextStyle(color: _muted, fontSize: 11.5)),
         // Back-off notice: after a refused login the app stops touching Soulseek entirely, so the
         // user knows WHY there are no results (instead of thinking the search is just empty).
         const _SlskPauzeStrook(),
-        if (busy) ...const [
-          SizedBox(width: 8),
+        if (busy) ...[
+          const SizedBox(width: 8),
           SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
         ],
         if (folder.length >= 2)
@@ -17629,7 +17637,7 @@ class VervangJachtStrook extends StatelessWidget {
               ),
               if (j.opDeLijst > 0)
                 Text('${j.opDeLijst} op de verlanglijst',
-                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    style: TextStyle(color: _muted, fontSize: 11.5)),
             ],
           ),
           const SizedBox(height: 9),
@@ -17658,7 +17666,7 @@ class VervangJachtStrook extends StatelessWidget {
             Text(j.regel!,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
+                style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
           ],
           if (j.binnen > 0 || j.weggegooid > 0) ...[
             const SizedBox(height: 6),
@@ -17885,7 +17893,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                       'of niet aantoonbaar dezelfde opname.'
                   : 'Elk is heel en dezelfde opname, en wat er nu staat is niet bewezen beter. '
                       'Terugzetten zet wat er nu staat opzij in $dupeFolder — er wordt niets gewist.',
-              style: const TextStyle(color: _muted, fontSize: 12, height: 1.4)),
+              style: TextStyle(color: _muted, fontSize: 12, height: 1.4)),
           const SizedBox(height: 8),
           for (final v in lijst)
             CheckboxListTile(
@@ -17901,7 +17909,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               subtitle: Text('${v.reden}\nterug: ${naam(v.geparkeerd)}  ·  opzij: ${naam(v.huidig)}',
-                  style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
+                  style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
             ),
           const SizedBox(height: 6),
           Wrap(spacing: 8, runSpacing: 6, children: [
@@ -17966,7 +17974,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
             const Text('Kwaliteit',
                 style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
             if (_bezig)
-              Text('Luisteren… $_done van $_total', style: const TextStyle(color: _muted, fontSize: 12.5))
+              Text('Luisteren… $_done van $_total', style: TextStyle(color: _muted, fontSize: 12.5))
             else
               TextButton.icon(
                 onPressed: _meet,
@@ -18007,7 +18015,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                   _terugTotaal == 0
                       ? '$dupeFolder nakijken…'
                       : '$dupeFolder nakijken… $_terugGedaan van $_terugTotaal',
-                  style: const TextStyle(color: _muted, fontSize: 12.5))
+                  style: TextStyle(color: _muted, fontSize: 12.5))
             else if (!_bezig)
               TextButton.icon(
                 onPressed: _zoekTerug,
@@ -18016,7 +18024,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                 style: TextButton.styleFrom(foregroundColor: _muted),
               ),
             if (_uitslag != null)
-              Text(_uitslag!, style: const TextStyle(color: _muted, fontSize: 12.5)),
+              Text(_uitslag!, style: TextStyle(color: _muted, fontSize: 12.5)),
           ],
         ),
         // Wat de app zélf aan het doen is. Zonder deze strook zei de knop "op de verlanglijst
@@ -18033,7 +18041,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
               : '${rijen.length} nummer(s) komen uit een mp3 en zitten dus ónder cd-kwaliteit. '
                   'Het ergste staat bovenaan. Klap er een open om te zien wat er te halen valt, en '
                   'kies zelf een vervanger — de oude kopie gaat naar _dubbel, nooit weg.',
-          style: const TextStyle(color: _muted, fontSize: 12.5, height: 1.4),
+          style: TextStyle(color: _muted, fontSize: 12.5, height: 1.4),
         ),
         const SizedBox(height: 16),
         for (var i = 0; i < rijen.length; i++) _rij(rijen[i], i),
@@ -18074,7 +18082,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                         const SizedBox(height: 2),
-                        Text(t.album, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                        Text(t.album, style: TextStyle(color: _muted, fontSize: 11.5)),
                         const SizedBox(height: 3),
                         // `waaromAfkap` en niet `waarom`: op deze lijst staat een rij ALTIJD om
                         // zijn afkap, en die hoort dus vooraan te staan. Zie de docstring daar.
@@ -18149,10 +18157,10 @@ class EchtheidDialog extends StatelessWidget {
         width: dialogWidth(context, 720),
         height: 460,
         child: items.isEmpty
-            ? const Center(child: Text('Niets gevonden.', style: TextStyle(color: _muted)))
+            ? Center(child: Text('Niets gevonden.', style: TextStyle(color: _muted)))
             : ListView.separated(
                 itemCount: items.length,
-                separatorBuilder: (_, __) => const Divider(height: 1, color: _line),
+                separatorBuilder: (_, __) => Divider(height: 1, color: _line),
                 itemBuilder: (_, i) {
                   final it = items[i];
                   return Padding(
@@ -18163,7 +18171,7 @@ class EchtheidDialog extends StatelessWidget {
                         Text('${it.track.artist} — ${it.track.title}',
                             style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                         const SizedBox(height: 2),
-                        Text(it.track.album, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                        Text(it.track.album, style: TextStyle(color: _muted, fontSize: 11.5)),
                         const SizedBox(height: 3),
                         Text(waarom(it.oordeel),
                             style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
@@ -18438,7 +18446,7 @@ Widget _filterChipsRow(QFilter current, ValueChanged<QFilter> onChanged) => Padd
         crossAxisAlignment: WrapCrossAlignment.center,
         runSpacing: 6,
         children: [
-          const Icon(Icons.tune_rounded, size: 15, color: _muted),
+          Icon(Icons.tune_rounded, size: 15, color: _muted),
           const SizedBox(width: 8),
           ...QFilter.values.map((f) {
             final sel = current == f;
@@ -18507,7 +18515,7 @@ Widget _bronChipsRow(
       crossAxisAlignment: WrapCrossAlignment.center,
       runSpacing: 6,
       children: [
-        const Icon(Icons.travel_explore_rounded, size: 15, color: _muted),
+        Icon(Icons.travel_explore_rounded, size: 15, color: _muted),
         const SizedBox(width: 8),
         chip('Alle bronnen', null, gekozen == null, () => onChanged(null)),
         for (final b in bronnen)
@@ -18522,11 +18530,11 @@ Widget _sourceHeader(String title, int count, bool loading) => Padding(
       child: Row(
         children: [
           Text(title.toUpperCase(),
-              style: const TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
+              style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
           const SizedBox(width: 8),
-          Text('$count', style: const TextStyle(color: _muted, fontSize: 11.5)),
-          if (loading) ...const [
-            SizedBox(width: 8),
+          Text('$count', style: TextStyle(color: _muted, fontSize: 11.5)),
+          if (loading) ...[
+            const SizedBox(width: 8),
             SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
           ],
         ],
@@ -18594,10 +18602,10 @@ Widget _torrentTile(BuildContext context, SearchResult r, {String? merk}) {
                 runSpacing: 4,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  Text(meta, style: const TextStyle(color: _muted, fontSize: 12)),
+                  Text(meta, style: TextStyle(color: _muted, fontSize: 12)),
                   if (r.cached)
-                    const Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12)),
-                  if (merk != null) Text(merk, style: const TextStyle(color: _accent2, fontSize: 12)),
+                    Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12)),
+                  if (merk != null) Text(merk, style: TextStyle(color: _accent2, fontSize: 12)),
                   _qualityBadge(q),
                 ],
               ),
@@ -18641,17 +18649,17 @@ Widget _torrentTile(BuildContext context, SearchResult r, {String? merk}) {
                           child: Text(meta,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: _muted, fontSize: 12)),
+                              style: TextStyle(color: _muted, fontSize: 12)),
                         ),
                         if (r.cached)
-                          const Padding(
+                          Padding(
                               padding: EdgeInsets.only(left: 8),
                               child:
                                   Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
                         if (merk != null)
                           Padding(
                               padding: const EdgeInsets.only(left: 8),
-                              child: Text(merk, style: const TextStyle(color: _accent2, fontSize: 12))),
+                              child: Text(merk, style: TextStyle(color: _accent2, fontSize: 12))),
                       ],
                     ),
                   ],
@@ -18731,7 +18739,7 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
           border: Border.all(color: _accent2.withValues(alpha: .45)),
         ),
         child: Text(pastMerk,
-            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: _accent2)),
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: _accent2)),
       ),
     if (_surroundMerk(f) != null) merk(_surroundMerk(f)!),
     // TE KLEIN VOOR WAT HET BEWEERT. Meten kan hier niet: je kunt niet in het bestand van een
@@ -18771,7 +18779,7 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
-              Text(meta, style: const TextStyle(color: _muted, fontSize: 12)),
+              Text(meta, style: TextStyle(color: _muted, fontSize: 12)),
               if (smal) ...[
                 const SizedBox(height: 6),
                 Wrap(spacing: 6, runSpacing: 4, children: merken),
@@ -18804,7 +18812,7 @@ Widget _netCover(String? url,
     decoration: BoxDecoration(
       shape: shape,
       borderRadius: br,
-      gradient: const LinearGradient(colors: [kPaneelHoog, kPaneel]),
+      gradient: LinearGradient(colors: [kPaneelHoog, kPaneel]),
     ),
     child: Icon(circle ? Icons.person_rounded : Icons.album_rounded, color: _muted.withValues(alpha: .4), size: size * .34),
   );
@@ -19012,7 +19020,7 @@ class _SourcesViewState extends State<SourcesView> {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(verborgenTorrentsZin(verborgen.length, mist: mist, nummer: widget.track != null),
-                    style: const TextStyle(color: _muted, fontSize: 12.5)),
+                    style: TextStyle(color: _muted, fontSize: 12.5)),
                 TextButton(
                   onPressed: () => setState(() => _toonAndere = !_toonAndere),
                   child: Text(_toonAndere ? 'Verberg ze' : 'Toon ze'),
@@ -19026,12 +19034,12 @@ class _SourcesViewState extends State<SourcesView> {
           _soulseekHeader(context, slsk, _sBusy, slsk,
               folder: bronnen.besteMap, authority: widget.authority)
         else
-          const Padding(
+          Padding(
               padding: EdgeInsets.fromLTRB(24, 14, 24, 6),
               child: Text('SOULSEEK · log in via Instellingen',
                   style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6))),
         if (ready && slsk.isEmpty && !_sBusy)
-          const Padding(
+          Padding(
               padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
               child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
         // Eerlijk zeggen waar deze lijst over gaat. Zonder deze regel stond je naar bronnen voor een
@@ -19447,7 +19455,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
                   label: Text('Nog ${venster.volgende} tonen'),
                 ),
                 Text('nog ${venster.rest} bronnen · de beste staan bovenaan',
-                    style: const TextStyle(color: _muted, fontSize: 12)),
+                    style: TextStyle(color: _muted, fontSize: 12)),
               ],
             ),
           ),
@@ -19507,7 +19515,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
                             '${g.mappen.length > 1 ? " in ${g.mappen.length} mappen" : ""} · '
                             '${_fmtBytes(g.totaal)}',
                             maxLines: 2,
-                            style: const TextStyle(color: _muted, fontSize: 12)),
+                            style: TextStyle(color: _muted, fontSize: 12)),
                       ],
                     ),
                   ),
@@ -19533,7 +19541,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
           spacing: 10,
           runSpacing: 2,
           children: [
-            const Icon(Icons.folder_rounded, size: 15, color: _muted),
+            Icon(Icons.folder_rounded, size: 15, color: _muted),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 260),
               child: Text(m.naam.isEmpty ? 'losse nummers' : m.naam,
@@ -19542,7 +19550,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
                   style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
             ),
             Text('${m.aantal} · ${_fmtBytes(m.totaal)}',
-                style: const TextStyle(color: _muted, fontSize: 12)),
+                style: TextStyle(color: _muted, fontSize: 12)),
             if (m.aantal >= 2)
               TextButton.icon(
                 // De volledige lijst gaat als kandidatenpoel mee: een download die bij deze peer
@@ -19722,14 +19730,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: _panel,
-        title: const Text('Adres uit je browser plakken', style: kKopKlein),
+        title: Text('Adres uit je browser plakken', style: kKopKlein),
         content: SizedBox(
           width: dialogWidth(context, 460),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Plak het hele adres waar je browser op uitkwam — dat begint met '
+              Text('Plak het hele adres waar je browser op uitkwam — dat begint met '
                   'https://tidal.com/?code= en is lang. Enkel de code mag ook.',
                   style: kTekstKlein),
               const SizedBox(height: 10),
@@ -19741,8 +19749,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   isDense: true,
                   filled: true,
                   fillColor: kVerzonken,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
                 ),
               ),
             ],
@@ -20104,7 +20112,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
+        Padding(
           padding: EdgeInsets.fromLTRB(24, 22, 24, 8),
           child: Text('Online zoeken', style: kKop),
         ),
@@ -20143,9 +20151,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     fillColor: _panel,
                     prefixIcon: const Icon(Icons.search_rounded, size: 20),
                     border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(11), borderSide: const BorderSide(color: _line)),
+                        borderRadius: BorderRadius.circular(11), borderSide: BorderSide(color: _line)),
                     enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(11), borderSide: const BorderSide(color: _line)),
+                        borderRadius: BorderRadius.circular(11), borderSide: BorderSide(color: _line)),
                   ),
                 ),
                 ),
@@ -20197,7 +20205,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                 children: [
                   Row(
                     children: [
-                      const Text('DOWNLOADS', style: kOpschrift),
+                      Text('DOWNLOADS', style: kOpschrift),
                       const Spacer(),
                       if (hasFinished)
                         TextButton.icon(
@@ -20277,7 +20285,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           },
         ),
         if (_status != null)
-          Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: const TextStyle(color: _muted))),
+          Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: TextStyle(color: _muted))),
         Expanded(
             child: _mode == 0
                 ? _browseResults()
@@ -20289,7 +20297,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   Widget _tidalResults() {
     final tidal = context.read<TidalService>();
     if (!tidal.configured) {
-      return const Center(
+      return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text('Stel je TIDAL Client ID + Secret in via Instellingen (⚙) om TIDAL te gebruiken.',
@@ -20306,7 +20314,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             // tidal.com — een pagina die niet van ons is, dus er kan niets vanzelf terugkomen. Dat
             // stond hier eerder als "lukt het automatisch niet?", en dat is precies de zin die je
             // laat wachten op iets wat nooit gaat gebeuren.
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 24),
               child: Text('Verbind je TIDAL-account om de catalogus te doorzoeken.\n'
                   'Je logt in op TIDAL zelf — DebridMusic ziet je wachtwoord niet.',
@@ -20322,7 +20330,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               onPressed: _tidalConnecting ? null : _connectTidal,
             ),
             const SizedBox(height: 14),
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 24),
               child: Text('Na het inloggen kom je uit op tidal.com. Kopieer daar het hele adres uit '
                   'de adresbalk van je browser — er staat ?code= in — en klik dan hieronder. De app '
@@ -20339,9 +20347,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ),
       );
     }
-    if (_tidalBusy) return const Center(child: CircularProgressIndicator(color: _accent));
+    if (_tidalBusy) return Center(child: CircularProgressIndicator(color: _accent));
     if (_tidalAlbums.isEmpty && _tidalTracks.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text('Verbonden met TIDAL ✓  — zoek een plaat of een nummer. Ophalen gaat met je '
@@ -20487,9 +20495,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   }
 
   Widget _browseResults() {
-    if (_browseBusy) return const Center(child: CircularProgressIndicator(color: _accent));
+    if (_browseBusy) return Center(child: CircularProgressIndicator(color: _accent));
     if (_artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text('Zoek een artiest, album of nummer — bronnen (torrent/Soulseek) verschijnen eronder.',
@@ -20722,7 +20730,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
               ? _soulseekHeader(context, slsk, _slskBusy, slsk, folder: bronnen.besteMap)
-              : const Padding(
+              : Padding(
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
                       style: kOpschrift))),
@@ -20832,7 +20840,7 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
             Text(widget.result.name,
                 maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            const Text('Kies een nummer om af te spelen of los te downloaden',
+            Text('Kies een nummer om af te spelen of los te downloaden',
                 style: TextStyle(color: _muted, fontSize: 12)),
             const SizedBox(height: 14),
             if (_loading)
@@ -20840,12 +20848,12 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                 padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
                 child: Center(
                   child: Column(children: [
-                    const CircularProgressIndicator(color: _accent),
+                    CircularProgressIndicator(color: _accent),
                     const SizedBox(height: 16),
                     Text(
                         _stand.isNotEmpty ? _stand : 'Bron voorbereiden bij TorBox…',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(color: _muted, fontSize: 12.5)),
+                        style: TextStyle(color: _muted, fontSize: 12.5)),
                     if (_prep > 0) ...[
                       const SizedBox(height: 10),
                       ClipRRect(
@@ -20861,7 +20869,7 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                       const SizedBox(height: 10),
                       Text(torboxWaarom(gecacht: widget.result.cached),
                           textAlign: TextAlign.center,
-                          style: const TextStyle(color: _muted, fontSize: 11)),
+                          style: TextStyle(color: _muted, fontSize: 11)),
                     ],
                   ]),
                 ),
@@ -20888,7 +20896,7 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                               children: [
                                 Text(f.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
                                 Text('${_fmtBytes(f.size)}${f.isFlac ? " · FLAC" : ""}',
-                                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                    style: TextStyle(color: _muted, fontSize: 11.5)),
                               ],
                             ),
                           ),
@@ -21014,17 +21022,17 @@ class _BioTextState extends State<BioText> {
               Text(text,
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _muted, fontSize: 13, height: 1.45)),
+                  style: TextStyle(color: _muted, fontSize: 13, height: 1.45)),
               Padding(
                 padding: const EdgeInsets.only(top: 3),
                 child: Text.rich(TextSpan(children: [
                   TextSpan(
                       text: 'Lees meer',
                       style: tvLinkStijl(
-                          const TextStyle(color: _accent, fontSize: 12.5, fontWeight: FontWeight.w600), _gekozen)),
+                          TextStyle(color: _accent, fontSize: 12.5, fontWeight: FontWeight.w600), _gekozen)),
                   // Eerlijk zeggen dat dit niet de oorspronkelijke tekst is.
                   if (_vertaald)
-                    const TextSpan(text: ' · vertaald', style: TextStyle(color: _muted, fontSize: 12)),
+                    TextSpan(text: ' · vertaald', style: TextStyle(color: _muted, fontSize: 12)),
                 ])),
               ),
             ],
@@ -21255,7 +21263,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
                         Text(widget.koppen[hit.album.id] ?? 'NIEUWE RELEASE',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 color: _accent2, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
                         const SizedBox(height: 8),
                         Text(hit.album.title,
@@ -21274,7 +21282,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
                           Text(onder,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 12.5, color: _muted)),
+                              style: TextStyle(fontSize: 12.5, color: _muted)),
                         ],
                         const SizedBox(height: 14),
                         FilledButton.icon(
@@ -21777,7 +21785,7 @@ class _GetekendeSchijf extends StatelessWidget {
         alignment: Alignment.center,
         children: [
           DecoratedBox(
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               shape: BoxShape.circle,
               // Een glans die niet meedraait zou vreemd staan; deze zit ín de schijf en draait mee,
               // precies zoals het licht over een echte plaat loopt.
@@ -22463,7 +22471,7 @@ class EditorialeKop extends StatelessWidget {
                   // is niet wat gevraagd is: "hou enkel de achtergrond image in volle breedte lijk
                   // het is" — en zoals het IS, is deze. De leesbaarheid van de naam hangt niet aan
                   // dit verloop maar aan het verloop van links hieronder.
-                  gradient: const LinearGradient(
+                  gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
@@ -22491,7 +22499,7 @@ class EditorialeKop extends StatelessWidget {
             if (!smal)
               Positioned.fill(
                 child: DecoratedBox(
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.centerLeft,
                       end: Alignment.centerRight,
@@ -23058,16 +23066,16 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
                 // a page and a way into the rest of the music that sounds like this.
                 child: Wrap(spacing: 5, runSpacing: 2, children: [
                   for (var i = 0; i < facts.length; i++) ...[
-                    if (i > 0) const Text('·', style: TextStyle(color: _muted, fontSize: 12.5)),
+                    if (i > 0) Text('·', style: TextStyle(color: _muted, fontSize: 12.5)),
                     if (genres.contains(facts[i]))
                       InkWell(
                         onTap: () => openPagina(context, (_) => StylePage(facts[i])),
                         borderRadius: BorderRadius.circular(4),
                         child: Text(facts[i],
-                            style: const TextStyle(color: _accent2, fontSize: 12.5)),
+                            style: TextStyle(color: _accent2, fontSize: 12.5)),
                       )
                     else
-                      Text(facts[i], style: const TextStyle(color: _muted, fontSize: 12.5)),
+                      Text(facts[i], style: TextStyle(color: _muted, fontSize: 12.5)),
                   ],
                 ]),
               ),
@@ -23076,7 +23084,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
           if (pressing.isNotEmpty) ...[
             const SizedBox(height: 6),
             Row(children: [
-              const Icon(Icons.album_outlined, size: 13, color: _muted),
+              Icon(Icons.album_outlined, size: 13, color: _muted),
               const SizedBox(width: 5),
               Flexible(
                 child: Text(
@@ -23089,7 +23097,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
                     // Twee regels: "Uitgave: cd · 0825646404124 · France" is op een gsm net te lang.
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: _muted, fontSize: 12)),
+                    style: TextStyle(color: _muted, fontSize: 12)),
               ),
             ]),
           ],
@@ -24095,7 +24103,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             SliverToBoxAdapter(child: GetrapteLijst(albums: mine)),
           ],
           if (_busy)
-            const SliverToBoxAdapter(
+            SliverToBoxAdapter(
                 child: Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator(color: _accent))))
           else ...[
             SliverToBoxAdapter(
@@ -24134,7 +24142,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.fromLTRB(_marge, 0, _marge, 8),
-                  child: Text(regel, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                  child: Text(regel, style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               ),
             // Wat de zeef weglaat, en de weg terug. Zie [_toonAlles]: een filter zonder uitweg is
@@ -24150,7 +24158,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                     runSpacing: 4,
                     children: [
                       Text(_verborgenRegel(zeef),
-                          style: const TextStyle(color: _muted, fontSize: 11.5)),
+                          style: TextStyle(color: _muted, fontSize: 11.5)),
                       TekstLink(
                         onPressed: () => setState(() => _toonAlles = !_toonAlles),
                         bouw: (gekozen) => Text(
@@ -24345,10 +24353,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             for (final s in DiscoSort.values) PopupMenuItem(value: s, child: Text(s.label)),
           ],
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.sort_rounded, size: 15, color: _muted),
+            Icon(Icons.sort_rounded, size: 15, color: _muted),
             const SizedBox(width: 6),
-            Text(_sort.label, style: const TextStyle(fontSize: 12, color: _muted)),
-            const Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
+            Text(_sort.label, style: TextStyle(fontSize: 12, color: _muted)),
+            Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
           ]),
         ),
       );
@@ -24462,7 +24470,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                         color: _bg.withValues(alpha: .72),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(Icons.check_circle_rounded, size: 15, color: _accent2),
+                      child: Icon(Icons.check_circle_rounded, size: 15, color: _accent2),
                     ),
                   ),
               ]),
@@ -24470,7 +24478,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           ),
           const SizedBox(height: 6),
           Text(al.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
-          Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 11)),
+          Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 11)),
         ],
       ),
     );
@@ -24505,7 +24513,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Divider(height: 1, thickness: 1, color: kLijn),
+          Divider(height: 1, thickness: 1, color: kLijn),
           SizedBox(height: smal ? 16 : (isTv ? 16 : 26)),
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
             // Flexible, want een Row die niet past tekent gewoon door over wat ernaast staat — geen
@@ -25060,13 +25068,13 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                       _maybeFocusable(KopFeiten(
                         artiest: ArtistNames(
                             names: [widget.artistName],
-                            style: const TextStyle(color: _muted, fontSize: 13)),
+                            style: TextStyle(color: _muted, fontSize: 13)),
                         artiestTekst: widget.artistName,
                         feiten: [
                           if ((_officialYear ?? al.year) != null) '${_officialYear ?? al.year}',
                           if (_tracks.isNotEmpty) '${_tracks.length} ${_tracks.length == 1 ? 'nummer' : 'nummers'}',
                         ],
-                        stijl: const TextStyle(color: _muted, fontSize: 13),
+                        stijl: TextStyle(color: _muted, fontSize: 13),
                       )),
                       const SizedBox(height: 12),
                       GlasKnop(
@@ -25122,9 +25130,9 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 artist: widget.artistName, album: al.title, volledigAantal: _tracks.length),
           ],
           if (_busy)
-            const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator(color: _accent)))
+            Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator(color: _accent)))
           else if (_tracks.isEmpty)
-            const Padding(
+            Padding(
                 padding: EdgeInsets.all(24),
                 child: Text('Geen tracklijst gevonden voor deze uitgave.',
                     style: TextStyle(color: _muted)))
@@ -25163,14 +25171,14 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 SizedBox(
                     width: 26,
                     child: Text('${_numberOf(t, i)}',
-                        style: const TextStyle(color: _muted, fontSize: 13))),
+                        style: TextStyle(color: _muted, fontSize: 13))),
                 // Which tracks of this record you already have — the gap in the album, at a glance.
                 Builder(builder: (context) {
                   final have = context.watch<LibraryStore>().ownedTrack(widget.artistName, t.title) != null;
                   return SizedBox(
                     width: 22,
                     child: have
-                        ? const Icon(Icons.check_circle_rounded, size: 14, color: _accent2)
+                        ? Icon(Icons.check_circle_rounded, size: 14, color: _accent2)
                         : const SizedBox.shrink(),
                   );
                 }),
@@ -25183,16 +25191,16 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: Text('$srcCount ⌄',
-                        style: const TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
+                        style: TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
                   )
                 else if (soulseekReady && _slskBusy)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.only(right: 8),
                     child: SizedBox(width: 11, height: 11, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
                   ),
-                Text(t.durationLabel, style: const TextStyle(color: _muted, fontSize: 12)),
+                Text(t.durationLabel, style: TextStyle(color: _muted, fontSize: 12)),
                 if (_owned(t) != null)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.all(9),
                     child: Tooltip(
                       message: 'Al in je bibliotheek',
@@ -25307,9 +25315,9 @@ class _AboutSectionState extends State<_AboutSection> {
           // heading for "Opslaan". There is nothing to copy a path to on a TV anyway.
           isTv
               ? Text(_path.replaceAll(r'\', '\\\u200B'),
-                  style: const TextStyle(color: _muted, fontSize: 11, height: 1.35))
+                  style: TextStyle(color: _muted, fontSize: 11, height: 1.35))
               : SelectableText(_path.replaceAll(r'\', '\\\u200B'),
-                  style: const TextStyle(color: _muted, fontSize: 11, height: 1.35)),
+                  style: TextStyle(color: _muted, fontSize: 11, height: 1.35)),
         ],
         // Zelf kijken, naast de controle die bij het opstarten loopt.
         //
@@ -25451,7 +25459,7 @@ class _SharingSectionState extends State<_SharingSection> {
     // A build with no Firebase project configured cannot sign in to anything, and saying so is
     // better than a form that always fails. The pairing code below still works.
     if (cloud.state == CloudState.disabled) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.only(bottom: 14),
         child: Text(
           'Deze build heeft geen cloud-project, dus inloggen kan niet. '
@@ -25463,7 +25471,7 @@ class _SharingSectionState extends State<_SharingSection> {
 
     final title = Row(
       children: [
-        const Icon(Icons.cloud_outlined, size: 16, color: _muted),
+        Icon(Icons.cloud_outlined, size: 16, color: _muted),
         const SizedBox(width: 6),
         const Text('Account', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
         if (cloud.state == CloudState.restoring) ...[
@@ -25522,7 +25530,7 @@ class _SharingSectionState extends State<_SharingSection> {
         children: [
           title,
           const SizedBox(height: 4),
-          const Text(
+          Text(
             'Log in en je Mac, iPad en Shield vinden deze pc zonder code — ook op een netwerk '
             'dat automatisch zoeken blokkeert. Begin hier: een apparaat kan pas verbinden als '
             'deze pc onder het account bekend is.',
@@ -25650,13 +25658,13 @@ class _SharingSectionState extends State<_SharingSection> {
                           // maar zonder de tellende seconden: dit scherm tekent zichzelf niet elke
                           // seconde opnieuw.
                           '\n${session.verbinding.soort == Verbindingssoort.zoekt ? 'Zoekt je pc…' : verbindingsTekst(session.verbinding, nu: DateTime.now())}',
-                  style: const TextStyle(color: _muted, fontSize: 12),
+                  style: TextStyle(color: _muted, fontSize: 12),
                 ),
               ]),
             ),
             TextButton(
               onPressed: () => session.refreshNow(),
-              child: const Text('Ververs', style: TextStyle(color: _muted)),
+              child: Text('Ververs', style: TextStyle(color: _muted)),
             ),
           ]),
         ),
@@ -25685,7 +25693,7 @@ class _SharingSectionState extends State<_SharingSection> {
         // geen databundel — daar zou de keuze alleen maar in de weg staan.
         if (!isTv) ...[
           const SizedBox(height: 18),
-          const Divider(height: 1, color: _panel2),
+          Divider(height: 1, color: _panel2),
           const SizedBox(height: 14),
           const StroomkwaliteitKeuze(),
         ],
@@ -25738,10 +25746,10 @@ class _SharingSectionState extends State<_SharingSection> {
                           fontWeight: FontWeight.w600,
                           color: hoofdzaak ? const Color(0xFF6BCB8B) : null)),
                   const SizedBox(width: 6),
-                  const Icon(Icons.copy_rounded, size: 13, color: _muted),
+                  Icon(Icons.copy_rounded, size: 13, color: _muted),
                 ],
               ),
-              Text(uitleg, style: const TextStyle(color: _muted, fontSize: 10.5)),
+              Text(uitleg, style: TextStyle(color: _muted, fontSize: 10.5)),
             ],
           ),
         ),
@@ -25781,7 +25789,7 @@ class _SharingSectionState extends State<_SharingSection> {
             ),
           ],
         ),
-        const Text(
+        Text(
           'Zet dit aan en je Mac, iPad en Shield zien dezelfde bibliotheek — '
           'inclusief je eigen covers en persingen.',
           style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
@@ -25857,7 +25865,7 @@ class _SharingSectionState extends State<_SharingSection> {
                   deurMetDeHand(sharing.homeAddresses.isEmpty
                       ? null
                       : Uri.tryParse(sharing.homeAddresses.first)?.host),
-                  style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+                  style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
                 ),
               ),
             if (sharing.deur.rodeMelding != null)
@@ -25887,7 +25895,7 @@ class _SharingSectionState extends State<_SharingSection> {
             ),
           ],
         ),
-        const Text(
+        Text(
           'Deze pc zoekt van elke plaat de persing en de officiële tracklijst op vóórdat je hem '
           'opent, zodat een album nooit meer laat wachten. Eén keer per plaat, en elk toestel in '
           'huis heeft er wat aan. Hij schrijft bij elk album een klein bestandje in die albummap, '
@@ -25899,7 +25907,7 @@ class _SharingSectionState extends State<_SharingSection> {
           if (sharing.error != null)
             Text(sharing.error!, style: const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12))
           else if (!sharing.running)
-            const Text('Starten…', style: TextStyle(color: _muted, fontSize: 12))
+            Text('Starten…', style: TextStyle(color: _muted, fontSize: 12))
           else ...[
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -25908,7 +25916,7 @@ class _SharingSectionState extends State<_SharingSection> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Adres', style: TextStyle(color: _muted, fontSize: 11.5)),
+                      Text('Adres', style: TextStyle(color: _muted, fontSize: 11.5)),
                       // Twee soorten adres, en het verschil is niet klein: het ene stopt aan de
                       // voordeur, het andere gaat mee op 5G. Ze door elkaar in een lijstje zetten
                       // is precies hoe je een gsm koppelt aan een adres dat buitenshuis zwijgt.
@@ -25946,7 +25954,7 @@ class _SharingSectionState extends State<_SharingSection> {
                         sharing.discoverable
                             ? 'Je apparaten vinden deze pc vanzelf.'
                             : 'Automatisch vinden lukt niet — vul het adres hierboven met de hand in.',
-                        style: const TextStyle(color: _muted, fontSize: 11, height: 1.35),
+                        style: TextStyle(color: _muted, fontSize: 11, height: 1.35),
                       ),
                     ],
                   ),
@@ -26005,7 +26013,7 @@ class _SharingSectionState extends State<_SharingSection> {
                 ],
               ),
             if (sharing.pairingCodeDigits != null)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.only(top: 4),
                 child: Text('Typ deze zes cijfers op je Shield of iPad. Vijf minuten geldig.',
                     style: TextStyle(color: _muted, fontSize: 11, height: 1.35)),
@@ -26015,7 +26023,7 @@ class _SharingSectionState extends State<_SharingSection> {
           ],
         ],
         const SizedBox(height: 12),
-        const Text('Muziekmap', style: TextStyle(color: _muted, fontSize: 12.5)),
+        Text('Muziekmap', style: TextStyle(color: _muted, fontSize: 12.5)),
         const SizedBox(height: 5),
         Row(
           children: [
@@ -26029,13 +26037,13 @@ class _SharingSectionState extends State<_SharingSection> {
                   fillColor: kVerzonken,
                   border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(9),
-                      borderSide: const BorderSide(color: _line)),
+                      borderSide: BorderSide(color: _line)),
                   enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(9),
-                      borderSide: const BorderSide(color: _line)),
+                      borderSide: BorderSide(color: _line)),
                   focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(9),
-                      borderSide: const BorderSide(color: _accent)),
+                      borderSide: BorderSide(color: _accent)),
                 ),
               ),
             ),
@@ -26613,7 +26621,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Typ de tekens uit de afbeelding over.',
+              Text('Typ de tekens uit de afbeelding over.',
                   style: TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 10),
               Container(
@@ -26633,8 +26641,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   isDense: true,
                   filled: true,
                   fillColor: kVerzonken,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
                 ),
               ),
             ],
@@ -26688,7 +26696,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       child: Row(
         children: [
           r?.state == ConnState.checking
-              ? const SizedBox(
+              ? SizedBox(
                   width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _muted))
               : Icon(icon, size: 18, color: color),
           const SizedBox(width: 10),
@@ -26708,7 +26716,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(color: _muted, fontSize: 12.5)),
+          Text(label, style: TextStyle(color: _muted, fontSize: 12.5)),
           const SizedBox(height: 5),
           MaybePressable(
             enabled: isTv,
@@ -26724,11 +26732,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
               filled: true,
               fillColor: kVerzonken,
               border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                  borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
               enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                  borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
               focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _accent)),
+                  borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _accent)),
             ),
             ),
           ),
@@ -26764,7 +26772,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   ? 'Je sleutels reizen mee met je account, zodat een nieuwe installatie ze '
                       'terugkrijgt.'
                   : 'Sleutels blijven op dit apparaat. Log in en ze reizen mee met je account.',
-              style: const TextStyle(color: _muted, fontSize: 13),
+              style: TextStyle(color: _muted, fontSize: 13),
             ),
             // The one thing that must not stay quiet. When settings.json cannot be read, the app
             // now refuses to save over it — which is right, and which without a word here would
@@ -26805,9 +26813,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // Gelijk volume BOVENAAN: dat is wat je zoekt als iets ineens zachter klinkt, en
                     // het staat op pc, telefoon en tv in hetzelfde venster. Zie luidheid_keuze.dart.
                     const _LuidheidSectie(),
-                    const Divider(color: _line, height: 1),
+                    Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
-                    // Weergave: het glas en waarom het lichter staat (Saber, 18-10-2026).
+                    // Weergave: licht of donker, het glas en waarom het lichter staat (Saber, 18-10-2026).
+                    const ThemaKeuzeRegel(),
                     const GlasRegel(),
                     const SizedBox(height: 12),
                     _field('TorBox API-sleutel', _torbox),
@@ -26821,7 +26830,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       ],
                     ),
                     _field('Soulseek luisterpoort (zelfde als de native app)', _slskPort),
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.only(bottom: 8),
                       child: Text(
                           'Zonder open poort ziet de app alleen peers die zelf bereikbaar zijn — dat is waarom '
@@ -26912,7 +26921,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     ? 'Aangemeld — de sessie staat klaar.'
                                     : 'RuTracker staat achter Cloudflare; inloggen met alleen naam '
                                         'en wachtwoord lukt niet meer.',
-                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                style: TextStyle(color: _muted, fontSize: 11.5)),
                           ),
                         ],
                       ),
@@ -26921,8 +26930,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // bronnen in deze app staan vast in de code, en een tracker die omvalt kost
                     // anders een nieuwe bouw. Met Jackett of Prowlarr op je pc bepaal jij de lijst.
                     const SizedBox(height: 16),
-                    const Text('Eigen indexers (Jackett of Prowlarr)', style: kOpschrift),
-                    const Padding(
+                    Text('Eigen indexers (Jackett of Prowlarr)', style: kOpschrift),
+                    Padding(
                       padding: EdgeInsets.only(top: 4, bottom: 6),
                       child: Text(
                           'Draait op je pc en spreekt Torznab. Laat je dit leeg, dan verandert er '
@@ -26959,8 +26968,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // is beschreven (formaat, codering, bron) en de zwermen leven — waar de open
                     // indexen tellers tonen die maanden achterlopen. Zie `redacted.dart`.
                     const SizedBox(height: 16),
-                    const Text('Redacted', style: kOpschrift),
-                    const Padding(
+                    Text('Redacted', style: kOpschrift),
+                    Padding(
                       padding: EdgeInsets.only(top: 4, bottom: 6),
                       child: Text(
                           'Maak in je profiel op Redacted een API-sleutel aan (Settings → Access '
@@ -27051,7 +27060,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       'Maak op developer.tidal.com een app aan en zet daar exact '
                       'https://www.tidal.com als Redirect URI. Hiermee kan de app in TIDAL zóéken. '
                       'Het ophalen zelf gaat met je eigen abonnement via tiddl op deze pc — dat is '
@@ -27068,7 +27077,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // iets dat de fout aanwees, en "Test verbindingen" kende AcoustID niet eens.
                     _field('AcoustID APPLICATION-sleutel (herkennen op geluid)', _acoustid),
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       'Van acoustid.org/my-applications — meld daar een toepassing aan. NIET de '
                       'sleutel van acoustid.org/api-key: dat is je user-sleutel en die werkt hier '
                       'niet. Test hem hieronder.',
@@ -27079,14 +27088,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // venster staat soms open terwijl iemand meekijkt.
                     _field('TheAudioDB-sleutel (premium, optioneel)', _audiodb, obscure: true),
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       'Van je profiel op theaudiodb.com. Zonder sleutel komen de hoezen en scans van '
                       'TheAudioDB gewoon; met je eigen sleutel ook de volle tracklijst, en mag de app '
                       'er vaker per minuut om vragen.',
                       style: TextStyle(color: _muted, fontSize: 11.5, height: 1.3),
                     ),
                     const SizedBox(height: 4),
-                    const Divider(color: _line, height: 1),
+                    Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
                     Row(
                       children: [
@@ -27096,7 +27105,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         TextButton.icon(
                           onPressed: _testing ? null : _testAll,
                           icon: _testing
-                              ? const SizedBox(
+                              ? SizedBox(
                                   width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
                               : const Icon(Icons.wifi_tethering_rounded, size: 16),
                           label: Text(_testing ? 'Testen…' : 'Test verbindingen'),
@@ -27116,11 +27125,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     _statusRow('AcoustID', 'acoustid'),
                     _statusRow('TheAudioDB', 'audiodb'),
                     const SizedBox(height: 10),
-                    const Divider(color: _line, height: 1),
+                    Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        const Expanded(
+                        Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -27140,7 +27149,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                           style: FilledButton.styleFrom(backgroundColor: _panel2, foregroundColor: Colors.white),
                           onPressed: _tidying ? null : _tidyDownloads,
                           icon: _tidying
-                              ? const SizedBox(
+                              ? SizedBox(
                                   width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
                               : const Icon(Icons.cleaning_services_rounded, size: 16),
                           label: Text(_tidying ? 'Bezig…' : 'Opruimen'),
@@ -27174,7 +27183,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             'bits, naar wat er boven 22 kHz zit, en naar een harde afkap in het '
                                             'spectrum. Ongeveer een minuut voor de hele bibliotheek; daarna uit het '
                                             'geheugen.',
-                                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                    style: TextStyle(color: _muted, fontSize: 11.5)),
                               ],
                             ),
                           ),
@@ -27184,7 +27193,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 backgroundColor: _panel2, foregroundColor: Colors.white),
                             onPressed: _echtBusy ? null : _meetEchtheid,
                             icon: _echtBusy
-                                ? const SizedBox(
+                                ? SizedBox(
                                     width: 14,
                                     height: 14,
                                     child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
@@ -27197,7 +27206,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
                           child: Text(_echtResult!,
-                              style: const TextStyle(color: _accent2, fontSize: 12)),
+                              style: TextStyle(color: _accent2, fontSize: 12)),
                         ),
                       const SizedBox(height: 18),
                       Row(
@@ -27216,7 +27225,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             'twee rips van hetzelfde nummer boven, ook onder een andere titel of '
                                             'in een andere map. De eerste keer duurt dat ongeveer een minuut; '
                                             'daarna is het onmiddellijk.',
-                                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                    style: TextStyle(color: _muted, fontSize: 11.5)),
                               ],
                             ),
                           ),
@@ -27226,7 +27235,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 backgroundColor: _panel2, foregroundColor: Colors.white),
                             onPressed: _dupeBusy ? null : _findSoundDupes,
                             icon: _dupeBusy
-                                ? const SizedBox(
+                                ? SizedBox(
                                     width: 14,
                                     height: 14,
                                     child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
@@ -27254,7 +27263,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     child: Text(
                                         '${lib.hiddenCount} nummer(s) verborgen uit je bibliotheek '
                                         '(staan nog wel op je pc).',
-                                        style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                        style: TextStyle(color: _muted, fontSize: 11.5)),
                                   ),
                                   const SizedBox(width: 10),
                                   TextButton.icon(
@@ -27269,11 +27278,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             ),
                     ),
                     const SizedBox(height: 14),
-                    const Divider(color: _line, height: 1),
+                    Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
                     const _SharingSection(),
                     const SizedBox(height: 14),
-                    const Divider(color: _line, height: 1),
+                    Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
                     const _AboutSection(),
                     const SizedBox(height: kRuimte12),
@@ -27821,7 +27830,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     final sleeve = ClipRRect(
       borderRadius: BorderRadius.circular(10),
       child: front == null
-          ? Container(width: s, height: s, color: _panel2, child: const Icon(Icons.album, color: _muted))
+          ? Container(width: s, height: s, color: _panel2, child: Icon(Icons.album, color: _muted))
           // `gaplessPlayback`: bij een andere hoes blijft de vorige staan tot de nieuwe gedecodeerd is,
           // in plaats van een leeg vak tussendoor — dat was de "lichte verspringing" bij elk volgend
           // nummer (10-10-2026).
@@ -28012,7 +28021,7 @@ class OvernemenBalk extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final uitleg = Text(tekst, style: const TextStyle(color: _muted, fontSize: 12));
+    final uitleg = Text(tekst, style: TextStyle(color: _muted, fontSize: 12));
     final ongedaan = TextButton(onPressed: bezig ? null : onOngedaan, child: const Text('Ongedaan maken'));
     final opslaan = FilledButton.icon(
       style: FilledButton.styleFrom(backgroundColor: _knopVulling),
@@ -28830,7 +28839,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                   // Geteld wordt wat er ZICHTBAAR is. Het aantal van de hele lijst boven een lijst
                   // die op CD gefilterd staat, is een getal dat de rijen eronder tegenspreekt.
                   '${_telRegel()}',
-                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+                  style: TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 10),
               _nummerVeld(),
               const SizedBox(height: 10),
@@ -28869,13 +28878,13 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Row(children: [
-                    const SizedBox(
+                    SizedBox(
                         width: 11,
                         height: 11,
                         child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
                     const SizedBox(width: 8),
                     Text(nogBezigTekst(musicBrainz: !_mbDone, discogs: !_dgDone),
-                        style: const TextStyle(color: _muted, fontSize: 11.5)),
+                        style: TextStyle(color: _muted, fontSize: 11.5)),
                   ]),
                 ),
               // "Zes? Meer niet?" — en niets op het scherm dat die vraag beantwoordt.
@@ -28902,7 +28911,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                   !_dgFailed &&
                   _dgTotaal > 0 &&
                   (_choices ?? const <ReleaseChoice>[]).any((c) => c.isDiscogs))
-                const Padding(
+                Padding(
                   padding: EdgeInsets.only(top: 8),
                   child: Text('Alles opgehaald — meer heeft Discogs er niet onder dit album.',
                       style: TextStyle(color: _muted, fontSize: 11.5)),
@@ -28917,7 +28926,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                       (_choices ?? const <ReleaseChoice>[]).any((c) => c.isDiscogs)
                           ? 'Een deel van Discogs kwam niet door; deze lijst kan onvolledig zijn.'
                           : 'Discogs was niet bereikbaar — dit zijn alleen de MusicBrainz-uitgaves.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               // De enige eerlijke regel over een afgekapte lijst. Precies dit — een lijst die
               // ophoudt zonder het te zeggen — is wat deze hele wijziging kwam repareren, dus een
@@ -28926,7 +28935,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
               // wat er is" doorgaan. Los van de lege-lijst-melding: juist mét MusicBrainz-rijen
               // erop lijkt de lijst compleet.
               if (!DiscogsService(context.read<AppSettings>()).available)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.only(top: 8),
                   child: Text(
                       'Er is geen Discogs-sleutel ingesteld — dit zijn alleen de '
@@ -28962,7 +28971,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                       'Discogs heeft nog $_andereMasters ${_andereMasters == 1 ? 'ander album' : 'andere albums'} '
                       'met deze naam. Staat je uitgave er niet bij, plak dan hierboven het '
                       'masternummer van het juiste album.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               // Only once something is picked: an empty bar at the bottom of every gallery would be
               // a control that does nothing, most of the time.
@@ -29051,8 +29060,8 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               hintText: 'Discogs-nummer of link — bv. 7738290, [r7738290] of [m1938390]',
-              hintStyle: const TextStyle(color: _muted, fontSize: 12),
-              prefixIcon: const Icon(Icons.tag_rounded, size: 17, color: _muted),
+              hintStyle: TextStyle(color: _muted, fontSize: 12),
+              prefixIcon: Icon(Icons.tag_rounded, size: 17, color: _muted),
               prefixIconConstraints: const BoxConstraints(minWidth: 34, minHeight: 34),
               filled: true,
               fillColor: Colors.white.withValues(alpha: .05),
@@ -29080,10 +29089,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       ]);
 
   Widget _body(String? pinnedKey) {
-    if (_error != null) return Center(child: Text(_error!, style: const TextStyle(color: _muted)));
+    if (_error != null) return Center(child: Text(_error!, style: TextStyle(color: _muted)));
     final list = _choices;
     if (list == null) {
-      return const Center(
+      return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           CircularProgressIndicator(strokeWidth: 2, color: _accent),
           SizedBox(height: 14),
@@ -29093,10 +29102,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
         ]),
       );
     }
-    if (list.isEmpty) return const Center(child: Text('Geen uitgaves gevonden.', style: TextStyle(color: _muted)));
+    if (list.isEmpty) return Center(child: Text('Geen uitgaves gevonden.', style: TextStyle(color: _muted)));
     final shown = _zichtbaar(list, pinnedKey);
     if (shown.isEmpty) {
-      return const Center(child: Text('Geen uitgaves in dit formaat.', style: TextStyle(color: _muted)));
+      return Center(child: Text('Geen uitgaves in dit formaat.', style: TextStyle(color: _muted)));
     }
     return ListView.separated(
       controller: _scroll,
@@ -29367,7 +29376,7 @@ class UitgaveRij extends StatelessWidget {
           onPressed: onNummering,
         ),
       ),
-      if (vastgezet) const Icon(Icons.check_circle_rounded, color: _accent, size: 20),
+      if (vastgezet) Icon(Icons.check_circle_rounded, color: _accent, size: 20),
     ];
     final tekst = _tekst(c);
 
@@ -29392,7 +29401,7 @@ class UitgaveRij extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                   if ((c.label ?? '').isNotEmpty)
                     Text(c.label!, maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _muted, fontSize: 12)),
+                        style: TextStyle(color: _muted, fontSize: 12)),
                   const SizedBox(height: 6),
                   // `Wrap` en geen `Row`, en dat is geen opmaakvoorkeur. Deze vier plaatjes zijn
                   // samen ruim tweehonderd punten breed en op een staande telefoon houdt de tekst
@@ -29412,7 +29421,7 @@ class UitgaveRij extends StatelessWidget {
                       // rij die je hier vindt terugzoeken op Discogs zelf, en andersom.
                       if (c.isDiscogs && c.releaseId > 0)
                         Text('r${c.releaseId}',
-                            style: const TextStyle(color: _muted, fontSize: 10.5)),
+                            style: TextStyle(color: _muted, fontSize: 10.5)),
                       // Until this pressing has been looked up we do not know whether it has a back
                       // or a disc, and saying "–" would be a claim we have not earned. A row you can
                       // see is always on its way now — being visible is what starts the lookup — so
@@ -29420,7 +29429,7 @@ class UitgaveRij extends StatelessWidget {
                       if (!c.detailed)
                         // Het molentje en zijn tekst horen bij elkaar; los in de Wrap zouden ze op
                         // twee regels kunnen belanden.
-                        const Row(mainAxisSize: MainAxisSize.min, children: [
+                        Row(mainAxisSize: MainAxisSize.min, children: [
                           SizedBox(
                               width: 10,
                               height: 10,
@@ -29507,7 +29516,7 @@ class UitgaveRij extends StatelessWidget {
                         // mark at this size reads as an answer.
                         child: waiting
                             ? null
-                            : const Icon(Icons.close_rounded, size: 16, color: _muted)),
+                            : Icon(Icons.close_rounded, size: 16, color: _muted)),
               ),
             ),
             if (chosen)
@@ -29519,7 +29528,7 @@ class UitgaveRij extends StatelessWidget {
                 // die op het icoon zoekt vindt die van de bordjes en zegt niets over dit vinkje.
                 child: Container(
                   key: const Key('scan-klaargezet'),
-                  decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
+                  decoration: BoxDecoration(color: _accent, shape: BoxShape.circle),
                   padding: const EdgeInsets.all(2),
                   child: const Icon(Icons.check_rounded, size: 13, color: Colors.white),
                 ),
@@ -29731,7 +29740,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                     icon: const Icon(Icons.close_rounded),
                     onPressed: () => Navigator.of(context).pop()),
               ]),
-              const Text('Klik onder een scan om te zeggen wat het is. Jouw keuze wint van wat de app zelf denkt.',
+              Text('Klik onder een scan om te zeggen wat het is. Jouw keuze wint van wat de app zelf denkt.',
                   style: TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 10),
               // Wat het WORDT, boven de keuze zelf.
@@ -29743,7 +29752,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
               const SizedBox(height: 12),
               Expanded(
                 child: _error != null
-                    ? Center(child: Text(_error!, style: const TextStyle(color: _muted)))
+                    ? Center(child: Text(_error!, style: TextStyle(color: _muted)))
                     : images == null
                         ? const Center(child: CircularProgressIndicator())
                         : GridView.builder(
@@ -29815,7 +29824,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                   if (roles.isNotEmpty)
                     TextButton(
                       onPressed: _opslaan ? null : () => setState(roles.clear),
-                      child: const Text('Alles weer laten raden',
+                      child: Text('Alles weer laten raden',
                           style: TextStyle(color: _muted, fontSize: 12)),
                     ),
                   if (c.maxWidth >= kOvernemenSmal) const Spacer(),
@@ -29865,7 +29874,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                           width: 52,
                           height: 52,
                           color: Colors.white.withValues(alpha: .04),
-                          child: const Icon(Icons.close_rounded, size: 15, color: _muted),
+                          child: Icon(Icons.close_rounded, size: 15, color: _muted),
                         )
                       : _netCover(roles[role]!, size: 52, radius: 6),
                 ),
@@ -29878,7 +29887,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
               ]),
             ),
         ];
-        const uitleg = Text(
+        final uitleg = Text(
           'Zo komt deze plaat eruit te zien. Een leeg vak betekent: de app mag het zelf blijven '
           'raden.',
           style: TextStyle(color: _muted, fontSize: 11.5),
@@ -29890,7 +29899,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
             uitleg,
           ]);
         }
-        return Row(children: [...vakjes, const Expanded(child: uitleg)]);
+        return Row(children: [...vakjes, Expanded(child: uitleg)]);
       });
 
   Widget _roleChip(String text, {required bool on, required VoidCallback onTap}) => InkWell(
@@ -30009,7 +30018,7 @@ class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
                 '$aantal ${aantal == 1 ? 'plaat staat' : 'platen staan'} onder “${widget.name}”. '
                 'Ze gaan allemaal over naar de naam die je hier zet. Staat die naam al in je '
                 'bibliotheek, dan worden de twee één artiest.',
-                style: const TextStyle(color: _muted, fontSize: 13, height: 1.35),
+                style: TextStyle(color: _muted, fontSize: 13, height: 1.35),
               ),
               const SizedBox(height: 16),
               TextField(
@@ -30024,7 +30033,7 @@ class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
               ),
               if (buren.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                const Text('Staat al in je bibliotheek',
+                Text('Staat al in je bibliotheek',
                     style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 8),
                 Wrap(
@@ -30035,7 +30044,7 @@ class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
                       ActionChip(
                         label: Text(n),
                         backgroundColor: _panel2,
-                        side: const BorderSide(color: _line),
+                        side: BorderSide(color: _line),
                         onPressed: _bezig
                             ? null
                             : () => setState(() {
@@ -30186,7 +30195,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
                 filled: true,
                 fillColor: Colors.white.withValues(alpha: .06),
                 hintText: 'Plak het adres van een foto van internet',
-                hintStyle: const TextStyle(color: _muted, fontSize: 13),
+                hintStyle: TextStyle(color: _muted, fontSize: 13),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
               ),
             ),
@@ -30210,7 +30219,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
             child: Text(
               _melding ?? 'Rechtsklik op een foto in je browser → "Afbeeldingsadres kopiëren", en plak het hier.',
               maxLines: 3,
-              style: const TextStyle(color: _muted, fontSize: 11.5),
+              style: TextStyle(color: _muted, fontSize: 11.5),
             ),
           ),
           TextButton.icon(
@@ -30285,9 +30294,9 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
                 const Spacer(),
                 IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.of(context).pop()),
               ]),
-              Text(widget.artist, style: const TextStyle(color: _muted, fontSize: 12.5)),
+              Text(widget.artist, style: TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 4),
-              const Text(
+              Text(
                   'Klik in LIGGEND voor een breed scherm, in STAAND voor een iPad die je rechtop '
                   'houdt · rechtsklik voor het portret',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
@@ -30303,10 +30312,10 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
   }
 
   Widget _body(String? portrait, String? liggendKeuze, String? staandKeuze) {
-    if (_error != null) return Center(child: Text(_error!, style: const TextStyle(color: _muted)));
+    if (_error != null) return Center(child: Text(_error!, style: TextStyle(color: _muted)));
     final list = _images;
     if (list == null) {
-      return const Center(child: CircularProgressIndicator(strokeWidth: 2, color: _accent));
+      return Center(child: CircularProgressIndicator(strokeWidth: 2, color: _accent));
     }
     // Eigen foto's vooraan, in BEIDE vakken: je hebt ze zelf gekozen, dus jij zegt waar ze horen —
     // ook een foto van 4:3 die je toch liever als brede achtergrond wilt. Een eerder gekozen adres
@@ -30319,7 +30328,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
         if (u != null && u.isNotEmpty && !bekend.contains(u)) DiscogsImage(u, u, 0, 0, false),
     ];
     if (list.isEmpty && eigen.isEmpty) {
-      return const Center(
+      return Center(
           child: Text('Geen foto\'s gevonden. Voeg er hierboven zelf een toe.', style: TextStyle(color: _muted)));
     }
 
@@ -30361,7 +30370,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
     if (beelden.isEmpty) {
       return SliverToBoxAdapter(
         child: Text(breed ? 'Geen liggende foto\'s gevonden.' : 'Geen staande foto\'s gevonden.',
-            style: const TextStyle(color: _muted, fontSize: 12)),
+            style: TextStyle(color: _muted, fontSize: 12)),
       );
     }
     return SliverGrid(
@@ -30444,9 +30453,9 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
   /// identiek en verschillen ze alleen bij de uitschieters — waar `contain` een banner van 1000×185
   /// hééllemaal laat zien in plaats van hem tot een gewone achtergrond bij te snijden.
   Widget _fotoVlak(String url) {
-    const leeg = ColoredBox(
+    final leeg = ColoredBox(
       color: kPaneelHoog,
-      child: Center(child: Icon(Icons.image_rounded, color: Color(0xFF3A4054), size: 22)),
+      child: const Center(child: Icon(Icons.image_rounded, color: Color(0xFF3A4054), size: 22)),
     );
     return Image.network(
       url,
@@ -30568,7 +30577,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Nummer verplaatsen', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
-            Text(widget.track.title, style: const TextStyle(color: _muted, fontSize: 12.5)),
+            Text(widget.track.title, style: TextStyle(color: _muted, fontSize: 12.5)),
             const SizedBox(height: 14),
             TextField(
               controller: _query,
@@ -30605,7 +30614,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
                             Text('${a.artist} · ${a.tracks.length} nummers',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                style: TextStyle(color: _muted, fontSize: 11.5)),
                           ]),
                         ),
                       ]),
@@ -30629,7 +30638,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
                     : plan.first.movesFile
                         ? 'Naar: ${File(plan.first.to!).parent.path}'
                         : 'Doelmap onbekend — alleen de indeling verandert.',
-                style: const TextStyle(color: _muted, fontSize: 11.5),
+                style: TextStyle(color: _muted, fontSize: 11.5),
               ),
             ),
             const SizedBox(height: 6),
@@ -30750,7 +30759,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
             const Text('Tags gelijktrekken', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
             Text('${widget.album.artist} — ${widget.album.title}',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             const SizedBox(height: 12),
             // What is actually wrong today, in numbers. "Your files disagree" means nothing; "four
             // different totals" is the reason there are four tiles.
@@ -30770,7 +30779,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                   if (plan.albumsNow.length > 1) ...[
                     const SizedBox(height: 4),
                     Text('En ${plan.albumsNow.length} schrijfwijzen van de albumtitel.',
-                        style: const TextStyle(fontSize: 12.5, color: _muted)),
+                        style: TextStyle(fontSize: 12.5, color: _muted)),
                   ],
                   // The tile you opened holds only part of the record. Say so, or the file count
                   // below reads as a mistake.
@@ -30779,7 +30788,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                     Text(
                         'Dit gaat over alle ${plan.steps.length} bestanden van deze plaat, '
                         'niet alleen de ${album.tracks.length} in deze tegel.',
-                        style: const TextStyle(fontSize: 12.5, color: _muted)),
+                        style: TextStyle(fontSize: 12.5, color: _muted)),
                   ],
                 ]),
               ),
@@ -30809,12 +30818,12 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontSize: 13))),
                       Text('${s.track.trackTotal == 0 ? "geen" : s.track.trackTotal} → ${plan.total}',
-                          style: const TextStyle(fontSize: 11.5, color: _muted)),
+                          style: TextStyle(fontSize: 11.5, color: _muted)),
                     ]),
                   ),
                 if (plan.albumOnly.isNotEmpty) ...[
                   const Divider(height: 22),
-                  const Text('Alleen album en aantal — titel en nummer blijven',
+                  Text('Alleen album en aantal — titel en nummer blijven',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _muted)),
                   const SizedBox(height: 6),
                   for (final s in plan.albumOnly)
@@ -30824,27 +30833,27 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                         SizedBox(
                             width: 46,
                             child: Text('${s.track.trackNo}',
-                                style: const TextStyle(fontSize: 12.5, color: _muted))),
+                                style: TextStyle(fontSize: 12.5, color: _muted))),
                         Expanded(
                             child: Text(s.track.title,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 13, color: _muted))),
+                                style: TextStyle(fontSize: 13, color: _muted))),
                         Text('${s.track.trackTotal == 0 ? "geen" : s.track.trackTotal} → ${plan.total}',
-                            style: const TextStyle(fontSize: 11.5, color: _muted)),
+                            style: TextStyle(fontSize: 11.5, color: _muted)),
                       ]),
                     ),
                 ],
                 if (plan.skipped.isNotEmpty) ...[
                   const Divider(height: 22),
-                  const Text('Blijft ongemoeid',
+                  Text('Blijft ongemoeid',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _muted)),
                   const SizedBox(height: 6),
                   for (final s in plan.skipped)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 3),
                       child: Text('${s.name} — ${s.skipped}',
-                          style: const TextStyle(fontSize: 12, color: _muted)),
+                          style: TextStyle(fontSize: 12, color: _muted)),
                     ),
                 ],
               ]),
@@ -30865,7 +30874,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(color: Colors.orangeAccent, fontSize: 11.5)),
                     ),
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.only(top: 2),
                     child: Text('Stop het afspelen en klik opnieuw — de rest is al klaar.',
                         style: TextStyle(color: _muted, fontSize: 11.5)),
@@ -30890,7 +30899,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                   // Almost always the same cause: two rips of one song that landed under different
                   // names. Saying so is not enough — the way out belongs here too.
                   if (_dupes.isEmpty)
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.only(top: 2),
                       child: Text('Kies een uitgave die bij deze bestanden past.',
                           style: TextStyle(color: _muted, fontSize: 11.5)),
@@ -30904,7 +30913,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                             'behouden ${_fileName(d.keep.path)} (${d.why})',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: _muted, fontSize: 11.5)),
+                            style: TextStyle(color: _muted, fontSize: 11.5)),
                       ),
                     const SizedBox(height: 6),
                     Align(
@@ -30922,7 +30931,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
               ),
             const SizedBox(height: 12),
             Row(children: [
-              const Expanded(
+              Expanded(
                 child: Text('De hoes, de ReplayGain-waarden en al het andere in het bestand blijven staan.',
                     style: TextStyle(color: _muted, fontSize: 11.5)),
               ),
@@ -30986,7 +30995,7 @@ class _RenumberDialogState extends State<RenumberDialog> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
             Text('${widget.album.artist} · ${widget.album.title}',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             const SizedBox(height: 14),
             Container(
               width: double.infinity,
@@ -31010,7 +31019,7 @@ class _RenumberDialogState extends State<RenumberDialog> {
                   const SizedBox(height: 3),
                   Text(
                       '${plan.unmatched.length} niet herkend op deze uitgave — die houden hun eigen tags.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ],
               ]),
             ),
@@ -31121,7 +31130,7 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
             Text('Dit album gaat op in “${widget.exclude.title}”.',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             const SizedBox(height: 14),
             TextField(
               controller: _query,
@@ -31154,7 +31163,7 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
                             Text('${a.artist} · ${a.tracks.length} nummers',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                style: TextStyle(color: _muted, fontSize: 11.5)),
                           ]),
                         ),
                       ]),
@@ -31295,7 +31304,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                       : 'Alles herkend, en de tags kloppen al — er valt niets te wijzigen.'
                   : '${_changes.length} ${_changes.length == 1 ? 'nummer wijkt' : 'nummers wijken'} af '
                       '· alleen artiest en titel worden geschreven, album en nummering blijven',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             // De reden, als er een is. Bovenaan en niet weggestopt: dit is het enige wat je verder
             // helpt, en het onderscheid tussen "AcoustID kent dit niet" en "AcoustID heeft de vraag
@@ -31311,7 +31320,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                   border: Border.all(color: _accent2.withValues(alpha: .45)),
                 ),
                 child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Icon(Icons.report_gmailerrorred_rounded, size: 17, color: _accent2),
+                  Icon(Icons.report_gmailerrorred_rounded, size: 17, color: _accent2),
                   const SizedBox(width: 9),
                   Expanded(
                     child: SelectableText(widget.fout!,
@@ -31345,10 +31354,10 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                           Text('${_nu(e.key).artist} — ${_nu(e.key).title}',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: _muted, fontSize: 12.5)),
+                              style: TextStyle(color: _muted, fontSize: 12.5)),
                           const SizedBox(height: 3),
                           Row(children: [
-                            const Icon(Icons.arrow_forward_rounded, size: 14, color: _accent),
+                            Icon(Icons.arrow_forward_rounded, size: 14, color: _accent),
                             const SizedBox(width: 7),
                             Expanded(
                               child: Text('${e.value.artist} — ${e.value.title}',
@@ -31357,7 +31366,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                                       fontSize: 13.5, fontWeight: FontWeight.w600)),
                             ),
                             Text('${(e.value.score * 100).round()}%',
-                                style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                                style: TextStyle(color: _accent2, fontSize: 11.5)),
                           ]),
                         ]),
                       ),
@@ -31374,7 +31383,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                       child: Text(n,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _muted, fontSize: 11.5)),
+                          style: TextStyle(color: _muted, fontSize: 11.5)),
                     ),
                 ],
                 if (_failed.isNotEmpty) ...[
@@ -31384,7 +31393,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                   for (final f in _failed)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
-                      child: Text(f, style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                      child: Text(f, style: TextStyle(color: _accent2, fontSize: 11.5)),
                     ),
                 ],
               ]),
@@ -31601,7 +31610,7 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(titel, style: const TextStyle(fontSize: 13.5, height: 1.3)),
                 const SizedBox(height: 2),
-                Text(bron, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                Text(bron, style: TextStyle(color: _muted, fontSize: 11.5)),
               ]),
             ),
           ]),
@@ -31631,7 +31640,7 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
               const SizedBox(height: 2),
               Text('Nu: ${t.title}',
-                  style: const TextStyle(color: _muted, fontSize: 12.5), maxLines: 2),
+                  style: TextStyle(color: _muted, fontSize: 12.5), maxLines: 2),
               const SizedBox(height: 14),
               _voorstel(Icons.verified_outlined, 'zoals de uitgave het noemt', officieel),
               // Alleen als hij écht iets anders zegt. Twee identieke regels onder elkaar zouden de
@@ -31660,7 +31669,7 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
                       n == 1
                           ? 'Eén persing noemt dit nummer al zoals jouw bestand.'
                           : '$n persingen noemen dit nummer al zoals jouw bestand.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               if (widget.albumMbid != null && _andere == null)
                 Align(
@@ -31674,7 +31683,7 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
                     ),
                     onPressed: _persingBezig ? null : _haalPersingen,
                     icon: _persingBezig
-                        ? const SizedBox(
+                        ? SizedBox(
                             width: 13,
                             height: 13,
                             child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
@@ -31694,20 +31703,20 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
                       _andere!.isEmpty
                           ? 'Geen andere persing van deze plaat draagt dit nummer.'
                           : 'Geen andere persing noemt het anders dan hierboven.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               if (_persingFout != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Text(_persingFout!,
-                      style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                      style: TextStyle(color: _accent2, fontSize: 11.5)),
                 ),
               const SizedBox(height: 6),
               TextField(
                 controller: _titel,
                 onChanged: (_) => setState(() {}),
                 style: const TextStyle(fontSize: 13.5),
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Titel',
                   labelStyle: TextStyle(color: _muted, fontSize: 12.5),
                   isDense: true,
@@ -31733,7 +31742,7 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
               for (final f in _mislukt)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
-                  child: Text(f, style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                  child: Text(f, style: TextStyle(color: _accent2, fontSize: 11.5)),
                 ),
               const SizedBox(height: 12),
               // **Een Wrap en geen Row, en dat is geen smaak.** Een Row liet deze twee knoppen 25
@@ -31859,7 +31868,7 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
             Text(
               '${widget.stappen.length} ${widget.stappen.length == 1 ? 'nummer krijgt' : 'nummers krijgen'} '
               'de titel die de uitgave noemt · nummering en jaartal blijven staan',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             if (geblokkeerd) ...[
               const SizedBox(height: 10),
@@ -31878,10 +31887,10 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
                   for (final b in botsingen)
                     Padding(
                       padding: const EdgeInsets.only(top: 3),
-                      child: Text(b, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      child: Text(b, style: TextStyle(color: _muted, fontSize: 11.5)),
                     ),
                   const SizedBox(height: 3),
-                  const Text('Vink er één uit, of zet de gastnaam naar het artiestveld aan.',
+                  Text('Vink er één uit, of zet de gastnaam naar het artiestveld aan.',
                       style: TextStyle(color: _muted, fontSize: 11.5)),
                 ]),
               ),
@@ -31907,10 +31916,10 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
                       Expanded(
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                           Text(s.track.title,
-                              style: const TextStyle(color: _muted, fontSize: 12.5)),
+                              style: TextStyle(color: _muted, fontSize: 12.5)),
                           const SizedBox(height: 2),
                           Row(children: [
-                            const Icon(Icons.subdirectory_arrow_right_rounded,
+                            Icon(Icons.subdirectory_arrow_right_rounded,
                                 size: 15, color: _accent),
                             const SizedBox(width: 5),
                             Expanded(
@@ -31921,7 +31930,7 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
                           if (_gastMee && s.artiest != null) ...[
                             const SizedBox(height: 3),
                             Text('artiest wordt ${s.artiest}',
-                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                style: TextStyle(color: _muted, fontSize: 11.5)),
                           ],
                         ]),
                       ),
@@ -31930,7 +31939,7 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
                 for (final f in _mislukt)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
-                    child: Text(f, style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                    child: Text(f, style: TextStyle(color: _accent2, fontSize: 11.5)),
                   ),
               ]),
             ),
@@ -32097,7 +32106,7 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
         border: Border.all(color: gekozen ? _accent : Colors.transparent),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.drag_indicator_rounded, size: 15, color: _muted),
+        Icon(Icons.drag_indicator_rounded, size: 15, color: _muted),
         const SizedBox(width: 5),
         Flexible(
           // Twee regels in plaats van één: onder de titel op een telefoon is "Just Give Me a Reason
@@ -32117,7 +32126,7 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
             visualDensity: VisualDensity.compact,
             constraints: const BoxConstraints(),
             padding: EdgeInsets.zero,
-            icon: const Icon(Icons.close_rounded, color: _muted),
+            icon: Icon(Icons.close_rounded, color: _muted),
             onPressed: () => _laatLos(t),
           ),
         ],
@@ -32162,7 +32171,7 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
               _gekozen == null
                   ? 'Sleep een bestand naar de juiste rij — of tik het aan en daarna de rij.'
                   : 'Tik nu de rij aan waar “${_gekozen!.title}” hoort.',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             const SizedBox(height: 12),
             Expanded(
@@ -32203,7 +32212,7 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
                             final nummer = SizedBox(
                               width: 30,
                               child: Text(o.position.isEmpty ? '${i + 1}' : o.position,
-                                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+                                  style: TextStyle(color: _muted, fontSize: 12.5)),
                             );
                             final titel = Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -32215,7 +32224,7 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
                                         if (o.artist.trim().isNotEmpty) o.artist.trim(),
                                         if (o.seconds != null) _fmt(Duration(seconds: o.seconds!)),
                                       ].join('  ·  '),
-                                      style: const TextStyle(color: _muted, fontSize: 11.5),
+                                      style: TextStyle(color: _muted, fontSize: 11.5),
                                     ),
                                 ]);
                             final plek = hier == null
@@ -32370,7 +32379,7 @@ class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
                   ? 'Niets gevonden — geen enkel bestand klinkt hetzelfde als een ander.'
                   : '${ps.length} ${ps.length == 1 ? 'paar' : 'paren'} · herkend aan de audio, niet aan de naam · '
                       'de mindere gaat naar $dupeFolder, er wordt niets gewist',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             const SizedBox(height: 12),
             Expanded(
@@ -32401,7 +32410,7 @@ class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
                               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                           const SizedBox(height: 4),
                           Row(children: [
-                            const Icon(Icons.check_circle_rounded, size: 14, color: _accent2),
+                            Icon(Icons.check_circle_rounded, size: 14, color: _accent2),
                             const SizedBox(width: 7),
                             Expanded(
                               child: Text('blijft: ${_kort(p.keep.path)}',
@@ -32412,19 +32421,19 @@ class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
                           ]),
                           const SizedBox(height: 2),
                           Row(children: [
-                            const Icon(Icons.subdirectory_arrow_right_rounded,
+                            Icon(Icons.subdirectory_arrow_right_rounded,
                                 size: 14, color: _muted),
                             const SizedBox(width: 7),
                             Expanded(
                               child: Text('naar $dupeFolder: ${_kort(p.drop.path)}',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                  style: TextStyle(color: _muted, fontSize: 11.5)),
                             ),
                           ]),
                           if (p.why.isNotEmpty) ...[
                             const SizedBox(height: 3),
-                            Text(p.why, style: const TextStyle(color: _muted, fontSize: 11)),
+                            Text(p.why, style: TextStyle(color: _muted, fontSize: 11)),
                           ],
                         ]),
                       ),
@@ -32507,7 +32516,7 @@ class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
             Text(
               '${found.length} ${found.length == 1 ? 'album gaat' : 'albums gaan'} op in een album dat je al hebt · '
               '$totalTracks ${totalTracks == 1 ? 'nummer' : 'nummers'}',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             const SizedBox(height: 12),
             Expanded(
@@ -32528,7 +32537,7 @@ class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
                         r.upgrades > 0
                             ? '${r.upgrades} van de ${r.pairs.length} ${r.upgrades == 1 ? 'is' : 'zijn'} beter en vervangt wat je hebt · de rest naar _dubbel'
                             : 'alle ${r.pairs.length} zijn dubbel · naar _dubbel',
-                        style: const TextStyle(color: _muted, fontSize: 11.5),
+                        style: TextStyle(color: _muted, fontSize: 11.5),
                       ),
                       const SizedBox(height: 6),
                       for (final p in r.pairs)
@@ -32682,7 +32691,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
               widget.absorb == null
                   ? '${widget.album.artist} · ${widget.album.title}'
                   : '${widget.absorb!.title} → ${widget.album.title}',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             const SizedBox(height: 14),
             Container(
@@ -32695,21 +32704,21 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
                 if (plan.folder != null) ...[
                   const SizedBox(height: 3),
                   Text('Doelmap: ${plan.folder}',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ],
                 if (plan.parking > 0) ...[
                   const SizedBox(height: 3),
                   Text(
                       'Bij dezelfde bestandsnaam houdt de beste kopie de naam; de andere gaat naar '
                       '$dupeFolder. Er wordt niets gewist.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ],
               ]),
             ),
             const SizedBox(height: 12),
             Expanded(
               child: acts.isEmpty
-                  ? const Center(
+                  ? Center(
                       child: Text('Geen enkel bestand hoeft te verhuizen.',
                           style: TextStyle(color: _muted, fontSize: 12.5)))
                   : ListView.builder(
@@ -32755,7 +32764,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
               contentPadding: EdgeInsets.zero,
               controlAffinity: ListTileControlAffinity.leading,
               title: const Text('Bestanden mee verplaatsen', style: TextStyle(fontSize: 13)),
-              subtitle: const Text('Uit: alleen de indeling verandert, de mappen blijven zoals ze zijn.',
+              subtitle: Text('Uit: alleen de indeling verandert, de mappen blijven zoals ze zijn.',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
             ),
             const SizedBox(height: 4),
@@ -32922,14 +32931,14 @@ class _StylePageState extends State<StylePage> {
           ]),
         ),
         if (_more == null)
-          const SliverToBoxAdapter(
+          SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.all(40),
               child: Center(child: CircularProgressIndicator(strokeWidth: 2, color: _accent)),
             ),
           )
         else if (more.isEmpty)
-          const SliverToBoxAdapter(
+          SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.fromLTRB(24, 0, 24, 24),
               child: Text('Niets nieuws gevonden in deze stijl.', style: TextStyle(color: _muted)),
@@ -32956,7 +32965,7 @@ class _StylePageState extends State<StylePage> {
         child: Row(children: [
           Text(t, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
           const SizedBox(width: 8),
-          Text(badge, style: const TextStyle(color: _muted, fontSize: 12.5)),
+          Text(badge, style: TextStyle(color: _muted, fontSize: 12.5)),
         ]),
       );
 }
@@ -32987,13 +32996,13 @@ class _OnlineAlbumCard extends StatelessWidget {
           _maybeFocusable(Row(mainAxisSize: MainAxisSize.min, children: [
             Flexible(
                 child: ArtistNames(
-                    names: [hit.artist], style: const TextStyle(color: _muted, fontSize: 12))),
+                    names: [hit.artist], style: TextStyle(color: _muted, fontSize: 12))),
             if (hit.album.year != null)
               Flexible(
                   child: Text(' · ${hit.album.year}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: _muted, fontSize: 12))),
+                      style: TextStyle(color: _muted, fontSize: 12))),
           ])),
         ]),
       );
@@ -33135,7 +33144,7 @@ class _PcBijwerkenKnopState extends State<PcBijwerkenKnop> {
       // Zeggen wat je eraan doet, niet alleen dat het niet kan. De pc kijkt bij het opstarten zelf
       // of er iets klaarstaat en biedt het dan aan — die weg bestaat al sinds 3.9.74. Vandaar
       // "meestal": wie daar ooit op "overslaan" tikte krijgt juist die uitgave niet meer aangeboden.
-      return const Text(
+      return Text(
         'Deze pc is te oud om zichzelf op afstand bij te werken — die knop komt vanaf 3.9.237. '
         'Eén keer aan de pc zelf dus; meestal biedt hij het aan zodra je hem opnieuw opstart.',
         style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
@@ -33144,7 +33153,7 @@ class _PcBijwerkenKnopState extends State<PcBijwerkenKnop> {
 
     // Zwijgt hij nadat je op bijwerken drukte, dan is dat het verwachte beeld en geen storing.
     if (_stil && _gestart) {
-      return const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         LinearProgressIndicator(minHeight: 3),
         SizedBox(height: 8),
         Text('De pc installeert en start opnieuw op. Even geduld.',
@@ -33179,7 +33188,7 @@ class _PcBijwerkenKnopState extends State<PcBijwerkenKnop> {
           ),
           if (vanBuitenaf(widget.session.endpoint?.baseUrl)) ...[
             const SizedBox(height: 6),
-            const Text(kAlleenThuisBijwerken, style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4)),
+            Text(kAlleenThuisBijwerken, style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4)),
           ],
         ],
         // De kijk-knop. Dezelfde weg naar de pc als hierboven — die kijkt vers bij GitHub en
@@ -33276,7 +33285,7 @@ class StroomkwaliteitKeuze extends StatelessWidget {
               },
               title: const Text('Onderweg minder gebruiken',
                   style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
-              subtitle: const Text('Schakelt om zodra je op mobiele data zit.',
+              subtitle: Text('Schakelt om zodra je op mobiele data zit.',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
             ),
             if (settings.stroomAdaptief) ...[
@@ -33300,7 +33309,7 @@ class StroomkwaliteitKeuze extends StatelessWidget {
             '· ${labelVan(Stroomstand.cd)} — ${tempoVan(Stroomstand.cd)}, en nog altijd bit-voor-bit cd.\n'
             'Nu geldt: ${labelVan(geldend)}${netStore.noodstand ? ' (verlaagd omdat het haperde)' : ''}. '
             'Een wijziging geldt vanaf het volgende nummer.',
-            style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
+            style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
           ),
         ],
       ),
@@ -33359,7 +33368,7 @@ class SeedKeuze extends StatelessWidget {
                 ? 'Uit. Op Redacted heet dat hit-and-run, en daar kun je je account mee kwijtraken.'
                 : 'Zolang de app deelt blijft het bestand ook in de werkmap staan — die ruimte komt '
                     'daarna vanzelf vrij. Bij Pirate Bay, Knaben en RuTracker verandert er niets.',
-            style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+            style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
           ),
         ],
       ),
@@ -33399,6 +33408,40 @@ class _LuidheidSectie extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Licht, donker of volgens het systeem (Saber, 18-10-2026). Per toestel; zie ui/thema.dart.
+class ThemaKeuzeRegel extends StatelessWidget {
+  const ThemaKeuzeRegel({super.key});
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<ThemaKeuze>(
+        valueListenable: ThemaStand.keuze,
+        builder: (context, huidig, _) => Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Thema', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final k in ThemaKeuze.values)
+                    ChoiceChip(
+                      key: ValueKey('thema-${k.name}'),
+                      label: Text(k.label),
+                      selected: huidig == k,
+                      onSelected: (aan) {
+                        if (aan) unawaited(ThemaStand.zet(k));
+                      },
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
 class TorrentmotorKeuze extends StatelessWidget {
@@ -33447,7 +33490,7 @@ class TorrentmotorKeuze extends StatelessWidget {
                     'torrent nog moet ophalen en dus traag is. Daarbij zit je eigen IP wél in de zwerm.'
                 : 'Deze pc kan zelf geen torrents halen: aria2c.exe staat niet naast de app. Alles '
                     'gaat via TorBox.',
-            style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+            style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
           ),
         ],
       ),
@@ -33507,7 +33550,7 @@ class _RuTrackerKoekjeDialoogState extends State<RuTrackerKoekjeDialoog> {
               const Text('Koekje uit je browser',
                   style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                   'RuTracker staat achter Cloudflare. Die uitdaging kan alleen een echte browser '
                   'oplossen — dus doet jouw browser dat, en gebruikt de app het resultaat.',
                   style: TextStyle(color: _muted, fontSize: 12.5, height: 1.4)),
@@ -33521,7 +33564,7 @@ class _RuTrackerKoekjeDialoogState extends State<RuTrackerKoekjeDialoog> {
               // Waarom niet gewoon document.cookie: cf_clearance is HttpOnly en staat daar dus niet
               // in. Via "Kopieer als cURL" komt hij wél mee — samen met het browserkenmerk, en dat
               // is nodig omdat Cloudflare het koekje aan die twee bindt.
-              const Text(
+              Text(
                   'Kopieer als cURL neemt ook je browserkenmerk mee. Dat is nodig: het koekje hoort '
                   'bij dat kenmerk én bij je IP-adres, dus na een netwerkwissel plak je het opnieuw.',
                   style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4)),
@@ -33533,7 +33576,7 @@ class _RuTrackerKoekjeDialoogState extends State<RuTrackerKoekjeDialoog> {
                 style: const TextStyle(fontSize: 12),
                 decoration: InputDecoration(
                   hintText: "curl 'https://rutracker.org/forum/index.php' -H 'cookie: …'",
-                  hintStyle: const TextStyle(color: _muted, fontSize: 11.5),
+                  hintStyle: TextStyle(color: _muted, fontSize: 11.5),
                   filled: true,
                   fillColor: _panel2,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),

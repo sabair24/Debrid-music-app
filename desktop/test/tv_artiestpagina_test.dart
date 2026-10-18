@@ -389,7 +389,7 @@ void main() {
             FilledButton(onPressed: () {}, child: const Text('ander')),
             TekstLink(
               onPressed: () {},
-              bouw: (g) => Text('JC Chasez', style: tvLinkStijl(const TextStyle(color: kGedempt), g)),
+              bouw: (g) => Text('JC Chasez', style: tvLinkStijl(TextStyle(color: kGedempt), g)),
             ),
           ]),
         ),
