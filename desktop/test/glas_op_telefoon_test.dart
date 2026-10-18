@@ -19,6 +19,7 @@
 /// scherm zit er geen `BackdropFilter` meer in de boom, en op een breed scherm nog wel.
 library;
 
+import 'package:debridmusic/ui/glas.dart';
 import 'package:debridmusic/ui/vlak.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -60,10 +61,14 @@ void main() {
     expect(await _lagen(t, balkGlas(const Color(0xFF07080C), 0), breed: 1400), 0);
   });
 
-  testWidgets('DE KERN: een glasknop op een telefoon leest niets terug', (t) async {
-    // Op de artiestpagina staan er drie naast elkaar, plus de terugpijl.
+  testWidgets('een glasknop op een telefoon vervaagt weer, met het gedeelde filter (18-10-2026)', (t) async {
+    // Saber koos "overal echt glas" op de gsm. Dat kan sinds alle ruiten één vervaging delen
+    // ([glasMat] onder één BackdropGroup) in plaats van er elk een te lezen; de bewaker zet het terug
+    // als het toch te veel kost. Op de artiestpagina staan er drie naast elkaar, plus de terugpijl.
     expect(
-        await _lagen(t, GlasKnop(icoon: Icons.radio_rounded, label: 'Radio', onPressed: () {}), breed: 390), 0);
+        await _lagen(t, GlasKnop(icoon: Icons.radio_rounded, label: 'Radio', onPressed: () {}), breed: 390), 1);
+    expect(identical(t.widget<BackdropFilter>(find.byType(BackdropFilter)).filter, glasMat), isTrue,
+        reason: 'het gedeelde filter: alleen gelijke filters worden in één terugleesbeurt samengenomen');
   });
 
   testWidgets('DE GRENS: diezelfde knop op een pc houdt zijn glas', (t) async {

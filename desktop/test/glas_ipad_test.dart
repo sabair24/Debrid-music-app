@@ -93,6 +93,6 @@ void main() {
   test('één groep bovenaan de app, boven de Navigator', () {
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(main, contains('inhoud = BackdropGroup(child: inhoud);'));
-    expect(main, contains('unawaited(GlasKwaliteit.inrichten());'));
+    expect(main, contains('unawaited(GlasKwaliteit.inrichten().then((_) => SysteemGlas.start()));'));
   });
 }

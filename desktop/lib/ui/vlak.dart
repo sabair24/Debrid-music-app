@@ -242,7 +242,10 @@ LinearGradient? kleurWas(Color? basis) {
 /// die speelt (nu 10 %)". Een tiende viel op een gsm weg tegen de zwarte vloer; een kwart zegt bij
 /// welke plaat je bent zonder dat de balk een gekleurd blok wordt. De onderbalk krijgt dezelfde tint,
 /// zodat speler en navigatie samen één vlak zijn.
-const double kBalkZweem = .24;
+///
+/// **38 %, sinds 18-10-2026.** Saber koos "sterker, 35-40 %" bij het nieuwe glas: de balk kleurt
+/// duidelijk mee met de plaat.
+const double kBalkZweem = .38;
 
 Color balkKleur(int? kleur) {
   final basis = wasBasis(kleur);
@@ -487,6 +490,7 @@ Widget _glasRuit({bool? plat, required bool lens}) {
                 if (lens && GlasKwaliteit.stand.value == GlasStand.vloeibaar) const GlasLens(hoek: kHoekRond),
                 const ColoredBox(color: kGlasOnderlaagMat),
                 vulling,
+                const GlasKorrelLaag(),
               ],
             ),
     ),
@@ -674,7 +678,9 @@ class _GlasKnopState extends State<GlasKnop> {
         curve: aan ? Curves.easeOut : Curves.easeOutBack,
         child: Stack(
           children: [
-            Positioned.fill(child: IgnorePointer(child: glasRuit(plat: isTv || isCompact(context)))),
+            // Ook op een gsm echt glas (Saber, 18-10-2026: "overal echt glas"); de bewaker zet het terug
+            // als het te veel kost. Alleen de tv blijft plat.
+            Positioned.fill(child: IgnorePointer(child: glasRuit(plat: isTv))),
             Positioned.fill(
               child: IgnorePointer(
                 child: AnimatedOpacity(

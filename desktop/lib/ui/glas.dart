@@ -31,6 +31,7 @@ library;
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/rendering.dart';
@@ -100,23 +101,37 @@ const kGlasTeZwaar = 3;
 /// en een menu zonder enige vervaging is precies wat de schermafdrukken van 16-10-2026 tonen.
 const kGlasAanloop = Duration(seconds: 10);
 
-/// Hoe dicht een donker glasvlak is (menu, minispeler, onderbalk), mét vervaging: de achtergrond
-/// wordt een gekleurde waas, er valt niets meer door te lezen. Zie de uitleg bovenaan.
-const kGlasDekking = .80;
+/// Hoe dicht een donker glasvlak is (menu, minispeler, onderbalk, wachtrij), mét vervaging: de
+/// achtergrond wordt een gekleurde waas, er valt niets meer door te lezen. Zie de uitleg bovenaan.
+///
+/// 85 % sinds 18-10-2026 (was 80): Saber koos "aanpassend" — dichter boven lijsten met tekst, lichter
+/// boven een beeld ([kGlasDekkingBeeld]).
+const kGlasDekking = .85;
+
+/// Hoe dicht glas is boven een beeld (een hoes, een foto): daar mag de kleur doorkomen, er staat
+/// geen tekst onder om dwars doorheen te lezen.
+const kGlasDekkingBeeld = .60;
+
+/// Wat er onder een glasvlak ligt. Zie [kGlasDekking] en [kGlasDekkingBeeld].
+enum GlasOndergrond { lijst, beeld }
 
 /// Hoe dicht hetzelfde vlak is als de vervaging er niet is ([GlasStand.plat]): helemaal. Dan is de
 /// vulling het enige wat tegenhoudt; 74 % liet de lijst eronder gewoon leesbaar, en zelfs bij 96 %
 /// schemerde witte tekst op zwart nog door (getekend op 16-10-2026).
 const kGlasDekkingPlat = 1.0;
 
-/// De dekking voor deze stand.
-double glasDekking(GlasStand stand) => stand == GlasStand.plat ? kGlasDekkingPlat : kGlasDekking;
+/// De dekking voor deze stand, boven deze [ondergrond].
+double glasDekking(GlasStand stand, {GlasOndergrond ondergrond = GlasOndergrond.lijst}) => stand == GlasStand.plat
+    ? kGlasDekkingPlat
+    : ondergrond == GlasOndergrond.beeld
+        ? kGlasDekkingBeeld
+        : kGlasDekking;
 
 /// De vulling van een donker glasvlak in [kleur], naar het voorbeeld van Somati's `GlassSheet`: een
 /// diagonaal verloop, linksboven een tikje lichter en dichter (waar glas het licht vangt), in het
 /// midden het dunst. Gemiddeld [glasDekking].
-BoxDecoration glasVulling(Color kleur, GlasStand stand) {
-  final a = glasDekking(stand);
+BoxDecoration glasVulling(Color kleur, GlasStand stand, {GlasOndergrond ondergrond = GlasOndergrond.lijst}) {
+  final a = glasDekking(stand, ondergrond: ondergrond);
   // Plat: overal dicht, alleen het licht verloopt nog.
   final speling = stand == GlasStand.plat ? 0.0 : .04;
   return BoxDecoration(
@@ -279,6 +294,7 @@ class GlasKwaliteit {
 
   /// Kiest de beginstand voor dit toestel en start de bewaker. Eén keer, bij het opstarten.
   static Future<void> inrichten() async {
+    if (!isTv) await GlasKorrel.maak();
     if (isTv) stand.value = GlasStand.plat;
     final doel = _bewaakte;
     doel.value = GlasStand.mat;
@@ -382,6 +398,8 @@ class GlasVlak extends StatefulWidget {
     this.lens = false,
     this.lichtrand = true,
     this.balk = false,
+    this.ondergrond = GlasOndergrond.lijst,
+    this.korrel = true,
     this.child,
   }) : assert(vulling != null || kleur != null, 'een glasvlak zonder vulling is een gat');
 
@@ -404,6 +422,12 @@ class GlasVlak extends StatefulWidget {
   /// Het menu of de spelerbalk: op een tv volgt dit [GlasKwaliteit.tvBalk] in plaats van de platte
   /// stand van de rest.
   final bool balk;
+
+  /// Wat eronder ligt: een lijst (dicht) of een beeld (de kleur mag door). Zie [glasDekking].
+  final GlasOndergrond ondergrond;
+
+  /// De fijne korrel van [GlasKorrel] erover (niet op een tv: daar zie je hem niet).
+  final bool korrel;
 
   final Widget? child;
 
@@ -429,7 +453,8 @@ class _GlasVlakState extends State<GlasVlak> {
         valueListenable: widget.balk && isTv ? GlasKwaliteit.tvBalk : GlasKwaliteit.stand,
         builder: (context, stand, _) {
           final k = widget.kleur;
-          final vulling = DecoratedBox(decoration: k != null ? glasVulling(k, stand) : widget.vulling!);
+          final vulling = DecoratedBox(
+              decoration: k != null ? glasVulling(k, stand, ondergrond: widget.ondergrond) : widget.vulling!);
           final rand = widget.lichtrand ? CustomPaint(painter: _Lichtrand(widget.vorm)) : null;
           return ClipRRect(
             borderRadius: widget.vorm,
@@ -443,6 +468,7 @@ class _GlasVlakState extends State<GlasVlak> {
                 if (stand == GlasStand.vloeibaar && widget.lens)
                   Positioned.fill(child: GlasLens(hoek: widget.vorm.topLeft.x)),
                 Positioned.fill(child: vulling),
+                if (widget.korrel && !isTv) const Positioned.fill(child: GlasKorrelLaag()),
                 if (rand != null) Positioned.fill(child: IgnorePointer(child: rand)),
                 widget.child ?? const SizedBox.shrink(),
               ],
@@ -488,6 +514,76 @@ class GlasRegel extends StatelessWidget {
           ]);
         },
       );
+}
+
+/// De korrel van glas: een fijne ruis op 2 %, zoals Windows Acrylic (Saber, 18-10-2026: "ook op de
+/// knoppen"). Zonder oogt glas als plastic; met ruis vangt het licht.
+///
+/// Eén tegel van 64 bij 64 voor de hele app, één keer gemaakt bij het inrichten en daarna alleen
+/// herhaald: elke pixel een willekeurige grijswaarde op 2 % dekking. Vaste zaadwaarde, zodat hij
+/// overal en elke keer hetzelfde is.
+class GlasKorrel {
+  GlasKorrel._();
+
+  static const zijde = 64;
+
+  /// Hoe sterk de korrel is (de dekking van elke korrel).
+  static const sterkte = .02;
+
+  static ui.Image? beeld;
+
+  /// De pixels van de tegel (rgba). Publiek voor de toets.
+  @visibleForTesting
+  static Uint8List pixels() {
+    final kans = math.Random(18102026);
+    final p = Uint8List(zijde * zijde * 4);
+    final a = (sterkte * 255).round();
+    for (var i = 0; i < zijde * zijde; i++) {
+      final v = kans.nextInt(256);
+      p[i * 4] = v;
+      p[i * 4 + 1] = v;
+      p[i * 4 + 2] = v;
+      p[i * 4 + 3] = a;
+    }
+    return p;
+  }
+
+  static Future<void> maak() async {
+    if (beeld != null) return;
+    final klaar = Completer<ui.Image>();
+    ui.decodeImageFromPixels(pixels(), zijde, zijde, ui.PixelFormat.rgba8888, klaar.complete);
+    beeld = await klaar.future;
+  }
+}
+
+/// [GlasKorrel] over een vlak. Tekent niets zolang de tegel er nog niet is.
+class GlasKorrelLaag extends StatelessWidget {
+  const GlasKorrelLaag({super.key});
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+        child: CustomPaint(painter: _KorrelSchilder(MediaQuery.maybeDevicePixelRatioOf(context) ?? 1)),
+      );
+}
+
+class _KorrelSchilder extends CustomPainter {
+  _KorrelSchilder(this.dpr);
+  final double dpr;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final b = GlasKorrel.beeld;
+    if (b == null || size.isEmpty) return;
+    // Eén korrel per fysieke pixel: zo blijft het een fijne ruis en geen grove vlekken op een gsm.
+    final schaal = Matrix4.diagonal3Values(1 / dpr, 1 / dpr, 1).storage;
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..shader = ImageShader(b, TileMode.repeated, TileMode.repeated, schaal, filterQuality: FilterQuality.none),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_KorrelSchilder oud) => oud.dpr != dpr;
 }
 
 /// De lichtrand: een streep die linksboven helder is en naar rechtsonder uitdooft.

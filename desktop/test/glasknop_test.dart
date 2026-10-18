@@ -90,15 +90,18 @@ void main() {
         reason: 'zonder vervaging lost de pil van drie meter afstand op in het donker');
   });
 
-  testWidgets('DE KERN: op een gsm een donkere onderlaag, want daar vervaagt niets', (t) async {
-    // Zonder onderlaag las je "Tracklijst opnieuw ophalen" dwars door de ronde knoppen heen.
+  testWidgets('DE KERN: op een gsm vervaagd glas op een donkere grond, net als op de pc', (t) async {
+    // Sinds 18-10-2026 ook op een gsm echt glas ("overal echt glas"). De donkere grond eronder blijft:
+    // zonder las je "Tracklijst opnieuw ophalen" dwars door de ronde knoppen heen.
     final onderlaag = find.byWidgetPredicate((w) => w is ColoredBox && w.color == kGlasOnderlaag);
+    final onderlaagMat = find.byWidgetPredicate((w) => w is ColoredBox && w.color == kGlasOnderlaagMat);
     t.view.physicalSize = const Size(390, 844);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.reset);
     await zet(t, GlasKnop.rond(icoon: Icons.arrow_back_rounded, onPressed: () {}));
-    expect(find.byType(BackdropFilter), findsNothing);
-    expect(onderlaag, findsOneWidget);
+    expect(find.byType(BackdropFilter), findsOneWidget);
+    expect(onderlaagMat, findsOneWidget);
+    expect(onderlaag, findsNothing);
 
     t.view.physicalSize = const Size(1400, 900);
     await zet(t, radio());

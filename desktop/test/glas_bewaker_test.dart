@@ -3,7 +3,9 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/glas.dart';
+import 'package:debridmusic/ui/vlak.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -280,6 +282,43 @@ void main() {
       expect(main, contains('    Timer.run(() => kopLog.line(r));'));
       expect(main, contains('                    const GlasRegel(),'));
       expect(File('lib/navigatie.dart').readAsStringSync(), contains('    GlasKwaliteit.paginaGewisseld();'));
+    });
+  });
+
+
+  group('korrel en dekking (Saber, 18-10-2026)', () {
+    test('de korrel: 64 bij 64, elke korrel op 2 %, en elke keer dezelfde', () {
+      final a = GlasKorrel.pixels();
+      expect(a.length, 64 * 64 * 4);
+      for (var i = 3; i < a.length; i += 4) {
+        expect(a[i], 5, reason: '2 % van 255');
+      }
+      expect(GlasKorrel.pixels(), a, reason: 'een vaste zaadwaarde: overal en altijd dezelfde ruis');
+      final grijs = {for (var i = 0; i < a.length; i += 4) a[i]};
+      expect(grijs.length, greaterThan(200), reason: 'echte ruis, geen vlak');
+    });
+
+    testWidgets('in elk glasvlak en elke glasknop, niet op een tv', (t) async {
+      await t.pumpWidget(_vlak());
+      expect(find.byType(GlasKorrelLaag), findsOneWidget);
+      setTvModeForTest(true);
+      addTearDown(() => setTvModeForTest(false));
+      await t.pumpWidget(const SizedBox());
+      await t.pumpWidget(_vlak());
+      expect(find.byType(GlasKorrelLaag), findsNothing, reason: 'van drie meter zie je hem niet');
+      setTvModeForTest(false);
+      GlasKwaliteit.stand.value = GlasStand.mat;
+      await t.pumpWidget(const SizedBox());
+      await t.pumpWidget(Directionality(textDirection: TextDirection.ltr, child: glasRuit()));
+      expect(find.byType(GlasKorrelLaag), findsOneWidget, reason: 'ook op de knoppen');
+    });
+
+    test('dichter boven een lijst, lichter boven een beeld', () {
+      expect(glasDekking(GlasStand.mat), kGlasDekking);
+      expect(kGlasDekking, inInclusiveRange(.80, .90), reason: '"80-90 % boven tekstlijsten"');
+      expect(glasDekking(GlasStand.mat, ondergrond: GlasOndergrond.beeld), kGlasDekkingBeeld);
+      expect(kGlasDekkingBeeld, closeTo(.60, .001));
+      expect(glasDekking(GlasStand.plat, ondergrond: GlasOndergrond.beeld), 1.0, reason: 'plat blijft dicht');
     });
   });
 
