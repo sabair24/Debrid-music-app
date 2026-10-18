@@ -19,6 +19,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../tv.dart';
+import 'getekende_schijf.dart';
 import 'glas.dart';
 import 'kleuren.dart';
 import 'langzame_draai.dart';
@@ -130,6 +131,12 @@ class _WachtrijEilandState extends State<WachtrijEiland> with SingleTickerProvid
                     ),
                   ),
                 ),
+                // De glans erover draait niet mee: het licht komt uit de kamer, niet van de plaat.
+                Positioned(
+                  left: m - plaat * .56,
+                  top: (m - plaat) / 2,
+                  child: CdGlans(maat: plaat, vinyl: true),
+                ),
                 // De hoes, licht naar je toe gekanteld: de linkerkant komt naar voren.
                 Transform(
                   key: const ValueKey('wachtrij-hoes'),
@@ -156,7 +163,7 @@ class _WachtrijEilandState extends State<WachtrijEiland> with SingleTickerProvid
   }
 }
 
-/// Een zwart plaatje met groeven en een glansveeg die meedraait. Het etiket is het paars van de app:
+/// Een zwart plaatje met groeven (de glans ligt erboven en staat stil, [CdGlans]). Het etiket is het paars van de app:
 /// het hoesje ligt er al naast, twee keer dezelfde hoes zou druk zijn.
 class EilandPlaat extends CustomPainter {
   const EilandPlaat();
@@ -184,14 +191,6 @@ class EilandPlaat extends CustomPainter {
       groef.color = Color.fromRGBO(255, 255, 255, i.isEven ? .07 : .035);
       canvas.drawCircle(c, rr, groef);
     }
-    // De glansveeg: een smalle wig licht die met het plaatje meedraait.
-    final veeg = Paint()
-      ..shader = SweepGradient(
-        center: Alignment.center,
-        colors: const [Color(0x00FFFFFF), Color(0x26FFFFFF), Color(0x00FFFFFF), Color(0x00FFFFFF), Color(0x1AFFFFFF), Color(0x00FFFFFF)],
-        stops: const [0, .08, .16, .5, .58, .66],
-      ).createShader(Rect.fromCircle(center: c, radius: r));
-    canvas.drawCircle(c, r * .98, veeg);
     // Het etiket en het gat.
     canvas.drawCircle(c, r * .34, Paint()..color = const Color(0xFF7C5CFF));
     canvas.drawCircle(c, r * .34, Paint()

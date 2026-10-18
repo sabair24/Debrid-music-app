@@ -181,6 +181,7 @@ import 'ui/skelet.dart';
 import 'ui/speelvlak.dart';
 import 'ui/stijl.dart';
 import 'ui/tegel.dart';
+import 'ui/getekende_schijf.dart';
 import 'ui/kantel_hoes.dart';
 import 'ui/thema.dart';
 import 'ui/wachtrij_eiland.dart';
@@ -21782,55 +21783,24 @@ class _Feit extends StatelessWidget {
       );
 }
 
-/// Een schijf die er niet is: donker plastic met de hoes als etiket in het midden.
+/// Een schijf die er niet is, met de hoes als etiket in het midden: een zilveren cd, of een zwarte
+/// plaat als de uitgave vinyl is (Saber, 18-10-2026). Zie `ui/getekende_schijf.dart`.
 ///
 /// **Alleen als terugval, en met opzet duidelijk anders dan een scan.** Zie de uitleg bij het
 /// gebruik in [AlbumArt]: een echte cd-scan toont de bedrukking van díé persing, en die willen we
 /// tonen als hij er is. Is hij er niet — zes van de tien platen — dan is dit beter dan een lege
 /// hoes zonder gebaar, zolang het maar niet doet alsof.
-///
-/// Het etiket is 34% van de schijf. Op een echte cd is het bedrukte vlak ongeveer 46 van de 120 mm;
-/// iets kleiner leest hier beter, want het is een hoes en geen ronde bedrukking.
 class _GetekendeSchijf extends StatelessWidget {
-  const _GetekendeSchijf({required this.label, required this.maat});
+  const _GetekendeSchijf({required this.label, required this.maat, this.vinyl = false});
   final Uint8List label;
   final double maat;
 
+  /// Is de uitgave vinyl? Dan een zwarte plaat met groeven, anders een zilveren cd.
+  final bool vinyl;
+
   @override
-  Widget build(BuildContext context) {
-    final etiket = maat * .34;
-    return SizedBox(
-      width: maat,
-      height: maat,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          DecoratedBox(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              // Een glans die niet meedraait zou vreemd staan; deze zit ín de schijf en draait mee,
-              // precies zoals het licht over een echte plaat loopt.
-              gradient: RadialGradient(
-                center: Alignment(-.24, -.36),
-                radius: .92,
-                colors: [Color(0xFF2B3142), Color(0xFF12141C), Color(0xFF08090D)],
-                stops: [0, .46, 1],
-              ),
-            ),
-            child: SizedBox(width: maat, height: maat),
-          ),
-          ClipOval(
-            child: Image.memory(label,
-                width: etiket,
-                height: etiket,
-                fit: BoxFit.cover,
-                cacheWidth: decodeWidth(etiket),
-                errorBuilder: (_, __, ___) => const SizedBox()),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      vinyl ? GetekendVinyl(label: label, maat: maat) : GetekendeCd(label: label, maat: maat);
 }
 
 /// De hoes in het paneel naast "In mijn bibliotheek" op een tv.
@@ -27926,7 +27896,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
             // 600px circle is the most expensive picture in the app.
             cacheWidth: decodeWidth(s * .92),
             gaplessPlayback: true)
-        : (front == null ? null : _GetekendeSchijf(label: front, maat: s * .92));
+        : (front == null ? null : _GetekendeSchijf(label: front, maat: s * .92, vinyl: isVinylFormaat(_art?.formaat)));
     if (schijf == null) {
       final k = widget.kantel;
       return k == null ? kaart : KantelHoes(bron: k, aan: widget.uitgelicht, vorm: BorderRadius.circular(10), child: kaart);
@@ -28015,7 +27985,15 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
                 ),
                 child: child,
               ),
-              child: spinningDisc,
+              // Een getekende schijf krijgt zijn glans erbovenop, en die draait NIET mee: op een echte
+              // cd staat de regenboog stil (Saber, 18-10-2026). Hij schuift wel mee naar buiten. Een
+              // echte scan blijft zoals hij is.
+              child: disc != null
+                  ? spinningDisc
+                  : Stack(alignment: Alignment.center, children: [
+                      spinningDisc,
+                      CdGlans(maat: s * .92, vinyl: isVinylFormaat(_art?.formaat)),
+                    ]),
             )),
             ),
           ),

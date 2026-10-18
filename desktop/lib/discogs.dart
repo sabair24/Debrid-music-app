@@ -1542,7 +1542,12 @@ class ReleaseArt {
   /// albumpagina degene was die het goed had. Zie `_kiesHoesBron` en `AlbumArt._load`.
   final String? bron;
 
-  const ReleaseArt({this.front, this.back, this.disc, this.bron});
+  /// Het formaat van die persing zoals de bron het noemt (`CD`, `Vinyl`, `12" Vinyl`…), of null als
+  /// het niet bekend is. Bepaalt de getekende schijf als er geen scan van de schijf is: vinyl alleen
+  /// als de uitgave vinyl is, anders een cd (Saber, 18-10-2026). Zie `ui/getekende_schijf.dart`.
+  final String? formaat;
+
+  const ReleaseArt({this.front, this.back, this.disc, this.bron, this.formaat});
   bool get isEmpty => front == null && back == null && disc == null;
 }
 
@@ -1748,6 +1753,7 @@ extension DiscogsArtwork on DiscogsService {
           // Heeft de gebruiker de voorkant zélf aangewezen, dan is die niet van deze persing en
           // hoort er geen persing bij te staan. De hoes is dan een keuze, geen vondst.
           bron: saidFront != null ? null : found.bron,
+          formaat: saidFront != null ? null : found.formaat,
         );
 
     /// Enough to stop looking, without paying Discogs for the rest.
@@ -1792,7 +1798,8 @@ extension DiscogsArtwork on DiscogsService {
       if (back != null || disc != null) {
         // `bron` blijft aan de VOORKANT hangen, en die komt hier van de gepinde persing of nergens
         // vandaan — TheAudioDB levert alleen een achterkant en een cd.
-        final art = said(ReleaseArt(front: partial?.front, back: back, disc: disc, bron: partial?.bron));
+        final art = said(ReleaseArt(
+            front: partial?.front, back: back, disc: disc, bron: partial?.bron, formaat: partial?.formaat));
         if (enough(art)) {
           await _writeArt(dir, art);
           return art;
@@ -1825,6 +1832,7 @@ extension DiscogsArtwork on DiscogsService {
           // Wie de voorkant leverde, levert ook de herkomst. Had `partial` er al een, dan blijft
           // die staan — de bredere zoektocht vulde dan alleen de rollen die nog open stonden.
           bron: partial?.front != null ? partial?.bron : wider.bron,
+          formaat: partial?.front != null ? partial?.formaat : wider.formaat,
         );
         final art = said(caa);
         if (enough(art)) {
@@ -1915,6 +1923,7 @@ extension DiscogsArtwork on DiscogsService {
       bron: caa?.front != null
           ? caa?.bron
           : (at(guessed.front) != null && e.releaseId > 0 ? 'rel:${e.releaseId}' : null),
+      formaat: caa?.front != null ? caa?.formaat : (e.format.isEmpty ? null : e.format),
     ));
     if (art.isEmpty) return null; // nothing found — don't cache a blank as the answer
     await _writeArt(dir, art);
@@ -1969,7 +1978,7 @@ extension DiscogsArtwork on DiscogsService {
       // Wélke persing de voorkant leverde. De lus loopt er tot twaalf langs en pakt van elk wat er
       // nog ontbreekt, dus "de eerste treffer" is niet hetzelfde als "de persing waar de hoes van
       // is" — en dat laatste is precies wat `ReleaseArt.bron` moet zeggen.
-      String? frontVan;
+      String? frontVan, frontFormaat;
       var looked = 0;
       for (var w = 0; w * perWave < hits.length && w < 5; w++) {
         if (looked >= maxLooked || (front != null && back != null && disc != null)) break;
@@ -1997,6 +2006,7 @@ extension DiscogsArtwork on DiscogsService {
                 if (front == null && bytes[n] != null) {
                   front = bytes[n];
                   frontVan = wave[s].mbid;
+                  frontFormaat = wave[s].format.isEmpty ? null : wave[s].format;
                 }
               case 'back':
                 back ??= bytes[n];
@@ -2008,7 +2018,11 @@ extension DiscogsArtwork on DiscogsService {
       }
       if (front == null && back == null && disc == null) return null;
       return ReleaseArt(
-          front: front, back: back, disc: disc, bron: frontVan == null ? null : 'mb:$frontVan');
+          front: front,
+          back: back,
+          disc: disc,
+          bron: frontVan == null ? null : 'mb:$frontVan',
+          formaat: frontVan == null ? null : frontFormaat);
     } catch (_) {
       return null; // no art from here is not an error — the Discogs path takes over
     }
@@ -2213,6 +2227,8 @@ extension DiscogsArtwork on DiscogsService {
         // bestanden zet, op grond van niets.
         if (s.isNotEmpty) gelezenBron = s;
       }
+      final formaatBestand = File('${dir.path}${Platform.pathSeparator}formaat');
+      final gelezenFormaat = await formaatBestand.exists() ? (await formaatBestand.readAsString()).trim() : '';
       final art = ReleaseArt(
         front: await one('front'),
         back: await one('back'),
@@ -2220,6 +2236,8 @@ extension DiscogsArtwork on DiscogsService {
         // Ontbreekt dit bestand, dan is dit een map van vóór deze versie. Dat is geen fout: het
         // betekent alleen dat er geen persing bij staat, en dan gedraagt alles zich als voorheen.
         bron: gelezenBron,
+        // Ook dit kan ontbreken (van vóór 18-10-2026): dan een cd, zoals altijd.
+        formaat: gelezenFormaat.isEmpty ? null : gelezenFormaat,
       );
       // Een map zonder één enkele afbeelding is GEEN antwoord.
       //
@@ -2325,6 +2343,10 @@ extension DiscogsArtwork on DiscogsService {
       // bestanden. Precies het gedrag dat we hier aan het repareren zijn, één dag later.
       if (art.bron != null) {
         await File('${dir.path}${Platform.pathSeparator}bron').writeAsString(art.bron!);
+      }
+      // En het formaat van die persing, om dezelfde reden: de tweede keer is het anders een cd.
+      if (art.formaat != null) {
+        await File('${dir.path}${Platform.pathSeparator}formaat').writeAsString(art.formaat!);
       }
       // A marker, so a release that genuinely has only a front cover isn't refetched every visit.
       //
