@@ -30,6 +30,11 @@ const Duration kKantelVolg = Duration(milliseconds: 160);
 /// volle zes graden van de hoes: tien graden toestel is zes graden hoes.
 const double kToestelVol = .17;
 
+/// De zwaartekracht zoals het toestel hem voelt, in g (x naar rechts, y naar boven), ongeveer zestig
+/// keer per seconde. Op een pc of tv zonder bewegingsmelder: een fout, en wie luistert stopt dan.
+Stream<Offset> toestelZwaartekracht() =>
+    accelerometerEventStream(samplingPeriod: SensorInterval.uiInterval).map((e) => Offset(e.x / 9.81, e.y / 9.81));
+
 /// Waar de kanteling vandaan komt.
 enum KantelBron {
   /// De muis op de hoes (pc, Mac, een iPad met een muis).
@@ -87,6 +92,10 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
   /// Hoe je het toestel vasthoudt, langzaam bijgehouden: dat is de rust. Kantelen ERVAN kantelt de hoes.
   Offset? _rust;
 
+  /// De melding glad gemaakt: een hand trilt, en zonder dit liep er in een stille hand elke melding
+  /// een nieuwe beweging (en dus elk beeld een nieuw beeld).
+  Offset? _glad;
+
   Offset get _stand => Offset.lerp(_van, _naar, Curves.easeOut.transform(_c.value))!;
 
   bool _mag(BuildContext context) => !MediaQuery.disableAnimationsOf(context);
@@ -124,7 +133,11 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
 
   void _naarStand(Offset doel) {
     if (!_mag(context)) doel = Offset.zero;
-    if ((doel - _naar).distance < .01) return;
+    // Een kleine stap niet volgen: van het toestel pas vanaf ruim een vijfde graad, van de muis en de
+    // selectie vanaf een honderdste.
+    final drempel = widget.bron == KantelBron.toestel ? .035 : .01;
+    if ((doel - _naar).distance < drempel && doel != Offset.zero) return;
+    if (doel == _naar) return;
     _van = _stand;
     _naar = doel;
     _c.forward(from: 0);
@@ -143,14 +156,12 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
     if (!wil) {
       _melder?.cancel();
       _melder = null;
-      _rust = null;
+      _rust = _glad = null;
       if (widget.bron == KantelBron.toestel) _naarStand(Offset.zero);
       return;
     }
     if (_melder != null) return;
-    final bron = KantelHoes.toestelVoorToets?.call() ??
-        accelerometerEventStream(samplingPeriod: SensorInterval.uiInterval)
-            .map((e) => Offset(e.x / 9.81, e.y / 9.81));
+    final bron = KantelHoes.toestelVoorToets?.call() ?? toestelZwaartekracht();
     _melder = bron.listen(_opToestel, onError: (Object _) {
       // Geen bewegingsmelder (een pc, een tv, een toets): dan kantelt hij gewoon niet.
       _melder?.cancel();
@@ -158,7 +169,8 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
     }, cancelOnError: true);
   }
 
-  void _opToestel(Offset g) {
+  void _opToestel(Offset ruw) {
+    final g = _glad = _glad == null ? ruw : Offset.lerp(_glad, ruw, .15)!;
     // De rust volgt traag (ongeveer een seconde): hoe je hem vasthoudt is geen kanteling.
     final r = _rust == null ? g : Offset.lerp(_rust, g, .03)!;
     _rust = r;

@@ -82,14 +82,22 @@ void main() {
     }
     await t.pump(kKantelVolg);
     expect(_hoekY(t), isNull, reason: 'stilhouden kantelt niets, ook niet schuin');
-    // Tien graden naar links. Twee beelden: de melding komt na het eerste, en de klok van de
-    // beweging begint pas bij het tweede.
-    melder.add(const Offset(.17, .5));
-    await t.pump();
-    await t.pump();
+    // Een hand die trilt (een tiende graad heen en weer): niets.
+    for (var i = 0; i < 30; i++) {
+      melder.add(Offset(i.isEven ? .002 : -.002, .5));
+      await t.pump(const Duration(milliseconds: 16));
+    }
+    await t.pump(kKantelVolg);
+    expect(_hoekY(t), isNull, reason: 'trillen kantelt niets en vraagt geen beelden');
+    // Tien graden naar links, een kwart seconde lang (de melder meldt doorlopend).
+    for (var i = 0; i < 16; i++) {
+      melder.add(const Offset(.17, .5));
+      await t.pump(const Duration(milliseconds: 16));
+    }
     await t.pump(kKantelVolg);
     expect(_hoekY(t), isNotNull);
-    expect(_hoekY(t)!.abs(), greaterThan(kKantelHoek * .7));
+    // Niet de volle zes graden: de rust schuift intussen al een stukje mee (zo hoort het).
+    expect(_hoekY(t)!.abs(), greaterThan(kKantelHoek * .5));
     await t.pumpWidget(const SizedBox());
     expect(melder.hasListener, isFalse, reason: 'weg uit Nu speelt: de melder luistert niet meer');
   });

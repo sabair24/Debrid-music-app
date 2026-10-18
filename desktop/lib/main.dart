@@ -529,7 +529,12 @@ Future<void> main() async {
     Timer.run(() => kopLog.line(r));
   };
   // Op een tv volgt het licht over het glas de selectie (GlasLicht).
-  if (isTv) GlasLicht.volgSelectie();
+  if (isTv) {
+    GlasLicht.volgSelectie();
+  } else if (Platform.isAndroid || Platform.isIOS) {
+    // En op een gsm of iPad volgt het de kanteling van het toestel.
+    GlasLicht.volgToestel();
+  }
   // En of het systeem dicht glas vraagt (minder transparantie, batterijbesparing): systeem_glas.dart.
   unawaited(GlasKwaliteit.inrichten().then((_) => SysteemGlas.start()));
   // And what this device is called, before it publishes that name anywhere. Same channel, same
@@ -11959,6 +11964,10 @@ const kNuSpeeltHoes = 'nu-speelt-hoes';
 
 /// De schaduw van de achterkant op Nu speelt: dezelfde als onder de voorkant, maar om de achterkant
 /// zelf (zie [AchterkantBeeld.schaduw]).
+/// Hoe sterk de kleurvlekken van de hoes achter Nu speelt zijn: zachter dan in de balk, want hier
+/// liggen ze over het hele scherm.
+const double kNuSpeeltVlekken = .22;
+
 const kNuSpeeltAchterSchaduw = [BoxShadow(color: Color(0x80000000), blurRadius: 44, offset: Offset(0, 22))];
 
 /// Hoe ver je de minispeler opzij moet vegen voor het volgende of vorige nummer.
@@ -13808,6 +13817,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                 ),
               ),
             ),
+          // De stilstaande kleurvlekken van de hoes (Saber, 18-10-2026: "achter Nu speelt en de balk"):
+          // zachte ronde vlekken in de kleuren van de plaat, waar ze op de hoes liggen. Ze bewegen
+          // niet ("Nu speelt-achtergrond stilstaand") en worden één keer getekend.
+          Positioned.fill(child: HoesVlekkenLaag(p.hoesVlekken, sterkte: kNuSpeeltVlekken)),
           // De hoes zelf blijft erachter staan, maar dooft naar onderen uit — anders ligt hij nog
           // steeds over de knoppen heen.
           //

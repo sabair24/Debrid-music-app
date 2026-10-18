@@ -40,6 +40,7 @@ import 'package:flutter/widgets.dart';
 
 import '../artwork.dart' show HoesVlek;
 import '../tv.dart';
+import 'kantel_hoes.dart' show toestelZwaartekracht;
 import 'kleuren.dart';
 
 enum GlasStand { plat, mat, vloeibaar }
@@ -753,9 +754,87 @@ class GlasLicht {
     });
   }
 
+  /// Op een gsm of iPad: het licht volgt de kanteling van het toestel (Saber, 18-10-2026: "glans die
+  /// meebeweegt — kanteling gsm/iPad").
+  ///
+  /// **Zuinig.** De rust is hoe je hem vasthoudt (traag bijgehouden, zoals bij [KantelHoes]); alleen
+  /// kantelen ERVAN verplaatst het licht. Het licht verspringt pas als het meer dan
+  /// [kLichtStap] punten zou opschuiven, dus een toestel op tafel of in een stille hand vraagt geen
+  /// enkel beeld. In de achtergrond luistert er niets, en bij minder beweging staat het stil.
+  static void volgToestel({Stream<Offset> Function()? melder}) {
+    if (_toestel != null) return;
+    _toestel = _ToestelLicht(melder ?? toestelZwaartekracht)..start();
+  }
+
+  static _ToestelLicht? _toestel;
+
   /// Voor toetsen.
   @visibleForTesting
-  static void vergeet() => bron.value = null;
+  static void vergeet() {
+    bron.value = null;
+    _toestel?.stop();
+    _toestel = null;
+  }
+}
+
+/// Hoe ver het licht minstens opschuift voor het opnieuw getekend wordt, in punten.
+const double kLichtStap = 12;
+
+class _ToestelLicht with WidgetsBindingObserver {
+  _ToestelLicht(this._melder);
+  final Stream<Offset> Function() _melder;
+  StreamSubscription<Offset>? _sub;
+  Offset? _glad, _rust, _laatst;
+
+  void start() {
+    WidgetsBinding.instance.addObserver(this);
+    _luister();
+  }
+
+  void stop() {
+    WidgetsBinding.instance.removeObserver(this);
+    _sub?.cancel();
+    _sub = null;
+  }
+
+  void _luister() {
+    final s = WidgetsBinding.instance.lifecycleState;
+    final mag = s != AppLifecycleState.paused &&
+        s != AppLifecycleState.hidden &&
+        !ui.PlatformDispatcher.instance.accessibilityFeatures.disableAnimations;
+    if (!mag) {
+      _sub?.cancel();
+      _sub = null;
+      _rust = _glad = null;
+      return;
+    }
+    _sub ??= _melder().listen(_op, onError: (Object _) {
+      _sub?.cancel();
+      _sub = null;
+    }, cancelOnError: true);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) => _luister();
+
+  void _op(Offset ruw) {
+    // Eerst glad: een hand trilt, en zonder dit sprong het licht bij een tiende graad al 16 punten.
+    final g = _glad = _glad == null ? ruw : Offset.lerp(_glad, ruw, .15)!;
+    final r = _rust == null ? g : Offset.lerp(_rust, g, .03)!;
+    _rust = r;
+    final d = g - r;
+    final views = ui.PlatformDispatcher.instance.views;
+    if (views.isEmpty) return;
+    final v = views.first;
+    final maat = v.physicalSize / v.devicePixelRatio;
+    // Zes graden toestel = het licht een halve schermbreedte opzij. Links kantelen = licht links.
+    final x = (-d.dx / .1).clamp(-1.0, 1.0), y = (d.dy / .1).clamp(-1.0, 1.0);
+    final plek = Offset(maat.width * (.5 + x * .5), maat.height * (.35 + y * .5));
+    final vorige = _laatst;
+    if (vorige != null && (plek - vorige).distance < kLichtStap) return;
+    _laatst = plek;
+    GlasLicht.bron.value = plek;
+  }
 }
 
 /// De rand van glas met de glans erop: een dunne lijn rondom (wit 14 %) en een heldere vlek op de

@@ -361,7 +361,7 @@ void main() {
     test('aangesloten: de muis op de pc, de selectie op een tv, en op de knoppen', () {
       final main = File('lib/main.dart').readAsStringSync();
       expect(main, contains('onPointerHover: (e) => GlasLicht.muis(e.position),'));
-      expect(main, contains('if (isTv) GlasLicht.volgSelectie();'));
+      expect(main, contains('  if (isTv) {\n    GlasLicht.volgSelectie();'));
       expect(File('lib/ui/vlak.dart').readAsStringSync(), contains('const RepaintBoundary(child: GlasGlans(vorm: hoek)),'));
     });
   });
