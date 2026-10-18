@@ -2,6 +2,7 @@
 // opviel, moet op gebroken wit nog lezen — en op donker precies blijven wat het was.
 import 'dart:io';
 
+import 'package:debridmusic/ui/glas.dart' show kVlekLicht;
 import 'package:debridmusic/ui/kleuren.dart';
 import 'package:debridmusic/ui/maten.dart';
 import 'package:debridmusic/ui/menu.dart';
@@ -101,4 +102,18 @@ void main() {
     }
     expect(fout, isEmpty);
   });
+
+  test('op de tv: gevulde knoppen (glas) krijgen in licht donkere letters', () {
+    final bron = File('lib/main.dart').readAsStringSync();
+    expect(bron, contains('filledButtonTheme: FilledButtonThemeData(style: _focusOutlineGevuld),'));
+    expect(bron, contains('return Thema.licht ? kTekst : null;'));
+  });
+
+  test('op licht zijn de kleurvlekken van de hoes zachter; de cd-glans leest de schijf niet terug', () {
+    expect(File('lib/ui/glas.dart').readAsStringSync(), contains('(Thema.licht ? sterkte * kVlekLicht : sterkte)'));
+    expect(kVlekLicht, lessThan(.5));
+    expect(File('lib/ui/getekende_schijf.dart').readAsStringSync(), isNot(contains('BlendMode.softLight')),
+        reason: 'een menging die de draaiende schijf eronder terugleest, kost elk beeld een schermkopie');
+  });
+
 }

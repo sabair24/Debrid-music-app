@@ -131,18 +131,19 @@ class _GlansSchilder extends CustomPainter {
       ..addOval(Rect.fromCircle(center: c, radius: r * kSchijfEtiket / 2 * 1.02));
     canvas.save();
     canvas.clipPath(ring);
-    // De regenboog: twee keer rond, zacht, zoals licht in de sporen breekt.
+    // De regenboog: twee keer rond, zacht, zoals licht in de sporen breekt. Gewoon erover gelegd en
+    // niet met een menging als zachtlicht: zo'n menging leest de draaiende schijf eronder elk beeld
+    // terug, en dat kostte de Shield een kopie van dat stuk scherm per beeld (18-10-2026).
     canvas.drawRect(
         vak,
         Paint()
-          ..blendMode = BlendMode.softLight
           ..shader = const SweepGradient(
             startAngle: 0,
             endAngle: math.pi * 2,
             colors: [
-              Color(0x00FF4D6D), Color(0x99FF4D6D), Color(0x99FFD23F), Color(0x9945E08F),
-              Color(0x9935C8FF), Color(0x998A5CFF), Color(0x00FF4D6D),
-              Color(0x99FF4D6D), Color(0x99FFD23F), Color(0x9945E08F), Color(0x9935C8FF), Color(0x998A5CFF),
+              Color(0x00FF4D6D), Color(0x2EFF4D6D), Color(0x2EFFD23F), Color(0x2E45E08F),
+              Color(0x2E35C8FF), Color(0x2E8A5CFF), Color(0x00FF4D6D),
+              Color(0x2EFF4D6D), Color(0x2EFFD23F), Color(0x2E45E08F), Color(0x2E35C8FF), Color(0x2E8A5CFF),
               Color(0x00FF4D6D),
             ],
           ).createShader(vak));

@@ -34,6 +34,9 @@ import 'wachtrij_eiland.dart';
 /// Hoe lang de proef loopt.
 const Duration kGlasproefDuur = Duration(seconds: 12);
 
+/// Hoe ver de lijst op en neer schuift, in punten.
+const double kGlasproefSchuif = 240;
+
 /// Hoeveel beelden boven het budget mogen komen.
 const double kGlasproefTeLaat = .05;
 
@@ -155,9 +158,13 @@ class _GlasproefState extends State<Glasproef> with TickerProviderStateMixin {
       if (!mounted) return;
       _tel++;
       setState(() => _schuin = !_schuin);
-      if (_tel % 2 == 0) _draai.draai(heeftAchterkant: true);
+      // Op een tv draait een hoes niet om (daar is OK afspelen), dus in de proef ook niet: de proef
+      // meet wat dit toestel echt doet.
+      if (_tel % 2 == 0 && !isTv) _draai.draai(heeftAchterkant: true);
       if (_rol.hasClients) {
-        final doel = _tel.isOdd ? _rol.position.maxScrollExtent : 0.0;
+        // Een stuk, niet helemaal: de hoes, de cd en de knoppen moeten in beeld blijven (pc, 18-10-2026:
+        // tot onderaan schoof alles uit beeld en mat de proef alleen nog een lijst).
+        final doel = _tel.isOdd ? math.min(_rol.position.maxScrollExtent, kGlasproefSchuif) : 0.0;
         _rol.animateTo(doel, duration: const Duration(milliseconds: 1200), curve: Curves.easeInOut);
       }
     });

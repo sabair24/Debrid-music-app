@@ -54,11 +54,66 @@ void main() {
         reason: 'twee vensters zijn anderhalve seconde: een pagina die opengaat, geen patroon');
     GlasKwaliteit.opBeelden(beelden(kGlasVenster, 9000));
     expect(GlasKwaliteit.stand.value, GlasStand.mat);
+    // Mat is sneller (7,5 tegen 9 ms: de terugval hielp) maar nog altijd te zwaar.
     for (var i = 0; i < kGlasTeZwaar; i++) {
-      GlasKwaliteit.opBeelden(beelden(kGlasVenster, 9000));
+      GlasKwaliteit.opBeelden(beelden(kGlasVenster, 7500));
     }
     expect(GlasKwaliteit.stand.value, GlasStand.plat);
+    // En plat is weer sneller: dan blijft hij plat.
+    GlasKwaliteit.opBeelden(beelden(kGlasVenster, 4000));
+    expect(GlasKwaliteit.stand.value, GlasStand.plat);
     GlasKwaliteit.vergeet(); // de klok voor opnieuw proberen mag niet blijven lopen
+  });
+
+  group('alleen het glas krijgt de schuld van wat het glas doet (pc, 18-10-2026)', () {
+    testWidgets('een terugval die niet sneller is, gaat terug: het lag niet aan het glas', (t) async {
+      await t.pumpWidget(_vlak());
+      final regels = <String>[];
+      GlasKwaliteit.meld = regels.add;
+      addTearDown(() => GlasKwaliteit.meld = null);
+      GlasKwaliteit.stand.value = GlasStand.vloeibaar;
+      for (var i = 0; i < kGlasTeZwaar; i++) {
+        GlasKwaliteit.opBeelden(beelden(kGlasVenster, 15000));
+      }
+      expect(GlasKwaliteit.stand.value, GlasStand.mat);
+      // Mat: nog altijd 14 ms (zo stond het in kop.log: 15,4 → 14,3 → plat).
+      GlasKwaliteit.opBeelden(beelden(kGlasVenster, 14000));
+      expect(GlasKwaliteit.stand.value, GlasStand.vloeibaar);
+      expect(GlasKwaliteit.terugval.value, isNull, reason: 'geen "te zwaar" in Instellingen voor iets wat het glas niet deed');
+      expect(regels.last, contains('het lag niet aan het glas'));
+      // En daarna een half uur niet opnieuw schuldig verklaren.
+      for (var i = 0; i < 3 * kGlasTeZwaar; i++) {
+        GlasKwaliteit.opBeelden(beelden(kGlasVenster, 15000));
+      }
+      expect(GlasKwaliteit.stand.value, GlasStand.vloeibaar);
+      GlasKwaliteit.vergeet();
+    });
+
+    testWidgets('beelden na een stilte tellen niet mee', (t) async {
+      await t.pumpWidget(_vlak());
+      final regels = <String>[];
+      GlasKwaliteit.meld = regels.add;
+      addTearDown(() => GlasKwaliteit.meld = null);
+      GlasKwaliteit.stand.value = GlasStand.vloeibaar;
+      // Elf beelden per seconde, elk 15 ms: een scherm dat stil staat en af en toe iets opbouwt.
+      List<ui.FrameTiming> los(int n) => [
+            for (var i = 0; i < n; i++)
+              ui.FrameTiming(
+                vsyncStart: i * 90000,
+                buildStart: i * 90000,
+                buildFinish: i * 90000 + 1000,
+                rasterStart: i * 90000 + 1000,
+                rasterFinish: i * 90000 + 16000,
+                rasterFinishWallTime: i * 90000 + 16000,
+              ),
+          ];
+      for (var i = 0; i < 4 * kGlasTeZwaar; i++) {
+        GlasKwaliteit.opBeelden(los(kGlasVenster));
+      }
+      expect(GlasKwaliteit.stand.value, GlasStand.vloeibaar);
+      expect(regels, isEmpty, reason: 'zelfs geen terugval die daarna teruggedraaid wordt');
+      GlasKwaliteit.vergeet();
+    });
   });
 
   testWidgets('een licht venster ertussen begint de telling opnieuw', (t) async {

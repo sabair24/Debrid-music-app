@@ -210,6 +210,17 @@ final ButtonStyle _focusOutline = ButtonStyle(
       : null),
 );
 
+/// Hetzelfde voor gevulde knoppen, met één ding erbij: op een tv in het lichte thema donkere letters.
+/// Die knoppen zijn daar glas ([_knopVulling]), en Materials witte letters op 8 % zwart glas over
+/// gebroken wit las je niet ("Opslaan", "+ Nieuwe", gezien op de Shield, 18-10-2026).
+final ButtonStyle _focusOutlineGevuld = _focusOutline.copyWith(
+  foregroundColor: WidgetStateProperty.resolveWith((states) {
+    if (!isTv || states.contains(WidgetState.disabled)) return null;
+    if (states.contains(WidgetState.focused)) return kAccent;
+    return Thema.licht ? kTekst : null;
+  }),
+);
+
 /// De vulling van een knop die elders paars gevuld is: op een tv glas (16-10-2026, "Bekijken" en
 /// alle andere knoppen hetzelfde), zodat zijn paarse letters bij selectie te zien zijn.
 Color get _knopVulling => isTv ? kTvKnopGlas : _accent;
@@ -1922,7 +1933,7 @@ class DebridApp extends StatelessWidget {
         // tenth of white. On the purple "Afspelen" button that is nothing at all, and on a TV a
         // button you cannot tell is selected is a button you press by accident. So they get the
         // same outline every other focusable thing in this app got.
-        filledButtonTheme: FilledButtonThemeData(style: _focusOutline),
+        filledButtonTheme: FilledButtonThemeData(style: _focusOutlineGevuld),
         textButtonTheme: TextButtonThemeData(style: _focusOutline),
         outlinedButtonTheme: OutlinedButtonThemeData(style: _focusOutline),
         iconButtonTheme: IconButtonThemeData(style: _focusOutline),

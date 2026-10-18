@@ -104,6 +104,25 @@ const kGlasTeZwaar = 3;
 /// en een menu zonder enige vervaging is precies wat de schermafdrukken van 16-10-2026 tonen.
 const kGlasAanloop = Duration(seconds: 10);
 
+/// Een beeld dat meer dan drie schermtikken (en minstens 20 ms) na het vorige begint, komt na een
+/// stilte en telt niet mee. Tijdens een beweging volgen de beelden elkaar op de tik; een los beeld van
+/// een scherm dat stil staat, niet.
+///
+/// **Waarom (pc, 18-10-2026).** In kop.log zakte het glas elke dertig minuten van vloeibaar naar mat
+/// naar plat, met 15 ms per beeld — en ook plat nog 14 ms. Het glas was het dus niet: dat waren de
+/// losse beelden van een scherm dat stil staat (elf per seconde, een hoes die binnenkomt, een tegel
+/// die opnieuw opbouwt), en die zijn duur om redenen die niets met glas te maken hebben. De glasproef
+/// mat op hetzelfde moment, met alles in beweging, 5,3 ms in vloeibaar glas.
+Duration glasStilteVoor(double hz) =>
+    Duration(microseconds: math.max(20000, hz <= 0 ? 50000 : (3e6 / hz).round()));
+
+/// Hoeveel een lichtere stand minstens moet schelen om de terugval te houden: 15 % sneller. Scheelt
+/// het minder, dan lag het niet aan het glas en gaat hij terug.
+const double kGlasMoetHelpen = .85;
+
+/// Hoe lang de bewaker zwijgt nadat een terugval niet hielp.
+const Duration kGlasNietSchuldig = Duration(minutes: 30);
+
 /// Hoe dicht een donker glasvlak is (menu, minispeler, onderbalk, wachtrij), mét vervaging: de
 /// achtergrond wordt een gekleurde waas, er valt niets meer door te lezen. Zie de uitleg bovenaan.
 ///
@@ -264,8 +283,13 @@ class GlasKwaliteit {
     _later?.cancel();
     _later = null;
     if (systeemDicht.value) return;
-    if (handmatig) _wacht = Duration.zero;
+    if (handmatig) {
+      _wacht = Duration.zero;
+      _nietTot = null;
+    }
     if (_bewaakte.value == hoogste) return;
+    _voorTerugval = null;
+    _terugNaar = null;
     final van = _bewaakte.value;
     _bewaakte.value = hoogste;
     _tijden.clear();
@@ -292,6 +316,18 @@ class GlasKwaliteit {
   static int _actief = 0;
   static final _tijden = <int>[];
   static int _teZwaar = 0;
+
+  /// Wanneer het vorige beeld klaar was (rasterFinish, µs). Een beeld dat na een stilte komt, telt
+  /// niet mee: zie [glasStilteVoor].
+  static int? _vorigKlaar;
+
+  /// Na een terugval: het 90e percentiel van vóór de terugval, en de stand waar hij vandaan kwam. Het
+  /// eerstvolgende venster vergelijkt — zie [kGlasMoetHelpen].
+  static int? _voorTerugval;
+  static GlasStand? _terugNaar;
+
+  /// Tot wanneer de bewaker niet oordeelt, nadat bleek dat een terugval niet hielp.
+  static DateTime? _nietTot;
   static bool _bewaakt = false;
   static Stopwatch? _sinds;
   static String? _wissel;
@@ -351,17 +387,49 @@ class GlasKwaliteit {
   static void opBeelden(List<ui.FrameTiming> beelden, {Duration? verstreken}) {
     final sinds = verstreken ?? _sinds?.elapsed;
     final doel = _bewaakte;
-    if (_actief == 0 || doel.value == GlasStand.plat || (sinds != null && sinds < kGlasAanloop)) {
+    final niet = _nietTot;
+    // Plat meet hij alleen nog om te zien of de terugval hielp.
+    if (_actief == 0 ||
+        (doel.value == GlasStand.plat && _voorTerugval == null) ||
+        (sinds != null && sinds < kGlasAanloop) ||
+        (niet != null && klok().isBefore(niet))) {
       _tijden.clear();
+      _vorigKlaar = null;
       return;
     }
+    final stilte = glasStilteVoor(_hz).inMicroseconds;
     for (final b in beelden) {
+      final begin = b.timestampInMicroseconds(ui.FramePhase.vsyncStart);
+      final vorig = _vorigKlaar;
+      _vorigKlaar = b.timestampInMicroseconds(ui.FramePhase.rasterFinish);
+      // Na een stilte: niet meetellen (zie [glasStilteVoor]).
+      if (vorig != null && begin - vorig > stilte) continue;
       _tijden.add(b.rasterDuration.inMicroseconds);
     }
     if (_tijden.length < kGlasVenster) return;
     final p90 = negentigste(_tijden);
     _tijden.clear();
     final budget = glasBudgetVoor(_hz);
+    // Het eerste venster na een terugval: hielp het?
+    final voor = _voorTerugval, terug = _terugNaar;
+    if (voor != null && terug != null) {
+      _voorTerugval = null;
+      _terugNaar = null;
+      if (p90 > voor * kGlasMoetHelpen) {
+        final van = doel.value;
+        doel.value = terug;
+        terugval.value = null;
+        _teZwaar = 0;
+        _nietTot = klok().add(kGlasNietSchuldig);
+        _later?.cancel();
+        _later = null;
+        final waarom = '${van.name} → ${terug.name}: ${van.name} was niet sneller '
+            '(${(p90 / 1000).toStringAsFixed(1)} tegen ${(voor / 1000).toStringAsFixed(1)} ms), het lag niet aan het glas';
+        _wissel = waarom;
+        meld?.call('glas: $waarom');
+        return;
+      }
+    }
     if (p90 <= budget.inMicroseconds) {
       _teZwaar = 0;
       return;
@@ -371,6 +439,8 @@ class GlasKwaliteit {
     final van = doel.value;
     final naar = van == GlasStand.vloeibaar ? GlasStand.mat : GlasStand.plat;
     doel.value = naar;
+    _voorTerugval = p90;
+    _terugNaar = van;
     final waarom = '${van.name} → ${naar.name}, 90e percentiel ${(p90 / 1000).toStringAsFixed(1)} ms '
         'per beeld met $_actief glasvlakken (budget ${(budget.inMicroseconds / 1000).toStringAsFixed(1)} ms)';
     _wissel = waarom;
@@ -398,6 +468,10 @@ class GlasKwaliteit {
     _tijden.clear();
     _teZwaar = 0;
     _wissel = null;
+    _vorigKlaar = null;
+    _voorTerugval = null;
+    _terugNaar = null;
+    _nietTot = null;
     stand.value = GlasStand.mat;
     hoogste = GlasStand.mat;
     terugval.value = null;
@@ -605,7 +679,9 @@ class HoesVlekkenLaag extends StatelessWidget {
   @override
   Widget build(BuildContext context) => vlekken.isEmpty
       ? const SizedBox.shrink()
-      : IgnorePointer(child: RepaintBoundary(child: CustomPaint(painter: HoesVlekkenSchilder(vlekken, sterkte: sterkte))));
+      : IgnorePointer(
+          child: RepaintBoundary(
+              child: CustomPaint(painter: HoesVlekkenSchilder(vlekken, sterkte: sterkte))));
 }
 
 /// Hoe sterk een vlek op zijn zwaarst is.
@@ -613,6 +689,10 @@ const double kVlekSterkte = .30;
 
 /// En in het nep-glas van een tv, waar de vulling dicht is en niets van de pagina doorschijnt.
 const double kMicaSterkte = .38;
+
+/// Op licht een derde daarvan: op gebroken wit kleuren 30 % hoeskleur het hele vlak (gezien op de
+/// Shield, 18-10-2026: lila balken), en Saber koos "warm gebroken wit, geen lila vlekken".
+const double kVlekLicht = .35;
 
 /// Tekent [HoesVlek]ken. Als achtergrond van een rij (`CustomPaint(painter: …, child: rij)`) staan ze
 /// boven de kleur van de balk en onder de knoppen; [uitloop] laat ze doorlopen tot in de binnenmarge
@@ -639,7 +719,8 @@ class HoesVlekkenSchilder extends CustomPainter {
         Offset.zero & size,
         Paint()
           ..shader = ui.Gradient.radial(midden, straal, [
-            kleur.withValues(alpha: sterkte * (.55 + .45 * v.gewicht)),
+            // Op licht zachter: zie [kVlekLicht].
+            kleur.withValues(alpha: (Thema.licht ? sterkte * kVlekLicht : sterkte) * (.55 + .45 * v.gewicht)),
             kleur.withValues(alpha: 0),
           ]),
       );
