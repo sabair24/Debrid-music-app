@@ -21,6 +21,7 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
+import '../proef.dart';
 import '../tv.dart';
 import 'glas.dart';
 import 'kleuren.dart';
@@ -1200,7 +1201,7 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
                 // Parallax (Saber, 18-10-2026: "parallax-kop"): het beeld schuift half zo snel als de
                 // pagina, dus de kop lijkt dieper te liggen dan wat eroverheen gaat. Niet op een tv
                 // en niet bij minder beweging: daar schuift hij gewoon mee, zoals altijd.
-                final traag = !isTv && !MediaQuery.disableAnimationsOf(context);
+                final traag = !isTv && !MediaQuery.disableAnimationsOf(context) && !gProef.contains('parallax-uit');
                 final f = traag ? kParallax : 1.0;
                 final schuif = rol.hasClients ? rol.offset.clamp(0.0, widget.hoogte / f) * f : 0.0;
                 return Transform.translate(offset: Offset(0, -schuif), child: kind);

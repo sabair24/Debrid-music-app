@@ -18,7 +18,9 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'proef.dart';
 import 'tv.dart';
+import 'ui/kleuren.dart';
 import 'ui/glas.dart';
 import 'ui/maten.dart';
 
@@ -208,17 +210,28 @@ Widget _schuif(
   // Diepte (Saber, 18-10-2026: "diepte-overgang"): de pagina eronder wijkt een tikje terug en wordt
   // stiller, de nieuwe komt van iets kleiner naar voren. Niet op een tv: daar kost een doorzichtige
   // volle pagina elk beeld een kopie van het scherm, en de Shield heeft die marge niet.
-  if (!isTv) {
+  if (!isTv && !gProef.contains('diepte-uit')) {
+    final stil = Tween(begin: 1.0, end: kDiepteStil).chain(curve);
+    Widget stiller(Widget k) => gProef.contains('diepte-waas')
+        ? AnimatedBuilder(
+            animation: terug,
+            child: k,
+            builder: (_, k) => DecoratedBox(
+              position: DecorationPosition.foreground,
+              decoration: BoxDecoration(color: kAchtergrond.withValues(alpha: 1 - stil.evaluate(terug))),
+              child: k,
+            ),
+          )
+        : FadeTransition(opacity: stil.animate(terug), child: k);
     return SlideTransition(
       position: Tween(begin: Offset.zero, end: const Offset(-_afstand / 3, 0)).chain(curve).animate(terug),
       child: ScaleTransition(
-        scale: Tween(begin: 1.0, end: kDiepteTerug).chain(curve).animate(terug),
-        child: FadeTransition(
-          opacity: Tween(begin: 1.0, end: kDiepteStil).chain(curve).animate(terug),
-          child: SlideTransition(
+        scale: Tween(begin: 1.0, end: gProef.contains('diepte-schaal-uit') ? 1.0 : kDiepteTerug).chain(curve).animate(terug),
+        child: stiller(
+          SlideTransition(
             position: Tween(begin: const Offset(_afstand / 2, 0), end: Offset.zero).chain(curve).animate(animatie),
             child: ScaleTransition(
-              scale: Tween(begin: kDiepteVoor, end: 1.0).chain(curve).animate(animatie),
+              scale: Tween(begin: gProef.contains('diepte-schaal-uit') ? 1.0 : kDiepteVoor, end: 1.0).chain(curve).animate(animatie),
               child: FadeTransition(opacity: animatie.drive(curve), child: kind),
             ),
           ),

@@ -28,6 +28,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../proef.dart';
 import '../tv.dart';
 import 'draaihoes.dart';
 import 'kantel_hoes.dart';
@@ -406,7 +407,7 @@ class _AlbumTegelState extends State<AlbumTegel> {
                     beeld: _achter!, maat: maat, hoek: kHoek12, decodeerBreedte: _decodeer(maat), schaduw: kSchaduw1),
           );
     // Kantelen ±6° met een glans (Saber, 18-10-2026): de schaduw blijft plat liggen, de hoes kantelt.
-    final gekanteld = KantelHoes(
+    final gekanteld = gProef.contains('kantel-tegel-uit') ? hoes : KantelHoes(
       bron: isTv ? KantelBron.selectie : KantelBron.muis,
       aan: _aan,
       vorm: vorm,

@@ -124,6 +124,7 @@ import 'paths.dart';
 import 'fotoblik_bestand.dart';
 import 'musicbrainz.dart';
 import 'navigatie.dart';
+import 'proef.dart';
 import 'ui/itemmenu.dart';
 import 'offline.dart';
 import 'online.dart';
@@ -518,6 +519,9 @@ Future<void> main() async {
   // Waar de gezichten op de artiestfoto's staan, zodat elke foto maar één keer bekeken wordt (zie
   // `ui/kopfoto.dart`). Hier om dezelfde reden als de scanmaten hierboven.
   await bewaarFotoBlikkenIn(appFile('fotoblikken.json'));
+  // MEETTAK: zie lib/proef.dart.
+  final proefLog = WarmLog('$logDir${Platform.pathSeparator}proef.log');
+  proefInrichten(logDir, proefLog.line);
   // En hoe lang dat kijken duurt, in kop.log naast de andere logboeken. Buiten het beeld geschreven:
   // WarmLog schrijft gespoeld en synchroon.
   final kopLog = WarmLog('$logDir${Platform.pathSeparator}kop.log');

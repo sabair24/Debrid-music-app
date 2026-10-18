@@ -20,6 +20,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+import '../proef.dart';
+
 /// Hoe ver een hoes hooguit kantelt, in radialen: zes graden.
 const double kKantelHoek = 6 * math.pi / 180;
 
@@ -216,7 +218,7 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
 
   @override
   Widget build(BuildContext context) {
-    final kind = RepaintBoundary(child: widget.child);
+    final kind = gProef.contains('kantel-rb-uit') ? widget.child : RepaintBoundary(child: widget.child);
     final getekend = AnimatedBuilder(
       animation: _c,
       child: kind,

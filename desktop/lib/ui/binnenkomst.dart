@@ -23,6 +23,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../proef.dart';
 import '../tv.dart';
 import 'maten.dart';
 
@@ -156,7 +157,7 @@ class _BinnenkomstState extends State<Binnenkomst> with SingleTickerProviderStat
     // Op een televisie niets: daar staat de markering al voor "waar ben ik", en veertig tegels die
     // tegelijk bewegen kost beelden op een Tegra X1 — dezelfde afweging als bij de matglas-balk en
     // bij `paneelDecoratie`.
-    if (isTv || !BinnenkomstGroep.magNog(context)) return;
+    if (isTv || gProef.contains('binnenkomst-uit') || !BinnenkomstGroep.magNog(context)) return;
     final c = AnimationController(vsync: this, duration: kBinnenkomstDuur);
     final curve = CurvedAnimation(parent: c, curve: Curves.easeOutCubic);
     _c = c;
