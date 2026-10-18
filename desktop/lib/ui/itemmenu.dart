@@ -149,6 +149,8 @@ Future<MenuRegel?> _viaBlad(BuildContext context, ItemMenu menu) async {
           vorm: const BorderRadius.vertical(top: Radius.circular(16)),
           vulling: isTv ? const BoxDecoration(color: kBovenop) : null,
           kleur: isTv ? null : kBovenop,
+          // Over ander glas heen: dat wordt zolang dicht (nooit glas op glas, 18-10-2026).
+          bovenop: true,
           // Een eigen doorzichtig Material BOVEN de vulling. De regels zijn InkWells, en die tekenen
           // hun selectie en rimpeling op het Material van het blad — en dat ligt ONDER de vulling van
           // het glas. Op de Shield (16-10-2026) zag je in dit menu daardoor niet welke regel de

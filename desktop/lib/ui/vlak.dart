@@ -423,9 +423,10 @@ const kGlasOnderlaagMat = Color(0x7307080C);
 Widget glasRuit({bool? plat, bool lens = false}) {
   // Volgt de stand van het glas: verandert die (de bewaker in ui/glas.dart), dan tekent de ruit
   // meteen opnieuw, en niet pas bij de volgende opbouw van zijn pagina.
-  return ValueListenableBuilder<GlasStand>(
-    valueListenable: GlasKwaliteit.stand,
-    builder: (_, __, ___) => _glasRuit(plat: plat, lens: lens),
+  return AnimatedBuilder(
+    animation: Listenable.merge([GlasKwaliteit.stand, GlasKwaliteit.bovenop]),
+    // Ligt er een glazen menu of blad over, dan is deze ruit dicht: nooit glas op glas.
+    builder: (_, __) => _glasRuit(plat: GlasKwaliteit.bovenop.value > 0 ? true : plat, lens: lens),
   );
 }
 

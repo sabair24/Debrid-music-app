@@ -14232,6 +14232,8 @@ class VerderBalk extends StatelessWidget {
         vorm: const BorderRadius.all(Radius.circular(18)),
         kleur: _panel,
         balk: true,
+        // In een blad over de balken heen: die worden zolang dicht (nooit glas op glas).
+        bovenop: true,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(10, 10, 6, 10),
           child: Row(

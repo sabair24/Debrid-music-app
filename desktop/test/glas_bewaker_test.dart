@@ -365,4 +365,44 @@ void main() {
     });
   });
 
+
+  group('nooit glas op glas (Saber, 18-10-2026: "onderste wordt dicht")', () {
+    Widget vlak({Widget? kind, bool bovenop = false}) => GlasVlak(
+        kleur: const Color(0xFF2B3142), bovenop: bovenop, child: kind ?? const SizedBox(width: 100, height: 60));
+
+    testWidgets('glas in glas: alleen het buitenste vervaagt', (t) async {
+      GlasKwaliteit.stand.value = GlasStand.mat;
+      await t.pumpWidget(Directionality(textDirection: TextDirection.ltr, child: vlak(kind: vlak())));
+      expect(find.byType(GlasVlak), findsNWidgets(2));
+      expect(find.byType(BackdropFilter), findsOneWidget, reason: 'het knopje in de balk is een vulling, geen tweede glas');
+    });
+
+    testWidgets('een menu bovenop: het glas eronder is zolang dicht, en daarna weer glas', (t) async {
+      GlasKwaliteit.stand.value = GlasStand.mat;
+      Widget scherm({required bool menu}) => Directionality(
+            textDirection: TextDirection.ltr,
+            child: Stack(children: [
+              vlak(),
+              Positioned(left: 0, top: 0, width: 80, height: 40, child: glasRuit()),
+              if (menu) Positioned(left: 0, top: 100, child: vlak(bovenop: true)),
+            ]),
+          );
+      await t.pumpWidget(scherm(menu: false));
+      expect(find.byType(BackdropFilter), findsNWidgets(2), reason: 'de balk en de knop');
+      await t.pumpWidget(scherm(menu: true));
+      await t.pump();
+      expect(find.byType(BackdropFilter), findsOneWidget, reason: 'alleen het menu zelf');
+      await t.pumpWidget(scherm(menu: false));
+      await t.pump();
+      await t.pump();
+      expect(GlasKwaliteit.bovenop.value, 0);
+      expect(find.byType(BackdropFilter), findsNWidgets(2), reason: 'menu dicht: weer glas');
+    });
+
+    test('aangesloten: het menu bij lang indrukken en het blad Verder liggen bovenop', () {
+      expect(File('lib/ui/itemmenu.dart').readAsStringSync(), contains('          bovenop: true,'));
+      expect(File('lib/main.dart').readAsStringSync(), contains('        bovenop: true,'));
+    });
+  });
+
 }

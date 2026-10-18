@@ -197,6 +197,14 @@ class GlasKwaliteit {
   /// De laatste terugval, of null zolang het glas op zijn hoogste stand staat. Voor Instellingen.
   static final terugval = ValueNotifier<GlasTerugval?>(null);
 
+  /// Hoeveel glasvlakken er nu BOVENOP liggen (een menu of blad: [GlasVlak.bovenop]). Zolang dat er
+  /// één of meer zijn, is het glas eronder dicht: nooit glas op glas (Apple's regel; Saber koos
+  /// 18-10-2026 "onderste wordt dicht").
+  static final bovenop = ValueNotifier<int>(0);
+
+  /// De stand voor glas dat onder een menu of blad kan liggen: plat zolang er iets [bovenop] ligt.
+  static GlasStand onder(GlasStand stand) => bovenop.value > 0 ? GlasStand.plat : stand;
+
   /// De hoogste stand die dit toestel kan (vloeibaar met een lens, anders mat). Daar gaat
   /// [probeerOpnieuw] heen.
   static GlasStand hoogste = GlasStand.mat;
@@ -383,6 +391,7 @@ class GlasKwaliteit {
     klok = DateTime.now;
     systeemDicht.value = false;
     _voorSysteem = null;
+    bovenop.value = 0;
   }
 }
 
@@ -401,6 +410,7 @@ class GlasVlak extends StatefulWidget {
     this.balk = false,
     this.ondergrond = GlasOndergrond.lijst,
     this.korrel = true,
+    this.bovenop = false,
     this.child,
   }) : assert(vulling != null || kleur != null, 'een glasvlak zonder vulling is een gat');
 
@@ -430,29 +440,70 @@ class GlasVlak extends StatefulWidget {
   /// De fijne korrel van [GlasKorrel] erover (niet op een tv: daar zie je hem niet).
   final bool korrel;
 
+  /// Een menu of blad dat over ander glas heen komt: zolang het er is, wordt het glas eronder dicht
+  /// ([GlasKwaliteit.bovenop]).
+  final bool bovenop;
+
   final Widget? child;
 
   @override
   State<GlasVlak> createState() => _GlasVlakState();
 }
 
+/// Zit dit binnen een ander glasvlak? Dan geen eigen vervaging: glas in glas is een vulling.
+class _BinnenGlas extends InheritedWidget {
+  const _BinnenGlas({required super.child});
+
+  static bool van(BuildContext context) => context.getInheritedWidgetOfExactType<_BinnenGlas>() != null;
+
+  @override
+  bool updateShouldNotify(_BinnenGlas oud) => false;
+}
+
 class _GlasVlakState extends State<GlasVlak> {
+  bool _telt = false;
+
   @override
   void initState() {
     super.initState();
     GlasKwaliteit._erbij();
+    if (widget.bovenop) {
+      // Na het beeld, net als het aftellen: het glas eronder tekent dan opnieuw, en een melding
+      // midden in de opbouw van dit menu mag dat niet.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _telt) return;
+        _telt = true;
+        GlasKwaliteit.bovenop.value++;
+      });
+    }
   }
 
   @override
   void dispose() {
     GlasKwaliteit._eraf();
+    if (_telt) {
+      // Na het beeld: het glas eronder tekent dan opnieuw, en dat mag niet midden in een opbouw.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final n = GlasKwaliteit.bovenop.value;
+        GlasKwaliteit.bovenop.value = n > 0 ? n - 1 : 0;
+      });
+    }
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<GlasStand>(
-        valueListenable: widget.balk && isTv ? GlasKwaliteit.tvBalk : GlasKwaliteit.stand,
-        builder: (context, stand, _) {
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: Listenable.merge(
+            [widget.balk && isTv ? GlasKwaliteit.tvBalk : GlasKwaliteit.stand, GlasKwaliteit.bovenop]),
+        builder: (context, _) {
+          final eigen = (widget.balk && isTv ? GlasKwaliteit.tvBalk : GlasKwaliteit.stand).value;
+          // Glas in glas: alleen een vulling. Glas onder een menu of blad: dicht.
+          final binnen = _BinnenGlas.van(context);
+          final stand = binnen
+              ? GlasStand.plat
+              : widget.bovenop
+                  ? eigen
+                  : GlasKwaliteit.onder(eigen);
           final k = widget.kleur;
           final vulling = DecoratedBox(
               decoration: k != null ? glasVulling(k, stand, ondergrond: widget.ondergrond) : widget.vulling!);
@@ -471,7 +522,7 @@ class _GlasVlakState extends State<GlasVlak> {
                 Positioned.fill(child: vulling),
                 if (widget.korrel && !isTv) const Positioned.fill(child: GlasKorrelLaag()),
                 if (rand != null) Positioned.fill(child: IgnorePointer(child: rand)),
-                widget.child ?? const SizedBox.shrink(),
+                _BinnenGlas(child: widget.child ?? const SizedBox.shrink()),
               ],
             ),
           );
