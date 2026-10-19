@@ -33,6 +33,7 @@ import 'draaihoes.dart';
 import 'kantel_hoes.dart';
 import 'kleuren.dart';
 import 'maten.dart';
+import 'schijf_licht.dart';
 import 'typografie.dart';
 
 /// De maat van een hoes in een liggende rij op Start.
@@ -148,7 +149,10 @@ class TegelSchijf extends StatelessWidget {
     final label = maat * .36;
     return SizedBox.square(
       dimension: maat,
-      child: Stack(alignment: Alignment.center, children: [
+      child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
+        // De slagschaduw: één keer gebakken voor alle tegels van deze maat, in plaats van een vervaagde
+        // schaduw per tegel (ui/schijf_licht.dart).
+        SchijfGrondschaduw(maat: maat),
         DecoratedBox(
           decoration: const BoxDecoration(
             shape: BoxShape.circle,
@@ -156,7 +160,6 @@ class TegelSchijf extends StatelessWidget {
               Color(0xFFC9CED8), Color(0xFF8E96A6), Color(0xFFD9D2E8), Color(0xFF9FB4C8),
               Color(0xFFE2E5EC), Color(0xFF8A90A0), Color(0xFFCFC6E0), Color(0xFFC9CED8),
             ]),
-            boxShadow: [BoxShadow(color: Color(0x66000000), blurRadius: 12, offset: Offset(0, 4))],
           ),
           child: SizedBox.square(dimension: maat),
         ),
@@ -182,6 +185,8 @@ class TegelSchijf extends StatelessWidget {
           height: maat * .07,
           decoration: const BoxDecoration(color: Color(0xFF07080C), shape: BoxShape.circle),
         ),
+        // Het licht erover, zoals de grote cd (Saber, 19-10-2026: ook op de tegels).
+        SchijfLichtLaag(maat: maat, soort: SchijfSoort.cd, etiket: .36),
       ]),
     );
   }

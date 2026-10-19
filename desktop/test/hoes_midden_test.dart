@@ -59,7 +59,9 @@ void main() {
     expect(bron, contains('    final centreer = !isTv;'));
     expect(bron, contains('child: meeMetDeHoes(HoesSpiegel(beeld: front, maat: s))),'));
     expect(bron, contains('child: meeMetDeHoes(RepaintBoundary(child: kaartGekanteld))),'));
-    expect(bron,
-        contains('offset: Offset(hoesEnSchijfX(_slide.value, reis: travel, centreer: centreer).schijf, 0),'));
+    // Sinds 19-10-2026 één keer uitgerekend: de schijf schuift met .schijf, de schaduw van de hoes erop
+    // ligt aan .hoes (zie schijf_licht_test.dart).
+    expect(bron, contains('final x = hoesEnSchijfX(_slide.value, reis: travel, centreer: centreer);'));
+    expect(bron, contains('offset: Offset(x.schijf, 0),'));
   });
 }

@@ -185,6 +185,7 @@ import 'ui/tegel.dart';
 import 'ui/getekende_schijf.dart';
 import 'ui/glasproef.dart';
 import 'ui/kantel_hoes.dart';
+import 'ui/schijf_licht.dart';
 import 'ui/thema.dart';
 import 'ui/wachtrij_eiland.dart';
 import 'ui/typografie.dart';
@@ -535,6 +536,9 @@ Future<void> main() async {
   // Na initTvMode: op een tv is "volgens systeem" donker.
   ThemaStand.meld = (r) => Timer.run(() => kopLog.line(r));
   ThemaStand.laad();
+  // Licht en schaduw van de draaiende schijf (ui/schijf_licht.dart): laden zonder op het eerste beeld te
+  // wachten; tot dan de oude glans.
+  unawaited(SchijfLicht.laad());
   // Welk glas dit toestel tekent, en de bewaker die het terugzet als het te veel kost (ui/glas.dart).
   // De meldingen ook in kop.log: debugPrint alleen zag je in een uitgave nergens (18-10-2026).
   GlasKwaliteit.meld = (r) {
@@ -29094,19 +29098,33 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               // sleeve, so an album page you were not playing showed no disc at all — and somebody
               // who had just chosen a disc scan had no way to look at it without pressing play.
               // The reveal is still the reveal: it comes the rest of the way out and starts turning.
-              builder: (context, child) => Transform.translate(
-                offset: Offset(hoesEnSchijfX(_slide.value, reis: travel, centreer: centreer).schijf, 0),
-                child: child,
-              ),
-              // Een getekende schijf krijgt zijn glans erbovenop, en die draait NIET mee: op een echte
-              // cd staat de regenboog stil (Saber, 18-10-2026). Hij schuift wel mee naar buiten. Een
-              // echte scan blijft zoals hij is.
-              child: disc != null
-                  ? spinningDisc
-                  : Stack(alignment: Alignment.center, children: [
-                      spinningDisc,
-                      CdGlans(maat: s * .92, vinyl: isVinylFormaat(_art?.formaat)),
-                    ]),
+              // De schaduw die de hoes op de schijf werpt, ligt aan de rand van de hoes: die schuift
+              // anders dan de schijf, dus hier per beeld van het uitschuiven (en stil zodra hij uit is).
+              builder: (context, child) {
+                final x = hoesEnSchijfX(_slide.value, reis: travel, centreer: centreer);
+                return Transform.translate(
+                  offset: Offset(x.schijf, 0),
+                  child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
+                    child!,
+                    MouwSchaduw(key: const ValueKey('albumart-mouwschaduw'), maat: s * .92, rand: x.hoes + s - x.schijf),
+                  ]),
+                );
+              },
+              // Licht en schaduw (Saber, 19-10-2026, "Echt, licht stil"): de slagschaduw op de grond
+              // eronder en het licht erover draaien NIET mee — op een echte cd staat de regenboog stil —
+              // en schuiven wel mee naar buiten. Een echte scan krijgt alleen de schaduwen. Zie
+              // ui/schijf_licht.dart: één keer gebakken, per beeld alleen gelegd.
+              child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
+                SchijfGrondschaduw(maat: s * .92),
+                spinningDisc,
+                SchijfLichtLaag(
+                    maat: s * .92,
+                    soort: disc != null
+                        ? SchijfSoort.scan
+                        : isVinylFormaat(_art?.formaat)
+                            ? SchijfSoort.vinyl
+                            : SchijfSoort.cd),
+              ]),
             )),
             ),
           ),

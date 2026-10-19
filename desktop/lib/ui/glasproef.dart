@@ -27,6 +27,7 @@ import 'glas.dart';
 import 'kantel_hoes.dart';
 import 'kleuren.dart';
 import 'langzame_draai.dart';
+import 'schijf_licht.dart';
 import 'typografie.dart';
 import 'vlak.dart';
 import 'wachtrij_eiland.dart';
@@ -239,7 +240,7 @@ class _GlasproefState extends State<Glasproef> with TickerProviderStateMixin {
                         child: hoes != null ? GetekendeCd(label: hoes, maat: 170) : const SizedBox.square(dimension: 170),
                       ),
                     ),
-                    const CdGlans(maat: 170),
+                    const SchijfLichtLaag(maat: 170, soort: SchijfSoort.cd),
                   ]),
                 ),
                 Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [

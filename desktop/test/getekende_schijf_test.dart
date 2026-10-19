@@ -70,12 +70,15 @@ void main() {
     expect(t.getSize(find.byKey(const ValueKey('cd-glans'))), const Size(200, 200));
   });
 
-  test('aangesloten: de glans ligt boven de draaiende schijf en draait niet mee, en alleen zonder scan', () {
+  test('aangesloten: het licht ligt boven de draaiende schijf en draait niet mee; een scan alleen schaduw', () {
     final bron = File('lib/main.dart').readAsStringSync();
-    final i = bron.indexOf('child: disc != null\n                  ? spinningDisc');
-    expect(i, greaterThan(0), reason: 'een echte scan blijft zoals hij is');
+    // Sinds 19-10-2026 via ui/schijf_licht.dart (zie schijf_licht_test.dart): het licht is een broer van
+    // spinningDisc, niet zijn kind, en een echte scan krijgt SchijfSoort.scan (alleen de schaduwen).
+    final i = bron.indexOf('                spinningDisc,\n                SchijfLichtLaag(');
+    expect(i, greaterThan(0));
     final stuk = bron.substring(i, i + 400);
-    expect(stuk, contains('spinningDisc,\n                      CdGlans(maat: s * .92, vinyl: isVinylFormaat(_art?.formaat)),'));
+    expect(stuk, contains('soort: disc != null\n                        ? SchijfSoort.scan'));
+    expect(stuk, contains('isVinylFormaat(_art?.formaat)\n                            ? SchijfSoort.vinyl'));
     expect(bron, contains('_GetekendeSchijf(label: front, maat: s * .92, vinyl: isVinylFormaat(_art?.formaat))'));
   });
 }

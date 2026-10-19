@@ -23,6 +23,7 @@ import 'getekende_schijf.dart';
 import 'glas.dart';
 import 'kleuren.dart';
 import 'langzame_draai.dart';
+import 'schijf_licht.dart';
 
 /// Hoeveel de hoes kantelt, in radialen: zes graden (Saber: "kantelen ±6°").
 const double kEilandKanteling = 6 * math.pi / 180;
@@ -132,6 +133,12 @@ class _WachtrijEilandState extends State<WachtrijEiland> with SingleTickerProvid
               width: m + plaat * .42,
               height: m,
               child: Stack(clipBehavior: Clip.none, children: [
+                // De slagschaduw van het plaatje op het eiland, eronder.
+                Positioned(
+                  left: m - plaat * .56,
+                  top: (m - plaat) / 2,
+                  child: SchijfGrondschaduw(maat: plaat),
+                ),
                 // Het plaatje, half achter de hoes vandaan.
                 Positioned(
                   left: m - plaat * .56,
@@ -151,13 +158,25 @@ class _WachtrijEilandState extends State<WachtrijEiland> with SingleTickerProvid
                     ),
                   ),
                 ),
-                // De glans erover draait niet mee: het licht komt uit de kamer, niet van de plaat.
-                if (widget.glans)
-                  Positioned(
-                    left: m - plaat * .56,
-                    top: (m - plaat) / 2,
-                    child: CdGlans(maat: plaat, vinyl: widget.vinyl),
-                  ),
+                // Het licht erover draait niet mee: het komt uit de kamer, niet van de plaat. Een echte
+                // scan krijgt alleen de schaduwen (Saber, 19-10-2026). Plus de schaduw van de hoes op de
+                // plaat, aan de rand waar hij eronder vandaan komt.
+                Positioned(
+                  left: m - plaat * .56,
+                  top: (m - plaat) / 2,
+                  child: SchijfLichtLaag(
+                      maat: plaat,
+                      soort: !widget.glans
+                          ? SchijfSoort.scan
+                          : widget.vinyl
+                              ? SchijfSoort.vinyl
+                              : SchijfSoort.cd),
+                ),
+                Positioned(
+                  left: m - plaat * .56,
+                  top: (m - plaat) / 2,
+                  child: MouwSchaduw(maat: plaat, rand: plaat * .56),
+                ),
                 // De hoes, licht naar je toe gekanteld: de linkerkant komt naar voren.
                 Transform(
                   key: const ValueKey('wachtrij-hoes'),
