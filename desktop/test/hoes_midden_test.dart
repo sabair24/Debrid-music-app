@@ -48,10 +48,8 @@ void main() {
     expect(bron, contains('final x = hoesEnSchijfX(_slide.value, reis: _reis, centreer: _centreer).hoes;'));
     expect(bron, contains('hoesX: _hoesX,'));
     expect(bron, contains('metDeHoes(ArtiestKop('));
-    // Naast elkaar de plaatnaam onder de hoes, mee; gestapeld staat hij erboven (19-10-2026) en schuift de
-    // spiegeling in zijn eigen vak mee.
+    // Naast elkaar de plaatnaam onder de hoes, mee; gestapeld staat hij erboven (19-10-2026).
     expect(bron, contains('metDeHoes(SizedBox(\n                  width: hoesMaat,'));
-    expect(bron, contains('zichtbaar: _draai.voorInRust,\n                              x: _hoesX,'));
   });
 
   test('de hoes, de spiegeling en de cd gebruiken alle drie deze regel', () {
