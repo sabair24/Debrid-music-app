@@ -297,6 +297,65 @@ const double kSpiegelHoogte = .22;
 /// Hoe ver hij onder de hoes begint.
 const double kSpiegelAfstand = 6;
 
+/// De spiegeling in een eigen vak onder de hoes, voor de GESTAPELDE indeling van Nu speelt (gsm en iPad
+/// staand; Saber, 19-10-2026: "zelfde reflectie als pc", met de plaatnaam boven de hoes).
+///
+/// Daar valt hij niet buiten het blok zoals naast elkaar ([HoesSpiegel] via `AlbumArt.spiegel`), want
+/// onder de hoes staat de titel: op 18-10 lag hij zo over de plaatnaam. Dit vak is hoogstens zo hoog als
+/// de spiegeling ([kSpiegelAfstand] + [kSpiegelHoogte] van de hoes) en nooit hoger dan de ruimte die het
+/// krijgt — in een `Flexible` is dat wat er op het scherm over is. Wat niet past wordt weggeknipt: op
+/// een kleine gsm is de spiegeling korter, de hoes krimpt er nooit voor en er schuift niets over de titel.
+///
+/// [blok] is de breedte van het hoesblok (hoes plus de reis van de cd): de hoes staat daar links in, en
+/// [x] is hoe ver hij opzij geschoven is ([hoesEnSchijfX]). [zichtbaar] is onwaar tijdens het
+/// omdraaien, zoals binnen de hoes.
+class SpiegelVak extends StatelessWidget {
+  const SpiegelVak({
+    super.key,
+    required this.beeld,
+    required this.maat,
+    required this.blok,
+    required this.zichtbaar,
+    required this.x,
+  });
+
+  final Uint8List? beeld;
+  final double maat, blok;
+  final ValueListenable<bool> zichtbaar;
+  final ValueListenable<double> x;
+
+  /// Hoe hoog het vak wil zijn.
+  static double hoogte(double maat) => kSpiegelAfstand + maat * kSpiegelHoogte;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = beeld;
+    return ClipRect(
+      child: SizedBox(
+        width: blok,
+        height: hoogte(maat),
+        child: b == null
+            ? null
+            : ValueListenableBuilder<bool>(
+                valueListenable: zichtbaar,
+                builder: (_, ja, kind) => ja ? kind! : const SizedBox.shrink(),
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: kSpiegelAfstand),
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: x,
+                      builder: (_, dx, k) => Transform.translate(offset: Offset(dx, 0), child: k),
+                      child: HoesSpiegel(beeld: b, maat: maat),
+                    ),
+                  ),
+                ),
+              ),
+      ),
+    );
+  }
+}
+
 /// De spiegeling onder de grote hoes in Nu speelt en op de albumpagina: de onderkant van de hoes,
 /// omgekeerd, van 20 % naar niets. Alleen de voorkant: een cd die draait wordt niet gespiegeld (dat
 /// zou hem twee keer per beeld laten tekenen).

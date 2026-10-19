@@ -2,9 +2,12 @@
 // boven elkaar, een datumlint op de hoes, en een kop met een teller en "Alles". Op een gsm van 360 en 411
 // punten breed, ook met een grotere tekst: niets mag overlopen.
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:debridmusic/ui/nieuw_kaarten.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
+import 'package:flutter/services.dart' show FontLoader;
 import 'package:flutter_test/flutter_test.dart';
 
 NieuwKaart _k(int i, {VoidCallback? knop}) => NieuwKaart(
@@ -36,6 +39,11 @@ void main() {
   for (final breedte in [360.0, 411.0]) {
     for (final tekst in [1.0, 1.3]) {
       testWidgets('rij op $breedte punten, tekst ×$tekst: geen overloop', (t) async {
+        // De echte schermbreedte, niet alleen de MediaQuery: anders werd alles op 800 opgemaakt en viel
+        // de afgekapte kop niet op (19-10-2026).
+        t.view.physicalSize = Size(breedte, 800);
+        t.view.devicePixelRatio = 1;
+        addTearDown(t.view.reset);
         await t.pumpWidget(_scherm(breedte,
             tekst: tekst,
             kind: Column(children: [
@@ -44,14 +52,56 @@ void main() {
             ])));
         expect(t.takeException(), isNull);
         expect(find.byType(GroteKaart), findsOneWidget);
-        expect(find.byType(BredeKaart), findsWidgets);
-        expect(find.text('Alles (124)'), findsOneWidget);
-        expect(find.text('5 nieuw'), findsOneWidget);
+        // Op 360 punten met grote tekst vult de grote kaart het scherm; de volgende kolom staat er net naast.
+        expect(find.byType(BredeKaart, skipOffstage: false), findsWidgets);
+        expect(find.text('Alles'), findsOneWidget, reason: 'op een gsm zonder getal');
+        expect(find.textContaining('5 nieuw · 124 in totaal', findRichText: true), findsOneWidget);
         expect(find.text('3 dagen'), findsWidgets, reason: 'het datumlint op de hoes');
         expect(find.text('Afspelen'), findsOneWidget, reason: 'de knop op de grote kaart');
       });
     }
   }
+
+  group('de kop op een gsm, met het echte lettertype', () {
+    setUpAll(() async {
+      final inter = FontLoader('Inter');
+      for (final w in ['Regular', 'Medium', 'SemiBold', 'Bold']) {
+        inter.addFont(Future.value(ByteData.sublistView(File('fonts/Inter-$w.ttf').readAsBytesSync())));
+      }
+      await inter.load();
+    });
+
+    for (final breedte in [360.0, 411.0]) {
+      for (final tekst in [1.0, 1.3]) {
+        testWidgets('$breedte punten, tekst ×$tekst: geen titel afgekapt', (t) async {
+          t.view.physicalSize = Size(breedte, 800);
+          t.view.devicePixelRatio = 1;
+          addTearDown(t.view.reset);
+          await t.pumpWidget(MediaQuery(
+            data: MediaQueryData(size: Size(breedte, 800), textScaler: TextScaler.linear(tekst)),
+            child: MaterialApp(
+              theme: ThemeData(fontFamily: 'Inter'),
+              home: Scaffold(
+                body: Column(children: [
+                  NieuwKop('Nieuwe nummers', totaal: 300, nieuw: 58, onAlles: () {}),
+                  NieuwKop("Nieuwe albums & EP's", totaal: 95, nieuw: 23, onAlles: () {}),
+                ]),
+              ),
+            ),
+          ));
+          for (final titel in ['Nieuwe nummers', "Nieuwe albums & EP's"]) {
+            final p = t.renderObject<RenderParagraph>(find.text(titel));
+            expect(p.didExceedMaxLines, isFalse, reason: '"$titel" afgekapt (gsm, 19-10-2026: "Nieuwe num…")');
+          }
+          if (tekst == 1.0) {
+            expect(t.getSize(find.text('Nieuwe nummers')).height, lessThan(30),
+                reason: 'met gewone tekst op één regel');
+          }
+          expect(t.takeException(), isNull);
+        });
+      }
+    }
+  });
 
   testWidgets('"Alles" staat rechts, ook op een breed scherm', (t) async {
     t.view.physicalSize = const Size(1440, 800);

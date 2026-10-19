@@ -7598,9 +7598,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
             draai: isTv ? null : _draai,
             onAchter: (b) => _heeftAchter = b != null,
             kantel: _isDesktop ? KantelBron.muis : null,
-            // Niet in de smalle indeling: daar staan "Album" en de titel vlak onder de hoes, en lag de
-            // spiegeling eroverheen (gsm, 18-10-2026).
-            spiegel: !isTv && !narrow,
+            // Ook in de smalle indeling (Saber, 19-10-2026). Daar staan "Album" en de titel onder de
+            // hoes, dus krijgt de spiegeling daar zijn eigen ruimte (zie [_spiegelRuimte]); op 18-10 lag
+            // hij er nog overheen.
+            spiegel: !isTv,
           );
     // Twee tikken draaien de hoes om; een gewone tik doet hier niets, dus er hoeft niets te wachten.
     final hoes = isTv ? art : DubbelTikVlak(onDubbel: () => _draai.draai(heeftAchterkant: _heeftAchter), child: art);
@@ -7703,7 +7704,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
       child: narrow
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [hoes, const SizedBox(height: 16), details],
+              // De ruimte van de spiegeling, die buiten de maat van de hoes getekend wordt; daarna
+              // dezelfde 16 als zonder.
+              children: [hoes, SizedBox(height: isTv ? 16 : SpiegelVak.hoogte(artSize) + 16), details],
             )
           : Row(
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -13659,12 +13662,18 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                 )),
                 const SizedBox(height: 14),
               ],
+              // Gestapeld (gsm en iPad staand) staat de plaatnaam BOVEN de hoes, onder de artiest: eronder
+              // komt de spiegeling (Saber, 19-10-2026, "plaatnaam boven de hoes").
+              if (!zij && albumNaam.isNotEmpty) ...[
+                SizedBox(width: dialogWidth(context, 540), child: _albumRegel(context, albumNaam, al)),
+                const SizedBox(height: 12),
+              ],
               hoesMetTikken,
-              if (albumNaam.isNotEmpty) ...[
+              if (zij && albumNaam.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 metDeHoes(SizedBox(
-                  width: zij ? hoesMaat : dialogWidth(context, 540),
-                  child: _albumRegel(context, albumNaam, al, gecentreerd: !zij),
+                  width: hoesMaat,
+                  child: _albumRegel(context, albumNaam, al, gecentreerd: false),
                 )),
               ],
             ],
@@ -14216,13 +14225,38 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                       ),
                     ),
                   )
-                else ...[
+                else if (isTv) ...[
                   const Spacer(),
                   hoesKolom,
-                  SizedBox(height: isTv ? 16 : 30),
+                  const SizedBox(height: 16),
                   ...onder,
                   const Spacer(),
-                ],
+                ]
+                // Gestapeld met de spiegeling in zijn eigen vak: dat krijgt wat er aan hoogte over is,
+                // tot zijn volle maat, en de rest verdeelt zich boven en onder (zoals de twee Spacers
+                // eerst deden). Zie [SpiegelVak].
+                else
+                  Expanded(
+                    child: Column(
+                      key: const Key('np-gestapeld'),
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        hoesKolom,
+                        if (t != null)
+                          Flexible(
+                            child: SpiegelVak(
+                              beeld: _shown ?? p.currentCover,
+                              maat: hoesMaat,
+                              blok: hoesMaat * (1 + discTravelFactor(context)),
+                              zichtbaar: _draai.voorInRust,
+                              x: _hoesX,
+                            ),
+                          ),
+                        const SizedBox(height: 18),
+                        ...onder,
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),

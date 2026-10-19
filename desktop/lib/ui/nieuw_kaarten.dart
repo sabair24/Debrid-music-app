@@ -261,14 +261,61 @@ class GroteKaart extends StatelessWidget {
 }
 
 /// De kop boven een rij: een ster in het accent, de titel, "5 nieuw", en rechts "Alles (124) ›".
+///
+/// Smaller dan [smalTot] (een gsm) in twee regels: "✦ Nieuwe nummers … Alles ›", en daaronder klein
+/// "58 nieuw · 300 in totaal". Op één regel paste het daar niet, en werd de titel "Nieuwe num…" (gsm,
+/// 19-10-2026; Saber koos "teller eronder").
 class NieuwKop extends StatelessWidget {
   const NieuwKop(this.titel, {super.key, required this.totaal, this.nieuw = 0, this.onAlles});
   final String titel;
   final int totaal, nieuw;
   final VoidCallback? onAlles;
 
+  /// Onder deze breedte: twee regels.
+  static const double smalTot = 600;
+
   @override
-  Widget build(BuildContext context) => Padding(
+  Widget build(BuildContext context) =>
+      LayoutBuilder(builder: (context, c) => c.maxWidth < smalTot ? _smal() : _breed());
+
+  Widget _smal() => Padding(
+        padding: const EdgeInsets.fromLTRB(kGoot, kRuimte24, kGoot - kRuimte8, kRuimte12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Row(children: [
+            SizedBox(
+                width: _ster, child: Text('✦', style: TextStyle(fontSize: 18, color: kAccent, height: 1))),
+            // Twee regels mag: liever "Nieuwe albums & / EP's" dan afgekapt, met grote tekst op 360 punten.
+            Expanded(child: Text(titel, maxLines: 2, overflow: TextOverflow.ellipsis, style: kKopKlein)),
+            if (onAlles != null && totaal > 0)
+              TextButton(
+                onPressed: onAlles,
+                style: TextButton.styleFrom(foregroundColor: kGedempt, visualDensity: VisualDensity.compact),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text('Alles', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  Icon(Icons.chevron_right_rounded, size: 18),
+                ]),
+              ),
+          ]),
+          Padding(
+            padding: const EdgeInsets.only(left: _ster),
+            child: Text.rich(
+              TextSpan(children: [
+                if (nieuw > 0) ...[
+                  TextSpan(text: '$nieuw nieuw', style: TextStyle(color: kAccent, fontWeight: FontWeight.w700)),
+                  const TextSpan(text: ' · '),
+                ],
+                TextSpan(text: '$totaal in totaal'),
+              ]),
+              style: TextStyle(fontSize: 12.5, color: kGedempt, height: 1.2),
+            ),
+          ),
+        ]),
+      );
+
+  /// Breedte van de ster met de ruimte erna; de regel eronder begint daar ook.
+  static const double _ster = 26;
+
+  Widget _breed() => Padding(
         padding: const EdgeInsets.fromLTRB(kGoot, kRuimte24, kGoot - kRuimte8, kRuimte12),
         // De titel en de teller in één Expanded, zodat "Alles" echt rechts staat. Met een Flexible en
         // een Spacer naast elkaar kregen die twee elk de helft van de ruimte, en stond "Alles (7)"

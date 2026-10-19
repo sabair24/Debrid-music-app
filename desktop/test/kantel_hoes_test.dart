@@ -184,11 +184,63 @@ void main() {
     expect(m.entry(0, 0), closeTo(0, 1e-9));
   });
 
+  group('SpiegelVak (Nu speelt gestapeld)', () {
+    Widget scherm({required double hoog, required ValueNotifier<bool> voor, required ValueNotifier<double> x}) =>
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: hoog,
+              child: Column(children: [
+                const SizedBox(height: 300, width: 300),
+                Flexible(child: SpiegelVak(beeld: _png, maat: 300, blok: 390, zichtbaar: voor, x: x)),
+                const SizedBox(height: 100, child: Text('titel')),
+              ]),
+            ),
+          ),
+        );
+
+    testWidgets('met ruimte: de volle spiegeling, en de titel staat eronder', (t) async {
+      final voor = ValueNotifier(true), x = ValueNotifier(0.0);
+      await t.pumpWidget(scherm(hoog: 700, voor: voor, x: x));
+      expect(t.getSize(find.byType(SpiegelVak)).height, SpiegelVak.hoogte(300));
+      expect(t.getTopLeft(find.text('titel')).dy, greaterThanOrEqualTo(300 + SpiegelVak.hoogte(300)));
+      expect(find.byType(HoesSpiegel), findsOneWidget);
+    });
+
+    testWidgets('weinig ruimte: korter en geknipt, niets loopt over en de hoes krimpt niet', (t) async {
+      final voor = ValueNotifier(true), x = ValueNotifier(0.0);
+      await t.pumpWidget(scherm(hoog: 420, voor: voor, x: x));
+      expect(t.takeException(), isNull);
+      expect(t.getSize(find.byType(SpiegelVak)).height, 20);
+      expect(t.getTopLeft(find.text('titel')).dy, 320, reason: 'de titel direct onder het korte vak');
+    });
+
+    testWidgets('weg tijdens het omdraaien, en hij schuift mee met de hoes', (t) async {
+      final voor = ValueNotifier(true), x = ValueNotifier(0.0);
+      await t.pumpWidget(scherm(hoog: 700, voor: voor, x: x));
+      final eerst = t.getTopLeft(find.byType(HoesSpiegel)).dx;
+      x.value = 40;
+      await t.pump();
+      expect(t.getTopLeft(find.byType(HoesSpiegel)).dx, closeTo(eerst + 40, .01));
+      voor.value = false;
+      await t.pump();
+      expect(find.byType(HoesSpiegel), findsNothing);
+    });
+  });
+
   test('aangesloten: Nu speelt en de albumpagina spiegelen, de tegel kantelt', () {
     final bron = File('lib/main.dart').readAsStringSync();
-    // Alleen waar de tekst naast de hoes staat (gsm, 18-10-2026: hij lag over "Album" en de plaatnaam).
+    // Naast elkaar valt hij buiten het blok; gestapeld in zijn eigen vak, met de plaatnaam erboven, en op
+    // de albumpagina met eigen ruimte (19-10-2026; op 18-10 lag hij over "Album" en de plaatnaam).
     expect(bron, contains('spiegel: !isTv && naast,'));
-    expect(bron, contains('spiegel: !isTv && !narrow,'));
+    expect(bron, contains('spiegel: !isTv,\n'));
+    expect(bron, contains('SizedBox(height: isTv ? 16 : SpiegelVak.hoogte(artSize) + 16)'));
+    final gestapeld = bron.substring(bron.indexOf("key: const Key('np-gestapeld')"));
+    expect(gestapeld.substring(0, 600), contains('Flexible(\n                            child: SpiegelVak('));
+    final plaatnaam = bron.indexOf('if (!zij && albumNaam.isNotEmpty)');
+    expect(plaatnaam, greaterThan(0));
+    expect(plaatnaam, lessThan(bron.indexOf('hoesMetTikken,\n              if (zij && albumNaam.isNotEmpty)')),
+        reason: 'gestapeld staat de plaatnaam boven de hoes');
     expect(bron, contains('''kantel: isTv
                         ? KantelBron.selectie
                         : _isDesktop
