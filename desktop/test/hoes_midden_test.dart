@@ -47,7 +47,7 @@ void main() {
     expect(bron, contains('_slide.addListener(_meldHoesX);'));
     expect(bron, contains('final x = hoesEnSchijfX(_slide.value, reis: _reis, centreer: _centreer).hoes;'));
     expect(bron, contains('hoesX: _hoesX,'));
-    expect(bron, contains('metDeHoes(ArtiestKop('));
+    expect(bron, contains('metDeHoes(kopMetFoto('), reason: 'de kop, gestapeld met de foto ernaast (19-10-2026)');
     // Naast elkaar de plaatnaam onder de hoes, mee; gestapeld staat hij erboven (19-10-2026).
     expect(bron, contains('metDeHoes(SizedBox(\n                  width: hoesMaat,'));
   });

@@ -182,10 +182,12 @@ import 'ui/skelet.dart';
 import 'ui/speelvlak.dart';
 import 'ui/stijl.dart';
 import 'ui/tegel.dart';
+import 'ui/tegel_spiegel.dart';
 import 'ui/getekende_schijf.dart';
 import 'ui/glasproef.dart';
 import 'ui/kantel_hoes.dart';
 import 'ui/schijf_licht.dart';
+import 'ui/wachtrij_stapel.dart';
 import 'ui/thema.dart';
 import 'ui/wachtrij_eiland.dart';
 import 'ui/typografie.dart';
@@ -536,6 +538,8 @@ Future<void> main() async {
   // Na initTvMode: op een tv is "volgens systeem" donker.
   ThemaStand.meld = (r) => Timer.run(() => kopLog.line(r));
   ThemaStand.laad();
+  // De wachtrij als stapel op Nu speelt, per toestel (ui/wachtrij_stapel.dart).
+  StapelKeuze.laad();
   // Licht en schaduw van de draaiende schijf (ui/schijf_licht.dart): laden zonder op het eerste beeld te
   // wachten; tot dan de oude glans.
   unawaited(SchijfLicht.laad());
@@ -5980,6 +5984,7 @@ class AlbumCard extends StatelessWidget {
         if (a.cover == null) context.read<LibraryStore>().hoesVoorrang(a);
         return cover(a.cover, size: maat);
       },
+      spiegel: spiegelVan(a.cover),
       // De hoes VLIEGT naar de albumpagina in plaats van te knippen. Het label is wat de app zelf
       // als vaste naam voor een album gebruikt, zodat twee persingen van dezelfde plaat niet met
       // elkaar verwisseld worden.
@@ -9661,6 +9666,10 @@ class ArtistLine extends StatefulWidget {
   /// De selectie van het eerste rondje, zodat de hoes op een tv er met OMHOOG naartoe kan.
   final FocusNode? eersteRondje;
 
+  /// Wie er al bovenaan staat (de kop van Nu speelt, gestapeld). Dan toont deze regel alleen wie er nog
+  /// bij komt — zie [gastenNaastKop] — en niets als dat niemand is. Null = iedereen, zoals overal.
+  final List<String>? alNoemd;
+
   const ArtistLine({
     super.key,
     required this.artist,
@@ -9670,6 +9679,7 @@ class ArtistLine extends StatefulWidget {
     this.omvouwen = false,
     this.rondjes = false,
     this.eersteRondje,
+    this.alNoemd,
   });
 
   @override
@@ -9710,6 +9720,17 @@ class _ArtistLineState extends State<ArtistLine> {
     final split = splitFeatured(widget.artist, widget.title);
     final lib = context.watch<LibraryStore>();
     final namen = [lib.displayArtist(split.main), ...split.featured, ..._extra];
+    if (widget.alNoemd case final al?) {
+      final g = gastenNaastKop(namen, al);
+      if (g.namen.isEmpty) return const SizedBox.shrink();
+      final gasten = ArtistNames(names: g.namen, style: widget.style, omvouwen: widget.omvouwen);
+      return !g.met
+          ? gasten
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [Text('met ', style: widget.style), Flexible(child: gasten)],
+            );
+    }
     final regel = ArtistNames(names: namen, style: widget.style, omvouwen: widget.omvouwen);
     if (!widget.rondjes || namen.every((n) => n.trim().isEmpty)) return regel;
     // Dezelfde namen als de regel ernaast, ook de gasten die pas na het opzoeken binnenkomen: één lijst,
@@ -12384,6 +12405,49 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
   );
 }
 
+/// Hoe groot de ronde foto naast de kop van Nu speelt is.
+const double kKopFoto = 38;
+
+/// De kop van Nu speelt met de ronde foto links ervan (Saber, 19-10-2026: "1 maal boven de naam, met
+/// ronde foto links ervan"). Alleen gestapeld; naast elkaar staat de kop zoals hij stond.
+Widget kopMetFoto(bool gestapeld, List<String> namen, Widget kop) => !gestapeld || namen.isEmpty
+    ? kop
+    : Row(
+        key: const ValueKey('np-kop-met-foto'),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ArtiestRondjes(namen: namen, maat: kKopFoto),
+          const SizedBox(width: 10),
+          Flexible(child: kop),
+        ],
+      );
+
+/// Het menu van Nu speelt, met onderaan de keuze voor de stapel (Saber, 19-10-2026: "in het ⋯-menu").
+ItemMenu _metStapelKeuze(ItemMenu menu) => ItemMenu(titel: menu.titel, ondertitel: menu.ondertitel, blokken: [
+      ...menu.blokken,
+      [
+        StapelKeuze.aan.value
+            ? MenuRegel(Icons.crop_square_rounded, 'Gewone hoes', () => StapelKeuze.zet(false))
+            : MenuRegel(Icons.layers_rounded, 'Wachtrij als stapel', () => StapelKeuze.zet(true)),
+      ],
+    ]);
+
+/// De hoezen van wat na het spelende nummer komt, voor de stapel ([WachtrijStapel]): uit de radiorij
+/// tijdens een radio, anders uit de wachtrij (in de volgorde waarin hij speelt, ook geschud).
+List<Uint8List?> volgendeHoezen(PlayerStore p, LibraryStore bib, {int max = 13}) {
+  if (p.radioMode) {
+    final r = p.radioQueue;
+    final i = p.radioIndex;
+    return [
+      for (var k = i + 1; k < r.length && k <= i + max; k++)
+        r[k].local == null ? null : bib.coverForTrack(r[k].local!),
+    ];
+  }
+  final q = p.queueTracks;
+  final i = p.currentIndex;
+  return [for (var k = i + 1; k < q.length && k <= i + max; k++) bib.coverForTrack(q[k])];
+}
+
 /// How big the sleeve on the now-playing screen may be.
 ///
 /// AlbumArt reserves size * 1.62 so the disc has somewhere to slide out to. At the old fixed 360
@@ -13352,8 +13416,24 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     });
   }
 
+  /// De stapel (ui/wachtrij_stapel.dart): hoe ver er gebladerd is, en de pijltjes van de tv.
+  final _stapel = GlobalKey<WachtrijStapelState>();
+  final _stapelBesturing = StapelBesturing();
+
+  void _opStapelKeuze() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    StapelKeuze.aan.addListener(_opStapelKeuze);
+  }
+
   @override
   void dispose() {
+    StapelKeuze.aan.removeListener(_opStapelKeuze);
+    _stapelBesturing.dispose();
     _paneel.dispose();
     _levensloop?.dispose();
     _spoelPijlen.vergeet();
@@ -13376,6 +13456,11 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
   /// OK op de hoes, op een tv. Twee keer kort na elkaar draait hem om (zoals twee tikken op een gsm);
   /// één keer pauzeert of speelt, een tel later — pas dan weet je dat er geen tweede kwam.
   void _okOpHoes(VoidCallback? speel) {
+    // Gebladerd in de stapel: OK speelt wat er vooraan staat.
+    if ((_stapel.currentState?.blad ?? 0) > .5) {
+      _stapelBesturing.speel();
+      return;
+    }
     final klok = _okKlok;
     if (klok != null && klok.isActive) {
       klok.cancel();
@@ -13433,16 +13518,23 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     final bruikbaar = Size(schermmaat.width - rand.horizontal, schermmaat.height - rand.vertical);
     // Naast elkaar of dwars: in allebei staat de tekst links uitgelijnd naast de hoes.
     final zij = naast || dwars;
+    // Gestapeld (gsm, iPad staand, een smal pc-venster) en geen tv: daar staat de artiest één keer,
+    // bovenaan met zijn foto, en de kwaliteit boven de afspeelbalk (Saber, 19-10-2026).
+    final gestapeld = !zij && !isTv;
     // Hoe breed het wachtrijpaneel nu is (schuivend tussen 0 en [kNuSpeeltWachtrij]); de hoes rekent
     // met wat er naast het paneel overblijft.
     final paneelBreedte = naast ? Curves.easeOutCubic.transform(_paneel.value) * kNuSpeeltWachtrij : 0.0;
-    final hoesMaat = naast
+    // De stapel ([WachtrijStapel]) steekt links en boven uit: de hoes is dan kleiner, zodat alles in
+    // dezelfde ruimte past. Niet dwars: daar is geen hoogte voor wat erboven uitsteekt.
+    final stapelAan = StapelKeuze.aan.value && !dwars;
+    final hoesMaatVol = naast
         ? hoesNaast(
             scherm: Size(schermmaat.width - paneelBreedte, schermmaat.height),
             reisfactor: discTravelFactor(context))
         : dwars
             ? hoesLiggend(bruikbaar: bruikbaar)
             : _sleeve(context);
+    final hoesMaat = stapelAan ? hoesMaatVol / (1 + kStapelBoven) : hoesMaatVol;
     final kolom = naast
         ? kSpeelKolom
         : dwars
@@ -13602,7 +13694,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                     // Gestapeld ligt de titel eroverheen, en dat mag: met een eigen vak ervoor stond er
                     // een gat tussen hoes en titel (Saber, 19-10-2026: "dan zit de tekst in de schaduw
                     // maar dat geeft niet … tis nie mooi zo").
-                    spiegel: !isTv && !dwars,
+                    // In de stapel wijkt hij (Saber, 19-10-2026): daar staan de volgende hoezen.
+                    spiegel: !isTv && !dwars && !stapelAan,
                     // De hoes van de minispeler groeit hierheen uit (zie [kNuSpeeltHoes]).
                     heroTag: kNuSpeeltHoes,
                     // De hoes en cd van het volgende nummer alvast klaarzetten — anders staat er bij
@@ -13623,6 +13716,23 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
             child: hoesBlok,
           );
 
+    // De wachtrij als stapel (Saber, 19-10-2026; ⋯-menu): de hoes met de cd vooraan, wat hierna komt
+    // erachter. Een tik op een gebladerde hoes springt ernaartoe, zoals een tik in de wachtrijlijst.
+    final hoesOfStapel = !stapelAan || t == null
+        ? hoesMetTikken
+        : WachtrijStapel(
+            key: _stapel,
+            maat: hoesMaat,
+            blok: hoesMaat * (1 + discTravelFactor(context)),
+            voorste: hoesMetTikken,
+            volgende: volgendeHoezen(p, bib),
+            onSpeel: (n) =>
+                p.radioMode ? p.springInRadio(p.radioIndex + n) : p.playQueue(p.queueTracks, p.currentIndex + n),
+            x: _hoesX,
+            onWeg: isTv ? null : () => Navigator.of(context).maybePop(),
+            besturing: _stapelBesturing,
+          );
+
     // De hoes met de artiest erboven en de plaat eronder.
     //
     // **Waarom dit één kolom is en niet twee keer los.** Het hoesblok staat in beide indelingen, en
@@ -13635,17 +13745,20 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     // de hoes is op anderhalve meter afstand ook geen winst.
     final artiestVanPlaat = al?.artist ?? t?.artist ?? '';
     final albumNaam = (al?.title ?? t?.album ?? '').trim();
+    // Wie er bovenaan staat: onder de titel komt dan alleen wie er nog bij hoort ([gastenNaastKop]).
+    final kopNamen = artiestVanPlaat.trim().isEmpty ? const <String>[] : [...kopFotoNamen(artiestVanPlaat), artiestVanPlaat];
     // Naast elkaar staan het logo en de plaatnaam op de breedte van de hoes, en dus horen ze met de
     // hoes mee te schuiven als die naar het midden van zijn vak gaat (zie [hoesEnSchijfX]).
     Widget metDeHoes(Widget kind) => !zij || t == null
         ? kind
         : ValueListenableBuilder<double>(
             valueListenable: _hoesX,
-            builder: (_, x, k) => Transform.translate(offset: Offset(x, 0), child: k),
+            // In de stapel staat de hoes een stuk naar rechts (wat links uitsteekt).
+            builder: (_, x, k) => Transform.translate(offset: Offset(x + (stapelAan ? hoesMaat * kStapelLinks : 0), 0), child: k),
             child: kind,
           );
     final hoesKolom = isTv
-        ? hoesMetTikken
+        ? hoesOfStapel
         : Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment:
@@ -13653,15 +13766,20 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
             children: [
               // Dwars niet: op 384 punten hoog is er voor een logo boven de hoes geen plaats.
               if (!dwars && artiestVanPlaat.trim().isNotEmpty) ...[
-                metDeHoes(ArtiestKop(
-                  naam: artiestVanPlaat,
-                  // Zelfde regel als [artiestVanPlaat], voor het volgende nummer.
-                  volgende: volgendAlbum?.artist ?? volgendNummer?.artist,
-                  gecentreerd: !zij,
-                  // Naast elkaar de breedte van de HOES, niet die van de tekstkolom ernaast: dan
-                  // staat de kop netjes boven de plaat waar hij over gaat. De loopruimte van de cd
-                  // zit in het blok maar niet onder de hoes zelf.
-                  breedte: zij ? hoesMaat : dialogWidth(context, 540),
+                metDeHoes(kopMetFoto(
+                  gestapeld,
+                  kopFotoNamen(artiestVanPlaat),
+                  ArtiestKop(
+                    naam: artiestVanPlaat,
+                    // Zelfde regel als [artiestVanPlaat], voor het volgende nummer.
+                    volgende: volgendAlbum?.artist ?? volgendNummer?.artist,
+                    // Met de foto ernaast staan logo en naam links tegen de foto; het geheel staat in het midden.
+                    gecentreerd: !zij && !gestapeld,
+                    // Naast elkaar de breedte van de HOES, niet die van de tekstkolom ernaast: dan
+                    // staat de kop netjes boven de plaat waar hij over gaat. De loopruimte van de cd
+                    // zit in het blok maar niet onder de hoes zelf. Gestapeld gaat de foto ervan af.
+                    breedte: zij ? hoesMaat : dialogWidth(context, 540) - (gestapeld ? kKopFoto + 10 : 0),
+                  ),
                 )),
                 const SizedBox(height: 14),
               ],
@@ -13671,7 +13789,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                 SizedBox(width: dialogWidth(context, 540), child: _albumRegel(context, albumNaam, al)),
                 const SizedBox(height: 12),
               ],
-              hoesMetTikken,
+              hoesOfStapel,
               if (zij && albumNaam.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 metDeHoes(SizedBox(
@@ -13724,15 +13842,17 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   omvouwen: true,
                   style: TextStyle(color: _muted, fontSize: 15),
                   // De artiesten als rondjes vóór hun naam, elk naar hun pagina (Saber, 17-10-2026).
-                  rondjes: true,
-                  eersteRondje: _eersteRondje,
+                  // Gestapeld staat de foto al bovenaan, en hier alleen wie er nog bij komt.
+                  rondjes: !gestapeld,
+                  eersteRondje: gestapeld ? null : _eersteRondje,
+                  alNoemd: gestapeld ? kopNamen : null,
                 ),
-          echtheid: t == null ? null : _echtheidMerk(t),
+          echtheid: gestapeld || t == null ? null : _echtheidMerk(t),
           // Wat je NU hoort, en niet wat er op de schijf van de pc staat. Zie [_stroomKwaliteit]:
           // onderweg stuurt je pc een kleinere versie, en zolang de badge het bestand toonde was
-          // er geen enkele manier om te zien dát dat gebeurde.
-          kwaliteit: (t != null && t.sizeBytes > 0) ? _qualityBadge(_stroomKwaliteit(p, t)) : null,
-          merk: t == null ? null : _luidheidMerk(context, p, t, cast),
+          // er geen enkele manier om te zien dát dat gebeurde. Gestapeld staat hij boven de afspeelbalk.
+          kwaliteit: !gestapeld && t != null && t.sizeBytes > 0 ? _qualityBadge(_stroomKwaliteit(p, t)) : null,
+          merk: gestapeld || t == null ? null : _luidheidMerk(context, p, t, cast),
         ),
       ),
       // Twee regels die hier ontbraken, en allebei om dezelfde reden: dit scherm dekt op een
@@ -13770,7 +13890,23 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
       // Geen uitleg meer over wat de pc onderweg stuurt ("Onderweg: je pc stuurt 16/44.1 in plaats van
       // 24/192 …"): het merk naast de artiest zegt al wat je hoort, en de zin nam twee regels (Saber,
       // 19-10-2026: "al die uitleg hoeft niet eigenlijk, pakt veel plaats in").
-      SizedBox(height: isTv ? 14 : 26),
+      //
+      // Gestapeld: kwaliteit en volume in het midden, vlak boven de afspeelbalk (Saber, 19-10-2026:
+      // "de kwaliteit gecentreerd boven de afspeelbalk").
+      if (gestapeld && t != null) ...[
+        const SizedBox(height: 22),
+        SizedBox(
+          key: const ValueKey('np-kwaliteitsregel'),
+          width: kolom,
+          child: KwaliteitsRegel(
+            echtheid: _echtheidMerk(t),
+            kwaliteit: t.sizeBytes > 0 ? _qualityBadge(_stroomKwaliteit(p, t)) : null,
+            merk: _luidheidMerk(context, p, t, cast),
+          ),
+        ),
+        const SizedBox(height: 10),
+      ] else
+        SizedBox(height: isTv ? 14 : 26),
       SizedBox(
         width: kolom,
         child: Row(
@@ -14124,7 +14260,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                               icon: const Icon(Icons.more_horiz_rounded, size: 26),
                               tooltip: 'Meer',
                               onPressed: () =>
-                                  _toonItemMenu(knopContext, _nummerMenu(knopContext, t)),
+                                  _toonItemMenu(knopContext, _metStapelKeuze(_nummerMenu(knopContext, t))),
                             ),
                           ),
                         ),
@@ -14225,7 +14361,11 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   hoesKolom,
                   SizedBox(height: isTv ? 16 : 30),
                   ...onder,
-                  const Spacer(),
+                  // Gestapeld alles een stuk naar boven (Saber, 19-10-2026: "daar hebben we nog vrij
+                  // ruimte, pas op niet teveel"): op de gsm een vijfde van de vrije hoogte boven, de rest
+                  // eronder — op het voorbeeld de kop 20 punten hoger, de bediening 40. Op een groter
+                  // scherm minder ver. Spacers en geen vaste maat: dit blok heeft geen schuifvangnet.
+                  Spacer(flex: !gestapeld ? 1 : (isCompact(context) ? 4 : 2)),
                 ],
               ],
             ),
@@ -14266,6 +14406,12 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         return KeyEventResult.handled;
       }
       return e is KeyRepeatEvent ? KeyEventResult.handled : KeyEventResult.ignored;
+    }
+    // In de stapel bladeren links en rechts (Saber, 19-10-2026); vasthouden spoelt dan niet.
+    if (_stapel.currentState != null &&
+        (e.logicalKey == LogicalKeyboardKey.arrowLeft || e.logicalKey == LogicalKeyboardKey.arrowRight)) {
+      if (e is KeyDownEvent) _stapelBesturing.blader(e.logicalKey == LogicalKeyboardKey.arrowRight ? 1 : -1);
+      return KeyEventResult.handled;
     }
     return _spoelPijlen.opToets(e);
   }
@@ -16579,6 +16725,7 @@ class _HomeStartViewState extends State<HomeStartView> {
                 artist: albums[i].artist,
                 achterkant: () => achterkantVan(context, albums[i]),
                 heroTag: tag,
+                spiegel: spiegelVan(albums[i].cover),
                 // Lang indrukken: hetzelfde menu als op Albums (16-10-2026, "op elke tegel en rij").
                 onLongPress: () => _toonItemMenu(context, _albumMenu(context, albums[i])));
           }),
@@ -16611,6 +16758,7 @@ class _HomeStartViewState extends State<HomeStartView> {
                   (_) => AlbumBrowsePage(hits[i].artist, hits[i].album, heroTag: 'net:${hits[i].album.id}@$rij')),
               artist: hits[i].artist,
               heroTag: 'net:${hits[i].album.id}@$rij',
+              spiegel: spiegelVanUrl(hits[i].album.cover),
               onLongPress: () => _toonItemMenu(context, _netAlbumMenu(context, hits[i].artist, hits[i].album))),
         ),
       );
@@ -16651,6 +16799,7 @@ class _HomeStartViewState extends State<HomeStartView> {
             () => openPagina(context,
                 (_) => AlbumBrowsePage(items[i].hit.artist, items[i].hit.album, heroTag: 'net:${items[i].hit.album.id}@ai')),
             heroTag: 'net:${items[i].hit.album.id}@ai',
+            spiegel: spiegelVanUrl(items[i].hit.album.cover),
             onLongPress: () =>
                 _toonItemMenu(context, _netAlbumMenu(context, items[i].hit.artist, items[i].hit.album)),
           ),
@@ -16690,6 +16839,7 @@ class _HomeStartViewState extends State<HomeStartView> {
                 ],
               ])),
           heroTag: ts[i].hasAlbum ? 'net:${ts[i].albumId}@$rij' : null,
+          spiegel: spiegelVanUrl(ts[i].cover),
         ),
         ),
       );
@@ -16709,8 +16859,13 @@ class _HomeStartViewState extends State<HomeStartView> {
 
   /// [subtitle] blijft de kale tekst voor het geval de widget niets kan; [artist] maakt hem klikbaar.
   Widget _card(Widget art, String title, String subtitle, VoidCallback onTap,
-          {String? artist, Future<Uint8List?> Function()? achterkant, Object? heroTag, VoidCallback? onLongPress}) =>
+          {String? artist,
+          Future<Uint8List?> Function()? achterkant,
+          Object? heroTag,
+          VoidCallback? onLongPress,
+          ImageProvider? spiegel}) =>
       _HoverCard(
+        spiegel: spiegel,
         art: art,
         title: title,
         subtitle: subtitle,
@@ -16742,8 +16897,12 @@ class _HoverCard extends StatelessWidget {
   /// De achterkant voor twee tikken; leeg bij een plaat van online (die wiebelt dan).
   final Future<Uint8List?> Function()? achterkant;
 
+  /// De spiegeling onder de hoes; zie [AlbumTegel.spiegel].
+  final ImageProvider? spiegel;
+
   const _HoverCard(
       {required this.art,
+      this.spiegel,
       required this.title,
       required this.subtitle,
       required this.onTap,
@@ -16775,6 +16934,7 @@ class _HoverCard extends StatelessWidget {
         draaibaar: true,
         achterkant: achterkant,
         heroTag: heroTag,
+        spiegel: spiegel,
       );
 }
 
@@ -17168,6 +17328,7 @@ class _NieuwMeerPaginaState extends State<NieuwMeerPagina> {
                                 _netCover(u.album.cover, size: maat),
                                 if (lint != null) Positioned(left: 6, bottom: 6, child: DatumLint(lint)),
                               ]),
+                              spiegel: spiegelVanUrl(u.album.cover),
                               titel: u.album.title,
                               ondertitel: u.lijktOp == null ? u.artiest : '${u.artiest} · lijkt op ${u.lijktOp}',
                               onTap: () => _openNieuwAlbum(context, u.album, u.artiest),
@@ -17377,6 +17538,7 @@ class _OntdekViewState extends State<OntdekView> {
     return AlbumTegel(
       key: ValueKey('ontdek-tegel-$i'),
       hoes: (maat) => _netCover(t.cover, size: maat),
+      spiegel: spiegelVanUrl(t.cover),
       titel: t.title,
       ondertitel: t.artist,
       ondertitelWidget: t.artist.trim().isEmpty ? null : _HomeStartViewState._naamLink(t.artist),
@@ -21431,7 +21593,13 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _netCover(h.album.cover, size: 132, radius: 10),
+                        // Schaduw en spiegeling zoals elke albumtegel (Saber, 19-10-2026).
+                        TegelLicht(
+                          maat: 132,
+                          hoek: 10,
+                          spiegel: spiegelVanUrl(h.album.cover),
+                          child: _netCover(h.album.cover, size: 132, radius: 10),
+                        ),
                         const SizedBox(height: 6),
                         Text(h.album.title,
                             maxLines: 1,
@@ -25392,9 +25560,15 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
               builder: (_, c) => Stack(children: [
                 // Zonder hoes geen grijs vak met een schijfje maar de titel zelf, op een eigen kleur.
                 // Zie [PlaatTegel] voor waarom.
-                _netCover(al.cover,
-                    size: c.maxWidth,
-                    zonder: PlaatTegel(titel: al.title, jaar: al.year, maat: c.maxWidth)),
+                // Schaduw en spiegeling zoals elke albumtegel (Saber, 19-10-2026); zonder hoes geen
+                // spiegeling van de titeltegel.
+                TegelLicht(
+                  maat: c.maxWidth,
+                  spiegel: spiegelVanUrl(al.cover),
+                  child: _netCover(al.cover,
+                      size: c.maxWidth,
+                      zonder: PlaatTegel(titel: al.title, jaar: al.year, maat: c.maxWidth)),
+                ),
                 // Which of the discography you already hold — so the gap in the collection is the
                 // thing you can see, rather than something to work out by comparing two lists.
                 if (owned)
@@ -34092,9 +34266,15 @@ class _OnlineAlbumCard extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
             child: LayoutBuilder(
-              builder: (_, c) => ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: _netCover(hit.album.cover, size: c.maxWidth, radius: 8),
+              // Schaduw en spiegeling zoals elke albumtegel (Saber, 19-10-2026).
+              builder: (_, c) => TegelLicht(
+                maat: c.maxWidth,
+                hoek: 8,
+                spiegel: spiegelVanUrl(hit.album.cover),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: _netCover(hit.album.cover, size: c.maxWidth, radius: 8),
+                ),
               ),
             ),
           ),

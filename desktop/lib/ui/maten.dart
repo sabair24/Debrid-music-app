@@ -103,6 +103,21 @@ const List<BoxShadow> _schaduw2 = [
   BoxShadow(color: Color(0x73000000), blurRadius: 22, offset: Offset(0, 10)),
 ];
 
+/// Onder een albumtegel, met de spiegeling eronder (Saber, 19-10-2026, "volle spiegeling", variant B):
+/// dieper dan [kSchaduw1], want de hoes ligt nu hoger boven de pagina en de spiegeling eronder.
+List<BoxShadow> get kSchaduwTegel => Thema.licht ? _zacht(_schaduwTegel) : _schaduwTegel;
+const List<BoxShadow> _schaduwTegel = [
+  BoxShadow(color: Color(0x33000000), blurRadius: 7, offset: Offset(0, 3)),
+  BoxShadow(color: Color(0x4D000000), blurRadius: 26, offset: Offset(0, 16)),
+];
+
+/// Een aangewezen albumtegel: dezelfde vorm als [kSchaduwTegel], verder van de pagina.
+List<BoxShadow> get kSchaduwTegelAan => Thema.licht ? _zacht(_schaduwTegelAan) : _schaduwTegelAan;
+const List<BoxShadow> _schaduwTegelAan = [
+  BoxShadow(color: Color(0x40000000), blurRadius: 9, offset: Offset(0, 4)),
+  BoxShadow(color: Color(0x6B000000), blurRadius: 34, offset: Offset(0, 22)),
+];
+
 /// Wat over de app heen ligt: een blad, een menu, een dialoog.
 List<BoxShadow> get kSchaduw3 => Thema.licht ? _zacht(_schaduw3) : _schaduw3;
 const List<BoxShadow> _schaduw3 = [

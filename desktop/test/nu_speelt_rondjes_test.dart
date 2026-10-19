@@ -76,7 +76,8 @@ void main() {
     final bron = File('lib/main.dart').readAsStringSync();
 
     test('Nu speelt zet de rondjes aan, met het eerste rondje als haak', () {
-      expect(bron, contains('                  rondjes: true,\n                  eersteRondje: _eersteRondje,'));
+      // Naast elkaar en op de tv onder de titel; gestapeld staat de foto bovenaan, naast de kop (19-10-2026).
+      expect(bron, contains('                  rondjes: !gestapeld,\n                  eersteRondje: gestapeld ? null : _eersteRondje,'));
     });
 
     test('op de hoes gaat OMHOOG naar het eerste rondje', () {

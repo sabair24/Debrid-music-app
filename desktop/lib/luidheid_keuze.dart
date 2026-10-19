@@ -11,6 +11,7 @@ library;
 import 'package:flutter/material.dart';
 
 import 'luidheid.dart';
+import 'organize.dart' show artistKey, splitFeatured;
 import 'luidheid_winkel.dart' show LuidheidStatus;
 import 'settings.dart';
 import 'tv.dart';
@@ -148,6 +149,68 @@ class LuidheidMerk extends StatelessWidget {
             textAlign: uitlijning,
             style: kLabel.copyWith(color: kGedempt)),
       ),
+    );
+  }
+}
+
+/// Wie er op de ronde foto naast de kop van Nu speelt staat (Saber, 19-10-2026: "1 maal boven de naam,
+/// met ronde foto links ervan").
+///
+/// Een plaat van drie artiesten ("Elton John, Tim Rice, Hans Zimmer") krijgt drie rondjes over elkaar,
+/// elk met zijn eigen foto: de hele reeks als één naam heeft er geen. Een groepsnaam met een komma
+/// blijft één naam: "Earth, Wind & Fire", "Crosby, Stills & Nash", "Peter, Paul and Mary" en "Tyler,
+/// The Creator" — daar staat een "&", een "and"/"en" of een lidwoord in een van de delen.
+List<String> kopFotoNamen(String artiest) {
+  final hoofd = splitFeatured(artiest, '').main.trim();
+  if (hoofd.isEmpty) return const [];
+  final delen = [
+    for (final d in hoofd.split(','))
+      if (d.trim().isNotEmpty) d.trim(),
+  ];
+  final groep = RegExp(r'&|\+|\band\b|\ben\b|^(the|de|het|les|la|le)\b', caseSensitive: false);
+  return delen.length > 1 && !delen.any(groep.hasMatch) ? delen : [hoofd];
+}
+
+/// Wie er onder de titel nog bij hoort als de artiest al bovenaan staat ([kop]): iedereen die daar niet
+/// staat. Staat de hoofdartiest van het nummer bovenaan, dan zijn dat gasten en zegt de regel "met T.I.";
+/// staat hij er niet (een verzamelplaat), dan het hele lijstje, zonder "met". Een lege lijst = geen
+/// regel (Saber, 19-10-2026: "als er verschillende artiesten in de song zijn, onder de titel dan wel").
+({List<String> namen, bool met}) gastenNaastKop(List<String> namen, List<String> kop) {
+  final boven = {
+    for (final k in kop)
+      if (k.trim().isNotEmpty) artistKey(k),
+  };
+  final rest = [
+    for (final n in namen)
+      if (n.trim().isNotEmpty && !boven.contains(artistKey(n))) n,
+  ];
+  final hoofdBoven = namen.isNotEmpty && boven.contains(artistKey(namen.first));
+  return (namen: rest, met: hoofdBoven);
+}
+
+/// De regel vlak boven de afspeelbalk van Nu speelt, gestapeld: echtheid, kwaliteit en volume, in het
+/// midden (Saber, 19-10-2026: "de kwaliteit gecentreerd boven de afspeelbalk"). Leeg = niets.
+class KwaliteitsRegel extends StatelessWidget {
+  const KwaliteitsRegel({super.key, this.echtheid, this.kwaliteit, this.merk});
+
+  final Widget? echtheid;
+  final Widget? kwaliteit;
+  final Widget? merk;
+
+  @override
+  Widget build(BuildContext context) {
+    if (echtheid == null && kwaliteit == null && merk == null) return const SizedBox.shrink();
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        if (echtheid != null) echtheid!,
+        if (kwaliteit != null) kwaliteit!,
+        if (merk != null) ...[
+          if (echtheid != null || kwaliteit != null) const SizedBox(width: 10),
+          // Het merk krimpt met puntjes; de badge ernaast blijft heel.
+          Flexible(child: merk!),
+        ],
+      ],
     );
   }
 }

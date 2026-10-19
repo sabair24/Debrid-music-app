@@ -240,7 +240,7 @@ void main() {
     expect(main.substring(mee, mee + 260), contains('child: meeMetDeHoes(IgnorePointer('));
     final tegel = File('lib/ui/tegel.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(tegel, contains('AchterkantBeeld('));
-    expect(tegel, contains('boxShadow: !_draai.voorInRust.value ? const [] : (_aan ? kSchaduw2 : kSchaduw1),'));
+    expect(tegel, contains('boxShadow: !_draai.voorInRust.value ? const [] : (_aan ? kSchaduwTegelAan : kSchaduwTegel),'));
   });
 
   group('de achterkant in zijn eigen vorm (Saber, 16-10-2026: "wordt die teveel afgesneden")', () {

@@ -34,6 +34,7 @@ import 'kantel_hoes.dart';
 import 'kleuren.dart';
 import 'maten.dart';
 import 'schijf_licht.dart';
+import 'tegel_spiegel.dart';
 import 'typografie.dart';
 
 /// De maat van een hoes in een liggende rij op Start.
@@ -255,7 +256,12 @@ class AlbumTegel extends StatefulWidget {
     this.schijf,
     this.onAfspelen,
     this.voorladen,
+    this.spiegel,
   });
+
+  /// De spiegeling onder de hoes: dezelfde bron als de hoes ([spiegelVan] voor bytes, [spiegelVanUrl]
+  /// voor een url). Null = geen spiegeling.
+  final ImageProvider? spiegel;
 
   /// Bij de eerste keer aanwijzen: alvast klaarleggen wat een klik of twee tikken straks nodig
   /// hebben (van schijf, nooit van het net). Geeft de achterkant terug als die er is; die wordt dan
@@ -443,13 +449,13 @@ class _AlbumTegelState extends State<AlbumTegel> {
       vorm: vorm,
       child: hoes,
     );
-    final metSchaduw = AnimatedContainer(
+    final hoesMetSchaduw = AnimatedContainer(
       duration: kGebaar,
       curve: Curves.easeOut,
       decoration: BoxDecoration(
         borderRadius: vorm,
         // Geen vierkante schaduw onder een achterkant die breder is dan hoog: die draagt zijn eigen.
-        boxShadow: !_draai.voorInRust.value ? const [] : (_aan ? kSchaduw2 : kSchaduw1),
+        boxShadow: !_draai.voorInRust.value ? const [] : (_aan ? kSchaduwTegelAan : kSchaduwTegel),
       ),
       child: widget.heroTag == null
           ? gekanteld
@@ -461,6 +467,13 @@ class _AlbumTegelState extends State<AlbumTegel> {
               child: gekanteld,
             ),
     );
+    // De spiegeling eronder (Saber, 19-10-2026: "volle spiegeling"), plat zoals de schaduw: de hoes
+    // kantelt, zijn spiegelbeeld niet. Weg zolang de achterkant voor staat. Altijd dezelfde Stack, ook
+    // zonder spiegeling: anders krijgt de hoes bij het omdraaien een nieuwe staat en stopt de draai.
+    final metSchaduw = Stack(clipBehavior: Clip.none, children: [
+      spiegelOnderHoes(bron: widget.spiegel, maat: maat, hoek: kHoek12, zichtbaar: _draai.voorInRust.value),
+      hoesMetSchaduw,
+    ]);
     final schijf = widget.schijf;
     final speel = widget.onAfspelen;
     if (isTv || (schijf == null && speel == null)) return metSchaduw;
