@@ -525,6 +525,10 @@ List<DiscogsUitgave>? samenUitgaven(List<DiscogsUitgave> eerst, List<DiscogsUitg
 /// de families op minstens de helft van de uitgaven ([minstensDeHelft]) (27-09-2026).
 const int kStijlboekVersie = 5;
 
+/// Hoeveel jaar een jaar na de ISRC moet liggen voor het als te laat geldt: een code wordt soms het
+/// jaar vóór de uitgave al toegekend.
+const int kIsrcSpeling = 2;
+
 /// De feiten ophalen en onthouden. De bronnen zijn haken, zodat een toets ze kan invullen.
 ///
 /// Onthouden op schijf, en ook wat NIET gevonden werd: een obscure artiest die TheAudioDB niet kent,
@@ -535,6 +539,7 @@ class Stijlboek {
     required this.audioDbGenre,
     required this.discogsNummer,
     this.deezerJaar,
+    this.isrcJaar,
   });
 
   /// Waar het geheugen staat.
@@ -551,6 +556,20 @@ class Stijlboek {
   /// niet kent en het model geen jaar noemde. Gemeten op 26-09-2026: "Kayzo — El Diablo" en "Sandy
   /// Beach — Man! I Feel Like A Woman!" kenden Discogs en TheAudioDB geen van beide; Deezer zei 2026.
   final Future<int?> Function(String artiest, String titel)? deezerJaar;
+
+  /// Het vroegste ISRC-jaar van dit liedje, of null — een PLAFOND, geen bron. Een ISRC wordt bij de
+  /// opname uitgegeven, dus een jaar dat er [kIsrcSpeling] of meer na ligt, is aantoonbaar te laat; een
+  /// ISRC alleen zegt te weinig, want oude catalogus kreeg pas een code toen hij gedigitaliseerd werd
+  /// ("Sexual Healing", 1982, draagt er een uit 1998).
+  ///
+  /// Gemeten op 19-10-2026 over de 61 tijdvakweigeringen in radio.log: twee waren fout door het jaar
+  /// van een heruitgave — Whitney Houston "I'm Every Woman (Clivilles & Cole Radio Mix)" "uit 2010"
+  /// (ISRC 1992, zaad 1992) en Garbage "Stupid Girl (Remastered 2015)" "uit 2015" (ISRC 1995, zaad
+  /// 1993) — en bij de andere 59 lag de ISRC even laat of later, dus verandert er daar niets.
+  ///
+  /// Alleen gevraagd als het tijdvak nee zegt (en voor het zaad): één zoekvraag per weigering, en
+  /// onthouden ("i:").
+  final Future<int?> Function(String artiest, String titel)? isrcJaar;
 
   // Eén keer inlezen, ook als acht keuringen tegelijk beginnen — anders bouwt elk zijn eigen kaart en
   // raken antwoorden kwijt (review van 26-09-2026). En één schrijver tegelijk op het .tmp-bestand.
@@ -712,6 +731,30 @@ class Stijlboek {
     return j;
   }
 
+  Future<int?> _isrcJaar(String artiest, String titel) async {
+    final bron = isrcJaar;
+    if (bron == null) return null;
+    final g = await _lees();
+    final k = 'i:${_sleutel(artiest)}|${_sleutel(titel)}';
+    if (g.containsKey(k)) return (g[k] as num?)?.toInt();
+    int? j;
+    try {
+      j = await bron(artiest, titel);
+    } catch (_) {
+      return null; // geen antwoord is geen jaartal; niet onthouden
+    }
+    g[k] = j;
+    await _bewaar();
+    return j;
+  }
+
+  /// [jaar], of het ISRC-jaar als dat er minstens [kIsrcSpeling] vóór ligt. Zie [isrcJaar].
+  Future<int?> _metPlafond(String artiest, String titel, int? jaar) async {
+    if (jaar == null) return null;
+    final i = await _isrcJaar(artiest, titel);
+    return i != null && i <= jaar - kIsrcSpeling ? i : jaar;
+  }
+
   static Stijlfamilie? _alsFamilie(Object? v) {
     for (final f in Stijlfamilie.values) {
       if (f.name == v) return f;
@@ -738,6 +781,7 @@ class Stijlboek {
       // tag, en zonder jaar van het zaad is er helemaal geen tijdvakkeuring (tweede beoordeling van
       // 26-09-2026).
       jaar ??= await _deezerJaar(artiest, titel);
+      jaar = await _metPlafond(artiest, titel, jaar);
     }
     f ??= await this.artiest(artiest);
     return (familie: f, jaar: jaar);
@@ -772,8 +816,16 @@ class Stijlboek {
       int? speling,
       void Function(int jaar)? buitenJaar}) async {
     final n = await nummer(artiest, titel);
-    final jaar = n.jaar ?? jaarHint ?? (zaad.jaar == null ? null : await _deezerJaar(artiest, titel));
-    final eerst = keurStijl(zaad, (families: const {}, jaar: jaar), speling: speling);
+    var jaar = n.jaar ?? jaarHint ?? (zaad.jaar == null ? null : await _deezerJaar(artiest, titel));
+    var eerst = keurStijl(zaad, (families: const {}, jaar: jaar), speling: speling);
+    // Buiten het tijdvak: eerst kijken of dat jaar niet aantoonbaar te laat is ([isrcJaar]).
+    if (!eerst.mag && jaar != null) {
+      final plafond = await _metPlafond(artiest, titel, jaar);
+      if (plafond != jaar) {
+        jaar = plafond;
+        eerst = keurStijl(zaad, (families: const {}, jaar: jaar), speling: speling);
+      }
+    }
     if (!eerst.mag && jaar != null) buitenJaar?.call(jaar);
     if (!eerst.mag || !familieTelt) return eerst;
     final zf = zaad.familie;

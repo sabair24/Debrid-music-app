@@ -43,8 +43,11 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'catalog.dart';
+import 'isrc.dart';
 import 'organize.dart' show artistKey, normKey, versionMarkers, withoutVersionText;
 import 'startrijen.dart' show bezitssleutel, zonderHerlevering;
+
+export 'isrc.dart' show isrcJaar;
 
 // ── Wie ────────────────────────────────────────────────────────────────────
 
@@ -507,14 +510,6 @@ class AlbumNummer {
       ];
 }
 
-/// Het jaar in een ISRC: "USWB19600603" → 1996, "USWB12604176" → 2026. Twee cijfers, dus vanaf '40 de
-/// vorige eeuw (een opname van vóór 1940 heeft zelden een ISRC, en die van na 2039 bestaan nog niet).
-int? isrcJaar(String? isrc) {
-  final m = RegExp(r'^[A-Z]{2}[A-Z0-9]{3}(\d{2})\d{5}$').firstMatch((isrc ?? '').trim().toUpperCase());
-  if (m == null) return null;
-  final jj = int.parse(m.group(1)!);
-  return jj >= 40 ? 1900 + jj : 2000 + jj;
-}
 
 /// Hoeveel jaar vóór de uitgave een ISRC "oud" is.
 const kOudeOpname = 3;

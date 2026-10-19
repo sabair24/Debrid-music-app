@@ -14997,6 +14997,7 @@ Future<void> startRadio(BuildContext context, String artist,
     audioDbGenre: CoverEnricher.audioDbGenre,
     discogsNummer: DiscogsService(cfg).nummerUitgaven,
     deezerJaar: RecommendService().albumJaar,
+    isrcJaar: RecommendService().isrcJaar,
   );
   final Future<Zaadstijl> zaadStijl = stijlboek
       .zaad(artist, zaadTitel, eigenJaar: zaad?.year)

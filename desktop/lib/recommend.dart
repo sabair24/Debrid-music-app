@@ -2,6 +2,7 @@ import 'dart:math';
 import 'aanbevolen.dart' show kiesNummers, rangschikKandidaten;
 
 import 'deezerbaan.dart';
+import 'isrc.dart' as isrc;
 import 'radiobuurt.dart';
 import 'radiokeuze.dart' show basisTitel, zelfdeArtiest;
 import 'radiolijst.dart';
@@ -324,6 +325,24 @@ class RecommendService {
         '${weg.isEmpty ? '' : ' | niet gevonden: ${weg.join('; ')}'}'
         '${stil.isEmpty ? '' : ' | geen antwoord: ${stil.join('; ')} (${zwijgt.values.toSet().join('; ')})'}');
     return uit;
+  }
+
+  /// Het vroegste ISRC-jaar van dit liedje bij Deezer, of null. Alleen `/search` geeft de ISRC mee
+  /// (`/artist/{id}/top`, `/radio` en de hitlijst niet, gemeten 19-10-2026). Ook van een heruitgave:
+  /// de code hoort bij de opname, niet bij de plaat. Zie `Stijlboek.isrcJaar` voor hoe hij telt.
+  Future<int?> isrcJaar(String artiest, String titel) async {
+    final zoek = await _get('$_base/search?q=${Uri.encodeComponent('$artiest $titel')}&limit=15');
+    if (zoek == null) throw StateError('Deezer gaf geen antwoord');
+    final t = basisTitel(titel);
+    int? min;
+    for (final r in (zoek['data'] as List? ?? const [])) {
+      if (r is! Map) continue;
+      final naam = ((r['artist'] as Map?)?['name'] ?? '') as String;
+      if (!zelfdeArtiest(naam, artiest) || basisTitel((r['title'] ?? '') as String) != t) continue;
+      final j = isrc.isrcJaar(r['isrc'] as String?);
+      if (j != null && (min == null || j < min)) min = j;
+    }
+    return min;
   }
 
   /// Het jaar van het Deezer-album met dit nummer, of null. Zie `Stijlboek.deezerJaar` voor
