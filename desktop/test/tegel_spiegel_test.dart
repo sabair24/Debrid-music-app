@@ -76,6 +76,32 @@ void main() {
     expect(p.getUint8((0 * 100 + 50) * 4 + 3), greaterThan(40), reason: 'het midden');
   });
 
+  testWidgets('DE STREEP (Saber, 19-10-2026): onderaan een grote spiegeling niets, en geen treden', (t) async {
+    final p = (await t.runAsync(() async {
+      final codec = await ui.instantiateImageCodec(_hoes());
+      final bron = (await codec.getNextFrame()).image;
+      final opname = ui.PictureRecorder();
+      tekenSpiegel(Canvas(opname), bron, maat: 300, hoogte: 70, hoek: 10);
+      final beeld = await opname.endRecording().toImage(300, 70);
+      return beeld.toByteData(format: ui.ImageByteFormat.rawStraightRgba);
+    }))!;
+    int a(int y) => p.getUint8((y * 300 + 150) * 4 + 3);
+    for (var y = 65; y < 70; y++) {
+      expect(a(y), 0, reason: 'rij $y: de onderrand van het vak tekent niets');
+    }
+    for (var y = 1; y < 64; y++) {
+      expect((a(y) - a(y - 1)).abs(), lessThanOrEqualTo(3), reason: 'rij $y: geen zichtbare trede');
+    }
+    expect(spiegelStroken(70), greaterThanOrEqualTo(24));
+  });
+
+  test('de grote hoes gebruikt dezelfde stroken, geen ShaderMask meer', () {
+    final bron = File('lib/ui/kantel_hoes.dart').readAsStringSync();
+    final lijf = bron.substring(bron.indexOf('class HoesSpiegel'));
+    expect(lijf, contains('TegelSpiegel(bron: MemoryImage(beeld), maat: maat, hoek: 10)'));
+    expect(lijf, isNot(contains('ShaderMask(')));
+  });
+
   test('dezelfde bron als de hoes: geen tweede decodering', () async {
     final b = _hoes();
     const cfg = ImageConfiguration.empty;
@@ -135,7 +161,9 @@ void main() {
       final ro = t.renderObject(s.first);
       // Negen vlakjes uit de textuur van de hoes (de tiende ligt voorbij 92 %, daar is niets meer), binnen
       // één afgeronde knip. Geen saveLayer: die zou in elk beeld van elke tegel een eigen laag mengen.
-      expect(ro, paintsExactlyCountTimes(#drawRect, kTegelSpiegelStroken - 1));
+      final n = spiegelStroken(140 * kTegelSpiegelHoogte);
+      final zichtbaar = [for (var i = 0; i < n; i++) if ((i + .5) / n < .92) i].length;
+      expect(ro, paintsExactlyCountTimes(#drawRect, zichtbaar));
       expect(ro, paintsExactlyCountTimes(#saveLayer, 0));
       expect(ro, paintsExactlyCountTimes(#clipRRect, 1));
     });

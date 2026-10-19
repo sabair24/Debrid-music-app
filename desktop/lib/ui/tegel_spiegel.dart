@@ -38,8 +38,12 @@ const double kTegelSpiegelAfstand = 4;
 const double kTegelSpiegelDekking = .2;
 const double _kTegelSpiegelTot = .92;
 
-/// In hoeveel stroken het verloop loopt: treden van 2 % dekking, en daaronder is geen trede te zien.
+/// In hoeveel stroken het verloop loopt: één per [_kStrookHoogte] punten, tussen [kTegelSpiegelStroken]
+/// en 32. Onder een tegel (30 punten hoog) zijn dat er 11, treden van 2 % dekking; onder de grote hoes
+/// van Nu speelt (70 punten en meer) 24 of meer, anders werd elke trede 7 punten breed en zichtbaar.
 const int kTegelSpiegelStroken = 10;
+const double _kStrookHoogte = 3;
+int spiegelStroken(double hoogte) => (hoogte / _kStrookHoogte).ceil().clamp(kTegelSpiegelStroken, 32);
 
 /// De bron voor de spiegeling van een hoes uit je eigen bibliotheek (de bytes die `cover` tekent).
 ImageProvider? spiegelVan(Uint8List? hoes) => hoes == null ? null : MemoryImage(hoes);
@@ -65,8 +69,9 @@ void tekenSpiegel(Canvas c, ui.Image hoes, {required double maat, required doubl
   if (hoek > 0) {
     c.clipRRect(RRect.fromRectAndCorners(vlak, topLeft: Radius.circular(hoek), topRight: Radius.circular(hoek)));
   }
-  for (var i = 0; i < kTegelSpiegelStroken; i++) {
-    final boven = hoogte * i / kTegelSpiegelStroken, onder = hoogte * (i + 1) / kTegelSpiegelStroken;
+  final stroken = spiegelStroken(hoogte);
+  for (var i = 0; i < stroken; i++) {
+    final boven = hoogte * i / stroken, onder = hoogte * (i + 1) / stroken;
     final dekking = kTegelSpiegelDekking * (1 - (boven + onder) / 2 / (hoogte * _kTegelSpiegelTot)).clamp(0.0, 1.0);
     if (dekking <= 0) break;
     // Met een shader telt van de kleur alleen de dekking: die maakt de strook doorzichtiger.

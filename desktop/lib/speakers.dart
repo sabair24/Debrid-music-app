@@ -79,9 +79,20 @@ class SpeakerTarget extends ChangeNotifier implements Speakerbediening {
   @override
   bool get isCasting => _device != null;
 
-  /// The client to steer through, set once by main. Null on the machine that holds the music, which
+  /// The client to steer through, set by main. Null on the machine that holds the music, which
   /// is also the machine that never needs it.
-  RemoteClient? client;
+  ///
+  /// **Een wissel meldt zich.** Op een toestel zonder muziek wordt hij gezet zodra de koppeling er is,
+  /// en dat is vaak een tel NA het eerste beeld. De speakerknop in de spelerbalk kijkt ernaar met
+  /// `watch`, maar een kaal veld meldt niets: na een koude start bleef de knop weg tot er toevallig iets
+  /// anders de balk liet herbouwen (Shield, 19-10-2026, proef b12071).
+  RemoteClient? get client => _client;
+  RemoteClient? _client;
+  set client(RemoteClient? c) {
+    if (identical(c, _client)) return;
+    _client = c;
+    notifyListeners();
+  }
 
   CastStatus? _status;
 

@@ -104,10 +104,12 @@ void main() {
     expect(fout, isEmpty);
   });
 
-  test('op de tv: gevulde knoppen (glas) krijgen in licht donkere letters', () {
+  // Eerst donker (18-10-2026: wit op glas over gebroken wit las je niet), sinds 19-10-2026 paars zoals
+  // de glazen knoppen op de pc en de gsm ("volledig zoals het is op pc en gsm"). Zie tv_licht_test.
+  test('op de tv: gevulde knoppen (glas) krijgen in licht paarse letters, niet wit', () {
     final bron = File('lib/main.dart').readAsStringSync();
     expect(bron, contains('filledButtonTheme: FilledButtonThemeData(style: _focusOutlineGevuld),'));
-    expect(bron, contains('return Thema.licht ? kTekst : null;'));
+    expect(bron, contains('return Thema.licht ? kAccent : null;'));
   });
 
   test('op licht zijn de kleurvlekken van de hoes zachter; de cd-glans leest de schijf niet terug', () {

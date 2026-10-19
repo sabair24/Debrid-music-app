@@ -68,7 +68,9 @@ void main() {
     test('een scope zonder iets om op te staan wordt overgeslagen', () {
       final start = bron.indexOf('KeyEventResult _tvSprong');
       expect(start, greaterThan(-1), reason: '_tvSprong is hernoemd of verdwenen');
-      final lijf = bron.substring(start, start + 900);
+      // Tot het eind van de functie, niet een vast aantal tekens: sinds 19-10-2026 staat er nog een stap
+      // tussen (de pagina verder schuiven, [tvSchuifVerder]), en dan viel de rest buiten de 900.
+      final lijf = bron.substring(start, bron.indexOf('\n  }\n', start));
       // Sinds 16-10-2026 strenger: iets dat ook IN BEELD staat. Een lege Favorieten-pagina droeg
       // onzichtbare elementen, en dan landde de selectie daarop (zie `_heeftZichtbaar`).
       expect(lijf, contains('_heeftZichtbaar(scope)'),

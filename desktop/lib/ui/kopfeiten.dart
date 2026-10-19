@@ -57,7 +57,11 @@ class KopFeiten extends StatelessWidget {
     if (f.isEmpty) return artiest;
     return LayoutBuilder(builder: (context, c) {
       final schaal = MediaQuery.textScalerOf(context);
-      if (!c.hasBoundedWidth || kopFeitenOpEenRegel(artiestTekst, f, stijl, schaal, c.maxWidth)) {
+      // Meten met wat er werkelijk getekend wordt: de stijl eromheen plus [stijl]. Met [stijl] alleen
+      // (zonder lettergrootte) rekende dit met 14 punten terwijl de albumpagina groter tekent, en dan
+      // "paste" het op één regel en werd de artiest afgeknipt: "Kate Ry… · 2002 · …" (gsm, 19-10-2026).
+      final echt = DefaultTextStyle.of(context).style.merge(stijl);
+      if (!c.hasBoundedWidth || kopFeitenOpEenRegel(artiestTekst, f, echt, schaal, c.maxWidth)) {
         return Row(mainAxisSize: MainAxisSize.min, children: [
           Flexible(child: artiest),
           Text(' · ${f.join(' · ')}', style: stijl, maxLines: 1),

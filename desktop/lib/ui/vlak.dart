@@ -703,10 +703,12 @@ class _GlasKnopState extends State<GlasKnop> {
     final tvSelectie = isTv && _focus && onPressed != null;
     final kleur = tvSelectie ? kAccent : w.kleur;
     // Op een tv is de ruit plat glas zonder donkere onderlaag; in het lichte thema zijn witte letters
-    // daarop onleesbaar ("Afspelen" en "Radio" in de glasproef op de Shield, 18-10-2026).
+    // daarop onleesbaar ("Afspelen" en "Radio" in de glasproef op de Shield, 18-10-2026). Daar paars,
+    // zoals op de pc en de gsm (19-10-2026, "volledig zoals het is op pc en gsm"; het was zwart). De
+    // selectie blijft te zien aan het glas dat oplicht.
     final letters = !Thema.licht
         ? Colors.white
-        : isTv || w._rond
+        : w._rond
             ? kTekst
             : kAccent;
     final knop = w._rond

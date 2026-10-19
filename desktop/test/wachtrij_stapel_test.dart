@@ -170,7 +170,12 @@ void main() {
     expect(main, contains('  StapelKeuze.laad();'));
     expect(main, contains("MenuRegel(Icons.layers_rounded, 'Wachtrij als stapel', () => StapelKeuze.zet(true))"));
     expect(main, contains('_toonItemMenu(knopContext, _metStapelKeuze(_nummerMenu(knopContext, t)))'));
-    expect(main, contains('spiegel: !isTv && !dwars && !stapelAan,'));
+    // Op de tv staat de rij met ⋯ er niet: daar een eigen knop achteraan (Shield, 19-10-2026).
+    final tv = main.indexOf("key: const ValueKey('np-meer-tv'),");
+    expect(tv, greaterThan(0));
+    expect(main.substring(tv - 400, tv), contains('if (isTv && t != null) ...['));
+    expect(main.substring(tv, tv + 400), contains('_metStapelKeuze(_nummerMenu(knopContext, t))'));
+    expect(main, contains('spiegel: !dwars && !stapelAan,'));
     expect(main, contains('p.radioMode ? p.springInRadio(p.radioIndex + n) : p.playQueue(p.queueTracks, p.currentIndex + n)'),
         reason: 'zoals een tik in de wachtrijlijst');
     expect(main, contains('final hoesMaat = stapelAan ? hoesMaatVol / (1 + kStapelBoven) : hoesMaatVol;'));

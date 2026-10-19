@@ -30,6 +30,8 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -39,6 +41,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
 import '../artwork.dart' show HoesVlek;
+import '../paths.dart' show appFile;
 import '../tv.dart';
 import 'kantel_hoes.dart' show toestelZwaartekracht;
 import 'kleuren.dart';
@@ -72,6 +75,17 @@ const kGlasWachtHoogstens = Duration(minutes: 30);
 
 /// Na hoe lang hij het hoe dan ook opnieuw probeert, ook zonder paginawissel (minstens de wachttijd).
 const kGlasProbeerNa = Duration(minutes: 10);
+
+/// Hoe lang een gebleken "vloeibaar is hier te zwaar" geldt.
+///
+/// **Waarom (gsm, 19-10-2026).** Gemeten op de S26 met alles al geladen: met vloeibaar glas rasterde
+/// Tracks gemiddeld 5,8 ms per beeld (piek 78), 103 beelden per seconde en tien beelden te laat; met
+/// mat 3,0 ms (piek 20), 118 per seconde en geen enkel beeld te laat. De bewaker zette het glas wel
+/// terug, maar pas na tien seconden aanloop en drie te zware vensters, en elke start (en elke nieuwe
+/// poging) begon weer vloeibaar: precies de stroefheid die Saber voelde. Hij koos "onthouden": eens te
+/// zwaar gebleken, dan start dit toestel in mat, en vanzelf probeert het vloeibaar hooguit één keer per
+/// dag opnieuw. Met "Opnieuw proberen" in Instellingen kan het altijd meteen.
+const kGlasOnthoud = Duration(hours: 24);
 
 /// De laatste keer dat het glas lichter werd: van welke stand naar welke, wanneer, en waarom.
 class GlasTerugval {
@@ -276,9 +290,73 @@ class GlasKwaliteit {
     }
   }
 
+  /// Waar het besluit "vloeibaar is hier te zwaar" staat ([kGlasOnthoud]). Null = niet bewaren: zo
+  /// staat het in een toets ([vergeet]), zodat geen toets in een echte app-map schrijft.
+  @visibleForTesting
+  static File? Function() besluitBestand = () => appFile('glas_besluit.json');
+
+  /// Tot wanneer de bewaker niet vanzelf naar vloeibaar teruggaat. Null = geen besluit.
+  static DateTime? _onthoudenTot;
+
+  /// Geldt het besluit nu?
+  static bool get onthouden {
+    final t = _onthoudenTot;
+    return t != null && klok().isBefore(t);
+  }
+
+  static ({DateTime om, double p90Ms})? _leesBesluit() {
+    try {
+      final f = besluitBestand();
+      if (f == null || !f.existsSync()) return null;
+      final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      final om = DateTime.tryParse(j['vloeibaarTeZwaar'] as String? ?? '');
+      return om == null ? null : (om: om, p90Ms: (j['p90Ms'] as num?)?.toDouble() ?? 0);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static void _schrijfBesluit(DateTime om, double p90Ms) {
+    try {
+      final f = besluitBestand();
+      if (f == null) return;
+      f.parent.createSync(recursive: true);
+      f.writeAsStringSync(jsonEncode({'vloeibaarTeZwaar': om.toIso8601String(), 'p90Ms': p90Ms}));
+    } catch (_) {/* niet kunnen bewaren: dan geldt het alleen deze sessie */}
+  }
+
+  static void _wisBesluit() {
+    try {
+      final f = besluitBestand();
+      if (f != null && f.existsSync()) f.deleteSync();
+    } catch (_) {}
+  }
+
+  /// Bij het opstarten: bleek vloeibaar op dit toestel binnen [kGlasOnthoud] te zwaar, dan meteen mat,
+  /// met de regel in Instellingen ("Glas: mat — te zwaar op dit toestel …") en de knop om het opnieuw
+  /// te proberen.
+  @visibleForTesting
+  static void pasBesluitToe() {
+    if (hoogste != GlasStand.vloeibaar || systeemDicht.value) return;
+    final b = _leesBesluit();
+    if (b == null) return;
+    final tot = b.om.add(kGlasOnthoud);
+    if (!klok().isBefore(tot)) return;
+    _onthoudenTot = tot;
+    _bewaakte.value = GlasStand.mat;
+    terugval.value = GlasTerugval(van: GlasStand.vloeibaar, naar: GlasStand.mat, om: b.om, p90Ms: b.p90Ms, vlakken: 0);
+    String twee(int n) => n.toString().padLeft(2, '0');
+    final waarom = 'start in mat: vloeibaar was hier te zwaar, onthouden tot ${twee(tot.hour)}:${twee(tot.minute)}';
+    _wissel = waarom;
+    meld?.call('glas: $waarom');
+  }
+
   /// Probeer de hoogste stand opnieuw. Vanuit Instellingen ([handmatig]) begint de wachttijd weer
   /// klein; vanzelf (na de wachttijd) blijft hij staan, zodat een toestel dat het echt niet trekt
   /// niet elke minuut hapert.
+  ///
+  /// Vanzelf nooit terug naar vloeibaar zolang [onthouden] geldt: dan hooguit van plat terug naar mat.
+  /// Vanuit Instellingen wel, en dan vervalt het besluit (blijkt het weer te zwaar, dan komt het terug).
   static void probeerOpnieuw({bool handmatig = false}) {
     _later?.cancel();
     _later = null;
@@ -286,16 +364,19 @@ class GlasKwaliteit {
     if (handmatig) {
       _wacht = Duration.zero;
       _nietTot = null;
+      _onthoudenTot = null;
+      _wisBesluit();
     }
-    if (_bewaakte.value == hoogste) return;
+    final naar = onthouden && hoogste == GlasStand.vloeibaar ? GlasStand.mat : hoogste;
+    if (_bewaakte.value == naar) return;
     _voorTerugval = null;
     _terugNaar = null;
     final van = _bewaakte.value;
-    _bewaakte.value = hoogste;
+    _bewaakte.value = naar;
     _tijden.clear();
     _teZwaar = 0;
-    terugval.value = null;
-    final waarom = '${van.name} → ${hoogste.name}, ${handmatig ? 'opnieuw geprobeerd' : 'na ${_wacht.inMinutes} min opnieuw'}';
+    if (naar == hoogste) terugval.value = null;
+    final waarom = '${van.name} → ${naar.name}, ${handmatig ? 'opnieuw geprobeerd' : 'na ${_wacht.inMinutes} min opnieuw'}';
     _wissel = waarom;
     meld?.call('glas: $waarom');
   }
@@ -366,6 +447,7 @@ class GlasKwaliteit {
         lens = await ui.FragmentProgram.fromAsset('shaders/glas_lens.frag');
         doel.value = GlasStand.vloeibaar;
         hoogste = GlasStand.vloeibaar;
+        pasBesluitToe();
       } catch (e) {
         meld?.call('glas: lensshader niet geladen ($e) — matglas');
       }
@@ -418,6 +500,11 @@ class GlasKwaliteit {
       if (p90 > voor * kGlasMoetHelpen) {
         final van = doel.value;
         doel.value = terug;
+        // Het lag niet aan het glas: dan ook niets onthouden.
+        if (terug == GlasStand.vloeibaar) {
+          _onthoudenTot = null;
+          _wisBesluit();
+        }
         terugval.value = null;
         _teZwaar = 0;
         _nietTot = klok().add(kGlasNietSchuldig);
@@ -441,6 +528,11 @@ class GlasKwaliteit {
     doel.value = naar;
     _voorTerugval = p90;
     _terugNaar = van;
+    // Vloeibaar te zwaar: onthouden, zodat de volgende start niet opnieuw hapert ([kGlasOnthoud]).
+    if (van == GlasStand.vloeibaar) {
+      _onthoudenTot = klok().add(kGlasOnthoud);
+      _schrijfBesluit(klok(), p90 / 1000);
+    }
     final waarom = '${van.name} → ${naar.name}, 90e percentiel ${(p90 / 1000).toStringAsFixed(1)} ms '
         'per beeld met $_actief glasvlakken (budget ${(budget.inMicroseconds / 1000).toStringAsFixed(1)} ms)';
     _wissel = waarom;
@@ -478,6 +570,8 @@ class GlasKwaliteit {
     _wacht = Duration.zero;
     _later?.cancel();
     _later = null;
+    _onthoudenTot = null;
+    besluitBestand = () => null;
     hzVoorToets = null;
     klok = DateTime.now;
     systeemDicht.value = false;
@@ -613,7 +707,10 @@ class _GlasVlakState extends State<GlasVlak> {
                   Positioned.fill(child: GlasLens(hoek: widget.vorm.topLeft.x)),
                 Positioned.fill(child: vulling),
                 // Het nep-glas van de tv: de kleurvlekken van wat er speelt, over de dichte vulling.
-                if (isTv && widget.balk)
+                // Niet in het lichte thema: daar lag er een bruinroze band door het menu (Kelis, Shield,
+                // 19-10-2026), en op de pc en de gsm is de capsule daar schoon gebroken wit. Saber
+                // wilde het lichte thema op de tv "volledig zoals het is op pc en gsm".
+                if (isTv && widget.balk && !Thema.licht)
                   Positioned.fill(
                     child: ValueListenableBuilder<List<HoesVlek>>(
                       valueListenable: GlasKwaliteit.micaVlekken,

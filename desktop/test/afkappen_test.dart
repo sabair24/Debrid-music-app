@@ -124,6 +124,39 @@ void main() {
       expect(tekst, contains('2 nummers'));
     });
 
+    testWidgets('DE AFGEKNIPTE ARTIEST (gsm, 19-10-2026): meten met de letter die er werkelijk staat', (t) async {
+      // Zoals op de albumpagina: [stijl] zonder lettergrootte, de pagina tekent groter dan 14. In 14
+      // past het net op één regel, in 18 niet: dan horen de feiten op een eigen regel, met de artiest heel.
+      const feiten = ['2002', 'Contemporary Pop', '1 nummer'];
+      final breed = (() {
+        final tp = TextPainter(
+          text: TextSpan(text: ['Kate Ryan', ...feiten].join(' · '), style: const TextStyle(fontSize: 14)),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        return tp.width + 4;
+      })();
+      await t.pumpWidget(MaterialApp(
+        home: Align(
+          alignment: Alignment.topLeft,
+          child: DefaultTextStyle(
+            style: const TextStyle(fontSize: 18),
+            child: SizedBox(
+              width: breed,
+              child: const KopFeiten(
+                artiest: Text('Kate Ryan', maxLines: 1, overflow: TextOverflow.ellipsis),
+                artiestTekst: 'Kate Ryan',
+                feiten: feiten,
+                stijl: TextStyle(color: Color(0xFF888888)),
+              ),
+            ),
+          ),
+        ),
+      ));
+      final artiest = t.renderObject<RenderParagraph>(find.text('Kate Ryan'));
+      expect(artiest.didExceedMaxLines, isFalse, reason: 'de naam heel, geen "Kate Ry…"');
+      expect(t.getTopLeft(find.textContaining('2002')).dy, greaterThan(t.getTopLeft(find.text('Kate Ryan')).dy + 10));
+    });
+
     testWidgets('breed genoeg: alles op één regel, zoals altijd', (t) async {
       await t.pumpWidget(kop(900));
       expect(find.text(' · 2006 · Variété française · 2 nummers'), findsOneWidget);

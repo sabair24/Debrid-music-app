@@ -349,9 +349,17 @@ void main() {
       expect(midden(pil), closeTo(tracks, 2));
       expect(kleur('Tracks'), MenuTint.paars.tekst);
       expect(kleur('Start'), isNot(MenuTint.paars.tekst), reason: 'één woord licht op: dat onder de pil');
-      final deco = t.widget<DecoratedBox>(find.descendant(of: pil, matching: find.byType(DecoratedBox))).decoration;
-      expect(deco, menuPilVorm(MenuTint.paars),
-          reason: 'helder glas, alleen de letters paars (Saber, 17-10-2026: "doe enkel de tekst paars")');
+      BoxDecoration deco() =>
+          t.widget<DecoratedBox>(find.descendant(of: pil, matching: find.byType(DecoratedBox))).decoration as BoxDecoration;
+      // Met de selectie in de balk een witte rand om de pil (Shield, 19-10-2026): anders zag je niet
+      // of OMHOOG was aangekomen.
+      expect((deco().border! as Border).top.width, 2);
+      expect((deco().border! as Border).top.color.a, greaterThan(.8));
+      expect(deco().gradient, menuPilVorm(MenuTint.paars).gradient, reason: 'verder hetzelfde glas');
+      FocusManager.instance.primaryFocus?.unfocus();
+      await t.pumpAndSettle();
+      expect(deco(), menuPilVorm(MenuTint.paars),
+          reason: 'zonder selectie in de balk: helder glas, alleen de letters paars (Saber, 17-10-2026: "doe enkel de tekst paars")');
     });
 
     testWidgets('het tabblad van de pagina waar je bent staat in beeld, ook na een wissel', (t) async {

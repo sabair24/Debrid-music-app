@@ -949,6 +949,79 @@ bool tvPijlStap(FocusNode hier, TraversalDirection richting) {
   }
 }
 
+/// Hoeveel een lijst nog minstens verder moet kunnen voor [tvSchuifVerder] schuift. Een rij die
+/// dichterbij ligt, valt binnen het voorraadstuk van de lijst (250 punten) en is dus al opgemaakt: vond
+/// de pijl hem niet, dan is hij er niet. Daaronder (de kop "Albums" boven de eerste rij, de lucht onder
+/// de laatste) gaat de pijl gewoon door naar de bovenbalk of de spelerbalk.
+const double kTvVerderVanaf = 160;
+
+/// Een pijl omhoog of omlaag die in de pagina niets meer vond, terwijl de pagina nog verder kan.
+///
+/// **Waarom (Shield, 19-10-2026).** Vijf keer snel omlaag in Albums, of de toets vasthouden: de focus
+/// stond na één stap in de spelerbalk ("Kelis"), en de pagina was niet verschoven. Een rij buiten
+/// beeld wordt pas gebouwd als hij binnen het voorraadstuk valt; de lijst schuift 220 ms na een stap
+/// mee, en een tweede pijl die eerder komt, vindt onder zich nog geen rij — alleen de spelerbalk. Ook
+/// op Start, na twee rijen.
+///
+/// Dan wacht de stap tot die rij er is, en wordt hij daarna alsnog gezet ([tvPijlStap]). Pas als de
+/// pagina aan zijn eind is, mag de pijl eruit. Geeft true als de pijl hiermee is afgehandeld.
+///
+/// **Elke pijl telt.** Een pijl die binnenkomt terwijl er al stappen wachten, wacht mee. Ze worden beeld
+/// voor beeld gezet zodra de volgende rij bestaat: na elke stap schuift er iets (de rij naar zijn vaste
+/// plek, of het focusverzoek met `ensureVisible`), en daarmee komt de rij eronder binnen het
+/// voorraadstuk. Zonder dit leverden tien snelle pijlen op de Shield twee rijen op (19-10-2026,
+/// proef b12070).
+bool tvSchuifVerder(FocusNode hier, TraversalDirection richting) {
+  if (richting != TraversalDirection.down && richting != TraversalDirection.up) return false;
+  final ctx = hier.context;
+  if (ctx == null) return false;
+  // De buitenste staande lijst: de pagina. Een rij in de pagina schuift opzij, niet omlaag.
+  ScrollableState? pagina;
+  for (var s = Scrollable.maybeOf(ctx); s != null; s = Scrollable.maybeOf(s.context)) {
+    if (s.position.axis == Axis.vertical) pagina = s;
+  }
+  final pos = pagina?.position;
+  if (pos == null || !pos.hasContentDimensions || !pos.hasPixels) return false;
+  final omlaag = richting == TraversalDirection.down;
+  final bezig = _verderStappen > 0 && _verderOmlaag == omlaag && identical(_verderPos, pos);
+  if (!bezig && _nogRuimte(pos, omlaag) <= kTvVerderVanaf) return false;
+  _verderPos = pos;
+  _verderOmlaag = omlaag;
+  _verderBeelden = 0;
+  _verderStappen = bezig ? _verderStappen + 1 : 1;
+  if (!bezig) _volgendeStap(richting);
+  return true;
+}
+
+double _nogRuimte(ScrollPosition pos, bool omlaag) =>
+    omlaag ? pos.maxScrollExtent - pos.pixels : pos.pixels - pos.minScrollExtent;
+
+/// Na het volgende beeld: een wachtende stap zetten als de rij er is, anders nog een beeld wachten.
+void _volgendeStap(TraversalDirection richting) {
+  WidgetsBinding.instance.ensureVisualUpdate();
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (_verderStappen <= 0) return;
+    final nu = FocusManager.instance.primaryFocus;
+    if (nu != null && tvPijlStap(nu, richting)) {
+      _verderStappen--;
+      _verderBeelden = 0;
+    } else if (++_verderBeelden > kTvVerderGeduld) {
+      _verderStappen = 0;
+      return;
+    }
+    if (_verderStappen > 0) _volgendeStap(richting);
+  });
+}
+
+/// Hoeveel beelden een wachtende stap op zijn rij wacht voor hij vervalt (een seconde op 60 Hz).
+const int kTvVerderGeduld = 60;
+
+/// De pagina waar stappen op wachten, in welke richting, hoeveel, en hoe lang al.
+ScrollPosition? _verderPos;
+bool _verderOmlaag = true;
+int _verderStappen = 0;
+int _verderBeelden = 0;
+
 /// Staat [n] in een sliver die in deze opmaak niet aan de beurt kwam (buiten beeld én buiten het
 /// voorraadstuk)? Dan is zijn plek op het scherm verzonnen: zie [tvPijlStap].
 @visibleForTesting

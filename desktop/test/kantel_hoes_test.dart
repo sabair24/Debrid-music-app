@@ -189,8 +189,10 @@ void main() {
     final bron = File('lib/main.dart').readAsStringSync();
     // Naast elkaar en gestapeld valt hij buiten het blok en liggen de titel (Nu speelt) en "Album" (de
     // albumpagina) eroverheen; gestapeld staat de plaatnaam boven de hoes (19-10-2026).
-    expect(bron, contains('spiegel: !isTv && !dwars && !stapelAan,'), reason: 'in de stapel wijkt hij');
-    expect(bron, contains('spiegel: !isTv,\n'));
+    // Ook op een tv (19-10-2026: het lichte thema op de Shield "volledig zoals het is op pc en gsm").
+    expect(bron, contains('spiegel: !dwars && !stapelAan,'), reason: 'in de stapel wijkt hij');
+    expect(bron, contains('spiegel: true,\n'));
+    expect(bron, isNot(contains('spiegel: !isTv')));
     expect(bron, contains('children: [hoes, const SizedBox(height: 16), details],'),
         reason: 'geen gat tussen de hoes en de titel ("tis nie mooi zo")');
     expect(bron, isNot(contains('SpiegelVak(')));

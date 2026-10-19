@@ -123,6 +123,42 @@ Widget _hoesMetLint(NieuwKaart k, double maat, double hoek) => SizedBox.square(
     );
 
 /// Een brede kaart: de hoes links, drie regels tekst ernaast.
+/// Een kaart die op een tv laat zien dat hij de selectie heeft.
+///
+/// **Waarom (Shield, 19-10-2026).** Op de kleine kaarten van "Nieuwe albums & EP's" was nergens te zien
+/// waar je stond: [Pressable] legt op een tv een glazen vlak ONDER de kaart en kleurt letters zonder
+/// eigen kleur paars, maar de kaart tekent zijn eigen dichte achtergrond en al zijn tekst heeft een
+/// kleur. Hier krijgt de kaart zelf het teken (`bouw(true)`): een felle rand en een lichtere grond.
+/// Op de pc blijft het de ring van [Pressable].
+class KaartMetSelectie extends StatefulWidget {
+  const KaartMetSelectie({super.key, required this.k, required this.hoek, required this.bouw});
+  final NieuwKaart k;
+  final double hoek;
+  final Widget Function(bool selectie) bouw;
+
+  @override
+  State<KaartMetSelectie> createState() => _KaartMetSelectieState();
+}
+
+class _KaartMetSelectieState extends State<KaartMetSelectie> {
+  bool _selectie = false;
+
+  @override
+  Widget build(BuildContext context) => Pressable(
+        onPressed: widget.k.onTap,
+        onLongPress: widget.k.onLang,
+        onSecondaryTap: widget.k.onRechts,
+        borderRadius: BorderRadius.circular(widget.hoek),
+        scaleOnFocus: false,
+        // Op een tv het eigen teken hieronder; het glazen vlak van Pressable zou er toch achter liggen.
+        ringOnFocus: !isTv,
+        onFocusChange: (v) {
+          if (v != _selectie) setState(() => _selectie = v);
+        },
+        child: widget.bouw(isTv && _selectie),
+      );
+}
+
 class BredeKaart extends StatelessWidget {
   const BredeKaart(this.k, {super.key, required this.breedte, required this.hoogte});
   final NieuwKaart k;
@@ -131,20 +167,18 @@ class BredeKaart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hoes = hoogte - 12;
-    return Pressable(
-      onPressed: k.onTap,
-      onLongPress: k.onLang,
-      onSecondaryTap: k.onRechts,
-      borderRadius: BorderRadius.circular(kHoek12),
-      scaleOnFocus: false,
-      child: Container(
+    return KaartMetSelectie(
+      k: k,
+      hoek: kHoek12,
+      bouw: (selectie) => Container(
+        key: ValueKey(selectie ? 'kaart-selectie' : 'kaart-rust'),
         width: breedte,
         height: hoogte,
         padding: const EdgeInsets.all(6),
         decoration: BoxDecoration(
-          color: kPaneel,
+          color: selectie ? kPaneelHoog : kPaneel,
           borderRadius: BorderRadius.circular(kHoek12),
-          border: Border.all(color: kLijnZacht),
+          border: Border.all(color: selectie ? kAccent : kLijnZacht, width: selectie ? 2 : 1),
         ),
         child: Row(children: [
           _hoesMetLint(k, hoes, kHoek8),
@@ -185,19 +219,17 @@ class GroteKaart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hoes = hoogte - 16;
-    return Pressable(
-      onPressed: k.onTap,
-      onLongPress: k.onLang,
-      onSecondaryTap: k.onRechts,
-      borderRadius: BorderRadius.circular(kHoek18),
-      scaleOnFocus: false,
-      child: Container(
+    return KaartMetSelectie(
+      k: k,
+      hoek: kHoek18,
+      bouw: (selectie) => Container(
+        key: ValueKey(selectie ? 'kaart-selectie' : 'kaart-rust'),
         width: breedte,
         height: hoogte,
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(kHoek18),
-          border: Border.all(color: kAccent.withValues(alpha: .35)),
+          border: Border.all(color: kAccent.withValues(alpha: selectie ? 1 : .35), width: selectie ? 2 : 1),
           // Een zweem van het accent: zo leest hij als de uitgelichte, zonder iets dat beweegt of per
           // beeld rekent.
           gradient: LinearGradient(

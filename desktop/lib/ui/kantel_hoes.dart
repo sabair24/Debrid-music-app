@@ -20,6 +20,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+import 'tegel_spiegel.dart' show TegelSpiegel;
+
 /// Hoe ver een hoes hooguit kantelt, in radialen: zes graden.
 const double kKantelHoek = 6 * math.pi / 180;
 
@@ -301,6 +303,12 @@ const double kSpiegelAfstand = 6;
 /// De spiegeling onder de grote hoes in Nu speelt en op de albumpagina: de onderkant van de hoes,
 /// omgekeerd, van 20 % naar niets. Alleen de voorkant: een cd die draait wordt niet gespiegeld (dat
 /// zou hem twee keer per beeld laten tekenen).
+///
+/// **Getekend zoals onder de tegels ([TegelSpiegel]), in stroken.** Hier stond een `ShaderMask` met
+/// een verloop over het hele vak, en onderaan bleef een harde streep staan: de laag van het masker is
+/// op de pixel afgerond groter dan het verloop, en die laatste rij hoes kreeg geen masker (Saber, gsm,
+/// 19-10-2026: "die streep mag er niet zijn, moet mooi overvloeien zonder brute stop"). De stroken
+/// zijn op 92 % van de hoogte al niets, dus de onderrand van het vak tekent nooit iets.
 class HoesSpiegel extends StatelessWidget {
   const HoesSpiegel({super.key, required this.beeld, required this.maat});
 
@@ -309,40 +317,15 @@ class HoesSpiegel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => IgnorePointer(
-        // Een eigen laag: de cd die ernaast draait, tekent deze spiegeling (en zijn masker) niet opnieuw.
+        // Een eigen laag: de cd die ernaast draait, tekent deze spiegeling niet opnieuw.
         child: RepaintBoundary(
           child: SizedBox(
-          key: const ValueKey('hoes-spiegel'),
-          width: maat,
-          height: maat * kSpiegelHoogte,
-          child: ShaderMask(
-            blendMode: BlendMode.dstIn,
-            shaderCallback: (r) => const LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0x33FFFFFF), Color(0x00FFFFFF)],
-            ).createShader(r),
-            child: ClipRect(
-              child: OverflowBox(
-                alignment: Alignment.topCenter,
-                maxHeight: maat,
-                minHeight: maat,
-                child: Transform.flip(
-                  flipY: true,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: Image.memory(beeld,
-                        width: maat,
-                        height: maat,
-                        fit: BoxFit.cover,
-                        // Klein: na 20 % dekking en een verloop is er geen detail dat meer vraagt.
-                        cacheWidth: (maat * .5).round().clamp(32, 600),
-                        gaplessPlayback: true),
-                  ),
-                ),
-              ),
-            ),
-          ),
+            key: const ValueKey('hoes-spiegel'),
+            width: maat,
+            height: maat * kSpiegelHoogte,
+            // Dezelfde bron als de hoes erboven (AlbumArt: `Image.memory(front, cacheWidth:
+            // decodeWidth(s))`), dus geen tweede decodering. De afronding van de grote hoes is 10.
+            child: TegelSpiegel(bron: MemoryImage(beeld), maat: maat, hoek: 10),
           ),
         ),
       );

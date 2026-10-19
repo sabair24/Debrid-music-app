@@ -214,14 +214,17 @@ final ButtonStyle _focusOutline = ButtonStyle(
       : null),
 );
 
-/// Hetzelfde voor gevulde knoppen, met één ding erbij: op een tv in het lichte thema donkere letters.
+/// Hetzelfde voor gevulde knoppen, met één ding erbij: op een tv in het lichte thema paarse letters.
 /// Die knoppen zijn daar glas ([_knopVulling]), en Materials witte letters op 8 % zwart glas over
-/// gebroken wit las je niet ("Opslaan", "+ Nieuwe", gezien op de Shield, 18-10-2026).
+/// gebroken wit las je niet ("Opslaan", "+ Nieuwe", gezien op de Shield, 18-10-2026). Paars en niet
+/// zwart sinds 19-10-2026: zo staan de glazen knoppen ook op de pc en de gsm ([GlasKnop]), en Saber
+/// wilde het lichte thema op de Shield "volledig zoals het is op pc en gsm". De selectie blijft te
+/// zien aan het glas dat oplicht ([_focusOutline]).
 final ButtonStyle _focusOutlineGevuld = _focusOutline.copyWith(
   foregroundColor: WidgetStateProperty.resolveWith((states) {
     if (!isTv || states.contains(WidgetState.disabled)) return null;
     if (states.contains(WidgetState.focused)) return kAccent;
-    return Thema.licht ? kTekst : null;
+    return Thema.licht ? kAccent : null;
   }),
 );
 
@@ -2333,6 +2336,13 @@ bool schilKop(BuildContext context) => isCompact(context) && !isTv;
 Color balkOpGlas(int? was) =>
     glasZonderVervaging ? balkKleur(was) : balkKleur(was).withValues(alpha: kGlasDekking);
 
+/// De spelerbalk op een tv in het lichte thema: de kleur die de glazen balk op de pc laat zien
+/// ([balkOpGlas] over de lichte pagina), maar dicht, want echte vervaging trekt de Shield niet (zie
+/// [GlasKwaliteit.inrichten]). Met de volle tint stond hij er zwaarder bij dan op de pc: bij Kelis een
+/// zalmroze blok met een streep erboven (Saber, 19-10-2026: het lichte thema op de Shield "volledig
+/// zoals het is op pc en gsm").
+Color balkOpTvLicht(int? was) => Color.alphaBlend(balkKleur(was).withValues(alpha: kGlasDekking), kAchtergrond);
+
 /// De pagina's met de glazen balken eroverheen, of gewoon de pagina's.
 ///
 /// De pagina's krijgen de hoogte van de balken als extra `MediaQuery.padding.bottom`, en dat al
@@ -2491,6 +2501,11 @@ class _HomeShellState extends State<HomeShell> {
     // pagina "Op dit toestel" (15-10-2026).
     final hier = FocusManager.instance.primaryFocus;
     if (!focusZonderDoel(hier) && hier != null && tvPijlStap(hier, richting)) {
+      return KeyEventResult.handled;
+    }
+    // Niets meer in de pagina, maar die kan nog verder: dan staat de volgende rij er nog niet. Eerst
+    // schuiven, dan opnieuw (zie [tvSchuifVerder]); de spelerbalk pas aan het eind van de pagina.
+    if (hier != null && _tvInhoud.hasFocus && tvSchuifVerder(hier, richting)) {
       return KeyEventResult.handled;
     }
     final vanwaar = FocusManager.instance.primaryFocus?.rect;
@@ -4765,7 +4780,15 @@ class _TvTopBarState extends State<TvTopBar> {
                         width: pil.width,
                         top: 0,
                         bottom: 0,
-                        child: DecoratedBox(decoration: menuPilVorm(tint)),
+                        // Heeft de balk de selectie, dan een witte rand om de pil: anders zag het gekozen
+                        // tabblad er met en zonder selectie hetzelfde uit, en wist je op de bank niet of
+                        // OMHOOG was aangekomen (Shield, 19-10-2026).
+                        child: DecoratedBox(
+                          key: ValueKey(_gefocust == null ? 'tv-menu-pil-rust' : 'tv-menu-pil-selectie'),
+                          decoration: _gefocust == null
+                              ? menuPilVorm(tint)
+                              : menuPilVorm(tint).copyWith(border: Border.all(color: kFel.withValues(alpha: .9), width: 2)),
+                        ),
                       ),
                     Row(
                       key: _rij,
@@ -7609,7 +7632,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
             kantel: _isDesktop ? KantelBron.muis : null,
             // Ook in de smalle indeling (Saber, 19-10-2026). "Album" en de titel liggen er daar overheen,
             // en dat mag: eigen ruimte gaf een gat tussen hoes en titel.
-            spiegel: !isTv,
+            // Ook op een tv (Saber, 19-10-2026: het lichte thema op de Shield "volledig zoals het is op
+            // pc en gsm"). Hij bleef er weg zolang hij een tussenlaag kostte; nu zijn het stroken uit de
+            // hoes ([HoesSpiegel]).
+            spiegel: true,
           );
     // Twee tikken draaien de hoes om; een gewone tik doet hier niets, dus er hoeft niets te wachten.
     final hoes = isTv ? art : DubbelTikVlak(onDubbel: () => _draai.draai(heeftAchterkant: _heeftAchter), child: art);
@@ -10033,10 +10059,15 @@ class PlayerBar extends StatelessWidget {
       // Taller on a television: the text is scaled there, and the bottom row (position, slider,
       // duration) sat flush against the panel edge — the first strip a set overscans away.
       height: (isTv ? 104 : 84) + bottomInset,
-      // Op glas doorschijnend en zonder streep: de lichtrand van het glas is de bovenrand.
+      // Op glas doorschijnend en zonder streep: de lichtrand van het glas is de bovenrand. Op een tv in
+      // het lichte thema de kleur van dat glas, ook zonder streep ([balkOpTvLicht]).
       decoration: BoxDecoration(
-        color: opGlas ? balkOpGlas(x.player.wasKleur) : balkKleur(x.player.wasKleur),
-        border: opGlas ? null : Border(top: BorderSide(color: _line)),
+        color: opGlas
+            ? balkOpGlas(x.player.wasKleur)
+            : isTv && Thema.licht
+                ? balkOpTvLicht(x.player.wasKleur)
+                : balkKleur(x.player.wasKleur),
+        border: opGlas || (isTv && Thema.licht) ? null : Border(top: BorderSide(color: _line)),
       ),
       // The panel runs to the edge; only what you read and press comes in. On a television the
       // bottom row of this bar is the first thing a set overscans away, so it gets tvOverscan
@@ -13695,7 +13726,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                     // een gat tussen hoes en titel (Saber, 19-10-2026: "dan zit de tekst in de schaduw
                     // maar dat geeft niet … tis nie mooi zo").
                     // In de stapel wijkt hij (Saber, 19-10-2026): daar staan de volgende hoezen.
-                    spiegel: !isTv && !dwars && !stapelAan,
+                    // Ook op een tv, net als op de albumpagina (19-10-2026, "zoals op pc en gsm").
+                    spiegel: !dwars && !stapelAan,
                     // De hoes van de minispeler groeit hierheen uit (zie [kNuSpeeltHoes]).
                     heroTag: kNuSpeeltHoes,
                     // De hoes en cd van het volgende nummer alvast klaarzetten — anders staat er bij
@@ -14064,6 +14096,24 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           ],
           const SizedBox(width: 12),
           const _SpeakerButton(iconSize: 24),
+          // Op een tv staat de bovenste rij met ⋯ er niet (48 punten die er niet zijn), en lang OK op de
+          // hoes is uitvergroten. Hetzelfde menu dan hier, achteraan, met de keuze voor de stapel
+          // (Shield, 19-10-2026: de stapel was op de tv niet aan te zetten; Saber: "ook op tv").
+          if (isTv && t != null) ...[
+            const SizedBox(width: 12),
+            Builder(
+              builder: (knopContext) => TvLabelled(
+                label: 'Meer',
+                child: IconButton(
+                  key: const ValueKey('np-meer-tv'),
+                  icon: const Icon(Icons.more_horiz_rounded, size: 24),
+                  tooltip: 'Meer',
+                  color: _muted,
+                  onPressed: () => _toonItemMenu(knopContext, _metStapelKeuze(_nummerMenu(knopContext, t))),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
       ),
@@ -14194,9 +14244,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           // De hoes zelf blijft erachter staan, maar dooft naar onderen uit — anders ligt hij nog
           // steeds over de knoppen heen.
           //
-          // NIET op een televisie. Daar kost een schermvullend plaatje met een verloopmasker
-          // beeldjes op de Tegra X1, uitgerekend op het scherm waar de draaiende plaat er al 120 per
-          // seconde vraagt, en van drie meter is het verschil met alleen de was er niet.
+          // Ook op een televisie, sinds 19-10-2026 (Saber: het lichte thema op de Shield "volledig zoals
+          // het is op pc en gsm"). Hij bleef daar weg toen het nog een schermvullend plaatje met een
+          // verloopmasker was; nu is het één gebakken beeld en een verloop, zonder tussenlaag.
           //
           // De doorzichtigheid via `Image` en NIET via een `Opacity`-widget. Die laatste zet een
           // schermvullende `saveLayer` op — de duurste soort laag die er is.
@@ -14205,7 +14255,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           // S26 stond de grafische chip op 99 % met 29 ms per beeld terwijl de cd draaide — zie
           // [hoesUitdoving]. Nu ligt dezelfde was er nog eens overheen, oplopend in dekking; dat
           // geeft hetzelfde beeld en de chip tekent het in één keer.
-          if (p.currentCover != null && !isTv) ...[
+          if (p.currentCover != null) ...[
             // Sterk vervaagd en één keer gebakken (Saber, 18-10-2026): scherp stond het logo van de
             // hoes ("MADONNA ray of light") groot achter de titel en de tijdbalk. Dezelfde gebakken
             // waas als bovenaan een albumpagina ([HoesAchtergrond]): bij het tekenen kost hij niets,

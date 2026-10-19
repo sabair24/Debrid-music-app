@@ -291,45 +291,43 @@ void main() {
       GlasKwaliteit.stand.value = GlasStand.mat; // zodat de toets niet met een open klok eindigt
     });
 
-    testWidgets('vanzelf opnieuw: bij een paginawissel na de wachttijd, of na tien minuten', (t) async {
+    testWidgets('vanzelf opnieuw: van plat terug naar mat na de wachttijd, naar vloeibaar pas na een dag', (t) async {
+      // Sinds 19-10-2026 onthoudt het glas dat vloeibaar te zwaar was (kGlasOnthoud, Saber: "onthouden"):
+      // vanzelf gaat het binnen de dag niet meer naar vloeibaar. Het ritme van wachten en verdubbelen
+      // geldt nog voor de stap van plat terug naar mat.
       await t.pumpWidget(_vlak());
       var nu = DateTime(2026, 10, 18, 10);
       GlasKwaliteit.klok = () => nu;
       GlasKwaliteit.hoogste = GlasStand.vloeibaar;
       GlasKwaliteit.stand.value = GlasStand.vloeibaar;
       GlasKwaliteit.hzVoorToets = 120;
-      void zwaar() {
+      void zwaar(int us) {
         for (var i = 0; i < kGlasTeZwaar; i++) {
-          GlasKwaliteit.opBeelden(beelden(kGlasVenster, 9000));
+          GlasKwaliteit.opBeelden(beelden(kGlasVenster, us));
         }
       }
 
-      zwaar();
+      zwaar(9000);
       expect(GlasKwaliteit.stand.value, GlasStand.mat);
-      nu = nu.add(const Duration(seconds: 30));
+      nu = nu.add(const Duration(seconds: 61));
       GlasKwaliteit.paginaGewisseld();
-      expect(GlasKwaliteit.stand.value, GlasStand.mat, reason: 'binnen de eerste minuut niet');
-      nu = nu.add(const Duration(seconds: 31));
-      GlasKwaliteit.paginaGewisseld();
-      expect(GlasKwaliteit.stand.value, GlasStand.vloeibaar, reason: 'na een minuut, bij een andere pagina');
+      expect(GlasKwaliteit.stand.value, GlasStand.mat, reason: 'na een minuut niet meer terug naar vloeibaar');
+      await t.pump(const Duration(minutes: 11));
+      expect(GlasKwaliteit.stand.value, GlasStand.mat, reason: 'ook niet na tien minuten');
 
-      // Weer te zwaar: nu wacht hij twee minuten.
-      zwaar();
-      expect(GlasKwaliteit.stand.value, GlasStand.mat);
-      nu = nu.add(const Duration(seconds: 90));
+      // Mat ook te zwaar (en sneller dan vloeibaar, dus de terugval hielp): naar plat, en na de
+      // wachttijd vanzelf terug naar mat.
+      zwaar(7500);
+      expect(GlasKwaliteit.stand.value, GlasStand.plat);
+      nu = nu.add(const Duration(minutes: 3));
       GlasKwaliteit.paginaGewisseld();
-      expect(GlasKwaliteit.stand.value, GlasStand.mat, reason: 'de wachttijd verdubbelde');
-      nu = nu.add(const Duration(seconds: 31));
-      GlasKwaliteit.paginaGewisseld();
-      expect(GlasKwaliteit.stand.value, GlasStand.vloeibaar);
+      expect(GlasKwaliteit.stand.value, GlasStand.mat, reason: 'van plat terug, maar niet verder dan mat');
 
-      // Zonder paginawissel: na tien minuten vanzelf.
-      zwaar();
-      expect(GlasKwaliteit.stand.value, GlasStand.mat);
-      await t.pump(const Duration(minutes: 9));
-      expect(GlasKwaliteit.stand.value, GlasStand.mat);
-      await t.pump(const Duration(minutes: 1, seconds: 1));
+      // Een dag later: dan mag vloeibaar weer.
+      nu = nu.add(kGlasOnthoud);
+      GlasKwaliteit.probeerOpnieuw();
       expect(GlasKwaliteit.stand.value, GlasStand.vloeibaar);
+      GlasKwaliteit.vergeet();
     });
 
     test('aangesloten: paginawissels en meldingen in kop.log', () {
