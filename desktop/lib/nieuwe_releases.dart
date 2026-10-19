@@ -454,6 +454,9 @@ class AlbumNummer {
   final int id;
   final String titel, artiest;
   final int seconden, rank, positie;
+
+  /// Het jaar uit de ISRC ([isrcJaar]); 0 als Deezer er geen gaf.
+  final int jaar;
   const AlbumNummer({
     required this.id,
     required this.titel,
@@ -461,9 +464,15 @@ class AlbumNummer {
     this.seconden = 0,
     this.rank = 0,
     this.positie = 0,
+    this.jaar = 0,
   });
 
-  Map<String, dynamic> toJson() => {'id': id, 't': titel, 'a': artiest, 's': seconden, 'r': rank, 'p': positie};
+  Map<String, dynamic> toJson() =>
+      {'id': id, 't': titel, 'a': artiest, 's': seconden, 'r': rank, 'p': positie, 'j': jaar};
+
+  /// Bewaard met een ISRC-jaar? Wat van vóór 19-10-2026 op schijf staat niet, en wordt één keer opnieuw
+  /// gevraagd — anders zag de controle op oude opnamen ([oudeOpnamen]) die albums nooit.
+  static bool metJaar(Object? j) => j is Map && j.containsKey('j');
 
   static AlbumNummer? fromJson(Object? j) {
     if (j is! Map) return null;
@@ -477,12 +486,14 @@ class AlbumNummer {
       seconden: (j['s'] as num?)?.toInt() ?? 0,
       rank: (j['r'] as num?)?.toInt() ?? 0,
       positie: (j['p'] as num?)?.toInt() ?? 0,
+      jaar: (j['j'] as num?)?.toInt() ?? 0,
     );
   }
 
-  /// Uit `/album/{id}` van Deezer.
-  static List<AlbumNummer> uitDeezer(Map<String, dynamic>? album) => [
-        for (final t in ((album?['tracks'] as Map?)?['data'] as List? ?? const []))
+  /// Uit `/album/{id}/tracks` van Deezer (`data`), of uit `/album/{id}` (`tracks.data`). Alleen de
+  /// eerste draagt de ISRC: in `/album/{id}` ontbreekt hij (gemeten 19-10-2026).
+  static List<AlbumNummer> uitDeezer(Map<String, dynamic>? antwoord) => [
+        for (final t in (antwoord?['data'] as List? ?? (antwoord?['tracks'] as Map?)?['data'] as List? ?? const []))
           if (t is Map && t['id'] is num && (t['title'] ?? '').toString().isNotEmpty)
             AlbumNummer(
               id: (t['id'] as num).toInt(),
@@ -491,8 +502,52 @@ class AlbumNummer {
               seconden: (t['duration'] as num?)?.toInt() ?? 0,
               rank: (t['rank'] as num?)?.toInt() ?? 0,
               positie: (t['track_position'] as num?)?.toInt() ?? 0,
+              jaar: isrcJaar(t['isrc'] as String?) ?? 0,
             ),
       ];
+}
+
+/// Het jaar in een ISRC: "USWB19600603" → 1996, "USWB12604176" → 2026. Twee cijfers, dus vanaf '40 de
+/// vorige eeuw (een opname van vóór 1940 heeft zelden een ISRC, en die van na 2039 bestaan nog niet).
+int? isrcJaar(String? isrc) {
+  final m = RegExp(r'^[A-Z]{2}[A-Z0-9]{3}(\d{2})\d{5}$').firstMatch((isrc ?? '').trim().toUpperCase());
+  if (m == null) return null;
+  final jj = int.parse(m.group(1)!);
+  return jj >= 40 ? 1900 + jj : 2000 + jj;
+}
+
+/// Hoeveel jaar vóór de uitgave een ISRC "oud" is.
+const kOudeOpname = 3;
+
+final _tussenstuk = RegExp(r'^\s*(intro|interlude|outro|skit)\b|[(\[]\s*(intro|interlude|outro|skit)\s*[)\]]',
+    caseSensitive: false);
+
+/// Een heruitgave volgens de opnamen zelf: meer dan de helft van de nummers draagt een ISRC van minstens
+/// [kOudeOpname] jaar vóór [datum].
+///
+/// Saber, 19-10-2026, bij "You Must Love Me" van Madonna als grote kaart: "???". Deezer gaf hem als single
+/// van 12 oktober 2026; twee van de drie nummers dragen een ISRC uit 1996. Over de 307 uitgaven van die
+/// ochtend: 30 heruitgaven zo gevonden (Tears For Fears 1989, The Cranberries 1993, Ricky Martin 1996,
+/// Katy Perry 2008, …), en geen enkele echte nieuwe. Wat half oud is (Whitney Houston 1 van 4, Dua Lipa
+/// live 13 van 42) blijft.
+bool oudeOpnamen(List<AlbumNummer> nummers, DateTime? datum) {
+  if (datum == null) return false;
+  final bekend = [for (final n in nummers) if (n.jaar > 0) n.jaar];
+  if (bekend.isEmpty) return false;
+  final oud = bekend.where((j) => j <= datum.year - kOudeOpname).length;
+  return oud * 2 > bekend.length;
+}
+
+/// Hoogstens [max] per artiest, in de volgorde van [lijst].
+List<NieuweUitgave> hoogstensPerArtiest(List<NieuweUitgave> lijst, int max) {
+  final tel = <String, int>{};
+  final uit = <NieuweUitgave>[];
+  for (final u in lijst) {
+    final k = artistKey(u.artiest);
+    tel[k] = (tel[k] ?? 0) + 1;
+    if (tel[k]! <= max) uit.add(u);
+  }
+  return uit;
 }
 
 /// Eén tegel in de rij "Nieuwe nummers": een single, of een nummer van een nieuw album of EP.
@@ -606,6 +661,13 @@ List<NieuwNummer> kiesNieuweNummers({
         final r = y.rank.compareTo(x.rank);
         return r != 0 ? r : x.positie.compareTo(y.positie);
       });
+    // Een oude opname op een verder nieuwe plaat (een hit als bonus, een oude studioversie op een
+    // live-album) is geen nieuw nummer.
+    final d = a.datum;
+    lijst.removeWhere((t) => d != null && t.jaar > 0 && t.jaar <= d.year - kOudeOpname);
+    // Een intro, interlude of skit is geen nummer om op te zetten ("Instinct (intro)" van Angèle en
+    // "Intro (Instrumental)" van Snoop Dogg stonden in de rij, pc 19-10-2026).
+    lijst.removeWhere((t) => _tussenstuk.hasMatch(t.titel));
     for (var i = 0; i < lijst.length && i < perAlbum; i++) {
       final t = lijst[i];
       voeg(NieuwNummer(
@@ -670,16 +732,6 @@ List<NieuwNummer> kiesNieuweNummers({
 /// begin niets, en beslist [uitgaveBasis].
 String _liedKern(String titel) => normKey(_zonderGasten(titel).split(RegExp(r'\s*[(\[]|\s+[-–]\s+')).first);
 
-/// [lijst] met vooraan het eerste item dat niet [zelfde] is; de rest in dezelfde volgorde.
-///
-/// Voor de grote kaart van "Nieuwe nummers": staat daar een nummer van precies de plaat die ook de grote
-/// kaart van "Nieuwe albums & EP's" is, dan opent Start twee keer met dezelfde hoes (pc, 19-10-2026).
-List<T> anderVooraan<T>(List<T> lijst, bool Function(T) zelfde) {
-  if (lijst.isEmpty || !zelfde(lijst.first)) return lijst;
-  final i = lijst.indexWhere((x) => !zelfde(x));
-  if (i < 0) return lijst;
-  return [lijst[i], ...lijst.take(i), ...lijst.skip(i + 1)];
-}
 
 DateTime _dag(DateTime d) => DateTime(d.year, d.month, d.day);
 
@@ -750,19 +802,25 @@ List<({String kop, List<T> items})> perWeek<T>(
 
 /// De volgorde in de rij op Start: vooraan (op de grote kaart) het beste wat al uit is, dan wat
 /// binnenkort verschijnt (met de datum op de hoes), dan de rest in de volgorde van [perWeek].
+///
+/// [nietVooraan]: wat niet op de grote kaart mag — bij "Nieuwe nummers" een nummer van precies de plaat
+/// die de grote kaart van "Nieuwe albums & EP's" is, anders opent Start twee keer met dezelfde hoes (pc,
+/// 19-10-2026). De grote kaart wordt dan het volgende dat al uit is, nooit iets van "Binnenkort".
 List<T> rijVolgorde<T>(
   List<T> lijst, {
   required DateTime? Function(T) datum,
   required bool Function(T) eigen,
   required double Function(T) score,
   required DateTime nu,
+  bool Function(T)? nietVooraan,
   int max = 20,
 }) {
   final weken = perWeek(lijst, datum: datum, eigen: eigen, score: score, nu: nu);
   final binnenkort = [for (final w in weken) if (w.kop == 'Binnenkort') ...w.items];
   final uit = [for (final w in weken) if (w.kop != 'Binnenkort') ...w.items];
   if (uit.isEmpty) return binnenkort.take(max).toList();
-  return [uit.first, ...binnenkort, ...uit.skip(1)].take(max).toList();
+  final i = nietVooraan == null ? 0 : math.max(0, uit.indexWhere((x) => !nietVooraan(x)));
+  return [uit[i], ...binnenkort, ...uit.take(i), ...uit.skip(i + 1)].take(max).toList();
 }
 
 /// Het lintje op de hoes: "Vandaag", "Gisteren", "3 dagen", "12 sep" — en voor wat nog komt de datum
@@ -964,7 +1022,7 @@ class NieuweReleasesZoeker {
   Future<List<AlbumNummer>> nummersVan(int albumId, {bool bewaar = true}) async {
     final bekend = nummers[albumId];
     if (bekend != null) return bekend;
-    final lijst = AlbumNummer.uitDeezer(await _haal('/album/$albumId'));
+    final lijst = AlbumNummer.uitDeezer(await _haal('/album/$albumId/tracks?limit=100'));
     if (bewaar && lijst.isNotEmpty) nummers[albumId] = lijst;
     return lijst;
   }
@@ -1177,7 +1235,9 @@ class NieuweReleasesZoeker {
 
     const albumSoorten = {UitgaveSoort.album, UitgaveSoort.ep};
     const singleSoort = {UitgaveSoort.single};
-    final albumsEigen = kies(aanbod, albumSoorten);
+    // Ruimer dan twee per artiest: wat een heruitgave blijkt ([oudeOpnamen]) maakt plaats, en dan
+    // schuift de volgende van die artiest op. De grens van twee komt daarna ([hoogstensPerArtiest]).
+    final albumsEigen = kies(aanbod, albumSoorten, perArtiest: _ruimPerArtiest);
     // Ruimer dan twee: de grens per artiest komt in [kiesNieuweNummers], samen met de albumnummers.
     final singlesEigen = kies(aanbod, singleSoort, perArtiest: 6);
 
@@ -1214,23 +1274,64 @@ class NieuweReleasesZoeker {
         verwant.add(Aanbod(artiest: naam, relevantie: 0, albums: albums, lijktOp: h.eigen.naam));
       }
     }
-    final albumsVerwant = kies(verwant, albumSoorten);
-    final singlesVerwant = kies(verwant, singleSoort, perArtiest: 6);
+    final albumsVerwantRuim = kies(verwant, albumSoorten, perArtiest: _ruimPerArtiest);
+    final singlesVerwantRuim = kies(verwant, singleSoort, perArtiest: 6);
 
-    // De nummers van elk nieuw album en elke nieuwe EP: één vraag per album, en daarna bewaard.
+    // De nummers van elke kandidaat, ook van elke single: één vraag per plaat, en daarna bewaard. Aan
+    // hun ISRC's is te zien of het een heruitgave is ([oudeOpnamen]).
     final vandaag = DateTime(nu.year, nu.month, nu.day);
-    for (final a in [...albumsEigen, ...albumsVerwant]) {
+    final opgehaald = <int, List<AlbumNummer>>{};
+    final datumVan = <int, DateTime?>{};
+    for (final a in [...albumsEigen, ...albumsVerwantRuim, ...singlesEigen, ...singlesVerwantRuim]) {
       final d = a.datum;
+      datumVan[a.album.id] = d;
       try {
-        await nummersVan(a.album.id, bewaar: d != null && !d.isAfter(vandaag));
+        opgehaald[a.album.id] = await nummersVan(a.album.id, bewaar: d != null && !d.isAfter(vandaag));
       } catch (_) {
-        v.mislukt++; // dan staat dit album er zonder zijn nummers bij; de volgende ronde probeert het opnieuw
+        v.mislukt++; // dan staat deze plaat er zonder zijn nummers bij; de volgende ronde probeert het opnieuw
       }
     }
-    final nummersEigen =
-        kiesNieuweNummers(singles: singlesEigen, albums: albumsEigen, nummersPerAlbum: nummers, inBezit: nummersInBezit);
+    // Een album of EP met hetzelfde liedje als een bewezen oude opname van die artiest, is dezelfde
+    // heruitgave in een andere verpakking — ook als een distributeur er nieuwe ISRC's op zette. Gemeten
+    // op de pc (19-10-2026): "Witch Doktor (Basic Beat / ffrr Mixes)" van Armand Van Helden, de remixen
+    // uit 1994 met codes uit 2026, naast de single "Witch Doktor" met zijn ISRC's uit 1994. Een single
+    // blijft erbuiten: een echt nieuwe remix van een oude hit is wel nieuw.
+    String lied(NieuweUitgave u) => '${artistKey(u.artiest)}|${uitgaveBasis(u.album.title)}';
+    final alle = [...albumsEigen, ...albumsVerwantRuim, ...singlesEigen, ...singlesVerwantRuim];
+    final oudeLiederen = {
+      for (final u in alle)
+        if (oudeOpnamen(opgehaald[u.album.id] ?? const [], u.datum)) lied(u),
+    };
+    bool heruitgave(NieuweUitgave u) =>
+        oudeOpnamen(opgehaald[u.album.id] ?? const [], u.datum) ||
+        (u.soort != UitgaveSoort.single && oudeLiederen.contains(lied(u)));
+    List<NieuweUitgave> nieuwOpgenomen(List<NieuweUitgave> l) {
+      final uit = <NieuweUitgave>[];
+      for (final u in l) {
+        if (heruitgave(u)) {
+          v.weg['oude opnamen'] = (v.weg['oude opnamen'] ?? 0) + 1;
+        } else {
+          uit.add(u);
+        }
+      }
+      return uit;
+    }
+    final albumsEigenNieuw = hoogstensPerArtiest(nieuwOpgenomen(albumsEigen), kNieuwPerArtiest);
+    final albumsVerwant = hoogstensPerArtiest(nieuwOpgenomen(albumsVerwantRuim), kNieuwPerArtiest);
+    final singlesVerwant = nieuwOpgenomen(singlesVerwantRuim);
+    // Alleen de nummers van wat al uit is: een nummer van een album dat pas over een maand verschijnt
+    // kun je niet spelen (pc, 19-10-2026: de halve rij was Sting en Calogero van eind november).
+    final speelbaar = {
+      for (final e in opgehaald.entries)
+        if (!(datumVan[e.key]?.isAfter(vandaag) ?? true)) e.key: e.value,
+    };
+    final nummersEigen = kiesNieuweNummers(
+        singles: nieuwOpgenomen(singlesEigen),
+        albums: albumsEigenNieuw,
+        nummersPerAlbum: speelbaar,
+        inBezit: nummersInBezit);
     final nummersVerwant = kiesNieuweNummers(
-        singles: singlesVerwant, albums: albumsVerwant, nummersPerAlbum: nummers, inBezit: nummersInBezit);
+        singles: singlesVerwant, albums: albumsVerwant, nummersPerAlbum: speelbaar, inBezit: nummersInBezit);
 
     // De oude lijst, voor een toestel dat de twee rijen nog niet kent: zoals hij was.
     var oud = kiesUitgaven(aanbod, nu: nu, alInBezit: alInBezit);
@@ -1243,12 +1344,19 @@ class NieuweReleasesZoeker {
     return (
       oud: oud,
       nummers: [...nummersEigen, ...nummersVerwant].take(kNieuwMax).toList(),
-      albums: [...albumsEigen, ...albumsVerwant].take(kNieuwMax).toList(),
+      albums: [...albumsEigenNieuw, ...albumsVerwant].take(kNieuwMax).toList(),
     );
   }
 
   /// Van hoeveel eigen artiesten de buren meedoen, en hoeveel buren per artiest.
-  static const _bronnenVerwant = 15, _burenPerBron = 5;
+  ///
+  /// Was 15. Na het weren van heruitgaven op hun ISRC bleven er 74 albums & EP's over, 12 daarvan van
+  /// verwante artiesten (pc, 19-10-2026), en Saber vroeg er "zeker een stuk of 100". Het venster blijft
+  /// zes maanden; de buren vullen aan, zoals afgesproken.
+  static const _bronnenVerwant = 40, _burenPerBron = 5;
+
+  /// Hoeveel albums per artiest kandidaat zijn vóór de controle op oude opnamen.
+  static const _ruimPerArtiest = 4;
 }
 
 // ── Bewaren en verversen ───────────────────────────────────────────────────
@@ -1391,7 +1499,9 @@ class NieuweReleases {
           for (final e in j.entries) {
             final id = int.tryParse('${e.key}');
             if (id == null || e.value is! List) continue;
-            zoeker.nummers[id] = [for (final n in e.value as List) ?AlbumNummer.fromJson(n)];
+            final lijst = e.value as List;
+            if (!lijst.every(AlbumNummer.metJaar)) continue;
+            zoeker.nummers[id] = [for (final n in lijst) ?AlbumNummer.fromJson(n)];
           }
         }
       }

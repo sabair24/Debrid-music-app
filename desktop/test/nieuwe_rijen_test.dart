@@ -75,6 +75,61 @@ void main() {
     });
   });
 
+  group('oude opnamen (ISRC)', () {
+    test('isrcJaar', () {
+      expect(isrcJaar('USWB19600603'), 1996);
+      expect(isrcJaar('USWB12604176'), 2026);
+      expect(isrcJaar('gbaht2000041'), 2020);
+      expect(isrcJaar('FR-Z03-14-00212'.replaceAll('-', '')), 2014);
+      expect(isrcJaar(''), isNull);
+      expect(isrcJaar(null), isNull);
+      expect(isrcJaar('kapot'), isNull);
+    });
+
+    List<AlbumNummer> plaat(List<String?> isrcs) => [
+          for (final (i, x) in isrcs.indexed) AlbumNummer(id: i, titel: 'N$i', jaar: isrcJaar(x) ?? 0),
+        ];
+
+    test('Madonna "You Must Love Me" (Deezer: single van 12-10-2026) is een heruitgave', () {
+      // De echte ISRC's van die uitgave (Deezer-album 1119390132).
+      expect(oudeOpnamen(plaat(['USWB12604176', 'USWB19600603', 'USWB19600769']), DateTime(2026, 10, 12)), isTrue);
+    });
+
+    test('half oud blijft, zonder ISRC of zonder datum ook', () {
+      final d = DateTime(2026, 10, 16);
+      expect(oudeOpnamen(plaat(['USA0303', 'USRC10300001', 'USRC12600001', 'USRC12600002', 'USRC12600003']), d),
+          isFalse, reason: 'Whitney Houston: 1 van 4 oud (de kapotte telt niet)');
+      expect(oudeOpnamen(plaat(['USRC10300001', 'USRC12600001']), d), isFalse, reason: 'de helft is geen meerderheid');
+      expect(oudeOpnamen(plaat(['USRC12400001']), d), isFalse, reason: 'twee jaar: nog nieuw genoeg');
+      expect(oudeOpnamen(plaat(['USRC12300001']), d), isTrue, reason: 'drie jaar: oud');
+      expect(oudeOpnamen(plaat([null, null]), d), isFalse);
+      expect(oudeOpnamen(plaat(['USRC19600001']), null), isFalse);
+    });
+
+    test('bewaarde nummers van vóór de ISRC-jaren worden één keer opnieuw gevraagd', () async {
+      final map = await Directory.systemTemp.createTemp('dm_isrc');
+      addTearDown(() => map.delete(recursive: true));
+      final f = File('${map.path}/albumnummers.json');
+      await f.writeAsString(jsonEncode({
+        '7': [
+          {'id': 1, 't': 'Oud bewaard', 's': 200, 'r': 5, 'p': 1},
+        ],
+        '8': [const AlbumNummer(id: 2, titel: 'Met jaar', jaar: 2026).toJson()],
+      }));
+      final d = NieuweReleases(
+        zoeker: NieuweReleasesZoeker((_) async => {'data': []}, slaap: (_) async {}),
+        nummers: () => const [],
+        bezit: () => const {},
+        bestand: File('${map.path}/lijst.json'),
+        idsBestand: File('${map.path}/ids.json'),
+        nummersBestand: f,
+      );
+      await d.laad();
+      expect(d.zoeker.nummers.containsKey(7), isFalse, reason: 'zonder jaar: opnieuw vragen');
+      expect(d.zoeker.nummers[8]!.single.jaar, 2026);
+    });
+  });
+
   group('kiesNieuweNummers', () {
     test('singles en de populairste nummers van een nieuw album; twee per artiest; de single wint', () {
       final album = _u('Dua Lipa', 'Radical Optimism', '2026-10-10', soort: 'album', score: 8);
@@ -124,11 +179,21 @@ void main() {
           reason: 'een titel die met een haakje begint zegt niets over het liedje');
     });
 
-    test('anderVooraan: niet twee keer dezelfde plaat op de grote kaarten', () {
-      expect(anderVooraan([1, 1, 2, 3], (x) => x == 1), [2, 1, 1, 3]);
-      expect(anderVooraan([2, 1], (x) => x == 1), [2, 1]);
-      expect(anderVooraan([1, 1], (x) => x == 1), [1, 1], reason: 'alleen die plaat: dan zo laten');
-      expect(anderVooraan(<int>[], (x) => true), isEmpty);
+    test('rijVolgorde met nietVooraan: de grote kaart is het volgende dat al uit is, nooit Binnenkort', () {
+      final l = [
+        _u('Whitney Houston', 'One Wish', '2026-10-16', score: 9),
+        _u('Pascal Obispo', 'À Forthlin Road', '2026-10-23', score: 8),
+        _u('Nelly Furtado', 'FADED', '2026-10-16', score: 7),
+      ];
+      List<String> r(bool Function(NieuweUitgave)? weg) => [
+            for (final u in rijVolgorde(l,
+                datum: (u) => u.datum, eigen: (u) => true, score: (u) => u.score, nu: _nu, nietVooraan: weg))
+              u.album.title
+          ];
+      expect(r(null), ['One Wish', 'À Forthlin Road', 'FADED']);
+      expect(r((u) => u.artiest == 'Whitney Houston'), ['FADED', 'À Forthlin Road', 'One Wish'],
+          reason: 'Pascal Obispo verschijnt pas op 23 oktober');
+      expect(r((u) => true), ['One Wish', 'À Forthlin Road', 'FADED'], reason: 'niets anders: dan zo laten');
     });
 
     test('releaseKop boven een nummer zegt waar het uit komt', () {
@@ -139,11 +204,23 @@ void main() {
       expect(releaseKop(ep, nu: _nu), 'NIEUWE EP');
     });
 
+    test('een tik op de pc: eerst wat TorBox klaar heeft, anders halen zoals de radio', () {
+      final main = File('lib/main.dart').readAsStringSync();
+      final speel = main.substring(main.indexOf('class NieuwSpeler'), main.indexOf('File get _nieuwOpToestel'));
+      expect(speel, contains('EigenRadiobron('));
+      expect(speel, contains('await online.resolveRadio(n.artiest, n.titel);'),
+          reason: 'alleen klaarstaande torrents: een niet-klaarstaande kan minuten duren');
+      expect(speel, isNot(contains('instantOnly: false')));
+      expect(speel, contains('for (var ronde = 0; ronde < kNieuwHaalRondes && t == null; ronde++)'),
+          reason: 'je vroeg dít nummer: meer dan de drie uploaders van de radio');
+      expect(main, contains('const kNieuwHaalRondes = 3;'));
+    });
+
     test('Start telt elke lijst opnieuw, tegen wat je de vorige keer zag', () {
       final main = File('lib/main.dart').readAsStringSync();
       expect(main, contains('await (_gezienVorige ??= leesNieuwGezien())'));
       expect(main, isNot(contains('if (_teller == null) unawaited(_telNieuw(l));')));
-      expect(main, contains('final nummers = anderVooraan('));
+      expect(main, contains('nietVooraan: (n) => albums.isNotEmpty && n.album.id == albums.first.album.id'));
     });
 
     test('wat je al hebt valt weg', () {
@@ -238,14 +315,162 @@ void main() {
         'total': 1,
       },
       '/album/101': {
-        'tracks': {
-          'data': [
-            {'id': 1, 'title': 'Training Season', 'rank': 900, 'track_position': 1},
-            {'id': 2, 'title': 'Houdini', 'rank': 800, 'track_position': 2},
-          ]
-        }
+        'data': [
+          {'id': 1, 'title': 'Training Season', 'rank': 900, 'track_position': 1, 'isrc': 'GBAHT2600001'},
+          {'id': 2, 'title': 'Houdini', 'rank': 800, 'track_position': 2, 'isrc': 'GBAHT2600002'},
+        ]
+      },
+      '/album/102': {
+        'data': [
+          {'id': 3, 'title': 'Houdini', 'rank': 950, 'track_position': 1, 'isrc': 'GBAHT2600002'},
+        ]
+      },
+      '/album/103': {
+        'data': [
+          {'id': 4, 'title': 'Dance The Night', 'rank': 700, 'track_position': 1, 'isrc': 'GBAHT2600003'},
+        ]
+      },
+      '/album/200': {
+        'data': [
+          {'id': 5, 'title': 'Genesis', 'rank': 600, 'track_position': 1, 'isrc': 'GBAHT2600004'},
+        ]
       },
     };
+
+    test('een heruitgave (oude ISRC\'s) valt weg, en de volgende van die artiest schuift op', () async {
+      final metOud = {
+        ...antwoorden,
+        '/artist/8/albums': {
+          'data': [
+            // Het bewijs dat dit jouw Dua Lipa is: een album dat je hebt.
+            {'id': 100, 'title': 'Future Nostalgia', 'release_date': '2020-03-27', 'record_type': 'album'},
+            {'id': 101, 'title': 'Radical Optimism', 'release_date': '2026-10-10', 'record_type': 'album'},
+            {'id': 104, 'title': 'Club Future Nostalgia', 'release_date': '2026-10-01', 'record_type': 'album'},
+            {'id': 105, 'title': 'Live In Mexico', 'release_date': '2026-08-01', 'record_type': 'album'},
+            {'id': 106, 'title': 'One Kiss', 'release_date': '2026-10-05', 'record_type': 'single'},
+          ],
+          'total': 5,
+        },
+        '/album/104': {
+          'data': [
+            {'id': 41, 'title': 'Levitating (Remix)', 'rank': 900, 'isrc': 'GBAHT2000041'},
+            {'id': 42, 'title': 'Physical (Remix)', 'rank': 800, 'isrc': 'GBAHT2000042'},
+          ]
+        },
+        '/album/105': {
+          'data': [
+            {'id': 51, 'title': 'Houdini (Live)', 'rank': 500, 'isrc': 'GBAHT2600051'},
+          ]
+        },
+        '/album/106': {
+          'data': [
+            {'id': 61, 'title': 'One Kiss', 'rank': 990, 'isrc': 'GBAHT1800061'},
+          ]
+        },
+      };
+      final d = nep(metOud);
+      final v = ReleasesVerslag();
+      final uit = await d.z.zoekAlles([dua], nu: _nu, verslag: v);
+      expect([for (final a in uit.albums) a.album.title], ['Radical Optimism', 'Live In Mexico'],
+          reason: 'Club Future Nostalgia is uit 2020; Live In Mexico schuift op');
+      expect([for (final n in uit.nummers) n.titel], isNot(contains('One Kiss')), reason: 'een single uit 2018');
+      expect(v.weg['oude opnamen'], 2);
+      expect(d.gevraagd, contains('/album/106/tracks?limit=100'), reason: 'alleen /tracks draagt de ISRC');
+    });
+
+    test('een intro, interlude of skit van een album is geen nieuw nummer', () {
+      final album = _u('Angèle', 'Instinct', '2026-10-16', soort: 'album', score: 8);
+      final uit = kiesNieuweNummers(
+        singles: const [],
+        albums: [album],
+        nummersPerAlbum: {
+          album.album.id: const [
+            AlbumNummer(id: 1, titel: 'Instinct (intro)', rank: 999),
+            AlbumNummer(id: 2, titel: 'Intro (Instrumental)', rank: 998),
+            AlbumNummer(id: 3, titel: 'Skit', rank: 997),
+            AlbumNummer(id: 4, titel: 'Introspection', rank: 500),
+            AlbumNummer(id: 5, titel: 'Au revoir', rank: 400),
+          ]
+        },
+        perArtiest: 5,
+      );
+      expect([for (final n in uit) n.titel], unorderedEquals(['Introspection', 'Au revoir']),
+          reason: '"Introspection" begint wel met intro, maar is een liedje');
+    });
+
+    test('een remix-EP van een bewezen oude single (verse ISRC\'s) is dezelfde heruitgave', () async {
+      final metRemixen = {
+        ...antwoorden,
+        '/artist/8/albums': {
+          'data': [
+            {'id': 100, 'title': 'Future Nostalgia', 'release_date': '2020-03-27', 'record_type': 'album'},
+            {'id': 108, 'title': 'Witch Doktor', 'release_date': '2026-10-09', 'record_type': 'single'},
+            {'id': 109, 'title': 'Witch Doktor (Basic Beat / ffrr Mixes)', 'release_date': '2026-10-16', 'record_type': 'album'},
+            {'id': 110, 'title': 'Training Season (Remixes)', 'release_date': '2026-10-16', 'record_type': 'single'},
+          ],
+          'total': 4,
+        },
+        '/album/108': {
+          'data': [
+            {'id': 81, 'title': 'Witch Doktor', 'rank': 900, 'isrc': 'GBAHT9400081'},
+          ]
+        },
+        '/album/109': {
+          'data': [
+            {'id': 91, 'title': 'Witch Doktor (Radio Edit)', 'rank': 900, 'isrc': 'QMRSZ2603520'},
+            {'id': 92, 'title': 'Witch Doktor (Orientalist Mix)', 'rank': 800, 'isrc': 'QMRSZ2603521'},
+          ]
+        },
+        '/album/110': {
+          'data': [
+            {'id': 101, 'title': 'Training Season (Remix)', 'rank': 700, 'isrc': 'GBAHT2600101'},
+          ]
+        },
+      };
+      final v = ReleasesVerslag();
+      final uit = await nep(metRemixen).z.zoekAlles([dua], nu: _nu, verslag: v);
+      expect([for (final a in uit.albums) a.album.title], isNot(contains('Witch Doktor (Basic Beat / ffrr Mixes)')));
+      expect([for (final n in uit.nummers) n.titel], isNot(contains('Witch Doktor')));
+      expect(v.weg['oude opnamen'], 2, reason: 'de single en het remixalbum');
+    });
+
+    test('de nummers van een album dat nog moet verschijnen staan niet bij Nieuwe nummers', () async {
+      final metKomend = {
+        ...antwoorden,
+        '/artist/8/albums': {
+          'data': [
+            {'id': 100, 'title': 'Future Nostalgia', 'release_date': '2020-03-27', 'record_type': 'album'},
+            {'id': 107, 'title': 'Later', 'release_date': '2026-11-27', 'record_type': 'album'},
+          ],
+          'total': 2,
+        },
+        '/album/107': {
+          'data': [
+            {'id': 71, 'title': 'Nog Niet Uit', 'rank': 999, 'isrc': 'GBAHT2600071'},
+          ]
+        },
+      };
+      final uit = await nep(metKomend).z.zoekAlles([dua], nu: _nu);
+      expect([for (final a in uit.albums) a.album.title], ['Later'], reason: 'het album zelf: bij Binnenkort');
+      expect([for (final n in uit.nummers) n.titel], isNot(contains('Nog Niet Uit')));
+    });
+
+    test('een oude opname op een verder nieuw album is geen nieuw nummer', () async {
+      final metBonus = {
+        ...antwoorden,
+        '/album/101': {
+          'data': [
+            {'id': 7, 'title': "Don't Start Now", 'rank': 99999, 'isrc': 'GBAHT1900007'},
+            {'id': 1, 'title': 'Training Season', 'rank': 900, 'isrc': 'GBAHT2600001'},
+            {'id': 2, 'title': 'Houdini', 'rank': 800, 'isrc': 'GBAHT2600002'},
+          ]
+        },
+      };
+      final uit = await nep(metBonus).z.zoekAlles([dua], nu: _nu);
+      expect([for (final a in uit.albums) a.album.title], ['Radical Optimism'], reason: 'het album zelf is nieuw');
+      expect([for (final n in uit.nummers) n.titel], isNot(contains("Don't Start Now")));
+      expect([for (final n in uit.nummers) n.titel], contains('Training Season'));
+    });
 
     test('albums, nummers (met albumnummers) en verwant, in één ronde', () async {
       final d = nep(antwoorden);

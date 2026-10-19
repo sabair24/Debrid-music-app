@@ -16483,9 +16483,12 @@ class _HomeStartViewState extends State<HomeStartView> {
     }
     final albums =
         rijVolgorde(l.albums, datum: (a) => a.datum, eigen: (a) => a.lijktOp == null, score: (a) => a.score, nu: nu);
-    final nummers = anderVooraan(
-        rijVolgorde(l.nummers, datum: (n) => n.datum, eigen: (n) => n.eigen, score: (n) => n.score, nu: nu),
-        (n) => albums.isNotEmpty && n.album.id == albums.first.album.id);
+    final nummers = rijVolgorde(l.nummers,
+        datum: (n) => n.datum,
+        eigen: (n) => n.eigen,
+        score: (n) => n.score,
+        nu: nu,
+        nietVooraan: (n) => albums.isNotEmpty && n.album.id == albums.first.album.id);
     return [
       if (nummers.isNotEmpty) ...[
         NieuwKop('Nieuwe nummers',
@@ -16894,10 +16897,14 @@ void _bronnenVenster(BuildContext context, String kop, String query) => showDial
 
 /// Een nieuw nummer afspelen (Saber, 19-10-2026: "meteen afspelen").
 ///
-/// Op de pc meteen online, zoals Ontdek. Op een gsm, iPad of tv kan dat niet (zie
-/// `RemoteOnlineService.resolveRadio`): daar haalt de pc het eerst, zoals de radio dat doet
-/// ([PcRadiobron]), en het nummer blijft daarna gewoon in je bibliotheek. Zolang dat duurt (10 tot 60
-/// seconden) staat er een ringetje op de kaart, op Start en op de meer-pagina.
+/// Op de pc meteen online als TorBox hem klaar heeft, zoals Ontdek; anders haalt de pc hem zoals de radio
+/// ([EigenRadiobron]). Op een gsm, iPad of tv kan online niet (zie `RemoteOnlineService.resolveRadio`):
+/// daar haalt de pc het eerst ([PcRadiobron]). Opgehaald blijft het nummer gewoon in je bibliotheek.
+/// Zolang dat duurt (10 tot 60 seconden) staat er een ringetje op de kaart, op Start en op de
+/// meer-pagina.
+/// Hoe vaak een tik op een nieuw nummer het ophalen probeert (elk drie uploaders).
+const kNieuwHaalRondes = 3;
+
 class NieuwSpeler extends ChangeNotifier {
   final _bezig = <String>{};
   bool bezig(NieuwNummer n) => _bezig.contains(n.sleutel);
@@ -16914,21 +16921,32 @@ class NieuwSpeler extends ChangeNotifier {
       speler.playQueue([eigen], 0);
       return;
     }
+    // Op de pc haalt hij zelf, zoals de radio: Soulseek en de keuring van de radio.
+    final Radiobron bron = lib.remote == null
+        ? EigenRadiobron(
+            downloads: context.read<DownloadManager>(),
+            soulseek: context.read<SoulseekService>(),
+            library: lib,
+            instellingen: context.read<AppSettings>())
+        : PcRadiobron(library: lib, clientOf: () => lib.remote);
     _bezig.add(sleutel);
     notifyListeners();
     try {
       if (lib.remote == null) {
+        // Eerst wat TorBox al klaar heeft: dat speelt binnen seconden. Alleen torrents dus — en voor een
+        // single van drie dagen oud is er meestal nog geen. Gemeten op de pc (19-10-2026): een tik op
+        // "WALK ON WATER" van Timbaland zocht een minuut en speelde niets ("Geen bron gevonden"). Dan
+        // haalt de pc hem, net als de radio en net als voor de gsm, en blijft hij in je bibliotheek.
         _srcToast(context, 'Bron voorbereiden voor ${n.titel}…');
-        final url = await online.resolveRadio(n.artiest, n.titel, instantOnly: false);
-        if (url == null) {
-          if (context.mounted) _srcToast(context, 'Geen bron gevonden — lang drukken voor de bronnen.');
+        final url = await online.resolveRadio(n.artiest, n.titel);
+        if (url != null) {
+          speler.playUrl(url, title: n.titel, artist: n.artiest);
           return;
         }
-        speler.playUrl(url, title: n.titel, artist: n.artiest);
-        return;
+        if (context.mounted) _srcToast(context, 'Niet klaar bij TorBox — de pc haalt "${n.titel}" op…');
+      } else {
+        _srcToast(context, 'Je pc haalt "${n.titel}" op…');
       }
-      _srcToast(context, 'Je pc haalt "${n.titel}" op…');
-      final bron = PcRadiobron(library: lib, clientOf: () => lib.remote);
       final fout = await bron.begin();
       if (fout != null) {
         if (context.mounted) _srcToast(context, fout);
@@ -16936,14 +16954,22 @@ class NieuwSpeler extends ChangeNotifier {
       }
       try {
         Track? t;
-        try {
-          t = await bron.haal(
-              Radioplek(artiest: n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null));
-        } on AlVanJou catch (e) {
-          t = e.nummer;
+        // De radio probeert drie uploaders en gaat dan naar het volgende nummer; hier vroeg je dít
+        // nummer. Dus tot drie rondes, en elke ronde slaat de uploaders over die al mislukten
+        // (`_radioNietBij` in online.dart): tot negen. Gemeten op de pc (19-10-2026): "Babylon" van
+        // Taylor Swift, 171 van 249 treffers goed, drie afgebroken overdrachten, en er speelde niets.
+        for (var ronde = 0; ronde < kNieuwHaalRondes && t == null; ronde++) {
+          try {
+            t = await bron.haal(
+                Radioplek(artiest: n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null));
+          } on AlVanJou catch (e) {
+            t = e.nummer;
+          }
         }
         if (t == null) {
-          if (context.mounted) _srcToast(context, 'Je pc vond "${n.titel}" nergens.');
+          if (context.mounted) {
+            _srcToast(context, '"${n.titel}" nergens gevonden — lang drukken voor de bronnen.');
+          }
           return;
         }
         speler.playQueue([t], 0);
