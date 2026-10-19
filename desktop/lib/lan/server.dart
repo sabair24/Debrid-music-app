@@ -76,7 +76,7 @@ enum Ingang {
 String? weigerVanBuiten(String pad, String methode) {
   const exact = {
     '/health', '/api/catalog', '/api/album/facts', '/api/state', '/api/state/ops', '/api/uitwijk',
-    '/api/config', '/api/radio', '/api/jobs', '/api/kwaliteit', '/api/corrections', '/api/move/plan',
+    '/api/config', '/api/radio', '/api/jobs', '/api/kwaliteit', '/api/nieuw', '/api/corrections', '/api/move/plan',
     '/api/move/apply',
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
   };
@@ -559,6 +559,8 @@ class LanServer {
         return _onlineBestanden(req);
       case '/api/releases':
         return _releases(req);
+      case '/api/nieuw':
+        return _releases(req, v2: true);
       case '/api/vertaal':
         return _vertaal(req);
       case '/api/aanbevolen':
@@ -1607,7 +1609,10 @@ class LanServer {
   /// rekent de pc op de achtergrond opnieuw en krijgt het toestel de volgende keer de nieuwe lijst.
   /// Alleen als er nog niets ligt — of het toestel op Ververs drukte — wacht deze vraag erop, en dan
   /// hoogstens twintig seconden: de telefoon geeft het na dertig op.
-  Future<void> _releases(HttpRequest req) async {
+  ///
+  /// [v2]: de twee rijen (nummers, albums & EP's) via `/api/nieuw`. `/api/releases` blijft versie 1, want
+  /// een oudere app leest alleen die en zou anders een lege balk tonen.
+  Future<void> _releases(HttpRequest req, {bool v2 = false}) async {
     final d = NieuweReleases.pc;
     if (d == null) return _unavailable(req, 'Deze pc rekent geen nieuwe releases uit.');
     var l = d.lijst;
@@ -1616,8 +1621,9 @@ class LanServer {
     } else if (d.verouderd) {
       unawaited(d.ververs());
     }
+    final lijst = l ?? const ReleasesLijst(0, []);
     return _json(req.response, {
-      ...(l ?? ReleasesLijst(0, const [])).toJson(),
+      ...(v2 ? lijst.toJson() : lijst.toJsonV1()),
       'bezig': d.bezig,
     });
   }

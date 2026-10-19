@@ -95,7 +95,8 @@ void main() {
     expect(main, contains('heroTag: widget.heroTag ?? \'hoes:'));
     expect(main, contains("_localRow(recent.take(15).toList(), rij: 'recent')"));
     expect(main, contains("_catalogRow(_charts.take(20).toList(), rij: 'top')"));
-    expect(main, contains("_catalogRow(_releases.take(20).toList(), rij: 'nieuw')"));
+    // De nieuwe releases sinds 19-10-2026 als uitgelichte rijen met brede kaarten (ui/nieuw_kaarten.dart).
+    expect(main, contains('groot: () => nieuwNummerKaart(context, nummers.first, nu, groot: true),'));
     // Lang indrukken: een menu op elke tegel van Start.
     expect(main, contains('onLongPress: () => _toonItemMenu(context, _albumMenu(context, albums[i])));'));
     expect(main, contains('_netAlbumMenu(context, hits[i].artist, hits[i].album)'));

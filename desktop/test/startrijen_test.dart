@@ -338,15 +338,14 @@ void main() {
     // Een skelet van precies zijn hoogte houdt de plek vrij zolang hij nog kan komen. Sinds 15-10-2026
     // komt hij los van de andere rijen (`nieuwe_releases.dart`), dus hangt het skelet aan zijn eigen
     // stand en niet meer aan die van de hitlijst.
+    // Sinds 19-10-2026 twee rijen in plaats van de balk ([NieuwRij]); het skelet leest hun hoogte.
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
-    expect(
-        main.contains('        else if (_nieuwLaadt || !_nieuwGevraagd)\n'
-            '          Padding(\n'
-            '            padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),\n'
-            '            child: Skelet(breedte: double.infinity, hoogte: HeroCarousel.hoogte(context), radius: 18),'),
-        isTrue);
-    expect(main.contains('          height: HeroCarousel.hoogte(context),'), isTrue,
-        reason: 'skelet en balk lezen dezelfde hoogte, anders verspringt het alsnog');
+    expect(main, contains('if (!_nieuwLaadt && _nieuwGevraagd) return const [];'));
+    expect(main,
+        contains('child: Skelet(breedte: double.infinity, hoogte: NieuwRij.hoogte(context, smal: smal) + 44, radius: 18),'));
+    final kaarten = File('lib/ui/nieuw_kaarten.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(kaarten, contains('      height: m.grootH + 8,'), reason: 'skelet en rij lezen dezelfde hoogte');
+    expect(kaarten, contains('    return m.grootH + 8;'));
   });
 
   test('de kop van "jouw jaren": geen "jaren 0" voor de jaren 2000', () {

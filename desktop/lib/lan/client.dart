@@ -701,7 +701,21 @@ class RemoteClient {
     }
   }
 
-  Future<({Map<String, dynamic>? lijst, bool onbekend})> nieuweReleases({bool ververs = false}) async {
+  /// Met [beideRijen] de twee rijen (nummers, albums & EP's) via `/api/nieuw`; kent de pc die nog niet
+  /// (404), dan de oude lijst via `/api/releases`, waar [ReleasesLijst.fromJson] zelf twee rijen van maakt.
+  Future<({Map<String, dynamic>? lijst, bool onbekend})> nieuweReleases(
+      {bool ververs = false, bool beideRijen = false}) async {
+    if (beideRijen) {
+      try {
+        final res = await _get('/api/nieuw', query: ververs ? const {'ververs': '1'} : null);
+        final j = jsonDecode(utf8.decode(res.bodyBytes));
+        return (lijst: j is Map<String, dynamic> ? j : null, onbekend: false);
+      } on RemoteException catch (e) {
+        if (e.statusCode != 404) return (lijst: null, onbekend: false);
+      } catch (_) {
+        return (lijst: null, onbekend: false);
+      }
+    }
     try {
       final res = await _get('/api/releases', query: ververs ? const {'ververs': '1'} : null);
       final j = jsonDecode(utf8.decode(res.bodyBytes));

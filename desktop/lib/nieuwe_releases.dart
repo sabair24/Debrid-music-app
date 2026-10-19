@@ -24,8 +24,17 @@
 /// hitlijst. (Gemeten op de eigen bibliotheek, 15-10-2026: negen echte nieuwe uitgaven van de veertig
 /// meest gedraaide artiesten.)
 ///
-/// Op de pc berekend en bewaard (`nieuwe_releases.json`), elke zes uur opnieuw; een toestel krijgt de
-/// lijst in één vraag van de pc. Zie [NieuweReleases].
+/// Op de pc berekend en bewaard (`nieuwe_releases.json`); een toestel krijgt de lijst in één vraag van
+/// de pc. Zie [NieuweReleases].
+///
+/// **Twee rijen (Saber, 19-10-2026).** "Die wil ik in een nieuwe rij … een stuk of 20, en dan op meer
+/// kunnen klikken, en daar wil ik er zeker een stuk of 100 of meer zien, zowel voor tracks en albums."
+/// Daarom naast de oude lijst ([ReleasesLijst.uitgaven], voor oudere toestellen) twee nieuwe:
+/// [ReleasesLijst.nummers] (singles en de nummers van nieuwe albums) en [ReleasesLijst.albums] (albums
+/// en EP's). Uit AL je artiesten in plaats van de veertig meest gedraaide, zes maanden terug in plaats
+/// van drie, en verwante artiesten vullen aan. Gemeten op 19-10-2026 bij de 39 herkende topartiesten: 24
+/// uitgaven in drie maanden, 57 in zes, 105 in twaalf — vijf op de zes een single. Elke drie uur opnieuw,
+/// met per artiest onthouden wat Deezer gaf, zodat een ronde weinig vraagt.
 library;
 
 import 'dart:async';
@@ -343,6 +352,8 @@ Map<String, int> _vroegsteJaren(Aanbod a) {
 ///
 /// [terug] en [vooruit] in dagen. [alInBezit] zijn [bezitssleutel]s. [weg] telt per reden wat er
 /// afviel, voor het logboek.
+///
+/// [soorten]: alleen deze soorten (album, EP, single); null is alles.
 List<NieuweUitgave> kiesUitgaven(
   List<Aanbod> aanbod, {
   required DateTime nu,
@@ -351,6 +362,7 @@ List<NieuweUitgave> kiesUitgaven(
   int vooruit = 45,
   int perArtiest = 2,
   int max = 15,
+  Set<UitgaveSoort>? soorten,
   Map<String, int>? weg,
 }) {
   void tel(String r) {
@@ -366,6 +378,7 @@ List<NieuweUitgave> kiesUitgaven(
     final kandidaten = <CatalogAlbum>[];
     final vroegst = _vroegsteJaren(a);
     for (final al in a.albums) {
+      if (soorten != null && !soorten.contains(soortVan(al.recordType))) continue;
       final d = DateTime.tryParse(al.releaseDate ?? '');
       if (d == null || d.isBefore(vanaf) || d.isAfter(tot)) continue;
       final reden = geenNieuweMuziek(al.title, recordType: al.recordType, jaar: d.year);
@@ -425,6 +438,348 @@ List<NieuweUitgave> kiesUitgaven(
   return uit.take(max).toList();
 }
 
+// ── De twee rijen: nummers, en albums & EP's (19-10-2026) ──────────────────
+
+/// Hoe ver terug en vooruit de twee rijen kijken, in dagen (Saber, 19-10-2026: "overal 6 maanden").
+const kNieuwTerug = 182, kNieuwVooruit = 45;
+
+/// Hoogstens zoveel per artiest, per lijst: twee nummers en twee albums (Saber, 19-10-2026).
+const kNieuwPerArtiest = 2;
+
+/// Hoeveel er in elke lijst hoogstens bewaard worden. Ruim boven de honderd die Saber wil zien.
+const kNieuwMax = 300;
+
+/// Eén nummer van een nieuw album of een nieuwe EP, zoals Deezer het noemt.
+class AlbumNummer {
+  final int id;
+  final String titel, artiest;
+  final int seconden, rank, positie;
+  const AlbumNummer({
+    required this.id,
+    required this.titel,
+    this.artiest = '',
+    this.seconden = 0,
+    this.rank = 0,
+    this.positie = 0,
+  });
+
+  Map<String, dynamic> toJson() => {'id': id, 't': titel, 'a': artiest, 's': seconden, 'r': rank, 'p': positie};
+
+  static AlbumNummer? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final id = (j['id'] as num?)?.toInt();
+    final t = j['t'] as String?;
+    if (id == null || t == null || t.isEmpty) return null;
+    return AlbumNummer(
+      id: id,
+      titel: t,
+      artiest: (j['a'] as String?) ?? '',
+      seconden: (j['s'] as num?)?.toInt() ?? 0,
+      rank: (j['r'] as num?)?.toInt() ?? 0,
+      positie: (j['p'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  /// Uit `/album/{id}` van Deezer.
+  static List<AlbumNummer> uitDeezer(Map<String, dynamic>? album) => [
+        for (final t in ((album?['tracks'] as Map?)?['data'] as List? ?? const []))
+          if (t is Map && t['id'] is num && (t['title'] ?? '').toString().isNotEmpty)
+            AlbumNummer(
+              id: (t['id'] as num).toInt(),
+              titel: t['title'] as String,
+              artiest: ((t['artist'] as Map?)?['name'] as String?) ?? '',
+              seconden: (t['duration'] as num?)?.toInt() ?? 0,
+              rank: (t['rank'] as num?)?.toInt() ?? 0,
+              positie: (t['track_position'] as num?)?.toInt() ?? 0,
+            ),
+      ];
+}
+
+/// Eén tegel in de rij "Nieuwe nummers": een single, of een nummer van een nieuw album of EP.
+class NieuwNummer {
+  final String titel, artiest;
+
+  /// De uitgave waar het op staat: de single zelf, of het album.
+  final CatalogAlbum album;
+
+  /// Het Deezer-nummer, als het van een album komt; een single heeft er hier geen nodig.
+  final int? trackId;
+  final int seconden;
+
+  /// Op wie dit lijkt, als het van een verwante artiest komt.
+  final String? lijktOp;
+  final int remixen;
+  final double score;
+
+  const NieuwNummer({
+    required this.titel,
+    required this.artiest,
+    required this.album,
+    this.trackId,
+    this.seconden = 0,
+    this.lijktOp,
+    this.remixen = 0,
+    this.score = 0,
+  });
+
+  DateTime? get datum => DateTime.tryParse(album.releaseDate ?? '');
+  bool get eigen => lijktOp == null;
+
+  /// Van een album (en dus niet de single zelf)?
+  bool get vanAlbum => trackId != null && soortVan(album.recordType) != UitgaveSoort.single;
+
+  /// Waarmee het scherm onthoudt of je hem al zag ("5 nieuw").
+  String get sleutel => '${album.id}|${normKey(titel)}';
+
+  Map<String, dynamic> toJson() => {
+        'titel': titel,
+        'artiest': artiest,
+        'albumId': album.id,
+        'album': album.title,
+        'hoes': album.cover,
+        'datum': album.releaseDate,
+        'nummers': album.trackCount,
+        'soort': album.recordType,
+        if (trackId != null) 'trackId': trackId,
+        if (seconden > 0) 'seconden': seconden,
+        if (lijktOp != null) 'lijktOp': lijktOp,
+        if (remixen > 0) 'remixen': remixen,
+        'score': double.parse(score.toStringAsFixed(2)),
+      };
+
+  static NieuwNummer? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final id = (j['albumId'] as num?)?.toInt();
+    final titel = j['titel'] as String?;
+    final artiest = j['artiest'] as String?;
+    if (id == null || titel == null || titel.isEmpty || artiest == null) return null;
+    return NieuwNummer(
+      titel: titel,
+      artiest: artiest,
+      album: CatalogAlbum(id, (j['album'] as String?) ?? titel, j['hoes'] as String?, j['datum'] as String?,
+          (j['nummers'] as num?)?.toInt() ?? 0, (j['soort'] as String?) ?? 'single'),
+      trackId: (j['trackId'] as num?)?.toInt(),
+      seconden: (j['seconden'] as num?)?.toInt() ?? 0,
+      lijktOp: j['lijktOp'] as String?,
+      remixen: (j['remixen'] as num?)?.toInt() ?? 0,
+      score: (j['score'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  /// Een single uit de oude lijst als nummer (een oudere pc stuurt alleen [ReleasesLijst.uitgaven]).
+  static NieuwNummer vanSingle(NieuweUitgave s) => NieuwNummer(
+      titel: s.album.title, artiest: s.artiest, album: s.album, lijktOp: s.lijktOp, remixen: s.remixen, score: s.score);
+}
+
+/// De nummers voor "Nieuwe nummers": elke single (met zijn remixen eronder), en van elk nieuw album of
+/// elke nieuwe EP de populairste nummers ([perAlbum], op Deezer's `rank`). Daarna per artiest hoogstens
+/// [perArtiest], en een nummer dat als single én op het album staat één keer — als de single: die kwam
+/// eerst, en dat is hoe je hem kent.
+///
+/// [inBezit]: [bezitssleutel]s van nummers die je al hebt (artiest + titel); die vallen weg (Saber,
+/// 19-10-2026: "verbergen, zoals nu").
+List<NieuwNummer> kiesNieuweNummers({
+  required List<NieuweUitgave> singles,
+  List<NieuweUitgave> albums = const [],
+  Map<int, List<AlbumNummer>> nummersPerAlbum = const {},
+  Set<String> inBezit = const {},
+  int perArtiest = kNieuwPerArtiest,
+  int perAlbum = 3,
+  int max = kNieuwMax,
+}) {
+  final perArtiestK = <String, List<NieuwNummer>>{};
+  void voeg(NieuwNummer n) {
+    if (inBezit.contains(bezitssleutel(n.artiest, n.titel))) return;
+    (perArtiestK[artistKey(n.artiest)] ??= []).add(n);
+  }
+  for (final s in singles) {
+    voeg(NieuwNummer(
+        titel: s.album.title,
+        artiest: s.artiest,
+        album: s.album,
+        lijktOp: s.lijktOp,
+        remixen: s.remixen,
+        score: s.score + .5));
+  }
+  for (final a in albums) {
+    final lijst = [...?nummersPerAlbum[a.album.id]]..sort((x, y) {
+        final r = y.rank.compareTo(x.rank);
+        return r != 0 ? r : x.positie.compareTo(y.positie);
+      });
+    for (var i = 0; i < lijst.length && i < perAlbum; i++) {
+      final t = lijst[i];
+      voeg(NieuwNummer(
+          titel: t.titel,
+          artiest: a.artiest,
+          album: a.album,
+          trackId: t.id,
+          seconden: t.seconden,
+          lijktOp: a.lijktOp,
+          score: a.score - .5 - .3 * i));
+    }
+  }
+  final uit = <NieuwNummer>[];
+  for (final lijst in perArtiestK.values) {
+    // Eén nummer één keer. Staat het als single én op het album, dan de single — met de hoogste score
+    // van de twee, zodat het niet zakt omdat het album hoger staat.
+    final perBasis = <String, NieuwNummer>{};
+    // Versies van één liedje op hetzelfde album zijn één nummer, met de rest als "+ 1 remix" eronder.
+    // Gemeten op de pc (19-10-2026): Whitney Houstons EP "One Wish (For Christmas)" stond twee keer
+    // vooraan, als "(The Voice of Whitney Symphonic)" en "(The Voice - A cappella Mix)" — dat eerste
+    // herkent [uitgaveBasis] niet als versie, en dat hoeft ook niet: op één album is wat vóór het
+    // eerste haakje staat genoeg.
+    final kernNaarBasis = <String, String>{};
+    for (final x in lijst) {
+      var b = uitgaveBasis(x.titel);
+      if (x.vanAlbum) {
+        final kern = _liedKern(x.titel);
+        if (kern.isNotEmpty) b = kernNaarBasis.putIfAbsent('${x.album.id}|$kern', () => b);
+      }
+      final eerder = perBasis[b];
+      if (eerder == null) {
+        perBasis[b] = x;
+        continue;
+      }
+      final single = !eerder.vanAlbum ? eerder : (!x.vanAlbum ? x : null);
+      final hoogste = math.max(eerder.score, x.score);
+      final houd = single ?? (x.score > eerder.score ? x : eerder);
+      perBasis[b] = NieuwNummer(
+          titel: houd.titel,
+          artiest: houd.artiest,
+          album: houd.album,
+          trackId: houd.trackId,
+          seconden: houd.seconden,
+          lijktOp: houd.lijktOp,
+          // Twee nummers van dezelfde plaat: de tweede is een versie. Een single naast zijn albumnummer
+          // is dezelfde opname en telt niet.
+          remixen: houd.remixen + (eerder.album.id == x.album.id ? 1 : 0),
+          score: hoogste);
+    }
+    final gekozen = perBasis.values.toList()..sort((x, y) => y.score.compareTo(x.score));
+    uit.addAll(gekozen.take(perArtiest));
+  }
+  uit.sort((x, y) {
+    final s = y.score.compareTo(x.score);
+    return s != 0 ? s : (y.album.releaseDate ?? '').compareTo(x.album.releaseDate ?? '');
+  });
+  return uit.take(max).toList();
+}
+
+/// Het liedje zonder wat erachter staat: "One Wish (For Christmas) (The Voice - A cappella Mix)" wordt
+/// "one wish". Leeg als de titel met een haakje begint ("(I Can't Get No) Satisfaction"): dan zegt het
+/// begin niets, en beslist [uitgaveBasis].
+String _liedKern(String titel) => normKey(_zonderGasten(titel).split(RegExp(r'\s*[(\[]|\s+[-–]\s+')).first);
+
+/// [lijst] met vooraan het eerste item dat niet [zelfde] is; de rest in dezelfde volgorde.
+///
+/// Voor de grote kaart van "Nieuwe nummers": staat daar een nummer van precies de plaat die ook de grote
+/// kaart van "Nieuwe albums & EP's" is, dan opent Start twee keer met dezelfde hoes (pc, 19-10-2026).
+List<T> anderVooraan<T>(List<T> lijst, bool Function(T) zelfde) {
+  if (lijst.isEmpty || !zelfde(lijst.first)) return lijst;
+  final i = lijst.indexWhere((x) => !zelfde(x));
+  if (i < 0) return lijst;
+  return [lijst[i], ...lijst.take(i), ...lijst.skip(i + 1)];
+}
+
+DateTime _dag(DateTime d) => DateTime(d.year, d.month, d.day);
+
+/// Het kopje waaronder een uitgave van [datum] staat op de meer-pagina: "Binnenkort", "Deze week",
+/// "Vorige week", "Eerder in oktober", "September", "Mei 2026" (een ander jaar erbij).
+String weekKop(DateTime? datum, DateTime nu) {
+  if (datum == null) return 'Eerder';
+  final vandaag = _dag(nu), d = _dag(datum);
+  if (d.isAfter(vandaag)) return 'Binnenkort';
+  final maandag = vandaag.subtract(Duration(days: vandaag.weekday - 1));
+  if (!d.isBefore(maandag)) return 'Deze week';
+  if (!d.isBefore(maandag.subtract(const Duration(days: 7)))) return 'Vorige week';
+  final maand = _maandenVol[d.month - 1];
+  if (d.year == vandaag.year && d.month == vandaag.month) return 'Eerder in $maand';
+  final groot = '${maand[0].toUpperCase()}${maand.substring(1)}';
+  return d.year == vandaag.year ? groot : '$groot ${d.year}';
+}
+
+/// De volgorde van de kopjes: Binnenkort, Deze week, Vorige week, dan maand voor maand terug.
+int _weekRang(DateTime? datum, DateTime nu) {
+  if (datum == null) return 1 << 20;
+  final vandaag = _dag(nu), d = _dag(datum);
+  if (d.isAfter(vandaag)) return 0;
+  final maandag = vandaag.subtract(Duration(days: vandaag.weekday - 1));
+  if (!d.isBefore(maandag)) return 1;
+  if (!d.isBefore(maandag.subtract(const Duration(days: 7)))) return 2;
+  return 3 + (vandaag.year - d.year) * 12 + (vandaag.month - d.month);
+}
+
+/// Per kopje ([weekKop]), in de volgorde van de meer-pagina. Binnen een kopje eerst je eigen artiesten
+/// (Saber, 19-10-2026: "eigen artiesten eerst, verwant vult aan"), dan de rest; bij Binnenkort wat het
+/// eerst verschijnt bovenaan, verder de hoogste [score].
+List<({String kop, List<T> items})> perWeek<T>(
+  List<T> lijst, {
+  required DateTime? Function(T) datum,
+  required bool Function(T) eigen,
+  required double Function(T) score,
+  required DateTime nu,
+}) {
+  final groepen = <int, List<T>>{};
+  final koppen = <int, String>{};
+  for (final x in lijst) {
+    final d = datum(x);
+    final r = _weekRang(d, nu);
+    (groepen[r] ??= []).add(x);
+    koppen[r] ??= weekKop(d, nu);
+  }
+  final rangen = groepen.keys.toList()..sort();
+  return [
+    for (final r in rangen)
+      (
+        kop: koppen[r]!,
+        items: groepen[r]!
+          ..sort((a, b) {
+            final e = (eigen(a) ? 0 : 1).compareTo(eigen(b) ? 0 : 1);
+            if (e != 0) return e;
+            if (r == 0) {
+              final d = (datum(a) ?? nu).compareTo(datum(b) ?? nu);
+              if (d != 0) return d;
+            }
+            final s = score(b).compareTo(score(a));
+            if (s != 0) return s;
+            return (datum(b) ?? nu).compareTo(datum(a) ?? nu);
+          }),
+      ),
+  ];
+}
+
+/// De volgorde in de rij op Start: vooraan (op de grote kaart) het beste wat al uit is, dan wat
+/// binnenkort verschijnt (met de datum op de hoes), dan de rest in de volgorde van [perWeek].
+List<T> rijVolgorde<T>(
+  List<T> lijst, {
+  required DateTime? Function(T) datum,
+  required bool Function(T) eigen,
+  required double Function(T) score,
+  required DateTime nu,
+  int max = 20,
+}) {
+  final weken = perWeek(lijst, datum: datum, eigen: eigen, score: score, nu: nu);
+  final binnenkort = [for (final w in weken) if (w.kop == 'Binnenkort') ...w.items];
+  final uit = [for (final w in weken) if (w.kop != 'Binnenkort') ...w.items];
+  if (uit.isEmpty) return binnenkort.take(max).toList();
+  return [uit.first, ...binnenkort, ...uit.skip(1)].take(max).toList();
+}
+
+/// Het lintje op de hoes: "Vandaag", "Gisteren", "3 dagen", "12 sep" — en voor wat nog komt de datum
+/// waarop hij verschijnt ("6 nov").
+String? datumLint(DateTime? datum, DateTime nu) {
+  if (datum == null) return null;
+  final dagen = _dag(nu).difference(_dag(datum)).inDays;
+  if (dagen < 0 || dagen >= 7) return '${datum.day} ${_maanden[datum.month - 1]}';
+  if (dagen == 0) return 'Vandaag';
+  if (dagen == 1) return 'Gisteren';
+  return '$dagen dagen';
+}
+
+/// Hoeveel van [sleutels] er niet in [gezien] staan: de teller "5 nieuw" naast de kop.
+int nieuwSindsVorige(Iterable<String> sleutels, Set<String> gezien) =>
+    gezien.isEmpty ? 0 : sleutels.where((s) => !gezien.contains(s)).length;
+
 /// Hoogstens [max] uit [lijst], om de beurt uit elke groep, in de volgorde waarin de groepen voor het
 /// eerst voorkomen. Gemeten op 15-10-2026: zonder dit kwamen alle drie de aanvullers via Céline Dion.
 List<T> omDeBeurt<T>(List<T> lijst, String Function(T) groep, int max) {
@@ -475,10 +830,13 @@ const _maandenVol = [
 ];
 
 /// De kop boven een tegel: "NIEUWE SINGLE", "NIEUW ALBUM · VERSCHIJNT 6 NOV", "LIJKT OP DUA LIPA".
-String releaseKop(NieuweUitgave u, {required DateTime nu}) {
+///
+/// [alsNummer]: boven één nummer van die plaat. Dan "UIT DE NIEUWE EP" — "NIEUWE EP" boven een nummer
+/// zei dat het nummer de EP was.
+String releaseKop(NieuweUitgave u, {required DateTime nu, bool alsNummer = false}) {
   final wat = switch (u.soort) {
-    UitgaveSoort.album => 'NIEUW ALBUM',
-    UitgaveSoort.ep => 'NIEUWE EP',
+    UitgaveSoort.album => alsNummer ? 'UIT HET NIEUWE ALBUM' : 'NIEUW ALBUM',
+    UitgaveSoort.ep => alsNummer ? 'UIT DE NIEUWE EP' : 'NIEUWE EP',
     UitgaveSoort.single => 'NIEUWE SINGLE',
   };
   final d = u.datum;
@@ -526,12 +884,15 @@ String _naamSleutel(String s) => artistKey(s).replaceAll(' ', '');
 /// Wat er gebeurde bij één berekening, voor het logboek. Zie [NieuweReleasesZoeker.zoek].
 class ReleasesVerslag {
   int artiesten = 0, herkend = 0, naamgenoot = 0, nietGevonden = 0, verwant = 0, vragen = 0;
+
+  /// Vragen die ook na opnieuw proberen niet lukten (meestal het budget van Deezer).
+  int mislukt = 0;
   final weg = <String, int>{};
   final overgeslagen = <String>[];
   @override
   String toString() => '$artiesten artiesten: $herkend herkend, $naamgenoot zonder bewijs '
       '(${overgeslagen.take(8).join(', ')}${overgeslagen.length > 8 ? ', …' : ''}), '
-      '$nietGevonden niet bij Deezer, $verwant verwant; $vragen vragen; weg: '
+      '$nietGevonden niet bij Deezer, $verwant verwant; $vragen vragen${mislukt > 0 ? ', $mislukt mislukt' : ''}; weg: '
       '${weg.entries.map((e) => '${e.key} ${e.value}').join(', ')}';
 }
 
@@ -539,7 +900,19 @@ class ReleasesVerslag {
 /// toets.
 class NieuweReleasesZoeker {
   final Future<Map<String, dynamic>?> Function(String url) haal;
-  NieuweReleasesZoeker(this.haal);
+  NieuweReleasesZoeker(this.haal, {Future<void> Function(Duration)? slaap}) : slaap = slaap ?? Future<void>.delayed;
+
+  /// Hoe er gewacht wordt; een toets zet hem op meteen.
+  final Future<void> Function(Duration) slaap;
+
+  /// Extra rust tussen twee vragen tijdens een hele ronde ([zoekAlles]).
+  ///
+  /// De Deezer-baan is van de hele app (`deezerbaan.dart`), en een ronde van honderden vragen mag een
+  /// artiestpagina die je intussen opent niet in de weg zitten. Gemeten op 19-10-2026: zonder dit liep
+  /// de eerste ronde over al je artiesten na 3,5 minuut op "Quota limit exceeded", en ging hij in zijn
+  /// geheel verloren.
+  static const rondeRust = Duration(milliseconds: 250);
+  Duration _rust = Duration.zero;
 
   static const _api = 'https://api.deezer.com';
 
@@ -549,17 +922,54 @@ class NieuweReleasesZoeker {
   /// Bekende Deezer-ids per artiest ([_naamSleutel] → id; 0 = geen bewijs gevonden), met wanneer.
   final ids = <String, ({int id, int ms})>{};
 
+  /// Wat Deezer per artiest gaf, en wanneer: in het geheugen, zolang de pc draait. Met al je artiesten
+  /// (±400) is dat het verschil tussen een ronde van vijfhonderd vragen en een van een paar dozijn.
+  final _uitgaven = <int, ({int ms, List<CatalogAlbum> albums})>{};
+
+  /// De nummers per album ([AlbumNummer.uitDeezer]), bewaard op schijf: een album dat uit is,
+  /// verandert niet meer. Wat nog moet verschijnen, wordt niet bewaard.
+  final nummers = <int, List<AlbumNummer>>{};
+
   int _vragen = 0;
 
-  Future<Map<String, dynamic>?> _haal(String pad) {
+  /// Eén vraag aan Deezer. Een "Quota limit exceeded" is geen nee maar "even niet": dan wachten en tot
+  /// twee keer opnieuw. Al het andere gaat door naar wie vroeg.
+  Future<Map<String, dynamic>?> _haal(String pad) async {
     _vragen++;
-    return haal('$_api$pad');
+    if (_rust > Duration.zero) await slaap(_rust);
+    for (var poging = 0;; poging++) {
+      try {
+        return await haal('$_api$pad');
+      } catch (e) {
+        if (!'$e'.toLowerCase().contains('quota') || poging >= 2) rethrow;
+        await slaap(Duration(seconds: 6 * (poging + 1)));
+      }
+    }
   }
 
   /// Alle uitgaven van één Deezer-artiest. Deezer geeft ze NIET op datum (gemeten: eerst de albums,
   /// dan de singles) en hoogstens honderd per keer — David Guetta heeft er 398. Dus een tweede
   /// bladzijde als er meer zijn, en zelf sorteren.
-  Future<List<CatalogAlbum>> uitgavenVan(int id) async {
+  ///
+  /// Met [nuMs] en [vers]: wat jonger is dan [vers] komt uit het geheugen ([_uitgaven]).
+  Future<List<CatalogAlbum>> uitgavenVan(int id, {int? nuMs, Duration vers = Duration.zero}) async {
+    final bekend = _uitgaven[id];
+    if (nuMs != null && bekend != null && nuMs - bekend.ms < vers.inMilliseconds) return bekend.albums;
+    final lijst = await _uitgavenVanDeezer(id);
+    if (nuMs != null) _uitgaven[id] = (ms: nuMs, albums: lijst);
+    return lijst;
+  }
+
+  /// De nummers van een album, uit [nummers] of van Deezer. [bewaar] alleen voor wat al uit is.
+  Future<List<AlbumNummer>> nummersVan(int albumId, {bool bewaar = true}) async {
+    final bekend = nummers[albumId];
+    if (bekend != null) return bekend;
+    final lijst = AlbumNummer.uitDeezer(await _haal('/album/$albumId'));
+    if (bewaar && lijst.isNotEmpty) nummers[albumId] = lijst;
+    return lijst;
+  }
+
+  Future<List<CatalogAlbum>> _uitgavenVanDeezer(int id) async {
     final eerste = await _haal('/artist/$id/albums?limit=100');
     final lijst = [for (final a in (eerste?['data'] as List? ?? const [])) ?deezerAlbumUit(a)];
     final totaal = (eerste?['total'] as num?)?.toInt() ?? 0;
@@ -572,29 +982,32 @@ class NieuweReleasesZoeker {
   }
 
   /// Het Deezer-id van [eigen], na bewijs. Null als er geen kandidaat iets met jou deelt.
+  ///
+  /// [vers]: hoe oud wat er van een bekende artiest in het geheugen ligt mag zijn ([uitgavenVan]).
+  /// [kandidaten]: hoeveel naamgenoten hoogstens geprobeerd worden (elk twee à drie vragen).
   Future<({int id, List<CatalogAlbum> albums})?> _herken(EigenArtiest eigen, ReleasesVerslag v,
-      {required int nuMs}) async {
+      {required int nuMs, Duration vers = Duration.zero, int kandidaten = 3}) async {
     final k = _naamSleutel(eigen.naam);
     final bekend = ids[k];
     if (bekend != null) {
       final houdbaar = bekend.id > 0 ? const Duration(days: 30) : const Duration(days: 7);
       if (nuMs - bekend.ms < houdbaar.inMilliseconds) {
         if (bekend.id == 0) return null;
-        return (id: bekend.id, albums: await uitgavenVan(bekend.id));
+        return (id: bekend.id, albums: await uitgavenVan(bekend.id, nuMs: nuMs, vers: vers));
       }
     }
     final s = await _haal('/search/artist?q=${Uri.encodeQueryComponent(eigen.naam)}&limit=25');
-    final kandidaten = [
+    final namen = [
       for (final a in (s?['data'] as List? ?? const []))
         if (a is Map && a['id'] is num && _naamSleutel((a['name'] ?? '') as String) == k) a,
     ]..sort((a, b) => ((b['nb_fan'] as num?) ?? 0).compareTo((a['nb_fan'] as num?) ?? 0));
-    if (kandidaten.isEmpty) {
+    if (namen.isEmpty) {
       v.nietGevonden++;
       return null;
     }
-    for (final c in kandidaten.take(3)) {
+    for (final c in namen.take(kandidaten)) {
       final id = (c['id'] as num).toInt();
-      final albums = await uitgavenVan(id);
+      final albums = await uitgavenVan(id, nuMs: nuMs, vers: vers);
       var raak = zelfdeArtiest(eigen, albums: [for (final a in albums) a.title]);
       if (!raak) {
         final top = await _haal('/artist/$id/top?limit=50');
@@ -678,31 +1091,222 @@ class NieuweReleasesZoeker {
     v.vragen = _vragen;
     return gekozen;
   }
+
+  /// Hoe oud wat er van een artiest in het geheugen ligt mag zijn: je [vaakst] gedraaide artiesten
+  /// elke ronde vers, de rest één keer per dag.
+  static const vaakst = 60;
+  static const _versTop = Duration(hours: 3), _versRest = Duration(hours: 24);
+
+  /// De twee rijen ([ReleasesLijst.nummers] en [ReleasesLijst.albums]) en de oude lijst, in één ronde.
+  ///
+  /// [artiesten] in volgorde van [relevantie]: de bovenste [vaakst] worden elke ronde opnieuw gevraagd,
+  /// de rest één keer per dag. Verwante artiesten komen van de [_bronnenVerwant] meest gedraaide
+  /// artiesten die zelf iets nieuws hebben.
+  ///
+  /// [tussendoor] elke [tussenstap] artiesten, met een regel over de voortgang: de eerste ronde over
+  /// al je artiesten duurt twintig minuten of langer (gemeten 19-10-2026), en zonder dit was niet te
+  /// zien of hij liep — en ging het herkennen verloren als hij halverwege brak. De aanroeper bewaart
+  /// dan [ids] alvast.
+  Future<({List<NieuweUitgave> oud, List<NieuwNummer> nummers, List<NieuweUitgave> albums})> zoekAlles(
+    List<EigenArtiest> artiesten, {
+    required DateTime nu,
+    Set<String> alInBezit = const {},
+    Set<String> nummersInBezit = const {},
+    ReleasesVerslag? verslag,
+    Future<void> Function(String voortgang)? tussendoor,
+  }) async {
+    _rust = rondeRust;
+    try {
+      return await _zoekAlles(artiesten,
+          nu: nu, alInBezit: alInBezit, nummersInBezit: nummersInBezit, verslag: verslag, tussendoor: tussendoor);
+    } finally {
+      _rust = Duration.zero;
+    }
+  }
+
+  static const tussenstap = 50;
+
+  Future<({List<NieuweUitgave> oud, List<NieuwNummer> nummers, List<NieuweUitgave> albums})> _zoekAlles(
+    List<EigenArtiest> artiesten, {
+    required DateTime nu,
+    required Set<String> alInBezit,
+    required Set<String> nummersInBezit,
+    ReleasesVerslag? verslag,
+    Future<void> Function(String voortgang)? tussendoor,
+  }) async {
+    final v = verslag ?? ReleasesVerslag();
+    _vragen = 0;
+    final nuMs = nu.millisecondsSinceEpoch;
+    v.artiesten = artiesten.length;
+    final aanbod = <Aanbod>[];
+    final herkend = <({EigenArtiest eigen, int id})>[];
+    for (final (i, a) in artiesten.indexed) {
+      if (i > 0 && i % tussenstap == 0) {
+        await tussendoor?.call('$i van ${artiesten.length} artiesten, $_vragen vragen, ${v.herkend} herkend'
+            '${v.mislukt > 0 ? ', ${v.mislukt} mislukt' : ''}');
+      }
+      // Eén artiest die niet lukt, is één artiest minder — niet de hele ronde weg.
+      ({int id, List<CatalogAlbum> albums})? h;
+      try {
+        // Wie je weinig draait: twee naamgenoten proberen en niet drie. Bij de eerste ronde over al je
+        // artiesten scheelt dat honderden vragen, en wie je zelden draait heeft zelden een naamgenoot
+        // die bekender is dan hijzelf.
+        h = await _herken(a, v,
+            nuMs: nuMs, vers: i < vaakst ? _versTop : _versRest, kandidaten: i < vaakst ? 3 : 2);
+      } catch (_) {
+        v.mislukt++;
+        continue;
+      }
+      if (h == null) continue;
+      v.herkend++;
+      herkend.add((eigen: a, id: h.id));
+      aanbod.add(Aanbod(
+          artiest: a.naam, relevantie: relevantie(a, nuMs: nuMs), albums: h.albums, eerder: a.titelJaar));
+    }
+
+    List<NieuweUitgave> kies(List<Aanbod> van, Set<UitgaveSoort> soorten, {int perArtiest = kNieuwPerArtiest}) =>
+        kiesUitgaven(van,
+            nu: nu,
+            alInBezit: alInBezit,
+            terug: kNieuwTerug,
+            vooruit: kNieuwVooruit,
+            perArtiest: perArtiest,
+            max: kNieuwMax,
+            soorten: soorten,
+            weg: v.weg);
+
+    const albumSoorten = {UitgaveSoort.album, UitgaveSoort.ep};
+    const singleSoort = {UitgaveSoort.single};
+    final albumsEigen = kies(aanbod, albumSoorten);
+    // Ruimer dan twee: de grens per artiest komt in [kiesNieuweNummers], samen met de albumnummers.
+    final singlesEigen = kies(aanbod, singleSoort, perArtiest: 6);
+
+    // Verwant: de buren van wie zelf iets nieuws uitbracht, eigen artiesten eerst.
+    final actief = {
+      for (final u in [...albumsEigen, ...singlesEigen]) _naamSleutel(u.artiest),
+    };
+    final eigenNamen = {for (final a in artiesten) _naamSleutel(a.naam)};
+    final verwant = <Aanbod>[];
+    final gezien = <int>{};
+    for (final h in herkend.where((h) => actief.contains(_naamSleutel(h.eigen.naam))).take(_bronnenVerwant)) {
+      Map<String, dynamic>? r;
+      try {
+        r = await _haal('/artist/${h.id}/related?limit=10');
+      } catch (_) {
+        v.mislukt++;
+        continue;
+      }
+      var vanDeze = 0;
+      for (final x in (r?['data'] as List? ?? const [])) {
+        if (vanDeze >= _burenPerBron) break;
+        if (x is! Map || x['id'] is! num) continue;
+        final id = (x['id'] as num).toInt();
+        final naam = (x['name'] ?? '') as String;
+        if (naam.isEmpty || eigenNamen.contains(_naamSleutel(naam)) || !gezien.add(id)) continue;
+        List<CatalogAlbum> albums;
+        try {
+          albums = await uitgavenVan(id, nuMs: nuMs, vers: _versRest);
+        } catch (_) {
+          v.mislukt++;
+          continue;
+        }
+        vanDeze++;
+        verwant.add(Aanbod(artiest: naam, relevantie: 0, albums: albums, lijktOp: h.eigen.naam));
+      }
+    }
+    final albumsVerwant = kies(verwant, albumSoorten);
+    final singlesVerwant = kies(verwant, singleSoort, perArtiest: 6);
+
+    // De nummers van elk nieuw album en elke nieuwe EP: één vraag per album, en daarna bewaard.
+    final vandaag = DateTime(nu.year, nu.month, nu.day);
+    for (final a in [...albumsEigen, ...albumsVerwant]) {
+      final d = a.datum;
+      try {
+        await nummersVan(a.album.id, bewaar: d != null && !d.isAfter(vandaag));
+      } catch (_) {
+        v.mislukt++; // dan staat dit album er zonder zijn nummers bij; de volgende ronde probeert het opnieuw
+      }
+    }
+    final nummersEigen =
+        kiesNieuweNummers(singles: singlesEigen, albums: albumsEigen, nummersPerAlbum: nummers, inBezit: nummersInBezit);
+    final nummersVerwant = kiesNieuweNummers(
+        singles: singlesVerwant, albums: albumsVerwant, nummersPerAlbum: nummers, inBezit: nummersInBezit);
+
+    // De oude lijst, voor een toestel dat de twee rijen nog niet kent: zoals hij was.
+    var oud = kiesUitgaven(aanbod, nu: nu, alInBezit: alInBezit);
+    if (oud.length < aanvullenOnder && verwant.isNotEmpty) {
+      final alle = kiesUitgaven(verwant, nu: nu, alInBezit: alInBezit, terug: 60, perArtiest: 1, max: 50);
+      oud = [...oud, ...omDeBeurt(alle, (u) => u.lijktOp ?? '', aanvullenTot - oud.length)];
+    }
+    v.verwant = albumsVerwant.length + nummersVerwant.length;
+    v.vragen = _vragen;
+    return (
+      oud: oud,
+      nummers: [...nummersEigen, ...nummersVerwant].take(kNieuwMax).toList(),
+      albums: [...albumsEigen, ...albumsVerwant].take(kNieuwMax).toList(),
+    );
+  }
+
+  /// Van hoeveel eigen artiesten de buren meedoen, en hoeveel buren per artiest.
+  static const _bronnenVerwant = 15, _burenPerBron = 5;
 }
 
 // ── Bewaren en verversen ───────────────────────────────────────────────────
 
 /// De lijst zoals hij bewaard en verstuurd wordt.
+///
+/// Versie 2 (19-10-2026) draagt naast de oude [uitgaven] de twee rijen [nummers] en [albums]. Een
+/// oudere app leest alleen versie 1 en gooit al het andere weg; daarom krijgt die via `/api/releases`
+/// nog steeds [toJsonV1], en de nieuwe app vraagt `/api/nieuw`.
 class ReleasesLijst {
   final int berekendMs;
   final List<NieuweUitgave> uitgaven;
-  const ReleasesLijst(this.berekendMs, this.uitgaven);
+  final List<NieuwNummer> nummers;
+  final List<NieuweUitgave> albums;
 
-  static const versie = 1;
+  /// Ingelezen uit versie 1: de twee rijen zijn dan afgeleid uit de oude twaalf tegels en geen echte
+  /// ronde. [NieuweReleases.verouderd] rekent zo'n lijst meteen opnieuw, anders bleef na de update
+  /// tot drie uur lang de oude lijst staan (pc, 19-10-2026: "Alles (7)" en "Alles (5)").
+  final bool oudeVorm;
+  const ReleasesLijst(this.berekendMs, this.uitgaven,
+      {this.nummers = const [], this.albums = const [], this.oudeVorm = false});
+
+  static const versie = 2;
 
   Map<String, dynamic> toJson() => {
         'versie': versie,
         'berekendMs': berekendMs,
         'uitgaven': [for (final u in uitgaven) u.toJson()],
+        'nummers': [for (final n in nummers) n.toJson()],
+        'albums': [for (final a in albums) a.toJson()],
+      };
+
+  /// Zoals een app van vóór de twee rijen hem verwacht.
+  Map<String, dynamic> toJsonV1() => {
+        'versie': 1,
+        'berekendMs': berekendMs,
+        'uitgaven': [for (final u in uitgaven) u.toJson()],
       };
 
   static ReleasesLijst? fromJson(Object? j) {
-    if (j is! Map || j['versie'] != versie) return null;
+    if (j is! Map) return null;
+    final v = j['versie'];
+    if (v != 1 && v != versie) return null;
     final ms = (j['berekendMs'] as num?)?.toInt();
     if (ms == null) return null;
-    return ReleasesLijst(ms, [
+    final uitgaven = [
       for (final u in (j['uitgaven'] as List? ?? const [])) ?NieuweUitgave.fromJson(u),
-    ]);
+    ];
+    if (v == 1) {
+      // Een oudere pc: de twee rijen uit de oude lijst, zo goed als het gaat.
+      return ReleasesLijst(ms, uitgaven,
+          nummers: [for (final u in uitgaven) if (u.soort == UitgaveSoort.single) NieuwNummer.vanSingle(u)],
+          albums: [for (final u in uitgaven) if (u.soort != UitgaveSoort.single) u],
+          oudeVorm: true);
+    }
+    return ReleasesLijst(ms, uitgaven,
+        nummers: [for (final n in (j['nummers'] as List? ?? const [])) ?NieuwNummer.fromJson(n)],
+        albums: [for (final a in (j['albums'] as List? ?? const [])) ?NieuweUitgave.fromJson(a)]);
   }
 }
 
@@ -717,8 +1321,10 @@ class NieuweReleases {
     required this.zoeker,
     required this.nummers,
     required this.bezit,
+    this.bezitNummers,
     required this.bestand,
     required this.idsBestand,
+    this.nummersBestand,
     this.log,
     DateTime Function()? klok,
   }) : klok = klok ?? DateTime.now;
@@ -729,11 +1335,18 @@ class NieuweReleases {
   final NieuweReleasesZoeker zoeker;
   final List<EigenArtiest> Function() nummers;
   final Set<String> Function() bezit;
+
+  /// [bezitssleutel]s van de nummers die je hebt (artiest + titel), voor [kiesNieuweNummers].
+  final Set<String> Function()? bezitNummers;
   final File bestand, idsBestand;
+
+  /// Waar de nummers per album bewaard worden ([NieuweReleasesZoeker.nummers]). Null = niet bewaren.
+  final File? nummersBestand;
   final void Function(String regel)? log;
   final DateTime Function() klok;
 
-  static const houdbaar = Duration(hours: 6);
+  /// Elke drie uur (Saber, 19-10-2026); per artiest onthouden, zodat een ronde weinig vraagt.
+  static const houdbaar = Duration(hours: 3);
 
   ReleasesLijst? _lijst;
   ReleasesLijst? get lijst => _lijst;
@@ -745,7 +1358,9 @@ class NieuweReleases {
   void stopLuisteren(void Function() f) => _luisteraars.remove(f);
 
   bool get verouderd =>
-      _lijst == null || klok().millisecondsSinceEpoch - _lijst!.berekendMs > houdbaar.inMilliseconds;
+      _lijst == null ||
+      _lijst!.oudeVorm ||
+      klok().millisecondsSinceEpoch - _lijst!.berekendMs > houdbaar.inMilliseconds;
 
   /// Loopt er nu een berekening?
   bool get bezig => _bezig != null;
@@ -764,6 +1379,19 @@ class NieuweReleases {
             if (e.key is String && w is Map && w['id'] is num && w['ms'] is num) {
               zoeker.ids[e.key as String] = (id: (w['id'] as num).toInt(), ms: (w['ms'] as num).toInt());
             }
+          }
+        }
+      }
+    } catch (_) {}
+    try {
+      final f = nummersBestand;
+      if (f != null && await f.exists()) {
+        final j = jsonDecode(await f.readAsString());
+        if (j is Map) {
+          for (final e in j.entries) {
+            final id = int.tryParse('${e.key}');
+            if (id == null || e.value is! List) continue;
+            zoeker.nummers[id] = [for (final n in e.value as List) ?AlbumNummer.fromJson(n)];
           }
         }
       }
@@ -793,6 +1421,14 @@ class NieuweReleases {
     });
   }
 
+  Future<void> _bewaarIds() async {
+    try {
+      await idsBestand.writeAsString(jsonEncode({
+        for (final e in zoeker.ids.entries) e.key: {'id': e.value.id, 'ms': e.value.ms},
+      }));
+    } catch (_) {/* niet bewaard: dan herkent de volgende ronde ze opnieuw */}
+  }
+
   Future<ReleasesLijst?> _reken() async {
     final t0 = DateTime.now();
     final nu = klok();
@@ -803,17 +1439,32 @@ class NieuweReleases {
       Timer(const Duration(minutes: 2), () => unawaited(ververs()));
       return _lijst;
     }
-    final top = relevanteArtiesten(alle, nuMs: nu.millisecondsSinceEpoch);
+    // Al je artiesten (Saber, 19-10-2026), de meest gedraaide eerst: die worden elke ronde opnieuw
+    // gevraagd, de rest één keer per dag. Zie [NieuweReleasesZoeker.zoekAlles].
+    final top = relevanteArtiesten(alle, nuMs: nu.millisecondsSinceEpoch, max: 2000);
     final v = ReleasesVerslag();
     try {
-      final uit = await zoeker.zoek(top, nu: nu, alInBezit: bezit(), verslag: v);
-      final lijst = ReleasesLijst(nu.millisecondsSinceEpoch, uit);
+      final uit = await zoeker.zoekAlles(top,
+          nu: nu,
+          alInBezit: bezit(),
+          nummersInBezit: bezitNummers?.call() ?? const {},
+          verslag: v,
+          tussendoor: (regel) async {
+            log?.call('releases: bezig — $regel (${DateTime.now().difference(t0).inSeconds} s)');
+            await _bewaarIds();
+          });
+      final lijst = ReleasesLijst(nu.millisecondsSinceEpoch, uit.oud, nummers: uit.nummers, albums: uit.albums);
       _lijst = lijst;
       await bestand.writeAsString(jsonEncode(lijst.toJson()));
-      await idsBestand.writeAsString(jsonEncode({
-        for (final e in zoeker.ids.entries) e.key: {'id': e.value.id, 'ms': e.value.ms},
-      }));
-      log?.call('releases: ${uit.length} tegels in ${DateTime.now().difference(t0).inMilliseconds} ms — $v');
+      await _bewaarIds();
+      final nb = nummersBestand;
+      if (nb != null) {
+        await nb.writeAsString(jsonEncode({
+          for (final e in zoeker.nummers.entries) '${e.key}': [for (final n in e.value) n.toJson()],
+        }));
+      }
+      log?.call('releases: ${uit.oud.length} oud, ${uit.nummers.length} nummers, ${uit.albums.length} albums in '
+          '${DateTime.now().difference(t0).inMilliseconds} ms — $v');
       for (final f in [..._luisteraars]) {
         f();
       }

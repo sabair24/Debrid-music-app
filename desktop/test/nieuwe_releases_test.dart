@@ -339,9 +339,11 @@ void main() {
       expect(main, contains('unawaited(_laadNieuw())'));
     });
 
-    test('de balk toont de kop en de datum, en valt niet terug op de hitlijst', () {
-      expect(main, contains('koppen: {for (final u in hero) u.album.id: releaseKop(u, nu: nu)},'));
-      expect(main, contains('final hero = _nieuw.take(7).toList();'));
+    test('de rijen tonen de kop en de datum, en vallen niet terug op de hitlijst', () {
+      // Sinds 19-10-2026 twee rijen in plaats van de balk: de kop op de grote kaart, het lint op de hoes.
+      expect(main, contains('opschrift: groot ? releaseKop(u, nu: nu) : null,'));
+      expect(main, contains('lint: datumLint(n.datum, nu),'));
+      expect(main, isNot(contains('final hero = _nieuw.take(7).toList();')));
       expect(main, isNot(contains('uitJaar(_charts')));
     });
 
@@ -445,6 +447,14 @@ void main() {
       expect(opnieuw.verouderd, isFalse);
       expect(opnieuw.zoeker.ids.values.single.id, 3);
       expect(keren, vragen, reason: 'inlezen kost geen enkele vraag');
+
+      // Een lijst van vóór de twee rijen (versie 1), net berekend: toch meteen opnieuw rekenen.
+      await File('${map.path}/nieuwe_releases.json').writeAsString(jsonEncode(
+          ReleasesLijst(_nu.millisecondsSinceEpoch, d.lijst!.uitgaven).toJsonV1()));
+      final oud = maak();
+      await oud.laad();
+      expect(_titels(oud.lijst!.uitgaven), ['Seven Tears'], reason: 'intussen toont hij wat er lag');
+      expect(oud.verouderd, isTrue, reason: 'versie 1 is geen echte ronde');
     });
   });
 }

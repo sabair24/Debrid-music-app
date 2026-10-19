@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:io';
+import 'dart:isolate' show Isolate;
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 // Flutter 3.36+ exports a RepeatMode of its own (for RepeatingAnimationBuilder), which collides
@@ -34,13 +35,14 @@ import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
 import 'radiostijl.dart'
     show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl, buitenTijdvak, naLijstVanModel, sfeerBeslistFamilie;
-import 'radiovoorraad.dart' show Haalstand, RadioKeuringLater, Weerreden;
+import 'radiovoorraad.dart' show Haalstand, RadioKeuringLater, RadioLaterOpnieuw, Weerreden;
 import 'radioplan.dart';
 import 'oordelen.dart';
 import 'prullenbak.dart' show heeftPrullenbak;
 import 'radiosessie.dart';
 import 'ui/draaihoes.dart';
 import 'ui/tv_rij.dart';
+import 'ui/nieuw_kaarten.dart';
 import 'ui/duim.dart';
 import 'ui/glas.dart';
 import 'ui/menu.dart';
@@ -15576,8 +15578,10 @@ NieuweReleases maakNieuweReleases(LibraryStore library, Speelstanden standen, {r
           }),
           overslaan: _genericArtist),
       bezit: () => {for (final a in library.albums) bezitssleutel(a.artist, a.title)},
+      bezitNummers: () => {for (final t in library.tracks) bezitssleutel(t.artist, t.title)},
       bestand: appFile('$naam.json'),
       idsBestand: appFile('${naam}_ids.json'),
+      nummersBestand: appFile('${naam}_albumnummers.json'),
       log: WarmLog('$logDir${Platform.pathSeparator}releases.log').line,
     );
 
@@ -15846,11 +15850,15 @@ class _StartCache {
   /// Vraagt bij de volgende lading een VERSE lijst "Aanbevolen voor jou" (omlaag trekken).
   static bool aanbevolenDwingen = false;
 
-  /// De balk "Nieuwe release" en de rij eronder, en wanneer die het laatst gevraagd is. NIET in
-  /// [leeg]: hij heeft zijn eigen houdbaarheid (op de pc zes uur, zie `nieuwe_releases.dart`), en een
-  /// Ververs vraagt hem apart opnieuw — zonder eerst een leeg vlak te tonen.
-  static List<NieuweUitgave> nieuw = [];
+  /// De twee rijen nieuwe releases (nummers, albums & EP's), en wanneer ze het laatst gevraagd zijn.
+  /// NIET in [leeg]: ze hebben hun eigen houdbaarheid (op de pc drie uur, zie `nieuwe_releases.dart`),
+  /// en een Ververs vraagt ze apart opnieuw — zonder eerst een leeg vlak te tonen.
+  static ReleasesLijst? nieuw;
   static int nieuwMs = 0;
+
+  /// Wat er nu opgehaald of klaargezet wordt om af te spelen: Start en de meer-pagina tonen hetzelfde
+  /// ringetje op dezelfde kaart.
+  static final nieuwSpeler = NieuwSpeler();
 
   /// Op een toestel met een pc die `/api/releases` niet kent: de eigen berekening.
   static NieuweReleases? eigenReleases;
@@ -15910,8 +15918,10 @@ class _HomeStartViewState extends State<HomeStartView> {
   final _catalog = CatalogService();
   final _rec = RecommendService();
   List<CatalogAlbumHit> _charts = _StartCache.charts;
-  List<NieuweUitgave> _nieuw = _StartCache.nieuw;
-  List<CatalogAlbumHit> get _releases => [for (final u in _nieuw) u.hit];
+  ReleasesLijst? _nieuw = _StartCache.nieuw;
+
+  /// "5 nieuw" naast de koppen: één keer per bezoek berekend, tegen wat je de vorige keer zag.
+  ({int nummers, int albums})? _teller;
   List<RecTrack> _forYou = _StartCache.forYou;
   List<int> _genres = _StartCache.genres;
   String _omdatArtiest = _StartCache.omdatArtiest;
@@ -15939,10 +15949,30 @@ class _HomeStartViewState extends State<HomeStartView> {
     if (l != null && mounted) _toonNieuw(l);
   }
 
-  void _toonNieuw(ReleasesLijst l) {
-    _StartCache.nieuw = l.uitgaven;
+  void _toonNieuw(ReleasesLijst l, {bool bewaar = true}) {
+    _StartCache.nieuw = l;
     _StartCache.nieuwMs = DateTime.now().millisecondsSinceEpoch;
-    setState(() => _nieuw = l.uitgaven);
+    setState(() => _nieuw = l);
+    // Bij elke lijst opnieuw tellen, tegen wat je de VORIGE keer zag. Werd alleen de eerste lijst
+    // geteld, dan bleef de teller weg als de echte ronde binnenkwam terwijl je op Start stond: eerst de
+    // oude lijst (0 nieuw), en daarna 298 nummers zonder teller (pc, 19-10-2026).
+    unawaited(_telNieuw(l));
+    // Op een toestel ook op schijf: na een koude start staan de rijen er dan meteen, nog voor de pc
+    // antwoordt. Op de pc ligt hij al klaar in de dienst.
+    if (bewaar && NieuweReleases.pc == null) unawaited(bewaarNieuwOpToestel(l));
+  }
+
+  /// Wat er op schijf stond toen je Start opende: één keer gelezen, voor elke lijst die daarna komt.
+  Future<({Set<String> nummers, Set<String> albums})>? _gezienVorige;
+
+  Future<void> _telNieuw(ReleasesLijst l) async {
+    final gezien = await (_gezienVorige ??= leesNieuwGezien());
+    if (!mounted) return;
+    setState(() => _teller = (
+          nummers: nieuwSindsVorige([for (final n in l.nummers) n.sleutel], gezien.nummers),
+          albums: nieuwSindsVorige([for (final a in l.albums) '${a.album.id}'], gezien.albums),
+        ));
+    await bewaarNieuwGezien(l);
   }
 
   /// Haalt de releases: op de pc uit de dienst (meteen wat er ligt, en opnieuw als het verouderd is),
@@ -15964,12 +15994,16 @@ class _HomeStartViewState extends State<HomeStartView> {
           if (nieuw != null && mounted) _toonNieuw(nieuw);
         }
       } else if (lib.remote != null) {
-        var antwoord = await lib.remote!.nieuweReleases(ververs: dwing);
+        if (_StartCache.nieuw == null) {
+          final opSchijf = await leesNieuwVanToestel();
+          if (opSchijf != null && mounted) _toonNieuw(opSchijf, bewaar: false);
+        }
+        var antwoord = await lib.remote!.nieuweReleases(ververs: dwing, beideRijen: true);
         // De pc rekent nog (eerste keer na een herstart): één keer opnieuw vragen.
         if (antwoord.lijst?['bezig'] == true && (antwoord.lijst?['uitgaven'] as List?)?.isEmpty != false) {
           await Future<void>.delayed(const Duration(seconds: 15));
           if (!mounted) return;
-          antwoord = await lib.remote!.nieuweReleases();
+          antwoord = await lib.remote!.nieuweReleases(beideRijen: true);
         }
         final l = ReleasesLijst.fromJson(antwoord.lijst);
         if (l != null && mounted) {
@@ -16288,7 +16322,7 @@ class _HomeStartViewState extends State<HomeStartView> {
       _nieuwGevraagd = true;
       final halfuur = const Duration(minutes: 30).inMilliseconds;
       if (NieuweReleases.pc != null ||
-          _StartCache.nieuw.isEmpty ||
+          _StartCache.nieuw == null ||
           DateTime.now().millisecondsSinceEpoch - _StartCache.nieuwMs > halfuur) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) unawaited(_laadNieuw());
@@ -16325,11 +16359,7 @@ class _HomeStartViewState extends State<HomeStartView> {
           a,
     ], _StartCache.zaad);
     final anyLoading = _chartsLoading || _seedsLoading || (!_seedsRequested && lib.scanning);
-    // De balk: wat er de laatste drie maanden verscheen bij de artiesten die je draait, en wat er
-    // binnenkort komt. Zie `nieuwe_releases.dart`. Geen terugval op de wereldwijde hitlijst meer — die
-    // zegt niets over jou, en dat was precies de klacht ("niet relevant met mijn artiesten").
     final nu = DateTime.now();
-    final hero = _nieuw.take(7).toList();
 
     // Omlaag trekken ververst alles (Saber, 16-10-2026: "in plaats van het knopje"). Met een muis
     // valt er niet te trekken, dus daar blijft het knopje staan.
@@ -16382,23 +16412,8 @@ class _HomeStartViewState extends State<HomeStartView> {
           padding: EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),
           child: _RadioUitEenZinKaart(),
         ),
-        if (hero.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),
-            child: HeroCarousel(
-              hits: [for (final u in hero) u.hit],
-              koppen: {for (final u in hero) u.album.id: releaseKop(u, nu: nu)},
-              onderschriften: {for (final u in hero) u.album.id: releaseOnderschrift(u)},
-            ),
-          )
-        // Zolang hij nog kan komen, houdt een skelet van precies zijn hoogte de plek vrij. Hij komt
-        // van Deezer, seconden na de eigen rijen hieronder, en duwde die dan 300 punten omlaag —
-        // gezien op de S26 na een koude start op 11-10-2026, terwijl je net een hoes wilde aantikken.
-        else if (_nieuwLaadt || !_nieuwGevraagd)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),
-            child: Skelet(breedte: double.infinity, hoogte: HeroCarousel.hoogte(context), radius: 18),
-          ),
+        // De twee rijen nieuwe releases, waar de balk stond (Saber, 19-10-2026). Zie [_nieuweRijen].
+        ..._nieuweRijen(nu),
         if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList(), rij: 'recent')),
         // Boven de netwerkrijen: deze twee staan er meteen en zijn altijd raak.
         if (uitDecennium.length >= 4)
@@ -16427,15 +16442,12 @@ class _HomeStartViewState extends State<HomeStartView> {
           _section('Top van dit moment',
               _charts.isEmpty ? _loadingRow() : _catalogRow(_charts.take(20).toList(), rij: 'top'),
               bij: _genreBijschrift),
-        if (_releases.isNotEmpty || _nieuwLaadt)
-          _section('Nieuw van jouw artiesten',
-              _releases.isEmpty ? _loadingRow() : _catalogRow(_releases.take(20).toList(), rij: 'nieuw'),
-              bij: 'de laatste drie maanden en wat eraan komt'),
-        // Streng: alleen de laatste drie maanden, geen heruitgaven. Dan is leeg een normale uitkomst,
-        // en dan hoort er te staan waarom.
-        if (!_nieuwLaadt && _nieuwGevraagd && _releases.isEmpty)
-          _legeRij('Niets nieuws van jouw artiesten de laatste drie maanden.'),
-        if (!anyLoading && _charts.isEmpty && _releases.isEmpty && _forYou.isEmpty && recent.isEmpty)
+        if (!anyLoading &&
+            _charts.isEmpty &&
+            (_nieuw?.nummers.isEmpty ?? true) &&
+            (_nieuw?.albums.isEmpty ?? true) &&
+            _forYou.isEmpty &&
+            recent.isEmpty)
           LeegVlak(
             teken: Icons.library_music_rounded,
             kop: 'Nog geen muziek hier',
@@ -16450,6 +16462,64 @@ class _HomeStartViewState extends State<HomeStartView> {
       ),
       ),
     );
+  }
+
+  /// "Nieuwe nummers" en "Nieuwe albums & EP's", waar de balk stond (Saber, 19-10-2026): elk een
+  /// uitgelichte rij van twintig ([NieuwRij]: vooraan een grote kaart, dan brede kaarten twee boven
+  /// elkaar), met "Alles" naar de meer-pagina. Zolang ze nog komen, houdt een skelet van precies hun
+  /// hoogte de plek vrij — anders duwen ze de eigen rijen eronder omlaag (S26, 11-10-2026).
+  List<Widget> _nieuweRijen(DateTime nu) {
+    final l = _nieuw;
+    final smal = isCompact(context);
+    if (l == null) {
+      if (!_nieuwLaadt && _nieuwGevraagd) return const [];
+      return [
+        for (final _ in [1, 2])
+          Padding(
+            padding: const EdgeInsets.fromLTRB(kGoot, kRuimte24, kGoot, 0),
+            child: Skelet(breedte: double.infinity, hoogte: NieuwRij.hoogte(context, smal: smal) + 44, radius: 18),
+          ),
+      ];
+    }
+    final albums =
+        rijVolgorde(l.albums, datum: (a) => a.datum, eigen: (a) => a.lijktOp == null, score: (a) => a.score, nu: nu);
+    final nummers = anderVooraan(
+        rijVolgorde(l.nummers, datum: (n) => n.datum, eigen: (n) => n.eigen, score: (n) => n.score, nu: nu),
+        (n) => albums.isNotEmpty && n.album.id == albums.first.album.id);
+    return [
+      if (nummers.isNotEmpty) ...[
+        NieuwKop('Nieuwe nummers',
+            totaal: l.nummers.length,
+            nieuw: _teller?.nummers ?? 0,
+            onAlles: () => openPagina(context, (_) => NieuwMeerPagina(lijst: l, soort: NieuwSoort.nummers))),
+        ListenableBuilder(
+          listenable: _StartCache.nieuwSpeler,
+          builder: (context, _) => TvRij(
+            child: NieuwRij(
+              aantal: nummers.length,
+              groot: () => nieuwNummerKaart(context, nummers.first, nu, groot: true),
+              kaart: (i) => nieuwNummerKaart(context, nummers[i], nu),
+            ),
+          ),
+        ),
+      ],
+      if (albums.isNotEmpty) ...[
+        NieuwKop("Nieuwe albums & EP's",
+            totaal: l.albums.length,
+            nieuw: _teller?.albums ?? 0,
+            onAlles: () => openPagina(context, (_) => NieuwMeerPagina(lijst: l, soort: NieuwSoort.albums))),
+        TvRij(
+          child: NieuwRij(
+            aantal: albums.length,
+            groot: () => nieuwAlbumKaart(context, albums.first, nu, groot: true),
+            kaart: (i) => nieuwAlbumKaart(context, albums[i], nu),
+          ),
+        ),
+      ],
+      // Streng: geen heruitgaven. Dan is leeg een normale uitkomst, en dan hoort er te staan waarom.
+      if (nummers.isEmpty && albums.isEmpty && !_nieuwLaadt)
+        _legeRij('Niets nieuws van jouw artiesten de laatste zes maanden.'),
+    ];
   }
 
   Widget _section(String title, Widget row, {String? bij}) => Column(
@@ -16709,6 +16779,386 @@ String begroeting(DateTime nu) {
   return 'Goedenavond';
 }
 
+// ── Nieuwe releases: de kaarten, het afspelen en de meer-pagina (Saber, 19-10-2026) ─────────────
+
+/// De derde regel van een nummerkaart: op wie hij lijkt, de remixen, of van welk album hij komt.
+String? nieuwRegel3(NieuwNummer n) {
+  if (n.lijktOp != null) return 'Lijkt op ${n.lijktOp}';
+  if (n.remixen > 0) return '+ ${n.remixen} ${n.remixen == 1 ? 'remix' : 'remixen'}';
+  if (n.vanAlbum) return 'Van ${n.album.title}';
+  return 'Single';
+}
+
+/// De derde regel van een albumkaart: "Album · 12 nummers", "EP · lijkt op Dua Lipa".
+String nieuwAlbumRegel3(NieuweUitgave u) => [
+      u.soort == UitgaveSoort.ep ? 'EP' : 'Album',
+      if (u.album.trackCount > 0) '${u.album.trackCount} ${u.album.trackCount == 1 ? 'nummer' : 'nummers'}',
+      if (u.lijktOp != null) 'lijkt op ${u.lijktOp}',
+    ].join(' · ');
+
+bool _nogNiet(DateTime? d, DateTime nu) => d != null && d.isAfter(DateTime(nu.year, nu.month, nu.day, 23, 59));
+
+void _openNieuwAlbum(BuildContext context, CatalogAlbum al, String artiest) =>
+    openPagina(context, (_) => AlbumBrowsePage(artiest, al));
+
+/// Een kaart voor een nieuw nummer: een tik speelt hem meteen (Saber, 19-10-2026), lang of rechts het
+/// menu. Wat nog moet verschijnen, opent de uitgave in plaats daarvan.
+NieuwKaart nieuwNummerKaart(BuildContext context, NieuwNummer n, DateTime nu, {bool groot = false}) {
+  final speler = _StartCache.nieuwSpeler;
+  final komt = _nogNiet(n.datum, nu);
+  return NieuwKaart(
+    titel: n.titel,
+    regel2: n.artiest,
+    regel3: nieuwRegel3(n),
+    opschrift: groot
+        ? releaseKop(NieuweUitgave(album: n.album, artiest: n.artiest, lijktOp: n.lijktOp), nu: nu, alsNummer: true)
+        : null,
+    hoes: (maat) => _netCover(n.album.cover, size: maat, radius: 0),
+    lint: datumLint(n.datum, nu),
+    bezig: speler.bezig(n),
+    onTap: komt ? () => _openNieuwAlbum(context, n.album, n.artiest) : () => speler.speel(context, n),
+    onLang: () => _nieuwNummerMenu(context, n),
+    onRechts: (bij) => _nieuwNummerMenu(context, n, bij: bij),
+    onKnop: groot && !komt ? () => speler.speel(context, n) : null,
+  );
+}
+
+/// Een kaart voor een nieuw album of een nieuwe EP: een tik opent hem.
+NieuwKaart nieuwAlbumKaart(BuildContext context, NieuweUitgave u, DateTime nu, {bool groot = false}) => NieuwKaart(
+      titel: u.album.title,
+      regel2: u.artiest,
+      regel3: nieuwAlbumRegel3(u),
+      opschrift: groot ? releaseKop(u, nu: nu) : null,
+      hoes: (maat) => _netCover(u.album.cover, size: maat, radius: 0),
+      lint: datumLint(u.datum, nu),
+      onTap: () => _openNieuwAlbum(context, u.album, u.artiest),
+      onLang: () => _nieuwAlbumMenu(context, u),
+      onRechts: (bij) => _nieuwAlbumMenu(context, u, bij: bij),
+      onKnop: groot ? () => _openNieuwAlbum(context, u.album, u.artiest) : null,
+      knopIcoon: Icons.album_rounded,
+      knopTekst: 'Bekijken',
+    );
+
+void _nieuwNummerMenu(BuildContext context, NieuwNummer n, {Offset? bij}) => _toonItemMenu(
+    context,
+    ItemMenu(titel: n.titel, ondertitel: n.artiest, blokken: [
+      [MenuRegel(Icons.play_arrow_rounded, 'Afspelen', () => _StartCache.nieuwSpeler.speel(context, n))],
+      [
+        MenuRegel(Icons.album_rounded, n.vanAlbum ? 'Album openen' : 'Single openen',
+            () => _openNieuwAlbum(context, n.album, n.artiest)),
+        MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, n.artiest)),
+        MenuRegel(Icons.radio_rounded, 'Radio vanaf hier',
+            () => startRadio(context, n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null)),
+        if (!isTv)
+          MenuRegel(Icons.download_rounded, 'Bronnen / download',
+              () => _bronnenVenster(context, '${n.artiest} — ${n.titel}', '${n.artiest} ${n.titel}')),
+      ],
+    ]),
+    bij: bij);
+
+void _nieuwAlbumMenu(BuildContext context, NieuweUitgave u, {Offset? bij}) => _toonItemMenu(
+    context,
+    ItemMenu(titel: u.album.title, ondertitel: u.artiest, blokken: [
+      [
+        MenuRegel(Icons.album_rounded, 'Album openen', () => _openNieuwAlbum(context, u.album, u.artiest)),
+        MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, u.artiest)),
+        MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, u.artiest)),
+      ],
+    ]),
+    bij: bij);
+
+/// De bronnen van één nummer in een venster; in een raster kan dat niet tussen de tegels. Ook voor
+/// Ontdek.
+void _bronnenVenster(BuildContext context, String kop, String query) => showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: _panel,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: SizedBox(
+          width: dialogWidth(ctx, 760),
+          height: dialogHeight(ctx, 620),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 8, 6),
+              child: Row(children: [
+                Expanded(child: Text(kop, maxLines: 1, overflow: TextOverflow.ellipsis, style: kKop)),
+                IconButton(
+                    onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close_rounded), tooltip: 'Sluiten'),
+              ]),
+            ),
+            Expanded(child: SingleChildScrollView(child: SourcesView(query: query))),
+          ]),
+        ),
+      ),
+    );
+
+/// Een nieuw nummer afspelen (Saber, 19-10-2026: "meteen afspelen").
+///
+/// Op de pc meteen online, zoals Ontdek. Op een gsm, iPad of tv kan dat niet (zie
+/// `RemoteOnlineService.resolveRadio`): daar haalt de pc het eerst, zoals de radio dat doet
+/// ([PcRadiobron]), en het nummer blijft daarna gewoon in je bibliotheek. Zolang dat duurt (10 tot 60
+/// seconden) staat er een ringetje op de kaart, op Start en op de meer-pagina.
+class NieuwSpeler extends ChangeNotifier {
+  final _bezig = <String>{};
+  bool bezig(NieuwNummer n) => _bezig.contains(n.sleutel);
+
+  Future<void> speel(BuildContext context, NieuwNummer n) async {
+    final sleutel = n.sleutel;
+    if (_bezig.contains(sleutel)) return;
+    final lib = context.read<LibraryStore>();
+    final speler = context.read<PlayerStore>();
+    final online = context.read<OnlineService>();
+    // Al binnen (eerder opgehaald, of je had hem al): gewoon spelen.
+    final eigen = lib.ownedTrack(n.artiest, n.titel);
+    if (eigen != null) {
+      speler.playQueue([eigen], 0);
+      return;
+    }
+    _bezig.add(sleutel);
+    notifyListeners();
+    try {
+      if (lib.remote == null) {
+        _srcToast(context, 'Bron voorbereiden voor ${n.titel}…');
+        final url = await online.resolveRadio(n.artiest, n.titel, instantOnly: false);
+        if (url == null) {
+          if (context.mounted) _srcToast(context, 'Geen bron gevonden — lang drukken voor de bronnen.');
+          return;
+        }
+        speler.playUrl(url, title: n.titel, artist: n.artiest);
+        return;
+      }
+      _srcToast(context, 'Je pc haalt "${n.titel}" op…');
+      final bron = PcRadiobron(library: lib, clientOf: () => lib.remote);
+      final fout = await bron.begin();
+      if (fout != null) {
+        if (context.mounted) _srcToast(context, fout);
+        return;
+      }
+      try {
+        Track? t;
+        try {
+          t = await bron.haal(
+              Radioplek(artiest: n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null));
+        } on AlVanJou catch (e) {
+          t = e.nummer;
+        }
+        if (t == null) {
+          if (context.mounted) _srcToast(context, 'Je pc vond "${n.titel}" nergens.');
+          return;
+        }
+        speler.playQueue([t], 0);
+      } on RadioLaterOpnieuw catch (e) {
+        if (context.mounted) _srcToast(context, 'Nu even niet: ${e.waarom}');
+      } finally {
+        bron.einde();
+      }
+    } catch (e) {
+      if (context.mounted) _srcToast(context, 'Kan niet afspelen: $e');
+    } finally {
+      _bezig.remove(sleutel);
+      notifyListeners();
+    }
+  }
+}
+
+File get _nieuwOpToestel => appFile('nieuwe_releases_rijen.json');
+File get _nieuwGezienBestand => appFile('nieuwe_releases_gezien.json');
+
+/// De laatste twee rijen van dit toestel, buiten de UI-draad gelezen (honderden kaarten).
+Future<ReleasesLijst?> leesNieuwVanToestel() async {
+  try {
+    final f = _nieuwOpToestel;
+    if (!await f.exists()) return null;
+    final tekst = await f.readAsString();
+    return await Isolate.run(() => ReleasesLijst.fromJson(jsonDecode(tekst)));
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<void> bewaarNieuwOpToestel(ReleasesLijst l) async {
+  try {
+    await _nieuwOpToestel.writeAsString(jsonEncode(l.toJson()));
+  } catch (_) {/* niet bewaard: dan vraagt de volgende start het gewoon aan de pc */}
+}
+
+/// Wat je de vorige keer zag, voor "5 nieuw".
+Future<({Set<String> nummers, Set<String> albums})> leesNieuwGezien() async {
+  try {
+    final f = _nieuwGezienBestand;
+    if (await f.exists()) {
+      final j = jsonDecode(await f.readAsString());
+      if (j is Map) {
+        return (
+          nummers: {for (final x in (j['nummers'] as List? ?? const [])) '$x'},
+          albums: {for (final x in (j['albums'] as List? ?? const [])) '$x'},
+        );
+      }
+    }
+  } catch (_) {}
+  return (nummers: <String>{}, albums: <String>{});
+}
+
+Future<void> bewaarNieuwGezien(ReleasesLijst l) async {
+  try {
+    await _nieuwGezienBestand.writeAsString(jsonEncode({
+      'nummers': [for (final n in l.nummers) n.sleutel],
+      'albums': [for (final a in l.albums) '${a.album.id}'],
+    }));
+  } catch (_) {}
+}
+
+enum NieuwSoort { nummers, albums }
+
+/// "Alles" achter een rij: honderden nieuwe nummers of albums, per week (Saber, 19-10-2026).
+///
+/// Bovenaan een vooraf gebakken collage van de nieuwste hoezen ([HoesCollage]); daaronder de kopjes van
+/// [perWeek] — Binnenkort, Deze week, Vorige week, … — met binnen elke week je eigen artiesten eerst.
+/// Nummers als raster van brede kaarten, albums als raster van hoezen met het datumlint. Niets wordt
+/// hier opgehaald: de lijst ligt al klaar, dus de pagina staat er meteen.
+class NieuwMeerPagina extends StatefulWidget {
+  const NieuwMeerPagina({super.key, required this.lijst, required this.soort});
+  final ReleasesLijst lijst;
+  final NieuwSoort soort;
+
+  @override
+  State<NieuwMeerPagina> createState() => _NieuwMeerPaginaState();
+}
+
+class _NieuwMeerPaginaState extends State<NieuwMeerPagina> {
+  final _rol = ScrollController();
+
+  @override
+  void dispose() {
+    _rol.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final nu = DateTime.now();
+    final nummers = widget.soort == NieuwSoort.nummers;
+    final titel = nummers ? 'Nieuwe nummers' : "Nieuwe albums & EP's";
+    final aantal = nummers ? widget.lijst.nummers.length : widget.lijst.albums.length;
+    final boven = MediaQuery.paddingOf(context).top + kToolbarHeight;
+    const kop = 190.0;
+    final m = nieuwRijMaten(MediaQuery.sizeOf(context).width,
+        smal: isCompact(context), schaal: MediaQuery.textScalerOf(context));
+    final weekNummers = nummers
+        ? perWeek(widget.lijst.nummers, datum: (n) => n.datum, eigen: (n) => n.eigen, score: (n) => n.score, nu: nu)
+        : const <({String kop, List<NieuwNummer> items})>[];
+    final weekAlbums = nummers
+        ? const <({String kop, List<NieuweUitgave> items})>[]
+        : perWeek(widget.lijst.albums,
+            datum: (a) => a.datum, eigen: (a) => a.lijktOp == null, score: (a) => a.score, nu: nu);
+    // De nieuwste hoezen voor de collage, elk één keer.
+    final hoezen = <String>{
+      for (final w in nummers ? weekNummers : weekAlbums)
+        for (final x in w.items)
+          if ((x is NieuwNummer ? x.album.cover : (x as NieuweUitgave).album.cover) case final c?)
+            if (c.isNotEmpty) c,
+    }.toList();
+
+    return Scaffold(
+      backgroundColor: _bg,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
+        flexibleSpace: _MeeschuivendGlas(tint: _bg, rol: _rol),
+        leading: glasInBalk(
+            plat: isCompact(context),
+            IconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              tooltip: 'Terug',
+              onPressed: () => Navigator.of(context).pop(),
+            )),
+      ),
+      body: Stack(children: [
+        HoesCollage(urls: hoezen, hoogte: boven + kop + 60, rol: _rol),
+        ListenableBuilder(
+          listenable: _StartCache.nieuwSpeler,
+          builder: (context, _) => CustomScrollView(
+            controller: _rol,
+            slivers: [
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(kGoot, boven + kop - 90, kGoot, kRuimte8),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('✦ $titel',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: kTekst, height: 1.15)),
+                    const SizedBox(height: kRuimte4),
+                    Text(
+                        '$aantal ${nummers ? (aantal == 1 ? 'nummer' : 'nummers') : (aantal == 1 ? 'uitgave' : "albums en EP's")}'
+                        ' · de laatste zes maanden en wat eraan komt',
+                        style: kTekstBij),
+                  ]),
+                ),
+              ),
+              if (nummers)
+                for (final w in weekNummers) ...[
+                  SliverToBoxAdapter(child: SectieKop(w.kop, bij: '${w.items.length}')),
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: kGoot),
+                    sliver: SliverGrid(
+                      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                        maxCrossAxisExtent: 420,
+                        mainAxisExtent: m.kaartH,
+                        mainAxisSpacing: m.tussen,
+                        crossAxisSpacing: m.tussen,
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, i) => BredeKaart(nieuwNummerKaart(context, w.items[i], nu),
+                            breedte: double.infinity, hoogte: m.kaartH),
+                        childCount: w.items.length,
+                      ),
+                    ),
+                  ),
+                ]
+              else
+                for (final w in weekAlbums) ...[
+                  SliverToBoxAdapter(child: SectieKop(w.kop, bij: '${w.items.length}')),
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: kGoot),
+                    sliver: SliverLayoutBuilder(
+                      builder: (context, c) => SliverGrid(
+                        gridDelegate: tegelRaster(context, c.crossAxisExtent),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, i) {
+                            final u = w.items[i];
+                            final lint = datumLint(u.datum, nu);
+                            return AlbumTegel(
+                              hoes: (maat) => Stack(children: [
+                                _netCover(u.album.cover, size: maat),
+                                if (lint != null) Positioned(left: 6, bottom: 6, child: DatumLint(lint)),
+                              ]),
+                              titel: u.album.title,
+                              ondertitel: u.lijktOp == null ? u.artiest : '${u.artiest} · lijkt op ${u.lijktOp}',
+                              onTap: () => _openNieuwAlbum(context, u.album, u.artiest),
+                              onLongPress: () => _nieuwAlbumMenu(context, u),
+                              onSecondaryTap: (bij) => _nieuwAlbumMenu(context, u, bij: bij),
+                            );
+                          },
+                          childCount: w.items.length,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              SliverToBoxAdapter(child: SizedBox(height: kRuimte24 + MediaQuery.paddingOf(context).bottom)),
+            ],
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
 /// Hoe lang een oogst van Ontdek blijft staan als je het tabblad verlaat en terugkomt.
 const kOntdekBewaard = Duration(minutes: 30);
 
@@ -16939,34 +17389,8 @@ class _OntdekViewState extends State<OntdekView> {
       bij: bij);
 
   /// De bronnen van één aanbeveling, zoals de lijst ze openklapt; in een raster kan dat niet tussen
-  /// de tegels, dus in een venster.
-  void _bronnen(RecTrack t) => showDialog(
-        context: context,
-        builder: (ctx) => Dialog(
-          backgroundColor: _panel,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: SizedBox(
-            width: dialogWidth(ctx, 760),
-            height: dialogHeight(ctx, 620),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 8, 6),
-                child: Row(children: [
-                  Expanded(
-                    child: Text('${t.artist} — ${t.title}',
-                        maxLines: 1, overflow: TextOverflow.ellipsis, style: kKop),
-                  ),
-                  IconButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      icon: const Icon(Icons.close_rounded),
-                      tooltip: 'Sluiten'),
-                ]),
-              ),
-              Expanded(child: SingleChildScrollView(child: SourcesView(query: t.query))),
-            ]),
-          ),
-        ),
-      );
+  /// de tegels, dus in een venster ([_bronnenVenster], dat de nieuwe releases ook gebruiken).
+  void _bronnen(RecTrack t) => _bronnenVenster(context, '${t.artist} — ${t.title}', t.query);
 
   Widget _row(int i, RecTrack t) {
     final open = _expanded == i;
