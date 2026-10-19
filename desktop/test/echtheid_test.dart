@@ -301,7 +301,7 @@ void main() {
       final zin = waarom(o);
       // De muur wordt op de eerste plek gevonden waar hij het steilst is, dus ergens tussen 20,3 en
       // 20,7 — vandaar het begin van het getal en niet één exacte waarde.
-      expect(zin, startsWith('afgekapt op 20.'), reason: 'de gemeten hoogte staat vooraan');
+      expect(zin, startsWith('afgekapt op 20,'), reason: 'de gemeten hoogte staat vooraan');
       expect(zin, contains('mp3 320'));
     });
 
@@ -348,7 +348,7 @@ void main() {
     });
 
     test('een afkap zonder bekende bron zegt nog steeds wat er gemeten is', () {
-      expect(afkapZin(14500), contains('14.5'));
+      expect(afkapZin(14500), contains('14,5'), reason: 'met een komma, zoals overal in de app');
       expect(afkapZin(14500), isNot(contains('mp3')));
       expect(afkapZin(14500), contains('smaller'));
     });
@@ -367,7 +367,7 @@ void main() {
         afkapHz: 17200,
       );
       // Niet "16/44,1": een bestand dat op 17,2 kHz ophoudt draagt geen 44,1 kHz aan inhoud.
-      expect(echteResolutie(o, kopSampleRate: 192000, kopBits: 24), 'tot 17.2 kHz');
+      expect(echteResolutie(o, kopSampleRate: 192000, kopBits: 24), 'tot 17,2 kHz');
     });
 
     test('opgeblazen bits worden het gemeten getal', () {

@@ -312,6 +312,21 @@ Matrix4 draaiMatrix(double t) {
     ..scaleByDouble(til, til, 1, 1);
 }
 
+/// Hoe dik een hoes is, als deel van zijn breedte: een cd-doosje of een plaathoes van karton.
+const double kHoesDikte = .03;
+
+/// De transform van de rand (de dikte) aan kant [kant] (-1 links, 1 rechts) van een hoes die
+/// [breedte] breed is, op moment [t]: loodrecht op de hoes, aan zijn rand, en meegedraaid.
+@visibleForTesting
+Matrix4 randMatrix(double t, double breedte, int kant) =>
+    draaiMatrix(t)
+      ..translateByDouble(kant * breedte / 2, 0, 0, 1)
+      ..rotateY(math.pi / 2);
+
+/// Hoe fel de glansveeg is op moment [t]: niets in rust, het felst halverwege.
+@visibleForTesting
+double veegSterkte(double t) => .32 * math.sin(math.pi * t.clamp(0.0, 1.0));
+
 class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
   late final AnimationController _draai;
   late final AnimationController _wiebel;
@@ -381,20 +396,110 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
             // Gespiegeld, zodat hij na een halve slag leesbaar staat.
             child: Transform(alignment: Alignment.center, transform: Matrix4.rotationY(math.pi), child: widget.achter),
           );
+    // **Altijd dezelfde vorm**, in rust en tijdens het draaien. Eerst gaf dit in rust de kant zelf terug
+    // en tijdens het draaien een Stack met de kant erin: dan verhuist de hoes bij elk begin en eind van
+    // een draai naar een andere plek in de boom, en Flutter gooit hem dan weg en bouwt hem opnieuw — met
+    // zijn Hero, zijn beeld en alles wat eronder hing (gsm 18-10-2026: "de hoes flipt niet om"). Nu
+    // staan voor- en achterkant er allebei, met een sleutel, en wisselt alleen welke zichtbaar is.
     return AnimatedBuilder(
       animation: Listenable.merge([_draai, _wiebel]),
       builder: (context, _) {
         final t = _draai.value;
         final w = _wiebel.isAnimating ? wiebelHoek(_wiebel.value) : 0.0;
         final rust = t == 0 && w == 0;
-        if (rust) return voor;
-        final kant = (t < .5 || achter == null) ? voor : achter;
-        return Transform(
-          alignment: Alignment.center,
-          transform: draaiMatrix(t)..rotateY(w),
-          child: kant,
-        );
+        final achterOp = achter != null && t >= .5;
+        // Dikte, schaduw en veeg alleen tijdens het omdraaien. Een wiebel blijft wat hij was, en een
+        // achterkant in rust krijgt geen randen (die bleven anders als twee strepen naast een
+        // cd-achterkant staan die breder is dan hoog, gsm 18-10-2026).
+        final draait = t > 0 && t < 1;
+        final dwars = math.cos(math.pi * t).abs();
+        return Stack(clipBehavior: Clip.none, fit: StackFit.passthrough, children: [
+          if (draait)
+            Positioned.fill(
+              key: const ValueKey('draai-schaduw-laag'),
+              child: IgnorePointer(
+                child: Transform.scale(
+                  scaleX: math.max(dwars, .08),
+                  child: const DecoratedBox(
+                    key: ValueKey('draai-schaduw'),
+                    decoration: BoxDecoration(boxShadow: [
+                      BoxShadow(color: Color(0x59000000), blurRadius: 18, offset: Offset(0, 10)),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+          // Beide randen vóór de hoes getekend: de rand die van je af staat, valt dan achter de hoes.
+          if (draait)
+            for (final k in const [-1, 1])
+              Positioned.fill(
+                key: ValueKey('draai-rand-laag-$k'),
+                child: IgnorePointer(
+                  child: LayoutBuilder(
+                    builder: (_, c) => Transform(
+                      alignment: Alignment.center,
+                      transform: randMatrix(t, c.maxWidth, k),
+                      child: Center(
+                        child: SizedBox(
+                          key: ValueKey('draai-rand-$k'),
+                          width: c.maxWidth * kHoesDikte,
+                          height: c.maxHeight,
+                          child: const DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(colors: [Color(0xFF2A2B30), Color(0xFF4A4C54), Color(0xFF2A2B30)]),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          Transform(
+            key: const ValueKey('draai-kant'),
+            alignment: Alignment.center,
+            // In rust de eenheid: een rechte hoes, niets te verrekenen.
+            transform: rust ? Matrix4.identity() : (draaiMatrix(t)..rotateY(w)),
+            child: Stack(fit: StackFit.passthrough, children: [
+              Offstage(key: const ValueKey('draai-voor'), offstage: achterOp, child: voor),
+              if (achter != null) Offstage(key: const ValueKey('draai-achter'), offstage: !achterOp, child: achter),
+              if (draait)
+                Positioned.fill(
+                  key: const ValueKey('draai-veeg-laag'),
+                  child: IgnorePointer(
+                    child: CustomPaint(key: const ValueKey('draai-veeg'), painter: _Veeg(t)),
+                  ),
+                ),
+            ]),
+          ),
+        ]);
       },
     );
   }
+}
+
+/// De glansveeg over een hoes die omdraait: een schuine band licht die in één keer van links naar
+/// rechts over de voorkant gaat, en dan over de achterkant verder.
+class _Veeg extends CustomPainter {
+  _Veeg(this.t);
+  final double t;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = veegSterkte(t);
+    if (a <= 0) return;
+    final x = -1.4 + 2.8 * t;
+    final vak = Offset.zero & size;
+    canvas.drawRect(
+        vak,
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment(x - .5, -1),
+            end: Alignment(x + .5, 1),
+            colors: [const Color(0x00FFFFFF), Color.fromRGBO(255, 255, 255, a), const Color(0x00FFFFFF)],
+          ).createShader(vak));
+  }
+
+  @override
+  bool shouldRepaint(_Veeg oud) => oud.t != t;
 }

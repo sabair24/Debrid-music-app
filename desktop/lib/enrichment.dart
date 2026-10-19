@@ -146,6 +146,11 @@ class ArtiestFeiten {
   /// jaartal is — anders kan het lint een streepje zetten waar de feitenstrook er geen ziet.
   static int? jaarUit(String? tekst) => _jaarUit(tekst);
 
+  /// Een jaartal, of null. TheAudioDB stuurt "0" als het jaar niet bekend is, en dat stond er dan
+  /// letterlijk: "OPGERICHT 0" en "ACTIEF sinds 0" bij 2 Fabiola (gsm, 18-10-2026). Ook uit een
+  /// bewaard bestand van vóór deze regel.
+  static int? _echtJaar(int? j) => j == null || j < 1000 ? null : j;
+
   static int? _jaarUit(String? tekst) {
     if (tekst == null) return null;
     final m = RegExp(r'^\s*(\d{4})\s*$').firstMatch(tekst);
@@ -169,9 +174,9 @@ class ArtiestFeiten {
     if ((j['v'] as num?)?.toInt() != schema) return null;
     return ArtiestFeiten(
       geboren: j['geboren'] as String?,
-      geborenJaar: (j['gj'] as num?)?.toInt(),
-      gestorvenJaar: (j['sj'] as num?)?.toInt(),
-      opgerichtJaar: (j['oj'] as num?)?.toInt(),
+      geborenJaar: _echtJaar((j['gj'] as num?)?.toInt()),
+      gestorvenJaar: _echtJaar((j['sj'] as num?)?.toInt()),
+      opgerichtJaar: _echtJaar((j['oj'] as num?)?.toInt()),
       ontbonden: j['ontbonden'] as String?,
       land: j['land'] as String?,
       label: j['label'] as String?,
@@ -195,9 +200,9 @@ class ArtiestFeiten {
       geboren: s('strBornLocation') == null
           ? s('strBorn')
           : [s('strBorn'), s('strBornLocation')].whereType<String>().join(' · '),
-      geborenJaar: n('intBornYear'),
-      gestorvenJaar: n('intDiedYear'),
-      opgerichtJaar: n('intFormedYear'),
+      geborenJaar: _echtJaar(n('intBornYear')),
+      gestorvenJaar: _echtJaar(n('intDiedYear')),
+      opgerichtJaar: _echtJaar(n('intFormedYear')),
       ontbonden: s('strDisbanded'),
       land: s('strCountry'),
       label: s('strLabel'),
@@ -853,6 +858,16 @@ class CoverEnricher {
     return g == null || g.isEmpty || g.toLowerCase() == 'null' ? null : g;
   }
 
+  /// Een vraag die iemand nu op het scherm wacht (de artiestpagina): niet achter de hele rij van de
+  /// achtergrond, alleen [_audioDbGap] na de vorige vraag. Op de pc stond de bio van een geopende
+  /// artiest anders minuten achter de opstartveeg van de hele bibliotheek (18-10-2026: "Over 2
+  /// Fabiola" kwam er op de pc niet, op de gsm meteen).
+  static Future<void> _audioDbVoorrang() async {
+    final since = DateTime.now().difference(_audioDbLast);
+    if (since < _audioDbGap) await Future<void>.delayed(_audioDbGap - since);
+    _audioDbLast = DateTime.now();
+  }
+
   static Future<void> _audioDbSlot() {
     final slot = _audioDbTurn.then((_) async {
       final since = DateTime.now().difference(_audioDbLast);
@@ -999,39 +1014,76 @@ class CoverEnricher {
   }
 
   Future<String?> cachedBio(String name) async {
-    final f = _bioFile(name);
-    if (!await f.exists()) return null;
-    final s = (await f.readAsString()).trim();
-    return s.isEmpty ? null : s;
+    // Een bestand dat niet te lezen is (op Windows even op slot) is geen bio, en mag de rest van de
+    // pagina niet tegenhouden: zonder dit stopte het hele laden van "Over …" bij die ene fout.
+    try {
+      final f = _bioFile(name);
+      if (!await f.exists()) return null;
+      final s = (await f.readAsString()).trim();
+      return s.isEmpty ? null : s;
+    } catch (_) {
+      return null;
+    }
   }
 
+  /// "TheAudioDB kent deze artiest niet, of heeft geen bio": zo lang niet opnieuw vragen.
+  static const _bioMisDuur = Duration(days: 14);
+  File _bioMisFile(String name) =>
+      File('${bioDir.path}${Platform.pathSeparator}${fnv1a(name.toLowerCase())}.geen');
+
   /// Artist biography from TheAudioDB (keyless test key). Prefers Dutch, falls back to English.
-  Future<String?> fetchArtistBio(String name) async {
+  ///
+  /// [voorrang] voor wie er nu op wacht (de artiestpagina), zie [_audioDbVoorrang].
+  ///
+  /// **Een "niets" wordt onthouden** ([_bioMisDuur]). Dat stond nergens, en dus vroeg de opstartveeg
+  /// op de pc bij elke start opnieuw naar elke artiest die TheAudioDB niet kent — drie seconden per
+  /// stuk, op de rij waar ook de artiestpagina op wacht.
+  Future<String?> fetchArtistBio(String name, {bool voorrang = false}) async {
     if (_generic.contains(name.trim().toLowerCase())) return null;
+    try {
+      final mis = _bioMisFile(name);
+      if (await mis.exists() &&
+          DateTime.now().difference(await mis.lastModified()) < _bioMisDuur) {
+        return null;
+      }
+    } catch (_) {/* geen briefje te lezen: gewoon vragen */}
     try {
       // Op de rij, om dezelfde reden als in [_zoekArtiestBeeld]: dit is dezelfde URL naar dezelfde
       // host, en `_enrichArtistsFromWeb` roept ze allebei aan voor zes artiesten tegelijk.
-      await _audioDbSlot();
+      await (voorrang ? _audioDbVoorrang() : _audioDbSlot());
       final r = await http.get(
         Uri.parse('$kAudioDbBasis/search.php?s=${Uri.encodeComponent(name)}'),
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return null;
       final artists = (jsonBody(r)['artists'] as List?) ?? const [];
-      if (artists.isEmpty) return null;
+      if (artists.isEmpty) {
+        await _onthoudGeenBio(name);
+        return null;
+      }
       final a = artists.first as Map<String, dynamic>;
       // De feiten liggen HIER al op tafel, in dezelfde rij. Ze wegschrijven kost geen verzoek en
       // geen wachttijd; ze later apart ophalen zou allebei wél kosten. Buiten de bio-tak, want een
       // artiest zonder biografie heeft vaak wél een geboortejaar en een land.
       await _schrijfFeiten(name, ArtiestFeiten.uitAudioDb(a));
       final bio = ((a['strBiographyNL'] ?? a['strBiographyEN']) as String?)?.trim();
-      if (bio == null || bio.isEmpty) return null;
+      if (bio == null || bio.isEmpty) {
+        await _onthoudGeenBio(name);
+        return null;
+      }
       await bioDir.create(recursive: true);
       await _bioFile(name).writeAsString(bio);
       return bio;
     } catch (_) {
       return null;
     }
+  }
+
+  Future<void> _onthoudGeenBio(String name) async {
+    try {
+      await bioDir.create(recursive: true);
+      await _bioMisFile(name).writeAsString('');
+    } catch (_) {/* niet te onthouden: dan wordt het later nog eens gevraagd */}
   }
 
   // ── Feiten ────────────────────────────────────────────────────────────────
@@ -1061,12 +1113,12 @@ class CoverEnricher {
   /// dat nooit. Die feiten zouden dus voor altijd wegblijven, zonder één melding.
   ///
   /// [fetch] op false is er voor wie alleen wil kijken wat er ligt.
-  Future<ArtiestFeiten?> artistFeiten(String name, {bool fetch = true}) async {
+  Future<ArtiestFeiten?> artistFeiten(String name, {bool fetch = true, bool voorrang = false}) async {
     final gelezen = await _leesFeiten(name);
     if (gelezen != null || !fetch) return gelezen;
     // De bio ophalen schrijft de feiten mee. Eén weg naar die URL, en dus geen tweede plek waar
     // een ander antwoord over dezelfde artiest vandaan kan komen.
-    await fetchArtistBio(name);
+    await fetchArtistBio(name, voorrang: voorrang);
     return _leesFeiten(name);
   }
 

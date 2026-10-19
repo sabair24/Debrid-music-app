@@ -433,8 +433,8 @@ class _PressableState extends State<Pressable> {
   Widget _paarsBijSelectie(Widget kind) {
     if (!isTv || !_focused || !widget.ringOnFocus) return kind;
     return DefaultTextStyle.merge(
-      style: const TextStyle(color: kAccent),
-      child: IconTheme.merge(data: const IconThemeData(color: kAccent), child: kind),
+      style: TextStyle(color: kAccent),
+      child: IconTheme.merge(data: IconThemeData(color: kAccent), child: kind),
     );
   }
 
@@ -549,7 +549,7 @@ class _TvLabelledState extends State<TvLabelled> {
                   maxLines: 1,
                   softWrap: false,
                   // Paars, zoals de letters van elke geselecteerde knop op een tv (16-10-2026).
-                  style: const TextStyle(fontSize: 16, height: 1.1, color: kAccent),
+                  style: TextStyle(fontSize: 16, height: 1.1, color: kAccent),
                 ),
               ),
             ),
@@ -599,7 +599,7 @@ class MaybePressable extends StatelessWidget {
 /// via adb: de paarse rand viel weg op precies de knop die het meest gebruikt wordt ("Shuffle alles"
 /// is zelf paars), en een geselecteerde nummerrij was een vierkante paarse balk over de volle breedte.
 /// Wit is wat Google TV en Apple TV doen: het staat los van elke kleur in de app, ook van paars.
-Color get kTvSelectie => isTv ? Colors.white : kAccent;
+Color get kTvSelectie => isTv ? kFel : kAccent;
 Color get _ring => kTvSelectie;
 
 double get _ringWidth => isTv ? 3 : 2;
@@ -623,8 +623,8 @@ const kTvFocusGroei = Duration(milliseconds: 200);
 const double kTvKaartGroei = 1.03;
 
 /// De glazen pil onder wat op een tv de selectie heeft en niet groeit (een link, een chip, een
-/// knop): wit op 14 %, geen rand, geen gloed.
-const kTvSelectieGlas = Color(0x24FFFFFF);
+/// knop): wit op 14 %, geen rand, geen gloed. Op licht zwart op 8 %.
+Color get kTvSelectieGlas => Thema.licht ? const Color(0x14000000) : const Color(0x24FFFFFF);
 
 /// Een tekstlink: een naam onder "Ook in", "Toon alles", "Meer lezen".
 ///

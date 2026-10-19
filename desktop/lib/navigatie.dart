@@ -19,6 +19,7 @@ library;
 import 'package:flutter/material.dart';
 
 import 'tv.dart';
+import 'ui/glas.dart';
 import 'ui/maten.dart';
 
 /// De navigator binnen de schil. De chrome staat erbuiten en blijft dus staan.
@@ -181,6 +182,9 @@ class _BovenKnip extends CustomClipper<Rect> {
 /// scherm even lang klaar.
 const double _afstand = .06;
 
+/// Hoe stil de pagina eronder wordt bij een diepte-overgang: nog 55 % zichtbaar.
+const double kDiepteStil = .55;
+
 Widget _schuif(
   BuildContext context,
   Animation<double> animatie,
@@ -195,6 +199,26 @@ Widget _schuif(
   // eigen `dispose`, en eentje maken in een bouwer die per beeld draait is een lek dat de
   // lekopsporing in een toets terecht meldt. Een tween met een curve erin heeft geen levensloop.
   final curve = CurveTween(curve: Curves.easeOutCubic);
+  // Diepte (Saber, 18-10-2026: "diepte-overgang"): de pagina eronder wijkt opzij en wordt stiller, de
+  // nieuwe schuift in en komt op. Niet op een tv: daar kost een doorzichtige volle pagina elk beeld een
+  // kopie van het scherm, en de Shield heeft die marge niet.
+  //
+  // **Zonder schalen.** Eerst week de oude pagina ook terug naar 96 % en kwam de nieuwe van 97 %. Dat
+  // kostte gemeten het meeste: elk beeld van de overgang de hele pagina opnieuw tekenen, op een andere
+  // maat. Op de pc (2560×1440, Skia) bij vier keer album of artiest openen en terug 47 beelden te laat,
+  // zonder schalen 11; op de gsm 155 tegen 120. Het dimmen en het opzij schuiven kosten bijna niets.
+  if (!isTv) {
+    return SlideTransition(
+      position: Tween(begin: Offset.zero, end: const Offset(-_afstand / 3, 0)).chain(curve).animate(terug),
+      child: FadeTransition(
+        opacity: Tween(begin: 1.0, end: kDiepteStil).chain(curve).animate(terug),
+        child: SlideTransition(
+          position: Tween(begin: const Offset(_afstand / 2, 0), end: Offset.zero).chain(curve).animate(animatie),
+          child: FadeTransition(opacity: animatie.drive(curve), child: kind),
+        ),
+      ),
+    );
+  }
   return SlideTransition(
     // De pagina ONDER deze wijkt naar links zodra er een nieuwe overheen komt.
     position: Tween(begin: Offset.zero, end: const Offset(-_afstand / 2, 0))
@@ -299,6 +323,8 @@ class StapelDiepte extends NavigatorObserver {
     // hertekening tijdens het bouwen aanvragen. De wortel kan niet terug, de beginwaarde is onwaar,
     // dus die eerste meting is stil.
     kanTerug.value = n != null && n.canPop();
+    // Een andere pagina: het glas mag na een terugval opnieuw proberen (zie [GlasKwaliteit]).
+    GlasKwaliteit.paginaGewisseld();
   }
 
   @override

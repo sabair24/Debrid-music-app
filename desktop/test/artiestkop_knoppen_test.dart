@@ -176,15 +176,14 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
 
-    // Twee woorden: tweede regel ingesprongen. Eén woord: niets om je toe te verhouden.
+    // Eén regel als hij past (Saber, 18-10-2026: "2 Fabiola" stond als "2" boven "FABIOLA").
     await tester.pumpWidget(omhulsel(const EditorialeKop(naam: 'Stromae')));
     await tester.pump();
     expect(find.text('STROMAE'), findsOneWidget);
 
-    await tester.pumpWidget(omhulsel(const EditorialeKop(naam: 'Michael Jackson')));
+    await tester.pumpWidget(omhulsel(const EditorialeKop(naam: '2 Fabiola')));
     await tester.pump();
-    expect(find.text('MICHAEL'), findsOneWidget);
-    expect(find.text('JACKSON'), findsOneWidget);
+    expect(find.text('2 FABIOLA'), findsOneWidget);
   });
 
   testWidgets('zonder enig beeld blijft de kop een compositie, geen gat', (tester) async {
@@ -204,7 +203,7 @@ void main() {
     expect(tester.takeException(), isNull);
     final kop = tester.getRect(find.byType(EditorialeKop));
     expect(kop.height, greaterThan(300), reason: 'de kop mag niet inzakken tot een regel tekst');
-    expect(find.text('PHIL'), findsOneWidget);
+    expect(find.textContaining('PHIL'), findsOneWidget);
   });
 
   /// De kop moet ZO BREED zijn als de ruimte die hij krijgt — op elke maat, met en zonder beeld.

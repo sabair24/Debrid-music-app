@@ -336,10 +336,10 @@ void main() {
     testWidgets('de naam is op een tv de maat uit de ontwerpschets, niet die van een iPad', (t) async {
       await _scherm(t);
       await t.pumpWidget(_omhulsel(const EditorialeKop(naam: 'Michael Jackson')));
-      expect(t.widget<Text>(find.text('MICHAEL')).style?.fontSize, kTvArtiestNaam);
+      expect(t.widget<Text>(find.textContaining('MICHAEL').first).style?.fontSize, kTvArtiestNaam);
       setTvModeForTest(false);
       await t.pumpWidget(_omhulsel(const EditorialeKop(naam: 'Michael Jackson', key: ValueKey('pc'))));
-      expect(t.widget<Text>(find.text('MICHAEL')).style?.fontSize, artiestNaamGrootte(960),
+      expect(t.widget<Text>(find.textContaining('MICHAEL').first).style?.fontSize, artiestNaamGrootte(960),
           reason: 'buiten een tv verandert er niets');
     });
 
@@ -389,7 +389,7 @@ void main() {
             FilledButton(onPressed: () {}, child: const Text('ander')),
             TekstLink(
               onPressed: () {},
-              bouw: (g) => Text('JC Chasez', style: tvLinkStijl(const TextStyle(color: kGedempt), g)),
+              bouw: (g) => Text('JC Chasez', style: tvLinkStijl(TextStyle(color: kGedempt), g)),
             ),
           ]),
         ),
@@ -443,7 +443,10 @@ void main() {
       expect(bron, contains('final eigenSleutel = artistKey(widget.artist.name);'));
       expect(bron, contains('.where((a) => artistKey(a.artist) == eigenSleutel)'));
       expect(bron, contains('final disco = _discografie(bezit);'));
-      expect('vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), {..._hoezen, ..._groepHoezen})'.allMatches(bron).length, 1);
+      // Sinds 18-10-2026 wordt er alleen nog in _load samengevoegd, één keer per bezoek; zie
+      // discografie_vast_test.dart.
+      expect('mergeDiscography([dz.releases, mb.releases, dg.releases])'.allMatches(bron).length, 1);
+      expect(bron, contains('final zeef = toonVast(vast, hoezen, toonAlles: _toonAlles);'));
       expect(bron, contains('if (vorige != null && _zelfdeInvoer(invoer, _discoInvoer)) return vorige;'));
     });
 

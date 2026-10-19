@@ -76,7 +76,8 @@ enum Ingang {
 String? weigerVanBuiten(String pad, String methode) {
   const exact = {
     '/health', '/api/catalog', '/api/album/facts', '/api/state', '/api/state/ops', '/api/uitwijk',
-    '/api/config', '/api/radio', '/api/jobs', '/api/corrections', '/api/move/plan', '/api/move/apply',
+    '/api/config', '/api/radio', '/api/jobs', '/api/kwaliteit', '/api/corrections', '/api/move/plan',
+    '/api/move/apply',
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
   };
   const voorvoegsels = ['/stream/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
@@ -580,6 +581,8 @@ class LanServer {
         return _jobsClear(req);
       case '/api/jobs/stopwens':
         return _jobStopWens(req);
+      case '/api/kwaliteit':
+        return _kwaliteit(req);
       case '/api/rutracker/sessie':
         return _rutrackerSessie(req);
       case '/api/config':
@@ -1133,7 +1136,7 @@ class LanServer {
         [for (final id in (map['trackIds'] as List? ?? const [])) id.toString()],
         (map['index'] as int?) ?? 0,
       );
-      return _json(req.response, {'ok': true});
+      return await _json(req.response, {'ok': true});
     } catch (e) {
       // A speaker that has gone off the network, or a track that isn't there any more. The
       // client shows this, so it must read like something a person can act on.
@@ -1155,7 +1158,7 @@ class LanServer {
         [for (final id in (map['trackIds'] as List? ?? const [])) id.toString()],
         (map['index'] as int?) ?? 0,
       );
-      return _json(req.response, {'ok': true});
+      return await _json(req.response, {'ok': true});
     } catch (e) {
       return _json(req.response, {'error': '$e'}, status: HttpStatus.badRequest);
     }
@@ -1179,7 +1182,7 @@ class LanServer {
         (map['action'] ?? '') as String,
         value: map['value'] as int?,
       );
-      return _json(req.response, {'ok': true});
+      return await _json(req.response, {'ok': true});
     } catch (e) {
       return _json(req.response, {'error': '$e'}, status: HttpStatus.badRequest);
     }
@@ -1383,20 +1386,25 @@ class LanServer {
     RandomAccessFile? raf;
     try {
       final f = File(track.path);
-      if (!f.existsSync()) return _json(res, {'reden': 'het bestand staat er niet meer'});
+      if (!f.existsSync()) return await _json(res, {'reden': 'het bestand staat er niet meer'});
       final grootte = f.lengthSync();
       var kop = const <int>[];
       // Vierenzestig, net als in `player.dart`: de STREAMINFO van een FLAC loopt tot byte 42.
       if (grootte > 0) {
         raf = f.openSync();
         kop = raf.readSync(64);
+        // Meteen dicht, vóór het antwoord: met `return await` hieronder liep het `finally` pas als
+        // het antwoord helemaal weg was, en dan hield de pc het bestand nog open terwijl de
+        // aanvrager al verder ging (op Windows: niet te verplaatsen of te wissen).
+        raf.closeSync();
+        raf = null;
       }
       final reden = waaromNietTeOpenen(naam: track.path, bytes: grootte, kop: kop);
       if (reden == null) {
         res.statusCode = HttpStatus.noContent;
-        return res.close();
+        return await res.close();
       }
-      return _json(res, {'reden': reden});
+      return await _json(res, {'reden': reden});
     } catch (_) {
       // Niet kunnen kijken is geen uitspraak.
       res.statusCode = HttpStatus.noContent;
@@ -1672,7 +1680,7 @@ class LanServer {
       // zoeken hier op de pc gebeurt. Alles wat de pc wist over waarom er niets binnenkwam bleef op
       // de pc. Zie ook `remote_services.dart`.
       final rt = service.rutracker;
-      return _json(req.response, {
+      return await _json(req.response, {
         'results': [for (final r in results) r.toJson()],
         'rutracker': {
           'fout': rt.lastError,
@@ -1704,7 +1712,7 @@ class LanServer {
     if (fout != null) return _json(req.response, {'error': fout}, status: HttpStatus.badRequest);
     try {
       final (torrent, files) = await service.tracklist(SearchResult.fromJson(body));
-      return _json(req.response, {
+      return await _json(req.response, {
         'torrentId': torrent.id,
         'files': [
           for (final f in files)
@@ -1737,7 +1745,7 @@ class LanServer {
     if (q.trim().isEmpty) return _json(req.response, {'files': []});
     try {
       final files = await service.search(q);
-      return _json(req.response, {'files': [for (final f in files) f.toJson()]});
+      return await _json(req.response, {'files': [for (final f in files) f.toJson()]});
     } catch (e) {
       return _unavailable(req, 'Soulseek zoeken mislukte: $e');
     }
@@ -1848,7 +1856,7 @@ class LanServer {
     if (teVeel != null) return _teVeel(req, teVeel);
     try {
       final started = await startSoulseekDownload(body);
-      return _json(req.response, {'ok': started});
+      return await _json(req.response, {'ok': started});
     } catch (e) {
       return _unavailable(req, '$e');
     }
@@ -1867,7 +1875,7 @@ class LanServer {
     if (teVeel != null) return _teVeel(req, teVeel);
     try {
       final started = await startSoulseekAlbumDownload(body);
-      return _json(req.response, {'started': started});
+      return await _json(req.response, {'started': started});
     } catch (e) {
       return _unavailable(req, '$e');
     }
@@ -1906,6 +1914,40 @@ class LanServer {
         : manager.jobs.cast<DownloadJob?>().firstWhere((j) => j?.name == name, orElse: () => null);
     if (job != null) await manager.stopWens(job);
     return _json(req.response, {'ok': job != null});
+  }
+
+  /// Kwaliteit op een ander toestel: de stand van de vervangjacht, en wensen op de verlanglijst van
+  /// de pc (Saber, 18-10-2026: "gsm toont de pc").
+  ///
+  /// Hier, want de verlanglijst, de jacht en je eigen keuzes staan op de pc. Op de gsm liep een eigen,
+  /// lege verlanglijst: de strook verscheen daar nooit, en "Laat de app zoeken" zette wensen op een
+  /// lijst waar niemand naar zocht.
+  ///
+  /// GET: `{jacht}`. POST `{ids, vrijgeven}`: die nummers op de verlanglijst; met `vrijgeven` eerst de
+  /// bescherming van je eigen keuzes eraf. Antwoord `{vrij, nieuw, gevonden, jacht}`.
+  Future<void> _kwaliteit(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    if (req.method != 'POST') {
+      await manager.ververJachtStand();
+      return _json(req.response, {'jacht': manager.jacht.value.toJson()});
+    }
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final nummers = [
+      for (final id in (body['ids'] as List? ?? const []))
+        if (id is String)
+          if (catalog.track(id) case final t?) t,
+    ];
+    final vrij = body['vrijgeven'] == true ? await library.geefEigenKeuzeVrij(nummers) : 0;
+    final nieuw = await manager.wensEchteVersies(nummers, gezag: library.tagsVoorVervanger);
+    await manager.ververJachtStand();
+    return _json(req.response, {
+      'vrij': vrij,
+      'nieuw': nieuw,
+      'gevonden': nummers.length,
+      'jacht': manager.jacht.value.toJson(),
+    });
   }
 
   /// De RuTracker-aanmelding van een toestel overnemen op de pc.
@@ -2116,7 +2158,7 @@ class LanServer {
           final o = await AiService(() => config.anthropicKey,
                   werkruimteVan: () => config.anthropicWorkspace)
               .maakRadioplan((body['zin'] ?? '') as String);
-          return _json(req.response, {
+          return await _json(req.response, {
             'genre': o.genre,
             'aantal': o.aantal,
             'aantalGenoemd': o.aantalGenoemd,
@@ -2190,7 +2232,7 @@ class LanServer {
           // `default` hieronder en zegt hij eerlijk dat hij het niet kan.
           final teDoen = _tracksFor(body['trackIds']);
           if (teDoen.isEmpty) {
-            return _json(req.response, {'error': 'Geen nummers opgegeven.'},
+            return await _json(req.response, {'error': 'Geen nummers opgegeven.'},
                 status: HttpStatus.badRequest);
           }
           final hoesB64Nummer = body['cover'] as String?;
@@ -2214,7 +2256,7 @@ class LanServer {
         case 'artistArt':
           final artist = (body['artist'] ?? '') as String;
           if (artist.isEmpty) {
-            return _json(req.response, {'error': 'Geen artiest opgegeven.'},
+            return await _json(req.response, {'error': 'Geen artiest opgegeven.'},
                 status: HttpStatus.badRequest);
           }
           await library.setArtistArt(
@@ -2230,7 +2272,7 @@ class LanServer {
           final waarde = (body['waarde'] ?? '') as String;
           final instelling = KopInstelling.lees(waarde);
           if (artist.isEmpty || scherm == null || (waarde.isNotEmpty && instelling == null)) {
-            return _json(req.response, {'error': 'Ongeldige kopinstelling.'}, status: HttpStatus.badRequest);
+            return await _json(req.response, {'error': 'Ongeldige kopinstelling.'}, status: HttpStatus.badRequest);
           }
           await library.setArtistArt(artist, kopSoort(scherm), instelling?.schrijf() ?? '');
         case 'renumber':
@@ -2251,7 +2293,7 @@ class LanServer {
             stappen.add((path: t.path, no: no, title: rauw['title'] as String?));
           }
           if (stappen.isEmpty) {
-            return _json(req.response, {'error': 'Geen nummers gevonden om te hernummeren.'},
+            return await _json(req.response, {'error': 'Geen nummers gevonden om te hernummeren.'},
                 status: HttpStatus.badRequest);
           }
           await library.hernummer(stappen, totaal);
@@ -2265,7 +2307,7 @@ class LanServer {
           // halen de andere toestellen hem vanzelf op.
           final hoesB64 = (body['cover'] ?? '') as String;
           if (hoesB64.isEmpty) {
-            return _json(req.response, {'error': 'Geen hoes meegestuurd.'},
+            return await _json(req.response, {'error': 'Geen hoes meegestuurd.'},
                 status: HttpStatus.badRequest);
           }
           await library.setAlbumCover(album!, config, base64Decode(hoesB64));
@@ -2280,7 +2322,7 @@ class LanServer {
           final rolArtiest = (body['artist'] ?? '') as String;
           final rolAlbum = (body['album'] ?? '') as String;
           if (rolArtiest.isEmpty || rolAlbum.isEmpty) {
-            return _json(req.response, {'error': 'Geen album opgegeven.'},
+            return await _json(req.response, {'error': 'Geen album opgegeven.'},
                 status: HttpStatus.badRequest);
           }
           if (body['clear'] == true) {
@@ -2309,7 +2351,7 @@ class LanServer {
             keuzes[t.path] = (rij == null || rij.isEmpty) ? null : rij;
           }
           if (keuzes.isEmpty) {
-            return _json(req.response, {'error': 'Geen nummers gevonden om toe te wijzen.'},
+            return await _json(req.response, {'error': 'Geen nummers gevonden om toe te wijzen.'},
                 status: HttpStatus.badRequest);
           }
           await library.wijsRijenToe(keuzes);
@@ -2319,24 +2361,24 @@ class LanServer {
             final t = id is String ? catalog.track(id) : null;
             if (t != null) paths.add(t.path);
           }
-          if (paths.isEmpty) return _json(req.response, {'ok': false, 'reason': 'niets gevonden'});
+          if (paths.isEmpty) return await _json(req.response, {'ok': false, 'reason': 'niets gevonden'});
           final vanSchijf = body['fromDisk'] == true;
           // Van buiten gaat er nooit iets definitief weg: altijd de prullenbak, en zonder prullenbak
           // alleen thuis. Een gestolen gsm kan zo hoogstens iets in de prullenbak zetten.
           if (vanBuiten && vanSchijf) {
             if (!prullenbakAanwezig()) {
-              return _json(req.response,
+              return await _json(req.response,
                   {'error': 'Van buitenaf gaat verwijderen alleen naar de prullenbak, en deze pc heeft er geen.'},
                   status: HttpStatus.forbidden);
             }
             final teVeel = _quotum(req, kQuotumPrullenbak, paths.length);
-            if (teVeel != null) return _teVeel(req, teVeel);
+            if (teVeel != null) return await _teVeel(req, teVeel);
           }
           await library.removeTracks(paths,
               fromDisk: vanSchijf,
               naarPrullenbak: body['naarPrullenbak'] == true || (vanBuiten && vanSchijf));
         default:
-          return _json(req.response, {'error': 'Onbekende bewerking: $op'},
+          return await _json(req.response, {'error': 'Onbekende bewerking: $op'},
               status: HttpStatus.badRequest);
       }
     } catch (e) {
@@ -2442,7 +2484,7 @@ class LanServer {
     try {
       final moved = await library.moveTracksToAlbum(tracks, target, config,
           moveFiles: body['moveFiles'] != false, plan: uitTeVoeren);
-      return _json(req.response, {'moved': moved});
+      return await _json(req.response, {'moved': moved});
     } catch (e) {
       return _unavailable(req, 'De pc kon dat niet verplaatsen: $e');
     }

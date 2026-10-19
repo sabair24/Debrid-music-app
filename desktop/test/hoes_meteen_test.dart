@@ -7,6 +7,7 @@
 /// (zie binnenkomst_test.dart).
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -101,6 +102,65 @@ void main() {
       await t.pump();
     }
     expect(voor, 1);
+    await t.pumpAndSettle();
+  });
+
+  testWidgets('de cd wacht bij het eerste aanwijzen op de scans van schijf, en schuift dan pas uit', (t) async {
+    // Saber, 18-10-2026: de cd schoof uit als getekende schijf en de echte cd kwam er pas later overheen.
+    final scan = Completer<Uint8List?>();
+    await t.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: AlbumTegel(
+            breedte: 180,
+            hoes: (maat) => SizedBox.square(dimension: maat, child: const ColoredBox(color: Colors.teal)),
+            titel: 'Plaat',
+            onTap: () {},
+            schijf: (maat) => SizedBox.square(key: const ValueKey('cd'), dimension: maat),
+            onAfspelen: () {},
+            voorladen: () => scan.future,
+          ),
+        ),
+      ),
+    ));
+    final muis = await t.createGesture(kind: PointerDeviceKind.mouse);
+    await muis.addPointer(location: const Offset(1, 1));
+    addTearDown(muis.removePointer);
+    await muis.moveTo(t.getCenter(find.byType(AlbumTegel)));
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(const ValueKey('cd')), findsNothing, reason: 'nog geen scan: nog geen cd');
+    scan.complete(null);
+    await t.pump();
+    await t.pump();
+    expect(find.byKey(const ValueKey('cd')), findsOneWidget, reason: 'scan gelezen: nu de cd');
+    await t.pumpAndSettle();
+  });
+
+  testWidgets('een trage schijf houdt de cd hooguit een kwart seconde tegen', (t) async {
+    await t.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: AlbumTegel(
+            breedte: 180,
+            hoes: (maat) => SizedBox.square(dimension: maat, child: const ColoredBox(color: Colors.teal)),
+            titel: 'Plaat',
+            onTap: () {},
+            schijf: (maat) => SizedBox.square(key: const ValueKey('cd'), dimension: maat),
+            onAfspelen: () {},
+            voorladen: () => Completer<Uint8List?>().future,
+          ),
+        ),
+      ),
+    ));
+    final muis = await t.createGesture(kind: PointerDeviceKind.mouse);
+    await muis.addPointer(location: const Offset(1, 1));
+    addTearDown(muis.removePointer);
+    await muis.moveTo(t.getCenter(find.byType(AlbumTegel)));
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 260));
+    await t.pump();
+    expect(find.byKey(const ValueKey('cd')), findsOneWidget);
     await t.pumpAndSettle();
   });
 

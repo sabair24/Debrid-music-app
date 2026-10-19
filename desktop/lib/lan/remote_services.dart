@@ -25,7 +25,10 @@ import '../organize.dart';
 import '../search.dart';
 import '../soulseek.dart';
 import '../torbox.dart';
+import '../models.dart' show Track;
+import '../vervangjacht.dart';
 import 'client.dart';
+import 'vaste_naam.dart' show pcNummerId;
 
 /// The one thing all three need: a call to the PC that either answers or says why not.
 ///
@@ -385,6 +388,41 @@ class RemoteDownloadManager extends DownloadManager {
   /// Torrents draaien op de pc; daar ruimt de pc zijn eigen werkmappen op.
   @override
   Future<int> ruimDodeTorrentwerkOp() async => 0;
+
+  /// De stand van de vervangjacht op de pc (Kwaliteit). Hier loopt geen jacht: de verlanglijst staat
+  /// op de pc. Met de eigen, lege lijst van dit toestel verscheen de strook hier nooit.
+  @override
+  Future<void> ververJachtStand() async {
+    try {
+      final res = await _rpc.get('/api/kwaliteit', timeout: const Duration(seconds: 15));
+      _neemJacht(res['jacht']);
+    } catch (_) {/* de strook blijft staan zoals hij was; de volgende tik vraagt het opnieuw */}
+  }
+
+  void _neemJacht(Object? j) {
+    if (j is Map) jacht.value = VervangJacht.fromJson(Map<String, dynamic>.from(j));
+  }
+
+  /// Op de verlanglijst van de PC, waar de jacht loopt. [gezag] zoekt de pc zelf op, uit het bestand
+  /// dat daar ligt.
+  @override
+  Future<int> wensEchteVersies(Iterable<Track> nummers, {TrackTags Function(Track)? gezag}) async =>
+      (await wensOpPc(nummers)).nieuw;
+
+  /// Als [wensEchteVersies], en met [vrijgeven] eerst de bescherming van je eigen keuzes eraf. Ook dat
+  /// gebeurt op de pc (`LibraryStore.geefEigenKeuzeVrij`), want daar staan de keuzes.
+  ///
+  /// Gooit de zin van de pc als die nee zegt, zodat het scherm kan zeggen wat er misging.
+  Future<({int vrij, int nieuw})> wensOpPc(Iterable<Track> nummers, {bool vrijgeven = false}) async {
+    final ids = [
+      for (final t in nummers)
+        if (pcNummerId(t.path) case final id?) id,
+    ];
+    if (ids.isEmpty) return (vrij: 0, nieuw: 0);
+    final res = await _rpc.post('/api/kwaliteit', {'ids': ids, 'vrijgeven': vrijgeven});
+    _neemJacht(res['jacht']);
+    return (vrij: (res['vrij'] as num?)?.toInt() ?? 0, nieuw: (res['nieuw'] as num?)?.toInt() ?? 0);
+  }
 
   /// Put a request in the queue instead of failing. Returns false when there is no queue to put it
   /// in, so the caller can report the original problem rather than a silent success.

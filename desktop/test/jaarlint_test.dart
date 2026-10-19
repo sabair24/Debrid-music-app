@@ -279,6 +279,18 @@ void main() {
       expect(f.label, isNull);
     });
 
+    test('DE VAL: een jaartal 0 is geen jaartal (TheAudioDB bij 2 Fabiola)', () {
+      final f = ArtiestFeiten.uitAudioDb({'intFormedYear': '0', 'intBornYear': '0', 'strCountry': 'Belgium'});
+      expect(f.opgerichtJaar, isNull, reason: 'anders: "OPGERICHT 0"');
+      expect(f.geborenJaar, isNull);
+      expect(f.actief, isNull, reason: 'anders: "ACTIEF sinds 0"');
+      expect(f.land, 'Belgium');
+      // Ook uit een bewaard bestand van vóór deze regel.
+      final oud = ArtiestFeiten.fromJson({'v': ArtiestFeiten.schema, 'oj': 0, 'land': 'Belgium'})!;
+      expect(oud.opgerichtJaar, isNull);
+      expect(oud.actief, isNull);
+    });
+
     test('DE VAL: een ander schema geeft null in plaats van halve feiten', () {
       expect(ArtiestFeiten.fromJson({'v': 0, 'land': 'USA'}), isNull);
       final terug = ArtiestFeiten.fromJson(_mj.toJson())!;

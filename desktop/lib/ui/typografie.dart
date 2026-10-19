@@ -31,7 +31,7 @@ import 'kleuren.dart';
 ///
 /// De negatieve spatiëring hoort bij het gewicht: op deze grootte staan letters van 800 anders veel
 /// te ruim. Schaalt mee met de breedte — zie `artiestNaamGrootte`.
-const kDisplay = TextStyle(
+TextStyle get kDisplay => TextStyle(
   fontSize: 112,
   fontWeight: FontWeight.w800,
   letterSpacing: -3,
@@ -40,7 +40,7 @@ const kDisplay = TextStyle(
 );
 
 /// De kop boven een sectie op een pagina die met [kDisplay] opent — DISCOGRAFIE, OVER.
-const kDisplayKlein = TextStyle(
+TextStyle get kDisplayKlein => TextStyle(
   fontSize: 56,
   fontWeight: FontWeight.w800,
   letterSpacing: -1.5,
@@ -72,7 +72,7 @@ double artiestNaamGrootte(double breedte) {
 const double kTvArtiestNaam = 46;
 
 /// De naam van een scherm, of van een album op zijn eigen pagina.
-const kKopGroot = TextStyle(
+TextStyle get kKopGroot => TextStyle(
   fontSize: 25,
   fontWeight: FontWeight.w800,
   letterSpacing: -.4,
@@ -80,25 +80,25 @@ const kKopGroot = TextStyle(
 );
 
 /// De kop boven een sectie of een lijst.
-const kKop = TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: kTekst);
+TextStyle get kKop => TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: kTekst);
 
 /// De kop boven een rij op het startscherm.
-const kKopKlein = TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: kTekst);
+TextStyle get kKopKlein => TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: kTekst);
 
 /// Gewone tekst: de titel van een nummer in een lijst, een knoplabel.
-const kTekstNormaal = TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: kTekst);
+TextStyle get kTekstNormaal => TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: kTekst);
 
 /// Wat onder een titel staat: artiest, aantal, tijd.
 ///
 /// 13,5 en niet 13 of 14: dit is de maat die het vaakst voorkwam van de zes varianten in die band,
 /// dus zo verschuift er het minst.
-const kTekstBij = TextStyle(fontSize: 13.5, color: kGedempt);
+TextStyle get kTekstBij => TextStyle(fontSize: 13.5, color: kGedempt);
 
 /// Kleine bijzaken: een telling naast een kop, een jaartal, een tijdsduur in een rij.
-const kTekstKlein = TextStyle(fontSize: 12, color: kGedempt);
+TextStyle get kTekstKlein => TextStyle(fontSize: 12, color: kGedempt);
 
 /// Het kleinste dat nog leesbaar hoort te zijn: labels op merkjes en badges.
-const kLabel = TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: kGedempt);
+TextStyle get kLabel => TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: kGedempt);
 
 /// Het kleine kapitaal boven een blok: DOWNLOADS, CREDITS, ARTIESTEN.
 ///
@@ -109,7 +109,7 @@ const kLabel = TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: kGede
 ///
 /// En het stond er al drie keer, in twee maten (11 en 11,5) met steeds dezelfde bedoeling. Dat is
 /// precies het patroon waar dit bestand voor gemaakt is: één ding, één plek.
-const kOpschrift = TextStyle(
+TextStyle get kOpschrift => TextStyle(
   fontSize: 11,
   fontWeight: FontWeight.w700,
   letterSpacing: .6,
@@ -117,7 +117,7 @@ const kOpschrift = TextStyle(
 );
 
 /// Tekst zonder eigen stijl. Zie [kTekstThema] voor waarom deze apart bestaat.
-const kTekstBasis = TextStyle(fontSize: 14, color: kTekst);
+TextStyle get kTekstBasis => TextStyle(fontSize: 14, color: kTekst);
 
 /// De rollen als `TextTheme`, zodat `Theme.of(context).textTheme` ze teruggeeft.
 ///
@@ -130,7 +130,7 @@ const kTekstBasis = TextStyle(fontSize: 14, color: kTekst);
 /// Daarom [kTekstBasis]: 14 punten in de tekstkleur van het palet, wat Material zelf ook als maat
 /// aanhoudt. Er verschuift dus niets; wat er verandert is dat er vanaf nu íets zinnigs terugkomt
 /// waar een widget om vraagt, in plaats van een kleur die niet in dit palet staat.
-const kTekstThema = TextTheme(
+TextTheme get kTekstThema => TextTheme(
   headlineLarge: kKopGroot,
   headlineMedium: kKop,
   headlineSmall: kKopKlein,

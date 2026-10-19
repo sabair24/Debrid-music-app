@@ -259,12 +259,16 @@ void main() {
           'de regel "Ook in" noemde de leden van het tranceproject');
     });
 
+    // Sinds 18-10-2026 ligt de lijst vast zodra hij verschijnt (zie toonVast in discography.dart). De
+    // hoesregel van het archief geldt dus voor de BEWAARDE lijst: het volgende bezoek.
     test('DE VAL: de hoezen van het archief komen op de pagina, en tellen pas mee als ze er zijn', () {
       final main = bron('lib/main.dart');
       staatErin(main, 'unawaited(_haalGroepHoezen(naam, alles));', 'de ronde wordt nooit gestart');
-      staatErin(main, '{..._hoezen, ..._groepHoezen}', 'gevonden hoezen komen niet op de regels');
-      staatErin(main, '(_dgStatus != BronStatus.geenToken && _hoezen.isNotEmpty) || _groepKlaar',
+      staatErin(main, '{..._versHoezen, ..._hoezen, ..._groepHoezen}',
+          'gevonden hoezen komen niet op de regels');
+      staatErin(main, 'final zeefHoezen = dg.status != BronStatus.geenToken && dg.hoezen.isNotEmpty;',
           'de hoesregel');
+      staatErin(main, 'zeefHoezen: _versZeefHoezen || _groepKlaar', 'de hoesregel van de bewaarde lijst');
       staatErin(main, '_groepKlaar = nieuw > 0;',
           'zonder vondst hoort een artiest zijn platen niet te verliezen');
     });

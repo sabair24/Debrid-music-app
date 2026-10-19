@@ -1164,7 +1164,7 @@ class RuTrackerService {
         if (again.ok) {
           pendingCaptcha = null;
           lastError = '';
-          return search(query, allowRelogin: false);
+          return await search(query, allowRelogin: false);
         }
         // A captcha cannot be answered from here — but it CAN be said out loud.
         pendingCaptcha = again.captcha;

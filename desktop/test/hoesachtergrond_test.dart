@@ -23,7 +23,9 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  Widget pagina({ImageProvider? beeld, double balk = 0, ScrollController? rol}) => MaterialApp(
+  Widget pagina({ImageProvider? beeld, double balk = 0, ScrollController? rol, bool stil = false}) => MaterialApp(
+        builder: (context, kind) =>
+            stil ? MediaQuery(data: MediaQuery.of(context).copyWith(disableAnimations: true), child: kind!) : kind!,
         home: Scaffold(
           body: Stack(
             children: [
@@ -128,13 +130,33 @@ void main() {
         .getTranslation()
         .y;
 
+    // Half zo snel als de pagina (parallax, Saber 18-10-2026): de kop ligt dieper.
     rol.jumpTo(120);
     await t.pump();
-    expect(schuif(), -120, reason: 'de kop schuift weg en het beeld blijft achter in het venster');
+    expect(schuif(), -120 * kParallax, reason: 'de kop schuift weg, trager dan de pagina');
 
     rol.jumpTo(0);
     await t.pump();
     expect(schuif(), 0);
+
+    // Helemaal weg als de pagina twee keer zijn hoogte verder is, en niet verder dan dat.
+    rol.jumpTo(2000);
+    await t.pump();
+    expect(schuif(), -400);
+  });
+
+  testWidgets('bij minder beweging schuift hij gewoon mee, zonder parallax', (t) async {
+    final rol = ScrollController();
+    addTearDown(rol.dispose);
+    await t.pumpWidget(pagina(beeld: hoes, rol: rol, stil: true));
+    rol.jumpTo(120);
+    await t.pump();
+    final y = t
+        .widget<Transform>(find.descendant(of: find.byType(HoesAchtergrond), matching: find.byType(Transform)).first)
+        .transform
+        .getTranslation()
+        .y;
+    expect(y, -120);
   });
 
   testWidgets('DE GRENS: de rand achter de balk alleen als er een balk overheen zweeft', (t) async {
@@ -193,7 +215,7 @@ Future<ui.Image> _oudeOpbouw(WidgetTester t, ui.Image bron, Size vak) async {
                     ),
                   ),
                 ),
-                const ColoredBox(color: HoesAchtergrond.donkering),
+                ColoredBox(color: HoesAchtergrond.donkering),
               ],
             ),
           ),

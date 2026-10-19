@@ -14,6 +14,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'kleuren.dart';
 
 // ── Ruimte ───────────────────────────────────────────────────────────────────
 //
@@ -86,7 +87,8 @@ double binnenHoek(double buiten, double vulling) =>
 // contactschaduw die de rand láát raken, en een wijde die optilt. Dat verschil is wat je ziet.
 
 /// In rust: een kaart ligt op de pagina in plaats van de pagina te zíjn.
-const List<BoxShadow> kSchaduw1 = [
+List<BoxShadow> get kSchaduw1 => Thema.licht ? _zacht(_schaduw1) : _schaduw1;
+const List<BoxShadow> _schaduw1 = [
   BoxShadow(color: Color(0x4D000000), blurRadius: 3, offset: Offset(0, 1)),
   BoxShadow(color: Color(0x38000000), blurRadius: 12, offset: Offset(0, 3)),
 ];
@@ -95,16 +97,24 @@ const List<BoxShadow> kSchaduw1 = [
 ///
 /// De wijde laag is exact de bestaande hoverschaduw van `AlbumCard` (zwart op .45, blur 22, 10
 /// omlaag). Die klopte al; wat ontbrak was dat er in rust iéts onder lag om vanaf te tillen.
-const List<BoxShadow> kSchaduw2 = [
+List<BoxShadow> get kSchaduw2 => Thema.licht ? _zacht(_schaduw2) : _schaduw2;
+const List<BoxShadow> _schaduw2 = [
   BoxShadow(color: Color(0x47000000), blurRadius: 5, offset: Offset(0, 2)),
   BoxShadow(color: Color(0x73000000), blurRadius: 22, offset: Offset(0, 10)),
 ];
 
 /// Wat over de app heen ligt: een blad, een menu, een dialoog.
-const List<BoxShadow> kSchaduw3 = [
+List<BoxShadow> get kSchaduw3 => Thema.licht ? _zacht(_schaduw3) : _schaduw3;
+const List<BoxShadow> _schaduw3 = [
   BoxShadow(color: Color(0x4D000000), blurRadius: 6, offset: Offset(0, 2)),
   BoxShadow(color: Color(0x85000000), blurRadius: 36, offset: Offset(0, 14)),
 ];
+
+/// Op licht dezelfde vorm met ruim een derde van het zwart: 45 % zwart onder een witte kaart is een
+/// vlek, geen diepte (18-10-2026, licht thema).
+List<BoxShadow> _zacht(List<BoxShadow> s) =>
+    _zachtGeheugen[s] ??= [for (final b in s) b.copyWith(color: b.color.withValues(alpha: b.color.a * .38))];
+final _zachtGeheugen = <List<BoxShadow>, List<BoxShadow>>{};
 
 /// Geen schaduw. Bestaat als naam zodat de tv-uitweg leesbaar is.
 const List<BoxShadow> kGeenSchaduw = <BoxShadow>[];

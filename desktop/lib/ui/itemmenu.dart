@@ -147,8 +147,10 @@ Future<MenuRegel?> _viaBlad(BuildContext context, ItemMenu menu) async {
       return BackdropGroup(
         child: GlasVlak(
           vorm: const BorderRadius.vertical(top: Radius.circular(16)),
-          vulling: isTv ? const BoxDecoration(color: kBovenop) : null,
+          vulling: isTv ? BoxDecoration(color: kBovenop) : null,
           kleur: isTv ? null : kBovenop,
+          // Over ander glas heen: dat wordt zolang dicht (nooit glas op glas, 18-10-2026).
+          bovenop: true,
           // Een eigen doorzichtig Material BOVEN de vulling. De regels zijn InkWells, en die tekenen
           // hun selectie en rimpeling op het Material van het blad — en dat ligt ONDER de vulling van
           // het glas. Op de Shield (16-10-2026) zag je in dit menu daardoor niet welke regel de
@@ -280,11 +282,11 @@ class ItemMenuBlad extends StatelessWidget {
                     Text(s,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: kGedempt, fontSize: 12.5)),
+                        style: TextStyle(color: kGedempt, fontSize: 12.5)),
                 ],
               ),
             ),
-            const Divider(color: kLijn, height: 1),
+            Divider(color: kLijn, height: 1),
             Flexible(
               child: ListView(
                 shrinkWrap: true,
@@ -292,7 +294,7 @@ class ItemMenuBlad extends StatelessWidget {
                 children: [
                   for (var b = 0; b < blokken.length; b++) ...[
                     if (b > 0)
-                      const Divider(color: kLijn, height: 9, indent: 20, endIndent: 20),
+                      Divider(color: kLijn, height: 9, indent: 20, endIndent: 20),
                     for (final r in blokken[b])
                       InkWell(
                         // Op een afstandsbediening legt een blad de markering nergens neer, dus zou

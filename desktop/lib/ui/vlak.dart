@@ -242,7 +242,10 @@ LinearGradient? kleurWas(Color? basis) {
 /// die speelt (nu 10 %)". Een tiende viel op een gsm weg tegen de zwarte vloer; een kwart zegt bij
 /// welke plaat je bent zonder dat de balk een gekleurd blok wordt. De onderbalk krijgt dezelfde tint,
 /// zodat speler en navigatie samen één vlak zijn.
-const double kBalkZweem = .24;
+///
+/// **38 %, sinds 18-10-2026.** Saber koos "sterker, 35-40 %" bij het nieuwe glas: de balk kleurt
+/// duidelijk mee met de plaat.
+const double kBalkZweem = .38;
 
 Color balkKleur(int? kleur) {
   final basis = wasBasis(kleur);
@@ -417,12 +420,63 @@ const kGlasOnderlaag = Color(0xCC07080C);
 /// glans ook over een donkere grond.
 const kGlasOnderlaagMat = Color(0x7307080C);
 
+/// Op licht: wit glas. Dicht genoeg dat paarse letters er 4,5:1 halen, ook boven een donkere hoes.
+const kGlasOnderlaagLicht = Color(0xC7FFFFFF);
+
+/// Hoe licht het is onder de glasknoppen hier (0 = zwart, 1 = wit; de sRGB-helderheid van de grond).
+///
+/// Zet een scherm met een lichte grond onder zijn knoppen: dan wordt de donkere onderlaag van elke
+/// [GlasKnop] daar dichter ([glasOnderlaagVoor]), zodat witte letters 4,5:1 houden (Saber, 18-10-2026:
+/// "automatisch dichter boven licht"). Zonder staat er het donkerste wat de app nu heeft: de kop van
+/// een albumpagina, waar zelfs boven een witte hoes 70 % donkering ligt ([kGrondDonkereKop]).
+class KnopGrond extends InheritedWidget {
+  const KnopGrond({super.key, required this.helderheid, required super.child});
+  final double helderheid;
+
+  static double van(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<KnopGrond>()?.helderheid ??
+      (Thema.licht ? kGrondLichteKop : kGrondDonkereKop);
+
+  @override
+  bool updateShouldNotify(KnopGrond oud) => oud.helderheid != helderheid;
+}
+
+/// De helderheid onder de knoppen van een albumkop in het slechtste geval: een witte hoes onder de
+/// donkering van [HoesAchtergrond] (70 % #07080C): 0,30 + 0,70 x 0,03.
+const double kGrondDonkereKop = .321;
+
+/// Hetzelfde op licht: een witte hoes onder de waas van gebroken wit (70 % #F3EFE7): 0,30 + 0,70 x 0,94.
+/// Daar wordt de onderlaag van een glasknop dus zo dicht als hij kan ([glasOnderlaagVoor]).
+const double kGrondLichteKop = .958;
+
+/// De dekking van de donkere onderlaag onder vervaagd glas, voor een grond van [helderheid]: 45 % op een
+/// donkere grond (zoals altijd), oplopend tot 82 % boven wit.
+double glasOnderlaagVoor(double helderheid) {
+  final t = ((helderheid - .35) / .40).clamp(0.0, 1.0);
+  return .45 + (.82 - .45) * t;
+}
+
+/// Het contrast van witte letters op een glasknop boven een grond van [helderheid], in het slechtste
+/// punt van de knop (bovenaan, waar het witte waas 30 % is). Zuiver, voor de toets: in sRGB gemengd,
+/// zoals Flutter mengt, en dan de WCAG-formule.
+double glasKnopContrast(double helderheid, {double? onderlaag}) {
+  final a = onderlaag ?? glasOnderlaagVoor(helderheid);
+  const zwart = 0x0C / 255;
+  const waas = .30;
+  final c1 = helderheid * (1 - a) + zwart * a;
+  final c2 = c1 * (1 - waas) + waas;
+  double lineair(double c) => c <= .04045 ? c / 12.92 : math.pow((c + .055) / 1.055, 2.4).toDouble();
+  final l = lineair(c2);
+  return 1.05 / (l + .05);
+}
+
 Widget glasRuit({bool? plat, bool lens = false}) {
   // Volgt de stand van het glas: verandert die (de bewaker in ui/glas.dart), dan tekent de ruit
   // meteen opnieuw, en niet pas bij de volgende opbouw van zijn pagina.
-  return ValueListenableBuilder<GlasStand>(
-    valueListenable: GlasKwaliteit.stand,
-    builder: (_, __, ___) => _glasRuit(plat: plat, lens: lens),
+  return AnimatedBuilder(
+    animation: Listenable.merge([GlasKwaliteit.stand, GlasKwaliteit.bovenop]),
+    // Ligt er een glazen menu of blad over, dan is deze ruit dicht: nooit glas op glas.
+    builder: (_, __) => _glasRuit(plat: GlasKwaliteit.bovenop.value > 0 ? true : plat, lens: lens),
   );
 }
 
@@ -449,17 +503,19 @@ Widget _glasRuit({bool? plat, required bool lens}) {
           Colors.white.withValues(alpha: tv ? .10 : .07),
         ],
       ),
-      border: Border.all(color: Colors.white.withValues(alpha: tv ? .32 : .20)),
+      // Op licht een donker haarrandje: een wit randje op wit glas is er niet.
+      border: Border.all(
+          color: Thema.licht ? Colors.black.withValues(alpha: .10) : Colors.white.withValues(alpha: tv ? .32 : .20)),
     ),
   );
   return DecoratedBox(
-    decoration: const BoxDecoration(
+    decoration: BoxDecoration(
       borderRadius: hoek,
       boxShadow: [
         BoxShadow(
-          color: Color(0x47000000),
+          color: Thema.licht ? const Color(0x24000000) : const Color(0x47000000),
           blurRadius: 10,
-          offset: Offset(0, 3),
+          offset: const Offset(0, 3),
           blurStyle: BlurStyle.outer,
         ),
       ],
@@ -475,7 +531,7 @@ Widget _glasRuit({bool? plat, required bool lens}) {
               // goedgekeurd is: daar schuift niets onder een knop door.
               : Stack(
                   fit: StackFit.expand,
-                  children: [const ColoredBox(color: kGlasOnderlaag), vulling],
+                  children: [ColoredBox(color: Thema.licht ? kGlasOnderlaagLicht : kGlasOnderlaag), vulling],
                 ))
           : Stack(
               fit: StackFit.expand,
@@ -485,8 +541,21 @@ Widget _glasRuit({bool? plat, required bool lens}) {
                 BackdropFilter.grouped(filter: glasMat, child: const SizedBox.expand()),
                 // De lensrand, alleen als vloeibaar glas en alleen voor een ruit die stil staat.
                 if (lens && GlasKwaliteit.stand.value == GlasStand.vloeibaar) const GlasLens(hoek: kHoekRond),
-                const ColoredBox(color: kGlasOnderlaagMat),
+                // Dichter boven een lichte grond ([KnopGrond]); op een donkere 45 %, zoals altijd.
+                Builder(
+                  builder: (context) {
+                    // Op licht wit glas met paarse letters (Saber, gsm, 18-10-2026: "zwarte buttons vind
+                    // ik niet mooi"). Op licht is ook de grond licht, dus de donkere onderlaag die hier
+                    // witte letters leesbaar hield, hoeft niet meer.
+                    if (Thema.licht) return const ColoredBox(color: kGlasOnderlaagLicht);
+                    final a = glasOnderlaagVoor(KnopGrond.van(context));
+                    return ColoredBox(
+                        color: a <= .4501 ? kGlasOnderlaagMat : kGlasOnderlaagMat.withValues(alpha: a));
+                  },
+                ),
                 vulling,
+                const GlasKorrelLaag(),
+                const RepaintBoundary(child: GlasGlans(vorm: hoek)),
               ],
             ),
     ),
@@ -518,7 +587,12 @@ const kKnopIngedrukt = Duration(milliseconds: 110);
 
 /// Hoe ver een ingedrukte glasknop inveert, en hoe sterk hij oplicht.
 const double kKnopVeer = .94;
-const double kKnopLicht = .18;
+const double kKnopLicht = .10;
+
+/// De lichtvlek die vanaf de vinger door de knop uitwaaiert (Saber, 18-10-2026, zoals iOS 26): hoe
+/// lang hij loopt en hoe fel hij begint.
+const kKnopVlekDuur = Duration(milliseconds: 520);
+const double kKnopVlekLicht = .42;
 
 class GlasKnop extends StatefulWidget {
   const GlasKnop({
@@ -580,6 +654,10 @@ class _GlasKnopState extends State<GlasKnop> {
     if (mounted && v != _in) setState(() => _in = v);
   }
 
+  /// Waar de vinger neerkwam, en de hoeveelste keer: elke tik start de lichtvlek opnieuw.
+  Offset? _plek;
+  int _tik = 0;
+
   /// Loopt vanaf het neerdrukken [kKnopIngedrukt] lang; zolang hij loopt, blijft de knop ingedrukt
   /// ogen, ook als de vinger al los is.
   ///
@@ -624,6 +702,13 @@ class _GlasKnopState extends State<GlasKnop> {
     final icoon = w.icoon, label = w.label, tooltip = w.tooltip, teken = w.teken, autofocus = w.autofocus;
     final tvSelectie = isTv && _focus && onPressed != null;
     final kleur = tvSelectie ? kAccent : w.kleur;
+    // Op een tv is de ruit plat glas zonder donkere onderlaag; in het lichte thema zijn witte letters
+    // daarop onleesbaar ("Afspelen" en "Radio" in de glasproef op de Shield, 18-10-2026).
+    final letters = !Thema.licht
+        ? Colors.white
+        : isTv || w._rond
+            ? kTekst
+            : kAccent;
     final knop = w._rond
         // Een IconButton kent geen onFocusChange: een Focus erom die alleen meekijkt.
         ? Focus(
@@ -635,7 +720,7 @@ class _GlasKnopState extends State<GlasKnop> {
               tooltip: tooltip,
               autofocus: autofocus,
               style: IconButton.styleFrom(
-                foregroundColor: tvSelectie ? kAccent : Colors.white,
+                foregroundColor: tvSelectie ? kAccent : letters,
                 minimumSize: const Size(44, 44),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
@@ -648,7 +733,7 @@ class _GlasKnopState extends State<GlasKnop> {
             style: FilledButton.styleFrom(
               backgroundColor: Colors.transparent,
               disabledBackgroundColor: Colors.transparent,
-              foregroundColor: kleur ?? Colors.white,
+              foregroundColor: kleur ?? letters,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
               minimumSize: const Size(64, 44),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -665,7 +750,15 @@ class _GlasKnopState extends State<GlasKnop> {
     // Inveren en oplichten. Alleen een schaal en een doorzichtigheid: geen opbouw van de knop zelf
     // per beeld, en in rust (schaal 1, licht 0) geen enkele extra laag.
     return Listener(
-      onPointerDown: onPressed == null ? null : (_) => _neer(),
+      onPointerDown: onPressed == null
+          ? null
+          : (e) {
+              setState(() {
+                _plek = e.localPosition;
+                _tik++;
+              });
+              _neer();
+            },
       onPointerUp: (_) => _los(),
       onPointerCancel: (_) => _weg(),
       child: AnimatedScale(
@@ -674,7 +767,9 @@ class _GlasKnopState extends State<GlasKnop> {
         curve: aan ? Curves.easeOut : Curves.easeOutBack,
         child: Stack(
           children: [
-            Positioned.fill(child: IgnorePointer(child: glasRuit(plat: isTv || isCompact(context)))),
+            // Ook op een gsm echt glas (Saber, 18-10-2026: "overal echt glas"); de bewaker zet het terug
+            // als het te veel kost. Alleen de tv blijft plat.
+            Positioned.fill(child: IgnorePointer(child: glasRuit(plat: isTv))),
             Positioned.fill(
               child: IgnorePointer(
                 child: AnimatedOpacity(
@@ -689,12 +784,60 @@ class _GlasKnopState extends State<GlasKnop> {
                 ),
               ),
             ),
+            // De lichtvlek vanaf de vinger: een zachte ronde gloed die uitwaaiert en uitdooft.
+            if (_plek != null)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.all(Radius.circular(999)),
+                    child: TweenAnimationBuilder<double>(
+                      key: ValueKey(_tik),
+                      tween: Tween(begin: 0, end: 1),
+                      duration: kKnopVlekDuur,
+                      curve: Curves.easeOutCubic,
+                      builder: (_, t, __) => t >= 1
+                          ? const SizedBox.shrink()
+                          : CustomPaint(painter: KnopLichtvlek(_plek!, t)),
+                    ),
+                  ),
+                ),
+              ),
             knop,
           ],
         ),
       ),
     );
   }
+}
+
+/// De lichtvlek van een ingedrukte glasknop op moment [t] (0 tot 1): rond [plek], groeit van klein naar
+/// ruim de knop, en dooft van [kKnopVlekLicht] naar niets.
+class KnopLichtvlek extends CustomPainter {
+  KnopLichtvlek(this.plek, this.t);
+  final Offset plek;
+  final double t;
+
+  /// De straal en de felheid op moment [t]. Publiek voor de toets.
+  static ({double straal, double licht}) op(Size size, double t) => (
+        straal: 12 + (size.longestSide * 1.3 - 12) * t,
+        licht: kKnopVlekLicht * (1 - t),
+      );
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final o = op(size, t);
+    if (o.licht <= 0) return;
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [Colors.white.withValues(alpha: o.licht), Colors.white.withValues(alpha: 0)],
+        ).createShader(Rect.fromCircle(center: plek, radius: o.straal)),
+    );
+  }
+
+  @override
+  bool shouldRepaint(KnopLichtvlek oud) => oud.t != t || oud.plek != plek;
 }
 
 /// Een ruit ONDER een knop die er al is — voor de pictogrammen in een werkbalk.
@@ -757,9 +900,9 @@ Widget randAchterDeBalk(double hoogte, {bool naarWaas = false}) => Positioned(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                const Color(0xD9000000),
-                const Color(0xC7000000),
-                naarWaas ? const Color(0x44000000) : const Color(0x00000000),
+                paginaWaas(0xD9, donker: Colors.black),
+                paginaWaas(0xC7, donker: Colors.black),
+                paginaWaas(naarWaas ? 0x44 : 0x00, donker: Colors.black),
               ],
               stops: const [0, .55, 1],
             ),
@@ -800,6 +943,9 @@ Widget randAchterDeBalk(double hoogte, {bool naarWaas = false}) => Positioned(
 /// bewaart geen getekend beeld tussen twee frames, dus elke scrollstap vervaagde ruim een miljoen
 /// pixels opnieuw en legde er een masker overheen. Nu wordt vervaging, donkering en uitvloeiing
 /// één keer in een klein beeld gebakken, en tekent elke stap alleen dat beeld.
+/// Hoe snel de kop achter een albumpagina meeschuift, als deel van de pagina: half zo snel.
+const double kParallax = .5;
+
 class HoesAchtergrond extends StatefulWidget {
   const HoesAchtergrond({
     super.key,
@@ -833,7 +979,10 @@ class HoesAchtergrond extends StatefulWidget {
   static const double uitvergroting = 1.2;
 
   /// De donkering die mee oplost — zie de klasse: een witte titel moet er altijd op lezen.
-  static const Color donkering = Color(0xB307080C);
+  ///
+  /// Op licht is het een waas van gebroken wit, om dezelfde reden andersom: daar staat de titel in
+  /// donkere letters, en die moeten ook boven een zwarte hoes lezen (Saber, 18-10-2026).
+  static Color get donkering => Thema.licht ? const Color(0xB3F3EFE7) : const Color(0xB307080C);
 
   /// Het masker: tot iets over de helft het volle beeld, daarna naar niets.
   static const LinearGradient vervloeiing = LinearGradient(
@@ -863,7 +1012,10 @@ class HoesAchtergrond extends StatefulWidget {
 /// te bevatten wat hij nodig heeft, pas dan uitsnijden. Een vervaging binnen een uitsnede vraagt de
 /// tekenmotor om zelf te bepalen hoeveel er buiten die uitsnede meedoet, en dat doen Skia en Impeller
 /// niet gelijk — dan krijg je donkere randen op het ene toestel en niet op het andere.
-Future<ui.Image> bakHoesAchtergrond(ui.Image hoes, {required Size vak, required double schaal}) async {
+Future<ui.Image> bakHoesAchtergrond(ui.Image hoes, {required Size vak, required double schaal, Color? donkering}) async {
+  // Bij het vragen vastgelegd en niet pas na het eerste await: wisselt het thema intussen, dan hoort
+  // dit beeld nog bij het oude, en vraagt de kop zelf een nieuw.
+  final waas = donkering ?? HoesAchtergrond.donkering;
   final w = (vak.width * schaal).ceil().clamp(1, 4096);
   final h = (vak.height * schaal).ceil().clamp(1, 4096);
   final doel = Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble());
@@ -889,7 +1041,7 @@ Future<ui.Image> bakHoesAchtergrond(ui.Image hoes, {required Size vak, required 
     d.saveLayer(doel, Paint());
     d.drawImageRect(vervaagd, doel.shift(Offset(rand.toDouble(), rand.toDouble())), doel,
         Paint()..filterQuality = FilterQuality.low);
-    d.drawRect(doel, Paint()..color = HoesAchtergrond.donkering);
+    d.drawRect(doel, Paint()..color = waas);
     d.drawRect(doel,
         Paint()
           ..blendMode = BlendMode.dstIn
@@ -914,6 +1066,10 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
   Size? _gebakkenVoor;
   Size? _gevraagdVoor;
 
+  /// Voor licht of donker gebakken: de waas erin verschilt ([HoesAchtergrond.donkering]).
+  bool? _gebakkenLicht;
+  bool? _gevraagdLicht;
+
   /// Welke bakbeurt de laatste is. Een venster dat wordt versleept vraagt er veel achter elkaar, en
   /// zonder dit landt een trage oude beurt als laatste.
   int _beurt = 0;
@@ -937,7 +1093,16 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
     final nieuw = b == null ? null : ResizeImage(b, width: 128).resolve(createLocalImageConfiguration(context));
     if (nieuw?.key == _stroom?.key) return;
     _laatStroomLos();
-    _wisHoes();
+    // De gebakken waas van de vorige hoes blijft staan tot de nieuwe klaar is: in Nu speelt wisselt
+    // de hoes terwijl je kijkt, en een leeg tussenbeeld knippert dan over het hele scherm.
+    _hoes?.dispose();
+    _hoes = null;
+    _gebakkenVoor = null;
+    _gevraagdVoor = null;
+    if (nieuw == null) {
+      _gebakken?.dispose();
+      _gebakken = null;
+    }
     _stroom = nieuw;
     if (nieuw == null) return;
     _luisteraar = ImageStreamListener(
@@ -976,12 +1141,13 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
 
   void _bak(Size vak, double dpr) {
     final hoes = _hoes;
-    if (hoes == null || vak.isEmpty || vak == _gevraagdVoor) return;
+    if (hoes == null || vak.isEmpty || (vak == _gevraagdVoor && _gevraagdLicht == Thema.licht)) return;
     _gevraagdVoor = vak;
+    final licht = _gevraagdLicht = Thema.licht;
     final beurt = ++_beurt;
     final schaal = math.min(dpr, HoesAchtergrond.gebakkenBreedte / vak.width);
     final bron = hoes.image.clone();
-    bakHoesAchtergrond(bron, vak: vak, schaal: schaal).then((beeld) {
+    bakHoesAchtergrond(bron, vak: vak, schaal: schaal, donkering: HoesAchtergrond.donkering).then((beeld) {
       if (!mounted || beurt != _beurt) {
         beeld.dispose();
         return;
@@ -990,6 +1156,7 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
         _gebakken?.dispose();
         _gebakken = beeld;
         _gebakkenVoor = vak;
+        _gebakkenLicht = licht;
       });
     }, onError: (Object _) {}).whenComplete(bron.dispose);
   }
@@ -1011,7 +1178,7 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
         width: double.infinity,
         child: LayoutBuilder(builder: (context, maat) {
           final grootte = Size(maat.maxWidth, widget.hoogte);
-          if (grootte != _gebakkenVoor) {
+          if (grootte != _gebakkenVoor || _gebakkenLicht != Thema.licht) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) _bak(grootte, dpr);
             });
@@ -1036,9 +1203,15 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
           : AnimatedBuilder(
               animation: rol,
               child: vak,
-              builder: (_, kind) {
+              builder: (context, kind) {
                 // Nooit omlaag: trek je een lijst voorbij zijn bovenrand, dan blijft het beeld staan.
-                final schuif = rol.hasClients ? rol.offset.clamp(0.0, widget.hoogte) : 0.0;
+                //
+                // Parallax (Saber, 18-10-2026: "parallax-kop"): het beeld schuift half zo snel als de
+                // pagina, dus de kop lijkt dieper te liggen dan wat eroverheen gaat. Niet op een tv
+                // en niet bij minder beweging: daar schuift hij gewoon mee, zoals altijd.
+                final traag = !isTv && !MediaQuery.disableAnimationsOf(context);
+                final f = traag ? kParallax : 1.0;
+                final schuif = rol.hasClients ? rol.offset.clamp(0.0, widget.hoogte / f) * f : 0.0;
                 return Transform.translate(offset: Offset(0, -schuif), child: kind);
               },
             ),

@@ -88,6 +88,38 @@ class VervangJacht {
         volgendeOm: volgendeOm ?? this.volgendeOm,
       );
 
+  /// Over de lijn naar een gsm of iPad (`/api/kwaliteit`): daar loopt geen jacht, de verlanglijst staat
+  /// op de pc. Zonder dit bleef de strook daar altijd weg (Saber, 18-10-2026: "gsm toont de pc").
+  Map<String, dynamic> toJson() => {
+        'opDeLijst': opDeLijst,
+        'dezeBeurt': dezeBeurt,
+        'gedaan': gedaan,
+        'poging': poging,
+        'maxPoging': maxPoging,
+        'bezigMet': bezigMet,
+        'regel': regel,
+        'binnen': binnen,
+        'weggegooid': weggegooid,
+        'volgendeOm': volgendeOm?.millisecondsSinceEpoch,
+      };
+
+  factory VervangJacht.fromJson(Map<String, dynamic> j) {
+    int n(String k) => (j[k] as num?)?.toInt() ?? 0;
+    final om = j['volgendeOm'];
+    return VervangJacht(
+      opDeLijst: n('opDeLijst'),
+      dezeBeurt: n('dezeBeurt'),
+      gedaan: n('gedaan'),
+      poging: n('poging'),
+      maxPoging: n('maxPoging'),
+      bezigMet: j['bezigMet'] as String?,
+      regel: j['regel'] as String?,
+      binnen: n('binnen'),
+      weggegooid: n('weggegooid'),
+      volgendeOm: om is num ? DateTime.fromMillisecondsSinceEpoch(om.toInt()) : null,
+    );
+  }
+
   /// De beurt is voorbij: de balk weg, de tellers en het ritme blijven staan.
   VervangJacht klaar({required int opDeLijst, String? regel}) => VervangJacht(
         opDeLijst: opDeLijst,

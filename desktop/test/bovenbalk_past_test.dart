@@ -79,6 +79,8 @@ void main() {
       expect(stuk, contains('for (final (id, label, _) in NavSections.items)'));
       expect(stuk, contains("sleutel: 'zoeken'"));
       expect(stuk, contains("sleutel: 'instellingen'"));
+      // Op de pc die de muziek zelf heeft geen 'Op dit toestel' (Saber, 18-10-2026).
+      expect(stuk, contains('if (id != 10 || context.read<LibraryStore>().remote != null)'));
       final b = hoofd.indexOf('  Widget _pcBovenlaag() {');
       expect(b, greaterThan(-1));
       final balk = hoofd.substring(b, a);

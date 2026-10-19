@@ -65,12 +65,26 @@ Future<void> _bewaar() async {
   }
 }
 
+/// Wat de pc als eigen keuze kent, op een toestel waar de bestanden niet staan (gsm, iPad).
+///
+/// Alleen voor deze sessie en nooit naar schijf, zoals `onthoudOordeelVanPc`: de pc is de eigenaar.
+/// Zonder dit telde Kwaliteit op de gsm andere getallen dan op de pc (18-10-2026). Wat je zelf koos,
+/// stond daar onder "Laat de app zoeken" en "Ook wat je zelf koos" bleef weg.
+final Set<String> _vanPc = <String>{};
+
+/// Uit de catalogus van de pc: zet of wis de keuze voor dit pad.
+void zetVasteKeuzeVanPc(String pad, bool vast) =>
+    vast ? _vanPc.add(_sleutel(pad)) : _vanPc.remove(_sleutel(pad));
+
 /// Heeft de gebruiker dit bestand zelf gekozen?
-bool isVasteKeuze(String pad) => _keuzes.contains(_sleutel(pad));
+bool isVasteKeuze(String pad) {
+  final k = _sleutel(pad);
+  return _keuzes.contains(k) || _vanPc.contains(k);
+}
 
 /// Er is er minstens één, dus de bescherming kan ergens aanslaan. Voor de uitleg in de vegers, die
 /// anders bij elk paar naar deze lijst zou vragen.
-bool get erZijnVasteKeuzes => _keuzes.isNotEmpty;
+bool get erZijnVasteKeuzes => _keuzes.isNotEmpty || _vanPc.isNotEmpty;
 
 /// De hele lijst, om mee te geven aan een isolate.
 ///
@@ -81,7 +95,7 @@ bool get erZijnVasteKeuzes => _keuzes.isNotEmpty;
 ///
 /// De sleutels zitten er al genormaliseerd in, dus wie ze aan de overkant gebruikt moet [sleutelVoor]
 /// nemen en niet het rauwe pad.
-Set<String> vasteKeuzeSleutels() => Set<String>.of(_keuzes);
+Set<String> vasteKeuzeSleutels() => {..._keuzes, ..._vanPc};
 
 /// Dezelfde normalisatie als [isVasteKeuze] gebruikt, voor wie de verzameling zelf raadpleegt.
 String sleutelVoor(String pad) => _sleutel(pad);

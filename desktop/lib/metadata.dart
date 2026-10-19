@@ -354,7 +354,7 @@ class MetadataSearch {
       // betalen: er staat iemand te wachten met een draaiend wieltje.
       final keuzes = await DiscogsService(settings)
           .releaseChoices(wie, wat, max: 60, maxPaginas: 1);
-      if (keuzes.isEmpty) return zoeklijst;
+      if (keuzes.isEmpty) return await zoeklijst;
       final persingen = [
         for (final k in keuzes)
           MetaResult(

@@ -9,6 +9,7 @@ import '../enrichment.dart';
 import '../luidheid_winkel.dart' show gepubliceerdeLuidheid, gepubliceerdeStatus, luidheidUitgave;
 import '../models.dart';
 import '../organize.dart';
+import '../vaste_keuze.dart';
 import 'dtos.dart';
 import 'ids.dart';
 
@@ -273,6 +274,7 @@ class LanCatalog {
           // herbouw tijdens de veegronde een nieuwe ETag geven, en haalt elk toestel elke 15 s de
           // hele catalogus opnieuw. Zie luidheid_winkel.dart.
           luid: gepubliceerdeLuidheid(t),
+          vast: isVasteKeuze(t.path),
         ));
       }
     }

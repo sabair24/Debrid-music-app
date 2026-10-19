@@ -3114,13 +3114,7 @@ class LibraryStore extends ChangeNotifier {
   }
 
   /// The PC's id for a track we are showing. Its path is the stream URL, and the id is in it.
-  String? _remoteTrackId(String path) {
-    final segments = Uri.tryParse(path)?.pathSegments ?? const [];
-    if (segments.length < 2 || segments[segments.length - 2] != 'stream') return null;
-    final last = segments.last;
-    final dot = last.lastIndexOf('.');
-    return dot < 0 ? last : last.substring(0, dot);
-  }
+  String? _remoteTrackId(String path) => pcNummerId(path);
 
   /// A track as the PC describes it. [Track.path] becomes the stream URL WITHOUT the token: it is
   /// the identity key for favourites, playlists and resume, and those must survive re-pairing —
@@ -3145,6 +3139,8 @@ class LibraryStore extends ChangeNotifier {
     } else {
       _rijenVanPc.remove(pad);
     }
+    // En of je dit bestand zelf koos: de bescherming staat op de pc. Zie [TrackDto.vast].
+    zetVasteKeuzeVanPc(pad, d.vast);
     // Gelijk volume: de meting van de pc, onder dezelfde sleutel (grootte|tijd) als op de pc — het
     // Track hier krijgt die twee uit deze DTO. Zie luidheid_winkel.dart.
     onthoudLuidheidVanPc(sizeBytes: d.sizeBytes, addedMs: d.addedMs, luid: d.luid);

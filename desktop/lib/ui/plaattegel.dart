@@ -15,7 +15,6 @@ library;
 import 'package:flutter/material.dart';
 
 import '../cachesleutel.dart' show fnv1aVan;
-import 'kleuren.dart';
 
 /// De kleur van een tegel zonder hoes, vast per titel.
 ///
@@ -46,7 +45,8 @@ class PlaatTegel extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [basis, Color.lerp(basis, kAchtergrond, .55)!],
+          // Een vaste donkere onderkant, ook op licht: dit is een hoes, geen paneel, en de titel erop is wit.
+          colors: [basis, Color.lerp(basis, const Color(0xFF07080C), .55)!],
         ),
       ),
       child: Column(

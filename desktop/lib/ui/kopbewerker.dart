@@ -140,7 +140,7 @@ class _KopBewerkerState extends State<KopBewerker> {
                 const SizedBox(width: 12),
                 Flexible(
                   child: Text(widget.naam,
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kGedempt)),
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: kGedempt)),
                 ),
                 const Spacer(),
                 IconButton(
@@ -149,7 +149,7 @@ class _KopBewerkerState extends State<KopBewerker> {
                     onPressed: () => Navigator.of(context).pop(false)),
               ]),
               const SizedBox(height: 4),
-              const Text(
+              Text(
                   'Sleep de foto om hem te verschuiven · scroll of knijp om te zoomen · sleep de onderrand '
                   'voor de hoogte. Elk scherm apart.',
                   style: TextStyle(color: kGedempt, fontSize: 12)),
@@ -201,7 +201,7 @@ class _KopBewerkerState extends State<KopBewerker> {
                 ),
                 const SizedBox(width: 6),
                 Text(i == null ? 'De app kiest zelf, op de gezichten' : 'Zelf ingesteld',
-                    style: const TextStyle(color: kGedempt, fontSize: 12)),
+                    style: TextStyle(color: kGedempt, fontSize: 12)),
                 const Spacer(),
                 TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
                 const SizedBox(width: 8),
@@ -374,7 +374,7 @@ class _Voorbeeld extends StatelessWidget {
     final s = schaal;
     final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
     return Stack(fit: StackFit.expand, children: [
-      const ColoredBox(color: kAchtergrond),
+      ColoredBox(color: kAchtergrond),
       Positioned(
         left: plek.left * s,
         top: plek.top * s,
@@ -399,22 +399,22 @@ class _Voorbeeld extends StatelessWidget {
         left: 0,
         right: 0,
         bottom: 0,
-        child: const DecoratedBox(
+        child: DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [Color(0x44000000), Color(0x66000000), Color(0xDB07080C), kAchtergrond, kAchtergrond],
+              colors: [paginaWaas(0x44, donker: Colors.black), paginaWaas(0x66, donker: Colors.black), paginaWaas(0xDB), kAchtergrond, kAchtergrond],
               stops: [0, .30, .58, .92, 1],
             ),
           ),
         ),
       ),
       if (!smal)
-        const DecoratedBox(
+        DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [kAchtergrond, Color(0x5907080C), Color(0x0007080C)],
+              colors: [kAchtergrond, paginaWaas(0x59), paginaWaas(0x00)],
               stops: [0, .44, .74],
             ),
           ),
@@ -425,7 +425,7 @@ class _Voorbeeld extends StatelessWidget {
           left: 0,
           right: 0,
           height: balk * s,
-          child: const ColoredBox(color: Color(0x6607080C)),
+          child: ColoredBox(color: paginaWaas(0x66)),
         ),
       // De naam, ongeveer waar hij in de echte kop staat — om te zien wat hij bedekt.
       Positioned(

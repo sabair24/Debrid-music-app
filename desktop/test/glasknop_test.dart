@@ -9,6 +9,8 @@
 /// kijkt of de lagen er ZIJN — dat was precies de les van `glasbalk_test.dart`.
 library;
 
+import 'dart:math' as math;
+
 import 'dart:ui' show ImageFilter;
 
 import 'package:debridmusic/tv.dart';
@@ -90,15 +92,18 @@ void main() {
         reason: 'zonder vervaging lost de pil van drie meter afstand op in het donker');
   });
 
-  testWidgets('DE KERN: op een gsm een donkere onderlaag, want daar vervaagt niets', (t) async {
-    // Zonder onderlaag las je "Tracklijst opnieuw ophalen" dwars door de ronde knoppen heen.
+  testWidgets('DE KERN: op een gsm vervaagd glas op een donkere grond, net als op de pc', (t) async {
+    // Sinds 18-10-2026 ook op een gsm echt glas ("overal echt glas"). De donkere grond eronder blijft:
+    // zonder las je "Tracklijst opnieuw ophalen" dwars door de ronde knoppen heen.
     final onderlaag = find.byWidgetPredicate((w) => w is ColoredBox && w.color == kGlasOnderlaag);
+    final onderlaagMat = find.byWidgetPredicate((w) => w is ColoredBox && w.color == kGlasOnderlaagMat);
     t.view.physicalSize = const Size(390, 844);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.reset);
     await zet(t, GlasKnop.rond(icoon: Icons.arrow_back_rounded, onPressed: () {}));
-    expect(find.byType(BackdropFilter), findsNothing);
-    expect(onderlaag, findsOneWidget);
+    expect(find.byType(BackdropFilter), findsOneWidget);
+    expect(onderlaagMat, findsOneWidget);
+    expect(onderlaag, findsNothing);
 
     t.view.physicalSize = const Size(1400, 900);
     await zet(t, radio());
@@ -206,4 +211,55 @@ void main() {
       expect(ruit(), findsNothing);
     });
   });
+
+  group('leesbaar op elke grond, en een lichtvlek vanaf de vinger (Saber, 18-10-2026)', () {
+    test('witte letters halen 4,5:1 op elke grond, van zwart tot wit', () {
+      for (var h = 0.0; h <= 1.0001; h += .05) {
+        expect(glasKnopContrast(h), greaterThanOrEqualTo(4.5), reason: 'grond ${h.toStringAsFixed(2)}');
+      }
+    });
+
+    test('met een vaste onderlaag van 45 % niet: boven wit was het 2,5 tot 3:1', () {
+      expect(glasKnopContrast(1, onderlaag: .45), lessThan(4.5), reason: 'daarom wordt hij dichter boven licht');
+      expect(glasKnopContrast(kGrondDonkereKop, onderlaag: .45), greaterThanOrEqualTo(4.5),
+          reason: 'de kop van een albumpagina (70 % donkering) is ook boven een witte hoes al goed');
+    });
+
+    testWidgets('boven een lichte grond is de onderlaag dichter', (t) async {
+      GlasKwaliteit.stand.value = GlasStand.mat;
+      await t.pumpWidget(const Directionality(
+          textDirection: TextDirection.ltr,
+          child: KnopGrond(helderheid: .95, child: SizedBox(width: 80, height: 40, child: _Ruit()))));
+      final laag = t.widgetList<ColoredBox>(find.byType(ColoredBox)).map((c) => c.color.a).reduce(math.max);
+      expect(laag, closeTo(glasOnderlaagVoor(.95), .01));
+      expect(laag, greaterThan(.75));
+    });
+
+    testWidgets('een tik laat een lichtvlek uitwaaieren vanaf de vinger, en die dooft uit', (t) async {
+      await zet(t, radio());
+      final midden = t.getCenter(find.text('Radio'));
+      final g = await t.startGesture(midden);
+      await t.pump();
+      final vlek = find.byWidgetPredicate((w) => w is CustomPaint && w.painter is KnopLichtvlek);
+      expect(vlek, findsOneWidget);
+      final eerst = (t.widget<CustomPaint>(vlek).painter! as KnopLichtvlek);
+      final links = t.getTopLeft(find.byType(GlasKnop));
+      expect(eerst.plek.dx, closeTo(midden.dx - links.dx, 1), reason: 'waar de vinger neerkwam');
+      await g.up();
+      await t.pump(kKnopVlekDuur ~/ 2);
+      final later = (t.widget<CustomPaint>(vlek).painter! as KnopLichtvlek);
+      expect(later.t, greaterThan(eerst.t));
+      expect(KnopLichtvlek.op(const Size(120, 44), later.t).licht, lessThan(kKnopVlekLicht));
+      await t.pump(kKnopVlekDuur);
+      expect(vlek, findsNothing, reason: 'uitgedoofd: geen laag meer');
+    });
+  });
+
+}
+
+
+class _Ruit extends StatelessWidget {
+  const _Ruit();
+  @override
+  Widget build(BuildContext context) => glasRuit();
 }

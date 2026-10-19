@@ -765,6 +765,35 @@ DiscoZeef zeefDiscografie(
   );
 }
 
+/// De discografie zoals hij op het scherm kwam, en vanaf dan zo blijft (Saber, 18-10-2026).
+///
+/// De bronnen kwamen na elkaar binnen en bij elke bron verschoof de lijst: Deezer eerst, dan
+/// MusicBrainz en Discogs, dan de hoezen van het archief (en die lieten regels zonder hoes
+/// verdwijnen), dan de gastoptredens (en die haalden regels weg). Saber koos voor "pas tonen als hij
+/// compleet is". Hij staat er dus één keer, en tijdens het bezoek komt er alleen nog een hoes bij.
+///
+/// [samen] is al gevouwen ([vouwHeruitgaves]) en zonder gastoptredens. [zeefHoezen] is de hoesregel
+/// zoals die gold toen de lijst verscheen.
+typedef VasteDisco = ({List<DiscoRelease> samen, bool zeefHoezen});
+
+VasteDisco bevriesDiscografie(List<DiscoRelease> alles, {required bool zeefHoezen}) =>
+    (samen: vouwHeruitgaves(alles), zeefHoezen: zeefHoezen);
+
+/// Wat [vast] laat zien, met de hoezen die er sindsdien bij kwamen.
+///
+/// **De zeef beslist op de hoezen van het moment waarop de lijst verscheen**, niet op die van nu.
+/// Anders komt een regel die wegviel omdat hij geen hoes had, alsnog tevoorschijn zodra het archief
+/// er een vindt, en schuift alles eronder op. Een hoes die binnenkomt vult alleen een tegel in.
+DiscoZeef toonVast(VasteDisco vast, Map<String, String> hoezen, {bool toonAlles = false}) {
+  final z = zeefDiscografie(vast.samen, toonAlles: toonAlles, zeefHoezen: vast.zeefHoezen);
+  return (
+    rijen: vulHoezenAan(z.rijen, hoezen),
+    verborgen: z.verborgen,
+    zonderHoes: z.zonderHoes,
+    perSoort: z.perSoort,
+  );
+}
+
 /// Waarop de gebruiker kan sorteren.
 ///
 /// [datumOud] staat vooraan omdat het menu de declaratievolgorde volgt en dit de stand is waarin de

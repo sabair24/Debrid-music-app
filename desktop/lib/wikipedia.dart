@@ -259,16 +259,25 @@ class WikipediaService {
     } catch (_) {/* een cache die niet geschreven kan worden kost één herhaald verzoek */}
   }
 
+  /// Ging een vraag mis (geen verbinding, geen 200)? Dan is "niets gevonden" niet te geloven, en
+  /// wordt het maar een uur onthouden in plaats van een week ([_misHaperend]). Hiervoor werd elke
+  /// hapering zeven dagen lang als "deze act heeft geen artikel" bewaard.
+  bool _haperde = false;
+
   Future<Map<String, dynamic>?> _haal(Uri url) async {
     try {
       await MusicBrainzService.laneSlot(_lane, _gap);
       final r = await http
           .get(url, headers: {'User-Agent': _ua, 'Accept': 'application/json'})
           .timeout(const Duration(seconds: 8));
-      if (r.statusCode != 200) return null;
+      if (r.statusCode != 200) {
+        _haperde = true;
+        return null;
+      }
       final j = jsonBody(r);
       return j is Map<String, dynamic> ? j : null;
     } catch (_) {
+      _haperde = true;
       return null;
     }
   }
@@ -292,9 +301,10 @@ class WikipediaService {
       }
     }
 
+    _haperde = false;
     final gevonden = await _zoekTitel(naam, mbid: mbid);
     if (gevonden == null) {
-      await _schrijf(f, _misteken(nietGevonden: true));
+      await _schrijf(f, _misteken(nietGevonden: !_haperde));
       return null;
     }
     await _schrijf(f, {'taal': gevonden.taal, 'titel': gevonden.titel, 'q': gevonden.q});

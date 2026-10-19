@@ -83,10 +83,10 @@ class _ToestellenLijstState extends State<ToestellenLijst> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Toestellen (${rijen.length})', style: const TextStyle(color: kGedempt, fontSize: 11.5)),
+        Text('Toestellen (${rijen.length})', style: TextStyle(color: kGedempt, fontSize: 11.5)),
         const SizedBox(height: 4),
         if (rijen.isEmpty)
-          const Text('Nog geen enkel toestel gekoppeld.', style: TextStyle(color: kGedempt, fontSize: 11.5)),
+          Text('Nog geen enkel toestel gekoppeld.', style: TextStyle(color: kGedempt, fontSize: 11.5)),
         for (final g in rijen)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 3),
@@ -110,7 +110,7 @@ class _ToestellenLijstState extends State<ToestellenLijst> {
                                 // Tot elk toestel dit toont, laat je Tailscale staan (plan, uitlevering B).
                                 if (g.tlsToken != null) 'versleuteld',
                               ].join(' · '),
-                        style: const TextStyle(color: kGedempt, fontSize: 11, height: 1.3),
+                        style: TextStyle(color: kGedempt, fontSize: 11, height: 1.3),
                       ),
                     ],
                   ),
@@ -121,7 +121,7 @@ class _ToestellenLijstState extends State<ToestellenLijst> {
                     child: TextButton(
                       onPressed: () => _trekIn(g),
                       style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xFFE07A7A), textStyle: const TextStyle(fontSize: 12)),
+                          foregroundColor: leesbaar(const Color(0xFFE07A7A)), textStyle: const TextStyle(fontSize: 12)),
                       child: const Text('Intrekken'),
                     ),
                   ),
@@ -129,7 +129,7 @@ class _ToestellenLijstState extends State<ToestellenLijst> {
             ),
           ),
         const SizedBox(height: 4),
-        const Text(
+        Text(
           'Telefoon kwijt? Trek hem hier in en wijzig het wachtwoord van je account. Dan kan wie hem vond '
           'er niet meer bij, en je andere toestellen werken gewoon door.',
           style: TextStyle(color: kGedempt, fontSize: 11, height: 1.35),

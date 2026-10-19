@@ -100,5 +100,7 @@ void main() {
     // Bij veertig zichtbare tegels zou 40 × het trapje betekenen dat de laatste pas na ruim een
     // seconde staat — dan wacht je op een animatie in plaats van hem op te merken.
     expect(kTrapje * kTrapjeDak, lessThan(const Duration(milliseconds: 250)));
+    // Saber, 18-10-2026: de hele binnenkomst, trapje plus de laatste tegel, hooguit 250 ms.
+    expect(kTrapje * kTrapjeDak + kBinnenkomstDuur, lessThanOrEqualTo(const Duration(milliseconds: 250)));
   });
 }

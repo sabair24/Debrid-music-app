@@ -101,7 +101,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.41.9'
+          flutter-version: '3.47.7'
           channel: stable
           cache: true
 
@@ -183,7 +183,7 @@ jobs:
             test/terug_test.dart test/binnen_navigator_test.dart \
             test/itemmenu_test.dart \
             test/maten_test.dart test/afmetingen_test.dart test/afkappen_test.dart test/draaihoes_test.dart test/tv_leunstoel_test.dart test/tv_artiestpagina_test.dart test/kopfoto_test.dart test/kopbewerker_test.dart test/nu_speelt_rondjes_test.dart test/tv_kop_past_test.dart test/normkey_geheugen_test.dart \
-            test/albumkop_menu_test.dart test/gebaren_test.dart test/kleine_fouten_test.dart test/aanbevolen_test.dart test/glas_bewaker_test.dart test/glas_balken_test.dart \
+            test/albumkop_menu_test.dart test/gebaren_test.dart test/kleine_fouten_test.dart test/aanbevolen_test.dart test/glas_bewaker_test.dart test/glas_balken_test.dart test/instellingen_sleutels_test.dart test/over_sneller_test.dart test/discografie_vast_test.dart test/kwaliteit_van_pc_test.dart test/hoes_midden_test.dart test/grote_kop_test.dart test/ontdek_raster_test.dart \
             test/kleurenladder_test.dart test/overgang_test.dart \
             test/was_test.dart test/binnenkomst_test.dart \
             test/speelvlak_test.dart test/cache_snoei_test.dart \
@@ -203,7 +203,7 @@ jobs:
             test/sleutelherstel_test.dart \
             test/shield_rondgang_test.dart \
             test/tv_schermvullend_test.dart \
-            test/bovenbalk_past_test.dart test/menu_iconen_test.dart test/mediabediening_test.dart test/hoes_meteen_test.dart test/zacht_wiel_test.dart test/terug_test.dart test/eigen_foto_test.dart test/start_donker_test.dart test/verder_knop_test.dart test/tv_zonder_sprong_test.dart test/spelerbalk_zijvak_test.dart \
+            test/bovenbalk_past_test.dart test/menu_iconen_test.dart test/mediabediening_test.dart test/hoes_meteen_test.dart test/zacht_wiel_test.dart test/terug_test.dart test/eigen_foto_test.dart test/start_donker_test.dart test/verder_knop_test.dart test/tv_zonder_sprong_test.dart test/spelerbalk_zijvak_test.dart test/systeem_glas_test.dart test/hoes_vlekken_test.dart test/thema_keuze_test.dart test/licht_thema_test.dart test/wachtrij_glas_test.dart test/kantel_hoes_test.dart test/getekende_schijf_test.dart test/hoes_blijft_staan_test.dart test/diepte_overgang_test.dart test/glasproef_test.dart test/licht_volgt_toestel_test.dart \
             test/verder_luisteren_test.dart \
             test/albumraster_ingebed_test.dart \
             test/bestandsbeheer_test.dart test/hoesherkomst_test.dart \
@@ -255,7 +255,7 @@ jobs:
             test/lengte_voorkeur_test.dart test/zoek_en_haal_test.dart test/scanmaat_test.dart test/deezer_toppers_test.dart \
             test/toewijzen_telefoon_test.dart test/audiodb_bron_test.dart test/uitgave_telefoon_test.dart \
             test/langzame_draai_test.dart test/hoes_uitdoving_test.dart \
-            test/navigatie_meteen_test.dart test/runner_toon_test.dart test/metadata_vlot_test.dart \
+            test/navigatie_meteen_test.dart test/runner_toon_test.dart test/windows_skia_test.dart test/metadata_vlot_test.dart \
             test/hoes_zelfde_bytes_test.dart test/vergelijking_geheugen_test.dart \
             test/start_vast_geschud_test.dart \
             test/discogs_token_in_kop_test.dart \

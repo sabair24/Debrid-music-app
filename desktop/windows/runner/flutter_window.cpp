@@ -1,5 +1,7 @@
 #include "flutter_window.h"
 
+#include <flutter/standard_method_codec.h>
+
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
@@ -39,6 +41,31 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   media_ = std::make_unique<Mediabediening>(GetHandle(), flutter_controller_->engine()->messenger());
+  // Wil het systeem dicht glas? "Transparantie-effecten" uit (Instellingen > Persoonlijke instellingen
+  // > Kleuren), of de batterijbesparing aan. Zie lib/systeem_glas.dart.
+  systeem_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "debridmusic/systeem",
+      &flutter::StandardMethodCodec::GetInstance());
+  systeem_->SetMethodCallHandler(
+      [](const flutter::MethodCall<flutter::EncodableValue>& oproep,
+         std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> antwoord) {
+        if (oproep.method_name() != "dichtGlas") {
+          antwoord->NotImplemented();
+          return;
+        }
+        DWORD waarde = 1;
+        DWORD grootte = sizeof(waarde);
+        const bool gelezen =
+            ::RegGetValueW(HKEY_CURRENT_USER,
+                           L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                           L"EnableTransparency", RRF_RT_REG_DWORD, nullptr, &waarde,
+                           &grootte) == ERROR_SUCCESS;
+        const bool geenTransparantie = gelezen && waarde == 0;
+        SYSTEM_POWER_STATUS stroom{};
+        const bool besparing =
+            ::GetSystemPowerStatus(&stroom) && (stroom.SystemStatusFlag & 1) != 0;
+        antwoord->Success(flutter::EncodableValue(geenTransparantie || besparing));
+      });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -115,6 +142,10 @@ void FlutterWindow::OnDestroy() {
   tearing_down_ = true;
   // Vóór de controller: de mediabediening praat over zijn kanaal met de engine.
   media_ = nullptr;
+  if (systeem_) {
+    systeem_->SetMethodCallHandler(nullptr);
+    systeem_ = nullptr;
+  }
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

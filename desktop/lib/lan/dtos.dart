@@ -246,6 +246,10 @@ class TrackDto {
   /// De ruwe meting en geen dB: de keuze Uit/Gelijk/Luider is per toestel, dus elk toestel rekent zelf.
   final Map<String, dynamic>? luid;
 
+  /// Of je dit bestand zelf koos (`vaste_keuze.dart`). Die keuze staat op de pc, en zonder dit veld
+  /// telde Kwaliteit op de gsm andere getallen: daar was niets "zelf gekozen".
+  final bool vast;
+
   const TrackDto({
     required this.id,
     required this.albumId,
@@ -272,6 +276,7 @@ class TrackDto {
     this.echt,
     this.rij,
     this.luid,
+    this.vast = false,
   });
 
   /// True when the file is beyond what Sonos will accept (it plays FLAC/ALAC up to 24-bit but
@@ -305,6 +310,7 @@ class TrackDto {
         echt: j['echt'] is Map ? Map<String, dynamic>.from(j['echt'] as Map) : null,
         rij: j['rij'] as String?,
         luid: j['luid'] is Map ? Map<String, dynamic>.from(j['luid'] as Map) : null,
+        vast: j['vast'] == true,
       );
 
   Map<String, dynamic> toJson() => {
@@ -335,6 +341,7 @@ class TrackDto {
         if (echt != null) 'echt': echt,
         if (rij != null && rij!.isNotEmpty) 'rij': rij,
         if (luid != null) 'luid': luid,
+        if (vast) 'vast': true,
       };
 }
 

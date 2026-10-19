@@ -73,8 +73,8 @@ void main() {
     });
   });
 
-  test('de balken kleuren een kwart mee met de hoes', () {
-    expect(kBalkZweem, .24);
+  test('de balken kleuren duidelijk mee met de hoes (38 %, Saber 18-10-2026: "sterker")', () {
+    expect(kBalkZweem, .38);
     expect(balkKleur(null), kVerzonken);
     final rood = balkKleur(0xFFCC2222);
     expect(rood, isNot(kVerzonken));

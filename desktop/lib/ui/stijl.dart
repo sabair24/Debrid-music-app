@@ -27,7 +27,7 @@ import 'vlak.dart';
 class StijlPagina extends StatelessWidget {
   const StijlPagina({super.key});
 
-  static const _trap = <(String, Color)>[
+  static List<(String, Color)> get _trap => [
     ('achtergrond', kAchtergrond),
     ('verzonken', kVerzonken),
     ('paneel', kPaneel),
@@ -36,7 +36,7 @@ class StijlPagina extends StatelessWidget {
     ('lijn', kLijn),
   ];
 
-  static const _rollen = <(String, TextStyle)>[
+  static List<(String, TextStyle)> get _rollen => [
     ('kKopGroot 25/800', kKopGroot),
     ('kKop 22/700', kKop),
     ('kKopKlein 18/700', kKopKlein),
@@ -117,7 +117,7 @@ class StijlPagina extends StatelessWidget {
                   height: 62,
                   alignment: Alignment.center,
                   decoration: paneelDecoratie(Niveau.hoog, radius: kHoekRond),
-                  child: const Text('rond', style: kLabel),
+                  child: Text('rond', style: kLabel),
                 ),
               ],
             ),

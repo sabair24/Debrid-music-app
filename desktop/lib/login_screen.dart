@@ -18,11 +18,11 @@ import 'lan/discovery.dart';
 import 'tv.dart';
 import 'ui/kleuren.dart';
 
-const _bg = kAchtergrond;
-const _panel2 = kPaneelHoog;
-const _text = kTekst;
-const _muted = kGedempt;
-const _accent = kAccent;
+Color get _bg => kAchtergrond;
+Color get _panel2 => kPaneelHoog;
+Color get _text => kTekst;
+Color get _muted => kGedempt;
+Color get _accent => kAccent;
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
@@ -404,15 +404,15 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.library_music_rounded, size: 56, color: _accent),
+                  Icon(Icons.library_music_rounded, size: 56, color: _accent),
                   const SizedBox(height: 18),
                   Text(
                     _register ? 'Maak een account' : 'Inloggen',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: _text, fontSize: 26, fontWeight: FontWeight.w700),
+                    style: TextStyle(color: _text, fontSize: 26, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'Log op elk apparaat in met hetzelfde account. Je muziek blijft op je pc — '
                     'die geeft dit apparaat toegang zodra je bent ingelogd.',
                     textAlign: TextAlign.center,
@@ -433,7 +433,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       autocorrect: false,
                       keyboardType: TextInputType.emailAddress,
                       textInputAction: TextInputAction.next,
-                      style: const TextStyle(color: _text),
+                      style: TextStyle(color: _text),
                       decoration: _field('E-mailadres'),
                     ),
                   ),
@@ -447,7 +447,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       focusNode: _passwordFocus,
                       enabled: !_busy,
                       obscureText: true,
-                      style: const TextStyle(color: _text),
+                      style: TextStyle(color: _text),
                       decoration: _field('Wachtwoord'),
                       onSubmitted: (_) => _busy ? null : _submit(),
                     ),
@@ -488,7 +488,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   if (_waiting != null) ...[
                     const SizedBox(height: 16),
                     Row(children: [
-                      const SizedBox(
+                      SizedBox(
                         width: 15,
                         height: 15,
                         child: CircularProgressIndicator(strokeWidth: 2, color: _muted),
@@ -496,7 +496,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(_waiting!,
-                            style: const TextStyle(color: _muted, fontSize: 13, height: 1.4)),
+                            style: TextStyle(color: _muted, fontSize: 13, height: 1.4)),
                       ),
                     ]),
                   ],
@@ -516,12 +516,12 @@ class _LoginScreenState extends State<LoginScreen> {
                     // op het eerste scherm lijkt het een keuze die je moet maken, en dat is het
                     // niet — in verreweg de meeste gevallen zoekt de app hem gewoon zelf.
                     const SizedBox(height: 20),
-                    const Text(
+                    Text(
                       'Weet je waar je pc staat?',
                       style: TextStyle(color: _text, fontSize: 15, fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
+                    Text(
                       'Vul zijn adres in en je komt er rechtstreeks op — nog steeds op je account, '
                       'zonder code. Gebruik je Tailscale, neem dan dat adres (100.…): dat werkt '
                       'ook buitenshuis. Je vindt het op je pc in Instellingen, onder '
@@ -539,7 +539,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         enabled: !_busy,
                         autocorrect: false,
                         keyboardType: TextInputType.url,
-                        style: const TextStyle(color: _text),
+                        style: TextStyle(color: _text),
                         decoration: _field('Adres van je pc'),
                         onSubmitted: (_) => _busy ? null : _probeerAdres(),
                       ),
@@ -554,7 +554,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             },
                       style: OutlinedButton.styleFrom(
                         foregroundColor: _accent,
-                        side: const BorderSide(color: _accent),
+                        side: BorderSide(color: _accent),
                         padding: const EdgeInsets.symmetric(vertical: 14),
                       ),
                       child: const Text('Verbinden met dit adres',
@@ -572,7 +572,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               }),
                       child: Text(
                         _register ? 'Ik heb al een account' : 'Nog geen account?',
-                        style: const TextStyle(color: _muted),
+                        style: TextStyle(color: _muted),
                       ),
                     ),
                     // **De koppelcode staat er PAS als inloggen niet lukte.**
@@ -591,10 +591,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     // zodra je iets probeert, en dan verdwijnt het vangnet precies terwijl je het
                     // aan het gebruiken bent.
                     if (widget.onUseCode != null && _toonAdres) ...[
-                      const Text('·', style: TextStyle(color: _muted)),
+                      Text('·', style: TextStyle(color: _muted)),
                       TextButton(
                         onPressed: _busy ? null : widget.onUseCode,
-                        child: const Text('Lukt inloggen niet? Koppel met een code',
+                        child: Text('Lukt inloggen niet? Koppel met een code',
                             style: TextStyle(color: _muted)),
                       ),
                     ],
@@ -610,7 +610,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   InputDecoration _field(String label) => InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(color: _muted),
+        labelStyle: TextStyle(color: _muted),
         filled: true,
         fillColor: _panel2,
         border: OutlineInputBorder(
@@ -629,15 +629,15 @@ class _ErrorBox extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF3A1E24),
+        color: vlakOpThema(const Color(0xFF3A1E24)),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Icon(Icons.error_outline_rounded, color: Color(0xFFFF8A9B), size: 20),
+        Icon(Icons.error_outline_rounded, color: leesbaar(const Color(0xFFFF8A9B)), size: 20),
         const SizedBox(width: 10),
         Expanded(
           child: Text(message,
-              style: const TextStyle(color: Color(0xFFFFC9D1), height: 1.4, fontSize: 13.5)),
+              style: TextStyle(color: leesbaar(const Color(0xFFFFC9D1)), height: 1.4, fontSize: 13.5)),
         ),
       ]),
     );

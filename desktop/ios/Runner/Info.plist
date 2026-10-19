@@ -6,6 +6,8 @@
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>NSMotionUsageDescription</key>
+	<string>De grote hoes in Nu speelt kantelt een tikje mee als je je toestel beweegt.</string>
 	<key>CFBundleDisplayName</key>
 	<string>DebridMusic</string>
 	<key>CFBundleExecutable</key>

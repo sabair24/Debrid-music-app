@@ -74,7 +74,6 @@ import 'mp3_tags.dart';
 import 'aanbevolen.dart' show AanbevolenLijst, AanbevolenVoorJou;
 import 'afspeellijsten.dart';
 import 'favorieten.dart';
-import 'lan/ids.dart';
 import 'buitenproef.dart';
 import 'lan/deur.dart';
 import 'lan/sharing.dart';
@@ -146,6 +145,7 @@ import 'rutracker_venster.dart';
 import 'netsoort.dart';
 import 'netwerkwissel.dart';
 import 'settings.dart';
+import 'systeem_glas.dart';
 import 'speelstanden.dart';
 import 'slsk_groepen.dart';
 import 'speakers.dart';
@@ -180,6 +180,11 @@ import 'ui/skelet.dart';
 import 'ui/speelvlak.dart';
 import 'ui/stijl.dart';
 import 'ui/tegel.dart';
+import 'ui/getekende_schijf.dart';
+import 'ui/glasproef.dart';
+import 'ui/kantel_hoes.dart';
+import 'ui/thema.dart';
+import 'ui/wachtrij_eiland.dart';
 import 'ui/typografie.dart';
 import 'ui/vlak.dart';
 
@@ -200,25 +205,37 @@ final ButtonStyle _focusOutline = ButtonStyle(
   foregroundColor: WidgetStateProperty.resolveWith(
       (states) => isTv && states.contains(WidgetState.focused) ? kAccent : null),
   overlayColor: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.focused)
-      ? (isTv ? Colors.white.withValues(alpha: .16) : _accent.withValues(alpha: .22))
+      ? (isTv ? kInkt.withValues(alpha: .16) : _accent.withValues(alpha: .22))
       : null),
+);
+
+/// Hetzelfde voor gevulde knoppen, met één ding erbij: op een tv in het lichte thema donkere letters.
+/// Die knoppen zijn daar glas ([_knopVulling]), en Materials witte letters op 8 % zwart glas over
+/// gebroken wit las je niet ("Opslaan", "+ Nieuwe", gezien op de Shield, 18-10-2026).
+final ButtonStyle _focusOutlineGevuld = _focusOutline.copyWith(
+  foregroundColor: WidgetStateProperty.resolveWith((states) {
+    if (!isTv || states.contains(WidgetState.disabled)) return null;
+    if (states.contains(WidgetState.focused)) return kAccent;
+    return Thema.licht ? kTekst : null;
+  }),
 );
 
 /// De vulling van een knop die elders paars gevuld is: op een tv glas (16-10-2026, "Bekijken" en
 /// alle andere knoppen hetzelfde), zodat zijn paarse letters bij selectie te zien zijn.
 Color get _knopVulling => isTv ? kTvKnopGlas : _accent;
 
-/// Het glas van een knop op een tv: wit op 14 %, zoals de pil van de sectie waar je bent.
-const kTvKnopGlas = Color(0x24FFFFFF);
+/// Het glas van een knop op een tv: wit op 14 %, zoals de pil van de sectie waar je bent. Op licht
+/// zwart op 8 %: wit op gebroken wit is niets.
+Color get kTvKnopGlas => Thema.licht ? const Color(0x14000000) : const Color(0x24FFFFFF);
 
-const _bg = kAchtergrond;
-const _panel = kPaneel;
-const _panel2 = kPaneelHoog;
-const _line = kLijn;
-const _text = kTekst;
-const _muted = kGedempt;
-const _accent = kAccent;
-const _accent2 = kAccent2;
+Color get _bg => kAchtergrond;
+Color get _panel => kPaneel;
+Color get _panel2 => kPaneelHoog;
+Color get _line => kLijn;
+Color get _text => kTekst;
+Color get _muted => kGedempt;
+Color get _accent => kAccent;
+Color get _accent2 => kAccent2;
 
 /// Windows and macOS have windows to manage and one app instance per machine; iOS and Android
 /// have neither. Everything below that touches window_manager or the instance lock asks this
@@ -504,12 +521,33 @@ Future<void> main() async {
   // WarmLog schrijft gespoeld en synchroon.
   final kopLog = WarmLog('$logDir${Platform.pathSeparator}kop.log');
   FotoBlikGeheugen.meld = (r) => Timer.run(() => kopLog.line(r));
+  // Het oordeel van de glasproef (ui/glasproef.dart) ook in kop.log, en in logcat via debugPrint.
+  Glasproef.meld = (r) {
+    debugPrint(r);
+    Timer.run(() => kopLog.line(r));
+  };
   // Before the first widget: whether this is a television decides focus rings, overscan margins
   // and type sizes, and a layout that changes shape one frame after it appears looks broken.
   await initTvMode();
+  // Licht of donker, vóór het eerste beeld: anders flitst een lichte app eerst donker (ui/thema.dart).
+  // Na initTvMode: op een tv is "volgens systeem" donker.
+  ThemaStand.meld = (r) => Timer.run(() => kopLog.line(r));
+  ThemaStand.laad();
   // Welk glas dit toestel tekent, en de bewaker die het terugzet als het te veel kost (ui/glas.dart).
-  GlasKwaliteit.meld = (r) => debugPrint(r);
-  unawaited(GlasKwaliteit.inrichten());
+  // De meldingen ook in kop.log: debugPrint alleen zag je in een uitgave nergens (18-10-2026).
+  GlasKwaliteit.meld = (r) {
+    debugPrint(r);
+    Timer.run(() => kopLog.line(r));
+  };
+  // Op een tv volgt het licht over het glas de selectie (GlasLicht).
+  if (isTv) {
+    GlasLicht.volgSelectie();
+  } else if (Platform.isAndroid || Platform.isIOS) {
+    // En op een gsm of iPad volgt het de kanteling van het toestel.
+    GlasLicht.volgToestel();
+  }
+  // En of het systeem dicht glas vraagt (minder transparantie, batterijbesparing): systeem_glas.dart.
+  unawaited(GlasKwaliteit.inrichten().then((_) => SysteemGlas.start()));
   // And what this device is called, before it publishes that name anywhere. Same channel, same
   // race — and on Android the alternative is a device list in which every phone reads "localhost".
   await initDeviceName();
@@ -833,6 +871,15 @@ Future<void> main() async {
     player.refreshCover();
     player.refreshTracks();
   });
+  // Het nep-glas van de tv kleurt mee met wat er speelt: de vlekken van de hoes onder het menu
+  // (GlasKwaliteit.micaVlekken). De spelerbalk tekent ze zelf al.
+  if (isTv) {
+    player.addListener(() {
+      if (!identical(GlasKwaliteit.micaVlekken.value, player.hoesVlekken)) {
+        GlasKwaliteit.micaVlekken.value = player.hoesVlekken;
+      }
+    });
+  }
   // **De vier draden van de streamkwaliteit.** Zie `netsoort.dart` en `lan/stroomstand.dart`.
   //
   // Alle vier ook op de pc ingehangen, en dat kost daar niets: `leesNetsoort()` antwoordt buiten
@@ -1039,7 +1086,7 @@ Future<void> main() async {
   );
   // Favorieten. Op de pc rechtstreeks in de gedeelde staat; op een Mac of iPad gaat dezelfde op over
   // de lijn (zie waar `duwOps` gezet wordt). Eén weg, dus geen tweede waarheid die kan afwijken.
-  final favorieten = Favorieten();
+  final favorieten = Favorieten()..idVanPad = library.gedeeldId;
   if (mode.owner) {
     favorieten
       ..winkel = sharing.state
@@ -1160,7 +1207,6 @@ Future<void> main() async {
   // door, en Auto vraagt telkens opnieuw. Een kopie zou je door de bibliotheek van gisteren laten
   // bladeren.
   autoBladerBron = () {
-    final wortel = library.rootPath;
     return (
       albums: () => library.albums,
       recent: () {
@@ -1183,8 +1229,12 @@ Future<void> main() async {
       hoesVanAlbum: (a) => autoHoesUri(a.tracks.isEmpty ? null : library.coverForTrack(a.tracks.first)),
       nummersVanLijst: (id) {
         final lijst = lijsten.byId(id);
-        if (lijst == null || wortel.isEmpty) return const <Track>[];
-        final perId = {for (final t in library.tracks) trackIdFor(t.path, wortel): t};
+        if (lijst == null) return const <Track>[];
+        // Via gedeeldId, ook op een telefoon (daar is de muziekmap leeg): zie [Favorieten.idVanPad].
+        final perId = {
+          for (final t in library.tracks)
+            if (library.gedeeldId(t.path) case final i?) i: t,
+        };
         return lijsten.nummersVan(lijst, (i) => perId[i]);
       },
     );
@@ -1829,6 +1879,9 @@ class DebridApp extends StatelessWidget {
                     child: inhoud,
                   )
                 : Listener(
+                    // De muis is het licht dat over de glasranden glijdt (ui/glas.dart, GlasLicht).
+                    onPointerHover: (e) => GlasLicht.muis(e.position),
+                    onPointerMove: (e) => GlasLicht.muis(e.position),
                     onPointerDown: (e) {
                       if (e.kind == PointerDeviceKind.mouse && e.buttons & kBackMouseButton != 0) stapTerug();
                     },
@@ -1839,18 +1892,24 @@ class DebridApp extends StatelessWidget {
       },
       theme: ThemeData(
         useMaterial3: true,
-        brightness: Brightness.dark,
+        // Licht of donker volgt de keuze in Instellingen (ui/thema.dart). Bij een wissel wordt dit
+        // hele thema opnieuw gebouwd, net als elke kleur in de app.
+        brightness: Thema.licht ? Brightness.light : Brightness.dark,
         scaffoldBackgroundColor: _bg,
+        // De statusbalk volgt het thema, ook onder een AppBar (zie [systeemBalken]).
+        appBarTheme: AppBarTheme(systemOverlayStyle: systeemBalken()),
         // De tekstrollen van de app. Hiervoor stond hier NIETS, en dus gaf
         // `Theme.of(context).textTheme` het standaardpalet van Material terug — 14 punten in een
         // kleur die niet in dit palet staat. Precies daarom bouwde elke widget zijn eigen
         // TextStyle: er was niets om op terug te vallen. Zie ui/typografie.dart voor de telling.
         textTheme: kTekstThema,
-        colorScheme: const ColorScheme.dark(
-          primary: _accent,
-          secondary: _accent2,
-          surface: _panel,
-        ),
+        colorScheme: Thema.licht
+            ? ColorScheme.light(primary: _accent, secondary: _accent2, surface: _panel, onSurface: _text)
+            : ColorScheme.dark(
+                primary: _accent,
+                secondary: _accent2,
+                surface: _panel,
+              ),
         // Every InkWell, ListTile and Material button in the app can already take focus — Flutter
         // gives them that for free, which is why they were reachable with a remote before anything
         // was changed. What they could not do was SAY so: the default focus tint is a whisper of
@@ -1858,7 +1917,7 @@ class DebridApp extends StatelessWidget {
         // twenty-five edits, and a mouse never sees it because a mouse never focuses.
         // Op een tv een lichte waas en geen paarse balk: een geselecteerde nummerrij was een vierkant
         // paars vlak over de volle breedte (gezien op de Shield, 15-10-2026). Zie [kTvSelectie].
-        focusColor: isTv ? Colors.white.withValues(alpha: .12) : _accent.withValues(alpha: .18),
+        focusColor: isTv ? kInkt.withValues(alpha: .12) : _accent.withValues(alpha: .18),
   // Hier stond niets, dus kregen alle zwevende menu's Materials eigen maten: hoeken van VIER punten
   // in een app die overal tussen 10 en 18 zit, en een vlak dat op geen van deze panelen lijkt. Dat
   // gold ook voor de twee sorteerkiezers, en juist die twee liepen uiteen — de ene gaf zichzelf een
@@ -1879,7 +1938,7 @@ class DebridApp extends StatelessWidget {
         // tenth of white. On the purple "Afspelen" button that is nothing at all, and on a TV a
         // button you cannot tell is selected is a button you press by accident. So they get the
         // same outline every other focusable thing in this app got.
-        filledButtonTheme: FilledButtonThemeData(style: _focusOutline),
+        filledButtonTheme: FilledButtonThemeData(style: _focusOutlineGevuld),
         textButtonTheme: TextButtonThemeData(style: _focusOutline),
         outlinedButtonTheme: OutlinedButtonThemeData(style: _focusOutline),
         iconButtonTheme: IconButtonThemeData(style: _focusOutline),
@@ -1906,7 +1965,7 @@ class DebridApp extends StatelessWidget {
             );
           }
           if (cloud.state == CloudState.restoring) {
-            return const Scaffold(
+            return Scaffold(
               backgroundColor: _bg,
               body: Center(child: CircularProgressIndicator(color: _accent)),
             );
@@ -2028,7 +2087,7 @@ Widget cover(Uint8List? bytes, {double size = 160, double radius = 12, bool circ
     decoration: BoxDecoration(
       shape: shape,
       borderRadius: br,
-      gradient: const LinearGradient(colors: [kPaneelHoog, kPaneel]),
+      gradient: LinearGradient(colors: [kPaneelHoog, kPaneel]),
     ),
     child: Icon(Icons.music_note_rounded, color: _muted.withValues(alpha: .4), size: size * .34),
   );
@@ -2171,12 +2230,19 @@ Widget glassSurface({
       gradient: LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
-        colors: [
-          Colors.white.withValues(alpha: isTv ? fillTop + .055 : fillTop),
-          Colors.white.withValues(alpha: isTv ? fillBottom + .032 : fillBottom),
-        ],
+        // Op licht wit matglas: een waas van 8 % wit is op gebroken wit niets, dus veel meer wit, en een
+        // donker haarrandje waar op donker een licht stond (Saber, 18-10-2026: "licht wit glas").
+        colors: Thema.licht
+            ? [Colors.white.withValues(alpha: .78), Colors.white.withValues(alpha: .60)]
+            : [
+                Colors.white.withValues(alpha: isTv ? fillTop + .055 : fillTop),
+                Colors.white.withValues(alpha: isTv ? fillBottom + .032 : fillBottom),
+              ],
       ),
-      border: Border.all(color: Colors.white.withValues(alpha: isTv ? edge + .12 : edge)),
+      border: Border.all(
+          color: Thema.licht
+              ? Colors.black.withValues(alpha: .08)
+              : Colors.white.withValues(alpha: isTv ? edge + .12 : edge)),
     ),
     child: child,
   );
@@ -2196,7 +2262,8 @@ Widget glassSurface({
     borderRadius: BorderRadius.circular(999),
     boxShadow: [
       BoxShadow(
-        color: Colors.black.withValues(alpha: shadow),
+        // Op licht een zachtere schaduw: 34 % zwart onder een witte pil is een vlek.
+        color: Colors.black.withValues(alpha: Thema.licht ? shadow * .35 : shadow),
         blurRadius: shadowBlur,
         offset: shadowOffset,
       ),
@@ -2244,6 +2311,10 @@ const double kGlasBalkenHoogte = 52 + Onderbalk.hoogte;
 /// telt hem er alleen bij als er geen marge is opgegeven.
 EdgeInsets onderOp(BuildContext context, EdgeInsets e) =>
     e.copyWith(bottom: e.bottom + MediaQuery.paddingOf(context).bottom);
+
+/// Staat de titel van de sectie als [GroteKop] in de schil (een gsm)? Dan laat een sectiepagina haar
+/// eigen titel weg: anders staat hij er twee keer (Saber, 18-10-2026). Tellingen en knoppen blijven.
+bool schilKop(BuildContext context) => isCompact(context) && !isTv;
 
 /// De kleur van een balk op glas: dezelfde tint als zonder ([balkKleur]), maar doorschijnend, zodat
 /// het glas eronder te zien is. Staat het glas plat (tv of de bewaker), dan dicht zoals altijd.
@@ -2356,7 +2427,7 @@ class _HomeShellState extends State<HomeShell> {
           _MeetHoogte(
             onHoogte: _zetTvMeldingHoogte,
             child: DecoratedBox(
-              decoration: const BoxDecoration(color: Color(0xE607080C)),
+              decoration: BoxDecoration(color: paginaWaas(0xE6)),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2580,6 +2651,7 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    _gsmKop.addListener(_volgGsmKop);
     if (isTv) HardwareKeyboard.instance.addHandler(_tvVangnet);
     // Stilstand: zie [kTvStilstand]. Elke tien seconden kijken is ruim genoeg voor twee minuten.
     if (isTv) {
@@ -2775,6 +2847,8 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
+    _gsmKop.dispose();
+    _titelInBalk.dispose();
     _zoekPauze?.cancel();
     _radio?.removeListener(_kijkNaarRadio);
     _sleutels?.nieuweSleutelMelding.removeListener(_toonSleutelMelding);
@@ -2822,7 +2896,7 @@ class _HomeShellState extends State<HomeShell> {
             controller: ctl,
             autofocus: true,
             style: const TextStyle(fontSize: 16),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               hintText: 'Artiest, album of nummer…',
               hintStyle: TextStyle(color: _muted),
             ),
@@ -2999,14 +3073,14 @@ class _HomeShellState extends State<HomeShell> {
                 decoration: InputDecoration(
                   isDense: true,
                   hintText: 'Zoek in je bibliotheek — artiest, album of nummer…',
-                  hintStyle: const TextStyle(color: _muted, fontSize: 13.5),
-                  prefixIcon: const Icon(Icons.search_rounded, size: 19, color: _muted),
+                  hintStyle: TextStyle(color: _muted, fontSize: 13.5),
+                  prefixIcon: Icon(Icons.search_rounded, size: 19, color: _muted),
                   suffixIcon: _q.isEmpty
                       ? null
                       : TvLabelled(
                           label: 'Wissen',
                           child: IconButton(
-                          icon: const Icon(Icons.close_rounded, size: 17, color: _muted),
+                          icon: Icon(Icons.close_rounded, size: 17, color: _muted),
                           tooltip: 'Wissen',
                           onPressed: () => setState(() {
                             _zoekPauze?.cancel();
@@ -3035,10 +3109,10 @@ class _HomeShellState extends State<HomeShell> {
                   label: Text(_qFilterLabel(f), style: const TextStyle(fontSize: 12)),
                   selected: sel,
                   onSelected: (_) => setState(() => _qFilter = f),
-                  backgroundColor: Colors.white.withValues(alpha: .06),
+                  backgroundColor: kInkt.withValues(alpha: .06),
                   selectedColor: _accent,
                   labelStyle: TextStyle(color: sel ? Colors.white : _muted),
-                  side: BorderSide(color: sel ? _accent : Colors.white.withValues(alpha: .12)),
+                  side: BorderSide(color: sel ? _accent : kInkt.withValues(alpha: .12)),
                   shape: const StadiumBorder(),
                   showCheckmark: false,
                 ),
@@ -3064,15 +3138,15 @@ class _HomeShellState extends State<HomeShell> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: .06),
+                    color: kInkt.withValues(alpha: .06),
                     borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: Colors.white.withValues(alpha: .12)),
+                    border: Border.all(color: kInkt.withValues(alpha: .12)),
                   ),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    const Icon(Icons.sort_rounded, size: 16, color: _muted),
+                    Icon(Icons.sort_rounded, size: 16, color: _muted),
                     const SizedBox(width: 6),
-                    Text(_sort.label, style: const TextStyle(fontSize: 12.5, color: _muted)),
-                    const Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
+                    Text(_sort.label, style: TextStyle(fontSize: 12.5, color: _muted)),
+                    Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
                   ]),
                 ),
               ),
@@ -3319,10 +3393,20 @@ class _HomeShellState extends State<HomeShell> {
                   ),
                   // De wachtrij staat NAAST de pagina's en niet in de navigator, dus hij krijgt de
                   // ruimte onder de balk hier: anders begint zijn kop achter de pillen.
+                  // Een glazen paneel en geen dichte strook (Saber, 18-10-2026: "wachtrij op de pc = glas
+                  // naast de inhoud"): los van de rand, met ronde hoeken, zoals in Nu speelt.
                   if (!isCompact(context) && context.watch<WachtrijPaneel>().open)
                     Padding(
-                      padding: EdgeInsets.only(top: ruimte),
-                      child: const WachtrijPaneelView(),
+                      padding: EdgeInsets.fromLTRB(kRuimte8, ruimte, kRuimte12, kRuimte12),
+                      child: SizedBox(
+                        width: WachtrijPaneelView.breedte,
+                        child: GlasVlak(
+                          key: const ValueKey('wachtrij-glas'),
+                          vorm: const BorderRadius.all(Radius.circular(18)),
+                          kleur: _panel,
+                          child: const WachtrijPaneelView(opGlas: true),
+                        ),
+                      ),
                     ),
                 ],
               ),
@@ -3409,8 +3493,11 @@ class _HomeShellState extends State<HomeShell> {
   /// brengt je terug naar de bovenkant van die sectie.
   void _gaNaar(int id) {
     binnenNav.currentState?.popUntil((r) => r.isFirst);
+    if (_view != id) GlasKwaliteit.paginaGewisseld();
     if (_menuIn) setState(() => _menuIn = false);
     if (_view != id) {
+      // Een andere sectie begint met zijn grote kop in beeld.
+      if (_gsmKop.hasClients) _gsmKop.jumpTo(0);
       final van = NavSections.items.indexWhere((s) => s.$1 == _view);
       final naar = NavSections.items.indexWhere((s) => s.$1 == id);
       _richting = naar >= van ? 1 : -1;
@@ -3496,11 +3583,22 @@ class _HomeShellState extends State<HomeShell> {
               onPressed: () => _scaffoldKey.currentState?.openDrawer(),
             ),
             ),
+            // Pas als de grote kop weg is (zie [GroteKop]): bovenaan staat de titel daar, groot, en
+            // niet ook nog hier.
             Expanded(
-              child: Text(label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+              child: ValueListenableBuilder<bool>(
+                valueListenable: _titelInBalk,
+                builder: (_, aan, kind) => AnimatedOpacity(
+                  opacity: aan ? 1 : 0,
+                  duration: const Duration(milliseconds: 160),
+                  child: kind,
+                ),
+                child: Text(label,
+                    key: const ValueKey('gsm-balktitel'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+              ),
             ),
             // The one badge worth carrying out of the drawer: a download running while you are
             // somewhere else is the thing you would otherwise have to go looking for.
@@ -3560,6 +3658,20 @@ class _HomeShellState extends State<HomeShell> {
 
   /// Het menu ingeklapt, omdat je omlaag scrolde (alleen pc, Mac en iPad). Zie [_opScrol].
   bool _menuIn = false;
+
+  /// De buitenste scroller op een gsm: de [GroteKop] en het zoekveld, die inklappen terwijl de
+  /// pagina scrolt. Zie [_sectieKolom].
+  final _gsmKop = ScrollController();
+
+  /// Of de titel klein in de balk staat: zodra de grote kop eronder verdwenen is. Een eigen seintje,
+  /// zodat de balk niet bij elke scrolstap opnieuw gebouwd wordt, alleen als hij omslaat.
+  final _titelInBalk = ValueNotifier<bool>(false);
+
+  void _volgGsmKop() {
+    if (!_gsmKop.hasClients) return;
+    final aan = _gsmKop.offset > GroteKop.inklapGrens;
+    if (aan != _titelInBalk.value) _titelInBalk.value = aan;
+  }
 
   /// Waar de pil bij de laatste sectiewissel heen ging: 1 = naar rechts, -1 = naar links.
   int _richting = 1;
@@ -3638,9 +3750,13 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   /// De punten van het menu op een pc, Mac of iPad: Zoeken, de elf secties, Instellingen.
+  ///
+  /// Zonder "Op dit toestel" op de pc die de muziek zelf heeft (Saber, 18-10-2026): daar staat alles
+  /// al, en de pagina zei er "speelt ook zonder je pc". Een Mac of iPad is een client en houdt hem.
   List<MenuPunt> _menuPunten(int bezig) => [
         const MenuPunt(sleutel: 'zoeken', label: 'Zoeken', icoon: MenuIcoonSoort.zoeken),
         for (final (id, label, _) in NavSections.items)
+          if (id != 10 || context.read<LibraryStore>().remote != null)
           MenuPunt(
             sleutel: MenuPunt.voorSectie(id),
             label: label,
@@ -3721,7 +3837,7 @@ class _HomeShellState extends State<HomeShell> {
             child: Row(
               children: [
                 const SizedBox(width: 12),
-                const Icon(Icons.search_rounded, size: 18, color: _muted),
+                Icon(Icons.search_rounded, size: 18, color: _muted),
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
@@ -3730,7 +3846,7 @@ class _HomeShellState extends State<HomeShell> {
                     focusNode: _searchFocus,
                     onChanged: _zetZoekterm,
                     style: const TextStyle(fontSize: 14),
-                    decoration: const InputDecoration.collapsed(
+                    decoration: InputDecoration.collapsed(
                       hintText: 'Zoek in je bibliotheek — artiest, album of nummer…',
                       hintStyle: TextStyle(color: _muted, fontSize: 13.5),
                     ),
@@ -3740,7 +3856,7 @@ class _HomeShellState extends State<HomeShell> {
                 ..._sortControl(),
                 IconButton(
                   key: const ValueKey('menu-zoek-sluiten'),
-                  icon: const Icon(Icons.close_rounded, size: 18, color: _muted),
+                  icon: Icon(Icons.close_rounded, size: 18, color: _muted),
                   tooltip: 'Sluiten (Esc)',
                   onPressed: _sluitZoeken,
                 ),
@@ -3765,13 +3881,13 @@ class _HomeShellState extends State<HomeShell> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
           decoration: BoxDecoration(
-            color: _qFilter == QFilter.all ? Colors.white.withValues(alpha: .06) : _accent.withValues(alpha: .28),
+            color: _qFilter == QFilter.all ? kInkt.withValues(alpha: .06) : _accent.withValues(alpha: .28),
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: Colors.white.withValues(alpha: .12)),
+            border: Border.all(color: kInkt.withValues(alpha: .12)),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Text(_qFilterLabel(_qFilter), style: const TextStyle(fontSize: 12.5, color: _muted)),
-            const Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
+            Text(_qFilterLabel(_qFilter), style: TextStyle(fontSize: 12.5, color: _muted)),
+            Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
           ]),
         ),
       );
@@ -3790,13 +3906,34 @@ class _HomeShellState extends State<HomeShell> {
   /// Dit is de WORTELROUTE van de binnennavigator. Hij wordt aangeroepen vanuit [_SectieHost], die
   /// zijn afhankelijkheid op [ShellScope] registreert -- daardoor komt een wissel van sectie,
   /// zoekterm, filter of sortering hier wél binnen, dwars door de routecache heen.
-  Widget _sectieKolom(BuildContext context) => Column(
-        children: [
-          // No permanent search field on a television. It cost 75 points of height for a control
-          // you cannot type into without the on-screen keyboard taking over the screen — and the
-          // rail has a "Zoeken" entry that asks for the words once and then gets out of the way.
-          // Op een pc, Mac en iPad staat het zoekveld sinds 17-10-2026 in de capsule ([_openZoeken]).
-          if (_searchable && !isTv && isCompact(context)) _searchBar(context),
+  Widget _sectieKolom(BuildContext context) {
+    final wissel = _sectieWissel(context);
+    // No permanent search field on a television. It cost 75 points of height for a control you
+    // cannot type into without the on-screen keyboard taking over the screen — and the rail has a
+    // "Zoeken" entry that asks for the words once and then gets out of the way. Op een pc, Mac en iPad
+    // staat het zoekveld sinds 17-10-2026 in de capsule ([_openZoeken]).
+    if (!schilKop(context)) return wissel;
+    // Op een gsm: de grote titel en het zoekveld boven de pagina, en ze klappen in terwijl je scrolt
+    // (Saber, 18-10-2026: "één keer de titel", als grote kop die inklapt). Een NestedScrollView en geen
+    // kop die krimpt: krimpt de kop terwijl de lijst ook schuift, dan loopt de inhoud twee keer zo snel
+    // als je vinger. Hier schuift eerst de kop weg en daarna de lijst, in één beweging. De lijsten van
+    // de secties nemen de scroller van hier vanzelf over (`primary`, op een telefoon standaard).
+    // Op Start is de groet de grote kop, en niet het woord "Start" met de groet er nog eens onder
+    // (Saber, 19-10-2026). In de balk staat na het inklappen gewoon "Start".
+    final titel = _view == 5
+        ? '${begroeting(DateTime.now())} 👋'
+        : NavSections.items.firstWhere((e) => e.$1 == _view, orElse: () => (5, 'Start', Icons.home_rounded)).$2;
+    return NestedScrollView(
+      controller: _gsmKop,
+      headerSliverBuilder: (context, _) => [
+        SliverToBoxAdapter(child: GroteKop(titel, key: const ValueKey('gsm-grote-kop'))),
+        if (_searchable) SliverToBoxAdapter(child: _searchBar(context)),
+      ],
+      body: wissel,
+    );
+  }
+
+  Widget _sectieWissel(BuildContext context) =>
           // Een korte overvloeier in plaats van een harde knip.
           //
           // De navigatiepil schuift al 300 ms naar zijn nieuwe plek terwijl de inhoud eronder al
@@ -3806,8 +3943,7 @@ class _HomeShellState extends State<HomeShell> {
           // Buiten de tv sinds 17-10-2026 opzij, in de richting waarin de pil gaat (Saber: "schuiven in
           // de richting van de pil"): gaat de pil naar rechts, dan komt de nieuwe pagina van rechts
           // binnen en schuift de oude naar links weg. Kort, zodat je voelt waar je heen gaat.
-          Expanded(
-            child: AnimatedSwitcher(
+          AnimatedSwitcher(
               duration: Duration(milliseconds: isTv ? 160 : 250),
               switchInCurve: Curves.easeOutCubic,
               switchOutCurve: Curves.easeInCubic,
@@ -3823,12 +3959,10 @@ class _HomeShellState extends State<HomeShell> {
                 ),
               ),
               child: KeyedSubtree(key: ValueKey(_view), child: _content()),
-            ),
-          ),
-        ],
-      );
+            );
 
   Widget _content() {
+    // Zie [_sectieKolom]: op een gsm staat de titel als grote kop boven de pagina.
     if (_view == 5) return const HomeStartView();
     if (_view == 6) return const DownloadsView();
     if (_view == 10) return const OpDitToestelView();
@@ -3937,13 +4071,11 @@ class _HomeShellState extends State<HomeShell> {
 /// GETAL verandert, en dan alleen dit hoekje. Een download van twintig nummers kost zo twintig
 /// hertekeningen van een pilletje in plaats van duizenden van het hele scherm.
 class _DownloadBadge extends StatelessWidget {
-  const _DownloadBadge({
-    this.horizontaal = 8,
-    this.verticaal = 3,
-    this.tekstmaat = 11.5,
-    this.ronding = 10,
-    this.marge = EdgeInsets.zero,
-  });
+  const _DownloadBadge({this.marge = EdgeInsets.zero})
+      : horizontaal = 8,
+        verticaal = 3,
+        tekstmaat = 11.5,
+        ronding = 10;
 
   final double horizontaal;
   final double verticaal;
@@ -3955,7 +4087,12 @@ class _DownloadBadge extends StatelessWidget {
   final EdgeInsets marge;
 
   /// De maat zoals hij in de la staat, naast "Downloads".
-  const _DownloadBadge.la() : this(horizontaal: 7, verticaal: 2, tekstmaat: 11, ronding: 9);
+  const _DownloadBadge.la()
+      : horizontaal = 7,
+        verticaal = 2,
+        tekstmaat = 11,
+        ronding = 9,
+        marge = EdgeInsets.zero;
 
   @override
   Widget build(BuildContext context) {
@@ -4020,9 +4157,9 @@ class _SectionsDrawer extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
               child: Text('${maten.$1} ${maten.$1 == 1 ? 'album' : 'albums'} · '
                   '${maten.$2} ${maten.$2 == 1 ? 'nummer' : 'nummers'}',
-                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+                  style: TextStyle(color: _muted, fontSize: 12.5)),
             ),
-            const Divider(color: _line, height: 1),
+            Divider(color: _line, height: 1),
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
@@ -4039,10 +4176,10 @@ class _SectionsDrawer extends StatelessWidget {
                     ListTile(
                       selected: huidig == id,
                       selectedTileColor: _accent.withValues(alpha: .16),
-                      selectedColor: Colors.white,
+                      selectedColor: kFel,
                       leading: switch (menuIcoonVoorSectie(id)) {
                         final soort? => MenuIcoon(
-                            soort: soort, kleur: huidig == id ? Colors.white : _muted, gekozen: huidig == id, maat: 20),
+                            soort: soort, kleur: huidig == id ? kFel : _muted, gekozen: huidig == id, maat: 20),
                         null => Icon(icoon, size: 20),
                       },
                       title: Text(label),
@@ -4055,9 +4192,9 @@ class _SectionsDrawer extends StatelessWidget {
                 ],
               ),
             ),
-            const Divider(color: _line, height: 1),
+            Divider(color: _line, height: 1),
             ListTile(
-              leading: const MenuIcoon(soort: MenuIcoonSoort.instellingen, kleur: _muted, maat: 20),
+              leading: MenuIcoon(soort: MenuIcoonSoort.instellingen, kleur: _muted, maat: 20),
               title: const Text('Instellingen'),
               onTap: () {
                 Navigator.pop(context);
@@ -4170,8 +4307,8 @@ class _OfflineBannerState extends State<_OfflineBanner> {
         return _rustig(
           icoon: Icons.sync_rounded,
           tekst: verbindingsTekst(stand, nu: nu),
-          kleur: const Color(0xFF9DB4C8),
-          achter: const Color(0xFF1A2129),
+          kleur: leesbaar(const Color(0xFF9DB4C8)),
+          achter: vlakOpThema(const Color(0xFF1A2129)),
         );
       }
       if (nieuweWeg) {
@@ -4182,8 +4319,8 @@ class _OfflineBannerState extends State<_OfflineBanner> {
             Verbindingsweg.rechtstreeks => Icons.public_rounded,
           },
           tekst: verbindingsTekst(stand, nu: nu),
-          kleur: const Color(0xFF8FD3A6),
-          achter: const Color(0xFF15241B),
+          kleur: leesbaar(const Color(0xFF8FD3A6)),
+          achter: vlakOpThema(const Color(0xFF15241B)),
         );
       }
       return const SizedBox.shrink();
@@ -4192,10 +4329,10 @@ class _OfflineBannerState extends State<_OfflineBanner> {
     // geen punt erachter.
     final reden = verbindingsTekst(stand, nu: nu, kort: isCompact(context), toestel: _toestel(context));
     final punt = reden.endsWith('?') || reden.endsWith('.') || reden.endsWith('…') ? '' : '.';
-    final kleur = geweigerd ? const Color(0xFFE89A6A) : const Color(0xFFE8C36A);
+    final kleur = geweigerd ? leesbaar(const Color(0xFFE89A6A)) : leesbaar(const Color(0xFFE8C36A));
     return Container(
       width: double.infinity,
-      color: geweigerd ? const Color(0xFF2E1F16) : const Color(0xFF2A2416),
+      color: geweigerd ? vlakOpThema(const Color(0xFF2E1F16)) : vlakOpThema(const Color(0xFF2A2416)),
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
       child: Row(children: [
         Icon(geweigerd ? Icons.lock_outline_rounded : Icons.cloud_off_rounded, size: 17, color: kleur),
@@ -4588,7 +4725,7 @@ class _TvTopBarState extends State<TvTopBar> {
     // zwevende capsule, en daarin één pil die van het ene woord naar het volgende schuift.
     WidgetsBinding.instance.addPostFrameCallback((_) => _meetPil());
     final pil = _pil;
-    const tint = MenuTint.paars;
+    final tint = MenuTint.nu;
     return SizedBox(
       height: TvTopBar.hoogte + tvOverscan.top,
       child: Padding(
@@ -4858,9 +4995,10 @@ class Onderbalk extends StatelessWidget {
   /// De rij zelf, zonder de systeeminzet die er onder komt.
   static const hoogte = 48.0;
 
-  /// Korter dan in de la ("Zoeken" tegen "Online zoeken"): onder een pictogram van veertig punten
-  /// breed past geen zin.
-  static const _kort = {5: 'Start', 0: 'Albums', 4: 'Tracks', 2: 'Zoeken', 3: 'Ontdek'};
+  /// De namen onder de pictogrammen. "Online zoeken" voluit (Saber, 18-10-2026): "Zoeken" alleen
+  /// las als zoeken in je eigen bibliotheek, en dat zit in het zoekveld bovenaan Albums, Tracks en
+  /// Artiesten. Op 10 punten past het onder de gekozen pil (alleen de gekozen sectie draagt een naam).
+  static const _kort = {5: 'Start', 0: 'Albums', 4: 'Tracks', 2: 'Online zoeken', 3: 'Ontdek'};
 
   @override
   Widget build(BuildContext context) {
@@ -4944,7 +5082,7 @@ class Onderbalk extends StatelessWidget {
                 child: Text(
                   label,
                   maxLines: 1,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 10,
                     height: 1.1,
                     fontWeight: FontWeight.w600,
@@ -5007,10 +5145,11 @@ class _OfflineSection extends StatelessWidget {
           spacing: 14,
           runSpacing: 4,
           children: [
-            const Text('Op dit toestel',
-                style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+            if (!schilKop(context))
+              const Text('Op dit toestel',
+                  style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
             Text('${tracks.length} nummers · ${_size(offline.bytes)}',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             if (tracks.isNotEmpty)
               TextButton.icon(
                 onPressed: () async {
@@ -5020,7 +5159,7 @@ class _OfflineSection extends StatelessWidget {
                       backgroundColor: _panel,
                       title: const Text('Alles van dit toestel halen?',
                           style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-                      content: const Text(
+                      content: Text(
                           'Je muziek blijft gewoon op je pc staan. Alleen de kopieën op dit '
                           'toestel gaan weg.',
                           style: TextStyle(color: _muted, height: 1.4)),
@@ -5054,7 +5193,7 @@ class _OfflineSection extends StatelessWidget {
                 child: job.bezig
                     ? CircularProgressIndicator(
                         strokeWidth: 2.4, value: job.progress, color: _accent)
-                    : const Icon(Icons.error_outline_rounded, size: 20, color: _mislukt),
+                    : Icon(Icons.error_outline_rounded, size: 20, color: _mislukt),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -5068,13 +5207,13 @@ class _OfflineSection extends StatelessWidget {
                       Text(job.error!,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _mislukt, fontSize: 12)),
+                          style: TextStyle(color: _mislukt, fontSize: 12)),
                   ],
                 ),
               ),
               if (job.bezig)
                 Text(job.progress == null ? '' : '${(job.progress! * 100).round()}%',
-                    style: const TextStyle(color: _muted, fontSize: 12.5))
+                    style: TextStyle(color: _muted, fontSize: 12.5))
               else ...[
                 TvLabelled(
                   label: 'Opnieuw',
@@ -5109,7 +5248,7 @@ class _OfflineSection extends StatelessWidget {
                 border: Border.all(color: _line),
               ),
               child: Row(children: [
-                const Icon(Icons.offline_pin_rounded, size: 18, color: _accent2),
+                Icon(Icons.offline_pin_rounded, size: 18, color: _accent2),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -5124,7 +5263,7 @@ class _OfflineSection extends StatelessWidget {
                           '${_size(entry.value.fold(0, (n, t) => n + t.bytes))}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _muted, fontSize: 12)),
+                          style: TextStyle(color: _muted, fontSize: 12)),
                     ],
                   ),
                 ),
@@ -5158,7 +5297,7 @@ class _OfflineSection extends StatelessWidget {
 /// De kleur van "er ging iets mis, maar er is niets kapot" — dezelfde amber die de app elders
 /// voor een waarschuwing gebruikt. Rood is voor onomkeerbaar; een mislukte download probeer je
 /// gewoon opnieuw.
-const _mislukt = Color(0xFFE8913A);
+Color get _mislukt => leesbaar(const Color(0xFFE8913A));
 
 class _OfflineAlbumButton extends StatefulWidget {
   const _OfflineAlbumButton({required this.album});
@@ -5327,7 +5466,7 @@ class OpDitToestelView extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.offline_pin_outlined, size: 44, color: _muted),
+              Icon(Icons.offline_pin_outlined, size: 44, color: _muted),
               const SizedBox(height: 16),
               const Text('Nog niets op dit toestel',
                   textAlign: TextAlign.center,
@@ -5404,8 +5543,10 @@ class AlbumsGrid extends StatelessWidget {
       physics: ingebed ? const NeverScrollableScrollPhysics() : null,
       slivers: [
         // En ingebed ook geen eigen kop: het scherm eromheen zet er al een. Anders staat er twee
-        // keer "Albums" onder elkaar, in twee verschillende maten — gezien op Favorieten.
-        if (!ingebed)
+        // keer "Albums" onder elkaar, in twee verschillende maten — gezien op Favorieten. Op een gsm
+        // ook niet als hij gewoon "Albums" zou zeggen: daar staat dat al als grote kop boven de
+        // pagina ([GroteKop]; gsm, 19-10-2026). Een zoekuitslag ("12 resultaten") blijft wel staan.
+        if (!ingebed && (title != null || !schilKop(context)))
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
             sliver: SliverToBoxAdapter(
@@ -5434,7 +5575,7 @@ class AlbumsGrid extends StatelessWidget {
                     border: Border.all(color: _accent.withValues(alpha: .4)),
                   ),
                   child: Row(children: [
-                    const Icon(Icons.auto_delete_outlined, size: 18, color: _accent),
+                    Icon(Icons.auto_delete_outlined, size: 18, color: _accent),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
@@ -5444,7 +5585,7 @@ class AlbumsGrid extends StatelessWidget {
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                       ),
                     ),
-                    const Icon(Icons.chevron_right_rounded, color: _muted),
+                    Icon(Icons.chevron_right_rounded, color: _muted),
                   ]),
                 ),
               ),
@@ -5461,7 +5602,9 @@ class AlbumsGrid extends StatelessWidget {
           ..._albumRowSlivers(albums, sort)
         else
           SliverPadding(
-            padding: onderOp(context, const EdgeInsets.fromLTRB(24, 0, 24, 24)),
+            // Zonder eigen kop (gsm) kwamen de tegels tegen de chips van het zoekveld aan.
+            padding: onderOp(context,
+                EdgeInsets.fromLTRB(24, title == null && schilKop(context) ? 12 : 0, 24, 24)),
             // De hoogte uit de echte celbreedte, zodat de hoes vierkant blijft: zie [tegelRaster].
             sliver: SliverLayoutBuilder(
               builder: (context, c) => SliverGrid(
@@ -5653,7 +5796,7 @@ class _WerkstreepSchilder extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.drawRect(Offset.zero & size, Paint()..color = Colors.white.withValues(alpha: .06));
+    canvas.drawRect(Offset.zero & size, Paint()..color = kInkt.withValues(alpha: .06));
     // Een stuk van een derde dat van links naar rechts loopt en aan de rand verdwijnt.
     final breed = size.width / 3;
     final x = -breed + (size.width + breed) * Curves.easeInOut.transform(loop.value);
@@ -5848,14 +5991,14 @@ class AlbumCard extends StatelessWidget {
         children: [
           Flexible(
               child: ArtistNames(
-                  names: [a.artist], style: const TextStyle(color: _muted, fontSize: 12))),
+                  names: [a.artist], style: TextStyle(color: _muted, fontSize: 12))),
           if (a.edition != null)
             // Ook Flexible, anders loopt de rij over zodra de artiestnaam wat langer is.
             Flexible(
                 child: Text(' · ${a.edition}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: _muted, fontSize: 12))),
+                    style: TextStyle(color: _muted, fontSize: 12))),
         ],
       )),
       onTap: () => openPagina(context, (_) => AlbumDetailPage(album: a)),
@@ -7011,7 +7154,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                   ),
                 ),
                 if (_officialBusy && _official.isEmpty && !album.isSingle)
-                  const SliverToBoxAdapter(
+                  SliverToBoxAdapter(
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(kGoot, kRuimte4, kGoot, kRuimte8),
                       child: Row(children: [
@@ -7255,8 +7398,12 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                 Text('Op andere uitgaves · ${_officialBonus.length}',
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                 const SizedBox(width: 8),
-                const Text('niet op jouw persing, wel op deze plaat',
-                    style: TextStyle(color: _muted, fontSize: 11.5)),
+                // Flexible met puntjes: op een gsm liep deze zin anders over de rand van het scherm
+                // ("wel op d", 18-10-2026).
+                Flexible(
+                  child: Text('niet op jouw persing, wel op deze plaat',
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 11.5)),
+                ),
               ]),
             ),
           ),
@@ -7304,7 +7451,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
         crossAxisAlignment: narrow ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
           Row(children: [
-          const Icon(Icons.playlist_add_check_rounded, size: 18, color: _accent2),
+          Icon(Icons.playlist_add_check_rounded, size: 18, color: _accent2),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -7448,6 +7595,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
             onFront: _kleurUitKop,
             draai: isTv ? null : _draai,
             onAchter: (b) => _heeftAchter = b != null,
+            kantel: _isDesktop ? KantelBron.muis : null,
+            // Niet in de smalle indeling: daar staan "Album" en de titel vlak onder de hoes, en lag de
+            // spiegeling eroverheen (gsm, 18-10-2026).
+            spiegel: !isTv && !narrow,
           );
     // Twee tikken draaien de hoes om; een gewone tik doet hier niets, dus er hoeft niets te wachten.
     final hoes = isTv ? art : DubbelTikVlak(onDubbel: () => _draai.draai(heeftAchterkant: _heeftAchter), child: art);
@@ -7455,7 +7606,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     final details = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(album.isSingle ? 'Single' : 'Album', style: const TextStyle(color: _muted)),
+                Text(album.isSingle ? 'Single' : 'Album', style: TextStyle(color: _muted)),
                 const SizedBox(height: 6),
                 Text(album.title,
                     style: TextStyle(fontSize: narrow ? 24 : 30, fontWeight: FontWeight.w800)),
@@ -7468,7 +7619,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                 // Zie ui/kopfeiten.dart: de feiten begonnen hier met " · ", en als ze niet naast de
                 // artiest pasten stond die punt vooraan een nieuwe regel.
                 KopFeiten(
-                  artiest: ArtistNames(names: [album.artist], style: const TextStyle(color: _muted)),
+                  artiest: ArtistNames(names: [album.artist], style: TextStyle(color: _muted)),
                   artiestTekst: album.artist,
                   feiten: [
                     // Het jaar van de PLAAT, niet van je bestand (Saber, 16-10-2026: bovenaan 2006 uit
@@ -7478,7 +7629,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                     if (album.genre != null) album.genre!,
                     '${album.tracks.length} ${album.tracks.length == 1 ? 'nummer' : 'nummers'}',
                   ],
-                  stijl: const TextStyle(color: _muted),
+                  stijl: TextStyle(color: _muted),
                 ),
                 const SizedBox(height: 18),
                 // Wrapped on a phone rather than a Row. Afspelen, Offline bewaren and Radio are
@@ -7703,7 +7854,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
   /// erger dan geen venster.
   Widget _tracklijst(List<ChoiceTrack> lijst) {
     if (lijst.isEmpty) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.fromLTRB(54, 0, 8, 8),
         child: Text('Deze bron geeft geen tracklijst voor deze uitgave.',
             style: TextStyle(color: _muted, fontSize: 12)),
@@ -7743,7 +7894,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
                       style: TextStyle(
                           fontSize: 12,
                           height: 1.3,
-                          color: s.track != null ? Colors.white70 : _muted),
+                          color: s.track != null ? kFel.withValues(alpha: .7) : _muted),
                     ),
                   ),
                 ],
@@ -8012,13 +8163,13 @@ class _MetadataEditorState extends State<MetadataEditor> {
               // Er staan al treffers, maar een bron zoekt nog: een dun streepje erboven, geen molen
               // eroverheen.
               if (_searching && _results.isNotEmpty)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.only(bottom: 6),
                   child: LinearProgressIndicator(minHeight: 2, color: _accent, backgroundColor: Colors.transparent),
                 ),
               Expanded(
                 child: _searching && _results.isEmpty
-                    ? const Center(child: CircularProgressIndicator(color: _accent))
+                    ? Center(child: CircularProgressIndicator(color: _accent))
                     : _results.isEmpty
                         ? Center(
                             child: Padding(
@@ -8074,13 +8225,13 @@ class _MetadataEditorState extends State<MetadataEditor> {
                                                           (m.artist.isEmpty ? '—' : m.artist),
                                                       maxLines: 1,
                                                       overflow: TextOverflow.ellipsis,
-                                                      style: const TextStyle(
+                                                      style: TextStyle(
                                                           color: _muted, fontSize: 12)),
                                                 ],
                                               ),
                                             ),
                                             if (sel)
-                                              const Icon(Icons.check_circle_rounded,
+                                              Icon(Icons.check_circle_rounded,
                                                   color: _accent),
                                             // Een EIGEN raakvlak, naast dat van de regel. Openklappen
                                             // is kijken; de regel aantikken is kiezen. Zaten die op
@@ -8092,7 +8243,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
                                                   ? 'Tracklijst verbergen'
                                                   : 'Tracklijst tonen — staan jouw versies erop?',
                                               icon: _laden.contains(k)
-                                                  ? const SizedBox(
+                                                  ? SizedBox(
                                                       width: 16,
                                                       height: 16,
                                                       child: CircularProgressIndicator(
@@ -8128,12 +8279,12 @@ class _MetadataEditorState extends State<MetadataEditor> {
                 children: [
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(false),
-                    child: const Text('Annuleren', style: TextStyle(color: _muted)),
+                    child: Text('Annuleren', style: TextStyle(color: _muted)),
                   ),
                   // Zeggen WAAROM de knop uit staat. Een dode knop zonder uitleg is precies zo
                   // verwarrend als een knop die "Aangepast" zegt en niets doet.
                   if (!_kanToepassen)
-                    const Expanded(
+                    Expanded(
                       child: Text('Kies eerst een uitgave, of vul zelf een album in',
                           textAlign: TextAlign.right,
                           maxLines: 2,
@@ -8197,7 +8348,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
 
   InputDecoration _inputDeco(String label) => InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(color: _muted),
+        labelStyle: TextStyle(color: _muted),
         isDense: true,
         filled: true,
         fillColor: _panel2,
@@ -8348,7 +8499,7 @@ class _TrackRowState extends State<TrackRow> {
               SizedBox(
                 width: 28,
                 child: _hover
-                    ? const Icon(Icons.play_arrow_rounded, size: 18, color: _accent)
+                    ? Icon(Icons.play_arrow_rounded, size: 18, color: _accent)
                     : Text(widget.label ?? '${t.trackNo > 0 ? t.trackNo : widget.index + 1}',
                         textAlign: TextAlign.right,
                         style: kTekstKlein),
@@ -8374,7 +8525,7 @@ class _TrackRowState extends State<TrackRow> {
                       : Text(widget.reden!,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: kTekstKlein.copyWith(color: const Color(0xFFE0A33A)));
+                          style: kTekstKlein.copyWith(color: leesbaar(const Color(0xFFE0A33A))));
                   if (guests.isEmpty && reden == null) return title;
                   return Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -8419,7 +8570,7 @@ class _TrackRowState extends State<TrackRow> {
                             : '· ${_fmt(Duration(seconds: widget.uitgaveSeconden!))}',
                         style: kTekstKlein.copyWith(
                             color: widget.uitgaveTijdWaarschuwt
-                                ? const Color(0xFFE0B341)
+                                ? leesbaar(const Color(0xFFE0B341))
                                 : _muted)),
                   ),
                 ),
@@ -8655,21 +8806,30 @@ class _ArtistsViewState extends State<ArtistsView> {
       hoesVanArtiest.putIfAbsent(a.artist, () => a.cover);
     }
     if (artists.isEmpty) {
-      return const Center(child: Text('Geen artiesten gevonden.', style: TextStyle(color: _muted)));
+      return Center(child: Text('Geen artiesten gevonden.', style: TextStyle(color: _muted)));
     }
     return CustomScrollView(
       // Zie het albumraster: de plek waar je was overleeft een wissel naar een ander scherm.
       key: const PageStorageKey('artiestenraster'),
       slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
-          sliver: SliverToBoxAdapter(
-            child: Text('Artiesten${artists.length == widget.lib.artists.length ? "" : " · ${artists.length}"}',
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+        // Op een gsm staat "Artiesten" al als grote kop boven de pagina ([GroteKop]); alleen bij een
+        // zoekopdracht zegt deze regel iets, namelijk hoeveel er overblijven.
+        if (!schilKop(context) || artists.length != widget.lib.artists.length)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
+            sliver: SliverToBoxAdapter(
+              child: Text(
+                  schilKop(context)
+                      ? '${artists.length} ${artists.length == 1 ? 'artiest' : 'artiesten'}'
+                      : 'Artiesten${artists.length == widget.lib.artists.length ? "" : " · ${artists.length}"}',
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+            ),
           ),
-        ),
         SliverPadding(
-          padding: onderOp(context, const EdgeInsets.fromLTRB(24, 0, 24, 24)),
+          // Zonder eigen kop (gsm) kwamen de tegels tegen de chips van het zoekveld aan.
+          padding: onderOp(context,
+              EdgeInsets.fromLTRB(
+                  24, schilKop(context) && artists.length == widget.lib.artists.length ? 12 : 0, 24, 24)),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                 maxCrossAxisExtent: 180,
@@ -8755,7 +8915,7 @@ class _CreditsPanelState extends State<CreditsPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('CREDITS',
+          Text('CREDITS',
               style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8)),
           const SizedBox(height: 8),
           Wrap(
@@ -8800,17 +8960,17 @@ class _CreditChipState extends State<_CreditChip> {
           decoration: BoxDecoration(
             color: _hover ? _panel2 : _panel,
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: _hover ? Colors.white.withValues(alpha: .18) : _line),
+            border: Border.all(color: _hover ? kInkt.withValues(alpha: .18) : _line),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(widget.credit.role,
-                  style: const TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w600)),
+                  style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w600)),
               const SizedBox(width: 7),
               Text(widget.credit.name,
                   style: TextStyle(
-                      fontSize: 12.5, fontWeight: FontWeight.w600, color: _hover ? Colors.white : null)),
+                      fontSize: 12.5, fontWeight: FontWeight.w600, color: _hover ? kFel : null)),
             ],
           ),
         ),
@@ -8924,7 +9084,7 @@ class _PersonPageState extends State<PersonPage> {
             ),
           ),
           if (_busy)
-            const SliverToBoxAdapter(
+            SliverToBoxAdapter(
               child: Padding(
                 padding: EdgeInsets.all(40),
                 child: Center(child: CircularProgressIndicator(color: _accent)),
@@ -8939,7 +9099,7 @@ class _PersonPageState extends State<PersonPage> {
                         ? 'De producties konden niet worden opgehaald. Wikidata antwoordde niet — '
                             'probeer het straks nog eens.'
                         : 'Geen verdere producties gevonden voor deze naam.',
-                    style: const TextStyle(color: _muted)),
+                    style: TextStyle(color: _muted)),
               ),
             )
           else ...[
@@ -8956,8 +9116,8 @@ class _PersonPageState extends State<PersonPage> {
                   final w = _works[i];
                   return ListTile(
                     title: Text(w.title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                    subtitle: w.year == null ? null : Text(w.year!, style: const TextStyle(color: _muted, fontSize: 12)),
-                    trailing: const Icon(Icons.search_rounded, size: 17, color: _muted),
+                    subtitle: w.year == null ? null : Text(w.year!, style: TextStyle(color: _muted, fontSize: 12)),
+                    trailing: Icon(Icons.search_rounded, size: 17, color: _muted),
                     onTap: () => openPagina(
                       context,
                       (_) => Scaffold(
@@ -9039,7 +9199,7 @@ class _RelatedArtistCardState extends State<_RelatedArtistCard> {
                         bottom: 2,
                         child: Container(
                           padding: const EdgeInsets.all(3),
-                          decoration: const BoxDecoration(color: _accent2, shape: BoxShape.circle),
+                          decoration: BoxDecoration(color: _accent2, shape: BoxShape.circle),
                           child: const Icon(Icons.check_rounded, size: 12, color: Colors.black),
                         ),
                       ),
@@ -9051,7 +9211,7 @@ class _RelatedArtistCardState extends State<_RelatedArtistCard> {
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 12.5, color: _hover ? Colors.white : null)),
+                        fontWeight: FontWeight.w600, fontSize: 12.5, color: _hover ? kFel : null)),
               ],
             ),
           ),
@@ -9233,7 +9393,7 @@ class _RondjeState extends State<_Rondje> {
       message: widget.naam,
       // Zelf de kleur: de standaardtip is wit in een donker thema.
       decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(6)),
-      textStyle: const TextStyle(color: kTekst, fontSize: 12),
+      textStyle: TextStyle(color: kTekst, fontSize: 12),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => _licht = true),
@@ -9254,7 +9414,7 @@ class _RondjeState extends State<_Rondje> {
               // Een rand in de achtergrondkleur scheidt de rondjes die over elkaar liggen; geselecteerd
               // wordt hij wit, zodat je op een tv ziet welke artiest OK opent.
               padding: const EdgeInsets.all(1.5),
-              decoration: BoxDecoration(shape: BoxShape.circle, color: _licht ? Colors.white : _bg),
+              decoration: BoxDecoration(shape: BoxShape.circle, color: _licht ? kFel : _bg),
               child: ArtiestPortret(naam: widget.naam, maat: m - 3, hoek: m),
             ),
           ),
@@ -9323,7 +9483,7 @@ class _ArtistCardState extends State<_ArtistCard> {
                   style: TextStyle(
                       fontWeight: FontWeight.w600,
                       fontSize: 13,
-                      color: _hover ? Colors.white : null)),
+                      color: _hover ? kFel : null)),
             ],
           ),
         ),
@@ -9417,7 +9577,7 @@ class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
           // Rond, nu ze in een capsule staan.
           borderRadius: BorderRadius.circular(999),
           // Red on hover for close, the one that loses work if hit by accident.
-          hoverColor: danger ? const Color(0xFFE81123) : Colors.white.withValues(alpha: .10),
+          hoverColor: danger ? const Color(0xFFE81123) : kInkt.withValues(alpha: .10),
           child: SizedBox(
             width: 38,
             height: 30,
@@ -9467,7 +9627,7 @@ class _MenuStatus extends StatelessWidget {
             child: MenuGlas(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                child: Text(tekst, maxLines: 1, style: const TextStyle(fontSize: 11, color: _muted)),
+                child: Text(tekst, maxLines: 1, style: TextStyle(fontSize: 11, color: _muted)),
               ),
             ),
           );
@@ -9633,7 +9793,7 @@ class _ArtistNamesState extends State<ArtistNames> {
             style: _hover == naam
                 ? (isTv
                     ? tvLinkStijl(widget.style, true)
-                    : widget.style.copyWith(color: Colors.white, decoration: TextDecoration.underline))
+                    : widget.style.copyWith(color: kFel, decoration: TextDecoration.underline))
                 : widget.style,
           ),
         ),
@@ -9805,6 +9965,18 @@ class PlayerBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Op glas hangt de kleur aan de glasstand ([balkOpGlas]): zet de bewaker het glas plat, dan gaat
+    // de vervaging eronder weg en moet de balk dicht worden. Maar deze balk staat als `const` in de
+    // glasbalken en werd bij die wissel niet opnieuw gebouwd: doorschijnend zonder vervaging, en de
+    // tekst van de pagina leesbaar dwars door de titel (gsm, 18-10-2026).
+    if (opGlas) {
+      return ValueListenableBuilder<GlasStand>(
+          valueListenable: GlasKwaliteit.stand, builder: (context, _, __) => _bouw(context));
+    }
+    return _bouw(context);
+  }
+
+  Widget _bouw(BuildContext context) {
     final x = _Transport(context);
     final p = x.player;
     final t = x.track;
@@ -9837,14 +10009,20 @@ class PlayerBar extends StatelessWidget {
       // Op glas doorschijnend en zonder streep: de lichtrand van het glas is de bovenrand.
       decoration: BoxDecoration(
         color: opGlas ? balkOpGlas(x.player.wasKleur) : balkKleur(x.player.wasKleur),
-        border: opGlas ? null : const Border(top: BorderSide(color: _line)),
+        border: opGlas ? null : Border(top: BorderSide(color: _line)),
       ),
       // The panel runs to the edge; only what you read and press comes in. On a television the
       // bottom row of this bar is the first thing a set overscans away, so it gets tvOverscan
       // rather than the 0 it had — SafeArea is no help here, a TV reports no insets at all.
       padding: EdgeInsets.fromLTRB(
           18 + tvOverscan.left, 0, 18 + tvOverscan.right, bottomInset + tvOverscan.bottom),
-      child: Row(
+      // De kleurvlekken van de hoes, boven de kleur van de balk en onder de knoppen (Saber,
+      // 18-10-2026). Ze lopen door tot in de binnenmarge, tot de rand van de balk.
+      child: CustomPaint(
+        painter: HoesVlekkenSchilder(p.hoesVlekken,
+            uitloop: EdgeInsets.fromLTRB(
+                18 + tvOverscan.left, 0, 18 + tvOverscan.right, bottomInset + tvOverscan.bottom)),
+        child: Row(
         children: [
           SizedBox(
             width: side,
@@ -9905,14 +10083,14 @@ class PlayerBar extends StatelessWidget {
                         Text(p.speelFout!,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 12.5))
+                            style: TextStyle(color: leesbaar(const Color(0xFFE0A33A)), fontSize: 12.5))
                       else if ((p.radioMode ? _radioRegel(context, p) : null) case final s?)
                         Text(s,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: _accent2, fontSize: 12.5))
+                            style: TextStyle(color: _accent2, fontSize: 12.5))
                       else if (t == null)
-                        const Text('Niets aan het spelen',
+                        Text('Niets aan het spelen',
                             style: TextStyle(color: _muted, fontSize: 12.5))
                       // Een herhaling vervangt de artiest niet: "opnieuw" komt erachter.
                       else if (p.speeltHerhaling)
@@ -9922,10 +10100,10 @@ class PlayerBar extends StatelessWidget {
                               artist: t.artist,
                               title: t.title,
                               lookup: true,
-                              style: const TextStyle(color: _muted, fontSize: 12.5),
+                              style: TextStyle(color: _muted, fontSize: 12.5),
                             ),
                           ),
-                          const Text(' · opnieuw', style: TextStyle(color: _accent2, fontSize: 12.5)),
+                          Text(' · opnieuw', style: TextStyle(color: _accent2, fontSize: 12.5)),
                         ])
                       else
                         // Everyone on the track, each name tappable — a guest artist is exactly
@@ -9934,7 +10112,7 @@ class PlayerBar extends StatelessWidget {
                           artist: t.artist,
                           title: t.title,
                           lookup: true,
-                          style: const TextStyle(color: _muted, fontSize: 12.5),
+                          style: TextStyle(color: _muted, fontSize: 12.5),
                         ),
                     ],
                   ),
@@ -9972,7 +10150,7 @@ class PlayerBar extends StatelessWidget {
                     // in Nu speelt door links of rechts ingedrukt te houden op de hoes (SpoelPijlen).
                     const SizedBox(width: 2),
                     Container(
-                      decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                      decoration: BoxDecoration(color: kFel, shape: BoxShape.circle),
                       child: IconButton(
                         // Het driehoekje vloeit over in de twee streepjes, en terug.
                         icon: SpeelPauzeIcoon(speelt: x.playing, maat: 26),
@@ -10009,7 +10187,7 @@ class PlayerBar extends StatelessWidget {
                 ),
                 Row(
                   children: [
-                    Text(_fmt(x.position), style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    Text(_fmt(x.position), style: TextStyle(color: _muted, fontSize: 11.5)),
                     Expanded(
                       child: SliderTheme(
                         data: SliderTheme.of(context).copyWith(
@@ -10018,7 +10196,7 @@ class PlayerBar extends StatelessWidget {
                           overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
                           activeTrackColor: _accent,
                           inactiveTrackColor: kLijn,
-                          thumbColor: Colors.white,
+                          thumbColor: kFel,
                         ),
                         child: _maybeFocusable(Slider(
                           value: x.progress,
@@ -10027,7 +10205,7 @@ class PlayerBar extends StatelessWidget {
                         )),
                       ),
                     ),
-                    Text(_fmt(x.duration), style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    Text(_fmt(x.duration), style: TextStyle(color: _muted, fontSize: 11.5)),
                   ],
                 ),
               ],
@@ -10040,6 +10218,7 @@ class PlayerBar extends StatelessWidget {
             child: const Align(alignment: Alignment.centerRight, child: VerderKnop()),
           ),
         ],
+      ),
       ),
     );
   }
@@ -10064,11 +10243,11 @@ class _SpeelOpKnop extends StatelessWidget {
       tooltip: 'Speel op …',
       color: _panel,
       position: PopupMenuPosition.over,
-      icon: const Icon(Icons.devices_rounded, size: 20, color: _muted),
+      icon: Icon(Icons.devices_rounded, size: 20, color: _muted),
       itemBuilder: (_) {
         final toestellen = server.aanwezigeToestellen();
         if (toestellen.isEmpty) {
-          return const [
+          return [
             PopupMenuItem<String>(
               enabled: false,
               child: Text('Open de app op je gsm, iPad, Mac of Shield',
@@ -10077,7 +10256,7 @@ class _SpeelOpKnop extends StatelessWidget {
           ];
         }
         return [
-          const PopupMenuItem<String>(
+          PopupMenuItem<String>(
             enabled: false,
             height: 28,
             child: Text('SPEEL OP', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: _muted)),
@@ -10086,7 +10265,7 @@ class _SpeelOpKnop extends StatelessWidget {
             PopupMenuItem<String>(
               value: t.id,
               child: Row(children: [
-                const Icon(Icons.phonelink_rounded, size: 18, color: _muted),
+                Icon(Icons.phonelink_rounded, size: 18, color: _muted),
                 const SizedBox(width: 10),
                 Text(t.naam, style: const TextStyle(fontSize: 13.5)),
               ]),
@@ -10157,22 +10336,22 @@ Future<void> _kiesAfspeellijst(BuildContext context, List<String> nummers) async
           children: [
             ListTile(
               autofocus: true,
-              leading: const Icon(Icons.add_rounded, color: _accent),
-              title: const Text('Nieuwe afspeellijst…', style: TextStyle(color: _accent)),
+              leading: Icon(Icons.add_rounded, color: _accent),
+              title: Text('Nieuwe afspeellijst…', style: TextStyle(color: _accent)),
               onTap: () => Navigator.pop(ctx, ''),
             ),
             if (lijsten.leeg)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(24, 8, 24, 16),
                 child: Text('Je hebt er nog geen.',
                     style: TextStyle(color: _muted, fontSize: 12.5)),
               ),
             for (final p in lijsten.lijsten)
               ListTile(
-                leading: const Icon(Icons.queue_music_rounded, color: _muted),
+                leading: Icon(Icons.queue_music_rounded, color: _muted),
                 title: Text(p.name),
                 subtitle: Text('${p.trackIds.length} nummers',
-                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    style: TextStyle(color: _muted, fontSize: 11.5)),
                 onTap: () => Navigator.pop(ctx, p.id),
               ),
           ],
@@ -10189,12 +10368,12 @@ Future<void> _kiesAfspeellijst(BuildContext context, List<String> nummers) async
     final naam = await _vraagNaam(context, 'Nieuwe afspeellijst', '');
     if (naam == null || naam.trim().isEmpty) return;
     await lijsten.maak(naam.trim(), nummers: nummers);
-    if (context.mounted) _srcToast(context, '“${naam.trim()}” aangemaakt met ${nummers.length} nummer(s).');
+    if (context.mounted) _srcToast(context, '“${naam.trim()}” aangemaakt met ${nummers.length} ${nummers.length == 1 ? 'nummer' : 'nummers'}.');
     return;
   }
   await lijsten.voegToe(gekozen, nummers);
   if (context.mounted) {
-    _srcToast(context, '${nummers.length} nummer(s) toegevoegd aan “${lijsten.byId(gekozen)?.name ?? ""}”.');
+    _srcToast(context, '${nummers.length} ${nummers.length == 1 ? 'nummer' : 'nummers'} toegevoegd aan “${lijsten.byId(gekozen)?.name ?? ""}”.');
   }
 }
 
@@ -10235,11 +10414,17 @@ class AfspeellijstenView extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Text('Afspeellijsten',
-                style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
-            const SizedBox(width: 12),
-            Text('${lijsten.lijsten.length}',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+            if (!schilKop(context)) ...[
+              const Text('Afspeellijsten',
+                  style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+              const SizedBox(width: 12),
+            ],
+            // Zonder de titel ervoor (gsm) zegt een kaal getal niets: "1" (gsm, 19-10-2026).
+            Text(
+                schilKop(context)
+                    ? '${lijsten.lijsten.length} ${lijsten.lijsten.length == 1 ? 'afspeellijst' : 'afspeellijsten'}'
+                    : '${lijsten.lijsten.length}',
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             const Spacer(),
             FilledButton.icon(
               style: FilledButton.styleFrom(backgroundColor: _knopVulling),
@@ -10285,10 +10470,10 @@ class _AfspeellijstRij extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(10)),
       child: ListTile(
-        leading: const Icon(Icons.queue_music_rounded, color: _accent),
+        leading: Icon(Icons.queue_music_rounded, color: _accent),
         title: Text(lijst.name, style: const TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Text('${lijst.trackIds.length} nummers',
-            style: const TextStyle(color: _muted, fontSize: 12)),
+            style: TextStyle(color: _muted, fontSize: 12)),
         onTap: () => openPagina(context, (_) => AfspeellijstPagina(id: lijst.id)),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
@@ -10322,7 +10507,7 @@ class _AfspeellijstRij extends StatelessWidget {
                     backgroundColor: _panel,
                     title: Text('“${lijst.name}” verwijderen?',
                         style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-                    content: const Text('Alleen de lijst verdwijnt. Je nummers blijven staan.',
+                    content: Text('Alleen de lijst verdwijnt. Je nummers blijven staan.',
                         style: TextStyle(color: _muted, height: 1.4)),
                     actions: [
                       TextButton(
@@ -10376,16 +10561,16 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
     final p = context.read<PlayerStore>();
     final lijst = lijsten.byId(id);
     if (lijst == null) {
-      return const Scaffold(
+      return Scaffold(
           backgroundColor: _bg,
           body: Center(child: Text('Deze afspeellijst bestaat niet meer.',
               style: TextStyle(color: _muted))));
     }
-    // Van id naar nummer via de catalogus van de pc — hetzelfde id dat de lijst bewaart.
-    final wortel = lib.rootPath;
+    // Van id naar nummer via de catalogus van de pc — hetzelfde id dat de lijst bewaart. Via
+    // gedeeldId: op een telefoon is de muziekmap leeg, en dan bleef deze pagina daar altijd leeg.
     final perId = <String, Track>{
       for (final t in lib.tracks)
-        if (wortel.isNotEmpty) trackIdFor(t.path, wortel): t,
+        if (lib.gedeeldId(t.path) case final i?) i: t,
     };
     final nummers = lijsten.nummersVan(lijst, (i) => perId[i]);
 
@@ -10481,7 +10666,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
                 subtitle: Text(lib.displayArtist(nummers[i].artist),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: _muted)),
+                    style: TextStyle(fontSize: 12, color: _muted)),
                 onTap: () => p.playQueue(nummers, i),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -10511,7 +10696,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
                         height: 40,
                         alignment: Alignment.center,
                         color: Colors.transparent,
-                        child: const Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
+                        child: Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
                       ),
                     ),
                   ],
@@ -10557,12 +10742,14 @@ class FavorietenView extends StatelessWidget {
           direction: narrow ? Axis.vertical : Axis.horizontal,
           crossAxisAlignment: narrow ? CrossAxisAlignment.start : CrossAxisAlignment.center,
           children: [
-            const Text('Favorieten',
-                style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
-            SizedBox(width: narrow ? 0 : 12, height: narrow ? 4 : 0),
+            if (!schilKop(context)) ...[
+              const Text('Favorieten',
+                  style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+              SizedBox(width: narrow ? 0 : 12, height: narrow ? 4 : 0),
+            ],
             Text('${albums.length} ${albums.length == 1 ? 'album' : 'albums'} · '
                 '${nummers.length} ${nummers.length == 1 ? 'nummer' : 'nummers'}',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             if (!narrow) const Spacer(),
             if (nummers.isNotEmpty) ...[
               SizedBox(height: narrow ? 12 : 0),
@@ -10628,14 +10815,14 @@ class _FavorietRij extends StatelessWidget {
                   Text(lib.displayArtist(track.artist),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: _muted)),
+                      style: TextStyle(fontSize: 12, color: _muted)),
                 ],
               ),
             ),
             _echtheidMerk(track),
             _qualityBadge(_trackQuality(track)),
             const SizedBox(width: 4),
-            Text(_fmt(track.duration), style: const TextStyle(color: _muted, fontSize: 12)),
+            Text(_fmt(track.duration), style: TextStyle(color: _muted, fontSize: 12)),
             const SizedBox(width: 6),
             // Het hartje is hier gevuld — je kijkt naar je favorieten — en dus de weg eruit.
             TvLabelled(
@@ -10797,17 +10984,17 @@ Widget _waaromGeenTorrents(BuildContext context, {required bool leeg, VoidCallba
           Text(
             reden.isEmpty ? 'Geen torrents gevonden.' : 'Geen torrents gevonden — $reden',
             style: TextStyle(
-                color: reden.isEmpty ? _muted : const Color(0xFFE8913A), fontSize: 12.5),
+                color: reden.isEmpty ? _muted : leesbaar(const Color(0xFFE8913A)), fontSize: 12.5),
           ),
         Text(
           '$rutracker$bouw',
           style: TextStyle(
-              color: reden.isEmpty ? _muted : const Color(0xFFE8913A), fontSize: 11.5),
+              color: reden.isEmpty ? _muted : leesbaar(const Color(0xFFE8913A)), fontSize: 11.5),
         ),
         if (bronnen.isNotEmpty)
           Text(
             bronnen.join('  ·  '),
-            style: const TextStyle(color: _muted, fontSize: 11.5),
+            style: TextStyle(color: _muted, fontSize: 11.5),
           ),
         // De zin zegt wat er scheelt; deze knop is waar je het oplost. Zie [rutrackerControle].
         if (rt.vraagtControle && rutrackerVensterKan)
@@ -11074,15 +11261,22 @@ class _WachtrijKnop extends StatelessWidget {
             paneel.wissel();
             return;
           }
+          // Een glazen blad (Saber, 18-10-2026). Het blad ligt over ander glas (de spelerbalk):
+          // `bovenop`, dus dat wordt zolang dicht — nooit glas op glas.
           showModalBottomSheet<void>(
             context: context,
-            backgroundColor: _panel,
+            backgroundColor: Colors.transparent,
+            elevation: 0,
             isScrollControlled: true,
-            shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
             builder: (_) => SizedBox(
               height: MediaQuery.sizeOf(context).height * .7,
-              child: const WachtrijPaneelView(inBlad: true),
+              child: GlasVlak(
+                key: const ValueKey('wachtrij-blad'),
+                vorm: const BorderRadius.vertical(top: Radius.circular(20)),
+                kleur: _panel,
+                bovenop: true,
+                child: const WachtrijPaneelView(inBlad: true, opGlas: true),
+              ),
             ),
           );
         },
@@ -11131,10 +11325,10 @@ class _RadioAfstemming extends StatelessWidget {
                   label: Text(s.label, style: const TextStyle(fontSize: 12)),
                   selected: s == nu,
                   onSelected: (_) => stemRadioAf(context, s),
-                  backgroundColor: Colors.white.withValues(alpha: .06),
+                  backgroundColor: kInkt.withValues(alpha: .06),
                   selectedColor: _accent,
                   labelStyle: TextStyle(color: s == nu ? Colors.white : _muted),
-                  side: BorderSide(color: s == nu ? _accent : Colors.white.withValues(alpha: .12)),
+                  side: BorderSide(color: s == nu ? _accent : kInkt.withValues(alpha: .12)),
                   shape: const StadiumBorder(),
                   showCheckmark: false,
                   visualDensity: VisualDensity.compact,
@@ -11145,7 +11339,7 @@ class _RadioAfstemming extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text('Ophalen staat even stil: $pauze',
-                  style: const TextStyle(color: _muted, fontSize: 12)),
+                  style: TextStyle(color: _muted, fontSize: 12)),
             ),
         ],
       ),
@@ -11277,7 +11471,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                             // Op de tv (tekstschaal 1,35) past "12 hierna · 6 onderweg" niet op één regel.
                             maxLines: isTv ? 2 : 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: _muted, fontSize: 12)),
+                            style: TextStyle(color: _muted, fontSize: 12)),
                     ],
                   )
                 : const Text('Wachtrij', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
@@ -11329,10 +11523,10 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
           child: Row(children: [
             Text(tekst.toUpperCase(),
-                style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: .8, color: _muted)),
+                style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: .8, color: _muted)),
             if (extra != null) ...[
               const SizedBox(width: 6),
-              Text(extra, style: const TextStyle(fontSize: 10.5, color: _muted)),
+              Text(extra, style: TextStyle(fontSize: 10.5, color: _muted)),
             ],
           ]),
         );
@@ -11343,7 +11537,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(radio ? 'De radio zoekt nog wat hij zal spelen.' : 'Nog niets in de wachtrij.',
-              textAlign: TextAlign.center, style: const TextStyle(color: _muted, fontSize: 12.5)),
+              textAlign: TextAlign.center, style: TextStyle(color: _muted, fontSize: 12.5)),
         ),
       );
     } else {
@@ -11419,7 +11613,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
           ? null
           : BoxDecoration(
               color: _panel,
-              border: widget.inBlad ? null : const Border(left: BorderSide(color: _line)),
+              border: widget.inBlad ? null : Border(left: BorderSide(color: _line)),
             ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -11483,7 +11677,7 @@ class _UitklapState extends State<_Uitklap> with SingleTickerProviderStateMixin 
 
 /// Het nummer dat nu speelt, groot: hoes, titel, artiest en drie balkjes die meebewegen zolang het
 /// speelt.
-class _NuSpeeltRegel extends StatelessWidget {
+class _NuSpeeltRegel extends StatefulWidget {
   const _NuSpeeltRegel({required this.track, required this.cover, required this.speelt, this.regel});
 
   final Track track;
@@ -11492,28 +11686,83 @@ class _NuSpeeltRegel extends StatelessWidget {
   final Radioregel? regel;
 
   @override
-  Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.symmetric(horizontal: 10),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: _accent.withValues(alpha: .14),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _accent.withValues(alpha: .28)),
-        ),
+  State<_NuSpeeltRegel> createState() => _NuSpeeltRegelState();
+}
+
+/// De cd van wat nu speelt, voor het eiland in de wachtrij: dezelfde scan als in Nu speelt, uit
+/// dezelfde map ([albumArtVooruit]). Meestal ligt hij al in het geheugen (Nu speelt of de albumpagina
+/// las hem), anders van schijf — nooit van het net. Geen scan: de getekende cd of vinyl van de
+/// persing, met de hoes als etiket, zoals in Nu speelt.
+class _NuSpeeltRegelState extends State<_NuSpeeltRegel> {
+  Uint8List? _scan;
+  String? _formaat;
+  String? _voor;
+
+  @override
+  void initState() {
+    super.initState();
+    _zoek();
+  }
+
+  @override
+  void didUpdateWidget(_NuSpeeltRegel oud) {
+    super.didUpdateWidget(oud);
+    if (oud.track.path != widget.track.path) _zoek();
+  }
+
+  void _zoek() {
+    final bib = context.read<LibraryStore>();
+    final al = bib.albumForPath(widget.track.path);
+    final sleutel = al == null ? null : bib.uidOf(al);
+    if (sleutel == _voor && sleutel != null) return;
+    _voor = sleutel;
+    _scan = null;
+    _formaat = null;
+    if (al == null) return;
+    final v = albumArtVooruit(bib, al);
+    final dienst = DiscogsService(context.read<AppSettings>());
+    final art = dienst.artInGeheugen(v.artist, v.album,
+        expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+    if (art != null) {
+      _scan = art.disc;
+      _formaat = art.formaat;
+      return;
+    }
+    unawaited(() async {
+      try {
+        final a = await dienst.cachedReleaseArt(v.artist, v.album,
+            expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+        if (a == null || !mounted || _voor != sleutel) return;
+        setState(() {
+          _scan = a.disc;
+          _formaat = a.formaat;
+        });
+      } catch (_) {/* geen scan: dan de getekende plaat */}
+    }());
+  }
+
+  // Een glazen eiland met een gekantelde hoes en een draaiende plaat: ui/wachtrij_eiland.dart.
+  @override
+  Widget build(BuildContext context) {
+    final track = widget.track, cover = widget.cover, speelt = widget.speelt, scan = _scan;
+    final vinyl = isVinylFormaat(_formaat);
+    return WachtrijEiland(
+        hoes: cover,
+        speelt: speelt,
+        glans: scan == null && cover != null,
+        vinyl: vinyl,
+        schijf: scan != null
+            ? (m) => ClipPath(
+                  key: const ValueKey('wachtrij-cd-scan'),
+                  clipper: const _DiscClipper(),
+                  child: Image.memory(scan,
+                      width: m, height: m, fit: BoxFit.cover, cacheWidth: decodeWidth(m), gaplessPlayback: true),
+                )
+            : cover == null
+                ? null
+                : (m) => _GetekendeSchijf(label: cover, maat: m, vinyl: vinyl),
         child: Row(
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: cover != null
-                  ? Image.memory(cover!, width: 52, height: 52, cacheWidth: decodeWidth(52), fit: BoxFit.cover)
-                  : Container(
-                      width: 52,
-                      height: 52,
-                      color: _panel2,
-                      child: const Icon(Icons.music_note_rounded, size: 20, color: _muted),
-                    ),
-            ),
-            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -11522,12 +11771,12 @@ class _NuSpeeltRegel extends StatelessWidget {
                   Text(track.title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: Colors.white)),
+                      style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: kFel)),
                   const SizedBox(height: 2),
                   Text(track.artist,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: _muted)),
+                      style: TextStyle(fontSize: 12, color: _muted)),
                 ],
               ),
             ),
@@ -11537,6 +11786,7 @@ class _NuSpeeltRegel extends StatelessWidget {
           ],
         ),
       );
+  }
 }
 
 /// Drie balkjes die op en neer gaan zolang er muziek speelt; stil en laag als het gepauzeerd is. Op
@@ -11699,7 +11949,7 @@ class _WachtrijRij extends StatelessWidget {
                       // Zonder kleur vangt een Container geen aanwijzer, en dan is alleen het icoon
                       // zelf het doelwit — precies wat hier weg moest.
                       color: Colors.transparent,
-                      child: const Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
+                      child: Icon(Icons.drag_indicator_rounded, size: 16, color: _muted),
                     ),
                   ),
                 ),
@@ -11724,7 +11974,7 @@ class _WachtrijRij extends StatelessWidget {
                       height: 34,
                       decoration: BoxDecoration(
                           color: _panel2, borderRadius: BorderRadius.circular(4)),
-                      child: const Icon(Icons.music_note_rounded, size: 15, color: _muted),
+                      child: Icon(Icons.music_note_rounded, size: 15, color: _muted),
                     ),
               const SizedBox(width: 10),
               Expanded(
@@ -11744,11 +11994,11 @@ class _WachtrijRij extends StatelessWidget {
                         child: Text(track.artist,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 11, color: _muted)),
+                            style: TextStyle(fontSize: 11, color: _muted)),
                       ),
                       // Achter de naam en niet erin: een lange naam kortte "opnieuw" anders juist weg.
                       if (r != null && r.herhaling)
-                        const Text(' · opnieuw', style: TextStyle(fontSize: 11, color: _accent2)),
+                        Text(' · opnieuw', style: TextStyle(fontSize: 11, color: _accent2)),
                     ]),
                   ],
                 ),
@@ -11767,7 +12017,7 @@ class _WachtrijRij extends StatelessWidget {
               SizedBox(
                 width: 28,
                 child: speeltNu
-                    ? const Icon(Icons.volume_up_rounded, size: 15, color: _accent)
+                    ? Icon(Icons.volume_up_rounded, size: 15, color: _accent)
                     : r != null
                         ? Icon(
                             r.mislukt
@@ -11899,7 +12149,12 @@ const kNuSpeeltHoes = 'nu-speelt-hoes';
 
 /// De schaduw van de achterkant op Nu speelt: dezelfde als onder de voorkant, maar om de achterkant
 /// zelf (zie [AchterkantBeeld.schaduw]).
-const kNuSpeeltAchterSchaduw = [BoxShadow(color: Color(0x80000000), blurRadius: 44, offset: Offset(0, 22))];
+/// Hoe sterk de kleurvlekken van de hoes achter Nu speelt zijn: zachter dan in de balk, want hier
+/// liggen ze over het hele scherm.
+const double kNuSpeeltVlekken = .22;
+
+List<BoxShadow> get kNuSpeeltAchterSchaduw =>
+    [BoxShadow(color: Thema.licht ? const Color(0x2E000000) : const Color(0x80000000), blurRadius: 44, offset: const Offset(0, 22))];
 
 /// Hoe ver je de minispeler opzij moet vegen voor het volgende of vorige nummer.
 const double kVeegDrempel = 72;
@@ -12017,10 +12272,13 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
     height: 52 + bottomInset,
     decoration: BoxDecoration(
       color: opGlas ? balkOpGlas(p.wasKleur) : balkKleur(p.wasKleur),
-      border: const Border(top: BorderSide(color: _line)),
+      border: Border(top: BorderSide(color: _line)),
     ),
     padding: EdgeInsets.only(bottom: bottomInset),
-    child: Column(
+    // De kleurvlekken van de hoes, zoals in de brede balk.
+    child: CustomPaint(
+      painter: HoesVlekkenSchilder(p.hoesVlekken, uitloop: EdgeInsets.only(bottom: bottomInset)),
+      child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         // The progress line, full width and two points tall. A draggable slider needs a thumb and
@@ -12030,7 +12288,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
           child: LinearProgressIndicator(
             value: x.progress,
             backgroundColor: kLijn,
-            valueColor: const AlwaysStoppedAnimation(_accent),
+            valueColor: AlwaysStoppedAnimation(_accent),
           ),
         ),
         Expanded(
@@ -12069,7 +12327,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
                                 Text(p.speelFout!,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 12))
+                                    style: TextStyle(color: leesbaar(const Color(0xFFE0A33A)), fontSize: 12))
                               // Alleen de artiesttak wordt een link; "Niets aan het spelen" en de
                               // radiostatus zijn geen naam. De brede speler doet dit al met
                               // ArtistLine — deze smalle variant was als enige achtergebleven.
@@ -12078,19 +12336,19 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
                                     t == null ? 'Niets aan het spelen' : _radioRegel(context, p)!,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(color: _muted, fontSize: 12))
+                                    style: TextStyle(color: _muted, fontSize: 12))
                               // Een herhaling: "opnieuw" achter de artiest, zoals in de brede balk.
                               else if (p.speeltHerhaling)
                                 Row(children: [
                                   Flexible(
                                     child: _artistLine(splitFeatured(t.artist, t.title),
-                                        const TextStyle(color: _muted, fontSize: 12)),
+                                        TextStyle(color: _muted, fontSize: 12)),
                                   ),
-                                  const Text(' · opnieuw', style: TextStyle(color: _accent2, fontSize: 12)),
+                                  Text(' · opnieuw', style: TextStyle(color: _accent2, fontSize: 12)),
                                 ])
                               else
                                 _artistLine(splitFeatured(t.artist, t.title),
-                                    const TextStyle(color: _muted, fontSize: 12)),
+                                    TextStyle(color: _muted, fontSize: 12)),
                             ],
                           ),
                           ),
@@ -12103,7 +12361,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
               ),
               IconButton(
                 icon: SpeelPauzeIcoon(speelt: x.playing, maat: 30),
-                color: Colors.white,
+                color: kFel,
                 onPressed: x.playPause,
               ),
               DuwKnop(icoon: Icons.skip_next_rounded, maat: 26, kleur: _muted, onPressed: x.next),
@@ -12115,6 +12373,7 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
           ),
         ),
       ],
+    ),
     ),
   );
 }
@@ -12151,7 +12410,7 @@ Widget _albumRegel(BuildContext context, String naam, Album? album,
     maxLines: 2,
     overflow: TextOverflow.ellipsis,
     textAlign: gecentreerd ? TextAlign.center : TextAlign.left,
-    style: const TextStyle(color: _muted, fontSize: 13.5, fontWeight: FontWeight.w600),
+    style: TextStyle(color: _muted, fontSize: 13.5, fontWeight: FontWeight.w600),
   );
   if (album == null) return tekst;
   return Pressable(
@@ -12206,9 +12465,9 @@ class _RadioUitEenZinKaartState extends State<_RadioUitEenZinKaart> {
         ),
         child: Row(
           children: [
-            const Icon(Icons.auto_awesome_rounded, size: 18, color: kAccent2),
+            Icon(Icons.auto_awesome_rounded, size: 18, color: kAccent2),
             const SizedBox(width: kRuimte12),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -12222,7 +12481,7 @@ class _RadioUitEenZinKaartState extends State<_RadioUitEenZinKaart> {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right_rounded, size: 20, color: _muted),
+            Icon(Icons.chevron_right_rounded, size: 20, color: _muted),
           ],
         ),
       ),
@@ -12418,14 +12677,14 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('NIEUWE RADIO',
+            Text('NIEUWE RADIO',
                 style: TextStyle(
                     fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .6, color: kAccent2)),
             const SizedBox(height: kRuimte8),
             const Text('Zeg wat je wil horen',
                 style: TextStyle(fontSize: 25, fontWeight: FontWeight.w700, letterSpacing: -.4)),
             const SizedBox(height: kRuimte6),
-            const Text('Gewoon een zin. De rest zoekt hij zelf uit.',
+            Text('Gewoon een zin. De rest zoekt hij zelf uit.',
                 style: TextStyle(fontSize: 13.5, color: _muted)),
             const SizedBox(height: kRuimte16),
             TextField(
@@ -12435,7 +12694,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
               minLines: 2,
               textInputAction: TextInputAction.done,
               onSubmitted: (_) => _bezig ? null : _denk(),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 hintText: 'maak me een radio met 300 liedjes van de jaren 90, genre eurodance',
                 filled: true,
                 fillColor: kVerzonken,
@@ -12444,7 +12703,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
             ),
             if (_fout != null) ...[
               const SizedBox(height: kRuimte12),
-              Text(_fout!, style: const TextStyle(fontSize: 12.5, color: Color(0xFFE8913A))),
+              Text(_fout!, style: TextStyle(fontSize: 12.5, color: leesbaar(const Color(0xFFE8913A)))),
             ],
             if (o != null) ...[
               const SizedBox(height: kRuimte16),
@@ -12488,7 +12747,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
           Text(o.naam, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
           const SizedBox(height: kRuimte4),
           Text('${o.aantal} nummers · begint bij ${o.zaadArtiesten.length} artiesten',
-              style: const TextStyle(fontSize: 12, color: _muted)),
+              style: TextStyle(fontSize: 12, color: _muted)),
           const SizedBox(height: kRuimte8),
           Wrap(
             spacing: kRuimte6,
@@ -12507,7 +12766,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   child: Text('+${o.zaadArtiesten.length - 7} meer',
-                      style: const TextStyle(fontSize: 11, color: _muted)),
+                      style: TextStyle(fontSize: 11, color: _muted)),
                 ),
             ],
           ),
@@ -12517,7 +12776,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
                 '${o.aantal} nummers is ongeveer $uren uur muziek en zo’n $gb GB op je pc. Hij '
                 'haalt ze pas op terwijl je luistert, en wat je niet groen geeft ruimt hij achteraf '
                 'weer op.',
-                style: const TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
+                style: TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
           ],
         ],
       ),
@@ -12630,7 +12889,7 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('Radio afsluiten'.toUpperCase(),
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                               letterSpacing: .6,
@@ -12643,7 +12902,7 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
                       Text(
                           'Deze radio haalde ${aanwezig.length} '
                           '${aanwezig.length == 1 ? "nummer" : "nummers"} voor je op.',
-                          style: const TextStyle(fontSize: 13.5, color: _muted, height: 1.4)),
+                          style: TextStyle(fontSize: 13.5, color: _muted, height: 1.4)),
                     ],
                   ),
                 ),
@@ -12677,7 +12936,7 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
                                   'raakt de radio niet aan.'
                               : 'Weggaan is van dit toestel af, niet alleen uit deze lijst. Wat je '
                                   'zelf al had blijft hoe dan ook staan — die raakt de radio niet aan.',
-                          style: const TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
+                          style: TextStyle(fontSize: 11.5, color: _muted, height: 1.45)),
                       const SizedBox(height: kRuimte12),
                       // NAAST elkaar en niet onder elkaar. Op 26-09-2026 stonden ze twintig punten
                       // boven elkaar, en een klik die voor "Later beslissen" bedoeld was werd
@@ -12780,10 +13039,10 @@ Widget _overzichtKop(String tekst, Color kleur, int aantal) => Padding(
               decoration: BoxDecoration(color: kleur, shape: BoxShape.circle)),
           const SizedBox(width: kRuimte8),
           Text(tekst.toUpperCase(),
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .6, color: kUitgezet)),
           const Spacer(),
-          Text('$aantal', style: const TextStyle(fontSize: 12, color: _muted)),
+          Text('$aantal', style: TextStyle(fontSize: 12, color: _muted)),
         ],
       ),
     );
@@ -12803,7 +13062,7 @@ Widget _overzichtRegel(Gehaald g, VoidCallback? redden) => Padding(
                 Text(g.artiest,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11, color: _muted)),
+                    style: TextStyle(fontSize: 11, color: _muted)),
               ],
             ),
           ),
@@ -12936,7 +13195,7 @@ class _RadioOordeel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: naast ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
-          const Text('Houden of weg?',
+          Text('Houden of weg?',
               style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
@@ -13039,6 +13298,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
   final _tikken = TweeTikken();
   Uint8List? _achterNu;
 
+  /// Waar de hoes in zijn vak staat ([AlbumArt.hoesX]): het logo erboven en de plaatnaam eronder
+  /// schuiven mee, naast elkaar. Onder elkaar staat alles al gecentreerd.
+  final _hoesX = ValueNotifier<double>(0);
+
   /// Gelijk volume: de eenmalige aankondiging ("dit nummer speelt 6,2 dB zachter…"), hooguit één keer
   /// per scherm, alleen bij een VERLAGING, niet op de tv. Aflopen telt alleen als gezien als de app die
   /// twintig seconden op de voorgrond stond — anders komt hij de volgende keer terug.
@@ -13092,6 +13355,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     _draai.dispose();
     _tikken.dispose();
     _eersteRondje.dispose();
+    _hoesX.dispose();
     super.dispose();
   }
 
@@ -13235,17 +13499,37 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         // onder hem lag anders een donkere strook (16-10-2026).
         child: ValueListenableBuilder<bool>(
           valueListenable: _draai.voorInRust,
-          builder: (_, rust, kind) => AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                    color: Colors.black.withValues(alpha: rust ? .5 : 0), blurRadius: 44, offset: const Offset(0, 22))
-              ],
+          // Alleen onder de hoes zelf (hoesMaat × hoesMaat, linksboven), niet onder het hele blok: dat is
+          // ook het vak dat voor de uitschuivende cd vrijgehouden wordt, en staat de cd niet uit, dan
+          // lag er een grijs (licht) of zwart (donker) blok tot ver rechts naast de hoes (pc, 18-10-2026).
+          // Met een plaat ernaast tekent [AlbumArt] de schaduw zelf ([AlbumArt.hoesSchaduw]), want
+          // daar schuift de hoes; dit is voor de kale hoes zonder nummer.
+          builder: (_, rust, kind) => Stack(clipBehavior: Clip.none, children: [
+            if (t == null)
+            Positioned(
+              key: const ValueKey('np-hoes-schaduw'),
+              left: 0,
+              top: 0,
+              width: hoesMaat,
+              height: hoesMaat,
+              child: IgnorePointer(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                          // Op licht een derde: 50 % zwart was naast de hoes een grijze vlek (gsm, 18-10-2026).
+                          color: Colors.black.withValues(alpha: rust ? (Thema.licht ? .18 : .5) : 0),
+                          blurRadius: 44,
+                          offset: const Offset(0, 22))
+                    ],
+                  ),
+                ),
+              ),
             ),
-            child: kind,
-          ),
+            kind!,
+          ]),
           // Same sleeve-and-disc as the album page, at the size this screen deserves.
           // The album is taken from the track that is playing, so the disc that comes
           // out is the one this song is actually on.
@@ -13297,6 +13581,20 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                     uitgelicht: isTv && _opHoes,
                     onAchter: (b) => _achterNu = b,
                     achterSchaduw: kNuSpeeltAchterSchaduw,
+                    hoesX: _hoesX,
+                    // Dezelfde als de kale hoes hierboven ('np-hoes-schaduw'), maar hij schuift mee.
+                    hoesSchaduw: BoxShadow(
+                        color: Colors.black.withValues(alpha: Thema.licht ? .18 : .5),
+                        blurRadius: 44,
+                        offset: const Offset(0, 22)),
+                    kantel: isTv
+                        ? KantelBron.selectie
+                        : _isDesktop
+                            ? KantelBron.muis
+                            : KantelBron.toestel,
+                    // Alleen als de tekst naast de hoes staat: op een gsm staand staat de plaatnaam er
+                    // vlak onder, en dan lag de spiegeling eroverheen (gsm, 18-10-2026).
+                    spiegel: !isTv && naast,
                     // De hoes van de minispeler groeit hierheen uit (zie [kNuSpeeltHoes]).
                     heroTag: kNuSpeeltHoes,
                     // De hoes en cd van het volgende nummer alvast klaarzetten — anders staat er bij
@@ -13329,6 +13627,15 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     // de hoes is op anderhalve meter afstand ook geen winst.
     final artiestVanPlaat = al?.artist ?? t?.artist ?? '';
     final albumNaam = (al?.title ?? t?.album ?? '').trim();
+    // Naast elkaar staan het logo en de plaatnaam op de breedte van de hoes, en dus horen ze met de
+    // hoes mee te schuiven als die naar het midden van zijn vak gaat (zie [hoesEnSchijfX]).
+    Widget metDeHoes(Widget kind) => !zij || t == null
+        ? kind
+        : ValueListenableBuilder<double>(
+            valueListenable: _hoesX,
+            builder: (_, x, k) => Transform.translate(offset: Offset(x, 0), child: k),
+            child: kind,
+          );
     final hoesKolom = isTv
         ? hoesMetTikken
         : Column(
@@ -13338,7 +13645,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
             children: [
               // Dwars niet: op 384 punten hoog is er voor een logo boven de hoes geen plaats.
               if (!dwars && artiestVanPlaat.trim().isNotEmpty) ...[
-                ArtiestKop(
+                metDeHoes(ArtiestKop(
                   naam: artiestVanPlaat,
                   // Zelfde regel als [artiestVanPlaat], voor het volgende nummer.
                   volgende: volgendAlbum?.artist ?? volgendNummer?.artist,
@@ -13347,16 +13654,16 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   // staat de kop netjes boven de plaat waar hij over gaat. De loopruimte van de cd
                   // zit in het blok maar niet onder de hoes zelf.
                   breedte: zij ? hoesMaat : dialogWidth(context, 540),
-                ),
+                )),
                 const SizedBox(height: 14),
               ],
               hoesMetTikken,
               if (albumNaam.isNotEmpty) ...[
                 const SizedBox(height: 12),
-                SizedBox(
+                metDeHoes(SizedBox(
                   width: zij ? hoesMaat : dialogWidth(context, 540),
                   child: _albumRegel(context, albumNaam, al, gecentreerd: !zij),
-                ),
+                )),
               ],
             ],
           );
@@ -13401,7 +13708,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   title: t.title,
                   lookup: true,
                   omvouwen: true,
-                  style: const TextStyle(color: _muted, fontSize: 15),
+                  style: TextStyle(color: _muted, fontSize: 15),
                   // De artiesten als rondjes vóór hun naam, elk naar hun pagina (Saber, 17-10-2026).
                   rondjes: true,
                   eersteRondje: _eersteRondje,
@@ -13423,7 +13730,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           width: kolom,
           child: Text(p.speelFout!,
               textAlign: zij ? TextAlign.start : TextAlign.center,
-              style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 12.5)),
+              style: TextStyle(color: leesbaar(const Color(0xFFE0A33A)), fontSize: 12.5)),
         ),
       // De radio: wat hij doet als er niets klinkt (zoekt, het genoemde aantal is er), en "opnieuw" bij
       // een herhaling. In hetzelfde vak als de melding hierboven en niet op een eigen regel: de gestapelde
@@ -13435,7 +13742,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           width: kolom,
           child: Text(status,
               textAlign: zij ? TextAlign.start : TextAlign.center,
-              style: const TextStyle(color: _accent2, fontSize: 12.5)),
+              style: TextStyle(color: _accent2, fontSize: 12.5)),
         ),
       ] else if (p.speeltHerhaling) ...[
         const SizedBox(height: kRuimte8),
@@ -13446,7 +13753,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   ? 'Opnieuw · ${_stroomUitleg(p, t)}'
                   : 'Opnieuw — dit nummer speelde eerder in deze radio',
               textAlign: zij ? TextAlign.start : TextAlign.center,
-              style: const TextStyle(color: kGedempt, fontSize: 11.5)),
+              style: TextStyle(color: kGedempt, fontSize: 11.5)),
         ),
       ] else if (p.stroomGrens != null && t != null) ...[
         const SizedBox(height: kRuimte8),
@@ -13454,7 +13761,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           width: kolom,
           child: Text(_stroomUitleg(p, t),
               textAlign: zij ? TextAlign.start : TextAlign.center,
-              style: const TextStyle(color: kUitgezet, fontSize: 11.5)),
+              style: TextStyle(color: kUitgezet, fontSize: 11.5)),
         ),
       ],
       SizedBox(height: isTv ? 14 : 26),
@@ -13462,7 +13769,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         width: kolom,
         child: Row(
           children: [
-            Text(_fmt(position), style: const TextStyle(color: _muted, fontSize: 12)),
+            Text(_fmt(position), style: TextStyle(color: _muted, fontSize: 12)),
 
             Expanded(
               child: SliderTheme(
@@ -13471,7 +13778,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
                   activeTrackColor: _accent,
                   inactiveTrackColor: kLijn,
-                  thumbColor: Colors.white,
+                  thumbColor: kFel,
                 ),
                 // Same as the player bar's: a Slider eats left and right to change its
                 // value, so the highlight would enter the seek bar and never leave it.
@@ -13489,7 +13796,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                 )),
               ),
             ),
-            Text(_fmt(duration), style: const TextStyle(color: _muted, fontSize: 12)),
+            Text(_fmt(duration), style: TextStyle(color: _muted, fontSize: 12)),
           ],
         ),
       ),
@@ -13520,13 +13827,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         return Padding(
           padding: const EdgeInsets.only(top: 4, bottom: 4),
           child: Row(mainAxisAlignment: zij ? MainAxisAlignment.start : MainAxisAlignment.center, children: [
-            const Icon(Icons.speaker_rounded, size: 16, color: _accent),
+            Icon(Icons.speaker_rounded, size: 16, color: _accent),
             const SizedBox(width: 8),
             Flexible(
               child: Text('Speelt op ${target.device!.name}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _accent, fontSize: 13.5)),
+                  style: TextStyle(color: _accent, fontSize: 13.5)),
             ),
           ]),
         );
@@ -13564,7 +13871,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
               onPressed: x.previous),
           const SizedBox(width: 8),
           Container(
-            decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+            decoration: BoxDecoration(color: kFel, shape: BoxShape.circle),
             child: IconButton(
               // De markering start op tv niet hier maar op de HOES. Dat was ooit deze
               // knop, maar die stond op de Shield 80 punten onder de schermrand — dus
@@ -13644,7 +13951,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   ),
                   )
                 else
-                  const Icon(Icons.volume_down_rounded, size: 19, color: _muted),
+                  Icon(Icons.volume_down_rounded, size: 19, color: _muted),
                 Expanded(
                   child: SliderTheme(
                     data: SliderTheme.of(context).copyWith(
@@ -13652,7 +13959,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                       thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
                       activeTrackColor: _accent,
                       inactiveTrackColor: kLijn,
-                      thumbColor: Colors.white,
+                      thumbColor: kFel,
                     ),
                     child: _maybeFocusable(Slider(
                       value: cast.volume.clamp(0, 100).toDouble(),
@@ -13672,13 +13979,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   ),
                   )
                 else
-                  const Icon(Icons.volume_up_rounded, size: 19, color: _muted),
+                  Icon(Icons.volume_up_rounded, size: 19, color: _muted),
                 const SizedBox(width: 6),
                 SizedBox(
                   width: 30,
                   child: Text('${cast.volume}',
                       textAlign: TextAlign.right,
-                      style: const TextStyle(color: _muted, fontSize: 12)),
+                      style: TextStyle(color: _muted, fontSize: 12)),
                 ),
               ],
             ),
@@ -13738,6 +14045,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                 ),
               ),
             ),
+          // De stilstaande kleurvlekken van de hoes (Saber, 18-10-2026: "achter Nu speelt en de balk"):
+          // zachte ronde vlekken in de kleuren van de plaat, waar ze op de hoes liggen. Ze bewegen
+          // niet ("Nu speelt-achtergrond stilstaand") en worden één keer getekend.
+          Positioned.fill(child: HoesVlekkenLaag(p.hoesVlekken, sterkte: kNuSpeeltVlekken)),
           // De hoes zelf blijft erachter staan, maar dooft naar onderen uit — anders ligt hij nog
           // steeds over de knoppen heen.
           //
@@ -13753,16 +14064,16 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           // [hoesUitdoving]. Nu ligt dezelfde was er nog eens overheen, oplopend in dekking; dat
           // geeft hetzelfde beeld en de chip tekent het in één keer.
           if (p.currentCover != null && !isTv) ...[
+            // Sterk vervaagd en één keer gebakken (Saber, 18-10-2026): scherp stond het logo van de
+            // hoes ("MADONNA ray of light") groot achter de titel en de tijdbalk. Dezelfde gebakken
+            // waas als bovenaan een albumpagina ([HoesAchtergrond]): bij het tekenen kost hij niets,
+            // en bij een nieuw nummer blijft de vorige staan tot de volgende klaar is.
             Positioned.fill(
               key: const Key('np-hoes-achter'),
               child: IgnorePointer(
-                child: Image.memory(p.currentCover!,
-                    fit: BoxFit.cover,
-                    cacheWidth: 480,
-                    // De vorige hoes blijft staan tot de volgende gedecodeerd is; anders knippert
-                    // het hele scherm even naar leeg bij elk nummer.
-                    gaplessPlayback: true,
-                    opacity: const AlwaysStoppedAnimation(.22)),
+                child: LayoutBuilder(
+                  builder: (_, c) => HoesAchtergrond(beeld: MemoryImage(p.currentCover!), hoogte: c.maxHeight),
+                ),
               ),
             ),
             Positioned.fill(
@@ -14206,6 +14517,8 @@ class VerderBalk extends StatelessWidget {
         vorm: const BorderRadius.all(Radius.circular(18)),
         kleur: _panel,
         balk: true,
+        // In een blad over de balken heen: die worden zolang dicht (nooit glas op glas).
+        bovenop: true,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(10, 10, 6, 10),
           child: Row(
@@ -14218,14 +14531,14 @@ class VerderBalk extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(kop, maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _accent2, fontSize: 11.5, fontWeight: FontWeight.w600)),
+                        style: TextStyle(color: _accent2, fontSize: 11.5, fontWeight: FontWeight.w600)),
                     const SizedBox(height: 2),
                     Text('${t.title} — ${t.artist}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
                     Text(_fmt(startPositie(a, DateTime.now().millisecondsSinceEpoch)),
-                        style: const TextStyle(color: _muted, fontSize: 11.5)),
+                        style: TextStyle(color: _muted, fontSize: 11.5)),
                   ],
                 ),
               ),
@@ -14305,14 +14618,14 @@ class VerderKnop extends StatelessWidget {
           builder: (_) => const _VerderBlad(),
         ),
         icon: Stack(clipBehavior: Clip.none, children: [
-          const Icon(Icons.devices_rounded, size: 22, color: _muted),
+          Icon(Icons.devices_rounded, size: 22, color: _muted),
           Positioned(
             right: -2,
             top: -2,
             child: Container(
               width: 8,
               height: 8,
-              decoration: const BoxDecoration(color: _accent2, shape: BoxShape.circle),
+              decoration: BoxDecoration(color: _accent2, shape: BoxShape.circle),
             ),
           ),
         ]),
@@ -14338,7 +14651,7 @@ class VerderKnop extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(10, 6, 14, 6),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.devices_rounded, size: 18, color: _accent2),
+              Icon(Icons.devices_rounded, size: 18, color: _accent2),
               const SizedBox(width: 8),
               Flexible(
                 child: Column(
@@ -14348,11 +14661,11 @@ class VerderKnop extends StatelessWidget {
                     Text(kop,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
+                        style: TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
                     Text('${t.title} · $tijd',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: MenuTint.paars.tekst, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                        style: TextStyle(color: MenuTint.nu.tekst, fontSize: 12.5, fontWeight: FontWeight.w600)),
                   ],
                 ),
               ),
@@ -15323,9 +15636,16 @@ class TracksView extends StatelessWidget {
         Builder(builder: (context) {
           final narrow = isCompact(context);
           final title = Row(mainAxisSize: MainAxisSize.min, children: [
-            const Text('Tracks', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-            const SizedBox(width: 10),
-            Text('${tracks.length}', style: const TextStyle(color: _muted, fontSize: 14)),
+            if (!schilKop(context)) ...[
+              const Text('Tracks', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+              const SizedBox(width: 10),
+            ],
+            // Zonder de titel ervoor (gsm) stond hier een kaal "1564" (19-10-2026).
+            Text(
+                schilKop(context)
+                    ? '${tracks.length} ${tracks.length == 1 ? 'nummer' : 'nummers'}'
+                    : '${tracks.length}',
+                style: TextStyle(color: _muted, fontSize: 14)),
           ]);
           // Allebei hetzelfde glas, en allebei zeggen ze wat ze deden (Saber, 16-10-2026: "Ik zie nooit
           // welke knop Ik intik"). Eerst was de ene paars en de andere donker, zonder iets terug.
@@ -15417,7 +15737,7 @@ class TracksView extends StatelessWidget {
                   color: isCurrent ? _panel : Colors.transparent,
                   child: Row(
                     children: [
-                      SizedBox(width: 22, child: Text('${i + 1}', style: const TextStyle(color: _muted, fontSize: 11))),
+                      SizedBox(width: 22, child: Text('${i + 1}', style: TextStyle(color: _muted, fontSize: 11))),
                       cover(lib.coverForTrack(t), size: 40, radius: 6),
                       const SizedBox(width: 12),
                       Expanded(
@@ -15440,7 +15760,7 @@ class TracksView extends StatelessWidget {
                             // differently from the name shown everywhere else. Split so a guest
                             // is their own name here, not part of one long unclickable string.
                             _artistLine(splitFeatured(lib.displayArtist(t.artist), t.title),
-                                const TextStyle(fontSize: 12, color: _muted)),
+                                TextStyle(fontSize: 12, color: _muted)),
                           ],
                         ),
                       ),
@@ -15456,7 +15776,7 @@ class TracksView extends StatelessWidget {
                       // in de wachtrij. Op een breder scherm blijft hij gewoon staan.
                       if (!isCompact(context)) ...[
                         Text(_fmt(t.duration),
-                            style: const TextStyle(color: _muted, fontSize: 12)),
+                            style: TextStyle(color: _muted, fontSize: 12)),
                         const SizedBox(width: 6),
                       ],
                       // Geen prullenbak meer in de rij. Hij stond twee punten naast afspelen, in elke
@@ -15933,13 +16253,6 @@ class _HomeStartViewState extends State<HomeStartView> {
     return uit.isEmpty ? null : uit.join(' · ');
   }
 
-  String _greeting() {
-    final h = DateTime.now().hour;
-    if (h < 6) return 'Goedenacht';
-    if (h < 12) return 'Goedemorgen';
-    if (h < 18) return 'Goedemiddag';
-    return 'Goedenavond';
-  }
 
   Future<void> _playRec(RecTrack t) async {
     final online = context.read<OnlineService>();
@@ -16032,12 +16345,15 @@ class _HomeStartViewState extends State<HomeStartView> {
       children: [
         // 28 werd 24: alles op dit scherm staat vanaf hier op dezelfde goot als de rijen hoezen
         // eronder. Zie `ui/maten.dart`.
+        // Op een gsm is de groet de grote kop boven de pagina (Saber, 19-10-2026), en staat hij hier
+        // dus niet nog een keer. Zie [_sectieKolom].
+        if (!schilKop(context))
         Padding(
           padding: const EdgeInsets.fromLTRB(kGoot, kRuimte24, kGoot, kRuimte2),
           child: Row(
             children: [
               Expanded(
-                child: Text('${_greeting()} 👋',
+                child: Text('${begroeting(DateTime.now())} 👋',
                     style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
               ),
               // Niet op een tv: daar is dit geen knop maar een extra halte op de weg naar beneden,
@@ -16055,7 +16371,7 @@ class _HomeStartViewState extends State<HomeStartView> {
             ],
           ),
         ),
-        const Padding(
+        Padding(
           padding: EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte6),
           child: Text('Ontdek nieuwe muziek en pak op waar je gebleven was',
               style: TextStyle(color: _muted, fontSize: 13.5)),
@@ -16199,7 +16515,7 @@ class _HomeStartViewState extends State<HomeStartView> {
   /// widget neer te zetten.
   static Widget _naamLink(String naam) => ArtistNames(
         names: [naam],
-        style: const TextStyle(color: _muted, fontSize: 12),
+        style: TextStyle(color: _muted, fontSize: 12),
       );
 
   Widget _catalogRow(List<CatalogAlbumHit> hits, {required String rij}) => ListView.separated(
@@ -16384,8 +16700,22 @@ class _HoverCard extends StatelessWidget {
       );
 }
 
+/// De groet bovenaan Start, naar het uur van [nu].
+String begroeting(DateTime nu) {
+  final h = nu.hour;
+  if (h < 6) return 'Goedenacht';
+  if (h < 12) return 'Goedemorgen';
+  if (h < 18) return 'Goedemiddag';
+  return 'Goedenavond';
+}
+
 /// Hoe lang een oogst van Ontdek blijft staan als je het tabblad verlaat en terugkomt.
 const kOntdekBewaard = Duration(minutes: 30);
+
+/// Ontdek als raster van hoezen: op een pc, Mac en iPad (Saber, 18-10-2026). Op een gsm (smal) en een
+/// tv blijft het de lijst: daar staan de knoppen voor afspelen en radio naast elk nummer, en een
+/// afstandsbediening heeft geen rechtermuisknop.
+bool ontdekAlsRaster({required bool tv, required bool smal}) => !tv && !smal;
 
 /// Mag de bewaarde oogst van [om] op [nu] nog getoond worden?
 bool ontdekBewaardBruikbaar(DateTime? om, DateTime nu) =>
@@ -16504,9 +16834,11 @@ class _OntdekViewState extends State<OntdekView> {
           padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
           child: Row(
             children: [
-              const Text('Ontdek', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-              const SizedBox(width: 12),
-              const Expanded(
+              if (!schilKop(context)) ...[
+                const Text('Ontdek', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                const SizedBox(width: 12),
+              ],
+              Expanded(
                   child: Text('Nieuwe muziek op basis van je bibliotheek',
                       style: TextStyle(color: _muted, fontSize: 13))),
               TvLabelled(
@@ -16521,9 +16853,11 @@ class _OntdekViewState extends State<OntdekView> {
           ),
         ),
         if (_status != null)
-          Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: const TextStyle(color: _muted))),
+          Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: TextStyle(color: _muted))),
         if (_busy)
-          const Expanded(child: Center(child: CircularProgressIndicator(color: _accent)))
+          Expanded(child: Center(child: CircularProgressIndicator(color: _accent)))
+        else if (ontdekAlsRaster(tv: isTv, smal: isCompact(context)))
+          Expanded(child: _raster())
         else
           Expanded(
             child: ListView.builder(
@@ -16535,6 +16869,104 @@ class _OntdekViewState extends State<OntdekView> {
       ],
     );
   }
+
+  /// Op een pc, Mac en iPad een raster van hoezen (Saber, 18-10-2026: "tegels met hoezen"), met
+  /// dezelfde tegel als Albums en de rijen op Start: een tik opent de plaat, de afspeelknop staat op
+  /// de hoes zodra de muis erop staat, en de rest (radio, bronnen) zit onder de rechtermuisknop.
+  Widget _raster() => BinnenkomstGroep(
+        child: CustomScrollView(slivers: [
+          SliverPadding(
+            padding: onderOp(context, const EdgeInsets.fromLTRB(24, 8, 24, 24)),
+            // De hoogte uit de echte celbreedte, zodat de hoes vierkant blijft: zie [tegelRaster].
+            sliver: SliverLayoutBuilder(
+              builder: (context, c) => SliverGrid(
+                gridDelegate: tegelRaster(context, c.crossAxisExtent, extra: 2),
+                delegate: SliverChildBuilderDelegate(
+                  (_, i) => Binnenkomst(index: i, child: _tegel(i, _tracks[i])),
+                  childCount: _tracks.length,
+                ),
+              ),
+            ),
+          ),
+        ]),
+      );
+
+  Widget _tegel(int i, RecTrack t) {
+    final held = t.hasAlbum ? 'ontdek:${t.albumId}:$i' : null;
+    return AlbumTegel(
+      key: ValueKey('ontdek-tegel-$i'),
+      hoes: (maat) => _netCover(t.cover, size: maat),
+      titel: t.title,
+      ondertitel: t.artist,
+      ondertitelWidget: t.artist.trim().isEmpty ? null : _HomeStartViewState._naamLink(t.artist),
+      onTap: () => _open(i, t, heroTag: held),
+      onAfspelen: () => _play(i, t),
+      onLongPress: () => _menu(i, t),
+      onSecondaryTap: (bij) => _menu(i, t, bij: bij),
+      heroTag: held,
+      // Twee punten, ook als er niets loopt: dan staan alle tegels op dezelfde hoogte.
+      onderHoes: SizedBox(
+        height: 2,
+        child: _playing == i
+            ? LinearProgressIndicator(minHeight: 2, color: _accent, backgroundColor: Colors.transparent)
+            : null,
+      ),
+    );
+  }
+
+  /// Naar de plaat waar het nummer op staat, zoals op Start. Zonder plaat: meteen afspelen.
+  void _open(int i, RecTrack t, {Object? heroTag}) {
+    if (!t.hasAlbum) {
+      unawaited(_play(i, t));
+      return;
+    }
+    final album = CatalogAlbum(t.albumId, t.album, t.cover, null, 0, 'album');
+    openPagina(context, (_) => AlbumBrowsePage(t.artist, album, heroTag: heroTag));
+  }
+
+  void _menu(int i, RecTrack t, {Offset? bij}) => _toonItemMenu(
+      context,
+      ItemMenu(titel: t.title, ondertitel: t.artist, blokken: [
+        [MenuRegel(Icons.play_arrow_rounded, 'Afspelen', () => _play(i, t))],
+        [
+          if (t.hasAlbum) MenuRegel(Icons.album_rounded, 'Album openen', () => _open(i, t)),
+          MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
+          MenuRegel(Icons.radio_rounded, 'Radio vanaf hier',
+              () => startRadio(context, t.artist, titel: t.title, seconden: t.seconds)),
+          MenuRegel(Icons.download_rounded, 'Bronnen / download', () => _bronnen(t)),
+        ],
+      ]),
+      bij: bij);
+
+  /// De bronnen van één aanbeveling, zoals de lijst ze openklapt; in een raster kan dat niet tussen
+  /// de tegels, dus in een venster.
+  void _bronnen(RecTrack t) => showDialog(
+        context: context,
+        builder: (ctx) => Dialog(
+          backgroundColor: _panel,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: SizedBox(
+            width: dialogWidth(ctx, 760),
+            height: dialogHeight(ctx, 620),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 8, 6),
+                child: Row(children: [
+                  Expanded(
+                    child: Text('${t.artist} — ${t.title}',
+                        maxLines: 1, overflow: TextOverflow.ellipsis, style: kKop),
+                  ),
+                  IconButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      icon: const Icon(Icons.close_rounded),
+                      tooltip: 'Sluiten'),
+                ]),
+              ),
+              Expanded(child: SingleChildScrollView(child: SourcesView(query: t.query))),
+            ]),
+          ),
+        ),
+      );
 
   Widget _row(int i, RecTrack t) {
     final open = _expanded == i;
@@ -16554,12 +16986,12 @@ class _OntdekViewState extends State<OntdekView> {
                   children: [
                     Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
                     _artistLine(splitFeatured(t.artist, t.title),
-                        const TextStyle(color: _muted, fontSize: 12)),
+                        TextStyle(color: _muted, fontSize: 12)),
                   ],
                 ),
               ),
               _playing == i
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 48,
                       height: 48,
                       child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))))
@@ -16628,7 +17060,7 @@ Future<void> _confirmDelete(BuildContext context, String what, List<String> path
         'Dit gaat over $n bestand${n == 1 ? "" : "en"}.\n\n'
         '• Alleen uit bibliotheek: het blijft op je pc staan, maar verdwijnt uit de app.\n'
         '• Ook van pc: de bestanden worden definitief verwijderd.',
-        style: const TextStyle(color: _muted, fontSize: 13, height: 1.45),
+        style: TextStyle(color: _muted, fontSize: 13, height: 1.45),
       ),
       actions: [
         // Where the highlight starts, said out loud rather than left to whatever Flutter picks.
@@ -16800,7 +17232,7 @@ class _TidalOphalenState extends State<_TidalOphalen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Ophalen van Tidal', style: kKop),
+                Text('Ophalen van Tidal', style: kKop),
                 const SizedBox(height: kRuimte6),
                 Text(
                   widget.doel == null
@@ -16830,7 +17262,7 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                 ],
                 Row(
                   children: [
-                    const Text('Kwaliteit', style: kTekstKlein),
+                    Text('Kwaliteit', style: kTekstKlein),
                     const SizedBox(width: kRuimte8),
                     Container(
                       decoration: BoxDecoration(
@@ -16853,7 +17285,7 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                     // Waarom dit erbij staat: `low` en `normal` zijn m4a van 96 en 320 kbps, en dus
                     // slechter dan wat deze bibliotheek al heeft. Wie ze kiest hoort te weten dat
                     // hij zichzelf een slechtere kopie bezorgt.
-                    const Expanded(
+                    Expanded(
                       child: Text('max = 24 bit tot 192 kHz · low en normal zijn m4a',
                           style: kTekstKlein),
                     ),
@@ -16865,10 +17297,10 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                 // uitziet is de vervelendste soort, dus staat het hier vóórdat je op Ophalen klikt.
                 if (!Ffmpeg().available) ...[
                   const SizedBox(height: kRuimte12),
-                  const Text(
+                  Text(
                     'ffmpeg staat niet op deze pc. Zonder ffmpeg komt er 16 bit / 44,1 kHz binnen, '
                     'ook op "max". Installeer hem met "winget install ffmpeg" en herstart de app.',
-                    style: TextStyle(color: Color(0xFFE0B341), fontSize: 12, height: 1.35),
+                    style: TextStyle(color: leesbaar(const Color(0xFFE0B341)), fontSize: 12, height: 1.35),
                   ),
                 ],
                 if (_fout != null) ...[
@@ -16883,14 +17315,14 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     if (_bezig) ...[
-                      const SizedBox(
+                      SizedBox(
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2, color: _accent)),
                       const SizedBox(width: kRuimte8),
                       // Een plaat van 24 bit is honderden megabytes; zonder deze regel lijkt het
                       // venster na een halve minuut vast te staan.
-                      const Expanded(
+                      Expanded(
                           child: Text('Bezig met ophalen — dit kan even duren.',
                               style: kTekstKlein)),
                     ],
@@ -16939,8 +17371,8 @@ class DownloadsView extends StatelessWidget {
         // een rode balk met een uitroepteken erboven leest als een probleem dat je moet oplossen.
         'failed' => j.cancelled ? _muted : Colors.redAccent,
         // Amber, niet rood: er is niets kapot en er hoeft niets opgelost te worden.
-        'later' => const Color(0xFFE0B341),
-        'waiting' => const Color(0xFFE0B341),
+        'later' => leesbaar(const Color(0xFFE0B341)),
+        'waiting' => leesbaar(const Color(0xFFE0B341)),
         'upgrading' => _accent2, // green: you can play it, this is a bonus not a problem
         _ => _accent,
       };
@@ -16980,14 +17412,15 @@ class DownloadsView extends StatelessWidget {
               spacing: 14,
               runSpacing: 4,
               children: [
-                const Text('Mijn downloads',
-                    style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+                if (!schilKop(context))
+                  const Text('Mijn downloads',
+                      style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
                 if (active.isNotEmpty)
                   // Counted from the jobs themselves: a download waiting in an uploader's queue has
                   // handed its parallel slot back, so the scheduler's counters would read 0 here.
                   Text('${active.where((j) => j.status == 'downloading' || j.status == 'preparing').length} bezig'
                       ' · ${active.where((j) => j.status == 'waiting' || j.status == 'queued').length} wachtend',
-                      style: const TextStyle(color: _muted, fontSize: 12.5)),
+                      style: TextStyle(color: _muted, fontSize: 12.5)),
                 if (finished.isNotEmpty)
                   TextButton.icon(
                     onPressed: dm.clearFinished,
@@ -17024,14 +17457,14 @@ class DownloadsView extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 10),
                 child: Row(
                   children: [
-                    const Icon(Icons.history_rounded, size: 16, color: _muted),
+                    Icon(Icons.history_rounded, size: 16, color: _muted),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         '${dm.wachtendeHervattingen} onderbroken download'
                         '${dm.wachtendeHervattingen == 1 ? "" : "s"} — gaan vanzelf verder zodra je '
                         'Soulseek gebruikt',
-                        style: const TextStyle(color: _muted, fontSize: 12.5),
+                        style: TextStyle(color: _muted, fontSize: 12.5),
                       ),
                     ),
                     TextButton(
@@ -17080,7 +17513,7 @@ class _DlHeader extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Text(text,
-            style: const TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8)),
+            style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8)),
       );
 }
 
@@ -17241,7 +17674,7 @@ Widget _downloadControl(BuildContext context,
       if (status == 'queued') {
         // Waiting for a download slot — show a queue clock, NOT a spinner (a spinning ring here
         // looked like a stuck download when several tracks were started at once).
-        return const Padding(
+        return Padding(
           padding: EdgeInsets.all(9),
           child: Tooltip(
             message: 'In wachtrij…',
@@ -17259,12 +17692,12 @@ Widget _downloadControl(BuildContext context,
             width: 40,
             height: 40,
             child: Stack(alignment: Alignment.center, children: [
-              const Icon(Icons.hourglass_top_rounded, color: Color(0xFFE0B341), size: 19),
+              Icon(Icons.hourglass_top_rounded, color: leesbaar(const Color(0xFFE0B341)), size: 19),
               if (place > 0)
                 Positioned(
                   bottom: 2,
                   child: Text('$place',
-                      style: const TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
+                      style: TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
                 ),
             ]),
           ),
@@ -17287,7 +17720,7 @@ Widget _downloadControl(BuildContext context,
                     color: _accent,
                     backgroundColor: kLijn),
               ),
-              Text('$pct', style: const TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
+              Text('$pct', style: TextStyle(fontSize: 8.5, color: _muted, fontWeight: FontWeight.w700)),
             ]),
           ),
         );
@@ -17296,14 +17729,14 @@ Widget _downloadControl(BuildContext context,
         // Downloaded and playable — the arrow says a better copy is still being fetched.
         return Tooltip(
           message: job?.detail ?? 'Speelbaar · betere kwaliteit onderweg',
-          child: const Padding(
+          child: Padding(
             padding: EdgeInsets.all(9),
             child: Icon(Icons.upgrade_rounded, color: _accent2, size: 20),
           ),
         );
       }
       if (status == 'done') {
-        return const Padding(padding: EdgeInsets.all(9), child: Icon(Icons.check_circle_rounded, color: _accent2, size: 20));
+        return Padding(padding: EdgeInsets.all(9), child: Icon(Icons.check_circle_rounded, color: _accent2, size: 20));
       }
       // Niemand leverde, maar het staat op de wenslijst: de app klopt er vanzelf weer aan. Deze knop
       // is dan "nu meteen", niet "anders gebeurt er niets" — vandaar amber en niet rood.
@@ -17315,7 +17748,7 @@ Widget _downloadControl(BuildContext context,
           label: waarom,
           child: IconButton(
               icon: const Icon(Icons.update_rounded),
-              color: const Color(0xFFE0B341),
+              color: leesbaar(const Color(0xFFE0B341)),
               tooltip: waarom,
               onPressed: onDownload),
         );
@@ -17353,7 +17786,7 @@ Future<void> _downloadSoulseekAlbum(
       .read<DownloadManager>()
       .enqueueSoulseekAlbum(tracks, authorities: authorities);
   if (context.mounted) {
-    _srcToast(context, '$n nummer(s) via Soulseek — volg de voortgang in de downloadlijst.');
+    _srcToast(context, '$n ${n == 1 ? 'nummer' : 'nummers'} via Soulseek — volg de voortgang in de downloadlijst.');
   }
 }
 
@@ -17452,15 +17885,15 @@ Widget _soulseekHeader(
       spacing: 4,
       runSpacing: 2,
       children: [
-        const Text('SOULSEEK · P2P',
+        Text('SOULSEEK · P2P',
             style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
         const SizedBox(width: 8),
-        Text('${slsk.length}', style: const TextStyle(color: _muted, fontSize: 11.5)),
+        Text('${slsk.length}', style: TextStyle(color: _muted, fontSize: 11.5)),
         // Back-off notice: after a refused login the app stops touching Soulseek entirely, so the
         // user knows WHY there are no results (instead of thinking the search is just empty).
         const _SlskPauzeStrook(),
-        if (busy) ...const [
-          SizedBox(width: 8),
+        if (busy) ...[
+          const SizedBox(width: 8),
           SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
         ],
         if (folder.length >= 2)
@@ -17479,19 +17912,19 @@ Widget _qualityBadge(Quality q) {
   Color fg, bg, border;
   switch (q.tier) {
     case QTier.hires: // hi-res lossless (24-bit / >48kHz / DSD) — gold
-      fg = const Color(0xFFF2C14E);
-      bg = const Color(0xFF2A2413);
-      border = const Color(0xFF5A4A1E);
+      fg = leesbaar(const Color(0xFFF2C14E));
+      bg = vlakOpThema(const Color(0xFF2A2413));
+      border = vlakOpThema(const Color(0xFF5A4A1E), rand: true);
       break;
     case QTier.lossless: // CD-quality lossless — teal
       fg = _accent2;
-      bg = const Color(0xFF0F2521);
-      border = const Color(0xFF24493F);
+      bg = vlakOpThema(const Color(0xFF0F2521));
+      border = vlakOpThema(const Color(0xFF24493F), rand: true);
       break;
     case QTier.lossy: // MP3/AAC — blue-grey
-      fg = const Color(0xFFA9B6E8);
+      fg = leesbaar(const Color(0xFFA9B6E8));
       bg = kPaneel;
-      border = const Color(0xFF2A3350);
+      border = vlakOpThema(const Color(0xFF2A3350), rand: true);
       break;
     case QTier.unknown: // unclear — subtle grey
       fg = _muted;
@@ -17584,15 +18017,17 @@ class VervangJachtStrook extends StatelessWidget {
               Icon(j.loopt ? Icons.travel_explore_rounded : Icons.schedule_rounded,
                   size: 15, color: kleur),
               const SizedBox(width: 8),
+              // Twee regels: op een gsm stond er "Volgende ronde over 1…", en juist de tijd viel weg
+              // (19-10-2026).
               Expanded(
                 child: Text(kop,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               ),
               if (j.opDeLijst > 0)
                 Text('${j.opDeLijst} op de verlanglijst',
-                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                    style: TextStyle(color: _muted, fontSize: 11.5)),
             ],
           ),
           const SizedBox(height: 9),
@@ -17601,7 +18036,7 @@ class VervangJachtStrook extends StatelessWidget {
             child: LinearProgressIndicator(
               value: vulling,
               minHeight: 5,
-              backgroundColor: Colors.white10,
+              backgroundColor: kInkt.withValues(alpha: .10),
               valueColor: AlwaysStoppedAnimation<Color>(kleur),
             ),
           ),
@@ -17621,7 +18056,7 @@ class VervangJachtStrook extends StatelessWidget {
             Text(j.regel!,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
+                style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
           ],
           if (j.binnen > 0 || j.weggegooid > 0) ...[
             const SizedBox(height: 6),
@@ -17678,7 +18113,11 @@ class _KwaliteitViewState extends State<KwaliteitView> {
     // hij tegen gebouwd is. Zie [DownloadManager.ververJachtStand].
     unawaited(context.read<DownloadManager>().ververJachtStand());
     _tikker = Timer.periodic(const Duration(seconds: 10), (_) {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      setState(() {});
+      // Op een gsm of iPad loopt de jacht op de pc; die meldt zich hier niet vanzelf.
+      final dm = context.read<DownloadManager>();
+      if (dm is RemoteDownloadManager) unawaited(dm.ververJachtStand());
     });
   }
 
@@ -17758,11 +18197,23 @@ class _KwaliteitViewState extends State<KwaliteitView> {
       ),
     );
     if (ja != true || !mounted) return;
-    final vrij = await lib.geefEigenKeuzeVrij(rijen.map((r) => r.track));
-    if (!mounted) return;
-    final nieuw = await context
-        .read<DownloadManager>()
-        .wensEchteVersies(rijen.map((r) => r.track), gezag: lib.tagsVoorVervanger);
+    final dm = context.read<DownloadManager>();
+    final int vrij, nieuw;
+    if (dm is RemoteDownloadManager) {
+      // Je keuzes en de verlanglijst staan op de pc; daar gebeurt allebei.
+      try {
+        final u = await dm.wensOpPc(rijen.map((r) => r.track), vrijgeven: true);
+        vrij = u.vrij;
+        nieuw = u.nieuw;
+      } catch (e) {
+        if (mounted) setState(() => _uitslag = 'De pc nam het niet aan: $e');
+        return;
+      }
+    } else {
+      vrij = await lib.geefEigenKeuzeVrij(rijen.map((r) => r.track));
+      if (!mounted) return;
+      nieuw = await dm.wensEchteVersies(rijen.map((r) => r.track), gezag: lib.tagsVoorVervanger);
+    }
     if (!mounted) return;
     setState(() {
       _uitslag = '$vrij vrijgegeven · $nieuw op de verlanglijst; de app zoekt er vanzelf naar.';
@@ -17848,7 +18299,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                       'of niet aantoonbaar dezelfde opname.'
                   : 'Elk is heel en dezelfde opname, en wat er nu staat is niet bewezen beter. '
                       'Terugzetten zet wat er nu staat opzij in $dupeFolder — er wordt niets gewist.',
-              style: const TextStyle(color: _muted, fontSize: 12, height: 1.4)),
+              style: TextStyle(color: _muted, fontSize: 12, height: 1.4)),
           const SizedBox(height: 8),
           for (final v in lijst)
             CheckboxListTile(
@@ -17864,7 +18315,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               subtitle: Text('${v.reden}\nterug: ${naam(v.geparkeerd)}  ·  opzij: ${naam(v.huidig)}',
-                  style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
+                  style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
             ),
           const SizedBox(height: 6),
           Wrap(spacing: 8, runSpacing: 6, children: [
@@ -17895,9 +18346,16 @@ class _KwaliteitViewState extends State<KwaliteitView> {
     // liegt en het is vier keer zo groot — gemeten 20,6 GB waar 4,1 GB volstaat, over 158 nummers
     // die via `uitMp3Bestanden` nooit op de verlanglijst kwamen.
     final rijen = lib.teVervangenBestanden();
-    final nieuw = await context
-        .read<DownloadManager>()
-        .wensEchteVersies(rijen.map((r) => r.track), gezag: lib.tagsVoorVervanger);
+    final int nieuw;
+    try {
+      nieuw = await context
+          .read<DownloadManager>()
+          .wensEchteVersies(rijen.map((r) => r.track), gezag: lib.tagsVoorVervanger);
+    } catch (e) {
+      // Op een gsm gaat dit naar de pc, en die kan wegvallen.
+      if (mounted) setState(() => _uitslag = 'De pc nam het niet aan: $e');
+      return;
+    }
     if (!mounted) return;
     setState(() {
       _uitslag = nieuw == 0
@@ -17917,6 +18375,10 @@ class _KwaliteitViewState extends State<KwaliteitView> {
     final rijen = lib.uitMp3Bestanden();
     final teVervangen = lib.teVervangenBestanden();
     final eigenKeuzes = lib.eigenKeuzesDieNepZijn();
+    // Op een gsm of iPad staan de bestanden niet: meten en `_dubbel` nakijken kan alleen de pc. De
+    // lijst en de getallen zijn wel die van de pc (de metingen en je keuzes reizen mee in de
+    // catalogus), en de knoppen die iets op de verlanglijst zetten, doen dat op de pc.
+    final opPc = !lib.isRemote;
 
     return ListView(
       padding: onderOp(context, const EdgeInsets.fromLTRB(28, 22, 28, 30)),
@@ -17926,11 +18388,12 @@ class _KwaliteitViewState extends State<KwaliteitView> {
           spacing: 14,
           runSpacing: 4,
           children: [
-            const Text('Kwaliteit',
-                style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+            if (!schilKop(context))
+              const Text('Kwaliteit',
+                  style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
             if (_bezig)
-              Text('Luisteren… $_done van $_total', style: const TextStyle(color: _muted, fontSize: 12.5))
-            else
+              Text('Luisteren… $_done van $_total', style: TextStyle(color: _muted, fontSize: 12.5))
+            else if (opPc)
               TextButton.icon(
                 onPressed: _meet,
                 icon: const Icon(Icons.verified_outlined, size: 16),
@@ -17970,16 +18433,19 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                   _terugTotaal == 0
                       ? '$dupeFolder nakijken…'
                       : '$dupeFolder nakijken… $_terugGedaan van $_terugTotaal',
-                  style: const TextStyle(color: _muted, fontSize: 12.5))
-            else if (!_bezig)
+                  style: TextStyle(color: _muted, fontSize: 12.5))
+            else if (!_bezig && opPc)
               TextButton.icon(
                 onPressed: _zoekTerug,
                 icon: const Icon(Icons.settings_backup_restore_rounded, size: 16),
                 label: const Text('Ten onrechte vervangen?'),
                 style: TextButton.styleFrom(foregroundColor: _muted),
               ),
+            if (!opPc)
+              Text('Meten en terugzetten gaan op de pc',
+                  style: TextStyle(color: _muted, fontSize: 12.5)),
             if (_uitslag != null)
-              Text(_uitslag!, style: const TextStyle(color: _muted, fontSize: 12.5)),
+              Text(_uitslag!, style: TextStyle(color: _muted, fontSize: 12.5)),
           ],
         ),
         // Wat de app zélf aan het doen is. Zonder deze strook zei de knop "op de verlanglijst
@@ -17993,10 +18459,10 @@ class _KwaliteitViewState extends State<KwaliteitView> {
         Text(
           rijen.isEmpty
               ? 'Niets afgekapt gevonden — of er is nog niet gemeten.'
-              : '${rijen.length} nummer(s) komen uit een mp3 en zitten dus ónder cd-kwaliteit. '
+              : '${rijen.length == 1 ? '1 nummer komt uit een mp3 en zit' : '${rijen.length} nummers komen uit een mp3 en zitten'} dus ónder cd-kwaliteit. '
                   'Het ergste staat bovenaan. Klap er een open om te zien wat er te halen valt, en '
                   'kies zelf een vervanger — de oude kopie gaat naar _dubbel, nooit weg.',
-          style: const TextStyle(color: _muted, fontSize: 12.5, height: 1.4),
+          style: TextStyle(color: _muted, fontSize: 12.5, height: 1.4),
         ),
         const SizedBox(height: 16),
         for (var i = 0; i < rijen.length; i++) _rij(rijen[i], i),
@@ -18037,7 +18503,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                         const SizedBox(height: 2),
-                        Text(t.album, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                        Text(t.album, style: TextStyle(color: _muted, fontSize: 11.5)),
                         const SizedBox(height: 3),
                         // `waaromAfkap` en niet `waarom`: op deze lijst staat een rij ALTIJD om
                         // zijn afkap, en die hoort dus vooraan te staan. Zie de docstring daar.
@@ -18045,9 +18511,9 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                             style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
                         if (nogSteeds) ...[
                           const SizedBox(height: 3),
-                          const Text('de nieuwe kopie is óók afgekapt — probeer een andere bron',
+                          Text('de nieuwe kopie is óók afgekapt — probeer een andere bron',
                               style: TextStyle(
-                                  color: Color(0xFFE8913A), fontSize: 11.5, fontWeight: FontWeight.w600)),
+                                  color: leesbaar(const Color(0xFFE8913A)), fontSize: 11.5, fontWeight: FontWeight.w600)),
                         ],
                       ],
                     ),
@@ -18063,7 +18529,7 @@ class _KwaliteitViewState extends State<KwaliteitView> {
                         borderRadius: BorderRadius.circular(6),
                         border: Border.all(color: Colors.orange.shade300),
                       ),
-                      child: Text('${(hz / 1000).toStringAsFixed(1)} kHz',
+                      child: Text('${(hz / 1000).toStringAsFixed(1).replaceAll('.', ',')} kHz',
                           style: TextStyle(
                               color: Colors.orange.shade300, fontSize: 10.5, fontWeight: FontWeight.w600)),
                     ),
@@ -18112,10 +18578,10 @@ class EchtheidDialog extends StatelessWidget {
         width: dialogWidth(context, 720),
         height: 460,
         child: items.isEmpty
-            ? const Center(child: Text('Niets gevonden.', style: TextStyle(color: _muted)))
+            ? Center(child: Text('Niets gevonden.', style: TextStyle(color: _muted)))
             : ListView.separated(
                 itemCount: items.length,
-                separatorBuilder: (_, __) => const Divider(height: 1, color: _line),
+                separatorBuilder: (_, __) => Divider(height: 1, color: _line),
                 itemBuilder: (_, i) {
                   final it = items[i];
                   return Padding(
@@ -18126,7 +18592,7 @@ class EchtheidDialog extends StatelessWidget {
                         Text('${it.track.artist} — ${it.track.title}',
                             style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                         const SizedBox(height: 2),
-                        Text(it.track.album, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                        Text(it.track.album, style: TextStyle(color: _muted, fontSize: 11.5)),
                         const SizedBox(height: 3),
                         Text(waarom(it.oordeel),
                             style: TextStyle(color: Colors.orange.shade300, fontSize: 11.5)),
@@ -18220,7 +18686,7 @@ Widget _echtheidMerk(Track? t) {
     message: waarom(o),
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Text(echt, style: kLabel.copyWith(color: const Color(0xFFB98A4A))),
+      child: Text(echt, style: kLabel.copyWith(color: leesbaar(const Color(0xFFB98A4A)))),
     ),
   );
 }
@@ -18401,7 +18867,7 @@ Widget _filterChipsRow(QFilter current, ValueChanged<QFilter> onChanged) => Padd
         crossAxisAlignment: WrapCrossAlignment.center,
         runSpacing: 6,
         children: [
-          const Icon(Icons.tune_rounded, size: 15, color: _muted),
+          Icon(Icons.tune_rounded, size: 15, color: _muted),
           const SizedBox(width: 8),
           ...QFilter.values.map((f) {
             final sel = current == f;
@@ -18456,7 +18922,7 @@ Widget _bronChipsRow(
             ),
             child: Text(aantal == null ? label : '$label $aantal',
                 style: TextStyle(
-                    color: sel ? Colors.white : _muted,
+                    color: sel ? kFel : _muted,
                     fontSize: 12,
                     fontWeight: sel ? FontWeight.w600 : FontWeight.w400)),
           ),
@@ -18470,7 +18936,7 @@ Widget _bronChipsRow(
       crossAxisAlignment: WrapCrossAlignment.center,
       runSpacing: 6,
       children: [
-        const Icon(Icons.travel_explore_rounded, size: 15, color: _muted),
+        Icon(Icons.travel_explore_rounded, size: 15, color: _muted),
         const SizedBox(width: 8),
         chip('Alle bronnen', null, gekozen == null, () => onChanged(null)),
         for (final b in bronnen)
@@ -18485,11 +18951,11 @@ Widget _sourceHeader(String title, int count, bool loading) => Padding(
       child: Row(
         children: [
           Text(title.toUpperCase(),
-              style: const TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
+              style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6)),
           const SizedBox(width: 8),
-          Text('$count', style: const TextStyle(color: _muted, fontSize: 11.5)),
-          if (loading) ...const [
-            SizedBox(width: 8),
+          Text('$count', style: TextStyle(color: _muted, fontSize: 11.5)),
+          if (loading) ...[
+            const SizedBox(width: 8),
             SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
           ],
         ],
@@ -18557,10 +19023,10 @@ Widget _torrentTile(BuildContext context, SearchResult r, {String? merk}) {
                 runSpacing: 4,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  Text(meta, style: const TextStyle(color: _muted, fontSize: 12)),
+                  Text(meta, style: TextStyle(color: _muted, fontSize: 12)),
                   if (r.cached)
-                    const Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12)),
-                  if (merk != null) Text(merk, style: const TextStyle(color: _accent2, fontSize: 12)),
+                    Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12)),
+                  if (merk != null) Text(merk, style: TextStyle(color: _accent2, fontSize: 12)),
                   _qualityBadge(q),
                 ],
               ),
@@ -18604,17 +19070,17 @@ Widget _torrentTile(BuildContext context, SearchResult r, {String? merk}) {
                           child: Text(meta,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: _muted, fontSize: 12)),
+                              style: TextStyle(color: _muted, fontSize: 12)),
                         ),
                         if (r.cached)
-                          const Padding(
+                          Padding(
                               padding: EdgeInsets.only(left: 8),
                               child:
                                   Text('⚡ Instant', style: TextStyle(color: _accent2, fontSize: 12))),
                         if (merk != null)
                           Padding(
                               padding: const EdgeInsets.only(left: 8),
-                              child: Text(merk, style: const TextStyle(color: _accent2, fontSize: 12))),
+                              child: Text(merk, style: TextStyle(color: _accent2, fontSize: 12))),
                       ],
                     ),
                   ],
@@ -18669,13 +19135,13 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
     final blok = Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: const Color(0xFFE8913A).withValues(alpha: .16),
+        color: leesbaar(const Color(0xFFE8913A)).withValues(alpha: .16),
         borderRadius: BorderRadius.circular(5),
-        border: Border.all(color: const Color(0xFFE8913A).withValues(alpha: .45)),
+        border: Border.all(color: leesbaar(const Color(0xFFE8913A)).withValues(alpha: .45)),
       ),
       child: Text(tekst,
-          style: const TextStyle(
-              fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFE8913A))),
+          style: TextStyle(
+              fontSize: 10, fontWeight: FontWeight.w700, color: leesbaar(const Color(0xFFE8913A)))),
     );
     return uitleg == null ? blok : Tooltip(message: uitleg, child: blok);
   }
@@ -18694,7 +19160,7 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
           border: Border.all(color: _accent2.withValues(alpha: .45)),
         ),
         child: Text(pastMerk,
-            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: _accent2)),
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: _accent2)),
       ),
     if (_surroundMerk(f) != null) merk(_surroundMerk(f)!),
     // TE KLEIN VOOR WAT HET BEWEERT. Meten kan hier niet: je kunt niet in het bestand van een
@@ -18734,7 +19200,7 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
-              Text(meta, style: const TextStyle(color: _muted, fontSize: 12)),
+              Text(meta, style: TextStyle(color: _muted, fontSize: 12)),
               if (smal) ...[
                 const SizedBox(height: 6),
                 Wrap(spacing: 6, runSpacing: 4, children: merken),
@@ -18767,7 +19233,7 @@ Widget _netCover(String? url,
     decoration: BoxDecoration(
       shape: shape,
       borderRadius: br,
-      gradient: const LinearGradient(colors: [kPaneelHoog, kPaneel]),
+      gradient: LinearGradient(colors: [kPaneelHoog, kPaneel]),
     ),
     child: Icon(circle ? Icons.person_rounded : Icons.album_rounded, color: _muted.withValues(alpha: .4), size: size * .34),
   );
@@ -18975,7 +19441,7 @@ class _SourcesViewState extends State<SourcesView> {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(verborgenTorrentsZin(verborgen.length, mist: mist, nummer: widget.track != null),
-                    style: const TextStyle(color: _muted, fontSize: 12.5)),
+                    style: TextStyle(color: _muted, fontSize: 12.5)),
                 TextButton(
                   onPressed: () => setState(() => _toonAndere = !_toonAndere),
                   child: Text(_toonAndere ? 'Verberg ze' : 'Toon ze'),
@@ -18989,12 +19455,12 @@ class _SourcesViewState extends State<SourcesView> {
           _soulseekHeader(context, slsk, _sBusy, slsk,
               folder: bronnen.besteMap, authority: widget.authority)
         else
-          const Padding(
+          Padding(
               padding: EdgeInsets.fromLTRB(24, 14, 24, 6),
               child: Text('SOULSEEK · log in via Instellingen',
                   style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: .6))),
         if (ready && slsk.isEmpty && !_sBusy)
-          const Padding(
+          Padding(
               padding: EdgeInsets.fromLTRB(24, 2, 24, 6),
               child: Text('Geen Soulseek-bronnen.', style: TextStyle(color: _muted, fontSize: 12.5))),
         // Eerlijk zeggen waar deze lijst over gaat. Zonder deze regel stond je naar bronnen voor een
@@ -19005,7 +19471,7 @@ class _SourcesViewState extends State<SourcesView> {
             child: Text(
                 'Niets gevonden voor “${widget.query}”. Dit zijn de bronnen voor “$_gezochtOp” — '
                 'kijk dus na of het de juiste versie is.',
-                style: const TextStyle(color: Color(0xFFE8913A), fontSize: 12.5)),
+                style: TextStyle(color: leesbaar(const Color(0xFFE8913A)), fontSize: 12.5)),
           ),
         // Whichever copy the user picks, the record decides what it is. That is the whole point:
         // this same song is offered as "13 …", "19. …" and "…The Essential … - 01 - …".
@@ -19402,7 +19868,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
                 FilledButton.icon(
                   style: FilledButton.styleFrom(
                     backgroundColor: _panel2,
-                    foregroundColor: Colors.white,
+                    foregroundColor: kFel,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   ),
                   onPressed: () => setState(() => _limiet += bronStap),
@@ -19410,7 +19876,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
                   label: Text('Nog ${venster.volgende} tonen'),
                 ),
                 Text('nog ${venster.rest} bronnen · de beste staan bovenaan',
-                    style: const TextStyle(color: _muted, fontSize: 12)),
+                    style: TextStyle(color: _muted, fontSize: 12)),
               ],
             ),
           ),
@@ -19470,7 +19936,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
                             '${g.mappen.length > 1 ? " in ${g.mappen.length} mappen" : ""} · '
                             '${_fmtBytes(g.totaal)}',
                             maxLines: 2,
-                            style: const TextStyle(color: _muted, fontSize: 12)),
+                            style: TextStyle(color: _muted, fontSize: 12)),
                       ],
                     ),
                   ),
@@ -19496,7 +19962,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
           spacing: 10,
           runSpacing: 2,
           children: [
-            const Icon(Icons.folder_rounded, size: 15, color: _muted),
+            Icon(Icons.folder_rounded, size: 15, color: _muted),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 260),
               child: Text(m.naam.isEmpty ? 'losse nummers' : m.naam,
@@ -19505,7 +19971,7 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
                   style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
             ),
             Text('${m.aantal} · ${_fmtBytes(m.totaal)}',
-                style: const TextStyle(color: _muted, fontSize: 12)),
+                style: TextStyle(color: _muted, fontSize: 12)),
             if (m.aantal >= 2)
               TextButton.icon(
                 // De volledige lijst gaat als kandidatenpoel mee: een download die bij deze peer
@@ -19685,14 +20151,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: _panel,
-        title: const Text('Adres uit je browser plakken', style: kKopKlein),
+        title: Text('Adres uit je browser plakken', style: kKopKlein),
         content: SizedBox(
           width: dialogWidth(context, 460),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Plak het hele adres waar je browser op uitkwam — dat begint met '
+              Text('Plak het hele adres waar je browser op uitkwam — dat begint met '
                   'https://tidal.com/?code= en is lang. Enkel de code mag ook.',
                   style: kTekstKlein),
               const SizedBox(height: 10),
@@ -19704,8 +20170,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                   isDense: true,
                   filled: true,
                   fillColor: kVerzonken,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
                 ),
               ),
             ],
@@ -20067,10 +20533,11 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(24, 22, 24, 8),
-          child: Text('Online zoeken', style: kKop),
-        ),
+        if (!schilKop(context))
+          Padding(
+            padding: EdgeInsets.fromLTRB(24, 22, 24, 8),
+            child: Text('Online zoeken', style: kKop),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 10),
           // Wrap en geen Row: drie chips passen op een telefoon van 360 punten net niet naast
@@ -20106,9 +20573,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     fillColor: _panel,
                     prefixIcon: const Icon(Icons.search_rounded, size: 20),
                     border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(11), borderSide: const BorderSide(color: _line)),
+                        borderRadius: BorderRadius.circular(11), borderSide: BorderSide(color: _line)),
                     enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(11), borderSide: const BorderSide(color: _line)),
+                        borderRadius: BorderRadius.circular(11), borderSide: BorderSide(color: _line)),
                   ),
                 ),
                 ),
@@ -20160,7 +20627,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                 children: [
                   Row(
                     children: [
-                      const Text('DOWNLOADS', style: kOpschrift),
+                      Text('DOWNLOADS', style: kOpschrift),
                       const Spacer(),
                       if (hasFinished)
                         TextButton.icon(
@@ -20240,7 +20707,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           },
         ),
         if (_status != null)
-          Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: const TextStyle(color: _muted))),
+          Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: TextStyle(color: _muted))),
         Expanded(
             child: _mode == 0
                 ? _browseResults()
@@ -20252,7 +20719,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   Widget _tidalResults() {
     final tidal = context.read<TidalService>();
     if (!tidal.configured) {
-      return const Center(
+      return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text('Stel je TIDAL Client ID + Secret in via Instellingen (⚙) om TIDAL te gebruiken.',
@@ -20269,7 +20736,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             // tidal.com — een pagina die niet van ons is, dus er kan niets vanzelf terugkomen. Dat
             // stond hier eerder als "lukt het automatisch niet?", en dat is precies de zin die je
             // laat wachten op iets wat nooit gaat gebeuren.
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 24),
               child: Text('Verbind je TIDAL-account om de catalogus te doorzoeken.\n'
                   'Je logt in op TIDAL zelf — DebridMusic ziet je wachtwoord niet.',
@@ -20285,7 +20752,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
               onPressed: _tidalConnecting ? null : _connectTidal,
             ),
             const SizedBox(height: 14),
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 24),
               child: Text('Na het inloggen kom je uit op tidal.com. Kopieer daar het hele adres uit '
                   'de adresbalk van je browser — er staat ?code= in — en klik dan hieronder. De app '
@@ -20302,9 +20769,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ),
       );
     }
-    if (_tidalBusy) return const Center(child: CircularProgressIndicator(color: _accent));
+    if (_tidalBusy) return Center(child: CircularProgressIndicator(color: _accent));
     if (_tidalAlbums.isEmpty && _tidalTracks.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text('Verbonden met TIDAL ✓  — zoek een plaat of een nummer. Ophalen gaat met je '
@@ -20450,9 +20917,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   }
 
   Widget _browseResults() {
-    if (_browseBusy) return const Center(child: CircularProgressIndicator(color: _accent));
+    if (_browseBusy) return Center(child: CircularProgressIndicator(color: _accent));
     if (_artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text('Zoek een artiest, album of nummer — bronnen (torrent/Soulseek) verschijnen eronder.',
@@ -20653,7 +21120,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             padding: const EdgeInsets.fromLTRB(24, 6, 24, 2),
             child: Text(
                 'Niets gevonden voor “$vraag”. Dit zijn de treffers voor “$_gezochtDirect”.',
-                style: const TextStyle(color: Color(0xFFE8913A), fontSize: 12.5)),
+                style: TextStyle(color: leesbaar(const Color(0xFFE8913A)), fontSize: 12.5)),
           ),
         // HOE GOED DEKT DE BESTE TREFFER JE VRAAG? Zonder dit moest je zelf bestandsnamen
         // ontcijferen om te zien dat de bovenste maar drie van je vier woorden had — en dan zoek je
@@ -20671,7 +21138,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                       : 'Beste treffer heeft ${bronnen.besteDekking} van je $totaal woorden — '
                           'waarschijnlijk staat wat je zoekt er niet bij.',
                   style: TextStyle(
-                      color: volledig ? _accent2 : const Color(0xFFE8913A), fontSize: 12.5)),
+                      color: volledig ? _accent2 : leesbaar(const Color(0xFFE8913A)), fontSize: 12.5)),
             );
           }),
         if (torrents.isNotEmpty) _sourceHeader('Torrents · TorBox', torrents.length, _busy),
@@ -20685,7 +21152,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         if (_status == null || _slsk.isNotEmpty || _slskBusy)
           (soulseekReady
               ? _soulseekHeader(context, slsk, _slskBusy, slsk, folder: bronnen.besteMap)
-              : const Padding(
+              : Padding(
                   padding: EdgeInsets.fromLTRB(24, 16, 24, 6),
                   child: Text('SOULSEEK · log in via Instellingen om P2P mee te zoeken',
                       style: kOpschrift))),
@@ -20795,7 +21262,7 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
             Text(widget.result.name,
                 maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            const Text('Kies een nummer om af te spelen of los te downloaden',
+            Text('Kies een nummer om af te spelen of los te downloaden',
                 style: TextStyle(color: _muted, fontSize: 12)),
             const SizedBox(height: 14),
             if (_loading)
@@ -20803,12 +21270,12 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                 padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
                 child: Center(
                   child: Column(children: [
-                    const CircularProgressIndicator(color: _accent),
+                    CircularProgressIndicator(color: _accent),
                     const SizedBox(height: 16),
                     Text(
                         _stand.isNotEmpty ? _stand : 'Bron voorbereiden bij TorBox…',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(color: _muted, fontSize: 12.5)),
+                        style: TextStyle(color: _muted, fontSize: 12.5)),
                     if (_prep > 0) ...[
                       const SizedBox(height: 10),
                       ClipRRect(
@@ -20824,7 +21291,7 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                       const SizedBox(height: 10),
                       Text(torboxWaarom(gecacht: widget.result.cached),
                           textAlign: TextAlign.center,
-                          style: const TextStyle(color: _muted, fontSize: 11)),
+                          style: TextStyle(color: _muted, fontSize: 11)),
                     ],
                   ]),
                 ),
@@ -20851,7 +21318,7 @@ class _TrackPickerDialogState extends State<_TrackPickerDialog> {
                               children: [
                                 Text(f.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
                                 Text('${_fmtBytes(f.size)}${f.isFlac ? " · FLAC" : ""}',
-                                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                    style: TextStyle(color: _muted, fontSize: 11.5)),
                               ],
                             ),
                           ),
@@ -20963,7 +21430,7 @@ class _BioTextState extends State<BioText> {
             content: SizedBox(
               width: dialogWidth(context, 540),
               child: SingleChildScrollView(
-                child: Text(text, style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5, height: 1.5)),
+                child: Text(text, style: TextStyle(color: leesbaar(const Color(0xFFC7CBDA)), fontSize: 13.5, height: 1.5)),
               ),
             ),
             actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Sluiten'))],
@@ -20977,17 +21444,17 @@ class _BioTextState extends State<BioText> {
               Text(text,
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _muted, fontSize: 13, height: 1.45)),
+                  style: TextStyle(color: _muted, fontSize: 13, height: 1.45)),
               Padding(
                 padding: const EdgeInsets.only(top: 3),
                 child: Text.rich(TextSpan(children: [
                   TextSpan(
                       text: 'Lees meer',
                       style: tvLinkStijl(
-                          const TextStyle(color: _accent, fontSize: 12.5, fontWeight: FontWeight.w600), _gekozen)),
+                          TextStyle(color: _accent, fontSize: 12.5, fontWeight: FontWeight.w600), _gekozen)),
                   // Eerlijk zeggen dat dit niet de oorspronkelijke tekst is.
                   if (_vertaald)
-                    const TextSpan(text: ' · vertaald', style: TextStyle(color: _muted, fontSize: 12)),
+                    TextSpan(text: ' · vertaald', style: TextStyle(color: _muted, fontSize: 12)),
                 ])),
               ),
             ],
@@ -21185,7 +21652,8 @@ class _HeroCarouselState extends State<HeroCarousel> {
                 gradient: LinearGradient(
                   begin: Alignment.centerLeft,
                   end: Alignment.centerRight,
-                  colors: [Colors.black.withValues(alpha: .88), Colors.black.withValues(alpha: .62)],
+                  // Op licht een waas van gebroken wit: de titel staat in de tekstkleur, en die is daar donker.
+                  colors: [paginaWaasOp(.88, donker: Colors.black), paginaWaasOp(.62, donker: Colors.black)],
                 ),
               ),
             ),
@@ -21218,7 +21686,7 @@ class _HeroCarouselState extends State<HeroCarousel> {
                         Text(widget.koppen[hit.album.id] ?? 'NIEUWE RELEASE',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 color: _accent2, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
                         const SizedBox(height: 8),
                         Text(hit.album.title,
@@ -21230,14 +21698,14 @@ class _HeroCarouselState extends State<HeroCarousel> {
                           alignment: Alignment.centerLeft,
                           child: ArtistNames(
                               names: [hit.artist],
-                              style: const TextStyle(fontSize: 15, color: Color(0xFFC7CBDA))),
+                              style: TextStyle(fontSize: 15, color: leesbaar(const Color(0xFFC7CBDA)))),
                         )),
                         if ((widget.onderschriften[hit.album.id] ?? hit.album.year) case final onder?) ...[
                           const SizedBox(height: 2),
                           Text(onder,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 12.5, color: _muted)),
+                              style: TextStyle(fontSize: 12.5, color: _muted)),
                         ],
                         const SizedBox(height: 14),
                         FilledButton.icon(
@@ -21381,8 +21849,8 @@ class _ArtistBackdropState extends State<ArtistBackdrop> {
               // The hero fills roughly the top third, so the scrim stays light that far down and
               // only closes in below it, where the records and tracks have to stay readable.
               colors: [
-                Colors.black.withValues(alpha: .26),
-                Colors.black.withValues(alpha: .40),
+                paginaWaasOp(.26, donker: Colors.black),
+                paginaWaasOp(.40, donker: Colors.black),
                 kAchtergrond.withValues(alpha: .86),
                 kAchtergrond.withValues(alpha: .92),
               ],
@@ -21571,9 +22039,9 @@ class _ArtistHeroState extends State<ArtistHero> {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Colors.black.withValues(alpha: .30),
-                      Colors.black.withValues(alpha: .38),
-                      Colors.black.withValues(alpha: .82),
+                      paginaWaasOp(.30, donker: Colors.black),
+                      paginaWaasOp(.38, donker: Colors.black),
+                      paginaWaasOp(.82, donker: Colors.black),
                       kAchtergrond,
                     ],
                     stops: const [0, .40, .82, 1],
@@ -21639,7 +22107,7 @@ class _ArtistHeroState extends State<ArtistHero> {
                         _plainName(),
                       if (widget.subtitle != null) ...[
                         const SizedBox(height: 8),
-                        Text(widget.subtitle!, style: const TextStyle(color: Color(0xFFC7CBDA), fontSize: 13.5)),
+                        Text(widget.subtitle!, style: TextStyle(color: leesbaar(const Color(0xFFC7CBDA)), fontSize: 13.5)),
                       ],
                       if (widget.actions.isNotEmpty) ...[
                         const SizedBox(height: 12),
@@ -21716,55 +22184,24 @@ class _Feit extends StatelessWidget {
       );
 }
 
-/// Een schijf die er niet is: donker plastic met de hoes als etiket in het midden.
+/// Een schijf die er niet is, met de hoes als etiket in het midden: een zilveren cd, of een zwarte
+/// plaat als de uitgave vinyl is (Saber, 18-10-2026). Zie `ui/getekende_schijf.dart`.
 ///
 /// **Alleen als terugval, en met opzet duidelijk anders dan een scan.** Zie de uitleg bij het
 /// gebruik in [AlbumArt]: een echte cd-scan toont de bedrukking van díé persing, en die willen we
 /// tonen als hij er is. Is hij er niet — zes van de tien platen — dan is dit beter dan een lege
 /// hoes zonder gebaar, zolang het maar niet doet alsof.
-///
-/// Het etiket is 34% van de schijf. Op een echte cd is het bedrukte vlak ongeveer 46 van de 120 mm;
-/// iets kleiner leest hier beter, want het is een hoes en geen ronde bedrukking.
 class _GetekendeSchijf extends StatelessWidget {
-  const _GetekendeSchijf({required this.label, required this.maat});
+  const _GetekendeSchijf({required this.label, required this.maat, this.vinyl = false});
   final Uint8List label;
   final double maat;
 
+  /// Is de uitgave vinyl? Dan een zwarte plaat met groeven, anders een zilveren cd.
+  final bool vinyl;
+
   @override
-  Widget build(BuildContext context) {
-    final etiket = maat * .34;
-    return SizedBox(
-      width: maat,
-      height: maat,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          DecoratedBox(
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              // Een glans die niet meedraait zou vreemd staan; deze zit ín de schijf en draait mee,
-              // precies zoals het licht over een echte plaat loopt.
-              gradient: RadialGradient(
-                center: Alignment(-.24, -.36),
-                radius: .92,
-                colors: [kBovenop, Color(0xFF12141C), Color(0xFF08090D)],
-                stops: [0, .46, 1],
-              ),
-            ),
-            child: SizedBox(width: maat, height: maat),
-          ),
-          ClipOval(
-            child: Image.memory(label,
-                width: etiket,
-                height: etiket,
-                fit: BoxFit.cover,
-                cacheWidth: decodeWidth(etiket),
-                errorBuilder: (_, __, ___) => const SizedBox()),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      vinyl ? GetekendVinyl(label: label, maat: maat) : GetekendeCd(label: label, maat: maat);
 }
 
 /// De hoes in het paneel naast "In mijn bibliotheek" op een tv.
@@ -22242,6 +22679,42 @@ Future<void> toonKopBewerker(BuildContext context, String naam, Uint8List beeld)
 /// Dat de laatste trap meeging is het gevolg van de eerste: dat ronde portret bestónd alleen als
 /// terugval voor artiesten zónder cutout. Met de cutout weg zou hij bij iedereen verschijnen, en
 /// dan is er nog steeds een tweede figuur.
+/// De regels van een artiestnaam in de kop, in hoofdletters.
+///
+/// Eén regel zolang hij in [breedte] past; anders gaat er per regel zoveel woorden mee als er passen,
+/// elke volgende regel [inspring] smaller. Nooit midden in een woord: een woord dat alleen al te breed
+/// is, krijgt een eigen regel (de kop laat het dan krimpen).
+@visibleForTesting
+List<String> naamRegels(String naam, TextStyle stijl, double breedte,
+    {double inspring = 0, TextScaler schaal = TextScaler.noScaling}) {
+  final woorden = naam.trim().toUpperCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+  if (woorden.isEmpty) return const [''];
+  if (!breedte.isFinite || breedte <= 0) return [woorden.join(' ')];
+  double breed(String tekst) {
+    final tp = TextPainter(
+        text: TextSpan(text: tekst, style: stijl), textDirection: TextDirection.ltr, textScaler: schaal, maxLines: 1)
+      ..layout();
+    final w = tp.width;
+    tp.dispose();
+    return w;
+  }
+
+  final regels = <String>[];
+  var huidig = '';
+  for (final w in woorden) {
+    final proef = huidig.isEmpty ? w : '$huidig $w';
+    final ruimte = regels.isEmpty ? breedte : breedte - inspring;
+    if (huidig.isEmpty || breed(proef) <= ruimte) {
+      huidig = proef;
+    } else {
+      regels.add(huidig);
+      huidig = w;
+    }
+  }
+  regels.add(huidig);
+  return regels;
+}
+
 class EditorialeKop extends StatelessWidget {
   const EditorialeKop({
     super.key,
@@ -22339,12 +22812,6 @@ class EditorialeKop extends StatelessWidget {
         );
 
     final naamKleur = Theme.of(context).textTheme.bodyLarge?.color ?? kTekst;
-    final woorden = naam.trim().split(RegExp(r'\s+'));
-    // Twee regels met de tweede ingesprongen — het ritme uit het ontwerp. Bij een naam van één
-    // woord blijft het één regel; inspringen heeft dan niets om zich toe te verhouden.
-    final kop = woorden.length > 1
-        ? [woorden.first, woorden.skip(1).join(' ')]
-        : [woorden.first];
 
     return ClipRect(
       child: ConstrainedBox(
@@ -22426,13 +22893,13 @@ class EditorialeKop extends StatelessWidget {
                   // is niet wat gevraagd is: "hou enkel de achtergrond image in volle breedte lijk
                   // het is" — en zoals het IS, is deze. De leesbaarheid van de naam hangt niet aan
                   // dit verloop maar aan het verloop van links hieronder.
-                  gradient: const LinearGradient(
+                  gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Color(0x44000000),
-                      Color(0x66000000),
-                      Color(0xDB07080C),
+                      paginaWaas(0x44, donker: Colors.black),
+                      paginaWaas(0x66, donker: Colors.black),
+                      paginaWaas(0xDB),
                       kAchtergrond,
                       kAchtergrond,
                     ],
@@ -22454,12 +22921,12 @@ class EditorialeKop extends StatelessWidget {
             if (!smal)
               Positioned.fill(
                 child: DecoratedBox(
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.centerLeft,
                       end: Alignment.centerRight,
-                      colors: [kAchtergrond, Color(0x5907080C), Color(0x0007080C)],
-                      stops: [0, .44, .74],
+                      colors: [kAchtergrond, paginaWaas(0x59), paginaWaas(0x00)],
+                      stops: const [0, .44, .74],
                     ),
                   ),
                 ),
@@ -22506,26 +22973,37 @@ class EditorialeKop extends StatelessWidget {
                   SizedBox(height: smal ? 104 : (isTv ? 10 : 150)),
                   // De naam. Geen laatste trap nodig als er geen beeld is: dan draagt hij het
                   // kader alleen, en dat is een compositie in plaats van een gat.
-                  for (var i = 0; i < kop.length; i++)
-                    Padding(
-                      padding: EdgeInsets.only(left: i == 0 ? 0 : naamGrootte * .52),
-                      // Krimpen in plaats van afkappen: de tweede regel is "de rest van de naam", en
-                      // op een gsm van 46 punten in hoofdletters viel daar het einde af ("AND THE
-                      // WAILE…"). Een naam die je niet helemaal kunt lezen is geen kop.
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          kop[i].toUpperCase(),
-                          maxLines: 1,
-                          style: kDisplay.copyWith(
-                            fontSize: naamGrootte,
-                            letterSpacing: -naamGrootte * .027,
-                            color: naamKleur,
+                  // Eén regel als de naam past, anders afgebroken tussen woorden met elke volgende
+                  // regel ingesprongen — het ritme uit het ontwerp. Hiervoor ging elke naam van twee
+                  // woorden altijd over twee regels, ook als hij ruim paste: "2" boven "FABIOLA"
+                  // (Saber, 18-10-2026: "één regel als het past").
+                  LayoutBuilder(builder: (context, c) {
+                    final stijl = kDisplay.copyWith(
+                      fontSize: naamGrootte,
+                      letterSpacing: -naamGrootte * .027,
+                      color: naamKleur,
+                    );
+                    final regels = naamRegels(naam, stijl, c.maxWidth,
+                        inspring: naamGrootte * .52, schaal: MediaQuery.textScalerOf(context));
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (var i = 0; i < regels.length; i++)
+                          Padding(
+                            padding: EdgeInsets.only(left: i == 0 ? 0 : naamGrootte * .52),
+                            // Krimpen in plaats van afkappen: een woord dat alleen al te breed is
+                            // ("AND THE WAILE…" op een gsm van 46 punten). Een naam die je niet
+                            // helemaal kunt lezen is geen kop.
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: Text(regels[i], maxLines: 1, style: stijl),
+                            ),
                           ),
-                        ),
-                      ),
-                    ),
+                      ],
+                    );
+                  }),
                   if (!isTv && echteNaam != null && echteNaam!.trim().isNotEmpty) ...[
                     const SizedBox(height: 12),
                     Padding(
@@ -23010,7 +23488,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
           Row(
             children: [
               if (info?.score != null) ...[
-                const Icon(Icons.star_rounded, size: 16, color: Color(0xFFE0B341)),
+                Icon(Icons.star_rounded, size: 16, color: leesbaar(const Color(0xFFE0B341))),
                 const SizedBox(width: 4),
                 Text(info!.score!.toStringAsFixed(1),
                     style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
@@ -23021,16 +23499,16 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
                 // a page and a way into the rest of the music that sounds like this.
                 child: Wrap(spacing: 5, runSpacing: 2, children: [
                   for (var i = 0; i < facts.length; i++) ...[
-                    if (i > 0) const Text('·', style: TextStyle(color: _muted, fontSize: 12.5)),
+                    if (i > 0) Text('·', style: TextStyle(color: _muted, fontSize: 12.5)),
                     if (genres.contains(facts[i]))
                       InkWell(
                         onTap: () => openPagina(context, (_) => StylePage(facts[i])),
                         borderRadius: BorderRadius.circular(4),
                         child: Text(facts[i],
-                            style: const TextStyle(color: _accent2, fontSize: 12.5)),
+                            style: TextStyle(color: _accent2, fontSize: 12.5)),
                       )
                     else
-                      Text(facts[i], style: const TextStyle(color: _muted, fontSize: 12.5)),
+                      Text(facts[i], style: TextStyle(color: _muted, fontSize: 12.5)),
                   ],
                 ]),
               ),
@@ -23039,7 +23517,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
           if (pressing.isNotEmpty) ...[
             const SizedBox(height: 6),
             Row(children: [
-              const Icon(Icons.album_outlined, size: 13, color: _muted),
+              Icon(Icons.album_outlined, size: 13, color: _muted),
               const SizedBox(width: 5),
               Flexible(
                 child: Text(
@@ -23052,7 +23530,7 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
                     // Twee regels: "Uitgave: cd · 0825646404124 · France" is op een gsm net te lang.
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: _muted, fontSize: 12)),
+                    style: TextStyle(color: _muted, fontSize: 12)),
               ),
             ]),
           ],
@@ -23081,12 +23559,29 @@ class ArtistBrowsePage extends StatefulWidget implements OnderDeBalk {
 class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   final _catalog = CatalogService();
 
-  /// De drie bronnen APART, en pas samengevoegd bij het tekenen.
+  /// De discografie zoals hij op het scherm staat. Hij ligt vast zodra hij verschijnt (zie
+  /// [bevriesDiscografie]), en is null zolang er nog niets te tonen is.
   ///
-  /// Eén gedeelde lijst zou betekenen dat de uitkomst afhangt van wie het eerst binnenkwam, en dan
-  /// verspringt de lijst terwijl je ernaar kijkt. Zo geeft elke hertekening hetzelfde antwoord — en is
-  /// dat antwoord precies wat `mergeDiscography` in de test oplevert.
-  List<DiscoRelease> _dz = const [], _mb = const [], _dg = const [];
+  /// Hier stonden eerst de drie bronnen apart, en die werden bij elke hertekening samengevoegd. Elke
+  /// bron die binnenkwam verschoof zo de lijst. Saber, 18-10-2026: pas tonen als hij compleet is.
+  /// Bij een tweede bezoek staat de bewaarde lijst er meteen. Wat de bronnen dan vinden, is voor het
+  /// bezoek daarna.
+  VasteDisco? _vast;
+
+  /// Wat de bronnen deze keer opleverden, samengevoegd. Dit is om te BEWAREN, niet om te tonen; zie
+  /// [_bewaar].
+  List<DiscoRelease>? _versAlles;
+
+  /// De hoesregel van [_versAlles]: de zoeksweep van Discogs leverde hoezen. Het archief telt hier
+  /// nog niet mee.
+  bool _versZeefHoezen = false;
+
+  /// Of [_versAlles] bewaard mag worden. Dat mag niet als er een bron onbereikbaar was, want dan
+  /// staat de halve lijst bij het volgende bezoek meteen vast op het scherm.
+  bool _magBewaren = false;
+
+  /// Hoezen uit de verse bronnen, op [discoKey], voor regels van [_vast] die er toen nog geen hadden.
+  Map<String, String> _versHoezen = const {};
   BronStatus? _dzStatus, _mbStatus, _dgStatus;
 
   /// Hoezen die Discogs' zoeksweep kent voor platen die hij zelf niet als regel oplevert.
@@ -23099,7 +23594,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// [_haalGroepHoezen].
   Map<String, String> _groepHoezen = const {};
 
-  /// Of [_haalGroepHoezen] rond is ÉN iets vond. Pas dán telt het archief mee voor de hoesregel:
+  /// Of [_haalGroepHoezen] rond is ÉN iets vond. Pas dán telt het archief mee voor de hoesregel van de
+  /// bewaarde lijst, dus voor het volgende bezoek (zie [_bewaar]):
   /// eerder verdwijnt een plaat die zijn antwoord nog niet had, en zonder vondst zou een artiest
   /// waar het archief niets kent zijn platen verliezen. Niet af te lezen aan [_groepHoezen] zelf —
   /// die begint met de bewaarde hoezen van het vorige bezoek, ook die van Deezer.
@@ -23115,7 +23611,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   ///
   /// Saber wees "Pavarotti & Friends for Cambodia and Tibet" aan tussen de albums van Enrique
   /// Iglesias — een plaat van Luciano Pavarotti waar Enrique op één nummer meezingt. Komt na het
-  /// laden binnen, want het kost één verzoek per regel die alleen Deezer kent.
+  /// laden binnen, want het kost één verzoek per regel die alleen Deezer kent. Daarom gaat het alleen
+  /// naar de bewaarde lijst ([_bewaar]): een regel die midden in je bezoek verdwijnt, is precies het
+  /// verspringen dat weg moest.
   Set<String> _gasten = const {};
 
   DiscoSort _sort = DiscoSort.datumOud;
@@ -23235,74 +23733,126 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         DiscogsService(context.read<AppSettings>()),
       );
 
-  /// Drie bronnen, elk zodra hij klaar is.
+  /// Drie bronnen naast elkaar, en de lijst één keer op het scherm.
   ///
-  /// Dit was een OF/OF: een MusicBrainz-artiest kreeg alleen MusicBrainz, alle anderen alleen Deezer.
-  /// Daardoor miste je bij een gewone artiest elke regionale uitgave en elke compilatie die een
-  /// streamingcatalogus nooit heeft gekend, en bij een MusicBrainz-artiest élke hoes.
+  /// Alle drie. Eerst was het een OF/OF: een MusicBrainz-artiest kreeg alleen MusicBrainz, alle
+  /// anderen alleen Deezer. Dan mis je bij een gewone artiest elke regionale uitgave en elke
+  /// compilatie die een streamingcatalogus nooit heeft gekend, en bij een MusicBrainz-artiest élke
+  /// hoes.
   ///
-  /// Nu alle drie, in volgorde van snelheid: Deezer heeft geen rem en staat er meteen, MusicBrainz
-  /// kost één verzoek op een baan van 1100 ms, Discogs twee op een baan van zestig per minuut. De
-  /// pagina is dus bruikbaar voordat de trage bronnen binnen zijn, en groeit daarna.
+  /// **Eén keer tonen** (Saber, 18-10-2026). Eerst tekende elke bron zodra hij klaar was, en dan
+  /// verschoof de lijst drie keer onder je vinger. Nu zijn er twee gevallen:
+  /// - Er is een bewaarde lijst. Die staat er meteen en blijft staan. Wat de bronnen vinden, gaat naar
+  ///   schijf voor het volgende bezoek; alleen hoezen vullen nog aan.
+  /// - Er is geen bewaarde lijst. Dan verschijnt hij zodra alle drie geantwoord hebben, dus zo snel
+  ///   als de traagste bron. Die is sneller geworden: een vraag die al onderweg is, wordt gedeeld
+  ///   (zie `MusicBrainzService._onderweg`) in plaats van drie keer op dezelfde baan te wachten.
+  ///
+  /// Hoe lang elke bron deed, staat in disco.log.
   Future<void> _load() async {
     final ref = widget.artist.ref;
     final naam = widget.artist.name;
     final svc = _disco;
+    final metDiscogs = DiscogsService(context.read<AppSettings>()).available;
+    final klok = Stopwatch()..start();
+    final spoor = <String>[];
 
-    // De cache eerst, zodat een tweede bezoek niet leeg begint. Wat daarna binnenkomt overschrijft
-    // hem gewoon — samenvoegen is idempotent, dus dat kan geen kwaad.
     final bewaard = await svc.lees(naam);
     if (mounted && bewaard != null && bewaard.releases.isNotEmpty) {
       setState(() {
-        _dz = bewaard.releases;
-        // De hoezen van toen, ook die uit het archief. Zonder dit vervangen de verse bronnen de
-        // bewaarde regels door regels zónder archiefhoes, en staan die tegels even leeg tot de ronde
-        // ze weer vindt. [vulHoezenAan] vult alleen aan, dus dit kan geen betere hoes verdringen.
+        // Een bestand van vóór 18-10-2026 draagt de hoesregel niet. Dan geldt hij zoals hij nu zou
+        // gelden: alleen met een Discogs-token is er een zoeksweep die hoezen levert.
+        _vast = bevriesDiscografie(bewaard.releases, zeefHoezen: bewaard.zeefHoezen ?? metDiscogs);
+        // De hoezen van toen, ook die uit het archief. Het archief vraagt alleen wat nog geen hoes
+        // heeft, en [_bewaar] schrijft zo ook de hoezen van het vorige bezoek weer mee.
         _groepHoezen = {
           for (final r in bewaard.releases)
             if (r.cover != null && r.cover!.isNotEmpty) r.key: r.cover!,
         };
         _busy = false;
       });
+      final oud = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(bewaard.fetchedMs));
+      spoor.add('bewaard ${bewaard.releases.length} regels, '
+          '${oud.inDays > 0 ? '${oud.inDays} d' : oud.inHours > 0 ? '${oud.inHours} u' : '${oud.inMinutes} min'} oud');
     }
 
-    Future<void> pak(Future<BronUitkomst> f, void Function(BronUitkomst) zet) async {
+    Future<BronUitkomst> getimed(String wie, Future<BronUitkomst> f) async {
       final u = await f;
-      if (!mounted) return;
-      setState(() {
-        zet(u);
-        _busy = false;
-      });
+      final s = (klok.elapsedMilliseconds / 1000).toStringAsFixed(1).replaceAll('.', ',');
+      spoor.add('$wie $s s ${u.releases.length}${u.status == BronStatus.klaar ? '' : ' (${u.status.name})'}');
+      return u;
     }
 
-    // Niet awaited op elkaar: de drie lopen naast elkaar en elke setState tekent wat er dán is.
-    await Future.wait([
+    // Naast elkaar, en pas samen op het scherm.
+    final uit = await Future.wait([
       // Geen nummer (0): dan zoekt vanDeezer hem zelf op naam. Met 0 vroeg hij de albums van
       // "artiest 0" op — zie [openArtist], dat de pagina sinds 05-10-2026 meteen op naam opent.
-      pak(svc.vanDeezer(naam, bekendId: ref.isMb || widget.artist.id <= 0 ? null : widget.artist.id),
-          (u) { _dz = u.releases; _dzStatus = u.status; }),
-      pak(svc.vanMusicBrainz(naam, bekendeMbid: ref.isMb ? ref.id : null),
-          (u) { _mb = u.releases; _mbStatus = u.status; }),
+      getimed('deezer',
+          svc.vanDeezer(naam, bekendId: ref.isMb || widget.artist.id <= 0 ? null : widget.artist.id)),
+      getimed('musicbrainz', svc.vanMusicBrainz(naam, bekendeMbid: ref.isMb ? ref.id : null)),
       // Met het MusicBrainz-nummer als dat er is: dan kiest Discogs niet op naam — zie
       // [DiscographyService.discogsIdVoor] voor Oasis en het Belgische tranceproject.
-      pak(svc.vanDiscogs(naam, bekendeMbid: ref.isMb ? ref.id : null),
-          (u) { _dg = u.releases; _dgStatus = u.status; _hoezen = u.hoezen; }),
+      getimed('discogs', svc.vanDiscogs(naam, bekendeMbid: ref.isMb ? ref.id : null)),
     ]);
-
+    final dz = uit[0], mb = uit[1], dg = uit[2];
+    final alles = vulHoezenAan(mergeDiscography([dz.releases, mb.releases, dg.releases]), dg.hoezen);
+    // De hoesregel alleen als er iets IS om hoezen mee aan te vullen. Zonder Discogs-token draait de
+    // zoeksweep niet, en dan zou de regel elke plaat wegvegen die alleen MusicBrainz kent. Bij
+    // Michael Jackson zijn dat Off The Wall, Dangerous en Invincible.
+    final zeefHoezen = dg.status != BronStatus.geenToken && dg.hoezen.isNotEmpty;
+    _versAlles = alles;
+    _versZeefHoezen = zeefHoezen;
+    _magBewaren = alles.isNotEmpty && !uit.any((u) => u.status == BronStatus.onbereikbaar);
+    // Ook als je de pagina al verliet: dan staat hij er bij het volgende bezoek meteen.
+    _bewaar(svc, naam);
+    final eerste = _vast == null;
+    spoor.add('${alles.length} samen, ${eerste ? 'nu getoond' : 'voor het volgende bezoek'}'
+        '${_magBewaren ? '' : ', niet bewaard'}');
+    WarmLog('$logDir${Platform.pathSeparator}disco.log').line('"$naam": ${spoor.join(' · ')}');
     if (!mounted) return;
-    final alles = vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), _hoezen);
-    if (alles.isNotEmpty) unawaited(svc.schrijf(naam, alles));
-    // Op de achtergrond, en niet ervoor: de pagina staat al, dit maakt hem alleen mooier.
+    setState(() {
+      _dzStatus = dz.status;
+      _mbStatus = mb.status;
+      _dgStatus = dg.status;
+      _hoezen = dg.hoezen;
+      if (eerste) {
+        _vast = bevriesDiscografie(alles, zeefHoezen: zeefHoezen);
+      } else {
+        _versHoezen = {
+          for (final r in alles)
+            if (r.cover != null && r.cover!.isNotEmpty) r.key: r.cover!,
+        };
+      }
+      _busy = false;
+    });
+    // Op de achtergrond: de pagina staat al, dit maakt hem alleen mooier.
     unawaited(_haalGroepHoezen(naam, alles));
 
-    // Pas NA de drie bronnen, want wat MusicBrainz of Discogs ook kent hoeft niet nagevraagd — die
-    // twee laten een gastoptreden al vallen. En pas nadat de pagina staat: dit kost een verzoek per
-    // regel die alleen Deezer kent, voor Enrique Iglesias zijn dat er 47.
+    // Pas NA de drie bronnen, want wat MusicBrainz of Discogs ook kent, hoeft niet nagevraagd: die
+    // twee laten een gastoptreden al vallen. Dit kost een verzoek per regel die alleen Deezer kent
+    // (bij Enrique Iglesias 47), en het gaat alleen naar schijf, voor het volgende bezoek.
     final gasten = await svc.gastoptredens(naam, alles);
     if (!mounted || gasten.isEmpty) return;
-    setState(() => _gasten = gasten);
-    // Opnieuw wegschrijven, zodat een tweede bezoek ze niet eerst weer laat opflitsen.
-    unawaited(svc.schrijf(naam, alles.where((r) => !gasten.contains(r.key)).toList()));
+    _gasten = gasten;
+    _bewaar(svc, naam);
+  }
+
+  /// Schrijft weg wat er nu bekend is, voor het volgende bezoek: de verse lijst met de hoezen van het
+  /// archief, zonder gastoptredens, en met de hoesregel die daarbij hoort.
+  ///
+  /// Achter elkaar en niet naast elkaar. Het archief en de gastoptredens komen elk op hun eigen moment
+  /// binnen, en eerst schreef elk zijn eigen versie weg: de versie van de gastoptredens zonder de
+  /// hoezen van het archief, en wie het laatst schreef, won. Nu bouwt elke beurt het bestand op uit
+  /// alles wat er op dat moment bekend is.
+  Future<void> _bewaarRij = Future.value();
+  void _bewaar(DiscographyService svc, String naam) {
+    _bewaarRij = _bewaarRij.then((_) async {
+      final alles = _versAlles;
+      if (!_magBewaren || alles == null) return;
+      await svc.schrijf(
+          naam, vulHoezenAan(alles, _groepHoezen).where((r) => !_gasten.contains(r.key)).toList(),
+          zeefHoezen: _versZeefHoezen || _groepKlaar);
+    });
   }
 
   /// Een hoes uit het Cover Art Archive voor elke regel die alleen MusicBrainz kent.
@@ -23336,30 +23886,31 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       _groepHoezen = gevonden;
       _groepKlaar = nieuw > 0;
     });
-    // Mét de hoezen wegschrijven, zodat het volgende bezoek ze meteen heeft.
-    if (nieuw > 0) {
-      unawaited(_disco.schrijf(
-          naam, vulHoezenAan(alles, gevonden).where((r) => !_gasten.contains(r.key)).toList()));
-    }
+    // Mét de hoezen wegschrijven, zodat het volgende bezoek ze meteen heeft. En met de hoesregel die
+    // nu geldt: een regel zonder hoes valt dan weg vóór hij op het scherm komt, niet erna.
+    if (nieuw > 0) _bewaar(_disco, naam);
   }
 
   Future<void> _loadBio() async {
     final naam = widget.artist.name;
     final enricher = CoverEnricher(context.read<AppSettings>());
+    // Wikipedia TEGELIJK met TheAudioDB, niet erna (18-10-2026). Die tweede staat op een rij van drie
+    // seconden per vraag, en op de pc stond de opstartveeg van de hele bibliotheek daarvoor: daar
+    // kwam "Over 2 Fabiola" er minutenlang niet, terwijl het Wikipedia-artikel al klaarlag.
+    final wikiKomt = WikipediaService().artikel(naam, mbid: _mbid).then((w) {
+      if (mounted && naam == widget.artist.name && w != null) setState(() => _wiki = w);
+      return w;
+    });
     var bio = await enricher.cachedBio(naam);
-    bio ??= await enricher.fetchArtistBio(naam);
+    bio ??= await enricher.fetchArtistBio(naam, voorrang: true);
     if (mounted && bio != null) setState(() => _bio = bio);
 
     // De feiten liggen na `fetchArtistBio` op schijf: hij schrijft ze mee uit dezelfde respons.
     // Vandaar ná die aanroep en niet ervoor.
-    final feiten = await enricher.artistFeiten(naam);
+    final feiten = await enricher.artistFeiten(naam, voorrang: true);
     if (mounted && naam == widget.artist.name) setState(() => _feiten = feiten);
 
-    // Wikipedia erbovenop, en dat is met opzet de LAATSTE stap. Van schijf komt hij vrijwel meteen;
-    // is er nog niets, dan kost hij twee tot drie verzoeken over Wikidata — en tot die tijd staat
-    // de tekst van TheAudioDB er al. Zo is er nooit een leeg blok, alleen een dat beter wordt.
-    final wiki = await WikipediaService().artikel(naam, mbid: _mbid);
-    if (mounted && naam == widget.artist.name) setState(() => _wiki = wiki);
+    final wiki = await wikiKomt;
 
     // De foto's per periode, en pas na het artikel: het Wikidata-nummer waarmee het Engelse artikel
     // gevonden wordt, komt mee met de titel die het artikel opzocht.
@@ -23472,7 +24023,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           imageFilter: ImageFilter.blur(sigmaX: 42, sigmaY: 42),
           child: Transform.scale(scale: 1.2, child: waas()),
         ),
-        const DecoratedBox(decoration: BoxDecoration(color: Color(0x7307080C))),
+        DecoratedBox(decoration: BoxDecoration(color: paginaWaas(0x73))),
       ]),
       voor: _bandInhoud(punt, teller, eigen, bytes, url, heeftHoes),
     );
@@ -23625,7 +24176,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             Text(_geboorteFoto!.onderschrift,
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13, height: 1.5, color: Color(0xFFC7CBDA))),
+                style: TextStyle(fontSize: 13, height: 1.5, color: leesbaar(const Color(0xFFC7CBDA)))),
           const SizedBox(height: 4),
           Text(_geboorteFoto!.vermelding, maxLines: 2, overflow: TextOverflow.ellipsis, style: kLabel),
         ],
@@ -23636,7 +24187,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           Text(tekst,
               maxLines: 6,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 13.5, height: 1.6, color: Color(0xFFC7CBDA))),
+              style: TextStyle(fontSize: 13.5, height: 1.6, color: leesbaar(const Color(0xFFC7CBDA)))),
         ],
       ],
     );
@@ -23765,27 +24316,20 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     List<Jaarpunt> lint,
     List<({RecordKind soort, List<DiscoRelease> rijen})> blokken,
   }) _discografie(Set<String> bezit) {
-    final zeefHoezen = (_dgStatus != BronStatus.geenToken && _hoezen.isNotEmpty) || _groepKlaar;
     final invoer = <Object?>[
-      _dz, _mb, _dg, _hoezen, _groepHoezen, _gasten, _feiten, //
-      _toonAlles, zeefHoezen, _sort, (bezit.toList()..sort()).join('\n'),
+      _vast, _versHoezen, _hoezen, _groepHoezen, _feiten, //
+      _toonAlles, _sort, (bezit.toList()..sort()).join('\n'),
     ];
     final vorige = _discoUit;
     if (vorige != null && _zelfdeInvoer(invoer, _discoInvoer)) return vorige;
-    final samen = vouwHeruitgaves(
-        vulHoezenAan(mergeDiscography([_dz, _mb, _dg]), {..._hoezen, ..._groepHoezen})
-            .where((r) => !_gasten.contains(r.key))
-            .toList());
-    // De hoesregel alleen als er iets IS om hoezen mee aan te vullen. Zonder Discogs-token draait de
-    // zoeksweep niet, en dan zou hij elke plaat wegvegen die alleen MusicBrainz kent — dat zijn bij
-    // Michael Jackson Off The Wall, Dangerous en Invincible. Diezelfde voorwaarde vangt ook de race:
-    // zolang Discogs nog niet geantwoord heeft is `_hoezen` leeg, en dan verschijnen regels alleen,
-    // ze knipperen nooit weg.
-    //
-    // Het archief telt pas mee als zijn ronde rond is ([_groepKlaar]), en alleen als het iets vond:
-    // daarvóór zou een plaat verdwijnen die zijn antwoord nog niet had, en bij een artiest waar het
-    // archief niets kent blijft alles staan — met een [PlaatTegel] in plaats van een grijs vak.
-    final zeef = zeefDiscografie(samen, toonAlles: _toonAlles, zeefHoezen: zeefHoezen);
+    final vast = _vast ?? bevriesDiscografie(const [], zeefHoezen: false);
+    // Hoezen vullen alleen aan. Het archief komt na Discogs, zodat het wint: het archief koppelt op
+    // het NUMMER van de releasegroep, Discogs op de titel.
+    final hoezen = {..._versHoezen, ..._hoezen, ..._groepHoezen};
+    final samen = vulHoezenAan(vast.samen, hoezen);
+    // Welke regels er staan, is beslist toen de lijst verscheen ([_load]). Zie [toonVast] voor
+    // waarom een hoes die nu binnenkomt daar niets meer aan verandert.
+    final zeef = toonVast(vast, hoezen, toonAlles: _toonAlles);
     final rijen = zeef.rijen;
     // Eén keer opbouwen en twee keer gebruiken: het lint zelf, en de openingszet eronder. Twee keer
     // bouwen zou twee lijsten geven die uit elkaar kunnen lopen zodra er een bron bijkomt.
@@ -23864,8 +24408,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final _eigenGenres = _stijlTelling.entries.toList()
       ..sort((x, y) => y.value.compareTo(x.value));
 
-    // Samenvoegen gebeurt HIER, bij het tekenen, en niet in `_load`. Zo geeft elke hertekening
-    // hetzelfde antwoord ongeacht welke bron het eerst binnenkwam — zie de test daarop.
+    // Welke platen er staan, ligt vast in [_vast] (zie [_load]). Hier komen alleen de hoezen, het
+    // bezit en de sortering erbij.
     //
     // Bezit langs dezelfde sleutel als de rest, want anders is "heb ik dit" een andere vraag dan "is
     // dit dezelfde plaat" en vink je twee regels af voor één album.
@@ -23875,10 +24419,6 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // tweede idee van "dezelfde plaat" zou een lint kunnen opleveren dat een hoes toont voor een
     // album waar het vinkje ernaast zegt dat je het niet hebt.
     final eigenPerSleutel = {for (final a in mine) discoKey(a.title): a};
-    // Hoezen aanvullen vóór het sorteren, gastoptredens eruit: allebei op de samengevoegde lijst,
-    // zodat elke hertekening hetzelfde antwoord geeft ongeacht wat er wanneer binnenkwam.
-    // Het archief na Discogs, zodat het wint: dat koppelt op het NUMMER van de releasegroep, Discogs
-    // op de titel.
     final disco = _discografie(bezit);
     final zeef = disco.zeef;
     final rijen = zeef.rijen;
@@ -24058,7 +24598,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             SliverToBoxAdapter(child: GetrapteLijst(albums: mine)),
           ],
           if (_busy)
-            const SliverToBoxAdapter(
+            SliverToBoxAdapter(
                 child: Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator(color: _accent))))
           else ...[
             SliverToBoxAdapter(
@@ -24097,7 +24637,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.fromLTRB(_marge, 0, _marge, 8),
-                  child: Text(regel, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                  child: Text(regel, style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               ),
             // Wat de zeef weglaat, en de weg terug. Zie [_toonAlles]: een filter zonder uitweg is
@@ -24113,7 +24653,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                     runSpacing: 4,
                     children: [
                       Text(_verborgenRegel(zeef),
-                          style: const TextStyle(color: _muted, fontSize: 11.5)),
+                          style: TextStyle(color: _muted, fontSize: 11.5)),
                       TekstLink(
                         onPressed: () => setState(() => _toonAlles = !_toonAlles),
                         bouw: (gekozen) => Text(
@@ -24200,7 +24740,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           // ALBUM" in het ontwerp waar dit op gebaseerd is.
           if (_bio != null || _wiki != null) ...[
             SliverToBoxAdapter(
-                child: _sectionTitle('Over ${widget.artist.name.split(' ').first}',
+                // De hele naam: met alleen het eerste woord stond er bij 2 Fabiola "OVER 2" (gsm, 18-10-2026).
+                child: _sectionTitle('Over ${widget.artist.name}',
                     _wiki == null ? 'TheAudioDB' : 'Wikipedia')),
             SliverToBoxAdapter(
               child: OverBlok(
@@ -24295,9 +24836,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// Dezelfde pil als op de Albums-pagina, zodat sorteren overal hetzelfde ding is.
   Widget _sorteerPil() => Container(
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: .06),
+          color: kInkt.withValues(alpha: .06),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: Colors.white.withValues(alpha: .12)),
+          border: Border.all(color: kInkt.withValues(alpha: .12)),
         ),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
         child: PopupMenuButton<DiscoSort>(
@@ -24308,10 +24849,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             for (final s in DiscoSort.values) PopupMenuItem(value: s, child: Text(s.label)),
           ],
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.sort_rounded, size: 15, color: _muted),
+            Icon(Icons.sort_rounded, size: 15, color: _muted),
             const SizedBox(width: 6),
-            Text(_sort.label, style: const TextStyle(fontSize: 12, color: _muted)),
-            const Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
+            Text(_sort.label, style: TextStyle(fontSize: 12, color: _muted)),
+            Icon(Icons.arrow_drop_down_rounded, size: 18, color: _muted),
           ]),
         ),
       );
@@ -24425,7 +24966,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                         color: _bg.withValues(alpha: .72),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(Icons.check_circle_rounded, size: 15, color: _accent2),
+                      child: Icon(Icons.check_circle_rounded, size: 15, color: _accent2),
                     ),
                   ),
               ]),
@@ -24433,7 +24974,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           ),
           const SizedBox(height: 6),
           Text(al.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
-          Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 11)),
+          Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 11)),
         ],
       ),
     );
@@ -24468,13 +25009,16 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Divider(height: 1, thickness: 1, color: kLijn),
+          Divider(height: 1, thickness: 1, color: kLijn),
           SizedBox(height: smal ? 16 : (isTv ? 16 : 26)),
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
             // Flexible, want een Row die niet past tekent gewoon door over wat ernaast staat — geen
             // melding, geen streepjes, in een release-bouw alleen twee teksten over elkaar heen.
             // Zo stond "Volledige discografie" op een telefoon dwars door de sorteerpil.
-            Flexible(child: kop),
+            //
+            // En verkleind in plaats van afgekapt: één regel blijft (Saber, 16-10-2026: "altijd één
+            // regel"), maar op de gsm stond er "VOLLEDIGE DISC…" naast "40 in 5 blokken" (18-10-2026).
+            Flexible(child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.bottomLeft, child: kop)),
             const SizedBox(width: 12),
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
@@ -25023,13 +25567,13 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                       _maybeFocusable(KopFeiten(
                         artiest: ArtistNames(
                             names: [widget.artistName],
-                            style: const TextStyle(color: _muted, fontSize: 13)),
+                            style: TextStyle(color: _muted, fontSize: 13)),
                         artiestTekst: widget.artistName,
                         feiten: [
                           if ((_officialYear ?? al.year) != null) '${_officialYear ?? al.year}',
                           if (_tracks.isNotEmpty) '${_tracks.length} ${_tracks.length == 1 ? 'nummer' : 'nummers'}',
                         ],
-                        stijl: const TextStyle(color: _muted, fontSize: 13),
+                        stijl: TextStyle(color: _muted, fontSize: 13),
                       )),
                       const SizedBox(height: 12),
                       GlasKnop(
@@ -25085,9 +25629,9 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 artist: widget.artistName, album: al.title, volledigAantal: _tracks.length),
           ],
           if (_busy)
-            const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator(color: _accent)))
+            Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator(color: _accent)))
           else if (_tracks.isEmpty)
-            const Padding(
+            Padding(
                 padding: EdgeInsets.all(24),
                 child: Text('Geen tracklijst gevonden voor deze uitgave.',
                     style: TextStyle(color: _muted)))
@@ -25126,14 +25670,14 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 SizedBox(
                     width: 26,
                     child: Text('${_numberOf(t, i)}',
-                        style: const TextStyle(color: _muted, fontSize: 13))),
+                        style: TextStyle(color: _muted, fontSize: 13))),
                 // Which tracks of this record you already have — the gap in the album, at a glance.
                 Builder(builder: (context) {
                   final have = context.watch<LibraryStore>().ownedTrack(widget.artistName, t.title) != null;
                   return SizedBox(
                     width: 22,
                     child: have
-                        ? const Icon(Icons.check_circle_rounded, size: 14, color: _accent2)
+                        ? Icon(Icons.check_circle_rounded, size: 14, color: _accent2)
                         : const SizedBox.shrink(),
                   );
                 }),
@@ -25146,16 +25690,16 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: Text('$srcCount ⌄',
-                        style: const TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
+                        style: TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
                   )
                 else if (soulseekReady && _slskBusy)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.only(right: 8),
                     child: SizedBox(width: 11, height: 11, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
                   ),
-                Text(t.durationLabel, style: const TextStyle(color: _muted, fontSize: 12)),
+                Text(t.durationLabel, style: TextStyle(color: _muted, fontSize: 12)),
                 if (_owned(t) != null)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.all(9),
                     child: Tooltip(
                       message: 'Al in je bibliotheek',
@@ -25241,7 +25785,7 @@ class _AboutSectionState extends State<_AboutSection> {
                 border: Border.all(color: _accent.withValues(alpha: .35)),
               ),
               child: Text('DebridMusic $_version',
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: kFel)),
             ),
             const SizedBox(width: 10),
             TvLabelled(
@@ -25270,9 +25814,9 @@ class _AboutSectionState extends State<_AboutSection> {
           // heading for "Opslaan". There is nothing to copy a path to on a TV anyway.
           isTv
               ? Text(_path.replaceAll(r'\', '\\\u200B'),
-                  style: const TextStyle(color: _muted, fontSize: 11, height: 1.35))
+                  style: TextStyle(color: _muted, fontSize: 11, height: 1.35))
               : SelectableText(_path.replaceAll(r'\', '\\\u200B'),
-                  style: const TextStyle(color: _muted, fontSize: 11, height: 1.35)),
+                  style: TextStyle(color: _muted, fontSize: 11, height: 1.35)),
         ],
         // Zelf kijken, naast de controle die bij het opstarten loopt.
         //
@@ -25414,7 +25958,7 @@ class _SharingSectionState extends State<_SharingSection> {
     // A build with no Firebase project configured cannot sign in to anything, and saying so is
     // better than a form that always fails. The pairing code below still works.
     if (cloud.state == CloudState.disabled) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.only(bottom: 14),
         child: Text(
           'Deze build heeft geen cloud-project, dus inloggen kan niet. '
@@ -25426,7 +25970,7 @@ class _SharingSectionState extends State<_SharingSection> {
 
     final title = Row(
       children: [
-        const Icon(Icons.cloud_outlined, size: 16, color: _muted),
+        Icon(Icons.cloud_outlined, size: 16, color: _muted),
         const SizedBox(width: 6),
         const Text('Account', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
         if (cloud.state == CloudState.restoring) ...[
@@ -25453,7 +25997,7 @@ class _SharingSectionState extends State<_SharingSection> {
                   : 'Deze pc meldt zich aan onder dit account. Log op je Mac, iPad of Shield in met '
                       'hetzelfde account — dan vinden ze hem zonder code.',
               style: TextStyle(
-                  color: cloud.lastError != null ? const Color(0xFFFF6B6B) : _muted,
+                  color: cloud.lastError != null ? leesbaar(const Color(0xFFFF6B6B)) : _muted,
                   fontSize: 11.5,
                   height: 1.35),
             ),
@@ -25485,7 +26029,7 @@ class _SharingSectionState extends State<_SharingSection> {
         children: [
           title,
           const SizedBox(height: 4),
-          const Text(
+          Text(
             'Log in en je Mac, iPad en Shield vinden deze pc zonder code — ook op een netwerk '
             'dat automatisch zoeken blokkeert. Begin hier: een apparaat kan pas verbinden als '
             'deze pc onder het account bekend is.',
@@ -25527,7 +26071,7 @@ class _SharingSectionState extends State<_SharingSection> {
           if (_cloudError != null) ...[
             const SizedBox(height: 8),
             Text(_cloudError!,
-                style: const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12, height: 1.35)),
+                style: TextStyle(color: leesbaar(const Color(0xFFFF6B6B)), fontSize: 12, height: 1.35)),
           ],
           const SizedBox(height: 10),
           Row(
@@ -25613,13 +26157,13 @@ class _SharingSectionState extends State<_SharingSection> {
                           // maar zonder de tellende seconden: dit scherm tekent zichzelf niet elke
                           // seconde opnieuw.
                           '\n${session.verbinding.soort == Verbindingssoort.zoekt ? 'Zoekt je pc…' : verbindingsTekst(session.verbinding, nu: DateTime.now())}',
-                  style: const TextStyle(color: _muted, fontSize: 12),
+                  style: TextStyle(color: _muted, fontSize: 12),
                 ),
               ]),
             ),
             TextButton(
               onPressed: () => session.refreshNow(),
-              child: const Text('Ververs', style: TextStyle(color: _muted)),
+              child: Text('Ververs', style: TextStyle(color: _muted)),
             ),
           ]),
         ),
@@ -25648,7 +26192,7 @@ class _SharingSectionState extends State<_SharingSection> {
         // geen databundel — daar zou de keuze alleen maar in de weg staan.
         if (!isTv) ...[
           const SizedBox(height: 18),
-          const Divider(height: 1, color: _panel2),
+          Divider(height: 1, color: _panel2),
           const SizedBox(height: 14),
           const StroomkwaliteitKeuze(),
         ],
@@ -25692,19 +26236,19 @@ class _SharingSectionState extends State<_SharingSection> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (hoofdzaak) ...[
-                    const Icon(Icons.public_rounded, size: 13, color: Color(0xFF6BCB8B)),
+                    Icon(Icons.public_rounded, size: 13, color: leesbaar(const Color(0xFF6BCB8B))),
                     const SizedBox(width: 5),
                   ],
                   Text(url,
                       style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
-                          color: hoofdzaak ? const Color(0xFF6BCB8B) : null)),
+                          color: hoofdzaak ? leesbaar(const Color(0xFF6BCB8B)) : null)),
                   const SizedBox(width: 6),
-                  const Icon(Icons.copy_rounded, size: 13, color: _muted),
+                  Icon(Icons.copy_rounded, size: 13, color: _muted),
                 ],
               ),
-              Text(uitleg, style: const TextStyle(color: _muted, fontSize: 10.5)),
+              Text(uitleg, style: TextStyle(color: _muted, fontSize: 10.5)),
             ],
           ),
         ),
@@ -25744,7 +26288,7 @@ class _SharingSectionState extends State<_SharingSection> {
             ),
           ],
         ),
-        const Text(
+        Text(
           'Zet dit aan en je Mac, iPad en Shield zien dezelfde bibliotheek — '
           'inclusief je eigen covers en persingen.',
           style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
@@ -25776,7 +26320,7 @@ class _SharingSectionState extends State<_SharingSection> {
                 : 'Uit: elk toestel gebruikt de gewone, onversleutelde verbinding, thuis of via '
                     'Tailscale. Zet dit weer aan zodra het kan.',
             style: TextStyle(
-                color: settings.versleuteld ? _muted : const Color(0xFFFFB454), fontSize: 11.5, height: 1.35),
+                color: settings.versleuteld ? _muted : leesbaar(const Color(0xFFFFB454)), fontSize: 11.5, height: 1.35),
           ),
           // De deur naar buiten (stap 7): alleen met de versleutelde verbinding, en standaard uit.
           if (settings.versleuteld) ...[
@@ -25808,7 +26352,7 @@ class _SharingSectionState extends State<_SharingSection> {
               ),
               style: TextStyle(
                   color: settings.deurNaarBuiten && sharing.deur.stand == DeurStand.mislukt
-                      ? const Color(0xFFFFB454)
+                      ? leesbaar(const Color(0xFFFFB454))
                       : _muted,
                   fontSize: 11.5,
                   height: 1.35),
@@ -25820,14 +26364,14 @@ class _SharingSectionState extends State<_SharingSection> {
                   deurMetDeHand(sharing.homeAddresses.isEmpty
                       ? null
                       : Uri.tryParse(sharing.homeAddresses.first)?.host),
-                  style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+                  style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
                 ),
               ),
             if (sharing.deur.rodeMelding != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(sharing.deur.rodeMelding!,
-                    style: const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12, height: 1.35)),
+                    style: TextStyle(color: leesbaar(const Color(0xFFFF6B6B)), fontSize: 12, height: 1.35)),
               ),
           ],
         ],
@@ -25850,7 +26394,7 @@ class _SharingSectionState extends State<_SharingSection> {
             ),
           ],
         ),
-        const Text(
+        Text(
           'Deze pc zoekt van elke plaat de persing en de officiële tracklijst op vóórdat je hem '
           'opent, zodat een album nooit meer laat wachten. Eén keer per plaat, en elk toestel in '
           'huis heeft er wat aan. Hij schrijft bij elk album een klein bestandje in die albummap, '
@@ -25860,9 +26404,9 @@ class _SharingSectionState extends State<_SharingSection> {
         if (settings.lanEnabled) ...[
           const SizedBox(height: 10),
           if (sharing.error != null)
-            Text(sharing.error!, style: const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12))
+            Text(sharing.error!, style: TextStyle(color: leesbaar(const Color(0xFFFF6B6B)), fontSize: 12))
           else if (!sharing.running)
-            const Text('Starten…', style: TextStyle(color: _muted, fontSize: 12))
+            Text('Starten…', style: TextStyle(color: _muted, fontSize: 12))
           else ...[
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -25871,7 +26415,7 @@ class _SharingSectionState extends State<_SharingSection> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Adres', style: TextStyle(color: _muted, fontSize: 11.5)),
+                      Text('Adres', style: TextStyle(color: _muted, fontSize: 11.5)),
                       // Twee soorten adres, en het verschil is niet klein: het ene stopt aan de
                       // voordeur, het andere gaat mee op 5G. Ze door elkaar in een lijstje zetten
                       // is precies hoe je een gsm koppelt aan een adres dat buitenshuis zwijgt.
@@ -25881,12 +26425,12 @@ class _SharingSectionState extends State<_SharingSection> {
                       for (final url in sharing.homeAddresses)
                         _adresRegel(url, 'alleen thuis op dit netwerk'),
                       if (sharing.remoteUrl == null)
-                        const Padding(
+                        Padding(
                           padding: EdgeInsets.only(top: 4),
                           child: Text(
                             'Van buitenshuis is deze pc nu niet bereikbaar. Zet Tailscale aan op '
                             'de pc én op je gsm — dan verschijnt hier het adres dat overal werkt.',
-                            style: TextStyle(color: Color(0xFFE0A44A), fontSize: 11, height: 1.35),
+                            style: TextStyle(color: leesbaar(const Color(0xFFE0A44A)), fontSize: 11, height: 1.35),
                           ),
                         ),
                       // Hier stonden de gedeelde sleutel zelf (met Tonen en Kopiëren) en, ernaast, een
@@ -25895,13 +26439,13 @@ class _SharingSectionState extends State<_SharingSection> {
                       // afstand. Koppelen gaat met je account of met de zes cijfers hieronder; elk
                       // toestel krijgt dan een sleutel van zichzelf.
                       if (context.watch<CloudSession>().state == CloudState.signedOut)
-                        const Padding(
+                        Padding(
                           padding: EdgeInsets.only(top: 6),
                           child: Text(
                             'Deze pc is niet aangemeld bij je account. Dan vindt je gsm hem onderweg '
                             'niet terug als je adres verandert, en kan een geweigerd toestel zich niet '
                             'vanzelf herstellen. Meld hem aan bij Account.',
-                            style: TextStyle(color: Color(0xFFE0A44A), fontSize: 11, height: 1.35),
+                            style: TextStyle(color: leesbaar(const Color(0xFFE0A44A)), fontSize: 11, height: 1.35),
                           ),
                         ),
                       const SizedBox(height: 6),
@@ -25909,7 +26453,7 @@ class _SharingSectionState extends State<_SharingSection> {
                         sharing.discoverable
                             ? 'Je apparaten vinden deze pc vanzelf.'
                             : 'Automatisch vinden lukt niet — vul het adres hierboven met de hand in.',
-                        style: const TextStyle(color: _muted, fontSize: 11, height: 1.35),
+                        style: TextStyle(color: _muted, fontSize: 11, height: 1.35),
                       ),
                     ],
                   ),
@@ -25932,8 +26476,8 @@ class _SharingSectionState extends State<_SharingSection> {
                         border: Border.all(color: _accent.withValues(alpha: .35)),
                       ),
                       child: Text(digit,
-                          style: const TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white)),
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w700, color: kFel)),
                     ),
                   const SizedBox(width: 6),
                   TextButton(
@@ -25968,7 +26512,7 @@ class _SharingSectionState extends State<_SharingSection> {
                 ],
               ),
             if (sharing.pairingCodeDigits != null)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.only(top: 4),
                 child: Text('Typ deze zes cijfers op je Shield of iPad. Vijf minuten geldig.',
                     style: TextStyle(color: _muted, fontSize: 11, height: 1.35)),
@@ -25978,7 +26522,7 @@ class _SharingSectionState extends State<_SharingSection> {
           ],
         ],
         const SizedBox(height: 12),
-        const Text('Muziekmap', style: TextStyle(color: _muted, fontSize: 12.5)),
+        Text('Muziekmap', style: TextStyle(color: _muted, fontSize: 12.5)),
         const SizedBox(height: 5),
         Row(
           children: [
@@ -25992,13 +26536,13 @@ class _SharingSectionState extends State<_SharingSection> {
                   fillColor: kVerzonken,
                   border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(9),
-                      borderSide: const BorderSide(color: _line)),
+                      borderSide: BorderSide(color: _line)),
                   enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(9),
-                      borderSide: const BorderSide(color: _line)),
+                      borderSide: BorderSide(color: _line)),
                   focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(9),
-                      borderSide: const BorderSide(color: _accent)),
+                      borderSide: BorderSide(color: _accent)),
                 ),
               ),
             ),
@@ -26576,7 +27120,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Typ de tekens uit de afbeelding over.',
+              Text('Typ de tekens uit de afbeelding over.',
                   style: TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 10),
               Container(
@@ -26596,8 +27140,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   isDense: true,
                   filled: true,
                   fillColor: kVerzonken,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
                 ),
               ),
             ],
@@ -26651,7 +27195,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       child: Row(
         children: [
           r?.state == ConnState.checking
-              ? const SizedBox(
+              ? SizedBox(
                   width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _muted))
               : Icon(icon, size: 18, color: color),
           const SizedBox(width: 10),
@@ -26665,13 +27209,20 @@ class _SettingsDialogState extends State<SettingsDialog> {
     );
   }
 
+  /// Velden met een sleutel die je even zichtbaar zette (het oogje).
+  final Set<TextEditingController> _onthuld = {};
+
   Widget _field(String label, TextEditingController c, {bool obscure = false}) {
+    // Een sleutel staat verborgen, met een oogje om hem te tonen. Hiervoor stonden de TorBox-sleutel,
+    // het Discogs-token en de AI-sleutel gewoon leesbaar in beeld (gsm, 18-10-2026). Niet op een tv:
+    // daar zou elk veld er een stap bij krijgen met de pijltjes.
+    final verborgen = obscure && !_onthuld.contains(c);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(color: _muted, fontSize: 12.5)),
+          Text(label, style: TextStyle(color: _muted, fontSize: 12.5)),
           const SizedBox(height: 5),
           MaybePressable(
             enabled: isTv,
@@ -26680,18 +27231,26 @@ class _SettingsDialogState extends State<SettingsDialog> {
             child: TextField(
             controller: c,
             focusNode: _focusFor(c),
-            obscureText: obscure,
+            obscureText: verborgen,
             style: const TextStyle(fontSize: 14),
             decoration: InputDecoration(
               isDense: true,
               filled: true,
               fillColor: kVerzonken,
+              suffixIcon: !obscure || isTv
+                  ? null
+                  : IconButton(
+                      tooltip: verborgen ? 'Tonen' : 'Verbergen',
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(verborgen ? Icons.visibility_rounded : Icons.visibility_off_rounded, size: 18),
+                      onPressed: () => setState(() => verborgen ? _onthuld.add(c) : _onthuld.remove(c)),
+                    ),
               border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                  borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
               enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _line)),
+                  borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _line)),
               focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(9), borderSide: const BorderSide(color: _accent)),
+                  borderRadius: BorderRadius.circular(9), borderSide: BorderSide(color: _accent)),
             ),
             ),
           ),
@@ -26727,7 +27286,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   ? 'Je sleutels reizen mee met je account, zodat een nieuwe installatie ze '
                       'terugkrijgt.'
                   : 'Sleutels blijven op dit apparaat. Log in en ze reizen mee met je account.',
-              style: const TextStyle(color: _muted, fontSize: 13),
+              style: TextStyle(color: _muted, fontSize: 13),
             ),
             // The one thing that must not stay quiet. When settings.json cannot be read, the app
             // now refuses to save over it — which is right, and which without a word here would
@@ -26737,16 +27296,16 @@ class _SettingsDialogState extends State<SettingsDialog> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFF6B6B).withValues(alpha: .12),
+                  color: leesbaar(const Color(0xFFFF6B6B)).withValues(alpha: .12),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFFF6B6B).withValues(alpha: .4)),
+                  border: Border.all(color: leesbaar(const Color(0xFFFF6B6B)).withValues(alpha: .4)),
                 ),
-                child: const Text(
+                child: Text(
                   'Je instellingenbestand is beschadigd en kon niet worden gelezen. De app bewaart '
                   'nu niets, expres: dat bestand is het enige waar je wachtwoorden in staan, en er '
                   'lege velden overheen schrijven zou ze definitief wissen. Vul ze hieronder '
                   'opnieuw in en druk op Opslaan, dan is het hersteld.',
-                  style: TextStyle(color: Color(0xFFFF6B6B), fontSize: 12, height: 1.4),
+                  style: TextStyle(color: leesbaar(const Color(0xFFFF6B6B)), fontSize: 12, height: 1.4),
                 ),
               ),
             ],
@@ -26768,11 +27327,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // Gelijk volume BOVENAAN: dat is wat je zoekt als iets ineens zachter klinkt, en
                     // het staat op pc, telefoon en tv in hetzelfde venster. Zie luidheid_keuze.dart.
                     const _LuidheidSectie(),
-                    const Divider(color: _line, height: 1),
+                    Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
-                    _field('TorBox API-sleutel', _torbox),
-                    const TorrentmotorKeuze(),
-                    _field('Discogs token', _discogs),
+                    // Weergave: licht of donker, het glas en waarom het lichter staat (Saber, 18-10-2026).
+                    const ThemaKeuzeRegel(),
+                    const GlasRegel(),
+                    // Alle effecten tegelijk, met een meting (Saber, 18-10-2026: "proefpagina").
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        key: const ValueKey('glasproef-knop'),
+                        icon: const Icon(Icons.speed_rounded, size: 18),
+                        label: const Text('Glasproef'),
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                            builder: (_) => Glasproef(hoes: context.read<PlayerStore>().currentCover))),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _field('TorBox API-sleutel', _torbox, obscure: true),
+                    // Alleen op de pc: daar draait aria2c. Op een gsm stond hier "Deze pc kan zelf geen
+                    // torrents halen", terwijl de pc dat prima kon (18-10-2026).
+                    if (_isDesktop) const TorrentmotorKeuze(),
+                    _field('Discogs token', _discogs, obscure: true),
                     Row(
                       children: [
                         Expanded(child: _field('Soulseek gebruiker', _slskUser)),
@@ -26781,7 +27357,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       ],
                     ),
                     _field('Soulseek luisterpoort (zelfde als de native app)', _slskPort),
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.only(bottom: 8),
                       child: Text(
                           'Zonder open poort ziet de app alleen peers die zelf bereikbaar zijn — dat is waarom '
@@ -26872,7 +27448,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     ? 'Aangemeld — de sessie staat klaar.'
                                     : 'RuTracker staat achter Cloudflare; inloggen met alleen naam '
                                         'en wachtwoord lukt niet meer.',
-                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                style: TextStyle(color: _muted, fontSize: 11.5)),
                           ),
                         ],
                       ),
@@ -26881,8 +27457,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // bronnen in deze app staan vast in de code, en een tracker die omvalt kost
                     // anders een nieuwe bouw. Met Jackett of Prowlarr op je pc bepaal jij de lijst.
                     const SizedBox(height: 16),
-                    const Text('Eigen indexers (Jackett of Prowlarr)', style: kOpschrift),
-                    const Padding(
+                    Text('Eigen indexers (Jackett of Prowlarr)', style: kOpschrift),
+                    Padding(
                       padding: EdgeInsets.only(top: 4, bottom: 6),
                       child: Text(
                           'Draait op je pc en spreekt Torznab. Laat je dit leeg, dan verandert er '
@@ -26909,7 +27485,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               constraints: const BoxConstraints(maxWidth: 340),
                               child: Text(_torznabUit,
                                   style: TextStyle(
-                                      color: _torznabOk ? _accent2 : const Color(0xFFE8913A),
+                                      color: _torznabOk ? _accent2 : leesbaar(const Color(0xFFE8913A)),
                                       fontSize: 11.5)),
                             ),
                         ],
@@ -26919,8 +27495,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // is beschreven (formaat, codering, bron) en de zwermen leven — waar de open
                     // indexen tellers tonen die maanden achterlopen. Zie `redacted.dart`.
                     const SizedBox(height: 16),
-                    const Text('Redacted', style: kOpschrift),
-                    const Padding(
+                    Text('Redacted', style: kOpschrift),
+                    Padding(
                       padding: EdgeInsets.only(top: 4, bottom: 6),
                       child: Text(
                           'Maak in je profiel op Redacted een API-sleutel aan (Settings → Access '
@@ -26946,7 +27522,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               constraints: const BoxConstraints(maxWidth: 340),
                               child: Text(_redUit,
                                   style: TextStyle(
-                                      color: _redOk ? _accent2 : const Color(0xFFE8913A),
+                                      color: _redOk ? _accent2 : leesbaar(const Color(0xFFE8913A)),
                                       fontSize: 11.5)),
                             ),
                         ],
@@ -26956,13 +27532,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // instelling waar je account op een besloten tracker aan hangt.
                     const SeedKeuze(),
                     const SizedBox(height: 8),
-                    _field('Last.fm API-sleutel', _lastfm),
+                    _field('Last.fm API-sleutel', _lastfm, obscure: true),
                     const SizedBox(height: 8),
                     // Alleen voor "Zeg wat je wil horen" op het startscherm. Zonder deze sleutel
                     // werkt de rest van de app precies zoals hij deed; met sleutel kun je een radio
                     // in gewone taal vragen. Hij staat HIER en niet op je telefoon: een gekoppeld
                     // toestel laat de pc de vraag stellen, net als bij TorBox.
-                    _field('AI-sleutel (Anthropic) — voor een radio uit een zin', _anthropic),
+                    _field('AI-sleutel (Anthropic) — voor een radio uit een zin', _anthropic, obscure: true),
                     // Nakijken zonder er een radio voor te hoeven starten. Zonder deze knop was de
                     // enige melding een toast diep in een radio, en die zei alleen "wordt niet
                     // geaccepteerd" — niet WELKE sleutel er geprobeerd werd. Op 12-09-2026 kostte
@@ -26986,7 +27562,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               constraints: const BoxConstraints(maxWidth: 360),
                               child: Text(_aiUit,
                                   style: TextStyle(
-                                      color: _aiOk ? _accent2 : const Color(0xFFE8913A),
+                                      color: _aiOk ? _accent2 : leesbaar(const Color(0xFFE8913A)),
                                       fontSize: 11.5)),
                             ),
                         ],
@@ -27011,7 +27587,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       'Maak op developer.tidal.com een app aan en zet daar exact '
                       'https://www.tidal.com als Redirect URI. Hiermee kan de app in TIDAL zóéken. '
                       'Het ophalen zelf gaat met je eigen abonnement via tiddl op deze pc — dat is '
@@ -27026,9 +27602,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     //
                     // Wie de verkeerde plakte kreeg op élk nummer hetzelfde: niets. Er stond nergens
                     // iets dat de fout aanwees, en "Test verbindingen" kende AcoustID niet eens.
-                    _field('AcoustID APPLICATION-sleutel (herkennen op geluid)', _acoustid),
+                    _field('AcoustID APPLICATION-sleutel (herkennen op geluid)', _acoustid, obscure: true),
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       'Van acoustid.org/my-applications — meld daar een toepassing aan. NIET de '
                       'sleutel van acoustid.org/api-key: dat is je user-sleutel en die werkt hier '
                       'niet. Test hem hieronder.',
@@ -27039,14 +27615,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     // venster staat soms open terwijl iemand meekijkt.
                     _field('TheAudioDB-sleutel (premium, optioneel)', _audiodb, obscure: true),
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       'Van je profiel op theaudiodb.com. Zonder sleutel komen de hoezen en scans van '
                       'TheAudioDB gewoon; met je eigen sleutel ook de volle tracklijst, en mag de app '
                       'er vaker per minuut om vragen.',
                       style: TextStyle(color: _muted, fontSize: 11.5, height: 1.3),
                     ),
                     const SizedBox(height: 4),
-                    const Divider(color: _line, height: 1),
+                    Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
                     Row(
                       children: [
@@ -27056,7 +27632,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         TextButton.icon(
                           onPressed: _testing ? null : _testAll,
                           icon: _testing
-                              ? const SizedBox(
+                              ? SizedBox(
                                   width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
                               : const Icon(Icons.wifi_tethering_rounded, size: 16),
                           label: Text(_testing ? 'Testen…' : 'Test verbindingen'),
@@ -27076,11 +27652,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     _statusRow('AcoustID', 'acoustid'),
                     _statusRow('TheAudioDB', 'audiodb'),
                     const SizedBox(height: 10),
-                    const Divider(color: _line, height: 1),
+                    Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        const Expanded(
+                        Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -27097,10 +27673,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                         const SizedBox(width: 10),
                         FilledButton.icon(
-                          style: FilledButton.styleFrom(backgroundColor: _panel2, foregroundColor: Colors.white),
+                          style: FilledButton.styleFrom(backgroundColor: _panel2, foregroundColor: kFel),
                           onPressed: _tidying ? null : _tidyDownloads,
                           icon: _tidying
-                              ? const SizedBox(
+                              ? SizedBox(
                                   width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
                               : const Icon(Icons.cleaning_services_rounded, size: 16),
                           label: Text(_tidying ? 'Bezig…' : 'Opruimen'),
@@ -27134,17 +27710,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             'bits, naar wat er boven 22 kHz zit, en naar een harde afkap in het '
                                             'spectrum. Ongeveer een minuut voor de hele bibliotheek; daarna uit het '
                                             'geheugen.',
-                                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                    style: TextStyle(color: _muted, fontSize: 11.5)),
                               ],
                             ),
                           ),
                           const SizedBox(width: 10),
                           FilledButton.icon(
                             style: FilledButton.styleFrom(
-                                backgroundColor: _panel2, foregroundColor: Colors.white),
+                                backgroundColor: _panel2, foregroundColor: kFel),
                             onPressed: _echtBusy ? null : _meetEchtheid,
                             icon: _echtBusy
-                                ? const SizedBox(
+                                ? SizedBox(
                                     width: 14,
                                     height: 14,
                                     child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
@@ -27157,7 +27733,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
                           child: Text(_echtResult!,
-                              style: const TextStyle(color: _accent2, fontSize: 12)),
+                              style: TextStyle(color: _accent2, fontSize: 12)),
                         ),
                       const SizedBox(height: 18),
                       Row(
@@ -27176,17 +27752,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             'twee rips van hetzelfde nummer boven, ook onder een andere titel of '
                                             'in een andere map. De eerste keer duurt dat ongeveer een minuut; '
                                             'daarna is het onmiddellijk.',
-                                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                    style: TextStyle(color: _muted, fontSize: 11.5)),
                               ],
                             ),
                           ),
                           const SizedBox(width: 10),
                           FilledButton.icon(
                             style: FilledButton.styleFrom(
-                                backgroundColor: _panel2, foregroundColor: Colors.white),
+                                backgroundColor: _panel2, foregroundColor: kFel),
                             onPressed: _dupeBusy ? null : _findSoundDupes,
                             icon: _dupeBusy
-                                ? const SizedBox(
+                                ? SizedBox(
                                     width: 14,
                                     height: 14,
                                     child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
@@ -27212,9 +27788,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 children: [
                                   Expanded(
                                     child: Text(
-                                        '${lib.hiddenCount} nummer(s) verborgen uit je bibliotheek '
+                                        '${lib.hiddenCount} ${lib.hiddenCount == 1 ? 'nummer' : 'nummers'} verborgen uit je bibliotheek '
                                         '(staan nog wel op je pc).',
-                                        style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                        style: TextStyle(color: _muted, fontSize: 11.5)),
                                   ),
                                   const SizedBox(width: 10),
                                   TextButton.icon(
@@ -27229,11 +27805,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             ),
                     ),
                     const SizedBox(height: 14),
-                    const Divider(color: _line, height: 1),
+                    Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
                     const _SharingSection(),
                     const SizedBox(height: 14),
-                    const Divider(color: _line, height: 1),
+                    Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
                     const _AboutSection(),
                     const SizedBox(height: kRuimte12),
@@ -27408,6 +27984,23 @@ class AlbumArt extends StatefulWidget {
   /// Heeft de hoes de selectie (op een tv, in Nu speelt)? Dan groeit de HOES een tikje, en niet de cd
   /// ernaast: wie het hele blok laat oplichten, laat de cd selecteerbaar lijken.
   final bool uitgelicht;
+
+  /// Kantelt de hoes ±6° met een glans (Saber, 18-10-2026)? Null = nee. Zie ui/kantel_hoes.dart.
+  final KantelBron? kantel;
+
+  /// Een spiegeling onder de hoes: alleen de grote hoes in Nu speelt en op de albumpagina.
+  final bool spiegel;
+
+  /// Waar de hoes nu in zijn vak staat ([hoesEnSchijfX]), voor wat erboven en eronder bij de HOES hoort
+  /// en dus mee moet schuiven: in Nu speelt het logo van de artiest en de naam van de plaat. Zonder dit
+  /// stonden die op de linkerrand van het vak, 127 punten naast een hoes die in het midden stond (pc,
+  /// 18-10-2026). Wordt alleen buiten het bouwen bijgewerkt (een beeld later, of door de animatie).
+  final ValueNotifier<double>? hoesX;
+
+  /// De grote schaduw onder de voorkant (Nu speelt). Hier en niet erbuiten, want de hoes schuift naar
+  /// het midden zodra de cd erin gaat ([hoesEnSchijfX]): een schaduw van buitenaf bleef dan links
+  /// liggen. Weg zolang de achterkant voor staat; die draagt [achterSchaduw] in zijn eigen vorm.
+  final BoxShadow? hoesSchaduw;
   const AlbumArt({
     super.key,
     required this.artist,
@@ -27431,6 +28024,10 @@ class AlbumArt extends StatefulWidget {
     this.onAchter,
     this.achterSchaduw,
     this.uitgelicht = false,
+    this.kantel,
+    this.spiegel = false,
+    this.hoesSchaduw,
+    this.hoesX,
   });
 
   @override
@@ -27473,6 +28070,23 @@ AlbumArtVooruit albumArtVooruit(LibraryStore bib, Album al) => (
 /// play has nothing left to show. A quarter of the travel leaves the label behind the sleeve, so it
 /// still reads as a disc tucked into a card rather than one lying beside it.
 const _discRest = 0.26;
+
+/// Waar de hoes en de cd staan bij uitschuifstand [t]: 0 is de cd in de hoes, 1 is helemaal uit. Het
+/// zijn verschuivingen vanaf de linkerrand van het vak, dat [reis] breder is dan de hoes.
+///
+/// **Met [centreer] staat de hoes in het midden zolang de cd erin zit**, en schuift hij naar links in
+/// dezelfde beweging waarmee de cd eruit komt (Saber, 18-10-2026: "als cd in hoes zit hoes
+/// centreren", overal). Eerst stond de hoes altijd links, met een lege strook ernaast die op de cd
+/// wachtte, ook als er niets speelde. Uitgeschoven is alles zoals het was: de hoes links, de cd
+/// [reis] verder.
+///
+/// Eén curve voor allebei, zodat ze samen bewegen en de cd nooit voor of achter de hoes aan loopt.
+@visibleForTesting
+({double hoes, double schijf}) hoesEnSchijfX(double t, {required double reis, bool centreer = true}) {
+  final e = Curves.easeOutCubic.transform(t.clamp(0.0, 1.0));
+  final hoes = centreer ? (1 - e) * reis / 2 : 0.0;
+  return (hoes: hoes, schijf: hoes + (_discRest + (1 - _discRest) * e) * reis);
+}
 
 /// A disc with a hole in it, the way a CD has one.
 ///
@@ -27534,9 +28148,21 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   /// "de plaat hapert" van "de plaat is traag" te onderscheiden valt, en dat komt terug.
   late final FpsProbe _fps = FpsProbe(WarmLog('$logDir${Platform.pathSeparator}fps.log'));
 
+  /// De reis en de centreerregel van het laatste beeld, voor [_meldHoesX].
+  double _reis = -1;
+  bool _centreer = true;
+
+  void _meldHoesX() {
+    final n = widget.hoesX;
+    if (n == null || _reis < 0) return;
+    final x = hoesEnSchijfX(_slide.value, reis: _reis, centreer: _centreer).hoes;
+    if ((n.value - x).abs() > .01) n.value = x;
+  }
+
   @override
   void initState() {
     super.initState();
+    _slide.addListener(_meldHoesX);
     widget.draai?.addListener(_opDraai);
     widget.draai?.voorInRust.addListener(_opDraai);
     // Liggen de scans al in het geheugen, dan staan ze er in het EERSTE beeld. Dezelfde controle als
@@ -27777,11 +28403,20 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     // screen that is the row of transport buttons, which has to be there. Sideways and on the TV
     // there is width to spare, so the disc gets its full stride.
     final travel = s * (widget.reisFactor ?? discTravelFactor(context));
+    // Niet op een tv: daar staat alles op een vaste plek, afgesteld op de Shield.
+    final centreer = !isTv;
+    Widget meeMetDeHoes(Widget child) => AnimatedBuilder(
+          animation: _slide,
+          builder: (_, c) => Transform.translate(
+              offset: Offset(hoesEnSchijfX(_slide.value, reis: travel, centreer: centreer).hoes, 0),
+              child: c),
+          child: child,
+        );
 
     final sleeve = ClipRRect(
       borderRadius: BorderRadius.circular(10),
       child: front == null
-          ? Container(width: s, height: s, color: _panel2, child: const Icon(Icons.album, color: _muted))
+          ? Container(width: s, height: s, color: _panel2, child: Icon(Icons.album, color: _muted))
           // `gaplessPlayback`: bij een andere hoes blijft de vorige staan tot de nieuwe gedecodeerd is,
           // in plaats van een leeg vak tussendoor — dat was de "lichte verspringing" bij elk volgend
           // nummer (10-10-2026).
@@ -27848,8 +28483,21 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
             // 600px circle is the most expensive picture in the app.
             cacheWidth: decodeWidth(s * .92),
             gaplessPlayback: true)
-        : (front == null ? null : _GetekendeSchijf(label: front, maat: s * .92));
-    if (schijf == null) return kaart;
+        : (front == null ? null : _GetekendeSchijf(label: front, maat: s * .92, vinyl: isVinylFormaat(_art?.formaat)));
+    // Zonder schijf is er geen vak en staat de hoes op nul. Na dit beeld melden: een seintje tijdens
+    // het bouwen zou de bouwer erboven midden in zijn eigen opbouw laten herbouwen.
+    final reisNu = schijf == null ? 0.0 : travel;
+    if (widget.hoesX != null && (reisNu != _reis || centreer != _centreer)) {
+      _reis = reisNu;
+      _centreer = centreer;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _meldHoesX();
+      });
+    }
+    if (schijf == null) {
+      final k = widget.kantel;
+      return k == null ? kaart : KantelHoes(bron: k, aan: widget.uitgelicht, vorm: BorderRadius.circular(10), child: kaart);
+    }
 
     // Built once and handed to the animation as a child, so none of this is rebuilt per frame.
     //
@@ -27885,14 +28533,62 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       child: gedraaid,
     );
 
+    final kantel = widget.kantel;
+    final kaartGekanteld = kantel == null
+        ? kaart
+        : KantelHoes(
+            bron: kantel,
+            aan: widget.uitgelicht,
+            vorm: BorderRadius.circular(10),
+            child: kaart,
+          );
     return SizedBox(
       width: s + travel,
       height: s,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
+          // Onder alles, ook onder de cd, zoals toen hij nog buiten dit blok lag. Alleen onder de
+          // hoes zelf: het vak ernaast is voor de cd (pc, 18-10-2026: een grijs blok tot ver rechts).
+          if (widget.hoesSchaduw case final schaduw?)
+            Positioned(
+              key: const ValueKey('albumart-schaduw'),
+              left: 0,
+              top: 0,
+              width: s,
+              height: s,
+              child: meeMetDeHoes(IgnorePointer(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _voorInRust ? schaduw.color : schaduw.color.withValues(alpha: 0),
+                        blurRadius: schaduw.blurRadius,
+                        spreadRadius: schaduw.spreadRadius,
+                        offset: schaduw.offset,
+                      ),
+                    ],
+                  ),
+                ),
+              )),
+            ),
+          // De spiegeling onder de hoes, buiten de maat van het blok: hij neemt geen ruimte in en
+          // ligt onder wat eronder staat. Alleen zolang de voorkant voor staat.
+          //
+          // Elke laag hier met een sleutel. Zonder schoof alles één plek op zodra de spiegeling bij het
+          // omdraaien verdween, en dan werd de hoes zelf (met zijn draai) weggegooid en opnieuw
+          // gebouwd: "de hoes flipt niet om" (gsm, 18-10-2026).
+          if (widget.spiegel && front != null && _voorInRust)
+            Positioned(
+                key: const ValueKey('albumart-spiegel'),
+                left: 0,
+                top: s + kSpiegelAfstand,
+                child: meeMetDeHoes(HoesSpiegel(beeld: front, maat: s))),
           // Behind the sleeve, and drawn first so it stays there.
           Positioned(
+            key: const ValueKey('albumart-schijf'),
             left: 0,
             top: s * .04,
             // Weg zolang de achterkant voor staat, en tot de hoes helemaal TERUG is: anders zie je
@@ -27914,20 +28610,28 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               // who had just chosen a disc scan had no way to look at it without pressing play.
               // The reveal is still the reveal: it comes the rest of the way out and starts turning.
               builder: (context, child) => Transform.translate(
-                offset: Offset(
-                  (_discRest + (1 - _discRest) * Curves.easeOutCubic.transform(_slide.value)) *
-                      travel,
-                  0,
-                ),
+                offset: Offset(hoesEnSchijfX(_slide.value, reis: travel, centreer: centreer).schijf, 0),
                 child: child,
               ),
-              child: spinningDisc,
+              // Een getekende schijf krijgt zijn glans erbovenop, en die draait NIET mee: op een echte
+              // cd staat de regenboog stil (Saber, 18-10-2026). Hij schuift wel mee naar buiten. Een
+              // echte scan blijft zoals hij is.
+              child: disc != null
+                  ? spinningDisc
+                  : Stack(alignment: Alignment.center, children: [
+                      spinningDisc,
+                      CdGlans(maat: s * .92, vinyl: isVinylFormaat(_art?.formaat)),
+                    ]),
             )),
             ),
           ),
-          // Never rebuilt: it is outside the builder entirely, and it never changes while a record
-          // plays.
-          Positioned(left: 0, top: 0, child: kaart),
+          // Never rebuilt: the builder only moves it (see [hoesEnSchijfX]), the sleeve itself is its
+          // child and is painted once into its own layer. While a record plays nothing moves here.
+          Positioned(
+              key: const ValueKey('albumart-hoes'),
+              left: 0,
+              top: 0,
+              child: meeMetDeHoes(RepaintBoundary(child: kaartGekanteld))),
         ],
       ),
     );
@@ -27972,7 +28676,7 @@ class OvernemenBalk extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final uitleg = Text(tekst, style: const TextStyle(color: _muted, fontSize: 12));
+    final uitleg = Text(tekst, style: TextStyle(color: _muted, fontSize: 12));
     final ongedaan = TextButton(onPressed: bezig ? null : onOngedaan, child: const Text('Ongedaan maken'));
     final opslaan = FilledButton.icon(
       style: FilledButton.styleFrom(backgroundColor: _knopVulling),
@@ -28790,7 +29494,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                   // Geteld wordt wat er ZICHTBAAR is. Het aantal van de hele lijst boven een lijst
                   // die op CD gefilterd staat, is een getal dat de rijen eronder tegenspreekt.
                   '${_telRegel()}',
-                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+                  style: TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 10),
               _nummerVeld(),
               const SizedBox(height: 10),
@@ -28807,7 +29511,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                         decoration: BoxDecoration(
-                          color: _filter == f ? _accent : Colors.white.withValues(alpha: .06),
+                          color: _filter == f ? _accent : kInkt.withValues(alpha: .06),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(f,
@@ -28829,13 +29533,13 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Row(children: [
-                    const SizedBox(
+                    SizedBox(
                         width: 11,
                         height: 11,
                         child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
                     const SizedBox(width: 8),
                     Text(nogBezigTekst(musicBrainz: !_mbDone, discogs: !_dgDone),
-                        style: const TextStyle(color: _muted, fontSize: 11.5)),
+                        style: TextStyle(color: _muted, fontSize: 11.5)),
                   ]),
                 ),
               // "Zes? Meer niet?" — en niets op het scherm dat die vraag beantwoordt.
@@ -28862,7 +29566,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                   !_dgFailed &&
                   _dgTotaal > 0 &&
                   (_choices ?? const <ReleaseChoice>[]).any((c) => c.isDiscogs))
-                const Padding(
+                Padding(
                   padding: EdgeInsets.only(top: 8),
                   child: Text('Alles opgehaald — meer heeft Discogs er niet onder dit album.',
                       style: TextStyle(color: _muted, fontSize: 11.5)),
@@ -28877,7 +29581,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                       (_choices ?? const <ReleaseChoice>[]).any((c) => c.isDiscogs)
                           ? 'Een deel van Discogs kwam niet door; deze lijst kan onvolledig zijn.'
                           : 'Discogs was niet bereikbaar — dit zijn alleen de MusicBrainz-uitgaves.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               // De enige eerlijke regel over een afgekapte lijst. Precies dit — een lijst die
               // ophoudt zonder het te zeggen — is wat deze hele wijziging kwam repareren, dus een
@@ -28886,7 +29590,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
               // wat er is" doorgaan. Los van de lege-lijst-melding: juist mét MusicBrainz-rijen
               // erop lijkt de lijst compleet.
               if (!DiscogsService(context.read<AppSettings>()).available)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.only(top: 8),
                   child: Text(
                       'Er is geen Discogs-sleutel ingesteld — dit zijn alleen de '
@@ -28908,7 +29612,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                       _dgTotaal > 0
                           ? 'Niet alles staat hier: Discogs kent er minstens $_dgTotaal.'
                           : 'Niet alles staat hier — er zijn er meer dan er nu in de lijst passen.',
-                      style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 11.5)),
+                      style: TextStyle(color: leesbaar(const Color(0xFFE0A33A)), fontSize: 11.5)),
                 ),
               // Het stilste plafond van allemaal, en uitgerekend degene waar een gezochte persing
               // zich het makkelijkst achter verstopt: het zoeken kiest op naam, loopt de drie
@@ -28922,7 +29626,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
                       'Discogs heeft nog $_andereMasters ${_andereMasters == 1 ? 'ander album' : 'andere albums'} '
                       'met deze naam. Staat je uitgave er niet bij, plak dan hierboven het '
                       'masternummer van het juiste album.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               // Only once something is picked: an empty bar at the bottom of every gallery would be
               // a control that does nothing, most of the time.
@@ -28995,7 +29699,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
           Padding(
             padding: const EdgeInsets.only(top: 6, left: 2),
             child: Text(_nummerFout!,
-                style: const TextStyle(color: Color(0xFFE0A33A), fontSize: 11.5)),
+                style: TextStyle(color: leesbaar(const Color(0xFFE0A33A)), fontSize: 11.5)),
           ),
       ]);
 
@@ -29011,11 +29715,11 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               hintText: 'Discogs-nummer of link — bv. 7738290, [r7738290] of [m1938390]',
-              hintStyle: const TextStyle(color: _muted, fontSize: 12),
-              prefixIcon: const Icon(Icons.tag_rounded, size: 17, color: _muted),
+              hintStyle: TextStyle(color: _muted, fontSize: 12),
+              prefixIcon: Icon(Icons.tag_rounded, size: 17, color: _muted),
               prefixIconConstraints: const BoxConstraints(minWidth: 34, minHeight: 34),
               filled: true,
-              fillColor: Colors.white.withValues(alpha: .05),
+              fillColor: kInkt.withValues(alpha: .05),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
                 borderSide: BorderSide.none,
@@ -29040,10 +29744,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       ]);
 
   Widget _body(String? pinnedKey) {
-    if (_error != null) return Center(child: Text(_error!, style: const TextStyle(color: _muted)));
+    if (_error != null) return Center(child: Text(_error!, style: TextStyle(color: _muted)));
     final list = _choices;
     if (list == null) {
-      return const Center(
+      return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           CircularProgressIndicator(strokeWidth: 2, color: _accent),
           SizedBox(height: 14),
@@ -29053,10 +29757,10 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
         ]),
       );
     }
-    if (list.isEmpty) return const Center(child: Text('Geen uitgaves gevonden.', style: TextStyle(color: _muted)));
+    if (list.isEmpty) return Center(child: Text('Geen uitgaves gevonden.', style: TextStyle(color: _muted)));
     final shown = _zichtbaar(list, pinnedKey);
     if (shown.isEmpty) {
-      return const Center(child: Text('Geen uitgaves in dit formaat.', style: TextStyle(color: _muted)));
+      return Center(child: Text('Geen uitgaves in dit formaat.', style: TextStyle(color: _muted)));
     }
     return ListView.separated(
       controller: _scroll,
@@ -29115,8 +29819,8 @@ class ScanMaatRegel extends StatelessWidget {
 
   static Color kleurVan(Scherpte s) => switch (s) {
         Scherpte.scherp => _accent2,
-        Scherpte.bruikbaar => Colors.white70,
-        Scherpte.klein => const Color(0xFFE0B341),
+        Scherpte.bruikbaar => kFel.withValues(alpha: .7),
+        Scherpte.klein => leesbaar(const Color(0xFFE0B341)),
       };
 
   @override
@@ -29327,7 +30031,7 @@ class UitgaveRij extends StatelessWidget {
           onPressed: onNummering,
         ),
       ),
-      if (vastgezet) const Icon(Icons.check_circle_rounded, color: _accent, size: 20),
+      if (vastgezet) Icon(Icons.check_circle_rounded, color: _accent, size: 20),
     ];
     final tekst = _tekst(c);
 
@@ -29352,7 +30056,7 @@ class UitgaveRij extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                   if ((c.label ?? '').isNotEmpty)
                     Text(c.label!, maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _muted, fontSize: 12)),
+                        style: TextStyle(color: _muted, fontSize: 12)),
                   const SizedBox(height: 6),
                   // `Wrap` en geen `Row`, en dat is geen opmaakvoorkeur. Deze vier plaatjes zijn
                   // samen ruim tweehonderd punten breed en op een staande telefoon houdt de tekst
@@ -29372,7 +30076,7 @@ class UitgaveRij extends StatelessWidget {
                       // rij die je hier vindt terugzoeken op Discogs zelf, en andersom.
                       if (c.isDiscogs && c.releaseId > 0)
                         Text('r${c.releaseId}',
-                            style: const TextStyle(color: _muted, fontSize: 10.5)),
+                            style: TextStyle(color: _muted, fontSize: 10.5)),
                       // Until this pressing has been looked up we do not know whether it has a back
                       // or a disc, and saying "–" would be a claim we have not earned. A row you can
                       // see is always on its way now — being visible is what starts the lookup — so
@@ -29380,7 +30084,7 @@ class UitgaveRij extends StatelessWidget {
                       if (!c.detailed)
                         // Het molentje en zijn tekst horen bij elkaar; los in de Wrap zouden ze op
                         // twee regels kunnen belanden.
-                        const Row(mainAxisSize: MainAxisSize.min, children: [
+                        Row(mainAxisSize: MainAxisSize.min, children: [
                           SizedBox(
                               width: 10,
                               height: 10,
@@ -29462,12 +30166,12 @@ class UitgaveRij extends StatelessWidget {
                     : Container(
                         width: 58,
                         height: 58,
-                        color: Colors.white.withValues(alpha: .04),
+                        color: kInkt.withValues(alpha: .04),
                         // Nothing at all while we wait: an empty frame reads as "not yet", where any
                         // mark at this size reads as an answer.
                         child: waiting
                             ? null
-                            : const Icon(Icons.close_rounded, size: 16, color: _muted)),
+                            : Icon(Icons.close_rounded, size: 16, color: _muted)),
               ),
             ),
             if (chosen)
@@ -29479,7 +30183,7 @@ class UitgaveRij extends StatelessWidget {
                 // die op het icoon zoekt vindt die van de bordjes en zegt niets over dit vinkje.
                 child: Container(
                   key: const Key('scan-klaargezet'),
-                  decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
+                  decoration: BoxDecoration(color: _accent, shape: BoxShape.circle),
                   padding: const EdgeInsets.all(2),
                   child: const Icon(Icons.check_rounded, size: 13, color: Colors.white),
                 ),
@@ -29531,14 +30235,14 @@ class UitgaveRij extends StatelessWidget {
   static Color kleurVanBron(EditionSource b) => switch (b) {
         EditionSource.musicbrainz => _accent,
         EditionSource.discogs => _accent2,
-        EditionSource.audiodb => const Color(0xFFF2A65A),
+        EditionSource.audiodb => leesbaar(const Color(0xFFF2A65A)),
       };
 
   /// Present or absent, stated rather than implied — the reason this dialog exists.
   Widget _tag(String text, bool on) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
-          color: on ? _accent2.withValues(alpha: .16) : Colors.white.withValues(alpha: .05),
+          color: on ? _accent2.withValues(alpha: .16) : kInkt.withValues(alpha: .05),
           borderRadius: BorderRadius.circular(999),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -29691,7 +30395,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                     icon: const Icon(Icons.close_rounded),
                     onPressed: () => Navigator.of(context).pop()),
               ]),
-              const Text('Klik onder een scan om te zeggen wat het is. Jouw keuze wint van wat de app zelf denkt.',
+              Text('Klik onder een scan om te zeggen wat het is. Jouw keuze wint van wat de app zelf denkt.',
                   style: TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 10),
               // Wat het WORDT, boven de keuze zelf.
@@ -29703,7 +30407,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
               const SizedBox(height: 12),
               Expanded(
                 child: _error != null
-                    ? Center(child: Text(_error!, style: const TextStyle(color: _muted)))
+                    ? Center(child: Text(_error!, style: TextStyle(color: _muted)))
                     : images == null
                         ? const Center(child: CircularProgressIndicator())
                         : GridView.builder(
@@ -29775,7 +30479,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                   if (roles.isNotEmpty)
                     TextButton(
                       onPressed: _opslaan ? null : () => setState(roles.clear),
-                      child: const Text('Alles weer laten raden',
+                      child: Text('Alles weer laten raden',
                           style: TextStyle(color: _muted, fontSize: 12)),
                     ),
                   if (c.maxWidth >= kOvernemenSmal) const Spacer(),
@@ -29824,8 +30528,8 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
                       ? Container(
                           width: 52,
                           height: 52,
-                          color: Colors.white.withValues(alpha: .04),
-                          child: const Icon(Icons.close_rounded, size: 15, color: _muted),
+                          color: kInkt.withValues(alpha: .04),
+                          child: Icon(Icons.close_rounded, size: 15, color: _muted),
                         )
                       : _netCover(roles[role]!, size: 52, radius: 6),
                 ),
@@ -29838,7 +30542,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
               ]),
             ),
         ];
-        const uitleg = Text(
+        final uitleg = Text(
           'Zo komt deze plaat eruit te zien. Een leeg vak betekent: de app mag het zelf blijven '
           'raden.',
           style: TextStyle(color: _muted, fontSize: 11.5),
@@ -29850,7 +30554,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
             uitleg,
           ]);
         }
-        return Row(children: [...vakjes, const Expanded(child: uitleg)]);
+        return Row(children: [...vakjes, Expanded(child: uitleg)]);
       });
 
   Widget _roleChip(String text, {required bool on, required VoidCallback onTap}) => InkWell(
@@ -29859,7 +30563,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
           decoration: BoxDecoration(
-            color: on ? _accent : Colors.white.withValues(alpha: .06),
+            color: on ? _accent : kInkt.withValues(alpha: .06),
             borderRadius: BorderRadius.circular(999),
           ),
           child: Text(text,
@@ -29969,7 +30673,7 @@ class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
                 '$aantal ${aantal == 1 ? 'plaat staat' : 'platen staan'} onder “${widget.name}”. '
                 'Ze gaan allemaal over naar de naam die je hier zet. Staat die naam al in je '
                 'bibliotheek, dan worden de twee één artiest.',
-                style: const TextStyle(color: _muted, fontSize: 13, height: 1.35),
+                style: TextStyle(color: _muted, fontSize: 13, height: 1.35),
               ),
               const SizedBox(height: 16),
               TextField(
@@ -29984,7 +30688,7 @@ class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
               ),
               if (buren.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                const Text('Staat al in je bibliotheek',
+                Text('Staat al in je bibliotheek',
                     style: TextStyle(color: _muted, fontSize: 11.5, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 8),
                 Wrap(
@@ -29995,7 +30699,7 @@ class _ArtistRenameDialogState extends State<ArtistRenameDialog> {
                       ActionChip(
                         label: Text(n),
                         backgroundColor: _panel2,
-                        side: const BorderSide(color: _line),
+                        side: BorderSide(color: _line),
                         onPressed: _bezig
                             ? null
                             : () => setState(() {
@@ -30144,9 +30848,9 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
               decoration: InputDecoration(
                 isDense: true,
                 filled: true,
-                fillColor: Colors.white.withValues(alpha: .06),
+                fillColor: kInkt.withValues(alpha: .06),
                 hintText: 'Plak het adres van een foto van internet',
-                hintStyle: const TextStyle(color: _muted, fontSize: 13),
+                hintStyle: TextStyle(color: _muted, fontSize: 13),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
               ),
             ),
@@ -30170,7 +30874,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
             child: Text(
               _melding ?? 'Rechtsklik op een foto in je browser → "Afbeeldingsadres kopiëren", en plak het hier.',
               maxLines: 3,
-              style: const TextStyle(color: _muted, fontSize: 11.5),
+              style: TextStyle(color: _muted, fontSize: 11.5),
             ),
           ),
           TextButton.icon(
@@ -30245,9 +30949,9 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
                 const Spacer(),
                 IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.of(context).pop()),
               ]),
-              Text(widget.artist, style: const TextStyle(color: _muted, fontSize: 12.5)),
+              Text(widget.artist, style: TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 4),
-              const Text(
+              Text(
                   'Klik in LIGGEND voor een breed scherm, in STAAND voor een iPad die je rechtop '
                   'houdt · rechtsklik voor het portret',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
@@ -30263,10 +30967,10 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
   }
 
   Widget _body(String? portrait, String? liggendKeuze, String? staandKeuze) {
-    if (_error != null) return Center(child: Text(_error!, style: const TextStyle(color: _muted)));
+    if (_error != null) return Center(child: Text(_error!, style: TextStyle(color: _muted)));
     final list = _images;
     if (list == null) {
-      return const Center(child: CircularProgressIndicator(strokeWidth: 2, color: _accent));
+      return Center(child: CircularProgressIndicator(strokeWidth: 2, color: _accent));
     }
     // Eigen foto's vooraan, in BEIDE vakken: je hebt ze zelf gekozen, dus jij zegt waar ze horen —
     // ook een foto van 4:3 die je toch liever als brede achtergrond wilt. Een eerder gekozen adres
@@ -30279,7 +30983,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
         if (u != null && u.isNotEmpty && !bekend.contains(u)) DiscogsImage(u, u, 0, 0, false),
     ];
     if (list.isEmpty && eigen.isEmpty) {
-      return const Center(
+      return Center(
           child: Text('Geen foto\'s gevonden. Voeg er hierboven zelf een toe.', style: TextStyle(color: _muted)));
     }
 
@@ -30311,7 +31015,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
             Text(naam, style: kOpschrift),
             const SizedBox(width: 8),
             Text(aantal == 1 ? '1 foto' : '$aantal foto\'s',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF6C7387))),
+                style: TextStyle(fontSize: 11, color: leesbaar(const Color(0xFF6C7387)))),
           ]),
         ),
       );
@@ -30321,7 +31025,7 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
     if (beelden.isEmpty) {
       return SliverToBoxAdapter(
         child: Text(breed ? 'Geen liggende foto\'s gevonden.' : 'Geen staande foto\'s gevonden.',
-            style: const TextStyle(color: _muted, fontSize: 12)),
+            style: TextStyle(color: _muted, fontSize: 12)),
       );
     }
     return SliverGrid(
@@ -30404,9 +31108,9 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
   /// identiek en verschillen ze alleen bij de uitschieters — waar `contain` een banner van 1000×185
   /// hééllemaal laat zien in plaats van hem tot een gewone achtergrond bij te snijden.
   Widget _fotoVlak(String url) {
-    const leeg = ColoredBox(
+    final leeg = ColoredBox(
       color: kPaneelHoog,
-      child: Center(child: Icon(Icons.image_rounded, color: Color(0xFF3A4054), size: 22)),
+      child: const Center(child: Icon(Icons.image_rounded, color: Color(0xFF3A4054), size: 22)),
     );
     return Image.network(
       url,
@@ -30528,7 +31232,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Nummer verplaatsen', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
-            Text(widget.track.title, style: const TextStyle(color: _muted, fontSize: 12.5)),
+            Text(widget.track.title, style: TextStyle(color: _muted, fontSize: 12.5)),
             const SizedBox(height: 14),
             TextField(
               controller: _query,
@@ -30565,7 +31269,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
                             Text('${a.artist} · ${a.tracks.length} nummers',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                style: TextStyle(color: _muted, fontSize: 11.5)),
                           ]),
                         ),
                       ]),
@@ -30589,7 +31293,7 @@ class _MoveTrackDialogState extends State<MoveTrackDialog> {
                     : plan.first.movesFile
                         ? 'Naar: ${File(plan.first.to!).parent.path}'
                         : 'Doelmap onbekend — alleen de indeling verandert.',
-                style: const TextStyle(color: _muted, fontSize: 11.5),
+                style: TextStyle(color: _muted, fontSize: 11.5),
               ),
             ),
             const SizedBox(height: 6),
@@ -30710,7 +31414,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
             const Text('Tags gelijktrekken', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
             Text('${widget.album.artist} — ${widget.album.title}',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             const SizedBox(height: 12),
             // What is actually wrong today, in numbers. "Your files disagree" means nothing; "four
             // different totals" is the reason there are four tiles.
@@ -30730,7 +31434,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                   if (plan.albumsNow.length > 1) ...[
                     const SizedBox(height: 4),
                     Text('En ${plan.albumsNow.length} schrijfwijzen van de albumtitel.',
-                        style: const TextStyle(fontSize: 12.5, color: _muted)),
+                        style: TextStyle(fontSize: 12.5, color: _muted)),
                   ],
                   // The tile you opened holds only part of the record. Say so, or the file count
                   // below reads as a mistake.
@@ -30739,7 +31443,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                     Text(
                         'Dit gaat over alle ${plan.steps.length} bestanden van deze plaat, '
                         'niet alleen de ${album.tracks.length} in deze tegel.',
-                        style: const TextStyle(fontSize: 12.5, color: _muted)),
+                        style: TextStyle(fontSize: 12.5, color: _muted)),
                   ],
                 ]),
               ),
@@ -30769,12 +31473,12 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontSize: 13))),
                       Text('${s.track.trackTotal == 0 ? "geen" : s.track.trackTotal} → ${plan.total}',
-                          style: const TextStyle(fontSize: 11.5, color: _muted)),
+                          style: TextStyle(fontSize: 11.5, color: _muted)),
                     ]),
                   ),
                 if (plan.albumOnly.isNotEmpty) ...[
                   const Divider(height: 22),
-                  const Text('Alleen album en aantal — titel en nummer blijven',
+                  Text('Alleen album en aantal — titel en nummer blijven',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _muted)),
                   const SizedBox(height: 6),
                   for (final s in plan.albumOnly)
@@ -30784,27 +31488,27 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                         SizedBox(
                             width: 46,
                             child: Text('${s.track.trackNo}',
-                                style: const TextStyle(fontSize: 12.5, color: _muted))),
+                                style: TextStyle(fontSize: 12.5, color: _muted))),
                         Expanded(
                             child: Text(s.track.title,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 13, color: _muted))),
+                                style: TextStyle(fontSize: 13, color: _muted))),
                         Text('${s.track.trackTotal == 0 ? "geen" : s.track.trackTotal} → ${plan.total}',
-                            style: const TextStyle(fontSize: 11.5, color: _muted)),
+                            style: TextStyle(fontSize: 11.5, color: _muted)),
                       ]),
                     ),
                 ],
                 if (plan.skipped.isNotEmpty) ...[
                   const Divider(height: 22),
-                  const Text('Blijft ongemoeid',
+                  Text('Blijft ongemoeid',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _muted)),
                   const SizedBox(height: 6),
                   for (final s in plan.skipped)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 3),
                       child: Text('${s.name} — ${s.skipped}',
-                          style: const TextStyle(fontSize: 12, color: _muted)),
+                          style: TextStyle(fontSize: 12, color: _muted)),
                     ),
                 ],
               ]),
@@ -30825,7 +31529,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(color: Colors.orangeAccent, fontSize: 11.5)),
                     ),
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.only(top: 2),
                     child: Text('Stop het afspelen en klik opnieuw — de rest is al klaar.',
                         style: TextStyle(color: _muted, fontSize: 11.5)),
@@ -30850,7 +31554,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                   // Almost always the same cause: two rips of one song that landed under different
                   // names. Saying so is not enough — the way out belongs here too.
                   if (_dupes.isEmpty)
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.only(top: 2),
                       child: Text('Kies een uitgave die bij deze bestanden past.',
                           style: TextStyle(color: _muted, fontSize: 11.5)),
@@ -30864,7 +31568,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
                             'behouden ${_fileName(d.keep.path)} (${d.why})',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: _muted, fontSize: 11.5)),
+                            style: TextStyle(color: _muted, fontSize: 11.5)),
                       ),
                     const SizedBox(height: 6),
                     Align(
@@ -30882,7 +31586,7 @@ class _NormaliseTagsDialogState extends State<NormaliseTagsDialog> {
               ),
             const SizedBox(height: 12),
             Row(children: [
-              const Expanded(
+              Expanded(
                 child: Text('De hoes, de ReplayGain-waarden en al het andere in het bestand blijven staan.',
                     style: TextStyle(color: _muted, fontSize: 11.5)),
               ),
@@ -30946,7 +31650,7 @@ class _RenumberDialogState extends State<RenumberDialog> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
             Text('${widget.album.artist} · ${widget.album.title}',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             const SizedBox(height: 14),
             Container(
               width: double.infinity,
@@ -30970,7 +31674,7 @@ class _RenumberDialogState extends State<RenumberDialog> {
                   const SizedBox(height: 3),
                   Text(
                       '${plan.unmatched.length} niet herkend op deze uitgave — die houden hun eigen tags.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ],
               ]),
             ),
@@ -31007,7 +31711,7 @@ class _RenumberDialogState extends State<RenumberDialog> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                              fontSize: 12.5, color: st.unmatched ? _muted : Colors.white),
+                              fontSize: 12.5, color: st.unmatched ? _muted : kFel),
                         ),
                       ),
                     ]),
@@ -31081,7 +31785,7 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
             Text('Dit album gaat op in “${widget.exclude.title}”.',
-                style: const TextStyle(color: _muted, fontSize: 12.5)),
+                style: TextStyle(color: _muted, fontSize: 12.5)),
             const SizedBox(height: 14),
             TextField(
               controller: _query,
@@ -31114,7 +31818,7 @@ class _PickAlbumDialogState extends State<PickAlbumDialog> {
                             Text('${a.artist} · ${a.tracks.length} nummers',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                style: TextStyle(color: _muted, fontSize: 11.5)),
                           ]),
                         ),
                       ]),
@@ -31255,7 +31959,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                       : 'Alles herkend, en de tags kloppen al — er valt niets te wijzigen.'
                   : '${_changes.length} ${_changes.length == 1 ? 'nummer wijkt' : 'nummers wijken'} af '
                       '· alleen artiest en titel worden geschreven, album en nummering blijven',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             // De reden, als er een is. Bovenaan en niet weggestopt: dit is het enige wat je verder
             // helpt, en het onderscheid tussen "AcoustID kent dit niet" en "AcoustID heeft de vraag
@@ -31271,7 +31975,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                   border: Border.all(color: _accent2.withValues(alpha: .45)),
                 ),
                 child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Icon(Icons.report_gmailerrorred_rounded, size: 17, color: _accent2),
+                  Icon(Icons.report_gmailerrorred_rounded, size: 17, color: _accent2),
                   const SizedBox(width: 9),
                   Expanded(
                     child: SelectableText(widget.fout!,
@@ -31305,10 +32009,10 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                           Text('${_nu(e.key).artist} — ${_nu(e.key).title}',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: _muted, fontSize: 12.5)),
+                              style: TextStyle(color: _muted, fontSize: 12.5)),
                           const SizedBox(height: 3),
                           Row(children: [
-                            const Icon(Icons.arrow_forward_rounded, size: 14, color: _accent),
+                            Icon(Icons.arrow_forward_rounded, size: 14, color: _accent),
                             const SizedBox(width: 7),
                             Expanded(
                               child: Text('${e.value.artist} — ${e.value.title}',
@@ -31317,7 +32021,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                                       fontSize: 13.5, fontWeight: FontWeight.w600)),
                             ),
                             Text('${(e.value.score * 100).round()}%',
-                                style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                                style: TextStyle(color: _accent2, fontSize: 11.5)),
                           ]),
                         ]),
                       ),
@@ -31334,7 +32038,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                       child: Text(n,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _muted, fontSize: 11.5)),
+                          style: TextStyle(color: _muted, fontSize: 11.5)),
                     ),
                 ],
                 if (_failed.isNotEmpty) ...[
@@ -31344,7 +32048,7 @@ class _RecogniseTracksDialogState extends State<RecogniseTracksDialog> {
                   for (final f in _failed)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
-                      child: Text(f, style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                      child: Text(f, style: TextStyle(color: _accent2, fontSize: 11.5)),
                     ),
                 ],
               ]),
@@ -31561,7 +32265,7 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(titel, style: const TextStyle(fontSize: 13.5, height: 1.3)),
                 const SizedBox(height: 2),
-                Text(bron, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                Text(bron, style: TextStyle(color: _muted, fontSize: 11.5)),
               ]),
             ),
           ]),
@@ -31591,7 +32295,7 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
               const SizedBox(height: 2),
               Text('Nu: ${t.title}',
-                  style: const TextStyle(color: _muted, fontSize: 12.5), maxLines: 2),
+                  style: TextStyle(color: _muted, fontSize: 12.5), maxLines: 2),
               const SizedBox(height: 14),
               _voorstel(Icons.verified_outlined, 'zoals de uitgave het noemt', officieel),
               // Alleen als hij écht iets anders zegt. Twee identieke regels onder elkaar zouden de
@@ -31620,7 +32324,7 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
                       n == 1
                           ? 'Eén persing noemt dit nummer al zoals jouw bestand.'
                           : '$n persingen noemen dit nummer al zoals jouw bestand.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               if (widget.albumMbid != null && _andere == null)
                 Align(
@@ -31634,7 +32338,7 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
                     ),
                     onPressed: _persingBezig ? null : _haalPersingen,
                     icon: _persingBezig
-                        ? const SizedBox(
+                        ? SizedBox(
                             width: 13,
                             height: 13,
                             child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
@@ -31654,20 +32358,20 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
                       _andere!.isEmpty
                           ? 'Geen andere persing van deze plaat draagt dit nummer.'
                           : 'Geen andere persing noemt het anders dan hierboven.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ),
               if (_persingFout != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Text(_persingFout!,
-                      style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                      style: TextStyle(color: _accent2, fontSize: 11.5)),
                 ),
               const SizedBox(height: 6),
               TextField(
                 controller: _titel,
                 onChanged: (_) => setState(() {}),
                 style: const TextStyle(fontSize: 13.5),
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Titel',
                   labelStyle: TextStyle(color: _muted, fontSize: 12.5),
                   isDense: true,
@@ -31693,7 +32397,7 @@ class _TitelRechtzettenDialogState extends State<TitelRechtzettenDialog> {
               for (final f in _mislukt)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
-                  child: Text(f, style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                  child: Text(f, style: TextStyle(color: _accent2, fontSize: 11.5)),
                 ),
               const SizedBox(height: 12),
               // **Een Wrap en geen Row, en dat is geen smaak.** Een Row liet deze twee knoppen 25
@@ -31819,7 +32523,7 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
             Text(
               '${widget.stappen.length} ${widget.stappen.length == 1 ? 'nummer krijgt' : 'nummers krijgen'} '
               'de titel die de uitgave noemt · nummering en jaartal blijven staan',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             if (geblokkeerd) ...[
               const SizedBox(height: 10),
@@ -31838,10 +32542,10 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
                   for (final b in botsingen)
                     Padding(
                       padding: const EdgeInsets.only(top: 3),
-                      child: Text(b, style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      child: Text(b, style: TextStyle(color: _muted, fontSize: 11.5)),
                     ),
                   const SizedBox(height: 3),
-                  const Text('Vink er één uit, of zet de gastnaam naar het artiestveld aan.',
+                  Text('Vink er één uit, of zet de gastnaam naar het artiestveld aan.',
                       style: TextStyle(color: _muted, fontSize: 11.5)),
                 ]),
               ),
@@ -31867,10 +32571,10 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
                       Expanded(
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                           Text(s.track.title,
-                              style: const TextStyle(color: _muted, fontSize: 12.5)),
+                              style: TextStyle(color: _muted, fontSize: 12.5)),
                           const SizedBox(height: 2),
                           Row(children: [
-                            const Icon(Icons.subdirectory_arrow_right_rounded,
+                            Icon(Icons.subdirectory_arrow_right_rounded,
                                 size: 15, color: _accent),
                             const SizedBox(width: 5),
                             Expanded(
@@ -31881,7 +32585,7 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
                           if (_gastMee && s.artiest != null) ...[
                             const SizedBox(height: 3),
                             Text('artiest wordt ${s.artiest}',
-                                style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                style: TextStyle(color: _muted, fontSize: 11.5)),
                           ],
                         ]),
                       ),
@@ -31890,7 +32594,7 @@ class _AlleTitelsDialogState extends State<AlleTitelsDialog> {
                 for (final f in _mislukt)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
-                    child: Text(f, style: const TextStyle(color: _accent2, fontSize: 11.5)),
+                    child: Text(f, style: TextStyle(color: _accent2, fontSize: 11.5)),
                   ),
               ]),
             ),
@@ -32057,7 +32761,7 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
         border: Border.all(color: gekozen ? _accent : Colors.transparent),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.drag_indicator_rounded, size: 15, color: _muted),
+        Icon(Icons.drag_indicator_rounded, size: 15, color: _muted),
         const SizedBox(width: 5),
         Flexible(
           // Twee regels in plaats van één: onder de titel op een telefoon is "Just Give Me a Reason
@@ -32077,7 +32781,7 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
             visualDensity: VisualDensity.compact,
             constraints: const BoxConstraints(),
             padding: EdgeInsets.zero,
-            icon: const Icon(Icons.close_rounded, color: _muted),
+            icon: Icon(Icons.close_rounded, color: _muted),
             onPressed: () => _laatLos(t),
           ),
         ],
@@ -32122,7 +32826,7 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
               _gekozen == null
                   ? 'Sleep een bestand naar de juiste rij — of tik het aan en daarna de rij.'
                   : 'Tik nu de rij aan waar “${_gekozen!.title}” hoort.',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             const SizedBox(height: 12),
             Expanded(
@@ -32163,7 +32867,7 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
                             final nummer = SizedBox(
                               width: 30,
                               child: Text(o.position.isEmpty ? '${i + 1}' : o.position,
-                                  style: const TextStyle(color: _muted, fontSize: 12.5)),
+                                  style: TextStyle(color: _muted, fontSize: 12.5)),
                             );
                             final titel = Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -32175,7 +32879,7 @@ class _RijToewijzenDialogState extends State<RijToewijzenDialog> {
                                         if (o.artist.trim().isNotEmpty) o.artist.trim(),
                                         if (o.seconds != null) _fmt(Duration(seconds: o.seconds!)),
                                       ].join('  ·  '),
-                                      style: const TextStyle(color: _muted, fontSize: 11.5),
+                                      style: TextStyle(color: _muted, fontSize: 11.5),
                                     ),
                                 ]);
                             final plek = hier == null
@@ -32330,7 +33034,7 @@ class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
                   ? 'Niets gevonden — geen enkel bestand klinkt hetzelfde als een ander.'
                   : '${ps.length} ${ps.length == 1 ? 'paar' : 'paren'} · herkend aan de audio, niet aan de naam · '
                       'de mindere gaat naar $dupeFolder, er wordt niets gewist',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             const SizedBox(height: 12),
             Expanded(
@@ -32361,7 +33065,7 @@ class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
                               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                           const SizedBox(height: 4),
                           Row(children: [
-                            const Icon(Icons.check_circle_rounded, size: 14, color: _accent2),
+                            Icon(Icons.check_circle_rounded, size: 14, color: _accent2),
                             const SizedBox(width: 7),
                             Expanded(
                               child: Text('blijft: ${_kort(p.keep.path)}',
@@ -32372,19 +33076,19 @@ class _SoundDuplicatesDialogState extends State<SoundDuplicatesDialog> {
                           ]),
                           const SizedBox(height: 2),
                           Row(children: [
-                            const Icon(Icons.subdirectory_arrow_right_rounded,
+                            Icon(Icons.subdirectory_arrow_right_rounded,
                                 size: 14, color: _muted),
                             const SizedBox(width: 7),
                             Expanded(
                               child: Text('naar $dupeFolder: ${_kort(p.drop.path)}',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: _muted, fontSize: 11.5)),
+                                  style: TextStyle(color: _muted, fontSize: 11.5)),
                             ),
                           ]),
                           if (p.why.isNotEmpty) ...[
                             const SizedBox(height: 3),
-                            Text(p.why, style: const TextStyle(color: _muted, fontSize: 11)),
+                            Text(p.why, style: TextStyle(color: _muted, fontSize: 11)),
                           ],
                         ]),
                       ),
@@ -32467,7 +33171,7 @@ class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
             Text(
               '${found.length} ${found.length == 1 ? 'album gaat' : 'albums gaan'} op in een album dat je al hebt · '
               '$totalTracks ${totalTracks == 1 ? 'nummer' : 'nummers'}',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             const SizedBox(height: 12),
             Expanded(
@@ -32488,7 +33192,7 @@ class _RedundantCleanupDialogState extends State<RedundantCleanupDialog> {
                         r.upgrades > 0
                             ? '${r.upgrades} van de ${r.pairs.length} ${r.upgrades == 1 ? 'is' : 'zijn'} beter en vervangt wat je hebt · de rest naar _dubbel'
                             : 'alle ${r.pairs.length} zijn dubbel · naar _dubbel',
-                        style: const TextStyle(color: _muted, fontSize: 11.5),
+                        style: TextStyle(color: _muted, fontSize: 11.5),
                       ),
                       const SizedBox(height: 6),
                       for (final p in r.pairs)
@@ -32642,7 +33346,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
               widget.absorb == null
                   ? '${widget.album.artist} · ${widget.album.title}'
                   : '${widget.absorb!.title} → ${widget.album.title}',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
             const SizedBox(height: 14),
             Container(
@@ -32655,21 +33359,21 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
                 if (plan.folder != null) ...[
                   const SizedBox(height: 3),
                   Text('Doelmap: ${plan.folder}',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ],
                 if (plan.parking > 0) ...[
                   const SizedBox(height: 3),
                   Text(
                       'Bij dezelfde bestandsnaam houdt de beste kopie de naam; de andere gaat naar '
                       '$dupeFolder. Er wordt niets gewist.',
-                      style: const TextStyle(color: _muted, fontSize: 11.5)),
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
                 ],
               ]),
             ),
             const SizedBox(height: 12),
             Expanded(
               child: acts.isEmpty
-                  ? const Center(
+                  ? Center(
                       child: Text('Geen enkel bestand hoeft te verhuizen.',
                           style: TextStyle(color: _muted, fontSize: 12.5)))
                   : ListView.builder(
@@ -32715,7 +33419,7 @@ class _MergeAlbumsDialogState extends State<MergeAlbumsDialog> {
               contentPadding: EdgeInsets.zero,
               controlAffinity: ListTileControlAffinity.leading,
               title: const Text('Bestanden mee verplaatsen', style: TextStyle(fontSize: 13)),
-              subtitle: const Text('Uit: alleen de indeling verandert, de mappen blijven zoals ze zijn.',
+              subtitle: Text('Uit: alleen de indeling verandert, de mappen blijven zoals ze zijn.',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
             ),
             const SizedBox(height: 4),
@@ -32866,7 +33570,7 @@ class _StylePageState extends State<StylePage> {
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                         decoration: BoxDecoration(
-                          color: _deep == d ? _accent : Colors.white.withValues(alpha: .06),
+                          color: _deep == d ? _accent : kInkt.withValues(alpha: .06),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(d ? 'Minder bekend' : 'Bekend',
@@ -32882,14 +33586,14 @@ class _StylePageState extends State<StylePage> {
           ]),
         ),
         if (_more == null)
-          const SliverToBoxAdapter(
+          SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.all(40),
               child: Center(child: CircularProgressIndicator(strokeWidth: 2, color: _accent)),
             ),
           )
         else if (more.isEmpty)
-          const SliverToBoxAdapter(
+          SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.fromLTRB(24, 0, 24, 24),
               child: Text('Niets nieuws gevonden in deze stijl.', style: TextStyle(color: _muted)),
@@ -32916,7 +33620,7 @@ class _StylePageState extends State<StylePage> {
         child: Row(children: [
           Text(t, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
           const SizedBox(width: 8),
-          Text(badge, style: const TextStyle(color: _muted, fontSize: 12.5)),
+          Text(badge, style: TextStyle(color: _muted, fontSize: 12.5)),
         ]),
       );
 }
@@ -32947,13 +33651,13 @@ class _OnlineAlbumCard extends StatelessWidget {
           _maybeFocusable(Row(mainAxisSize: MainAxisSize.min, children: [
             Flexible(
                 child: ArtistNames(
-                    names: [hit.artist], style: const TextStyle(color: _muted, fontSize: 12))),
+                    names: [hit.artist], style: TextStyle(color: _muted, fontSize: 12))),
             if (hit.album.year != null)
               Flexible(
                   child: Text(' · ${hit.album.year}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: _muted, fontSize: 12))),
+                      style: TextStyle(color: _muted, fontSize: 12))),
           ])),
         ]),
       );
@@ -33095,7 +33799,7 @@ class _PcBijwerkenKnopState extends State<PcBijwerkenKnop> {
       // Zeggen wat je eraan doet, niet alleen dat het niet kan. De pc kijkt bij het opstarten zelf
       // of er iets klaarstaat en biedt het dan aan — die weg bestaat al sinds 3.9.74. Vandaar
       // "meestal": wie daar ooit op "overslaan" tikte krijgt juist die uitgave niet meer aangeboden.
-      return const Text(
+      return Text(
         'Deze pc is te oud om zichzelf op afstand bij te werken — die knop komt vanaf 3.9.237. '
         'Eén keer aan de pc zelf dus; meestal biedt hij het aan zodra je hem opnieuw opstart.',
         style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
@@ -33104,7 +33808,7 @@ class _PcBijwerkenKnopState extends State<PcBijwerkenKnop> {
 
     // Zwijgt hij nadat je op bijwerken drukte, dan is dat het verwachte beeld en geen storing.
     if (_stil && _gestart) {
-      return const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         LinearProgressIndicator(minHeight: 3),
         SizedBox(height: 8),
         Text('De pc installeert en start opnieuw op. Even geduld.',
@@ -33139,7 +33843,7 @@ class _PcBijwerkenKnopState extends State<PcBijwerkenKnop> {
           ),
           if (vanBuitenaf(widget.session.endpoint?.baseUrl)) ...[
             const SizedBox(height: 6),
-            const Text(kAlleenThuisBijwerken, style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4)),
+            Text(kAlleenThuisBijwerken, style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4)),
           ],
         ],
         // De kijk-knop. Dezelfde weg naar de pc als hierboven — die kijkt vers bij GitHub en
@@ -33236,7 +33940,7 @@ class StroomkwaliteitKeuze extends StatelessWidget {
               },
               title: const Text('Onderweg minder gebruiken',
                   style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
-              subtitle: const Text('Schakelt om zodra je op mobiele data zit.',
+              subtitle: Text('Schakelt om zodra je op mobiele data zit.',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
             ),
             if (settings.stroomAdaptief) ...[
@@ -33260,7 +33964,7 @@ class StroomkwaliteitKeuze extends StatelessWidget {
             '· ${labelVan(Stroomstand.cd)} — ${tempoVan(Stroomstand.cd)}, en nog altijd bit-voor-bit cd.\n'
             'Nu geldt: ${labelVan(geldend)}${netStore.noodstand ? ' (verlaagd omdat het haperde)' : ''}. '
             'Een wijziging geldt vanaf het volgende nummer.',
-            style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
+            style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
           ),
         ],
       ),
@@ -33319,7 +34023,7 @@ class SeedKeuze extends StatelessWidget {
                 ? 'Uit. Op Redacted heet dat hit-and-run, en daar kun je je account mee kwijtraken.'
                 : 'Zolang de app deelt blijft het bestand ook in de werkmap staan — die ruimte komt '
                     'daarna vanzelf vrij. Bij Pirate Bay, Knaben en RuTracker verandert er niets.',
-            style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+            style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
           ),
         ],
       ),
@@ -33359,6 +34063,41 @@ class _LuidheidSectie extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Licht, donker of volgens het systeem (Saber, 18-10-2026). Per toestel; zie ui/thema.dart.
+class ThemaKeuzeRegel extends StatelessWidget {
+  const ThemaKeuzeRegel({super.key});
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<ThemaKeuze>(
+        valueListenable: ThemaStand.keuze,
+        builder: (context, huidig, _) => Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Thema', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final k in ThemaKeuze.values)
+                    ChoiceChip(
+                      key: ValueKey('thema-${k.name}'),
+                      // Op een tv is "volgens systeem" donker (zie themaIsLicht): dat staat er dan ook.
+                      label: Text(k == ThemaKeuze.systeem && isTv ? 'Standaard (donker)' : k.label),
+                      selected: huidig == k,
+                      onSelected: (aan) {
+                        if (aan) unawaited(ThemaStand.zet(k));
+                      },
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
 class TorrentmotorKeuze extends StatelessWidget {
@@ -33407,7 +34146,7 @@ class TorrentmotorKeuze extends StatelessWidget {
                     'torrent nog moet ophalen en dus traag is. Daarbij zit je eigen IP wél in de zwerm.'
                 : 'Deze pc kan zelf geen torrents halen: aria2c.exe staat niet naast de app. Alles '
                     'gaat via TorBox.',
-            style: const TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
+            style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35),
           ),
         ],
       ),
@@ -33467,7 +34206,7 @@ class _RuTrackerKoekjeDialoogState extends State<RuTrackerKoekjeDialoog> {
               const Text('Koekje uit je browser',
                   style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                   'RuTracker staat achter Cloudflare. Die uitdaging kan alleen een echte browser '
                   'oplossen — dus doet jouw browser dat, en gebruikt de app het resultaat.',
                   style: TextStyle(color: _muted, fontSize: 12.5, height: 1.4)),
@@ -33481,7 +34220,7 @@ class _RuTrackerKoekjeDialoogState extends State<RuTrackerKoekjeDialoog> {
               // Waarom niet gewoon document.cookie: cf_clearance is HttpOnly en staat daar dus niet
               // in. Via "Kopieer als cURL" komt hij wél mee — samen met het browserkenmerk, en dat
               // is nodig omdat Cloudflare het koekje aan die twee bindt.
-              const Text(
+              Text(
                   'Kopieer als cURL neemt ook je browserkenmerk mee. Dat is nodig: het koekje hoort '
                   'bij dat kenmerk én bij je IP-adres, dus na een netwerkwissel plak je het opnieuw.',
                   style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4)),
@@ -33493,7 +34232,7 @@ class _RuTrackerKoekjeDialoogState extends State<RuTrackerKoekjeDialoog> {
                 style: const TextStyle(fontSize: 12),
                 decoration: InputDecoration(
                   hintText: "curl 'https://rutracker.org/forum/index.php' -H 'cookie: …'",
-                  hintStyle: const TextStyle(color: _muted, fontSize: 11.5),
+                  hintStyle: TextStyle(color: _muted, fontSize: 11.5),
                   filled: true,
                   fillColor: _panel2,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),

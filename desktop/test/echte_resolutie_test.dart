@@ -119,7 +119,7 @@ void main() {
       // afgekapte kopie hoort te blijven zeggen wáár de muur zit, niet welke bemonstering dat is.
       expect(echteResolutie(_opgeschaald(), kopSampleRate: 96000, kopBits: 24), '24/44.1');
       expect(echteResolutie(_opgeblazen(), kopSampleRate: 96000, kopBits: 24), '16/44.1');
-      expect(echteResolutie(_afgekapt(14000), kopSampleRate: 44100, kopBits: 16), 'tot 14.0 kHz');
+      expect(echteResolutie(_afgekapt(14000), kopSampleRate: 44100, kopBits: 16), 'tot 14,0 kHz');
       expect(echteResolutie(_schoon, kopSampleRate: 96000, kopBits: 24), isNull);
     });
   });

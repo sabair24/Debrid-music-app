@@ -62,7 +62,7 @@ class _SkeletState extends State<Skelet> with SingleTickerProviderStateMixin {
               gradient: LinearGradient(
                 begin: Alignment(x - .6, 0),
                 end: Alignment(x + .6, 0),
-                colors: const [kPaneel, kPaneelHoog, kPaneel],
+                colors: [kPaneel, kPaneelHoog, kPaneel],
               ),
             ),
           );

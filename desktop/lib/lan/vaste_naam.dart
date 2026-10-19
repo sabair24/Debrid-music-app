@@ -22,6 +22,15 @@ String vastePcNaam(String streamPath) =>
 
 bool isVastePcNaam(String pad) => Uri.tryParse(pad)?.host == kPcHost;
 
+/// Het id van een nummer van de pc (`…/stream/<id>.<ext>`), of null voor alles wat geen stream is.
+String? pcNummerId(String pad) {
+  final segments = Uri.tryParse(pad)?.pathSegments ?? const [];
+  if (segments.length < 2 || segments[segments.length - 2] != 'stream') return null;
+  final last = segments.last;
+  final dot = last.lastIndexOf('.');
+  return dot < 0 ? last : last.substring(0, dot);
+}
+
 /// Een pad zoals het vóór 14-10-2026 bewaard werd (met het adres van de pc erin) omgezet naar de
 /// vaste naam. Al het andere — een bestand, een radiostroom, een TorBox-adres — blijft zoals het is.
 ///

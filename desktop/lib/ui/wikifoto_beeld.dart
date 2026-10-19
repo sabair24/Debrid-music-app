@@ -64,7 +64,7 @@ class _WikiFotoBeeldState extends State<WikiFotoBeeld> {
         ClipRRect(
           borderRadius: BorderRadius.circular(kHoek8),
           child: b == null
-              ? const AspectRatio(aspectRatio: 4 / 3, child: ColoredBox(color: kLijnZacht))
+              ? AspectRatio(aspectRatio: 4 / 3, child: ColoredBox(color: kLijnZacht))
               : Image.memory(b,
                   width: double.infinity,
                   fit: BoxFit.cover,

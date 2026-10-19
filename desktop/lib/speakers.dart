@@ -22,11 +22,11 @@ import 'models.dart';
 import 'tv.dart';
 import 'ui/kleuren.dart';
 
-const _panel = kPaneel;
-const _line = kLijn;
-const _muted = kGedempt;
-const _accent = kAccent;
-const _accent2 = kAccent2;
+Color get _panel => kPaneel;
+Color get _line => kLijn;
+Color get _muted => kGedempt;
+Color get _accent => kAccent;
+Color get _accent2 => kAccent2;
 
 /// Wat er naar de speaker gaat, en waar het gevraagde nummer in die lijst staat.
 class Handover {
@@ -322,7 +322,7 @@ class _SpeakerPickerState extends State<SpeakerPicker> {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
             child: Row(children: [
-              const Icon(Icons.speaker_rounded, size: 20, color: _accent),
+              Icon(Icons.speaker_rounded, size: 20, color: _accent),
               const SizedBox(width: 10),
               const Expanded(
                 child: Text('Afspelen op',
@@ -335,7 +335,7 @@ class _SpeakerPickerState extends State<SpeakerPicker> {
               ),
             ]),
           ),
-          const Divider(color: _line, height: 1),
+          Divider(color: _line, height: 1),
           Flexible(
             child: ListView(
               shrinkWrap: true,
@@ -353,7 +353,7 @@ class _SpeakerPickerState extends State<SpeakerPicker> {
                   },
                 ),
                 if (_busy)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.symmetric(vertical: 22),
                     child: Center(
                       child: SizedBox(
@@ -364,7 +364,7 @@ class _SpeakerPickerState extends State<SpeakerPicker> {
                     ),
                   )
                 else if (_devices.isEmpty)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.fromLTRB(20, 18, 20, 22),
                     child: Text(
                       'Niets gevonden. Staan de speakers aan en hangen ze aan hetzelfde netwerk?',
@@ -425,8 +425,8 @@ class _SpeakerPickerState extends State<SpeakerPicker> {
             style: TextStyle(fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
         subtitle: Text(subtitle,
             maxLines: 1, overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: _muted, fontSize: 12)),
-        trailing: selected ? const Icon(Icons.check_rounded, color: _accent2) : null,
+            style: TextStyle(color: _muted, fontSize: 12)),
+        trailing: selected ? Icon(Icons.check_rounded, color: _accent2) : null,
         selected: selected,
         selectedTileColor: _accent.withValues(alpha: .10),
         onTap: onTap,

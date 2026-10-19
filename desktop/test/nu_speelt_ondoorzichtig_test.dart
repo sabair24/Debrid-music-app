@@ -104,4 +104,13 @@ void main() {
     expect(lijf, contains('opaque: true,'));
     expect(lijf, isNot(contains('opaque: false')));
   });
+
+  test('de hoes achter Nu speelt is de gebakken, sterk vervaagde waas (geen scherp logo achter de knoppen)', () {
+    final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    final i = main.indexOf("key: const Key('np-hoes-achter'),");
+    expect(i, greaterThan(0));
+    final stuk = main.substring(i, i + 300);
+    expect(stuk, contains('HoesAchtergrond(beeld: MemoryImage(p.currentCover!), hoogte: c.maxHeight)'));
+    expect(stuk, isNot(contains('Image.memory')));
+  });
 }

@@ -74,7 +74,7 @@ Widget _boom() => Column(
             ),
           ),
         ),
-        const Vlak(child: Text('een paneel', style: kTekstKlein)),
+        Vlak(child: Text('een paneel', style: kTekstKlein)),
         const Expanded(
           child: LeegVlak(
             teken: Icons.library_music_rounded,

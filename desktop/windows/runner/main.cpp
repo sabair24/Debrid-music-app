@@ -39,6 +39,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
+  // Skia, niet Impeller (18-10-2026). Flutter 3.47 zette Windows standaard op Impeller, en daarmee
+  // kostte Nu speelt openen of sluiten op Sabers pc een paar seconden lang 15 tot 20 GB werkgeheugen
+  // en 6 tot 9 GB videogeheugen, met 65 tot 123 ms per beeld: "heel stroef". Gemeten met dezelfde
+  // proef op vier bouwen: 3.9.504 (Flutter 3.41, Skia) bleef op 1,2 GB en 2,3 ms per beeld, en de
+  // bouw met alleen de overstap naar 3.47 (b317fc2) had het al. In rust ook vijf keer zoveel
+  // videogeheugen (0,9 tegen 0,2 GB). Het vloeibare glas (de lensrand is een shader als filter)
+  // vraagt Impeller; zonder valt de pc terug op matglas, zoals in 3.9.504 (lib/ui/glas.dart).
+  project.set_impeller_switch(flutter::ImpellerSwitch::Disabled);
+
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);

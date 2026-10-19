@@ -30,6 +30,8 @@ import 'package:flutter/material.dart';
 
 import '../tv.dart';
 import 'draaihoes.dart';
+import 'kantel_hoes.dart';
+import 'kleuren.dart';
 import 'maten.dart';
 import 'typografie.dart';
 
@@ -41,10 +43,10 @@ const double kTegelHoes = 140;
 /// Uit `ui/typografie.dart` en niet als eigen getal: dit is precies waar de 24 verschillende
 /// tekstgroottes vandaan kwamen — elke widget die zijn eigen maat verzon omdat er niets was om naar
 /// te wijzen.
-final kTegelTitel = kTekstNormaal.copyWith(height: _regel);
+TextStyle get kTegelTitel => kTekstNormaal.copyWith(height: _regel);
 
 /// Wat onder de titel staat: de artiest.
-final kTegelOnder = kTekstKlein.copyWith(height: _regel);
+TextStyle get kTegelOnder => kTekstKlein.copyWith(height: _regel);
 
 /// De regelhoogte waarmee [hoogteVanTegelrij] rekent, en die de tegel zelf ook aanhoudt.
 const double _regel = 1.35;
@@ -310,7 +312,7 @@ class _AlbumTegelState extends State<AlbumTegel> {
   final _tikken = TweeTikken();
   Uint8List? _achter;
   bool _zoekt = false;
-  bool _voorgeladen = false;
+  Future<void>? _voorladen;
 
   /// De cd schuift nog terug: tot dan blijft hij zichtbaar. Daarna tekent hij niets meer — hij ligt
   /// in rust achter een dichte hoes, en zijn wazige schaduw werd anders in elk beeld van elke tegel
@@ -326,17 +328,43 @@ class _AlbumTegelState extends State<AlbumTegel> {
   /// Staat de muis er nu werkelijk op? [_muis] volgt een beeld later bij het eerste aanwijzen.
   bool _erop = false;
 
-  /// De eerste keer dat de muis erop komt: [AlbumTegel.voorladen], één keer per tegel.
-  Future<void> _laadVoor() async {
+  /// De eerste keer dat de muis erop komt: [AlbumTegel.voorladen], één keer per tegel. Klaar zodra
+  /// de scans van schijf in het geheugen liggen; de achterkant decodeert daarna verder, daar wacht de
+  /// cd niet op.
+  Future<void> _laadVoor() => _voorladen ??= _doeVoorladen();
+
+  Future<void> _doeVoorladen() async {
     final laad = widget.voorladen;
-    if (_voorgeladen || laad == null || isTv) return;
-    _voorgeladen = true;
+    if (laad == null || isTv) return;
     try {
       final b = await laad();
       if (b == null || !mounted || _achter != null || !_draaien) return;
-      await precacheImage(ResizeImage(MemoryImage(b), width: _decodeer(_maat)), context);
-      if (mounted && _achter == null) setState(() => _achter = b);
+      unawaited(precacheImage(ResizeImage(MemoryImage(b), width: _decodeer(_maat)), context).then((_) {
+        if (mounted && _achter == null) setState(() => _achter = b);
+      }, onError: (_) {}));
     } catch (_) {/* niets klaar is geen fout: dan haalt de dubbeltik hem zoals vroeger */}
+  }
+
+  /// Hoe lang het eerste aanwijzen hooguit op de scans wacht voor de cd uitschuift.
+  static const kCdWacht = Duration(milliseconds: 250);
+
+  /// De cd en de afspeelknop bouwen, na de scans.
+  ///
+  /// **Eerst de scans, dan de cd.** Zonder dit werd de cd gebouwd voor er iets van schijf gelezen
+  /// was: hij schoof uit als getekende zilveren schijf, en de echte cd vaagde er pas daarna overheen
+  /// (Saber, 18-10-2026: "niet direct laden"). Nu ligt de scan in het geheugen voor de cd bestaat, en
+  /// staat hij er vanaf zijn eerste beeld. Hooguit [kCdWacht]: een trage schijf houdt het uitschuiven
+  /// niet tegen, dan gaat het zoals vroeger.
+  Future<void> _bouwExtra() async {
+    try {
+      await _laadVoor().timeout(kCdWacht);
+    } catch (_) {/* te traag of mislukt: dan zonder */}
+    if (!mounted || _extraGebouwd) return;
+    setState(() => _extraGebouwd = true);
+    // Eerst bouwen in rust, en een beeld later pas uit: anders heeft het uitschuiven geen beginstand.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _erop) setState(() => _muis = true);
+    });
   }
 
   bool get _draaien => widget.draaibaar && !isTv;
@@ -403,6 +431,13 @@ class _AlbumTegelState extends State<AlbumTegel> {
                 : AchterkantBeeld(
                     beeld: _achter!, maat: maat, hoek: kHoek12, decodeerBreedte: _decodeer(maat), schaduw: kSchaduw1),
           );
+    // Kantelen ±6° met een glans (Saber, 18-10-2026): de schaduw blijft plat liggen, de hoes kantelt.
+    final gekanteld = KantelHoes(
+      bron: isTv ? KantelBron.selectie : KantelBron.muis,
+      aan: _aan,
+      vorm: vorm,
+      child: hoes,
+    );
     final metSchaduw = AnimatedContainer(
       duration: kGebaar,
       curve: Curves.easeOut,
@@ -412,13 +447,13 @@ class _AlbumTegelState extends State<AlbumTegel> {
         boxShadow: !_draai.voorInRust.value ? const [] : (_aan ? kSchaduw2 : kSchaduw1),
       ),
       child: widget.heroTag == null
-          ? hoes
+          ? gekanteld
           : Hero(
               tag: widget.heroTag!,
               // Tijdens de vlucht alleen de hoes, zonder de schaduw eromheen: die zou meeschalen en
               // onderweg een zwarte vlek onder een groeiend vierkant worden.
               flightShuttleBuilder: (_, __, ___, ____, _____) => widget.hoes(maat),
-              child: hoes,
+              child: gekanteld,
             ),
     );
     final schijf = widget.schijf;
@@ -499,6 +534,10 @@ class _AlbumTegelState extends State<AlbumTegel> {
         _erop = true;
         if (_extraGebouwd) {
           setState(() => _aan = _muis = true);
+        } else if (widget.schijf != null && widget.voorladen != null && !isTv) {
+          // De tegel licht meteen op; de cd komt zodra zijn scan er is ([_bouwExtra]).
+          setState(() => _aan = true);
+          unawaited(_bouwExtra());
         } else {
           // Eerst bouwen in rust, en een beeld later pas uit: anders heeft het uitschuiven geen
           // beginstand en staat de cd er meteen.
@@ -558,7 +597,7 @@ class _AlbumTegelState extends State<AlbumTegel> {
                   widget.titel,
                   maxLines: kTegelTitelRegels,
                   overflow: TextOverflow.ellipsis,
-                  style: _aan ? kTegelTitel.copyWith(color: Colors.white) : kTegelTitel,
+                  style: _aan ? kTegelTitel.copyWith(color: kFel) : kTegelTitel,
                 ),
               ),
               if (widget.ondertitelWidget != null)

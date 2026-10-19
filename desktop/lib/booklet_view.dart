@@ -15,13 +15,13 @@ import 'ui/kleuren.dart';
 
 // Same four values as the album pages use. Duplicated rather than imported: main.dart already
 // imports this file, and a theme constant is not worth a cycle.
-const _bg = kAchtergrond;
-const _panel = kPaneel;
-const _muted = kGedempt;
-const _accent = kAccent;
+Color get _bg => kAchtergrond;
+Color get _panel => kPaneel;
+Color get _muted => kGedempt;
+Color get _accent => kAccent;
 
 /// Paper showing where a page hasn't loaded yet.
-const _paper = kVerzonken;
+Color get _paper => kVerzonken;
 
 const _turnMs = 560;
 const _crossMs = 380;
@@ -112,7 +112,7 @@ class _BookletScreenState extends State<BookletScreen> {
           children: [
             Text(
               _error ?? (_toFetch > 0 ? 'Scans ophalen… $_fetched / $_toFetch' : 'Boekje zoeken…'),
-              style: const TextStyle(color: _muted),
+              style: TextStyle(color: _muted),
               textAlign: TextAlign.center,
             ),
             if (_error != null) ...[
@@ -312,7 +312,7 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
           Center(
             child: Text(
               '${_b.sheets[_sheet].label} · ${_p + 1} / ${_pages.length}',
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: TextStyle(color: _muted, fontSize: 12.5),
             ),
           ),
           const SizedBox(width: 12),
@@ -575,7 +575,7 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
     if (sheet < 0 || sheet >= b.sheets.length) return const SizedBox.shrink();
     final s = b.sheets[sheet];
     final f = _file[sheet];
-    if (f == null) return const ColoredBox(color: _paper);
+    if (f == null) return ColoredBox(color: _paper);
 
     // Booklet scans are routinely 2000-3000 px. Decoded whole, twelve pages is roughly 190 MB of
     // ARGB — against an image cache of 100 MB, which means guaranteed evict-and-decode-again on
@@ -607,7 +607,7 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
 
     return ClipRect(
       child: DecoratedBox(
-        decoration: const BoxDecoration(color: _paper),
+        decoration: BoxDecoration(color: _paper),
         child: OverflowBox(
           maxWidth: double.infinity,
           maxHeight: double.infinity,
@@ -686,14 +686,14 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
                     decoration: BoxDecoration(
                       color: _panel,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: current ? _accent : Colors.white10),
+                      border: Border.all(color: current ? _accent : kInkt.withValues(alpha: .10)),
                     ),
                     padding: const EdgeInsets.all(6),
                     child: Column(
                       children: [
                         Expanded(
                           child: f == null
-                              ? const ColoredBox(color: _paper)
+                              ? ColoredBox(color: _paper)
                               // Thumbnails in the overview grid — about 260 points wide.
                               : Image.file(f, fit: BoxFit.contain, cacheWidth: decodeWidth(260)),
                         ),
@@ -702,7 +702,7 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
                           b.sheets[i].spread
                               ? '${b.sheets[i].label} · dubbele pagina'
                               : b.sheets[i].label,
-                          style: const TextStyle(color: _muted, fontSize: 11),
+                          style: TextStyle(color: _muted, fontSize: 11),
                         ),
                       ],
                     ),
@@ -742,7 +742,7 @@ class _BookletViewState extends State<BookletView> with TickerProviderStateMixin
             ),
           ),
           if (!_full.contains(sheet))
-            const Positioned(
+            Positioned(
               bottom: 18,
               left: 0,
               right: 0,

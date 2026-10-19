@@ -59,7 +59,7 @@ void main() {
   });
 
   test('de metaregel van de albumkop loopt door in plaats van af te knippen', () {
-    final i = hoofd.indexOf('ArtistNames(names: [album.artist], style: const TextStyle(color: _muted)),');
+    final i = hoofd.indexOf('ArtistNames(names: [album.artist], style: TextStyle(color: _muted)),');
     expect(i, greaterThan(-1), reason: 'de metaregel van de albumkop is verdwenen');
     final ervoor = hoofd.substring(i - 400, i);
     // Sinds 16-10-2026 via KopFeiten (ui/kopfeiten.dart): die meet en zet de feiten onder de artiest

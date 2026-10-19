@@ -2,7 +2,7 @@
 // De lensrand van vloeibaar glas (16-10-2026): de achtergrond buigt aan de rand van een afgeronde
 // rechthoek, met een lichtrand linksboven. Alleen onder Impeller (zie lib/ui/glas.dart).
 //
-// Wat de engine doet (nagelezen in de bron van Flutter 3.41.9):
+// Wat de engine doet (nagelezen in de bron van Flutter 3.41.9, en weer in 3.47.7):
 //  - uSize (de eerste vec2) wordt overschreven met de grootte van de invoertextuur: de hele pass.
 //  - FlutterFragCoord() is een pixel in die textuur, y omlaag op elke backend.
 //  - de invoer (uTex) wordt NEAREST gesampeld, dus de rand sampelt zelf bilineair.
@@ -35,12 +35,12 @@ vec2 nRR(vec2 p, vec2 b, float r) {
   return s * n;
 }
 
+// Geen omkering meer op GLES (sinds Flutter 3.47): een offscreen-pass keert daar nu zelf de y om in
+// de vertex-shader (flutter#186554), dus de invoer ligt op elke backend met y omlaag. Met de oude
+// `uv.y = 1.0 - uv.y` stond de lens op Windows (ANGLE) en oudere Androids op zijn kop. Let op: de
+// documentatie van ImageFilter.shader zegt in 3.47.7 nog steeds dat je zelf moet omkeren.
 vec4 lees(vec2 px) {
-  vec2 uv = px / uSize;
-#ifdef IMPELLER_TARGET_OPENGLES
-  uv.y = 1.0 - uv.y;
-#endif
-  return texture(uTex, uv);
+  return texture(uTex, px / uSize);
 }
 
 // Vier keer lezen en mengen: de invoer geeft alleen hele pixels terug, en een rand die op een halve

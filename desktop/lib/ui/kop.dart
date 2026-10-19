@@ -9,8 +9,34 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'kleuren.dart';
 import 'maten.dart';
 import 'typografie.dart';
+
+/// De grote titel boven een sectie op een gsm. Hij scrolt mee weg, en dan staat de titel klein in de
+/// balk erboven (Saber, 18-10-2026: "één keer de titel", als grote kop die inklapt, zoals in Apple
+/// Music). Eerst stond de naam van de sectie in de balk én nog eens als kop op de pagina.
+class GroteKop extends StatelessWidget {
+  const GroteKop(this.titel, {super.key});
+
+  final String titel;
+
+  /// Hoe ver de kop weg moet zijn voor de titel in de balk verschijnt: als hij grotendeels onder de
+  /// balk verdwenen is.
+  static const inklapGrens = 30.0;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(kGoot, 2, kGoot, 4),
+        child: Text(
+          titel,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+              fontSize: 32, fontWeight: FontWeight.w800, letterSpacing: -.6, height: 1.15, color: kTekst),
+        ),
+      );
+}
 
 /// De kop van een sectie, met eventueel een telling of een knop rechts.
 class SectieKop extends StatelessWidget {

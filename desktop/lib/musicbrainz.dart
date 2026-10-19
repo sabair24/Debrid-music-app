@@ -581,9 +581,26 @@ class MusicBrainzService {
   @visibleForTesting
   static Future<void> Function(Duration) busyWacht = Future<void>.delayed;
 
+  /// Vragen die nu onderweg zijn, op adres. Een tweede vraag naar hetzelfde adres krijgt dezelfde
+  /// toekomst in plaats van een eigen plek op de baan. Gemeten op de artiestpagina (18-10-2026): de
+  /// zoekvraag naar de artiest ging drie keer tegelijk uit (de discografie, Discogs via MusicBrainz en "wie is dit"),
+  /// en het eerste echte antwoord kreeg pas na drie plekken op de baan een beurt.
+  static final Map<String, Future<Map<String, dynamic>?>> _onderweg = {};
+
   /// Spaced out per host, disk-cached. Null on any failure: a missing album page is a
   /// disappointment, a crashed one is a bug.
-  Future<Map<String, dynamic>?> _get(String url, {required String lane, required Duration gap}) async {
+  Future<Map<String, dynamic>?> _get(String url, {required String lane, required Duration gap}) {
+    final bezig = _onderweg[url];
+    if (bezig != null) return bezig;
+    final f = _getEcht(url, lane: lane, gap: gap);
+    _onderweg[url] = f;
+    f.whenComplete(() {
+      _onderweg.remove(url);
+    }).ignore();
+    return f;
+  }
+
+  Future<Map<String, dynamic>?> _getEcht(String url, {required String lane, required Duration gap}) async {
     final cached = await _readCache(url);
     if (cached != null) {
       final miss = _missAge(cached);

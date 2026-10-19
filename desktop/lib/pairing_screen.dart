@@ -16,12 +16,12 @@ import 'lan/discovery.dart';
 import 'tv.dart';
 import 'ui/kleuren.dart';
 
-const _bg = kAchtergrond;
-const _panel = kPaneel;
-const _panel2 = kPaneelHoog;
-const _text = kTekst;
-const _muted = kGedempt;
-const _accent = kAccent;
+Color get _bg => kAchtergrond;
+Color get _panel => kPaneel;
+Color get _panel2 => kPaneelHoog;
+Color get _text => kTekst;
+Color get _muted => kGedempt;
+Color get _accent => kAccent;
 
 class PairingScreen extends StatefulWidget {
   const PairingScreen({super.key, required this.deviceName, required this.onPaired});
@@ -148,15 +148,15 @@ class _PairingScreenState extends State<PairingScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.library_music_rounded, size: 56, color: _accent),
+                  Icon(Icons.library_music_rounded, size: 56, color: _accent),
                   const SizedBox(height: 18),
-                  const Text(
+                  Text(
                     'Verbind met je pc',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: _text, fontSize: 26, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'Je muziek staat op je Windows-pc. Open daar DebridMusic en ga naar '
                     'Instellingen → Apparaat koppelen voor de code.',
                     textAlign: TextAlign.center,
@@ -179,7 +179,7 @@ class _PairingScreenState extends State<PairingScreen> {
 
   List<Widget> _chooseServer() => [
         if (_searching && _found.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(vertical: 26),
             child: Column(children: [
               SizedBox(
@@ -195,7 +195,7 @@ class _PairingScreenState extends State<PairingScreen> {
           Container(
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(14)),
-            child: const Text(
+            child: Text(
               'Geen pc gevonden. Staat DebridMusic open op je pc, en hangen beide apparaten '
               'aan hetzelfde netwerk?',
               style: TextStyle(color: _muted, height: 1.45),
@@ -212,7 +212,7 @@ class _PairingScreenState extends State<PairingScreen> {
           TextField(
             controller: _hostController,
             autocorrect: false,
-            style: const TextStyle(color: _text),
+            style: TextStyle(color: _text),
             decoration: _fieldStyle('Adres van de pc', hint: '192.168.0.216'),
             onSubmitted: (_) => _useTypedAddress(),
           ),
@@ -230,12 +230,12 @@ class _PairingScreenState extends State<PairingScreen> {
             TextButton(
               onPressed: _searching ? null : _search,
               child: Text(_searching ? 'Zoeken…' : 'Opnieuw zoeken',
-                  style: const TextStyle(color: _muted)),
+                  style: TextStyle(color: _muted)),
             ),
-            const Text('·', style: TextStyle(color: _muted)),
+            Text('·', style: TextStyle(color: _muted)),
             TextButton(
               onPressed: () => setState(() => _manual = true),
-              child: const Text('Adres invoeren', style: TextStyle(color: _muted)),
+              child: Text('Adres invoeren', style: TextStyle(color: _muted)),
             ),
           ]),
       ];
@@ -245,11 +245,11 @@ class _PairingScreenState extends State<PairingScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(14)),
           child: Row(children: [
-            const Icon(Icons.computer_rounded, color: _accent, size: 22),
+            Icon(Icons.computer_rounded, color: _accent, size: 22),
             const SizedBox(width: 12),
             Expanded(
               child: Text(_targetName ?? _target!.host,
-                  style: const TextStyle(color: _text, fontWeight: FontWeight.w600)),
+                  style: TextStyle(color: _text, fontWeight: FontWeight.w600)),
             ),
             TextButton(
               onPressed: _pairing
@@ -258,7 +258,7 @@ class _PairingScreenState extends State<PairingScreen> {
                         _target = null;
                         _error = null;
                       }),
-              child: const Text('Wijzig', style: TextStyle(color: _muted)),
+              child: Text('Wijzig', style: TextStyle(color: _muted)),
             ),
           ]),
         ),
@@ -270,7 +270,7 @@ class _PairingScreenState extends State<PairingScreen> {
           keyboardType: TextInputType.number,
           textAlign: TextAlign.center,
           maxLength: 6,
-          style: const TextStyle(
+          style: TextStyle(
             color: _text,
             fontSize: 30,
             fontWeight: FontWeight.w700,
@@ -301,7 +301,7 @@ class _PairingScreenState extends State<PairingScreen> {
         labelText: label,
         hintText: hint,
         counterText: counter ? '' : null,
-        labelStyle: const TextStyle(color: _muted),
+        labelStyle: TextStyle(color: _muted),
         hintStyle: TextStyle(color: _muted.withValues(alpha: .4)),
         filled: true,
         fillColor: _panel2,
@@ -332,24 +332,24 @@ class _ServerTile extends StatelessWidget {
             // iPad, and a row sized for a mouse is a row you miss.
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             child: Row(children: [
-              const Icon(Icons.computer_rounded, color: _accent, size: 22),
+              Icon(Icons.computer_rounded, color: _accent, size: 22),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(server.name,
-                        style: const TextStyle(color: _text, fontWeight: FontWeight.w600)),
+                        style: TextStyle(color: _text, fontWeight: FontWeight.w600)),
                     Text(
                       server.trackCount > 0
                           ? '${server.baseUrl.host} · ${server.trackCount} nummers'
                           : server.baseUrl.host,
-                      style: const TextStyle(color: _muted, fontSize: 12.5),
+                      style: TextStyle(color: _muted, fontSize: 12.5),
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right_rounded, color: _muted),
+              Icon(Icons.chevron_right_rounded, color: _muted),
             ]),
           ),
         ),
@@ -367,15 +367,15 @@ class _ErrorBox extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF3A1E24),
+        color: vlakOpThema(const Color(0xFF3A1E24)),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Icon(Icons.error_outline_rounded, color: Color(0xFFFF8A9B), size: 20),
+        Icon(Icons.error_outline_rounded, color: leesbaar(const Color(0xFFFF8A9B)), size: 20),
         const SizedBox(width: 10),
         Expanded(
           child: Text(message,
-              style: const TextStyle(color: Color(0xFFFFC9D1), height: 1.4, fontSize: 13.5)),
+              style: TextStyle(color: leesbaar(const Color(0xFFFFC9D1)), height: 1.4, fontSize: 13.5)),
         ),
       ]),
     );

@@ -91,6 +91,18 @@ void main() {
   });
 
   group('op een iPad of gsm', () {
+    test('een favoriet NUMMER van de pc staat ook op de gsm (18-10-2026: daar stond "Nog geen favorieten")', () {
+      // Op een client is er geen muziekmap; het id komt uit de stream-URL (library.gedeeldId).
+      final t = Track(
+          path: 'http://pc:47820/stream/t1', title: 'Talkin', artist: 'Tracy', album: 'TC', trackNo: 1,
+          duration: const Duration(seconds: 200), isFlac: true);
+      final fav = Favorieten()..idVanPad = (p) => p.endsWith('/t1') ? 't1' : null;
+      fav.vanServer(['t1'], const []);
+      expect(fav.idVanTrack(t), 't1');
+      expect(fav.isFavorietTrack(t), isTrue);
+      expect(fav.nummers([t, tr('ander')]), [t]);
+    });
+
     test('wat de pc meldt wordt getoond', () {
       final fav = Favorieten();
       fav.vanServer(['t1', 't2'], ['a1']);
@@ -134,5 +146,12 @@ void main() {
       await fav.wissel(id: 'alb1', album: true);
       expect(verstuurd.single['kind'], 'album');
     });
+  });
+
+  test('aangesloten: favorieten en afspeellijsten zoeken nummers via gedeeldId, ook op een gsm', () {
+    final hoofd = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(hoofd, contains('final favorieten = Favorieten()..idVanPad = library.gedeeldId;'));
+    expect(hoofd, contains('if (lib.gedeeldId(t.path) case final i?) i: t,'));
+    expect(hoofd, contains('if (library.gedeeldId(t.path) case final i?) i: t,'));
   });
 }

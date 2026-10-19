@@ -49,7 +49,11 @@ class BronUitkomst {
 class DiscoCache {
   final List<DiscoRelease> releases;
   final int fetchedMs;
-  const DiscoCache(this.releases, this.fetchedMs);
+
+  /// De hoesregel van dit antwoord (zie [bevriesDiscografie]). Null in een bestand van vóór
+  /// 18-10-2026.
+  final bool? zeefHoezen;
+  const DiscoCache(this.releases, this.fetchedMs, {this.zeefHoezen});
 
   bool ouderDan(Duration d) =>
       DateTime.now().millisecondsSinceEpoch - fetchedMs > d.inMilliseconds;
@@ -121,17 +125,21 @@ class DiscographyService {
       return DiscoCache(
         [for (final r in rijen) if (r is Map<String, dynamic>) _uitJson(r)].whereType<DiscoRelease>().toList(),
         (j['fetchedMs'] as num?)?.toInt() ?? 0,
+        zeefHoezen: j['zeefHoezen'] is bool ? j['zeefHoezen'] as bool : null,
       );
     } catch (_) {
       return null;
     }
   }
 
-  Future<void> schrijf(String naam, List<DiscoRelease> releases) async {
+  /// [zeefHoezen]: de hoesregel die bij deze lijst hoort. Het volgende bezoek zet de lijst daarmee
+  /// meteen vast, zie [bevriesDiscografie].
+  Future<void> schrijf(String naam, List<DiscoRelease> releases, {bool? zeefHoezen}) async {
     try {
       await _dir.create(recursive: true);
       await _bestand(naam).writeAsString(jsonEncode({
         'fetchedMs': DateTime.now().millisecondsSinceEpoch,
+        if (zeefHoezen != null) 'zeefHoezen': zeefHoezen,
         'releases': [for (final r in releases) _naarJson(r)],
       }));
     } catch (_) {/* een cache die niet kan schrijven mag de pagina niet tegenhouden */}

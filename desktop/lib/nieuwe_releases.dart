@@ -513,7 +513,7 @@ CatalogAlbum? deezerAlbumUit(Object? a) {
   return CatalogAlbum(
     id,
     titel,
-    (a['cover_big'] ?? a['cover_medium'] ?? a['cover']) as String?,
+    deezerHoes(a),
     a['release_date'] as String?,
     (a['nb_tracks'] as num?)?.toInt() ?? 0,
     (a['record_type'] as String?) ?? 'album',

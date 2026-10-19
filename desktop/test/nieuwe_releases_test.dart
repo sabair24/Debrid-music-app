@@ -20,6 +20,14 @@ Aanbod _van(String artiest, List<CatalogAlbum> albums, {double r = 10, String? l
 List<String> _titels(List<NieuweUitgave> u) => [for (final x in u) x.album.title];
 
 void main() {
+  test('een plaat die nog moet verschijnen: de hoes uit md5_image (Sting, Seven Tears, 18-10-2026)', () {
+    final al = deezerAlbumUit({'id': 1, 'title': 'Seven Tears', 'cover_big': null, 'md5_image': '9846572093021a90c5c23ed30c125c31', 'release_date': '2026-11-27'})!;
+    expect(al.cover, 'https://cdn-images.dzcdn.net/images/cover/9846572093021a90c5c23ed30c125c31/500x500-000000-80-0-0.jpg');
+    // Een gewone plaat houdt zijn eigen adres, en zonder iets blijft het leeg.
+    expect(deezerAlbumUit({'id': 2, 'title': 'X', 'cover_big': 'https://a/b.jpg', 'md5_image': 'abc'})!.cover, 'https://a/b.jpg');
+    expect(deezerAlbumUit({'id': 3, 'title': 'Y'})!.cover, isNull);
+  });
+
   group('wat geen nieuwe muziek is', () {
     String? r(String t, [String soort = 'album', int jaar = 2026]) =>
         geenNieuweMuziek(t, recordType: soort, jaar: jaar);

@@ -74,6 +74,19 @@ class CatalogArtist {
   CatalogRef get ref => origin ?? CatalogRef.deezer(id);
 }
 
+/// De hoes van een Deezer-album, als adres.
+///
+/// Bij een plaat die nog moet verschijnen laat Deezer `cover_big` en de andere adressen leeg (null),
+/// maar staat er wel een `md5_image`, en met die code bestaat de hoes gewoon. Zonder dit stond er op
+/// Start een lege tegel (Sting, "Seven Tears", verschijnt 27 november: 18-10-2026).
+String? deezerHoes(Map a) {
+  final u = (a['cover_big'] ?? a['cover_medium'] ?? a['cover']) as String?;
+  if (u != null && u.isNotEmpty) return u;
+  final md5 = a['md5_image'] as String?;
+  if (md5 == null || md5.isEmpty) return null;
+  return 'https://cdn-images.dzcdn.net/images/cover/$md5/500x500-000000-80-0-0.jpg';
+}
+
 class CatalogAlbum {
   final int id;
   final String title;
@@ -475,7 +488,7 @@ class CatalogService {
   CatalogAlbum _album(dynamic a) => CatalogAlbum(
         a['id'] as int,
         (a['title'] ?? '') as String,
-        (a['cover_big'] ?? a['cover_medium'] ?? a['cover']) as String?,
+        deezerHoes(a as Map),
         a['release_date'] as String?,
         (a['nb_tracks'] ?? 0) as int,
         (a['record_type'] ?? 'album') as String,

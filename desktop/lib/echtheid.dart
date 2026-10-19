@@ -342,7 +342,8 @@ String waaromAfkap(Echtheidsoordeel o) {
 /// meting en blijft dus vooropstaan; wat hem waarschijnlijk veroorzaakte staat erachter, en alleen
 /// als de hoogte ergens naar wijst.
 String afkapZin(double hz) {
-  final k = (hz / 1000).toStringAsFixed(1);
+  // Met een komma, zoals overal in de app ("15,9 kHz"); hier stond "15.9" (18-10-2026).
+  final k = (hz / 1000).toStringAsFixed(1).replaceAll('.', ',');
   final bron = vermoedelijkeBron(hz);
   return bron == null
       ? 'afgekapt op $k kHz — smaller dan lossless hoort te zijn'
@@ -380,7 +381,7 @@ String? echteResolutie(Echtheidsoordeel o, {required int kopSampleRate, required
   // De ZIN blijft zeggen waar de muur zit, ook al rekent [echteWaarden] hem om naar een
   // bemonstering: "tot 14,0 kHz" vertelt je iets, "16/28" niets.
   if (o.band == Bandbreedte.afgekapt && hz != null) {
-    return 'tot ${(hz / 1000).toStringAsFixed(1)} kHz';
+    return 'tot ${(hz / 1000).toStringAsFixed(1).replaceAll('.', ',')} kHz';
   }
   final w = echteWaarden(o, kopSampleRate: kopSampleRate, kopBits: kopBits);
   if (w.rate == kopSampleRate && w.bits == kopBits) return null;

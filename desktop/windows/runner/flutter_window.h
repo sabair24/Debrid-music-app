@@ -33,6 +33,9 @@ class FlutterWindow : public Win32Window {
   // De mediatoetsen en de knoppen in de taakbalk. Zie mediabediening.h.
   std::unique_ptr<Mediabediening> media_;
 
+  // Wil het systeem dicht glas? Zie lib/systeem_glas.dart.
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> systeem_;
+
   // Is het opruimen al begonnen?
   //
   // Vanaf dat moment gaat er geen enkel vensterbericht meer naar Flutter. Het opruimen van de

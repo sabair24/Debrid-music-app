@@ -29,6 +29,12 @@ class Favorieten extends GedeeldeOps {
   /// de id's al uit de catalogus komen.
   String Function()? wortel;
 
+  /// Van pad naar het id van de gedeelde staat (`library.gedeeldId`): op een telefoon uit de
+  /// stream-URL, op de pc uit het pad. Zonder dit gaf [idVanTrack] op elke client null en waren
+  /// per-nummer favorieten daar stil dood: de pc had er één, de gsm toonde "Nog geen favorieten"
+  /// (18-10-2026).
+  String? Function(String path)? idVanPad;
+
   /// Wat een client van de pc heeft gekregen. Op de pc blijven deze leeg en wordt [winkel] gelezen.
   final Set<String> _vanPc = {};
 
@@ -43,6 +49,8 @@ class Favorieten extends GedeeldeOps {
   }
 
   String? idVanTrack(Track t) {
+    final via = idVanPad?.call(t.path);
+    if (via != null) return via;
     final r = wortel?.call() ?? '';
     if (r.isEmpty) return null;
     return trackIdFor(t.path, r);

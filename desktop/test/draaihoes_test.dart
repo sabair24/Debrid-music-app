@@ -109,7 +109,12 @@ void main() {
       expect(tr.transform.isIdentity(), isFalse, reason: 'hij beweegt');
       await t.pumpAndSettle();
       expect(find.text('voor'), findsOneWidget);
-      expect(find.byType(Transform), findsNothing, reason: 'in rust geen transform: niets te tekenen per beeld');
+      // In rust een rechte transform (de eenheid), geen extra lagen. Een transform en niet "niets": de
+      // vorm moet in rust en tijdens het draaien dezelfde blijven (gsm 18-10-2026).
+      for (final e in find.byType(Transform).evaluate()) {
+        expect((e.widget as Transform).transform, Matrix4.identity(), reason: 'in rust recht');
+      }
+      expect(find.byKey(const ValueKey('draai-veeg')), findsNothing);
     });
 
     test('de wiebel dempt uit en eindigt recht', () {
@@ -222,6 +227,17 @@ void main() {
     expect(main, contains('schaduw: widget.achterSchaduw'));
     expect(main, contains('achterSchaduw: kNuSpeeltAchterSchaduw,'));
     expect(main, contains('valueListenable: _draai.voorInRust,'));
+    // De grote schaduw van Nu speelt alleen onder de hoes, niet onder het vak voor de cd (pc, 18-10-2026:
+    // een grijs blok tot ver rechts naast de hoes).
+    final schaduw = main.indexOf("key: const ValueKey('np-hoes-schaduw'),");
+    expect(schaduw, greaterThan(0));
+    expect(main.substring(schaduw, schaduw + 160), contains('width: hoesMaat,'));
+    // Met een plaat ernaast tekent AlbumArt hem zelf, op de maat van de hoes, en schuift hij mee
+    // (zie hoes_midden_test.dart).
+    final mee = main.indexOf("key: const ValueKey('albumart-schaduw'),");
+    expect(mee, greaterThan(0));
+    expect(main.substring(mee, mee + 200), contains('width: s,'));
+    expect(main.substring(mee, mee + 260), contains('child: meeMetDeHoes(IgnorePointer('));
     final tegel = File('lib/ui/tegel.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(tegel, contains('AchterkantBeeld('));
     expect(tegel, contains('boxShadow: !_draai.voorInRust.value ? const [] : (_aan ? kSchaduw2 : kSchaduw1),'));
