@@ -80,7 +80,8 @@ void main() {
         reason: 'de hele marge op de SafeArea houdt ook de foto van de kop van de rand weg');
     // De bovenkant van de marge blijft — behalve als de balk zweeft (sinds 16-10-2026 ook op een tv):
     // dan zit die marge al in de ruimte van de balk, en hoort de foto tot de bovenrand te lopen.
-    expect(staat, contains('minimum: EdgeInsets.only(top: ruimte > 0 ? 0 : tvOverscan.top)'),
+    // Via [bloed] sinds 19-10-2026: op een tv is dat ruimte; alleen een gsm loopt achter zijn statusbalk door.
+    expect(staat, contains('minimum: EdgeInsets.only(top: bloed > 0 ? 0 : tvOverscan.top)'),
         reason: 'de bovenkant van de marge blijft: daar snijdt een tv net zo goed weg');
     final g = staat.indexOf('SliverMainAxisGroup(');
     expect(g, greaterThan(-1), reason: 'de inhoud onder de kop staat niet meer in één groep');

@@ -430,7 +430,10 @@ void main() {
     });
 
     test('de artiestpagina laat de tv-marge bovenaan weg zodra de balk zweeft', () {
-      expect(bron, contains('minimum: EdgeInsets.only(top: ruimte > 0 ? 0 : tvOverscan.top),'));
+      // Sinds 19-10-2026 via [bloed], dat op een tv gelijk is aan ruimte (alleen een gsm laat de foto
+      // achter de statusbalk doorlopen).
+      expect(bron, contains('minimum: EdgeInsets.only(top: bloed > 0 ? 0 : tvOverscan.top),'));
+      expect(bron, contains('final bloed = ruimte > 0 ? ruimte : (isCompact(context) && !isTv ? MediaQuery.paddingOf(context).top : 0.0);'));
     });
 
     // Shield, 17-10-2026: na het openen van een artiest had niets de selectie; op de albumpagina

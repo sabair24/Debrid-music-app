@@ -113,6 +113,7 @@ import 'kandidatenzeef.dart';
 import 'overblok.dart';
 import 'ui/wikifoto_beeld.dart';
 import 'wikifotos.dart';
+import 'fotomaat.dart';
 import 'wikipedia.dart';
 import 'warm_log.dart' show WarmLog;
 import 'warmtemeter.dart';
@@ -22481,25 +22482,10 @@ class _ArtistBackdropState extends State<ArtistBackdrop> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (img != null)
-          ClipRect(
-            child: ImageFiltered(
-              imageFilter: ImageFilter.blur(sigmaX: 60, sigmaY: 60),
-              // Overscanned, or the blur samples past the image and the edges fade to nothing.
-              child: Transform.scale(
-                scale: 1.25,
-                // Same argument as the hero backdrop: at sigma 60 nothing survives that a 96-point
-                // decode did not already have, and a full-resolution artist portrait behind a
-                // screen-filling blur is the most expensive thing on this page.
-                child: Image.memory(img,
-                    fit: BoxFit.cover,
-                    cacheWidth: 96,
-                    filterQuality: FilterQuality.low,
-                    alignment: Alignment.topCenter,
-                    errorBuilder: (_, __, ___) => const SizedBox()),
-              ),
-            ),
-          ),
+        // Eén keer gebakken in plaats van elk beeld vervaagd: zie [GebakkenWaas] voor de meting op de
+        // S26 (8,6–9,3 ms per beeld op deze pagina, ook met de kop uit beeld). Zelfde σ60, dezelfde
+        // uitvergroting van 1,25 tegen een rand die naar niets vervaagt, dezelfde decodering op 96.
+        if (img != null) GebakkenWaas(beeld: img),
         DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -23390,6 +23376,7 @@ class EditorialeKop extends StatelessWidget {
     this.echteNaam,
     this.actions = const [],
     this.bovenBloed = 0,
+    this.bloedZacht = false,
     this.uitsnede,
   });
 
@@ -23429,6 +23416,11 @@ class EditorialeKop extends StatelessWidget {
   /// omlaag: de tekst, de knoppen én het verloop dat de naam draagt. Zo staat alles onder de balk op
   /// dezelfde plek in het venster als voordien, en is het enige verschil de foto erboven.
   final double bovenBloed;
+
+  /// Een zachte rand achter [bovenBloed] in plaats van de dichte: achter de statusbalk van een gsm,
+  /// waar de foto zichtbaar moet blijven ("full immersive") en alleen de klok en de pictogrammen een
+  /// rustige ondergrond vragen. De dichte is voor de zwevende balk van de pc, met pillen en tellingen.
+  final bool bloedZacht;
 
   @override
   Widget build(BuildContext context) {
@@ -23574,7 +23566,7 @@ class EditorialeKop extends StatelessWidget {
             // Achter de zwevende balk: de donkere rand die de pillen, de tellingen en de
             // vensterknoppen leesbaar houdt — zie [randAchterDeBalk]. Hij eindigt op de 27 procent
             // waar het verloop hierboven begint, zodat er geen naad over de foto loopt.
-            if (bovenBloed > 0) randAchterDeBalk(bovenBloed, naarWaas: true),
+            if (bovenBloed > 0) randAchterDeBalk(bovenBloed, naarWaas: true, zacht: bloedZacht),
             // En van links, zodat de letters altijd op een rustige ondergrond staan — ook als de
             // foto daar toevallig licht is.
             if (!smal)
@@ -25013,6 +25005,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // Hoeveel van deze pagina achter de zwevende balk ligt. Nul op een televisie, een telefoon, en
     // op de pc zolang de offline-melding er staat — dan is alles hieronder zoals het altijd was.
     final ruimte = BalkRuimte.van(context);
+    // Op een gsm loopt de foto achter de statusbalk door tot de bovenrand van het scherm (Saber,
+    // 19-10-2026: "full immersive"). Dezelfde weg als achter de zwevende balk op de pc: de kop krijgt
+    // het stuk erachter als [EditorialeKop.bovenBloed], en de tekst en de terugknop zakken evenveel.
+    final bloed = ruimte > 0 ? ruimte : (isCompact(context) && !isTv ? MediaQuery.paddingOf(context).top : 0.0);
     // The records of this artist you actually hold. Matched on the normalised artist name, the same
     // key the library groups by, so a stray capital or accent doesn't hide your own albums.
     final lib = context.watch<LibraryStore>();
@@ -25118,11 +25114,12 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             //
             // En nul zodra de balk zweeft — sinds 16-10-2026 ook op een tv. `minimum` geldt óók als
             // `top` uit staat, en dan begon de foto 27 punten onder de bovenrand.
-            minimum: EdgeInsets.only(top: ruimte > 0 ? 0 : tvOverscan.top),
+            minimum: EdgeInsets.only(top: bloed > 0 ? 0 : tvOverscan.top),
         bottom: false,
         // Niet bovenaan als de balk zweeft: die houdt de statusbalk van een iPad al zelf vrij, en de
-        // foto hoort daar juist onderdoor te lopen. [EditorialeKop] schuift de tekst omlaag.
-        top: ruimte == 0,
+        // foto hoort daar juist onderdoor te lopen. [EditorialeKop] schuift de tekst omlaag. Op een
+        // gsm evenmin: daar loopt de foto achter de statusbalk door (zie [bloed]).
+        top: bloed == 0,
         child: CustomScrollView(
         controller: _rol,
         slivers: [
@@ -25159,7 +25156,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   zijnLeden: _zijnLeden,
                   onGroep: (g) => openArtist(context, g),
                   echteNaam: _echteNaam,
-                  bovenBloed: ruimte,
+                  bovenBloed: bloed,
+                  // Achter de statusbalk van een gsm een zachte rand: de foto blijft er zichtbaar, de
+                  // klok en de pictogrammen leesbaar. Achter de zwevende balk de dichte van de pc.
+                  bloedZacht: ruimte == 0,
                   // Zoals je hem op de pc instelde voor dit soort scherm; anders kiest de kop zelf.
                   uitsnede: lib.kopVoor(widget.artist.name, kopSchermVan(context)),
                   // Glas, alle drie hetzelfde (Saber, 11-09-2026: "alle drie neutraal glas"). Radio
@@ -25230,7 +25230,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 Padding(
                   // Onder de zwevende balk, anders vangt die de tik.
                   // Plus de zijmarge van de tv: de kop loopt tot de rand, de pijl niet.
-                  padding: EdgeInsets.fromLTRB(10 + tvOverscan.left, 8 + ruimte, 0, 0),
+                  padding: EdgeInsets.fromLTRB(10 + tvOverscan.left, 8 + bloed, 0, 0),
                   child: GlasKnop.rond(
                     icoon: Icons.arrow_back_rounded,
                     tooltip: 'Terug',
@@ -31435,6 +31435,14 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
   List<DiscogsImage>? _images;
   String? _error;
 
+  /// De grote foto's van Wikipedia ([WikiFotoService.portretten]), apart: ze kosten drie à vier
+  /// verzoeken op een baan van één per seconde, en de andere bronnen hoeven daar niet op te wachten.
+  List<DiscogsImage> _wiki = const [];
+  bool _wikiBezig = true;
+
+  /// Per adres een kleine versie voor de tegel (alleen bij Wikipedia: die foto's zijn tot 1920 breed).
+  final Map<String, String> _voorbeeld = {};
+
   /// Eigen foto's die je in dit venster van internet toevoegde ([_voegToe]).
   final List<DiscogsImage> _eigen = [];
   final _adres = TextEditingController();
@@ -31570,6 +31578,22 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
   void initState() {
     super.initState();
     _load();
+    _laadWiki();
+  }
+
+  Future<void> _laadWiki() async {
+    List<WikiPortret> wiki = const [];
+    try {
+      wiki = await WikiFotoService().portretten(widget.artist);
+    } catch (_) {/* geen Wikipedia-foto's: de andere bronnen staan er gewoon */}
+    if (!mounted) return;
+    setState(() {
+      _wikiBezig = false;
+      for (final p in wiki) {
+        _voorbeeld[p.url] = p.voorbeeld;
+      }
+      _wiki = [for (final p in wiki) DiscogsImage(p.url, p.voorbeeld, p.breedte, p.hoogte, false)];
+    });
   }
 
   Future<void> _load() async {
@@ -31593,9 +31617,21 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
         (tadb?.cutout, 'cutout'),
       ]) {
         if (url == null || url.isEmpty) continue;
-        final maat = CoverEnricher.audioDbNominaal(soort);
+        // De ECHTE maat waar de foto al op schijf staat (de achtergrond en het portret): de kiezer
+        // toont hem nu (Saber, 19-10-2026), en een fanart is soms 1920×1080 in plaats van 1280×720.
+        final bytes = switch (soort) {
+          'backdrop' => tadb?.backdropBytes,
+          'thumb' => tadb?.thumbBytes,
+          _ => null,
+        };
+        final echt = bytes == null ? null : imageSize(bytes);
+        final maat = echt == null ? CoverEnricher.audioDbNominaal(soort) : (breedte: echt.w, hoogte: echt.h);
         extra.add(DiscogsImage(url, url, maat.breedte, maat.hoogte, false));
       }
+      // Deezers foto (1000×1000): de terugval van de pagina, nu ook te kiezen. Op een gsm ±2 keer
+      // opgerekt, scherper dan elke Discogs-foto en dan TheAudioDB's fanart in een staande kop.
+      final dz = await CoverEnricher(settings).deezerFotoAdres(widget.artist);
+      if (dz != null) extra.add(DiscogsImage(dz.url, dz.url, dz.maat, dz.maat, false));
       if (!mounted) return;
       setState(() => _images = [...a?.images ?? const <DiscogsImage>[], ...extra]);
     } catch (_) {
@@ -31631,8 +31667,9 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
               Text(widget.artist, style: TextStyle(color: _muted, fontSize: 12.5)),
               const SizedBox(height: 4),
               Text(
-                  'Klik in LIGGEND voor een breed scherm, in STAAND voor een iPad die je rechtop '
-                  'houdt · rechtsklik voor het portret',
+                  'Klik in LIGGEND voor een breed scherm, in STAAND voor een gsm of een iPad die je '
+                  'rechtop houdt · rechtsklik voor het portret · de scherpste staan vooraan'
+                  '${_wikiBezig ? ' · Wikipedia-foto\'s laden…' : ''}',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
               const SizedBox(height: 12),
               _vanInternet(),
@@ -31646,11 +31683,12 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
   }
 
   Widget _body(String? portrait, String? liggendKeuze, String? staandKeuze) {
-    if (_error != null) return Center(child: Text(_error!, style: TextStyle(color: _muted)));
-    final list = _images;
-    if (list == null) {
+    if (_error != null && _wiki.isEmpty) return Center(child: Text(_error!, style: TextStyle(color: _muted)));
+    if (_images == null && _error == null) {
       return Center(child: CircularProgressIndicator(strokeWidth: 2, color: _accent));
     }
+    final al = {for (final i in _images ?? const <DiscogsImage>[]) i.uri};
+    final list = [...?_images, for (final w in _wiki) if (!al.contains(w.uri)) w];
     // Eigen foto's vooraan, in BEIDE vakken: je hebt ze zelf gekozen, dus jij zegt waar ze horen —
     // ook een foto van 4:3 die je toch liever als brede achtergrond wilt. Een eerder gekozen adres
     // dat geen van de bronnen kent (een eigen foto van een vorige keer) staat er ook bij, anders zou
@@ -31668,9 +31706,11 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
 
     // Twee vakken in ÉÉN schuiflijst, niet twee losse rasters: met een eigen schuifbalk per vak
     // staat STAAND achter een balk die je pas vindt als je weet dat hij er is.
+    // De scherpste eerst ([opScherpte]): wat in de kop het minst opgerekt wordt. Saber koos dit op
+    // 19-10-2026, toen 28 van zijn 29 gsm-foto's meer dan 2,5 keer opgerekt bleken.
     final vorm = splitsOpVorm(list);
-    final liggend = [...eigen, ...vorm.liggend];
-    final staand = [...eigen, ...vorm.staand];
+    final liggend = [...eigen, ...opScherpte(vorm.liggend, breed: true)];
+    final staand = [...eigen, ...opScherpte(vorm.staand, breed: false)];
     return CustomScrollView(
       slivers: [
         _sectieKop('LIGGEND', liggend.length),
@@ -31761,18 +31801,54 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
           Expanded(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(6),
-              child: _fotoVlak(img.uri),
+              child: _fotoVlak(_voorbeeld[img.uri] ?? img.uri),
             ),
           ),
           SizedBox(
-            height: 14,
-            child: isGekozen || isPortret
-                ? Text(isPortret ? 'portret' : (breed ? 'achtergrond' : 'achtergrond staand'),
-                    style: TextStyle(fontSize: 10, color: isPortret ? _accent2 : _accent))
-                : null,
+            height: 28,
+            child: _onderschrift(img, breed: breed, isGekozen: isGekozen, isPortret: isPortret),
           ),
         ]),
       ),
+    );
+  }
+
+  /// Onder een tegel: waar hij vandaan komt en hoe groot hij is, en daaronder wat je ermee deed en of
+  /// hij op een gsm onscherp wordt (Saber, 19-10-2026: "maat tonen bij Foto kiezen"). Het merk alleen
+  /// in STAAND: dat vak is wat een gsm toont ([onscherpOpGsm]).
+  Widget _onderschrift(DiscogsImage img, {required bool breed, required bool isGekozen, required bool isPortret}) {
+    final maat = img.width > 0 && img.height > 0 ? '${img.width} × ${img.height}' : 'maat onbekend';
+    final onscherp = !breed && onscherpOpGsm(img.width, img.height);
+    // Kort als het merk erachter komt: "achtergrond staand · onscherp op je gsm" past niet onder een
+    // tegel van 160 punten, en het merk viel eraf (gsm, 19-10-2026). Het vak zegt al welke soort het is.
+    final keuze = isPortret
+        ? 'portret'
+        : (isGekozen ? (onscherp ? 'gekozen' : (breed ? 'achtergrond' : 'achtergrond staand')) : null);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('${fotoBron(img.uri)} · $maat',
+            key: ValueKey('foto-maat-${img.uri}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 10, color: _muted)),
+        if (keuze != null || onscherp)
+          Text.rich(
+            TextSpan(children: [
+              if (keuze != null) TextSpan(text: keuze, style: TextStyle(color: isPortret ? _accent2 : _accent)),
+              if (keuze != null && onscherp) const TextSpan(text: ' · '),
+              if (onscherp)
+                TextSpan(
+                    text: 'onscherp op je gsm',
+                    style: TextStyle(color: leesbaar(const Color(0xFFE8A33D)), fontWeight: FontWeight.w600)),
+            ]),
+            key: onscherp ? ValueKey('foto-onscherp-${img.uri}') : null,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 10, color: _muted),
+          ),
+      ],
     );
   }
 

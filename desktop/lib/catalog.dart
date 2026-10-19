@@ -215,7 +215,8 @@ class CatalogService {
     final albums = await artistAlbums(gevonden.first.id);
     final wil = _kaleTitel(titel);
     if (wil.isEmpty) return null;
-    for (final a in albums) {
+    // Het album vóór de single met dezelfde naam: sinds [ontdubbelArtiestAlbums] staan ze er allebei.
+    for (final a in [...albums.where((a) => !a.isSingle), ...albums.where((a) => a.isSingle)]) {
       final heeft = _kaleTitel(a.title);
       if (heeft.isEmpty) continue;
       if (heeft == wil || heeft.contains(wil) || wil.contains(heeft)) {
@@ -453,17 +454,25 @@ class CatalogService {
   Future<List<CatalogAlbum>> artistAlbums(int artistId) async {
     final j = await _get('$_base/artist/$artistId/albums?limit=100');
     final data = (j?['data'] as List?) ?? const [];
-    final albums = data.map(_album).toList();
-    // De-dupe by title (Deezer lists many re-releases), keep the newest, sort newest-first.
+    return ontdubbelArtiestAlbums(data.map(_album).toList());
+  }
+
+  /// Deezer noemt veel heruitgaven van dezelfde plaat; per titel blijft de nieuwste, nieuwste eerst.
+  ///
+  /// **Per titel én maat** (19-10-2026). Op titel alleen bleef bij P!nk de single "Funhouse" (2009,
+  /// drie nummers) over en verdween het album "Funhouse" (2008, dertien nummers): de single was
+  /// nieuwer. Dan stond het album in de discografie met de hoes en de nummers van de single, en sloegen
+  /// de aanbevelingen (die singles overslaan) het album helemaal over. Zelfde bij Madonna's "True
+  /// Blue". Een single of EP is daarom een eigen plaat naast het album met dezelfde naam.
+  static List<CatalogAlbum> ontdubbelArtiestAlbums(List<CatalogAlbum> albums) {
     final byTitle = <String, CatalogAlbum>{};
     for (final a in albums) {
-      final k = a.title.toLowerCase();
+      final klein = a.recordType == 'single' || a.recordType == 'ep';
+      final k = '${a.title.toLowerCase()}${klein ? '\u0000klein' : ''}';
       final cur = byTitle[k];
       if (cur == null || (a.releaseDate ?? '').compareTo(cur.releaseDate ?? '') > 0) byTitle[k] = a;
     }
-    final out = byTitle.values.toList()
-      ..sort((a, b) => (b.releaseDate ?? '').compareTo(a.releaseDate ?? ''));
-    return out;
+    return byTitle.values.toList()..sort((a, b) => (b.releaseDate ?? '').compareTo(a.releaseDate ?? ''));
   }
 
   /// The album (with cover) + its ordered tracklist.

@@ -482,6 +482,24 @@ class CoverEnricher {
   /// that silhouette in the hero AND blurred it across the whole banner; no picture looks better.
   static const _noPhoto = 'd41d8cd98f00b204e9800998ecf8427e';
 
+  /// Het adres van Deezers artiestfoto (1000×1000, anders 500×500), zonder hem op te halen. Voor
+  /// "Foto kiezen": dezelfde foto die de pagina als terugval toont, nu ook als keuze met zijn maat.
+  Future<({String url, int maat})?> deezerFotoAdres(String name) async {
+    if (_generic.contains(name.trim().toLowerCase())) return null;
+    try {
+      final j = await DeezerBaan.haal(
+          'https://api.deezer.com/search/artist?q=${Uri.encodeComponent(name)}&limit=1');
+      final data = (j?['data'] as List?) ?? const [];
+      if (data.isEmpty) return null;
+      final xl = data.first['picture_xl'] as String?;
+      final url = xl ?? data.first['picture_big'] as String?;
+      if (url == null || url.isEmpty || url.contains(_noPhoto)) return null;
+      return (url: url, maat: xl != null ? 1000 : 500);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Fetch + cache an artist photo from Deezer (keyless).
   Future<Uint8List?> fetchArtistImage(String name) async {
     if (_generic.contains(name.trim().toLowerCase())) return null;

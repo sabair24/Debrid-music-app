@@ -94,7 +94,9 @@ class DiscographyService {
   /// v8: de jaren. Een bewaarde lijst van vóór de herkansing bij een MusicBrainz-"busy" en vóór de
   /// Discogs-masters uit de sweep draagt bij een grote catalogus het jaar van de heruitgave — bij
   /// Serge Gainsbourg *Aux armes et cætera* op 2003 en *Love on the Beat* op 2015.
-  static const schema = 'disco|v8';
+  /// v9: een single of EP en een album met dezelfde titel zijn twee regels (zie [mergeDiscography]).
+  /// Een bewaarde lijst draagt nog het album "Taking Chances" met de hoes en de link van de single.
+  static const schema = 'disco|v9';
 
   /// Hoe lang een bewaard antwoord meegaat voor er bij Deezer opnieuw wordt gekeken.
   ///

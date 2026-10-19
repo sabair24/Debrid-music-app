@@ -16,6 +16,7 @@ library;
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'dart:ui' show ImageFilter;
 
@@ -890,7 +891,11 @@ Widget glasInBalk(Widget knop, {bool plat = false}) {
 /// in de balk dubbel en staat er op de onderrand alsnog een streep.
 ///
 /// Een `Positioned`: hij hoort als direct kind in de `Stack` van het beeld waar hij bovenop ligt.
-Widget randAchterDeBalk(double hoogte, {bool naarWaas = false}) => Positioned(
+///
+/// [zacht]: achter de statusbalk van een gsm. Daar staan alleen de klok en een paar pictogrammen, en
+/// moet de foto zichtbaar blijven tot de bovenrand (Saber, 19-10-2026: "full immersive"): 55 procent
+/// in plaats van 85, oplopend naar het verloop van de kop.
+Widget randAchterDeBalk(double hoogte, {bool naarWaas = false, bool zacht = false}) => Positioned(
       top: 0,
       left: 0,
       right: 0,
@@ -901,12 +906,17 @@ Widget randAchterDeBalk(double hoogte, {bool naarWaas = false}) => Positioned(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [
-                paginaWaas(0xD9, donker: Colors.black),
-                paginaWaas(0xC7, donker: Colors.black),
-                paginaWaas(naarWaas ? 0x44 : 0x00, donker: Colors.black),
-              ],
-              stops: const [0, .55, 1],
+              colors: zacht
+                  ? [
+                      paginaWaas(0x8C, donker: Colors.black),
+                      paginaWaas(naarWaas ? 0x44 : 0x00, donker: Colors.black),
+                    ]
+                  : [
+                      paginaWaas(0xD9, donker: Colors.black),
+                      paginaWaas(0xC7, donker: Colors.black),
+                      paginaWaas(naarWaas ? 0x44 : 0x00, donker: Colors.black),
+                    ],
+              stops: zacht ? const [0, 1] : const [0, .55, 1],
             ),
           ),
         ),
@@ -1217,6 +1227,207 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
                 return Transform.translate(offset: Offset(0, -schuif), child: kind);
               },
             ),
+    );
+  }
+}
+
+
+/// Een foto als vervaagde achtergrond over een heel vlak: [bron] als `BoxFit.cover` met [uitlijning],
+/// [uitvergroting] keer uitvergroot rond het midden (anders vervaagt de rand naar niets), vervaagd met
+/// [sigma] logische punten. [schaal] pixels per punt; de vervaging schaalt mee.
+///
+/// Hetzelfde recept als [bakHoesAchtergrond], zonder waas en zonder vervloeiing: die tekent wie hem
+/// gebruikt er zelf overheen, zodat een themawissel niet opnieuw hoeft te bakken.
+Future<ui.Image> bakVervaging(ui.Image bron,
+    {required Size vak,
+    required double schaal,
+    required double sigma,
+    double uitvergroting = 1.25,
+    Alignment uitlijning = Alignment.topCenter}) async {
+  final w = (vak.width * schaal).ceil().clamp(1, 4096);
+  final h = (vak.height * schaal).ceil().clamp(1, 4096);
+  final doel = Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble());
+  final s = sigma * schaal;
+  final rand = (s * 3).ceil() + 2;
+  final eerst = ui.PictureRecorder();
+  final c = Canvas(eerst)..translate(rand.toDouble(), rand.toDouble());
+  c.saveLayer(doel.inflate(rand.toDouble()), Paint()..imageFilter = ImageFilter.blur(sigmaX: s, sigmaY: s));
+  c
+    ..translate(doel.center.dx, doel.center.dy)
+    ..scale(uitvergroting)
+    ..translate(-doel.center.dx, -doel.center.dy);
+  paintImage(
+      canvas: c, rect: doel, image: bron, fit: BoxFit.cover, alignment: uitlijning, filterQuality: FilterQuality.low);
+  c.restore();
+  final vervaagd = await eerst.endRecording().toImage(w + 2 * rand, h + 2 * rand);
+  try {
+    final dan = ui.PictureRecorder();
+    Canvas(dan).drawImageRect(vervaagd, doel.shift(Offset(rand.toDouble(), rand.toDouble())), doel,
+        Paint()..filterQuality = FilterQuality.low);
+    return await dan.endRecording().toImage(w, h);
+  } finally {
+    vervaagd.dispose();
+  }
+}
+
+/// Een vervaagde foto die het hele vlak vult, één keer gebakken ([bakVervaging]) in plaats van elk
+/// beeld opnieuw vervaagd.
+///
+/// **Waarom (gsm, 19-10-2026).** De artiestpagina lag op een `ImageFiltered` van σ60 over het hele
+/// scherm. Onder Impeller wordt zo'n laag elk beeld opnieuw uitgerekend, ook als hij stilstaat: op de
+/// S26 kostte tekenen op die pagina 8,6–9,3 ms per beeld zelfs met de kop uit beeld (andere pagina's
+/// 3–6 ms; budget bij 120 Hz 8,3 ms), en Saber voelde het schuiven haperen. Gebakken is het één
+/// gewone afbeelding per beeld. Zelfde les als de albumkop op 05-10-2026 ([HoesAchtergrond]).
+///
+/// Bij een andere maat of een ander beeld blijft het vorige staan tot het nieuwe klaar is.
+class GebakkenWaas extends StatefulWidget {
+  const GebakkenWaas({
+    super.key,
+    required this.beeld,
+    this.sigma = 60,
+    this.uitvergroting = 1.25,
+    this.uitlijning = Alignment.topCenter,
+  });
+
+  final Uint8List beeld;
+  final double sigma;
+  final double uitvergroting;
+  final Alignment uitlijning;
+
+  /// Op welke breedte de foto gedecodeerd wordt: na σ60 heeft niets er meer aan.
+  static const int decodeerBreedte = 96;
+
+  /// Hoe breed het gebakken beeld hooguit is, in pixels (zoals [HoesAchtergrond.gebakkenBreedte]).
+  static const double gebakkenBreedte = 360;
+
+  /// Hoeveel bakbeurten er gestart zijn: een toets kijkt hiermee dat er niet elk beeld een begint.
+  @visibleForTesting
+  static int bakBeurten = 0;
+
+  @override
+  State<GebakkenWaas> createState() => _GebakkenWaasState();
+}
+
+class _GebakkenWaasState extends State<GebakkenWaas> {
+  ImageStream? _stroom;
+  ImageStreamListener? _luisteraar;
+  ImageInfo? _bron;
+  ui.Image? _gebakken;
+  Size? _gebakkenVoor;
+  Size? _gevraagdVoor;
+  int _beurt = 0;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _bronStroom();
+  }
+
+  @override
+  void didUpdateWidget(GebakkenWaas oud) {
+    super.didUpdateWidget(oud);
+    if (!identical(oud.beeld, widget.beeld) ||
+        oud.sigma != widget.sigma ||
+        oud.uitvergroting != widget.uitvergroting ||
+        oud.uitlijning != widget.uitlijning) {
+      _gevraagdVoor = null;
+      _gebakkenVoor = null;
+      _bronStroom();
+    }
+  }
+
+  void _bronStroom() {
+    final nieuw = ResizeImage(MemoryImage(widget.beeld), width: GebakkenWaas.decodeerBreedte)
+        .resolve(createLocalImageConfiguration(context));
+    if (nieuw.key == _stroom?.key) return;
+    _laatLos();
+    _bron?.dispose();
+    _bron = null;
+    _gevraagdVoor = null;
+    _gebakkenVoor = null;
+    _stroom = nieuw;
+    _luisteraar = ImageStreamListener(
+      (info, _) {
+        if (!mounted) {
+          info.dispose();
+          return;
+        }
+        _bron?.dispose();
+        _bron = info;
+        _gevraagdVoor = null;
+        _gebakkenVoor = null;
+        setState(() {});
+      },
+      // Een foto die niet laadt is geen fout: dan blijft het vlak zonder waas.
+      onError: (_, __) {},
+    );
+    nieuw.addListener(_luisteraar!);
+  }
+
+  void _laatLos() {
+    final l = _luisteraar;
+    if (l != null) _stroom?.removeListener(l);
+    _luisteraar = null;
+    _stroom = null;
+  }
+
+  void _bak(Size vak, double dpr) {
+    final bron = _bron;
+    if (bron == null || vak.isEmpty || !vak.isFinite || vak == _gevraagdVoor) return;
+    _gevraagdVoor = vak;
+    GebakkenWaas.bakBeurten++;
+    final beurt = ++_beurt;
+    final schaal = math.min(dpr, GebakkenWaas.gebakkenBreedte / vak.width);
+    final beeld = bron.image.clone();
+    bakVervaging(beeld,
+            vak: vak,
+            schaal: schaal,
+            sigma: widget.sigma,
+            uitvergroting: widget.uitvergroting,
+            uitlijning: widget.uitlijning)
+        .then((klaar) {
+      if (!mounted || beurt != _beurt) {
+        klaar.dispose();
+        return;
+      }
+      setState(() {
+        _gebakken?.dispose();
+        _gebakken = klaar;
+        _gebakkenVoor = vak;
+      });
+    }, onError: (Object _) {}).whenComplete(beeld.dispose);
+  }
+
+  @override
+  void dispose() {
+    _laatLos();
+    _bron?.dispose();
+    _gebakken?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return RepaintBoundary(
+      child: LayoutBuilder(builder: (context, maat) {
+        final vak = maat.biggest;
+        if (vak != _gebakkenVoor) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _bak(vak, dpr);
+          });
+        }
+        final g = _gebakken;
+        return g == null
+            ? const SizedBox.expand()
+            : RawImage(
+                key: const ValueKey('gebakken-waas'),
+                image: g,
+                width: vak.width,
+                height: vak.height,
+                fit: BoxFit.fill,
+                filterQuality: FilterQuality.low);
+      }),
     );
   }
 }

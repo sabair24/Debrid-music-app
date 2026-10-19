@@ -45,7 +45,8 @@ void main() {
         reason: 'met dezelfde ophaler als de pagina, anders werkt hij hier wel en daar niet');
     expect(lijf, contains('decodeImageFromList(bytes)'), reason: 'alleen iets wat echt een foto is');
     expect(lijf, contains('lib.setArtistArt(widget.artist, nieuw.isWide ? kSoortLiggend : kSoortStaand, adres)'));
-    expect(lijf, contains('final liggend = [...eigen, ...vorm.liggend];'));
-    expect(lijf, contains('final staand = [...eigen, ...vorm.staand];'));
+    // Eigen foto's vooraan; de rest sinds 19-10-2026 op scherpte (zie foto_maat_test).
+    expect(lijf, contains('final liggend = [...eigen, ...opScherpte(vorm.liggend, breed: true)];'));
+    expect(lijf, contains('final staand = [...eigen, ...opScherpte(vorm.staand, breed: false)];'));
   });
 }

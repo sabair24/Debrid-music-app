@@ -518,14 +518,39 @@ RecordKind _minKind(RecordKind a, RecordKind b) => kindRank(a) <= kindRank(b) ? 
 /// Neemt de LIJSTEN, niet een lopende toestand. De artiestpagina houdt de drie bronnen apart en roept
 /// dit aan bij het tekenen; dan geeft elke hertekening hetzelfde antwoord, ongeacht wie het eerst
 /// binnenkwam. Dat is wat progressief aanvullen veilig maakt — en meteen wat het testbaar maakt.
+///
+/// **Een single of EP en een album met dezelfde titel zijn twee platen** (Saber, 19-10-2026: "vaak
+/// merk ik dat er singles staan bij albums"). Op titel alleen werden het album "Taking Chances" en de
+/// single "Taking Chances" één regel. Die stond terecht bij Albums, maar droeg de hoes, de nummers en
+/// de Deezer-link van wat het eerst binnenkwam — vaak de single, en dan opende een album op twee
+/// nummers. GEMETEN over acht artiesten: 8 van de 167 albumtegels openden op een single of EP
+/// ("Taking Chances", "One Heart", "Vuelve", "A Medio Vivir", "Livin' La Vida Loca", "Funhouse",
+/// "True Blue", en "Alabina": Discogs' cassette-album uit 1993 plus de single uit 1996). Dus samen
+/// op titel ÉN maat: single en EP apart van de rest. Eén uitzondering, zie [_alleenDeezerZegtKlein].
 List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
   final samen = <String, DiscoRelease>{};
   for (final lijst in bronnen) {
     for (final r in lijst) {
       final k = r.key;
       if (k.isEmpty) continue;
-      final bestaand = samen[k];
-      samen[k] = bestaand == null ? r : bestaand.mergedWith(r);
+      final g = _isKlein(r.kind) ? '$k$_klein' : k;
+      final bestaand = samen[g];
+      samen[g] = bestaand == null ? r : bestaand.mergedWith(r);
+    }
+  }
+  // Wat bij een titel als single of EP staat naast een regel van een andere maat. In vaste volgorde,
+  // zodat de uitkomst niet van de aanvoer afhangt.
+  for (final g in samen.keys.toList()..sort()) {
+    if (!g.endsWith(_klein)) continue;
+    final klein = samen[g];
+    final k = g.substring(0, g.length - _klein.length);
+    final groot = samen[k];
+    if (klein == null || groot == null) continue;
+    // Een regel zonder mening (een Discogs-master zonder formaat) bij een titel die verder alleen als
+    // single bekend is: bij die single, zoals hij dat altijd deed.
+    if (groot.kind == RecordKind.other || _alleenDeezerZegtKlein(klein, groot)) {
+      samen[k] = groot.mergedWith(klein);
+      samen.remove(g);
     }
   }
   // TWEEDE RONDE: een aanduiding die zegt WAT de plaat is, niet welke uitgave.
@@ -538,6 +563,8 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
   // live-aanduiding alleen bij een liveplaat, want "Plaat (Live)" naast de studioplaat "Plaat" zijn
   // twee platen. In vaste volgorde, zodat de uitkomst niet van de aanvoer afhangt.
   for (final k in samen.keys.toList()..sort()) {
+    // Een single met een aanduiding hoort evenmin bij een album als een single zonder.
+    if (k.endsWith(_klein)) continue;
     final r = samen[k];
     if (r == null) continue;
     final a = _aanduiding(r.title);
@@ -561,6 +588,24 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
   }
   return samen.values.toList();
 }
+
+/// Achter de sleutel van een single of EP in [mergeDiscography]: zo staan ze los van een album met
+/// dezelfde titel. Een teken dat in geen [discoKey] kan voorkomen.
+const _klein = '\u0000klein';
+
+bool _isKlein(RecordKind k) => k == RecordKind.single || k == RecordKind.ep;
+
+/// Is "single" hier alleen Deezers etiket op dezelfde plaat die een andere bron een album noemt?
+///
+/// Dan blijft het één plaat. Deezer noemt Janet Jacksons "Unbreakable" (19 nummers, 71 minuten) een
+/// single, en MusicBrainz en Discogs noemen het een album: uit elkaar gehouden kwam er een tegel bij
+/// Albums zonder Deezer-link en een "single" van 71 minuten bij Singles. Alleen als geen andere bron
+/// van een single of EP spreekt, én Deezer zelf niet ook een album met die titel heeft — want dan zijn
+/// het voor Deezer zelf al twee platen ("Taking Chances": album en single, twee nummers).
+bool _alleenDeezerZegtKlein(DiscoRelease klein, DiscoRelease groot) =>
+    klein.sources.length == 1 &&
+    klein.sources.contains(DiscoSource.deezer) &&
+    !groot.sources.contains(DiscoSource.deezer);
 
 /// De titel zonder een aanduiding van wat de plaat IS — soundtrack, live, of een tweede naam als
 /// "(N°3)" — of null. Geen uitgave-staart: die maakt een ander product, zie [heeftEditieStaart].
