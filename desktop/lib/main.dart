@@ -17288,6 +17288,7 @@ class NieuwSpeler extends ChangeNotifier {
       var klaar = false;
       var klinkt = false;
       if (vroeg != null) {
+        vroeg.zalKlinken();
         unawaited(vroeg.speelbaar.then((kan) {
           if (!kan || klaar || !magNog()) return;
           klinkt = true;

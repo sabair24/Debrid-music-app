@@ -243,6 +243,32 @@ void main() {
       expect(a.lijf, getagd);
     });
 
+    test('compleet vóór de speler opent, maar iemand wil het meteen horen: uit het geheugen, niet wachten',
+        () async {
+      // Gemeten op de pc (3.9.522, Do I Wanna Know?): 50 MB in één tel, 145 ms vóór mpv opende; mpv's
+      // verzoek wachtte op het opbergen en begon daarna opnieuw — een seconde te laat.
+      final alles = _bytes(300 * 1024);
+      final f = File(pad('in.flac'))..writeAsBytesSync(alles);
+      final g = await server.nieuw('snel');
+      g.zalKlinken();
+      g.poging(pad: f.path, totaal: alles.length);
+      g.goedgekeurd(const Duration(seconds: 30));
+      await g.binnen(); // nog niemand die luistert
+      final klok = Stopwatch()..start();
+      final antwoord = _haal(g.adres);
+      // De keuring en het opbergen duren even; intussen hoort mpv al te krijgen wat er is.
+      final a = await antwoord.timeout(const Duration(milliseconds: 1200), onTimeout: () => fail('wachtte op het opbergen'));
+      expect(klok.elapsed, lessThan(const Duration(milliseconds: 1200)));
+      expect(a.fout, isNull);
+      expect(a.lijf, alles);
+      final bib = File(pad('bib.flac'));
+      f.renameSync(bib.path);
+      bib.writeAsBytesSync([...List.filled(700, 3), ...alles]);
+      g.geland(bib.path);
+      final sprong = await _haal(g.adres, bereik: 'bytes=${200 * 1024}-');
+      expect(sprong.lijf, alles.sublist(200 * 1024), reason: 'een sprong daarna: dezelfde bytes als de kop die mpv las');
+    });
+
     test('een stroom zonder geheugen die het opbergen meemaakt: breuk, en een vervolg krijgt het einde', () async {
       final klein = Groeistroom(peil: const Duration(milliseconds: 20), vastPlafond: 1024);
       addTearDown(klein.stop);
@@ -450,6 +476,25 @@ void main() {
       expect(k?.username, 'juist');
     });
 
+    test('alleen de officiële lengte (±2 s) begint vroeg — in een wedloop wint wie het eerst stuurt', () {
+      // Saber, 20-10-2026: "wel letten dat hij de juiste song binnenhaalt, zoals in de app al zit".
+      expect(kies([f('01 - Kygo - Before You Know It.flac', sec: 233)])?.username, 'p', reason: '2 s scheelt: dezelfde opname');
+      expect(kies([f('01 - Kygo - Before You Know It.flac', peer: 'lang', sec: 240)]), isNull,
+          reason: 'binnen de radiomarge (15 s), maar niet de lengte: pas in de hele uitslag, en dan pas na de juiste');
+      expect(kies([f('01 - Kygo - Before You Know It.flac', sec: null)]), isNull, reason: 'onbekend is geen voorrang');
+      expect(
+          DownloadManager.vroegeKandidaat([f('01 - Kygo - Before You Know It.flac', sec: 240)],
+                  artiest: 'Kygo', titel: 'Before You Know It', seconden: null)
+              ?.username,
+          'p',
+          reason: 'zonder officiële lengte valt er niets te kiezen');
+      final online = File('lib/online.dart').readAsStringSync();
+      final haal = online.substring(online.indexOf('  Future<String?> _haalVoorRadio('));
+      expect(haal, contains('for (final deel in lengteDelen(flac, seconden)) {'),
+          reason: 'de hele uitslag: eerst de juiste lengte als wedloop, dan pas de rest');
+      expect(haal, contains('final over = deel.where(vrij).toList();\n            if (over.isEmpty) break;'));
+    });
+
     test('de haal begint vroeg en valt terug op de hele uitslag zonder wie afviel', () {
       final online = File('lib/online.dart').readAsStringSync();
       final haal = online.substring(online.indexOf('  Future<String?> _haalVoorRadio('));
@@ -472,12 +517,12 @@ void main() {
           reason: 'een nieuw nummer gaat door dezelfde functie');
     });
 
-    test('de vroege start is een wedloop: twintig tegelijk vanaf de start, de eerste wint', () {
+    test('de vroege start is een wedloop: dertig tegelijk vanaf de start, de eerste wint', () {
       final online = File('lib/online.dart').readAsStringSync();
       final w = online.substring(online.indexOf('  Future<({SoulseekFile f, SlskResult res, bool afgekeurd})?> _wedloop('));
       final lijf = w.substring(0, w.indexOf('\n  }\n'));
-      expect(online, contains('static const kWedloopTegelijk = 20;'), reason: 'elke loper erbij vergroot de kans');
-      expect(online, contains('static const kWedloopLopers = 20;'), reason: 'zoveel als het gewone downloaden');
+      expect(online, contains('static const kWedloopTegelijk = 30;'), reason: 'elke loper erbij vergroot de kans');
+      expect(online, contains('static const kWedloopLopers = 30;'));
       expect(online, contains('static const _maxLosslessTries = 20;'));
       expect(online, isNot(contains('kWedloopTussen')), reason: 'niet meer na elkaar, maar samen');
       expect(lijf, contains('if (winnaar != null) return false;'), reason: 'maar één winnaar');
@@ -501,7 +546,7 @@ void main() {
       expect(haal, contains('if (vroeg == null) ...bruikbaar.where((f) => !isLossless(f)),'),
           reason: 'in een wedloop wint wie het eerst stuurt — een mp3 zou een FLAC kunnen verslaan');
       expect(haal, contains('final flac = kandidaten.where(stroombaar).toList();'));
-      expect(haal, contains('final over = flac.where(vrij).toList();'), reason: 'de wedloop loopt alleen over FLAC');
+      expect(haal, contains('for (final deel in lengteDelen(flac, seconden)) {'), reason: 'de wedloop loopt alleen over FLAC');
       expect(haal, contains('for (final f in kandidaten.where(isLossless).take(3)) {'),
           reason: 'zonder FLAC nog een AIFF of WAV, nooit lossy');
       expect(haal, contains('if (kandidaten.isEmpty && alleenMp3 > 0) {'), reason: 'na te lezen in het logboek');
@@ -620,6 +665,11 @@ void main() {
       expect(speel, contains('speler.wordtLokaal(vroeg.adres, t);'));
       expect(speel, contains('if (vroeg != null && vroeg.geborgen == null) vroeg.opgegeven();'));
       expect(main, contains("..inGebruik = (a) => (player.mpvAdres ?? '').split('?').first == a || player.current?.path == a;"));
+      expect(speel, contains('vroeg.zalKlinken();\n        unawaited(vroeg.speelbaar.then((kan) {'),
+          reason: '▶ wil het meteen horen: ook een bestand dat binnen is vóór mpv opent, in het geheugen');
+      final radio = File('lib/radio.dart').readAsStringSync();
+      expect(radio, contains('p.stroomItem = it;\n        g.zalKlinken();'),
+          reason: 'de radio alleen als hij een stroomregel inzet — vooruit halen houdt niets vast');
     });
   });
 }

@@ -1325,6 +1325,7 @@ class RadioBesturing extends ChangeNotifier {
         final it = RadioItem(artist: p.artiest, title: p.titel)..url = g.adres;
         _plekVan[it] = p;
         p.stroomItem = it;
+        g.zalKlinken();
         _spoor?.call('radio-stroom: "${p.artiest} — ${p.titel}" klinkt al terwijl hij binnenkomt');
         speler.voegToeAanRadio([it]);
         stroom = true;

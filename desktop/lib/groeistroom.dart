@@ -369,6 +369,16 @@ class Groei {
     return w.klaar.future;
   }
 
+  /// Iemand wil dit meteen horen (▶, of de radio die een stroomregel in de rij zet): komt het hele bestand
+  /// binnen voordat de speler het opent, dan toch in het geheugen (zie [binnen]).
+  ///
+  /// **Waarom.** Gemeten op de pc (20-10-2026, 3.9.522, Arctic Monkeys — Do I Wanna Know?): een uploader
+  /// leverde 50 MB in één tel, 145 ms vóór mpv het adres opende. Niemand luisterde nog, dus niets
+  /// vastgehouden; mpv's verzoek wachtte op het opbergen, brak af en begon opnieuw in het opgeborgen
+  /// bestand — een seconde later dan nodig.
+  void zalKlinken() => _zalKlinken = true;
+  bool _zalKlinken = false;
+
   /// Kan het nu vanaf het begin klinken? Hetzelfde als [speelbaar], maar zonder te wachten — voor de
   /// radio, die elke tik kijkt wat er klaar is.
   bool get kanKlinken => _klinkbaar;
@@ -469,9 +479,9 @@ class Groei {
     final p = _huidig;
     if (p == null || p.afgebroken || _gesloten) return;
     p.klaar = true;
-    if (!p.gebruikt) {
-      // Niemand luistert nog: niets vasthouden. Komt er tijdens het opbergen toch een verzoek, dan wacht
-      // dat op [geland].
+    if (!p.gebruikt && !_zalKlinken) {
+      // Niemand luistert, en niemand zei dat hij het meteen wil horen (de radio die vooruit haalt): niets
+      // vasthouden. Komt er tijdens het opbergen toch een verzoek, dan wacht dat op [geland].
       p.verhuist = true;
       return;
     }

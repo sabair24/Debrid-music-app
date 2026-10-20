@@ -3466,16 +3466,21 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  /// Zoveel uploaders lopen tegelijk in een [_wedloop]: zoveel als er goede zijn, tot het maximum van het
-  /// gewone downloaden ([_maxLosslessTries]). Elke loper erbij kan de kans op een vlotte start alleen
-  /// vergroten. Gemeten op de pc (20-10-2026, 3.9.521): van zeven goede kandidaten (FLAC, vrije plek)
-  /// begonnen er twee à drie meteen te sturen; de rest was onbereikbaar, brak af zonder één byte of begon
-  /// pas na 20 s. Hoeveel elke loper boven de tiende nog uitmaakt, is niet gemeten — daarvoor logt de
-  /// wedloop welke loper won en hoeveel er al afgevallen waren.
-  static const kWedloopTegelijk = 20;
+  /// Zoveel uploaders lopen tegelijk in een [_wedloop]: zoveel als er goede zijn, tot dertig. Elke loper
+  /// erbij kan de kans op een vlotte start alleen vergroten.
+  ///
+  /// Gemeten op de pc (20-10-2026). Met 3.9.521: van zeven goede kandidaten (FLAC, vrije plek) begonnen er
+  /// twee à drie meteen te sturen; de rest was onbereikbaar, brak af zonder één byte of begon pas na 20 s.
+  /// Met twintig (3.9.522, vijf nummers via ▶) won loper #9, #4, #4, #3 en #19 — twee van de vijf stonden
+  /// voorbij de vijfde, één voorbij de tiende, en elke keer liepen er twintig. Dus dertig (Saber: "wat met
+  /// 30 tegelijkertijd?"); of de lopers 21–30 ooit winnen, staat in de logregel van de winnaar.
+  ///
+  /// Geen last voor Soulseek zelf: de overdrachten lopen tussen de peers, en het gewone downloaden houdt
+  /// tot [_slskMaxParallel] nummers met elk [_maxLosslessTries] peers tegelijk open.
+  static const kWedloopTegelijk = 30;
 
   /// Zoveel uploaders hoogstens in één [_wedloop], ook als er later in de zoekuitslag nog goede opduiken.
-  static const kWedloopLopers = 20;
+  static const kWedloopLopers = 30;
 
   /// Een wedloop voor een nummer met een groeistroom: niet op één uploader wachten.
   ///
@@ -3651,6 +3656,11 @@ class DownloadManager extends ChangeNotifier {
             isLossless(f) &&
             !isMultichannel(f) &&
             !nietBij.contains(f.username) &&
+            // Alleen de officiële lengte (±2 s, [lengteKlopt]) — zoals de race van het gewone downloaden
+            // ([lengteDelen]): in een wedloop wint wie het eerst stuurt, dus de voorkeur moet uit wie
+            // meedoet komen, niet uit een sortering. Een andere lengte binnen de radiomarge komt pas in
+            // de hele uitslag aan de beurt, als er niets met de juiste lengte is.
+            (seconden == null || seconden <= 0 || lengteKlopt(seconden, f.durationSec)) &&
             radioBestandKlopt(
                 artiest: artiest, titel: titel, seconden: seconden, pad: f.filename, padSeconden: f.durationSec))
           f
@@ -4018,16 +4028,21 @@ class DownloadManager extends ChangeNotifier {
         // in [_radioNietBij] staat, viel af of mislukte; de verliezers die stopten omdat een ander won, doen
         // gewoon weer mee.
         bool vrij(SoulseekFile k) => !(_radioNietBij[sleutel]?.contains(k.username) ?? false);
-        for (var ronde = 0; ronde < 3; ronde++) {
-          final over = flac.where(vrij).toList();
-          if (over.isEmpty) return;
-          final uit = await probeer(over.first, mee: (al) {
-            for (final k in over) {
-              if (!al.contains(k.username) && vrij(k)) return k;
-            }
-            return null;
-          });
-          if (uit != _Uit.volgende) return;
+        // Eerst alleen wat de officiële lengte heeft, dan pas de rest — zoals het gewone downloaden
+        // ([lengteDelen]; Saber: "letten dat hij de juiste song binnenhaalt"). Wie het eerst stuurt wint, dus
+        // een kopie die 10 s langer is mag niet meedoen zolang er een met de juiste lengte kan.
+        for (final deel in lengteDelen(flac, seconden)) {
+          for (var ronde = 0; ronde < 3; ronde++) {
+            final over = deel.where(vrij).toList();
+            if (over.isEmpty) break;
+            final uit = await probeer(over.first, mee: (al) {
+              for (final k in over) {
+                if (!al.contains(k.username) && vrij(k)) return k;
+              }
+              return null;
+            });
+            if (uit != _Uit.volgende) return;
+          }
         }
       });
     } on RadioLaterOpnieuw catch (e) {
