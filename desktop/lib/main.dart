@@ -535,6 +535,10 @@ Future<void> main() async {
   // WarmLog schrijft gespoeld en synchroon.
   final kopLog = WarmLog('$logDir${Platform.pathSeparator}kop.log');
   FotoBlikGeheugen.meld = (r) => Timer.run(() => kopLog.line(r));
+  // De Deezer-rij: weigeringen en trage verzoeken (zie [DeezerBaan.traagVanaf]), en hoe lang Online
+  // zoeken op zijn drie lijsten wacht.
+  final deezerLog = WarmLog('$logDir${Platform.pathSeparator}deezer.log');
+  DeezerBaan.spoor = (r) => Timer.run(() => deezerLog.line(r));
   // Het oordeel van de glasproef (ui/glasproef.dart) ook in kop.log, en in logcat via debugPrint.
   Glasproef.meld = (r) {
     debugPrint(r);
@@ -21427,11 +21431,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     final dgVoor = DiscogsService.transportErrors;
     final mbVoor = MusicBrainzService.transportErrors;
     try {
+      final klok = Stopwatch()..start();
       final res = await Future.wait([
         _catalog.searchArtists(q),
         _catalog.searchAlbums(q),
         _catalog.searchTracks(q),
       ]);
+      DeezerBaan.spoor?.call('online zoeken: drie lijsten na ${klok.elapsedMilliseconds} ms '
+          '(${DeezerBaan.wachtend} nog in de rij)');
       if (!geldig()) return;
       _albumHits = res[1] as List<CatalogAlbumHit>;
       _trackHits = res[2] as List<CatalogTrackHit>;

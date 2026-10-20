@@ -111,4 +111,32 @@ void main() {
     DeezerBaan.vergeet();
     expect(DeezerBaan.gekendId('adele'), isNull);
   });
+
+  // Online zoeken duurde op de gsm 3,2 s, Deezer zelf 0,2 s: het spoor moet zeggen waar de rest zat.
+  group('het spoor van trage verzoeken', () {
+    late List<String> regels;
+    setUp(() {
+      regels = [];
+      DeezerBaan.spoor = regels.add;
+    });
+    tearDown(() => DeezerBaan.spoor = null);
+
+    test('een traag antwoord meldt het pad en de tijd, nooit de zoektekst', () async {
+      final traag = MockClient((_) async {
+        await Future<void>.delayed(DeezerBaan.traagVanaf + const Duration(milliseconds: 50));
+        return http.Response(jsonEncode({'data': []}), 200);
+      });
+      await DeezerBaan.haal('https://api.deezer.com/search/album?q=geheime%20vraag&limit=20', client: traag);
+      expect(regels, hasLength(1));
+      expect(regels.single, startsWith('/search/album: '));
+      expect(regels.single, contains('ms bij Deezer'));
+      expect(regels.single, isNot(contains('geheime')));
+    });
+
+    test('een vlot antwoord zegt niets', () async {
+      final vlot = MockClient((_) async => http.Response(jsonEncode({'data': []}), 200));
+      await DeezerBaan.haal('https://api.deezer.com/search?q=x', client: vlot);
+      expect(regels, isEmpty);
+    });
+  });
 }
