@@ -1218,6 +1218,18 @@ class DownloadJob {
 
   /// The track is on disk and playable — even if something is still running for it.
   bool get playable => status == 'done' || status == 'upgrading';
+
+  /// Hoort deze taak in de hervatnotitie (`pending_downloads.json`)? Alleen wat nog niet speelbaar is.
+  ///
+  /// Een taak die al geland is en nog op betere kwaliteit jaagt (`upgrading`) telt als [busy], en ging
+  /// zo de notitie in op het moment dat de race afliep — de jacht liep dan nog. Na de jacht schreef
+  /// niemand de notitie opnieuw, dus bij de volgende start haalde de pc het hele nummer nog eens, met de
+  /// kandidaten van toen. Gemeten op 21-10-2026: Doechii — Anxiety, om 23:44 al in 88.2 kHz binnen,
+  /// werd na de herstart opnieuw gehaald (80,7 MB) en weggegooid ("niet bewezen beter dan wat je
+  /// hebt") — op het moment van een ▶, want een hervatting wacht op de eerste Soulseek-sessie.
+  /// Een onderbroken jacht kost niets: je hebt het nummer, en een lossy landing staat al als wens op
+  /// de lijst ([DownloadManager._wantLossless]).
+  bool get hoortInHervatnotitie => busy && !playable && candidates.isNotEmpty;
   DownloadJob(this.name, {this.key, this.status = 'downloading'}) : progress = 0;
 }
 
@@ -1877,7 +1889,7 @@ class DownloadManager extends ChangeNotifier {
 
   Future<void> _savePending() async {
     try {
-      final open = jobs.where((j) => j.busy && j.candidates.isNotEmpty).toList();
+      final open = jobs.where((j) => j.hoortInHervatnotitie).toList();
       if (open.isEmpty) {
         if (await _pendingFile.exists()) await _pendingFile.delete();
         return;
