@@ -162,7 +162,13 @@ class CatalogTrackHit {
   final String? cover;
   final String? album;
   final int? seconden;
-  const CatalogTrackHit(this.title, this.artist, this.cover, {this.album, this.seconden});
+
+  /// De Deezer-artiest van dit nummer, met foto — voor de artiestenrij van Online zoeken (zie
+  /// `zoek_artiesten.dart`). Null als de bron het niet zegt.
+  final int? artistId;
+  final String? artistPicture;
+  const CatalogTrackHit(this.title, this.artist, this.cover,
+      {this.album, this.seconden, this.artistId, this.artistPicture});
   String get query => artist.isEmpty ? title : '$artist $title';
 }
 
@@ -318,6 +324,8 @@ class CatalogService {
               (t['album']?['cover_medium'] ?? t['album']?['cover']) as String?,
               album: t['album']?['title'] as String?,
               seconden: (t['duration'] as num?)?.toInt(),
+              artistId: (t['artist']?['id'] as num?)?.toInt(),
+              artistPicture: (t['artist']?['picture_big'] ?? t['artist']?['picture_medium']) as String?,
             ))
         .where((h) => h.title.isNotEmpty && seen.add('${h.artist.toLowerCase()}|${h.title.toLowerCase()}'))
         .toList();
@@ -389,6 +397,8 @@ class CatalogService {
               (t['album']?['cover_medium'] ?? t['album']?['cover']) as String?,
               album: t['album']?['title'] as String?,
               seconden: (t['duration'] as num?)?.toInt(),
+              artistId: (t['artist']?['id'] as num?)?.toInt(),
+              artistPicture: (t['artist']?['picture_big'] ?? t['artist']?['picture_medium']) as String?,
             ))
         .where((h) => h.title.isNotEmpty && seen.add('${h.artist.toLowerCase()}|${h.title.toLowerCase()}'))
         .toList();

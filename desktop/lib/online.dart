@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show max, min;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
@@ -1164,7 +1165,24 @@ class DownloadManager extends ChangeNotifier {
   /// answers "you're in my queue" frees its slot immediately and keeps waiting in the background,
   /// so within half a minute the whole shortlist is engaged. Peer connections, not logins — the
   /// shared session is untouched, so this cannot repeat the login problem.
+  ///
+  /// The FLOOR now — see [raceBreedte] for how wide a race actually starts.
   static const _probeWidth = 6;
+
+  /// Zoveel uploaders spreken alle lopende downloads samen ongeveer tegelijk aan — zie [raceBreedte].
+  static const kRaceBudget = 30;
+
+  /// Hoeveel kandidaten één race tegelijk aanspreekt: het [kRaceBudget] verdeeld over de downloads die
+  /// lopen, nooit minder dan [_probeWidth] en nooit meer dan [cap].
+  ///
+  /// **Waarom.** Gemeten op de pc (20-10-2026): "Tell Him" met ⬇ — 141 kopieën met de officiële lengte,
+  /// zes kanalen, en elk kanaal wachtte tot zijn uploader antwoordde of opgaf (een onbereikbare houdt er
+  /// één tot ~20 s vast): 56 s voor het bestand er stond. Met ▶, waar dertig meteen samen beginnen
+  /// ([kWedloopTegelijk]), werden populaire nummers 4 à 8 s. Saber: "dat zou het gewone downloaden
+  /// drastisch versnellen". Eén nummer begint dus met alle twintig samen; een album van twaalf blijft
+  /// op zes per nummer, zodat het totaal niet honderden verbindingen in één tel wordt.
+  static int raceBreedte({required int actief, required int cap}) =>
+      max(_probeWidth, min(cap, kRaceBudget ~/ max(1, actief)));
 
   /// Total time spent chasing a better copy after a playable one already landed.
   static const _upgradeBudget = Duration(minutes: 10);
@@ -2191,7 +2209,7 @@ class DownloadManager extends ChangeNotifier {
       }
 
       paint();
-      final feeders = List.generate(_probeWidth, (_) => feeder());
+      final feeders = List.generate(raceBreedte(actief: _slskActive, cap: n), (_) => feeder());
       await Future.wait(feeders);
       // Everyone has been asked and nobody is sending, so this job is now just holding places in
       // other people's queues: hand the parallel slot to the next download. Releasing it on the

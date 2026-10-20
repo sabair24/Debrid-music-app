@@ -116,6 +116,7 @@ import 'kwaliteit_blad.dart';
 import 'overblok.dart';
 import 'ui/wikifoto_beeld.dart';
 import 'wikifotos.dart';
+import 'zoek_artiesten.dart';
 import 'fotomaat.dart';
 import 'wikipedia.dart';
 import 'warm_log.dart' show WarmLog;
@@ -20119,7 +20120,7 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
 /// [zonder]: wat er staat als er GEEN hoes is of hij niet laadt. Standaard het grijze vak met een
 /// schijfje; de discografie geeft een [PlaatTegel] mee — zie daar waarom.
 Widget _netCover(String? url,
-    {double size = 160, double radius = 12, bool circle = false, Widget? zonder}) {
+    {double size = 160, double radius = 12, bool circle = false, Widget? zonder, Map<String, String>? headers}) {
   final shape = circle ? BoxShape.circle : BoxShape.rectangle;
   final br = circle ? null : BorderRadius.circular(radius);
   final placeholder = Container(
@@ -20134,6 +20135,7 @@ Widget _netCover(String? url,
   );
   if (url == null || url.isEmpty) return zonder ?? placeholder;
   final beeld = Image.network(url,
+      headers: headers,
       width: size,
       height: size,
       fit: BoxFit.cover,
@@ -21180,7 +21182,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         final have = {for (final a in _artists) artistKey(a.name)};
         final add = [
           for (final a in found)
-            if (have.add(artistKey(a.name)))
+            // Alleen wie de zoekzin begint: MusicBrainz zoekt op losse woorden ("Good Luck", "BaBe",
+            // "Roan" bij "Chappell Roan Good Luck Babe") — zie [mbArtiestPastBijZoekzin].
+            if (mbArtiestPastBijZoekzin(q, a.name) && have.add(artistKey(a.name)))
               CatalogArtist(0, a.name, null, 0,
                   origin: CatalogRef.musicbrainz(a.mbid), detail: a.line)
         ];
@@ -21297,9 +21301,11 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         _catalog.searchTracks(q),
       ]);
       if (!geldig()) return;
-      _artists = res[0] as List<CatalogArtist>;
       _albumHits = res[1] as List<CatalogAlbumHit>;
       _trackHits = res[2] as List<CatalogTrackHit>;
+      // Ook de artiesten van de gevonden nummers, met hun Deezer-foto: "Chappell Roan Good Luck Babe"
+      // is geen artiestennaam, dus de artiestenzoektocht vond niemand — zie `zoek_artiesten.dart`.
+      _artists = artiestenVoorZoekrij(res[0] as List<CatalogArtist>, _trackHits, q);
       // Nog geen reden geven: Discogs en MusicBrainz zijn hieronder nog aan het werk, en een
       // oordeel over "waarom leeg" is pas te vellen als iedereen geantwoord heeft.
       _status = (_artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty)
@@ -21850,8 +21856,24 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                       children: [
                         // Dezelfde vorm als het artiestenraster, maar de foto van precies deze
                         // gevonden artiest (Deezer): op naam zoeken bij TheAudioDB kan hier een
-                        // naamgenoot opleveren.
-                        _netCover(a.picture, size: 116, radius: kArtiestHoek),
+                        // naamgenoot opleveren. Alleen van MusicBrainz (geen Deezer-foto): op zijn
+                        // MusicBrainz-nummer bij TheAudioDB, Discogs of Wikipedia — [MbArtiestFoto].
+                        if (a.picture == null && (a.origin?.isMb ?? false))
+                          Builder(builder: (context) {
+                            final discogs = DiscogsService(context.read<AppSettings>());
+                            return FutureBuilder<String?>(
+                              key: ValueKey('mbfoto-${a.origin!.id}'),
+                              future: MbArtiestFoto.voor(a.origin!.id, context.read<MusicBrainzService>(),
+                                  discogs: discogs),
+                              builder: (_, s) => _netCover(s.data,
+                                  size: 116,
+                                  radius: kArtiestHoek,
+                                  // Een Discogs-plaatje vraagt de sleutel; elders gaat die niet heen.
+                                  headers: s.data == null ? null : discogs.beeldKoppen(s.data!)),
+                            );
+                          })
+                        else
+                          _netCover(a.picture, size: 116, radius: kArtiestHoek),
                         const SizedBox(height: 6),
                         Text(a.name,
                             maxLines: 1,

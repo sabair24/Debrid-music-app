@@ -2389,20 +2389,18 @@ extension DiscogsArtwork on DiscogsService {
   Future<Uint8List?> _fetchIf(String? url) async =>
       (url == null || url.isEmpty) ? null : fetchImage(url);
 
+  /// De kopregels om [url] op te halen: het token alleen naar Discogs zelf. Ook voor een plaatje dat het
+  /// scherm rechtstreeks laadt (`Image.network(headers:)`), zoals een artiestenfoto in Online zoeken.
+  Map<String, String> beeldKoppen(String url) => {
+        'User-Agent': DiscogsService._ua,
+        if (scanBronVan(url) == ScanBron.discogs) 'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
+      };
+
   Future<Uint8List?> fetchImage(String url) async {
     try {
       // Het token alleen naar Discogs zelf. Deze ophaler kreeg ook adressen van elders aangereikt —
       // zie `scanBronVan` — en zette het token dan in de kopregel naar die andere dienst.
-      final naarDiscogs = scanBronVan(url) == ScanBron.discogs;
-      final r = await http
-          .get(
-            Uri.parse(url),
-            headers: {
-              'User-Agent': DiscogsService._ua,
-              if (naarDiscogs) 'Authorization': 'Discogs token=${settings.discogsToken.trim()}',
-            },
-          )
-          .timeout(const Duration(seconds: 20));
+      final r = await http.get(Uri.parse(url), headers: beeldKoppen(url)).timeout(const Duration(seconds: 20));
       return r.statusCode == 200 && r.bodyBytes.length > 500 ? r.bodyBytes : null;
     } catch (_) {
       return null;
