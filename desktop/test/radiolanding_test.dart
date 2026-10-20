@@ -75,6 +75,11 @@ class _Speler implements PlayerStore {
     return true;
   }
 
+  // De radio luistert of hij stil komt te staan (groeistroom); hier gebeurt dat niet.
+  @override
+  void addListener(void Function() listener) {}
+  @override
+  void removeListener(void Function() listener) {}
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

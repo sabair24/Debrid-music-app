@@ -181,6 +181,10 @@ class AppSettings extends ChangeNotifier {
   /// Is de eenmalige aankondiging ("dit nummer speelt 6,2 dB zachter…") al gezien?
   bool luidheidUitgelegd = false;
 
+  /// Een nieuw nummer van Soulseek al laten klinken terwijl het binnenkomt (zie `groeistroom.dart`).
+  /// Alleen op de pc, alleen FLAC. Een proef (20-10-2026): staat standaard aan, en is hier uit te zetten.
+  bool vroegLuisteren = true;
+
   static File file() {
     return appFile('settings.json');
   }
@@ -362,6 +366,7 @@ class AppSettings extends ChangeNotifier {
         luidheid = (m['luidheid'] ?? 'normaal') as String;
         luidheidAlbum = (m['luidheid_album'] ?? true) as bool;
         luidheidUitgelegd = (m['luidheid_uitgelegd'] ?? false) as bool;
+        vroegLuisteren = (m['vroeg_luisteren'] ?? true) as bool;
     }
   }
 
@@ -409,6 +414,7 @@ class AppSettings extends ChangeNotifier {
         'luidheid': luidheid,
         'luidheid_album': luidheidAlbum,
         'luidheid_uitgelegd': luidheidUitgelegd,
+        'vroeg_luisteren': vroegLuisteren,
       };
 
   /// Write the settings down.

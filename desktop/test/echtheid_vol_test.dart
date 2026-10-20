@@ -167,6 +167,14 @@ void main() {
       expect(main, contains('unawaited(echtVeger.start()'));
     });
 
+    test('wat niet te beoordelen is, meet de veger niet elke ronde opnieuw', () {
+      final v = bron('lib/echtheid_veger.dart');
+      expect(v, contains('!_onbeoordeelbaar.contains(t.path.toLowerCase())'));
+      expect(v, contains('_onbeoordeelbaar.add(t.path.toLowerCase());'));
+      expect(v, contains('if (gedaan > niets) library.refreshFromCorrections();'),
+          reason: 'verversen telt als een verandering en start de volgende ronde: op 20-10-2026 elke 30 s');
+    });
+
     test('de meter meet het hele bestand, in een isolate, met de MD5', () {
       final m = bron('lib/echtheid_meter.dart');
       expect(m, contains('await Isolate.spawn('));

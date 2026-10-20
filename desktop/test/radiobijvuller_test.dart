@@ -48,6 +48,11 @@ class _Speler implements PlayerStore {
     ..addAll(items);
   @override
   void voegToeAanRadio(List<RadioItem> meer) => rij.addAll(meer);
+  // De radio luistert of hij stil komt te staan (groeistroom); hier gebeurt dat niet.
+  @override
+  void addListener(void Function() listener) {}
+  @override
+  void removeListener(void Function() listener) {}
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

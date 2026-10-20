@@ -386,3 +386,27 @@ bool radioTagsSprekenTegen(String artiest, String titel, TrackTags? tags) {
   }
   return false;
 }
+
+/// Mag een radiobestand dat nog BINNENKOMT al klinken? Null als ja, anders waarom niet.
+///
+/// Dezelfde netten als ná het halen in `_haalVoorRadio` — ander nummer volgens de tags, geen tags die
+/// erin te zetten zijn, een andere lengte — maar op de kop van het bestand, die bij een FLAC vóór de
+/// audio staat (STREAMINFO met de looptijd, de Vorbis-tags). Zo klinkt er nooit eerst een verkeerd
+/// nummer dat daarna weggegooid wordt: wat hier niet door komt, wordt meteen afgebroken en de
+/// volgende uploader is aan de beurt. Zonder leesbare looptijd valt er niets te beloven: dan niet.
+String? vroegeAfkeur({
+  required String artiest,
+  required String titel,
+  required int? seconden,
+  required TrackTags? tags,
+  required int? bestandSeconden,
+  required String pad,
+}) {
+  if (bestandSeconden == null || bestandSeconden <= 0) return 'geen looptijd in de kop';
+  if (radioTagsSprekenTegen(artiest, titel, tags)) return 'een ander nummer (${tags?.artist} — ${tags?.title})';
+  if (radioZonderTags(tags, pad)) return 'geen tags';
+  if (radioLengteSpreektTegen(seconden, bestandSeconden)) {
+    return '$bestandSeconden s, gevraagd $seconden s — een andere versie';
+  }
+  return null;
+}

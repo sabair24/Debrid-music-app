@@ -72,6 +72,7 @@ import 'facts_warmer.dart';
 import 'ffmpeg.dart';
 import 'fingerprint.dart';
 import 'flac_tags.dart';
+import 'groeistroom.dart';
 import 'mp3_tags.dart';
 import 'aanbevolen.dart' show AanbevolenLijst, AanbevolenVoorJou;
 import 'afspeellijsten.dart';
@@ -903,6 +904,12 @@ Future<void> main() async {
   // dan raakt `metStand` de URL niet aan. Een `if (mode.owner)` eromheen zou alleen een tweede
   // plek zijn waar dit stuk kapot kan.
   player.onHapering = netStore.hapering;
+  // Spelen terwijl het nog binnenkomt (groeistroom.dart): een eigen logboek, want het gebeurt op de
+  // achtergrond en "het haperde" moet terug te lezen zijn. En wat mpv nog speelt, blijft staan.
+  final groeiLog = WarmLog('$appDir${Platform.pathSeparator}groeistroom.log');
+  Groeistroom.gedeeld
+    ..spoor = groeiLog.line
+    ..inGebruik = (a) => player.mpvAdres == a || player.current?.path == a;
   // De mediatoetsen van het toetsenbord en de knoppen in de taakbalk, op Windows. Zie mediabediening.dart.
   Mediabediening.start(speler: player, speaker: speakers, meld: startLog.line);
   // Wisselt het toestel van netwerk (wifi weg, mobiel erbij, Tailscale aan of uit), dan meteen
@@ -1066,7 +1073,10 @@ Future<void> main() async {
             library: library,
             instellingen: settings)
         : PcRadiobron(library: library, clientOf: () => library.remote),
-  )..idVanPad = library.gedeeldId;
+  )
+    ..idVanPad = library.gedeeldId
+    // Spelen terwijl het binnenkomt (groeistroom.dart): dezelfde schakelaar als bij een nieuw nummer.
+    ..vroegLuisteren = (() => settings.vroegLuisteren);
 
   // Share this library with the Mac, the iPad and the Shield. Started before the scan finishes:
   // a device probing /health then gets a real answer straight away, and the catalogue fills in
@@ -17166,6 +17176,7 @@ class NieuwSpeler extends ChangeNotifier {
     final lib = context.read<LibraryStore>();
     final speler = context.read<PlayerStore>();
     final online = context.read<OnlineService>();
+    final instellingen = context.read<AppSettings>();
     // Al binnen (eerder opgehaald, of je had hem al): gewoon spelen.
     final eigen = lib.ownedTrack(n.artiest, n.titel);
     if (eigen != null) {
@@ -17178,7 +17189,7 @@ class NieuwSpeler extends ChangeNotifier {
             downloads: context.read<DownloadManager>(),
             soulseek: context.read<SoulseekService>(),
             library: lib,
-            instellingen: context.read<AppSettings>())
+            instellingen: instellingen)
         : PcRadiobron(library: lib, clientOf: () => lib.remote);
     _bezig.add(sleutel);
     notifyListeners();
@@ -17203,6 +17214,22 @@ class NieuwSpeler extends ChangeNotifier {
         if (context.mounted) _srcToast(context, fout);
         return;
       }
+      // Al laten klinken terwijl hij binnenkomt (Saber, 20-10-2026) — zie `groeistroom.dart`. Alleen
+      // waar deze machine zelf haalt; de haal zegt wanneer het kan (kop gelezen en goedgekeurd, genoeg
+      // binnen om zonder haperen door te spelen).
+      final vroeg = bron is EigenRadiobron && instellingen.vroegLuisteren
+          ? await Groeistroom.gedeeld.nieuw('${n.artiest} — ${n.titel}')
+          : null;
+      var klaar = false;
+      var klinkt = false;
+      if (vroeg != null) {
+        unawaited(vroeg.speelbaar.then((kan) {
+          if (!kan || klaar) return;
+          klinkt = true;
+          speler.playUrl(vroeg.adres, title: n.titel, artist: n.artiest);
+          if (context.mounted) _srcToast(context, '"${n.titel}" speelt al terwijl hij binnenkomt');
+        }));
+      }
       try {
         Track? t;
         // De radio probeert drie uploaders en gaat dan naar het volgende nummer; hier vroeg je dít
@@ -17210,23 +17237,34 @@ class NieuwSpeler extends ChangeNotifier {
         // (`_radioNietBij` in online.dart): tot negen. Gemeten op de pc (19-10-2026): "Babylon" van
         // Taylor Swift, 171 van 249 treffers goed, drie afgebroken overdrachten, en er speelde niets.
         for (var ronde = 0; ronde < kNieuwHaalRondes && t == null; ronde++) {
+          final plek = Radioplek(artiest: n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null);
           try {
-            t = await bron.haal(
-                Radioplek(artiest: n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null));
+            t = vroeg != null ? await (bron as EigenRadiobron).haal(plek, vroeg: vroeg) : await bron.haal(plek);
           } on AlVanJou catch (e) {
             t = e.nummer;
           }
         }
+        klaar = true;
         if (t == null) {
           if (context.mounted) {
             _srcToast(context, '"${n.titel}" nergens gevonden — lang drukken voor de bronnen.');
           }
           return;
         }
-        speler.playQueue([t], 0);
+        if (vroeg != null && klinkt) {
+          // Het klinkt al: niets opnieuw openen. In de rij wordt het je eigen nummer (hoes, kwaliteit,
+          // duimen); mpv speelt door uit het geheugen van de groeistroom. Koos je intussen iets anders,
+          // dan blijft dat spelen.
+          speler.wordtLokaal(vroeg.adres, t);
+        } else {
+          speler.playQueue([t], 0);
+        }
       } on RadioLaterOpnieuw catch (e) {
         if (context.mounted) _srcToast(context, 'Nu even niet: ${e.waarom}');
       } finally {
+        klaar = true;
+        // Niets geland: wie nog op een volgende uploader wacht, hoort dat er geen komt.
+        if (vroeg != null && vroeg.geborgen == null) vroeg.opgegeven();
         bron.einde();
       }
     } catch (e) {
@@ -28225,6 +28263,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       ],
                     ),
                     _field('Soulseek luisterpoort (zelfde als de native app)', _slskPort),
+                    if (_isDesktop) const VroegLuisterenKeuze(),
                     Padding(
                       padding: EdgeInsets.only(bottom: 8),
                       child: Text(
@@ -35062,6 +35101,32 @@ class ThemaKeuzeRegel extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// Spelen terwijl het binnenkomt (groeistroom.dart), aan of uit. Alleen op de pc: die haalt zelf.
+class VroegLuisterenKeuze extends StatelessWidget {
+  const VroegLuisterenKeuze({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = context.watch<AppSettings>();
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      value: settings.vroegLuisteren,
+      onChanged: (aan) async {
+        settings.vroegLuisteren = aan;
+        await settings.save();
+      },
+      title: const Text('Al spelen terwijl het binnenkomt (proef)',
+          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+      subtitle: Text(
+          'Een nieuw nummer van Soulseek klinkt zodra de kop klopt (dit nummer, de juiste lengte) en er '
+          'genoeg binnen is om zonder haperen door te spelen. Haakt de uploader af, dan gaat het verder '
+          'bij de volgende, op dezelfde plek. Alleen FLAC.',
+          style: TextStyle(color: _muted, fontSize: 11.5)),
+    );
+  }
 }
 
 class TorrentmotorKeuze extends StatelessWidget {

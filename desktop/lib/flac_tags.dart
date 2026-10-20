@@ -229,6 +229,37 @@ FlacKern? leesFlacKern(File f) {
   }
 }
 
+/// Waar de audio begint: de byte na het laatste metablok. Null als de kop er (nog) niet helemaal staat,
+/// of als er nog geen byte audio achter staat.
+///
+/// Voor een bestand dat nog BINNENKOMT (`groeistroom.dart`): pas met de hele kop is te zeggen wat het is
+/// en hoe lang het duurt, en de rekensom "staat er genoeg om door te spelen" gaat over de audio — niet
+/// over een hoes van een paar megabyte vooraan. Eigen openSync/closeSync, zoals [leesFlacKern].
+int? flacAudioBegin(File f) {
+  RandomAccessFile? raf;
+  try {
+    raf = f.openSync();
+    if (flacBegin(raf) < 0) return null;
+    final lengte = raf.lengthSync();
+    for (var block = 0; block < 128; block++) {
+      final h = raf.readSync(4);
+      if (h.length < 4) return null;
+      final len = (h[1] << 16) | (h[2] << 8) | h[3];
+      final na = raf.positionSync() + len;
+      if (na > lengte) return null;
+      if ((h[0] & 0x80) != 0) return na < lengte ? na : null;
+      raf.setPositionSync(na);
+    }
+    return null;
+  } catch (_) {
+    return null;
+  } finally {
+    try {
+      raf?.closeSync();
+    } catch (_) {}
+  }
+}
+
 /// Reads [f]'s FLAC tags, or null if it isn't FLAC / has no readable header.
 FlacTags? readFlacTags(File f) {
   RandomAccessFile? raf;

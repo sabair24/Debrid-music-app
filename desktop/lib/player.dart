@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'artwork.dart' show HoesVlek, kleurEnVlekkenBuitenDeTekendraad;
+import 'groeistroom.dart' show Groeistroom;
 import 'kapot_bestand.dart' show waaromNietTeOpenen;
 import 'lan/stroomstand.dart' show grensUitUrl;
 import 'luidheid.dart' show Bijstelbron, Bijstelling, adresSleutel;
@@ -1293,6 +1294,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     // beschreef en nergens werd aangeroepen.
     _player.stream.error.listen((e) {
       if (e.trim().isEmpty) return;
+      if (_breukInGroeistroom(e)) return;
       // Tijdens het overslaan van een radionummer: onthouden, niet weggooien en niet meteen
       // afhandelen. Zie [_radioOverslaan]: mpv meldt twee keer per mislukte opening, en de tweede
       // melding zou anders het VOLGENDE nummer treffen.
@@ -1304,7 +1306,10 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     });
     _stilstandTikker = Timer.periodic(const Duration(seconds: 2), (_) {
       final vast = _wacht.voeden(speelt: playing, positie: position, nu: DateTime.now());
-      if (vast) {
+      if (vast && Groeistroom.isAdres(mpvAdres ?? '')) {
+        // Een nummer dat nog binnenkomt (groeistroom.dart): de uploader hapert, niet de pc of het net.
+        _meldStilstand('Wacht op de download — de uploader hapert…');
+      } else if (vast) {
         _meldStilstand('Er komt geen geluid — staat de pc aan?');
         onHapering?.call();
       } else if (playing && position > Duration.zero) {
@@ -1784,6 +1789,14 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       mislukt: _hervatpogingen,
     )) {
       case NaHetEinde.stroomHervatten:
+        // Een nummer dat nog binnenkomt en waarvan de uploader afhaakte: niet het algemene hervatten
+        // (dat opent meteen opnieuw en springt; hier is er misschien nog geen volgende uploader), maar
+        // wachten tot de volgende ver genoeg is. Zie [_hervatGroei].
+        final groei = Groeistroom.gedeeld.van(current?.path ?? '');
+        if (groei != null) {
+          unawaited(_hervatGroei(current!, position));
+          return;
+        }
         _hervatpogingen++;
         _log?.line('AFGEBROKEN op $position van $duration — poging $_hervatpogingen'
             ' — ${current?.title ?? "?"}');
@@ -1809,6 +1822,98 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
         }
         next();
     }
+  }
+
+  /// Een melding van een groeistroom (groeistroom.dart) die midden in het nummer afbrak? Die eindigt in een
+  /// half frame: mpv meldt "Error decoding audio" en speelt door tot het einde van wat er is. Dat einde
+  /// handelt [_hervatGroei] af. Zonder deze uitzondering liep de gewone foutafhandeling (opnieuw openen,
+  /// vanaf nul) er dwars doorheen. Gezien in de proef van 20-10-2026, bij elke breuk.
+  bool _breukInGroeistroom(String e) {
+    if (position <= Duration.zero || !Groeistroom.isAdres(mpvAdres ?? '')) return false;
+    _log?.line('groeistroom: $e');
+    return true;
+  }
+
+  /// Een groeistroom (groeistroom.dart) brak af: de uploader haakte af, of het bestand werd opgeborgen
+  /// zonder in het geheugen te passen. Wachten tot de volgende uploader zo ver is dat het vanaf [plek]
+  /// zonder haperen door kan spelen — of tot het nummer binnen is — en dan op [plek] verder.
+  ///
+  /// **Met een startpositie en niet open-en-springen.** Het algemene [_hervatOpDezelfdePlek] springt
+  /// zodra er een duur is, en die staat er bij hetzelfde nummer al; met een server die nog op de
+  /// volgende uploader wacht, verdween die sprong in het niets en begon het nummer van voren af aan.
+  /// mpv's `start` geldt vóór de eerste byte audio: geen tel van het begin, en geen sprong die mislukt.
+  Future<void> _hervatGroei(Track t, Duration plek) async {
+    final g = Groeistroom.gedeeld.van(t.path);
+    if (g == null) return;
+    _log?.line('GROEISTROOM AFGEBROKEN op ${plek.inSeconds} s — wacht op de volgende uploader — ${t.title}');
+    _meldStilstand('Andere bron — even geduld…');
+    final klok = Stopwatch()..start();
+    final kan = await g.speelbaarVanaf(plek);
+    // Intussen geland: dan is de regel in de rij nu je eigen bestand ([wordtLokaal],
+    // [wordtLokaalInRadio]) — en dan dáár verder, op dezelfde plek. Intussen iets anders gekozen: niets.
+    final nu = current;
+    final geborgen = g.geborgen;
+    final verder = nu?.path == t.path ? t.path : (geborgen != null && nu?.path == geborgen ? geborgen : null);
+    if (verder == null) return;
+    if (!kan) {
+      _log?.line('GROEISTROOM OPGEGEVEN — geen andere uploader — ${t.title}');
+      // In de radio: door naar het volgende, zoals bij elk nummer dat niet te openen is.
+      if (radioMode) {
+        unawaited(_radioOverslaan('geen andere uploader', bestand: false));
+        return;
+      }
+      _meldStilstand('Geen andere bron gevonden voor dit nummer');
+      return;
+    }
+    _log?.line('GROEISTROOM VERDER op ${plek.inSeconds} s na ${klok.elapsedMilliseconds} ms — ${t.title}');
+    _meldStilstand(null);
+    try {
+      await _player.open(Media(_bron(verder), start: plek), play: true);
+    } catch (e) {
+      _log?.line('GROEISTROOM VERDER MISLUKT: $e');
+    }
+  }
+
+  /// Wat mpv NU speelt. Na [wordtLokaal] is dat nog het adres van de groeistroom, terwijl het nummer in
+  /// de rij al het bestand in je bibliotheek is.
+  String? get mpvAdres {
+    final pl = _player.state.playlist;
+    return pl.index >= 0 && pl.index < pl.medias.length ? pl.medias[pl.index].uri : null;
+  }
+
+  /// Het nummer dat via [adres] (een groeistroom) klinkt, staat nu in je bibliotheek als [t]: in de rij
+  /// het echte nummer, zonder dat er iets opnieuw opent — mpv speelt gewoon door uit het geheugen van de
+  /// groeistroom. Breekt de stroom daarna toch nog, dan opent het gewone hervatten dít bestand.
+  void wordtLokaal(String adres, Track t) {
+    var raak = false;
+    for (var i = 0; i < _original.length; i++) {
+      if (_original[i].path == adres) {
+        _original[i] = t;
+        raak = true;
+      }
+    }
+    for (var i = 0; i < _order.length; i++) {
+      if (_order[i].path == adres) {
+        _order[i] = t;
+        raak = true;
+      }
+    }
+    if (raak) {
+      _log?.line('GROEISTROOM in je bibliotheek: ${t.path}');
+      notifyListeners();
+    }
+  }
+
+  /// Zoals [wordtLokaal], voor een radioregel: de regel [oud] (een groeistroom) wordt het nummer [t] uit
+  /// je bibliotheek. Geeft de nieuwe regel terug, of null als [oud] niet meer in de rij staat.
+  RadioItem? wordtLokaalInRadio(RadioItem oud, Track t) {
+    final i = _radio.indexOf(oud);
+    if (i < 0) return null;
+    final nieuw = RadioItem(artist: oud.artist, title: oud.title, local: t, herhaling: oud.herhaling);
+    _radio[i] = nieuw;
+    _log?.line('GROEISTROOM in je bibliotheek (radio): ${t.path}');
+    notifyListeners();
+    return nieuw;
   }
 
   /// Hetzelfde nummer opnieuw openen en terugspringen naar waar het afbrak.

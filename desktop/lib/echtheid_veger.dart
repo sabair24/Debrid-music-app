@@ -54,6 +54,12 @@ class EchtheidVeger {
   String? _pidPad;
   final Map<String, DateTime> _geblokkeerd = {};
 
+  /// Wat deze sessie al gemeten werd en niet te beoordelen was (geen meetbare audio, een meting die niets
+  /// opleverde). Niet onthouden in het oordelenbestand — een volgende versie kan het misschien wel — maar
+  /// ook niet elke ronde opnieuw: gemeten op 20-10-2026 maten twee zulke bestanden zich elke 30 s opnieuw,
+  /// want het verversen na een ronde telt als "bibliotheek veranderd" en start de volgende.
+  final Set<String> _onbeoordeelbaar = {};
+
   Future<void> start() async {
     if (!enabled || library.isRemote || _gestart || !_meter.available) return;
     _gestart = true;
@@ -107,7 +113,12 @@ class EchtheidVeger {
   /// De nog ongemeten FLAC's, nieuwste eerst: wat er net binnenkwam, wil je het eerst weten.
   List<Track> _teMeten() => [
         for (final t in library.tracks)
-          if (t.isFlac && t.path.isNotEmpty && gemeten(t.path) == null && !_isGeblokkeerd(t.path)) t,
+          if (t.isFlac &&
+              t.path.isNotEmpty &&
+              gemeten(t.path) == null &&
+              !_isGeblokkeerd(t.path) &&
+              !_onbeoordeelbaar.contains(t.path.toLowerCase()))
+            t,
       ]..sort((a, b) => b.addedMs.compareTo(a.addedMs));
 
   Future<void> ronde() async {
@@ -141,6 +152,7 @@ class EchtheidVeger {
         gedaan++;
         if (o == null || o.isOnbekend) {
           niets++;
+          _onbeoordeelbaar.add(t.path.toLowerCase());
         } else {
           await onthoudOordeel(t.path, o);
           if (o.isNep) nep++;
@@ -156,7 +168,8 @@ class EchtheidVeger {
         if (gedaan % 25 == 0) library.refreshFromCorrections();
         await Future<void>.delayed(tussenpoos);
       }
-      library.refreshFromCorrections();
+      // Alleen als er iets te tonen is: verversen meldt een verandering, en die start de volgende ronde.
+      if (gedaan > niets) library.refreshFromCorrections();
       final s = DateTime.now().difference(start).inSeconds;
       _log.line('klaar: $gedaan gemeten in $s s — $nep nep, $vermoedelijk vermoedelijk, $kapot kapot, $niets niet te beoordelen'
           '${Echtheidsmeter.laatsteFout == null ? '' : ' (laatste fout: ${Echtheidsmeter.laatsteFout})'}');

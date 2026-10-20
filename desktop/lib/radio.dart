@@ -22,6 +22,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'groeistroom.dart' show Groei, Groeistroom;
 import 'library.dart';
 import 'models.dart';
 import 'online.dart';
@@ -118,6 +119,13 @@ class Radioplek {
   bool doorRadio = false;
 
   Haalstand stand = Haalstand.wacht;
+
+  /// Wat er binnenkomt terwijl deze plek gehaald wordt (zie `groeistroom.dart`), of null.
+  Groei? groei;
+
+  /// De regel in de speelrij die deze plek al laat klinken terwijl hij binnenkomt, of null. Landt het
+  /// nummer, dan wordt DIE regel je eigen nummer — er komt geen tweede bij.
+  RadioItem? stroomItem;
 }
 
 /// Waar een radio zijn nummers vandaan haalt.
@@ -224,16 +232,25 @@ class EigenRadiobron implements Radiobron {
   @override
   void staak() => downloads.staakRadiohalen();
 
+  /// Met [vroeg] klinkt het al terwijl het binnenkomt (zie `groeistroom.dart`).
   @override
-  Future<Track?> haal(Radioplek plek) async {
+  Future<Track?> haal(Radioplek plek, {Groei? vroeg}) async {
     final String? pad;
     try {
-      pad = await downloads.haalVoorRadio(
-        artiest: plek.artiest,
-        titel: plek.titel,
-        seconden: plek.seconden,
-        jaar: plek.jaar,
-      );
+      pad = vroeg == null
+          ? await downloads.haalVoorRadio(
+              artiest: plek.artiest,
+              titel: plek.titel,
+              seconden: plek.seconden,
+              jaar: plek.jaar,
+            )
+          : await downloads.haalEnLaatHoren(
+              artiest: plek.artiest,
+              titel: plek.titel,
+              seconden: plek.seconden,
+              jaar: plek.jaar,
+              vroeg: vroeg,
+            );
     } on RadioAlGehad catch (e) {
       // Geland op muziek die je al had: laten klinken, maar als JOUW nummer — zie [AlVanJou].
       final t = await library.voegBestandToe(e.pad);
@@ -458,6 +475,15 @@ class RadioBesturing extends ChangeNotifier {
 
   /// Het bijvullen van deze radio, of null (dan vult hij niet bij). Zie [start].
   Bijvuller? _bijvul;
+
+  /// Mag een nummer al klinken terwijl het binnenkomt (zie `groeistroom.dart`)? Ingehangen vanuit
+  /// main.dart (de instelling). Alleen waar deze machine zelf haalt.
+  bool Function()? vroegLuisteren;
+
+  /// Valt de radio stil — droog, of je klikte door tot het einde — dan meteen kijken of iets wat
+  /// onderweg is al kan klinken, en niet pas bij de volgende tik van vijf seconden.
+  VoidCallback? _stilLuisteraar;
+  bool _wasStil = false;
   void Function(String regel)? _spoor;
 
   /// Bij een radio uit een zin met een genoemd aantal ("300 nummers"): daar stopt het bijvullen.
@@ -768,6 +794,14 @@ class RadioBesturing extends ChangeNotifier {
     // zolang er iets klinkt, en dan zou deze rekensom vier keer per seconde draaien om te ontdekken
     // dat er niets veranderd is.
     _tik = Timer.periodic(const Duration(seconds: 5), (_) => _pas(sessie));
+    // Alleen de OVERGANG naar stil, en dan één keer: de speler meldt zich vier keer per seconde.
+    _wasStil = false;
+    final stil = _stilLuisteraar = () {
+      final nu = speler.radioDroog || speler.wilVerder;
+      if (nu && !_wasStil) scheduleMicrotask(() => _pas(sessie));
+      _wasStil = nu;
+    };
+    speler.addListener(stil);
     notifyListeners();
     return null;
   }
@@ -981,6 +1015,9 @@ class RadioBesturing extends ChangeNotifier {
   RadioSessie? _stop({required bool laatLos, bool naarOverzicht = true}) {
     _tik?.cancel();
     _tik = null;
+    final stil = _stilLuisteraar;
+    _stilLuisteraar = null;
+    if (stil != null) speler.removeListener(stil);
     _sessie++; // alles wat nog onderweg is hoort nergens meer bij
     final liep = _loopt;
     _loopt = false;
@@ -1029,6 +1066,19 @@ class RadioBesturing extends ChangeNotifier {
       rest += s != null && s > 0 ? s : kOnbekendeLengte;
     }
     return rest;
+  }
+
+  /// Klonk [p] al als groeistroom, dan wordt die regel in de rij nu het echte nummer [t] — zonder dat
+  /// er iets opnieuw opent (mpv speelt door uit het geheugen van de groeistroom). True als dat lukte.
+  bool _alsGestroomd(Radioplek p, Track t) {
+    final oud = p.stroomItem;
+    if (oud == null) return false;
+    p.stroomItem = null;
+    final nieuw = speler.wordtLokaalInRadio(oud, t);
+    if (nieuw == null) return false;
+    _plekVan[nieuw] = p;
+    _spoor?.call('radio-stroom: "${p.artiest} — ${p.titel}" staat nu in je bibliotheek');
+    return true;
   }
 
   RadioItem _itemVan(Radioplek p) {
@@ -1264,7 +1314,24 @@ class RadioBesturing extends ChangeNotifier {
       _plan[i].stand = Haalstand.onderweg;
       unawaited(_haal(sessie, _plan[i]));
     }
-    if (besluit.inRij.isNotEmpty || besluit.starten.isNotEmpty) notifyListeners();
+    // Spelen terwijl het binnenkomt (Saber, 20-10-2026: "als ik een paar liedjes skip … dat het
+    // volgende liedje wel al kan beginnen"). Staat de radio stil — droog, of doorgeklikt tot het
+    // einde — en kan iets wat onderweg is al klinken, dan dat. Zie groeistroom.dart.
+    var stroom = false;
+    if (besluit.inRij.isEmpty && (speler.radioDroog || speler.wilVerder)) {
+      for (final p in _plan) {
+        final g = p.groei;
+        if (p.stand != Haalstand.onderweg || p.stroomItem != null || g == null || !g.kanKlinken) continue;
+        final it = RadioItem(artist: p.artiest, title: p.titel)..url = g.adres;
+        _plekVan[it] = p;
+        p.stroomItem = it;
+        _spoor?.call('radio-stroom: "${p.artiest} — ${p.titel}" klinkt al terwijl hij binnenkomt');
+        speler.voegToeAanRadio([it]);
+        stroom = true;
+        break;
+      }
+    }
+    if (besluit.inRij.isNotEmpty || besluit.starten.isNotEmpty || stroom) notifyListeners();
     _droogSpoor();
     _misschienBijvullen(sessie, bijvul.besluit, bijvul.verwacht, reserveVoor);
   }
@@ -1300,8 +1367,19 @@ class RadioBesturing extends ChangeNotifier {
     var later = false;
     var vanRadio = true;
     String? waarom;
+    // Al laten klinken terwijl het binnenkomt (groeistroom.dart): alleen waar deze machine zelf haalt.
+    final zelf = bron;
+    final vroeg = zelf is EigenRadiobron && (vroegLuisteren?.call() ?? false)
+        ? await Groeistroom.gedeeld.nieuw('radio: ${p.artiest} — ${p.titel}')
+        : null;
+    if (vroeg != null) {
+      p.groei = vroeg;
+      unawaited(vroeg.speelbaar.then((kan) {
+        if (kan && sessie == _sessie) _pas(sessie);
+      }));
+    }
     try {
-      t = await bron.haal(p);
+      t = vroeg != null ? await (zelf as EigenRadiobron).haal(p, vroeg: vroeg) : await bron.haal(p);
     } on RadioLaterOpnieuw catch (e) {
       later = true;
       waarom = e.waarom;
@@ -1310,6 +1388,15 @@ class RadioBesturing extends ChangeNotifier {
       vanRadio = false;
     } catch (_) {
       t = null;
+    } finally {
+      // Niets geland: wie (de speler) op een volgende uploader wacht, hoort dat er geen komt.
+      if (vroeg != null && vroeg.geborgen == null) vroeg.opgegeven();
+      p.groei = null;
+    }
+    // Klonk deze plek al en landde hij niet, dan is die regel een gat: de speler slaat hem over.
+    if (t == null && p.stroomItem != null) {
+      p.stroomItem!.failed = true;
+      p.stroomItem = null;
     }
     if (sessie != _sessie) return; // een andere radio; deze landing hoort daar niet bij
     if (later) {
@@ -1335,7 +1422,7 @@ class RadioBesturing extends ChangeNotifier {
     } else if (!vanRadio) {
       // Van jou: in de rij, maar niet in de notitie van deze radio — zie [AlVanJou].
       p.eigen = t;
-      p.stand = Haalstand.geland;
+      p.stand = _alsGestroomd(p, t) ? Haalstand.inRij : Haalstand.geland;
       _uitkomsten.add(true);
       _eersteLanding = true;
     } else {
@@ -1345,7 +1432,8 @@ class RadioBesturing extends ChangeNotifier {
       p.doorRadio = true;
       // `geland` en niet `klaar`: dit gaat meteen de rij in. Zie [Haalstand.geland] — een net
       // opgehaald nummer dat blijft liggen tot de voorraad opdroogt is een nummer dat je nooit hoort.
-      p.stand = Haalstand.geland;
+      // Klonk het al terwijl het binnenkwam, dan stáát het in de rij: die regel wordt het nummer.
+      p.stand = _alsGestroomd(p, t) ? Haalstand.inRij : Haalstand.geland;
       _doorRadio.add(t.path);
       _lopend?.gehaald.add(Gehaald(
         pad: t.path,

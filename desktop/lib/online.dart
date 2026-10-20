@@ -30,6 +30,7 @@ import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
 import 'flac_tags.dart';
+import 'groeistroom.dart' show Groei;
 import 'fingerprint.dart' show Fingerprinter, similarity, maybeSameRecordingScore;
 import 'integriteit.dart';
 import 'keuring.dart' show Heelheid, kwaliteitZin;
@@ -3416,6 +3417,19 @@ class DownloadManager extends ChangeNotifier {
     required String titel,
     int? seconden,
     int? jaar,
+  }) =>
+      haalEnLaatHoren(artiest: artiest, titel: titel, seconden: seconden, jaar: jaar);
+
+  /// [haalVoorRadio], en met [vroeg] klinkt het al terwijl het binnenkomt (zie `groeistroom.dart`).
+  ///
+  /// Een eigen naam en geen extra parameter op [haalVoorRadio]: die wordt in de toetsen nagebootst, en
+  /// een extra parameter zou al die nabootsingen breken voor iets wat ze nooit gebruiken.
+  Future<String?> haalEnLaatHoren({
+    required String artiest,
+    required String titel,
+    int? seconden,
+    int? jaar,
+    Groei? vroeg,
   }) async {
     if (!soulseek.available) return null;
     // Heb je dit al? Dan valt er niets te halen — en, net zo belangrijk, dan mag het straks ook niet
@@ -3436,14 +3450,73 @@ class DownloadManager extends ChangeNotifier {
     final job = DownloadJob(titel); // wegwerp: bewust niet in `jobs`
     _radiohalen.add(job);
     try {
-      return await _haalVoorRadio(job, artiest, titel, seconden, jaar);
+      return await _haalVoorRadio(job, artiest, titel, seconden, jaar, vroeg: vroeg);
     } finally {
       _radiohalen.remove(job);
     }
   }
 
+  /// Kijkt mee terwijl één kandidaat binnenkomt, en meldt het aan [g] (zie `groeistroom.dart`).
+  ///
+  /// Zodra er bytes staan: een [Groei.poging]. Zodra de kop compleet is ([flacAudioBegin]): dezelfde
+  /// keuring als na het halen ([vroegeAfkeur]). Klopt die, dan [Groei.goedgekeurd] en mag het klinken;
+  /// klopt die niet, dan wordt deze overdracht METEEN gestopt — er klinkt nooit eerst een verkeerd
+  /// nummer, en de volgende uploader hoeft niet te wachten tot een fout bestand helemaal binnen is.
+  /// Geeft terug of het afgekeurd werd. Alleen voor FLAC: zie de aanroep.
+  Future<bool> _vroegKeuren(Groei g, File dest, SoulseekFile f, SlskCancel stop, bool Function() klaar,
+      {required String artiest, required String titel, required int? seconden}) async {
+    var gemeld = false;
+    while (!klaar() && !stop.isCancelled) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (klaar() || stop.isCancelled) return false;
+      int staat;
+      try {
+        staat = dest.lengthSync();
+      } catch (_) {
+        continue; // nog niet aangemaakt
+      }
+      if (staat <= 0) continue;
+      if (!gemeld) {
+        gemeld = true;
+        g.poging(pad: dest.path, totaal: f.size);
+      }
+      final kopBytes = flacAudioBegin(dest);
+      if (kopBytes == null) {
+        // Een kop van meer dan 24 MB (een hoes van een poster) is geen kop meer: dan maar niet vroeg.
+        if (staat > 24 * 1024 * 1024) return false;
+        continue;
+      }
+      final kop = readFlacTags(dest);
+      final tags = kop == null || (kop.title == null && kop.artist == null && kop.album == null)
+          ? null
+          : TrackTags(
+              title: kop.title ?? baseName(f.filename),
+              artist: kop.artist ?? '',
+              album: kop.album ?? '',
+              trackNo: kop.trackNo,
+              vanBestand: true);
+      final duur = kop?.duration;
+      final waarom = vroegeAfkeur(
+          artiest: artiest,
+          titel: titel,
+          seconden: seconden,
+          tags: tags,
+          bestandSeconden: duur == null ? null : (duur.inMilliseconds / 1000).round(),
+          pad: dest.path);
+      if (waarom != null) {
+        _log.line('radio "$artiest — $titel": ${f.username} — kop gelezen terwijl hij binnenkwam: $waarom; '
+            'gestopt, volgende');
+        stop.cancel();
+        return true;
+      }
+      g.goedgekeurd(duur!, kopBytes: kopBytes);
+      return false;
+    }
+    return false;
+  }
+
   Future<String?> _haalVoorRadio(
-      DownloadJob job, String artiest, String titel, int? seconden, int? jaar) async {
+      DownloadJob job, String artiest, String titel, int? seconden, int? jaar, {Groei? vroeg}) async {
     List<SoulseekFile> hits;
     try {
       hits = await soulseek.search(zoekvraagVoorNummer(titel, artist: artiest));
@@ -3531,17 +3604,29 @@ class DownloadManager extends ChangeNotifier {
           // over een minuut.
           final stop = SlskCancel();
           job.live.add(stop);
+          // Al laten klinken terwijl het binnenkomt: alleen FLAC, want alleen daar staat alles wat de
+          // keuring hieronder wil weten (artiest, titel, looptijd) vóór de audio. En alleen met een
+          // bekende grootte: die belooft de stroom vooraf aan mpv.
+          var overdrachtKlaar = false;
+          final vroegAfgekeurd = vroeg != null && f.size > 0 && f.filename.toLowerCase().endsWith('.flac')
+              ? _vroegKeuren(vroeg, _bestemming(f), f, stop, () => overdrachtKlaar,
+                  artiest: artiest, titel: titel, seconden: seconden)
+              : Future.value(false);
           try {
             res = await _rawTransfer(session, f, job, () {},
                 waitInQueue: true, maxWait: kMaxWacht, cancel: stop);
           } catch (_) {
+            vroeg?.afgebroken();
             continue;
           } finally {
+            overdrachtKlaar = true;
             job.live.remove(stop);
           }
+          if (await vroegAfgekeurd) (_radioNietBij[sleutel] ??= {}).add(f.username);
           if (job.cancelled) return;
           _log.line('radio "$artiest — $titel": ${f.username} '
               '${_uitkomst(res)} na ${_kort(DateTime.now().difference(t0))} — ${baseName(f.filename)}');
+          if (res is! SlskDone) vroeg?.afgebroken();
           if (res is! SlskDone) {
             // Kon ONZE kant niet aanmelden, dan ligt het niet aan deze uploader, en ook niet aan de
             // volgende twee: stoppen en de plek later opnieuw. Gemeten op 26-09-2026: "mislukt: Kan
@@ -3554,6 +3639,9 @@ class DownloadManager extends ChangeNotifier {
             (_radioNietBij[sleutel] ??= {}).add(f.username);
             continue;
           }
+          // Klonk het al terwijl het binnenkwam, dan nu in het geheugen ermee: vanaf hier mag het bestand
+          // verplaatst en van tags voorzien worden zonder dat de lopende stroom het merkt (groeistroom.dart).
+          await vroeg?.binnen();
           // Het tweede net: wat er IN het bestand staat. Een peer kan een bestand goed noemen en iets
           // anders laten klinken, en dat hoort nooit in je bibliotheek te landen.
           final binnen = File(res.path);
@@ -3562,6 +3650,7 @@ class DownloadManager extends ChangeNotifier {
             _log.line('radio "$artiest — $titel": ${f.username} leverde een ander nummer '
                 '(${t?.artist} — ${t?.title}) — weggegooid, volgende');
             (_radioNietBij[sleutel] ??= {}).add(f.username);
+            vroeg?.afgebroken();
             try {
               await binnen.delete();
             } catch (_) {/* dan ruimt de wachtmap het later op */}
@@ -3573,6 +3662,7 @@ class DownloadManager extends ChangeNotifier {
             _log.line('radio "$artiest — $titel": ${f.username} leverde een bestand zonder tags dat de '
                 'app niet kan beschrijven — weggegooid, volgende');
             (_radioNietBij[sleutel] ??= {}).add(f.username);
+            vroeg?.afgebroken();
             try {
               await binnen.delete();
             } catch (_) {/* dan ruimt de wachtmap het later op */}
@@ -3585,6 +3675,7 @@ class DownloadManager extends ChangeNotifier {
             _log.line('radio "$artiest — $titel": ${f.username} leverde ${echt}s, gevraagd '
                 '${seconden}s — een andere versie, weggegooid, volgende');
             (_radioNietBij[sleutel] ??= {}).add(f.username);
+            vroeg?.afgebroken();
             try {
               await binnen.delete();
             } catch (_) {/* dan ruimt de wachtmap het later op */}
@@ -3608,6 +3699,7 @@ class DownloadManager extends ChangeNotifier {
                 parkeerAltijd: true,
                 parkeerBinnenkomend: false);
           } catch (_) {
+            vroeg?.afgebroken();
             continue;
           }
           if (alBekend != null || uit.how != Placement.moved || uit.verving) {
@@ -3615,7 +3707,10 @@ class DownloadManager extends ChangeNotifier {
                 'niet van de radio, wordt straks niet opgeruimd');
             // Wel laten klinken: daarvoor werd het gehaald. Zie [RadioAlGehad] — eerst bleef hier een
             // lege plek in de radio.
-            if (uit.how != Placement.stuck && File(uit.path).existsSync()) throw RadioAlGehad(uit.path);
+            if (uit.how != Placement.stuck && File(uit.path).existsSync()) {
+              vroeg?.geland(uit.path);
+              throw RadioAlGehad(uit.path);
+            }
             return;
           }
           // Pas NA het landen, en dit ontbrak op de hele downloadweg: `rebuildAlbums` groepeert op de
@@ -3636,6 +3731,7 @@ class DownloadManager extends ChangeNotifier {
               }
             } catch (_) {/* zelfde als hierboven */}
           }
+          vroeg?.geland(uit.path);
           geland = uit.path;
           return;
         }
@@ -3649,6 +3745,10 @@ class DownloadManager extends ChangeNotifier {
       // Niets verloren: deze plek in het plan mislukt gewoon — tenzij het aan de aanmelding lag.
       final waarom = soulseek.whyNotLogin;
       if (waarom != null) throw RadioLaterOpnieuw(waarom);
+    } finally {
+      // Elke andere uitgang (gestopt, geen aanmelding, een fout): wat er klonk van een peer die niet
+      // landde, houdt op. Na [Groei.geland] doet dit niets meer.
+      vroeg?.afgebroken();
     }
     return geland;
   }
@@ -4095,6 +4195,10 @@ class DownloadManager extends ChangeNotifier {
     return res;
   }
 
+  /// Waar [_rawTransfer] dit bestand neerzet: `_inkomend/<peer>/<naam>`.
+  File _bestemming(SoulseekFile file) => File('$_downloadsRoot${Platform.pathSeparator}_inkomend'
+      '${Platform.pathSeparator}${_sanitize(file.username)}${Platform.pathSeparator}${_sanitize(file.displayName)}');
+
   /// The raw single-peer transfer over [session] (updates progress only; no status finalization).
   /// [claim] turns this into one runner in a race: it fires the moment the peer's first bytes
   /// arrive, and returns whether this attempt gets to own the job's progress line. A runner that
@@ -4110,10 +4214,9 @@ class DownloadManager extends ChangeNotifier {
     // Land in a staging folder; placeFile() moves it into Albums/Singles/Compilaties after.
     // Per-PEER subfolder: candidates for the same track share a display name, so a slow attempt
     // that is still winding down can never write into the file the next attempt just opened.
-    final dir = Directory(
-        '$_downloadsRoot${Platform.pathSeparator}_inkomend${Platform.pathSeparator}${_sanitize(file.username)}');
+    final dest = _bestemming(file);
+    final dir = dest.parent;
     await dir.create(recursive: true);
-    final dest = File('${dir.path}${Platform.pathSeparator}${_sanitize(file.displayName)}');
     var settled = claim == null; // no race → this attempt owns the UI from the start
     var mine = claim == null;
     // Alleen bij een VERANDERING, want een peer herhaalt zijn plaats. Zonder deze regel is een
