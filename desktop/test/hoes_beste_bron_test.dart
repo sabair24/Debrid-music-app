@@ -96,6 +96,28 @@ void main() {
       expect(load, contains('disc: nu?.disc ?? t.disc,'), reason: 'wat er al staat, blijft staan');
     });
 
+    test('aangesloten: Discogs zoekt al naast het archief als TheAudioDB geen cd heeft (live: archief 4,1–4,6 s)', () {
+      final d = File('lib/discogs.dart').readAsStringSync();
+      final keten = d.substring(d.indexOf('    tadb = await tadbF;'));
+      final vooraf = keten.indexOf('final discogsVoorafF = !freeOnly && pinned == null && saidDisc == null && tadb.disc == null');
+      expect(vooraf, greaterThan(0), reason: 'niet voor de opwarmer, niet bij een aangewezen persing, niet als er al een cd is');
+      expect(vooraf, lessThan(keten.indexOf('await _artFromMusicBrainz(artist, album, expectedTracks)')),
+          reason: 'vóór de andere persingen, niet erna');
+      expect(keten, contains('e = await (discogsVoorafF ?? _quickRelease(artist, album));'),
+          reason: 'de stap die Discogs vraagt, neemt het vooraf gestarte antwoord');
+    });
+
+    test('aangesloten: Nu speelt schrijft de weg van zijn hoezen in kunst.log, op elk toestel', () {
+      // Op de gsm kwam de echte cd 20 tot 30 s na de tik (21-10-2026), en daar stond niets van in een log.
+      final m = File('lib/main.dart').readAsStringSync();
+      final load = m.substring(m.indexOf('  Future<void> _load() async {'));
+      expect(load.substring(0, load.indexOf('tussenstand: (t) {')), contains('trace: spoor,'));
+      final hoofd = m.substring(m.indexOf('Future<void> main() async {'));
+      final zet = hoofd.indexOf('kunstSpoor = (r) => Timer.run(() => kunstLog.line(r));');
+      expect(zet, greaterThan(0));
+      expect(zet, lessThan(hoofd.indexOf('runApp(')), reason: 'vóór het eerste scherm');
+    });
+
     test('aangesloten: de achterkant uit het archief op zijn grootst', () {
       final d = File('lib/discogs.dart').readAsStringSync();
       expect(d, contains('if (back == null && i.isBack) back = await mb.fetchGrootste(i);'));

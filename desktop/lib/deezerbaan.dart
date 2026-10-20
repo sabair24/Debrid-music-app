@@ -58,6 +58,12 @@ class DeezerBaan {
   /// blijft dit bestand vrij van `dart:io`.
   static void Function(String)? spoor;
 
+  /// Vanaf hier meldt [haal] een verzoek in het [spoor]: hoe lang het in de rij stond en hoe lang
+  /// Deezer erover deed. Op de gsm duurde Online zoeken 3,2 s van tik tot uitslag (21-10-2026), terwijl
+  /// Deezer zelf de drie zoekvragen vanaf de pc in 0,14–0,20 s beantwoordt — de rest is niet te zien
+  /// zonder deze regel. Alleen het pad, nooit de zoektekst.
+  static const Duration traagVanaf = Duration(milliseconds: 300);
+
   /// Hoeveel er nu op een plek staan te wachten, voor datzelfde spoor.
   static int _wachtend = 0;
   static int get wachtend => _wachtend;
@@ -83,6 +89,7 @@ class DeezerBaan {
   /// Werpt [DeezerFout] bij een weigering en geeft `null` alleen terug als het antwoord geen
   /// bruikbare JSON was. Dat onderscheid is de hele reden dat deze functie bestaat.
   static Future<Map<String, dynamic>?> haal(String url, {http.Client? client}) {
+    final gevraagd = DateTime.now();
     final mijn = _beurt.then((_) async {
       // **Opnieuw kijken na het wachten, tot de tijd echt om is.** Hier stond één `delayed` en dan
       // door. Op de bouwstraat (Linux) gemeten op 10-10-2026: drie verzoeken in minder dan 2 × 110
@@ -96,8 +103,10 @@ class DeezerBaan {
       _laatste = DateTime.now();
     });
     _beurt = mijn.catchError((_) {});
+    final voorMij = _wachtend;
     _wachtend++;
     return mijn.then((_) async {
+      final vertrek = DateTime.now();
       try {
         final r = await (client ?? http.Client())
             .get(Uri.parse(url))
@@ -123,6 +132,15 @@ class DeezerBaan {
         throw DeezerFout('$e');
       } finally {
         _wachtend--;
+        final s = spoor;
+        if (s != null) {
+          final rij = vertrek.difference(gevraagd);
+          final vraag = DateTime.now().difference(vertrek);
+          if (rij + vraag >= traagVanaf) {
+            s('${Uri.tryParse(url)?.path ?? '?'}: ${rij.inMilliseconds} ms in de rij ($voorMij voor) + '
+                '${vraag.inMilliseconds} ms bij Deezer');
+          }
+        }
       }
     });
   }

@@ -1840,6 +1840,15 @@ extension DiscogsArtwork on DiscogsService {
       step('tussenstand: achter=${tadb.back != null} cd=${tadb.disc != null}');
       tussen(said(const ReleaseArt()));
     }
+    // Discogs alvast zoeken, naast het archief, als TheAudioDB geen cd heeft. De cd komt dan bijna altijd
+    // van Discogs, en die stap kwam pas aan de beurt nadat het archief over de andere persingen klaar was:
+    // gemeten 4,1–4,6 s (live, sombr — back to friends, 21-10-2026), en op de gsm kwam de echte cd 20 tot
+    // 30 s na de tik. Het zijn de twee verzoeken die de keten hieronder toch doet — alleen voor wie de hele
+    // keten loopt (de opwarmer vraagt Discogs niets), en niet als je zelf een Discogs-persing aanwees: dan
+    // beslist [edition].
+    final discogsVoorafF = !freeOnly && pinned == null && saidDisc == null && tadb.disc == null
+        ? _quickRelease(artist, album).catchError((Object _) => null)
+        : null;
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
       final exact = await exactF;
       step('archief voor de gepinde persing: '
@@ -1939,8 +1948,9 @@ extension DiscogsArtwork on DiscogsService {
     // is that pressing's own scans.
     DiscogsEdition? e;
     if (pinned == null) {
-      e = await _quickRelease(artist, album);
-      step('Discogs snelzoek: ${e == null ? "niets" : "${e.images.length} afbeeldingen"}');
+      e = await (discogsVoorafF ?? _quickRelease(artist, album));
+      step('Discogs snelzoek${discogsVoorafF != null ? " (vooraf, naast het archief)" : ""}: '
+          '${e == null ? "niets" : "${e.images.length} afbeeldingen"}');
     }
     e ??= await edition(artist, album, expectedTracks: expectedTracks, pinned: pinned);
     step('Discogs-persing: ${e == null ? "niets" : "${e.images.length} afbeeldingen"}');
