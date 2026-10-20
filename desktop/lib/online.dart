@@ -3387,6 +3387,16 @@ class DownloadManager extends ChangeNotifier {
   /// bij elke nieuwe radio (zie [staakRadiohalen]).
   final Map<String, Set<String>> _radioNietBij = {};
 
+  /// Nummers waarvoor de laatste haal géén enkel bestand vond dat door de zeef kwam.
+  final Set<String> _radioZonderKandidaat = {};
+
+  /// Vond de laatste haal van dit nummer niets wat dit nummer is? Dan levert meteen opnieuw zoeken
+  /// hetzelfde op, en is het alleen een zoekopdracht meer — zuinig zijn met zoeken is wat een account bij
+  /// Soulseek uit de problemen houdt. Gezien op 20-10-2026: Sabien Tiels en Timbaland, elk vier keer
+  /// gezocht, vier keer "niets bruikbaars".
+  bool vondGeenKandidaat(String artiest, String titel) =>
+      _radioZonderKandidaat.contains(_radioSleutel(artiest, titel));
+
   static String _radioSleutel(String artiest, String titel) =>
       '${normKey(artiest)}|${normKey(titel)}';
 
@@ -3454,6 +3464,105 @@ class DownloadManager extends ChangeNotifier {
     } finally {
       _radiohalen.remove(job);
     }
+  }
+
+  /// Zoveel uploaders lopen tegelijk in een [_wedloop]: zoveel als er goede zijn, tot het maximum van het
+  /// gewone downloaden ([_maxLosslessTries]). Elke loper erbij kan de kans op een vlotte start alleen
+  /// vergroten. Gemeten op de pc (20-10-2026, 3.9.521): van zeven goede kandidaten (FLAC, vrije plek)
+  /// begonnen er twee à drie meteen te sturen; de rest was onbereikbaar, brak af zonder één byte of begon
+  /// pas na 20 s. Hoeveel elke loper boven de tiende nog uitmaakt, is niet gemeten — daarvoor logt de
+  /// wedloop welke loper won en hoeveel er al afgevallen waren.
+  static const kWedloopTegelijk = 20;
+
+  /// Zoveel uploaders hoogstens in één [_wedloop], ook als er later in de zoekuitslag nog goede opduiken.
+  static const kWedloopLopers = 20;
+
+  /// Een wedloop voor een nummer met een groeistroom: niet op één uploader wachten.
+  ///
+  /// **Waarom.** Gemeten op de pc (20-10-2026, 3.9.521): van drie vroege keuzes — FLAC, "vrije plek", een
+  /// opgegeven snelheid van ruim een megabyte per seconde — begon er één na 1,5 s te sturen, één na 20 s
+  /// (Kings Of Leon: 23 s van tik tot geluid) en één brak na 17 s zonder één byte af (Whitney Houston:
+  /// ± 30 s). Een vrije plek zegt niets over hoe snel een uploader begint. Dus beginnen [eerste] en wat
+  /// [volgende] nog geeft meteen samen, tot [kWedloopTegelijk]; wie afvalt of later in de uitslag opduikt,
+  /// vult aan tot [kWedloopLopers]. Wie het eerst bytes stuurt wint (de `claim` van [_rawTransfer]); de rest
+  /// stopt meteen. Zo doet het gewone downloaden het ook — één aanmelding, de verliezers afgebroken voor ze
+  /// iets sturen. Null als niemand iets stuurde.
+  Future<({SoulseekFile f, SlskResult res, bool afgekeurd})?> _wedloop(SlskSession session, DownloadJob job,
+      SoulseekFile eerste, SoulseekFile? Function(Set<String> al) volgende, Groei vroeg,
+      {required String artiest, required String titel, required int? seconden, void Function(String)? viel}) async {
+    SoulseekFile? winnaar;
+    final lopers = <SoulseekFile, ({SlskCancel stop, Future<SlskResult> res})>{};
+    final klaar = <SoulseekFile>{};
+    final klok = Stopwatch()..start();
+    // Vastgelegd op het moment van winnen: daarna vallen de gestopte verliezers ook in [klaar].
+    var winstMs = 0, afgevallen = 0, lopend = 0;
+    void start(SoulseekFile f) {
+      final stop = SlskCancel();
+      job.live.add(stop);
+      final res = _rawTransfer(session, f, job, () {}, waitInQueue: true, maxWait: kMaxWacht, cancel: stop,
+          claim: () {
+        if (winnaar != null) return false;
+        winnaar = f;
+        winstMs = klok.elapsedMilliseconds;
+        afgevallen = klaar.length;
+        lopend = lopers.length;
+        for (final e in lopers.entries) {
+          if (e.key != f) e.value.stop.cancel();
+        }
+        return true;
+      }).then<SlskResult>((r) => r, onError: (Object e) => SlskFail('$e'));
+      lopers[f] = (stop: stop, res: res);
+      unawaited(res.whenComplete(() {
+        klaar.add(f);
+        job.live.remove(stop);
+        // Klaar vóór er een winnaar was = uit zichzelf afgevallen (onbereikbaar, afgebroken, te lang in de
+        // rij). Wie pas daarna stopt, stopte omdat een ander won — die blijft goed voor een volgende ronde.
+        if (winnaar == null && !job.cancelled) viel?.call(f.username);
+      }));
+    }
+
+    // Aanvullen tot [kWedloopTegelijk] lopen: bij de start, en elke kwart seconde opnieuw — de tussenstand
+    // van het zoeken groeit nog, en wie afvalt laat een plek vrij.
+    void vulAan() {
+      while (winnaar == null &&
+          lopers.length < kWedloopLopers &&
+          lopers.length - klaar.length < kWedloopTegelijk) {
+        final f = volgende({for (final l in lopers.keys) l.username});
+        if (f == null) return;
+        start(f);
+      }
+    }
+
+    start(eerste);
+    vulAan();
+    while (winnaar == null && !job.cancelled) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (winnaar != null || job.cancelled) break;
+      vulAan();
+      if (lopers.length == klaar.length) break;
+    }
+    final w = winnaar;
+    if (w == null) {
+      for (final l in lopers.values) {
+        l.stop.cancel();
+      }
+      _log.line('radio "$artiest — $titel": wedloop zonder winnaar — niemand van de ${lopers.length} stuurde '
+          'iets (${klok.elapsedMilliseconds} ms)');
+      return null;
+    }
+    // Welke loper won (#1 = de eerste die begon) en hoeveel er toen al afgevallen waren: daaruit valt af te
+    // lezen of de lopers achteraan ooit winnen — zie [kWedloopTegelijk].
+    _log.line('radio "$artiest — $titel": ${w.username} stuurde als eerste, na $winstMs ms '
+        '(loper #${lopers.keys.toList().indexOf(w) + 1} van $lopend, $afgevallen al afgevallen) — '
+        '${baseName(w.filename)}');
+    var overdrachtKlaar = false;
+    final afgekeurd = w.size > 0 && w.filename.toLowerCase().endsWith('.flac')
+        ? _vroegKeuren(vroeg, _bestemming(w), w, lopers[w]!.stop, () => overdrachtKlaar,
+            artiest: artiest, titel: titel, seconden: seconden)
+        : Future.value(false);
+    final res = await lopers[w]!.res;
+    overdrachtKlaar = true;
+    return (f: w, res: res, afgekeurd: await afgekeurd);
   }
 
   /// Kijkt mee terwijl één kandidaat binnenkomt, en meldt het aan [g] (zie `groeistroom.dart`).
@@ -3555,6 +3664,7 @@ class DownloadManager extends ChangeNotifier {
     // Alleen wat ECHT dit nummer is, in de gevraagde uitvoering en ongeveer de juiste lengte — zie
     // `radiobestand.dart` voor de zes verkeerde nummers van 26-09-2026 — en niet bij een uploader die
     // het deze radio al liet afweten.
+    var alleenMp3 = 0; // met een groeistroom: zoveel treffers waren dit nummer, maar niet lossless
     List<SoulseekFile> kandidatenUit(List<SoulseekFile> hits) {
       final nietBij = _radioNietBij[sleutel] ?? const <String>{};
       final passend = [
@@ -3577,10 +3687,16 @@ class DownloadManager extends ChangeNotifier {
       //
       // En binnen lossless eerst wat de app kan taggen (FLAC): een AIFF of WAV zonder tags staat anders
       // als "Onbekende artiest" in je bibliotheek — zie [radioZonderTags].
+      //
+      // Met een groeistroom (▶, en de radio met de proef aan) nooit een mp3 — Saber, 20-10-2026: "geen mp3
+      // binnenhalen". In een wedloop wint wie het eerst stuurt, niet wie het best is: stond er een mp3
+      // tussen, dan kon die het halen van een FLAC. Bestaat het nummer hier alleen als mp3, dan telt het als
+      // niets bruikbaars — één zoekronde, en ▶ vraagt het daarna aan TorBox.
+      alleenMp3 = vroeg == null ? 0 : bruikbaar.where((f) => !isLossless(f)).length;
       return [
         ...bruikbaar.where((f) => isLossless(f) && radioTagsSchrijfbaar(f.filename)),
         ...bruikbaar.where((f) => isLossless(f) && !radioTagsSchrijfbaar(f.filename)),
-        ...bruikbaar.where((f) => !isLossless(f)),
+        if (vroeg == null) ...bruikbaar.where((f) => !isLossless(f)),
       ];
     }
 
@@ -3596,6 +3712,16 @@ class DownloadManager extends ChangeNotifier {
 
     void logKandidaten(List<SoulseekFile> kandidaten, List<SoulseekFile> hits) {
       final nietBij = _radioNietBij[sleutel] ?? const <String>{};
+      if (kandidaten.isEmpty && nietBij.isEmpty) {
+        _radioZonderKandidaat.add(sleutel);
+      } else {
+        _radioZonderKandidaat.remove(sleutel);
+      }
+      if (kandidaten.isEmpty && alleenMp3 > 0) {
+        _log.line('radio "$artiest — $titel": ${hits.length} treffers, niets bruikbaars — $alleenMp3 zijn dit '
+            'nummer, maar alleen lossy (mp3 of zo), en met een groeistroom niet');
+        return;
+      }
       if (kandidaten.isEmpty) {
         _log.line('radio "$artiest — $titel": ${hits.length} treffers, niets bruikbaars'
             '${hits.isEmpty ? "" : " — geen enkele is dit nummer in deze uitvoering${voorbeelden(hits)}"}');
@@ -3691,33 +3817,52 @@ class DownloadManager extends ChangeNotifier {
     try {
       await _withSlsk<void>((session, _) async {
         // Eén uploader: halen, keuren, opbergen. [_Uit.volgende] = probeer de volgende.
-        Future<_Uit> probeer(SoulseekFile f) async {
+        // [mee]: een wedloop — zie [_wedloop]. Dan is [f] daarna de uploader die won.
+        Future<_Uit> probeer(SoulseekFile f, {SoulseekFile? Function(Set<String> al)? mee}) async {
           if (job.cancelled) return _Uit.stop;
           final t0 = DateTime.now();
           SlskResult res;
-          // De stopschakelaar van DEZE poging, opgeborgen waar [staakRadiohalen] hem kan vinden.
-          // Zonder dit is `job.cancelled` alleen een vlag die pas tússen twee peers gelezen wordt —
-          // en een overdracht die halverwege een bestand van tien megabyte zit, leest hem dan pas
-          // over een minuut.
-          final stop = SlskCancel();
-          job.live.add(stop);
-          // Al laten klinken terwijl het binnenkomt: alleen FLAC, want alleen daar staat alles wat de
-          // keuring hieronder wil weten (artiest, titel, looptijd) vóór de audio. En alleen met een
-          // bekende grootte: die belooft de stroom vooraf aan mpv.
-          var overdrachtKlaar = false;
-          final vroegAfgekeurd = vroeg != null && f.size > 0 && f.filename.toLowerCase().endsWith('.flac')
-              ? _vroegKeuren(vroeg, _bestemming(f), f, stop, () => overdrachtKlaar,
-                  artiest: artiest, titel: titel, seconden: seconden)
-              : Future.value(false);
-          try {
-            res = await _rawTransfer(session, f, job, () {},
-                waitInQueue: true, maxWait: kMaxWacht, cancel: stop);
-          } catch (_) {
-            vroeg?.afgebroken();
-            return _Uit.volgende;
-          } finally {
-            overdrachtKlaar = true;
-            job.live.remove(stop);
+          final Future<bool> vroegAfgekeurd;
+          if (mee != null && vroeg != null) {
+            // Wie in de wedloop uit zichzelf afviel, slaat dit nummer voortaan over — net als een uploader
+            // die hieronder mislukt. Wie stopte omdat een ander won, niet.
+            final w = await _wedloop(session, job, f, mee, vroeg,
+                artiest: artiest,
+                titel: titel,
+                seconden: seconden,
+                viel: (u) => (_radioNietBij[sleutel] ??= {}).add(u));
+            if (w == null) {
+              vroeg.afgebroken();
+              return job.cancelled ? _Uit.stop : _Uit.volgende;
+            }
+            f = w.f;
+            res = w.res;
+            vroegAfgekeurd = Future.value(w.afgekeurd);
+          } else {
+            // De stopschakelaar van DEZE poging, opgeborgen waar [staakRadiohalen] hem kan vinden.
+            // Zonder dit is `job.cancelled` alleen een vlag die pas tússen twee peers gelezen wordt —
+            // en een overdracht die halverwege een bestand van tien megabyte zit, leest hem dan pas
+            // over een minuut.
+            final stop = SlskCancel();
+            job.live.add(stop);
+            // Al laten klinken terwijl het binnenkomt: alleen FLAC, want alleen daar staat alles wat de
+            // keuring hieronder wil weten (artiest, titel, looptijd) vóór de audio. En alleen met een
+            // bekende grootte: die belooft de stroom vooraf aan mpv.
+            var overdrachtKlaar = false;
+            vroegAfgekeurd = vroeg != null && f.size > 0 && f.filename.toLowerCase().endsWith('.flac')
+                ? _vroegKeuren(vroeg, _bestemming(f), f, stop, () => overdrachtKlaar,
+                    artiest: artiest, titel: titel, seconden: seconden)
+                : Future.value(false);
+            try {
+              res = await _rawTransfer(session, f, job, () {},
+                  waitInQueue: true, maxWait: kMaxWacht, cancel: stop);
+            } catch (_) {
+              vroeg?.afgebroken();
+              return _Uit.volgende;
+            } finally {
+              overdrachtKlaar = true;
+              job.live.remove(stop);
+            }
           }
           if (await vroegAfgekeurd) (_radioNietBij[sleutel] ??= {}).add(f.username);
           if (job.cancelled) return _Uit.stop;
@@ -3834,16 +3979,55 @@ class DownloadManager extends ChangeNotifier {
         }
 
         if (eerste != null) {
-          if (await probeer(eerste) != _Uit.volgende) return;
-          // De vroege ging niet: dan de hele uitslag, zonder die uploader.
-          (_radioNietBij[sleutel] ??= {}).add(eerste.username);
+          final wedloop = await probeer(eerste,
+              mee: (al) => vroegeKandidaat(tussenstand,
+                  artiest: artiest,
+                  titel: titel,
+                  seconden: seconden,
+                  nietBij: {...?_radioNietBij[sleutel], ...al}));
+          if (wedloop != _Uit.volgende) return;
+          // De vroege ging niet: dan de hele uitslag, zonder wie afviel of mislukte (dat staat al in
+          // [_radioNietBij] — zie `viel` in [probeer]).
           final hits = await uitslag();
           if (hits == null || job.cancelled) return;
           kandidaten = kandidatenUit(hits);
           logKandidaten(kandidaten, hits);
         }
-        for (final f in kandidaten.take(3)) {
-          if (await probeer(f) != _Uit.volgende) return;
+        if (vroeg == null) {
+          for (final f in kandidaten.take(3)) {
+            if (await probeer(f) != _Uit.volgende) return;
+          }
+          return;
+        }
+        // Met een groeistroom alleen FLAC in de wedloop (een mp3 staat hier al niet meer tussen — zie
+        // `alleenMp3`). Geen FLAC: dan nog een AIFF of WAV (lossless, maar klinkt pas als hij binnen is),
+        // één voor één.
+        bool stroombaar(SoulseekFile k) => k.size > 0 && k.filename.toLowerCase().endsWith('.flac');
+        final flac = kandidaten.where(stroombaar).toList();
+        if (flac.isEmpty) {
+          for (final f in kandidaten.where(isLossless).take(3)) {
+            if (await probeer(f) != _Uit.volgende) return;
+          }
+          return;
+        }
+        // De volledige lijst als wedloop, niet één voor één. Gemeten op de pc (20-10-2026, Selah Sue —
+        // Raggamuffin): de eerste onbereikbaar (23 s), de tweede afgebroken zonder één byte (18 s), de derde
+        // leverde alles in één tel — 45 s van tik tot geluid.
+        //
+        // Een volgende ronde alleen als de winnaar mislukte of afgekeurd werd, of als niemand stuurde. Wie
+        // in [_radioNietBij] staat, viel af of mislukte; de verliezers die stopten omdat een ander won, doen
+        // gewoon weer mee.
+        bool vrij(SoulseekFile k) => !(_radioNietBij[sleutel]?.contains(k.username) ?? false);
+        for (var ronde = 0; ronde < 3; ronde++) {
+          final over = flac.where(vrij).toList();
+          if (over.isEmpty) return;
+          final uit = await probeer(over.first, mee: (al) {
+            for (final k in over) {
+              if (!al.contains(k.username) && vrij(k)) return k;
+            }
+            return null;
+          });
+          if (uit != _Uit.volgende) return;
         }
       });
     } on RadioLaterOpnieuw catch (e) {

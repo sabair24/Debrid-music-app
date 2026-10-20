@@ -450,12 +450,12 @@ void main() {
       expect(k?.username, 'juist');
     });
 
-    test('de haal begint vroeg en valt terug op de hele uitslag zonder die uploader', () {
+    test('de haal begint vroeg en valt terug op de hele uitslag zonder wie afviel', () {
       final online = File('lib/online.dart').readAsStringSync();
       final haal = online.substring(online.indexOf('  Future<String?> _haalVoorRadio('));
       expect(haal, contains('final eerste = vroeg == null ? null : await vroegeKeus.future;'));
-      expect(haal, contains('if (await probeer(eerste) != _Uit.volgende) return;'));
-      expect(haal, contains('(_radioNietBij[sleutel] ??= {}).add(eerste.username);'));
+      expect(haal, contains('if (wedloop != _Uit.volgende) return;'));
+      expect(haal, contains('viel: (u) => (_radioNietBij[sleutel] ??= {}).add(u));'));
       expect(haal, contains('onPartial: vroeg == null'), reason: 'zonder groeistroom zoals altijd: de hele uitslag');
     });
 
@@ -470,6 +470,61 @@ void main() {
       expect(main, contains('onPressed: () => speler.speelNummer(context, artiest: artiest, titel: titel, seconden: seconden),'));
       expect(main, contains('Future<void> speel(BuildContext context, NieuwNummer n) => speelNummer(context,'),
           reason: 'een nieuw nummer gaat door dezelfde functie');
+    });
+
+    test('de vroege start is een wedloop: twintig tegelijk vanaf de start, de eerste wint', () {
+      final online = File('lib/online.dart').readAsStringSync();
+      final w = online.substring(online.indexOf('  Future<({SoulseekFile f, SlskResult res, bool afgekeurd})?> _wedloop('));
+      final lijf = w.substring(0, w.indexOf('\n  }\n'));
+      expect(online, contains('static const kWedloopTegelijk = 20;'), reason: 'elke loper erbij vergroot de kans');
+      expect(online, contains('static const kWedloopLopers = 20;'), reason: 'zoveel als het gewone downloaden');
+      expect(online, contains('static const _maxLosslessTries = 20;'));
+      expect(online, isNot(contains('kWedloopTussen')), reason: 'niet meer na elkaar, maar samen');
+      expect(lijf, contains('if (winnaar != null) return false;'), reason: 'maar één winnaar');
+      expect(lijf, contains('if (e.key != f) e.value.stop.cancel();'), reason: 'de verliezers stoppen meteen');
+      expect(lijf, contains('lopers.length < kWedloopLopers &&\n          lopers.length - klaar.length < kWedloopTegelijk'));
+      expect(lijf, contains('start(eerste);\n    vulAan();\n    while'), reason: 'meteen samen, niet pas na een wachttijd');
+      expect(lijf, contains('      vulAan();\n      if (lopers.length == klaar.length) break;'),
+          reason: 'wie afvalt maakt plaats; niemand meer over = opgeven');
+      expect(lijf.indexOf('_vroegKeuren('), greaterThan(lijf.indexOf('final w = winnaar;')),
+          reason: 'alleen de winnaar meldt zich bij de groeistroom');
+      final haal = online.substring(online.indexOf('  Future<String?> _haalVoorRadio('));
+      expect(haal, contains('final wedloop = await probeer(eerste,'));
+      expect(haal, contains('final uit = await probeer(over.first, mee: (al) {'), reason: 'ook de volledige lijst als wedloop');
+      expect(haal, contains('if (vroeg == null) {\n          for (final f in kandidaten.take(3)) {'),
+          reason: 'zonder groeistroom zoals altijd');
+    });
+
+    test('met een groeistroom nooit een mp3: alleen FLAC in de wedloop, mp3-alleen = niets bruikbaars', () {
+      final online = File('lib/online.dart').readAsStringSync();
+      final haal = online.substring(online.indexOf('  Future<String?> _haalVoorRadio('));
+      expect(haal, contains('if (vroeg == null) ...bruikbaar.where((f) => !isLossless(f)),'),
+          reason: 'in een wedloop wint wie het eerst stuurt — een mp3 zou een FLAC kunnen verslaan');
+      expect(haal, contains('final flac = kandidaten.where(stroombaar).toList();'));
+      expect(haal, contains('final over = flac.where(vrij).toList();'), reason: 'de wedloop loopt alleen over FLAC');
+      expect(haal, contains('for (final f in kandidaten.where(isLossless).take(3)) {'),
+          reason: 'zonder FLAC nog een AIFF of WAV, nooit lossy');
+      expect(haal, contains('if (kandidaten.isEmpty && alleenMp3 > 0) {'), reason: 'na te lezen in het logboek');
+    });
+
+    test('een volgende ronde: wie uit zichzelf afviel blijft weg, wie stopte omdat een ander won doet weer mee', () {
+      final online = File('lib/online.dart').readAsStringSync();
+      final w = online.substring(online.indexOf('  Future<({SoulseekFile f, SlskResult res, bool afgekeurd})?> _wedloop('));
+      final lijf = w.substring(0, w.indexOf('\n  }\n'));
+      expect(lijf, contains('if (winnaar == null && !job.cancelled) viel?.call(f.username);'));
+      final haal = online.substring(online.indexOf('  Future<String?> _haalVoorRadio('));
+      expect(haal, contains('bool vrij(SoulseekFile k) => !(_radioNietBij[sleutel]?.contains(k.username) ?? false);'));
+      expect(haal, isNot(contains('geprobeerd.add(')),
+          reason: 'met twintig tegelijk zou "al geprobeerd" na één mislukte winnaar de hele lijst opmaken');
+      expect(lijf, contains(r"'(loper #${lopers.keys.toList().indexOf(w) + 1} van $lopend, $afgevallen al afgevallen)"),
+          reason: 'meten of de lopers achteraan ooit winnen');
+    });
+
+    test('zuinig zoeken: vond een ronde niets wat dit nummer is, dan geen tweede en derde ronde', () {
+      final online = File('lib/online.dart').readAsStringSync();
+      expect(online, contains('if (kandidaten.isEmpty && nietBij.isEmpty) {\n        _radioZonderKandidaat.add(sleutel);'));
+      final main = File('lib/main.dart').readAsStringSync();
+      expect(main, contains('if (t == null && dm != null && dm.vondGeenKandidaat(artiest, titel)) break;'));
     });
 
     test('de laatste tik wint: een eerder nummer neemt de speler niet meer over', () {

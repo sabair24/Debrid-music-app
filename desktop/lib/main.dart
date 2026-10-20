@@ -17231,6 +17231,7 @@ class NieuwSpeler extends ChangeNotifier {
     // je bibliotheek. Gezien op de pc (20-10-2026): U2 landde na 69 s en onderbrak Angèle, die later
     // aangetikt was en al speelde.
     final mijnTik = ++_tikken;
+    final downloads = lib.remote == null ? context.read<DownloadManager>() : null;
     final keuzes = speler.keuzes;
     bool magNog() => mijnTik == _tikken && speler.keuzes == keuzes;
     final online = context.read<OnlineService>();
@@ -17307,6 +17308,9 @@ class NieuwSpeler extends ChangeNotifier {
           } on AlVanJou catch (e) {
             t = e.nummer;
           }
+          // Niets wat dit nummer is (niet: alle uploaders faalden): nog eens zoeken levert hetzelfde op.
+          final dm = downloads;
+          if (t == null && dm != null && dm.vondGeenKandidaat(artiest, titel)) break;
         }
         klaar = true;
         // Soulseek had niets: dan alsnog wat TorBox klaar heeft (alleen met de proef aan, want anders is
