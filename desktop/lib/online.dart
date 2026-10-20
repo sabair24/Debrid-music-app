@@ -3452,12 +3452,16 @@ class DownloadManager extends ChangeNotifier {
   ///
   /// Een eigen naam en geen extra parameter op [haalVoorRadio]: die wordt in de toetsen nagebootst, en
   /// een extra parameter zou al die nabootsingen breken voor iets wat ze nooit gebruiken.
+  ///
+  /// [zoekDaarnaBeter]: na het landen dezelfde jacht op beter als na een gewone download — voor ▶, niet
+  /// voor de radio (die doet het pas bij een 👍).
   Future<String?> haalEnLaatHoren({
     required String artiest,
     required String titel,
     int? seconden,
     int? jaar,
     Groei? vroeg,
+    bool zoekDaarnaBeter = false,
   }) async {
     if (!soulseek.available) return null;
     // Heb je dit al? Dan valt er niets te halen — en, net zo belangrijk, dan mag het straks ook niet
@@ -3478,7 +3482,7 @@ class DownloadManager extends ChangeNotifier {
     final job = DownloadJob(titel); // wegwerp: bewust niet in `jobs`
     _radiohalen.add(job);
     try {
-      return await _haalVoorRadio(job, artiest, titel, seconden, jaar, vroeg: vroeg);
+      return await _haalVoorRadio(job, artiest, titel, seconden, jaar, vroeg: vroeg, zoekBeter: zoekDaarnaBeter);
     } finally {
       _radiohalen.remove(job);
     }
@@ -3704,8 +3708,8 @@ class DownloadManager extends ChangeNotifier {
     return goed.isEmpty ? null : goed.first;
   }
 
-  Future<String?> _haalVoorRadio(
-      DownloadJob job, String artiest, String titel, int? seconden, int? jaar, {Groei? vroeg}) async {
+  Future<String?> _haalVoorRadio(DownloadJob job, String artiest, String titel, int? seconden, int? jaar,
+      {Groei? vroeg, bool zoekBeter = false}) async {
     final sleutel = _radioSleutel(artiest, titel);
     // Alleen wat ECHT dit nummer is, in de gevraagde uitvoering en ongeveer de juiste lengte — zie
     // `radiobestand.dart` voor de zes verkeerde nummers van 26-09-2026 — en niet bij een uploader die
@@ -4021,6 +4025,13 @@ class DownloadManager extends ChangeNotifier {
           }
           vroeg?.geland(uit.path);
           geland = uit.path;
+          if (zoekBeter) {
+            unawaited(_zoekBeterNaHetLanden(job, f, uit.path, seconden,
+                gezag: gezag,
+                plaatsing: plaatsing,
+                // De hele uitslag: bij een vroege start zocht de zoektocht intussen verder.
+                alle: () async => kandidatenUit(await uitslag() ?? tussenstand)));
+          }
           return _Uit.klaar;
         }
 
@@ -4158,8 +4169,154 @@ class DownloadManager extends ChangeNotifier {
     return false;
   }
 
+  /// Speelt de speler dit pad nu (ook gepauzeerd)? Gezet in main.dart. Een betere kopie van een nummer
+  /// dat je net met ▶ aanzette, vervangt het pas als het niet meer speelt — zie [_chaseUpgrade].
+  bool Function(String pad)? speeltNu;
+
+  /// Hoe lang een gevonden betere kopie wacht tot het nummer niet meer speelt. Daarna gaat ze weg: wie
+  /// een nummer twintig minuten op pauze laat staan, krijgt de jacht een volgende keer opnieuw.
+  static const kWachtOpStilte = Duration(minutes: 20);
+
+  Future<bool> _wachtTotNietMeerSpeelt(String pad) async {
+    final tot = DateTime.now().add(kWachtOpStilte);
+    while (speeltNu?.call(pad) ?? false) {
+      if (DateTime.now().isAfter(tot)) return false;
+      await Future<void>.delayed(const Duration(seconds: 5));
+    }
+    return true;
+  }
+
+  /// De kandidaten die [gekozen] mogen opwaarderen ([magOpwaarderen]: duidelijk beter, en nooit verder
+  /// van de officiële lengte), zonder hetzelfde bestand nog eens.
+  static List<SoulseekFile> betereKandidaten(List<SoulseekFile> alle, SoulseekFile gekozen, int? officieel) => [
+        for (final k in alle)
+          if (!(k.username == gekozen.username && k.filename == gekozen.filename) &&
+              magOpwaarderen(k, gekozen, officieel))
+            k
+      ];
+
+  /// Na ▶: het klonk meteen met de snelste FLAC, en nu dezelfde jacht op beter als na een gewone
+  /// download (Saber, 20-10-2026: "eerst de snelste flac, om daarna een betere versie te zoeken").
+  /// Uit de hele zoekuitslag van dít nummer; vervangen pas als het niet meer speelt.
+  Future<void> _zoekBeterNaHetLanden(DownloadJob job, SoulseekFile gekozen, String pad, int? seconden,
+      {required TrackTags gezag, required TrackTags plaatsing, required Future<List<SoulseekFile>> Function() alle}) async {
+    try {
+      final beter = betereKandidaten(await alle(), gekozen, seconden);
+      if (beter.isEmpty) {
+        _log.line('"${job.name}": na ▶ geen betere kandidaat in deze zoekuitslag — het blijft '
+            '${baseName(gekozen.filename)}');
+        return;
+      }
+      job.authority = plaatsing;
+      _queueUpgrade(beter, job, gezag: gezag, speeltPad: pad, parkeerAltijd: true);
+    } catch (_) {/* niets verloren: wat klonk, staat in je bibliotheek */}
+  }
+
+  /// Je eigen bestand als Soulseek-kandidaat, om er een gevonden kopie mee te vergelijken. [clearlyBetter]
+  /// kijkt naar de soort en de bitrate (grootte gedeeld door lengte), zoals Soulseek die van een kopie
+  /// toont. Null zonder grootte of lengte: dan valt er niets te vergelijken.
+  static SoulseekFile? eigenAlsKandidaat(Track t) {
+    final sec = t.duration?.inSeconds ?? 0;
+    if (t.sizeBytes <= 0 || sec <= 0) return null;
+    return SoulseekFile(
+        username: '',
+        filename: t.path,
+        size: t.sizeBytes,
+        durationSec: sec,
+        sampleRate: t.sampleRate > 0 ? t.sampleRate : null,
+        bitDepth: t.bitsPerSample > 0 ? t.bitsPerSample : null);
+  }
+
+  /// Wat in [hits] een betere kopie is van [t]: hetzelfde nummer — dezelfde zeef als een wens
+  /// ([kandidatenVoorWens]: titel, lengte ±6 s, lossless, stereo, één per uploader) — en duidelijk beter
+  /// dan wat er ligt ([magOpwaarderen] tegen [eigenAlsKandidaat]).
+  static List<SoulseekFile> beterDanWatErLigt(Track t, List<SoulseekFile> hits) {
+    final eigen = eigenAlsKandidaat(t);
+    if (eigen == null) return const [];
+    final w = LosslessWant(
+        artist: t.artist,
+        title: t.title,
+        album: t.album,
+        authority: TrackTags(
+            title: t.title, artist: t.artist, album: t.album, trackNo: t.trackNo, seconds: t.duration?.inSeconds));
+    return [
+      for (final k in kandidatenVoorWens(w, hits))
+        if (magOpwaarderen(k, eigen, t.duration?.inSeconds)) k
+    ];
+  }
+
+  /// Een betere kopie zoeken voor nummers die al in je bibliotheek staan — op jouw vraag (de knop "Zoek
+  /// hi-res" op een album) of bij een 👍 op een nummer dat de radio haalde (Saber, 20-10-2026: "alleen
+  /// als ik het vraag", en voor de radio "bij nummers die ik beslis om bij te houden").
+  ///
+  /// **Eén zoekopdracht voor een heel album** ([album] en meer dan één nummer): "artiest album" geeft de
+  /// albummappen, ook de hi-res-rips, en elk nummer wordt daarin op titel en lengte teruggevonden — één
+  /// vraag aan Soulseek in plaats van twaalf. Anders per nummer.
+  ///
+  /// Daarna de gewone jacht ([_queueUpgrade]): een vingerafdruk tegen jouw bestand (dezelfde opname?), de
+  /// keuring beslist (alleen bewezen beter vervangt), wat verliest gaat opzij, en een spelend nummer wordt
+  /// pas vervangen als het niet meer speelt. Een zelf gekozen bestand ([isVasteKeuze]) blijft met rust.
+  /// Geeft terug voor hoeveel nummers er een jacht begon.
+  Future<int> zoekBeterVoor(List<Track> nummers, {String? album, TrackTags Function(Track)? gezag}) async {
+    if (!soulseek.available) return 0;
+    final te = [
+      for (final t in nummers)
+        if (t.artist.trim().isNotEmpty && t.title.trim().isNotEmpty && !isVasteKeuze(t.path)) t
+    ];
+    if (te.isEmpty) return 0;
+    List<SoulseekFile>? albumHits;
+    final albumNaam = album?.trim() ?? '';
+    if (albumNaam.isNotEmpty && te.length > 1) {
+      try {
+        albumHits = await soulseek.search(zoekvraagVoorAlbum(te.first.artist, albumNaam));
+      } catch (_) {
+        return 0;
+      }
+      _log.line('"${te.first.artist} — $albumNaam": betere kwaliteit zoeken — ${albumHits.length} treffers '
+          'voor ${te.length} nummers');
+    }
+    var begonnen = 0;
+    for (final t in te) {
+      final naam = '${t.artist} — ${t.title}';
+      List<SoulseekFile> hits;
+      if (albumHits != null) {
+        hits = albumHits;
+      } else {
+        try {
+          hits = await soulseek.search(zoekvraagVoorNummer(t.title, artist: t.artist));
+        } catch (_) {
+          continue;
+        }
+      }
+      final beter = beterDanWatErLigt(t, hits);
+      if (beter.isEmpty) {
+        _log.line('"$naam": geen betere kopie dan wat je hebt');
+        continue;
+      }
+      _log.line('"$naam": ${beter.length} betere kandidaten, de beste ${beter.first.username} — '
+          '${baseName(beter.first.filename)}');
+      final job = DownloadJob(naam)
+        ..authority = gezag?.call(t) ??
+            TrackTags(
+                title: t.title,
+                artist: t.artist,
+                album: t.album,
+                trackNo: t.trackNo,
+                year: t.year,
+                seconds: t.duration?.inSeconds);
+      _queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true);
+      begonnen++;
+    }
+    return begonnen;
+  }
+
   /// Queue a background hunt for a better copy of a track you can already play.
-  void _queueUpgrade(List<SoulseekFile> better, DownloadJob job) {
+  ///
+  /// [gezag]: de tags om na het vervangen te schrijven (▶ bergt op zonder jaar en schrijft daarna het
+  /// gezag — zie `_haalVoorRadio`). [speeltPad]: vervang pas als dat niet meer speelt. [parkeerAltijd]:
+  /// wat verliest gaat opzij, nooit weg — zoals bij de eerste landing van ▶.
+  void _queueUpgrade(List<SoulseekFile> better, DownloadJob job,
+      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false}) {
     job.status = 'upgrading';
     job.detail = 'speelbaar · betere kwaliteit zoeken';
     notifyListeners();
@@ -4168,7 +4325,8 @@ class DownloadManager extends ChangeNotifier {
     _log.line('"${job.name}": ${better.length} betere kandidaten, opwaarderen in de rij'
         ' (${_jachten.lopend} van $_maxParallelleJachten jachten bezig'
         '${_jachten.wachtend > 0 ? ", ${_jachten.wachtend} wachtend" : ""})');
-    _jachten.voegToe(() => _chaseUpgrade(better, job));
+    _jachten.voegToe(() =>
+        _chaseUpgrade(better, job, gezag: gezag, speeltPad: speeltPad, parkeerAltijd: parkeerAltijd));
   }
 
 
@@ -4178,7 +4336,8 @@ class DownloadManager extends ChangeNotifier {
   /// shared session for its whole run — dipping out between peers would let the 120s idle close
   /// fire and make the next attempt a fresh LOGIN, which is what gets the account blocked — and
   /// deliberately takes no download slot, so a track you have nothing of never waits behind it.
-  Future<void> _chaseUpgrade(List<SoulseekFile> better, DownloadJob job) async {
+  Future<void> _chaseUpgrade(List<SoulseekFile> better, DownloadJob job,
+      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false}) async {
     final deadline = DateTime.now().add(_upgradeBudget);
     // A shadow job absorbs the transfer's own status/progress writes: the visible job is already
     // finished and must not flip back to "Bezig 34%" with a half-full bar.
@@ -4247,9 +4406,24 @@ class DownloadManager extends ChangeNotifier {
               await _discardStaged(staged.path);
               continue;
             }
+            // Niet onder een spelend nummer door (▶): wachten tot het niet meer speelt.
+            if (speeltPad != null && !await _wachtTotNietMeerSpeelt(speeltPad)) {
+              _log.line('   ${job.name}: betere kopie klaar, maar het nummer speelde nog na '
+                  '${kWachtOpStilte.inMinutes} min — weggegooid, de oude blijft');
+              await _discardStaged(staged.path);
+              settle('beste vrije kwaliteit behouden');
+              return;
+            }
             // The SAME authority as the first landing. Without it the sweep would quietly undo the
             // numbering a quarter of an hour later, using whatever this new peer's tags happen to say.
-            how = (await placeFileDetailed(staged, _downloadsRoot, tags: job.authority, staatAl: mapVanBestaande)).how;
+            final uit = await placeFileDetailed(staged, _downloadsRoot,
+                tags: job.authority, staatAl: mapVanBestaande, parkeerAltijd: parkeerAltijd);
+            how = uit.how;
+            if (how == Placement.moved && gezag != null) {
+              try {
+                await stampTags(File(uit.path), gezag);
+              } catch (_) {/* het bestand staat goed; een mislukte tagschrijf maakt het niet stuk */}
+            }
           } catch (_) {/* the scan still finds it wherever it landed */}
           if (how == Placement.duplicate) {
             settle('had al de beste kwaliteit');

@@ -76,11 +76,18 @@ class _Groeiend extends DownloadManager {
   final landen = Completer<void>();
   bool mislukt = false;
   Groei? gekregen;
+  bool? zoekBeterGevraagd;
 
   @override
   Future<String?> haalEnLaatHoren(
-      {required String artiest, required String titel, int? seconden, int? jaar, Groei? vroeg}) async {
+      {required String artiest,
+      required String titel,
+      int? seconden,
+      int? jaar,
+      Groei? vroeg,
+      bool zoekDaarnaBeter = false}) async {
     gekregen = vroeg;
+    zoekBeterGevraagd = zoekDaarnaBeter;
     final pad = '$map${Platform.pathSeparator}in.flac';
     File(pad).writeAsBytesSync(Uint8List(300 * 1024));
     vroeg?.poging(pad: pad, totaal: 300 * 1024);
@@ -172,6 +179,8 @@ void main() {
     m.speler.droog = false;
     await m.radio.start([Radioplek(artiest: '2 Fabiola', titel: 'Freak Out')]);
     await _totDat(() => m.haal.gekregen?.kanKlinken ?? false);
+    expect(m.haal.zoekBeterGevraagd, isFalse,
+        reason: 'de radio zelf zoekt niet verder naar beter — alleen ▶, en bij een 👍 (Saber, 20-10-2026)');
     m.radio.tikVoorToets();
     expect(m.speler.rij, isEmpty, reason: 'er speelt nog iets: niets onderbreken');
     m.haal.landen.complete();

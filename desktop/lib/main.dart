@@ -1752,6 +1752,8 @@ Future<void> main() async {
     // zijn eigen albumtag volgt en ook niet ernaast onder een andere naam. Zie
     // [LibraryStore.fileOfRecording].
     downloads.mapVanBestaande = library.fileOfRecording;
+    // Een betere kopie van een nummer dat je met ▶ aanzette, vervangt het pas als het niet meer speelt.
+    downloads.speeltNu = (p) => player.current?.path == p;
     // En voor wat onder een ándere titel binnenkomt dan jouw kopie. Zie [LibraryStore.bestandenVanLengte].
     downloads.opLengte = library.bestandenVanLengte;
     // Een torrent die bij het afsluiten nog in de keuringsmap stond: nu alsnog keuren en opbergen. Na
@@ -7260,6 +7262,15 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                               icon: const Icon(Icons.swap_vert_rounded, size: 15),
                               label: const Text('Nummers toewijzen…',
                                   style: TextStyle(fontSize: 12)),
+                              style: TextButton.styleFrom(foregroundColor: _muted),
+                            ),
+                          // Saber, 20-10-2026: "alleen als ik het vraag" — geen ronde op de achtergrond,
+                          // wel een knop. Alleen waar deze machine zelf haalt.
+                          if (!isTv && context.read<LibraryStore>().remote == null)
+                            TextButton.icon(
+                              onPressed: () => unawaited(_zoekHires(context, album)),
+                              icon: const Icon(Icons.high_quality_rounded, size: 15),
+                              label: const Text('Zoek hi-res', style: TextStyle(fontSize: 12)),
                               style: TextButton.styleFrom(foregroundColor: _muted),
                             ),
                         ],
@@ -13221,6 +13232,34 @@ Widget _overzichtRegel(Gehaald g, VoidCallback? redden) => Padding(
 ///
 /// Een groen oordeel van eerder gaat wél weg. Zonder dat zou hetzelfde nummer, als het later opnieuw
 /// binnenkomt, die duim omhoog erven — van een keuze die je intussen hebt teruggenomen.
+/// De knop "Zoek hi-res" op een albumpagina: één zoekopdracht voor het hele album, en voor elk nummer met
+/// een duidelijk betere kopie de gewone jacht — zie [DownloadManager.zoekBeterVoor].
+Future<void> _zoekHires(BuildContext context, Album album) async {
+  final lib = context.read<LibraryStore>();
+  final dm = context.read<DownloadManager>();
+  _srcToast(context, 'Zoekt een betere kopie voor "${album.title}"…');
+  final n = await dm.zoekBeterVoor(album.tracks, album: album.title, gezag: lib.tagsVoorVervanger);
+  if (!context.mounted) return;
+  _srcToast(
+      context,
+      n == 0
+          ? 'Geen betere kopie gevonden voor "${album.title}" — wat je hebt is het beste dat er nu is'
+          : '$n ${n == 1 ? "nummer" : "nummers"} op jacht naar een betere kopie — vervangen alleen als het '
+              'bewezen beter is');
+}
+
+/// 👍 op een nummer dat de radio haalde: houden, en dan ook op jacht naar een betere kopie (Saber,
+/// 20-10-2026: "maar bij radio wel bij nummers die ik beslis om bij te houden"). Alleen waar deze machine
+/// zelf haalt, en alleen als het nummer nú groen werd — uitzetten zoekt niets.
+Future<void> _duimOmhoogRadio(BuildContext context, Track t) async {
+  final oordelen = context.read<Oordelen>();
+  final lib = context.read<LibraryStore>();
+  final dm = lib.remote == null ? context.read<DownloadManager>() : null;
+  final nu = await oordelen.wissel(t, Oordeel.omhoog);
+  if (dm == null || nu != Oordeel.omhoog) return;
+  unawaited(dm.zoekBeterVoor([t], gezag: lib.tagsVoorVervanger));
+}
+
 Future<void> _duimOmlaag(BuildContext context, Track t) async {
   final radio = context.read<RadioBesturing>();
   final oordelen = context.read<Oordelen>();
@@ -13274,7 +13313,7 @@ class _RijDuimen extends StatelessWidget {
           maat: 28,
           aan: nu == Oordeel.omhoog,
           gedempt: nu == Oordeel.omlaag,
-          opTik: () => unawaited(oordelen.wissel(track, Oordeel.omhoog)),
+          opTik: () => unawaited(_duimOmhoogRadio(context, track)),
         ),
         const SizedBox(width: kRuimte4),
       ],
@@ -13350,7 +13389,7 @@ class _RadioOordeel extends StatelessWidget {
                 aan: nu == Oordeel.omhoog,
                 gedempt: nu == Oordeel.omlaag,
                 bijschrift: 'Houden',
-                opTik: () => unawaited(oordelen.wissel(t, Oordeel.omhoog)),
+                opTik: () => unawaited(_duimOmhoogRadio(context, t)),
               ),
             ],
           ),
@@ -17306,7 +17345,10 @@ class NieuwSpeler extends ChangeNotifier {
         for (var ronde = 0; ronde < kNieuwHaalRondes && t == null; ronde++) {
           final plek = Radioplek(artiest: artiest, titel: titel, seconden: seconden);
           try {
-            t = vroeg != null ? await (bron as EigenRadiobron).haal(plek, vroeg: vroeg) : await bron.haal(plek);
+            // [zoekBeter]: eerst de snelste FLAC, daarna een betere (Saber, 20-10-2026).
+            t = vroeg != null
+                ? await (bron as EigenRadiobron).haal(plek, vroeg: vroeg, zoekBeter: true)
+                : await bron.haal(plek);
           } on AlVanJou catch (e) {
             t = e.nummer;
           }
