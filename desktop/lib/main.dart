@@ -909,7 +909,8 @@ Future<void> main() async {
   final groeiLog = WarmLog('$appDir${Platform.pathSeparator}groeistroom.log');
   Groeistroom.gedeeld
     ..spoor = groeiLog.line
-    ..inGebruik = (a) => player.mpvAdres == a || player.current?.path == a;
+    // Zonder de vraag erachter: na een peerwissel speelt mpv "<adres>?vanaf=…".
+    ..inGebruik = (a) => (player.mpvAdres ?? '').split('?').first == a || player.current?.path == a;
   // De mediatoetsen van het toetsenbord en de knoppen in de taakbalk, op Windows. Zie mediabediening.dart.
   Mediabediening.start(speler: player, speaker: speakers, meld: startLog.line);
   // Wisselt het toestel van netwerk (wifi weg, mobiel erbij, Tailscale aan of uit), dan meteen

@@ -1782,6 +1782,23 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   }
 
   void _onCompleted() {
+    // Een nummer dat nog binnenkomt en vóór zijn einde ophoudt — de uploader haakte af: niet het algemene
+    // hervatten (dat opent meteen opnieuw en springt; hier is er misschien nog geen volgende uploader),
+    // maar wachten tot de volgende ver genoeg is. Zie [_hervatGroei]. Ook in de laatste tien seconden
+    // (de marge van [watNaHetEinde]): in de proef van 20-10-2026 miste anders het slot van een nummer.
+    // Met een rem: drie keer niet verder dan dezelfde plek, dan door naar het volgende.
+    if (Groeistroom.gedeeld.van(current?.path ?? '') != null &&
+        duration - position > const Duration(seconds: 1)) {
+      final vorig = _groeiVorigePlek;
+      _groeiZelfdePlek =
+          vorig != null && (position - vorig).abs() < const Duration(seconds: 2) ? _groeiZelfdePlek + 1 : 0;
+      _groeiVorigePlek = position;
+      if (_groeiZelfdePlek < 3) {
+        unawaited(_hervatGroei(current!, position));
+        return;
+      }
+      _log?.line('GROEISTROOM komt niet verder dan ${position.inSeconds} s — door naar het volgende');
+    }
     switch (watNaHetEinde(
       positie: position,
       duur: duration,
@@ -1789,14 +1806,6 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       mislukt: _hervatpogingen,
     )) {
       case NaHetEinde.stroomHervatten:
-        // Een nummer dat nog binnenkomt en waarvan de uploader afhaakte: niet het algemene hervatten
-        // (dat opent meteen opnieuw en springt; hier is er misschien nog geen volgende uploader), maar
-        // wachten tot de volgende ver genoeg is. Zie [_hervatGroei].
-        final groei = Groeistroom.gedeeld.van(current?.path ?? '');
-        if (groei != null) {
-          unawaited(_hervatGroei(current!, position));
-          return;
-        }
         _hervatpogingen++;
         _log?.line('AFGEBROKEN op $position van $duration — poging $_hervatpogingen'
             ' — ${current?.title ?? "?"}');
@@ -1842,6 +1851,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// zodra er een duur is, en die staat er bij hetzelfde nummer al; met een server die nog op de
   /// volgende uploader wacht, verdween die sprong in het niets en begon het nummer van voren af aan.
   /// mpv's `start` geldt vóór de eerste byte audio: geen tel van het begin, en geen sprong die mislukt.
+  Duration? _groeiVorigePlek;
+  int _groeiZelfdePlek = 0;
+
   Future<void> _hervatGroei(Track t, Duration plek) async {
     final g = Groeistroom.gedeeld.van(t.path);
     if (g == null) return;
@@ -1868,9 +1880,33 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _log?.line('GROEISTROOM VERDER op ${plek.inSeconds} s na ${klok.elapsedMilliseconds} ms — ${t.title}');
     _meldStilstand(null);
     try {
-      await _player.open(Media(_bron(verder), start: plek), play: true);
+      if (Groeistroom.isAdres(verder)) {
+        // **Niet springen, maar een stroom die op de plek begint** (`?vanaf=`, zie groeistroom.dart).
+        // Springen in een FLAC laat ffmpeg eerst het einde van het bestand zoeken, en dat is er bij een
+        // download nog niet: gemeten op 20-10-2026 9 en 52 s stilte, ook in een bestand mét zoektabel.
+        // De frames dragen hun eigen tijd; `rebase-start-time=no` laat mpv die tijd tonen in plaats van
+        // de stroom op 0:00 te laten beginnen. Voor een gewoon nummer verandert dat niets: dat begint op 0.
+        await _zetZonderHerbasering();
+        await _player.open(Media(_bron('$verder?vanaf=${plek.inMilliseconds}')), play: true);
+      } else {
+        await _player.open(Media(_bron(verder), start: plek), play: true);
+      }
     } catch (e) {
       _log?.line('GROEISTROOM VERDER MISLUKT: $e');
+    }
+  }
+
+  bool _zonderHerbasering = false;
+
+  Future<void> _zetZonderHerbasering() async {
+    if (_zonderHerbasering) return;
+    final p = _player.platform;
+    if (p is! NativePlayer) return;
+    try {
+      await p.setProperty('rebase-start-time', 'no');
+      _zonderHerbasering = true;
+    } catch (e) {
+      _log?.line('rebase-start-time niet gezet: $e');
     }
   }
 

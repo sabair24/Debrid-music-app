@@ -38,6 +38,44 @@ Future<_Antwoord> _haal(String adres, {String? bereik, void Function(int binnen)
 
 Uint8List _bytes(int n, {int zaad = 7}) => Uint8List.fromList([for (var i = 0; i < n; i++) (i * 31 + zaad) & 0xFF]);
 
+int _crc8(List<int> b) {
+  var crc = 0;
+  for (final x in b) {
+    crc ^= x;
+    for (var k = 0; k < 8; k++) {
+      crc = (crc & 0x80) != 0 ? ((crc << 1) ^ 0x07) & 0xFF : (crc << 1) & 0xFF;
+    }
+  }
+  return crc;
+}
+
+/// Een zelfgebouwde FLAC (zie flac_frames_test.dart): STREAMINFO, opvulling, frames van 4096 monsters.
+({Uint8List bytes, int audioBegin, List<int> frameBegin}) _flac({int frames = 60, int vulling = 0}) {
+  final si = ByteData(34)
+    ..setUint16(0, 4096)
+    ..setUint16(2, 4096)
+    ..setUint64(10, (44100 << 44) | (1 << 41) | (15 << 36) | (frames * 4096));
+  final b = BytesBuilder()
+    ..add('fLaC'.codeUnits)
+    ..add([0x00, 0, 0, 34])
+    ..add(si.buffer.asUint8List())
+    ..add([0x81, 0, 0x10, 0x00])
+    ..add(Uint8List(4096));
+  final audioBegin = b.length;
+  final begin = <int>[];
+  for (var n = 0; n < frames; n++) {
+    begin.add(b.length);
+    final kop = [0xFF, 0xF8, 0xC9, 0x18, if (n < 0x80) n else ...[0xC0 | (n >> 6), 0x80 | (n & 0x3F)]];
+    kop.add(_crc8(kop));
+    b
+      ..add(kop)
+      ..add([0x00, 0x12, 0x34, 0x00, 0x12, 0x34])
+      ..add(List.filled(vulling, 0x55))
+      ..add([0x00, 0x00]);
+  }
+  return (bytes: b.toBytes(), audioBegin: audioBegin, frameBegin: begin);
+}
+
 /// Wacht tot [klopt] waar is, of faalt na twee seconden.
 Future<void> _totDat(bool Function() klopt) async {
   final eind = DateTime.now().add(const Duration(seconds: 5));
@@ -96,6 +134,48 @@ void main() {
       expect(a.status, 206);
       expect(a.kop!.value(HttpHeaders.contentRangeHeader), 'bytes 1000-${alles.length - 1}/${alles.length}');
       expect(a.lijf, alles.sublist(1000));
+    });
+
+    test('een sprong voorbij wat er al binnen is: meteen nee (ffmpeg zoekt dan verder terug), niet wachten',
+        () async {
+      final alles = _bytes(400 * 1024);
+      final f = File(pad('in.flac'))..writeAsBytesSync(alles.sublist(0, 100 * 1024));
+      final g = await server.nieuw('vooruit');
+      g.poging(pad: f.path, totaal: alles.length);
+      g.goedgekeurd(const Duration(seconds: 40));
+      await _haal(g.adres, bereik: 'bytes=0-1023');
+      final klok = Stopwatch()..start();
+      final eind = await _haal(g.adres, bereik: 'bytes=${alles.length - 1024}-');
+      expect(eind.status, 416, reason: 'gemeten: anders 9 s wachten op het einde van de download');
+      expect(klok.elapsed, lessThan(const Duration(seconds: 1)));
+      // Binnen wat er staat: gewoon de bytes.
+      final binnen = await _haal(g.adres, bereik: 'bytes=50000-50999');
+      expect(binnen.lijf, alles.sublist(50000, 51000));
+      // Compleet: dan bestaat het einde wel.
+      f.writeAsBytesSync(alles);
+      await g.binnen();
+      expect((await _haal(g.adres, bereik: 'bytes=${alles.length - 1024}-')).lijf, alles.sublist(alles.length - 1024));
+    });
+
+    test('verder op een plek (?vanaf=): de kop en dan de frames vanaf het frame van die tijd — zonder sprong',
+        () async {
+      final fl = _flac(frames: 60, vulling: 2000);
+      final f = File(pad('in.flac'))..writeAsBytesSync(fl.bytes.sublist(0, fl.frameBegin[40]));
+      final g = await server.nieuw('vanaf');
+      g.poging(pad: f.path, totaal: fl.bytes.length);
+      g.goedgekeurd(const Duration(milliseconds: 60 * 4096 * 1000 ~/ 44100), kopBytes: fl.audioBegin);
+      // 1,9 s = monster 83790: in frame 20 (81920–86015).
+      var binnen = 0;
+      final antwoord = _haal('${g.adres}?vanaf=1900', bijBytes: (n) => binnen = n);
+      await _totDat(() => binnen > 0);
+      f.writeAsBytesSync(fl.bytes); // de rest komt binnen
+      final a = await antwoord;
+      final verwacht = [...fl.bytes.sublist(0, fl.audioBegin), ...fl.bytes.sublist(fl.frameBegin[20])];
+      expect(a.kop!.contentLength, verwacht.length);
+      expect(a.lijf, verwacht, reason: 'de kop van het bestand, en dan meteen frame 20');
+      // Een sprong daarbinnen wordt omgerekend naar het echte bestand.
+      final sprong = await _haal(g.adres, bereik: 'bytes=${fl.audioBegin + 10}-');
+      expect(sprong.lijf, fl.bytes.sublist(fl.frameBegin[20] + 10));
     });
 
     test('een uploader die afhaakt: een breuk, en daarna een leeg EINDE voor ffmpeg — geen 410', () async {
@@ -376,7 +456,11 @@ void main() {
       final einde = player.substring(player.indexOf('  void _onCompleted() {'));
       expect(einde.indexOf('Groeistroom.gedeeld.van(current?.path'), lessThan(einde.indexOf('_hervatpogingen++;')));
       expect(player, contains('await g.speelbaarVanaf(plek);'));
-      expect(player, contains('Media(_bron(verder), start: plek)'));
+      expect(player, contains('if (_groeiZelfdePlek < 3) {'), reason: 'nooit eindeloos op dezelfde plek opnieuw');
+      expect(einde, contains("duration - position > const Duration(seconds: 1)"), reason: 'ook in de laatste tien seconden');
+      expect(player, contains(r"Media(_bron('$verder?vanaf=${plek.inMilliseconds}'))"),
+          reason: 'niet springen: een stroom die op de plek begint');
+      expect(player, contains("setProperty('rebase-start-time', 'no')"));
       expect(player, contains('geborgen != null && nu?.path == geborgen ? geborgen : null'),
           reason: 'intussen geland: verder in het opgeborgen bestand, niet stil blijven staan');
       expect(player, contains("if (position <= Duration.zero || !Groeistroom.isAdres(mpvAdres ?? '')) return false;"),
@@ -389,7 +473,7 @@ void main() {
       expect(speel, contains('instellingen.vroegLuisteren'));
       expect(speel, contains('speler.wordtLokaal(vroeg.adres, t);'));
       expect(speel, contains('if (vroeg != null && vroeg.geborgen == null) vroeg.opgegeven();'));
-      expect(main, contains('..inGebruik = (a) => player.mpvAdres == a || player.current?.path == a;'));
+      expect(main, contains("..inGebruik = (a) => (player.mpvAdres ?? '').split('?').first == a || player.current?.path == a;"));
     });
   });
 }

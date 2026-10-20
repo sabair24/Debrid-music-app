@@ -26,6 +26,8 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'flac_frames.dart';
+
 /// Hoeveel er per keer gelezen en verstuurd wordt.
 const kGroeiStuk = 256 * 1024;
 
@@ -195,16 +197,19 @@ class Groeistroom {
       if (g == null) return await _antwoord(res, 404);
       final bereik = req.headers.value(HttpHeaders.rangeHeader);
       final vanaf = int.tryParse(RegExp(r'bytes=(\d+)-').firstMatch(bereik ?? '')?.group(1) ?? '') ?? 0;
-      _Poging? p;
+      _Opening? o;
       if (vanaf == 0) {
         // OPENEN: de poging die nu bruikbaar is (zo nodig wachten op de volgende peer). Daarvan leest de
         // speler de kop, dus daar hoort elk vervolgverzoek bij.
-        p = await g._wachtOpBruikbaar(wachtOpPoging);
+        final p = await g._wachtOpBruikbaar(wachtOpPoging);
         if (p == null) {
           g._log('${req.method} ${bereik ?? "-"} → ${g._opgegeven ? 404 : 503}');
           return await _antwoord(res, g._opgegeven ? 404 : 503);
         }
-        g._geopend = p;
+        // `?vanaf=` (milliseconden): verder op een plek in het nummer, zonder te springen — zie
+        // [Groei._openingVanaf].
+        final ms = int.tryParse(req.uri.queryParameters['vanaf'] ?? '') ?? 0;
+        o = g._geopend = (ms > 0 ? g._openingVanaf(p, Duration(milliseconds: ms)) : null) ?? _Opening(p);
       } else {
         // EEN VERVOLG op een plek midden in het bestand: een sprong, of ffmpeg die na een hik opnieuw
         // verbindt. **Gemeten op 20-10-2026:** ffmpeg verbindt dan opnieuw met HETZELFDE adres op dezelfde
@@ -212,8 +217,8 @@ class Groeistroom {
         // speler de kop las weg (een andere peer, of opgeborgen met nieuwe tags), dan zou hij midden in
         // een ánder bestand verder lezen. Gezien met een poging zonder geheugen: "flac: invalid frame
         // header", en vier seconden terug in het nummer.
-        p = g._geopend;
-        if (p == null || p.afgebroken) {
+        o = g._geopend;
+        if (o == null || o.p.afgebroken) {
           // **Een einde, en geen foutcode.** Op "410" bleef ffmpeg het een minuut proberen (na 1, 3, 7, 15
           // en 31 s) en stond de muziek 25 s stil terwijl de volgende uploader al klaar was. Een leeg
           // antwoord dat zegt dat het bestand HIER ophoudt, is voor ffmpeg gewoon het einde: mpv speelt
@@ -226,8 +231,8 @@ class Groeistroom {
           return await res.close();
         }
       }
-      g._log('${req.method} ${bereik ?? "-"} → poging ${p.n}');
-      await g._dien(req, p);
+      g._log('${req.method} ${bereik ?? "-"} → poging ${o.p.n}${o.vanByte > 0 ? ' (vanaf byte ${o.vanByte})' : ''}');
+      await g._dien(req, o);
     } catch (_) {
       try {
         await res.close();
@@ -280,6 +285,28 @@ class _Poging {
   final metingen = <({Duration t, int bytes})>[];
 }
 
+/// Wat de speler bij het openen kreeg: een poging, en bij `?vanaf=` een eigen kop met de frames vanaf
+/// [vanByte] erachter. Elk vervolgverzoek (een sprong, een herverbinding) rekent met dezelfde opening.
+class _Opening {
+  _Opening(this.p, {this.kop, this.vanByte = 0});
+  final _Poging p;
+
+  /// De kop zoals de speler hem krijgt (tot het eerste frame), of null: dan het bestand zoals het is.
+  final Uint8List? kop;
+
+  /// De echte byte waar de frames achter [kop] beginnen.
+  final int vanByte;
+
+  /// Hoe groot het bestand is zoals de speler het ziet.
+  int get lengte => kop == null ? p.totaal : kop!.length + (p.totaal - vanByte);
+
+  /// De echte byte achter byte [v] van de speler (voorbij de kop).
+  int echt(int v) => kop == null ? v : vanByte + (v - kop!.length);
+
+  /// Hoeveel er voor de speler beschikbaar is, als er [staat] echte bytes zijn.
+  int beschikbaar(int staat) => kop == null ? staat : kop!.length + max(0, staat - vanByte);
+}
+
 /// Iemand die wacht tot het vanaf [vanaf] kan klinken.
 class _Wachter {
   _Wachter(this.vanaf);
@@ -307,8 +334,8 @@ class Groei {
   String? _geland;
   DateTime? _rustSinds;
 
-  /// De poging waarvan de speler de kop las (het laatste verzoek vanaf byte 0).
-  _Poging? _geopend;
+  /// Wat de speler bij het laatste openen (een verzoek vanaf byte 0) kreeg; daar hoort elk vervolg bij.
+  _Opening? _geopend;
 
   final _wachters = <_Wachter>[];
   Future<bool>? _vanafBegin;
@@ -555,9 +582,45 @@ class Groei {
     }
   }
 
-  Future<void> _dien(HttpRequest req, _Poging p) async {
+  /// Een opening die bij [plek] begint: de kop van het bestand en daarachter de frames vanaf het frame waarin
+  /// die tijd valt. Er valt niets te springen — en springen wacht in een FLAC op het einde van het bestand,
+  /// ook mét zoektabel (gemeten op 20-10-2026: 9 en 52 s stilte na een peerwissel; zie flac_frames.dart).
+  /// Elk frame draagt zijn eigen tijd, dus mpv toont de juiste plek en de volle duur, mits
+  /// `rebase-start-time=no` (zie `_hervatGroei` in player.dart). Null als het frame niet te vinden is.
+  _Opening? _openingVanaf(_Poging p, Duration plek) {
+    final staat = p.klaar || p.vast != null ? p.totaal : _grootte(p.pad);
+    Uint8List lees(int v, int n) {
+      final vast = p.vast;
+      if (vast != null) return Uint8List.sublistView(vast, min(v, vast.length), min(v + n, vast.length));
+      if (v >= staat) return Uint8List(0);
+      return _lees(p.pad, v, min(n, staat - v)) ?? Uint8List(0);
+    }
+
+    // De kop zoals de haal hem mat; past hij daar niet in (of is hij niet gemeten), dan ruimer lezen.
+    var kop = lees(0, max(p.kop, 64 * 1024));
+    if (flacBlokken(kop) == null) kop = lees(0, 16 * 1024 * 1024);
+    final blokken = flacBlokken(kop);
+    final si = flacStroominfo(kop);
+    if (blokken == null || si == null || si.frequentie <= 0) {
+      _log('poging ${p.n}: geen leesbare kop voor een start op ${plek.inSeconds} s — dan van voren af aan');
+      return null;
+    }
+    final laatste = blokken.last;
+    final audioBegin = laatste.begin + 4 + laatste.lengte;
+    final doel = (plek.inMilliseconds * si.frequentie / 1000).round();
+    final f = flacFrameBij(doel, audioBegin: audioBegin, einde: staat, si: si, lees: lees);
+    if (f == null) {
+      _log('poging ${p.n}: geen frame gevonden op ${plek.inSeconds} s — dan van voren af aan');
+      return null;
+    }
+    _log('poging ${p.n} vanaf ${(f.monster / si.frequentie).toStringAsFixed(2)} s: frame op byte ${f.byte}');
+    return _Opening(p, kop: Uint8List.fromList(Uint8List.sublistView(kop, 0, audioBegin)), vanByte: f.byte);
+  }
+
+  Future<void> _dien(HttpRequest req, _Opening o) async {
+    final p = o.p;
     final res = req.response;
-    final totaal = p.totaal;
+    final totaal = o.lengte;
     var start = 0;
     var eind = totaal - 1;
     final r = RegExp(r'bytes=(\d*)-(\d*)').firstMatch(req.headers.value(HttpHeaders.rangeHeader) ?? '');
@@ -570,7 +633,15 @@ class Groei {
         start = max(0, totaal - int.parse(b));
       }
     }
-    if (start >= totaal || start > eind) {
+    // **Een sprong voorbij wat er al is: meteen nee, niet wachten.** Om naar een tijd te springen leest
+    // ffmpeg eerst vanaf het EINDE terug om de laatste tijd te vinden (`ff_find_last_ts`); met een nee
+    // stapt hij verder terug tot hij in het binnengekomen deel uitkomt, in plaats van te wachten tot de
+    // download klaar is. (Daarna loopt hij nog frame voor frame vooruit naar het einde, en DAT wacht wél —
+    // daarom springt het verdergaan na een peerwissel niet, zie [_openingVanaf]. Alleen een sprong die jij
+    // maakt terwijl het nog binnenkomt, kan nog op de download wachten.) Een gewone stroom vraagt nooit
+    // voorbij het einde van wat hij kreeg, dus die merkt hier niets van.
+    final staatNu = o.beschikbaar(p.klaar || p.vast != null ? p.totaal : _grootte(p.pad));
+    if (start >= totaal || start > eind || start > staatNu) {
       res.statusCode = HttpStatus.requestedRangeNotSatisfiable;
       res.headers.set(HttpHeaders.contentRangeHeader, 'bytes */$totaal');
       res.contentLength = 0;
@@ -590,15 +661,21 @@ class Groei {
     p.open++;
     var pos = start;
     var stilSinds = DateTime.now();
+    final kop = o.kop;
     try {
       while (pos <= eind && !p.afgebroken && !_gesloten) {
-        final vast = p.vast;
         Uint8List? stuk;
-        if (vast != null) {
-          stuk = Uint8List.sublistView(vast, pos, min(eind + 1, pos + kGroeiStuk));
-        } else if (!p.verhuist) {
-          final staat = _grootte(p.pad);
-          if (staat > pos) stuk = _lees(p.pad, pos, min(eind + 1, min(staat, pos + kGroeiStuk)) - pos);
+        if (kop != null && pos < kop.length) {
+          stuk = Uint8List.sublistView(kop, pos, min(kop.length, eind + 1));
+        } else {
+          final echt = o.echt(pos), echtEind = o.echt(eind);
+          final vast = p.vast;
+          if (vast != null) {
+            stuk = Uint8List.sublistView(vast, echt, min(echtEind + 1, echt + kGroeiStuk));
+          } else if (!p.verhuist) {
+            final staat = _grootte(p.pad);
+            if (staat > echt) stuk = _lees(p.pad, echt, min(echtEind + 1, min(staat, echt + kGroeiStuk)) - echt);
+          }
         }
         if (stuk != null && stuk.isNotEmpty) {
           res.add(stuk);
