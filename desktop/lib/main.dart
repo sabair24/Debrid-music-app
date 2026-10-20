@@ -17272,7 +17272,8 @@ class NieuwSpeler extends ChangeNotifier {
     // aangetikt was en al speelde.
     final mijnTik = ++_tikken;
     final downloads = lib.remote == null ? context.read<DownloadManager>() : null;
-    final keuzes = speler.keuzes;
+    // Wat deze tik zelf laat klinken (een groeistroom) telt niet als "zelf iets anders gekozen".
+    var keuzes = speler.keuzes;
     bool magNog() => mijnTik == _tikken && speler.keuzes == keuzes;
     final online = context.read<OnlineService>();
     final instellingen = context.read<AppSettings>();
@@ -17333,8 +17334,25 @@ class NieuwSpeler extends ChangeNotifier {
           if (!kan || klaar || !magNog()) return;
           klinkt = true;
           speler.playUrl(vroeg.adres, title: titel, artist: artiest);
+          keuzes = speler.keuzes;
           if (context.mounted) _srcToast(context, '"$titel" speelt al terwijl hij binnenkomt');
         }));
+      }
+      // Op een gsm, iPad of tv: de pc haalt met dezelfde snelle weg (wedloop, vroege start), en zegt wanneer
+      // het al te horen is — dan speelt het hier via de pc terwijl het daar binnenkomt (`GroeiOpPc`). Over
+      // wifi het origineel. Een oudere pc meldt niets; dan speelt het zoals vroeger pas na het landen.
+      GroeiOpPc? elders;
+      void klinktOpPc(String groeiId) {
+        if (klaar || !magNog()) return;
+        // Klinkt een vorige ronde nog, dan niet onderbreken. Viel die stil (de uploader haakte af en er
+        // kwam er op de pc geen meer), dan deze ronde.
+        if (klinkt && speler.playing) return;
+        final g = elders = GroeiOpPc(() => lib.remote, groeiId);
+        klinkt = true;
+        speler.groeitElders(g.pad, g);
+        speler.playUrl(g.pad, title: titel, artist: artiest);
+        keuzes = speler.keuzes;
+        if (context.mounted) _srcToast(context, '"$titel" speelt al terwijl je pc hem binnenhaalt');
       }
       try {
         Track? t;
@@ -17348,7 +17366,9 @@ class NieuwSpeler extends ChangeNotifier {
             // [zoekBeter]: eerst de snelste FLAC, daarna een betere (Saber, 20-10-2026).
             t = vroeg != null
                 ? await (bron as EigenRadiobron).haal(plek, vroeg: vroeg, zoekBeter: true)
-                : await bron.haal(plek);
+                : bron is PcRadiobron
+                    ? await bron.haal(plek, zoekBeter: true, klinkt: klinktOpPc)
+                    : await bron.haal(plek);
           } on AlVanJou catch (e) {
             t = e.nummer;
           }
@@ -17372,11 +17392,13 @@ class NieuwSpeler extends ChangeNotifier {
           }
           return;
         }
-        if (vroeg != null && klinkt) {
+        final klinkendAdres = vroeg?.adres ?? elders?.pad;
+        if (klinkendAdres != null && klinkt) {
           // Het klinkt al: niets opnieuw openen. In de rij wordt het je eigen nummer (hoes, kwaliteit,
           // duimen); mpv speelt door uit het geheugen van de groeistroom. Koos je intussen iets anders,
           // dan blijft dat spelen.
-          speler.wordtLokaal(vroeg.adres, t);
+          elders?.geborgen = t.path;
+          speler.wordtLokaal(klinkendAdres, t);
         } else if (magNog()) {
           speler.playQueue([t], 0);
         } else if (context.mounted) {
@@ -22068,6 +22090,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
         zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title),
             seconden: t.seconden,
+            zeefOp: (titel: t.title, artiest: t.artist, album: t.album),
             zeef: (l) => zeefKandidaten(l, titel: t.title, seconden: t.seconden, artiest: t.artist, album: t.album)),
       );
       if (!mounted) return;
@@ -26483,6 +26506,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
       for (final f in await soulseek.zoekVroeg(soulseekQuery(widget.artistName, t.title),
           seconden: t.durationSec,
+          zeefOp: (titel: t.title, artiest: widget.artistName, album: widget.album.title),
           zeef: (l) => zeefKandidaten(l,
               titel: t.title, seconden: t.durationSec, artiest: widget.artistName, album: widget.album.title))) {
         pool.putIfAbsent('${f.username}|${f.filename}', () => f);

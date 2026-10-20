@@ -15,14 +15,19 @@ library;
 import 'dart:async';
 import 'dart:io' show HttpStatus;
 
+import '../groeistroom.dart' show Groeiend;
 import '../library.dart';
 import '../models.dart';
 import '../radio.dart';
 import '../radiovoorraad.dart' show RadioLaterOpnieuw;
 import 'client.dart';
+import 'vaste_naam.dart' show kPcHost;
 
 /// Hoe vaak er gevraagd wordt hoe het met een haal staat.
 const Duration _peilritme = Duration(seconds: 3);
+
+/// Hoe vaak, zolang iemand op geluid wacht (▶) en het nog niet klinkt — zie [PcRadiobron.haal].
+const Duration kPeilritmeVoorGeluid = Duration(milliseconds: 500);
 
 /// Wanneer we een haal opgeven ook al zegt de pc niets.
 ///
@@ -46,6 +51,50 @@ String? radioLaterBijStatus(int? status) {
   if (status == 401 || status == 403) return 'de koppeling met je pc geldt niet meer — koppel opnieuw';
   if (status >= 500 || status == 408 || status == 429) return 'de pc kan het even niet aan';
   return null;
+}
+
+/// Een nummer dat op de pc nog binnenkomt en hier al klinkt: via de pc (`/groei/<id>.flac`, zie `_groei` in
+/// server.dart), zodra [PcRadiobron.haal] dat meldt.
+///
+/// Haakt de uploader op de pc af, dan houdt de stroom hier op waar het bestand ophield. De speler vraagt
+/// dan [speelbaarVanaf] — de pc wacht tot de volgende uploader zo ver is (`groeiwacht`) — en gaat op
+/// dezelfde plek verder (`?vanaf=`), net als op de pc zelf.
+class GroeiOpPc implements Groeiend {
+  GroeiOpPc(this.clientOf, this.id, {this.ritme = const Duration(seconds: 2)});
+
+  final RemoteClient? Function() clientOf;
+  final String id;
+
+  /// Tussen twee vragen na een fout (de pc even weg). Een toets zet het korter.
+  final Duration ritme;
+
+  /// De vaste naam: elke keer dat mpv opent, maakt `RemoteClient.authorized` er het adres van nu van.
+  String get pad => 'http://$kPcHost/groei/$id.flac';
+
+  @override
+  String? geborgen;
+
+  /// Zolang de pc "nog bezig" zegt opnieuw vragen (hij wacht hoogstens 25 s per vraag), tot drie minuten:
+  /// zo lang wacht de pc ook op een volgende uploader. Een paar mislukte vragen (wifi weg) zijn nog geen
+  /// nee.
+  @override
+  Future<bool> speelbaarVanaf(Duration plek) async {
+    final tot = DateTime.now().add(const Duration(minutes: 3));
+    var fouten = 0;
+    while (DateTime.now().isBefore(tot)) {
+      final c = clientOf();
+      if (c == null) return false;
+      try {
+        final a = await c.ask('/api/radio', {'op': 'groeiwacht', 'groei': id, 'vanaf': plek.inMilliseconds});
+        if (a['kan'] == true) return true;
+        if (a['nogBezig'] != true) return false;
+      } catch (_) {
+        if (++fouten >= 5) return false;
+        await Future<void>.delayed(ritme);
+      }
+    }
+    return false;
+  }
 }
 
 class PcRadiobron implements Radiobron {
@@ -125,8 +174,11 @@ class PcRadiobron implements Radiobron {
     }
   }
 
+  /// [zoekBeter]: ▶ op dit toestel — de pc zoekt na het landen een betere kopie (de radio niet).
+  /// [klinkt]: de pc zegt dat het nummer al te horen is terwijl het nog binnenkomt (groeistroom.dart op de
+  /// pc) — met het nummer van die groei, één keer. Dan peilt dit ook vaker: iemand wacht op geluid.
   @override
-  Future<Track?> haal(Radioplek plek) async {
+  Future<Track?> haal(Radioplek plek, {bool zoekBeter = false, void Function(String groeiId)? klinkt}) async {
     // Geen pc is geen mislukte plek maar een plek voor straks: op de sportschool valt de pc anderhalf
     // tot vijf minuten weg (zie `sportschool-pc-onbereikbaar`), en elke keer werd zo het plan
     // opgebrand — acht plekken per poging. Zie [RadioLaterOpnieuw].
@@ -141,6 +193,8 @@ class PcRadiobron implements Radiobron {
         'titel': plek.titel,
         if (plek.seconden != null) 'seconden': plek.seconden,
         if (plek.jaar != null) 'jaar': plek.jaar,
+        if (zoekBeter) 'zoekBeter': true,
+        if (klinkt != null) 'meeluisteren': true,
       });
       final gekregen = a['id'];
       if (gekregen is! String || gekregen.isEmpty) return null;
@@ -156,8 +210,11 @@ class PcRadiobron implements Radiobron {
     if (ronde != _ronde) return null;
 
     final tot = DateTime.now().add(_geduld);
+    var gemeld = false;
     while (DateTime.now().isBefore(tot)) {
-      await Future<void>.delayed(peilritme);
+      // Wacht er iemand op geluid ([klinkt]) en klinkt het nog niet, dan elke halve seconde: de pc laat
+      // een vlot nummer na 2 à 4 s klinken, en een peiling om de drie seconden at daar de helft van op.
+      await Future<void>.delayed(klinkt != null && !gemeld ? kPeilritmeVoorGeluid : peilritme);
       if (ronde != _ronde) return null; // de radio is intussen afgesloten
       Map<String, dynamic> a;
       try {
@@ -171,6 +228,11 @@ class PcRadiobron implements Radiobron {
         continue;
       }
       final stand = a['stand'];
+      final groei = a['groei'];
+      if (stand == 'onderweg' && !gemeld && groei is String && groei.isNotEmpty && klinkt != null) {
+        gemeld = true;
+        klinkt(groei);
+      }
       if (stand == 'onderweg') continue;
       // Soulseek op de pc doet even niet mee: geen mislukte plek, straks opnieuw. Een oudere pc kent
       // dit antwoord niet en zegt 'mislukt', en dan is het zoals het altijd was.

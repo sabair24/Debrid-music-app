@@ -649,7 +649,8 @@ void main() {
     test('de speler: een breuk in een groeistroom wacht op de volgende uploader en opent met een startpositie',
         () {
       final einde = player.substring(player.indexOf('  void _onCompleted() {'));
-      expect(einde.indexOf('Groeistroom.gedeeld.van(current?.path'), lessThan(einde.indexOf('_hervatpogingen++;')));
+      expect(einde.indexOf("_groeiVan(current?.path ?? '') != null"), allOf(greaterThan(0), lessThan(einde.indexOf('_hervatpogingen++;'))));
+      expect(player, contains('Groeiend? _groeiVan(String pad) => Groeistroom.gedeeld.van(pad) ?? _groeiElders[pad];'));
       expect(player, contains('await g.speelbaarVanaf(plek);'));
       expect(player, contains('if (_groeiZelfdePlek < 3) {'), reason: 'nooit eindeloos op dezelfde plek opnieuw');
       expect(einde, contains("duration - position > const Duration(seconds: 1)"), reason: 'ook in de laatste tien seconden');
@@ -658,7 +659,7 @@ void main() {
       expect(player, contains("setProperty('rebase-start-time', 'no')"));
       expect(player, contains('geborgen != null && nu?.path == geborgen ? geborgen : null'),
           reason: 'intussen geland: verder in het opgeborgen bestand, niet stil blijven staan');
-      expect(player, contains("if (position <= Duration.zero || !Groeistroom.isAdres(mpvAdres ?? '')) return false;"),
+      expect(player, contains('if (position <= Duration.zero || !_speeltGroei) return false;'),
           reason: 'het halve laatste frame ("Error decoding audio") is geen openfout');
       expect(player, contains('if (_breukInGroeistroom(e)) return;'), reason: 'in de foutluisteraar, vóór de poort');
     });
@@ -666,7 +667,8 @@ void main() {
     test('een tik op een nieuw nummer: klinkt het al, dan wordt het je nummer zonder opnieuw te openen', () {
       final speel = main.substring(main.indexOf('class NieuwSpeler'), main.indexOf('File get _nieuwOpToestel'));
       expect(speel, contains('instellingen.vroegLuisteren'));
-      expect(speel, contains('speler.wordtLokaal(vroeg.adres, t);'));
+      expect(speel, contains('final klinkendAdres = vroeg?.adres ?? elders?.pad;'));
+      expect(speel, contains('speler.wordtLokaal(klinkendAdres, t);'));
       expect(speel, contains('if (vroeg != null && vroeg.geborgen == null) vroeg.opgegeven();'));
       expect(main, contains("..inGebruik = (a) => (player.mpvAdres ?? '').split('?').first == a || player.current?.path == a;"));
       expect(speel, contains('vroeg.zalKlinken();\n        unawaited(vroeg.speelbaar.then((kan) {'),

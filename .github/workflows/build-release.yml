@@ -183,7 +183,7 @@ jobs:
             test/terug_test.dart test/binnen_navigator_test.dart \
             test/itemmenu_test.dart \
             test/maten_test.dart test/afmetingen_test.dart test/afkappen_test.dart test/draaihoes_test.dart test/tv_leunstoel_test.dart test/tv_artiestpagina_test.dart test/kopfoto_test.dart test/kopbewerker_test.dart test/nu_speelt_rondjes_test.dart test/tv_kop_past_test.dart test/normkey_geheugen_test.dart \
-            test/albumkop_menu_test.dart test/gebaren_test.dart test/kleine_fouten_test.dart test/aanbevolen_test.dart test/glas_bewaker_test.dart test/glas_balken_test.dart test/instellingen_sleutels_test.dart test/over_sneller_test.dart test/discografie_vast_test.dart test/kwaliteit_van_pc_test.dart test/hoes_midden_test.dart test/grote_kop_test.dart test/ontdek_raster_test.dart test/nieuwe_rijen_test.dart test/nieuw_kaarten_test.dart test/radio_isrc_test.dart test/schijf_licht_test.dart test/wachtrij_stapel_test.dart test/tegel_spiegel_test.dart test/nu_speelt_kop_test.dart test/tv_verder_schuiven_test.dart test/tv_kaart_selectie_test.dart test/glas_onthouden_test.dart test/tv_licht_test.dart test/speaker_client_meldt_test.dart test/single_naast_album_test.dart test/artiestpagina_immersief_test.dart test/foto_maat_test.dart test/remix_uitgave_test.dart test/volgens_musicbrainz_test.dart test/zoek_download_test.dart test/echtheid_vol_test.dart test/nu_speelt_kwaliteit_test.dart test/heropen_na_verbinding_test.dart test/groeistroom_test.dart test/radio_stroom_test.dart test/flac_frames_test.dart test/soulseek_twee_wegen_test.dart test/zoek_artiesten_test.dart test/race_breedte_test.dart test/opwaarderen_na_play_test.dart test/zoek_beter_test.dart test/download_vroeg_test.dart \
+            test/albumkop_menu_test.dart test/gebaren_test.dart test/kleine_fouten_test.dart test/aanbevolen_test.dart test/glas_bewaker_test.dart test/glas_balken_test.dart test/instellingen_sleutels_test.dart test/over_sneller_test.dart test/discografie_vast_test.dart test/kwaliteit_van_pc_test.dart test/hoes_midden_test.dart test/grote_kop_test.dart test/ontdek_raster_test.dart test/nieuwe_rijen_test.dart test/nieuw_kaarten_test.dart test/radio_isrc_test.dart test/schijf_licht_test.dart test/wachtrij_stapel_test.dart test/tegel_spiegel_test.dart test/nu_speelt_kop_test.dart test/tv_verder_schuiven_test.dart test/tv_kaart_selectie_test.dart test/glas_onthouden_test.dart test/tv_licht_test.dart test/speaker_client_meldt_test.dart test/single_naast_album_test.dart test/artiestpagina_immersief_test.dart test/foto_maat_test.dart test/remix_uitgave_test.dart test/volgens_musicbrainz_test.dart test/zoek_download_test.dart test/echtheid_vol_test.dart test/nu_speelt_kwaliteit_test.dart test/heropen_na_verbinding_test.dart test/groeistroom_test.dart test/radio_stroom_test.dart test/flac_frames_test.dart test/soulseek_twee_wegen_test.dart test/zoek_artiesten_test.dart test/race_breedte_test.dart test/opwaarderen_na_play_test.dart test/zoek_beter_test.dart test/download_vroeg_test.dart test/groei_op_toestel_test.dart \
             test/kleurenladder_test.dart test/overgang_test.dart \
             test/was_test.dart test/binnenkomst_test.dart \
             test/speelvlak_test.dart test/cache_snoei_test.dart \
@@ -444,6 +444,26 @@ jobs:
             echo "Staan ze er wél, kijk dan of ze onder Settings → Secrets and variables → ACTIONS staan"
             echo "(en niet onder Dependabot of Codespaces), in DEZE repo, en of de naam exact klopt."
           fi
+
+      # **De NDK vooraf, met herkansing.** Gradle haalt de NDK die Flutter vraagt zelf op tijdens de bouw:
+      # één keer, zonder herkansing. Op 20-10-2026 brak die download drie keer af (bij 33 %, dan "Error on
+      # ZipFile unknown archive" en geen APK: 3.9.525, de proef van e2cd7d1, 3.9.528). Hier tot drie keer,
+      # en pas goed als `source.properties` er staat — een half uitgepakte map telt niet.
+      - name: NDK klaarzetten (met herkansing)
+        run: |
+          SDK="$ANDROID_HOME"
+          # Alleen FlutterExtension.kt: Flutters eigen toetsen noemen andere versies (29.0…, 26.3…).
+          V=$(grep -hoE 'val ndkVersion: String = "[0-9.]+"' "${FLUTTER_ROOT:-/nonexistent}/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt" 2>/dev/null | grep -oE '[0-9][0-9.]+' | head -1)
+          V="${V:-28.2.13676358}"
+          for i in 1 2 3; do
+            if [ -f "$SDK/ndk/$V/source.properties" ]; then echo "NDK $V staat er"; exit 0; fi
+            rm -rf "$SDK/ndk/$V"
+            yes 2>/dev/null | sdkmanager --install "ndk;$V" >/dev/null 2>&1 || true
+            if [ -f "$SDK/ndk/$V/source.properties" ]; then echo "NDK $V geïnstalleerd (poging $i)"; exit 0; fi
+            echo "::warning title=NDK::poging $i om NDK $V te installeren mislukte"
+            sleep 15
+          done
+          echo "::warning title=NDK::NDK $V niet vooraf te installeren — Gradle probeert het zelf nog"
 
       - name: Build release APK
         working-directory: desktop

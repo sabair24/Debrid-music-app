@@ -185,7 +185,10 @@ class Groeistroom {
   void _ruimOp() {
     final nu = DateTime.now();
     for (final g in _alle.values.toList()) {
-      if (g._openAntwoorden > 0 || (inGebruik?.call(g.adres) ?? false)) {
+      final toestel = g._toestelSinds;
+      if (g._openAntwoorden > 0 ||
+          (inGebruik?.call(g.adres) ?? false) ||
+          (toestel != null && nu.difference(toestel) < kToestelGeduld)) {
         g._rustSinds = null;
         continue;
       }
@@ -327,7 +330,24 @@ class _Wachter {
 /// De haal (online.dart) meldt wat er gebeurt: [poging] zodra een peer bytes stuurt, [goedgekeurd] als
 /// de kop klopt, [afgebroken] als die peer afvalt, [binnen] als het bestand compleet is, [geland] als
 /// het in de bibliotheek staat. Wie wil luisteren wacht op [speelbaar] en speelt [adres].
-class Groei {
+/// Hoe lang een groei na de laatste vraag van een toestel blijft staan ([Groei.opToestel]).
+///
+/// Een toestel speelt niet hier: wat mpv daar nog speelt, ziet [Groeistroom.inGebruik] niet. mpv op het
+/// toestel vraagt alleen opnieuw na een hik of een sprong, en dan moet hij dezelfde bytes krijgen — ook
+/// als het nummer intussen geland is (dat is een ánder bestand, zie [Groei.geland]).
+const kToestelGeduld = Duration(minutes: 10);
+
+/// Een nummer dat nog binnenkomt: hier ([Groei]), of op de pc voor dit toestel (`GroeiOpPc`). De speler
+/// doet met beide hetzelfde: na een breuk wachten tot het verder kan, dan op dezelfde plek verder.
+abstract interface class Groeiend {
+  /// Klaar om vanaf [plek] te klinken? Zie [Groei.speelbaarVanaf].
+  Future<bool> speelbaarVanaf(Duration plek);
+
+  /// Waar het nummer na het landen staat (het pad in de rij), of null.
+  String? get geborgen;
+}
+
+class Groei implements Groeiend {
   Groei._(this._server, this.id, this.adres, this.naam);
 
   final Groeistroom _server;
@@ -341,6 +361,11 @@ class Groei {
   bool _gesloten = false;
   String? _geland;
   DateTime? _rustSinds;
+  DateTime? _toestelSinds;
+
+  /// Een toestel vroeg naar deze groei (de LAN-server geeft hem door): blijft staan tot [kToestelGeduld]
+  /// na de laatste vraag.
+  void opToestel() => _toestelSinds = DateTime.now();
 
   /// Wat de speler bij het laatste openen (een verzoek vanaf byte 0) kreeg; daar hoort elk vervolg bij.
   _Opening? _geopend;
@@ -358,6 +383,7 @@ class Groei {
 
   /// Klaar om vanaf [plek] te klinken — bij deze uploader of de volgende die goedgekeurd wordt. Voor als
   /// een uploader midden in het nummer afhaakte: het gat duurt dan tot de volgende zo ver is.
+  @override
   Future<bool> speelbaarVanaf(Duration plek) {
     if (_gesloten || _opgegeven) return Future.value(false);
     final p = _huidig;
@@ -388,6 +414,7 @@ class Groei {
   bool get gestart => _pogingen.values.any((p) => p.gebruikt);
 
   /// Waar het nummer na het opbergen staat, of null.
+  @override
   String? get geborgen => _geland;
 
   int get _openAntwoorden => _pogingen.values.fold(0, (s, p) => s + p.open);

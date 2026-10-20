@@ -18,6 +18,7 @@ import '../library.dart';
 import '../models.dart';
 import '../musicbrainz.dart';
 import '../nieuwe_releases.dart' show NieuweReleases, ReleasesLijst;
+import '../kandidatenzeef.dart' show zeefKandidaten;
 import '../online.dart';
 import '../organize.dart';
 import '../paths.dart';
@@ -80,7 +81,7 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/move/apply',
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
   };
-  const voorvoegsels = ['/stream/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
+  const voorvoegsels = ['/stream/', '/groei/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
   if (exact.contains(pad) || voorvoegsels.any(pad.startsWith)) return null;
   if (pad == '/api/rutracker/sessie') return 'Kan alleen met je gsm thuis op wifi.';
   return 'Dit kan alleen thuis of via Tailscale.';
@@ -606,6 +607,7 @@ class LanServer {
     }
 
     if (path.startsWith('/stream/')) return _stream(req);
+    if (path.startsWith('/groei/')) return _groei(req);
     if (path.startsWith('/art/')) return _art(req);
     if (path.startsWith('/waarom/')) return _waarom(req);
 
@@ -1418,6 +1420,58 @@ class LanServer {
     }
   }
 
+  /// Een nummer dat op deze pc nog binnenkomt, voor het toestel dat erom vroeg ([Radiohaler.groeiVoor]).
+  ///
+  /// De groeistroom zelf luistert alleen op 127.0.0.1 (groeistroom.dart); dit geeft hem door, met de
+  /// Range en `?vanaf=` van het verzoek en precies zijn antwoorden — ook de breuk als een uploader
+  /// afhaakt en het lege einde daarna. Daaraan ziet de speler op het toestel dat hij op dezelfde plek
+  /// verder moet (zie `Radiohaler`/`PcRadiobron`). Zelf pompen en niet `pipe`: breekt de bovenkant, dan
+  /// moet deze kant ook breken, en minder bytes dan beloofd sluiten breekt de verbinding.
+  Future<void> _groei(HttpRequest req) async {
+    final res = req.response;
+    final naam = req.uri.pathSegments.isEmpty ? '' : req.uri.pathSegments.last;
+    final g = radiohaler.groeiVoor(naam.endsWith('.flac') ? naam.substring(0, naam.length - 5) : naam);
+    if (g == null || (req.method != 'GET' && req.method != 'HEAD')) {
+      res.statusCode = g == null ? HttpStatus.notFound : HttpStatus.methodNotAllowed;
+      return res.close();
+    }
+    g.opToestel();
+    final client = HttpClient();
+    try {
+      // De sleutel (`?token=`, op de gewone poort) blijft hier: alleen `?vanaf=` hoort bij de groeistroom.
+      final vanaf = req.uri.queryParameters['vanaf'];
+      final boven = await client.openUrl(
+          req.method, Uri.parse(g.adres).replace(queryParameters: vanaf == null ? null : {'vanaf': vanaf}));
+      final range = req.headers.value(HttpHeaders.rangeHeader);
+      if (range != null) boven.headers.set(HttpHeaders.rangeHeader, range);
+      final r = await boven.close();
+      res.statusCode = r.statusCode;
+      for (final k in const [
+        HttpHeaders.contentTypeHeader,
+        HttpHeaders.contentRangeHeader,
+        HttpHeaders.acceptRangesHeader,
+      ]) {
+        final v = r.headers.value(k);
+        if (v != null) res.headers.set(k, v);
+      }
+      if (r.contentLength >= 0) res.contentLength = r.contentLength;
+      // Zonder dit houdt de server tot 8 KB vast tot er meer komt — en bij een uploader die hapert, komt er
+      // even niets: gemeten in de toets, 192 van 200 KB kwam door.
+      res.bufferOutput = false;
+      await for (final stuk in r) {
+        res.add(stuk);
+        await res.flush();
+      }
+      await res.close();
+    } catch (_) {
+      try {
+        await res.close();
+      } catch (_) {}
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<void> _stream(HttpRequest req) async {
     // `/stream/<id>` and `/stream/<id>.flac` are the same track. The extension is there for the
     // Apple clients: AVFoundation types an asset by its path, and refuses one it can't place.
@@ -1749,8 +1803,19 @@ class LanServer {
     }
     final q = req.uri.queryParameters['q'] ?? '';
     if (q.trim().isEmpty) return _json(req.response, {'files': []});
+    // ⬇ op een toestel (`RemoteSoulseekService.zoekVroeg`): zoeken met dezelfde zeef als het toestel, en
+    // antwoorden zodra er genoeg zekere kopieën zijn — zoals ⬇ op de pc zelf. Dan alleen wat door de zeef
+    // kwam; het toestel zeeft het daarna nog eens.
+    final vp = req.uri.queryParameters;
+    final titel = vp['vroegTitel'] ?? '';
+    final seconden = int.tryParse(vp['seconden'] ?? '');
     try {
-      final files = await service.search(q);
+      final files = titel.isEmpty
+          ? await service.search(q)
+          : await service.zoekVroeg(q,
+              seconden: seconden,
+              zeef: (l) => zeefKandidaten(l,
+                  titel: titel, seconden: seconden, artiest: vp['vroegArtiest'] ?? '', album: vp['vroegAlbum']));
       return await _json(req.response, {'files': [for (final f in files) f.toJson()]});
     } catch (e) {
       return _unavailable(req, 'Soulseek zoeken mislukte: $e');
@@ -2140,10 +2205,28 @@ class LanServer {
           titel: titel,
           seconden: (body['seconden'] as num?)?.toInt(),
           jaar: (body['jaar'] as num?)?.toInt(),
+          // ▶ op het toestel: na het landen op jacht naar beter. Een ouder toestel stuurt dit niet.
+          zoekBeter: body['zoekBeter'] == true,
+          luistertMee: body['meeluisteren'] == true,
         );
         return _json(req.response, {'id': h.id});
       case 'stand':
         return _json(req.response, radiohaler.stand((body['id'] ?? '') as String));
+      case 'groeiwacht':
+        // Het toestel speelde een nummer dat nog binnenkwam, en de uploader haakte af: wacht tot het bij
+        // de volgende vanaf [vanaf] (ms) zonder haperen kan klinken — zoals `_hervatGroei` op de pc.
+        // Hoogstens 25 s per vraag; het toestel vraagt dan opnieuw.
+        final g = radiohaler.groeiVoor((body['groei'] ?? '') as String);
+        if (g == null) return _json(req.response, {'kan': false, 'weg': true});
+        g.opToestel();
+        var nogBezig = false;
+        final kan = await g
+            .speelbaarVanaf(Duration(milliseconds: ((body['vanaf'] as num?) ?? 0).toInt()))
+            .timeout(const Duration(seconds: 25), onTimeout: () {
+          nogBezig = true;
+          return false;
+        });
+        return _json(req.response, {'kan': kan, if (nogBezig) 'nogBezig': true});
       case 'vergeetwens':
         // Het WISSEN van het bestand loopt over `/api/library/edit` — dat kan de telefoon al. Wat ze
         // niet zelf kan is de verlanglijst hier opschonen, en zonder dat haalt `sweepLosslessWants`

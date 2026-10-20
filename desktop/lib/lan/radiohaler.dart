@@ -14,6 +14,9 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
+import '../groeistroom.dart';
 import '../library.dart';
 import '../settings.dart';
 import '../online.dart';
@@ -47,6 +50,10 @@ class Radiohaal {
   /// Landde op muziek die je al had — zie [RadioAlGehad].
   bool eigen = false;
   DateTime? klaarOm;
+
+  /// Klinkt al terwijl het binnenkomt (groeistroom.dart): het toestel kan het via de pc laten spelen
+  /// zodra [Groei.kanKlinken] — zie [Radiohaler.stand]. Null als de proef op de pc uit staat.
+  Groei? groei;
 }
 
 /// De pc-kant van een radio op een gekoppeld toestel.
@@ -126,11 +133,22 @@ class Radiohaler {
   /// telefoon die intussen op slot gaat gewoon weg — en dan weet niemand meer of er nog iets
   /// gebeurt. Precies dezelfde reden
   /// waarom `enqueueSoulseekBest` een `wachtOpAfloop` heeft.
+  ///
+  /// **Met de groeistroom, net als ▶ op de pc** (als de proef "Al spelen terwijl het binnenkomt" op de pc
+  /// aan staat). Gemeten op 20-10-2026: zonder groei nam deze haal de oude weg — geen vroege start, geen
+  /// wedloop, de uploaders één voor één, hoogstens drie — terwijl ▶ op de pc met dertig tegelijk begint en
+  /// populaire nummers in 4 à 8 s laat klinken. Met een groei gaat elke haal van het toestel die snelle
+  /// weg, ook als het toestel (nog) niet meeluistert. [zoekBeter]: na het landen op jacht naar een
+  /// betere kopie — voor ▶ op het toestel, niet voor zijn radio. [luistertMee]: het toestel wil het horen
+  /// zodra het kan (▶), dus ook in het geheugen als het binnen is vóór het toestel opent
+  /// ([Groei.zalKlinken]).
   Radiohaal haal({
     required String artiest,
     required String titel,
     int? seconden,
     int? jaar,
+    bool zoekBeter = false,
+    bool luistertMee = false,
   }) {
     _ruimOp();
     // De leen kan verlopen zijn terwijl de radio nog loopt; hem hier opnieuw vastnemen is goedkoper
@@ -142,8 +160,24 @@ class Radiohaler {
       String? pad;
       var later = false;
       try {
-        pad = await downloads?.haalVoorRadio(
-            artiest: artiest, titel: titel, seconden: seconden, jaar: jaar);
+        final g = (instellingen?.vroegLuisteren ?? false)
+            ? await Groeistroom.gedeeld.nieuw('toestel: $artiest — $titel')
+            : null;
+        haal.groei = g;
+        if (g != null) {
+          // Gaat wachten tot het kan klinken: pas daarna zegt [stand] het het toestel ([Groei.kanKlinken]).
+          unawaited(g.speelbaar);
+          if (luistertMee) g.zalKlinken();
+        }
+        pad = g == null
+            ? await downloads?.haalVoorRadio(artiest: artiest, titel: titel, seconden: seconden, jaar: jaar)
+            : await downloads?.haalEnLaatHoren(
+                artiest: artiest,
+                titel: titel,
+                seconden: seconden,
+                jaar: jaar,
+                vroeg: g,
+                zoekDaarnaBeter: zoekBeter);
       } on RadioLaterOpnieuw {
         later = true; // Soulseek op de pc doet even niet mee; het toestel probeert het straks weer
       } on RadioAlGehad catch (e) {
@@ -156,6 +190,10 @@ class Radiohaler {
         haal.eigen = true;
       } catch (_) {
         pad = null;
+      } finally {
+        // Niets geland: wie (een toestel) op een volgende uploader wacht, hoort dat er geen komt.
+        final g = haal.groei;
+        if (g != null && g.geborgen == null) g.opgegeven();
       }
       // Meteen de bibliotheek in, en niet wachten op een volledige scan: dat is wat de catalogus
       // die de telefoon ophaalt actueel maakt. Zie [LibraryStore.voegBestandToe].
@@ -182,11 +220,32 @@ class Radiohaler {
     _ruimOp();
     final h = _halen[id];
     if (h == null) return {'stand': 'mislukt'};
+    final g = h.groei;
     return {
       'stand': h.stand,
       if (h.pad != null) 'pad': h.pad,
       if (h.trackId != null) 'trackId': h.trackId,
+      // Al te horen via de pc ([Radiohaler.groeiVoor]), terwijl het nog binnenkomt.
+      if (g != null && h.stand == 'onderweg' && g.kanKlinken) 'groei': g.id,
     };
+  }
+
+  /// De groei achter een haal van een toestel, voor de LAN-server die hem doorgeeft. Alleen een groei die
+  /// via [haal] gemaakt is: een toestel komt zo nooit bij wat de pc zelf aan het spelen is.
+  Groei? groeiVoor(String groeiId) {
+    for (final h in _halen.values) {
+      final g = h.groei;
+      if (g != null && g.id == groeiId) return g;
+    }
+    return null;
+  }
+
+  /// Voor de toetsen: een haal met deze groei, zonder te halen.
+  @visibleForTesting
+  Radiohaal haalVoorToets(Groei g) {
+    final h = Radiohaal('r${++_volgnummer}')..groei = g;
+    _halen[h.id] = h;
+    return h;
   }
 
   void _ruimOp() {

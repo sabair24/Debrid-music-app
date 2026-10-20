@@ -950,8 +950,13 @@ class SoulseekService {
   /// een vrije plek, de officiële lengte), dan is dat de lijst en begint de race. Anders — een minder
   /// bekend nummer — gewoon de hele uitslag, zoals voorheen. Het zoeken loopt intussen verder; wat er later
   /// nog binnenkomt doet niet meer mee.
+  ///
+  /// [zeefOp]: waar [zeef] op zeeft. Hier niet nodig; een toestel stuurt het naar de pc, die daar zoekt en
+  /// vroeg stopt (`RemoteSoulseekService.zoekVroeg`).
   Future<List<SoulseekFile>> zoekVroeg(String vraag,
-      {required Future<List<SoulseekFile>> Function(List<SoulseekFile>) zeef, int? seconden}) {
+      {required Future<List<SoulseekFile>> Function(List<SoulseekFile>) zeef,
+      int? seconden,
+      ({String titel, String artiest, String? album})? zeefOp}) {
     final uit = Completer<List<SoulseekFile>>();
     final klok = Stopwatch()..start();
     var bezig = false;

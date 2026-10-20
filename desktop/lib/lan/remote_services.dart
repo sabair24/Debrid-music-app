@@ -305,6 +305,26 @@ class RemoteSoulseekService extends SoulseekService {
     return files;
   }
 
+  /// ⬇ op een toestel net zo vlot als op de pc (Saber, 20-10-2026: "en het snellere downloaden ook e").
+  /// Vroeg beginnen kan alleen waar gezocht wordt: de pc zoekt, zeeft elke tussenstand met dezelfde zeef
+  /// ([zeefOp]) en antwoordt zodra er genoeg zekere kopieën zijn — `SoulseekService.zoekVroeg` op de pc.
+  /// Hier daarna nog eens door [zeef]: een oudere pc kent de vraag niet en stuurt de hele uitslag.
+  @override
+  Future<List<SoulseekFile>> zoekVroeg(String vraag,
+      {required Future<List<SoulseekFile>> Function(List<SoulseekFile>) zeef,
+      int? seconden,
+      ({String titel, String artiest, String? album})? zeefOp}) async {
+    if (zeefOp == null) return super.zoekVroeg(vraag, zeef: zeef, seconden: seconden);
+    final files = await soulseekBestandenUit(await _rpc.getBytes('/api/soulseek/search', query: {
+      'q': vraag,
+      'vroegTitel': zeefOp.titel,
+      'vroegArtiest': zeefOp.artiest,
+      if (zeefOp.album != null && zeefOp.album!.isNotEmpty) 'vroegAlbum': zeefOp.album!,
+      if (seconden != null && seconden > 0) 'seconden': '$seconden',
+    }));
+    return zeef(files);
+  }
+
   void dispose() => _rpc.close();
 }
 

@@ -386,6 +386,45 @@ void main() {
       expect(veranderd, hasLength(1));
     });
 
+    test('een groei (/groei/) verandert wél onderweg: het lege einde komt door, geen 412, ?vanaf= mee', () async {
+      // Zoals `_groei` op de pc en de groeistroom erachter: eerst 4000 bytes, dan haakt de uploader af na 100
+      // en zegt een vervolg "het houdt hier op" (206, bytes 100-100/100, leeg).
+      var afgehaakt = false;
+      pc.voorElk = (req) async {
+        final res = req.response;
+        if (afgehaakt && req.headers.value(HttpHeaders.rangeHeader) != null) {
+          res
+            ..statusCode = 206
+            ..contentLength = 0
+            ..headers.set(HttpHeaders.contentRangeHeader, 'bytes 100-100/100');
+          await res.close();
+          return true;
+        }
+        final range = parseRange(req.headers.value(HttpHeaders.rangeHeader), 4000) ?? const ByteRange(0, 3999);
+        res
+          ..statusCode = req.headers.value(HttpHeaders.rangeHeader) == null ? 200 : 206
+          ..contentLength = range.length;
+        if (res.statusCode == 206) res.headers.set(HttpHeaders.contentRangeHeader, 'bytes ${range.start}-${range.end}/4000');
+        res.add(List<int>.filled(range.length, 2));
+        await res.close();
+        return true;
+      };
+      final groei = adres('/groei/g7.flac');
+      expect((await _mpv(groei, range: 'bytes=0-99')).status, 206);
+      afgehaakt = true;
+      final einde = await _mpv(groei, range: 'bytes=100-');
+      expect(einde.status, 206, reason: 'geen 412: de speler moet dit einde horen');
+      expect(einde.koppen!.contentLength, 0);
+      expect(veranderd, isEmpty);
+      // Verder op een plek: de vraag gaat mee, de sleutel niet.
+      afgehaakt = false;
+      final verder = await _mpv(adres('/groei/g7.flac?vanaf=83500&token=geheim'));
+      expect(verder.status, 200);
+      expect(pc.koppen.last['query'], 'vanaf=83500');
+      // Een stroom blijft wél bewaakt.
+      expect((await _mpv(adres('/stream/ab12cd.flac'), range: 'bytes=0-9')).status, isNot(412));
+    });
+
     test('het nummer veranderde op de pc tussen twee stukken: stoppen, niet aan elkaar plakken', () async {
       final eerst = await _mpv(adres(), range: 'bytes=0-1023');
       expect(eerst.status, 206);

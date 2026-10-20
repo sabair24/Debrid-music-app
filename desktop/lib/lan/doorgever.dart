@@ -19,8 +19,8 @@
 ///   en dan liever stoppen dan twee bestanden aan elkaar plakken ([veranderd]).
 ///
 /// Alleen op 127.0.0.1, een willekeurige poort, en een geheim per run vooraan in het pad: een andere
-/// app op de telefoon of een webpagina die 127.0.0.1 probeert, komt er niet in. Alleen `/stream/` en
-/// `/art/`.
+/// app op de telefoon of een webpagina die 127.0.0.1 probeert, komt er niet in. Alleen `/stream/`,
+/// `/groei/` en `/art/`.
 ///
 /// [Doorgever] werkt in elke isolate; [DoorgeverIsolaat] draait hem in een eigen isolate, zodat het
 /// pompen van bytes nooit met het tekenen van het scherm concurreert.
@@ -171,7 +171,12 @@ class Doorgever {
       return res.close();
     }
     final pad = '/${delen.skip(1).join('/')}';
-    if (!pad.startsWith('/stream/') && !pad.startsWith('/art/')) {
+    // `/groei/`: een nummer dat op de pc nog binnenkomt (zie `_groei` in server.dart). Dat verandert
+    // wél onderweg — een andere uploader, en na het landen een ander bestand — en de pc zegt dat zelf,
+    // met een leeg einde op de plek waar het ophoudt. Dus niet tegen het eerste antwoord controleren: de
+    // speler hoort dat einde, en gaat dan op dezelfde plek verder (`_hervatGroei` in player.dart).
+    final groei = pad.startsWith('/groei/');
+    if (!pad.startsWith('/stream/') && !pad.startsWith('/art/') && !groei) {
       res.statusCode = HttpStatus.notFound;
       return res.close();
     }
@@ -181,7 +186,7 @@ class Doorgever {
     }
     final wat = req.uri.query.isEmpty ? pad : '$pad?${req.uri.query}';
     final range = req.headers.value(HttpHeaders.rangeHeader);
-    final eerste = _eerste[wat];
+    final eerste = groei ? null : _eerste[wat];
     final klok = Stopwatch()..start();
     final tot = DateTime.now().add(wachtOpAdres);
     var pogingen = 0;
@@ -255,7 +260,7 @@ class Doorgever {
         res.statusCode = HttpStatus.preconditionFailed;
         return res.close();
       }
-      if (eerste == null && totaal >= 0) {
+      if (eerste == null && totaal >= 0 && !groei) {
         _eerste[wat] = (etag: etag, totaal: totaal);
         while (_eerste.length > 64) {
           _eerste.remove(_eerste.keys.first);
@@ -282,6 +287,8 @@ class Doorgever {
     }
     res.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
     res.headers.chunkedTransferEncoding = false;
+    // Een groei komt met horten binnen: niets vasthouden tot er 8 KB is (zie `_groei` in server.dart).
+    if (groei) res.bufferOutput = false;
     if (boven.contentLength >= 0) res.contentLength = boven.contentLength;
     if (range != null || pogingen > 1) {
       _log('${req.method} $pad${range == null ? '' : ' $range'} → $status via ${via?.basis.authority}'

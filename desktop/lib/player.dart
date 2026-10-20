@@ -5,7 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'artwork.dart' show HoesVlek, kleurEnVlekkenBuitenDeTekendraad;
-import 'groeistroom.dart' show Groeistroom;
+import 'groeistroom.dart' show Groeistroom, Groeiend;
 import 'kapot_bestand.dart' show waaromNietTeOpenen;
 import 'lan/stroomstand.dart' show grensUitUrl;
 import 'luidheid.dart' show Bijstelbron, Bijstelling, adresSleutel;
@@ -1306,7 +1306,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     });
     _stilstandTikker = Timer.periodic(const Duration(seconds: 2), (_) {
       final vast = _wacht.voeden(speelt: playing, positie: position, nu: DateTime.now());
-      if (vast && Groeistroom.isAdres(mpvAdres ?? '')) {
+      if (vast && _speeltGroei) {
         // Een nummer dat nog binnenkomt (groeistroom.dart): de uploader hapert, niet de pc of het net.
         _meldStilstand('Wacht op de download — de uploader hapert…');
       } else if (vast) {
@@ -1787,7 +1787,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     // maar wachten tot de volgende ver genoeg is. Zie [_hervatGroei]. Ook in de laatste tien seconden
     // (de marge van [watNaHetEinde]): in de proef van 20-10-2026 miste anders het slot van een nummer.
     // Met een rem: drie keer niet verder dan dezelfde plek, dan door naar het volgende.
-    if (Groeistroom.gedeeld.van(current?.path ?? '') != null &&
+    if (_groeiVan(current?.path ?? '') != null &&
         duration - position > const Duration(seconds: 1)) {
       final vorig = _groeiVorigePlek;
       _groeiZelfdePlek =
@@ -1838,7 +1838,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// handelt [_hervatGroei] af. Zonder deze uitzondering liep de gewone foutafhandeling (opnieuw openen,
   /// vanaf nul) er dwars doorheen. Gezien in de proef van 20-10-2026, bij elke breuk.
   bool _breukInGroeistroom(String e) {
-    if (position <= Duration.zero || !Groeistroom.isAdres(mpvAdres ?? '')) return false;
+    if (position <= Duration.zero || !_speeltGroei) return false;
     _log?.line('groeistroom: $e');
     return true;
   }
@@ -1854,8 +1854,30 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   Duration? _groeiVorigePlek;
   int _groeiZelfdePlek = 0;
 
+  /// Nummers die op de pc nog binnenkomen en hier al klinken (`GroeiOpPc`), op hun pad in de rij.
+  final _groeiElders = <String, Groeiend>{};
+
+  /// [pad] (een `http://pc.invalid/groei/…`) klinkt hier terwijl het op de pc nog binnenkomt: breekt de
+  /// stroom, dan gaat het verder zoals bij een eigen groeistroom ([_hervatGroei]). Hoogstens een paar.
+  void groeitElders(String pad, Groeiend g) {
+    _groeiElders.remove(pad);
+    _groeiElders[pad] = g;
+    while (_groeiElders.length > 4) {
+      _groeiElders.remove(_groeiElders.keys.first);
+    }
+  }
+
+  Groeiend? _groeiVan(String pad) => Groeistroom.gedeeld.van(pad) ?? _groeiElders[pad];
+
+  /// Speelt mpv nu een groeistroom — van deze machine, of via de pc (`/groei/`, op een toestel)?
+  bool get _speeltGroei {
+    final a = mpvAdres ?? '';
+    if (Groeistroom.isAdres(a)) return true;
+    return _groeiElders.isNotEmpty && (Uri.tryParse(a)?.path.contains('/groei/') ?? false);
+  }
+
   Future<void> _hervatGroei(Track t, Duration plek) async {
-    final g = Groeistroom.gedeeld.van(t.path);
+    final g = _groeiVan(t.path);
     if (g == null) return;
     _log?.line('GROEISTROOM AFGEBROKEN op ${plek.inSeconds} s — wacht op de volgende uploader — ${t.title}');
     _meldStilstand('Andere bron — even geduld…');
@@ -1880,7 +1902,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _log?.line('GROEISTROOM VERDER op ${plek.inSeconds} s na ${klok.elapsedMilliseconds} ms — ${t.title}');
     _meldStilstand(null);
     try {
-      if (Groeistroom.isAdres(verder)) {
+      if (Groeistroom.isAdres(verder) || _groeiElders.containsKey(verder)) {
         // **Niet springen, maar een stroom die op de plek begint** (`?vanaf=`, zie groeistroom.dart).
         // Springen in een FLAC laat ffmpeg eerst het einde van het bestand zoeken, en dat is er bij een
         // download nog niet: gemeten op 20-10-2026 9 en 52 s stilte, ook in een bestand mét zoektabel.
