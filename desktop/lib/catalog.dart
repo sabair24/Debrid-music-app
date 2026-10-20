@@ -152,11 +152,17 @@ String _kaleTitel(String s) =>
     s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
 
 /// A track search hit — tapped to open torrent/Soulseek sources directly.
+///
+/// [album] en [seconden] voor de downloadknop in Online zoeken (Saber, 20-10-2026: "de automatische
+/// download functie bij nummers daar ook zien"): zonder looptijd kan de zeef een radio-edit of een
+/// liveversie niet van het nummer zelf onderscheiden.
 class CatalogTrackHit {
   final String title;
   final String artist;
   final String? cover;
-  const CatalogTrackHit(this.title, this.artist, this.cover);
+  final String? album;
+  final int? seconden;
+  const CatalogTrackHit(this.title, this.artist, this.cover, {this.album, this.seconden});
   String get query => artist.isEmpty ? title : '$artist $title';
 }
 
@@ -310,6 +316,8 @@ class CatalogService {
               (t['title'] ?? '') as String,
               (t['artist']?['name'] ?? '') as String,
               (t['album']?['cover_medium'] ?? t['album']?['cover']) as String?,
+              album: t['album']?['title'] as String?,
+              seconden: (t['duration'] as num?)?.toInt(),
             ))
         .where((h) => h.title.isNotEmpty && seen.add('${h.artist.toLowerCase()}|${h.title.toLowerCase()}'))
         .toList();
@@ -379,6 +387,8 @@ class CatalogService {
               (t['title'] ?? '') as String,
               (t['artist']?['name'] ?? '') as String,
               (t['album']?['cover_medium'] ?? t['album']?['cover']) as String?,
+              album: t['album']?['title'] as String?,
+              seconden: (t['duration'] as num?)?.toInt(),
             ))
         .where((h) => h.title.isNotEmpty && seen.add('${h.artist.toLowerCase()}|${h.title.toLowerCase()}'))
         .toList();

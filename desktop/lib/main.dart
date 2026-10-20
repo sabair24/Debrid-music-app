@@ -21708,6 +21708,17 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     ],
                   ),
                 ),
+                // Dezelfde knop als bij elk nummer op een albumpagina: zoekt zelf de beste bron en haalt
+                // hem (Saber, 20-10-2026: "zo kan ik snel een losse song zoeken en downloaden"). Een tik
+                // op de rij opent nog steeds de bronnen om zelf te kiezen.
+                if (context.read<LibraryStore>().ownedTrack(t.artist, t.title) != null)
+                  Tooltip(
+                    message: 'Al in je bibliotheek',
+                    child: Icon(Icons.library_add_check_rounded, color: _accent2),
+                  )
+                else
+                  _downloadControl(context,
+                      jobKey: _zoekSleutel(t), onDownload: () => _downloadHit(t), tooltip: 'Downloaden (beste bron)'),
                 Icon(open ? Icons.expand_less_rounded : Icons.chevron_right_rounded, color: _muted),
               ],
             ),
@@ -21716,6 +21727,54 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         if (open) Padding(padding: const EdgeInsets.only(bottom: 8), child: SourcesView(query: t.query)),
       ],
     );
+  }
+
+  String _zoekSleutel(CatalogTrackHit t) => 'zoek:${artistKey(t.artist)}|${normKey(t.title)}';
+
+  /// Eén zoektreffer downloaden zoals een nummer op een albumpagina ([_AlbumBrowsePageState]): de zeef
+  /// kiest de bron op titel, artiest en looptijd, en [DownloadManager.zoekEnHaal] zet hem meteen in de
+  /// lijst — ook op de telefoon, waar de pc het werk doet.
+  Future<void> _downloadHit(CatalogTrackHit t) async {
+    final dm = context.read<DownloadManager>();
+    final soulseek = context.read<SoulseekService>();
+    if (context.read<LibraryStore>().ownedTrack(t.artist, t.title) != null) {
+      _srcToast(context, '“${t.title}” heb je al — niet opnieuw gedownload.');
+      return;
+    }
+    if (!soulseek.available) {
+      _srcToast(context, 'Stel je Soulseek-login in (Instellingen).');
+      return;
+    }
+    _srcToast(context, 'Bron zoeken voor “${t.title}”…');
+    try {
+      final uit = await dm.zoekEnHaal(
+        naam: t.title,
+        key: _zoekSleutel(t),
+        authority: TrackTags(
+          title: t.title,
+          artist: t.artist,
+          album: t.album ?? '',
+          albumArtist: t.artist,
+          trackNo: 0,
+          seconds: t.seconden,
+        ),
+        zoek: () async => zeefKandidaten(await soulseek.search(soulseekQuery(t.artist, t.title)),
+            titel: t.title, seconden: t.seconden, artiest: t.artist, album: t.album),
+      );
+      if (!mounted) return;
+      switch (uit) {
+        case ZoekUitkomst.gestart:
+          _srcToast(context, '“${t.title}” via Soulseek…');
+        case ZoekUitkomst.geenBron:
+          _srcToast(context, 'Geen Soulseek-bron gevonden voor “${t.title}”.');
+        case ZoekUitkomst.loopt:
+          _srcToast(context, '“${t.title}” loopt al — zie Mijn downloads.');
+        case ZoekUitkomst.geannuleerd:
+          break;
+      }
+    } catch (e) {
+      if (mounted) _srcToast(context, 'Download mislukt: $e');
+    }
   }
 
   /// Zelfde geheugen van één als bij [SourcesView] — zie [_SlskKlaar].

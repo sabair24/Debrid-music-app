@@ -14,5 +14,8 @@ void main() {
     print('tracks: ${r.length}; first=${r.isEmpty ? "-" : "${r.first.artist} — ${r.first.title}"}');
     expect(r.isNotEmpty, true);
     expect(r.first.query.isNotEmpty, true);
+    // De downloadknop in Online zoeken filtert op looptijd en album (20-10-2026).
+    expect(r.first.seconden, greaterThan(60));
+    expect(r.first.album, isNotEmpty);
   });
 }
