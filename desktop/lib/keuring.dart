@@ -56,7 +56,8 @@ Kwaliteit kwaliteitUit(
     Echtheidsoordeel? oordeel,
     bool kapot = false}) {
   Klasse k;
-  if (kapot) {
+  // De volle echtheidsmeting bewijst het ook: de MD5 van de samples klopt niet met de FLAC-kop.
+  if (kapot || (oordeel?.isKapot ?? false)) {
     k = Klasse.kapot;
   } else if (!verliesvrij) {
     k = Klasse.lossy;

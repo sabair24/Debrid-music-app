@@ -250,6 +250,9 @@ class LuidheidVeger {
   late final WarmLog _log = WarmLog('${library.configDir}${Platform.pathSeparator}luidheid.log');
 
   bool _gestart = false, _gestopt = false, _bezig = false, _nogEens = false;
+
+  /// Meet hij nu? De echtheidsveger wacht dan, zodat de schijf niet twee kanten op moet.
+  bool get bezig => _bezig;
   Timer? _start, _herstart;
   DateTime _laatstGepubliceerd = DateTime.fromMillisecondsSinceEpoch(0);
 

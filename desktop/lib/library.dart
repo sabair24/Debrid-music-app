@@ -33,7 +33,7 @@ import 'prullenbak.dart' as pb;
 import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
-import 'integriteit.dart' show kapotSleutels;
+import 'integriteit.dart' show kapotSleutels, onthoudHeelheid;
 import 'luidheid_winkel.dart' show onthoudLuidheidVanPc, zetLuidheidStatusVanPc;
 import 'organize.dart';
 import 'settings.dart';
@@ -4560,8 +4560,9 @@ extension LibraryNormalise on LibraryStore {
   /// spectrum. Zie `echtheid.dart`; daar staat ook waarom alleen de derde vals alarm kan geven en welke
   /// vier vangnetten daaromheen zitten.
   ///
-  /// Gemeten over deze bibliotheek: 676 bestanden in ruim een minuut, 124 ms per stuk. Daarna komt het
-  /// uit de cache en is het onmiddellijk.
+  /// Sinds 20-10-2026 het HELE bestand ([Echtheidsmeter], ~1 s per nummer; 1810 nummers in een halfuur);
+  /// de oude meting van 3 × 4 s gaf ~180 verkeerde antwoorden. Daarna komt het uit de cache. Op de pc doet
+  /// de [EchtheidVeger] dit ook vanzelf in de achtergrond.
   ///
   /// Alleen FLAC. Bij een mp3 is een afkap de definitie en geen bevinding, en voor ALAC/APE/WAV zijn er
   /// geen betrouwbare kopgetallen om iets tegen te spreken.
@@ -4585,6 +4586,10 @@ extension LibraryNormalise on LibraryStore {
       } else {
         await onthoudOordeel(t.path, o);
         if (o.isNep) betrapt++;
+        if (o.isKapot) {
+          betrapt++;
+          await onthoudHeelheid(t.path, (heel: false, reden: 'de controlesom van de samples klopt niet'));
+        }
       }
       onProgress?.call(i + 1, lijst.length);
     }
@@ -4641,7 +4646,11 @@ extension LibraryNormalise on LibraryStore {
     final uit = <({Track track, Echtheidsoordeel oordeel})>[];
     for (final t in tracks) {
       final o = gemeten(t.path);
-      if (o != null && o.band == Bandbreedte.afgekapt) uit.add((track: t, oordeel: o));
+      // Ook de muren rond 20 kHz ([Bandbreedte.vermoedelijk]): daar kies je zelf, en de rij zegt dat het
+      // niet zeker is. Op hertz gesorteerd staan ze vanzelf onder de bewezen afkappen.
+      if (o != null && (o.band == Bandbreedte.afgekapt || o.band == Bandbreedte.vermoedelijk)) {
+        uit.add((track: t, oordeel: o));
+      }
     }
     // `afkapHz` kan bij een afgekapt oordeel niet null zijn — de afkap IS wat het oordeel maakt —
     // maar sorteren mag daar niet op vertrouwen: een oud bestand op schijf uit een vorige versie
@@ -4671,11 +4680,13 @@ extension LibraryNormalise on LibraryStore {
     final uit = <({Track track, Echtheidsoordeel oordeel})>[];
     for (final t in tracks) {
       final o = gemeten(t.path);
-      if (o == null || !o.isNep || isVasteKeuze(t.path)) continue;
+      // Beschadigd ([Echtheidsoordeel.isKapot]) hoort er ook bij, en vooraan: de controlesom klopt niet.
+      if (o == null || !(o.isNep || o.isKapot) || isVasteKeuze(t.path)) continue;
       uit.add((track: t, oordeel: o));
     }
-    int capaciteit(({Track track, Echtheidsoordeel oordeel}) r) => echteCapaciteit(r.oordeel,
-        kopSampleRate: r.track.sampleRate, kopBits: r.track.bitsPerSample);
+    int capaciteit(({Track track, Echtheidsoordeel oordeel}) r) => r.oordeel.isKapot
+        ? -1
+        : echteCapaciteit(r.oordeel, kopSampleRate: r.track.sampleRate, kopBits: r.track.bitsPerSample);
     uit.sort((a, b) => capaciteit(a).compareTo(capaciteit(b)));
     return uit;
   }
@@ -4692,11 +4703,12 @@ extension LibraryNormalise on LibraryStore {
     final uit = <({Track track, Echtheidsoordeel oordeel})>[];
     for (final t in tracks) {
       final o = gemeten(t.path);
-      if (o == null || !o.isNep || !isVasteKeuze(t.path)) continue;
+      if (o == null || !(o.isNep || o.isKapot) || !isVasteKeuze(t.path)) continue;
       uit.add((track: t, oordeel: o));
     }
-    int capaciteit(({Track track, Echtheidsoordeel oordeel}) r) => echteCapaciteit(r.oordeel,
-        kopSampleRate: r.track.sampleRate, kopBits: r.track.bitsPerSample);
+    int capaciteit(({Track track, Echtheidsoordeel oordeel}) r) => r.oordeel.isKapot
+        ? -1
+        : echteCapaciteit(r.oordeel, kopSampleRate: r.track.sampleRate, kopBits: r.track.bitsPerSample);
     uit.sort((a, b) => capaciteit(a).compareTo(capaciteit(b)));
     return uit;
   }

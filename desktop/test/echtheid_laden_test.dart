@@ -50,6 +50,7 @@ void main() {
     const pad = r"D:\Flac music 2024\DebridMusic Downloads\Albums\Céline Dion\D'Eux\01 - Pour.flac";
     schrijf({
       _opSchijf(pad): {
+        'v': echtheidsVersie,
         'bits': 'spreektNietTegen',
         'boven': 'leeg',
         'band': 'afgekapt',
@@ -69,13 +70,25 @@ void main() {
     expect(o, isNotNull, reason: 'hier ging het in de app mis');
     expect(o!.isNep, isTrue);
     expect(bewezenNep(pad), isTrue);
-    expect(waarom(o), contains('22 kHz'));
+    expect(waarom(o), contains('24,5 kHz'));
+  });
+
+  // Volle meting (20-10-2026): de oude meting (3 × 4 s, één kanaal) gaf ~180 verkeerde antwoorden.
+  // Wat zij bewaarde, wordt niet meer geloofd maar opnieuw gemeten.
+  test('een oordeel van de oude meting (zonder versie) wordt niet geladen', () async {
+    const pad = r'D:\Muziek\Oud.flac';
+    schrijf({
+      _opSchijf(pad): {'bits': 'onbekend', 'boven': 'leeg', 'band': 'onbekend', 'vensters': 32}
+    });
+    await laadEchtheid();
+    expect(gemeten(pad), isNull, reason: 'dan meet de veger hem opnieuw');
+    expect(bewezenNep(pad), isFalse);
   });
 
   test('een pad met andere hoofdletters of scheidingstekens vindt hetzelfde oordeel', () async {
     const pad = r'D:\Muziek\A\B.flac';
     schrijf({
-      _opSchijf(pad): {'bits': 'onbekend', 'boven': 'leeg', 'band': 'onbekend'}
+      _opSchijf(pad): {'v': echtheidsVersie, 'bits': 'onbekend', 'boven': 'leeg', 'band': 'onbekend'}
     });
     await laadEchtheid();
 

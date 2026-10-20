@@ -194,15 +194,19 @@ List<String> kopFotoNamen(String artiest) {
 /// De regel vlak boven de afspeelbalk van Nu speelt, gestapeld: echtheid, kwaliteit en volume, in het
 /// midden (Saber, 19-10-2026: "de kwaliteit gecentreerd boven de afspeelbalk"). Leeg = niets.
 class KwaliteitsRegel extends StatelessWidget {
-  const KwaliteitsRegel({super.key, this.echtheid, this.kwaliteit, this.merk});
+  const KwaliteitsRegel({super.key, this.echtheid, this.kwaliteit, this.merk, this.naast});
 
   final Widget? echtheid;
   final Widget? kwaliteit;
   final Widget? merk;
 
+  /// Wat er achteraan bij hoort, op ware grootte: de streamknop (Saber, 20-10-2026: "verzet naast de
+  /// kwaliteit"). Die tekent zelf niets als er geen toestel is.
+  final Widget? naast;
+
   @override
   Widget build(BuildContext context) {
-    if (echtheid == null && kwaliteit == null && merk == null) return const SizedBox.shrink();
+    if (echtheid == null && kwaliteit == null && merk == null && naast == null) return const SizedBox.shrink();
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -213,6 +217,7 @@ class KwaliteitsRegel extends StatelessWidget {
           // Het merk krimpt met puntjes; de badge ernaast blijft heel.
           Flexible(child: merk!),
         ],
+        if (naast != null) naast!,
       ],
     );
   }

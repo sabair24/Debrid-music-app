@@ -102,6 +102,7 @@ import 'lossless_want.dart' show performerFromFilename, zoekvraagVoorAlbum, zoek
 import 'lan/cast_manager.dart' show CastManager;
 import 'luidheid.dart';
 import 'luidheid_keuze.dart';
+import 'echtheid_veger.dart';
 import 'luidheid_veger.dart';
 import 'luidheid_winkel.dart';
 import 'pairing_screen.dart';
@@ -110,6 +111,7 @@ import 'beeldvorm.dart';
 import 'fps_probe.dart';
 import 'jaarlint.dart';
 import 'kandidatenzeef.dart';
+import 'kwaliteit_blad.dart';
 import 'overblok.dart';
 import 'ui/wikifoto_beeld.dart';
 import 'wikifotos.dart';
@@ -1753,10 +1755,21 @@ Future<void> main() async {
     // minuten — niet achter `fase('enrichArtists')`, die fouten doorgooit. Wissen en verplaatsen laten
     // een lopende meting eerst los: Windows houdt een bestand vast zolang ffmpeg het open heeft.
     final veger = LuidheidVeger(library: library, enabled: mode.owner);
-    library.laatLos = veger.laatLos;
-    voorVerplaatsen = veger.laatLos;
+    // De echtheid: elk nummer één keer volledig gemeten (echtheid_veger.dart, 20-10-2026), en wacht op
+    // de luidheidsveger zodat de harde schijf niet twee kanten op moet.
+    final echtVeger = EchtheidVeger(library: library, enabled: mode.owner, bezigElders: () => veger.bezig);
+    Future<void> laatAllesLos(List<String> paden) async {
+      await veger.laatLos(paden);
+      await echtVeger.laatLos(paden);
+    }
+
+    library.laatLos = laatAllesLos;
+    voorVerplaatsen = laatAllesLos;
     meldAanBijHartslag(() =>
         LuidheidVeger.voortgang.value.isEmpty ? '' : 'luidheid ${LuidheidVeger.voortgang.value}');
+    meldAanBijHartslag(() => EchtheidVeger.voortgang.value);
+    unawaited(echtVeger.start().then((_) => startLog.line('echtheid: veger gestart (eerste ronde na 6 min)'),
+        onError: (Object e) => startLog.line('echtheid: veger MISLUKT: $e')));
     // De Shield krijgt per nummer de meting en de plaatwaarde mee, met de stand van deze pc.
     CastManager.luidheidOpgave = (t, rij, plek) {
       if (!luidheidKlaar) return null;
@@ -12143,6 +12156,10 @@ class _SpeakerButton extends StatelessWidget {
     // toen de pc zijn eigen server kon aanspreken. Wie de speakers kan bedienen mag ze kiezen.
     final client = target.client;
     if (client == null) return const SizedBox.shrink();
+    // Alleen als er iets is om naartoe te streamen (Saber, 20-10-2026). De pc zoekt hoogstens eens per
+    // tien minuten; tot het eerste antwoord is de knop er niet.
+    unawaited(target.kijkRond());
+    if (!target.heeftToestellen) return const SizedBox.shrink();
     final player = context.read<PlayerStore>();
     final casting = target.isCasting;
 
@@ -13931,10 +13948,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         SizedBox(
           key: const ValueKey('np-kwaliteitsregel'),
           width: kolom,
+          // De badge opent het kwaliteitsblad (wat je nu hoort, wat het bestand echt is, gelijk volume);
+          // de volumezin zelf staat daar en niet meer hier, en de streamknop staat ernaast in plaats van in
+          // de bedieningsrij (Saber, 20-10-2026: "playbar is te vol zo").
           child: KwaliteitsRegel(
             echtheid: _echtheidMerk(t),
-            kwaliteit: t.sizeBytes > 0 ? _qualityBadge(_stroomKwaliteit(p, t)) : null,
-            merk: _luidheidMerk(context, p, t, cast),
+            kwaliteit: t.sizeBytes > 0 ? _kwaliteitKnop(context, p, t, cast) : null,
+            naast: const _SpeakerButton(iconSize: 22),
           ),
         ),
         const SizedBox(height: 10),
@@ -14024,6 +14044,18 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Gestapeld (de gsm): links een onzichtbare kopie van de wachtrijknop rechts, zodat de afspeelknop
+          // precies in het midden staat (Saber, 20-10-2026: "centreer de playbar").
+          if (gestapeld) ...[
+            const Visibility(
+              visible: false,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: _WachtrijKnop(maat: 24),
+            ),
+            const SizedBox(width: 8),
+          ],
           IconButton(
               icon: ShuffleIcoon(aan: p.shuffle, maat: 24),
               iconSize: 24,
@@ -14095,8 +14127,11 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
             const SizedBox(width: 8),
             const _WachtrijKnop(maat: 24),
           ],
-          const SizedBox(width: 12),
-          const _SpeakerButton(iconSize: 24),
+          // Gestapeld staat de streamknop naast de kwaliteit (zie [KwaliteitsRegel]).
+          if (!gestapeld) ...[
+            const SizedBox(width: 12),
+            const _SpeakerButton(iconSize: 24),
+          ],
           // Op een tv staat de bovenste rij met ⋯ er niet (48 punten die er niet zijn), en lang OK op de
           // hoes is uitvergroten. Hetzelfde menu dan hier, achteraan, met de keuze voor de stapel
           // (Shield, 19-10-2026: de stapel was op de tv niet aan te zetten; Saber: "ook op tv").
@@ -19320,6 +19355,71 @@ Widget _luidheidMerk(BuildContext context, PlayerStore p, Track t, SpeakerTarget
   );
 }
 
+/// De kwaliteitsbadge van Nu speelt als knop: hij opent [_toonKwaliteitBlad].
+Widget _kwaliteitKnop(BuildContext context, PlayerStore p, Track t, SpeakerTarget cast) => Pressable(
+      key: const ValueKey('np-kwaliteit-knop'),
+      onPressed: () => _toonKwaliteitBlad(context, p, t, cast),
+      borderRadius: BorderRadius.circular(6),
+      scaleOnFocus: false,
+      child: _qualityBadge(_stroomKwaliteit(p, t)),
+    );
+
+/// Het kwaliteitsblad (Saber, 20-10-2026: "als ik op de kwaliteit klik … dat ik zie wat de echte
+/// kwaliteit is"): wat je NU hoort — onderweg stuurt je pc een kleinere versie —, wat het BESTAND echt
+/// is volgens de volle meting en de controlesom, en gelijk volume. Die zin stond naast de badge en maakte
+/// de regel te vol; hier opent hij nog steeds het volumeblad.
+Future<void> _toonKwaliteitBlad(BuildContext context, PlayerStore p, Track t, SpeakerTarget cast) {
+  final nu = _stroomKwaliteit(p, t);
+  final bestand = _trackQuality(t);
+  final settings = context.read<AppSettings>();
+  final volumeUit = luidheidsstandUit(settings.luidheid) == Luidheidsstand.uit && !cast.isCasting;
+  Widget kop(String s) => Padding(
+        padding: const EdgeInsets.only(top: 14, bottom: 6),
+        child: Text(s.toUpperCase(), style: kOpschrift),
+      );
+  return showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: !isTv,
+    builder: (ctx) => SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Kwaliteit', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            kop('Nu'),
+            Row(children: [_qualityBadge(nu)]),
+            const SizedBox(height: 6),
+            Text(
+                nuHoorZin(
+                    nu: nu.label,
+                    bestand: bestand.label,
+                    omgezet: p.stroomGrens != null,
+                    speaker: cast.isCasting ? cast.device?.name : null),
+                style: const TextStyle(fontSize: 13, height: 1.4)),
+            kop('Het bestand'),
+            Row(children: [_qualityBadge(bestand), _echtheidMerk(t)]),
+            const SizedBox(height: 6),
+            for (final r in bestandRegels(gemeten(t.path),
+                kopSampleRate: t.sampleRate, kopBits: t.bitsPerSample))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(r, style: const TextStyle(fontSize: 13, height: 1.4)),
+              ),
+            kop('Gelijk volume'),
+            if (volumeUit)
+              Text('Uit: elk nummer speelt zoals het op de schijf staat.',
+                  style: TextStyle(fontSize: 13, color: kGedempt))
+            else
+              Align(alignment: Alignment.centerLeft, child: _luidheidMerk(ctx, p, t, cast)),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
 /// **Opgeschaald** is iets anders. Zo'n bestand IS cd-kwaliteit; het draagt alleen een te grote jas.
 /// Er valt niets aan te verbeteren door het opnieuw te halen — je krijgt exact hetzelfde geluid terug.
 /// Een even luide waarschuwing als bij een echte transcode zette 89 nummers in het rood voor iets wat
@@ -19332,7 +19432,30 @@ Widget _echtheidMerk(Track? t) {
   if (t == null || pad == null || pad.isEmpty) return const SizedBox.shrink();
   final sr = t.sampleRate, bits = t.bitsPerSample;
   final o = gemeten(pad);
-  if (o == null || !o.isNep) return const SizedBox.shrink();
+  if (o == null) return const SizedBox.shrink();
+  // Beschadigd gaat voor alles: de controlesom van de samples klopt niet (volle meting, 20-10-2026).
+  if (o.isKapot) {
+    return Tooltip(
+      message: waarom(o),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Text('beschadigd', style: kLabel.copyWith(color: leesbaar(const Color(0xFFD9534F)))),
+      ),
+    );
+  }
+  // Een muur rond 20 kHz: met een vraagteken en gedempter, want het kan ook de master zijn.
+  if (!o.isNep && o.isVermoedelijk) {
+    final vraag = echteResolutie(o, kopSampleRate: sr, kopBits: bits);
+    if (vraag == null) return const SizedBox.shrink();
+    return Tooltip(
+      message: waarom(o),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Text(vraag, style: kLabel.copyWith(color: kGedempt)),
+      ),
+    );
+  }
+  if (!o.isNep) return const SizedBox.shrink();
 
   // ZEGGEN WAT HET DAN WEL IS, in plaats van alleen dat het niet klopt.
   //

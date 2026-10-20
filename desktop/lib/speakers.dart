@@ -94,6 +94,43 @@ class SpeakerTarget extends ChangeNotifier implements Speakerbediening {
     notifyListeners();
   }
 
+  /// De toestellen die de pc het laatst vond. De streamknop staat er alleen als hier iets in staat (of
+  /// als er al gestreamd wordt): Saber, 20-10-2026, "toon de streaming icon enkel als er toestellen
+  /// aanwezig zijn waar ik kan streamen".
+  List<CastDevice> get gevonden => _gevonden;
+  List<CastDevice> _gevonden = const [];
+  DateTime? _gezochtOp;
+  Future<void>? _zoekt;
+
+  bool get heeftToestellen => _gevonden.isNotEmpty || isCasting;
+
+  /// Vraag de pc welke toestellen er zijn, hoogstens eens per [geldig]: zoeken is drie seconden SSDP
+  /// plus een veeg over het subnet, en de knop vraagt het bij elk beeld.
+  Future<void> kijkRond({Duration geldig = const Duration(minutes: 10)}) {
+    final c = _client;
+    if (c == null) return Future.value();
+    final bezig = _zoekt;
+    if (bezig != null) return bezig;
+    final op = _gezochtOp;
+    if (op != null && DateTime.now().difference(op) < geldig) return Future.value();
+    _gezochtOp = DateTime.now();
+    return _zoekt = () async {
+      try {
+        onthoudGevonden(await c.castDevices());
+      } finally {
+        _zoekt = null;
+      }
+    }();
+  }
+
+  /// Wat de keuzelijst vond, geldt ook voor de knop.
+  void onthoudGevonden(List<CastDevice> f) {
+    _gezochtOp = DateTime.now();
+    if (f.length == _gevonden.length && f.every((d) => _gevonden.any((e) => e.id == d.id))) return;
+    _gevonden = List.unmodifiable(f);
+    notifyListeners();
+  }
+
   CastStatus? _status;
 
   /// What the speaker last told us. Null until the first answer arrives, and again if it stops
@@ -313,6 +350,7 @@ class _SpeakerPickerState extends State<SpeakerPicker> {
     // Discovery is a three-second SSDP wait plus a sweep of the subnet, so the list arrives late
     // enough that a spinner is the honest thing to show.
     final found = await widget.client.castDevices();
+    widget.target.onthoudGevonden(found);
     if (!mounted) return;
     setState(() {
       _devices = found;

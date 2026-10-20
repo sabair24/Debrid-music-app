@@ -39,22 +39,39 @@ Float64List spectrum({
   return s;
 }
 
+/// Het verzonnen spectrum als [Spectrumstaat], zoals de volle meting het opbouwt: banden van 50 Hz,
+/// het vermogensgemiddelde per band in dB (en hetzelfde als 95e percentiel).
+Spectrumstaat staatVan(Float64List s, int sampleRate, int luid) {
+  const bandHz = 50.0;
+  final perBin = sampleRate / 2 / s.length;
+  final n = (sampleRate / 2 / bandHz).floor();
+  final banden = Float64List(n);
+  for (var k = 0; k < n; k++) {
+    final a = (k * bandHz / perBin).floor(), z = math.max(a + 1, ((k + 1) * bandHz / perBin).floor());
+    var som = 0.0, aantal = 0;
+    for (var i = a; i < z && i < s.length; i++) {
+      som += s[i];
+      aantal++;
+    }
+    banden[k] = dB(aantal == 0 ? 0 : som / aantal);
+  }
+  return Spectrumstaat(sampleRate: sampleRate, bandHz: bandHz, gemiddeld: banden, p95: banden, luid: luid);
+}
+
 Echtheidsoordeel beoordeel(
   Float64List s, {
   int sampleRate = _cd,
   int kopSampleRate = _cd,
   int kopBits = 16,
   int gebruikteBits = 16,
-  int vensters = 20,
+  int vensters = 400,
   int nietNul = 500000,
 }) =>
-    oordeel(
-      spectrum: s,
-      sampleRate: sampleRate,
+    oordeelVol(
+      s: staatVan(s, sampleRate, vensters),
       kopSampleRate: kopSampleRate,
       kopBits: kopBits,
       gebruikteBits: gebruikteBits,
-      vensters: vensters,
       nietNulSamples: nietNul,
     );
 
@@ -136,7 +153,7 @@ void main() {
       final o = beoordeel(s, sampleRate: 96000, kopSampleRate: 96000, kopBits: 24, gebruikteBits: 24);
       expect(o.boven, Bovenband.leeg);
       expect(o.isNep, isTrue);
-      expect(waarom(o), contains('22 kHz'));
+      expect(waarom(o), contains('24,5 kHz'));
     });
 
     test('96 kHz mét ruis boven 22 kHz is echt', () {
@@ -154,9 +171,12 @@ void main() {
     test('een 96 kHz-bestand dat tóch uit een mp3 komt wordt wél betrapt', () {
       // De muur ligt dan nog steeds rond 20 kHz en valt dus binnen het zoekgebied — het optrekken naar
       // 96 kHz verstopt hem niet.
+      // Sinds de volle meting (20-10-2026) heet een muur boven 19,4 kHz "vermoedelijk" — maar boven
+      // 24,5 kHz is het hier leeg, en DAT is bewijs: opgeschaald.
       final s = spectrum(totHz: 19800, sampleRate: 96000);
       final o = beoordeel(s, sampleRate: 96000, kopSampleRate: 96000, kopBits: 24, gebruikteBits: 24);
-      expect(o.band, Bandbreedte.afgekapt);
+      expect(o.band, Bandbreedte.vermoedelijk);
+      expect(o.boven, Bovenband.leeg);
       expect(o.isNep, isTrue);
     });
 
@@ -167,13 +187,23 @@ void main() {
   });
 
   group('proef C: de afkap — de enige die vals alarm kan geven', () {
-    test('een mp3 van 320 kbps: muur rond 20 kHz', () {
+    test('een muur rond 20 kHz: vermoedelijk, niet bewezen', () {
+      // Volle meting (20-10-2026): tussen 19,4 en 20,9 kHz kapt mp3 256/320 en Opus, maar daar zit ook
+      // een 20 kHz-filter in een master. Geen [Echtheidsoordeel.isNep]; de zin zegt dat het niet zeker is.
       final s = spectrum(totHz: 19800);
       final o = beoordeel(s);
-      expect(o.band, Bandbreedte.afgekapt);
+      expect(o.band, Bandbreedte.vermoedelijk);
       expect(o.afkapHz, closeTo(19800, 400));
+      expect(o.isNep, isFalse);
+      expect(o.isVermoedelijk, isTrue);
+      expect(waarom(o), contains('niet zeker'));
+    });
+
+    test('een muur op 18,6 kHz: het patroon van mp3 192, bewezen genoeg', () {
+      final o = beoordeel(spectrum(totHz: 18600));
+      expect(o.band, Bandbreedte.afgekapt);
       expect(o.isNep, isTrue);
-      expect(waarom(o), contains('mp3'));
+      expect(waarom(o), contains('mp3 192'));
     });
 
     test('een mp3 van 128 kbps: muur rond 16 kHz', () {
@@ -289,11 +319,11 @@ void main() {
     // De toets hierboven heette "een mp3 van 320 kbps" maar gebruikte 19,8 kHz, en dat is waar 256
     // kapt. Hij paste dus binnen het oude bereik en verborg het gat in plaats van het te vinden.
 
-    test('een muur op 20,5 kHz wordt nu gezien', () {
+    test('een muur op 20,5 kHz wordt gezien — als vermoedelijk', () {
       final o = beoordeel(spectrum(totHz: 20500));
-      expect(o.band, Bandbreedte.afgekapt, reason: 'dit is precies waar een mp3 van 320 kapt');
+      expect(o.band, Bandbreedte.vermoedelijk, reason: 'mp3 320 kapt hier, een 20 kHz-masterfilter ook');
       expect(o.afkapHz, closeTo(20500, 400));
-      expect(o.isNep, isTrue);
+      expect(o.isNep, isFalse);
     });
 
     test('en de melding noemt de meting eerst, de verklaring erachter', () {
@@ -301,8 +331,9 @@ void main() {
       final zin = waarom(o);
       // De muur wordt op de eerste plek gevonden waar hij het steilst is, dus ergens tussen 20,3 en
       // 20,7 — vandaar het begin van het getal en niet één exacte waarde.
-      expect(zin, startsWith('afgekapt op 20,'), reason: 'de gemeten hoogte staat vooraan');
+      expect(zin, startsWith('muur op 20,'), reason: 'de gemeten hoogte staat vooraan');
       expect(zin, contains('mp3 320'));
+      expect(zin, contains('niet zeker'));
     });
 
     test('een echte cd-rip die tot Nyquist doorloopt blijft schoon', () {
@@ -330,14 +361,21 @@ void main() {
 
   group('waar een afkap vandaan komt', () {
     test('de bekende encoders worden bij naam genoemd', () {
+      // Waar de muurzoeker de val van elke encoder vond op de ijkset (20-10-2026), ~300 Hz onder de
+      // instelling in de LAME-broncode. Mp3 V0 heeft op 44,1 kHz geen laagdoorlaat en staat er niet in.
       expect(vermoedelijkeBron(16000), contains('128'));
-      expect(vermoedelijkeBron(19500), contains('V0'));
-      expect(vermoedelijkeBron(20500), contains('320'));
+      expect(vermoedelijkeBron(16800), 'mp3 128');
+      expect(vermoedelijkeBron(18700), contains('192'));
+      expect(vermoedelijkeBron(19450), contains('256'));
+      expect(vermoedelijkeBron(20200), contains('320'));
+      for (var hz = 14000.0; hz <= 21000; hz += 50) {
+        expect(vermoedelijkeBron(hz) ?? '', isNot(contains('V0')), reason: 'V0 kapt niet');
+      }
     });
 
     test('met een marge, want encoders schuiven hun filter een beetje', () {
-      expect(vermoedelijkeBron(20300), contains('320'));
-      expect(vermoedelijkeBron(20700), contains('320'));
+      expect(vermoedelijkeBron(20000), contains('320'));
+      expect(vermoedelijkeBron(20400), contains('320'));
     });
 
     test('en wat nergens naar wijst krijgt geen verzonnen naam', () {

@@ -192,6 +192,20 @@ Future<Heelheid?> controleerHeel(String pad, {Duration limiet = const Duration(m
   }
 }
 
+/// Een uitslag van de volle echtheidsmeting (echtheid_meter.dart) die hetzelfde bewijst: de MD5 van de
+/// samples klopt wel of niet met die in de FLAC-kop. Zo telt een bestand waarvan de controlesom niet
+/// klopt overal als kapot — ook in de keuring en bij dubbels — en niet alleen na een download.
+Future<void> onthoudHeelheid(String pad, Heelheid h) async {
+  await _laad();
+  try {
+    final st = await File(pad).stat();
+    _uitslagen[_sleutelVan(pad, st)] = h;
+    unawaited(_bewaar());
+  } catch (e) {
+    laatsteIntegriteitFout = 'heelheid niet te onthouden: $e';
+  }
+}
+
 /// Tests delen dit proces.
 void resetIntegriteitVoorTest() {
   _uitslagen.clear();

@@ -36,63 +36,14 @@ import 'fft.dart';
 import 'quality.dart';
 
 // ── De drempels ────────────────────────────────────────────────────────────
-// Elk getal met de redenering erboven, zoals `sameRecordingScore` in fingerprint.dart. Ze zijn
-// beredeneerd en daarna aan de echte bibliotheek getoetst met tool/echtheid_proef.dart.
-
-/// Hoe steil de val moet zijn om een MUUR te heten, gemeten over 1,5 kHz.
-///
-/// 35 dB over 1,5 kHz is ruim 23 dB/kHz. Geen akoestische of analoge oorzaak haalt dat in dit gebied:
-/// een derde-orde analoog filter op 15 kHz geeft 18 dB per octaaf, dus ongeveer 1,2 dB/kHz tussen 15 en
-/// 30 kHz, en tapebandruis rolt af met enkele dB's per kHz. Alleen een digitaal filter valt zo. Onder
-/// deze drempel is het antwoord GEEN oordeel, hoe laag de afkap ook ligt.
-const double wandDrempelDb = 35;
-const double wandSpan = 1500, wandGat = 200;
+// De drempels van de spectrale proeven staan bij [oordeelVol], met de ijking waarop ze rusten. Hier
+// alleen de twee die voor beide gelden.
 
 /// Onder deze frequentie doen we geen uitspraak.
 ///
 /// Daaronder leven 78-toerenplaten, cassettetransfers, AM-opnames en gerestaureerde mono's. De kans op
 /// vals alarm is daar hoog en het belang laag.
 const double laagsteAfkapHz = 14000;
-
-/// Er moet ruimte zijn om de val te MÉTEN, dus de afkap mag niet tegen Nyquist aan liggen.
-///
-/// Alleen nog voor proef B, de bovenband. Voor de muurzoeker geldt [wandRandHz] — zie daar waarom dat
-/// uit elkaar getrokken is.
-const double randNyquistHz = 2000;
-
-/// Hoeveel ruimte er BOVEN de muur moet overblijven om er nog een eerlijk gemiddelde van te maken.
-///
-/// **Hier zat het gat, en het stond er als bewuste keuze bij.** De muurzoeker gebruikte dezelfde 2000
-/// Hz als proef B, en dat betekende op een 44,1 kHz-bestand: zoeken tot 20,05 kHz. Een mp3 van 320
-/// kbit/s kapt rond 20,5. Dat is verreweg de meest gebruikte bron voor een nep-FLAC, en hij viel er
-/// net buiten. De oude afweging — "liever een gemiste transcode dan een beschuldigde plaat" — is
-/// omgedraaid op uitdrukkelijk verzoek: liever de waarheid.
-///
-/// Waarom 700 Hz genoeg is en 2000 niet nodig: het gemiddelde boven de muur hoeft alleen stabiel te
-/// zijn, niet breed. Bij vensters van 4096 op 44,1 kHz is een bin 10,8 Hz, dus 700 Hz zijn ruim
-/// zestig bins — meer dan genoeg om ruis uit te middelen. Het zoekgebied loopt daarmee tot 21,0 kHz
-/// (de harde grens [hoogsteAfkapHz]) in plaats van 20,05.
-///
-/// En de rand blijft er wél: een echte cd-master heeft zijn eigen antialiasmuur pal op 22,05 kHz.
-/// Zonder deze marge zou die als afkap gelezen worden en was élke cd-rip ineens een transcode.
-const double wandRandHz = 700;
-
-/// En boven deze frequentie zoeken we niet, hoe hoog de bemonstering ook is.
-///
-/// Dit vond de test, en het is geen detail: op een 96 kHz-bestand loopt het zoekgebied anders door tot
-/// 46 kHz, en dáár zit het anti-aliasfilter van de omzetter. Dat is een volkomen normale, steile val die
-/// élke echte hi-res opname heeft — hij werd als mp3-afkap gelezen en maakte van iedere 96 kHz-plaat een
-/// transcode. De afkap die wij zoeken komt van een mp3- of aac-encoder, en die woont tussen 14 en 21 kHz;
-/// hoger dan dat kapt geen enkele lossy encoder. Een 96 kHz-bestand dat uit een mp3 komt heeft zijn muur
-/// nog steeds rond 20 kHz en valt dus gewoon binnen het bereik.
-const double hoogsteAfkapHz = 21000;
-
-/// Boven de muur moet het écht leeg zijn, gemeten tegen de band waar de muziek zit.
-const double stilteOnderDb = 55;
-
-/// En onder de muur moet er breedbandige energie zijn, anders is het daar ook al stil en valt er niets
-/// af te kappen — dan is de opname gewoon dof.
-const double inhoudBovenDb = 25;
 
 /// Hoeveel samples er minstens niet-nul moeten zijn voor de bitdiepteproef.
 const int minNietNulSamples = 200000;
@@ -103,7 +54,18 @@ enum Bitdiepte { spreektNietTegen, opgeblazen, onbekend }
 
 enum Bovenband { vol, leeg, onbekend }
 
-enum Bandbreedte { doorlopend, afgekapt, onbekend }
+/// [vermoedelijk]: een muur tussen [zekerAfkapTot] en [vermoedelijkAfkapTot] — past bij mp3 320 of
+/// Opus, maar ook bij een 20 kHz-filter in de master. Geen bewijs, dus geen [Echtheidsoordeel.isNep].
+enum Bandbreedte { doorlopend, afgekapt, vermoedelijk, onbekend }
+
+/// De controlesom van een FLAC: de MD5 van alle samples, door de encoder in de kop gezet (RFC 9639).
+/// [fout]: de samples zijn niet wat de encoder schreef — bewezen beschadigd.
+enum Integriteit { klopt, fout, geenControlesom, onbekend }
+
+/// De vorm van de opgeslagen meting. Een oordeel uit de oude meting (drie grepen van vier seconden,
+/// één kanaal) gaf ~180 verkeerde antwoorden op Sabers bibliotheek en wordt bij het laden weggegooid,
+/// zodat het opnieuw gemeten wordt — zie [Echtheidsoordeel.fromJson].
+const int echtheidsVersie = 2;
 
 class Echtheidsoordeel {
   final Bitdiepte bits;
@@ -112,6 +74,10 @@ class Echtheidsoordeel {
   final Bandbreedte band;
   final double? afkapHz, wandDb;
   final int vensters;
+  final Integriteit integriteit;
+
+  /// 24,5-40 kHz ten opzichte van de muziek (dB), alleen boven 48 kHz.
+  final double? ultraDb;
 
   const Echtheidsoordeel({
     required this.bits,
@@ -121,11 +87,19 @@ class Echtheidsoordeel {
     this.afkapHz,
     this.wandDb,
     this.vensters = 0,
+    this.integriteit = Integriteit.onbekend,
+    this.ultraDb,
   });
 
   /// Alleen wat BEWEZEN is telt. `onbekend` is nadrukkelijk geen "nep" — zie [isOnbekend].
   bool get isNep =>
       bits == Bitdiepte.opgeblazen || boven == Bovenband.leeg || band == Bandbreedte.afgekapt;
+
+  /// Bewezen beschadigd: de controlesom klopt niet.
+  bool get isKapot => integriteit == Integriteit.fout;
+
+  /// Een muur rond 20 kHz: waarschijnlijk lossy, niet bewezen.
+  bool get isVermoedelijk => band == Bandbreedte.vermoedelijk;
 
   /// Er viel niets te zeggen. Een volwaardig antwoord, geen stille `false`.
   bool get isOnbekend =>
@@ -135,6 +109,7 @@ class Echtheidsoordeel {
       band == Bandbreedte.onbekend;
 
   Map<String, dynamic> toJson() => {
+        'v': echtheidsVersie,
         'bits': bits.name,
         'boven': boven.name,
         'band': band.name,
@@ -142,9 +117,14 @@ class Echtheidsoordeel {
         if (afkapHz != null) 'afkapHz': afkapHz,
         if (wandDb != null) 'wandDb': wandDb,
         'vensters': vensters,
+        'integriteit': integriteit.name,
+        if (ultraDb != null) 'ultraDb': ultraDb,
       };
 
+  /// Null voor rommel én voor een oordeel van een oudere meting ([echtheidsVersie]): dat wordt dan
+  /// opnieuw gemeten in plaats van verder geloofd.
   static Echtheidsoordeel? fromJson(Map<String, dynamic> j) {
+    if ((j['v'] as num?)?.toInt() != echtheidsVersie) return null;
     T? lees<T extends Enum>(List<T> waarden, String sleutel) {
       final s = j[sleutel]?.toString();
       for (final w in waarden) {
@@ -165,6 +145,8 @@ class Echtheidsoordeel {
       afkapHz: (j['afkapHz'] as num?)?.toDouble(),
       wandDb: (j['wandDb'] as num?)?.toDouble(),
       vensters: (j['vensters'] as num?)?.toInt() ?? 0,
+      integriteit: lees(Integriteit.values, 'integriteit') ?? Integriteit.onbekend,
+      ultraDb: (j['ultraDb'] as num?)?.toDouble(),
     );
   }
 }
@@ -191,108 +173,167 @@ int gebruikteBitsVan(Int32List samples) {
   return 32 - nullenAchteraan;
 }
 
-// ── Proef C: de afkap ──────────────────────────────────────────────────────
+// ── De volle meting (20-10-2026) ───────────────────────────────────────────
+//
+// Saber: "ik wil dit met 100 procent zekerheid weten … eerlijkheid". Dezelfde drie proeven, maar over
+// het HELE bestand en beide kanalen (echtheid_meter.dart), en met drempels die geijkt zijn op 110
+// nep-bestanden gemaakt van zes echte uit zijn bibliotheek:
+//
+//   echte originelen                 0 van 6 vals alarm
+//   MP3 192, 256, 320                18 van 18        MP3 128 en V2     10 van 12
+//   Opus 128 en 256                  9 van 10         44,1 → 96 kHz     11 van 11
+//   16 → 24 bit                      6 van 6          via 48 → 96 kHz   0 van 1
+//   MP3 V0, Vorbis q6, AAC (ffmpeg)  0 van 30 — geen laagdoorlaat; voor geen enkele spectrummeting
+//                                    zichtbaar (LAME-broncode: V0 = 24 kHz, boven Nyquist)
+//
+// De oude meting (drie grepen van vier seconden, één kanaal, een val van 35 dB, een bovenband 55 dB
+// stil) noemde 89 echte hi-res bestanden opgeschaald (A-ha "Take On Me (MTV Unplugged)" heeft inhoud
+// tot 34 kHz) en miste 75 duidelijke MP3-muren (Beyoncé "Halo", 17 kHz).
 
-/// De frequentie waar de val het steilst is, en hoe steil.
-///
-/// Bewust een VERSCHIL van twee gemiddelden en niet "de hoogste frequentie boven een drempel". Een
-/// absolute drempel vraagt een referentieniveau, en dat verschilt per genre met tientallen dB's; erger,
-/// hij kan een natuurlijke roll-off niet van een muur onderscheiden, want beide eindigen ergens. Een
-/// verschil is niveau-onafhankelijk en meet precies wat telt: de steilheid.
-({double hz, double db})? afkapVan(Float64List spectrum, int sampleRate) {
-  if (spectrum.isEmpty) return null;
-  final perBin = sampleRate / 2 / spectrum.length;
-  double gemiddeldDb(double vanHz, double totHz) {
-    final a = (vanHz / perBin).round().clamp(0, spectrum.length - 1);
-    final b = (totHz / perBin).round().clamp(0, spectrum.length - 1);
-    if (b <= a) return dB(spectrum[a]);
+/// Het spectrum zoals de volle meting het verzamelt: banden van [bandHz] breed, het vermogensgemiddelde
+/// over de luide vensters ([gemiddeld], dB) en het 95e percentiel per band ([p95], dB). [luid] is het
+/// aantal luide vensters, alle kanalen samen.
+class Spectrumstaat {
+  const Spectrumstaat({
+    required this.sampleRate,
+    required this.bandHz,
+    required this.gemiddeld,
+    required this.p95,
+    required this.luid,
+  });
+  final int sampleRate;
+  final double bandHz;
+  final Float64List gemiddeld, p95;
+  final int luid;
+
+  ({int a, int z}) _banden(double van, double tot) => (
+        a: math.max(0, (van / bandHz).round()),
+        z: math.min(gemiddeld.length, (tot / bandHz).round()),
+      );
+
+  /// Het vermogensgemiddelde over [van, tot) in dB, of null als daar geen band ligt.
+  double? db(double van, double tot) {
+    final (:a, :z) = _banden(van, tot);
+    if (z <= a) return null;
     var som = 0.0;
-    for (var i = a; i < b; i++) {
-      som += dB(spectrum[i]);
+    for (var k = a; k < z; k++) {
+      som += math.pow(10, gemiddeld[k] / 10);
     }
-    return som / (b - a);
+    return dB(som / (z - a));
   }
 
-  final nyquist = sampleRate / 2;
-  final bovengrens = math.min(nyquist - wandGat - wandRandHz, hoogsteAfkapHz);
-  if (bovengrens <= laagsteAfkapHz) return null;
-
-  double besteHz = 0, besteDb = -1e9;
-  for (var f = laagsteAfkapHz; f <= bovengrens; f += perBin) {
-    final onder = gemiddeldDb(f - wandSpan, f - wandGat);
-    // Afgekapt op Nyquist, want dicht bij de rand past het volle venster er niet meer in. Zonder
-    // deze grens klapt `gemiddeldDb` daar terug op één enkele bin, en dan meet je ruis in plaats van
-    // een band — precies waar de meest voorkomende transcode zit.
-    final bovenTot = math.min(f + wandSpan + wandGat, nyquist - 50);
-    final boven = gemiddeldDb(f + wandGat, bovenTot);
-    final val = onder - boven;
-    if (val > besteDb) {
-      besteDb = val;
-      besteHz = f;
+  /// De luidste band van het 95e percentiel in [van, tot): staat er óóit iets?
+  double maxP95(double van, double tot) {
+    final (:a, :z) = _banden(van, tot);
+    var m = -300.0;
+    for (var k = a; k < z; k++) {
+      if (p95[k] > m) m = p95[k];
     }
+    return m;
   }
-  if (besteHz == 0) return null;
-  return (hz: besteHz, db: besteDb);
 }
 
-// ── Het oordeel ────────────────────────────────────────────────────────────
+/// Hoeveel dB de val over een afkap minstens is om een MUUR te heten: gemiddeld over 1 kHz eronder
+/// min 1 kHz erboven. De zes echte bronnen haalden hooguit 13, MP3 128-320 en Opus 23 tot 68.
+const double volMuurDb = 25;
 
-/// [sampleRate] is die van de DECODER, [kopSampleRate]/[kopBits] wat het bestand bewéért.
-Echtheidsoordeel oordeel({
-  required Float64List spectrum,
-  required int sampleRate,
+/// Boven de muur gemiddeld minstens zoveel stiller dan de muziek (500-5000 Hz): echt leeg.
+const double volErbovenDb = -45;
+
+/// En eronder minstens zoveel meer dan erboven: er wás iets om af te kappen (anders is het dof).
+const double volInhoudDb = 15;
+
+/// Een muur onder deze frequentie is het patroon van een MP3/AAC-encoder: LAME 128 = 17,0 kHz, 192 =
+/// 18,6, oudere encoders op 128 = 16. Een studio filtert daar niet.
+const double zekerAfkapTot = 19400;
+
+/// Tussen [zekerAfkapTot] en hier: mp3 256/320 (19,7/20,5 kHz) en Opus (20 kHz), maar ook een 20 kHz-
+/// filter in de master. Waarschijnlijk, niet bewezen — [Bandbreedte.vermoedelijk].
+const double vermoedelijkAfkapTot = 20900;
+
+/// Hi-res: 24,5-40 kHz zoveel onder de muziek is vrijwel digitale stilte. Opgeschaald met soxr: tot -122;
+/// echte 96 kHz-opnames in de bibliotheek: -40 tot -70.
+const double volOpgeschaaldStil = -90;
+
+/// Of een muur tussen 19 en 25 kHz van minstens [volOpgeschaaldWand] dB met erboven minstens
+/// [volOpgeschaaldLeeg] stilte: ffmpegs eigen resampler laat tot 25 kHz wat doorlekken (val 15-23 dB).
+const double volOpgeschaaldWand = 15;
+const double volOpgeschaaldLeeg = -60;
+
+/// Zoveel luide vensters (alle kanalen) minstens voor een uitspraak over de band.
+const int volMinLuid = 50;
+
+/// De steilste val in [van, tot]: het gemiddelde over 1 kHz eronder min 1 kHz erboven, met 150 Hz marge.
+({double hz, double db})? steilsteVal(Spectrumstaat s, double van, double tot) {
+  final nyq = s.sampleRate / 2;
+  ({double hz, double db})? beste;
+  for (var f = van; f <= tot; f += s.bandHz) {
+    final onder = s.db(f - 1000, f - 150);
+    final boven = s.db(f + 150, math.min(f + 1000, nyq - 100));
+    if (onder == null || boven == null) continue;
+    final val = onder - boven;
+    if (beste == null || val > beste.db) beste = (hz: f, db: val);
+  }
+  return beste;
+}
+
+/// Het oordeel van de volle meting: de drie proeven uit de kop van dit bestand, met
+/// [Bandbreedte.vermoedelijk] erbij en de controlesom ([integriteit]).
+Echtheidsoordeel oordeelVol({
+  required Spectrumstaat s,
   required int kopSampleRate,
   required int kopBits,
   required int gebruikteBits,
-  required int vensters,
   required int nietNulSamples,
+  Integriteit integriteit = Integriteit.onbekend,
 }) {
-  const geenIdee = Echtheidsoordeel(
-      bits: Bitdiepte.onbekend, boven: Bovenband.onbekend, band: Bandbreedte.onbekend);
+  final sr = s.sampleRate;
+  final nyq = sr / 2;
+  final muziek = s.db(500, 5000);
+  // Geen muziek (stilte, of geen enkel luid venster): dan valt er niets te zeggen.
+  if (sr < 44100 || muziek == null || muziek < -250 || s.gemiddeld.isEmpty) {
+    return Echtheidsoordeel(
+        bits: Bitdiepte.onbekend, boven: Bovenband.onbekend, band: Bandbreedte.onbekend, integriteit: integriteit);
+  }
 
-  // Onder 44,1 kHz ligt Nyquist onder 22 kHz en degenereert elke drempel.
-  if (sampleRate < 44100 || spectrum.isEmpty) return geenIdee;
-
-  // ── A ──
+  // ── A: over ALLE samples, dus rekenkundig zeker ──
   var bits = Bitdiepte.onbekend;
   if (nietNulSamples >= minNietNulSamples && kopBits > 16) {
     bits = gebruikteBits <= 16 ? Bitdiepte.opgeblazen : Bitdiepte.spreektNietTegen;
   }
 
-  final perBin = sampleRate / 2 / spectrum.length;
-  double gemiddeldDb(double vanHz, double totHz) {
-    final a = (vanHz / perBin).round().clamp(0, spectrum.length - 1);
-    final b = (totHz / perBin).round().clamp(0, spectrum.length - 1);
-    if (b <= a) return dB(spectrum[a]);
-    var som = 0.0;
-    for (var i = a; i < b; i++) {
-      som += dB(spectrum[i]);
-    }
-    return som / (b - a);
-  }
-
-  final muziekband = gemiddeldDb(500, 5000);
-
-  // ── B: is er iets boven 22,05 kHz? Alleen zinvol als het bestand méér dan 48 kHz beweert. ──
+  // ── B: is er iets boven 24,5 kHz? Alleen als het bestand meer dan 48 kHz beweert. ──
   var boven = Bovenband.onbekend;
-  if (kopSampleRate > 48000 && sampleRate > 48000) {
-    final bovenband = gemiddeldDb(22050, sampleRate / 2 - randNyquistHz);
-    boven = (muziekband - bovenband) >= stilteOnderDb ? Bovenband.leeg : Bovenband.vol;
+  double? ultra;
+  if (kopSampleRate > 48000 && sr > 48000) {
+    final u = s.db(24500, math.min(nyq - 1000, 40000));
+    if (u != null) {
+      ultra = u - muziek;
+      final wand = steilsteVal(s, 19000, 25000);
+      final leeg = ultra <= volOpgeschaaldStil ||
+          (wand != null && wand.db >= volOpgeschaaldWand && ultra <= volOpgeschaaldLeeg);
+      boven = leeg ? Bovenband.leeg : Bovenband.vol;
+    }
   }
 
-  // ── C: staat er een muur? ──
+  // ── C: staat er een muur tussen 14 en 20,9 kHz? ──
   var band = Bandbreedte.onbekend;
   double? afkapHz, wandDb;
-  final gevonden = afkapVan(spectrum, sampleRate);
-  if (gevonden != null && vensters >= 8) {
-    afkapHz = gevonden.hz;
-    wandDb = gevonden.db;
-    final erboven = gemiddeldDb(afkapHz + wandGat, (sampleRate / 2) - 200);
-    final eronder = gemiddeldDb(afkapHz - 4000, afkapHz - 500);
-    final steil = wandDb >= wandDrempelDb;
-    final echtLeegErboven = (muziekband - erboven) >= stilteOnderDb;
-    final inhoudEronder = (eronder - erboven) >= inhoudBovenDb;
-    band = (steil && echtLeegErboven && inhoudEronder) ? Bandbreedte.afgekapt : Bandbreedte.doorlopend;
+  if (s.luid >= volMinLuid) {
+    band = Bandbreedte.doorlopend;
+    final w = steilsteVal(s, 11000, math.min(21500, nyq - 600));
+    if (w != null) {
+      afkapHz = w.hz;
+      wandDb = w.db;
+      final erboven = (s.db(w.hz + 150, nyq - 200) ?? muziek) - muziek;
+      final eronder = (s.db(w.hz - 3000, w.hz - 500) ?? muziek) - muziek;
+      final muur = w.db >= volMuurDb && erboven <= volErbovenDb && (eronder - erboven) >= volInhoudDb;
+      if (muur && w.hz >= laagsteAfkapHz && w.hz < zekerAfkapTot) {
+        band = Bandbreedte.afgekapt;
+      } else if (muur && w.hz >= zekerAfkapTot && w.hz <= vermoedelijkAfkapTot) {
+        band = Bandbreedte.vermoedelijk;
+      }
+    }
   }
 
   return Echtheidsoordeel(
@@ -302,11 +343,13 @@ Echtheidsoordeel oordeel({
     band: band,
     afkapHz: afkapHz,
     wandDb: wandDb,
-    vensters: vensters,
+    vensters: s.luid,
+    integriteit: integriteit,
+    ultraDb: ultra,
   );
 }
 
-/// Waarom, in dezelfde volgorde als [oordeel] beslist — zodat het scherm nooit iets anders zegt dan de
+/// Waarom, in dezelfde volgorde als [oordeelVol] beslist — zodat het scherm nooit iets anders zegt dan de
 /// meting. Zelfde afspraak als `whyBetter` in organize.dart.
 /// Waarom dit bestand op de Kwaliteit-lijst staat: de afkap, altijd.
 ///
@@ -350,19 +393,29 @@ String afkapZin(double hz) {
       : 'afgekapt op $k kHz — dat is waar $bron kapt';
 }
 
+/// Gemeten op de ijkset (20-10-2026): de muurzoeker vindt de val zo'n 300 Hz onder wat de encoder
+/// instelt (LAME-broncode: 128 = 17,0, 160 = 17,5, 192 = 18,6, V2 = 18,5, 256 = 19,7, 320 = 20,5 kHz;
+/// Opus: 20 kHz; oudere encoders op 128: 16 kHz). Mp3 V0 staat er bewust niet in: die heeft op 44,1
+/// kHz geen laagdoorlaat, en hier stond hij bij 19,5 kHz.
 String? vermoedelijkeBron(double hz) {
   const bekend = <(double, String)>[
-    (16000, 'mp3 128'),
-    (18000, 'mp3 192'),
-    (18500, 'mp3 V2'),
-    (19500, 'mp3 V0 of aac 256'),
-    (19800, 'mp3 256'),
-    (20500, 'mp3 320'),
+    (15900, 'een oude mp3 van 128'),
+    (16800, 'mp3 128'),
+    (17300, 'mp3 160'),
+    (18700, 'mp3 192 of V2'),
+    (19450, 'mp3 256'),
+    (20200, 'mp3 320 of Opus'),
   ];
   for (final (f, naam) in bekend) {
-    if ((hz - f).abs() <= 400) return naam;
+    if ((hz - f).abs() <= 250) return naam;
   }
   return null;
+}
+
+/// Een muur rond 20 kHz: wat hij kan zijn, zonder te beweren wat hij is.
+String vermoedelijkZin(double hz) {
+  final k = (hz / 1000).toStringAsFixed(1).replaceAll('.', ',');
+  return 'muur op $k kHz — past bij mp3 320 of Opus, maar ook bij een 20 kHz-filter in de master; niet zeker';
 }
 
 /// Wat er WERKELIJK in zit, in de notatie waarin de kop het beweert.
@@ -384,6 +437,10 @@ String? echteResolutie(Echtheidsoordeel o, {required int kopSampleRate, required
     return 'tot ${(hz / 1000).toStringAsFixed(1).replaceAll('.', ',')} kHz';
   }
   final w = echteWaarden(o, kopSampleRate: kopSampleRate, kopBits: kopBits);
+  // Vermoedelijk: met een vraagteken, want het kan ook de master zijn. Pas als niets harders iets zegt.
+  if (o.band == Bandbreedte.vermoedelijk && hz != null && w.rate == kopSampleRate && w.bits == kopBits) {
+    return 'tot ${(hz / 1000).toStringAsFixed(1).replaceAll('.', ',')} kHz?';
+  }
   if (w.rate == kopSampleRate && w.bits == kopBits) return null;
   // Dezelfde notatie als de badge ernaast, uit dezelfde functie. Een eigen kopie zou hier `16/44,1`
   // kunnen gaan schrijven terwijl de badge `16/44` zegt, en dan lezen ze als twee verschillende
@@ -405,7 +462,7 @@ typedef EchteResolutie = ({int bits, int rate, bool uitLossy});
 /// sterker dan een bemonstering.
 ///
 /// **Een afgekapte kopie verliest per constructie van een echte cd, zonder drempel.** De muurzoeker
-/// kijkt niet hoger dan [hoogsteAfkapHz] = 21000, dus twee keer de afkap is hoogstens 42000 — al
+/// noemt alleen een muur onder [zekerAfkapTot] = 19400 afgekapt, dus twee keer de afkap is hoogstens 38800 — al
 /// minder dan 44100. En de bits worden op zestien geklemd: een uit mp3 omgezet bestand dat 24 bits
 /// beweert zou anders `42000 × 24` scoren en een echte cd verslaan. Die klem is verdedigbaar op de
 /// eigen voorwaarden van dit bestand — [Bitdiepte.spreektNietTegen] bewijst nadrukkelijk nooit dat
@@ -441,14 +498,20 @@ int echteCapaciteit(Echtheidsoordeel? o, {required int kopSampleRate, required i
 }
 
 String waarom(Echtheidsoordeel o) {
+  if (o.isKapot) {
+    return 'beschadigd: de controlesom klopt niet — de samples zijn niet wat de encoder schreef';
+  }
   if (o.bits == Bitdiepte.opgeblazen) {
     return 'zegt meer dan 16 bits, maar gebruikt er ${o.gebruikteBits} — opgeblazen';
   }
   if (o.boven == Bovenband.leeg) {
-    return 'niets boven 22 kHz — opgeschaald, geen echte hi-res';
+    return 'boven 24,5 kHz vrijwel leeg — opgeschaald uit 44,1 of 48 kHz, geen echte hi-res';
   }
   if (o.band == Bandbreedte.afgekapt) {
     return afkapZin(o.afkapHz!);
+  }
+  if (o.band == Bandbreedte.vermoedelijk && o.afkapHz != null) {
+    return vermoedelijkZin(o.afkapHz!);
   }
   if (o.isOnbekend) return 'niet te beoordelen';
   final stukken = <String>[];
