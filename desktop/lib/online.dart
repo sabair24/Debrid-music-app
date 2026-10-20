@@ -1177,6 +1177,12 @@ class DownloadJob {
   /// `vaste_keuze.dart`) en er komt geen jacht op iets beters achteraan.
   bool jouwKeuze = false;
 
+  /// Eén nummer dat je zelf met ⬇ startte (zie [DownloadManager.zoekEnHaal]): de race krijgt de ruimte van
+  /// de wedloop — [DownloadManager.kWedloopLopers] kandidaten in plaats van twintig, en wie na
+  /// [DownloadManager.kVerbindGeduld] nog niet antwoordt houdt zijn plek niet bezet. Een album niet: twaalf
+  /// nummers tegelijk keer zestig peers is geen nette gast meer.
+  bool ruim = false;
+
   /// Identity of the TRACK, not of one peer's copy. Clicking five sources of the same song must
   /// not start five downloads of it.
   String? trackKey;
@@ -1304,6 +1310,10 @@ class DownloadManager extends ChangeNotifier {
   /// Each try is now a DIFFERENT peer (see [_sweepOrder]), so the budget buys real chances rather
   /// than several files from the same collector.
   static const _maxLosslessTries = 20;
+
+  /// Zo lang wacht de race van een los nummer ([DownloadJob.ruim]) op een antwoord voor hij de volgende
+  /// vraagt. Gemeten op 20-10-2026: vijftien onbereikbare peers hielden elk 18 s een plek bezet.
+  static const kVerbindGeduld = Duration(seconds: 4);
   static const _maxLossyTries = 8;
 
   /// How fast the race opens new peer connections. Not a cap on how many run at once: a peer that
@@ -1744,7 +1754,8 @@ class DownloadManager extends ChangeNotifier {
       TrackTags? authority,
       SoulseekFile? exact,
       bool jouwKeuze = false,
-      bool wachtOpAfloop = true}) async {
+      bool wachtOpAfloop = true,
+      bool ruim = false}) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     if (candidates.isEmpty) return false;
     // Don't start a duplicate if this exact key is already in progress.
@@ -1777,6 +1788,7 @@ class DownloadManager extends ChangeNotifier {
       ..authority = authority
       ..exact = exact
       ..jouwKeuze = jouwKeuze || exact != null
+      ..ruim = ruim
       ..candidates = candidates;
     jobs.insert(0, job);
     notifyListeners();
@@ -1848,7 +1860,11 @@ class DownloadManager extends ChangeNotifier {
     }
     notifyListeners();
     // Dezelfde sleutel, zodat de knop op de pagina gewoon doorloopt van "zoeken" naar "bezig".
-    final gestart = await enqueueSoulseekBest(kandidaten, key: key, authority: authority, wachtOpAfloop: false);
+    // Eén nummer dat je zelf startte: de ruimte van de wedloop (zie [DownloadJob.ruim]). Gemeten op 20-10-2026
+    // (⬇ Doechii — Anxiety vanaf de gsm): 196 kopieën met de officiële lengte, twintig geprobeerd — bijna
+    // allemaal onbereikbaar (elk 18 s een plek bezet) of afgebroken — en dan "de andere lengtes": 2 min 24 s.
+    final gestart =
+        await enqueueSoulseekBest(kandidaten, key: key, authority: authority, wachtOpAfloop: false, ruim: true);
     return gestart ? ZoekUitkomst.gestart : ZoekUitkomst.loopt;
   }
 
@@ -2250,7 +2266,7 @@ class DownloadManager extends ChangeNotifier {
     /// and whoever comes up first takes it. All of them ride the ONE shared login — twenty peer
     /// sockets, zero extra logins.
     Future<(SlskDone, SoulseekFile)?> race(List<SoulseekFile> pool, String label, {bool alsLossy = false}) async {
-      final cap = alsLossy ? _maxLossyTries : _maxLosslessTries;
+      final cap = alsLossy ? _maxLossyTries : (job.ruim ? kWedloopLopers : _maxLosslessTries);
       final order = sweepOrderFor(pool, first: keuze);
       final n = order.length < cap ? order.length : cap;
 
@@ -2280,6 +2296,13 @@ class DownloadManager extends ChangeNotifier {
         job.live.add(c);
         asked++;
         paint();
+        // Antwoordt hij na [kVerbindGeduld] nog niet (onbereikbaar: rechtstreeks 3 s, dan via de server tot
+        // 15 s), dan mag de race alvast de volgende vragen — hij blijft gewoon verder verbinden.
+        final geduld = job.ruim
+            ? Timer(kVerbindGeduld, () {
+                if (!moveOn.isCompleted && !identical(leader, f)) moveOn.complete();
+              })
+            : null;
         // Counted once. A queued peer re-reports its position every 30 seconds, so counting each
         // report had the line climbing to "137 in de wachtrij" out of twenty peers.
         var inLine = false;
@@ -2331,6 +2354,7 @@ class DownloadManager extends ChangeNotifier {
           },
         );
         job.live.remove(c);
+        geduld?.cancel();
         // Vasthouden waaróm deze peer niets leverde. De laatste die iets zegt wint: bij één vaste
         // keuze is dat de enige peer die er is, en bij een race is de laatste even willekeurig als
         // elke andere — maar één echte reden is oneindig veel meer dan "mislukt".

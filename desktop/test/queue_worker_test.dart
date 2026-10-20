@@ -77,7 +77,7 @@ class FakeDownloads extends DownloadManager {
       TrackTags? authority,
       SoulseekFile? exact,
       bool jouwKeuze = false,
-      bool wachtOpAfloop = true}) async {
+      bool wachtOpAfloop = true, bool ruim = false}) async {
     if (candidates.isEmpty) return false;
     // Mirrors the real guard: the same recording, already running, is not started twice.
     final track = authority == null ? '' : '${authority.artist}|${authority.title}';

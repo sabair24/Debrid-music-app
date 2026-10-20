@@ -1404,7 +1404,7 @@ class _RecordingDownloads extends DownloadManager {
       TrackTags? authority,
       SoulseekFile? exact,
       bool jouwKeuze = false,
-      bool wachtOpAfloop = true}) async {
+      bool wachtOpAfloop = true, bool ruim = false}) async {
     calls++;
     lastKey = key;
     lastAuthority = authority;

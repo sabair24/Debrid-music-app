@@ -17445,6 +17445,17 @@ class NieuwSpeler extends ChangeNotifier {
           }
           return;
         }
+        // De achterkant en de cd alvast, uit de gratis bronnen en met de sleutel die Nu speelt en de tegels
+        // gebruiken ([albumArtVooruit]): dan staan ze klaar als je Nu speelt opent, en opent het intussen,
+        // dan wacht het op ditzelfde werk. Saber, 20-10-2026: de hoezen "lopen nu achter".
+        final landAl = lib.albumForPath(t.path);
+        if (landAl != null) {
+          final v = albumArtVooruit(lib, landAl);
+          unawaited(DiscogsService(instellingen)
+              .releaseArt(v.artist, v.album,
+                  expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles, freeOnly: true)
+              .then((_) {}, onError: (_) {}));
+        }
         final klinkendAdres = vroeg?.adres ?? elders?.pad;
         if (klinkendAdres != null && klinkt && opende(klinkendAdres)) {
           // Het klinkt al: niets opnieuw openen. In de rij wordt het je eigen nummer (hoes, kwaliteit,
@@ -29489,7 +29500,21 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           expectedTracks: widget.trackCount,
           pinned: widget.pinned,
           pinnedMbid: widget.pinnedMbid,
-          roles: widget.roles);
+          roles: widget.roles,
+          // De cd en de achterkant zodra TheAudioDB ze heeft, en niet pas na het archief (7 tot 10 s):
+          // alleen wat hier nog ontbreekt — wat er al staat, blijft staan.
+          tussenstand: (t) {
+        if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
+        final nu = _art;
+        if ((nu?.disc != null || t.disc == null) && (nu?.back != null || t.back == null)) return;
+        setState(() => _art = ReleaseArt(
+              front: nu?.front ?? t.front,
+              back: nu?.back ?? t.back,
+              disc: nu?.disc ?? t.disc,
+              bron: nu?.bron,
+              formaat: nu?.formaat,
+            ));
+      });
       if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
       // Nothing found leaves what is on screen alone: an empty answer is not a better answer than
       // the sleeve already showing.

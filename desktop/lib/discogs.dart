@@ -1671,6 +1671,10 @@ extension DiscogsArtwork on DiscogsService {
     // facts sweep fully deferred and the whole budget free, one record still ran past ninety seconds.
     // Guessing at a chain with five stages from the outside does not work.
     void Function(String)? trace,
+    /// Wat er al is terwijl de keten verder zoekt: de cd en de achterkant van TheAudioDB, na een paar tienden
+    /// van een seconde — het archief doet er 7 tot 10 s over (gemeten 20-10-2026). Ook voor wie meelift op
+    /// een keten die al loopt. Saber: de hoezen "lopen nu achter".
+    void Function(ReleaseArt tussen)? tussenstand,
   }) async {
     // Both pins are part of the cache key. Without that a new choice would keep answering with the
     // scans fetched for the old one — which is half of why picking a release changed the front
@@ -1727,15 +1731,25 @@ extension DiscogsArtwork on DiscogsService {
     // happened. And they do overlap: warm.log shows the free sweep re-arming at 16:03:02 while the
     // backfill was working on a record from 16:02:53.
     final lane = '$key|${freeOnly ? 'vrij' : 'vol'}';
+    if (tussenstand != null) (_artTussen[lane] ??= []).add(tussenstand);
     final running = _artInFlight[lane];
     if (running != null) {
       trace?.call('  [kunst] al onderweg voor dezelfde sleutel — meegelift');
       return running;
     }
+    void meld(ReleaseArt t) {
+      for (final cb in List.of(_artTussen[lane] ?? const <void Function(ReleaseArt)>[])) {
+        try {
+          cb(t);
+        } catch (_) {/* een scherm dat intussen weg is */}
+      }
+    }
+
     final work =
-        _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly)
+        _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld)
             .whenComplete(() {
       _artInFlight.remove(lane);
+      _artTussen.remove(lane);
       trace?.call('  [kunst] whenComplete — uit de in-flight tabel');
     });
     _artInFlight[lane] = work;
@@ -1744,6 +1758,9 @@ extension DiscogsArtwork on DiscogsService {
   }
 
   static final _artInFlight = <String, Future<ReleaseArt?>>{};
+
+  /// Wie per lopende keten een tussenstand wil — zie [releaseArt].
+  static final _artTussen = <String, List<void Function(ReleaseArt)>>{};
 
   /// The artwork chain itself. Only reached on a cache miss, and only once per album at a time —
   /// see [releaseArt], which owns the cache key and the in-flight table.
@@ -1756,8 +1773,9 @@ extension DiscogsArtwork on DiscogsService {
     Map<String, String> roles,
     Directory dir,
     void Function(String)? trace,
-    bool freeOnly,
-  ) async {
+    bool freeOnly, [
+    void Function(ReleaseArt tussen)? tussen,
+  ]) async {
     final t0 = DateTime.now();
     void step(String what) =>
         trace?.call('  [kunst] +${DateTime.now().difference(t0).inMilliseconds}ms $what');
@@ -1817,6 +1835,11 @@ extension DiscogsArtwork on DiscogsService {
     ReleaseArt? partial;
     final exactF = pinnedMbid != null && pinnedMbid.isNotEmpty ? _artFromCaa(pinnedMbid) : Future<ReleaseArt?>.value();
     tadb = await tadbF;
+    // Wat TheAudioDB gaf, meteen naar wie wacht: het archief hieronder duurt seconden.
+    if (tussen != null && (tadb.disc != null || tadb.back != null)) {
+      step('tussenstand: achter=${tadb.back != null} cd=${tadb.disc != null}');
+      tussen(said(const ReleaseArt()));
+    }
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
       final exact = await exactF;
       step('archief voor de gepinde persing: '

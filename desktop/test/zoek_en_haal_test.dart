@@ -29,11 +29,13 @@ class _Schrijver extends DownloadManager {
   _Schrijver(AppSettings cfg) : super(OnlineService(cfg), SoulseekService(cfg), Directory.systemTemp.path, () async {});
 
   final gestart = <({List<SoulseekFile> kandidaten, String? key, TrackTags? authority})>[];
+  final ruimGevraagd = <bool>[];
 
   @override
   Future<bool> enqueueSoulseekBest(List<SoulseekFile> candidates,
-      {String? key, TrackTags? authority, SoulseekFile? exact, bool jouwKeuze = false, bool wachtOpAfloop = true}) async {
+      {String? key, TrackTags? authority, SoulseekFile? exact, bool jouwKeuze = false, bool wachtOpAfloop = true, bool ruim = false}) async {
     gestart.add((kandidaten: candidates, key: key, authority: authority));
+    ruimGevraagd.add(ruim);
     jobs.insert(0, DownloadJob(candidates.first.displayName, key: key, status: 'queued'));
     notifyListeners();
     return true;
@@ -55,6 +57,20 @@ AppSettings _cfg() => AppSettings()
   ..soulseekPass = 'toets';
 
 void main() {
+  test('één nummer dat je zelf startte, krijgt de ruimte van de wedloop (Anxiety, 20-10-2026: 20 van 196 geprobeerd)', () async {
+    final dm = _Schrijver(_cfg());
+    await dm.zoekEnHaal(naam: 'Anxiety', key: 'k', zoek: () async => [_f('Anxiety.flac')]);
+    expect(dm.ruimGevraagd, [true]);
+    final online = File('lib/online.dart').readAsStringSync();
+    expect(online, contains('final cap = alsLossy ? _maxLossyTries : (job.ruim ? kWedloopLopers : _maxLosslessTries);'));
+    expect(online, contains('if (!moveOn.isCompleted && !identical(leader, f)) moveOn.complete();'),
+        reason: 'wie na 4 s nog niet antwoordt, houdt zijn plek niet bezet');
+    expect(DownloadManager.kVerbindGeduld, const Duration(seconds: 4));
+    // Ook vanaf de gsm: de vlag gaat mee naar de pc, en de pc leest hem.
+    expect(File('lib/lan/remote_services.dart').readAsStringSync(), contains("if (ruim) 'ruim': true,"));
+    expect(File('lib/lan/server.dart').readAsStringSync(), contains("ruim: body['ruim'] == true,"));
+  });
+
   test('DE KERN: de taak staat er bij de klik al, vóór het zoeken klaar is', () async {
     final dm = _Schrijver(_cfg());
     final zoeken = Completer<List<SoulseekFile>>();

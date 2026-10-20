@@ -86,7 +86,7 @@ class FakeDownloads extends DownloadManager {
       TrackTags? authority,
       SoulseekFile? exact,
       bool jouwKeuze = false,
-      bool wachtOpAfloop = true}) async {
+      bool wachtOpAfloop = true, bool ruim = false}) async {
     slskEnqueued.add(candidates);
     jobs.insert(0, DownloadJob(candidates.first.filename, key: key)..status = 'queued');
     notifyListeners();

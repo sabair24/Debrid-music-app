@@ -575,7 +575,8 @@ class RemoteDownloadManager extends DownloadManager {
       TrackTags? authority,
       SoulseekFile? exact,
       bool jouwKeuze = false,
-      bool wachtOpAfloop = true}) async {
+      bool wachtOpAfloop = true,
+      bool ruim = false}) async {
     final payload = <String, dynamic>{
       'candidates': [for (final c in candidates) c.toJson()],
       'key': key,
@@ -588,6 +589,8 @@ class RemoteDownloadManager extends DownloadManager {
       if (exact != null) 'exact': exact.toJson(),
       // En om dezelfde reden: wat je op de iPad zelf aanwees, hoort op de pc een keuze te blijven.
       if (jouwKeuze) 'jouwKeuze': true,
+      // Eén nummer dat je zelf startte: de pc geeft de race de ruimte van de wedloop (DownloadJob.ruim).
+      if (ruim) 'ruim': true,
     };
     try {
       final res = await _rpc.post('/api/soulseek/download', payload);

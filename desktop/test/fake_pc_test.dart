@@ -149,7 +149,7 @@ class _FakeDownloads extends DownloadManager {
       TrackTags? authority,
       SoulseekFile? exact,
       bool jouwKeuze = false,
-      bool wachtOpAfloop = true}) async {
+      bool wachtOpAfloop = true, bool ruim = false}) async {
     _run(candidates.first.filename, key: key);
     return true;
   }

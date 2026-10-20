@@ -45,6 +45,14 @@ void main() {
     });
   });
 
+  test('aangesloten: na een ▶ de achterkant en de cd alvast, met de sleutel van Nu speelt, alleen gratis bronnen', () {
+    final m = File('lib/main.dart').readAsStringSync();
+    final s = m.substring(m.indexOf('  Future<void> speelNummer(BuildContext context,'));
+    final voor = s.substring(0, s.indexOf('final klinkendAdres = vroeg?.adres ?? elders?.pad;'));
+    expect(voor, contains('final v = albumArtVooruit(lib, landAl);'));
+    expect(voor, contains('roles: v.roles, freeOnly: true)'), reason: 'vooraf: nooit het Discogs-budget');
+  });
+
   group('cd en achterkant', () {
     test('aangesloten: de cd van TheAudioDB gaat voor, zijn achterkant is alleen de terugval', () {
       final d = File('lib/discogs.dart').readAsStringSync();
@@ -73,6 +81,19 @@ void main() {
       expect(grootsteBeeld(archief, gelijk), same(archief));
       expect(grootsteBeeld(null, tadb), same(tadb));
       expect(grootsteBeeld(archief, null), same(archief));
+    });
+
+    test('aangesloten: een tussenstand zodra TheAudioDB antwoordt (live: 0,23 s tegen 5,8–10,8 s voor de keten)', () {
+      final d = File('lib/discogs.dart').readAsStringSync();
+      final keten = d.substring(d.indexOf('    tadb = await tadbF;'));
+      expect(keten.indexOf('tussen(said(const ReleaseArt()));'), lessThan(keten.indexOf('final exact = await exactF;')),
+          reason: 'vóór het archief, niet erna');
+      expect(d, contains('if (tussenstand != null) (_artTussen[lane] ??= []).add(tussenstand);'),
+          reason: 'ook wie meelift op een keten die al loopt');
+      final m = File('lib/main.dart').readAsStringSync();
+      final load = m.substring(m.indexOf('  Future<void> _load() async {'));
+      expect(load, contains('tussenstand: (t) {'));
+      expect(load, contains('disc: nu?.disc ?? t.disc,'), reason: 'wat er al staat, blijft staan');
     });
 
     test('aangesloten: de achterkant uit het archief op zijn grootst', () {

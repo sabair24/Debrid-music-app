@@ -1876,6 +1876,7 @@ class LanServer {
         authority: _authorityOf(body),
         exact: gekozen is Map<String, dynamic> ? SoulseekFile.fromJson(gekozen) : null,
         jouwKeuze: body['jouwKeuze'] == true,
+        ruim: body['ruim'] == true,
         wachtOpAfloop: false);
   }
 
