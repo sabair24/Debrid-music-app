@@ -22065,8 +22065,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           trackNo: 0,
           seconds: t.seconden,
         ),
-        zoek: () async => zeefKandidaten(await soulseek.search(soulseekQuery(t.artist, t.title)),
-            titel: t.title, seconden: t.seconden, artiest: t.artist, album: t.album),
+        // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
+        zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title),
+            seconden: t.seconden,
+            zeef: (l) => zeefKandidaten(l, titel: t.title, seconden: t.seconden, artiest: t.artist, album: t.album)),
       );
       if (!mounted) return;
       switch (uit) {
@@ -26475,12 +26477,14 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       for (final f in _slskForTitle(t)) '${f.username}|${f.filename}': f
     };
     try {
-      final r = await soulseek.search(soulseekQuery(widget.artistName, t.title));
       // Dezelfde zeef als de telling naast de rij, mét de terugval voor een gast die de bestanden niet
       // noemen ([zonderGast]). Hier stond een eigen lus met alleen [fileOffersTitle]: "À 20 ans (feat.
       // Diam's)" van Amel Bent kreeg zo nul bronnen naast een rij peers met "03. A 20 Ans.flac".
-      for (final f in await zeefKandidaten(r,
-          titel: t.title, seconden: t.durationSec, artiest: widget.artistName, album: widget.album.title)) {
+      // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
+      for (final f in await soulseek.zoekVroeg(soulseekQuery(widget.artistName, t.title),
+          seconden: t.durationSec,
+          zeef: (l) => zeefKandidaten(l,
+              titel: t.title, seconden: t.durationSec, artiest: widget.artistName, album: widget.album.title))) {
         pool.putIfAbsent('${f.username}|${f.filename}', () => f);
       }
     } catch (_) {/* the preload's copies are still worth a try on their own */}

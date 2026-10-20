@@ -706,6 +706,23 @@ class OnlineService {
 }
 
 /// Soulseek search (with the first-character "*" quirk) + credentials gate.
+/// Hoeveel zeker goede kopieën een tussenstand moet tonen voordat ⬇ al begint — zie [SoulseekService.zoekVroeg].
+/// Acht, omdat de race van één nummer met twintig tegelijk begint ([DownloadManager.raceBreedte]): met
+/// minder is de vroege lijst te mager om er iets mee te winnen.
+const kVroegGenoeg = 8;
+
+/// Toont [z] al genoeg kopieën die zeker goed zijn om de race te beginnen? Lossless, stereo, een vrije
+/// plek, en de officiële lengte (±2 s, [lengteKlopt]) als die bekend is.
+bool vroegGenoeg(List<SoulseekFile> z, int? seconden) =>
+    z
+        .where((f) =>
+            f.freeSlots &&
+            DownloadManager.isLossless(f) &&
+            !DownloadManager.isMultichannel(f) &&
+            (seconden == null || seconden <= 0 || lengteKlopt(seconden, f.durationSec)))
+        .length >=
+    kVroegGenoeg;
+
 class SoulseekService {
   final AppSettings settings;
   final SoulseekClient client = SoulseekClient();
@@ -922,6 +939,47 @@ class SoulseekService {
   /// bronnen voor een ander nummer, zonder dat er iets over gezegd werd. De trede ertussen — dezelfde
   /// vraag zonder de haakjes — is precies de nuttigste.
   ///
+  /// Zoeken voor ⬇ met een vroege start, zoals ▶ al deed (Saber, 20-10-2026: "doe ook maar voor download").
+  ///
+  /// **Waarom.** Gemeten op de pc (3.9.526): ⬇ Please Please Please 12 s van tik tot bestand, waarvan 5 s
+  /// zoeken; Indigo Night 21 s, waarvan 8 s zoeken — een Soulseek-zoekopdracht wacht een vaste tijd op
+  /// uitslagen. ▶ begint al na [DownloadManager.kVroegZoeken] met wat er dan is.
+  ///
+  /// Vanaf die tel wordt elke tussenstand door [zeef] gehaald (dezelfde zeef als de hele uitslag, nooit
+  /// twee tegelijk); toont hij er al [kVroegGenoeg] die zeker goed zijn ([vroegGenoeg]: lossless, stereo,
+  /// een vrije plek, de officiële lengte), dan is dat de lijst en begint de race. Anders — een minder
+  /// bekend nummer — gewoon de hele uitslag, zoals voorheen. Het zoeken loopt intussen verder; wat er later
+  /// nog binnenkomt doet niet meer mee.
+  Future<List<SoulseekFile>> zoekVroeg(String vraag,
+      {required Future<List<SoulseekFile>> Function(List<SoulseekFile>) zeef, int? seconden}) {
+    final uit = Completer<List<SoulseekFile>>();
+    final klok = Stopwatch()..start();
+    var bezig = false;
+    Future<void> kijk(List<SoulseekFile> tussen) async {
+      if (uit.isCompleted || bezig || klok.elapsed < DownloadManager.kVroegZoeken) return;
+      bezig = true;
+      try {
+        final z = await zeef(tussen);
+        if (!uit.isCompleted && vroegGenoeg(z, seconden)) uit.complete(z);
+      } catch (_) {/* dan wacht het op de hele uitslag */} finally {
+        bezig = false;
+      }
+    }
+
+    search(vraag, onPartial: (l) => unawaited(kijk(l))).then((alles) async {
+      if (uit.isCompleted) return;
+      try {
+        final z = await zeef(alles);
+        if (!uit.isCompleted) uit.complete(z);
+      } catch (e, s) {
+        if (!uit.isCompleted) uit.completeError(e, s);
+      }
+    }, onError: (Object e, StackTrace s) {
+      if (!uit.isCompleted) uit.completeError(e, s);
+    });
+    return uit.future;
+  }
+
   /// [gebruikteVraag] meldt op welke trede er uiteindelijk gezocht is, zodat het scherm eerlijk kan
   /// zeggen waar deze lijst over gaat.
   Future<List<SoulseekFile>> search(String query,

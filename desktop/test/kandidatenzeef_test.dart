@@ -132,7 +132,8 @@ void main() {
       final s = main.indexOf('Future<List<SoulseekFile>> _slskCandidatesForTrack(');
       final e = main.indexOf('Future<void> _downloadTrack(', s);
       final bron = main.substring(s, e);
-      expect(bron, contains('await zeefKandidaten(r,'));
+      // Via de vroege start ([SoulseekService.zoekVroeg]), maar door dezelfde zeef — ook de tussenstand.
+      expect(bron, contains('zeef: (l) => zeefKandidaten(l,'));
       expect(bron, isNot(contains('fileOffersTitle(')));
     });
   });
