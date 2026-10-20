@@ -539,6 +539,9 @@ Future<void> main() async {
   // zoeken op zijn drie lijsten wacht.
   final deezerLog = WarmLog('$logDir${Platform.pathSeparator}deezer.log');
   DeezerBaan.spoor = (r) => Timer.run(() => deezerLog.line(r));
+  // En de hoezen van Nu speelt, stap voor stap — zie [kunstSpoor].
+  final kunstLog = WarmLog('$logDir${Platform.pathSeparator}kunst.log');
+  kunstSpoor = (r) => Timer.run(() => kunstLog.line(r));
   // Het oordeel van de glasproef (ui/glasproef.dart) ook in kop.log, en in logcat via debugPrint.
   Glasproef.meld = (r) {
     debugPrint(r);
@@ -29059,6 +29062,14 @@ String _fmt(Duration? d) {
 /// Both scans come from Discogs, which does not label them — see artwork.dart for how the disc is
 /// told apart from a back cover. When there is no disc scan the sleeve simply sits there, which is
 /// what every album looked like before.
+/// Waar Nu speelt de weg van zijn hoezen opschrijft: welk album, met welk aantal en welke persing, elke
+/// stap van [DiscogsService.releaseArt], en wanneer de tussenstand en de uitkomst er waren. Op de pc
+/// staat de keten van de opwarmer in warm.log; die van Nu speelt stond nergens, en op de gsm was er
+/// helemaal niets. Gemeten op 21-10-2026 (▶ sombr — back to friends op de gsm): de echte cd kwam 20 tot
+/// 30 s na de tik, en zonder deze regels valt niet te zeggen of Nu speelt er al tijdens het streamen om
+/// vroeg of pas na het landen. Wordt één keer gezet, in [main].
+void Function(String)? kunstSpoor;
+
 class AlbumArt extends StatefulWidget {
   final String artist, album;
   final Uint8List? fallback;
@@ -29503,14 +29514,22 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       if (uitCache != null && mounted && mine == _gen && !identical(uitCache, _art)) {
         setState(() => _art = uitCache);
       }
+      final spoor = kunstSpoor;
+      final klok = Stopwatch()..start();
+      spoor?.call('Nu speelt "$artist — $album" (aantal=${widget.trackCount} '
+          'persing=${widget.pinnedMbid ?? widget.pinned ?? "-"}): '
+          'uit de cache voor=${uitCache?.front != null} achter=${uitCache?.back != null} cd=${uitCache?.disc != null}');
       final art = await dienst.releaseArt(artist, album,
           expectedTracks: widget.trackCount,
           pinned: widget.pinned,
           pinnedMbid: widget.pinnedMbid,
           roles: widget.roles,
+          trace: spoor,
           // De cd en de achterkant zodra TheAudioDB ze heeft, en niet pas na het archief (7 tot 10 s):
           // alleen wat hier nog ontbreekt — wat er al staat, blijft staan.
           tussenstand: (t) {
+        spoor?.call('Nu speelt "$album": tussenstand na ${klok.elapsedMilliseconds} ms '
+            'achter=${t.back != null} cd=${t.disc != null}');
         if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
         final nu = _art;
         if ((nu?.disc != null || t.disc == null) && (nu?.back != null || t.back == null)) return;
@@ -29522,6 +29541,9 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               formaat: nu?.formaat,
             ));
       });
+      spoor?.call('Nu speelt "$album": klaar na ${klok.elapsedMilliseconds} ms '
+          'voor=${art?.front != null} achter=${art?.back != null} cd=${art?.disc != null}'
+          '${mine != _gen || album != widget.album ? " (intussen een ander album)" : ""}');
       if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
       // Nothing found leaves what is on screen alone: an empty answer is not a better answer than
       // the sleeve already showing.
