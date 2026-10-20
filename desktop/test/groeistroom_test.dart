@@ -7,8 +7,10 @@ import 'dart:typed_data';
 
 import 'package:debridmusic/flac_tags.dart';
 import 'package:debridmusic/groeistroom.dart';
+import 'package:debridmusic/online.dart' show DownloadManager;
 import 'package:debridmusic/organize.dart' show TrackTags;
 import 'package:debridmusic/radiobestand.dart';
+import 'package:debridmusic/soulseek.dart' show SoulseekFile;
 import 'package:flutter_test/flutter_test.dart';
 
 typedef _Antwoord = ({int status, HttpHeaders? kop, List<int> lijf, Object? fout});
@@ -343,11 +345,22 @@ void main() {
     const duur = Duration(seconds: 200);
     const totaal = 20 * 1000 * 1000; // 100 kB/s verbruik
 
-    test('een ruim snellere uploader: na drie seconden meten, niet eerder', () {
+    test('een snellere uploader met weinig vooruit: na drie seconden meten, niet eerder', () {
+      // 1 MB = 10 s muziek: te weinig om een wissel te overbruggen, dus de volle drie seconden.
       bool mag(Duration gemeten) => magBeginnen(
-          binnen: 2000000, totaal: totaal, duur: duur, snelheid: 500000, gemeten: gemeten);
+          binnen: 1000000, totaal: totaal, duur: duur, snelheid: 500000, gemeten: gemeten);
       expect(mag(const Duration(seconds: 2)), isFalse);
       expect(mag(const Duration(seconds: 3)), isTrue);
+    });
+
+    test('ruim vlot en ruim vooruit (15 s muziek): al na driekwart seconde', () {
+      bool mag(int binnen, Duration gemeten, {double snelheid = 3000000}) => magBeginnen(
+          binnen: binnen, totaal: totaal, duur: duur, snelheid: snelheid, gemeten: gemeten);
+      expect(mag(1600000, const Duration(milliseconds: 750)), isTrue, reason: '16 s vooruit, 30× het verbruik');
+      expect(mag(1600000, const Duration(milliseconds: 500)), isFalse, reason: 'een halve tel is geen meting');
+      expect(mag(1400000, const Duration(milliseconds: 750)), isFalse, reason: '14 s: niet genoeg voor een wissel');
+      expect(mag(1600000, const Duration(milliseconds: 750), snelheid: 150000), isFalse,
+          reason: 'anderhalf keer het verbruik is niet ruim vlot');
     });
 
     test('een tragere uploader: pas als de voorsprong het hele nummer overbrugt, met 30 % marge', () {
@@ -401,6 +414,84 @@ void main() {
         (t: const Duration(seconds: 8), bytes: 5300000), // daarna 100 kB/s
       ];
       expect(voorzichtigeSnelheid(m), closeTo(100000, 1));
+    });
+  });
+
+  group('vroeg beginnen terwijl het zoeken loopt', () {
+    SoulseekFile f(String naam,
+            {String peer = 'p', bool vrij = true, int snelheid = 2000000, int? sec = 230, int grootte = 30000000}) =>
+        SoulseekFile(
+            username: peer,
+            filename: 'Muziek\\Kygo\\Singles\\$naam',
+            size: grootte,
+            freeSlots: vrij,
+            speed: snelheid,
+            durationSec: sec,
+            sampleRate: 44100,
+            bitDepth: 16);
+    SoulseekFile? kies(List<SoulseekFile> l, {Set<String> nietBij = const {}}) => DownloadManager.vroegeKandidaat(l,
+        artiest: 'Kygo', titel: 'Before You Know It', seconden: 231, nietBij: nietBij);
+
+    test('alleen FLAC, met een vrije plek, vlot, door de zeef — anders wachten op de hele uitslag', () {
+      expect(kies([f('01 - Kygo - Before You Know It.flac')])?.username, 'p');
+      expect(kies([f('01 - Kygo - Before You Know It.mp3')]), isNull, reason: 'alleen FLAC klinkt al terwijl het binnenkomt');
+      expect(kies([f('01 - Kygo - Before You Know It.flac', vrij: false)]), isNull, reason: 'een wachtrij is geen vroeg begin');
+      expect(kies([f('01 - Kygo - Before You Know It.flac', snelheid: 100000)]), isNull, reason: 'te traag opgegeven');
+      expect(kies([f('01 - Kygo - Before You Know It (Live).flac')]), isNull, reason: 'dezelfde zeef: geen live');
+      expect(kies([f('01 - Kygo - Before You Know It.flac', sec: 300)]), isNull, reason: 'een andere lengte');
+      expect(kies([f('01 - Kygo - Before You Know It.flac', peer: 'weg')], nietBij: {'weg'}), isNull);
+    });
+
+    test('binnen wat mag: de officiële lengte voorop', () {
+      final k = kies([
+        f('01 - Kygo - Before You Know It.flac', peer: 'lang', sec: 240),
+        f('01 - Kygo - Before You Know It.flac', peer: 'juist', sec: 231),
+      ]);
+      expect(k?.username, 'juist');
+    });
+
+    test('de haal begint vroeg en valt terug op de hele uitslag zonder die uploader', () {
+      final online = File('lib/online.dart').readAsStringSync();
+      final haal = online.substring(online.indexOf('  Future<String?> _haalVoorRadio('));
+      expect(haal, contains('final eerste = vroeg == null ? null : await vroegeKeus.future;'));
+      expect(haal, contains('if (await probeer(eerste) != _Uit.volgende) return;'));
+      expect(haal, contains('(_radioNietBij[sleutel] ??= {}).add(eerste.username);'));
+      expect(haal, contains('onPartial: vroeg == null'), reason: 'zonder groeistroom zoals altijd: de hele uitslag');
+    });
+
+    test('▶ naast elke downloadknop: Online zoeken, een albumpagina, een ontbrekend nummer — dezelfde weg', () {
+      final main = File('lib/main.dart').readAsStringSync();
+      expect(RegExp(r'SpeelNuKnop\(').allMatches(main).length, greaterThanOrEqualTo(3));
+      expect(main, contains('SpeelNuKnop(artiest: t.artist, titel: t.title, seconden: t.seconden),'),
+          reason: 'Online zoeken');
+      expect(main, contains("artiest: t.artist.isEmpty ? widget.artistName : t.artist,"), reason: 'een albumpagina');
+      expect(main, contains('SpeelNuKnop(artiest: widget.artiest, titel: s.title, seconden: s.seconds, grootte: 20),'),
+          reason: 'een ontbrekend nummer van een album dat je hebt');
+      expect(main, contains('onPressed: () => speler.speelNummer(context, artiest: artiest, titel: titel, seconden: seconden),'));
+      expect(main, contains('Future<void> speel(BuildContext context, NieuwNummer n) => speelNummer(context,'),
+          reason: 'een nieuw nummer gaat door dezelfde functie');
+    });
+
+    test('de laatste tik wint: een eerder nummer neemt de speler niet meer over', () {
+      final main = File('lib/main.dart').readAsStringSync();
+      final speel = main.substring(main.indexOf('class NieuwSpeler'), main.indexOf('File get _nieuwOpToestel'));
+      expect(speel, contains('bool magNog() => mijnTik == _tikken && speler.keuzes == keuzes;'));
+      expect(speel, contains('if (!kan || klaar || !magNog()) return;'), reason: 'niet gaan klinken');
+      expect(speel, contains('} else if (magNog()) {\n          speler.playQueue([t], 0);'), reason: 'niet na het landen');
+      final player = File('lib/player.dart').readAsStringSync();
+      for (final m in ['Future<void> playQueue(', 'Future<void> playUrl(', 'Future<void> playRadio(']) {
+        final lijf = player.substring(player.indexOf(m), player.indexOf(m) + 160);
+        expect(lijf, contains('keuzes++;'), reason: m);
+      }
+      final volgende = player.substring(player.indexOf('  Future<void> next() async {'), player.indexOf('  Future<void> next() async {') + 400);
+      expect(volgende, isNot(contains('keuzes++')), reason: 'vanzelf doorgaan is geen keuze');
+    });
+
+    test('een tik met de proef aan: Soulseek eerst, TorBox pas als Soulseek niets heeft', () {
+      final main = File('lib/main.dart').readAsStringSync();
+      final speel = main.substring(main.indexOf('class NieuwSpeler'), main.indexOf('File get _nieuwOpToestel'));
+      expect(speel, contains('if (lib.remote == null && instellingen.vroegLuisteren) {'));
+      expect(speel.indexOf('if (t == null && vroeg != null && magNog()) {'), greaterThan(speel.indexOf('for (var ronde = 0;')));
     });
   });
 

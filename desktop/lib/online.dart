@@ -3515,63 +3515,159 @@ class DownloadManager extends ChangeNotifier {
     return false;
   }
 
+  /// Zo lang verzamelt een haal met een groeistroom uitslagen voordat hij al mag beginnen. Zie
+  /// [vroegeKandidaat].
+  static const kVroegZoeken = Duration(milliseconds: 1200);
+
+  /// Hoe vlot een uploader minstens moet zijn (zijn eigen opgave, bytes per seconde) om vroeg te
+  /// beginnen. Een cd-FLAC verbruikt 100 à 200 kB/s; met een halve megabyte per seconde staat er na een
+  /// tel al genoeg om door te spelen.
+  static const kVroegeSnelheid = 512 * 1024;
+
+  /// De kandidaat waarmee een haal al mag beginnen terwijl het zoeken nog loopt, of null.
+  ///
+  /// Strenger dan de gewone keuze, want er is nog niet alles binnen om uit te kiezen: alleen FLAC (dan
+  /// kan het klinken terwijl het binnenkomt, zie groeistroom.dart), alleen een uploader met een vrije
+  /// plek (geen wachtrij) en een opgegeven snelheid van minstens [kVroegeSnelheid], en door dezelfde
+  /// zeef als de gewone weg ([radioBestandKlopt]). Daarbinnen de officiële lengte voorop.
+  @visibleForTesting
+  static SoulseekFile? vroegeKandidaat(List<SoulseekFile> tussenstand,
+      {required String artiest, required String titel, int? seconden, Set<String> nietBij = const {}}) {
+    final goed = [
+      for (final f in tussenstand)
+        if (f.freeSlots &&
+            f.speed >= kVroegeSnelheid &&
+            f.size > 0 &&
+            f.filename.toLowerCase().endsWith('.flac') &&
+            isLossless(f) &&
+            !isMultichannel(f) &&
+            !nietBij.contains(f.username) &&
+            radioBestandKlopt(
+                artiest: artiest, titel: titel, seconden: seconden, pad: f.filename, padSeconden: f.durationSec))
+          f
+    ]..sort(opLengteDanRang(seconden));
+    return goed.isEmpty ? null : goed.first;
+  }
+
   Future<String?> _haalVoorRadio(
       DownloadJob job, String artiest, String titel, int? seconden, int? jaar, {Groei? vroeg}) async {
-    List<SoulseekFile> hits;
-    try {
-      hits = await soulseek.search(zoekvraagVoorNummer(titel, artist: artiest));
-    } catch (_) {
-      // Geen aanmelding is geen mislukte plek — zie [RadioLaterOpnieuw]. Geen net wel.
-      final waarom = soulseek.whyNotLogin;
-      if (waarom != null) throw RadioLaterOpnieuw(waarom);
-      return null;
-    }
-    if (job.cancelled) return null; // de radio is afgesloten terwijl we zochten
-    // Niets gevonden ZONDER aanmelding is geen antwoord. Een verbinding die niet opkomt (geen net,
-    // een route die wisselt, de server die herstart) zet geen blokkade, dus [whyNotLogin] zegt niets —
-    // en dan brandde de radio zijn plan op aan "0 treffers" (review van 26-09-2026).
-    if (hits.isEmpty && soulseek.available && !soulseek.verbonden) {
-      throw const RadioLaterOpnieuw('geen verbinding met Soulseek');
-    }
+    final sleutel = _radioSleutel(artiest, titel);
     // Alleen wat ECHT dit nummer is, in de gevraagde uitvoering en ongeveer de juiste lengte — zie
     // `radiobestand.dart` voor de zes verkeerde nummers van 26-09-2026 — en niet bij een uploader die
     // het deze radio al liet afweten.
-    final sleutel = _radioSleutel(artiest, titel);
-    final nietBij = _radioNietBij[sleutel] ?? const <String>{};
-    final passend = [
-      for (final f in hits)
-        if (!isMultichannel(f) &&
-            !nietBij.contains(f.username) &&
-            radioBestandKlopt(
-                artiest: artiest,
-                titel: titel,
-                seconden: seconden,
-                pad: f.filename,
-                padSeconden: f.durationSec))
-          f
-    ];
-    // De officiële lengte voorop, net als bij elke andere download — zie [opLengteDanRang].
-    final bruikbaar = passend..sort(opLengteDanRang(seconden));
-    // Lossless eerst, precies zoals overal in deze app. Maar niet lossless-of-niets: een
-    // eurodance-single uit 1993 bestaat op dit netwerk soms alleen als mp3, en dan is die mp3 beter
-    // dan stilte. `_rankSlsk` heeft de beste al vooraan gezet.
-    //
-    // En binnen lossless eerst wat de app kan taggen (FLAC): een AIFF of WAV zonder tags staat anders
-    // als "Onbekende artiest" in je bibliotheek — zie [radioZonderTags].
-    final kandidaten = [
-      ...bruikbaar.where((f) => isLossless(f) && radioTagsSchrijfbaar(f.filename)),
-      ...bruikbaar.where((f) => isLossless(f) && !radioTagsSchrijfbaar(f.filename)),
-      ...bruikbaar.where((f) => !isLossless(f)),
-    ];
-    if (kandidaten.isEmpty) {
-      _log.line('radio "$artiest — $titel": ${hits.length} treffers, niets bruikbaars'
-          '${hits.isEmpty ? "" : " — geen enkele is dit nummer in deze uitvoering"}');
-      return null;
+    List<SoulseekFile> kandidatenUit(List<SoulseekFile> hits) {
+      final nietBij = _radioNietBij[sleutel] ?? const <String>{};
+      final passend = [
+        for (final f in hits)
+          if (!isMultichannel(f) &&
+              !nietBij.contains(f.username) &&
+              radioBestandKlopt(
+                  artiest: artiest,
+                  titel: titel,
+                  seconden: seconden,
+                  pad: f.filename,
+                  padSeconden: f.durationSec))
+            f
+      ];
+      // De officiële lengte voorop, net als bij elke andere download — zie [opLengteDanRang].
+      final bruikbaar = passend..sort(opLengteDanRang(seconden));
+      // Lossless eerst, precies zoals overal in deze app. Maar niet lossless-of-niets: een
+      // eurodance-single uit 1993 bestaat op dit netwerk soms alleen als mp3, en dan is die mp3 beter
+      // dan stilte. `_rankSlsk` heeft de beste al vooraan gezet.
+      //
+      // En binnen lossless eerst wat de app kan taggen (FLAC): een AIFF of WAV zonder tags staat anders
+      // als "Onbekende artiest" in je bibliotheek — zie [radioZonderTags].
+      return [
+        ...bruikbaar.where((f) => isLossless(f) && radioTagsSchrijfbaar(f.filename)),
+        ...bruikbaar.where((f) => isLossless(f) && !radioTagsSchrijfbaar(f.filename)),
+        ...bruikbaar.where((f) => !isLossless(f)),
+      ];
     }
-    // Hoeveel er door de zeef kwam: zonder dit getal is "de radio vindt minder" niet te scheiden van
-    // "Soulseek heeft het niet".
-    _log.line('radio "$artiest — $titel": ${kandidaten.length} van ${hits.length} treffers '
-        'zijn dit nummer${nietBij.isEmpty ? "" : ", ${nietBij.length} uploader(s) overgeslagen"}');
+
+    // Wat er gevonden werd maar niet door de zeef kwam: een paar voorbeelden in het logboek, zodat "niets
+    // bruikbaars" na te kijken is (20-10-2026: 203 treffers voor Sabien Tiels, en geen enkele telde).
+    String voorbeelden(List<SoulseekFile> hits) => hits.isEmpty
+        ? ''
+        : ' — bv. ${[
+            for (final f in hits.take(3))
+              '"${f.filename.split(RegExp(r'[\\/]')).reversed.take(2).toList().reversed.join('/')}"'
+                  '${f.durationSec == null ? '' : ' (${f.durationSec} s)'}'
+          ].join(', ')}${seconden == null ? '' : '; gevraagd $seconden s'}';
+
+    void logKandidaten(List<SoulseekFile> kandidaten, List<SoulseekFile> hits) {
+      final nietBij = _radioNietBij[sleutel] ?? const <String>{};
+      if (kandidaten.isEmpty) {
+        _log.line('radio "$artiest — $titel": ${hits.length} treffers, niets bruikbaars'
+            '${hits.isEmpty ? "" : " — geen enkele is dit nummer in deze uitvoering${voorbeelden(hits)}"}');
+        return;
+      }
+      // Hoeveel er door de zeef kwam: zonder dit getal is "de radio vindt minder" niet te scheiden van
+      // "Soulseek heeft het niet".
+      _log.line('radio "$artiest — $titel": ${kandidaten.length} van ${hits.length} treffers '
+          'zijn dit nummer${nietBij.isEmpty ? "" : ", ${nietBij.length} uploader(s) overgeslagen"}');
+    }
+
+    // **Met een groeistroom ([vroeg]) niet wachten tot het zoeken klaar is.** Een zoekopdracht wacht acht
+    // seconden op uitslagen (`_SearchRun.settle`); gemeten op 20-10-2026 was dat het grootste deel van
+    // 15 s van tik tot geluid. Staat er na [kVroegZoeken] een goede kandidaat — FLAC, een vrije plek, een
+    // vlotte uploader, door dezelfde zeef — dan begint die meteen, terwijl het zoeken doorloopt. Lukt
+    // die niet, dan gaat het verder met de hele uitslag, zonder die uploader.
+    final klok = Stopwatch()..start();
+    final vroegeKeus = Completer<SoulseekFile?>();
+    var tussenstand = const <SoulseekFile>[];
+    void kies() {
+      if (vroegeKeus.isCompleted) return;
+      final f = vroegeKandidaat(tussenstand,
+          artiest: artiest, titel: titel, seconden: seconden, nietBij: _radioNietBij[sleutel] ?? const {});
+      if (f != null) vroegeKeus.complete(f);
+    }
+
+    final zoek = soulseek.search(zoekvraagVoorNummer(titel, artist: artiest),
+        onPartial: vroeg == null
+            ? null
+            : (lijst) {
+                tussenstand = lijst;
+                if (klok.elapsed >= kVroegZoeken) kies();
+              });
+    Timer? kijk;
+    if (vroeg != null) {
+      kijk = Timer(kVroegZoeken, kies);
+      unawaited(zoek.then((_) {}, onError: (_) {}).whenComplete(() {
+        kijk?.cancel();
+        if (!vroegeKeus.isCompleted) vroegeKeus.complete(null);
+      }));
+    }
+    final eerste = vroeg == null ? null : await vroegeKeus.future;
+
+    Future<List<SoulseekFile>?> uitslag() async {
+      try {
+        return await zoek;
+      } catch (_) {
+        // Geen aanmelding is geen mislukte plek — zie [RadioLaterOpnieuw]. Geen net wel.
+        final waarom = soulseek.whyNotLogin;
+        if (waarom != null) throw RadioLaterOpnieuw(waarom);
+        return null;
+      }
+    }
+
+    var kandidaten = const <SoulseekFile>[];
+    if (eerste == null) {
+      final hits = await uitslag();
+      if (hits == null) return null;
+      if (job.cancelled) return null; // de radio is afgesloten terwijl we zochten
+      // Niets gevonden ZONDER aanmelding is geen antwoord. Een verbinding die niet opkomt (geen net,
+      // een route die wisselt, de server die herstart) zet geen blokkade, dus [whyNotLogin] zegt niets —
+      // en dan brandde de radio zijn plan op aan "0 treffers" (review van 26-09-2026).
+      if (hits.isEmpty && soulseek.available && !soulseek.verbonden) {
+        throw const RadioLaterOpnieuw('geen verbinding met Soulseek');
+      }
+      kandidaten = kandidatenUit(hits);
+      logKandidaten(kandidaten, hits);
+      if (kandidaten.isEmpty) return null;
+    } else {
+      _log.line('radio "$artiest — $titel": na ${klok.elapsedMilliseconds} ms al begonnen bij ${eerste.username} '
+          '(${tussenstand.length} treffers tot dan) — ${baseName(eerste.filename)}');
+    }
 
     final gezag = TrackTags(
       title: titel,
@@ -3594,8 +3690,9 @@ class DownloadManager extends ChangeNotifier {
     String? geland;
     try {
       await _withSlsk<void>((session, _) async {
-        for (final f in kandidaten.take(3)) {
-          if (job.cancelled) return;
+        // Eén uploader: halen, keuren, opbergen. [_Uit.volgende] = probeer de volgende.
+        Future<_Uit> probeer(SoulseekFile f) async {
+          if (job.cancelled) return _Uit.stop;
           final t0 = DateTime.now();
           SlskResult res;
           // De stopschakelaar van DEZE poging, opgeborgen waar [staakRadiohalen] hem kan vinden.
@@ -3617,13 +3714,13 @@ class DownloadManager extends ChangeNotifier {
                 waitInQueue: true, maxWait: kMaxWacht, cancel: stop);
           } catch (_) {
             vroeg?.afgebroken();
-            continue;
+            return _Uit.volgende;
           } finally {
             overdrachtKlaar = true;
             job.live.remove(stop);
           }
           if (await vroegAfgekeurd) (_radioNietBij[sleutel] ??= {}).add(f.username);
-          if (job.cancelled) return;
+          if (job.cancelled) return _Uit.stop;
           _log.line('radio "$artiest — $titel": ${f.username} '
               '${_uitkomst(res)} na ${_kort(DateTime.now().difference(t0))} — ${baseName(f.filename)}');
           if (res is! SlskDone) vroeg?.afgebroken();
@@ -3637,7 +3734,7 @@ class DownloadManager extends ChangeNotifier {
               throw RadioLaterOpnieuw(soulseek.whyNotLogin ?? 'geen aanmelding');
             }
             (_radioNietBij[sleutel] ??= {}).add(f.username);
-            continue;
+            return _Uit.volgende;
           }
           // Klonk het al terwijl het binnenkwam, dan nu in het geheugen ermee: vanaf hier mag het bestand
           // verplaatst en van tags voorzien worden zonder dat de lopende stroom het merkt (groeistroom.dart).
@@ -3654,7 +3751,7 @@ class DownloadManager extends ChangeNotifier {
             try {
               await binnen.delete();
             } catch (_) {/* dan ruimt de wachtmap het later op */}
-            continue;
+            return _Uit.volgende;
           }
           // Geen tags, en ze zijn er ook niet in te zetten (AIFF, WAV): dan blijft het voor altijd
           // "Onbekende artiest". Liever de volgende uploader — zie [radioZonderTags].
@@ -3666,7 +3763,7 @@ class DownloadManager extends ChangeNotifier {
             try {
               await binnen.delete();
             } catch (_) {/* dan ruimt de wachtmap het later op */}
-            continue;
+            return _Uit.volgende;
           }
           // En de ECHTE lengte. Een peer meldt die lang niet altijd, en dan telde de lengte vóór het
           // halen niet mee — zo kan een albumversie van 5:36 op de plek van een single van 4:17 komen.
@@ -3679,7 +3776,7 @@ class DownloadManager extends ChangeNotifier {
             try {
               await binnen.delete();
             } catch (_) {/* dan ruimt de wachtmap het later op */}
-            continue;
+            return _Uit.volgende;
           }
 
           // Nog één keer kijken, vlak vóór het filen. Tussen de toets bovenaan en dit moment kan een
@@ -3700,7 +3797,7 @@ class DownloadManager extends ChangeNotifier {
                 parkeerBinnenkomend: false);
           } catch (_) {
             vroeg?.afgebroken();
-            continue;
+            return _Uit.volgende;
           }
           if (alBekend != null || uit.how != Placement.moved || uit.verving) {
             _log.line('radio "$artiest — $titel": geland op muziek die je al had — '
@@ -3711,7 +3808,7 @@ class DownloadManager extends ChangeNotifier {
               vroeg?.geland(uit.path);
               throw RadioAlGehad(uit.path);
             }
-            return;
+            return _Uit.stop;
           }
           // Pas NA het landen, en dit ontbrak op de hele downloadweg: `rebuildAlbums` groepeert op de
           // tags ván het bestand, dus zonder dit vult je raster zich met de rommelalbums van de
@@ -3733,7 +3830,20 @@ class DownloadManager extends ChangeNotifier {
           }
           vroeg?.geland(uit.path);
           geland = uit.path;
-          return;
+          return _Uit.klaar;
+        }
+
+        if (eerste != null) {
+          if (await probeer(eerste) != _Uit.volgende) return;
+          // De vroege ging niet: dan de hele uitslag, zonder die uploader.
+          (_radioNietBij[sleutel] ??= {}).add(eerste.username);
+          final hits = await uitslag();
+          if (hits == null || job.cancelled) return;
+          kandidaten = kandidatenUit(hits);
+          logKandidaten(kandidaten, hits);
+        }
+        for (final f in kandidaten.take(3)) {
+          if (await probeer(f) != _Uit.volgende) return;
         }
       });
     } on RadioLaterOpnieuw catch (e) {
@@ -5126,3 +5236,6 @@ class DownloadManager extends ChangeNotifier {
 
   String _sanitize(String s) => s.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
 }
+
+/// Hoe één poging bij een uploader afliep, binnen `_haalVoorRadio`.
+enum _Uit { klaar, volgende, stop }

@@ -208,7 +208,7 @@ void main() {
       final main = File('lib/main.dart').readAsStringSync();
       final speel = main.substring(main.indexOf('class NieuwSpeler'), main.indexOf('File get _nieuwOpToestel'));
       expect(speel, contains('EigenRadiobron('));
-      expect(speel, contains('await online.resolveRadio(n.artiest, n.titel);'),
+      expect(speel, contains('await online.resolveRadio(artiest, titel);'),
           reason: 'alleen klaarstaande torrents: een niet-klaarstaande kan minuten duren');
       expect(speel, isNot(contains('instantOnly: false')));
       expect(speel, contains('for (var ronde = 0; ronde < kNieuwHaalRondes && t == null; ronde++)'),

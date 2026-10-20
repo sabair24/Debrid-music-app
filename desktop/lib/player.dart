@@ -2031,7 +2031,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// gelijk, in plaats van dat er twee keer hetzelfde gerekend moet worden.
   Future<List<Track>?> Function(List<Track> tracks, int index)? castQueue;
 
+  /// Hoe vaak er bewust iets is gaan spelen (een rij, een adres, een radio) — niet het vanzelf
+  /// doorgaan naar het volgende nummer. Zo weet wie iets op de achtergrond haalt ([NieuwSpeler] in
+  /// main.dart) of je intussen zelf iets anders koos.
+  int keuzes = 0;
+
   Future<void> playQueue(List<Track> tracks, int index, {Uint8List? cover}) async {
+    keuzes++;
     if (await _handedToSpeaker(tracks, index, cover)) return;
     _verlaatRadio();
     _resumable = true;
@@ -2185,6 +2191,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   /// Play a remote URL (e.g. a resolved TorBox stream) as a one-item queue.
   Future<void> playUrl(String url, {required String title, required String artist}) async {
+    keuzes++;
     _verlaatRadio();
     _resumable = false;
     currentCover = null;
@@ -2199,6 +2206,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// Een lopende radio wordt eerst netjes verlaten. Anders schuift de tweede radio over de eerste
   /// heen zonder dat er iemand van weet, en blijft alles wat die eerste opgehaald had zwerven.
   Future<void> playRadio(List<RadioItem> items, {int start = 0}) async {
+    keuzes++;
     _verlaatRadio();
     radioMode = true;
     _resumable = false;

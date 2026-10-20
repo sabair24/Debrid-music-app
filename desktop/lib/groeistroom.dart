@@ -45,6 +45,9 @@ const kGroeiMinBuffer = 256 * 1024;
 /// uploader moet wisselen, hoort een gat; anderhalve seconde langer meten voorkomt er een deel van.
 const kGroeiMinGemeten = Duration(seconds: 3);
 
+/// Zo kort mag het meten bij een uploader die ruim vlot is en al ruim vooruit staat (zie [magBeginnen]).
+const kGroeiSnelGemeten = Duration(milliseconds: 750);
+
 /// Mag het al klinken — vanaf [vanaf] in het nummer?
 ///
 /// **De rekensom, over de audio** (zonder de kop van [kop] bytes: een hoes vooraan is in één keer
@@ -69,12 +72,17 @@ bool magBeginnen({
   if (totaal > 0 && binnen >= totaal) return true;
   if (totaal <= 0 || duur <= Duration.zero) return false;
   final audio = totaal - kop;
-  if (audio <= 0 || gemeten < kGroeiMinGemeten || snelheid <= 0) return false;
+  if (audio <= 0 || gemeten < kGroeiSnelGemeten || snelheid <= 0) return false;
   final deel = (vanaf.inMilliseconds / duur.inMilliseconds).clamp(0.0, 1.0);
   final speelplek = kop + audio * deel;
   final voorsprong = binnen - speelplek;
   if (voorsprong < kGroeiMinBuffer) return false;
   final verbruik = audio / (duur.inMilliseconds / 1000);
+  // **Ruim vlot en ruim vooruit: niet de volle drie seconden meten.** Twee keer het verbruik en 15 s
+  // muziek klaar: haakt zo'n uploader alsnog af, dan overbrugt die voorsprong de wissel naar de volgende
+  // (met `?vanaf=` een tel, gemeten op 20-10-2026). Op de pc dezelfde middag: 3 MB/s, en toch 3 s wachten.
+  final ruim = snelheid >= verbruik * 2 && voorsprong >= verbruik * 15;
+  if (gemeten < kGroeiMinGemeten && !ruim) return false;
   final rest = audio * (1 - deel);
   final achterstand = snelheid >= verbruik ? 0.0 : rest * (1 - snelheid / verbruik) * 1.3;
   final reserve = verbruik * (snelheid >= verbruik * 1.25 ? 2 : 8);

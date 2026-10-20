@@ -8821,6 +8821,7 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
             if (s.seconds != null && s.seconds! > 0)
               Text(_fmt(Duration(seconds: s.seconds!)), style: kTekstKlein.copyWith(color: dim)),
             const SizedBox(width: 8),
+            SpeelNuKnop(artiest: widget.artiest, titel: s.title, seconden: s.seconds, grootte: 20),
             SizedBox(
               width: 72,
               child: Align(
@@ -17167,19 +17168,75 @@ void _bronnenVenster(BuildContext context, String kop, String query) => showDial
 /// Hoe vaak een tik op een nieuw nummer het ophalen probeert (elk drie uploaders).
 const kNieuwHaalRondes = 3;
 
+/// ▶ naast de downloadknop: dit nummer nu laten klinken (Saber, 20-10-2026: "een liedje zoeken, op de play
+/// button klikken … en dat dat liedje begint te spelen"). Dezelfde weg als een tik op een nieuw nummer —
+/// [NieuwSpeler.speelNummer]: op de pc Soulseek, en het klinkt al terwijl het binnenkomt. Een ringetje
+/// zolang het gehaald wordt.
+class SpeelNuKnop extends StatelessWidget {
+  const SpeelNuKnop({super.key, required this.artiest, required this.titel, this.seconden, this.grootte = 22});
+  final String artiest, titel;
+  final int? seconden;
+  final double grootte;
+
+  @override
+  Widget build(BuildContext context) {
+    final speler = _StartCache.nieuwSpeler;
+    return ListenableBuilder(
+      listenable: speler,
+      builder: (context, _) {
+        if (speler.bezigMet(artiest, titel)) {
+          return Padding(
+            padding: const EdgeInsets.all(11),
+            child: SizedBox(
+                width: grootte - 4, height: grootte - 4, child: CircularProgressIndicator(strokeWidth: 2, color: _accent)),
+          );
+        }
+        return TvLabelled(
+          label: 'Nu afspelen',
+          child: IconButton(
+            icon: Icon(Icons.play_arrow_rounded, size: grootte),
+            color: _accent,
+            tooltip: 'Nu afspelen',
+            onPressed: () => speler.speelNummer(context, artiest: artiest, titel: titel, seconden: seconden),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class NieuwSpeler extends ChangeNotifier {
   final _bezig = <String>{};
+
+  /// Elke tik telt; alleen de laatste mag de speler nog overnemen (zie [speelNummer]).
+  var _tikken = 0;
   bool bezig(NieuwNummer n) => _bezig.contains(n.sleutel);
 
-  Future<void> speel(BuildContext context, NieuwNummer n) async {
-    final sleutel = n.sleutel;
+  /// Wordt dit nummer nu gehaald? Voor de ▶-knop naast een downloadknop ([SpeelNuKnop]).
+  bool bezigMet(String artiest, String titel) => _bezig.contains(_sleutelVan(artiest, titel));
+  static String _sleutelVan(String artiest, String titel) => '${normKey(artiest)}|${normKey(titel)}';
+
+  Future<void> speel(BuildContext context, NieuwNummer n) => speelNummer(context,
+      artiest: n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null, sleutelVan: n.sleutel);
+
+  /// Dit nummer nu laten klinken — van een nieuwe release, of van de ▶ naast een downloadknop.
+  Future<void> speelNummer(BuildContext context,
+      {required String artiest, required String titel, int? seconden, String? sleutelVan}) async {
+    final sleutel = sleutelVan ?? _sleutelVan(artiest, titel);
     if (_bezig.contains(sleutel)) return;
     final lib = context.read<LibraryStore>();
     final speler = context.read<PlayerStore>();
+    // **De laatste tik wint.** Een haal kan een minuut duren; tikte je intussen een ander nummer aan, of
+    // ging je zelf iets anders spelen, dan neemt dit nummer de speler niet meer over — het komt gewoon in
+    // je bibliotheek. Gezien op de pc (20-10-2026): U2 landde na 69 s en onderbrak Angèle, die later
+    // aangetikt was en al speelde.
+    final mijnTik = ++_tikken;
+    final keuzes = speler.keuzes;
+    bool magNog() => mijnTik == _tikken && speler.keuzes == keuzes;
     final online = context.read<OnlineService>();
     final instellingen = context.read<AppSettings>();
     // Al binnen (eerder opgehaald, of je had hem al): gewoon spelen.
-    final eigen = lib.ownedTrack(n.artiest, n.titel);
+    final eigen = lib.ownedTrack(artiest, titel);
     if (eigen != null) {
       speler.playQueue([eigen], 0);
       return;
@@ -17195,20 +17252,26 @@ class NieuwSpeler extends ChangeNotifier {
     _bezig.add(sleutel);
     notifyListeners();
     try {
-      if (lib.remote == null) {
+      // Met spelen-terwijl-het-binnenkomt: alleen Soulseek, en TorBox pas als Soulseek niets heeft (Saber,
+      // 20-10-2026: "ik zou in dit geval misschien enkel gebruik maken van soulseek"). Gemeten: de
+      // TorBox-stap vooraf kostte bij een misser ±3 s (een torrentzoektocht), en bij een treffer 5,8 s tot
+      // geluid — terwijl Soulseek met een vlotte uploader binnen een paar tellen klinkt.
+      if (lib.remote == null && instellingen.vroegLuisteren) {
+        _srcToast(context, 'Zoeken op Soulseek: "$titel"…');
+      } else if (lib.remote == null) {
         // Eerst wat TorBox al klaar heeft: dat speelt binnen seconden. Alleen torrents dus — en voor een
         // single van drie dagen oud is er meestal nog geen. Gemeten op de pc (19-10-2026): een tik op
         // "WALK ON WATER" van Timbaland zocht een minuut en speelde niets ("Geen bron gevonden"). Dan
         // haalt de pc hem, net als de radio en net als voor de gsm, en blijft hij in je bibliotheek.
-        _srcToast(context, 'Bron voorbereiden voor ${n.titel}…');
-        final url = await online.resolveRadio(n.artiest, n.titel);
+        _srcToast(context, 'Bron voorbereiden voor $titel…');
+        final url = await online.resolveRadio(artiest, titel);
         if (url != null) {
-          speler.playUrl(url, title: n.titel, artist: n.artiest);
+          speler.playUrl(url, title: titel, artist: artiest);
           return;
         }
-        if (context.mounted) _srcToast(context, 'Niet klaar bij TorBox — de pc haalt "${n.titel}" op…');
+        if (context.mounted) _srcToast(context, 'Niet klaar bij TorBox — de pc haalt "$titel" op…');
       } else {
-        _srcToast(context, 'Je pc haalt "${n.titel}" op…');
+        _srcToast(context, 'Je pc haalt "$titel" op…');
       }
       final fout = await bron.begin();
       if (fout != null) {
@@ -17219,16 +17282,16 @@ class NieuwSpeler extends ChangeNotifier {
       // waar deze machine zelf haalt; de haal zegt wanneer het kan (kop gelezen en goedgekeurd, genoeg
       // binnen om zonder haperen door te spelen).
       final vroeg = bron is EigenRadiobron && instellingen.vroegLuisteren
-          ? await Groeistroom.gedeeld.nieuw('${n.artiest} — ${n.titel}')
+          ? await Groeistroom.gedeeld.nieuw('$artiest — $titel')
           : null;
       var klaar = false;
       var klinkt = false;
       if (vroeg != null) {
         unawaited(vroeg.speelbaar.then((kan) {
-          if (!kan || klaar) return;
+          if (!kan || klaar || !magNog()) return;
           klinkt = true;
-          speler.playUrl(vroeg.adres, title: n.titel, artist: n.artiest);
-          if (context.mounted) _srcToast(context, '"${n.titel}" speelt al terwijl hij binnenkomt');
+          speler.playUrl(vroeg.adres, title: titel, artist: artiest);
+          if (context.mounted) _srcToast(context, '"$titel" speelt al terwijl hij binnenkomt');
         }));
       }
       try {
@@ -17238,7 +17301,7 @@ class NieuwSpeler extends ChangeNotifier {
         // (`_radioNietBij` in online.dart): tot negen. Gemeten op de pc (19-10-2026): "Babylon" van
         // Taylor Swift, 171 van 249 treffers goed, drie afgebroken overdrachten, en er speelde niets.
         for (var ronde = 0; ronde < kNieuwHaalRondes && t == null; ronde++) {
-          final plek = Radioplek(artiest: n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null);
+          final plek = Radioplek(artiest: artiest, titel: titel, seconden: seconden);
           try {
             t = vroeg != null ? await (bron as EigenRadiobron).haal(plek, vroeg: vroeg) : await bron.haal(plek);
           } on AlVanJou catch (e) {
@@ -17246,9 +17309,18 @@ class NieuwSpeler extends ChangeNotifier {
           }
         }
         klaar = true;
+        // Soulseek had niets: dan alsnog wat TorBox klaar heeft (alleen met de proef aan, want anders is
+        // TorBox hierboven al gevraagd).
+        if (t == null && vroeg != null && magNog()) {
+          final url = await online.resolveRadio(artiest, titel);
+          if (url != null && magNog()) {
+            speler.playUrl(url, title: titel, artist: artiest);
+            return;
+          }
+        }
         if (t == null) {
           if (context.mounted) {
-            _srcToast(context, '"${n.titel}" nergens gevonden — lang drukken voor de bronnen.');
+            _srcToast(context, '"$titel" nergens gevonden — lang drukken voor de bronnen.');
           }
           return;
         }
@@ -17257,8 +17329,10 @@ class NieuwSpeler extends ChangeNotifier {
           // duimen); mpv speelt door uit het geheugen van de groeistroom. Koos je intussen iets anders,
           // dan blijft dat spelen.
           speler.wordtLokaal(vroeg.adres, t);
-        } else {
+        } else if (magNog()) {
           speler.playQueue([t], 0);
+        } else if (context.mounted) {
+          _srcToast(context, '"$titel" staat nu in je bibliotheek');
         }
       } on RadioLaterOpnieuw catch (e) {
         if (context.mounted) _srcToast(context, 'Nu even niet: ${e.waarom}');
@@ -21878,9 +21952,11 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     message: 'Al in je bibliotheek',
                     child: Icon(Icons.library_add_check_rounded, color: _accent2),
                   )
-                else
+                else ...[
+                  SpeelNuKnop(artiest: t.artist, titel: t.title, seconden: t.seconden),
                   _downloadControl(context,
                       jobKey: _zoekSleutel(t), onDownload: () => _downloadHit(t), tooltip: 'Downloaden (beste bron)'),
+                ],
                 Icon(open ? Icons.expand_less_rounded : Icons.chevron_right_rounded, color: _muted),
               ],
             ),
@@ -26613,11 +26689,17 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                       child: Icon(Icons.library_add_check_rounded, color: _accent2, size: 19),
                     ),
                   )
-                else if (soulseekReady)
+                else if (soulseekReady) ...[
+                  SpeelNuKnop(
+                      artiest: t.artist.isEmpty ? widget.artistName : t.artist,
+                      titel: t.title,
+                      seconden: t.durationSec > 0 ? t.durationSec : null,
+                      grootte: 20),
                   _downloadControl(context,
                       jobKey: 'alb:${widget.album.ref.keyPart}:$i',
                       onDownload: () => _downloadTrack(t, i),
                       tooltip: 'Download via Soulseek'),
+                ],
                 const SizedBox(width: 2),
                 Icon(open ? Icons.expand_less_rounded : Icons.travel_explore_rounded,
                     size: 18, color: open ? _accent : _muted),
