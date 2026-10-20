@@ -2211,13 +2211,24 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _saveQueue();
   }
 
+  /// De hoes van een nummer dat nog binnenkomt ([adres], zie [playUrl]): alleen als dat nog speelt en er nog
+  /// geen hoes staat. Saber, 20-10-2026: de hoezen "lopen nu achter op de downloads en radio".
+  void toonStroomHoes(String adres, Uint8List bytes) {
+    if (current?.path != adres || _hoesNu != null) return;
+    currentCover = bytes;
+    notifyListeners();
+  }
+
   /// Play a remote URL (e.g. a resolved TorBox stream) as a one-item queue.
-  Future<void> playUrl(String url, {required String title, required String artist}) async {
+  ///
+  /// [album]: waar het nummer op staat, als dat bekend is (▶ weet het) — dan zoekt Nu speelt al tijdens het
+  /// streamen de achterkant en de cd van dat album, en niet van een plaat zonder naam.
+  Future<void> playUrl(String url, {required String title, required String artist, String album = ''}) async {
     keuzes++;
     _verlaatRadio();
     _resumable = false;
     currentCover = null;
-    _original = [Track(path: url, title: title, artist: artist, album: '')];
+    _original = [Track(path: url, title: title, artist: artist, album: album)];
     _order = List.of(_original);
     _index = 0;
     await _openCurrent();

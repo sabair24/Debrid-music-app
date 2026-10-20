@@ -266,6 +266,28 @@ void main() {
       expect(c.library.albums.firstWhere((a) => a.title == 'Dummy').cover, chosen);
     });
 
+    test('HERKANSEN: had de pc nog geen hoes (404), dan vraagt het toestel het even later opnieuw', () async {
+      // Een nummer dat net op de pc landde: in de catalogus, maar de pc haalt zijn hoes pas daarna op. Vroeg
+      // het toestel in die tellen, dan bleef het vak leeg tot de volgende verandering van de catalogus
+      // (Saber, 20-10-2026: "die lopen nu achter op de downloads en radio").
+      final pc = _pc();
+      final art = <String, Uint8List>{};
+      final c = _client(pc.library, art: art);
+      await c.library.loadRemote();
+      await c.library.loadRemoteCovers(AppSettings());
+      Album dummy() => c.library.albums.firstWhere((a) => a.title == 'Dummy');
+      expect(dummy().cover, isNull, reason: 'de pc had nog niets');
+      final vraag = c.requests.firstWhere((r) => r.startsWith('/art/') && c.library.albums.isNotEmpty);
+      final ref = Uri.parse(vraag).pathSegments.last;
+      final hoes = Uint8List.fromList(List.generate(700, (i) => (i * 13) % 256));
+      art[ref] = hoes; // intussen gevonden op de pc
+      final eind = DateTime.now().add(const Duration(seconds: 10));
+      while (dummy().cover == null && DateTime.now().isBefore(eind)) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      expect(dummy().cover, hoes, reason: 'vanzelf opnieuw gevraagd, na ${LibraryStore.kHoesHerkansingen.first.inSeconds} s');
+    });
+
     test('een hoes die je al hebt komt van schijf: navragen mag, downloaden niet', () async {
       final pc = _pc();
       pc.library.albums.firstWhere((a) => a.title == 'Dummy').embeddedCover =

@@ -293,6 +293,9 @@ class MetadataSearch {
         ].join(' · '),
       );
 
+  /// De hoes op 1200 — zie [deezerHoes1200].
+  static String? _groot(String? u) => u == null ? null : deezerHoes1200(u);
+
   Future<List<MetaResult>> _deezer(String query, bool track) async {
     final path = track ? 'search' : 'search/album';
     try {
@@ -308,14 +311,14 @@ class MetadataSearch {
             title: (e['title'] ?? '') as String,
             artist: (e['artist']?['name'] ?? '') as String,
             album: (al?['title'] ?? '') as String,
-            coverUrl: (al?['cover_xl'] ?? al?['cover_big']) as String?,
+            coverUrl: _groot((al?['cover_xl'] ?? al?['cover_big']) as String?),
           ));
         } else {
           out.add(MetaResult(
             title: (e['title'] ?? '') as String,
             artist: (e['artist']?['name'] ?? '') as String,
             album: (e['title'] ?? '') as String,
-            coverUrl: (e['cover_xl'] ?? e['cover_big']) as String?,
+            coverUrl: _groot((e['cover_xl'] ?? e['cover_big']) as String?),
           ));
         }
       }

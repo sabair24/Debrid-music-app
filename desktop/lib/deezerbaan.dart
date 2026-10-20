@@ -127,3 +127,12 @@ class DeezerBaan {
     });
   }
 }
+
+/// Deezer's digitale hoes op 1200×1200 in plaats van de 1000×1000 van `cover_xl`.
+///
+/// Gemeten op 20-10-2026 (Short n' Sweet, Unheard): de CDN levert 1200×1200 echt; vraag je 1800, dan komt
+/// er 1200 terug — dat is de bron — en 1400 is opgerekt. Saber: "front is meestal de digitale versie het
+/// beste 1200x1200". Een adres dat niet van Deezer is, blijft zoals het is.
+String deezerHoes1200(String url) => url.contains('dzcdn.net/images/')
+    ? url.replaceFirst(RegExp(r'/\d{2,4}x\d{2,4}-'), '/1200x1200-')
+    : url;

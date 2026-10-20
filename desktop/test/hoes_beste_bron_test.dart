@@ -1,0 +1,121 @@
+// Per beeld de beste bron (Saber, 20-10-2026): "front is meestal de digitale versie het beste 1200x1200 of
+// bij the audiodb 700x700, voor de cd afbeelding meestal the audiodb ook 1000x1000, en achterkant of
+// musicbrainz of discogs hoogste resolutie wel."
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:debridmusic/deezerbaan.dart';
+import 'package:debridmusic/discogs.dart' show grootsteBeeld;
+import 'package:debridmusic/enrichment.dart';
+import 'package:debridmusic/musicbrainz.dart';
+
+void main() {
+  group('voorkant', () {
+    test('Deezer op 1200: gemeten op de CDN, en een ander adres blijft zoals het is', () {
+      expect(
+          deezerHoes1200(
+              'https://cdn-images.dzcdn.net/images/cover/0fd6e3b346b959a8781ccfa89b63607a/1000x1000-000000-80-0-0.jpg'),
+          'https://cdn-images.dzcdn.net/images/cover/0fd6e3b346b959a8781ccfa89b63607a/1200x1200-000000-80-0-0.jpg');
+      expect(deezerHoes1200('https://cdn-images.dzcdn.net/images/cover/abc/500x500-000000-80-0-0.jpg'),
+          endsWith('/1200x1200-000000-80-0-0.jpg'));
+      const ander = 'https://r2.theaudiodb.com/images/media/album/thumb/x.jpg';
+      expect(deezerHoes1200(ander), ander);
+    });
+
+    test('TheAudioDB 700 als tweede keus: het veld overleeft de schijf, en alleen een voorkant is niet leeg', () {
+      const info = AlbumInfo(frontUrl: 'https://r2.theaudiodb.com/images/media/album/thumb/x.jpg');
+      expect(AlbumInfo.fromJson(info.toJson()).frontUrl, info.frontUrl);
+      expect(info.isEmpty, isFalse);
+    });
+
+    test('aangesloten: eerst Deezer op 1200 (met 1000 als terugval), dan TheAudioDB, dan Discogs en het archief', () {
+      final e = File('lib/enrichment.dart').readAsStringSync();
+      final find = e.substring(e.indexOf('  Future<Uint8List?> _find(String artistRaw, String albumRaw) async {'));
+      final deezer = find.indexOf('final groot = deezerHoes1200(deezer);');
+      final tadb = find.indexOf('final u = (await albumInfo(artist, album))?.frontUrl;');
+      final discogs = find.indexOf('if (settings.discogsToken.isNotEmpty) {');
+      final mb = find.indexOf('return await _musicbrainzCover(');
+      expect([deezer, tadb, discogs, mb].every((i) => i > 0), isTrue);
+      expect(deezer < tadb && tadb < discogs && discogs < mb, isTrue);
+      expect(find, contains('?? await _download(deezer)'), reason: 'geen 1200: dan de 1000 van cover_xl');
+      expect(e, contains("frontUrl: s('strAlbumThumb'),"));
+      expect(e, contains("fnv1a('v3|"), reason: 'een nieuw veld in een bewaard record: de sleutel omhoog');
+    });
+  });
+
+  group('cd en achterkant', () {
+    test('aangesloten: de cd van TheAudioDB gaat voor, zijn achterkant is alleen de terugval', () {
+      final d = File('lib/discogs.dart').readAsStringSync();
+      expect(d, contains('back: saidBack ?? grootsteBeeld(found.back, tadb?.back),'));
+      expect(d, contains('disc: saidDisc ?? tadb?.disc ?? found.disc,'));
+      expect(d, contains('(saidBack ?? found.back) != null && (saidDisc ?? tadb?.disc ?? found.disc) != null;'),
+          reason: 'een achterkant van TheAudioDB houdt het zoeken naar die van het archief of Discogs niet tegen');
+      // Tegelijk met het archief gevraagd, niet erna.
+      final keten = d.substring(d.indexOf('    final tadbF ='));
+      expect(keten.indexOf('final exactF ='), lessThan(keten.indexOf('tadb = await tadbF;')));
+    });
+
+    test('de grootste achterkant wint; bij gelijke maat het archief of Discogs (live: ANTI 540×475 tegen 700×700)', () {
+      Uint8List png(int w, int h, int merk) {
+        final b = Uint8List(40);
+        b.setAll(0, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+        final d = ByteData.sublistView(b)
+          ..setUint32(16, w)
+          ..setUint32(20, h);
+        d.setUint8(39, merk);
+        return b;
+      }
+
+      final archief = png(540, 475, 1), tadb = png(700, 700, 2), gelijk = png(540, 475, 3);
+      expect(grootsteBeeld(archief, tadb), same(tadb));
+      expect(grootsteBeeld(archief, gelijk), same(archief));
+      expect(grootsteBeeld(null, tadb), same(tadb));
+      expect(grootsteBeeld(archief, null), same(archief));
+    });
+
+    test('aangesloten: de achterkant uit het archief op zijn grootst', () {
+      final d = File('lib/discogs.dart').readAsStringSync();
+      expect(d, contains('if (back == null && i.isBack) back = await mb.fetchGrootste(i);'));
+      expect(d, contains("k == 'back' ? mb.fetchGrootste(want[k]!) : mb.fetchImage(want[k]!.full)"));
+    });
+
+    group('fetchGrootste', () {
+      late HttpServer server;
+      late Map<String, List<int>> bestanden;
+      setUp(() async {
+        bestanden = {};
+        server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        server.listen((req) async {
+          final b = bestanden[req.uri.path];
+          if (b == null) {
+            req.response.statusCode = 404;
+          } else {
+            req.response.contentLength = b.length;
+            req.response.add(b);
+          }
+          await req.response.close();
+        });
+      });
+      tearDown(() => server.close(force: true));
+
+      String adres(String p) => 'http://127.0.0.1:${server.port}$p';
+      MbImage beeld() => MbImage(adres('/origineel.jpg'), adres('/250.jpg'), adres('/1200.jpg'), const ['Back'], false, true);
+
+      test('het origineel als het binnen de grens blijft', () async {
+        bestanden['/origineel.jpg'] = List.filled(3000, 1);
+        bestanden['/1200.jpg'] = List.filled(1000, 2);
+        expect(await MusicBrainzService().fetchGrootste(beeld(), maxBytes: 5000), Uint8List.fromList(List.filled(3000, 1)));
+      });
+
+      test('te groot of weg: de 1200', () async {
+        bestanden['/origineel.jpg'] = List.filled(9000, 1);
+        bestanden['/1200.jpg'] = List.filled(1000, 2);
+        expect(await MusicBrainzService().fetchGrootste(beeld(), maxBytes: 5000), Uint8List.fromList(List.filled(1000, 2)));
+        bestanden.remove('/origineel.jpg');
+        expect(await MusicBrainzService().fetchGrootste(beeld(), maxBytes: 5000), Uint8List.fromList(List.filled(1000, 2)));
+      });
+    });
+  });
+}

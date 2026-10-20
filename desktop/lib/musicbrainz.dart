@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data' show BytesBuilder;
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -1344,6 +1345,41 @@ class MusicBrainzService {
       return r.statusCode == 200 && r.bodyBytes.length > 500 ? r.bodyBytes : null;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Zo groot mag het origineel van een achterkant zijn — zie [fetchGrootste].
+  static const kGrootsteBytes = 8 * 1024 * 1024;
+
+  /// [i] op zijn grootst: de upload zelf als die onder [maxBytes] blijft, anders de 1200 van het archief.
+  ///
+  /// Voor de achterkant. Saber, 20-10-2026: "achterkant of musicbrainz of discogs hoogste resolutie". De
+  /// 1200 blijft de standaard voor de rest ([MbImage.full]): een cd-scan was in het origineel 11,8 MB.
+  Future<Uint8List?> fetchGrootste(MbImage i, {int maxBytes = kGrootsteBytes}) async {
+    if (i.url.isNotEmpty && i.url != i.full) {
+      final b = await _haalTot(i.url, maxBytes);
+      if (b != null) return b;
+    }
+    return fetchImage(i.full);
+  }
+
+  Future<Uint8List?> _haalTot(String url, int maxBytes) async {
+    final c = http.Client();
+    try {
+      final req = http.Request('GET', Uri.parse(url))..headers['User-Agent'] = _ua;
+      final res = await c.send(req).timeout(const Duration(seconds: 20));
+      if (res.statusCode != 200 || (res.contentLength ?? 0) > maxBytes) return null;
+      final b = BytesBuilder(copy: false);
+      await for (final d in res.stream.timeout(const Duration(seconds: 30))) {
+        b.add(d);
+        if (b.length > maxBytes) return null;
+      }
+      final bytes = b.takeBytes();
+      return bytes.length > 500 ? bytes : null;
+    } catch (_) {
+      return null;
+    } finally {
+      c.close();
     }
   }
 }

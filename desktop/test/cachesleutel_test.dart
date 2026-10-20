@@ -43,7 +43,9 @@ void main() {
       const vast = <String, String>{
         'the doors|l.a. woman': 'f4097460', //      covers/  ·  CoverEnricher.keyFor
         'radiohead': '46be2a6', //                  bios/ en artistart/  ·  naam kleingemaakt
-        'v2|radiohead|ok computer': '2e5c3c1b', //  albuminfo/
+        'v2|radiohead|ok computer': '2e5c3c1b', //  albuminfo/ tot 20-10-2026
+        // Bewust verhoogd op 20-10-2026: AlbumInfo kreeg frontUrl, en oude records zien een nieuw veld nooit.
+        'v3|radiohead|ok computer': 'eda7cd40', //  albuminfo/
         'disco|v7|doors': 'cde2c641', //            discography/  ·  schema | artistKey
         'a1|stromae': '8a4aa236', //                wikipedia/  ·  naam naar artikel
         't1|nl|Michael Jackson': 'a0db5548', //     wikipedia/  ·  het artikel zelf

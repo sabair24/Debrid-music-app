@@ -234,9 +234,10 @@ class EigenRadiobron implements Radiobron {
 
   /// Met [vroeg] klinkt het al terwijl het binnenkomt (zie `groeistroom.dart`).
   /// [zoekBeter]: na het landen op jacht naar een betere kopie — voor ▶ ([NieuwSpeler]), niet voor de
-  /// radio zelf.
+  /// radio zelf. [los]: ▶ — een radio die stopt, breekt deze haal niet af (zie
+  /// `DownloadManager.haalEnLaatHoren`).
   @override
-  Future<Track?> haal(Radioplek plek, {Groei? vroeg, bool zoekBeter = false}) async {
+  Future<Track?> haal(Radioplek plek, {Groei? vroeg, bool zoekBeter = false, bool los = false}) async {
     final String? pad;
     try {
       pad = vroeg == null
@@ -253,6 +254,7 @@ class EigenRadiobron implements Radiobron {
               jaar: plek.jaar,
               vroeg: vroeg,
               zoekDaarnaBeter: zoekBeter,
+              losVanDeRadio: los,
             );
     } on RadioAlGehad catch (e) {
       // Geland op muziek die je al had: laten klinken, maar als JOUW nummer — zie [AlVanJou].

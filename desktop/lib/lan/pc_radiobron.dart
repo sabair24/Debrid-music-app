@@ -279,6 +279,8 @@ class PcRadiobron implements Radiobron {
         }
         for (final t in library.tracks) {
           if (library.gedeeldId(t.path) != trackId) continue;
+          // Zijn hoes meteen, en niet pas bij de volgende verandering van de catalogus.
+          library.hoesNaLanding(t);
           if (eigen) throw AlVanJou(t);
           return t;
         }

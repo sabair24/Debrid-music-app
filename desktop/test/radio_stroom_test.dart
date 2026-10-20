@@ -85,7 +85,8 @@ class _Groeiend extends DownloadManager {
       int? seconden,
       int? jaar,
       Groei? vroeg,
-      bool zoekDaarnaBeter = false}) async {
+      bool zoekDaarnaBeter = false,
+      bool losVanDeRadio = false}) async {
     gekregen = vroeg;
     zoekBeterGevraagd = zoekDaarnaBeter;
     final pad = '$map${Platform.pathSeparator}in.flac';

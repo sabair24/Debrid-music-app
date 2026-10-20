@@ -54,6 +54,9 @@ class Radiohaal {
   /// Klinkt al terwijl het binnenkomt (groeistroom.dart): het toestel kan het via de pc laten spelen
   /// zodra [Groei.kanKlinken] — zie [Radiohaler.stand]. Null als de proef op de pc uit staat.
   Groei? groei;
+
+  /// ▶ op het toestel, geen radio: [Radiohaler.staak] laat hem staan.
+  bool los = false;
 }
 
 /// De pc-kant van een radio op een gekoppeld toestel.
@@ -120,7 +123,7 @@ class Radiohaler {
     // En de boekhouding meteen bij: het toestel peilt om de drie seconden, en een haal die
     // 'onderweg' blijft heten terwijl er niets meer gebeurt laat die peiling acht minuten doorgaan.
     for (final h in _halen.values) {
-      if (h.stand != 'onderweg') continue;
+      if (h.stand != 'onderweg' || h.los) continue;
       h.stand = 'mislukt';
       h.klaarOm = DateTime.now();
     }
@@ -154,7 +157,7 @@ class Radiohaler {
     // De leen kan verlopen zijn terwijl de radio nog loopt; hem hier opnieuw vastnemen is goedkoper
     // dan een radio die halverwege stil ophoudt met halen.
     begin();
-    final haal = Radiohaal('r${++_volgnummer}');
+    final haal = Radiohaal('r${++_volgnummer}')..los = luistertMee;
     _halen[haal.id] = haal;
     unawaited(() async {
       String? pad;
@@ -177,7 +180,8 @@ class Radiohaler {
                 seconden: seconden,
                 jaar: jaar,
                 vroeg: g,
-                zoekDaarnaBeter: zoekBeter);
+                zoekDaarnaBeter: zoekBeter,
+                losVanDeRadio: luistertMee);
       } on RadioLaterOpnieuw {
         later = true; // Soulseek op de pc doet even niet mee; het toestel probeert het straks weer
       } on RadioAlGehad catch (e) {

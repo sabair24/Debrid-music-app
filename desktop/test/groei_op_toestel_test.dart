@@ -98,6 +98,7 @@ class _Groeiend extends DownloadManager {
   final landen = Completer<void>();
   Groei? gekregen;
   bool? zoekBeterGevraagd;
+  final losGevraagd = <String, bool>{};
 
   @override
   Future<String?> haalEnLaatHoren(
@@ -106,9 +107,11 @@ class _Groeiend extends DownloadManager {
       int? seconden,
       int? jaar,
       Groei? vroeg,
-      bool zoekDaarnaBeter = false}) async {
+      bool zoekDaarnaBeter = false,
+      bool losVanDeRadio = false}) async {
     gekregen = vroeg;
     zoekBeterGevraagd = zoekDaarnaBeter;
+    losGevraagd[titel] = losVanDeRadio;
     final pad = '$map${Platform.pathSeparator}in.flac';
     File(pad).writeAsBytesSync(_bytes(300 * 1024));
     vroeg?.poging(pad: pad, totaal: 300 * 1024);
@@ -151,6 +154,21 @@ void main() {
       d.landen.complete();
       await _totDat(() => h.stand(haal.id)['stand'] != 'onderweg');
       expect(h.stand(haal.id).containsKey('groei'), isFalse, reason: 'na de haal geen groei meer in de stand');
+    });
+
+    test('▶ hoort niet bij de radio: een radio die stopt, laat hem staan (Stargazing, 20-10-2026)', () async {
+      final cfg = AppSettings()..vroegLuisteren = true;
+      final d = _Groeiend(OnlineService(cfg), SoulseekService(cfg), map.path, () async {}, map.path);
+      final h = Radiohaler(d, null, LibraryStore()..configDirOverride = map.path, cfg);
+      final speel = h.haal(artiest: 'Myles Smith', titel: 'Stargazing', zoekBeter: true, luistertMee: true);
+      final radio = h.haal(artiest: 'Madison Beer', titel: 'Home To Another One');
+      await _totDat(() => d.losGevraagd.length == 2);
+      expect(d.losGevraagd['Stargazing'], isTrue, reason: 'de pc zet ▶ niet bij de radiohalen');
+      expect(d.losGevraagd['Home To Another One'], isFalse);
+      h.staak();
+      expect(h.stand(speel.id)['stand'], 'onderweg', reason: 'het sluiten van een radio brak ▶ af: 404, niets te horen');
+      expect(h.stand(radio.id)['stand'], 'mislukt');
+      d.landen.complete();
     });
 
     test('met de proef uit: de oude weg, en geen groei in de stand', () async {
@@ -341,12 +359,36 @@ void main() {
       expect(p, contains('if (vast && _speeltGroei) {'));
     });
 
+    test('▶ los van de radio, op de pc en via de pc', () {
+      final online = File('lib/online.dart').readAsStringSync();
+      expect(online, contains('if (!losVanDeRadio) _radiohalen.add(job);'));
+      final radio = File('lib/radio.dart').readAsStringSync();
+      expect(radio, contains('losVanDeRadio: los,'));
+      final m = File('lib/main.dart').readAsStringSync();
+      expect(m, contains('.haal(plek, vroeg: vroeg, zoekBeter: true, los: true)'));
+      final rh = File('lib/lan/radiohaler.dart').readAsStringSync();
+      expect(rh, contains("if (h.stand != 'onderweg' || h.los) continue;"));
+      expect(rh, contains('losVanDeRadio: luistertMee'));
+    });
+
+    test('ging de groei nooit open, dan neemt de volgende ronde over, en speelt het gelande nummer', () {
+      final m = File('lib/main.dart').readAsStringSync();
+      final s = m.substring(m.indexOf('  Future<void> speelNummer(BuildContext context,'));
+      expect(s, contains('if (klinkt && opende(elders?.pad)) return;'),
+          reason: 'niet op playing: dat blijft na een mislukte opening waar');
+      expect(s, contains('bool opende(String? adres) => adres != null && speler.current?.path == adres && speler.duration > Duration.zero;'));
+      final landen = s.substring(s.indexOf('final klinkendAdres = vroeg?.adres ?? elders?.pad;'));
+      expect(landen, contains('if (klinkendAdres != null && klinkt && opende(klinkendAdres)) {'));
+      expect(landen.indexOf('speler.playQueue([t], 0);'), lessThan(landen.indexOf('} else if (magNog()) {')),
+          reason: 'nooit geopend: het gelande nummer spelen, niet stil een regel vervangen');
+    });
+
     test('▶ op een toestel: laten klinken zodra de pc het meldt, en na het landen je eigen nummer', () {
       final m = File('lib/main.dart').readAsStringSync();
       final s = m.substring(m.indexOf('  Future<void> speelNummer(BuildContext context,'));
       expect(s, contains('? await bron.haal(plek, zoekBeter: true, klinkt: klinktOpPc)'));
       expect(s, contains('speler.groeitElders(g.pad, g);'));
-      expect(s, contains('speler.playUrl(g.pad, title: titel, artist: artiest);'));
+      expect(s, contains("speler.playUrl(g.pad, title: titel, artist: artiest, album: album ?? '');"));
       expect(s, contains('elders?.geborgen = t.path;'));
       expect(s, contains('speler.wordtLokaal(klinkendAdres, t);'));
     });
@@ -386,6 +428,7 @@ class _Oud extends DownloadManager {
           int? seconden,
           int? jaar,
           Groei? vroeg,
-          bool zoekDaarnaBeter = false}) =>
+          bool zoekDaarnaBeter = false,
+      bool losVanDeRadio = false}) =>
       fail('met de proef uit de oude weg');
 }

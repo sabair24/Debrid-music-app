@@ -36,7 +36,7 @@ void main() {
 
   test('aangesloten: ▶ zoekt daarna beter, de radio niet; vervangen pas als het niet meer speelt', () {
     final main = File('lib/main.dart').readAsStringSync();
-    expect(main, contains('await (bron as EigenRadiobron).haal(plek, vroeg: vroeg, zoekBeter: true)'));
+    expect(main, contains('await (bron as EigenRadiobron).haal(plek, vroeg: vroeg, zoekBeter: true, los: true)'));
     expect(main, contains('downloads.speeltNu = (p) => player.current?.path == p;'));
     final radio = File('lib/radio.dart').readAsStringSync();
     expect(radio, contains('zoekDaarnaBeter: zoekBeter,'));

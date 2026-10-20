@@ -1128,6 +1128,51 @@ class LibraryStore extends ChangeNotifier {
     _voorrang.add(a.tracks.first.path);
   }
 
+  /// Een nummer dat net op de pc landde (de radio, ▶): zijn hoes nu, vóór de rest — en niet pas bij de
+  /// volgende verandering van de catalogus. Alleen op een toestel.
+  ///
+  /// **Waarom.** `PcRadiobron.haal` laadt de catalogus zelf; de volgende peiling krijgt dan 304 en start
+  /// geen hoezenronde. Het nieuwe nummer stond er, zonder hoes.
+  void hoesNaLanding(Track t) {
+    if (!isRemote) return;
+    final a = albumForPath(t.path);
+    if (a != null) hoesVoorrang(a);
+    final s = _hoesInstellingen;
+    if (s != null) unawaited(loadRemoteCovers(s));
+  }
+
+  /// Albums waar de pc nog geen hoes voor had, met hoe vaak er al opnieuw gevraagd is (op naam: het
+  /// albumobject is na elke catalogus een ander).
+  ///
+  /// **Waarom.** Een nummer dat net op de pc landde, staat meteen in de catalogus — maar zijn hoes haalt de
+  /// pc pas daarna op (`enrichFromWeb`, een paar tellen). Vroeg dit toestel in die tellen, dan kreeg het
+  /// 404, en een nieuwe vraag kwam pas bij de volgende verandering van de catalogus: het merkteken
+  /// daarvan telt een verrijkte hoes bewust niet mee. Saber, 20-10-2026: "die lopen nu achter op de
+  /// downloads en radio".
+  final _hoesNogNiet = <String, int>{};
+  Timer? _hoesHerkansing;
+
+  /// Na een 404 opnieuw vragen, na zoveel tijd; daarna niet meer deze zitting (sommige platen hebben
+  /// nergens een hoes).
+  static const kHoesHerkansingen = [Duration(seconds: 4), Duration(seconds: 12), Duration(seconds: 40)];
+
+  static String _hoesSleutel(Album a) => '${a.artist}|${a.title}';
+
+  void _planHoesHerkansing(List<Album> missers, AppSettings settings) {
+    Duration? wacht;
+    for (final a in missers) {
+      final k = _hoesSleutel(a);
+      final n = _hoesNogNiet[k] ?? 0;
+      if (n >= kHoesHerkansingen.length) continue;
+      _hoesNogNiet[k] = n + 1;
+      final w = kHoesHerkansingen[n];
+      if (wacht == null || w < wacht) wacht = w;
+    }
+    if (wacht == null) return;
+    _hoesHerkansing?.cancel();
+    _hoesHerkansing = Timer(wacht, () => unawaited(loadRemoteCovers(settings)));
+  }
+
   /// The album a playing track belongs to. The now-playing screen needs the album, not just the
   /// track: the pressing the user pinned and the cover they picked both live on it, and without
   /// them that screen went off and resolved its own record — landing on a different artist's album
@@ -3266,6 +3311,8 @@ class LibraryStore extends ChangeNotifier {
     // is genoeg om te weten dat het hier zinloos is; daarna gedraagt deze ronde zich weer als
     // vroeger.
     var pcKentMerken = true;
+    // Wat de pc nog niet had (404, of geen antwoord): straks opnieuw ([_planHoesHerkansing]).
+    final nogNiet = <Album>[];
 
     // EERST WAT ER AL OP SCHIJF LIGT, dan pas navragen.
     //
@@ -3376,8 +3423,12 @@ class LibraryStore extends ChangeNotifier {
       final antwoord = ref == null ? null : await client.artAls(ref, '', maxZijde: kHoesPlafond);
       if (antwoord != null && antwoord.etag == null) pcKentMerken = false;
       final bytes = antwoord?.bytes;
-      if (bytes == null || bytes.isEmpty) return;
+      if (bytes == null || bytes.isEmpty) {
+        if (ref != null) nogNiet.add(album);
+        return;
+      }
       gelukt++;
+      _hoesNogNiet.remove(_hoesSleutel(album));
       album.embeddedCover = bytes;
       _onthoudHoes(album, bytes);
       await enricher.putCached(album, bytes);
@@ -3492,6 +3543,7 @@ class LibraryStore extends ChangeNotifier {
     // antwoordt of een sleutel die geweigerd wordt. Eén regel is genoeg om het verschil te kunnen
     // zien; zonder die regel is er niets om naar te kijken.
     hoezenMislukt = gevraagd > 0 && gelukt == 0;
+    if (nogNiet.isNotEmpty) _planHoesHerkansing(nogNiet, settings);
     if (hoezenMislukt) {
       debugPrint('hoezen: $gevraagd gevraagd aan de pc, geen enkele gekregen — '
           'staat de pc aan, en klopt het adres nog?');

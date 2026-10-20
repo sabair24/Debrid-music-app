@@ -723,6 +723,88 @@ bool vroegGenoeg(List<SoulseekFile> z, int? seconden) =>
         .length >=
     kVroegGenoeg;
 
+/// Zo lang mag de winnaar van een wedloop stilvallen voordat hij afvalt — zie [bewaakStilte].
+const kWinnaarStil = Duration(seconds: 6);
+
+/// Zo lang meet [teTraag] voordat hij iets zegt: de eerste tel van een overdracht zegt nog weinig.
+const kTraagNa = Duration(seconds: 5);
+
+/// Onder deze snelheid (bytes per seconde) is een uploader voor ⬇ traag — als er ook nog meer dan
+/// [kTraagRest] te gaan is. Gemeten op 20-10-2026 in één race voor Lola Young — Messy: 1,8, 3,5, 15,8, 0,8
+/// en 0,5 MB/s bij de anderen, en de winnaar (dweee) leverde 42 kB/s: tien minuten voor één nummer.
+const kTraagSnelheid = 250 * 1024;
+
+/// Zie [kTraagSnelheid]: wie bijna klaar is, mag traag zijn.
+const kTraagRest = Duration(seconds: 45);
+
+/// Is de uploader die nu stuurt zo traag dat een ander het beter overneemt? [binnen] bytes van [totaal] in
+/// [bezig] (sinds hij begon te sturen).
+///
+/// Met [verbruik] (bytes per seconde die het nummer bij het afspelen vraagt, voor ▶): te traag als hij
+/// minder dan 1,2 keer dat levert — dan kan het niet zonder haperen klinken, en een volgende ronde levert
+/// meestal binnen een paar tellen. Zonder (⬇): onder [kTraagSnelheid] en nog meer dan [kTraagRest] te gaan.
+/// Saber, 20-10-2026: "als het echt zo traag gaat, beter niet wachten en direct een andere proberen".
+bool teTraag({required int binnen, required int totaal, required Duration bezig, double? verbruik}) {
+  if (bezig < kTraagNa || totaal <= 0 || binnen >= totaal) return false;
+  final snelheid = binnen / (bezig.inMilliseconds / 1000);
+  if (verbruik != null && verbruik > 0) return snelheid < verbruik * 1.2;
+  final nogNodig = (totaal - binnen) / max(snelheid, 1);
+  return snelheid < kTraagSnelheid && nogNodig > kTraagRest.inSeconds;
+}
+
+/// Bewaakt de winnaar van een wedloop: komen er [stil] lang geen nieuwe bytes in [dest] terwijl het bestand
+/// nog niet compleet is ([totaal]), dan gaat [stop] en is het true. Klaar ([klaar]) of al gestopt: false.
+///
+/// **Waarom.** In een wedloop wint wie het eerst bytes stuurt, en de anderen stoppen meteen. Valt die
+/// winnaar daarna stil, dan wachtte alles tot Soulseek zelf opgaf. Gemeten op de gsm (20-10-2026, 3.9.529,
+/// Hozier — Too Sweet): fraiklers33king stuurde na 3,6 s, de kop kwam nooit binnen, "Overdracht afgebroken
+/// na 38s" — en de ronde daarna leverde in 2,9 s (peachleaf). 44 s van tik tot geluid, waarvan 34 s wachten
+/// op een uploader die niets meer stuurde. Een gezonde uploader levert ruim meer dan het verbruik (peachleaf:
+/// 3,2 MB/s tegen 207 kB/s); zes seconden zonder één byte is geen hapering meer.
+///
+/// [traag]: ook stoppen als die zegt dat hij te traag is ([teTraag]) — met wat er binnen is en hoe lang
+/// hij al stuurt (vanaf de eerste byte).
+Future<bool> bewaakStilte(File dest, int totaal, SlskCancel stop, bool Function() klaar,
+    {Duration stil = kWinnaarStil,
+    Duration peil = const Duration(milliseconds: 250),
+    bool Function(int binnen, Duration bezig)? traag,
+    void Function(int binnen, String waarom)? gestopt}) async {
+  var vorige = -1;
+  var sinds = DateTime.now();
+  DateTime? eersteByte;
+  while (!klaar() && !stop.isCancelled) {
+    await Future<void>.delayed(peil);
+    if (klaar() || stop.isCancelled) return false;
+    int staat;
+    try {
+      staat = dest.existsSync() ? dest.lengthSync() : 0;
+    } catch (_) {
+      staat = vorige < 0 ? 0 : vorige;
+    }
+    if (totaal > 0 && staat >= totaal) return false;
+    final nu = DateTime.now();
+    if (staat > 0) eersteByte ??= nu;
+    final e = eersteByte;
+    if (traag != null && e != null && traag(staat, nu.difference(e))) {
+      final kBs = staat / max(1, nu.difference(e).inMilliseconds) * 1000 / 1024;
+      gestopt?.call(staat, 'te traag (${kBs.round()} kB/s)');
+      stop.cancel();
+      return true;
+    }
+    if (staat != vorige) {
+      vorige = staat;
+      sinds = nu;
+      continue;
+    }
+    if (nu.difference(sinds) >= stil) {
+      gestopt?.call(staat, '${nu.difference(sinds).inSeconds} s niets nieuws');
+      stop.cancel();
+      return true;
+    }
+  }
+  return false;
+}
+
 class SoulseekService {
   final AppSettings settings;
   final SoulseekClient client = SoulseekClient();
@@ -2175,6 +2257,9 @@ class DownloadManager extends ChangeNotifier {
       SlskDone? winner;
       SoulseekFile? winnerFile;
       SoulseekFile? leader; // the peer currently sending; owns the progress line
+      // Zijn stopschakelaar en wanneer hij begon te sturen: een trage leider maakt plaats ([teTraag]).
+      SlskCancel? leaderStop;
+      DateTime? leaderSinds;
       final decided = Completer<void>();
       final runners = <Future<void>>[];
       var asked = 0, queued = 0, cursor = 0;
@@ -2214,7 +2299,32 @@ class DownloadManager extends ChangeNotifier {
           claim: () {
             if (leader == null) {
               leader = f;
+              leaderStop = c;
+              leaderSinds = DateTime.now();
               return true;
+            }
+            // **Een trage leider maakt plaats** voor wie nu begint te sturen. Gemeten op 20-10-2026 (⬇ van
+            // Lola Young — Messy, vanaf de gsm): de leider leverde 42 kB/s, en elke snellere die daarna
+            // begon werd hier gestopt — tien minuten voor één nummer.
+            final l = leader!, sinds = leaderSinds;
+            if (sinds != null) {
+              int binnen;
+              try {
+                binnen = _bestemming(l).lengthSync();
+              } catch (_) {
+                binnen = 0;
+              }
+              final bezig = DateTime.now().difference(sinds);
+              if (teTraag(binnen: binnen, totaal: l.size, bezig: bezig)) {
+                final kBs = binnen / max(1, bezig.inMilliseconds) * 1000 / 1024;
+                _log.line('   ${l.username}: te traag (${kBs.round()} kB/s, ${(binnen / 1048576).toStringAsFixed(1)} '
+                    'van ${(l.size / 1048576).toStringAsFixed(1)} MB) — ${f.username} neemt over');
+                leaderStop?.cancel();
+                leader = f;
+                leaderStop = c;
+                leaderSinds = DateTime.now();
+                return true;
+              }
             }
             c.cancel(); // someone else is already sending — don't burn bandwidth alongside them
             return false;
@@ -3518,6 +3628,11 @@ class DownloadManager extends ChangeNotifier {
   ///
   /// [zoekDaarnaBeter]: na het landen dezelfde jacht op beter als na een gewone download — voor ▶, niet
   /// voor de radio (die doet het pas bij een 👍).
+  ///
+  /// [losVanDeRadio]: ▶ — dit hoort niet bij een radio, en [staakRadiohalen] laat het staan. Gemeten op de
+  /// gsm (20-10-2026, 3.9.529, Myles Smith — Stargazing): ▶ terwijl er een radio liep; het nummer begon
+  /// te klinken, dat sloot de radio, en het sluiten brak precies deze haal af — 404, en niets te horen.
+  /// Op de pc net zo.
   Future<String?> haalEnLaatHoren({
     required String artiest,
     required String titel,
@@ -3525,6 +3640,7 @@ class DownloadManager extends ChangeNotifier {
     int? jaar,
     Groei? vroeg,
     bool zoekDaarnaBeter = false,
+    bool losVanDeRadio = false,
   }) async {
     if (!soulseek.available) return null;
     // Heb je dit al? Dan valt er niets te halen — en, net zo belangrijk, dan mag het straks ook niet
@@ -3543,7 +3659,7 @@ class DownloadManager extends ChangeNotifier {
     // zoeken. Een zoekopdracht duurt seconden, maar het is wél het moment waarop de meeste haaltjes
     // zich bevinden als je de radio afsluit.
     final job = DownloadJob(titel); // wegwerp: bewust niet in `jobs`
-    _radiohalen.add(job);
+    if (!losVanDeRadio) _radiohalen.add(job);
     try {
       return await _haalVoorRadio(job, artiest, titel, seconden, jaar, vroeg: vroeg, zoekBeter: zoekDaarnaBeter);
     } finally {
@@ -3668,8 +3784,24 @@ class DownloadManager extends ChangeNotifier {
         ? _vroegKeuren(vroeg, _bestemming(w), w, lopers[w]!.stop, () => overdrachtKlaar,
             artiest: artiest, titel: titel, seconden: seconden)
         : Future.value(false);
+    // Een winnaar die stilvalt, valt af — zie [bewaakStilte]. Dan is de uitslag "gestopt", en de ronde
+    // erna (zonder hem, [viel]) begint meteen.
+    // Een winnaar die trager levert dan het nummer klinkt, valt ook af — maar alleen als er anderen
+    // meededen: is hij de enige, dan liever traag dan niets ([teTraag]).
+    final duur = (w.durationSec ?? 0) > 0 ? w.durationSec! : (seconden ?? 0);
+    final verbruik = duur > 0 && w.size > 0 ? w.size / duur : null;
+    final stilgevallen = bewaakStilte(_bestemming(w), w.size, lopers[w]!.stop, () => overdrachtKlaar,
+        traag: verbruik == null || lopend < 2
+            ? null
+            : (binnen, bezig) => teTraag(binnen: binnen, totaal: w.size, bezig: bezig, verbruik: verbruik),
+        gestopt: (binnen, waarom) {
+      viel?.call(w.username);
+      _log.line('radio "$artiest — $titel": ${w.username} viel af — $waarom op '
+          '${(binnen / 1048576).toStringAsFixed(1)} van ${(w.size / 1048576).toStringAsFixed(1)} MB; gestopt, volgende');
+    });
     final res = await lopers[w]!.res;
     overdrachtKlaar = true;
+    await stilgevallen;
     return (f: w, res: res, afgekeurd: await afgekeurd);
   }
 

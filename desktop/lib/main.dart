@@ -3,6 +3,7 @@ import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:io';
 import 'dart:isolate' show Isolate;
 import 'dart:math' as math;
+import 'dart:typed_data' show BytesBuilder;
 import 'dart:ui' show ImageFilter;
 // Flutter 3.36+ exports a RepeatMode of its own (for RepeatingAnimationBuilder), which collides
 // with the player's. Ours is the one this app means everywhere.
@@ -8833,7 +8834,8 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
             if (s.seconds != null && s.seconds! > 0)
               Text(_fmt(Duration(seconds: s.seconds!)), style: kTekstKlein.copyWith(color: dim)),
             const SizedBox(width: 8),
-            SpeelNuKnop(artiest: widget.artiest, titel: s.title, seconden: s.seconds, grootte: 20),
+            SpeelNuKnop(
+                artiest: widget.artiest, titel: s.title, seconden: s.seconds, grootte: 20, album: widget.tags?.album),
             SizedBox(
               width: 72,
               child: Align(
@@ -17213,10 +17215,15 @@ const kNieuwHaalRondes = 3;
 /// [NieuwSpeler.speelNummer]: op de pc Soulseek, en het klinkt al terwijl het binnenkomt. Een ringetje
 /// zolang het gehaald wordt.
 class SpeelNuKnop extends StatelessWidget {
-  const SpeelNuKnop({super.key, required this.artiest, required this.titel, this.seconden, this.grootte = 22});
+  const SpeelNuKnop(
+      {super.key, required this.artiest, required this.titel, this.seconden, this.grootte = 22, this.album, this.hoes});
   final String artiest, titel;
   final int? seconden;
   final double grootte;
+
+  /// Het album en de hoes (een adres, meestal van Deezer), als de plek ze kent: dan staat de hoes er
+  /// zodra het klinkt, en vindt Nu speelt de achterkant en de cd al tijdens het streamen.
+  final String? album, hoes;
 
   @override
   Widget build(BuildContext context) {
@@ -17237,7 +17244,8 @@ class SpeelNuKnop extends StatelessWidget {
             icon: Icon(Icons.play_arrow_rounded, size: grootte),
             color: _accent,
             tooltip: 'Nu afspelen',
-            onPressed: () => speler.speelNummer(context, artiest: artiest, titel: titel, seconden: seconden),
+            onPressed: () => speler.speelNummer(context,
+                artiest: artiest, titel: titel, seconden: seconden, album: album, hoesUrl: hoes),
           ),
         );
       },
@@ -17257,11 +17265,46 @@ class NieuwSpeler extends ChangeNotifier {
   static String _sleutelVan(String artiest, String titel) => '${normKey(artiest)}|${normKey(titel)}';
 
   Future<void> speel(BuildContext context, NieuwNummer n) => speelNummer(context,
-      artiest: n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null, sleutelVan: n.sleutel);
+      artiest: n.artiest,
+      titel: n.titel,
+      seconden: n.seconden > 0 ? n.seconden : null,
+      sleutelVan: n.sleutel,
+      album: n.album.title,
+      hoesUrl: n.album.cover);
+
+  /// De hoes achter [url] op 1200 ([deezerHoes1200]), anders zoals hij is. Null als er niets komt.
+  static Future<Uint8List?> _hoesVan(String url) async {
+    for (final u in {deezerHoes1200(url), url}) {
+      final c = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+      try {
+        final res = await (await c.getUrl(Uri.parse(u))).close().timeout(const Duration(seconds: 10));
+        if (res.statusCode != 200) {
+          await res.drain<void>().catchError((_) {});
+          continue;
+        }
+        final b = BytesBuilder(copy: false);
+        await for (final d in res.timeout(const Duration(seconds: 10))) {
+          b.add(d);
+        }
+        final bytes = b.takeBytes();
+        if (bytes.length > 1500) return bytes;
+      } catch (_) {
+        // dan de volgende maat, of geen hoes — het nummer klinkt toch
+      } finally {
+        c.close(force: true);
+      }
+    }
+    return null;
+  }
 
   /// Dit nummer nu laten klinken — van een nieuwe release, of van de ▶ naast een downloadknop.
   Future<void> speelNummer(BuildContext context,
-      {required String artiest, required String titel, int? seconden, String? sleutelVan}) async {
+      {required String artiest,
+      required String titel,
+      int? seconden,
+      String? sleutelVan,
+      String? album,
+      String? hoesUrl}) async {
     final sleutel = sleutelVan ?? _sleutelVan(artiest, titel);
     if (_bezig.contains(sleutel)) return;
     final lib = context.read<LibraryStore>();
@@ -17293,6 +17336,11 @@ class NieuwSpeler extends ChangeNotifier {
         : PcRadiobron(library: lib, clientOf: () => lib.remote);
     _bezig.add(sleutel);
     notifyListeners();
+    // De hoes alvast halen, op 1200: zodra het klinkt staat hij er (zie [PlayerStore.toonStroomHoes]).
+    final hoesF = hoesUrl == null || hoesUrl.isEmpty ? null : _hoesVan(hoesUrl);
+    void toonHoes(String adres) => hoesF?.then((b) {
+          if (b != null) speler.toonStroomHoes(adres, b);
+        });
     try {
       // Met spelen-terwijl-het-binnenkomt: alleen Soulseek, en TorBox pas als Soulseek niets heeft (Saber,
       // 20-10-2026: "ik zou in dit geval misschien enkel gebruik maken van soulseek"). Gemeten: de
@@ -17333,8 +17381,9 @@ class NieuwSpeler extends ChangeNotifier {
         unawaited(vroeg.speelbaar.then((kan) {
           if (!kan || klaar || !magNog()) return;
           klinkt = true;
-          speler.playUrl(vroeg.adres, title: titel, artist: artiest);
+          speler.playUrl(vroeg.adres, title: titel, artist: artiest, album: album ?? '');
           keuzes = speler.keuzes;
+          toonHoes(vroeg.adres);
           if (context.mounted) _srcToast(context, '"$titel" speelt al terwijl hij binnenkomt');
         }));
       }
@@ -17342,16 +17391,20 @@ class NieuwSpeler extends ChangeNotifier {
       // het al te horen is — dan speelt het hier via de pc terwijl het daar binnenkomt (`GroeiOpPc`). Over
       // wifi het origineel. Een oudere pc meldt niets; dan speelt het zoals vroeger pas na het landen.
       GroeiOpPc? elders;
+      // Speelt de speler [adres] echt — geopend, met een duur?
+      bool opende(String? adres) => adres != null && speler.current?.path == adres && speler.duration > Duration.zero;
       void klinktOpPc(String groeiId) {
         if (klaar || !magNog()) return;
-        // Klinkt een vorige ronde nog, dan niet onderbreken. Viel die stil (de uploader haakte af en er
-        // kwam er op de pc geen meer), dan deze ronde.
-        if (klinkt && speler.playing) return;
+        // Klinkt een vorige ronde nog, dan niet onderbreken. Ging die nooit open of viel hij stil (de groei
+        // ging dicht, er kwam op de pc geen uploader meer), dan deze ronde. Niet op `playing`: dat blijft
+        // na een mislukte opening gewoon waar (gemeten, Stargazing 20-10-2026).
+        if (klinkt && opende(elders?.pad)) return;
         final g = elders = GroeiOpPc(() => lib.remote, groeiId);
         klinkt = true;
         speler.groeitElders(g.pad, g);
-        speler.playUrl(g.pad, title: titel, artist: artiest);
+        speler.playUrl(g.pad, title: titel, artist: artiest, album: album ?? '');
         keuzes = speler.keuzes;
+        toonHoes(g.pad);
         if (context.mounted) _srcToast(context, '"$titel" speelt al terwijl je pc hem binnenhaalt');
       }
       try {
@@ -17365,7 +17418,7 @@ class NieuwSpeler extends ChangeNotifier {
           try {
             // [zoekBeter]: eerst de snelste FLAC, daarna een betere (Saber, 20-10-2026).
             t = vroeg != null
-                ? await (bron as EigenRadiobron).haal(plek, vroeg: vroeg, zoekBeter: true)
+                ? await (bron as EigenRadiobron).haal(plek, vroeg: vroeg, zoekBeter: true, los: true)
                 : bron is PcRadiobron
                     ? await bron.haal(plek, zoekBeter: true, klinkt: klinktOpPc)
                     : await bron.haal(plek);
@@ -17393,12 +17446,16 @@ class NieuwSpeler extends ChangeNotifier {
           return;
         }
         final klinkendAdres = vroeg?.adres ?? elders?.pad;
-        if (klinkendAdres != null && klinkt) {
+        if (klinkendAdres != null && klinkt && opende(klinkendAdres)) {
           // Het klinkt al: niets opnieuw openen. In de rij wordt het je eigen nummer (hoes, kwaliteit,
           // duimen); mpv speelt door uit het geheugen van de groeistroom. Koos je intussen iets anders,
           // dan blijft dat spelen.
           elders?.geborgen = t.path;
           speler.wordtLokaal(klinkendAdres, t);
+        } else if (klinkendAdres != null && klinkt && speler.current?.path == klinkendAdres) {
+          // Het zou klinken, maar ging nooit open (de groei was al dicht): dan nu het gelande nummer, in
+          // plaats van een regel in de rij te vervangen terwijl er niets speelt (Stargazing, 20-10-2026).
+          speler.playQueue([t], 0);
         } else if (magNog()) {
           speler.playQueue([t], 0);
         } else if (context.mounted) {
@@ -22044,7 +22101,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     child: Icon(Icons.library_add_check_rounded, color: _accent2),
                   )
                 else ...[
-                  SpeelNuKnop(artiest: t.artist, titel: t.title, seconden: t.seconden),
+                  SpeelNuKnop(artiest: t.artist, titel: t.title, seconden: t.seconden, album: t.album, hoes: t.cover),
                   _downloadControl(context,
                       jobKey: _zoekSleutel(t), onDownload: () => _downloadHit(t), tooltip: 'Downloaden (beste bron)'),
                 ],
@@ -26791,7 +26848,9 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                       artiest: t.artist.isEmpty ? widget.artistName : t.artist,
                       titel: t.title,
                       seconden: t.durationSec > 0 ? t.durationSec : null,
-                      grootte: 20),
+                      grootte: 20,
+                      album: widget.album.title,
+                      hoes: widget.album.cover),
                   _downloadControl(context,
                       jobKey: 'alb:${widget.album.ref.keyPart}:$i',
                       onDownload: () => _downloadTrack(t, i),

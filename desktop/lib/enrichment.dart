@@ -228,6 +228,10 @@ class AlbumInfo {
   /// TheAudioDB is keyless and unmetered, and for ANTI it has both.
   final String? backUrl, discUrl;
 
+  /// De voorkant bij TheAudioDB (`strAlbumThumb`, 700×700): de tweede keus na Deezer's 1200 — Saber,
+  /// 20-10-2026: "front is meestal de digitale versie het beste 1200x1200 of bij the audiodb 700x700".
+  final String? frontUrl;
+
   const AlbumInfo({
     this.description,
     this.review,
@@ -238,6 +242,7 @@ class AlbumInfo {
     this.score,
     this.backUrl,
     this.discUrl,
+    this.frontUrl,
   });
 
   bool get isEmpty =>
@@ -247,7 +252,8 @@ class AlbumInfo {
       genre == null &&
       label == null &&
       backUrl == null &&
-      discUrl == null;
+      discUrl == null &&
+      frontUrl == null;
 
   /// The blurb to show: the encyclopedic description first, a review only if that's all there is.
   String? get text => (description != null && description!.isNotEmpty) ? description : review;
@@ -262,6 +268,7 @@ class AlbumInfo {
         'score': score,
         if (backUrl != null) 'backUrl': backUrl,
         if (discUrl != null) 'discUrl': discUrl,
+        if (frontUrl != null) 'frontUrl': frontUrl,
       };
 
   factory AlbumInfo.fromJson(Map<String, dynamic> j) => AlbumInfo(
@@ -274,6 +281,7 @@ class AlbumInfo {
         score: (j['score'] as num?)?.toDouble(),
         backUrl: j['backUrl'] as String?,
         discUrl: j['discUrl'] as String?,
+        frontUrl: j['frontUrl'] as String?,
       );
 }
 
@@ -958,6 +966,7 @@ class CoverEnricher {
         // and dropping these two on the floor, then paying the Discogs budget for the same two scans.
         backUrl: s('strAlbumBack'),
         discUrl: s('strAlbumCDart'),
+        frontUrl: s('strAlbumThumb'),
       );
       if (info.isEmpty) {
         await onthoudGeenAlbumInfo(artist, album);
@@ -988,8 +997,10 @@ class CoverEnricher {
   ///
   /// Same lesson as the artwork key's version, learned twice in one morning: adding a field to a
   /// cached record does nothing until the old records are re-derived.
+  ///
+  /// `v3` sinds 20-10-2026: [AlbumInfo.frontUrl] erbij — zelfde les, derde keer.
   File _albumInfoFile(String artist, String album) => File('${_albumInfoDir.path}${Platform.pathSeparator}'
-      '${fnv1a('v2|${artist.toLowerCase()}|${album.toLowerCase()}')}.json');
+      '${fnv1a('v3|${artist.toLowerCase()}|${album.toLowerCase()}')}.json');
 
   /// Het briefje "hier gekeken en niets gevonden", voor de albuminfo van TheAudioDB.
   ///
@@ -1206,8 +1217,18 @@ class CoverEnricher {
 
     final deezer = await _deezerCover(query);
     if (deezer != null) {
-      final b = await _download(deezer);
+      // Op 1200, en de 1000 van `cover_xl` als die maat er niet is — zie [deezerHoes1200].
+      final groot = deezerHoes1200(deezer);
+      final b = (groot == deezer ? null : await _download(groot)) ?? await _download(deezer);
       if (b != null) return b;
+    }
+    // TheAudioDB's 700 voor wat Deezer niet heeft — vóór Discogs (~600) en het archief.
+    if (!generic) {
+      final u = (await albumInfo(artist, album))?.frontUrl;
+      if (u != null) {
+        final b = await _download(u);
+        if (b != null) return b;
+      }
     }
     if (settings.discogsToken.isNotEmpty) {
       final dc = await _discogsCover(artist, album, generic);

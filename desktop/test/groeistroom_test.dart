@@ -507,12 +507,17 @@ void main() {
     test('▶ naast elke downloadknop: Online zoeken, een albumpagina, een ontbrekend nummer — dezelfde weg', () {
       final main = File('lib/main.dart').readAsStringSync();
       expect(RegExp(r'SpeelNuKnop\(').allMatches(main).length, greaterThanOrEqualTo(3));
-      expect(main, contains('SpeelNuKnop(artiest: t.artist, titel: t.title, seconden: t.seconden),'),
-          reason: 'Online zoeken');
+      expect(main, contains('SpeelNuKnop(artiest: t.artist, titel: t.title, seconden: t.seconden, album: t.album, hoes: t.cover),'),
+          reason: 'Online zoeken, met album en hoes');
       expect(main, contains("artiest: t.artist.isEmpty ? widget.artistName : t.artist,"), reason: 'een albumpagina');
-      expect(main, contains('SpeelNuKnop(artiest: widget.artiest, titel: s.title, seconden: s.seconds, grootte: 20),'),
+      expect(main, contains('artiest: widget.artiest, titel: s.title, seconden: s.seconds, grootte: 20, album: widget.tags?.album),'),
           reason: 'een ontbrekend nummer van een album dat je hebt');
-      expect(main, contains('onPressed: () => speler.speelNummer(context, artiest: artiest, titel: titel, seconden: seconden),'));
+      expect(main, contains('artiest: artiest, titel: titel, seconden: seconden, album: album, hoesUrl: hoes),'));
+      // De hoes tijdens het streamen (20-10-2026): het album gaat mee, en de hoes staat er zodra het klinkt.
+      expect(main, contains("speler.playUrl(vroeg.adres, title: titel, artist: artiest, album: album ?? '');"));
+      expect(main, contains('toonHoes(vroeg.adres);'));
+      expect(main, contains('toonHoes(g.pad);'));
+      expect(main, contains('hoes: widget.album.cover),'), reason: 'een albumpagina, met de hoes van de uitgave');
       expect(main, contains('Future<void> speel(BuildContext context, NieuwNummer n) => speelNummer(context,'),
           reason: 'een nieuw nummer gaat door dezelfde functie');
     });

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'artwork.dart';
+import 'booklet.dart' show imageSize;
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
@@ -1628,6 +1629,18 @@ String? hoesHerkomst({String? artBron, String? pinnedMbid, int? pinned}) {
   return (release: null, mbid: null);
 }
 
+/// De grootste van twee beelden, in pixels; bij gelijke maat (of onleesbaar) [eerst].
+///
+/// Voor de achterkant: het archief of Discogs eerst, TheAudioDB daarna — maar "hoogste resolutie" (Saber,
+/// 20-10-2026) gaat voor. Live gemeten op ANTI: het archief had 540×475, TheAudioDB meer.
+Uint8List? grootsteBeeld(Uint8List? eerst, Uint8List? dan) {
+  if (eerst == null) return dan;
+  if (dan == null) return eerst;
+  final a = imageSize(eerst), b = imageSize(dan);
+  final pa = a == null ? 0 : a.w * a.h, pb = b == null ? 0 : b.w * b.h;
+  return pb > pa ? dan : eerst;
+}
+
 extension DiscogsArtwork on DiscogsService {
   /// Fetch and identify the front, back and disc scans for an album, cached on disk.
   ///
@@ -1767,11 +1780,20 @@ extension DiscogsArtwork on DiscogsService {
       }
     }
 
+    // TheAudioDB, keyless and unmetered, and asked alongside the archive instead of after it. Its disc
+    // (strAlbumCDart, 1000×1000, transparent) goes before any other — Saber, 20-10-2026: "voor de cd
+    // afbeelding meestal the audiodb ook 1000x1000". Its back (~700) is only the fallback: "achterkant of
+    // musicbrainz of discogs hoogste resolutie". So a TheAudioDB back never stops the search below.
+    final tadbF = (saidDisc == null || saidBack == null) && artist.isNotEmpty && album.isNotEmpty
+        ? _tadbBeelden(artist, album, step)
+        : Future.value((back: null, disc: null));
+    ({Uint8List? back, Uint8List? disc})? tadb;
+
     // Anything found below fills only the roles the user did NOT assign.
     ReleaseArt said(ReleaseArt found) => ReleaseArt(
           front: saidFront ?? found.front,
-          back: saidBack ?? found.back,
-          disc: saidDisc ?? found.disc,
+          back: saidBack ?? grootsteBeeld(found.back, tadb?.back),
+          disc: saidDisc ?? tadb?.disc ?? found.disc,
           // Heeft de gebruiker de voorkant zélf aangewezen, dan is die niet van deze persing en
           // hoort er geen persing bij te staan. De hoes is dan een keuze, geen vondst.
           bron: saidFront != null ? null : found.bron,
@@ -1786,21 +1808,26 @@ extension DiscogsArtwork on DiscogsService {
     /// on to Discogs: measured on the real library, each one then ran past ninety seconds and
     /// finished nothing at all in five minutes, because the sixty-a-minute budget is shared with the
     /// tracklist sweep and its spacing triples when the budget runs low.
-    bool enough(ReleaseArt a) => a.back != null && a.disc != null;
+    ///
+    /// On what was FOUND, before [said]: a back from TheAudioDB is the fallback, not an answer.
+    bool enough(ReleaseArt found) =>
+        (saidBack ?? found.back) != null && (saidDisc ?? tadb?.disc ?? found.disc) != null;
 
     // A pinned MusicBrainz pressing is an exact answer: take its scans and no one else's.
     ReleaseArt? partial;
+    final exactF = pinnedMbid != null && pinnedMbid.isNotEmpty ? _artFromCaa(pinnedMbid) : Future<ReleaseArt?>.value();
+    tadb = await tadbF;
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
-      final exact = await _artFromCaa(pinnedMbid);
+      final exact = await exactF;
       step('archief voor de gepinde persing: '
           '${exact == null ? "niets" : "voor=${exact.front != null} achter=${exact.back != null} cd=${exact.disc != null}"}');
       if (exact != null) {
-        final art = said(exact);
-        if (enough(art) || (art.front != null && art.back != null && art.disc != null)) {
+        if (enough(exact)) {
+          final art = said(exact);
           await _writeArt(dir, art);
           return art;
         }
-        partial = art;
+        partial = exact;
       }
     }
 
@@ -1811,23 +1838,11 @@ extension DiscogsArtwork on DiscogsService {
     // This sits here on purpose. Below is Discogs, whose sixty requests a minute are the scarcest
     // thing in this app: measured on the real library with two loops running, ONE album's artwork
     // spent over two minutes waiting for a slot. Anything free that can answer first should.
-    if ((partial?.back == null || partial?.disc == null) && artist.isNotEmpty && album.isNotEmpty) {
-      final info = await CoverEnricher(settings).albumInfo(artist, album);
-      step('theaudiodb: ${info == null ? "GEEN ANTWOORD" : "achter=${info.backUrl != null} cd=${info.discUrl != null}"}');
-      final back = partial?.back ?? await _fetchIf(info?.backUrl);
-      final disc = partial?.disc ?? await _fetchIf(info?.discUrl);
-      step('theaudiodb-afbeeldingen: achter=${back != null} cd=${disc != null}');
-      if (back != null || disc != null) {
-        // `bron` blijft aan de VOORKANT hangen, en die komt hier van de gepinde persing of nergens
-        // vandaan — TheAudioDB levert alleen een achterkant en een cd.
-        final art = said(ReleaseArt(
-            front: partial?.front, back: back, disc: disc, bron: partial?.bron, formaat: partial?.formaat));
-        if (enough(art)) {
-          await _writeArt(dir, art);
-          return art;
-        }
-        partial = art;
-      }
+    // (TheAudioDB was asked above, alongside the archive: see [tadb]. Its disc and back fill [said].)
+    if (enough(partial ?? const ReleaseArt())) {
+      final art = said(partial!);
+      await _writeArt(dir, art);
+      return art;
     }
 
     // The archive again, now across the record's OTHER pressings.
@@ -1840,7 +1855,7 @@ extension DiscogsArtwork on DiscogsService {
     // pressing in the same free archive very often has one. The front still comes from the pinned
     // pressing; only the roles it cannot fill are looked for elsewhere.
     ReleaseArt? caa = partial;
-    final needMore = partial == null || partial.back == null || partial.disc == null;
+    final needMore = !enough(partial ?? const ReleaseArt());
     if (pinned == null && needMore && !await breedGezocht(dir)) {
       final wider = await _artFromMusicBrainz(artist, album, expectedTracks);
       step('archief over andere persingen: ${wider == null ? "niets" : "voor=${wider.front != null} "
@@ -1856,8 +1871,8 @@ extension DiscogsArtwork on DiscogsService {
           bron: partial?.front != null ? partial?.bron : wider.bron,
           formaat: partial?.front != null ? partial?.formaat : wider.formaat,
         );
-        final art = said(caa);
-        if (enough(art)) {
+        if (enough(caa)) {
+          final art = said(caa);
           await _writeArt(dir, art);
           return art;
         }
@@ -1872,11 +1887,12 @@ extension DiscogsArtwork on DiscogsService {
     // actually opens this record, and the sleeve it does have shows up immediately meanwhile.
     if (freeOnly) {
       final art = said(partial ?? const ReleaseArt());
+      final klaar = enough(partial ?? const ReleaseArt());
       step('gratis bronnen klaar — geen Discogs (warmen): '
           'voor=${art.front != null} achter=${art.back != null} cd=${art.disc != null}');
       if (!art.isEmpty) {
-        await _writeArt(dir, art, done: enough(art));
-        step('weggeschreven (done=${enough(art)}) — keten klaar');
+        await _writeArt(dir, art, done: klaar);
+        step('weggeschreven (done=$klaar) — keten klaar');
         return art;
       }
       step('niets gevonden — keten klaar');
@@ -2021,7 +2037,9 @@ extension DiscogsArtwork on DiscogsService {
           }
           if (want.isEmpty) continue;
           final keys = want.keys.toList();
-          final bytes = await Future.wait([for (final k in keys) mb.fetchImage(want[k]!.full)]);
+          // De achterkant op zijn grootst ([MusicBrainzService.fetchGrootste]); de rest op de 1200.
+          final bytes = await Future.wait(
+              [for (final k in keys) k == 'back' ? mb.fetchGrootste(want[k]!) : mb.fetchImage(want[k]!.full)]);
           for (var n = 0; n < keys.length; n++) {
             switch (keys[n]) {
               case 'front':
@@ -2089,7 +2107,7 @@ extension DiscogsArtwork on DiscogsService {
       Uint8List? front, back, disc;
       for (final i in images) {
         if (front == null && i.isFront) front = await mb.fetchImage(i.full);
-        if (back == null && i.isBack) back = await mb.fetchImage(i.full);
+        if (back == null && i.isBack) back = await mb.fetchGrootste(i);
         if (disc == null && i.isDisc) disc = await mb.fetchImage(i.full);
       }
       if (front == null && back == null && disc == null) return null;
@@ -2388,6 +2406,16 @@ extension DiscogsArtwork on DiscogsService {
   /// [fetchImage] for a url that may not be there. Saves the caller a null dance per image.
   Future<Uint8List?> _fetchIf(String? url) async =>
       (url == null || url.isEmpty) ? null : fetchImage(url);
+
+  /// De achterkant en de cd van TheAudioDB, tegelijk opgehaald. Zie [releaseArt].
+  Future<({Uint8List? back, Uint8List? disc})> _tadbBeelden(
+      String artist, String album, void Function(String) step) async {
+    final info = await CoverEnricher(settings).albumInfo(artist, album);
+    step('theaudiodb: ${info == null ? "GEEN ANTWOORD" : "achter=${info.backUrl != null} cd=${info.discUrl != null}"}');
+    final r = await Future.wait([_fetchIf(info?.backUrl), _fetchIf(info?.discUrl)]);
+    step('theaudiodb-afbeeldingen: achter=${r[0] != null} cd=${r[1] != null}');
+    return (back: r[0], disc: r[1]);
+  }
 
   /// De kopregels om [url] op te halen: het token alleen naar Discogs zelf. Ook voor een plaatje dat het
   /// scherm rechtstreeks laadt (`Image.network(headers:)`), zoals een artiestenfoto in Online zoeken.
