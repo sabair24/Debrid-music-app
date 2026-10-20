@@ -24453,7 +24453,12 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       getimed('discogs', svc.vanDiscogs(naam, bekendeMbid: ref.isMb ? ref.id : null)),
     ]);
     final dz = uit[0], mb = uit[1], dg = uit[2];
-    final alles = vulHoezenAan(mergeDiscography([dz.releases, mb.releases, dg.releases]), dg.hoezen);
+    // MusicBrainz beslist welke platen er zijn en van welke soort, als hij de artiest kent (Saber,
+    // 20-10-2026: "gebruik dan 1 pad, MusicBrainz"); Deezer en Discogs leveren hoes, nummers en link.
+    final alles = vulHoezenAan(
+        volgensMusicBrainz(mergeDiscography([dz.releases, mb.releases, dg.releases]), mb.releases,
+            artiest: naam),
+        dg.hoezen);
     // De hoesregel alleen als er iets IS om hoezen mee aan te vullen. Zonder Discogs-token draait de
     // zoeksweep niet, en dan zou de regel elke plaat wegvegen die alleen MusicBrainz kent. Bij
     // Michael Jackson zijn dat Off The Wall, Dangerous en Invincible.

@@ -749,6 +749,114 @@ bool isRemixAlbum(List<String> titels) {
   return versies * 5 >= titels.length * 4;
 }
 
+/// Hoeveel albums MusicBrainz minstens moet kennen voor hij alleen beslist ([volgensMusicBrainz]).
+const int kMbGenoeg = 3;
+
+/// Hoe lang een plaat die alleen Deezer kent nog "nieuw" is: MusicBrainz heeft hem dan misschien nog niet.
+const Duration kNieuwVenster = Duration(days: 183);
+
+/// De discografie zoals MusicBrainz hem kent: welke platen er zijn, van welke soort, en wanneer.
+///
+/// **Waarom (Saber, 20-10-2026: "gebruik dan 1 pad, MusicBrainz, wat het beste en precies is").** Drie
+/// bronnen samenvoegen en elke fout met een eigen regel dichten bleef lekken: Deezer noemt elke
+/// verzamelaar, remix-ep en heruitgave "album" ("Alabina, l'essentiel", zeven keer "Anthologie" bij
+/// Johnny Hallyday, "Last Train To Mashville Vol.2" drie keer bij Alabama 3), en Discogs zette 37
+/// concertdownloads van Metallica bij de albums. MusicBrainz heeft per plaat één releasegroep, met een
+/// soort die mensen nakijken (album, verzamelaar, live, remix, soundtrack); edities zijn daar uitgaven
+/// bínnen de groep.
+///
+/// Dus: elke releasegroep van [mb] precies één keer, met de soort, de titel en de datum van MusicBrainz.
+/// Wat Deezer en Discogs over dezelfde plaat weten (hoes, nummers, de link om af te spelen) komt uit de
+/// samengevoegde regel in [samen] met dezelfde MusicBrainz-verwijzing. Van wat MusicBrainz niet kent,
+/// blijft alleen:
+/// - een editie van een MusicBrainz-album ("Rebel Heart (Deluxe)"), voor de nummers die er alleen op
+///   staan — hij komt onder de uitgaven ([DiscoRelease.blok], [vouwHeruitgaves]);
+/// - een plaat van de laatste [kNieuwVenster] die geen versie is van iets wat MusicBrainz al heeft:
+///   die kent MusicBrainz misschien nog niet.
+///
+/// Kent MusicBrainz de artiest niet, of minder dan [kMbGenoeg] albums (of antwoordde hij niet), dan
+/// blijft [samen] zoals hij is: dan is er geen beter pad.
+///
+/// [artiest]: Deezer zet de naam soms vóór of achter de titel ("Alabina, l'essentiel", "Les amours perdues -
+/// Serge Gainsbourg"). Een MusicBrainz-regel zonder Deezer-link krijgt die van zo'n regel ("L'Essentiel"),
+/// anders was hij niet af te spelen; de Deezer-regel staat dan niet nog eens apart.
+List<DiscoRelease> volgensMusicBrainz(List<DiscoRelease> samen, List<DiscoRelease> mb,
+    {String artiest = '', DateTime? nu}) {
+  final mbAlbums = {
+    for (final m in mb)
+      if (soortMetTitel(m.kind, m.title) == RecordKind.album) m.key,
+  };
+  if (mbAlbums.length < kMbGenoeg) return samen;
+  final mbSleutels = {for (final m in mb) m.key};
+  final perMbId = <String, DiscoRelease>{
+    for (final r in samen)
+      if (r.refs[DiscoSource.musicbrainz] case final ref?) ref.id: r,
+  };
+  // Deezer-regels die MusicBrainz niet kent, op hun sleutel zonder de artiestnaam.
+  final ak = discoKey(artiest);
+  String? zonderArtiest(String k) {
+    if (ak.isEmpty) return null;
+    final rest = k.startsWith('$ak ')
+        ? k.substring(ak.length + 1)
+        : k.endsWith(' $ak')
+            ? k.substring(0, k.length - ak.length - 1)
+            : null;
+    return rest == null || rest.trim().isEmpty ? null : rest.trim();
+  }
+  // Op hun eigen sleutel én zonder de artiestnaam; per maat, want een single hoort niet bij een album.
+  final losDeezer = <String, DiscoRelease>{};
+  String maat(RecordKind k) => _isKlein(k) ? _klein : '';
+  for (final r in samen) {
+    if (r.refs.containsKey(DiscoSource.musicbrainz) || !r.refs.containsKey(DiscoSource.deezer)) continue;
+    losDeezer.putIfAbsent(r.key + maat(r.kind), () => r);
+    if (zonderArtiest(r.key) case final k?) losDeezer.putIfAbsent(k + maat(r.kind), () => r);
+  }
+  final gekoppeld = <String>{};
+  final g = (nu ?? DateTime.now()).subtract(kNieuwVenster);
+  String twee(int n) => n.toString().padLeft(2, '0');
+  final grens = '${g.year}-${twee(g.month)}-${twee(g.day)}';
+  final gezien = <String>{};
+  final uit = <DiscoRelease>[];
+  for (final m in mb) {
+    final ref = m.refs[DiscoSource.musicbrainz];
+    if (ref == null || !gezien.add(ref.id)) continue;
+    var s = perMbId[ref.id];
+    if (s == null || !s.refs.containsKey(DiscoSource.deezer)) {
+      final km = zonderArtiest(m.key);
+      final d = losDeezer[m.key + maat(m.kind)] ?? (km == null ? null : losDeezer[km + maat(m.kind)]);
+      if (d != null && gekoppeld.add(d.key)) s = s == null ? d : s.mergedWith(d);
+    }
+    uit.add(DiscoRelease(
+      title: m.title,
+      kind: soortMetTitel(m.kind, m.title),
+      firstDate: m.firstDate ?? s?.firstDate,
+      cover: s?.cover,
+      trackCount: s?.trackCount ?? 0,
+      sources: {...m.sources, ...?s?.sources},
+      refs: {...?s?.refs, ...m.refs},
+    ));
+  }
+  return [
+    ...uit,
+    for (final r in samen)
+      if (!r.refs.containsKey(DiscoSource.musicbrainz) &&
+          !gekoppeld.contains(r.key) &&
+          _blijftNaastMb(r, mbAlbums, mbSleutels, grens))
+        r,
+  ];
+}
+
+/// Een regel die MusicBrainz niet kent: blijft hij staan? Zie [volgensMusicBrainz].
+bool _blijftNaastMb(DiscoRelease r, Set<String> mbAlbums, Set<String> mbSleutels, String grens) {
+  if (r.kind == RecordKind.album) {
+    final kaal = _editieStaart(r.title) ?? _losseUitgave(r.title);
+    if (kaal != null && mbAlbums.contains(discoKey(kaal))) return true;
+  }
+  if ((r.firstDate ?? '').compareTo(grens) < 0) return false;
+  // Nieuw, maar een versie van iets wat MusicBrainz al heeft ("Insolitudes (Johnny 73)", 2026): weg.
+  return !mbSleutels.contains(r.key) && !mbSleutels.contains(discoKey(_ontleed(r.title).kaal));
+}
+
 /// [r] met wat het nakijken van zijn nummers zei (zie `DiscographyService.nakijken`): een maxisingle
 /// ([isMaxisingle]) naar de singles, een remixalbum ([isRemixAlbum]) naar de remixen. Anders ongewijzigd.
 DiscoRelease metNagekekenSoort(DiscoRelease r, {required Set<int> singles, required Set<int> remixen}) {

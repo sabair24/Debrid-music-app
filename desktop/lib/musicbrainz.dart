@@ -1025,29 +1025,22 @@ class MusicBrainzService {
   /// Een halve lijst is beter dan geen lijst: valt een bladzijde weg, dan komt terug wat er al was —
   /// vroeger leverde één mislukt verzoek nul regels op. `_writeMiss` onthoudt een wankel "nee" maar
   /// een uur, dus de staart wordt bij het volgende bezoek gewoon opnieuw geprobeerd.
-  Future<List<MbReleaseGroup>> discographyOf(String artistMbid, {int max = 100, int dak = 500}) async {
+  ///
+  /// **Per soort bij een grote catalogus** (20-10-2026). Elvis Presley heeft er 1212 (967 albums, 46
+  /// ep's, 181 singles), en de eerste 500 in MusicBrainz' volgorde misten "Blue Hawaii", "G.I. Blues"
+  /// en "King Creole" — met MusicBrainz als enige pad (`volgensMusicBrainz`) bestonden die platen dan
+  /// niet. Zegt de eerste bladzijde meer dan [dak], dan opnieuw per soort: albums tot [albumDak], ep's
+  /// en singles tot [dak]. Een kleine catalogus blijft bij die ene browse.
+  Future<List<MbReleaseGroup>> discographyOf(String artistMbid,
+      {int max = 100, int dak = 500, int albumDak = 1500}) async {
     if (artistMbid.trim().isEmpty) return const [];
     final out = <MbReleaseGroup>[];
     final gezien = <String>{};
-    for (var offset = 0; offset < dak; offset += max) {
-      // `release-group-status=website-default`: zonder groepen die alleen uit bootlegs bestaan, zoals
-      // de website van MusicBrainz ze ook verbergt (20-10-2026, Saber bij Madonna: "klopt dit wel ??").
-      // Zonder dit stonden "Australia Sydney Broadcast 1993", "Madonna Tokyo 1987" en "Revolutionary
-      // Heart" als Album tussen de studioplaten; MusicBrainz legt "bootleg" per uitgave vast, niet per
-      // groep. GEMETEN: bij Madonna 300 groepen, met deze vlag 282. Een nieuwe URL, dus de bewaarde
-      // antwoorden van vóór deze vlag tellen niet meer: één nieuwe browse per artiest.
-      final body = await _ws('$_root/release-group?artist=${artistMbid.trim()}&fmt=json&limit=$max'
-          '&release-group-status=website-default${offset == 0 ? '' : '&offset=$offset'}');
-      if (body == null) break;
-      final list = body['release-groups'] as List<dynamic>? ?? const [];
-      for (final g in list) {
-        if (g is! Map<String, dynamic>) continue;
-        final rg = MbReleaseGroup.from(g);
-        if (gezien.add(rg.mbid)) out.add(rg);
+    final groot = await _bladerGroepen(artistMbid, '', max: max, dak: dak, out: out, gezien: gezien);
+    if (groot) {
+      for (final (soort, tot) in [('album', albumDak), ('ep', dak), ('single', dak)]) {
+        await _bladerGroepen(artistMbid, '&type=$soort', max: max, dak: tot, out: out, gezien: gezien);
       }
-      if (list.length < max) break;
-      final totaal = (body['release-group-count'] as num?)?.toInt();
-      if (totaal != null && offset + max >= totaal) break;
     }
     // Albums before singles and compilations, then newest first — the shape a discography reads in.
     out.sort((a, b) {
@@ -1056,6 +1049,39 @@ class MusicBrainzService {
       return (b.firstDate ?? '').compareTo(a.firstDate ?? '');
     });
     return out;
+  }
+
+  /// Bladert de releasegroepen van een artiest door ([soort] = "" of "&type=album") tot [dak], in [out].
+  /// Geeft terug of MusicBrainz er meer kent dan [dak].
+  Future<bool> _bladerGroepen(String artistMbid, String soort,
+      {required int max,
+      required int dak,
+      required List<MbReleaseGroup> out,
+      required Set<String> gezien}) async {
+    for (var offset = 0; offset < dak; offset += max) {
+      // `release-group-status=website-default`: zonder groepen die alleen uit bootlegs bestaan, zoals
+      // de website van MusicBrainz ze ook verbergt (20-10-2026, Saber bij Madonna: "klopt dit wel ??").
+      // Zonder dit stonden "Australia Sydney Broadcast 1993", "Madonna Tokyo 1987" en "Revolutionary
+      // Heart" als Album tussen de studioplaten; MusicBrainz legt "bootleg" per uitgave vast, niet per
+      // groep. GEMETEN: bij Madonna 300 groepen, met deze vlag 282. Een nieuwe URL, dus de bewaarde
+      // antwoorden van vóór deze vlag tellen niet meer: één nieuwe browse per artiest.
+      final body = await _ws('$_root/release-group?artist=${artistMbid.trim()}&fmt=json&limit=$max'
+          '&release-group-status=website-default$soort${offset == 0 ? '' : '&offset=$offset'}');
+      if (body == null) break;
+      final list = body['release-groups'] as List<dynamic>? ?? const [];
+      for (final g in list) {
+        if (g is! Map<String, dynamic>) continue;
+        final rg = MbReleaseGroup.from(g);
+        if (gezien.add(rg.mbid)) out.add(rg);
+      }
+      final totaal = (body['release-group-count'] as num?)?.toInt();
+      if (offset == 0 && totaal != null && totaal > dak) {
+        if (soort.isEmpty) return true;
+      }
+      if (list.length < max) break;
+      if (totaal != null && offset + max >= totaal) break;
+    }
+    return false;
   }
 
   static int _kindRank(String t) {

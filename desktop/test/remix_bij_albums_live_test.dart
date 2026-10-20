@@ -37,7 +37,9 @@ void main() {
       final dz = await svc.vanDeezer(naam);
       final mb = await svc.vanMusicBrainz(naam);
       final dg = await svc.vanDiscogs(naam);
-      final samen = mergeDiscography([dz.releases, mb.releases, dg.releases]);
+      // Zoals de artiestpagina: MusicBrainz beslist als hij de artiest kent (volgensMusicBrainz).
+      final samen = volgensMusicBrainz(mergeDiscography([dz.releases, mb.releases, dg.releases]), mb.releases,
+          artiest: naam);
       final nagekeken = await svc.nakijken(naam, samen);
       // Zoals de artiestpagina: nagekeken, zonder gasten, en gevouwen (bevriesDiscografie).
       final na = vouwHeruitgaves([
@@ -66,7 +68,19 @@ void main() {
       // ignore: avoid_print
       print('   albums: ${albums.map((r) => '${r.title} ${r.year ?? '?'}').join(' | ')}');
       // ignore: avoid_print
-      print('   uitgaven: ${na.where((r) => r.blok == RecordKind.albumVersie).map((r) => r.title).join(' | ')}');
+      if (Platform.environment['DETAIL'] == '1') {
+        for (final r in albums) {
+          // ignore: avoid_print
+          print('   ALBUM ${r.year ?? '?'} | ${r.title} | ${r.sources.map((x) => x.name).join('+')} | '
+              'dz=${r.refs[DiscoSource.deezer]?.id ?? '-'} | ${r.trackCount} nrs');
+        }
+        for (final b in [RecordKind.compilation, RecordKind.live, RecordKind.albumVersie]) {
+          // ignore: avoid_print
+          print('   ${b.name.toUpperCase()}: ${na.where((r) => r.blok == b).map((r) => r.title).join(' | ')}');
+        }
+      }
+      // ignore: avoid_print
+      print('   uitgaven:${na.where((r) => r.blok == RecordKind.albumVersie).map((r) => r.title).join(' | ')}');
     }
-  }, timeout: const Timeout(Duration(minutes: 25)));
+  }, timeout: const Timeout(Duration(minutes: 60)));
 }

@@ -99,7 +99,9 @@ class DiscographyService {
   /// v10: remixuitgaven op hun titel ([soortMetTitel]) en Deezers maxisingles ([isMaxisingle]) naar de
   /// remixen, en Deezer doorgebladerd tot voorbij honderd uitgaven. Bij Madonna stonden er zestien
   /// remixuitgaven tussen de albums.
-  static const schema = 'disco|v10';
+  /// v11: MusicBrainz beslist welke platen er zijn en van welke soort ([volgensMusicBrainz]); een
+  /// bewaarde lijst draagt nog Deezers verzamelaars en Discogs' concertdownloads tussen de albums.
+  static const schema = 'disco|v11';
 
   /// Hoe lang een bewaard antwoord meegaat voor er bij Deezer opnieuw wordt gekeken.
   ///
