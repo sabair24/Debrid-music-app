@@ -1302,6 +1302,10 @@ class DiscogsService {
         // verzoek per regel op een baan van zestig per minuut.
         final eigen = (r['format'] as String? ?? '').trim();
         final formaat = eigen.isNotEmpty ? eigen : (master ? (sweep.formaatPerMaster[rid] ?? '') : '');
+        // Een bootleg is geen plaat van de artiest (Saber, 20-10-2026: "klopt dit wel ??" bij Madonna's
+        // albums). Discogs zet het in het formaat ("CD, Album, Unofficial Release"); de kiezer van
+        // persingen gebruikt dezelfde vlag al ([noemtOnofficieel]).
+        if (noemtOnofficieel(formaat)) continue;
         // Aan wie de plaat gecrediteerd is, en dat veld werd weggegooid. Discogs schrijft bij een
         // verzamelplaat "Various …" — voor "Brimstone & Treacle (Original Soundtrack Album)" staat
         // er letterlijk `Various Featuring The Police, Sting, Go.Go's* & Squeeze (2)`. Dat is geen
@@ -1341,6 +1345,7 @@ class DiscogsService {
         if (gezienMasters.contains(e.key)) continue;
         final m = e.value;
         if (!doorDezeArtiest(m.artiest, naam)) continue;
+        if (noemtOnofficieel(sweep.formaatPerMaster[e.key])) continue;
         final hoes = sweep.hoesPerMaster[e.key] ?? '';
         uit.add(DiscoRelease(
           title: m.titel,

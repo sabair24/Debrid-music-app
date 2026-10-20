@@ -530,9 +530,22 @@ RecordKind _minKind(RecordKind a, RecordKind b) => kindRank(a) <= kindRank(b) ? 
 List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
   final samen = <String, DiscoRelease>{};
   for (final lijst in bronnen) {
-    for (final r in lijst) {
-      final k = r.key;
+    for (final r0 in lijst) {
+      final k = r0.key;
       if (k.isEmpty) continue;
+      // Wat de titel zegt, vóór het samenvoegen: zie [soortMetTitel].
+      final soort = soortMetTitel(r0.kind, r0.title);
+      final r = soort == r0.kind
+          ? r0
+          : DiscoRelease(
+              title: r0.title,
+              kind: soort,
+              firstDate: r0.firstDate,
+              cover: r0.cover,
+              trackCount: r0.trackCount,
+              sources: r0.sources,
+              refs: r0.refs,
+            );
       final g = _isKlein(r.kind) ? '$k$_klein' : k;
       final bestaand = samen[g];
       samen[g] = bestaand == null ? r : bestaand.mergedWith(r);
@@ -551,6 +564,19 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
     if (groot.kind == RecordKind.other || _alleenDeezerZegtKlein(klein, groot)) {
       samen[k] = groot.mergedWith(klein);
       samen.remove(g);
+    } else if (_alleenDeezerZegtGroot(klein, groot)) {
+      // Omgekeerd: alleen Deezer zegt "album", MusicBrainz zegt EP of single. Dan MusicBrainz' soort.
+      final m = klein.mergedWith(groot);
+      samen[g] = DiscoRelease(
+        title: m.title,
+        kind: klein.kind,
+        firstDate: m.firstDate,
+        cover: m.cover,
+        trackCount: m.trackCount,
+        sources: m.sources,
+        refs: m.refs,
+      );
+      samen.remove(k);
     }
   }
   // TWEEDE RONDE: een aanduiding die zegt WAT de plaat is, niet welke uitgave.
@@ -562,6 +588,11 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
   // tegen 1980). Alleen samen als de kale titel er ÓÓK staat, en van het passende soort: een
   // live-aanduiding alleen bij een liveplaat, want "Plaat (Live)" naast de studioplaat "Plaat" zijn
   // twee platen. In vaste volgorde, zodat de uitkomst niet van de aanvoer afhangt.
+  //
+  // Zonder kaal album: twee regels met dezelfde aanduiding en dezelfde kale titel zijn één plaat.
+  // Madonna (20-10-2026): Deezer "Who's That Girl Soundtrack", MusicBrainz "Who’s That Girl: Original
+  // Motion Picture Soundtrack" — twee keer tussen de albums, en "Who's That Girl" zelf is een single.
+  final zonderKaal = <String, String>{};
   for (final k in samen.keys.toList()..sort()) {
     // Een single met een aanduiding hoort evenmin bij een album als een single zonder.
     if (k.endsWith(_klein)) continue;
@@ -572,7 +603,18 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
     final kk = discoKey(a.kaal);
     if (kk == k) continue;
     final basis = samen[kk];
-    if (basis == null) continue;
+    if (basis == null) {
+      final groep = '$kk|${a.live}';
+      final eerste = zonderKaal[groep];
+      final e = eerste == null ? null : samen[eerste];
+      if (e == null || e.kind != r.kind) {
+        zonderKaal.putIfAbsent(groep, () => k);
+        continue;
+      }
+      samen[eerste!] = e.mergedWith(r);
+      samen.remove(k);
+      continue;
+    }
     if (basis.kind != (a.live ? RecordKind.live : RecordKind.album)) continue;
     final m = basis.mergedWith(r);
     samen[kk] = DiscoRelease(
@@ -587,6 +629,146 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
     samen.remove(k);
   }
   return samen.values.toList();
+}
+
+/// Een titel die zegt dat de plaat remixen zijn: "Hollywood (Remixes)", "American Life (The Remixes)",
+/// "Remixed & Revisited", "You Can Dance (Single Edits of Album Remixes)", "X-Ray Mixes", "Music Mix 2001".
+final _remixTitel = RegExp(r'\bremix(es|ed)?\b|\bremixen\b|\bmix(es)?\b', caseSensitive: false);
+
+/// Het soort, met wat de titel erover zegt.
+///
+/// **Waarom (Saber, 20-10-2026: "dit staat ook vaak tussen albums ?? remixen enzo").** Deezer noemt bij
+/// Madonna veertien remixuitgaven "album" — "Hollywood (Remixes)", "Celebration (Remixes)", "Hung Up
+/// (Remixes)", "American Life (The Remixes)" — en wat alleen Deezer kent, stond daardoor tussen de
+/// studioalbums. Een album, ep of regel zonder mening met "remix" in de titel is een remixuitgave. Een
+/// SINGLE niet: een remixsingle hoort bij de singles, en zo valt hij ook niet los van de single die
+/// MusicBrainz onder dezelfde naam kent ([mergeDiscography] houdt single en groot werk apart).
+///
+/// En om dezelfde reden live en verzamelaars: Kylie's "Live In New York" en "Kylie Hits", Michael
+/// Jacksons "Greatest Hits Live" en "Anthology: The Best Of Michael Jackson" stonden tussen de
+/// studioalbums omdat alleen Deezer ze kende, en Deezer kent geen live en noemt een verzamelaar soms
+/// "album". Alleen voor een album of een regel zonder mening: een single blijft een single.
+RecordKind soortMetTitel(RecordKind kind, String titel) {
+  final groot = kind == RecordKind.album || kind == RecordKind.other;
+  if ((groot || kind == RecordKind.ep) && _remixTitel.hasMatch(titel)) return RecordKind.remix;
+  if (!groot) return kind;
+  final t = titel.trim();
+  if (_liveTitel.hasMatch(t)) return RecordKind.live;
+  if (_verzamelTitel.hasMatch(t)) return RecordKind.compilation;
+  return kind;
+}
+
+/// "Live In New York", "Live At Wembley", "Live 2010 (…)", "Greatest Hits Live", "Plaat (Live)",
+/// "Live - London Festival EP". Niet "Live Your Life" of "Live to Tell": live moet aan een plek, een
+/// jaartal, het eind van de titel of een staart hangen.
+///
+/// Ook Frans, want Céline Dion: "Le spectacle Live à Montréal", "Une Seule Fois / Live 2013".
+final _liveTitel = RegExp(
+    r'\blive (in|at|from|on)\b|\blive (à|au|aux)\s|\blive \d{4}\b|^live\s*[-–(:]|\blive$|\(live\b[^)]*\)',
+    caseSensitive: false);
+
+/// "Greatest Hits", "The Best Of …", "Kylie Hits", "The Collection", "Anthology", "The Essential …",
+/// "50 Number Ones", "Number 1's". Op hele woorden: "Golden" is een studioalbum van Kylie.
+final _verzamelTitel = RegExp(
+    r"\b(greatest hits|best of|hits|the collection|collection|anthology|the essential|essentials|number ones|#1'?s|number 1'?s)\b",
+    caseSensitive: false);
+
+/// Wat een versie van een nummer verraadt: "(Shep's Deep Makeover Mix)", "(Album Edit)", "(David's Love
+/// Dub)", "(Shep's Classic 12")", "(Shep's Deepstrumental)", "(Backing Track)". Niet "Remaster": dat is
+/// dezelfde opname.
+final _versieWoord = RegExp(
+    r'\b(mix|remix|dub|edit|version|versie|instrumental|acapella|a cappella|club|radio|extended|deepstrumental|'
+    r'backing track|karaoke)\b|\d+"|\d+ inch',
+    caseSensitive: false);
+
+/// Eén staart achteraan de titel: "(…)", "[…]" of " - …".
+final _titelStaart = RegExp(r'\s*[(\[]([^()\[\]]*)[)\]]\s*$|\s+-\s+([^-]+)$');
+
+/// De titel zonder al zijn staarten, en wat er in die staarten stond. "Holiday (7" Version) (2022
+/// Remaster)" → ("Holiday", ["2022 Remaster", "7" Version"]).
+({String kaal, List<String> staarten}) _ontleed(String titel) {
+  var t = titel;
+  final staarten = <String>[];
+  for (var i = 0; i < 4; i++) {
+    final m = _titelStaart.firstMatch(t);
+    if (m == null || m.start == 0) break;
+    staarten.add(m.group(1) ?? m.group(2) ?? '');
+    t = t.substring(0, m.start);
+  }
+  return (kaal: t, staarten: staarten);
+}
+
+/// Heeft deze titel een staart die een versie aanduidt?
+bool _isVersie(String titel) => _ontleed(titel).staarten.any(_versieWoord.hasMatch);
+
+/// Is dit een maxisingle die Deezer "album" noemt: het titelnummer in meerdere versies, met hooguit
+/// een paar B-kanten? Dan hoort hij bij de singles.
+///
+/// Gemeten (20-10-2026). Madonna, 2022: "Deeper and Deeper" is twaalf keer "Deeper and Deeper (… Mix)",
+/// "(… Dub)", "(Album Edit)"; "Rain" is drie keer "Rain (… Edit)" met "Waiting (Remix)", "Up Down Suite"
+/// en "Fever (Edit Two)". Kylie, 2009: "Hand on Your Heart" is zes keer "Hand on Your Heart" ZONDER
+/// versienaam en twee keer "Just Wanna Love You" — dus een titel die meer dan eens voorkomt telt ook
+/// als versie. Geen titel die "remix" zegt, en de singles van toen heten bij MusicBrainz anders
+/// ("Deeper and Deeper EP"), dus alleen de nummers verraden het.
+///
+/// De regel: het titelnummer staat er minstens twee keer op, minstens drie vijfde van de nummers is
+/// een versie, en het zijn er hooguit vijftien — een deluxe-album met remixen erachter blijft zo een
+/// album, en een album met een "Reprise" van het titelnummer ook.
+bool isMaxisingle(String albumTitel, List<String> titels) {
+  if (titels.length < 2 || titels.length > 15) return false;
+  final titel = _zelfdeNummer(albumTitel);
+  if (titel.isEmpty) return false;
+  final kalen = [for (final t in titels) _zelfdeNummer(t)];
+  final hoeVaak = <String, int>{};
+  for (final k in kalen) {
+    hoeVaak[k] = (hoeVaak[k] ?? 0) + 1;
+  }
+  final vanTitel = kalen.where((k) => k == titel).length;
+  var versies = 0;
+  for (var i = 0; i < titels.length; i++) {
+    if (_isVersie(titels[i]) || (hoeVaak[kalen[i]] ?? 0) >= 2) versies++;
+  }
+  return vanTitel >= 2 && versies * 5 >= titels.length * 3;
+}
+
+/// Een titel om nummers op te vergelijken: zonder staart, zonder lidwoord vooraan en zonder spaties.
+/// Kylie, "The Loco-Motion (Australian Version)" (2009): de nummers heten daar "Locomotion" en
+/// "Locomotion (Chugga-Motion Mix)" — zonder lidwoord en zonder streepje.
+String _zelfdeNummer(String titel) =>
+    normKey(_ontleed(titel).kaal).replaceFirst(_lidwoordVooraan, '').replaceAll(' ', '');
+final _lidwoordVooraan = RegExp(r'^(the|a|an|de|het|le|la|les) ');
+
+/// Is dit een remixalbum dat Deezer "album" noemt: veel nummers, bijna allemaal een versie?
+///
+/// Madonna, "Finally Enough Love: 50 Number Ones" (2022): vijftig keer "… (7" Version)", "(You Can Dance
+/// Remix Edit)", "(Video Version)". Minstens acht nummers en minstens vier vijfde een versie — een
+/// deluxe-uitgave met een tweede schijf remixen haalt dat niet.
+bool isRemixAlbum(List<String> titels) {
+  if (titels.length < 8) return false;
+  final versies = titels.where(_isVersie).length;
+  return versies * 5 >= titels.length * 4;
+}
+
+/// [r] met wat het nakijken van zijn nummers zei (zie `DiscographyService.nakijken`): een maxisingle
+/// ([isMaxisingle]) naar de singles, een remixalbum ([isRemixAlbum]) naar de remixen. Anders ongewijzigd.
+DiscoRelease metNagekekenSoort(DiscoRelease r, {required Set<int> singles, required Set<int> remixen}) {
+  final id = r.refs[DiscoSource.deezer]?.intId;
+  if (id == null) return r;
+  final soort = singles.contains(id)
+      ? RecordKind.single
+      : remixen.contains(id)
+          ? RecordKind.remix
+          : r.kind;
+  if (soort == r.kind) return r;
+  return DiscoRelease(
+    title: r.title,
+    kind: soort,
+    firstDate: r.firstDate,
+    cover: r.cover,
+    trackCount: r.trackCount,
+    sources: r.sources,
+    refs: r.refs,
+  );
 }
 
 /// Achter de sleutel van een single of EP in [mergeDiscography]: zo staan ze los van een album met
@@ -607,6 +789,19 @@ bool _alleenDeezerZegtKlein(DiscoRelease klein, DiscoRelease groot) =>
     klein.sources.contains(DiscoSource.deezer) &&
     !groot.sources.contains(DiscoSource.deezer);
 
+/// Het omgekeerde: alleen Deezer noemt het een album, en MusicBrainz kent een EP of single met die naam.
+///
+/// Madonna's "Bedtime Stories – The Untold Chapter" (2025): Deezer "album", MusicBrainz EP. Dan geldt
+/// MusicBrainz, waar mensen het soort per releasegroep vastleggen; Deezer krijgt het etiket van de
+/// platenmaatschappij, en die noemt bij Madonna veertien remix-ep's een album (20-10-2026). Alleen met
+/// MusicBrainz als getuige: een single die alleen Discogs kent zegt niet genoeg over een album dat
+/// MusicBrainz niet kent.
+bool _alleenDeezerZegtGroot(DiscoRelease klein, DiscoRelease groot) =>
+    groot.sources.length == 1 &&
+    groot.sources.contains(DiscoSource.deezer) &&
+    groot.kind == RecordKind.album &&
+    klein.sources.contains(DiscoSource.musicbrainz);
+
 /// De titel zonder een aanduiding van wat de plaat IS — soundtrack, live, of een tweede naam als
 /// "(N°3)" — of null. Geen uitgave-staart: die maakt een ander product, zie [heeftEditieStaart].
 ({String kaal, bool live})? _aanduiding(String title) {
@@ -617,16 +812,27 @@ bool _alleenDeezerZegtKlein(DiscoRelease klein, DiscoRelease groot) =>
     return kaal.isEmpty ? null : (kaal: kaal, live: false);
   }
   final m = _staart.firstMatch(t);
-  if (m == null) return null;
-  final kaal = t.substring(0, m.start).trim();
-  if (kaal.isEmpty) return null;
-  final binnen = normKey(m.group(0)!);
-  if (_soundtrackAanduiding.hasMatch(binnen) || _tweedeNaam.hasMatch(binnen)) {
-    return (kaal: kaal, live: false);
+  if (m != null) {
+    final kaal = t.substring(0, m.start).trim();
+    final binnen = normKey(m.group(0)!);
+    if (kaal.isNotEmpty) {
+      if (_soundtrackAanduiding.hasMatch(binnen) || _tweedeNaam.hasMatch(binnen)) {
+        return (kaal: kaal, live: false);
+      }
+      if (_liveAanduiding.hasMatch(binnen)) return (kaal: kaal, live: true);
+    }
   }
-  if (_liveAanduiding.hasMatch(binnen)) return (kaal: kaal, live: true);
+  // Of als laatste woorden, zonder haakjes: "Who's That Girl Soundtrack" (Deezer) en "Who’s That Girl:
+  // Original Motion Picture Soundtrack" (MusicBrainz; de dubbele punt valt weg in de sleutel).
+  final los = _losseSoundtrack.firstMatch(t);
+  if (los != null) {
+    final kaal = t.substring(0, los.start).trim();
+    if (kaal.isNotEmpty) return (kaal: kaal, live: false);
+  }
   return null;
 }
+
+final _losseSoundtrack = RegExp(r'\s+(original\s+)?(motion\s+picture\s+)?soundtrack$', caseSensitive: false);
 
 /// "Bande originale du film", "… de la série TV", "… de la comédie musicale", "… du film de Claude
 /// Berri" — Discogs en Deezer zetten er van alles achter; het blijft dezelfde soundtrack.
@@ -673,6 +879,34 @@ List<DiscoRelease> vulHoezenAan(List<DiscoRelease> rijen, Map<String, String> ho
   ];
 }
 
+/// De kale titel van een uitgave waarvan de staart een STERK uitgavewoord draagt, ook als er woorden
+/// naast staan die [_uitgaveWoorden] niet kent; anders null.
+///
+/// Gemeten bij Madonna en Kylie (20-10-2026), allemaal tussen de studioalbums naast hun eigen album:
+/// "Erotica (PA Version)", "Hard Candy (iTunes Deluxe Pre-Order)", "Confessions On A Dance Floor (Twenty
+/// Years Edition)", "Kylie Christmas (Snow Queen Edition)", en na een dubbele punt "DISCO: Guest List
+/// Edition" en "CONFESSIONS II: Afterhours Edition". Die woorden ("pa", "itunes", "snow queen") kan
+/// geen lijst bijhouden; het uitgavewoord ernaast zegt genoeg — maar alleen samen met grendel 1 van
+/// [vouwHeruitgaves]: het kale album staat er ook. "Tension II" heeft geen staart en blijft een album.
+String? _losseUitgave(String title) {
+  final t = title.trim();
+  final m = _staart.firstMatch(t) ?? _dubbelpuntStaart.firstMatch(t) ?? _streepStaart.firstMatch(t);
+  if (m == null) return null;
+  final kaal = t.substring(0, m.start).trim();
+  if (kaal.isEmpty) return null;
+  return normKey(m.group(0)!).split(' ').any(_sterkeUitgaveWoorden.contains) ? kaal : null;
+}
+
+/// Een staart na een dubbele punt: "DISCO: Guest List Edition".
+final _dubbelpuntStaart = RegExp(r'\s*:\s+[^:()\[\]{}]+$');
+
+/// Woorden die op zichzelf al zeggen dat dit een uitgave is, geen andere plaat. Niet "the", "of",
+/// "cd" of een jaartal uit [_uitgaveWoorden]: die zeggen pas iets als ELK woord van de staart meedoet.
+const _sterkeUitgaveWoorden = {
+  'deluxe', 'edition', 'editie', 'expanded', 'remaster', 'remastered', 'reissue', 'anniversary',
+  'version', 'versie', 'jubileum', 'collector', 'remasterise', 'remasterisee',
+};
+
 /// Heruitgaves ZONDER haakjes bij hun eigen album vandaan: "Bad 25", "Thriller 40".
 ///
 /// [heeftEditieStaart] ziet alleen een staart tussen haakjes, en Deezer en Discogs zetten die er vaak
@@ -694,6 +928,9 @@ List<DiscoRelease> vulHoezenAan(List<DiscoRelease> rijen, Map<String, String> ho
 /// Staat er een echt uitgavewoord in de staart ("25th Anniversary", "Super Deluxe"), dan is dát al de
 /// uitspraak en hoeft grendel 2 niet.
 ///
+/// En een staart MET haakjes of na een dubbele punt die een sterk uitgavewoord draagt naast woorden die
+/// [_uitgaveWoorden] niet kent — zie [_losseUitgave]. Ook die alleen onder grendel 1.
+///
 /// Verandert alleen [DiscoRelease.kind]; gooit nooit een regel weg. Onafhankelijk van de
 /// aanvoervolgorde en idempotent — de pagina roept dit bij elke hertekening aan.
 List<DiscoRelease> vouwHeruitgaves(List<DiscoRelease> rijen) {
@@ -706,6 +943,8 @@ List<DiscoRelease> vouwHeruitgaves(List<DiscoRelease> rijen) {
 
   bool isHeruitgave(DiscoRelease r) {
     if (r.kind != RecordKind.album || heeftEditieStaart(r.title)) return false;
+    final los = _losseUitgave(r.title);
+    if (los != null && discoKey(los) != r.key && basis.containsKey(discoKey(los))) return true;
     final w = r.key.split(' ').where((x) => x.isNotEmpty).toList();
     for (var n = 1; n <= 4 && n < w.length; n++) {
       final staart = w.sublist(w.length - n);

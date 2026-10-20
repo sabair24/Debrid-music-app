@@ -8,7 +8,10 @@
 /// knop die een blad opent.
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import 'luidheid.dart';
 import 'organize.dart' show artistKey, splitFeatured;
@@ -240,29 +243,150 @@ class NuSpeeltNaamrij extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final inDeRij = merkInDeRij && merk != null;
+    // Met het merk in de rij: zie [_MerkRij]. Een vast merk liep op de tv (540 punt, tekst 1,35×) 126
+    // punt over de rand; twee `Flexible`s (3 : 2) knipten het af naast een naam die zijn deel niet
+    // gebruikte.
+    if (merkInDeRij && merk != null) {
+      return _MerkRij(
+        links: zij,
+        naam: naam ?? const SizedBox.shrink(),
+        echtheid: echtheid ?? const SizedBox.shrink(),
+        kwaliteit: kwaliteit ?? const SizedBox.shrink(),
+        merk: merk!,
+      );
+    }
     final rij = Row(
       mainAxisAlignment: zij ? MainAxisAlignment.start : MainAxisAlignment.center,
       children: [
-        // Met het merk in de rij krimpen de namen én het merk allebei (3 : 2), met puntjes; een vast
-        // merk liep op de tv (540 punt, tekst 1,35×) 126 punt over de rand.
-        if (naam != null) Flexible(flex: inDeRij ? 3 : 1, child: naam!),
+        if (naam != null) Flexible(child: naam!),
         if (echtheid != null) echtheid!,
         if (kwaliteit != null) kwaliteit!,
-        if (inDeRij)
-          Flexible(
-            flex: 2,
-            child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 220), child: merk!),
-          ),
       ],
     );
-    if (merk == null || merkInDeRij) return rij;
+    if (merk == null) return rij;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: zij ? CrossAxisAlignment.start : CrossAxisAlignment.center,
       children: [rij, const SizedBox(height: 2), merk!],
     );
   }
+}
+
+/// Hoeveel van de breedte naast echtheid en kwaliteit het merk hoogstens krijgt; de namen houden de rest.
+/// Op de tv (520 punt, tekst 1,35×, badge ~125) is dat 236 punt: genoeg voor de langste tvtekst, "Gelijk
+/// · niet op deze speaker" (224), en de namen houden er minstens 158.
+const double kMerkDeel = 0.6;
+
+/// De naamrij met het merk erin: echtheid en kwaliteit op hun eigen maat, dan het merk op de zijne (tot
+/// [kMerkDeel] van wat er over is), en de namen krijgen de rest.
+///
+/// **Waarom geen `Row`.** Daar stonden naam en merk als twee `Flexible`s (3 : 2), en wat een
+/// `Flexible` niet gebruikt, gaat niet naar zijn buurman: het merk kreeg zijn vaste deel, ook naast een
+/// naam die het zijne liet liggen. Op de Shield stond er zo "Gelijk · zacht opg…" (19-10-2026). Met het
+/// merk eerst krijgen de namen juist méér als het merk kort is ("Gelijk −3,4 dB"), en vouwen drie namen
+/// later om — op de tv is elke regel hoogte er een te veel.
+class _MerkRij extends MultiChildRenderObjectWidget {
+  _MerkRij({
+    required Widget naam,
+    required Widget echtheid,
+    required Widget kwaliteit,
+    required Widget merk,
+    required this.links,
+  }) : super(children: [naam, echtheid, kwaliteit, merk]);
+
+  final bool links;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderMerkRij(links);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderMerkRij renderObject) => renderObject.links = links;
+}
+
+class _MerkRijData extends ContainerBoxParentData<RenderBox> {}
+
+class _RenderMerkRij extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _MerkRijData>,
+        RenderBoxContainerDefaultsMixin<RenderBox, _MerkRijData> {
+  _RenderMerkRij(this._links);
+
+  bool _links;
+  set links(bool waarde) {
+    if (waarde == _links) return;
+    _links = waarde;
+    markNeedsLayout();
+  }
+
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _MerkRijData) child.parentData = _MerkRijData();
+  }
+
+  /// naam, echtheid, kwaliteit, merk — de volgorde van [_MerkRij].
+  List<RenderBox> get _kinderen => getChildrenAsList();
+
+  /// De maten van de vier kinderen, in de volgorde van [_kinderen]. [meet] legt uit of meet droog.
+  List<Size> _maten(BoxConstraints c, Size Function(RenderBox kind, BoxConstraints kc) meet) {
+    final k = _kinderen;
+    final maten = List<Size>.filled(k.length, Size.zero);
+    var vrij = c.maxWidth;
+    double leg(int i, double tot) =>
+        (maten[i] = meet(k[i], BoxConstraints(maxWidth: math.max(0, tot), maxHeight: c.maxHeight))).width;
+    vrij -= leg(1, vrij);
+    vrij -= leg(2, vrij);
+    final merk = leg(3, vrij * kMerkDeel);
+    leg(0, vrij - merk);
+    return maten;
+  }
+
+  Size _totaal(BoxConstraints c, List<Size> maten) {
+    final breed = maten.fold<double>(0, (s, m) => s + m.width);
+    final hoog = maten.fold<double>(0, (h, m) => math.max(h, m.height));
+    return c.constrain(Size(c.hasBoundedWidth ? c.maxWidth : breed, hoog));
+  }
+
+  @override
+  Size computeDryLayout(covariant BoxConstraints constraints) =>
+      _totaal(constraints, _maten(constraints, (k, kc) => k.getDryLayout(kc)));
+
+  @override
+  void performLayout() {
+    final maten = _maten(constraints, (k, kc) {
+      k.layout(kc, parentUsesSize: true);
+      return k.size;
+    });
+    size = _totaal(constraints, maten);
+    final breed = maten.fold<double>(0, (s, m) => s + m.width);
+    var x = _links ? 0.0 : math.max(0.0, (size.width - breed) / 2);
+    for (final k in _kinderen) {
+      (k.parentData! as _MerkRijData).offset = Offset(x, (size.height - k.size.height) / 2);
+      x += k.size.width;
+    }
+  }
+
+  @override
+  double computeMinIntrinsicWidth(double height) =>
+      _kinderen.skip(1).take(2).fold(0.0, (s, k) => s + k.getMinIntrinsicWidth(height));
+
+  @override
+  double computeMaxIntrinsicWidth(double height) =>
+      _kinderen.fold(0.0, (s, k) => s + k.getMaxIntrinsicWidth(height));
+
+  @override
+  double computeMinIntrinsicHeight(double width) =>
+      _kinderen.fold(0.0, (h, k) => math.max(h, k.getMinIntrinsicHeight(double.infinity)));
+
+  @override
+  double computeMaxIntrinsicHeight(double width) =>
+      _kinderen.fold(0.0, (h, k) => math.max(h, k.getMaxIntrinsicHeight(double.infinity)));
+
+  @override
+  void paint(PaintingContext context, Offset offset) => defaultPaint(context, offset);
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      defaultHitTestChildren(result, position: position);
 }
 
 /// De drie keuzes en de albumschakelaar, voor de instelling en het blad. Bewaart meteen.

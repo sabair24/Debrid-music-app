@@ -62,10 +62,14 @@ void main() {
       expect('_vast = bevriesDiscografie('.allMatches(main).length, 2, reason: 'bewaard, of de eerste keer');
     });
 
+    // Sinds 20-10-2026 samen met de maxisingles en remixalbums (`nakijken`): ook die alleen naar schijf.
     test('gastoptredens gaan naar schijf en niet op het scherm', () {
       final main = bron('lib/main.dart');
-      expect(main, isNot(contains('setState(() => _gasten = gasten);')));
-      expect(main, contains('    _gasten = gasten;\n    _bewaar(svc, naam);'));
+      expect(main, isNot(contains('setState(() => _gasten')));
+      expect(main, isNot(contains('setState(() => _maxisingles')));
+      expect(main,
+          contains('    _gasten = nagekeken.gasten;\n    _maxisingles = nagekeken.maxisingles;\n'
+              '    _remixAlbums = nagekeken.remixAlbums;\n    _bewaar(svc, naam);'));
     });
 
     test('een halve lijst wordt niet bewaard, en bewaren gaat achter elkaar', () {

@@ -438,23 +438,47 @@ class CatalogService {
   ///
   /// Deezer is hier de goedkope kant: gemeten 86 verzoeken in 12,7 s. Een lege uitkomst betekent
   /// "niet te achterhalen", nooit "van iemand anders" — bij twijfel blijft een regel staan.
-  Future<Map<int, String>> albumArtists(Iterable<int> albumIds) async {
-    final uit = <int, String>{};
+  Future<Map<int, String>> albumArtists(Iterable<int> albumIds) async => {
+        for (final e in (await albumKenmerken(albumIds)).entries)
+          if (e.value.artiest.isNotEmpty) e.key: e.value.artiest,
+      };
+
+  /// Per Deezer-album de hoofdartiest en de titels van de nummers. `/album/{id}` draagt ze allebei,
+  /// dus het blijft één verzoek per album: de discografie kijkt er gastoptredens én maxisingles mee na
+  /// (zie `DiscographyService.nakijken`). Een album dat niet antwoordt ontbreekt in het antwoord.
+  Future<Map<int, ({String artiest, List<String> titels})>> albumKenmerken(Iterable<int> albumIds) async {
+    final uit = <int, ({String artiest, List<String> titels})>{};
     for (final id in albumIds) {
       if (id <= 0) continue;
       try {
         final j = await _get('$_base/album/$id');
-        final naam = ((j?['artist']?['name']) as String? ?? '').trim();
-        if (naam.isNotEmpty) uit[id] = naam;
+        if (j == null) continue;
+        uit[id] = (
+          artiest: ((j['artist']?['name']) as String? ?? '').trim(),
+          titels: [
+            for (final t in ((j['tracks']?['data']) as List?) ?? const [])
+              if (t is Map && t['title'] is String) t['title'] as String,
+          ],
+        );
       } catch (_) {/* een album dat niet antwoordt telt als onbekend, niet als vreemd */}
     }
     return uit;
   }
 
+  /// Alle uitgaven van een artiest, ontdubbeld ([ontdubbelArtiestAlbums]).
+  ///
+  /// **Doorbladeren** (20-10-2026). Deezer geeft er hoogstens honderd per keer, en Madonna heeft er 147:
+  /// de laatste 47 vielen weg. Nu tot vijfhonderd, per honderd, tot `total` bereikt is.
   Future<List<CatalogAlbum>> artistAlbums(int artistId) async {
-    final j = await _get('$_base/artist/$artistId/albums?limit=100');
-    final data = (j?['data'] as List?) ?? const [];
-    return ontdubbelArtiestAlbums(data.map(_album).toList());
+    final alles = <CatalogAlbum>[];
+    for (var index = 0; index < 500; index += 100) {
+      final j = await _get('$_base/artist/$artistId/albums?limit=100&index=$index');
+      final data = (j?['data'] as List?) ?? const [];
+      alles.addAll(data.map(_album));
+      final totaal = (j?['total'] as num?)?.toInt() ?? 0;
+      if (data.length < 100 || alles.length >= totaal) break;
+    }
+    return ontdubbelArtiestAlbums(alles);
   }
 
   /// Deezer noemt veel heruitgaven van dezelfde plaat; per titel blijft de nieuwste, nieuwste eerst.

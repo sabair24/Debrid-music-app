@@ -88,6 +88,27 @@ void main() {
       expect(uit, hasLength(3), reason: '"Thriller (Live)" naast de studioplaat "Thriller" zijn twee platen');
     });
 
+    test('DE KERN: twee keer dezelfde soundtrack zonder kaal album wordt één regel', () {
+      // Madonna, 20-10-2026: twee keer tussen de albums; "Who's That Girl" zelf is een single.
+      final uit = mergeDiscography([
+        [_dz("Who's That Girl Soundtrack", '1987-07-21'), _dz("Who's That Girl", '1987', k: RecordKind.single, id: 2)],
+        [_mb('Who’s That Girl: Original Motion Picture Soundtrack', '1987-07-21'),
+         _mb('Who’s That Girl', '1987-06-30', k: RecordKind.single)],
+      ]);
+      expect(uit.where((r) => r.kind == RecordKind.album).map((r) => r.title),
+          ['Who’s That Girl: Original Motion Picture Soundtrack']);
+      expect(uit.where((r) => r.kind == RecordKind.single), hasLength(1), reason: 'de single blijft de single');
+      expect(uit.firstWhere((r) => r.kind == RecordKind.album).refs[DiscoSource.deezer]?.intId, 1,
+          reason: 'openen gaat via Deezer, met zijn tracklijst');
+    });
+
+    test('DE GRENS: een live- en een soundtrackregel met dezelfde kale titel blijven twee', () {
+      final uit = mergeDiscography([
+        [_dz('Evita (Live)', '1998', k: RecordKind.live), _dz('Evita: Original Motion Picture Soundtrack', '1996', id: 2)],
+      ]);
+      expect(uit, hasLength(2));
+    });
+
     test('DE GRENS: zonder de kale titel blijft hij staan zoals hij is', () {
       final uit = mergeDiscography([
         [_dz('Madame Claude (Bande originale du film)', '2021-02-19')]

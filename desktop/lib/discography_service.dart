@@ -96,7 +96,10 @@ class DiscographyService {
   /// Serge Gainsbourg *Aux armes et cætera* op 2003 en *Love on the Beat* op 2015.
   /// v9: een single of EP en een album met dezelfde titel zijn twee regels (zie [mergeDiscography]).
   /// Een bewaarde lijst draagt nog het album "Taking Chances" met de hoes en de link van de single.
-  static const schema = 'disco|v9';
+  /// v10: remixuitgaven op hun titel ([soortMetTitel]) en Deezers maxisingles ([isMaxisingle]) naar de
+  /// remixen, en Deezer doorgebladerd tot voorbij honderd uitgaven. Bij Madonna stonden er zestien
+  /// remixuitgaven tussen de albums.
+  static const schema = 'disco|v10';
 
   /// Hoe lang een bewaard antwoord meegaat voor er bij Deezer opnieuw wordt gekeken.
   ///
@@ -281,21 +284,44 @@ class DiscographyService {
   /// bronnen óók kent gaat er niet langs, want dat is al gedekt; voor Enrique scheelt dat 39 verzoeken.
   ///
   /// Bij twijfel blijft een regel staan. Een plaat die ten onrechte verdwijnt merk je niet.
-  Future<Set<String>> gastoptredens(String naam, List<DiscoRelease> rijen) async {
-    final teVragen = <int, String>{}; // deezer album-id -> discoKey
+  Future<Set<String>> gastoptredens(String naam, List<DiscoRelease> rijen) async =>
+      (await nakijken(naam, rijen)).gasten;
+
+  /// De regels die alleen Deezer kent, één voor één nagekeken: welke andermans plaat zijn ([gastoptredens],
+  /// hun [discoKey]s) en welke "albums" in werkelijkheid maxisingles zijn ([isMaxisingle], hun
+  /// Deezer-nummers). Hetzelfde verzoek per regel voor allebei, dus de tweede vraag kost niets extra.
+  ///
+  /// Maxisingles (Saber, 20-10-2026: remixen "tussen albums"): Madonna's "Deeper and Deeper" en "Rain"
+  /// van 2022 noemt Deezer album, en alleen Deezer kent ze onder die naam. Remixalbums ([isRemixAlbum]):
+  /// "Finally Enough Love: 50 Number Ones", vijftig remixen.
+  Future<({Set<String> gasten, Set<int> maxisingles, Set<int> remixAlbums})> nakijken(
+      String naam, List<DiscoRelease> rijen) async {
+    final teVragen = <int, DiscoRelease>{};
     for (final r in rijen) {
       if (r.sources.length != 1 || !r.sources.contains(DiscoSource.deezer)) continue;
       final ref = r.refs[DiscoSource.deezer];
       if (ref == null || ref.intId <= 0) continue;
-      teVragen[ref.intId] = r.key;
+      teVragen[ref.intId] = r;
     }
-    if (teVragen.isEmpty) return const {};
-    final vanWie = await catalog.albumArtists(teVragen.keys);
-    return {
-      for (final e in teVragen.entries)
-        if (vanWie[e.key] case final wie?)
-          if (!_zelfdeArtiest(naam, wie)) e.value,
-    };
+    if (teVragen.isEmpty) return (gasten: const <String>{}, maxisingles: const <int>{}, remixAlbums: const <int>{});
+    final kenmerken = await catalog.albumKenmerken(teVragen.keys);
+    return (
+      gasten: {
+        for (final e in kenmerken.entries)
+          if (e.value.artiest.isNotEmpty && !_zelfdeArtiest(naam, e.value.artiest)) teVragen[e.key]!.key,
+      },
+      maxisingles: {
+        for (final e in kenmerken.entries)
+          if (teVragen[e.key]!.blok == RecordKind.album && isMaxisingle(teVragen[e.key]!.title, e.value.titels)) e.key,
+      },
+      remixAlbums: {
+        for (final e in kenmerken.entries)
+          if (teVragen[e.key]!.blok == RecordKind.album &&
+              !isMaxisingle(teVragen[e.key]!.title, e.value.titels) &&
+              isRemixAlbum(e.value.titels))
+            e.key,
+      },
+    );
   }
 
   // ── Opslagvorm ─────────────────────────────────────────────────────────────

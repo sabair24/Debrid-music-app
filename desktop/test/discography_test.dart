@@ -584,6 +584,31 @@ void main() {
       expect(blokVan(rijen, RecordKind.albumVersie), isEmpty);
     });
 
+    // Gemeten bij Madonna en Kylie (20-10-2026): naast hun eigen album tussen de studioalbums.
+    test('DE KERN: een staart met een uitgavewoord en onbekende woorden ernaast vouwt', () {
+      final rijen = [
+        _dz('Erotica'), _dz('Erotica (PA Version)'),
+        _dz('Hard Candy'), _dz('Hard Candy (iTunes Deluxe Pre-Order)'),
+        _dz('Confessions on a Dance Floor'), _dz('Confessions On A Dance Floor (Twenty Years Edition)'),
+        _dz('Kylie Christmas'), _dz('Kylie Christmas (Snow Queen Edition)'),
+        _dz('DISCO'), _dz('DISCO: Guest List Edition'),
+        _dz('CONFESSIONS II'), _dz('CONFESSIONS II: Afterhours Edition'),
+        _dz('Tension'), _dz('Tension II'),
+      ];
+      expect(blokVan(rijen, RecordKind.album),
+          ['Erotica', 'Hard Candy', 'Confessions on a Dance Floor', 'Kylie Christmas', 'DISCO', 'CONFESSIONS II',
+           'Tension', 'Tension II']);
+      expect(blokVan(rijen, RecordKind.albumVersie), hasLength(6));
+    });
+
+    test('DE GRENS: zonder het kale album, of zonder uitgavewoord, blijft het een album', () {
+      expect(blokVan([_dz('DISCO: Guest List Edition')], RecordKind.album), ['DISCO: Guest List Edition']);
+      expect(blokVan([_dz('Kylie Christmas'), _dz('Kylie Christmas (Fully Wrapped)')], RecordKind.album),
+          hasLength(2), reason: 'zonder uitgavewoord zegt de staart niets');
+      expect(blokVan([_dz('Music'), _dz('Music: The Collection Of Songs')], RecordKind.album), hasLength(2),
+          reason: '"the" en "of" zijn geen sterke woorden');
+    });
+
     test('de uitkomst hangt niet af van de aanvoervolgorde, en twee keer vouwen doet niets meer', () {
       final rijen = [_dz('Thriller', datum: '1982'), _dz('Thriller 40', datum: '2022')];
       final een = vouwHeruitgaves(rijen).map((r) => '${r.title}=${r.kind}').toList()..sort();

@@ -11,6 +11,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -110,6 +111,45 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(tester.getSize(find.byType(ArtistNames)).width, greaterThan(100));
     });
+
+    // Gezien op de Shield, 19-10-2026: "Gelijk · zacht opg…". Het merk kreeg zijn vaste deel (2 van 5)
+    // van de rij, ook als de naam ernaast het zijne liet liggen: een `Flexible` geeft wat hij niet
+    // gebruikt niet door aan zijn buurman. Alleen wat de tv kan tonen: de tv is nooit de pc zelf.
+    final opTv = {
+      for (final bron in Bijstelbron.values)
+        for (final album in [false, true])
+          luidheidMerkTekst(Bijstelling(-12.3, bron, alsAlbum: album, netBewerkt: bron == Bijstelbron.ongemeten),
+              kort: true),
+      luidheidMerkTekst(const Bijstelling(0, Bijstelbron.nummer), speaker: true, kort: true),
+    }..remove('');
+    for (final (wie, namen) in [('één korte naam', const ['Madonna']), ('drie namen', drie)]) {
+      testWidgets('DE KERN: tv, $wie — elke merktekst staat er helemaal', (tester) async {
+        for (final tekst in opTv) {
+          await tester.pumpWidget(_vak(
+            NuSpeeltNaamrij(
+              zij: false,
+              merkInDeRij: true,
+              naam: ArtistNames(names: namen, style: const TextStyle(fontSize: 15), omvouwen: true),
+              kwaliteit: _badge('FLAC · 16/44.1'),
+              merk: LuidheidMerk(tekst: tekst, onPressed: () {}),
+            ),
+            breedte: kSpeelKolom,
+            schaal: 1.35,
+          ));
+          await tester.pump();
+          expect(tester.takeException(), isNull, reason: tekst);
+          final merk = tester.renderObject<RenderParagraph>(find.text(tekst));
+          expect(merk.didExceedMaxLines, isFalse, reason: '"$tekst" afgekapt naast $namen');
+          if (namen.length == 1) {
+            expect(tester.renderObject<RenderParagraph>(find.text(namen.first)).didExceedMaxLines, isFalse,
+                reason: 'naast "$tekst"');
+          } else {
+            expect(tester.getSize(find.byType(ArtistNames)).width, greaterThan(150),
+                reason: 'naast "$tekst" houden drie namen hun plaats');
+          }
+        }
+      });
+    }
 
     testWidgets('DE GRENS: zonder merk (stand Uit) is de rij precies de oude rij', (tester) async {
       await tester.pumpWidget(_vak(

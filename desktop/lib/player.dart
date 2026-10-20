@@ -1317,6 +1317,8 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     });
     _player.stream.duration.listen((d) {
       duration = d;
+      // Een duur betekent: het bestand is open. Zie [_nietGeopend].
+      if (d > Duration.zero) _nietGeopend = null;
       notifyListeners();
     });
     _player.stream.completed.listen((done) {
@@ -1332,6 +1334,9 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       // een adres dat niet te bereiken is, een antwoord dat te lang uitbleef — en die zin werd
       // weggegooid. Dezelfde fout als bij het taalmodel dat alleen "400" mocht zeggen.
       _log?.line('OPENEN MISLUKT — ${current?.title ?? "?"} — ${e.trim()}');
+      // Nog nooit open geweest (geen duur): onthouden, zodat [pcWeerBereikbaar] het opnieuw kan
+      // proberen. De positie zegt dat niet — [restore] zet hem ook als het openen mislukte.
+      if (duration <= Duration.zero) _nietGeopend = current?.path;
       // Eerst naar het BESTAND kijken, en pas daarna mpv citeren.
       //
       // "Failed to recognize file format" is waar en zegt niets. Staat er nul bytes, dan is dát het
@@ -1595,11 +1600,55 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// dan nu opnieuw openen in plaats van tot een minuut later — zie de wachtstand in [_naOpenfout].
   void pcWeerBereikbaar() {
     final t = current;
-    if (!radioMode || t == null || _pcWachtVoor != t.path || position > Duration.zero) return;
+    if (t == null) return;
+    if (heropenNaVerbinding(radio: radioMode, nietGeopend: _nietGeopend == t.path, speelt: playing)) {
+      unawaited(_heropenGepauzeerd());
+      return;
+    }
+    if (!radioMode || _pcWachtVoor != t.path || position > Duration.zero) return;
     _pcKlok?.cancel();
     _pcKlok = null;
     _log?.line('VERBINDING MET DE PC TERUG — opnieuw — ${t.title}');
     unawaited(_hervatOpDezelfdePlek());
+  }
+
+  /// Het pad van het nummer dat hier nog nooit openging (geen duur), of null.
+  ///
+  /// **Waarom (Shield, 19-10-2026).** Na het slapen startte de app opnieuw, en [restore] opende het
+  /// laatste nummer gepauzeerd op 0:35 terwijl de wifi er nog niet was: twintig minuten lang "geen
+  /// winnaar" in verbinding.log. Daarna bleef "Kan dit nummer niet openen" staan, ook toen de pc
+  /// allang weer antwoordde. [_naOpenfout] doet bewust niets met een nummer dat al een positie heeft
+  /// (een stroom die halverwege wegvalt loopt via [_hervatOpDezelfdePlek]), en [restore] zet die
+  /// positie ook als het openen mislukte. Op Play drukken opende hem wel, maar van voren af aan.
+  String? _nietGeopend;
+
+  /// Hetzelfde nummer opnieuw openen, GEPAUZEERD en op dezelfde plek: zoals [restore] het bedoelde. Niet
+  /// [_hervatOpDezelfdePlek], want die speelt meteen — en een tv die na het wakker worden uit zichzelf
+  /// muziek begint te spelen is erger dan een foutmelding.
+  Future<void> _heropenGepauzeerd() async {
+    final t = current;
+    if (t == null) return;
+    final plek = position;
+    _log?.line('VERBINDING MET DE PC TERUG — opnieuw geopend, gepauzeerd op $plek — ${t.title}');
+    try {
+      final bron = _bron(t.path);
+      final lopend = luidheidToegepast ?? Bijstelling(_luidheidGezet.isNaN ? 0 : _luidheidGezet, Bijstelbron.nummer);
+      _onthoudLuidheid(bron, lopend, t.title);
+      await _player.open(Media(bron), play: false);
+      for (var i = 0; i < 40 && duration <= Duration.zero; i++) {
+        await Future.delayed(const Duration(milliseconds: 75));
+        if (current?.path != t.path) return;
+      }
+      if (duration <= Duration.zero) return; // nog steeds niet: de volgende `session.ready` probeert het weer
+      _meldStilstand(null);
+      if (plek > Duration.zero) {
+        await _player.seek(plek);
+        position = plek;
+      }
+      notifyListeners();
+    } catch (e) {
+      _log?.line('OPNIEUW OPENEN MISLUKT: $e');
+    }
   }
 
   void _pcIsTerug() {

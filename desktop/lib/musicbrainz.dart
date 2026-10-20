@@ -1030,8 +1030,14 @@ class MusicBrainzService {
     final out = <MbReleaseGroup>[];
     final gezien = <String>{};
     for (var offset = 0; offset < dak; offset += max) {
+      // `release-group-status=website-default`: zonder groepen die alleen uit bootlegs bestaan, zoals
+      // de website van MusicBrainz ze ook verbergt (20-10-2026, Saber bij Madonna: "klopt dit wel ??").
+      // Zonder dit stonden "Australia Sydney Broadcast 1993", "Madonna Tokyo 1987" en "Revolutionary
+      // Heart" als Album tussen de studioplaten; MusicBrainz legt "bootleg" per uitgave vast, niet per
+      // groep. GEMETEN: bij Madonna 300 groepen, met deze vlag 282. Een nieuwe URL, dus de bewaarde
+      // antwoorden van vóór deze vlag tellen niet meer: één nieuwe browse per artiest.
       final body = await _ws('$_root/release-group?artist=${artistMbid.trim()}&fmt=json&limit=$max'
-          '${offset == 0 ? '' : '&offset=$offset'}');
+          '&release-group-status=website-default${offset == 0 ? '' : '&offset=$offset'}');
       if (body == null) break;
       final list = body['release-groups'] as List<dynamic>? ?? const [];
       for (final g in list) {

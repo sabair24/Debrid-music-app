@@ -4037,7 +4037,7 @@ class _HomeShellState extends State<HomeShell> {
             ? AlbumsGrid(
                 albums: _sortAlbums(albums),
                 sort: _sort,
-                title: _q.isEmpty ? null : '${albums.length} resultaten')
+                title: _q.isEmpty ? null : '${albums.length} ${albums.length == 1 ? 'resultaat' : 'resultaten'}')
             : ArtistsView(lib: lib, albums: albums);
       },
     );
@@ -24267,6 +24267,13 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// verspringen dat weg moest.
   Set<String> _gasten = const {};
 
+  /// De Deezer-nummers van "albums" die maxisingles bleken ([isMaxisingle]): bij het bewaren gaan ze naar
+  /// de remixen. Net als [_gasten] alleen voor het volgende bezoek, om dezelfde reden.
+  Set<int> _maxisingles = const {};
+
+  /// En de remixalbums ([isRemixAlbum]), op dezelfde manier.
+  Set<int> _remixAlbums = const {};
+
   DiscoSort _sort = DiscoSort.datumOud;
 
   /// De discografie ongefilterd tonen. Standaard uit — zie [zeefDiscografie] voor wat er weggaat.
@@ -24482,9 +24489,14 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // Pas NA de drie bronnen, want wat MusicBrainz of Discogs ook kent, hoeft niet nagevraagd: die
     // twee laten een gastoptreden al vallen. Dit kost een verzoek per regel die alleen Deezer kent
     // (bij Enrique Iglesias 47), en het gaat alleen naar schijf, voor het volgende bezoek.
-    final gasten = await svc.gastoptredens(naam, alles);
-    if (!mounted || gasten.isEmpty) return;
-    _gasten = gasten;
+    final nagekeken = await svc.nakijken(naam, alles);
+    if (!mounted ||
+        (nagekeken.gasten.isEmpty && nagekeken.maxisingles.isEmpty && nagekeken.remixAlbums.isEmpty)) {
+      return;
+    }
+    _gasten = nagekeken.gasten;
+    _maxisingles = nagekeken.maxisingles;
+    _remixAlbums = nagekeken.remixAlbums;
     _bewaar(svc, naam);
   }
 
@@ -24501,7 +24513,11 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       final alles = _versAlles;
       if (!_magBewaren || alles == null) return;
       await svc.schrijf(
-          naam, vulHoezenAan(alles, _groepHoezen).where((r) => !_gasten.contains(r.key)).toList(),
+          naam,
+          [
+            for (final r in vulHoezenAan(alles, _groepHoezen))
+              if (!_gasten.contains(r.key)) metNagekekenSoort(r, singles: _maxisingles, remixen: _remixAlbums),
+          ],
           zeefHoezen: _versZeefHoezen || _groepKlaar);
     });
   }

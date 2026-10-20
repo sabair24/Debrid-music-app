@@ -93,6 +93,15 @@ enum NaOpenfout {
   opgeven,
 }
 
+/// Moet het nummer opnieuw geopend worden nu de verbinding met de pc terug is (`session.ready`)?
+///
+/// Alleen een nummer dat hier nog nooit openging ([nietGeopend]: geen duur), dat niet speelt, en
+/// buiten de radio — die heeft zijn eigen wachtstand (`_pcWachtVoor` in `PlayerStore.pcWeerBereikbaar`). Een
+/// nummer dat al speelt of halverwege afbrak, loopt via het hervatten. Zie `PlayerStore._nietGeopend`
+/// voor de Shield die na het slapen op "Kan dit nummer niet openen" bleef staan (19-10-2026).
+bool heropenNaVerbinding({required bool radio, required bool nietGeopend, required bool speelt}) =>
+    !radio && nietGeopend && !speelt;
+
 /// De regel achter een nummer dat niet opengaat.
 NaOpenfout naOpenfout({required Duration sinds, required bool volgendeStaatHier}) {
   if (volgendeStaatHier) return NaOpenfout.naarVolgende;
