@@ -1558,65 +1558,17 @@ String verbindingWegRegel({
 /// Hoeveel servercodes [SlskSession] onthoudt voor [verbindingWegRegel].
 const int kServercodesOnthouden = 6;
 
-/// Hoe lang een rechtstreekse verbinding met een uploader voorgaat, voordat ook de server gevraagd wordt
-/// hem naar ons te laten bellen — zie [eersteVerbinding].
-const kRechtstreeksVoorsprong = Duration(seconds: 1);
-
-/// Twee wegen naar een uploader, met een voorsprong voor de eerste.
+/// Zo lang mag een rechtstreekse verbinding met een uploader duren, voordat de server gevraagd wordt hem
+/// naar ons te laten bellen (ConnectToPeer) — de enige weg naar een uploader achter een firewall.
 ///
-/// [rechtstreeks] begint meteen. Is er na [voorsprong] nog geen verbinding — of faalde die al — dan
-/// begint ook [viaServer] (ConnectToPeer: de uploader belt ons). De eerste die een verbinding geeft,
-/// wint; wat daarna nog binnenkomt, gaat dicht via [sluit]. Null als geen van beide iets gaf.
-///
-/// **Waarom niet na elkaar.** Gemeten op de pc (20-10-2026, 3.9.523, ▶ met dertig uploaders tegelijk):
-/// bij Yellow, Joe, Do I Wanna Know? en Espresso stuurde de eerste pas na 9,0 – 10,5 s, en bij Espresso
-/// kwamen negen antwoorden van verschillende uploaders binnen dezelfde 0,4 s — precies 10 s na de start.
-/// Zo gelijk antwoorden echte uploaders niet: dat was de rechtstreekse poging die na 8 s opgaf, waarna
-/// pas de server gevraagd werd. Een uploader achter een firewall is ALLEEN langs de server te bereiken,
-/// en kostte zo elke keer 8 s wachten op niets. Wie wel rechtstreeks bereikbaar is, staat er bijna
-/// altijd binnen een tel: dan gaat er geen bericht naar de server.
-Future<T?> eersteVerbinding<T extends Object>({
-  required Future<T?> Function() rechtstreeks,
-  required Future<T?> Function() viaServer,
-  required void Function(T) sluit,
-  Duration voorsprong = kRechtstreeksVoorsprong,
-}) {
-  final uit = Completer<T?>();
-  var lopend = 0;
-  var serverGestart = false;
-  Timer? klok;
-  late final void Function() startServer;
-  void binnen(T? v) {
-    lopend--;
-    if (v != null) {
-      if (uit.isCompleted) {
-        sluit(v);
-      } else {
-        klok?.cancel();
-        uit.complete(v);
-      }
-      return;
-    }
-    if (uit.isCompleted) return;
-    if (!serverGestart) {
-      startServer(); // rechtstreeks lukte niet: niet op de voorsprong wachten
-    } else if (lopend == 0) {
-      uit.complete(null);
-    }
-  }
-
-  startServer = () {
-    if (serverGestart || uit.isCompleted) return;
-    serverGestart = true;
-    klok?.cancel();
-    lopend++;
-    viaServer().then(binnen, onError: (Object _) => binnen(null));
-  };
-  lopend++;
-  klok = Timer(voorsprong, startServer);
-  rechtstreeks().then(binnen, onError: (Object _) => binnen(null));
-  return uit.future;
-}
+/// **Gemeten op de pc (20-10-2026).** Met 8 s (tot 3.9.523) stuurde bij Yellow, Joe, Do I Wanna Know? en
+/// Espresso de eerste pas na 9,0 – 10,5 s, en bij Espresso kwamen negen antwoorden van verschillende
+/// uploaders binnen dezelfde 0,4 s, precies 10 s na de start: de rechtstreekse pogingen die tegelijk
+/// opgaven. Beide wegen tegelijk na 1 s (3.9.524) leverde langs de server níets meer op: twee van de vier
+/// vroege wedlopen eindigden zonder één byte (Beautiful Things, Good Luck, Babe!), tegen nul van tien
+/// daarvoor. Dus weer na elkaar, zoals het werkte, maar met een korte rechtstreekse kans: wie bereikbaar
+/// is, staat er bijna altijd binnen een tel.
+const kRechtstreeksGeduld = Duration(seconds: 3);
 
 /// A reusable, logged-in Soulseek SERVER connection for a batch of downloads.
 ///
@@ -2095,43 +2047,29 @@ class SlskSession {
         }
       };
 
-      // Message connection: dial the uploader, and — if that hasn't connected within a second — at the
-      // same time have the server flip it around. Whichever answers first is used; see
-      // [eersteVerbinding] for why not one after the other.
+      // Message connection: dial the uploader, and if that fails have the server flip it around — one
+      // after the other, with a short first chance ([kRechtstreeksGeduld]).
       void Function(Uint8List) psend;
       Stream<Uint8List> pmsgs;
-      final weg = await eersteVerbinding<Object>(
-        rechtstreeks: () async {
-          if (ip == '0.0.0.0' || port <= 0) return null;
-          try {
-            return await Socket.connect(ip, port, timeout: const Duration(seconds: 8));
-          } catch (_) {
-            return null;
-          }
-        },
-        viaServer: () => _reverseConnect(file.username),
-        sluit: (v) {
-          if (v is Socket) {
-            v.destroy();
-          } else if (v is (_Inbound, Stream<Uint8List>)) {
-            v.$1.destroy();
-          }
-        },
-      );
-      if (weg is Socket) {
-        peer = weg;
-        final pconn = _Conn(weg);
+      if (ip != '0.0.0.0' && port > 0) {
+        try {
+          peer = await Socket.connect(ip, port, timeout: kRechtstreeksGeduld);
+        } catch (_) {
+          peer = null;
+        }
+      }
+      if (peer != null) {
+        final pconn = _Conn(peer);
         psend = pconn.send;
         pmsgs = pconn.messages;
         pconn.send(_initMessage(1, (_W()..str(user)..str('P')..u32(dlToken)).bytes())); // PeerInit "P"
-      } else if (weg is (_Inbound, Stream<Uint8List>)) {
-        final rev = weg;
+      } else {
+        final rev = await _reverseConnect(file.username);
+        if (rev == null) return SlskFail('Uploader niet bereikbaar (firewall)');
         viaServer = rev.$1;
         psend = (b) => rev.$1.send(b);
         pmsgs = rev.$2;
         // No PeerInit here: the peer initiated, the handshake is already done.
-      } else {
-        return SlskFail('Uploader niet bereikbaar (firewall)');
       }
       // Don't ask for a slot at a peer we've meanwhile given up on.
       if (cancel != null && cancel.isCancelled) return SlskCancelled();

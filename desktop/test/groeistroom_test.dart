@@ -522,12 +522,15 @@ void main() {
       final w = online.substring(online.indexOf('  Future<({SoulseekFile f, SlskResult res, bool afgekeurd})?> _wedloop('));
       final lijf = w.substring(0, w.indexOf('\n  }\n'));
       expect(online, contains('static const kWedloopTegelijk = 30;'), reason: 'elke loper erbij vergroot de kans');
-      expect(online, contains('static const kWedloopLopers = 30;'));
+      expect(online, contains('static const kWedloopLopers = 60;'), reason: 'wie in een rij staat, neemt geen plaats in');
       expect(online, contains('static const _maxLosslessTries = 20;'));
       expect(online, isNot(contains('kWedloopTussen')), reason: 'niet meer na elkaar, maar samen');
       expect(lijf, contains('if (winnaar != null) return false;'), reason: 'maar één winnaar');
       expect(lijf, contains('if (e.key != f) e.value.stop.cancel();'), reason: 'de verliezers stoppen meteen');
-      expect(lijf, contains('lopers.length < kWedloopLopers &&\n          lopers.length - klaar.length < kWedloopTegelijk'));
+      expect(lijf, contains('while (winnaar == null && lopers.length < kWedloopLopers && bezig() < kWedloopTegelijk) {'));
+      expect(lijf, contains('int bezig() => lopers.keys.where((l) => !klaar.contains(l) && !inRij.contains(l)).length;'),
+          reason: 'Beautiful Things: negen in een rij hielden dertig plaatsen 17,7 s bezet');
+      expect(lijf, contains('final res = _rawTransfer(session, f, job, () => inRij.add(f),'));
       expect(lijf, contains('start(eerste);\n    vulAan();\n    while'), reason: 'meteen samen, niet pas na een wachttijd');
       expect(lijf, contains('      vulAan();\n      if (lopers.length == klaar.length) break;'),
           reason: 'wie afvalt maakt plaats; niemand meer over = opgeven');
@@ -556,7 +559,8 @@ void main() {
       final online = File('lib/online.dart').readAsStringSync();
       final w = online.substring(online.indexOf('  Future<({SoulseekFile f, SlskResult res, bool afgekeurd})?> _wedloop('));
       final lijf = w.substring(0, w.indexOf('\n  }\n'));
-      expect(lijf, contains('if (winnaar == null && !job.cancelled) viel?.call(f.username);'));
+      expect(lijf, contains('if (winnaar == null && !job.cancelled) {\n          viel?.call(f.username);'));
+      expect(lijf, contains(r"_log.line('   $u');"), reason: 'zonder winnaar: per uploader waarom hij afviel');
       final haal = online.substring(online.indexOf('  Future<String?> _haalVoorRadio('));
       expect(haal, contains('bool vrij(SoulseekFile k) => !(_radioNietBij[sleutel]?.contains(k.username) ?? false);'));
       expect(haal, isNot(contains('geprobeerd.add(')),

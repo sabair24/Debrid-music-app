@@ -3477,10 +3477,18 @@ class DownloadManager extends ChangeNotifier {
   ///
   /// Geen last voor Soulseek zelf: de overdrachten lopen tussen de peers, en het gewone downloaden houdt
   /// tot [_slskMaxParallel] nummers met elk [_maxLosslessTries] peers tegelijk open.
+  ///
+  /// **Wie ons in zijn rij zet, telt hier niet mee** — zoals in de race van het gewone downloaden ("a slot
+  /// frees once its peer is queued"). Gemeten op de pc (20-10-2026, 3.9.524, Benson Boone — Beautiful
+  /// Things): negen van de dertig vroege lopers zetten ons in hun rij ondanks hun "vrije plek", de rest
+  /// was onbereikbaar; de dertig plaatsen bleven 17,7 s bezet zonder één byte, en de uploader die het in
+  /// 0,7 s leverde (later in de zoekuitslag) kwam pas daarna aan de beurt — 21 s van tik tot geluid. Wie in
+  /// een rij staat, houdt zijn plek daar en wint alsnog als hij als eerste begint.
   static const kWedloopTegelijk = 30;
 
   /// Zoveel uploaders hoogstens in één [_wedloop], ook als er later in de zoekuitslag nog goede opduiken.
-  static const kWedloopLopers = 30;
+  /// Ruimer dan [kWedloopTegelijk], omdat wie in een rij staat geen plaats inneemt.
+  static const kWedloopLopers = 60;
 
   /// Een wedloop voor een nummer met een groeistroom: niet op één uploader wachten.
   ///
@@ -3498,14 +3506,18 @@ class DownloadManager extends ChangeNotifier {
     SoulseekFile? winnaar;
     final lopers = <SoulseekFile, ({SlskCancel stop, Future<SlskResult> res})>{};
     final klaar = <SoulseekFile>{};
+    // Wie ons in zijn rij zette: die wacht daar, maar neemt geen plaats in (zie [kWedloopTegelijk]).
+    final inRij = <SoulseekFile>{};
+    // Waarom wie afviel afviel — alleen gelogd als niemand won, om na te gaan wat er gebeurde.
+    final uitkomsten = <String>[];
     final klok = Stopwatch()..start();
     // Vastgelegd op het moment van winnen: daarna vallen de gestopte verliezers ook in [klaar].
     var winstMs = 0, afgevallen = 0, lopend = 0;
     void start(SoulseekFile f) {
       final stop = SlskCancel();
       job.live.add(stop);
-      final res = _rawTransfer(session, f, job, () {}, waitInQueue: true, maxWait: kMaxWacht, cancel: stop,
-          claim: () {
+      final res = _rawTransfer(session, f, job, () => inRij.add(f),
+          waitInQueue: true, maxWait: kMaxWacht, cancel: stop, claim: () {
         if (winnaar != null) return false;
         winnaar = f;
         winstMs = klok.elapsedMilliseconds;
@@ -3517,21 +3529,24 @@ class DownloadManager extends ChangeNotifier {
         return true;
       }).then<SlskResult>((r) => r, onError: (Object e) => SlskFail('$e'));
       lopers[f] = (stop: stop, res: res);
-      unawaited(res.whenComplete(() {
+      unawaited(res.then((r) {
         klaar.add(f);
         job.live.remove(stop);
         // Klaar vóór er een winnaar was = uit zichzelf afgevallen (onbereikbaar, afgebroken, te lang in de
         // rij). Wie pas daarna stopt, stopte omdat een ander won — die blijft goed voor een volgende ronde.
-        if (winnaar == null && !job.cancelled) viel?.call(f.username);
+        if (winnaar == null && !job.cancelled) {
+          viel?.call(f.username);
+          uitkomsten.add('${f.username}: ${_uitkomst(r)} na ${klok.elapsedMilliseconds} ms'
+              '${inRij.contains(f) ? ' (stond in de rij)' : ''}');
+        }
       }));
     }
 
     // Aanvullen tot [kWedloopTegelijk] lopen: bij de start, en elke kwart seconde opnieuw — de tussenstand
-    // van het zoeken groeit nog, en wie afvalt laat een plek vrij.
+    // van het zoeken groeit nog, en wie afvalt of ons in zijn rij zet, laat een plek vrij.
+    int bezig() => lopers.keys.where((l) => !klaar.contains(l) && !inRij.contains(l)).length;
     void vulAan() {
-      while (winnaar == null &&
-          lopers.length < kWedloopLopers &&
-          lopers.length - klaar.length < kWedloopTegelijk) {
+      while (winnaar == null && lopers.length < kWedloopLopers && bezig() < kWedloopTegelijk) {
         final f = volgende({for (final l in lopers.keys) l.username});
         if (f == null) return;
         start(f);
@@ -3553,6 +3568,9 @@ class DownloadManager extends ChangeNotifier {
       }
       _log.line('radio "$artiest — $titel": wedloop zonder winnaar — niemand van de ${lopers.length} stuurde '
           'iets (${klok.elapsedMilliseconds} ms)');
+      for (final u in uitkomsten) {
+        _log.line('   $u');
+      }
       return null;
     }
     // Welke loper won (#1 = de eerste die begon) en hoeveel er toen al afgevallen waren: daaruit valt af te
