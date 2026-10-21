@@ -9,7 +9,7 @@ import 'deezerbaan.dart';
 import 'discogs.dart';
 import 'models.dart';
 import 'musicbrainz.dart';
-import 'organize.dart' show normKey;
+import 'organize.dart' show normKey, artistKey;
 import 'settings.dart';
 import 'paths.dart';
 
@@ -294,6 +294,42 @@ class AlbumInfo {
 /// het dus stil niet meer: een lege lijst en een "Not found" zien er in de code hetzelfde uit.
 const kAudioDbBasis = 'https://www.theaudiodb.com/api/v1/json/123';
 
+/// Het Deezer-album dat werkelijk [album] van [artiest] is, uit een zoekuitslag — of null.
+///
+/// **Nooit blind het eerste resultaat.** Gemeten op 21-10-2026: "Roya Turn Me On" geeft bij Deezer als
+/// eerste "Rojas On The Beat — On Me", en de oude zoektocht nam dat als hoes. Sinds de digitale voorkant
+/// boven de hoes in de bestanden gaat (Saber, 21-10-2026: "digitaal wint altijd") mag een gok op naam er
+/// niet meer tussen komen.
+///
+/// De artiest moet kloppen — of de artiest in het bestand begint met die van Deezer ("Lady Gaga & Bruno
+/// Mars" bij Deezers "Lady Gaga"). De titel eerst precies, dan zonder de editie-aanduiding
+/// ([DiscogsService.plainTitle]: "(Deluxe)", "Remastered"). Bij een verzamelaar ("Various Artists")
+/// telt alleen de precieze titel.
+Map<String, dynamic>? kiesDigitaalAlbum(List<dynamic> data, String artiest, String album, {bool generiek = false}) {
+  final wilTitel = normKey(album);
+  if (wilTitel.isEmpty) return null;
+  final wilKaal = normKey(DiscogsService.plainTitle(album));
+  final wilArtiest = artistKey(artiest);
+  bool zelfdeArtiest(String naam) {
+    final k = artistKey(naam);
+    return k.isNotEmpty && (k == wilArtiest || wilArtiest.startsWith('$k '));
+  }
+
+  Map<String, dynamic>? kaal;
+  for (final d in data) {
+    if (d is! Map<String, dynamic>) continue;
+    final titel = '${d['title'] ?? ''}';
+    final art = d['artist'];
+    final naam = '${art is Map ? art['name'] ?? '' : ''}';
+    if (!generiek && !zelfdeArtiest(naam)) continue;
+    if (normKey(titel) == wilTitel) return d;
+    if (!generiek && kaal == null && wilKaal.isNotEmpty && normKey(DiscogsService.plainTitle(titel)) == wilKaal) {
+      kaal = d;
+    }
+  }
+  return kaal;
+}
+
 /// Hoeveel vragen met voorrang er binnen [kAudioDbSalvoVenster] zonder afstand mogen.
 ///
 /// De drie seconden van de gewone rij zijn geijkt op een lange veeg: zesenvijftig albums aan 1,2 s gaven
@@ -363,6 +399,99 @@ class CoverEnricher {
   /// the moment you opened the record; nothing was written down, so the next start went back to the
   /// wrong one. The fix looked like it worked every time you checked it.
   Directory get resolvedDir => Directory(_dir('resolved'));
+
+  /// De digitale voorkanten ([digitaleVoorkant]) — apart van [cacheDir] (een gok op naam voor wie geen
+  /// hoes heeft) en van [resolvedDir] (wat de bibliotheek overnam).
+  Directory get digitaalDir => Directory(_dir('digitaal'));
+
+  /// Wat er al eens gelezen of gevonden is — en dan HETZELFDE object terug, zoals `DiscogsService._gelezen`:
+  /// een `Image.memory` herkent een beeld aan zijn bytes-object, en een nieuw object laat Nu speelt bij
+  /// elke nummerwissel even flitsen (Saber, 10-10-2026). Begrensd: de opwarmer loopt de hele bibliotheek af.
+  static final _digitaalGelezen = <String, ({Uint8List bytes, String bron})>{};
+  static const _digitaalGelezenMax = 24;
+  static final _digitaalOnderweg = <String, Future<({Uint8List bytes, String bron})?>>{};
+
+  /// Zo lang telt "niets gevonden": een nieuwe single staat er soms pas na een paar dagen.
+  static const _digitaalMisDuur = Duration(days: 3);
+
+  /// De digitale voorkant van een album: Deezer op 1200×1200 als artiest én titel kloppen
+  /// ([kiesDigitaalAlbum]), anders TheAudioDB (`strAlbumThumb`, ~700×700). Saber, 21-10-2026: "digitaal
+  /// wint altijd" en "Deezer 1200 eerst". `bron` is `dz:<album-id>` of `tadb` — zie [isDigitaleHerkomst].
+  ///
+  /// Op schijf bewaard ([digitaalDir]), één zoektocht per album tegelijk. [netwerk] uit: alleen wat er al
+  /// ligt — voor wie meteen iets wil tekenen.
+  Future<({Uint8List bytes, String bron})?> digitaleVoorkant(String artistRaw, String albumRaw,
+      {bool voorrang = false, bool netwerk = true}) async {
+    final artist = _cleanArtist(artistRaw), album = _cleanAlbum(albumRaw);
+    if (album.isEmpty) return null;
+    final sleutel = fnv1a('${artist.toLowerCase()}|${album.toLowerCase()}');
+    final al = _digitaalGelezen[sleutel];
+    if (al != null) return al;
+    final sep = Platform.pathSeparator;
+    final img = File('${digitaalDir.path}$sep$sleutel.jpg'), van = File('${digitaalDir.path}$sep$sleutel.from');
+    try {
+      if (await img.exists() && await van.exists()) {
+        final b = await img.readAsBytes();
+        final f = (await van.readAsString()).trim();
+        if (b.length > 1500 && f.isNotEmpty) return _onthoudDigitaal(sleutel, (bytes: b, bron: f));
+      }
+    } catch (_) {/* niets te lezen: dan zoeken */}
+    if (!netwerk) return null;
+    return _digitaalOnderweg[sleutel] ??= _zoekDigitaal(sleutel, artist, album, voorrang, img, van).whenComplete(() {
+      _digitaalOnderweg.remove(sleutel);
+    });
+  }
+
+  ({Uint8List bytes, String bron}) _onthoudDigitaal(String sleutel, ({Uint8List bytes, String bron}) d) {
+    _digitaalGelezen.remove(sleutel);
+    _digitaalGelezen[sleutel] = d;
+    while (_digitaalGelezen.length > _digitaalGelezenMax) {
+      _digitaalGelezen.remove(_digitaalGelezen.keys.first);
+    }
+    return d;
+  }
+
+  Future<({Uint8List bytes, String bron})?> _zoekDigitaal(
+      String sleutel, String artist, String album, bool voorrang, File img, File van) async {
+    final mis = File('${digitaalDir.path}${Platform.pathSeparator}$sleutel.none');
+    try {
+      if (await mis.exists() && DateTime.now().difference(await mis.lastModified()) <= _digitaalMisDuur) return null;
+    } catch (_) {}
+    final generiek = _generic.contains(artist.toLowerCase());
+    ({Uint8List bytes, String bron})? gevonden;
+    var deezerAntwoordde = false;
+    try {
+      final j = await DeezerBaan.haal('https://api.deezer.com/search/album'
+          '?q=${Uri.encodeComponent(generiek ? album : '$artist $album')}&limit=10');
+      deezerAntwoordde = j != null;
+      final d = kiesDigitaalAlbum((j?['data'] as List?) ?? const [], artist, album, generiek: generiek);
+      final url = d == null ? null : (d['cover_xl'] ?? d['cover_big']) as String?;
+      if (d != null && url != null && url.isNotEmpty) {
+        final groot = deezerHoes1200(url);
+        final b = (groot == url ? null : await _download(groot)) ?? await _download(url);
+        if (b != null) gevonden = (bytes: b, bron: 'dz:${d['id']}');
+      }
+    } catch (_) {/* Deezer weigerde of zweeg: TheAudioDB mag het nog zeggen */}
+    if (gevonden == null && !generiek) {
+      final u = (await albumInfo(artist, album, voorrang: voorrang))?.frontUrl;
+      if (u != null) {
+        final b = await _download(u);
+        if (b != null) gevonden = (bytes: b, bron: 'tadb');
+      }
+    }
+    try {
+      await digitaalDir.create(recursive: true);
+      if (gevonden != null) {
+        await img.writeAsBytes(gevonden.bytes);
+        await van.writeAsString(gevonden.bron);
+        if (await mis.exists()) await mis.delete();
+      } else if (deezerAntwoordde) {
+        // Alleen als Deezer echt antwoordde: een weigering is geen "bestaat niet".
+        await mis.writeAsString('');
+      }
+    } catch (_) {/* niet bewaard kost alleen een tweede zoektocht */}
+    return gevonden == null ? null : _onthoudDigitaal(sleutel, gevonden);
+  }
 
   /// Een kort merkteken voor precies déze hoes.
   ///
@@ -1253,7 +1382,7 @@ class CoverEnricher {
     final generic = _generic.contains(artist.trim().toLowerCase());
     final query = generic ? album : '$artist $album';
 
-    final deezer = await _deezerCover(query);
+    final deezer = await _deezerCover(query, artist: artist, album: album, generiek: generic);
     if (deezer != null) {
       // Op 1200, en de 1000 van `cover_xl` als die maat er niet is — zie [deezerHoes1200].
       final groot = deezerHoes1200(deezer);
@@ -1278,14 +1407,15 @@ class CoverEnricher {
     return await _musicbrainzCover(generic ? '' : artist, album);
   }
 
-  Future<String?> _deezerCover(String query) async {
+  Future<String?> _deezerCover(String query,
+      {required String artist, required String album, required bool generiek}) async {
     try {
       // Via de gedeelde rijbaan, zoals [fetchArtistImage]: het verrijken vraagt zes hoezen tegelijk.
+      // Tien treffers en de juiste eruit ([kiesDigitaalAlbum]) — niet blind de eerste.
       final j = await DeezerBaan.haal(
-          'https://api.deezer.com/search/album?q=${Uri.encodeComponent(query)}&limit=1');
-      final data = (j?['data'] as List?) ?? const [];
-      if (data.isEmpty) return null;
-      final a = data.first as Map<String, dynamic>;
+          'https://api.deezer.com/search/album?q=${Uri.encodeComponent(query)}&limit=10');
+      final a = kiesDigitaalAlbum((j?['data'] as List?) ?? const [], artist, album, generiek: generiek);
+      if (a == null) return null;
       final url = (a['cover_xl'] ?? a['cover_big']) as String?;
       return (url != null && url.isNotEmpty) ? url : null;
     } catch (_) {

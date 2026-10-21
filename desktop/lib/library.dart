@@ -12,7 +12,7 @@ import 'beeldvorm.dart';
 import 'cachesleutel.dart';
 import 'completeness.dart';
 import 'audioformaten.dart';
-import 'discogs.dart' show persingUitHerkomst;
+import 'discogs.dart' show isDigitaleHerkomst, persingUitHerkomst;
 import 'dsd_kop.dart';
 import 'id3v2_kop.dart';
 import 'wavpack_kop.dart';
@@ -1850,7 +1850,14 @@ class LibraryStore extends ChangeNotifier {
       // Alleen de hoes van JOUW persing mag dus voorgaan. Een andere gaat naar [Album.enriched] en
       // blijft daarmee onder wat er in de bestanden zit: hij is nog steeds bruikbaar voor een plaat
       // die zelf geen hoes draagt, maar hij kan de jouwe niet meer verdringen.
-      final vastgezet = _pinPastBij(a, from);
+      //
+      // **Sinds 21-10-2026 gaat een DIGITALE voorkant boven alles behalve je eigen keuze** (Saber: "digitaal
+      // wint altijd"): Deezer of TheAudioDB vóór de bestanden en vóór elke scan, ook bij een vastgezette
+      // persing. En een scan neemt nooit de plaats van een digitale in — gezien op de gsm: de digitale hoes
+      // van KATSEYE — BEAUTIFUL CHAOS werd een scheve Discogs-foto van de fysieke hoes.
+      final digitaal = isDigitaleHerkomst(from);
+      if (!digitaal && isDigitaleHerkomst(a.resolvedFrom)) continue;
+      final vastgezet = digitaal || _pinPastBij(a, from);
       if (from != null && vastgezet) {
         if (_zelfdeHoes(a.resolvedCover, bytes) && a.resolvedFrom == from) continue;
         a.resolvedCover = bytes;
@@ -3854,7 +3861,8 @@ class LibraryStore extends ChangeNotifier {
         // weggeschreven was blijft anders voor altijd staan: de app zou hem netjes weigeren te
         // vervangen en tegelijk elke keer de verkeerde inlezen. Zo repareert een plaat die al
         // omgeslagen is zichzelf bij de eerstvolgende scan.
-        if (traced != null && _pinPastBij(album, traced.$2)) {
+        // Een digitale voorkant altijd (zie [adoptAlbumCover]); een scan alleen als hij bij de pin past.
+        if (traced != null && (isDigitaleHerkomst(traced.$2) || _pinPastBij(album, traced.$2))) {
           album.resolvedCover = traced.$1;
           album.resolvedFrom = traced.$2;
         }

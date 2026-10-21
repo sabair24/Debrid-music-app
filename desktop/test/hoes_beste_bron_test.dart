@@ -54,12 +54,18 @@ void main() {
   });
 
   group('cd en achterkant', () {
-    test('aangesloten: de cd van TheAudioDB gaat voor, zijn achterkant is alleen de terugval', () {
+    // Saber, 21-10-2026: "over het algemeen wil ik theaudioDB voor de hoezen, voorkant, cd en achterkant, maar
+    // vooral de achterkant zit er niet altijd bij … een vangnet … musicbrainz of discogs, wie de hoogste
+    // resolutie heeft".
+    test('aangesloten: TheAudioDB eerst voor cd én achterkant; het vangnet is het scherpste van archief en Discogs', () {
       final d = File('lib/discogs.dart').readAsStringSync();
-      expect(d, contains('back: saidBack ?? grootsteBeeld(found.back, tadb?.back),'));
+      expect(d, contains('back: saidBack ?? tadb?.back ?? found.back,'));
       expect(d, contains('disc: saidDisc ?? tadb?.disc ?? found.disc,'));
-      expect(d, contains('(saidBack ?? found.back) != null && (saidDisc ?? tadb?.disc ?? found.disc) != null;'),
-          reason: 'een achterkant van TheAudioDB houdt het zoeken naar die van het archief of Discogs niet tegen');
+      expect(d, contains('(saidBack != null || tadb?.back != null || scherp(found.back)) &&'),
+          reason: 'pas klaar als TheAudioDB het had, of het archief al scherp genoeg was');
+      expect(d, contains('back: grootsteBeeld(caa?.back, at(guessed.back)),'));
+      expect(d, contains('disc: grootsteBeeld(caa?.disc, disc),'));
+      expect(d, contains('final voor = grootsteBeeld(caa?.front, at(guessed.front));'));
       // Tegelijk met het archief gevraagd, niet erna.
       final keten = d.substring(d.indexOf('    final tadbF ='));
       expect(keten.indexOf('final exactF ='), lessThan(keten.indexOf('tadb = await tadbF;')));
@@ -99,8 +105,9 @@ void main() {
     test('aangesloten: Discogs zoekt al naast het archief als TheAudioDB geen cd heeft (live: archief 4,1–4,6 s)', () {
       final d = File('lib/discogs.dart').readAsStringSync();
       final keten = d.substring(d.indexOf('    tadb = await tadbF;'));
-      final vooraf = keten.indexOf('final discogsVoorafF = !freeOnly && pinned == null && saidDisc == null && tadb.disc == null');
-      expect(vooraf, greaterThan(0), reason: 'niet voor de opwarmer, niet bij een aangewezen persing, niet als er al een cd is');
+      final vooraf = keten.indexOf('final discogsVoorafF = !freeOnly && pinned == null && !enough(const ReleaseArt())');
+      expect(vooraf, greaterThan(0),
+          reason: 'niet voor de opwarmer, niet bij een aangewezen persing, niet als TheAudioDB cd en achterkant al had');
       expect(vooraf, lessThan(keten.indexOf('await _artFromMusicBrainz(artist, album, expectedTracks)')),
           reason: 'vóór de andere persingen, niet erna');
       expect(keten, contains('e = await (discogsVoorafF ?? _quickRelease(artist, album));'),
