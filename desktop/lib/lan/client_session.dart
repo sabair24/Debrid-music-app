@@ -321,6 +321,10 @@ class ClientSession extends ChangeNotifier {
   /// openen van de app is ruis.
   DateTime? wegGewisseld;
   Verbindingsweg? _laatsteWeg;
+
+  /// De weg voor de streamkwaliteit: de huidige, of de laatst bekende terwijl er opnieuw gezocht wordt.
+  /// Zie `welkeStand` in netsoort.dart.
+  Verbindingsweg? get wegVoorStroom => _stand.weg ?? _laatsteWeg;
   int _verbondenTeller = 0;
 
   /// Er was een tijd zonder pc sinds de laatste verbinding. Apart onthouden, want een netwerkwissel
