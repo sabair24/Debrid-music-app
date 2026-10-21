@@ -4755,6 +4755,12 @@ class DownloadManager extends ChangeNotifier {
             settle('had al de beste kwaliteit');
             return;
           }
+          // In het logboek, en niet alleen op het scherm: zonder deze regel zag een geslaagde jacht er in
+          // downloads.log uit als een die na de laatste "GELEVERD" was blijven hangen (Snoop Dogg —
+          // Beautiful, 21-10-2026: vervangen om 17:59, en er stond niets).
+          _log.line(how == Placement.moved
+              ? '   ${job.name}: ${f.username} BEWEZEN BETER — vervangen, de vorige staat in _dubbel'
+              : '   ${job.name}: ${f.username} binnen, maar niet als vervanger geplaatst ($how)');
           settle(how == Placement.moved
               ? 'kwaliteit verbeterd · ${f.username}'
               : 'betere kopie opgehaald, maar tags onleesbaar');

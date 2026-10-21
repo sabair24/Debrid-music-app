@@ -8573,9 +8573,7 @@ class _TrackRowState extends State<TrackRow> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: Pressable(
-        onPressed: () => context
-            .read<PlayerStore>()
-            .playQueue(widget.queue, widget.index, cover: widget.albumCover),
+        onPressed: () => speelGetikt(context, widget.queue, widget.index, cover: widget.albumCover),
         // Hold OK for what the mouse reaches by hovering.
         //
         // "Verplaatsen" and "Verwijderen" live INSIDE this row, and Flutter's directional traversal
@@ -10821,7 +10819,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12, color: _muted)),
-                onTap: () => p.playQueue(nummers, i),
+                onTap: () => speelGetikt(context, nummers, i),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -10945,10 +10943,9 @@ class _FavorietRij extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final lib = context.watch<LibraryStore>();
-    final p = context.read<PlayerStore>();
     final fav = context.read<Favorieten>();
     return InkWell(
-      onTap: () => p.playQueue(alles, plek),
+      onTap: () => speelGetikt(context, alles, plek),
       onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _nummerMenu(context, track)) : null,
       onSecondaryTapDown: (d) =>
           _toonItemMenu(context, _nummerMenu(context, track), bij: d.globalPosition),
@@ -11020,6 +11017,132 @@ bool get _menuOpHouden => isTv || _isTouch;
 ///
 /// [bij] is waar de muis stond bij een rechtsklik; zonder muispositie hangt het menu aan het
 /// aangewezen ding zelf.
+/// Wat een tik op een nummer doet als er al een wachtrij is — zie [speelGetikt] en [AppSettings.tikKeuze].
+enum TikKeuze { vragen, vervang, nu, hierna, achteraan }
+
+TikKeuze tikKeuzeUit(String naam) =>
+    TikKeuze.values.firstWhere((k) => k.name == naam, orElse: () => TikKeuze.vragen);
+
+/// Hoe een keuze heet, in het menu en in de instellingen.
+String tikKeuzeTekst(TikKeuze k) => switch (k) {
+      TikKeuze.vragen => 'Vragen',
+      TikKeuze.vervang => 'Nu spelen — wachtrij vervangen',
+      TikKeuze.nu => 'Nu spelen — rest laten staan',
+      TikKeuze.hierna => 'Hierna spelen',
+      TikKeuze.achteraan => 'Achteraan toevoegen',
+    };
+
+/// Valt er bij een tik iets te kiezen? Alleen als er al een wachtrij is: speelt er niets, of staat alleen
+/// het spelende nummer erin, dan speelt het meteen.
+bool tikVraagtIets({required bool speelt, required bool radio, required int lengte}) => speelt && (radio || lengte > 1);
+
+/// Een tik op een nummer in een lijst — een album, de Tracks-lijst, een afspeellijst, de favorieten.
+///
+/// **Waarom (Saber, 21-10-2026).** *"als ik naar heel men bibliotheek aan het beluisteren ben en klik op een
+/// liedje is de hele wachtrij weg."* Elke tik liep langs [PlayerStore.playQueue] en verving de hele rij. Nu:
+/// is er een wachtrij, dan een keuzemenu — vervangen (de lijst vanaf dit nummer, zoals vroeger), nu spelen
+/// en de rest laten staan, hierna, of achteraan — tenzij dit toestel een vaste keuze heeft
+/// ([AppSettings.tikKeuze]). Ook tijdens een radio. "Speel alles", "Shuffle alles" en ▶ blijven vervangen.
+Future<void> speelGetikt(BuildContext context, List<Track> lijst, int index, {Uint8List? cover}) async {
+  if (index < 0 || index >= lijst.length) return;
+  final p = context.read<PlayerStore>();
+  final instellingen = context.read<AppSettings>();
+  if (!tikVraagtIets(speelt: p.current != null, radio: p.radioMode, lengte: p.queueTracks.length)) {
+    return p.playQueue(lijst, index, cover: cover);
+  }
+  var keuze = tikKeuzeUit(instellingen.tikKeuze);
+  final gevraagd = keuze == TikKeuze.vragen;
+  if (gevraagd) {
+    final t = lijst[index];
+    TikKeuze? gekozen;
+    await _toonItemMenu(
+        context,
+        ItemMenu(titel: t.title, ondertitel: t.artist, blokken: [
+          [
+            for (final k in const [TikKeuze.vervang, TikKeuze.nu, TikKeuze.hierna, TikKeuze.achteraan])
+              MenuRegel(
+                  switch (k) {
+                    TikKeuze.vervang => Icons.play_arrow_rounded,
+                    TikKeuze.nu => Icons.play_circle_outline_rounded,
+                    TikKeuze.hierna => Icons.playlist_play_rounded,
+                    _ => Icons.playlist_add_rounded,
+                  },
+                  tikKeuzeTekst(k),
+                  () => gekozen = k),
+          ],
+        ]));
+    if (gekozen == null) return; // weggetikt: niets
+    keuze = gekozen!;
+  }
+  final t = lijst[index];
+  switch (keuze) {
+    case TikKeuze.vragen:
+    case TikKeuze.vervang:
+      await p.playQueue(lijst, index, cover: cover);
+    case TikKeuze.nu:
+      await p.speelNuMetRest(t);
+    case TikKeuze.hierna:
+      p.speelHierna([t]);
+    case TikKeuze.achteraan:
+      p.zetAchteraan([t]);
+  }
+  if (!context.mounted) return;
+  final melding = ScaffoldMessenger.maybeOf(context);
+  final tekst = switch (keuze) {
+    TikKeuze.hierna => '"${t.title}" komt hierna',
+    TikKeuze.achteraan => '"${t.title}" staat achteraan in de wachtrij',
+    _ => null,
+  };
+  // Na een keuze uit het menu: "Altijd zo" maakt er de vaste keuze van dit toestel van (terug te zetten in
+  // Instellingen).
+  if (gevraagd) {
+    melding?.hideCurrentSnackBar();
+    melding?.showSnackBar(SnackBar(
+      content: Text(tekst ?? tikKeuzeTekst(keuze)),
+      duration: const Duration(seconds: 4),
+      action: SnackBarAction(
+          label: 'Altijd zo',
+          onPressed: () {
+            instellingen.tikKeuze = keuze.name;
+            unawaited(instellingen.save());
+          }),
+    ));
+  } else if (tekst != null) {
+    _srcToast(context, tekst);
+  }
+}
+
+/// De vaste keuze voor een tik op een nummer, in Instellingen — zie [speelGetikt].
+class TikKeuzeInstelling extends StatelessWidget {
+  const TikKeuzeInstelling({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = context.watch<AppSettings>();
+    final nu = tikKeuzeUit(settings.tikKeuze);
+    return Row(
+      children: [
+        const Expanded(
+          child: Text('Tikken op een nummer, als er al een wachtrij is',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        ),
+        DropdownButton<TikKeuze>(
+          value: nu,
+          underline: const SizedBox.shrink(),
+          items: [
+            for (final k in TikKeuze.values) DropdownMenuItem(value: k, child: Text(tikKeuzeTekst(k))),
+          ],
+          onChanged: (k) {
+            if (k == null) return;
+            settings.tikKeuze = k.name;
+            unawaited(settings.save());
+          },
+        ),
+      ],
+    );
+  }
+}
+
 Future<void> _toonItemMenu(BuildContext context, ItemMenu menu, {Offset? bij}) =>
     toonItemMenu(context, menu, bij: bij);
 
@@ -12060,7 +12183,7 @@ class _WachtrijRij extends StatelessWidget {
       child: Container(
       color: speeltNu ? _panel2 : Colors.transparent,
       child: InkWell(
-        onTap: () => r != null ? p.springInRadio(plek) : p.playQueue(p.queueTracks, plek),
+        onTap: () => p.springNaar(plek),
         onLongPress: _menuOpHouden ? menu : null,
         onSecondaryTapDown: menu == null
             ? null
@@ -13991,7 +14114,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
             voorste: hoesMetTikken,
             volgende: volgendeHoezen(p, bib),
             onSpeel: (n) =>
-                p.radioMode ? p.springInRadio(p.radioIndex + n) : p.playQueue(p.queueTracks, p.currentIndex + n),
+                p.springNaar(p.currentIndex + n),
             x: _hoesX,
             onWeg: isTv ? null : () => Navigator.of(context).maybePop(),
             besturing: _stapelBesturing,
@@ -16195,7 +16318,7 @@ class TracksView extends StatelessWidget {
                   return (ik, ik && p.playing);
                 });
                 return InkWell(
-                onTap: () => player.playQueue(tracks, i),
+                onTap: () => speelGetikt(context, tracks, i),
                 // Op een tv de selectie op een vaste plek, zoals elke andere lijst (16-10-2026). Een
                 // InkWell is geen Pressable, dus hier stond de vierde rij half onder de spelerbalk.
                 onFocusChange: tvVolgFocus(rij),
@@ -27549,6 +27672,8 @@ class _SharingSectionState extends State<_SharingSection> {
           const SizedBox(height: 14),
           const StroomkwaliteitKeuze(),
         ],
+        const SizedBox(height: 14),
+        const TikKeuzeInstelling(),
         const SizedBox(height: 14),
         OutlinedButton.icon(
           onPressed: () async {

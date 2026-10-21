@@ -170,6 +170,10 @@ class AppSettings extends ChangeNotifier {
   /// `isOnderweg` in netsoort.dart.
   String laatsteWeg = '';
 
+  /// Wat een tik op een nummer doet als er al een wachtrij is: 'vragen' (een keuzemenu), 'vervang', 'nu'
+  /// (nu spelen, rest laten staan), 'hierna' of 'achteraan'. Per toestel. Zie `speelGetikt` in main.dart.
+  String tikKeuze = 'vragen';
+
   /// Hoe de radio kiest: 'bekend', 'gemengd' of 'ontdekken' — zie `radiosmaak.dart`.
   ///
   /// Als tekst, om dezelfde reden als [stroomThuis]. Leeg of onbekend leest als 'gemengd': de radio
@@ -368,6 +372,7 @@ class AppSettings extends ChangeNotifier {
         stroomOnderweg = (m['stroom_onderweg'] ?? 'cd') as String;
         stroomAdaptief = (m['stroom_adaptief'] ?? true) as bool;
         laatsteWeg = (m['laatste_weg'] ?? '') as String;
+        tikKeuze = (m['tik_keuze'] ?? 'vragen') as String;
         radioSmaak = (m['radio_smaak'] ?? 'gemengd') as String;
         luidheid = (m['luidheid'] ?? 'normaal') as String;
         luidheidAlbum = (m['luidheid_album'] ?? true) as bool;
@@ -417,6 +422,7 @@ class AppSettings extends ChangeNotifier {
         'stroom_onderweg': stroomOnderweg,
         'stroom_adaptief': stroomAdaptief,
         'laatste_weg': laatsteWeg,
+        'tik_keuze': tikKeuze,
         'radio_smaak': radioSmaak,
         'luidheid': luidheid,
         'luidheid_album': luidheidAlbum,
