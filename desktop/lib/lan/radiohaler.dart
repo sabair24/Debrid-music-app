@@ -152,6 +152,7 @@ class Radiohaler {
     int? jaar,
     bool zoekBeter = false,
     bool luistertMee = false,
+    String? album,
   }) {
     _ruimOp();
     // De leen kan verlopen zijn terwijl de radio nog loopt; hem hier opnieuw vastnemen is goedkoper
@@ -181,7 +182,8 @@ class Radiohaler {
                 jaar: jaar,
                 vroeg: g,
                 zoekDaarnaBeter: zoekBeter,
-                losVanDeRadio: luistertMee);
+                losVanDeRadio: luistertMee,
+                album: album);
       } on RadioLaterOpnieuw {
         later = true; // Soulseek op de pc doet even niet mee; het toestel probeert het straks weer
       } on RadioAlGehad catch (e) {

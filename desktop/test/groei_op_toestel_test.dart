@@ -99,6 +99,7 @@ class _Groeiend extends DownloadManager {
   Groei? gekregen;
   bool? zoekBeterGevraagd;
   final losGevraagd = <String, bool>{};
+  final albumGevraagd = <String, String?>{};
 
   @override
   Future<String?> haalEnLaatHoren(
@@ -108,10 +109,12 @@ class _Groeiend extends DownloadManager {
       int? jaar,
       Groei? vroeg,
       bool zoekDaarnaBeter = false,
-      bool losVanDeRadio = false}) async {
+      bool losVanDeRadio = false,
+      String? album}) async {
     gekregen = vroeg;
     zoekBeterGevraagd = zoekDaarnaBeter;
     losGevraagd[titel] = losVanDeRadio;
+    albumGevraagd[titel] = album;
     final pad = '$map${Platform.pathSeparator}in.flac';
     File(pad).writeAsBytesSync(_bytes(300 * 1024));
     vroeg?.poging(pad: pad, totaal: 300 * 1024);
@@ -142,9 +145,10 @@ void main() {
       final cfg = AppSettings()..vroegLuisteren = true;
       final d = _Groeiend(OnlineService(cfg), SoulseekService(cfg), map.path, () async {}, map.path);
       final h = Radiohaler(d, null, LibraryStore()..configDirOverride = map.path, cfg);
-      final haal = h.haal(artiest: 'Gorki', titel: 'Anja', zoekBeter: true, luistertMee: true);
+      final haal = h.haal(artiest: 'Gorki', titel: 'Anja', zoekBeter: true, luistertMee: true, album: 'Gorki');
       await _totDat(() => d.gekregen != null);
       expect(d.zoekBeterGevraagd, isTrue, reason: '▶ op het toestel: daarna op jacht naar beter');
+      expect(d.albumGevraagd['Anja'], 'Gorki', reason: 'het album waarop je het zag, tot in de haal');
       final g = d.gekregen!;
       // Zonder dat iemand op de pc het vraagt: de pc wacht zelf tot het kan klinken.
       await _totDat(() => g.kanKlinken);
@@ -324,12 +328,14 @@ void main() {
           library: _Catalogus(t, 'abc'), clientOf: () => pc, peilritme: const Duration(milliseconds: 5));
       final gemeld = <String>[];
       final klok = Stopwatch()..start();
-      final uit = await bron.haal(Radioplek(artiest: 'Gorki', titel: 'Anja'), zoekBeter: true, klinkt: gemeld.add);
+      final uit = await bron.haal(Radioplek(artiest: 'Gorki', titel: 'Anja', album: 'Gorki'),
+          zoekBeter: true, klinkt: gemeld.add);
       expect(uit?.path, t.path);
       expect(gemeld, ['g9'], reason: 'één keer, ook al noemt de stand hem vaker');
       final haal = pc.vragen.firstWhere((v) => v['op'] == 'haal');
       expect(haal['zoekBeter'], isTrue);
       expect(haal['meeluisteren'], isTrue);
+      expect(haal['album'], 'Gorki', reason: 'de pc tagt het bestand met het album waarop je het zag');
       // Tot het klinkt elke halve seconde: één peiling (de eerste) op dat ritme, daarna het gewone.
       expect(klok.elapsed, greaterThanOrEqualTo(kPeilritmeVoorGeluid * 2));
       expect(klok.elapsed, lessThan(const Duration(seconds: 3)));
@@ -343,6 +349,7 @@ void main() {
       final haal = pc.vragen.firstWhere((v) => v['op'] == 'haal');
       expect(haal.containsKey('meeluisteren'), isFalse);
       expect(haal.containsKey('zoekBeter'), isFalse);
+      expect(haal.containsKey('album'), isFalse);
     });
   });
 
@@ -429,6 +436,7 @@ class _Oud extends DownloadManager {
           int? jaar,
           Groei? vroeg,
           bool zoekDaarnaBeter = false,
-      bool losVanDeRadio = false}) =>
+      bool losVanDeRadio = false,
+      String? album}) =>
       fail('met de proef uit de oude weg');
 }

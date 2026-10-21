@@ -193,6 +193,8 @@ class PcRadiobron implements Radiobron {
         'titel': plek.titel,
         if (plek.seconden != null) 'seconden': plek.seconden,
         if (plek.jaar != null) 'jaar': plek.jaar,
+        // De uitgave waarop je het zag (▶). Een oudere pc negeert het.
+        if ((plek.album ?? '').trim().isNotEmpty) 'album': plek.album,
         if (zoekBeter) 'zoekBeter': true,
         if (klinkt != null) 'meeluisteren': true,
       });

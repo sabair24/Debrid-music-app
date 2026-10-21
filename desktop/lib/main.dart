@@ -17515,7 +17515,7 @@ class NieuwSpeler extends ChangeNotifier {
         // (`_radioNietBij` in online.dart): tot negen. Gemeten op de pc (19-10-2026): "Babylon" van
         // Taylor Swift, 171 van 249 treffers goed, drie afgebroken overdrachten, en er speelde niets.
         for (var ronde = 0; ronde < kNieuwHaalRondes && t == null; ronde++) {
-          final plek = Radioplek(artiest: artiest, titel: titel, seconden: seconden);
+          final plek = Radioplek(artiest: artiest, titel: titel, seconden: seconden, album: album);
           try {
             // [zoekBeter]: eerst de snelste FLAC, daarna een betere (Saber, 20-10-2026).
             t = vroeg != null

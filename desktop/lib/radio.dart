@@ -48,11 +48,16 @@ class Radioplek {
     this.deezerArtiest = 0,
     this.reserve = false,
     this.herhaling = false,
+    this.album,
   }) : teHalen = eigen == null {
     // Wat je al hebt is meteen klaar: het bestand staat er, er valt niets aan te halen. Dat is de
     // enige plek waar het onderscheid tussen "eigen muziek" en "moet nog komen" gemaakt wordt.
     if (eigen != null) stand = Haalstand.klaar;
   }
+
+  /// De uitgave waarop je dit nummer zag (▶ in de zoekuitslag of op een albumpagina), of null. Het geland
+  /// bestand krijgt die als album — zie `DownloadManager.gezagVoorHaal`.
+  final String? album;
 
   /// Moest deze plek gehaald worden (geen eigen nummer bij het maken)? Voor de opbrengst: alleen
   /// zulke plekken tellen mee in "hoeveel van wat wacht, klinkt straks".
@@ -256,6 +261,7 @@ class EigenRadiobron implements Radiobron {
               vroeg: vroeg,
               zoekDaarnaBeter: zoekBeter,
               losVanDeRadio: los,
+              album: plek.album,
             );
     } on RadioAlGehad catch (e) {
       // Geland op muziek die je al had: laten klinken, maar als JOUW nummer — zie [AlVanJou].
