@@ -11,7 +11,7 @@ import 'dtos.dart';
 import 'net.dart';
 import 'transcode.dart';
 import 'upnp.dart';
-import 'zones.dart' show SpeakerStand;
+import 'zones.dart' show SpeakerStand, plekVoorNummer;
 
 /// The Shield running the DebridMusic TV app.
 ///
@@ -390,13 +390,53 @@ class CastManager {
     bijStand?.call();
   }
 
-  /// Naar het nummer op [plek] in de wachtrij van de speaker.
-  Future<void> springNaar(String deviceId, int plek) async {
+  /// De wachtrij van een speaker met een sessie, en waar hij is. Null zonder sessie.
+  ({List<String> rij, int index})? rijVan(String deviceId) {
+    final s = _sessies[deviceId];
+    return s == null ? null : (rij: List.unmodifiable(s.queue), index: s.index);
+  }
+
+  /// Naar het nummer op [plek] in de wachtrij van de speaker. Met [trackId]: dat nummer, ook als de rij
+  /// intussen verschoof ([plekVoorNummer]).
+  Future<void> springNaar(String deviceId, int plek, {String trackId = ''}) async {
     final s = _sessies[deviceId];
     if (s == null) throw StateError('Die speaker speelt nu niets.');
-    if (plek < 0 || plek >= s.queue.length) return;
-    s.index = plek;
+    final i = plekVoorNummer(s.queue, plek, trackId);
+    if (i < 0) throw StateError('Dat nummer staat niet meer in de wachtrij.');
+    s.index = i;
     await _openCurrent(s);
+  }
+
+  /// Een nummer dat nog komt uit de wachtrij van de speaker halen.
+  Future<void> haalUit(String deviceId, int plek, {String trackId = ''}) async {
+    final s = _sessies[deviceId];
+    if (s == null) throw StateError('Die speaker speelt nu niets.');
+    final i = plekVoorNummer(s.queue, plek, trackId);
+    if (i < 0 || i == s.index) throw StateError('Dat nummer staat niet (meer) in wat er nog komt.');
+    s.queue.removeAt(i);
+    if (i < s.index) s.index--;
+    if (i == s.index + 1) await _armNext(s);
+    bijStand?.call();
+  }
+
+  /// Een nummer in de wachtrij van de speaker verplaatsen, van [van] naar [naar].
+  Future<void> verplaats(String deviceId, int van, int naar, {String trackId = ''}) async {
+    final s = _sessies[deviceId];
+    if (s == null) throw StateError('Die speaker speelt nu niets.');
+    final i = plekVoorNummer(s.queue, van, trackId);
+    if (i < 0 || i == s.index || naar < 0 || naar >= s.queue.length) {
+      throw StateError('Dat nummer staat niet (meer) in wat er nog komt.');
+    }
+    final volgendeWas = s.queue.elementAtOrNull(s.index + 1);
+    final id = s.queue.removeAt(i);
+    s.queue.insert(naar, id);
+    if (i < s.index && naar >= s.index) {
+      s.index--;
+    } else if (i > s.index && naar <= s.index) {
+      s.index++;
+    }
+    if (s.queue.elementAtOrNull(s.index + 1) != volgendeWas) await _armNext(s);
+    bijStand?.call();
   }
 
   /// [id] meteen, en de rest laten staan ("Nu spelen, rest laten staan").

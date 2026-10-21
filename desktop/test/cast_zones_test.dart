@@ -195,4 +195,24 @@ void main() {
     await expectLater(cast.voegToe(_b.id, [ids[0]], hierna: true), throwsStateError,
         reason: 'een speaker zonder sessie heeft geen wachtrij');
   });
+
+  test('weghalen, verplaatsen en springen in de wachtrij van de speaker (stap 2.4)', () async {
+    await cast.play(_a.id, [ids[0], ids[1], ids[2], ids[3]], 0, alsZone: true); // Drie, Een, Twee, Vier
+    expect([for (final i in cast.rijVan(_a.id)!.rij) titel(i)], ['Drie', 'Een', 'Twee', 'Vier']);
+
+    upnp.opdrachten.clear();
+    await cast.haalUit(_a.id, 1, trackId: ids[1]); // Een eruit: Drie, Twee, Vier
+    expect([for (final i in cast.rijVan(_a.id)!.rij) titel(i)], ['Drie', 'Twee', 'Vier']);
+    expect(upnp.van(_a.id), ['volgende Twee'], reason: 'het volgende nummer was weg: het nieuwe meegeven');
+
+    await cast.verplaats(_a.id, 2, 1, trackId: ids[3]); // Vier naar voren: Drie, Vier, Twee
+    expect([for (final i in cast.rijVan(_a.id)!.rij) titel(i)], ['Drie', 'Vier', 'Twee']);
+
+    // Met een plek die intussen niet meer klopt: het nummer zelf telt.
+    upnp.opdrachten.clear();
+    await cast.springNaar(_a.id, 1, trackId: ids[2]);
+    expect(upnp.van(_a.id).first, 'open Twee');
+    expect(cast.rijVan(_a.id)!.index, 2);
+    await expectLater(cast.haalUit(_a.id, 2, trackId: ids[2]), throwsStateError, reason: 'het spelende nummer niet');
+  });
 }

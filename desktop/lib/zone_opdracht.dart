@@ -8,6 +8,7 @@
 library;
 
 import 'models.dart';
+import 'lan/zones.dart' show plekVoorNummer;
 import 'player.dart' show Rijbediening, Speelbron;
 import 'zone_speler.dart' show herhaalUit;
 
@@ -34,10 +35,22 @@ class ZoneUitvoerder {
     required this.speler,
     required this.rij,
     required this.nummer,
+    this.idVan,
     this.radio,
     this.naUitvoeren,
     this.log,
   });
+
+  /// Het id van de pc voor een nummer hier: om bij springen, weghalen en verplaatsen het juiste nummer
+  /// te vinden als de wachtrij intussen verschoof. Null: alleen op de plek.
+  final String? Function(Track t)? idVan;
+
+  /// Waar het nummer [trackId] (met [plek] als voorkeur) nu in de wachtrij van de speler staat.
+  int _plek(int plek, String trackId) {
+    final f = idVan;
+    if (f == null || trackId.isEmpty) return plek;
+    return plekVoorNummer([for (final t in speler.queueTracks) f(t) ?? ''], plek, trackId);
+  }
 
   final Speelbron speler;
   final Rijbediening rij;
@@ -84,7 +97,19 @@ class ZoneUitvoerder {
         case 'volume':
           speler.setVolume(((op['waarde'] as num?) ?? 100).toDouble());
         case 'jump':
-          await speler.springNaar((op['plek'] as num?)?.toInt() ?? 0);
+          final i = _plek((op['plek'] as num?)?.toInt() ?? 0, '${op['trackId'] ?? ''}');
+          if (i < 0) {
+            fout = 'Dat nummer staat niet meer in de wachtrij';
+          } else {
+            await speler.springNaar(i);
+          }
+        case 'remove':
+          final i = _plek((op['plek'] as num?)?.toInt() ?? -1, '${op['trackId'] ?? ''}');
+          if (i < 0 || !speler.haalUitWachtrij(i)) fout = 'Dat nummer staat niet (meer) in de wachtrij';
+        case 'move':
+          final i = _plek((op['van'] as num?)?.toInt() ?? -1, '${op['trackId'] ?? ''}');
+          final naar = (op['naar'] as num?)?.toInt() ?? -1;
+          if (i < 0 || !speler.verplaatsInWachtrij(i, naar)) fout = 'Dat nummer staat niet (meer) in de wachtrij';
         case 'speel':
           final r = rijUitIds(ids, (op['plek'] as num?)?.toInt() ?? 0, nummer);
           if (r.rij.isEmpty) {

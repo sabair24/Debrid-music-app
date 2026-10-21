@@ -167,6 +167,7 @@ class LanServer {
       },
     );
     cast.bijStand = () => zones.zetSpeakers(cast.laatsteStanden, bekend: cast.bekendeSpeakers);
+    zones.speakerRij = cast.rijVan;
     // NIET afhankelijk van `configDir`, en dat is een reparatie.
     //
     // Stond die map leeg op het moment dat de server werd opgezet — en dat kan, want `applySettings`
@@ -378,7 +379,12 @@ class LanServer {
           case 'nu':
             await cast.speelNu(speaker, '${op['id'] ?? ''}');
           case 'jump':
-            await cast.springNaar(speaker, (op['plek'] as num?)?.toInt() ?? 0);
+            await cast.springNaar(speaker, (op['plek'] as num?)?.toInt() ?? 0, trackId: '${op['trackId'] ?? ''}');
+          case 'remove':
+            await cast.haalUit(speaker, (op['plek'] as num?)?.toInt() ?? -1, trackId: '${op['trackId'] ?? ''}');
+          case 'move':
+            await cast.verplaats(speaker, (op['van'] as num?)?.toInt() ?? -1, (op['naar'] as num?)?.toInt() ?? -1,
+                trackId: '${op['trackId'] ?? ''}');
           default:
             return (status: 409, antwoord: {'error': 'Dat kan nog niet op een speaker.'});
         }
@@ -1577,6 +1583,15 @@ class LanServer {
   /// De volledige melding van één zone, mét de wachtrij: wat "Hier verder luisteren" vanaf die zone
   /// nodig heeft. 404 als die zone niets meldde.
   Future<void> _zoneStand(HttpRequest req) async {
+    // Met `venster`: alleen een stuk van de wachtrij rond het spelende nummer (het wachtrijpaneel).
+    if (req.uri.queryParameters['venster'] == '1') {
+      final v = zones.rijVenster(req.uri.queryParameters['zone'] ?? '');
+      if (v == null) {
+        req.response.statusCode = HttpStatus.notFound;
+        return req.response.close();
+      }
+      return _json(req.response, v);
+    }
     final p = zones.standVan(req.uri.queryParameters['zone'] ?? '');
     if (p == null) {
       req.response.statusCode = HttpStatus.notFound;
