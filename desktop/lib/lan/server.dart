@@ -83,7 +83,7 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/config', '/api/radio', '/api/jobs', '/api/kwaliteit', '/api/nieuw', '/api/corrections', '/api/move/plan',
     '/api/move/apply',
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
-    '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd', '/api/zone/transfer',
+    '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd', '/api/zone/transfer', '/api/tijd',
     '/api/releaseart',
   };
   const voorvoegsels = ['/stream/', '/groei/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
@@ -169,6 +169,10 @@ class LanServer {
     cast.bijStand = () =>
         zones.zetSpeakers(cast.laatsteStanden, bekend: cast.bekendeSpeakers, groepen: cast.speakerGroepen);
     zones.speakerRij = cast.rijVan;
+    // Samen spelen (stap 3.2): elke melding van een leider gaat als anker naar zijn volgers.
+    _ankerSub = state.zoneChanges.listen((toestel) {
+      if (zones.toestelGroepen.containsKey(toestel)) _stuurAnkers(toestel);
+    });
     // NIET afhankelijk van `configDir`, en dat is een reparatie.
     //
     // Stond die map leeg op het moment dat de server werd opgezet — en dat kan, want `applySettings`
@@ -318,6 +322,28 @@ class LanServer {
 
   /// Alle zones: wat elk toestel en elke speaker speelt, en wie er bereikbaar is. Zie `zones.dart`.
   late final ZoneRegister zones;
+  StreamSubscription<String>? _ankerSub;
+
+  /// Het anker van [leider] naar al zijn volgers (zie `samen.dart`), of alleen naar [enkel].
+  void _stuurAnkers(String leider, {String? enkel}) {
+    final anker = zones.ankerVan(leider);
+    if (anker == null) return;
+    for (final v in [...?zones.toestelGroepen[leider]]) {
+      if (enkel != null && v != enkel) continue;
+      unawaited(_naarToestel(v, {'cmd': 'samen', 'anker': anker, 'id': 'anker-${anker['pcMs']}-$v'}));
+    }
+  }
+
+  /// Een opdracht naar een toestel zelf (de pc of over zijn lijn), zonder antwoord af te wachten.
+  Future<void> _naarToestel(String toestel, Map<String, dynamic> op) async {
+    if (toestel == zones.pcId) {
+      await bijZoneOpdracht?.call({...op, 'van': 'samen'});
+      return;
+    }
+    for (final l in [...?_zoneLijnen[toestel]]) {
+      l('cmd', {...op, 'van': 'samen'});
+    }
+  }
 
   /// Wat de pc doet met een opdracht voor zijn EIGEN zone (zie `zone_opdracht.dart`). Gezet door main;
   /// null = de pc kan zijn eigen zone (nog) niet laten bedienen.
@@ -342,8 +368,24 @@ class LanServer {
     final metVan = {...op, 'van': van};
     String naam() => zones.lijst().where((z) => z.id == zone).map((z) => z.naam).firstOrNull ?? 'Die zone';
     _zoneLog.line('opdracht $cmd → $zone  (van $van)');
-    if (cmd == 'groepeer' && !zone.startsWith('spk:')) {
-      return (status: 409, antwoord: {'error': 'Toestellen samen laten spelen komt in een volgende stap; Sonossen kunnen al.'});
+    if (cmd == 'groepeer' && zone.startsWith('dev:')) {
+      // Toestellen samen (stap 3.2): de pc houdt de groep bij en stuurt de volgers.
+      final leider = zone.substring(4);
+      final volgers = [
+        for (final x in (op['leden'] as List? ?? const []))
+          if ('$x'.startsWith('dev:') && '$x' != zone) '$x'.substring(4),
+      ];
+      // Volgde de nieuwe leider zelf een groep: dan houdt hij daarmee op, en speelt hij gewoon door.
+      final wasVolger = volgers.isNotEmpty && zones.leiderVan(leider) != null;
+      final weg = zones.zetToestelGroep(leider, volgers);
+      if (wasVolger) {
+        unawaited(_naarToestel(leider, {'cmd': 'samenStop', 'houdSpelen': true, 'id': 'stop-${zones.nu}-$leider'}));
+      }
+      for (final w in weg) {
+        unawaited(_naarToestel(w, {'cmd': 'samenStop', 'id': 'stop-${zones.nu}-$w'}));
+      }
+      _stuurAnkers(leider);
+      return (status: 200, antwoord: {'bezorgd': 1});
     }
     if (zone == 'dev:${zones.pcId}') {
       final f = bijZoneOpdracht;
@@ -618,6 +660,7 @@ class LanServer {
   Future<void> dispose() async {
     await stop();
     cast.dispose();
+    await _ankerSub?.cancel();
     await zones.dispose();
     catalog.dispose();
     // Een opslagbeurt die een verzoek net startte (`touch`), nog afmaken: anders gaat hij verloren,
@@ -757,6 +800,9 @@ class LanServer {
         return _events(req);
       case '/api/zones':
         return _json(res, zones.snapshot());
+      case '/api/tijd':
+        // De klok van de pc, voor samen spelen (samen.dart `KlokIjk`). Zo kort mogelijk: elke ms telt.
+        return _json(res, {'nu': DateTime.now().microsecondsSinceEpoch});
       case '/api/zones/events':
         return _zoneEvents(req);
       case '/api/zones/stand':
@@ -1646,6 +1692,9 @@ class LanServer {
     if (toestel.isNotEmpty) {
       zones.stroomOpen(toestel, naam: naam, soort: soort);
       _zoneLijnen.putIfAbsent(toestel, () => []).add(send);
+      // Een volger die (opnieuw) verbindt: meteen weten waar de groep is.
+      final leider = zones.leiderVan(toestel);
+      if (leider != null) scheduleMicrotask(() => _stuurAnkers(leider, enkel: toestel));
     }
     send('zones', zones.snapshot());
     send('stand', stand());

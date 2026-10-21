@@ -265,15 +265,22 @@ class CastManager {
   /// [leiderId] met precies [ledenIds] in één groep: wie er nog niet in zat, komt erbij (en houdt op met
   /// zijn eigen muziek); wie er wel in zat en niet in [ledenIds] staat, gaat eruit. Alleen Sonossen: die
   /// lopen onderling op de seconde gelijk.
+  ///
+  /// **De Sonossen melden een nieuwe groep pas na een paar seconden** (gemeten 21-10-2026: "los" kort na
+  /// "samen" deed niets, want de pc zag de groep nog niet). Daarom eerst de echte groepen lezen, dan meteen
+  /// tonen wat er gevraagd is, en na 2 en 5 s nog eens nalezen.
   Future<void> groepeer(String leiderId, List<String> ledenIds) async {
     final leider = await _renderer(leiderId);
     if (!leider.isSonos || leider.udn.isEmpty) throw StateError('Alleen Sonossen kunnen (nog) samen spelen.');
+    // Wat er net gevraagd was (misschien nog niet door de Sonossen gemeld) én wat ze nu melden.
+    final gevraagd = {...?_groepVan(leiderId)?.leden};
+    await leesGroepen();
     // Is de leider zelf lid van een andere groep, dan eerst op zichzelf.
     if (_groepen.any((g) => g.leider != leiderId && g.leden.contains(leiderId))) {
       await _upnp.maakLosUitGroep(leider);
     }
     final willen = {...ledenIds}..remove(leiderId);
-    final nu = {...?_groepVan(leiderId)?.leden}..remove(leiderId);
+    final nu = {...gevraagd, ...?_groepVan(leiderId)?.leden}..remove(leiderId);
     for (final id in willen.difference(nu)) {
       final lid = await _renderer(id);
       if (!lid.isSonos || lid.udn.isEmpty) throw StateError('${lid.name} is geen Sonos.');
@@ -286,7 +293,17 @@ class CastManager {
       await _upnp.maakLosUitGroep(await _renderer(id));
       _log?.line('groep: ${_renderers[id]?.name ?? id} los van ${leider.name}');
     }
-    await leesGroepen();
+    // Meteen tonen wat er gevraagd is; de Sonossen bevestigen het straks.
+    _groepen = [
+      for (final g in _groepen)
+        if (g.leider != leiderId && !willen.contains(g.leider))
+          (leider: g.leider, leden: [for (final l in g.leden) if (l != leiderId && !willen.contains(l)) l]),
+      if (willen.isNotEmpty) (leider: leiderId, leden: [leiderId, ...willen]),
+    ].where((g) => g.leden.length > 1).toList();
+    bijStand?.call();
+    for (final na in const [Duration(seconds: 2), Duration(seconds: 5)]) {
+      Timer(na, () => unawaited(leesGroepen()));
+    }
   }
 
   /// Om de [elke] op het netwerk kijken welke speakers er zijn (en meteen één keer). Alleen in de app:

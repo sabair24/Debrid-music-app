@@ -779,6 +779,15 @@ class RemoteClient {
     return decoded is Map<String, dynamic> ? decoded : null;
   }
 
+  /// De klok van de pc (µs), voor samen spelen (`samen.dart` KlokIjk). Een kort antwoord; null bij een
+  /// pc van vóór stap 3.2.
+  Future<int?> tijd() async {
+    final res = await _http.get(_api('/api/tijd'), headers: _headers).timeout(const Duration(seconds: 3));
+    if (res.statusCode != 200) return null;
+    final m = jsonDecode(res.body);
+    return m is Map ? (m['nu'] as num?)?.toInt() : null;
+  }
+
   /// Een venster op de wachtrij van een zone (`{index, lengte, van, rij}`, zie `ZoneRegister.rijVenster`),
   /// of null als die zone geen wachtrij meldt.
   Future<Map<String, dynamic>?> zoneRij(String zone) async {

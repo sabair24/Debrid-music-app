@@ -881,6 +881,33 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
   bool playing = false;
   @override
   Duration position = Duration.zero;
+
+  /// Wanneer [position] het laatst gemeld werd (microseconden, klok van dit toestel).
+  int _positieOp = 0;
+
+  /// De snelheid waarmee er nu gespeeld wordt (1.0 = gewoon). Zie [zetSnelheid].
+  double snelheid = 1.0;
+
+  /// De plek in het nummer op dit moment, tot op de milliseconde: de laatste melding van mpv plus de
+  /// tijd sindsdien (bij de huidige [snelheid]). mpv meldt zijn plek in stapjes; voor samen spelen
+  /// (groeperen, stap 3.2) is dat te grof.
+  Duration get positieNauwkeurig {
+    if (!playing || _positieOp == 0) return position;
+    final sinds = DateTime.now().microsecondsSinceEpoch - _positieOp;
+    if (sinds <= 0 || sinds > 2000000) return position;
+    return position + Duration(microseconds: (sinds * snelheid).round());
+  }
+
+  /// Iets sneller of trager spelen, om bij te sturen als toestellen samen spelen (stap 3.2). mpv houdt
+  /// de toonhoogte gelijk.
+  Future<void> zetSnelheid(double v) async {
+    if ((v - snelheid).abs() < 0.0005) return;
+    // Eerst vastleggen waar we nu zijn, anders rekent [positieNauwkeurig] met de nieuwe snelheid terug.
+    position = positieNauwkeurig;
+    _positieOp = DateTime.now().microsecondsSinceEpoch;
+    snelheid = v;
+    await _player.setRate(v);
+  }
   @override
   Duration duration = Duration.zero;
 
@@ -1283,6 +1310,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
     });
     _player.stream.position.listen((p) {
       position = p;
+      _positieOp = DateTime.now().microsecondsSinceEpoch;
       if (_pcWachtVoor != null && p > Duration.zero) _pcIsTerug();
       // Het volgende nummer vooruit halen, maar pas als dit nummer echt loopt, en daarna elke
       // [kVooruitHerhaal] nog eens — een poging die halverwege afbrak gaat dan verder.
@@ -3018,7 +3046,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
       if (!force && nu.difference(_lastPosSave).inSeconds < 5) return;
       _lastPosSave = nu;
       final t = current;
-      if (t != null) onProgress?.call(t, position, playing, [t], 0);
+      if (t != null) onProgress?.call(t, positieNauwkeurig, playing, [t], 0);
       return;
     }
     final now = DateTime.now();
@@ -3026,7 +3054,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
     _lastPosSave = now;
     final t = current;
     if (t == null) return;
-    onProgress?.call(t, position, playing, _order, _index);
+    onProgress?.call(t, positieNauwkeurig, playing, _order, _index);
     try {
       await Directory(_appDir).create(recursive: true);
       await _posFile.writeAsString(jsonEncode({

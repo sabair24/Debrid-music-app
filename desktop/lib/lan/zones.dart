@@ -407,6 +407,60 @@ class ZoneRegister {
   }
 
   List<({String id, String naam, bool sonos})> _bekend = const [];
+
+  /// Toestellen die samen spelen (stap 3.2): per leider (toestel-id) de volgers. Zie `samen.dart`.
+  final Map<String, List<String>> toestelGroepen = {};
+
+  /// [leider] met precies [volgers] (toestel-ids; leeg = geen groep). Geeft de volgers terug die
+  /// eruit gingen. Een toestel zit in hoogstens één groep, en een leider is geen volger.
+  List<String> zetToestelGroep(String leider, List<String> volgers) {
+    final weg = <String>[...?toestelGroepen[leider]];
+    final nieuw = [for (final v in volgers.toSet()) if (v != leider && v.isNotEmpty) v];
+    // Een leider volgt niemand: weg uit een groep waar hij volger was.
+    if (nieuw.isNotEmpty) {
+      for (final e in toestelGroepen.entries.toList()) {
+        if (e.key == leider) continue;
+        e.value.remove(leider);
+        if (e.value.isEmpty) toestelGroepen.remove(e.key);
+      }
+    }
+    // Wie elders volgde of leidde, komt daar weg.
+    for (final v in nieuw) {
+      for (final e in toestelGroepen.entries.toList()) {
+        if (e.key == leider) continue;
+        e.value.remove(v);
+        if (e.value.isEmpty) toestelGroepen.remove(e.key);
+      }
+      final eigen = toestelGroepen.remove(v);
+      if (eigen != null) weg.addAll(eigen);
+    }
+    if (nieuw.isEmpty) {
+      toestelGroepen.remove(leider);
+    } else {
+      toestelGroepen[leider] = nieuw;
+    }
+    _meld();
+    return [for (final w in weg.toSet()) if (!nieuw.contains(w) && w != leider) w];
+  }
+
+  /// De leider van [toestel] als het volgt, of null.
+  String? leiderVan(String toestel) =>
+      toestelGroepen.entries.where((e) => e.value.contains(toestel)).map((e) => e.key).firstOrNull;
+
+  /// Het anker van de groep van [leider]: wat de leider het laatst meldde. Null zonder melding.
+  Map<String, dynamic>? ankerVan(String leider) {
+    final p = state.perToestel[leider];
+    if (p == null || p.trackId.isEmpty) return null;
+    return {
+      'groep': 'dev:$leider',
+      'trackId': p.trackId,
+      'rij': p.queue,
+      'index': p.index,
+      'positieMs': p.positionMs,
+      'pcMs': p.updatedAt,
+      'speelt': p.playing,
+    };
+  }
   List<({String leider, List<String> leden})> _groepen = const [];
 
   /// De toestellen met een open stroom: wie "Speel op …" van de pc kan krijgen.
@@ -423,8 +477,9 @@ class ZoneRegister {
       if (t - e.value.updatedAt <= kZoneTotEenDag.inMilliseconds) ids.add(e.key);
     }
     final uit = <ZoneStaat>[];
+    final volgers = {for (final v in toestelGroepen.values) ...v};
     for (final id in ids) {
-      if (id.isEmpty) continue;
+      if (id.isEmpty || volgers.contains(id)) continue;
       final p = state.perToestel[id];
       final wie = _wie[id];
       final pc = id == pcId;
@@ -440,7 +495,19 @@ class ZoneRegister {
                   ? p!.deviceName
                   : 'Toestel';
       final soort = pc ? ZoneSoort.pc : wie?.soort ?? zoneSoortVoor(platform: '', naam: naam);
-      uit.add(_zoneUit(id: 'dev:$id', soort: soort, naam: naam, online: online, p: vers ? p : null));
+      final groep = toestelGroepen[id];
+      final z = _zoneUit(
+          id: 'dev:$id',
+          soort: soort,
+          naam: groep == null ? naam : [naam, for (final v in groep) _naamVanToestel(v)].join(' + '),
+          online: online,
+          p: vers ? p : null);
+      uit.add(ZoneStaat.fromJson({
+        ...z.toJson(),
+        // Elk toestel met de app kan met andere samen spelen (stap 3.2).
+        'kanGroeperen': true,
+        if (groep != null) 'groep': ['dev:$id', for (final v in groep) 'dev:$v'],
+      }));
     }
     // Groepen (stap 3.1): de leider draagt de namen van allemaal; de leden staan er niet apart in.
     final namen = {for (final b in _bekend) b.id: b.naam, for (final s in _speakers) s.id: s.naam};
@@ -492,6 +559,14 @@ class ZoneRegister {
       ));
     }
     return ordenZones(uit, hier: 'dev:$pcId');
+  }
+
+  String _naamVanToestel(String id) {
+    if (id == pcId) return pcNaam;
+    final w = _wie[id];
+    if (w != null && w.naam.isNotEmpty) return w.naam;
+    final p = state.perToestel[id];
+    return p != null && p.deviceName.isNotEmpty ? p.deviceName : 'Toestel';
   }
 
   ZoneStaat _zoneUit({
