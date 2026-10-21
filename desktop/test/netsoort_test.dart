@@ -7,6 +7,7 @@ library;
 import 'dart:io';
 
 import 'package:debridmusic/lan/stroomstand.dart';
+import 'package:debridmusic/lan/verbindingsstand.dart' show Verbindingsweg;
 import 'package:debridmusic/netsoort.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -16,6 +17,7 @@ void main() {
     Stroomstand onderweg = Stroomstand.cd,
     bool adaptief = true,
     Netsoort net = Netsoort.wifi,
+    Verbindingsweg? weg,
     bool noodstand = false,
     bool tv = false,
   }) =>
@@ -24,6 +26,7 @@ void main() {
           onderweg: onderweg,
           adaptief: adaptief,
           net: net,
+          weg: weg,
           noodstand: noodstand,
           tv: tv);
 
@@ -52,6 +55,47 @@ void main() {
       // Niemand houdt je tegen om onderweg juist méér te willen. Rare keuze, maar geen fout.
       expect(stand(thuis: Stroomstand.cd, onderweg: Stroomstand.max, net: Netsoort.mobiel),
           Stroomstand.max);
+    });
+  });
+
+  group('de weg naar de pc (21-10-2026: Wonderwall als origineel op mobiele data)', () {
+    test('niet thuis verbonden is onderweg, ook als de netsoort nog onbekend is of wifi zegt', () {
+      expect(stand(net: Netsoort.onbekend, weg: Verbindingsweg.rechtstreeks), Stroomstand.cd,
+          reason: 'koude start of midden in een wissel: Android zegt nog niets, de weg is al bekend');
+      expect(stand(net: Netsoort.onbekend, weg: Verbindingsweg.tailscale), Stroomstand.cd);
+      expect(stand(net: Netsoort.wifi, weg: Verbindingsweg.rechtstreeks), Stroomstand.cd,
+          reason: 'een wifi die niet de jouwe is (op het werk)');
+    });
+
+    test('thuis verbonden blijft thuis; zonder weg beslist de netsoort zoals voorheen', () {
+      expect(stand(net: Netsoort.wifi, weg: Verbindingsweg.thuis), Stroomstand.max);
+      expect(stand(net: Netsoort.onbekend, weg: Verbindingsweg.thuis), Stroomstand.max);
+      expect(stand(net: Netsoort.onbekend), Stroomstand.max);
+      expect(stand(net: Netsoort.mobiel, weg: Verbindingsweg.thuis), Stroomstand.cd);
+    });
+
+    test('een tv blijft thuis, en adaptief uit blijft thuis', () {
+      expect(stand(tv: true, weg: Verbindingsweg.rechtstreeks), Stroomstand.max);
+      expect(stand(adaptief: false, weg: Verbindingsweg.rechtstreeks), Stroomstand.max);
+    });
+
+    test('de noodstand geldt ook onderweg op een vreemde wifi', () {
+      expect(
+          stand(net: Netsoort.wifi, weg: Verbindingsweg.rechtstreeks, noodstand: true, onderweg: Stroomstand.hoog),
+          Stroomstand.cd);
+    });
+
+    test('NetsoortStore gebruikt de weg van de sessie', () {
+      final s = NetsoortStore()..wegNu = () => Verbindingsweg.rechtstreeks;
+      expect(s.onderweg, isTrue);
+      s.wegNu = () => Verbindingsweg.thuis;
+      expect(s.onderweg, isFalse);
+    });
+
+    test('aangesloten: de sessie geeft haar weg, en het vooruithalen volgt onderweg', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(main, contains('netStore.wegNu = () => session.wegVoorStroom;'));
+      expect(main, contains('opMobiel: netStore.onderweg,'));
     });
   });
 

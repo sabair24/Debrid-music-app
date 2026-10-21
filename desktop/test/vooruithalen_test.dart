@@ -120,7 +120,7 @@ void main() {
       staatErin(main, "OfflineStore(map: 'vooruit', indexNaam: 'vooruit.json')",
           'in je eigen offline-lijst hoort het niet');
       staatErin(main, 'await vooruit.leegMap();', 'wat er van een vorige keer ligt, hoort weg');
-      staatErin(main, 'opMobiel: netStore.net == Netsoort.mobiel,', 'alleen op mobiele data halen');
+      staatErin(main, 'opMobiel: netStore.onderweg,', 'alleen onderweg halen (mobiele data, of niet thuis verbonden)');
     });
   });
 }

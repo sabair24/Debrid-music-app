@@ -17,6 +17,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'lan/stroomstand.dart';
+import 'lan/verbindingsstand.dart' show Verbindingsweg;
 import 'settings.dart';
 import 'tv.dart' show isTv;
 
@@ -50,19 +51,32 @@ enum Netsoort { wifi, mobiel, onbekend }
 ///
 /// [tv]: een televisie zit thuis, altijd. Android kan zijn netwerk ook daar "beperkt" noemen (een
 /// VPN, een gedeelde verbinding) en dan las de app "mobiel"; dan geldt [thuis] toch.
+///
+/// [weg]: langs welke weg dit toestel met de pc praat. **Niet thuis (Tailscale, of rechtstreeks van
+/// buitenaf) is onderweg, wat de netsoort ook zegt.** Saber, 21-10-2026: op mobiele data kwam Wonderwall
+/// om 12:35 als origineel (92 MB, 24/96) binnen en twee minuten later weer als cd — "dat gebeurt af en toe
+/// wel, zeker bij een cold start of wisselen van netwerk". Bij een koude start en midden in een wissel zegt
+/// Android vaak nog niets ([Netsoort.onbekend] — de dure kant), en de netsoort wordt alleen om de dertig
+/// seconden opnieuw gevraagd; de weg naar de pc is dan al wél bekend. Een wifi die niet de jouwe is (op
+/// het werk) telt zo ook als onderweg: alles gaat dan door je eigen deur en over je thuislijn.
 Stroomstand welkeStand({
   required Stroomstand thuis,
   required Stroomstand onderweg,
   required bool adaptief,
   required Netsoort net,
+  Verbindingsweg? weg,
   bool noodstand = false,
   bool tv = false,
 }) {
   if (tv) return thuis;
-  final onderwegNu = net == Netsoort.mobiel;
+  final onderwegNu = isOnderweg(net: net, weg: weg);
   final gekozen = (adaptief && onderwegNu) ? onderweg : thuis;
   return noodstand && onderwegNu ? eenSportLager(gekozen) : gekozen;
 }
+
+/// Ben je onderweg — op mobiele data, of verbonden met de pc langs een andere weg dan thuis? Zie [welkeStand].
+bool isOnderweg({required Netsoort net, Verbindingsweg? weg}) =>
+    net == Netsoort.mobiel || (weg != null && weg != Verbindingsweg.thuis);
 
 /// Regel B: één sport omlaag, en nooit onder de onderste.
 ///
@@ -137,6 +151,14 @@ class NetsoortStore extends ChangeNotifier {
 
   Timer? _klok;
 
+  /// Langs welke weg dit toestel nu met de pc praat (de sessie, of de laatst bekende als hij net opnieuw
+  /// zoekt). Gezet in main.dart; null = geen pc in beeld (de pc zelf).
+  Verbindingsweg? Function() wegNu = _geenWeg;
+  static Verbindingsweg? _geenWeg() => null;
+
+  /// Onderweg — zie [isOnderweg]. Voor de stand en voor het vooruithalen.
+  bool get onderweg => isOnderweg(net: _net, weg: wegNu());
+
   /// Zet de grendel. Meer dan één hapering in dezelfde sessie zakt niet verder — één sport is één
   /// sport, en onder de cd-stand is er niets.
   void hapering() {
@@ -180,6 +202,7 @@ class NetsoortStore extends ChangeNotifier {
         onderweg: standUitNaam(s.stroomOnderweg, terugval: Stroomstand.cd),
         adaptief: s.stroomAdaptief,
         net: _net,
+        weg: wegNu(),
         noodstand: _noodstand,
         tv: isTv,
       );

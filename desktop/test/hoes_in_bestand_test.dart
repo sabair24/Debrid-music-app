@@ -315,6 +315,51 @@ void main() {
       final sleutel = hoesSleutel(paden[0], st.modified.millisecondsSinceEpoch, st.size);
       expect(File('${lib.hoesCacheMap}${Platform.pathSeparator}$sleutel').readAsBytesSync(), gekozen);
       veger.stop();
+
+      // Na een herstart: wat al klaar was en niet veranderde, gaat niet meer open (3.9.540 keek alles na).
+      lib.albums = [
+        Album('Pochette Surprise', 'Jordy', [
+          for (final p in paden)
+            Track(
+                path: p,
+                title: 'x',
+                artist: 'Jordy',
+                album: 'Pochette Surprise',
+                isFlac: true,
+                sizeBytes: File(p).lengthSync(),
+                addedMs: File(p).lastModifiedSync().millisecondsSinceEpoch)
+        ])
+          ..resolvedCover = gekozen
+          ..resolvedFrom = 'dz:664022531',
+      ];
+      final opnieuw = HoesInBestandVeger(library: lib, tussenpoos: Duration.zero, startNa: const Duration(hours: 1));
+      await opnieuw.start();
+      await opnieuw.ronde();
+      final log2 = File('${map.path}${Platform.pathSeparator}hoes_in_bestand.log').readAsStringSync();
+      expect(log2, contains('ronde: 1 nummers in 1 albums'), reason: 'alleen het nummer dat toen speelde');
+
+      // Een ander bestand op hetzelfde pad (Alanis Morissette — Perfect, opnieuw gedownload): een nieuwe vraag,
+      // ook binnen dezelfde sessie.
+      File(paden[0]).writeAsBytesSync(_flac([(4, tags), (6, _picture(3, oudeHoes)), (1, Uint8List(30000))], audio));
+      // Zoals na een download: de bibliotheek kent het nieuwe bestand (grootte, datum), en dat start de ronde.
+      lib.albums = [
+        Album('Pochette Surprise', 'Jordy', [
+          for (final p in paden)
+            Track(
+                path: p,
+                title: 'x',
+                artist: 'Jordy',
+                album: 'Pochette Surprise',
+                isFlac: true,
+                sizeBytes: File(p).lengthSync(),
+                addedMs: File(p).lastModifiedSync().millisecondsSinceEpoch)
+        ])
+          ..resolvedCover = gekozen
+          ..resolvedFrom = 'dz:664022531',
+      ];
+      await opnieuw.ronde();
+      expect(readFlacPicture(File(paden[0])).hoes, gekozen, reason: 'het nieuwe bestand kreeg de hoes ook');
+      opnieuw.stop();
     });
   });
 

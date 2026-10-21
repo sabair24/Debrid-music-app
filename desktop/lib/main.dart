@@ -945,6 +945,8 @@ Future<void> main() async {
     session.geenNetwerk = () => wacht.geenNetwerk;
     // En of er alleen mobiele data is: dan is een thuisadres dat antwoordt "via Tailscale".
     session.opMobiel = () => wacht.opMobiel;
+    // De streamkwaliteit volgt ook de weg naar de pc: niet thuis = onderweg (netsoort.dart, 21-10-2026).
+    netStore.wegNu = () => session.wegVoorStroom;
   }
   // Als het openen mislukt en dit toestel zelf niets kan zien, de pc vragen. Een closure en geen
   // vaste verwijzing: `library.remote` wordt pas verderop gezet, en op de pc blijft hij null —
@@ -983,7 +985,8 @@ Future<void> main() async {
     final plan = vooruitPlan(
       huidig: huidig?.path,
       volgende: volgende?.path,
-      opMobiel: netStore.net == Netsoort.mobiel,
+      // Onderweg, ook op een wifi die niet de jouwe is — zie `isOnderweg`.
+      opMobiel: netStore.onderweg,
       stroomt: (p) => player.mediaResolver(p).startsWith('http'),
     );
     unawaited(vooruit.houdAlleen(plan.houden));
@@ -35351,7 +35354,7 @@ class StroomkwaliteitKeuze extends StatelessWidget {
           const Text('Streamkwaliteit',
               style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
           const SizedBox(height: 10),
-          Text(_isTouch ? 'Op wifi' : 'Kwaliteit',
+          Text(_isTouch ? 'Thuis' : 'Kwaliteit',
               style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           _chips(context, huidig: thuis, kies: (s) {
@@ -35370,12 +35373,12 @@ class StroomkwaliteitKeuze extends StatelessWidget {
               },
               title: const Text('Onderweg minder gebruiken',
                   style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
-              subtitle: Text('Schakelt om zodra je op mobiele data zit.',
+              subtitle: Text('Schakelt om zodra je niet op je thuisnetwerk zit: mobiele data, of een andere wifi.',
                   style: TextStyle(color: _muted, fontSize: 11.5)),
             ),
             if (settings.stroomAdaptief) ...[
               const SizedBox(height: 2),
-              const Text('Op mobiele data',
+              const Text('Onderweg',
                   style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
               _chips(context, huidig: onderweg, kies: (s) {

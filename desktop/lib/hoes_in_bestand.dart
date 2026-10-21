@@ -379,9 +379,51 @@ class HoesInBestandVeger {
   final Expando<String> _merkVan = Expando();
   final Expando<Uint8List> _verkleindVan = Expando();
 
-  /// Per pad het merk van de hoes die er deze sessie al in staat (geschreven of al gelijk): wat niet
-  /// veranderde, hoeft de volgende ronde niet opnieuw open.
-  final Map<String, String> _klaar = {};
+  /// Per pad (kleine letters) "merk|grootte|datum": met welke hoes het bestand klaar is, en welk bestand
+  /// dat toen was. Ook over herstarts heen (`hoes_in_bestand.json`). Klopt dat nog, dan hoeft het niet open.
+  ///
+  /// **Met grootte en datum, en niet alleen het merk.** Gemeten op 21-10-2026: na een herstart keek de veger
+  /// alle 1586 al goede nummers opnieuw na (609 s); en Alanis Morissette — Perfect, deze sessie "niet te
+  /// herschrijven" (een kapotte kop), bleef dat ook nadat Saber hem opnieuw downloadde — het nieuwe, gave
+  /// bestand kwam pas na een herstart aan de beurt. Een ander bestand op hetzelfde pad is nu een nieuwe vraag.
+  Map<String, String>? _opSchijf;
+  bool _opSchijfVeranderd = false;
+  String get _indexPad => '${library.configDir}${Platform.pathSeparator}hoes_in_bestand.json';
+
+  Map<String, String> _laadOpSchijf() {
+    final al = _opSchijf;
+    if (al != null) return al;
+    final uit = <String, String>{};
+    try {
+      final f = File(_indexPad);
+      if (f.existsSync()) {
+        for (final e in (jsonDecode(f.readAsStringSync()) as Map<String, dynamic>).entries) {
+          if (e.value is String) uit[e.key] = e.value as String;
+        }
+      }
+    } catch (_) {/* dan kijkt deze ronde alles na, en schrijft het opnieuw */}
+    return _opSchijf = uit;
+  }
+
+  /// Onthoud dat [pad] klaar is met [merk], met zijn grootte en datum van nu.
+  void _onthoud(String pad, String merk) {
+    try {
+      final st = File(pad).statSync();
+      _laadOpSchijf()[pad.toLowerCase()] = '$merk|${st.size}|${st.modified.millisecondsSinceEpoch}';
+      _opSchijfVeranderd = true;
+    } catch (_) {}
+  }
+
+  void _bewaarOpSchijf() {
+    if (!_opSchijfVeranderd) return;
+    try {
+      File(_indexPad).writeAsStringSync(jsonEncode(_opSchijf));
+      _opSchijfVeranderd = false;
+    } catch (e) {
+      _log.line('hoes_in_bestand.json niet bewaard: $e');
+    }
+  }
+
   String? _nuPad;
   Future<void>? _nu;
 
@@ -430,6 +472,20 @@ class HoesInBestandVeger {
     return !_gestopt;
   }
 
+  /// Is [t] al klaar met [merk]? Eerst wat de bibliotheek van het bestand weet; loopt die achter (het
+  /// bestand groeide door ons, en dat ziet ze pas bij een volgende scan), dan het bestand zelf.
+  bool _isKlaar(Track t, String merk) {
+    final al = _laadOpSchijf()[t.path.toLowerCase()];
+    if (al == null || !al.startsWith('$merk|')) return false;
+    if (al == '$merk|${t.sizeBytes}|${t.addedMs}') return true;
+    try {
+      final st = File(t.path).statSync();
+      return al == '$merk|${st.size}|${st.modified.millisecondsSinceEpoch}';
+    } catch (_) {
+      return false;
+    }
+  }
+
   static String _merk(Uint8List b) => fnv1aBytes(b, fnv1aVan(b.length.toString())).toRadixString(16);
 
   Future<void> ronde() async {
@@ -460,7 +516,7 @@ class HoesInBestandVeger {
             nietFlac++;
             continue;
           }
-          if (_klaar[t.path] == merk) continue;
+          if (_isKlaar(t, merk)) continue;
           nummers.add(t);
         }
         if (nummers.isNotEmpty) {
@@ -480,8 +536,18 @@ class HoesInBestandVeger {
           gedaan++;
           voortgang.value = 'hoezen $gedaan/$totaal';
           final pad = t.path;
-          if (_isGeblokkeerd(pad) || (speeltNu?.call(pad) ?? false) || bekendKapot(pad) || !File(pad).existsSync()) {
+          final waarom = _isGeblokkeerd(pad)
+              ? 'wordt verplaatst of gewist'
+              : (speeltNu?.call(pad) ?? false)
+                  ? 'speelt'
+                  : bekendKapot(pad)
+                      ? 'bekend kapot'
+                      : !File(pad).existsSync()
+                          ? 'staat er niet meer'
+                          : null;
+          if (waarom != null) {
             overgeslagen++;
+            _log.line('even overgeslagen ($waarom): $pad');
             continue;
           }
           final beeld = w.beeld;
@@ -499,29 +565,32 @@ class HoesInBestandVeger {
               } else {
                 ander++;
               }
-              _klaar[pad] = w.merk;
+              _onthoud(pad, w.merk);
               if (r.oud != null) oud[pad] = r.oud!;
               _werkHoescacheBij(w.album, pad, beeld);
               _log.line('geschreven${r.uitkomst == HoesUitkomst.andereGrootte ? ' (bestand groeide)' : ''}: $pad');
+              // Alleen na een echte schrijfbeurt even ademhalen: nakijken kost niets aan de schijf.
+              await Future<void>.delayed(tussenpoos);
             case HoesUitkomst.alGelijk:
             case HoesUitkomst.heeftAlEen:
               gelijk++;
-              _klaar[pad] = w.merk;
+              _onthoud(pad, w.merk);
             case HoesUitkomst.alleenLezen:
               overslaanVast++;
-              _klaar[pad] = w.merk;
+              _onthoud(pad, w.merk);
               _log.line('alleen-lezen, niet aangeraakt: $pad');
             case HoesUitkomst.nietTeLezen:
               mis++;
-              _klaar[pad] = w.merk; // deze sessie niet opnieuw proberen
+              _onthoud(pad, w.merk); // niet opnieuw proberen — tenzij er een ander bestand komt te staan
               _log.line('niet te herschrijven (${r.reden}): $pad');
             case HoesUitkomst.mislukt:
               mis++;
               _log.line('MISLUKT (${r.reden}) — volgende ronde opnieuw: $pad');
           }
-          await Future<void>.delayed(tussenpoos);
+          if (gedaan % 100 == 0) _bewaarOpSchijf();
         }
       }
+      _bewaarOpSchijf();
       if (oud.isNotEmpty) _bewaarOudIndex(oud);
       if ((overgeslagen > 0 || mis > 0) && !_gestopt) {
         _later?.cancel();
