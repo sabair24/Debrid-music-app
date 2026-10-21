@@ -1803,7 +1803,7 @@ extension DiscogsArtwork on DiscogsService {
     // afbeelding meestal the audiodb ook 1000x1000". Its back (~700) is only the fallback: "achterkant of
     // musicbrainz of discogs hoogste resolutie". So a TheAudioDB back never stops the search below.
     final tadbF = (saidDisc == null || saidBack == null) && artist.isNotEmpty && album.isNotEmpty
-        ? _tadbBeelden(artist, album, step)
+        ? _tadbBeelden(artist, album, step, voorrang: !freeOnly)
         : Future.value((back: null, disc: null));
     ({Uint8List? back, Uint8List? disc})? tadb;
 
@@ -2442,8 +2442,10 @@ extension DiscogsArtwork on DiscogsService {
 
   /// De achterkant en de cd van TheAudioDB, tegelijk opgehaald. Zie [releaseArt].
   Future<({Uint8List? back, Uint8List? disc})> _tadbBeelden(
-      String artist, String album, void Function(String) step) async {
-    final info = await CoverEnricher(settings).albumInfo(artist, album);
+      String artist, String album, void Function(String) step, {bool voorrang = false}) async {
+    // Met voorrang voor wie de hele keten loopt (Nu speelt, de albumpagina): iemand kijkt naar de grijze
+    // cd. De opwarmer (freeOnly) blijft achter in de rij.
+    final info = await CoverEnricher(settings).albumInfo(artist, album, voorrang: voorrang);
     step('theaudiodb: ${info == null ? "GEEN ANTWOORD" : "achter=${info.backUrl != null} cd=${info.discUrl != null}"}');
     final r = await Future.wait([_fetchIf(info?.backUrl), _fetchIf(info?.discUrl)]);
     step('theaudiodb-afbeeldingen: achter=${r[0] != null} cd=${r[1] != null}');

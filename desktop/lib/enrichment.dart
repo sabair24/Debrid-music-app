@@ -294,6 +294,33 @@ class AlbumInfo {
 /// het dus stil niet meer: een lege lijst en een "Not found" zien er in de code hetzelfde uit.
 const kAudioDbBasis = 'https://www.theaudiodb.com/api/v1/json/123';
 
+/// Hoeveel vragen met voorrang er binnen [kAudioDbSalvoVenster] zonder afstand mogen.
+///
+/// De drie seconden van de gewone rij zijn geijkt op een lange veeg: zesenvijftig albums aan 1,2 s gaven
+/// zevenenveertig lege antwoorden. Een paar vragen van één scherm is iets anders — gemeten op 21-10-2026:
+/// twaalf vragen binnen twee seconden kregen alle twaalf een volledig antwoord (cd en achterkant).
+const kAudioDbSalvo = 6;
+const kAudioDbSalvoVenster = Duration(seconds: 20);
+
+/// Hoe lang een vraag met voorrang nog moet wachten. Zolang er in het venster minder dan [kAudioDbSalvo]
+/// voorrangsvragen weg zijn: niet. Daarna weer [afstand] na de vorige vraag, maar nooit langer dan die
+/// afstand zelf — ook niet als de klok terugsprong. Ruimt [verstuurd] op wat buiten het venster valt.
+Duration audioDbVoorrangWacht({
+  required List<DateTime> verstuurd,
+  required DateTime laatste,
+  required DateTime nu,
+  required Duration afstand,
+}) {
+  verstuurd.removeWhere((t) {
+    final oud = nu.difference(t);
+    return oud.isNegative || oud > kAudioDbSalvoVenster;
+  });
+  if (verstuurd.length < kAudioDbSalvo) return Duration.zero;
+  final sinds = nu.difference(laatste);
+  if (sinds.isNegative || sinds >= afstand) return Duration.zero;
+  return afstand - sinds;
+}
+
 /// Fetches missing album covers from Deezer → Discogs → MusicBrainz/CoverArtArchive
 /// and caches them on disk. Ported from the server's enrichment logic.
 class CoverEnricher {
@@ -884,15 +911,24 @@ class CoverEnricher {
     return g == null || g.isEmpty || g.toLowerCase() == 'null' ? null : g;
   }
 
-  /// Een vraag die iemand nu op het scherm wacht (de artiestpagina): niet achter de hele rij van de
-  /// achtergrond, alleen [_audioDbGap] na de vorige vraag. Op de pc stond de bio van een geopende
-  /// artiest anders minuten achter de opstartveeg van de hele bibliotheek (18-10-2026: "Over 2
-  /// Fabiola" kwam er op de pc niet, op de gsm meteen).
+  /// Een vraag die iemand nu op het scherm wacht (de artiestpagina, Nu speelt): niet achter de hele rij
+  /// van de achtergrond. Op de pc stond de bio van een geopende artiest anders minuten achter de
+  /// opstartveeg van de hele bibliotheek (18-10-2026: "Over 2 Fabiola" kwam er op de pc niet, op de gsm
+  /// meteen).
+  ///
+  /// En ook niet meer [_audioDbGap] na de vorige vraag, zolang het een kleine reeks blijft — zie
+  /// [audioDbVoorrangWacht]. Gemeten op 21-10-2026 op de gsm (▶ KATSEYE — Gabriela): de cd-vraag van Nu
+  /// speelt stond twee keer precies 3,1 s te wachten op een vraag die net de deur uit was.
   static Future<void> _audioDbVoorrang() async {
-    final since = DateTime.now().difference(_audioDbLast);
-    if (since < _audioDbGap) await Future<void>.delayed(_audioDbGap - since);
+    final wacht = audioDbVoorrangWacht(
+        verstuurd: _voorrangVerstuurd, laatste: _audioDbLast, nu: DateTime.now(), afstand: _audioDbGap);
+    if (wacht > Duration.zero) await Future<void>.delayed(wacht);
     _audioDbLast = DateTime.now();
+    _voorrangVerstuurd.add(_audioDbLast);
   }
+
+  /// Wanneer de vragen met voorrang de deur uit gingen, voor [audioDbVoorrangWacht].
+  static final _voorrangVerstuurd = <DateTime>[];
 
   static Future<void> _audioDbSlot() {
     final slot = _audioDbTurn.then((_) async {
@@ -907,7 +943,9 @@ class CoverEnricher {
 
   /// The sleeve notes for a release: what it is, when, on what label, how it was received —
   /// the album equivalent of a film's synopsis panel.
-  Future<AlbumInfo?> albumInfo(String artist, String album, {bool fetch = true}) async {
+  ///
+  /// [voorrang]: iemand wacht er nu op een scherm op (Nu speelt, de albumpagina) — zie [_audioDbVoorrang].
+  Future<AlbumInfo?> albumInfo(String artist, String album, {bool fetch = true, bool voorrang = false}) async {
     final f = _albumInfoFile(artist, album);
     if (await f.exists()) {
       try {
@@ -927,7 +965,7 @@ class CoverEnricher {
       // entry per record, not per edition. plainTitle is the same stripper the Discogs search uses,
       // so both sides ask the same question.
       final ask = DiscogsService.plainTitle(album);
-      await _audioDbSlot();
+      await (voorrang ? _audioDbVoorrang() : _audioDbSlot());
       final r = await _haal(
         Uri.parse('$kAudioDbBasis/searchalbum.php'
             '?s=${Uri.encodeComponent(artist)}&a=${Uri.encodeComponent(ask)}'),

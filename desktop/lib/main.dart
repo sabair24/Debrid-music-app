@@ -21960,8 +21960,15 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   }
 
   Widget _browseResults() {
-    if (_browseBusy) return Center(child: CircularProgressIndicator(color: _accent));
-    if (_artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty) {
+    final leeg = _artists.isEmpty && _albumHits.isEmpty && _trackHits.isEmpty;
+    // Het draaiwiel alleen zolang er nog NIETS te tonen is. Hier stond `if (_browseBusy)`, en
+    // [_browseBusy] gaat pas uit als ook Discogs en MusicBrainz klaar zijn — die vullen ná Deezer aan,
+    // MusicBrainz één vraag per 1,1 s. Zo hield het scherm de snelle uitslag toch gegijzeld door de
+    // trage, precies wat [_addMusicBrainzHits] zegt te vermijden. Gemeten op 21-10-2026 op de gsm
+    // ("Tate McRae Revolving door"): de drie Deezer-lijsten na 451 ms (deezer.log), op het scherm na
+    // 4,2–4,6 s.
+    if (_browseBusy && leeg) return Center(child: CircularProgressIndicator(color: _accent));
+    if (leeg) {
       return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
@@ -21977,6 +21984,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       key: const PageStorageKey('online-bladeren'),
       padding: onderOp(context, const EdgeInsets.only(bottom: 24)),
       children: [
+        // Discogs en MusicBrainz vullen nog aan: een dun streepje boven wat er al staat. Altijd twee
+        // pixels hoog, zodat de lijst niet verspringt als het verdwijnt.
+        SizedBox(
+          height: 2,
+          child: _browseBusy
+              ? LinearProgressIndicator(minHeight: 2, color: _accent, backgroundColor: Colors.transparent)
+              : null,
+        ),
         if (_artists.isNotEmpty) ...[
           _browseHeader('Artiesten', _artists.length),
           SizedBox(
@@ -24466,7 +24481,8 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     // MusicBrainz and the Discogs edition. Nothing in the artwork chain needs any of those three:
     // every argument it takes comes from the widget. See DiscogsService.edition's in-flight table
     // for why asking for the edition twice at once costs one fetch, not two.
-    final blurb = CoverEnricher(settings).albumInfo(artist, album).catchError((_) => null);
+    // Met voorrang: de albumpagina staat open (zie CoverEnricher._audioDbVoorrang).
+    final blurb = CoverEnricher(settings).albumInfo(artist, album, voorrang: true).catchError((_) => null);
 
     final mbid = widget.pinnedMbid;
     final pressing = (mbid != null && mbid.isNotEmpty)
