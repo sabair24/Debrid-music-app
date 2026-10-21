@@ -382,6 +382,49 @@ class HoesInBestandVeger {
   /// Per pad het merk van de hoes die er deze sessie al in staat (geschreven of al gelijk): wat niet
   /// veranderde, hoeft de volgende ronde niet opnieuw open.
   final Map<String, String> _klaar = {};
+
+  /// Hetzelfde over herstarts heen (`hoes_in_bestand.json`): per pad "merk|grootte|datum". Klopt dat nog met
+  /// wat de bibliotheek van het bestand weet, dan hoeft het niet open. Gemeten op 21-10-2026 (3.9.540): na
+  /// een herstart keek de veger alle 1586 al goede nummers opnieuw na — 609 s.
+  Map<String, String>? _opSchijf;
+  bool _opSchijfVeranderd = false;
+  String get _indexPad => '${library.configDir}${Platform.pathSeparator}hoes_in_bestand.json';
+
+  Map<String, String> _laadOpSchijf() {
+    final al = _opSchijf;
+    if (al != null) return al;
+    final uit = <String, String>{};
+    try {
+      final f = File(_indexPad);
+      if (f.existsSync()) {
+        for (final e in (jsonDecode(f.readAsStringSync()) as Map<String, dynamic>).entries) {
+          if (e.value is String) uit[e.key] = e.value as String;
+        }
+      }
+    } catch (_) {/* dan kijkt deze ronde alles na, en schrijft het opnieuw */}
+    return _opSchijf = uit;
+  }
+
+  /// Onthoud dat [pad] klaar is met [merk], met zijn grootte en datum van nu.
+  void _onthoud(String pad, String merk) {
+    _klaar[pad] = merk;
+    try {
+      final st = File(pad).statSync();
+      _laadOpSchijf()[pad.toLowerCase()] = '$merk|${st.size}|${st.modified.millisecondsSinceEpoch}';
+      _opSchijfVeranderd = true;
+    } catch (_) {}
+  }
+
+  void _bewaarOpSchijf() {
+    if (!_opSchijfVeranderd) return;
+    try {
+      File(_indexPad).writeAsStringSync(jsonEncode(_opSchijf));
+      _opSchijfVeranderd = false;
+    } catch (e) {
+      _log.line('hoes_in_bestand.json niet bewaard: $e');
+    }
+  }
+
   String? _nuPad;
   Future<void>? _nu;
 
@@ -461,6 +504,10 @@ class HoesInBestandVeger {
             continue;
           }
           if (_klaar[t.path] == merk) continue;
+          if (_laadOpSchijf()[t.path.toLowerCase()] == '$merk|${t.sizeBytes}|${t.addedMs}') {
+            _klaar[t.path] = merk;
+            continue;
+          }
           nummers.add(t);
         }
         if (nummers.isNotEmpty) {
@@ -499,17 +546,19 @@ class HoesInBestandVeger {
               } else {
                 ander++;
               }
-              _klaar[pad] = w.merk;
+              _onthoud(pad, w.merk);
               if (r.oud != null) oud[pad] = r.oud!;
               _werkHoescacheBij(w.album, pad, beeld);
               _log.line('geschreven${r.uitkomst == HoesUitkomst.andereGrootte ? ' (bestand groeide)' : ''}: $pad');
+              // Alleen na een echte schrijfbeurt even ademhalen: nakijken kost niets aan de schijf.
+              await Future<void>.delayed(tussenpoos);
             case HoesUitkomst.alGelijk:
             case HoesUitkomst.heeftAlEen:
               gelijk++;
-              _klaar[pad] = w.merk;
+              _onthoud(pad, w.merk);
             case HoesUitkomst.alleenLezen:
               overslaanVast++;
-              _klaar[pad] = w.merk;
+              _onthoud(pad, w.merk);
               _log.line('alleen-lezen, niet aangeraakt: $pad');
             case HoesUitkomst.nietTeLezen:
               mis++;
@@ -519,9 +568,10 @@ class HoesInBestandVeger {
               mis++;
               _log.line('MISLUKT (${r.reden}) — volgende ronde opnieuw: $pad');
           }
-          await Future<void>.delayed(tussenpoos);
+          if (gedaan % 100 == 0) _bewaarOpSchijf();
         }
       }
+      _bewaarOpSchijf();
       if (oud.isNotEmpty) _bewaarOudIndex(oud);
       if ((overgeslagen > 0 || mis > 0) && !_gestopt) {
         _later?.cancel();
