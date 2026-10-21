@@ -261,6 +261,20 @@ void main() {
     expect(cast.speakerGroepen, isEmpty);
   });
 
+  test('meteen weer los, terwijl de Sonossen de groep nog niet melden (gemeten 21-10)', () async {
+    upnp.groepen = [
+      (leider: 'RINCON_AMP', leden: ['RINCON_AMP']),
+      (leider: 'RINCON_MOVE', leden: ['RINCON_MOVE']),
+    ];
+    final voor = upnp.groepen;
+    await cast.groepeer(_a.id, [_b.id]);
+    expect(_tekst(cast.speakerGroepen), ['uuid:amp: uuid:amp,uuid:move'], reason: 'meteen te zien');
+    upnp.groepen = voor; // de Sonossen melden het nog niet
+    upnp.opdrachten.clear();
+    await cast.groepeer(_a.id, const []);
+    expect(upnp.van(_b.id), contains('los'), reason: 'wat net gevraagd was, telt ook als "zit erin"');
+  });
+
   test('de groepen uit het antwoord van een Sonos, zonder onzichtbare leden', () {
     const body = '<ZoneGroupState>&lt;ZoneGroupState&gt;&lt;ZoneGroups&gt;'
         '&lt;ZoneGroup Coordinator=&quot;RINCON_A&quot; ID=&quot;RINCON_A:1&quot;&gt;'
