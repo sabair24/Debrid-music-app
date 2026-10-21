@@ -82,7 +82,16 @@ class ZoneStaat {
     this.radio = '',
     this.via = '',
     this.volume = -1,
+    this.groep = const [],
+    this.kanGroeperen = false,
   });
+
+  /// Bij de leider van een groep (stap 3.1): alle zones die samen spelen, de leider erbij. Leeg zonder
+  /// groep. De leden staan niet apart in de lijst: ze spelen wat de leider speelt.
+  final List<String> groep;
+
+  /// Kan deze zone met andere samen spelen (een Sonos)?
+  final bool kanGroeperen;
 
   /// Het appvolume (0–100), of -1 als de zone het niet meldt.
   final int volume;
@@ -149,6 +158,8 @@ class ZoneStaat {
         if (radio.isNotEmpty) 'radio': radio,
         if (via.isNotEmpty) 'via': via,
         if (volume >= 0) 'volume': volume,
+        if (groep.isNotEmpty) 'groep': groep,
+        if (kanGroeperen) 'kanGroeperen': true,
       };
 
   static ZoneStaat fromJson(Map<String, dynamic> m) => ZoneStaat(
@@ -171,6 +182,8 @@ class ZoneStaat {
         radio: '${m['radio'] ?? ''}',
         via: '${m['via'] ?? ''}',
         volume: (m['volume'] as num?)?.toInt() ?? -1,
+        groep: [for (final x in (m['groep'] as List? ?? const [])) '$x'],
+        kanGroeperen: m['kanGroeperen'] == true,
       );
 
   @override
@@ -193,7 +206,9 @@ class ZoneStaat {
       other.repeat == repeat &&
       other.radio == radio &&
       other.via == via &&
-      other.volume == volume;
+      other.volume == volume &&
+      listEquals(other.groep, groep) &&
+      other.kanGroeperen == kanGroeperen;
 
   @override
   int get hashCode => Object.hash(id, online, playing, trackId, positionMs, opMs, index, lengte);
@@ -383,13 +398,16 @@ class ZoneRegister {
   /// De speakers waar de pc nu muziek naartoe stuurt.
   /// De speakers waar de pc nu muziek naartoe stuurt ([actief]), en alle speakers die hij op het netwerk
   /// kent ([bekend]): die staan er ook, zonder muziek, zodat je er iets naartoe kunt sturen.
-  void zetSpeakers(List<SpeakerStand> actief, {List<({String id, String naam})>? bekend}) {
+  void zetSpeakers(List<SpeakerStand> actief,
+      {List<({String id, String naam, bool sonos})>? bekend, List<({String leider, List<String> leden})>? groepen}) {
     _speakers = actief;
     if (bekend != null) _bekend = bekend;
+    if (groepen != null) _groepen = groepen;
     _meld();
   }
 
-  List<({String id, String naam})> _bekend = const [];
+  List<({String id, String naam, bool sonos})> _bekend = const [];
+  List<({String leider, List<String> leden})> _groepen = const [];
 
   /// De toestellen met een open stroom: wie "Speel op …" van de pc kan krijgen.
   List<({String id, String naam})> bereikbareToestellen() => [
@@ -424,12 +442,27 @@ class ZoneRegister {
       final soort = pc ? ZoneSoort.pc : wie?.soort ?? zoneSoortVoor(platform: '', naam: naam);
       uit.add(_zoneUit(id: 'dev:$id', soort: soort, naam: naam, online: online, p: vers ? p : null));
     }
+    // Groepen (stap 3.1): de leider draagt de namen van allemaal; de leden staan er niet apart in.
+    final namen = {for (final b in _bekend) b.id: b.naam, for (final s in _speakers) s.id: s.naam};
+    final sonos = {for (final b in _bekend) if (b.sonos) b.id};
+    final groepVan = {for (final g in _groepen) if (g.leden.length > 1) g.leider: g.leden};
+    final leden = {for (final g in groepVan.entries) ...g.value.where((l) => l != g.key)};
+    String naamVan(String id, String eigen) {
+      final g = groepVan[id];
+      if (g == null) return eigen;
+      return [eigen, for (final l in g) if (l != id) namen[l] ?? l].join(' + ');
+    }
+
+    List<String> groepIds(String id) => [for (final l in groepVan[id] ?? const <String>[]) 'spk:$l'];
     for (final s in _speakers) {
+      if (leden.contains(s.id)) continue;
       final n = s.trackId == null ? null : nummer?.call(s.trackId!);
       uit.add(ZoneStaat(
         id: 'spk:${s.id}',
         soort: ZoneSoort.speaker,
-        naam: s.naam,
+        naam: naamVan(s.id, s.naam),
+        groep: groepIds(s.id),
+        kanGroeperen: sonos.contains(s.id),
         online: true,
         playing: s.speelt,
         trackId: s.trackId ?? '',
@@ -447,8 +480,16 @@ class ZoneRegister {
     }
     final actief = {for (final s in _speakers) s.id};
     for (final b in _bekend) {
-      if (actief.contains(b.id)) continue;
-      uit.add(ZoneStaat(id: 'spk:${b.id}', soort: ZoneSoort.speaker, naam: b.naam, online: true, via: pcNaam));
+      if (actief.contains(b.id) || leden.contains(b.id)) continue;
+      uit.add(ZoneStaat(
+        id: 'spk:${b.id}',
+        soort: ZoneSoort.speaker,
+        naam: naamVan(b.id, b.naam),
+        groep: groepIds(b.id),
+        kanGroeperen: b.sonos,
+        online: true,
+        via: pcNaam,
+      ));
     }
     return ordenZones(uit, hier: 'dev:$pcId');
   }

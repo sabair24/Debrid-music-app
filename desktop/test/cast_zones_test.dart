@@ -65,6 +65,36 @@ class _NepUpnp extends UpnpControlPoint {
   @override
   Future<void> seek(Renderer r, Duration to) async => opdrachten.add('${r.id} seek ${to.inSeconds}');
 
+  /// De groepen zoals een Sonos ze zou melden (UDN's).
+  List<({String leider, List<String> leden})> groepen = const [];
+
+  @override
+  Future<void> voegToeAanGroep(Renderer lid, String leiderUdn) async {
+    opdrachten.add('${lid.id} bij $leiderUdn');
+    final leider = groepen.where((g) => g.leider == leiderUdn).firstOrNull;
+    groepen = [
+      for (final g in groepen)
+        if (g.leider != leiderUdn && g.leider != lid.udn) g,
+      (leider: leiderUdn, leden: [...?leider?.leden.where((l) => l != lid.udn), if (leider == null) leiderUdn, lid.udn]),
+    ];
+  }
+
+  @override
+  Future<void> maakLosUitGroep(Renderer r) async {
+    opdrachten.add('${r.id} los');
+    groepen = [
+      for (final g in groepen) (leider: g.leider, leden: [for (final l in g.leden) if (l != r.udn) l]),
+      (leider: r.udn, leden: [r.udn]),
+    ];
+  }
+
+  @override
+  Future<List<({String leider, List<String> leden})>?> sonosGroepen(Renderer eender) async => groepen;
+  @override
+  Future<void> zetGroepsvolume(Renderer leider, int volume) async => opdrachten.add('${leider.id} groepsvolume $volume');
+  @override
+  Future<int?> groepsvolume(Renderer leider) async => 55;
+
   @override
   Future<({Duration? position, Duration duration, String? trackUri})?> positionInfo(Renderer r) async =>
       (position: const Duration(seconds: 30), duration: const Duration(seconds: 200), trackUri: uri[r.id]);
@@ -75,8 +105,23 @@ class _NepUpnp extends UpnpControlPoint {
   List<String> van(String id) => [for (final o in opdrachten) if (o.startsWith('$id ')) o.substring(id.length + 1)];
 }
 
-const _a = Renderer(id: 'uuid:amp', name: 'Sonos Amp', host: '192.168.0.20', avTransportUrl: 'http://192.168.0.20/av');
-const _b = Renderer(id: 'uuid:move', name: 'Sonos Move', host: '192.168.0.21', avTransportUrl: 'http://192.168.0.21/av');
+const _a = Renderer(
+    id: 'uuid:amp',
+    name: 'Sonos Amp',
+    host: '192.168.0.20',
+    avTransportUrl: 'http://192.168.0.20/av',
+    manufacturer: 'Sonos, Inc.',
+    udn: 'RINCON_AMP');
+const _b = Renderer(
+    id: 'uuid:move',
+    name: 'Sonos Move',
+    host: '192.168.0.21',
+    avTransportUrl: 'http://192.168.0.21/av',
+    manufacturer: 'Sonos, Inc.',
+    udn: 'RINCON_MOVE');
+
+List<String> _tekst(List<({String leider, List<String> leden})> g) =>
+    [for (final x in g) '${x.leider}: ${x.leden.join(',')}'];
 
 void main() {
   late Directory map;
@@ -194,6 +239,39 @@ void main() {
 
     await expectLater(cast.voegToe(_b.id, [ids[0]], hierna: true), throwsStateError,
         reason: 'een speaker zonder sessie heeft geen wachtrij');
+  });
+
+  test('Sonossen groeperen en losmaken (stap 3.1); de groep heeft één volume', () async {
+    upnp.groepen = [
+      (leider: 'RINCON_AMP', leden: ['RINCON_AMP']),
+      (leider: 'RINCON_MOVE', leden: ['RINCON_MOVE']),
+    ];
+    await cast.play(_b.id, [ids[0]], 0, alsZone: true); // de Move speelde eerst iets van zichzelf
+    await cast.groepeer(_a.id, [_b.id]);
+    expect(upnp.van(_b.id), contains('bij RINCON_AMP'));
+    expect(_tekst(cast.speakerGroepen), ['uuid:amp: uuid:amp,uuid:move']);
+    expect(cast.laatsteStanden.where((s) => s.id == _b.id), isEmpty, reason: 'de Move speelt nu wat de Amp speelt');
+
+    upnp.opdrachten.clear();
+    await cast.control(_a.id, 'volume', value: 30);
+    expect(upnp.van(_a.id), ['groepsvolume 30'], reason: 'de schuif van de groep zet het volume van de hele groep');
+
+    await cast.groepeer(_a.id, const []);
+    expect(upnp.van(_b.id), contains('los'));
+    expect(cast.speakerGroepen, isEmpty);
+  });
+
+  test('de groepen uit het antwoord van een Sonos, zonder onzichtbare leden', () {
+    const body = '<ZoneGroupState>&lt;ZoneGroupState&gt;&lt;ZoneGroups&gt;'
+        '&lt;ZoneGroup Coordinator=&quot;RINCON_A&quot; ID=&quot;RINCON_A:1&quot;&gt;'
+        '&lt;ZoneGroupMember UUID=&quot;RINCON_A&quot; ZoneName=&quot;Huiskamer&quot;/&gt;'
+        '&lt;ZoneGroupMember UUID=&quot;RINCON_SUB&quot; Invisible=&quot;1&quot;/&gt;'
+        '&lt;ZoneGroupMember UUID=&quot;RINCON_B&quot; ZoneName=&quot;Move&quot;&gt;&lt;/ZoneGroupMember&gt;'
+        '&lt;/ZoneGroup&gt;'
+        '&lt;ZoneGroup Coordinator=&quot;RINCON_C&quot; ID=&quot;RINCON_C:2&quot;&gt;'
+        '&lt;ZoneGroupMember UUID=&quot;RINCON_C&quot;/&gt;&lt;/ZoneGroup&gt;'
+        '&lt;/ZoneGroups&gt;&lt;/ZoneGroupState&gt;</ZoneGroupState>';
+    expect(_tekst(UpnpControlPoint.parseSonosGroepen(body)), ['RINCON_A: RINCON_A,RINCON_B', 'RINCON_C: RINCON_C']);
   });
 
   test('weghalen, verplaatsen en springen in de wachtrij van de speaker (stap 2.4)', () async {
