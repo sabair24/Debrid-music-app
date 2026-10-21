@@ -42,6 +42,17 @@ ZoneSoort zoneSoortVoor({required String platform, required String naam, bool tv
   return ZoneSoort.gsm;
 }
 
+/// Onder welk id een toestel met een open lijn in de zones staat: het id dat het zelf opgeeft
+/// ([gevraagd], `thisDevice().id`), want daaronder meldt het ook wat het speelt; alleen zonder dat het
+/// id uit zijn sleutel ([uitSleutel]).
+///
+/// **Waarom (gemeten op de S26, 21-10-2026).** Dit stond andersom: met een echte sleutel telde het id
+/// van de koppeling. Bij de S26 is dat een ander id dan zijn eigen, dus stond de gsm er twee keer in —
+/// één keer met wat hij speelde, één keer met de open lijn — en kwam een opdracht aan "de gsm" bij een
+/// zone zonder lijn uit: "niet bereikbaar".
+String zoneToestelVoor({String? gevraagd, String? uitSleutel}) =>
+    (gevraagd ?? '').isNotEmpty ? gevraagd! : (uitSleutel ?? '');
+
 /// Hoe lang een toestel zonder open stroom en zonder melding nog als bereikbaar geldt.
 const kZoneBereikbaar = Duration(seconds: 30);
 

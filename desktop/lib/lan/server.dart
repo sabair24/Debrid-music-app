@@ -1593,8 +1593,8 @@ class LanServer {
   /// - `: ping` om de vijftien seconden, zodat een thuisrouter de stille verbinding niet dichtgooit en
   ///   het toestel ziet dat de lijn er nog is.
   ///
-  /// Wie hier een stroom open heeft, is bereikbaar. Welk toestel het is, staat in de sleutel; alleen met
-  /// de oude gedeelde sleutel telt `?toestel=`.
+  /// Wie hier een stroom open heeft, is bereikbaar. Welk toestel het is: het id dat het toestel zelf
+  /// opgeeft (`?toestel=`, zie [zoneToestelVoor]), en alleen zonder dat het id uit de sleutel.
   Future<void> _zoneEvents(HttpRequest req) async {
     final res = req.response;
     final q = req.uri.queryParameters;
@@ -1602,7 +1602,7 @@ class LanServer {
     final sleutel = kop.startsWith('Bearer ') ? kop.substring(7).trim() : '';
     final grant = grants.grantFor(sleutel);
     final echt = grant != null && !grant.legacy;
-    final toestel = echt ? grant.deviceId : (q['toestel'] ?? '');
+    final toestel = zoneToestelVoor(gevraagd: q['toestel'], uitSleutel: echt ? grant.deviceId : null);
     final naam = (q['naam'] ?? '').isNotEmpty ? q['naam']! : (grant?.deviceName ?? toestel);
     final soort = zoneSoortVoor(
       platform: (q['platform'] ?? '').isNotEmpty ? q['platform']! : (grant?.platform ?? ''),

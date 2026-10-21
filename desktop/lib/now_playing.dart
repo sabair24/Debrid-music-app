@@ -23,6 +23,7 @@ import 'models.dart';
 import 'paths.dart';
 import 'player.dart';
 import 'tv.dart' show isTv;
+import 'volgbron.dart' show Afstandsvolume, kVolumeStap;
 import 'warm_log.dart';
 
 /// Waar de boom voor Android Auto vandaan komt. Null = geen bladeren; de app is dan zichtbaar in de
@@ -63,7 +64,10 @@ bool get _wantsSystemControls => Platform.isIOS || Platform.isMacOS || Platform.
 
 /// Start publishing. Safe to call anywhere: it does nothing where there is nothing to publish to,
 /// and a failure to register is never a reason for the app not to start.
-Future<void> initNowPlaying(NowPlayingSource player, {Uint8List? Function(Track)? cover}) async {
+///
+/// [lokaal]: de speler van dit toestel, als [player] iets anders is (de `Volgbron` van de zones). De
+/// audiofocus — een telefoontje, een navigatiestem — gaat altijd over wat HIER klinkt.
+Future<void> initNowPlaying(NowPlayingSource player, {Uint8List? Function(Track)? cover, NowPlayingSource? lokaal}) async {
   if (!_wantsSystemControls) return;
   try {
     await AudioService.init(
@@ -86,7 +90,7 @@ Future<void> initNowPlaying(NowPlayingSource player, {Uint8List? Function(Track)
         artDownscaleHeight: 512,
       ),
     );
-    await _claimAudioFocus(player);
+    await _claimAudioFocus(lokaal ?? player);
   } catch (e) {
     // A missing platform implementation, or a second init during a hot restart. The app plays
     // either way; only the lockscreen goes quiet.
@@ -612,7 +616,42 @@ class NowPlayingHandler extends BaseAudioHandler with SeekHandler {
   /// title that ends where an artist begins produce the signature of a different pair.
   static String _sigOf(Track t) => [t.path, t.title, t.artist, t.album].join('\u0000');
 
+  /// Het volume dat de volumeknoppen nu regelen: null = het toestel zelf (zie [Afstandsvolume]).
+  int? _gepubliceerdVolume;
+  bool _volumeOoitGezet = false;
+
+  /// Toont het vergrendelscherm een zone op afstand, dan regelen de volumeknoppen van de gsm HAAR volume
+  /// (Saber, 21-10-2026). Android doet dat met "remote playback": de sessie zegt welk volume er is, en
+  /// stuurt een druk op de knop naar [androidSetRemoteVolume] / [androidAdjustRemoteVolume].
+  void _volgVolume() {
+    final av = player is Afstandsvolume ? (player as Afstandsvolume).afstandsvolume : null;
+    if (_volumeOoitGezet && av == _gepubliceerdVolume) return;
+    _volumeOoitGezet = true;
+    _gepubliceerdVolume = av;
+    androidPlaybackInfo.add(av == null
+        ? LocalAndroidPlaybackInfo()
+        : RemoteAndroidPlaybackInfo(
+            volumeControlType: AndroidVolumeControlType.absolute, maxVolume: 100, volume: av));
+  }
+
+  @override
+  Future<void> androidSetRemoteVolume(int volumeIndex) async {
+    final p = player;
+    if (p is Afstandsvolume) (p as Afstandsvolume).zetAfstandsvolume(volumeIndex);
+  }
+
+  @override
+  Future<void> androidAdjustRemoteVolume(AndroidVolumeDirection direction) async {
+    final p = player;
+    if (p is! Afstandsvolume) return;
+    final a = p as Afstandsvolume;
+    final nu = a.afstandsvolume;
+    if (nu == null) return;
+    a.zetAfstandsvolume(nu + direction.index * kVolumeStap);
+  }
+
   void _onChanged() {
+    _volgVolume();
     final track = player.current;
     if (track == null) {
       if (_publishedSig != null) {
