@@ -42,6 +42,9 @@ class ZoneLijst extends ChangeNotifier {
   /// Gezet door main: op de pc rechtstreeks, op een toestel via `/api/zone/transfer`.
   Future<String?> Function(String van, String naar)? verplaats;
 
+  /// Een opdracht naar een zone (`{cmd, …}`), bijvoorbeeld `groepeer`; null als ze aankwam. Gezet door main.
+  Future<String?> Function(String zone, Map<String, dynamic> opdracht)? stuur;
+
   final int Function()? _klok;
   int get _nu => _klok?.call() ?? DateTime.now().millisecondsSinceEpoch;
 

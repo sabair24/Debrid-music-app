@@ -17,7 +17,12 @@ class Renderer {
     this.renderingControlUrl,
     this.model = '',
     this.manufacturer = '',
+    this.udn = '',
   });
+
+  /// De eigen naam van het apparaat (`RINCON_…` bij een Sonos, zonder `uuid:`). Een Sonos groepeert op
+  /// die naam: een lid krijgt `x-rincon:<udn van de leider>` als bron. Leeg als hij er geen gaf.
+  final String udn;
 
   final String id;
   final String name;
@@ -59,6 +64,7 @@ class Renderer {
         'model': model,
         'manufacturer': manufacturer,
         'kind': isSonos ? 'sonos' : 'upnp',
+        if (udn.isNotEmpty) 'udn': udn,
         'maxSampleRate': maxSampleRate,
         'maxBitDepth': maxBitDepth,
       };
@@ -260,6 +266,8 @@ class UpnpControlPoint {
         renderingControlUrl: renderingControl,
         model: document.findAllElements('modelName').firstOrNull?.innerText.trim() ?? '',
         manufacturer: document.findAllElements('manufacturer').firstOrNull?.innerText.trim() ?? '',
+        // De eerste UDN is die van het apparaat zelf; een Sonos Move noemt er nog een tweede (`…_MS`).
+        udn: (document.findAllElements('UDN').firstOrNull?.innerText.trim() ?? '').replaceFirst('uuid:', ''),
       );
     } catch (e) {
       debugPrint('could not read $location: $e');
@@ -360,6 +368,66 @@ class UpnpControlPoint {
     await _soap(url, 'RenderingControl', 'SetVolume',
         '<InstanceID>0</InstanceID><Channel>Master</Channel>'
         '<DesiredVolume>${volume.clamp(0, 100)}</DesiredVolume>');
+  }
+
+  /// Waar een Sonos zijn andere diensten heeft: dezelfde host en poort als zijn AVTransport.
+  static String _sonosBasis(Renderer r) {
+    final u = Uri.parse(r.avTransportUrl);
+    return '${u.scheme}://${u.host}:${u.port}';
+  }
+
+  /// [lid] gaat spelen wat de Sonos met [leiderUdn] speelt, op de seconde gelijk — de Sonossen regelen dat
+  /// onderling (Saber, 21-10-2026: "Sonos onderling", "hoorbaar gelijk in één kamer").
+  Future<void> voegToeAanGroep(Renderer lid, String leiderUdn) => _soap(lid.avTransportUrl, 'AVTransport',
+      'SetAVTransportURI', '<InstanceID>0</InstanceID><CurrentURI>x-rincon:$leiderUdn</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>');
+
+  /// [r] uit zijn groep: weer een Sonos op zichzelf.
+  Future<void> maakLosUitGroep(Renderer r) =>
+      _soap(r.avTransportUrl, 'AVTransport', 'BecomeCoordinatorOfStandaloneGroup', '<InstanceID>0</InstanceID>');
+
+  /// Hoe de Sonossen nu gegroepeerd zijn, gevraagd aan [eender] welke Sonos (ze kennen het allemaal).
+  Future<List<({String leider, List<String> leden})>?> sonosGroepen(Renderer eender) async {
+    final body = await _soap('${_sonosBasis(eender)}/ZoneGroupTopology/Control', 'ZoneGroupTopology',
+        'GetZoneGroupState', '');
+    return body == null ? null : parseSonosGroepen(body);
+  }
+
+  /// Het volume van de hele groep waarvan [leider] de leider is (de Sonossen houden de verhouding).
+  Future<void> zetGroepsvolume(Renderer leider, int volume) => _soap(
+      '${_sonosBasis(leider)}/MediaRenderer/GroupRenderingControl/Control', 'GroupRenderingControl',
+      'SetGroupVolume', '<InstanceID>0</InstanceID><DesiredVolume>${volume.clamp(0, 100)}</DesiredVolume>');
+
+  Future<int?> groepsvolume(Renderer leider) async {
+    final body = await _soap('${_sonosBasis(leider)}/MediaRenderer/GroupRenderingControl/Control',
+        'GroupRenderingControl', 'GetGroupVolume', '<InstanceID>0</InstanceID>');
+    final match = RegExp(r'<CurrentVolume>(\d+)</CurrentVolume>').firstMatch(body ?? '');
+    return match == null ? null : int.tryParse(match.group(1)!);
+  }
+
+  /// De groepen uit een GetZoneGroupState-antwoord: per groep de leider en alle zichtbare leden (de
+  /// leider erbij), als UDN. Onzichtbare leden (een sub of surround-speakers) tellen niet mee.
+  @visibleForTesting
+  static List<({String leider, List<String> leden})> parseSonosGroepen(String body) {
+    final xml = body
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&apos;', "'")
+        .replaceAll('&amp;', '&');
+    final uit = <({String leider, List<String> leden})>[];
+    for (final g in RegExp(r'<ZoneGroup\b([^>]*)>(.*?)</ZoneGroup>', dotAll: true).allMatches(xml)) {
+      final leider = RegExp(r'Coordinator="([^"]+)"').firstMatch(g.group(1)!)?.group(1);
+      if (leider == null) continue;
+      final leden = <String>[];
+      for (final m in RegExp(r'<ZoneGroupMember\b([^>]*?)/?>').allMatches(g.group(2)!)) {
+        final attr = m.group(1)!;
+        if (attr.contains('Invisible="1"')) continue;
+        final uuid = RegExp(r'UUID="([^"]+)"').firstMatch(attr)?.group(1);
+        if (uuid != null) leden.add(uuid);
+      }
+      uit.add((leider: leider, leden: leden));
+    }
+    return uit;
   }
 
   Future<int?> getVolume(Renderer r) async {

@@ -225,11 +225,69 @@ class CastManager {
 
   /// De speakers die de pc op het netwerk kent (ook zonder sessie): als zone in de lijst, zodat je er
   /// muziek naartoe kunt sturen. Zie [zoekSpeakers].
-  List<({String id, String naam})> get bekendeSpeakers => [
-        for (final r in _renderers.values) (id: r.id, naam: r.name),
+  List<({String id, String naam, bool sonos})> get bekendeSpeakers => [
+        for (final r in _renderers.values) (id: r.id, naam: r.name, sonos: r.isSonos && r.udn.isNotEmpty),
       ];
 
   Timer? _zoeker;
+  Timer? _groepKijker;
+
+  /// Hoe de Sonossen gegroepeerd zijn (stap 3.1, Saber 21-10-2026: "Sonos onderling"), in renderer-ids:
+  /// per groep van meer dan één bekende speaker de leider en alle leden (de leider erbij). Gelezen bij het
+  /// zoeken, om de minuut (de Sonos-app kan ze ook veranderen) en na elke wijziging hier.
+  List<({String leider, List<String> leden})> get speakerGroepen => _groepen;
+  List<({String leider, List<String> leden})> _groepen = const [];
+
+  Renderer? _vanUdn(String udn) => _renderers.values.where((r) => r.udn == udn).firstOrNull;
+
+  /// De groep waarvan [id] de leider is, met meer dan één lid; of null.
+  ({String leider, List<String> leden})? _groepVan(String id) =>
+      _groepen.where((g) => g.leider == id && g.leden.length > 1).firstOrNull;
+
+  Future<void> leesGroepen() async {
+    final sonos = _renderers.values.where((r) => r.isSonos && r.udn.isNotEmpty).firstOrNull;
+    if (sonos == null) return;
+    final g = await _upnp.sonosGroepen(sonos).catchError((Object _) => null);
+    if (g == null) return;
+    final nieuw = [
+      for (final x in g)
+        if (_vanUdn(x.leider) case final leider?)
+          (leider: leider.id, leden: [for (final l in x.leden) if (_vanUdn(l) case final r?) r.id]),
+    ].where((x) => x.leden.length > 1).toList();
+    final was = [for (final x in _groepen) '${x.leider}:${x.leden.join(',')}'].join(';');
+    final nu = [for (final x in nieuw) '${x.leider}:${x.leden.join(',')}'].join(';');
+    if (was == nu) return;
+    _groepen = nieuw;
+    _log?.line('groepen: ${nieuw.isEmpty ? '(geen)' : nu}');
+    bijStand?.call();
+  }
+
+  /// [leiderId] met precies [ledenIds] in één groep: wie er nog niet in zat, komt erbij (en houdt op met
+  /// zijn eigen muziek); wie er wel in zat en niet in [ledenIds] staat, gaat eruit. Alleen Sonossen: die
+  /// lopen onderling op de seconde gelijk.
+  Future<void> groepeer(String leiderId, List<String> ledenIds) async {
+    final leider = await _renderer(leiderId);
+    if (!leider.isSonos || leider.udn.isEmpty) throw StateError('Alleen Sonossen kunnen (nog) samen spelen.');
+    // Is de leider zelf lid van een andere groep, dan eerst op zichzelf.
+    if (_groepen.any((g) => g.leider != leiderId && g.leden.contains(leiderId))) {
+      await _upnp.maakLosUitGroep(leider);
+    }
+    final willen = {...ledenIds}..remove(leiderId);
+    final nu = {...?_groepVan(leiderId)?.leden}..remove(leiderId);
+    for (final id in willen.difference(nu)) {
+      final lid = await _renderer(id);
+      if (!lid.isSonos || lid.udn.isEmpty) throw StateError('${lid.name} is geen Sonos.');
+      final eigen = _sessies[id];
+      if (eigen != null) _sluit(eigen);
+      await _upnp.voegToeAanGroep(lid, leider.udn);
+      _log?.line('groep: ${lid.name} bij ${leider.name}');
+    }
+    for (final id in nu.difference(willen)) {
+      await _upnp.maakLosUitGroep(await _renderer(id));
+      _log?.line('groep: ${_renderers[id]?.name ?? id} los van ${leider.name}');
+    }
+    await leesGroepen();
+  }
 
   /// Om de [elke] op het netwerk kijken welke speakers er zijn (en meteen één keer). Alleen in de app:
   /// een toets mag het netwerk niet op (zie "toets nooit tegen de echte deur").
@@ -243,6 +301,8 @@ class CastManager {
 
     unawaited(zoek());
     _zoeker = Timer.periodic(elke, (_) => unawaited(zoek()));
+    _groepKijker?.cancel();
+    _groepKijker = Timer.periodic(const Duration(minutes: 1), (_) => unawaited(leesGroepen()));
   }
 
   /// Onthoud wat de speaker zei, en meld het als het iets nieuws is.
@@ -271,6 +331,7 @@ class CastManager {
       _renderers = {for (final r in found) r.id: r};
       _shields = await _findShields();
       bijStand?.call();
+      unawaited(leesGroepen());
     }
     return [
       for (final r in _renderers.values) r.toJson(),
@@ -360,7 +421,10 @@ class CastManager {
   /// Het volume van de speaker, voor de schuif van zijn zone. Stil bij een speaker zonder volume.
   Future<void> _haalVolume(_Session s) async {
     try {
-      final v = await _upnp.getVolume(s.renderer);
+      // De leider van een groep: het volume van de hele groep.
+      final v = _groepVan(s.renderer.id) != null
+          ? await _upnp.groepsvolume(s.renderer)
+          : await _upnp.getVolume(s.renderer);
       if (v != null && v != s.volume) {
         s.volume = v;
         bijStand?.call();
@@ -850,7 +914,11 @@ class CastManager {
           await _openCurrent(sessie);
         }
       case 'volume':
-        await _upnp.setVolume(renderer, value ?? 50);
+        if (_groepVan(renderer.id) != null) {
+          await _upnp.zetGroepsvolume(renderer, value ?? 50);
+        } else {
+          await _upnp.setVolume(renderer, value ?? 50);
+        }
         if (sessie != null) {
           sessie.volume = value ?? 50;
           bijStand?.call();
@@ -1004,6 +1072,7 @@ class CastManager {
 
   void dispose() {
     _zoeker?.cancel();
+    _groepKijker?.cancel();
     for (final s in _sessies.values) {
       s.advance?.cancel();
     }

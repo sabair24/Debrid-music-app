@@ -186,7 +186,8 @@ void main() {
     });
 
     test('een speaker zonder muziek staat er ook, om iets naartoe te sturen (stap 2.3)', () {
-      reg.zetSpeakers(const [], bekend: [(id: 'uuid:move', naam: 'Sonos Move'), (id: 'uuid:amp', naam: 'Sonos Amp')]);
+      reg.zetSpeakers(const [],
+          bekend: [(id: 'uuid:move', naam: 'Sonos Move', sonos: true), (id: 'uuid:amp', naam: 'Sonos Amp', sonos: true)]);
       final s = {for (final z in reg.lijst()) z.id: z};
       expect(s['spk:uuid:move']!.online, isTrue);
       expect(s['spk:uuid:move']!.speeltIets, isFalse);
@@ -196,6 +197,28 @@ void main() {
       final na = reg.lijst().where((z) => z.id == 'spk:uuid:amp').toList();
       expect(na.length, 1, reason: 'een speaker met muziek staat er één keer, niet ook nog als lege');
       expect(na.single.speeltIets, isTrue);
+    });
+
+    test('een groep Sonossen is één zone, met de namen van allemaal (stap 3.1)', () {
+      reg.zetSpeakers(
+        const [],
+        bekend: [
+          (id: 'amp', naam: 'Sonos Amp', sonos: true),
+          (id: 'move', naam: 'Sonos Move', sonos: true),
+          (id: 'kef', naam: 'KEF LS50', sonos: false),
+        ],
+        groepen: [
+          (leider: 'amp', leden: ['amp', 'move']),
+        ],
+      );
+      final z = {for (final x in reg.lijst()) x.id: x};
+      expect(z['spk:amp']!.naam, 'Sonos Amp + Sonos Move');
+      expect(z['spk:amp']!.groep, ['spk:amp', 'spk:move']);
+      expect(z.containsKey('spk:move'), isFalse, reason: 'een lid speelt wat de leider speelt');
+      expect(z['spk:amp']!.kanGroeperen, isTrue);
+      expect(z['spk:kef']!.kanGroeperen, isFalse, reason: 'alleen Sonossen lopen onderling gelijk');
+      final terug = ZoneStaat.fromJson(z['spk:amp']!.toJson());
+      expect(terug, z['spk:amp']);
     });
 
     test('de volledige stand van een zone, mét de wachtrij', () {

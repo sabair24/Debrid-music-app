@@ -166,7 +166,8 @@ class LanServer {
         return (titel: t.title, artiest: t.artist, album: t.album, duurMs: t.duration?.inMilliseconds ?? 0);
       },
     );
-    cast.bijStand = () => zones.zetSpeakers(cast.laatsteStanden, bekend: cast.bekendeSpeakers);
+    cast.bijStand = () =>
+        zones.zetSpeakers(cast.laatsteStanden, bekend: cast.bekendeSpeakers, groepen: cast.speakerGroepen);
     zones.speakerRij = cast.rijVan;
     // NIET afhankelijk van `configDir`, en dat is een reparatie.
     //
@@ -341,6 +342,9 @@ class LanServer {
     final metVan = {...op, 'van': van};
     String naam() => zones.lijst().where((z) => z.id == zone).map((z) => z.naam).firstOrNull ?? 'Die zone';
     _zoneLog.line('opdracht $cmd → $zone  (van $van)');
+    if (cmd == 'groepeer' && !zone.startsWith('spk:')) {
+      return (status: 409, antwoord: {'error': 'Toestellen samen laten spelen komt in een volgende stap; Sonossen kunnen al.'});
+    }
     if (zone == 'dev:${zones.pcId}') {
       final f = bijZoneOpdracht;
       if (f == null) return (status: 409, antwoord: {'error': 'De pc kan dat nu niet.'});
@@ -378,6 +382,12 @@ class LanServer {
             await cast.voegToe(speaker, ids, hierna: cmd == 'hierna');
           case 'nu':
             await cast.speelNu(speaker, '${op['id'] ?? ''}');
+          case 'groepeer':
+            final leden = [
+              for (final x in (op['leden'] as List? ?? const []))
+                if ('$x'.startsWith('spk:')) '$x'.substring(4),
+            ];
+            await cast.groepeer(speaker, leden);
           case 'jump':
             await cast.springNaar(speaker, (op['plek'] as num?)?.toInt() ?? 0, trackId: '${op['trackId'] ?? ''}');
           case 'remove':

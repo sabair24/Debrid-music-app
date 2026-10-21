@@ -9,7 +9,7 @@ import 'dart:ui' show ImageFilter;
 // with the player's. Ours is the one this app means everywhere.
 import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter/gestures.dart' show PointerDeviceKind, kBackMouseButton;
-import 'package:flutter/foundation.dart' show mapEquals, visibleForTesting;
+import 'package:flutter/foundation.dart' show mapEquals, setEquals, visibleForTesting;
 // AppExitResponse hoort bij de haak die Windows gebruikt als het de app wil beëindigen — zie
 // _saveOnLeaving. Hij woont in dart:ui; material.dart exporteert hem niet.
 import 'dart:ui' show AppExitResponse, PlatformDispatcher;
@@ -1433,6 +1433,9 @@ Future<void> main() async {
       return e.message;
     }
   }
+
+  // Een opdracht vanuit het zoneblad (groeperen, stap 3.1).
+  zoneLijst.stuur = stuurNaarZone;
 
   final gekozenZone = GekozenZone(
     lijst: zoneLijst,
@@ -10891,6 +10894,14 @@ class _ZoneRij extends StatelessWidget {
             ),
           ),
           if (actie != null) ...[const SizedBox(width: 8), actie],
+          // Samen laten spelen (stap 3.1): Sonossen, op de seconde gelijk.
+          if (zone.kanGroeperen && lijst.stuur != null)
+            IconButton(
+              key: ValueKey('zone-groep-${zone.id}'),
+              tooltip: zone.groep.isEmpty ? 'Samen laten spelen …' : 'Groep aanpassen …',
+              icon: Icon(Icons.link_rounded, size: 20, color: zone.groep.isEmpty ? _muted : _accent2),
+              onPressed: () => _kiesGroep(context, zone),
+            ),
           // Overdragen naar een andere zone (stap 2.5): de muziek verhuist, deze zone pauzeert.
           if (zone.speeltIets && lijst.verplaats != null)
             IconButton(
@@ -10951,6 +10962,91 @@ class _ZoneVolume extends StatelessWidget {
       ],
     );
   }
+}
+
+/// "Samen laten spelen …" (stap 3.1, Saber 21-10-2026: "Sonos onderling", "hoorbaar gelijk in één kamer"):
+/// vink aan welke speakers met [leider] meespelen. De Sonossen lopen dan onderling op de seconde gelijk
+/// en spelen wat de leider speelt; uitvinken maakt een speaker weer los.
+Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
+  final lijst = context.read<ZoneLijst>();
+  final kandidaten = [
+    for (final z in lijst.zones)
+      if (z.id != leider.id && z.kanGroeperen) z,
+  ];
+  // Wie al in de groep zit, staat niet apart in de lijst: die halen we uit de groep zelf.
+  final inGroep = {...leider.groep}..remove(leider.id);
+  final keuze = {...inGroep};
+  final ids = {for (final z in kandidaten) z.id, ...inGroep};
+  String naamVan(String id) =>
+      kandidaten.where((z) => z.id == id).map((z) => z.naam).firstOrNull ?? id.replaceFirst('spk:', '');
+  final ok = await showModalBottomSheet<bool>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, zet) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: GlasVlak(
+              vorm: const BorderRadius.all(Radius.circular(18)),
+              kleur: _panel,
+              balk: true,
+              bovenop: true,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Samen laten spelen met ${leider.naam.split(' + ').first}',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text('Ze spelen wat deze speelt, op de seconde gelijk',
+                        style: TextStyle(color: _muted, fontSize: 12)),
+                    const SizedBox(height: 8),
+                    if (ids.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Text('Geen andere Sonos gevonden.', style: TextStyle(color: _muted, fontSize: 13)),
+                      ),
+                    for (final id in ids)
+                      CheckboxListTile(
+                        key: ValueKey('zone-groep-lid-$id'),
+                        value: keuze.contains(id),
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: Text(naamVan(id), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                        onChanged: (v) => zet(() => v == true ? keuze.add(id) : keuze.remove(id)),
+                      ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: GlasKnop(
+                        key: const ValueKey('zone-groep-klaar'),
+                        icoon: Icons.check_rounded,
+                        label: 'Klaar',
+                        onPressed: () => Navigator.of(ctx).pop(true),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+  if (setEquals(keuze, inGroep)) return;
+  final fout = await lijst.stuur?.call(leider.id, {'cmd': 'groepeer', 'leden': keuze.toList()});
+  if (!context.mounted) return;
+  _srcToast(
+      context,
+      fout ??
+          (keuze.isEmpty
+              ? '${leider.naam.split(' + ').first} speelt weer alleen.'
+              : 'Spelen nu samen: ${[leider.naam.split(' + ').first, for (final id in keuze) naamVan(id)].join(' + ')}.'));
 }
 
 /// "Verplaats naar …" (Saber, 21-10-2026: "overdragen naar elke zone"): kies waar de muziek van [van]
