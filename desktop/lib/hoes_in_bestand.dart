@@ -34,6 +34,7 @@ import 'package:flutter/foundation.dart';
 
 import 'artwork.dart' show verkleindeHoesBuitenDeTekendraad;
 import 'cachesleutel.dart' show fnv1aBytes, fnv1aVan;
+import 'flac_tags.dart' show flacBegin;
 import 'integriteit.dart' show bekendKapot;
 import 'lan/transcode.dart' show Transcoder;
 import 'library.dart';
@@ -61,8 +62,12 @@ enum HoesUitkomst {
   /// Er zit al een plaat in, en er mocht alleen in een bestand zonder plaat geschreven worden.
   heeftAlEen,
 
-  /// Geen FLAC dat we veilig herschrijven (geen `fLaC` vooraan, een verminkt blok).
+  /// Geen FLAC dat we veilig herschrijven (geen `fLaC`, een verminkt blok).
   nietTeLezen,
+
+  /// Het bestand staat op alleen-lezen: iemand heeft het zo gewild, dus blijft het zoals het is. Gezien op
+  /// 21-10-2026: zeven FLAC's (Alizée, Twarres, Âme) — elke ronde opnieuw proberen had geen zin.
+  alleenLezen,
 
   /// Het schrijven of het vervangen lukte niet (staat open, alleen-lezen, onderweg veranderd).
   mislukt,
@@ -196,11 +201,16 @@ List<({int soort, Uint8List lijf})> nieuweBlokken(
   File? tmp;
   try {
     final st = f.statSync();
+    // Geen schrijfrechten in de modus (Windows: het kenmerk alleen-lezen) — vóór er iets gekopieerd wordt.
+    if (st.mode & 0x92 == 0) return (uitkomst: HoesUitkomst.alleenLezen, oud: null, reden: null);
     raf = f.openSync();
     final grootte = raf.lengthSync();
-    if (grootte < 8 || String.fromCharCodes(raf.readSync(4)) != 'fLaC') {
-      return (uitkomst: HoesUitkomst.nietTeLezen, oud: null, reden: 'geen fLaC vooraan');
-    }
+    // Een ID3-kop vóór de FLAC (niet volgens de regels, maar het komt voor: gezien op 21-10-2026 bij o.a.
+    // Janet Jackson, Cher en Real McCoy) gaat byte voor byte mee; alleen de FLAC-kop erachter verandert.
+    final begin = grootte < 8 ? -1 : flacBegin(raf);
+    if (begin < 0) return (uitkomst: HoesUitkomst.nietTeLezen, oud: null, reden: 'geen fLaC');
+    final voorvoegsel = begin == 0 ? Uint8List(0) : (raf..setPositionSync(0)).readSync(begin);
+    raf.setPositionSync(begin + 4);
     final blokken = <({int soort, Uint8List lijf})>[];
     var laatste = false;
     for (var i = 0; i < 128 && !laatste; i++) {
@@ -245,8 +255,10 @@ List<({int soort, Uint8List lijf})> nieuweBlokken(
       }
     }
 
-    final nieuw = nieuweBlokken(blokken, pictureLijf(beeld, k), audioBegin - 4);
-    final kop = BytesBuilder(copy: false)..add(const [0x66, 0x4C, 0x61, 0x43]);
+    final nieuw = nieuweBlokken(blokken, pictureLijf(beeld, k), audioBegin - begin - 4);
+    final kop = BytesBuilder(copy: false)
+      ..add(voorvoegsel)
+      ..add(const [0x66, 0x4C, 0x61, 0x43]);
     for (var i = 0; i < nieuw.length; i++) {
       final l = nieuw[i].lijf.length;
       if (l > 0xFFFFFF) return (uitkomst: HoesUitkomst.nietTeLezen, oud: null, reden: 'plaat te groot voor een blok');
@@ -460,7 +472,7 @@ class HoesInBestandVeger {
       final start = DateTime.now();
       _log.line('ronde: $totaal nummers in ${werk.length} albums na te kijken'
           '${nietFlac > 0 ? ' ($nietFlac geen FLAC — die nog niet)' : ''}');
-      var gedaan = 0, zelfde = 0, ander = 0, gelijk = 0, overgeslagen = 0, mis = 0;
+      var gedaan = 0, zelfde = 0, ander = 0, gelijk = 0, overgeslagen = 0, mis = 0, overslaanVast = 0;
       final oud = <String, String>{};
       for (final w in werk) {
         for (final t in w.nummers) {
@@ -495,6 +507,10 @@ class HoesInBestandVeger {
             case HoesUitkomst.heeftAlEen:
               gelijk++;
               _klaar[pad] = w.merk;
+            case HoesUitkomst.alleenLezen:
+              overslaanVast++;
+              _klaar[pad] = w.merk;
+              _log.line('alleen-lezen, niet aangeraakt: $pad');
             case HoesUitkomst.nietTeLezen:
               mis++;
               _klaar[pad] = w.merk; // deze sessie niet opnieuw proberen
@@ -513,7 +529,8 @@ class HoesInBestandVeger {
       }
       final s = DateTime.now().difference(start).inSeconds;
       _log.line('klaar in $s s: ${zelfde + ander} geschreven ($zelfde even groot, $ander gegroeid), '
-          '$gelijk hadden hem al, $overgeslagen even overgeslagen (speelt, kapot of bezet), $mis niet gelukt');
+          '$gelijk hadden hem al, $overgeslagen even overgeslagen (speelt, kapot of bezet), '
+          '$overslaanVast op alleen-lezen, $mis niet gelukt');
     } catch (e) {
       _log.line('ronde MISLUKT: $e');
     } finally {
