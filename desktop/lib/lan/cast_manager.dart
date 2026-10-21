@@ -11,6 +11,7 @@ import 'dtos.dart';
 import 'net.dart';
 import 'transcode.dart';
 import 'upnp.dart';
+import 'zones.dart' show SpeakerStand, plekVoorNummer;
 
 /// The Shield running the DebridMusic TV app.
 ///
@@ -154,6 +155,7 @@ class CastManager {
     UpnpControlPoint? upnp,
     Transcoder? transcoder,
     String? logPath,
+    @visibleForTesting this.startGrace = const Duration(seconds: 8),
   })  : _upnp = upnp ?? UpnpControlPoint(),
         _transcoder = transcoder ?? Transcoder(),
         _log = logPath == null ? null : WarmLog(logPath);
@@ -187,27 +189,22 @@ class CastManager {
   Map<String, Renderer> _renderers = {};
   List<ShieldTarget> _shields = [];
 
-  _Session? _session;
-  Timer? _advance;
+  /// De sessies, per speaker (zones, 21-10-2026: elke speaker is een eigen zone, en twee speakers kunnen
+  /// tegelijk iets anders spelen). Elk met zijn eigen tijdklok en zijn eigen slot.
+  ///
+  /// **De oude speakerkeuze blijft één speaker tegelijk.** Wie in het speakerblad een andere speaker
+  /// kiest, laat de vorige ophouden met doorschuiven, zoals altijd ([play] zonder `alsZone`). Alleen een
+  /// zone (`/api/zone/cmd`) krijgt een sessie die naast de andere doorloopt.
+  final Map<String, _Session> _sessies = {};
 
   /// Er veranderde iets aan wat de speaker doet (of er is geen sessie meer). Voor de zonelijst.
   void Function()? bijStand;
 
-  /// Wat de speaker met de sessie het laatst zei — zonder hem iets te vragen: de tijdklok van vijf
-  /// seconden en elke statusvraag houden het bij. Null zonder sessie. Zie `zones.dart`.
-  ({
-    String id,
-    String naam,
-    String? trackId,
-    int index,
-    int lengte,
-    bool speelt,
-    int positieMs,
-    int duurMs,
-    int opMs,
-  })? get laatsteStand {
-    final s = _session;
-    if (s == null) return null;
+  /// Wat elke speaker met een sessie het laatst zei — zonder hem iets te vragen: de tijdklok van vijf
+  /// seconden en elke statusvraag houden het bij. Zie `zones.dart`.
+  List<SpeakerStand> get laatsteStanden => [for (final sessie in _sessies.values) _standVan(sessie)];
+
+  SpeakerStand _standVan(_Session s) {
     final tid = s.queue.elementAtOrNull(s.index);
     var duur = s.duur?.inMilliseconds ?? 0;
     if (duur <= 0 && tid != null) duur = catalog.track(tid)?.duration?.inMilliseconds ?? 0;
@@ -222,7 +219,30 @@ class CastManager {
       positieMs: s.positie?.inMilliseconds ?? 0,
       duurMs: duur,
       opMs: s.gezienOp ?? s.startedAt.millisecondsSinceEpoch,
+      volume: s.volume ?? -1,
     );
+  }
+
+  /// De speakers die de pc op het netwerk kent (ook zonder sessie): als zone in de lijst, zodat je er
+  /// muziek naartoe kunt sturen. Zie [zoekSpeakers].
+  List<({String id, String naam})> get bekendeSpeakers => [
+        for (final r in _renderers.values) (id: r.id, naam: r.name),
+      ];
+
+  Timer? _zoeker;
+
+  /// Om de [elke] op het netwerk kijken welke speakers er zijn (en meteen één keer). Alleen in de app:
+  /// een toets mag het netwerk niet op (zie "toets nooit tegen de echte deur").
+  void zoekSpeakers({Duration elke = const Duration(minutes: 10)}) {
+    _zoeker?.cancel();
+    Future<void> zoek() async {
+      try {
+        await devices();
+      } catch (_) {/* geen netwerk: de vorige lijst blijft */}
+    }
+
+    unawaited(zoek());
+    _zoeker = Timer.periodic(elke, (_) => unawaited(zoek()));
   }
 
   /// Onthoud wat de speaker zei, en meld het als het iets nieuws is.
@@ -250,6 +270,7 @@ class CastManager {
       final found = await _upnp.discover();
       _renderers = {for (final r in found) r.id: r};
       _shields = await _findShields();
+      bijStand?.call();
     }
     return [
       for (final r in _renderers.values) r.toJson(),
@@ -292,9 +313,16 @@ class CastManager {
   // ── Playing ──────────────────────────────────────────────────────────────
 
   /// Start [trackIds] on [deviceId] at [index].
-  Future<void> play(String deviceId, List<String> trackIds, int index) async {
+  ///
+  /// [alsZone]: vanuit de zones. Dan blijven de andere speakers spelen wat ze speelden; anders (de oude
+  /// speakerkeuze) houdt de vorige speaker op met doorschuiven, zoals altijd.
+  Future<void> play(String deviceId, List<String> trackIds, int index, {bool alsZone = false}) async {
     if (trackIds.isEmpty) throw ArgumentError('nothing to play');
-    _advance?.cancel();
+    if (!alsZone) {
+      for (final ander in _sessies.values.where((x) => !x.alsZone && x.renderer.id != deviceId).toList()) {
+        _sluit(ander);
+      }
+    }
 
     final shield = _shields.where((s) => s.id == deviceId).firstOrNull;
     if (shield != null) {
@@ -303,12 +331,124 @@ class CastManager {
     }
 
     final renderer = await _renderer(deviceId);
-    _log?.line('── start op ${renderer.name}: ${trackIds.length} nummers, vanaf $index ──');
-    _session = _Session(renderer: renderer, queue: trackIds, index: index.clamp(0, trackIds.length - 1));
+    _log?.line('── start op ${renderer.name}: ${trackIds.length} nummers, vanaf $index'
+        '${alsZone ? ' (zone)' : ''} ──');
+    final oud = _sessies[renderer.id];
+    if (oud != null) _sluit(oud, melden: false);
+    final session = _Session(
+        renderer: renderer,
+        queue: List.of(trackIds),
+        index: index.clamp(0, trackIds.length - 1),
+        alsZone: alsZone);
+    _sessies[renderer.id] = session;
     bijStand?.call();
-    await _openCurrent();
+    await _openCurrent(session);
     // The renderer plays one track; something has to notice it ended and send the next.
-    _advance = Timer.periodic(const Duration(seconds: 5), (_) => _maybeAdvance());
+    session.advance = Timer.periodic(const Duration(seconds: 5), (_) => _maybeAdvance(session));
+    unawaited(_haalVolume(session));
+  }
+
+  /// Een sessie beëindigen: geen tijdklok meer, en weg uit de lijst. De speaker zelf krijgt niets te
+  /// horen (hij speelt het nummer van nu uit), net als vroeger bij een andere keuze.
+  void _sluit(_Session s, {bool melden = true}) {
+    s.advance?.cancel();
+    s.advance = null;
+    if (identical(_sessies[s.renderer.id], s)) _sessies.remove(s.renderer.id);
+    if (melden) bijStand?.call();
+  }
+
+  /// Het volume van de speaker, voor de schuif van zijn zone. Stil bij een speaker zonder volume.
+  Future<void> _haalVolume(_Session s) async {
+    try {
+      final v = await _upnp.getVolume(s.renderer);
+      if (v != null && v != s.volume) {
+        s.volume = v;
+        bijStand?.call();
+      }
+    } catch (_) {}
+  }
+
+  /// Nummers in de wachtrij van de speaker zetten: achter het spelende nummer ([hierna]) of achteraan.
+  /// Wat er al komt en hetzelfde nummer is, verhuist (zoals op een toestel).
+  Future<void> voegToe(String deviceId, List<String> ids, {required bool hierna}) async {
+    final s = _sessies[deviceId];
+    if (s == null) throw StateError('Die speaker speelt nu niets.');
+    if (ids.isEmpty) return;
+    final nieuw = ids.toSet();
+    for (var i = s.queue.length - 1; i > s.index; i--) {
+      if (nieuw.contains(s.queue[i])) s.queue.removeAt(i);
+    }
+    final volgendeWas = s.queue.elementAtOrNull(s.index + 1);
+    if (hierna) {
+      s.queue.insertAll(s.index + 1, ids);
+    } else {
+      s.queue.addAll(ids);
+    }
+    _log?.line('${hierna ? 'hierna' : 'achteraan'}: ${ids.length} nummers  (nu ${s.queue.length})');
+    // De speaker kreeg het volgende nummer al mee; is dat een ander geworden, dan het nieuwe.
+    if (s.queue.elementAtOrNull(s.index + 1) != volgendeWas) await _armNext(s);
+    bijStand?.call();
+  }
+
+  /// De wachtrij van een speaker met een sessie, en waar hij is. Null zonder sessie.
+  ({List<String> rij, int index})? rijVan(String deviceId) {
+    final s = _sessies[deviceId];
+    return s == null ? null : (rij: List.unmodifiable(s.queue), index: s.index);
+  }
+
+  /// Naar het nummer op [plek] in de wachtrij van de speaker. Met [trackId]: dat nummer, ook als de rij
+  /// intussen verschoof ([plekVoorNummer]).
+  Future<void> springNaar(String deviceId, int plek, {String trackId = ''}) async {
+    final s = _sessies[deviceId];
+    if (s == null) throw StateError('Die speaker speelt nu niets.');
+    final i = plekVoorNummer(s.queue, plek, trackId);
+    if (i < 0) throw StateError('Dat nummer staat niet meer in de wachtrij.');
+    s.index = i;
+    await _openCurrent(s);
+  }
+
+  /// Een nummer dat nog komt uit de wachtrij van de speaker halen.
+  Future<void> haalUit(String deviceId, int plek, {String trackId = ''}) async {
+    final s = _sessies[deviceId];
+    if (s == null) throw StateError('Die speaker speelt nu niets.');
+    final i = plekVoorNummer(s.queue, plek, trackId);
+    if (i < 0 || i == s.index) throw StateError('Dat nummer staat niet (meer) in wat er nog komt.');
+    s.queue.removeAt(i);
+    if (i < s.index) s.index--;
+    if (i == s.index + 1) await _armNext(s);
+    bijStand?.call();
+  }
+
+  /// Een nummer in de wachtrij van de speaker verplaatsen, van [van] naar [naar].
+  Future<void> verplaats(String deviceId, int van, int naar, {String trackId = ''}) async {
+    final s = _sessies[deviceId];
+    if (s == null) throw StateError('Die speaker speelt nu niets.');
+    final i = plekVoorNummer(s.queue, van, trackId);
+    if (i < 0 || i == s.index || naar < 0 || naar >= s.queue.length) {
+      throw StateError('Dat nummer staat niet (meer) in wat er nog komt.');
+    }
+    final volgendeWas = s.queue.elementAtOrNull(s.index + 1);
+    final id = s.queue.removeAt(i);
+    s.queue.insert(naar, id);
+    if (i < s.index && naar >= s.index) {
+      s.index--;
+    } else if (i > s.index && naar <= s.index) {
+      s.index++;
+    }
+    if (s.queue.elementAtOrNull(s.index + 1) != volgendeWas) await _armNext(s);
+    bijStand?.call();
+  }
+
+  /// [id] meteen, en de rest laten staan ("Nu spelen, rest laten staan").
+  Future<void> speelNu(String deviceId, String id) async {
+    final s = _sessies[deviceId];
+    if (s == null) throw StateError('Die speaker speelt nu niets.');
+    for (var i = s.queue.length - 1; i > s.index; i--) {
+      if (s.queue[i] == id) s.queue.removeAt(i);
+    }
+    s.queue.insert(s.index + 1, id);
+    s.index++;
+    await _openCurrent(s);
   }
 
   /// The Shield gets the whole queue at once — it has a real player and can manage its own gaps.
@@ -359,9 +499,7 @@ class CastManager {
     }
   }
 
-  Future<void> _openCurrent() async {
-    final session = _session;
-    if (session == null) return;
+  Future<void> _openCurrent(_Session session) async {
     final id = session.queue.elementAtOrNull(session.index);
     final track = id == null ? null : catalog.track(id);
     if (id == null || track == null) return;
@@ -435,8 +573,8 @@ class CastManager {
   ///
   /// De aanroeper zet het spelende nummer op [index]; dat is wat de volgorde hier en daar gelijk houdt.
   Future<void> requeue(String deviceId, List<String> trackIds, int index) async {
-    final session = _session;
-    if (session == null || session.renderer.id != deviceId || trackIds.isEmpty) return;
+    final session = _sessies[deviceId];
+    if (session == null || trackIds.isEmpty) return;
     session.queue = List.of(trackIds);
     // Waar staat het nummer dat NU klinkt in de nieuwe lijst? Dat is de index -- ongeacht wat de
     // aanroeper meestuurt. De speaker speelt door, dus de boekhouding hoort zich naar het geluid te
@@ -462,9 +600,7 @@ class CastManager {
   ///
   /// Dit vervangt de STOPPED-weg niet: een speaker die de volgende-URL niet ondersteunt stopt wél, en
   /// dan is [_maybeAdvance] nog steeds wat de wachtrij doorzet.
-  Future<bool> _followedRenderer(String? trackUri, Duration? positie) async {
-    final session = _session;
-    if (session == null) return false;
+  Future<bool> _followedRenderer(_Session session, String? trackUri, Duration? positie) async {
     // Eerst onthouden, en met de waarde van VOOR deze meting verder rekenen -- anders is de terugval
     // die we zoeken al weggeschreven voordat we hem konden zien.
     final top = session.hoogstePositie;
@@ -481,7 +617,7 @@ class CastManager {
     // De positie die dóórloopt in plaats van terug naar nul te springen verraadt het: er wisselde geen
     // nummer, alleen de boekhouding schoof op. Een ECHTE doorschuiving komt altijd aan het eind van een
     // nummer en dus ruim na deze periode, dus dit kost de goede kant niets.
-    if (DateTime.now().difference(session.startedAt) < _startGrace) return false;
+    if (DateTime.now().difference(session.startedAt) < startGrace) return false;
     final volgende = session.nextUrl;
     if (volgende == null || trackUri != volgende) return false;
     if (session.index + 1 >= session.queue.length) return false;
@@ -633,27 +769,29 @@ class CastManager {
   /// Een Sonos zegt STOPPED terwijl hij de eerste bytes ophaalt, en meldt de volgende-URL al in
   /// TrackURI terwijl hij nog aan het huidige nummer bezig is. Twee keer uitgeschreven zouden ze
   /// uiteen gaan lopen.
-  static const _startGrace = Duration(seconds: 8);
-
-  bool _advancing = false;
+  /// Hoe lang na het openen van een nummer een "STOPPED" of een nieuwe TrackURI niet geloofd wordt. Een
+  /// toets zet hem op nul.
+  final Duration startGrace;
 
   /// Move to the next track once the speaker says it has finished.
-  Future<void> _maybeAdvance() async {
-    if (_advancing) return;
-    final session = _session;
-    if (session == null) return;
+  Future<void> _maybeAdvance(_Session session) async {
+    if (session.advancing) return;
+    // Een sessie die intussen vervangen of gesloten is, schuift niets meer door.
+    if (!identical(_sessies[session.renderer.id], session)) return;
+    // Om de zes tikken (een halve minuut) het volume: dat verandert zelden vanzelf.
+    if (++session.tikken % 6 == 0) unawaited(_haalVolume(session));
     // Give the renderer a moment after a start before believing "STOPPED" — a Sonos reports
     // exactly that for a second or two while it fetches the first bytes.
-    if (DateTime.now().difference(session.startedAt) < _startGrace) return;
+    if (DateTime.now().difference(session.startedAt) < startGrace) return;
 
-    _advancing = true;
+    session.advancing = true;
     try {
       // Eerst: is de speaker zelf al doorgeschoven? Dan is er niets te doen behalve bijhouden waar hij
       // is. Deze vraag gaat vóór de transportstatus, want in dat geval staat die nog op PLAYING en zou
       // de rest van deze functie niets doen terwijl de index achterloopt.
       final pos = await _upnp.positionInfo(session.renderer).catchError((_) => null);
       if (pos != null) _zag(session, positie: pos.position, duur: pos.duration);
-      if (await _followedRenderer(pos?.trackUri, pos?.position)) return;
+      if (await _followedRenderer(session, pos?.trackUri, pos?.position)) return;
 
       final state = await _upnp.transportState(session.renderer);
       if (state != null) _zag(session, speelt: state.isPlaying);
@@ -663,14 +801,12 @@ class CastManager {
           'volgende=${_idVanUrl(session.nextUrl) ?? '-'}');
       if (state == null || !state.isStopped) return;
       if (session.index + 1 >= session.queue.length) {
-        _advance?.cancel();
-        _session = null;
-        bijStand?.call();
+        _sluit(session);
         return;
       }
       session.index++;
       try {
-        await _openCurrent();
+        await _openCurrent(session);
       } catch (e) {
         // The index had already moved, and the timer throws the error away — so a renderer that
         // refuses the track (a busy Sonos answers "Transition not available" with an HTTP 500) lost
@@ -681,7 +817,7 @@ class CastManager {
         debugPrint('cast: kon ${session.queue.elementAtOrNull(session.index + 1)} niet openen: $e');
       }
     } finally {
-      _advancing = false;
+      session.advancing = false;
     }
   }
 
@@ -692,39 +828,40 @@ class CastManager {
       return;
     }
     final renderer = await _renderer(deviceId);
+    final sessie = _sessies[renderer.id];
     _log?.line('opdracht $action${value == null ? '' : ' $value'}  '
-        '(idx=${_session?.index ?? -1})');
+        '(idx=${sessie?.index ?? -1})');
     switch (action) {
       case 'play':
         await _upnp.play(renderer);
       case 'pause':
         await _upnp.pause(renderer);
       case 'stop':
-        _advance?.cancel();
-        _session = null;
-        bijStand?.call();
+        if (sessie != null) _sluit(sessie);
         await _upnp.stop(renderer);
       case 'next':
-        final session = _session;
-        if (session != null && session.index + 1 < session.queue.length) {
-          session.index++;
-          await _openCurrent();
+        if (sessie != null && sessie.index + 1 < sessie.queue.length) {
+          sessie.index++;
+          await _openCurrent(sessie);
         }
       case 'previous':
-        final session = _session;
-        if (session != null && session.index > 0) {
-          session.index--;
-          await _openCurrent();
+        if (sessie != null && sessie.index > 0) {
+          sessie.index--;
+          await _openCurrent(sessie);
         }
       case 'volume':
         await _upnp.setVolume(renderer, value ?? 50);
+        if (sessie != null) {
+          sessie.volume = value ?? 50;
+          bijStand?.call();
+        }
       case 'seek':
         // Seconds on the wire rather than a formatted time: the phone has a slider, not a clock,
         // and the H:MM:SS the renderer wants is upnp.dart's business.
         //
         // Het ijkpunt voor de terugval verzetten, want anders is achteruit slepen niet te onderscheiden
         // van een nummer dat afliep: allebei valt de positie terug. Zo verzet slepen de meetlat mee.
-        _session?.hoogstePositie = Duration(seconds: value ?? 0);
+        sessie?.hoogstePositie = Duration(seconds: value ?? 0);
         await _upnp.seek(renderer, Duration(seconds: value ?? 0));
       default:
         throw ArgumentError('unknown action: $action');
@@ -753,8 +890,8 @@ class CastManager {
     } catch (_) {
       return out; // gone from the network; the caller shows its own last known state
     }
-    final session = _session;
-    out['casting'] = session != null && session.renderer.id == renderer.id;
+    final session = _sessies[renderer.id];
+    out['casting'] = session != null;
     // Alle drie tegelijk gestart en pas daarna afgewacht: drie ronden naar een embedded stack, één na
     // de ander, is bijna een seconde — en dit wordt gepolst terwijl iemand naar een voortgangsbalk kijkt.
     //
@@ -787,9 +924,9 @@ class CastManager {
     //
     // Het antwoord wordt NA deze vraag samengesteld: eerst bijwerken, dan vertellen. Andersom zou deze
     // poll nog de oude index melden en pas de volgende de nieuwe.
-    await _followGuarded(pos?.trackUri, pos?.position);
-    final nu = _session;
-    if (nu != null && nu.renderer.id == renderer.id) {
+    if (session != null) await _followGuarded(session, pos?.trackUri, pos?.position);
+    final nu = _sessies[renderer.id];
+    if (nu != null) {
       _zag(nu, positie: pos?.position, duur: pos?.duration, speelt: state?.isPlaying);
       out['index'] = nu.index;
       out['queueLength'] = nu.queue.length;
@@ -818,16 +955,16 @@ class CastManager {
   ///
   /// Nodig omdat de status door meerdere toestellen tegelijk gepolst wordt: twee overlappende
   /// doorschuivingen verhogen allebei de index en dan loopt de wachtrij sneller dan de speaker speelt --
-  /// exact de fout die de tijdklok eerder maakte en waarvoor [_advancing] bestaat.
-  Future<void> _followGuarded(String? trackUri, Duration? positie) async {
+  /// exact de fout die de tijdklok eerder maakte en waarvoor [_Session.advancing] bestaat (per speaker).
+  Future<void> _followGuarded(_Session session, String? trackUri, Duration? positie) async {
     // Geen `trackUri == null` meer als afslag hierboven: de positie moet óók onthouden worden als de
     // speaker even geen URI meldt, anders mist de terugval straks zijn ijkpunt.
-    if (_advancing) return;
-    _advancing = true;
+    if (session.advancing) return;
+    session.advancing = true;
     try {
-      await _followedRenderer(trackUri, positie);
+      await _followedRenderer(session, trackUri, positie);
     } catch (_) {/* een mislukte doorschuiving mag geen statusvraag laten klappen */} finally {
-      _advancing = false;
+      session.advancing = false;
     }
   }
 
@@ -853,16 +990,43 @@ class CastManager {
     return found;
   }
 
+  /// Voor een toets: deze speakers kent hij al (zonder op het netwerk te zoeken).
+  @visibleForTesting
+  void kenSpeakersVoorToets(List<Renderer> r) => _renderers = {for (final x in r) x.id: x};
+
+  /// Voor een toets: wat de tijdklok van vijf seconden doet, nu meteen, voor elke speaker.
+  @visibleForTesting
+  Future<void> tikVoorToets() async {
+    for (final s in _sessies.values.toList()) {
+      await _maybeAdvance(s);
+    }
+  }
+
   void dispose() {
-    _advance?.cancel();
-    _advance = null;
+    _zoeker?.cancel();
+    for (final s in _sessies.values) {
+      s.advance?.cancel();
+    }
+    _sessies.clear();
   }
 }
 
 class _Session {
-  _Session({required this.renderer, required this.queue, required this.index});
+  _Session({required this.renderer, required this.queue, required this.index, this.alsZone = false});
 
   final Renderer renderer;
+
+  /// Gestart vanuit de zones: loopt naast de andere sessies door. Zie [CastManager.play].
+  final bool alsZone;
+
+  /// De tijdklok die het volgende nummer stuurt, en het slot ertegen dat twee doorschuivingen elkaar
+  /// kruisen (vroeger één voor de hele castmanager; nu per speaker).
+  Timer? advance;
+  bool advancing = false;
+  int tikken = 0;
+
+  /// Het volume van de speaker (0–100), als hij het meldt.
+  int? volume;
 
   /// Niet final: shuffle tijdens het casten geeft een andere volgorde voor wat er nog komt. Zie
   /// [CastManager.requeue].

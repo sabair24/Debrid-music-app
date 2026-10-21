@@ -164,13 +164,38 @@ void main() {
 
     test('speakers staan erbij, met wie ze de muziek gaf', () {
       reg.zetSpeakers([
-        (id: 'uuid:amp', naam: 'Sonos Amp', trackId: 'x', index: 2, lengte: 9, speelt: true, positieMs: 1000, duurMs: 0, opMs: nu),
+        (
+          id: 'uuid:amp',
+          naam: 'Sonos Amp',
+          trackId: 'x',
+          index: 2,
+          lengte: 9,
+          speelt: true,
+          positieMs: 1000,
+          duurMs: 0,
+          opMs: nu,
+          volume: 30,
+        ),
       ]);
       final s = reg.lijst().firstWhere((z) => z.id == 'spk:uuid:amp');
       expect(s.soort, ZoneSoort.speaker);
       expect(s.via, 'THUIS');
       expect(s.durationMs, 200000, reason: 'een Sonos meldt geen lengte; de bibliotheek weet hem');
       expect(s.toestel, isNull);
+      expect(s.volume, 30);
+    });
+
+    test('een speaker zonder muziek staat er ook, om iets naartoe te sturen (stap 2.3)', () {
+      reg.zetSpeakers(const [], bekend: [(id: 'uuid:move', naam: 'Sonos Move'), (id: 'uuid:amp', naam: 'Sonos Amp')]);
+      final s = {for (final z in reg.lijst()) z.id: z};
+      expect(s['spk:uuid:move']!.online, isTrue);
+      expect(s['spk:uuid:move']!.speeltIets, isFalse);
+      reg.zetSpeakers([
+        (id: 'uuid:amp', naam: 'Sonos Amp', trackId: 'x', index: 0, lengte: 1, speelt: true, positieMs: 0, duurMs: 0, opMs: nu, volume: -1),
+      ]);
+      final na = reg.lijst().where((z) => z.id == 'spk:uuid:amp').toList();
+      expect(na.length, 1, reason: 'een speaker met muziek staat er één keer, niet ook nog als lege');
+      expect(na.single.speeltIets, isTrue);
     });
 
     test('de volledige stand van een zone, mét de wachtrij', () {

@@ -281,6 +281,9 @@ class LanSharing extends ChangeNotifier {
       );
       await discovery.start();
       _discovery = discovery;
+      // De speakers in huis als zones (zones, 21-10-2026), ook als er niets op speelt. Nooit met poort 0:
+      // een toets mag het netwerk niet op.
+      if (settings.lanPort != 0) _server!.cast.zoekSpeakers();
     }
     await _refreshAddresses();
   }

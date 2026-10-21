@@ -779,6 +779,25 @@ class RemoteClient {
     return decoded is Map<String, dynamic> ? decoded : null;
   }
 
+  /// Een venster op de wachtrij van een zone (`{index, lengte, van, rij}`, zie `ZoneRegister.rijVenster`),
+  /// of null als die zone geen wachtrij meldt.
+  Future<Map<String, dynamic>?> zoneRij(String zone) async {
+    final http.Response res;
+    try {
+      res = await _http
+          .get(_api('/api/zones/stand', {'zone': zone, 'venster': '1'}), headers: _headers)
+          .timeout(timeout);
+    } catch (e) {
+      throw RemoteException('Kon de pc niet bereiken: $e');
+    }
+    if (res.statusCode == 404) return null;
+    if (res.statusCode != 200) {
+      throw RemoteException('De pc antwoordde met ${res.statusCode}.', statusCode: res.statusCode);
+    }
+    final decoded = res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
+    return decoded is Map<String, dynamic> ? decoded : null;
+  }
+
   /// De zones als stroom (`/api/zones/events`): elk bericht zodra de pc het stuurt, en een `ping` bij
   /// elk teken van leven (zodat de aanroeper een dode lijn herkent aan stilte).
   ///

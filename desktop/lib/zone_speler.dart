@@ -77,11 +77,16 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     required this.idVan,
     required this.hoesVan,
     required this.stuur,
+    this.haalRij,
     int Function()? klok,
   }) : _klok = klok {
     lijst.addListener(_lijstVeranderd);
     _lijstVeranderd();
   }
+
+  /// Een venster op de wachtrij van deze zone (`{index, lengte, van, rij}`), of null. Zie
+  /// `ZoneRegister.rijVenster`. Null: geen wachtrij te zien (een oudere pc).
+  final Future<Map<String, dynamic>?> Function()? haalRij;
 
   final ZoneLijst lijst;
   final String zoneId;
@@ -129,7 +134,63 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     // anders even terugspringen.
     if (z != null && (_nu > _verwachtTot || _bevestigt(z))) _wisVerwacht();
     _volgTik();
+    // Er keek de laatste tien seconden iemand naar de wachtrij, en die kan nu anders zijn.
+    if (_nu - _rijGevraagdOp < 10000 && _rijSleutel != _rijVoor) _haalRijLater();
     if (was != z) notifyListeners();
+  }
+
+  // ── De wachtrij: een venster rond het spelende nummer ──────────────────────
+
+  List<Track> _rij = const [];
+  List<String> _rijIds = const [];
+  int _rijVan = 0;
+
+  /// Voor welke stand van de zone het venster gehaald werd (nummer, plek, lengte). Leeg = opnieuw halen.
+  String _rijVoor = '';
+  bool _rijBezig = false;
+  int _rijGevraagdOp = 0;
+
+  String get _rijSleutel {
+    final z = _zone;
+    return z == null ? '' : '${z.trackId}|${z.index}|${z.lengte}';
+  }
+
+  void _haalRijLater() {
+    final h = haalRij;
+    if (_rijBezig || h == null || _weg) return;
+    _rijBezig = true;
+    Timer(const Duration(milliseconds: 150), () async {
+      final sleutel = _rijSleutel;
+      try {
+        final m = await h();
+        if (_weg) return;
+        _rijVoor = sleutel;
+        final ids = [for (final x in (m?['rij'] as List? ?? const [])) '$x'];
+        _rijIds = ids;
+        _rijVan = (m?['van'] as num?)?.toInt() ?? 0;
+        _rij = [
+          for (final id in ids)
+            nummer(id) ?? Track(path: 'zone:$id', title: 'Onbekend nummer', artist: '', album: ''),
+        ];
+        notifyListeners();
+      } catch (_) {
+        // Geen pc: niet blijven proberen tot de zone iets nieuws meldt.
+        _rijVoor = sleutel;
+      } finally {
+        _rijBezig = false;
+      }
+      if (!_weg && _rijSleutel != _rijVoor && _nu - _rijGevraagdOp < 10000) _haalRijLater();
+    });
+  }
+
+  /// Na een opdracht die de wachtrij verandert: even later opnieuw halen (het toestel moet ze eerst
+  /// uitvoeren en melden; een verplaatsing verandert nummer, plek noch lengte).
+  void _rijStraksOpnieuw() {
+    Timer(const Duration(milliseconds: 900), () {
+      if (_weg) return;
+      _rijVoor = '';
+      if (_nu - _rijGevraagdOp < 10000) _haalRijLater();
+    });
   }
 
   /// Zegt [z] wat we verwachtten?
@@ -326,12 +387,23 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
 
   @override
   bool get speeltHerhaling => false;
+  /// De plek van het spelende nummer in [queueTracks] (het venster), niet in de hele wachtrij.
   @override
-  int get currentIndex => _zone?.index ?? 0;
+  int get currentIndex {
+    final z = _zone;
+    if (z == null) return 0;
+    final i = z.index - _rijVan;
+    return i >= 0 && i < _rij.length ? i : 0;
+  }
 
-  /// De wachtrij van een zone op afstand komt in een volgende stap; tot dan geen lijst.
+  /// Het venster op de wachtrij van de zone: tot 100 nummers ervoor en 400 erna. Wie dit leest, wil het
+  /// zien: dan wordt het bijgehouden zolang er iemand kijkt.
   @override
-  List<Track> get queueTracks => const [];
+  List<Track> get queueTracks {
+    _rijGevraagdOp = _nu;
+    if (_rijSleutel != _rijVoor) _haalRijLater();
+    return _rij;
+  }
   @override
   Track? get volgendNummer => null;
   @override
@@ -429,8 +501,40 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   @override
   void zetDemping(bool aan) {}
 
+  /// Naar [plek] in [queueTracks]. Het nummer gaat mee: is de rij intussen verschoven, dan zoekt de zone
+  /// het zelf op.
   @override
-  Future<void> springNaar(int plek) => _stuur('jump', {'plek': plek});
+  Future<void> springNaar(int plek) => _stuur('jump', {
+        'plek': plek + _rijVan,
+        if (plek >= 0 && plek < _rijIds.length) 'trackId': _rijIds[plek],
+      });
+
+  @override
+  bool haalUitWachtrij(int plek) {
+    if (plek < 0 || plek >= _rijIds.length) return false;
+    final id = _rijIds[plek];
+    // Meteen weg op het scherm; de zone meldt daarna haar echte wachtrij.
+    _rijIds = [..._rijIds]..removeAt(plek);
+    _rij = [..._rij]..removeAt(plek);
+    notifyListeners();
+    unawaited(_stuur('remove', {'plek': plek + _rijVan, 'trackId': id}).then((_) => _rijStraksOpnieuw()));
+    return true;
+  }
+
+  @override
+  bool verplaatsInWachtrij(int van, int naar) {
+    if (van < 0 || van >= _rijIds.length || naar < 0 || naar >= _rijIds.length || van == naar) return false;
+    final id = _rijIds[van];
+    _rijIds = [..._rijIds]..removeAt(van);
+    _rijIds.insert(naar, id);
+    final t = _rij[van];
+    _rij = [..._rij]..removeAt(van);
+    _rij.insert(naar, t);
+    notifyListeners();
+    unawaited(_stuur('move', {'van': van + _rijVan, 'naar': naar + _rijVan, 'trackId': id})
+        .then((_) => _rijStraksOpnieuw()));
+    return true;
+  }
 
   @override
   Future<void> playQueue(List<Track> queue, int index, {Uint8List? cover}) {
@@ -447,9 +551,10 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   }
 
   @override
-  void speelHierna(List<Track> nummers) => unawaited(_rijOpdracht('hierna', nummers));
+  void speelHierna(List<Track> nummers) => unawaited(_rijOpdracht('hierna', nummers).then((_) => _rijStraksOpnieuw()));
   @override
-  void zetAchteraan(List<Track> nummers) => unawaited(_rijOpdracht('achteraan', nummers));
+  void zetAchteraan(List<Track> nummers) =>
+      unawaited(_rijOpdracht('achteraan', nummers).then((_) => _rijStraksOpnieuw()));
 
   @override
   Future<void> speelNuMetRest(Track t) {

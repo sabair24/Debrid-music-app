@@ -38,6 +38,10 @@ class ZoneLijst extends ChangeNotifier {
   /// zijn eigen server, op een toestel via `/api/zones/stand`.
   Future<Map<String, dynamic>?> Function(String zone)? haalStand;
 
+  /// De muziek van zone `van` naar zone `naar` verplaatsen; null als het lukte, anders waarom niet.
+  /// Gezet door main: op de pc rechtstreeks, op een toestel via `/api/zone/transfer`.
+  Future<String?> Function(String van, String naar)? verplaats;
+
   final int Function()? _klok;
   int get _nu => _klok?.call() ?? DateTime.now().millisecondsSinceEpoch;
 

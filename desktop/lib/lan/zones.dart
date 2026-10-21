@@ -271,6 +271,9 @@ typedef SpeakerStand = ({
   int positieMs,
   int duurMs,
   int opMs,
+
+  /// Het volume van de speaker (0–100), of -1 als hij het niet meldt.
+  int volume,
 });
 
 /// Alle zones, op de pc. Eén per server.
@@ -367,10 +370,15 @@ class ZoneRegister {
   }
 
   /// De speakers waar de pc nu muziek naartoe stuurt.
-  void zetSpeakers(List<SpeakerStand> s) {
-    _speakers = s;
+  /// De speakers waar de pc nu muziek naartoe stuurt ([actief]), en alle speakers die hij op het netwerk
+  /// kent ([bekend]): die staan er ook, zonder muziek, zodat je er iets naartoe kunt sturen.
+  void zetSpeakers(List<SpeakerStand> actief, {List<({String id, String naam})>? bekend}) {
+    _speakers = actief;
+    if (bekend != null) _bekend = bekend;
     _meld();
   }
+
+  List<({String id, String naam})> _bekend = const [];
 
   /// De toestellen met een open stroom: wie "Speel op …" van de pc kan krijgen.
   List<({String id, String naam})> bereikbareToestellen() => [
@@ -423,7 +431,13 @@ class ZoneRegister {
         index: s.index,
         lengte: s.lengte,
         via: pcNaam,
+        volume: s.volume,
       ));
+    }
+    final actief = {for (final s in _speakers) s.id};
+    for (final b in _bekend) {
+      if (actief.contains(b.id)) continue;
+      uit.add(ZoneStaat(id: 'spk:${b.id}', soort: ZoneSoort.speaker, naam: b.naam, online: true, via: pcNaam));
     }
     return ordenZones(uit, hier: 'dev:$pcId');
   }
@@ -474,11 +488,77 @@ class ZoneRegister {
     return state.perToestel[zoneId.substring(4)];
   }
 
+  /// De wachtrij van een speaker die de pc stuurt (ids en de plek van het spelende nummer), of null.
+  /// Gezet door de server, uit `CastManager.rijVan`.
+  ({List<String> rij, int index})? Function(String speakerId)? speakerRij;
+
+  /// Een venster op de wachtrij van een zone, rond het spelende nummer: [voor] ervoor en [na] erna. Een
+  /// geschudde bibliotheek is dertigduizend ids; die horen niet bij elk nieuw nummer over mobiele data.
+  /// Null als de zone geen wachtrij meldt.
+  Map<String, dynamic>? rijVenster(String zoneId, {int voor = 100, int na = 400}) {
+    final List<String> rij;
+    final int index;
+    if (zoneId.startsWith('spk:')) {
+      final r = speakerRij?.call(zoneId.substring(4));
+      if (r == null) return null;
+      rij = r.rij;
+      index = r.index;
+    } else {
+      final p = standVan(zoneId);
+      if (p == null) return null;
+      rij = p.queue;
+      index = p.index;
+    }
+    final w = rijVensterUit(rij, index, voor: voor, na: na);
+    return {'zone': zoneId, 'index': index, 'lengte': rij.length, 'van': w.van, 'rij': w.rij};
+  }
+
   Future<void> dispose() async {
     _tik.cancel();
     await _sub.cancel();
     await _veranderd.close();
   }
+}
+
+/// Het stuk van [rij] van [voor] plekken vóór [index] tot [na] erna, en waar het begint.
+({int van, List<String> rij}) rijVensterUit(List<String> rij, int index, {int voor = 100, int na = 400}) {
+  if (rij.isEmpty) return (van: 0, rij: const []);
+  final i = index.clamp(0, rij.length - 1);
+  final van = (i - voor).clamp(0, rij.length);
+  final tot = (i + na + 1).clamp(van, rij.length);
+  return (van: van, rij: rij.sublist(van, tot));
+}
+
+/// Wat een speaker speelt als melding zoals een toestel ze geeft (`PlaybackProgress`): om de muziek van
+/// een speaker naar een andere zone te verplaatsen. [nuMs] op de klok van de pc.
+Map<String, dynamic> speakerAlsStand(SpeakerStand s, List<String> rij, {required int nuMs}) {
+  final pos = s.speelt ? s.positieMs + (nuMs - s.opMs).clamp(0, 6 * 60 * 60 * 1000) : s.positieMs;
+  return {
+    'trackId': s.trackId ?? '',
+    'positionMs': s.duurMs > 0 && pos > s.duurMs ? s.duurMs : pos,
+    'queue': rij,
+    'index': s.index,
+    'playing': s.speelt,
+    'updatedAt': nuMs,
+    'deviceId': 'spk:${s.id}',
+    'deviceName': s.naam,
+    'shuffle': false,
+    'repeat': 'off',
+  };
+}
+
+/// Waar [trackId] nu staat, met [plek] als voorkeur: daar als het er nog staat, anders het dichtstbij
+/// gelegen exemplaar (de rij kan intussen verschoven zijn: een nummer begon, iemand anders voegde iets
+/// toe). -1 als het er niet meer in staat.
+int plekVoorNummer(List<String> rij, int plek, String trackId) {
+  if (trackId.isEmpty) return plek >= 0 && plek < rij.length ? plek : -1;
+  if (plek >= 0 && plek < rij.length && rij[plek] == trackId) return plek;
+  var beste = -1;
+  for (var i = 0; i < rij.length; i++) {
+    if (rij[i] != trackId) continue;
+    if (beste < 0 || (i - plek).abs() < (beste - plek).abs()) beste = i;
+  }
+  return beste;
 }
 
 /// Wat een toestel van de zones weet: de lijst zoals de pc hem het laatst stuurde, en hoe zijn klok

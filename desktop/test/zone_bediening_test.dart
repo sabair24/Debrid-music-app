@@ -287,6 +287,82 @@ void main() {
     });
   });
 
+  group('de wachtrij van een zone op afstand (stap 2.4)', () {
+    test('een venster rond het spelende nummer, en het juiste nummer als de rij verschoof', () {
+      final rij = [for (var i = 0; i < 1000; i++) 'n$i'];
+      final w = rijVensterUit(rij, 500, voor: 100, na: 400);
+      expect(w.van, 400);
+      expect(w.rij.first, 'n400');
+      expect(w.rij.last, 'n900');
+      expect(rijVensterUit(rij, 3).van, 0);
+      expect(rijVensterUit(const [], 0).rij, isEmpty);
+
+      expect(plekVoorNummer(['a', 'b', 'c', 'b'], 1, 'b'), 1, reason: 'het staat er nog');
+      expect(plekVoorNummer(['x', 'a', 'b', 'c', 'b'], 1, 'b'), 2, reason: 'een plek verschoven: het dichtstbij');
+      expect(plekVoorNummer(['a', 'c'], 1, 'b'), -1, reason: 'het staat er niet meer');
+      expect(plekVoorNummer(['a', 'c'], 1, ''), 1, reason: 'zonder nummer: de plek');
+    });
+
+    test('de ZoneSpeler haalt het venster, en springen, weghalen en verplaatsen tellen het begin mee', () async {
+      final gestuurd = <Map<String, dynamic>>[];
+      var gehaald = 0;
+      final z = ZoneSpeler(
+        lijst: _lijst([_pc()]), // index 3, lengte 10
+        zoneId: 'dev:pc-THUIS',
+        nummer: _t,
+        idVan: (t) => t.title,
+        hoesVan: (_) => null,
+        stuur: (op) async {
+          gestuurd.add(op);
+          return null;
+        },
+        haalRij: () async {
+          gehaald++;
+          return {'index': 3, 'lengte': 10, 'van': 2, 'rij': ['a', 'b', 'c', 'd']};
+        },
+      );
+      expect(z.queueTracks, isEmpty, reason: 'nog niet gehaald');
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect([for (final t in z.queueTracks) t.title], ['Nummer a', 'Nummer b', 'Nummer c', 'Nummer d']);
+      expect(z.currentIndex, 1, reason: 'plek 3 in de rij, 1 in het venster dat op 2 begint');
+      expect(gehaald, 1, reason: 'niet opnieuw zolang de zone niets nieuws meldt');
+
+      await z.springNaar(3);
+      expect(gestuurd.last, {'cmd': 'jump', 'plek': 5, 'trackId': 'd'});
+      expect(z.haalUitWachtrij(2), isTrue);
+      expect([for (final t in z.queueTracks) t.title], ['Nummer a', 'Nummer b', 'Nummer d'], reason: 'meteen weg');
+      await Future<void>.delayed(Duration.zero);
+      expect(gestuurd.last, {'cmd': 'remove', 'plek': 4, 'trackId': 'c'});
+      expect(z.verplaatsInWachtrij(2, 0), isTrue);
+      await Future<void>.delayed(Duration.zero);
+      expect(gestuurd.last, {'cmd': 'move', 'van': 4, 'naar': 2, 'trackId': 'd'});
+      z.dispose();
+    });
+
+    test('de zone zoekt het nummer zelf op als haar rij intussen verschoof', () async {
+      final s = _NepSpeler()..rij = [_t('x'), _t('a'), _t('b'), _t('c')];
+      final u = ZoneUitvoerder(speler: s, rij: s, nummer: _t, idVan: (t) => t.title.replaceFirst('Nummer ', ''));
+      await u.voerUit({'id': '1', 'cmd': 'jump', 'plek': 1, 'trackId': 'b'});
+      await u.voerUit({'id': '2', 'cmd': 'remove', 'plek': 2, 'trackId': 'c'});
+      await u.voerUit({'id': '3', 'cmd': 'move', 'van': 0, 'naar': 3, 'trackId': 'a'});
+      expect(s.log, ['spring 2', 'weg 3', 'verplaats 1→3']);
+      expect(await u.voerUit({'id': '4', 'cmd': 'remove', 'plek': 1, 'trackId': 'weg'}), isNotNull);
+    });
+
+    test('overnemen: de stand gaat naar "Hier verder"', () async {
+      final s = _NepSpeler();
+      final genomen = <Map<String, dynamic>>[];
+      final u = ZoneUitvoerder(speler: s, rij: s, nummer: _t, neemOver: (stand) async {
+        genomen.add(stand);
+        return true;
+      });
+      expect(await u.voerUit({'id': '1', 'cmd': 'neemOver', 'stand': {'trackId': 'b'}}), isNull);
+      expect(genomen.single['trackId'], 'b');
+      final zonder = ZoneUitvoerder(speler: s, rij: s, nummer: _t);
+      expect(await zonder.voerUit({'id': '2', 'cmd': 'neemOver', 'stand': {'trackId': 'b'}}), isNotNull);
+    });
+  });
+
   group('aangesloten', () {
     String lees(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
 
@@ -296,13 +372,21 @@ void main() {
       expect(main, contains('bool get casting => afstand == null && speaker.isCasting;'));
       expect(main, contains('afstand = _misschien<GekozenZone>(context, luister: true)?.opAfstand;'));
       expect(main, contains('ChangeNotifierProvider<GekozenZone>.value(value: gekozenZone),'));
-      // Wachtrij, speakerkeuze, radioduimen en de radioknop gaan over dit toestel: weg bij een zone op afstand.
+      // Speakerkeuze, radioduimen en de radioknop gaan over dit toestel: weg bij een zone op afstand. De
+      // wachtrijknop niet meer: die toont sinds stap 2.4 de wachtrij van de zone.
       expect(
           RegExp(r'if \(_misschien<GekozenZone>\(context, luister: true\)\?\.opAfstand != null\) return const SizedBox\.shrink\(\);')
               .allMatches(main)
               .length,
-          4);
+          3);
       expect(main, contains('if (x.afstand case final zone? when zone.heeftVolume)'));
+      expect(main, contains('final Speelbron p = _misschien<GekozenZone>(context, luister: true)?.opAfstand ?? lokaal;'),
+          reason: 'het wachtrijpaneel toont de wachtrij van de gekozen zone');
+      expect(main, contains('final Speelbron p = _misschien<GekozenZone>(context)?.opAfstand ?? context.read<PlayerStore>();'),
+          reason: 'een tik in die wachtrij springt daar');
+      expect(main, contains('idVan: (t) => library.gedeeldId(t.path),\n    // Een andere zone verplaatst'));
+      expect(main, contains('neemOver: verder.neemOverUit,'), reason: 'overdragen naar dit toestel (stap 2.5)');
+      expect(main, contains("key: ValueKey('zone-naar-\${zone.id}'),"), reason: '"Verplaats naar …" in het zoneblad');
     });
 
     test('een tik, een menu, een album en een radio gaan naar de gekozen zone', () {
@@ -375,6 +459,61 @@ void main() {
       );
     });
 
+    test('overdragen (stap 2.5): het doel krijgt de hele stand van de bron; niets op de bron = 409', () async {
+      // De iPad speelt iets (zijn melding staat op de pc); de gsm heeft een lijn open.
+      await c.ask('/api/state/ops', {
+        'ops': [
+          {
+            'type': 'progress',
+            'trackId': 't2',
+            'positionMs': 61000,
+            'queue': ['t1', 't2', 't3'],
+            'index': 1,
+            'playing': true,
+            'shuffle': true,
+            'repeat': 'all',
+            'at': DateTime.now().millisecondsSinceEpoch,
+          }
+        ],
+        'deviceId': 'ipad-1',
+        'deviceName': 'iPad',
+      });
+      final events = <SseEvent>[];
+      final sub = c.zoneStroom(toestel: 'gsm-1', naam: 'Galaxy').listen(events.add);
+      for (var i = 0; i < 50 && server.zones.bereikbareToestellen().isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect((await c.ask('/api/zone/transfer', {'van': 'dev:ipad-1', 'naar': 'dev:gsm-1'}))['bezorgd'], 1);
+      for (var i = 0; i < 50 && !events.any((e) => e.event == 'cmd'); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      final cmd = jsonDecode(events.firstWhere((e) => e.event == 'cmd').data) as Map<String, dynamic>;
+      expect(cmd['cmd'], 'neemOver');
+      final stand = (cmd['stand'] as Map).cast<String, dynamic>();
+      expect(stand['queue'], ['t1', 't2', 't3']);
+      expect(stand['index'], 1);
+      expect(stand['shuffle'], isTrue);
+      expect(stand['deviceId'], 'ipad-1', reason: 'zodat de iPad zichzelf ziet en pauzeert');
+      await sub.cancel();
+
+      await expectLater(
+        c.ask('/api/zone/transfer', {'van': 'dev:gsm-1', 'naar': 'dev:ipad-1'}),
+        throwsA(isA<RemoteException>().having((e) => e.statusCode, 'status', 409)),
+        reason: 'op de gsm speelt niets',
+      );
+    });
+
+    test('de stand van een speaker als melding, met de plek van nu', () {
+      final s = speakerAlsStand(
+        (id: 'uuid:amp', naam: 'Amp', trackId: 'x', index: 2, lengte: 5, speelt: true, positieMs: 10000, duurMs: 200000, opMs: 1000, volume: 30),
+        ['a', 'b', 'x', 'c', 'd'],
+        nuMs: 6000,
+      );
+      expect(s['positionMs'], 15000);
+      expect(s['queue'], ['a', 'b', 'x', 'c', 'd']);
+      expect(s['deviceId'], 'spk:uuid:amp');
+    });
+
     test('een opdracht voor de pc zelf gaat naar zijn eigen speler', () async {
       final gekregen = <Map<String, dynamic>>[];
       server.bijZoneOpdracht = (op) async {
@@ -421,6 +560,21 @@ class _NepSpeler implements Speelbron, Rijbediening {
   void zetAchteraan(List<Track> nummers) => log.add('achteraan ${nummers.map((t) => t.title).join(',')}');
   @override
   Future<void> speelNuMetRest(Track t) async => log.add('nu ${t.title}');
+
+  List<Track> rij = const [];
+  @override
+  List<Track> get queueTracks => rij;
+  @override
+  bool haalUitWachtrij(int plek) {
+    log.add('weg $plek');
+    return true;
+  }
+
+  @override
+  bool verplaatsInWachtrij(int van, int naar) {
+    log.add('verplaats $van→$naar');
+    return true;
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

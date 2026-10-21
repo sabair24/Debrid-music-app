@@ -1384,9 +1384,26 @@ Future<void> main() async {
   final ik = mode.owner ? null : await thisDevice();
   // De zones: wat elk toestel en elke speaker speelt (Saber, 21-10-2026). Zie zone_lijst.dart.
   final zoneLijst = ZoneLijst(hier: 'dev:${mode.owner ? sharing.mijnId : ik!.id}', opDePc: mode.owner)
-    ..haalStand = mode.owner
+    ..haalStand = (mode.owner
         ? (zone) async => sharing.server?.zones.standVan(zone)?.toJson()
-        : (zone) async => library.remote?.zoneStand(zone);
+        : (zone) async => library.remote?.zoneStand(zone))
+    // De muziek van de ene zone naar de andere (stap 2.5).
+    ..verplaats = (van, naar) async {
+      if (mode.owner) {
+        final s = sharing.server;
+        if (s == null) return 'De deelservice van de pc staat uit.';
+        final r = await s.zoneOverdracht(van, naar, wie: 'de pc');
+        return r.status == 200 ? null : '${r.antwoord['error'] ?? 'Dat lukte niet.'}';
+      }
+      final c = library.remote;
+      if (c == null) return 'Geen verbinding met de pc.';
+      try {
+        await c.ask('/api/zone/transfer', {'van': van, 'naar': naar});
+        return null;
+      } on RemoteException catch (e) {
+        return e.message;
+      }
+    };
   final verder = VerderLuisteren(
       mode.owner ? _PcVerderBron(sharing, player) : _ToestelVerderBron(library, player, ik!.id),
       // Op de klok van de pc: daarop staan de meldingen, ook die van een toestel met een scheve klok.
@@ -1432,6 +1449,10 @@ Future<void> main() async {
       idVan: (t) => library.gedeeldId(t.path),
       hoesVan: library.coverForTrack,
       stuur: (op) => stuurNaarZone(zone, op),
+      // Een venster op haar wachtrij (stap 2.4): op de pc uit zijn eigen server, op een toestel gevraagd.
+      haalRij: mode.owner
+          ? () async => sharing.server?.zones.rijVenster(zone)
+          : () async => library.remote?.zoneRij(zone),
     ),
   );
 
@@ -1440,6 +1461,9 @@ Future<void> main() async {
     speler: player,
     rij: player,
     nummer: verder.bron.nummer,
+    idVan: (t) => library.gedeeldId(t.path),
+    // Een andere zone verplaatst haar muziek hierheen (stap 2.5): overnemen zoals bij "Hier verder".
+    neemOver: verder.neemOverUit,
     radio: (artiest, {zaad, titel}) async {
       final ctx = appNavigator.currentContext;
       if (ctx != null && ctx.mounted) await startRadio(ctx, artiest, titel: titel, zaad: zaad, hier: true);
@@ -10847,6 +10871,14 @@ class _ZoneRij extends StatelessWidget {
             ),
           ),
           if (actie != null) ...[const SizedBox(width: 8), actie],
+          // Overdragen naar een andere zone (stap 2.5): de muziek verhuist, deze zone pauzeert.
+          if (zone.speeltIets && lijst.verplaats != null)
+            IconButton(
+              key: ValueKey('zone-naar-${zone.id}'),
+              tooltip: 'Verplaats naar …',
+              icon: Icon(Icons.move_down_rounded, size: 20, color: _muted),
+              onPressed: () => _kiesDoelZone(context, zone),
+            ),
           if (gekozen)
             Padding(
               padding: const EdgeInsets.only(left: 8),
@@ -10899,6 +10931,83 @@ class _ZoneVolume extends StatelessWidget {
       ],
     );
   }
+}
+
+/// "Verplaats naar …" (Saber, 21-10-2026: "overdragen naar elke zone"): kies waar de muziek van [van]
+/// verder speelt. Keek je naar [van], dan kijk je daarna naar de nieuwe zone: je volgt de muziek.
+Future<void> _kiesDoelZone(BuildContext context, ZoneStaat van) async {
+  final lijst = context.read<ZoneLijst>();
+  final gekozen = _misschien<GekozenZone>(context);
+  final doelen = [for (final z in lijst.zones) if (z.id != van.id && z.online) z];
+  final doel = await showModalBottomSheet<ZoneStaat>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: GlasVlak(
+            vorm: const BorderRadius.all(Radius.circular(18)),
+            kleur: _panel,
+            balk: true,
+            bovenop: true,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Verplaats naar', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text('${van.naam} pauzeert zodra het daar speelt',
+                      style: TextStyle(color: _muted, fontSize: 12)),
+                  const SizedBox(height: 8),
+                  if (doelen.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Text('Geen andere zone bereikbaar.', style: TextStyle(color: _muted, fontSize: 13)),
+                    ),
+                  for (final z in doelen)
+                    Pressable(
+                      key: ValueKey('zone-doel-${z.id}'),
+                      onPressed: () => Navigator.of(ctx).pop(z),
+                      borderRadius: BorderRadius.circular(10),
+                      scaleOnFocus: false,
+                      vastePlek: false,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                        child: Row(children: [
+                          Icon(zoneIcoon(z.soort), size: 20, color: _muted),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(z.id == lijst.hier ? '${z.naam} · dit toestel' : z.naam,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                          ),
+                          if (z.playing) Text('speelt', style: TextStyle(color: _muted, fontSize: 11.5)),
+                        ]),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  if (doel == null || !context.mounted) return;
+  final fout = await lijst.verplaats?.call(van.id, doel.id);
+  if (!context.mounted) return;
+  if (fout != null) {
+    _srcToast(context, fout);
+    return;
+  }
+  if (gekozen != null && gekozen.gekozen == van.id) gekozen.kies(doel.id);
+  _srcToast(context, 'Naar ${doel.naam} verplaatst — ${van.naam} pauzeert zodra het daar speelt.');
+  Navigator.of(context).maybePop();
 }
 
 /// "Hier verder" vanaf [zone]: haal haar volledige stand (met de wachtrij) en neem over zoals de balk
@@ -12023,8 +12132,7 @@ class _WachtrijKnop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026).
-    if (_misschien<GekozenZone>(context, luister: true)?.opAfstand != null) return const SizedBox.shrink();
+    // Ook bij een zone op afstand: het paneel toont dan HAAR wachtrij (zones, stap 2.4).
     final paneel = context.watch<WachtrijPaneel>();
     final compact = isCompact(context);
     return TvLabelled(
@@ -12191,11 +12299,14 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
 
   @override
   Widget build(BuildContext context) {
-    final p = context.watch<PlayerStore>();
+    // De wachtrij van de gekozen zone (zones, 21-10-2026), of die van dit toestel.
+    final lokaal = context.watch<PlayerStore>();
+    final Speelbron p = _misschien<GekozenZone>(context, luister: true)?.opAfstand ?? lokaal;
     final lib = context.watch<LibraryStore>();
     final paneel = context.read<WachtrijPaneel>();
-    final radio = p.radioMode;
-    final regels = radio ? radioAlsRij(p.radioQueue) : const <Radioregel>[];
+    // De radio van een zone op afstand staat op dat toestel: hier alleen het nummer dat speelt.
+    final radio = p is PlayerStore && p.radioMode;
+    final regels = radio ? radioAlsRij(lokaal.radioQueue) : const <Radioregel>[];
     final rij = radio ? [for (final r in regels) r.nummer] : p.queueTracks;
     final nu = rij.isEmpty ? -1 : p.currentIndex.clamp(0, rij.length - 1);
     final sleutels = _sleutels(rij);
@@ -12262,7 +12373,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
           ),
           // Het genoemde aantal van een radio uit een zin is gespeeld: hier ook verder, niet alleen
           // op het speelscherm.
-          if (radio && context.watch<RadioBesturing>().aantalOp && (p.radioDroog || p.wilVerder))
+          if (radio && context.watch<RadioBesturing>().aantalOp && (lokaal.radioDroog || lokaal.wilVerder))
             TextButton(
               onPressed: context.read<RadioBesturing>().gaDoor,
               style: TextButton.styleFrom(
@@ -12677,7 +12788,8 @@ class _WachtrijRij extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final p = context.read<PlayerStore>();
+    // De gekozen zone op afstand, of dit toestel: springen en weghalen gaan daarheen.
+    final Speelbron p = _misschien<GekozenZone>(context)?.opAfstand ?? context.read<PlayerStore>();
     final r = regel;
     // Een nummer dat je niet hebt heeft geen pad, en dus geen menu dat ergens over gaat: "in de map
     // tonen", "verplaatsen", "juiste uitgave zoeken" — allemaal over een bestand dat er niet is.

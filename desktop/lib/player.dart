@@ -2963,6 +2963,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
   }
 
   /// Haal het nummer op [plek] in de speelvolgorde uit de wachtrij. Raakt geen bestand aan.
+  @override
   bool haalUitWachtrij(int plek) {
     if (radioMode) return false;
     final uit = haalUitWachtrijLijst(_nu, plek);
@@ -2972,6 +2973,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
   }
 
   /// Versleep het nummer van [van] naar [naar] in de speelvolgorde.
+  @override
   bool verplaatsInWachtrij(int van, int naar) {
     if (radioMode) return false;
     final uit = verplaatsInWachtrijLijst(_nu, van, naar, shuffle: shuffle);
@@ -3125,6 +3127,10 @@ abstract interface class Speelbron implements NowPlayingSource {
   void toggleShuffle();
   void cycleRepeat();
   Future<void> springNaar(int plek);
+
+  /// Het nummer op [plek] in [queueTracks] eruit, of van [van] naar [naar]. False als het niet kon.
+  bool haalUitWachtrij(int plek);
+  bool verplaatsInWachtrij(int van, int naar);
 }
 
 /// Een wachtrij beginnen of aanvullen — hier, of in de gekozen zone. Zie `rijVoor` in main.dart.
