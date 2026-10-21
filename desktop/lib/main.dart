@@ -946,7 +946,15 @@ Future<void> main() async {
     // En of er alleen mobiele data is: dan is een thuisadres dat antwoordt "via Tailscale".
     session.opMobiel = () => wacht.opMobiel;
     // De streamkwaliteit volgt ook de weg naar de pc: niet thuis = onderweg (netsoort.dart, 21-10-2026).
-    netStore.wegNu = () => session.wegVoorStroom;
+    netStore.wegNu = () => session.wegVoorStroom ?? wegUitNaam(settings.laatsteWeg);
+    // En die weg onthouden over herstarts heen: bij een koude start hervat de speler het laatste nummer
+    // vóór de verbinding er is (Perfect en Black Velvet als origineel op de wifi van de kliniek, 21-10-2026).
+    session.addListener(() {
+      final w = session.verbinding.weg;
+      if (w == null || w.name == settings.laatsteWeg) return;
+      settings.laatsteWeg = w.name;
+      unawaited(settings.save());
+    });
   }
   // Als het openen mislukt en dit toestel zelf niets kan zien, de pc vragen. Een closure en geen
   // vaste verwijzing: `library.remote` wordt pas verderop gezet, en op de pc blijft hij null —

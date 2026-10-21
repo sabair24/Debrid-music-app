@@ -165,6 +165,11 @@ class AppSettings extends ChangeNotifier {
   /// Staat dit uit, dan geldt [stroomThuis] altijd en is er één stand en verder niets.
   bool stroomAdaptief = true;
 
+  /// Langs welke weg dit toestel het laatst met de pc praatte ('thuis', 'tailscale', 'rechtstreeks'), over
+  /// herstarts heen. Voor de streamkwaliteit bij een koude start, vóór de verbinding er is — zie
+  /// `isOnderweg` in netsoort.dart.
+  String laatsteWeg = '';
+
   /// Hoe de radio kiest: 'bekend', 'gemengd' of 'ontdekken' — zie `radiosmaak.dart`.
   ///
   /// Als tekst, om dezelfde reden als [stroomThuis]. Leeg of onbekend leest als 'gemengd': de radio
@@ -362,6 +367,7 @@ class AppSettings extends ChangeNotifier {
         stroomThuis = (m['stroom_thuis'] ?? 'max') as String;
         stroomOnderweg = (m['stroom_onderweg'] ?? 'cd') as String;
         stroomAdaptief = (m['stroom_adaptief'] ?? true) as bool;
+        laatsteWeg = (m['laatste_weg'] ?? '') as String;
         radioSmaak = (m['radio_smaak'] ?? 'gemengd') as String;
         luidheid = (m['luidheid'] ?? 'normaal') as String;
         luidheidAlbum = (m['luidheid_album'] ?? true) as bool;
@@ -410,6 +416,7 @@ class AppSettings extends ChangeNotifier {
         'stroom_thuis': stroomThuis,
         'stroom_onderweg': stroomOnderweg,
         'stroom_adaptief': stroomAdaptief,
+        'laatste_weg': laatsteWeg,
         'radio_smaak': radioSmaak,
         'luidheid': luidheid,
         'luidheid_album': luidheidAlbum,

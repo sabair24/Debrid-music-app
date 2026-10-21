@@ -33,7 +33,8 @@ void main() {
 
     test('pcWeerBereikbaar opent hem opnieuw, gepauzeerd en op dezelfde plek', () {
       final p = speler.indexOf('  void pcWeerBereikbaar() {');
-      expect(speler.substring(p, p + 400),
+      // De hele functie: vooraan staat sinds 21-10-2026 ook het heropenen voor een andere stroomstand.
+      expect(speler.substring(p, speler.indexOf('\n  }\n', p)),
           contains('if (heropenNaVerbinding(radio: radioMode, nietGeopend: _nietGeopend == t.path, speelt: playing)) {\n'
               '      unawaited(_heropenGepauzeerd());'));
       final h = speler.indexOf('Future<void> _heropenGepauzeerd() async {');
