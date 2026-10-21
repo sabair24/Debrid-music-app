@@ -78,6 +78,30 @@ Stroomstand welkeStand({
 bool isOnderweg({required Netsoort net, Verbindingsweg? weg}) =>
     net == Netsoort.mobiel || (weg != null && weg != Verbindingsweg.thuis);
 
+/// Een bewaarde weg ([AppSettings.laatsteWeg]) terug, of null.
+Verbindingsweg? wegUitNaam(String naam) {
+  for (final w in Verbindingsweg.values) {
+    if (w.name == naam) return w;
+  }
+  return null;
+}
+
+/// Moet het nummer dat nu open is opnieuw open, omdat de stroomstand sinds het openen een andere is?
+///
+/// **Waarom (Saber, 21-10-2026, op de wifi van de kliniek).** Bij een koude start hervat de speler het
+/// laatste nummer meteen — vóór de verbinding met de pc er is, dus vóór de weg bekend is. Android zegt
+/// "wifi", en dan gold thuis: Perfect (24/192, 108 MB) en Black Velvet (32/192, 197 MB) gingen als origineel
+/// de deur uit, de nummers erna wel als cd. Is de verbinding er en geldt nu een andere grens dan die in
+/// [geopend], dan opnieuw — maar alleen gepauzeerd of in de eerste [kHeropenTot]: midden in een nummer
+/// een hik voor wat data is geen ruil.
+bool heropenVoorStand({required String? geopend, required String nu, required bool speelt, required Duration plek}) {
+  if (geopend == null || !geopend.startsWith('http') || !nu.startsWith('http')) return false;
+  if (grensUitUrl(geopend) == grensUitUrl(nu)) return false;
+  return !speelt || plek < kHeropenTot;
+}
+
+const kHeropenTot = Duration(seconds: 30);
+
 /// Regel B: één sport omlaag, en nooit onder de onderste.
 ///
 /// **En nooit vanzelf terug omhoog.** Een ladder die na een geslaagd nummer weer opklimt lokt precies

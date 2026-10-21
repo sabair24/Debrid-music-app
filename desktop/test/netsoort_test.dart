@@ -92,9 +92,35 @@ void main() {
       expect(s.onderweg, isFalse);
     });
 
+    test('heropenen als de stand na de verbinding anders is — gepauzeerd of in het begin', () {
+      const origineel = 'http://pc/stream/abc.flac?token=x';
+      const cd = 'http://pc/stream/abc.flac?token=x&maxRate=44100&maxBits=16';
+      expect(heropenVoorStand(geopend: origineel, nu: cd, speelt: false, plek: const Duration(seconds: 95)), isTrue,
+          reason: 'koude start: hervat en gepauzeerd');
+      expect(heropenVoorStand(geopend: origineel, nu: cd, speelt: true, plek: const Duration(seconds: 3)), isTrue);
+      expect(heropenVoorStand(geopend: origineel, nu: cd, speelt: true, plek: const Duration(minutes: 2)), isFalse,
+          reason: 'midden in een nummer geen hik voor wat data');
+      expect(heropenVoorStand(geopend: cd, nu: cd, speelt: false, plek: Duration.zero), isFalse);
+      expect(heropenVoorStand(geopend: '/storage/abc.flac', nu: cd, speelt: false, plek: Duration.zero), isFalse,
+          reason: 'een kopie op het toestel');
+      expect(heropenVoorStand(geopend: null, nu: cd, speelt: false, plek: Duration.zero), isFalse);
+      expect(heropenVoorStand(geopend: cd, nu: origineel, speelt: false, plek: Duration.zero), isTrue,
+          reason: 'andersom ook: thuis na een koude start met de weg van buiten');
+    });
+
+    test('een bewaarde weg terug', () {
+      expect(wegUitNaam('rechtstreeks'), Verbindingsweg.rechtstreeks);
+      expect(wegUitNaam('thuis'), Verbindingsweg.thuis);
+      expect(wegUitNaam(''), isNull);
+      expect(wegUitNaam('iets'), isNull);
+    });
+
     test('aangesloten: de sessie geeft haar weg, en het vooruithalen volgt onderweg', () {
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
-      expect(main, contains('netStore.wegNu = () => session.wegVoorStroom;'));
+      expect(main, contains('netStore.wegNu = () => session.wegVoorStroom ?? wegUitNaam(settings.laatsteWeg);'));
+      expect(main, contains('settings.laatsteWeg = w.name;'));
+      final speler = File('lib/player.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(speler, contains('if (heropenVoorStand(geopend: mpvAdres, nu: mediaResolver(t.path), speelt: playing, plek: position)) {'));
       expect(main, contains('opMobiel: netStore.onderweg,'));
     });
   });

@@ -7,6 +7,7 @@ import 'package:media_kit/media_kit.dart' hide Track;
 import 'artwork.dart' show HoesVlek, kleurEnVlekkenBuitenDeTekendraad;
 import 'groeistroom.dart' show Groeistroom, Groeiend;
 import 'kapot_bestand.dart' show waaromNietTeOpenen;
+import 'netsoort.dart' show heropenVoorStand;
 import 'lan/stroomstand.dart' show grensUitUrl;
 import 'luidheid.dart' show Bijstelbron, Bijstelling, adresSleutel;
 import 'models.dart';
@@ -1606,6 +1607,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   void pcWeerBereikbaar() {
     final t = current;
     if (t == null) return;
+    // De stroomstand hangt ook aan de weg naar de pc, en die is pas nu bekend — zie `heropenVoorStand`.
+    if (heropenVoorStand(geopend: mpvAdres, nu: mediaResolver(t.path), speelt: playing, plek: position)) {
+      _log?.line('STROOMSTAND ANDERS NA DE VERBINDING — opnieuw open — ${t.title}');
+      unawaited(playing ? _hervatOpDezelfdePlek() : _heropenGepauzeerd());
+      return;
+    }
     if (heropenNaVerbinding(radio: radioMode, nietGeopend: _nietGeopend == t.path, speelt: playing)) {
       unawaited(_heropenGepauzeerd());
       return;
