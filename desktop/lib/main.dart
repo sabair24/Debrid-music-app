@@ -71,6 +71,7 @@ import 'audiodb.dart';
 import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
+import 'hoes_in_bestand.dart';
 import 'facts_warmer.dart';
 import 'ffmpeg.dart';
 import 'fingerprint.dart';
@@ -1794,9 +1795,17 @@ Future<void> main() async {
     // De echtheid: elk nummer één keer volledig gemeten (echtheid_veger.dart, 20-10-2026), en wacht op
     // de luidheidsveger zodat de harde schijf niet twee kanten op moet.
     final echtVeger = EchtheidVeger(library: library, enabled: mode.owner, bezigElders: () => veger.bezig);
+    // De gekozen voorkant ook IN de bestanden (Saber, 21-10-2026: "doe dit altijd bij allemaal") — zie
+    // hoes_in_bestand.dart. Na de twee meters, zodat de harde schijf niet drie kanten op moet.
+    final hoesVeger = HoesInBestandVeger(
+        library: library,
+        enabled: mode.owner,
+        bezigElders: () => veger.bezig || echtVeger.bezig,
+        speeltNu: (p) => player.current?.path == p);
     Future<void> laatAllesLos(List<String> paden) async {
       await veger.laatLos(paden);
       await echtVeger.laatLos(paden);
+      await hoesVeger.laatLos(paden);
     }
 
     library.laatLos = laatAllesLos;
@@ -1804,6 +1813,9 @@ Future<void> main() async {
     meldAanBijHartslag(() =>
         LuidheidVeger.voortgang.value.isEmpty ? '' : 'luidheid ${LuidheidVeger.voortgang.value}');
     meldAanBijHartslag(() => EchtheidVeger.voortgang.value);
+    meldAanBijHartslag(() => HoesInBestandVeger.voortgang.value);
+    unawaited(hoesVeger.start().then((_) => startLog.line('hoezen in bestanden: veger gestart (eerste ronde na 4 min)'),
+        onError: (Object e) => startLog.line('hoezen in bestanden: veger MISLUKT: $e')));
     unawaited(echtVeger.start().then((_) => startLog.line('echtheid: veger gestart (eerste ronde na 6 min)'),
         onError: (Object e) => startLog.line('echtheid: veger MISLUKT: $e')));
     // De Shield krijgt per nummer de meting en de plaatwaarde mee, met de stand van deze pc.

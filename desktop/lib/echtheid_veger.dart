@@ -49,6 +49,7 @@ class EchtheidVeger {
   late final WarmLog _log = WarmLog('${library.configDir}${Platform.pathSeparator}echtheid.log');
 
   bool _gestart = false, _gestopt = false, _bezig = false, _nogEens = false;
+  bool get bezig => _bezig;
   Timer? _start, _herstart;
   int? _pid;
   String? _pidPad;
