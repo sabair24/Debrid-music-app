@@ -584,20 +584,24 @@ void main() {
       expect(zonderTijd.inRij, [0], reason: 'zonder tijd telt hij nummers, zoals voorheen');
     });
 
-    test('DE KERN: de zaadartiest hoogstens één op de tien IN DE RIJ', () {
+    test('DE KERN: dezelfde artiest pas na vijftig plekken IN DE RIJ — de zaadartiest net zo', () {
       // 3.9.417, 17:48: 2 Fabiola op plek 1, 6, 10 en 14 — het plan hield zich aan één op de tien, de
-      // rij niet. Hier staat het zaad vijf plekken terug.
-      const staart = ['2 Fabiola', 'Cappella', 'Haddaway', 'Dune', 'Snap!'];
-      final b = voorraadPlan([Haalstand.klaar, Haalstand.klaar],
-          artiesten: ['2 Fabiola', 'Corona'], staart: staart, vooruitNu: 2, restSeconden: 300,
-          seconden: [200, 240], zaad: '2 Fabiola');
-      expect(b.inRij, [1], reason: 'Corona wel, 2 Fabiola pas na tien plekken');
-      final gewoon = voorraadPlan([Haalstand.klaar, Haalstand.klaar],
-          artiesten: ['2 Fabiola', 'Corona'], staart: staart, vooruitNu: 2, restSeconden: 300,
-          seconden: [200, 240]);
-      expect(gewoon.inRij, [0, 1], reason: 'voor een gewone artiest is vier plekken genoeg');
+      // rij niet. Sinds 21-10-2026 geldt voor iedereen dezelfde afstand (Saber: "pas na 50 liedjes").
+      // Met Corona erbij staat 2 Fabiola dan 49 plekken na de vorige: nog net te dichtbij.
+      final dichtbij = ['2 Fabiola', for (var i = 0; i < kArtiestTerug - 3; i++) 'Artiest $i'];
+      final ver = ['2 Fabiola', for (var i = 0; i < kArtiestTerug - 1; i++) 'Artiest $i'];
+      for (final zaad in ['2 Fabiola', null]) {
+        final b = voorraadPlan([Haalstand.klaar, Haalstand.klaar],
+            artiesten: ['2 Fabiola', 'Corona'], staart: dichtbij, vooruitNu: 2, restSeconden: 300,
+            seconden: [200, 240], zaad: zaad);
+        expect(b.inRij, [1], reason: 'Corona wel, 2 Fabiola pas na vijftig plekken (zaad: $zaad)');
+        final verder = voorraadPlan([Haalstand.klaar, Haalstand.klaar],
+            artiesten: ['2 Fabiola', 'Corona'], staart: ver, vooruitNu: 2, restSeconden: 300,
+            seconden: [200, 240], zaad: zaad);
+        expect(verder.inRij, [0, 1], reason: 'negenenveertig anderen ertussen: dan mag hij weer (zaad: $zaad)');
+      }
       final krap = voorraadPlan([Haalstand.klaar],
-          artiesten: ['2 Fabiola'], staart: staart, vooruitNu: 0, restSeconden: 30, seconden: [200],
+          artiesten: ['2 Fabiola'], staart: dichtbij, vooruitNu: 0, restSeconden: 30, seconden: [200],
           zaad: '2 Fabiola');
       expect(krap.inRij, [0], reason: 'onder de minuut liever 2 Fabiola dan stilte');
     });

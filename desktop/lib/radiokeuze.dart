@@ -562,28 +562,29 @@ String artiestSleutel(String artiest) {
   return delen.isEmpty ? '' : delen.first;
 }
 
-/// Tussen twee nummers van dezelfde artiest staan er minstens drie anderen.
-const int kArtiestAfstand = 4;
-
-/// De artiest waar de radio omheen gebouwd is: hoogstens één op de tien plekken, en minstens twee.
+/// Dezelfde artiest pas na zoveel nummers opnieuw — voor IEDEREEN, ook de artiest waarop de radio startte.
 ///
-/// Gemeten op 26-09-2026, radio vanaf "Freak Out" van 2 Fabiola: Deezer levert voor de zaadartiest
-/// vijftien toppers en daarnaast nog een handvol in de artiestenradio, dus een derde van het plan was
-/// 2 Fabiola, twee keer vlak na elkaar. Saber: *"ik hoor nu al heel de tijd 2fabiola, mag maar niet
-/// heel de tijd."* Een radio "vanaf" iemand is een radio in zijn buurt, geen verzamelalbum van hem.
-const int kZaadPerTien = 1;
+/// Saber, 21-10-2026, over een radio vanaf Sabrina Carpenter met vier keer Sabrina en drie keer Zara
+/// Larsson (plus een gastrol bij Tyla) in twintig nummers: *"variatie is belangrijk, of mag terugkerend
+/// zijn maar na 50 liedjes ofzo, dus verder van elkaar dat mag."* Gekozen boven "de zaadartiest één op de
+/// tien" — de regel van 26-09-2026 (*"ik hoor nu al heel de tijd 2fabiola"*), die hier in opgaat.
+const int kArtiestTerug = 50;
 
-/// En van elke andere artiest hoogstens drie.
-const int kMaxPerArtiest = 3;
+/// Tussen twee nummers van dezelfde artiest staan er minstens [kArtiestTerug] − 1 anderen.
+const int kArtiestAfstand = kArtiestTerug;
+
+/// Hoeveel nummers één artiest hoogstens krijgt per [kArtiestTerug] plekken.
+const int kMaxPerArtiest = 1;
 
 /// Welke regels de radio in mogen en in welke volgorde, zodat er afwisseling in zit.
 ///
 /// Twee dingen:
 ///
 /// 1. **Een plafond per artiest**, in de volgorde waarin ze erin gingen: wie te vaak voorkomt verliest
-///    zijn láátste nummers. [zaad] is de artiest waar de radio omheen gebouwd is en krijgt
-///    [kZaadPerTien]; de rest [maxPerArtiest]. [al] telt mee — wat er al in de radio staat — zodat
-///    een nakomer het plafond niet opnieuw kan beginnen.
+///    zijn láátste nummers. [maxPerArtiest] per [kArtiestTerug] plekken, voor iedereen — [zaad] ook. Een
+///    lijst van driehonderd (een radio uit een zin) houdt zo zes per artiest over, die de afstand
+///    hieronder uit elkaar zet. [al] telt mee — wat er al in de radio staat — zodat een nakomer het
+///    plafond niet opnieuw kan beginnen.
 /// 2. **Een minimale afstand**: een artiest komt pas terug als er [afstand] − 1 anderen tussen
 ///    stonden. [ervoor] is wat er direct vóór deze lijst klinkt — bij een radio vanaf een nummer is
 ///    dat het nummer zelf. Lukt het niet meer (alleen nog één artiest over), dan de regel die het
@@ -600,15 +601,22 @@ List<int> spreidArtiesten(
   int maxPerArtiest = kMaxPerArtiest,
 }) {
   final sleutels = [for (final a in artiesten) artiestSleutel(a)];
-  final z = zaad == null ? '' : artiestSleutel(zaad);
   final geteld = <String, int>{};
   for (final a in al) {
     final s = artiestSleutel(a);
     geteld[s] = (geteld[s] ?? 0) + 1;
   }
-  final totaal = artiesten.length + geteld.values.fold(0, (a, b) => a + b);
-  var zaadMax = (totaal * kZaadPerTien + 9) ~/ 10;
-  if (zaadMax < 2) zaadMax = 2;
+  // Meer dan [maxPerArtiest] alleen als DEZE lijst zelf minstens [afstand] verschillende artiesten heeft —
+  // anders kan een tweede nummer nooit [afstand] plekken verder staan. En dan naar de lengte van de lijst,
+  // niet plus wat er al staat: een bijvulronde van twintig met zestig in het venster kreeg anders twee per
+  // artiest, en dan kwam wie er al stond er nog eens bij. Een radio uit een zin van driehonderd met zestig
+  // artiesten houdt er zo zes per artiest over.
+  final verschillend = {for (final s in sleutels) if (s.isNotEmpty) s}.length;
+  var plafond = maxPerArtiest;
+  if (verschillend >= afstand) {
+    final naarLengte = (artiesten.length * maxPerArtiest + afstand - 1) ~/ afstand;
+    if (naarLengte > plafond) plafond = naarLengte;
+  }
 
   // 1. Het plafond.
   final rest = <int>[];
@@ -616,7 +624,7 @@ List<int> spreidArtiesten(
     final s = sleutels[i];
     if (s.isNotEmpty) {
       final n = geteld[s] ?? 0;
-      if (n >= (s == z ? zaadMax : maxPerArtiest)) continue;
+      if (n >= plafond) continue;
       geteld[s] = n + 1;
     }
     rest.add(i);
@@ -630,21 +638,31 @@ List<int> spreidArtiesten(
   }
   final uit = <int>[];
   while (rest.isNotEmpty) {
-    var kies = 0;
+    // Een artiest die nog niet klonk gaat vóór een die mag terugkeren (Saber, 21-10-2026: "variatie is
+    // belangrijk"). Met alleen "de eerste die mag" kwam elke artiest na vijftig plekken terug zolang er
+    // nog nieuwe wachtten, en bleven de laatsten aan het eind van de lijst over, tien plekken uit elkaar.
+    var kies = -1;
+    var magTerug = -1;
     var verst = -1;
+    var langstWeg = 0;
     for (var k = 0; k < rest.length; k++) {
       final s = sleutels[rest[k]];
       final vorige = s.isEmpty ? null : laatst[s];
-      final weg = vorige == null ? afstand : plek - vorige;
-      if (weg >= afstand) {
+      if (vorige == null) {
         kies = k;
         break;
       }
+      final weg = plek - vorige;
+      if (weg >= afstand) {
+        if (magTerug < 0) magTerug = k;
+        continue;
+      }
       if (weg > verst) {
         verst = weg;
-        kies = k;
+        langstWeg = k;
       }
     }
+    if (kies < 0) kies = magTerug >= 0 ? magTerug : langstWeg;
     final i = rest.removeAt(kies);
     if (sleutels[i].isNotEmpty) laatst[sleutels[i]] = plek;
     plek++;

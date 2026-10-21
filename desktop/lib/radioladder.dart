@@ -73,9 +73,9 @@ double recenteOpbrengst(List<bool> uitkomsten, {int venster = kOpbrengstVenster}
 /// Hoeveel nummers er naar verwachting nog vóór je staan.
 ///
 /// Wat in de rij staat telt helemaal, wat geland is ook. Eigen muziek die klaarstaat ([klaarArtiesten],
-/// zonder de reserve) telt per artiest hoogstens [kMaxPerArtiest] en voor de zaadartiest één keer: dertig
-/// eigen nummers van de zaadartiest zijn geen dertig nummers vooruit, want de afstandsregel laat er maar
-/// één op de tien door. Wat onderweg is of nog wacht telt naar de [opbrengst].
+/// zonder de reserve) telt per artiest hoogstens [kMaxPerArtiest], de zaadartiest net zo: dertig eigen
+/// nummers van de zaadartiest zijn geen dertig nummers vooruit, want de afstandsregel laat er maar één per
+/// [kArtiestTerug] door (Saber, 21-10-2026). Wat onderweg is of nog wacht telt naar de [opbrengst].
 double verwachtVooruit({
   required int rijVooruit,
   required int geland,

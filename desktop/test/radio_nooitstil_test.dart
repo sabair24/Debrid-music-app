@@ -13,6 +13,7 @@ import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/player.dart';
 import 'package:debridmusic/radio.dart';
 import 'package:debridmusic/radioladder.dart';
+import 'package:debridmusic/radiokeuze.dart' show kArtiestTerug;
 import 'package:debridmusic/radiovoorraad.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -256,7 +257,7 @@ void main() {
       r.stop();
     });
 
-    test('de zaadartiest ook bij het herhalen hoogstens één op de tien', () async {
+    test('bij het herhalen komt niemand terug binnen vijftig plekken — de zaadartiest net zo', () async {
       final s = _Speler();
       final r = maak(s);
       await r.start([_eigen('Niels Destadsbader', 'n1'), _eigen('X', 'x1')], zaadArtiest: 'Niels Destadsbader');
@@ -264,7 +265,8 @@ void main() {
       r.gehoord(r.plan[1].eigen!);
       s.index = 1;
       r.tikVoorToets(); // n1 voorbij
-      for (var i = 0; i < 30; i++) {
+      // Genoeg anderen dat X (en n1) ruim vijftig plekken terug liggen (Saber, 21-10-2026).
+      for (var i = 0; i < kArtiestTerug + 10; i++) {
         r.voegBij(r.sessie, [_eigen('Vul $i', 'v')]);
         r.tikVoorToets();
         s.index = s.rij.length - 1;
@@ -273,8 +275,7 @@ void main() {
       r.voegBij(r.sessie, [_eigen('Niels Destadsbader', 'n2')]);
       r.tikVoorToets();
       s.index = s.rij.length - 1;
-      // Vier anderen erna: Niels staat dan binnen de laatste tien, maar niet meer in de laatste drie
-      // (die houdt de gewone "net geklonken"-regel al tegen).
+      // Vier anderen erna: Niels staat dan vijf plekken terug, binnen de vijftig.
       for (var i = 0; i < 4; i++) {
         r.voegBij(r.sessie, [_eigen('Na $i', 'n')]);
         r.tikVoorToets();

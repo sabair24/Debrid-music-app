@@ -6,6 +6,7 @@
 /// zonder Soulseek.
 library;
 
+import 'package:debridmusic/radiokeuze.dart' show kArtiestTerug;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/radiovoorraad.dart';
@@ -159,7 +160,7 @@ void main() {
     // 6 van de 23, met 16 artiesten — maar de scheefheid zat helemaal aan het begin, en daar
     // beoordeel je een radio op. De oorzaak: alles wat je AL HEBT telt als vulling, en van de
     // artiest waar de radio omheen gebouwd is heb je het meest (hier zeven albums, 71 nummers).
-    test('DE KERN: zes plekken, zes verschillende artiesten', () {
+    test('DE KERN: zes plekken, en geen artiest twee keer zolang er genoeg klinkt', () {
       final b = voorraadPlan(standen('kkkkkkkkk'),
           artiesten: const ['MJ', 'MJ', 'MJ', 'MJ', 'MJ', 'Prince', 'Sade', 'Bee Gees', 'Diana Ross'],
           vooruitNu: 0,
@@ -167,9 +168,10 @@ void main() {
 
       final gekozen = [for (final i in b.inRij) ['MJ', 'MJ', 'MJ', 'MJ', 'MJ', 'Prince', 'Sade', 'Bee Gees', 'Diana Ross'][i]];
       expect(gekozen.toSet(), hasLength(5), reason: 'vijf verschillende namen beschikbaar, dus vijf');
-      expect(gekozen.where((a) => a == 'MJ'), hasLength(2),
-          reason: 'vijf namen op zes plekken: pas de zesde mag herhalen. Was vier van de vijf.');
-      expect(b.vooruit, 6);
+      // Sinds 21-10-2026 komt dezelfde artiest pas na vijftig plekken terug; met vijf vooruit is er
+      // genoeg om op een andere te wachten. Was vier keer MJ van de vijf (26-09-2026).
+      expect(gekozen.where((a) => a == 'MJ'), hasLength(1));
+      expect(b.vooruit, 5);
     });
 
     test('DE VAL: als er niets anders is, vult hij toch aan — tot er twee vooruit staan', () {
@@ -237,10 +239,10 @@ void main() {
       expect(b.inRij, isEmpty, reason: 'twee anderen ertussen is te weinig; het moeten er drie zijn');
     });
 
-    test('DE VAL: met drie anderen ertussen mag hij weer', () {
+    test('DE VAL: met negenenveertig anderen ertussen mag hij weer', () {
       final b = voorraadPlan(standen('g'),
           artiesten: const ['2 Fabiola'],
-          staart: const ['2 Fabiola', 'Snap!', 'Cappella', 'Haddaway'],
+          staart: ['2 Fabiola', for (var i = 0; i < kArtiestTerug - 1; i++) 'Artiest $i'],
           vooruitNu: 4);
       expect(b.inRij, [0]);
     });

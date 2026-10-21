@@ -14,10 +14,20 @@ import 'package:debridmusic/radiokeuze.dart';
 
 /// Wie er achter elkaar klinkt, in de volgorde die [spreidArtiesten] kiest.
 List<String> rij(List<String> artiesten,
-        {String? zaad, List<String> al = const [], List<String> ervoor = const []}) =>
+        {String? zaad,
+        List<String> al = const [],
+        List<String> ervoor = const [],
+        int afstand = kArtiestAfstand,
+        int maxPerArtiest = kMaxPerArtiest}) =>
     [
-      for (final i in spreidArtiesten(artiesten, zaad: zaad, al: al, ervoor: ervoor)) artiesten[i]
+      for (final i in spreidArtiesten(artiesten,
+          zaad: zaad, al: al, ervoor: ervoor, afstand: afstand, maxPerArtiest: maxPerArtiest))
+        artiesten[i]
     ];
+
+/// Het mechanisme met de getallen van vóór 21-10-2026 (afstand vier, drie per artiest), zodat het met
+/// een handvol regels te volgen blijft.
+const klein = (afstand: 4, max: 3);
 
 /// De kleinste afstand tussen twee keer dezelfde artiest.
 int kleinsteAfstand(List<String> rij) {
@@ -34,27 +44,42 @@ int kleinsteAfstand(List<String> rij) {
 
 void main() {
   group('het plafond per artiest', () {
-    test('DE KERN: de zaadartiest krijgt hoogstens één op de tien plekken', () {
-      // Zoals Deezer het aanlevert: vijftien van hemzelf, dertig van anderen.
+    test('DE KERN: elke artiest één keer per vijftig, ook de artiest waarop de radio startte', () {
+      // De radio vanaf Sabrina Carpenter — Taste, 20-10-2026 22:17, in de volgorde waarin hij landde.
+      // Saber: "variatie is belangrijk, of mag terugkerend zijn maar na 50 liedjes".
+      const sabrina = 'Sabrina Carpenter', zara = 'Zara Larsson';
       final artiesten = [
-        for (var i = 0; i < 15; i++) '2 Fabiola',
-        for (var i = 0; i < 30; i++) 'Artiest ${i % 15}',
+        sabrina, sabrina, 'Madison Beer', zara, 'Reneé Rapp', 'Ashe', 'Charlie Puth', sabrina,
+        'Ariana Grande', zara, 'Olivia Rodrigo', 'Tate McRae', 'Ashe', 'Mckenna Grace', 'Maisie Peters',
+        zara, 'Reneé Rapp', sabrina, 'Tyla feat. Zara Larsson', 'Charlie Puth',
       ];
-      final uit = rij(artiesten, zaad: '2 Fabiola', al: ['2 Fabiola'], ervoor: ['2 Fabiola']);
+      final uit = rij(artiesten, zaad: sabrina, al: [sabrina], ervoor: [sabrina]);
+      expect(uit.where((a) => a == sabrina), isEmpty, reason: 'Taste klonk net; vier keer werd nul');
+      expect(uit.where((a) => a == zara), hasLength(1), reason: 'drie keer werd één');
+      for (final a in ['Reneé Rapp', 'Ashe', 'Charlie Puth']) {
+        expect(uit.where((x) => x == a), hasLength(1), reason: a);
+      }
+      expect(uit, contains('Tyla feat. Zara Larsson'), reason: 'een gastrol is een nummer van Tyla');
+    });
 
-      final fabiola = uit.where((a) => a == '2 Fabiola').length + 1; // het zaadnummer zelf
-      expect(fabiola, 5, reason: 'zes-en-veertig plekken: vijf voor 2 Fabiola, niet zestien');
+    test('DE KERN: een lange lijst houdt één per vijftig over, niet één in totaal', () {
+      // Een radio uit een zin: driehonderd nummers, zestig artiesten met elk vijf.
+      final artiesten = [for (var r = 0; r < 5; r++) for (var a = 0; a < 60; a++) 'Artiest $a'];
+      final uit = rij(artiesten);
+      expect(uit, hasLength(300), reason: 'zes per artiest mag, vijf heeft er elk');
+      expect(kleinsteAfstand(uit), greaterThanOrEqualTo(kArtiestAfstand));
     });
 
     test('DE KERN: een andere artiest krijgt er hoogstens drie', () {
       final artiesten = [for (var i = 0; i < 6; i++) 'Cappella', 'Haddaway', 'Snap!'];
-      final uit = rij(artiesten);
-      expect(uit.where((a) => a == 'Cappella'), hasLength(kMaxPerArtiest));
+      final uit = rij(artiesten, afstand: klein.afstand, maxPerArtiest: klein.max);
+      expect(uit.where((a) => a == 'Cappella'), hasLength(klein.max));
       expect(uit, containsAll(['Haddaway', 'Snap!']));
     });
 
     test('DE VAL: wie al in de radio staat telt mee — een nakomer begint niet opnieuw', () {
-      final uit = rij(['Cappella', 'Cappella', 'Haddaway'], al: ['Cappella', 'Cappella']);
+      final uit = rij(['Cappella', 'Cappella', 'Haddaway'],
+          al: ['Cappella', 'Cappella'], afstand: klein.afstand, maxPerArtiest: klein.max);
       expect(uit.where((a) => a == 'Cappella'), hasLength(1),
           reason: 'twee stonden er al; het plafond is drie');
     });
@@ -67,35 +92,44 @@ void main() {
         '2 FABIOLA',
         for (var i = 0; i < 6; i++) 'Artiest $i',
       ], zaad: '2 Fabiola');
-      expect(uit.where((a) => a.toLowerCase().startsWith('2 fabiola')), hasLength(2),
-          reason: 'tien plekken: hoogstens twee voor de zaadartiest, hoe hij ook geschreven is');
+      expect(uit.where((a) => a.toLowerCase().startsWith('2 fabiola')), hasLength(1),
+          reason: 'tien plekken: één voor 2 Fabiola, hoe hij ook geschreven is');
     });
 
-    test('DE GRENS: minstens twee voor de zaadartiest, ook in een kleine radio', () {
+    test('DE GRENS: ook in een kleine radio krijgt de zaadartiest er maar één', () {
+      // Tot 21-10-2026 minstens twee; Saber koos "voor iedereen 50".
       final uit = rij(['2 Fabiola', '2 Fabiola', '2 Fabiola', 'Snap!'], zaad: '2 Fabiola');
-      expect(uit.where((a) => a == '2 Fabiola'), hasLength(2));
+      expect(uit.where((a) => a == '2 Fabiola'), hasLength(1));
     });
   });
 
   group('de afstand', () {
-    test('DE KERN: nooit twee keer dezelfde artiest binnen vier plekken', () {
+    test('DE KERN: nooit twee keer dezelfde artiest binnen vijftig plekken', () {
+      // Per artiest naast elkaar aangeleverd: de spreiding moet het zelf doen.
+      final artiesten = [for (var a = 0; a < 60; a++) ...['Artiest $a', 'Artiest $a']];
+      final uit = rij(artiesten);
+      expect(uit, hasLength(artiesten.length), reason: 'twee per artiest in honderdtwintig: er valt niets weg');
+      expect(kleinsteAfstand(uit), greaterThanOrEqualTo(kArtiestAfstand));
+    });
+
+    test('het mechanisme: nooit twee keer dezelfde artiest binnen de afstand', () {
       final artiesten = [
         'A', 'A', 'A', 'B', 'B', 'B', 'C', 'C', 'C', 'D', 'D', 'D', 'E', 'F', 'G', 'H',
       ];
-      final uit = rij(artiesten);
+      final uit = rij(artiesten, afstand: klein.afstand, maxPerArtiest: klein.max);
       expect(uit, hasLength(artiesten.length), reason: 'niemand boven het plafond: er valt niets weg');
-      expect(kleinsteAfstand(uit), greaterThanOrEqualTo(kArtiestAfstand));
+      expect(kleinsteAfstand(uit), greaterThanOrEqualTo(klein.afstand));
     });
 
     test('DE KERN: het zaadnummer telt mee — de radio begint niet met nog een van hem', () {
       final uit = rij(['2 Fabiola', 'Cappella', 'Haddaway', 'Snap!', 'Culture Beat'],
-          zaad: '2 Fabiola', al: ['2 Fabiola'], ervoor: ['2 Fabiola']);
-      expect(uit.indexOf('2 Fabiola'), greaterThanOrEqualTo(kArtiestAfstand - 1),
+          zaad: '2 Fabiola', al: ['2 Fabiola'], ervoor: ['2 Fabiola'], afstand: klein.afstand, maxPerArtiest: klein.max);
+      expect(uit.indexOf('2 Fabiola'), greaterThanOrEqualTo(klein.afstand - 1),
           reason: 'het zaadnummer klinkt eerst; drie anderen ertussen');
     });
 
     test('DE VAL: lukt het niet meer, dan zo ver mogelijk uit elkaar — en er valt niets weg', () {
-      final uit = rij(['A', 'A', 'A', 'B']);
+      final uit = rij(['A', 'A', 'A', 'B'], afstand: klein.afstand, maxPerArtiest: klein.max);
       expect(uit, hasLength(4));
       expect(uit.first, 'A');
       expect(uit[1], 'B', reason: 'B tussen de A\'s, niet achteraan');
@@ -104,12 +138,13 @@ void main() {
     test('DE VAL: past er niets, dan wint wie het langst weg is — niet wie vooraan staat', () {
       // Na A en B staan alleen nog B en A over, allebei te dichtbij. B was net, A twee plekken
       // terug: dan A, anders klinkt B twee keer achter elkaar.
-      expect(rij(['A', 'B', 'B', 'A']), ['A', 'B', 'A', 'B']);
+      expect(rij(['A', 'B', 'B', 'A'], afstand: klein.afstand, maxPerArtiest: klein.max), ['A', 'B', 'A', 'B']);
     });
 
     test('DE GRENS: past alles al, dan blijft de volgorde van het aanbod staan', () {
       final artiesten = ['A', 'B', 'C', 'D', 'A', 'B', 'C', 'D'];
-      expect(spreidArtiesten(artiesten), [0, 1, 2, 3, 4, 5, 6, 7]);
+      expect(spreidArtiesten(artiesten, afstand: klein.afstand, maxPerArtiest: klein.max), [0, 1, 2, 3, 4, 5, 6, 7]);
+      expect(spreidArtiesten(artiesten), [0, 1, 2, 3], reason: 'met de standaard: één per artiest in acht plekken');
     });
 
     test('DE GRENS: een lege lijst', () {

@@ -29,7 +29,7 @@ import 'online.dart';
 import 'paths.dart';
 import 'settings.dart';
 import 'player.dart';
-import 'radiokeuze.dart' show artiestSleutel, basisTitel, kArtiestAfstand, kMaxPerArtiest;
+import 'radiokeuze.dart' show artiestSleutel, basisTitel, kArtiestAfstand, kArtiestTerug, kMaxPerArtiest;
 import 'radioladder.dart';
 import 'radiosessie.dart';
 import 'radiovoorraad.dart';
@@ -317,7 +317,7 @@ List<Radioplek> nieuweNakomers(List<Radioplek> plan, List<Radioplek> extra) {
 ///
 /// "Wat nog komt" is: wachten, onderweg, klaar (zonder de reserve), geland, en in de rij maar nog
 /// niet voorbij. Een nummer dat je oversloeg telt alleen binnen het venster mee.
-List<String> artiestenVoorPlafond(List<Radioplek> plan, {required int voorbijteller, int venster = 40}) => [
+List<String> artiestenVoorPlafond(List<Radioplek> plan, {required int voorbijteller, int venster = kArtiestTerug}) => [
       for (final p in plan)
         if (p.stand != Haalstand.mislukt &&
             !(p.stand == Haalstand.klaar && p.reserve) &&
