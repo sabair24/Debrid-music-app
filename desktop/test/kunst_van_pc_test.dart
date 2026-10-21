@@ -83,6 +83,10 @@ void main() {
       final server = lees('lib/lan/server.dart');
       expect(server, contains("case '/api/releaseart':\n        return _releaseArt(req);"));
       expect(server, contains("    '/api/releaseart',\n  };"), reason: 'ook van buitenaf: het zijn alleen plaatjes');
+      final eindpunt = server.substring(server.indexOf('  Future<void> _releaseArt(HttpRequest req) async {'));
+      expect(eindpunt.substring(0, eindpunt.indexOf('\n  }\n')), isNot(contains('verkleindeHoes')),
+          reason: 'op volle resolutie (Saber: "worden die nooit op volle resolutie getoond dan ???")');
+      expect(server, contains('return _json(req.response, kunstNaarJson(art, klaar: klaar));'));
       final discogs = lees('lib/discogs.dart');
       expect(discogs, contains('_vanPcOfVers(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld)'));
       final snoei = lees('lib/cache_snoei.dart');

@@ -1971,8 +1971,8 @@ class LanServer {
   /// De scans van een album zoals deze pc ze al heeft — voor een toestel, zodat de cd en de achterkant er
   /// meteen staan in plaats van na de hele keten (zie `DiscogsArtwork.vanDePc`). Op het id van het album: de
   /// pc kent zijn feiten (de uitgave), zijn vaste persing en de rollen, en zoekt dus in de juiste map — onder
-  /// de sleutel van de warmer en de albumpagina, en anders onder die van Nu speelt. Grote scans gaan
-  /// verkleind (1600 px), want ze reizen ook over mobiele data. 404 als er niets ligt.
+  /// de sleutel van de warmer en de albumpagina, en anders onder die van Nu speelt. Altijd op volle
+  /// resolutie. 404 als er niets ligt.
   Future<void> _releaseArt(HttpRequest req) async {
     final config = settings;
     final al = catalog.album(req.uri.queryParameters['albumId'] ?? '');
@@ -2006,15 +2006,10 @@ class LanServer {
       req.response.statusCode = HttpStatus.notFound;
       return req.response.close();
     }
-    Future<Uint8List?> klein(Uint8List? b) async =>
-        b == null || b.length <= 1536 * 1024 ? b : (await verkleindeHoesBuitenDeTekendraad(b, 1600) ?? b);
-    final reis = ReleaseArt(
-        front: await klein(art.front),
-        back: await klein(art.back),
-        disc: await klein(art.disc),
-        bron: art.bron,
-        formaat: art.formaat);
-    return _json(req.response, kunstNaarJson(reis, klaar: klaar));
+    // Op volle resolutie, zoals de pc ze bewaart — niet verkleind (Saber, 21-10-2026: "worden die nooit op
+    // volle resolutie getoond dan ??? Da wil ik wel"). Het is één keer per album; daarna staan ze op het
+    // toestel.
+    return _json(req.response, kunstNaarJson(art, klaar: klaar));
   }
 
   /// A whole album at once, asked for by a paired device.
