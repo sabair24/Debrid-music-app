@@ -55,6 +55,15 @@ Future<({int status, String lijf, HttpHeaders? koppen})> _vraag(
   }
 }
 
+/// Wachten tot [klaar] waar is, hoogstens [binnen]. Een voorwaarde en geen vaste tijd: op een volle
+/// CI-machine duurt alles langer, en een vaste tijd gokt dan.
+Future<void> _tot(bool Function() klaar, {required Duration binnen}) async {
+  final eind = DateTime.now().add(binnen);
+  while (!klaar() && DateTime.now().isBefore(eind)) {
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+}
+
 void main() {
   late Directory scratch, pcRoot;
   late LanServer server;
@@ -265,13 +274,23 @@ void main() {
     zwijger.destroy();
   });
 
+  // **Waarom geen vaste wachttijden meer (21-10-2026).** Op CI (Linux, vier kernen, toetsbestanden naast
+  // elkaar) viel deze toets om met "geweigerd ≥ 136, kreeg 17", terwijl tls_ingang.dart niet veranderd was.
+  // Nagespeeld: duurt het openen van de 200 verbindingen langer dan de klok (toen 400 ms), dan vliegen de
+  // eersten er al uit voor de laatsten aankomen, en wordt het plafond nauwelijks geraakt. Op Linux komt
+  // daar bij dat de kernel een verbinding afrondt voor de app ze aanneemt: na de lus waren ze nog niet
+  // allemaal ingedeeld. Nu is de klok ruim langer dan de opbouw, wacht de toets tot elke verbinding
+  // ingedeeld is, en telt hij exact.
   test('200 stille verbindingen: een lopende stroom gaat door, de stille vliegen eruit', () async {
-    final ingang = await TlsIngang.bind(InternetAddress.loopbackIPv4, 0, _cert.context(),
-        handdruk: const Duration(milliseconds: 400), eersteVerzoek: const Duration(milliseconds: 400));
+    const klok = Duration(seconds: 2);
+    final ingang =
+        await TlsIngang.bind(InternetAddress.loopbackIPv4, 0, _cert.context(), handdruk: klok, eersteVerzoek: klok);
     final srv = HttpServer.listenOn(ingang);
     addTearDown(() => srv.close(force: true));
+    final stroomLoopt = Completer<void>();
     srv.listen((req) async {
       ingang.geldig(req.connectionInfo);
+      if (!stroomLoopt.isCompleted) stroomLoopt.complete();
       req.response.contentLength = 40 * 16384;
       for (var i = 0; i < 40; i++) {
         req.response.add(List<int>.filled(16384, i));
@@ -281,18 +300,23 @@ void main() {
       await req.response.close();
     });
     final stroom = _vraag(ingang.port, '/stroom', pin: _cert.pin);
-    await Future<void>.delayed(const Duration(milliseconds: 150));
+    // Pas als de stroom loopt (en dus geldig is) de stille erbij: dan telt hij niet meer mee in de 64.
+    await stroomLoopt.future.timeout(const Duration(seconds: 10));
+    final opbouw = Stopwatch()..start();
     final stil = <Socket>[];
     for (var i = 0; i < 200; i++) {
       stil.add(await Socket.connect(InternetAddress.loopbackIPv4, ingang.port));
     }
-    await Future<void>.delayed(const Duration(milliseconds: 100));
-    expect(ingang.wachtend, lessThanOrEqualTo(64));
-    expect(ingang.geweigerd, greaterThanOrEqualTo(136));
+    // Tot de pc ze allemaal aangenomen en ingedeeld heeft: wachtend of geweigerd.
+    await _tot(() => ingang.wachtend + ingang.geweigerd >= 200, binnen: const Duration(seconds: 10));
+    expect(opbouw.elapsed, lessThan(klok),
+        reason: 'de opbouw duurde langer dan de klok: dan zijn er al stille weg en zegt de telling niets');
+    expect(ingang.wachtend, 64, reason: 'het plafond');
+    expect(ingang.geweigerd, 136, reason: 'de rest meteen dicht');
     final r = await stroom;
     expect(r.status, 200);
     expect(r.lijf.length, 40 * 16384, reason: 'de lopende stroom kwam helemaal aan');
-    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    await _tot(() => ingang.wachtend == 0, binnen: klok * 4);
     expect(ingang.wachtend, 0, reason: 'wie niets zegt, vliegt er na de klok uit');
     for (final s in stil) {
       s.destroy();
