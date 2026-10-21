@@ -190,6 +190,60 @@ class CastManager {
   _Session? _session;
   Timer? _advance;
 
+  /// Er veranderde iets aan wat de speaker doet (of er is geen sessie meer). Voor de zonelijst.
+  void Function()? bijStand;
+
+  /// Wat de speaker met de sessie het laatst zei — zonder hem iets te vragen: de tijdklok van vijf
+  /// seconden en elke statusvraag houden het bij. Null zonder sessie. Zie `zones.dart`.
+  ({
+    String id,
+    String naam,
+    String? trackId,
+    int index,
+    int lengte,
+    bool speelt,
+    int positieMs,
+    int duurMs,
+    int opMs,
+  })? get laatsteStand {
+    final s = _session;
+    if (s == null) return null;
+    final tid = s.queue.elementAtOrNull(s.index);
+    var duur = s.duur?.inMilliseconds ?? 0;
+    if (duur <= 0 && tid != null) duur = catalog.track(tid)?.duration?.inMilliseconds ?? 0;
+    return (
+      id: s.renderer.id,
+      naam: s.renderer.name,
+      trackId: tid,
+      index: s.index,
+      lengte: s.queue.length,
+      // Nog niets gehoord: net gestart, dus speelt hij (of gaat hij zo spelen).
+      speelt: s.speelt ?? true,
+      positieMs: s.positie?.inMilliseconds ?? 0,
+      duurMs: duur,
+      opMs: s.gezienOp ?? s.startedAt.millisecondsSinceEpoch,
+    );
+  }
+
+  /// Onthoud wat de speaker zei, en meld het als het iets nieuws is.
+  void _zag(_Session s, {Duration? positie, Duration? duur, bool? speelt}) {
+    final nu = DateTime.now().millisecondsSinceEpoch;
+    final speeltWas = s.speelt;
+    // Waar hij nu zou moeten zijn als hij gewoon doorspeelde: wijkt de melding meer dan drie seconden
+    // af, dan is er gespoeld en moet de lijst het ook weten.
+    final verwacht = (s.positie?.inMilliseconds ?? 0) +
+        ((s.speelt ?? true) && s.gezienOp != null ? nu - s.gezienOp! : 0);
+    final gesprongen = positie != null && s.gezienOp != null && (positie.inMilliseconds - verwacht).abs() > 3000;
+    if (positie != null) s.positie = positie;
+    if (duur != null && duur > Duration.zero) s.duur = duur;
+    if (speelt != null) s.speelt = speelt;
+    s.gezienOp = nu;
+    if (speeltWas != s.speelt || s.zagIndex != s.index || gesprongen) {
+      s.zagIndex = s.index;
+      bijStand?.call();
+    }
+  }
+
   /// Every place the music can go, this device excluded.
   Future<List<Map<String, dynamic>>> devices({bool refresh = true}) async {
     if (refresh || _renderers.isEmpty) {
@@ -251,6 +305,7 @@ class CastManager {
     final renderer = await _renderer(deviceId);
     _log?.line('── start op ${renderer.name}: ${trackIds.length} nummers, vanaf $index ──');
     _session = _Session(renderer: renderer, queue: trackIds, index: index.clamp(0, trackIds.length - 1));
+    bijStand?.call();
     await _openCurrent();
     // The renderer plays one track; something has to notice it ended and send the next.
     _advance = Timer.periodic(const Duration(seconds: 5), (_) => _maybeAdvance());
@@ -310,6 +365,8 @@ class CastManager {
     final id = session.queue.elementAtOrNull(session.index);
     final track = id == null ? null : catalog.track(id);
     if (id == null || track == null) return;
+    // Een nieuw nummer op de speaker: meteen in de zonelijst.
+    if (session.zagIndex != session.index) _zag(session, positie: Duration.zero);
 
     // Stamped BEFORE the SOAP calls, not after. Opening a track is three round trips of up to eight
     // seconds each, and until this line ran the timestamp still described the PREVIOUS track — so
@@ -436,6 +493,7 @@ class CastManager {
     session.currentUrl = volgende;
     session.nextUrl = null;
     session.hoogstePositie = Duration.zero;
+    _zag(session, positie: Duration.zero);
     // Alleen de VOLGENDE doorgeven, niet opnieuw openen: de speaker speelt dit nummer al, en er
     // opnieuw een URL op zetten zou hem vanaf nul laten beginnen.
     try {
@@ -594,9 +652,11 @@ class CastManager {
       // is. Deze vraag gaat vóór de transportstatus, want in dat geval staat die nog op PLAYING en zou
       // de rest van deze functie niets doen terwijl de index achterloopt.
       final pos = await _upnp.positionInfo(session.renderer).catchError((_) => null);
+      if (pos != null) _zag(session, positie: pos.position, duur: pos.duration);
       if (await _followedRenderer(pos?.trackUri, pos?.position)) return;
 
       final state = await _upnp.transportState(session.renderer);
+      if (state != null) _zag(session, speelt: state.isPlaying);
       _zie('kijk: ${state?.state ?? '?'} pos=${_sec(pos?.position ?? Duration.zero)} '
           'top=${_sec(session.hoogstePositie)} idx=${session.index}/${session.queue.length} '
           'uri=${_idVanUrl(pos?.trackUri) ?? '-'} nu=${_idVanUrl(session.currentUrl) ?? '-'} '
@@ -605,6 +665,7 @@ class CastManager {
       if (session.index + 1 >= session.queue.length) {
         _advance?.cancel();
         _session = null;
+        bijStand?.call();
         return;
       }
       session.index++;
@@ -641,6 +702,7 @@ class CastManager {
       case 'stop':
         _advance?.cancel();
         _session = null;
+        bijStand?.call();
         await _upnp.stop(renderer);
       case 'next':
         final session = _session;
@@ -728,6 +790,7 @@ class CastManager {
     await _followGuarded(pos?.trackUri, pos?.position);
     final nu = _session;
     if (nu != null && nu.renderer.id == renderer.id) {
+      _zag(nu, positie: pos?.position, duur: pos?.duration, speelt: state?.isPlaying);
       out['index'] = nu.index;
       out['queueLength'] = nu.queue.length;
       final tid = nu.queue.elementAtOrNull(nu.index);
@@ -824,6 +887,14 @@ class _Session {
   ///
   /// Het hoogste in plaats van het laatste, zodat één rare meting tussendoor niets kapotmaakt.
   Duration hoogstePositie = Duration.zero;
+
+  /// Wat de speaker het laatst zei, en wanneer. Zie [CastManager.laatsteStand].
+  bool? speelt;
+  Duration? positie, duur;
+  int? gezienOp;
+
+  /// De index bij de laatste melding naar buiten: een nieuw nummer is ook iets nieuws.
+  int zagIndex = -1;
 }
 
 extension _ElementAtOrNull<E> on List<E> {
