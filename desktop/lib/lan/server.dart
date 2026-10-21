@@ -40,6 +40,7 @@ import 'pc_bijwerker.dart';
 import 'range.dart';
 import 'state_store.dart';
 import 'tls_ingang.dart';
+import 'zones.dart';
 import 'poorten.dart';
 export 'poorten.dart';
 import 'quota.dart';
@@ -74,6 +75,7 @@ enum Ingang {
 /// **Een witte lijst, geen zwarte.** Wat hier niet staat, kan van buiten niet — ook een route die er
 /// morgen bij komt. Niet van buiten: koppelen, de hele bibliotheek doorzoeken of uitlijsten, de
 /// gebeurtenissenstroom, muziek op een speaker thuis starten, RuTracker aanmelden en de warmtemeting.
+/// De zones wél, ook hun stroom (Saber, 21-10-2026: van buitenshuis "Ja, alles").
 @visibleForTesting
 String? weigerVanBuiten(String pad, String methode) {
   const exact = {
@@ -81,6 +83,7 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/config', '/api/radio', '/api/jobs', '/api/kwaliteit', '/api/nieuw', '/api/corrections', '/api/move/plan',
     '/api/move/apply',
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
+    '/api/zones', '/api/zones/events', '/api/zones/stand',
     '/api/releaseart',
   };
   const voorvoegsels = ['/stream/', '/groei/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
@@ -152,6 +155,18 @@ class LanServer {
       port: port,
       logPath: dir.isEmpty ? null : '$dir${Platform.pathSeparator}cast.log',
     );
+    zones = ZoneRegister(
+      state: state,
+      // Zoals [LanSharing.mijnId]: onder dat id meldt de pc zijn eigen stand.
+      pcId: 'pc-${deviceName()}',
+      pcNaam: deviceName(),
+      nummer: (id) {
+        final t = catalog.track(id);
+        if (t == null) return null;
+        return (titel: t.title, artiest: t.artist, album: t.album, duurMs: t.duration?.inMilliseconds ?? 0);
+      },
+    );
+    cast.bijStand = () => zones.zetSpeakers([if (cast.laatsteStand case final s?) s]);
     // NIET afhankelijk van `configDir`, en dat is een reparatie.
     //
     // Stond die map leeg op het moment dat de server werd opgezet — en dat kan, want `applySettings`
@@ -298,6 +313,9 @@ class LanServer {
   /// Sending music to a speaker or the TV. Lives on the PC so the audio goes straight from here
   /// to the speaker, and so every device gets the same destination list.
   late final CastManager cast;
+
+  /// Alle zones: wat elk toestel en elke speaker speelt, en wie er bereikbaar is. Zie `zones.dart`.
+  late final ZoneRegister zones;
   final Transcoder transcoder = Transcoder();
 
   /// Zichzelf bijwerken op verzoek van een gekoppeld toestel. Zie `pc_bijwerker.dart`.
@@ -407,6 +425,7 @@ class LanServer {
   Future<void> dispose() async {
     await stop();
     cast.dispose();
+    await zones.dispose();
     catalog.dispose();
     // Een opslagbeurt die een verzoek net startte (`touch`), nog afmaken: anders gaat hij verloren,
     // of schrijft hij in een map die intussen weg is.
@@ -472,6 +491,8 @@ class LanServer {
         'deviceName': deviceName(),
         'trackCount': library.tracks.length,
         'albumCount': library.albums.length,
+        // Deze pc kent `/api/zones` (stap 2.1 van de zones, 21-10-2026).
+        'zones': 1,
         // Welke pc dit is, zodat een toestel dat tussen adressen kiest weet dat het de zijne is.
         if ((settings?.serverId ?? '').isNotEmpty) 'serverId': settings!.serverId,
       });
@@ -541,6 +562,12 @@ class LanServer {
         return _stateOps(req);
       case '/api/events':
         return _events(req);
+      case '/api/zones':
+        return _json(res, zones.snapshot());
+      case '/api/zones/events':
+        return _zoneEvents(req);
+      case '/api/zones/stand':
+        return _zoneStand(req);
       case '/api/cast/devices':
         return _json(res, await cast.devices());
       case '/api/cast/play':
@@ -1301,6 +1328,7 @@ class LanServer {
         naam: req.uri.queryParameters['naam'] ?? toestel,
         op: DateTime.now().millisecondsSinceEpoch,
       );
+      zones.gezien(toestel, naam: req.uri.queryParameters['naam']);
     }
     // Nothing durable has changed since the client last looked. The position may well have, so
     // it rides along — it is a handful of bytes and saves a second round trip.
@@ -1366,6 +1394,92 @@ class LanServer {
     await res.done.catchError((Object _) {});
     await sub.cancel();
     beat.cancel();
+  }
+
+  /// De zones als stroom (zie `zones.dart`): meteen de hele lijst, daarna bij elke wijziging opnieuw.
+  ///
+  /// Drie soorten berichten:
+  /// - `zones`: de lijst (`{nu, zones}`), bij het openen en bij elke wijziging;
+  /// - `stand`: de laatste melding van wie dan ook en het laatste "Speel op …" (`{progress, verzoek}`),
+  ///   zoals `/api/state` die geeft — daar draait "Hier verder luisteren" op, en nu zonder vier seconden
+  ///   wachten;
+  /// - `: ping` om de vijftien seconden, zodat een thuisrouter de stille verbinding niet dichtgooit en
+  ///   het toestel ziet dat de lijn er nog is.
+  ///
+  /// Wie hier een stroom open heeft, is bereikbaar. Welk toestel het is, staat in de sleutel; alleen met
+  /// de oude gedeelde sleutel telt `?toestel=`.
+  Future<void> _zoneEvents(HttpRequest req) async {
+    final res = req.response;
+    final q = req.uri.queryParameters;
+    final kop = req.headers.value(HttpHeaders.authorizationHeader) ?? '';
+    final sleutel = kop.startsWith('Bearer ') ? kop.substring(7).trim() : '';
+    final grant = grants.grantFor(sleutel);
+    final echt = grant != null && !grant.legacy;
+    final toestel = echt ? grant.deviceId : (q['toestel'] ?? '');
+    final naam = (q['naam'] ?? '').isNotEmpty ? q['naam']! : (grant?.deviceName ?? toestel);
+    final soort = zoneSoortVoor(
+      platform: (q['platform'] ?? '').isNotEmpty ? q['platform']! : (grant?.platform ?? ''),
+      naam: naam,
+      tv: q['tv'] == '1',
+    );
+
+    res.statusCode = HttpStatus.ok;
+    res.headers
+      ..set(HttpHeaders.contentTypeHeader, 'text/event-stream; charset=utf-8')
+      ..set(HttpHeaders.cacheControlHeader, 'no-cache')
+      ..set(HttpHeaders.connectionHeader, 'keep-alive')
+      ..set('X-Accel-Buffering', 'no');
+    res.bufferOutput = false;
+
+    var dicht = false;
+    void send(String event, Map<String, dynamic> data) {
+      if (dicht) return;
+      try {
+        res.write('event: $event\ndata: ${jsonEncode(data)}\n\n');
+      } catch (_) {
+        dicht = true;
+      }
+    }
+
+    Map<String, dynamic> stand() => {
+          'progress': state.progress.toJson(),
+          if (state.verzoek != null) 'verzoek': state.verzoek,
+        };
+
+    if (toestel.isNotEmpty) zones.stroomOpen(toestel, naam: naam, soort: soort);
+    send('zones', zones.snapshot());
+    send('stand', stand());
+
+    final subZones = zones.veranderd.listen((_) => send('zones', zones.snapshot()));
+    final subStand = state.changes.listen((e) {
+      if (e.containsKey('progress')) send('stand', stand());
+    });
+    final beat = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (dicht) return;
+      try {
+        res.write(': ping\n\n');
+      } catch (_) {
+        dicht = true;
+      }
+    });
+
+    await res.done.catchError((Object _) {});
+    dicht = true;
+    beat.cancel();
+    await subZones.cancel();
+    await subStand.cancel();
+    if (toestel.isNotEmpty) zones.stroomDicht(toestel);
+  }
+
+  /// De volledige melding van één zone, mét de wachtrij: wat "Hier verder luisteren" vanaf die zone
+  /// nodig heeft. 404 als die zone niets meldde.
+  Future<void> _zoneStand(HttpRequest req) async {
+    final p = zones.standVan(req.uri.queryParameters['zone'] ?? '');
+    if (p == null) {
+      req.response.statusCode = HttpStatus.notFound;
+      return req.response.close();
+    }
+    return _json(req.response, p.toJson());
   }
 
   /// Waarom een nummer niet open te krijgen is — gevraagd door een toestel dat het NIET zelf kan

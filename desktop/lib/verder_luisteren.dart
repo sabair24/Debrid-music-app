@@ -28,6 +28,10 @@ import 'player.dart' show RepeatMode;
 /// Hoe vaak een toestel (niet de pc) naar de stand kijkt.
 const kVerderKijk = Duration(seconds: 4);
 
+/// Hoe vaak zolang de lijn met de zones open staat: die brengt elke stand meteen (zie `zone_lijst.dart`),
+/// dus kijken is alleen nog een vangnet.
+const kVerderKijkMetLijn = Duration(seconds: 30);
+
 /// Een melding van "speelt" die ouder is dan dit, is een toestel dat weg is of slaapt: dan bieden we
 /// hem aan als "verder waar je was", niet als "speelt op". Een spelend toestel meldt elke vijf seconden.
 const kVerderSpeeltNog = Duration(seconds: 30);
@@ -215,15 +219,42 @@ class VerderLuisteren extends ChangeNotifier {
 
   Timer? _kijk;
   bool _bezig = false;
+  bool _zelfKijken = false;
+  bool _lijnOpen = false;
 
   /// Begin met kijken (op een toestel elke [kijkElke]; de pc roept [opStand] zelf aan).
   void start({bool zelfKijken = true}) {
-    _kijk?.cancel();
-    if (zelfKijken) _kijk = Timer.periodic(kijkElke, (_) => kijkNu());
+    _zelfKijken = zelfKijken;
+    _zetKlok();
     unawaited(kijkNu());
   }
 
+  void _zetKlok() {
+    _kijk?.cancel();
+    _kijk = null;
+    if (_zelfKijken) _kijk = Timer.periodic(_lijnOpen ? kVerderKijkMetLijn : kijkElke, (_) => kijkNu());
+  }
+
+  /// De lijn met de zones ging open of dicht. Open: die brengt elke stand meteen via [opStand], dus
+  /// zelf kijken nog maar om de [kVerderKijkMetLijn]. Dicht: weer om de [kijkElke].
+  void lijn(bool open) {
+    if (open == _lijnOpen) return;
+    _lijnOpen = open;
+    if (_kijk != null) _zetKlok();
+  }
+
+  /// "Hier verder luisteren" vanaf een gekozen zone: [stand] is de volledige melding van die zone (met
+  /// de wachtrij, zie `/api/zones/stand`). Ook als hier iets speelt: wie een zone kiest, wil die. False
+  /// als er niets over te nemen viel.
+  Future<bool> neemOverUit(Map<String, dynamic>? stand) async {
+    final a = aanbodUit(stand, mijnId: bron.mijnId, nuMs: _nu, ikSpeel: false, nummer: bron.nummer);
+    if (a == null) return false;
+    await neemOver(a);
+    return true;
+  }
+
   void stop() {
+    _zelfKijken = false;
     _kijk?.cancel();
     _kijk = null;
   }

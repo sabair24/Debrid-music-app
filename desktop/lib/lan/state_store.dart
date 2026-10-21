@@ -155,6 +155,18 @@ class LanStateStore {
   final Map<String, Map<String, dynamic>> radioSfeer = {};
   PlaybackProgress progress = PlaybackProgress();
 
+  /// Wat elk toestel het laatst meldde, per toestel-id — de zones (Saber, 21-10-2026: "als ik op de pc
+  /// een liedje aan het spelen ben, dat de ander devices dit zien"). [progress] is alleen de laatste
+  /// melding van wie dan ook; hier staat elk toestel apart, zodat de gsm ziet wat de pc speelt terwijl
+  /// de iPad ook iets speelt. Niet op schijf: na een herstart meldt elk spelend toestel binnen vijf
+  /// seconden opnieuw. Zie `zones.dart`.
+  final Map<String, PlaybackProgress> perToestel = {};
+
+  final _zoneChanges = StreamController<String>.broadcast();
+
+  /// Het toestel-id telkens als [perToestel] voor dat toestel veranderde.
+  Stream<String> get zoneChanges => _zoneChanges.stream;
+
   /// Per toestel hoeveel zijn klok afwijkt van die van de pc (pc min toestel), voor de speelstand.
   final Map<String, int> _klokVerschil = {};
 
@@ -365,8 +377,7 @@ class LanStateStore {
           final schatting = bekend == null || verschil < bekend ? verschil : bekend;
           _klokVerschil[deviceId] = schatting;
           final opPc = at + schatting;
-          if (opPc < progress.updatedAt) break;
-          progress = PlaybackProgress(
+          final melding = PlaybackProgress(
             trackId: (op['trackId'] ?? '') as String,
             positionMs: (op['positionMs'] as int?) ?? 0,
             queue: [for (final t in (op['queue'] as List? ?? const [])) t.toString()],
@@ -380,6 +391,15 @@ class LanStateStore {
             overname: (op['overname'] ?? '') as String,
             radio: (op['radio'] as Map?)?.cast<String, dynamic>(),
           );
+          // Per toestel eerst: ook een melding die achter de laatste van een ANDER toestel valt, is
+          // voor zijn eigen zone nieuw. Alleen een oudere van hetzelfde toestel valt weg.
+          final eerder = perToestel[deviceId];
+          if (eerder == null || opPc >= eerder.updatedAt) {
+            perToestel[deviceId] = melding;
+            if (deviceId.isNotEmpty) _zoneChanges.add(deviceId);
+          }
+          if (opPc < progress.updatedAt) break;
+          progress = melding;
           progressChanged = true;
 
         case 'verzoek':
@@ -435,5 +455,6 @@ class LanStateStore {
   Future<void> dispose() async {
     await save();
     await _changes.close();
+    await _zoneChanges.close();
   }
 }

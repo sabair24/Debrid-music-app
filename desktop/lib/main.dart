@@ -49,6 +49,9 @@ import 'ui/glas.dart';
 import 'ui/menu.dart';
 import 'mediabediening.dart';
 import 'verder_luisteren.dart';
+import 'zone_lijst.dart';
+import 'lan/zones.dart' show ZoneSoort, ZoneStaat, positieNu;
+import 'lan/server.dart' show LanServer;
 import 'ui/knopbewegingen.dart';
 import 'ui/menu_iconen.dart';
 import 'lan/pc_radiobron.dart';
@@ -1377,9 +1380,15 @@ Future<void> main() async {
   // 17-10-2026: "als music afspeelt op pc, en ik ga op men mac, gsm, ipad of shield, dat die hervat
   // waar ik zat"). Zie verder_luisteren.dart.
   final ik = mode.owner ? null : await thisDevice();
-  final verder = VerderLuisteren(mode.owner
-      ? _PcVerderBron(sharing, player)
-      : _ToestelVerderBron(library, player, ik!.id));
+  // De zones: wat elk toestel en elke speaker speelt (Saber, 21-10-2026). Zie zone_lijst.dart.
+  final zoneLijst = ZoneLijst(hier: 'dev:${mode.owner ? sharing.mijnId : ik!.id}', opDePc: mode.owner)
+    ..haalStand = mode.owner
+        ? (zone) async => sharing.server?.zones.standVan(zone)?.toJson()
+        : (zone) async => library.remote?.zoneStand(zone);
+  final verder = VerderLuisteren(
+      mode.owner ? _PcVerderBron(sharing, player) : _ToestelVerderBron(library, player, ik!.id),
+      // Op de klok van de pc: daarop staan de meldingen, ook die van een toestel met een scheve klok.
+      klok: mode.owner ? null : zoneLijst.nuOpPc);
   player.addListener(verder.spelerVeranderd);
   AppLifecycleListener(onResume: () => unawaited(verder.kijkNu()));
   if (mode.owner) {
@@ -1404,6 +1413,28 @@ Future<void> main() async {
           overname: m.overname ?? '',
           radio: player.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null);
     };
+    // De zones van de pc staan in zijn eigen server; die kan opnieuw opgezet worden (andere poort,
+    // andere instellingen), dan de nieuwe volgen.
+    LanServer? zoneServer;
+    StreamSubscription<void>? zoneSub;
+    void volgPcZones() {
+      final s = sharing.server;
+      if (identical(s, zoneServer)) return;
+      zoneServer = s;
+      unawaited(zoneSub?.cancel());
+      zoneSub = null;
+      if (s == null) {
+        zoneLijst.vergeet();
+        return;
+      }
+      zoneLijst
+        ..zetVerbonden(true)
+        ..zet(s.zones.snapshot());
+      zoneSub = s.zones.veranderd.listen((_) => zoneLijst.zet(s.zones.snapshot()));
+    }
+
+    sharing.addListener(volgPcZones);
+    volgPcZones();
     // De pc hoeft niet te vragen: hij houdt de stand zelf bij.
     sharing.state.changes.listen((e) {
       final stand = e['progress'];
@@ -1478,6 +1509,7 @@ Future<void> main() async {
         ChangeNotifierProvider<PaginaWas>(create: (_) => PaginaWas()),
         ChangeNotifierProvider<Favorieten>.value(value: favorieten),
         ChangeNotifierProvider<VerderLuisteren>.value(value: verder),
+        ChangeNotifierProvider<ZoneLijst>.value(value: zoneLijst),
         // Wat je werkelijk gedraaid hebt, bereikbaar voor de schermen.
         //
         // Dit object bestond al — het wordt hierboven aan de speler gegeven — maar stond in geen
@@ -1646,6 +1678,52 @@ Future<void> main() async {
         if (session.ready) unawaited(verder.kijkNu());
       });
       verder.start();
+      // De zones: één open lijn naar de pc, die elke wijziging meteen brengt — ook de stand voor "Hier
+      // verder luisteren", zodat die niet meer tot vier seconden achterloopt. Zie zone_lijst.dart.
+      final zoneLog = WarmLog('$logDir${Platform.pathSeparator}zones.log');
+      final zoneLijn = ZoneVerbinding(
+        lijst: zoneLijst,
+        client: () => library.remote,
+        toestel: ik!.id,
+        naam: deviceName(),
+        platform: platformName(),
+        tv: isTv,
+        opStand: (p, v) => unawaited(verder.opStand(p, verzoek: v)),
+        log: zoneLog.line,
+      );
+      zoneLijst.addListener(() => verder.lijn(zoneLijst.verbonden));
+      zoneLijn.start();
+      // Een gsm, iPad of Shield in de achtergrond die niets speelt, houdt de lijn niet open: de pc stuurt
+      // om de vijftien seconden een teken van leven, en over mobiel wekt dat telkens de radio. Bij
+      // terugkomen of spelen gaat ze meteen weer open. Een Mac houdt ze open: die staat ook naast je als
+      // zijn venster niet vooraan ligt.
+      if (Platform.isAndroid || Platform.isIOS) {
+        void lijnNaarStand() {
+          final s = WidgetsBinding.instance.lifecycleState;
+          final voor = s == null || s == AppLifecycleState.resumed || s == AppLifecycleState.inactive;
+          if (voor || player.playing) {
+            zoneLijn.start();
+          } else {
+            zoneLijn.stop();
+          }
+        }
+
+        AppLifecycleListener(onStateChange: (_) => lijnNaarStand());
+        player.addListener(lijnNaarStand);
+      }
+      // Een ander adres voor de pc (netwerkwissel, de deur naar buiten): de oude lijn loopt nog naar
+      // het vorige, dus meteen opnieuw. Verder bij elke "klaar": dan wacht hij niet op zijn klok.
+      Uri? zoneAdres = library.remote?.endpoint.baseUrl;
+      session.addListener(() {
+        final a = library.remote?.endpoint.baseUrl;
+        if (a != zoneAdres) {
+          zoneAdres = a;
+          zoneLijn.nuOpnieuw(ookAlsOpen: true);
+        } else if (session.ready) {
+          zoneLijn.nuOpnieuw();
+        }
+      });
+      AppLifecycleListener(onResume: zoneLijn.nuOpnieuw);
       session.addListener(() {
         if (session.ready) {
           unawaited(haalFavorieten());
@@ -10333,8 +10411,8 @@ class PlayerBar extends StatelessWidget {
                     ),
                     const _WachtrijKnop(),
                     const _SpeakerButton(),
-                    // "Speel op …": naar een ander toestel waarop de app open staat (alleen op de pc).
-                    if (!isTv) const _SpeelOpKnop(),
+                    // De zones (Saber, 21-10-2026). Daarin ook "Speel daar" — vroeger "Speel op …".
+                    if (!isTv) const ZoneKiesKnop(alsIcoon: true),
                   ],
                 ),
                 Row(
@@ -10377,67 +10455,322 @@ class PlayerBar extends StatelessWidget {
 
 }
 
-/// "Speel op …" (Saber, 17-10-2026): stuurt wat hier speelt naar een gsm, iPad, Mac of Shield waarop
-/// de app open staat, op dezelfde plek in het nummer. Alleen op de pc: hij houdt de gedeelde stand bij
-/// en weet wie er net nog keek. Zie verder_luisteren.dart.
-class _SpeelOpKnop extends StatelessWidget {
-  const _SpeelOpKnop();
+/// Het icoon van een soort zone.
+IconData zoneIcoon(ZoneSoort s) => switch (s) {
+      ZoneSoort.pc => Icons.desktop_windows_rounded,
+      ZoneSoort.mac => Icons.laptop_mac_rounded,
+      ZoneSoort.gsm => Icons.smartphone_rounded,
+      ZoneSoort.tablet => Icons.tablet_mac_rounded,
+      ZoneSoort.tv => Icons.tv_rounded,
+      ZoneSoort.speaker => Icons.speaker_rounded,
+    };
+
+/// "Speelt op: … ▾" (Saber, 21-10-2026): bovenaan Nu speelt, en als icoon in de brede spelerbalk. Opent
+/// het [ZoneBlad]: wat elk toestel en elke speaker speelt, met "Hier verder" vanaf elke zone. Er staat
+/// een stipje bij zodra er ergens anders iets speelt.
+///
+/// Onzichtbaar zolang de pc geen zones kent (een pc van vóór 3.9.546): dan blijft alleen de balk "Hier
+/// verder luisteren" zoals hij was.
+class ZoneKiesKnop extends StatelessWidget {
+  const ZoneKiesKnop({super.key, this.alsIcoon = false});
+
+  final bool alsIcoon;
 
   @override
   Widget build(BuildContext context) {
-    // Meekijken met de deelservice: de server start pas na het eerste beeld, en met read stond de knop
-    // er daardoor nooit (op de proef gezien, 17-10-2026).
-    final sharing = context.watch<LanSharing>();
-    final server = sharing.server;
-    final p = context.read<PlayerStore>();
-    if (server == null || p.current == null) return const SizedBox.shrink();
-    return PopupMenuButton<String>(
-      tooltip: 'Speel op …',
-      color: _panel,
-      position: PopupMenuPosition.over,
-      icon: Icon(Icons.devices_rounded, size: 20, color: _muted),
-      itemBuilder: (_) {
-        final toestellen = server.aanwezigeToestellen();
-        if (toestellen.isEmpty) {
-          return [
-            PopupMenuItem<String>(
-              enabled: false,
-              child: Text('Open de app op je gsm, iPad, Mac of Shield',
-                  style: TextStyle(fontSize: 13, color: _muted)),
-            ),
-          ];
-        }
-        return [
-          PopupMenuItem<String>(
-            enabled: false,
-            height: 28,
-            child: Text('SPEEL OP', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: _muted)),
+    final z = context.watch<ZoneLijst>();
+    if (!z.ondersteund) return const SizedBox.shrink();
+    final elders = z.eldersSpeeltIets;
+    final stip = Positioned(
+      right: -2,
+      top: -2,
+      child: Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(color: _accent2, shape: BoxShape.circle),
+      ),
+    );
+    if (alsIcoon) {
+      return IconButton(
+        key: const ValueKey('zone-knop'),
+        tooltip: elders ? 'Zones — er speelt ook iets op een ander toestel' : 'Zones',
+        onPressed: () => toonZoneBlad(context),
+        icon: Stack(clipBehavior: Clip.none, children: [
+          Icon(Icons.speaker_group_rounded, size: 20, color: _muted),
+          if (elders) stip,
+        ]),
+      );
+    }
+    final hier = z.dezeZone;
+    final naam = hier?.naam ?? deviceName();
+    return Pressable(
+      key: const ValueKey('zone-kies'),
+      onPressed: () => toonZoneBlad(context),
+      borderRadius: BorderRadius.circular(999),
+      scaleOnFocus: false,
+      vastePlek: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Stack(clipBehavior: Clip.none, children: [
+            Icon(zoneIcoon(hier?.soort ?? (isCompact(context) ? ZoneSoort.gsm : ZoneSoort.pc)),
+                size: 16, color: _muted),
+            if (elders) stip,
+          ]),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text('Speelt op: $naam',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: _muted, fontSize: 12.5, fontWeight: FontWeight.w600)),
           ),
-          for (final t in toestellen)
-            PopupMenuItem<String>(
-              value: t.id,
-              child: Row(children: [
-                Icon(Icons.phonelink_rounded, size: 18, color: _muted),
-                const SizedBox(width: 10),
-                Text(t.naam, style: const TextStyle(fontSize: 13.5)),
-              ]),
-            ),
-        ];
-      },
-      onSelected: (id) {
-        final t = p.current;
-        if (t == null) return;
-        final rij = p.queueTracks;
-        final naam = server.aanwezigeToestellen().where((x) => x.id == id).map((x) => x.naam).firstOrNull ?? '';
-        final radio = context.read<RadioBesturing>();
-        final ok = sharing.stuurNaar(id, t.path, p.position, [for (final x in rij) x.path], p.currentIndex,
-            shuffle: p.shuffle,
-            herhaal: p.repeat.name,
-            radio: p.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null);
-        _srcToast(context, ok ? 'Naar $naam gestuurd — de pc pauzeert zodra het daar speelt.' : 'Dit nummer kan niet mee (het staat niet in je bibliotheek).');
-      },
+          Icon(Icons.arrow_drop_down_rounded, size: 20, color: _muted),
+        ]),
+      ),
     );
   }
+}
+
+/// Het [ZoneBlad] van onderen.
+Future<void> toonZoneBlad(BuildContext context) => showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => const ZoneBlad(),
+    );
+
+/// Alle zones: wat er op elk toestel en elke speaker speelt, waar in het nummer, en of het toestel er
+/// is. Vanaf elke zone "Hier verder" (de wachtrij, de plek in het nummer, shuffle en herhalen, of de
+/// radio; dat toestel pauzeert). Op de pc daarnaast "Speel daar": wat de pc speelt, naar een toestel
+/// waarop de app open staat — vroeger "Speel op …" in de spelerbalk.
+///
+/// Deelstap 2.1 van de zones: zien en overnemen. Een zone kiezen en bedienen komt erna.
+class ZoneBlad extends StatefulWidget {
+  const ZoneBlad({super.key});
+
+  @override
+  State<ZoneBlad> createState() => _ZoneBladState();
+}
+
+class _ZoneBladState extends State<ZoneBlad> {
+  // De plek in een nummer dat ergens anders speelt, schuift elke seconde op.
+  late final Timer _tik = Timer.periodic(const Duration(seconds: 1), (_) {
+    if (mounted) setState(() {});
+  });
+
+  @override
+  void dispose() {
+    _tik.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final z = context.watch<ZoneLijst>();
+    final zones = z.zones;
+    final hoog = MediaQuery.sizeOf(context).height;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 600, maxHeight: hoog * .8),
+          child: GlasVlak(
+            vorm: const BorderRadius.all(Radius.circular(18)),
+            kleur: _panel,
+            balk: true,
+            bovenop: true,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 14, 8, 10),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    const Expanded(
+                      child: Text('Zones', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                    ),
+                    if (!z.verbonden)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Text('Even geen verbinding met de pc',
+                            style: TextStyle(color: _muted, fontSize: 11.5)),
+                      ),
+                  ]),
+                  const SizedBox(height: 2),
+                  Text('Wat er op je toestellen en speakers speelt',
+                      style: TextStyle(color: _muted, fontSize: 12)),
+                  const SizedBox(height: 10),
+                  Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      padding: EdgeInsets.zero,
+                      children: [
+                        for (final zone in zones)
+                          _ZoneRij(key: ValueKey('zone-${zone.id}'), zone: zone, hier: zone.id == z.hier),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ZoneRij extends StatelessWidget {
+  const _ZoneRij({super.key, required this.zone, required this.hier});
+
+  final ZoneStaat zone;
+  final bool hier;
+
+  @override
+  Widget build(BuildContext context) {
+    final lijst = context.read<ZoneLijst>();
+    final verder = context.read<VerderLuisteren>();
+    final nummer = zone.speeltIets ? verder.bron.nummer(zone.trackId) : null;
+    final hoes = context.select<LibraryStore, Uint8List?>((l) => nummer == null ? null : l.coverForTrack(nummer));
+    final nuPc = lijst.nuOpPc();
+    final titel = nummer?.title ?? zone.titel;
+    final artiest = nummer?.artist ?? zone.artiest;
+
+    final kop = [
+      zone.naam,
+      if (hier) 'dit toestel',
+      if (zone.via.isNotEmpty) 'via ${zone.via}',
+    ].join(' · ');
+    final String regel;
+    final String? tijd;
+    if (!zone.speeltIets) {
+      regel = zone.online ? 'Speelt niets' : 'Niet bereikbaar';
+      tijd = null;
+    } else {
+      regel = artiest.isEmpty ? titel : '$titel — $artiest';
+      final plek = positieNu(zone, nuMs: nuPc);
+      final geleden = Duration(milliseconds: (nuPc - zone.opMs).clamp(0, 1 << 40));
+      tijd = [
+        zone.playing ? 'Speelt' : 'Gepauzeerd',
+        if (zone.radio.isNotEmpty) 'radio ${zone.radio}',
+        zone.durationMs > 0 ? '${_fmt(plek)} / ${_fmt(Duration(milliseconds: zone.durationMs))}' : _fmt(plek),
+        if (!zone.playing && geleden > const Duration(minutes: 1)) _geleden(geleden),
+        if (!zone.online) 'niet bereikbaar',
+      ].join(' · ');
+    }
+
+    Widget? actie;
+    if (!hier && zone.speeltIets && zone.toestel != null) {
+      // Overnemen kan van elk toestel, ook een dat weg is: zijn laatste stand staat op de pc.
+      actie = GlasKnop(
+        key: ValueKey('zone-verder-${zone.id}'),
+        icoon: Icons.play_arrow_rounded,
+        label: 'Hier verder',
+        onPressed: () => _neemOverVan(context, zone),
+      );
+    } else if (!hier && zone.online && zone.toestel != null && lijst.opDePc) {
+      final p = context.read<PlayerStore>();
+      if (p.current != null) {
+        actie = GlasKnop(
+          key: ValueKey('zone-daar-${zone.id}'),
+          icoon: Icons.cast_rounded,
+          label: 'Speel daar',
+          onPressed: () => _speelOpToestel(context, zone.toestel!, zone.naam),
+        );
+      }
+    }
+
+    return Opacity(
+      opacity: zone.online || hier ? 1 : .55,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(children: [
+          SizedBox(
+            width: 46,
+            height: 46,
+            child: hoes != null
+                ? cover(hoes, size: 46, radius: 8)
+                : DecoratedBox(
+                    decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(8)),
+                    child: Icon(zoneIcoon(zone.soort), size: 22, color: _muted),
+                  ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(zoneIcoon(zone.soort), size: 13, color: zone.playing ? _accent2 : _muted),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(kop,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: zone.playing ? _accent2 : _muted, fontSize: 11.5, fontWeight: FontWeight.w600)),
+                  ),
+                ]),
+                const SizedBox(height: 2),
+                Text(regel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+                if (tijd != null)
+                  Text(tijd,
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 11.5)),
+              ],
+            ),
+          ),
+          if (actie != null) ...[const SizedBox(width: 8), actie],
+          const SizedBox(width: 4),
+        ]),
+      ),
+    );
+  }
+
+  static String _geleden(Duration d) => d.inHours >= 1
+      ? '${d.inHours} u geleden'
+      : '${d.inMinutes} min geleden';
+}
+
+/// "Hier verder" vanaf [zone]: haal haar volledige stand (met de wachtrij) en neem over zoals de balk
+/// "Hier verder luisteren" dat doet — dat toestel pauzeert.
+Future<void> _neemOverVan(BuildContext context, ZoneStaat zone) async {
+  final verder = context.read<VerderLuisteren>();
+  final haal = context.read<ZoneLijst>().haalStand;
+  final nav = Navigator.of(context);
+  Map<String, dynamic>? stand;
+  try {
+    stand = await haal?.call(zone.id);
+  } catch (_) {
+    stand = null;
+  }
+  final ok = await verder.neemOverUit(stand);
+  if (!context.mounted) return;
+  if (ok) {
+    nav.maybePop();
+  } else {
+    _srcToast(context, stand == null ? 'De pc antwoordt niet.' : 'Dat nummer staat niet in je bibliotheek hier.');
+  }
+}
+
+/// "Speel daar" (vroeger "Speel op …", Saber 17-10-2026): wat de pc speelt, naar het toestel [id], op
+/// dezelfde plek in het nummer; de pc pauzeert zodra het daar speelt. Alleen op de pc.
+void _speelOpToestel(BuildContext context, String id, String naam) {
+  final sharing = context.read<LanSharing>();
+  final p = context.read<PlayerStore>();
+  final t = p.current;
+  if (t == null) return;
+  final rij = p.queueTracks;
+  final radio = context.read<RadioBesturing>();
+  final ok = sharing.stuurNaar(id, t.path, p.position, [for (final x in rij) x.path], p.currentIndex,
+      shuffle: p.shuffle,
+      herhaal: p.repeat.name,
+      radio: p.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null);
+  _srcToast(context,
+      ok ? 'Naar $naam gestuurd — de pc pauzeert zodra het daar speelt.' : 'Dit nummer kan niet mee (het staat niet in je bibliotheek).');
 }
 
 /// Het hart naast de titel in de spelerbalk: vol als dit nummer een favoriet is, en het klopt met
@@ -14666,7 +14999,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                         icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 30),
                         onPressed: () => Navigator.pop(context),
                       ),
-                      const Spacer(),
+                      // "Speelt op: … ▾" (Saber, 21-10-2026): de zones, en hier verder luisteren vanaf
+                      // elke zone.
+                      const Expanded(child: Center(child: ZoneKiesKnop())),
                       // Hetzelfde menu als op een albumtegel en een nummerrij, op het enige scherm
                       // waar het niet zat.
                       //

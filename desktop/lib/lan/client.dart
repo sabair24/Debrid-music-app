@@ -13,6 +13,7 @@
 /// it is a token for a music library on a home network, and the alternative is that nothing plays.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -26,6 +27,7 @@ import 'pin_client.dart';
 import 'poorten.dart';
 import 'tokens.dart' show toestelWeg;
 import 'vaste_naam.dart';
+import 'zones.dart' show SseEvent, SseLezer;
 
 /// A paired PC: where it is and what proves we may talk to it.
 class RemoteEndpoint {
@@ -753,6 +755,115 @@ class RemoteClient {
   /// De speelstand van de pc, en wie wat speelt ("Hier verder luisteren"). Met [sinds] de revisie die
   /// dit toestel kent: dan komt alleen de stand mee zolang er verder niets veranderde. [toestel] en
   /// [naam] zeggen de pc dat dit toestel er is, voor "Speel op …".
+  /// Alle zones zoals de pc ze kent (`{nu, zones}`, zie `zones.dart`). 404 op een pc van vóór de zones.
+  Future<Map<String, dynamic>> zones() async {
+    final res = await _get('/api/zones');
+    final decoded = res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
+    return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+  }
+
+  /// De volledige melding van één zone, met de wachtrij — voor "Hier verder luisteren" vanaf die zone.
+  /// Null als die zone niets meldde.
+  Future<Map<String, dynamic>?> zoneStand(String zone) async {
+    final http.Response res;
+    try {
+      res = await _http.get(_api('/api/zones/stand', {'zone': zone}), headers: _headers).timeout(timeout);
+    } catch (e) {
+      throw RemoteException('Kon de pc niet bereiken: $e');
+    }
+    if (res.statusCode == 404) return null;
+    if (res.statusCode != 200) {
+      throw RemoteException('De pc antwoordde met ${res.statusCode}.', statusCode: res.statusCode);
+    }
+    final decoded = res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
+    return decoded is Map<String, dynamic> ? decoded : null;
+  }
+
+  /// De zones als stroom (`/api/zones/events`): elk bericht zodra de pc het stuurt, en een `ping` bij
+  /// elk teken van leven (zodat de aanroeper een dode lijn herkent aan stilte).
+  ///
+  /// Een EIGEN verbinding, los van de gewone: wie de stroom stopzet, sluit die verbinding, en dan is
+  /// de lijn ook echt dicht. Over de gewone zou een openstaande stroom voor altijd een plek bezetten.
+  /// Een pc zonder zones antwoordt 404: dan een [RemoteException] met die code.
+  ///
+  /// Geen `async*`: wie zo'n stroom stopzet terwijl hij op de volgende regel wacht, kreeg de fout van
+  /// de dichtgegooide verbinding ("Connection closed while receiving data") als onopgevangen fout. Hier
+  /// sluit stoppen de verbinding, en wat er daarna nog binnenkomt, valt stil weg.
+  Stream<SseEvent> zoneStroom({
+    required String toestel,
+    required String naam,
+    String platform = '',
+    bool tv = false,
+  }) {
+    late final StreamController<SseEvent> uit;
+    final c = clientVoor(endpoint);
+    StreamSubscription<String>? regels;
+    var dicht = false;
+
+    Future<void> sluit() async {
+      if (dicht) return;
+      dicht = true;
+      final r = regels;
+      regels = null;
+      c.close();
+      try {
+        await r?.cancel();
+      } catch (_) {}
+    }
+
+    void fout(Object e) {
+      if (dicht) return;
+      uit.addError(e);
+      unawaited(sluit());
+      unawaited(uit.close());
+    }
+
+    uit = StreamController<SseEvent>(
+      onListen: () async {
+        final req = http.Request(
+            'GET',
+            _api('/api/zones/events', {
+              'toestel': toestel,
+              'naam': naam,
+              if (platform.isNotEmpty) 'platform': platform,
+              if (tv) 'tv': '1',
+            }))
+          ..headers.addAll({..._headers, 'Accept': 'text/event-stream'});
+        final http.StreamedResponse res;
+        try {
+          res = await c.send(req).timeout(timeout);
+        } catch (e) {
+          return fout(RemoteException('Kon de pc niet bereiken: $e'));
+        }
+        if (dicht) return;
+        if (res.statusCode != 200) {
+          return fout(RemoteException('De pc antwoordde met ${res.statusCode}.', statusCode: res.statusCode));
+        }
+        final lezer = SseLezer();
+        regels = res.stream.transform(utf8.decoder).transform(const LineSplitter()).listen(
+          (regel) {
+            if (dicht) return;
+            if (regel.startsWith(':')) {
+              uit.add((event: 'ping', data: ''));
+              return;
+            }
+            final e = lezer.regel(regel);
+            if (e != null) uit.add(e);
+          },
+          onError: (Object e) => fout(e),
+          onDone: () {
+            if (dicht) return;
+            unawaited(sluit());
+            unawaited(uit.close());
+          },
+          cancelOnError: true,
+        );
+      },
+      onCancel: sluit,
+    );
+    return uit.stream;
+  }
+
   Future<Map<String, dynamic>> speelstand({int? sinds, required String toestel, required String naam}) async {
     final res = await _get('/api/state', query: {
       if (sinds != null) 'since': '$sinds',
