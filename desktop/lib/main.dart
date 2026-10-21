@@ -52,6 +52,7 @@ import 'verder_luisteren.dart';
 import 'zone_lijst.dart';
 import 'zone_speler.dart';
 import 'zone_opdracht.dart';
+import 'volgbron.dart' show Volgbron;
 import 'lan/zones.dart' show ZoneSoort, ZoneStaat, positieNu;
 import 'lan/server.dart' show LanServer;
 import 'ui/knopbewegingen.dart';
@@ -1063,9 +1064,7 @@ Future<void> main() async {
   });
 
 
-  // The lockscreen, Control Center and the media keys. Not awaited on the critical path — the
-  // window should not wait on a system service to come up.
-  unawaited(initNowPlaying(player, cover: library.coverForTrack));
+  // The lockscreen, Control Center and the media keys: verderop, na de gekozen zone (zones, stap 2.6).
 
   // Being cast TO. Only on a television: that is the box wired to the amplifier, and a phone that
   // answered here would start playing whenever somebody in the house picked a speaker.
@@ -1456,6 +1455,15 @@ Future<void> main() async {
     ),
   );
 
+  // The lockscreen, Control Center and the media keys. Not awaited on the critical path — the
+  // window should not wait on a system service to come up.
+  //
+  // Op Android volgt het vergrendelscherm de gekozen zone als de gsm zelf niets speelt, en regelen de
+  // volumeknoppen dan haar volume (Saber, 21-10-2026). Zie volgbron.dart. Op iOS kan dat niet: daar
+  // toont het vergrendelscherm alleen wat het toestel zelf laat klinken.
+  final volgbron = Platform.isAndroid ? Volgbron(lokaal: player, gekozen: gekozenZone) : null;
+  unawaited(initNowPlaying(volgbron ?? player, cover: library.coverForTrack, lokaal: player));
+
   // Wat dit toestel doet met een opdracht van een ander toestel dat het als zone bedient.
   final zoneUitvoerder = ZoneUitvoerder(
     speler: player,
@@ -1800,7 +1808,9 @@ Future<void> main() async {
         void lijnNaarStand() {
           final s = WidgetsBinding.instance.lifecycleState;
           final voor = s == null || s == AppLifecycleState.resumed || s == AppLifecycleState.inactive;
-          if (voor || player.playing) {
+          // Ook open met een zone op afstand gekozen: het vergrendelscherm toont dan die zone (stap 2.6),
+          // en zonder lijn zou het blijven staan op wat ze speelde toen je de gsm wegstak.
+          if (voor || player.playing || gekozenZone.opAfstand != null) {
             zoneLijn.start();
           } else {
             zoneLijn.stop();
@@ -1809,6 +1819,7 @@ Future<void> main() async {
 
         AppLifecycleListener(onStateChange: (_) => lijnNaarStand());
         player.addListener(lijnNaarStand);
+        gekozenZone.addListener(lijnNaarStand);
       }
       // Een ander adres voor de pc (netwerkwissel, de deur naar buiten): de oude lijn loopt nog naar
       // het vorige, dus meteen opnieuw. Verder bij elke "klaar": dan wacht hij niet op zijn klok.
