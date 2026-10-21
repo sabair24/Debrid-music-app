@@ -76,6 +76,27 @@ Kwaliteit kwaliteitUit(
   return (klasse: k, rate: kopRate, formaat: formaat);
 }
 
+/// Hoeveel verder een andere kopie van dezelfde opname echt moet doorlopen om te bewijzen dat de muur van de
+/// eerste geen filter in de master was — zie [metMuurBewijs].
+const kMuurBewijsHz = 500.0;
+
+/// [a] met wat een ANDERE kopie van dezelfde opname over zijn muur bewijst.
+///
+/// **Waarom (Saber, 21-10-2026, Snoop Dogg — Beautiful).** Zijn 24/48 heeft een muur op 20,0 kHz: "past bij
+/// mp3 320 of Opus, maar ook bij een 20 kHz-filter in de master; niet zeker" ([Bandbreedte.vermoedelijk]).
+/// Dat telt als cd, en dan is een echte cd-kopie hooguit gelijk — en blijft het verdachte bestand staan.
+/// Maar loopt een andere kopie van dezelfde opname wél door, tot ver voorbij die muur
+/// ([Bandbreedte.doorlopend], minstens [kMuurBewijsHz] hoger), dan zat die muur niet in de master: dan is
+/// bewezen dat [a] afgekapt is, en telt het als [Klasse.uitLossy]. Saber: "Ja, dat telt als bewijs."
+Kwaliteit metMuurBewijs(Kwaliteit a, Echtheidsoordeel? oa, Echtheidsoordeel? ob) {
+  if (oa == null || ob == null) return a;
+  if (a.klasse != Klasse.cd && a.klasse != Klasse.onbewezenHires) return a;
+  if (oa.band != Bandbreedte.vermoedelijk || ob.band != Bandbreedte.doorlopend) return a;
+  final xa = oa.afkapHz, xb = ob.afkapHz;
+  if (xa == null || xb == null || xb < xa + kMuurBewijsHz) return a;
+  return (klasse: Klasse.uitLossy, rate: a.rate, formaat: a.formaat);
+}
+
 /// Groter dan nul als [a] BEWEZEN beter is dan [b], kleiner dan nul als [b] het is, nul als het gelijk
 /// is of niet te zeggen valt.
 ///

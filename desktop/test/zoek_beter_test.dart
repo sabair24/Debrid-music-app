@@ -60,7 +60,7 @@ void main() {
     expect(z, contains('albumHits = await soulseek.search(zoekvraagVoorAlbum(te.first.artist, albumNaam));'));
     expect(z, contains('if (albumHits != null) {\n        hits = albumHits;'), reason: 'niet nog eens per nummer');
     expect(z, contains('!isVasteKeuze(t.path)'), reason: 'wat je zelf koos blijft de baas');
-    expect(z, contains('_queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true);'));
+    expect(z, contains('_queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true, blijfZoeken: verdacht);'));
     final main = File('lib/main.dart').readAsStringSync();
     // Sinds 21-10-2026 op elk toestel behalve de tv; op gsm, iPad en Mac zoekt de pc ([zoekBeterOpPc]).
     expect(main, contains("if (!isTv)\n                            TextButton.icon(\n                              onPressed: () => unawaited(_zoekHires(context, album)),"));

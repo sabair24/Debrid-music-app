@@ -869,7 +869,10 @@ typedef Voorkennis = ({
 /// Hier en niet bij de aanroepers, want dit is het enige punt waar élke opruimweg langskomt: het filen
 /// van een download, Opruimen, de dubbelveger per album en die over de hele bibliotheek.
 bool firstIsBetter(File a, File b, {Voorkennis? kennis}) {
-  final c = vergelijkKwaliteit(kwaliteitVan(a, kennis: kennis), kwaliteitVan(b, kennis: kennis));
+  // Wat de ene kopie over de muur van de andere bewijst (21-10-2026) — zie [metMuurBewijs].
+  final oa = _oordeelVan(a, kennis), ob = _oordeelVan(b, kennis);
+  final c = vergelijkKwaliteit(metMuurBewijs(kwaliteitVan(a, kennis: kennis), oa, ob),
+      metMuurBewijs(kwaliteitVan(b, kennis: kennis), ob, oa));
   if (c != 0) return c > 0;
   final va = kennis == null ? isVasteKeuze(a.path) : kennis.vast.contains(sleutelVoor(a.path));
   final vb = kennis == null ? isVasteKeuze(b.path) : kennis.vast.contains(sleutelVoor(b.path));
@@ -893,10 +896,14 @@ bool firstIsBetter(File a, File b, {Voorkennis? kennis}) {
 Kwaliteit kwaliteitVan(File f, {Voorkennis? kennis}) {
   final rang = formatRank(f.path);
   final kapot = kennis == null ? bekendKapot(f.path) : kennis.kapot.contains(f.path.toLowerCase());
-  final o = kennis == null ? gemeten(f.path) : kennis.oordelen[echtheidSleutelVoor(f.path)];
+  final o = _oordeelVan(f, kennis);
   return kwaliteitUit(
       verliesvrij: rang >= 3, kopRate: _kopRateVan(f), formaat: rang, oordeel: o, kapot: kapot);
 }
+
+/// Het oordeel van de echtheidsmeter over [f], uit de voorkennis of het oordelenbestand.
+Echtheidsoordeel? _oordeelVan(File f, Voorkennis? kennis) =>
+    kennis == null ? gemeten(f.path) : kennis.oordelen[echtheidSleutelVoor(f.path)];
 
 /// De bemonstering uit de kop, of 0 als die niet te lezen is. Onthouden per (pad, tijd, grootte), om
 /// dezelfde reden als [_surroundGeheugen]: de dubbelveger vraagt dit tienduizenden keren.
@@ -936,7 +943,8 @@ String whyBetter(File keep, File drop) {
   }
 
   // In dezelfde volgorde als [firstIsBetter] beslist, zodat de zin nooit iets anders zegt dan de keuze.
-  final kk = kwaliteitVan(keep), kd = kwaliteitVan(drop);
+  final ok = _oordeelVan(keep, null), od = _oordeelVan(drop, null);
+  final kk = metMuurBewijs(kwaliteitVan(keep), ok, od), kd = metMuurBewijs(kwaliteitVan(drop), od, ok);
   final c = vergelijkKwaliteit(kk, kd);
   if (c != 0) {
     if (kk.klasse == kd.klasse) return '${ext(keep)} boven ${ext(drop)}';

@@ -4531,20 +4531,30 @@ class DownloadManager extends ChangeNotifier {
   /// Wat in [hits] een betere kopie is van [t]: hetzelfde nummer — dezelfde zeef als een wens
   /// ([kandidatenVoorWens]: titel, lengte ±6 s, lossless, stereo, één per uploader) — en duidelijk beter
   /// dan wat er ligt ([magOpwaarderen] tegen [eigenAlsKandidaat]).
-  static List<SoulseekFile> beterDanWatErLigt(Track t, List<SoulseekFile> hits) {
+  ///
+  /// [verdacht]: wat er ligt heeft een muur in het spectrum ("vermoedelijk" of "afgekapt", zie
+  /// `Bandbreedte`). Dan telt ook een kopie die op papier niet hoger staat — een echte 16/44,1 tegen een
+  /// verdachte 24/48 — want pas na het binnenhalen kan de keuring zien of zij voorbij die muur doorloopt
+  /// ([metMuurBewijs]). Hoogstens [kVerdachtKandidaten].
+  static List<SoulseekFile> beterDanWatErLigt(Track t, List<SoulseekFile> hits, {bool verdacht = false}) {
     final eigen = eigenAlsKandidaat(t);
     if (eigen == null) return const [];
-    final w = LosslessWant(
-        artist: t.artist,
-        title: t.title,
-        album: t.album,
-        authority: TrackTags(
-            title: t.title, artist: t.artist, album: t.album, trackNo: t.trackNo, seconds: t.duration?.inSeconds));
+    if (verdacht) return kandidatenVoorWens(_wensVoor(t), hits).take(kVerdachtKandidaten).toList();
     return [
-      for (final k in kandidatenVoorWens(w, hits))
+      for (final k in kandidatenVoorWens(_wensVoor(t), hits))
         if (magOpwaarderen(k, eigen, t.duration?.inSeconds)) k
     ];
   }
+
+  /// Zoveel kandidaten hoogstens voor een verdacht bestand — elke verliezer gaat naar `_dubbel`.
+  static const kVerdachtKandidaten = 6;
+
+  static LosslessWant _wensVoor(Track t) => LosslessWant(
+      artist: t.artist,
+      title: t.title,
+      album: t.album,
+      authority: TrackTags(
+          title: t.title, artist: t.artist, album: t.album, trackNo: t.trackNo, seconds: t.duration?.inSeconds));
 
   /// Een betere kopie zoeken voor nummers die al in je bibliotheek staan — op jouw vraag (de knop "Zoek
   /// hi-res" op een album) of bij een 👍 op een nummer dat de radio haalde (Saber, 20-10-2026: "alleen
@@ -4589,10 +4599,17 @@ class DownloadManager extends ChangeNotifier {
           continue;
         }
       }
-      final beter = beterDanWatErLigt(t, hits);
+      // Een muur in het spectrum: dan ook echte cd-kopieën proberen — zie [beterDanWatErLigt].
+      final o = gemeten(t.path);
+      final verdacht = o != null && (o.band == Bandbreedte.vermoedelijk || o.band == Bandbreedte.afgekapt);
+      final beter = beterDanWatErLigt(t, hits, verdacht: verdacht);
       if (beter.isEmpty) {
         _log.line('"$naam": geen betere kopie dan wat je hebt');
         continue;
+      }
+      if (verdacht) {
+        _log.line('"$naam": verdacht (muur op ${((o.afkapHz ?? 0) / 1000).toStringAsFixed(1)} kHz) — ook echte '
+            'cd-kopieën proberen; de keuring meet of ze voorbij die muur doorlopen');
       }
       _log.line('"$naam": ${beter.length} betere kandidaten, de beste ${beter.first.username} — '
           '${baseName(beter.first.filename)}');
@@ -4605,7 +4622,7 @@ class DownloadManager extends ChangeNotifier {
                 trackNo: t.trackNo,
                 year: t.year,
                 seconds: t.duration?.inSeconds);
-      _queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true);
+      _queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true, blijfZoeken: verdacht);
       begonnen++;
     }
     return begonnen;
@@ -4616,8 +4633,11 @@ class DownloadManager extends ChangeNotifier {
   /// [gezag]: de tags om na het vervangen te schrijven (▶ bergt op zonder jaar en schrijft daarna het
   /// gezag — zie `_haalVoorRadio`). [speeltPad]: vervang pas als dat niet meer speelt. [parkeerAltijd]:
   /// wat verliest gaat opzij, nooit weg — zoals bij de eerste landing van ▶.
+  ///
+  /// [blijfZoeken]: is een binnengehaalde kopie niet bewezen beter, dan de volgende proberen in plaats van te
+  /// stoppen — voor een verdacht bestand, waar meerdere uploaders hetzelfde opgeblazen bestand delen.
   void _queueUpgrade(List<SoulseekFile> better, DownloadJob job,
-      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false}) {
+      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false, bool blijfZoeken = false}) {
     job.status = 'upgrading';
     job.detail = 'speelbaar · betere kwaliteit zoeken';
     notifyListeners();
@@ -4627,7 +4647,8 @@ class DownloadManager extends ChangeNotifier {
         ' (${_jachten.lopend} van $_maxParallelleJachten jachten bezig'
         '${_jachten.wachtend > 0 ? ", ${_jachten.wachtend} wachtend" : ""})');
     _jachten.voegToe(() =>
-        _chaseUpgrade(better, job, gezag: gezag, speeltPad: speeltPad, parkeerAltijd: parkeerAltijd));
+        _chaseUpgrade(better, job,
+            gezag: gezag, speeltPad: speeltPad, parkeerAltijd: parkeerAltijd, blijfZoeken: blijfZoeken));
   }
 
 
@@ -4638,7 +4659,7 @@ class DownloadManager extends ChangeNotifier {
   /// fire and make the next attempt a fresh LOGIN, which is what gets the account blocked — and
   /// deliberately takes no download slot, so a track you have nothing of never waits behind it.
   Future<void> _chaseUpgrade(List<SoulseekFile> better, DownloadJob job,
-      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false}) async {
+      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false, bool blijfZoeken = false}) async {
     final deadline = DateTime.now().add(_upgradeBudget);
     // A shadow job absorbs the transfer's own status/progress writes: the visible job is already
     // finished and must not flip back to "Bezig 34%" with a half-full bar.
@@ -4727,6 +4748,10 @@ class DownloadManager extends ChangeNotifier {
             }
           } catch (_) {/* the scan still finds it wherever it landed */}
           if (how == Placement.duplicate) {
+            if (blijfZoeken) {
+              _log.line('   ${job.name}: ${f.username} niet bewezen beter dan wat je hebt — volgende');
+              continue;
+            }
             settle('had al de beste kwaliteit');
             return;
           }
