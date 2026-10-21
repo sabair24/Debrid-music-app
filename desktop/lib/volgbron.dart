@@ -31,13 +31,23 @@ const kVolumeStap = 5;
 
 /// Volgt dit toestel of de gekozen zone, zie de uitleg bovenaan.
 class Volgbron extends ChangeNotifier implements NowPlayingSource, Afstandsvolume {
-  Volgbron({required this.lokaal, required this.gekozen}) {
+  Volgbron({required this.lokaal, required this.gekozen, bool Function()? opVoorgrond, int Function()? klok})
+      : _opVoorgrond = opVoorgrond ?? (() => true),
+        _klok = klok {
     lokaal.addListener(notifyListeners);
     gekozen.addListener(notifyListeners);
   }
 
   final NowPlayingSource lokaal;
   final GekozenZone gekozen;
+
+  /// Staat de app nu voor (in beeld)? Zie [speeltErgens].
+  final bool Function() _opVoorgrond;
+  final int Function()? _klok;
+  int get _nu => _klok?.call() ?? DateTime.now().millisecondsSinceEpoch;
+
+  /// De app kwam weer in beeld (of iets anders veranderde): opnieuw laten bekijken.
+  void herbekijk() => notifyListeners();
 
   /// De zone op afstand die het vergrendelscherm nu toont, of null.
   ZoneSpeler? get opAfstand {
@@ -50,7 +60,38 @@ class Volgbron extends ChangeNotifier implements NowPlayingSource, Afstandsvolum
   @override
   Track? get current => _actief.current;
   @override
-  bool get playing => _actief.playing;
+  bool get playing => opAfstand == null ? lokaal.playing : speeltErgens;
+
+  /// Toonde het vergrendelscherm de zone als spelend? Dan draait de mediadienst op de voorgrond al.
+  bool _getoondSpelend = false;
+
+  /// Tot wanneer een druk van HIER telt als reden om de mediadienst te starten.
+  int _eigenDrukTot = 0;
+
+  /// Speelt wat het vergrendelscherm toont — met één grendel voor een zone op afstand.
+  ///
+  /// **Waarom.** "Speelt" laat audio_service de mediadienst op de voorgrond zetten
+  /// (\`startForegroundService\`). Android 12 en later weigert dat als de app in de achtergrond zit,
+  /// behalve vlak na een druk op een mediaknop. Begint de zone te spelen omdat een ANDER toestel op play
+  /// drukte terwijl de gsm weggestoken is en zijn dienst stillag, dan zou dat een fout geven. Dan toont
+  /// het vergrendelscherm de zone nog even als gepauzeerd — tot de app in beeld komt, of tot je hier zelf
+  /// op een knop drukt. Draaide de dienst al (de zone speelde al), dan gewoon "speelt".
+  @override
+  bool get speeltErgens {
+    final a = opAfstand;
+    if (a == null) return lokaal.speeltErgens;
+    if (!a.speeltErgens) {
+      _getoondSpelend = false;
+      return false;
+    }
+    if (_getoondSpelend || _opVoorgrond() || _nu < _eigenDrukTot) {
+      _getoondSpelend = true;
+      return true;
+    }
+    return false;
+  }
+
+  void _eigenDruk() => _eigenDrukTot = _nu + 10000;
   @override
   Duration get position => _actief.position;
   @override
@@ -58,13 +99,19 @@ class Volgbron extends ChangeNotifier implements NowPlayingSource, Afstandsvolum
   @override
   Uint8List? get currentCover => _actief.currentCover;
   @override
-  void playPause() => _actief.playPause();
+  void playPause() {
+    _eigenDruk();
+    _actief.playPause();
+  }
+
   @override
-  void speelAf() => _actief.speelAf();
+  void speelAf() {
+    _eigenDruk();
+    _actief.speelAf();
+  }
+
   @override
   void pauzeer() => _actief.pauzeer();
-  @override
-  bool get speeltErgens => _actief.speeltErgens;
   @override
   Duration get positieErgens => _actief.positieErgens;
   @override

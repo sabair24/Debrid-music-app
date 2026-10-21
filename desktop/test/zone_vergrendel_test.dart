@@ -136,6 +136,49 @@ void main() {
       expect(lokaal.gedempt, isTrue, reason: 'een navigatiestem gaat over wat HIER klinkt');
     });
 
+    test('in de achtergrond begint de zone te spelen door een ander toestel: eerst nog "gepauzeerd"', () {
+      var voor = false;
+      var nu = 1000000;
+      final v = Volgbron(lokaal: lokaal, gekozen: gekozen, opVoorgrond: () => voor, klok: () => nu);
+      gekozen.kies('dev:pc-THUIS'); // de pc speelt al, maar de gsm toonde nog niets
+      expect(v.speeltErgens, isFalse,
+          reason: 'de mediadienst mag nu niet vanuit de achtergrond starten (Android 12+)');
+      v.speelAf(); // een druk van hier, op het vergrendelscherm
+      expect(v.speeltErgens, isTrue, reason: 'na een eigen druk mag het wel');
+      // De pc bevestigt dat hij speelt.
+      lijst.zet({
+        'nu': nu,
+        'zones': [
+          ZoneStaat(id: 'dev:pc-THUIS', soort: ZoneSoort.pc, naam: 'THUIS', online: true, playing: true, trackId: 'b', opMs: nu)
+              .toJson()
+        ],
+      });
+      nu += 60000;
+      expect(v.speeltErgens, isTrue, reason: 'de dienst draait al: gewoon blijven spelen');
+      // Pauze op afstand, en later play van een ander toestel, in de achtergrond.
+      lijst.zet({
+        'nu': nu,
+        'zones': [
+          ZoneStaat(id: 'dev:pc-THUIS', soort: ZoneSoort.pc, naam: 'THUIS', online: true, trackId: 'b', opMs: nu)
+              .toJson()
+        ],
+      });
+      nu += 4000;
+      expect(v.speeltErgens, isFalse);
+      lijst.zet({
+        'nu': nu,
+        'zones': [
+          ZoneStaat(id: 'dev:pc-THUIS', soort: ZoneSoort.pc, naam: 'THUIS', online: true, playing: true, trackId: 'b', opMs: nu)
+              .toJson()
+        ],
+      });
+      nu += 20000;
+      expect(v.speeltErgens, isFalse, reason: 'de dienst lag stil en niemand hier drukte');
+      voor = true;
+      expect(v.speeltErgens, isTrue, reason: 'de app in beeld: nu wel');
+      v.dispose();
+    });
+
     test('speelt de gsm zelf, dan is hij het weer', () {
       gekozen.kies('dev:pc-THUIS');
       lokaal

@@ -1461,7 +1461,14 @@ Future<void> main() async {
   // Op Android volgt het vergrendelscherm de gekozen zone als de gsm zelf niets speelt, en regelen de
   // volumeknoppen dan haar volume (Saber, 21-10-2026). Zie volgbron.dart. Op iOS kan dat niet: daar
   // toont het vergrendelscherm alleen wat het toestel zelf laat klinken.
-  final volgbron = Platform.isAndroid ? Volgbron(lokaal: player, gekozen: gekozenZone) : null;
+  final volgbron = Platform.isAndroid
+      ? Volgbron(
+          lokaal: player,
+          gekozen: gekozenZone,
+          opVoorgrond: () => WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
+        )
+      : null;
+  if (volgbron != null) AppLifecycleListener(onResume: volgbron.herbekijk);
   unawaited(initNowPlaying(volgbron ?? player, cover: library.coverForTrack, lokaal: player));
 
   // Wat dit toestel doet met een opdracht van een ander toestel dat het als zone bedient.
