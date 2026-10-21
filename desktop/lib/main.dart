@@ -10626,7 +10626,9 @@ class ZoneKiesKnop extends StatelessWidget {
     final afstand = _misschien<GekozenZone>(context, luister: true)?.opAfstand;
     final gekozen = afstand?.zone ?? z.dezeZone;
     // Het stipje: er speelt iets in een zone die je nu NIET voor je hebt.
-    final elders = z.zones.any((x) => x.playing && x.id != (afstand?.zoneId ?? z.hier));
+    final elders = z.zones.any((x) => x.playing && x.id != (afstand?.zoneId ?? z.hier)) ||
+        // Of er is iets om hier verder te luisteren (het stipje dat vroeger op het verder-icoon stond).
+        (afstand == null && _misschien<VerderLuisteren>(context, luister: true)?.aanbod != null);
     final stip = Positioned(
       right: -2,
       top: -2,
@@ -12995,6 +12997,12 @@ class _SpeakerButton extends StatelessWidget {
     // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026).
     if (_misschien<GekozenZone>(context, luister: true)?.opAfstand != null) return const SizedBox.shrink();
     final target = context.watch<SpeakerTarget>();
+    // Kent de pc zones, dan staan de speakers in de zonelijst en stuur je muziek erheen met "Verplaats
+    // naar …": één knop in plaats van twee bijna gelijke (Saber, 21-10-2026: "is die dan nog nodig??").
+    // Niet op de tv (die heeft geen zonelijst), en niet zolang er via dit blad gecast wordt.
+    if (!isTv && !target.isCasting && (_misschien<ZoneLijst>(context, luister: true)?.ondersteund ?? false)) {
+      return const SizedBox.shrink();
+    }
     // Gekeken naar de client waarmee GESTUURD wordt, niet naar de bibliotheek. Dat scheelt: op de pc is
     // library.remote null — de bibliotheek staat daar zelf — en daarmee was de knop er niet, ook niet
     // toen de pc zijn eigen server kon aanspreken. Wie de speakers kan bedienen mag ze kiezen.
@@ -13288,6 +13296,8 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
               const VerderKnop(smal: true),
               const _WachtrijKnop(),
               const _SpeakerButton(iconSize: 22),
+              // De zones (en daarin de speakers en "Hier verder"), in plaats van de speakerknop.
+              const ZoneKiesKnop(alsIcoon: true),
               const SizedBox(width: 2),
             ],
           ),
@@ -15823,7 +15833,9 @@ class VerderKnop extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final v = context.watch<VerderLuisteren>();
-    final a = v.aanbod;
+    // Het icoontje van de telefoon wijkt voor de zoneknop ernaast: daar staat "Hier verder" ook in, en
+    // die krijgt het stipje (Saber, 21-10-2026: twee keer bijna hetzelfde icoon).
+    final a = smal && (_misschien<ZoneLijst>(context, luister: true)?.ondersteund ?? false) ? null : v.aanbod;
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 220),
       switchInCurve: Curves.easeOutCubic,
