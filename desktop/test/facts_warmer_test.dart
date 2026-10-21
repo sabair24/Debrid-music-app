@@ -30,6 +30,7 @@ void main() {
   /// What the warmer pulled the scans for, so the test can hold onto the one thing that makes an
   /// album page instant: the artwork is warmed under the SAME key the page will ask with.
   late List<String> warmedArt;
+  late List<String> volledig;
 
   Track track(String album, int i, {int addedMs = 0}) => Track(
         path: '/m/$album/$i.flac',
@@ -59,6 +60,7 @@ void main() {
       ..rootPath = scratch.path;
     asked = [];
     warmedArt = [];
+    volledig = [];
   });
 
   tearDown(() {
@@ -76,6 +78,7 @@ void main() {
     bool brokenNetwork = false,
   }) =>
       FactsWarmer(
+        volledigTussen: Duration.zero,
         library: library,
         settings: settings,
         mb: MusicBrainzService(),
@@ -115,6 +118,7 @@ void main() {
       seedLibrary([for (var i = 0; i < 20; i++) 'Album$i']);
       late FactsWarmer w;
       w = FactsWarmer(
+        volledigTussen: Duration.zero,
         library: library,
         settings: settings,
         mb: MusicBrainzService(),
@@ -206,6 +210,7 @@ void main() {
       seedLibrary(['Traag']);
       late FactsWarmer w;
       w = FactsWarmer(
+        volledigTussen: Duration.zero,
         library: library,
         settings: settings,
         mb: MusicBrainzService(),
@@ -247,6 +252,7 @@ void main() {
       var toegevoegd = false;
       late FactsWarmer w;
       w = FactsWarmer(
+        volledigTussen: Duration.zero,
         library: library,
         settings: settings,
         mb: MusicBrainzService(),
@@ -308,6 +314,7 @@ void main() {
           added: {'Eerste': 3000, 'Blijft hangen': 2000, 'Derde': 1000});
 
       final w = FactsWarmer(
+        volledigTussen: Duration.zero,
         library: library,
         settings: settings,
         mb: MusicBrainzService(),
@@ -361,6 +368,7 @@ void main() {
 
       late FactsWarmer w;
       w = FactsWarmer(
+        volledigTussen: Duration.zero,
         library: library,
         settings: settings,
         mb: MusicBrainzService(),
@@ -372,6 +380,11 @@ void main() {
             library.facts.get(uid)!,
         warmArt: (artist, album,
             {required expectedTracks, pinned, pinnedMbid, required roles, required settings, freeOnly = true, trace}) async {
+          // De volledige ronde (ook Discogs, 21-10-2026) komt na de gratis ronde: apart geteld.
+          if (!freeOnly) {
+            volledig.add(album);
+            return null;
+          }
           warmedArt.add('$artist|$album|$expectedTracks');
           // Na de eerste plaat begint er een scan, zoals bij een binnengekomen download.
           if (warmedArt.length == 1) {
@@ -386,6 +399,8 @@ void main() {
 
       expect(warmedArt, hasLength(3),
           reason: 'de ronde hoort na de scan gewoon verder te gaan, niet af te breken');
+      expect(volledig..sort(), ['Drie', 'Een', 'Twee'],
+          reason: 'daarna de volledige ronde, voor elk album zonder afgeronde map (Azizam, 21-10-2026)');
       w.dispose();
     });
 
@@ -491,6 +506,7 @@ void main() {
       var n = 0;
       late FactsWarmer w;
       w = FactsWarmer(
+        volledigTussen: Duration.zero,
         library: library,
         settings: settings,
         mb: MusicBrainzService(),

@@ -117,6 +117,7 @@ class FactsWarmer extends ChangeNotifier {
     this.resolve = resolveAlbumFacts,
     this.warmArt = fetchReleaseArt,
     this.rearmDelay = const Duration(seconds: 10),
+    this.volledigTussen = const Duration(seconds: 20),
     this.outageBackoff = const Duration(minutes: 15),
     this.scanWait = const Duration(minutes: 3),
     this.factsDeadline = const Duration(seconds: 90),
@@ -175,6 +176,10 @@ class FactsWarmer extends ChangeNotifier {
   final Duration scanWait;
 
   final Duration rearmDelay;
+
+  /// De rust tussen twee albums in de volledige ronde ([_warmVolledig]): Discogs geeft zestig vragen per
+  /// minuut, en die horen in de eerste plaats bij wat je zelf opent.
+  final Duration volledigTussen;
   final Duration outageBackoff;
 
   bool _running = false;
@@ -484,6 +489,8 @@ class FactsWarmer extends ChangeNotifier {
   /// cannot stampede, and neither waits for the other. Newest first, so the record that just
   /// downloaded gets its scans without standing behind two dozen tracklists.
   Future<void> _artSweep() async {
+    // Loopt de volledige ronde nog: die maakt plaats ([_warmVolledig] kijkt hiernaar), en daarna opnieuw.
+    if (_artRunning) _artOpnieuw = true;
     if (_artRunning || _stopped || !enabled || library.isRemote) {
       _log.line('scans: veeg NIET gestart (loopt=$_artRunning gestopt=$_stopped '
           'aan=$enabled remote=${library.isRemote})');
@@ -502,13 +509,84 @@ class FactsWarmer extends ChangeNotifier {
       // by the sweep the facts round now kicks off when it finishes, not by polling for it.
       await _warmMissingArt();
       _log.line('scans: veeg klaar, $_artDone opgehaald deze sessie');
+      _artOpnieuw = false;
+      await _warmVolledig();
     } finally {
       _artRunning = false;
       _notify();
     }
+    // Kwam er iets bij terwijl de volledige ronde liep: eerst dat, dan gaat die verder waar hij was.
+    if (_artOpnieuw && !_stopped) {
+      _artOpnieuw = false;
+      unawaited(_artSweep());
+    }
   }
 
   bool _artRunning = false;
+
+  /// Er kwam werk bij (een nieuwe download) terwijl de hoesveeg liep — zie [_warmVolledig].
+  bool _artOpnieuw = false;
+
+  /// Albums die deze sessie al de volledige ronde kregen.
+  final Set<String> _volTried = {};
+
+  /// De volledige ronde: ook Discogs, voor elk album waar de gratis bronnen (het archief, TheAudioDB) geen
+  /// AFGERONDE map opleverden — geen achterkant, geen cd.
+  ///
+  /// **Waarom (Saber, 21-10-2026, over Azizam).** *"het duurde even voor ik de afbeelding van de cd zag …
+  /// Ook na updates of koude start of wissel van toestel moet die er direct staan."* De warmer vroeg alleen
+  /// de gratis bronnen ([fetchReleaseArt], `freeOnly`); op de pc lag voor Azizam alleen de voorkant, zonder
+  /// "af". Een toestel dat de pc om de scans vraagt (`/api/releaseart`) kreeg dan niets en deed de hele keten
+  /// zelf — daarom kwam de cd na een tijd toch, van Discogs. Nu doet de pc dat zelf, op de achtergrond.
+  ///
+  /// Eén album tegelijk met [volledigTussen] ertussen, en hij maakt plaats zodra er iets nieuws binnenkomt
+  /// ([_artOpnieuw]): dat krijgt eerst zijn scans, daarna gaat dit verder (wat al gedaan is staat in
+  /// [_volTried], en een afgeronde map wordt overgeslagen).
+  Future<int> _warmVolledig() async {
+    var gedaan = 0;
+    for (final album in _artOrder()) {
+      if (_stopped || !settings.warmFacts || _artOpnieuw) break;
+      if (!await _waitForScan()) break;
+      final uid = library.uidOf(album);
+      if (uid.isEmpty || _volTried.contains(uid)) continue;
+      final facts = library.facts.get(uid);
+      if (facts == null || facts.tracklist.isEmpty) continue;
+      final expected = facts.tracklist.length;
+      final mbid = library.pinnedMbid(album) ?? facts.mbid;
+      final pinned = library.pinnedRelease(album);
+      final roles = library.albumArtRoles(album.artist, album.title);
+      if (await DiscogsService(settings).hasReleaseArt(album.artist, album.title,
+          expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles)) {
+        continue;
+      }
+      _volTried.add(uid);
+      final t0 = DateTime.now();
+      _log.line('scans volledig: "${album.title}" — ook Discogs…');
+      try {
+        final art = await warmArt(album.artist, album.title,
+                expectedTracks: expected,
+                pinned: pinned,
+                pinnedMbid: mbid,
+                roles: roles,
+                settings: settings,
+                freeOnly: false,
+                trace: artTrace)
+            .timeout(const Duration(minutes: 3));
+        _neemHoesOver(album, art);
+        gedaan++;
+        _log.line('scans volledig: "${album.title}" klaar in ${DateTime.now().difference(t0).inSeconds}s —'
+            '${art?.back != null ? ' achterkant' : ''}${art?.disc != null ? ' cd' : ''}'
+            '${art?.back == null && art?.disc == null ? ' geen achterkant of cd te vinden' : ''}');
+      } on TimeoutException {
+        _log.line('scans volledig: "${album.title}" duurde langer dan 3 min — verder');
+      } catch (e) {
+        _log.line('scans volledig: "${album.title}" gooide $e — verder');
+      }
+      await Future<void>.delayed(volledigTussen);
+    }
+    if (gedaan > 0) _log.line('scans volledig: $gedaan albums deze ronde');
+    return gedaan;
+  }
 
   /// Passes over the library until one adds nothing. Returns how many records had their scans
   /// fetched.
