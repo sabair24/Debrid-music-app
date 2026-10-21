@@ -1170,6 +1170,8 @@ Future<void> main() async {
   if (mode.owner) radioSfeer.winkel = sharing.state;
   // De versiecontrole van elke download: alleen op de pc, die haalt (zie `versiecontrole.dart`).
   if (mode.owner) DownloadManager.versiecontrole = Versiecontrole().score;
+  // ▶ tagt met het album waarop je het zag; daarbij het nummer en het jaar van die uitgave.
+  if (mode.owner) DownloadManager.plekOpAlbum = deezerPlekOpAlbum;
   radio.sfeer = radioSfeer;
   // Als FACTOR de speler in: die hoeft niets van duimen te weten, en `oordeelBonus` blijft daardoor
   // op één plek staan in plaats van in de speler én in het scherm.
