@@ -576,6 +576,8 @@ class LanServer {
         return _soulseekDownload(req);
       case '/api/soulseek/download-album':
         return _soulseekDownloadAlbum(req);
+      case '/api/soulseek/zoek-beter':
+        return _soulseekZoekBeter(req);
       case '/api/jobs':
         return _json(res, {'jobs': jobsSnapshot()});
       case '/api/jobs/cancel':
@@ -1932,6 +1934,34 @@ class LanServer {
     } catch (e) {
       return _unavailable(req, '$e');
     }
+  }
+
+  /// "Zoek hi-res" op een albumpagina, of 👍 op een radionummer, vanaf een toestel: dezelfde jacht als op de
+  /// pc ([DownloadManager.zoekBeterVoor] — vervangen alleen als het bewezen beter is). Saber, 21-10-2026:
+  /// "Kan het dat de functie hi res zoeken, niet op de andere platformen staan?" — de knop stond alleen
+  /// waar het toestel zelf haalt.
+  ///
+  /// `trackIds` zijn de nummer-ids van de catalogus; `album` (optioneel) laat één zoekopdracht voor het hele
+  /// album gaan. Antwoord: `begonnen` = voor hoeveel nummers er een jacht begon, -1 als het zoeken langer
+  /// duurt dan het toestel wacht (dan loopt het gewoon door).
+  Future<void> _soulseekZoekBeter(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final nummers = <Track>[
+      for (final id in (body['trackIds'] as List? ?? const []))
+        if (id is String)
+          if (catalog.track(id) case final t?) t,
+    ];
+    if (nummers.isEmpty) return _json(req.response, {'begonnen': 0, 'reason': 'niets gevonden'});
+    final teVeel = _quotum(req, kQuotumDownloads);
+    if (teVeel != null) return _teVeel(req, teVeel);
+    final album = body['album'] is String ? body['album'] as String : null;
+    final n = await manager
+        .zoekBeterVoor(nummers, album: album, gezag: library.tagsVoorVervanger)
+        .timeout(const Duration(seconds: 25), onTimeout: () => -1);
+    return _json(req.response, {'begonnen': n});
   }
 
   /// A whole album at once, asked for by a paired device.

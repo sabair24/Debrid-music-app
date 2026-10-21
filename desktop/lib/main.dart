@@ -7310,8 +7310,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                               style: TextButton.styleFrom(foregroundColor: _muted),
                             ),
                           // Saber, 20-10-2026: "alleen als ik het vraag" — geen ronde op de achtergrond,
-                          // wel een knop. Alleen waar deze machine zelf haalt.
-                          if (!isTv && context.read<LibraryStore>().remote == null)
+                          // wel een knop. Op een toestel zoekt de pc (21-10-2026, zie [zoekBeterOpPc]).
+                          if (!isTv)
                             TextButton.icon(
                               onPressed: () => unawaited(_zoekHires(context, album)),
                               icon: const Icon(Icons.high_quality_rounded, size: 15),
@@ -13283,9 +13283,23 @@ Widget _overzichtRegel(Gehaald g, VoidCallback? redden) => Padding(
 /// een duidelijk betere kopie de gewone jacht — zie [DownloadManager.zoekBeterVoor].
 Future<void> _zoekHires(BuildContext context, Album album) async {
   final lib = context.read<LibraryStore>();
-  final dm = context.read<DownloadManager>();
   _srcToast(context, 'Zoekt een betere kopie voor "${album.title}"…');
-  final n = await dm.zoekBeterVoor(album.tracks, album: album.title, gezag: lib.tagsVoorVervanger);
+  final int n;
+  if (lib.remote != null) {
+    final r = await zoekBeterOpPc(lib, album.tracks, album: album.title);
+    if (!context.mounted) return;
+    if (r == null) {
+      _srcToast(context, 'Je pc antwoordde niet — probeer het straks opnieuw');
+      return;
+    }
+    if (r < 0) {
+      _srcToast(context, 'Je pc zoekt nog een betere kopie voor "${album.title}" — vervangen alleen als het bewezen beter is');
+      return;
+    }
+    n = r;
+  } else {
+    n = await context.read<DownloadManager>().zoekBeterVoor(album.tracks, album: album.title, gezag: lib.tagsVoorVervanger);
+  }
   if (!context.mounted) return;
   _srcToast(
       context,
@@ -13293,6 +13307,26 @@ Future<void> _zoekHires(BuildContext context, Album album) async {
           ? 'Geen betere kopie gevonden voor "${album.title}" — wat je hebt is het beste dat er nu is'
           : '$n ${n == 1 ? "nummer" : "nummers"} op jacht naar een betere kopie — vervangen alleen als het '
               'bewezen beter is');
+}
+
+/// "Zoek hi-res" of 👍 vanaf een toestel: de pc zoekt (`/api/soulseek/zoek-beter`, server.dart). Saber,
+/// 21-10-2026: "Kan het dat de functie hi res zoeken, niet op de andere platformen staan?" — ze stond alleen
+/// waar het toestel zelf haalt. Geeft terug voor hoeveel nummers de pc een jacht begon, -1 als hij nog
+/// zoekt, en null als de pc niet antwoordde.
+Future<int?> zoekBeterOpPc(LibraryStore lib, List<Track> nummers, {String? album}) async {
+  final c = lib.remote;
+  if (c == null) return null;
+  final ids = [
+    for (final t in nummers)
+      if (lib.remoteTrackId(t.path) case final id?) id,
+  ];
+  if (ids.isEmpty) return 0;
+  try {
+    final a = await c.ask('/api/soulseek/zoek-beter', {'trackIds': ids, if (album != null) 'album': album});
+    return (a['begonnen'] as num?)?.toInt() ?? 0;
+  } catch (_) {
+    return null;
+  }
 }
 
 /// 👍 op een nummer dat de radio haalde: houden, en dan ook op jacht naar een betere kopie (Saber,
@@ -13303,7 +13337,12 @@ Future<void> _duimOmhoogRadio(BuildContext context, Track t) async {
   final lib = context.read<LibraryStore>();
   final dm = lib.remote == null ? context.read<DownloadManager>() : null;
   final nu = await oordelen.wissel(t, Oordeel.omhoog);
-  if (dm == null || nu != Oordeel.omhoog) return;
+  if (nu != Oordeel.omhoog) return;
+  // Op een toestel zoekt de pc — zie [zoekBeterOpPc].
+  if (dm == null) {
+    unawaited(zoekBeterOpPc(lib, [t]));
+    return;
+  }
   unawaited(dm.zoekBeterVoor([t], gezag: lib.tagsVoorVervanger));
 }
 

@@ -62,12 +62,19 @@ void main() {
     expect(z, contains('!isVasteKeuze(t.path)'), reason: 'wat je zelf koos blijft de baas');
     expect(z, contains('_queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true);'));
     final main = File('lib/main.dart').readAsStringSync();
-    expect(main, contains("if (!isTv && context.read<LibraryStore>().remote == null)"));
+    // Sinds 21-10-2026 op elk toestel behalve de tv; op gsm, iPad en Mac zoekt de pc ([zoekBeterOpPc]).
+    expect(main, contains("if (!isTv)\n                            TextButton.icon(\n                              onPressed: () => unawaited(_zoekHires(context, album)),"));
     expect(main, contains("label: const Text('Zoek hi-res', style: TextStyle(fontSize: 12)),"));
-    expect(main, contains('dm.zoekBeterVoor(album.tracks, album: album.title, gezag: lib.tagsVoorVervanger)'));
+    expect(main, contains('.zoekBeterVoor(album.tracks, album: album.title, gezag: lib.tagsVoorVervanger)'));
+    expect(main, contains('final r = await zoekBeterOpPc(lib, album.tracks, album: album.title);'));
+    expect(main, contains("await c.ask('/api/soulseek/zoek-beter', {'trackIds': ids, if (album != null) 'album': album});"));
     expect(RegExp(r'opTik: \(\) => unawaited\(_duimOmhoogRadio\(context, (t|track)\)\),').allMatches(main).length, 2,
         reason: 'beide radioduimen');
-    expect(main, contains('if (dm == null || nu != Oordeel.omhoog) return;'), reason: 'uitzetten zoekt niets');
+    expect(main, contains('if (nu != Oordeel.omhoog) return;'), reason: 'uitzetten zoekt niets');
+    expect(main, contains('unawaited(zoekBeterOpPc(lib, [t]));'), reason: '👍 op een toestel: de pc zoekt');
+    final server = File('lib/lan/server.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(server, contains("case '/api/soulseek/zoek-beter':\n        return _soulseekZoekBeter(req);"));
+    expect(server, contains('.zoekBeterVoor(nummers, album: album, gezag: library.tagsVoorVervanger)'));
     expect(main, isNot(contains('opTik: () => unawaited(oordelen.wissel(track, Oordeel.omhoog)),')));
   });
 }
