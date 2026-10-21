@@ -271,6 +271,9 @@ typedef SpeakerStand = ({
   int positieMs,
   int duurMs,
   int opMs,
+
+  /// Het volume van de speaker (0–100), of -1 als hij het niet meldt.
+  int volume,
 });
 
 /// Alle zones, op de pc. Eén per server.
@@ -367,10 +370,15 @@ class ZoneRegister {
   }
 
   /// De speakers waar de pc nu muziek naartoe stuurt.
-  void zetSpeakers(List<SpeakerStand> s) {
-    _speakers = s;
+  /// De speakers waar de pc nu muziek naartoe stuurt ([actief]), en alle speakers die hij op het netwerk
+  /// kent ([bekend]): die staan er ook, zonder muziek, zodat je er iets naartoe kunt sturen.
+  void zetSpeakers(List<SpeakerStand> actief, {List<({String id, String naam})>? bekend}) {
+    _speakers = actief;
+    if (bekend != null) _bekend = bekend;
     _meld();
   }
+
+  List<({String id, String naam})> _bekend = const [];
 
   /// De toestellen met een open stroom: wie "Speel op …" van de pc kan krijgen.
   List<({String id, String naam})> bereikbareToestellen() => [
@@ -423,7 +431,13 @@ class ZoneRegister {
         index: s.index,
         lengte: s.lengte,
         via: pcNaam,
+        volume: s.volume,
       ));
+    }
+    final actief = {for (final s in _speakers) s.id};
+    for (final b in _bekend) {
+      if (actief.contains(b.id)) continue;
+      uit.add(ZoneStaat(id: 'spk:${b.id}', soort: ZoneSoort.speaker, naam: b.naam, online: true, via: pcNaam));
     }
     return ordenZones(uit, hier: 'dev:$pcId');
   }

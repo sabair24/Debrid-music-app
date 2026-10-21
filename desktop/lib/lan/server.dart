@@ -166,7 +166,7 @@ class LanServer {
         return (titel: t.title, artiest: t.artist, album: t.album, duurMs: t.duration?.inMilliseconds ?? 0);
       },
     );
-    cast.bijStand = () => zones.zetSpeakers([if (cast.laatsteStand case final s?) s]);
+    cast.bijStand = () => zones.zetSpeakers(cast.laatsteStanden, bekend: cast.bekendeSpeakers);
     // NIET afhankelijk van `configDir`, en dat is een reparatie.
     //
     // Stond die map leeg op het moment dat de server werd opgezet — en dat kan, want `applySettings`
@@ -370,7 +370,15 @@ class LanServer {
           case 'speel':
             final ids = [for (final x in (op['ids'] as List? ?? const [])) '$x'];
             if (ids.isEmpty) return (status: 400, antwoord: {'error': 'Geen nummers.'});
-            await cast.play(speaker, ids, (op['plek'] as num?)?.toInt() ?? 0);
+            if (op['shuffle'] == true) ids.shuffle();
+            await cast.play(speaker, ids, (op['plek'] as num?)?.toInt() ?? 0, alsZone: true);
+          case 'hierna' || 'achteraan':
+            final ids = [for (final x in (op['ids'] as List? ?? const [])) '$x'];
+            await cast.voegToe(speaker, ids, hierna: cmd == 'hierna');
+          case 'nu':
+            await cast.speelNu(speaker, '${op['id'] ?? ''}');
+          case 'jump':
+            await cast.springNaar(speaker, (op['plek'] as num?)?.toInt() ?? 0);
           default:
             return (status: 409, antwoord: {'error': 'Dat kan nog niet op een speaker.'});
         }
