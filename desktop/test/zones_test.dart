@@ -217,6 +217,14 @@ void main() {
     });
   });
 
+  test('een lijn staat onder het id dat het toestel zelf opgeeft, niet dat van zijn sleutel (S26, 21-10)', () {
+    expect(zoneToestelVoor(gevraagd: 'eigen-id', uitSleutel: 'sleutel-id'), 'eigen-id');
+    expect(zoneToestelVoor(gevraagd: '', uitSleutel: 'sleutel-id'), 'sleutel-id');
+    expect(zoneToestelVoor(), '');
+    final server = File('lib/lan/server.dart').readAsStringSync();
+    expect(server, contains("zoneToestelVoor(gevraagd: q['toestel'], uitSleutel: echt ? grant.deviceId : null)"));
+  });
+
   group('van buiten', () {
     test('de zones mogen ook via de deur naar buiten (Saber: "Ja, alles")', () {
       expect(weigerVanBuiten('/api/zones', 'GET'), isNull);
