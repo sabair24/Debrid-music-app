@@ -7,6 +7,7 @@ library;
 import 'dart:io';
 
 import 'package:debridmusic/lan/stroomstand.dart';
+import 'package:debridmusic/lan/tokens.dart' show bronIsThuis;
 import 'package:debridmusic/lan/verbindingsstand.dart' show Verbindingsweg;
 import 'package:debridmusic/netsoort.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -122,6 +123,32 @@ void main() {
       final speler = File('lib/player.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(speler, contains('if (heropenVoorStand(geopend: mpvAdres, nu: mediaResolver(t.path), speelt: playing, plek: position)) {'));
       expect(main, contains('opMobiel: netStore.onderweg,'));
+    });
+  });
+
+  group('thuis via de eigen deur is thuis (21-10-2026: de Mac kreeg The Door als 16/44,1)', () {
+    test('de pc herkent zijn thuisnetwerk en zijn eigen publieke adres', () {
+      const publiek = '178.118.55.105';
+      expect(bronIsThuis(InternetAddress('192.168.0.216'), publiek), isTrue, reason: 'de Mac op de wifi');
+      expect(bronIsThuis(InternetAddress('::ffff:192.168.0.216'), publiek), isTrue);
+      expect(bronIsThuis(InternetAddress(publiek), publiek), isTrue,
+          reason: 'via de eigen deur, door de modem teruggestuurd naar binnen');
+      expect(bronIsThuis(InternetAddress('127.0.0.1'), publiek), isTrue);
+      expect(bronIsThuis(InternetAddress('212.123.26.50'), publiek), isFalse, reason: 'de wifi van de kliniek');
+      expect(bronIsThuis(InternetAddress('100.73.186.40'), publiek), isFalse, reason: 'Tailscale kan van buiten zijn');
+      expect(bronIsThuis(InternetAddress(publiek), null), isFalse, reason: 'geen deur: dan weet de pc het niet');
+    });
+
+    test('aangesloten: de pc zegt het in /api/config, de sessie gebruikt het, en main bewaart die weg', () {
+      String lees(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
+      expect(lees('lib/lan/server.dart'), contains("'opHetThuisnet': _vanThuis(req) ? 'ja' : 'nee',"));
+      final sessie = lees('lib/lan/client_session.dart');
+      expect(sessie,
+          contains('return w == Verbindingsweg.rechtstreeks && _pcZegtThuis == true ? Verbindingsweg.thuis : w;'));
+      expect(sessie, contains("_zetThuis(shared['opHetThuisnet']);"));
+      expect(sessie, contains('unawaited(_vraagOfThuis());'));
+      expect(lees('lib/main.dart'),
+          contains('final w = session.verbinding.weg == null ? null : session.wegVoorStroom;'));
     });
   });
 

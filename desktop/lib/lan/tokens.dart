@@ -146,6 +146,22 @@ String toestelWeg(InternetAddress adres) {
   return 'buiten';
 }
 
+/// Zit wie dit verzoek stuurde op het thuisnetwerk van deze pc — ook als het via de eigen deur van buitenaf
+/// binnenkomt?
+///
+/// **Waarom (Saber, 21-10-2026).** De Mac stond thuis op de wifi (192.168.0.216), maar praatte met de pc via
+/// de deur naar buiten: de modem stuurde het verzoek meteen terug naar binnen, en de pc zag het van zijn
+/// EIGEN publieke adres komen (178.118.55.105). Het toestel hield dat voor onderweg en vroeg cd-kwaliteit —
+/// "The Door" kwam als 16/44,1 in plaats van 24/44,1. Van het eigen netwerk of van het eigen publieke adres
+/// ([publiek], zie `Deur.publiekAdres`) is thuis; Tailscale niet (dat kan net zo goed van buiten zijn).
+bool bronIsThuis(InternetAddress bron, String? publiek) {
+  final w = toestelWeg(bron);
+  if (w == 'thuis' || w == 'deze pc') return true;
+  if (publiek == null || publiek.isEmpty) return false;
+  final a = bron.address.startsWith('::ffff:') ? bron.address.substring(7) : bron.address;
+  return a == publiek;
+}
+
 /// Mag dit als toestel-id dienen? Letters, cijfers, `_` en `-`, 8 tot 64 tekens.
 ///
 /// Het id gaat letterlijk een Firestore-pad in (`grants/<id>`) en een logregel; een `/` of een

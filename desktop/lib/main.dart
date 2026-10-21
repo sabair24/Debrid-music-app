@@ -960,7 +960,8 @@ Future<void> main() async {
     // En die weg onthouden over herstarts heen: bij een koude start hervat de speler het laatste nummer
     // vóór de verbinding er is (Perfect en Black Velvet als origineel op de wifi van de kliniek, 21-10-2026).
     session.addListener(() {
-      final w = session.verbinding.weg;
+      // De weg zoals de stroom hem ziet: thuis via de eigen deur is thuis (21-10-2026).
+      final w = session.verbinding.weg == null ? null : session.wegVoorStroom;
       if (w == null || w.name == settings.laatsteWeg) return;
       settings.laatsteWeg = w.name;
       unawaited(settings.save());

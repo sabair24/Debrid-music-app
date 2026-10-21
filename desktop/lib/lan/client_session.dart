@@ -324,7 +324,34 @@ class ClientSession extends ChangeNotifier {
 
   /// De weg voor de streamkwaliteit: de huidige, of de laatst bekende terwijl er opnieuw gezocht wordt.
   /// Zie `welkeStand` in netsoort.dart.
-  Verbindingsweg? get wegVoorStroom => _stand.weg ?? _laatsteWeg;
+  ///
+  /// **Via de eigen deur, maar thuis, is thuis** — als de pc dat zegt ([_pcZegtThuis], `bronIsThuis` in
+  /// tokens.dart). Saber, 21-10-2026: de Mac op de thuiswifi kreeg The Door als 16/44,1, want hij praatte via
+  /// de deur naar buiten met de pc en hield zich dus voor onderweg.
+  Verbindingsweg? get wegVoorStroom {
+    final w = _stand.weg ?? _laatsteWeg;
+    return w == Verbindingsweg.rechtstreeks && _pcZegtThuis == true ? Verbindingsweg.thuis : w;
+  }
+
+  /// Wat de pc het laatst zei: zit dit toestel op zijn thuisnetwerk (`opHetThuisnet` in `/api/config`)?
+  /// Null = (nog) niet gevraagd, of de pc is ouder.
+  bool? _pcZegtThuis;
+
+  Future<void> _vraagOfThuis() async {
+    final c = library.remote;
+    if (c == null) return;
+    try {
+      _zetThuis((await c.config())['opHetThuisnet']);
+    } catch (_) {/* dan blijft het zoals het was */}
+  }
+
+  void _zetThuis(String? antwoord) {
+    final nieuw = antwoord == null ? null : antwoord == 'ja';
+    if (nieuw == _pcZegtThuis) return;
+    _pcZegtThuis = nieuw;
+    _log('de pc zegt: ${nieuw == null ? "weet niet" : nieuw ? "op het thuisnetwerk" : "niet op het thuisnetwerk"}');
+    notifyListeners();
+  }
   int _verbondenTeller = 0;
 
   /// Er was een tijd zonder pc sinds de laatste verbinding. Apart onthouden, want een netwerkwissel
@@ -347,6 +374,10 @@ class ClientSession extends ChangeNotifier {
     }
     if (oud.zelfde(nieuw)) return;
     _log('stand: $nieuw');
+    // Langs de eigen deur verbonden: vragen of dit toestel toch thuis zit (zie [wegVoorStroom]).
+    if (nieuw.soort == Verbindingssoort.verbonden && nieuw.weg == Verbindingsweg.rechtstreeks) {
+      unawaited(_vraagOfThuis());
+    }
     notifyListeners();
   }
 
@@ -796,6 +827,7 @@ class ClientSession extends ChangeNotifier {
     // **Niet meer afgewacht.** Ze zijn voor het opzoeken van platen, niet voor de catalogus, en hier
     // stond `await`: een pc die niet antwoordde hield zo de hele start dertig seconden op.
     final sleutels = client.config().then((shared) {
+      _zetThuis(shared['opHetThuisnet']);
       final discogs = shared['discogsToken'] ?? '';
       final lastfm = shared['lastfmKey'] ?? '';
       final audiodb = shared['audiodbKey'] ?? '';

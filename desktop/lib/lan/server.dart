@@ -2173,6 +2173,11 @@ class LanServer {
   ///
   /// Sent on every connect rather than once at pairing, so changing a token here reaches the
   /// devices by itself instead of leaving them on a key that stopped working.
+  bool _vanThuis(HttpRequest req) {
+    final bron = req.connectionInfo?.remoteAddress;
+    return bron != null && bronIsThuis(bron, buitenAdres?.call()?.host);
+  }
+
   Future<void> _config(HttpRequest req) async {
     final config = settings;
     if (config == null) return _json(req.response, const {});
@@ -2182,6 +2187,9 @@ class LanServer {
       // Zodat ook de telefoon bij TheAudioDB de volle tracklijst krijgt — "Uitgave kiezen" en
       // "Metadata corrigeren" vragen daar zelf.
       'audiodbKey': config.audiodbKey,
+      // Zit dit toestel thuis, ook als het via de eigen deur binnenkomt? Voor de streamkwaliteit — zie
+      // [bronIsThuis] en `ClientSession.wegVoorStroom`.
+      'opHetThuisnet': _vanThuis(req) ? 'ja' : 'nee',
     });
   }
 
