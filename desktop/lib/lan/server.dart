@@ -47,6 +47,7 @@ import 'tokens.dart';
 import 'transcode.dart';
 import 'upnp.dart';
 import '../artwork.dart';
+import '../discogs.dart' show DiscogsArtwork, DiscogsService, ReleaseArt, kunstNaarJson, persingUitHerkomst;
 import '../aanbevolen.dart';
 import '../vertaler.dart';
 
@@ -80,6 +81,7 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/config', '/api/radio', '/api/jobs', '/api/kwaliteit', '/api/nieuw', '/api/corrections', '/api/move/plan',
     '/api/move/apply',
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
+    '/api/releaseart',
   };
   const voorvoegsels = ['/stream/', '/groei/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
   if (exact.contains(pad) || voorvoegsels.any(pad.startsWith)) return null;
@@ -578,6 +580,8 @@ class LanServer {
         return _soulseekDownloadAlbum(req);
       case '/api/soulseek/zoek-beter':
         return _soulseekZoekBeter(req);
+      case '/api/releaseart':
+        return _releaseArt(req);
       case '/api/jobs':
         return _json(res, {'jobs': jobsSnapshot()});
       case '/api/jobs/cancel':
@@ -1962,6 +1966,55 @@ class LanServer {
         .zoekBeterVoor(nummers, album: album, gezag: library.tagsVoorVervanger)
         .timeout(const Duration(seconds: 25), onTimeout: () => -1);
     return _json(req.response, {'begonnen': n});
+  }
+
+  /// De scans van een album zoals deze pc ze al heeft — voor een toestel, zodat de cd en de achterkant er
+  /// meteen staan in plaats van na de hele keten (zie `DiscogsArtwork.vanDePc`). Op het id van het album: de
+  /// pc kent zijn feiten (de uitgave), zijn vaste persing en de rollen, en zoekt dus in de juiste map — onder
+  /// de sleutel van de warmer en de albumpagina, en anders onder die van Nu speelt. Grote scans gaan
+  /// verkleind (1600 px), want ze reizen ook over mobiele data. 404 als er niets ligt.
+  Future<void> _releaseArt(HttpRequest req) async {
+    final config = settings;
+    final al = catalog.album(req.uri.queryParameters['albumId'] ?? '');
+    if (config == null || al == null) {
+      req.response.statusCode = HttpStatus.notFound;
+      return req.response.close();
+    }
+    final dienst = DiscogsService(config);
+    final feiten = library.facts.get(library.uidOf(al));
+    final persing = persingUitHerkomst(al.resolvedFrom);
+    final rollen = library.albumArtRoles(al.artist, al.title);
+    final pins = library.pinnedRelease(al);
+    final mbid = library.pinnedMbid(al);
+    final sleutels = <({int tracks, int? pinned, String? mbid})>{
+      (tracks: feiten?.tracklist.length ?? al.tracks.length, pinned: pins, mbid: mbid ?? feiten?.mbid),
+      (tracks: al.tracks.length, pinned: pins ?? persing.release, mbid: mbid ?? persing.mbid ?? feiten?.mbid),
+      (tracks: al.tracks.length, pinned: pins, mbid: mbid),
+    };
+    ReleaseArt? art;
+    var klaar = false;
+    for (final s in sleutels) {
+      final a = await dienst.cachedReleaseArt(al.artist, al.title,
+          expectedTracks: s.tracks, pinned: s.pinned, pinnedMbid: s.mbid, roles: rollen);
+      if (a == null || (a.back == null && a.disc == null)) continue;
+      art = a;
+      klaar = await dienst.hasReleaseArt(al.artist, al.title,
+          expectedTracks: s.tracks, pinned: s.pinned, pinnedMbid: s.mbid, roles: rollen);
+      break;
+    }
+    if (art == null) {
+      req.response.statusCode = HttpStatus.notFound;
+      return req.response.close();
+    }
+    Future<Uint8List?> klein(Uint8List? b) async =>
+        b == null || b.length <= 1536 * 1024 ? b : (await verkleindeHoesBuitenDeTekendraad(b, 1600) ?? b);
+    final reis = ReleaseArt(
+        front: await klein(art.front),
+        back: await klein(art.back),
+        disc: await klein(art.disc),
+        bron: art.bron,
+        formaat: art.formaat);
+    return _json(req.response, kunstNaarJson(reis, klaar: klaar));
   }
 
   /// A whole album at once, asked for by a paired device.

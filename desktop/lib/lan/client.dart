@@ -394,6 +394,15 @@ class RemoteClient {
   ///
   /// The first ask for a record the PC has not looked at yet takes as long as it always did; every
   /// ask after that, from any device, is instant.
+  /// De scans van een album zoals de pc ze heeft (`/api/releaseart`), als JSON — zie `kunstUitJson` in
+  /// discogs.dart. Null als de pc ze niet heeft of het niet kent.
+  Future<Map<String, dynamic>?> releaseArtJson(String albumId) async {
+    final res = await _get('/api/releaseart', query: {'albumId': albumId});
+    if (res.statusCode != 200) return null;
+    final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+    return decoded is Map<String, dynamic> ? decoded : null;
+  }
+
   Future<AlbumFacts?> albumFacts(String albumId, {String? etag, bool force = false}) async {
     // Through [query], never as a string on the path: _api replaces the whole path, so a `?` in
     // there is escaped INTO it and the server sees a route it has never heard of.

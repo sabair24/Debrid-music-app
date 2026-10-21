@@ -947,6 +947,16 @@ Future<void> main() async {
     session.opMobiel = () => wacht.opMobiel;
     // De streamkwaliteit volgt ook de weg naar de pc: niet thuis = onderweg (netsoort.dart, 21-10-2026).
     netStore.wegNu = () => session.wegVoorStroom ?? wegUitNaam(settings.laatsteWeg);
+    // De cd en de achterkant eerst van de pc: die heeft ze al (Saber, 21-10-2026, Azizam) — zie
+    // [DiscogsService.vanDePc]. Op het id van het album, zodat de pc in zijn eigen, juiste map kijkt.
+    DiscogsArtwork.vanDePc = (artist, album) async {
+      final c = library.remote;
+      if (c == null) return null;
+      final al = library.albums.where((a) => a.artist == artist && a.title == album).firstOrNull;
+      final id = al == null ? '' : library.uidOf(al);
+      if (id.isEmpty) return null;
+      return kunstUitJson(await c.releaseArtJson(id));
+    };
     // En die weg onthouden over herstarts heen: bij een koude start hervat de speler het laatste nummer
     // vóór de verbinding er is (Perfect en Black Velvet als origineel op de wifi van de kliniek, 21-10-2026).
     session.addListener(() {

@@ -117,7 +117,12 @@ Future<int> snoeiMap(Directory map, {required int maxBytes, bool perMap = false}
 const cacheGrenzen = <String, int>{
   // Alle uitgaves die een albumpagina ooit liet zien, niet alleen de gekozen. Verreweg de grootste,
   // en het enige dat echt losstaat van hoeveel muziek je hebt.
-  'releaseart': 300 * 1024 * 1024,
+  //
+  // 3 GB sinds 21-10-2026: met 300 MB had de pc de scans van 339 van de 811 albums, de rest was al weg —
+  // en een toestel dat de cd van de pc vraagt (`DiscogsArtwork.vanDePc`) kreeg dan niets. Gemeten: een
+  // album kost ~1,1 MB (voorkant, achterkant, cd), de hele bibliotheek dus ~0,9 GB; de rest is ruimte voor
+  // de uitgaves die je in de galerij bekijkt. Op deze pc is er 1,3 TB vrij.
+  'releaseart': 3 * 1024 * 1024 * 1024,
   // Omgezette kopieën voor de Sonos: wegwerpwerk dat zichzelf in een seconde of twee terugmaakt.
   // Er stond al een grens van 24 bestanden, maar één omgezette 24/48 is tientallen MB — dus 24
   // stuks kan 1 GB zijn. Dit is de tweede, echte grens.
