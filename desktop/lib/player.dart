@@ -296,6 +296,19 @@ Wachtrij voegInWachtrij(Wachtrij w, List<Track> nieuw, {required bool hierna}) {
   return (origineel: origineel, volgorde: volgorde, index: w.index);
 }
 
+/// [nieuw] erbij zoals [voegInWachtrij], maar wat er al KOMT (na het spelende nummer) verhuist in plaats van
+/// er twee keer te staan (Saber, 21-10-2026: "Verplaatsen"). Wat al klonk ("Eerder gespeeld") blijft staan,
+/// en het spelende nummer ook: dat is geschiedenis, geen dubbel.
+Wachtrij voegInWachtrijVerplaatsend(Wachtrij w, List<Track> nieuw, {required bool hierna}) {
+  if (nieuw.isEmpty) return w;
+  final paden = {for (final t in nieuw) t.path};
+  var v = w;
+  for (var i = v.volgorde.length - 1; i > v.index; i--) {
+    if (paden.contains(v.volgorde[i].path)) v = haalUitWachtrijLijst(v, i);
+  }
+  return voegInWachtrij(v, nieuw, hierna: hierna);
+}
+
 /// Het nummer op [plek] eruit. Raakt geen bestand aan.
 ///
 /// Het lopende nummer kan er niet uit: dat is geen "deze hoef ik straks niet" maar "stop" of
@@ -2848,14 +2861,72 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   void zetAchteraan(List<Track> nieuw) => _voegIn(nieuw, hierna: false);
 
   void _voegIn(List<Track> nieuw, {required bool hierna}) {
-    if (nieuw.isEmpty || radioMode) return;
+    if (nieuw.isEmpty) return;
+    if (radioMode) {
+      _voegInRadio(nieuw, hierna: hierna);
+      return;
+    }
     // Niets om achter te zetten: dan is dit gewoon "speel dit". Anders zou de eerste klik op
     // "toevoegen aan de wachtrij" bij een stille app niets hoorbaars doen.
     if (_order.isEmpty) {
       playQueue(nieuw, 0);
       return;
     }
-    _pas(voegInWachtrij(_nu, nieuw, hierna: hierna));
+    _pas(voegInWachtrijVerplaatsend(_nu, nieuw, hierna: hierna));
+  }
+
+  /// In de lopende radio: achter het spelende nummer, of achteraan — de radio vult daarna gewoon verder aan
+  /// (Saber, 21-10-2026: "Hetzelfde menu, ook in de radio"). Wat al komt en hetzelfde bestand is, verhuist.
+  /// De radio kent deze regels niet als zijn plekken (`_plekVan` in radio.dart) en laat ze dus staan.
+  void _voegInRadio(List<Track> nieuw, {required bool hierna}) {
+    final paden = {for (final t in nieuw) t.path};
+    for (var i = _radio.length - 1; i > _radioIndex; i--) {
+      if (paden.contains(_radio[i].local?.path)) _radio.removeAt(i);
+    }
+    final items = [for (final t in nieuw) RadioItem(artist: t.artist, title: t.title, local: t)];
+    final plek = hierna ? (_radioIndex + 1).clamp(0, _radio.length) : _radio.length;
+    _radio.insertAll(plek, items);
+    if (_radioDroog || _wilVerder) {
+      // Stond de radio droog, dan meteen het eerste van wat erbij kwam — zoals [voegToeAanRadio].
+      _radioDroog = false;
+      _wilVerder = false;
+      _radioIndex = plek;
+      unawaited(_openRadioCurrent());
+      return;
+    }
+    notifyListeners();
+  }
+
+  /// "Nu spelen, rest laten staan" (Roon "Play Now"): [t] klinkt meteen, en wat er daarna in de wachtrij
+  /// stond, blijft erachter staan. Het nummer dat speelde, gaat naar "Eerder gespeeld". In een radio net zo.
+  Future<void> speelNuMetRest(Track t) async {
+    if (radioMode) {
+      final doel = _radioIndex + 1;
+      _voegInRadio([t], hierna: true);
+      if (_radioIndex != doel) await springInRadio(doel);
+      return;
+    }
+    if (_order.isEmpty || current == null) return playQueue([t], 0);
+    _pas(voegInWachtrijVerplaatsend(_nu, [t], hierna: true));
+    await springNaar(_index + 1);
+  }
+
+  /// Naar het nummer op [plek] in de wachtrij — ook een dat al klonk — ZONDER opnieuw te schudden.
+  ///
+  /// **Waarom (Saber, 21-10-2026).** Een tik in de wachtrij liep langs [playQueue], en die bouwt de
+  /// speelvolgorde opnieuw: met shuffle aan werd alles opnieuw door elkaar gehaald en was "Eerder gespeeld"
+  /// weg. "een liedje van in de wachtrij die al gespeeld heeft weer laten afspelen als ik die selecteer".
+  /// Nu blijft de volgorde staan en gaat het daarna verder waar je in de rij zat.
+  Future<void> springNaar(int plek) async {
+    if (radioMode) return springInRadio(plek);
+    if (plek < 0 || plek >= _order.length) return;
+    keuzes++;
+    if (_bijSpeaker != null && await _handedToSpeaker(List.of(_order), plek, currentCover)) return;
+    _index = plek;
+    resumedPaused = false;
+    await _openCurrent();
+    unawaited(_saveQueue());
+    notifyListeners();
   }
 
   /// Haal het nummer op [plek] in de speelvolgorde uit de wachtrij. Raakt geen bestand aan.

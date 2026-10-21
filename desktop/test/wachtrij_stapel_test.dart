@@ -176,8 +176,8 @@ void main() {
     expect(main.substring(tv - 400, tv), contains('if (isTv && t != null) ...['));
     expect(main.substring(tv, tv + 400), contains('_metStapelKeuze(_nummerMenu(knopContext, t))'));
     expect(main, contains('spiegel: !dwars && !stapelAan,'));
-    expect(main, contains('p.radioMode ? p.springInRadio(p.radioIndex + n) : p.playQueue(p.queueTracks, p.currentIndex + n)'),
-        reason: 'zoals een tik in de wachtrijlijst');
+    expect(main, contains('p.springNaar(p.currentIndex + n),'),
+        reason: 'zoals een tik in de wachtrijlijst: springen, niet opnieuw schudden (21-10-2026)');
     expect(main, contains('final hoesMaat = stapelAan ? hoesMaatVol / (1 + kStapelBoven) : hoesMaatVol;'));
   });
 }
