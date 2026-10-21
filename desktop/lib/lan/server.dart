@@ -83,7 +83,7 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/config', '/api/radio', '/api/jobs', '/api/kwaliteit', '/api/nieuw', '/api/corrections', '/api/move/plan',
     '/api/move/apply',
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
-    '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd',
+    '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd', '/api/zone/transfer',
     '/api/releaseart',
   };
   const voorvoegsels = ['/stream/', '/groei/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
@@ -396,6 +396,90 @@ class LanServer {
     return (status: 409, antwoord: {'error': 'Onbekende zone.'});
   }
 
+  /// De muziek van zone [van] naar zone [naar] verplaatsen (Saber, 21-10-2026: "overdragen naar elke
+  /// zone, de oude zone pauzeert"): de wachtrij, de plek in het nummer, shuffle en herhalen, of de radio.
+  ///
+  /// - Naar een toestel (ook de pc): dat neemt over zoals bij "Hier verder" (`neemOver`); een toestel dat
+  ///   de bron was, ziet zichzelf in de melding en pauzeert vanzelf.
+  /// - Naar een speaker: de pc start hem op hetzelfde nummer en spoelt naar de plek.
+  /// - Een speaker of een toestel dat een speaker de muziek gaf, pauzeert de pc zelf zodra het doel
+  ///   speelt (hoogstens tien seconden wachten). Lukt het doel niet, dan blijft de bron spelen.
+  Future<({int status, Map<String, dynamic> antwoord})> zoneOverdracht(String van, String naar,
+      {required String wie}) async {
+    if (van.isEmpty || naar.isEmpty || van == naar) {
+      return (status: 400, antwoord: {'error': 'Kies twee verschillende zones.'});
+    }
+    Map<String, dynamic>? bron;
+    if (van.startsWith('spk:')) {
+      final id = van.substring(4);
+      final stand = cast.laatsteStanden.where((s) => s.id == id).firstOrNull;
+      final rij = cast.rijVan(id);
+      if (stand != null && rij != null) bron = speakerAlsStand(stand, rij.rij, nuMs: zones.nu);
+    } else {
+      bron = zones.standVan(van)?.toJson();
+    }
+    final trackId = '${bron?['trackId'] ?? ''}';
+    if (bron == null || trackId.isEmpty) return (status: 409, antwoord: {'error': 'Op die zone speelt niets.'});
+    _zoneLog.line('overdracht $van → $naar  (van $wie)');
+
+    if (naar.startsWith('spk:')) {
+      final speaker = naar.substring(4);
+      final ids = [for (final x in (bron['queue'] as List? ?? const [])) '$x'];
+      if (ids.isEmpty) ids.add(trackId);
+      final plek = ((bron['index'] as num?)?.toInt() ?? 0).clamp(0, ids.length - 1);
+      final positie = (bron['positionMs'] as num?)?.toInt() ?? 0;
+      try {
+        await cast.play(speaker, ids, plek, alsZone: true);
+      } catch (e) {
+        return (status: 409, antwoord: {'error': 'De speaker nam het niet aan: $e'});
+      }
+      // Pas spoelen als de speaker het nummer heeft: een Sonos negeert een Seek tijdens het laden.
+      if (positie > 3000) {
+        unawaited(Future<void>.delayed(const Duration(seconds: 3), () async {
+          try {
+            await cast.control(speaker, 'seek', value: positie ~/ 1000 + 3);
+          } catch (_) {}
+        }));
+      }
+    } else {
+      final r = await zoneOpdracht({'zone': naar, 'cmd': 'neemOver', 'stand': bron, 'id': 'over-${zones.nu}'},
+          van: wie);
+      if (r.status != 200) return r;
+    }
+    // Een toestel als bron pauzeert vanzelf als een toestel overneemt (het ziet zichzelf in de melding).
+    // Een speaker niet, en een toestel ook niet als een SPEAKER overnam: die pauzeert de pc zelf.
+    if (van.startsWith('spk:') || naar.startsWith('spk:')) unawaited(_pauzeerAlsDoelSpeelt(van, naar, trackId));
+    return (status: 200, antwoord: {'bezorgd': 1});
+  }
+
+  Future<void> _pauzeerAlsDoelSpeelt(String van, String naar, String trackId) async {
+    for (var i = 0; i < 20; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      final doel = zones.lijst().where((z) => z.id == naar).firstOrNull;
+      if (doel != null && doel.playing && doel.trackId == trackId) {
+        await zoneOpdracht({'zone': van, 'cmd': 'pause', 'id': 'over-pauze-${zones.nu}'}, van: 'overdracht');
+        return;
+      }
+    }
+    _zoneLog.line('overdracht $van → $naar: het doel speelt na 10 s niet — de bron blijft spelen');
+  }
+
+  Future<void> _zoneOver(HttpRequest req) async {
+    if (req.method != 'POST') {
+      req.response.statusCode = HttpStatus.methodNotAllowed;
+      return req.response.close();
+    }
+    final nee = _quotum(req, kQuotumBediening);
+    if (nee != null) return _teVeel(req, nee);
+    final body = await _body(req);
+    if (body == null) return;
+    final kop = req.headers.value(HttpHeaders.authorizationHeader) ?? '';
+    final sleutel = kop.startsWith('Bearer ') ? kop.substring(7).trim() : '';
+    final wie = grants.grantFor(sleutel)?.deviceName ?? 'een toestel';
+    final r = await zoneOverdracht('${body['van'] ?? ''}', '${body['naar'] ?? ''}', wie: wie);
+    return _json(req.response, r.antwoord, status: r.status);
+  }
+
   Future<void> _zoneCmd(HttpRequest req) async {
     if (req.method != 'POST') {
       req.response.statusCode = HttpStatus.methodNotAllowed;
@@ -669,6 +753,8 @@ class LanServer {
         return _zoneStand(req);
       case '/api/zone/cmd':
         return _zoneCmd(req);
+      case '/api/zone/transfer':
+        return _zoneOver(req);
       case '/api/cast/devices':
         return _json(res, await cast.devices());
       case '/api/cast/play':

@@ -529,6 +529,24 @@ class ZoneRegister {
   return (van: van, rij: rij.sublist(van, tot));
 }
 
+/// Wat een speaker speelt als melding zoals een toestel ze geeft (`PlaybackProgress`): om de muziek van
+/// een speaker naar een andere zone te verplaatsen. [nuMs] op de klok van de pc.
+Map<String, dynamic> speakerAlsStand(SpeakerStand s, List<String> rij, {required int nuMs}) {
+  final pos = s.speelt ? s.positieMs + (nuMs - s.opMs).clamp(0, 6 * 60 * 60 * 1000) : s.positieMs;
+  return {
+    'trackId': s.trackId ?? '',
+    'positionMs': s.duurMs > 0 && pos > s.duurMs ? s.duurMs : pos,
+    'queue': rij,
+    'index': s.index,
+    'playing': s.speelt,
+    'updatedAt': nuMs,
+    'deviceId': 'spk:${s.id}',
+    'deviceName': s.naam,
+    'shuffle': false,
+    'repeat': 'off',
+  };
+}
+
 /// Waar [trackId] nu staat, met [plek] als voorkeur: daar als het er nog staat, anders het dichtstbij
 /// gelegen exemplaar (de rij kan intussen verschoven zijn: een nummer begon, iemand anders voegde iets
 /// toe). -1 als het er niet meer in staat.

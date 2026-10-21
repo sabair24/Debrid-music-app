@@ -348,6 +348,19 @@ void main() {
       expect(s.log, ['spring 2', 'weg 3', 'verplaats 1→3']);
       expect(await u.voerUit({'id': '4', 'cmd': 'remove', 'plek': 1, 'trackId': 'weg'}), isNotNull);
     });
+
+    test('overnemen: de stand gaat naar "Hier verder"', () async {
+      final s = _NepSpeler();
+      final genomen = <Map<String, dynamic>>[];
+      final u = ZoneUitvoerder(speler: s, rij: s, nummer: _t, neemOver: (stand) async {
+        genomen.add(stand);
+        return true;
+      });
+      expect(await u.voerUit({'id': '1', 'cmd': 'neemOver', 'stand': {'trackId': 'b'}}), isNull);
+      expect(genomen.single['trackId'], 'b');
+      final zonder = ZoneUitvoerder(speler: s, rij: s, nummer: _t);
+      expect(await zonder.voerUit({'id': '2', 'cmd': 'neemOver', 'stand': {'trackId': 'b'}}), isNotNull);
+    });
   });
 
   group('aangesloten', () {
@@ -371,7 +384,9 @@ void main() {
           reason: 'het wachtrijpaneel toont de wachtrij van de gekozen zone');
       expect(main, contains('final Speelbron p = _misschien<GekozenZone>(context)?.opAfstand ?? context.read<PlayerStore>();'),
           reason: 'een tik in die wachtrij springt daar');
-      expect(main, contains('idVan: (t) => library.gedeeldId(t.path),\n    radio:'));
+      expect(main, contains('idVan: (t) => library.gedeeldId(t.path),\n    // Een andere zone verplaatst'));
+      expect(main, contains('neemOver: verder.neemOverUit,'), reason: 'overdragen naar dit toestel (stap 2.5)');
+      expect(main, contains("key: ValueKey('zone-naar-\${zone.id}'),"), reason: '"Verplaats naar …" in het zoneblad');
     });
 
     test('een tik, een menu, een album en een radio gaan naar de gekozen zone', () {
@@ -442,6 +457,61 @@ void main() {
         c.ask('/api/zone/cmd', {'zone': 'dev:ipad-1', 'cmd': 'play'}),
         throwsA(isA<RemoteException>().having((e) => e.statusCode, 'status', 409)),
       );
+    });
+
+    test('overdragen (stap 2.5): het doel krijgt de hele stand van de bron; niets op de bron = 409', () async {
+      // De iPad speelt iets (zijn melding staat op de pc); de gsm heeft een lijn open.
+      await c.ask('/api/state/ops', {
+        'ops': [
+          {
+            'type': 'progress',
+            'trackId': 't2',
+            'positionMs': 61000,
+            'queue': ['t1', 't2', 't3'],
+            'index': 1,
+            'playing': true,
+            'shuffle': true,
+            'repeat': 'all',
+            'at': DateTime.now().millisecondsSinceEpoch,
+          }
+        ],
+        'deviceId': 'ipad-1',
+        'deviceName': 'iPad',
+      });
+      final events = <SseEvent>[];
+      final sub = c.zoneStroom(toestel: 'gsm-1', naam: 'Galaxy').listen(events.add);
+      for (var i = 0; i < 50 && server.zones.bereikbareToestellen().isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect((await c.ask('/api/zone/transfer', {'van': 'dev:ipad-1', 'naar': 'dev:gsm-1'}))['bezorgd'], 1);
+      for (var i = 0; i < 50 && !events.any((e) => e.event == 'cmd'); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      final cmd = jsonDecode(events.firstWhere((e) => e.event == 'cmd').data) as Map<String, dynamic>;
+      expect(cmd['cmd'], 'neemOver');
+      final stand = (cmd['stand'] as Map).cast<String, dynamic>();
+      expect(stand['queue'], ['t1', 't2', 't3']);
+      expect(stand['index'], 1);
+      expect(stand['shuffle'], isTrue);
+      expect(stand['deviceId'], 'ipad-1', reason: 'zodat de iPad zichzelf ziet en pauzeert');
+      await sub.cancel();
+
+      await expectLater(
+        c.ask('/api/zone/transfer', {'van': 'dev:gsm-1', 'naar': 'dev:ipad-1'}),
+        throwsA(isA<RemoteException>().having((e) => e.statusCode, 'status', 409)),
+        reason: 'op de gsm speelt niets',
+      );
+    });
+
+    test('de stand van een speaker als melding, met de plek van nu', () {
+      final s = speakerAlsStand(
+        (id: 'uuid:amp', naam: 'Amp', trackId: 'x', index: 2, lengte: 5, speelt: true, positieMs: 10000, duurMs: 200000, opMs: 1000, volume: 30),
+        ['a', 'b', 'x', 'c', 'd'],
+        nuMs: 6000,
+      );
+      expect(s['positionMs'], 15000);
+      expect(s['queue'], ['a', 'b', 'x', 'c', 'd']);
+      expect(s['deviceId'], 'spk:uuid:amp');
     });
 
     test('een opdracht voor de pc zelf gaat naar zijn eigen speler', () async {

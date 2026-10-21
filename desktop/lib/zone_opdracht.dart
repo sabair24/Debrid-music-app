@@ -37,9 +37,14 @@ class ZoneUitvoerder {
     required this.nummer,
     this.idVan,
     this.radio,
+    this.neemOver,
     this.naUitvoeren,
     this.log,
   });
+
+  /// De muziek van een andere zone hier verder spelen ([stand] = haar melding, zie `/api/zone/transfer`).
+  /// True als het lukte. Zie `VerderLuisteren.neemOverUit`.
+  final Future<bool> Function(Map<String, dynamic> stand)? neemOver;
 
   /// Het id van de pc voor een nummer hier: om bij springen, weghalen en verplaatsen het juiste nummer
   /// te vinden als de wachtrij intussen verschoof. Null: alleen op de plek.
@@ -135,6 +140,10 @@ class ZoneUitvoerder {
           } else {
             rij.zetAchteraan(ts);
           }
+        case 'neemOver':
+          final stand = (op['stand'] as Map?)?.cast<String, dynamic>();
+          final f = neemOver;
+          if (stand == null || f == null || !await f(stand)) fout = 'Overnemen lukte niet';
         case 'radio':
           final artiest = '${op['artiest'] ?? ''}'.trim();
           final r = radio;
