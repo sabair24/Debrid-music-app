@@ -385,6 +385,52 @@ Map<String, dynamic>? kiesOrigineleUitgave(List<Map<String, dynamic>> albums, St
   return beste;
 }
 
+/// Het Deezer-nummer van [titel] van [artiest] op het album [album], uit een zoekuitslag op nummers — of
+/// null. Dezelfde zeef als [albumsVanNummer], plus de albumtitel.
+int? nummerOpAlbum(List<dynamic> data, String artiest, String titel, String album) {
+  final wil = normKey(titel), wilKaal = normKey(zonderGastTitel(titel)), wilAlbum = normKey(album);
+  for (final d in data) {
+    if (d is! Map) continue;
+    final art = d['artist'];
+    if (!_zelfdeArtiestAls('${art is Map ? art['name'] ?? '' : ''}', artiest)) continue;
+    final t = '${d['title'] ?? ''}';
+    if (normKey(t) != wil && normKey(zonderGastTitel(t)) != wilKaal) continue;
+    final alb = d['album'];
+    if (alb is! Map || normKey('${alb['title'] ?? ''}') != wilAlbum) continue;
+    final id = (d['id'] as num?)?.toInt();
+    if (id != null) return id;
+  }
+  return null;
+}
+
+/// De plek van een nummer op een uitgave, zoals Deezer het van `/track/{id}` geeft: het jaar van het
+/// album, het nummer en de schijf (0: onbekend). Zie [deezerPlekOpAlbum].
+({int? jaar, int nummer, int schijf}) plekUitDeezerNummer(Map<String, dynamic> t) {
+  final alb = t['album'];
+  final datum = '${(alb is Map ? alb['release_date'] : null) ?? t['release_date'] ?? ''}';
+  final jaar = datum.length >= 4 ? int.tryParse(datum.substring(0, 4)) : null;
+  return (
+    jaar: jaar == null || jaar < 1900 ? null : jaar,
+    nummer: (t['track_position'] as num?)?.toInt() ?? 0,
+    schijf: (t['disk_number'] as num?)?.toInt() ?? 0,
+  );
+}
+
+/// Waar [titel] van [artiest] op de uitgave [album] staat, volgens Deezer — of null.
+///
+/// Voor ▶, dat het bestand met het album tagt waarop je het nummer zag (`DownloadManager.gezagVoorHaal`):
+/// de nummering en het jaar in een verzamelrip horen bij een ándere uitgave. Gemeten op 21-10-2026: Jordy —
+/// Dur Dur D'être Bébé uit de Foute CD van Q-music stond na ▶ als nummer 11 van 2012 op Pochette Surprise;
+/// Deezer zegt nummer 1, schijf 1, 1992.
+Future<({int? jaar, int nummer, int schijf})?> deezerPlekOpAlbum(String artiest, String titel, String album) async {
+  final j = await DeezerBaan.haal(
+      'https://api.deezer.com/search?q=${Uri.encodeComponent('$artiest $titel')}&limit=15');
+  final id = nummerOpAlbum((j?['data'] as List?) ?? const [], artiest, titel, album);
+  if (id == null) return null;
+  final t = await DeezerBaan.haal('https://api.deezer.com/track/$id');
+  return t == null ? null : plekUitDeezerNummer(t);
+}
+
 /// Hoeveel vragen met voorrang er binnen [kAudioDbSalvoVenster] zonder afstand mogen.
 ///
 /// De drie seconden van de gewone rij zijn geijkt op een lange veeg: zesenvijftig albums aan 1,2 s gaven

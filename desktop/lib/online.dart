@@ -3968,6 +3968,43 @@ class DownloadManager extends ChangeNotifier {
     );
   }
 
+  /// Wat een radiohaal of ▶ na het landen in het bestand schrijft: [gezag], als dat gezaghebbend is.
+  ///
+  /// Heeft het gezag een album en had het bestand een ánder ([eigenAlbum]: een verzamelrip), dan horen zijn
+  /// nummer, schijf en jaar bij die andere uitgave: weg — of, als Deezer het weet ([plek]), die van deze
+  /// uitgave. Jordy uit de Foute CD stond zo als nummer 11 van 2012 op Pochette Surprise (1992).
+  @visibleForTesting
+  static Map<String, String?> veldenNaHaal(TrackTags gezag,
+      {String? eigenAlbum, ({int? jaar, int nummer, int schijf})? plek}) {
+    final velden = <String, String?>{};
+    if (gezag.album.isNotEmpty && normKey(eigenAlbum ?? '') != normKey(gezag.album)) {
+      for (final k in const ['TRACKNUMBER', 'TRACKTOTAL', 'TOTALTRACKS', 'DISCNUMBER', 'DISCTOTAL', 'TOTALDISCS', 'DATE']) {
+        velden[k] = null;
+      }
+      if (plek != null) {
+        if (plek.nummer > 0) velden['TRACKNUMBER'] = '${plek.nummer}';
+        if (plek.schijf > 0) velden['DISCNUMBER'] = '${plek.schijf}';
+        if (plek.jaar != null) velden['DATE'] = '${plek.jaar}';
+      }
+    }
+    if (gezag.isAuthoritative) velden.addAll(gezag.vorbisFields);
+    return velden;
+  }
+
+  /// [gezag] met het nummer en het jaar uit [plek] — voor de jacht op beter na ▶, die na het vervangen
+  /// opnieuw tagt ([_queueUpgrade]).
+  static TrackTags metPlek(TrackTags gezag, ({int? jaar, int nummer, int schijf})? plek) => plek == null
+      ? gezag
+      : TrackTags(
+          title: gezag.title,
+          artist: gezag.artist,
+          album: gezag.album,
+          albumArtist: gezag.albumArtist,
+          trackNo: plek.nummer > 0 ? plek.nummer : gezag.trackNo,
+          year: gezag.year ?? plek.jaar,
+          seconds: gezag.seconds,
+        );
+
   Future<String?> _haalVoorRadio(DownloadJob job, String artiest, String titel, int? seconden, int? jaar,
       {Groei? vroeg, bool zoekBeter = false, String? album}) async {
     final sleutel = _radioSleutel(artiest, titel);
@@ -4106,6 +4143,11 @@ class DownloadManager extends ChangeNotifier {
     }
 
     final gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);
+    // Waar het nummer op dat album staat: alvast opzoeken, terwijl er gezocht en gehaald wordt.
+    final plekF = gezag.album.isEmpty
+        ? null
+        : plekOpAlbum?.call(artiest, titel, gezag.album).then<({int? jaar, int nummer, int schijf})?>((p) => p,
+            onError: (Object _) => null);
     // Opbergen met de tags ZONDER jaar, en pas daarna de gezaghebbende schrijven: met een jaar geldt
     // alles wat op dezelfde plek ligt als dezelfde opname, zonder naar naam of versie te kijken, en dan
     // zou een andere opname van jou met dezelfde titel stil opzij gaan (review van 26-09-2026).
@@ -4261,8 +4303,14 @@ class DownloadManager extends ChangeNotifier {
           // Pas NA het landen, en dit ontbrak op de hele downloadweg: `rebuildAlbums` groepeert op de
           // tags ván het bestand, dus zonder dit vult je raster zich met de rommelalbums van de
           // uploader.
+          ({int? jaar, int nummer, int schijf})? plek;
           try {
-            await stampTags(File(uit.path), gezag);
+            plek = plekF == null
+                ? null
+                : await plekF.timeout(const Duration(seconds: 8), onTimeout: () => null);
+            final velden = veldenNaHaal(gezag,
+                eigenAlbum: gezag.album.isEmpty ? null : readTags(File(uit.path))?.album, plek: plek);
+            if (velden.isNotEmpty) await writeTagFields(File(uit.path), velden);
           } catch (_) {/* het bestand staat goed; een mislukte tagschrijf maakt het niet stuk */}
           // Zonder jaartal is het gezag niet gezaghebbend en schrijft [stampTags] niets. Heeft het
           // bestand zelf dan ook geen artiest of titel, dan staat het als "Onbekende artiest" met
@@ -4280,7 +4328,7 @@ class DownloadManager extends ChangeNotifier {
           geland = uit.path;
           if (zoekBeter) {
             unawaited(_zoekBeterNaHetLanden(job, f, uit.path, seconden,
-                gezag: gezag,
+                gezag: metPlek(gezag, plek),
                 plaatsing: plaatsing,
                 // De hele uitslag: bij een vroege start zocht de zoektocht intussen verder.
                 alle: () async => kandidatenUit(await uitslag() ?? tussenstand)));
@@ -4953,6 +5001,11 @@ class DownloadManager extends ChangeNotifier {
     }
     return res;
   }
+
+  /// Waar een nummer op een uitgave staat (jaar, nummer, schijf) — zie `deezerPlekOpAlbum` en
+  /// [veldenNaHaal]. Gezet bij het opstarten van de pc; null (een toets, een toestel): niet opzoeken.
+  static Future<({int? jaar, int nummer, int schijf})?> Function(String artiest, String titel, String album)?
+      plekOpAlbum;
 
   /// De versiecontrole van de pc — zie [keurOverdracht] en `versiecontrole.dart`. Gezet bij het opstarten
   /// van de pc; null (een toets, een toestel): niet controleren.
