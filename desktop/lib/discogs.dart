@@ -1629,6 +1629,19 @@ String? hoesHerkomst({String? artBron, String? pinnedMbid, int? pinned}) {
   return (release: null, mbid: null);
 }
 
+/// Is deze herkomst een DIGITALE voorkant — Deezer (`dz:`) of TheAudioDB (`tadb`) — en geen scan van een
+/// persing (`rel:`, `mb:`, `dg:`)? Zie `CoverEnricher.digitaleVoorkant`. Saber, 21-10-2026: "digitaal wint
+/// altijd" — een scan neemt nooit de plaats van een digitale voorkant in.
+bool isDigitaleHerkomst(String? herkomst) {
+  final h = (herkomst ?? '').trim();
+  return h.startsWith('dz:') || h == 'tadb' || h.startsWith('tadb:');
+}
+
+/// Vanaf deze maat (lange kant, in pixels) vraagt de keten Discogs niet meer om een scherpere cd of
+/// achterkant dan het archief al gaf. Discogs levert er zelden meer dan 600; zonder deze grens ging elke
+/// plaat zonder achterkant van TheAudioDB naar het Discogs-budget, dat met de nummerlijsten gedeeld wordt.
+const kScherpGenoeg = 1000;
+
 /// De grootste van twee beelden, in pixels; bij gelijke maat (of onleesbaar) [eerst].
 ///
 /// Voor de achterkant: het archief of Discogs eerst, TheAudioDB daarna — maar "hoogste resolutie" (Saber,
@@ -1706,9 +1719,19 @@ extension DiscogsArtwork on DiscogsService {
     // Only a FINISHED entry short-circuits. The warmer may have left images here from the free
     // sources without the marker; those are worth having on screen but they are not the last word, and
     // serving them as the answer would mean the back and the disc never get looked for.
+    // De VOORKANT is de digitale hoes (Saber, 21-10-2026: "digitaal wint altijd", "Deezer 1200 eerst"):
+    // apart gezocht, meteen en naast de hele keten, en over elk antwoord heen gelegd — ook over een
+    // afgerond antwoord uit de cache, waar nog een scan als voorkant in staat. Alleen een voorkant die je
+    // zelf aanwees gaat voor. Gemeten op 21-10-2026 (KATSEYE — BEAUTIFUL CHAOS op de gsm): de digitale
+    // hoes werd na 27 s vervangen door een scheve Discogs-foto van de fysieke hoes.
+    final digitaalF = (roles['front'] ?? '').isEmpty && artist.isNotEmpty && album.isNotEmpty
+        ? CoverEnricher(settings)
+            .digitaleVoorkant(artist, album, voorrang: !freeOnly)
+            .catchError((Object _) => null)
+        : null;
     final cached = await _readArt(dir);
     if (cached != null && await _afgerond(dir, cached)) {
-      return cached;
+      return _metDigitaal(cached, await digitaalF);
     }
 
     // One chain per album, however many widgets ask.
@@ -1747,17 +1770,41 @@ extension DiscogsArtwork on DiscogsService {
 
     final work =
         _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld)
+            .then((a) async => _metDigitaal(a, await digitaalF))
             .whenComplete(() {
       _artInFlight.remove(lane);
       _artTussen.remove(lane);
       trace?.call('  [kunst] whenComplete — uit de in-flight tabel');
     });
     _artInFlight[lane] = work;
+    // De digitale voorkant meteen naar wie wacht: Deezer antwoordt in tienden van een seconde, de keten
+    // doet er seconden over.
+    if (digitaalF != null) {
+      unawaited(digitaalF.then((d) {
+        trace?.call('  [kunst] digitale voorkant: ${d == null ? "niets" : d.bron}');
+        if (d != null && identical(_artInFlight[lane], work)) meld(ReleaseArt(front: d.bytes, bron: d.bron));
+      }));
+    }
     trace?.call('  [kunst] work aangemaakt en teruggegeven aan de aanroeper');
     return work;
   }
 
   static final _artInFlight = <String, Future<ReleaseArt?>>{};
+
+  /// [art] met de digitale voorkant [d] erin — en elke keer HETZELFDE object voor dezelfde twee, zie
+  /// [_gelezen]: een nieuw object laat Nu speelt flitsen.
+  static ReleaseArt? _metDigitaal(ReleaseArt? art, ({Uint8List bytes, String bron})? d) {
+    if (d == null) return art;
+    if (art == null) return _alleenDigitaal[d.bytes] ??= ReleaseArt(front: d.bytes, bron: d.bron);
+    if (identical(art.front, d.bytes)) return art;
+    final al = _digitaalOp[art];
+    if (al != null && identical(al.front, d.bytes)) return al;
+    return _digitaalOp[art] =
+        ReleaseArt(front: d.bytes, back: art.back, disc: art.disc, bron: d.bron, formaat: art.formaat);
+  }
+
+  static final _digitaalOp = Expando<ReleaseArt>('met digitale voorkant');
+  static final _alleenDigitaal = Expando<ReleaseArt>('alleen de digitale voorkant');
 
   /// Wie per lopende keten een tussenstand wil — zie [releaseArt].
   static final _artTussen = <String, List<void Function(ReleaseArt)>>{};
@@ -1810,7 +1857,10 @@ extension DiscogsArtwork on DiscogsService {
     // Anything found below fills only the roles the user did NOT assign.
     ReleaseArt said(ReleaseArt found) => ReleaseArt(
           front: saidFront ?? found.front,
-          back: saidBack ?? grootsteBeeld(found.back, tadb?.back),
+          // TheAudioDB eerst, ook voor de achterkant (Saber, 21-10-2026: "over het algemeen wil ik theaudioDB
+          // voor de hoezen, voorkant, cd en achterkant"); [found] is het vangnet — de scherpste van het
+          // archief en Discogs, zie hieronder.
+          back: saidBack ?? tadb?.back ?? found.back,
           disc: saidDisc ?? tadb?.disc ?? found.disc,
           // Heeft de gebruiker de voorkant zélf aangewezen, dan is die niet van deze persing en
           // hoort er geen persing bij te staan. De hoes is dan een keuze, geen vondst.
@@ -1827,9 +1877,18 @@ extension DiscogsArtwork on DiscogsService {
     /// finished nothing at all in five minutes, because the sixty-a-minute budget is shared with the
     /// tracklist sweep and its spacing triples when the budget runs low.
     ///
-    /// On what was FOUND, before [said]: a back from TheAudioDB is the fallback, not an answer.
+    /// Sinds 21-10-2026: wat TheAudioDB (of jijzelf) gaf is het antwoord. Voor wat daar ontbreekt is het
+    /// vangnet "de scherpste van MusicBrainz of Discogs" (Saber) — en dat kan pas als beide gevraagd zijn.
+    /// Behalve als het archief al een scan van [kScherpGenoeg] pixels gaf: dan wint Discogs het zelden, en
+    /// dat budget is schaars.
+    bool scherp(Uint8List? b) {
+      final m = b == null ? null : imageSize(b);
+      return m != null && (m.w > m.h ? m.w : m.h) >= kScherpGenoeg;
+    }
+
     bool enough(ReleaseArt found) =>
-        (saidBack ?? found.back) != null && (saidDisc ?? tadb?.disc ?? found.disc) != null;
+        (saidBack != null || tadb?.back != null || scherp(found.back)) &&
+        (saidDisc != null || tadb?.disc != null || scherp(found.disc));
 
     // A pinned MusicBrainz pressing is an exact answer: take its scans and no one else's.
     ReleaseArt? partial;
@@ -1846,7 +1905,7 @@ extension DiscogsArtwork on DiscogsService {
     // 30 s na de tik. Het zijn de twee verzoeken die de keten hieronder toch doet — alleen voor wie de hele
     // keten loopt (de opwarmer vraagt Discogs niets), en niet als je zelf een Discogs-persing aanwees: dan
     // beslist [edition].
-    final discogsVoorafF = !freeOnly && pinned == null && saidDisc == null && tadb.disc == null
+    final discogsVoorafF = !freeOnly && pinned == null && !enough(const ReleaseArt())
         ? _quickRelease(artist, album).catchError((Object _) => null)
         : null;
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
@@ -1872,7 +1931,7 @@ extension DiscogsArtwork on DiscogsService {
     // spent over two minutes waiting for a slot. Anything free that can answer first should.
     // (TheAudioDB was asked above, alongside the archive: see [tadb]. Its disc and back fill [said].)
     if (enough(partial ?? const ReleaseArt())) {
-      final art = said(partial!);
+      final art = said(partial ?? const ReleaseArt());
       await _writeArt(dir, art);
       return art;
     }
@@ -1981,20 +2040,26 @@ extension DiscogsArtwork on DiscogsService {
     // Not every pressing has its disc photographed, and a missing scan is a missing animation —
     // for a record the library demonstrably holds. So borrow one from another pressing of the SAME
     // master: it is the same disc art, just someone else's scanner.
-    disc ??= await _discFromAnotherPressing(artist, album, e.releaseId);
-    // Order of authority: what the user assigned, then what the archive STATES an image is, then
-    // what was inferred here from shape and pixels. Each only fills what the one above left open.
+    // Alleen als er nergens een cd is: dat kost Discogs nog twee verzoeken.
+    if (disc == null && caa?.disc == null && tadb.disc == null && saidDisc == null) {
+      disc = await _discFromAnotherPressing(artist, album, e.releaseId);
+    }
+    // Per rol de SCHERPSTE van het archief en Discogs — het vangnet voor wat TheAudioDB niet had (Saber,
+    // 21-10-2026: "ofwel musicbrainz of wel discogs te zien wie de beste hoogste resolutie heeft"). Bij
+    // gelijke maat het archief: dat zegt zelf wat een beeld is, hier is het afgeleid uit vorm en pixels.
+    // [said] legt er daarna TheAudioDB en wat je zelf aanwees overheen.
+    final voor = grootsteBeeld(caa?.front, at(guessed.front));
+    final voorVanArchief = voor != null && identical(voor, caa?.front);
     final art = said(ReleaseArt(
-      front: caa?.front ?? at(guessed.front),
-      back: caa?.back ?? at(guessed.back),
-      disc: caa?.disc ?? disc,
-      // Kwam de voorkant hier vandaan, dan is dít de persing waar hij van is — en dat is precies wat
-      // de bibliotheek nodig heeft om hem boven de hoes in de bestanden te zetten. Zonder dit veld
-      // wist alleen de albumpagina het, en zag je op Start nog de oude.
-      bron: caa?.front != null
+      front: voor,
+      back: grootsteBeeld(caa?.back, at(guessed.back)),
+      disc: grootsteBeeld(caa?.disc, disc),
+      // Van welke persing de voorkant is. De bibliotheek zet een scan boven de hoes in de bestanden, maar
+      // nooit boven een digitale voorkant — zie `LibraryStore.adoptAlbumCover`.
+      bron: voorVanArchief
           ? caa?.bron
-          : (at(guessed.front) != null && e.releaseId > 0 ? 'rel:${e.releaseId}' : null),
-      formaat: caa?.front != null ? caa?.formaat : (e.format.isEmpty ? null : e.format),
+          : (voor != null && e.releaseId > 0 ? 'rel:${e.releaseId}' : null),
+      formaat: voorVanArchief ? caa?.formaat : (e.format.isEmpty ? null : e.format),
     ));
     if (art.isEmpty) return null; // nothing found — don't cache a blank as the answer
     await _writeArt(dir, art);
@@ -2233,8 +2298,13 @@ extension DiscogsArtwork on DiscogsService {
     int? pinned,
     String? pinnedMbid,
     Map<String, String> roles = const {},
-  }) =>
-      _readArt(artMap(artist, album, expectedTracks, pinned, pinnedMbid, roles));
+  }) async {
+    final art = await _readArt(artMap(artist, album, expectedTracks, pinned, pinnedMbid, roles));
+    if ((roles['front'] ?? '').isNotEmpty || artist.isEmpty || album.isEmpty) return art;
+    // De digitale voorkant als hij al op schijf ligt — zie [releaseArt]. Geen netwerk: wie dit vraagt,
+    // wil meteen tekenen.
+    return _metDigitaal(art, await CoverEnricher(settings).digitaleVoorkant(artist, album, netwerk: false));
+  }
 
   /// Wat er al eens van schijf gelezen is, per map — en dan HETZELFDE object terug.
   ///

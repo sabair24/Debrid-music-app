@@ -25,6 +25,7 @@ import 'acoustid.dart';
 import 'album_facts.dart';
 import 'album_facts_resolver.dart';
 import 'discogs.dart';
+import 'enrichment.dart' show CoverEnricher;
 import 'fingerprint.dart';
 import 'library.dart';
 import 'models.dart';
@@ -653,7 +654,12 @@ class FactsWarmer extends ChangeNotifier {
       // Deze tak sloeg alles over, en dat is na de eerste ronde de meerderheid van de platen: wat
       // in een vorige sessie gewarmd is, staat op schijf en werd hier nooit meer aangeraakt. De
       // hoes bleef dan liggen in een cachemap waar alleen de albumpagina hem uit haalt. Uitlezen
-      // kost één schijfleesactie en geen enkel netwerkverzoek.
+      // kost één schijfleesactie.
+      //
+      // Plus de DIGITALE voorkant (Deezer, anders TheAudioDB), ook voor een plaat waarvan de scans er al
+      // staan: Saber, 21-10-2026, "digitaal wint altijd". Eén keer per plaat over het net, daarna van
+      // schijf — en `cachedReleaseArt` legt hem over de voorkant.
+      await CoverEnricher(settings).digitaleVoorkant(album.artist, album.title).catchError((Object _) => null);
       _neemHoesOver(
           album,
           await DiscogsService(settings).cachedReleaseArt(album.artist, album.title,

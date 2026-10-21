@@ -29545,15 +29545,18 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           // alleen wat hier nog ontbreekt — wat er al staat, blijft staan.
           tussenstand: (t) {
         spoor?.call('Nu speelt "$album": tussenstand na ${klok.elapsedMilliseconds} ms '
-            'achter=${t.back != null} cd=${t.disc != null}');
+            'voor=${t.front != null ? t.bron : false} achter=${t.back != null} cd=${t.disc != null}');
         if (!mounted || mine != _gen || artist != widget.artist || album != widget.album) return;
         final nu = _art;
-        if ((nu?.disc != null || t.disc == null) && (nu?.back != null || t.back == null)) return;
+        // De digitale voorkant gaat over wat er staat, ook over een scan uit de cache (Saber, 21-10-2026:
+        // "digitaal wint altijd"); een andere voorkant vult alleen wat leeg is.
+        final digitaal = t.front != null && isDigitaleHerkomst(t.bron) && !isDigitaleHerkomst(nu?.bron);
+        if (!digitaal && (nu?.disc != null || t.disc == null) && (nu?.back != null || t.back == null)) return;
         setState(() => _art = ReleaseArt(
-              front: nu?.front ?? t.front,
+              front: digitaal ? t.front : (nu?.front ?? t.front),
               back: nu?.back ?? t.back,
               disc: nu?.disc ?? t.disc,
-              bron: nu?.bron,
+              bron: digitaal ? t.bron : nu?.bron,
               formaat: nu?.formaat,
             ));
       });
