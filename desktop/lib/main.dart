@@ -50,6 +50,8 @@ import 'ui/menu.dart';
 import 'mediabediening.dart';
 import 'verder_luisteren.dart';
 import 'zone_lijst.dart';
+import 'zone_speler.dart';
+import 'zone_opdracht.dart';
 import 'lan/zones.dart' show ZoneSoort, ZoneStaat, positieNu;
 import 'lan/server.dart' show LanServer;
 import 'ui/knopbewegingen.dart';
@@ -1389,6 +1391,71 @@ Future<void> main() async {
       mode.owner ? _PcVerderBron(sharing, player) : _ToestelVerderBron(library, player, ik!.id),
       // Op de klok van de pc: daarop staan de meldingen, ook die van een toestel met een scheve klok.
       klok: mode.owner ? null : zoneLijst.nuOpPc);
+
+  // De gekozen zone ("Speelt op: … ▾"): wat de balk en Nu speelt tonen en bedienen, en waar een tik in
+  // de bibliotheek speelt (Saber, 21-10-2026). Zie zone_speler.dart.
+  var zoneOpdrachtNr = 0;
+  Future<String?> stuurNaarZone(String zone, Map<String, dynamic> opdracht) async {
+    final op = {
+      ...opdracht,
+      'zone': zone,
+      // Zodat een opdracht die over twee lijnen aankomt, maar één keer gebeurt (zone_opdracht.dart).
+      'id': '${zoneLijst.hier}-${DateTime.now().microsecondsSinceEpoch}-${zoneOpdrachtNr++}',
+    };
+    if (mode.owner) {
+      final s = sharing.server;
+      if (s == null) return 'De deelservice van de pc staat uit.';
+      final r = await s.zoneOpdracht(op, van: 'de pc');
+      return r.status == 200 ? null : '${r.antwoord['error'] ?? 'Dat lukte niet.'}';
+    }
+    final c = library.remote;
+    if (c == null) return 'Geen verbinding met de pc.';
+    try {
+      await c.ask('/api/zone/cmd', op);
+      return null;
+    } on RemoteException catch (e) {
+      return e.message;
+    }
+  }
+
+  final gekozenZone = GekozenZone(
+    lijst: zoneLijst,
+    laatste: settings.gekozenZone,
+    bewaar: (zone) {
+      settings.gekozenZone = zone;
+      unawaited(settings.save());
+    },
+    maak: (zone) => ZoneSpeler(
+      lijst: zoneLijst,
+      zoneId: zone,
+      nummer: verder.bron.nummer,
+      idVan: (t) => library.gedeeldId(t.path),
+      hoesVan: library.coverForTrack,
+      stuur: (op) => stuurNaarZone(zone, op),
+    ),
+  );
+
+  // Wat dit toestel doet met een opdracht van een ander toestel dat het als zone bedient.
+  final zoneUitvoerder = ZoneUitvoerder(
+    speler: player,
+    rij: player,
+    nummer: verder.bron.nummer,
+    radio: (artiest, {zaad, titel}) async {
+      final ctx = appNavigator.currentContext;
+      if (ctx != null && ctx.mounted) await startRadio(ctx, artiest, titel: titel, zaad: zaad, hier: true);
+    },
+    // Meteen melden wat er nu speelt, zodat wie bedient de uitkomst ziet (niet pas na vijf seconden).
+    naUitvoeren: () => Timer(const Duration(milliseconds: 400), player.meldStandNu),
+  );
+
+  // Het volume van de app: een zone op afstand kan het zetten, en het blijft zo na een herstart.
+  if (settings.appVolume < 100) player.setVolume(settings.appVolume);
+  Timer? volumeBewaren;
+  player.bijVolume = (v) {
+    settings.appVolume = v;
+    volumeBewaren?.cancel();
+    volumeBewaren = Timer(const Duration(seconds: 1), () => unawaited(settings.save()));
+  };
   player.addListener(verder.spelerVeranderd);
   AppLifecycleListener(onResume: () => unawaited(verder.kijkNu()));
   if (mode.owner) {
@@ -1411,7 +1478,8 @@ Future<void> main() async {
           shuffle: player.shuffle,
           herhaal: player.repeat.name,
           overname: m.overname ?? '',
-          radio: player.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null);
+          radio: player.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null,
+          volume: player.volume.round());
     };
     // De zones van de pc staan in zijn eigen server; die kan opnieuw opgezet worden (andere poort,
     // andere instellingen), dan de nieuwe volgen.
@@ -1427,6 +1495,8 @@ Future<void> main() async {
         zoneLijst.vergeet();
         return;
       }
+      // Een opdracht van een toestel voor de zone van de pc zelf.
+      s.bijZoneOpdracht = zoneUitvoerder.voerUit;
       zoneLijst
         ..zetVerbonden(true)
         ..zet(s.zones.snapshot());
@@ -1510,6 +1580,7 @@ Future<void> main() async {
         ChangeNotifierProvider<Favorieten>.value(value: favorieten),
         ChangeNotifierProvider<VerderLuisteren>.value(value: verder),
         ChangeNotifierProvider<ZoneLijst>.value(value: zoneLijst),
+        ChangeNotifierProvider<GekozenZone>.value(value: gekozenZone),
         // Wat je werkelijk gedraaid hebt, bereikbaar voor de schermen.
         //
         // Dit object bestond al — het wordt hierboven aan de speler gegeven — maar stond in geen
@@ -1666,6 +1737,8 @@ Future<void> main() async {
               'playing': playing,
               'shuffle': player.shuffle,
               'repeat': player.repeat.name,
+              // Het appvolume, voor de schuif van deze zone op een ander toestel (zones, 21-10-2026).
+              'volume': player.volume.round(),
               if (m.overname != null) 'overname': m.overname,
               if (player.radioMode) 'radio': {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam},
             }
@@ -1689,6 +1762,8 @@ Future<void> main() async {
         platform: platformName(),
         tv: isTv,
         opStand: (p, v) => unawaited(verder.opStand(p, verzoek: v)),
+        // Een ander toestel bedient dit toestel als zone.
+        opOpdracht: (op) => unawaited(zoneUitvoerder.voerUit(op)),
         log: zoneLog.line,
       );
       zoneLijst.addListener(() => verder.lijn(zoneLijst.verbonden));
@@ -6206,7 +6281,7 @@ class AlbumCard extends StatelessWidget {
       schijf: a.cover == null ? null : (maat) => _TegelCd(album: a, maat: maat),
       onAfspelen: a.tracks.isEmpty
           ? null
-          : () => context.read<PlayerStore>().playQueue(a.tracks, 0, cover: a.cover),
+          : () => rijVoor(context).playQueue(a.tracks, 0, cover: a.cover),
       // Tot nu toe kon een albumtegel precies één ding: opengaan. Afspelen, in de wachtrij zetten,
       // radio en verwijderen zaten allemaal een navigatiestap dieper.
       onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
@@ -7745,7 +7820,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
   static const _minTitelBreedte = 300.0;
 
   Widget _kop(BuildContext context, double breedte) {
-    final player = context.read<PlayerStore>();
+    final player = rijVoor(context);
     // 18 op een telefoon en 28 op een pc — terwijl de tracklijst eronder op 20 stond en de rest van
     // de app sinds ronde 1 op [kGoot]. Drie gootbreedtes op één pagina, en dat is precies wat je als
     // "het rammelt" ziet zonder te kunnen aanwijzen waarom. De hoes wordt hierdoor op een telefoon
@@ -10067,11 +10142,25 @@ class _ArtistNamesState extends State<ArtistNames> {
   }
 }
 
+/// [T] uit de providers, of null als er geen is (een widgettoets die alleen het nodige opzet).
+T? _misschien<T>(BuildContext context, {bool luister = false}) {
+  try {
+    return luister ? context.watch<T>() : context.read<T>();
+  } on ProviderNotFoundException {
+    return null;
+  }
+}
+
+/// Waar een nieuwe wachtrij heen gaat (een tik op een nummer, "Afspelen", "Hierna spelen" …): de gekozen
+/// zone op afstand, of dit toestel (Saber, 21-10-2026: "Tik in de bibliotheek speelt in de gekozen zone").
+Rijbediening rijVoor(BuildContext context) =>
+    _misschien<GekozenZone>(context)?.opAfstand ?? context.read<PlayerStore>();
+
 /// Move the playhead by [seconds], clamped to the track.
 ///
 /// Clamped rather than left to the player: seeking past the end restarts the queue on some
 /// backends and stalls on others, and neither is what "ten seconds forward" means.
-void _nudge(PlayerStore p, int seconds) {
+void _nudge(Speelbron p, int seconds) {
   final total = p.duration;
   if (total.inMilliseconds <= 0) return;
   var target = p.position + Duration(seconds: seconds);
@@ -10088,15 +10177,27 @@ void _nudge(PlayerStore p, int seconds) {
 ///
 /// One place, read by the desktop bar, the phone bar and the full player alike: three copies of
 /// "which player am I talking to" is three chances for one of them to be wrong.
+///
+/// Sinds de zones (Saber, 21-10-2026) ook een zone op afstand: is er een gekozen ("Speelt op: … ▾"), dan is
+/// [player] die zone ([ZoneSpeler]) en sturen alle knoppen haar. [lokaal] is altijd de speler van dit
+/// toestel.
 class _Transport {
   _Transport(BuildContext context)
-      : player = context.watch<PlayerStore>(),
-        speaker = context.watch<SpeakerTarget>();
+      : lokaal = context.watch<PlayerStore>(),
+        speaker = context.watch<SpeakerTarget>(),
+        afstand = _misschien<GekozenZone>(context, luister: true)?.opAfstand;
 
-  final PlayerStore player;
+  final PlayerStore lokaal;
   final SpeakerTarget speaker;
 
-  bool get casting => speaker.isCasting;
+  /// De gekozen zone op afstand, of null: dan is het dit toestel.
+  final ZoneSpeler? afstand;
+
+  /// Wie de knoppen krijgen: de gekozen zone, of de speler van dit toestel.
+  Speelbron get player => afstand ?? lokaal;
+
+  /// Cast dit toestel naar een speaker? Niet als er een zone op afstand gekozen is: die cast zelf.
+  bool get casting => afstand == null && speaker.isCasting;
   Track? get track => player.current;
 
   /// Position and length come from the SPEAKER while casting — it is the only one that knows.
@@ -10480,7 +10581,10 @@ class ZoneKiesKnop extends StatelessWidget {
   Widget build(BuildContext context) {
     final z = context.watch<ZoneLijst>();
     if (!z.ondersteund) return const SizedBox.shrink();
-    final elders = z.eldersSpeeltIets;
+    final afstand = _misschien<GekozenZone>(context, luister: true)?.opAfstand;
+    final gekozen = afstand?.zone ?? z.dezeZone;
+    // Het stipje: er speelt iets in een zone die je nu NIET voor je hebt.
+    final elders = z.zones.any((x) => x.playing && x.id != (afstand?.zoneId ?? z.hier));
     final stip = Positioned(
       right: -2,
       top: -2,
@@ -10496,13 +10600,14 @@ class ZoneKiesKnop extends StatelessWidget {
         tooltip: elders ? 'Zones — er speelt ook iets op een ander toestel' : 'Zones',
         onPressed: () => toonZoneBlad(context),
         icon: Stack(clipBehavior: Clip.none, children: [
-          Icon(Icons.speaker_group_rounded, size: 20, color: _muted),
+          Icon(Icons.speaker_group_rounded, size: 20, color: afstand != null ? _accent2 : _muted),
           if (elders) stip,
         ]),
       );
     }
-    final hier = z.dezeZone;
-    final naam = hier?.naam ?? deviceName();
+    final naam = gekozen?.naam ?? deviceName();
+    // Op afstand in de accentkleur: wat je ziet en bedient, is niet dit toestel.
+    final kleur = afstand != null ? _accent2 : _muted;
     return Pressable(
       key: const ValueKey('zone-kies'),
       onPressed: () => toonZoneBlad(context),
@@ -10513,8 +10618,8 @@ class ZoneKiesKnop extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Stack(clipBehavior: Clip.none, children: [
-            Icon(zoneIcoon(hier?.soort ?? (isCompact(context) ? ZoneSoort.gsm : ZoneSoort.pc)),
-                size: 16, color: _muted),
+            Icon(zoneIcoon(gekozen?.soort ?? (isCompact(context) ? ZoneSoort.gsm : ZoneSoort.pc)),
+                size: 16, color: kleur),
             if (elders) stip,
           ]),
           const SizedBox(width: 6),
@@ -10522,9 +10627,9 @@ class ZoneKiesKnop extends StatelessWidget {
             child: Text('Speelt op: $naam',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: _muted, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                style: TextStyle(color: kleur, fontSize: 12.5, fontWeight: FontWeight.w600)),
           ),
-          Icon(Icons.arrow_drop_down_rounded, size: 20, color: _muted),
+          Icon(Icons.arrow_drop_down_rounded, size: 20, color: kleur),
         ]),
       ),
     );
@@ -10568,6 +10673,7 @@ class _ZoneBladState extends State<ZoneBlad> {
   Widget build(BuildContext context) {
     final z = context.watch<ZoneLijst>();
     final zones = z.zones;
+    final gekozen = _misschien<GekozenZone>(context, luister: true)?.gekozen ?? z.hier;
     final hoog = MediaQuery.sizeOf(context).height;
     return SafeArea(
       child: Padding(
@@ -10597,7 +10703,7 @@ class _ZoneBladState extends State<ZoneBlad> {
                       ),
                   ]),
                   const SizedBox(height: 2),
-                  Text('Wat er op je toestellen en speakers speelt',
+                  Text('Tik op een zone om ze hier te zien en te bedienen',
                       style: TextStyle(color: _muted, fontSize: 12)),
                   const SizedBox(height: 10),
                   Flexible(
@@ -10606,7 +10712,11 @@ class _ZoneBladState extends State<ZoneBlad> {
                       padding: EdgeInsets.zero,
                       children: [
                         for (final zone in zones)
-                          _ZoneRij(key: ValueKey('zone-${zone.id}'), zone: zone, hier: zone.id == z.hier),
+                          _ZoneRij(
+                              key: ValueKey('zone-${zone.id}'),
+                              zone: zone,
+                              hier: zone.id == z.hier,
+                              gekozen: zone.id == gekozen),
                       ],
                     ),
                   ),
@@ -10621,10 +10731,13 @@ class _ZoneBladState extends State<ZoneBlad> {
 }
 
 class _ZoneRij extends StatelessWidget {
-  const _ZoneRij({super.key, required this.zone, required this.hier});
+  const _ZoneRij({super.key, required this.zone, required this.hier, this.gekozen = false});
 
   final ZoneStaat zone;
   final bool hier;
+
+  /// Is dit de zone die je nu ziet en bedient ([GekozenZone])?
+  final bool gekozen;
 
   @override
   Widget build(BuildContext context) {
@@ -10680,10 +10793,20 @@ class _ZoneRij extends StatelessWidget {
       }
     }
 
-    return Opacity(
+    return Pressable(
+      key: ValueKey('zone-kies-${zone.id}'),
+      // Kiezen: de balk en Nu speelt tonen en bedienen vanaf nu deze zone. De muziek verhuist niet.
+      onPressed: () {
+        _misschien<GekozenZone>(context)?.kies(zone.id);
+        Navigator.of(context).maybePop();
+      },
+      borderRadius: BorderRadius.circular(10),
+      scaleOnFocus: false,
+      vastePlek: false,
+      child: Opacity(
       opacity: zone.online || hier ? 1 : .55,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
         child: Row(children: [
           SizedBox(
             width: 46,
@@ -10724,8 +10847,14 @@ class _ZoneRij extends StatelessWidget {
             ),
           ),
           if (actie != null) ...[const SizedBox(width: 8), actie],
+          if (gekozen)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Icon(Icons.check_rounded, size: 20, color: _accent2, semanticLabel: 'gekozen'),
+            ),
           const SizedBox(width: 4),
         ]),
+      ),
       ),
     );
   }
@@ -10733,6 +10862,43 @@ class _ZoneRij extends StatelessWidget {
   static String _geleden(Duration d) => d.inHours >= 1
       ? '${d.inHours} u geleden'
       : '${d.inMinutes} min geleden';
+}
+
+/// Het volume van de app in een zone op afstand (Saber, 21-10-2026: "volume van de app"). De schuif
+/// stuurt hoogstens vier keer per seconde, en de laatste stand komt altijd aan ([ZoneSpeler.setVolume]).
+class _ZoneVolume extends StatelessWidget {
+  const _ZoneVolume({required this.zone});
+
+  final ZoneSpeler zone;
+
+  @override
+  Widget build(BuildContext context) {
+    final v = zone.volume.clamp(0, 100).toDouble();
+    return Row(
+      key: const ValueKey('zone-volume'),
+      children: [
+        Icon(Icons.volume_down_rounded, size: 19, color: _muted),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              activeTrackColor: _accent,
+              inactiveTrackColor: kLijn,
+              thumbColor: kFel,
+            ),
+            child: Slider(value: v, max: 100, onChanged: zone.setVolume),
+          ),
+        ),
+        Icon(Icons.volume_up_rounded, size: 19, color: _muted),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 30,
+          child: Text('${v.round()}', textAlign: TextAlign.right, style: TextStyle(color: _muted, fontSize: 12)),
+        ),
+      ],
+    );
+  }
 }
 
 /// "Hier verder" vanaf [zone]: haal haar volledige stand (met de wachtrij) en neem over zoals de balk
@@ -11043,7 +11209,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
   Widget build(BuildContext context) {
     final lijsten = context.watch<Afspeellijsten>();
     final lib = context.watch<LibraryStore>();
-    final p = context.read<PlayerStore>();
+    final p = rijVoor(context);
     final lijst = lijsten.byId(id);
     if (lijst == null) {
       return Scaffold(
@@ -11204,7 +11370,7 @@ class FavorietenView extends StatelessWidget {
   Widget build(BuildContext context) {
     final fav = context.watch<Favorieten>();
     final lib = context.watch<LibraryStore>();
-    final p = context.read<PlayerStore>();
+    final p = rijVoor(context);
     final albums = fav.albums(lib.albums);
     final nummers = fav.nummers(lib.tracks);
     final narrow = isCompact(context);
@@ -11378,9 +11544,15 @@ bool tikVraagtIets({required bool speelt, required bool radio, required int leng
 /// ([AppSettings.tikKeuze]). Ook tijdens een radio. "Speel alles", "Shuffle alles" en ▶ blijven vervangen.
 Future<void> speelGetikt(BuildContext context, List<Track> lijst, int index, {Uint8List? cover}) async {
   if (index < 0 || index >= lijst.length) return;
-  final p = context.read<PlayerStore>();
+  // In de gekozen zone (Saber, 21-10-2026: "Tik in de bibliotheek speelt in de gekozen zone"); de vraag
+  // gaat over HAAR wachtrij.
+  final afstand = _misschien<GekozenZone>(context)?.opAfstand;
+  final lokaal = context.read<PlayerStore>();
+  final Rijbediening p = afstand ?? lokaal;
   final instellingen = context.read<AppSettings>();
-  if (!tikVraagtIets(speelt: p.current != null, radio: p.radioMode, lengte: p.queueTracks.length)) {
+  final speelt = afstand != null ? afstand.current != null : lokaal.current != null;
+  final lengte = afstand != null ? (afstand.zone?.lengte ?? 0) : lokaal.queueTracks.length;
+  if (!tikVraagtIets(speelt: speelt, radio: afstand?.radioMode ?? lokaal.radioMode, lengte: lengte)) {
     return p.playQueue(lijst, index, cover: cover);
   }
   var keuze = tikKeuzeUit(instellingen.tikKeuze);
@@ -11673,7 +11845,7 @@ ItemMenu _ontbrekendMenu(
 /// een titel recht te zetten, en alleen dán staat die regel in het menu — zie [waaromGeenPlaatsMet].
 ItemMenu _nummerMenu(BuildContext context, Track t,
     {ChoiceTrack? uitgave, String? albumMbid}) {
-  final p = context.read<PlayerStore>();
+  final p = rijVoor(context);
   final lib = context.read<LibraryStore>();
   final nav = Navigator.of(context);
   final album = lib.albumForPath(t.path);
@@ -11784,7 +11956,7 @@ ItemMenu _netAlbumMenu(BuildContext context, String artiest, CatalogAlbum al) =>
 
 /// Het menu voor een heel album. Dezelfde acties, alleen met alle nummers tegelijk.
 ItemMenu _albumMenu(BuildContext context, Album a) {
-  final p = context.read<PlayerStore>();
+  final p = rijVoor(context);
   final nav = Navigator.of(context);
   final nummers = a.tracks;
   final fav = context.read<Favorieten>();
@@ -11851,6 +12023,8 @@ class _WachtrijKnop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026).
+    if (_misschien<GekozenZone>(context, luister: true)?.opAfstand != null) return const SizedBox.shrink();
     final paneel = context.watch<WachtrijPaneel>();
     final compact = isCompact(context);
     return TvLabelled(
@@ -12688,6 +12862,8 @@ class _SpeakerButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026).
+    if (_misschien<GekozenZone>(context, luister: true)?.opAfstand != null) return const SizedBox.shrink();
     final target = context.watch<SpeakerTarget>();
     // Gekeken naar de client waarmee GESTUURD wordt, niet naar de bibliotheek. Dat scheelt: op de pc is
     // library.remote null — de bibliotheek staat daar zelf — en daarmee was de knop er niet, ook niet
@@ -13021,8 +13197,8 @@ ItemMenu _metStapelKeuze(ItemMenu menu) => ItemMenu(titel: menu.titel, ondertite
 
 /// De hoezen van wat na het spelende nummer komt, voor de stapel ([WachtrijStapel]): uit de radiorij
 /// tijdens een radio, anders uit de wachtrij (in de volgorde waarin hij speelt, ook geschud).
-List<Uint8List?> volgendeHoezen(PlayerStore p, LibraryStore bib, {int max = 13}) {
-  if (p.radioMode) {
+List<Uint8List?> volgendeHoezen(Speelbron p, LibraryStore bib, {int max = 13}) {
+  if (p is PlayerStore && p.radioMode) {
     final r = p.radioQueue;
     final i = p.radioIndex;
     return [
@@ -13886,7 +14062,9 @@ class _RijDuimen extends StatelessWidget {
 /// aanklikken tussen zeven andere knoppen door is geen oordeel maar een ongeluk in wording. Het
 /// overzicht bij het afsluiten is daar het vangnet.
 /// De radioregel onder de titel — zie [radioStatusTekst]. Null: niets bijzonders.
-String? _radioRegel(BuildContext context, PlayerStore p) {
+String? _radioRegel(BuildContext context, Speelbron p) {
+  // Een zone op afstand: haar radio staat op dat toestel, en hier is daar niets van te zeggen.
+  if (p is! PlayerStore) return null;
   final r = context.watch<RadioBesturing>();
   return radioStatusTekst(
     spelerStatus: p.radioStatus,
@@ -13908,6 +14086,8 @@ class _RadioOordeel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026).
+    if (_misschien<GekozenZone>(context, luister: true)?.opAfstand != null) return const SizedBox.shrink();
     final t = track;
     final radio = context.watch<RadioBesturing>();
     if (isTv || t == null || !radio.loopt) return const SizedBox.shrink();
@@ -14024,6 +14204,8 @@ class _RadioAfsluitknop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026).
+    if (_misschien<GekozenZone>(context, luister: true)?.opAfstand != null) return const SizedBox.shrink();
     final radio = context.watch<RadioBesturing>();
     final p = context.watch<PlayerStore>();
     if (!radio.loopt) return const SizedBox.shrink();
@@ -14215,7 +14397,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     final t = x.track;
     final cast = x.speaker;
     final casting = x.casting;
-    if (!casting) _misschienAankondigen(p);
+    if (!casting && p is PlayerStore) _misschienAankondigen(p);
     final position = x.position;
     final duration = x.duration;
     final playing = x.playing;
@@ -14889,6 +15071,12 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
             ),
           ),
         ),
+      // Een zone op afstand gekozen: het volume van de app daar (Saber, 21-10-2026: "volume van de app").
+      if (x.afstand case final zone? when zone.heeftVolume)
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: SizedBox(width: dialogWidth(context, 320), child: _ZoneVolume(zone: zone)),
+        ),
       // Onderaan, en alleen tijdens een radio: de weg eruit.
       //
       // **Waarom die knop er hoort te zijn.** Een radio houdt niet vanzelf op — dat is precies wat
@@ -15375,7 +15563,7 @@ Future<void> _verderSpelen(PlayerStore player, List<Track> rij, int index, Durat
     return player.neemOver(rij, index, positie, spelen: spelen, shuffle: shuffle, herhaal: herhaal);
   }
   final zaad = rij[index.clamp(0, rij.length - 1)];
-  await startRadio(ctx, radioArtiest, zaad: zaad);
+  await startRadio(ctx, radioArtiest, zaad: zaad, hier: true);
   // Het zaad klinkt als eerste; zodra libmpv het kent, naar de plek waar het andere toestel was.
   for (var i = 0; i < 60; i++) {
     if (player.current?.path == zaad.path && player.duration > Duration.zero) break;
@@ -15870,7 +16058,20 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
 /// het liedje daar helemaal weg: het plan weert het zaadnummer, en alleen een eigen nummer werd er
 /// vooraan weer in gezet (eindbeoordeling van 26-09-2026).
 Future<void> startRadio(BuildContext context, String artist,
-    {String? titel, Track? zaad, int? seconden}) async {
+    {String? titel, Track? zaad, int? seconden, bool hier = false}) async {
+  // Een zone op afstand gekozen: daar (Saber, 21-10-2026: een radio starten in een andere zone "op elk
+  // toestel meteen"). [hier] als het per se dit toestel moet zijn: bij overnemen, of als een ander
+  // toestel dit toestel net vroeg een radio te starten.
+  final afstand = hier ? null : _misschien<GekozenZone>(context)?.opAfstand;
+  if (afstand != null) {
+    final waar = afstand.zone?.naam ?? 'de gekozen zone';
+    if (afstand.zone?.soort == ZoneSoort.speaker) {
+      _srcToast(context, 'Een radio op een speaker kan nog niet. Kies de pc als zone en laat die naar $waar spelen.');
+      return;
+    }
+    _srcToast(context, '📻 Radio starten voor $artist op $waar…');
+    return afstand.startRadio(artist, zaad: zaad, titel: titel);
+  }
   final lib = context.read<LibraryStore>();
   if (zaad == null && titel != null) {
     final eigen = lib.tracks;
@@ -16532,7 +16733,7 @@ class TracksView extends StatelessWidget {
     // elkaar: de KNOPPEN roepen hem aan (daar is `read` genoeg, die luistert niet), en één RIJ wil
     // weten of zij het is die speelt. Dat laatste staat hieronder per rij in een `select`, precies
     // zoals `TrackRow` het al doet — met dezelfde uitleg erboven.
-    final player = context.read<PlayerStore>();
+    final player = rijVoor(context);
     final all = lib.tracks;
     final tracks = match == null ? all : all.where(match!).toList();
     if (lib.scanning && all.isEmpty) {
@@ -20217,7 +20418,9 @@ class EchtheidDialog extends StatelessWidget {
 ///
 /// Speelt een speaker, dan zegt het merk dat (Sonos/KEF krijgen het origineel); bij de Shield rekent
 /// het merk zelf, want daar past de Shield het toe.
-Widget _luidheidMerk(BuildContext context, PlayerStore p, Track t, SpeakerTarget cast) {
+Widget _luidheidMerk(BuildContext context, Speelbron p, Track t, SpeakerTarget cast) {
+  // Een zone op afstand: haar gelijk volume rekent dat toestel, en hier is het niet te zien.
+  if (p is! PlayerStore) return const SizedBox.shrink();
   final settings = context.read<AppSettings>();
   final shield = cast.isCasting && (cast.device?.playsUntouched ?? false);
   final speaker = cast.isCasting && !shield;
@@ -20241,7 +20444,7 @@ Widget _luidheidMerk(BuildContext context, PlayerStore p, Track t, SpeakerTarget
 }
 
 /// De kwaliteitsbadge van Nu speelt als knop: hij opent [_toonKwaliteitBlad].
-Widget _kwaliteitKnop(BuildContext context, PlayerStore p, Track t, SpeakerTarget cast) => Pressable(
+Widget _kwaliteitKnop(BuildContext context, Speelbron p, Track t, SpeakerTarget cast) => Pressable(
       key: const ValueKey('np-kwaliteit-knop'),
       onPressed: () => _toonKwaliteitBlad(context, p, t, cast),
       borderRadius: BorderRadius.circular(6),
@@ -20253,7 +20456,7 @@ Widget _kwaliteitKnop(BuildContext context, PlayerStore p, Track t, SpeakerTarge
 /// kwaliteit is"): wat je NU hoort — onderweg stuurt je pc een kleinere versie —, wat het BESTAND echt
 /// is volgens de volle meting en de controlesom, en gelijk volume. Die zin stond naast de badge en maakte
 /// de regel te vol; hier opent hij nog steeds het volumeblad.
-Future<void> _toonKwaliteitBlad(BuildContext context, PlayerStore p, Track t, SpeakerTarget cast) {
+Future<void> _toonKwaliteitBlad(BuildContext context, Speelbron p, Track t, SpeakerTarget cast) {
   final nu = _stroomKwaliteit(p, t);
   final bestand = _trackQuality(t);
   final settings = context.read<AppSettings>();
@@ -20280,7 +20483,7 @@ Future<void> _toonKwaliteitBlad(BuildContext context, PlayerStore p, Track t, Sp
                 nuHoorZin(
                     nu: nu.label,
                     bestand: bestand.label,
-                    omgezet: p.stroomGrens != null,
+                    omgezet: p is PlayerStore && p.stroomGrens != null,
                     speaker: cast.isCasting ? cast.device?.name : null),
                 style: const TextStyle(fontSize: 13, height: 1.4)),
             kop('Het bestand'),
@@ -20382,8 +20585,9 @@ Widget _echtheidMerk(Track? t) {
 /// "ik zie niet dat het geconverteerd wordt."
 ///
 /// Nog altijd goud waar het goud verdient: 24/48 over de lijn is nog steeds hi-res.
-Quality _stroomKwaliteit(PlayerStore p, Track t) {
-  final g = p.stroomGrens;
+Quality _stroomKwaliteit(Speelbron p, Track t) {
+  // Een zone op afstand: wat dat toestel ontvangt, weet het zelf; hier geldt het bestand.
+  final g = p is PlayerStore ? p.stroomGrens : null;
   if (g == null) return _trackQuality(t);
   // Een grens zonder diepte laat de diepte van het bestand staan; zo schrijft `metStand` hem ook.
   final bits = g.bits > 0 ? g.bits : t.bitsPerSample;

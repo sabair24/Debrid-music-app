@@ -33,6 +33,8 @@ const kQuotumDownloads = Quotumsoort('downloads', perUur: 250, perDag: 1000, wat
 const kQuotumRadioplan = Quotumsoort('radioplan', perUur: 20, perDag: 60, wat: 'een radio uit een zin laten maken');
 const kQuotumPrullenbak =
     Quotumsoort('prullenbak', perUur: 150, perDag: 500, wat: 'nummers naar de prullenbak op je pc sturen');
+/// Een zone bedienen van buiten (zones, 21-10-2026). Ruim: een volumeschuif stuurt er vier per seconde.
+const kQuotumBediening = Quotumsoort('bediening', perUur: 3000, perDag: 20000, wat: 'een zone bedienen');
 const kQuotumOmzetten = Quotumsoort('omzetten', perUur: 400, perDag: 2000, wat: 'nummers laten omzetten');
 const kQuotumHoezen = Quotumsoort('hoezen', perUur: 3000, perDag: 10000, wat: 'hoezen laten verkleinen');
 

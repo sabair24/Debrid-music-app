@@ -83,7 +83,7 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/config', '/api/radio', '/api/jobs', '/api/kwaliteit', '/api/nieuw', '/api/corrections', '/api/move/plan',
     '/api/move/apply',
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
-    '/api/zones', '/api/zones/events', '/api/zones/stand',
+    '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd',
     '/api/releaseart',
   };
   const voorvoegsels = ['/stream/', '/groei/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
@@ -316,6 +316,91 @@ class LanServer {
 
   /// Alle zones: wat elk toestel en elke speaker speelt, en wie er bereikbaar is. Zie `zones.dart`.
   late final ZoneRegister zones;
+
+  /// Wat de pc doet met een opdracht voor zijn EIGEN zone (zie `zone_opdracht.dart`). Gezet door main;
+  /// null = de pc kan zijn eigen zone (nog) niet laten bedienen.
+  Future<String?> Function(Map<String, dynamic> opdracht)? bijZoneOpdracht;
+
+  /// Per toestel de open lijnen (`/api/zones/events`) waarover een opdracht naar dat toestel kan.
+  final Map<String, List<void Function(String event, Map<String, dynamic> data)>> _zoneLijnen = {};
+
+  /// Een opdracht voor een zone (`{zone, cmd, …}`), van [van] (een naam, voor het logboek). Geeft
+  /// `(status, antwoord)` terug: 200 als ze onderweg is, 409 als de zone er niet is, 400 als het geen
+  /// opdracht is.
+  ///
+  /// - De pc zelf: [bijZoneOpdracht].
+  /// - Een toestel: over zijn open lijn(en). Zonder lijn (de app is dicht, of het toestel slaapt) kan het
+  ///   niet: dan 409 met de reden.
+  /// - Een speaker: de pc stuurt hem zelf ([CastManager.control] / [CastManager.play]).
+  Future<({int status, Map<String, dynamic> antwoord})> zoneOpdracht(Map<String, dynamic> op,
+      {required String van}) async {
+    final zone = '${op['zone'] ?? ''}';
+    final cmd = '${op['cmd'] ?? ''}';
+    if (zone.isEmpty || cmd.isEmpty) return (status: 400, antwoord: {'error': 'Geen zone of geen opdracht.'});
+    final metVan = {...op, 'van': van};
+    String naam() => zones.lijst().where((z) => z.id == zone).map((z) => z.naam).firstOrNull ?? 'Die zone';
+    _zoneLog.line('opdracht $cmd → $zone  (van $van)');
+    if (zone == 'dev:${zones.pcId}') {
+      final f = bijZoneOpdracht;
+      if (f == null) return (status: 409, antwoord: {'error': 'De pc kan dat nu niet.'});
+      final fout = await f(metVan);
+      if (fout != null) return (status: 409, antwoord: {'error': fout});
+      return (status: 200, antwoord: {'bezorgd': 1});
+    }
+    if (zone.startsWith('dev:')) {
+      final lijnen = List.of(_zoneLijnen[zone.substring(4)] ?? const <void Function(String, Map<String, dynamic>)>[]);
+      if (lijnen.isEmpty) {
+        return (status: 409, antwoord: {'error': '${naam()} is niet bereikbaar (de app is dicht, of het toestel slaapt).'});
+      }
+      for (final l in lijnen) {
+        l('cmd', metVan);
+      }
+      return (status: 200, antwoord: {'bezorgd': lijnen.length});
+    }
+    if (zone.startsWith('spk:')) {
+      final speaker = zone.substring(4);
+      try {
+        switch (cmd) {
+          case 'play' || 'pause' || 'next' || 'previous':
+            await cast.control(speaker, cmd);
+          case 'seek':
+            await cast.control(speaker, 'seek', value: ((op['ms'] as num?)?.toInt() ?? 0) ~/ 1000);
+          case 'volume':
+            await cast.control(speaker, 'volume', value: (op['waarde'] as num?)?.toInt() ?? 50);
+          case 'speel':
+            final ids = [for (final x in (op['ids'] as List? ?? const [])) '$x'];
+            if (ids.isEmpty) return (status: 400, antwoord: {'error': 'Geen nummers.'});
+            await cast.play(speaker, ids, (op['plek'] as num?)?.toInt() ?? 0);
+          default:
+            return (status: 409, antwoord: {'error': 'Dat kan nog niet op een speaker.'});
+        }
+      } catch (e) {
+        return (status: 409, antwoord: {'error': '${naam()} antwoordt niet: $e'});
+      }
+      return (status: 200, antwoord: {'bezorgd': 1});
+    }
+    return (status: 409, antwoord: {'error': 'Onbekende zone.'});
+  }
+
+  Future<void> _zoneCmd(HttpRequest req) async {
+    if (req.method != 'POST') {
+      req.response.statusCode = HttpStatus.methodNotAllowed;
+      return req.response.close();
+    }
+    final nee = _quotum(req, kQuotumBediening);
+    if (nee != null) return _teVeel(req, nee);
+    final body = await _body(req);
+    if (body == null) return;
+    final kop = req.headers.value(HttpHeaders.authorizationHeader) ?? '';
+    final sleutel = kop.startsWith('Bearer ') ? kop.substring(7).trim() : '';
+    final wie = grants.grantFor(sleutel)?.deviceName ?? 'een toestel';
+    final buiten = _ingangVan[req] == Ingang.tlsBuiten ? ' (van buiten)' : '';
+    final r = await zoneOpdracht(body, van: '$wie$buiten');
+    return _json(req.response, r.antwoord, status: r.status);
+  }
+
+  late final WarmLog _zoneLog =
+      WarmLog('${library.configDir.isEmpty ? logDir : library.configDir}${Platform.pathSeparator}zones.log');
   final Transcoder transcoder = Transcoder();
 
   /// Zichzelf bijwerken op verzoek van een gekoppeld toestel. Zie `pc_bijwerker.dart`.
@@ -568,6 +653,8 @@ class LanServer {
         return _zoneEvents(req);
       case '/api/zones/stand':
         return _zoneStand(req);
+      case '/api/zone/cmd':
+        return _zoneCmd(req);
       case '/api/cast/devices':
         return _json(res, await cast.devices());
       case '/api/cast/play':
@@ -1446,7 +1533,10 @@ class LanServer {
           if (state.verzoek != null) 'verzoek': state.verzoek,
         };
 
-    if (toestel.isNotEmpty) zones.stroomOpen(toestel, naam: naam, soort: soort);
+    if (toestel.isNotEmpty) {
+      zones.stroomOpen(toestel, naam: naam, soort: soort);
+      _zoneLijnen.putIfAbsent(toestel, () => []).add(send);
+    }
     send('zones', zones.snapshot());
     send('stand', stand());
 
@@ -1468,7 +1558,12 @@ class LanServer {
     beat.cancel();
     await subZones.cancel();
     await subStand.cancel();
-    if (toestel.isNotEmpty) zones.stroomDicht(toestel);
+    if (toestel.isNotEmpty) {
+      final l = _zoneLijnen[toestel];
+      l?.remove(send);
+      if (l != null && l.isEmpty) _zoneLijnen.remove(toestel);
+      zones.stroomDicht(toestel);
+    }
   }
 
   /// De volledige melding van één zone, mét de wachtrij: wat "Hier verder luisteren" vanaf die zone

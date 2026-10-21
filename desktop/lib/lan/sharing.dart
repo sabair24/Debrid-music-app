@@ -317,9 +317,10 @@ class LanSharing extends ChangeNotifier {
     String herhaal = 'off',
     String overname = '',
     Map<String, dynamic>? radio,
+    int volume = -1,
   }) {
     final op = progressOp(trackPath, position, playing, queuePaths, index,
-        shuffle: shuffle, herhaal: herhaal, overname: overname, radio: radio);
+        shuffle: shuffle, herhaal: herhaal, overname: overname, radio: radio, volume: volume);
     if (op == null) return;
     state.applyOps([op], deviceId: mijnId, deviceName: deviceName());
   }
@@ -338,6 +339,7 @@ class LanSharing extends ChangeNotifier {
     String herhaal = 'off',
     String overname = '',
     Map<String, dynamic>? radio,
+    int volume = -1,
   }) {
     final id = _trackId(trackPath);
     if (id == null) return null;
@@ -352,6 +354,8 @@ class LanSharing extends ChangeNotifier {
       'repeat': herhaal,
       if (overname.isNotEmpty) 'overname': overname,
       if (radio != null) 'radio': radio,
+      // Het appvolume, voor de schuif van deze zone op een ander toestel (zones, 21-10-2026).
+      if (volume >= 0) 'volume': volume,
       'at': DateTime.now().millisecondsSinceEpoch,
     };
   }

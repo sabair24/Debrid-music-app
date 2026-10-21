@@ -174,6 +174,14 @@ class AppSettings extends ChangeNotifier {
   /// (nu spelen, rest laten staan), 'hierna' of 'achteraan'. Per toestel. Zie `speelGetikt` in main.dart.
   String tikKeuze = 'vragen';
 
+  /// Het volume van de app (0–100), bewaard: een zone op afstand kan het zetten (Saber, 21-10-2026:
+  /// "volume van de app"), en dan hoort het na een herstart nog zo te staan.
+  double appVolume = 100;
+
+  /// De gekozen zone ("Speelt op: … ▾"), als zone-id; leeg = dit toestel. Per toestel. Zie
+  /// `GekozenZone` in zone_speler.dart.
+  String gekozenZone = '';
+
   /// Hoe de radio kiest: 'bekend', 'gemengd' of 'ontdekken' — zie `radiosmaak.dart`.
   ///
   /// Als tekst, om dezelfde reden als [stroomThuis]. Leeg of onbekend leest als 'gemengd': de radio
@@ -373,6 +381,8 @@ class AppSettings extends ChangeNotifier {
         stroomAdaptief = (m['stroom_adaptief'] ?? true) as bool;
         laatsteWeg = (m['laatste_weg'] ?? '') as String;
         tikKeuze = (m['tik_keuze'] ?? 'vragen') as String;
+        appVolume = ((m['app_volume'] as num?) ?? 100).toDouble().clamp(0, 100).toDouble();
+        gekozenZone = (m['gekozen_zone'] ?? '') as String;
         radioSmaak = (m['radio_smaak'] ?? 'gemengd') as String;
         luidheid = (m['luidheid'] ?? 'normaal') as String;
         luidheidAlbum = (m['luidheid_album'] ?? true) as bool;
@@ -423,6 +433,8 @@ class AppSettings extends ChangeNotifier {
         'stroom_adaptief': stroomAdaptief,
         'laatste_weg': laatsteWeg,
         'tik_keuze': tikKeuze,
+        'app_volume': appVolume,
+        'gekozen_zone': gekozenZone,
         'radio_smaak': radioSmaak,
         'luidheid': luidheid,
         'luidheid_album': luidheidAlbum,

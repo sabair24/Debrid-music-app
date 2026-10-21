@@ -9,6 +9,7 @@ import 'package:debridmusic/models.dart';
 import 'package:debridmusic/player.dart' show RepeatMode;
 import 'package:debridmusic/verder_luisteren.dart';
 import 'package:debridmusic/zone_lijst.dart';
+import 'package:debridmusic/zone_speler.dart';
 import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -113,6 +114,47 @@ void main() {
     await t.pump(const Duration(milliseconds: 400));
     expect(gevraagd, ['dev:pc-THUIS']);
     expect(bron.gespeeld, ['Nummer b@65']);
+    await t.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('een rij aantikken kiest die zone: de knop zegt waar je naar kijkt (stap 2.2)', (t) async {
+    final v = VerderLuisteren(_Bron(), klok: () => _nu);
+    final lijst = ZoneLijst(hier: 'dev:gsm-1', klok: () => _nu)..zet(_lijst());
+    final bewaard = <String>[];
+    final gekozen = GekozenZone(
+      lijst: lijst,
+      bewaar: bewaard.add,
+      maak: (id) => ZoneSpeler(
+        lijst: lijst,
+        zoneId: id,
+        nummer: v.bron.nummer,
+        idVan: (t) => t.title,
+        hoesVan: (_) => null,
+        stuur: (_) async => null,
+      ),
+    );
+    await t.pumpWidget(MultiProvider(
+      providers: [
+        ChangeNotifierProvider<LibraryStore>(create: (_) => LibraryStore()),
+        ChangeNotifierProvider<VerderLuisteren>.value(value: v),
+        ChangeNotifierProvider<ZoneLijst>.value(value: lijst),
+        ChangeNotifierProvider<GekozenZone>.value(value: gekozen),
+      ],
+      child: const MaterialApp(home: Scaffold(body: Center(child: SizedBox(width: 360, child: ZoneKiesKnop())))),
+    ));
+    expect(find.text('Speelt op: Galaxy'), findsOneWidget);
+    await t.tap(find.byKey(const ValueKey('zone-kies')));
+    await t.pump(const Duration(milliseconds: 400));
+    await t.pump(const Duration(milliseconds: 400));
+    expect(find.byIcon(Icons.check_rounded), findsOneWidget, reason: 'het vinkje bij dit toestel');
+
+    await t.tap(find.byKey(const ValueKey('zone-kies-dev:pc-THUIS')));
+    await t.pump(const Duration(milliseconds: 400));
+    await t.pump(const Duration(milliseconds: 400));
+    expect(gekozen.opAfstand?.zoneId, 'dev:pc-THUIS');
+    expect(bewaard, ['dev:pc-THUIS'], reason: 'per toestel onthouden');
+    expect(find.text('Speelt op: THUIS'), findsOneWidget);
+    gekozen.dispose();
     await t.pump(const Duration(seconds: 1));
   });
 }

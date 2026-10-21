@@ -99,6 +99,7 @@ class ZoneVerbinding {
     this.platform = '',
     this.tv = false,
     this.opStand,
+    this.opOpdracht,
     this.log,
   });
 
@@ -113,6 +114,10 @@ class ZoneVerbinding {
   /// De laatste melding van wie dan ook en het laatste "Speel op …" (`{progress, verzoek}`), zodra de pc
   /// ze stuurt: voor "Hier verder luisteren".
   final void Function(Map<String, dynamic>? progress, Map<String, dynamic>? verzoek)? opStand;
+
+  /// Een opdracht voor DIT toestel, van een ander toestel dat het als zone bedient (`{cmd, …}`, zie
+  /// zone_opdracht.dart).
+  final void Function(Map<String, dynamic> opdracht)? opOpdracht;
 
   /// Eén regel per verandering van de lijn, voor een logboek. Nooit per bericht.
   final void Function(String)? log;
@@ -238,6 +243,8 @@ class ZoneVerbinding {
         switch (e.event) {
           case 'zones':
             lijst.zet(m);
+          case 'cmd':
+            opOpdracht?.call(m);
           case 'stand':
             opStand?.call((m['progress'] as Map?)?.cast<String, dynamic>(),
                 (m['verzoek'] as Map?)?.cast<String, dynamic>());
