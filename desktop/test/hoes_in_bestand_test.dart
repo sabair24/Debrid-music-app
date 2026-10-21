@@ -212,6 +212,22 @@ void main() {
       expect(readFlacRawFields(f)['album'], 'Pochette Surprise');
     });
 
+    test('alleen-lezen: niet aangeraakt, en niets gekopieerd', () {
+      final f = schrijf('ro.flac', _flac([(4, tags), (6, _picture(3, oudeHoes)), (1, Uint8List(8192))], audio));
+      if (Platform.isWindows) {
+        Process.runSync('attrib', ['+R', f.path]);
+      } else {
+        Process.runSync('chmod', ['444', f.path]);
+      }
+      addTearDown(() => Platform.isWindows
+          ? Process.runSync('attrib', ['-R', f.path])
+          : Process.runSync('chmod', ['644', f.path]));
+      final voor = f.readAsBytesSync();
+      expect(schrijfVoorkantInFlac(f.path, _jpeg(1200, 1200, 2000)).uitkomst, HoesUitkomst.alleenLezen);
+      expect(f.readAsBytesSync(), voor);
+      expect(File('${f.path}.hoes').existsSync(), isFalse);
+    });
+
     test('geen FLAC: niet aangeraakt', () {
       final nieuw = _jpeg(1200, 1200, 2000);
       final mp3 = schrijf('g.flac', Uint8List.fromList([0x49, 0x44, 0x33, 3, 0, 0, 0, 0, 0, 0, ...audio.take(500)]));
