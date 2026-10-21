@@ -308,6 +308,16 @@ List<({int soort, Uint8List lijf})> nieuweBlokken(
   }
 }
 
+/// [schrijfVoorkantInFlac] in een eigen isolate.
+///
+/// **Een functie op het hoogste niveau, en dat is geen smaak.** Een closure die IN een methode van de veger
+/// gemaakt wordt, neemt de context van die methode mee naar de isolate — en daarmee de veger zelf, met zijn
+/// timers. Gemeten op de pc (21-10-2026, 3.9.538): de eerste ronde brak meteen af met "object is unsendable
+/// — _Timer", vóór er één bestand geschreven was. Hier draagt de closure alleen deze vier waarden.
+Future<({HoesUitkomst uitkomst, String? oud, String? reden})> schrijfVoorkantApart(
+        String pad, Uint8List beeld, bool alleenAlsLeeg, String? bewaarOud) =>
+    Isolate.run(() => schrijfVoorkantInFlac(pad, beeld, alleenAlsLeeg: alleenAlsLeeg, bewaarOud: bewaarOud));
+
 /// Wat er per album in de bestanden hoort: het beeld, en of het alleen in bestanden zonder plaat mag.
 /// Null als er niets zekers is (zie de uitleg bovenaan).
 ({Uint8List beeld, bool alleenAlsLeeg})? hoesVoorBestanden(Album a) {
@@ -462,9 +472,8 @@ class HoesInBestandVeger {
             overgeslagen++;
             continue;
           }
-          final beeld = w.beeld, alleenAlsLeeg = w.alleenAlsLeeg, bewaar = _oudMap;
-          final klus = Isolate.run(
-              () => schrijfVoorkantInFlac(pad, beeld, alleenAlsLeeg: alleenAlsLeeg, bewaarOud: bewaar));
+          final beeld = w.beeld;
+          final klus = schrijfVoorkantApart(pad, beeld, w.alleenAlsLeeg, _oudMap);
           _nuPad = pad;
           _nu = klus.then((_) {});
           final r = await klus;
