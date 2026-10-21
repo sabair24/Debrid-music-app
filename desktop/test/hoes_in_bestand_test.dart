@@ -337,6 +337,28 @@ void main() {
       await opnieuw.ronde();
       final log2 = File('${map.path}${Platform.pathSeparator}hoes_in_bestand.log').readAsStringSync();
       expect(log2, contains('ronde: 1 nummers in 1 albums'), reason: 'alleen het nummer dat toen speelde');
+
+      // Een ander bestand op hetzelfde pad (Alanis Morissette — Perfect, opnieuw gedownload): een nieuwe vraag,
+      // ook binnen dezelfde sessie.
+      File(paden[0]).writeAsBytesSync(_flac([(4, tags), (6, _picture(3, oudeHoes)), (1, Uint8List(30000))], audio));
+      // Zoals na een download: de bibliotheek kent het nieuwe bestand (grootte, datum), en dat start de ronde.
+      lib.albums = [
+        Album('Pochette Surprise', 'Jordy', [
+          for (final p in paden)
+            Track(
+                path: p,
+                title: 'x',
+                artist: 'Jordy',
+                album: 'Pochette Surprise',
+                isFlac: true,
+                sizeBytes: File(p).lengthSync(),
+                addedMs: File(p).lastModifiedSync().millisecondsSinceEpoch)
+        ])
+          ..resolvedCover = gekozen
+          ..resolvedFrom = 'dz:664022531',
+      ];
+      await opnieuw.ronde();
+      expect(readFlacPicture(File(paden[0])).hoes, gekozen, reason: 'het nieuwe bestand kreeg de hoes ook');
       opnieuw.stop();
     });
   });
