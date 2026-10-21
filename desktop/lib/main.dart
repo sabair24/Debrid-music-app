@@ -53,6 +53,7 @@ import 'zone_lijst.dart';
 import 'zone_speler.dart';
 import 'zone_opdracht.dart';
 import 'volgbron.dart' show Volgbron;
+import 'samen.dart' show KlokIjk, SamenAnker, SamenVolger;
 import 'lan/zones.dart' show ZoneSoort, ZoneStaat, positieNu;
 import 'lan/server.dart' show LanServer;
 import 'ui/knopbewegingen.dart';
@@ -1474,6 +1475,22 @@ Future<void> main() async {
   if (volgbron != null) AppLifecycleListener(onResume: volgbron.herbekijk);
   unawaited(initNowPlaying(volgbron ?? player, cover: library.coverForTrack, lokaal: player));
 
+  // Samen spelen (groeperen, stap 3.2): de klok van de pc en de volger. Zie samen.dart.
+  final samenKlok = KlokIjk(vraag: mode.owner ? null : () async => library.remote?.tijd());
+  final samenLog = WarmLog('$logDir${Platform.pathSeparator}samen.log');
+  final samenVolger = SamenVolger(
+    speler: player,
+    nummer: verder.bron.nummer,
+    idVan: (t) => library.gedeeldId(t.path),
+    klok: samenKlok,
+    vertragingMs: () => settings.samenVertragingMs,
+    log: (regel) {
+      samenLog.line(regel);
+      // Ook in logcat, zodat een meting aan de kabel het meteen ziet.
+      debugPrint(regel);
+    },
+  );
+
   // Wat dit toestel doet met een opdracht van een ander toestel dat het als zone bedient.
   final zoneUitvoerder = ZoneUitvoerder(
     speler: player,
@@ -1482,6 +1499,12 @@ Future<void> main() async {
     idVan: (t) => library.gedeeldId(t.path),
     // Een andere zone verplaatst haar muziek hierheen (stap 2.5): overnemen zoals bij "Hier verder".
     neemOver: verder.neemOverUit,
+    // Dit toestel volgt een groep (stap 3.2).
+    samen: (a) async {
+      final anker = SamenAnker.fromJson(a);
+      if (anker != null) await samenVolger.opAnker(anker);
+    },
+    samenStop: ({bool pauzeer = true}) => samenVolger.stop(pauzeer: pauzeer),
     radio: (artiest, {zaad, titel}) async {
       final ctx = appNavigator.currentContext;
       if (ctx != null && ctx.mounted) await startRadio(ctx, artiest, titel: titel, zaad: zaad, hier: true);
@@ -10969,9 +10992,11 @@ class _ZoneVolume extends StatelessWidget {
 /// en spelen wat de leider speelt; uitvinken maakt een speaker weer los.
 Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
   final lijst = context.read<ZoneLijst>();
+  // Sonossen met Sonossen (die lopen onderling exact gelijk), toestellen met toestellen (stap 3.2).
+  final speakers = leider.soort == ZoneSoort.speaker;
   final kandidaten = [
     for (final z in lijst.zones)
-      if (z.id != leider.id && z.kanGroeperen) z,
+      if (z.id != leider.id && z.kanGroeperen && z.online && (z.soort == ZoneSoort.speaker) == speakers) z,
   ];
   // Wie al in de groep zit, staat niet apart in de lijst: die halen we uit de groep zelf.
   final inGroep = {...leider.groep}..remove(leider.id);
@@ -11002,7 +11027,11 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
                     Text('Samen laten spelen met ${leider.naam.split(' + ').first}',
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                     const SizedBox(height: 2),
-                    Text('Ze spelen wat deze speelt, op de seconde gelijk',
+                    Text(
+                        speakers
+                            ? 'Ze spelen wat deze speelt, op de seconde gelijk'
+                            : 'Ze volgen dit toestel. Klinkt er een achter (Bluetooth)? Zet het bij in Instellingen '
+                                'op dat toestel: "Vertraging bij samen spelen".',
                         style: TextStyle(color: _muted, fontSize: 12)),
                     const SizedBox(height: 8),
                     if (ids.isEmpty)
@@ -11843,6 +11872,58 @@ Future<void> speelGetikt(BuildContext context, List<Track> lijst, int index, {Ui
 }
 
 /// De vaste keuze voor een tik op een nummer, in Instellingen — zie [speelGetikt].
+/// "Vertraging bij samen spelen" (stap 3.2, Saber 21-10-2026: "per toestel bij te stellen"): klinkt dit
+/// toestel achter de rest aan (Bluetooth-oortjes, een versterker via HDMI), schuif dan naar links; klinkt
+/// het voor, naar rechts. Per toestel bewaard.
+class SamenVertragingInstelling extends StatefulWidget {
+  const SamenVertragingInstelling({super.key});
+
+  @override
+  State<SamenVertragingInstelling> createState() => _SamenVertragingInstellingState();
+}
+
+class _SamenVertragingInstellingState extends State<SamenVertragingInstelling> {
+  Timer? _bewaar;
+
+  @override
+  void dispose() {
+    _bewaar?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = context.watch<AppSettings>();
+    final v = settings.samenVertragingMs;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          const Expanded(
+            child: Text('Vertraging bij samen spelen', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+          Text(v == 0 ? 'geen' : '${v > 0 ? '+' : ''}$v ms', style: TextStyle(color: _muted, fontSize: 12)),
+        ]),
+        Text('Speelt dit toestel samen met andere en klinkt het erachter aan (Bluetooth), schuif naar links; '
+            'klinkt het ervoor, naar rechts.',
+            style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
+        Slider(
+          key: const ValueKey('samen-vertraging'),
+          value: v.toDouble().clamp(-500, 500),
+          min: -500,
+          max: 500,
+          divisions: 100,
+          onChanged: (x) {
+            setState(() => settings.samenVertragingMs = x.round());
+            _bewaar?.cancel();
+            _bewaar = Timer(const Duration(milliseconds: 600), () => unawaited(settings.save()));
+          },
+        ),
+      ],
+    );
+  }
+}
+
 class TikKeuzeInstelling extends StatelessWidget {
   const TikKeuzeInstelling({super.key});
 
@@ -28451,6 +28532,8 @@ class _SharingSectionState extends State<_SharingSection> {
         ],
         const SizedBox(height: 14),
         const TikKeuzeInstelling(),
+        const SizedBox(height: 14),
+        const SamenVertragingInstelling(),
         const SizedBox(height: 14),
         OutlinedButton.icon(
           onPressed: () async {

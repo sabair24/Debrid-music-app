@@ -38,9 +38,15 @@ class ZoneUitvoerder {
     this.idVan,
     this.radio,
     this.neemOver,
+    this.samen,
+    this.samenStop,
     this.naUitvoeren,
     this.log,
   });
+
+  /// Een anker van de groep die dit toestel volgt (stap 3.2, zie `samen.dart`), en het einde daarvan.
+  final Future<void> Function(Map<String, dynamic> anker)? samen;
+  final Future<void> Function({bool pauzeer})? samenStop;
 
   /// De muziek van een andere zone hier verder spelen ([stand] = haar melding, zie `/api/zone/transfer`).
   /// True als het lukte. Zie `VerderLuisteren.neemOverUit`.
@@ -140,6 +146,11 @@ class ZoneUitvoerder {
           } else {
             rij.zetAchteraan(ts);
           }
+        case 'samen':
+          final a = (op['anker'] as Map?)?.cast<String, dynamic>();
+          if (a != null) await samen?.call(a);
+        case 'samenStop':
+          await samenStop?.call(pauzeer: op['houdSpelen'] != true);
         case 'neemOver':
           final stand = (op['stand'] as Map?)?.cast<String, dynamic>();
           final f = neemOver;
@@ -160,6 +171,8 @@ class ZoneUitvoerder {
     } catch (e) {
       fout = 'Mislukt: $e';
     }
+    // Een anker komt om de vijf seconden: niet elke keer in het logboek, en geen extra melding.
+    if (cmd == 'samen') return fout;
     log?.call('opdracht $cmd${fout == null ? '' : ' — $fout'}  (van ${op['van'] ?? '?'})');
     naUitvoeren?.call();
     return fout;

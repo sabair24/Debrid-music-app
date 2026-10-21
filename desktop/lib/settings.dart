@@ -182,6 +182,10 @@ class AppSettings extends ChangeNotifier {
   /// `GekozenZone` in zone_speler.dart.
   String gekozenZone = '';
 
+  /// Hoeveel later dit toestel klinkt als het samen met andere speelt (ms; positief = later). Voor een
+  /// toestel dat achter de rest aan klinkt (Bluetooth, een versterker via HDMI): naar links (stap 3.2).
+  int samenVertragingMs = 0;
+
   /// Hoe de radio kiest: 'bekend', 'gemengd' of 'ontdekken' — zie `radiosmaak.dart`.
   ///
   /// Als tekst, om dezelfde reden als [stroomThuis]. Leeg of onbekend leest als 'gemengd': de radio
@@ -383,6 +387,7 @@ class AppSettings extends ChangeNotifier {
         tikKeuze = (m['tik_keuze'] ?? 'vragen') as String;
         appVolume = ((m['app_volume'] as num?) ?? 100).toDouble().clamp(0, 100).toDouble();
         gekozenZone = (m['gekozen_zone'] ?? '') as String;
+        samenVertragingMs = ((m['samen_vertraging_ms'] as num?) ?? 0).toInt().clamp(-1000, 1000);
         radioSmaak = (m['radio_smaak'] ?? 'gemengd') as String;
         luidheid = (m['luidheid'] ?? 'normaal') as String;
         luidheidAlbum = (m['luidheid_album'] ?? true) as bool;
@@ -435,6 +440,7 @@ class AppSettings extends ChangeNotifier {
         'tik_keuze': tikKeuze,
         'app_volume': appVolume,
         'gekozen_zone': gekozenZone,
+        'samen_vertraging_ms': samenVertragingMs,
         'radio_smaak': radioSmaak,
         'luidheid': luidheid,
         'luidheid_album': luidheidAlbum,
