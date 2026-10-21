@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/flac_tags.dart';
 import 'package:debridmusic/hoes_in_bestand.dart';
+import 'package:debridmusic/library.dart';
 import 'package:debridmusic/models.dart';
 
 /// Een JPEG-kop met maten en wat vulling: genoeg voor [beeldKenmerk] en om te vergelijken.
@@ -243,6 +244,46 @@ void main() {
         ..embeddedIsVanEenAndere = false
         ..embeddedCover = null;
       expect(hoesVoorBestanden(a), isNull, reason: 'een gok op naam gaat niet in je bestanden');
+    });
+  });
+
+  group('de veger', () {
+    test('een echte ronde, met de isolate: de hoes in alle nummers, de oude bewaard, het spelende niet', () async {
+      final audio = _audio(50000);
+      final oudeHoes = _jpeg(600, 600, 5000, zaad: 2);
+      final tags = _vorbis({'TITLE': 'x'});
+      final paden = [
+        for (final n in ['1.flac', '2.flac', '3.flac'])
+          schrijf(n, _flac([(4, tags), (6, _picture(3, oudeHoes)), (1, Uint8List(20000))], audio)).path
+      ];
+      final gekozen = _jpeg(1200, 1200, 9000, zaad: 3);
+      final lib = LibraryStore()..configDirOverride = map.path;
+      lib.albums = [
+        Album('Pochette Surprise', 'Jordy', [
+          for (final p in paden) Track(path: p, title: 'x', artist: 'Jordy', album: 'Pochette Surprise', isFlac: true)
+        ])
+          ..resolvedCover = gekozen
+          ..resolvedFrom = 'dz:664022531',
+      ];
+      final veger = HoesInBestandVeger(
+          library: lib, speeltNu: (p) => p == paden[2], tussenpoos: Duration.zero, startNa: const Duration(hours: 1));
+      // Gestart zoals op de pc: dan heeft de veger zijn timers, en een closure die hem meeneemt naar de isolate
+      // breekt daarop af (3.9.538: "object is unsendable — _Timer").
+      await veger.start();
+      await veger.ronde();
+      expect(readFlacPicture(File(paden[0])).hoes, gekozen);
+      expect(readFlacPicture(File(paden[1])).hoes, gekozen);
+      expect(readFlacPicture(File(paden[2])).hoes, oudeHoes, reason: 'wat speelt, wacht');
+      expect(File(paden[0]).lastModifiedSync(), vroeger);
+      final log = File('${map.path}${Platform.pathSeparator}hoes_in_bestand.log').readAsStringSync();
+      expect(log, isNot(contains('MISLUKT')));
+      expect(log, contains('2 geschreven (2 even groot, 0 gegroeid)'));
+      expect(File('${map.path}${Platform.pathSeparator}hoes_oud${Platform.pathSeparator}index.json').existsSync(), isTrue);
+      // De bibliotheek leest bij de volgende start de NIEUWE plaat uit haar cache.
+      final st = File(paden[0]).statSync();
+      final sleutel = hoesSleutel(paden[0], st.modified.millisecondsSinceEpoch, st.size);
+      expect(File('${lib.hoesCacheMap}${Platform.pathSeparator}$sleutel').readAsBytesSync(), gekozen);
+      veger.stop();
     });
   });
 
