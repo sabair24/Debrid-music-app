@@ -47,6 +47,7 @@ import 'tokens.dart';
 import 'transcode.dart';
 import 'upnp.dart';
 import '../artwork.dart';
+import '../discogs.dart' show DiscogsArtwork, DiscogsService, ReleaseArt, kunstNaarJson, persingUitHerkomst;
 import '../aanbevolen.dart';
 import '../vertaler.dart';
 
@@ -80,6 +81,7 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/config', '/api/radio', '/api/jobs', '/api/kwaliteit', '/api/nieuw', '/api/corrections', '/api/move/plan',
     '/api/move/apply',
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
+    '/api/releaseart',
   };
   const voorvoegsels = ['/stream/', '/groei/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
   if (exact.contains(pad) || voorvoegsels.any(pad.startsWith)) return null;
@@ -576,6 +578,10 @@ class LanServer {
         return _soulseekDownload(req);
       case '/api/soulseek/download-album':
         return _soulseekDownloadAlbum(req);
+      case '/api/soulseek/zoek-beter':
+        return _soulseekZoekBeter(req);
+      case '/api/releaseart':
+        return _releaseArt(req);
       case '/api/jobs':
         return _json(res, {'jobs': jobsSnapshot()});
       case '/api/jobs/cancel':
@@ -1932,6 +1938,78 @@ class LanServer {
     } catch (e) {
       return _unavailable(req, '$e');
     }
+  }
+
+  /// "Zoek hi-res" op een albumpagina, of 👍 op een radionummer, vanaf een toestel: dezelfde jacht als op de
+  /// pc ([DownloadManager.zoekBeterVoor] — vervangen alleen als het bewezen beter is). Saber, 21-10-2026:
+  /// "Kan het dat de functie hi res zoeken, niet op de andere platformen staan?" — de knop stond alleen
+  /// waar het toestel zelf haalt.
+  ///
+  /// `trackIds` zijn de nummer-ids van de catalogus; `album` (optioneel) laat één zoekopdracht voor het hele
+  /// album gaan. Antwoord: `begonnen` = voor hoeveel nummers er een jacht begon, -1 als het zoeken langer
+  /// duurt dan het toestel wacht (dan loopt het gewoon door).
+  Future<void> _soulseekZoekBeter(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final nummers = <Track>[
+      for (final id in (body['trackIds'] as List? ?? const []))
+        if (id is String)
+          if (catalog.track(id) case final t?) t,
+    ];
+    if (nummers.isEmpty) return _json(req.response, {'begonnen': 0, 'reason': 'niets gevonden'});
+    final teVeel = _quotum(req, kQuotumDownloads);
+    if (teVeel != null) return _teVeel(req, teVeel);
+    final album = body['album'] is String ? body['album'] as String : null;
+    final n = await manager
+        .zoekBeterVoor(nummers, album: album, gezag: library.tagsVoorVervanger)
+        .timeout(const Duration(seconds: 25), onTimeout: () => -1);
+    return _json(req.response, {'begonnen': n});
+  }
+
+  /// De scans van een album zoals deze pc ze al heeft — voor een toestel, zodat de cd en de achterkant er
+  /// meteen staan in plaats van na de hele keten (zie `DiscogsArtwork.vanDePc`). Op het id van het album: de
+  /// pc kent zijn feiten (de uitgave), zijn vaste persing en de rollen, en zoekt dus in de juiste map — onder
+  /// de sleutel van de warmer en de albumpagina, en anders onder die van Nu speelt. Altijd op volle
+  /// resolutie. 404 als er niets ligt.
+  Future<void> _releaseArt(HttpRequest req) async {
+    final config = settings;
+    final al = catalog.album(req.uri.queryParameters['albumId'] ?? '');
+    if (config == null || al == null) {
+      req.response.statusCode = HttpStatus.notFound;
+      return req.response.close();
+    }
+    final dienst = DiscogsService(config);
+    final feiten = library.facts.get(library.uidOf(al));
+    final persing = persingUitHerkomst(al.resolvedFrom);
+    final rollen = library.albumArtRoles(al.artist, al.title);
+    final pins = library.pinnedRelease(al);
+    final mbid = library.pinnedMbid(al);
+    final sleutels = <({int tracks, int? pinned, String? mbid})>{
+      (tracks: feiten?.tracklist.length ?? al.tracks.length, pinned: pins, mbid: mbid ?? feiten?.mbid),
+      (tracks: al.tracks.length, pinned: pins ?? persing.release, mbid: mbid ?? persing.mbid ?? feiten?.mbid),
+      (tracks: al.tracks.length, pinned: pins, mbid: mbid),
+    };
+    ReleaseArt? art;
+    var klaar = false;
+    for (final s in sleutels) {
+      final a = await dienst.cachedReleaseArt(al.artist, al.title,
+          expectedTracks: s.tracks, pinned: s.pinned, pinnedMbid: s.mbid, roles: rollen);
+      if (a == null || (a.back == null && a.disc == null)) continue;
+      art = a;
+      klaar = await dienst.hasReleaseArt(al.artist, al.title,
+          expectedTracks: s.tracks, pinned: s.pinned, pinnedMbid: s.mbid, roles: rollen);
+      break;
+    }
+    if (art == null) {
+      req.response.statusCode = HttpStatus.notFound;
+      return req.response.close();
+    }
+    // Op volle resolutie, zoals de pc ze bewaart — niet verkleind (Saber, 21-10-2026: "worden die nooit op
+    // volle resolutie getoond dan ??? Da wil ik wel"). Het is één keer per album; daarna staan ze op het
+    // toestel.
+    return _json(req.response, kunstNaarJson(art, klaar: klaar));
   }
 
   /// A whole album at once, asked for by a paired device.

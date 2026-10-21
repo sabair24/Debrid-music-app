@@ -1574,6 +1574,38 @@ class ReleaseArt {
   bool get isEmpty => front == null && back == null && disc == null;
 }
 
+/// De scans van een album als JSON, zoals de pc ze aan een toestel geeft (`/api/releaseart`, server.dart).
+Map<String, dynamic> kunstNaarJson(ReleaseArt a, {required bool klaar}) => {
+      if (a.front != null) 'front': base64Encode(a.front!),
+      if (a.back != null) 'back': base64Encode(a.back!),
+      if (a.disc != null) 'disc': base64Encode(a.disc!),
+      if (a.bron != null) 'bron': a.bron,
+      if (a.formaat != null) 'formaat': a.formaat,
+      'klaar': klaar,
+    };
+
+/// Het omgekeerde van [kunstNaarJson]; null als er geen enkel beeld in zit of het geen geldige JSON is.
+({ReleaseArt art, bool klaar})? kunstUitJson(Object? j) {
+  if (j is! Map) return null;
+  Uint8List? beeld(String k) {
+    final v = j[k];
+    if (v is! String || v.isEmpty) return null;
+    try {
+      return base64Decode(v);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  final a = ReleaseArt(
+      front: beeld('front'),
+      back: beeld('back'),
+      disc: beeld('disc'),
+      bron: j['bron'] is String ? j['bron'] as String : null,
+      formaat: j['formaat'] is String ? j['formaat'] as String : null);
+  return a.isEmpty ? null : (art: a, klaar: j['klaar'] == true);
+}
+
 /// Van welke persing de getekende hoes is, om aan de bibliotheek door te geven.
 ///
 /// **Waarom dit een eigen functie is en geen regel in de widget.** Dit is de regel die stuk was, en
@@ -1772,7 +1804,7 @@ extension DiscogsArtwork on DiscogsService {
     }
 
     final work =
-        _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld)
+        _vanPcOfVers(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld)
             .then((a) async => _metDigitaal(a, await digitaalF))
             .whenComplete(() {
       _artInFlight.remove(lane);
@@ -1793,6 +1825,49 @@ extension DiscogsArtwork on DiscogsService {
   }
 
   static final _artInFlight = <String, Future<ReleaseArt?>>{};
+
+  /// Op een toestel: de scans van dit album zoals de pc ze al heeft — zie [kunstUitJson] en
+  /// `/api/releaseart`. Null (de pc zelf, een toets): niet vragen.
+  ///
+  /// **Waarom (Saber, 21-10-2026, over Azizam op de gsm).** *"het duurde even voor ik de afbeelding van de cd
+  /// zag … waardoor ik altijd denk van oei die heeft nog geen afbeelding terwijl die wel heeft. Ook na updates
+  /// of koude start of wissel van toestel moet die er direct staan."* Een toestel zocht de cd zelf, langs de
+  /// hele keten (TheAudioDB met drie seconden tussen de vragen, het archief, Discogs), ook als de pc hem al
+  /// lang had: onder een andere sleutel (de gsm kende de uitgave van het album nog niet, want die feiten komen
+  /// pas als je de albumpagina opent), of op een toestel dat hem nog nooit gezien had. De pc zoekt het album
+  /// op zijn id op, met zijn eigen feiten en keuzes — dus altijd de juiste map.
+  static Future<({ReleaseArt art, bool klaar})?> Function(String artist, String album)? vanDePc;
+
+  /// Eerst de pc ([vanDePc]), dan pas de keten. Wat de pc gaf staat meteen op het scherm ([meld]) en op schijf;
+  /// heet het daar af, dan is dat het antwoord.
+  Future<ReleaseArt?> _vanPcOfVers(
+      String artist,
+      String album,
+      int expectedTracks,
+      int? pinned,
+      String? pinnedMbid,
+      Map<String, String> roles,
+      Directory dir,
+      void Function(String)? trace,
+      bool freeOnly,
+      void Function(ReleaseArt) meld) async {
+    final pc = vanDePc;
+    if (pc != null && !freeOnly) {
+      ({ReleaseArt art, bool klaar})? v;
+      try {
+        v = await pc(artist, album).timeout(const Duration(seconds: 10));
+      } catch (_) {/* dan de keten, zoals altijd */}
+      final a = v?.art;
+      if (v != null && a != null && (a.back != null || a.disc != null)) {
+        trace?.call('  [kunst] van de pc:${a.front != null ? " voorkant" : ""}${a.back != null ? " achterkant" : ""}'
+            '${a.disc != null ? " cd" : ""}${v.klaar ? " — af" : " — de keten vult aan"}');
+        meld(a);
+        await _writeArt(dir, a, done: v.klaar);
+        if (v.klaar) return a;
+      }
+    }
+    return _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld);
+  }
 
   /// [art] met de digitale voorkant [d] erin — en elke keer HETZELFDE object voor dezelfde twee, zie
   /// [_gelezen]: een nieuw object laat Nu speelt flitsen.
