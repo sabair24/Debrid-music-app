@@ -100,6 +100,8 @@ String sfeerPrompt({
   int? jaar,
   List<String> stijlen = const [],
   required List<({String artiest, String titel})> kandidaten,
+  List<({String artiest, String titel})> pastNiet = const [],
+  List<({String artiest, String titel})> pastWel = const [],
 }) {
   final zaad = titel == null || titel.trim().isEmpty ? artiest : '$artiest - $titel';
   final feiten = [
@@ -113,11 +115,32 @@ Een ander systeem stelde de nummers hieronder voor. Welke passen NIET in de sfee
 Kijk naar tempo, energie, stemming en klank - niet alleen naar het genre of het jaar. Een radio rond
 een rustig, zwoel soulnummer heeft geen uptempo dancepop; een radio rond een eurodanceplaat heeft geen
 trage ballads. Wees streng: twijfel je of een nummer de sfeer breekt, noem het dan.
-
+${_voorbeeldZinnen(pastNiet, pastWel)}
 ${[for (var i = 0; i < kandidaten.length; i++) '${i + 1}. ${kandidaten[i].artiest} - ${kandidaten[i].titel}'].join('\n')}
 
 Geef de nummers terug die weg moeten.
 ''';
+}
+
+/// Wat de luisteraar zelf zei over nummers in radio's als deze — "past niet" en "past" (Saber, 21-10-2026:
+/// "dan moet de app daar absoluut rekening mee houden"). Leeg als hij nog niets zei.
+String _voorbeeldZinnen(List<({String artiest, String titel})> pastNiet, List<({String artiest, String titel})> pastWel) {
+  if (pastNiet.isEmpty && pastWel.isEmpty) return '';
+  final niet = pastNiet.take(20).map((n) => '- ${n.artiest} - ${n.titel}').join('\n');
+  final wel = pastWel.take(15).map((n) => '- ${n.artiest} - ${n.titel}').join('\n');
+  return [
+    '',
+    if (pastNiet.isNotEmpty) ...[
+      'De luisteraar zei over deze nummers in een radio als deze dat ze NIET pasten. Kijk wat ze gemeen',
+      'hebben - tempo, stemming, klank - en weer ook nummers die daarop lijken:',
+      niet,
+    ],
+    if (pastWel.isNotEmpty) ...[
+      'En deze pasten WEL - dat is de richting:',
+      wel,
+    ],
+    '',
+  ].join('\n');
 }
 
 /// De indexen (vanaf 0) die weg moeten, uit het antwoord op [sfeerPrompt]. Alleen wat in de lijst
@@ -156,6 +179,8 @@ String nummersPrompt({
   required SmaakProfiel profiel,
   Radiosmaak smaak = Radiosmaak.gemengd,
   List<String> alGekozen = const [],
+  List<({String artiest, String titel})> pastNiet = const [],
+  List<({String artiest, String titel})> pastWel = const [],
 }) {
   final zaad = titel == null || titel.trim().isEmpty ? artiest : '$artiest - $titel';
   final feiten = [
@@ -176,7 +201,7 @@ ${_smaakZin(smaak)}
 
 Altijd de originele of de radioversie: geen remixen, extended mixes, covers, live-opnames of
 karaoke. Hoogstens twee nummers van $artiest zelf, en hoogstens twee per andere artiest.
-${alGekozen.isEmpty ? '' : '\nDeze staan al op de radio, noem ze niet opnieuw: ${alGekozen.take(60).join('; ')}\n'}
+${alGekozen.isEmpty ? '' : '\nDeze staan al op de radio, noem ze niet opnieuw: ${alGekozen.take(60).join('; ')}\n'}${_voorbeeldZinnen(pastNiet, pastWel)}
 Wat ik van de luisteraar weet - alleen om "bekend" in te vullen, niet om de stijl te kiezen:
 - Meest in zijn kast: ${profiel.topArtiesten.take(25).join(', ')}
 - Recent gedraaid: ${profiel.gespeeld.take(10).join(', ')}

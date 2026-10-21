@@ -62,6 +62,8 @@ import 'catalog.dart';
 import 'completeness.dart';
 import 'credits.dart';
 import 'deezerbaan.dart';
+import 'radiosfeer.dart';
+import 'versiecontrole.dart';
 import 'discogs.dart';
 import 'discography.dart';
 import 'discography_service.dart';
@@ -1163,6 +1165,12 @@ Future<void> main() async {
   // Duim omhoog of omlaag. Dezelfde vorm, dezelfde weg, en dezelfde `idVanPad` — zie hierboven.
   final oordelen = Oordelen()..idVanPad = library.gedeeldId;
   if (mode.owner) oordelen.winkel = sharing.state;
+  // "Past / past niet in deze radio" — zie `radiosfeer.dart`. Dezelfde gedeelde staat als de duimen.
+  final radioSfeer = RadioSfeer();
+  if (mode.owner) radioSfeer.winkel = sharing.state;
+  // De versiecontrole van elke download: alleen op de pc, die haalt (zie `versiecontrole.dart`).
+  if (mode.owner) DownloadManager.versiecontrole = Versiecontrole().score;
+  radio.sfeer = radioSfeer;
   // Als FACTOR de speler in: die hoeft niets van duimen te weten, en `oordeelBonus` blijft daardoor
   // op één plek staan in plaats van in de speler én in het scherm.
   player.oordeelWeging = (t) => oordeelBonus(oordelen.vanTrack(t));
@@ -1467,6 +1475,7 @@ Future<void> main() async {
         ChangeNotifierProvider<DownloadManager>.value(value: downloads),
         ChangeNotifierProvider<RadioBesturing>.value(value: radio),
         ChangeNotifierProvider<Oordelen>.value(value: oordelen),
+        ChangeNotifierProvider<RadioSfeer>.value(value: radioSfeer),
         ChangeNotifierProvider<LanSharing>.value(value: sharing),
         ChangeNotifierProvider<ClientSession>.value(value: session),
         ChangeNotifierProvider<CloudSession>.value(value: cloud),
@@ -1559,6 +1568,8 @@ Future<void> main() async {
               (s['plays'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
           oordelen.vanServer(
               (s['ratings'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
+          radioSfeer.vanServer(
+              (s['radioSfeer'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
         } catch (_) {/* geen pc; het hartje blijft staan zoals het stond */}
       }
 
@@ -1576,6 +1587,7 @@ Future<void> main() async {
       lijsten.duwOps = duw;
       speelstanden.duwOps = duw;
       oordelen.duwOps = duw;
+      radioSfeer.duwOps = duw;
       // Wat er hier speelt, naar de pc, onder het eigen id van dit toestel: zo kan elk ander toestel
       // "Hier verder luisteren" aanbieden (Saber, 17-10-2026). Tot nu toe meldde alleen de pc.
       player.onProgress = (track, position, playing, queue, index) {
@@ -13330,11 +13342,12 @@ class _RijDuimen extends StatelessWidget {
   }
 }
 
-/// De duimen op het speelscherm.
+/// De duimen op het speelscherm ([_RadioOordeel]).
 ///
-/// **Alleen bij een nummer dat DEZE radio heeft opgehaald.** Bij muziek die je zelf al had staat er
-/// niets, en dat is geen zuinigheid: er valt daar niets weg te gooien, en een rode knop die dat wél
-/// suggereert is precies de knop die je een keer per ongeluk raakt. De radio raakt je eigen
+/// **Twee paar sinds 21-10-2026.** "Past in deze radio?" bij elk nummer, ook je eigen — een oordeel over de
+/// sfeer (zie `radiosfeer.dart`). "Houden of weg?" alleen bij een nummer dat DEZE radio heeft opgehaald: bij
+/// muziek die je zelf al had valt er niets weg te gooien, en een rode knop die dat wél suggereert is precies
+/// de knop die je een keer per ongeluk raakt. De radio raakt je eigen
 /// verzameling niet aan, en dat hoort ook op het scherm te zien te zijn.
 ///
 /// Niet op televisie. Daar is geen aanwijzer, en een oordeel dat je met een afstandsbediening moet
@@ -13365,47 +13378,108 @@ class _RadioOordeel extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = track;
     final radio = context.watch<RadioBesturing>();
-    if (isTv || t == null || !radio.loopt || !radio.doorDezeRadio(t.path)) {
-      return const SizedBox.shrink();
-    }
+    if (isTv || t == null || !radio.loopt) return const SizedBox.shrink();
+    // "Past in deze radio?" bij ELK nummer van de radio, ook je eigen (Saber, 21-10-2026: "net zoals roon
+    // doet"); "Houden of weg?" alleen bij wat deze radio haalde — dat gaat over het bestand.
+    final gehaald = radio.doorDezeRadio(t.path);
+    final sfeer = context.watch<RadioSfeer>();
+    final past = sfeer.oordeel(artiest: t.artist, titel: t.title, zaad: radio.sfeerZaad, familie: radio.familie);
     final oordelen = context.watch<Oordelen>();
     final nu = oordelen.vanTrack(t);
+    Widget kop(String tekst) => Text(tekst,
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .6, color: kUitgezet));
+    final uitlijning = naast ? MainAxisAlignment.start : MainAxisAlignment.center;
     return Padding(
       padding: const EdgeInsets.only(top: kRuimte16, bottom: kRuimte8),
       child: Column(
         crossAxisAlignment: naast ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
-          Text('Houden of weg?',
-              style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: .6,
-                  color: kUitgezet)),
+          kop('Past in deze radio?'),
           const SizedBox(height: kRuimte8),
           Row(
-            mainAxisAlignment: naast ? MainAxisAlignment.start : MainAxisAlignment.center,
+            mainAxisAlignment: uitlijning,
             children: [
               Duim(
                 kant: Duimkant.omlaag,
-                aan: false,
-                gedempt: nu == Oordeel.omhoog,
-                bijschrift: 'Weg, ook van je pc',
-                opTik: () => unawaited(_duimOmlaag(context, t)),
+                aan: past == Sfeeroordeel.pastNiet,
+                gedempt: past == Sfeeroordeel.past,
+                bijschrift: 'Past niet',
+                opTik: () => unawaited(_pastNietInRadio(context, t)),
               ),
               const SizedBox(width: kRuimte24),
               Duim(
                 kant: Duimkant.omhoog,
-                aan: nu == Oordeel.omhoog,
-                gedempt: nu == Oordeel.omlaag,
-                bijschrift: 'Houden',
-                opTik: () => unawaited(_duimOmhoogRadio(context, t)),
+                aan: past == Sfeeroordeel.past,
+                gedempt: past == Sfeeroordeel.pastNiet,
+                bijschrift: 'Past',
+                opTik: () => unawaited(_pastInRadio(context, t)),
               ),
             ],
           ),
+          if (gehaald) ...[
+            const SizedBox(height: kRuimte16),
+            kop('Houden of weg?'),
+            const SizedBox(height: kRuimte8),
+            Row(
+              mainAxisAlignment: uitlijning,
+              children: [
+                Duim(
+                  kant: Duimkant.omlaag,
+                  aan: false,
+                  gedempt: nu == Oordeel.omhoog,
+                  bijschrift: 'Weg, ook van je pc',
+                  opTik: () => unawaited(_duimOmlaag(context, t)),
+                ),
+                const SizedBox(width: kRuimte24),
+                Duim(
+                  kant: Duimkant.omhoog,
+                  aan: nu == Oordeel.omhoog,
+                  gedempt: nu == Oordeel.omlaag,
+                  bijschrift: 'Houden',
+                  opTik: () => unawaited(_duimOmhoogRadio(context, t)),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
   }
+}
+
+/// "Past niet in deze radio": dit nummer niet meer in radio's met dezelfde startartiest of dezelfde sfeer,
+/// en meteen het volgende. Het bestand blijft staan tot "Radio afsluiten" (Saber, 21-10-2026) — weggooien
+/// is "Weg", hieronder. Zie `radiosfeer.dart`.
+Future<void> _pastNietInRadio(BuildContext context, Track t) async {
+  final radio = context.read<RadioBesturing>();
+  final sfeer = context.read<RadioSfeer>();
+  final meldingen = ScaffoldMessenger.of(context);
+  // Eerst het oordeel (op de pc meteen, op een toestel alvast hier), dan de radio: die vraagt het meteen na.
+  final klaar = sfeer
+      .zet(artiest: t.artist, titel: t.title, zaad: radio.sfeerZaad, familie: radio.familie, naar: Sfeeroordeel.pastNiet)
+      .catchError((Object _) {});
+  await radio.pastNiet(t);
+  await klaar;
+  meldingen.showSnackBar(SnackBar(
+    content: Text('${t.artist} — ${t.title} past niet in deze radio. Het komt niet meer in radio\'s als deze.'),
+    duration: const Duration(seconds: 3),
+  ));
+}
+
+/// "Past in deze radio" — nog eens tikken haalt het oordeel weg.
+Future<void> _pastInRadio(BuildContext context, Track t) async {
+  final radio = context.read<RadioBesturing>();
+  final sfeer = context.read<RadioSfeer>();
+  final meldingen = ScaffoldMessenger.of(context);
+  final was = sfeer.oordeel(artiest: t.artist, titel: t.title, zaad: radio.sfeerZaad, familie: radio.familie);
+  final naar = was == Sfeeroordeel.past ? null : Sfeeroordeel.past;
+  await sfeer
+      .zet(artiest: t.artist, titel: t.title, zaad: radio.sfeerZaad, familie: radio.familie, naar: naar)
+      .catchError((Object _) {});
+  meldingen.showSnackBar(SnackBar(
+    content: Text(naar == null ? 'Niet meer onthouden.' : 'Onthouden: past in deze radio.'),
+    duration: const Duration(seconds: 2),
+  ));
 }
 
 /// De weg uit een radio.
@@ -15312,7 +15386,10 @@ Future<void> startRadio(BuildContext context, String artist,
       zaadTitel: zaadTitel,
       stijlboek: stijlboek,
       zaadStijl: zaadStijl,
-      log: log);
+      log: log,
+      // "Past / past niet" van radio's als deze, op het moment van vragen.
+      voorbeelden: (s) =>
+          radio.sfeer?.voorbeelden(zaad: radio.sfeerZaad, familie: radio.familie, soort: s) ?? const []);
   // Deze start is de laatste: alles wat een eerdere start of afstemming nog onderweg heeft, voegt
   // daarna niets meer toe. Zie [_afstemBeurt].
   final beurt = ++_afstemBeurt;
@@ -15414,6 +15491,10 @@ Future<void> startRadio(BuildContext context, String artist,
       bijStart: (s) {
     gestart = s;
     _keuring = keuring;
+    // De sfeerfamilie: een "past niet" geldt ook voor radio's met dezelfde familie (zie `radiosfeer.dart`).
+    unawaited(zaadStijl.then((z) {
+      if (radio.sessie == s) radio.familie = z.familie?.name ?? '';
+    }));
     // Het laatste vangnet van het herhalen: je eigen nummers van de zaadartiest. Pas hier, als deze
     // start het werd — anders kreeg een lopende radio het vangnet van een start die geweigerd werd.
     radio.eigenVanZaad = () => [
@@ -15448,6 +15529,8 @@ Future<void> startRadio(BuildContext context, String artist,
             profiel: wie,
             smaak: smaak,
             alGekozen: [for (final p in radio.plan) '${p.artiest} - ${p.titel}'],
+            pastNiet: keuring.voorbeelden(Sfeeroordeel.pastNiet),
+            pastWel: keuring.voorbeelden(Sfeeroordeel.past),
           );
           keuring.onthoud(lijst);
           log.line('radio-lijst: ${lijst.length} nummers van het model'
@@ -15500,7 +15583,12 @@ class _Radiokeuring {
     required this.stijlboek,
     required this.zaadStijl,
     required this.log,
+    this.voorbeelden = _geenVoorbeelden,
   });
+
+  /// Wat in radio's als deze wel of niet paste — zie `RadioSfeer.voorbeelden`. Gaat mee in de sfeervraag.
+  final List<({String artiest, String titel})> Function(Sfeeroordeel soort) voorbeelden;
+  static List<({String artiest, String titel})> _geenVoorbeelden(Sfeeroordeel _) => const [];
 
   final String artiest;
   final Track? zaad;
@@ -15666,7 +15754,9 @@ class _Radiokeuring {
           titel: t,
           jaar: z.jaar,
           stijlen: stijlen,
-          kandidaten: [for (final p in nieuw) (artiest: p.artiest, titel: p.titel)]);
+          kandidaten: [for (final p in nieuw) (artiest: p.artiest, titel: p.titel)],
+          pastNiet: voorbeelden(Sfeeroordeel.pastNiet),
+          pastWel: voorbeelden(Sfeeroordeel.past));
       log.line('radio-sfeer: ${weg.length} van ${nieuw.length} passen niet — '
           '${[for (final i in weg) '${nieuw[i].artiest} — ${nieuw[i].titel}'].join('; ')}');
       return weg;

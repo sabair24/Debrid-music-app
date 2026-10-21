@@ -231,11 +231,14 @@ void main() {
     test('wat al in de radio staat telt mee en wordt niet nog eens aangeboden', () async {
       final r = await radio();
       r.voegBij(r.sessie, [Radioplek(artiest: 'Bazart', titel: 'Bazart nummer 1')]);
+      // Lang genoeg geleden voorbij: Bazart mag weer (één per vijftig, Saber 21-10-2026), maar niet met
+      // hetzelfde nummer.
+      r.plan.last.voorbijOp = r.voorbijteller - kArtiestTerug;
       final b = Radiobijvuller(radio: r, deezer: _Deezer().als, ankers: const ['Niels Destadsbader'], metVerwant: true, maakPlan: _plan, toeval: Random(1));
       await b(r.sessie, r.bijvulRonde, _vraag);
       final bazart = [for (final p in r.plan) if (p.artiest == 'Bazart') p.titel];
-      expect(bazart, ['Bazart nummer 1', 'Bazart nummer 2', 'Bazart nummer 3'],
-          reason: 'twee plekken over onder het plafond, en die gaan naar nummers die er nog niet zijn');
+      expect(bazart, ['Bazart nummer 1', 'Bazart nummer 2'],
+          reason: 'één plek onder het plafond, en die gaat naar een nummer dat er nog niet is');
       r.stop();
     });
 
@@ -255,14 +258,14 @@ void main() {
         ],
         keurEigen: (p) async {
           gekeurd.add(p.titel);
-          return p.titel.endsWith('1');
+          return false;
         },
       );
       await b(r.sessie, r.bijvulRonde, _vraag);
       await pumpEventQueue();
-      expect(gekeurd, hasLength(3));
+      expect(gekeurd, ['Bazart nummer 1'], reason: 'één per artiest per vijftig: dit is het enige aanbod');
       final bazart = [for (final p in r.plan) if (p.artiest == 'Bazart') p.titel];
-      expect(bazart, ['Bazart nummer 1']);
+      expect(bazart, isEmpty, reason: 'afgekeurd: niet in de radio');
       r.stop();
     });
 
@@ -277,6 +280,9 @@ void main() {
 
     test('DE VAL: als de buurt op is herhaalt hij in dezelfde ronde, en de trap gaat dicht', () async {
       final r = await radio();
+      // Ook de zaadartiest klonk lang genoeg geleden: anders is de buurt niet op, alleen even dicht —
+      // zie de toets hieronder.
+      r.plan.first.voorbijOp = r.voorbijteller - kArtiestTerug;
       final log = <String>[];
       final zaad = _t('Niels Destadsbader', 'Pa');
       r.eigenVanZaad = () => [zaad];
@@ -290,7 +296,8 @@ void main() {
           spoor: log.add);
       const krap = (nood: false, verwacht: 1.0, reserveNodig: 0, reserveKlaar: 0);
       expect(await b(r.sessie, r.bijvulRonde, krap), greaterThan(0));
-      expect(r.plan.last.eigen?.path, zaad.path, reason: 'het vangnet, in dezelfde ronde');
+      expect(r.plan.last.artiest, 'Niels Destadsbader',
+          reason: 'het vangnet, in dezelfde ronde: een nummer van de zaadartiest (zijn eigen, of een herhaling)');
       expect(log.last, contains('de buurt is nu op'));
       expect(r.bijvulStand, isNotNull);
       // De volgende ronde vraagt Deezer niets meer: de buurt is op, en wordt over een half uur opnieuw bekeken.
@@ -299,6 +306,20 @@ void main() {
       expect(d.toppersVragen.length, vragen);
       expect(log.last, contains('[herhaal]'));
       expect(log.last, contains('opnieuw bekeken om'));
+      r.stop();
+    });
+
+    test('DE KERN: een zaadartiest die nog moet wachten is geen lege buurt', () async {
+      // Sinds 21-10-2026 komt dezelfde artiest pas na vijftig nummers terug, ook de zaadartiest. Hij heeft
+      // dan nog nummers: de trap mag niet dichtgaan omdat de anderen niets meer hebben.
+      final r = await radio();
+      final log = <String>[];
+      final d = _Deezer(perArtiest: 0);
+      final b = Radiobijvuller(
+          radio: r, deezer: d.als, ankers: const ['Niels Destadsbader'], metVerwant: true, maakPlan: _plan, spoor: log.add);
+      const krap = (nood: false, verwacht: 1.0, reserveNodig: 0, reserveKlaar: 0);
+      await b(r.sessie, r.bijvulRonde, krap);
+      expect(log.join('\n'), isNot(contains('de buurt is nu op')));
       r.stop();
     });
 

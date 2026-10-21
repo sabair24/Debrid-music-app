@@ -13,6 +13,8 @@ import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/player.dart';
 import 'package:debridmusic/radio.dart';
 import 'package:debridmusic/radioladder.dart';
+import 'package:debridmusic/radiokeuze.dart' show kArtiestTerug;
+import 'package:debridmusic/radiosfeer.dart';
 import 'package:debridmusic/radiovoorraad.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -256,7 +258,7 @@ void main() {
       r.stop();
     });
 
-    test('de zaadartiest ook bij het herhalen hoogstens één op de tien', () async {
+    test('bij het herhalen komt niemand terug binnen vijftig plekken — de zaadartiest net zo', () async {
       final s = _Speler();
       final r = maak(s);
       await r.start([_eigen('Niels Destadsbader', 'n1'), _eigen('X', 'x1')], zaadArtiest: 'Niels Destadsbader');
@@ -264,7 +266,8 @@ void main() {
       r.gehoord(r.plan[1].eigen!);
       s.index = 1;
       r.tikVoorToets(); // n1 voorbij
-      for (var i = 0; i < 30; i++) {
+      // Genoeg anderen dat X (en n1) ruim vijftig plekken terug liggen (Saber, 21-10-2026).
+      for (var i = 0; i < kArtiestTerug + 10; i++) {
         r.voegBij(r.sessie, [_eigen('Vul $i', 'v')]);
         r.tikVoorToets();
         s.index = s.rij.length - 1;
@@ -273,8 +276,7 @@ void main() {
       r.voegBij(r.sessie, [_eigen('Niels Destadsbader', 'n2')]);
       r.tikVoorToets();
       s.index = s.rij.length - 1;
-      // Vier anderen erna: Niels staat dan binnen de laatste tien, maar niet meer in de laatste drie
-      // (die houdt de gewone "net geklonken"-regel al tegen).
+      // Vier anderen erna: Niels staat dan vijf plekken terug, binnen de vijftig.
       for (var i = 0; i < 4; i++) {
         r.voegBij(r.sessie, [_eigen('Na $i', 'n')]);
         r.tikVoorToets();
@@ -674,4 +676,79 @@ void main() {
       r.stop();
     });
   });
+
+  // "Past / past niet in deze radio" (Saber, 21-10-2026): "dan moet de app daar absoluut rekening mee houden".
+  group('past niet in deze radio', () {
+    Future<RadioSfeer> metOordeel({String zaad = 'Vengaboys', String familie = ''}) async {
+      final sfeer = RadioSfeer()..duwOps = (_) async {};
+      await sfeer.zet(artiest: 'Sade', titel: 'Smooth Operator', zaad: zaad, familie: familie, naar: Sfeeroordeel.pastNiet);
+      return sfeer;
+    }
+
+    test('DE KERN: de start laat weg wat hier niet past — het zaad nooit', () async {
+      final s = _Speler();
+      final r = maak(s)..sfeer = await metOordeel();
+      await r.start([
+        Radioplek(artiest: 'Vengaboys', titel: 'Boom Boom', eigen: _t('Vengaboys', 'Boom Boom'), zaad: true),
+        _eigen('Sade', 'Smooth Operator'),
+        _eigen('Haddaway', 'What Is Love'),
+      ], zaadArtiest: 'Vengaboys');
+      expect([for (final p in r.plan) p.artiest], ['Vengaboys', 'Haddaway']);
+      r.stop();
+    });
+
+    test('een radio met een andere sfeer: daar mag het wel', () async {
+      final s = _Speler();
+      final r = maak(s)..sfeer = await metOordeel();
+      await r.start([_eigen('Michael Bublé', 'Feeling Good'), _eigen('Sade', 'Smooth Operator')], zaadArtiest: 'Michael Bublé');
+      expect([for (final p in r.plan) p.artiest], contains('Sade'));
+      r.stop();
+    });
+
+    test('dezelfde familie: ook niet in een andere dansradio, zodra de familie bekend is', () async {
+      final s = _Speler();
+      final r = maak(s)..sfeer = await metOordeel(familie: 'dans');
+      await r.start([_eigen('2 Unlimited', 'No Limit')], zaadArtiest: '2 Unlimited');
+      r.familie = 'dans';
+      expect(r.voegBij(r.sessie, [_eigen('Sade', 'Smooth Operator'), _eigen('Snap!', 'Rhythm Is A Dancer')]), 1);
+      expect([for (final p in r.plan) p.artiest], isNot(contains('Sade')));
+      r.stop();
+    });
+
+    test('kreeg het "past niet" terwijl het nog gehaald moest worden: niet halen', () async {
+      final s = _Speler();
+      var gevraagd = 0;
+      final r = maak(s, bron: _Bron((p) async {
+        gevraagd++;
+        return null;
+      }));
+      final sfeer = RadioSfeer()..duwOps = (_) async {};
+      r.sfeer = sfeer;
+      await r.start([_eigen('Vengaboys', 'Boom Boom')], zaadArtiest: 'Vengaboys');
+      r.voegBij(r.sessie, [Radioplek(artiest: 'Sade', titel: 'Smooth Operator')]);
+      await sfeer.zet(artiest: 'Sade', titel: 'Smooth Operator', zaad: 'Vengaboys', familie: '', naar: Sfeeroordeel.pastNiet);
+      r.tikVoorToets();
+      await _totAllesTerug(r);
+      final sade = r.plan.firstWhere((p) => p.artiest == 'Sade');
+      expect(sade.stand, Haalstand.mislukt);
+      expect(sade.weer, Weerreden.sfeer);
+      expect(gevraagd, 0, reason: 'niet gedownload');
+      r.stop();
+    });
+
+    test('"past niet" op wat klinkt: uit de rij en uit het plan — het bestand blijft', () async {
+      final s = _Speler();
+      final r = maak(s);
+      await r.start([_eigen('Vengaboys', 'Boom Boom'), _eigen('Sade', 'Smooth Operator'), _eigen('Haddaway', 'What Is Love')],
+          zaadArtiest: 'Vengaboys');
+      final sade = r.plan[1].eigen!;
+      await r.pastNiet(sade);
+      expect([for (final it in s.rij) it.local?.title], isNot(contains('Smooth Operator')));
+      expect(r.plan[1].stand, Haalstand.mislukt);
+      expect(r.plan[1].weer, Weerreden.sfeer);
+      expect(r.plan[1].eigen, isNotNull, reason: 'het bestand blijft tot "Radio afsluiten" (Saber, 21-10-2026)');
+      r.stop();
+    });
+  });
+
 }

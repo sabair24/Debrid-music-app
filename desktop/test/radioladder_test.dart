@@ -88,7 +88,7 @@ void main() {
       expect(v, closeTo(5, 1e-9));
     });
 
-    test('eigen muziek per artiest hoogstens drie, de zaadartiest één', () {
+    test('eigen muziek per artiest hoogstens één, de zaadartiest net zo', () {
       final v = verwachtVooruit(
         rijVooruit: 2,
         geland: 1,
@@ -98,7 +98,8 @@ void main() {
         wacht: 0,
         opbrengst: 0.05,
       );
-      expect(v, closeTo(2 + 1 + 1 + 3 + 8 * 0.05, 1e-9));
+      // Eén per artiest per vijftig (Saber, 21-10-2026): drie keer Niels en vier keer Bazart zijn er twee.
+      expect(v, closeTo(2 + 1 + 1 + 1 + 8 * 0.05, 1e-9));
     });
   });
 
@@ -300,7 +301,9 @@ void main() {
 
     test('wat lang geleden voorbij kwam telt niet meer, wat net klonk wel', () {
       final plan = [plek('A', stand: Haalstand.inRij, voorbij: 1), plek('B', stand: Haalstand.inRij, voorbij: 30)];
-      expect(artiestenVoorPlafond(plan, voorbijteller: 45), ['B']);
+      // Het venster is zo lang als de afstand: vijftig.
+      expect(artiestenVoorPlafond(plan, voorbijteller: kArtiestTerug + 5), ['B']);
+      expect(artiestenVoorPlafond(plan, voorbijteller: kArtiestTerug - 5), ['A', 'B']);
     });
 
     test('wat nog komt telt altijd, de reserve die klaarstaat niet', () {
@@ -314,16 +317,17 @@ void main() {
       expect(artiestenVoorPlafond(plan, voorbijteller: 0), ['A', 'B', 'C', 'D']);
     });
 
-    test('DE VAL: tweehonderd nummers, en in elke veertig hoogstens drie van één artiest', () {
+    test('DE VAL: tweehonderd nummers, en in elke vijftig hoogstens één van één artiest', () {
       final r = Random(7);
-      final artiesten = [for (var i = 0; i < 25; i++) 'Artiest $i'];
+      // Zestig artiesten: met één per vijftig kan een radio met minder niet zonder herhaling.
+      final artiesten = [for (var i = 0; i < 60; i++) 'Artiest $i'];
       final plan = <Radioplek>[];
       var teller = 0;
       final gespeeld = <String>[];
       var n = 0;
       while (gespeeld.length < 200) {
         if (plan.where((p) => p.voorbijOp == null).length < 10) {
-          final kandidaten = [for (final a in (artiesten.toList()..shuffle(r)).take(8)) for (var j = 0; j < 3; j++) a];
+          final kandidaten = [for (final a in (artiesten.toList()..shuffle(r)).take(30)) for (var j = 0; j < 3; j++) a];
           final al = artiestenVoorPlafond(plan, voorbijteller: teller);
           for (final i in spreidArtiesten(kandidaten, al: al)) {
             plan.add(Radioplek(artiest: kandidaten[i], titel: 'nummer ${n++}'));
@@ -333,9 +337,9 @@ void main() {
         volgende.voorbijOp = ++teller;
         gespeeld.add(volgende.artiest);
       }
-      for (var i = 0; i + 40 <= gespeeld.length; i++) {
+      for (var i = 0; i + kArtiestTerug <= gespeeld.length; i++) {
         final tel = <String, int>{};
-        for (final a in gespeeld.sublist(i, i + 40)) {
+        for (final a in gespeeld.sublist(i, i + kArtiestTerug)) {
           tel[a] = (tel[a] ?? 0) + 1;
         }
         final meest = tel.values.reduce(max);

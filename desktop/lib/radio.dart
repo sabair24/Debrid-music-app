@@ -29,9 +29,10 @@ import 'online.dart';
 import 'paths.dart';
 import 'settings.dart';
 import 'player.dart';
-import 'radiokeuze.dart' show artiestSleutel, basisTitel, kArtiestAfstand, kMaxPerArtiest;
+import 'radiokeuze.dart' show artiestSleutel, basisTitel, kArtiestAfstand, kArtiestTerug, kMaxPerArtiest;
 import 'radioladder.dart';
 import 'radiosessie.dart';
+import 'radiosfeer.dart';
 import 'radiovoorraad.dart';
 
 /// Eén plek in het radioplan: wat er zou moeten spelen, en hoe ver het daarmee is.
@@ -317,7 +318,7 @@ List<Radioplek> nieuweNakomers(List<Radioplek> plan, List<Radioplek> extra) {
 ///
 /// "Wat nog komt" is: wachten, onderweg, klaar (zonder de reserve), geland, en in de rij maar nog
 /// niet voorbij. Een nummer dat je oversloeg telt alleen binnen het venster mee.
-List<String> artiestenVoorPlafond(List<Radioplek> plan, {required int voorbijteller, int venster = 40}) => [
+List<String> artiestenVoorPlafond(List<Radioplek> plan, {required int voorbijteller, int venster = kArtiestTerug}) => [
       for (final p in plan)
         if (p.stand != Haalstand.mislukt &&
             !(p.stand == Haalstand.klaar && p.reserve) &&
@@ -466,6 +467,51 @@ class RadioBesturing extends ChangeNotifier {
   /// Het nummer waar de radio vanaf begon, als dat er was. Voor het afstemmen: dat liedje hoort er
   /// daarna evenmin nog een keer in.
   Track? zaad;
+
+  /// "Past / past niet in deze radio" — zie `radiosfeer.dart`. Gezet door wie de radio maakt.
+  RadioSfeer? sfeer;
+
+  /// De sfeerfamilie van deze radio (`Stijlfamilie.name`), zodra de stijl van het zaad bekend is. Leeg:
+  /// nog onbekend — dan telt alleen de zaadartiest.
+  String familie = '';
+
+  /// De context van een sfeeroordeel in deze radio: de zaadartiest, of de zin van een radio uit een zin.
+  String get sfeerZaad {
+    final a = (zaadArtiest ?? '').trim();
+    return a.isNotEmpty ? a : 'zin:$naam';
+  }
+
+  /// Past dit nummer NIET in deze radio? Saber, 21-10-2026: "dan moet de app daar absoluut rekening mee
+  /// houden" — dus op elke plek waar de radio iets kiest: de start, bijvoegen, de reserve, herhalen,
+  /// vóór het halen en vóór het in de rij gaan.
+  bool pastHierNiet(String artiest, String titel) =>
+      sfeer?.pastNiet(artiest: artiest, titel: titel, zaad: sfeerZaad, familie: familie) ?? false;
+
+  /// [extra] zonder wat hier niet past, met een logregel voor wat eruit ging.
+  List<Radioplek> _zonderPastNiet(List<Radioplek> extra, String waar) {
+    final weg = [for (final p in extra) if (!p.zaad && pastHierNiet(p.artiest, p.titel)) p];
+    if (weg.isEmpty) return extra;
+    _spoor?.call('radio-sfeer: ${weg.length} niet bij $waar — past niet in deze radio: '
+        '${weg.map((p) => '${p.artiest} — ${p.titel}').join('; ')}');
+    return [for (final p in extra) if (!weg.contains(p)) p];
+  }
+
+  /// "Past niet" op een nummer van deze radio — meestal wat nu klinkt. Uit de rij (klinkt het nu, dan
+  /// meteen het volgende) en uit het plan; het BESTAND blijft staan tot "Radio afsluiten" (Saber,
+  /// 21-10-2026). Het oordeel zelf geeft wie dit aanroept via [sfeer].
+  Future<void> pastNiet(Track t) async {
+    for (final p in _plan) {
+      final zelfde = p.eigen?.path == t.path ||
+          sfeerNummer(p.artiest, p.titel) == sfeerNummer(t.artist, t.title);
+      if (!zelfde || p.stand == Haalstand.mislukt) continue;
+      p.stand = Haalstand.mislukt;
+      p.weer = Weerreden.sfeer;
+    }
+    _spoor?.call('radio-sfeer: past niet — ${t.artist} — ${t.title}');
+    await speler.haalUitRadio(t.path);
+    notifyListeners();
+    _pas(_sessie);
+  }
 
   /// Van een pad naar het gedeelde id, om een oordeel te kunnen terugvinden als het bestand er niet
   /// meer is. Ingehangen vanuit main.dart.
@@ -739,6 +785,8 @@ class RadioBesturing extends ChangeNotifier {
     this.naam = naam;
     this.zaadArtiest = zaadArtiest;
     this.zaad = zaad;
+    familie = '';
+    _plan = _zonderPastNiet(_plan, 'de start');
     _loopt = true;
     _doorRadio.clear();
     _lopend = RadioSessie(naam: naam, begonnenMs: DateTime.now().millisecondsSinceEpoch);
@@ -835,7 +883,7 @@ class RadioBesturing extends ChangeNotifier {
   int voegBij(int sessie, List<Radioplek> extra, {int? ronde, bool achteraan = false}) {
     if (sessie != _sessie || !_loopt || extra.isEmpty) return 0;
     if (ronde != null && ronde != _bijvulRonde) return 0;
-    final nieuw = nieuweNakomers(_plan, extra);
+    final nieuw = _zonderPastNiet(nieuweNakomers(_plan, extra), 'het bijvoegen');
     if (nieuw.isEmpty) return 0;
     if (achteraan) {
       var k = _plan.length;
@@ -854,7 +902,8 @@ class RadioBesturing extends ChangeNotifier {
   /// [kReserveVooruit]). [plekken] moeten [Radioplek.reserve] zijn.
   int voegReserveBij(int sessie, List<Radioplek> plekken) {
     if (sessie != _sessie || !_loopt || plekken.isEmpty) return 0;
-    final nieuw = nieuweNakomers(_plan, [for (final p in plekken) if (p.reserve && p.eigen != null) p]);
+    final nieuw = _zonderPastNiet(
+        nieuweNakomers(_plan, [for (final p in plekken) if (p.reserve && p.eigen != null) p]), 'de reserve');
     if (nieuw.isEmpty) return 0;
     _plan = [..._plan, ...nieuw];
     _spoor?.call('radio-reserve: ${nieuw.length} eigen nummers klaar — '
@@ -923,6 +972,9 @@ class RadioBesturing extends ChangeNotifier {
     ];
     final zaadPaden = {for (final t in zaadEigen) t.path};
     final trackVan = {for (final t in zaadEigen) t.path: t, for (final e in eerste.entries) e.key: e.value.eigen!};
+    // Wat in deze radio niet past, komt er ook als herhaling niet in.
+    paden.removeWhere((pad) => pastHierNiet(
+        eerste[pad]?.artiest ?? trackVan[pad]?.artist ?? '', eerste[pad]?.titel ?? trackVan[pad]?.title ?? ''));
     final k = <Herhaalkandidaat>[
       for (final pad in paden)
         (
@@ -1285,6 +1337,13 @@ class RadioBesturing extends ChangeNotifier {
       notifyListeners();
     }
     _stempel();
+    // Wat klaarstaat of net landde, maar intussen "past niet" kreeg: niet de rij in.
+    for (final p in _plan) {
+      if (p.zaad || (p.stand != Haalstand.klaar && p.stand != Haalstand.geland)) continue;
+      if (!pastHierNiet(p.artiest, p.titel)) continue;
+      p.stand = Haalstand.mislukt;
+      p.weer = Weerreden.sfeer;
+    }
     final bijvul = _bijvulNu();
     final reserveVoor = _plan.where((p) => p.reserve && p.stand == Haalstand.klaar).length;
     final vooruit = speler.radioQueue.length - speler.radioIndex - 1;
@@ -1343,6 +1402,15 @@ class RadioBesturing extends ChangeNotifier {
   }
 
   Future<void> _haal(int sessie, Radioplek p) async {
+    // Kreeg het intussen "past niet": niet halen.
+    if (!p.zaad && pastHierNiet(p.artiest, p.titel)) {
+      p.stand = Haalstand.mislukt;
+      p.weer = Weerreden.sfeer;
+      _spoor?.call('radio-sfeer: niet gehaald — past niet in deze radio: ${p.artiest} — ${p.titel}');
+      notifyListeners();
+      _pas(sessie);
+      return;
+    }
     final keur = _keur;
     if (keur != null) {
       var mag = true;

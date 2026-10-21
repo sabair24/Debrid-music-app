@@ -12,7 +12,7 @@
 /// toeval — alleen tellen, want dit is precies het stuk dat kloppen moet.
 library;
 
-import 'radiokeuze.dart' show artiestSleutel, kArtiestAfstand, kZaadPerTien;
+import 'radiokeuze.dart' show artiestSleutel, kArtiestAfstand, kArtiestTerug;
 
 /// Wat er met één plek uit het radioplan aan de hand is.
 enum Haalstand {
@@ -130,13 +130,14 @@ const int kMaxOnderweg = 8;
 /// 26-09-2026), en onder de minuut is een tweede nummer van dezelfde artiest beter dan stilte.
 const int kRuimeRest = 60;
 
-/// Hoe ver twee nummers van de zaadartiest in de speelrij uit elkaar staan — [kZaadPerTien] op de tien.
+/// Hoe ver twee nummers van de zaadartiest in de speelrij uit elkaar staan. Sinds 21-10-2026 net zo ver als
+/// voor iedereen ([kArtiestTerug]); de naam blijft, want hij zegt nog altijd hoe ver de speelrij terugkijkt.
 ///
 /// Gemeten op 26-09-2026 (3.9.417, radio vanaf Freak Out): het PLAN hield zich aan één op de tien,
 /// maar de eigen nummers van 2 Fabiola waren het eerst klaar, en met de gewone afstand van vier
 /// stonden ze op plek 1, 6, 10 en 14 — drie in de eerste tien. Alleen zolang er genoeg klinkt
 /// ([kRuimeRest]); anders liever 2 Fabiola dan stilte.
-const int kZaadAfstand = 10 ~/ kZaadPerTien;
+const int kZaadAfstand = kArtiestTerug;
 
 /// Hoe lang een plek zonder bekende lengte meetelt: een gewone single.
 const int kOnbekendeLengte = 180;
@@ -233,7 +234,7 @@ Voorraadbesluit voorraadPlan(
   }
   String naam(int i) => i < artiesten.length ? artiestSleutel(artiesten[i]) : '';
   final rij = [for (final a in staart) artiestSleutel(a)];
-  // De zaadartiest hoogstens één op de tien IN DE RIJ, niet alleen in het plan — zie [kZaadAfstand].
+  // De afstand IN DE RIJ, niet alleen in het plan — zie [kZaadAfstand]; sinds 21-10-2026 voor iedereen dezelfde.
   final zaadSleutel = zaad == null ? '' : artiestSleutel(zaad);
   bool vlakErvoor(String a) {
     if (a.isEmpty) return false;

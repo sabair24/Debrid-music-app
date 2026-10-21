@@ -148,6 +148,11 @@ class LanStateStore {
   /// Een kaart en geen twee verzamelingen, want een nummer heeft precies één oordeel — met twee
   /// verzamelingen kan het in allebei staan en is er geen antwoord op de vraag wat je ervan vindt.
   final Map<String, String> ratings = {};
+
+  /// "Past / past niet in deze radio", per nummer én context — zie `radiosfeer.dart`. Sleutel →
+  /// `{v, n, a, t, z, f, at}`. Een weggehaald oordeel blijft als lege `v` staan, zodat een late op van
+  /// een toestel dat offline was het niet terugzet (de laatste op `at` wint).
+  final Map<String, Map<String, dynamic>> radioSfeer = {};
   PlaybackProgress progress = PlaybackProgress();
 
   /// Per toestel hoeveel zijn klok afwijkt van die van de pc (pc min toestel), voor de speelstand.
@@ -189,6 +194,14 @@ class LanStateStore {
       (m['ratings'] as Map?)?.forEach((k, v) {
         if (v == 'up' || v == 'down') ratings[k.toString()] = v as String;
       });
+      final oud = DateTime.now().millisecondsSinceEpoch - _tombstoneTtlMs;
+      (m['radioSfeer'] as Map?)?.forEach((k, v) {
+        if (v is! Map) return;
+        final r = v.cast<String, dynamic>();
+        // Een weggehaald oordeel van lang geleden mag weg: elk toestel heeft het intussen gezien.
+        if ('${r['v'] ?? ''}'.isEmpty && ((r['at'] as num?) ?? 0) < oud) return;
+        radioSfeer[k.toString()] = r;
+      });
       if (m['progress'] != null) {
         progress = PlaybackProgress.fromJson((m['progress'] as Map).cast<String, dynamic>());
       }
@@ -206,6 +219,7 @@ class LanStateStore {
         'playlists': [for (final p in playlists.values) p.toJson()],
         'plays': {for (final e in plays.entries) e.key: e.value.toJson()},
         'ratings': ratings,
+        'radioSfeer': radioSfeer,
         'progress': progress.toJson(),
       };
 
@@ -219,6 +233,7 @@ class LanStateStore {
         'playlists': [for (final p in playlists.values) p.toJson()],
         'plays': {for (final e in plays.entries) e.key: e.value.toJson()},
         'ratings': ratings,
+        'radioSfeer': radioSfeer,
         'progress': progress.toJson(),
         if (verzoek != null) 'verzoek': verzoek,
       };
@@ -317,6 +332,24 @@ class LanStateStore {
           } else {
             durableChanged |= ratings.remove(id) != null;
           }
+
+        case 'radio.sfeer':
+          // "Past / past niet in deze radio" — zie `radiosfeer.dart`. De laatste op `at` wint.
+          final sleutel = (op['key'] ?? '') as String;
+          if (sleutel.isEmpty) break;
+          final was = radioSfeer[sleutel];
+          if (was != null && ((was['at'] as num?) ?? 0) > at) break;
+          final v = '${op['v'] ?? ''}';
+          radioSfeer[sleutel] = {
+            'v': v == 'past' || v == 'pastniet' ? v : '',
+            'n': '${op['n'] ?? ''}',
+            'a': '${op['a'] ?? ''}',
+            't': '${op['t'] ?? ''}',
+            'z': '${op['z'] ?? ''}',
+            'f': '${op['f'] ?? ''}',
+            'at': at,
+          };
+          durableChanged = true;
 
         case 'progress':
           // Only ever moves forward. Two devices both reporting means the most recent one is

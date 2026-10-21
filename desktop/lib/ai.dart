@@ -259,6 +259,8 @@ class AiService {
     required SmaakProfiel profiel,
     Radiosmaak smaak = Radiosmaak.gemengd,
     List<String> alGekozen = const [],
+    List<({String artiest, String titel})> pastNiet = const [],
+    List<({String artiest, String titel})> pastWel = const [],
   }) async {
     final sleutel = sleutelVan().trim();
     if (sleutel.isEmpty || artiest.trim().isEmpty) return const [];
@@ -268,7 +270,7 @@ class AiService {
     var beste = const <AiNummer>[];
     for (var poging = 0; poging < 2; poging++) {
       final uit = await _radiolijstEenmaal(
-          sleutel, artiest, titel, jaar, stijlen, genre, profiel, smaak, alGekozen);
+          sleutel, artiest, titel, jaar, stijlen, genre, profiel, smaak, alGekozen, pastNiet, pastWel);
       if (uit.length > beste.length) beste = uit;
       if (beste.length >= kMinModelNummers) break;
     }
@@ -287,7 +289,9 @@ class AiService {
       String? genre,
       SmaakProfiel profiel,
       Radiosmaak smaak,
-      List<String> alGekozen) async {
+      List<String> alGekozen,
+      List<({String artiest, String titel})> pastNiet,
+      List<({String artiest, String titel})> pastWel) async {
     final body = await _verstuur(
       {
         'model': kRadioModel,
@@ -307,7 +311,9 @@ class AiService {
                 genre: genre,
                 profiel: profiel,
                 smaak: smaak,
-                alGekozen: alGekozen),
+                alGekozen: alGekozen,
+                pastNiet: pastNiet,
+                pastWel: pastWel),
           }
         ],
       },
@@ -328,6 +334,8 @@ class AiService {
     int? jaar,
     List<String> stijlen = const [],
     required List<({String artiest, String titel})> kandidaten,
+    List<({String artiest, String titel})> pastNiet = const [],
+    List<({String artiest, String titel})> pastWel = const [],
   }) async {
     final sleutel = sleutelVan().trim();
     if (sleutel.isEmpty || kandidaten.isEmpty) return const {};
@@ -343,7 +351,13 @@ class AiService {
           {
             'role': 'user',
             'content': sfeerPrompt(
-                artiest: artiest, titel: titel, jaar: jaar, stijlen: stijlen, kandidaten: kandidaten),
+                artiest: artiest,
+                titel: titel,
+                jaar: jaar,
+                stijlen: stijlen,
+                kandidaten: kandidaten,
+                pastNiet: pastNiet,
+                pastWel: pastWel),
           }
         ],
       },
