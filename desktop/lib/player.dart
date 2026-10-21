@@ -727,7 +727,7 @@ class Stilstandwacht {
 }
 
 /// Native (libmpv) player with a queue, shuffle, repeat and a Radio mode.
-class PlayerStore extends ChangeNotifier implements NowPlayingSource {
+class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron, Rijbediening {
   /// **Ruim vooruit lezen, want de muziek komt over het netwerk.**
   ///
   /// Gemeld op 15-08-2026 na een rit: draadloos Android Auto verloor geregeld de verbinding, "zeker
@@ -803,6 +803,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   List<RadioItem> _radio = [];
   int _radioIndex = -1;
   int _radioGen = 0; // bumped on every (re)open so a stale async open aborts
+  @override
   bool radioMode = false;
   String radioStatus = '';
   Future<String?> Function(String artist, String title)? resolver;
@@ -848,10 +849,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// antwoorden die kunnen verschillen — precies wat er in ronde 2 dreigde te ontstaan.
   ///
   /// Null bij een zwart-witte hoes; zie `dominantColour`. Geen was is beter dan een grijze.
+  @override
   int? wasKleur;
 
   /// De kleurvlekken van de hoes die nu speelt, voor het glas van de balk (zie `hoesVlekken` in
   /// artwork.dart). Leeg zolang ze er niet zijn, of als de hoes geen kleur heeft.
+  @override
   List<HoesVlek> hoesVlekken = const [];
 
   Future<void> _wasUitHoes(Uint8List bytes) async {
@@ -1045,6 +1048,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   /// Wat de on_load-haak WERKELIJK aan mpv gaf. Dit toont het merk op Nu speelt, en niet [luidheidNu]:
   /// een merk dat "−3,4 dB" zegt boven een nummer dat op 0 dB speelt is het slechtste wat kan.
+  @override
   Bijstelling? luidheidToegepast;
 
   /// Kent deze mpv `replaygain-fallback` niet? Dan zegt de instelling dat.
@@ -1194,10 +1198,12 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   }
 
   /// The queue as it will actually play, shuffle applied.
+  @override
   List<Track> get queueTracks => List.unmodifiable(_order);
 
   /// Waar we in [queueTracks] staan, of -1. Nodig zodra iemand die lijst tóónt: `current` zegt wél
   /// wat er klinkt maar niet wélke van twee gelijke regels het is.
+  @override
   int get currentIndex => radioMode ? _radioIndex : _index;
 
   // Resume: persist the library queue + position so the app reopens where you left off.
@@ -1227,6 +1233,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// vooruithalen van de audio. In de radio alleen een EIGEN nummer: een online bron heeft nog geen
   /// album om scans van te tonen. Voor `AlbumArt.volgende`: de hoes en cd van het volgende nummer
   /// liggen dan al klaar als het begint.
+  @override
   Track? get volgendNummer {
     if (radioMode) {
       final i = _radioIndex + 1;
@@ -1236,15 +1243,18 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     return i >= 0 && i < _order.length ? _order[i] : null;
   }
 
+  @override
   bool get hasNext => radioMode
       ? _radioIndex < _radio.length - 1
       : (_index < _order.length - 1 || (repeat == RepeatMode.all && _order.isNotEmpty));
+  @override
   bool get hasPrev => radioMode ? _radioIndex > 0 : _index > 0;
 
 
   /// Wat er mis is met wat er nu zou moeten spelen, of null als er niets mis is.
   ///
   /// Voor de spelerbalk. Zie [Stilstandwacht] voor het geval dat dit veld bestaat.
+  @override
   String? speelFout;
 
   Timer? _stilstandTikker;
@@ -1444,6 +1454,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   bool get radioDroog => _radioDroog;
 
   /// Is wat nu speelt een herhaling van eerder in deze radio? Voor het label "opnieuw".
+  @override
   bool get speeltHerhaling =>
       radioMode && _radioIndex >= 0 && _radioIndex < _radio.length && _radio[_radioIndex].herhaling;
 
@@ -2078,6 +2089,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// main.dart) of je intussen zelf iets anders koos.
   int keuzes = 0;
 
+  @override
   Future<void> playQueue(List<Track> tracks, int index, {Uint8List? cover}) async {
     keuzes++;
     if (await _handedToSpeaker(tracks, index, cover)) return;
@@ -2204,6 +2216,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   /// Shuffle the whole library (or any list): every track plays exactly once (repeat
   /// off), starting from a random one. Scales to tens of thousands of tracks.
+  @override
   Future<void> shuffleAll(List<Track> tracks) async {
     // Shuffled HERE and then handed over in that order: the speaker is given one track at a time,
     // so it has no notion of shuffling a queue itself.
@@ -2765,9 +2778,23 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   double _volume = 100;
   bool _gedempt = false;
 
+  /// Het ingestelde volume van de app, 0–100 (Saber, 21-10-2026: het volume van een zone is dat van de
+  /// app, niet dat van het toestel).
+  @override
+  double get volume => _volume;
+
+  /// Gezet bij elke wijziging, om te bewaren. Zie main.dart.
+  void Function(double v)? bijVolume;
+
+  @override
   void setVolume(double v) {
+    v = v.clamp(0, 100).toDouble();
+    if (v == _volume) return;
     _volume = v;
     if (!_gedempt) _player.setVolume(v);
+    bijVolume?.call(v);
+    notifyListeners();
+    unawaited(_saveProgress(force: true));
   }
 
   /// Een kwart van de ingestelde stand. Zacht genoeg om overheen te praten, hard genoeg om te horen
@@ -2790,6 +2817,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// van een kopie die kan verlopen, en als bijvangst komt elke druk op shuffle in cast.log terecht.
   Future<void> Function(List<Track> volgorde, int index)? castReorder;
 
+  @override
   void toggleShuffle() {
     shuffle = !shuffle;
     if (_original.isEmpty) {
@@ -2809,6 +2837,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     notifyListeners();
   }
 
+  @override
   void cycleRepeat() {
     repeat = RepeatMode.values[(repeat.index + 1) % RepeatMode.values.length];
     notifyListeners();
@@ -2855,9 +2884,11 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   }
 
   /// Zet [nieuw] direct achter het nummer dat nu klinkt.
+  @override
   void speelHierna(List<Track> nieuw) => _voegIn(nieuw, hierna: true);
 
   /// Hang [nieuw] achteraan de wachtrij.
+  @override
   void zetAchteraan(List<Track> nieuw) => _voegIn(nieuw, hierna: false);
 
   void _voegIn(List<Track> nieuw, {required bool hierna}) {
@@ -2899,6 +2930,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
 
   /// "Nu spelen, rest laten staan" (Roon "Play Now"): [t] klinkt meteen, en wat er daarna in de wachtrij
   /// stond, blijft erachter staan. Het nummer dat speelde, gaat naar "Eerder gespeeld". In een radio net zo.
+  @override
   Future<void> speelNuMetRest(Track t) async {
     if (radioMode) {
       final doel = _radioIndex + 1;
@@ -2917,6 +2949,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
   /// speelvolgorde opnieuw: met shuffle aan werd alles opnieuw door elkaar gehaald en was "Eerder gespeeld"
   /// weg. "een liedje van in de wachtrij die al gespeeld heeft weer laten afspelen als ik die selecteer".
   /// Nu blijft de volgorde staan en gaat het daarna verder waar je in de rij zat.
+  @override
   Future<void> springNaar(int plek) async {
     if (radioMode) return springInRadio(plek);
     if (plek < 0 || plek >= _order.length) return;
@@ -2968,6 +3001,10 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
       }));
     } catch (_) {}
   }
+
+  /// Meld nu meteen waar de speler staat, buiten de vijf seconden om: na een opdracht van een ander
+  /// toestel (zones) moet wie bedient de uitkomst zien, niet pas bij de volgende melding.
+  void meldStandNu() => unawaited(_saveProgress(force: true));
 
   Future<void> _saveProgress({bool force = false}) async {
     if (_restoring) return;
@@ -3053,4 +3090,48 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource {
     _player.dispose();
     super.dispose();
   }
+}
+
+/// Wat de spelerbalk en Nu speelt van een speler lezen en kunnen — de speler van dit toestel
+/// ([PlayerStore]) of een zone op afstand (`ZoneSpeler` in zone_speler.dart).
+///
+/// **Waarom (Saber, 21-10-2026).** "Speelt op: … ▾": kies je de pc als zone op je gsm, dan tonen de balk
+/// en Nu speelt wat de pc speelt, en sturen hun knoppen de pc. Door de schermen tegen deze vorm te laten
+/// praten in plaats van tegen [PlayerStore] zegt de compiler waar een scherm nog aan de eigen speler
+/// hangt — en dat is precies de fout die je anders pas merkt als je op je gsm op pauze drukt en de pc
+/// doorspeelt.
+abstract interface class Speelbron implements NowPlayingSource {
+  /// De kleur en de kleurvlekken van de hoes, voor de was achter de balk en Nu speelt.
+  int? get wasKleur;
+  List<HoesVlek> get hoesVlekken;
+
+  bool get radioMode;
+  bool get hasNext;
+  bool get hasPrev;
+
+  /// Waarom er niets klinkt, als er iets mis is (een bestand dat niet open gaat; een zone die niet
+  /// bereikbaar is).
+  String? get speelFout;
+  bool get speeltHerhaling;
+  int get currentIndex;
+  List<Track> get queueTracks;
+  Track? get volgendNummer;
+  Bijstelling? get luidheidToegepast;
+
+  /// Het volume van de app (0–100), los van het volume van het toestel.
+  double get volume;
+  void setVolume(double v);
+
+  void toggleShuffle();
+  void cycleRepeat();
+  Future<void> springNaar(int plek);
+}
+
+/// Een wachtrij beginnen of aanvullen — hier, of in de gekozen zone. Zie `rijVoor` in main.dart.
+abstract interface class Rijbediening {
+  Future<void> playQueue(List<Track> queue, int index, {Uint8List? cover});
+  Future<void> shuffleAll(List<Track> tracks);
+  void speelHierna(List<Track> nummers);
+  void zetAchteraan(List<Track> nummers);
+  Future<void> speelNuMetRest(Track t);
 }

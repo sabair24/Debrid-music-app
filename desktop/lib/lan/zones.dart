@@ -70,7 +70,11 @@ class ZoneStaat {
     this.repeat = 'off',
     this.radio = '',
     this.via = '',
+    this.volume = -1,
   });
+
+  /// Het appvolume (0–100), of -1 als de zone het niet meldt.
+  final int volume;
 
   /// `dev:<toestel-id>` voor een toestel (de pc: `dev:pc-<naam>`), `spk:<speaker-id>` voor een speaker.
   final String id;
@@ -133,6 +137,7 @@ class ZoneStaat {
         'repeat': repeat,
         if (radio.isNotEmpty) 'radio': radio,
         if (via.isNotEmpty) 'via': via,
+        if (volume >= 0) 'volume': volume,
       };
 
   static ZoneStaat fromJson(Map<String, dynamic> m) => ZoneStaat(
@@ -154,6 +159,7 @@ class ZoneStaat {
         repeat: '${m['repeat'] ?? 'off'}',
         radio: '${m['radio'] ?? ''}',
         via: '${m['via'] ?? ''}',
+        volume: (m['volume'] as num?)?.toInt() ?? -1,
       );
 
   @override
@@ -175,7 +181,8 @@ class ZoneStaat {
       other.shuffle == shuffle &&
       other.repeat == repeat &&
       other.radio == radio &&
-      other.via == via;
+      other.via == via &&
+      other.volume == volume;
 
   @override
   int get hashCode => Object.hash(id, online, playing, trackId, positionMs, opMs, index, lengte);
@@ -449,6 +456,7 @@ class ZoneRegister {
       shuffle: p.shuffle,
       repeat: p.repeat,
       radio: '${p.radio?['naam'] ?? ''}',
+      volume: p.volume,
     );
   }
 

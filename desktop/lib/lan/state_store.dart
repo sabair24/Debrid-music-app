@@ -57,7 +57,11 @@ class PlaybackProgress {
     this.repeat = 'off',
     this.overname = '',
     this.radio,
+    this.volume = -1,
   });
+
+  /// Het appvolume van dat toestel (0–100), of -1 als het dat niet meldde (een oudere app).
+  final int volume;
 
   /// Speelt er een radio: rond welke artiest (`artiest`) en hoe hij heet (`naam`). Neemt een ander
   /// toestel over, dan start het dezelfde radio. Null zonder radio.
@@ -94,6 +98,7 @@ class PlaybackProgress {
         'repeat': repeat,
         if (overname.isNotEmpty) 'overname': overname,
         if (radio != null) 'radio': radio,
+        if (volume >= 0) 'volume': volume,
       };
 
   static PlaybackProgress fromJson(Map<String, dynamic> m) => PlaybackProgress(
@@ -109,6 +114,7 @@ class PlaybackProgress {
         repeat: (m['repeat'] ?? 'off') as String,
         overname: (m['overname'] ?? '') as String,
         radio: (m['radio'] as Map?)?.cast<String, dynamic>(),
+        volume: (m['volume'] as num?)?.toInt() ?? -1,
       );
 }
 
@@ -390,6 +396,7 @@ class LanStateStore {
             repeat: (op['repeat'] ?? 'off') as String,
             overname: (op['overname'] ?? '') as String,
             radio: (op['radio'] as Map?)?.cast<String, dynamic>(),
+            volume: (op['volume'] as num?)?.toInt() ?? -1,
           );
           // Per toestel eerst: ook een melding die achter de laatste van een ANDER toestel valt, is
           // voor zijn eigen zone nieuw. Alleen een oudere van hetzelfde toestel valt weg.
