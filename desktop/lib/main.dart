@@ -24481,7 +24481,8 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
     // MusicBrainz and the Discogs edition. Nothing in the artwork chain needs any of those three:
     // every argument it takes comes from the widget. See DiscogsService.edition's in-flight table
     // for why asking for the edition twice at once costs one fetch, not two.
-    final blurb = CoverEnricher(settings).albumInfo(artist, album).catchError((_) => null);
+    // Met voorrang: de albumpagina staat open (zie CoverEnricher._audioDbVoorrang).
+    final blurb = CoverEnricher(settings).albumInfo(artist, album, voorrang: true).catchError((_) => null);
 
     final mbid = widget.pinnedMbid;
     final pressing = (mbid != null && mbid.isNotEmpty)
