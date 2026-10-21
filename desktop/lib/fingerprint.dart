@@ -110,6 +110,31 @@ double similarity(List<int> a, List<int> b, {int maxOffset = 30}) {
 /// at 0.929. That is a DIFFERENT recording over largely the same backing, and calling it a duplicate
 /// would have offered a real track for deletion. Hence 0.95: it separates that case from every true
 /// duplicate found, with room on both sides.
+/// Hoe goed een kort FRAGMENT (de 30 s die Deezer van een nummer laten horen) ergens in een heel nummer
+/// past: het fragment over het hele nummer geschoven, de beste overeenkomst in bits — 1,0 gelijk, ~0,5
+/// toeval. Minstens vier vijfde van het fragment moet over het nummer liggen.
+///
+/// Anders dan [similarity], dat twee hele nummers met hooguit een paar seconden verschuiving vergelijkt:
+/// Deezer kiest zijn fragment ergens in het nummer (gemeten op 21-10-2026: rond 42–48 s).
+double fragmentOvereenkomst(List<int> heel, List<int> fragment) {
+  if (heel.isEmpty || fragment.length < 20) return 0;
+  final min = (fragment.length * 4) ~/ 5;
+  var best = 0.0;
+  for (var o = -(fragment.length - min); o <= heel.length - min; o++) {
+    var bits = 0, n = 0;
+    for (var i = 0; i < fragment.length; i++) {
+      final j = o + i;
+      if (j < 0 || j >= heel.length) continue;
+      bits += _popcount(heel[j] ^ fragment[i]);
+      n++;
+    }
+    if (n < min) continue;
+    final score = 1 - bits / (n * 32);
+    if (score > best) best = score;
+  }
+  return best;
+}
+
 const double sameRecordingScore = 0.95;
 
 /// Possibly the same recording — worth showing, not worth acting on.
@@ -212,7 +237,10 @@ class Fingerprinter {
   /// Returns null when fpcalc is missing, when the file is gone, or when the decoder cannot read it.
   /// Never throws: a fingerprint is an enrichment, and nothing in this app may fail because an
   /// enrichment did.
-  Future<Fingerprint?> of(String path, {bool compressed = false}) async {
+  ///
+  /// [heel]: het hele bestand in plaats van de eerste twee minuten (fpcalc `-length 0`) — voor
+  /// [fragmentOvereenkomst], want het fragment kan na die twee minuten liggen.
+  Future<Fingerprint?> of(String path, {bool compressed = false, bool heel = false}) async {
     final exe = tool;
     if (exe == null) return null;
     File f;
@@ -228,7 +256,7 @@ class Fingerprinter {
     // Size and modified time in the key, so a re-download under the same name is a different
     // fingerprint rather than a stale one. That case is not hypothetical here — replacing a
     // transcode with a proper rip is exactly how this library gets its duplicates.
-    final sleutel = '$path|${st.size}|${st.modified.millisecondsSinceEpoch}|${compressed ? 'c' : 'r'}';
+    final sleutel = '$path|${st.size}|${st.modified.millisecondsSinceEpoch}|${compressed ? 'c' : 'r'}${heel ? '|heel' : ''}';
     final cache = File('$_dir${Platform.pathSeparator}'
         '${sha1.convert(utf8.encode(sleutel))}.json');
     try {
@@ -243,6 +271,7 @@ class Fingerprinter {
       r = await Process.run(exe, [
         '-json',
         if (!compressed) '-raw',
+        if (heel) ...['-length', '0'],
         path,
       ]);
     } catch (_) {

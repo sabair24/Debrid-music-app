@@ -63,6 +63,7 @@ import 'completeness.dart';
 import 'credits.dart';
 import 'deezerbaan.dart';
 import 'radiosfeer.dart';
+import 'versiecontrole.dart';
 import 'discogs.dart';
 import 'discography.dart';
 import 'discography_service.dart';
@@ -1167,6 +1168,8 @@ Future<void> main() async {
   // "Past / past niet in deze radio" — zie `radiosfeer.dart`. Dezelfde gedeelde staat als de duimen.
   final radioSfeer = RadioSfeer();
   if (mode.owner) radioSfeer.winkel = sharing.state;
+  // De versiecontrole van elke download: alleen op de pc, die haalt (zie `versiecontrole.dart`).
+  if (mode.owner) DownloadManager.versiecontrole = Versiecontrole().score;
   radio.sfeer = radioSfeer;
   // Als FACTOR de speler in: die hoeft niets van duimen te weten, en `oordeelBonus` blijft daardoor
   // op één plek staan in plaats van in de speler én in het scherm.

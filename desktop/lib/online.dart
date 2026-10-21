@@ -15,6 +15,7 @@ import 'rutracker.dart';
 import 'search.dart';
 import 'settings.dart';
 import 'soulseek.dart';
+import 'versiecontrole.dart' show kAndereVersieOnder, kZelfdeVersieVanaf;
 import 'zoekladder.dart';
 import 'torbox.dart';
 import 'torznab.dart';
@@ -4892,8 +4893,13 @@ class DownloadManager extends ChangeNotifier {
   /// dan [kLengteSpelingNaHalen] af van de officiële lengte, dan is het een andere uitvoering — een
   /// radio-edit, een live-opname, een extended mix — en dan is dit een mislukte poging, precies als
   /// een kapot bestand: de race gaat door met de volgende peer.
+  ///
+  /// **[gevraagd]: en is het de VERSIE die gevraagd werd?** Het bestand tegen het Deezer-fragment van die
+  /// versie ([versiecontrole], zie `versiecontrole.dart`). Onder [kAndereVersieOnder] een mislukte poging,
+  /// zoals een andere lengte: "Light Switch (Acoustic)" van de Sabrina-radio bleek de albumversie (0,642
+  /// tegen het akoestische fragment, 0,945 tegen dat van het origineel — 21-10-2026). Geen oordeel is ja.
   static Future<SlskResult> keurOverdracht(SlskResult res,
-      {void Function(String)? spoor, int? verwachtSeconden}) async {
+      {void Function(String)? spoor, int? verwachtSeconden, ({String artiest, String titel})? gevraagd}) async {
     if (res is! SlskDone) return res;
     final h = await controleerHeel(res.path);
     final naam = res.path.split(Platform.pathSeparator).last;
@@ -4909,8 +4915,28 @@ class DownloadManager extends ChangeNotifier {
         return SlskFail('andere uitvoering (${_mmss(echt)} in plaats van ${_mmss(verwachtSeconden)})');
       }
     }
+    final vc = versiecontrole;
+    if (vc != null && gevraagd != null && gevraagd.artiest.trim().isNotEmpty && gevraagd.titel.trim().isNotEmpty) {
+      final score = await vc(res.path, artiest: gevraagd.artiest, titel: gevraagd.titel, seconden: verwachtSeconden);
+      if (score != null) {
+        final s = score.toStringAsFixed(2);
+        if (score < kAndereVersieOnder) {
+          spoor?.call('   andere versie binnengekomen: $naam — $s tegen het Deezer-fragment van '
+              '"${gevraagd.titel}"; weggegooid, volgende');
+          return SlskFail('andere versie (vingerafdruk $s tegen het Deezer-fragment)');
+        }
+        spoor?.call(score < kZelfdeVersieVanaf
+            ? '   twijfel over de versie: $naam — $s tegen het Deezer-fragment; gehouden'
+            : '   versie klopt: $naam — $s tegen het Deezer-fragment');
+      }
+    }
     return res;
   }
+
+  /// De versiecontrole van de pc — zie [keurOverdracht] en `versiecontrole.dart`. Gezet bij het opstarten
+  /// van de pc; null (een toets, een toestel): niet controleren.
+  static Future<double?> Function(String pad, {required String artiest, required String titel, int? seconden})?
+      versiecontrole;
 
   /// Zo ver mag een binnengekomen bestand van de officiële lengte afwijken. Dezelfde twaalf seconden als
   /// vóór het binnenhalen ([fileOffersTitle]): twee persingen van één plaat verschillen soms zeven, acht
@@ -4928,8 +4954,9 @@ class DownloadManager extends ChangeNotifier {
   /// doesn't slowly fill with the name of every uploader we ever tried. Non-recursive on purpose:
   /// a folder that still holds a partial file is left alone.
   Future<SlskResult> _cleanStaging(Directory dir, File dest, Future<SlskResult> transfer,
-      {int? verwachtSeconden}) async {
-    final res = await keurOverdracht(await transfer, spoor: _log.line, verwachtSeconden: verwachtSeconden);
+      {int? verwachtSeconden, ({String artiest, String titel})? gevraagd}) async {
+    final res = await keurOverdracht(await transfer,
+        spoor: _log.line, verwachtSeconden: verwachtSeconden, gevraagd: gevraagd);
     // A loser in a race can still have finished: a small file arrives inside one chunk, so the
     // peer was told "no" only after the bytes were already on disk. Nothing downstream looks at a
     // cancelled attempt, so without this the complete file sat in _inkomend forever — and kept the
@@ -5018,7 +5045,11 @@ class DownloadManager extends ChangeNotifier {
       onQueued();
     }, waitInQueue: waitInQueue, maxWait: maxWait, cancel: cancel ?? plaatsStop),
         // De officiële lengte van wat deze download zoekt — niet bij jouw eigen keuze. Zie [keurOverdracht].
-        verwachtSeconden: job.exact == null && !job.jouwKeuze ? job.authority?.seconds : null);
+        verwachtSeconden: job.exact == null && !job.jouwKeuze ? job.authority?.seconds : null,
+        // En de versie die gevraagd werd, net zo.
+        gevraagd: job.exact == null && !job.jouwKeuze && job.authority != null
+            ? (artiest: job.authority!.artist, titel: job.authority!.title)
+            : null);
   }
 
   /// Add a torrent download. Non-blocking: a "preparing" job shows TorBox's fetch progress
