@@ -1688,6 +1688,9 @@ extension DiscogsArtwork on DiscogsService {
     /// van een seconde — het archief doet er 7 tot 10 s over (gemeten 20-10-2026). Ook voor wie meelift op
     /// een keten die al loopt. Saber: de hoezen "lopen nu achter".
     void Function(ReleaseArt tussen)? tussenstand,
+    /// De nummers van dit album, voor de digitale voorkant van een verzamelrip — zie
+    /// `CoverEnricher.digitaleVoorkant`.
+    List<String> titels = const [],
   }) async {
     // Both pins are part of the cache key. Without that a new choice would keep answering with the
     // scans fetched for the old one — which is half of why picking a release changed the front
@@ -1726,7 +1729,7 @@ extension DiscogsArtwork on DiscogsService {
     // hoes werd na 27 s vervangen door een scheve Discogs-foto van de fysieke hoes.
     final digitaalF = (roles['front'] ?? '').isEmpty && artist.isNotEmpty && album.isNotEmpty
         ? CoverEnricher(settings)
-            .digitaleVoorkant(artist, album, voorrang: !freeOnly)
+            .digitaleVoorkant(artist, album, voorrang: !freeOnly, titels: titels)
             .catchError((Object _) => null)
         : null;
     final cached = await _readArt(dir);

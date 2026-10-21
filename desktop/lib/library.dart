@@ -1158,6 +1158,20 @@ class LibraryStore extends ChangeNotifier {
 
   static String _hoesSleutel(Album a) => '${a.artist}|${a.title}';
 
+  /// Geen herkansing van hoezen meer ([_planHoesHerkansing]). Anders loopt die klok door na het einde van
+  /// deze bibliotheek, en schrijft hij zijn hoezen in de cache van wie er daarna is — gezien op 21-10-2026 in
+  /// de toetsen op macOS: de hoes van de vorige toets kwam in de volgende terecht.
+  void stopHoesHerkansing() {
+    _hoesHerkansing?.cancel();
+    _hoesHerkansing = null;
+  }
+
+  @override
+  void dispose() {
+    stopHoesHerkansing();
+    super.dispose();
+  }
+
   void _planHoesHerkansing(List<Album> missers, AppSettings settings) {
     Duration? wacht;
     for (final a in missers) {

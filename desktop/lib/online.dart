@@ -29,6 +29,7 @@ import 'werkrij.dart';
 import 'paths.dart';
 import 'audioformaten.dart' show isAudioBestand, isVerliesvrij;
 import 'echtheid.dart';
+import 'enrichment.dart' show lijktVerzamelaar;
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
 import 'flac_tags.dart';
@@ -3670,6 +3671,8 @@ class DownloadManager extends ChangeNotifier {
   /// gsm (20-10-2026, 3.9.529, Myles Smith — Stargazing): ▶ terwijl er een radio liep; het nummer begon
   /// te klinken, dat sloot de radio, en het sluiten brak precies deze haal af — 404, en niets te horen.
   /// Op de pc net zo.
+  ///
+  /// [album]: de uitgave waarop je het nummer zag — zie [gezagVoorHaal].
   Future<String?> haalEnLaatHoren({
     required String artiest,
     required String titel,
@@ -3678,6 +3681,7 @@ class DownloadManager extends ChangeNotifier {
     Groei? vroeg,
     bool zoekDaarnaBeter = false,
     bool losVanDeRadio = false,
+    String? album,
   }) async {
     if (!soulseek.available) return null;
     // Heb je dit al? Dan valt er niets te halen — en, net zo belangrijk, dan mag het straks ook niet
@@ -3698,7 +3702,8 @@ class DownloadManager extends ChangeNotifier {
     final job = DownloadJob(titel); // wegwerp: bewust niet in `jobs`
     if (!losVanDeRadio) _radiohalen.add(job);
     try {
-      return await _haalVoorRadio(job, artiest, titel, seconden, jaar, vroeg: vroeg, zoekBeter: zoekDaarnaBeter);
+      return await _haalVoorRadio(job, artiest, titel, seconden, jaar,
+          vroeg: vroeg, zoekBeter: zoekDaarnaBeter, album: album);
     } finally {
       _radiohalen.remove(job);
     }
@@ -3940,8 +3945,31 @@ class DownloadManager extends ChangeNotifier {
     return goed.isEmpty ? null : goed.first;
   }
 
+  /// De tags die een radiohaal of ▶ na het landen in het bestand schrijft ([stampTags]).
+  ///
+  /// Met [album] (▶: de uitgave waarop je het nummer zag) ook ALBUM en ALBUMARTIST. Zonder dat hield het
+  /// bestand de albumtag van de uploader: Jordy — Dur Dur D'être Bébé, met ▶ uit de zoekuitslag waar
+  /// Deezer "Pochette Surprise" toont, stond als "Foute Cd 11 Cd2" in je bibliotheek, met de hoes van die
+  /// verzamelaar (Saber, 21-10-2026: "het moet echt de originele hoes zijn"). De ⬇ ernaast deed dit al.
+  /// Is dat album zelf een verzamelaar ([lijktVerzamelaar]), dan blijft het zoals het was.
+  @visibleForTesting
+  static TrackTags gezagVoorHaal(
+      {required String artiest, required String titel, String? album, int? jaar, int? seconden}) {
+    final a = album?.trim() ?? '';
+    final metAlbum = a.isNotEmpty && !lijktVerzamelaar(a);
+    return TrackTags(
+      title: titel,
+      artist: artiest,
+      album: metAlbum ? a : '',
+      albumArtist: metAlbum ? artiest : null,
+      trackNo: 0,
+      year: jaar,
+      seconds: seconden,
+    );
+  }
+
   Future<String?> _haalVoorRadio(DownloadJob job, String artiest, String titel, int? seconden, int? jaar,
-      {Groei? vroeg, bool zoekBeter = false}) async {
+      {Groei? vroeg, bool zoekBeter = false, String? album}) async {
     final sleutel = _radioSleutel(artiest, titel);
     // Alleen wat ECHT dit nummer is, in de gevraagde uitvoering en ongeveer de juiste lengte — zie
     // `radiobestand.dart` voor de zes verkeerde nummers van 26-09-2026 — en niet bij een uploader die
@@ -4077,14 +4105,7 @@ class DownloadManager extends ChangeNotifier {
           '(${tussenstand.length} treffers tot dan) — ${baseName(eerste.filename)}');
     }
 
-    final gezag = TrackTags(
-      title: titel,
-      artist: artiest,
-      album: '',
-      trackNo: 0,
-      year: jaar,
-      seconds: seconden,
-    );
+    final gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);
     // Opbergen met de tags ZONDER jaar, en pas daarna de gezaghebbende schrijven: met een jaar geldt
     // alles wat op dezelfde plek ligt als dezelfde opname, zonder naar naam of versie te kijken, en dan
     // zou een andere opname van jou met dezelfde titel stil opzij gaan (review van 26-09-2026).

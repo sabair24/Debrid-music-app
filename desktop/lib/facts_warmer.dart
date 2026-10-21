@@ -659,7 +659,9 @@ class FactsWarmer extends ChangeNotifier {
       // Plus de DIGITALE voorkant (Deezer, anders TheAudioDB), ook voor een plaat waarvan de scans er al
       // staan: Saber, 21-10-2026, "digitaal wint altijd". Eén keer per plaat over het net, daarna van
       // schijf — en `cachedReleaseArt` legt hem over de voorkant.
-      await CoverEnricher(settings).digitaleVoorkant(album.artist, album.title).catchError((Object _) => null);
+      await CoverEnricher(settings)
+          .digitaleVoorkant(album.artist, album.title, titels: [for (final t in album.tracks) t.title])
+          .catchError((Object _) => null);
       _neemHoesOver(
           album,
           await DiscogsService(settings).cachedReleaseArt(album.artist, album.title,
@@ -667,6 +669,11 @@ class FactsWarmer extends ChangeNotifier {
       return _Art.already; // one file check, nothing to show a line for
     }
     _busy(uid);
+    // De digitale voorkant met de titels erbij, zodat een verzamelrip de hoes van zijn originele uitgave
+    // krijgt; de keten hieronder vindt hem daarna in de cache.
+    await CoverEnricher(settings)
+        .digitaleVoorkant(album.artist, album.title, titels: [for (final t in album.tracks) t.title])
+        .catchError((Object _) => null);
     try {
       // Logged BEFORE the call, with the clock. Without this a record that takes four minutes is
       // indistinguishable from a loop that has stopped — which is exactly the two hours I spent

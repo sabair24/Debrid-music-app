@@ -56,6 +56,57 @@ void main() {
     });
   });
 
+  // Saber, 21-10-2026, over Jordy — Dur Dur D'être Bébé uit "Foute Cd 11 Cd2": "het moet echt de originele
+  // hoes zijn". Zo antwoordde Deezer die dag op "Jordy Dur Dur D'etre Bebe".
+  group('een verzamelrip krijgt de hoes van de originele uitgave van het nummer', () {
+    Map<String, dynamic> nr(String artiest, String titel, int album) =>
+        {'title': titel, 'artist': {'name': artiest}, 'album': {'id': album}};
+    final uitslag = [
+      nr('Jordy', "Dur Dur d'être bébé !", 664022531),
+      nr('Jordy', "Dur Dur d'être bébé ! (remix)", 664022531),
+      nr('The Karaoke Channel', "Dur Dur D'être Bébé (Originally Performed by Jordy) [Karaoke Version]", 13619495),
+      nr('Starlite Karaoke', "Dur Dur D'Être Bébé! (In the Style of Jordy) (Instrumental Version)", 372427417),
+    ];
+
+    test('DE KERN: het nummer zelf, geen remix of karaokeversie', () {
+      expect(albumsVanNummer(uitslag, 'Jordy', "Dur Dur D'être Bébé"), [664022531]);
+    });
+
+    test('de originele uitgave: van de artiest zelf, geen verzamelaar, de vroegste', () {
+      Map<String, dynamic> alb(int id, String artiest, String soort, String datum) =>
+          {'id': id, 'artist': {'name': artiest}, 'record_type': soort, 'release_date': datum};
+      final o = kiesOrigineleUitgave([
+        alb(1, 'Various Artists', 'compile', '1990-01-01'),
+        alb(2, 'Jordy', 'compile', '1991-01-01'),
+        alb(3, 'Jordy', 'album', '1993-03-01'),
+        alb(4, 'Jordy', 'single', '1992-06-01'),
+      ], 'Jordy');
+      expect(o?['id'], 4);
+    });
+
+    test('wat er als verzamelaar uitziet', () {
+      for (final t in ['Foute Cd 11 Cd2', 'NOW 121', "Bravo Hits 00's", 'Sublime Top 1000', 'Q-music Vol. 11', 'The Best Of 2024']) {
+        expect(lijktVerzamelaar(t), isTrue, reason: t);
+      }
+      for (final t in ['Pochette Surprise', 'BEAUTIFUL CHAOS', 'Play', "Short n' Sweet"]) {
+        expect(lijktVerzamelaar(t), isFalse, reason: t);
+      }
+    });
+
+    test('aangesloten: Nu speelt, de albumpagina en de opwarmer geven de titels mee', () {
+      final e = File('lib/enrichment.dart').readAsStringSync();
+      expect(e, contains('if (gevonden == null && perNummer.isNotEmpty) gevonden = await _origineleVoorkant(artist, perNummer);'));
+      expect(e, contains('(titels.length <= 2 || lijktVerzamelaar(album))'));
+      expect(File('lib/discogs.dart').readAsStringSync(), contains('.digitaleVoorkant(artist, album, voorrang: !freeOnly, titels: titels)'));
+      final m = File('lib/main.dart').readAsStringSync();
+      expect(m, contains('titels: widget.titels,'));
+      expect(m, contains('titels: [t.title, if (al != null) for (final x in al.tracks) if (x.title != t.title) x.title],'),
+          reason: 'Nu speelt: het spelende nummer eerst');
+      expect(File('lib/facts_warmer.dart').readAsStringSync(),
+          contains('.digitaleVoorkant(album.artist, album.title, titels: [for (final t in album.tracks) t.title])'));
+    });
+  });
+
   test('wat digitaal is: Deezer en TheAudioDB, geen scan van een persing', () {
     for (final h in ['dz:123', 'tadb', 'tadb:abc']) {
       expect(isDigitaleHerkomst(h), isTrue, reason: h);

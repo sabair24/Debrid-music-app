@@ -7658,6 +7658,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     final art = AlbumArt(
             artist: album.artist,
             album: album.title,
+            titels: [for (final t in album.tracks) t.title],
             identity: context.watch<LibraryStore>().uidOf(album),
             // Het label van de tegel waar je vandaan kwam: de hoes groeit door in plaats van dat
             // het ene scherm hard door het andere vervangen wordt. Zelfde uid als in AlbumCard.
@@ -13826,6 +13827,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   return AlbumArt(
                     artist: al?.artist ?? t.artist,
                     album: al?.title ?? t.album,
+                    // Het spelende nummer eerst: is dit een verzamelrip, dan de hoes van zijn originele
+                    // uitgave (zie CoverEnricher.digitaleVoorkant).
+                    titels: [t.title, if (al != null) for (final x in al.tracks) if (x.title != t.title) x.title],
                     identity: al == null ? '' : bib.uidOf(al),
                     size: hoesMaat,
                     reisFactor: dwars ? kLiggendReis : null,
@@ -17511,7 +17515,7 @@ class NieuwSpeler extends ChangeNotifier {
         // (`_radioNietBij` in online.dart): tot negen. Gemeten op de pc (19-10-2026): "Babylon" van
         // Taylor Swift, 171 van 249 treffers goed, drie afgebroken overdrachten, en er speelde niets.
         for (var ronde = 0; ronde < kNieuwHaalRondes && t == null; ronde++) {
-          final plek = Radioplek(artiest: artiest, titel: titel, seconden: seconden);
+          final plek = Radioplek(artiest: artiest, titel: titel, seconden: seconden, album: album);
           try {
             // [zoekBeter]: eerst de snelste FLAC, daarna een betere (Saber, 20-10-2026).
             t = vroeg != null
@@ -23806,6 +23810,7 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
             AlbumArt(
               artist: a.artist,
               album: a.title,
+              titels: [for (final t in a.tracks) t.title],
               identity: bib.uidOf(a),
               size: hoes,
               fallback: a.cover,
@@ -25347,6 +25352,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
             ? AlbumArt(
                 artist: eigen.artist,
                 album: eigen.title,
+                titels: [for (final t in eigen.tracks) t.title],
                 identity: bib.uidOf(eigen),
                 size: hoes,
                 fallback: eigen.cover,
@@ -29178,6 +29184,9 @@ void Function(String)? kunstSpoor;
 
 class AlbumArt extends StatefulWidget {
   final String artist, album;
+
+  /// De nummers van dit album — voor de hoes van een verzamelrip (zie `CoverEnricher.digitaleVoorkant`).
+  final List<String> titels;
   final Uint8List? fallback;
 
   /// A sleeve the user picked by hand. It outranks anything Discogs offers — an automatic source
@@ -29287,6 +29296,7 @@ class AlbumArt extends StatefulWidget {
     required this.artist,
     required this.album,
     required this.size,
+    this.titels = const [],
     this.identity = '',
     this.fallback,
     this.chosen,
@@ -29631,6 +29641,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           pinnedMbid: widget.pinnedMbid,
           roles: widget.roles,
           trace: spoor,
+          titels: widget.titels,
           // De cd en de achterkant zodra TheAudioDB ze heeft, en niet pas na het archief (7 tot 10 s):
           // alleen wat hier nog ontbreekt — wat er al staat, blijft staan.
           tussenstand: (t) {

@@ -163,6 +163,9 @@ Track _t(
     client: mock,
   );
   final library = LibraryStore()..remote = client;
+  // Opruimen na de toets: anders gaat een herkansingsklok van deze bibliotheek af in de volgende toets, en
+  // schrijft hij zijn hoes in de cache van die toets (rood op macOS, 21-10-2026).
+  addTearDown(library.stopHoesHerkansing);
   return (
     library: library,
     client: client,

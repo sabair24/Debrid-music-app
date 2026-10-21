@@ -2206,6 +2206,7 @@ class LanServer {
           titel: titel,
           seconden: (body['seconden'] as num?)?.toInt(),
           jaar: (body['jaar'] as num?)?.toInt(),
+          album: body['album'] is String ? body['album'] as String : null,
           // ▶ op het toestel: na het landen op jacht naar beter. Een ouder toestel stuurt dit niet.
           zoekBeter: body['zoekBeter'] == true,
           luistertMee: body['meeluisteren'] == true,

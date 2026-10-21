@@ -330,6 +330,61 @@ Map<String, dynamic>? kiesDigitaalAlbum(List<dynamic> data, String artiest, Stri
   return kaal;
 }
 
+/// Ziet deze albumtitel eruit als een verzamelaar — "Foute Cd 11 Cd2", "NOW 121", "Bravo Hits 00's",
+/// "Sublime Top 1000"? Alleen gevraagd nadat het album zelf nergens te vinden was.
+bool lijktVerzamelaar(String album) => RegExp(
+        r'\b(cd ?\d+|vol(ume)?\.? ?\d+|hits|top ?\d+|now|foute|compilation|collection|verzamel\w*|best of|the best)\b',
+        caseSensitive: false)
+    .hasMatch(album);
+
+/// Zonder gastrol: "(feat. …)", "[with …]".
+String zonderGastTitel(String t) => t
+    .replaceAll(RegExp(r'\s*[\(\[]\s*(feat\.?|ft\.?|featuring|with)\s[^\)\]]*[\)\]]', caseSensitive: false), '')
+    .trim();
+
+bool _zelfdeArtiestAls(String naam, String artiest) {
+  final k = artistKey(naam), wil = artistKey(artiest);
+  return k.isNotEmpty && (k == wil || wil.startsWith('$k '));
+}
+
+/// De Deezer-albums waarop [titel] van [artiest] staat, uit een zoekuitslag op nummers — hoogstens [max],
+/// in de volgorde van Deezer. Geen remix of karaokeversie: de titel moet precies kloppen (of zonder gastrol),
+/// en de artiest ook ("The Karaoke Channel — Dur Dur D'être Bébé (Originally Performed by Jordy)" niet).
+List<int> albumsVanNummer(List<dynamic> data, String artiest, String titel, {int max = 5}) {
+  final wil = normKey(titel), wilKaal = normKey(zonderGastTitel(titel));
+  final uit = <int>[];
+  for (final d in data) {
+    if (d is! Map) continue;
+    final art = d['artist'];
+    if (!_zelfdeArtiestAls('${art is Map ? art['name'] ?? '' : ''}', artiest)) continue;
+    final t = '${d['title'] ?? ''}';
+    if (normKey(t) != wil && normKey(zonderGastTitel(t)) != wilKaal) continue;
+    final alb = d['album'];
+    final id = alb is Map ? (alb['id'] as num?)?.toInt() : null;
+    if (id != null && !uit.contains(id)) uit.add(id);
+    if (uit.length >= max) break;
+  }
+  return uit;
+}
+
+/// De ORIGINELE uitgave uit Deezer-albums ([albums], zoals `/album/{id}` ze geeft): geen verzamelaar
+/// (`record_type` "compile"), van de artiest zelf, en de vroegste. Of null.
+Map<String, dynamic>? kiesOrigineleUitgave(List<Map<String, dynamic>> albums, String artiest) {
+  Map<String, dynamic>? beste;
+  var besteDatum = '';
+  for (final a in albums) {
+    if ('${a['record_type'] ?? ''}' == 'compile') continue;
+    final art = a['artist'];
+    if (!_zelfdeArtiestAls('${art is Map ? art['name'] ?? '' : ''}', artiest)) continue;
+    final datum = '${a['release_date'] ?? '9999'}';
+    if (beste == null || datum.compareTo(besteDatum) < 0) {
+      beste = a;
+      besteDatum = datum;
+    }
+  }
+  return beste;
+}
+
 /// Hoeveel vragen met voorrang er binnen [kAudioDbSalvoVenster] zonder afstand mogen.
 ///
 /// De drie seconden van de gewone rij zijn geijkt op een lange veeg: zesenvijftig albums aan 1,2 s gaven
@@ -420,8 +475,13 @@ class CoverEnricher {
   ///
   /// Op schijf bewaard ([digitaalDir]), één zoektocht per album tegelijk. [netwerk] uit: alleen wat er al
   /// ligt — voor wie meteen iets wil tekenen.
+  ///
+  /// [titels]: de nummers van dit album (Nu speelt: het spelende eerst). Is het album nergens te vinden en
+  /// lijkt het een verzamelrip — één of twee nummers van deze artiest, of een titel als "Foute Cd 11 Cd2" —
+  /// dan de hoes van de originele uitgave van het NUMMER (Saber, 21-10-2026, over Jordy — Dur Dur D'être
+  /// Bébé uit de Foute CD van Q-music: "het moet echt de originele hoes zijn").
   Future<({Uint8List bytes, String bron})?> digitaleVoorkant(String artistRaw, String albumRaw,
-      {bool voorrang = false, bool netwerk = true}) async {
+      {bool voorrang = false, bool netwerk = true, List<String> titels = const []}) async {
     final artist = _cleanArtist(artistRaw), album = _cleanAlbum(albumRaw);
     if (album.isEmpty) return null;
     final sleutel = fnv1a('${artist.toLowerCase()}|${album.toLowerCase()}');
@@ -437,9 +497,40 @@ class CoverEnricher {
       }
     } catch (_) {/* niets te lezen: dan zoeken */}
     if (!netwerk) return null;
-    return _digitaalOnderweg[sleutel] ??= _zoekDigitaal(sleutel, artist, album, voorrang, img, van).whenComplete(() {
-      _digitaalOnderweg.remove(sleutel);
+    final generiek = _generic.contains(artist.toLowerCase());
+    final perNummer = !generiek &&
+        titels.any((t) => t.trim().isNotEmpty) &&
+        (titels.length <= 2 || lijktVerzamelaar(album));
+    final lopend = '$sleutel|${perNummer ? 'nummer' : 'album'}';
+    return _digitaalOnderweg[lopend] ??=
+        _zoekDigitaal(sleutel, artist, album, voorrang, img, van, perNummer ? titels : const []).whenComplete(() {
+      _digitaalOnderweg.remove(lopend);
     });
+  }
+
+  /// De hoes van de originele uitgave van een van [titels] — zie [albumsVanNummer] en [kiesOrigineleUitgave].
+  /// Gemeten op 21-10-2026: "Jordy Dur Dur D'être Bébé" geeft bij Deezer "Pochette Surprise" (album, 1992) en
+  /// twee karaokeversies.
+  Future<({Uint8List bytes, String bron})?> _origineleVoorkant(String artist, List<String> titels) async {
+    for (final titel in titels.where((t) => t.trim().isNotEmpty).take(3)) {
+      try {
+        final j = await DeezerBaan.haal(
+            'https://api.deezer.com/search?q=${Uri.encodeComponent('$artist $titel')}&limit=15');
+        final ids = albumsVanNummer((j?['data'] as List?) ?? const [], artist, titel);
+        final albums = <Map<String, dynamic>>[];
+        for (final id in ids) {
+          final a = await DeezerBaan.haal('https://api.deezer.com/album/$id');
+          if (a != null) albums.add(a);
+        }
+        final o = kiesOrigineleUitgave(albums, artist);
+        final url = o == null ? null : (o['cover_xl'] ?? o['cover_big']) as String?;
+        if (o == null || url == null || url.isEmpty) continue;
+        final groot = deezerHoes1200(url);
+        final b = (groot == url ? null : await _download(groot)) ?? await _download(url);
+        if (b != null) return (bytes: b, bron: 'dz:${o['id']}');
+      } catch (_) {/* het volgende nummer */}
+    }
+    return null;
   }
 
   ({Uint8List bytes, String bron}) _onthoudDigitaal(String sleutel, ({Uint8List bytes, String bron}) d) {
@@ -451,11 +542,16 @@ class CoverEnricher {
     return d;
   }
 
-  Future<({Uint8List bytes, String bron})?> _zoekDigitaal(
-      String sleutel, String artist, String album, bool voorrang, File img, File van) async {
+  Future<({Uint8List bytes, String bron})?> _zoekDigitaal(String sleutel, String artist, String album,
+      bool voorrang, File img, File van, List<String> perNummer) async {
     final mis = File('${digitaalDir.path}${Platform.pathSeparator}$sleutel.none');
     try {
-      if (await mis.exists() && DateTime.now().difference(await mis.lastModified()) <= _digitaalMisDuur) return null;
+      // Een "niets gevonden" telt alleen als hij ook per nummer gezocht had, wanneer dat nu kan.
+      if (await mis.exists() &&
+          DateTime.now().difference(await mis.lastModified()) <= _digitaalMisDuur &&
+          (perNummer.isEmpty || (await mis.readAsString()).trim() == 'nummer')) {
+        return null;
+      }
     } catch (_) {}
     final generiek = _generic.contains(artist.toLowerCase());
     ({Uint8List bytes, String bron})? gevonden;
@@ -479,6 +575,8 @@ class CoverEnricher {
         if (b != null) gevonden = (bytes: b, bron: 'tadb');
       }
     }
+    // Het album nergens, en het is een verzamelrip: de originele uitgave van het nummer.
+    if (gevonden == null && perNummer.isNotEmpty) gevonden = await _origineleVoorkant(artist, perNummer);
     try {
       await digitaalDir.create(recursive: true);
       if (gevonden != null) {
@@ -487,7 +585,7 @@ class CoverEnricher {
         if (await mis.exists()) await mis.delete();
       } else if (deezerAntwoordde) {
         // Alleen als Deezer echt antwoordde: een weigering is geen "bestaat niet".
-        await mis.writeAsString('');
+        await mis.writeAsString(perNummer.isEmpty ? 'album' : 'nummer');
       }
     } catch (_) {/* niet bewaard kost alleen een tweede zoektocht */}
     return gevonden == null ? null : _onthoudDigitaal(sleutel, gevonden);
