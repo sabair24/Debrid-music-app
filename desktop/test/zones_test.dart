@@ -216,7 +216,10 @@ void main() {
       expect(z['spk:amp']!.groep, ['spk:amp', 'spk:move']);
       expect(z.containsKey('spk:move'), isFalse, reason: 'een lid speelt wat de leider speelt');
       expect(z['spk:amp']!.kanGroeperen, isTrue);
-      expect(z['spk:kef']!.kanGroeperen, isFalse, reason: 'alleen Sonossen lopen onderling gelijk');
+      expect(z['spk:amp']!.sonos, isTrue);
+      // Toestellen kunnen met elke speaker meespelen (stap 3.3); speakers onderling alleen Sonossen.
+      expect(z['spk:kef']!.kanGroeperen, isTrue);
+      expect(z['spk:kef']!.sonos, isFalse, reason: 'alleen Sonossen lopen onderling gelijk');
       final terug = ZoneStaat.fromJson(z['spk:amp']!.toJson());
       expect(terug, z['spk:amp']);
     });
