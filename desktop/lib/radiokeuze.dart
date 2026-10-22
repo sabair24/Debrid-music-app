@@ -208,9 +208,15 @@ const List<String> _anders = [
 /// mee. Een bewerking mag in het rantsoen (twee op de tien), maar dit is geen bewerking van een
 /// origineel dat er ook had kunnen staan; het is een cover. Saber: "ik wil vooral originele nummers
 /// horen."
+///
+/// En de versie zonder zang van een gezongen nummer: "(Orkestband)", "(Instrumental)", "(Backing Track)". Gemeten op
+/// 22-10-2026: van 80 nummers die de radio doorliet, was Mart Hoogkamer — Ik Ga Zwemmen (Orkestband) het enige echte
+/// rommelnummer (4 luisteraars op Last.fm). Een ondergrens op luisteraars ving het ook, maar raakte evenveel echte
+/// Vlaamse nummers (Red 5, Gert Verhulst, Sam Gooris); op de titel raakt het alleen wat het is. Alleen in de staart
+/// tussen haakjes ([_staart]): een origineel instrumentaal nummer draagt dat woord niet.
 final RegExp _nooit = RegExp(
     r'\b(uit liefde voor muziek|liefde voor muziek|tribute|karaoke|cover|in the style of|'
-    r'originally performed|made famous)\b');
+    r'originally performed|made famous|orkestband|instrumental|instrumentaal|backing track)\b');
 
 /// Hoort dit nummer nooit op een radio? Zie [_nooit].
 bool nooitOpRadio(String titel) => _nooit.hasMatch(_staart(titel));

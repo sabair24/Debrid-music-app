@@ -66,12 +66,12 @@ void main() {
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(
         'vanJou: eigenVoorModel(lib.tracks)'.allMatches(main).length,
-        4,
-        reason: 'de startlijst, de vervolglijst, het afstemmen en Last.fm',
+        5,
+        reason: 'de startlijst, de vervolglijst, het afstemmen, Last.fm bij de start en Last.fm onderweg',
       );
-      // De vijfde is de rij "Vroeger veel gespeeld, nog niet van jou" op het startscherm: die zoekt per definitie
+      // De zesde is de rij "Vroeger veel gespeeld, nog niet van jou" op het startscherm: die zoekt per definitie
       // nummers die je níét hebt, dus daar hoort je bibliotheek niet bij.
-      expect(RegExp(r'lijstOpDeezer\(').allMatches(main).length, 5, reason: 'geen zesde zonder opzoeker');
+      expect(RegExp(r'lijstOpDeezer\(').allMatches(main).length, 6, reason: 'geen zevende zonder opzoeker');
       expect(main, contains("van: 'je Last.fm');"));
     });
   });

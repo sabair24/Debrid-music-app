@@ -743,4 +743,99 @@ void main() {
       r.stop();
     });
   });
+
+  // Saber, 22-10-2026: "radio blijft ontdekken". Elke ronde ook wat Last.fm vergelijkbaar vindt met een nummer dat net
+  // speelde — streng op sfeer, en het model pas als ook Last.fm niets nieuws gaf.
+  group('Last.fm onderweg', () {
+    const krap = (nood: false, verwacht: 1.0, reserveNodig: 0, reserveKlaar: 0);
+
+    test('DE KERN: elke ronde Last.fm; eerst vanaf het zaad, dan vanaf wat net speelde, nooit twee keer hetzelfde', () async {
+      final r = await radio();
+      final gevraagd = <String>[];
+      final sfeer = <String>[];
+      final log = <String>[];
+      final b = Radiobijvuller(
+        radio: r,
+        deezer: _Deezer().als,
+        ankers: const ['Niels Destadsbader'],
+        metVerwant: true,
+        maakPlan: _plan,
+        lastfmVan: (a, t) async {
+          gevraagd.add('$a — $t');
+          return [
+            Radioplek(artiest: 'X-Session', titel: 'On and On ${gevraagd.length}', bron: 'lastfm'),
+            Radioplek(artiest: 'T-Spoon', titel: 'Mercedes Benz ${gevraagd.length}', bron: 'lastfm'),
+          ];
+        },
+        vraagSfeer: (plekken) => sfeer.addAll([for (final p in plekken) if (p.bron == 'lastfm') p.artiest]),
+        spoor: log.add,
+        toeval: Random(1),
+      );
+      await b(r.sessie, r.bijvulRonde, _vraag);
+      expect(gevraagd, ['Niels Destadsbader — Vuur en vlam'], reason: 'nog niets gehoord: het zaad');
+      expect([for (final p in r.plan) if (p.bron == 'lastfm') p.artiest], ['X-Session', 'T-Spoon']);
+      expect(sfeer, ['X-Session', 'T-Spoon'], reason: 'streng op sfeer, zoals de buurt');
+      expect(log.last, contains('Last.fm vanaf "Niels Destadsbader — Vuur en vlam": 2 gevonden → 2 te halen'));
+      // Nu speelde X-Session echt: de volgende ronde vertrekt daarvan.
+      r.plan.firstWhere((p) => p.artiest == 'X-Session').gehoord = true;
+      await b(r.sessie, r.bijvulRonde, _vraag);
+      expect(gevraagd.last, 'X-Session — On and On 1');
+      await b(r.sessie, r.bijvulRonde, _vraag);
+      expect(gevraagd.length, 2, reason: 'niets nieuws gehoord: geen vraag');
+      expect(log.last, contains('Last.fm: niets nieuws gehoord om van te vertrekken'));
+      r.stop();
+    });
+
+    test('gaf Last.fm iets nieuws, dan wordt het model niet gevraagd; gaf het niets, dan wel', () async {
+      final r = await radio();
+      r.plan.first.voorbijOp = r.voorbijteller - kArtiestTerug;
+      var modelVragen = 0;
+      final model = Radiomodel(
+        mag: () => (mag: true, waarom: null),
+        lijst: ({required alGekozen, required dieper}) async {
+          modelVragen++;
+          return [Radioplek(artiest: 'Pommelien Thijs', titel: 'Lisa', bron: 'model')];
+        },
+      );
+      var geeft = true;
+      final log = <String>[];
+      final b = Radiobijvuller(
+        radio: r,
+        deezer: _Deezer(perArtiest: 0).als,
+        ankers: const ['Niels Destadsbader'],
+        metVerwant: true,
+        maakPlan: _plan,
+        model: model,
+        lastfmVan: (a, t) async => geeft ? [Radioplek(artiest: 'Bazart', titel: 'Goud', bron: 'lastfm')] : const [],
+        spoor: log.add,
+      );
+      await b(r.sessie, r.bijvulRonde, krap);
+      expect(modelVragen, 0, reason: 'elke modelvraag kost geld');
+      expect(log.last, contains('[lastfm]'));
+      geeft = false;
+      r.plan.firstWhere((p) => p.artiest == 'Bazart').gehoord = true;
+      await b(r.sessie, r.bijvulRonde, krap);
+      expect(modelVragen, 1);
+      r.stop();
+    });
+
+    test('een fout van Last.fm is geen stilte: de rest van de ronde gaat door', () async {
+      final r = await radio();
+      final log = <String>[];
+      final b = Radiobijvuller(
+        radio: r,
+        deezer: _Deezer().als,
+        ankers: const ['Niels Destadsbader'],
+        metVerwant: true,
+        maakPlan: _plan,
+        lastfmVan: (a, t) async => throw Exception('geen net'),
+        spoor: log.add,
+        toeval: Random(1),
+      );
+      expect(await b(r.sessie, r.bijvulRonde, _vraag), greaterThan(0), reason: 'de buurt vulde gewoon');
+      expect(log.last, contains('Last.fm gaf niets'));
+      expect(kLastfmPerRonde, 8);
+      r.stop();
+    });
+  });
 }

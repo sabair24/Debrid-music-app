@@ -72,6 +72,14 @@ const int kArtiestenPerRonde = 8;
 const int kReserveAnker = 1;
 const int kReservePerArtiest = 2;
 
+/// Hoeveel nummers de Last.fm-trap per ronde hoogstens aanbiedt.
+///
+/// Saber, 22-10-2026: "radio blijft ontdekken". De buurt (toppers van Deezer) geeft vooral de bekende hits van
+/// verwante artiesten; Last.fm geeft wat luisteraars ná een nummer draaien, en dat gaat dieper (gemeten bij 2 Fabiola —
+/// Freak Out: X-Session, Da Boy Tommy, 2 Brothers on the 4th Floor, T-Spoon). Elke ronde vanaf een ander nummer dat
+/// net echt speelde, zodat de radio meebeweegt met wat er klinkt.
+const int kLastfmPerRonde = 8;
+
 class Radiobijvuller {
   Radiobijvuller({
     required this.radio,
@@ -82,6 +90,7 @@ class Radiobijvuller {
     this.keurEigen,
     this.reserveKandidaten,
     this.model,
+    this.lastfmVan,
     this.vraagSfeer,
     this.spoor,
     DateTime Function()? klok,
@@ -110,6 +119,10 @@ class Radiobijvuller {
 
   /// Het model, als er een sleutel is: een vervolglijst als de buurt niets nieuws gaf. Null: zoals voorheen.
   final Radiomodel? model;
+
+  /// Wat Last.fm vergelijkbaar vindt met een nummer, al opgezocht en tot plekken gemaakt (met het plafond per artiest)
+  /// — zie [kLastfmPerRonde]. Null: geen Last.fm-sleutel.
+  final Future<List<Radioplek>> Function(String artiest, String titel)? lastfmVan;
 
   /// Een sfeeroordeel vragen over wat een ronde voorstelt — `_Radiokeuring.vraagSfeer`, die zelf over het
   /// budget beslist. De keuring wacht er per plek op, zoals bij de start. Null: geen model.
@@ -163,13 +176,19 @@ class Radiobijvuller {
     final herkanst = radio.herkans(sessie, ronde: ronde);
     final r = await _buren(sessie, ronde);
     if (sessie != radio.sessie || ronde != radio.bijvulRonde) return 0;
-    // Niets nieuws uit de buurt (op, aan het plafond, of Deezer zweeg): het model, als het mag.
+    // Elke ronde ook Last.fm, als er een sleutel is: vanaf een nummer dat net speelde.
+    ({int nieuw, String wat})? l;
+    if (lastfmVan != null) {
+      l = await _lastfm(sessie, ronde);
+      if (sessie != radio.sessie || ronde != radio.bijvulRonde) return 0;
+    }
+    // Niets nieuws uit de buurt en van Last.fm (op, aan het plafond, of zwijgend): het model, als het mag.
     ({int nieuw, String wat})? m;
-    if (r.nieuw == 0 && model != null) {
+    if (r.nieuw + (l?.nieuw ?? 0) == 0 && model != null) {
       m = await _model(sessie, ronde);
       if (sessie != radio.sessie || ronde != radio.bijvulRonde) return 0;
     }
-    final n = r.nieuw + herkanst + (m?.nieuw ?? 0);
+    final n = r.nieuw + herkanst + (l?.nieuw ?? 0) + (m?.nieuw ?? 0);
     // Niets nieuws, en het wordt krap: dan herhalen, in dezelfde ronde. Niet bij nood: dan heeft de
     // noodvulling van de radio al gezorgd (reserve of herhalen), en kwamen er anders in één keer twee
     // reservenummers plus twee herhalingen (tweede beoordeling van 08-10-2026).
@@ -179,11 +198,13 @@ class Radiobijvuller {
     }
     final trap = (m?.nieuw ?? 0) > 0
         ? 'model'
-        : r.op
-            ? 'herhaal'
-            : 'buren';
+        : (l?.nieuw ?? 0) > 0 && r.nieuw == 0
+            ? 'lastfm'
+            : r.op
+                ? 'herhaal'
+                : 'buren';
     spoor?.call('radio-bijvul #$ronde [$trap] vooruit≈${v.verwacht.toStringAsFixed(1)}'
-        '${v.nood ? ' NOOD' : ''}: ${r.wat}${m == null ? '' : ' · ${m.wat}'}'
+        '${v.nood ? ' NOOD' : ''}: ${r.wat}${l == null ? '' : ' · ${l.wat}'}${m == null ? '' : ' · ${m.wat}'}'
         '${herkanst > 0 ? ' · $herkanst opnieuw geprobeerd' : ''}'
         '${herhaald > 0 ? ' · $herhaald herhaald' : ''}');
     // Alleen zeggen wat er werkelijk gebeurt: herhaald → zeggen; iets nieuws → weer gewoon.
@@ -259,6 +280,51 @@ class Radiobijvuller {
             '${eigen.isEmpty ? '' : ' + ${eigen.length} van jou (keuring)'}'
             '${op ? ' — de buurt is nu op' : ''}';
     return (nieuw: n + eigen.length, wat: wat, op: op && n + eigen.length == 0);
+  }
+
+  /// De nummers waarvan Last.fm al gevraagd is — elke ronde een ander.
+  final Set<String> _lastfmZaden = {};
+
+  /// Het nummer waarvan Last.fm deze ronde gevraagd wordt: het laatst gehoorde dat nog niet gevraagd is, of anders
+  /// het zaad (de eerste ronde, voor er iets gehoord is). Null: niets nieuws om van te vertrekken.
+  ({String artiest, String titel})? lastfmZaad() {
+    for (final p in radio.plan.reversed) {
+      if (!p.gehoord) continue;
+      if (_lastfmZaden.contains(_sleutel(p.artiest, p.titel))) continue;
+      return (artiest: p.artiest, titel: p.titel);
+    }
+    for (final p in radio.plan) {
+      if (p.zaad && !_lastfmZaden.contains(_sleutel(p.artiest, p.titel))) return (artiest: p.artiest, titel: p.titel);
+    }
+    return null;
+  }
+
+  Future<({int nieuw, String wat})> _lastfm(int sessie, int ronde) async {
+    final z = lastfmZaad();
+    if (z == null) return (nieuw: 0, wat: 'Last.fm: niets nieuws gehoord om van te vertrekken');
+    _lastfmZaden.add(_sleutel(z.artiest, z.titel));
+    List<Radioplek> plekken;
+    try {
+      plekken = await lastfmVan!(z.artiest, z.titel);
+    } catch (e) {
+      return (nieuw: 0, wat: 'Last.fm gaf niets — $e');
+    }
+    if (sessie != radio.sessie || ronde != radio.bijvulRonde) return (nieuw: 0, wat: 'ingehaald');
+    final inPlan = {for (final p in radio.plan) _sleutel(p.artiest, p.titel)};
+    final nieuw = [for (final p in plekken) if (!inPlan.contains(_sleutel(p.artiest, p.titel))) p]
+        .take(kLastfmPerRonde)
+        .toList();
+    final halen = [for (final p in nieuw) if (p.eigen == null) p];
+    final eigen = nieuweNakomers(radio.plan, [for (final p in nieuw) if (p.eigen != null) p]);
+    // Streng op sfeer, zoals de buurt: dit koos niemand voor deze radio.
+    vraagSfeer?.call([...halen, ...eigen]);
+    final n = radio.voegBij(sessie, halen, ronde: ronde, achteraan: true);
+    if (eigen.isNotEmpty) unawaited(_keurEnVoegBij(sessie, eigen));
+    return (
+      nieuw: n + eigen.length,
+      wat: 'Last.fm vanaf "${z.artiest} — ${z.titel}": ${plekken.length} gevonden → $n te halen'
+          '${eigen.isEmpty ? '' : ' + ${eigen.length} van jou (keuring)'}'
+    );
   }
 
   /// Hoeveel vervolglijsten deze radio al kreeg: vanaf de tweede vraagt hij het model dieper te graven.

@@ -13972,6 +13972,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
         '${ai == null ? ', zonder model' : ''}');
     final beurt = ++_afstemBeurt;
     // Bijvullen uit de toppers van de genoemde artiesten zelf — die zíjn het genre — en gekeurd.
+    final lastfmSleutelZin = context.read<AppSettings>().lastfmKey.trim();
     final bijvuller = Radiobijvuller(
       radio: radio,
       deezer: Radiodeezer(
@@ -13988,6 +13989,16 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
       ],
       keurEigen: (p) => keuring.keur(p, eigen: true),
       vraagSfeer: ai == null ? null : (plekken) => keuring.vraagSfeer(plekken, onderweg: true),
+      // Ontdekken onderweg: wat Last.fm vergelijkbaar vindt met wat net speelde (zie [kLastfmPerRonde]).
+      lastfmVan: lastfmSleutelZin.isEmpty
+          ? null
+          : (a, t) => _lastfmPlekken(a, t,
+              sleutel: lastfmSleutelZin,
+              lib: lib,
+              rec: rec,
+              spoor: log.line,
+              maakPlan: (recs) => _radioplan(recs, lib,
+                  al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller), bron: 'lastfm')),
       spoor: log.line,
     );
     log.line('radio uit een zin "${o.naam}": ${o.zaadArtiesten.length} artiesten, '
@@ -16632,6 +16643,23 @@ Future<RecTrack?> _itunesVoorModel(AiNummer n) => _itunes.vind(n.artiest, n.tite
 /// geschiedenis. Met een buffer op schijf, zodat dezelfde vraag niet elke keer opnieuw gaat.
 final LastfmZoeker _lastfmBron = LastfmZoeker(buffer: '$appDir${Platform.pathSeparator}lastfm');
 
+/// Wat Last.fm vergelijkbaar vindt met [titel] van [artiest], opgezocht zoals de modellijst (Deezer, je eigen
+/// bibliotheek, iTunes; hoogstens [hoeveel]) en tot plekken gemaakt met [maakPlan] — de Last.fm-trap van de bijvuller
+/// (zie [kLastfmPerRonde]). Leeg zonder antwoord of bij naamgenoten ([lastfmVergelijkbaar]).
+Future<List<Radioplek>> _lastfmPlekken(String artiest, String titel,
+    {required String sleutel,
+    required LibraryStore lib,
+    required RecommendService rec,
+    required List<Radioplek> Function(List<RecTrack> recs) maakPlan,
+    void Function(String)? spoor,
+    int hoeveel = 20}) async {
+  final lf = await _lastfmBron.vergelijkbaar(artiest, titel, sleutel: sleutel);
+  if (lf == null || lf.nummers.isEmpty) return const [];
+  final gevonden = await rec.lijstOpDeezer([for (final n in lf.nummers.take(hoeveel)) AiNummer(n.artiest, n.titel)],
+      spoor: spoor, vanJou: eigenVoorModel(lib.tracks), elders: _itunesVoorModel, eldersNaam: 'iTunes', van: 'Last.fm');
+  return maakPlan(gevonden);
+}
+
 /// De artiesten die je volgens Last.fm het meest speelde, voor het smaakprofiel — zonder wat [al] al noemt. Leeg
 /// zonder sleutel of gebruiker, of als Last.fm niet binnen [geduld] antwoordt; de vraag loopt dan door en vult de
 /// buffer (een dag), zodat het de volgende keer meteen klaarligt.
@@ -16805,6 +16833,23 @@ Future<void> startRadio(BuildContext context, String artist,
         bron: 'buren'),
     keurEigen: (p) => keuring.keur(p, eigen: true),
     reserveKandidaten: (artiesten) => _reserveUit(lib, artiesten),
+    // Ontdekken onderweg (Saber, 22-10-2026: "radio blijft ontdekken"): elke ronde wat Last.fm vergelijkbaar vindt
+    // met een nummer dat net speelde, streng op sfeer — zie [kLastfmPerRonde].
+    lastfmVan: cfg.lastfmKey.trim().isEmpty
+        ? null
+        : (a, t) => _lastfmPlekken(a, t,
+            sleutel: cfg.lastfmKey,
+            lib: lib,
+            rec: rec,
+            spoor: log.line,
+            maakPlan: (recs) => _radioplan(recs, lib,
+                zaadArtiest: artist,
+                zaad: zaad,
+                zaadTitel: zaadTitel,
+                al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller),
+                weert: steedsGeweigerd(radio.plan),
+                elkeLengte: keuring.elkeLengte,
+                bron: 'lastfm')),
     // Met een sleutel: ook de buurt op sfeer, en een vervolglijst van het model als de buurt niets nieuws
     // meer geeft — binnen het budget (uitlevering 2 van het radioplan, zie `modelbudget.dart`).
     vraagSfeer: ai == null ? null : (plekken) => keuring.vraagSfeer(plekken, onderweg: true),
