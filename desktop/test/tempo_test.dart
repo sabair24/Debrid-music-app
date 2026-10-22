@@ -98,10 +98,29 @@ void main() {
       );
       expect(v, contains(tempoZin(142)));
       expect(v, contains('rond 142 BPM'));
-      expect(v, contains('1. Benny Neyman - Waarom fluister ik je naam nog (~94 BPM)'));
+      expect(v, contains('1. Benny Neyman - Waarom fluister ik je naam nog (~94 BPM, of ~188)'));
       expect(v, contains('2. Gerard Joling - Maak me gek (~144 BPM)'));
       expect(tempoZin(142), contains('af en toe een rustiger nummer'));
       expect(tempoZin(142), contains('het dubbele of de helft'));
+    });
+
+    // Gemeten op 22-10-2026, radio vanaf Petra: Clouseau — Daar Gaat Ze kwam binnen als 87 BPM (waarschijnlijk het
+    // halve tempo; Saber: "Ja idd, maar past ook") en de sfeervraag wees het negen keer op negen af.
+    test('onder 100 BPM staat het dubbele erbij: de meter weet niet welke van de twee het is', () {
+      expect(tempoTekst(87), '~87 BPM, of ~174');
+      expect(tempoTekst(99.4), '~99 BPM, of ~198');
+      expect(tempoTekst(100), '~100 BPM');
+      expect(tempoTekst(142), '~142 BPM');
+      expect(kTempoTwijfelOnder, 100);
+    });
+
+    test('de taalregel van de sfeervraag: de taal weegt het zwaarst, alleen een echt trage ballad valt af', () {
+      expect(kTaalSfeerZin, contains('weegt de taal het zwaarst'));
+      expect(kTaalSfeerZin, contains('Marco Borsato - Dromen Zijn Bedrog hoort er wel bij'), reason: 'Sabers oordeel');
+      expect(kTaalSfeerZin, contains('Dit gaat voor "wees streng" en voor de tempozin'));
+      expect(kTaalSfeerZin, contains('Bij een Engelstalig zaad geldt dit niet'));
+      expect(kTaalSfeerZin, isNot(contains('met hetzelfde tempo en dezelfde energie')),
+          reason: 'die zin wees alle vijf Nederlandstalige nummers af');
     });
 
     test('zonder meting zoals voorheen; een nummer zonder meting zonder getal', () {
