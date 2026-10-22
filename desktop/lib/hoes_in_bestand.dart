@@ -6,7 +6,8 @@
 ///
 /// **Wat.** Op de pc legt [HoesInBestandVeger] de voorkant die de bibliotheek zeker weet — jouw eigen keuze
 /// of die van een herkende uitgave ([Album.correctedCover], [Album.resolvedCover]) — als eerste PICTURE
-/// (soort 3, voorkant) in elke FLAC van dat album, en opnieuw als die keuze verandert. Een gok op naam
+/// (soort 3, voorkant) in elke FLAC van dat album — en sinds 22-10-2026 ook in mp3, AIFF, WavPack en Monkey's
+/// Audio (`hoes_in_bestand_anders.dart`) — en opnieuw als die keuze verandert. Een gok op naam
 /// ([Album.enriched]) gaat er niet in: die kan fout zijn, en dan zat de fout voortaan in je bestanden. Een
 /// album zonder zekere hoes maar met een eigen ingebedde hoes geeft die aan zijn nummers die er geen
 /// hebben. De andere platen (achterkant, cd) blijven staan.
@@ -35,6 +36,7 @@ import 'package:flutter/foundation.dart';
 import 'artwork.dart' show verkleindeHoesBuitenDeTekendraad;
 import 'cachesleutel.dart' show fnv1aBytes, fnv1aVan;
 import 'flac_tags.dart' show flacBegin;
+import 'hoes_in_bestand_anders.dart';
 import 'integriteit.dart' show bekendKapot;
 import 'lan/transcode.dart' show Transcoder;
 import 'library.dart';
@@ -62,7 +64,8 @@ enum HoesUitkomst {
   /// Er zit al een plaat in, en er mocht alleen in een bestand zonder plaat geschreven worden.
   heeftAlEen,
 
-  /// Geen FLAC dat we veilig herschrijven (geen `fLaC`, een verminkt blok).
+  /// Geen bestand dat we veilig herschrijven (geen `fLaC`, een verminkt blok, een ID3-kop of APE-blok dat we
+  /// niet helemaal kennen).
   nietTeLezen,
 
   /// Het bestand staat op alleen-lezen: iemand heeft het zo gewild, dus blijft het zoals het is. Gezien op
@@ -188,6 +191,22 @@ List<({int soort, Uint8List lijf})> nieuweBlokken(
   return uit;
 }
 
+/// Bewaart een oude voorkant in [map] als `<merk>.jpg` (`.png`, `.gif`), één keer per beeld; geeft de naam.
+String bewaarOudeVoorkant(Uint8List b, String map) {
+  final soort = beeldKenmerk(b)?.mime == 'image/png'
+      ? '.png'
+      : b.length > 3 && b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46
+          ? '.gif'
+          : '.jpg';
+  final naam = '${fnv1aBytes(b, fnv1aVan(b.length.toString())).toRadixString(16)}$soort';
+  final doel = File('$map${Platform.pathSeparator}$naam');
+  if (!doel.existsSync()) {
+    Directory(map).createSync(recursive: true);
+    doel.writeAsBytesSync(b, flush: true);
+  }
+  return naam;
+}
+
 /// Legt [beeld] als voorkant in de FLAC op [pad] — zie de uitleg bovenaan. Synchroon, voor een isolate.
 ///
 /// [alleenAlsLeeg]: alleen in een bestand zonder enige plaat. [bewaarOud]: een map waar de oude voorkant
@@ -243,17 +262,9 @@ List<({int soort, Uint8List lijf})> nieuweBlokken(
     }
 
     // De oude voorkant bewaren, één keer per beeld.
-    String? oud;
-    if (bewaarOud != null && eerste != null && (eerste.soort == 3 || eerste.soort == 0)) {
-      final b = eerste.beeld;
-      oud = '${fnv1aBytes(b, fnv1aVan(b.length.toString())).toRadixString(16)}'
-          '${beeldKenmerk(b)?.mime == 'image/png' ? '.png' : '.jpg'}';
-      final doel = File('$bewaarOud${Platform.pathSeparator}$oud');
-      if (!doel.existsSync()) {
-        Directory(bewaarOud).createSync(recursive: true);
-        doel.writeAsBytesSync(b, flush: true);
-      }
-    }
+    final oud = bewaarOud != null && eerste != null && (eerste.soort == 3 || eerste.soort == 0)
+        ? bewaarOudeVoorkant(eerste.beeld, bewaarOud)
+        : null;
 
     final nieuw = nieuweBlokken(blokken, pictureLijf(beeld, k), audioBegin - begin - 4);
     final kop = BytesBuilder(copy: false)
@@ -320,7 +331,19 @@ List<({int soort, Uint8List lijf})> nieuweBlokken(
   }
 }
 
-/// [schrijfVoorkantInFlac] in een eigen isolate.
+/// Legt [beeld] als voorkant in het bestand op [pad], naar zijn soort ([hoesbakVan]): FLAC hierboven, mp3, AIFF,
+/// WavPack en Monkey's Audio in `hoes_in_bestand_anders.dart`. Synchroon, voor een isolate.
+({HoesUitkomst uitkomst, String? oud, String? reden}) schrijfVoorkant(String pad, Uint8List beeld,
+        {bool alleenAlsLeeg = false, String? bewaarOud}) =>
+    switch (hoesbakVan(pad)) {
+      Hoesbak.flac => schrijfVoorkantInFlac(pad, beeld, alleenAlsLeeg: alleenAlsLeeg, bewaarOud: bewaarOud),
+      Hoesbak.id3 => schrijfVoorkantInMp3(pad, beeld, alleenAlsLeeg: alleenAlsLeeg, bewaarOud: bewaarOud),
+      Hoesbak.aiff => schrijfVoorkantInAiff(pad, beeld, alleenAlsLeeg: alleenAlsLeeg, bewaarOud: bewaarOud),
+      Hoesbak.ape => schrijfVoorkantInApe(pad, beeld, alleenAlsLeeg: alleenAlsLeeg, bewaarOud: bewaarOud),
+      null => (uitkomst: HoesUitkomst.nietTeLezen, oud: null, reden: 'dit formaat nog niet'),
+    };
+
+/// [schrijfVoorkant] in een eigen isolate.
 ///
 /// **Een functie op het hoogste niveau, en dat is geen smaak.** Een closure die IN een methode van de veger
 /// gemaakt wordt, neemt de context van die methode mee naar de isolate — en daarmee de veger zelf, met zijn
@@ -328,7 +351,7 @@ List<({int soort, Uint8List lijf})> nieuweBlokken(
 /// — _Timer", vóór er één bestand geschreven was. Hier draagt de closure alleen deze vier waarden.
 Future<({HoesUitkomst uitkomst, String? oud, String? reden})> schrijfVoorkantApart(
         String pad, Uint8List beeld, bool alleenAlsLeeg, String? bewaarOud) =>
-    Isolate.run(() => schrijfVoorkantInFlac(pad, beeld, alleenAlsLeeg: alleenAlsLeeg, bewaarOud: bewaarOud));
+    Isolate.run(() => schrijfVoorkant(pad, beeld, alleenAlsLeeg: alleenAlsLeeg, bewaarOud: bewaarOud));
 
 /// Wat er per album in de bestanden hoort: het beeld, en of het alleen in bestanden zonder plaat mag.
 /// Null als er niets zekers is (zie de uitleg bovenaan).
@@ -497,7 +520,7 @@ class HoesInBestandVeger {
     _bezig = true;
     try {
       final werk = <({Album album, Uint8List beeld, bool alleenAlsLeeg, String merk, List<Track> nummers})>[];
-      var nietFlac = 0;
+      var nogNiet = 0;
       for (final a in library.albums) {
         final h = hoesVoorBestanden(a);
         if (h == null) continue;
@@ -512,8 +535,8 @@ class HoesInBestandVeger {
         final nummers = <Track>[];
         for (final t in a.tracks) {
           if (t.path.isEmpty) continue;
-          if (!t.isFlac) {
-            nietFlac++;
+          if (hoesbakVan(t.path) == null) {
+            nogNiet++;
             continue;
           }
           if (_isKlaar(t, merk)) continue;
@@ -527,7 +550,7 @@ class HoesInBestandVeger {
       final totaal = werk.fold<int>(0, (n, w) => n + w.nummers.length);
       final start = DateTime.now();
       _log.line('ronde: $totaal nummers in ${werk.length} albums na te kijken'
-          '${nietFlac > 0 ? ' ($nietFlac geen FLAC — die nog niet)' : ''}');
+          '${nogNiet > 0 ? ' ($nogNiet in een formaat dat nog niet kan, zoals m4a)' : ''}');
       var gedaan = 0, zelfde = 0, ander = 0, gelijk = 0, overgeslagen = 0, mis = 0, overslaanVast = 0;
       final oud = <String, String>{};
       for (final w in werk) {
