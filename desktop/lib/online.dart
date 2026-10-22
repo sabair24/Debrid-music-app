@@ -1072,8 +1072,13 @@ class SoulseekService {
 
   /// [gebruikteVraag] meldt op welke trede er uiteindelijk gezocht is, zodat het scherm eerlijk kan
   /// zeggen waar deze lijst over gaat.
+  ///
+  /// [achtergrond]: de radio, de verlanglijst of een betere kopie — die wachten eerder op de zoekrem dan wat je zelf
+  /// zoekt (`kZoekVoorJou` in soulseek.dart).
   Future<List<SoulseekFile>> search(String query,
-      {void Function(List<SoulseekFile>)? onPartial, void Function(String)? gebruikteVraag}) async {
+      {void Function(List<SoulseekFile>)? onPartial,
+      void Function(String)? gebruikteVraag,
+      bool achtergrond = false}) async {
     // An empty result because we couldn't log in is NOT "no sources" — retrying a broader query
     // would just burn another login and still show the user the wrong answer.
     final blocked = client.whyNotLogin;
@@ -1087,7 +1092,7 @@ class SoulseekService {
       // De RUIMSTE vraag van deze ronde, want daar kunnen de resultaten vandaan komen. Zie
       // [ruimerGezocht]: dat is precies waar het scherm eerlijk over hoort te zijn.
       gebruikteVraag?.call(ronde.last);
-      laatste = beperkZoekuitslag(query, await _searchOnce(ronde, deel));
+      laatste = beperkZoekuitslag(query, await _searchOnce(ronde, deel, achtergrond: achtergrond));
       if (laatste.isNotEmpty) return laatste;
       if (client.whyNotLogin != null) throw client.whyNotLogin!;
     }
@@ -1099,8 +1104,8 @@ class SoulseekService {
   /// Ze gaan als losse tickets naar dezelfde sessie en komen op één hoop terug, dus twee vragen
   /// kosten hetzelfde als één. Zou je ze na elkaar sturen, dan was elke ronde er ruim acht seconden
   /// bij.
-  Future<List<SoulseekFile>> _searchOnce(
-      List<String> vragen, void Function(List<SoulseekFile>)? onPartial) async {
+  Future<List<SoulseekFile>> _searchOnce(List<String> vragen, void Function(List<SoulseekFile>)? onPartial,
+      {bool achtergrond = false}) async {
     if (!available) return [];
     final variants = <String>{};
     for (final v in vragen) {
@@ -1113,7 +1118,7 @@ class SoulseekService {
     }
     if (variants.isEmpty) return [];
     try {
-      return await withSession((s) => s.search(variants.toList(), onPartial: onPartial));
+      return await withSession((s) => s.search(variants.toList(), onPartial: onPartial, achtergrond: achtergrond));
     } catch (_) {
       return [];
     }
@@ -3384,7 +3389,7 @@ class DownloadManager extends ChangeNotifier {
     if (w.exact != null) return _chaseExact(w);
     List<SoulseekFile> hits;
     try {
-      hits = await soulseek.search(w.query);
+      hits = await soulseek.search(w.query, achtergrond: true);
     } catch (_) {
       return false; // geen net; de wens blijft staan en het ritme schuift niet op
     }
@@ -4177,7 +4182,9 @@ class DownloadManager extends ChangeNotifier {
       if (f != null) vroegeKeus.complete(f);
     }
 
+    // De radio is achtergrond; ▶ (los van de radio) niet — daar wacht je op.
     final zoek = soulseek.search(zoekvraagVoorNummer(titel, artist: artiest),
+        achtergrond: _radiohalen.contains(job),
         onPartial: vroeg == null
             ? null
             : (lijst) {
@@ -4661,7 +4668,7 @@ class DownloadManager extends ChangeNotifier {
     final albumNaam = album?.trim() ?? '';
     if (albumNaam.isNotEmpty && te.length > 1) {
       try {
-        albumHits = await soulseek.search(zoekvraagVoorAlbum(te.first.artist, albumNaam));
+        albumHits = await soulseek.search(zoekvraagVoorAlbum(te.first.artist, albumNaam), achtergrond: true);
       } catch (_) {
         return 0;
       }
@@ -4676,7 +4683,7 @@ class DownloadManager extends ChangeNotifier {
         hits = albumHits;
       } else {
         try {
-          hits = await soulseek.search(zoekvraagVoorNummer(t.title, artist: t.artist));
+          hits = await soulseek.search(zoekvraagVoorNummer(t.title, artist: t.artist), achtergrond: true);
         } catch (_) {
           continue;
         }

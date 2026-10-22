@@ -56,7 +56,8 @@ class FakeSoulseek extends SoulseekService {
   @override
   Future<List<SoulseekFile>> search(String query,
       {void Function(List<SoulseekFile>)? onPartial,
-      void Function(String)? gebruikteVraag}) async {
+      void Function(String)? gebruikteVraag,
+      bool achtergrond = false}) async {
     queries.add(query);
     return answer;
   }

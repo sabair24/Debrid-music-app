@@ -120,7 +120,8 @@ class _FakeSoulseek extends SoulseekService {
   @override
   Future<List<SoulseekFile>> search(String query,
       {void Function(List<SoulseekFile>)? onPartial,
-      void Function(String)? gebruikteVraag}) async {
+      void Function(String)? gebruikteVraag,
+      bool achtergrond = false}) async {
     await Future<void>.delayed(const Duration(milliseconds: 300));
     return [
       for (var i = 1; i <= 4; i++)

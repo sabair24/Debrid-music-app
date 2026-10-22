@@ -293,11 +293,13 @@ class RemoteSoulseekService extends SoulseekService {
   /// [gebruikteVraag] meldt hier altijd de vraag zoals hij gesteld is: de trappenladder van
   /// [zoekLadder] wordt aan de PC-kant afgelopen, en welke trede het geworden is komt niet over de
   /// lijn terug. Liever niets melden dan iets melden dat niet klopt — het scherm zegt dan gewoon
-  /// niets over een ruimere zoekopdracht.
+  /// niets over een ruimere zoekopdracht. [achtergrond] doet hier niets: de zoekrem zit op de pc, die de
+  /// zoekopdracht stuurt (`Zoekrem` in soulseek.dart).
   @override
   Future<List<SoulseekFile>> search(String query,
       {void Function(List<SoulseekFile>)? onPartial,
-      void Function(String)? gebruikteVraag}) async {
+      void Function(String)? gebruikteVraag,
+      bool achtergrond = false}) async {
     gebruikteVraag?.call(query.trim().replaceAll(RegExp(r'\s+'), ' '));
     final files = await soulseekBestandenUit(
         await _rpc.getBytes('/api/soulseek/search', query: {'q': query}));

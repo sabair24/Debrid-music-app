@@ -192,10 +192,12 @@ void main() {
       expect(b.inRij, isEmpty);
     });
 
-    test('DE GRENS: met twaalf vooruit wordt er niets nieuws gehaald', () {
-      // Zonder grens haalde de radio zijn hele plan binnen in een minuut of twintig.
-      expect(voorraadPlan(standen('wwww'), vooruitNu: 12).starten, isEmpty);
-      expect(voorraadPlan(standen('wwww'), vooruitNu: 11).starten, [0, 1, 2, 3]);
+    test('DE GRENS: met vijftig vooruit wordt er niets nieuws gehaald', () {
+      // Zonder grens haalde de radio zijn hele plan binnen in een minuut of twintig. Vijftig sinds 22-10-2026
+      // (Saber: "zeker 50 liedjes"); het tempo houdt de zoekrem tegen.
+      expect(kMaxVooruit, 50);
+      expect(voorraadPlan(standen('wwww'), vooruitNu: 50).starten, isEmpty);
+      expect(voorraadPlan(standen('wwww'), vooruitNu: 49).starten, [0, 1, 2, 3]);
     });
 
     test('DE KERN: wat net geland is telt mee voor de spreiding', () {
