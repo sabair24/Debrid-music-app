@@ -12081,6 +12081,9 @@ class _SamenVertragingInstellingState extends State<SamenVertragingInstelling> {
   }
 }
 
+/// Vanaf deze breedte staan de tekst en de keuzelijst van [TikKeuzeInstelling] naast elkaar.
+const double kTikKeuzeNaastElkaar = 460;
+
 class TikKeuzeInstelling extends StatelessWidget {
   const TikKeuzeInstelling({super.key});
 
@@ -12088,14 +12091,11 @@ class TikKeuzeInstelling extends StatelessWidget {
   Widget build(BuildContext context) {
     final settings = context.watch<AppSettings>();
     final nu = tikKeuzeUit(settings.tikKeuze);
-    return Row(
-      children: [
-        const Expanded(
-          child: Text('Tikken op een nummer, als er al een wachtrij is',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-        ),
-        DropdownButton<TikKeuze>(
+    const label = Text('Tikken op een nummer, als er al een wachtrij is',
+        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600));
+    DropdownButton<TikKeuze> keuze({required bool breed}) => DropdownButton<TikKeuze>(
           value: nu,
+          isExpanded: breed,
           underline: const SizedBox.shrink(),
           items: [
             for (final k in TikKeuze.values) DropdownMenuItem(value: k, child: Text(tikKeuzeTekst(k))),
@@ -12105,8 +12105,17 @@ class TikKeuzeInstelling extends StatelessWidget {
             settings.tikKeuze = k.name;
             unawaited(settings.save());
           },
-        ),
-      ],
+        );
+    // Gemeten op de gsm (Saber, 22-10-2026, schermafdruk): de keuzelijst is zo breed als "Nu spelen — wachtrij
+    // vervangen", en in het venster bleef voor de tekst één letter per regel over. Op een smal scherm dus onder
+    // elkaar — zie [kTikKeuzeNaastElkaar].
+    return LayoutBuilder(
+      builder: (context, c) => c.maxWidth < kTikKeuzeNaastElkaar
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [label, keuze(breed: true)],
+            )
+          : Row(children: [const Expanded(child: label), keuze(breed: false)]),
     );
   }
 }
@@ -30543,6 +30552,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               ),
                             ),
                     ),
+                    // Op de pc ook (Saber, 22-10-2026: "Staat deze button overal? Mac pc iPad..."). Een gekoppeld
+                    // toestel heeft hem al bij zijn koppeling (`_connectedPanel`).
+                    if (!context.read<LibraryStore>().isRemote) ...[
+                      const SizedBox(height: 14),
+                      const TikKeuzeInstelling(),
+                    ],
                     const SizedBox(height: 14),
                     Divider(color: _line, height: 1),
                     const SizedBox(height: 12),
