@@ -186,6 +186,10 @@ class AppSettings extends ChangeNotifier {
   /// toestel dat achter de rest aan klinkt (Bluetooth, een versterker via HDMI): naar links (stap 3.2).
   int samenVertragingMs = 0;
 
+  /// Per speaker (renderer-id) hoeveel later hij klinkt dan hij zegt, als toestellen met hem meespelen (ms;
+  /// de schuif "Sonos gelijkzetten", stap 3.3). Alleen op de pc: die stuurt de speakers.
+  Map<String, int> samenSpeakerMs = {};
+
   /// Hoe de radio kiest: 'bekend', 'gemengd' of 'ontdekken' — zie `radiosmaak.dart`.
   ///
   /// Als tekst, om dezelfde reden als [stroomThuis]. Leeg of onbekend leest als 'gemengd': de radio
@@ -388,6 +392,10 @@ class AppSettings extends ChangeNotifier {
         appVolume = ((m['app_volume'] as num?) ?? 100).toDouble().clamp(0, 100).toDouble();
         gekozenZone = (m['gekozen_zone'] ?? '') as String;
         samenVertragingMs = ((m['samen_vertraging_ms'] as num?) ?? 0).toInt().clamp(-1000, 1000);
+        samenSpeakerMs = {
+          for (final e in ((m['samen_speaker_ms'] as Map?) ?? const {}).entries)
+            if (e.value is num) '${e.key}': (e.value as num).toInt().clamp(-2000, 2000),
+        };
         radioSmaak = (m['radio_smaak'] ?? 'gemengd') as String;
         luidheid = (m['luidheid'] ?? 'normaal') as String;
         luidheidAlbum = (m['luidheid_album'] ?? true) as bool;
@@ -441,6 +449,7 @@ class AppSettings extends ChangeNotifier {
         'app_volume': appVolume,
         'gekozen_zone': gekozenZone,
         'samen_vertraging_ms': samenVertragingMs,
+        'samen_speaker_ms': samenSpeakerMs,
         'radio_smaak': radioSmaak,
         'luidheid': luidheid,
         'luidheid_album': luidheidAlbum,

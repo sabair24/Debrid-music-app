@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -9,6 +10,7 @@ import '../warm_log.dart';
 import 'catalog.dart';
 import 'dtos.dart';
 import 'net.dart';
+import 'speaker_klok.dart';
 import 'transcode.dart';
 import 'upnp.dart';
 import 'zones.dart' show SpeakerStand, plekVoorNummer;
@@ -156,9 +158,28 @@ class CastManager {
     Transcoder? transcoder,
     String? logPath,
     @visibleForTesting this.startGrace = const Duration(seconds: 8),
+    @visibleForTesting int Function()? klokUs,
+    @visibleForTesting this.spoelNa = const Duration(seconds: 3),
+    @visibleForTesting Future<String?> Function(String host)? adresVoor,
+    @visibleForTesting this.toeval,
   })  : _upnp = upnp ?? UpnpControlPoint(),
         _transcoder = transcoder ?? Transcoder(),
+        _klokUs = klokUs ?? (() => DateTime.now().microsecondsSinceEpoch),
+        _adresVoor = adresVoor ?? lanAddressFor,
         _log = logPath == null ? null : WarmLog(logPath);
+
+  /// De klok van de pc (µs) — dezelfde als die van `/api/tijd`, waar elk toestel zijn klok op ijkt.
+  final int Function() _klokUs;
+
+  /// Het adres van deze pc zoals [host] het ziet (een toets geeft er een vast adres voor: het netwerk
+  /// aflopen is echte IO, en die loopt niet in een stilgezette klok).
+  final Future<String?> Function(String host) _adresVoor;
+
+  /// Het toeval van de speakerklok (een toets geeft een vast zaad).
+  final Random? toeval;
+
+  /// Hoe lang na het starten [play] met `vanafMs` spoelt: een Sonos negeert een Seek tijdens het laden.
+  final Duration spoelNa;
 
   final LanCatalog catalog;
   final UpnpControlPoint _upnp;
@@ -199,6 +220,102 @@ class CastManager {
 
   /// Er veranderde iets aan wat de speaker doet (of er is geen sessie meer). Voor de zonelijst.
   void Function()? bijStand;
+
+  /// Speakers waarmee toestellen meespelen (groeperen, stap 3.3, Saber 21-10-2026: "pc + Sonos ongeveer,
+  /// met een schuif"). Die krijgen een [SpeakerKlok], ook als hun sessie pas later begint.
+  final Set<String> _klokGewenst = {};
+
+  /// Waar een speaker met meespelers is, veranderde: de server stuurt ze een nieuw anker ([ankerVan]).
+  void Function(String speakerId)? bijAnker;
+
+  /// Toestellen spelen met speaker [id] mee ([aan]), of niet meer.
+  void volgKlok(String id, bool aan) {
+    if (aan) {
+      _klokGewenst.add(id);
+    } else {
+      _klokGewenst.remove(id);
+    }
+    final s = _sessies[id];
+    if (s != null) _zetKlok(s);
+  }
+
+  void _zetKlok(_Session s) {
+    final wil = _klokGewenst.contains(s.renderer.id);
+    if (wil && s.klok == null) {
+      _log?.line('klok aan voor ${s.renderer.name}');
+      s.klok = SpeakerKlok(
+        klokUs: _klokUs,
+        toeval: toeval,
+        vraag: () async => (await _upnp.positionInfo(s.renderer))?.position?.inSeconds,
+        bijVerandering: () {
+          final p = s.klok?.plekNu;
+          if (p != null && p.speelt) s.stilVoorKlok = null;
+          final b = s.klok?.schatting.breedteUs;
+          _zie('klok ${s.renderer.name}: ${p == null ? '?' : p.speelt ? 'speelt op ${p.positieMs} ms' : 'stil'}'
+              '${b == null ? '' : ' ±${(b / 2000).toStringAsFixed(1)} ms'}');
+          if (!s.aanloop) bijAnker?.call(s.renderer.id);
+        },
+        bijBreuk: () => unawaited(_naBreuk(s)),
+      )..start();
+    } else if (!wil && s.klok != null) {
+      s.klok!.stop();
+      s.klok = null;
+      _log?.line('klok uit voor ${s.renderer.name}');
+    }
+  }
+
+  /// De plek van [s] viel terug of sprong. Een nieuw nummer ziet de tijdklok pas binnen vijf seconden, en
+  /// tot dan zou het anker het OUDE nummer noemen met de plek van het nieuwe: kijk dus meteen, en houd het
+  /// anker zolang in.
+  Future<void> _naBreuk(_Session s) async {
+    if (s.wachtOpNummer) return;
+    s.wachtOpNummer = true;
+    try {
+      for (var i = 0; i < 40 && s.advancing; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      await _maybeAdvance(s);
+    } catch (_) {
+      // Dan pakt de tijdklok het op.
+    } finally {
+      s.wachtOpNummer = false;
+    }
+    if (!s.aanloop) bijAnker?.call(s.renderer.id);
+  }
+
+  /// De speaker gaat stilstaan op [ms] (een pauze, spoelen of een ander nummer vanaf hier): wie meespeelt,
+  /// hoort het meteen en wacht daar tot de speaker weer speelt — in plaats van door te spelen tot de klok
+  /// het merkt.
+  void _meldStil(_Session s, int ms) {
+    final klok = s.klok;
+    if (klok == null) return;
+    s.stilVoorKlok = ms;
+    klok.verstoord();
+    if (!s.aanloop) bijAnker?.call(s.renderer.id);
+  }
+
+  /// Waar speaker [id] is, voor wie meespeelt (stap 3.3, zie `samen.dart`): in de vorm van
+  /// `SamenAnker.toJson`. Null als dat nu niet te zeggen is (geen klok, net een nieuw nummer, nog aan het
+  /// laden).
+  Map<String, dynamic>? ankerVan(String id) {
+    final s = _sessies[id];
+    final klok = s?.klok;
+    if (s == null || klok == null || s.wachtOpNummer || s.aanloop) return null;
+    final tid = s.queue.elementAtOrNull(s.index);
+    if (tid == null) return null;
+    final stil = s.stilVoorKlok;
+    final plek = klok.plekNu ?? (stil == null ? null : (speelt: false, positieMs: stil));
+    if (plek == null) return null;
+    return {
+      'groep': 'spk:$id',
+      'trackId': tid,
+      'rij': List.of(s.queue),
+      'index': s.index,
+      'positieMs': plek.positieMs,
+      'pcMs': _klokUs() ~/ 1000,
+      'speelt': plek.speelt,
+    };
+  }
 
   /// Wat elke speaker met een sessie het laatst zei — zonder hem iets te vragen: de tijdklok van vijf
   /// seconden en elke statusvraag houden het bij. Zie `zones.dart`.
@@ -394,7 +511,12 @@ class CastManager {
   ///
   /// [alsZone]: vanuit de zones. Dan blijven de andere speakers spelen wat ze speelden; anders (de oude
   /// speakerkeuze) houdt de vorige speaker op met doorschuiven, zoals altijd.
-  Future<void> play(String deviceId, List<String> trackIds, int index, {bool alsZone = false}) async {
+  ///
+  /// [vanafMs]: zo ver in het nummer beginnen (overdragen, samen spelen). Een Sonos negeert een Seek tijdens
+  /// het laden, dus spoelt dit pas na [spoelNa], naar waar de bron dan is. Tot dan krijgt wie meespeelt geen
+  /// anker: die speelt gewoon door tot de speaker op zijn plek staat.
+  Future<void> play(String deviceId, List<String> trackIds, int index,
+      {bool alsZone = false, int vanafMs = 0}) async {
     if (trackIds.isEmpty) throw ArgumentError('nothing to play');
     if (!alsZone) {
       for (final ander in _sessies.values.where((x) => !x.alsZone && x.renderer.id != deviceId).toList()) {
@@ -419,11 +541,34 @@ class CastManager {
         index: index.clamp(0, trackIds.length - 1),
         alsZone: alsZone);
     _sessies[renderer.id] = session;
+    final spoelen = vanafMs > 3000;
+    session.aanloop = spoelen;
+    _zetKlok(session);
     bijStand?.call();
     await _openCurrent(session);
+    if (spoelen) {
+      final begon = _klokUs();
+      Timer(spoelNa, () => unawaited(_spoelNaStart(session, vanafMs, begon)));
+    }
     // The renderer plays one track; something has to notice it ended and send the next.
     session.advance = Timer.periodic(const Duration(seconds: 5), (_) => _maybeAdvance(session));
     unawaited(_haalVolume(session));
+  }
+
+  Future<void> _spoelNaStart(_Session s, int vanafMs, int begonUs) async {
+    if (!identical(_sessies[s.renderer.id], s)) return;
+    // Waar de bron nu is, op een halve seconde afgerond (de Sonos spoelt op hele seconden).
+    final doel = (vanafMs + (_klokUs() - begonUs) ~/ 1000 + 500) ~/ 1000;
+    try {
+      s.hoogstePositie = Duration(seconds: doel);
+      await _upnp.seek(s.renderer, Duration(seconds: doel));
+      _log?.line('gespoeld naar ${doel}s (na het laden)');
+    } catch (_) {
+      // Dan speelt hij vanaf het begin; wie meespeelt, volgt hem daar.
+    } finally {
+      s.aanloop = false;
+      _meldStil(s, doel * 1000);
+    }
   }
 
   /// Een sessie beëindigen: geen tijdklok meer, en weg uit de lijst. De speaker zelf krijgt niets te
@@ -431,6 +576,8 @@ class CastManager {
   void _sluit(_Session s, {bool melden = true}) {
     s.advance?.cancel();
     s.advance = null;
+    s.klok?.stop();
+    s.klok = null;
     if (identical(_sessies[s.renderer.id], s)) _sessies.remove(s.renderer.id);
     if (melden) bijStand?.call();
   }
@@ -586,6 +733,8 @@ class CastManager {
     if (id == null || track == null) return;
     // Een nieuw nummer op de speaker: meteen in de zonelijst.
     if (session.zagIndex != session.index) _zag(session, positie: Duration.zero);
+    // En wie meespeelt, wacht op het begin ervan.
+    _meldStil(session, 0);
 
     // Stamped BEFORE the SOAP calls, not after. Opening a track is three round trips of up to eight
     // seconds each, and until this line ran the timestamp still described the PREVIOUS track — so
@@ -710,6 +859,9 @@ class CastManager {
     session.currentUrl = volgende;
     session.nextUrl = null;
     session.hoogstePositie = Duration.zero;
+    // Wat de klok weet, hoort bij het vorige nummer: zonder dit noemde het anker even het nieuwe nummer met
+    // de plek van het oude (bijna aan het eind), en spoelde wie meespeelt daarheen.
+    session.klok?.verstoord();
     _zag(session, positie: Duration.zero);
     // Alleen de VOLGENDE doorgeven, niet opnieuw openen: de speaker speelt dit nummer al, en er
     // opnieuw een URL op zetten zou hem vanaf nul laten beginnen.
@@ -787,7 +939,7 @@ class CastManager {
   /// niet. Zie [Renderer.maxBitDepth].
   Future<String> _streamUrlFor(
       String id, String ext, Renderer renderer, int sampleRate, int bits) async {
-    final base = await lanAddressFor(renderer.host);
+    final base = await _adresVoor(renderer.host);
     final ceiling = renderer.maxSampleRate;
     final bitPlafond = renderer.maxBitDepth;
     // Sonos stops at 48 kHz and SKIPS anything higher — no error, no sound, just nothing. Send
@@ -834,7 +986,7 @@ class CastManager {
     final snapshot = catalog.snapshot();
     final dto = snapshot.catalog.tracks.where((t) => t.id == id).firstOrNull;
     if (dto?.artworkRef == null) return null;
-    final base = await lanAddressFor(renderer.host);
+    final base = await _adresVoor(renderer.host);
     return 'http://$base:$port/art/${dto!.artworkRef}?token=$token';
   }
 
@@ -882,6 +1034,7 @@ class CastManager {
           'volgende=${_idVanUrl(session.nextUrl) ?? '-'}');
       if (state == null || !state.isStopped) return;
       if (session.index + 1 >= session.queue.length) {
+        _meldStil(session, session.positie?.inMilliseconds ?? 0);
         _sluit(session);
         return;
       }
@@ -915,10 +1068,16 @@ class CastManager {
     switch (action) {
       case 'play':
         await _upnp.play(renderer);
+        sessie?.klok?.verstoord();
       case 'pause':
+        final plek = sessie?.klok?.plekNu;
         await _upnp.pause(renderer);
+        if (sessie != null) _meldStil(sessie, plek?.positieMs ?? sessie.positie?.inMilliseconds ?? 0);
       case 'stop':
-        if (sessie != null) _sluit(sessie);
+        if (sessie != null) {
+          _meldStil(sessie, sessie.klok?.plekNu?.positieMs ?? 0);
+          _sluit(sessie);
+        }
         await _upnp.stop(renderer);
       case 'next':
         if (sessie != null && sessie.index + 1 < sessie.queue.length) {
@@ -948,6 +1107,7 @@ class CastManager {
         // van een nummer dat afliep: allebei valt de positie terug. Zo verzet slepen de meetlat mee.
         sessie?.hoogstePositie = Duration(seconds: value ?? 0);
         await _upnp.seek(renderer, Duration(seconds: value ?? 0));
+        if (sessie != null) _meldStil(sessie, (value ?? 0) * 1000);
       default:
         throw ArgumentError('unknown action: $action');
     }
@@ -1092,6 +1252,7 @@ class CastManager {
     _groepKijker?.cancel();
     for (final s in _sessies.values) {
       s.advance?.cancel();
+      s.klok?.stop();
     }
     _sessies.clear();
   }
@@ -1145,6 +1306,18 @@ class _Session {
 
   /// De index bij de laatste melding naar buiten: een nieuw nummer is ook iets nieuws.
   int zagIndex = -1;
+
+  /// Samen spelen (stap 3.3): waar de speaker op de ms is ([SpeakerKlok]), zolang er toestellen meespelen.
+  SpeakerKlok? klok;
+
+  /// Hij gaat stilstaan op deze plek (ms) en de klok weet het nog niet: wat het anker dan zegt.
+  int? stilVoorKlok;
+
+  /// Net een breuk: wacht tot bekend is welk nummer er speelt. Zie [CastManager._naBreuk].
+  bool wachtOpNummer = false;
+
+  /// Nog aan het laden en spoelen (zie [CastManager.play] met `vanafMs`): nog geen anker.
+  bool aanloop = false;
 }
 
 extension _ElementAtOrNull<E> on List<E> {

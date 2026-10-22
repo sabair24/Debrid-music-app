@@ -173,6 +173,12 @@ class LanServer {
     _ankerSub = state.zoneChanges.listen((toestel) {
       if (zones.toestelGroepen.containsKey(toestel)) _stuurAnkers(toestel);
     });
+    // En met een speaker (stap 3.3): de speakerklok meldt waar hij is, op de ms.
+    zones.speakerAnker = cast.ankerVan;
+    zones.speakerVertraging.addAll(settings?.samenSpeakerMs ?? const {});
+    cast.bijAnker = (id) {
+      if (zones.toestelGroepen.containsKey('spk:$id')) _stuurAnkers('spk:$id');
+    };
     // NIET afhankelijk van `configDir`, en dat is een reparatie.
     //
     // Stond die map leeg op het moment dat de server werd opgezet — en dat kan, want `applySettings`
@@ -368,13 +374,49 @@ class LanServer {
     final metVan = {...op, 'van': van};
     String naam() => zones.lijst().where((z) => z.id == zone).map((z) => z.naam).firstOrNull ?? 'Die zone';
     _zoneLog.line('opdracht $cmd → $zone  (van $van)');
+    final groepSpeakers = [
+      for (final x in (op['leden'] as List? ?? const []))
+        if ('$x'.startsWith('spk:') && '$x' != zone) '$x'.substring(4),
+    ];
+    final groepToestellen = [
+      for (final x in (op['leden'] as List? ?? const []))
+        if ('$x'.startsWith('dev:') && '$x' != zone) '$x'.substring(4),
+    ];
+    if (cmd == 'groepeer' && zone.startsWith('dev:') && groepSpeakers.isNotEmpty) {
+      // Een toestel met een Sonos (stap 3.3, Saber 21-10-2026: "pc + Sonos ongeveer, met een schuif"): de
+      // Sonos kan niet bijsturen, dus wordt hij de leider. Hij neemt de muziek van het toestel over, op
+      // dezelfde plek; het toestel speelt door en volgt hem.
+      final speaker = groepSpeakers.first;
+      final bron = zones.standVan(zone)?.toJson();
+      final tid = '${bron?['trackId'] ?? ''}';
+      if (bron != null && tid.isNotEmpty) {
+        final ids = [for (final x in (bron['queue'] as List? ?? const [])) '$x'];
+        if (ids.isEmpty) ids.add(tid);
+        final plek = ((bron['index'] as num?)?.toInt() ?? 0).clamp(0, ids.length - 1);
+        var positie = (bron['positionMs'] as num?)?.toInt() ?? 0;
+        if (bron['playing'] == true) positie += zones.nu - ((bron['updatedAt'] as num?)?.toInt() ?? zones.nu);
+        try {
+          await cast.play(speaker, ids, plek, alsZone: true, vanafMs: positie);
+        } catch (e) {
+          return (status: 409, antwoord: {'error': 'De speaker nam het niet aan: $e'});
+        }
+      }
+      return _groepeerSpeaker(speaker, groepSpeakers.skip(1).toList(), [zone.substring(4), ...groepToestellen],
+          vertragingMs: (op['vertragingMs'] as num?)?.toInt());
+    }
+    final metToestellen = groepToestellen.isNotEmpty || zones.toestelGroepen.containsKey(zone);
+    if (cmd == 'groepeer' && zone.startsWith('spk:') && metToestellen) {
+      return _groepeerSpeaker(zone.substring(4), groepSpeakers, groepToestellen,
+          vertragingMs: (op['vertragingMs'] as num?)?.toInt());
+    }
+    if (cmd == 'samenVertraging' && zone.startsWith('spk:')) {
+      _zetSpeakerVertraging(zone.substring(4), (op['ms'] as num?)?.toInt() ?? 0);
+      return (status: 200, antwoord: {'bezorgd': 1});
+    }
     if (cmd == 'groepeer' && zone.startsWith('dev:')) {
       // Toestellen samen (stap 3.2): de pc houdt de groep bij en stuurt de volgers.
       final leider = zone.substring(4);
-      final volgers = [
-        for (final x in (op['leden'] as List? ?? const []))
-          if ('$x'.startsWith('dev:') && '$x' != zone) '$x'.substring(4),
-      ];
+      final volgers = groepToestellen;
       // Volgde de nieuwe leider zelf een groep: dan houdt hij daarmee op, en speelt hij gewoon door.
       final wasVolger = volgers.isNotEmpty && zones.leiderVan(leider) != null;
       final weg = zones.zetToestelGroep(leider, volgers);
@@ -448,6 +490,44 @@ class LanServer {
     return (status: 409, antwoord: {'error': 'Onbekende zone.'});
   }
 
+  /// Toestellen [toestellen] spelen met speaker [speaker] mee (stap 3.3), en Sonossen [sonos] in zijn groep
+  /// (stap 3.1). Een toestel volgt hoogstens één leider: wie elders volgde, komt daar weg; wie hier niet
+  /// meer bij hoort, stopt.
+  Future<({int status, Map<String, dynamic> antwoord})> _groepeerSpeaker(
+      String speaker, List<String> sonos, List<String> toestellen,
+      {int? vertragingMs}) async {
+    final sleutel = 'spk:$speaker';
+    try {
+      if (sonos.isNotEmpty || cast.speakerGroepen.any((g) => g.leider == speaker)) {
+        await cast.groepeer(speaker, sonos);
+      }
+    } catch (e) {
+      final naam = zones.lijst().where((z) => z.id == sleutel).map((z) => z.naam).firstOrNull ?? 'Die speaker';
+      return (status: 409, antwoord: {'error': '$naam antwoordt niet: $e'});
+    }
+    final weg = zones.zetToestelGroep(sleutel, toestellen);
+    for (final w in weg) {
+      unawaited(_naarToestel(w, {'cmd': 'samenStop', 'id': 'stop-${zones.nu}-$w'}));
+    }
+    if (vertragingMs != null) _zetSpeakerVertraging(speaker, vertragingMs);
+    cast.volgKlok(speaker, zones.toestelGroepen.containsKey(sleutel));
+    _zoneLog.line('samen met $sleutel: ${toestellen.isEmpty ? '(niemand)' : toestellen.join(', ')}');
+    _stuurAnkers(sleutel);
+    return (status: 200, antwoord: {'bezorgd': 1, 'leider': sleutel});
+  }
+
+  /// De schuif "Sonos gelijkzetten" (stap 3.3): onthouden, en wie meespeelt meteen laten bijschuiven.
+  void _zetSpeakerVertraging(String speaker, int ms) {
+    final waarde = ms.clamp(-2000, 2000);
+    zones.zetSpeakerVertraging(speaker, waarde);
+    final st = settings;
+    if (st != null) {
+      st.samenSpeakerMs = {...zones.speakerVertraging};
+      unawaited(st.save());
+    }
+    _stuurAnkers('spk:$speaker');
+  }
+
   /// De muziek van zone [van] naar zone [naar] verplaatsen (Saber, 21-10-2026: "overdragen naar elke
   /// zone, de oude zone pauzeert"): de wachtrij, de plek in het nummer, shuffle en herhalen, of de radio.
   ///
@@ -481,17 +561,10 @@ class LanServer {
       final plek = ((bron['index'] as num?)?.toInt() ?? 0).clamp(0, ids.length - 1);
       final positie = (bron['positionMs'] as num?)?.toInt() ?? 0;
       try {
-        await cast.play(speaker, ids, plek, alsZone: true);
+        // Spoelt pas als de speaker het nummer heeft (een Sonos negeert een Seek tijdens het laden).
+        await cast.play(speaker, ids, plek, alsZone: true, vanafMs: positie);
       } catch (e) {
         return (status: 409, antwoord: {'error': 'De speaker nam het niet aan: $e'});
-      }
-      // Pas spoelen als de speaker het nummer heeft: een Sonos negeert een Seek tijdens het laden.
-      if (positie > 3000) {
-        unawaited(Future<void>.delayed(const Duration(seconds: 3), () async {
-          try {
-            await cast.control(speaker, 'seek', value: positie ~/ 1000 + 3);
-          } catch (_) {}
-        }));
       }
     } else {
       final r = await zoneOpdracht({'zone': naar, 'cmd': 'neemOver', 'stand': bron, 'id': 'over-${zones.nu}'},
