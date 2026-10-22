@@ -589,7 +589,8 @@ void main() {
       final i = scherm.indexOf('      bijStart: (s) {\n    gestart = s;');
       expect(i, greaterThanOrEqualTo(0));
       expect(scherm.substring(i, i + 600).contains('radio.eigenVanZaad = () => ['), isTrue);
-      expect(scherm.contains('bijStart: (_) => radio.eigenVanZaad = () => ['), isTrue, reason: 'ook de zin-radio');
+      final zin = scherm.indexOf('        bijStart: (s) {\n          gestart = s;\n          radio.eigenVanZaad = () => [');
+      expect(zin, greaterThanOrEqualTo(0), reason: 'ook de zin-radio');
     });
 
     test('de keuring in main.dart geeft de reden door, en het plafond telt met venster', () {

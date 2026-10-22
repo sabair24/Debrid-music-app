@@ -60,6 +60,26 @@ void main() {
   });
 
   group('de jaren', () {
+    // De jaren die je ZELF in een zin noemt, gelden — ook nu de app zelf geen jaargrens meer heeft (22-10-2026).
+    test('DE KERN: "jaren 90" weert 1985 en 2005, met een jaar speling aan elke kant', () {
+      expect(zinJaarPast(1995, 1990, 1999), isTrue);
+      expect(zinJaarPast(1989, 1990, 1999), isTrue, reason: 'een single van eind 1989');
+      expect(zinJaarPast(2000, 1990, 1999), isTrue);
+      expect(zinJaarPast(1988, 1990, 1999), isFalse);
+      expect(zinJaarPast(2001, 1990, 1999), isFalse);
+      expect(zinJaarPast(1960, null, 1999), isTrue, reason: 'alleen een eindjaar');
+      expect(zinJaarPast(1960, 1995, null), isFalse, reason: 'alleen een beginjaar');
+      expect(zinJaarPast(1960, null, null), isTrue, reason: 'geen jaren genoemd: geen grens');
+    });
+
+    test('aangesloten: de zin-radio keurt zoals een radio vanaf een nummer, met jouw jaren', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(main.contains('      ..jaarVan = o.jaarVan\n      ..jaarTot = o.jaarTot\n'), isTrue);
+      expect(main.contains('    keuring.lijstKlaar();\n'), isTrue, reason: 'anders wacht de keuring op een lijst die nooit komt');
+      expect(main.contains('        keur: keuring.keur,\n        bijvul: bijvuller.call,\n'), isTrue);
+      expect(main.contains('      if (jaar != null && !zinJaarPast(jaar, jaarVan, jaarTot)) {\n'), isTrue);
+    });
+
     test('een gewoon tijdvak komt door', () {
       final o = leesRadioOpdracht({'jaarVan': 1990, 'jaarTot': 1999, 'zaadArtiesten': ['A']});
       expect(o.jaarVan, 1990);

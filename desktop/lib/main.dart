@@ -38,7 +38,16 @@ import 'ui/kopbewerker.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
 import 'radiostijl.dart'
-    show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl, danstakVanZaad, naLijstVanModel, sfeerBeslistFamilie;
+    show
+        Stijlboek,
+        Stijlfamilie,
+        Stijloordeel,
+        Zaadstijl,
+        danstakkenVan,
+        danstakVanZaad,
+        familieVan,
+        naLijstVanModel,
+        sfeerBeslistFamilie;
 import 'radiovoorraad.dart' show Haalstand, RadioKeuringLater, RadioLaterOpnieuw, Weerreden;
 import 'radioplan.dart';
 import 'oordelen.dart';
@@ -13919,11 +13928,38 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
     }
     final lib = context.read<LibraryStore>();
     final radio = context.read<RadioBesturing>();
+    final cfg = context.read<AppSettings>();
     final rec = RecommendService();
     final log = WarmLog('$appDir${Platform.pathSeparator}radio.log');
     final genoemd = {for (final a in o.zaadArtiesten) artiestSleutel(a)};
-    // Bijvullen uit de toppers van de genoemde artiesten zelf — die zíjn het genre. Zonder keuring,
-    // net als de start van deze radio.
+    // Dezelfde keuring als een radio vanaf een nummer (Saber, 22-10-2026: "Werkt dit voor alle radio functies in
+    // de app?"): het genre van de zin als familie en danstak, het sfeeroordeel van het model, en de jaren die je
+    // zelf noemde. Zonder zaadnummer: geen tempo, en het "zaad" van de sfeervraag is de naam van de radio.
+    final remote = lib.isRemote ? lib.remote : null;
+    final viaPc = remote != null && context.read<ClientSession>().pcHeeftModel;
+    final familie = familieVan(o.genre);
+    final ai = _radioModel(cfg: cfg, lib: lib, remote: remote, viaPc: viaPc, radio: radio, log: log);
+    final keuring = _Radiokeuring(
+      artiest: o.naam,
+      zaad: null,
+      zaadTitel: null,
+      stijlboek: _gedeeldStijlboek(cfg),
+      zaadStijl: Future.value((familie: familie, jaar: null)),
+      log: log,
+    )
+      ..model = ai
+      ..budget = viaPc ? null : _modelbudget
+      ..jaarVan = o.jaarVan
+      ..jaarTot = o.jaarTot
+      ..danstakVanZin = familie == Stijlfamilie.dans ? danstakkenVan([o.genre]).firstOrNull : null;
+    // Een zin-radio vraagt het model geen lijst: de keuring hoeft er niet op te wachten.
+    keuring.lijstKlaar();
+    log.line('radio uit een zin "${o.naam}": genre ${familie?.name ?? '?'}'
+        '${keuring.danstakVanZin == null ? '' : ', ${keuring.danstakVanZin}'}'
+        '${o.jaarVan == null && o.jaarTot == null ? '' : ', jaren ${o.jaarVan ?? '…'}–${o.jaarTot ?? '…'}'}'
+        '${ai == null ? ', zonder model' : ''}');
+    final beurt = ++_afstemBeurt;
+    // Bijvullen uit de toppers van de genoemde artiesten zelf — die zíjn het genre — en gekeurd.
     final bijvuller = Radiobijvuller(
       radio: radio,
       deezer: Radiodeezer(
@@ -13938,20 +13974,35 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
         for (final t in lib.tracks)
           if (!nooitOpRadio(t.title) && artiesten.contains(artiestSleutel(t.artist))) t
       ],
+      keurEigen: (p) => keuring.keur(p, eigen: true),
+      vraagSfeer: ai == null ? null : (plekken) => keuring.vraagSfeer(plekken, onderweg: true),
       spoor: log.line,
     );
     log.line('radio uit een zin "${o.naam}": ${o.zaadArtiesten.length} artiesten, '
         '${o.aantalGenoemd ? 'stopt bij ${o.aantal}' : 'geen aantal genoemd, vult door'}');
-    final reden = await radio.start(_radioplan(nummers, lib),
+    final plan = _radioplan(nummers, lib);
+    keuring.vraagSfeer(plan);
+    // Eigen nummers pas na de keuring, zoals bij [startRadio]; wat gehaald moet worden keurt de haal zelf.
+    final halen = [for (final p in plan) if (p.eigen == null) p];
+    int? gestart;
+    final reden = await radio.start(halen.isEmpty ? plan : halen,
         naam: o.naam,
+        keur: keuring.keur,
         bijvul: bijvuller.call,
         spoor: log.line,
         aantal: o.aantalGenoemd ? o.aantal : null,
         // Het vangnet pas als deze start het werd.
-        bijStart: (_) => radio.eigenVanZaad = () => [
-              for (final t in lib.tracks)
-                if (!nooitOpRadio(t.title) && genoemd.contains(artiestSleutel(t.artist))) t
-            ]);
+        bijStart: (s) {
+          gestart = s;
+          radio.eigenVanZaad = () => [
+                for (final t in lib.tracks)
+                  if (!nooitOpRadio(t.title) && genoemd.contains(artiestSleutel(t.artist))) t
+              ];
+        });
+    final sessie = gestart;
+    if (reden == null && sessie != null && halen.isNotEmpty) {
+      _voegGekeurdBij(radio, sessie, beurt, keuring, [for (final p in plan) if (p.eigen != null) p]);
+    }
     if (!mounted) return;
     if (reden != null) {
       setState(() {
@@ -16523,6 +16574,32 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
 /// uitvoering als je die hebt, en anders het eerste dat gehaald wordt, [seconden] lang. Eerst viel
 /// het liedje daar helemaal weg: het plan weert het zaadnummer, en alleen een eigen nummer werd er
 /// vooraan weer in gezet (eindbeoordeling van 26-09-2026).
+/// Het taalmodel voor een radio: op een toestel dat van de pc als die het kan ([viaPc], `pc_model.dart`), op de pc
+/// het eigen met de sleutel; anders null. Voor [startRadio] en voor een radio uit een zin.
+AiService? _radioModel({
+  required AppSettings cfg,
+  required LibraryStore lib,
+  required RemoteClient? remote,
+  required bool viaPc,
+  required RadioBesturing radio,
+  required WarmLog log,
+}) {
+  if (viaPc && remote != null) return PcModel((v) => remote.ask('/api/radio', v), radio: () => radio.sessie);
+  if (lib.isRemote || cfg.anthropicKey.trim().isEmpty) return null;
+  return AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
+    // Wat elke vraag kostte, in het logboek van de radio — zie `modelbudget.dart`.
+    ..bijGebruik = (soort, inT, uitT) => log.line('radio-model: $soort, $inT in / $uitT uit tokens');
+}
+
+/// Het ene stijlboek van de app — zie [startRadio].
+Stijlboek _gedeeldStijlboek(AppSettings cfg) => _stijlboek ??= Stijlboek(
+      bestand: File('$appDir${Platform.pathSeparator}radiostijl.json'),
+      audioDbGenre: CoverEnricher.audioDbGenre,
+      discogsNummer: DiscogsService(cfg).nummerUitgaven,
+      deezerJaar: RecommendService().albumJaar,
+      isrcJaar: RecommendService().isrcJaar,
+    );
+
 /// Per speaker de uitgang waarop een radio van de pc speelt (`speaker_radio.dart`). Zie [startRadio].
 final Map<String, SpeakerRadio> _speakerRadios = {};
 
@@ -16576,13 +16653,7 @@ Future<void> startRadio(BuildContext context, String artist,
   // meteen, en wat er gehaald moet worden wacht in zijn eigen haal op dit antwoord.
   // Eén stijlboek voor de hele app: elk exemplaar heeft zijn eigen geheugen en schrijver, en twee
   // radio's na elkaar schreven zo door elkaar heen in hetzelfde bestand (review van 26-09-2026).
-  final stijlboek = _stijlboek ??= Stijlboek(
-    bestand: File('$appDir${Platform.pathSeparator}radiostijl.json'),
-    audioDbGenre: CoverEnricher.audioDbGenre,
-    discogsNummer: DiscogsService(cfg).nummerUitgaven,
-    deezerJaar: RecommendService().albumJaar,
-    isrcJaar: RecommendService().isrcJaar,
-  );
+  final stijlboek = _gedeeldStijlboek(cfg);
   final Future<Zaadstijl> zaadStijl = stijlboek
       .zaad(artist, zaadTitel, eigenJaar: zaad?.year)
       .timeout(const Duration(seconds: 40))
@@ -16629,11 +16700,7 @@ Future<void> startRadio(BuildContext context, String artist,
       gespeeld: gespeeld,
       overslaan: _genericArtist,
     );
-    ai = viaPc
-        ? PcModel((v) => remote.ask('/api/radio', v), radio: () => radio.sessie)
-        : (AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
-          // Wat elke vraag kostte, in het logboek van de radio — zie `modelbudget.dart`.
-          ..bijGebruik = (soort, inT, uitT) => log.line('radio-model: $soort, $inT in / $uitT uit tokens'));
+    ai = _radioModel(cfg: cfg, lib: lib, remote: remote, viaPc: viaPc, radio: radio, log: log);
   }
   keuring
     ..model = ai
@@ -16947,8 +17014,8 @@ class _Radiokeuring {
       if (past == true) sfeerJa = true;
     }
     final z = await zaadStijl;
-    // Over het zaad weten we niets: dan zegt geen enkele regel nee, en hoeft er niets gevraagd.
-    if (z.familie == null && z.jaar == null) return true;
+    // Over het zaad weten we niets en de zin noemde geen jaren: dan zegt geen enkele regel nee.
+    if (z.familie == null && z.jaar == null && jaarVan == null && jaarTot == null) return true;
     // Eigen muziek: het jaar uit je tags is een HINT (Discogs gaat voor), en de stijl wordt gewoon
     // gekeurd — anders kwam een eigen "Wonderwall" (1995) in een radio vanaf Freak Out (review van
     // 26-09-2026).
@@ -16976,6 +17043,19 @@ class _Radiokeuring {
     } on TimeoutException {
       _wachtOfDoor(p, 'nog geen antwoord van Discogs', eigen);
       o = (mag: true, waarom: 'geen antwoord${eigen ? '' : ', na ${p.keurUitstel} keer wachten'}');
+    }
+    // De jaren die je zelf in een zin noemde ("jaren 90"): het jaar van Discogs, anders je tag of de hint van het
+    // model. Onbekend is geen nee.
+    if (o.mag && (jaarVan != null || jaarTot != null)) {
+      int? jaar;
+      try {
+        jaar = (await stijlboek.nummer(p.artiest, p.titel).timeout(const Duration(seconds: 5))).jaar ?? hint;
+      } catch (_) {
+        jaar = hint;
+      }
+      if (jaar != null && !zinJaarPast(jaar, jaarVan, jaarTot)) {
+        o = (mag: false, waarom: 'uit $jaar, de zin vraagt ${jaarVan ?? '…'}–${jaarTot ?? '…'}');
+      }
     }
     log.line('radio-keuring "${p.artiest} — ${p.titel}": ${o.mag ? 'ja' : 'NEE'} — ${o.waarom}');
     // Toch ja (het model koos hem zelf, of een tweede blik): dan geen reden laten staan.
@@ -17027,6 +17107,14 @@ class _Radiokeuring {
 
   /// Het tempo meten voor de sfeervraag (`tempo.dart`) — alleen op de pc; een toestel laat de pc het doen.
   Radiotempo? tempo;
+
+  /// Een radio uit een zin ("eurodance uit de jaren 90"): de jaren die je ZELF noemde. Die gelden — de
+  /// jaargrens die Saber op 22-10-2026 weghaalde, was die van de app, niet die van jouw zin. Een jaar speling
+  /// ernaast: een plaat van eind 1989 hoort bij "de jaren 90".
+  int? jaarVan, jaarTot;
+
+  /// De danstak die de zin noemt ("eurodance", "trance"), voor een radio zonder zaadnummer — zie [_zaadDanstak].
+  String? danstakVanZin;
 
   /// Vraag het model welke van [plekken] de SFEER van het zaad breken — zie `sfeerPrompt`. Eén vraag
   /// voor de hele lijst; [keur] wacht per plek op het antwoord. De zaadartiest en wat al gevraagd is
@@ -17111,6 +17199,7 @@ class _Radiokeuring {
 
   /// De danstak van het zaad, als het dance is — zie `danstakVanZaad`: eurodance, trance, hardstyle, …
   Future<String?> get _zaadDanstak => _zaadDanstakF ??= zaadStijl.then((z) async {
+        if (danstakVanZin case final d?) return d;
         final t = zaadTitel;
         if (z.familie != Stijlfamilie.dans || t == null) return null;
         final d = await stijlboek.danstak(artiest, t);

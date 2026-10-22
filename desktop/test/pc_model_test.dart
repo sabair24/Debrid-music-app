@@ -201,7 +201,16 @@ void main() {
       final sessie = File('lib/lan/client_session.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(main.contains('      s.modelvragen = Modelvragen(\n'), isTrue);
       expect(main.contains('  final viaPc = remote != null && context.read<ClientSession>().pcHeeftModel;'), isTrue);
-      expect(main.contains("        ? PcModel((v) => remote.ask('/api/radio', v), radio: () => radio.sessie)"), isTrue);
+      expect(
+          main.contains(
+              "  if (viaPc && remote != null) return PcModel((v) => remote.ask('/api/radio', v), radio: () => radio.sessie);"),
+          isTrue);
+      expect(main.contains('    ai = _radioModel(cfg: cfg, lib: lib, remote: remote, viaPc: viaPc, radio: radio, log: log);'),
+          isTrue,
+          reason: 'de radio vanaf een nummer');
+      expect(main.contains('    final ai = _radioModel(cfg: cfg, lib: lib, remote: remote, viaPc: viaPc, radio: radio, log: log);'),
+          isTrue,
+          reason: 'en de radio uit een zin');
       expect(main.contains('    ..budget = viaPc ? null : _modelbudget\n'), isTrue);
       expect(sessie.contains("      pcHeeftModel = shared['radioModel'] == 'ja';"), isTrue);
     });
