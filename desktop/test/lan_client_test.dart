@@ -284,12 +284,17 @@ void main() {
       final ref = Uri.parse(vraag).pathSegments.last;
       final hoes = Uint8List.fromList(List.generate(700, (i) => (i * 13) % 256));
       art[ref] = hoes; // intussen gevonden op de pc
-      final eind = DateTime.now().add(const Duration(seconds: 10));
+      // Tot en met de TWEEDE herkansing (4 + 12 s), met ruimte: onder de last van de volle reeks viel de eerste soms
+      // samen met het hoezenwerk dat nog liep, en dan kwam de hoes pas bij de tweede — buiten het oude venster van
+      // 10 s. Zo viel de Apple-bouw van 3.9.576 om (22-10-2026), en lokaal één keer op de zes. Wat er bewezen wordt,
+      // blijft: het toestel vraagt vanzelf opnieuw.
+      final tweede = LibraryStore.kHoesHerkansingen[0] + LibraryStore.kHoesHerkansingen[1];
+      final eind = DateTime.now().add(tweede + const Duration(seconds: 8));
       while (dummy().cover == null && DateTime.now().isBefore(eind)) {
         await Future<void>.delayed(const Duration(milliseconds: 100));
       }
       expect(dummy().cover, hoes, reason: 'vanzelf opnieuw gevraagd, na ${LibraryStore.kHoesHerkansingen.first.inSeconds} s');
-    });
+    }, timeout: const Timeout(Duration(seconds: 60)));
 
     test('een hoes die je al hebt komt van schijf: navragen mag, downloaden niet', () async {
       final pc = _pc();

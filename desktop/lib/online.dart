@@ -38,7 +38,7 @@ import 'fingerprint.dart' show Fingerprinter, similarity, maybeSameRecordingScor
 import 'integriteit.dart';
 import 'keuring.dart' show Heelheid, kwaliteitZin;
 import 'wavpack_kop.dart' show readWvKop;
-import 'tidaler.dart' show Tidaler, haalVanTidal, kiesTidalTreffers, zoekOpTidal;
+import 'tidaler.dart' show Tidaler, haalVanTidal, kTidalRadioPerUur, kiesTidalTreffers, zoekOpTidal;
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
 import 'vervangjacht.dart';
@@ -3789,11 +3789,117 @@ class DownloadManager extends ChangeNotifier {
     final job = DownloadJob(titel); // wegwerp: bewust niet in `jobs`
     if (!losVanDeRadio) _radiohalen.add(job);
     try {
-      return await _haalVoorRadio(job, artiest, titel, seconden, jaar,
+      final pad = await _haalVoorRadio(job, artiest, titel, seconden, jaar,
           vroeg: vroeg, zoekBeter: zoekDaarnaBeter, album: album);
+      if (pad != null || job.cancelled) return pad;
+      // Soulseek had geen enkele kopie van dit nummer (niet: alle uploaders faalden) — dan TIDAL als reserve.
+      if (!_radioZonderKandidaat.contains(_radioSleutel(artiest, titel))) return null;
+      return await _radioViaTidal(job, artiest, titel, seconden, jaar, album: album, waarom: 'niet op Soulseek');
+    } on RadioLaterOpnieuw catch (e) {
+      // Soulseek doet niet mee (geen aanmelding, de server zwijgt): dan TIDAL, en anders later opnieuw. Saber,
+      // 22-10-2026, na een radio die om 19:37 stilviel toen Soulseek ons buitensloot: "oei radio stopt al".
+      final pad = await _radioViaTidal(job, artiest, titel, seconden, jaar, album: album, waarom: e.waarom);
+      if (pad != null) return pad;
+      rethrow;
     } finally {
       _radiohalen.remove(job);
     }
+  }
+
+  /// Wanneer de radio (en ▶) TIDAL vroeg — voor [kTidalRadioPerUur].
+  final List<DateTime> _tidalRadioTijden = [];
+
+  /// TIDAL als reserve voor een radiohaal: zoeken met tidaler, het juiste nummer kiezen ([kiesTidalTreffers]),
+  /// halen in een eigen keuringsmap, en dan dezelfde keuringen als een kopie van Soulseek in [_haalVoorRadio] — de
+  /// tags moeten dit nummer zijn, de lengte moet kloppen, en wat je al had blijft van jou ([RadioAlGehad]).
+  ///
+  /// **Soulseek blijft eerst** (Saber, 22-10-2026: "Tidal is wel enkel als back-up e, soulseek blijft prio"): dit
+  /// draait alleen als Soulseek niet meedoet of het nummer niet heeft. En hoogstens [kTidalRadioPerUur] per uur: bij
+  /// een storing met vijftig nummers vooruit trok de radio anders in een paar minuten tientallen nummers van TIDAL,
+  /// en precies dat patroon levert een geblokkeerd account op ("abuse_detected", gemeld bij tidal-dl-ng).
+  Future<String?> _radioViaTidal(DownloadJob job, String artiest, String titel, int? seconden, int? jaar,
+      {String? album, required String waarom}) async {
+    if (job.cancelled || Tidaler.inToets || !Tidaler.beschikbaar || Tidaler.python == null) return null;
+    final nu = DateTime.now();
+    _tidalRadioTijden.removeWhere((t) => nu.difference(t) >= const Duration(hours: 1));
+    final wacht =
+        zoekWachttijd(_tidalRadioTijden, nu, max: kTidalRadioPerUur, venster: const Duration(hours: 1));
+    if (wacht > Duration.zero) {
+      _log.line('radio "$artiest — $titel": $waarom — TIDAL niet: al $kTidalRadioPerUur dit uur '
+          '(weer over ${wacht.inMinutes} min)');
+      return null;
+    }
+    final treffers = await zoekOpTidal('$artiest $titel');
+    if (treffers == null) {
+      _log.line('radio "$artiest — $titel": $waarom — TIDAL: zoeken lukte niet');
+      return null;
+    }
+    final ids = kiesTidalTreffers(treffers, artiest: artiest, titel: titel);
+    _log.line('radio "$artiest — $titel": $waarom — TIDAL: ${treffers.length} treffers, ${ids.length} met deze '
+        'titel en artiest');
+    for (final id in ids.take(2)) {
+      if (job.cancelled) return null;
+      _tidalRadioTijden.add(DateTime.now());
+      final map = keuringsmapVoor('tidal-radio-$id');
+      try {
+        final t0 = DateTime.now();
+        final r = await haalVanTidal(doel: 'track/$id', map: map.path);
+        if (r.fout != null) {
+          _log.line('   TIDAL $id: mislukt: ${r.fout!.split('\n').last}');
+          continue;
+        }
+        final binnen = <File>[];
+        await for (final e in map.list(recursive: true, followLinks: false)) {
+          if (e is File && isVerliesvrij(soortVan(e.path))) binnen.add(e);
+        }
+        if (binnen.length != 1) {
+          _log.line('   TIDAL $id: ${binnen.length} verliesvrije bestanden binnen — overgeslagen');
+          continue;
+        }
+        final bestand = binnen.single;
+        final tags = readTags(bestand);
+        if (radioTagsSprekenTegen(artiest, titel, tags)) {
+          _log.line('   TIDAL $id: leverde een ander nummer (${tags?.artist} — ${tags?.title}) — overgeslagen');
+          continue;
+        }
+        final echt = looptijdInSeconden(bestand);
+        if (radioLengteSpreektTegen(seconden, echt)) {
+          _log.line('   TIDAL $id: ${echt}s, gevraagd ${seconden}s — een andere versie, overgeslagen');
+          continue;
+        }
+        if (job.cancelled) return null;
+        // Opbergen zoals een radiokopie van Soulseek: zonder jaar, opzij wat verliest, nooit weg.
+        final plaatsing = TrackTags(title: titel, artist: artiest, album: '', trackNo: 0, seconds: seconden);
+        final alBekend = mapVanBestaande?.call(artiest, titel, seconds: seconden);
+        await _bereidVergelijkingVoor(bestand, plaatsing);
+        final uit = await placeFileDetailed(bestand, _downloadsRoot,
+            tags: plaatsing, staatAl: mapVanBestaande, parkeerAltijd: true, parkeerBinnenkomend: false);
+        if (alBekend != null || uit.how != Placement.moved || uit.verving) {
+          _log.line('   TIDAL $id: geland op muziek die je al had — niet van de radio');
+          if (uit.how != Placement.stuck && File(uit.path).existsSync()) throw RadioAlGehad(uit.path);
+          return null;
+        }
+        final gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);
+        try {
+          final velden =
+              veldenNaHaal(gezag, eigenAlbum: gezag.album.isEmpty ? null : readTags(File(uit.path))?.album);
+          if (velden.isNotEmpty) await writeTagFields(File(uit.path), velden);
+        } catch (_) {/* het bestand staat goed; een mislukte tagschrijf maakt het niet stuk */}
+        _log.line('radio "$artiest — $titel": TIDAL $id GELEVERD${r.kwaliteit == null ? "" : " (${r.kwaliteit})"} '
+            'na ${_kort(DateTime.now().difference(t0))} — ${baseName(uit.path)}');
+        return uit.path;
+      } on RadioAlGehad {
+        rethrow;
+      } catch (e) {
+        _log.line('   TIDAL $id: $e');
+      } finally {
+        try {
+          if (map.existsSync()) await map.delete(recursive: true);
+        } catch (_) {/* in gebruik; dan keurt de volgende start het restant */}
+        _geefKeuringsmapVrij(map);
+      }
+    }
+    return null;
   }
 
   /// Zoveel uploaders lopen tegelijk in een [_wedloop]: zoveel als er goede zijn, tot dertig. Elke loper

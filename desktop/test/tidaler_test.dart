@@ -161,6 +161,32 @@ void main() {
       expect(t.single, (id: '19823990', artiest: 'Daft Punk', titel: 'Get Lucky (Radio Edit)'));
     });
 
+    test('het zoekscherm: platen én nummers, elk één keer; de wens ziet alleen de nummers', () {
+      const uit = '{"soort": "album", "id": "96600816", "artiest": "Tamino", "titel": "Amir", "jaar": "2018"}\n'
+          '{"soort": "album", "id": "96600816", "artiest": "Tamino", "titel": "Amir", "jaar": "2018"}\n'
+          '{"id": "96600827", "artiest": "Tamino", "titel": "Indigo Night", "stereo": true}\n'
+          '{"id": "1", "artiest": "Tamino", "titel": "Indigo Night", "stereo": false}\n';
+      final r = tidalCatalogusUit(uit);
+      expect(r.albums.single.id, '96600816');
+      expect(r.albums.single.jaar, '2018');
+      expect(r.albums.single.label, 'Tamino — Amir');
+      expect(r.tracks.map((t) => t.id), ['96600827', '1'], reason: 'het scherm toont de catalogus; de keuring beslist');
+      expect(tidalZoektreffers(uit).map((t) => t.id), ['96600827'], reason: 'geen platen en alleen stereo voor de wens');
+      expect(kTidalZoekHulp, contains('alles = len(sys.argv) > 3 and sys.argv[3] == "alles"'));
+      expect(kTidalZoekHulp, contains('sys.stdout.reconfigure(encoding="utf-8")'),
+          reason: 'met -I negeert Python PYTHONIOENCODING: KAYTRAMINÉ werd KAYTRAMIN?');
+    });
+
+    test('aangesloten: het TIDAL-zoekscherm zoekt op de pc via tidaler, zonder tweede login', () {
+      final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final zoek = m.substring(m.indexOf('  Future<void> _searchTidal(String q) async {'));
+      expect(zoek.substring(0, 900), contains('if (!viaTidaler && !tidal.connected) return;'));
+      expect(zoek.substring(0, 1600), contains('await zoekCatalogusOpTidal(q) ??'));
+      final scherm = m.substring(m.indexOf('  Widget _tidalResults() {'));
+      expect(scherm.substring(0, 400), contains('if (!viaTidaler && !tidal.configured) {'));
+      expect(m, contains('_isDesktop && !context.read<LibraryStore>().isRemote && Tidaler.beschikbaar && Tidaler.python != null;'));
+    });
+
     test('het hulpje gebruikt tidalers eigen inlog en geeft de volle titel', () {
       expect(kTidalZoekHulp, contains('from tidaler.config import Settings, Tidal'));
       expect(kTidalZoekHulp, contains('if not t.login_token():'));

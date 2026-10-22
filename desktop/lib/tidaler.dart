@@ -31,6 +31,7 @@ import 'uitvoerbaar.dart';
 
 import 'enrichment.dart' show zonderGastTitel;
 import 'ffmpeg.dart';
+import 'tidal.dart' show TidalAlbum, TidalTrack, TidalZoekResultaat;
 import 'organize.dart' show artistKey, normKey;
 
 /// Waar tidaler kan staan, in volgorde van waarschijnlijkheid.
@@ -125,6 +126,10 @@ class Tidaler {
   }
 
   static bool get beschikbaar => pad != null;
+
+  /// Draaien we in een toets? Dan nooit echt naar TIDAL — op Sabers pc staat tidaler echt, en een toets die een
+  /// Soulseek-storing nabootst zou anders bij TIDAL gaan halen (`flutter test` zet `FLUTTER_TEST`).
+  static bool get inToets => Platform.environment['FLUTTER_TEST'] == 'true';
 
   /// Voor de toetsen, en voor nadat iemand tidaler geïnstalleerd heeft zonder de app te herstarten.
   static void resetLookup() {
@@ -293,6 +298,11 @@ String opgehaaldMelding(String kwaliteit, {String? keuring}) {
       : '$basis en gekeurd: $keuring';
 }
 
+/// Hoeveel nummers de radio (en ▶) hoogstens per uur van TIDAL haalt, als Soulseek niet meedoet of het nummer niet
+/// heeft. Een uur muziek is zo'n vijftien nummers: de radio houdt zo bij wat je hoort, zonder in een paar minuten
+/// tientallen nummers te trekken — dat patroon geeft een geblokkeerd account ("abuse_detected").
+const int kTidalRadioPerUur = 15;
+
 /// Eén download tegelijk: tidaler leest zijn map uit één instellingenbestand ([tidalerInstellingen]).
 Future<void> _beurt = Future.value();
 
@@ -377,14 +387,30 @@ typedef TidalTreffer = ({String id, String artiest, String titel});
 /// wens is een stereobestand, geen Dolby Atmos.
 const kTidalZoekHulp = r'''
 import json, sys
+# UTF-8, ook op Windows: met -I negeert Python PYTHONIOENCODING, en dan werd "KAYTRAMINÉ" "KAYTRAMIN?".
+sys.stdout.reconfigure(encoding="utf-8")
 from tidaler.config import Settings, Tidal
 
 vraag, aantal = sys.argv[1], int(sys.argv[2])
+alles = len(sys.argv) > 3 and sys.argv[3] == "alles"
 t = Tidal(Settings())
 if not t.login_token():
     print(json.dumps({"fout": "niet ingelogd"}))
     sys.exit(2)
 r = t.session.search(vraag, limit=aantal)
+if alles:
+    for al in (r.get("albums") or [])[:aantal]:
+        naam = al.name or ""
+        versie = getattr(al, "version", None)
+        if versie:
+            naam = f"{naam} ({versie})"
+        print(json.dumps({
+            "soort": "album",
+            "id": str(al.id),
+            "artiest": al.artist.name if getattr(al, "artist", None) else "",
+            "titel": naam,
+            "jaar": str(getattr(al, "year", None) or ""),
+        }, ensure_ascii=False))
 for tr in (r.get("tracks") or [])[:aantal]:
     modi = getattr(tr, "audio_modes", None) or []
     naam = tr.name or ""
@@ -411,7 +437,7 @@ List<TidalTreffer> tidalZoektreffers(String uitvoer) {
     try {
       final j = jsonDecode(r);
       if (j is! Map || j['id'] == null) continue;
-      if (j['stereo'] == false) continue;
+      if (j['soort'] == 'album' || j['stereo'] == false) continue;
       final id = '${j['id']}';
       if (!gezien.add(id)) continue;
       uit.add((id: id, artiest: '${j['artiest'] ?? ''}', titel: '${j['titel'] ?? ''}'));
@@ -454,15 +480,54 @@ List<String> kiesTidalTreffers(
   ];
 }
 
+/// Platen en nummers uit de uitvoer van [kTidalZoekHulp] met "alles" — voor het TIDAL-zoekscherm. Hier ook wat niet
+/// stereo is: dat scherm toont de catalogus, en de keuring beslist bij het halen.
+TidalZoekResultaat tidalCatalogusUit(String uitvoer) {
+  final albums = <TidalAlbum>[], nummers = <TidalTrack>[];
+  final gezien = <String>{};
+  for (final regel in uitvoer.split(RegExp(r'\r\n|\r|\n'))) {
+    final r = regel.trim();
+    if (!r.startsWith('{')) continue;
+    try {
+      final j = jsonDecode(r);
+      if (j is! Map || j['id'] == null) continue;
+      final album = j['soort'] == 'album';
+      if (!gezien.add('${album ? 'a' : 't'}${j['id']}')) continue;
+      if (album) {
+        albums.add(TidalAlbum('${j['id']}', '${j['titel'] ?? ''}', '${j['artiest'] ?? ''}', '${j['jaar'] ?? ''}'));
+      } else {
+        nummers.add(TidalTrack('${j['id']}', '${j['titel'] ?? ''}', '${j['artiest'] ?? ''}'));
+      }
+    } catch (_) {/* geen treffer */}
+  }
+  return TidalZoekResultaat(albums, nummers);
+}
+
+/// Zoek [vraag] in de TIDAL-catalogus met tidalers inlog: platen én nummers, voor het zoekscherm. Null als tidaler
+/// (of zijn Python) er niet is of niet antwoordde.
+///
+/// **Waarom (Saber, 22-10-2026).** *"Niet verbonden met tidal staat er bij zoeken via tidal"* — dat scherm hing aan de
+/// officiële API (een eigen app op developer.tidal.com en een tweede login), terwijl tidaler al ingelogd is.
+Future<TidalZoekResultaat?> zoekCatalogusOpTidal(String vraag, {int aantal = 20}) async {
+  final uit = await _zoekHulp(vraag, aantal, alles: true);
+  return uit == null ? null : tidalCatalogusUit(uit);
+}
+
 /// Zoek [vraag] op TIDAL. Null als tidaler (of zijn Python) er niet is of niet antwoordde, anders de treffers.
 Future<List<TidalTreffer>?> zoekOpTidal(String vraag, {int aantal = 10}) async {
+  final uit = await _zoekHulp(vraag, aantal);
+  return uit == null ? null : tidalZoektreffers(uit);
+}
+
+/// Het zoekhulpje draaien ([kTidalZoekHulp]); de ruwe uitvoer, of null.
+Future<String?> _zoekHulp(String vraag, int aantal, {bool alles = false}) async {
   final py = Tidaler.python;
   if (py == null || vraag.trim().isEmpty) return null;
   try {
     final hulp = File('${Directory.systemTemp.path}${Platform.pathSeparator}debridmusic_tidal_zoek.py');
     await hulp.writeAsString(kTidalZoekHulp, flush: true);
     // -I: alleen tidalers eigen pakketten, niets uit de map waar het hulpje staat.
-    final p = await Process.start(py, ['-I', hulp.path, vraag.trim(), '$aantal'],
+    final p = await Process.start(py, ['-I', hulp.path, vraag.trim(), '$aantal', if (alles) 'alles'],
         environment: {'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1'});
     await p.stdin.close();
     final uit = p.stdout.transform(_soepelUtf8.decoder).join();
@@ -474,7 +539,7 @@ Future<List<TidalTreffer>?> zoekOpTidal(String vraag, {int aantal = 10}) async {
     final tekst = await uit;
     await fout;
     if (code != 0) return null;
-    return tidalZoektreffers(tekst);
+    return tekst;
   } catch (_) {
     return null;
   }
