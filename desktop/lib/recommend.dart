@@ -346,7 +346,8 @@ class RecommendService {
       {void Function(String)? spoor,
       RecTrack? Function(AiNummer n)? vanJou,
       Future<RecTrack?> Function(AiNummer n)? elders,
-      String eldersNaam = 'elders'}) async {
+      String eldersNaam = 'elders',
+      String van = 'het model'}) async {
     final antwoord = List<Map<String, dynamic>?>.filled(lijst.length, null);
     final zwijgt = <int, String>{};
     Future<void> zoek(int i) async {
@@ -430,7 +431,7 @@ class RecommendService {
     }
     weg.addAll([for (final n in nietGevonden) '${n.artiest} — ${n.titel}']);
     stil.addAll([for (final n in zonderAntwoord) '${n.artiest} — ${n.titel}']);
-    spoor?.call('radio-lijst: ${uit.length} van ${lijst.length} nummers van het model gevonden'
+    spoor?.call('radio-lijst: ${uit.length} van ${lijst.length} nummers van $van gevonden'
         '${jouw.isEmpty ? '' : ' | niet op Deezer, wel van jou: ${jouw.join('; ')}'}'
         '${daar.isEmpty ? '' : ' | niet op Deezer, wel op $eldersNaam: ${daar.join('; ')}'}'
         '${weg.isEmpty ? '' : ' | niet gevonden: ${weg.join('; ')}'}'

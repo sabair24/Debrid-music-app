@@ -62,14 +62,14 @@ void main() {
       expect(log.last, contains('niet gevonden: Plaza — Yo Yo'));
     });
 
-    test('aangesloten: alle drie de plekken waar de radio een modellijst opzoekt, kijken ook bij jou', () {
+    test('aangesloten: alle vier de plekken waar de radio een lijst namen opzoekt, kijken ook bij jou', () {
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(
         'vanJou: eigenVoorModel(lib.tracks)'.allMatches(main).length,
-        3,
-        reason: 'de startlijst, de vervolglijst en het afstemmen',
+        4,
+        reason: 'de startlijst, de vervolglijst, het afstemmen en Last.fm',
       );
-      expect(RegExp(r'lijstOpDeezer\(').allMatches(main).length, 3, reason: 'geen vierde zonder opzoeker');
+      expect(RegExp(r'lijstOpDeezer\(').allMatches(main).length, 4, reason: 'geen vijfde zonder opzoeker');
     });
   });
 }
