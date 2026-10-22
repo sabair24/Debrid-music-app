@@ -363,6 +363,7 @@ class AiService {
     bool start = false,
     double? zaadBpm,
     List<double?> bpm = const [],
+    bool gekozen = false,
   }) async {
     final sleutel = sleutelVan().trim();
     if (sleutel.isEmpty || kandidaten.isEmpty) return const {};
@@ -386,7 +387,8 @@ class AiService {
                 pastNiet: pastNiet,
                 pastWel: pastWel,
                 zaadBpm: zaadBpm,
-                bpm: bpm),
+                bpm: bpm,
+                gekozen: gekozen),
           }
         ],
       },

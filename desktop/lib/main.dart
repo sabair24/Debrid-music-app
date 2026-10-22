@@ -16818,7 +16818,7 @@ Future<void> startRadio(BuildContext context, String artist,
                 elkeLengte: keuring.elkeLengte,
                 bron: 'model');
             // Langs de sfeervraag met tempo, zoals de startlijst — vóór ze in het plan komen.
-            keuring.vraagSfeer(vanModel, onderweg: true);
+            keuring.vraagSfeer(vanModel, onderweg: true, gekozen: true);
             return vanModel;
           }),
       _ => null,
@@ -16927,7 +16927,7 @@ Future<void> startRadio(BuildContext context, String artist,
           // Ook wat het model zelf koos, langs de sfeervraag — met het gemeten tempo erbij. Gemeten op 22-10-2026,
           // radio vanaf Petra: de lijst zette er trage ballads tussen (Benny Neyman, Borsato), ondanks de regel;
           // met het tempo erbij weerde de sfeervraag Benny Neyman (94 BPM tegen 142). Zie `tempo.dart`.
-          keuring.vraagSfeer(vanModel);
+          keuring.vraagSfeer(vanModel, gekozen: true);
           _voegGekeurdBij(radio, sessie, _afstemBeurt, keuring, vanModel);
         } catch (e) {
           log.line('radio-lijst: het model gaf niets — $e');
@@ -17157,7 +17157,7 @@ class _Radiokeuring {
   ///
   /// [onderweg]: voor een bijvulronde. Die moet binnen het budget passen; past hij niet, dan keurt de radio
   /// zoals zonder model (stijl en tijdvak). De start en het afstemmen mogen altijd — ze tellen wel mee.
-  void vraagSfeer(List<Radioplek> plekken, {bool onderweg = false}) {
+  void vraagSfeer(List<Radioplek> plekken, {bool onderweg = false, bool gekozen = false}) {
     final m = model;
     if (m == null) return;
     final zelf = artiestSleutel(artiest);
@@ -17206,7 +17206,8 @@ class _Radiokeuring {
           pastWel: voorbeelden(Sfeeroordeel.past),
           start: !onderweg,
           zaadBpm: zaadBpm,
-          bpm: bpm);
+          bpm: bpm,
+          gekozen: gekozen);
       log.line('radio-sfeer: ${weg.length} van ${nieuw.length} passen niet — '
           '${[for (final i in weg) '${nieuw[i].artiest} — ${nieuw[i].titel}'].join('; ')}');
       return weg;

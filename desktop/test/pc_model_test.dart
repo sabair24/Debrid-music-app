@@ -27,6 +27,7 @@ class _Model extends AiService {
   final lijsten = <Map<String, Object?>>[];
   final sfeervragen = <List<({String artiest, String titel})>>[];
   final tempi = <({double? zaad, List<double?> rij})>[];
+  final gekozen = <bool>[];
   final lijstTempi = <double?>[];
   Completer<void> klaar = Completer<void>()..complete();
   Object? fout;
@@ -81,9 +82,11 @@ class _Model extends AiService {
     bool start = false,
     double? zaadBpm,
     List<double?> bpm = const [],
+    bool gekozen = false,
   }) async {
     sfeervragen.add(kandidaten);
     tempi.add((zaad: zaadBpm, rij: bpm));
+    this.gekozen.add(gekozen);
     await klaar.future;
     return {
       for (var i = 0; i < kandidaten.length; i++)
@@ -316,6 +319,10 @@ void main() {
         kandidaten: const [(artiest: 'Bazart', titel: 'Goud'), (artiest: 'K3', titel: 'Dromen')],
       );
       expect(weg, {1});
+      expect(model.gekozen, [false]);
+      // Wat het model zelf koos, krijgt ook op een toestel de lichtere vraag (zie `kGekozenSfeerZin`).
+      await pc().weesSfeer(artiest: 'Petra', kandidaten: const [(artiest: 'Clouseau', titel: 'Domino')], gekozen: true);
+      expect(model.gekozen, [false, true]);
     });
 
     test('een fout van het model komt als AiFout aan, zodat de radio doet als zonder model', () async {
