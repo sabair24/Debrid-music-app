@@ -175,9 +175,12 @@ void main() {
           duurMs: 0,
           opMs: nu,
           volume: 30,
+          radio: 'Radio Corona',
         ),
       ]);
       final s = reg.lijst().firstWhere((z) => z.id == 'spk:uuid:amp');
+      // Een radio van de pc op de speaker: de zone zegt het (stap: radio op een speaker, 22-10-2026).
+      expect(s.radio, 'Radio Corona');
       expect(s.soort, ZoneSoort.speaker);
       expect(s.via, 'THUIS');
       expect(s.durationMs, 200000, reason: 'een Sonos meldt geen lengte; de bibliotheek weet hem');
@@ -192,7 +195,7 @@ void main() {
       expect(s['spk:uuid:move']!.online, isTrue);
       expect(s['spk:uuid:move']!.speeltIets, isFalse);
       reg.zetSpeakers([
-        (id: 'uuid:amp', naam: 'Sonos Amp', trackId: 'x', index: 0, lengte: 1, speelt: true, positieMs: 0, duurMs: 0, opMs: nu, volume: -1),
+        (id: 'uuid:amp', naam: 'Sonos Amp', trackId: 'x', index: 0, lengte: 1, speelt: true, positieMs: 0, duurMs: 0, opMs: nu, volume: -1, radio: ''),
       ]);
       final na = reg.lijst().where((z) => z.id == 'spk:uuid:amp').toList();
       expect(na.length, 1, reason: 'een speaker met muziek staat er één keer, niet ook nog als lege');

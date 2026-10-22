@@ -505,7 +505,7 @@ void main() {
 
     test('de stand van een speaker als melding, met de plek van nu', () {
       final s = speakerAlsStand(
-        (id: 'uuid:amp', naam: 'Amp', trackId: 'x', index: 2, lengte: 5, speelt: true, positieMs: 10000, duurMs: 200000, opMs: 1000, volume: 30),
+        (id: 'uuid:amp', naam: 'Amp', trackId: 'x', index: 2, lengte: 5, speelt: true, positieMs: 10000, duurMs: 200000, opMs: 1000, volume: 30, radio: ''),
         ['a', 'b', 'x', 'c', 'd'],
         nuMs: 6000,
       );
