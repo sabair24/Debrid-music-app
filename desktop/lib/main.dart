@@ -26,6 +26,7 @@ import 'aanbevelingplan.dart';
 import 'ai.dart';
 import 'radio.dart';
 import 'modelbudget.dart';
+import 'pc_model.dart';
 import 'radiobijvuller.dart';
 import 'radiokeuze.dart';
 import 'radiobestand.dart' show kRadioSpeling;
@@ -1575,6 +1576,19 @@ Future<void> main() async {
             zaad: zaad, titel: titel.isEmpty ? null : titel, hier: true, naar: speaker);
         return null;
       };
+      // Het taalmodel voor een radio op een toestel: de sleutel en het budget blijven hier (`pc_model.dart`).
+      final radioLog = WarmLog('$appDir${Platform.pathSeparator}radio.log');
+      s.modelvragen = Modelvragen(
+        model: () {
+          final c = s.settings;
+          if (c == null || c.anthropicKey.trim().isEmpty) return null;
+          return AiService(() => c.anthropicKey, werkruimteVan: () => c.anthropicWorkspace)
+            ..bijGebruik =
+                (soort, inT, uitT) => radioLog.line('radio-model (toestel): $soort, $inT in / $uitT uit tokens');
+        },
+        budget: _modelbudget,
+        spoor: radioLog.line,
+      );
       zoneLijst
         ..zetVerbonden(true)
         ..zet(s.zones.snapshot());
@@ -16585,11 +16599,13 @@ Future<void> startRadio(BuildContext context, String artist,
   // daarna niets meer toe. Zie [_afstemBeurt].
   final beurt = ++_afstemBeurt;
 
-  // Het model als samensteller. Alleen op de pc met een sleutel: op een gekoppeld toestel staat die
-  // niet, en dan is het de radio met Deezer en de keuring.
+  // Het model als samensteller. Op de pc met een sleutel; op een gekoppeld toestel staat die niet, en dan
+  // vraagt het de pc (`pc_model.dart`) — als die het kan. Anders is het de radio met Deezer en de keuring.
   AiService? ai;
   SmaakProfiel? profiel;
-  if (!lib.isRemote && cfg.anthropicKey.trim().isNotEmpty) {
+  final remote = lib.isRemote ? lib.remote : null;
+  final viaPc = remote != null && context.read<ClientSession>().pcHeeftModel;
+  if ((!lib.isRemote && cfg.anthropicKey.trim().isNotEmpty) || viaPc) {
     final beurten = <Beurt>[
       for (final t in lib.tracks)
         if (standen.standVan(t) case final s?)
@@ -16605,13 +16621,16 @@ Future<void> startRadio(BuildContext context, String artist,
       gespeeld: gespeeld,
       overslaan: _genericArtist,
     );
-    ai = AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
-      // Wat elke vraag kostte, in het logboek van de radio — zie `modelbudget.dart`.
-      ..bijGebruik = (soort, inT, uitT) => log.line('radio-model: $soort, $inT in / $uitT uit tokens');
+    ai = viaPc
+        ? PcModel((v) => remote.ask('/api/radio', v), radio: () => radio.sessie)
+        : (AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
+          // Wat elke vraag kostte, in het logboek van de radio — zie `modelbudget.dart`.
+          ..bijGebruik = (soort, inT, uitT) => log.line('radio-model: $soort, $inT in / $uitT uit tokens'));
   }
   keuring
     ..model = ai
-    ..budget = _modelbudget;
+    // Via de pc houdt de pc het budget bij.
+    ..budget = viaPc ? null : _modelbudget;
   // Bekend, Gemengd of Ontdekken — zie `radiosmaak.dart`. Staat op het radiopaneel.
   final smaak = Radiosmaak.uit(cfg.radioSmaak);
   List<RecTrack> recs;
@@ -16668,7 +16687,7 @@ Future<void> startRadio(BuildContext context, String artist,
     vraagSfeer: ai == null ? null : (plekken) => keuring.vraagSfeer(plekken, onderweg: true),
     model: switch ((ai, profiel)) {
       (final m?, final wie?) => Radiomodel(
-          mag: () => _modelbudget.lijst(radio.sessie),
+          mag: () => viaPc ? (mag: true, waarom: null) : _modelbudget.lijst(radio.sessie),
           lijst: ({required alGekozen, required dieper}) async {
             final s = radio.sessie;
             final z = await zaadStijl;
@@ -16782,6 +16801,7 @@ Future<void> startRadio(BuildContext context, String artist,
             pastWel: keuring.voorbeelden(Sfeeroordeel.past),
             // Telt voor deze radio (12), niet voor de uurgrens: een start mag altijd.
             perAanroep: () => _modelbudget.lijstGevraagd(sessie, start: true),
+            start: true,
           );
           keuring.onthoud(lijst);
           log.line('radio-lijst: ${lijst.length} nummers van het model'
@@ -17022,7 +17042,8 @@ class _Radiokeuring {
           stijlen: stijlen,
           kandidaten: [for (final p in nieuw) (artiest: p.artiest, titel: p.titel)],
           pastNiet: voorbeelden(Sfeeroordeel.pastNiet),
-          pastWel: voorbeelden(Sfeeroordeel.past));
+          pastWel: voorbeelden(Sfeeroordeel.past),
+          start: !onderweg);
       log.line('radio-sfeer: ${weg.length} van ${nieuw.length} passen niet — '
           '${[for (final i in weg) '${nieuw[i].artiest} — ${nieuw[i].titel}'].join('; ')}');
       return weg;

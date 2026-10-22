@@ -97,48 +97,67 @@ void main() {
       bool heeft(String s) => main.contains(s);
       expect(heeft('perAanroep: () => _modelbudget.lijstGevraagd(sessie, start: true),'), isTrue, reason: 'de start');
       expect(heeft('perAanroep: () => _modelbudget.lijstGevraagd(s),'), isTrue, reason: 'een vervolglijst');
-      expect(heeft('mag: () => _modelbudget.lijst(radio.sessie),'), isTrue);
-      expect(heeft('vraagSfeer: ai == null ? null : (plekken) => keuring.vraagSfeer(plekken, onderweg: true),'), isTrue);
-      expect(heeft('    if (onderweg && b != null) {\n      final mag = b.sfeer();\n      if (!mag.mag) {'), isTrue,
-          reason: 'een sfeervraag onderweg moet binnen het budget passen');
+      expect(heeft('mag: () => viaPc ? (mag: true, waarom: null) : _modelbudget.lijst(radio.sessie),'), isTrue,
+          reason: 'op de pc het eigen budget; via de pc telt de pc');
+      expect(
+        heeft('vraagSfeer: ai == null ? null : (plekken) => keuring.vraagSfeer(plekken, onderweg: true),'),
+        isTrue,
+      );
+      expect(
+        heeft('    if (onderweg && b != null) {\n      final mag = b.sfeer();\n      if (!mag.mag) {'),
+        isTrue,
+        reason: 'een sfeervraag onderweg moet binnen het budget passen',
+      );
       expect(heeft('    b?.sfeerGevraagd(start: !onderweg);'), isTrue);
-      expect(heeft("..bijGebruik = (soort, inT, uitT) => log.line('radio-model: \$soort, \$inT in / \$uitT uit tokens');"),
-          isTrue);
+      expect(
+        heeft("..bijGebruik = (soort, inT, uitT) => log.line('radio-model: \$soort, \$inT in / \$uitT uit tokens')"),
+        isTrue,
+      );
     });
   });
 
   group('het model telt elke aanroep', () {
     http.Response antwoord(int aantal, String stop) => http.Response(
-        jsonEncode({
-          'content': [
-            {
-              'type': 'text',
-              'text': jsonEncode({
-                'nummers': [
-                  for (var i = 0; i < aantal; i++) {'artiest': 'Artiest $i', 'titel': 'Nummer $i', 'jaar': 1995, 'bekend': true}
-                ]
-              })
-            }
-          ],
-          'stop_reason': stop,
-          'usage': {'input_tokens': 2140, 'output_tokens': 3880},
-        }),
-        200,
-        headers: {'content-type': 'application/json; charset=utf-8'});
+      jsonEncode({
+        'content': [
+          {
+            'type': 'text',
+            'text': jsonEncode({
+              'nummers': [
+                for (var i = 0; i < aantal; i++)
+                  {'artiest': 'Artiest $i', 'titel': 'Nummer $i', 'jaar': 1995, 'bekend': true},
+              ],
+            }),
+          },
+        ],
+        'stop_reason': stop,
+        'usage': {'input_tokens': 2140, 'output_tokens': 3880},
+      }),
+      200,
+      headers: {'content-type': 'application/json; charset=utf-8'},
+    );
 
     test('DE KERN: de tweede poging telt ook, en het logboek krijgt de tokens', () async {
       var vragen = 0;
       String? prompt;
-      final ai = AiService(() => 'sk-ant-toets', client: MockClient((v) async {
-        vragen++;
-        prompt = (((jsonDecode(v.body) as Map)['messages'] as List).first as Map)['content'] as String;
-        return vragen == 1 ? antwoord(1, 'max_tokens') : antwoord(20, 'end_turn');
-      }));
+      final ai = AiService(
+        () => 'sk-ant-toets',
+        client: MockClient((v) async {
+          vragen++;
+          prompt = (((jsonDecode(v.body) as Map)['messages'] as List).first as Map)['content'] as String;
+          return vragen == 1 ? antwoord(1, 'max_tokens') : antwoord(20, 'end_turn');
+        }),
+      );
       final gebruik = <String>[];
       ai.bijGebruik = (soort, i, u) => gebruik.add('$soort $i/$u');
       var geteld = 0;
       await ai.maakRadiolijst(
-          artiest: 'Regi', profiel: const SmaakProfiel(), perAanroep: () => geteld++, dieper: true, alGekozen: ['A - B']);
+        artiest: 'Regi',
+        profiel: const SmaakProfiel(),
+        perAanroep: () => geteld++,
+        dieper: true,
+        alGekozen: ['A - B'],
+      );
       expect(geteld, 2);
       expect(gebruik, ['lijst 2140/3880', 'lijst 2140/3880']);
       expect(prompt, contains(kDieperZin));

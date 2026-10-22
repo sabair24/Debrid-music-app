@@ -33,12 +33,12 @@ import 'hoes_in_bestand.dart';
 enum Hoesbak { flac, id3, aiff, ape }
 
 Hoesbak? hoesbakVan(String pad) => switch (extensieVan(pad)) {
-      '.flac' => Hoesbak.flac,
-      '.mp3' => Hoesbak.id3,
-      '.aif' || '.aiff' || '.aifc' => Hoesbak.aiff,
-      '.wv' || '.ape' => Hoesbak.ape,
-      _ => null,
-    };
+  '.flac' => Hoesbak.flac,
+  '.mp3' => Hoesbak.id3,
+  '.aif' || '.aiff' || '.aifc' => Hoesbak.aiff,
+  '.wv' || '.ape' => Hoesbak.ape,
+  _ => null,
+};
 
 typedef _Uit = ({HoesUitkomst uitkomst, String? oud, String? reden});
 typedef _Plaat = ({int soort, Uint8List beeld});
@@ -86,7 +86,11 @@ typedef Id3Frame = ({String id, Uint8List bytes, ({int soort, Uint8List beeld})?
     // Het tweede vlaggenbyte zegt hoe de inhoud bewaard is (gecomprimeerd, versleuteld, …): dan lezen we de
     // plaat niet, maar het frame gaat wel mee.
     final gewoon = tag[i + 9] == 0;
-    frames.add((id: id, bytes: bytes, plaat: id == 'APIC' && gewoon ? _leesApic(Uint8List.sublistView(bytes, 10)) : null));
+    frames.add((
+      id: id,
+      bytes: bytes,
+      plaat: id == 'APIC' && gewoon ? _leesApic(Uint8List.sublistView(bytes, 10)) : null,
+    ));
     i += 10 + n;
   }
   for (var j = i; j < eind; j++) {
@@ -139,8 +143,13 @@ Uint8List _apic(int versie, Uint8List beeld, String mime) {
 /// (soort 3 en 0) weg, de rest byte voor byte en in volgorde, en opvulling tot precies [doel] bytes als dat past
 /// — anders ruimte voor een volgende keer. Pure functie — zie de toetsen.
 @visibleForTesting
-Uint8List nieuweId3(
-    {required int versie, required int revisie, required List<Id3Frame> frames, required Uint8List apic, required int doel}) {
+Uint8List nieuweId3({
+  required int versie,
+  required int revisie,
+  required List<Id3Frame> frames,
+  required Uint8List apic,
+  required int doel,
+}) {
   final kern = BytesBuilder(copy: false);
   var geplaatst = false;
   for (final f in frames) {
@@ -183,10 +192,15 @@ _Ontleed _leesMp3(RandomAccessFile raf, int grootte, Uint8List beeld, String mim
       eerste: _eerstePlaat(t.frames),
       heeftPlaat: t.frames.any((f) => f.id == 'APIC'),
       stukken: () => [
-            nieuweId3(
-                versie: t.versie, revisie: t.revisie, frames: t.frames, apic: _apic(t.versie, beeld, mime), doel: lengte),
-            (lengte, grootte),
-          ],
+        nieuweId3(
+          versie: t.versie,
+          revisie: t.revisie,
+          frames: t.frames,
+          apic: _apic(t.versie, beeld, mime),
+          doel: lengte,
+        ),
+        (lengte, grootte),
+      ],
     );
   }
   // Zonder kop moet het met een mp3-frame beginnen (elf bits sync); anders weten we niet wat dit is.
@@ -196,9 +210,9 @@ _Ontleed _leesMp3(RandomAccessFile raf, int grootte, Uint8List beeld, String mim
     eerste: null,
     heeftPlaat: false,
     stukken: () => [
-          nieuweId3(versie: 3, revisie: 0, frames: const [], apic: _apic(3, beeld, mime), doel: 0),
-          (0, grootte),
-        ],
+      nieuweId3(versie: 3, revisie: 0, frames: const [], apic: _apic(3, beeld, mime), doel: 0),
+      (0, grootte),
+    ],
   );
 }
 
@@ -227,12 +241,13 @@ _Ontleed _leesAiff(RandomAccessFile raf, int grootte, Uint8List beeld, String mi
   final id3 = chunks.where((c) => c.id == 'ID3 ' || c.id == 'id3 ').toList();
   if (id3.length > 1) return _fout('twee ID3-chunks');
 
-  Uint8List chunk(String id, Uint8List tag) => (BytesBuilder(copy: false)
-        ..add(id.codeUnits)
-        ..add(_be(tag.length))
-        ..add(tag)
-        ..add(tag.length.isOdd ? const [0] : const []))
-      .toBytes();
+  Uint8List chunk(String id, Uint8List tag) =>
+      (BytesBuilder(copy: false)
+            ..add(id.codeUnits)
+            ..add(_be(tag.length))
+            ..add(tag)
+            ..add(tag.length.isOdd ? const [0] : const []))
+          .toBytes();
   List<int> form(int lengte) => [...'FORM'.codeUnits, ..._be(lengte), ...soort.codeUnits];
 
   if (id3.isEmpty) {
@@ -241,7 +256,10 @@ _Ontleed _leesAiff(RandomAccessFile raf, int grootte, Uint8List beeld, String mi
       eerste: null,
       heeftPlaat: false,
       stukken: () {
-        final c = chunk('ID3 ', nieuweId3(versie: 3, revisie: 0, frames: const [], apic: _apic(3, beeld, mime), doel: 0));
+        final c = chunk(
+          'ID3 ',
+          nieuweId3(versie: 3, revisie: 0, frames: const [], apic: _apic(3, beeld, mime), doel: 0),
+        );
         return [Uint8List.fromList(form(formEind - 8 + c.length)), (12, formEind), c, (formEind, grootte)];
       },
     );
@@ -260,8 +278,16 @@ _Ontleed _leesAiff(RandomAccessFile raf, int grootte, Uint8List beeld, String mi
     eerste: _eerstePlaat(t.frames),
     heeftPlaat: t.frames.any((f) => f.id == 'APIC'),
     stukken: () {
-      final nieuw = chunk(c.id,
-          nieuweId3(versie: t.versie, revisie: t.revisie, frames: t.frames, apic: _apic(t.versie, beeld, mime), doel: c.lengte));
+      final nieuw = chunk(
+        c.id,
+        nieuweId3(
+          versie: t.versie,
+          revisie: t.revisie,
+          frames: t.frames,
+          apic: _apic(t.versie, beeld, mime),
+          doel: c.lengte,
+        ),
+      );
       return [
         Uint8List.fromList(form(formEind - 8 - (c.tot - c.van) + nieuw.length)),
         (12, c.van),
@@ -288,12 +314,12 @@ _Plaat? _apePlaat(_ApeItem it) {
   final soort = s.contains('front')
       ? 3
       : s.contains('back')
-          ? 4
-          : s.contains('media')
-              ? 6
-              : s.contains('other')
-                  ? 0
-                  : 20;
+      ? 4
+      : s.contains('media')
+      ? 6
+      : s.contains('other')
+      ? 0
+      : 20;
   return (soort: soort, beeld: beeld);
 }
 
@@ -304,13 +330,14 @@ bool _oudeVoorkant(_ApeItem it) {
   return s == 3 || s == 0;
 }
 
-Uint8List _apeItem(String sleutel, int vlaggen, Uint8List waarde) => (BytesBuilder(copy: false)
-      ..add(_le(waarde.length))
-      ..add(_le(vlaggen))
-      ..add(ascii.encode(sleutel))
-      ..addByte(0)
-      ..add(waarde))
-    .toBytes();
+Uint8List _apeItem(String sleutel, int vlaggen, Uint8List waarde) =>
+    (BytesBuilder(copy: false)
+          ..add(_le(waarde.length))
+          ..add(_le(vlaggen))
+          ..add(ascii.encode(sleutel))
+          ..addByte(0)
+          ..add(waarde))
+        .toBytes();
 
 /// Een APEv2-blok met kop en voet om [items] heen.
 @visibleForTesting
@@ -320,8 +347,21 @@ Uint8List apeBlok(List<Uint8List> items) {
     lijf.add(it);
   }
   final l = lijf.toBytes();
-  List<int> rand(int vlaggen) =>
-      [...'APETAGEX'.codeUnits, ..._le(2000), ..._le(l.length + 32), ..._le(items.length), ..._le(vlaggen), 0, 0, 0, 0, 0, 0, 0, 0];
+  List<int> rand(int vlaggen) => [
+    ...'APETAGEX'.codeUnits,
+    ..._le(2000),
+    ..._le(l.length + 32),
+    ..._le(items.length),
+    ..._le(vlaggen),
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+  ];
   return (BytesBuilder(copy: false)
         ..add(rand(0xA0000000)) // heeft een kop, dit is de kop
         ..add(l)
@@ -399,8 +439,13 @@ _Ontleed _leesApe(RandomAccessFile raf, int grootte, Uint8List beeld, String mim
 
 /// Leest met [lees], schrijft het nieuwe bestand ernaast, leest het met dezelfde lezer terug, en zet het pas dan
 /// over het origineel — met de oude datum. Zelfde controles als [schrijfVoorkantInFlac].
-_Uit _herschrijf(String pad, Uint8List beeld, bool alleenAlsLeeg, String? bewaarOud,
-    _Ontleed Function(RandomAccessFile raf, int grootte, Uint8List beeld, String mime) lees) {
+_Uit _herschrijf(
+  String pad,
+  Uint8List beeld,
+  bool alleenAlsLeeg,
+  String? bewaarOud,
+  _Ontleed Function(RandomAccessFile raf, int grootte, Uint8List beeld, String mime) lees,
+) {
   final k = beeldKenmerk(beeld);
   if (k == null) return (uitkomst: HoesUitkomst.nietTeLezen, oud: null, reden: 'geen JPEG of PNG');
   final f = File(pad);
@@ -414,7 +459,8 @@ _Uit _herschrijf(String pad, Uint8List beeld, bool alleenAlsLeeg, String? bewaar
     final o = lees(raf, grootte, beeld, k.mime);
     if (o.fout != null) return (uitkomst: HoesUitkomst.nietTeLezen, oud: null, reden: o.fout);
     final eerste = o.eerste;
-    if (eerste != null && listEquals(eerste.beeld, beeld)) return (uitkomst: HoesUitkomst.alGelijk, oud: null, reden: null);
+    if (eerste != null && listEquals(eerste.beeld, beeld))
+      return (uitkomst: HoesUitkomst.alGelijk, oud: null, reden: null);
     if (alleenAlsLeeg && o.heeftPlaat) return (uitkomst: HoesUitkomst.heeftAlEen, oud: null, reden: null);
     final oud = bewaarOud != null && eerste != null && (eerste.soort == 3 || eerste.soort == 0)
         ? bewaarOudeVoorkant(eerste.beeld, bewaarOud)
@@ -469,17 +515,19 @@ _Uit _herschrijf(String pad, Uint8List beeld, bool alleenAlsLeeg, String? bewaar
     tmp = null;
     try {
       f.setLastModifiedSync(st.modified);
-    } catch (_) {/* de hoes staat erin; alleen "recent toegevoegd" schuift dan */}
+    } catch (_) {
+      /* de hoes staat erin; alleen "recent toegevoegd" schuift dan */
+    }
     return (
       uitkomst: verwacht == grootte ? HoesUitkomst.zelfdeGrootte : HoesUitkomst.andereGrootte,
       oud: oud,
-      reden: null
+      reden: null,
     );
   } catch (e) {
     return (
       uitkomst: HoesUitkomst.mislukt,
       oud: null,
-      reden: e is PathAccessException ? 'staat open of op alleen-lezen' : '$e'
+      reden: e is PathAccessException ? 'staat open of op alleen-lezen' : '$e',
     );
   } finally {
     try {
@@ -492,16 +540,25 @@ _Uit _herschrijf(String pad, Uint8List beeld, bool alleenAlsLeeg, String? bewaar
 }
 
 /// Legt [beeld] als voorkant in de mp3 op [pad] (ID3v2) — zie de uitleg bovenaan. Synchroon, voor een isolate.
-({HoesUitkomst uitkomst, String? oud, String? reden}) schrijfVoorkantInMp3(String pad, Uint8List beeld,
-        {bool alleenAlsLeeg = false, String? bewaarOud}) =>
-    _herschrijf(pad, beeld, alleenAlsLeeg, bewaarOud, _leesMp3);
+({HoesUitkomst uitkomst, String? oud, String? reden}) schrijfVoorkantInMp3(
+  String pad,
+  Uint8List beeld, {
+  bool alleenAlsLeeg = false,
+  String? bewaarOud,
+}) => _herschrijf(pad, beeld, alleenAlsLeeg, bewaarOud, _leesMp3);
 
 /// Legt [beeld] als voorkant in de AIFF op [pad] (de `ID3 `-chunk) — zie de uitleg bovenaan.
-({HoesUitkomst uitkomst, String? oud, String? reden}) schrijfVoorkantInAiff(String pad, Uint8List beeld,
-        {bool alleenAlsLeeg = false, String? bewaarOud}) =>
-    _herschrijf(pad, beeld, alleenAlsLeeg, bewaarOud, _leesAiff);
+({HoesUitkomst uitkomst, String? oud, String? reden}) schrijfVoorkantInAiff(
+  String pad,
+  Uint8List beeld, {
+  bool alleenAlsLeeg = false,
+  String? bewaarOud,
+}) => _herschrijf(pad, beeld, alleenAlsLeeg, bewaarOud, _leesAiff);
 
 /// Legt [beeld] als voorkant in de WavPack of Monkey's Audio op [pad] (APEv2) — zie de uitleg bovenaan.
-({HoesUitkomst uitkomst, String? oud, String? reden}) schrijfVoorkantInApe(String pad, Uint8List beeld,
-        {bool alleenAlsLeeg = false, String? bewaarOud}) =>
-    _herschrijf(pad, beeld, alleenAlsLeeg, bewaarOud, _leesApe);
+({HoesUitkomst uitkomst, String? oud, String? reden}) schrijfVoorkantInApe(
+  String pad,
+  Uint8List beeld, {
+  bool alleenAlsLeeg = false,
+  String? bewaarOud,
+}) => _herschrijf(pad, beeld, alleenAlsLeeg, bewaarOud, _leesApe);

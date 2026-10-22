@@ -333,6 +333,10 @@ class ClientSession extends ChangeNotifier {
     return w == Verbindingsweg.rechtstreeks && _pcZegtThuis == true ? Verbindingsweg.thuis : w;
   }
 
+  /// Kan de pc het taalmodel vragen voor een radio op dit toestel (`radioModel` in `/api/config`, zie
+  /// `pc_model.dart`)? Onwaar tot hij het zei — een oudere pc zegt het nooit.
+  bool pcHeeftModel = false;
+
   /// Wat de pc het laatst zei: zit dit toestel op zijn thuisnetwerk (`opHetThuisnet` in `/api/config`)?
   /// Null = (nog) niet gevraagd, of de pc is ouder.
   bool? _pcZegtThuis;
@@ -828,6 +832,7 @@ class ClientSession extends ChangeNotifier {
     // stond `await`: een pc die niet antwoordde hield zo de hele start dertig seconden op.
     final sleutels = client.config().then((shared) {
       _zetThuis(shared['opHetThuisnet']);
+      pcHeeftModel = shared['radioModel'] == 'ja';
       final discogs = shared['discogsToken'] ?? '';
       final lastfm = shared['lastfmKey'] ?? '';
       final audiodb = shared['audiodbKey'] ?? '';

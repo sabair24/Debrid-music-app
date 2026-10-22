@@ -42,9 +42,9 @@ class Modelbudget {
   /// Wanneer de laatste lijst onderweg gevraagd werd, voor [kLijstAdem].
   DateTime? _laatsteLijst;
 
-  /// Lijsten per radio (`RadioBesturing.sessie`), de start meegeteld. Niet op schijf: een herstart is een
-  /// nieuwe radio.
-  final Map<int, int> _perRadio = {};
+  /// Lijsten per radio (`RadioBesturing.sessie` op de pc, `toestel:sessie` voor een toestel), de start
+  /// meegeteld. Niet op schijf: een herstart is een nieuwe radio.
+  final Map<Object, int> _perRadio = {};
 
   static const _uur = Duration(hours: 1);
 
@@ -57,7 +57,7 @@ class Modelbudget {
   static String _tijd(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
   /// Mag radio [radio] nu (onderweg) een lijst vragen?
-  Budgetantwoord lijst(int radio) {
+  Budgetantwoord lijst(Object radio) {
     _snoei();
     if ((_perRadio[radio] ?? 0) >= kLijstenPerRadio) {
       return (mag: false, waarom: '$kLijstenPerRadio lijsten voor deze radio');
@@ -67,14 +67,17 @@ class Modelbudget {
     }
     final vorige = _laatsteLijst;
     if (vorige != null && _klok().difference(vorige) < kLijstAdem) {
-      return (mag: false, waarom: 'minstens ${kLijstAdem.inMinutes} min ertussen (om ${_tijd(vorige.add(kLijstAdem))})');
+      return (
+        mag: false,
+        waarom: 'minstens ${kLijstAdem.inMinutes} min ertussen (om ${_tijd(vorige.add(kLijstAdem))})',
+      );
     }
     return (mag: true, waarom: null);
   }
 
   /// Eén API-aanroep voor een lijst. [start]: bij het starten (of afstemmen) — telt voor de radio, niet voor
   /// de uurgrens.
-  void lijstGevraagd(int radio, {bool start = false}) {
+  void lijstGevraagd(Object radio, {bool start = false}) {
     _perRadio[radio] = (_perRadio[radio] ?? 0) + 1;
     if (start) return;
     final nu = _klok();
@@ -107,16 +110,18 @@ class Modelbudget {
       if (!f.existsSync()) return;
       final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
       List<DateTime> lees(Object? l) => [
-            if (l is List)
-              for (final ms in l)
-                if (ms is int) DateTime.fromMillisecondsSinceEpoch(ms)
-          ];
+        if (l is List)
+          for (final ms in l)
+            if (ms is int) DateTime.fromMillisecondsSinceEpoch(ms),
+      ];
       _lijsten.addAll(lees(j['lijsten']));
       _sfeer.addAll(lees(j['sfeer']));
       final laatste = j['laatsteLijst'];
       if (laatste is int) _laatsteLijst = DateTime.fromMillisecondsSinceEpoch(laatste);
       _snoei();
-    } catch (_) {/* een kapot bestand: dan begint de telling opnieuw — hoogstens één uur te ruim */}
+    } catch (_) {
+      /* een kapot bestand: dan begint de telling opnieuw — hoogstens één uur te ruim */
+    }
   }
 
   void _bewaar() {
@@ -124,11 +129,15 @@ class Modelbudget {
     if (p == null) return;
     _snoei();
     try {
-      File(p).writeAsStringSync(jsonEncode({
-        'lijsten': [for (final t in _lijsten) t.millisecondsSinceEpoch],
-        'sfeer': [for (final t in _sfeer) t.millisecondsSinceEpoch],
-        if (_laatsteLijst case final t?) 'laatsteLijst': t.millisecondsSinceEpoch,
-      }));
-    } catch (_) {/* dan telt alleen het geheugen; na een herstart hoogstens één uur te ruim */}
+      File(p).writeAsStringSync(
+        jsonEncode({
+          'lijsten': [for (final t in _lijsten) t.millisecondsSinceEpoch],
+          'sfeer': [for (final t in _sfeer) t.millisecondsSinceEpoch],
+          if (_laatsteLijst case final t?) 'laatsteLijst': t.millisecondsSinceEpoch,
+        }),
+      );
+    } catch (_) {
+      /* dan telt alleen het geheugen; na een herstart hoogstens één uur te ruim */
+    }
   }
 }
