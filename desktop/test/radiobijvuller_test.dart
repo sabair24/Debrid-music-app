@@ -544,6 +544,70 @@ void main() {
     });
   });
 
+  // 22-10-2026: een radio vanaf "Petra — Ik Leef Voor Jou" kreeg op naam de christelijke rockband Petra (42.556
+  // fans) in plaats van de Vlaamse schlagerzangeres (51 fans). Het nummer zegt wie het is.
+  group('naamgenoten', () {
+    Map<String, dynamic> nummer(int artiestId, String artiest, String titel) => {
+          'title': titel,
+          'artist': {'id': artiestId, 'name': artiest},
+        };
+
+    test('DE KERN: de artiest bij wie het zaadnummer staat, ook met minder fans', () {
+      final treffers = [
+        nummer(303599251, 'Petra', 'Ik Leef Voor Jou'),
+        nummer(15039, 'Petra', 'Filthy Lucre'),
+        nummer(303599251, 'Petra', 'Ik leef voor jou (Live)'),
+        nummer(77, 'Petra & De Vrienden', 'Ik Leef Voor Jou'),
+      ];
+      expect(artiestUitNummers(treffers, 'Petra', 'Ik Leef Voor Jou'), 303599251);
+      expect(artiestUitNummers(treffers, 'Petra', 'Vlaanderen Mijn Land'), isNull,
+          reason: 'staat het nummer bij niemand met die naam, dan weet de titel het ook niet');
+      expect(artiestUitNummers([nummer(9, 'Clouseau', 'Ik Leef Voor Jou')], 'Petra', 'Ik Leef Voor Jou'), isNull,
+          reason: 'een andere artiest met dezelfde titel is geen Petra');
+    });
+
+    test('vastgezet: de startlijst en de buurt gaan naar die artiest, niet naar de naamgenoot', () async {
+      final gevraagd = <String>[];
+      final rec = RecommendService(
+          adem: Duration.zero,
+          haal: (url) async {
+            gevraagd.add(url);
+            if (url.contains('/search/artist')) {
+              return {
+                'data': [
+                  {'id': 15039, 'name': 'Petra', 'nb_fan': 42556},
+                  {'id': 303599251, 'name': 'Petra', 'nb_fan': 51},
+                ]
+              };
+            }
+            if (url.contains('/search?')) {
+              return {
+                'data': [nummer(303599251, 'Petra', 'Ik Leef Voor Jou')]
+              };
+            }
+            return {'data': []};
+          });
+      expect((await rec.bronArtiesten('Petra', metVerwant: false))?.id, 15039, reason: 'zo ging het: op fans');
+      final id = await rec.artiestVanNummer('Petra', 'Ik Leef Voor Jou');
+      expect(id, 303599251);
+      rec.zetArtiest('Petra', id!);
+      expect((await rec.bronArtiesten('Petra'))?.id, 303599251);
+      await rec.mixRadio('Petra');
+      expect(gevraagd.where((u) => u.contains('/artist/15039/')), isEmpty);
+      expect(gevraagd.where((u) => u.contains('/artist/303599251/radio')), hasLength(1));
+    });
+
+    test('aangesloten: de start zet de artiest van het zaadnummer vast, en afstemmen neemt die over', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final start = main.indexOf('final id = await rec.artiestVanNummer(artist, zaadTitel)');
+      final mix = main.indexOf('    recs = await rec.mixRadio(artist, smaak: smaak);');
+      expect(start, greaterThan(0));
+      expect(start < mix, isTrue, reason: 'vóór de startlijst');
+      expect(main.contains('        rec.zetArtiest(artist, id);\n        keuring.deezerArtiest = id;'), isTrue);
+      expect(main.contains('  if (keuring?.deezerArtiest case final id?) rec.zetArtiest(artist, id);'), isTrue);
+    });
+  });
+
   // Uitlevering 2: met een sleutel zoekt hij verder met het model, binnen het budget (`modelbudget.dart`).
   group('het model', () {
     const krap = (nood: false, verwacht: 1.0, reserveNodig: 0, reserveKlaar: 0);

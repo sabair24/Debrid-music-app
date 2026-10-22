@@ -16633,6 +16633,18 @@ Future<void> startRadio(BuildContext context, String artist,
     ..budget = viaPc ? null : _modelbudget;
   // Bekend, Gemengd of Ontdekken — zie `radiosmaak.dart`. Staat op het radiopaneel.
   final smaak = Radiosmaak.uit(cfg.radioSmaak);
+  // Wie het zaadnummer werkelijk maakte, is de artiest van deze radio — niet de naamgenoot met de meeste fans
+  // (22-10-2026: "Petra" werd de Amerikaanse christelijke rockband). Zie [RecommendService.artiestVanNummer].
+  if (zaadTitel != null && zaadTitel.trim().isNotEmpty) {
+    try {
+      final id = await rec.artiestVanNummer(artist, zaadTitel).timeout(const Duration(seconds: 8));
+      if (id != null) {
+        rec.zetArtiest(artist, id);
+        keuring.deezerArtiest = id;
+        log.line('radio "$artist — $zaadTitel": Deezer-artiest $id (van wie het nummer is)');
+      }
+    } catch (_) {/* dan op naam, zoals voorheen */}
+  }
   List<RecTrack> recs;
   try {
     recs = await rec.mixRadio(artist, smaak: smaak);
@@ -17007,6 +17019,9 @@ class _Radiokeuring {
   /// Het budget voor het model (`modelbudget.dart`): een vraag [onderweg] moet er binnen passen.
   Modelbudget? budget;
 
+  /// De Deezer-artiest van het zaadnummer, als die gevonden werd — zodat afstemmen dezelfde artiest neemt.
+  int? deezerArtiest;
+
   /// Vraag het model welke van [plekken] de SFEER van het zaad breken — zie `sfeerPrompt`. Eén vraag
   /// voor de hele lijst; [keur] wacht per plek op het antwoord. De zaadartiest en wat al gevraagd is
   /// gaan niet mee.
@@ -17176,6 +17191,8 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
   final zaad = radio.zaad;
   final keuring = _keuring != null && _keuring!.artiest == artist ? _keuring : null;
   final rec = RecommendService();
+  // Dezelfde artiest als bij de start, niet de naamgenoot met de meeste fans — zie [RecommendService.zetArtiest].
+  if (keuring?.deezerArtiest case final id?) rec.zetArtiest(artist, id);
   List<RecTrack> recs;
   try {
     recs = await rec.mixRadio(artist, smaak: smaak);
