@@ -7,65 +7,35 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/lossless_want.dart';
-import 'package:debridmusic/tiddl.dart';
+import 'package:debridmusic/tidaler.dart';
 
-/// Wat `tiddl download search -t track -n 10 "High Volume"` echt afdrukte op 22-10-2026 (tiddl 3.4.4), met de
-/// \r\n van Windows.
+/// Wat het zoekhulpje van tidaler ([kTidalZoekHulp]) teruggaf voor "DJ Massiv High Volume", gemeten op 22-10-2026 met
+/// tidaler 0.1.8, plus de band High Volume en Phlegmatic Dogs uit de vroegere tiddl-meting — met de \r\n van Windows.
 final _echt = [
-  'Auth token expires in 0d 3h 49m',
-  '┌────────────────────────────── Search Results ───────────────────────────────┐',
-  '│                                 High Volume                                 │',
-  '│ ┌──────┬──────┬───────────────────────────────────────────────┬───────────┐ │',
-  '│ │ #    │ Type │ Title                                         │ ID        │ │',
-  '│ ├──────┼──────┼───────────────────────────────────────────────┼───────────┤ │',
-  '│ │ 1    │ Tra… │ Phlegmatic Dogs - High Volume [STEREO]        │ 298793269 │ │',
-  '│ │ 2    │ Tra… │ High Volume - Our Secret [STEREO]             │ 39195534  │ │',
-  '│ │ 3    │ Tra… │ High Volume - Our Secret [STEREO]             │ 15311933  │ │',
-  '│ │ 4    │ Tra… │ Phlegmatic Dogs - High Volume [STEREO]        │ 298793269 │ │',
-  '│ │ 5    │ Tra… │ High Volume - Our Secret [STEREO]             │ 15311929  │ │',
-  '│ │ 6    │ Tra… │ High Volume - Our Secret [STEREO]             │ 15311927  │ │',
-  '│ │ 7    │ Tra… │ High Volume - Our Secret [STEREO]             │ 15524009  │ │',
-  '│ │ 8    │ Tra… │ High Volume - Our Secret [STEREO]             │ 15311930  │ │',
-  '│ │ 9    │ Tra… │ DJ Massiv - High Volume [STEREO]              │ 208442464 │ │',
-  '│ │ 10   │ Tra… │ High Volume - Our Secret [STEREO]             │ 15311932  │ │',
-  '│ │ 11   │ Tra… │ Junkie Kid - High Volume [STEREO]             │ 390624198 │ │',
-  '│ └──────┴──────┴───────────────────────────────────────────────┴───────────┘ │',
-  '└─────────────────────────────────────────────────────────────────────────────┘',
-  'Enter the number of the resource to add to your list (comma-separated for ',
-  'multiple, q/empty = quit): Total downloads: 0',
-  '',
-  'Aborted.',
+  'Let us check if you are already logged in...',
+  '{"id": "298793269", "artiest": "Phlegmatic Dogs", "titel": "High Volume", "stereo": true, "tags": ["LOSSLESS"]}',
+  '{"id": "39195534", "artiest": "High Volume", "titel": "Our Secret", "stereo": true, "tags": ["LOSSLESS"]}',
+  '{"id": "208442464", "artiest": "DJ Massiv", "titel": "High Volume", "seconden": 299, "stereo": true, "tags": ["LOSSLESS"]}',
+  '{"id": "208442481", "artiest": "DJ Massiv", "titel": "High Volume (Furax Remix)", "stereo": true, "tags": ["LOSSLESS"]}',
+  '{"id": "329212875", "artiest": "MI37", "titel": "High Volume", "stereo": true, "tags": ["LOSSLESS"]}',
+  '{"id": "208442464", "artiest": "DJ Massiv", "titel": "High Volume", "stereo": true}',
   '',
 ].join('\r\n');
 
 void main() {
-  group('de zoektabel van tiddl', () {
-    test('DE KERN: elk id één keer, artiest en titel apart, zonder [STEREO]', () {
+  group('de treffers van het zoekhulpje', () {
+    test('DE KERN: elk id één keer, artiest en titel apart, de versie in de titel', () {
       final t = tidalZoektreffers(_echt);
-      expect(t.length, 10, reason: 'elf regels, één id dubbel');
+      expect(t.length, 5, reason: 'zes regels JSON, één id dubbel; de begroeting telt niet');
       expect(t.first, (id: '298793269', artiest: 'Phlegmatic Dogs', titel: 'High Volume'));
       expect(t.where((x) => x.id == '208442464').single, (id: '208442464', artiest: 'DJ Massiv', titel: 'High Volume'));
       expect(t[1], (id: '39195534', artiest: 'High Volume', titel: 'Our Secret'));
+      expect(t[3].titel, 'High Volume (Furax Remix)');
     });
 
-    test('een lange titel loopt door op de volgende regel; alleen Atmos valt weg; kleuren en | tellen niet', () {
-      const uit =
-          '│ │ 1  │ Track │ Gorillaz - Feel Good Inc. (Stanton │ 2001 │ │\n'
-          '│ │    │       │ Warriors Remix) [STEREO]           │      │ │\n'
-          '│ │ 2  │ Track │ Gorillaz - Feel Good Inc [DOLBY_ATMOS] │ 2002 │ │\n'
-          '\x1B[1m│ │ 3  │ Track │ Gorillaz - Feel Good Inc [STEREO, DOLBY_ATMOS] │ 2003 │ │\x1B[0m\n'
-          '| | 4  | Track | Gorillaz - DARE              | 2004 | |\n';
-      final t = tidalZoektreffers(uit);
-      expect(t.map((x) => x.id), ['2001', '2003', '2004']);
-      expect(t.first.titel, 'Feel Good Inc. (Stanton Warriors Remix)');
-      expect(t[1].titel, 'Feel Good Inc');
-      expect(t.last.titel, 'DARE', reason: 'zonder modus blijft de titel zoals hij is');
-    });
-
-    test('geen tabel: niets, en geen uitzondering', () {
+    test('geen treffers: niets, en geen uitzondering', () {
       expect(tidalZoektreffers(''), isEmpty);
-      expect(tidalZoektreffers('Aborted.\r\n'), isEmpty);
-      expect(tidalZoektreffers('│ │ #    │ Type │ Title │ ID        │ │'), isEmpty, reason: 'de kopregel');
+      expect(tidalZoektreffers('{"fout": "niet ingelogd"}\r\n'), isEmpty);
     });
   });
 
@@ -101,7 +71,7 @@ void main() {
   group('wanneer TIDAL meedoet', () {
     const w = LosslessWant(artist: 'DJ Massiv vs the Rebel', title: 'High Volume');
 
-    test('DE KERN: pas in de derde ronde zonder FLAC van Soulseek, en alleen als tiddl er is', () {
+    test('DE KERN: pas in de derde ronde zonder FLAC van Soulseek, en alleen als tidaler er is', () {
       expect(kSoulseekRondesVoorTidal, 3);
       expect(wensMagNaarTidal(w, tidalErIs: true), isFalse, reason: 'de eerste ronde is van Soulseek');
       expect(wensMagNaarTidal(w.met(tries: 1), tidalErIs: true), isFalse);
@@ -129,23 +99,15 @@ void main() {
     });
   });
 
-  group('de opdrachtregel', () {
-    test('--sp wijst de keuringsmap aan, vóór url; de kwaliteit blijft op zijn plek', () {
-      final r = tiddlOpdracht(
-        tool: 'tiddl',
-        doel: 'track/208442464',
-        map: r'D:\k\tidal-wens-1',
-        zoekMap: r'D:\k\tidal-wens-1',
-      );
-      expect(r[r.indexOf('--sp') + 1], r'D:\k\tidal-wens-1');
-      expect(r.indexOf('--sp'), lessThan(r.indexOf('url')));
-      expect(r[3], 'max');
-      expect(r.last, 'track/208442464');
-      expect(
-        tiddlOpdracht(tool: 'tiddl', doel: 'album/1', map: 'm'),
-        isNot(contains('--sp')),
-        reason: 'de link plakken blijft zoals hij was',
-      );
+  group('de instellingen van tidaler', () {
+    test('de keuringsmap wordt de downloadmap, en hij slaat niets over', () {
+      final m = {
+        for (final x in tidalerInstellingen(map: r'D:\k\tidal-wens-1', kwaliteit: 'max')) x[0]: x[1],
+      };
+      expect(m['download_base_path'], r'D:\k\tidal-wens-1');
+      expect(m['skip_existing'], 'False', reason: 'een eerder gehaald nummer leverde anders niets en toch afloopcode 0');
+      expect(m['quality_audio'], 'HI_RES_LOSSLESS');
+      expect(tidalerUrl('track/208442464'), 'https://tidal.com/browse/track/208442464');
     });
   });
 
@@ -159,12 +121,12 @@ void main() {
 
     test('DE KERN: Soulseek eerst; TIDAL alleen in het einde van de ronde, en alleen als Soulseek niets gaf', () {
       final jacht = lijf('  Future<bool> _chaseWant(LosslessWant w) async {');
-      expect(jacht.indexOf('soulseek.search(w.query)'), lessThan(jacht.indexOf('_rondWensAf(')));
+      expect(jacht.indexOf('soulseek.search(w.query, achtergrond: true)'), allOf(greaterThan(0), lessThan(jacht.indexOf('_rondWensAf('))));
       expect(jacht, contains('if (lossless.isEmpty) return _rondWensAf(w, goed: false,'));
       expect(jacht, contains('return _rondWensAf(w, goed: goed,'));
       expect(jacht, isNot(contains('_wensViaTidal')));
       final einde = lijf('  Future<bool> _rondWensAf(');
-      expect(einde, contains('if (!goed && wensMagNaarTidal(w, tidalErIs: Tiddl.beschikbaar)) {'));
+      expect(einde, contains('if (!goed && wensMagNaarTidal(w, tidalErIs: Tidaler.beschikbaar)) {'));
       expect(einde, contains('tidalNee: tidalNee));'), reason: 'de afgewezen nummers gaan mee op schijf');
     });
 

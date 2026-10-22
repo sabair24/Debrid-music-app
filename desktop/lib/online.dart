@@ -38,7 +38,7 @@ import 'fingerprint.dart' show Fingerprinter, similarity, maybeSameRecordingScor
 import 'integriteit.dart';
 import 'keuring.dart' show Heelheid, kwaliteitZin;
 import 'wavpack_kop.dart' show readWvKop;
-import 'tiddl.dart' show Tiddl, haalVanTidal, kiesTidalTreffers, zoekOpTidal;
+import 'tidaler.dart' show Tidaler, haalVanTidal, kiesTidalTreffers, zoekOpTidal;
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
 import 'vervangjacht.dart';
@@ -3056,7 +3056,7 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  /// Waar wat van TIDAL niet op te bergen is terechtkomt: zichtbaar, zoals vroeger alles van tiddl.
+  /// Waar wat van TIDAL niet op te bergen is terechtkomt: zichtbaar, zoals vroeger alles van tiddl (nu tidaler).
   Directory get tidalRest => Directory('$_downloadsRoot${Platform.pathSeparator}TIDAL');
 
   /// Zoek in `_dubbel` wat er ten onrechte vervangen werd: kopieën die onder de regel van 29-09-2026
@@ -3496,16 +3496,16 @@ class DownloadManager extends ChangeNotifier {
   /// opnieuw plannen.
   ///
   /// **TIDAL pas na drie rondes zonder iets** ([wensMagNaarTidal]). Saber, 22-10-2026: *"Tidal is wel
-  /// enkel als back-up e, soulseek blijft prio."* Op Soulseek staat vaak een 24-bitkopie, en tiddl
-  /// levert alleen 16 bit / 44,1 kHz. Een nummer dat op Soulseek niet in FLAC staat, kreeg zo nooit
-  /// een FLAC, ook als je TIDAL hebt.
+  /// enkel als back-up e, soulseek blijft prio."* Op Soulseek staat vaak een 24-bitkopie. Een nummer dat
+  /// op Soulseek niet in FLAC staat, kreeg zo nooit een FLAC, ook als je TIDAL hebt. Sinds 22-10-2026 met
+  /// tidaler in plaats van tiddl: die krijgt van TIDAL ook 24 bit, waar TIDAL het heeft (zie tidaler.dart).
   Future<bool> _rondWensAf(LosslessWant w,
       {required bool goed,
       required Map<String, String> geweigerd,
       required List<VasteBron> betrapt}) async {
     final tidalNee = List<String>.of(w.tidalNee);
     var via = '';
-    if (!goed && wensMagNaarTidal(w, tidalErIs: Tiddl.beschikbaar)) {
+    if (!goed && wensMagNaarTidal(w, tidalErIs: Tidaler.beschikbaar)) {
       goed = await _wensViaTidal(w, tidalNee);
       if (goed) via = ' via TIDAL';
     }

@@ -436,7 +436,7 @@ void main() {
   group('TIDAL wordt aangesloten', () {
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
 
-    test('DE KERN: tiddl schrijft in de keuringsmap en er wordt daarna gekeurd', () {
+    test('DE KERN: TIDAL schrijft in de keuringsmap en er wordt daarna gekeurd', () {
       final i = main.indexOf('  Future<void> _ophalen() async {');
       expect(i, greaterThan(0));
       final lijf = main.substring(i, main.indexOf('\n  }\n', i));

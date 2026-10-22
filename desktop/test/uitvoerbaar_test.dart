@@ -1,6 +1,6 @@
 /// Nooit `exec` op iets wat er niet is.
 ///
-/// **Waarom dit bestaat.** De app zoekt ffmpeg, fpcalc, aria2c en tiddl door kandidaten af te lopen
+/// **Waarom dit bestaat.** De app zoekt ffmpeg, fpcalc, aria2c en tidaler door kandidaten af te lopen
 /// en er `--version` op te proberen. Dat leest als "gewoon proberen, een fout vangen we op", en op
 /// Windows en Linux klopt dat ook.
 ///
