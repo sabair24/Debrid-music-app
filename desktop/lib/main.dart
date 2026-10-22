@@ -25,6 +25,7 @@ import 'acoustid.dart';
 import 'aanbevelingplan.dart';
 import 'ai.dart';
 import 'radio.dart';
+import 'modelbudget.dart';
 import 'radiobijvuller.dart';
 import 'radiokeuze.dart';
 import 'radiobestand.dart' show kRadioSpeling;
@@ -16509,6 +16510,9 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
 /// Per speaker de uitgang waarop een radio van de pc speelt (`speaker_radio.dart`). Zie [startRadio].
 final Map<String, SpeakerRadio> _speakerRadios = {};
 
+/// Wat de radio's samen het taalmodel mogen vragen, ook over een herstart heen — zie `modelbudget.dart`.
+final Modelbudget _modelbudget = Modelbudget(pad: '$appDir${Platform.pathSeparator}modelbudget.json');
+
 Future<void> startRadio(BuildContext context, String artist,
     {String? titel, Track? zaad, int? seconden, bool hier = false, String? naar}) async {
   // Een zone op afstand gekozen: daar (Saber, 21-10-2026: een radio starten in een andere zone "op elk
@@ -16601,9 +16605,13 @@ Future<void> startRadio(BuildContext context, String artist,
       gespeeld: gespeeld,
       overslaan: _genericArtist,
     );
-    ai = AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace);
+    ai = AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
+      // Wat elke vraag kostte, in het logboek van de radio — zie `modelbudget.dart`.
+      ..bijGebruik = (soort, inT, uitT) => log.line('radio-model: $soort, $inT in / $uitT uit tokens');
   }
-  keuring.model = ai;
+  keuring
+    ..model = ai
+    ..budget = _modelbudget;
   // Bekend, Gemengd of Ontdekken — zie `radiosmaak.dart`. Staat op het radiopaneel.
   final smaak = Radiosmaak.uit(cfg.radioSmaak);
   List<RecTrack> recs;
@@ -16655,6 +16663,45 @@ Future<void> startRadio(BuildContext context, String artist,
         bron: 'buren'),
     keurEigen: (p) => keuring.keur(p, eigen: true),
     reserveKandidaten: (artiesten) => _reserveUit(lib, artiesten, zaadLaatst),
+    // Met een sleutel: ook de buurt op sfeer, en een vervolglijst van het model als de buurt niets nieuws
+    // meer geeft — binnen het budget (uitlevering 2 van het radioplan, zie `modelbudget.dart`).
+    vraagSfeer: ai == null ? null : (plekken) => keuring.vraagSfeer(plekken, onderweg: true),
+    model: switch ((ai, profiel)) {
+      (final m?, final wie?) => Radiomodel(
+          mag: () => _modelbudget.lijst(radio.sessie),
+          lijst: ({required alGekozen, required dieper}) async {
+            final s = radio.sessie;
+            final z = await zaadStijl;
+            final stijlen = zaadTitel == null ? const <String>[] : await stijlboek.stijlnamen(artist, zaadTitel);
+            final lijst = await m.maakRadiolijst(
+              artiest: artist,
+              titel: zaadTitel,
+              jaar: z.jaar,
+              stijlen: stijlen,
+              profiel: wie,
+              smaak: smaak,
+              alGekozen: alGekozen,
+              pastNiet: keuring.voorbeelden(Sfeeroordeel.pastNiet),
+              pastWel: keuring.voorbeelden(Sfeeroordeel.past),
+              dieper: dieper,
+              perAanroep: () => _modelbudget.lijstGevraagd(s),
+            );
+            // Wat het model koos, keurt de sfeer niet opnieuw — zie [_Radiokeuring.keur].
+            keuring.onthoud([...keuring.lijst, ...lijst]);
+            log.line('radio-lijst (vervolg${dieper ? ', dieper' : ''}): ${lijst.length} nummers van het model — '
+                '${lijst.map((n) => '${n.artiest} – ${n.titel}${n.bekend ? '' : '*'}').join('; ')}');
+            final gevonden = await rec.lijstOpDeezer(lijst, spoor: log.line);
+            return _radioplan(gevonden, lib,
+                zaadArtiest: artist,
+                zaad: zaad,
+                zaadTitel: zaadTitel,
+                al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller),
+                weert: steedsGeweigerd(radio.plan),
+                elkeLengte: keuring.elkeLengte,
+                bron: 'model');
+          }),
+      _ => null,
+    },
     spoor: log.line,
   );
   // Op een speaker (Saber, 22-10-2026: "pc draait, speaker speelt"): die speaker als uitgang. Eén uitgang per
@@ -16733,6 +16780,8 @@ Future<void> startRadio(BuildContext context, String artist,
             alGekozen: [for (final p in radio.plan) '${p.artiest} - ${p.titel}'],
             pastNiet: keuring.voorbeelden(Sfeeroordeel.pastNiet),
             pastWel: keuring.voorbeelden(Sfeeroordeel.past),
+            // Telt voor deze radio (12), niet voor de uurgrens: een start mag altijd.
+            perAanroep: () => _modelbudget.lijstGevraagd(sessie, start: true),
           );
           keuring.onthoud(lijst);
           log.line('radio-lijst: ${lijst.length} nummers van het model'
@@ -16935,10 +16984,16 @@ class _Radiokeuring {
   /// Per liedje ([_k]) of het in de sfeer past, zodra het model antwoordde.
   final Map<String, Future<bool>> _sfeer = {};
 
+  /// Het budget voor het model (`modelbudget.dart`): een vraag [onderweg] moet er binnen passen.
+  Modelbudget? budget;
+
   /// Vraag het model welke van [plekken] de SFEER van het zaad breken — zie `sfeerPrompt`. Eén vraag
   /// voor de hele lijst; [keur] wacht per plek op het antwoord. De zaadartiest en wat al gevraagd is
   /// gaan niet mee.
-  void vraagSfeer(List<Radioplek> plekken) {
+  ///
+  /// [onderweg]: voor een bijvulronde. Die moet binnen het budget passen; past hij niet, dan keurt de radio
+  /// zoals zonder model (stijl en tijdvak). De start en het afstemmen mogen altijd — ze tellen wel mee.
+  void vraagSfeer(List<Radioplek> plekken, {bool onderweg = false}) {
     final m = model;
     if (m == null) return;
     final zelf = artiestSleutel(artiest);
@@ -16947,6 +17002,15 @@ class _Radiokeuring {
         if (artiestSleutel(p.artiest) != zelf && !_sfeer.containsKey(_k(p.artiest, p.titel))) p
     ];
     if (nieuw.isEmpty) return;
+    final b = budget;
+    if (onderweg && b != null) {
+      final mag = b.sfeer();
+      if (!mag.mag) {
+        log.line('radio-sfeer overgeslagen voor ${nieuw.length} nummers — ${mag.waarom}');
+        return;
+      }
+    }
+    b?.sfeerGevraagd(start: !onderweg);
     final antwoord = () async {
       final z = await zaadStijl;
       final t = zaadTitel;

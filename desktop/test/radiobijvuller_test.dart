@@ -543,4 +543,140 @@ void main() {
       expect(zonder?.verwant, isEmpty);
     });
   });
+
+  // Uitlevering 2: met een sleutel zoekt hij verder met het model, binnen het budget (`modelbudget.dart`).
+  group('het model', () {
+    const krap = (nood: false, verwacht: 1.0, reserveNodig: 0, reserveKlaar: 0);
+    final vragen = <({List<String> alGekozen, bool dieper})>[];
+    setUp(vragen.clear);
+    Radiomodel model({bool mag = true, List<Radioplek> Function()? geeft, Object? fout}) => Radiomodel(
+          mag: () => mag ? (mag: true, waarom: null) : (mag: false, waarom: '3 per uur (volgende om 10:42)'),
+          lijst: ({required alGekozen, required dieper}) async {
+            vragen.add((alGekozen: alGekozen, dieper: dieper));
+            if (fout != null) throw fout;
+            return geeft?.call() ??
+                [
+                  Radioplek(artiest: 'Pommelien Thijs', titel: 'Lisa ${vragen.length}', bron: 'model'),
+                  Radioplek(artiest: 'Metejoor', titel: '1 Op Een Miljoen ${vragen.length}', bron: 'model'),
+                ];
+          },
+        );
+
+    Future<RadioBesturing> opRadio() async {
+      final r = await radio();
+      // De zaadartiest klonk lang genoeg geleden: anders is de buurt niet op, alleen even dicht.
+      r.plan.first.voorbijOp = r.voorbijteller - kArtiestTerug;
+      return r;
+    }
+
+    test('DE KERN: de buurt is op → een vervolglijst van het model; vanaf de tweede "dieper"', () async {
+      final r = await opRadio();
+      final log = <String>[];
+      final b = Radiobijvuller(
+          radio: r,
+          deezer: _Deezer(perArtiest: 0).als,
+          ankers: const ['Niels Destadsbader'],
+          metVerwant: true,
+          maakPlan: _plan,
+          model: model(),
+          spoor: log.add);
+      expect(await b(r.sessie, r.bijvulRonde, krap), greaterThan(0));
+      expect([for (final p in r.plan) if (p.bron == 'model') p.artiest], ['Pommelien Thijs', 'Metejoor']);
+      expect(log.last, contains('[model]'));
+      expect(log.last, contains('model: 2 gevonden → 2 te halen'));
+      expect(vragen.single.dieper, isFalse);
+      expect(vragen.single.alGekozen.last, 'Niels Destadsbader - Vuur en vlam', reason: 'recentste eerst');
+      await b(r.sessie, r.bijvulRonde, krap);
+      expect(vragen.last.dieper, isTrue);
+      expect(vragen.last.alGekozen.first, startsWith('Metejoor - 1 Op Een Miljoen'),
+          reason: 'wat het model net gaf, staat er nu bij');
+      r.stop();
+    });
+
+    test('DE GRENS: geeft de buurt nog iets nieuws, dan wordt het model niet gevraagd', () async {
+      final r = await radio();
+      final b = Radiobijvuller(
+          radio: r, deezer: _Deezer().als, ankers: const ['Niels Destadsbader'], metVerwant: true, maakPlan: _plan, model: model());
+      expect(await b(r.sessie, r.bijvulRonde, _vraag), greaterThan(0));
+      expect(vragen, isEmpty, reason: 'elke vraag kost geld');
+      r.stop();
+    });
+
+    test('het budget zegt nee: geen vraag, wel herhalen — en het logboek zegt waarom', () async {
+      final r = await opRadio();
+      r.eigenVanZaad = () => [_t('Niels Destadsbader', 'Pa')];
+      final log = <String>[];
+      final b = Radiobijvuller(
+          radio: r,
+          deezer: _Deezer(perArtiest: 0).als,
+          ankers: const ['Niels Destadsbader'],
+          metVerwant: true,
+          maakPlan: _plan,
+          model: model(mag: false),
+          spoor: log.add);
+      expect(await b(r.sessie, r.bijvulRonde, krap), greaterThan(0), reason: 'het vangnet, zoals zonder model');
+      expect(vragen, isEmpty);
+      expect(log.last, contains('model overgeslagen — 3 per uur (volgende om 10:42)'));
+      expect(log.last, isNot(contains('[model]')));
+      r.stop();
+    });
+
+    test('DE VAL: een fout van het model is geen stilte — dan herhaalt hij zoals zonder model', () async {
+      final r = await opRadio();
+      r.eigenVanZaad = () => [_t('Niels Destadsbader', 'Pa')];
+      final log = <String>[];
+      final b = Radiobijvuller(
+          radio: r,
+          deezer: _Deezer(perArtiest: 0).als,
+          ankers: const ['Niels Destadsbader'],
+          metVerwant: true,
+          maakPlan: _plan,
+          model: model(fout: Exception('429')),
+          spoor: log.add);
+      expect(await b(r.sessie, r.bijvulRonde, krap), greaterThan(0));
+      expect(log.last, contains('het model gaf niets'));
+      r.stop();
+    });
+
+    test('DE VAL: een radio die intussen stopte krijgt niets meer van een laat antwoord', () async {
+      final r = await opRadio();
+      final b = Radiobijvuller(
+          radio: r,
+          deezer: _Deezer(perArtiest: 0).als,
+          ankers: const ['Niels Destadsbader'],
+          metVerwant: true,
+          maakPlan: _plan,
+          model: model(geeft: () {
+            r.stop();
+            return [Radioplek(artiest: 'Pommelien Thijs', titel: 'Lisa', bron: 'model')];
+          }));
+      expect(await b(r.sessie, r.bijvulRonde, krap), 0);
+      expect(r.plan.where((p) => p.bron == 'model'), isEmpty);
+    });
+
+    test('de buurt op sfeer: per ronde één vraag, met precies wat die ronde voorstelt', () async {
+      final r = await radio();
+      final gevraagd = <List<String>>[];
+      final planBijVraag = <int>[];
+      late final RadioBesturing rr;
+      final b = Radiobijvuller(
+          radio: r,
+          deezer: _Deezer().als,
+          ankers: const ['Niels Destadsbader'],
+          metVerwant: true,
+          maakPlan: _plan,
+          vraagSfeer: (pl) {
+            planBijVraag.add(rr.plan.length);
+            gevraagd.add([for (final p in pl) '${p.artiest} — ${p.titel}']);
+          });
+      rr = r;
+      final voor = r.plan.length;
+      await b(r.sessie, r.bijvulRonde, _vraag);
+      expect(gevraagd, hasLength(1));
+      expect(gevraagd.single, [for (final p in r.plan.sublist(voor)) '${p.artiest} — ${p.titel}'],
+          reason: 'precies de nieuwe plekken');
+      expect(planBijVraag, [voor], reason: 'gevraagd vóór ze in het plan kwamen, zodat de keuring erop wacht');
+      r.stop();
+    });
+  });
 }
