@@ -355,6 +355,10 @@ class LanServer {
   /// null = de pc kan zijn eigen zone (nog) niet laten bedienen.
   Future<String?> Function(Map<String, dynamic> opdracht)? bijZoneOpdracht;
 
+  /// Een radio op een speaker (Saber, 22-10-2026: "pc draait, speaker speelt"): de pc start hem, met
+  /// [speaker] als uitgang (`speaker_radio.dart`). Gezet door main; geeft null of de reden waarom niet.
+  Future<String?> Function(String speaker, Map<String, dynamic> opdracht)? bijSpeakerRadio;
+
   /// Per toestel de open lijnen (`/api/zones/events`) waarover een opdracht naar dat toestel kan.
   final Map<String, List<void Function(String event, Map<String, dynamic> data)>> _zoneLijnen = {};
 
@@ -466,6 +470,11 @@ class LanServer {
             await cast.voegToe(speaker, ids, hierna: cmd == 'hierna');
           case 'nu':
             await cast.speelNu(speaker, '${op['id'] ?? ''}');
+          case 'radio':
+            final f = bijSpeakerRadio;
+            if (f == null) return (status: 409, antwoord: {'error': 'De pc kan nu geen radio starten.'});
+            final fout = await f(speaker, metVan);
+            if (fout != null) return (status: 409, antwoord: {'error': fout});
           case 'groepeer':
             final leden = [
               for (final x in (op['leden'] as List? ?? const []))

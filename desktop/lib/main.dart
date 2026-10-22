@@ -54,6 +54,7 @@ import 'zone_speler.dart';
 import 'zone_opdracht.dart';
 import 'volgbron.dart' show Volgbron;
 import 'samen.dart' show KlokIjk, SamenAnker, SamenVolger;
+import 'speaker_radio.dart';
 import 'lan/zones.dart' show ZoneSoort, ZoneStaat, positieNu;
 import 'lan/server.dart' show LanServer;
 import 'ui/knopbewegingen.dart';
@@ -1562,6 +1563,17 @@ Future<void> main() async {
       }
       // Een opdracht van een toestel voor de zone van de pc zelf.
       s.bijZoneOpdracht = zoneUitvoerder.voerUit;
+      // Een radio op een speaker: de pc draait hem, de speaker speelt (Saber, 22-10-2026).
+      s.bijSpeakerRadio = (speaker, op) async {
+        final ctx = appNavigator.currentContext;
+        if (ctx == null || !ctx.mounted) return 'De app op de pc staat niet open.';
+        final zaadId = '${op['zaad'] ?? ''}';
+        final zaad = zaadId.isEmpty ? null : verder.bron.nummer(zaadId);
+        final titel = '${op['titel'] ?? ''}';
+        await startRadio(ctx, '${op['artiest'] ?? ''}',
+            zaad: zaad, titel: titel.isEmpty ? null : titel, hier: true, naar: speaker);
+        return null;
+      };
       zoneLijst
         ..zetVerbonden(true)
         ..zet(s.zones.snapshot());
@@ -16494,18 +16506,18 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
 /// uitvoering als je die hebt, en anders het eerste dat gehaald wordt, [seconden] lang. Eerst viel
 /// het liedje daar helemaal weg: het plan weert het zaadnummer, en alleen een eigen nummer werd er
 /// vooraan weer in gezet (eindbeoordeling van 26-09-2026).
+/// Per speaker de uitgang waarop een radio van de pc speelt (`speaker_radio.dart`). Zie [startRadio].
+final Map<String, SpeakerRadio> _speakerRadios = {};
+
 Future<void> startRadio(BuildContext context, String artist,
-    {String? titel, Track? zaad, int? seconden, bool hier = false}) async {
+    {String? titel, Track? zaad, int? seconden, bool hier = false, String? naar}) async {
   // Een zone op afstand gekozen: daar (Saber, 21-10-2026: een radio starten in een andere zone "op elk
   // toestel meteen"). [hier] als het per se dit toestel moet zijn: bij overnemen, of als een ander
   // toestel dit toestel net vroeg een radio te starten.
   final afstand = hier ? null : _misschien<GekozenZone>(context)?.opAfstand;
   if (afstand != null) {
+    // Ook een speaker: dan draait de pc de radio en speelt de speaker (`speaker_radio.dart`).
     final waar = afstand.zone?.naam ?? 'de gekozen zone';
-    if (afstand.zone?.soort == ZoneSoort.speaker) {
-      _srcToast(context, 'Een radio op een speaker kan nog niet. Kies de pc als zone en laat die naar $waar spelen.');
-      return;
-    }
     _srcToast(context, '📻 Radio starten voor $artist op $waar…');
     return afstand.startRadio(artist, zaad: zaad, titel: titel);
   }
@@ -16645,6 +16657,21 @@ Future<void> startRadio(BuildContext context, String artist,
     reserveKandidaten: (artiesten) => _reserveUit(lib, artiesten, zaadLaatst),
     spoor: log.line,
   );
+  // Op een speaker (Saber, 22-10-2026: "pc draait, speaker speelt"): die speaker als uitgang. Eén uitgang per
+  // speaker, zodat een nieuwe radio op dezelfde speaker hem niet eerst laat pauzeren.
+  Radiospeler? uitgang;
+  if (naar != null) {
+    final cast = context.read<LanSharing>().server?.cast;
+    if (cast == null) {
+      _srcToast(context, 'Een radio op een speaker kan alleen vanaf de pc.');
+      return;
+    }
+    final al = _speakerRadios[naar];
+    uitgang = al != null && identical(al.cast, cast)
+        ? al
+        : _speakerRadios[naar] = SpeakerRadio(
+            cast: cast, speaker: naar, idVan: (t) => lib.gedeeldId(t.path), naam: () => radio.naam);
+  }
   int? gestart;
   final reden = await radio.start([
     if (zaad != null)
@@ -16662,7 +16689,7 @@ Future<void> startRadio(BuildContext context, String artist,
           zaad: true),
     for (final p in plan)
       if (p.eigen == null || artiestSleutel(p.artiest) == zelf) p,
-  ], naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijvul: bijvuller.call, spoor: log.line,
+  ], naar: uitgang, naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijvul: bijvuller.call, spoor: log.line,
       bijStart: (s) {
     gestart = s;
     _keuring = keuring;

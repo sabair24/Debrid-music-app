@@ -271,6 +271,24 @@ void main() {
     });
   });
 
+  test('begint de radio zonder iets speelbaars, dan start het eerste dat landt de speaker', () {
+    fakeAsync((fa) {
+      final m = maak(fa);
+      unawaited(m.uit.playRadio(const []));
+      fa.flushMicrotasks();
+      expect(m.sonos.opdrachten, isEmpty);
+      expect(m.cast.rijVan(_move.id), isNull);
+      final a = item(ids[0]);
+      m.uit.voegToeAanRadio([a]);
+      fa.flushMicrotasks();
+      expect(m.sonos.opdrachten, ['open ${titel(ids[0])}']);
+      expect(m.cast.laatsteStanden.single.radio, 'Radio A');
+      expect(identical(m.uit.radioQueue.single, a), isTrue);
+      m.cast.dispose();
+      fa.flushTimers(flushPeriodicTimers: false);
+    });
+  });
+
   test('"volgende" op het laatste nummer: wil verder, en het eerste nieuwe speelt meteen', () {
     fakeAsync((fa) {
       final m = maak(fa);

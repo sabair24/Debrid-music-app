@@ -125,6 +125,14 @@ class SpeakerRadio extends ChangeNotifier implements Radiospeler {
     _wilVerder = false;
     unawaited(() async {
       try {
+        // Begon de radio zonder iets speelbaars (een titel die nog gehaald moest worden), dan is er nog geen
+        // sessie op de speaker: het eerste dat landt, start hem.
+        if (cast.rijVan(speaker) == null) {
+          _index = eerste;
+          await cast.play(speaker, [for (final it in speelbaar) _id[it]!], 0, alsZone: true, radio: naam());
+          notifyListeners();
+          return;
+        }
         await cast.voegToe(speaker, [for (final it in speelbaar) _id[it]!], hierna: false);
         // Wie op "volgende" drukte op het laatste nummer, krijgt het eerste nieuwe meteen (een droge rij doet
         // de cast zelf).
