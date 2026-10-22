@@ -172,6 +172,7 @@ class Modelvragen {
           pastWel: pastWel,
           zaadBpm: zaadBpm,
           bpm: bpm,
+          gekozen: v['gekozen'] == true,
         );
         return <String, dynamic>{'weg': weg.toList()..sort()};
       }();
@@ -286,6 +287,7 @@ class PcModel extends AiService {
     bool start = false,
     double? zaadBpm,
     List<double?> bpm = const [],
+    bool gekozen = false,
   }) async {
     if (kandidaten.isEmpty) return const {};
     // Het tempo meet de pc zelf (`tempo.dart`): een toestel heeft geen ffmpeg.
@@ -299,6 +301,7 @@ class PcModel extends AiService {
       'kandidaten': _paren(kandidaten),
       'pastNiet': _paren(pastNiet),
       'pastWel': _paren(pastWel),
+      if (gekozen) 'gekozen': true,
     });
     final weg = s['weg'];
     return {

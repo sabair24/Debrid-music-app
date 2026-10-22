@@ -94,6 +94,10 @@ Map<String, dynamic> sfeerSchema() => {
 /// (pop/soul) en een jaar (1987), en die klopten allebei; wat niet klopte is iets wat in geen enkel
 /// label staat. Het model hoort dat wel. De voorstellen van Deezer gaan daarom als één lijst naar het
 /// model; de eigen lijst van het model niet, want die koos het al op sfeer.
+///
+/// [gekozen]: de nummers komen uit de eigen lijst van het model, en dan is de vraag lichter ([kGekozenSfeerZin]).
+/// Sinds 22-10-2026 gaat ook die lijst hier langs, om het tempo (de trage ballads in de Petra-radio); maar de strenge
+/// vraag keurde daarna af wat de lijst bewust in de taal van het zaad koos.
 String sfeerPrompt({
   required String artiest,
   String? titel,
@@ -104,6 +108,7 @@ String sfeerPrompt({
   List<({String artiest, String titel})> pastWel = const [],
   double? zaadBpm,
   List<double?> bpm = const [],
+  bool gekozen = false,
 }) {
   final zaad = titel == null || titel.trim().isEmpty ? artiest : '$artiest - $titel';
   final feiten = [
@@ -114,6 +119,17 @@ String sfeerPrompt({
   final lijst = [
     for (var i = 0; i < kandidaten.length; i++) '${i + 1}. ${kandidaten[i].artiest} - ${kandidaten[i].titel}${tempo(i)}'
   ];
+  if (gekozen) {
+    return '''
+Een radio rond: $zaad${feiten.isEmpty ? '' : ' ($feiten)'}
+
+$kGekozenSfeerZin $kTaalSfeerZin
+${zaadBpm == null ? '' : '\n${tempoZin(zaadBpm)}\n'}${_voorbeeldZinnen(pastNiet, pastWel)}
+${lijst.join('\n')}
+
+Geef de nummers terug die weg moeten.
+''';
+  }
   return '''
 Een radio rond: $zaad${feiten.isEmpty ? '' : ' ($feiten)'}
 
@@ -214,6 +230,15 @@ const String kTaalSfeerZin = 'Taal: is het zaad NIET in het Engels gezongen, dan
     'zo een nummer alleen als het een echt trage ballad is, zoals Marco Borsato - Afscheid Nemen Bestaat Niet; een '
     'popnummer in middentempo zoals Marco Borsato - Dromen Zijn Bedrog hoort er wel bij. Twijfel je, laat het dan '
     'staan. Dit gaat voor "wees streng" en voor de tempozin. Bij een Engelstalig zaad geldt dit niet.';
+
+/// De vraag voor wat het model zelf al koos ([sfeerPrompt] met `gekozen`): alleen wat de sfeer echt breekt, en bij
+/// twijfel blijft het staan. Gemeten op 22-10-2026, radio vanaf Petra (3.9.567): met de strenge vraag gingen in de
+/// echte lijst 8 van de 10 Nederlandstalige nummers weg, ook Clouseau — Domino (149 BPM) en Marco Borsato — Dromen
+/// Zijn Bedrog, dat Saber met name goedkeurde.
+const String kGekozenSfeerZin = 'Een ander systeem koos de nummers hieronder al voor deze radio - bewust ook '
+    'nummers in de taal van het zaad en uit verwante genres. Welke breken de sfeer ECHT? Noem alleen een nummer dat '
+    'duidelijk niet in deze radio hoort: een trage ballad in een radio met tempo, of een totaal andere stijl. '
+    'Twijfel je, laat het dan staan.';
 
 /// Een gemeten tempo zoals de sfeervraag het ziet. Onder [kTempoTwijfelOnder] BPM staat het dubbele erbij: een
 /// meter kan het halve tempo niet van het echte onderscheiden. Gemeten op 22-10-2026, radio vanaf Petra: Clouseau —

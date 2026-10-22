@@ -123,6 +123,29 @@ void main() {
           reason: 'die zin wees alle vijf Nederlandstalige nummers af');
     });
 
+    // Gemeten op 22-10-2026, radio vanaf Petra (3.9.567): de strenge vraag wees 8 van de 10 Nederlandstalige nummers
+    // af die de lijst van het model bewust koos; met de lichtere vraag (6 rondes, de echte lijst + 2 trage ballads)
+    // gingen elke keer precies de drie trage ballads weg en bleef de rest.
+    test('wat het model zelf koos, krijgt de lichtere vraag: alleen wat de sfeer echt breekt', () {
+      final licht = sfeerPrompt(
+        artiest: 'Petra',
+        titel: 'Ik Leef Voor Jou',
+        kandidaten: k,
+        zaadBpm: 142,
+        bpm: const [94, 144],
+        gekozen: true,
+      );
+      expect(licht, contains(kGekozenSfeerZin));
+      expect(licht, contains(kTaalSfeerZin));
+      expect(licht, contains(tempoZin(142)));
+      expect(licht, contains('1. Benny Neyman - Waarom fluister ik je naam nog (~94 BPM, of ~188)'));
+      expect(licht, isNot(contains('Wees streng')));
+      expect(kGekozenSfeerZin, contains('Twijfel je, laat het dan staan'));
+      final streng = sfeerPrompt(artiest: 'Petra', titel: 'Ik Leef Voor Jou', kandidaten: k);
+      expect(streng, contains('Wees streng'));
+      expect(streng, isNot(contains(kGekozenSfeerZin)));
+    });
+
     test('zonder meting zoals voorheen; een nummer zonder meting zonder getal', () {
       final zonder = sfeerPrompt(artiest: 'Petra', titel: 'Ik Leef Voor Jou', kandidaten: k);
       expect(zonder, isNot(contains('BPM')));
@@ -154,8 +177,9 @@ void main() {
         2,
         reason: 'de startlijst en de vervolglijst',
       );
-      expect(main.contains('          keuring.vraagSfeer(vanModel);\n'), isTrue);
-      expect(main.contains('            keuring.vraagSfeer(vanModel, onderweg: true);\n'), isTrue);
+      expect(main.contains('          keuring.vraagSfeer(vanModel, gekozen: true);\n'), isTrue);
+      expect(main.contains('            keuring.vraagSfeer(vanModel, onderweg: true, gekozen: true);\n'), isTrue);
+      expect(main.contains('          bpm: bpm,\n          gekozen: gekozen);'), isTrue, reason: 'tot in de vraag');
       expect(
         main.contains('          mag: () => !keuring.lijstIsBinnen\n'),
         isTrue,
@@ -167,7 +191,7 @@ void main() {
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(main.contains('    ..tempo = lib.isRemote ? null : _radiotempo;'), isTrue);
       expect(main.contains('        tempo: _radiotempo,\n'), isTrue);
-      expect(main.contains('          zaadBpm: zaadBpm,\n          bpm: bpm);'), isTrue);
+      expect(main.contains('          zaadBpm: zaadBpm,\n          bpm: bpm,\n          gekozen: gekozen);'), isTrue);
     });
   });
 }
