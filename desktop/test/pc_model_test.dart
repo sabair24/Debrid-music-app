@@ -27,6 +27,7 @@ class _Model extends AiService {
   final lijsten = <Map<String, Object?>>[];
   final sfeervragen = <List<({String artiest, String titel})>>[];
   final tempi = <({double? zaad, List<double?> rij})>[];
+  final lijstTempi = <double?>[];
   Completer<void> klaar = Completer<void>()..complete();
   Object? fout;
 
@@ -45,8 +46,10 @@ class _Model extends AiService {
     void Function()? perAanroep,
     bool dieper = false,
     bool start = false,
+    double? zaadBpm,
   }) async {
     perAanroep?.call();
+    lijstTempi.add(zaadBpm);
     lijsten.add({
       'artiest': artiest,
       'titel': titel,
@@ -95,9 +98,14 @@ class _NepTempo extends Radiotempo {
   final List<double?> Function(List<({String artiest, String titel, String? pad, int? seconden})> rij) antwoord;
 
   @override
-  Future<List<double?>> vanRij(List<({String artiest, String titel, String? pad, int? seconden})> rij,
-          {int tegelijk = 4}) async =>
-      antwoord(rij);
+  Future<double?> van(String artiest, String titel, {String? pad, int? seconden}) async =>
+      antwoord([(artiest: artiest, titel: titel, pad: pad, seconden: seconden)]).first;
+
+  @override
+  Future<List<double?>> vanRij(
+    List<({String artiest, String titel, String? pad, int? seconden})> rij, {
+    int tegelijk = 4,
+  }) async => antwoord(rij);
 }
 
 const _profiel = SmaakProfiel(topArtiesten: ['Clouseau (40)'], perDecennium: {1990: 448}, gespeeld: ['Bazart']);
@@ -187,6 +195,25 @@ void main() {
       expect(model.tempi.single.rij, [94, null]);
     });
 
+    test('een lijst voor een toestel: de pc meet het tempo van het zaad en geeft het mee', () async {
+      final metTempo = Modelvragen(
+        model: () => model,
+        budget: budget,
+        klok: () => nu,
+        tempo: _NepTempo((r) => [for (final _ in r) 142]),
+      );
+      final b = metTempo.begin({
+        'soort': 'lijst',
+        'start': true,
+        'artiest': 'Petra',
+        'titel': 'Ik Leef Voor Jou',
+      }, toestel: 'gsm');
+      for (var i = 0; i < 5 && metTempo.stand(b['id'] as String)['klaar'] != true; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(model.lijstTempi.single, 142);
+    });
+
     test('zonder sleutel of met een onbekende vraag: meteen een fout, en het model wordt niet gevraagd', () {
       final zonder = Modelvragen(model: () => null, budget: budget);
       expect(zonder.begin({'soort': 'lijst', 'artiest': 'X'})['fout'], contains('geen AI-sleutel'));
@@ -202,15 +229,25 @@ void main() {
       expect(main.contains('      s.modelvragen = Modelvragen(\n'), isTrue);
       expect(main.contains('  final viaPc = remote != null && context.read<ClientSession>().pcHeeftModel;'), isTrue);
       expect(
-          main.contains(
-              "  if (viaPc && remote != null) return PcModel((v) => remote.ask('/api/radio', v), radio: () => radio.sessie);"),
-          isTrue);
-      expect(main.contains('    ai = _radioModel(cfg: cfg, lib: lib, remote: remote, viaPc: viaPc, radio: radio, log: log);'),
-          isTrue,
-          reason: 'de radio vanaf een nummer');
-      expect(main.contains('    final ai = _radioModel(cfg: cfg, lib: lib, remote: remote, viaPc: viaPc, radio: radio, log: log);'),
-          isTrue,
-          reason: 'en de radio uit een zin');
+        main.contains(
+          "  if (viaPc && remote != null) return PcModel((v) => remote.ask('/api/radio', v), radio: () => radio.sessie);",
+        ),
+        isTrue,
+      );
+      expect(
+        main.contains(
+          '    ai = _radioModel(cfg: cfg, lib: lib, remote: remote, viaPc: viaPc, radio: radio, log: log);',
+        ),
+        isTrue,
+        reason: 'de radio vanaf een nummer',
+      );
+      expect(
+        main.contains(
+          '    final ai = _radioModel(cfg: cfg, lib: lib, remote: remote, viaPc: viaPc, radio: radio, log: log);',
+        ),
+        isTrue,
+        reason: 'en de radio uit een zin',
+      );
       expect(main.contains('    ..budget = viaPc ? null : _modelbudget\n'), isTrue);
       expect(sessie.contains("      pcHeeftModel = shared['radioModel'] == 'ja';"), isTrue);
     });

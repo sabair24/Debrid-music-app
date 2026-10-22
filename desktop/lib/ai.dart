@@ -265,6 +265,7 @@ class AiService {
     bool dieper = false,
     // Alleen voor wie het budget elders bijhoudt: de pc, voor een toestel (zie `pc_model.dart`).
     bool start = false,
+    double? zaadBpm,
   }) async {
     final sleutel = sleutelVan().trim();
     if (sleutel.isEmpty || artiest.trim().isEmpty) return const [];
@@ -276,7 +277,7 @@ class AiService {
       // Elke aanroep telt voor het budget, ook de tweede — zie `modelbudget.dart`.
       perAanroep?.call();
       final uit = await _radiolijstEenmaal(
-          sleutel, artiest, titel, jaar, stijlen, genre, profiel, smaak, alGekozen, pastNiet, pastWel, dieper);
+          sleutel, artiest, titel, jaar, stijlen, genre, profiel, smaak, alGekozen, pastNiet, pastWel, dieper, zaadBpm);
       if (uit.length > beste.length) beste = uit;
       if (beste.length >= kMinModelNummers) break;
     }
@@ -298,7 +299,8 @@ class AiService {
       List<String> alGekozen,
       List<({String artiest, String titel})> pastNiet,
       List<({String artiest, String titel})> pastWel,
-      bool dieper) async {
+      bool dieper,
+      double? zaadBpm) async {
     final body = await _verstuur(
       {
         'model': kRadioModel,
@@ -321,7 +323,8 @@ class AiService {
                 alGekozen: alGekozen,
                 pastNiet: pastNiet,
                 pastWel: pastWel,
-                dieper: dieper),
+                dieper: dieper,
+                zaadBpm: zaadBpm),
           }
         ],
       },

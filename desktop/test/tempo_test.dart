@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:debridmusic/aanbevelingplan.dart' show SmaakProfiel;
 import 'package:debridmusic/radiolijst.dart';
 import 'package:debridmusic/tempo.dart';
 
@@ -108,6 +109,39 @@ void main() {
       expect(zonder, isNot(contains('BPM')));
       final half = sfeerPrompt(artiest: 'Petra', kandidaten: k, zaadBpm: 142, bpm: const [null, 144]);
       expect(half, contains('1. Benny Neyman - Waarom fluister ik je naam nog\n'));
+    });
+
+    // Gemeten op 22-10-2026, radio vanaf Petra — Ik Leef Voor Jou: 37 keer Engelstalige eurodance, en de lijst van het
+    // model zette er trage ballads tussen. Saber: "Mengeling van beide" (Nederlandstalig up-tempo én 90s-eurodance).
+    test('de lijst hoort de taalregel en het tempo; de sfeervraag de taalregel', () {
+      final lijst = nummersPrompt(
+        artiest: 'Petra',
+        titel: 'Ik Leef Voor Jou',
+        profiel: const SmaakProfiel(),
+        zaadBpm: 142,
+      );
+      expect(lijst, contains(kTaalZin));
+      expect(lijst, contains(tempoLijstZin(142)));
+      expect(kTaalZin, contains('de helft'));
+      expect(kTaalZin, contains('Plaza - Yo Yo'), reason: 'Sabers eigen voorbeeld');
+      expect(nummersPrompt(artiest: 'Petra', profiel: const SmaakProfiel()), isNot(contains('BPM')));
+      expect(sfeerPrompt(artiest: 'Petra', kandidaten: const []), contains(kTaalSfeerZin));
+    });
+
+    test('aangesloten: de lijsten krijgen het zaadtempo, en ook wat het model koos gaat langs de sfeervraag', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(
+        'zaadBpm: await keuring.zaadTempo,'.allMatches(main).length,
+        2,
+        reason: 'de startlijst en de vervolglijst',
+      );
+      expect(main.contains('          keuring.vraagSfeer(vanModel);\n'), isTrue);
+      expect(main.contains('            keuring.vraagSfeer(vanModel, onderweg: true);\n'), isTrue);
+      expect(
+        main.contains('          mag: () => !keuring.lijstIsBinnen\n'),
+        isTrue,
+        reason: 'geen tweede lijst zolang de eerste onderweg is',
+      );
     });
 
     test('aangesloten: de pc meet voor zijn eigen radio en voor een toestel', () {

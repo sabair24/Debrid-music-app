@@ -70,8 +70,8 @@ class Modelvragen {
     this.spoor,
     DateTime Function()? klok,
     Random? toeval,
-  })  : _klok = klok ?? DateTime.now,
-        _toeval = toeval ?? Random();
+  }) : _klok = klok ?? DateTime.now,
+       _toeval = toeval ?? Random();
 
   /// Het tempo van zaad en kandidaten, voor de sfeervraag (`tempo.dart`); null: zonder tempo.
   final Radiotempo? tempo;
@@ -109,27 +109,33 @@ class Modelvragen {
         final b = budget.lijst(radio);
         if (!b.mag) return {'fout': 'Het model wacht even: ${b.waarom}.'};
       }
-      werk = m
-          .maakRadiolijst(
-            artiest: artiest,
-            titel: titel,
-            jaar: jaar,
-            stijlen: stijlen,
-            profiel: _profielUit(v['profiel']),
-            smaak: Radiosmaak.uit('${v['smaak'] ?? ''}'),
-            alGekozen: _tekstenUit(v['alGekozen']),
-            pastNiet: pastNiet,
-            pastWel: pastWel,
-            dieper: v['dieper'] == true,
-            perAanroep: () => budget.lijstGevraagd(radio, start: start),
-          )
-          .then(
-            (l) => <String, dynamic>{
-              'nummers': [
-                for (final n in l) {'artiest': n.artiest, 'titel': n.titel, 'jaar': n.jaar, 'bekend': n.bekend},
-              ],
-            },
-          );
+      Future<List<AiNummer>> lijst(double? zaadBpm) => m.maakRadiolijst(
+        artiest: artiest,
+        titel: titel,
+        jaar: jaar,
+        stijlen: stijlen,
+        profiel: _profielUit(v['profiel']),
+        smaak: Radiosmaak.uit('${v['smaak'] ?? ''}'),
+        alGekozen: _tekstenUit(v['alGekozen']),
+        pastNiet: pastNiet,
+        pastWel: pastWel,
+        dieper: v['dieper'] == true,
+        perAanroep: () => budget.lijstGevraagd(radio, start: start),
+        zaadBpm: zaadBpm,
+      );
+      // Het tempo van het zaad, uit zijn Deezer-fragment: een toestel kan dat niet meten (`tempo.dart`). Zonder meter
+      // meteen de vraag — dan telt het budget hem ook meteen.
+      final t = tempo;
+      final l = t == null || titel == null
+          ? lijst(null)
+          : t.van(artiest, titel).timeout(const Duration(seconds: 20)).then(lijst, onError: (Object _) => lijst(null));
+      werk = l.then(
+        (l) => <String, dynamic>{
+          'nummers': [
+            for (final n in l) {'artiest': n.artiest, 'titel': n.titel, 'jaar': n.jaar, 'bekend': n.bekend},
+          ],
+        },
+      );
     } else if (soort == 'sfeer') {
       if (!start) {
         final b = budget.sfeer();
@@ -152,7 +158,9 @@ class Modelvragen {
                 .timeout(const Duration(seconds: 40));
             zaadBpm = titel == null ? null : alle.first;
             bpm = alle.sublist(1);
-          } catch (_) {/* zonder tempo vraagt het model zoals voorheen */}
+          } catch (_) {
+            /* zonder tempo vraagt het model zoals voorheen */
+          }
         }
         final weg = await m.weesSfeer(
           artiest: artiest,
@@ -245,6 +253,7 @@ class PcModel extends AiService {
     void Function()? perAanroep,
     bool dieper = false,
     bool start = false,
+    double? zaadBpm,
   }) async {
     if (artiest.trim().isEmpty) return const [];
     final s = await _vraag({

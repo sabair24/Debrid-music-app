@@ -120,7 +120,7 @@ Een radio rond: $zaad${feiten.isEmpty ? '' : ' ($feiten)'}
 Een ander systeem stelde de nummers hieronder voor. Welke passen NIET in de sfeer van dit nummer?
 Kijk naar tempo, energie, stemming en klank - niet alleen naar het genre. $kGeenJaargrensZin Een radio
 rond een rustig, zwoel soulnummer heeft geen uptempo dancepop; een radio rond een eurodanceplaat heeft
-geen trage ballads. Wees streng: twijfel je of een nummer de sfeer breekt, noem het dan.
+geen trage ballads. $kTaalSfeerZin Wees streng: twijfel je of een nummer de sfeer breekt, noem het dan.
 ${zaadBpm == null ? '' : '\n${tempoZin(zaadBpm)}\n'}${_voorbeeldZinnen(pastNiet, pastWel)}
 ${lijst.join('\n')}
 
@@ -191,6 +191,24 @@ String tempoZin(double zaadBpm) => 'Gemeten tempo, uit de audio zelf: het zaad z
     'voelt - weet je het van een nummer beter, ga dan daarvan uit. Houd overwegend het tempo en de energie van het '
     'zaad aan; af en toe een rustiger nummer in hetzelfde genre mag, hoogstens een op de vijf.';
 
+/// De taal van het zaad telt mee. Saber, 22-10-2026, over een radio vanaf Petra — Ik Leef Voor Jou (Nederlandstalig,
+/// Discogs: Europop/Eurodance 1996): die werd 37 keer Engelstalige 90s-eurodance; hij koos *"Mengeling van beide"* —
+/// Nederlandstalige up-tempo nummers én 90s-eurodance door elkaar. "Ongeveer de helft" is de invulling daarvan.
+const String kTaalZin = 'Taal: bepaal eerst in welke taal het zaad gezongen is. Is dat NIET Engels, kies dan de helft '
+    'van de nummers in die taal - in hetzelfde tempo en met dezelfde energie, ook als het label iets anders zegt '
+    '(dance, up-tempo pop, feestnummers; bij een Nederlandstalig dancenummer uit de jaren negentig bijvoorbeeld '
+    'Plaza - Yo Yo) - en de andere helft uit het genre van het zaad in andere talen. Dan is een zanger uit dezelfde '
+    'taal juist wel de bedoeling. Een trage ballad in die taal is het niet.';
+
+/// Hetzelfde voor de sfeervraag: een nummer in de taal van het zaad mag niet wegvallen omdat het label anders is.
+const String kTaalSfeerZin = 'Een nummer in de taal van het zaad, met hetzelfde tempo en dezelfde energie, past er '
+    'juist bij - ook als het genre-label anders is (Nederlandstalige up-tempo pop bij een Nederlandstalig dancenummer).';
+
+/// Het gemeten tempo van het zaad voor de lijst (`tempo.dart`) — zie [tempoZin] voor de sfeervraag.
+String tempoLijstZin(double zaadBpm) => 'Het zaad zit rond ${zaadBpm.round()} BPM (gemeten uit de audio; een meter '
+    'telt soms het dubbele of de helft): kies vooral nummers in dat tempo en met die energie; af en toe een rustiger '
+    'nummer mag.';
+
 /// Hoeveel nummers die al op de radio staan het model te zien krijgt (de recentste). Was 60: genoeg bij de
 /// start, te weinig voor een radio die uren loopt en het model om een vervolglijst vraagt.
 const int kModelAlGekozen = 150;
@@ -218,6 +236,7 @@ String nummersPrompt({
   List<({String artiest, String titel})> pastNiet = const [],
   List<({String artiest, String titel})> pastWel = const [],
   bool dieper = false,
+  double? zaadBpm,
 }) {
   final zaad = titel == null || titel.trim().isEmpty ? artiest : '$artiest - $titel';
   final feiten = [
@@ -234,6 +253,8 @@ eurodance, dance en happy hardcore uit die scene - geen disco en geen EDM, ook a
 "dance"; en geen zanger alleen omdat hij uit hetzelfde land komt.
 
 ${_smaakZin(smaak)}
+
+$kTaalZin${zaadBpm == null ? '' : ' ${tempoLijstZin(zaadBpm)}'}
 
 Altijd de originele of de radioversie: geen remixen, extended mixes, covers, live-opnames of
 karaoke. Hoogstens twee nummers van $artiest zelf, en hoogstens twee per andere artiest.
