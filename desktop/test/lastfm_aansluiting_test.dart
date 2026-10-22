@@ -33,6 +33,44 @@ void main() {
     expect(main, contains('    vroeger = [];\n'), reason: 'Ververs berekent hem opnieuw');
   });
 
+  test('het startscherm: "Nieuwe artiesten voor jou" — verwanten van wie je speelt, die je niet hebt, met foto', () {
+    expect(main, contains('final nieuweArtiestenF = _zoekNieuweArtiesten('));
+    expect(main, contains('for (final n in nieuweArtiestenVoorJou(verwant, jouwArtiesten: jouw)) {'));
+    expect(
+      main,
+      contains("_section('Nieuwe artiesten voor jou', _artiestRij(_nieuweArtiesten), bij: 'lijkt op wie je draait'),"),
+    );
+    expect(main, contains('    nieuweArtiesten = [];\n'), reason: 'Ververs berekent hem opnieuw');
+    expect(main, contains('onTap: () => openArtist(context, artiesten[i].name),'));
+  });
+
+  test('een radio uit een zin: ook de bekendste nummers onder het genre (Last.fm-tag), hoogstens een derde', () {
+    expect(
+      main,
+      contains("final nummers = await _nummersVoor(o, lastfmSleutel: context.read<AppSettings>().lastfmKey);"),
+    );
+    expect(main, contains('final tag = await _lastfmBron.tagNummers(o.genre, sleutel: lastfmSleutel, limit: 60);'));
+    expect(main, contains('final namen = genreNummersErbij(tag ?? const [], max: ruim ~/ 3);'));
+    final tag = main.indexOf('final tag = await _lastfmBron.tagNummers(');
+    expect(tag, lessThan(main.indexOf('  uit.shuffle();\n', tag)), reason: 'vóór het door elkaar schudden en zeven');
+  });
+
+  test(
+    'Bekend / Ontdekken: wie in je bibliotheek of je Last.fm-geschiedenis staat, ken je — niet alleen wat het model raadt',
+    () {
+      expect(main, contains('return (n) => n.bekend || jouw.contains(artiestSleutel(n.artiest));'));
+      expect('modelVolgorde(lijst, await _kentJe(lib, cfg),'.allMatches(main).length, 2, reason: 'start en afstemmen');
+      expect(main, isNot(contains('modelVolgorde(lijst, (n) => n.bekend,')));
+    },
+  );
+
+  test('de albumpagina: een sterretje bij de bekendste nummers, na het laden van de nummers', () {
+    expect(main, contains('    _load().then((_) => _laadHits());\n'));
+    expect(main, contains('final hits = hitsVanAlbum(luisteraars);'));
+    expect(main, contains('if (_hits[i] case final n?)'));
+    expect(main, contains("luisteraars op Last.fm',"));
+  });
+
   test('het smaakprofiel: ook wie je volgens Last.fm het meest speelde — op het startscherm en bij de radio', () {
     expect(main, contains('final lfmArtiestenF = _lastfmTopArtiesten(cfg, al: gespeeldeNamen);'));
     expect(main, contains('gespeeld: [...gespeeldeNamen, ...extra].take(15).toList(),'));

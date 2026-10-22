@@ -82,6 +82,80 @@ void main() {
     });
   });
 
+  test('de genretag voor een radio uit een zin: geen covers of bewerkingen, hoogstens twee per artiest', () {
+    final n = genreNummersErbij(const [
+      (artiest: 'La Bouche', titel: 'Be My Lover', luisteraars: 900000),
+      (artiest: 'La Bouche', titel: 'Sweet Dreams', luisteraars: 500000),
+      (artiest: 'La Bouche', titel: 'Fallin in Love', luisteraars: 300000),
+      (artiest: 'Corona', titel: 'The Rhythm of the Night (Remix)', luisteraars: 200000),
+      (artiest: 'Corona', titel: 'The Rhythm of the Night', luisteraars: 800000),
+      (artiest: 'Party Band', titel: 'Be My Lover (Karaoke Version)', luisteraars: 10),
+      (artiest: 'Mr. President', titel: 'Coco Jamboo', luisteraars: 700000),
+    ], max: 4);
+    expect(
+      [for (final x in n) '${x.artiest} — ${x.titel}'],
+      [
+        'La Bouche — Be My Lover',
+        'La Bouche — Sweet Dreams',
+        'Corona — The Rhythm of the Night',
+        'Mr. President — Coco Jamboo',
+      ],
+    );
+  });
+
+  group('hits op de albumpagina', () {
+    test('DE KERN: hoogstens drie, de bekendste, elk minstens 30 % van de top en 1000 luisteraars', () {
+      // Clouseau — Hoezo?: Daar Gaat Ze 36.681, Domino 14.820, Anne 14.820, de rest ver eronder.
+      expect(hitsVanAlbum([36681, 900, 14820, 14820, 3000, null]), {0, 2, 3});
+      expect(hitsVanAlbum([36681, 9000, 500]), {0}, reason: '9000 is minder dan 30 % van 36.681');
+    });
+
+    test('een plaat van een kleine artiest krijgt geen sterren; Last.fm kent niets: geen sterren', () {
+      expect(hitsVanAlbum([347, 120, 80]), isEmpty, reason: 'Petra — Ik Leef Voor Jou: 347 luisteraars');
+      expect(hitsVanAlbum([null, null]), isEmpty);
+      expect(hitsVanAlbum(const []), isEmpty);
+    });
+
+    test('luisteraars met punten, zoals in het Nederlands', () {
+      expect(metPunten(36681), '36.681');
+      expect(metPunten(3396067), '3.396.067');
+      expect(metPunten(999), '999');
+    });
+  });
+
+  group('nieuwe artiesten voor jou', () {
+    // Gemeten op 22-10-2026 vanaf Sabers acht meest gespeelde: Solange kwam via Janet Jackson, Beyoncé en Sade.
+    test('DE KERN: opgeteld over je artiesten, wie bij meer terugkomt staat hoger; wie je hebt niet', () {
+      final n = nieuweArtiestenVoorJou(
+        {
+          'Janet Jackson': const [
+            (naam: 'Solange', maat: 0.5),
+            (naam: 'Tinashe', maat: 0.6),
+            (naam: 'Sade', maat: 0.4),
+          ],
+          'Beyoncé': const [(naam: 'Solange', maat: 0.6), (naam: 'Rihanna', maat: 0.9)],
+          'Sade': const [(naam: 'Solange', maat: 0.43), (naam: 'Erykah Badu', maat: 1.0)],
+        },
+        jouwArtiesten: {'rihanna'},
+      );
+      expect([for (final x in n) x.naam], ['Solange', 'Erykah Badu', 'Tinashe']);
+      expect(n.first.via, ['Janet Jackson', 'Beyoncé', 'Sade']);
+      expect(n.first.score, closeTo(1.53, 0.001));
+    });
+
+    test('je eigen ankers komen er niet in terug, en hoogstens [max]', () {
+      final n = nieuweArtiestenVoorJou(
+        {
+          'Sade': const [(naam: 'Anita Baker', maat: 0.9), (naam: 'Erykah Badu', maat: 1.0)],
+        },
+        jouwArtiesten: const {},
+        max: 1,
+      );
+      expect([for (final x in n) x.naam], ['Erykah Badu']);
+      expect(nieuweArtiestenVoorJou(const {}, jouwArtiesten: const {}), isEmpty);
+    });
+  });
+
   test('de artiesten voor het smaakprofiel: meest gespeeld eerst, zonder wat de app al kent', () {
     expect(
       geschiedenisArtiesten(
