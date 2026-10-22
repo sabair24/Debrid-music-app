@@ -296,6 +296,7 @@ class LanCatalog {
             for (final kind in kArtSoorten)
               if (library.chosenArtistArt(a.name, kind) case final url?) kind: url,
           },
+          tags: library.tagsOf(a.name),
         )
     ]..sort((x, y) => x.name.toLowerCase().compareTo(y.name.toLowerCase()));
 
@@ -321,7 +322,9 @@ class LanCatalog {
         ..add(a.name)
         ..add('${a.albumCount}')
         // A picked portrait is not a track change either.
-        ..add(a.artChoice.entries.map((e) => '${e.key}=${e.value}').join(','));
+        ..add(a.artChoice.entries.map((e) => '${e.key}=${e.value}').join(','))
+        // En de tags: anders krijgt een toestel een 304 en hoort het ze nooit.
+        ..add(a.tags.join(','));
     }
     for (final a in albums) {
       fingerprint

@@ -85,6 +85,7 @@ import 'deezerbaan.dart';
 import 'itunes.dart';
 import 'lastfm.dart';
 import 'lastfm_geschiedenis.dart';
+import 'artiest_tags.dart';
 import 'radiosfeer.dart';
 import 'versiecontrole.dart';
 import 'discogs.dart';
@@ -1253,6 +1254,8 @@ Future<void> main() async {
     );
     AanbevolenVoorJou.pc = aanbevolen;
     unawaited(aanbevolen.laad().then((_) => aanbevolen.start()));
+    // Taal en stijl per artiest (Last.fm), voor de bibliotheek — zie [_vulArtiestTags].
+    unawaited(_vulArtiestTags(library, settings));
   }
 
   // Wat dit toestel tekent en hoe warm het wordt, naar `warmte.log` op de pc. Zie warmtemeter.dart:
@@ -2009,6 +2012,7 @@ Future<void> main() async {
     await library.loadArtistArtChoice(); // portraits and backdrops the user picked
     await library.loadAlbumArtRoles(); // which scan is the sleeve, the back, the disc
     await library.loadStyles(); // what each record sounds like, for discovery
+    await library.loadArtistTags(); // taal en stijl per artiest (Last.fm), zie `artiest_tags.dart`
     startLog.line('bestanden geladen');
     // De scan schrijft voortaan zijn eigen tussentijden. Eén regel "scan klaar in 15034ms" wist niet
     // WELKE van de zes stappen die tijd opat, en dat kostte een hele ronde raden.
@@ -9184,11 +9188,36 @@ class ArtistsView extends StatefulWidget {
 class _ArtistsViewState extends State<ArtistsView> {
   List<Album> get _source => widget.albums ?? widget.lib.albums;
 
+  /// De gekozen taal of stijl (zie `artiest_tags.dart`), of null voor alles.
+  String? _groep;
+
+  /// Taal en stijl van de artiesten in je bibliotheek, uit de Last.fm-tags die de pc ophaalt. Leeg zonder tags.
+  List<({String naam, Groepsoort soort, List<String> artiesten})> _groepen() {
+    final lib = widget.lib;
+    final tags = <String, List<String>>{};
+    for (final a in lib.artists) {
+      final t = lib.tagsOf(a);
+      if (t.isNotEmpty) tags[a] = t;
+    }
+    if (tags.isEmpty) return const [];
+    final genres = <String, List<String?>>{};
+    for (final t in lib.tracks) {
+      (genres[t.artist] ??= []).add(t.genre);
+    }
+    return bibliotheekGroepen(tags, genres);
+  }
+
   @override
   Widget build(BuildContext context) {
     // Only artists that still have a matching album after the shell's search/filter.
     final visible = {for (final a in _source) a.artist};
-    final artists = widget.lib.artists.where(visible.contains).toList();
+    final groepen = _groepen();
+    final gekozen = groepen.where((g) => g.naam == _groep).firstOrNull;
+    final inGroep = gekozen == null ? null : {...gekozen.artiesten};
+    final artists = [
+      for (final a in widget.lib.artists)
+        if (visible.contains(a) && (inGroep == null || inGroep.contains(a))) a,
+    ];
     // Eén hoes per artiest, hier één keer opgezocht in plaats van per tegel.
     //
     // De rasterbouwer deed `_source.firstWhere((a) => a.artist == name)` — een lineaire zoektocht
@@ -9198,13 +9227,42 @@ class _ArtistsViewState extends State<ArtistsView> {
     for (final a in _source) {
       hoesVanArtiest.putIfAbsent(a.artist, () => a.cover);
     }
-    if (artists.isEmpty) {
+    if (artists.isEmpty && gekozen == null) {
       return Center(child: Text('Geen artiesten gevonden.', style: TextStyle(color: _muted)));
     }
     return CustomScrollView(
       // Zie het albumraster: de plek waar je was overleeft een wissel naar een ander scherm.
       key: const PageStorageKey('artiestenraster'),
       slivers: [
+        // Taal en stijl (Saber, 22-10-2026, bij de Last.fm-ideeën: "9"). Alleen als er tags zijn.
+        if (groepen.isNotEmpty)
+          SliverToBoxAdapter(
+            child: SizedBox(
+              height: 52,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(18, 10, 24, 6),
+                children: [
+                  for (final g in [null, ...groepen])
+                    Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: ChoiceChip(
+                        label: Text(g == null ? 'Alles' : '${g.naam} ${g.artiesten.length}',
+                            style: const TextStyle(fontSize: 12)),
+                        selected: _groep == g?.naam,
+                        onSelected: (_) => setState(() => _groep = g?.naam),
+                        backgroundColor: kInkt.withValues(alpha: .06),
+                        selectedColor: _accent,
+                        labelStyle: TextStyle(color: _groep == g?.naam ? Colors.white : _muted),
+                        side: BorderSide(color: _groep == g?.naam ? _accent : kInkt.withValues(alpha: .12)),
+                        shape: const StadiumBorder(),
+                        showCheckmark: false,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
         // Op een gsm staat "Artiesten" al als grote kop boven de pagina ([GroteKop]); alleen bij een
         // zoekopdracht zegt deze regel iets, namelijk hoeveel er overblijven.
         if (!schilKop(context) || artists.length != widget.lib.artists.length)
@@ -16690,6 +16748,29 @@ Future<bool Function(AiNummer n)> _kentJe(LibraryStore lib, AppSettings cfg) asy
     }
   } catch (_) {/* dan wat het model zei, en je bibliotheek */}
   return (n) => n.bekend || jouw.contains(artiestSleutel(n.artiest));
+}
+
+/// Op de pc: de Last.fm-tags van elke artiest in de bibliotheek die nog niet gevraagd is, voor taal en stijl
+/// (`artiest_tags.dart`). Een minuut na de start, zodat het opstarten er niet op wacht; daarna elke zes uur voor wie er
+/// nieuw bij kwam. Bij Saber de eerste keer 488 artiesten, zo'n twee minuten (vier per seconde). Toestellen krijgen ze
+/// met de catalogus mee.
+Future<void> _vulArtiestTags(LibraryStore lib, AppSettings cfg) async {
+  await Future<void>.delayed(const Duration(minutes: 1));
+  while (true) {
+    final sleutel = cfg.lastfmKey.trim();
+    if (sleutel.isNotEmpty && !lib.isRemote) {
+      var n = 0;
+      for (final a in [...lib.artists]) {
+        if (lib.tagsGevraagd(a)) continue;
+        final t = await _lastfmBron.tags(a, sleutel: sleutel);
+        if (t == null) continue; // geen antwoord: de volgende ronde opnieuw
+        await lib.rememberArtistTags(a, t, bewaar: false);
+        if (++n % 25 == 0) await lib.bewaarArtistTags(melden: false);
+      }
+      if (n > 0) await lib.bewaarArtistTags();
+    }
+    await Future<void>.delayed(const Duration(hours: 6));
+  }
 }
 
 /// De artiesten die je volgens Last.fm het meest speelde, voor het smaakprofiel — zonder wat [al] al noemt. Leeg
