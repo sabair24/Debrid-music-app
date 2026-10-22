@@ -358,6 +358,8 @@ class AiService {
     List<({String artiest, String titel})> pastNiet = const [],
     List<({String artiest, String titel})> pastWel = const [],
     bool start = false,
+    double? zaadBpm,
+    List<double?> bpm = const [],
   }) async {
     final sleutel = sleutelVan().trim();
     if (sleutel.isEmpty || kandidaten.isEmpty) return const {};
@@ -379,7 +381,9 @@ class AiService {
                 stijlen: stijlen,
                 kandidaten: kandidaten,
                 pastNiet: pastNiet,
-                pastWel: pastWel),
+                pastWel: pastWel,
+                zaadBpm: zaadBpm,
+                bpm: bpm),
           }
         ],
       },

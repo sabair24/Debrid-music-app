@@ -88,6 +88,10 @@ class Versiecontrole {
     }
   }
 
+  /// Het pad van het Deezer-fragment (30 s) van precies dit nummer, of null — ook voor het tempo van de radio
+  /// (`tempo.dart`): dan wordt het één keer gehaald voor beide.
+  Future<String?> fragment(String artiest, String titel, {int? seconden}) => _fragment(artiest, titel, seconden);
+
   Future<String?> _fragment(String artiest, String titel, int? seconden) {
     final sleutel = '${artistKey(artiest)}|${normKey(titel)}|${seconden ?? ''}';
     return _fragmenten[sleutel] ??= _haalFragment(artiest, titel, seconden).then((pad) {

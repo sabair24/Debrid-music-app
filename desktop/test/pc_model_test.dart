@@ -19,12 +19,14 @@ import 'package:debridmusic/pc_model.dart';
 import 'package:debridmusic/radiolijst.dart';
 import 'package:debridmusic/radiosmaak.dart';
 import 'package:debridmusic/settings.dart';
+import 'package:debridmusic/tempo.dart';
 
 /// Een model zonder netwerk: onthoudt wat het gevraagd werd, en antwoordt als [klaar] dat zegt.
 class _Model extends AiService {
   _Model() : super(() => 'sk-ant-toets');
   final lijsten = <Map<String, Object?>>[];
   final sfeervragen = <List<({String artiest, String titel})>>[];
+  final tempi = <({double? zaad, List<double?> rij})>[];
   Completer<void> klaar = Completer<void>()..complete();
   Object? fout;
 
@@ -74,14 +76,28 @@ class _Model extends AiService {
     List<({String artiest, String titel})> pastNiet = const [],
     List<({String artiest, String titel})> pastWel = const [],
     bool start = false,
+    double? zaadBpm,
+    List<double?> bpm = const [],
   }) async {
     sfeervragen.add(kandidaten);
+    tempi.add((zaad: zaadBpm, rij: bpm));
     await klaar.future;
     return {
       for (var i = 0; i < kandidaten.length; i++)
         if (kandidaten[i].artiest == 'K3') i,
     };
   }
+}
+
+/// Een tempo zonder ffmpeg: geeft wat [antwoord] zegt.
+class _NepTempo extends Radiotempo {
+  _NepTempo(this.antwoord) : super(meter: Tempometer(), fragment: (a, t, s) async => null);
+  final List<double?> Function(List<({String artiest, String titel, String? pad, int? seconden})> rij) antwoord;
+
+  @override
+  Future<List<double?>> vanRij(List<({String artiest, String titel, String? pad, int? seconden})> rij,
+          {int tegelijk = 4}) async =>
+      antwoord(rij);
 }
 
 const _profiel = SmaakProfiel(topArtiesten: ['Clouseau (40)'], perDecennium: {1990: 448}, gespeeld: ['Bazart']);
@@ -142,6 +158,35 @@ void main() {
       );
     });
 
+    test('een sfeervraag van een toestel: de pc meet het tempo (het toestel heeft geen ffmpeg)', () async {
+      final gemeten = <String>[];
+      final metTempo = Modelvragen(
+        model: () => model,
+        budget: budget,
+        klok: () => nu,
+        tempo: _NepTempo((r) {
+          gemeten.addAll([for (final x in r) x.titel]);
+          return [142, 94, null];
+        }),
+      );
+      final b = metTempo.begin({
+        'soort': 'sfeer',
+        'start': true,
+        'artiest': 'Petra',
+        'titel': 'Ik Leef Voor Jou',
+        'kandidaten': [
+          {'a': 'Benny Neyman', 't': 'Waarom fluister ik je naam nog'},
+          {'a': 'Eddy Wally', 't': 'Chérie'},
+        ],
+      }, toestel: 'gsm');
+      for (var i = 0; i < 5 && metTempo.stand(b['id'] as String)['klaar'] != true; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(gemeten, ['Ik Leef Voor Jou', 'Waarom fluister ik je naam nog', 'Chérie']);
+      expect(model.tempi.single.zaad, 142);
+      expect(model.tempi.single.rij, [94, null]);
+    });
+
     test('zonder sleutel of met een onbekende vraag: meteen een fout, en het model wordt niet gevraagd', () {
       final zonder = Modelvragen(model: () => null, budget: budget);
       expect(zonder.begin({'soort': 'lijst', 'artiest': 'X'})['fout'], contains('geen AI-sleutel'));
@@ -157,7 +202,7 @@ void main() {
       expect(main.contains('      s.modelvragen = Modelvragen(\n'), isTrue);
       expect(main.contains('  final viaPc = remote != null && context.read<ClientSession>().pcHeeftModel;'), isTrue);
       expect(main.contains("        ? PcModel((v) => remote.ask('/api/radio', v), radio: () => radio.sessie)"), isTrue);
-      expect(main.contains('    ..budget = viaPc ? null : _modelbudget;'), isTrue);
+      expect(main.contains('    ..budget = viaPc ? null : _modelbudget\n'), isTrue);
       expect(sessie.contains("      pcHeeftModel = shared['radioModel'] == 'ja';"), isTrue);
     });
   });

@@ -18,6 +18,7 @@ import 'ai.dart';
 import 'modelbudget.dart';
 import 'radiolijst.dart';
 import 'radiosmaak.dart';
+import 'tempo.dart' show Radiotempo;
 
 // ------------------------------------------------------------------------------------------------- de draad
 
@@ -62,9 +63,18 @@ SmaakProfiel _profielUit(Object? j) {
 
 /// Op de pc: de modelvragen van toestellen, met het budget. Eén per server.
 class Modelvragen {
-  Modelvragen({required this.model, required this.budget, this.spoor, DateTime Function()? klok, Random? toeval})
-    : _klok = klok ?? DateTime.now,
-      _toeval = toeval ?? Random();
+  Modelvragen({
+    required this.model,
+    required this.budget,
+    this.tempo,
+    this.spoor,
+    DateTime Function()? klok,
+    Random? toeval,
+  })  : _klok = klok ?? DateTime.now,
+        _toeval = toeval ?? Random();
+
+  /// Het tempo van zaad en kandidaten, voor de sfeervraag (`tempo.dart`); null: zonder tempo.
+  final Radiotempo? tempo;
 
   /// Het model van de pc, of null als er geen sleutel staat.
   final AiService? Function() model;
@@ -127,17 +137,36 @@ class Modelvragen {
       }
       budget.sfeerGevraagd(start: start);
       final kandidaten = _parenUit(v['kandidaten']);
-      werk = m
-          .weesSfeer(
-            artiest: artiest,
-            titel: titel,
-            jaar: jaar,
-            stijlen: stijlen,
-            kandidaten: kandidaten,
-            pastNiet: pastNiet,
-            pastWel: pastWel,
-          )
-          .then((weg) => <String, dynamic>{'weg': weg.toList()..sort()});
+      werk = () async {
+        // Het tempo van het zaad en van elke kandidaat, uit het Deezer-fragment — een toestel kan dat niet meten.
+        final t = tempo;
+        double? zaadBpm;
+        var bpm = const <double?>[];
+        if (t != null) {
+          try {
+            final alle = await t
+                .vanRij([
+                  (artiest: artiest, titel: titel ?? '', pad: null, seconden: null),
+                  for (final k in kandidaten) (artiest: k.artiest, titel: k.titel, pad: null, seconden: null),
+                ])
+                .timeout(const Duration(seconds: 40));
+            zaadBpm = titel == null ? null : alle.first;
+            bpm = alle.sublist(1);
+          } catch (_) {/* zonder tempo vraagt het model zoals voorheen */}
+        }
+        final weg = await m.weesSfeer(
+          artiest: artiest,
+          titel: titel,
+          jaar: jaar,
+          stijlen: stijlen,
+          kandidaten: kandidaten,
+          pastNiet: pastNiet,
+          pastWel: pastWel,
+          zaadBpm: zaadBpm,
+          bpm: bpm,
+        );
+        return <String, dynamic>{'weg': weg.toList()..sort()};
+      }();
     } else {
       return {'fout': 'Onbekende modelvraag.'};
     }
@@ -246,8 +275,11 @@ class PcModel extends AiService {
     List<({String artiest, String titel})> pastNiet = const [],
     List<({String artiest, String titel})> pastWel = const [],
     bool start = false,
+    double? zaadBpm,
+    List<double?> bpm = const [],
   }) async {
     if (kandidaten.isEmpty) return const {};
+    // Het tempo meet de pc zelf (`tempo.dart`): een toestel heeft geen ffmpeg.
     final s = await _vraag({
       'soort': 'sfeer',
       'start': start,

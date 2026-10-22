@@ -102,12 +102,18 @@ String sfeerPrompt({
   required List<({String artiest, String titel})> kandidaten,
   List<({String artiest, String titel})> pastNiet = const [],
   List<({String artiest, String titel})> pastWel = const [],
+  double? zaadBpm,
+  List<double?> bpm = const [],
 }) {
   final zaad = titel == null || titel.trim().isEmpty ? artiest : '$artiest - $titel';
   final feiten = [
     if (jaar != null) 'uit $jaar',
     if (stijlen.isNotEmpty) 'stijl ${stijlen.join(', ')}',
   ].join(', ');
+  String tempo(int i) => i < bpm.length && bpm[i] != null ? ' (~${bpm[i]!.round()} BPM)' : '';
+  final lijst = [
+    for (var i = 0; i < kandidaten.length; i++) '${i + 1}. ${kandidaten[i].artiest} - ${kandidaten[i].titel}${tempo(i)}'
+  ];
   return '''
 Een radio rond: $zaad${feiten.isEmpty ? '' : ' ($feiten)'}
 
@@ -115,8 +121,8 @@ Een ander systeem stelde de nummers hieronder voor. Welke passen NIET in de sfee
 Kijk naar tempo, energie, stemming en klank - niet alleen naar het genre. $kGeenJaargrensZin Een radio
 rond een rustig, zwoel soulnummer heeft geen uptempo dancepop; een radio rond een eurodanceplaat heeft
 geen trage ballads. Wees streng: twijfel je of een nummer de sfeer breekt, noem het dan.
-${_voorbeeldZinnen(pastNiet, pastWel)}
-${[for (var i = 0; i < kandidaten.length; i++) '${i + 1}. ${kandidaten[i].artiest} - ${kandidaten[i].titel}'].join('\n')}
+${zaadBpm == null ? '' : '\n${tempoZin(zaadBpm)}\n'}${_voorbeeldZinnen(pastNiet, pastWel)}
+${lijst.join('\n')}
 
 Geef de nummers terug die weg moeten.
 ''';
@@ -176,6 +182,14 @@ String _smaakZin(Radiosmaak smaak) => switch (smaak) {
 /// Brooklyn Bounce en L.A. Style, rave uit precies die scene. Zonder die opsomming 0 van 11 goede geweerd.
 const String kGeenJaargrensZin = 'Het jaartal is GEEN reden om te weren: een klassieker van veertig jaar geleden '
     'of een nummer van vorig jaar mag, zolang het echt hetzelfde genre en dezelfde scene is.';
+
+/// Wat het model over het gemeten tempo hoort (`tempo.dart`). Saber, 22-10-2026, over Petra — Ik Leef Voor Jou: *"is
+/// wat meer up-tempo e, maar eens een trager liedje mag wel natuurlijk"*. De meter telt soms het dubbele of de helft
+/// (81 % exact op 154 getagde nummers); het model kent veel nummers zelf en mag dat rechtzetten.
+String tempoZin(double zaadBpm) => 'Gemeten tempo, uit de audio zelf: het zaad zit rond ${zaadBpm.round()} BPM, en bij '
+    'de nummers hieronder staat het waar het gemeten is. Een meter telt soms het dubbele of de helft van wat je '
+    'voelt - weet je het van een nummer beter, ga dan daarvan uit. Houd overwegend het tempo en de energie van het '
+    'zaad aan; af en toe een rustiger nummer in hetzelfde genre mag, hoogstens een op de vijf.';
 
 /// Hoeveel nummers die al op de radio staan het model te zien krijgt (de recentste). Was 60: genoeg bij de
 /// start, te weinig voor een radio die uren loopt en het model om een vervolglijst vraagt.
