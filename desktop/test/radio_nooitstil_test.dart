@@ -595,8 +595,8 @@ void main() {
     test('de keuring in main.dart geeft de reden door, en het plafond telt met venster', () {
       final scherm = File('lib/main.dart').readAsStringSync();
       // Ja/nee en geen `contains` op het hele bestand: dat drukt bij een fout heel main.dart af.
-      expect(scherm.contains('buitenJaar: (j) {\n          p.weer = Weerreden.tijdvak;\n          p.buitenJaar = j;'), isTrue,
-          reason: 'de keuring moet het tijdvak als reden op de plek zetten');
+      expect(scherm.contains('p.weer = Weerreden.tijdvak;'), isFalse,
+          reason: 'sinds 22-10-2026 geen jaargrens (Saber): het tijdvak is nooit meer de reden');
       expect(scherm.contains("NEE — past niet in de sfeer (het model)');\n        p.weer = Weerreden.sfeer;"), isTrue,
           reason: 'en de sfeer');
       expect(scherm.contains('al: [for (final p in radio.plan) p.artiest]'), isFalse,

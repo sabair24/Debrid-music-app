@@ -112,9 +112,9 @@ String sfeerPrompt({
 Een radio rond: $zaad${feiten.isEmpty ? '' : ' ($feiten)'}
 
 Een ander systeem stelde de nummers hieronder voor. Welke passen NIET in de sfeer van dit nummer?
-Kijk naar tempo, energie, stemming en klank - niet alleen naar het genre of het jaar. Een radio rond
-een rustig, zwoel soulnummer heeft geen uptempo dancepop; een radio rond een eurodanceplaat heeft geen
-trage ballads. Wees streng: twijfel je of een nummer de sfeer breekt, noem het dan.
+Kijk naar tempo, energie, stemming en klank - niet alleen naar het genre. $kGeenJaargrensZin Een radio
+rond een rustig, zwoel soulnummer heeft geen uptempo dancepop; een radio rond een eurodanceplaat heeft
+geen trage ballads. Wees streng: twijfel je of een nummer de sfeer breekt, noem het dan.
 ${_voorbeeldZinnen(pastNiet, pastWel)}
 ${[for (var i = 0; i < kandidaten.length; i++) '${i + 1}. ${kandidaten[i].artiest} - ${kandidaten[i].titel}'].join('\n')}
 
@@ -166,6 +166,17 @@ String _smaakZin(Radiosmaak smaak) => switch (smaak) {
             'artiesten uit dezelfde scene die weinig mensen nog kennen.',
     };
 
+/// Geen jaargrens, wel een strenge genregrens (Saber, 22-10-2026: *"nergens een grens van jaren vanaf 1950 tot
+/// heden"* — *"maar natuurlijk eurodance is geen disco e, dit moet wel accurater blijven"*). Het tijdvak was tot
+/// dan ook een genrefilter (Freak Out 1996 hield zo de disco van 1979 en de EDM van 2013 buiten); dat doet nu het
+/// genre zelf — hier, en in de danstak van `radiostijl.dart`.
+///
+/// Gemeten op 22-10-2026 (één sfeervraag, zaad Freak Out, 9 nummers die het jaartal weerde tussen 11 goede): een
+/// opsomming "geen disco, geen hardstyle, geen big room" maakte het model te streng — het weerde ook Scooter, Dune,
+/// Brooklyn Bounce en L.A. Style, rave uit precies die scene. Zonder die opsomming 0 van 11 goede geweerd.
+const String kGeenJaargrensZin = 'Het jaartal is GEEN reden om te weren: een klassieker van veertig jaar geleden '
+    'of een nummer van vorig jaar mag, zolang het echt hetzelfde genre en dezelfde scene is.';
+
 /// Hoeveel nummers die al op de radio staan het model te zien krijgt (de recentste). Was 60: genoeg bij de
 /// start, te weinig voor een radio die uren loopt en het model om een vervolglijst vraagt.
 const int kModelAlGekozen = 150;
@@ -203,11 +214,10 @@ String nummersPrompt({
   return '''
 Je stelt een radio samen rond: $zaad${feiten.isEmpty ? '' : ' ($feiten)'}
 
-Geef $kMaxModelNummers nummers die op deze radio horen. Blijf in het genre en het tijdvak van DIT
-nummer: ongeveer dezelfde jaren, dezelfde klank, dezelfde scene. Bijvoorbeeld: rond een
-eurodanceplaat uit de jaren negentig horen eurodance, dance en happy hardcore uit die jaren - geen
-disco uit de jaren zeventig, geen EDM uit de jaren 2010, en geen zanger alleen omdat hij uit hetzelfde
-land komt.
+Geef $kMaxModelNummers nummers die op deze radio horen. Blijf in het genre en de sfeer van DIT nummer:
+dezelfde klank, dezelfde scene. $kGeenJaargrensZin Bijvoorbeeld: rond een eurodanceplaat horen
+eurodance, dance en happy hardcore uit die scene - geen disco en geen EDM, ook al heet het allemaal
+"dance"; en geen zanger alleen omdat hij uit hetzelfde land komt.
 
 ${_smaakZin(smaak)}
 
