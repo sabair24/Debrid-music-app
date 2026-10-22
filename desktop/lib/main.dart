@@ -16773,7 +16773,13 @@ Future<void> startRadio(BuildContext context, String artist,
     vraagSfeer: ai == null ? null : (plekken) => keuring.vraagSfeer(plekken, onderweg: true),
     model: switch ((ai, profiel)) {
       (final m?, final wie?) => Radiomodel(
-          mag: () => viaPc ? (mag: true, waarom: null) : _modelbudget.lijst(radio.sessie),
+          // Niet zolang de eerste lijst nog onderweg is: op 22-10-2026 (Petra) vroeg de radio 2,6 s na de start
+          // bijna dezelfde lijst nog eens — dubbel geld voor niets.
+          mag: () => !keuring.lijstIsBinnen
+              ? (mag: false, waarom: 'de eerste lijst is nog onderweg')
+              : viaPc
+                  ? (mag: true, waarom: null)
+                  : _modelbudget.lijst(radio.sessie),
           lijst: ({required alGekozen, required dieper}) async {
             final s = radio.sessie;
             final z = await zaadStijl;
@@ -16790,13 +16796,14 @@ Future<void> startRadio(BuildContext context, String artist,
               pastWel: keuring.voorbeelden(Sfeeroordeel.past),
               dieper: dieper,
               perAanroep: () => _modelbudget.lijstGevraagd(s),
+              zaadBpm: await keuring.zaadTempo,
             );
             // Wat het model koos, keurt de sfeer niet opnieuw — zie [_Radiokeuring.keur].
             keuring.onthoud([...keuring.lijst, ...lijst]);
             log.line('radio-lijst (vervolg${dieper ? ', dieper' : ''}): ${lijst.length} nummers van het model — '
                 '${lijst.map((n) => '${n.artiest} – ${n.titel}${n.bekend ? '' : '*'}').join('; ')}');
             final gevonden = await rec.lijstOpDeezer(lijst, spoor: log.line);
-            return _radioplan(gevonden, lib,
+            final vanModel = _radioplan(gevonden, lib,
                 zaadArtiest: artist,
                 zaad: zaad,
                 zaadTitel: zaadTitel,
@@ -16804,6 +16811,9 @@ Future<void> startRadio(BuildContext context, String artist,
                 weert: steedsGeweigerd(radio.plan),
                 elkeLengte: keuring.elkeLengte,
                 bron: 'model');
+            // Langs de sfeervraag met tempo, zoals de startlijst — vóór ze in het plan komen.
+            keuring.vraagSfeer(vanModel, onderweg: true);
+            return vanModel;
           }),
       _ => null,
     },
@@ -16888,6 +16898,7 @@ Future<void> startRadio(BuildContext context, String artist,
             // Telt voor deze radio (12), niet voor de uurgrens: een start mag altijd.
             perAanroep: () => _modelbudget.lijstGevraagd(sessie, start: true),
             start: true,
+            zaadBpm: await keuring.zaadTempo,
           );
           keuring.onthoud(lijst);
           log.line('radio-lijst: ${lijst.length} nummers van het model'
@@ -16899,18 +16910,18 @@ Future<void> startRadio(BuildContext context, String artist,
           final nu = beurt == _afstemBeurt ? lijst : modelVolgorde(lijst, (n) => n.bekend, Radiosmaak.uit(cfg.radioSmaak));
           final gevonden = await rec.lijstOpDeezer(nu, spoor: log.line);
           if (sessie != radio.sessie) return;
-          _voegGekeurdBij(
-              radio,
-              sessie,
-              _afstemBeurt,
-              keuring,
-              _radioplan(gevonden, lib,
-                  zaadArtiest: artist,
-                  zaad: zaad,
-                  zaadTitel: zaadTitel,
-                  al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller),
-                  weert: steedsGeweigerd(radio.plan),
-                  elkeLengte: keuring.elkeLengte));
+          final vanModel = _radioplan(gevonden, lib,
+              zaadArtiest: artist,
+              zaad: zaad,
+              zaadTitel: zaadTitel,
+              al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller),
+              weert: steedsGeweigerd(radio.plan),
+              elkeLengte: keuring.elkeLengte);
+          // Ook wat het model zelf koos, langs de sfeervraag — met het gemeten tempo erbij. Gemeten op 22-10-2026,
+          // radio vanaf Petra: de lijst zette er trage ballads tussen (Benny Neyman, Borsato), ondanks de regel;
+          // met het tempo erbij weerde de sfeervraag Benny Neyman (94 BPM tegen 142). Zie `tempo.dart`.
+          keuring.vraagSfeer(vanModel);
+          _voegGekeurdBij(radio, sessie, _afstemBeurt, keuring, vanModel);
         } catch (e) {
           log.line('radio-lijst: het model gaf niets — $e');
         } finally {
@@ -16975,6 +16986,23 @@ class _Radiokeuring {
   void lijstKlaar() {
     if (!_lijstBinnen.isCompleted) _lijstBinnen.complete();
   }
+
+  /// Is de eerste lijst van het model binnen (of komt er geen)? Tot dan vraagt het bijvullen er geen tweede.
+  bool get lijstIsBinnen => _lijstBinnen.isCompleted;
+
+  /// Het gemeten tempo van het zaad, één keer per radio ([tempo]; null zonder meter of zaadnummer).
+  Future<double?> get zaadTempo => _zaadTempoF ??= () async {
+        final tm = tempo, t = zaadTitel;
+        if (tm == null || t == null) return null;
+        try {
+          return await tm
+              .van(artiest, t, pad: zaad?.path, seconden: zaad?.duration?.inSeconds)
+              .timeout(const Duration(seconds: 20));
+        } catch (_) {
+          return null;
+        }
+      }();
+  Future<double?>? _zaadTempoF;
 
   /// Wat het model zelf koos: dat koos het al op sfeer — zie [sfeerBeslistFamilie].
   final Set<String> _vanModel = {};
@@ -17151,12 +17179,10 @@ class _Radiokeuring {
       final tm = tempo;
       if (tm != null) {
         try {
-          final alle = await tm.vanRij([
-            (artiest: artiest, titel: t ?? '', pad: zaad?.path, seconden: zaad?.duration?.inSeconds),
+          zaadBpm = await zaadTempo;
+          bpm = await tm.vanRij([
             for (final p in nieuw) (artiest: p.artiest, titel: p.titel, pad: p.eigen?.path, seconden: p.seconden),
           ]).timeout(const Duration(seconds: 40));
-          zaadBpm = alle.first;
-          bpm = alle.sublist(1);
           final rij = [
             for (var i = 0; i < nieuw.length; i++) '${nieuw[i].artiest} — ${nieuw[i].titel} ${bpm[i]?.round() ?? '?'}'
           ];

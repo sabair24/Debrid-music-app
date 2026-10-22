@@ -97,7 +97,7 @@ void main() {
       bool heeft(String s) => main.contains(s);
       expect(heeft('perAanroep: () => _modelbudget.lijstGevraagd(sessie, start: true),'), isTrue, reason: 'de start');
       expect(heeft('perAanroep: () => _modelbudget.lijstGevraagd(s),'), isTrue, reason: 'een vervolglijst');
-      expect(heeft('mag: () => viaPc ? (mag: true, waarom: null) : _modelbudget.lijst(radio.sessie),'), isTrue,
+      expect(heeft('                  : _modelbudget.lijst(radio.sessie),'), isTrue,
           reason: 'op de pc het eigen budget; via de pc telt de pc');
       expect(
         heeft('vraagSfeer: ai == null ? null : (plekken) => keuring.vraagSfeer(plekken, onderweg: true),'),
