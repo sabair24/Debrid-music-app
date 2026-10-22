@@ -85,7 +85,12 @@ class ZoneStaat {
     this.groep = const [],
     this.kanGroeperen = false,
     this.samenMs = 0,
+    this.sonos = false,
   });
+
+  /// Een Sonos: die kan met andere Sonossen in één groep (stap 3.1). Toestellen kunnen met elke speaker
+  /// meespelen ([kanGroeperen]).
+  final bool sonos;
 
   /// Bij een speaker waarmee toestellen meespelen (stap 3.3): hoeveel later hij klinkt dan hij zegt (ms),
   /// zoals gezet met de schuif "Sonos gelijkzetten". Wie meespeelt, loopt zoveel achter op zijn plek.
@@ -95,7 +100,8 @@ class ZoneStaat {
   /// groep. De leden staan niet apart in de lijst: ze spelen wat de leider speelt.
   final List<String> groep;
 
-  /// Kan deze zone met andere samen spelen (een Sonos)?
+  /// Kan deze zone met andere samen spelen? Elk toestel met de app, en elke speaker (toestellen volgen hem,
+  /// stap 3.3). Speakers onderling: alleen Sonossen ([sonos]).
   final bool kanGroeperen;
 
   /// Het appvolume (0–100), of -1 als de zone het niet meldt.
@@ -166,6 +172,7 @@ class ZoneStaat {
         if (groep.isNotEmpty) 'groep': groep,
         if (kanGroeperen) 'kanGroeperen': true,
         if (samenMs != 0) 'samenMs': samenMs,
+        if (sonos) 'sonos': true,
       };
 
   static ZoneStaat fromJson(Map<String, dynamic> m) => ZoneStaat(
@@ -191,6 +198,7 @@ class ZoneStaat {
         groep: [for (final x in (m['groep'] as List? ?? const [])) '$x'],
         kanGroeperen: m['kanGroeperen'] == true,
         samenMs: (m['samenMs'] as num?)?.toInt() ?? 0,
+        sonos: m['sonos'] == true,
       );
 
   @override
@@ -216,7 +224,8 @@ class ZoneStaat {
       other.volume == volume &&
       listEquals(other.groep, groep) &&
       other.kanGroeperen == kanGroeperen &&
-      other.samenMs == samenMs;
+      other.samenMs == samenMs &&
+      other.sonos == sonos;
 
   @override
   int get hashCode => Object.hash(id, online, playing, trackId, positionMs, opMs, index, lengte);
@@ -571,7 +580,8 @@ class ZoneRegister {
         soort: ZoneSoort.speaker,
         naam: naamMetVolgers(s.id, s.naam),
         groep: groepIds(s.id),
-        kanGroeperen: sonos.contains(s.id),
+        kanGroeperen: true,
+        sonos: sonos.contains(s.id),
         samenMs: toestelGroepen.containsKey('spk:${s.id}') ? speakerVertraging[s.id] ?? 0 : 0,
         online: true,
         playing: s.speelt,
@@ -596,7 +606,8 @@ class ZoneRegister {
         soort: ZoneSoort.speaker,
         naam: naamMetVolgers(b.id, b.naam),
         groep: groepIds(b.id),
-        kanGroeperen: b.sonos,
+        kanGroeperen: true,
+        sonos: b.sonos,
         samenMs: toestelGroepen.containsKey('spk:${b.id}') ? speakerVertraging[b.id] ?? 0 : 0,
         online: true,
         via: pcNaam,

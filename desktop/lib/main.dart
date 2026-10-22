@@ -10999,10 +10999,16 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
   final lijst = context.read<ZoneLijst>();
   final gekozen = _misschien<GekozenZone>(context);
   final speaker = leider.soort == ZoneSoort.speaker;
+  // Speakers onderling alleen Sonossen (die lopen samen op de seconde gelijk); toestellen met elke speaker.
   final kandidaten = [
     for (final z in lijst.zones)
-      if (z.id != leider.id && z.kanGroeperen && z.online) z,
+      if (z.id != leider.id &&
+          z.kanGroeperen &&
+          z.online &&
+          (z.soort != ZoneSoort.speaker || !speaker || (leider.sonos && z.sonos)))
+        z,
   ];
+  bool isSonos(String id) => kandidaten.where((z) => z.id == id).map((z) => z.sonos).firstOrNull ?? true;
   // Wie al in de groep zit, staat niet apart in de lijst: die halen we uit de groep zelf, en hun namen uit
   // de naam van de groep ("Sonos Move + THUIS": de leider, dan de anderen in de volgorde van de groep).
   final inGroep = {...leider.groep}..remove(leider.id);
@@ -11090,7 +11096,17 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
                           controlAffinity: ListTileControlAffinity.leading,
                           secondary: Icon(zoneIcoon(soortVan(id)), size: 20, color: _muted),
                           title: Text(naamVan(id), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                          onChanged: (v) => zet(() => v == true ? keuze.add(id) : keuze.remove(id)),
+                          onChanged: (v) => zet(() {
+                            if (v != true) {
+                              keuze.remove(id);
+                              return;
+                            }
+                            // Meer dan één speaker kan alleen als het allemaal Sonossen zijn.
+                            if (id.startsWith('spk:')) {
+                              keuze.removeWhere((k) => k.startsWith('spk:') && (!isSonos(k) || !isSonos(id)));
+                            }
+                            keuze.add(id);
+                          }),
                         ),
                       if (gemengd(keuze)) ...[
                         const SizedBox(height: 6),

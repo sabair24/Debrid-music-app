@@ -388,6 +388,21 @@ void main() {
       // Heen en terug over de lijn.
       expect(ZoneStaat.fromJson(z['spk:192.168.0.188']!.toJson()), z['spk:192.168.0.188']);
     });
+
+    test('ook een speaker die geen Sonos is (de KEF) laat toestellen meespelen', () {
+      reg.zetSpeakers(const [], bekend: [
+        (id: '192.168.0.100', naam: 'LS50 Wireless II', sonos: false),
+        (id: '192.168.0.188', naam: 'Sonos Move', sonos: true),
+      ]);
+      var z = {for (final x in reg.lijst()) x.id: x};
+      expect(z['spk:192.168.0.100']!.kanGroeperen, isTrue);
+      expect(z['spk:192.168.0.100']!.sonos, isFalse, reason: 'met een Sonos in één groep kan hij niet');
+      expect(z['spk:192.168.0.188']!.sonos, isTrue);
+      reg.zetToestelGroep('spk:192.168.0.100', ['pc-THUIS']);
+      z = {for (final x in reg.lijst()) x.id: x};
+      expect(z['spk:192.168.0.100']!.naam, 'LS50 Wireless II + THUIS');
+      expect(z['spk:192.168.0.100']!.groep, ['spk:192.168.0.100', 'dev:pc-THUIS']);
+    });
   });
 
   group('over de lijn', () {
