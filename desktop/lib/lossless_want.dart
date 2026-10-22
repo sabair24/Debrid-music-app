@@ -146,6 +146,7 @@ class LosslessWant {
     this.lastTryMs = 0,
     this.refused = const {},
     this.nep = const [],
+    this.tidalNee = const [],
     this.authority,
     this.performer,
     this.exact,
@@ -197,6 +198,11 @@ class LosslessWant {
   /// weinig genoeg om `lossless_wanted.json` klein te houden.
   static const maxNep = 20;
 
+  /// TIDAL-nummers die al gehaald en door de keuring afgewezen werden: andere lengte, andere opname,
+  /// niet beter. TIDAL is de reserve achter Soulseek (Saber, 22-10-2026: "Tidal is wel enkel als
+  /// back-up e, soulseek blijft prio"), en zonder dit haalt elke ronde hetzelfde verkeerde nummer.
+  final List<String> tidalNee;
+
   /// Stabiele naam van de wens. Niet het pad: het bestand verhuist zodra de tags kloppen.
   ///
   /// Een wens om één bepaald bestand heet naar dat bestand. Anders zou hij botsen met de gewone wens
@@ -217,7 +223,11 @@ class LosslessWant {
   String get query => zoekvraagVoorNummer(title, performer: performer, artist: artist);
 
   LosslessWant met(
-          {int? tries, int? lastTryMs, Map<String, String>? refused, List<VasteBron>? nep}) =>
+          {int? tries,
+          int? lastTryMs,
+          Map<String, String>? refused,
+          List<VasteBron>? nep,
+          List<String>? tidalNee}) =>
       LosslessWant(
         artist: artist,
         title: title,
@@ -231,6 +241,7 @@ class LosslessWant {
         nep: (nep ?? this.nep).length <= maxNep
             ? (nep ?? this.nep)
             : (nep ?? this.nep).sublist((nep ?? this.nep).length - maxNep),
+        tidalNee: tidalNee ?? this.tidalNee,
         authority: authority,
         performer: performer,
         exact: exact,
@@ -245,6 +256,7 @@ class LosslessWant {
         'lastTryMs': lastTryMs,
         if (refused.isNotEmpty) 'refused': refused,
         if (nep.isNotEmpty) 'nep': [for (final b in nep) b.toJson()],
+        if (tidalNee.isNotEmpty) 'tidalNee': tidalNee,
         if (authority != null) 'authority': authority!.toJson(),
         if (performer != null && performer!.isNotEmpty) 'performer': performer,
         if (exact != null) 'exact': exact!.toJson(),
@@ -279,6 +291,7 @@ class LosslessWant {
           if (x is Map)
             if (VasteBron.fromJson(Map<String, dynamic>.from(x)) case final b?) b,
       ],
+      tidalNee: [for (final x in (j['tidalNee'] as List?) ?? const []) '$x'],
     );
   }
 }
@@ -299,6 +312,17 @@ Duration wachtVoor(int tries) => switch (tries) {
 /// Is deze wens aan de beurt?
 bool wensIsAanDeBeurt(LosslessWant w, int nowMs) =>
     nowMs - w.lastTryMs >= wachtVoor(w.tries).inMilliseconds;
+
+/// Na hoeveel rondes zonder FLAC van Soulseek TIDAL meedoet, deze ronde meegeteld.
+///
+/// Saber, 22-10-2026: *"Tidal is wel enkel als back-up e, soulseek blijft prio."* Drie rondes is
+/// ruim twee uur ([wachtVoor]): genoeg voor een peer die even offline was.
+const kSoulseekRondesVoorTidal = 3;
+
+/// Mag TIDAL meedoen in deze ronde, nu Soulseek niets bruikbaars gaf? Een wens om één bepaald bestand
+/// ([LosslessWant.exact]) nooit: die klopt bij één peer aan en zoekt niets anders.
+bool wensMagNaarTidal(LosslessWant w, {required bool tidalErIs}) =>
+    tidalErIs && w.exact == null && w.tries + 1 >= kSoulseekRondesVoorTidal;
 
 /// De lijst met openstaande wensen, op schijf naast de andere staatbestanden.
 ///

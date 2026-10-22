@@ -12,6 +12,10 @@
 /// dat de app de Tidal-API zélf gaat spreken, en dat is precies het stuk dat stukgaat zodra Tidal
 /// iets verandert.
 ///
+/// Sinds tiddl 3 klopt dat half: `tiddl download search` tekent een tabel met treffers en vraagt dan
+/// welke je wil. De FLAC-wens leest die tabel ([zoekOpTidal]) als reserve achter Soulseek; het
+/// scherm blijft "plak een link".
+///
 /// Alleen op de machine die de muziek bezit. Een telefoon heeft geen Python, geen tiddl, en geen
 /// muziekmap om iets in te zetten.
 ///
@@ -27,7 +31,9 @@ import 'dart:io';
 
 import 'uitvoerbaar.dart';
 
+import 'enrichment.dart' show zonderGastTitel;
 import 'ffmpeg.dart';
+import 'organize.dart' show artistKey, normKey;
 
 /// Waar tiddl kan staan, in volgorde van waarschijnlijkheid.
 ///
@@ -174,13 +180,22 @@ const tidalKwaliteiten = ['max', 'high', 'normal', 'low'];
 /// `-p` wijst de map aan zonder aan jouw tiddl-instellingen te komen. Sinds 29-09-2026 is dat een
 /// keuringsmap en niet meer de muziekmap: wat tiddl aflevert wordt eerst gedecodeerd en vergeleken met
 /// wat je al hebt, en pas daarna opgeborgen (zie `keuringMap` in paths.dart).
+///
+/// [zoekMap] is waar tiddl kijkt of hij iets al heeft (`--sp`). Zonder die vlag is dat zijn eigen
+/// muziekmap, en staat het nummer daar, dan slaat hij het over en stopt hij netjes met afloopcode 0
+/// zonder één bestand. De wens geeft daarom zijn verse keuringsmap mee.
 List<String> tiddlOpdracht({
   required String tool,
   required String doel,
   required String map,
   String kwaliteit = 'max',
+  String? zoekMap,
 }) =>
-    [tool, 'download', '-q', kwaliteit, '-p', map, '-err', 'url', doel];
+    [
+      tool, 'download', '-q', kwaliteit, '-p', map, '-err', //
+      if (zoekMap != null) ...['--sp', zoekMap],
+      'url', doel,
+    ];
 
 /// De uitvoer van tiddl leesbaar maken.
 ///
@@ -281,6 +296,7 @@ Future<({String? fout, String? kwaliteit})> haalVanTidal({
   required String doel,
   required String map,
   String kwaliteit = 'max',
+  String? zoekMap,
 }) async {
   final tool = Tiddl.pad;
   if (tool == null) {
@@ -295,7 +311,8 @@ Future<({String? fout, String? kwaliteit})> haalVanTidal({
   try {
     final r = await Process.run(
       tool,
-      tiddlOpdracht(tool: tool, doel: doel, map: map, kwaliteit: kwaliteit).sublist(1),
+      tiddlOpdracht(tool: tool, doel: doel, map: map, kwaliteit: kwaliteit, zoekMap: zoekMap)
+          .sublist(1),
       stdoutEncoding: _soepelUtf8,
       stderrEncoding: _soepelUtf8,
       // Python vragen om UTF-8 te schrijven in plaats van de codetabel van de Windows-console.
@@ -313,5 +330,126 @@ Future<({String? fout, String? kwaliteit})> haalVanTidal({
     return (fout: leesbareFout(uitvoer), kwaliteit: null);
   } catch (e) {
     return (fout: 'Kon tiddl niet starten: $e', kwaliteit: null);
+  }
+}
+
+/// Eén regel uit de zoektabel van tiddl.
+typedef TidalTreffer = ({String id, String artiest, String titel});
+
+/// De treffers uit wat `tiddl download search -t track` afdrukt, elk id één keer.
+///
+/// **Waarom een tabel lezen.** tiddl zoekt alleen voor een mens: hij tekent de treffers en vraagt dan
+/// welk nummer je wil. Met een gesloten invoer breekt hij af na de tabel ("Aborted.", afloopcode 1)
+/// en haalt hij niets op, dus de tabel is alles wat er te lezen valt. Gemeten op 22-10-2026 met tiddl
+/// 3.4.4:
+///
+///     │ │ 9    │ Track │ DJ Massiv - High Volume [STEREO]             │ 208442464 │ │
+///
+/// Alleen de eerste artiest staat erin, geen lengte en geen album, en hetzelfde id komt soms twee keer
+/// voor. Een titel die niet past loopt door op de volgende regel, met een lege eerste cel. Een
+/// nummer dat alleen in Dolby Atmos of 360 staat, valt weg: de wens is een stereobestand.
+List<TidalTreffer> tidalZoektreffers(String uitvoer) {
+  final uit = <TidalTreffer>[];
+  final gezien = <String>{};
+  final getal = RegExp(r'^\d+$');
+  String? id;
+  var tekst = '';
+  void sluit() {
+    final i = id;
+    id = null;
+    if (i == null || !gezien.add(i)) return;
+    var t = tekst.trim();
+    final modus = RegExp(r'\s*\[([A-Z0-9_, ]+)\]$').firstMatch(t);
+    if (modus != null) {
+      if (!modus.group(1)!.contains('STEREO')) return;
+      t = t.substring(0, modus.start).trim();
+    }
+    final streep = t.indexOf(' - ');
+    uit.add(streep < 0
+        ? (id: i, artiest: '', titel: t)
+        : (id: i, artiest: t.substring(0, streep).trim(), titel: t.substring(streep + 3).trim()));
+  }
+
+  final schoon = uitvoer.replaceAll(RegExp(r'\x1B\[[0-9;?]*[A-Za-z]'), '');
+  for (final regel in schoon.split(RegExp(r'\r\n|\r|\n'))) {
+    final delen = regel.split(RegExp('[│┃|]'));
+    // Twee randen links (paneel en tabel), dan #, soort, titel, id, en weer twee randen rechts.
+    if (delen.length != 8) continue;
+    final c = [for (final d in delen.sublist(2, 6)) d.trim()];
+    if (getal.hasMatch(c[0]) && getal.hasMatch(c[3])) {
+      sluit();
+      id = c[3];
+      tekst = c[2];
+    } else if (c[0].isEmpty && c[2].isNotEmpty && id != null) {
+      tekst = '$tekst ${c[2]}';
+    }
+  }
+  sluit();
+  return uit;
+}
+
+/// De ids uit [treffers] die [titel] van [artiest] zijn, in de volgorde van tiddl, zonder [nee].
+///
+/// **Streng op de titel, ruim op de artiest.** tiddl toont alleen de eerste artiest: de wens "DJ
+/// Massiv vs the Rebel — High Volume" heet daar "DJ Massiv - High Volume". Daarom telt de artiest
+/// als de ene naam woord voor woord het begin van de andere is: "DJ Massiv" past, "Sam" past niet op
+/// "Samantha Fox". De titel moet gelijk zijn, met of zonder gast ("(feat. …)"). Dat is niet het
+/// laatste woord: de keuring meet daarna de lengte en of het dezelfde opname is als wat je hebt.
+List<String> kiesTidalTreffers(
+  List<TidalTreffer> treffers, {
+  required String artiest,
+  required String titel,
+  Iterable<String> nee = const [],
+}) {
+  List<String> woorden(String s) => artistKey(s).split(' ').where((w) => w.isNotEmpty).toList();
+  bool artiestPast(List<String> a, List<String> b) {
+    final kort = a.length <= b.length ? a : b, lang = identical(kort, a) ? b : a;
+    if (kort.isEmpty || kort.join(' ').length < 3) return false;
+    for (var i = 0; i < kort.length; i++) {
+      if (kort[i] != lang[i]) return false;
+    }
+    return true;
+  }
+
+  final wil = woorden(artiest);
+  final t = normKey(titel), tKaal = normKey(zonderGastTitel(titel));
+  final weg = nee.toSet();
+  return [
+    for (final x in treffers)
+      if (!weg.contains(x.id) &&
+          artiestPast(wil, woorden(x.artiest)) &&
+          (normKey(x.titel) == t || normKey(zonderGastTitel(x.titel)) == tKaal))
+        x.id,
+  ];
+}
+
+/// Zoek [vraag] op TIDAL. Null als tiddl er niet is of niet antwoordde, anders de treffers.
+///
+/// Breed getekend (`COLUMNS`): op de standaard 80 tekens kapt tiddl de soort af en breekt hij lange
+/// titels over twee regels. De invoer gaat meteen dicht, zodat de vraag "welk nummer?" niet blijft
+/// wachten; een minuut is ruim voor een zoekopdracht van drie seconden.
+Future<List<TidalTreffer>?> zoekOpTidal(String vraag, {int aantal = 10}) async {
+  final tool = Tiddl.pad;
+  if (tool == null || vraag.trim().isEmpty) return null;
+  try {
+    final p = await Process.start(
+      tool,
+      ['download', 'search', '-t', 'track', '-n', '$aantal', vraag.trim()],
+      environment: {
+        'PYTHONIOENCODING': 'utf-8',
+        'PYTHONUTF8': '1',
+        'COLUMNS': '220',
+      },
+    );
+    await p.stdin.close();
+    final uit = p.stdout.transform(_soepelUtf8.decoder).join();
+    final fout = p.stderr.transform(_soepelUtf8.decoder).join();
+    await p.exitCode.timeout(const Duration(minutes: 1), onTimeout: () {
+      p.kill();
+      return -1;
+    });
+    return tidalZoektreffers('${await uit}\n${await fout}');
+  } catch (_) {
+    return null;
   }
 }

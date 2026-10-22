@@ -27,7 +27,7 @@ import 'meldrem.dart';
 import 'warm_log.dart';
 import 'werkrij.dart';
 import 'paths.dart';
-import 'audioformaten.dart' show isAudioBestand, isVerliesvrij;
+import 'audioformaten.dart' show isAudioBestand, isVerliesvrij, soortVan;
 import 'echtheid.dart';
 import 'enrichment.dart' show lijktVerzamelaar;
 import 'echtheid_meter.dart';
@@ -38,6 +38,7 @@ import 'fingerprint.dart' show Fingerprinter, similarity, maybeSameRecordingScor
 import 'integriteit.dart';
 import 'keuring.dart' show Heelheid, kwaliteitZin;
 import 'wavpack_kop.dart' show readWvKop;
+import 'tiddl.dart' show Tiddl, haalVanTidal, kiesTidalTreffers, zoekOpTidal;
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
 import 'vervangjacht.dart';
@@ -1377,6 +1378,10 @@ class DownloadManager extends ChangeNotifier {
 
   /// Hoeveel wensen één veegbeurt afwerkt.
   static const _maxWensenPerVeeg = 6;
+
+  /// Hoeveel nummers van TIDAL er per ronde gehaald worden voor één wens. Weinig: de keuze is al
+  /// streng op titel en artiest, en wat de keuring afwijst komt niet terug ([LosslessWant.tidalNee]).
+  static const _maxTidalPogingen = 2;
 
   /// Boven welke wachtrijplaats er niet meer gewacht wordt.
   ///
@@ -3032,12 +3037,17 @@ class DownloadManager extends ChangeNotifier {
       }
       return await _bergTorrentOp(map, naam, zichtbaar: zichtbaar);
     } finally {
-      final over = (_opKeuring[map.path] ?? 1) - 1;
-      if (over <= 0) {
-        _opKeuring.remove(map.path);
-      } else {
-        _opKeuring[map.path] = over;
-      }
+      _geefKeuringsmapVrij(map);
+    }
+  }
+
+  /// De tegenhanger van [keuringsmapVoor].
+  void _geefKeuringsmapVrij(Directory map) {
+    final over = (_opKeuring[map.path] ?? 1) - 1;
+    if (over <= 0) {
+      _opKeuring.remove(map.path);
+    } else {
+      _opKeuring[map.path] = over;
     }
   }
 
@@ -3393,14 +3403,11 @@ class DownloadManager extends ChangeNotifier {
         '${w.refused.isEmpty ? "" : ", ${w.refused.length} peers overgeslagen"}'
         '${rustend.isEmpty ? "" : ", ${rustend.length} peers rusten uit"}'
         '${w.nep.isEmpty ? "" : ", ${w.nep.length} betrapte uploads overgeslagen"})');
-    if (lossless.isEmpty) {
-      _wants.update(w.met(tries: w.tries + 1, lastTryMs: DateTime.now().millisecondsSinceEpoch));
-      return false;
-    }
-
-    final job = DownloadJob(w.title);
     final geweigerd = Map<String, String>.of(w.refused);
     final betrapt = List<VasteBron>.of(w.nep);
+    if (lossless.isEmpty) return _rondWensAf(w, goed: false, geweigerd: geweigerd, betrapt: betrapt);
+
+    final job = DownloadJob(w.title);
     var goed = false;
     // Een klok in plaats van een teller, naar het model van [_chaseUpgrade]. Hiervoor stond er
     // `take(4)` met dertig minuten wachten per peer: tot TWEE UUR voor één wens, terwijl de veegbeurt
@@ -3463,101 +3470,48 @@ class DownloadManager extends ChangeNotifier {
           // naar `_dubbel` om plaats te maken voor de volgende vervalsing, de wens verviel, en
           // `hasLossless` telde de nieuwe mee. Stilletjes "opgelost", nog steeds nep.
           final staged = File(res.path);
-          final oordeel = await _meetEchtheid(staged);
-          if (!magBlijven(oordeel)) {
-            _log.line('   ${f.username}: betrapt bij binnenkomst '
-                '(${waarom(oordeel!)}) — weggegooid, volgende kandidaat');
-            jacht.value = jacht.value.met(
-                weggegooid: jacht.value.weggegooid + 1,
-                regel: 'Vervalsing betrapt bij ${f.username} (${waarom(oordeel)}) — weggegooid.');
+          final uitslag = await _keurVoorWens(w, staged, f.username);
+          if (uitslag == _Wenskeuring.afgewezen) {
             betrapt.add(VasteBron(
                 username: f.username,
                 filename: f.filename,
                 size: f.size,
                 durationSec: f.durationSec));
-            await _discardStaged(res.path);
-            continue;
           }
-
-          // En het moet DEZELFDE OPNAME zijn. De lengte van de peer is vóór het binnenhalen al
-          // gewogen (zie [zelfdeLengte]), maar lang niet iedereen meldt er een; hier staat het
-          // bestand er, dus hier valt het écht te meten. Zonder deze tweede laag landt een
-          // radio-edit als `(2)` naast het origineel en blijft de vervalsing staan.
-          // FLAC uit zijn kop; elk ander formaat uit de decodeerproef die er net overheen ging.
-          final lengte = _duurVan(staged.path) ?? gedecodeerdeLengte(staged.path)?.round();
-          if (!zelfdeLengte(w.authority?.seconds, lengte)) {
-            _log.line('   ${f.username}: andere uitgave (${lengte}s tegen '
-                '${w.authority?.seconds}s) — weggegooid, volgende kandidaat');
-            jacht.value = jacht.value.met(
-                weggegooid: jacht.value.weggegooid + 1,
-                regel: 'Andere uitgave bij ${f.username} — weggegooid.');
-            betrapt.add(VasteBron(
-                username: f.username,
-                filename: f.filename,
-                size: f.size,
-                durationSec: f.durationSec));
-            await _discardStaged(res.path);
-            continue;
-          }
-
-          // En schoon is niet genoeg: hij moet ook minstens evenveel ECHTE muziek dragen als wat er
-          // al ligt — bij de proefjacht kwam er een eerlijke 16/48 binnen voor
-          // een opgeschaalde 24/96 die in werkelijkheid 24 bits op 44,1 draagt, en dat is minder.
-          // Sinds 29-09-2026 dezelfde regel als elke andere weg: alleen wat BEWEZEN beter is, vervangt
-          // ([firstIsBetter]). Hier stond een eigen toets, [draagtGenoeg], die "minstens evenveel"
-          // vroeg — en daarmee ruilde de wens Sabers opgeschaalde 24/96 van Is It Scary in voor een
-          // eerlijke 24/48 die niets beter was, en die van Stranger In Moscow voor een 24/44,1. Zijn
-          // woorden: "als er een slechtere binnenkomt dan wat ik heb moet die weg."
-          final bestaand = await _bereidVergelijkingVoor(
-              staged,
-              w.authority ?? TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0));
-          final andereOpname = bestaand != null && await _zelfdeOpname(staged.path, bestaand) == false;
-          final nietBeter = bestaand != null && !firstIsBetter(staged, File(bestaand));
-          if (andereOpname || nietBeter) {
-            final waaromNiet = andereOpname
-                ? 'een andere opname dan wat je hebt'
-                : 'niet bewezen beter: ${kwaliteitZin(kwaliteitVan(staged))} tegen '
-                    '${kwaliteitZin(kwaliteitVan(File(bestaand)))}';
-            _log.line('   ${f.username}: $waaromNiet — weggegooid, volgende kandidaat');
-            jacht.value = jacht.value.met(
-                weggegooid: jacht.value.weggegooid + 1,
-                regel: 'Bij ${f.username}: $waaromNiet — weggegooid.');
-            betrapt.add(VasteBron(
-                username: f.username,
-                filename: f.filename,
-                size: f.size,
-                durationSec: f.durationSec));
-            await _discardStaged(res.path);
-            continue;
-          }
-
-          try {
-            // Het gezag van de wens, niet dat van dit wegwerp-job: een peer stuurt geregeld een
-            // bestand zonder één tag, en dan landt het als "Onbekende artiest" in Singles. Precies wat
-            // de eerste echte vondst deed voordat dit erin stond.
-            final uit = await placeFileDetailed(staged, _downloadsRoot,
-                tags: w.authority ??
-                    TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0),
-                staatAl: mapVanBestaande);
-            // Verloor hij van wat er al lag, dan is er niets opgelost en blijft de wens staan. Dit
-            // stond er niet: `goed` werd gezet ongeacht de uitkomst, dus een kopie die verloor liet
-            // de wens tóch vervallen.
-            if (uit.how == Placement.duplicate) continue;
-          } catch (_) {/* de scan vindt hem waar hij ook landde */}
+          if (uitslag != _Wenskeuring.opgeborgen) continue;
           goed = true;
           return;
         }
       });
     } catch (_) {/* niets verloren: je houdt de kopie die je had */}
+    return _rondWensAf(w, goed: goed, geweigerd: geweigerd, betrapt: betrapt);
+  }
 
+  /// Het einde van een wensronde: lukte Soulseek niet, dan TIDAL als reserve, en dan van de lijst of
+  /// opnieuw plannen.
+  ///
+  /// **TIDAL pas na drie rondes zonder iets** ([wensMagNaarTidal]). Saber, 22-10-2026: *"Tidal is wel
+  /// enkel als back-up e, soulseek blijft prio."* Op Soulseek staat vaak een 24-bitkopie, en tiddl
+  /// levert alleen 16 bit / 44,1 kHz. Een nummer dat op Soulseek niet in FLAC staat, kreeg zo nooit
+  /// een FLAC, ook als je TIDAL hebt.
+  Future<bool> _rondWensAf(LosslessWant w,
+      {required bool goed,
+      required Map<String, String> geweigerd,
+      required List<VasteBron> betrapt}) async {
+    final tidalNee = List<String>.of(w.tidalNee);
+    var via = '';
+    if (!goed && wensMagNaarTidal(w, tidalErIs: Tiddl.beschikbaar)) {
+      goed = await _wensViaTidal(w, tidalNee);
+      if (goed) via = ' via TIDAL';
+    }
     if (goed) {
       _wants.forget(w.key);
-      _log.line('wens "${w.artist} — ${w.title}": FLAC binnen na ${w.tries + 1} '
+      _log.line('wens "${w.artist} — ${w.title}": FLAC binnen$via na ${w.tries + 1} '
           'poging${w.tries == 0 ? "" : "en"} — van de lijst');
       jacht.value = jacht.value.met(
           binnen: jacht.value.binnen + 1,
           opDeLijst: _wants.count,
-          regel: 'Echte kopie binnen voor ${w.artist} — ${w.title}.');
+          regel: 'Echte kopie binnen$via voor ${w.artist} — ${w.title}.');
       try {
         await onLibraryChanged();
       } catch (_) {}
@@ -3569,12 +3523,140 @@ class DownloadManager extends ChangeNotifier {
         tries: w.tries + 1,
         lastTryMs: DateTime.now().millisecondsSinceEpoch,
         refused: geweigerd,
-        nep: betrapt));
+        nep: betrapt,
+        tidalNee: tidalNee));
     _log.line('wens "${w.artist} — ${w.title}": nog niet — volgende poging over '
         '${_kort(wachtVoor(w.tries + 1))}');
     _jachtRegel('${w.artist} — ${w.title}: nog niets echts gevonden, opnieuw over '
         '${duurTekst(wachtVoor(w.tries + 1))}.');
     return false;
+  }
+
+  /// TIDAL voor één wens: zoeken, het juiste nummer kiezen ([kiesTidalTreffers]), halen in een eigen
+  /// keuringsmap, en dan dezelfde keuring als een kandidaat van Soulseek ([_keurVoorWens]). Wat de
+  /// keuring afwijst, komt in [nee] en wordt niet opnieuw gehaald.
+  Future<bool> _wensViaTidal(LosslessWant w, List<String> nee) async {
+    final artiest = (w.performer?.isNotEmpty ?? false) ? w.performer! : w.artist;
+    final treffers = await zoekOpTidal(w.query);
+    if (treffers == null) {
+      _log.line('   TIDAL: zoeken lukte niet');
+      return false;
+    }
+    final ids = kiesTidalTreffers(treffers, artiest: artiest, titel: w.title, nee: nee);
+    _log.line('   TIDAL: ${treffers.length} treffers, ${ids.length} met deze titel en artiest'
+        '${nee.isEmpty ? "" : " (${nee.length} eerder afgewezen)"}');
+    for (final id in ids.take(_maxTidalPogingen)) {
+      jacht.value = jacht.value.met(regel: 'Probeert TIDAL (nummer $id).');
+      final map = keuringsmapVoor('tidal-wens-$id');
+      var laten = false;
+      try {
+        final t0 = DateTime.now();
+        final r = await haalVanTidal(doel: 'track/$id', map: map.path, zoekMap: map.path);
+        if (r.fout != null) {
+          _log.line('   TIDAL $id: mislukt: ${r.fout!.split('\n').last}');
+          continue;
+        }
+        final binnen = <File>[];
+        await for (final e in map.list(recursive: true, followLinks: false)) {
+          if (e is File && isVerliesvrij(soortVan(e.path))) binnen.add(e);
+        }
+        if (binnen.length != 1) {
+          _log.line('   TIDAL $id: ${binnen.length} verliesvrije bestanden binnen — overgeslagen');
+          continue;
+        }
+        _log.line('   TIDAL $id: GELEVERD${r.kwaliteit == null ? "" : " (${r.kwaliteit})"} '
+            'na ${_kort(DateTime.now().difference(t0))}');
+        final uitslag = await _keurVoorWens(w, binnen.single, 'TIDAL $id');
+        if (uitslag == _Wenskeuring.afgewezen) nee.add(id);
+        if (uitslag != _Wenskeuring.opgeborgen) continue;
+        // Kon hij niet opgeborgen worden, dan blijft de map staan: `hervatKeuring` keurt hem bij de
+        // volgende start alsnog, en de scan kijkt niet in de keuringsmap.
+        laten = binnen.single.existsSync();
+        return true;
+      } catch (e) {
+        _log.line('   TIDAL $id: $e');
+      } finally {
+        if (!laten) {
+          try {
+            if (map.existsSync()) await map.delete(recursive: true);
+          } catch (_) {/* in gebruik; dan keurt de volgende start het restant */}
+        }
+        _geefKeuringsmapVrij(map);
+      }
+    }
+    return false;
+  }
+
+  /// Wat er met een binnengekomen kandidaat voor een wens gebeurt, van Soulseek of van TIDAL ([bron]
+  /// staat in het logboek). Alles wat niet [_Wenskeuring.opgeborgen] is, is al weggegooid.
+  Future<_Wenskeuring> _keurVoorWens(LosslessWant w, File staged, String bron) async {
+    final oordeel = await _meetEchtheid(staged);
+    if (!magBlijven(oordeel)) {
+      _log.line('   $bron: betrapt bij binnenkomst '
+          '(${waarom(oordeel!)}) — weggegooid, volgende kandidaat');
+      jacht.value = jacht.value.met(
+          weggegooid: jacht.value.weggegooid + 1,
+          regel: 'Vervalsing betrapt bij $bron (${waarom(oordeel)}) — weggegooid.');
+      await _discardStaged(staged.path);
+      return _Wenskeuring.afgewezen;
+    }
+
+    // En het moet DEZELFDE OPNAME zijn. De lengte van de peer is vóór het binnenhalen al
+    // gewogen (zie [zelfdeLengte]), maar lang niet iedereen meldt er een; hier staat het
+    // bestand er, dus hier valt het écht te meten. Zonder deze tweede laag landt een
+    // radio-edit als `(2)` naast het origineel en blijft de vervalsing staan.
+    // FLAC uit zijn kop; elk ander formaat uit de decodeerproef die er net overheen ging.
+    final lengte = _duurVan(staged.path) ?? gedecodeerdeLengte(staged.path)?.round();
+    if (!zelfdeLengte(w.authority?.seconds, lengte)) {
+      _log.line('   $bron: andere uitgave (${lengte}s tegen '
+          '${w.authority?.seconds}s) — weggegooid, volgende kandidaat');
+      jacht.value = jacht.value.met(
+          weggegooid: jacht.value.weggegooid + 1,
+          regel: 'Andere uitgave bij $bron — weggegooid.');
+      await _discardStaged(staged.path);
+      return _Wenskeuring.afgewezen;
+    }
+
+    // En schoon is niet genoeg: hij moet ook minstens evenveel ECHTE muziek dragen als wat er
+    // al ligt — bij de proefjacht kwam er een eerlijke 16/48 binnen voor
+    // een opgeschaalde 24/96 die in werkelijkheid 24 bits op 44,1 draagt, en dat is minder.
+    // Sinds 29-09-2026 dezelfde regel als elke andere weg: alleen wat BEWEZEN beter is, vervangt
+    // ([firstIsBetter]). Hier stond een eigen toets, [draagtGenoeg], die "minstens evenveel"
+    // vroeg — en daarmee ruilde de wens Sabers opgeschaalde 24/96 van Is It Scary in voor een
+    // eerlijke 24/48 die niets beter was, en die van Stranger In Moscow voor een 24/44,1. Zijn
+    // woorden: "als er een slechtere binnenkomt dan wat ik heb moet die weg."
+    final bestaand = await _bereidVergelijkingVoor(
+        staged,
+        w.authority ?? TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0));
+    final andereOpname = bestaand != null && await _zelfdeOpname(staged.path, bestaand) == false;
+    final nietBeter = bestaand != null && !firstIsBetter(staged, File(bestaand));
+    if (andereOpname || nietBeter) {
+      final waaromNiet = andereOpname
+          ? 'een andere opname dan wat je hebt'
+          : 'niet bewezen beter: ${kwaliteitZin(kwaliteitVan(staged))} tegen '
+              '${kwaliteitZin(kwaliteitVan(File(bestaand)))}';
+      _log.line('   $bron: $waaromNiet — weggegooid, volgende kandidaat');
+      jacht.value = jacht.value.met(
+          weggegooid: jacht.value.weggegooid + 1,
+          regel: 'Bij $bron: $waaromNiet — weggegooid.');
+      await _discardStaged(staged.path);
+      return _Wenskeuring.afgewezen;
+    }
+
+    try {
+      // Het gezag van de wens, niet dat van dit wegwerp-job: een peer stuurt geregeld een
+      // bestand zonder één tag, en dan landt het als "Onbekende artiest" in Singles. Precies wat
+      // de eerste echte vondst deed voordat dit erin stond.
+      final uit = await placeFileDetailed(staged, _downloadsRoot,
+          tags: w.authority ??
+              TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0),
+          staatAl: mapVanBestaande);
+      // Verloor hij van wat er al lag, dan is er niets opgelost en blijft de wens staan. Dit
+      // stond er niet: `goed` werd gezet ongeacht de uitkomst, dus een kopie die verloor liet
+      // de wens tóch vervallen.
+      if (uit.how == Placement.duplicate) return _Wenskeuring.alAanwezig;
+    } catch (_) {/* de scan vindt hem waar hij ook landde */}
+    return _Wenskeuring.opgeborgen;
   }
 
   /// Eén nummer voor de RADIO ophalen. Geeft het pad terug waar het geland is, of null.
@@ -6015,3 +6097,15 @@ class DownloadManager extends ChangeNotifier {
 
 /// Hoe één poging bij een uploader afliep, binnen `_haalVoorRadio`.
 enum _Uit { klaar, volgende, stop }
+
+/// Hoe een kandidaat voor een wens door de keuring kwam (`_keurVoorWens`).
+enum _Wenskeuring {
+  /// In de bibliotheek: de wens is vervuld.
+  opgeborgen,
+
+  /// Nep, een andere uitgave of niet bewezen beter. Onthouden, zodat hij niet terugkomt.
+  afgewezen,
+
+  /// Verloor van wat er al lag. Niet onthouden: het bestand was in orde.
+  alAanwezig,
+}
