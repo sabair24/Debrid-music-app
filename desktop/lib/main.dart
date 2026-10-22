@@ -37,7 +37,7 @@ import 'ui/kopbewerker.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
 import 'radiostijl.dart'
-    show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl, buitenTijdvak, naLijstVanModel, sfeerBeslistFamilie;
+    show Stijlboek, Stijlfamilie, Stijloordeel, Zaadstijl, danstakVanZaad, naLijstVanModel, sfeerBeslistFamilie;
 import 'radiovoorraad.dart' show Haalstand, RadioKeuringLater, RadioLaterOpnieuw, Weerreden;
 import 'radioplan.dart';
 import 'oordelen.dart';
@@ -16674,8 +16674,6 @@ Future<void> startRadio(BuildContext context, String artist,
   final zelf = artiestSleutel(artist);
   // Het bijvullen: zonder model alleen uit de toppers van de zaadartiest en van zijn `/related` —
   // nooit uit de artiestenradio (zie `radiobijvuller.dart`).
-  var zaadLaatst = zaadNu;
-  unawaited(zaadStijl.then((z) => zaadLaatst = z, onError: (Object _) => zaadNu));
   final bijvuller = Radiobijvuller(
     radio: radio,
     deezer: Radiodeezer(
@@ -16693,7 +16691,7 @@ Future<void> startRadio(BuildContext context, String artist,
         elkeLengte: keuring.elkeLengte,
         bron: 'buren'),
     keurEigen: (p) => keuring.keur(p, eigen: true),
-    reserveKandidaten: (artiesten) => _reserveUit(lib, artiesten, zaadLaatst),
+    reserveKandidaten: (artiesten) => _reserveUit(lib, artiesten),
     // Met een sleutel: ook de buurt op sfeer, en een vervolglijst van het model als de buurt niets nieuws
     // meer geeft — binnen het budget (uitlevering 2 van het radioplan, zie `modelbudget.dart`).
     vraagSfeer: ai == null ? null : (plekken) => keuring.vraagSfeer(plekken, onderweg: true),
@@ -16949,20 +16947,16 @@ class _Radiokeuring {
     final hint = _jaar[_k(p.artiest, p.titel)] ?? (eigenJaar != null && eigenJaar > 1900 ? eigenJaar : null);
     Stijloordeel o;
     final tak = await _zaadTak;
+    final danstak = await _zaadDanstak;
     Future<Stijloordeel> oordeel({required bool doorModel}) => stijlboek.keur(p.artiest, p.titel, z,
         jaarHint: hint,
         zaadTak: tak,
         doorModel: doorModel,
-        familieTelt: !(sfeerJa && sfeerBeslistFamilie(z.familie)),
-        // Het tijdvak was de reden: dat staat dan op de plek, zodat een ruimer venster later precies
-        // die weigeringen terugvindt — zie [Weerreden].
-        buitenJaar: (j) {
-          p.weer = Weerreden.tijdvak;
-          p.buitenJaar = j;
-        });
+        zaadDanstak: danstak,
+        familieTelt: !(sfeerJa && sfeerBeslistFamilie(z.familie)));
     try {
-      // Heeft het model de sfeer goedgekeurd en is het zaad soul of jazz, dan telt alleen nog het
-      // tijdvak — zie [sfeerBeslistFamilie]: Sting "Fields of Gold" hoort bij Sade, ook al noemt
+      // Heeft het model de sfeer goedgekeurd en is het zaad soul of jazz, dan telt de familie niet —
+      // zie [sfeerBeslistFamilie]: Sting "Fields of Gold" hoort bij Sade, ook al noemt
       // Discogs het rock.
       // En wat het model zelf koos, keurt de rocktak niet — zie [Stijlboek.keur] en [naLijstVanModel].
       o = await oordeel(doorModel: vanModel).timeout(eigen ? _geduldEigen : _geduld);
@@ -17081,6 +17075,17 @@ class _Radiokeuring {
         return z.familie == Stijlfamilie.rock && t != null ? await stijlboek.tak(artiest, t) : null;
       });
   Future<String?>? _zaadTakF;
+
+  /// De danstak van het zaad, als het dance is — zie `danstakVanZaad`: eurodance, trance, hardstyle, …
+  Future<String?> get _zaadDanstak => _zaadDanstakF ??= zaadStijl.then((z) async {
+        final t = zaadTitel;
+        if (z.familie != Stijlfamilie.dans || t == null) return null;
+        final d = await stijlboek.danstak(artiest, t);
+        final tak = d == null ? null : danstakVanZaad(d);
+        if (tak != null) log.line('radio "$artiest — $t": danstak $tak');
+        return tak;
+      });
+  Future<String?>? _zaadDanstakF;
 }
 
 /// Eigen nummers voor de reserve van een radio — zie `Radiobijvuller.vulReserve`. Alleen van
@@ -17090,23 +17095,11 @@ class _Radiokeuring {
 /// kwamen Enya en Massive Attack in een Freak Out-radio (beoordeling van 08-10-2026). Die laag mag pas
 /// mee met een sfeeroordeel van het model, in een volgende uitlevering.
 ///
-/// Een jaar uit je tags weert alleen als het VÓÓR het tijdvak ligt. Een later jaar is vaak dat van een
-/// verzamelaar ("90s Hits", 2012), en dan beslist Discogs in de keuring.
-List<Track> _reserveUit(LibraryStore lib, Set<String> artiesten, Zaadstijl zaad) => [
+/// Geen jaargrens (Saber, 22-10-2026): de keuring beslist op stijl en sfeer.
+List<Track> _reserveUit(LibraryStore lib, Set<String> artiesten) => [
       for (final t in lib.tracks)
-        if (!nooitOpRadio(t.title) &&
-            artiesten.contains(artiestSleutel(t.artist)) &&
-            !tagjaarVoorTijdvak(zaad, t.year))
-          t
+        if (!nooitOpRadio(t.title) && artiesten.contains(artiestSleutel(t.artist))) t
     ];
-
-/// Ligt dit jaar uit je tags vóór het tijdvak van [zaad]? Alleen dan weert het — zie [_reserveUit].
-bool tagjaarVoorTijdvak(Zaadstijl zaad, int? jaar) {
-  final zj = zaad.jaar;
-  if (jaar == null || jaar < 1900 || zj == null) return false;
-  final buiten = buitenTijdvak(zaad, jaar);
-  return buiten != null && buiten < zj;
-}
 
 /// Telt bij deze radio je gewone versie van een liedje als het origineel, hoe lang ook — of let hij
 /// op de lengte? Zie [eigenPastOpPlek].

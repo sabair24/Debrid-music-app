@@ -63,7 +63,8 @@ void main() {
           stijlen: ['Euro House', 'Trance'],
           profiel: profiel);
       expect(v, contains("2 Fabiola - Freak Out ('97 Remix) (uit 1997, stijl Euro House, Trance)"));
-      expect(v, contains('Blijf in het genre en het tijdvak van DIT'));
+      expect(v, contains('Blijf in het genre en de sfeer van DIT nummer'));
+      expect(v, contains(kGeenJaargrensZin), reason: 'Saber, 22-10-2026: geen jaargrens, wel het genre');
       expect(v, contains('geen remixen'));
       expect(v, contains('Hoogstens twee nummers van 2 Fabiola'));
       expect(v, contains('niet om de stijl te kiezen'),

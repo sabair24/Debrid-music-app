@@ -1,4 +1,4 @@
-/// Past dit nummer bij de radio — in stijl en in tijdvak — volgens meer dan één bron?
+/// Past dit nummer bij de radio — in stijl — volgens meer dan één bron?
 ///
 /// **Waarom dit er is.** Saber op 26-09-2026: *"maar altijd met deezer vergelijken ?? er zijn toch
 /// andere bronnen ook e, dit is gelimiteerd aan deezer, maar moet combinatie zijn van AI, discogs
@@ -17,8 +17,8 @@
 /// Stijl alleen is dus niet genoeg — Niels had Discogs' Eurodance-label — en het tijdvak alleen ook
 /// niet. Samen wel. De regels, en verder niets:
 ///
-/// 1. **Tijdvak.** Weten we het jaar van het zaadnummer en van dit nummer, dan mogen ze hoogstens
-///    [kTijdvakSpeling] jaar uit elkaar liggen.
+/// 1. **Geen tijdvak meer** (Saber, 22-10-2026: "nergens een grens van jaren vanaf 1950 tot heden"). Het jaar
+///    hield ook genres uit elkaar; dat doen nu de stijl, de takken ([rockTak], [danstakPast]) en het model.
 /// 2. **Stijl.** Zet GEEN enkele bron dit nummer in de stijlfamilie van het zaad, terwijl er wél een
 ///    bron iets over zegt, dan valt het af. Eén bron die "ja" zegt is genoeg: TheAudioDB noemt
 ///    Vengaboys misschien "Pop", Discogs zet ze bij Electronic — en dan horen ze erbij.
@@ -157,6 +157,95 @@ final _altStijl = RegExp(r'grunge|alternative|indie|punk|noise|britpop|stoner|'
     r'funk metal|shoegaze|emo|lo-fi');
 final _klassiekStijl = RegExp(r'hard rock|glam|heavy metal|thrash|speed metal|aor|soft rock|pop rock|'
     r'blues rock|ballad|arena rock|classic rock|southern rock');
+
+/// Binnen dance: welke stroming? Discogs noemt het allemaal "Electronic"; de stijlen eronder maken het verschil.
+///
+/// **Waarom.** Sinds 22-10-2026 is het jaar geen grens meer (Saber: *"eurodance is geen disco e, dit moet wel
+/// accurater blijven"*). Tot dan hield het tijdvak de hardstyle en de big room van na 2010 uit een radio vanaf Freak
+/// Out (1996); nu doet de tak dat. Gemeten die dag op de honderd nummers die twee Freak Out-radio's keurden:
+/// 2 Fabiola, Cappella, Haddaway en Masterboy staan bij Euro House en Eurodance; Da Tweekaz bij Hardstyle, Ummet
+/// Ozcan bij Electro House. Specifiek eerst: "Euro House" is eurodance voordat "House" eraan toekomt.
+const List<(String, String)> kDanstakken = [
+  ('eurodance', r'euro ?house|eurodance|euro-dance|italodance|italo house|happy hardcore'),
+  ('hardstyle', r'hardstyle|jumpstyle|^hardcore$|gabber|hard dance|frenchcore'),
+  ('edm', r'electro house|big room|future house|complextro|dubstep|moombahton|future bass|bass house|melbourne bounce|^trap$|brostep'),
+  ('trance', r'trance'),
+  ('techno', r'techno|minimal|tech house'),
+  ('house', r'house'),
+  ('disco', r'disco|hi nrg|boogie'),
+  ('drum & bass', r'drum n bass|jungle|breakbeat|breaks|big beat'),
+  ('downtempo', r'downtempo|trip hop|ambient|chillout|lounge'),
+];
+final _danstakRegels = [for (final (t, p) in kDanstakken) (t, RegExp(p))];
+
+/// Welke takken samen in één radio mogen, per tak van het zaad. Geijkt op dezelfde honderd nummers: de 91 die de
+/// Freak Out-radio's goedkeurden zijn eurodance, of trance, house of techno uit die scene (Milk Inc., ATB, Sash!,
+/// Brooklyn Bounce, Ramirez) — die blijven er allemaal in.
+const Map<String, Set<String>> kDanstakSamen = {
+  'eurodance': {'eurodance', 'trance', 'house', 'techno'},
+  'trance': {'trance', 'eurodance', 'techno', 'house'},
+  'house': {'house', 'eurodance', 'techno', 'trance', 'disco'},
+  'techno': {'techno', 'trance', 'house', 'hardstyle'},
+  'hardstyle': {'hardstyle', 'techno'},
+  'edm': {'edm', 'house'},
+  'disco': {'disco', 'house'},
+  'drum & bass': {'drum & bass'},
+  'downtempo': {'downtempo'},
+};
+
+/// De takken van één uitgave (elke tak één keer).
+Set<String> danstakkenVan(Iterable<String> stijlen) {
+  final uit = <String>{};
+  for (final s in stijlen) {
+    final x = s.toLowerCase().trim();
+    for (final (t, re) in _danstakRegels) {
+      if (re.hasMatch(x)) {
+        uit.add(t);
+        break;
+      }
+    }
+  }
+  return uit;
+}
+
+/// Per tak op hoeveel uitgaven hij staat, en `_` = hoeveel uitgaven er een tak noemen.
+Map<String, int> danstakTelling(Iterable<DiscogsUitgave> uitgaven) {
+  final tel = <String, int>{};
+  var met = 0;
+  for (final u in uitgaven) {
+    final t = danstakkenVan(u.stijlen);
+    if (t.isEmpty) continue;
+    met++;
+    for (final k in t) {
+      tel[k] = (tel[k] ?? 0) + 1;
+    }
+  }
+  return {...tel, '_': met};
+}
+
+/// De tak van het zaad: die op de meeste uitgaven, bij gelijkstand de eerste in [kDanstakken]. Null: geen tak.
+String? danstakVanZaad(Map<String, int> telling) {
+  String? beste;
+  var n = 0;
+  for (final (t, _) in kDanstakken) {
+    final c = telling[t] ?? 0;
+    if (c > n) {
+      beste = t;
+      n = c;
+    }
+  }
+  return beste;
+}
+
+/// Past een nummer ([telling], zie [danstakTelling]) bij een zaad van tak [zaad]? Ja als een tak die er samen mee
+/// mag op minstens een DERDE van zijn uitgaven met een tak staat — of als Discogs er niets over zegt. Ruim met opzet:
+/// een remix op één uitgave maakt een eurodancenummer geen hardstyle.
+bool danstakPast(String zaad, Map<String, int> telling) {
+  final n = telling['_'] ?? 0;
+  if (n == 0) return true;
+  final samen = kDanstakSamen[zaad] ?? {zaad};
+  return samen.any((t) => (telling[t] ?? 0) * 3 >= n);
+}
 
 /// Is deze uitgave volgens Discogs een bootleg? Die tellen niet mee voor het jaar of de stijl — zie
 /// `DiscogsService.nummerUitgaven`.
@@ -334,12 +423,6 @@ Set<Stijlfamilie> meerderheid(List<Set<Stijlfamilie>> perUitgave) {
   return winnaars.length == 1 ? {winnaars.single} : const {};
 }
 
-/// Hoeveel jaar een nummer van het zaadnummer mag liggen.
-///
-/// Acht: vanaf Freak Out (1997) is dat 1989 tot 2005 — de hele eurodance en de nadagen ervan, en
-/// niet de disco van 1979 of de EDM van 2013.
-const int kTijdvakSpeling = 8;
-
 /// Wat we van het zaadnummer weten.
 typedef Zaadstijl = ({Stijlfamilie? familie, int? jaar});
 
@@ -375,19 +458,6 @@ Future<Stijloordeel> naLijstVanModel(Stijloordeel o,
   return doorModel() ? z : o;
 }
 
-/// Hoeveel jaar een nummer van het zaad mag liggen, per familie van het zaad.
-///
-/// Acht ([kTijdvakSpeling]) is geijkt op eurodance, een genre met een scherp tijdvak — en voor rock
-/// houdt het Nickelback (2001) uit een Nirvana-radio (1991). Maar op 27-09-2026, radio vanaf Sade
-/// "Cherish the Day" (1992), weerde het Marvin Gaye "Sexual Healing" (1982), Eurythmics (1983),
-/// Barry White (1978), Amy Winehouse (2006) en Corinne Bailey Rae (2005): precies wat er bij Sade
-/// hoort. Soul en jazz zijn tijdloos; pop zit ertussen.
-int tijdvakSpeling(Stijlfamilie? zaad) => switch (zaad) {
-      Stijlfamilie.jazz => 20,
-      Stijlfamilie.popsoul => 12,
-      _ => kTijdvakSpeling,
-    };
-
 /// Welke families er naast die van het zaad zelf bij horen. Een jazzy zaad als Sade — Discogs:
 /// Soul-Jazz, Smooth Jazz — hoort bij soul en R&B; eerst viel Jill Scott eruit als "popsoul, niet
 /// jazz" (27-09-2026). Niet andersom voor dance: een eurodanceradio weerde popsoul (Britney, Spice
@@ -408,31 +478,14 @@ bool sfeerBeslistFamilie(Stijlfamilie? zaad) => zaad == Stijlfamilie.jazz || zaa
 bool familiePast(Stijlfamilie zaad, Set<Stijlfamilie> families) =>
     families.contains(zaad) || families.any((f) => _buurfamilies[zaad]?.contains(f) ?? false);
 
-/// Het jaar als het buiten het tijdvak van [zaad] valt, anders null.
+/// Past [n] bij [zaad]? Op de stijlfamilie — en NIET meer op het jaar.
 ///
-/// **Het venster houdt zijn breedte.** Het lag symmetrisch rond het zaad, en dat brak bij een zaad van
-/// nu: op 08-10-2026, radio vanaf "Niels Destadsbader — Vuur en vlam" (popsoul, 2026, ±12), bleef
-/// alleen 2014–2026 over — de helft van het venster lag in de toekomst, en Natalia (2004), Bart Peeters
-/// (2006), Tom Waes (2010) en Bazart "Chaos" (2012) vielen af. Wat na [ditJaar] zou vallen schuift nu
-/// naar achteren: 2002–2026. Voor elk zaad waarvan het venster niet voorbij dit jaar reikt (Freak Out
-/// 1996, Sade 1992, Zombie 1993, Billie Jean 1982) verandert er niets.
-int? buitenTijdvak(Zaadstijl zaad, int? jaar, {int? speling, int? ditJaar}) {
-  final zj = zaad.jaar;
-  if (zj == null || jaar == null) return null;
-  final s = speling ?? tijdvakSpeling(zaad.familie);
-  final nu = ditJaar ?? DateTime.now().year;
-  final tot = zj + s;
-  final vanaf = tot > nu ? zj - s - (tot - nu) : zj - s;
-  return jaar < vanaf || jaar > tot ? jaar : null;
-}
-
-/// Past [n] bij [zaad]? Zie de drie regels bovenaan. [speling] is standaard die van de familie van
-/// het zaad — zie [tijdvakSpeling]; het tijdvak zelf staat in [buitenTijdvak].
-Stijloordeel keurStijl(Zaadstijl zaad, Nummerstijl n, {int? speling, int? ditJaar}) {
-  final zj = zaad.jaar, j = n.jaar;
-  if (buitenTijdvak(zaad, j, speling: speling, ditJaar: ditJaar) != null) {
-    return (mag: false, waarom: 'uit $j, het zaad is van $zj');
-  }
+/// Saber, 22-10-2026: *"nergens een grens van jaren vanaf 1950 tot heden"*, *"maar natuurlijk eurodance is geen
+/// disco e, dit moet wel accurater blijven"*. Het tijdvak (± 8 jaar, ± 12 voor pop/soul, ± 20 voor jazz) was ook
+/// een genrefilter; dat doen nu de familie (disco is bij Discogs Funk / Soul, dus geen dans), de takken
+/// ([rockTak], [danstakPast]) en het sfeeroordeel van het model.
+Stijloordeel keurStijl(Zaadstijl zaad, Nummerstijl n) {
+  final j = n.jaar;
   final zf = zaad.familie;
   if (zf != null && n.families.isNotEmpty && !familiePast(zf, n.families)) {
     return (mag: false, waarom: 'stijl ${n.families.map((f) => f.name).join('/')}, niet ${zf.name}');
@@ -523,7 +576,7 @@ List<DiscogsUitgave>? samenUitgaven(List<DiscogsUitgave> eerst, List<DiscogsUitg
 ///
 /// 5: alleen uitgaven die het nummer dragen ([metHetNummer]) — U2 "One" was "uit 1983" — en per nummer
 /// de families op minstens de helft van de uitgaven ([minstensDeHelft]) (27-09-2026).
-const int kStijlboekVersie = 5;
+const int kStijlboekVersie = 6;
 
 /// Hoeveel jaar een jaar na de ISRC moet liggen voor het als te laat geldt: een code wordt soms het
 /// jaar vóór de uitgave al toegekend.
@@ -578,9 +631,9 @@ class Stijlboek {
 
   // Een geheugen van een oudere [kStijlboekVersie]: dan zijn de regels voor een NUMMER veranderd, en
   // een nummer dat al eens opgezocht was zou anders nooit meer onder de nieuwe regels vallen. Alleen
-  // wat die versie veranderde weg — "n:" onder 5, het Deezer-jaar ("d:") onder 3 — en nooit het genre
-  // van een artiest: elke vraag aan TheAudioDB kost drie seconden, en na een update liep zo elke
-  // keuring tegen zijn tijdslimiet (tweede beoordeling van 26-09-2026).
+  // wat die versie veranderde weg — "n:" onder 6 (de danstak, 22-10-2026), het Deezer-jaar ("d:") onder
+  // 3 — en nooit het genre van een artiest: elke vraag aan TheAudioDB kost drie seconden, en na een
+  // update liep zo elke keuring tegen zijn tijdslimiet (tweede beoordeling van 26-09-2026).
   Future<Map<String, dynamic>> _lees() => _laden ??= () async {
         try {
           final j = jsonDecode(await bestand.readAsString());
@@ -588,7 +641,7 @@ class Stijlboek {
             final v = j['_versie'];
             if (v != kStijlboekVersie) {
               final oud = v is int ? v : 0;
-              j.removeWhere((k, _) => (oud < 5 && k.startsWith('n:')) || (oud < 3 && k.startsWith('d:')));
+              j.removeWhere((k, _) => (oud < 6 && k.startsWith('n:')) || (oud < 3 && k.startsWith('d:')));
               j['_versie'] = kStijlboekVersie;
             }
             return j;
@@ -684,6 +737,7 @@ class Stijlboek {
       'j': n.jaar,
       's': meesteStijlen([for (final u in uit) ...u.stijlen]),
       't': meerderheidTak([for (final u in uit) takVanUitgave(u)]),
+      'dt': danstakTelling(uit),
     };
     await _bewaar();
     return n;
@@ -691,6 +745,18 @@ class Stijlboek {
 
   /// De rocktak van dit nummer ([rockTak], meerderheid over de uitgaven), of null. Alleen uit het
   /// geheugen: vraag eerst [nummer].
+  /// De danstakken van dit nummer ([danstakTelling]), of null als het nog niet opgezocht is. Alleen uit het
+  /// geheugen: vraag eerst [nummer].
+  Future<Map<String, int>?> danstak(String artiest, String titel) async {
+    final zit = (await _lees())['n:${_sleutel(artiest)}|${_sleutel(titel)}'];
+    final d = zit is Map ? zit['dt'] : null;
+    if (d is! Map) return null;
+    return {
+      for (final e in d.entries)
+        if (e.value is num) '${e.key}': (e.value as num).toInt()
+    };
+  }
+
   Future<String?> tak(String artiest, String titel) async {
     final zit = (await _lees())['n:${_sleutel(artiest)}|${_sleutel(titel)}'];
     return zit is Map ? zit['t'] as String? : null;
@@ -789,49 +855,29 @@ class Stijlboek {
 
   /// Het oordeel over één radioplek.
   ///
-  /// Eerst Discogs, want dat weet het jaar én vaak de stijl in één vraag, en dan is TheAudioDB — drie
-  /// seconden per vraag — niet meer nodig. Alleen als Discogs de stijl van het zaad niet noemt, wordt
-  /// ook de artiest bij TheAudioDB nagevraagd: één bron die "ja" zegt is genoeg.
+  /// Eerst Discogs, want dat weet vaak de stijl in één vraag, en dan is TheAudioDB — drie seconden per vraag —
+  /// niet meer nodig. Alleen als Discogs de stijl van het zaad niet noemt, wordt ook de artiest bij TheAudioDB
+  /// nagevraagd: één bron die "ja" zegt is genoeg. Het jaar beslist niets meer (22-10-2026, zie [keurStijl]).
   ///
-  /// [zaadTak]: bij een rockzaad de tak ervan ([rockTak]). Zegt Discogs van dit nummer de ándere tak,
-  /// dan valt het af; weet het niets, dan niet.
+  /// [zaadTak]: bij een rockzaad de tak ervan ([rockTak]); [zaadDanstak]: bij een dancezaad de zijne
+  /// ([danstakVanZaad]). Zegt Discogs van dit nummer een tak die er niet bij hoort, dan valt het af; weet het
+  /// niets, dan niet.
   ///
-  /// [familieTelt] onwaar: alleen het tijdvak. Voor een zaad waarvan de SFEER al door het model
-  /// gekeurd is — zie [sfeerBeslistFamilie].
+  /// [familieTelt] onwaar: dan beslist de sfeer van het model, niet de familie — zie [sfeerBeslistFamilie].
   ///
   /// [doorModel]: het model koos dit nummer zelf, en dan telt de tak niet. Die is er voor wat Deezer
   /// erbij doet — Bon Jovi in een Nirvana-radio. Op 27-09-2026, radio vanaf Zombie, noemde Discogs
   /// "Don't Speak", "You Oughta Know" en "Torn" Pop Rock, en Pop Rock is de klassieke tak: drie
   /// keuzes van het model die precies in de sfeer van 1993 lagen, eruit.
-  ///
-  /// [speling] geldt voor ALLE vier de keuringen hieronder, niet alleen de eerste: anders logt een
-  /// verruimde ronde "verruimd" en weigert de familietak alsnog met het oude venster. [buitenJaar]
-  /// hoort het jaar als het tijdvak de reden van het nee is — de radio onthoudt dat op de plek, zodat
-  /// een ruimer venster later precies die weigeringen opnieuw kan keuren.
   Future<Stijloordeel> keur(String artiest, String titel, Zaadstijl zaad,
-      {int? jaarHint,
-      String? zaadTak,
-      bool familieTelt = true,
-      bool doorModel = false,
-      int? speling,
-      void Function(int jaar)? buitenJaar}) async {
+      {int? jaarHint, String? zaadTak, String? zaadDanstak, bool familieTelt = true, bool doorModel = false}) async {
     final n = await nummer(artiest, titel);
-    var jaar = n.jaar ?? jaarHint ?? (zaad.jaar == null ? null : await _deezerJaar(artiest, titel));
-    var eerst = keurStijl(zaad, (families: const {}, jaar: jaar), speling: speling);
-    // Buiten het tijdvak: eerst kijken of dat jaar niet aantoonbaar te laat is ([isrcJaar]).
-    if (!eerst.mag && jaar != null) {
-      final plafond = await _metPlafond(artiest, titel, jaar);
-      if (plafond != jaar) {
-        jaar = plafond;
-        eerst = keurStijl(zaad, (families: const {}, jaar: jaar), speling: speling);
-      }
-    }
-    if (!eerst.mag && jaar != null) buitenJaar?.call(jaar);
-    if (!eerst.mag || !familieTelt) return eerst;
+    final jaar = n.jaar ?? jaarHint;
+    if (!familieTelt) return (mag: true, waarom: 'de sfeer beslist');
     final zf = zaad.familie;
     final Stijloordeel o;
     if (zf == null || familiePast(zf, n.families)) {
-      o = keurStijl(zaad, (families: n.families, jaar: jaar), speling: speling);
+      o = keurStijl(zaad, (families: n.families, jaar: jaar));
     } else if (doorModel && zf == Stijlfamilie.rock && (await helft(artiest, titel)).contains(zf)) {
       // Koos het model het zelf en staat het op minstens de helft van de uitgaven bij rock, dan is het
       // rock — ook als Discogs er nog vaker "Pop" bij zet. Gemeten op 27-09-2026, radio vanaf Zombie:
@@ -839,14 +885,22 @@ class Stijlboek {
       // bij Pop, en viel af als "stijl country". Alleen voor wat het model koos: wat Deezer erbij doet
       // (Simply Red, 7 van 10) blijft buiten een Zombie-radio. Everything But The Girl "Missing" (3 van
       // 9) en Björk (0) blijven er ook buiten.
-      o = keurStijl(zaad, (families: {zf}, jaar: jaar), speling: speling);
+      o = keurStijl(zaad, (families: {zf}, jaar: jaar));
     } else {
       final a = await this.artiest(artiest);
-      o = keurStijl(zaad, (families: {...n.families, if (a != null) a}, jaar: jaar), speling: speling);
+      o = keurStijl(zaad, (families: {...n.families, if (a != null) a}, jaar: jaar));
     }
-    if (!o.mag || zf != Stijlfamilie.rock || zaadTak == null || doorModel) return o;
-    final t = await tak(artiest, titel);
-    if (t != null && t != zaadTak) return (mag: false, waarom: 'rock, maar $t en niet $zaadTak');
+    if (!o.mag || doorModel) return o;
+    if (zf == Stijlfamilie.rock && zaadTak != null) {
+      final t = await tak(artiest, titel);
+      if (t != null && t != zaadTak) return (mag: false, waarom: 'rock, maar $t en niet $zaadTak');
+    }
+    if (zf == Stijlfamilie.dans && zaadDanstak != null) {
+      final d = await danstak(artiest, titel);
+      if (d != null && !danstakPast(zaadDanstak, d)) {
+        return (mag: false, waarom: 'dance, maar ${danstakVanZaad(d)} en niet $zaadDanstak');
+      }
+    }
     return o;
   }
 }

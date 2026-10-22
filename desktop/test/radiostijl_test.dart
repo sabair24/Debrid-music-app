@@ -41,14 +41,10 @@ void main() {
   });
 
   group('het oordeel', () {
-    test('DE KERN: buiten het tijdvak valt af, ook met het juiste stijllabel', () {
-      // Discogs zette "De Wereld Draait Voor Jou" (met Regi) bij Electronic/Eurodance — maar 2021.
-      final o = keurStijl(freakOut, (families: {Stijlfamilie.dans}, jaar: 2021));
-      expect(o.mag, isFalse);
-      expect(o.waarom, contains('2021'));
-      expect(keurStijl(freakOut, (families: {Stijlfamilie.dans, Stijlfamilie.popsoul}, jaar: 1979)).mag,
-          isFalse,
-          reason: 'Donna Summer — Hot Stuff');
+    test('DE KERN: het jaar weert niet meer (Saber, 22-10-2026) — de stijl beslist', () {
+      // Discogs zette "De Wereld Draait Voor Jou" (met Regi) bij Electronic/Eurodance, in 2021. Een dance-label
+      // is dance; of het in de sfeer past, zegt het model.
+      expect(keurStijl(freakOut, (families: {Stijlfamilie.dans}, jaar: 2021)).mag, isTrue);
     });
 
     test('DE KERN: binnen het tijdvak en de stijl mag het', () {
@@ -70,12 +66,6 @@ void main() {
       final o = keurStijl(freakOut, (families: const <Stijlfamilie>{}, jaar: null));
       expect(o.mag, isTrue);
       expect(o.waarom, 'niets bekend');
-    });
-
-    test('DE GRENS: precies acht jaar mag nog, negen niet', () {
-      expect(keurStijl(freakOut, (families: const <Stijlfamilie>{}, jaar: 2005)).mag, isTrue);
-      expect(keurStijl(freakOut, (families: const <Stijlfamilie>{}, jaar: 2006)).mag, isFalse);
-      expect(keurStijl(freakOut, (families: const <Stijlfamilie>{}, jaar: 1989)).mag, isTrue);
     });
 
     test('DE GRENS: zonder zaadjaar telt het tijdvak niet, zonder zaadstijl de stijl niet', () {
@@ -194,8 +184,9 @@ void main() {
           },
         );
 
-    test('DE KERN: Niels valt af op het jaar, zonder dat TheAudioDB gevraagd wordt', () async {
-      final b = boek(nummers: {
+    test('DE KERN: zonder jaargrens houdt de stijl Niels buiten een Freak Out-radio', () async {
+      // Discogs: één uitgave Electronic/Eurodance, één Pop — geen meerderheid. Dan beslist TheAudioDB: Pop.
+      final b = boek(genres: {'Niels Destadsbader': 'Pop'}, nummers: {
         'Niels Destadsbader|De Wereld Draait Voor Jou': [
           (jaar: 2021, genres: ['Electronic'], stijlen: ['Eurodance']),
           (jaar: 2021, genres: ['Pop'], stijlen: const []),
@@ -203,16 +194,15 @@ void main() {
       });
       final o = await b.keur('Niels Destadsbader', 'De Wereld Draait Voor Jou', freakOut);
       expect(o.mag, isFalse);
-      expect(audioDb, isEmpty, reason: 'het jaar besliste al; drie seconden per vraag bespaard');
+      expect(o.waarom, contains('popsoul'));
     });
 
-    test('DE KERN: ook zonder de stijl van het zaad beslist het jaar eerst', () async {
-      // Donna Summer: Discogs zegt Funk / Soul en 1979. TheAudioDB hoeft dan niets meer te zeggen.
+    test('DE KERN: disco blijft eruit — Discogs zegt Funk / Soul, niet het jaar 1979', () async {
+      // Donna Summer: Discogs zegt Funk / Soul en Disco. Dat is geen dance.
       final b = boek(nummers: {
         'Donna Summer|Hot Stuff': [(jaar: 1979, genres: ['Funk / Soul'], stijlen: ['Disco'])],
       });
       expect((await b.keur('Donna Summer', 'Hot Stuff', freakOut)).mag, isFalse);
-      expect(audioDb, isEmpty);
     });
 
     test('DE KERN: noemt Discogs de stijl niet, dan beslist TheAudioDB mee', () async {
@@ -314,49 +304,96 @@ void main() {
     });
   });
 
-  // Het tijdvak van een recent zaad (plan van 08-10-2026). Symmetrisch rond 2026 viel de helft van het
-  // venster in de toekomst: Natalia (2004), Peeters (2006), Waes (2010) en Bazart "Chaos" (2012) vielen
-  // weg uit een radio vanaf Niels Destadsbader.
-  group('het tijdvak van een recent zaad', () {
+  // Saber, 22-10-2026: "nergens een grens van jaren vanaf 1950 tot heden" — "maar natuurlijk eurodance is geen
+  // disco e, dit moet wel accurater blijven". De gevallen hieronder zijn wat het tijdvak tot dan weerde in
+  // radio.log, en wat Discogs die dag van hun uitgaven zei.
+  group('geen jaargrens, wel het genre', () {
     const niels = (familie: Stijlfamilie.popsoul, jaar: 2026);
+    const sade = (familie: Stijlfamilie.jazz, jaar: 1992);
 
-    test('DE KERN: wat in de toekomst zou vallen, schuift naar achteren', () {
-      expect(buitenTijdvak(niels, 2004, ditJaar: 2026), isNull, reason: 'Natalia');
-      expect(buitenTijdvak(niels, 2006, ditJaar: 2026), isNull, reason: 'Peeters');
-      expect(buitenTijdvak(niels, 2010, ditJaar: 2026), isNull, reason: 'Waes');
-      expect(buitenTijdvak(niels, 2012, ditJaar: 2026), isNull, reason: 'Bazart — Chaos');
-      expect(buitenTijdvak(niels, 2002, ditJaar: 2026), isNull);
-      expect(buitenTijdvak(niels, 2001, ditJaar: 2026), 2001, reason: 'Clouseau blijft erbuiten');
-      expect(buitenTijdvak(niels, 1991, ditJaar: 2026), 1991, reason: 'Hermans blijft erbuiten');
+    test('DE KERN: het jaar weert niets meer — Clouseau bij Niels, Etta James bij Sade', () {
+      expect(keurStijl(niels, (families: {Stijlfamilie.popsoul}, jaar: 2001)).mag, isTrue, reason: 'Clouseau');
+      expect(keurStijl(niels, (families: {Stijlfamilie.popsoul}, jaar: 1991)).mag, isTrue, reason: 'Margriet Hermans');
+      expect(keurStijl(sade, (families: {Stijlfamilie.popsoul}, jaar: 1960)).mag, isTrue, reason: 'Etta James');
+      expect(keurStijl(freakOut, (families: const <Stijlfamilie>{}, jaar: 1955)).mag, isTrue);
+      expect(keurStijl(freakOut, (families: const <Stijlfamilie>{}, jaar: 2026)).mag, isTrue);
     });
 
-    test('DE VAL: de klassieke zaden houden precies hun venster', () {
-      const freak = (familie: Stijlfamilie.dans, jaar: 1996);
-      expect(buitenTijdvak(freak, 1988, ditJaar: 2026), isNull);
-      expect(buitenTijdvak(freak, 2004, ditJaar: 2026), isNull);
-      expect(buitenTijdvak(freak, 1987, ditJaar: 2026), 1987);
-      expect(buitenTijdvak(freak, 2005, ditJaar: 2026), 2005);
-      expect(buitenTijdvak(freak, 2010, ditJaar: 2026), 2010, reason: 'EDM uit 2010 blijft uit een Freak Out-radio');
-      const sade = (familie: Stijlfamilie.jazz, jaar: 1992);
-      expect(buitenTijdvak(sade, 1972, ditJaar: 2026), isNull);
-      expect(buitenTijdvak(sade, 2012, ditJaar: 2026), isNull);
-      expect(buitenTijdvak(sade, 2013, ditJaar: 2026), 2013);
-      const nirvana = (familie: Stijlfamilie.rock, jaar: 1991);
-      expect(buitenTijdvak(nirvana, 2001, ditJaar: 2026), 2001, reason: 'Nickelback blijft uit een Nirvana-radio');
-      const billie = (familie: Stijlfamilie.popsoul, jaar: 1982);
-      expect(buitenTijdvak(billie, 1970, ditJaar: 2026), isNull);
-      expect(buitenTijdvak(billie, 1994, ditJaar: 2026), isNull);
-      expect(buitenTijdvak(billie, 1995, ditJaar: 2026), 1995);
+    test('DE VAL: disco blijft uit een eurodance-radio — op de familie, niet op 1979', () {
+      expect(keurStijl(freakOut, (families: {Stijlfamilie.popsoul}, jaar: 1979)).mag, isFalse,
+          reason: 'Donna Summer — Hot Stuff: Discogs Funk / Soul, Disco');
     });
 
-    test('keurStijl gebruikt hetzelfde venster', () {
-      expect(keurStijl(niels, (families: const <Stijlfamilie>{}, jaar: 2004), ditJaar: 2026).mag, isTrue);
-      expect(keurStijl(niels, (families: const <Stijlfamilie>{}, jaar: 2001), ditJaar: 2026).mag, isFalse);
+    // Per tak op hoeveel uitgaven, zoals Discogs het op 22-10-2026 gaf.
+    List<DiscogsUitgave> uitgaven(List<List<String>> stijlen) => [
+          for (final s in stijlen) (jaar: null, genres: const ['Electronic'], stijlen: s)
+        ];
+
+    test('de danstak van een nummer: specifiek eerst', () {
+      expect(danstakkenVan(['Euro House', 'House']), {'eurodance', 'house'});
+      expect(danstakkenVan(['Hardstyle']), {'hardstyle'});
+      expect(danstakkenVan(['Electro House', 'Progressive House']), {'edm', 'house'});
+      expect(danstakkenVan(['Happy Hardcore']), {'eurodance'});
+      expect(danstakkenVan(['Hardcore']), {'hardstyle'});
+      expect(danstakkenVan(['Synth-pop']), isEmpty);
+      final fabiola = danstakTelling(uitgaven([
+        ['Euro House', 'Trance'],
+        ['Euro House'],
+        ['Eurodance', 'Happy Hardcore'],
+        ['House'],
+      ]));
+      expect(fabiola, {'eurodance': 3, 'trance': 1, 'house': 1, '_': 4});
+      expect(danstakVanZaad(fabiola), 'eurodance');
+      expect(danstakVanZaad(const {'_': 0}), isNull);
     });
 
-    test('zonder jaar van zaad of nummer zegt het tijdvak niets', () {
-      expect(buitenTijdvak((familie: Stijlfamilie.popsoul, jaar: null), 1950, ditJaar: 2026), isNull);
-      expect(buitenTijdvak(niels, null, ditJaar: 2026), isNull);
+    test('DE KERN: hardstyle en EDM uit een eurodance-radio; de rave van de jaren negentig blijft', () {
+      bool past(List<List<String>> s) => danstakPast('eurodance', danstakTelling(uitgaven(s)));
+      expect(past([['Hardstyle'], ['Hardstyle']]), isFalse, reason: 'Da Tweekaz — Supa Dupa Fly');
+      expect(past([['Electro House']]), isFalse, reason: 'Ummet Ozcan — Eins Zwei');
+      expect(past([['Trance'], ['Trance', 'Hard Trance'], ['Trance'], ['House']]), isTrue,
+          reason: 'Brooklyn Bounce — Bass, Beats & Melody');
+      expect(past([for (var i = 0; i < 10; i++) ['Techno', 'Hardcore'], ['Disco']]), isTrue,
+          reason: 'L.A. Style — James Brown Is Dead: techno op 10 van 10');
+      expect(past([['Euro House'], ['Electro House'], ['Hardstyle']]), isTrue,
+          reason: 'één remix maakt een eurodancenummer geen EDM: eurodance staat op een derde');
+      expect(past(const []), isTrue, reason: 'Discogs weet niets: dan beslist het model');
+      expect(danstakPast('edm', danstakTelling(uitgaven([['Euro House', 'Eurodance']]))), isFalse,
+          reason: 'en andersom: een EDM-radio is geen eurodance-radio');
+    });
+
+    test('het stijlboek: de danstak van het zaad weert hardstyle — behalve wat het model zelf koos', () async {
+      final map = Directory.systemTemp.createTempSync('dm_danstak_');
+      addTearDown(() {
+        try {
+          map.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final b = Stijlboek(
+        bestand: File('${map.path}${Platform.pathSeparator}radiostijl.json'),
+        audioDbGenre: (_) async => null,
+        discogsNummer: (a, t) async => switch (a) {
+          '2 Fabiola' => uitgaven([['Euro House'], ['Euro House', 'Happy Hardcore'], ['Trance']]),
+          'Da Tweekaz' => [for (final s in [['Hardstyle'], ['Hardstyle']]) (jaar: 2022, genres: const ['Electronic'], stijlen: s)],
+          _ => uitgaven([['Trance'], ['Trance', 'House']]),
+        },
+      );
+      await b.nummer('2 Fabiola', 'Freak Out');
+      final zaad = danstakVanZaad((await b.danstak('2 Fabiola', 'Freak Out'))!);
+      expect(zaad, 'eurodance');
+      final nee = await b.keur('Da Tweekaz', 'Supa Dupa Fly', freakOut, zaadDanstak: zaad);
+      expect(nee.mag, isFalse);
+      expect(nee.waarom, 'dance, maar hardstyle en niet eurodance');
+      expect((await b.keur('Da Tweekaz', 'Supa Dupa Fly', freakOut, zaadDanstak: zaad, doorModel: true)).mag, isTrue);
+      expect((await b.keur('Brooklyn Bounce', 'Bass, Beats & Melody', freakOut, zaadDanstak: zaad)).mag, isTrue);
+      expect((await b.keur('Da Tweekaz', 'Supa Dupa Fly', freakOut)).mag, isTrue, reason: 'zonder zaadtak geen tak');
+    });
+
+    test('aangesloten: de radiokeuring geeft de danstak van het zaad mee', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(main.contains('        zaadDanstak: danstak,\n'), isTrue);
+      expect(main.contains('    final danstak = await _zaadDanstak;\n'), isTrue);
+      expect(main.contains('        if (z.familie != Stijlfamilie.dans || t == null) return null;\n'), isTrue);
     });
   });
 }

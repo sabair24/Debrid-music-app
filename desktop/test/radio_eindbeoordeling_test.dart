@@ -787,25 +787,20 @@ void main() {
     const sade = (familie: Stijlfamilie.jazz, jaar: 1992);
     const freakOut = (familie: Stijlfamilie.dans, jaar: 1997);
 
-    test('DE KERN: Marvin Gaye (1982) en Amy Winehouse (2006) horen bij Sade', () {
+    test('DE KERN: Marvin Gaye (1982), Amy Winehouse (2006) en Donny Hathaway (1971) horen bij Sade', () {
       expect(keurStijl(sade, (families: {Stijlfamilie.popsoul}, jaar: 1982)).mag, isTrue,
           reason: 'met acht jaar speling viel "Sexual Healing" eruit');
       expect(keurStijl(sade, (families: {Stijlfamilie.popsoul}, jaar: 2006)).mag, isTrue);
-      expect(keurStijl(sade, (families: {Stijlfamilie.popsoul}, jaar: 1971)).mag, isFalse,
-          reason: 'ruimer is niet eindeloos');
+      expect(keurStijl(sade, (families: {Stijlfamilie.popsoul}, jaar: 1971)).mag, isTrue,
+          reason: 'sinds 22-10-2026 geen jaargrens: A Song for You hoort erbij');
     });
 
-    test('DE VAL: eurodance houdt zijn scherpe tijdvak en zijn eigen familie', () {
-      expect(keurStijl(freakOut, (families: {Stijlfamilie.dans}, jaar: 1985)).mag, isFalse);
+    test('DE VAL: eurodance houdt zijn eigen familie, ook zonder jaargrens', () {
       expect(keurStijl(freakOut, (families: {Stijlfamilie.popsoul}, jaar: 1998)).mag, isFalse,
           reason: 'Britney hoort niet in een eurodanceradio — dat was gemeten goed');
     });
 
     test('DE GRENS: welke familie welke buren heeft', () {
-      expect(tijdvakSpeling(Stijlfamilie.jazz), 20);
-      expect(tijdvakSpeling(Stijlfamilie.popsoul), 12);
-      expect(tijdvakSpeling(Stijlfamilie.dans), kTijdvakSpeling);
-      expect(tijdvakSpeling(Stijlfamilie.rock), kTijdvakSpeling);
       expect(familiePast(Stijlfamilie.jazz, {Stijlfamilie.popsoul}), isTrue);
       expect(familiePast(Stijlfamilie.dans, {Stijlfamilie.popsoul}), isFalse);
       expect(sfeerBeslistFamilie(Stijlfamilie.jazz), isTrue);
@@ -814,7 +809,7 @@ void main() {
       expect(sfeerBeslistFamilie(Stijlfamilie.rock), isFalse);
     });
 
-    test('DE KERN: is de sfeer goed, dan telt bij soul en jazz alleen het tijdvak', () async {
+    test('DE KERN: is de sfeer goed, dan telt bij soul en jazz de familie niet', () async {
       final map = Directory.systemTemp.createTempSync('dm_sade_');
       addTearDown(() {
         try {
@@ -833,8 +828,8 @@ void main() {
           reason: 'zonder sfeeroordeel beslist de familie, zoals voorheen');
       expect((await b.keur('Sting', 'Fields of Gold', sade, familieTelt: false)).mag, isTrue,
           reason: 'het model hoorde dat het bij Sade past; Discogs noemt het rock');
-      expect((await b.keur('Donny Hathaway', 'A Song for You', sade, familieTelt: false)).mag, isFalse,
-          reason: 'het tijdvak blijft gelden');
+      expect((await b.keur('Donny Hathaway', 'A Song for You', sade, familieTelt: false)).mag, isTrue,
+          reason: 'sinds 22-10-2026 geen jaargrens: 1971 is geen reden meer');
     });
   });
 
@@ -1058,7 +1053,8 @@ void main() {
 
     test('DE GRENS: een geheugen van versie 2 vergeet het Deezer-jaar, en nooit het genre', () async {
       final n = await naVersie(2);
-      expect(n.deezer, 1, reason: 'onder versie 2 onthouden als 2015 — dan bleef hij voorgoed "uit 2015"');
+      // Sinds 22-10-2026 vraagt de keuring geen jaar meer (geen jaargrens); het Deezer-jaar dient alleen het zaad.
+      expect(n.deezer, 0, reason: 'een keuring kost geen Deezer-vraag meer');
       expect(n.mag, isTrue);
       expect(n.audioDb, 0, reason: 'het genre van een artiest is nog waar — en elke vraag kost drie seconden');
     });
