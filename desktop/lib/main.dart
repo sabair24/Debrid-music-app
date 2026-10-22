@@ -13828,7 +13828,10 @@ Future<RadioOpdracht> _vraagRadioplan(BuildContext context, String zin) async {
 /// van een model zijn voor een deel verzonnen; Deezer weet wat er bestaat. De artiesten zíjn het
 /// tijdvak: de toppers van 2 Unlimited en Culture Beat zijn jaren negentig, en er is geen jaartal
 /// nodig om dat af te dwingen.
-Future<List<RecTrack>> _nummersVoor(RadioOpdracht o) async {
+///
+/// **En de bekendste nummers onder het genre** ([lastfmSleutel], zie [genreNummersErbij]): de tag op Last.fm
+/// ("eurodance", "nederpop") geeft klassiekers van artiesten die het model niet noemde — hoogstens een derde.
+Future<List<RecTrack>> _nummersVoor(RadioOpdracht o, {String lastfmSleutel = ''}) async {
   if (o.zaadArtiesten.isEmpty) return const [];
   final rec = RecommendService();
   // Ruimer ophalen dan er gevraagd is, want `kiesNummers` haalt er straks de dubbele uitvoeringen en
@@ -13853,6 +13856,19 @@ Future<List<RecTrack>> _nummersVoor(RadioOpdracht o) async {
         if (gezien.add('${recNorm(t.artist)}|${t.title.trim().toLowerCase()}')) uit.add(t);
       }
     }
+  }
+  if (lastfmSleutel.trim().isNotEmpty && o.genre.trim().isNotEmpty) {
+    try {
+      final tag = await _lastfmBron.tagNummers(o.genre, sleutel: lastfmSleutel, limit: 60);
+      final namen = genreNummersErbij(tag ?? const [], max: ruim ~/ 3);
+      if (namen.isNotEmpty) {
+        final gevonden = await rec.lijstOpDeezer([for (final n in namen) AiNummer(n.artiest, n.titel)],
+            elders: _itunesVoorModel, eldersNaam: 'iTunes', van: 'de tag "${o.genre}"');
+        for (final t in gevonden) {
+          if (gezien.add('${recNorm(t.artist)}|${t.title.trim().toLowerCase()}')) uit.add(t);
+        }
+      }
+    } catch (_) {/* zonder de tag: de artiesten van de zin, zoals voorheen */}
   }
   // Door elkaar, anders speelt hij eerst alles van de eerste artiest. Dat is geen radio maar een
   // discografie.
@@ -13929,7 +13945,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
     final o = _begrepen;
     if (o == null) return;
     setState(() => _bezig = true);
-    final nummers = await _nummersVoor(o);
+    final nummers = await _nummersVoor(o, lastfmSleutel: context.read<AppSettings>().lastfmKey);
     if (!mounted) return;
     if (nummers.isEmpty) {
       setState(() {
@@ -16660,6 +16676,22 @@ Future<List<Radioplek>> _lastfmPlekken(String artiest, String titel,
   return maakPlan(gevonden);
 }
 
+/// Kent de luisteraar deze artiest? Het model raadt het ([AiNummer.bekend]); wie in je bibliotheek of in je
+/// Last.fm-geschiedenis staat (uit de buffer, of niet als die er nog niet is), ken je zeker. Voor de stand
+/// Bekend / Ontdekken ([modelVolgorde]) — Saber staat op "Bekend".
+Future<bool Function(AiNummer n)> _kentJe(LibraryStore lib, AppSettings cfg) async {
+  final jouw = {for (final t in lib.tracks) artiestSleutel(t.artist)};
+  try {
+    final g = await haalGeschiedenis(_lastfmBron, gebruiker: cfg.lastfmGebruiker, sleutel: cfg.lastfmKey)
+        .timeout(const Duration(seconds: 2));
+    if (g != null) {
+      jouw.addAll([for (final n in g.nummers) artiestSleutel(n.artiest)]);
+      jouw.addAll([for (final a in g.artiesten) artiestSleutel(a.naam)]);
+    }
+  } catch (_) {/* dan wat het model zei, en je bibliotheek */}
+  return (n) => n.bekend || jouw.contains(artiestSleutel(n.artiest));
+}
+
 /// De artiesten die je volgens Last.fm het meest speelde, voor het smaakprofiel — zonder wat [al] al noemt. Leeg
 /// zonder sleutel of gebruiker, of als Last.fm niet binnen [geduld] antwoordt; de vraag loopt dan door en vult de
 /// buffer (een dag), zodat het de volgende keer meteen klaarligt.
@@ -17028,7 +17060,9 @@ Future<void> startRadio(BuildContext context, String artist,
               '${n.titel}${n.jaar == null ? '' : ' (${n.jaar})'}${n.bekend ? '' : '*'}').join('; ')}');
           // Intussen afgestemd? Dan dezelfde lijst, maar in de volgorde van de stand die nu geldt, en
           // bij díé afstemming — anders ging hij verloren, en afstemmen gebruikt hem ook.
-          final nu = beurt == _afstemBeurt ? lijst : modelVolgorde(lijst, (n) => n.bekend, Radiosmaak.uit(cfg.radioSmaak));
+          final nu = beurt == _afstemBeurt
+              ? lijst
+              : modelVolgorde(lijst, await _kentJe(lib, cfg), Radiosmaak.uit(cfg.radioSmaak));
           final gevonden = await rec.lijstOpDeezer(nu,
               spoor: log.line, vanJou: eigenVoorModel(lib.tracks), elders: _itunesVoorModel, eldersNaam: 'iTunes');
           if (sessie != radio.sessie) return;
@@ -17494,7 +17528,7 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
   if (lijst.isEmpty) return;
   try {
     final gevonden =
-        await rec.lijstOpDeezer(modelVolgorde(lijst, (n) => n.bekend, smaak),
+        await rec.lijstOpDeezer(modelVolgorde(lijst, await _kentJe(lib, cfg), smaak),
             spoor: keuring?.log.line,
             vanJou: eigenVoorModel(lib.tracks),
             elders: _itunesVoorModel,
@@ -17834,6 +17868,9 @@ class _StartCache {
   /// "Vroeger veel gespeeld, nog niet van jou": uit je Last.fm-geschiedenis (zie `lastfm_geschiedenis.dart`).
   static List<RecTrack> vroeger = [];
 
+  /// "Nieuwe artiesten voor jou": de verwanten van wie je het meest speelt, die je nog niet hebt.
+  static List<CatalogArtist> nieuweArtiesten = [];
+
   /// Hoe vaak er al ververst is. Zo gaat de rij bij elke ronde over iemand anders — anders is het
   /// een stempel in plaats van een suggestie.
   static int ronde = 0;
@@ -17860,6 +17897,7 @@ class _StartCache {
     omdatArtiest = '';
     omdat = [];
     vroeger = [];
+    nieuweArtiesten = [];
     uitgezocht = [];
     ronde++;
     geladen = false;
@@ -17891,6 +17929,7 @@ class _HomeStartViewState extends State<HomeStartView> {
   String _omdatArtiest = _StartCache.omdatArtiest;
   List<RecTrack> _omdat = _StartCache.omdat;
   List<RecTrack> _vroeger = _StartCache.vroeger;
+  List<CatalogArtist> _nieuweArtiesten = _StartCache.nieuweArtiesten;
   int get _ronde => _StartCache.ronde;
   List<({CatalogAlbumHit hit, String reden})> _uitgezocht = _StartCache.uitgezocht;
   bool _chartsLoading = !_StartCache.geladen;
@@ -18102,6 +18141,45 @@ class _HomeStartViewState extends State<HomeStartView> {
   /// The personal rows depend on the scanned library. On a cold start the scan is still running
   /// when this view first builds, so we load these ONCE the library actually has artists (driven
   /// from build via context.watch) — not eagerly with an empty seed list.
+  /// De verwanten (Last.fm) van wie je het meest speelt — wat de app telt, aangevuld met je Last.fm-geschiedenis —
+  /// zonder wie je al hebt ([jouw], als [artiestSleutel]s; zie [nieuweArtiestenVoorJou]), en bij Deezer opgezocht voor
+  /// een foto. Gemeten op 22-10-2026 vanaf Sabers acht meest gespeelde: Solange (via Janet Jackson, Beyoncé en Sade),
+  /// Erykah Badu, Anita Baker, Frank Ocean, Cheb Hasni (via Khaled), in 2,9 s.
+  Future<List<CatalogArtist>> _zoekNieuweArtiesten(
+      AppSettings cfg, List<String> gespeeld, Future<List<String>> lastfm, Set<String> jouw) async {
+    final sleutel = cfg.lastfmKey.trim();
+    if (sleutel.isEmpty) return const [];
+    final ankers = [...gespeeld, ...await lastfm].take(8).toList();
+    if (ankers.isEmpty) return const [];
+    final verwant = <String, List<({String naam, double maat})>>{};
+    for (final a in ankers) {
+      final v = await _lastfmBron.verwanteArtiesten(a, sleutel: sleutel);
+      if (v != null) verwant[a] = v;
+    }
+    final uit = <CatalogArtist>[];
+    for (final n in nieuweArtiestenVoorJou(verwant, jouwArtiesten: jouw)) {
+      try {
+        final hits = await _catalog.searchArtists(n.naam);
+        final hit = hits.where((a) => artistKey(a.name) == artistKey(n.naam)).firstOrNull;
+        if (hit != null) uit.add(hit);
+      } catch (_) {/* zonder foto liever niet: dan is het ook niet zeker dezelfde */}
+    }
+    return uit;
+  }
+
+  /// Een rij artiesten, zoals "Klinkt als" op de artiestpagina.
+  Widget _artiestRij(List<CatalogArtist> artiesten) => ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: kGoot),
+        itemCount: artiesten.length,
+        separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
+        itemBuilder: (context, i) => _RelatedArtistCard(
+          artist: artiesten[i],
+          inLibrary: false,
+          onTap: () => openArtist(context, artiesten[i].name),
+        ),
+      );
+
   /// Wat je volgens Last.fm vroeger veel speelde en nog niet hebt ([nogNietVanJou]), opgezocht zoals de lijst van het
   /// model — Deezer, dan iTunes — zodat de tegels een hoes en een album hebben. Hoogstens 30 nummers opzoeken.
   Future<List<RecTrack>> _vroegerGespeeld(AppSettings cfg, List<Track> bibliotheek) async {
@@ -18164,6 +18242,9 @@ class _HomeStartViewState extends State<HomeStartView> {
             )));
     // "Vroeger veel gespeeld, nog niet van jou" — zie [_vroegerGespeeld].
     final vroegerF = _vroegerGespeeld(cfg, lib.tracks.toList());
+    // "Nieuwe artiesten voor jou" — zie [_zoekNieuweArtiesten].
+    final nieuweArtiestenF = _zoekNieuweArtiesten(
+        cfg, gespeeldeNamen, lfmArtiestenF, {for (final t in lib.tracks) artiestSleutel(t.artist)});
     // De nieuwe releases staan hier niet meer tussen: die komen apart, en meteen — zie [_laadNieuw].
     final fyF = _haalAanbevolen(seeds);
     final genreF = profiel.isEmpty
@@ -18186,6 +18267,10 @@ class _HomeStartViewState extends State<HomeStartView> {
     List<RecTrack> vroegerRij = [];
     try {
       vroegerRij = await vroegerF;
+    } catch (_) {}
+    List<CatalogArtist> nieuweArtiestenRij = [];
+    try {
+      nieuweArtiestenRij = await nieuweArtiestenF;
     } catch (_) {}
     // Het model kiest, Deezer bewijst. Elk voorstel wordt nageslagen; wat niet bestaat verdwijnt
     // zonder een woord. Een tegel op grond van een verzonnen titel gaat nergens heen, en dat is
@@ -18228,6 +18313,7 @@ class _HomeStartViewState extends State<HomeStartView> {
     if (uitgezocht.isNotEmpty) _StartCache.uitgezocht = uitgezocht;
     final vroegerSchoon = maxPerArtiest(nogNietInBezit(vroegerRij, bezit), (t) => t.artist, 2);
     if (vroegerSchoon.isNotEmpty) _StartCache.vroeger = vroegerSchoon;
+    if (nieuweArtiestenRij.isNotEmpty) _StartCache.nieuweArtiesten = nieuweArtiestenRij;
     _StartCache.opgehaaldMs = DateTime.now().millisecondsSinceEpoch;
     setState(() {
       _forYou = _StartCache.forYou;
@@ -18236,6 +18322,7 @@ class _HomeStartViewState extends State<HomeStartView> {
       _omdatArtiest = _StartCache.omdatArtiest;
       _omdat = _StartCache.omdat;
       _vroeger = _StartCache.vroeger;
+      _nieuweArtiesten = _StartCache.nieuweArtiesten;
       _uitgezocht = _StartCache.uitgezocht;
       _seedsLoading = false;
     });
@@ -18417,6 +18504,9 @@ class _HomeStartViewState extends State<HomeStartView> {
         if (_vroeger.isNotEmpty)
           _section('Vroeger veel gespeeld, nog niet van jou', _recRow(_vroeger.take(20).toList(), rij: 'vroeger'),
               bij: 'uit je Last.fm'),
+        // Wie lijkt op wie je het meest speelt, en van wie je nog niets hebt (Last.fm) — zie [_zoekNieuweArtiesten].
+        if (_nieuweArtiesten.isNotEmpty)
+          _section('Nieuwe artiesten voor jou', _artiestRij(_nieuweArtiesten), bij: 'lijkt op wie je draait'),
         // De rij van het taalmodel. Blijft weg zonder AI-sleutel, en dat is geen fout maar de
         // afspraak: zie [AiService.maakAanbevelingen].
         if (_uitgezocht.isNotEmpty)
@@ -26391,8 +26481,6 @@ class _BekendNietVanJou extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 36681 → 36.681, zoals in het Nederlands.
-    String fmt(int n) => n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => '.');
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: marge - 8),
       child: Column(
@@ -26407,7 +26495,7 @@ class _BekendNietVanJou extends StatelessWidget {
                     maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
               ),
               const SizedBox(width: 10),
-              Text('${fmt(n.luisteraars)} luisteraars', style: TextStyle(color: _muted, fontSize: 12)),
+              Text('${metPunten(n.luisteraars)} luisteraars', style: TextStyle(color: _muted, fontSize: 12)),
             ]),
         ],
       ),
@@ -27992,11 +28080,30 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   List<SoulseekFile> _albumSlsk = [];
   bool _slskBusy = false;
 
+  /// De hits van dit album volgens Last.fm (plaats in [_tracks] → luisteraars) — zie [hitsVanAlbum].
+  Map<int, int> _hits = const {};
+
   @override
   void initState() {
     super.initState();
-    _load();
+    _load().then((_) => _laadHits());
     WidgetsBinding.instance.addPostFrameCallback((_) => _preloadSoulseek());
+  }
+
+  /// Saber, 22-10-2026, bij de Last.fm-ideeën: "hits aanduiden". Per nummer de luisteraars (een maand in de buffer),
+  /// en een sterretje bij de bekendste — alleen met een Last.fm-sleutel.
+  Future<void> _laadHits() async {
+    final sleutel = context.read<AppSettings>().lastfmKey.trim();
+    final lijst = _tracks;
+    if (sleutel.isEmpty || lijst.isEmpty || lijst.length > 40) return;
+    final luisteraars = <int?>[];
+    for (final t in lijst) {
+      luisteraars.add(await _lastfmBron.luisteraars(t.artist.isEmpty ? widget.artistName : t.artist, t.title,
+          sleutel: sleutel));
+      if (!mounted || !identical(lijst, _tracks)) return;
+    }
+    final hits = hitsVanAlbum(luisteraars);
+    if (hits.isNotEmpty) setState(() => _hits = {for (final i in hits) i: luisteraars[i]!});
   }
 
   @override
@@ -28617,6 +28724,15 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                     child: Text(t.title,
                         maxLines: titelRegels(context), overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500))),
+                // Een van de bekendste nummers van dit album (Last.fm) — zie [_laadHits].
+                if (_hits[i] case final n?)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Tooltip(
+                      message: 'Een van de bekendste van dit album — ${metPunten(n)} luisteraars op Last.fm',
+                      child: Icon(Icons.star_rounded, size: 15, color: _accent2),
+                    ),
+                  ),
                 // "N bronnen klaar" hint (or a tiny spinner while the album search is still running).
                 if (soulseekReady && srcCount > 0)
                   Padding(

@@ -56,6 +56,68 @@ List<LastfmTopper> bekendeNummersDieJeMist(
   ].take(max).toList();
 }
 
+/// Nieuwe artiesten voor jou: de verwanten (Last.fm, artist.getSimilar) van je meest gespeelde artiesten, opgeteld
+/// over die artiesten, zonder wie je al hebt ([jouwArtiesten], als [artiestSleutel]s). Wie bij meer van je artiesten
+/// terugkomt, staat hoger; [via] zegt bij wie (voor de uitleg op het scherm).
+List<({String naam, double score, List<String> via})> nieuweArtiestenVoorJou(
+  Map<String, List<({String naam, double maat})>> verwantPerAnker, {
+  required Set<String> jouwArtiesten,
+  int max = 15,
+}) {
+  final ankers = {for (final a in verwantPerAnker.keys) artiestSleutel(a)};
+  final score = <String, double>{};
+  final naam = <String, String>{};
+  final via = <String, List<String>>{};
+  verwantPerAnker.forEach((anker, verwant) {
+    for (final v in verwant) {
+      final k = artiestSleutel(v.naam);
+      if (k.isEmpty || jouwArtiesten.contains(k) || ankers.contains(k)) continue;
+      score[k] = (score[k] ?? 0) + v.maat;
+      naam.putIfAbsent(k, () => v.naam);
+      (via[k] ??= []).add(anker);
+    }
+  });
+  final volgorde = score.keys.toList()..sort((a, b) => score[b]!.compareTo(score[a]!));
+  return [for (final k in volgorde.take(max)) (naam: naam[k]!, score: score[k]!, via: via[k]!)];
+}
+
+/// Uit de bekendste nummers onder een tag (tag.getTopTracks) wat een radio uit een zin erbij neemt: geen covers,
+/// karaoke of bewerkingen, hoogstens [perArtiest] per artiest, hoogstens [max]. Gemeten op 22-10-2026: "eurodance" gaf
+/// La Bouche, Corona, 2 Brothers on the 4th Floor, Mr. President; "nederpop" De Dijk, Doe Maar, BLØF, Frank Boeijen.
+List<({String artiest, String titel})> genreNummersErbij(List<LastfmTopper> tag, {int max = 20, int perArtiest = 2}) {
+  final telling = <String, int>{};
+  final gezien = <String>{};
+  final uit = <({String artiest, String titel})>[];
+  for (final n in tag) {
+    if (uit.length >= max) break;
+    if (nooitOpRadio(n.titel) || uitvoeringVan(n.titel) == Uitvoering.bewerking) continue;
+    final a = artiestSleutel(n.artiest);
+    if ((telling[a] ?? 0) >= perArtiest || !gezien.add(eigenSleutel(n.artiest, n.titel))) continue;
+    telling[a] = (telling[a] ?? 0) + 1;
+    uit.add((artiest: n.artiest, titel: n.titel));
+  }
+  return uit;
+}
+
+/// 36681 → "36.681", zoals in het Nederlands — voor het aantal luisteraars op het scherm.
+String metPunten(int n) => n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => '.');
+
+/// De hits van een album: welke nummers (hun plaats in [luisteraars], de Last.fm-luisteraars per nummer, null als
+/// Last.fm het niet kent) een sterretje krijgen. Hoogstens [max], elk minstens [deel] van het bekendste en minstens
+/// [minstens] luisteraars — anders krijgt een plaat van een kleine artiest drie willekeurige sterren.
+Set<int> hitsVanAlbum(List<int?> luisteraars, {int max = 3, double deel = 0.3, int minstens = 1000}) {
+  final bekend = [
+    for (var i = 0; i < luisteraars.length; i++)
+      if ((luisteraars[i] ?? 0) >= minstens) (i: i, n: luisteraars[i]!),
+  ]..sort((a, b) => b.n.compareTo(a.n));
+  if (bekend.isEmpty) return const {};
+  final top = bekend.first.n;
+  return {
+    for (final x in bekend.take(max))
+      if (x.n >= top * deel) x.i,
+  };
+}
+
 /// Je meest gespeelde artiesten volgens Last.fm, voor het smaakprofiel van de radio: alleen namen, meest eerst, zonder
 /// dubbels met [al] (wat de app zelf al als meest gespeeld kent).
 List<String> geschiedenisArtiesten(
