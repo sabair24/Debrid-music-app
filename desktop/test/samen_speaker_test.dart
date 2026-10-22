@@ -355,6 +355,14 @@ void main() {
         expect(m.ankers.last['speelt'], isTrue);
         expect(fout(m.ankers.last, m.sonos, m.nuMs()).abs(), lessThan(10));
 
+        // Iets "hierna": wie meespeelt, krijgt de nieuwe rij meteen (niet pas bij de nummerwissel).
+        final voorRij = m.ankers.length;
+        unawaited(m.cast.voegToe(_move.id, [ids[2]], hierna: true));
+        fa.flushMicrotasks();
+        expect(m.ankers.length, greaterThan(voorRij));
+        expect(m.ankers.last['rij'], [ids[0], ids[2], ids[1]]);
+        expect(m.ankers.last['speelt'], isTrue);
+
         // Pauze: meteen stil, op de plek van nu.
         final voor = m.ankers.length;
         unawaited(m.cast.control(_move.id, 'pause'));
