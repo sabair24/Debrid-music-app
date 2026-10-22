@@ -57,7 +57,7 @@ void main() {
   test('aangesloten: één zoekopdracht voor een album, de knop op de pc, en 👍 op de radio', () {
     final online = File('lib/online.dart').readAsStringSync();
     final z = online.substring(online.indexOf('  Future<int> zoekBeterVoor('));
-    expect(z, contains('albumHits = await soulseek.search(zoekvraagVoorAlbum(te.first.artist, albumNaam));'));
+    expect(z, contains('albumHits = await soulseek.search(zoekvraagVoorAlbum(te.first.artist, albumNaam), achtergrond: true);'));
     expect(z, contains('if (albumHits != null) {\n        hits = albumHits;'), reason: 'niet nog eens per nummer');
     expect(z, contains('!isVasteKeuze(t.path)'), reason: 'wat je zelf koos blijft de baas');
     expect(z, contains('_queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true, blijfZoeken: verdacht);'));

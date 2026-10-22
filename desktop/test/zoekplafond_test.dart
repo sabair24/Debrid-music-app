@@ -95,7 +95,7 @@ void main() {
 
   test('aangesloten: elke zoekvraag begrensd, en de albumpagina\'s vragen met het jaar', () {
     final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
-    expect(online, contains('laatste = beperkZoekuitslag(query, await _searchOnce(ronde, deel));'));
+    expect(online, contains('laatste = beperkZoekuitslag(query, await _searchOnce(ronde, deel, achtergrond: achtergrond));'));
     expect(online, contains('onPartial(beperkZoekuitslag(query, p))'));
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(main, contains('soulseek.search(_albumVraag, onPartial:'));

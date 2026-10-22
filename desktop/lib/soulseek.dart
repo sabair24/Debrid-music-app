@@ -1558,6 +1558,60 @@ String verbindingWegRegel({
 /// Hoeveel servercodes [SlskSession] onthoudt voor [verbindingWegRegel].
 const int kServercodesOnthouden = 6;
 
+/// Hoeveel zoekopdrachten er hoogstens per minuut naar de server gaan, voor de hele app samen.
+///
+/// **Waarom.** Gemeten op de pc (22-10-2026, 19:35:34, de regel van [verbindingWegRegel]): 33 s na het inloggen sloot
+/// de server de verbinding, met 39 zoekopdrachten in die minuut — een radio vanaf Lambda die bij de start alles
+/// tegelijk zocht. Daarna vijf minuten blokkade en logins zonder antwoord, en de radio stond stil (Saber: "oei radio
+/// stopt al"). Twintig is ongeveer een derde van dat tempo. Een haal vraagt er twee (de vraag en een jokervariant),
+/// dus zo'n acht nummers per minuut — de radio heeft er vier tot acht onderweg en een haal duurt een halve minuut of
+/// langer, dus dat houdt hem bij.
+const int kZoekPerMinuut = 20;
+
+/// Hoeveel van [kZoekPerMinuut] er altijd vrij blijft voor wat JIJ zoekt: achtergrondwerk (de radio, de verlanglijst,
+/// een betere kopie) neemt er hoogstens de rest.
+const int kZoekVoorJou = 6;
+
+/// Hoe lang een zoekopdracht nog moet wachten: nul als er in het laatste [venster] minder dan [max] gingen, anders tot
+/// de oudste die nog meetelt uit het venster valt. [eerder]: de tijdstippen van de vorige zoekopdrachten.
+Duration zoekWachttijd(List<DateTime> eerder, DateTime nu,
+    {int max = kZoekPerMinuut, Duration venster = const Duration(minutes: 1)}) {
+  final binnen = [for (final t in eerder) if (nu.difference(t) < venster) t]..sort();
+  if (binnen.length < max) return Duration.zero;
+  return binnen[binnen.length - max].add(venster).difference(nu);
+}
+
+/// De zoekrem van de app — zie [kZoekPerMinuut]. Eén voor alle sessies: een sessie sluit na twee minuten stilte, en
+/// een nieuwe zou anders weer met een volle minuut beginnen.
+class Zoekrem {
+  Zoekrem({DateTime Function()? klok, this.max = kZoekPerMinuut, this.voorJou = kZoekVoorJou})
+      : _klok = klok ?? DateTime.now;
+  final DateTime Function() _klok;
+  final int max;
+  final int voorJou;
+  final _tijden = <DateTime>[];
+
+  /// Wacht tot er een zoekopdracht mag, en boekt hem meteen — tussen kijken en boeken zit geen `await`, dus twee
+  /// tegelijk nemen nooit dezelfde plek. [achtergrond]: hoogstens `max - voorJou`. Geeft terug hoe lang er gewacht is.
+  Future<Duration> neem({bool achtergrond = false}) async {
+    var gewacht = Duration.zero;
+    while (true) {
+      final nu = _klok();
+      _tijden.removeWhere((t) => nu.difference(t) >= const Duration(minutes: 1));
+      final w = zoekWachttijd(_tijden, nu, max: achtergrond ? max - voorJou : max);
+      if (w <= Duration.zero) {
+        _tijden.add(nu);
+        return gewacht;
+      }
+      gewacht += w;
+      await Future<void>.delayed(w);
+    }
+  }
+}
+
+/// De zoekrem van deze app (één Soulseek-account).
+final zoekrem = Zoekrem();
+
 /// Zo lang mag een rechtstreekse verbinding met een uploader duren, voordat de server gevraagd wordt hem
 /// naar ons te laten bellen (ConnectToPeer) — de enige weg naar een uploader achter een firewall.
 ///
@@ -1637,8 +1691,11 @@ class SlskSession {
   /// Searching used to open its own server connection and log in per query — so
   /// every query, and every broad-query retry, cost a login. That is the burst that repeatedly got
   /// the account blocked; downloads were fixed long ago but searching was still doing it.
+  ///
+  /// Elke vraag wacht op de zoekrem ([zoekrem], [kZoekPerMinuut]); [achtergrond] (de radio, de verlanglijst, een
+  /// betere kopie) laat [kZoekVoorJou] plaatsen vrij voor wat je zelf zoekt.
   Future<List<SoulseekFile>> search(List<String> queries,
-      {void Function(List<SoulseekFile>)? onPartial}) async {
+      {void Function(List<SoulseekFile>)? onPartial, bool achtergrond = false}) async {
     if (client.blocked) return const [];
     if (!await _ensure()) return const [];
     await client.ensureListening(); // so firewalled peers can deliver results to us directly
@@ -1648,6 +1705,13 @@ class SlskSession {
     try {
       _conn!.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort
       for (final q in queries) {
+        final gewacht = await zoekrem.neem(achtergrond: achtergrond);
+        if (gewacht >= const Duration(seconds: 1)) {
+          client.logboek('zoekrem: "$q" wachtte ${gewacht.inSeconds} s'
+              '${achtergrond ? ' (achtergrond)' : ''} — hoogstens $kZoekPerMinuut zoekopdrachten per minuut');
+        }
+        // Intussen kan de verbinding weg zijn; dan geldt wat er al binnen is.
+        if (!_alive) break;
         final t = client._nextTicket();
         run.tickets.add(t);
         client._searchSinks[t] = run.add;

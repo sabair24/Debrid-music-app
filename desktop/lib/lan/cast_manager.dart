@@ -150,6 +150,9 @@ Future<String?> probeShield(String host, {int port = ShieldTarget.port}) async {
   return (urls: urls, luidheid: luidheid);
 }
 
+/// Zo lang wacht een speaker die een nummer niet aannam, voor hij het nog één keer krijgt (zie `_openCurrent`).
+const kOpnieuwOpenen = Duration(seconds: 1);
+
 class CastManager {
   CastManager({
     required this.catalog,
@@ -596,7 +599,16 @@ class CastManager {
     session.aanloop = spoelen;
     _zetKlok(session);
     bijStand?.call();
-    await _openCurrent(session);
+    try {
+      await _openCurrent(session);
+    } catch (e) {
+      // Een start die niet lukte, laat geen sessie achter: anders staat de speaker in de zones als bron, met een rij en
+      // een klok, terwijl hij niets speelt. Gezien op de pc (22-10-2026, 19:01:54): de KEF nam het niet aan, en een
+      // kwartier later werd er "overgedragen" van een KEF die nooit begonnen was.
+      _log?.line('START MISLUKT op ${renderer.name}: $e');
+      _sluit(session);
+      rethrow;
+    }
     if (spoelen) {
       final begon = _klokUs();
       Timer(spoelNa, () => unawaited(_spoelNaStart(session, vanafMs, begon)));
@@ -817,16 +829,28 @@ class CastManager {
 
     final url = await _streamUrlFor(
         id, track.ext, session.renderer, track.sampleRate, track.bitsPerSample);
-    await _voor(session.renderer).playUrl(
-      session.renderer,
-      url,
-      title: track.title,
-      artist: track.artist,
-      album: track.album,
-      mime: mimeForExt(track.ext),
-      artUrl: await _artUrlFor(id, session.renderer),
-      duration: track.duration,
-    );
+    final hoes = await _artUrlFor(id, session.renderer);
+    Future<void> open() => _voor(session.renderer).playUrl(
+          session.renderer,
+          url,
+          title: track.title,
+          artist: track.artist,
+          album: track.album,
+          mime: mimeForExt(track.ext),
+          artUrl: hoes,
+          duration: track.duration,
+        );
+    try {
+      await open();
+    } catch (e) {
+      // Eén keer opnieuw, na een tel. Saber, 22-10-2026, over de KEF: "bij de eerste keer heeft hij een HTTP fout …
+      // bij de 2de keer pas ging het" — de tweede tik deed precies dit. Opnieuw openen is onschuldig: dezelfde url,
+      // en een speaker die de eerste toch nam, begint hem gewoon opnieuw.
+      _log?.line('openen op ${session.renderer.name} mislukte ($e) — over ${kOpnieuwOpenen.inMilliseconds} ms nog eens');
+      await Future<void>.delayed(kOpnieuwOpenen);
+      if (!identical(_sessies[session.renderer.id], session)) throw StateError('intussen iets anders gekozen');
+      await open();
+    }
     session.startedAt = DateTime.now();
     session.currentUrl = url;
     session.nextUrl = null;

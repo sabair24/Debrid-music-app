@@ -169,7 +169,9 @@ class _Zoeker extends SoulseekService {
 
   @override
   Future<List<SoulseekFile>> search(String query,
-      {void Function(List<SoulseekFile>)? onPartial, void Function(String)? gebruikteVraag}) async {
+      {void Function(List<SoulseekFile>)? onPartial,
+      void Function(String)? gebruikteVraag,
+      bool achtergrond = false}) async {
     vragen.add(query);
     final klok = Stopwatch()..start();
     for (final (wanneer, lijst) in tussen) {
