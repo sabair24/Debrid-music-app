@@ -54,8 +54,18 @@ const kOnbekendNaBreuk = 1500000;
 const kRandHoogstens = 200000;
 
 /// Zoveel mag een meting naast de doorsnede liggen en toch "de klok liep iets weg" zijn (µs). Meer is een
-/// pauze, spoelen of een ander nummer.
-const kKlokSpeling = 30000;
+/// pauze, spoelen of een ander nummer. De Move stelt zijn klok soms in één keer ~30 ms bij (gemeten
+/// 22-10-2026); met de oude vraagplanning en 30 ms speling las de klok dat als een pauze, en kreeg de Shield
+/// een anker dat 227 ms verschoven was. Met de huidige planning (vlak bij en naast het venster) blijft elke
+/// afwijking klein en volstaat in de nabootsing ook 30 ms; 150 is marge voor wat die niet kent. Spoelen gaat
+/// per hele seconde.
+const kKlokSpeling = 150000;
+
+/// Na een bijstelling die het venster breed maakte: onbekend tot het weer zo smal is (µs).
+const kHerstelBreed = 30000;
+
+/// Hoe ver buiten het venster de klok in de smalle stand ook vraagt (µs): zie [volgendeVraagOp].
+const kProefNaast = 8000;
 
 typedef _Grens = ({int t0Us, int t1Us, int seconde, int lo, int hi});
 
@@ -72,6 +82,11 @@ class Plekschatting {
   int? _sprongOpUs;
   int? _breukOpUs;
   bool _gepauzeerd = false;
+
+  /// Een bijstelling liet het venster ineens breed achter (alle smalle grenzen spraken de nieuwe meting
+  /// tegen): het midden ervan kan honderden ms naast de waarheid liggen (nagespeeld met de wandelende
+  /// Move: 239 ms). Onbekend tot het weer smal is ([kHerstelBreed]).
+  bool _herstel = false;
   int _sprongen = 0;
   int _lo = 0, _hi = 0;
   int _halveRondgangUs = 5000;
@@ -95,8 +110,30 @@ class Plekschatting {
   /// Hoe lang er al geen sprong meer was (µs), of sinds de laatste breuk als er nog geen was.
   int stilUs(int nuUs) => nuUs - (_sprongOpUs ?? _breukOpUs ?? nuUs);
 
+  /// Wanneer de volgende vraag vertrekt (µs), na een antwoord dat op [nuUs] binnenkwam: [volgendeVraagOp] met
+  /// wat deze schatting weet. Ook tijdens herstel gericht ([richtStandOp]): nagespeeld na een jump van 30–60
+  /// ms duurde "onbekend" zo 3–4 s (ergst 5,9), en met gewoon druk vragen 5–9 s (ergst 19).
+  int volgendeVraag(int nuUs, Random toeval) => volgendeVraagOp(
+        stand: richtStandOp(nuUs),
+        beginUs: beginUs,
+        breedteUs: breedteUs,
+        stilUs: stilUs(nuUs),
+        nuUs: nuUs,
+        toeval: toeval,
+        halveRondgangUs: halveRondgangUs,
+      );
+
+  /// De stand om de volgende vraag op te richten: ook bij herstel gericht, want juist dan beslist een vraag
+  /// bij de sprong waar hij is.
+  PlekStand richtStandOp(int nuUs) {
+    final stand = standOp(nuUs);
+    if (stand != PlekStand.onbekend || _sprongen == 0 || _sprongOpUs == null) return stand;
+    return nuUs - _sprongOpUs! < kGeenSprongNa ? PlekStand.speelt : stand;
+  }
+
   PlekStand standOp(int nuUs) {
     if (_gepauzeerd) return PlekStand.stil;
+    if (_herstel) return PlekStand.onbekend;
     if (_sprongOpUs != null && nuUs - _sprongOpUs! < kGeenSprongNa) return PlekStand.speelt;
     if (_breukOpUs != null && nuUs - _breukOpUs! < kOnbekendNaBreuk) return PlekStand.onbekend;
     return PlekStand.stil;
@@ -139,9 +176,11 @@ class Plekschatting {
       _sprongen = 1;
       _sprongOpUs = m.t1Us;
       _gepauzeerd = false;
+      _herstel = false;
       return false;
     }
     final grens = m.t1Us - venster.inMicroseconds;
+    final breedVoor = _hi - _lo;
     _grenzen.removeWhere((x) => x.t1Us < grens);
     _grenzen.add(g);
     if (!_herreken()) {
@@ -151,12 +190,14 @@ class Plekschatting {
         while (_grenzen.length > 1 && !_herreken()) {
           _grenzen.removeAt(0);
         }
+        if (_hi - _lo > max(kHerstelBreed, breedVoor * 3)) _herstel = true;
       } else {
         _grenzen
           ..clear()
           ..add(g);
         _herreken();
         _sprongen = 0;
+        _herstel = false;
         if (m.seconde == vorige.seconde) {
           // Dezelfde seconde, maar veel later dan hij zou moeten: hij staat stil (pauze, of hij hapert).
           // Meteen stil, en de schatting niet meer gebruiken: in de eerste seconde van een pauze zou ze
@@ -175,6 +216,7 @@ class Plekschatting {
       _sprongen++;
       _sprongOpUs = m.t1Us;
     }
+    if (_herstel && _hi - _lo <= kHerstelBreed) _herstel = false;
     return false;
   }
 
@@ -197,6 +239,7 @@ class Plekschatting {
     _sprongen = 0;
     _sprongOpUs = null;
     _gepauzeerd = false;
+    _herstel = false;
     _breukOpUs = nuUs;
   }
 }
@@ -207,7 +250,13 @@ class Plekschatting {
 ///   zeker of hij nog doorloopt) en vragen bij de verwachte sprong: boven 100 ms twee, op een kwart aan
 ///   weerszijden (dichter bij elkaar passen ze niet: tussen twee vragen zit minstens 25 ms); tot 15 ms
 ///   één, rond het midden van het venster — het antwoord valt voor of na de sprong en halveert het; daarna
-///   één ergens binnen het venster, dat houdt het smal.
+///   om de beurt één binnen het venster (dat houdt het smal), één [kProefNaast] ervoor en één erna. Die
+///   laatste twee zijn nodig: verschuift de sprong (de Move stelt zijn klok bij), dan zeggen vragen
+///   binnen het venster alleen nog "nog niet gesprongen" en spreken ze het oude venster nooit tegen; een
+///   vraag ernaast doet dat wel, en dan gaan de oudste metingen eruit. Aan BEIDE kanten, vast om de beurt
+///   en niet willekeurig: een te laat venster spreekt alleen een vraag aan de vroege kant tegen (nagespeeld
+///   met de wandelende Move: 7 s lang geen vroege vraag, en de schatting liep 57 ms weg). Eén per seconde:
+///   twee vlak na elkaar passen niet (tussen twee vragen zit minstens 25 ms plus de rondgang).
 /// - Anders druk (om de ~100 ms) zolang het kort geleden is: dan valt er snel een vraag vlak bij een
 ///   sprong. Na tien seconden stilte rustiger, na een minuut heel rustig (een speaker op pauze hoeft
 ///   niet tien keer per seconde gevraagd te worden).
@@ -241,7 +290,11 @@ int volgendeVraagOp({
       ] else if (w > 15000)
         rand - w ~/ 8 + toeval.nextInt(w ~/ 4 + 1)
       else
-        rand - w ~/ 2 + toeval.nextInt(w + 1),
+        switch (k % 3) {
+          0 => rand - w ~/ 2 + toeval.nextInt(w + 1),
+          1 => rand - w ~/ 2 - kProefNaast,
+          _ => rand + w ~/ 2 + kProefNaast,
+        },
     ];
     for (final d in doelen) {
       // Zo vertrekken dat het antwoord op het doel valt.
@@ -343,15 +396,7 @@ class SpeakerKlok {
     if (!_aan) return;
     if (s != null && schatting.voegToe((t0Us: t0, t1Us: t1, seconde: s))) bijBreuk?.call();
     _misschienMelden(t1);
-    final volgende = volgendeVraagOp(
-      stand: schatting.standOp(t1),
-      beginUs: schatting.beginUs,
-      breedteUs: schatting.breedteUs,
-      stilUs: schatting.stilUs(t1),
-      nuUs: t1,
-      toeval: _toeval,
-      halveRondgangUs: schatting.halveRondgangUs,
-    );
+    final volgende = schatting.volgendeVraag(t1, _toeval);
     _plan(Duration(microseconds: max(0, volgende - _klokUs())));
   }
 

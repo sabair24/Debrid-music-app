@@ -50,15 +50,7 @@ int _speel(
     final t1 = antwoord + 1000 + r.nextInt(5000);
     final breuk = p.voegToe((t0Us: t0, t1Us: t1, seconde: sonos.seconde(antwoord)));
     na?.call(t1, breuk);
-    t = volgendeVraagOp(
-      stand: p.standOp(t1),
-      beginUs: p.beginUs,
-      breedteUs: p.breedteUs,
-      stilUs: p.stilUs(t1),
-      nuUs: t1,
-      toeval: r,
-      halveRondgangUs: p.halveRondgangUs,
-    );
+    t = p.volgendeVraag(t1, r);
   }
   return t;
 }
@@ -99,9 +91,11 @@ void main() {
       );
       // Gericht vragen kost twee à drie vragen per seconde, geen tien.
       expect(gezien, greaterThanOrEqualTo(25));
-      // Gericht vragen: na vijf seconden al smal, na vijftien zo smal als de rondgang toelaat.
+      // Gericht vragen: na vijf seconden al smal, na vijftien bijna zo smal als de rondgang toelaat. Gemeten
+      // over 300 zaden (22-10-2026, met de vragen om de beurt binnen en naast het venster): na 5 s mediaan
+      // 13 ms, ergst 27; na 15 s mediaan 9 ms, ergst 14.
       expect(na5, lessThan(30000));
-      expect(p.breedteUs, lessThan(10000));
+      expect(p.breedteUs, lessThan(15000));
       expect(p.standOp(_t + 15000000), PlekStand.speelt);
     });
 
@@ -225,6 +219,68 @@ void main() {
       expect(breuken, 1);
     });
 
+    // Gemeten op de Move (22-10-2026, 40 s om de 15 ms): de sprongmomenten wandelen tot ±15 ms van een
+    // rechte lijn en springen soms in één keer ~30 ms terug — de Sonos stelt zijn klok bij. Met een
+    // speling van 30 ms las de klok zo'n sprong als een pauze en begon opnieuw: de Shield kreeg een anker
+    // dat 227 ms verschoven was.
+    test('de klok van de speaker springt 30 ms (de Move stelt bij): geen pauze, geen breuk, hij loopt mee', () {
+      for (final sprong in [30000, -30000, 60000, -60000]) {
+        final r = Random(sprong);
+        final p = Plekschatting();
+        final sonos = _NepSonos(_t - 20000000);
+        var gesprongen = false;
+        int? vorigeT;
+        var twijfel = 0;
+        _speel(p, sonos, _t, 30000000, r, voor: (t) {
+          if (!gesprongen && t > _t + 12000000) {
+            gesprongen = true;
+            sonos.beginUs += sprong;
+          }
+        }, na: (t, breuk) {
+          final waarom = 'sprong ${sprong ~/ 1000} ms na ${(t - _t) ~/ 1000} ms';
+          expect(breuk, isFalse, reason: waarom);
+          // Even twijfelen mag (bijstelling of pauze?), stil worden niet.
+          if (p.sprongen > 0) expect(p.standOp(t), isNot(PlekStand.stil), reason: waarom);
+          if (vorigeT != null && p.standOp(t) == PlekStand.onbekend) twijfel += t - vorigeT!;
+          vorigeT = t;
+        });
+        // Zo lang geen nieuw anker (volgers spelen door op het vorige). Gemeten over 200 zaden per jump: mediaan
+        // 3–4 s, ergst 5,9 s; daarna binnen 8 ms.
+        expect(twijfel, lessThan(6500000), reason: 'sprong ${sprong ~/ 1000} ms: zo lang onbekend');
+        expect((p.beginUs! - sonos.beginUs).abs(), lessThan(10000), reason: 'sprong ${sprong ~/ 1000} ms');
+      }
+    });
+
+    // De Move zoals gemeten: sprongen die ±15 ms van een rechte lijn wandelen (hier traag heen en weer, 25 s)
+    // en één jump van ±30 ms. Nagespeeld over 300 zaden (22-10-2026): mediaan 7 ms, 90 % 16, 99 % 42, ergst
+    // 50 ms (zonder de herstelstand: ergst 243 ms, het midden van een ineens breed venster; met willekeurig
+    // gekozen vragen naast het venster: 57 ms weggelopen in 7 s).
+    test('een wandelende klok (de Move): nooit stil of een breuk, en de schatting blijft in de buurt', () {
+      final fouten = <int>[];
+      for (var z = 0; z < 100; z++) {
+        final r = Random(z);
+        final b0 = _t - 20000000;
+        final fase = r.nextDouble() * 2 * pi;
+        final jumpOp = _t + 5000000 + r.nextInt(30000000);
+        final jump = (r.nextBool() ? 1 : -1) * 30000;
+        int begin(int t) => b0 + (15000 * sin(fase + 2 * pi * (t - _t) / 25000000)).round() + (t > jumpOp ? jump : 0);
+        final p = Plekschatting();
+        var t = _t;
+        while (t < _t + 40000000) {
+          final a = t + 1000 + r.nextInt(5000);
+          final t1 = a + 1000 + r.nextInt(5000);
+          expect(p.voegToe((t0Us: t, t1Us: t1, seconde: (a - begin(a)) ~/ 1000000)), isFalse, reason: 'zaad $z');
+          final stand = p.standOp(t1);
+          if (p.sprongen > 0) expect(stand, isNot(PlekStand.stil), reason: 'zaad $z');
+          if (t1 > _t + 8000000 && stand == PlekStand.speelt) fouten.add((p.beginUs! - begin(t1)).abs());
+          t = p.volgendeVraag(t1, r);
+        }
+      }
+      fouten.sort();
+      expect(fouten[(fouten.length * 0.9).floor()], lessThan(20000), reason: '90 %');
+      expect(fouten.last, lessThan(60000), reason: 'ergst');
+    });
+
     test('een klok die 50 ppm anders loopt: twee minuten geen breuk, en de schatting loopt mee', () {
       final r = Random(9);
       final p = Plekschatting();
@@ -286,7 +342,8 @@ void main() {
         halveRondgangUs: 4000,
       );
       final f = fase(b, 4000);
-      expect(f == 500000 || f <= 4500 || f >= 995500, isTrue, reason: 'fase $f');
+      // Binnen het venster, of er net naast (± de helft plus 8 ms: zie kProefNaast), of het midden.
+      expect(f == 500000 || f <= 4500 || f >= 995500 || f == 12500 || f == 987500, isTrue, reason: 'fase $f');
     }
     for (var i = 0; i < 50; i++) {
       int na(PlekStand s, int stil) =>

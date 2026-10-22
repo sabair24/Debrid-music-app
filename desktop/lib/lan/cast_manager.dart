@@ -250,9 +250,17 @@ class CastManager {
         bijVerandering: () {
           final p = s.klok?.plekNu;
           if (p != null && p.speelt) s.stilVoorKlok = null;
+          // Niet via [_zie]: die voegt regels samen die alleen in getallen verschillen, en juist die getallen
+          // (hoe smal de klok wordt) wil je bij een meting zien. Om de 5 s, en meteen bij een andere stand.
           final b = s.klok?.schatting.breedteUs;
-          _zie('klok ${s.renderer.name}: ${p == null ? '?' : p.speelt ? 'speelt op ${p.positieMs} ms' : 'stil'}'
-              '${b == null ? '' : ' ±${(b / 2000).toStringAsFixed(1)} ms'}');
+          final stand = p == null ? '?' : (p.speelt ? 'speelt' : 'stil');
+          final nu = DateTime.now().millisecondsSinceEpoch;
+          if (stand != s.klokLogStand || nu - s.klokLogOp >= 5000) {
+            s.klokLogStand = stand;
+            s.klokLogOp = nu;
+            _log?.line('klok ${s.renderer.name}: ${p == null ? '?' : p.speelt ? 'speelt op ${p.positieMs} ms' : 'stil'}'
+                '${b == null ? '' : ' ±${(b / 2000).toStringAsFixed(1)} ms'}');
+          }
           if (!s.aanloop) bijAnker?.call(s.renderer.id);
         },
         bijBreuk: () => unawaited(_naBreuk(s)),
@@ -1309,6 +1317,10 @@ class _Session {
 
   /// Samen spelen (stap 3.3): waar de speaker op de ms is ([SpeakerKlok]), zolang er toestellen meespelen.
   SpeakerKlok? klok;
+
+  /// Wanneer de klok het laatst in cast.log stond, en met welke stand.
+  String klokLogStand = '';
+  int klokLogOp = 0;
 
   /// Hij gaat stilstaan op deze plek (ms) en de klok weet het nog niet: wat het anker dan zegt.
   int? stilVoorKlok;
