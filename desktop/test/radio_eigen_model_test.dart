@@ -69,7 +69,10 @@ void main() {
         4,
         reason: 'de startlijst, de vervolglijst, het afstemmen en Last.fm',
       );
-      expect(RegExp(r'lijstOpDeezer\(').allMatches(main).length, 4, reason: 'geen vijfde zonder opzoeker');
+      // De vijfde is de rij "Vroeger veel gespeeld, nog niet van jou" op het startscherm: die zoekt per definitie
+      // nummers die je níét hebt, dus daar hoort je bibliotheek niet bij.
+      expect(RegExp(r'lijstOpDeezer\(').allMatches(main).length, 5, reason: 'geen zesde zonder opzoeker');
+      expect(main, contains("van: 'je Last.fm');"));
     });
   });
 }

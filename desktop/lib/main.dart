@@ -84,6 +84,7 @@ import 'credits.dart';
 import 'deezerbaan.dart';
 import 'itunes.dart';
 import 'lastfm.dart';
+import 'lastfm_geschiedenis.dart';
 import 'radiosfeer.dart';
 import 'versiecontrole.dart';
 import 'discogs.dart';
@@ -16627,8 +16628,23 @@ final Radiotempo _radiotempo =
 final ItunesZoeker _itunes = ItunesZoeker();
 Future<RecTrack?> _itunesVoorModel(AiNummer n) => _itunes.vind(n.artiest, n.titel);
 
-/// Vergelijkbare nummers bij de start van een radio — zie `lastfm.dart`.
-final LastfmZoeker _lastfm = LastfmZoeker();
+/// Last.fm — zie `lastfm.dart`: vergelijkbare nummers, bekendste nummers, tags, verwante artiesten en je eigen
+/// geschiedenis. Met een buffer op schijf, zodat dezelfde vraag niet elke keer opnieuw gaat.
+final LastfmZoeker _lastfmBron = LastfmZoeker(buffer: '$appDir${Platform.pathSeparator}lastfm');
+
+/// De artiesten die je volgens Last.fm het meest speelde, voor het smaakprofiel — zonder wat [al] al noemt. Leeg
+/// zonder sleutel of gebruiker, of als Last.fm niet binnen [geduld] antwoordt; de vraag loopt dan door en vult de
+/// buffer (een dag), zodat het de volgende keer meteen klaarligt.
+Future<List<String>> _lastfmTopArtiesten(AppSettings cfg,
+    {Iterable<String> al = const [], Duration geduld = const Duration(seconds: 3)}) async {
+  try {
+    final g = await haalGeschiedenis(_lastfmBron, gebruiker: cfg.lastfmGebruiker, sleutel: cfg.lastfmKey)
+        .timeout(geduld);
+    return g == null ? const [] : geschiedenisArtiesten(g.artiesten, al: al);
+  } catch (_) {
+    return const [];
+  }
+}
 
 Future<void> startRadio(BuildContext context, String artist,
     {String? titel, Track? zaad, int? seconden, bool hier = false, String? naar}) async {
@@ -16713,9 +16729,12 @@ Future<void> startRadio(BuildContext context, String artist,
       final n = meestGespeeldeArtiest(beurten, nuMs: nuMs, overslaan: i);
       if (n != null && !gespeeld.contains(n)) gespeeld.add(n);
     }
+    // En wie je volgens Last.fm het meest speelde — uit de buffer, of niet als hij er nog niet ligt: een radio wacht
+    // daar niet op (zie [_lastfmTopArtiesten]).
+    final lfm = await _lastfmTopArtiesten(cfg, al: gespeeld, geduld: const Duration(milliseconds: 800));
     profiel = profielUit(
       nummers: [for (final t in lib.tracks) (artiest: t.artist, jaar: t.year, genre: t.genre)],
-      gespeeld: gespeeld,
+      gespeeld: [...gespeeld, ...lfm].take(15).toList(),
       overslaan: _genericArtist,
     );
     ai = _radioModel(cfg: cfg, lib: lib, remote: remote, viaPc: viaPc, radio: radio, log: log);
@@ -16898,7 +16917,7 @@ Future<void> startRadio(BuildContext context, String artist,
     if (lastfmSleutel.isNotEmpty && lastfmTitel.isNotEmpty) {
       unawaited(() async {
         try {
-          final lf = await _lastfm.vergelijkbaar(artist, lastfmTitel, sleutel: lastfmSleutel);
+          final lf = await _lastfmBron.vergelijkbaar(artist, lastfmTitel, sleutel: lastfmSleutel);
           if (sessie != radio.sessie) return;
           if (lf == null) {
             log.line('radio-lastfm: geen antwoord');
@@ -17767,6 +17786,9 @@ class _StartCache {
   static String omdatArtiest = '';
   static List<RecTrack> omdat = [];
 
+  /// "Vroeger veel gespeeld, nog niet van jou": uit je Last.fm-geschiedenis (zie `lastfm_geschiedenis.dart`).
+  static List<RecTrack> vroeger = [];
+
   /// Hoe vaak er al ververst is. Zo gaat de rij bij elke ronde over iemand anders — anders is het
   /// een stempel in plaats van een suggestie.
   static int ronde = 0;
@@ -17792,6 +17814,7 @@ class _StartCache {
     genres = [];
     omdatArtiest = '';
     omdat = [];
+    vroeger = [];
     uitgezocht = [];
     ronde++;
     geladen = false;
@@ -17822,6 +17845,7 @@ class _HomeStartViewState extends State<HomeStartView> {
   List<int> _genres = _StartCache.genres;
   String _omdatArtiest = _StartCache.omdatArtiest;
   List<RecTrack> _omdat = _StartCache.omdat;
+  List<RecTrack> _vroeger = _StartCache.vroeger;
   int get _ronde => _StartCache.ronde;
   List<({CatalogAlbumHit hit, String reden})> _uitgezocht = _StartCache.uitgezocht;
   bool _chartsLoading = !_StartCache.geladen;
@@ -18033,6 +18057,17 @@ class _HomeStartViewState extends State<HomeStartView> {
   /// The personal rows depend on the scanned library. On a cold start the scan is still running
   /// when this view first builds, so we load these ONCE the library actually has artists (driven
   /// from build via context.watch) — not eagerly with an empty seed list.
+  /// Wat je volgens Last.fm vroeger veel speelde en nog niet hebt ([nogNietVanJou]), opgezocht zoals de lijst van het
+  /// model — Deezer, dan iTunes — zodat de tegels een hoes en een album hebben. Hoogstens 30 nummers opzoeken.
+  Future<List<RecTrack>> _vroegerGespeeld(AppSettings cfg, List<Track> bibliotheek) async {
+    final g = await haalGeschiedenis(_lastfmBron, gebruiker: cfg.lastfmGebruiker, sleutel: cfg.lastfmKey);
+    if (g == null) return const [];
+    final mis = nogNietVanJou(g.nummers, bibliotheek).take(30).toList();
+    if (mis.isEmpty) return const [];
+    return _rec.lijstOpDeezer([for (final m in mis) AiNummer(m.artiest, m.titel)],
+        elders: _itunesVoorModel, eldersNaam: 'iTunes', van: 'je Last.fm');
+  }
+
   Future<void> _loadSeeds(List<String> seeds) async {
     if (mounted) setState(() => _seedsLoading = true);
     // De bibliotheek NU lezen, vóór de eerste `await`.
@@ -18072,15 +18107,18 @@ class _HomeStartViewState extends State<HomeStartView> {
       final n = meestGespeeldeArtiest(beurten, nuMs: nuMs, overslaan: i);
       if (n != null && !gespeeldeNamen.contains(n)) gespeeldeNamen.add(n);
     }
-    final profielVoorAi = profielUit(
-      nummers: [for (final t in lib.tracks) (artiest: t.artist, jaar: t.year, genre: t.genre)],
-      gespeeld: gespeeldeNamen,
-      overslaan: _genericArtist,
-    );
+    // En wie je volgens Last.fm het meest speelde (2017–2023 bij Saber): de smaak van vóór deze app.
+    final lfmArtiestenF = _lastfmTopArtiesten(cfg, al: gespeeldeNamen);
     final aiF = (lib.isRemote || cfg.anthropicKey.trim().isEmpty)
         ? Future.value(<AiVoorstel>[])
-        : AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
-            .maakAanbevelingen(profielVoorAi);
+        : lfmArtiestenF.then((extra) => AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
+            .maakAanbevelingen(profielUit(
+              nummers: [for (final t in lib.tracks) (artiest: t.artist, jaar: t.year, genre: t.genre)],
+              gespeeld: [...gespeeldeNamen, ...extra].take(15).toList(),
+              overslaan: _genericArtist,
+            )));
+    // "Vroeger veel gespeeld, nog niet van jou" — zie [_vroegerGespeeld].
+    final vroegerF = _vroegerGespeeld(cfg, lib.tracks.toList());
     // De nieuwe releases staan hier niet meer tussen: die komen apart, en meteen — zie [_laadNieuw].
     final fyF = _haalAanbevolen(seeds);
     final genreF = profiel.isEmpty
@@ -18099,6 +18137,10 @@ class _HomeStartViewState extends State<HomeStartView> {
     List<RecTrack> omdatRij = [];
     try {
       omdatRij = await omdatF;
+    } catch (_) {}
+    List<RecTrack> vroegerRij = [];
+    try {
+      vroegerRij = await vroegerF;
     } catch (_) {}
     // Het model kiest, Deezer bewijst. Elk voorstel wordt nageslagen; wat niet bestaat verdwijnt
     // zonder een woord. Een tegel op grond van een verzonnen titel gaat nergens heen, en dat is
@@ -18139,6 +18181,8 @@ class _HomeStartViewState extends State<HomeStartView> {
       _StartCache.omdat = omdatSchoon;
     }
     if (uitgezocht.isNotEmpty) _StartCache.uitgezocht = uitgezocht;
+    final vroegerSchoon = maxPerArtiest(nogNietInBezit(vroegerRij, bezit), (t) => t.artist, 2);
+    if (vroegerSchoon.isNotEmpty) _StartCache.vroeger = vroegerSchoon;
     _StartCache.opgehaaldMs = DateTime.now().millisecondsSinceEpoch;
     setState(() {
       _forYou = _StartCache.forYou;
@@ -18146,6 +18190,7 @@ class _HomeStartViewState extends State<HomeStartView> {
       _genres = _StartCache.genres;
       _omdatArtiest = _StartCache.omdatArtiest;
       _omdat = _StartCache.omdat;
+      _vroeger = _StartCache.vroeger;
       _uitgezocht = _StartCache.uitgezocht;
       _seedsLoading = false;
     });
@@ -18322,6 +18367,11 @@ class _HomeStartViewState extends State<HomeStartView> {
         // controleerbaar waaróm iets wordt voorgesteld, en dat was precies de klacht.
         if (_omdat.isNotEmpty && _omdatArtiest.isNotEmpty)
           _section('Omdat je $_omdatArtiest draaide', _recRow(_omdat.take(20).toList(), rij: 'omdat')),
+        // Uit je Last.fm-geschiedenis: wat je vroeger veel speelde en nog niet hebt (Saber, 22-10-2026: "bekende
+        // liedjes die ik nog niet heb"). Alleen met een Last.fm-sleutel en -gebruikersnaam.
+        if (_vroeger.isNotEmpty)
+          _section('Vroeger veel gespeeld, nog niet van jou', _recRow(_vroeger.take(20).toList(), rij: 'vroeger'),
+              bij: 'uit je Last.fm'),
         // De rij van het taalmodel. Blijft weg zonder AI-sleutel, en dat is geen fout maar de
         // afspraak: zie [AiService.maakAanbevelingen].
         if (_uitgezocht.isNotEmpty)
@@ -26287,6 +26337,39 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
 }
 
 // ── Stremio-style online browse: artist → albums → tracks → sources ──────────
+/// De bekendste nummers van een artiest die je nog niet hebt (Last.fm), met het aantal luisteraars en ▶ ([SpeelNuKnop]:
+/// halen en meteen laten klinken; daarna staat het in je bibliotheek).
+class _BekendNietVanJou extends StatelessWidget {
+  const _BekendNietVanJou({required this.nummers, required this.marge});
+  final List<LastfmTopper> nummers;
+  final double marge;
+
+  @override
+  Widget build(BuildContext context) {
+    // 36681 → 36.681, zoals in het Nederlands.
+    String fmt(int n) => n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => '.');
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: marge - 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final (i, n) in nummers.indexed)
+            Row(children: [
+              SpeelNuKnop(artiest: n.artiest, titel: n.titel),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text('${i + 1}. ${n.titel}',
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
+              ),
+              const SizedBox(width: 10),
+              Text('${fmt(n.luisteraars)} luisteraars', style: TextStyle(color: _muted, fontSize: 12)),
+            ]),
+        ],
+      ),
+    );
+  }
+}
+
 class ArtistBrowsePage extends StatefulWidget implements OnderDeBalk {
   final CatalogArtist artist;
   const ArtistBrowsePage(this.artist, {super.key});
@@ -26421,6 +26504,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// waar je vandaan kwam. Nu is er één pagina en staat alles erop.
   List<CatalogArtist> _related = const [];
 
+  /// De bekendste nummers van Last.fm die je van deze artiest nog niet hebt — zie [bekendeNummersDieJeMist].
+  List<LastfmTopper> _lastfmTop = const [];
+
   /// De scroller van deze pagina: het glas achter de zwevende balk komt op naarmate je scrolt.
   final _rol = ScrollController();
 
@@ -26450,6 +26536,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     _load();
     _loadBio();
     _loadRelated();
+    _loadLastfmTop();
     _loadArt();
     _loadWie();
     // Op een tv vijf tellen beeldtijden in fps.log: bouwen, tekenen en "wacht op start". Het openen
@@ -27040,6 +27127,25 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// Een pagina die vanuit MusicBrainz of vanuit een kale naam is geopend draagt geen Deezer-id, dus
   /// die wordt hier alsnog opgezocht — met dezelfde naamcontrole als de discografie, want een
   /// naamgenoot levert een rij "klinkt als" op die nergens op slaat.
+  /// Saber, 22-10-2026: "bekende liedjes die ik nog niet heb". Alleen met een Last.fm-sleutel; de rij blijft weg als
+  /// Last.fm een naamgenoot lijkt te bedoelen (zie [bekendeNummersDieJeMist]).
+  Future<void> _loadLastfmTop() async {
+    final sleutel = context.read<AppSettings>().lastfmKey.trim();
+    if (sleutel.isEmpty) return;
+    try {
+      final naam = widget.artist.name;
+      final top = await _lastfmBron.topNummers(naam, sleutel: sleutel);
+      if (top == null || !mounted || naam != widget.artist.name) return;
+      final zelf = artistKey(naam);
+      final van = [
+        for (final t in context.read<LibraryStore>().tracks)
+          if (artistKey(t.artist) == zelf) t,
+      ];
+      final mis = bekendeNummersDieJeMist(top, van);
+      if (mis.isNotEmpty) setState(() => _lastfmTop = mis);
+    } catch (_) {/* een pagina zonder deze rij is nog steeds een goede pagina */}
+  }
+
   Future<void> _loadRelated() async {
     try {
       final naam = widget.artist.name;
@@ -27364,6 +27470,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           if (mine.isNotEmpty) ...[
             SliverToBoxAdapter(child: _sectionTitle('In mijn bibliotheek', '${mine.length}')),
             SliverToBoxAdapter(child: GetrapteLijst(albums: mine)),
+          ],
+          if (_lastfmTop.isNotEmpty) ...[
+            SliverToBoxAdapter(child: _sectionTitle('Bekend, nog niet van jou', 'Last.fm')),
+            SliverToBoxAdapter(child: _BekendNietVanJou(nummers: _lastfmTop, marge: _marge)),
           ],
           if (_busy)
             SliverToBoxAdapter(
@@ -28589,6 +28699,13 @@ class _AboutSectionState extends State<_AboutSection> {
             ),
           ],
         ),
+        // De vermelding die Last.fm vraagt (voorwaarden, art. 2.7): "powered by AudioScrobbler", met een verwijzing. Alleen
+        // als er een sleutel is — zonder sleutel komt er niets van Last.fm.
+        if (context.read<AppSettings>().lastfmKey.trim().isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text('Vergelijkbare nummers, bekendheid, tags en je luistergeschiedenis: powered by AudioScrobbler (last.fm)',
+              style: TextStyle(color: _muted, fontSize: 11, height: 1.35)),
+        ],
         if (_path.isNotEmpty) ...[
           const SizedBox(height: 6),
           // Zero-width spaces after each separator: a path has no spaces, so Flutter would
@@ -29390,7 +29507,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _anthropic, _anthropicWs, _rtUser, _rtPass, _slskPort, _acoustid, _audiodb, _tidalId, _tidalSecret, _torznabUrl, _torznabKey, _redacted;
+  late final TextEditingController _discogs, _torbox, _slskUser, _slskPass, _lastfm, _lastfmGebruiker, _anthropic, _anthropicWs, _rtUser, _rtPass, _slskPort, _acoustid, _audiodb, _tidalId, _tidalSecret, _torznabUrl, _torznabKey, _redacted;
 
   @override
   void initState() {
@@ -29402,6 +29519,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskPass = TextEditingController(text: s.soulseekPass);
     _slskPort = TextEditingController(text: s.soulseekPort > 0 ? s.soulseekPort.toString() : "");
     _lastfm = TextEditingController(text: s.lastfmKey);
+    _lastfmGebruiker = TextEditingController(text: s.lastfmGebruiker);
     _anthropic = TextEditingController(text: s.anthropicKey);
     _anthropicWs = TextEditingController(text: s.anthropicWorkspace);
     _acoustid = TextEditingController(text: s.acoustidKey);
@@ -29681,6 +29799,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _slskPass.dispose();
     _slskPort.dispose();
     _lastfm.dispose();
+    _lastfmGebruiker.dispose();
     _anthropic.dispose();
     _anthropicWs.dispose();
     _acoustid.dispose();
@@ -30323,6 +30442,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     const SeedKeuze(),
                     const SizedBox(height: 8),
                     _field('Last.fm API-sleutel', _lastfm, obscure: true),
+                    _field('Last.fm-gebruikersnaam (je luistergeschiedenis)', _lastfmGebruiker),
                     const SizedBox(height: 8),
                     // Alleen voor "Zeg wat je wil horen" op het startscherm. Zonder deze sleutel
                     // werkt de rest van de app precies zoals hij deed; met sleutel kun je een radio
@@ -30648,6 +30768,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     s.rutrackerUser = _rtUser.text.trim();
                     s.rutrackerPass = _rtPass.text;
                     s.lastfmKey = _lastfm.text.trim();
+                    s.lastfmGebruiker = _lastfmGebruiker.text.trim();
                     s.anthropicKey = _anthropic.text.trim();
                     s.anthropicWorkspace = _anthropicWs.text.trim();
                     s.acoustidKey = _acoustid.text.trim();

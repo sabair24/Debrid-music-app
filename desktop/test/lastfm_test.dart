@@ -143,7 +143,7 @@ void main() {
       final i = main.indexOf('    final lastfmSleutel = cfg.lastfmKey.trim();');
       expect(i, greaterThan(0));
       final blok = main.substring(i, main.indexOf('    // En de nummers van het model erbij', i));
-      expect(blok, contains('await _lastfm.vergelijkbaar(artist, lastfmTitel, sleutel: lastfmSleutel);'));
+      expect(blok, contains('await _lastfmBron.vergelijkbaar(artist, lastfmTitel, sleutel: lastfmSleutel);'));
       expect(blok, contains("van: 'Last.fm');"));
       expect(blok, contains("bron: 'lastfm');"));
       expect(blok, contains('keuring.vraagSfeer(vanLastfm);\n'), reason: 'streng: niet `gekozen`');

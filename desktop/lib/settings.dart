@@ -11,6 +11,10 @@ class AppSettings extends ChangeNotifier {
   String torboxToken = '';
   String lastfmKey = '';
 
+  /// Je gebruikersnaam op Last.fm: daarmee leest de app je openbare luistergeschiedenis (zie `lastfm.dart`). Geen
+  /// geheim — wie je profiel kent, ziet hetzelfde.
+  String lastfmGebruiker = '';
+
   /// De sleutel waarmee de app een getypte zin in een radio-opdracht laat omzetten.
   ///
   /// Leeg is de gewone toestand: zonder deze sleutel werkt alles behalve "maak me een radio met ...".
@@ -352,6 +356,7 @@ class AppSettings extends ChangeNotifier {
         discogsToken = (m['discogs_token'] ?? '') as String;
         torboxToken = (m['torbox_token'] ?? '') as String;
         lastfmKey = (m['lastfm_key'] ?? '') as String;
+        lastfmGebruiker = (m['lastfm_user'] ?? '') as String;
         anthropicKey = (m['anthropic_key'] ?? '') as String;
         anthropicWorkspace = (m['anthropic_workspace'] ?? '') as String;
         acoustidKey = (m['acoustid_key'] ?? '') as String;
@@ -409,6 +414,7 @@ class AppSettings extends ChangeNotifier {
         'discogs_token': discogsToken,
         'torbox_token': torboxToken,
         'lastfm_key': lastfmKey,
+        'lastfm_user': lastfmGebruiker,
         'anthropic_key': anthropicKey,
         'anthropic_workspace': anthropicWorkspace,
         'acoustid_key': acoustidKey,
