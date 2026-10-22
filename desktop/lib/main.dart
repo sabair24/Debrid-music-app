@@ -27,6 +27,7 @@ import 'ai.dart';
 import 'radio.dart';
 import 'modelbudget.dart';
 import 'pc_model.dart';
+import 'tempo.dart' show Radiotempo, Tempometer;
 import 'radiobijvuller.dart';
 import 'radiokeuze.dart';
 import 'radiobestand.dart' show kRadioSpeling;
@@ -1587,6 +1588,7 @@ Future<void> main() async {
                 (soort, inT, uitT) => radioLog.line('radio-model (toestel): $soort, $inT in / $uitT uit tokens');
         },
         budget: _modelbudget,
+        tempo: _radiotempo,
         spoor: radioLog.line,
       );
       zoneLijst
@@ -16527,6 +16529,12 @@ final Map<String, SpeakerRadio> _speakerRadios = {};
 /// Wat de radio's samen het taalmodel mogen vragen, ook over een herstart heen — zie `modelbudget.dart`.
 final Modelbudget _modelbudget = Modelbudget(pad: '$appDir${Platform.pathSeparator}modelbudget.json');
 
+/// Het tempo van zaad en kandidaten voor de sfeervraag, op de pc — zie `tempo.dart`. Het fragment komt van de
+/// versiecontrole, die het toch al haalt.
+final Versiecontrole _fragmentbron = Versiecontrole();
+final Radiotempo _radiotempo =
+    Radiotempo(meter: Tempometer(), fragment: (a, t, s) => _fragmentbron.fragment(a, t, seconden: s));
+
 Future<void> startRadio(BuildContext context, String artist,
     {String? titel, Track? zaad, int? seconden, bool hier = false, String? naar}) async {
   // Een zone op afstand gekozen: daar (Saber, 21-10-2026: een radio starten in een andere zone "op elk
@@ -16629,8 +16637,9 @@ Future<void> startRadio(BuildContext context, String artist,
   }
   keuring
     ..model = ai
-    // Via de pc houdt de pc het budget bij.
-    ..budget = viaPc ? null : _modelbudget;
+    // Via de pc houdt de pc het budget bij — en meet hij het tempo.
+    ..budget = viaPc ? null : _modelbudget
+    ..tempo = lib.isRemote ? null : _radiotempo;
   // Bekend, Gemengd of Ontdekken — zie `radiosmaak.dart`. Staat op het radiopaneel.
   final smaak = Radiosmaak.uit(cfg.radioSmaak);
   // Wie het zaadnummer werkelijk maakte, is de artiest van deze radio — niet de naamgenoot met de meeste fans
@@ -17016,6 +17025,9 @@ class _Radiokeuring {
   /// De Deezer-artiest van het zaadnummer, als die gevonden werd — zodat afstemmen dezelfde artiest neemt.
   int? deezerArtiest;
 
+  /// Het tempo meten voor de sfeervraag (`tempo.dart`) — alleen op de pc; een toestel laat de pc het doen.
+  Radiotempo? tempo;
+
   /// Vraag het model welke van [plekken] de SFEER van het zaad breken — zie `sfeerPrompt`. Eén vraag
   /// voor de hele lijst; [keur] wacht per plek op het antwoord. De zaadartiest en wat al gevraagd is
   /// gaan niet mee.
@@ -17044,6 +17056,25 @@ class _Radiokeuring {
       final z = await zaadStijl;
       final t = zaadTitel;
       final stijlen = t == null ? const <String>[] : await stijlboek.stijlnamen(artiest, t);
+      // Het tempo, gemeten uit de audio: het zaad uit zijn bestand, de rest uit bestand of Deezer-fragment (Saber,
+      // 22-10-2026: "wat meer up-tempo, maar eens een trager liedje mag"). Zie `tempo.dart`.
+      double? zaadBpm;
+      var bpm = const <double?>[];
+      final tm = tempo;
+      if (tm != null) {
+        try {
+          final alle = await tm.vanRij([
+            (artiest: artiest, titel: t ?? '', pad: zaad?.path, seconden: zaad?.duration?.inSeconds),
+            for (final p in nieuw) (artiest: p.artiest, titel: p.titel, pad: p.eigen?.path, seconden: p.seconden),
+          ]).timeout(const Duration(seconds: 40));
+          zaadBpm = alle.first;
+          bpm = alle.sublist(1);
+          final rij = [
+            for (var i = 0; i < nieuw.length; i++) '${nieuw[i].artiest} — ${nieuw[i].titel} ${bpm[i]?.round() ?? '?'}'
+          ];
+          log.line('radio-tempo: zaad ${zaadBpm?.round() ?? '?'} BPM — ${rij.join('; ')}');
+        } catch (_) {/* zonder tempo vraagt het model zoals voorheen */}
+      }
       final weg = await m.weesSfeer(
           artiest: artiest,
           titel: t,
@@ -17052,7 +17083,9 @@ class _Radiokeuring {
           kandidaten: [for (final p in nieuw) (artiest: p.artiest, titel: p.titel)],
           pastNiet: voorbeelden(Sfeeroordeel.pastNiet),
           pastWel: voorbeelden(Sfeeroordeel.past),
-          start: !onderweg);
+          start: !onderweg,
+          zaadBpm: zaadBpm,
+          bpm: bpm);
       log.line('radio-sfeer: ${weg.length} van ${nieuw.length} passen niet — '
           '${[for (final i in weg) '${nieuw[i].artiest} — ${nieuw[i].titel}'].join('; ')}');
       return weg;
