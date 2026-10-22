@@ -23141,6 +23141,12 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   int? _tidalExpanded = ZoekGeheugen.tidalNummerOpen,
       _tidalAlbumExpanded = ZoekGeheugen.tidalAlbumOpen;
 
+  /// Zoekt TIDAL hier via tidaler — zijn inlog, geen eigen app op developer.tidal.com nodig? Op de machine die de
+  /// muziek bezit en waar tidaler staat. Elders (een telefoon, de Shield) blijft het de officiële API. Saber,
+  /// 22-10-2026: *"Niet verbonden met tidal staat er bij zoeken via tidal"*.
+  bool get _tidalerZoekt =>
+      _isDesktop && !context.read<LibraryStore>().isRemote && Tidaler.beschikbaar && Tidaler.python != null;
+
   @override
   void initState() {
     super.initState();
@@ -23161,7 +23167,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   Future<void> _searchTidal(String q) async {
     final tidal = context.read<TidalService>();
-    if (!tidal.connected) return;
+    final viaTidaler = _tidalerZoekt;
+    if (!viaTidaler && !tidal.connected) return;
     final gen = ZoekGeheugen.nieuweRonde();
     bool geldig() => ZoekGeheugen.geldig(gen);
     setState(() {
@@ -23178,7 +23185,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     ZoekGeheugen.tidalAlbumOpen = null;
     ZoekGeheugen.status = null;
     try {
-      final r = await tidal.search(q);
+      final r = viaTidaler
+          ? await zoekCatalogusOpTidal(q) ??
+              (throw 'tidaler antwoordde niet — log opnieuw in met "tidaler login" in een terminal.')
+          : await tidal.search(q);
       if (!geldig()) return;
       _tidalAlbums = r.albums;
       _tidalTracks = r.tracks;
@@ -23808,7 +23818,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   Widget _tidalResults() {
     final tidal = context.read<TidalService>();
-    if (!tidal.configured) {
+    final viaTidaler = _tidalerZoekt;
+    if (!viaTidaler && !tidal.configured) {
       return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
@@ -23817,7 +23828,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ),
       );
     }
-    if (!tidal.connected) {
+    if (!viaTidaler && !tidal.connected) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -23864,8 +23875,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
-          child: Text('Verbonden met TIDAL ✓  — zoek een plaat of een nummer. Ophalen gaat met je '
-              'eigen abonnement; klap een regel uit voor torrent en Soulseek.',
+          child: Text(
+              '${viaTidaler ? 'Zoekt via tidaler ✓' : 'Verbonden met TIDAL ✓'}  — zoek een plaat of een nummer. '
+              'Ophalen gaat met je eigen abonnement; klap een regel uit voor torrent en Soulseek.',
               textAlign: TextAlign.center, style: TextStyle(color: _muted)),
         ),
       );
