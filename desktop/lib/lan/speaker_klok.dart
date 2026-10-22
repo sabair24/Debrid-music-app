@@ -19,6 +19,12 @@
 /// gemeten is, plus de meting vlak daarvoor: wat de speaker zei terwijl hij nog bufferde of stilstond,
 /// zou de schatting tot een seconde te vroeg trekken.
 ///
+/// **Andere speakers.** De KEF meldt zijn plek in ms, maar werkt hem bij op een eigen klokje van ~1 s, in
+/// blokjes van 48 ms (gemeten 22-10-2026): "plek P, hoogstens [Plekschatting.houdMs] oud, in blokjes van
+/// [Plekschatting.korrelMs]". Elke sprong zegt bovendien: hij gebeurde tussen de vorige vraag en deze, en
+/// toen stond hij op P (tot P + korrel). Voor een Sonos (houd 1000, korrel 0) is dat wiskundig hetzelfde
+/// als de twee vensters eromheen; voor de KEF geeft het de ondergrens die "hoogstens A oud" niet geeft.
+///
 /// Wat overblijft is hoe lang de Sonos er zelf over doet om van die plek geluid te maken; dat zet je op
 /// het oor bij met de schuif in "Samen laten spelen".
 library;
@@ -26,9 +32,9 @@ library;
 import 'dart:async';
 import 'dart:math';
 
-/// Eén antwoord van de speaker: zijn plek in hele seconden, en wanneer de vraag vertrok en het antwoord
-/// binnenkwam (µs, pc-klok).
-typedef PlekMeting = ({int t0Us, int t1Us, int seconde});
+/// Eén antwoord van de speaker: zijn plek (ms) zoals hij hem meldt — een Sonos in hele seconden, een KEF in
+/// blokjes van 48 ms — en wanneer de vraag vertrok en het antwoord binnenkwam (µs, pc-klok).
+typedef PlekMeting = ({int t0Us, int t1Us, int plekMs});
 
 /// Wat de metingen over de speaker zeggen.
 enum PlekStand {
@@ -50,9 +56,6 @@ const kGeenSprongNa = 2000000;
 /// Zo lang na een breuk (spoelen, een nieuw nummer, de eerste meting) is de stand onbekend (µs).
 const kOnbekendNaBreuk = 1500000;
 
-/// De meting vlak voor de eerste sprong telt alleen mee als ze zo kort voor de sprong lag (µs).
-const kRandHoogstens = 200000;
-
 /// Zoveel mag een meting naast de doorsnede liggen en toch "de klok liep iets weg" zijn (µs). Meer is een
 /// pauze, spoelen of een ander nummer. De Move stelt zijn klok soms in één keer ~30 ms bij (gemeten
 /// 22-10-2026); met de oude vraagplanning en 30 ms speling las de klok dat als een pauze, en kreeg de Shield
@@ -67,11 +70,27 @@ const kHerstelBreed = 30000;
 /// Hoe ver buiten het venster de klok in de smalle stand ook vraagt (µs): zie [volgendeVraagOp].
 const kProefNaast = 8000;
 
-typedef _Grens = ({int t0Us, int t1Us, int seconde, int lo, int hi});
+typedef _Grens = ({int t0Us, int t1Us, int plekMs, int lo, int hi});
 
 /// De schatting van het beginmoment van het nummer uit een rij [PlekMeting]en. Zuiver, voor toetsen.
 class Plekschatting {
-  Plekschatting({this.venster = const Duration(seconds: 20)});
+  Plekschatting({
+    this.venster = const Duration(seconds: 20),
+    this.houdMs = 1000,
+    this.korrelMs = 0,
+    this.gericht = true,
+  });
+
+  /// Hoe oud een gemelde plek hoogstens is (ms): een Sonos meldt de hele seconde (1000), de KEF werkt hem
+  /// ~elke 1008 ms bij, in blokjes van 48 ms (1150: ruim, want te krap maakt een grens fout).
+  final int houdMs;
+
+  /// In welke blokjes de speaker zijn plek bijwerkt (ms): Sonos 0 (precies op de seconde), KEF 48.
+  final int korrelMs;
+
+  /// Springt de plek op vaste plekken in het nummer (de hele seconde van een Sonos), zodat de klok er gericht
+  /// naar kan vragen? De KEF springt op zijn eigen klokje: daar vraagt hij gewoon vaak.
+  final bool gericht;
 
   /// Hoe lang een meting meetelt: de klok van de Sonos loopt een fractie anders dan die van de pc
   /// (tientallen ppm, een paar ms per minuut), dus oude metingen gaan eruit.
@@ -101,8 +120,8 @@ class Plekschatting {
   /// Hoeveel secondesprongen er in de huidige reeks gezien zijn.
   int get sprongen => _sprongen;
 
-  /// De laatst gemelde seconde, of null.
-  int? get laatsteSeconde => _laatste?.seconde;
+  /// De laatst gemelde plek (ms), of null.
+  int? get laatstePlekMs => _laatste?.plekMs;
 
   /// Hoe lang een vraag ongeveer onderweg is tot de speaker antwoordt (µs): de helft van de rondgang.
   int get halveRondgangUs => _halveRondgangUs;
@@ -114,6 +133,7 @@ class Plekschatting {
   /// wat deze schatting weet. Ook tijdens herstel gericht ([richtStandOp]): nagespeeld na een jump van 30–60
   /// ms duurde "onbekend" zo 3–4 s (ergst 5,9), en met gewoon druk vragen 5–9 s (ergst 19).
   int volgendeVraag(int nuUs, Random toeval) => volgendeVraagOp(
+        gericht: gericht,
         stand: richtStandOp(nuUs),
         beginUs: beginUs,
         breedteUs: breedteUs,
@@ -141,13 +161,8 @@ class Plekschatting {
 
   /// Een nieuwe meting. Geeft true terug als de reeks brak (spoelen, een ander nummer).
   bool voegToe(PlekMeting m) {
-    final _Grens g = (
-      t0Us: m.t0Us,
-      t1Us: m.t1Us,
-      seconde: m.seconde,
-      lo: m.t0Us - m.seconde * 1000000 - 1000000,
-      hi: m.t1Us - m.seconde * 1000000,
-    );
+    final v = m.plekMs * 1000;
+    final _Grens g = (t0Us: m.t0Us, t1Us: m.t1Us, plekMs: m.plekMs, lo: m.t0Us - v - houdMs * 1000, hi: m.t1Us - v);
     final vorige = _laatste;
     _laatste = g;
     final rt = m.t1Us - m.t0Us;
@@ -159,14 +174,21 @@ class Plekschatting {
       _herreken();
       return false;
     }
-    final sprong = m.seconde > vorige.seconde;
+    final sprong = m.plekMs > vorige.plekMs;
+    // De sprong gebeurde na het antwoord op de vorige vraag (dus na zijn vertrek) en vóór dit antwoord, en
+    // toen stond hij op deze plek (tot een korrel verder). Altijd geldig, ook als hij daarvoor stilstond.
+    final _Grens? rand = sprong
+        ? (t0Us: vorige.t0Us, t1Us: m.t1Us, plekMs: m.plekMs, lo: vorige.t0Us - v - korrelMs * 1000, hi: m.t1Us - v)
+        : null;
     final naStilte = sprong && (_gepauzeerd || _sprongOpUs == null || m.t1Us - _sprongOpUs! >= kGeenSprongNa);
     if (naStilte) {
-      // De eerste sprong na de start, een pauze of een breuk: alleen de sprong zelf, en de meting vlak
-      // ervoor als die kort genoeg ervoor lag (die geeft de ondergrens).
-      _grenzen.clear();
-      if (vorige.seconde == m.seconde - 1 && m.t1Us - vorige.t0Us <= kRandHoogstens) _grenzen.add(vorige);
-      _grenzen.add(g);
+      // De eerste sprong na de start, een pauze of een breuk: alleen deze meting en de sprong zelf. Wat de
+      // speaker ervoor zei (terwijl hij nog bufferde of stilstond) zou de schatting tot een seconde te vroeg
+      // trekken; de sprong-insluiting geldt wel, en geeft de ondergrens.
+      _grenzen
+        ..clear()
+        ..add(g)
+        ..add(rand!);
       if (!_herreken()) {
         _grenzen
           ..clear()
@@ -183,6 +205,7 @@ class Plekschatting {
     final breedVoor = _hi - _lo;
     _grenzen.removeWhere((x) => x.t1Us < grens);
     _grenzen.add(g);
+    if (rand != null) _grenzen.add(rand);
     if (!_herreken()) {
       final teLaat = g.lo - _hi, teVroeg = _lo - g.hi;
       if (max(teLaat, teVroeg) <= kKlokSpeling) {
@@ -198,8 +221,8 @@ class Plekschatting {
         _herreken();
         _sprongen = 0;
         _herstel = false;
-        if (m.seconde == vorige.seconde) {
-          // Dezelfde seconde, maar veel later dan hij zou moeten: hij staat stil (pauze, of hij hapert).
+        if (m.plekMs == vorige.plekMs) {
+          // Dezelfde plek, maar veel later dan hij zou moeten: hij staat stil (pauze, of hij hapert).
           // Meteen stil, en de schatting niet meer gebruiken: in de eerste seconde van een pauze zou ze
           // anders nog wegschuiven terwijl hij "speelt".
           _gepauzeerd = true;
@@ -263,6 +286,7 @@ class Plekschatting {
 ///
 /// Altijd een beetje willekeurig, zodat de vragen niet steeds op dezelfde plek vallen.
 int volgendeVraagOp({
+  bool gericht = true,
   required PlekStand stand,
   required int? beginUs,
   required int? breedteUs,
@@ -276,6 +300,8 @@ int volgendeVraagOp({
     if (stilUs > 10000000) return nuUs + (150 + toeval.nextInt(100)) * 1000;
     return nuUs + (70 + toeval.nextInt(60)) * 1000;
   }
+  // Springt hij op zijn eigen klokje (de KEF), dan valt er niets te richten: gewoon vaak vragen.
+  if (!gericht) return nuUs + (60 + toeval.nextInt(40)) * 1000;
   final w = max(breedteUs, 2000);
   final vroegst = nuUs + 25000;
   int? beste;
@@ -313,10 +339,14 @@ class SpeakerKlok {
     this.bijBreuk,
     int Function()? klokUs,
     Random? toeval,
+    int houdMs = 1000,
+    int korrelMs = 0,
+    bool gericht = true,
   }) : _klokUs = klokUs ?? (() => DateTime.now().microsecondsSinceEpoch),
-       _toeval = toeval ?? Random();
+       _toeval = toeval ?? Random(),
+       schatting = Plekschatting(houdMs: houdMs, korrelMs: korrelMs, gericht: gericht);
 
-  /// Vraag de speaker zijn plek in hele seconden, of null als hij niet antwoordt.
+  /// Vraag de speaker zijn plek (ms, zoals hij hem meldt), of null als hij niet antwoordt.
   final Future<int?> Function() vraag;
 
   /// De schatting veranderde genoeg om de volgers te laten weten, of hij speelt niet meer (of weer).
@@ -327,7 +357,7 @@ class SpeakerKlok {
 
   final int Function() _klokUs;
   final Random _toeval;
-  final Plekschatting schatting = Plekschatting();
+  final Plekschatting schatting;
 
   Timer? _tik;
   bool _aan = false;
@@ -348,8 +378,8 @@ class SpeakerKlok {
         final b = schatting.beginUs;
         return b == null ? null : (speelt: true, positieMs: (nu - b) ~/ 1000);
       case PlekStand.stil:
-        final s = schatting.laatsteSeconde;
-        return s == null ? null : (speelt: false, positieMs: s * 1000 + 500);
+        final s = schatting.laatstePlekMs;
+        return s == null ? null : (speelt: false, positieMs: s + schatting.houdMs ~/ 2);
       case PlekStand.onbekend:
         return null;
     }
@@ -394,7 +424,7 @@ class SpeakerKlok {
     }
     final t1 = _klokUs();
     if (!_aan) return;
-    if (s != null && schatting.voegToe((t0Us: t0, t1Us: t1, seconde: s))) bijBreuk?.call();
+    if (s != null && schatting.voegToe((t0Us: t0, t1Us: t1, plekMs: s))) bijBreuk?.call();
     _misschienMelden(t1);
     final volgende = schatting.volgendeVraag(t1, _toeval);
     _plan(Duration(microseconds: max(0, volgende - _klokUs())));
@@ -404,7 +434,7 @@ class SpeakerKlok {
     final stand = schatting.standOp(nuUs);
     if (stand == PlekStand.onbekend) return;
     if (stand == PlekStand.stil) {
-      if (_gemeld == PlekStand.stil || schatting.laatsteSeconde == null) return;
+      if (_gemeld == PlekStand.stil || schatting.laatstePlekMs == null) return;
       _gemeld = stand;
       _gemeldBegin = null;
       _gemeldOp = nuUs;

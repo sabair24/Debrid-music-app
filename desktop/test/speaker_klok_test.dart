@@ -48,7 +48,7 @@ int _speel(
     final t0 = t;
     final antwoord = t0 + 1000 + r.nextInt(5000);
     final t1 = antwoord + 1000 + r.nextInt(5000);
-    final breuk = p.voegToe((t0Us: t0, t1Us: t1, seconde: sonos.seconde(antwoord)));
+    final breuk = p.voegToe((t0Us: t0, t1Us: t1, plekMs: sonos.seconde(antwoord) * 1000));
     na?.call(t1, breuk);
     t = p.volgendeVraag(t1, r);
   }
@@ -269,7 +269,7 @@ void main() {
         while (t < _t + 40000000) {
           final a = t + 1000 + r.nextInt(5000);
           final t1 = a + 1000 + r.nextInt(5000);
-          expect(p.voegToe((t0Us: t, t1Us: t1, seconde: (a - begin(a)) ~/ 1000000)), isFalse, reason: 'zaad $z');
+          expect(p.voegToe((t0Us: t, t1Us: t1, plekMs: (a - begin(a)) ~/ 1000000 * 1000)), isFalse, reason: 'zaad $z');
           final stand = p.standOp(t1);
           if (p.sprongen > 0) expect(stand, isNot(PlekStand.stil), reason: 'zaad $z');
           if (t1 > _t + 8000000 && stand == PlekStand.speelt) fouten.add((p.beginUs! - begin(t1)).abs());
@@ -279,6 +279,42 @@ void main() {
       fouten.sort();
       expect(fouten[(fouten.length * 0.9).floor()], lessThan(20000), reason: '90 %');
       expect(fouten.last, lessThan(60000), reason: 'ergst');
+    });
+
+    // De KEF zoals gemeten (22-10-2026): hij werkt zijn plek bij op een eigen klokje (1008 ms ± 30), naar
+    // beneden op 48 ms. Nagespeeld over 300 zaden: het ware begin in 0 van 66.783 metingen buiten het
+    // venster; na 20 s fout mediaan 4 ms, 90 % 11, ergst 19 (het venster zelf blijft breder: mediaan 44 ms).
+    test('een KEF (eigen klokje, blokjes van 48 ms): het ware begin altijd in het venster, de schatting dichtbij', () {
+      final fouten = <int>[];
+      for (var z = 0; z < 100; z++) {
+        final r = Random(z);
+        final begin = _t - 30000000 - r.nextInt(1000000);
+        var bijgewerkt = _t - r.nextInt(1000000);
+        var volgende = bijgewerkt + 1008000;
+        var gemeld = ((bijgewerkt - begin) ~/ 48000) * 48;
+        int plek(int t) {
+          while (t >= volgende) {
+            bijgewerkt = volgende;
+            gemeld = ((bijgewerkt - begin) ~/ 48000) * 48;
+            volgende = bijgewerkt + 1008000 + (r.nextInt(61) - 30) * 1000;
+          }
+          return gemeld;
+        }
+
+        final p = Plekschatting(houdMs: 1150, korrelMs: 48, gericht: false);
+        var t = _t;
+        while (t < _t + 20000000) {
+          final a = t + 1000 + r.nextInt(6000);
+          final t1 = a + 1000 + r.nextInt(6000);
+          expect(p.voegToe((t0Us: t, t1Us: t1, plekMs: plek(a))), isFalse, reason: 'zaad $z');
+          if (p.sprongen > 0) _ligtErin(p, begin, 'zaad $z na ${(t1 - _t) ~/ 1000} ms');
+          t = p.volgendeVraag(t1, r);
+        }
+        fouten.add((p.beginUs! - begin).abs());
+      }
+      fouten.sort();
+      expect(fouten[(fouten.length * 0.9).floor()], lessThan(15000), reason: '90 %');
+      expect(fouten.last, lessThan(30000), reason: 'ergst');
     });
 
     test('een klok die 50 ppm anders loopt: twee minuten geen breuk, en de schatting loopt mee', () {
@@ -367,7 +403,7 @@ void main() {
           toeval: Random(11),
           vraag: () async {
             await Future<void>.delayed(const Duration(milliseconds: 3));
-            final s = sonos.seconde(nu());
+            final s = sonos.seconde(nu()) * 1000;
             await Future<void>.delayed(const Duration(milliseconds: 3));
             return s;
           },
