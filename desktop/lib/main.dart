@@ -82,6 +82,7 @@ import 'catalog.dart';
 import 'completeness.dart';
 import 'credits.dart';
 import 'deezerbaan.dart';
+import 'itunes.dart';
 import 'radiosfeer.dart';
 import 'versiecontrole.dart';
 import 'discogs.dart';
@@ -16612,6 +16613,10 @@ final Versiecontrole _fragmentbron = Versiecontrole();
 final Radiotempo _radiotempo =
     Radiotempo(meter: Tempometer(), fragment: (a, t, s) => _fragmentbron.fragment(a, t, seconden: s));
 
+/// De tweede catalogus voor wat het model noemt en Deezer niet kent — zie `itunes.dart`.
+final ItunesZoeker _itunes = ItunesZoeker();
+Future<RecTrack?> _itunesVoorModel(AiNummer n) => _itunes.vind(n.artiest, n.titel);
+
 Future<void> startRadio(BuildContext context, String artist,
     {String? titel, Track? zaad, int? seconden, bool hier = false, String? naar}) async {
   // Een zone op afstand gekozen: daar (Saber, 21-10-2026: een radio starten in een andere zone "op elk
@@ -16802,7 +16807,8 @@ Future<void> startRadio(BuildContext context, String artist,
             keuring.onthoud([...keuring.lijst, ...lijst]);
             log.line('radio-lijst (vervolg${dieper ? ', dieper' : ''}): ${lijst.length} nummers van het model — '
                 '${lijst.map((n) => '${n.artiest} – ${n.titel}${n.bekend ? '' : '*'}').join('; ')}');
-            final gevonden = await rec.lijstOpDeezer(lijst, spoor: log.line, vanJou: eigenVoorModel(lib.tracks));
+            final gevonden = await rec.lijstOpDeezer(lijst,
+                spoor: log.line, vanJou: eigenVoorModel(lib.tracks), elders: _itunesVoorModel, eldersNaam: 'iTunes');
             final vanModel = _radioplan(gevonden, lib,
                 zaadArtiest: artist,
                 zaad: zaad,
@@ -16908,7 +16914,8 @@ Future<void> startRadio(BuildContext context, String artist,
           // Intussen afgestemd? Dan dezelfde lijst, maar in de volgorde van de stand die nu geldt, en
           // bij díé afstemming — anders ging hij verloren, en afstemmen gebruikt hem ook.
           final nu = beurt == _afstemBeurt ? lijst : modelVolgorde(lijst, (n) => n.bekend, Radiosmaak.uit(cfg.radioSmaak));
-          final gevonden = await rec.lijstOpDeezer(nu, spoor: log.line, vanJou: eigenVoorModel(lib.tracks));
+          final gevonden = await rec.lijstOpDeezer(nu,
+              spoor: log.line, vanJou: eigenVoorModel(lib.tracks), elders: _itunesVoorModel, eldersNaam: 'iTunes');
           if (sessie != radio.sessie) return;
           final vanModel = _radioplan(gevonden, lib,
               zaadArtiest: artist,
@@ -17372,7 +17379,10 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
   try {
     final gevonden =
         await rec.lijstOpDeezer(modelVolgorde(lijst, (n) => n.bekend, smaak),
-            spoor: keuring?.log.line, vanJou: eigenVoorModel(lib.tracks));
+            spoor: keuring?.log.line,
+            vanJou: eigenVoorModel(lib.tracks),
+            elders: _itunesVoorModel,
+            eldersNaam: 'iTunes');
     _voegGekeurdBij(
         radio,
         sessie,
