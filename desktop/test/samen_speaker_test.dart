@@ -20,6 +20,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/lan/cast_manager.dart';
 import 'package:debridmusic/lan/catalog.dart';
 import 'package:debridmusic/lan/client.dart';
+import 'package:debridmusic/lan/kef.dart';
 import 'package:debridmusic/lan/pairing.dart';
 import 'package:debridmusic/lan/server.dart';
 import 'package:debridmusic/lan/state_store.dart';
@@ -151,6 +152,119 @@ class _Sonos extends UpnpControlPoint {
   Future<TransportState?> transportState(Renderer r) async =>
       TransportState(gepauzeerd ? 'PAUSED_PLAYBACK' : 'PLAYING');
 }
+
+/// Een KEF zoals gemeten (22-10-2026): ~0,5 s na de opdracht speelt hij; zijn plek (ms) werkt hij bij op een
+/// eigen klokje (1008 ms ± 30), naar beneden op 48 ms; pauze is een aan/uit-knop (de bediening leest eerst de
+/// stand); aan het eind van het nummer staat hij op "stopped" (hij kent geen volgend nummer).
+class _Kef extends KefBediening {
+  _Kef(this.nu, this.r);
+
+  final int Function() nu;
+  final Random r;
+  static const duurUs = 200000000;
+  int beginUs = 0;
+  int? stilUs;
+  int? hervatOp;
+  String stand = 'stopped';
+  String? uri;
+  int _bijgewerkt = 0, _volgende = 0, _gemeld = -1;
+  final geopend = <String>[];
+  final bediening = <String>[];
+
+  int _positie() {
+    final t = nu();
+    if (hervatOp != null && t >= hervatOp!) {
+      beginUs = hervatOp! - stilUs!;
+      stilUs = null;
+      hervatOp = null;
+      _volgende = t;
+    }
+    if (stilUs != null) return stilUs!;
+    final p = t - beginUs;
+    if (p >= duurUs && stand == 'playing') {
+      stand = 'stopped';
+      stilUs = duurUs;
+      return duurUs;
+    }
+    return p;
+  }
+
+  int _plekMs() {
+    final t = nu();
+    final p = _positie();
+    if (stand != 'playing') return _gemeld;
+    while (t >= _volgende) {
+      _bijgewerkt = _volgende;
+      _gemeld = ((_bijgewerkt - beginUs) ~/ 48000) * 48;
+      _volgende = _bijgewerkt + 1008000 + (r.nextInt(61) - 30) * 1000;
+    }
+    return p < 0 ? -1 : _gemeld;
+  }
+
+  @override
+  Future<void> playUrl(Renderer renderer, String url,
+      {required String title,
+      required String artist,
+      required String album,
+      required String mime,
+      String? artUrl,
+      Duration? duration}) async {
+    geopend.add(title);
+    uri = url;
+    stand = 'playing';
+    stilUs = 0;
+    hervatOp = nu() + 500000;
+    _gemeld = -1;
+    _volgende = hervatOp!;
+  }
+
+  @override
+  Future<void> play(Renderer r) async {
+    _positie();
+    bediening.add('verder');
+    if (stand == 'paused') {
+      stand = 'playing';
+      hervatOp = nu() + 100000;
+    }
+  }
+
+  @override
+  Future<void> pause(Renderer r) async {
+    if (stand != 'playing') return;
+    bediening.add('pauze');
+    _plekMs();
+    stilUs = _positie();
+    hervatOp = null;
+    stand = 'paused';
+  }
+
+  @override
+  Future<void> seek(Renderer r, Duration to) async {
+    bediening.add('spoel ${to.inMilliseconds}');
+    _positie();
+    stilUs = to.inMicroseconds;
+    hervatOp = nu() + 200000;
+  }
+
+  @override
+  Future<int?> getVolume(Renderer r) async => 21;
+
+  @override
+  Future<({Duration? position, Duration duration, String? trackUri})?> positionInfo(Renderer r) async {
+    await Future<void>.delayed(const Duration(milliseconds: 3));
+    final p = _plekMs();
+    await Future<void>.delayed(const Duration(milliseconds: 3));
+    return (position: p < 0 ? null : Duration(milliseconds: p), duration: const Duration(seconds: 200), trackUri: uri);
+  }
+
+  @override
+  Future<TransportState?> transportState(Renderer r) async {
+    _positie();
+    return TransportState(switch (stand) { 'playing' => 'PLAYING', 'paused' => 'PAUSED_PLAYBACK', _ => 'STOPPED' });
+  }
+}
+
+final _ls50 = kefRenderer(host: '192.168.0.100', naam: 'LS50 Wireless II-1729d5', model: 'SP4025');
 
 const _move = Renderer(
     id: '192.168.0.188',
@@ -325,6 +439,72 @@ void main() {
         });
       });
     }
+
+    test('een KEF: via zijn API, het anker op zijn eigen klokje, pauze meteen, en het volgende nummer na het einde', () {
+      fakeAsync((fa) {
+        int nu() => _t + fa.elapsed.inMicroseconds;
+        final kef = _Kef(nu, Random(5));
+        final upnp = _Sonos(nu);
+        final ankers = <Map<String, dynamic>>[];
+        final cast = CastManager(
+          catalog: catalog,
+          token: 't',
+          port: 47820,
+          upnp: upnp,
+          kef: kef,
+          startGrace: Duration.zero,
+          klokUs: nu,
+          adresVoor: (_) async => '192.168.0.117',
+          toeval: Random(5),
+        )..kenSpeakersVoorToets([_ls50]);
+        cast.bijAnker = (id) {
+          final a = cast.ankerVan(id);
+          if (a != null) ankers.add(a);
+        };
+        cast.volgKlok(_ls50.id, true);
+        int fout(Map<String, dynamic> a) {
+          final p = (a['positieMs'] as int) + (a['speelt'] == true ? nu() ~/ 1000 - (a['pcMs'] as int) : 0);
+          return p - kef._positie() ~/ 1000;
+        }
+
+        // Tien seconden voor het eind beginnen, zodat het volgende nummer erin zit.
+        unawaited(cast.play(_ls50.id, [ids[0], ids[1]], 0, alsZone: true, vanafMs: 187000));
+        fa.flushMicrotasks();
+        expect(kef.geopend, [catalog.track(ids[0])!.title], reason: 'de KEF-API, niet UPnP');
+        expect(upnp.opdrachten, isEmpty);
+        // Zijn plek in ms, bijgewerkt op een eigen klokje in blokjes van 48 ms: zie speaker_klok_test (met de
+        // Sonos-instellingen op KEF-gegevens tot 252 ms ernaast).
+        expect(cast.klokProfielVoorToets(_ls50.id), (houdMs: 1150, korrelMs: 48, gericht: false));
+        fa.elapse(const Duration(seconds: 3, milliseconds: 100));
+        expect(kef.bediening, ['spoel 190000'], reason: 'spoelen in ms, na het laden');
+        fa.elapse(const Duration(seconds: 3));
+        // Op zijn eigen klokje, binnen ~30 ms — en niet één keer ernaast: met de Sonos-instellingen (hele
+        // seconden) op KEF-gegevens lag het ware begin in 36 % van de metingen buiten het venster, tot 252 ms.
+        for (var i = 0; i < 15; i++) {
+          fa.elapse(const Duration(milliseconds: 200));
+          expect(ankers.last['speelt'], isTrue);
+          expect(fout(ankers.last).abs(), lessThan(30), reason: 'na ${i * 200 + 3200} ms');
+        }
+        // Pauze: meteen stil.
+        unawaited(cast.control(_ls50.id, 'pause'));
+        fa.flushMicrotasks();
+        expect(ankers.last['speelt'], isFalse);
+        expect(((ankers.last['positieMs'] as int) - kef._positie() ~/ 1000).abs(), lessThan(60));
+        unawaited(cast.control(_ls50.id, 'play'));
+        // Rond 200 s (nog ~1 s) stopt hij; de cast opent binnen een seconde of twee het volgende nummer.
+        fa.elapse(const Duration(seconds: 5));
+        expect(kef.geopend, [catalog.track(ids[0])!.title, catalog.track(ids[1])!.title]);
+        fa.elapse(const Duration(seconds: 6));
+        for (var i = 0; i < 15; i++) {
+          fa.elapse(const Duration(milliseconds: 200));
+          expect(ankers.last['trackId'], ids[1]);
+          expect(ankers.last['speelt'], isTrue);
+          expect(fout(ankers.last).abs(), lessThan(40), reason: 'volgende nummer, na ${i * 200 + 6200} ms');
+        }
+        cast.dispose();
+        fa.flushTimers(flushPeriodicTimers: false);
+      });
+    });
 
     test('geen meespelers: geen klok, geen anker', () {
       fakeAsync((fa) {

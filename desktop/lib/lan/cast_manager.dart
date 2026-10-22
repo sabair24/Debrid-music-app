@@ -9,6 +9,7 @@ import '../models.dart';
 import '../warm_log.dart';
 import 'catalog.dart';
 import 'dtos.dart';
+import 'kef.dart';
 import 'net.dart';
 import 'speaker_klok.dart';
 import 'transcode.dart';
@@ -162,7 +163,11 @@ class CastManager {
     @visibleForTesting this.spoelNa = const Duration(seconds: 3),
     @visibleForTesting Future<String?> Function(String host)? adresVoor,
     @visibleForTesting this.toeval,
+    @visibleForTesting KefBediening? kef,
+    @visibleForTesting Future<List<Renderer>> Function()? zoekKef,
   })  : _upnp = upnp ?? UpnpControlPoint(),
+        _kef = kef ?? KefBediening(),
+        _zoekKef = zoekKef ?? zoekKefs,
         _transcoder = transcoder ?? Transcoder(),
         _klokUs = klokUs ?? (() => DateTime.now().microsecondsSinceEpoch),
         _adresVoor = adresVoor ?? lanAddressFor,
@@ -183,6 +188,13 @@ class CastManager {
 
   final LanCatalog catalog;
   final UpnpControlPoint _upnp;
+
+  /// De KEF via zijn eigen API (zie `kef.dart`): dezelfde handelingen als [_upnp], in die vorm.
+  final KefBediening _kef;
+  final Future<List<Renderer>> Function() _zoekKef;
+
+  /// Wie [r] bedient: de KEF-API of UPnP.
+  UpnpControlPoint _voor(Renderer r) => isKef(r) ? _kef : _upnp;
   final Transcoder _transcoder;
   final int port;
   String token;
@@ -246,7 +258,11 @@ class CastManager {
       s.klok = SpeakerKlok(
         klokUs: _klokUs,
         toeval: toeval,
-        vraag: () async => (await _upnp.positionInfo(s.renderer))?.position?.inSeconds,
+        // Een KEF werkt zijn plek bij op een eigen klokje (~1 s, blokjes van 48 ms): zie speaker_klok.dart.
+        houdMs: isKef(s.renderer) ? 1150 : 1000,
+        korrelMs: isKef(s.renderer) ? 48 : 0,
+        gericht: !isKef(s.renderer),
+        vraag: () async => (await _voor(s.renderer).positionInfo(s.renderer))?.position?.inMilliseconds,
         bijVerandering: () {
           final p = s.klok?.plekNu;
           if (p != null && p.speelt) s.stilVoorKlok = null;
@@ -470,7 +486,8 @@ class CastManager {
   Future<List<Map<String, dynamic>>> devices({bool refresh = true}) async {
     if (refresh || _renderers.isEmpty) {
       final found = await _upnp.discover();
-      _renderers = {for (final r in found) r.id: r};
+      final kefs = await _zoekKef().catchError((Object _) => <Renderer>[]);
+      _renderers = {for (final r in found) r.id: r, for (final k in kefs) k.id: k};
       _shields = await _findShields();
       bijStand?.call();
       unawaited(leesGroepen());
@@ -559,7 +576,9 @@ class CastManager {
       Timer(spoelNa, () => unawaited(_spoelNaStart(session, vanafMs, begon)));
     }
     // The renderer plays one track; something has to notice it ended and send the next.
-    session.advance = Timer.periodic(const Duration(seconds: 5), (_) => _maybeAdvance(session));
+    // Een KEF zet geen volgend nummer klaar (naadloos): hij stopt, en dan opent de cast het volgende. Elke
+    // seconde kijken houdt dat gat kort; om de 5 s was het tot 5 s stilte.
+    session.advance = Timer.periodic(Duration(seconds: isKef(renderer) ? 1 : 5), (_) => _maybeAdvance(session));
     unawaited(_haalVolume(session));
   }
 
@@ -569,7 +588,7 @@ class CastManager {
     final doel = (vanafMs + (_klokUs() - begonUs) ~/ 1000 + 500) ~/ 1000;
     try {
       s.hoogstePositie = Duration(seconds: doel);
-      await _upnp.seek(s.renderer, Duration(seconds: doel));
+      await _voor(s.renderer).seek(s.renderer, Duration(seconds: doel));
       _log?.line('gespoeld naar ${doel}s (na het laden)');
     } catch (_) {
       // Dan speelt hij vanaf het begin; wie meespeelt, volgt hem daar.
@@ -596,7 +615,7 @@ class CastManager {
       // De leider van een groep: het volume van de hele groep.
       final v = _groepVan(s.renderer.id) != null
           ? await _upnp.groepsvolume(s.renderer)
-          : await _upnp.getVolume(s.renderer);
+          : await _voor(s.renderer).getVolume(s.renderer);
       if (v != null && v != s.volume) {
         s.volume = v;
         bijStand?.call();
@@ -754,7 +773,7 @@ class CastManager {
 
     final url = await _streamUrlFor(
         id, track.ext, session.renderer, track.sampleRate, track.bitsPerSample);
-    await _upnp.playUrl(
+    await _voor(session.renderer).playUrl(
       session.renderer,
       url,
       title: track.title,
@@ -788,7 +807,7 @@ class CastManager {
     if (nextId == null || nextTrack == null) return;
     final nextUrl = await _streamUrlFor(
         nextId, nextTrack.ext, session.renderer, nextTrack.sampleRate, nextTrack.bitsPerSample);
-    await _upnp.setNextUrl(
+    await _voor(session.renderer).setNextUrl(
       session.renderer,
       nextUrl,
       title: nextTrack.title,
@@ -1030,11 +1049,11 @@ class CastManager {
       // Eerst: is de speaker zelf al doorgeschoven? Dan is er niets te doen behalve bijhouden waar hij
       // is. Deze vraag gaat vóór de transportstatus, want in dat geval staat die nog op PLAYING en zou
       // de rest van deze functie niets doen terwijl de index achterloopt.
-      final pos = await _upnp.positionInfo(session.renderer).catchError((_) => null);
+      final pos = await _voor(session.renderer).positionInfo(session.renderer).catchError((_) => null);
       if (pos != null) _zag(session, positie: pos.position, duur: pos.duration);
       if (await _followedRenderer(session, pos?.trackUri, pos?.position)) return;
 
-      final state = await _upnp.transportState(session.renderer);
+      final state = await _voor(session.renderer).transportState(session.renderer);
       if (state != null) _zag(session, speelt: state.isPlaying);
       _zie('kijk: ${state?.state ?? '?'} pos=${_sec(pos?.position ?? Duration.zero)} '
           'top=${_sec(session.hoogstePositie)} idx=${session.index}/${session.queue.length} '
@@ -1075,18 +1094,18 @@ class CastManager {
         '(idx=${sessie?.index ?? -1})');
     switch (action) {
       case 'play':
-        await _upnp.play(renderer);
+        await _voor(renderer).play(renderer);
         sessie?.klok?.verstoord();
       case 'pause':
         final plek = sessie?.klok?.plekNu;
-        await _upnp.pause(renderer);
+        await _voor(renderer).pause(renderer);
         if (sessie != null) _meldStil(sessie, plek?.positieMs ?? sessie.positie?.inMilliseconds ?? 0);
       case 'stop':
         if (sessie != null) {
           _meldStil(sessie, sessie.klok?.plekNu?.positieMs ?? 0);
           _sluit(sessie);
         }
-        await _upnp.stop(renderer);
+        await _voor(renderer).stop(renderer);
       case 'next':
         if (sessie != null && sessie.index + 1 < sessie.queue.length) {
           sessie.index++;
@@ -1101,7 +1120,7 @@ class CastManager {
         if (_groepVan(renderer.id) != null) {
           await _upnp.zetGroepsvolume(renderer, value ?? 50);
         } else {
-          await _upnp.setVolume(renderer, value ?? 50);
+          await _voor(renderer).setVolume(renderer, value ?? 50);
         }
         if (sessie != null) {
           sessie.volume = value ?? 50;
@@ -1114,7 +1133,7 @@ class CastManager {
         // Het ijkpunt voor de terugval verzetten, want anders is achteruit slepen niet te onderscheiden
         // van een nummer dat afliep: allebei valt de positie terug. Zo verzet slepen de meetlat mee.
         sessie?.hoogstePositie = Duration(seconds: value ?? 0);
-        await _upnp.seek(renderer, Duration(seconds: value ?? 0));
+        await _voor(renderer).seek(renderer, Duration(seconds: value ?? 0));
         if (sessie != null) _meldStil(sessie, (value ?? 0) * 1000);
       default:
         throw ArgumentError('unknown action: $action');
@@ -1154,9 +1173,10 @@ class CastManager {
     // en élke statusvraag over een échte speaker klapte met een 500. De app las dat als "niet
     // bereikbaar", en dan vallen volgende en vorige dood terwijl de muziek doorloopt. Zo geschreven
     // klaagt de compiler de volgende keer wél.
-    final posF = _upnp.positionInfo(renderer).catchError((_) => null);
-    final stateF = _upnp.transportState(renderer).catchError((_) => null);
-    final volF = withVolume ? _upnp.getVolume(renderer).catchError((_) => null) : null;
+    final bediening = _voor(renderer);
+    final posF = bediening.positionInfo(renderer).catchError((_) => null);
+    final stateF = bediening.transportState(renderer).catchError((_) => null);
+    final volF = withVolume ? bediening.getVolume(renderer).catchError((_) => null) : null;
     final pos = await posF;
     final state = await stateF;
     final volume = volF == null ? null : await volF;
@@ -1247,6 +1267,13 @@ class CastManager {
   @visibleForTesting
   void kenSpeakersVoorToets(List<Renderer> r) => _renderers = {for (final x in r) x.id: x};
 
+  /// Voor een toets: met welke instellingen de klok van speaker [id] rekent (zie `speaker_klok.dart`).
+  @visibleForTesting
+  ({int houdMs, int korrelMs, bool gericht})? klokProfielVoorToets(String id) {
+    final k = _sessies[id]?.klok?.schatting;
+    return k == null ? null : (houdMs: k.houdMs, korrelMs: k.korrelMs, gericht: k.gericht);
+  }
+
   /// Voor een toets: wat de tijdklok van vijf seconden doet, nu meteen, voor elke speaker.
   @visibleForTesting
   Future<void> tikVoorToets() async {
@@ -1256,6 +1283,7 @@ class CastManager {
   }
 
   void dispose() {
+    _kef.sluit();
     _zoeker?.cancel();
     _groepKijker?.cancel();
     for (final s in _sessies.values) {
