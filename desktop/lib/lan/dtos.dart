@@ -41,12 +41,16 @@ class ArtistDto {
   /// finding their own — which is the app arguing with its owner.
   final Map<String, String> artChoice;
 
+  /// Wat luisteraars de artiest noemen (Last.fm), voor taal en stijl in de bibliotheek — zie `artiest_tags.dart`.
+  final List<String> tags;
+
   const ArtistDto({
     required this.id,
     required this.name,
     this.artworkRef,
     this.albumCount = 0,
     this.artChoice = const {},
+    this.tags = const [],
   });
 
   factory ArtistDto.fromJson(Map<String, dynamic> j) => ArtistDto(
@@ -58,6 +62,10 @@ class ArtistDto {
           for (final e in (j['artChoice'] as Map? ?? const {}).entries)
             if (e.value is String) '${e.key}': e.value as String,
         },
+        tags: [
+          for (final x in (j['tags'] as List? ?? const []))
+            if (x is String) x,
+        ],
       );
 
   Map<String, dynamic> toJson() => {
@@ -66,6 +74,7 @@ class ArtistDto {
         'artworkRef': artworkRef,
         'albumCount': albumCount,
         'artChoice': artChoice,
+        if (tags.isNotEmpty) 'tags': tags,
       };
 }
 

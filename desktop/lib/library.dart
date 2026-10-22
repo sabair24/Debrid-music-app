@@ -1690,6 +1690,44 @@ class LibraryStore extends ChangeNotifier {
     return setArtistArt(artist, kopSoort(scherm), waarde);
   }
 
+  // ── Tags per artiest (Last.fm) ───────────────────────────────────────────
+  // Wat luisteraars een artiest noemen (artist.getTopTags), voor taal en stijl in de bibliotheek — zie
+  // `artiest_tags.dart`. Op de pc gevuld (`_vulArtiestTags` in main.dart) en met de catalogus mee naar de toestellen.
+  // Een lege lijst betekent "gevraagd, niets bruikbaars": dan niet bij elke start opnieuw vragen.
+  final Map<String, List<String>> _artistTags = {};
+  File get _artistTagsFile => File('$_appDir${Platform.pathSeparator}artist_tags.json');
+
+  Future<void> loadArtistTags() async {
+    try {
+      final f = _artistTagsFile;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      _artistTags.clear();
+      j.forEach((k, v) {
+        if (v is List) _artistTags[k] = [for (final x in v) x.toString()];
+      });
+    } catch (_) {}
+  }
+
+  /// De Last.fm-tags van [artist], klein geschreven; leeg als ze (nog) niet bekend zijn.
+  List<String> tagsOf(String artist) => (isRemote ? _remoteArtistTags : _artistTags)[artistKey(artist)] ?? const [];
+
+  /// Zijn de tags van [artist] al gevraagd (ook als er niets uit kwam)?
+  bool tagsGevraagd(String artist) => _artistTags.containsKey(artistKey(artist));
+
+  /// Onthoud de tags van [artist]; [bewaar] onwaar spaart het schrijven op tot [bewaarArtistTags].
+  Future<void> rememberArtistTags(String artist, List<String> tags, {bool bewaar = true}) async {
+    _artistTags[artistKey(artist)] = tags;
+    if (bewaar) await bewaarArtistTags();
+  }
+
+  /// [melden] onwaar: alleen wegschrijven. Elke melding verandert de catalogus, en dan haalt elk toestel hem opnieuw
+  /// op (1,7 MB bij Saber) — tussentijds bewaren hoort dat niet te doen.
+  Future<void> bewaarArtistTags({bool melden = true}) async {
+    await _writeJson(_artistTagsFile, _artistTags);
+    if (melden) notifyListeners();
+  }
+
   // ── Styles ────────────────────────────────────────────────────────────────
   // A Discogs style is far finer than a genre: an album is not just "Electronic" but "House,
   // Disco, Synth-pop". That is what makes browsing by feel possible instead of by category, so
@@ -3043,6 +3081,12 @@ class LibraryStore extends ChangeNotifier {
         for (final a in catalog.artists)
           if (a.artChoice.isNotEmpty) MapEntry(artistKey(a.name), a.artChoice),
       ]);
+    _remoteArtistTags
+      ..clear()
+      ..addEntries([
+        for (final a in catalog.artists)
+          if (a.tags.isNotEmpty) MapEntry(artistKey(a.name), a.tags),
+      ]);
 
     _rebuildTrackIndexes();
     // Ook hier, en niet alleen bij een schijfscan. Deze weg bouwt de platen voor de TELEFOON, en die
@@ -3088,6 +3132,9 @@ class LibraryStore extends ChangeNotifier {
   /// Portraits and backdrops the user picked, by artist key — the same key [chosenArtistArt] uses,
   /// so the lookup is unchanged.
   final Map<String, Map<String, String>> _remoteArtistArt = {};
+
+  /// De Last.fm-tags per artiest, zoals de pc ze meestuurt — zie [tagsOf].
+  final Map<String, List<String>> _remoteArtistTags = {};
 
   /// The PC's id for an album we are showing, or null on the machine that owns the music.
   String? remoteAlbumId(Album a) {
