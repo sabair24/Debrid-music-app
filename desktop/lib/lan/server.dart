@@ -20,6 +20,7 @@ import '../musicbrainz.dart';
 import '../nieuwe_releases.dart' show NieuweReleases, ReleasesLijst;
 import '../kandidatenzeef.dart' show zeefKandidaten;
 import '../online.dart';
+import '../tidaler.dart' show Tidaler, haalVanTidal, tidalDoel, tidalHulpUitvoer;
 import '../organize.dart';
 import '../paths.dart';
 import '../pc_model.dart' show Modelvragen;
@@ -939,6 +940,14 @@ class LanServer {
         return _soulseekDownloadAlbum(req);
       case '/api/soulseek/zoek-beter':
         return _soulseekZoekBeter(req);
+      case '/api/tidal/zoek':
+        return _tidal(req, 'zoek');
+      case '/api/tidal/album':
+        return _tidal(req, 'album');
+      case '/api/tidal/artiest':
+        return _tidal(req, 'artiest');
+      case '/api/tidal/haal':
+        return _tidal(req, 'haal');
       case '/api/releaseart':
         return _releaseArt(req);
       case '/api/jobs':
@@ -2432,6 +2441,58 @@ class LanServer {
         .zoekBeterVoor(nummers, album: album, gezag: library.tagsVoorVervanger)
         .timeout(const Duration(seconds: 25), onTimeout: () => -1);
     return _json(req.response, {'begonnen': n});
+  }
+
+  /// TIDAL via tidaler op deze pc, voor een toestel (de gsm, de iPad, de Mac, de Shield). Saber, 22-10-2026: *"ok en
+  /// ondertussen maak het ook mogelijk vanaf men gsm, mac ipad en shield !"* — tidaler en zijn inlog staan alleen hier.
+  ///
+  /// Zoeken, een plaat en een artiest geven de uitvoer van het zoekhulpje ongewijzigd door (`{"uitvoer": …}`); het
+  /// toestel leest die met dezelfde `tidalCatalogusUit` als de pc, dus met dezelfde labels en volgorde. Ophalen
+  /// gebeurt hier, op de achtergrond, in een keuringsmap en door de keuring — zoals "Ophalen van Tidal…" op de pc; het
+  /// nummer verschijnt daarna in de bibliotheek van elk toestel.
+  Future<void> _tidal(HttpRequest req, String wat) async {
+    if (req.method != 'POST') {
+      req.response.statusCode = HttpStatus.methodNotAllowed;
+      return req.response.close();
+    }
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    if (!Tidaler.beschikbaar || Tidaler.python == null) {
+      return _unavailable(req, 'tidaler staat niet op de pc.');
+    }
+    String veld(String k) => '${body[k] ?? ''}'.trim();
+    if (wat == 'haal') {
+      final manager = downloads;
+      if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+      final doel = tidalDoel(veld('doel'));
+      if (doel == null) return _json(req.response, {'error': 'Geen bruikbaar TIDAL-doel.'}, status: 400);
+      final teVeel = _quotum(req, kQuotumDownloads);
+      if (teVeel != null) return _teVeel(req, teVeel);
+      unawaited(_tidalHaalHier(manager, doel));
+      return _json(req.response, {'gestart': true});
+    }
+    final argumenten = switch (wat) {
+      'album' => ['--album', veld('id')],
+      'artiest' => ['--artiest', veld('id')],
+      _ => [veld('q'), '20', 'alles'],
+    };
+    if (argumenten.first.isEmpty || argumenten.last.isEmpty) return _json(req.response, {'uitvoer': ''});
+    final uit = await tidalHulpUitvoer(argumenten);
+    if (uit == null) {
+      return _unavailable(req, 'tidaler antwoordde niet — log op de pc opnieuw in met "tidaler login".');
+    }
+    return _json(req.response, {'uitvoer': uit});
+  }
+
+  /// Wat een toestel liet ophalen: halen met tidaler, keuren, opbergen. Zie [_tidal].
+  Future<void> _tidalHaalHier(DownloadManager manager, String doel) async {
+    final keuring = manager.keuringsmapVoor('TIDAL ${doel.replaceAll('/', ' ')}');
+    final uitslag = await haalVanTidal(doel: doel, map: keuring.path);
+    // Ook na een fout keuren: wat er wél binnenkwam hoort niet onzichtbaar in de keuringsmap te blijven.
+    final r = await manager.keurBinnengekomen(keuring, 'TIDAL $doel', zichtbaar: manager.tidalRest);
+    _zoneLog.line('TIDAL $doel voor een toestel: '
+        '${uitslag.fout == null ? 'binnen${uitslag.kwaliteit == null ? '' : ' (${uitslag.kwaliteit})'}' : 'mislukt — ${uitslag.fout!.split('\n').first}'}'
+        '${r == null || r.keuringZin.isEmpty ? '' : ' · ${r.keuringZin}'}');
   }
 
   /// De scans van een album zoals deze pc ze al heeft — voor een toestel, zodat de cd en de achterkant er
