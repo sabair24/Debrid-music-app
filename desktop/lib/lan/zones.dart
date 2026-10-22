@@ -317,6 +317,9 @@ typedef SpeakerStand = ({
 
   /// Het volume van de speaker (0–100), of -1 als hij het niet meldt.
   int volume,
+
+  /// Speelt er een radio van de pc op (`speaker_radio.dart`): hoe hij heet. Leeg zonder radio.
+  String radio,
 });
 
 /// Alle zones, op de pc. Eén per server.
@@ -596,6 +599,7 @@ class ZoneRegister {
         lengte: s.lengte,
         via: pcNaam,
         volume: s.volume,
+        radio: s.radio,
       ));
     }
     final actief = {for (final s in _speakers) s.id};

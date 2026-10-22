@@ -443,8 +443,10 @@ typedef Bijvuller = Future<int> Function(int sessie, int ronde, Bijvulvraag vraa
 class RadioBesturing extends ChangeNotifier {
   /// [klok] is er voor de toetsen: de reserve na een minuut zonder landing, en een herkansing na een
   /// half uur, zijn anders niet na te spelen.
-  RadioBesturing({required this.speler, required this.bron, DateTime Function()? klok})
-      : _klok = klok ?? DateTime.now;
+  RadioBesturing({required Radiospeler speler, required this.bron, DateTime Function()? klok})
+      : _standaard = speler,
+        _speler = speler,
+        _klok = klok ?? DateTime.now;
 
   final DateTime Function() _klok;
 
@@ -452,7 +454,14 @@ class RadioBesturing extends ChangeNotifier {
   @visibleForTesting
   void tikVoorToets() => _pas(_sessie);
 
-  final PlayerStore speler;
+  /// Waar de radio nu klinkt: de speler van dit toestel ([_standaard]), of een speaker die de pc stuurt
+  /// (`speaker_radio.dart`). Gekozen bij [start]; één radio tegelijk.
+  Radiospeler get speler => _speler;
+  Radiospeler _speler;
+  final Radiospeler _standaard;
+
+  /// Speelt de radio op een andere uitgang dan de speler van dit toestel (een speaker)?
+  bool get opAndereUitgang => !identical(_speler, _standaard);
   final Radiobron bron;
 
   List<Radioplek> _plan = const [];
@@ -745,7 +754,8 @@ class RadioBesturing extends ChangeNotifier {
 
   /// Starten. Geeft null terug als het gelukt is, of de reden waarom niet — in gewone taal.
   Future<String?> start(List<Radioplek> nieuw,
-      {String naam = '',
+      {Radiospeler? naar,
+      String naam = '',
       String? zaadArtiest,
       Track? zaad,
       Future<bool> Function(Radioplek plek)? keur,
@@ -766,6 +776,14 @@ class RadioBesturing extends ChangeNotifier {
     // genomen heeft — die leen is voor de radio die nu begint.
     final nogLopend = _stop(laatLos: false, naarOverzicht: false);
     speler.bijRadioEinde = null;
+    // Een andere uitgang dan de vorige radio (de pc ↔ een speaker): de vorige valt stil. Eén radio tegelijk.
+    final uitgang = naar ?? _standaard;
+    if (!identical(uitgang, _speler)) {
+      final oud = _speler;
+      oud.bijRadioOverslaan = null;
+      _speler = uitgang;
+      unawaited(oud.verlaatRadio());
+    }
 
     final sessie = ++_sessie;
     _rustTot = null;
@@ -1388,7 +1406,8 @@ class RadioBesturing extends ChangeNotifier {
     // volgende liedje wel al kan beginnen"). Staat de radio stil — droog, of doorgeklikt tot het
     // einde — en kan iets wat onderweg is al klinken, dan dat. Zie groeistroom.dart.
     var stroom = false;
-    if (besluit.inRij.isEmpty && (speler.radioDroog || speler.wilVerder)) {
+    // Alleen op de speler van dit toestel: het adres van zo'n stroom bestaat alleen hier (127.0.0.1).
+    if (!opAndereUitgang && besluit.inRij.isEmpty && (speler.radioDroog || speler.wilVerder)) {
       for (final p in _plan) {
         final g = p.groei;
         if (p.stand != Haalstand.onderweg || p.stroomItem != null || g == null || !g.kanKlinken) continue;

@@ -736,7 +736,8 @@ class Stilstandwacht {
 }
 
 /// Native (libmpv) player with a queue, shuffle, repeat and a Radio mode.
-class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron, Rijbediening, VolgSpeler {
+class PlayerStore extends ChangeNotifier
+    implements NowPlayingSource, Speelbron, Rijbediening, VolgSpeler, Radiospeler {
   /// **Ruim vooruit lezen, want de muziek komt over het netwerk.**
   ///
   /// Gemeld op 15-08-2026 na een rit: draadloos Android Auto verloor geregeld de verbinding, "zeker
@@ -816,10 +817,13 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
   bool radioMode = false;
   String radioStatus = '';
   Future<String?> Function(String artist, String title)? resolver;
+  @override
   Future<List<RadioItem>> Function()? radioExtend; // fetch more items to keep radio endless
   bool _extending = false;
   int _radioSession = 0; // bumped per playRadio() so a stale extend can't pollute a new radio
+  @override
   List<RadioItem> get radioQueue => _radio;
+  @override
   int get radioIndex => _radioIndex;
 
   /// De radio is voorbij. Precies één keer, hoe je hem ook verlaat.
@@ -829,6 +833,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
   /// of de app opnieuw starten — vijf plekken die alle vijf `radioMode` op false zetten. Wie daar iets
   /// aan wil hangen (opruimen, een overzicht tonen) moet dat vijf keer doen, en dan denkt er vroeg of
   /// laat eentje niet aan. Vandaar [_verlaatRadio], die alle vijf aanroepen.
+  @override
   void Function(List<RadioItem> gespeeld)? bijRadioEinde;
 
   /// De hoes van wat er NU speelt.
@@ -1482,14 +1487,17 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
 
   /// Voor de radio: dit nummer is overgeslagen. [bestand]: het bestand deugde niet (weg, leeg, kapot),
   /// anders bleef het onbereikbaar na een herkansing. Ingehangen door `RadioBesturing`.
+  @override
   void Function(RadioItem item, {required bool bestand})? bijRadioOverslaan;
 
   /// Je drukte op "volgende" bij het laatste radionummer: het eerstvolgende nummer dat landt, speelt
   /// meteen — in plaats van dat de knop stil niets doet (beoordeling van 08-10-2026).
   bool _wilVerder = false;
+  @override
   bool get wilVerder => _wilVerder;
 
   /// De radio staat droog: de rij is op en er speelt niets. Zie [_radioDroog].
+  @override
   bool get radioDroog => _radioDroog;
 
   /// Is wat nu speelt een herhaling van eerder in deze radio? Voor het label "opnieuw".
@@ -2034,6 +2042,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
 
   /// Zoals [wordtLokaal], voor een radioregel: de regel [oud] (een groeistroom) wordt het nummer [t] uit
   /// je bibliotheek. Geeft de nieuwe regel terug, of null als [oud] niet meer in de rij staat.
+  @override
   RadioItem? wordtLokaalInRadio(RadioItem oud, Track t) {
     final i = _radio.indexOf(oud);
     if (i < 0) return null;
@@ -2311,6 +2320,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
   ///
   /// Een lopende radio wordt eerst netjes verlaten. Anders schuift de tweede radio over de eerste
   /// heen zonder dat er iemand van weet, en blijft alles wat die eerste opgehaald had zwerven.
+  @override
   Future<void> playRadio(List<RadioItem> items, {int start = 0}) async {
     keuzes++;
     _verlaatRadio();
@@ -2341,6 +2351,15 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
   /// Het sessienummer gaat omhoog zodat een aanvulling die nog onderweg is niet alsnog in een lijst
   /// valt die niemand meer speelt. Wat er gespeeld is blijft staan: [bijRadioEinde] moet erover
   /// kunnen vertellen, en dat kan niet als het hier al weggegooid is.
+  /// De radio speelt voortaan op een speaker (`speaker_radio.dart`): hier stilvallen en de radio loslaten.
+  @override
+  Future<void> verlaatRadio() async {
+    if (!radioMode) return;
+    _verlaatRadio();
+    if (playing) await _player.pause();
+    notifyListeners();
+  }
+
   void _verlaatRadio() {
     if (!radioMode) return;
     radioMode = false;
@@ -2419,6 +2438,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
   ///
   /// Stond de radio dróóg, dan begint hij hier meteen weer. Dat is het geval waarin je nog niets van
   /// de eerste nummers had: dan is de rij bij de start leeg, en zonder deze regel blijft hij dat.
+  @override
   void voegToeAanRadio(List<RadioItem> meer) {
     if (!radioMode || meer.isEmpty) return;
     final was = _radio.length;
@@ -2445,6 +2465,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
   /// op Windows laat een geopend bestand zich niet wissen — zonder deze volgorde zou de duim omlaag
   /// er precies bij het nummer dat je hoorde niets doen. Is er niets om naar door te gaan, dan valt
   /// de radio stil tot er weer iets landt; [voegToeAanRadio] pakt hem daar weer op.
+  @override
   Future<bool> haalUitRadio(String pad) async {
     if (!radioMode) return false;
     bool ditIsHem(RadioItem it) => it.isLocal && it.local!.path == pad;
@@ -3209,4 +3230,27 @@ abstract interface class VolgSpeler {
   Future<void> neemOver(List<Track> rij, int index, Duration positie,
       {bool spelen, bool shuffle, RepeatMode herhaal});
   bool zetRijRondHuidig(List<Track> rij, int index);
+}
+
+/// Wat de radio van een uitgang nodig heeft (`radio.dart`): de speler van dit toestel ([PlayerStore]), of een
+/// speaker die de pc stuurt (`speaker_radio.dart`; Saber, 22-10-2026: "pc draait, speaker speelt"). Er is één
+/// radio; bij elke start kiest hij zijn uitgang.
+abstract interface class Radiospeler implements Listenable {
+  List<RadioItem> get radioQueue;
+  int get radioIndex;
+  bool get radioDroog;
+  bool get wilVerder;
+  bool get playing;
+  Duration get duration;
+  Duration get positieErgens;
+  abstract Future<List<RadioItem>> Function()? radioExtend;
+  abstract void Function(List<RadioItem> gespeeld)? bijRadioEinde;
+  abstract void Function(RadioItem item, {required bool bestand})? bijRadioOverslaan;
+  Future<void> playRadio(List<RadioItem> items, {int start = 0});
+  void voegToeAanRadio(List<RadioItem> meer);
+  Future<bool> haalUitRadio(String pad);
+  RadioItem? wordtLokaalInRadio(RadioItem oud, Track t);
+
+  /// De radio speelt voortaan op een andere uitgang: stilvallen en de radio loslaten.
+  Future<void> verlaatRadio();
 }

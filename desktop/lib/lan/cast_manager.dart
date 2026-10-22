@@ -240,6 +240,20 @@ class CastManager {
   /// Waar een speaker met meespelers is, veranderde: de server stuurt ze een nieuw anker ([ankerVan]).
   void Function(String speakerId)? bijAnker;
 
+  /// Wat er met een radiosessie gebeurt (`speaker_radio.dart` volgt hem): de rij of de plek veranderde, hij
+  /// staat droog, iemand wil verder (volgende op het laatste nummer), of de sessie is weg (een andere
+  /// wachtrij nam de speaker over, of hij werd gestopt).
+  Stream<({String id, bool wilVerder, bool weg})> get radioGebeurtenis => _radioGebeurtenis.stream;
+  final _radioGebeurtenis = StreamController<({String id, bool wilVerder, bool weg})>.broadcast(sync: true);
+
+  void _meldRadio(_Session s, {bool wilVerder = false, bool weg = false}) {
+    if (s.radio == null || _radioGebeurtenis.isClosed) return;
+    _radioGebeurtenis.add((id: s.renderer.id, wilVerder: wilVerder, weg: weg));
+  }
+
+  /// Staat de radiosessie op [id] droog (de rij is op, de radio vult hem nog aan)?
+  bool isDroog(String id) => _sessies[id]?.droog ?? false;
+
   /// Toestellen spelen met speaker [id] mee ([aan]), of niet meer.
   void volgKlok(String id, bool aan) {
     if (aan) {
@@ -367,6 +381,7 @@ class CastManager {
       duurMs: duur,
       opMs: s.gezienOp ?? s.startedAt.millisecondsSinceEpoch,
       volume: s.volume ?? -1,
+      radio: s.radio ?? '',
     );
   }
 
@@ -485,6 +500,7 @@ class CastManager {
     if (speeltWas != s.speelt || s.zagIndex != s.index || gesprongen) {
       s.zagIndex = s.index;
       bijStand?.call();
+      _meldRadio(s);
     }
   }
 
@@ -546,8 +562,11 @@ class CastManager {
   /// [vanafMs]: zo ver in het nummer beginnen (overdragen, samen spelen). Een Sonos negeert een Seek tijdens
   /// het laden, dus spoelt dit pas na [spoelNa], naar waar de bron dan is. Tot dan krijgt wie meespeelt geen
   /// anker: die speelt gewoon door tot de speaker op zijn plek staat.
+  ///
+  /// [radio]: een radio van de pc speelt hier (`speaker_radio.dart`), met deze naam. Zo'n sessie blijft open
+  /// als de rij op is ([_Session.droog]) — de radio vult hem aan — en meldt wat er gebeurt ([radioGebeurtenis]).
   Future<void> play(String deviceId, List<String> trackIds, int index,
-      {bool alsZone = false, int vanafMs = 0}) async {
+      {bool alsZone = false, int vanafMs = 0, String? radio}) async {
     if (trackIds.isEmpty) throw ArgumentError('nothing to play');
     if (!alsZone) {
       for (final ander in _sessies.values.where((x) => !x.alsZone && x.renderer.id != deviceId).toList()) {
@@ -571,6 +590,7 @@ class CastManager {
         queue: List.of(trackIds),
         index: index.clamp(0, trackIds.length - 1),
         alsZone: alsZone);
+    session.radio = radio;
     _sessies[renderer.id] = session;
     final spoelen = vanafMs > 3000;
     session.aanloop = spoelen;
@@ -609,6 +629,7 @@ class CastManager {
   void _sluit(_Session s, {bool melden = true}) {
     s.advance?.cancel();
     s.advance = null;
+    _meldRadio(s, weg: true);
     s.klok?.stop();
     s.klok = null;
     if (identical(_sessies[s.renderer.id], s)) _sessies.remove(s.renderer.id);
@@ -645,11 +666,23 @@ class CastManager {
     } else {
       s.queue.addAll(ids);
     }
+    if (s.droog && s.index + 1 < s.queue.length) {
+      // Een droge radio: het eerste nieuwe nummer meteen.
+      s.droog = false;
+      s.index++;
+      _log?.line('radio weer verder op ${s.renderer.name}');
+      await _openCurrent(s);
+      bijStand?.call();
+      _rijVeranderd(s);
+      _meldRadio(s);
+      return;
+    }
     _log?.line('${hierna ? 'hierna' : 'achteraan'}: ${ids.length} nummers  (nu ${s.queue.length})');
     // De speaker kreeg het volgende nummer al mee; is dat een ander geworden, dan het nieuwe.
     if (s.queue.elementAtOrNull(s.index + 1) != volgendeWas) await _armNext(s);
     bijStand?.call();
     _rijVeranderd(s);
+    _meldRadio(s);
   }
 
   /// De wachtrij van een speaker met een sessie, en waar hij is. Null zonder sessie.
@@ -680,6 +713,7 @@ class CastManager {
     if (i == s.index + 1) await _armNext(s);
     bijStand?.call();
     _rijVeranderd(s);
+    _meldRadio(s);
   }
 
   /// Een nummer in de wachtrij van de speaker verplaatsen, van [van] naar [naar].
@@ -701,6 +735,7 @@ class CastManager {
     if (s.queue.elementAtOrNull(s.index + 1) != volgendeWas) await _armNext(s);
     bijStand?.call();
     _rijVeranderd(s);
+    _meldRadio(s);
   }
 
   /// [id] meteen, en de rest laten staan ("Nu spelen, rest laten staan").
@@ -1070,6 +1105,16 @@ class CastManager {
           'volgende=${_idVanUrl(session.nextUrl) ?? '-'}');
       if (state == null || !state.isStopped) return;
       if (session.index + 1 >= session.queue.length) {
+        if (session.radio != null) {
+          // Een radio houdt open: de radio vult de rij aan ([voegToe]), en dan speelt het volgende meteen.
+          if (!session.droog) {
+            session.droog = true;
+            _log?.line('radio droog op ${session.renderer.name}');
+            _zag(session, speelt: false);
+            _meldRadio(session);
+          }
+          return;
+        }
         _meldStil(session, session.positie?.inMilliseconds ?? 0);
         _sluit(session);
         return;
@@ -1119,6 +1164,9 @@ class CastManager {
         if (sessie != null && sessie.index + 1 < sessie.queue.length) {
           sessie.index++;
           await _openCurrent(sessie);
+        } else if (sessie != null && sessie.radio != null) {
+          // Het laatste nummer van een radio: de radio moet nu iets nieuws geven ([wilVerder]).
+          _meldRadio(sessie, wilVerder: true);
         }
       case 'previous':
         if (sessie != null && sessie.index > 0) {
@@ -1293,6 +1341,7 @@ class CastManager {
 
   void dispose() {
     _kef.sluit();
+    unawaited(_radioGebeurtenis.close());
     _zoeker?.cancel();
     _groepKijker?.cancel();
     for (final s in _sessies.values) {
@@ -1367,6 +1416,12 @@ class _Session {
 
   /// Nog aan het laden en spoelen (zie [CastManager.play] met `vanafMs`): nog geen anker.
   bool aanloop = false;
+
+  /// Een radio van de pc (`speaker_radio.dart`): zijn naam. Null bij een gewone wachtrij.
+  String? radio;
+
+  /// Een radiosessie waarvan de rij op is: hij blijft open tot de radio aanvult ([CastManager.voegToe]).
+  bool droog = false;
 }
 
 extension _ElementAtOrNull<E> on List<E> {

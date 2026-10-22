@@ -673,5 +673,38 @@ void main() {
       expect(server.zones.leiderVan('gsm-1'), isNull);
       await sub.cancel();
     });
+
+    test('een radio op een speakerzone gaat naar de pc (die draait hem, de speaker speelt)', () async {
+      // Nog geen haak (de app op de pc is niet zover): 409 met een reden.
+      final zonder = await server.zoneOpdracht(
+          {'zone': 'spk:192.168.0.188', 'cmd': 'radio', 'artiest': 'Corona'}, van: 'gsm');
+      expect(zonder.status, 409);
+      final gekregen = <(String, Map<String, dynamic>)>[];
+      String? antwoord;
+      server.bijSpeakerRadio = (speaker, op) async {
+        gekregen.add((speaker, op));
+        return antwoord;
+      };
+      final r = await c.ask('/api/zone/cmd',
+          {'zone': 'spk:192.168.0.188', 'cmd': 'radio', 'artiest': 'Corona', 'zaad': 'id-7', 'id': 'r1'});
+      expect(r['bezorgd'], 1);
+      expect(gekregen.single.$1, '192.168.0.188');
+      expect(gekregen.single.$2['artiest'], 'Corona');
+      expect(gekregen.single.$2['zaad'], 'id-7');
+      // Kan de pc het niet, dan hoort wie vroeg waarom.
+      antwoord = 'De app op de pc staat niet open.';
+      final nee = await server.zoneOpdracht(
+          {'zone': 'spk:192.168.0.188', 'cmd': 'radio', 'artiest': 'Corona'}, van: 'gsm');
+      expect(nee.status, 409);
+      expect(nee.antwoord['error'], 'De app op de pc staat niet open.');
+    });
+  });
+
+  test('bedrading in main.dart: de pc start een radio op een speaker; de oude melding is weg', () {
+    final hoofd = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(hoofd, contains('s.bijSpeakerRadio = (speaker, op) async {'));
+    expect(hoofd, contains('zaad: zaad, titel: titel.isEmpty ? null : titel, hier: true, naar: speaker);'));
+    expect(hoofd, contains('  ], naar: uitgang, naam: artist, zaadArtiest: artist,'));
+    expect(hoofd, isNot(contains('Een radio op een speaker kan nog niet')));
   });
 }
