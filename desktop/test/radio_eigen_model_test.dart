@@ -69,9 +69,10 @@ void main() {
         5,
         reason: 'de startlijst, de vervolglijst, het afstemmen, Last.fm bij de start en Last.fm onderweg',
       );
-      // Twee zonder, met reden: de rij "Vroeger veel gespeeld, nog niet van jou" zoekt per definitie wat je níét hebt,
-      // en de genretag van een radio uit een zin gaat daarna door `_radioplan`, die je eigen exemplaar al vindt.
-      expect(RegExp(r'lijstOpDeezer\(').allMatches(main).length, 7, reason: 'geen achtste zonder opzoeker');
+      // Drie zonder, met reden: de rijen "Vroeger veel gespeeld, nog niet van jou" en "Bekend, nog niet van jou" zoeken
+      // per definitie wat je níét hebt, en de genretag van een radio uit een zin gaat daarna door `_radioplan`, die je
+      // eigen exemplaar al vindt.
+      expect(RegExp(r'lijstOpDeezer\(').allMatches(main).length, 8, reason: 'geen negende zonder opzoeker');
       expect(main, contains("van: 'je Last.fm');"));
     });
   });

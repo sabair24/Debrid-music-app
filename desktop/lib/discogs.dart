@@ -26,6 +26,9 @@ import 'paths.dart';
 import 'radiostijl.dart'
     show DiscogsUitgave, Zoekregel, genoegVoorEenJaar, kaleTitel, metHetNummer, samenUitgaven, uitgaveUitZoekregel;
 
+/// De eerste beelden van een Discogs-persing en wat elk is — zie `DiscogsService._discogsBeelden`.
+typedef _DiscogsBeelden = ({List<Uint8List?> datas, ({int? front, int? back, int? disc}) guessed});
+
 /// One image a release or an artist offers. Discogs doesn't say what a picture IS beyond
 /// primary/secondary — a release's secondaries are the back, the disc and the booklet, an artist's
 /// are simply more photos — so the app decides what to use each one for, and so can the user.
@@ -1674,6 +1677,16 @@ bool isDigitaleHerkomst(String? herkomst) {
 /// plaat zonder achterkant van TheAudioDB naar het Discogs-budget, dat met de nummerlijsten gedeeld wordt.
 const kScherpGenoeg = 1000;
 
+/// Zo lang wacht de keten op TheAudioDB voor hij Discogs al vraagt. Gemeten in kunst.log op de pc (22-10-2026,
+/// 53 vragen): antwoord in mediaan 26 ms, 9 op 10 binnen 0,21 s; de cd zelf stond er (28 keer) in mediaan 0,28 s,
+/// de traagste na 2,3 s. Maar 19 keer kende hij het album niet, en bij Anouk — Girl duurde dat "nee" 16,7 s.
+/// Antwoordt hij later toch, dan wint zijn cd nog altijd ([said]).
+const kTadbGeduld = Duration(milliseconds: 1500);
+
+/// Zo lang wacht een antwoord met een cd uit het archief nog op de cd van Discogs, die voorgaat (Saber,
+/// 22-10-2026: TheAudioDB, "dan discogs en dan de rest"). De beelden van Discogs komen gemeten in 4 à 5 s.
+const kDiscogsCdGeduld = Duration(seconds: 6);
+
 /// De grootste van twee beelden, in pixels; bij gelijke maat (of onleesbaar) [eerst].
 ///
 /// Voor de achterkant: het archief of Discogs eerst, TheAudioDB daarna — maar "hoogste resolutie" (Saber,
@@ -1932,6 +1945,9 @@ extension DiscogsArtwork on DiscogsService {
         : Future.value((back: null, disc: null));
     ({Uint8List? back, Uint8List? disc})? tadb;
 
+    // De cd van Discogs, zodra die er is (zie [discogsBeeldenF] hieronder).
+    Uint8List? discogsCd;
+
     // Anything found below fills only the roles the user did NOT assign.
     ReleaseArt said(ReleaseArt found) => ReleaseArt(
           front: saidFront ?? found.front,
@@ -1939,7 +1955,11 @@ extension DiscogsArtwork on DiscogsService {
           // voor de hoezen, voorkant, cd en achterkant"); [found] is het vangnet — de scherpste van het
           // archief en Discogs, zie hieronder.
           back: saidBack ?? tadb?.back ?? found.back,
-          disc: saidDisc ?? tadb?.disc ?? found.disc,
+          // De cd: TheAudioDB, dan Discogs, dan de rest (Saber, 22-10-2026: "ik zou eerder the audiodb nemen
+          // voor de afbeelding van cd, die staat er direct, en is meestal de mooiste en hoogste res, dan discogs
+          // en dan de rest"). Niet meer de scherpste van het archief en Discogs: daarvoor moest elke cd op het
+          // archief wachten, en dat deed er bij Anouk — Girl 35 tot 77 s over.
+          disc: saidDisc ?? tadb?.disc ?? discogsCd ?? found.disc,
           // Heeft de gebruiker de voorkant zélf aangewezen, dan is die niet van deze persing en
           // hoort er geen persing bij te staan. De hoes is dan een keuze, geen vondst.
           bron: saidFront != null ? null : found.bron,
@@ -1966,17 +1986,29 @@ extension DiscogsArtwork on DiscogsService {
 
     bool enough(ReleaseArt found) =>
         (saidBack != null || tadb?.back != null || scherp(found.back)) &&
-        (saidDisc != null || tadb?.disc != null || scherp(found.disc));
+        (saidDisc != null || tadb?.disc != null || discogsCd != null || scherp(found.disc));
 
     // A pinned MusicBrainz pressing is an exact answer: take its scans and no one else's.
     ReleaseArt? partial;
     final exactF = pinnedMbid != null && pinnedMbid.isNotEmpty ? _artFromCaa(pinnedMbid) : Future<ReleaseArt?>.value();
-    tadb = await tadbF;
+    // Even op TheAudioDB wachten, maar niet lang: meestal antwoordt hij in tienden van een seconde, maar gemeten op
+    // de pc (22-10-2026, Anouk — Girl) bleef hij 16,7 s hangen en gaf dan niets — en zo lang wachtte Discogs, de
+    // volgende voor de cd. Zwijgt hij na anderhalve seconde, dan begint Discogs hieronder al.
+    tadb = await Future.any([
+      tadbF.then<({Uint8List? back, Uint8List? disc})?>((v) => v),
+      Future<({Uint8List? back, Uint8List? disc})?>.delayed(kTadbGeduld, () => null),
+    ]);
+    final tadbVlot = tadb != null;
+    if (!tadbVlot) step('theaudiodb na ${kTadbGeduld.inMilliseconds} ms nog stil — Discogs begint al');
     // Wat TheAudioDB gaf, meteen naar wie wacht: het archief hieronder duurt seconden.
-    if (tussen != null && (tadb.disc != null || tadb.back != null)) {
-      step('tussenstand: achter=${tadb.back != null} cd=${tadb.disc != null}');
+    void tadbTussen() {
+      final t = tadb;
+      if (tussen == null || t == null || (t.disc == null && t.back == null)) return;
+      step('tussenstand: achter=${t.back != null} cd=${t.disc != null}');
       tussen(said(const ReleaseArt()));
     }
+
+    tadbTussen();
     // Discogs alvast zoeken, naast het archief, als TheAudioDB geen cd heeft. De cd komt dan bijna altijd
     // van Discogs, en die stap kwam pas aan de beurt nadat het archief over de andere persingen klaar was:
     // gemeten 4,1–4,6 s (live, sombr — back to friends, 21-10-2026), en op de gsm kwam de echte cd 20 tot
@@ -1986,12 +2018,43 @@ extension DiscogsArtwork on DiscogsService {
     final discogsVoorafF = !freeOnly && pinned == null && !enough(const ReleaseArt())
         ? _quickRelease(artist, album).catchError((Object _) => null)
         : null;
+    // En de beelden ervan meteen, als tussenstand: het archief hieronder kan veel langer duren dan Discogs. Gemeten op
+    // de pc (22-10-2026, Anouk — Girl): Discogs had 4 beelden klaar, maar het archief over de andere persingen deed
+    // er 35 tot 77 s over, en zo lang bleef de cd leeg. Saber: "man wat duurde het weer lang eer die afbeelding van
+    // de cd laade". Eén keer gehaald: de Discogs-stap hieronder gebruikt dezelfde beelden. Zijn cd is ook het
+    // antwoord ([discogsCd], vóór het archief).
+    final discogsBeeldenF = discogsVoorafF
+        ?.then<_DiscogsBeelden?>((e) async => e == null || e.images.isEmpty ? null : await _discogsBeelden(e));
+    if (discogsBeeldenF != null) {
+      unawaited(discogsBeeldenF.then((b) {
+        if (b == null) return;
+        Uint8List? at(int? i) => (i == null || i >= b.datas.length) ? null : b.datas[i];
+        final back = at(b.guessed.back), disc = at(b.guessed.disc);
+        discogsCd = disc;
+        if (tussen == null || (back == null && disc == null)) return;
+        step('tussenstand van Discogs, vóór het archief: achter=${back != null} cd=${disc != null}');
+        tussen(said(ReleaseArt(back: back, disc: disc)));
+      }, onError: (Object _) {}));
+    }
+    if (!tadbVlot) {
+      tadb = await tadbF;
+      tadbTussen();
+    }
+    // Een antwoord zonder cd van TheAudioDB wacht even op die van Discogs: die gaat voor het archief.
+    Future<void> wachtOpDiscogsCd() async {
+      if (discogsBeeldenF == null || saidDisc != null || tadb?.disc != null || discogsCd != null) return;
+      try {
+        await discogsBeeldenF.timeout(kDiscogsCdGeduld);
+      } catch (_) {/* dan wat het archief had */}
+    }
+
     if (pinnedMbid != null && pinnedMbid.isNotEmpty) {
       final exact = await exactF;
       step('archief voor de gepinde persing: '
           '${exact == null ? "niets" : "voor=${exact.front != null} achter=${exact.back != null} cd=${exact.disc != null}"}');
       if (exact != null) {
         if (enough(exact)) {
+          await wachtOpDiscogsCd();
           final art = said(exact);
           await _writeArt(dir, art);
           return art;
@@ -2009,6 +2072,7 @@ extension DiscogsArtwork on DiscogsService {
     // spent over two minutes waiting for a slot. Anything free that can answer first should.
     // (TheAudioDB was asked above, alongside the archive: see [tadb]. Its disc and back fill [said].)
     if (enough(partial ?? const ReleaseArt())) {
+      await wachtOpDiscogsCd();
       final art = said(partial ?? const ReleaseArt());
       await _writeArt(dir, art);
       return art;
@@ -2041,6 +2105,7 @@ extension DiscogsArtwork on DiscogsService {
           formaat: partial?.front != null ? partial?.formaat : wider.formaat,
         );
         if (enough(caa)) {
+          await wachtOpDiscogsCd();
           final art = said(caa);
           await _writeArt(dir, art);
           return art;
@@ -2100,6 +2165,45 @@ extension DiscogsArtwork on DiscogsService {
       }
       return null;
     }
+    // Al gehaald voor de tussenstand als dit de snelzoek van vooraf is ([discogsBeeldenF]); anders nu.
+    final vooraf = discogsBeeldenF != null && identical(e, await discogsVoorafF) ? await discogsBeeldenF : null;
+    final beelden = vooraf ?? await _discogsBeelden(e);
+    final datas = beelden.datas;
+    final guessed = beelden.guessed;
+    Uint8List? at(int? i) => (i == null || i >= datas.length) ? null : datas[i];
+    var disc = at(guessed.disc);
+    // Not every pressing has its disc photographed, and a missing scan is a missing animation —
+    // for a record the library demonstrably holds. So borrow one from another pressing of the SAME
+    // master: it is the same disc art, just someone else's scanner.
+    // Alleen als er nergens een cd is: dat kost Discogs nog twee verzoeken.
+    if (disc == null && caa?.disc == null && tadb.disc == null && saidDisc == null) {
+      disc = await _discFromAnotherPressing(artist, album, e.releaseId);
+    }
+    // Per rol de SCHERPSTE van het archief en Discogs — het vangnet voor wat TheAudioDB niet had (Saber,
+    // 21-10-2026: "ofwel musicbrainz of wel discogs te zien wie de beste hoogste resolutie heeft"). Bij
+    // gelijke maat het archief: dat zegt zelf wat een beeld is, hier is het afgeleid uit vorm en pixels.
+    // Behalve de cd: Discogs vóór het archief (zie [said]). [said] legt er daarna TheAudioDB en wat je zelf
+    // aanwees overheen.
+    final voor = grootsteBeeld(caa?.front, at(guessed.front));
+    final voorVanArchief = voor != null && identical(voor, caa?.front);
+    final art = said(ReleaseArt(
+      front: voor,
+      back: grootsteBeeld(caa?.back, at(guessed.back)),
+      disc: disc ?? caa?.disc,
+      // Van welke persing de voorkant is. De bibliotheek zet een scan boven de hoes in de bestanden, maar
+      // nooit boven een digitale voorkant — zie `LibraryStore.adoptAlbumCover`.
+      bron: voorVanArchief
+          ? caa?.bron
+          : (voor != null && e.releaseId > 0 ? 'rel:${e.releaseId}' : null),
+      formaat: voorVanArchief ? caa?.formaat : (e.format.isEmpty ? null : e.format),
+    ));
+    if (art.isEmpty) return null; // nothing found — don't cache a blank as the answer
+    await _writeArt(dir, art);
+    return art;
+  }
+
+  /// De eerste zes beelden van [e] en welke de voorkant, de achterkant en de cd is.
+  Future<_DiscogsBeelden> _discogsBeelden(DiscogsEdition e) async {
     const look = 6;
     final take = e.images.length < look ? e.images.length : look;
     // Together, not one after another. These are plain image GETs to Discogs' CDN and do NOT go
@@ -2113,35 +2217,7 @@ extension DiscogsArtwork on DiscogsService {
       ],
       datas,
     );
-    Uint8List? at(int? i) => (i == null || i >= datas.length) ? null : datas[i];
-    var disc = at(guessed.disc);
-    // Not every pressing has its disc photographed, and a missing scan is a missing animation —
-    // for a record the library demonstrably holds. So borrow one from another pressing of the SAME
-    // master: it is the same disc art, just someone else's scanner.
-    // Alleen als er nergens een cd is: dat kost Discogs nog twee verzoeken.
-    if (disc == null && caa?.disc == null && tadb.disc == null && saidDisc == null) {
-      disc = await _discFromAnotherPressing(artist, album, e.releaseId);
-    }
-    // Per rol de SCHERPSTE van het archief en Discogs — het vangnet voor wat TheAudioDB niet had (Saber,
-    // 21-10-2026: "ofwel musicbrainz of wel discogs te zien wie de beste hoogste resolutie heeft"). Bij
-    // gelijke maat het archief: dat zegt zelf wat een beeld is, hier is het afgeleid uit vorm en pixels.
-    // [said] legt er daarna TheAudioDB en wat je zelf aanwees overheen.
-    final voor = grootsteBeeld(caa?.front, at(guessed.front));
-    final voorVanArchief = voor != null && identical(voor, caa?.front);
-    final art = said(ReleaseArt(
-      front: voor,
-      back: grootsteBeeld(caa?.back, at(guessed.back)),
-      disc: grootsteBeeld(caa?.disc, disc),
-      // Van welke persing de voorkant is. De bibliotheek zet een scan boven de hoes in de bestanden, maar
-      // nooit boven een digitale voorkant — zie `LibraryStore.adoptAlbumCover`.
-      bron: voorVanArchief
-          ? caa?.bron
-          : (voor != null && e.releaseId > 0 ? 'rel:${e.releaseId}' : null),
-      formaat: voorVanArchief ? caa?.formaat : (e.format.isEmpty ? null : e.format),
-    ));
-    if (art.isEmpty) return null; // nothing found — don't cache a blank as the answer
-    await _writeArt(dir, art);
-    return art;
+    return (datas: datas, guessed: guessed);
   }
 
   /// The three scans from the Cover Art Archive, which says outright what each image is.

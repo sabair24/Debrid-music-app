@@ -12002,6 +12002,51 @@ String tikKeuzeTekst(TikKeuze k) => switch (k) {
       TikKeuze.achteraan => 'Achteraan toevoegen',
     };
 
+/// Wat er gebeurt met een nummer dat nog gehaald wordt, zodra het er is — de melding bij het begin
+/// ([NieuwSpeler.speelNummer]).
+String naLandenTekst(TikKeuze k) => switch (k) {
+      TikKeuze.nu => 'speelt zodra hij er is, de wachtrij blijft staan',
+      TikKeuze.hierna => 'komt hierna zodra hij er is',
+      TikKeuze.achteraan => 'komt achteraan zodra hij er is',
+      TikKeuze.vervang || TikKeuze.vragen => 'speelt zodra hij er is',
+    };
+
+/// En de melding als hij er is.
+String gelandTekst(TikKeuze k) => switch (k) {
+      TikKeuze.nu => 'speelt nu, de wachtrij blijft staan',
+      TikKeuze.hierna => 'komt hierna',
+      TikKeuze.achteraan => 'staat achteraan in de wachtrij',
+      TikKeuze.vervang || TikKeuze.vragen => 'speelt nu',
+    };
+
+/// Het keuzemenu bij een tik ([speelGetikt], [speelGetiktNieuw]). Null: weggetikt.
+Future<TikKeuze?> _kiesTikKeuze(BuildContext context, {required String titel, required String artiest}) async {
+  TikKeuze? gekozen;
+  await _toonItemMenu(
+      context,
+      ItemMenu(titel: titel, ondertitel: artiest, blokken: [
+        [
+          for (final k in const [TikKeuze.vervang, TikKeuze.nu, TikKeuze.hierna, TikKeuze.achteraan])
+            MenuRegel(tikKeuzeIcoon(k), tikKeuzeTekst(k), () => gekozen = k),
+        ],
+      ]));
+  return gekozen;
+}
+
+/// Het icoon van een keuze in het menu.
+IconData tikKeuzeIcoon(TikKeuze k) => switch (k) {
+      TikKeuze.vervang || TikKeuze.vragen => Icons.play_arrow_rounded,
+      TikKeuze.nu => Icons.play_circle_outline_rounded,
+      TikKeuze.hierna => Icons.playlist_play_rounded,
+      TikKeuze.achteraan => Icons.playlist_add_rounded,
+    };
+
+/// "Altijd zo": de keuze uit het menu wordt de vaste keuze van dit toestel (terug te zetten in Instellingen).
+void _altijdZo(AppSettings instellingen, TikKeuze keuze) {
+  instellingen.tikKeuze = keuze.name;
+  unawaited(instellingen.save());
+}
+
 /// Valt er bij een tik iets te kiezen? Alleen als er al een wachtrij is: speelt er niets, of staat alleen
 /// het spelende nummer erin, dan speelt het meteen.
 bool tikVraagtIets({required bool speelt, required bool radio, required int lengte}) => speelt && (radio || lengte > 1);
@@ -12030,25 +12075,9 @@ Future<void> speelGetikt(BuildContext context, List<Track> lijst, int index, {Ui
   final gevraagd = keuze == TikKeuze.vragen;
   if (gevraagd) {
     final t = lijst[index];
-    TikKeuze? gekozen;
-    await _toonItemMenu(
-        context,
-        ItemMenu(titel: t.title, ondertitel: t.artist, blokken: [
-          [
-            for (final k in const [TikKeuze.vervang, TikKeuze.nu, TikKeuze.hierna, TikKeuze.achteraan])
-              MenuRegel(
-                  switch (k) {
-                    TikKeuze.vervang => Icons.play_arrow_rounded,
-                    TikKeuze.nu => Icons.play_circle_outline_rounded,
-                    TikKeuze.hierna => Icons.playlist_play_rounded,
-                    _ => Icons.playlist_add_rounded,
-                  },
-                  tikKeuzeTekst(k),
-                  () => gekozen = k),
-          ],
-        ]));
+    final gekozen = await _kiesTikKeuze(context, titel: t.title, artiest: t.artist);
     if (gekozen == null) return; // weggetikt: niets
-    keuze = gekozen!;
+    keuze = gekozen;
   }
   final t = lijst[index];
   switch (keuze) {
@@ -12076,16 +12105,46 @@ Future<void> speelGetikt(BuildContext context, List<Track> lijst, int index, {Ui
     melding?.showSnackBar(SnackBar(
       content: Text(tekst ?? tikKeuzeTekst(keuze)),
       duration: const Duration(seconds: 4),
-      action: SnackBarAction(
-          label: 'Altijd zo',
-          onPressed: () {
-            instellingen.tikKeuze = keuze.name;
-            unawaited(instellingen.save());
-          }),
+      action: SnackBarAction(label: 'Altijd zo', onPressed: () => _altijdZo(instellingen, keuze)),
     ));
   } else if (tekst != null) {
     _srcToast(context, tekst);
   }
+}
+
+/// Een tik (of ▶) op een nummer dat je nog niet hebt — een nieuwe release, "Bekend, nog niet van jou", een
+/// zoektreffer. Hetzelfde menu als [speelGetikt], en het halen loopt op de achtergrond: bij hierna,
+/// achteraan of nu-met-de-rest speelt wat er speelt gewoon door, en het nummer gaat de rij in zodra het
+/// er is ([NieuwSpeler.speelNummer]).
+///
+/// **Waarom (Saber, 22-10-2026).** *"liedjes die ik nog niet heb, wil ik ook kunnen klikken en als volgende
+/// spelen kiezen … en dan kan het liedje als downloaden op de achtergrond … of als ik zeg nu spelen maar de
+/// wachtrij laten staan."* Altijd op dit toestel, zoals ▶ dat al deed: het halen hoort bij deze speler.
+Future<void> speelGetiktNieuw(BuildContext context,
+    {required String artiest, required String titel, int? seconden, String? sleutelVan, String? album, String? hoes}) async {
+  final speler = context.read<PlayerStore>();
+  final instellingen = context.read<AppSettings>();
+  var keuze = TikKeuze.vervang;
+  var gevraagd = false;
+  if (tikVraagtIets(speelt: speler.current != null, radio: speler.radioMode, lengte: speler.queueTracks.length)) {
+    keuze = tikKeuzeUit(instellingen.tikKeuze);
+    gevraagd = keuze == TikKeuze.vragen;
+    if (gevraagd) {
+      final gekozen = await _kiesTikKeuze(context, titel: titel, artiest: artiest);
+      if (gekozen == null || !context.mounted) return; // weggetikt: niets
+      keuze = gekozen;
+    }
+  }
+  final k = keuze;
+  await _StartCache.nieuwSpeler.speelNummer(context,
+      artiest: artiest,
+      titel: titel,
+      seconden: seconden,
+      sleutelVan: sleutelVan,
+      album: album,
+      hoesUrl: hoes,
+      keuze: k,
+      altijdZo: gevraagd ? () => _altijdZo(instellingen, k) : null);
 }
 
 /// De vaste keuze voor een tik op een nummer, in Instellingen — zie [speelGetikt].
@@ -19021,7 +19080,11 @@ NieuwKaart nieuwAlbumKaart(BuildContext context, NieuweUitgave u, DateTime nu, {
 void _nieuwNummerMenu(BuildContext context, NieuwNummer n, {Offset? bij}) => _toonItemMenu(
     context,
     ItemMenu(titel: n.titel, ondertitel: n.artiest, blokken: [
-      [MenuRegel(Icons.play_arrow_rounded, 'Afspelen', () => _StartCache.nieuwSpeler.speel(context, n))],
+      // De vier keuzes van een tik ([speelGetiktNieuw]), hier meteen — je opende het menu al zelf.
+      [
+        for (final k in const [TikKeuze.vervang, TikKeuze.nu, TikKeuze.hierna, TikKeuze.achteraan])
+          MenuRegel(tikKeuzeIcoon(k), tikKeuzeTekst(k), () => _StartCache.nieuwSpeler.speelAls(context, n, k)),
+      ],
       [
         MenuRegel(Icons.album_rounded, n.vanAlbum ? 'Album openen' : 'Single openen',
             () => _openNieuwAlbum(context, n.album, n.artiest)),
@@ -19115,8 +19178,9 @@ class SpeelNuKnop extends StatelessWidget {
             icon: Icon(Icons.play_arrow_rounded, size: grootte),
             color: _accent,
             tooltip: 'Nu afspelen',
-            onPressed: () => speler.speelNummer(context,
-                artiest: artiest, titel: titel, seconden: seconden, album: album, hoesUrl: hoes),
+            // Met een wachtrij eerst het keuzemenu, zoals bij je eigen nummers ([speelGetiktNieuw]).
+            onPressed: () => speelGetiktNieuw(context,
+                artiest: artiest, titel: titel, seconden: seconden, album: album, hoes: hoes),
           ),
         );
       },
@@ -19135,13 +19199,24 @@ class NieuwSpeler extends ChangeNotifier {
   bool bezigMet(String artiest, String titel) => _bezig.contains(_sleutelVan(artiest, titel));
   static String _sleutelVan(String artiest, String titel) => '${normKey(artiest)}|${normKey(titel)}';
 
-  Future<void> speel(BuildContext context, NieuwNummer n) => speelNummer(context,
+  /// Een tik op een nieuw nummer: met een wachtrij eerst het keuzemenu ([speelGetiktNieuw]).
+  Future<void> speel(BuildContext context, NieuwNummer n) => speelGetiktNieuw(context,
       artiest: n.artiest,
       titel: n.titel,
       seconden: n.seconden > 0 ? n.seconden : null,
       sleutelVan: n.sleutel,
       album: n.album.title,
-      hoesUrl: n.album.cover);
+      hoes: n.album.cover);
+
+  /// Meteen zoals [keuze] zegt, zonder te vragen — uit het menu van een nieuw nummer ([_nieuwNummerMenu]).
+  Future<void> speelAls(BuildContext context, NieuwNummer n, TikKeuze keuze) => speelNummer(context,
+      artiest: n.artiest,
+      titel: n.titel,
+      seconden: n.seconden > 0 ? n.seconden : null,
+      sleutelVan: n.sleutel,
+      album: n.album.title,
+      hoesUrl: n.album.cover,
+      keuze: keuze);
 
   /// De hoes achter [url] op 1200 ([deezerHoes1200]), anders zoals hij is. Null als er niets komt.
   static Future<Uint8List?> _hoesVan(String url) async {
@@ -19169,32 +19244,71 @@ class NieuwSpeler extends ChangeNotifier {
   }
 
   /// Dit nummer nu laten klinken — van een nieuwe release, of van de ▶ naast een downloadknop.
+  ///
+  /// [keuze]: wat er met het nummer gebeurt zodra het er is — zie [speelGetiktNieuw]. Alleen [TikKeuze.vervang] (en
+  /// [TikKeuze.vragen], hetzelfde) laat het al klinken terwijl het binnenkomt; de andere wachten tot het geland is
+  /// en zetten het dan nu (met de rest erbij), hierna of achteraan.
   Future<void> speelNummer(BuildContext context,
       {required String artiest,
       required String titel,
       int? seconden,
       String? sleutelVan,
       String? album,
-      String? hoesUrl}) async {
+      String? hoesUrl,
+      TikKeuze keuze = TikKeuze.vervang,
+      VoidCallback? altijdZo}) async {
     final sleutel = sleutelVan ?? _sleutelVan(artiest, titel);
     if (_bezig.contains(sleutel)) return;
     final lib = context.read<LibraryStore>();
     final speler = context.read<PlayerStore>();
+    // Vervangen: wat er nu speelt maakt plaats, en het mag al klinken terwijl het binnenkomt.
+    final vervangt = keuze == TikKeuze.vervang || keuze == TikKeuze.vragen;
+    // Hierna en achteraan zetten iets in de rij en nemen de speler niet over.
+    final zetInRij = keuze == TikKeuze.hierna || keuze == TikKeuze.achteraan;
     // **De laatste tik wint.** Een haal kan een minuut duren; tikte je intussen een ander nummer aan, of
     // ging je zelf iets anders spelen, dan neemt dit nummer de speler niet meer over — het komt gewoon in
     // je bibliotheek. Gezien op de pc (20-10-2026): U2 landde na 69 s en onderbrak Angèle, die later
-    // aangetikt was en al speelde.
-    final mijnTik = ++_tikken;
+    // aangetikt was en al speelde. Hierna of achteraan neemt de speler niet over en telt dus niet als tik.
+    final mijnTik = zetInRij ? _tikken : ++_tikken;
     final downloads = lib.remote == null ? context.read<DownloadManager>() : null;
     // Wat deze tik zelf laat klinken (een groeistroom) telt niet als "zelf iets anders gekozen".
     var keuzes = speler.keuzes;
     bool magNog() => mijnTik == _tikken && speler.keuzes == keuzes;
     final online = context.read<OnlineService>();
     final instellingen = context.read<AppSettings>();
-    // Al binnen (eerder opgehaald, of je had hem al): gewoon spelen.
+    // Het gelande (of al aanwezige) nummer, zoals [keuze] het wil. Niet bij vervangen: daar beslist de staart
+    // hieronder, die ook weet of het al klinkt.
+    void zetNaarKeuze(Track t) {
+      switch (keuze) {
+        case TikKeuze.nu:
+          unawaited(speler.speelNuMetRest(t));
+        case TikKeuze.hierna:
+          speler.speelHierna([t]);
+        case TikKeuze.achteraan:
+          speler.zetAchteraan([t]);
+        case TikKeuze.vervang:
+        case TikKeuze.vragen:
+          speler.playQueue([t], 0);
+      }
+    }
+
+    // De eerste melding draagt "Altijd zo" als de keuze net uit het menu kwam (zie [speelGetikt]).
+    void eerste(String m) {
+      final az = altijdZo;
+      if (az == null) return _srcToast(context, m);
+      ScaffoldMessenger.maybeOf(context)
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+            content: Text(m),
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(label: 'Altijd zo', onPressed: az)));
+    }
+
+    // Al binnen (eerder opgehaald, of je had hem al): meteen zoals gevraagd.
     final eigen = lib.ownedTrack(artiest, titel);
     if (eigen != null) {
-      speler.playQueue([eigen], 0);
+      zetNaarKeuze(eigen);
+      if (!vervangt || altijdZo != null) eerste('"$titel" ${gelandTekst(keuze)}');
       return;
     }
     // Op de pc haalt hij zelf, zoals de radio: Soulseek en de keuring van de radio.
@@ -19217,14 +19331,18 @@ class NieuwSpeler extends ChangeNotifier {
       // 20-10-2026: "ik zou in dit geval misschien enkel gebruik maken van soulseek"). Gemeten: de
       // TorBox-stap vooraf kostte bij een misser ±3 s (een torrentzoektocht), en bij een treffer 5,8 s tot
       // geluid — terwijl Soulseek met een vlotte uploader binnen een paar tellen klinkt.
-      if (lib.remote == null && instellingen.vroegLuisteren) {
-        _srcToast(context, 'Zoeken op Soulseek: "$titel"…');
+      if (!vervangt) {
+        // Op de achtergrond: wat er nu speelt, blijft spelen. TorBox vooraf slaat hij over — dat is een stroom
+        // die alleen nu kan klinken, geen nummer voor in de rij.
+        eerste('"$titel" wordt gehaald — ${naLandenTekst(keuze)}');
+      } else if (lib.remote == null && instellingen.vroegLuisteren) {
+        eerste('Zoeken op Soulseek: "$titel"…');
       } else if (lib.remote == null) {
         // Eerst wat TorBox al klaar heeft: dat speelt binnen seconden. Alleen torrents dus — en voor een
         // single van drie dagen oud is er meestal nog geen. Gemeten op de pc (19-10-2026): een tik op
         // "WALK ON WATER" van Timbaland zocht een minuut en speelde niets ("Geen bron gevonden"). Dan
         // haalt de pc hem, net als de radio en net als voor de gsm, en blijft hij in je bibliotheek.
-        _srcToast(context, 'Bron voorbereiden voor $titel…');
+        eerste('Bron voorbereiden voor $titel…');
         final url = await online.resolveRadio(artiest, titel);
         if (url != null) {
           speler.playUrl(url, title: titel, artist: artiest);
@@ -19232,7 +19350,7 @@ class NieuwSpeler extends ChangeNotifier {
         }
         if (context.mounted) _srcToast(context, 'Niet klaar bij TorBox — de pc haalt "$titel" op…');
       } else {
-        _srcToast(context, 'Je pc haalt "$titel" op…');
+        eerste('Je pc haalt "$titel" op…');
       }
       final fout = await bron.begin();
       if (fout != null) {
@@ -19247,7 +19365,9 @@ class NieuwSpeler extends ChangeNotifier {
           : null;
       var klaar = false;
       var klinkt = false;
-      if (vroeg != null) {
+      // De groei ook als het niet meteen klinkt: dat is de snelle weg (wedloop, los van de radio, daarna een
+      // betere kopie), net als een haal van een toestel dat niet meeluistert (`radiohaler.dart`).
+      if (vroeg != null && vervangt) {
         vroeg.zalKlinken();
         unawaited(vroeg.speelbaar.then((kan) {
           if (!kan || klaar || !magNog()) return;
@@ -19291,7 +19411,7 @@ class NieuwSpeler extends ChangeNotifier {
             t = vroeg != null
                 ? await (bron as EigenRadiobron).haal(plek, vroeg: vroeg, zoekBeter: true, los: true)
                 : bron is PcRadiobron
-                    ? await bron.haal(plek, zoekBeter: true, klinkt: klinktOpPc)
+                    ? await bron.haal(plek, zoekBeter: true, klinkt: vervangt ? klinktOpPc : null)
                     : await bron.haal(plek);
           } on AlVanJou catch (e) {
             t = e.nummer;
@@ -19303,7 +19423,7 @@ class NieuwSpeler extends ChangeNotifier {
         klaar = true;
         // Soulseek had niets: dan alsnog wat TorBox klaar heeft (alleen met de proef aan, want anders is
         // TorBox hierboven al gevraagd).
-        if (t == null && vroeg != null && magNog()) {
+        if (t == null && vroeg != null && vervangt && magNog()) {
           final url = await online.resolveRadio(artiest, titel);
           if (url != null && magNog()) {
             speler.playUrl(url, title: titel, artist: artiest);
@@ -19328,7 +19448,16 @@ class NieuwSpeler extends ChangeNotifier {
               .then((_) {}, onError: (_) {}));
         }
         final klinkendAdres = vroeg?.adres ?? elders?.pad;
-        if (klinkendAdres != null && klinkt && opende(klinkendAdres)) {
+        if (!vervangt) {
+          // Nu met de rest erbij neemt de speler over, dus alleen als je intussen niets anders koos; hierna en
+          // achteraan zetten het er gewoon bij.
+          if (zetInRij || magNog()) {
+            zetNaarKeuze(t);
+            if (context.mounted) _srcToast(context, '"$titel" is er — ${gelandTekst(keuze)}');
+          } else if (context.mounted) {
+            _srcToast(context, '"$titel" staat nu in je bibliotheek');
+          }
+        } else if (klinkendAdres != null && klinkt && opende(klinkendAdres)) {
           // Het klinkt al: niets opnieuw openen. In de rij wordt het je eigen nummer (hoes, kwaliteit,
           // duimen); mpv speelt door uit het geheugen van de groeistroom. Koos je intussen iets anders,
           // dan blijft dat spelen.
@@ -26554,11 +26683,15 @@ class _AlbumInfoPanelState extends State<AlbumInfoPanel> {
 
 // ── Stremio-style online browse: artist → albums → tracks → sources ──────────
 /// De bekendste nummers van een artiest die je nog niet hebt (Last.fm), met het aantal luisteraars en ▶ ([SpeelNuKnop]:
-/// halen en meteen laten klinken; daarna staat het in je bibliotheek).
+/// halen en laten klinken; daarna staat het in je bibliotheek). Een tik op de regel doet hetzelfde als ▶: met een
+/// wachtrij eerst het keuzemenu ([speelGetiktNieuw]).
 class _BekendNietVanJou extends StatelessWidget {
-  const _BekendNietVanJou({required this.nummers, required this.marge});
+  const _BekendNietVanJou({required this.nummers, required this.marge, this.opDeezer = const {}});
   final List<LastfmTopper> nummers;
   final double marge;
+
+  /// Album, hoes en lengte bij Deezer, op [eigenSleutel] — zolang die er niet zijn, zonder.
+  final Map<String, RecTrack> opDeezer;
 
   @override
   Widget build(BuildContext context) {
@@ -26568,16 +26701,26 @@ class _BekendNietVanJou extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           for (final (i, n) in nummers.indexed)
-            Row(children: [
-              SpeelNuKnop(artiest: n.artiest, titel: n.titel),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text('${i + 1}. ${n.titel}',
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
-              ),
-              const SizedBox(width: 10),
-              Text('${metPunten(n.luisteraars)} luisteraars', style: TextStyle(color: _muted, fontSize: 12)),
-            ]),
+            Builder(builder: (context) {
+              final d = opDeezer[eigenSleutel(n.artiest, n.titel)];
+              final seconden = d == null || d.seconds <= 0 ? null : d.seconds;
+              final album = d == null || d.album.isEmpty ? null : d.album;
+              return InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => speelGetiktNieuw(context,
+                    artiest: n.artiest, titel: n.titel, seconden: seconden, album: album, hoes: d?.cover),
+                child: Row(children: [
+                  SpeelNuKnop(artiest: n.artiest, titel: n.titel, seconden: seconden, album: album, hoes: d?.cover),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text('${i + 1}. ${n.titel}',
+                        maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
+                  ),
+                  const SizedBox(width: 10),
+                  Text('${metPunten(n.luisteraars)} luisteraars', style: TextStyle(color: _muted, fontSize: 12)),
+                ]),
+              );
+            }),
         ],
       ),
     );
@@ -26720,6 +26863,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
   /// De bekendste nummers van Last.fm die je van deze artiest nog niet hebt — zie [bekendeNummersDieJeMist].
   List<LastfmTopper> _lastfmTop = const [];
+
+  /// Hetzelfde nummer bij Deezer (album, hoes, lengte), op [eigenSleutel] — zie [_loadLastfmTop].
+  Map<String, RecTrack> _lastfmOpDeezer = const {};
 
   /// De scroller van deze pagina: het glas achter de zwevende balk komt op naarmate je scrolt.
   final _rol = ScrollController();
@@ -27356,7 +27502,24 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           if (artistKey(t.artist) == zelf) t,
       ];
       final mis = bekendeNummersDieJeMist(top, van);
-      if (mis.isNotEmpty) setState(() => _lastfmTop = mis);
+      if (mis.isEmpty) return;
+      setState(() => _lastfmTop = mis);
+      // Album, hoes en lengte bij Deezer: Last.fm geeft geen album mee, en zonder album zoekt Nu speelt de achterkant
+      // en de cd pas als het nummer geland is (Saber, 22-10-2026, Anouk — Lost: "man wat duurde het weer lang eer die
+      // afbeelding van de cd laade"). Hoogstens tien zoekvragen, met de naamcontrole van de radio ([besteTreffer]).
+      final rec = RecommendService();
+      final gevonden = await Future.wait([
+        for (final n in mis)
+          rec
+              .lijstOpDeezer([AiNummer(n.artiest, n.titel)],
+                  elders: _itunesVoorModel, eldersNaam: 'iTunes', van: 'Last.fm')
+              .then<RecTrack?>((l) => l.firstOrNull, onError: (Object _) => null),
+      ]);
+      if (!mounted || naam != widget.artist.name) return;
+      setState(() => _lastfmOpDeezer = {
+            for (final (i, n) in mis.indexed)
+              if (gevonden[i] case final t?) eigenSleutel(n.artiest, n.titel): t,
+          });
     } catch (_) {/* een pagina zonder deze rij is nog steeds een goede pagina */}
   }
 
@@ -27687,7 +27850,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           ],
           if (_lastfmTop.isNotEmpty) ...[
             SliverToBoxAdapter(child: _sectionTitle('Bekend, nog niet van jou', 'Last.fm')),
-            SliverToBoxAdapter(child: _BekendNietVanJou(nummers: _lastfmTop, marge: _marge)),
+            SliverToBoxAdapter(
+                child: _BekendNietVanJou(nummers: _lastfmTop, opDeezer: _lastfmOpDeezer, marge: _marge)),
           ],
           if (_busy)
             SliverToBoxAdapter(

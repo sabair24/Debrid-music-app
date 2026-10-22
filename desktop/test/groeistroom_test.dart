@@ -512,14 +512,16 @@ void main() {
       expect(main, contains("artiest: t.artist.isEmpty ? widget.artistName : t.artist,"), reason: 'een albumpagina');
       expect(main, contains('artiest: widget.artiest, titel: s.title, seconden: s.seconds, grootte: 20, album: widget.tags?.album),'),
           reason: 'een ontbrekend nummer van een album dat je hebt');
-      expect(main, contains('artiest: artiest, titel: titel, seconden: seconden, album: album, hoesUrl: hoes),'));
+      expect(main, contains('artiest: artiest, titel: titel, seconden: seconden, album: album, hoes: hoes),'));
+      expect(main, contains('      hoesUrl: hoes,\n      keuze: k,'), reason: 'via het keuzemenu, met album en hoes');
       // De hoes tijdens het streamen (20-10-2026): het album gaat mee, en de hoes staat er zodra het klinkt.
       expect(main, contains("speler.playUrl(vroeg.adres, title: titel, artist: artiest, album: album ?? '');"));
       expect(main, contains('toonHoes(vroeg.adres);'));
       expect(main, contains('toonHoes(g.pad);'));
       expect(main, contains('hoes: widget.album.cover),'), reason: 'een albumpagina, met de hoes van de uitgave');
-      expect(main, contains('Future<void> speel(BuildContext context, NieuwNummer n) => speelNummer(context,'),
-          reason: 'een nieuw nummer gaat door dezelfde functie');
+      expect(main, contains('Future<void> speel(BuildContext context, NieuwNummer n) => speelGetiktNieuw(context,'),
+          reason: 'een nieuw nummer gaat door hetzelfde menu');
+      expect(main, contains('  await _StartCache.nieuwSpeler.speelNummer(context,'), reason: 'en daarna dezelfde functie');
     });
 
     test('de vroege start is een wedloop: dertig tegelijk vanaf de start, de eerste wint', () {
@@ -600,7 +602,9 @@ void main() {
       final main = File('lib/main.dart').readAsStringSync();
       final speel = main.substring(main.indexOf('class NieuwSpeler'), main.indexOf('File get _nieuwOpToestel'));
       expect(speel, contains('if (lib.remote == null && instellingen.vroegLuisteren) {'));
-      expect(speel.indexOf('if (t == null && vroeg != null && magNog()) {'), greaterThan(speel.indexOf('for (var ronde = 0;')));
+      expect(speel.indexOf('if (t == null && vroeg != null && vervangt && magNog()) {'),
+          greaterThan(speel.indexOf('for (var ronde = 0;')),
+          reason: 'TorBox is een stroom die alleen nu kan klinken: niet voor hierna of achteraan');
     });
   });
 

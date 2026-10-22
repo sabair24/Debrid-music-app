@@ -393,7 +393,8 @@ void main() {
     test('▶ op een toestel: laten klinken zodra de pc het meldt, en na het landen je eigen nummer', () {
       final m = File('lib/main.dart').readAsStringSync();
       final s = m.substring(m.indexOf('  Future<void> speelNummer(BuildContext context,'));
-      expect(s, contains('? await bron.haal(plek, zoekBeter: true, klinkt: klinktOpPc)'));
+      expect(s, contains('? await bron.haal(plek, zoekBeter: true, klinkt: vervangt ? klinktOpPc : null)'),
+          reason: 'hierna of achteraan: op de achtergrond, niet al laten klinken');
       expect(s, contains('speler.groeitElders(g.pad, g);'));
       expect(s, contains("speler.playUrl(g.pad, title: titel, artist: artiest, album: album ?? '');"));
       expect(s, contains('elders?.geborgen = t.path;'));

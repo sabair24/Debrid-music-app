@@ -17,7 +17,8 @@ void main() {
     final bekend = main.indexOf("_sectionTitle('Bekend, nog niet van jou', 'Last.fm')");
     final disco = main.indexOf("mine.isEmpty ? 'Discografie' : 'Volledige discografie'");
     expect(eigen < bekend && bekend < disco, isTrue);
-    expect(main, contains('SpeelNuKnop(artiest: n.artiest, titel: n.titel),'), reason: 'halen en meteen laten klinken');
+    expect(main, contains('SpeelNuKnop(artiest: n.artiest, titel: n.titel, seconden: seconden, album: album, hoes: d?.cover),'),
+        reason: 'halen en laten klinken, met album en hoes van Deezer');
   });
 
   test('het startscherm: "Vroeger veel gespeeld, nog niet van jou" uit je geschiedenis, opgezocht met hoes', () {
