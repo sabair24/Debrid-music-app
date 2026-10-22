@@ -46,6 +46,19 @@ class Radiodeezer {
   final Future<List<RecTrack>> Function(int id, String naam, int limit, int index) toppers;
 }
 
+/// Het taalmodel voor de bijvuller (uitlevering 2): een vervolglijst als de buurt niets nieuws meer geeft.
+/// Functies, zodat een toets hem zonder sleutel invult; het budget zit in [mag] (zie `modelbudget.dart`).
+class Radiomodel {
+  const Radiomodel({required this.mag, required this.lijst});
+
+  /// Mag deze radio nu een lijst vragen — en zo niet, waarom (voor het logboek).
+  final ({bool mag, String? waarom}) Function() mag;
+
+  /// Een lijst van het model, al opgezocht bij Deezer en tot plekken gemaakt (met het plafond per
+  /// artiest). [alGekozen]: wat er al op de radio staat, recentste eerst; [dieper]: niet de eerste keer.
+  final Future<List<Radioplek>> Function({required List<String> alGekozen, required bool dieper}) lijst;
+}
+
 /// Hoeveel toppers er per keer per artiest opgehaald worden. Eén verzoek; meestal genoeg voor de hele
 /// radio, want er mogen er per artiest toch maar drie tegelijk in.
 const int kToppersPerBlad = 25;
@@ -68,6 +81,8 @@ class Radiobijvuller {
     required this.maakPlan,
     this.keurEigen,
     this.reserveKandidaten,
+    this.model,
+    this.vraagSfeer,
     this.spoor,
     DateTime Function()? klok,
     Random? toeval,
@@ -92,6 +107,13 @@ class Radiobijvuller {
 
   /// Eigen nummers voor de reserve, bij deze artiesten ([artiestSleutel]s).
   final List<Track> Function(Set<String> artiesten)? reserveKandidaten;
+
+  /// Het model, als er een sleutel is: een vervolglijst als de buurt niets nieuws gaf. Null: zoals voorheen.
+  final Radiomodel? model;
+
+  /// Een sfeeroordeel vragen over wat een ronde voorstelt — `_Radiokeuring.vraagSfeer`, die zelf over het
+  /// budget beslist. De keuring wacht er per plek op, zoals bij de start. Null: geen model.
+  final void Function(List<Radioplek> plekken)? vraagSfeer;
 
   final void Function(String regel)? spoor;
   final DateTime Function() _klok;
@@ -141,7 +163,13 @@ class Radiobijvuller {
     final herkanst = radio.herkans(sessie, ronde: ronde);
     final r = await _buren(sessie, ronde);
     if (sessie != radio.sessie || ronde != radio.bijvulRonde) return 0;
-    final n = r.nieuw + herkanst;
+    // Niets nieuws uit de buurt (op, aan het plafond, of Deezer zweeg): het model, als het mag.
+    ({int nieuw, String wat})? m;
+    if (r.nieuw == 0 && model != null) {
+      m = await _model(sessie, ronde);
+      if (sessie != radio.sessie || ronde != radio.bijvulRonde) return 0;
+    }
+    final n = r.nieuw + herkanst + (m?.nieuw ?? 0);
     // Niets nieuws, en het wordt krap: dan herhalen, in dezelfde ronde. Niet bij nood: dan heeft de
     // noodvulling van de radio al gezorgd (reserve of herhalen), en kwamen er anders in één keer twee
     // reservenummers plus twee herhalingen (tweede beoordeling van 08-10-2026).
@@ -149,8 +177,13 @@ class Radiobijvuller {
     if (n == 0 && !v.nood && v.verwacht < 3 && v.reserveKlaar == 0) {
       herhaald = radio.voegHerhalingBij(sessie, 2);
     }
-    spoor?.call('radio-bijvul #$ronde [${r.op ? 'herhaal' : 'buren'}] vooruit≈${v.verwacht.toStringAsFixed(1)}'
-        '${v.nood ? ' NOOD' : ''}: ${r.wat}'
+    final trap = (m?.nieuw ?? 0) > 0
+        ? 'model'
+        : r.op
+            ? 'herhaal'
+            : 'buren';
+    spoor?.call('radio-bijvul #$ronde [$trap] vooruit≈${v.verwacht.toStringAsFixed(1)}'
+        '${v.nood ? ' NOOD' : ''}: ${r.wat}${m == null ? '' : ' · ${m.wat}'}'
         '${herkanst > 0 ? ' · $herkanst opnieuw geprobeerd' : ''}'
         '${herhaald > 0 ? ' · $herhaald herhaald' : ''}');
     // Alleen zeggen wat er werkelijk gebeurt: herhaald → zeggen; iets nieuws → weer gewoon.
@@ -211,6 +244,9 @@ class Radiobijvuller {
       final plekken = maakPlan(recs);
       halen.addAll([for (final p in plekken) if (p.eigen == null) p]);
       eigen.addAll(nieuweNakomers(radio.plan, [for (final p in plekken) if (p.eigen != null) p]));
+      // Ook de buurt op sfeer, als er een model is: `/related` van Niels is Vlaamse pop, maar niet elk
+      // nummer van elke buur past in een radio vanaf "Vuur en vlam" — zie `radiosfeer.dart`.
+      vraagSfeer?.call([...halen, ...eigen]);
     }
     // Achteraan: dit is aanvulling, en mag de startlijst niet verdringen — zie [RadioBesturing.voegBij].
     final n = radio.voegBij(sessie, halen, ronde: ronde, achteraan: true);
@@ -223,6 +259,33 @@ class Radiobijvuller {
             '${eigen.isEmpty ? '' : ' + ${eigen.length} van jou (keuring)'}'
             '${op ? ' — de buurt is nu op' : ''}';
     return (nieuw: n + eigen.length, wat: wat, op: op && n + eigen.length == 0);
+  }
+
+  /// Hoeveel vervolglijsten deze radio al kreeg: vanaf de tweede vraagt hij het model dieper te graven.
+  int _modelLijsten = 0;
+
+  /// De modeltrap: een vervolglijst van het model, als het budget het toelaat. Wat het model koos gaat zonder
+  /// sfeervraag door (dat koos het al op sfeer); eigen nummers eerst door de keuring, zoals overal.
+  Future<({int nieuw, String wat})> _model(int sessie, int ronde) async {
+    final m = model!;
+    final b = m.mag();
+    if (!b.mag) return (nieuw: 0, wat: 'model overgeslagen — ${b.waarom}');
+    final alGekozen = [for (final p in radio.plan.reversed) '${p.artiest} - ${p.titel}'];
+    List<Radioplek> plekken;
+    try {
+      plekken = await m.lijst(alGekozen: alGekozen, dieper: _modelLijsten++ > 0);
+    } catch (e) {
+      return (nieuw: 0, wat: 'het model gaf niets — $e');
+    }
+    if (sessie != radio.sessie || ronde != radio.bijvulRonde) return (nieuw: 0, wat: 'ingehaald');
+    final halen = [for (final p in plekken) if (p.eigen == null) p];
+    final eigen = nieuweNakomers(radio.plan, [for (final p in plekken) if (p.eigen != null) p]);
+    final n = radio.voegBij(sessie, halen, ronde: ronde, achteraan: true);
+    if (eigen.isNotEmpty) unawaited(_keurEnVoegBij(sessie, eigen));
+    return (
+      nieuw: n + eigen.length,
+      wat: 'model: ${plekken.length} gevonden → $n te halen${eigen.isEmpty ? '' : ' + ${eigen.length} van jou (keuring)'}'
+    );
   }
 
   /// Heeft artiest [id] niets meer: alle bladen gehaald en alles aangeboden.

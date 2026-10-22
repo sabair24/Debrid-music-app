@@ -261,6 +261,8 @@ class AiService {
     List<String> alGekozen = const [],
     List<({String artiest, String titel})> pastNiet = const [],
     List<({String artiest, String titel})> pastWel = const [],
+    void Function()? perAanroep,
+    bool dieper = false,
   }) async {
     final sleutel = sleutelVan().trim();
     if (sleutel.isEmpty || artiest.trim().isEmpty) return const [];
@@ -269,8 +271,10 @@ class AiService {
     // gemeten is en niet geraden.
     var beste = const <AiNummer>[];
     for (var poging = 0; poging < 2; poging++) {
+      // Elke aanroep telt voor het budget, ook de tweede — zie `modelbudget.dart`.
+      perAanroep?.call();
       final uit = await _radiolijstEenmaal(
-          sleutel, artiest, titel, jaar, stijlen, genre, profiel, smaak, alGekozen, pastNiet, pastWel);
+          sleutel, artiest, titel, jaar, stijlen, genre, profiel, smaak, alGekozen, pastNiet, pastWel, dieper);
       if (uit.length > beste.length) beste = uit;
       if (beste.length >= kMinModelNummers) break;
     }
@@ -291,7 +295,8 @@ class AiService {
       Radiosmaak smaak,
       List<String> alGekozen,
       List<({String artiest, String titel})> pastNiet,
-      List<({String artiest, String titel})> pastWel) async {
+      List<({String artiest, String titel})> pastWel,
+      bool dieper) async {
     final body = await _verstuur(
       {
         'model': kRadioModel,
@@ -313,7 +318,8 @@ class AiService {
                 smaak: smaak,
                 alGekozen: alGekozen,
                 pastNiet: pastNiet,
-                pastWel: pastWel),
+                pastWel: pastWel,
+                dieper: dieper),
           }
         ],
       },
@@ -321,7 +327,20 @@ class AiService {
       werkruimteVan().trim(),
     );
     laatsteStop = body is Map ? body['stop_reason']?.toString() : null;
+    _meldGebruik('lijst', body);
     return leesNummers(jsonUitAntwoord(body));
+  }
+
+  /// Hoeveel een vraag kostte (`usage` van de API), voor het radiologboek: `radio-model: lijst, 2140 in /
+  /// 3880 uit tokens`. Gezet door wie het wil weten.
+  void Function(String soort, int inTokens, int uitTokens)? bijGebruik;
+
+  void _meldGebruik(String soort, Object? body) {
+    final f = bijGebruik;
+    if (f == null || body is! Map || body['usage'] is! Map) return;
+    final u = body['usage'] as Map;
+    final inT = u['input_tokens'], uitT = u['output_tokens'];
+    f(soort, inT is int ? inT : 0, uitT is int ? uitT : 0);
   }
 
   /// Welke van [kandidaten] breken de sfeer van het zaad? De indexen (vanaf 0). Zie [sfeerPrompt].
@@ -364,6 +383,7 @@ class AiService {
       sleutel,
       werkruimteVan().trim(),
     );
+    _meldGebruik('sfeer', body);
     return leesSfeer(jsonUitAntwoord(body), kandidaten.length);
   }
 

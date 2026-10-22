@@ -166,6 +166,17 @@ String _smaakZin(Radiosmaak smaak) => switch (smaak) {
             'artiesten uit dezelfde scene die weinig mensen nog kennen.',
     };
 
+/// Hoeveel nummers die al op de radio staan het model te zien krijgt (de recentste). Was 60: genoeg bij de
+/// start, te weinig voor een radio die uren loopt en het model om een vervolglijst vraagt.
+const int kModelAlGekozen = 150;
+
+/// Bij een vervolglijst (onderweg, als de buurt op is): verder kijken dan de voor de hand liggende keuzes —
+/// die staan er al — en alleen titels die zeker bestaan; 24 van de 25 "niet gevonden" bij de start op
+/// 08-10-2026 waren verzonnen.
+const String kDieperZin = 'Dit is een vervolglijst: de voor de hand liggende nummers staan er al. Kijk verder in '
+    'dezelfde scene en dezelfde jaren - minder bekende singles en artiesten van hetzelfde soort - maar noem '
+    'alleen titels waarvan je zeker weet dat ze bestaan.';
+
 /// De vraag aan het model.
 ///
 /// [stijlen] en [jaar] komen van Discogs (de uitgave van het zaadnummer), [genre] van TheAudioDB —
@@ -181,6 +192,7 @@ String nummersPrompt({
   List<String> alGekozen = const [],
   List<({String artiest, String titel})> pastNiet = const [],
   List<({String artiest, String titel})> pastWel = const [],
+  bool dieper = false,
 }) {
   final zaad = titel == null || titel.trim().isEmpty ? artiest : '$artiest - $titel';
   final feiten = [
@@ -201,7 +213,7 @@ ${_smaakZin(smaak)}
 
 Altijd de originele of de radioversie: geen remixen, extended mixes, covers, live-opnames of
 karaoke. Hoogstens twee nummers van $artiest zelf, en hoogstens twee per andere artiest.
-${alGekozen.isEmpty ? '' : '\nDeze staan al op de radio, noem ze niet opnieuw: ${alGekozen.take(60).join('; ')}\n'}${_voorbeeldZinnen(pastNiet, pastWel)}
+${alGekozen.isEmpty ? '' : '\nDeze staan al op de radio, noem ze niet opnieuw: ${alGekozen.take(kModelAlGekozen).join('; ')}\n'}${dieper ? '\n$kDieperZin\n' : ''}${_voorbeeldZinnen(pastNiet, pastWel)}
 Wat ik van de luisteraar weet - alleen om "bekend" in te vullen, niet om de stijl te kiezen:
 - Meest in zijn kast: ${profiel.topArtiesten.take(25).join(', ')}
 - Recent gedraaid: ${profiel.gespeeld.take(10).join(', ')}
