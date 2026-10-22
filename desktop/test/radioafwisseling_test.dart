@@ -211,6 +211,16 @@ void main() {
       expect(nooitOpRadio('Freed From Desire (Karaoke Version)'), isTrue);
       expect(nooitOpRadio('Mr. Vain (Tribute to Culture Beat)'), isTrue);
     });
+
+    // Gemeten op 22-10-2026: het enige rommelnummer van 80 doorgelaten nummers.
+    test('de versie zonder zang: orkestband, instrumental — maar alleen als staart', () {
+      expect(nooitOpRadio('Ik Ga Zwemmen (Orkestband)'), isTrue);
+      expect(nooitOpRadio('Dromen Zijn Bedrog (Instrumental)'), isTrue);
+      expect(nooitOpRadio('Laat Me Nu Toch Niet Alleen (Instrumentaal)'), isTrue);
+      expect(nooitOpRadio('Freak Out (Backing Track)'), isTrue);
+      expect(nooitOpRadio('Instrumental Love'), isFalse, reason: 'in de titel zelf is het gewoon een woord');
+      expect(nooitOpRadio('Children (Dream Version)'), isFalse);
+    });
   });
 
   group('namen splitsen en vergelijken', () {
