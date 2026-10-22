@@ -63,7 +63,8 @@ class Renderer {
         'host': host,
         'model': model,
         'manufacturer': manufacturer,
-        'kind': isSonos ? 'sonos' : 'upnp',
+        // Een KEF die via zijn eigen API speelt (kef.dart): 'kef'. Alleen 'shield' wordt ergens gelezen.
+        'kind': isSonos ? 'sonos' : (avTransportUrl.startsWith('kef://') ? 'kef' : 'upnp'),
         if (udn.isNotEmpty) 'udn': udn,
         'maxSampleRate': maxSampleRate,
         'maxBitDepth': maxBitDepth,

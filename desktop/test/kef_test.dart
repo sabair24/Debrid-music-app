@@ -236,6 +236,7 @@ void main() {
       expect(await api.model(), 'SP4025');
       api.sluit();
       expect(isKef(r), isTrue);
+      expect(r.toJson()['kind'], 'kef');
       expect(r.id, '127.0.0.1');
     });
   });
