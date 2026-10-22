@@ -57,18 +57,43 @@ void main() {
     // Saber, 21-10-2026: "over het algemeen wil ik theaudioDB voor de hoezen, voorkant, cd en achterkant, maar
     // vooral de achterkant zit er niet altijd bij … een vangnet … musicbrainz of discogs, wie de hoogste
     // resolutie heeft".
-    test('aangesloten: TheAudioDB eerst voor cd én achterkant; het vangnet is het scherpste van archief en Discogs', () {
+    test('aangesloten: TheAudioDB eerst voor cd én achterkant; de achterkant daarna de scherpste van archief en Discogs', () {
       final d = File('lib/discogs.dart').readAsStringSync();
       expect(d, contains('back: saidBack ?? tadb?.back ?? found.back,'));
-      expect(d, contains('disc: saidDisc ?? tadb?.disc ?? found.disc,'));
       expect(d, contains('(saidBack != null || tadb?.back != null || scherp(found.back)) &&'),
           reason: 'pas klaar als TheAudioDB het had, of het archief al scherp genoeg was');
       expect(d, contains('back: grootsteBeeld(caa?.back, at(guessed.back)),'));
-      expect(d, contains('disc: grootsteBeeld(caa?.disc, disc),'));
       expect(d, contains('final voor = grootsteBeeld(caa?.front, at(guessed.front));'));
       // Tegelijk met het archief gevraagd, niet erna.
       final keten = d.substring(d.indexOf('    final tadbF ='));
-      expect(keten.indexOf('final exactF ='), lessThan(keten.indexOf('tadb = await tadbF;')));
+      expect(keten.indexOf('final exactF ='), lessThan(keten.indexOf('tadb = await Future.any([')));
+    });
+
+    // Saber, 22-10-2026: "ik zou eerder the audiodb nemen voor de afbeelding van cd, die staat er direct, en is meestal
+    // de mooiste en hoogste res, dan discogs en dan de rest".
+    test('aangesloten: de cd van TheAudioDB, dan Discogs, dan het archief — niet meer de scherpste', () {
+      final d = File('lib/discogs.dart').readAsStringSync();
+      expect(d, contains('disc: saidDisc ?? tadb?.disc ?? discogsCd ?? found.disc,'));
+      expect(d, contains('(saidDisc != null || tadb?.disc != null || discogsCd != null || scherp(found.disc));'),
+          reason: 'een cd van Discogs is genoeg: niet meer op het archief wachten (Anouk — Girl: 35–77 s)');
+      expect(d, contains('disc: disc ?? caa?.disc,'));
+      expect(d, isNot(contains('disc: grootsteBeeld(caa?.disc, disc),')));
+      final keten = d.substring(d.indexOf('    tadb = await Future.any(['));
+      expect(keten, contains('discogsCd = disc;'));
+      // Elk vroeg antwoord met een cd uit het archief wacht eerst even op die van Discogs.
+      expect('await wachtOpDiscogsCd();'.allMatches(keten).length, 3);
+      expect(keten.indexOf('await wachtOpDiscogsCd();'), lessThan(keten.indexOf('final art = said(exact);')));
+    });
+
+    test('aangesloten: Discogs wacht niet op een TheAudioDB die zwijgt (live: 16,7 s en dan niets)', () {
+      final d = File('lib/discogs.dart').readAsStringSync();
+      final keten = d.substring(d.indexOf('    tadb = await Future.any(['));
+      expect(keten, contains('Future<({Uint8List? back, Uint8List? disc})?>.delayed(kTadbGeduld, () => null),'));
+      expect(keten.indexOf('final discogsVoorafF ='), lessThan(keten.indexOf('      tadb = await tadbF;')),
+          reason: 'Discogs begint al terwijl TheAudioDB nog zoekt');
+      expect(keten.indexOf('if (discogsBeeldenF != null) {'), lessThan(keten.indexOf('      tadb = await tadbF;')),
+          reason: 'en zijn tussenstand wacht er evenmin op');
+      expect(keten, contains('      tadb = await tadbF;\n      tadbTussen();'), reason: 'komt TheAudioDB later, dan wint zijn cd');
     });
 
     test('de grootste achterkant wint; bij gelijke maat het archief of Discogs (live: ANTI 540×475 tegen 700×700)', () {
@@ -91,9 +116,14 @@ void main() {
 
     test('aangesloten: een tussenstand zodra TheAudioDB antwoordt (live: 0,23 s tegen 5,8–10,8 s voor de keten)', () {
       final d = File('lib/discogs.dart').readAsStringSync();
-      final keten = d.substring(d.indexOf('    tadb = await tadbF;'));
+      final keten = d.substring(d.indexOf('    tadb = await Future.any(['));
       expect(keten.indexOf('tussen(said(const ReleaseArt()));'), lessThan(keten.indexOf('final exact = await exactF;')),
           reason: 'vóór het archief, niet erna');
+      // En die van Discogs ook (22-10-2026, Anouk — Girl: Discogs had 4 beelden, het archief deed er 35–77 s over).
+      final discogs = keten.indexOf('tussen(said(ReleaseArt(back: back, disc: disc)));');
+      expect(discogs, greaterThan(0));
+      expect(discogs, lessThan(keten.indexOf('final exact = await exactF;')));
+      expect(discogs, lessThan(keten.indexOf('await _artFromMusicBrainz(artist, album, expectedTracks)')));
       expect(d, contains('if (tussenstand != null) (_artTussen[lane] ??= []).add(tussenstand);'),
           reason: 'ook wie meelift op een keten die al loopt');
       final m = File('lib/main.dart').readAsStringSync();
@@ -104,7 +134,7 @@ void main() {
 
     test('aangesloten: Discogs zoekt al naast het archief als TheAudioDB geen cd heeft (live: archief 4,1–4,6 s)', () {
       final d = File('lib/discogs.dart').readAsStringSync();
-      final keten = d.substring(d.indexOf('    tadb = await tadbF;'));
+      final keten = d.substring(d.indexOf('    tadb = await Future.any(['));
       final vooraf = keten.indexOf('final discogsVoorafF = !freeOnly && pinned == null && !enough(const ReleaseArt())');
       expect(vooraf, greaterThan(0),
           reason: 'niet voor de opwarmer, niet bij een aangewezen persing, niet als TheAudioDB cd en achterkant al had');
