@@ -35,6 +35,9 @@ class SpeakerRadio extends ChangeNotifier implements Radiospeler {
   /// Het renderer-id van de speaker.
   final String speaker;
 
+  /// Is [zoneId] de zone van deze speaker (`spk:<id>`, zie `lan/zones.dart`)? Dan gaan de duimen daar over deze radio.
+  bool speeltOpZone(String zoneId) => zoneId == 'spk:$speaker';
+
   /// Het id van een nummer op de pc (zoals de cast het kent), of null als het daar niet staat.
   final String? Function(Track t) idVan;
 

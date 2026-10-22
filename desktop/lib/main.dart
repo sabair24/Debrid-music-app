@@ -10559,6 +10559,9 @@ class PlayerBar extends StatelessWidget {
                           ),
                           // Het hart: vol als het een favoriet is, en het klopt als het er een wordt.
                           if (t != null && !isTv) _HartKnop(track: t),
+                          // 👍 "houden" bij een nummer dat de radio haalde, ook als hij op een speaker speelt — zie
+                          // [_radioHier]. Alleen omhoog: zie [_RijDuimen.alleenHouden].
+                          if (t != null && !isTv && _radioHier(context)) _RijDuimen(track: t, alleenHouden: true, maat: 26),
                           // What quality am I actually hearing? (local files only — a streamed
                           // source's real quality isn't known here.)
                           //
@@ -13391,7 +13394,10 @@ class _WachtrijRij extends StatelessWidget {
               // De kleine duimen, alleen bij een nummer dat DEZE radio ophaalde. Dezelfde knop als op
               // het speelscherm, alleen ter grootte van een regel — één widget, want twee zouden
               // betekenen dat er één achterblijft zodra de beweging bijgesteld wordt.
-              if (r != null && r.eigen && !isTv) _RijDuimen(track: track),
+              // Ook in de rij van een speaker waarop de radio van dit toestel speelt ([_radioOpGekozenZone]): die
+              // regels zijn gewone rijregels, maar het zijn dezelfde nummers van dezelfde radio.
+              if (!isTv && (r != null ? r.eigen : _radioOpGekozenZone(context, luister: false)))
+                _RijDuimen(track: track),
               SizedBox(
                 width: 28,
                 child: speeltNu
@@ -13749,6 +13755,8 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
                 ),
                 ),
               ),
+              // 👍 "houden", zoals in de brede balk.
+              if (t != null && !isTv && _radioHier(context)) _RijDuimen(track: t, alleenHouden: true, maat: 26),
               IconButton(
                 icon: SpeelPauzeIcoon(speelt: x.playing, maat: 30),
                 color: kFel,
@@ -14685,9 +14693,14 @@ Future<void> _duimOmlaag(BuildContext context, Track t) async {
 /// Tekent zichzelf weg bij een nummer dat de radio niet heeft opgehaald — de beslissing zit hier en
 /// niet bij de aanroeper, zodat er maar één plek is waar die regel staat.
 class _RijDuimen extends StatelessWidget {
-  const _RijDuimen({required this.track});
+  const _RijDuimen({required this.track, this.alleenHouden = false, this.maat = 28});
 
   final Track track;
+
+  /// Alleen 👍 ("houden"): in de balk onderaan, waar "weg" naast het hart en de speelknop te makkelijk geraakt
+  /// wordt. Het volle paar staat op het speelscherm en in de wachtrij.
+  final bool alleenHouden;
+  final double maat;
 
   @override
   Widget build(BuildContext context) {
@@ -14698,19 +14711,21 @@ class _RijDuimen extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Duim(
-          kant: Duimkant.omlaag,
-          maat: 28,
-          // Nooit ingedrukt: rood wist meteen, dus de regel waar deze duim op staat is er een tel
-          // later niet meer. Een stand die je toch niet ziet, is een stand die niet bestaat.
-          aan: false,
-          gedempt: nu == Oordeel.omhoog,
-          opTik: () => unawaited(_duimOmlaag(context, track)),
-        ),
-        const SizedBox(width: kRuimte4),
+        if (!alleenHouden) ...[
+          Duim(
+            kant: Duimkant.omlaag,
+            maat: maat,
+            // Nooit ingedrukt: rood wist meteen, dus de regel waar deze duim op staat is er een tel
+            // later niet meer. Een stand die je toch niet ziet, is een stand die niet bestaat.
+            aan: false,
+            gedempt: nu == Oordeel.omhoog,
+            opTik: () => unawaited(_duimOmlaag(context, track)),
+          ),
+          const SizedBox(width: kRuimte4),
+        ],
         Duim(
           kant: Duimkant.omhoog,
-          maat: 28,
+          maat: maat,
           aan: nu == Oordeel.omhoog,
           gedempt: nu == Oordeel.omlaag,
           opTik: () => unawaited(_duimOmhoogRadio(context, track)),
@@ -14719,6 +14734,28 @@ class _RijDuimen extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Gaan de duimen over wat je nu ziet? Op dit toestel altijd; op een gekozen zone alleen als daar de radio van dít
+/// toestel speelt — een radio van de pc op een speaker (`speaker_radio.dart`). Een zone met de radio van een ander
+/// toestel niet: die radio staat daar.
+///
+/// **Waarom (Saber, 22-10-2026).** Een radio vanaf Tamino op de KEF: *"wat ik wel nie zie is men duim omhoog of omlaag
+/// tijdens het spelen, nu speelt er een fantastisch mooi liedje ik wil direct kunnen zeggen dat ik die wil houden"*.
+/// Met de KEF gekozen ("Speelt op: LS50") verborgen alle duimen zich, want de KEF is een zone "op afstand".
+bool _radioHier(BuildContext context) {
+  final zone = _misschien<GekozenZone>(context, luister: true)?.opAfstand;
+  return zone == null || _radioOpGekozenZone(context);
+}
+
+/// Speelt de radio van dit toestel op de gekozen zone (en niet op dit toestel zelf)? [luister]: onwaar in een
+/// wachtrijregel — de zone tikt elke seconde, en de lijst bouwt zelf al opnieuw als je een andere kiest.
+bool _radioOpGekozenZone(BuildContext context, {bool luister = true}) {
+  final zone = _misschien<GekozenZone>(context, luister: luister)?.opAfstand;
+  if (zone == null) return false;
+  final radio = context.watch<RadioBesturing>();
+  final uit = radio.speler;
+  return radio.loopt && uit is SpeakerRadio && uit.speeltOpZone(zone.zoneId);
 }
 
 /// De duimen op het speelscherm ([_RadioOordeel]).
@@ -14757,8 +14794,9 @@ class _RadioOordeel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026).
-    if (_misschien<GekozenZone>(context, luister: true)?.opAfstand != null) return const SizedBox.shrink();
+    // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026) — behalve
+    // als daar de radio van dit toestel speelt ([_radioHier]).
+    if (!_radioHier(context)) return const SizedBox.shrink();
     final t = track;
     final radio = context.watch<RadioBesturing>();
     if (isTv || t == null || !radio.loopt) return const SizedBox.shrink();

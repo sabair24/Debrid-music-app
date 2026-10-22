@@ -577,6 +577,9 @@ class LanServer {
         // Spoelt pas als de speaker het nummer heeft (een Sonos negeert een Seek tijdens het laden).
         await cast.play(speaker, ids, plek, alsZone: true, vanafMs: positie);
       } catch (e) {
+        // Ook in het logboek: op het scherm staat het maar even (Saber, 22-10-2026: "een HTTP fout of zoiets ? ik kon
+        // het niet lezen").
+        _zoneLog.line('overdracht $van → $naar: de speaker nam het niet aan — $e');
         return (status: 409, antwoord: {'error': 'De speaker nam het niet aan: $e'});
       }
     } else {
