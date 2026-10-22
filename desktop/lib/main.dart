@@ -186,7 +186,7 @@ import 'slsk_groepen.dart';
 import 'speakers.dart';
 import 'soulseek.dart';
 import 'tidal.dart';
-import 'tiddl.dart';
+import 'tidaler.dart';
 import 'torbox.dart';
 import 'torbox_stand.dart';
 import 'torrentvoornummer.dart';
@@ -6488,6 +6488,17 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
             MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…', () async {
               final picked = await showDialog<bool>(context: context, builder: (_) => ReleaseGallery(album));
               if (picked == true && mounted) _refresh();
+            })
+          // Een nummer zonder album-tag — wat de radio en ▶ binnenhalen (`Singles/<artiest>/`) — heeft nog geen
+          // plaat om een persing van te kiezen. Dan eerst de plaat aanwijzen: "Juiste uitgave zoeken" voor dit
+          // ene nummer, dat de album-tag wél schrijft ([LibraryStore.veldenBijCorrectie], per nummer). Daarna is
+          // het een gewone plaat en werkt de galerij. Saber, 22-10-2026, bij Tomcraft — Loneliness en Café del
+          // Mar van de radio: "waarom kan ik bij sommige liedje de uitgave niet kiezen".
+          else if (!isTv && album.tracks.isNotEmpty)
+            MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…', () async {
+              final ok = await showDialog<bool>(
+                  context: context, builder: (_) => MetadataEditor(album, nummer: album.tracks.first));
+              if (ok == true && mounted) _refresh();
             }),
           // De enige knop hier die de BESTANDEN verandert in plaats van eromheen te werken.
           if (!album.isSingle && lokaal)
@@ -12576,10 +12587,14 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
       [
         MenuRegel(Icons.open_in_new_rounded, 'Album openen',
             () => openOp(nav, (_) => AlbumDetailPage(album: a))),
-        // Zelfde regel als in het menu van een nummer: de galerij meteen, zonder de omweg.
-        if (!a.isSingle)
-          if (!isTv) MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…',
-              () => showDialog<bool>(context: context, builder: (_) => ReleaseGallery(a))),
+        // Zelfde regel als in het menu van een nummer: de galerij meteen, zonder de omweg. Een nummer zonder
+        // album eerst aan een plaat (zie `_albumKopMenu`).
+        if (!a.isSingle && !isTv)
+          MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…',
+              () => showDialog<bool>(context: context, builder: (_) => ReleaseGallery(a)))
+        else if (a.isSingle && !isTv && a.tracks.isNotEmpty)
+          MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…',
+              () => showDialog<bool>(context: context, builder: (_) => MetadataEditor(a, nummer: a.tracks.first))),
         MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, a.artist)),
         MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, a.artist)),
       ],
@@ -20137,9 +20152,9 @@ Future<void> _downloadSoulseek(BuildContext context, SoulseekFile f, List<Soulse
 /// Everything the app is downloading, in one place — the equivalent of the native Soulseek
 /// transfer list. Split into what's still running and what's finished, because a track that is
 /// merely WAITING for an uploader's slot is not a failure and shouldn't look like one.
-/// "Plak een Tidal-link" — de hele koppeling met tiddl, in één venster.
+/// "Plak een Tidal-link" — de hele koppeling met tidaler, in één venster.
 ///
-/// **Waarom een venster en geen zoekscherm.** tiddl kán niet zoeken; hij neemt alleen een link of
+/// **Waarom een venster en geen zoekscherm.** tidaler kan zelf niet zoeken; hij neemt alleen een link of
 /// een id. Een zoekscherm zou betekenen dat deze app de Tidal-API zélf gaat spreken, en dat is
 /// precies het stuk dat stukgaat zodra Tidal iets verandert. Je zoekt dus in de Tidal-app, kopieert
 /// de link, en plakt hem hier.
@@ -20195,7 +20210,7 @@ class _TidalOphalenState extends State<_TidalOphalen> {
       _fout = null;
     });
     final uitslag = await haalVanTidal(doel: doel, map: keuring.path, kwaliteit: _kwaliteit);
-    // Ook na een fout keuren: tiddl breekt een plaat af bij één nummer dat niet te krijgen is, en wat
+    // Ook na een fout keuren: een plaat kan halverwege afbreken bij één nummer dat niet te krijgen is, en wat
     // er wél binnenkwam hoort niet onzichtbaar in de keuringsmap te blijven staan.
     final r = await dm.keurBinnengekomen(keuring, 'TIDAL $doel', zichtbaar: dm.tidalRest);
     if (!mounted) return;
@@ -20283,21 +20298,19 @@ class _TidalOphalenState extends State<_TidalOphalen> {
                     ),
                   ],
                 ),
-                // Zonder ffmpeg kan tiddl de hi-res-stroom niet in elkaar zetten en levert hij
-                // 16 bit / 44,1 kHz af terwijl je om max vroeg — met één waarschuwingsregel tussen
-                // zijn voortgangsbalken door, die niemand ziet. Een mindere plaat die er goed
-                // uitziet is de vervelendste soort, dus staat het hier vóórdat je op Ophalen klikt.
+                // Zonder ffmpeg haalt tidaler de FLAC niet uit TIDALs MP4-verpakking (extract_flac), en
+                // dat zie je pas aan het bestand. Daarom staat het hier vóórdat je op Ophalen klikt.
                 if (!Ffmpeg().available) ...[
                   const SizedBox(height: kRuimte12),
                   Text(
-                    'ffmpeg staat niet op deze pc. Zonder ffmpeg komt er 16 bit / 44,1 kHz binnen, '
-                    'ook op "max". Installeer hem met "winget install ffmpeg" en herstart de app.',
+                    'ffmpeg staat niet op deze pc. Zonder ffmpeg komt er geen FLAC binnen, ook niet '
+                    'op "max". Installeer hem met "winget install ffmpeg" en herstart de app.',
                     style: TextStyle(color: leesbaar(const Color(0xFFE0B341)), fontSize: 12, height: 1.35),
                   ),
                 ],
                 if (_fout != null) ...[
                   const SizedBox(height: kRuimte12),
-                  // In het venster en niet als toast: een fout van tiddl is meerdere regels, en die
+                  // In het venster en niet als toast: een fout van tidaler is meerdere regels, en die
                   // wil je kunnen lezen én overtypen.
                   SelectableText(_fout!,
                       style: kTekstBij.copyWith(color: Colors.orangeAccent, height: 1.4)),
@@ -20420,7 +20433,7 @@ class DownloadsView extends StatelessWidget {
                     label: const Text('Wis afgeronde'),
                     style: TextButton.styleFrom(foregroundColor: _muted),
                   ),
-                // De derde bron. Alleen op de machine die de muziek bezit: tiddl is een programma
+                // De derde bron. Alleen op de machine die de muziek bezit: tidaler is een programma
                 // op die pc, en een telefoon heeft geen muziekmap om iets in te zetten. Hij staat
                 // hier en niet tussen de bronnen op Zoeken, omdat er niets te zoeken valt — je
                 // plakt een link.
@@ -20428,7 +20441,7 @@ class DownloadsView extends StatelessWidget {
                   TextButton.icon(
                     onPressed: () async {
                       // Een string terug betekent gelukt; de inhoud is de melding, met de kwaliteit
-                      // die tiddl meldde en wat de keuring besliste. Null is geannuleerd. Inlezen
+                      // van het bestand en wat de keuring besliste. Null is geannuleerd. Inlezen
                       // doet het opbergen zelf al (`onLibraryChanged`).
                       final melding = await showDialog<String>(
                           context: context, builder: (_) => const _TidalOphalen());
@@ -23281,7 +23294,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     }
   }
 
-  /// Eén resultaat uit de TIDAL-lijst binnenhalen met tiddl.
+  /// Eén resultaat uit de TIDAL-lijst binnenhalen met tidaler.
   ///
   /// Hetzelfde venster als "Ophalen van Tidal…" bij Mijn downloads, alleen met het doel al
   /// ingevuld: er valt hier niets meer te plakken. Het venster keurt en bergt ook op, en laat de
@@ -23857,7 +23870,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ),
       );
     }
-    // tiddl staat op de machine die de muziek bezit. Een telefoon, de Shield en een op afstand
+    // tidaler staat op de machine die de muziek bezit. Een telefoon, de Shield en een op afstand
     // gekoppeld toestel hebben geen muziekmap om iets in te zetten — daar blijft dit precies wat
     // het was: een zoekscherm dat torrents en Soulseek voedt.
     final kanOphalen = _isDesktop && !context.read<LibraryStore>().isRemote;
@@ -30944,8 +30957,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     Text(
                       'Maak op developer.tidal.com een app aan en zet daar exact '
                       'https://www.tidal.com als Redirect URI. Hiermee kan de app in TIDAL zóéken. '
-                      'Het ophalen zelf gaat met je eigen abonnement via tiddl op deze pc — dat is '
-                      'een aparte, eenmalige "tiddl auth login".',
+                      'Het ophalen zelf gaat met je eigen abonnement via tidaler op deze pc — dat is '
+                      'een aparte, eenmalige "tidaler login".',
                       style: TextStyle(color: _muted, fontSize: 11.5, height: 1.3),
                     ),
                     const SizedBox(height: 12),

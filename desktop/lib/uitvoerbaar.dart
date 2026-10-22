@@ -1,6 +1,6 @@
 /// Bestaat dit hulpprogramma, en mag het aan `Process.runSync` gevoerd worden?
 ///
-/// **Waarom dit bestaat.** De app zoekt ffmpeg, fpcalc, aria2c en tiddl door een lijstje kandidaten
+/// **Waarom dit bestaat.** De app zoekt ffmpeg, fpcalc, aria2c en tidaler door een lijstje kandidaten
 /// af te lopen en er `--version` op te proberen; wat een nulcode teruggeeft is de goede. Dat leest
 /// als "probeer het gewoon, een fout vangen we op", en op Windows en Linux werkt het ook zo.
 ///

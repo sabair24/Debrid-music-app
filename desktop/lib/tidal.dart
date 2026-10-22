@@ -40,7 +40,7 @@ class TidalTrack {
 /// Een plaat uit de TIDAL-catalogus.
 ///
 /// Net zo mager als [TidalTrack] en met opzet: het enige dat er werkelijk toe doet is het id, want
-/// dáármee haalt tiddl de plaat op. [jaar] staat erbij omdat er van veel platen een heruitgave
+/// dáármee haalt tidaler de plaat op. [jaar] staat erbij omdat er van veel platen een heruitgave
 /// náást het origineel in de lijst komt, en de titel dan twee keer hetzelfde zegt.
 class TidalAlbum {
   final String id;

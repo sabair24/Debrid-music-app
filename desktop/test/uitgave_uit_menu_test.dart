@@ -51,7 +51,20 @@ void main() {
     final album = _lijf(bron, 'ItemMenu _albumMenu(');
     expect(nummer, contains("if (album != null && !album.isSingle)\n          if (!isTv) MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…',"),
         reason: 'een single heeft geen persing om uit te kiezen; de knop op de albumpagina ontbreekt daar ook');
-    expect(album, contains("if (!a.isSingle)\n          if (!isTv) MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…',"));
+    expect(album, contains("if (!a.isSingle && !isTv)\n          MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…',"));
+  });
+
+  test('een nummer zonder album (van de radio of ▶) kiest eerst zijn plaat, per nummer', () {
+    // Saber, 22-10-2026: "waarom kan ik bij sommige liedje de uitgave niet kiezen" — Tomcraft — Loneliness van de radio
+    // had geen ALBUM-tag en heette daardoor een single, en voor een single stond "Uitgave kiezen…" nergens.
+    final bron = _bron();
+    final album = _lijf(bron, 'ItemMenu _albumMenu(');
+    expect(album, contains('else if (a.isSingle && !isTv && a.tracks.isNotEmpty)'));
+    expect(album, contains('MetadataEditor(a, nummer: a.tracks.first)'));
+    final kop = _lijf(bron, '  ItemMenu _albumKopMenu() {');
+    expect(kop, contains('else if (!isTv && album.tracks.isNotEmpty)'));
+    expect(kop, contains('MetadataEditor(album, nummer: album.tracks.first)'),
+        reason: 'per nummer: dan mag de correctie de album-tag zetten (veldenBijCorrectie)');
   });
 
   test('DE VAL: de albumpagina eronder ziet een persing die via het menu gekozen is', () {

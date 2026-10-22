@@ -1,4 +1,4 @@
-/// Zoeken in TIDAL levert nu platen én nummers, en van allebei is een doel voor tiddl te maken.
+/// Zoeken in TIDAL levert nu platen én nummers, en van allebei is een doel voor tidaler te maken.
 ///
 /// **Waarom hier een toets op staat.** De zoekopdracht vraagt sinds deze wijziging om méér dan
 /// eerst: `albums,albums.artists,tracks,tracks.artists` in plaats van alleen de nummers. Dat is een
@@ -11,7 +11,7 @@
 library;
 
 import 'package:debridmusic/tidal.dart';
-import 'package:debridmusic/tiddl.dart';
+import 'package:debridmusic/tidaler.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een `included`-blok zoals de brede zoekopdracht het teruggeeft: twee platen, twee nummers, en
@@ -241,7 +241,7 @@ void main() {
     });
   });
 
-  group('van een id naar een doel voor tiddl', () {
+  group('van een id naar een doel voor tidaler', () {
     test('de soort gaat mee, want de ids botsen', () {
       // Een plaat "1" en een nummer "1" bestaan naast elkaar. Wie de soort zou raden uit het getal,
       // haalt de verkeerde binnen — en dat merk je pas als er muziek in je map staat die je niet
@@ -260,7 +260,7 @@ void main() {
       expect(tidalDoelVanId('album', '   '), isNull);
       expect(tidalDoelVanId('album', '12 34'), isNull);
       expect(tidalDoelVanId('album', 'a/b'), isNull, reason: 'geen tweede schuine streep');
-      expect(tidalDoelVanId('onzin', '123'), isNull, reason: 'tiddl kent die soort niet');
+      expect(tidalDoelVanId('onzin', '123'), isNull, reason: 'die soort bestaat niet');
     });
   });
 }

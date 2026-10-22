@@ -210,7 +210,7 @@ jobs:
             test/albumraster_ingebed_test.dart \
             test/bestandsbeheer_test.dart test/hoesherkomst_test.dart \
             test/metadata_bronnen_test.dart test/castgrenzen_test.dart \
-            test/hoes_overname_test.dart test/tiddl_test.dart \
+            test/hoes_overname_test.dart test/tidaler_test.dart \
             test/tidal_test.dart test/tidal_zoeken_test.dart \
             test/rutracker_codetabel_test.dart \
             test/slsk_groepen_test.dart \
