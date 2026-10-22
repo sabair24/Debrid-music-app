@@ -77,6 +77,26 @@ List<Map> topUitZoeken(List<dynamic> treffers, int id) {
   return eigen;
 }
 
+/// Uit zoektreffers op naam en titel: het id van de artiest met die naam bij wie dit nummer het vaakst staat (een
+/// nummer staat vaak ook op verzamelaars), of null als het bij niemand met die naam staat. Zie
+/// `RecommendService.artiestVanNummer`.
+int? artiestUitNummers(List<dynamic> treffers, String artiest, String titel) {
+  final t = basisTitel(titel);
+  final tel = <int, int>{};
+  for (final r in treffers) {
+    if (r is! Map) continue;
+    final a = r['artist'];
+    if (a is! Map || a['id'] is! num) continue;
+    if (!zelfdeArtiest('${a['name'] ?? ''}', artiest) || basisTitel('${r['title'] ?? ''}') != t) continue;
+    final id = (a['id'] as num).toInt();
+    tel[id] = (tel[id] ?? 0) + 1;
+  }
+  if (tel.isEmpty) return null;
+  // De meeste treffers; bij gelijkstand de eerste (Deezer zet de beste treffer vooraan — een Map onthoudt de
+  // volgorde van toevoegen).
+  return tel.entries.reduce((a, b) => b.value > a.value ? b : a).key;
+}
+
 int? pickArtist(List<dynamic> hits, String wanted) {
   final want = artistKey(wanted);
   final alle = [for (final h in hits) if (h is Map && h['id'] != null) h];
@@ -231,8 +251,28 @@ class RecommendService {
   }
 
   Future<int?> _artistId(String name) async {
+    final vast = _vast[artistKey(name)];
+    if (vast != null) return vast;
     final j = await _get('$_base/search/artist?q=${Uri.encodeComponent(name)}&limit=10');
     return pickArtist((j?['data'] as List?) ?? const [], name);
+  }
+
+  /// Namen die voor deze dienst vastliggen op één Deezer-artiest — zie [zetArtiest].
+  final Map<String, int> _vast = {};
+
+  /// Voortaan is [naam] hier artiest [id], en niet de naamgenoot met de meeste fans. Een dienst hoort bij één
+  /// radio (`startRadio` maakt er elke keer een), dus het geldt voor die radio.
+  void zetArtiest(String naam, int id) => _vast[artistKey(naam)] = id;
+
+  /// Wie [titel] werkelijk maakte: de Deezer-artiest met die naam bij wie dit nummer staat, of null.
+  ///
+  /// **Waarom.** Op naam wint de naamgenoot met de meeste fans ([pickArtist]). Gemeten op 22-10-2026: een radio
+  /// vanaf "Petra — Ik Leef Voor Jou" (Vlaamse schlager, Deezer 303599251, 51 fans) kreeg de Amerikaanse
+  /// christelijke rockband Petra (15039, 42.556 fans), met dc Talk en Hillsong als buren. Het nummer zegt wie
+  /// het is. Gewoon zoeken op naam en titel, zoals [isrcJaar]: de vorm `artist:"…"` zweeg soms helemaal.
+  Future<int?> artiestVanNummer(String artiest, String titel) async {
+    final zoek = await _get('$_base/search?q=${Uri.encodeComponent('$artiest $titel')}&limit=25');
+    return artiestUitNummers((zoek?['data'] as List?) ?? const [], artiest, titel);
   }
 
   List<RecTrack> _tracks(Map<String, dynamic>? j) {
