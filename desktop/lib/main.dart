@@ -6488,6 +6488,17 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
             MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…', () async {
               final picked = await showDialog<bool>(context: context, builder: (_) => ReleaseGallery(album));
               if (picked == true && mounted) _refresh();
+            })
+          // Een nummer zonder album-tag — wat de radio en ▶ binnenhalen (`Singles/<artiest>/`) — heeft nog geen
+          // plaat om een persing van te kiezen. Dan eerst de plaat aanwijzen: "Juiste uitgave zoeken" voor dit
+          // ene nummer, dat de album-tag wél schrijft ([LibraryStore.veldenBijCorrectie], per nummer). Daarna is
+          // het een gewone plaat en werkt de galerij. Saber, 22-10-2026, bij Tomcraft — Loneliness en Café del
+          // Mar van de radio: "waarom kan ik bij sommige liedje de uitgave niet kiezen".
+          else if (!isTv && album.tracks.isNotEmpty)
+            MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…', () async {
+              final ok = await showDialog<bool>(
+                  context: context, builder: (_) => MetadataEditor(album, nummer: album.tracks.first));
+              if (ok == true && mounted) _refresh();
             }),
           // De enige knop hier die de BESTANDEN verandert in plaats van eromheen te werken.
           if (!album.isSingle && lokaal)
@@ -12576,10 +12587,14 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
       [
         MenuRegel(Icons.open_in_new_rounded, 'Album openen',
             () => openOp(nav, (_) => AlbumDetailPage(album: a))),
-        // Zelfde regel als in het menu van een nummer: de galerij meteen, zonder de omweg.
-        if (!a.isSingle)
-          if (!isTv) MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…',
-              () => showDialog<bool>(context: context, builder: (_) => ReleaseGallery(a))),
+        // Zelfde regel als in het menu van een nummer: de galerij meteen, zonder de omweg. Een nummer zonder
+        // album eerst aan een plaat (zie `_albumKopMenu`).
+        if (!a.isSingle && !isTv)
+          MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…',
+              () => showDialog<bool>(context: context, builder: (_) => ReleaseGallery(a)))
+        else if (a.isSingle && !isTv && a.tracks.isNotEmpty)
+          MenuRegel(Icons.photo_library_outlined, 'Uitgave kiezen…',
+              () => showDialog<bool>(context: context, builder: (_) => MetadataEditor(a, nummer: a.tracks.first))),
         MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, a.artist)),
         MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, a.artist)),
       ],
