@@ -83,6 +83,7 @@ import 'completeness.dart';
 import 'credits.dart';
 import 'deezerbaan.dart';
 import 'itunes.dart';
+import 'lastfm.dart';
 import 'radiosfeer.dart';
 import 'versiecontrole.dart';
 import 'discogs.dart';
@@ -16626,6 +16627,9 @@ final Radiotempo _radiotempo =
 final ItunesZoeker _itunes = ItunesZoeker();
 Future<RecTrack?> _itunesVoorModel(AiNummer n) => _itunes.vind(n.artiest, n.titel);
 
+/// Vergelijkbare nummers bij de start van een radio — zie `lastfm.dart`.
+final LastfmZoeker _lastfm = LastfmZoeker();
+
 Future<void> startRadio(BuildContext context, String artist,
     {String? titel, Track? zaad, int? seconden, bool hier = false, String? naar}) async {
   // Een zone op afstand gekozen: daar (Saber, 21-10-2026: een radio starten in een andere zone "op elk
@@ -16887,6 +16891,44 @@ Future<void> startRadio(BuildContext context, String artist,
       for (final p in plan)
         if (p.eigen != null && artiestSleutel(p.artiest) != zelf) p
     ]);
+    // De vergelijkbare nummers van Last.fm, als er een sleutel is — zie `lastfm.dart`. Opgezocht zoals de lijst van
+    // het model (Deezer, je eigen bibliotheek, iTunes), maar streng op sfeer gekeurd: dit koos niemand voor deze radio.
+    final lastfmSleutel = cfg.lastfmKey.trim();
+    final lastfmTitel = zaadTitel?.trim() ?? '';
+    if (lastfmSleutel.isNotEmpty && lastfmTitel.isNotEmpty) {
+      unawaited(() async {
+        try {
+          final lf = await _lastfm.vergelijkbaar(artist, lastfmTitel, sleutel: lastfmSleutel);
+          if (sessie != radio.sessie) return;
+          if (lf == null) {
+            log.line('radio-lastfm: geen antwoord');
+            return;
+          }
+          log.line('radio-lastfm: ${lf.totaal} vergelijkbare nummers, ${lf.vanZelf} van $artist zelf'
+              '${lf.nummers.isEmpty ? ' — te weinig van anderen (naamgenoten?), overgeslagen' : ''}');
+          if (lf.nummers.isEmpty) return;
+          final gevonden = await rec.lijstOpDeezer([for (final n in lf.nummers) AiNummer(n.artiest, n.titel)],
+              spoor: log.line,
+              vanJou: eigenVoorModel(lib.tracks),
+              elders: _itunesVoorModel,
+              eldersNaam: 'iTunes',
+              van: 'Last.fm');
+          if (sessie != radio.sessie) return;
+          final vanLastfm = _radioplan(gevonden, lib,
+              zaadArtiest: artist,
+              zaad: zaad,
+              zaadTitel: zaadTitel,
+              al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller),
+              weert: steedsGeweigerd(radio.plan),
+              elkeLengte: keuring.elkeLengte,
+              bron: 'lastfm');
+          keuring.vraagSfeer(vanLastfm);
+          _voegGekeurdBij(radio, sessie, _afstemBeurt, keuring, vanLastfm);
+        } catch (e) {
+          log.line('radio-lastfm: $e');
+        }
+      }());
+    }
     // En de nummers van het model erbij zodra ze er zijn — de radio speelt intussen al.
     //
     // Het model doet er 25 tot 30 seconden over (gemeten 12-09-2026). Daar mag een radio niet op
