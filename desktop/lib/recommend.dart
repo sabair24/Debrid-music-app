@@ -4,7 +4,7 @@ import 'aanbevolen.dart' show kiesNummers, rangschikKandidaten;
 import 'deezerbaan.dart';
 import 'isrc.dart' as isrc;
 import 'radiobuurt.dart';
-import 'radiokeuze.dart' show basisTitel, zelfdeArtiest;
+import 'radiokeuze.dart' show Uitvoering, basisTitel, eigenSleutel, nooitOpRadio, uitvoeringVan, zelfdeArtiest;
 import 'radiolijst.dart';
 import 'radiosmaak.dart';
 
@@ -123,6 +123,27 @@ int? pickArtist(List<dynamic> hits, String wanted) {
 }
 
 /// A recommended track (metadata only) — resolved to a playable source on demand.
+/// Een nummer dat het model noemde, uit [tracks], of null: dezelfde artiest en hetzelfde liedje
+/// ([eigenSleutel], dus zonder wat er tussen haakjes staat), het origineel liever dan een bewerking.
+///
+/// Voor wat Deezer niet kent ([RecommendService.lijstOpDeezer]). De plek krijgt JOUW titel en lengte,
+/// zodat het plan er je eigen bestand bij vindt en een bewerking als bewerking telt (hoogstens twee per
+/// tien). De index wordt één keer gebouwd; de functie die terugkomt is per nummer een opzoeking.
+RecTrack? Function(AiNummer n) eigenVoorModel(Iterable<Track> tracks) {
+  final index = <String, List<Track>>{};
+  for (final t in tracks) {
+    if (nooitOpRadio(t.title)) continue;
+    (index[eigenSleutel(t.artist, t.title)] ??= []).add(t);
+  }
+  int bewerking(Track t) => uitvoeringVan(t.title) == Uitvoering.bewerking ? 1 : 0;
+  return (n) {
+    final k = [...?index[eigenSleutel(n.artiest, n.titel)]]..sort((a, b) => bewerking(a).compareTo(bewerking(b)));
+    if (k.isEmpty) return null;
+    final t = k.first;
+    return RecTrack(t.artist, t.title, null, album: t.album, seconds: t.duration?.inSeconds ?? 0);
+  };
+}
+
 class RecTrack {
   final String artist;
   final String title;
@@ -308,8 +329,13 @@ class RecommendService {
   /// opzoeken duurde 29 s in plaats van vier, en het hele laatste zestal viel af: Deezer gaf geen
   /// antwoord, en dat telde als "bestaat niet". Nu wordt dat na [adem] nog één keer gevraagd, en
   /// wat dan nog zwijgt staat met de reden in het logboek.
+  ///
+  /// **Wat Deezer niet kent en jij wél hebt, telt mee** ([vanJou], zie [eigenVoorModel]). Gemeten op
+  /// 22-10-2026, radio vanaf Petra — Ik Leef Voor Jou: het model noemde "Plaza — Yo Yo", Sabers eigen
+  /// voorbeeld, en die viel af als "niet gevonden" terwijl "Yo-Yo (Dance Version)" in zijn bibliotheek
+  /// staat. Deezer heeft hem niet.
   Future<List<RecTrack>> lijstOpDeezer(List<AiNummer> lijst,
-      {void Function(String)? spoor}) async {
+      {void Function(String)? spoor, RecTrack? Function(AiNummer n)? vanJou}) async {
     final antwoord = List<Map<String, dynamic>?>.filled(lijst.length, null);
     final zwijgt = <int, String>{};
     Future<void> zoek(int i) async {
@@ -344,10 +370,19 @@ class RecommendService {
     final uit = <RecTrack>[];
     final weg = <String>[];
     final stil = <String>[];
+    final jouw = <String>[];
+    bool eigen(AiNummer n) {
+      final t = vanJou?.call(n);
+      if (t == null) return false;
+      uit.add(t);
+      jouw.add('${t.artist} — ${t.title}');
+      return true;
+    }
+
     for (var k = 0; k < lijst.length; k++) {
       final n = lijst[k];
       if (zwijgt.containsKey(k)) {
-        stil.add('${n.artiest} — ${n.titel}');
+        if (!eigen(n)) stil.add('${n.artiest} — ${n.titel}');
         continue;
       }
       final treffers = _tracks(antwoord[k]);
@@ -356,12 +391,13 @@ class RecommendService {
           n.artiest,
           n.titel);
       if (j == null) {
-        weg.add('${n.artiest} — ${n.titel}');
+        if (!eigen(n)) weg.add('${n.artiest} — ${n.titel}');
       } else {
         uit.add(treffers[j]);
       }
     }
     spoor?.call('radio-lijst: ${uit.length} van ${lijst.length} nummers van het model gevonden'
+        '${jouw.isEmpty ? '' : ' | niet op Deezer, wel van jou: ${jouw.join('; ')}'}'
         '${weg.isEmpty ? '' : ' | niet gevonden: ${weg.join('; ')}'}'
         '${stil.isEmpty ? '' : ' | geen antwoord: ${stil.join('; ')} (${zwijgt.values.toSet().join('; ')})'}');
     return uit;

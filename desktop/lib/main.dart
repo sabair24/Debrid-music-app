@@ -16802,7 +16802,7 @@ Future<void> startRadio(BuildContext context, String artist,
             keuring.onthoud([...keuring.lijst, ...lijst]);
             log.line('radio-lijst (vervolg${dieper ? ', dieper' : ''}): ${lijst.length} nummers van het model — '
                 '${lijst.map((n) => '${n.artiest} – ${n.titel}${n.bekend ? '' : '*'}').join('; ')}');
-            final gevonden = await rec.lijstOpDeezer(lijst, spoor: log.line);
+            final gevonden = await rec.lijstOpDeezer(lijst, spoor: log.line, vanJou: eigenVoorModel(lib.tracks));
             final vanModel = _radioplan(gevonden, lib,
                 zaadArtiest: artist,
                 zaad: zaad,
@@ -16908,7 +16908,7 @@ Future<void> startRadio(BuildContext context, String artist,
           // Intussen afgestemd? Dan dezelfde lijst, maar in de volgorde van de stand die nu geldt, en
           // bij díé afstemming — anders ging hij verloren, en afstemmen gebruikt hem ook.
           final nu = beurt == _afstemBeurt ? lijst : modelVolgorde(lijst, (n) => n.bekend, Radiosmaak.uit(cfg.radioSmaak));
-          final gevonden = await rec.lijstOpDeezer(nu, spoor: log.line);
+          final gevonden = await rec.lijstOpDeezer(nu, spoor: log.line, vanJou: eigenVoorModel(lib.tracks));
           if (sessie != radio.sessie) return;
           final vanModel = _radioplan(gevonden, lib,
               zaadArtiest: artist,
@@ -17371,7 +17371,8 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
   if (lijst.isEmpty) return;
   try {
     final gevonden =
-        await rec.lijstOpDeezer(modelVolgorde(lijst, (n) => n.bekend, smaak), spoor: keuring?.log.line);
+        await rec.lijstOpDeezer(modelVolgorde(lijst, (n) => n.bekend, smaak),
+            spoor: keuring?.log.line, vanJou: eigenVoorModel(lib.tracks));
     _voegGekeurdBij(
         radio,
         sessie,
