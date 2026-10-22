@@ -4,7 +4,7 @@ import 'aanbevolen.dart' show kiesNummers, rangschikKandidaten;
 import 'deezerbaan.dart';
 import 'isrc.dart' as isrc;
 import 'radiobuurt.dart';
-import 'radiokeuze.dart' show basisTitel, zelfdeArtiest;
+import 'radiokeuze.dart' show Uitvoering, basisTitel, eigenSleutel, nooitOpRadio, uitvoeringVan, zelfdeArtiest;
 import 'radiolijst.dart';
 import 'radiosmaak.dart';
 
@@ -123,6 +123,31 @@ int? pickArtist(List<dynamic> hits, String wanted) {
 }
 
 /// A recommended track (metadata only) — resolved to a playable source on demand.
+/// Hoeveel nummers uit één modellijst er hoogstens aan de tweede catalogus gevraagd worden. Apple staat ongeveer
+/// twintig vragen per minuut toe, en een lijst van 36 miste er op 22-10-2026 acht.
+const int kEldersPerLijst = 12;
+
+/// Een nummer dat het model noemde, uit [tracks], of null: dezelfde artiest en hetzelfde liedje
+/// ([eigenSleutel], dus zonder wat er tussen haakjes staat), het origineel liever dan een bewerking.
+///
+/// Voor wat Deezer niet kent ([RecommendService.lijstOpDeezer]). De plek krijgt JOUW titel en lengte,
+/// zodat het plan er je eigen bestand bij vindt en een bewerking als bewerking telt (hoogstens twee per
+/// tien). De index wordt één keer gebouwd; de functie die terugkomt is per nummer een opzoeking.
+RecTrack? Function(AiNummer n) eigenVoorModel(Iterable<Track> tracks) {
+  final index = <String, List<Track>>{};
+  for (final t in tracks) {
+    if (nooitOpRadio(t.title)) continue;
+    (index[eigenSleutel(t.artist, t.title)] ??= []).add(t);
+  }
+  int bewerking(Track t) => uitvoeringVan(t.title) == Uitvoering.bewerking ? 1 : 0;
+  return (n) {
+    final k = [...?index[eigenSleutel(n.artiest, n.titel)]]..sort((a, b) => bewerking(a).compareTo(bewerking(b)));
+    if (k.isEmpty) return null;
+    final t = k.first;
+    return RecTrack(t.artist, t.title, null, album: t.album, seconds: t.duration?.inSeconds ?? 0);
+  };
+}
+
 class RecTrack {
   final String artist;
   final String title;
@@ -308,8 +333,20 @@ class RecommendService {
   /// opzoeken duurde 29 s in plaats van vier, en het hele laatste zestal viel af: Deezer gaf geen
   /// antwoord, en dat telde als "bestaat niet". Nu wordt dat na [adem] nog één keer gevraagd, en
   /// wat dan nog zwijgt staat met de reden in het logboek.
+  ///
+  /// **Wat Deezer niet kent en jij wél hebt, telt mee** ([vanJou], zie [eigenVoorModel]). Gemeten op
+  /// 22-10-2026, radio vanaf Petra — Ik Leef Voor Jou: het model noemde "Plaza — Yo Yo", Sabers eigen
+  /// voorbeeld, en die viel af als "niet gevonden" terwijl "Yo-Yo (Dance Version)" in zijn bibliotheek
+  /// staat. Deezer heeft hem niet.
+  ///
+  /// **En wat dan nog ontbreekt, gaat naar een tweede catalogus** ([elders]; op de radio iTunes, zie
+  /// `itunes.dart`), hoogstens [kEldersPerLijst] per lijst, twee tegelijk. Saber, 22-10-2026: *"alles wordt zo
+  /// gebaseerd op deezer ma baseer ook op andere dingen e"*.
   Future<List<RecTrack>> lijstOpDeezer(List<AiNummer> lijst,
-      {void Function(String)? spoor}) async {
+      {void Function(String)? spoor,
+      RecTrack? Function(AiNummer n)? vanJou,
+      Future<RecTrack?> Function(AiNummer n)? elders,
+      String eldersNaam = 'elders'}) async {
     final antwoord = List<Map<String, dynamic>?>.filled(lijst.length, null);
     final zwijgt = <int, String>{};
     Future<void> zoek(int i) async {
@@ -344,10 +381,21 @@ class RecommendService {
     final uit = <RecTrack>[];
     final weg = <String>[];
     final stil = <String>[];
+    final jouw = <String>[];
+    final nietGevonden = <AiNummer>[];
+    final zonderAntwoord = <AiNummer>[];
+    bool eigen(AiNummer n) {
+      final t = vanJou?.call(n);
+      if (t == null) return false;
+      uit.add(t);
+      jouw.add('${t.artist} — ${t.title}');
+      return true;
+    }
+
     for (var k = 0; k < lijst.length; k++) {
       final n = lijst[k];
       if (zwijgt.containsKey(k)) {
-        stil.add('${n.artiest} — ${n.titel}');
+        if (!eigen(n)) zonderAntwoord.add(n);
         continue;
       }
       final treffers = _tracks(antwoord[k]);
@@ -356,12 +404,35 @@ class RecommendService {
           n.artiest,
           n.titel);
       if (j == null) {
-        weg.add('${n.artiest} — ${n.titel}');
+        if (!eigen(n)) nietGevonden.add(n);
       } else {
         uit.add(treffers[j]);
       }
     }
+    final daar = <String>[];
+    if (elders != null) {
+      final vragen = [...nietGevonden, ...zonderAntwoord].take(kEldersPerLijst).toList();
+      Future<void> vraag(AiNummer n) async {
+        RecTrack? t;
+        try {
+          t = await elders(n);
+        } catch (_) {/* een tweede kans, geen oordeel */}
+        if (t == null) return;
+        uit.add(t);
+        daar.add('${t.artist} — ${t.title}');
+        nietGevonden.remove(n);
+        zonderAntwoord.remove(n);
+      }
+
+      for (var i = 0; i < vragen.length; i += 2) {
+        await Future.wait([for (final n in vragen.skip(i).take(2)) vraag(n)]);
+      }
+    }
+    weg.addAll([for (final n in nietGevonden) '${n.artiest} — ${n.titel}']);
+    stil.addAll([for (final n in zonderAntwoord) '${n.artiest} — ${n.titel}']);
     spoor?.call('radio-lijst: ${uit.length} van ${lijst.length} nummers van het model gevonden'
+        '${jouw.isEmpty ? '' : ' | niet op Deezer, wel van jou: ${jouw.join('; ')}'}'
+        '${daar.isEmpty ? '' : ' | niet op Deezer, wel op $eldersNaam: ${daar.join('; ')}'}'
         '${weg.isEmpty ? '' : ' | niet gevonden: ${weg.join('; ')}'}'
         '${stil.isEmpty ? '' : ' | geen antwoord: ${stil.join('; ')} (${zwijgt.values.toSet().join('; ')})'}');
     return uit;
