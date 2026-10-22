@@ -16,8 +16,10 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show listEquals;
+
 import 'models.dart';
-import 'player.dart' show PlayerStore;
+import 'player.dart' show VolgSpeler;
 
 /// Waar de leider was, op een moment op de klok van de pc.
 class SamenAnker {
@@ -165,7 +167,7 @@ class SamenVolger {
     this.log,
   });
 
-  final PlayerStore speler;
+  final VolgSpeler speler;
   final Track? Function(String id) nummer;
   final String? Function(Track t) idVan;
   final KlokIjk klok;
@@ -175,6 +177,10 @@ class SamenVolger {
   final void Function(String)? log;
 
   SamenAnker? _anker;
+
+  /// De wachtrij (ids) van het laatste anker dat hier verwerkt is: alleen als die verandert, valt er iets over
+  /// te nemen (een geschudde bibliotheek is dertigduizend ids).
+  List<String> _rij = const [];
   Timer? _lus;
   bool _bezig = false;
   bool _opent = false;
@@ -203,11 +209,36 @@ class SamenVolger {
     }
     if (!zelfde) {
       await _open(a);
-    } else if (!speler.playing) {
+    } else {
+      _volgRij(a);
+    }
+    if (zelfde && !speler.playing) {
       speler.seek(verwachtePlek(a, nuPcMs: klok.nuPcMs(), vertragingMs: vertragingMs()));
       speler.speelAf();
     }
     _startLus();
+  }
+
+  /// De leider kreeg een andere wachtrij (iets "hierna", verplaatst, weg): die overnemen rond het nummer dat
+  /// hier al klinkt. Anders speelde de volger bij de volgende wissel zijn oude volgende nummer, tot het anker
+  /// van de leider hem een seconde later naar het goede liet springen.
+  void _volgRij(SamenAnker a) {
+    if (a.rij.isEmpty || listEquals(a.rij, _rij)) return;
+    final rij = <Track>[];
+    var plek = -1;
+    for (var i = 0; i < a.rij.length; i++) {
+      final t = nummer(a.rij[i]);
+      if (t == null) continue;
+      if (i == a.index) plek = rij.length;
+      rij.add(t);
+    }
+    if (plek < 0) return;
+    final hier = speler.queueTracks;
+    final gelijk = hier.length == rij.length && [for (var i = 0; i < rij.length; i++) hier[i].path == rij[i].path].every((x) => x);
+    if (gelijk || speler.zetRijRondHuidig(rij, plek)) {
+      if (!gelijk) log?.call('samen: wachtrij van de leider overgenomen (${rij.length} nummers)');
+      _rij = a.rij;
+    }
   }
 
   /// Het nummer van de leider openen, en op het juiste moment beginnen.
@@ -234,6 +265,7 @@ class SamenVolger {
       // Een seconde vooruit openen, en pas beginnen als de leider daar is: openen kost tijd.
       final doel = verwachtePlek(a, nuPcMs: klok.nuPcMs(), vertragingMs: vertragingMs()) + const Duration(seconds: 1);
       await speler.neemOver(rij, plek, doel, spelen: false);
+      _rij = a.rij;
       final wacht = doel - verwachtePlek(a, nuPcMs: klok.nuPcMs(), vertragingMs: vertragingMs());
       if (wacht > Duration.zero) await Future<void>.delayed(wacht);
       if (identical(_anker, a) || _anker?.trackId == a.trackId) speler.speelAf();

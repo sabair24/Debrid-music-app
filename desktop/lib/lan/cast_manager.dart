@@ -307,6 +307,12 @@ class CastManager {
     if (!s.aanloop) bijAnker?.call(s.renderer.id);
   }
 
+  /// De wachtrij van [s] veranderde (hierna, achteraan, verplaatst, weg): wie meespeelt, krijgt hem meteen,
+  /// niet pas bij de volgende nummerwissel.
+  void _rijVeranderd(_Session s) {
+    if (s.klok != null && !s.aanloop && !s.wachtOpNummer) bijAnker?.call(s.renderer.id);
+  }
+
   /// De speaker gaat stilstaan op [ms] (een pauze, spoelen of een ander nummer vanaf hier): wie meespeelt,
   /// hoort het meteen en wacht daar tot de speaker weer speelt — in plaats van door te spelen tot de klok
   /// het merkt.
@@ -643,6 +649,7 @@ class CastManager {
     // De speaker kreeg het volgende nummer al mee; is dat een ander geworden, dan het nieuwe.
     if (s.queue.elementAtOrNull(s.index + 1) != volgendeWas) await _armNext(s);
     bijStand?.call();
+    _rijVeranderd(s);
   }
 
   /// De wachtrij van een speaker met een sessie, en waar hij is. Null zonder sessie.
@@ -672,6 +679,7 @@ class CastManager {
     if (i < s.index) s.index--;
     if (i == s.index + 1) await _armNext(s);
     bijStand?.call();
+    _rijVeranderd(s);
   }
 
   /// Een nummer in de wachtrij van de speaker verplaatsen, van [van] naar [naar].
@@ -692,6 +700,7 @@ class CastManager {
     }
     if (s.queue.elementAtOrNull(s.index + 1) != volgendeWas) await _armNext(s);
     bijStand?.call();
+    _rijVeranderd(s);
   }
 
   /// [id] meteen, en de rest laten staan ("Nu spelen, rest laten staan").

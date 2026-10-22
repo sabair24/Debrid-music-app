@@ -299,6 +299,15 @@ Wachtrij voegInWachtrij(Wachtrij w, List<Track> nieuw, {required bool hierna}) {
 /// [nieuw] erbij zoals [voegInWachtrij], maar wat er al KOMT (na het spelende nummer) verhuist in plaats van
 /// er twee keer te staan (Saber, 21-10-2026: "Verplaatsen"). Wat al klonk ("Eerder gespeeld") blijft staan,
 /// en het spelende nummer ook: dat is geschiedenis, geen dubbel.
+/// Samen spelen: de wachtrij van de leider overnemen rond het nummer dat hier nu klinkt
+/// ([PlayerStore.zetRijRondHuidig]). Null als op [index] niet [huidig] staat: dan klinkt hier iets anders en
+/// moet de volger dat nummer openen. De rij komt in speelvolgorde binnen (geschud of niet), dus origineel en
+/// volgorde zijn dezelfde lijst.
+Wachtrij? rijRondHuidig(Track? huidig, List<Track> rij, int index) {
+  if (huidig == null || index < 0 || index >= rij.length || rij[index].path != huidig.path) return null;
+  return (origineel: List.of(rij), volgorde: List.of(rij), index: index);
+}
+
 Wachtrij voegInWachtrijVerplaatsend(Wachtrij w, List<Track> nieuw, {required bool hierna}) {
   if (nieuw.isEmpty) return w;
   final paden = {for (final t in nieuw) t.path};
@@ -727,7 +736,7 @@ class Stilstandwacht {
 }
 
 /// Native (libmpv) player with a queue, shuffle, repeat and a Radio mode.
-class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron, Rijbediening {
+class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron, Rijbediening, VolgSpeler {
   /// **Ruim vooruit lezen, want de muziek komt over het netwerk.**
   ///
   /// Gemeld op 15-08-2026 na een rit: draadloos Android Auto verloor geregeld de verbinding, "zeker
@@ -891,6 +900,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
   /// De plek in het nummer op dit moment, tot op de milliseconde: de laatste melding van mpv plus de
   /// tijd sindsdien (bij de huidige [snelheid]). mpv meldt zijn plek in stapjes; voor samen spelen
   /// (groeperen, stap 3.2) is dat te grof.
+  @override
   Duration get positieNauwkeurig {
     if (!playing || _positieOp == 0) return position;
     final sinds = DateTime.now().microsecondsSinceEpoch - _positieOp;
@@ -900,6 +910,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
 
   /// Iets sneller of trager spelen, om bij te sturen als toestellen samen spelen (stap 3.2). mpv houdt
   /// de toonhoogte gelijk.
+  @override
   Future<void> zetSnelheid(double v) async {
     if ((v - snelheid).abs() < 0.0005) return;
     // Eerst vastleggen waar we nu zijn, anders rekent [positieNauwkeurig] met de nieuwe snelheid terug.
@@ -2138,6 +2149,7 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
   /// De volgorde komt al geschud binnen (het andere toestel meldt zijn speelvolgorde), dus hier wordt
   /// niet opnieuw geschud: shuffle gaat alleen als STAND mee. Staat er een speaker klaar, dan gaat het
   /// daarheen, zoals bij elke andere wachtrij.
+  @override
   Future<void> neemOver(List<Track> rij, int index, Duration positie,
       {bool spelen = true, bool shuffle = false, RepeatMode herhaal = RepeatMode.off}) async {
     if (rij.isEmpty) return;
@@ -2971,6 +2983,19 @@ class PlayerStore extends ChangeNotifier implements NowPlayingSource, Speelbron,
     await springNaar(_index + 1);
   }
 
+  /// Samen spelen (`samen.dart`): de leider kreeg een andere wachtrij (iets "hierna", verplaatst, weg).
+  /// Neem die over zonder het lopende nummer opnieuw te openen — alleen als op [index] het nummer staat dat
+  /// hier nu klinkt. False als dat niet zo is, of in een radio.
+  @override
+  bool zetRijRondHuidig(List<Track> rij, int index) {
+    if (radioMode) return false;
+    final w = rijRondHuidig(current, rij, index);
+    if (w == null) return false;
+    _pas(w);
+    _zetVolgendeKlaar();
+    return true;
+  }
+
   /// Naar het nummer op [plek] in de wachtrij — ook een dat al klonk — ZONDER opnieuw te schudden.
   ///
   /// **Waarom (Saber, 21-10-2026).** Een tik in de wachtrij liep langs [playQueue], en die bouwt de
@@ -3168,4 +3193,20 @@ abstract interface class Rijbediening {
   void speelHierna(List<Track> nummers);
   void zetAchteraan(List<Track> nummers);
   Future<void> speelNuMetRest(Track t);
+}
+
+/// Wat een volger van de speler nodig heeft (samen spelen, `samen.dart`). Een interface, zodat de volger in
+/// een toets te maken is: [PlayerStore] bouwt een libmpv-speler in een veld.
+abstract interface class VolgSpeler {
+  Track? get current;
+  bool get playing;
+  Duration get positieNauwkeurig;
+  List<Track> get queueTracks;
+  void pauzeer();
+  void seek(Duration d);
+  void speelAf();
+  Future<void> zetSnelheid(double v);
+  Future<void> neemOver(List<Track> rij, int index, Duration positie,
+      {bool spelen, bool shuffle, RepeatMode herhaal});
+  bool zetRijRondHuidig(List<Track> rij, int index);
 }
