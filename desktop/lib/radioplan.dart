@@ -171,6 +171,12 @@ Noemt hij geen aantal, kies dan $kStandaardAantal en zet aantalGenoemd op false.
 /// * dezelfde artiest zes keer, met een hoofdletter verschil;
 /// * een lege naam, of een naam van vierhonderd tekens;
 /// * geen enkele artiest — en dan valt er niets op te zoeken.
+/// Past een nummer uit [jaar] bij de jaren die je in je zin noemde ([van]–[tot], elk mag ontbreken)? Met één jaar
+/// speling aan elke kant: een single van eind 1989 hoort bij "de jaren 90", en Discogs' vroegste uitgave is soms een
+/// promo van het jaar ervoor. Saber haalde op 22-10-2026 de jaargrens van de APP weg; die van jouw zin geldt.
+bool zinJaarPast(int jaar, int? van, int? tot) =>
+    (van == null || jaar >= van - 1) && (tot == null || jaar <= tot + 1);
+
 RadioOpdracht leesRadioOpdracht(Object? json) {
   final m = json is Map ? json : const {};
 

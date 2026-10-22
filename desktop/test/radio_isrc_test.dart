@@ -58,7 +58,7 @@ void main() {
 
   test('de app geeft de haak echt door aan het stijlboek', () {
     final main = File('lib/main.dart').readAsStringSync();
-    final boek = main.substring(main.indexOf('final stijlboek = _stijlboek ??= Stijlboek('));
+    final boek = main.substring(main.indexOf('Stijlboek _gedeeldStijlboek(AppSettings cfg) => _stijlboek ??= Stijlboek('));
     expect(boek.substring(0, boek.indexOf(');')), contains('isrcJaar: RecommendService().isrcJaar,'));
   });
 
