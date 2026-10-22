@@ -10987,26 +10987,65 @@ class _ZoneVolume extends StatelessWidget {
   }
 }
 
-/// "Samen laten spelen …" (stap 3.1, Saber 21-10-2026: "Sonos onderling", "hoorbaar gelijk in één kamer"):
-/// vink aan welke speakers met [leider] meespelen. De Sonossen lopen dan onderling op de seconde gelijk
-/// en spelen wat de leider speelt; uitvinken maakt een speaker weer los.
+/// "Samen laten spelen …" (stap 3.1–3.3, Saber 21-10-2026: "Sonos onderling", "gsm/iPad/Mac/pc samen",
+/// "pc + Sonos ongeveer, met een schuif"): vink aan wie met [leider] meespeelt.
+///
+/// - Sonossen onderling lopen op de seconde gelijk: dat doen de Sonossen zelf.
+/// - Toestellen volgen de leider en sturen bij (`samen.dart`).
+/// - Een Sonos met toestellen: de Sonos wordt de leider (hij laat zich niet bijsturen) en de toestellen
+///   volgen hem — ongeveer, want hij meldt zijn plek per seconde; de schuif "Sonos gelijkzetten" zet het op
+///   het oor gelijk. Komt de groep van een toestel, dan speelt de Sonos verder wat dat toestel speelde.
 Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
   final lijst = context.read<ZoneLijst>();
-  // Sonossen met Sonossen (die lopen onderling exact gelijk), toestellen met toestellen (stap 3.2).
-  final speakers = leider.soort == ZoneSoort.speaker;
+  final gekozen = _misschien<GekozenZone>(context);
+  final speaker = leider.soort == ZoneSoort.speaker;
   final kandidaten = [
     for (final z in lijst.zones)
-      if (z.id != leider.id && z.kanGroeperen && z.online && (z.soort == ZoneSoort.speaker) == speakers) z,
+      if (z.id != leider.id && z.kanGroeperen && z.online) z,
   ];
-  // Wie al in de groep zit, staat niet apart in de lijst: die halen we uit de groep zelf.
+  // Wie al in de groep zit, staat niet apart in de lijst: die halen we uit de groep zelf, en hun namen uit
+  // de naam van de groep ("Sonos Move + THUIS": de leider, dan de anderen in de volgorde van de groep).
   final inGroep = {...leider.groep}..remove(leider.id);
   final keuze = {...inGroep};
-  final ids = {for (final z in kandidaten) z.id, ...inGroep};
+  final delen = leider.naam.split(' + ');
+  final volgorde = [leider.id, ...leider.groep.where((g) => g != leider.id)];
+  final uitNaam = {
+    if (delen.length == volgorde.length)
+      for (var i = 0; i < delen.length; i++) volgorde[i]: delen[i],
+  };
+  final eigenNaam = delen.first;
+  // Speakers eerst: komt de groep van een toestel, dan wordt de eerste aangevinkte Sonos de leider.
+  final alle = {for (final z in kandidaten) z.id, ...inGroep};
+  final ids = [
+    for (final id in alle)
+      if (id.startsWith('spk:')) id,
+    for (final id in alle)
+      if (!id.startsWith('spk:')) id,
+  ];
   String naamVan(String id) =>
-      kandidaten.where((z) => z.id == id).map((z) => z.naam).firstOrNull ?? id.replaceFirst('spk:', '');
+      kandidaten.where((z) => z.id == id).map((z) => z.naam).firstOrNull ??
+      uitNaam[id] ??
+      (id.startsWith('spk:') ? 'Speaker' : 'Toestel');
+  ZoneSoort soortVan(String id) => id.startsWith('spk:')
+      ? ZoneSoort.speaker
+      : kandidaten.where((z) => z.id == id).map((z) => z.soort).firstOrNull ?? ZoneSoort.gsm;
+  // Een Sonos met toestellen: de schuif hoort bij die Sonos.
+  bool gemengd(Set<String> k) =>
+      (speaker || k.any((id) => id.startsWith('spk:'))) &&
+      (!speaker || k.any((id) => id.startsWith('dev:')));
+  // Bestaat de groep al, dan schuift de schuif meteen (op het oor, terwijl het speelt).
+  final bestaatAl = speaker && inGroep.any((id) => id.startsWith('dev:'));
+  var vertraging = leider.samenMs;
+  void schuifNu(Set<String> k) {
+    if (bestaatAl && setEquals(k, inGroep)) {
+      unawaited(lijst.stuur?.call(leider.id, {'cmd': 'samenVertraging', 'ms': vertraging}));
+    }
+  }
+
   final ok = await showModalBottomSheet<bool>(
     context: context,
     backgroundColor: Colors.transparent,
+    isScrollControlled: true,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, zet) => SafeArea(
         child: Padding(
@@ -11020,44 +11059,96 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
               bovenop: true,
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Samen laten spelen met ${leider.naam.split(' + ').first}',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 2),
-                    Text(
-                        speakers
-                            ? 'Ze spelen wat deze speelt, op de seconde gelijk'
-                            : 'Ze volgen dit toestel. Klinkt er een achter (Bluetooth)? Zet het bij in Instellingen '
-                                'op dat toestel: "Vertraging bij samen spelen".',
-                        style: TextStyle(color: _muted, fontSize: 12)),
-                    const SizedBox(height: 8),
-                    if (ids.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: Text('Geen andere Sonos gevonden.', style: TextStyle(color: _muted, fontSize: 13)),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Samen laten spelen met $eigenNaam',
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 2),
+                      Text(
+                          speaker
+                              ? 'Sonossen spelen op de seconde gelijk met deze. Toestellen volgen hem ongeveer: zet '
+                                  'het op het oor gelijk met de schuif.'
+                              : 'Ze volgen dit toestel. Kies je een Sonos, dan speelt die verder wat hier speelt en '
+                                  'volgen de toestellen hem. Klinkt een toestel achter (Bluetooth)? Zet het bij in '
+                                  'Instellingen op dat toestel: "Vertraging bij samen spelen".',
+                          style: TextStyle(color: _muted, fontSize: 12)),
+                      const SizedBox(height: 8),
+                      if (ids.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: Text('Niets gevonden om mee samen te spelen.',
+                              style: TextStyle(color: _muted, fontSize: 13)),
+                        ),
+                      for (final id in ids)
+                        CheckboxListTile(
+                          key: ValueKey('zone-groep-lid-$id'),
+                          value: keuze.contains(id),
+                          contentPadding: EdgeInsets.zero,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          secondary: Icon(zoneIcoon(soortVan(id)), size: 20, color: _muted),
+                          title: Text(naamVan(id), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                          onChanged: (v) => zet(() => v == true ? keuze.add(id) : keuze.remove(id)),
+                        ),
+                      if (gemengd(keuze)) ...[
+                        const SizedBox(height: 6),
+                        Row(children: [
+                          const Expanded(
+                            child: Text('Sonos gelijkzetten',
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                          ),
+                          Text(vertraging == 0 ? 'gelijk' : '${vertraging > 0 ? '+' : ''}$vertraging ms',
+                              style: TextStyle(color: _muted, fontSize: 12)),
+                        ]),
+                        Text(
+                            'Klinkt de Sonos ná de toestellen, schuif naar rechts; ervoor, naar links. Hij meldt '
+                            'zijn plek per seconde: dit zet het op het oor gelijk.',
+                            style: TextStyle(color: _muted, fontSize: 12)),
+                        Row(children: [
+                          IconButton(
+                            key: const ValueKey('zone-samen-min'),
+                            tooltip: '10 ms eerder',
+                            icon: const Icon(Icons.remove_rounded),
+                            onPressed: () => zet(() {
+                              vertraging = (vertraging - 10).clamp(-1000, 1000);
+                              schuifNu(keuze);
+                            }),
+                          ),
+                          Expanded(
+                            child: Slider(
+                              key: const ValueKey('zone-samen-schuif'),
+                              value: vertraging.clamp(-1000, 1000).toDouble(),
+                              min: -1000,
+                              max: 1000,
+                              divisions: 200,
+                              onChanged: (v) => zet(() => vertraging = v.round()),
+                              onChangeEnd: (_) => schuifNu(keuze),
+                            ),
+                          ),
+                          IconButton(
+                            key: const ValueKey('zone-samen-plus'),
+                            tooltip: '10 ms later',
+                            icon: const Icon(Icons.add_rounded),
+                            onPressed: () => zet(() {
+                              vertraging = (vertraging + 10).clamp(-1000, 1000);
+                              schuifNu(keuze);
+                            }),
+                          ),
+                        ]),
+                      ],
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: GlasKnop(
+                          key: const ValueKey('zone-groep-klaar'),
+                          icoon: Icons.check_rounded,
+                          label: 'Klaar',
+                          onPressed: () => Navigator.of(ctx).pop(true),
+                        ),
                       ),
-                    for (final id in ids)
-                      CheckboxListTile(
-                        key: ValueKey('zone-groep-lid-$id'),
-                        value: keuze.contains(id),
-                        contentPadding: EdgeInsets.zero,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        title: Text(naamVan(id), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                        onChanged: (v) => zet(() => v == true ? keuze.add(id) : keuze.remove(id)),
-                      ),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: GlasKnop(
-                        key: const ValueKey('zone-groep-klaar'),
-                        icoon: Icons.check_rounded,
-                        label: 'Klaar',
-                        onPressed: () => Navigator.of(ctx).pop(true),
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -11068,14 +11159,25 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
   );
   if (ok != true || !context.mounted) return;
   if (setEquals(keuze, inGroep)) return;
-  final fout = await lijst.stuur?.call(leider.id, {'cmd': 'groepeer', 'leden': keuze.toList()});
+  final leden = [for (final id in ids) if (keuze.contains(id)) id];
+  final fout = await lijst.stuur
+      ?.call(leider.id, {'cmd': 'groepeer', 'leden': leden, if (gemengd(keuze)) 'vertragingMs': vertraging});
   if (!context.mounted) return;
+  // Wie nu leidt: een toestel met een Sonos geeft de leiding aan die Sonos (zie de server). Keek je naar een
+  // zone die nu volgt (het toestel zelf, of dit toestel), dan kijk je voortaan naar de leider.
+  final nieuweLeider = speaker ? leider.id : leden.where((id) => id.startsWith('spk:')).firstOrNull ?? leider.id;
+  if (fout == null &&
+      gekozen != null &&
+      nieuweLeider != gekozen.gekozen &&
+      (gekozen.gekozen == leider.id || leden.contains(gekozen.gekozen))) {
+    gekozen.kies(nieuweLeider);
+  }
   _srcToast(
       context,
       fout ??
           (keuze.isEmpty
-              ? '${leider.naam.split(' + ').first} speelt weer alleen.'
-              : 'Spelen nu samen: ${[leider.naam.split(' + ').first, for (final id in keuze) naamVan(id)].join(' + ')}.'));
+              ? '$eigenNaam speelt weer alleen.'
+              : 'Spelen nu samen: ${[eigenNaam, for (final id in leden) naamVan(id)].join(' + ')}.'));
 }
 
 /// "Verplaats naar …" (Saber, 21-10-2026: "overdragen naar elke zone"): kies waar de muziek van [van]

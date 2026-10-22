@@ -84,7 +84,12 @@ class ZoneStaat {
     this.volume = -1,
     this.groep = const [],
     this.kanGroeperen = false,
+    this.samenMs = 0,
   });
+
+  /// Bij een speaker waarmee toestellen meespelen (stap 3.3): hoeveel later hij klinkt dan hij zegt (ms),
+  /// zoals gezet met de schuif "Sonos gelijkzetten". Wie meespeelt, loopt zoveel achter op zijn plek.
+  final int samenMs;
 
   /// Bij de leider van een groep (stap 3.1): alle zones die samen spelen, de leider erbij. Leeg zonder
   /// groep. De leden staan niet apart in de lijst: ze spelen wat de leider speelt.
@@ -160,6 +165,7 @@ class ZoneStaat {
         if (volume >= 0) 'volume': volume,
         if (groep.isNotEmpty) 'groep': groep,
         if (kanGroeperen) 'kanGroeperen': true,
+        if (samenMs != 0) 'samenMs': samenMs,
       };
 
   static ZoneStaat fromJson(Map<String, dynamic> m) => ZoneStaat(
@@ -184,6 +190,7 @@ class ZoneStaat {
         volume: (m['volume'] as num?)?.toInt() ?? -1,
         groep: [for (final x in (m['groep'] as List? ?? const [])) '$x'],
         kanGroeperen: m['kanGroeperen'] == true,
+        samenMs: (m['samenMs'] as num?)?.toInt() ?? 0,
       );
 
   @override
@@ -208,7 +215,8 @@ class ZoneStaat {
       other.via == via &&
       other.volume == volume &&
       listEquals(other.groep, groep) &&
-      other.kanGroeperen == kanGroeperen;
+      other.kanGroeperen == kanGroeperen &&
+      other.samenMs == samenMs;
 
   @override
   int get hashCode => Object.hash(id, online, playing, trackId, positionMs, opMs, index, lengte);
@@ -408,8 +416,25 @@ class ZoneRegister {
 
   List<({String id, String naam, bool sonos})> _bekend = const [];
 
-  /// Toestellen die samen spelen (stap 3.2): per leider (toestel-id) de volgers. Zie `samen.dart`.
+  /// Toestellen die samen spelen (stap 3.2): per leider de volgers (toestel-ids). Zie `samen.dart`. De
+  /// leider is een toestel-id, of `spk:<speaker-id>` als toestellen met een speaker meespelen (stap 3.3):
+  /// die kan niet bijsturen, dus volgen de toestellen hem.
   final Map<String, List<String>> toestelGroepen = {};
+
+  /// Waar een speaker is voor wie met hem meespeelt (`CastManager.ankerVan`). Gezet door de server.
+  Map<String, dynamic>? Function(String speaker)? speakerAnker;
+
+  /// Per speaker hoeveel later hij klinkt dan hij zegt (ms; de schuif "Sonos gelijkzetten").
+  final Map<String, int> speakerVertraging = {};
+
+  void zetSpeakerVertraging(String speaker, int ms) {
+    if (ms == 0) {
+      speakerVertraging.remove(speaker);
+    } else {
+      speakerVertraging[speaker] = ms;
+    }
+    _meld();
+  }
 
   /// [leider] met precies [volgers] (toestel-ids; leeg = geen groep). Geeft de volgers terug die
   /// eruit gingen. Een toestel zit in hoogstens één groep, en een leider is geen volger.
@@ -449,6 +474,14 @@ class ZoneRegister {
 
   /// Het anker van de groep van [leider]: wat de leider het laatst meldde. Null zonder melding.
   Map<String, dynamic>? ankerVan(String leider) {
+    if (leider.startsWith('spk:')) {
+      final id = leider.substring(4);
+      final a = speakerAnker?.call(id);
+      if (a == null) return null;
+      // Klinkt de speaker later dan hij zegt, dan horen de volgers ook zoveel later te zijn.
+      final ms = ((a['positieMs'] as num?)?.toInt() ?? 0) - (speakerVertraging[id] ?? 0);
+      return {...a, 'positieMs': ms < 0 ? 0 : ms};
+    }
     final p = state.perToestel[leider];
     if (p == null || p.trackId.isEmpty) return null;
     return {
@@ -520,16 +553,26 @@ class ZoneRegister {
       return [eigen, for (final l in g) if (l != id) namen[l] ?? l].join(' + ');
     }
 
-    List<String> groepIds(String id) => [for (final l in groepVan[id] ?? const <String>[]) 'spk:$l'];
+    List<String> groepIds(String id) {
+      final volgers = toestelGroepen['spk:$id'] ?? const <String>[];
+      final sonos = groepVan[id] ?? (volgers.isEmpty ? const <String>[] : [id]);
+      return [for (final l in sonos) 'spk:$l', for (final v in volgers) 'dev:$v'];
+    }
+
+    String naamMetVolgers(String id, String eigen) => [
+          naamVan(id, eigen),
+          for (final v in toestelGroepen['spk:$id'] ?? const <String>[]) _naamVanToestel(v),
+        ].join(' + ');
     for (final s in _speakers) {
       if (leden.contains(s.id)) continue;
       final n = s.trackId == null ? null : nummer?.call(s.trackId!);
       uit.add(ZoneStaat(
         id: 'spk:${s.id}',
         soort: ZoneSoort.speaker,
-        naam: naamVan(s.id, s.naam),
+        naam: naamMetVolgers(s.id, s.naam),
         groep: groepIds(s.id),
         kanGroeperen: sonos.contains(s.id),
+        samenMs: toestelGroepen.containsKey('spk:${s.id}') ? speakerVertraging[s.id] ?? 0 : 0,
         online: true,
         playing: s.speelt,
         trackId: s.trackId ?? '',
@@ -551,9 +594,10 @@ class ZoneRegister {
       uit.add(ZoneStaat(
         id: 'spk:${b.id}',
         soort: ZoneSoort.speaker,
-        naam: naamVan(b.id, b.naam),
+        naam: naamMetVolgers(b.id, b.naam),
         groep: groepIds(b.id),
         kanGroeperen: b.sonos,
+        samenMs: toestelGroepen.containsKey('spk:${b.id}') ? speakerVertraging[b.id] ?? 0 : 0,
         online: true,
         via: pcNaam,
       ));
