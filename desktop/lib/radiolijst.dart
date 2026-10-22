@@ -110,7 +110,7 @@ String sfeerPrompt({
     if (jaar != null) 'uit $jaar',
     if (stijlen.isNotEmpty) 'stijl ${stijlen.join(', ')}',
   ].join(', ');
-  String tempo(int i) => i < bpm.length && bpm[i] != null ? ' (~${bpm[i]!.round()} BPM)' : '';
+  String tempo(int i) => i < bpm.length && bpm[i] != null ? ' (${tempoTekst(bpm[i]!)})' : '';
   final lijst = [
     for (var i = 0; i < kandidaten.length; i++) '${i + 1}. ${kandidaten[i].artiest} - ${kandidaten[i].titel}${tempo(i)}'
   ];
@@ -200,9 +200,32 @@ const String kTaalZin = 'Taal: bepaal eerst in welke taal het zaad gezongen is. 
     'Plaza - Yo Yo) - en de andere helft uit het genre van het zaad in andere talen. Dan is een zanger uit dezelfde '
     'taal juist wel de bedoeling. Een trage ballad in die taal is het niet.';
 
-/// Hetzelfde voor de sfeervraag: een nummer in de taal van het zaad mag niet wegvallen omdat het label anders is.
-const String kTaalSfeerZin = 'Een nummer in de taal van het zaad, met hetzelfde tempo en dezelfde energie, past er '
-    'juist bij - ook als het genre-label anders is (Nederlandstalige up-tempo pop bij een Nederlandstalig dancenummer).';
+/// Hetzelfde voor de sfeervraag: een nummer in de taal van het zaad mag niet wegvallen omdat het genre of het tempo
+/// anders is. Gemeten op 22-10-2026, radio vanaf Petra — Ik Leef Voor Jou: met de vorige zin ("met hetzelfde tempo en
+/// dezelfde energie") wees de sfeervraag drie keer op drie alle vijf Nederlandstalige nummers af — Clouseau, De
+/// Kreuners, Rob de Nijs, Marco Borsato, Jan Smit. Saber: *"nee allemaal goed, dromen zijn bedrog te traag??? Nee
+/// totaal niet"*. De taal gaat dus vóór "wees streng" en vóór de tempozin; alleen een echt trage ballad valt af.
+/// Nagemeten met deze zin (zes keer, samen met [tempoTekst]): De Kreuners, Jan Smit, Borsato en Clouseau bleven staan,
+/// Rob de Nijs 2 van 6; Benny Neyman en Willeke Alberti (echte trage ballads) gingen 6 van 6 weg, en bij Freak Out
+/// (Engelstalig) veranderde niets.
+const String kTaalSfeerZin = 'Taal: is het zaad NIET in het Engels gezongen, dan weegt de taal het zwaarst. Een '
+    'bekend nummer in die taal uit dezelfde jaren - pop, rock, schlager of een feestnummer - past er dan bij, ook als '
+    'het genre anders is of het tempo wat lager ligt: de luisteraar wil die nummers juist horen tussen de rest. Noem '
+    'zo een nummer alleen als het een echt trage ballad is, zoals Marco Borsato - Afscheid Nemen Bestaat Niet; een '
+    'popnummer in middentempo zoals Marco Borsato - Dromen Zijn Bedrog hoort er wel bij. Twijfel je, laat het dan '
+    'staan. Dit gaat voor "wees streng" en voor de tempozin. Bij een Engelstalig zaad geldt dit niet.';
+
+/// Een gemeten tempo zoals de sfeervraag het ziet. Onder [kTempoTwijfelOnder] BPM staat het dubbele erbij: een
+/// meter kan het halve tempo niet van het echte onderscheiden. Gemeten op 22-10-2026, radio vanaf Petra: Clouseau —
+/// Daar Gaat Ze kwam binnen als 87 BPM, en de sfeervraag wees het negen keer op negen af als te traag. Saber: het
+/// past, en het is waarschijnlijk het halve tempo. Het model weet van het nummer zelf welke van de twee het is.
+String tempoTekst(double bpm) {
+  final b = bpm.round();
+  return b < kTempoTwijfelOnder ? '~$b BPM, of ~${b * 2}' : '~$b BPM';
+}
+
+/// Zie [tempoTekst].
+const int kTempoTwijfelOnder = 100;
 
 /// Het gemeten tempo van het zaad voor de lijst (`tempo.dart`) — zie [tempoZin] voor de sfeervraag.
 String tempoLijstZin(double zaadBpm) => 'Het zaad zit rond ${zaadBpm.round()} BPM (gemeten uit de audio; een meter '
