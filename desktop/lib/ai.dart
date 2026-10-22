@@ -263,6 +263,8 @@ class AiService {
     List<({String artiest, String titel})> pastWel = const [],
     void Function()? perAanroep,
     bool dieper = false,
+    // Alleen voor wie het budget elders bijhoudt: de pc, voor een toestel (zie `pc_model.dart`).
+    bool start = false,
   }) async {
     final sleutel = sleutelVan().trim();
     if (sleutel.isEmpty || artiest.trim().isEmpty) return const [];
@@ -355,6 +357,7 @@ class AiService {
     required List<({String artiest, String titel})> kandidaten,
     List<({String artiest, String titel})> pastNiet = const [],
     List<({String artiest, String titel})> pastWel = const [],
+    bool start = false,
   }) async {
     final sleutel = sleutelVan().trim();
     if (sleutel.isEmpty || kandidaten.isEmpty) return const {};

@@ -14,7 +14,20 @@ import 'package:debridmusic/models.dart';
 
 Uint8List _jpeg(int breedte, int hoogte, int lengte, {int zaad = 1}) {
   final b = Uint8List(max(lengte, 40));
-  b.setAll(0, [0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, hoogte >> 8, hoogte & 0xFF, breedte >> 8, breedte & 0xFF, 0x03]);
+  b.setAll(0, [
+    0xFF,
+    0xD8,
+    0xFF,
+    0xC0,
+    0x00,
+    0x11,
+    0x08,
+    hoogte >> 8,
+    hoogte & 0xFF,
+    breedte >> 8,
+    breedte & 0xFF,
+    0x03,
+  ]);
   final r = Random(zaad);
   for (var i = 12; i < b.length - 2; i++) {
     b[i] = r.nextInt(256);
@@ -41,14 +54,14 @@ Uint8List _tekst(int versie, String id, String s) => _frame(versie, id, [0, ...s
 
 /// Een APIC; met [utf16] een omschrijving in UTF-16 met BOM (twee nullen erachter).
 Uint8List _apic(int versie, int soort, Uint8List beeld, {bool utf16 = false}) => _frame(versie, 'APIC', [
-      utf16 ? 1 : 0,
-      ...'image/jpeg'.codeUnits,
-      0,
-      soort,
-      if (utf16) ...[0xFF, 0xFE, 0x41, 0x00, 0x00, 0x00] else ...'hoes'.codeUnits,
-      if (!utf16) 0,
-      ...beeld,
-    ]);
+  utf16 ? 1 : 0,
+  ...'image/jpeg'.codeUnits,
+  0,
+  soort,
+  if (utf16) ...[0xFF, 0xFE, 0x41, 0x00, 0x00, 0x00] else ...'hoes'.codeUnits,
+  if (!utf16) 0,
+  ...beeld,
+]);
 
 Uint8List _id3(int versie, List<Uint8List> frames, int opvulling, {int vlaggen = 0}) {
   final lijf = [for (final f in frames) ...f, ...List.filled(opvulling, 0)];
@@ -64,9 +77,7 @@ Uint8List _id3(int versie, List<Uint8List> frames, int opvulling, {int vlaggen =
   var i = o + 10;
   while (i + 10 <= eind && b[i] != 0) {
     final id = String.fromCharCodes(b, i, i + 4);
-    final n = versie == 4
-        ? _ssLees(b, i + 4)
-        : (b[i + 4] << 24) | (b[i + 5] << 16) | (b[i + 6] << 8) | b[i + 7];
+    final n = versie == 4 ? _ssLees(b, i + 4) : (b[i + 4] << 24) | (b[i + 5] << 16) | (b[i + 6] << 8) | b[i + 7];
     ids.add(id);
     if (id == 'APIC') {
       var p = i + 11;
@@ -94,9 +105,13 @@ Uint8List _apeItem(String sleutel, List<int> waarde, {int vlaggen = 0}) =>
 Uint8List _ape(List<Uint8List> items, {int versie = 2000}) {
   final lijf = [for (final i in items) ...i];
   List<int> rand(int vlaggen) => [
-        ...'APETAGEX'.codeUnits, ..._le(versie), ..._le(lijf.length + 32), ..._le(items.length), ..._le(vlaggen),
-        ...List.filled(8, 0),
-      ];
+    ...'APETAGEX'.codeUnits,
+    ..._le(versie),
+    ..._le(lijf.length + 32),
+    ..._le(items.length),
+    ..._le(vlaggen),
+    ...List.filled(8, 0),
+  ];
   return Uint8List.fromList([...rand(0xA0000000), ...lijf, ...rand(0x80000000)]);
 }
 
@@ -148,7 +163,7 @@ void main() {
   // MPEG-1 laag 3, 128 kb/s, 44,1 kHz (FF FB 90 64: 417 bytes per frame) met ruis erin: de "audio" die byte
   // voor byte mee moet.
   final mp3Audio = Uint8List.fromList([
-    for (var i = 0; i < 140; i++) ..._bytes(417, zaad: i, begin: [0xFF, 0xFB, 0x90, 0x64])
+    for (var i = 0; i < 140; i++) ..._bytes(417, zaad: i, begin: [0xFF, 0xFB, 0x90, 0x64]),
   ]);
 
   test('welke schrijver bij welk bestand', () {
@@ -178,7 +193,11 @@ void main() {
       expect(f.lastModifiedSync(), vroeger);
       expect(b.sublist(kop.length), mp3Audio, reason: 'de audio byte voor byte');
       final inhoud = _id3Inhoud(b);
-      expect(inhoud.ids, ['TIT2', 'APIC', 'TXXX'], reason: 'de nieuwe plaat op de plek van de oude, de rest in volgorde');
+      expect(inhoud.ids, [
+        'TIT2',
+        'APIC',
+        'TXXX',
+      ], reason: 'de nieuwe plaat op de plek van de oude, de rest in volgorde');
       expect(inhoud.platen, [(3, 1 + 11 + 2 + nieuw.length)]);
       // De frames die we niet aanraken: byte voor byte.
       expect(b.sublist(10, 10 + titel.length), titel);
@@ -212,7 +231,11 @@ void main() {
     });
 
     test('een achterkant blijft, de nieuwe voorkant komt ervoor; oude voorkanten weg (ook in UTF-16)', () {
-      final kop = _id3(3, [_apic(3, 4, achter, utf16: true), _apic(3, 3, oudeHoes, utf16: true), _apic(3, 0, oudeHoes)], 500);
+      final kop = _id3(3, [
+        _apic(3, 4, achter, utf16: true),
+        _apic(3, 3, oudeHoes, utf16: true),
+        _apic(3, 0, oudeHoes),
+      ], 500);
       final f = schrijf('d.mp3', Uint8List.fromList([...kop, ...mp3Audio]));
       expect(schrijfVoorkantInMp3(f.path, nieuw).uitkomst, isNot(HoesUitkomst.mislukt));
       final p = _id3Inhoud(f.readAsBytesSync()).platen;
@@ -223,11 +246,23 @@ void main() {
     });
 
     test('alleen in een bestand zonder plaat — als dat gevraagd is', () {
-      final met = schrijf('e.mp3', Uint8List.fromList([..._id3(3, [_apic(3, 3, oudeHoes)], 100), ...mp3Audio]));
+      final met = schrijf(
+        'e.mp3',
+        Uint8List.fromList([
+          ..._id3(3, [_apic(3, 3, oudeHoes)], 100),
+          ...mp3Audio,
+        ]),
+      );
       final voor = met.readAsBytesSync();
       expect(schrijfVoorkantInMp3(met.path, nieuw, alleenAlsLeeg: true).uitkomst, HoesUitkomst.heeftAlEen);
       expect(met.readAsBytesSync(), voor);
-      final zonder = schrijf('f.mp3', Uint8List.fromList([..._id3(3, [_tekst(3, 'TIT2', 'x')], 100), ...mp3Audio]));
+      final zonder = schrijf(
+        'f.mp3',
+        Uint8List.fromList([
+          ..._id3(3, [_tekst(3, 'TIT2', 'x')], 100),
+          ...mp3Audio,
+        ]),
+      );
       expect(schrijfVoorkantInMp3(zonder.path, nieuw, alleenAlsLeeg: true).uitkomst, isNot(HoesUitkomst.heeftAlEen));
       expect(eerstePlaat(zonder), nieuw);
     });
@@ -235,10 +270,24 @@ void main() {
     test('weigeren in plaats van gokken: v2.2, vlaggen, een frame te lang, iets anders dan een mp3', () {
       final gevallen = {
         'v22.mp3': Uint8List.fromList([0x49, 0x44, 0x33, 2, 0, 0, ..._ss(20), ...List.filled(20, 0), ...mp3Audio]),
-        'unsync.mp3': Uint8List.fromList([..._id3(3, [_tekst(3, 'TIT2', 'x')], 50, vlaggen: 0x80), ...mp3Audio]),
+        'unsync.mp3': Uint8List.fromList([
+          ..._id3(3, [_tekst(3, 'TIT2', 'x')], 50, vlaggen: 0x80),
+          ...mp3Audio,
+        ]),
         'te_lang.mp3': Uint8List.fromList([
-          0x49, 0x44, 0x33, 3, 0, 0, ..._ss(30), ...'TIT2'.codeUnits, ..._be(500), 0, 0, ...List.filled(20, 1),
-          ...mp3Audio
+          0x49,
+          0x44,
+          0x33,
+          3,
+          0,
+          0,
+          ..._ss(30),
+          ...'TIT2'.codeUnits,
+          ..._be(500),
+          0,
+          0,
+          ...List.filled(20, 1),
+          ...mp3Audio,
         ]),
         'rommel.mp3': _bytes(5000, begin: [0x52, 0x49, 0x46, 0x46]),
       };
@@ -250,15 +299,22 @@ void main() {
     });
 
     test('alleen-lezen: niet aangeraakt', () {
-      final f = schrijf('ro.mp3', Uint8List.fromList([..._id3(3, [_apic(3, 3, oudeHoes)], 100), ...mp3Audio]));
+      final f = schrijf(
+        'ro.mp3',
+        Uint8List.fromList([
+          ..._id3(3, [_apic(3, 3, oudeHoes)], 100),
+          ...mp3Audio,
+        ]),
+      );
       if (Platform.isWindows) {
         Process.runSync('attrib', ['+R', f.path]);
       } else {
         Process.runSync('chmod', ['444', f.path]);
       }
-      addTearDown(() => Platform.isWindows
-          ? Process.runSync('attrib', ['-R', f.path])
-          : Process.runSync('chmod', ['644', f.path]));
+      addTearDown(
+        () =>
+            Platform.isWindows ? Process.runSync('attrib', ['-R', f.path]) : Process.runSync('chmod', ['644', f.path]),
+      );
       final voor = f.readAsBytesSync();
       expect(schrijfVoorkantInMp3(f.path, nieuw).uitkomst, HoesUitkomst.alleenLezen);
       expect(f.readAsBytesSync(), voor);
@@ -277,7 +333,9 @@ void main() {
       } finally {
         try {
           raf.closeSync();
-        } catch (_) {/* de lezer sluit hem zelf */}
+        } catch (_) {
+          /* de lezer sluit hem zelf */
+        }
       }
     }
 
@@ -317,7 +375,11 @@ void main() {
     });
 
     test('afgekapt (Bow Wow: de FORM belooft meer dan er staat): niet aangeraakt', () {
-      final heel = _aiff([comm, ssnd, _chunk('ID3 ', _id3(4, [_apic(4, 3, oudeHoes)], 100))]);
+      final heel = _aiff([
+        comm,
+        ssnd,
+        _chunk('ID3 ', _id3(4, [_apic(4, 3, oudeHoes)], 100)),
+      ]);
       final f = schrijf('d.aiff', Uint8List.sublistView(heel, 0, heel.length - 2000));
       final voor = f.readAsBytesSync();
       expect(schrijfVoorkantInAiff(f.path, nieuw).uitkomst, HoesUitkomst.nietTeLezen);
@@ -327,21 +389,27 @@ void main() {
 
   group('WavPack en Monkey\'s Audio (APEv2)', () {
     final wv = _bytes(50000, begin: 'wvpk'.codeUnits);
-    final id3v1 = Uint8List.fromList(['T'.codeUnitAt(0), 'A'.codeUnitAt(0), 'G'.codeUnitAt(0), ...List.filled(125, 32)]);
+    final id3v1 = Uint8List.fromList([
+      'T'.codeUnitAt(0),
+      'A'.codeUnitAt(0),
+      'G'.codeUnitAt(0),
+      ...List.filled(125, 32),
+    ]);
 
     test('de nieuwe voorkant als eerste item; tekst en achterkant blijven, de oude voorkant weg, ID3v1 achteraan', () {
       final titel = _apeItem('Title', 'Earth Song'.codeUnits);
       final f = schrijf(
-          'a.wv',
-          Uint8List.fromList([
-            ...wv,
-            ..._ape([
-              titel,
-              _apeItem('Cover Art (front)', [...'a.jpg'.codeUnits, 0, ...oudeHoes], vlaggen: 2),
-              _apeItem('Cover Art (Back)', [...'b.jpg'.codeUnits, 0, ...achter], vlaggen: 2),
-            ]),
-            ...id3v1,
-          ]));
+        'a.wv',
+        Uint8List.fromList([
+          ...wv,
+          ..._ape([
+            titel,
+            _apeItem('Cover Art (front)', [...'a.jpg'.codeUnits, 0, ...oudeHoes], vlaggen: 2),
+            _apeItem('Cover Art (Back)', [...'b.jpg'.codeUnits, 0, ...achter], vlaggen: 2),
+          ]),
+          ...id3v1,
+        ]),
+      );
       final r = schrijfVoorkantInApe(f.path, nieuw, bewaarOud: oudMap());
       expect(r.uitkomst, HoesUitkomst.andereGrootte);
       final b = f.readAsBytesSync();
@@ -368,13 +436,19 @@ void main() {
 
     test('APEv1 of items die niet kloppen: niet aangeraakt; alleen-als-leeg met een plaat ook niet', () {
       for (final (naam, bytes) in [
-        ('v1.wv', Uint8List.fromList([...wv, ..._ape([_apeItem('Title', 'x'.codeUnits)], versie: 1000)])),
+        (
+          'v1.wv',
+          Uint8List.fromList([
+            ...wv,
+            ..._ape([_apeItem('Title', 'x'.codeUnits)], versie: 1000),
+          ]),
+        ),
         (
           'kapot.wv',
           Uint8List.fromList([
             ...wv,
-            ...(_ape([_apeItem('Title', 'xyz'.codeUnits)])..[32] = 200)
-          ])
+            ...(_ape([_apeItem('Title', 'xyz'.codeUnits)])..[32] = 200),
+          ]),
         ),
       ]) {
         final f = schrijf(naam, bytes);
@@ -383,7 +457,9 @@ void main() {
       }
       final met = Uint8List.fromList([
         ...wv,
-        ..._ape([_apeItem('Cover Art (Front)', [...'a.jpg'.codeUnits, 0, ...oudeHoes], vlaggen: 2)])
+        ..._ape([
+          _apeItem('Cover Art (Front)', [...'a.jpg'.codeUnits, 0, ...oudeHoes], vlaggen: 2),
+        ]),
       ]);
       final f = schrijf('met.wv', met);
       expect(schrijfVoorkantInApe(f.path, nieuw, alleenAlsLeeg: true).uitkomst, HoesUitkomst.heeftAlEen);
@@ -399,23 +475,31 @@ void main() {
       final kern = 10 + t.length + apic.length;
       expect(nieuweId3(versie: 3, revisie: 0, frames: frames, apic: apic, doel: kern).length, kern);
       expect(nieuweId3(versie: 3, revisie: 0, frames: frames, apic: apic, doel: kern + 77).length, kern + 77);
-      expect(nieuweId3(versie: 3, revisie: 0, frames: frames, apic: apic, doel: kern - 1).length,
-          kern + kHoesInBestandRuimte);
+      expect(
+        nieuweId3(versie: 3, revisie: 0, frames: frames, apic: apic, doel: kern - 1).length,
+        kern + kHoesInBestandRuimte,
+      );
     });
   });
 
   group('de veger', () {
     test('een ronde met mp3, AIFF en WavPack — via de isolate; een m4a telt als "nog niet"', () async {
-      final mp3 = schrijf('1.mp3', Uint8List.fromList([..._id3(3, [_apic(3, 3, oudeHoes)], 100), ...mp3Audio]));
+      final mp3 = schrijf(
+        '1.mp3',
+        Uint8List.fromList([
+          ..._id3(3, [_apic(3, 3, oudeHoes)], 100),
+          ...mp3Audio,
+        ]),
+      );
       final aif = schrijf('2.aif', _aiff([_chunk('SSND', _bytes(4000))]));
       final wv = schrijf('3.wv', _bytes(9000, begin: 'wvpk'.codeUnits));
       final m4a = schrijf('4.m4a', _bytes(900));
       final lib = LibraryStore()..configDirOverride = map.path;
       lib.albums = [
         Album('Until Now', 'Swedish House Mafia', [
-          for (final f in [mp3, aif, wv, m4a])
-            Track(path: f.path, title: 'x', artist: 'Swedish House Mafia', album: 'Until Now', isFlac: false)
-        ])
+            for (final f in [mp3, aif, wv, m4a])
+              Track(path: f.path, title: 'x', artist: 'Swedish House Mafia', album: 'Until Now', isFlac: false),
+          ])
           ..resolvedCover = nieuw
           ..resolvedFrom = 'dz:1',
       ];

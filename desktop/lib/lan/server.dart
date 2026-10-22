@@ -22,6 +22,7 @@ import '../kandidatenzeef.dart' show zeefKandidaten;
 import '../online.dart';
 import '../organize.dart';
 import '../paths.dart';
+import '../pc_model.dart' show Modelvragen;
 import '../prullenbak.dart' show heeftPrullenbak;
 import '../warm_log.dart';
 import '../settings.dart';
@@ -358,6 +359,9 @@ class LanServer {
   /// Een radio op een speaker (Saber, 22-10-2026: "pc draait, speaker speelt"): de pc start hem, met
   /// [speaker] als uitgang (`speaker_radio.dart`). Gezet door main; geeft null of de reden waarom niet.
   Future<String?> Function(String speaker, Map<String, dynamic> opdracht)? bijSpeakerRadio;
+
+  /// De modelvragen van toestellen (`pc_model.dart`), met het budget van de pc. Gezet door main.
+  Modelvragen? modelvragen;
 
   /// Per toestel de open lijnen (`/api/zones/events`) waarover een opdracht naar dat toestel kan.
   final Map<String, List<void Function(String event, Map<String, dynamic> data)>> _zoneLijnen = {};
@@ -2649,6 +2653,9 @@ class LanServer {
       // Zit dit toestel thuis, ook als het via de eigen deur binnenkomt? Voor de streamkwaliteit — zie
       // [bronIsThuis] en `ClientSession.wegVoorStroom`.
       'opHetThuisnet': _vanThuis(req) ? 'ja' : 'nee',
+      // Kan de pc het taalmodel vragen voor een radio op dit toestel (`pc_model.dart`)? Een oudere pc zegt
+      // niets, en dan vraagt het toestel het ook niet.
+      'radioModel': modelvragen != null && config.anthropicKey.trim().isNotEmpty ? 'ja' : 'nee',
     });
   }
 
@@ -2732,6 +2739,18 @@ class LanServer {
       case 'begin':
         final tegen = radiohaler.begin();
         return _json(req.response, {'ok': tegen == null, if (tegen != null) 'reden': tegen});
+      // Het taalmodel van de pc voor een radio op een toestel — zie `pc_model.dart`.
+      case 'modelvraag':
+        final mv = modelvragen;
+        if (mv == null) return _unavailable(req, 'Deze pc kan het taalmodel niet vragen.');
+        final kop = req.headers.value(HttpHeaders.authorizationHeader) ?? '';
+        final sleutel = kop.startsWith('Bearer ') ? kop.substring(7).trim() : '';
+        final wie = grants.grantFor(sleutel)?.deviceName ?? 'een toestel';
+        return _json(req.response, mv.begin(body, toestel: wie));
+      case 'modelstand':
+        final mv = modelvragen;
+        if (mv == null) return _unavailable(req, 'Deze pc kan het taalmodel niet vragen.');
+        return _json(req.response, mv.stand('${body['id'] ?? ''}'));
       case 'einde':
         radiohaler.einde();
         return _json(req.response, {'ok': true});
