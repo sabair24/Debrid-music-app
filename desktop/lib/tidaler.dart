@@ -126,6 +126,10 @@ class Tidaler {
 
   static bool get beschikbaar => pad != null;
 
+  /// Draaien we in een toets? Dan nooit echt naar TIDAL — op Sabers pc staat tidaler echt, en een toets die een
+  /// Soulseek-storing nabootst zou anders bij TIDAL gaan halen (`flutter test` zet `FLUTTER_TEST`).
+  static bool get inToets => Platform.environment['FLUTTER_TEST'] == 'true';
+
   /// Voor de toetsen, en voor nadat iemand tidaler geïnstalleerd heeft zonder de app te herstarten.
   static void resetLookup() {
     _gekeken = false;
@@ -292,6 +296,11 @@ String opgehaaldMelding(String kwaliteit, {String? keuring}) {
       ? '$basis — de bibliotheek wordt opnieuw doorzocht'
       : '$basis en gekeurd: $keuring';
 }
+
+/// Hoeveel nummers de radio (en ▶) hoogstens per uur van TIDAL haalt, als Soulseek niet meedoet of het nummer niet
+/// heeft. Een uur muziek is zo'n vijftien nummers: de radio houdt zo bij wat je hoort, zonder in een paar minuten
+/// tientallen nummers te trekken — dat patroon geeft een geblokkeerd account ("abuse_detected").
+const int kTidalRadioPerUur = 15;
 
 /// Eén download tegelijk: tidaler leest zijn map uit één instellingenbestand ([tidalerInstellingen]).
 Future<void> _beurt = Future.value();
