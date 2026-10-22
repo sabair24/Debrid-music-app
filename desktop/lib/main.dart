@@ -23137,6 +23137,19 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   // tidal
   List<TidalTrack> _tidalTracks = ZoekGeheugen.tidalNummers;
   List<TidalAlbum> _tidalAlbums = ZoekGeheugen.tidalAlbums;
+
+  /// Artiesten met foto, alleen via tidaler. Saber, 22-10-2026: *"ik wil artiest foto en album cover ook zien, en ook
+  /// bij de liedjes"*.
+  List<TidalArtiest> _tidalArtiesten = const [];
+
+  /// De artiest die je via zijn foto opende ([_openTidalArtiest]), en de zoekuitslag om naar terug te gaan.
+  TidalArtiest? _tidalArtiest;
+  TidalZoekResultaat? _tidalVoorArtiest;
+
+  /// De nummers per plaat zoals tidaler ze gaf (null: nog bezig), en de platen waarbij je ook de andere bronnen
+  /// (Soulseek, torrents) openklapte.
+  final Map<String, List<TidalTrack>?> _tidalAlbumNummers = {};
+  final Set<String> _tidalBronnenOpen = {};
   bool _tidalBusy = false, _tidalConnecting = false;
   int? _tidalExpanded = ZoekGeheugen.tidalNummerOpen,
       _tidalAlbumExpanded = ZoekGeheugen.tidalAlbumOpen;
@@ -23144,8 +23157,17 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   /// Zoekt TIDAL hier via tidaler — zijn inlog, geen eigen app op developer.tidal.com nodig? Op de machine die de
   /// muziek bezit en waar tidaler staat. Elders (een telefoon, de Shield) blijft het de officiële API. Saber,
   /// 22-10-2026: *"Niet verbonden met tidal staat er bij zoeken via tidal"*.
-  bool get _tidalerZoekt =>
-      _isDesktop && !context.read<LibraryStore>().isRemote && Tidaler.beschikbaar && Tidaler.python != null;
+  ///
+  /// Op een toestel dat aan de pc hangt (gsm, iPad, Mac, Shield) ook: dan vraagt het de pc (`/api/tidal/…`), waar
+  /// tidaler en zijn inlog staan — Saber, 22-10-2026: *"maak het ook mogelijk vanaf men gsm, mac ipad en shield"*.
+  bool get _tidalerZoekt {
+    final lib = context.read<LibraryStore>();
+    if (lib.remote != null) return true;
+    return _isDesktop && !lib.isRemote && Tidaler.beschikbaar && Tidaler.python != null;
+  }
+
+  /// Hangt dit toestel aan de pc, dan gaat TIDAL via de pc ([_tidalOpPc]).
+  bool get _tidalViaPc => context.read<LibraryStore>().remote != null;
 
   @override
   void initState() {
@@ -23175,6 +23197,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       _tidalBusy = true;
       _tidalTracks = [];
       _tidalAlbums = [];
+      _tidalArtiesten = const [];
+      _tidalArtiest = null;
+      _tidalVoorArtiest = null;
       _tidalExpanded = null;
       _tidalAlbumExpanded = null;
       _status = null;
@@ -23185,13 +23210,16 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     ZoekGeheugen.tidalAlbumOpen = null;
     ZoekGeheugen.status = null;
     try {
-      final r = viaTidaler
-          ? await zoekCatalogusOpTidal(q) ??
-              (throw 'tidaler antwoordde niet — log opnieuw in met "tidaler login" in een terminal.')
-          : await tidal.search(q);
+      final r = !viaTidaler
+          ? await tidal.search(q)
+          : _tidalViaPc
+              ? await _tidalOpPc(context.read<LibraryStore>(), 'zoek', {'q': q})
+              : await zoekCatalogusOpTidal(q) ??
+                  (throw 'tidaler antwoordde niet — log opnieuw in met "tidaler login" in een terminal.');
       if (!geldig()) return;
       _tidalAlbums = r.albums;
       _tidalTracks = r.tracks;
+      _tidalArtiesten = r.artiesten;
       _status = r.leeg ? 'Geen TIDAL-resultaten.' : null;
       ZoekGeheugen.tidalAlbums = _tidalAlbums;
       ZoekGeheugen.tidalNummers = _tidalTracks;
@@ -23205,6 +23233,81 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     } finally {
       if (geldig() && mounted) setState(() => _tidalBusy = false);
     }
+  }
+
+  /// TIDAL via de pc ([_tidalViaPc]): de pc draait tidalers zoekhulpje en geeft zijn uitvoer door; hier gelezen met
+  /// dezelfde [tidalCatalogusUit] als op de pc. Een oudere pc kent `/api/tidal/…` niet — dan zegt de fout het.
+  Future<TidalZoekResultaat> _tidalOpPc(LibraryStore lib, String wat, Map<String, dynamic> vraag) async {
+    final c = lib.remote;
+    if (c == null) throw 'Geen verbinding met de pc.';
+    try {
+      final a = await c.ask('/api/tidal/$wat', vraag);
+      return tidalCatalogusUit('${a['uitvoer'] ?? ''}');
+    } on RemoteException catch (e) {
+      throw e.statusCode == 404 ? 'Werk de pc bij: hij kent TIDAL via tidaler nog niet.' : e.message;
+    }
+  }
+
+  /// Een artiest openen vanaf zijn foto: zijn platen en EP's en zijn bekendste nummers, via tidaler.
+  Future<void> _openTidalArtiest(TidalArtiest a) async {
+    final voor = TidalZoekResultaat(_tidalAlbums, _tidalTracks, _tidalArtiesten);
+    setState(() {
+      _tidalBusy = true;
+      _tidalExpanded = null;
+      _tidalAlbumExpanded = null;
+    });
+    ({TidalArtiest? artiest, TidalZoekResultaat werk})? r;
+    try {
+      if (_tidalViaPc) {
+        final z = await _tidalOpPc(context.read<LibraryStore>(), 'artiest', {'id': a.id});
+        r = (artiest: z.artiesten.firstOrNull, werk: TidalZoekResultaat(z.albums, z.tracks));
+      } else {
+        r = await artiestOpTidal(a.id);
+      }
+    } catch (_) {
+      r = null;
+    }
+    if (!mounted) return;
+    setState(() {
+      _tidalBusy = false;
+      if (r == null) {
+        _status = 'tidaler antwoordde niet over ${a.naam}.';
+        return;
+      }
+      _tidalVoorArtiest ??= voor;
+      _tidalArtiest = r.artiest ?? a;
+      _tidalAlbums = r.werk.albums;
+      _tidalTracks = r.werk.tracks;
+      _tidalArtiesten = const [];
+    });
+  }
+
+  /// Terug van een artiest naar de zoekuitslag waar je hem vond.
+  void _terugNaarTidalUitslag() {
+    final v = _tidalVoorArtiest;
+    if (v == null) return;
+    setState(() {
+      _tidalAlbums = v.albums;
+      _tidalTracks = v.tracks;
+      _tidalArtiesten = v.artiesten;
+      _tidalArtiest = null;
+      _tidalVoorArtiest = null;
+      _tidalExpanded = null;
+      _tidalAlbumExpanded = null;
+    });
+  }
+
+  /// De nummers van plaat [id] ophalen bij tidaler, één keer per plaat.
+  Future<void> _laadTidalAlbum(String id) async {
+    if (_tidalAlbumNummers.containsKey(id)) return;
+    setState(() => _tidalAlbumNummers[id] = null);
+    List<TidalTrack>? n;
+    try {
+      n = _tidalViaPc
+          ? (await _tidalOpPc(context.read<LibraryStore>(), 'album', {'id': id})).tracks
+          : await nummersVanTidalAlbum(id);
+    } catch (_) {/* dan "TIDAL gaf geen nummers" */}
+    if (mounted) setState(() => _tidalAlbumNummers[id] = n ?? const []);
   }
 
   Future<void> _connectTidal() async {
@@ -23314,6 +23417,18 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       // Kan alleen als TIDAL een id teruggeeft dat niet op een id lijkt. Beter een zin dan een
       // proces starten om een fout te ontdekken die hier al zichtbaar was.
       _srcToast(context, 'Dit resultaat heeft geen bruikbaar Tidal-id.');
+      return;
+    }
+    // Op een toestel haalt de pc het (`/api/tidal/haal`): met tidaler, door de keuring, in de bibliotheek — en
+    // dan staat het op elk toestel.
+    final c = context.read<LibraryStore>().remote;
+    if (c != null) {
+      try {
+        await c.ask('/api/tidal/haal', {'doel': doel});
+        if (mounted) _srcToast(context, 'Je pc haalt “$naam” op van TIDAL — het komt straks in je bibliotheek.');
+      } on RemoteException catch (e) {
+        if (mounted) _srcToast(context, 'Ophalen via de pc lukte niet: ${e.message}');
+      }
       return;
     }
     final melding = await showDialog<String>(
@@ -23871,7 +23986,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       );
     }
     if (_tidalBusy) return Center(child: CircularProgressIndicator(color: _accent));
-    if (_tidalAlbums.isEmpty && _tidalTracks.isEmpty) {
+    if (_tidalAlbums.isEmpty && _tidalTracks.isEmpty && _tidalArtiesten.isEmpty && _tidalArtiest == null) {
       return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
@@ -23885,7 +24000,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     // tidaler staat op de machine die de muziek bezit. Een telefoon, de Shield en een op afstand
     // gekoppeld toestel hebben geen muziekmap om iets in te zetten — daar blijft dit precies wat
     // het was: een zoekscherm dat torrents en Soulseek voedt.
-    final kanOphalen = _isDesktop && !context.read<LibraryStore>().isRemote;
+    // Sinds 22-10-2026 ook op een toestel: daar haalt de pc het ([_ophalenVanTidal], `/api/tidal/haal`).
+    final kanOphalen = _tidalViaPc || (_isDesktop && !context.read<LibraryStore>().isRemote);
     return ListView(
       // Waar je gebleven was blijft staan als je even naar de speler gaat. De route eronder
       // overleeft de sectiewissel, dus die bewaart de scrolstand — zelfde truc als bij het
@@ -23893,13 +24009,61 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       key: const PageStorageKey('online-tidal'),
       padding: onderOp(context, const EdgeInsets.only(bottom: 24)),
       children: [
+        // Een geopende artiest: zijn foto en naam bovenaan, en terug naar wat je zocht.
+        if (_tidalArtiest case final a?)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+            child: Row(children: [
+              IconButton(
+                tooltip: 'Terug naar de zoekresultaten',
+                icon: const Icon(Icons.arrow_back_rounded),
+                onPressed: _terugNaarTidalUitslag,
+              ),
+              const SizedBox(width: 6),
+              _netCover(a.foto.isEmpty ? null : a.foto, size: 64, circle: true),
+              const SizedBox(width: 14),
+              Expanded(child: Text(a.naam, maxLines: 1, overflow: TextOverflow.ellipsis, style: kKop)),
+            ]),
+          ),
+        if (_tidalArtiesten.isNotEmpty) ...[
+          _browseHeader('Artiesten', _tidalArtiesten.length),
+          SizedBox(
+            height: 132,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              children: [
+                for (final a in _tidalArtiesten)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 14),
+                    child: Pressable(
+                      onPressed: () => _openTidalArtiest(a),
+                      borderRadius: BorderRadius.circular(12),
+                      child: SizedBox(
+                        width: 92,
+                        child: Column(children: [
+                          _netCover(a.foto.isEmpty ? null : a.foto, size: 88, circle: true),
+                          const SizedBox(height: 6),
+                          Text(a.naam,
+                              maxLines: 2,
+                              textAlign: TextAlign.center,
+                              overflow: TextOverflow.ellipsis,
+                              style: kTekstKlein),
+                        ]),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
         if (_tidalAlbums.isNotEmpty) ...[
-          _browseHeader('Albums', _tidalAlbums.length),
+          _browseHeader(_tidalArtiest == null ? 'Albums' : 'Platen en EP’s', _tidalAlbums.length),
           for (var i = 0; i < _tidalAlbums.length; i++)
             _tidalAlbumRow(i, _tidalAlbums[i], kanOphalen),
         ],
         if (_tidalTracks.isNotEmpty) ...[
-          _browseHeader('Nummers', _tidalTracks.length),
+          _browseHeader(_tidalArtiest == null ? 'Nummers' : 'Bekendste nummers', _tidalTracks.length),
           for (var i = 0; i < _tidalTracks.length; i++)
             _tidalTrackRow(i, _tidalTracks[i], kanOphalen),
         ],
@@ -23914,10 +24078,16 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   /// plaat heeft geen gastartiest in zijn titel, en dat raden levert alleen maar rare afbrekingen.
   Widget _tidalAlbumRow(int i, TidalAlbum a, bool kanOphalen) {
     final open = _tidalAlbumExpanded == i;
+    // Via tidaler klapt een plaat open op haar NUMMERS, elk met een eigen Ophalen (Saber, 22-10-2026: "liedje per
+    // liedje kunnen downloaden, ook van een album"); Soulseek en torrents staan er op verzoek onder.
+    final viaTidaler = _tidalerZoekt;
     return Column(
       children: [
         InkWell(
-          onTap: () => setState(() => _tidalAlbumExpanded = open ? null : i),
+          onTap: () {
+            setState(() => _tidalAlbumExpanded = open ? null : i);
+            if (!open && viaTidaler) unawaited(_laadTidalAlbum(a.id));
+          },
           child: Container(
             margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
@@ -23925,6 +24095,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                 color: open ? _panel : Colors.transparent, borderRadius: BorderRadius.circular(8)),
             child: Row(
               children: [
+                if (a.hoes.isNotEmpty) ...[
+                  _netCover(a.hoes, size: 48, radius: 6),
+                  const SizedBox(width: 12),
+                ],
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -23933,22 +24107,103 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                           maxLines: titelRegels(context),
                           overflow: TextOverflow.ellipsis,
                           style: kTekstNormaal),
-                      if (a.artist.isNotEmpty || a.jaar.isNotEmpty)
-                        Text(a.jaar.isEmpty ? a.artist : '${a.artist} · ${a.jaar}',
-                            maxLines: 1, overflow: TextOverflow.ellipsis, style: kTekstKlein),
+                      if (a.artist.isNotEmpty || a.jaar.isNotEmpty || a.aantal > 0)
+                        Text(
+                            [
+                              if (a.artist.isNotEmpty) a.artist,
+                              if (a.jaar.isNotEmpty) a.jaar,
+                              if (a.aantal > 0) '${a.aantal} ${a.aantal == 1 ? 'nummer' : 'nummers'}',
+                            ].join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: kTekstKlein),
                     ],
                   ),
                 ),
+                _tidalKwaliteitsLabel(a.kwaliteit),
                 if (kanOphalen) _ophaalKnop(tidalDoelVanId('album', a.id), a.label),
-                Icon(open ? Icons.expand_less_rounded : Icons.travel_explore_rounded,
-                    size: 18, color: open ? _accent : _muted),
+                Icon(
+                    open
+                        ? Icons.expand_less_rounded
+                        : (viaTidaler ? Icons.expand_more_rounded : Icons.travel_explore_rounded),
+                    size: 18,
+                    color: open ? _accent : _muted),
               ],
             ),
           ),
         ),
-        if (open)
+        if (open && !viaTidaler)
           Padding(padding: const EdgeInsets.only(bottom: 8), child: SourcesView(query: a.sourceQuery)),
+        if (open && viaTidaler) _tidalAlbumInhoud(a, kanOphalen),
       ],
+    );
+  }
+
+  /// Wat TIDAL zegt te hebben, vóór je op Ophalen drukt: "24 bit" (HIRES_LOSSLESS) of "16 bit" (alleen LOSSLESS).
+  /// Niets als het niet bekend is (de officiële API). Saber, 22-10-2026, na Ellie Goulding — Close To Me in 16 bit:
+  /// *"maar ik kan da nie zien e zo"*.
+  Widget _tidalKwaliteitsLabel(TidalKwaliteit k) {
+    if (k == TidalKwaliteit.onbekend) return const SizedBox.shrink();
+    final hoog = k == TidalKwaliteit.hires;
+    return Container(
+      margin: const EdgeInsets.only(left: 8, right: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: hoog ? _accent2 : _line),
+      ),
+      child: Text(hoog ? '24 bit' : '16 bit',
+          style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: hoog ? _accent2 : _muted)),
+    );
+  }
+
+  /// De nummers van een opengeklapte plaat, elk met Ophalen; daaronder op verzoek Soulseek en torrents.
+  Widget _tidalAlbumInhoud(TidalAlbum a, bool kanOphalen) {
+    final nummers = _tidalAlbumNummers[a.id];
+    final bronnen = _tidalBronnenOpen.contains(a.id);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(28, 2, 20, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (nummers == null)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: SizedBox(
+                  width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _accent)),
+            )
+          else if (nummers.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text('TIDAL gaf geen nummers voor deze plaat.', style: kTekstKlein),
+            )
+          else
+            for (final t in nummers)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 1),
+                child: Row(children: [
+                  SizedBox(
+                    width: 28,
+                    child: Text(t.nummer > 0 ? '${t.nummer}' : '', style: kTekstKlein, textAlign: TextAlign.right),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: kTekstNormaal),
+                  ),
+                  _tidalKwaliteitsLabel(t.kwaliteit),
+                  if (t.seconden > 0) Text(_fmt(Duration(seconds: t.seconden)), style: kTekstKlein),
+                  if (kanOphalen) _ophaalKnop(tidalDoelVanId('track', t.id), t.label),
+                ]),
+              ),
+          TextButton.icon(
+            onPressed: () => setState(() => bronnen ? _tidalBronnenOpen.remove(a.id) : _tidalBronnenOpen.add(a.id)),
+            icon: Icon(bronnen ? Icons.expand_less_rounded : Icons.travel_explore_rounded, size: 15),
+            label: Text(bronnen ? 'Andere bronnen verbergen' : 'Ook op Soulseek en torrents zoeken'),
+            style: TextButton.styleFrom(foregroundColor: _muted, textStyle: const TextStyle(fontSize: 12)),
+          ),
+          if (bronnen) SourcesView(query: a.sourceQuery),
+        ],
+      ),
     );
   }
 
@@ -23976,6 +24231,11 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             decoration: BoxDecoration(color: open ? _panel : Colors.transparent, borderRadius: BorderRadius.circular(8)),
             child: Row(
               children: [
+                // De hoes van zijn plaat (via tidaler) — Saber: "en ook bij de liedjes".
+                if (t.hoes.isNotEmpty) ...[
+                  _netCover(t.hoes, size: 40, radius: 5),
+                  const SizedBox(width: 12),
+                ],
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -23989,6 +24249,11 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     ],
                   ),
                 ),
+                _tidalKwaliteitsLabel(t.kwaliteit),
+                if (t.seconden > 0) ...[
+                  Text(_fmt(Duration(seconds: t.seconden)), style: kTekstKlein),
+                  const SizedBox(width: 4),
+                ],
                 if (kanOphalen) _ophaalKnop(tidalDoelVanId('track', t.id), t.label),
                 Icon(open ? Icons.expand_less_rounded : Icons.travel_explore_rounded, size: 18, color: open ? _accent : _muted),
               ],

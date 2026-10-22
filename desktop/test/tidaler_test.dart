@@ -9,6 +9,7 @@ library;
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:debridmusic/tidal.dart' show TidalKwaliteit, tidalKwaliteitUit;
 import 'package:debridmusic/tidaler.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -181,17 +182,94 @@ void main() {
       final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       final zoek = m.substring(m.indexOf('  Future<void> _searchTidal(String q) async {'));
       expect(zoek.substring(0, 900), contains('if (!viaTidaler && !tidal.connected) return;'));
-      expect(zoek.substring(0, 1600), contains('await zoekCatalogusOpTidal(q) ??'));
+      expect(zoek.substring(0, 1800), contains('await zoekCatalogusOpTidal(q) ??'));
       final scherm = m.substring(m.indexOf('  Widget _tidalResults() {'));
       expect(scherm.substring(0, 400), contains('if (!viaTidaler && !tidal.configured) {'));
-      expect(m, contains('_isDesktop && !context.read<LibraryStore>().isRemote && Tidaler.beschikbaar && Tidaler.python != null;'));
+      expect(m, contains('return _isDesktop && !lib.isRemote && Tidaler.beschikbaar && Tidaler.python != null;'));
+    });
+
+    test('aangesloten: gsm, iPad, Mac en Shield vragen het de pc (Saber: "ook mogelijk vanaf men gsm, mac ipad en shield")', () {
+      final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final poort = m.substring(m.indexOf('  bool get _tidalerZoekt {'));
+      expect(poort.substring(0, 300), contains('if (lib.remote != null) return true;'));
+      final zoek = m.substring(m.indexOf('  Future<void> _searchTidal(String q) async {'));
+      expect(zoek.substring(0, 1800), contains("await _tidalOpPc(context.read<LibraryStore>(), 'zoek', {'q': q})"));
+      expect(m, contains("final a = await c.ask('/api/tidal/\$wat', vraag);"));
+      expect(m, contains("return tidalCatalogusUit('\${a['uitvoer'] ?? ''}');"), reason: 'dezelfde lezer als op de pc');
+      expect(m, contains("await c.ask('/api/tidal/haal', {'doel': doel});"), reason: 'ophalen doet de pc');
+      expect(m, contains('final kanOphalen = _tidalViaPc || (_isDesktop && !context.read<LibraryStore>().isRemote);'));
+      final s = File('lib/lan/server.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      for (final wat in ['zoek', 'album', 'artiest', 'haal']) {
+        expect(s, contains("case '/api/tidal/$wat':\n        return _tidal(req, '$wat');"));
+      }
+      final h = s.substring(s.indexOf('  Future<void> _tidal(HttpRequest req, String wat) async {'));
+      expect(h, contains('final uit = await tidalHulpUitvoer(argumenten);'));
+      expect(h, contains('unawaited(_tidalHaalHier(manager, doel));'));
+      final hier = s.substring(s.indexOf('  Future<void> _tidalHaalHier('));
+      expect(hier, contains("manager.keurBinnengekomen(keuring, 'TIDAL \$doel', zichtbaar: manager.tidalRest)"),
+          reason: 'door dezelfde keuring als "Ophalen van Tidal…" op de pc');
     });
 
     test('het hulpje gebruikt tidalers eigen inlog en geeft de volle titel', () {
       expect(kTidalZoekHulp, contains('from tidaler.config import Settings, Tidal'));
       expect(kTidalZoekHulp, contains('if not t.login_token():'));
-      expect(kTidalZoekHulp, contains('naam = f"{naam} ({versie})"'));
+      expect(kTidalZoekHulp, contains('return f"{naam} ({versie})"'));
+      expect(kTidalZoekHulp, contains('if not versie or versie.lower() in naam.lower():'),
+          reason: 'bij "Close To Me (Solo)" stond de versie al in de naam: "(Solo) (Solo)"');
       expect(kTidalZoekHulp, isNot(contains('access_token')), reason: 'de sleutel komt nooit in de uitvoer');
+    });
+
+    test('foto’s, hoezen en de nummers van een plaat (Saber: "liedje per liedje … artiest foto en album cover")', () {
+      const uit = '{"soort": "artiest", "id": "8495179", "naam": "Tamino", "foto": "https://resources.tidal.com/a.jpg"}\n'
+          '{"soort": "album", "id": "96600816", "artiest": "Tamino", "titel": "Amir", "jaar": "2018", '
+          '"hoes": "https://resources.tidal.com/h320.jpg", "aantal": 12}\n'
+          '{"soort": "track", "id": "96600827", "artiest": "Tamino", "titel": "Indigo Night", "seconden": 255, '
+          '"nummer": 6, "schijf": 1, "album": "Amir", "albumId": "96600816", "hoes": "https://resources.tidal.com/h160.jpg", '
+          '"stereo": true}\n';
+      final r = tidalCatalogusUit(uit);
+      expect(r.artiesten.single.foto, 'https://resources.tidal.com/a.jpg');
+      expect(r.albums.single.hoes, 'https://resources.tidal.com/h320.jpg');
+      expect(r.albums.single.aantal, 12);
+      final t = r.tracks.single;
+      expect([t.hoes, t.album, t.albumId, t.seconden, t.nummer],
+          ['https://resources.tidal.com/h160.jpg', 'Amir', '96600816', 255, 6]);
+      expect(tidalZoektreffers(uit).map((x) => x.id), ['96600827'], reason: 'de wens ziet geen artiesten of platen');
+      expect(kTidalZoekHulp, contains('if sys.argv[1] == "--album":'));
+      expect(kTidalZoekHulp, contains('if sys.argv[1] == "--artiest":'));
+    });
+
+    test('EG.0 staat twee keer bij TIDAL: de 24-bitversie komt vóór de 16-bitversie, en het label zegt het', () {
+      // Gemeten op 22-10-2026: album 568446935 (Close To Me (Solo) 568446942) alleen LOSSLESS — 16 bit; album
+      // 568446947 (568446955) HIRES_LOSSLESS — 24 bit. Saber haalde de eerste: "de solo ook enkel 16/44.1 binnen".
+      const uit = '{"soort": "album", "id": "568446935", "artiest": "Ellie Goulding", "titel": "EG.0", "tags": ["LOSSLESS"]}\n'
+          '{"soort": "album", "id": "29583536", "artiest": "Ellie Goulding", "titel": "Halcyon Days", "tags": ["LOSSLESS"]}\n'
+          '{"soort": "album", "id": "568446947", "artiest": "Ellie Goulding", "titel": "EG.0", '
+          '"tags": ["LOSSLESS", "HIRES_LOSSLESS"]}\n'
+          '{"soort": "track", "id": "568446942", "artiest": "Ellie Goulding", "titel": "Close To Me (Solo)", '
+          '"tags": ["LOSSLESS"], "stereo": true}\n'
+          '{"soort": "track", "id": "568446955", "artiest": "Ellie Goulding", "titel": "Close To Me (Solo)", '
+          '"tags": ["LOSSLESS", "HIRES_LOSSLESS"], "stereo": true}\n';
+      final r = tidalCatalogusUit(uit);
+      expect(r.albums.map((a) => a.id), ['568446947', '568446935', '29583536'], reason: 'op de plek van de eerste');
+      expect(r.albums.first.kwaliteit, TidalKwaliteit.hires);
+      expect(r.albums[1].kwaliteit, TidalKwaliteit.cd);
+      expect(r.tracks.map((t) => t.id), ['568446955', '568446942']);
+      expect(tidalKwaliteitUit(const []), TidalKwaliteit.onbekend, reason: 'de officiële API zegt het niet: geen label');
+      final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(m, contains("child: Text(hoog ? '24 bit' : '16 bit',"));
+      expect('_tidalKwaliteitsLabel('.allMatches(m).length, 4, reason: 'de functie, een plaat, een nummer, een nummer op een plaat');
+    });
+
+    test('aangesloten: een plaat klapt open op haar nummers, elk met Ophalen; een artiest opent met zijn foto', () {
+      final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final rij = m.substring(m.indexOf('  Widget _tidalAlbumRow(int i, TidalAlbum a, bool kanOphalen) {'));
+      expect(rij.substring(0, 1200), contains('if (!open && viaTidaler) unawaited(_laadTidalAlbum(a.id));'));
+      expect(rij, contains('if (open && viaTidaler) _tidalAlbumInhoud(a, kanOphalen),'));
+      final inhoud = m.substring(m.indexOf('  Widget _tidalAlbumInhoud(TidalAlbum a, bool kanOphalen) {'));
+      expect(inhoud.substring(0, 2600), contains("_ophaalKnop(tidalDoelVanId('track', t.id), t.label)"));
+      expect(m, contains('onPressed: () => _openTidalArtiest(a),'));
+      expect(m, contains('_netCover(a.hoes, size: 48, radius: 6),'));
+      expect(m, contains('_netCover(t.hoes, size: 40, radius: 5),'));
     });
   });
 

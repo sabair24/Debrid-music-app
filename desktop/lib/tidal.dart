@@ -26,15 +26,48 @@ void _spoor(String regel) {
   } catch (_) {/* een spoor dat niet lukt mag nooit de weg blokkeren die het volgt */}
 }
 
+/// Wat TIDAL zegt te hebben, uit zijn `media_metadata_tags`: [hires] (HIRES_LOSSLESS, 24 bit — de bemonstering hangt
+/// van de plaat af), [cd] (alleen LOSSLESS, 16 bit / 44,1 kHz), of [onbekend] (de officiële API zegt het hier niet).
+///
+/// **Waarom het op het scherm hoort (Saber, 22-10-2026).** *"heb ellie goulding close to me willen downloaden in
+/// 24/44.1 maar heeft me 16/44.1"* — het origineel heeft bij TIDAL alleen LOSSLESS; alleen de nieuwe versies op EG.0
+/// zijn hi-res. *"maar ik kan da nie zien e zo."*
+enum TidalKwaliteit { onbekend, cd, hires }
+
+/// [TidalKwaliteit] uit de tags van TIDAL.
+TidalKwaliteit tidalKwaliteitUit(List<String> tags) => tags.contains('HIRES_LOSSLESS')
+    ? TidalKwaliteit.hires
+    : tags.contains('LOSSLESS')
+        ? TidalKwaliteit.cd
+        : TidalKwaliteit.onbekend;
+
 /// A TIDAL catalog track — used only as metadata to drive the torrent/Soulseek
 /// source search (TIDAL itself can't be streamed by a third-party native app).
 class TidalTrack {
   final String id;
   final String title;
   final String artist;
-  const TidalTrack(this.id, this.title, this.artist);
+
+  /// Wat tidaler er nog over weet (`tidaler.dart`): de hoes van zijn plaat (een adres), die plaat, de lengte en de
+  /// plek erop. Leeg of 0 als de bron het niet zei — de officiële API geeft ze hier niet mee.
+  final String hoes, album, albumId;
+  final int seconden, nummer;
+  final TidalKwaliteit kwaliteit;
+  const TidalTrack(this.id, this.title, this.artist,
+      {this.hoes = '',
+      this.album = '',
+      this.albumId = '',
+      this.seconden = 0,
+      this.nummer = 0,
+      this.kwaliteit = TidalKwaliteit.onbekend});
   String get sourceQuery => artist.isEmpty ? title : '$artist $title';
   String get label => artist.isEmpty ? title : '$artist — $title';
+}
+
+/// Een artiest uit de TIDAL-catalogus, met zijn foto (een adres; leeg als TIDAL er geen heeft).
+class TidalArtiest {
+  final String id, naam, foto;
+  const TidalArtiest(this.id, this.naam, [this.foto = '']);
 }
 
 /// Een plaat uit de TIDAL-catalogus.
@@ -47,7 +80,13 @@ class TidalAlbum {
   final String title;
   final String artist;
   final String jaar;
-  const TidalAlbum(this.id, this.title, this.artist, [this.jaar = '']);
+
+  /// De hoes (een adres) en het aantal nummers, als tidaler ze gaf. Leeg of 0 anders.
+  final String hoes;
+  final int aantal;
+  final TidalKwaliteit kwaliteit;
+  const TidalAlbum(this.id, this.title, this.artist,
+      [this.jaar = '', this.hoes = '', this.aantal = 0, this.kwaliteit = TidalKwaliteit.onbekend]);
   String get sourceQuery => artist.isEmpty ? title : '$artist $title';
   String get label => artist.isEmpty ? title : '$artist — $title';
 }
@@ -59,8 +98,11 @@ class TidalAlbum {
 class TidalZoekResultaat {
   final List<TidalAlbum> albums;
   final List<TidalTrack> tracks;
-  const TidalZoekResultaat(this.albums, this.tracks);
-  bool get leeg => albums.isEmpty && tracks.isEmpty;
+
+  /// Artiesten met hun foto — alleen via tidaler (`tidaler.dart`); de officiële zoekweg laat ze leeg.
+  final List<TidalArtiest> artiesten;
+  const TidalZoekResultaat(this.albums, this.tracks, [this.artiesten = const []]);
+  bool get leeg => albums.isEmpty && tracks.isEmpty && artiesten.isEmpty;
 }
 
 /// TIDAL official developer API (openapi.tidal.com):

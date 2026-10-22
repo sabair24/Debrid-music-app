@@ -31,7 +31,7 @@ import 'uitvoerbaar.dart';
 
 import 'enrichment.dart' show zonderGastTitel;
 import 'ffmpeg.dart';
-import 'tidal.dart' show TidalAlbum, TidalTrack, TidalZoekResultaat;
+import 'tidal.dart' show TidalAlbum, TidalArtiest, TidalKwaliteit, TidalTrack, TidalZoekResultaat, tidalKwaliteitUit;
 import 'organize.dart' show artistKey, normKey;
 
 /// Waar tidaler kan staan, in volgorde van waarschijnlijkheid.
@@ -381,50 +381,108 @@ Future<({String? fout, String? kwaliteit})> _haal({
 typedef TidalTreffer = ({String id, String artiest, String titel});
 
 /// Het zoekhulpje: draait in tidalers eigen Python ([Tidaler.python]) en gebruikt zijn inlog. Elke treffer is één
-/// regel JSON; alleen regels die met `{` beginnen tellen (tidaler drukt soms zelf iets af bij het laden).
+/// regel JSON met een `soort` (artiest, album, track); alleen regels die met `{` beginnen tellen (tidaler drukt soms
+/// zelf iets af bij het laden). Drie standen, live nagekeken met tidalapi 0.8.11 op 22-10-2026:
 ///
-/// De titel krijgt de versie erbij ("Get Lucky (Radio Edit)"): zo heet een nummer ook in een wens. Alleen stereo: de
-/// wens is een stereobestand, geen Dolby Atmos.
+///  * `<vraag> <aantal> [alles]` — zoeken: de nummers, en met "alles" ook artiesten (met foto) en platen (met hoes);
+///  * `--album <id>` — de nummers van een plaat, met hun plek, lengte en de hoes;
+///  * `--artiest <id>` — de artiest, zijn platen en EP's, en zijn twintig bekendste nummers.
+///
+/// De titel krijgt de versie erbij ("Get Lucky (Radio Edit)"): zo heet een nummer ook in een wens. Een beeld is een
+/// adres op resources.tidal.com (320 px voor een plaat of een artiest, 160 voor een nummer), leeg als er geen is.
 const kTidalZoekHulp = r'''
 import json, sys
 # UTF-8, ook op Windows: met -I negeert Python PYTHONIOENCODING, en dan werd "KAYTRAMINÉ" "KAYTRAMIN?".
 sys.stdout.reconfigure(encoding="utf-8")
 from tidaler.config import Settings, Tidal
 
-vraag, aantal = sys.argv[1], int(sys.argv[2])
-alles = len(sys.argv) > 3 and sys.argv[3] == "alles"
-t = Tidal(Settings())
-if not t.login_token():
-    print(json.dumps({"fout": "niet ingelogd"}))
-    sys.exit(2)
-r = t.session.search(vraag, limit=aantal)
-if alles:
-    for al in (r.get("albums") or [])[:aantal]:
-        naam = al.name or ""
-        versie = getattr(al, "version", None)
-        if versie:
-            naam = f"{naam} ({versie})"
-        print(json.dumps({
-            "soort": "album",
-            "id": str(al.id),
-            "artiest": al.artist.name if getattr(al, "artist", None) else "",
-            "titel": naam,
-            "jaar": str(getattr(al, "year", None) or ""),
-        }, ensure_ascii=False))
-for tr in (r.get("tracks") or [])[:aantal]:
+
+def beeld(x, maat):
+    try:
+        return x.image(maat) or ""
+    except Exception:
+        return ""
+
+
+def naam_met_versie(x):
+    naam = x.name or ""
+    versie = getattr(x, "version", None)
+    # Niet twee keer: bij "Close To Me (Solo)" staat de versie al in de naam ("(Solo) (Solo)", 22-10-2026).
+    if not versie or versie.lower() in naam.lower():
+        return naam
+    return f"{naam} ({versie})"
+
+
+def uit(d):
+    print(json.dumps(d, ensure_ascii=False))
+
+
+def nummer(tr, hoes=None):
     modi = getattr(tr, "audio_modes", None) or []
-    naam = tr.name or ""
-    versie = getattr(tr, "version", None)
-    if versie:
-        naam = f"{naam} ({versie})"
-    print(json.dumps({
+    al = getattr(tr, "album", None)
+    return {
+        "soort": "track",
         "id": str(tr.id),
         "artiest": tr.artist.name if getattr(tr, "artist", None) else "",
-        "titel": naam,
+        "titel": naam_met_versie(tr),
         "seconden": getattr(tr, "duration", None),
+        "nummer": getattr(tr, "track_num", None),
+        "schijf": getattr(tr, "volume_num", None),
+        "album": (al.name or "") if al else "",
+        "albumId": str(al.id) if al else "",
+        "hoes": hoes if hoes is not None else (beeld(al, 160) if al else ""),
         "stereo": (not modi) or ("STEREO" in modi),
         "tags": getattr(tr, "media_metadata_tags", None) or [],
-    }, ensure_ascii=False))
+    }
+
+
+def plaat(al):
+    return {
+        "soort": "album",
+        "id": str(al.id),
+        "artiest": al.artist.name if getattr(al, "artist", None) else "",
+        "titel": naam_met_versie(al),
+        "jaar": str(getattr(al, "year", None) or ""),
+        "hoes": beeld(al, 320),
+        "aantal": getattr(al, "num_tracks", None),
+        "tags": getattr(al, "media_metadata_tags", None) or [],
+    }
+
+
+t = Tidal(Settings())
+if not t.login_token():
+    uit({"fout": "niet ingelogd"})
+    sys.exit(2)
+s = t.session
+
+if sys.argv[1] == "--album":
+    al = s.album(int(sys.argv[2]))
+    hoes = beeld(al, 160)
+    for tr in al.tracks():
+        uit(nummer(tr, hoes))
+    sys.exit(0)
+
+if sys.argv[1] == "--artiest":
+    ar = s.artist(int(sys.argv[2]))
+    uit({"soort": "artiest", "id": str(ar.id), "naam": ar.name or "", "foto": beeld(ar, 320)})
+    for al in ar.get_albums(limit=50):
+        uit(plaat(al))
+    for al in ar.get_ep_singles(limit=50):
+        uit(plaat(al))
+    for tr in ar.get_top_tracks(limit=20):
+        uit(nummer(tr))
+    sys.exit(0)
+
+vraag, aantal = sys.argv[1], int(sys.argv[2])
+alles = len(sys.argv) > 3 and sys.argv[3] == "alles"
+r = s.search(vraag, limit=aantal)
+if alles:
+    for ar in (r.get("artists") or [])[:8]:
+        uit({"soort": "artiest", "id": str(ar.id), "naam": ar.name or "", "foto": beeld(ar, 320)})
+    for al in (r.get("albums") or [])[:aantal]:
+        uit(plaat(al))
+for tr in (r.get("tracks") or [])[:aantal]:
+    uit(nummer(tr))
 ''';
 
 /// De treffers uit de uitvoer van [kTidalZoekHulp], elk id één keer, zonder wat niet stereo is.
@@ -437,7 +495,7 @@ List<TidalTreffer> tidalZoektreffers(String uitvoer) {
     try {
       final j = jsonDecode(r);
       if (j is! Map || j['id'] == null) continue;
-      if (j['soort'] == 'album' || j['stereo'] == false) continue;
+      if ((j['soort'] ?? 'track') != 'track' || j['stereo'] == false) continue;
       final id = '${j['id']}';
       if (!gezien.add(id)) continue;
       uit.add((id: id, artiest: '${j['artiest'] ?? ''}', titel: '${j['titel'] ?? ''}'));
@@ -483,24 +541,78 @@ List<String> kiesTidalTreffers(
 /// Platen en nummers uit de uitvoer van [kTidalZoekHulp] met "alles" — voor het TIDAL-zoekscherm. Hier ook wat niet
 /// stereo is: dat scherm toont de catalogus, en de keuring beslist bij het halen.
 TidalZoekResultaat tidalCatalogusUit(String uitvoer) {
-  final albums = <TidalAlbum>[], nummers = <TidalTrack>[];
+  final albums = <TidalAlbum>[], nummers = <TidalTrack>[], artiesten = <TidalArtiest>[];
   final gezien = <String>{};
+  String tekst(Object? v) => v == null ? '' : '$v';
+  int getal(Object? v) => v is num ? v.toInt() : int.tryParse('${v ?? ''}') ?? 0;
+  TidalKwaliteit kwaliteit(Object? tags) => tidalKwaliteitUit(tags is List ? [for (final t in tags) '$t'] : const []);
   for (final regel in uitvoer.split(RegExp(r'\r\n|\r|\n'))) {
     final r = regel.trim();
     if (!r.startsWith('{')) continue;
     try {
       final j = jsonDecode(r);
       if (j is! Map || j['id'] == null) continue;
-      final album = j['soort'] == 'album';
-      if (!gezien.add('${album ? 'a' : 't'}${j['id']}')) continue;
-      if (album) {
-        albums.add(TidalAlbum('${j['id']}', '${j['titel'] ?? ''}', '${j['artiest'] ?? ''}', '${j['jaar'] ?? ''}'));
-      } else {
-        nummers.add(TidalTrack('${j['id']}', '${j['titel'] ?? ''}', '${j['artiest'] ?? ''}'));
+      final soort = tekst(j['soort']).isEmpty ? 'track' : tekst(j['soort']);
+      if (!gezien.add('$soort:${j['id']}')) continue;
+      switch (soort) {
+        case 'artiest':
+          artiesten.add(TidalArtiest(tekst(j['id']), tekst(j['naam']), tekst(j['foto'])));
+        case 'album':
+          albums.add(TidalAlbum(tekst(j['id']), tekst(j['titel']), tekst(j['artiest']), tekst(j['jaar']),
+              tekst(j['hoes']), getal(j['aantal']), kwaliteit(j['tags'])));
+        default:
+          nummers.add(TidalTrack(tekst(j['id']), tekst(j['titel']), tekst(j['artiest']),
+              hoes: tekst(j['hoes']),
+              album: tekst(j['album']),
+              albumId: tekst(j['albumId']),
+              seconden: getal(j['seconden']),
+              nummer: getal(j['nummer']),
+              kwaliteit: kwaliteit(j['tags'])));
       }
     } catch (_) {/* geen treffer */}
   }
-  return TidalZoekResultaat(albums, nummers);
+  return TidalZoekResultaat(
+    hiresVoorop(albums, (a) => '${normKey(a.artist)}|${normKey(a.title)}', (a) => a.kwaliteit),
+    hiresVoorop(nummers, (t) => '${normKey(t.artist)}|${normKey(t.title)}', (t) => t.kwaliteit),
+    artiesten,
+  );
+}
+
+/// [lijst] in de volgorde van TIDAL, behalve dat van twee gelijke versies ([sleutel]: artiest en titel) de hi-res
+/// vooraan komt, op de plek van de eerste.
+///
+/// **Waarom (Saber, 22-10-2026).** TIDAL heeft EG.0 van Ellie Goulding twee keer: album 568446935 met "Close To Me
+/// (Solo)" alleen in 16 bit, en 568446947 met hetzelfde nummer in 24 bit. De eerste stond bovenaan, die haalde hij,
+/// en tidaler leverde netjes de 16 bit die TIDAL daar heeft: *"de solo ook enkel 16/44.1 binnen"*.
+List<T> hiresVoorop<T>(List<T> lijst, String Function(T) sleutel, TidalKwaliteit Function(T) kwaliteit) {
+  final groepen = <String, List<T>>{};
+  for (final x in lijst) {
+    (groepen[sleutel(x)] ??= []).add(x);
+  }
+  return [
+    for (final g in groepen.values)
+      ...[
+        ...g.where((x) => kwaliteit(x) == TidalKwaliteit.hires),
+        ...g.where((x) => kwaliteit(x) != TidalKwaliteit.hires),
+      ],
+  ];
+}
+
+/// De nummers van plaat [id] op TIDAL, in volgorde, met hoes en lengte. Null als tidaler niet antwoordde.
+///
+/// Saber, 22-10-2026: *"ik wil via tidaler ook liedje per liedje kunnen downloaden, ook van een album"*.
+Future<List<TidalTrack>?> nummersVanTidalAlbum(String id) async {
+  final uit = await _zoekHulp(['--album', id.trim()]);
+  return uit == null ? null : tidalCatalogusUit(uit).tracks;
+}
+
+/// Artiest [id] op TIDAL: hijzelf (met foto), zijn platen en EP's, en zijn bekendste nummers. Null als tidaler niet
+/// antwoordde.
+Future<({TidalArtiest? artiest, TidalZoekResultaat werk})?> artiestOpTidal(String id) async {
+  final uit = await _zoekHulp(['--artiest', id.trim()]);
+  if (uit == null) return null;
+  final r = tidalCatalogusUit(uit);
+  return (artiest: r.artiesten.firstOrNull, werk: TidalZoekResultaat(r.albums, r.tracks));
 }
 
 /// Zoek [vraag] in de TIDAL-catalogus met tidalers inlog: platen én nummers, voor het zoekscherm. Null als tidaler
@@ -509,25 +621,31 @@ TidalZoekResultaat tidalCatalogusUit(String uitvoer) {
 /// **Waarom (Saber, 22-10-2026).** *"Niet verbonden met tidal staat er bij zoeken via tidal"* — dat scherm hing aan de
 /// officiële API (een eigen app op developer.tidal.com en een tweede login), terwijl tidaler al ingelogd is.
 Future<TidalZoekResultaat?> zoekCatalogusOpTidal(String vraag, {int aantal = 20}) async {
-  final uit = await _zoekHulp(vraag, aantal, alles: true);
+  if (vraag.trim().isEmpty) return null;
+  final uit = await _zoekHulp([vraag.trim(), '$aantal', 'alles']);
   return uit == null ? null : tidalCatalogusUit(uit);
 }
 
 /// Zoek [vraag] op TIDAL. Null als tidaler (of zijn Python) er niet is of niet antwoordde, anders de treffers.
 Future<List<TidalTreffer>?> zoekOpTidal(String vraag, {int aantal = 10}) async {
-  final uit = await _zoekHulp(vraag, aantal);
+  if (vraag.trim().isEmpty) return null;
+  final uit = await _zoekHulp([vraag.trim(), '$aantal']);
   return uit == null ? null : tidalZoektreffers(uit);
 }
 
-/// Het zoekhulpje draaien ([kTidalZoekHulp]); de ruwe uitvoer, of null.
-Future<String?> _zoekHulp(String vraag, int aantal, {bool alles = false}) async {
+/// De ruwe uitvoer van het zoekhulpje, voor de pc die hem aan een toestel doorgeeft (`/api/tidal/…` in
+/// lan/server.dart); het toestel leest hem met [tidalCatalogusUit].
+Future<String?> tidalHulpUitvoer(List<String> argumenten) => _zoekHulp(argumenten);
+
+/// Het zoekhulpje draaien ([kTidalZoekHulp]) met [argumenten]; de ruwe uitvoer, of null.
+Future<String?> _zoekHulp(List<String> argumenten) async {
   final py = Tidaler.python;
-  if (py == null || vraag.trim().isEmpty) return null;
+  if (py == null) return null;
   try {
     final hulp = File('${Directory.systemTemp.path}${Platform.pathSeparator}debridmusic_tidal_zoek.py');
     await hulp.writeAsString(kTidalZoekHulp, flush: true);
     // -I: alleen tidalers eigen pakketten, niets uit de map waar het hulpje staat.
-    final p = await Process.start(py, ['-I', hulp.path, vraag.trim(), '$aantal', if (alles) 'alles'],
+    final p = await Process.start(py, ['-I', hulp.path, ...argumenten],
         environment: {'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1'});
     await p.stdin.close();
     final uit = p.stdout.transform(_soepelUtf8.decoder).join();
