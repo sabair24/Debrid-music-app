@@ -56,6 +56,33 @@ void main() {
         reason: 'niet "Queer" (ander liedje) en niet de cover van iemand anders');
   });
 
+  test('DE KERN: een live-opname zegt niets over het jaar van het zaad (Luka, 23-10-2026)', () async {
+    Map<String, dynamic> track(String titel, String album, String isrc) => {
+          'title': titel,
+          'artist': {'name': 'Suzanne Vega'},
+          'album': {'title': album, 'id': 1},
+          'isrc': isrc,
+        };
+    // Zoals Deezer het gaf: de studio-opname (USAM187…, 1987) en een uitzending met een code uit "60".
+    final data = [
+      track('Luka', 'RetroSpective: The Best Of Suzanne Vega', 'USAM18704255'),
+      track('Luka (Live 1986 Broadcast Remastered)', 'Legendary FM Broadcasts - The Bottom Line', 'GBSMU6079295'),
+      track('Luka', 'Legendary FM Broadcasts', 'GBSMU6079296'),
+    ];
+    final r = RecommendService(haal: (url) async => {'data': data}, adem: Duration.zero);
+    expect(await r.isrcJaar('Suzanne Vega', 'Luka'), 1987, reason: 'niet 1960: de radio zocht in het verkeerde tijdvak');
+    expect(await r.isrcJaar('Suzanne Vega', 'Luka (Live)'), 1960, reason: 'wie zelf een live-versie kiest, telt die mee');
+  });
+
+  test('een ISRC-jaar uit een oudere versie van het geheugen wordt opnieuw gevraagd', () async {
+    File('${map.path}${Platform.pathSeparator}radiostijl.json')
+        .writeAsStringSync('{"_versie": 6, "i:suzannevega|luka": 1960, "a:suzannevega": "rock"}');
+    final gevraagd = <String>[];
+    final z = await boek(isrc: 1987, gevraagd: gevraagd, deezer: 1987).zaad('Suzanne Vega', 'Luka');
+    expect(gevraagd, ['Suzanne Vega — Luka'], reason: 'de 1960 van vóór versie 7 is weg');
+    expect(z.jaar, 1987);
+  });
+
   test('de app geeft de haak echt door aan het stijlboek', () {
     final main = File('lib/main.dart').readAsStringSync();
     final boek = main.substring(main.indexOf('Stijlboek _gedeeldStijlboek(AppSettings cfg) => _stijlboek ??= Stijlboek('));

@@ -576,7 +576,12 @@ List<DiscogsUitgave>? samenUitgaven(List<DiscogsUitgave> eerst, List<DiscogsUitg
 ///
 /// 5: alleen uitgaven die het nummer dragen ([metHetNummer]) — U2 "One" was "uit 1983" — en per nummer
 /// de families op minstens de helft van de uitgaven ([minstensDeHelft]) (27-09-2026).
-const int kStijlboekVersie = 6;
+///
+/// 6: de danstak per nummer ("n:", 22-10-2026).
+///
+/// 7: het ISRC-jaar ("i:") telt geen live-opname meer — Luka (1987) was "uit 1960" door een uitzending met code
+/// GBSMU6079295 (23-10-2026).
+const int kStijlboekVersie = 7;
 
 /// Hoeveel jaar een jaar na de ISRC moet liggen voor het als te laat geldt: een code wordt soms het
 /// jaar vóór de uitgave al toegekend.
@@ -632,8 +637,9 @@ class Stijlboek {
   // Een geheugen van een oudere [kStijlboekVersie]: dan zijn de regels voor een NUMMER veranderd, en
   // een nummer dat al eens opgezocht was zou anders nooit meer onder de nieuwe regels vallen. Alleen
   // wat die versie veranderde weg — "n:" onder 6 (de danstak, 22-10-2026), het Deezer-jaar ("d:") onder
-  // 3 — en nooit het genre van een artiest: elke vraag aan TheAudioDB kost drie seconden, en na een
-  // update liep zo elke keuring tegen zijn tijdslimiet (tweede beoordeling van 26-09-2026).
+  // 3, het ISRC-jaar ("i:") onder 7 — en nooit het genre van een artiest: elke vraag aan TheAudioDB kost
+  // drie seconden, en na een update liep zo elke keuring tegen zijn tijdslimiet (tweede beoordeling van
+  // 26-09-2026).
   Future<Map<String, dynamic>> _lees() => _laden ??= () async {
         try {
           final j = jsonDecode(await bestand.readAsString());
@@ -641,7 +647,8 @@ class Stijlboek {
             final v = j['_versie'];
             if (v != kStijlboekVersie) {
               final oud = v is int ? v : 0;
-              j.removeWhere((k, _) => (oud < 6 && k.startsWith('n:')) || (oud < 3 && k.startsWith('d:')));
+              j.removeWhere((k, _) =>
+                  (oud < 6 && k.startsWith('n:')) || (oud < 3 && k.startsWith('d:')) || (oud < 7 && k.startsWith('i:')));
               j['_versie'] = kStijlboekVersie;
             }
             return j;
