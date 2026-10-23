@@ -80,6 +80,12 @@ const int kReservePerArtiest = 2;
 /// net echt speelde, zodat de radio meebeweegt met wat er klinkt.
 const int kLastfmPerRonde = 8;
 
+/// Hoeveel nummers één "Past" er meteen bij haalt — zie [Radiobijvuller.groenRonde].
+///
+/// Saber, 23-10-2026, op de vraag wat "Past" moet doen: *"Meteen meer in die richting"* — drie tot vijf nummers van
+/// verwante artiesten die bij de sfeer passen, vooraan; dezelfde artiest pas na 50 nummers (die regel blijft).
+const int kGroenPerRonde = 5;
+
 class Radiobijvuller {
   Radiobijvuller({
     required this.radio,
@@ -327,6 +333,44 @@ class Radiobijvuller {
     );
   }
 
+  /// "Past" op [artiest] — [titel]: meteen meer in die richting ([kGroenPerRonde]). Wat Last.fm luisteraars ná precies
+  /// dit nummer laat draaien, van andere artiesten, één per artiest, streng op sfeer zoals elke Last.fm-ronde, en
+  /// vooraan in plaats van achteraan. De afstand per artiest (50) bewaakt de rij zelf. Geeft hoeveel er bij kwamen.
+  ///
+  /// Zonder Last.fm-sleutel gebeurt er niets: dan zegt het scherm alleen "Onthouden" — zie [RadioBesturing.meerZoals].
+  Future<int> groenRonde(int sessie, String artiest, String titel) async {
+    final van = lastfmVan;
+    if (van == null) return 0;
+    // Dit nummer hoeft daarna niet nog eens als vertrekpunt van een gewone Last.fm-ronde.
+    _lastfmZaden.add(_sleutel(artiest, titel));
+    List<Radioplek> plekken;
+    try {
+      plekken = await van(artiest, titel);
+    } catch (e) {
+      spoor?.call('radio-past "$artiest — $titel": Last.fm gaf niets — $e');
+      return 0;
+    }
+    if (sessie != radio.sessie) return 0;
+    final inPlan = {for (final p in radio.plan) _sleutel(p.artiest, p.titel)};
+    final zelf = artiestSleutel(artiest);
+    final artiesten = <String>{};
+    final gekozen = <Radioplek>[];
+    for (final p in plekken) {
+      final a = artiestSleutel(p.artiest);
+      if (a == zelf || inPlan.contains(_sleutel(p.artiest, p.titel)) || !artiesten.add(a)) continue;
+      gekozen.add(p);
+      if (gekozen.length >= kGroenPerRonde) break;
+    }
+    final halen = [for (final p in gekozen) if (p.eigen == null) p];
+    final eigen = nieuweNakomers(radio.plan, [for (final p in gekozen) if (p.eigen != null) p]);
+    vraagSfeer?.call([...halen, ...eigen]);
+    final n = radio.voegBij(sessie, halen);
+    if (eigen.isNotEmpty) unawaited(_keurEnVoegBij(sessie, eigen, achteraan: false));
+    spoor?.call('radio-past "$artiest — $titel": Last.fm ${plekken.length} → $n te halen'
+        '${eigen.isEmpty ? '' : ' + ${eigen.length} van jou (keuring)'}, vooraan');
+    return n + eigen.length;
+  }
+
   /// Hoeveel vervolglijsten deze radio al kreeg: vanaf de tweede vraagt hij het model dieper te graven.
   int _modelLijsten = 0;
 
@@ -390,7 +434,7 @@ class Radiobijvuller {
   /// Eigen nummers pas na de keuring — net als bij de start (zie `_voegGekeurdBij` in main.dart).
   /// Zonder ronde: een keuring die langer duurt dan de ronde is geen reden om een goedgekeurd nummer
   /// weg te gooien.
-  Future<void> _keurEnVoegBij(int sessie, List<Radioplek> eigen) async {
+  Future<void> _keurEnVoegBij(int sessie, List<Radioplek> eigen, {bool achteraan = true}) async {
     for (final p in eigen) {
       if (sessie != radio.sessie || !radio.loopt) return;
       var mag = true;
@@ -400,7 +444,7 @@ class Radiobijvuller {
           mag = await k(p);
         } catch (_) {/* een keuring die stukloopt is geen nee */}
       }
-      if (mag) radio.voegBij(sessie, [p], achteraan: true);
+      if (mag) radio.voegBij(sessie, [p], achteraan: achteraan);
     }
   }
 

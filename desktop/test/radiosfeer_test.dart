@@ -44,6 +44,29 @@ void main() {
       expect(s.oordeel(artiest: 'Sade', titel: 'Smooth Operator', zaad: 'Vengaboys', familie: 'dans'), isNull);
     });
 
+    test('de lijst in het paneel: per nummer het laatste, weer toegelaten valt weg, andere radio\'s niet (23-10-2026)', () async {
+      final s = toestel();
+      Future<void> zet(String a, String t, String zaad, String fam, Sfeeroordeel? o) async {
+        await s.zet(artiest: a, titel: t, zaad: zaad, familie: fam, naar: o);
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+      }
+
+      await zet('Sade', 'Smooth Operator', 'Vengaboys', 'dans', Sfeeroordeel.pastNiet);
+      await zet('Haddaway', 'What Is Love', '2 Unlimited', 'dans', Sfeeroordeel.past);
+      await zet('Adele', 'Hello', 'Michael Bublé', 'jazz', Sfeeroordeel.pastNiet);
+      await zet('Corona', 'The Rhythm of the Night', 'Vengaboys', 'dans', Sfeeroordeel.pastNiet);
+      final lijst = s.oordelenVoor(zaad: 'Vengaboys', familie: 'dans');
+      expect([for (final x in lijst) x.titel], ['The Rhythm of the Night', 'What Is Love', 'Smooth Operator'],
+          reason: 'het nieuwste eerst, ook uit een andere dansradio; Adele hoort bij jazz');
+      // "Weer toelaten" in deze radio: een lege regel in DEZE context, nieuwer dan het oude oordeel.
+      await zet('Sade', 'Smooth Operator', 'Vengaboys', 'dans', null);
+      expect([for (final x in s.oordelenVoor(zaad: 'Vengaboys', familie: 'dans')) x.titel],
+          ['The Rhythm of the Night', 'What Is Love']);
+      // Ook als het oude oordeel in een andere radio van dezelfde familie gegeven was.
+      await zet('Haddaway', 'What Is Love', 'Vengaboys', 'dans', null);
+      expect([for (final x in s.oordelenVoor(zaad: 'Vengaboys', familie: 'dans')) x.titel], ['The Rhythm of the Night']);
+    });
+
     test('een akoestische versie is een ander nummer; hoofdletters en een "The" niet', () async {
       final s = toestel();
       await s.zet(artiest: 'Charlie Puth', titel: 'Light Switch', zaad: 'Sabrina Carpenter', familie: 'popsoul', naar: Sfeeroordeel.pastNiet);

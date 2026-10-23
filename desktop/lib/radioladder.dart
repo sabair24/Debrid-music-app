@@ -251,3 +251,52 @@ typedef Herhaalkandidaat = ({
   if (vangnetUitgesteld) return kies(poolVan(4), 4);
   return (keuze: const <int>[], niveau: 0);
 }
+
+/// Hoeveel nummers na het spelen een radiodownload die je niet hield naar de prullenbak gaat — zie [teOpruimen].
+const int kOpruimNa = 20;
+
+/// Hoeveel er per tik hoogstens weggaan: één bundel tegelijk, zodat een telefoon niet twintig keer na elkaar de
+/// catalogus van de pc herlaadt.
+const int kOpruimBundel = 5;
+
+/// Een plek van het plan zoals [teOpruimen] haar ziet: het bestand (null zonder), en of het van deze radio is.
+typedef Opruimplek = ({String? pad, bool doorRadio, bool zaad, bool reserve, int? voorbijOp});
+
+/// Welke bestanden de radio nu onderweg mag opruimen: hoogstens [max] paden.
+///
+/// **Waarom (Saber).** 08-10-2026: wat geen groen krijgt gaat 20 nummers nadat het voorbij was weg — geen
+/// schijfplafond, wel onderweg opruimen. 23-10-2026, op de vraag of "Past niet" dan ook meegaat: *"Na 20 nummers, ook
+/// Past niet"*. Alleen wat je houdt blijft altijd ([houdt]: Houden, favoriet of in een afspeellijst — dezelfde regel
+/// als het overzicht bij "Radio afsluiten", `opruimplan` in radiosessie.dart).
+///
+/// Een pad mag pas weg als het van deze radio is ([Opruimplek.doorRadio]), niet het zaad of de reserve (die zijn van
+/// jou), en ELKE plek met dat bestand minstens [na] nummers voorbij is — een herhaling die nog moet komen houdt het
+/// vast. Nooit wat in de rij op of na het spelende nummer staat ([rijVanaf]), en niet wat al onderweg naar de
+/// prullenbak is ([bezig]).
+List<String> teOpruimen(
+  List<Opruimplek> plan, {
+  required int voorbijteller,
+  required Set<String> rijVanaf,
+  required bool Function(String pad) houdt,
+  Set<String> bezig = const {},
+  int na = kOpruimNa,
+  int max = kOpruimBundel,
+}) {
+  final perPad = <String, List<Opruimplek>>{};
+  for (final p in plan) {
+    final pad = p.pad;
+    if (pad != null && pad.isNotEmpty) (perPad[pad] ??= []).add(p);
+  }
+  final uit = <String>[];
+  for (final e in perPad.entries) {
+    if (uit.length >= max) break;
+    final pad = e.key;
+    if (rijVanaf.contains(pad) || bezig.contains(pad)) continue;
+    final plekken = e.value;
+    if (plekken.any((p) => !p.doorRadio || p.zaad || p.reserve)) continue;
+    if (plekken.any((p) => p.voorbijOp == null || voorbijteller - p.voorbijOp! < na)) continue;
+    if (houdt(pad)) continue;
+    uit.add(pad);
+  }
+  return uit;
+}

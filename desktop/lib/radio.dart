@@ -542,6 +542,106 @@ class RadioBesturing extends ChangeNotifier {
   /// Het bijvullen van deze radio, of null (dan vult hij niet bij). Zie [start].
   Bijvuller? _bijvul;
 
+  /// Mag deze radio onderweg opruimen ([teOpruimen])? Ingehangen vanuit main.dart: niet op tv, en alleen waar het naar
+  /// een prullenbak gaat. Null: niet.
+  bool Function()? opruimenOnderweg;
+
+  /// Blijft dit bestand altijd (Houden, favoriet, in een afspeellijst)? Ingehangen vanuit main.dart — dezelfde regel als
+  /// het overzicht bij het afsluiten. Zonder: niets opruimen, want dan weet de radio niet wat je wilde houden.
+  bool Function(String pad)? houdt;
+
+  /// Hoeveel deze radio onderweg naar de prullenbak bracht.
+  int get opgeruimd => _opgeruimd;
+  int _opgeruimd = 0;
+  final Set<String> _opruimBezig = {};
+
+  /// Wanneer de radio voor het laatst iets herhaalde. Zolang hij herhaalt, ruimt hij niet op: dan is wat hij hoorde
+  /// precies wat hij nog nodig heeft (plan A4: "niet zolang herhalen nodig is").
+  DateTime? _herhaaldOp;
+
+  /// Hoe lang na een herhaling het opruimen nog wacht.
+  static const kOpruimNaHerhaling = Duration(minutes: 10);
+
+  /// Eén bundel van [teOpruimen], als het mag. Elke tik; er loopt hoogstens één bundel tegelijk.
+  void _ruimOnderwegOp(int sessie) {
+    final h = houdt;
+    if (h == null || !(opruimenOnderweg?.call() ?? false) || _opruimBezig.isNotEmpty) return;
+    final herhaald = _herhaaldOp;
+    if (herhaald != null && _klok().difference(herhaald) < kOpruimNaHerhaling) return;
+    final rij = speler.radioQueue;
+    final vanaf = <String>{
+      for (var k = speler.radioIndex < 0 ? 0 : speler.radioIndex; k < rij.length; k++)
+        if (rij[k].local?.path case final pad?) pad,
+    };
+    final paden = teOpruimen(
+      [
+        for (final p in _plan)
+          (pad: p.eigen?.path, doorRadio: p.doorRadio, zaad: p.zaad, reserve: p.reserve, voorbijOp: p.voorbijOp),
+      ],
+      voorbijteller: _voorbijteller,
+      rijVanaf: vanaf,
+      houdt: h,
+    );
+    if (paden.isEmpty) return;
+    _opruimBezig.addAll(paden);
+    unawaited(() async {
+      try {
+        for (final pad in paden) {
+          if (sessie != _sessie) break; // afgesloten: het overzicht neemt het over
+          await _ruimOp(pad, h);
+        }
+      } finally {
+        _opruimBezig.clear();
+      }
+    }());
+  }
+
+  /// [pad] naar de prullenbak, zoals "Weg" maar zonder duim: uit de rij (ook op een speaker), uit het plan, uit de
+  /// notitie. Lukt het niet, dan blijft het in de notitie en biedt het overzicht het straks aan.
+  Future<void> _ruimOp(String pad, bool Function(String pad) houdt) async {
+    // Intussen "Houden" gekregen, of al weg? Dan niet.
+    if (!_doorRadio.contains(pad) || houdt(pad)) return;
+    var artiest = '', titel = '';
+    int? voorbij;
+    for (final p in _plan) {
+      if (p.eigen?.path != pad) continue;
+      artiest = p.artiest;
+      titel = p.titel;
+      voorbij = p.voorbijOp;
+    }
+    await speler.haalUitRadio(pad);
+    final weg = await bron.vergeet(pad: pad, artiest: artiest, titel: titel);
+    if (!weg) {
+      _spoor?.call('radio-opruimen: "$artiest — $titel" kon niet naar de prullenbak — het overzicht biedt het aan');
+      return;
+    }
+    _doorRadio.remove(pad);
+    for (final p in _plan) {
+      if (p.eigen?.path != pad) continue;
+      p.eigen = null;
+      p.doorRadio = false;
+    }
+    _lopend?.gehaald.removeWhere((g) => g.pad == pad);
+    _opgeruimd++;
+    _spoor?.call('radio-opgeruimd: "$artiest — $titel" '
+        '(${voorbij == null ? '?' : _voorbijteller - voorbij} voorbij, niet gehouden)');
+    unawaited(_bewaar(_lopend));
+    notifyListeners();
+  }
+
+  /// "Past": meteen meer in die richting — `Radiobijvuller.groenRonde`. Null: dat kan deze radio niet. Zie [start].
+  Future<int> Function(int sessie, String artiest, String titel)? _groen;
+
+  /// "Past" op [t]: haal meteen meer in die richting (Saber, 23-10-2026: *"Meteen meer in die richting"*). Waar als
+  /// er een ronde begon — alleen dan zegt het scherm dat hij zoekt; anders is het alleen onthouden.
+  bool meerZoals(Track t) {
+    final g = _groen;
+    if (!_loopt || g == null) return false;
+    final sessie = _sessie;
+    unawaited(g(sessie, t.artist, t.title).catchError((Object _) => 0));
+    return true;
+  }
+
   /// Mag een nummer al klinken terwijl het binnenkomt (zie `groeistroom.dart`)? Ingehangen vanuit
   /// main.dart (de instelling). Alleen waar deze machine zelf haalt.
   bool Function()? vroegLuisteren;
@@ -761,6 +861,7 @@ class RadioBesturing extends ChangeNotifier {
       Future<bool> Function(Radioplek plek)? keur,
       void Function(int sessie)? bijStart,
       Bijvuller? bijvul,
+      Future<int> Function(int sessie, String artiest, String titel)? groen,
       void Function(String regel)? spoor,
       int? aantal}) async {
     if (nieuw.isEmpty) return 'Er viel niets te vinden om een radio van te maken.';
@@ -791,6 +892,9 @@ class RadioBesturing extends ChangeNotifier {
     _pauzeGemeld = false;
     _keur = keur;
     _bijvul = bijvul;
+    _opgeruimd = 0;
+    _herhaaldOp = null;
+    _groen = groen;
     _spoor = spoor;
     _aantal = aantal;
     _bijvulBezig = false;
@@ -1056,6 +1160,7 @@ class RadioBesturing extends ChangeNotifier {
           ? 'radio-herhaling: "${plek.artiest} — ${plek.titel}" (${_voorbijteller - laatst[pad]!} voorbij geleden, niveau ${keuze.niveau})'
           : 'radio-vangnet: "${plek.artiest} — ${plek.titel}" (van jou, nog niet in deze radio)');
     }
+    if (erbij.isNotEmpty) _herhaaldOp = _klok();
     _plan = [..._plan, ...erbij];
     notifyListeners();
     return erbij.length;
@@ -1373,6 +1478,7 @@ class RadioBesturing extends ChangeNotifier {
       notifyListeners();
     }
     _stempel();
+    _ruimOnderwegOp(sessie);
     // Wat klaarstaat of net landde, maar intussen "past niet" kreeg: niet de rij in.
     for (final p in _plan) {
       if (p.zaad || (p.stand != Haalstand.klaar && p.stand != Haalstand.geland)) continue;

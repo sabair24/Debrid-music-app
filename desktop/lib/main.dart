@@ -30,6 +30,7 @@ import 'pc_model.dart';
 import 'tempo.dart' show Radiotempo, Tempometer;
 import 'radiobijvuller.dart';
 import 'radiokeuze.dart';
+import 'radioladder.dart' show kOpruimNa;
 import 'radiobestand.dart' show kRadioSpeling;
 import 'scanmaat.dart';
 import 'booklet.dart' show imageSize;
@@ -1234,6 +1235,25 @@ Future<void> main() async {
   };
   // Groen gaat bij het herhalen voor — zie [RadioBesturing.voegHerhalingBij].
   radio.isGroen = (t) => oordelen.vanTrack(t) == Oordeel.omhoog;
+  // Onderweg opruimen (Saber, 08-10 en 23-10-2026: "Na 20 nummers, ook Past niet"): wat je niet houdt, gaat 20
+  // nummers later naar de prullenbak. Dezelfde regel als het overzicht bij het afsluiten: Houden, favoriet of in een
+  // afspeellijst blijft. Wat de bibliotheek hier niet (meer) kent, blijft ook: daar valt niets te controleren.
+  radio.houdt = (pad) {
+    Track? t;
+    for (final x in library.tracks) {
+      if (x.path == pad) {
+        t = x;
+        break;
+      }
+    }
+    if (t == null) return true;
+    if (oordelen.vanTrack(t) == Oordeel.omhoog || favorieten.isFavorietTrack(t)) return true;
+    final id = library.gedeeldId(t.path);
+    return id != null && lijsten.lijsten.any((l) => l.trackIds.contains(id));
+  };
+  // Niet op tv (daar geeft niemand een oordeel), en alleen waar het naar een prullenbak gaat — op een toestel beslist
+  // de pc, en die heeft er een.
+  radio.opruimenOnderweg = () => !isTv && (library.isRemote || heeftPrullenbak);
   // "Aanbevolen voor jou": op de pc berekend en bewaard, elke zes uur; een toestel vraagt het de pc
   // (`/api/aanbevolen`). Zie `aanbevolen.dart` — Saber, 16-10-2026: "laadt heel traag … ik wil
   // nieuwe muziek ontdekken".
@@ -12772,7 +12792,136 @@ class _RadioAfstemming extends StatelessWidget {
               child: Text('Ophalen staat even stil: $pauze',
                   style: TextStyle(color: _muted, fontSize: 12)),
             ),
+          const _RadioGeleerd(),
+          const _RadioOpruimregel(),
         ],
+      ),
+    );
+  }
+}
+
+/// "Wat je niet houdt, gaat 20 nummers later naar de prullenbak · 14 opgeruimd" — alleen waar de radio onderweg
+/// opruimt ([RadioBesturing.opruimenOnderweg]). Saber, 23-10-2026: *"Na 20 nummers, ook Past niet"*.
+class _RadioOpruimregel extends StatelessWidget {
+  const _RadioOpruimregel();
+
+  @override
+  Widget build(BuildContext context) {
+    final (aan, n) = context.select<RadioBesturing, (bool, int)>(
+        (r) => (r.loopt && r.houdt != null && (r.opruimenOnderweg?.call() ?? false), r.opgeruimd));
+    if (!aan) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Text(
+          'Wat je niet houdt, gaat $kOpruimNa nummers later naar de prullenbak${n > 0 ? ' · $n opgeruimd' : ''}',
+          style: TextStyle(color: _muted, fontSize: 12)),
+    );
+  }
+}
+
+/// "Leert van je duimen · 3 past · 7 past niet": wat je in radio's als deze zei ([RadioSfeer.oordelenVoor]). Een tik
+/// toont de lijst, met "Weer toelaten" bij wat niet paste.
+class _RadioGeleerd extends StatelessWidget {
+  const _RadioGeleerd();
+
+  @override
+  Widget build(BuildContext context) {
+    final radio = context.watch<RadioBesturing>();
+    final sfeer = context.watch<RadioSfeer>();
+    if (!radio.loopt) return const SizedBox.shrink();
+    final lijst = sfeer.oordelenVoor(zaad: radio.sfeerZaad, familie: radio.familie);
+    if (lijst.isEmpty) return const SizedBox.shrink();
+    final past = lijst.where((x) => x.oordeel == Sfeeroordeel.past).length;
+    final niet = lijst.length - past;
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(kHoek8),
+        onTap: () => unawaited(showModalBottomSheet<void>(
+          context: context,
+          backgroundColor: _panel,
+          isScrollControlled: true,
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(kHoek18))),
+          builder: (_) => MultiProvider(
+            providers: [
+              ChangeNotifierProvider<RadioBesturing>.value(value: radio),
+              ChangeNotifierProvider<RadioSfeer>.value(value: sfeer),
+            ],
+            child: const _RadioGeleerdBlad(),
+          ),
+        )),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Text(
+              'Leert van je duimen · $past past · $niet past niet ›',
+              style: TextStyle(color: _muted, fontSize: 12)),
+        ),
+      ),
+    );
+  }
+}
+
+class _RadioGeleerdBlad extends StatelessWidget {
+  const _RadioGeleerdBlad();
+
+  @override
+  Widget build(BuildContext context) {
+    final radio = context.watch<RadioBesturing>();
+    final sfeer = context.watch<RadioSfeer>();
+    final lijst = sfeer.oordelenVoor(zaad: radio.sfeerZaad, familie: radio.familie);
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .7),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
+              child: Text('In radio\'s als deze', style: TextStyle(color: kInkt, fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text('Dezelfde startartiest of dezelfde sfeer. "Past niet" komt hier niet meer in.',
+                  style: TextStyle(color: _muted, fontSize: 12)),
+            ),
+            if (lijst.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                child: Text('Nog niets.', style: TextStyle(color: _muted, fontSize: 13)),
+              ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final x in lijst)
+                    ListTile(
+                      dense: true,
+                      leading: Icon(
+                          x.oordeel == Sfeeroordeel.past ? Icons.thumb_up_alt_rounded : Icons.thumb_down_alt_rounded,
+                          size: 18,
+                          color: x.oordeel == Sfeeroordeel.past ? _accent : _muted),
+                      title: Text('${x.artiest} — ${x.titel}',
+                          maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: kInkt, fontSize: 13.5)),
+                      trailing: x.oordeel == Sfeeroordeel.pastNiet
+                          ? TextButton(
+                              onPressed: () => unawaited(sfeer
+                                  .zet(
+                                      artiest: x.artiest,
+                                      titel: x.titel,
+                                      zaad: radio.sfeerZaad,
+                                      familie: radio.familie,
+                                      naar: null)
+                                  .catchError((Object _) {})),
+                              child: const Text('Weer toelaten'),
+                            )
+                          : null,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -14207,6 +14356,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
         naam: o.naam,
         keur: keuring.keur,
         bijvul: bijvuller.call,
+        groen: bijvuller.lastfmVan == null ? null : bijvuller.groenRonde,
         spoor: log.line,
         aantal: o.aantalGenoemd ? o.aantal : null,
         // Het vangnet pas als deze start het werd.
@@ -15024,8 +15174,8 @@ class _ZoneRadioOordeel extends StatelessWidget {
 }
 
 /// "Past niet in deze radio": dit nummer niet meer in radio's met dezelfde startartiest of dezelfde sfeer,
-/// en meteen het volgende. Het bestand blijft staan tot "Radio afsluiten" (Saber, 21-10-2026) — weggooien
-/// is "Weg", hieronder. Zie `radiosfeer.dart`.
+/// en meteen het volgende. Het bestand gaat niet meteen weg — dat is "Weg", hieronder — maar 20 nummers later, zoals
+/// alles wat je niet houdt (Saber, 23-10-2026: "Na 20 nummers, ook Past niet"; zie `teOpruimen`). Zie `radiosfeer.dart`.
 Future<void> _pastNietInRadio(BuildContext context, Track t) async {
   final meldingen = ScaffoldMessenger.of(context);
   final zin = await radioPastNiet(context.read<RadioBesturing>(), context.read<RadioSfeer>(), t);
@@ -15135,7 +15285,11 @@ Future<String> radioPast(RadioBesturing radio, RadioSfeer sfeer, Track t) async 
   await sfeer
       .zet(artiest: t.artist, titel: t.title, zaad: radio.sfeerZaad, familie: radio.familie, naar: naar)
       .catchError((Object _) {});
-  return naar == null ? 'Niet meer onthouden.' : 'Onthouden: past in deze radio.';
+  if (naar == null) return 'Niet meer onthouden.';
+  // En meteen meer in die richting (Saber, 23-10-2026). Alleen zeggen dat hij zoekt als dat ook zo is.
+  return radio.meerZoals(t)
+      ? 'Onthouden — de radio zoekt meteen meer in deze richting.'
+      : 'Onthouden: past in deze radio.';
 }
 
 /// De weg uit een radio.
@@ -17398,7 +17552,7 @@ Future<void> startRadio(BuildContext context, String artist,
           zaad: true),
     for (final p in plan)
       if (p.eigen == null || artiestSleutel(p.artiest) == zelf) p,
-  ], naar: uitgang, naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijvul: bijvuller.call, spoor: log.line,
+  ], naar: uitgang, naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijvul: bijvuller.call, groen: bijvuller.lastfmVan == null ? null : bijvuller.groenRonde, spoor: log.line,
       bijStart: (s) {
     gestart = s;
     _keuring = keuring;
