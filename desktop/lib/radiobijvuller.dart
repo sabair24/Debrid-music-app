@@ -86,6 +86,12 @@ const int kLastfmPerRonde = 8;
 /// verwante artiesten die bij de sfeer passen, vooraan; dezelfde artiest pas na 50 nummers (die regel blijft).
 const int kGroenPerRonde = 5;
 
+/// Hoeveel eigen nummers de familielaag van de reserve per sfeervraag voorlegt — zie `Radiobijvuller._familieLaag`.
+const int kFamilieVraag = 20;
+
+/// Hoogstens één sfeervraag van de familielaag per zoveel tijd: het budget is 12 per uur, voor alles samen.
+const Duration kFamilieRust = Duration(minutes: 10);
+
 class Radiobijvuller {
   Radiobijvuller({
     required this.radio,
@@ -95,6 +101,8 @@ class Radiobijvuller {
     required this.maakPlan,
     this.keurEigen,
     this.reserveKandidaten,
+    this.familieKandidaten,
+    this.sfeerVoorReserve,
     this.model,
     this.lastfmVan,
     this.vraagSfeer,
@@ -122,6 +130,14 @@ class Radiobijvuller {
 
   /// Eigen nummers voor de reserve, bij deze artiesten ([artiestSleutel]s).
   final List<Track> Function(Set<String> artiesten)? reserveKandidaten;
+
+  /// Eigen nummers van dezelfde familie als het zaad (dans, rock, popsoul, jazz) — de tweede laag van de reserve,
+  /// zie [vulReserve]. Null: die laag is er niet.
+  final Future<List<Track>> Function()? familieKandidaten;
+
+  /// Welke van die eigen nummers volgens het model in de sfeer passen — `_Radiokeuring.sfeerJa`. Null als er niet
+  /// gevraagd kon worden: dan komt er uit de familielaag niets (fout = nee). Null als functie: geen model.
+  final Future<List<Radioplek>?> Function(List<Radioplek> plekken)? sfeerVoorReserve;
 
   /// Het model, als er een sleutel is: een vervolglijst als de buurt niets nieuws gaf. Null: zoals voorheen.
   final Radiomodel? model;
@@ -513,8 +529,79 @@ class Radiobijvuller {
         }
       }
       spoor?.call('radio-reserve: $erbij erbij van $geprobeerd gekeurd (${kandidaten.length} kandidaten)');
+      if (erbij < nodig) await _familieLaag(sessie, nodig - erbij, al, perArtiest, sleutels);
     } finally {
       _reserveBezig = false;
     }
+  }
+
+  /// Wanneer de familielaag het laatst het model vroeg — hoogstens één vraag per [kFamilieRust].
+  DateTime? _familieOp;
+
+  /// De tweede laag van de reserve: eigen nummers van dezelfde familie, van andere artiesten dan het zaad en zijn
+  /// buren ([buurt]), maar alleen wat het model op sfeer goedkeurt ([sfeerVoorReserve]) en daarna de keuring.
+  ///
+  /// **Waarom (Saber, 23-10-2026: "Doe maar").** De eerste laag kent alleen de zaadartiest en zijn `/related`; heb je
+  /// daarvan weinig, dan valt de reserve leeg terwijl je bibliotheek vol passende muziek staat. De familie alleen is
+  /// te grof (Enya en Massive Attack in een Freak Out-radio, 08-10-2026) — daarom de sfeervraag, en zonder antwoord
+  /// niets. Eén nummer per artiest per vraag, hoogstens [kReservePerArtiest] per artiest in de reserve.
+  Future<int> _familieLaag(int sessie, int nodig, Set<String> al, Map<String, int> perArtiest, Set<String> buurt) async {
+    final f = familieKandidaten, s = sfeerVoorReserve;
+    if (f == null || s == null) return 0;
+    final op = _familieOp;
+    if (op != null && _klok().difference(op) < kFamilieRust) return 0;
+    _familieOp = _klok();
+    final tracks = await f();
+    if (sessie != radio.sessie || !radio.loopt) return 0;
+    final kandidaten = [
+      for (final t in tracks)
+        if (!al.contains(_sleutel(t.artist, t.title)) &&
+            !_reserveGeprobeerd.contains(t.path) &&
+            !buurt.contains(artiestSleutel(t.artist)))
+          t
+    ]..shuffle(_toeval);
+    final inDezeVraag = <String>{};
+    final plekken = <Radioplek>[];
+    for (final t in kandidaten) {
+      final a = artiestSleutel(t.artist);
+      if ((perArtiest[a] ?? 0) >= kReservePerArtiest || !inDezeVraag.add(a)) continue;
+      plekken.add(Radioplek(
+        artiest: t.artist,
+        titel: t.title,
+        seconden: t.duration?.inSeconds,
+        eigen: t,
+        bron: 'reserve',
+        reserve: true,
+      ));
+      if (plekken.length >= kFamilieVraag) break;
+    }
+    if (plekken.isEmpty) return 0;
+    for (final p in plekken) {
+      _reserveGeprobeerd.add(p.eigen!.path);
+    }
+    final ja = await s(plekken);
+    if (sessie != radio.sessie || !radio.loopt) return 0;
+    if (ja == null) {
+      spoor?.call('radio-reserve (familie): ${plekken.length} gevraagd, geen sfeeroordeel — niets uit deze laag');
+      return 0;
+    }
+    var erbij = 0;
+    for (final p in ja) {
+      if (erbij >= nodig) break;
+      if (sessie != radio.sessie || !radio.loopt) return erbij;
+      var mag = true;
+      final k = keurEigen;
+      if (k != null) {
+        try {
+          mag = await k(p);
+        } catch (_) {/* geen nee */}
+      }
+      if (!mag) continue;
+      final n = radio.voegReserveBij(sessie, [p]);
+      erbij += n;
+      if (n > 0) perArtiest[artiestSleutel(p.artiest)] = (perArtiest[artiestSleutel(p.artiest)] ?? 0) + 1;
+    }
+    spoor?.call('radio-reserve (familie): ${ja.length} van ${plekken.length} passen op sfeer → $erbij erbij');
+    return erbij;
   }
 }

@@ -408,6 +408,103 @@ void main() {
     });
   });
 
+  // Saber, 23-10-2026, over eigen nummers op genre met een sfeercheck van het model: "Doe maar".
+  group('de reserve: de familielaag', () {
+    test('DE KERN: te weinig van de buurt — eigen nummers van dezelfde familie, maar alleen met een ja van het model',
+        () async {
+      final r = await radio();
+      final gevraagd = <List<String>>[];
+      final familie = [
+        _t('Enya', 'Orinoco Flow'),
+        _t('Clouseau', 'Daar gaat ze'),
+        _t('Clouseau', 'Domino'),
+        _t('Milk Inc.', 'Walk on Water'),
+        _t('Kate Ryan', 'Désenchantée'),
+        _t('Bazart', 'Goud'), // een buur: die hoort bij de eerste laag
+      ];
+      final b = Radiobijvuller(
+        radio: r,
+        deezer: _Deezer().als,
+        ankers: const ['Niels Destadsbader'],
+        metVerwant: true,
+        maakPlan: _plan,
+        reserveKandidaten: (_) => const [],
+        familieKandidaten: () async => familie,
+        sfeerVoorReserve: (plekken) async {
+          gevraagd.add([for (final p in plekken) p.artiest]);
+          return [for (final p in plekken) if (p.artiest != 'Enya') p];
+        },
+        keurEigen: (p) async => p.artiest != 'Kate Ryan',
+        toeval: Random(4),
+      );
+      await b.vulReserve(r.sessie, 4);
+      expect(gevraagd, hasLength(1));
+      expect(gevraagd.single, isNot(contains('Bazart')), reason: 'de buren zijn de eerste laag');
+      expect(gevraagd.single.where((a) => a == 'Clouseau'), hasLength(1), reason: 'één per artiest per vraag');
+      final reserve = {for (final p in r.plan.where((p) => p.reserve)) p.artiest};
+      expect(reserve, {'Clouseau', 'Milk Inc.'}, reason: 'Enya paste niet, Kate Ryan viel bij de keuring');
+      expect(r.plan.where((p) => p.reserve).every((p) => p.stand == Haalstand.klaar), isTrue);
+      r.stop();
+    });
+
+    test('DE VAL: geen oordeel van het model is nee — dan niets uit deze laag', () async {
+      final r = await radio();
+      final b = Radiobijvuller(
+        radio: r,
+        deezer: _Deezer().als,
+        ankers: const ['Niels Destadsbader'],
+        metVerwant: true,
+        maakPlan: _plan,
+        reserveKandidaten: (_) => const [],
+        familieKandidaten: () async => [_t('Clouseau', 'Daar gaat ze')],
+        sfeerVoorReserve: (_) async => null,
+      );
+      await b.vulReserve(r.sessie, 4);
+      expect(r.plan.where((p) => p.reserve), isEmpty);
+      r.stop();
+    });
+
+    test('hoogstens één vraag per tien minuten, en wat al gevraagd is komt niet terug', () async {
+      final r = await radio();
+      var nu = DateTime(2026, 10, 23, 9);
+      var vragen = 0;
+      final b = Radiobijvuller(
+        radio: r,
+        deezer: _Deezer().als,
+        ankers: const ['Niels Destadsbader'],
+        metVerwant: true,
+        maakPlan: _plan,
+        reserveKandidaten: (_) => const [],
+        familieKandidaten: () async => [for (var i = 0; i < 30; i++) _t('Artiest $i', 'Nummer $i')],
+        sfeerVoorReserve: (plekken) async {
+          vragen++;
+          expect(plekken.length, lessThanOrEqualTo(kFamilieVraag));
+          return const [];
+        },
+        klok: () => nu,
+      );
+      await b.vulReserve(r.sessie, 4);
+      await b.vulReserve(r.sessie, 4);
+      expect(vragen, 1, reason: 'het budget is twaalf per uur, voor alles samen');
+      nu = nu.add(kFamilieRust + const Duration(seconds: 1));
+      await b.vulReserve(r.sessie, 4);
+      expect(vragen, 2);
+      r.stop();
+    });
+
+    test('zonder model is de laag er niet', () {
+      final m = File('lib/main.dart').readAsStringSync();
+      expect(m, contains('familieKandidaten: ai == null ? null : () async => _familieUit(lib, (await keuring.zaadStijl).familie),'));
+      expect(m, contains('sfeerVoorReserve: ai == null ? null : keuring.sfeerJa,'));
+      expect(m, contains('if (!nooitOpRadio(t.title) && familieVan(t.genre) == familie) t'));
+      // Fout = nee: de familielaag vraagt het model zelf, en een fout of een vol budget geeft null.
+      final keuring = m.substring(m.indexOf('Future<List<Radioplek>?> sfeerJa('));
+      final lijf = keuring.substring(0, keuring.indexOf('\n  }\n'));
+      expect(lijf, contains("log.line('radio-reserve (familie): geen sfeervraag — \${mag.waarom}');\n        return null;"));
+      expect(lijf, endsWith("niets uit deze laag');\n      return null;\n    }"), reason: 'ook bij een fout');
+    });
+  });
+
   group('de reserve', () {
     test('DE KERN: hoogstens wat nodig is, gekeurd, achteraan', () async {
       final r = await radio();

@@ -17451,6 +17451,10 @@ Future<void> startRadio(BuildContext context, String artist,
         bron: 'buren'),
     keurEigen: (p) => keuring.keur(p, eigen: true),
     reserveKandidaten: (artiesten) => _reserveUit(lib, artiesten),
+    // De tweede laag: eigen nummers van dezelfde familie, alleen met een ja van het model (Saber, 23-10-2026: "Doe
+    // maar"). Zonder model is die laag er niet.
+    familieKandidaten: ai == null ? null : () async => _familieUit(lib, (await keuring.zaadStijl).familie),
+    sfeerVoorReserve: ai == null ? null : keuring.sfeerJa,
     // Ontdekken onderweg (Saber, 22-10-2026: "radio blijft ontdekken"): elke ronde wat Last.fm vergelijkbaar vindt
     // met een nummer dat net speelde, streng op sfeer — zie [kLastfmPerRonde].
     lastfmVan: cfg.lastfmKey.trim().isEmpty
@@ -17910,7 +17914,60 @@ class _Radiokeuring {
       }
     }
     b?.sfeerGevraagd(start: !onderweg);
-    final antwoord = () async {
+    final antwoord = _vraagModel(m, nieuw, onderweg: onderweg, gekozen: gekozen);
+    for (var i = 0; i < nieuw.length; i++) {
+      final j = i;
+      _sfeer[_k(nieuw[j].artiest, nieuw[j].titel)] =
+          antwoord.then((weg) => !weg.contains(j), onError: (Object _) => true);
+    }
+    // Een model dat niets zegt, weert niets: dan keurt de radio op stijl en tijdvak zoals voorheen.
+    unawaited(antwoord.then((_) {}, onError: (Object e) {
+      log.line('radio-sfeer: het model gaf geen oordeel — $e');
+    }));
+  }
+
+  /// Hoogstens zoveel eigen nummers per sfeervraag van de familielaag van de reserve ([sfeerJa]).
+  static const kSfeerReserve = 20;
+
+  /// Welke van [kandidaten] passen volgens het model in de sfeer van deze radio — voor de familielaag van de reserve
+  /// (`Radiobijvuller.vulReserve`): eigen nummers van dezelfde familie, die niet van de zaadartiest of zijn buren zijn.
+  ///
+  /// **Fout = nee (plan V6).** Null als er niet gevraagd kon worden: geen model, het budget op, een fout, een
+  /// time-out. Dan komt er uit die laag niets — anders dan bij [vraagSfeer], waar "geen oordeel" doorlaten betekent.
+  /// Want de familie alleen is te grof: "dans" omvat downtempo en trip hop, en zo kwamen Enya en Massive Attack in een
+  /// Freak Out-radio (08-10-2026). Wat het model goedkeurt, onthoudt [keur] als "ja".
+  Future<List<Radioplek>?> sfeerJa(List<Radioplek> kandidaten) async {
+    final m = model;
+    if (m == null || kandidaten.isEmpty) return null;
+    final b = budget;
+    if (b != null) {
+      final mag = b.sfeer();
+      if (!mag.mag) {
+        log.line('radio-reserve (familie): geen sfeervraag — ${mag.waarom}');
+        return null;
+      }
+    }
+    b?.sfeerGevraagd(start: false);
+    final nieuw = kandidaten.take(kSfeerReserve).toList();
+    try {
+      final weg = await _vraagModel(m, nieuw, onderweg: true).timeout(const Duration(seconds: 90));
+      final ja = [
+        for (var i = 0; i < nieuw.length; i++)
+          if (!weg.contains(i)) nieuw[i],
+      ];
+      for (var i = 0; i < nieuw.length; i++) {
+        _sfeer[_k(nieuw[i].artiest, nieuw[i].titel)] = Future<bool>.value(!weg.contains(i));
+      }
+      return ja;
+    } catch (e) {
+      log.line('radio-reserve (familie): het model gaf geen oordeel — $e; niets uit deze laag');
+      return null;
+    }
+  }
+
+  /// Eén sfeervraag aan het model over [nieuw]: de indexen van wat de sfeer van het zaad breekt.
+  Future<Set<int>> _vraagModel(AiService m, List<Radioplek> nieuw, {required bool onderweg, bool gekozen = false}) =>
+      () async {
       final z = await zaadStijl;
       final t = zaadTitel;
       final stijlen = t == null ? const <String>[] : await stijlboek.stijlnamen(artiest, t);
@@ -17947,16 +18004,6 @@ class _Radiokeuring {
           '${[for (final i in weg) '${nieuw[i].artiest} — ${nieuw[i].titel}'].join('; ')}');
       return weg;
     }();
-    for (var i = 0; i < nieuw.length; i++) {
-      final j = i;
-      _sfeer[_k(nieuw[j].artiest, nieuw[j].titel)] =
-          antwoord.then((weg) => !weg.contains(j), onError: (Object _) => true);
-    }
-    // Een model dat niets zegt, weert niets: dan keurt de radio op stijl en tijdvak zoals voorheen.
-    unawaited(antwoord.then((_) {}, onError: (Object e) {
-      log.line('radio-sfeer: het model gaf geen oordeel — $e');
-    }));
-  }
 
   /// De rocktak van het zaad, als het een rocknummer is — zie `rockTak`. Uit het geheugen: het zaad
   /// is al opgezocht.
@@ -17982,15 +18029,24 @@ class _Radiokeuring {
 /// Eigen nummers voor de reserve van een radio — zie `Radiobijvuller.vulReserve`. Alleen van
 /// [artiesten]: de zaadartiest en zijn `/related`.
 ///
-/// Geen familielaag ("alle eigen dance"): de familie "dans" omvat ook downtempo en trip hop, en zo
-/// kwamen Enya en Massive Attack in een Freak Out-radio (beoordeling van 08-10-2026). Die laag mag pas
-/// mee met een sfeeroordeel van het model, in een volgende uitlevering.
+/// Geen familie hier ("alle eigen dance"): de familie "dans" omvat ook downtempo en trip hop, en zo kwamen Enya en
+/// Massive Attack in een Freak Out-radio (beoordeling van 08-10-2026). Die laag staat apart ([_familieUit]), en gaat
+/// alleen mee met een ja van het model (23-10-2026).
 ///
 /// Geen jaargrens (Saber, 22-10-2026): de keuring beslist op stijl en sfeer.
 List<Track> _reserveUit(LibraryStore lib, Set<String> artiesten) => [
       for (final t in lib.tracks)
         if (!nooitOpRadio(t.title) && artiesten.contains(artiestSleutel(t.artist))) t
     ];
+
+/// De tweede laag van de reserve: eigen nummers waarvan het genre bij [familie] hoort — zie
+/// `Radiobijvuller._familieLaag`. Leeg zonder familie. Gaat nooit zonder sfeeroordeel van het model de reserve in.
+List<Track> _familieUit(LibraryStore lib, Stijlfamilie? familie) => familie == null
+    ? const []
+    : [
+        for (final t in lib.tracks)
+          if (!nooitOpRadio(t.title) && familieVan(t.genre) == familie) t
+      ];
 
 /// Telt bij deze radio je gewone versie van een liedje als het origineel, hoe lang ook — of let hij
 /// op de lengte? Zie [eigenPastOpPlek].
