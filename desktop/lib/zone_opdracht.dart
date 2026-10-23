@@ -37,6 +37,8 @@ class ZoneUitvoerder {
     required this.nummer,
     this.idVan,
     this.radio,
+    this.radioStop,
+    this.kijkInBrievenbus,
     this.neemOver,
     this.samen,
     this.samenStop,
@@ -70,7 +72,14 @@ class ZoneUitvoerder {
   final Track? Function(String id) nummer;
 
   /// Een radio starten rond [artiest], met [zaad] (of het nummer [titel]) eerst.
-  final Future<void> Function(String artiest, {Track? zaad, String? titel})? radio;
+  final Future<void> Function(String artiest, {Track? zaad, String? titel, String? door})? radio;
+
+  /// De radio van dit toestel afsluiten, op verzoek van [door] (een zone): daar komt het overzicht (Saber, 23-10-2026:
+  /// "waar ik 'Radio afsluiten' tik"). Null: hier kan dat niet.
+  final void Function({String? door})? radioStop;
+
+  /// Er ligt een overzicht in de brievenbus van dit toestel (een seintje van de pc): kijk meteen.
+  final void Function()? kijkInBrievenbus;
 
   /// Na elke opdracht: meld de nieuwe stand meteen, zodat wie bedient het ziet.
   final void Function()? naUitvoeren;
@@ -163,8 +172,19 @@ class ZoneUitvoerder {
           } else {
             final zaad = op['zaad'] == null ? null : nummer('${op['zaad']}');
             final titel = '${op['titel'] ?? ''}'.trim();
-            await r(artiest, zaad: zaad, titel: titel.isEmpty ? null : titel);
+            final door = '${op['door'] ?? ''}';
+            await r(artiest, zaad: zaad, titel: titel.isEmpty ? null : titel, door: door.isEmpty ? null : door);
           }
+        case 'radioStop':
+          final f = radioStop;
+          final door = '${op['door'] ?? ''}';
+          if (f == null) {
+            fout = 'Hier kan geen radio afgesloten worden';
+          } else {
+            f(door: door.isEmpty ? null : door);
+          }
+        case 'radioOverzicht':
+          kijkInBrievenbus?.call();
         default:
           fout = 'Onbekende opdracht "$cmd"';
       }

@@ -32,6 +32,29 @@ import 'settings.dart';
 /// unlit room. This lights it.
 void Function(String)? resolveTrace;
 
+/// De vormen van [titel] om een plaat op te zoeken, de gewone eerst — de rest pas als die niets vindt.
+///
+/// **Waarom (23-10-2026).** 31 albums kenden MusicBrainz en Discogs niet, en zonder tracklijst zoekt de warmer geen
+/// achterkant en geen cd-afbeelding (Saber: *"ook vooral de cd afbeeldingen"*). Een deel droeg alleen een toevoeging:
+/// " - Single" en " - EP" zoals Apple ze noemt ("Sailor Song - Single"), of een ondertitel na " - " ("Parade - Music
+/// From The Motion Picture Under The Cherry Moon"). Een haakje achteraan ("(2025 Remaster)") haalt
+/// [DiscogsService.plainTitle] al weg.
+List<String> zoekTitelsVoorFeiten(String titel) {
+  final uit = <String>[];
+  void voeg(String t) {
+    final s = t.trim();
+    if (s.isNotEmpty && !uit.contains(s)) uit.add(s);
+  }
+
+  final gewoon = DiscogsService.plainTitle(titel);
+  voeg(gewoon);
+  final zonderSoort = gewoon.replaceFirst(RegExp(r'\s+-\s+(single|ep)$', caseSensitive: false), '');
+  voeg(DiscogsService.plainTitle(zonderSoort));
+  final streep = zonderSoort.indexOf(' - ');
+  if (streep > 0) voeg(zonderSoort.substring(0, streep));
+  return uit;
+}
+
 /// The official tracklist: which pressing of this record you actually own.
 ///
 /// Chosen by CONTAINMENT, not by size. Asking for the first pressing big enough to hold the
@@ -97,8 +120,12 @@ Future<AlbumFacts> resolveAlbumFacts(
     }
     if (rel == null) {
       stap('zoeken op release-groep…');
-      final groups =
-          await mb.searchReleaseGroups(DiscogsService.plainTitle(album.title), artist: album.artist);
+      var groups = const <MbReleaseGroup>[];
+      for (final titel in zoekTitelsVoorFeiten(album.title)) {
+        groups = await mb.searchReleaseGroups(titel, artist: album.artist);
+        if (groups.isNotEmpty) break;
+        stap('release-groepen voor "$titel": geen — volgende vorm');
+      }
       stap('release-groepen: ${groups.length}');
       // Not merely "not a compilation": a SINGLE of the same name is a different record, and
       // picking it described a sixteen-track album with a two-track sleeve.

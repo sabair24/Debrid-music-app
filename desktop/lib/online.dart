@@ -29,7 +29,7 @@ import 'werkrij.dart';
 import 'paths.dart';
 import 'audioformaten.dart' show isAudioBestand, isVerliesvrij, soortVan;
 import 'echtheid.dart';
-import 'enrichment.dart' show lijktVerzamelaar;
+import 'enrichment.dart' show albumIsDeSingle, lijktVerzamelaar;
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
 import 'flac_tags.dart';
@@ -4340,7 +4340,10 @@ class DownloadManager extends ChangeNotifier {
     var gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);
     // Geen album (de radio), of dat van een verzamelaar: de oorspronkelijke uitgave opzoeken, en die in het bestand
     // zetten. Saber, 23-10-2026, op de vraag of de app dat zelf mag: "Ja". Ook alvast, terwijl er gezocht wordt.
-    final origineelF = gezag.album.isEmpty
+    // En als het album gewoon de single van dit nummer is ("Summer Of '69" in plaats van Reckless): dan ook, want een
+    // single krijgt geen tracklijst en geen cd-afbeelding — zie `albumIsDeSingle`.
+    final alsSingle = gezag.album.isNotEmpty && albumIsDeSingle(gezag.album, titel);
+    final origineelF = gezag.album.isEmpty || alsSingle
         ? origineleUitgave?.call(artiest, titel, seconden).then<({String album, int? jaar})?>((o) => o,
             onError: (Object _) => null)
         : null;
@@ -4506,8 +4509,12 @@ class DownloadManager extends ChangeNotifier {
           // uploader.
           ({int? jaar, int nummer, int schijf})? plek;
           try {
-            final origineel =
+            final gevonden =
                 origineelF == null ? null : await origineelF.timeout(const Duration(seconds: 8), onTimeout: () => null);
+            // Bij een single als album alleen iets ánders dan die single: het studioalbum of de ep waar hij op staat.
+            final origineel = gevonden != null && (!alsSingle || normKey(gevonden.album) != normKey(gezag.album))
+                ? gevonden
+                : null;
             if (origineel != null) {
               final j = origineel.jaar;
               gezag = gezagVoorHaal(

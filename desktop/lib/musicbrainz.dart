@@ -424,15 +424,22 @@ class MbRecordingRelease {
   /// Official, Promotion, Bootleg, Pseudo-Release — of leeg als MusicBrainz het niet zegt.
   final String status;
 
+  /// Van wie deze persing is ("Various Artists" bij een verzamelaar), of leeg.
+  final String artiest;
+
   const MbRecordingRelease(this.mbid, this.title,
-      {this.primaryType = '', this.secondaryTypes = const [], this.date = '', this.status = ''});
+      {this.primaryType = '', this.secondaryTypes = const [], this.date = '', this.status = '', this.artiest = ''});
 
   /// The artist's own record, as opposed to something their song was licensed onto.
   ///
   /// This is the whole difference between a useful answer and a useless one. "Porselein" by Yasmine
   /// is on sixteen releases; fifteen are compilations — *30 kleinkunst klassiekers deel 5*, *Tien om
   /// te zien: Editie 2023* — and exactly one is the album somebody searching for that song wants.
-  bool get isStudioAlbum => primaryType == 'Album' && secondaryTypes.isEmpty;
+  ///
+  /// Niet van "Various Artists": in MusicBrainz staat lang niet elke verzamelaar als Compilation — "SWF 3 Club
+  /// Collection Oldies: Die 70er" en "#1 Hits of the '80s" staan er als gewoon album (23-10-2026).
+  bool get isStudioAlbum =>
+      primaryType == 'Album' && secondaryTypes.isEmpty && !artiest.toLowerCase().contains('various artists');
 
   bool get isCompilation => secondaryTypes.contains('Compilation');
 }
@@ -481,6 +488,10 @@ class MbRecording {
             : const [],
         date: (r['date'] ?? '').toString(),
         status: (r['status'] ?? '').toString(),
+        artiest: [
+          for (final a in (r['artist-credit'] as List? ?? const []))
+            if (a is Map) '${a['name'] ?? ''}${a['joinphrase'] ?? ''}',
+        ].join(),
       ));
     }
     // The artist's own records first, then everything else, and a compilation last of all. Order
@@ -1111,12 +1122,22 @@ class MusicBrainzService {
   }
 
   /// Recordings matching a title, scoped to an artist where one is known.
+  ///
+  /// [alleenAlbums]: alleen opnames die op een officieel album staan, geen verzamelaar, live-plaat of dj-mix. Bij een
+  /// bekend nummer staan er tientallen live-opnames voor de studio-opname — bij Summer Of '69 kwam Reckless pas zo in
+  /// beeld (23-10-2026).
   Future<List<MbRecording>> searchRecordings(String title,
-      {String artist = '', int max = 25}) async {
+      {String artist = '', int max = 25, bool alleenAlbums = false}) async {
     if (title.trim().isEmpty) return const [];
-    final q = artist.trim().isEmpty
+    var q = artist.trim().isEmpty
         ? 'recording:"${_lucene(title.trim())}"'
         : 'artist:"${_lucene(artist.trim())}" AND recording:"${_lucene(title.trim())}"';
+    // Officieel, en geen verzamelaar, live-plaat of dj-mix: zonder die drie gaf Luka nog vijftien live-opnames en
+    // verzamelaars, en met: Solitude Standing (23-10-2026).
+    if (alleenAlbums) {
+      q = '$q AND primarytype:album AND status:official'
+          ' AND NOT secondarytype:compilation AND NOT secondarytype:live AND NOT secondarytype:dj-mix';
+    }
     final body =
         await _ws('$_root/recording/?query=${Uri.encodeQueryComponent(q)}&fmt=json&limit=$max');
     final list = body?['recordings'] as List<dynamic>? ?? const [];

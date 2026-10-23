@@ -74,8 +74,25 @@ class MetaResult {
     this.audioDbId,
     this.detail,
     this.coverIsMiniatuur = false,
+    this.studioalbum = false,
   });
+
+  /// Het studioalbum van de artiest zelf (MusicBrainz: een Album zonder bijsoort) — geen single, live-plaat of
+  /// verzamelaar. Zie [studioVoorop].
+  final bool studioalbum;
 }
+
+/// De studioalbums bovenaan, verder in dezelfde volgorde — voor "Uitgave kiezen…" bij een los nummer.
+///
+/// **Waarom (radiotest van 23-10-2026).** Bij Bryan Adams — Summer Of '69 stonden bovenaan de 7"-single, Greatest
+/// Hits Live en Live at Slane Castle; Reckless moest je zelf zoeken. Saber vroeg of hij de uitgave zelf kan kiezen: dan
+/// hoort het oorspronkelijke album vooraan.
+List<MetaResult> studioVoorop(List<MetaResult> r) => [
+      for (final m in r)
+        if (m.studioalbum) m,
+      for (final m in r)
+        if (!m.studioalbum) m,
+    ];
 
 /// Searches Deezer / Discogs / MusicBrainz for correct metadata + cover art.
 class MetadataSearch {
@@ -628,14 +645,34 @@ class MetadataSearch {
         }
       }
       if (song.isEmpty) return [];
-      final found = await mb.searchRecordings(song, artist: artist, max: 25);
+      // Ook alleen op albums: zonder die tweede vraag stond bij Summer Of '69 Reckless er niet tussen (23-10-2026).
+      final (gewoon, albums) = await (
+        mb.searchRecordings(song, artist: artist, max: 25),
+        mb.searchRecordings(song, artist: artist, max: 25, alleenAlbums: true),
+      ).wait;
+      final gezien = <String>{};
+      final found = [
+        for (final r in [...albums, ...gewoon])
+          if (gezien.add(r.mbid)) r,
+      ];
       final out = <MetaResult>[];
       // One row per RECORD, not per pressing. "Porselein" sits on sixteen releases of which fifteen
       // are compilations, and listing them all buries the one album somebody wanted under a
       // greatest-hits pile. Titles are already ranked studio-album-first by searchRecordings.
       final byTitle = <String>{};
-      for (final rec in found) {
-        for (final rel in rec.releases) {
+      // Eerst de studioalbums van ALLE opnames, dan de rest. Per opname op volgorde was niet genoeg: MusicBrainz geeft
+      // bij Summer Of '69 eerst een rij live-opnames, en die vulden de twaalf plaatsen voor Reckless aan de beurt kwam
+      // (23-10-2026).
+      final paren = [
+        for (final rec in found)
+          for (final rel in rec.releases)
+            if (rel.isStudioAlbum) (rec: rec, rel: rel),
+        for (final rec in found)
+          for (final rel in rec.releases)
+            if (!rel.isStudioAlbum) (rec: rec, rel: rel),
+      ];
+      for (final (:rec, :rel) in paren) {
+        {
           if (!byTitle.add(rel.title.toLowerCase())) continue;
           out.add(MetaResult(
             title: rel.title,
@@ -645,6 +682,8 @@ class MetadataSearch {
             coverFullUrl: 'https://coverartarchive.org/release/${rel.mbid}/front-1200',
             mbid: rel.mbid,
             detail: _because(rec.title, rel.isCompilation ? 'verzamelaar' : null),
+            // Officieel: een bootleg ("Hot Night In Charlotte") is geen studioalbum, ook als MusicBrainz hem Album noemt.
+            studioalbum: rel.isStudioAlbum && (rel.status.isEmpty || rel.status == 'Official'),
           ));
           // Enough to find the record without turning the dialog into a discography.
           if (out.length >= 12) return out;

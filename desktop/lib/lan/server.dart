@@ -175,6 +175,8 @@ class LanServer {
     _ankerSub = state.zoneChanges.listen((toestel) {
       if (zones.toestelGroepen.containsKey(toestel)) _stuurAnkers(toestel);
     });
+    // Een overzicht in de brievenbus: dat toestel een seintje — zie [_seinOverzicht].
+    _overzichtSub = state.changes.listen(_seinOverzicht);
     // En met een speaker (stap 3.3): de speakerklok meldt waar hij is, op de ms.
     zones.speakerAnker = cast.ankerVan;
     zones.speakerVertraging.addAll(settings?.samenSpeakerMs ?? const {});
@@ -331,6 +333,29 @@ class LanServer {
   /// Alle zones: wat elk toestel en elke speaker speelt, en wie er bereikbaar is. Zie `zones.dart`.
   late final ZoneRegister zones;
   StreamSubscription<String>? _ankerSub;
+  StreamSubscription<Map<String, dynamic>>? _overzichtSub;
+
+  /// Een overzicht "Radio afsluiten" kwam in de brievenbus van een toestel (`radio.overzicht`): dat toestel krijgt een
+  /// seintje over zijn zonelijn, zodat het meteen kijkt. Is de app daar dicht, dan kijkt hij bij het volgende openen
+  /// (Saber, 23-10-2026). Voor `gsm`: elke gsm die zich ooit meldde. De pc zelf luistert rechtstreeks naar de staat.
+  void _seinOverzicht(Map<String, dynamic> e) {
+    final voor = e['overzichtVoor'];
+    if (voor is! List) return;
+    for (final v in voor) {
+      final doel = '$v';
+      final toestellen = doel == 'gsm'
+          ? zones.toestellenVanSoort(ZoneSoort.gsm)
+          : doel.startsWith('dev:')
+              ? [doel.substring(4)]
+              : const <String>[];
+      for (final t in toestellen) {
+        if (t == zones.pcId) continue;
+        for (final l in List.of(_zoneLijnen[t] ?? const <void Function(String, Map<String, dynamic>)>[])) {
+          l('cmd', {'cmd': 'radioOverzicht', 'id': 'ovz-$t-${zones.nu}'});
+        }
+      }
+    }
+  }
 
   /// Het anker van [leider] naar al zijn volgers (zie `samen.dart`), of alleen naar [enkel].
   void _stuurAnkers(String leider, {String? enkel}) {
@@ -761,6 +786,7 @@ class LanServer {
     await stop();
     cast.dispose();
     await _ankerSub?.cancel();
+    await _overzichtSub?.cancel();
     await zones.dispose();
     catalog.dispose();
     // Een opslagbeurt die een verzoek net startte (`touch`), nog afmaken: anders gaat hij verloren,

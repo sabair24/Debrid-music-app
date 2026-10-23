@@ -153,7 +153,7 @@ void main() {
         expect(fout, isNull);
         unawaited(z.radioStop());
         fa.flushMicrotasks();
-        expect(gestuurd.last, {'cmd': 'radioStop'});
+        expect(gestuurd.last, {'cmd': 'radioStop', 'door': 'dev:gsm-1'}, reason: 'het overzicht komt waar je afsloot');
 
         // Geen radio meer: dan zijn het ook geen radioknoppen.
         lijst.zet({
@@ -253,7 +253,7 @@ void main() {
       'await radioPastNiet(radio, sfeer, t);',
       'await radioHouden(oordelen, lib, dm, t);',
       'await radioWeg(radio, oordelen, t, opAfstand: false);',
-      'radio.stop();',
+      'radio.stop(naar: door.isEmpty ? null : door);',
     ]) {
       expect(lijf, contains(s));
     }

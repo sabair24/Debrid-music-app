@@ -342,7 +342,7 @@ void main() {
 
     test('bedrading: een tussenstand van een oude zoekopdracht overschrijft de nieuwe niet', () {
       final main = File('lib/main.dart').readAsStringSync();
-      expect(main, contains('if (mounted && ronde == _zoekRonde) setState(() => _results = totNu);'));
+      expect(main, contains('if (mounted && ronde == _zoekRonde) setState(() => _results = orden(totNu));'));
       expect(main, contains('child: _searching && _results.isEmpty'),
           reason: 'de molen alleen zolang er nog niets staat');
     });

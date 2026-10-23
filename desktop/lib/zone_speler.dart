@@ -566,6 +566,8 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   /// Een radio starten in deze zone, rond [artiest] met [zaad] (of het nummer [titel]) eerst.
   Future<void> startRadio(String artiest, {Track? zaad, String? titel}) => _stuur('radio', {
         'artiest': artiest,
+        // Wie startte: als de radio vanzelf eindigt, komt het overzicht hier (Saber, 23-10-2026).
+        'door': lijst.hier,
         if (zaad != null && idVan(zaad) != null) 'zaad': idVan(zaad),
         if (titel != null && titel.isNotEmpty) 'titel': titel,
       });
@@ -573,8 +575,9 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   /// Speelt hier de radio van de pc ([ZoneStaat.radio] bij een speaker)? Dan gaan [radioStop] en [radioOordeel] erover.
   bool get radioVanDePc => radioMode && zoneId.startsWith('spk:');
 
-  /// De radio van de pc op deze speaker afsluiten (speakerradio v2, 23-10-2026).
-  Future<void> radioStop() => _stuur('radioStop');
+  /// De radio van deze zone afsluiten — de radio van de pc op een speaker, of die van een ander toestel. Het overzicht
+  /// komt dan hier (Saber, 23-10-2026: "waar ik 'Radio afsluiten' tik").
+  Future<void> radioStop() => _stuur('radioStop', {'door': lijst.hier});
 
   /// Een oordeel over het spelende nummer: 'past', 'pastNiet', 'houden' of 'weg'. Null als de pc het kreeg, anders
   /// de reden (die staat dan ook als [speelFout] op het scherm).

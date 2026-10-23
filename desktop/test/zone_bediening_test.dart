@@ -243,7 +243,7 @@ void main() {
         speler: s,
         rij: s,
         nummer: (id) => id == 'onbekend' ? null : _t(id),
-        radio: (artiest, {zaad, titel}) async => s.log.add('radio $artiest ${zaad?.title} $titel'),
+        radio: (artiest, {zaad, titel, door}) async => s.log.add('radio $artiest ${zaad?.title} $titel'),
         naUitvoeren: () => gemeld++,
       );
       for (final op in <Map<String, dynamic>>[
