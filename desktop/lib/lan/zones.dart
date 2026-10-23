@@ -59,6 +59,37 @@ const kZoneBereikbaar = Duration(seconds: 30);
 /// Wat een zone na zoveel stilte nog in de lijst houdt: wat er gisteren speelde, telt niet meer.
 const kZoneTotEenDag = Duration(hours: 24);
 
+/// Eén lid van een groep ([ZoneStaat.leden]): wie, en hoe luid. Voor "Los" en een schuif per lid op de kaart van de
+/// groep (Saber, 23-10-2026: "Bij een groep één schuif, plus per lid apart").
+@immutable
+class ZoneLid {
+  const ZoneLid({required this.id, required this.naam, required this.soort, this.volume = -1});
+
+  /// Het zone-id van het lid (`dev:…` of `spk:…`): daarheen gaat zijn eigen volume.
+  final String id;
+  final String naam;
+  final ZoneSoort soort;
+
+  /// 0–100, of -1 als het lid het niet meldt.
+  final int volume;
+
+  Map<String, dynamic> toJson() => {'id': id, 'naam': naam, 'soort': soort.name, if (volume >= 0) 'volume': volume};
+
+  static ZoneLid fromJson(Map<String, dynamic> m) => ZoneLid(
+        id: '${m['id'] ?? ''}',
+        naam: '${m['naam'] ?? ''}',
+        soort: ZoneSoort.values.firstWhere((s) => s.name == m['soort'], orElse: () => ZoneSoort.gsm),
+        volume: (m['volume'] as num?)?.toInt() ?? -1,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is ZoneLid && other.id == id && other.naam == naam && other.soort == soort && other.volume == volume;
+
+  @override
+  int get hashCode => Object.hash(id, naam, soort, volume);
+}
+
 /// Wat één zone doet, zoals de pc het weet.
 @immutable
 class ZoneStaat {
@@ -92,11 +123,16 @@ class ZoneStaat {
     this.radioHouden = false,
     this.verplaatstNaar = '',
     this.verplaatstOp = 0,
+    this.leden = const [],
   });
+
+  /// Bij de leider van een groep: elk lid (de leider eerst) met zijn naam en volume. Leeg zonder groep.
+  final List<ZoneLid> leden;
 
   /// De muziek van deze zone ging net naar een andere ([verplaatstNaar], de naam van die zone), op [verplaatstOp] (klok
   /// van de pc). Dan speelt deze zone niets meer — ook al meldde ze dat nog niet (Saber, 23-10-2026: "als ik ze
-  /// verplaats blijft op de andere ook"). Leeg: niet verplaatst. Zie [ZoneRegister.verplaatst].
+  /// verplaats blijft op de andere ook"). Zie [ZoneRegister.verplaatst]. Een lege naam met een [verplaatstOp]: iemand
+  /// tikte "Stop" ([ZoneRegister.gestopt]). Allebei 0/leeg: geen van beide.
   final String verplaatstNaar;
   final int verplaatstOp;
 
@@ -203,7 +239,8 @@ class ZoneStaat {
         if (radioPast.isNotEmpty) 'radioPast': radioPast,
         if (radioGehaald) 'radioGehaald': true,
         if (radioHouden) 'radioHouden': true,
-        if (verplaatstNaar.isNotEmpty) ...{'verplaatstNaar': verplaatstNaar, 'verplaatstOp': verplaatstOp},
+        if (verplaatstOp > 0) ...{'verplaatstNaar': verplaatstNaar, 'verplaatstOp': verplaatstOp},
+        if (leden.isNotEmpty) 'leden': [for (final l in leden) l.toJson()],
       };
 
   static ZoneStaat fromJson(Map<String, dynamic> m) => ZoneStaat(
@@ -236,6 +273,10 @@ class ZoneStaat {
         radioHouden: m['radioHouden'] == true,
         verplaatstNaar: '${m['verplaatstNaar'] ?? ''}',
         verplaatstOp: (m['verplaatstOp'] as num?)?.toInt() ?? 0,
+        leden: [
+          for (final x in (m['leden'] as List? ?? const []))
+            if (x is Map) ZoneLid.fromJson(x.cast<String, dynamic>()),
+        ],
       );
 
   @override
@@ -268,7 +309,8 @@ class ZoneStaat {
       other.radioGehaald == radioGehaald &&
       other.radioHouden == radioHouden &&
       other.verplaatstNaar == verplaatstNaar &&
-      other.verplaatstOp == verplaatstOp;
+      other.verplaatstOp == verplaatstOp &&
+      listEquals(other.leden, leden);
 
   @override
   int get hashCode => Object.hash(id, online, playing, trackId, positionMs, opMs, index, lengte);
@@ -288,9 +330,9 @@ String? verplaatstMelding(ZoneStaat z, {required int nuMs}) {
 }
 
 /// Telt [z] als een zone die speelt — bovenaan in de lijst, met haar nummer? Ze speelt, of ze staat korter dan
-/// [kGepauzeerdTeltAlsSpelend] gepauzeerd; en haar muziek ging niet naar een andere zone.
+/// [kGepauzeerdTeltAlsSpelend] gepauzeerd; en haar muziek ging niet naar een andere zone, en niemand tikte "Stop".
 bool speeltNu(ZoneStaat z, {required int nuMs}) {
-  if (!z.speeltIets || z.verplaatstNaar.isNotEmpty) return false;
+  if (!z.speeltIets || z.verplaatstOp > 0) return false;
   if (z.playing) return true;
   return z.opMs > 0 && nuMs - z.opMs < kGepauzeerdTeltAlsSpelend.inMilliseconds;
 }
@@ -314,6 +356,24 @@ List<ZoneStaat> ordenZones(Iterable<ZoneStaat> zones, {required String hier}) {
   int rang(ZoneStaat z) => z.id == hier
       ? 0
       : z.playing && z.online
+          ? 1
+          : z.online
+              ? 2
+              : 3;
+  return zones.toList()
+    ..sort((a, b) {
+      final r = rang(a).compareTo(rang(b));
+      return r != 0 ? r : a.naam.toLowerCase().compareTo(b.naam.toLowerCase());
+    });
+}
+
+/// De volgorde op het scherm van [hier] (Saber, 23-10-2026: "Alles altijd, spelend bovenaan" en "Dit toestel eerst, dan
+/// de rest"): dit toestel, dan wat speelt ([speeltNu], ook kort gepauzeerd), dan wat bereikbaar is, dan wat weg is.
+/// Daarbinnen op naam. De pc zet zichzelf vooraan ([ordenZones]); elk toestel ordent opnieuw voor zichzelf.
+List<ZoneStaat> ordenVoorHier(Iterable<ZoneStaat> zones, {required String hier, required int nuMs}) {
+  int rang(ZoneStaat z) => z.id == hier
+      ? 0
+      : z.online && speeltNu(z, nuMs: nuMs)
           ? 1
           : z.online
               ? 2
@@ -634,6 +694,11 @@ class ZoneRegister {
         // Elk toestel met de app kan met andere samen spelen (stap 3.2).
         'kanGroeperen': true,
         if (groep != null) 'groep': ['dev:$id', for (final v in groep) 'dev:$v'],
+        if (groep != null)
+          'leden': [
+            ZoneLid(id: 'dev:$id', naam: naam, soort: soort, volume: vers ? p.volume : -1).toJson(),
+            for (final v in groep) _toestelLid(v).toJson(),
+          ],
       }));
     }
     // Groepen (stap 3.1): de leider draagt de namen van allemaal; de leden staan er niet apart in.
@@ -653,6 +718,24 @@ class ZoneRegister {
       return [for (final l in sonos) 'spk:$l', for (final v in volgers) 'dev:$v'];
     }
 
+    final volumeVan = {for (final s in _speakers) s.id: s.volume};
+    List<ZoneLid> ledenVan(String id) {
+      final ids = groepIds(id);
+      if (ids.isEmpty) return const [];
+      // De leider eerst, zoals bij een toestelgroep.
+      return [
+        for (final g in ['spk:$id', ...ids.where((g) => g != 'spk:$id')])
+          if (g.startsWith('spk:'))
+            ZoneLid(
+                id: g,
+                naam: namen[g.substring(4)] ?? g.substring(4),
+                soort: ZoneSoort.speaker,
+                volume: volumeVan[g.substring(4)] ?? -1)
+          else
+            _toestelLid(g.substring(4)),
+      ];
+    }
+
     String naamMetVolgers(String id, String eigen) => [
           naamVan(id, eigen),
           for (final v in toestelGroepen['spk:$id'] ?? const <String>[]) _naamVanToestel(v),
@@ -670,6 +753,7 @@ class ZoneRegister {
         soort: ZoneSoort.speaker,
         naam: naamMetVolgers(s.id, s.naam),
         groep: groepIds(s.id),
+        leden: ledenVan(s.id),
         kanGroeperen: true,
         sonos: sonos.contains(s.id),
         samenMs: toestelGroepen.containsKey('spk:${s.id}') ? speakerVertraging[s.id] ?? 0 : 0,
@@ -697,6 +781,7 @@ class ZoneRegister {
         soort: ZoneSoort.speaker,
         naam: naamMetVolgers(b.id, b.naam),
         groep: groepIds(b.id),
+        leden: ledenVan(b.id),
         kanGroeperen: true,
         sonos: b.sonos,
         samenMs: toestelGroepen.containsKey('spk:${b.id}') ? speakerVertraging[b.id] ?? 0 : 0,
@@ -713,6 +798,12 @@ class ZoneRegister {
   /// De muziek van [zoneId] ging naar [naar] (de naam van die zone) — gezet door de overdracht op de pc.
   void verplaatst(String zoneId, String naar) => _verplaatst[zoneId] = (naar: naar, op: nu);
 
+  /// Iemand tikte "Stop" op [zoneId]: ze telt meteen als "Speelt niets", ook al meldde ze haar pauze nog niet.
+  void gestopt(String zoneId) => _verplaatst[zoneId] = (naar: '', op: nu);
+
+  /// [zoneId] kreeg iets om te spelen (`play`, `speel`, …): weg met "verplaatst" of "gestopt".
+  void speeltWeer(String zoneId) => _verplaatst.remove(zoneId);
+
   /// Ging de muziek van [zoneId] de laatste [binnen] al ergens heen? Dan hoeft dat niet nog eens.
   bool netVerplaatst(String zoneId, {Duration binnen = const Duration(seconds: 15)}) {
     final v = _verplaatst[zoneId];
@@ -720,15 +811,28 @@ class ZoneRegister {
   }
 
   /// [z] met [ZoneStaat.verplaatstNaar], tot ze weer zelf speelt. Een melding "speelt" van ná het verplaatsen —
-  /// met wat marge voor de bron die het nog niet wist — haalt het weg.
+  /// met wat marge voor de bron die het nog niet wist — haalt het weg. Na "Stop" is die marge kort: wie stopt, pauzeert
+  /// meteen.
   ZoneStaat _metVerplaatst(ZoneStaat z, int t) {
     final v = _verplaatst[z.id];
     if (v == null) return z;
-    if ((z.playing && z.opMs > v.op + 6000) || t - v.op > const Duration(hours: 12).inMilliseconds) {
+    final marge = v.naar.isEmpty ? 1500 : 6000;
+    if ((z.playing && z.opMs > v.op + marge) || t - v.op > const Duration(hours: 12).inMilliseconds) {
       _verplaatst.remove(z.id);
       return z;
     }
     return ZoneStaat.fromJson({...z.toJson(), 'verplaatstNaar': v.naar, 'verplaatstOp': v.op});
+  }
+
+  /// Een toestel als lid van een groep: zijn naam, zijn soort en zijn appvolume uit zijn laatste melding.
+  ZoneLid _toestelLid(String id) {
+    final naam = _naamVanToestel(id);
+    return ZoneLid(
+      id: 'dev:$id',
+      naam: naam,
+      soort: id == pcId ? ZoneSoort.pc : _wie[id]?.soort ?? zoneSoortVoor(platform: '', naam: naam),
+      volume: state.perToestel[id]?.volume ?? -1,
+    );
   }
 
   String _naamVanToestel(String id) {

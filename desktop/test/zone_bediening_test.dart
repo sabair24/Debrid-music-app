@@ -362,6 +362,13 @@ void main() {
       expect(await zonder.voerUit({'id': '2', 'cmd': 'neemOver', 'stand': {'trackId': 'b'}}), isNotNull);
     });
 
+    test('stop: hier pauzeren (de pc zet de zone op "Speelt niets")', () async {
+      final s = _NepSpeler();
+      final u = ZoneUitvoerder(speler: s, rij: s, nummer: _t);
+      expect(await u.voerUit({'id': '1', 'cmd': 'stop'}), isNull);
+      expect(s.log, ['pauzeer']);
+    });
+
     test('verplaatst: de muziek speelt nu elders, dus hier stoppen (Saber, 23-10-2026: "A stopt helemaal")', () async {
       final s = _NepSpeler();
       final naar = <String>[];

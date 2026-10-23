@@ -109,6 +109,10 @@ class ZoneUitvoerder {
           speler.speelAf();
         case 'pause':
           speler.pauzeer();
+        // "Stop" op de kaart (Saber, 23-10-2026: "Pauze/stop"): hier pauzeren; de pc zet de zone op "Speelt niets",
+        // en verder spelen vanaf dezelfde plek kan nog.
+        case 'stop':
+          speler.pauzeer();
         case 'next':
           await speler.next();
         case 'previous':

@@ -4,7 +4,7 @@ library;
 
 import 'package:debridmusic/lan/zones.dart';
 import 'package:debridmusic/library.dart';
-import 'package:debridmusic/main.dart' show ZoneKiesKnop;
+import 'package:debridmusic/main.dart' show ZoneKiesKnop, zoneKnoppenMetWoord;
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/player.dart' show RepeatMode;
 import 'package:debridmusic/verder_luisteren.dart';
@@ -79,7 +79,10 @@ void main() {
     expect(find.byKey(const ValueKey('zone-kies')), findsNothing);
   });
 
-  testWidgets('"Speelt op: dit toestel", het blad toont elke zone, en "Hier verder" neemt over', (t) async {
+  testWidgets('"Speelt op: dit toestel", het blad toont elke zone, en "Hierheen" neemt over', (t) async {
+    // Zoals op een aanraakscherm: een woordje onder elk icoon.
+    zoneKnoppenMetWoord = true;
+    addTearDown(() => zoneKnoppenMetWoord = null);
     final bron = _Bron();
     final v = VerderLuisteren(bron, klok: () => _nu);
     final lijst = ZoneLijst(hier: 'dev:gsm-1', klok: () => _nu)..zet(_lijst());
@@ -108,9 +111,9 @@ void main() {
     expect(find.text('Nummer b — X'), findsOneWidget, reason: 'het nummer zoals dit toestel het kent');
     expect(find.textContaining('Speelt · 1:05 / 4:00'), findsOneWidget, reason: 'de plek schuift op sinds de melding');
     expect(find.text('Niet bereikbaar'), findsOneWidget, reason: 'de iPad is er niet');
-    expect(find.text('Hier verder'), findsOneWidget, reason: 'alleen bij een ander toestel dat iets speelt');
+    expect(find.text('Hierheen'), findsOneWidget, reason: 'alleen bij een ander toestel dat iets speelt');
 
-    await t.tap(find.text('Hier verder'));
+    await t.tap(find.text('Hierheen'));
     await t.pump(const Duration(milliseconds: 400));
     expect(gevraagd, ['dev:pc-THUIS']);
     expect(bron.gespeeld, ['Nummer b@65']);

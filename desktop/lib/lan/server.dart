@@ -129,6 +129,18 @@ bool magOpThuisingang(InternetAddress bron) => toestelWeg(bron) != 'buiten';
 /// [LibraryStore]. That is the whole design: the covers you picked, the pressings you pinned and
 /// the albums you merged are in those objects, so there is no second scan that could disagree
 /// with what you see on screen here.
+/// Wat de pc een bron stuurt bij poging [poging] (1–4) om haar te laten stoppen ([LanServer._stopBron]): een toestel
+/// 'verplaatst'; een speaker om en om 'stop' en 'pause' (lukte het ene niet, dan misschien het andere).
+@visibleForTesting
+String bronStopOpdracht({required bool speaker, required int poging}) =>
+    speaker ? (poging.isOdd ? 'stop' : 'pause') : 'verplaatst';
+
+/// Is de bron na een poging stil? Ze moet het zelf melden ([meldtStil]). Een speaker staat na 'stop' altijd als stil
+/// in de lijst — de pc sluit zijn sessie vóór hij het vraagt — dus daar telt ook of hij het aannam ([aangekomen]).
+@visibleForTesting
+bool bronIsStil({required bool speaker, required bool aangekomen, required bool meldtStil}) =>
+    meldtStil && (aangekomen || !speaker);
+
 class LanServer {
   LanServer({
     required this.library,
@@ -165,7 +177,8 @@ class LanServer {
       state: state,
       // Zoals [LanSharing.mijnId]: onder dat id meldt de pc zijn eigen stand.
       pcId: 'pc-${deviceName()}',
-      pcNaam: deviceName(),
+      // "Pc", niet de naam van de computer (Saber, 23-10-2026: "'Pc' in plaats van 'Saber'").
+      pcNaam: 'Pc',
       nummer: (id) {
         final t = catalog.track(id);
         if (t == null) return null;
@@ -415,6 +428,23 @@ class LanServer {
   /// - Een speaker: de pc stuurt hem zelf ([CastManager.control] / [CastManager.play]).
   Future<({int status, Map<String, dynamic> antwoord})> zoneOpdracht(Map<String, dynamic> op,
       {required String van}) async {
+    final r = await _zoneOpdracht(op, van: van);
+    if (r.status == 200) {
+      final zone = '${op['zone'] ?? ''}';
+      final cmd = '${op['cmd'] ?? ''}';
+      // "Stop" telt meteen als "Speelt niets" (niet pas bij de volgende melding); iets nieuws om te spelen haalt dat
+      // weg. Het stoppen na een overdracht zet zelf "Verplaatst naar …" ([_bronVerplaatst]).
+      if (cmd == 'stop' && van != 'overdracht') {
+        zones.gestopt(zone);
+      } else if (const {'play', 'speel', 'nu', 'neemOver', 'radio', 'jump'}.contains(cmd)) {
+        zones.speeltWeer(zone);
+      }
+    }
+    return r;
+  }
+
+  Future<({int status, Map<String, dynamic> antwoord})> _zoneOpdracht(Map<String, dynamic> op,
+      {required String van}) async {
     final zone = '${op['zone'] ?? ''}';
     final cmd = '${op['cmd'] ?? ''}';
     if (zone.isEmpty || cmd.isEmpty) return (status: 400, antwoord: {'error': 'Geen zone of geen opdracht.'});
@@ -655,16 +685,57 @@ class LanServer {
         if (zones.netVerplaatst(van)) return;
         zones.verplaatst(van, doel.naam);
         _zoneLog.line('overdracht $van → $naar: de bron stopt');
-        await zoneOpdracht(
-            van.startsWith('spk:')
-                ? {'zone': van, 'cmd': 'stop', 'id': 'over-stop-${zones.nu}'}
-                : {'zone': van, 'cmd': 'verplaatst', 'naar': doel.naam, 'id': 'over-verplaatst-${zones.nu}'},
-            van: 'overdracht');
+        await _stopBron(van, doel.naam);
         return;
       }
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
     _zoneLog.line('overdracht $van → $naar: het doel speelt na 10 s niet — de bron blijft spelen');
+  }
+
+  /// Hoe lang de pc wacht tot een bron meldt dat ze stil is, voor hij het opnieuw vraagt ([_stopBron]).
+  @visibleForTesting
+  Duration bronStilWacht = const Duration(seconds: 6);
+
+  /// Laat [van] stoppen, en kijk na dat ze ook ECHT stil is (Saber, 23-10-2026: *"let er ook op als er naar een andere
+  /// zone wordt verstuurd, dat de zone die niet meer actief is, ook daadwerkelijk stopt met muziek spelen"*).
+  ///
+  /// - Een toestel krijgt 'verplaatst'; het pauzeert en meldt dat meteen. Komt de opdracht niet aan (de lijn was even
+  ///   weg), of meldt het na [bronStilWacht] nog altijd "speelt", dan nog eens: hoogstens vier keer.
+  /// - Een speaker krijgt 'stop'. Lukt dat niet, dan 'pause', en zo om en om. (Na 'stop' staat hij meteen als stil in
+  ///   de lijst: de pc sluit zijn sessie; alleen een fout zegt dat hij het niet deed.)
+  /// - Lukt het niet, dan staat dat in `zones.log`. Een toestel pauzeert dan nog altijd zelf zodra het de stand
+  ///   ziet (`VerderLuisteren.opStand`, de overname in de gedeelde stand).
+  Future<void> _stopBron(String van, String naarNaam) async {
+    final speaker = van.startsWith('spk:');
+    for (var poging = 1; poging <= 4; poging++) {
+      final cmd = bronStopOpdracht(speaker: speaker, poging: poging);
+      final r = await zoneOpdracht({
+        'zone': van,
+        'cmd': cmd,
+        if (!speaker) 'naar': naarNaam,
+        'id': 'over-$cmd-${zones.nu}',
+      }, van: 'overdracht');
+      if (bronIsStil(speaker: speaker, aangekomen: r.status == 200, meldtStil: await _bronStil(van))) {
+        if (poging > 1) _zoneLog.line('overdracht: $van is stil na $poging pogingen');
+        return;
+      }
+      _zoneLog.line(r.status == 200
+          ? 'overdracht: $van meldt na $cmd nog altijd "speelt" (poging $poging)'
+          : 'overdracht: $cmd kwam niet aan bij $van — ${r.antwoord['error'] ?? r.status} (poging $poging)');
+    }
+    _zoneLog.line('overdracht: $van bleef spelen na 4 pogingen');
+  }
+
+  /// Meldt [zone] binnen [bronStilWacht] dat ze niet (meer) speelt?
+  Future<bool> _bronStil(String zone) async {
+    final tot = DateTime.now().add(bronStilWacht);
+    while (true) {
+      final z = zones.lijst().where((x) => x.id == zone).firstOrNull;
+      if (z == null || !z.playing) return true;
+      if (DateTime.now().isAfter(tot)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
   }
 
   Future<void> _zoneOver(HttpRequest req) async {

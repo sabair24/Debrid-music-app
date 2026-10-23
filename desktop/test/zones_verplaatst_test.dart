@@ -198,6 +198,24 @@ void main() {
     expect(pc.progressOp(pad, Duration.zero, false, [pad], 0)!.containsKey('alleenZone'), isFalse);
   });
 
+  group('echt stil (Saber: "dat de zone die niet meer actief is, ook daadwerkelijk stopt")', () {
+    test('een toestel krijgt telkens "verplaatst"; een speaker om en om "stop" en "pause"', () {
+      expect([for (var p = 1; p <= 4; p++) bronStopOpdracht(speaker: false, poging: p)],
+          ['verplaatst', 'verplaatst', 'verplaatst', 'verplaatst']);
+      expect([for (var p = 1; p <= 4; p++) bronStopOpdracht(speaker: true, poging: p)], ['stop', 'pause', 'stop', 'pause']);
+    });
+
+    test('stil = de bron meldt het zelf; bij een speaker moet hij de opdracht ook aangenomen hebben', () {
+      expect(bronIsStil(speaker: false, aangekomen: true, meldtStil: true), isTrue);
+      expect(bronIsStil(speaker: false, aangekomen: true, meldtStil: false), isFalse, reason: 'speelt nog: opnieuw');
+      expect(bronIsStil(speaker: false, aangekomen: false, meldtStil: true), isTrue,
+          reason: 'een toestel dat al niet meer speelt, hoeft het niet nog eens te horen');
+      expect(bronIsStil(speaker: true, aangekomen: false, meldtStil: true), isFalse,
+          reason: 'na een mislukte "stop" staat een speaker toch als stil (zijn sessie is dicht): dan "pause"');
+      expect(bronIsStil(speaker: true, aangekomen: true, meldtStil: true), isTrue);
+    });
+  });
+
   group('de pc zegt het de bron', () {
     late Directory map;
     late LanServer server;
@@ -216,6 +234,8 @@ void main() {
       );
       expect(await server.start(), isNull);
       basis = 'http://127.0.0.1:${server.boundPort}';
+      // Kort, zodat "opnieuw vragen" binnen een toets past.
+      server.bronStilWacht = const Duration(milliseconds: 300);
     });
 
     tearDown(() async {
@@ -251,6 +271,8 @@ void main() {
               if (e.event == 'cmd') (jsonDecode(e.data) as Map).cast<String, dynamic>(),
           ];
       await wachtOp(() => opdrachten().isNotEmpty);
+      // De gsm pauzeert en meldt dat meteen (alleen voor zijn zone).
+      await meld('gsm-1', 'Galaxy', _melding('t1', at: t + 300, playing: false, alleenZone: true));
       expect(opdrachten().single['cmd'], 'verplaatst');
       expect(opdrachten().single['naar'], 'iPad');
       expect(opdrachten().single['zone'], 'dev:gsm-1');
@@ -262,12 +284,27 @@ void main() {
       await sub.cancel();
     });
 
-    test('de pc als bron: de opdracht komt bij zijn eigen zone', () async {
+    /// De pc als bron, die op 'verplaatst' echt pauzeert en dat meldt (zoals [VerderLuisteren.isVerplaatst]).
+    List<Map<String, dynamic>> pcPauzeert({bool pauzeer = true, int weigerEerst = 0}) {
       final eigen = <Map<String, dynamic>>[];
+      var geweigerd = 0;
       server.bijZoneOpdracht = (op) async {
+        if (geweigerd < weigerEerst) {
+          geweigerd++;
+          return 'De pc kan dat nu niet.';
+        }
         eigen.add(op);
+        if (pauzeer && op['cmd'] == 'verplaatst') {
+          server.state.applyOps([_melding('t1', at: DateTime.now().millisecondsSinceEpoch, playing: false, alleenZone: true)],
+              deviceId: server.zones.pcId, deviceName: 'THUIS');
+        }
         return null;
       };
+      return eigen;
+    }
+
+    test('de pc als bron: de opdracht komt bij zijn eigen zone', () async {
+      final eigen = pcPauzeert();
       final pc = server.zones.pcId;
       final t = DateTime.now().millisecondsSinceEpoch;
       server.state.applyOps([_melding('t1', at: t)], deviceId: pc, deviceName: 'THUIS');
@@ -279,11 +316,7 @@ void main() {
     });
 
     test('twee wegen tegelijk (de overdracht en de melding): de bron hoort het één keer', () async {
-      final eigen = <Map<String, dynamic>>[];
-      server.bijZoneOpdracht = (op) async {
-        eigen.add(op);
-        return null;
-      };
+      final eigen = pcPauzeert();
       final pc = server.zones.pcId;
       final t = DateTime.now().millisecondsSinceEpoch;
       server.state.applyOps([_melding('t1', at: t)], deviceId: pc, deviceName: 'THUIS');
@@ -296,6 +329,35 @@ void main() {
       await wachtOp(() => eigen.isNotEmpty);
       await Future<void>.delayed(const Duration(milliseconds: 700));
       expect(eigen, hasLength(1));
+    });
+
+    // Saber, 23-10-2026: "let er ook op als er naar een andere zone wordt verstuurd, dat de zone die niet meer actief
+    // is, ook daadwerkelijk stopt met muziek spelen".
+    test('speelt de bron na "verplaatst" nog, dan vraagt de pc het opnieuw — hoogstens vier keer', () async {
+      final eigen = pcPauzeert(pauzeer: false);
+      final pc = server.zones.pcId;
+      final t = DateTime.now().millisecondsSinceEpoch;
+      server.state.applyOps([_melding('t1', at: t)], deviceId: pc, deviceName: 'THUIS');
+      server.zones.gezien('ipad-1', naam: 'iPad');
+      await meld('ipad-1', 'iPad', _melding('t1', at: t + 200, overname: pc));
+      await wachtOp(() => eigen.length >= 4);
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      expect(eigen, hasLength(4));
+      expect(eigen.every((o) => o['cmd'] == 'verplaatst'), isTrue);
+      expect({for (final o in eigen) o['id']}, hasLength(4), reason: 'elke poging een eigen id, anders slaat de bron ze over');
+    });
+
+    test('kwam "verplaatst" niet aan, dan nog eens; stil = klaar', () async {
+      final eigen = pcPauzeert(weigerEerst: 1);
+      final pc = server.zones.pcId;
+      final t = DateTime.now().millisecondsSinceEpoch;
+      server.state.applyOps([_melding('t1', at: t)], deviceId: pc, deviceName: 'THUIS');
+      server.zones.gezien('ipad-1', naam: 'iPad');
+      await meld('ipad-1', 'iPad', _melding('t1', at: t + 200, overname: pc));
+      await wachtOp(() => eigen.isNotEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      expect(eigen, hasLength(1), reason: 'de tweede kwam aan, en de pc pauzeerde');
+      expect(server.zones.lijst().firstWhere((z) => z.id == 'dev:$pc').playing, isFalse);
     });
 
     test('speelt het doel (nog) niet, dan stopt de bron niet', () async {
