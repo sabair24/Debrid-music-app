@@ -20,6 +20,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+import '../meetronde.dart' show zonderVoorMeting;
 import 'tegel_spiegel.dart' show TegelSpiegel;
 
 /// Hoe ver een hoes hooguit kantelt, in radialen: zes graden.
@@ -85,6 +86,21 @@ class KantelHoes extends StatefulWidget {
   @visibleForTesting
   static Stream<Offset> Function()? toestelVoorToets;
 
+  static final _staten = <_KantelHoesState>{};
+
+  /// Waar de grootste kantelhoes nu staat (globaal), of null: de meetronde beweegt daar de muis over (zie
+  /// `meetronde.dart`). In Nu speelt is dat de grote hoes.
+  static Rect? grootsteVak() {
+    Rect? beste;
+    for (final s in _staten) {
+      final box = s.context.findRenderObject();
+      if (box is! RenderBox || !box.attached || !box.hasSize) continue;
+      final vak = box.localToGlobal(Offset.zero) & box.size;
+      if (beste == null || vak.width * vak.height > beste.width * beste.height) beste = vak;
+    }
+    return beste;
+  }
+
   @override
   State<KantelHoes> createState() => _KantelHoesState();
 }
@@ -108,6 +124,7 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
+    KantelHoes._staten.add(this);
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -130,6 +147,7 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
 
   @override
   void dispose() {
+    KantelHoes._staten.remove(this);
     WidgetsBinding.instance.removeObserver(this);
     _melder?.cancel();
     _wachtToestel?.cancel();
@@ -218,6 +236,8 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
 
   @override
   Widget build(BuildContext context) {
+    // Een meetronde zonder kantelen (zie `meetronde.dart`): de hoes zoals hij is.
+    if (zonderVoorMeting('kantel')) return widget.child;
     final kind = RepaintBoundary(child: widget.child);
     final getekend = AnimatedBuilder(
       animation: _c,
@@ -316,7 +336,9 @@ class HoesSpiegel extends StatelessWidget {
   final double maat;
 
   @override
-  Widget build(BuildContext context) => IgnorePointer(
+  Widget build(BuildContext context) => zonderVoorMeting('spiegel')
+      ? const SizedBox.shrink()
+      : IgnorePointer(
         // Een eigen laag: de cd die ernaast draait, tekent deze spiegeling niet opnieuw.
         child: RepaintBoundary(
           child: SizedBox(

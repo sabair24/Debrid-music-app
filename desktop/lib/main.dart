@@ -220,6 +220,7 @@ import 'ui/tegel_spiegel.dart';
 import 'ui/getekende_schijf.dart';
 import 'ui/glasproef.dart';
 import 'ui/kantel_hoes.dart';
+import 'meetronde.dart' show MeetHaken, voerMeetrondeUit, zonderVoorMeting;
 import 'ui/schijf_licht.dart';
 import 'ui/wachtrij_stapel.dart';
 import 'ui/thema.dart';
@@ -1305,7 +1306,8 @@ Future<void> main() async {
   if (!mode.owner) {
     final ik = thisDevice();
     Warmtemeter(
-      stuur: (regels) async {
+      // De meetronde (meetronde.dart) schrijft met dezelfde zender in hetzelfde logboek, met "[meet]" ervoor.
+      stuur: _meldMeting = (regels) async {
         final e = session.endpoint;
         if (e == null) throw StateError('nog niet gekoppeld');
         final c = RemoteClient(e, timeout: const Duration(seconds: 10));
@@ -1324,7 +1326,7 @@ Future<void> main() async {
     // geen beeldtijd te lezen (17-10-2026: "performance van de glass, in detail").
     final log = WarmLog('$logDir${Platform.pathSeparator}warmte.log');
     Warmtemeter(
-      stuur: (regels) async {
+      stuur: _meldMeting = (regels) async {
         for (final r in regels) {
           log.line('[pc] $r');
         }
@@ -1613,6 +1615,8 @@ Future<void> main() async {
     neemOver: verder.neemOverUit,
     // En andersom: de muziek van hier speelt nu daar. Hier stoppen (Saber, 23-10-2026: "A stopt helemaal").
     verplaatst: (_) => verder.isVerplaatst(),
+    // Een meetronde op afstand (meetronde.dart): de pc vraagt, dit toestel meet zichzelf.
+    meet: (op) => voerMeetrondeUit(op, _meetHaken(player, library)),
     // Dit toestel volgt een groep (stap 3.2).
     samen: (a) async {
       final anker = SamenAnker.fromJson(a);
@@ -16915,7 +16919,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           //
           // Nu hetzelfde verloop als daar: de tint bovenaan, de gewone achtergrond onderaan. En
           // overvloeiend, want dit scherm wisselt van plaat terwijl je ernaar kijkt.
-          if (was != null)
+          if (was != null && !zonderVoorMeting('achter'))
             Positioned.fill(
               child: IgnorePointer(
                 child: AnimatedContainer(
@@ -17253,9 +17257,117 @@ Route<void> nuSpeeltRoute({WidgetBuilder? scherm}) => PageRouteBuilder<void>(
       transitionsBuilder: (_, animatie, __, kind) => SlideTransition(
         position: Tween(begin: const Offset(0, 1), end: Offset.zero)
             .animate(CurvedAnimation(parent: animatie, curve: Curves.easeOutCubic)),
-        child: kind,
+        // Een meetronde met `foto` (zie `meetronde.dart`): tijdens het schuiven één foto van het scherm.
+        child: zonderVoorMeting('foto') ? FotoTijdensSchuiven(animatie: animatie, child: kind) : kind,
       ),
     );
+
+/// Tijdens het in- of uitschuiven één foto van [child] in plaats van het levende scherm: Impeller tekent anders bij
+/// elk beeld het hele scherm opnieuw, met al zijn glas, schaduwen en spiegelingen (gemeten op de Mac, 23-10-2026).
+/// Zodra het stilstaat, weer het echte scherm.
+class FotoTijdensSchuiven extends StatefulWidget {
+  const FotoTijdensSchuiven({super.key, required this.animatie, required this.child});
+
+  final Animation<double> animatie;
+  final Widget child;
+
+  @override
+  State<FotoTijdensSchuiven> createState() => _FotoTijdensSchuivenState();
+}
+
+class _FotoTijdensSchuivenState extends State<FotoTijdensSchuiven> {
+  final _foto = SnapshotController();
+
+  void _opStand(AnimationStatus s) =>
+      _foto.allowSnapshotting = s == AnimationStatus.forward || s == AnimationStatus.reverse;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.animatie.addStatusListener(_opStand);
+    _opStand(widget.animatie.status);
+  }
+
+  @override
+  void dispose() {
+    widget.animatie.removeStatusListener(_opStand);
+    _foto.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      SnapshotWidget(controller: _foto, mode: SnapshotMode.permissive, autoresize: true, child: widget.child);
+}
+
+/// De albumpagina die de meetronde opent (scenario "bronnen"): onder deze naam weet ze wat ze weer moet sluiten.
+const _meetAlbumRoute = 'meet-album';
+
+/// Waar de meetronde ([voerMeetrondeUit]) haar regels heen stuurt: `warmte.log` op de pc. Gezet waar de warmtemeter
+/// begint.
+Future<void> Function(List<String> regels)? _meldMeting;
+
+/// Wat de meetronde in deze app doet: Nu speelt openen en sluiten, het glas omzetten, en zo nodig een nummer
+/// klaarzetten. Zie `meetronde.dart`.
+MeetHaken _meetHaken(PlayerStore player, LibraryStore library) {
+  GlasStand? glasVoor;
+  double? volumeVoor;
+  return MeetHaken(
+    openNuSpeelt: () => appNavigator.currentState?.push(nuSpeeltRoute()),
+    sluitNuSpeelt: () => appNavigator.currentState?.popUntil((r) => r.settings.name != _nuSpeeltRoute),
+    meld: (regels) async => _meldMeting?.call(regels),
+    zetGlas: (stand, {klaar = false}) {
+      glasVoor ??= GlasKwaliteit.stand.value;
+      // De bewaker staat stil zolang er gemeten wordt: anders draait hij een variant midden in de meting terug.
+      GlasKwaliteit.meetPauze = !klaar;
+      GlasKwaliteit.stand.value = switch (stand) {
+        'plat' => GlasStand.plat,
+        'mat' => GlasStand.mat,
+        _ => glasVoor!,
+      };
+      if (klaar) glasVoor = null;
+    },
+    bereid: ({required spelen}) async {
+      final wat = <String>[];
+      if (player.current == null) {
+        final t = library.tracks.firstOrNull;
+        if (t == null) return 'geen nummer om te tonen';
+        await player.neemOver([t], 0, Duration.zero, spelen: false);
+        wat.add('"${t.title}" klaargezet');
+      }
+      if (spelen && !player.playing) {
+        // Zonder geluid: alleen zodat de cd draait zoals bij het luisteren.
+        volumeVoor = player.volume;
+        player.setVolume(0);
+        player.speelAf();
+        wat.add('speelt zonder geluid');
+      }
+      return wat.join(', ');
+    },
+    hoesVak: KantelHoes.grootsteVak,
+    // Scenario "bronnen": de albumpagina zoals je ze vanuit de catalogus opent, met de bronnen meteen open.
+    openAlbum: (artiest, album) async {
+      final nav = appNavigator.currentState;
+      if (nav == null) return false;
+      final hits = await CatalogService().searchAlbums('$artiest $album');
+      final hit = hits.where((h) => normKey(h.artist) == normKey(artiest)).firstOrNull ?? hits.firstOrNull;
+      if (hit == null) return false;
+      unawaited(nav.push(MaterialPageRoute<void>(
+        settings: const RouteSettings(name: _meetAlbumRoute),
+        builder: (_) => AlbumBrowsePage(hit.artist, hit.album, bronnenOpen: true),
+      )));
+      return true;
+    },
+    sluitAlbum: () => appNavigator.currentState?.popUntil((r) => r.settings.name != _meetAlbumRoute),
+    klaar: () async {
+      final v = volumeVoor;
+      if (v == null) return;
+      player.pauzeer();
+      player.setVolume(v);
+      volumeVoor = null;
+    },
+  );
+}
 
 /// Wat de sneltoets vraagt.
 class NaarNuSpeeltIntent extends Intent {
@@ -30140,24 +30252,58 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// Deezer's running time is passed along because the title alone can't tell a track from a
   /// medley that contains it, nor from a remix of about the same length.
   ///
-  /// Onthouden per titel zolang [_albumSlsk] dezelfde lijst is. `_trackRow` vraagt dit bij elke opbouw
-  /// van elke rij, alleen voor de telling ernaast, en elke vraag zeefde de hele albumbrede lijst
-  /// opnieuw: 5,3 µs per bestand (gemeten op de pc, 11-10-2026), bij 4400 bestanden dus ruim 20 ms per
-  /// rij — bij elk stukje scrollen dat een rij in beeld brengt en bij elke setState op deze pagina.
-  /// Een nieuw deelresultaat is een nieuwe lijst (`sortSoulseek`), en dan begint het geheugen opnieuw.
+  /// Uit het geheugen, en nooit meer hier uitgerekend. `_trackRow` vraagt dit bij elke opbouw van elke rij, alleen
+  /// voor de telling ernaast. Dat zeefde tot 23-10-2026 de hele albumbrede lijst per rij, op de UI-draad: 5,3 µs per
+  /// bestand (pc, 11-10-2026), en elke nieuwe lijst liet alle zichtbare rijen in hetzelfde beeld opnieuw rekenen —
+  /// op de Mac beelden van 1,2 tot 6,2 seconden (Saber: "als ik op de download pagina kom van de album hapert hij").
+  /// Nu rekent [_zeef] alle titels samen buiten de UI-draad ([zeefPerTitel]); tot dat klaar is staat er de vorige
+  /// telling, of het wieltje.
   List<SoulseekFile> _slskForTitle(CatalogTrack t) {
-    if (!identical(_slskPerTitelVan, _albumSlsk)) {
-      _slskPerTitel.clear();
-      _slskPerTitelVan = _albumSlsk;
-    }
-    return _slskPerTitel.putIfAbsent(
-        '${t.title}|${t.durationSec}',
-        () => zeefKandidatenNu(_albumSlsk,
-            titel: t.title, seconden: t.durationSec, artiest: widget.artistName, album: widget.album.title));
+    _zorgVoorZeef();
+    return _slskPerTitel['${t.title}|${t.durationSec}'] ?? const [];
   }
 
   final _slskPerTitel = <String, List<SoulseekFile>>{};
   List<SoulseekFile>? _slskPerTitelVan;
+  List<CatalogTrack>? _slskPerTitelSporen;
+  bool _zeefGepland = false;
+
+  /// Hoort het geheugen per titel bij de lijst en de tracklijst van nu?
+  bool get _zeefKlaar => identical(_slskPerTitelVan, _albumSlsk) && identical(_slskPerTitelSporen, _tracks);
+
+  /// Laat [_zeef] rekenen als de lijst of de tracklijst veranderde — na dit beeld, niet erin.
+  void _zorgVoorZeef() {
+    if (_zeefKlaar || _zeefGepland) return;
+    _zeefGepland = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_zeef()));
+  }
+
+  /// De zeef per titel buiten de UI-draad. Nooit twee tegelijk: komt er intussen een nieuwe tussenstand, dan daarna
+  /// nog één keer, met de nieuwste.
+  Future<void> _zeef() async {
+    try {
+      while (mounted && !_zeefKlaar) {
+        final lijst = _albumSlsk, sporen = _tracks;
+        final uit = lijst.isEmpty
+            ? [for (final _ in sporen) const <int>[]]
+            : await zeefPerTitel(lijst, [for (final t in sporen) (titel: t.title, seconden: t.durationSec)],
+                artiest: widget.artistName, album: widget.album.title);
+        if (!mounted) return;
+        setState(() {
+          _slskPerTitel
+            ..clear()
+            ..addAll({
+              for (var i = 0; i < sporen.length; i++)
+                '${sporen[i].title}|${sporen[i].durationSec}': [for (final p in uit[i]) lijst[p]],
+            });
+          _slskPerTitelVan = lijst;
+          _slskPerTitelSporen = sporen;
+        });
+      }
+    } finally {
+      _zeefGepland = false;
+    }
+  }
 
   /// The copy of this track already in the library (null if we don't have it). Version markers
   /// are part of the identity, so a Live/Radio-Edit/compilation cut still counts as NOT owned.
@@ -30227,8 +30373,13 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// what happened when the old path took every audio result the search returned and, after the
   /// query broadened to just the artist, would have downloaded the wrong song under this one's tags.
   Future<List<SoulseekFile>> _slskCandidatesForTrack(CatalogTrack t, SoulseekService soulseek) async {
+    // Is de zeef per titel nog bezig, dan deze ene titel zelf (ook buiten de UI-draad): niet wachten, niets missen.
+    final eerder = _zeefKlaar
+        ? _slskForTitle(t)
+        : await zeefKandidaten(_albumSlsk,
+            titel: t.title, seconden: t.durationSec, artiest: widget.artistName, album: widget.album.title);
     final pool = <String, SoulseekFile>{
-      for (final f in _slskForTitle(t)) '${f.username}|${f.filename}': f
+      for (final f in eerder) '${f.username}|${f.filename}': f
     };
     try {
       // Dezelfde zeef als de telling naast de rij, mét de terugval voor een gast die de bestanden niet
@@ -30512,7 +30663,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                     child: Text('$srcCount ⌄',
                         style: TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
                   )
-                else if (soulseekReady && _slskBusy)
+                else if (soulseekReady && (_slskBusy || !_zeefKlaar))
                   Padding(
                     padding: EdgeInsets.only(right: 8),
                     child: SizedBox(width: 11, height: 11, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),
@@ -33441,7 +33592,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
         children: [
           // Onder alles, ook onder de cd, zoals toen hij nog buiten dit blok lag. Alleen onder de
           // hoes zelf: het vak ernaast is voor de cd (pc, 18-10-2026: een grijs blok tot ver rechts).
-          if (widget.hoesSchaduw case final schaduw?)
+          if (widget.hoesSchaduw case final schaduw? when !zonderVoorMeting('schaduw'))
             Positioned(
               key: const ValueKey('albumart-schaduw'),
               left: 0,
@@ -33477,7 +33628,8 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
                 left: 0,
                 top: s + kSpiegelAfstand,
                 child: meeMetDeHoes(HoesSpiegel(beeld: front, maat: s))),
-          // Behind the sleeve, and drawn first so it stays there.
+          // Behind the sleeve, and drawn first so it stays there. (Weg in een meetronde zonder schijf.)
+          if (!zonderVoorMeting('schijf'))
           Positioned(
             key: const ValueKey('albumart-schijf'),
             left: 0,

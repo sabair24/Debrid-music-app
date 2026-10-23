@@ -22,6 +22,8 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
+import '../meetronde.dart' show zonderVoorMeting;
+
 import '../tv.dart';
 import 'glas.dart';
 import 'kleuren.dart';
@@ -1182,7 +1184,8 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.beeld == null) return const SizedBox.shrink();
+    // Een meetronde zonder achtergrond (meetronde.dart).
+    if (widget.beeld == null || zonderVoorMeting('achter')) return const SizedBox.shrink();
     final dpr = MediaQuery.devicePixelRatioOf(context);
     final vak = RepaintBoundary(
       child: SizedBox(

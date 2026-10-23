@@ -7,6 +7,8 @@
 /// uitgevoerd.
 library;
 
+import 'dart:async';
+
 import 'models.dart';
 import 'lan/zones.dart' show plekVoorNummer;
 import 'player.dart' show Rijbediening, Speelbron;
@@ -40,6 +42,7 @@ class ZoneUitvoerder {
     this.radioStop,
     this.kijkInBrievenbus,
     this.verplaatst,
+    this.meet,
     this.neemOver,
     this.samen,
     this.samenStop,
@@ -85,6 +88,10 @@ class ZoneUitvoerder {
   /// De muziek van dit toestel speelt nu op een andere zone ([naar], haar naam): stop hier, en meld het meteen —
   /// zie `VerderLuisteren.isVerplaatst` en `LanServer._bronVerplaatst` (Saber, 23-10-2026: "A stopt helemaal").
   final void Function(String naar)? verplaatst;
+
+  /// Een meetronde (`meetronde.dart`, Saber 23-10-2026: "zorg er dan voor, zo kan je het beste meten"): dit toestel
+  /// meet zichzelf. Loopt op de achtergrond; de uitkomst gaat naar `warmte.log` op de pc.
+  final Future<void> Function(Map<String, dynamic> op)? meet;
 
   /// Na elke opdracht: meld de nieuwe stand meteen, zodat wie bedient het ziet.
   final void Function()? naUitvoeren;
@@ -198,6 +205,13 @@ class ZoneUitvoerder {
             fout = 'Hier kan niet gestopt worden';
           } else {
             f('${op['naar'] ?? ''}');
+          }
+        case 'meet':
+          final f = meet;
+          if (f == null) {
+            fout = 'Hier kan niet gemeten worden';
+          } else {
+            unawaited(f(op));
           }
         case 'radioOverzicht':
           kijkInBrievenbus?.call();
