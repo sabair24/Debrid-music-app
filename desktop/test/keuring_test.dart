@@ -12,6 +12,7 @@ library;
 import 'dart:io';
 
 import 'package:debridmusic/echtheid.dart';
+import 'package:debridmusic/echtheid_oordelen.dart';
 import 'package:debridmusic/ffmpeg.dart';
 import 'package:debridmusic/integriteit.dart';
 import 'package:debridmusic/keuring.dart';
@@ -19,6 +20,7 @@ import 'package:debridmusic/online.dart';
 import 'package:debridmusic/organize.dart';
 import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/soulseek.dart';
+import 'package:debridmusic/vaste_keuze.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _leeg = Echtheidsoordeel(
@@ -80,6 +82,96 @@ void main() {
       final mp3 = kwaliteitUit(verliesvrij: false, kopRate: 44100, formaat: 1);
       expect(kapot.klasse, Klasse.kapot);
       expect(vergelijkKwaliteit(mp3, kapot), greaterThan(0));
+    });
+  });
+
+  group('24 bit boven 16 bit, maar alleen bewezen diep (23-10-2026, Ellie Goulding — Close To Me)', () {
+    // Letterlijk de oordelen uit echtheid_oordelen.json van 23-10-2026, 06:04: de 16-bitkopie die bleef staan
+    // en de 24-bitkopie van TIDAL die opzij ging.
+    const zestien = Echtheidsoordeel(
+        bits: Bitdiepte.onbekend,
+        boven: Bovenband.onbekend,
+        band: Bandbreedte.doorlopend,
+        gebruikteBits: 16,
+        afkapHz: 21100,
+        integriteit: Integriteit.klopt);
+    const vierentwintig = Echtheidsoordeel(
+        bits: Bitdiepte.spreektNietTegen,
+        boven: Bovenband.onbekend,
+        band: Bandbreedte.doorlopend,
+        gebruikteBits: 24,
+        afkapHz: 21100,
+        integriteit: Integriteit.klopt);
+
+    test('DE KERN: de gemeten 24/44,1 wint van de 16/44,1', () {
+      expect(_flac(44100, vierentwintig).diep, isTrue);
+      expect(_flac(44100, zestien).diep, isFalse);
+      expect(vergelijkKwaliteit(_flac(44100, vierentwintig), _flac(44100, zestien)), greaterThan(0));
+      expect(vergelijkKwaliteit(_flac(44100, zestien), _flac(44100, vierentwintig)), lessThan(0));
+    });
+
+    test('opgeblazen 16 bit in een 24-bitkop is niet diep', () {
+      const opgeblazen = Echtheidsoordeel(
+          bits: Bitdiepte.opgeblazen, boven: Bovenband.onbekend, band: Bandbreedte.doorlopend, gebruikteBits: 16);
+      expect(_flac(44100, opgeblazen).diep, isFalse);
+      expect(vergelijkKwaliteit(_flac(44100, opgeblazen), _flac(44100, zestien)), 0);
+    });
+
+    test('een opgeschaalde cd vult ook alle bits — en wint dus niet', () {
+      const opgeschaald = Echtheidsoordeel(
+          bits: Bitdiepte.spreektNietTegen, boven: Bovenband.leeg, band: Bandbreedte.doorlopend, gebruikteBits: 24);
+      expect(_flac(96000, opgeschaald).diep, isFalse);
+      expect(vergelijkKwaliteit(_flac(96000, opgeschaald), _flac(44100, zestien)), 0);
+    });
+
+    test('een vermoedelijke mp3-muur met 24 bits in gebruik wint niet', () {
+      // Een mp3 die tot 24 bit gedecodeerd is gebruikt ze allemaal; LAME 320 kapt op 20 kHz af.
+      const mp3Muur = Echtheidsoordeel(
+          bits: Bitdiepte.spreektNietTegen,
+          boven: Bovenband.onbekend,
+          band: Bandbreedte.vermoedelijk,
+          afkapHz: 20000,
+          gebruikteBits: 24);
+      expect(_flac(44100, mp3Muur).diep, isFalse);
+      expect(vergelijkKwaliteit(_flac(44100, mp3Muur), _flac(44100, zestien)), 0);
+    });
+
+    test('zonder doorlopend spectrum geen bewijs: band onbekend telt niet', () {
+      const stil = Echtheidsoordeel(
+          bits: Bitdiepte.spreektNietTegen, boven: Bovenband.onbekend, band: Bandbreedte.onbekend, gebruikteBits: 24);
+      expect(_flac(44100, stil).diep, isFalse);
+    });
+
+    test('de bits beslissen niet over de klasse heen: een afgekapte 24 bit verliest nog steeds', () {
+      const afgekapt = Echtheidsoordeel(
+          bits: Bitdiepte.spreektNietTegen,
+          boven: Bovenband.onbekend,
+          band: Bandbreedte.afgekapt,
+          afkapHz: 16000,
+          gebruikteBits: 24);
+      expect(vergelijkKwaliteit(_flac(44100, afgekapt), _flac(44100, zestien)), lessThan(0));
+    });
+
+    test('bewezen hires: eerst de bemonstering, dan pas de bits', () {
+      const vol24 = Echtheidsoordeel(
+          bits: Bitdiepte.spreektNietTegen, boven: Bovenband.vol, band: Bandbreedte.doorlopend, gebruikteBits: 24);
+      expect(vergelijkKwaliteit(_flac(192000, _vol), _flac(96000, vol24)), greaterThan(0));
+      expect(vergelijkKwaliteit(_flac(96000, vol24), _flac(96000, _vol)), greaterThan(0));
+    });
+
+    test('ook als beide jouw keuze zijn — wat TIDAL ophaalt is altijd jouw keuze', () {
+      final map = Directory.systemTemp.createTempSync('dm_diep_');
+      addTearDown(() => map.deleteSync(recursive: true));
+      final oud = File('${map.path}${Platform.pathSeparator}Close To Me.flac')..writeAsBytesSync(List.filled(64, 0));
+      final nieuw = File('${map.path}${Platform.pathSeparator}Close To Me (2).flac')
+        ..writeAsBytesSync(List.filled(64, 0));
+      final Voorkennis kennis = (
+        vast: {sleutelVoor(oud.path), sleutelVoor(nieuw.path)},
+        oordelen: {echtheidSleutelVoor(oud.path): zestien, echtheidSleutelVoor(nieuw.path): vierentwintig},
+        kapot: <String>{},
+      );
+      expect(firstIsBetter(nieuw, oud, kennis: kennis), isTrue);
+      expect(firstIsBetter(oud, nieuw, kennis: kennis), isFalse);
     });
   });
 

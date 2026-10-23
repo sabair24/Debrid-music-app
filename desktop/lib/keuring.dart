@@ -27,9 +27,17 @@
 /// 24/44,1 is er niets te bewijzen boven de cd. Een eerlijke 24/48 is daarom niet bewezen beter dan een
 /// opgeschaalde 24/96 die eigenlijk een cd is, en dus blijft die van jou staan. Precies Is It Scary.
 ///
-/// **Waarom de bits niet tellen.** Proef A bewijst alleen het negatieve: "deze 24 bits zijn er 16". Dat
-/// ze er écht 24 zijn, bewijst geen enkele meting — zie `Bitdiepte.spreektNietTegen`. Een 24/44,1 is dus
-/// niet bewezen beter dan een 16/44,1, en ook dan blijft wat er stond.
+/// **De bits als scheidsrechter (sinds 23-10-2026).** Tot dan telden ze niet: Proef A bewijst alleen het
+/// negatieve ("deze 24 bits zijn er 16"), en dat ze er écht 24 zijn bewijst geen meting — zie
+/// `Bitdiepte.spreektNietTegen`. Maar Saber, na Ellie Goulding — Close To Me (Solo) van TIDAL: *"ellie lukt in
+/// 24bit, maar tidal vervangt slechtere kwaliteit nog niet, daarmee ik bleef de 16 bit zien"*. De 24-bitkopie
+/// (alle 24 bits in gebruik, md5 in orde, "consistent") ging als "gelijk" opzij, want beide waren jouw keuze.
+///
+/// Nu: bij verder gelijke kwaliteit wint wat volgens Proef A MEER dan 16 bits gebruikt ([Kwaliteit.diep]) van wat
+/// er 16 heeft — maar alleen bij een spectrum dat bewezen doorloopt (Proef C: [Bandbreedte.doorlopend]) en niet
+/// opgeschaald is (Proef B: niet [Bovenband.leeg]). Want elke bewerking vult de lage bits: een opgeschaalde cd en
+/// een mp3 die tot 24 bit gedecodeerd is gebruiken ze ook allemaal. Een opgeblazen 16 bit telt nooit als diep;
+/// in het ergste geval (een 16-bitmaster met een volumeaanpassing) is het dezelfde muziek in een groter bestand.
 ///
 /// Puur en zonder `dart:io`: elke regel hieronder staat met de gemeten gevallen in
 /// `test/keuring_test.dart`.
@@ -42,8 +50,9 @@ enum Klasse { kapot, lossy, uitLossy, cd, onbewezenHires, hires }
 
 /// Wat de keuring van één bestand weet. [rate] is de bemonstering uit de kop — alleen van belang
 /// tussen twee bewezen hires-bestanden. [formaat] is `formatRank` uit organize.dart: binnen dezelfde
-/// klasse gaat een FLAC voor een WAV, en een aac voor een mp3.
-typedef Kwaliteit = ({Klasse klasse, int rate, int formaat});
+/// klasse gaat een FLAC voor een WAV, en een aac voor een mp3. [diep]: Proef A zag meer dan 16 bits in gebruik, in
+/// een doorlopend en niet opgeschaald spectrum — zie hierboven, "de bits als scheidsrechter".
+typedef Kwaliteit = ({Klasse klasse, int rate, int formaat, bool diep});
 
 /// De klasse van een bestand uit wat er over bekend is.
 ///
@@ -73,7 +82,14 @@ Kwaliteit kwaliteitUit(
   } else {
     k = Klasse.onbewezenHires;
   }
-  return (klasse: k, rate: kopRate, formaat: formaat);
+  // Elke bewerking vult de lage bits: opschalen, en een mp3 die tot 24 bit gedecodeerd is ook. Daarom telt de
+  // diepte alleen bij een spectrum dat bewezen doorloopt en niet opgeschaald is.
+  final diep = oordeel != null &&
+      oordeel.bits == Bitdiepte.spreektNietTegen &&
+      (oordeel.gebruikteBits ?? 0) > 16 &&
+      oordeel.band == Bandbreedte.doorlopend &&
+      oordeel.boven != Bovenband.leeg;
+  return (klasse: k, rate: kopRate, formaat: formaat, diep: diep);
 }
 
 /// Hoeveel verder een andere kopie van dezelfde opname echt moet doorlopen om te bewijzen dat de muur van de
@@ -94,7 +110,7 @@ Kwaliteit metMuurBewijs(Kwaliteit a, Echtheidsoordeel? oa, Echtheidsoordeel? ob)
   if (oa.band != Bandbreedte.vermoedelijk || ob.band != Bandbreedte.doorlopend) return a;
   final xa = oa.afkapHz, xb = ob.afkapHz;
   if (xa == null || xb == null || xb < xa + kMuurBewijsHz) return a;
-  return (klasse: Klasse.uitLossy, rate: a.rate, formaat: a.formaat);
+  return (klasse: Klasse.uitLossy, rate: a.rate, formaat: a.formaat, diep: a.diep);
 }
 
 /// Groter dan nul als [a] BEWEZEN beter is dan [b], kleiner dan nul als [b] het is, nul als het gelijk
@@ -117,6 +133,8 @@ int vergelijkKwaliteit(Kwaliteit a, Kwaliteit b) {
   if (ka != kb) return ka.index.compareTo(kb.index);
   // Twee bewezen hires-bestanden: de hoogste bewezen bemonstering.
   if (ka == Klasse.hires && a.rate != b.rate) return a.rate.compareTo(b.rate);
+  // Verder gelijk en verliesvrij: wat meer dan 16 bits in gebruik heeft, wint van 16 bit ([Kwaliteit.diep]).
+  if ((ka == Klasse.cd || ka == Klasse.hires) && a.diep != b.diep) return a.diep ? 1 : -1;
   // Zelfde klasse: het formaat, en alleen als dat een echt verschil is (FLAC boven WAV, aac boven mp3).
   // Een WavPack is geen stap vooruit tegen een FLAC en andersom ook niet: beide [formatRank] 4.
   return a.formaat.compareTo(b.formaat);

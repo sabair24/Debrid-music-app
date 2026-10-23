@@ -947,6 +947,10 @@ String whyBetter(File keep, File drop) {
   final kk = metMuurBewijs(kwaliteitVan(keep), ok, od), kd = metMuurBewijs(kwaliteitVan(drop), od, ok);
   final c = vergelijkKwaliteit(kk, kd);
   if (c != 0) {
+    final zelfdeRate = kk.klasse != Klasse.hires || kk.rate == kd.rate;
+    if (kk.klasse == kd.klasse && zelfdeRate && kk.diep && !kd.diep) {
+      return '${ok?.gebruikteBits ?? 24} bits in gebruik boven 16 bit';
+    }
     if (kk.klasse == kd.klasse) return '${ext(keep)} boven ${ext(drop)}';
     return '${kwaliteitZin(kk)} boven ${kwaliteitZin(kd)}';
   }
