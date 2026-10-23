@@ -20,7 +20,7 @@ import '../musicbrainz.dart';
 import '../nieuwe_releases.dart' show NieuweReleases, ReleasesLijst;
 import '../kandidatenzeef.dart' show zeefKandidaten;
 import '../online.dart';
-import '../tidaler.dart' show Tidaler, haalVanTidal, tidalDoel, tidalHulpUitvoer;
+import '../tidaler.dart' show Tidaler, haalVanTidal, tidalDoel, tidalHulpFoutZin, tidalHulpUitvoer;
 import '../organize.dart';
 import '../paths.dart';
 import '../pc_model.dart' show Modelvragen;
@@ -88,7 +88,11 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd', '/api/zone/transfer', '/api/tijd',
     '/api/releaseart',
   };
-  const voorvoegsels = ['/stream/', '/groei/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/'];
+  // TIDAL ook (Saber, 23-10-2026: "ik moet ook buitenshuis kunnen zoeken en downloaden"); ophalen telt mee in het
+  // quotum voor downloads, zoals Soulseek.
+  const voorvoegsels = [
+    '/stream/', '/groei/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/', '/api/tidal/', //
+  ];
   if (exact.contains(pad) || voorvoegsels.any(pad.startsWith)) return null;
   if (pad == '/api/rutracker/sessie') return 'Kan alleen met je gsm thuis op wifi.';
   return 'Dit kan alleen thuis of via Tailscale.';
@@ -2515,7 +2519,7 @@ class LanServer {
     if (argumenten.first.isEmpty || argumenten.last.isEmpty) return _json(req.response, {'uitvoer': ''});
     final uit = await tidalHulpUitvoer(argumenten);
     if (uit == null) {
-      return _unavailable(req, 'tidaler antwoordde niet — log op de pc opnieuw in met "tidaler login".');
+      return _unavailable(req, tidalHulpFoutZin());
     }
     return _json(req.response, {'uitvoer': uit});
   }

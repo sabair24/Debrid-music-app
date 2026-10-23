@@ -23900,7 +23900,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           : _tidalViaPc
               ? await _tidalOpPc(context.read<LibraryStore>(), 'zoek', {'q': q})
               : await zoekCatalogusOpTidal(q) ??
-                  (throw 'tidaler antwoordde niet — log opnieuw in met "tidaler login" in een terminal.');
+                  (throw tidalHulpFoutZin());
       if (!geldig()) return;
       _tidalAlbums = r.albums;
       _tidalTracks = r.tracks;
