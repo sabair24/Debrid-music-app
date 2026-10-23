@@ -347,7 +347,9 @@ class HoesSpiegel extends StatelessWidget {
             height: maat * kSpiegelHoogte,
             // Dezelfde bron als de hoes erboven (AlbumArt: `Image.memory(front, cacheWidth:
             // decodeWidth(s))`), dus geen tweede decodering. De afronding van de grote hoes is 10.
-            child: TegelSpiegel(bron: MemoryImage(beeld), maat: maat, hoek: 10),
+            // Gebakken: in stroken kostte hij op de Mac 7 ms per beeld (zie [TegelSpiegel.gebakken]). In een meetronde
+            // met `stroken` zoals vroeger, om te vergelijken.
+            child: TegelSpiegel(bron: MemoryImage(beeld), maat: maat, hoek: 10, gebakken: !zonderVoorMeting('stroken')),
           ),
         ),
       );

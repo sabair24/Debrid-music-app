@@ -34,15 +34,18 @@ const kMeetEffecten = {
   'achter': 'Nu speelt zonder achtergrond (waas, vlekken, vervaagde hoes)',
   'schaduw': 'zonder de schaduw onder de hoes',
   'spiegel': 'zonder de spiegeling onder de hoes',
+  'stroken': 'de spiegeling in stroken, elk beeld opnieuw (zoals vóór 3.9.590)',
   'schijf': 'zonder de cd naast de hoes',
   'licht': 'cd zonder licht en schaduwen',
   'kantel': 'de hoes kantelt niet',
-  'foto': 'Nu speelt schuift als één foto in en uit',
+  'foto': 'Nu speelt ook bij het openen als één foto',
+  'levend': 'Nu speelt ook bij het sluiten levend (zoals vóór 3.9.590)',
 };
 
 /// De scenario's van een meetronde.
 const kMeetScenarios = {
-  'open': 'Nu speelt drie keer openen en sluiten',
+  'open': 'Nu speelt drie keer openen (alleen het openen telt)',
+  'dicht': 'Nu speelt drie keer sluiten (alleen het sluiten telt)',
   'kantel': 'de muis vier seconden over de grote hoes in Nu speelt',
   'stil': 'Nu speelt drie seconden open laten staan',
   'bronnen': 'een albumpagina met "Bronnen voor album" open, twintig seconden (met `artiest` en `album`; alleen '
@@ -50,7 +53,7 @@ const kMeetScenarios = {
 };
 
 /// Wat een ronde zonder opgegeven scenario's doet: alles behalve `bronnen`, dat een album nodig heeft.
-const kMeetStandaard = ['open', 'kantel', 'stil'];
+const kMeetStandaard = ['open', 'dicht', 'kantel', 'stil'];
 
 /// De cijfers van een rij beelden: hoeveel, wat ze kostten, en hoeveel er te laat waren voor het scherm.
 @immutable
@@ -266,14 +269,27 @@ Future<List<ui.FrameTiming>> _scenario(String s, MeetHaken h, {String artiest = 
       await _wacht(900);
       return beelden;
     case 'open':
-      return _beeldenVan(() async {
-        for (var i = 0; i < 3; i++) {
+      final beelden = <ui.FrameTiming>[];
+      for (var i = 0; i < 3; i++) {
+        beelden.addAll(await _beeldenVan(() async {
           h.openNuSpeelt();
-          await _wacht(900);
+          await _wacht(600);
+        }));
+        h.sluitNuSpeelt();
+        await _wacht(900);
+      }
+      return beelden;
+    case 'dicht':
+      final beelden = <ui.FrameTiming>[];
+      for (var i = 0; i < 3; i++) {
+        h.openNuSpeelt();
+        await _wacht(1200);
+        beelden.addAll(await _beeldenVan(() async {
           h.sluitNuSpeelt();
-          await _wacht(900);
-        }
-      });
+          await _wacht(600);
+        }));
+      }
+      return beelden;
     case 'kantel':
       h.openNuSpeelt();
       await _wacht(1200);
