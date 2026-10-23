@@ -24,7 +24,39 @@ import 'release_format.dart' as fmt;
 import 'settings.dart';
 import 'paths.dart';
 import 'radiostijl.dart'
-    show DiscogsUitgave, Zoekregel, genoegVoorEenJaar, kaleTitel, metHetNummer, samenUitgaven, uitgaveUitZoekregel;
+    show
+        DiscogsUitgave,
+        Zoekregel,
+        genoegVoorEenJaar,
+        kaleTitel,
+        metHetNummer,
+        samenUitgaven,
+        uitgaveUitZoekregel,
+        uitgaveVanArtiest;
+
+/// De eigen single van een nummer uit een zoekuitslag van Discogs ([results], type release, soort single): de oudste
+/// die naar het nummer heet en van [artiest] is — zie [DiscogsService.eigenSingle]. Geen onofficiële persing.
+({String album, int? jaar})? eigenSingleUit(List<dynamic> results, String artiest, String titel) {
+  final wil = normKey(kaleTitel(titel));
+  if (wil.isEmpty) return null;
+  ({String album, int? jaar})? beste;
+  for (final r in results) {
+    if (r is! Map) continue;
+    final t = '${r['title'] ?? ''}';
+    // [uitgaveVanArtiest] kent ook "The Pretenders" voor "Pretenders", en "Pretenders*" of "Pretenders (2)".
+    if (!uitgaveVanArtiest(t, artiest)) continue;
+    final streep = t.indexOf(' - ');
+    final plaat = (streep > 0 ? t.substring(streep + 3) : t).trim();
+    if (normKey(kaleTitel(plaat)) != wil) continue;
+    final soort = [for (final f in (r['format'] as List? ?? const [])) '$f'.toLowerCase()];
+    if (!soort.any((f) => f == 'single' || f == 'maxi-single') || soort.contains('unofficial release')) continue;
+    final jaar = int.tryParse('${r['year'] ?? ''}');
+    final j = jaar != null && jaar > 1900 ? jaar : null;
+    final b = beste;
+    if (b == null || (j != null && (b.jaar == null || j < b.jaar!))) beste = (album: plaat, jaar: j);
+  }
+  return beste;
+}
 
 /// De eerste beelden van een Discogs-persing en wat elk is — zie `DiscogsService._discogsBeelden`.
 typedef _DiscogsBeelden = ({List<Uint8List?> datas, ({int? front, int? back, int? disc}) guessed});
@@ -1152,6 +1184,25 @@ class DiscogsService {
     // Geen antwoord (429, 5xx, time-out) is iets anders dan niets gevonden: null, en dan onthoudt het
     // stijlboek niets. Met een lege lijst werd een storing voorgoed "Discogs kent dit niet".
     return samenUitgaven(eerst, opnieuw == null ? null : await metHetNummer(vanArtiest(opnieuw), titel, tracks));
+  }
+
+  /// De eigen single van een nummer: de oudste officiële single bij Discogs die naar het nummer heet en van deze artiest
+  /// is ([eigenSingleUit]). Voor een nummer waarvoor MusicBrainz en Deezer geen plaat kennen: zonder dit bleef het een
+  /// los nummer, en een los nummer krijgt geen achterkant en geen cd. Een single als plaat wél — "Summer Nights" kreeg ze
+  /// op 23-10-2026 in 47 s via Discogs. Saber, 23-10-2026, met de Lovefool-single (CD, 1997) op Discogs: *"op discogs
+  /// zijn er toch singels met voorkant, achterkant en cd afbeelding??"*. Null: niets, of Discogs doet niet mee.
+  Future<({String album, int? jaar})?> eigenSingle(String artiest, String titel) async {
+    if (!available) return null;
+    final b = await _get('https://api.discogs.com/database/search?type=release&format=Single&per_page=25'
+        '&sort=year&sort_order=asc&artist=${_q(artiest)}&track=${_q(kaleTitel(titel))}');
+    if (b == null) return null;
+    final eerst = eigenSingleUit(b['results'] as List<dynamic>? ?? const [], artiest, titel);
+    if (eerst != null) return eerst;
+    // En vrij, zoals [nummerUitgaven]: op het artiestveld gaf Don't Get Me Wrong één treffer (The Losing, 2003), vrij
+    // gezocht 49, met de singles van 1986 bovenaan (23-10-2026).
+    final vrij = await _get('https://api.discogs.com/database/search?type=release&format=Single&per_page=50'
+        '&q=${_q('$artiest ${kaleTitel(titel)}')}');
+    return vrij == null ? null : eigenSingleUit(vrij['results'] as List<dynamic>? ?? const [], artiest, titel);
   }
 
   Future<int?> artistId(String name) async {
