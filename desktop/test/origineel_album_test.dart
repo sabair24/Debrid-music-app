@@ -7,7 +7,7 @@
 import 'dart:io';
 
 import 'package:debridmusic/enrichment.dart'
-    show deezerAlbumsMetNummer, albumsMetNummerUitOpnames, studioalbumUitGroepen, zonderEditie;
+    show deezerAlbumsMetNummer, albumsMetNummerUitOpnames, nietTeLaat, oorsprongJaar, studioalbumUitGroepen, zonderEditie;
 import 'package:debridmusic/musicbrainz.dart' show MbRecording, MbReleaseGroup;
 import 'package:debridmusic/online.dart';
 import 'package:debridmusic/organize.dart' show writeTagFields;
@@ -34,30 +34,34 @@ void main() {
       expect(_album(o), 'Everybody Else Is Doing It, So Why Can’t We? 1993', reason: 'met de schrijfwijze van MusicBrainz');
     });
 
-    test('een deluxe met bonusnummers telt pas als er niets anders is', () {
+    test('een editie telt als de plaat zelf, ook een deluxe — het vroegste wint', () {
       final plaatjes = [
         _plaat('g-pd', 'Private Dancer', '1984-05-29'),
         _plaat('g-ber', 'Break Every Rule', '1986-09-24'),
-        _plaat('g-fa', 'Foreign Affair', '1989-09-12'),
       ];
       expect(
           _album(studioalbumUitGroepen([
             (titel: 'Break Every Rule (Deluxe Edition)', groep: 'g-ber'),
             (titel: 'Private Dancer', groep: 'g-pd'),
           ], plaatjes)),
-          'Private Dancer 1984');
-      expect(
-          _album(studioalbumUitGroepen([
-            (titel: 'Break Every Rule (Deluxe Edition)', groep: 'g-ber'),
-            (titel: 'Foreign Affair', groep: 'g-fa'),
-          ], plaatjes)),
-          'Foreign Affair 1989',
-          reason: 'de deluxe van een vroegere plaat draagt vaak de hits van een latere');
+          'Private Dancer 1984',
+          reason: 'de deluxe van een latere plaat draagt het, maar het origineel is ouder');
       expect(_album(studioalbumUitGroepen([(titel: 'Break Every Rule (Deluxe Edition)', groep: '')], plaatjes)),
           'Break Every Rule 1986',
           reason: 'zonder andere kandidaat: de plaat zelf, zonder "(Deluxe Edition)"');
       expect(_album(studioalbumUitGroepen([(titel: 'Private Dancer (30th Anniversary Issue)', groep: '')], plaatjes)),
           'Private Dancer 1984');
+      // Nothing Compares 2 U: het origineel staat bij Deezer op een "(Deluxe Version)"; een album uit 2012 draagt een
+      // opname met dezelfde titel. Met "deluxe pas als tweede keus" won 2012.
+      expect(
+          _album(studioalbumUitGroepen([
+            (titel: 'How About I Be Me (and You Be You)?', groep: 'g-hab'),
+            (titel: "I Do Not Want What I Haven't Got (Deluxe Version)", groep: ''),
+          ], [
+            _plaat('g-hab', 'How About I Be Me (and You Be You)?', '2012-02-21'),
+            _plaat('g-idnw', 'I Do Not Want What I Haven’t Got', '1990-03-20'),
+          ])),
+          'I Do Not Want What I Haven’t Got 1990');
     });
 
     test('twee studioalbums met dezelfde naam: op de titel alleen geen gok, op het id wel', () {
@@ -114,6 +118,52 @@ void main() {
           isNull);
     });
 
+    test('wanneer het nummer er al was: een plaat van later draagt het als bonus of B-kant (Don\'t Get Me Wrong)', () {
+      MbRecording opname(String titel, String eerste, {bool live = false}) => MbRecording.from({
+            'id': 'rec-$titel-$eerste',
+            'title': titel,
+            'first-release-date': eerste,
+            'artist-credit': [
+              {'name': 'Pretenders', 'artist': {'id': 'pr'}}
+            ],
+            'releases': [
+              {
+                'id': 'r-$eerste',
+                'title': live ? 'The Isle of View' : 'Get Close',
+                'release-group': {
+                  'id': 'g-$eerste',
+                  'primary-type': 'Album',
+                  'secondary-types': [if (live) 'Live'],
+                },
+              }
+            ],
+          });
+      Map<String, dynamic> deezer(String titel, String album, String isrc) => {
+            'title': titel,
+            'artist': {'name': 'Pretenders'},
+            'album': {'title': album},
+            'isrc': isrc,
+          };
+      final al = oorsprongJaar([
+        opname("Don't Get Me Wrong", '1986-09'),
+        opname("Don't Get Me Wrong", '2016-10-21'),
+        opname("Don't Get Me Wrong", '1980', live: true), // live telt niet, ook met een gewone titel
+      ], [
+        deezer("Don't Get Me Wrong", 'Alone (Special Edition)', 'GBAHT1600123'),
+        deezer("Don't Get Me Wrong (Live 1986 Broadcast Remastered)", 'Legendary FM Broadcasts', 'GBSMU6079295'),
+        deezer("Don't Get Me Wrong", 'Legendary FM Broadcasts', 'GBSMU6079296'), // live op het album
+      ], artiest: 'Pretenders', titel: "Don't Get Me Wrong");
+      expect(al, 1986, reason: 'niet 1960 van een uitzending met een rare code, niet 1980 van een live-opname');
+      expect(
+          studioalbumUitGroepen([(titel: 'Alone (Special Edition)', groep: '')], [_plaat('g-a', 'Alone', '2016-10-21')],
+              nietNa: al! + 4),
+          isNull,
+          reason: 'liever geen album dan Alone (2016)');
+      expect(nietTeLaat((album: 'The Losing', jaar: 2003), al + 4), isNull, reason: 'ook niet de single met de B-kant');
+      expect(nietTeLaat((album: 'Get Close', jaar: 1986), al + 4)?.album, 'Get Close');
+      expect(nietTeLaat((album: 'Get Close', jaar: null), al + 4)?.album, 'Get Close');
+    });
+
     test('de editie eraf', () {
       expect(zonderEditie('Private Dancer (30th Anniversary Issue)'), 'Private Dancer');
       expect(zonderEditie('Rumours (2004 Remaster)'), 'Rumours');
@@ -121,6 +171,11 @@ void main() {
       expect(zonderEditie("Summer Of '69 - Single"), "Summer Of '69");
       expect(zonderEditie('Close-Up, Volume 2: People & Places'), 'Close-Up, Volume 2: People & Places');
       expect(zonderEditie('Relish'), 'Relish');
+      // Een uitvoering blijft staan, ook met "Remastered" erbij: dat is een andere opname.
+      expect(zonderEditie('Luka (Live 1986 Broadcast Remastered)'), 'Luka (Live 1986 Broadcast Remastered)');
+      expect(zonderEditie('Nothing Compares 2 U (Live in Europe, 1990) (2020 Remaster)'),
+          'Nothing Compares 2 U (Live in Europe, 1990)');
+      expect(zonderEditie('Blue Hotel (Remastered)'), 'Blue Hotel');
     });
   });
 
@@ -141,6 +196,23 @@ void main() {
       expect([for (final c in deezerAlbumsMetNummer(data, 'Sheryl Crow', 'If It Makes You Happy', seconden: 264)) c.titel],
           ['Sheryl Crow'],
           reason: 'niet de live-versie en niet een ander die het speelt');
+    });
+
+    test('Deezer: een remaster van het nummer telt, een live-versie met "Remaster" erachter niet', () {
+      final data = [
+        deezer("Sinéad O'Connor", 'Nothing Compares 2 U (2009 Remaster)',
+            "I Do Not Want What I Haven't Got (Deluxe Version)", 280),
+        deezer("Sinéad O'Connor", 'Nothing Compares 2 U (Live in Europe, 1990) (2020 Remaster)',
+            'Nothing Compares 2 U [30th Anniversary Remaster]', 300),
+      ];
+      expect([for (final c in deezerAlbumsMetNummer(data, "Sinéad O'Connor", 'Nothing Compares 2 U')) c.titel],
+          ["I Do Not Want What I Haven't Got (Deluxe Version)"]);
+      // En andersom: de radio zocht zelf "Blue Hotel (Remastered)".
+      expect([
+        for (final c in deezerAlbumsMetNummer(
+            [deezer('Chris Isaak', 'Blue Hotel', 'Chris Isaak', 214)], 'Chris Isaak', 'Blue Hotel (Remastered)'))
+          c.titel
+      ], ['Chris Isaak']);
     });
 
     test('MusicBrainz: ±8 s, want een heropname is een andere opname (Solsbury Hill op New Blood)', () {

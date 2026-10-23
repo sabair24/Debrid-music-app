@@ -257,7 +257,9 @@ void main() {
       expect(tidalKwaliteitUit(const []), TidalKwaliteit.onbekend, reason: 'de officiële API zegt het niet: geen label');
       final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(m, contains("child: Text(hoog ? '24 bit' : '16 bit',"));
-      expect('_tidalKwaliteitsLabel('.allMatches(m).length, 4, reason: 'de functie, een plaat, een nummer, een nummer op een plaat');
+      expect('_tidalKwaliteitsLabel('.allMatches(m).length, 5,
+          reason: 'de functie, een plaat, een nummer, een nummer op een plaat, en de regel onder de titel op een gsm '
+              '(tidal_smal_scherm_test)');
     });
 
     test('aangesloten: een plaat klapt open op haar nummers, elk met Ophalen; een artiest opent met zijn foto', () {

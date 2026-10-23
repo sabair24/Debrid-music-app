@@ -23829,7 +23829,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   /// Artiesten met foto, alleen via tidaler. Saber, 22-10-2026: *"ik wil artiest foto en album cover ook zien, en ook
   /// bij de liedjes"*.
-  List<TidalArtiest> _tidalArtiesten = const [];
+  List<TidalArtiest> _tidalArtiesten = ZoekGeheugen.tidalArtiesten;
 
   /// De artiest die je via zijn foto opende ([_openTidalArtiest]), en de zoekuitslag om naar terug te gaan.
   TidalArtiest? _tidalArtiest;
@@ -23837,7 +23837,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   /// De nummers per plaat zoals tidaler ze gaf (null: nog bezig), en de platen waarbij je ook de andere bronnen
   /// (Soulseek, torrents) openklapte.
-  final Map<String, List<TidalTrack>?> _tidalAlbumNummers = {};
+  final Map<String, List<TidalTrack>?> _tidalAlbumNummers = ZoekGeheugen.tidalAlbumNummers;
   final Set<String> _tidalBronnenOpen = {};
   bool _tidalBusy = false, _tidalConnecting = false;
   int? _tidalExpanded = ZoekGeheugen.tidalNummerOpen,
@@ -23862,6 +23862,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   void initState() {
     super.initState();
     _c.text = ZoekGeheugen.vraag;
+    // Wat je typt meteen onthouden, zoals de bediening in [build]: bij een draai komt het nieuwe scherm vóór het oude
+    // zijn [dispose] doet.
+    _c.addListener(() => ZoekGeheugen.vraag = _c.text);
   }
 
   Future<void> _search() async {
@@ -23988,7 +23991,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
 
   /// De nummers van plaat [id] ophalen bij tidaler, één keer per plaat.
   Future<void> _laadTidalAlbum(String id) async {
-    if (_tidalAlbumNummers.containsKey(id)) return;
+    // Bezig (null) of binnen: niet opnieuw. Leeg ("TIDAL gaf geen nummers"): wel, bij het volgende openklappen — de kaart
+    // leeft nu de hele sessie ([ZoekGeheugen.tidalAlbumNummers]), en een haperend net hoort daar niet in te blijven.
+    if (_tidalAlbumNummers.containsKey(id) && _tidalAlbumNummers[id]?.isEmpty != true) return;
     setState(() => _tidalAlbumNummers[id] = null);
     List<TidalTrack>? n;
     try {
@@ -23996,7 +24001,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           ? (await _tidalOpPc(context.read<LibraryStore>(), 'album', {'id': id})).tracks
           : await nummersVanTidalAlbum(id);
     } catch (_) {/* dan "TIDAL gaf geen nummers" */}
-    if (mounted) setState(() => _tidalAlbumNummers[id] = n ?? const []);
+    // Ook als dit scherm intussen weg is (de gsm gedraaid): het nieuwe leest dezelfde kaart, en anders bleef het molentje.
+    _tidalAlbumNummers[id] = n ?? const [];
+    if (mounted) setState(() {});
   }
 
   Future<void> _connectTidal() async {
@@ -24434,9 +24441,16 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   @override
   Widget build(BuildContext context) {
     final soulseekReady = context.read<SoulseekService>().available;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
+    // De bediening meteen in [ZoekGeheugen], niet pas in [dispose]. Draai je de gsm, dan wisselt de indeling en bouwt
+    // Flutter dit scherm opnieuw op vóór het oude weg is: het nieuwe las een oude stand, en TIDAL sprong terug naar
+    // Bladeren (Saber, 23-10-2026).
+    ZoekGeheugen.tab = _mode;
+    ZoekGeheugen.filter = _filter;
+    ZoekGeheugen.nummerOpen = _trackExpanded;
+    ZoekGeheugen.tidalNummerOpen = _tidalExpanded;
+    ZoekGeheugen.tidalAlbumOpen = _tidalAlbumExpanded;
+    ZoekGeheugen.tidalArtiesten = _tidalArtiesten;
+    final kop = <Widget>[
         if (!schilKop(context))
           Padding(
             padding: EdgeInsets.fromLTRB(24, 22, 24, 8),
@@ -24612,12 +24626,23 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ),
         if (_status != null)
           Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: TextStyle(color: _muted))),
-        Expanded(
-            child: _mode == 0
-                ? _browseResults()
-                : (_mode == 1 ? _directResults(soulseekReady) : _tidalResults())),
-      ],
-    );
+    ];
+    final resultaten =
+        _mode == 0 ? _browseResults() : (_mode == 1 ? _directResults(soulseekReady) : _tidalResults());
+    return LayoutBuilder(builder: (context, ruimte) {
+      // Weinig hoogte — een gsm liggend: de balk en de speler nemen de helft, en kop, tabbladen, zoekveld en downloads
+      // de rest. Dan bleef er voor de resultaten niets over en kon je niet scrollen (Saber, 23-10-2026). Dan schuift de
+      // kop mee weg met de resultaten.
+      if (ruimte.maxHeight < 520) {
+        return NestedScrollView(
+          headerSliverBuilder: (_, __) => [
+            SliverToBoxAdapter(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: kop)),
+          ],
+          body: resultaten,
+        );
+      }
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [...kop, Expanded(child: resultaten)]);
+    });
   }
 
   Widget _tidalResults() {
@@ -24803,14 +24828,20 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                               if (a.jaar.isNotEmpty) a.jaar,
                               if (a.aantal > 0) '${a.aantal} ${a.aantal == 1 ? 'nummer' : 'nummers'}',
                             ].join(' · '),
-                            maxLines: 1,
+                            maxLines: isCompact(context) ? 2 : 1,
                             overflow: TextOverflow.ellipsis,
                             style: kTekstKlein),
+                      // Op een gsm het label en Ophalen eronder, zodat de titel de breedte krijgt (Saber, 23-10-2026).
+                      if (isCompact(context))
+                        _tidalNummerRegel(
+                            a.kwaliteit, 0, kanOphalen ? _ophaalKnop(tidalDoelVanId('album', a.id), a.label) : null),
                     ],
                   ),
                 ),
-                _tidalKwaliteitsLabel(a.kwaliteit),
-                if (kanOphalen) _ophaalKnop(tidalDoelVanId('album', a.id), a.label),
+                if (!isCompact(context)) ...[
+                  _tidalKwaliteitsLabel(a.kwaliteit),
+                  if (kanOphalen) _ophaalKnop(tidalDoelVanId('album', a.id), a.label),
+                ],
                 Icon(
                     open
                         ? Icons.expand_less_rounded
@@ -24831,11 +24862,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
   /// Wat TIDAL zegt te hebben, vóór je op Ophalen drukt: "24 bit" (HIRES_LOSSLESS) of "16 bit" (alleen LOSSLESS).
   /// Niets als het niet bekend is (de officiële API). Saber, 22-10-2026, na Ellie Goulding — Close To Me in 16 bit:
   /// *"maar ik kan da nie zien e zo"*.
-  Widget _tidalKwaliteitsLabel(TidalKwaliteit k) {
+  ///
+  /// [vooraan]: vooraan op een eigen regel ([_tidalNummerRegel]), zonder de ruimte links die het naast een titel nodig
+  /// heeft.
+  Widget _tidalKwaliteitsLabel(TidalKwaliteit k, {bool vooraan = false}) {
     if (k == TidalKwaliteit.onbekend) return const SizedBox.shrink();
     final hoog = k == TidalKwaliteit.hires;
     return Container(
-      margin: const EdgeInsets.only(left: 8, right: 4),
+      margin: EdgeInsets.only(left: vooraan ? 0 : 8, right: vooraan ? 8 : 4),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(5),
@@ -24845,6 +24879,15 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: hoog ? _accent2 : _muted)),
     );
   }
+
+  /// Op een gsm de regel onder een titel: het kwaliteitslabel, de duur en (als [knop] er is) Ophalen — zodat de titel
+  /// de hele breedte krijgt. Zie [_tidalAlbumInhoud], [_tidalAlbumRow] en [_tidalTrackRow].
+  Widget _tidalNummerRegel(TidalKwaliteit k, int seconden, Widget? knop) => Row(children: [
+        _tidalKwaliteitsLabel(k, vooraan: true),
+        if (seconden > 0) Text(_fmt(Duration(seconds: seconden)), style: kTekstKlein),
+        const Spacer(),
+        if (knop != null) knop,
+      ]);
 
   /// De nummers van een opengeklapte plaat, elk met Ophalen; daaronder op verzoek Soulseek en torrents.
   Widget _tidalAlbumInhoud(TidalAlbum a, bool kanOphalen) {
@@ -24870,19 +24913,39 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
             for (final t in nummers)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 1),
-                child: Row(children: [
-                  SizedBox(
-                    width: 28,
-                    child: Text(t.nummer > 0 ? '${t.nummer}' : '', style: kTekstKlein, textAlign: TextAlign.right),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: kTekstNormaal),
-                  ),
-                  _tidalKwaliteitsLabel(t.kwaliteit),
-                  if (t.seconden > 0) Text(_fmt(Duration(seconds: t.seconden)), style: kTekstKlein),
-                  if (kanOphalen) _ophaalKnop(tidalDoelVanId('track', t.id), t.label),
-                ]),
+                // Op een gsm de titel over de hele breedte, en het label, de duur en Ophalen eronder: in één rij bleef
+                // er "Natural Born Ki…" over, vier keer, en het verschil staat juist achteraan (Saber, 23-10-2026).
+                child: isCompact(context)
+                    ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        SizedBox(
+                          width: 28,
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(t.nummer > 0 ? '${t.nummer}' : '', style: kTekstKlein, textAlign: TextAlign.right),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(t.title, maxLines: titelRegels(context), overflow: TextOverflow.ellipsis, style: kTekstNormaal),
+                            _tidalNummerRegel(t.kwaliteit, t.seconden,
+                                kanOphalen ? _ophaalKnop(tidalDoelVanId('track', t.id), t.label) : null),
+                          ]),
+                        ),
+                      ])
+                    : Row(children: [
+                        SizedBox(
+                          width: 28,
+                          child: Text(t.nummer > 0 ? '${t.nummer}' : '', style: kTekstKlein, textAlign: TextAlign.right),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(t.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: kTekstNormaal),
+                        ),
+                        _tidalKwaliteitsLabel(t.kwaliteit),
+                        if (t.seconden > 0) Text(_fmt(Duration(seconds: t.seconden)), style: kTekstKlein),
+                        if (kanOphalen) _ophaalKnop(tidalDoelVanId('track', t.id), t.label),
+                      ]),
               ),
           TextButton.icon(
             onPressed: () => setState(() => bronnen ? _tidalBronnenOpen.remove(a.id) : _tidalBronnenOpen.add(a.id)),
@@ -24935,15 +24998,20 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                           style: kTekstNormaal),
                       if (t.artist.isNotEmpty)
                         _artistLine(splitFeatured(t.artist, t.title), kTekstKlein),
+                      if (isCompact(context))
+                        _tidalNummerRegel(t.kwaliteit, t.seconden,
+                            kanOphalen ? _ophaalKnop(tidalDoelVanId('track', t.id), t.label) : null),
                     ],
                   ),
                 ),
-                _tidalKwaliteitsLabel(t.kwaliteit),
-                if (t.seconden > 0) ...[
-                  Text(_fmt(Duration(seconds: t.seconden)), style: kTekstKlein),
-                  const SizedBox(width: 4),
+                if (!isCompact(context)) ...[
+                  _tidalKwaliteitsLabel(t.kwaliteit),
+                  if (t.seconden > 0) ...[
+                    Text(_fmt(Duration(seconds: t.seconden)), style: kTekstKlein),
+                    const SizedBox(width: 4),
+                  ],
+                  if (kanOphalen) _ophaalKnop(tidalDoelVanId('track', t.id), t.label),
                 ],
-                if (kanOphalen) _ophaalKnop(tidalDoelVanId('track', t.id), t.label),
                 Icon(open ? Icons.expand_less_rounded : Icons.travel_explore_rounded, size: 18, color: open ? _accent : _muted),
               ],
             ),
