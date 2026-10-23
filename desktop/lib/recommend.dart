@@ -243,6 +243,10 @@ final RegExp _heruitgave = RegExp(
     r'\b(remaster(ed)?|anniversary|deluxe|expanded|reissue|re-issue)\b',
     caseSensitive: false);
 
+/// Een live-opname, in de titel of op het album: een andere opname dan die uit de studio — zie
+/// [RecommendService.isrcJaar].
+final RegExp _liveOpname = RegExp(r'\b(live|broadcasts?|unplugged|in concert)\b', caseSensitive: false);
+
 class RecommendService {
   /// [haal] en [adem] zijn er voor de toetsen; de app gebruikt de rijbaan en vijf seconden.
   RecommendService({Future<Map<String, dynamic>?> Function(String url)? haal, this.adem = kDeezerAdem})
@@ -446,11 +450,19 @@ class RecommendService {
     final zoek = await _get('$_base/search?q=${Uri.encodeComponent('$artiest $titel')}&limit=15');
     if (zoek == null) throw StateError('Deezer gaf geen antwoord');
     final t = basisTitel(titel);
+    final zelfLive = _liveOpname.hasMatch(titel);
     int? min;
     for (final r in (zoek['data'] as List? ?? const [])) {
       if (r is! Map) continue;
       final naam = ((r['artist'] as Map?)?['name'] ?? '') as String;
-      if (!zelfdeArtiest(naam, artiest) || basisTitel((r['title'] ?? '') as String) != t) continue;
+      final rauw = '${r['title'] ?? ''}';
+      if (!zelfdeArtiest(naam, artiest) || basisTitel(rauw) != t) continue;
+      // Een live-opname is een andere opname, met een eigen code. Gemeten op 23-10-2026: "Luka (Live 1986 Broadcast
+      // Remastered)" van een uitzendinglabel draagt GBSMU6079295, en zo werd een radio vanaf Luka (1987) een radio
+      // "uit 1960" — basisTitel had "(Live …)" weggehaald.
+      if (!zelfLive && (_liveOpname.hasMatch(rauw) || _liveOpname.hasMatch('${(r['album'] as Map?)?['title'] ?? ''}'))) {
+        continue;
+      }
       final j = isrc.isrcJaar(r['isrc'] as String?);
       if (j != null && (min == null || j < min)) min = j;
     }

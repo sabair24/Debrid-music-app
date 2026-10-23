@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'cachesleutel.dart';
 import 'json_body.dart';
 import 'deezerbaan.dart';
+import 'isrc.dart' show isrcJaar;
 import 'discogs.dart';
 import 'models.dart';
 import 'musicbrainz.dart';
@@ -547,24 +548,220 @@ String? deezerSingleUit(List<dynamic> data, String artiest, String titel, {int? 
   return null;
 }
 
-/// De oorspronkelijke uitgave: eerst [origineleUitgaveUit] met een vraag aan MusicBrainz, en kent die alleen
-/// verzamelaars, dan [deezerSingleUit]. Null bij geen antwoord — dan blijft het nummer zonder album, zoals voorheen.
-/// Het jaar van een Deezer-single komt daarna uit [deezerPlekOpAlbum].
+/// [album] zonder wat er over de editie achter staat: "Private Dancer (30th Anniversary Edition)" is "Private Dancer",
+/// "Rumours (2004 Remaster)" is "Rumours", "Woodface - Remastered" is "Woodface". Zie [studioalbumUitGroepen].
+String zonderEditie(String album) => album.replaceAll(_editieDeel, '').replaceAll(_editieStaart, '').trim();
+// Nooit een deel waarin "live" (of een andere uitvoering) staat: "Luka (Live 1986 Broadcast Remastered)" is niet Luka.
+final _editieDeel = RegExp(
+    r'\s*[\(\[](?![^\)\]]*\b(live|broadcast|unplugged|demo|remix|mix|acoustic|instrumental|karaoke)\b)'
+    r'[^\)\]]*\b(deluxe|remaster(ed)?|expanded|anniversary|edition|reissue|bonus|special|collector|legacy|super)\b'
+    r'[^\)\]]*[\)\]]',
+    caseSensitive: false);
+final _editieStaart = RegExp(
+    r'\s+-\s+(?![^-]*\b(live|broadcast|unplugged|demo|remix|mix|acoustic|instrumental|karaoke)\b)'
+    r'[^-]*\b(remaster(ed)?|deluxe|edition|anniversary|expanded|single|ep)\b[^-]*$',
+    caseSensitive: false);
+
+/// [o], of null als hij van na [nietNa] is — zie [oorsprongJaar]. Zonder jaar telt hij.
+({String album, int? jaar})? nietTeLaat(({String album, int? jaar}) o, int? nietNa) =>
+    nietNa != null && (o.jaar ?? 0) > nietNa ? null : o;
+
+/// Een live-opname, in de titel of op het album (zoals `_liveOpname` in recommend.dart).
+final _live = RegExp(r'\b(live|broadcasts?|unplugged|in concert)\b', caseSensitive: false);
+
+/// Wanneer dit nummer er al was: het vroegste jaar van de opnames die het zijn (MusicBrainz: hun eerste datum) en van de
+/// ISRC-codes van de Deezer-nummers die het zijn, nooit live. Geen van beide is het origineel zelf — de zoekvraag geeft
+/// heruitgaven, een ISRC is soms die van het digitaliseren — maar het nummer bestond toen in elk geval al. Voor
+/// [studioalbumUitGroepen] (`nietNa`). Null: onbekend.
+int? oorsprongJaar(List<MbRecording> opnames, List<dynamic> deezer, {required String artiest, required String titel}) {
+  final wil = _titelvormen(titel);
+  int? min;
+  void zie(int? j) {
+    if (j != null && j > 1900 && (min == null || j < min!)) min = j;
+  }
+
+  for (final o in opnames) {
+    // Live: MusicBrainz noemt een live-opname gewoon "Don't Get Me Wrong" en zet "live" bij de plaat.
+    final live = o.releases.isNotEmpty && o.releases.every((r) => r.secondaryTypes.contains('Live'));
+    if (!_zelfdeArtiestAls(o.artist, artiest) || live || !_ditNummer(o.title, wil, 0, null)) continue;
+    final d = o.firstReleaseDate;
+    if (d.length >= 4) zie(int.tryParse(d.substring(0, 4)));
+  }
+  for (final d in deezer) {
+    if (d is! Map) continue;
+    final art = d['artist'];
+    if (!_zelfdeArtiestAls('${art is Map ? art['name'] ?? '' : ''}', artiest)) continue;
+    final t = '${d['title'] ?? ''}', alb = d['album'];
+    if (_live.hasMatch(t) || _live.hasMatch(alb is Map ? '${alb['title'] ?? ''}' : '')) continue;
+    if (!_ditNummer(t, wil, 0, null)) continue;
+    zie(isrcJaar(d['isrc'] as String?));
+  }
+  return min;
+}
+
+/// Een album waarop dit nummer staat, als kandidaat voor [studioalbumUitGroepen]: zijn [titel], en het id van zijn
+/// plaat ([groep], van MusicBrainz) als dat bekend is — Deezer kent alleen de titel.
+typedef Albumkandidaat = ({String titel, String groep});
+
+/// Het oudste studioalbum van de artiest waar dit nummer op staat. [kandidaten]: de albums waarop MusicBrainz en Deezer
+/// het nummer kennen; [groepen]: de studioalbums van de artiest ([MusicBrainzService.studioalbumsVan]), met de datum
+/// van hun eerste uitgave. Alleen een studioalbum telt (soort Album, zonder bijsoort: geen verzamelaar, live-plaat of
+/// soundtrack). Null: geen kandidaat is zo'n album — dan [origineleUitgaveUit], zoals voorheen.
+///
+/// - Een kandidaat met het id van zijn plaat telt op dat id. Zonder id (Deezer) op de titel, zonder editie
+///   ([zonderEditie]), maar niet als twee studioalbums zo heten: Duran Duran heeft er twee met die naam (1981 en 1993),
+///   en Ordinary World staat op die van 1993.
+/// - Een editie telt als de plaat zelf, ook een deluxe: de deluxe van Break Every Rule draagt What's Love Got to Do with
+///   It, maar Private Dancer is ouder en wint. Een regel "deluxe pas als tweede keus" duwde Nothing Compares 2 U van I
+///   Do Not Want What I Haven't Got (Deluxe Version, 1990) naar How About I Be Me (2012) (23-10-2026).
+///
+/// **Waarom (radio vanaf Luka, 23-10-2026).** Van 48 opgehaalde nummers kregen er 28 geen album en 3 een verkeerd:
+/// de zoekvraag op opnames geeft bij MusicBrainz vooral heruitgaven. Linger kwam op Bury the Hatchet (1999), What's
+/// Love Got to Do with It op Break Every Rule (Deluxe Edition), Luka op de heropname van 2010; Weather With You, One Of
+/// Us en Solsbury Hill op niets. Het jaar van de plaat zelf staat alleen bij de releasegroep.
+///
+/// [nietNa]: een plaat van ná dat jaar telt niet. Het nummer bestond toen al lang ([oorsprongJaar]), en dan is die plaat
+/// een latere uitgave met het als bonus: Don't Get Me Wrong (1986) stond bij Deezer alleen nog op Alone (Special
+/// Edition, 2016) en op verzamelaars, niet op Get Close (23-10-2026).
+({String album, int? jaar})? studioalbumUitGroepen(Iterable<Albumkandidaat> kandidaten, List<MbReleaseGroup> groepen,
+    {int? nietNa}) {
+  String kaal(String s) => normKey(s).replaceAll(RegExp(r'[^a-z0-9]'), '');
+  final opId = <String, ({String titel, String datum})>{};
+  final opTitel = <String, List<({String titel, String datum})>>{};
+  for (final g in groepen) {
+    final d = g.firstDate ?? '';
+    final k = kaal(g.title);
+    if (g.primaryType != 'Album' || g.secondaryTypes.isNotEmpty || d.length < 4 || k.isEmpty) continue;
+    if (nietNa != null && (int.tryParse(d.substring(0, 4)) ?? 0) > nietNa) continue;
+    final plaat = (titel: g.title, datum: d);
+    if (g.mbid.isNotEmpty) opId[g.mbid] = plaat;
+    (opTitel[k] ??= []).add(plaat);
+  }
+  ({String titel, String datum})? vind(Albumkandidaat c) {
+    if (c.groep.isNotEmpty) return opId[c.groep];
+    final lijst = opTitel[kaal(zonderEditie(c.titel))] ?? opTitel[kaal(c.titel)];
+    return lijst != null && lijst.length == 1 ? lijst.single : null;
+  }
+
+  // Het vroegste jaar; in hetzelfde jaar de plaat die MusicBrainz én Deezer noemen, dan de preciezere datum. Bij
+  // Carnival won "Garden Lillies" (alleen "1995", alleen MusicBrainz) zo niet meer van Tigerlily (16-06-1995).
+  ({String titel, String datum})? oudste(Iterable<Albumkandidaat> cs) {
+    final bronnen = <({String titel, String datum}), Set<bool>>{};
+    for (final c in cs) {
+      final g = vind(c);
+      if (g != null) (bronnen[g] ??= {}).add(c.groep.isNotEmpty);
+    }
+    int vergelijk(({String titel, String datum}) a, ({String titel, String datum}) b) {
+      final j = a.datum.substring(0, 4).compareTo(b.datum.substring(0, 4));
+      if (j != 0) return j;
+      final n = bronnen[b]!.length.compareTo(bronnen[a]!.length);
+      if (n != 0) return n;
+      final p = b.datum.length.compareTo(a.datum.length);
+      return p != 0 ? p : a.datum.compareTo(b.datum);
+    }
+
+    return bronnen.keys.isEmpty ? null : bronnen.keys.reduce((a, b) => vergelijk(a, b) <= 0 ? a : b);
+  }
+
+  final b = oudste(kandidaten);
+  return b == null ? null : (album: b.titel, jaar: int.tryParse(b.datum.substring(0, 4)));
+}
+
+/// De vormen waarin een titel hetzelfde nummer noemt: zoals hij is, zonder gast, en zonder editie ([zonderEditie]). Bij
+/// Deezer heet het origineel van Nothing Compares 2 U "Nothing Compares 2 U (2009 Remaster)", en de radio zocht zelf
+/// "Blue Hotel (Remastered)" (23-10-2026). Een live-versie blijft een andere titel.
+Set<String> _titelvormen(String titel) {
+  final kaal = zonderEditie(titel);
+  return {normKey(titel), normKey(zonderGastTitel(titel)), normKey(kaal), normKey(zonderGastTitel(kaal))}
+    ..remove('');
+}
+
+/// Is [titel] (van een opname of een Deezer-nummer) dit nummer ([wil]: de [_titelvormen] van het gezochte), en past de
+/// lengte ([duur] tegen [seconden], hoogstens [speling] s verschil; null: de lengte telt niet)?
+bool _ditNummer(String titel, Set<String> wil, int duur, int? seconden, {int? speling}) =>
+    _titelvormen(titel).any(wil.contains) &&
+    !(speling != null && seconden != null && seconden > 0 && duur > 0 && (duur - seconden).abs() > speling);
+
+/// De albums (officieel, soort Album) waarop [opnames] dit nummer van [artiest] dragen — kandidaten voor
+/// [studioalbumUitGroepen].
+List<Albumkandidaat> albumsMetNummerUitOpnames(List<MbRecording> opnames,
+    {required String artiest, required String titel, int? seconden}) {
+  final wil = _titelvormen(titel);
+  return [
+    for (final o in opnames)
+      // ±8 s, zoals [origineleUitgaveUit]: de lengte van een opname is exact, en een heropname is een andere opname —
+      // Solsbury Hill op New Blood (2011) duurt 12 s langer dan het origineel van 1977.
+      if (_zelfdeArtiestAls(o.artist, artiest) && _ditNummer(o.title, wil, o.seconds, seconden, speling: 8))
+        for (final r in o.releases)
+          if (r.primaryType == 'Album' && (r.status.isEmpty || r.status == 'Official')) (titel: r.title, groep: r.groep),
+  ];
+}
+
+/// De albums waarop Deezer dit nummer van [artiest] kent, uit een zoekuitslag op nummers ([data]) — kandidaten voor
+/// [studioalbumUitGroepen]. Deezer kent Linger op "Everybody Else Is Doing It, So Why Can't We?", waar MusicBrainz'
+/// zoekvraag alleen latere opnames gaf.
+///
+/// Zonder lengte: de titel moet al precies kloppen, en de radio kent vaak de lengte van een andere versie. If It Makes
+/// You Happy staat met 5:24 op Sheryl Crow, de radio had de radio-edit van 4:24; One Of Us staat met 321 s op Relish,
+/// de radio verwachtte 300 (23-10-2026).
+List<Albumkandidaat> deezerAlbumsMetNummer(List<dynamic> data, String artiest, String titel, {int? seconden}) {
+  final wil = _titelvormen(titel);
+  final uit = <Albumkandidaat>[];
+  for (final d in data) {
+    if (d is! Map) continue;
+    final art = d['artist'];
+    if (!_zelfdeArtiestAls('${art is Map ? art['name'] ?? '' : ''}', artiest)) continue;
+    if (!_ditNummer('${d['title'] ?? ''}', wil, (d['duration'] as num?)?.toInt() ?? 0, seconden)) continue;
+    final alb = d['album'];
+    final a = alb is Map ? '${alb['title'] ?? ''}' : '';
+    if (a.isNotEmpty) uit.add((titel: a, groep: ''));
+  }
+  return uit;
+}
+
+/// De oorspronkelijke uitgave. Eerst het oudste studioalbum van de artiest waarop MusicBrainz of Deezer het nummer
+/// kent ([studioalbumUitGroepen]); kent die geen, dan [origineleUitgaveUit] met de opnames van MusicBrainz, en kent die
+/// alleen verzamelaars, dan [deezerSingleUit]. Null bij geen antwoord — dan blijft het nummer zonder album, zoals
+/// voorheen. Het jaar van een Deezer-single komt daarna uit [deezerPlekOpAlbum].
 Future<({String album, int? jaar})?> origineleUitgaveVan(String artiest, String titel, {int? seconden}) async {
+  // Zoeken zonder editie: MusicBrainz kent "Blue Hotel", niet "Blue Hotel (Remastered)" (23-10-2026).
+  final zoek = zonderEditie(titel).isEmpty ? titel : zonderEditie(titel);
   // Eerst alleen op albums (de studio-opname staat anders achter tientallen live-opnames), dan gewoon.
   final mbs = MusicBrainzService();
-  final albums = await mbs.searchRecordings(titel, artist: artiest, max: 15, alleenAlbums: true);
-  final gewoon = await mbs.searchRecordings(titel, artist: artiest, max: 15);
+  final albums = await mbs.searchRecordings(zoek, artist: artiest, max: 15, alleenAlbums: true);
+  final gewoon = await mbs.searchRecordings(zoek, artist: artiest, max: 15);
   final gezien = <String>{};
   final opnames = [
     for (final r in [...albums, ...gewoon])
       if (gezien.add(r.mbid)) r,
   ];
-  final mb = origineleUitgaveUit(opnames, artiest: artiest, titel: titel, seconden: seconden);
-  if (mb != null) return mb;
   final j = await DeezerBaan.haal(
-      'https://api.deezer.com/search?q=${Uri.encodeComponent('$artiest $titel')}&limit=25');
-  final single = deezerSingleUit((j?['data'] as List?) ?? const [], artiest, titel, seconden: seconden);
+      'https://api.deezer.com/search?q=${Uri.encodeComponent('$artiest $zoek')}&limit=25');
+  final data = (j?['data'] as List?) ?? const [];
+  // Een plaat die meer dan vier jaar na het ontstaan van het nummer uitkwam, draagt het als bonus of als B-kant — een
+  // single kan een jaar of twee vóór zijn album uitkomen, een heruitgave van een latere plaat dertig. Geldt voor elke
+  // weg hieronder: Don't Get Me Wrong (1986) kwam via [origineleUitgaveUit] op The Losing, een single uit 2003
+  // (23-10-2026). Liever geen album dan een fout.
+  final al = oorsprongJaar(opnames, data, artiest: artiest, titel: titel);
+  final nietNa = al == null ? null : al + 4;
+  // Een remix hoort op zijn remixplaat, niet op een studioalbum — dat regelt [origineleUitgaveUit].
+  if (!RegExp(r'\b(re)?mix\b', caseSensitive: false).hasMatch(titel)) {
+    // Het id van de artiest staat al in zijn opnames: niet opnieuw raden (naamgenoten — "Oasis" is ook een trance-act).
+    final id = [
+      for (final o in opnames)
+        if (o.artistMbid.isNotEmpty && _zelfdeArtiestAls(o.artist, artiest)) o.artistMbid,
+    ].firstOrNull;
+    if (id != null) {
+      final studio = studioalbumUitGroepen([
+        ...albumsMetNummerUitOpnames(opnames, artiest: artiest, titel: titel, seconden: seconden),
+        ...deezerAlbumsMetNummer(data, artiest, titel, seconden: seconden),
+      ], await mbs.studioalbumsVan(id), nietNa: nietNa);
+      if (studio != null) return studio;
+    }
+  }
+  final mb = origineleUitgaveUit(opnames, artiest: artiest, titel: zoek, seconden: seconden);
+  if (mb != null) return nietTeLaat(mb, nietNa);
+  final single = deezerSingleUit(data, artiest, zoek, seconden: seconden);
   return single == null ? null : (album: single, jaar: null);
 }
 

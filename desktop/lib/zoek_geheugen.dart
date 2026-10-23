@@ -76,6 +76,11 @@ class ZoekGeheugen {
   static int? tidalNummerOpen;
   static int? tidalAlbumOpen;
 
+  /// De artiesten met foto (via tidaler), en de nummers per opengeklapte plaat (null: nog bezig). Hier en niet in het
+  /// scherm: draai je de gsm, dan wisselt de indeling en begint het scherm opnieuw (Saber, 23-10-2026).
+  static List<TidalArtiest> tidalArtiesten = const [];
+  static final Map<String, List<TidalTrack>?> tidalAlbumNummers = {};
+
   /// Het volgnummer van de zoekopdracht.
   ///
   /// **Statisch, en dat is een reparatie op zichzelf.** Dit stond als veld in de staat van het
@@ -111,6 +116,8 @@ class ZoekGeheugen {
     tidalAlbums = const [];
     tidalNummerOpen = null;
     tidalAlbumOpen = null;
+    tidalArtiesten = const [];
+    tidalAlbumNummers.clear();
     gen = 0;
   }
 }

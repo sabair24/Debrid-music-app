@@ -27,6 +27,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'uitvoerbaar.dart';
 
 import 'enrichment.dart' show zonderGastTitel;
@@ -133,6 +135,15 @@ class Tidaler {
   }
 
   static bool get beschikbaar => pad != null;
+
+  /// Voor de toetsen: doen alsof tidaler (en zijn Python) hier staat, of niet — zonder op de schijf te zoeken.
+  @visibleForTesting
+  static void zetVoorToets({String? pad, String? python}) {
+    _gekeken = true;
+    _gevonden = pad;
+    _pythonGekeken = true;
+    _python = python;
+  }
 
   /// Draaien we in een toets? Dan nooit echt naar TIDAL — op Sabers pc staat tidaler echt, en een toets die een
   /// Soulseek-storing nabootst zou anders bij TIDAL gaan halen (`flutter test` zet `FLUTTER_TEST`).

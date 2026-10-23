@@ -434,8 +434,17 @@ class MbRecordingRelease {
   /// Van wie deze persing is ("Various Artists" bij een verzamelaar), of leeg.
   final String artiest;
 
+  /// Het id van de plaat (de releasegroep) waar deze persing bij hoort, of leeg. Twee albums kunnen dezelfde naam
+  /// hebben — Duran Duran (1981) en Duran Duran (1993) — en dan zegt alleen dit welke het is.
+  final String groep;
+
   const MbRecordingRelease(this.mbid, this.title,
-      {this.primaryType = '', this.secondaryTypes = const [], this.date = '', this.status = '', this.artiest = ''});
+      {this.primaryType = '',
+      this.secondaryTypes = const [],
+      this.date = '',
+      this.status = '',
+      this.artiest = '',
+      this.groep = ''});
 
   /// The artist's own record, as opposed to something their song was licensed onto.
   ///
@@ -468,7 +477,7 @@ class MbRecording {
   final String firstReleaseDate;
 
   /// Het MusicBrainz-id van de eerste genoemde artiest ([artist]), of leeg. Zo hoeft "Staat ook op…" de artiest niet
-  /// opnieuw te raden voor zijn albums (`albumsVan`).
+  /// opnieuw te raden voor zijn albums (`studioalbumsVan`).
   final String artistMbid;
 
   const MbRecording(this.mbid, this.title, this.artist,
@@ -503,6 +512,7 @@ class MbRecording {
           for (final a in (r['artist-credit'] as List? ?? const []))
             if (a is Map) '${a['name'] ?? ''}${a['joinphrase'] ?? ''}',
         ].join(),
+        groep: group is Map ? (group['id'] ?? '').toString() : '',
       ));
     }
     // The artist's own records first, then everything else, and a compilation last of all. Order
@@ -1089,14 +1099,25 @@ class MusicBrainzService {
     return out;
   }
 
-  /// De albums van een artiest (releasegroepen van soort Album), hoogstens [dak], elk met de datum van zijn eerste
-  /// uitgave: één vraag per honderd, bewaard zoals elke vraag. Voor het jaar en de volgorde in "Staat ook op…"
+  /// De studioalbums van een artiest (releasegroepen van soort Album, zonder verzamelaar, live-plaat, soundtrack,
+  /// remix, mix of demo), elk met de datum van zijn eerste uitgave: één zoekvraag, bewaard zoals elke vraag. Voor het
+  /// oorspronkelijke album van een nummer (`studioalbumUitGroepen` in enrichment.dart) en het jaar in "Staat ook op…"
   /// (`platenVanOpnames` in metadata.dart): de zoekvraag op opnames geeft vooral heruitgaven terug.
-  Future<List<MbReleaseGroup>> albumsVan(String artistMbid, {int dak = 100}) async {
-    if (artistMbid.trim().isEmpty) return const [];
-    final out = <MbReleaseGroup>[];
-    await _bladerGroepen(artistMbid, '&type=album', max: 100, dak: dak, out: out, gezien: <String>{});
-    return out;
+  ///
+  /// Een zoekvraag en geen browse: de browse op soort Album telt ook alle verzamelaars, en bij Tina Turner viel
+  /// Private Dancer buiten de eerste honderd (23-10-2026). Zo zijn het er 13.
+  Future<List<MbReleaseGroup>> studioalbumsVan(String artistMbid) async {
+    final id = artistMbid.trim();
+    if (id.isEmpty) return const [];
+    final q = 'arid:$id AND primarytype:album AND NOT secondarytype:compilation AND NOT secondarytype:live '
+        'AND NOT secondarytype:soundtrack AND NOT secondarytype:remix AND NOT secondarytype:dj-mix '
+        'AND NOT secondarytype:demo';
+    final body = await _ws('$_root/release-group/?query=${Uri.encodeQueryComponent(q)}&fmt=json&limit=100');
+    final list = body?['release-groups'] as List<dynamic>? ?? const [];
+    return [
+      for (final g in list)
+        if (g is Map<String, dynamic>) MbReleaseGroup.from(g)
+    ];
   }
 
   /// Bladert de releasegroepen van een artiest door ([soort] = "" of "&type=album") tot [dak], in [out].
