@@ -447,7 +447,14 @@ Future<({int? jaar, int nummer, int schijf})?> deezerPlekOpAlbum(String artiest,
   final wil = normKey(titel), wilKaal = normKey(zonderGastTitel(titel));
   final remix = RegExp(r'\b(re)?mix\b', caseSensitive: false).hasMatch(titel);
   ({MbRecordingRelease rel, String datum})? beste;
-  int rang(MbRecordingRelease r) => r.primaryType == 'Album' ? 0 : 1;
+  // Een album van de artiest zelf (ook een eigen soundtrack, zoals Purple Rain), dan een album van iemand anders, dan
+  // pas een single of ep. Gemeten op 23-10-2026: Live And Let Die kwam zonder deze volgorde op de soundtrack van een
+  // film uit 2003, terwijl Red Rose Speedway en Band on the Run erbij stonden.
+  int rang(MbRecordingRelease r) {
+    if (r.primaryType != 'Album') return 2;
+    return r.artiest.isEmpty || _zelfdeArtiestLos(r.artiest, artiest) ? 0 : 1;
+  }
+
   for (final o in opnames) {
     if (!_zelfdeArtiestAls(o.artist, artiest)) continue;
     if (normKey(o.title) != wil && normKey(zonderGastTitel(o.title)) != wilKaal) continue;
@@ -455,13 +462,21 @@ Future<({int? jaar, int nummer, int schijf})?> deezerPlekOpAlbum(String artiest,
     for (final r in o.releases) {
       if (r.status.isNotEmpty && r.status != 'Official') continue;
       if (!const {'Album', 'Single', 'EP'}.contains(r.primaryType)) continue;
+      // Een verzamelaar die MusicBrainz niet zo noemt ("SWF 3 Club Collection Oldies", 23-10-2026).
+      if (r.artiest.toLowerCase().contains('various artists')) continue;
       // Een soundtrack mag (daar staat een nummer soms eerst op), een remixplaat alleen voor een remix.
       if (r.secondaryTypes.any((s) => s != 'Soundtrack' && !(s == 'Remix' && remix))) continue;
       final datum = r.date.isNotEmpty ? r.date : o.firstReleaseDate;
       final b = beste;
+      // Bij gelijke rang het origineel vóór een deluxe of remaster ([isEditie]), dan de vroegste.
+      int ed(MbRecordingRelease x) => isEditie(x.title) ? 1 : 0;
       final beter = b == null ||
           rang(r) < rang(b.rel) ||
-          (rang(r) == rang(b.rel) && datum.isNotEmpty && (b.datum.isEmpty || datum.compareTo(b.datum) < 0));
+          (rang(r) == rang(b.rel) && ed(r) < ed(b.rel)) ||
+          (rang(r) == rang(b.rel) &&
+              ed(r) == ed(b.rel) &&
+              datum.isNotEmpty &&
+              (b.datum.isEmpty || datum.compareTo(b.datum) < 0));
       if (beter) beste = (rel: r, datum: datum);
     }
   }
@@ -481,12 +496,31 @@ Future<({int? jaar, int nummer, int schijf})?> deezerPlekOpAlbum(String artiest,
   return (album: b.rel.title, jaar: jaar == null || jaar < 1900 ? null : jaar);
 }
 
+/// Dezelfde artiest, of de een een uitgebreidere naam van de ander: "Paul McCartney & Wings" bij Paul McCartney.
+bool _zelfdeArtiestLos(String a, String b) {
+  final ka = artistKey(a), kb = artistKey(b);
+  return ka.isNotEmpty && kb.isNotEmpty && (ka == kb || ka.startsWith('$kb ') || kb.startsWith('$ka '));
+}
+
 /// Zonder wat er over de uitvoering achter staat: "Loneliness (Radio Cut)" is "Loneliness".
 String _zonderUitvoering(String t) {
   var x = t.replaceAll(RegExp(r'\s*[\(\[][^\)\]]*[\)\]]'), '');
   final streep = x.indexOf(' - ');
   if (streep > 0) x = x.substring(0, streep);
   return x.trim();
+}
+
+/// Is [album] gewoon de single van [titel] — de plaat die naar het nummer heet ("Summer Of '69" bij Summer Of '69)?
+///
+/// **Waarom (radiotest van 23-10-2026).** Deezer noemt bij een radionummer vaak de single als album. Van de dertien
+/// nummers die de radio die ochtend haalde, kregen er zeven zo een single als album — en een single krijgt geen
+/// tracklijst en dus geen cd-afbeelding. Saber: *"ook vooral de cd afbeeldingen"*. Dan zoekt de radio toch het
+/// studioalbum op ([origineleUitgaveVan]); is er geen, dan blijft de single.
+bool albumIsDeSingle(String album, String titel) {
+  final a = normKey(album);
+  if (a.isEmpty) return false;
+  final t = normKey(_zonderUitvoering(titel));
+  return a == normKey(titel) || a == t || normKey(_zonderUitvoering(album)) == t;
 }
 
 /// De Deezer-single die naar [titel] heet en waarop precies dit nummer staat — de terugval van [origineleUitgaveVan]
@@ -517,7 +551,15 @@ String? deezerSingleUit(List<dynamic> data, String artiest, String titel, {int? 
 /// verzamelaars, dan [deezerSingleUit]. Null bij geen antwoord — dan blijft het nummer zonder album, zoals voorheen.
 /// Het jaar van een Deezer-single komt daarna uit [deezerPlekOpAlbum].
 Future<({String album, int? jaar})?> origineleUitgaveVan(String artiest, String titel, {int? seconden}) async {
-  final opnames = await MusicBrainzService().searchRecordings(titel, artist: artiest, max: 15);
+  // Eerst alleen op albums (de studio-opname staat anders achter tientallen live-opnames), dan gewoon.
+  final mbs = MusicBrainzService();
+  final albums = await mbs.searchRecordings(titel, artist: artiest, max: 15, alleenAlbums: true);
+  final gewoon = await mbs.searchRecordings(titel, artist: artiest, max: 15);
+  final gezien = <String>{};
+  final opnames = [
+    for (final r in [...albums, ...gewoon])
+      if (gezien.add(r.mbid)) r,
+  ];
   final mb = origineleUitgaveUit(opnames, artiest: artiest, titel: titel, seconden: seconden);
   if (mb != null) return mb;
   final j = await DeezerBaan.haal(

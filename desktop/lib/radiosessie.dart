@@ -69,19 +69,27 @@ class Gehaald {
 /// binnengehaald — en dan blijven ze voor altijd staan zonder dat iemand weet waar ze vandaan komen.
 /// Met deze notitie komt het overzicht van gisteren gewoon alsnog.
 class RadioSessie {
-  RadioSessie({required this.naam, required this.begonnenMs, List<Gehaald>? gehaald})
+  RadioSessie({required this.naam, required this.begonnenMs, List<Gehaald>? gehaald, this.opgeruimd = 0})
       : gehaald = gehaald ?? [];
 
   final String naam;
   final int begonnenMs;
   final List<Gehaald> gehaald;
 
+  /// Hoeveel deze radio onderweg al naar de prullenbak bracht (`teOpruimen`): die staan niet meer in [gehaald],
+  /// maar horen in de korte melding bij het afsluiten (Saber, 23-10-2026: "Ja, kort tonen wat er gebeurde").
+  int opgeruimd;
+
   bool get leeg => gehaald.isEmpty;
+
+  /// Valt er iets te melden bij het afsluiten: iets om over te beslissen, of iets wat onderweg al opgeruimd is.
+  bool get teMelden => !leeg || opgeruimd > 0;
 
   Map<String, dynamic> toJson() => {
         'naam': naam,
         'begonnenMs': begonnenMs,
         'gehaald': [for (final g in gehaald) g.toJson()],
+        if (opgeruimd > 0) 'opgeruimd': opgeruimd,
       };
 
   static RadioSessie? fromJson(Object? j) {
@@ -96,6 +104,7 @@ class RadioSessie {
       naam: j['naam'] is String ? j['naam'] as String : '',
       begonnenMs: j['begonnenMs'] is num ? (j['begonnenMs'] as num).toInt() : 0,
       gehaald: uit,
+      opgeruimd: j['opgeruimd'] is num ? (j['opgeruimd'] as num).toInt() : 0,
     );
   }
 }
@@ -157,4 +166,11 @@ String? bestandVanGehaald(
   }
   if (opAfstand) return g.pad;
   return bestaat(g.pad) ? g.pad : null;
+}
+
+/// De korte melding bij het afsluiten als er niets meer te beslissen valt (Saber, 23-10-2026: "Ja, kort tonen wat er
+/// gebeurde"): "De radio haalde 40 nummers; 3 gehouden, 37 opgeruimd."
+String radioSamenvatting({required int gehouden, required int opgeruimd}) {
+  final totaal = gehouden + opgeruimd;
+  return 'De radio haalde $totaal ${totaal == 1 ? 'nummer' : 'nummers'}; $gehouden gehouden, $opgeruimd opgeruimd.';
 }

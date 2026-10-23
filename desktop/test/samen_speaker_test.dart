@@ -703,7 +703,7 @@ void main() {
   test('bedrading in main.dart: de pc start een radio op een speaker; de oude melding is weg', () {
     final hoofd = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(hoofd, contains('s.bijSpeakerRadio = (speaker, op) async {'));
-    expect(hoofd, contains('zaad: zaad, titel: titel.isEmpty ? null : titel, hier: true, naar: speaker);'));
+    expect(hoofd, contains('            hier: true,\n            naar: speaker,'));
     expect(hoofd, contains('  ], naar: uitgang, naam: artist, zaadArtiest: artist,'));
     expect(hoofd, isNot(contains('Een radio op een speaker kan nog niet')));
   });

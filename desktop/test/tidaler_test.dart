@@ -212,7 +212,7 @@ void main() {
 
     test('het hulpje gebruikt tidalers eigen inlog en geeft de volle titel', () {
       expect(kTidalZoekHulp, contains('from tidaler.config import Settings, Tidal'));
-      expect(kTidalZoekHulp, contains('if not t.login_token():'));
+      expect(kTidalZoekHulp, contains('    ok = t.login_token()'), reason: 'tidalers eigen login');
       expect(kTidalZoekHulp, contains('return f"{naam} ({versie})"'));
       expect(kTidalZoekHulp, contains('if not versie or versie.lower() in naam.lower():'),
           reason: 'bij "Close To Me (Solo)" stond de versie al in de naam: "(Solo) (Solo)"');
@@ -311,5 +311,62 @@ void main() {
     expect(haal, contains('if (!iets) {'), reason: 'tidaler dl sluit ook na een mislukking af met 0');
     expect(s, contains('_beurt = klaar.future.then((_) {}, onError: (_) {});'));
     expect(File('lib/tiddl.dart').existsSync(), isFalse, reason: 'tiddl is weg (Saber, 22-10-2026)');
+  });
+
+  // 23-10-2026: tidaler gooide zijn login weg bij een netwerkfout, en de pc was uitgelogd. Saber: "moet altijd
+  // ingelogd zijn".
+  group('de login blijft', () {
+    test('waar tidaler hem zoekt: thuismap, .config, tidaler — zoals tidaler/helper/path.py', () {
+      expect(tidalerSleutelPad({'HOME': r'C:\Users\saber'}), r'C:\Users\saber\.config\tidaler\token.json');
+      expect(tidalerSleutelPad({'HOMEDRIVE': 'C:', 'HOMEPATH': r'\Users\saber'}),
+          r'C:\Users\saber\.config\tidaler\token.json');
+      expect(tidalerSleutelPad({'XDG_CONFIG_HOME': r'D:\cfg', 'HOME': r'C:\x'}), r'D:\cfg\tidaler\token.json',
+          reason: 'met XDG geen .config ertussen');
+      expect(tidalerSleutelPad({}), isNull);
+    });
+
+    test('DE KERN: weggegooid na een netwerkfout — de reserve komt terug; een lege login wordt geen reserve', () {
+      final map = Directory.systemTemp.createTempSync('dm_tidaler_sleutel_');
+      addTearDown(() => map.deleteSync(recursive: true));
+      final pad = '${map.path}${Platform.pathSeparator}token.json';
+      const a1 = '{"token_type":"Bearer","access_token":"a1","refresh_token":"r1","expiry_time":1}';
+      const b2 = '{"token_type":"Bearer","access_token":"b2","refresh_token":"r2","expiry_time":2}';
+      // Wat tidaler zelf neerzet als zijn login weg is: 108 bytes, alles leeg (gezien op 23-10-2026).
+      const leeg = '{"token_type": null, "access_token": null, "refresh_token": null, "expiry_time": 0}';
+      final echt = File(pad)..writeAsStringSync(a1);
+      bewaarTidalerSleutel(sleutelPad: pad);
+      expect(File('$pad.reserve').readAsStringSync(), a1);
+      // tidaler gooit hem weg ("Remove token file. Probably corrupt or invalid.").
+      echt.deleteSync();
+      expect(zetTidalerSleutelTerug(sleutelPad: pad), isTrue);
+      expect(File(pad).readAsStringSync(), a1);
+      expect(zetTidalerSleutelTerug(sleutelPad: pad), isFalse, reason: 'staat er al: niets te doen');
+      // En als tidaler er intussen zijn lege bestand neerzette: dat is geen login, de reserve komt terug.
+      echt.writeAsStringSync(leeg);
+      expect(heeftTidalerLogin(echt), isFalse);
+      expect(zetTidalerSleutelTerug(sleutelPad: pad), isTrue);
+      expect(File(pad).readAsStringSync(), a1);
+      // Een nieuwe login (opnieuw ingelogd) wordt de nieuwe reserve; een leeg bestand nooit.
+      echt.writeAsStringSync(b2);
+      bewaarTidalerSleutel(sleutelPad: pad);
+      expect(File('$pad.reserve').readAsStringSync(), b2);
+      echt.writeAsStringSync(leeg);
+      bewaarTidalerSleutel(sleutelPad: pad);
+      expect(File('$pad.reserve').readAsStringSync(), b2);
+    });
+
+    test('het hulpje gooit niets weg en zegt "even niet" of "niet ingelogd"; het scherm zegt het in gewone taal', () {
+      expect(kTidalZoekHulp, contains('os.remove = lambda *a, **k: None\ntry:\n    ok = t.login_token()\nfinally:\n    os.remove = _wis'),
+          reason: 'tijdens het aanmelden mag tidaler de login niet wissen');
+      expect(kTidalZoekHulp, contains('    if t.token_from_storage:\n        uit({"fout": "tijdelijk"})\n        sys.exit(3)'));
+      Tidaler.laatsteHulpFout = 'tijdelijk';
+      expect(tidalHulpFoutZin(), contains('probeer het zo opnieuw'));
+      Tidaler.laatsteHulpFout = 'niet ingelogd';
+      expect(tidalHulpFoutZin(), contains('tidaler login'));
+      Tidaler.laatsteHulpFout = null;
+      final t = File('lib/tidaler.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(t, contains('  zetTidalerSleutelTerug();\n  try {'), reason: 'voor het zoeken');
+      expect(t, contains('  bewaarTidalerSleutel();\n  return (fout: null, kwaliteit: binnen);'), reason: 'na een download');
+    });
   });
 }

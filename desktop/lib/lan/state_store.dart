@@ -159,6 +159,11 @@ class LanStateStore {
   /// `{v, n, a, t, z, f, at}`. Een weggehaald oordeel blijft als lege `v` staan, zodat een late op van
   /// een toestel dat offline was het niet terugzet (de laatste op `at` wint).
   final Map<String, Map<String, dynamic>> radioSfeer = {};
+
+  /// De brievenbus: overzichten "Radio afsluiten" voor een ander toestel (Saber, 23-10-2026: het overzicht komt waar
+  /// je afsluit, of waar je startte). Sleutel → `{voor, sessie, at}`, met [voor] een zone (`dev:<id>`) of `'gsm'`.
+  /// Afgehandeld blijft als `{klaar: true, at}` staan, zodat een late op het niet terugzet. Zie `radio.dart`.
+  final Map<String, Map<String, dynamic>> radioOverzichten = {};
   PlaybackProgress progress = PlaybackProgress();
 
   /// Wat elk toestel het laatst meldde, per toestel-id — de zones (Saber, 21-10-2026: "als ik op de pc
@@ -220,6 +225,13 @@ class LanStateStore {
         if ('${r['v'] ?? ''}'.isEmpty && ((r['at'] as num?) ?? 0) < oud) return;
         radioSfeer[k.toString()] = r;
       });
+      (m['radioOverzichten'] as Map?)?.forEach((k, v) {
+        if (v is! Map) return;
+        final r = v.cast<String, dynamic>();
+        // Afgehandeld en lang geleden: elk toestel heeft het intussen gezien.
+        if (r['klaar'] == true && ((r['at'] as num?) ?? 0) < oud) return;
+        radioOverzichten[k.toString()] = r;
+      });
       if (m['progress'] != null) {
         progress = PlaybackProgress.fromJson((m['progress'] as Map).cast<String, dynamic>());
       }
@@ -238,6 +250,7 @@ class LanStateStore {
         'plays': {for (final e in plays.entries) e.key: e.value.toJson()},
         'ratings': ratings,
         'radioSfeer': radioSfeer,
+        'radioOverzichten': radioOverzichten,
         'progress': progress.toJson(),
       };
 
@@ -252,6 +265,7 @@ class LanStateStore {
         'plays': {for (final e in plays.entries) e.key: e.value.toJson()},
         'ratings': ratings,
         'radioSfeer': radioSfeer,
+        'radioOverzichten': radioOverzichten,
         'progress': progress.toJson(),
         if (verzoek != null) 'verzoek': verzoek,
       };
@@ -264,6 +278,8 @@ class LanStateStore {
     var durableChanged = false;
     var progressChanged = false;
     final now = DateTime.now().millisecondsSinceEpoch;
+    // Voor wie er een overzicht in de brievenbus kwam: die krijgen een seintje (zie de server).
+    final overzichtVoor = <String>{};
 
     for (final raw in ops) {
       if (raw is! Map) continue;
@@ -351,6 +367,26 @@ class LanStateStore {
             durableChanged |= ratings.remove(id) != null;
           }
 
+        case 'radio.overzicht':
+          // De brievenbus — zie [radioOverzichten]. De laatste op `at` wint; afgehandeld komt niet terug.
+          final sleutel = '${op['key'] ?? ''}';
+          final voor = '${op['voor'] ?? ''}';
+          final sessie = op['sessie'];
+          if (sleutel.isEmpty || voor.isEmpty || sessie is! Map) break;
+          final was = radioOverzichten[sleutel];
+          if (was != null && (was['klaar'] == true || ((was['at'] as num?) ?? 0) > at)) break;
+          radioOverzichten[sleutel] = {'voor': voor, 'sessie': sessie, 'at': at};
+          overzichtVoor.add(voor);
+          durableChanged = true;
+
+        case 'radio.overzicht.klaar':
+          final sleutel = '${op['key'] ?? ''}';
+          if (sleutel.isEmpty) break;
+          final was = radioOverzichten[sleutel];
+          if (was != null && ((was['at'] as num?) ?? 0) > at) break;
+          radioOverzichten[sleutel] = {'klaar': true, 'at': at};
+          durableChanged = true;
+
         case 'radio.sfeer':
           // "Past / past niet in deze radio" — zie `radiosfeer.dart`. De laatste op `at` wint.
           final sleutel = (op['key'] ?? '') as String;
@@ -429,6 +465,7 @@ class LanStateStore {
         if (progressChanged) 'progress': progress.toJson(),
         if (progressChanged && verzoek != null) 'verzoek': verzoek,
         'from': deviceId,
+        if (overzichtVoor.isNotEmpty) 'overzichtVoor': overzichtVoor.toList(),
       });
     }
     return {'rev': rev, 'progressRev': progressRev};

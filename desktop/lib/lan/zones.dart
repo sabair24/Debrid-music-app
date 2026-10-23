@@ -415,6 +415,13 @@ class ZoneRegister {
     };
   }
 
+  /// De toestellen van soort [soort] die zich ooit meldden (met of zonder open lijn) — voor een overzicht dat naar
+  /// "de gsm" moet (`radio.overzicht` met `voor: 'gsm'`).
+  List<String> toestellenVanSoort(ZoneSoort soort) => [
+        for (final e in _wie.entries)
+          if (e.value.soort == soort) e.key,
+      ];
+
   /// Een toestel opende `/api/zones/events`.
   void stroomOpen(String toestel, {required String naam, required ZoneSoort soort}) {
     if (toestel.isEmpty) return;

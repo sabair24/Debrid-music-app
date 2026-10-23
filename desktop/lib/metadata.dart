@@ -8,7 +8,7 @@ import 'discogs.dart';
 import 'editions.dart';
 import 'json_body.dart';
 import 'musicbrainz.dart';
-import 'organize.dart' show zonderBeeld;
+import 'organize.dart' show normKey, zonderBeeld;
 import 'settings.dart';
 
 /// One candidate release/track from a metadata provider — used by the manual
@@ -74,7 +74,51 @@ class MetaResult {
     this.audioDbId,
     this.detail,
     this.coverIsMiniatuur = false,
+    this.studioalbum = false,
+    this.soort = '',
+    this.jaar,
   });
+
+  /// Wat voor plaat het is, in een woord ("Studioalbum", "Single", "Live", "Verzamelaar") — zie [soortVan]. Leeg:
+  /// onbekend.
+  final String soort;
+
+  /// Het jaar van deze persing, als de bron het zegt.
+  final int? jaar;
+
+  /// Het studioalbum van de artiest zelf (MusicBrainz: een Album zonder bijsoort) — geen single, live-plaat of
+  /// verzamelaar. Zie [studioVoorop].
+  final bool studioalbum;
+}
+
+/// De studioalbums bovenaan, verder in dezelfde volgorde — voor "Uitgave kiezen…" bij een los nummer.
+///
+/// **Waarom (radiotest van 23-10-2026).** Bij Bryan Adams — Summer Of '69 stonden bovenaan de 7"-single, Greatest
+/// Hits Live en Live at Slane Castle; Reckless moest je zelf zoeken. Saber vroeg of hij de uitgave zelf kan kiezen: dan
+/// hoort het oorspronkelijke album vooraan.
+///
+/// En het oorspronkelijke album vóór een deluxe of remaster ([isEditie]) — Saber, 23-10-2026: "Het oorspronkelijke
+/// album".
+List<MetaResult> studioVoorop(List<MetaResult> r) => [
+      for (final m in r)
+        if (m.studioalbum && !isEditie(m.album)) m,
+      for (final m in r)
+        if (m.studioalbum && isEditie(m.album)) m,
+      for (final m in r)
+        if (!m.studioalbum) m,
+    ];
+
+/// Wat voor plaat [r] is, in één woord voor "Staat ook op…": Studioalbum, Single, EP, Live, Verzamelaar, Soundtrack.
+String soortVan(MbRecordingRelease r) {
+  if (r.secondaryTypes.contains('Live')) return 'Live';
+  if (r.isCompilation || r.artiest.toLowerCase().contains('various artists')) return 'Verzamelaar';
+  if (r.secondaryTypes.contains('Soundtrack')) return 'Soundtrack';
+  return switch (r.primaryType) {
+    'Album' => r.status.isNotEmpty && r.status != 'Official' ? 'Bootleg' : 'Studioalbum',
+    'Single' => 'Single',
+    'EP' => 'EP',
+    _ => r.primaryType,
+  };
 }
 
 /// Searches Deezer / Discogs / MusicBrainz for correct metadata + cover art.
@@ -598,7 +642,15 @@ class MetadataSearch {
   /// zoekregel als artiestnaam — "Oasis (What's The Story) Morning", "Oasis (What's The Story)", …
   /// tot "Oasis" — één vraag per seconde, en "Alles" stond 7 s te wachten op een artiest die er al
   /// stond.
-  Future<List<MetaResult>> _musicbrainzByTrack(String query, {String bekendeArtiest = ''}) async {
+  /// Op welke platen [titel] van [artiest] staat — voor "Staat ook op…" in het menu van een nummer (Saber,
+  /// 23-10-2026). De studioalbums bovenaan, het origineel voor de deluxe ([studioVoorop]).
+  Future<List<MetaResult>> opWelkePlaten(String artiest, String titel) async =>
+      studioVoorop(await _musicbrainzByTrack('$artiest - $titel', bekendeArtiest: artiest, max: 40, precies: true));
+
+  /// [precies]: alleen opnames die precies zo heten (op hoofdletters en leestekens na) — geen "Summer of 69
+  /// (clicktrack)" of karaokeversie bij "Staat ook op…".
+  Future<List<MetaResult>> _musicbrainzByTrack(String query,
+      {String bekendeArtiest = '', int max = 12, bool precies = false}) async {
     try {
       final mb = MusicBrainzService();
       // Scoped the same way the album search is: "Yasmine porselein" is an artist and a song, and
@@ -628,14 +680,36 @@ class MetadataSearch {
         }
       }
       if (song.isEmpty) return [];
-      final found = await mb.searchRecordings(song, artist: artist, max: 25);
+      // Ook alleen op albums: zonder die tweede vraag stond bij Summer Of '69 Reckless er niet tussen (23-10-2026).
+      final (gewoon, albums) = await (
+        mb.searchRecordings(song, artist: artist, max: 25),
+        mb.searchRecordings(song, artist: artist, max: 25, alleenAlbums: true),
+      ).wait;
+      final gezien = <String>{};
+      String kaal(String s) => normKey(s).replaceAll(RegExp(r'[^a-z0-9]'), '');
+      final wil = kaal(song);
+      final found = [
+        for (final r in [...albums, ...gewoon])
+          if (gezien.add(r.mbid) && (!precies || kaal(r.title) == wil)) r,
+      ];
       final out = <MetaResult>[];
       // One row per RECORD, not per pressing. "Porselein" sits on sixteen releases of which fifteen
       // are compilations, and listing them all buries the one album somebody wanted under a
       // greatest-hits pile. Titles are already ranked studio-album-first by searchRecordings.
       final byTitle = <String>{};
-      for (final rec in found) {
-        for (final rel in rec.releases) {
+      // Eerst de studioalbums van ALLE opnames, dan de rest. Per opname op volgorde was niet genoeg: MusicBrainz geeft
+      // bij Summer Of '69 eerst een rij live-opnames, en die vulden de twaalf plaatsen voor Reckless aan de beurt kwam
+      // (23-10-2026).
+      final paren = [
+        for (final rec in found)
+          for (final rel in rec.releases)
+            if (rel.isStudioAlbum) (rec: rec, rel: rel),
+        for (final rec in found)
+          for (final rel in rec.releases)
+            if (!rel.isStudioAlbum) (rec: rec, rel: rel),
+      ];
+      for (final (:rec, :rel) in paren) {
+        {
           if (!byTitle.add(rel.title.toLowerCase())) continue;
           out.add(MetaResult(
             title: rel.title,
@@ -645,9 +719,13 @@ class MetadataSearch {
             coverFullUrl: 'https://coverartarchive.org/release/${rel.mbid}/front-1200',
             mbid: rel.mbid,
             detail: _because(rec.title, rel.isCompilation ? 'verzamelaar' : null),
+            // Officieel: een bootleg ("Hot Night In Charlotte") is geen studioalbum, ook als MusicBrainz hem Album noemt.
+            studioalbum: rel.isStudioAlbum && (rel.status.isEmpty || rel.status == 'Official'),
+            soort: soortVan(rel),
+            jaar: rel.date.length >= 4 ? int.tryParse(rel.date.substring(0, 4)) : null,
           ));
           // Enough to find the record without turning the dialog into a discography.
-          if (out.length >= 12) return out;
+          if (out.length >= max) return out;
         }
       }
       return out;

@@ -781,10 +781,21 @@ class RadioBesturing extends ChangeNotifier {
 
   /// Het overzicht is afgehandeld. Weg ermee.
   Future<void> vergeetOpenstaand() async {
+    final sleutel = _overzichtSleutel;
     openstaand = null;
+    _overzichtSleutel = null;
     notifyListeners();
-    // Via dezelfde rij als het schrijven, en niet als er een radio loopt: dan staat in dit bestand de
-    // notitie van DIE radio, en die hoort niet weg omdat een oud overzicht is afgehandeld.
+    // Uit de brievenbus: daar afmelden; hier staat er geen notitie van.
+    if (sleutel != null) {
+      bijOverzichtAfgehandeld?.call(sleutel, null);
+      return;
+    }
+    await _wisNotitie();
+  }
+
+  /// De notitie op schijf weg — via dezelfde rij als het schrijven, en niet als er een radio loopt: dan staat in dit
+  /// bestand de notitie van DIE radio, en die hoort niet weg omdat een oud overzicht is afgehandeld.
+  Future<void> _wisNotitie() async {
     final beurt = _schrijfBeurt.then((_) async {
       if (_lopend != null) return;
       try {
@@ -814,6 +825,17 @@ class RadioBesturing extends ChangeNotifier {
         if (!houd(g)) g.pad
     };
     s.gehaald.retainWhere(houd);
+    // Uit de brievenbus: wat niet weg kon gaat daar terug, de rest is afgehandeld.
+    final sleutel = _overzichtSleutel;
+    if (sleutel != null && identical(openstaand, s)) {
+      if (s.leeg) {
+        await vergeetOpenstaand();
+      } else {
+        bijOverzichtAfgehandeld?.call(sleutel, s);
+        notifyListeners();
+      }
+      return;
+    }
     final lopend = _lopend;
     if (lopend != null) {
       if (!identical(lopend, s)) lopend.gehaald.removeWhere((g) => beslist.contains(g.pad));
@@ -863,7 +885,8 @@ class RadioBesturing extends ChangeNotifier {
       Bijvuller? bijvul,
       Future<int> Function(int sessie, String artiest, String titel)? groen,
       void Function(String regel)? spoor,
-      int? aantal}) async {
+      int? aantal,
+      String? door}) async {
     if (nieuw.isEmpty) return 'Er viel niets te vinden om een radio van te maken.';
 
     // Eerst vragen of het KAN, en pas daarna de lopende radio verlaten. Andersom zou een radio die
@@ -895,6 +918,7 @@ class RadioBesturing extends ChangeNotifier {
     _opgeruimd = 0;
     _herhaaldOp = null;
     _groen = groen;
+    _gestartDoor = door ?? hier;
     _spoor = spoor;
     _aantal = aantal;
     _bijvulBezig = false;
@@ -953,8 +977,9 @@ class RadioBesturing extends ChangeNotifier {
     speler.radioExtend = null;
     await speler.playRadio(eerste);
     if (sessie != _sessie) return null; // iemand was intussen sneller
+    // Vanzelf geëindigd (iets anders op de speaker): het overzicht op het toestel dat hem startte.
     speler.bijRadioEinde = (_) {
-      if (sessie == _sessie) stop();
+      if (sessie == _sessie) stop(naar: _gestartDoor);
     };
     // Een nummer dat de speler oversloeg: het bestand deugde niet, of het bleef onbereikbaar. Op de
     // plek, zodat het niet herhaald wordt — en een verdwenen bestand ook niet opnieuw gehaald.
@@ -1193,14 +1218,50 @@ class RadioBesturing extends ChangeNotifier {
     _pas(sessie);
   }
 
+  /// De zone van dit toestel (`dev:<id>`), zoals de zonelijst hem noemt. Gezet door main. Leeg: onbekend — dan blijft
+  /// het overzicht altijd hier.
+  String hier = '';
+
+  /// Welke zone deze radio startte (`dev:<id>`): dit toestel, of het toestel dat hem via een zone startte.
+  String? get gestartDoor => _gestartDoor;
+  String? _gestartDoor;
+
+  /// Waar een overzicht voor [doel] werkelijk heen gaat — een tv wordt de gsm (`'gsm'`). Gezet door main.
+  String Function(String doel)? richt;
+
+  /// Het overzicht hoort op een ander toestel ([doel]): leg het in zijn brievenbus op de pc. Gezet door main; null:
+  /// dan blijft het hier. Onwaar: het lukte niet (geen verbinding) — dan blijft het ook hier, liever dan nergens.
+  Future<bool> Function(RadioSessie sessie, String doel)? bijOverzichtElders;
+
+  /// Een overzicht uit de brievenbus is afgehandeld ([rest] null), of gedeeltelijk: wat niet weg kon gaat terug.
+  void Function(String sleutel, RadioSessie? rest)? bijOverzichtAfgehandeld;
+
+  /// De sleutel in de brievenbus van het [openstaand] overzicht dat van een ander toestel kwam, of null.
+  String? _overzichtSleutel;
+
+  /// Een overzicht uit de brievenbus tonen: het hoort hier (Saber, 23-10-2026: "die melding moet komen op de device
+  /// die de radio begon" — en waar je afsluit). Onwaar als er al een eigen overzicht openstaat: dan blijft het in de
+  /// brievenbus en komt het na dat overzicht.
+  bool ontvangOverzicht(RadioSessie s, String sleutel) {
+    if (openstaand != null && _overzichtSleutel != sleutel) return false;
+    if (_overzichtSleutel == sleutel) return true;
+    openstaand = s;
+    _overzichtSleutel = sleutel;
+    notifyListeners();
+    return true;
+  }
+
   /// Stoppen. Laat het plan staan, want daar valt straks nog over te vertellen.
   ///
   /// Speelt hij op een speaker ([opAndereUitgang]), dan valt die ook stil en laat hij de radio los — zonder dit
   /// speelde de speaker na "Radio afsluiten" zijn rij uit (speakerradio v2, 23-10-2026). Op dit toestel blijft wat
   /// speelt staan, zoals altijd.
-  void stop() {
+  ///
+  /// [naar]: de zone die afsloot (`dev:<id>`) — daar komt het overzicht (Saber, 23-10-2026: "waar ik 'Radio
+  /// afsluiten' tik"). Null: hier.
+  void stop({String? naar}) {
     final uit = opAndereUitgang ? _speler : null;
-    _stop(laatLos: true);
+    _stop(laatLos: true, naar: naar);
     if (uit != null) {
       uit.bijRadioEinde = null;
       uit.bijRadioOverslaan = null;
@@ -1210,7 +1271,7 @@ class RadioBesturing extends ChangeNotifier {
 
   /// [naarOverzicht] onwaar bij een nieuwe start: dan gaat de notitie van deze radio niet naar het
   /// overzicht maar terug naar de aanroeper, die hem meeneemt in de radio die begint — zie [start].
-  RadioSessie? _stop({required bool laatLos, bool naarOverzicht = true}) {
+  RadioSessie? _stop({required bool laatLos, bool naarOverzicht = true, String? naar}) {
     _tik?.cancel();
     _tik = null;
     final stil = _stilLuisteraar;
@@ -1227,10 +1288,27 @@ class RadioBesturing extends ChangeNotifier {
     // vragen en hoort er ook geen overzicht te komen — dat zou een venster zijn dat alleen maar in
     // de weg staat.
     final s = _lopend;
-    final teVertellen = liep && s != null && !s.leeg ? s : null;
+    s?.opgeruimd = _opgeruimd;
+    final teVertellen = liep && s != null && s.teMelden ? s : null;
     if (teVertellen != null && naarOverzicht) {
-      openstaand = teVertellen;
-      unawaited(_bewaar(teVertellen));
+      final ruw = naar ?? hier;
+      final doel = ruw.isEmpty ? '' : (richt?.call(ruw) ?? ruw);
+      final elders = bijOverzichtElders;
+      if (doel.isEmpty || doel == hier || elders == null) {
+        openstaand = teVertellen;
+        unawaited(_bewaar(teVertellen));
+      } else {
+        // Op een ander toestel: daar in de brievenbus, en hier geen notitie meer — anders kwam het overzicht bij de
+        // volgende start óók hier.
+        _lopend = null;
+        unawaited(_wisNotitie());
+        unawaited(elders(teVertellen, doel).catchError((Object _) => false).then((gelukt) {
+          if (gelukt || openstaand != null) return;
+          openstaand = teVertellen;
+          unawaited(_bewaar(teVertellen));
+          notifyListeners();
+        }));
+      }
     }
     _lopend = null;
     // Niet seinen bij een nieuwe start: het scherm opende dan het overzicht van de vorige radio, en
@@ -1666,4 +1744,25 @@ class RadioBesturing extends ChangeNotifier {
     notifyListeners();
     _pas(sessie);
   }
+}
+
+/// Het oudste overzicht in de brievenbus (`radioOverzichten` in de gedeelde staat) dat voor dit toestel is — voor
+/// [hier], of voor `'gsm'` als dit een gsm is — en nog niet afgehandeld. Null: niets. Zie [RadioBesturing.stop].
+({String sleutel, RadioSessie sessie})? overzichtVoorHier(Map<String, dynamic>? overzichten,
+    {required String hier, required bool isGsm}) {
+  if (overzichten == null || hier.isEmpty) return null;
+  ({String sleutel, RadioSessie sessie, int at})? beste;
+  for (final e in overzichten.entries) {
+    final v = e.value;
+    if (v is! Map || v['klaar'] == true) continue;
+    final voor = '${v['voor'] ?? ''}';
+    if (voor != hier && !(voor == 'gsm' && isGsm)) continue;
+    final s = RadioSessie.fromJson(v['sessie']);
+    if (s == null || !s.teMelden) continue;
+    final at = (v['at'] as num?)?.toInt() ?? 0;
+    final b = beste;
+    if (b == null || at < b.at) beste = (sleutel: e.key, sessie: s, at: at);
+  }
+  final b = beste;
+  return b == null ? null : (sleutel: b.sleutel, sessie: b.sessie);
 }

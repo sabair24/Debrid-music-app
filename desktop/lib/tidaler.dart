@@ -85,6 +85,13 @@ class Tidaler {
   /// Waar er gekeken is toen hij niet gevonden werd.
   static String? laatsteFout;
 
+  /// Waarom het zoekhulpje het laatst niets gaf: 'niet ingelogd', 'tijdelijk' of 'onbekend'; null als het lukte. Zie
+  /// [tidalHulpFoutZin].
+  static String? laatsteHulpFout;
+
+  /// Wanneer de app tidalers login het laatst uit de reserve terugzette — zie [zetTidalerSleutelTerug].
+  static DateTime? sleutelTeruggezet;
+
   static String? get pad {
     if (_gekeken) return _gevonden;
     _gekeken = true;
@@ -346,6 +353,8 @@ Future<({String? fout, String? kwaliteit})> _haal({
     );
   }
   if (map.trim().isEmpty) return (fout: 'Er is nog geen muziekmap ingesteld.', kwaliteit: null);
+  // tidaler gooit zijn login weg bij een netwerkfout: is hij weg, eerst de reserve terug — zie [bewaarTidalerSleutel].
+  zetTidalerSleutelTerug();
   final ffmpeg = Ffmpeg().pad;
   final omgeving = {
     'PYTHONIOENCODING': 'utf-8',
@@ -374,6 +383,7 @@ Future<({String? fout, String? kwaliteit})> _haal({
         : '';
     return (fout: 'TIDAL leverde niets.$niet\n${leesbareFout(uitvoer)}', kwaliteit: null);
   }
+  bewaarTidalerSleutel();
   return (fout: null, kwaliteit: binnen);
 }
 
@@ -450,7 +460,20 @@ def plaat(al):
 
 
 t = Tidal(Settings())
-if not t.login_token():
+# tidalers login_token gooit de login weg bij ELKE fout, ook een netwerkfout (23-10-2026: zo was de pc om 09:42
+# uitgelogd). Tijdens die ene aanroep mag hij niets wissen. Lukt het niet terwijl er wel een login stond, dan is het
+# "even niet" en geen "niet ingelogd".
+import os
+_wis = os.remove
+os.remove = lambda *a, **k: None
+try:
+    ok = t.login_token()
+finally:
+    os.remove = _wis
+if not ok:
+    if t.token_from_storage:
+        uit({"fout": "tijdelijk"})
+        sys.exit(3)
     uit({"fout": "niet ingelogd"})
     sys.exit(2)
 s = t.session
@@ -637,10 +660,92 @@ Future<List<TidalTreffer>?> zoekOpTidal(String vraag, {int aantal = 10}) async {
 /// lan/server.dart); het toestel leest hem met [tidalCatalogusUit].
 Future<String?> tidalHulpUitvoer(List<String> argumenten) => _zoekHulp(argumenten);
 
+/// Waar tidaler zijn login bewaart, zoals `tidaler.helper.path.path_file_token` het uitrekent: de thuismap (XDG_CONFIG_HOME,
+/// HOME, of HOMEDRIVE+HOMEPATH), dan `.config` (niet bij XDG), dan `tidaler/token.json`. Null: geen thuismap.
+String? tidalerSleutelPad(Map<String, String> env, {String sep = r'\'}) {
+  final xdg = env['XDG_CONFIG_HOME'] ?? '';
+  final drive = env['HOMEDRIVE'], pad = env['HOMEPATH'];
+  final thuis = xdg.isNotEmpty ? xdg : (env['HOME'] ?? (drive != null && pad != null ? '$drive$pad' : null));
+  if (thuis == null || thuis.isEmpty) return null;
+  return [thuis, if (xdg.isEmpty) '.config', 'tidaler', 'token.json'].join(sep);
+}
+
+/// De reservekopie van tidalers login (naast het origineel).
+///
+/// **Waarom (23-10-2026).** tidaler gooit zijn login weg bij elke fout tijdens het aanmelden, ook een netwerkfout
+/// (`Tidal.login_token` in tidaler/config.py: "Remove token file. Probably corrupt or invalid."). Om 09:42 viel het net
+/// even weg — Soulseek tegelijk — en daarna was de pc uitgelogd; elke radio-terugval en elke zoekopdracht faalde. Saber:
+/// *"moet altijd ingelogd zijn"*. Na elke geslaagde TIDAL-actie bewaart de app daarom een kopie
+/// ([bewaarTidalerSleutel]), en is het origineel weg, dan zet hij die terug vóór de volgende actie
+/// ([zetTidalerSleutelTerug]). Een echt verlopen login vangt dit niet op: dan blijft "log opnieuw in" nodig.
+String? _reservePad([String? sleutelPad]) {
+  final p = sleutelPad ?? tidalerSleutelPad(Platform.environment, sep: Platform.pathSeparator);
+  return p == null ? null : '$p.reserve';
+}
+
+/// Na een geslaagde TIDAL-actie: de login bewaren als reserve (als hij veranderde). [sleutelPad]: voor de toetsen.
+void bewaarTidalerSleutel({String? sleutelPad}) {
+  final r = _reservePad(sleutelPad);
+  if (r == null) return;
+  try {
+    final echt = File(r.substring(0, r.length - '.reserve'.length));
+    if (!heeftTidalerLogin(echt)) return;
+    final reserve = File(r);
+    final nu = echt.readAsBytesSync();
+    if (reserve.existsSync() && _gelijk(reserve.readAsBytesSync(), nu)) return;
+    reserve.writeAsBytesSync(nu, flush: true);
+  } catch (_) {/* dan de volgende keer */}
+}
+
+/// Vóór een TIDAL-actie: is de login weg en staat er een reserve, dan die terug. Waar als er iets teruggezet werd.
+bool zetTidalerSleutelTerug({String? sleutelPad}) {
+  final r = _reservePad(sleutelPad);
+  if (r == null) return false;
+  try {
+    final echt = File(r.substring(0, r.length - '.reserve'.length));
+    final reserve = File(r);
+    if (heeftTidalerLogin(echt) || !heeftTidalerLogin(reserve)) return false;
+    echt.parent.createSync(recursive: true);
+    reserve.copySync(echt.path);
+    Tidaler.sleutelTeruggezet = DateTime.now();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Staat er een echte login in [f]? tidaler maakt zelf een leeg bestand aan als het zijne weg is (108 bytes, alle velden
+/// leeg, gezien op 23-10-2026): dat is geen login. Alleen of er een verversingssleutel staat; de inhoud blijft dicht.
+bool heeftTidalerLogin(File f) {
+  try {
+    if (!f.existsSync()) return false;
+    final j = jsonDecode(f.readAsStringSync());
+    return j is Map && j['refresh_token'] is String && (j['refresh_token'] as String).isNotEmpty;
+  } catch (_) {
+    return false;
+  }
+}
+
+bool _gelijk(List<int> a, List<int> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+/// Waarom het zoekhulpje het laatst niets gaf, in gewone taal voor op het scherm — zie [_zoekHulp].
+String tidalHulpFoutZin() => switch (Tidaler.laatsteHulpFout) {
+      'niet ingelogd' => 'Niet ingelogd bij TIDAL — log op de pc één keer in met "tidaler login" in een terminal.',
+      'tijdelijk' => 'TIDAL antwoordt even niet (het net?) — probeer het zo opnieuw.',
+      _ => 'tidaler antwoordde niet — probeer het zo opnieuw, of log op de pc opnieuw in met "tidaler login".',
+    };
+
 /// Het zoekhulpje draaien ([kTidalZoekHulp]) met [argumenten]; de ruwe uitvoer, of null.
 Future<String?> _zoekHulp(List<String> argumenten) async {
   final py = Tidaler.python;
   if (py == null) return null;
+  zetTidalerSleutelTerug();
   try {
     final hulp = File('${Directory.systemTemp.path}${Platform.pathSeparator}debridmusic_tidal_zoek.py');
     await hulp.writeAsString(kTidalZoekHulp, flush: true);
@@ -656,9 +761,17 @@ Future<String?> _zoekHulp(List<String> argumenten) async {
     });
     final tekst = await uit;
     await fout;
+    Tidaler.laatsteHulpFout = switch (code) {
+      0 => null,
+      2 => 'niet ingelogd',
+      3 => 'tijdelijk',
+      _ => 'onbekend',
+    };
     if (code != 0) return null;
+    bewaarTidalerSleutel();
     return tekst;
   } catch (_) {
+    Tidaler.laatsteHulpFout = 'onbekend';
     return null;
   }
 }

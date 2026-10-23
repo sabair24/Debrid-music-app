@@ -7,8 +7,10 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:debridmusic/enrichment.dart' show deezerSingleUit, nummerOpAlbum, origineleUitgaveUit, plekUitDeezerNummer;
-import 'package:debridmusic/musicbrainz.dart' show MbRecording;
+import 'package:debridmusic/enrichment.dart'
+    show albumIsDeSingle, deezerSingleUit, nummerOpAlbum, origineleUitgaveUit, plekUitDeezerNummer;
+import 'package:debridmusic/metadata.dart' show MetaResult, soortVan, studioVoorop;
+import 'package:debridmusic/musicbrainz.dart' show MbRecording, MbRecordingRelease, isEditie;
 import 'package:debridmusic/online.dart';
 
 String _lees(String pad) => File(pad).readAsStringSync().replaceAll('\r\n', '\n');
@@ -207,6 +209,89 @@ void main() {
       expect(origineleUitgaveUit([karaoke], artiest: 'Ellie Goulding', titel: 'Hate Me'), isNull);
     });
 
+    test('de single als album: dan toch het studioalbum zoeken (radiotest van 23-10-2026)', () {
+      expect(albumIsDeSingle("Summer Of '69", "Summer Of '69"), isTrue);
+      expect(albumIsDeSingle('Loneliness', 'Loneliness (Radio Cut)'), isTrue);
+      expect(albumIsDeSingle("Summer Of '69 (Remastered)", "Summer Of '69"), isTrue);
+      expect(albumIsDeSingle('Reckless', "Summer Of '69"), isFalse);
+      expect(albumIsDeSingle('', 'Luka'), isFalse);
+    });
+
+    test('een album van de artiest zelf gaat voor een soundtrack en voor "Various Artists"', () {
+      Map<String, dynamic> met(String titel, String soort, String artiest, {List<String> ook = const [], String datum = ''}) =>
+          {
+            ...uitgave(titel, soort, ook: ook, datum: datum),
+            'artist-credit': [
+              {'name': artiest}
+            ],
+          };
+      final lald = opname('Live and Let Die', 'Paul McCartney', 193000, [
+        met('The In-Laws (Music From the Motion Picture)', 'Album', 'Various Artists', ook: ['Soundtrack'], datum: '2003'),
+        met('Live and Let Die', 'Album', 'George Martin', ook: ['Soundtrack'], datum: '2003-06-02'),
+        met('Red Rose Speedway', 'Album', 'Paul McCartney & Wings', datum: '2018-12-07'),
+        met('SWF 3 Club Collection Oldies', 'Album', 'Various Artists', datum: '1999'),
+      ]);
+      expect(origineleUitgaveUit([lald], artiest: 'Paul McCartney', titel: 'Live And Let Die', seconden: 193)?.album,
+          'Red Rose Speedway');
+      final alleenVerzamelaar = opname('Live and Let Die', 'Paul McCartney', 193000,
+          [met('SWF 3 Club Collection Oldies', 'Album', 'Various Artists', datum: '1999')]);
+      expect(origineleUitgaveUit([alleenVerzamelaar], artiest: 'Paul McCartney', titel: 'Live And Let Die'), isNull,
+          reason: 'een verzamelaar die MusicBrainz niet zo noemt, telt niet');
+    });
+
+    test('"Uitgave kiezen…" bij een los nummer: de studioalbums bovenaan, verder in dezelfde volgorde', () {
+      const a = MetaResult(title: 'Summer of 69', artist: 'Bryan Adams', album: "Summer of '69");
+      const b = MetaResult(title: 'x', artist: 'Bryan Adams', album: 'Live at Slane Castle');
+      const c = MetaResult(title: 'x', artist: 'Bryan Adams', album: 'Reckless', studioalbum: true);
+      const d = MetaResult(title: 'x', artist: 'Bryan Adams', album: 'Greatest Hits Live');
+      expect([for (final m in studioVoorop([a, b, c, d])) m.album],
+          ['Reckless', "Summer of '69", 'Live at Slane Castle', 'Greatest Hits Live']);
+      final m = _lees('lib/main.dart');
+      expect(m, contains('track: widget.album.isSingle && !los,'), reason: 'ook op welke platen dit nummer staat');
+      expect(m, contains('List<MetaResult> orden(List<MetaResult> r) => los ? studioVoorop(r) : r;'));
+      final meta = _lees('lib/metadata.dart');
+      expect(meta, contains("studioalbum: rel.isStudioAlbum && (rel.status.isEmpty || rel.status == 'Official'),"));
+      expect(meta, contains('mb.searchRecordings(song, artist: artist, max: 25, alleenAlbums: true),'));
+    });
+
+    test('het oorspronkelijke album vóór de deluxe of remaster (Saber, 23-10-2026)', () {
+      expect(isEditie('Reckless (deluxe edition)'), isTrue);
+      expect(isEditie('Rumours (2004 Remaster)'), isTrue);
+      expect(isEditie('Thriller (25th Anniversary Edition)'), isTrue);
+      expect(isEditie('Reckless'), isFalse);
+      final r = opname('Summer of ’69', 'Bryan Adams', 216000, [
+        uitgave('Reckless (deluxe edition)', 'Album', datum: '2014-11-07'),
+        uitgave('Reckless', 'Album', datum: '2014-11-24'),
+      ]);
+      expect(origineleUitgaveUit([r], artiest: 'Bryan Adams', titel: "Summer Of '69", seconden: 216)?.album, 'Reckless',
+          reason: 'ook al kwam de deluxe eerder uit');
+      const deluxe = MetaResult(title: 'x', artist: 'Bryan Adams', album: 'Reckless (deluxe edition)', studioalbum: true);
+      const origineel = MetaResult(title: 'x', artist: 'Bryan Adams', album: 'Reckless', studioalbum: true);
+      const live = MetaResult(title: 'x', artist: 'Bryan Adams', album: 'Live! Live! Live!');
+      expect([for (final m in studioVoorop([live, deluxe, origineel])) m.album],
+          ['Reckless', 'Reckless (deluxe edition)', 'Live! Live! Live!']);
+    });
+
+    test('"Staat ook op…": wat voor plaat het is, in één woord', () {
+      MbRecordingRelease rel(String soort, {List<String> ook = const [], String status = 'Official', String artiest = ''}) =>
+          MbRecordingRelease('id', 't', primaryType: soort, secondaryTypes: ook, status: status, artiest: artiest);
+      expect(soortVan(rel('Album')), 'Studioalbum');
+      expect(soortVan(rel('Album', ook: ['Live'])), 'Live');
+      expect(soortVan(rel('Album', ook: ['Compilation'])), 'Verzamelaar');
+      expect(soortVan(rel('Album', artiest: 'Various Artists')), 'Verzamelaar');
+      expect(soortVan(rel('Album', ook: ['Soundtrack'])), 'Soundtrack');
+      expect(soortVan(rel('Album', status: 'Bootleg')), 'Bootleg');
+      expect(soortVan(rel('Single')), 'Single');
+      expect(soortVan(rel('EP')), 'EP');
+      final m = _lees('lib/main.dart');
+      expect(m, contains("MenuRegel(Icons.library_music_outlined, 'Staat ook op…', () => toonStaatOokOp(context, t)),"));
+      expect(m, contains('if (widget.nummer != null && _picked == null && _results.isNotEmpty && _results.first.studioalbum)'),
+          reason: 'meteen voorstellen');
+      expect(m, contains('await _pick(_results.first);\n                          if (mounted) await _apply();'));
+      expect(_lees('lib/metadata.dart'),
+          contains("studioVoorop(await _musicbrainzByTrack('\$artiest - \$titel', bekendeArtiest: artiest, max: 40, precies: true));"));
+    });
+
     test('een remixplaat alleen voor een remix', () {
       final remixen = opname('Close To Me (Red Velvet Remix)', 'Ellie Goulding', 191000,
           [uitgave('Close To Me (Remixes)', 'EP', ook: ['Remix'], datum: '2018-12-07')]);
@@ -221,7 +306,9 @@ void main() {
     test('zonder album zoekt de pc de oorspronkelijke uitgave op en tagt daarmee', () {
       final online = _lees('lib/online.dart');
       expect(online, contains('? origineleUitgave?.call(artiest, titel, seconden).then'));
-      expect(online, contains('final origineel =\n                origineelF == null ? null : await origineelF.timeout('));
+      expect(online, contains('final gevonden =\n                origineelF == null ? null : await origineelF.timeout('));
+      expect(online, contains('final alsSingle = gezag.album.isNotEmpty && albumIsDeSingle(gezag.album, titel);'));
+      expect(online, contains('final origineelF = gezag.album.isEmpty || alsSingle'));
       expect(online, contains('              gezag = gezagVoorHaal(\n                  artiest: artiest,\n                  titel: titel,\n                  album: origineel.album,'));
       final main = _lees('lib/main.dart');
       expect(main, contains('DownloadManager.origineleUitgave = (artiest, titel, seconden) => origineleUitgaveVan('));

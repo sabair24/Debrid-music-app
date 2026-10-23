@@ -68,7 +68,7 @@ import 'zone_opdracht.dart';
 import 'volgbron.dart' show Volgbron;
 import 'samen.dart' show KlokIjk, SamenAnker, SamenVolger;
 import 'speaker_radio.dart';
-import 'lan/zones.dart' show RadioOpSpeaker, ZoneSoort, ZoneStaat, positieNu;
+import 'lan/zones.dart' show RadioOpSpeaker, ZoneSoort, ZoneStaat, positieNu, zoneSoortVoor;
 import 'lan/server.dart' show LanServer;
 import 'ui/knopbewegingen.dart';
 import 'ui/menu_iconen.dart';
@@ -1452,6 +1452,59 @@ Future<void> main() async {
       // Op de klok van de pc: daarop staan de meldingen, ook die van een toestel met een scheve klok.
       klok: mode.owner ? null : zoneLijst.nuOpPc);
 
+  // Het overzicht "Radio afsluiten" op het juiste toestel (Saber, 23-10-2026): waar je afsluit, of — vanzelf geëindigd
+  // — waar je startte; nooit op de tv (dan de gsm); een ander toestel krijgt het via de brievenbus op de pc.
+  radio.hier = zoneLijst.hier;
+  // Een seintje dat er een overzicht in de brievenbus ligt; ingevuld waar de gedeelde staat gelezen wordt.
+  void Function() kijkInBrievenbus = () {};
+  final ikSoort = zoneSoortVoor(platform: Platform.operatingSystem, naam: deviceName(), tv: isTv);
+  radio.richt = (doel) {
+    final soort = doel == zoneLijst.hier ? ikSoort : zoneLijst.zones.where((z) => z.id == doel).firstOrNull?.soort;
+    return soort == ZoneSoort.tv ? 'gsm' : doel;
+  };
+  // Schrijven in de gedeelde staat: op de pc rechtstreeks, op een toestel als op naar de pc (ingevuld bij het koppelen).
+  Future<void> Function(List<Map<String, dynamic>> ops) schrijfStaat = (ops) async {
+    sharing.state.applyOps(ops, deviceId: sharing.mijnId, deviceName: deviceName());
+  };
+  radio.bijOverzichtElders = (s, doel) async {
+    try {
+      await schrijfStaat([
+        {
+          'type': 'radio.overzicht',
+          'key': '${zoneLijst.hier}|${s.begonnenMs}',
+          'voor': doel,
+          'sessie': s.toJson(),
+          'at': DateTime.now().millisecondsSinceEpoch,
+        }
+      ]);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+  radio.bijOverzichtAfgehandeld = (sleutel, rest) {
+    final at = DateTime.now().millisecondsSinceEpoch;
+    unawaited(schrijfStaat([
+      rest == null
+          ? {'type': 'radio.overzicht.klaar', 'key': sleutel, 'at': at}
+          : {'type': 'radio.overzicht', 'key': sleutel, 'voor': zoneLijst.hier, 'sessie': rest.toJson(), 'at': at},
+    ]).then((_) => kijkInBrievenbus(), onError: (Object _) {}));
+  };
+  void toonUitBrievenbus(Map<String, dynamic>? overzichten) {
+    final o = overzichtVoorHier(overzichten, hier: zoneLijst.hier, isGsm: ikSoort == ZoneSoort.gsm);
+    if (o != null) radio.ontvangOverzicht(o.sessie, o.sleutel);
+  }
+
+  if (mode.owner) {
+    kijkInBrievenbus = () => toonUitBrievenbus(sharing.state.radioOverzichten);
+    sharing.state.changes.listen((e) {
+      final v = e['overzichtVoor'];
+      if (v is List && v.contains(zoneLijst.hier)) kijkInBrievenbus();
+    });
+    // Wat er lag terwijl de pc uit stond: na het opstarten (het venster moet er eerst zijn).
+    Timer(const Duration(seconds: 8), kijkInBrievenbus);
+  }
+
   // De gekozen zone ("Speelt op: … ▾"): wat de balk en Nu speelt tonen en bedienen, en waar een tik in
   // de bibliotheek speelt (Saber, 21-10-2026). Zie zone_speler.dart.
   var zoneOpdrachtNr = 0;
@@ -1548,10 +1601,17 @@ Future<void> main() async {
       if (anker != null) await samenVolger.opAnker(anker);
     },
     samenStop: ({bool pauzeer = true}) => samenVolger.stop(pauzeer: pauzeer),
-    radio: (artiest, {zaad, titel}) async {
+    radio: (artiest, {zaad, titel, door}) async {
       final ctx = appNavigator.currentContext;
-      if (ctx != null && ctx.mounted) await startRadio(ctx, artiest, titel: titel, zaad: zaad, hier: true);
+      if (ctx != null && ctx.mounted) {
+        await startRadio(ctx, artiest, titel: titel, zaad: zaad, hier: true, door: door);
+      }
     },
+    // Afsluiten vanaf een ander toestel: het overzicht komt daar (Saber, 23-10-2026).
+    radioStop: ({door}) {
+      if (radio.loopt) radio.stop(naar: door);
+    },
+    kijkInBrievenbus: () => kijkInBrievenbus(),
     // Meteen melden wat er nu speelt, zodat wie bedient de uitkomst ziet (niet pas na vijf seconden).
     naUitvoeren: () => Timer(const Duration(milliseconds: 400), player.meldStandNu),
   );
@@ -1613,7 +1673,11 @@ Future<void> main() async {
         final zaad = zaadId.isEmpty ? null : verder.bron.nummer(zaadId);
         final titel = '${op['titel'] ?? ''}';
         await startRadio(ctx, '${op['artiest'] ?? ''}',
-            zaad: zaad, titel: titel.isEmpty ? null : titel, hier: true, naar: speaker);
+            zaad: zaad,
+            titel: titel.isEmpty ? null : titel,
+            hier: true,
+            naar: speaker,
+            door: '${op['door'] ?? ''}'.isEmpty ? null : '${op['door']}');
         return null;
       };
       // Die radio bedienen vanaf een toestel, en zien wat hij doet (speakerradio v2, 23-10-2026).
@@ -1866,8 +1930,12 @@ Future<void> main() async {
               (s['ratings'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
           radioSfeer.vanServer(
               (s['radioSfeer'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
+          // Een overzicht "Radio afsluiten" dat voor dit toestel klaarligt (Saber, 23-10-2026).
+          toonUitBrievenbus((s['radioOverzichten'] as Map?)?.cast<String, dynamic>());
         } catch (_) {/* geen pc; het hartje blijft staan zoals het stond */}
       }
+
+      kijkInBrievenbus = () => unawaited(haalFavorieten());
 
       Future<void> duw(List<Map<String, dynamic>> ops) async {
         final c = library.remote;
@@ -1884,6 +1952,8 @@ Future<void> main() async {
       speelstanden.duwOps = duw;
       oordelen.duwOps = duw;
       radioSfeer.duwOps = duw;
+      // De brievenbus van het overzicht "Radio afsluiten" staat op de pc.
+      schrijfStaat = duw;
       // Wat er hier speelt, naar de pc, onder het eigen id van dit toestel: zo kan elk ander toestel
       // "Hier verder luisteren" aanbieden (Saber, 17-10-2026). Tot nu toe meldde alleen de pc.
       player.onProgress = (track, position, playing, queue, index) {
@@ -1969,7 +2039,11 @@ Future<void> main() async {
           zoneLijn.nuOpnieuw();
         }
       });
-      AppLifecycleListener(onResume: zoneLijn.nuOpnieuw);
+      AppLifecycleListener(onResume: () {
+        zoneLijn.nuOpnieuw();
+        // Bij het openen: ligt er een overzicht klaar (Saber, 23-10-2026: "bij het volgende openen")?
+        kijkInBrievenbus();
+      });
       session.addListener(() {
         if (session.ready) {
           unawaited(haalFavorieten());
@@ -8413,14 +8487,19 @@ class _MetadataEditorState extends State<MetadataEditor> {
       // geen tijdslimiet maar een storing.
       //
       // De treffers verschijnen per bron, zodra die antwoordt — zie [MetadataSearch.search].
+      // Eén nummer ("Juiste uitgave zoeken"): ook op welke platen dit nummer staat, met de studioalbums bovenaan. Op
+      // naam alleen vond het venster bij Summer Of '69 alleen platen die zo heten, en nooit Reckless (23-10-2026).
+      final los = widget.nummer != null;
+      List<MetaResult> orden(List<MetaResult> r) => los ? studioVoorop(r) : r;
       res = await MetadataSearch(context.read<AppSettings>())
           .search(_provider, _query.text,
-              track: widget.album.isSingle,
+              track: widget.album.isSingle && !los,
               artist: _artist.text,
               album: widget.album.isSingle ? '' : _title.text, onDeel: (totNu) {
-            if (mounted && ronde == _zoekRonde) setState(() => _results = totNu);
+            if (mounted && ronde == _zoekRonde) setState(() => _results = orden(totNu));
           })
           .timeout(Duration(seconds: _provider == 'Alles' ? 75 : 40));
+      res = orden(res);
     } on TimeoutException {
       failure = '$_provider antwoordde niet op tijd. Probeer het opnieuw of kies een andere bron.';
     } catch (e) {
@@ -8633,6 +8712,18 @@ class _MetadataEditorState extends State<MetadataEditor> {
                 Padding(
                   padding: EdgeInsets.only(bottom: 6),
                   child: LinearProgressIndicator(minHeight: 2, color: _accent, backgroundColor: Colors.transparent),
+                ),
+              // Eén nummer, en het staat op een studioalbum: meteen voorstellen, één tik en klaar (Saber, 23-10-2026:
+              // "Meteen voorstellen"). Wie zelf iets anders aanwijst, ziet dit niet meer.
+              if (widget.nummer != null && _picked == null && _results.isNotEmpty && _results.first.studioalbum)
+                _VoorstelRegel(
+                  album: _results.first.album,
+                  opZetten: _applying
+                      ? null
+                      : () async {
+                          await _pick(_results.first);
+                          if (mounted) await _apply();
+                        },
                 ),
               Expanded(
                 child: _searching && _results.isEmpty
@@ -12595,11 +12686,134 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
           if (!isTv) MenuRegel(Icons.travel_explore_outlined, 'Juiste uitgave zoeken…',
               () => showDialog<bool>(
                   context: context, builder: (_) => MetadataEditor(album, nummer: t))),
+        // Op welke platen dit nummer staat: studioalbum, single, live, verzamelaars (Saber, 23-10-2026: "Ja, in het
+        // menu").
+        if (!isTv) MenuRegel(Icons.library_music_outlined, 'Staat ook op…', () => toonStaatOokOp(context, t)),
         if (!isTv) MenuRegel(Icons.delete_outline_rounded, 'Verwijderen…',
             () => _confirmDelete(context, '“${t.title}”', [t.path])),
       ],
     ],
   );
+}
+
+/// De regel bovenaan "Juiste uitgave zoeken" bij een los nummer: "Hoort bij Reckless — zo zetten?". Zie
+/// [MetadataEditor].
+class _VoorstelRegel extends StatelessWidget {
+  const _VoorstelRegel({required this.album, required this.opZetten});
+
+  final String album;
+  final VoidCallback? opZetten;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        decoration: BoxDecoration(
+          color: _accent.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(kHoek8),
+          border: Border.all(color: _accent.withValues(alpha: 0.45)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.album_rounded, size: 18, color: _accent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('Hoort bij $album — zo zetten?',
+                  maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            const SizedBox(width: 8),
+            FilledButton(onPressed: opZetten, child: const Text('Zo zetten')),
+          ],
+        ),
+      );
+}
+
+/// "Staat ook op…": op welke platen [t] staat, de studioalbums bovenaan en het origineel voor de deluxe — zie
+/// [MetadataSearch.opWelkePlaten]. Alleen kijken; een uitgave kiezen gaat via "Juiste uitgave zoeken…".
+Future<void> toonStaatOokOp(BuildContext context, Track t) => showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: _panel,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(kHoek18))),
+      builder: (_) => _StaatOokOpBlad(track: t, zoeker: MetadataSearch(context.read<AppSettings>())),
+    );
+
+class _StaatOokOpBlad extends StatefulWidget {
+  const _StaatOokOpBlad({required this.track, required this.zoeker});
+
+  final Track track;
+  final MetadataSearch zoeker;
+
+  @override
+  State<_StaatOokOpBlad> createState() => _StaatOokOpBladState();
+}
+
+class _StaatOokOpBladState extends State<_StaatOokOpBlad> {
+  late final Future<List<MetaResult>> _platen =
+      widget.zoeker.opWelkePlaten(widget.track.artist, widget.track.title).catchError((Object _) => <MetaResult>[]);
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.track;
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .75),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 2),
+              child: Text('Staat ook op', style: TextStyle(color: kInkt, fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text('${t.artist} — ${t.title}',
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 12.5)),
+            ),
+            Flexible(
+              child: FutureBuilder<List<MetaResult>>(
+                future: _platen,
+                builder: (context, s) {
+                  if (s.connectionState != ConnectionState.done) {
+                    return Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Center(child: CircularProgressIndicator(color: _accent)),
+                    );
+                  }
+                  final lijst = s.data ?? const <MetaResult>[];
+                  if (lijst.isEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                      child: Text('MusicBrainz kent geen plaat met dit nummer.', style: TextStyle(color: _muted)),
+                    );
+                  }
+                  return ListView(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    children: [
+                      for (final m in lijst)
+                        ListTile(
+                          dense: true,
+                          leading: _netCover(m.coverUrl, size: 40, radius: 6),
+                          title: Text(m.album,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: kInkt, fontWeight: m.studioalbum ? FontWeight.w600 : FontWeight.w400)),
+                          subtitle: Text(
+                              [if (m.soort.isNotEmpty) m.soort, if (m.jaar != null) '${m.jaar}'].join(' · '),
+                              style: TextStyle(color: _muted, fontSize: 12)),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// Het menu voor een plaat van online (Start, zoeken): openen, de artiest, een radio.
@@ -14540,6 +14754,15 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
     for (final g in sessie.gehaald)
       if (padVan(g) != null) g
   ];
+  final meldingen = ScaffoldMessenger.of(context);
+  void kortGemeld(int gehouden) {
+    if (gehouden + sessie.opgeruimd == 0) return;
+    meldingen.showSnackBar(SnackBar(
+      content: Text(radioSamenvatting(gehouden: gehouden, opgeruimd: sessie.opgeruimd)),
+      duration: const Duration(seconds: 6),
+    ));
+  }
+
   if (aanwezig.isEmpty) {
     // Maar niet als de muziekschijf er gewoon niet is: dan is alles "weg" omdat de schijf los is, en
     // zou de notitie verdwijnen met de bestanden er nog op.
@@ -14547,6 +14770,7 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
         sessie.gehaald.any((g) => g.pad.length >= 3 && !Directory(g.pad.substring(0, 3)).existsSync())) {
       return;
     }
+    kortGemeld(0);
     await radio.vergeetOpenstaand();
     return;
   }
@@ -14581,6 +14805,14 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
         },
         gered: gered,
       );
+
+  // Niets meer te beslissen (alles gehouden, of onderweg al opgeruimd): geen blad, alleen een korte melding.
+  final vooraf = maakPlan();
+  if (vooraf.weg.isEmpty) {
+    kortGemeld(vooraf.blijft.length);
+    await radio.vergeetOpenstaand();
+    return;
+  }
 
   final doen = await showModalBottomSheet<bool>(
     context: context,
@@ -15257,7 +15489,9 @@ Future<String?> bedienSpeakerRadio({
 }) async {
   if (_radioOpSpeaker(radio, speaker) == null) return 'Op deze speaker speelt geen radio van de pc.';
   if (cmd == 'radioStop') {
-    radio.stop();
+    // Het overzicht komt waar je afsloot (Saber, 23-10-2026).
+    final door = '${opdracht['door'] ?? ''}';
+    radio.stop(naar: door.isEmpty ? null : door);
     return null;
   }
   final t = nummer('${opdracht['trackId'] ?? ''}');
@@ -15302,13 +15536,14 @@ class _RadioAfsluitknop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026) — behalve de
-    // radio van de pc op een speaker: die sluit je hier af, vanaf elk toestel (speakerradio v2, 23-10-2026).
+    // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026) — behalve een
+    // radio daar: die sluit je hier af, vanaf elk toestel, en het overzicht komt dan hier (speakerradio v2 en Saber,
+    // 23-10-2026: "waar ik 'Radio afsluiten' tik").
     final zone = _misschien<GekozenZone>(context, luister: true)?.opAfstand;
     if (zone != null) {
       return ListenableBuilder(
         listenable: zone,
-        builder: (context, _) => !zone.radioVanDePc
+        builder: (context, _) => !zone.radioMode
             ? const SizedBox.shrink()
             : Padding(
                 padding: const EdgeInsets.only(top: kRuimte12),
@@ -17293,7 +17528,7 @@ Future<List<String>> _lastfmTopArtiesten(AppSettings cfg,
 }
 
 Future<void> startRadio(BuildContext context, String artist,
-    {String? titel, Track? zaad, int? seconden, bool hier = false, String? naar}) async {
+    {String? titel, Track? zaad, int? seconden, bool hier = false, String? naar, String? door}) async {
   // Een zone op afstand gekozen: daar (Saber, 21-10-2026: een radio starten in een andere zone "op elk
   // toestel meteen"). [hier] als het per se dit toestel moet zijn: bij overnemen, of als een ander
   // toestel dit toestel net vroeg een radio te starten.
@@ -17557,6 +17792,7 @@ Future<void> startRadio(BuildContext context, String artist,
     for (final p in plan)
       if (p.eigen == null || artiestSleutel(p.artiest) == zelf) p,
   ], naar: uitgang, naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijvul: bijvuller.call, groen: bijvuller.lastfmVan == null ? null : bijvuller.groenRonde, spoor: log.line,
+      door: door,
       bijStart: (s) {
     gestart = s;
     _keuring = keuring;
@@ -23664,7 +23900,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           : _tidalViaPc
               ? await _tidalOpPc(context.read<LibraryStore>(), 'zoek', {'q': q})
               : await zoekCatalogusOpTidal(q) ??
-                  (throw 'tidaler antwoordde niet — log opnieuw in met "tidaler login" in een terminal.');
+                  (throw tidalHulpFoutZin());
       if (!geldig()) return;
       _tidalAlbums = r.albums;
       _tidalTracks = r.tracks;
