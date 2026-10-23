@@ -156,8 +156,8 @@ void main() {
       expect(n.gespeeld.single.positie, const Duration(seconds: 65));
       expect(n.gespeeld.single.shuffle, isTrue);
       expect(n.gespeeld.single.herhaal, RepeatMode.all);
-      expect(v.meldNu()?.overname, 'pc-THUIS', reason: 'zo weet de pc dat hij moet pauzeren');
-      expect(v.meldNu()?.overname, isNull, reason: 'maar alleen de eerste keer');
+      expect(v.meldNu().overname, 'pc-THUIS', reason: 'zo weet de pc dat hij moet pauzeren');
+      expect(v.meldNu().overname, isNull, reason: 'maar alleen de eerste keer');
     });
 
     test('pauzeren na een overname, en dan even niet melden', () async {
@@ -166,13 +166,29 @@ void main() {
       final v = VerderLuisteren(n, klok: () => nu);
       await v.opStand(_stand(van: 'ipad-2', overname: 'gsm-1', op: 1999000));
       expect(n.pauzes, 1);
-      expect(v.meldNu(), isNull, reason: 'anders overschrijft "gepauzeerd hier" de stand van de iPad');
+      expect(v.meldNu().alleenZone, isTrue, reason: 'anders overschrijft "gepauzeerd hier" de stand van de iPad');
+      expect(v.meldNu().overname, isNull);
       nu += 7000;
-      expect(v.meldNu(), isNotNull);
+      expect(v.meldNu().alleenZone, isFalse);
       // Dezelfde melding nog eens (de volgende keer kijken): niet nog eens pauzeren.
       n.speelt = true;
       await v.opStand(_stand(van: 'ipad-2', overname: 'gsm-1', op: 1999000));
       expect(n.pauzes, 1);
+    });
+
+    test('de pc zegt "verplaatst": pauzeren, en de pauze alleen in de eigen zone melden', () {
+      var nu = 3000000;
+      final n = _Nep(speelt: true);
+      final v = VerderLuisteren(n, klok: () => nu);
+      expect(v.meldNu().alleenZone, isFalse);
+      v.isVerplaatst();
+      expect(n.pauzes, 1);
+      expect(v.meldNu().alleenZone, isTrue,
+          reason: 'de zonelijst moet de pauze horen, maar "waar je gebleven bent" is nu van het andere toestel');
+      nu += 5900;
+      expect(v.meldNu().alleenZone, isTrue);
+      nu += 200;
+      expect(v.meldNu().alleenZone, isFalse);
     });
 
     test('wegklikken: hetzelfde nummer van hetzelfde toestel komt niet terug', () async {
@@ -223,7 +239,7 @@ void main() {
       final verzoek = {..._stand(), 'naar': 'gsm-1', 'at': 1004000};
       await v.opStand(null, verzoek: verzoek);
       expect(n.gespeeld, hasLength(1));
-      expect(v.meldNu()?.overname, 'pc-THUIS');
+      expect(v.meldNu().overname, 'pc-THUIS');
       await v.opStand(null, verzoek: verzoek);
       expect(n.gespeeld, hasLength(1), reason: 'hetzelfde verzoek niet nog eens');
       expect(verzoekVoorMij({'naar': 'gsm-1', 'at': 1000}, mijnId: 'gsm-1', nuMs: 60000), isFalse,

@@ -117,6 +117,61 @@ void main() {
     await t.pump(const Duration(seconds: 1));
   });
 
+  testWidgets('verplaatst: vijf seconden "Verplaatst naar …", dan "Speelt niets"; lang gepauzeerd telt als niets',
+      (t) async {
+    // Saber, 23-10-2026: "als ik ze verplaats blijft op de andere ook, om den duur weet ik niet meer welke speelt".
+    final v = VerderLuisteren(_Bron(), klok: () => _nu);
+    final lijstOp = {
+          'nu': _nu,
+          'zones': [
+            const ZoneStaat(id: 'dev:gsm-1', soort: ZoneSoort.gsm, naam: 'Galaxy', online: true).toJson(),
+            ZoneStaat.fromJson({
+              ...const ZoneStaat(
+                id: 'dev:pc-THUIS',
+                soort: ZoneSoort.pc,
+                naam: 'THUIS',
+                online: true,
+                trackId: 'b',
+                positionMs: 60000,
+                durationMs: 240000,
+                opMs: _nu - 1000,
+              ).toJson(),
+              'verplaatstNaar': 'Galaxy',
+              'verplaatstOp': _nu - 1000,
+            }).toJson(),
+            const ZoneStaat(
+              id: 'dev:ipad-1',
+              soort: ZoneSoort.tablet,
+              naam: 'iPad',
+              online: true,
+              trackId: 'c',
+              positionMs: 30000,
+              opMs: _nu - 11 * 60000,
+            ).toJson(),
+          ],
+        };
+    var klok = _nu;
+    final lijst = ZoneLijst(hier: 'dev:gsm-1', klok: () => klok)..zet(lijstOp);
+    await t.pumpWidget(_app(lijst, v));
+    await t.tap(find.byKey(const ValueKey('zone-kies')));
+    await t.pump(const Duration(milliseconds: 400));
+    await t.pump(const Duration(milliseconds: 400));
+    expect(find.text('Verplaatst naar Galaxy'), findsOneWidget);
+    expect(find.byKey(const ValueKey('zone-verder-dev:pc-THUIS')), findsNothing,
+        reason: 'de muziek van de pc speelt nu hier; daar is niets meer om over te nemen');
+    expect(find.byKey(const ValueKey('zone-verder-dev:ipad-1')), findsOneWidget,
+        reason: 'lang gepauzeerd telt als niets, maar verder spelen kan nog');
+    expect(find.text('Speelt niets'), findsNWidgets(2), reason: 'dit toestel, en de iPad na elf minuten pauze');
+    expect(find.text('Laatst: Nummer c — X · 11 min geleden'), findsOneWidget);
+
+    // Het blad tikt elke seconde: na vijf seconden staat er wat er nu is.
+    klok += 5000;
+    await t.pump(const Duration(seconds: 1));
+    expect(find.text('Verplaatst naar Galaxy'), findsNothing);
+    expect(find.text('Speelt niets'), findsNWidgets(3));
+    await t.pump(const Duration(seconds: 1));
+  });
+
   testWidgets('een rij aantikken kiest die zone: de knop zegt waar je naar kijkt (stap 2.2)', (t) async {
     final v = VerderLuisteren(_Bron(), klok: () => _nu);
     final lijst = ZoneLijst(hier: 'dev:gsm-1', klok: () => _nu)..zet(_lijst());
@@ -154,6 +209,37 @@ void main() {
     expect(gekozen.opAfstand?.zoneId, 'dev:pc-THUIS');
     expect(bewaard, ['dev:pc-THUIS'], reason: 'per toestel onthouden');
     expect(find.text('Speelt op: THUIS'), findsOneWidget);
+
+    // "Hier verder" vanaf de pc: de muziek speelt nu hier, dus bedien je dit toestel weer (niet de pc die stopt).
+    lijst.haalStand = (zone) async => {
+          'trackId': 'b',
+          'positionMs': 60000,
+          'queue': ['b'],
+          'index': 0,
+          'playing': true,
+          'updatedAt': _nu - 5000,
+          'deviceId': 'pc-THUIS',
+          'deviceName': 'THUIS',
+        };
+    await t.tap(find.byKey(const ValueKey('zone-kies')));
+    await t.pump(const Duration(milliseconds: 400));
+    await t.pump(const Duration(milliseconds: 400));
+    await t.tap(find.byKey(const ValueKey('zone-verder-dev:pc-THUIS')));
+    await t.pump(const Duration(milliseconds: 400));
+    await t.pump(const Duration(milliseconds: 400));
+    expect(gekozen.opAfstand, isNull);
+    expect(find.text('Speelt op: Galaxy'), findsOneWidget);
+
+    // Bedien je een andere zone, dan blijft dat zo (zoals bij "Verplaats naar"; Saber: "bedienen blijft lijk nu").
+    gekozen.kies('dev:ipad-1');
+    await t.pump(const Duration(milliseconds: 400));
+    await t.tap(find.byKey(const ValueKey('zone-kies')));
+    await t.pump(const Duration(milliseconds: 400));
+    await t.pump(const Duration(milliseconds: 400));
+    await t.tap(find.byKey(const ValueKey('zone-verder-dev:pc-THUIS')));
+    await t.pump(const Duration(milliseconds: 400));
+    await t.pump(const Duration(milliseconds: 400));
+    expect(gekozen.opAfstand?.zoneId, 'dev:ipad-1');
     gekozen.dispose();
     await t.pump(const Duration(seconds: 1));
   });

@@ -181,6 +181,9 @@ class LanServer {
     });
     // Een overzicht in de brievenbus: dat toestel een seintje — zie [_seinOverzicht].
     _overzichtSub = state.changes.listen(_seinOverzicht);
+    // Een toestel nam over ("Hier verder", "Speel daar"): de bron hoort het van de pc zelf — zie [_bronVerplaatst].
+    _overnameSub = state.overnames.listen((o) => unawaited(
+        _bronVerplaatst(o.van.startsWith('spk:') ? o.van : 'dev:${o.van}', 'dev:${o.naar}', o.trackId)));
     // En met een speaker (stap 3.3): de speakerklok meldt waar hij is, op de ms.
     zones.speakerAnker = cast.ankerVan;
     zones.speakerVertraging.addAll(settings?.samenSpeakerMs ?? const {});
@@ -338,6 +341,7 @@ class LanServer {
   late final ZoneRegister zones;
   StreamSubscription<String>? _ankerSub;
   StreamSubscription<Map<String, dynamic>>? _overzichtSub;
+  StreamSubscription<({String van, String naar, String trackId})>? _overnameSub;
 
   /// Een overzicht "Radio afsluiten" kwam in de brievenbus van een toestel (`radio.overzicht`): dat toestel krijgt een
   /// seintje over zijn zonelijn, zodat het meteen kijkt. Is de app daar dicht, dan kijkt hij bij het volgende openen
@@ -493,7 +497,7 @@ class LanServer {
       final speaker = zone.substring(4);
       try {
         switch (cmd) {
-          case 'play' || 'pause' || 'next' || 'previous':
+          case 'play' || 'pause' || 'stop' || 'next' || 'previous':
             await cast.control(speaker, cmd);
           case 'seek':
             await cast.control(speaker, 'seek', value: ((op['ms'] as num?)?.toInt() ?? 0) ~/ 1000);
@@ -627,20 +631,38 @@ class LanServer {
           van: wie);
       if (r.status != 200) return r;
     }
-    // Een toestel als bron pauzeert vanzelf als een toestel overneemt (het ziet zichzelf in de melding).
-    // Een speaker niet, en een toestel ook niet als een SPEAKER overnam: die pauzeert de pc zelf.
-    if (van.startsWith('spk:') || naar.startsWith('spk:')) unawaited(_pauzeerAlsDoelSpeelt(van, naar, trackId));
+    // De bron stopt zodra het doel speelt — ook een toestel dat het zelf had kunnen zien: dat signaal kon het
+    // missen ([_bronVerplaatst]).
+    unawaited(_bronVerplaatst(van, naar, trackId));
     return (status: 200, antwoord: {'bezorgd': 1});
   }
 
-  Future<void> _pauzeerAlsDoelSpeelt(String van, String naar, String trackId) async {
+  /// De muziek van [van] ging naar [naar]: zodra [naar] dit nummer ([trackId]) speelt (hoogstens tien seconden
+  /// wachten), stopt de bron — een speaker met 'stop', een toestel met de opdracht 'verplaatst' over zijn zonelijn —
+  /// en staat ze in de lijst als "Verplaatst naar …" ([ZoneRegister.verplaatst]).
+  ///
+  /// **Waarom (Saber, 23-10-2026).** *"als ik ze verplaats blijft op de andere ook, om den duur weet ik niet meer welke
+  /// speelt"* — en op de vraag wat er met de oude zone moet gebeuren: *"A stopt helemaal"*. Tot nu toe pauzeerde een
+  /// toestel als bron vanzelf, als het zichzelf in de gedeelde stand zag; maar dat signaal kon het missen, en zijn
+  /// pauze werd door het stilvenster van zes seconden niet gemeld. Dan bleef het in de lijst spelen, met een klok die
+  /// doorliep.
+  Future<void> _bronVerplaatst(String van, String naar, String trackId) async {
+    if (van == naar || van.isEmpty || naar.isEmpty) return;
     for (var i = 0; i < 20; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 500));
       final doel = zones.lijst().where((z) => z.id == naar).firstOrNull;
-      if (doel != null && doel.playing && doel.trackId == trackId) {
-        await zoneOpdracht({'zone': van, 'cmd': 'pause', 'id': 'over-pauze-${zones.nu}'}, van: 'overdracht');
+      if (doel != null && doel.playing && (trackId.isEmpty || doel.trackId == trackId)) {
+        // Twee wegen komen hier (de overdracht zelf, en de melding van wie overnam): maar één keer stoppen.
+        if (zones.netVerplaatst(van)) return;
+        zones.verplaatst(van, doel.naam);
+        _zoneLog.line('overdracht $van → $naar: de bron stopt');
+        await zoneOpdracht(
+            van.startsWith('spk:')
+                ? {'zone': van, 'cmd': 'stop', 'id': 'over-stop-${zones.nu}'}
+                : {'zone': van, 'cmd': 'verplaatst', 'naar': doel.naam, 'id': 'over-verplaatst-${zones.nu}'},
+            van: 'overdracht');
         return;
       }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
     }
     _zoneLog.line('overdracht $van → $naar: het doel speelt na 10 s niet — de bron blijft spelen');
   }
@@ -791,6 +813,7 @@ class LanServer {
     cast.dispose();
     await _ankerSub?.cancel();
     await _overzichtSub?.cancel();
+    await _overnameSub?.cancel();
     await zones.dispose();
     catalog.dispose();
     // Een opslagbeurt die een verzoek net startte (`touch`), nog afmaken: anders gaat hij verloren,

@@ -68,7 +68,7 @@ import 'zone_opdracht.dart';
 import 'volgbron.dart' show Volgbron;
 import 'samen.dart' show KlokIjk, SamenAnker, SamenVolger;
 import 'speaker_radio.dart';
-import 'lan/zones.dart' show RadioOpSpeaker, ZoneSoort, ZoneStaat, positieNu, zoneSoortVoor;
+import 'lan/zones.dart' show RadioOpSpeaker, ZoneSoort, ZoneStaat, positieNu, speeltNu, verplaatstMelding, zoneSoortVoor;
 import 'lan/server.dart' show LanServer;
 import 'ui/knopbewegingen.dart';
 import 'ui/menu_iconen.dart';
@@ -1611,6 +1611,8 @@ Future<void> main() async {
     idVan: (t) => library.gedeeldId(t.path),
     // Een andere zone verplaatst haar muziek hierheen (stap 2.5): overnemen zoals bij "Hier verder".
     neemOver: verder.neemOverUit,
+    // En andersom: de muziek van hier speelt nu daar. Hier stoppen (Saber, 23-10-2026: "A stopt helemaal").
+    verplaatst: (_) => verder.isVerplaatst(),
     // Dit toestel volgt een groep (stap 3.2).
     samen: (a) async {
       final anker = SamenAnker.fromJson(a);
@@ -1654,16 +1656,16 @@ Future<void> main() async {
       // is niet "waar je nu bent". Op de proef overschreef de Shield zo bij het opstarten wat de pc een
       // minuut eerder speelde, met een nummer van dagen geleden (17-10-2026).
       if (player.resumedPaused) return;
-      // Even niet na een overname (zie [VerderLuisteren.meldNu]); en de eerste melding na zelf
-      // overnemen zegt van welk toestel, zodat dat pauzeert.
+      // Na een overname even alleen voor de zonelijst (zie [VerderLuisteren.meldNu]); en de eerste
+      // melding na zelf overnemen zegt van welk toestel, zodat dat pauzeert.
       final m = verder.meldNu();
-      if (m == null) return;
       sharing.reportProgress(track.path, position, playing, [for (final t in queue) t.path], index,
           shuffle: player.shuffle,
           herhaal: player.repeat.name,
           overname: m.overname ?? '',
           radio: player.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null,
-          volume: player.volume.round());
+          volume: player.volume.round(),
+          alleenZone: m.alleenZone);
     };
     // De zones van de pc staan in zijn eigen server; die kan opnieuw opgezet worden (andere poort,
     // andere instellingen), dan de nieuwe volgen.
@@ -1977,7 +1979,6 @@ Future<void> main() async {
         // Zie de pc hierboven: een alleen teruggezette stand is geen melding.
         if (c == null || player.resumedPaused) return;
         final m = verder.meldNu();
-        if (m == null) return;
         final id = library.gedeeldId(track.path);
         if (id == null) return;
         unawaited(c.ask('/api/state/ops', {
@@ -1995,6 +1996,8 @@ Future<void> main() async {
               'volume': player.volume.round(),
               if (m.overname != null) 'overname': m.overname,
               if (player.radioMode) 'radio': {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam},
+              // Na een overname alleen voor de zonelijst (zie [VerderLuisteren.meldNu]).
+              if (m.alleenZone) 'alleenZone': true,
             }
           ],
           'deviceId': ik!.id,
@@ -11007,10 +11010,18 @@ class ZoneBlad extends StatefulWidget {
 }
 
 class _ZoneBladState extends State<ZoneBlad> {
-  // De plek in een nummer dat ergens anders speelt, schuift elke seconde op.
-  late final Timer _tik = Timer.periodic(const Duration(seconds: 1), (_) {
-    if (mounted) setState(() {});
-  });
+  // De plek in een nummer dat ergens anders speelt, schuift elke seconde op; en "Verplaatst naar …" gaat na vijf
+  // seconden weg. Gestart in [initState]: als `late final` veld liep hij tot 23-10-2026 nooit (alleen [dispose]
+  // raakte hem aan), en stond de plek stil tot de lijst zelf veranderde.
+  late final Timer _tik;
+
+  @override
+  void initState() {
+    super.initState();
+    _tik = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
 
   @override
   void dispose() {
@@ -11105,9 +11116,19 @@ class _ZoneRij extends StatelessWidget {
     ].join(' · ');
     final String regel;
     final String? tijd;
-    if (!zone.speeltIets) {
-      regel = zone.online ? 'Speelt niets' : 'Niet bereikbaar';
+    // Ging haar muziek net naar een andere zone: dat even zeggen, daarna "Speelt niets" (Saber, 23-10-2026:
+    // "als ik ze verplaats blijft op de andere ook, om den duur weet ik niet meer welke speelt").
+    final verplaatst = verplaatstMelding(zone, nuMs: nuPc);
+    final speelt = speeltNu(zone, nuMs: nuPc);
+    if (verplaatst != null) {
+      regel = verplaatst;
       tijd = null;
+    } else if (!speelt) {
+      regel = zone.online ? 'Speelt niets' : 'Niet bereikbaar';
+      // Lang gepauzeerd telt als niets, maar verder spelen kan nog: zeg waar.
+      final wat = artiest.isEmpty ? titel : '$titel — $artiest';
+      final geleden = Duration(milliseconds: (nuPc - zone.opMs).clamp(0, 1 << 40));
+      tijd = zone.speeltIets && zone.verplaatstNaar.isEmpty ? 'Laatst: $wat · ${_geleden(geleden)}' : null;
     } else {
       regel = artiest.isEmpty ? titel : '$titel — $artiest';
       final plek = positieNu(zone, nuMs: nuPc);
@@ -11122,7 +11143,7 @@ class _ZoneRij extends StatelessWidget {
     }
 
     Widget? actie;
-    if (!hier && zone.speeltIets && zone.toestel != null) {
+    if (!hier && zone.speeltIets && zone.verplaatstNaar.isEmpty && zone.toestel != null) {
       // Overnemen kan van elk toestel, ook een dat weg is: zijn laatste stand staat op de pc.
       actie = GlasKnop(
         key: ValueKey('zone-verder-${zone.id}'),
@@ -11174,14 +11195,14 @@ class _ZoneRij extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  Icon(zoneIcoon(zone.soort), size: 13, color: zone.playing ? _accent2 : _muted),
+                  Icon(zoneIcoon(zone.soort), size: 13, color: zone.playing && speelt ? _accent2 : _muted),
                   const SizedBox(width: 5),
                   Flexible(
                     child: Text(kop,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                            color: zone.playing ? _accent2 : _muted, fontSize: 11.5, fontWeight: FontWeight.w600)),
+                            color: zone.playing && speelt ? _accent2 : _muted, fontSize: 11.5, fontWeight: FontWeight.w600)),
                   ),
                 ]),
                 const SizedBox(height: 2),
@@ -11204,8 +11225,8 @@ class _ZoneRij extends StatelessWidget {
               icon: Icon(Icons.link_rounded, size: 20, color: zone.groep.isEmpty ? _muted : _accent2),
               onPressed: () => _kiesGroep(context, zone),
             ),
-          // Overdragen naar een andere zone (stap 2.5): de muziek verhuist, deze zone pauzeert.
-          if (zone.speeltIets && lijst.verplaats != null)
+          // Overdragen naar een andere zone (stap 2.5): de muziek verhuist, deze zone stopt.
+          if (zone.speeltIets && zone.verplaatstNaar.isEmpty && lijst.verplaats != null)
             IconButton(
               key: ValueKey('zone-naar-${zone.id}'),
               tooltip: 'Verplaats naar …',
@@ -11502,7 +11523,7 @@ Future<void> _kiesDoelZone(BuildContext context, ZoneStaat van) async {
                 children: [
                   Text('Verplaats naar', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 2),
-                  Text('${van.naam} pauzeert zodra het daar speelt',
+                  Text('${van.naam} stopt zodra het daar speelt',
                       style: TextStyle(color: _muted, fontSize: 12)),
                   const SizedBox(height: 8),
                   if (doelen.isEmpty)
@@ -11548,7 +11569,7 @@ Future<void> _kiesDoelZone(BuildContext context, ZoneStaat van) async {
     return;
   }
   if (gekozen != null && gekozen.gekozen == van.id) gekozen.kies(doel.id);
-  _srcToast(context, 'Naar ${doel.naam} verplaatst — ${van.naam} pauzeert zodra het daar speelt.');
+  _srcToast(context, 'Naar ${doel.naam} verplaatst — ${van.naam} stopt zodra het daar speelt.');
   Navigator.of(context).maybePop();
 }
 
@@ -11556,7 +11577,9 @@ Future<void> _kiesDoelZone(BuildContext context, ZoneStaat van) async {
 /// "Hier verder luisteren" dat doet — dat toestel pauzeert.
 Future<void> _neemOverVan(BuildContext context, ZoneStaat zone) async {
   final verder = context.read<VerderLuisteren>();
-  final haal = context.read<ZoneLijst>().haalStand;
+  final lijst = context.read<ZoneLijst>();
+  final haal = lijst.haalStand;
+  final gekozen = _misschien<GekozenZone>(context);
   final nav = Navigator.of(context);
   Map<String, dynamic>? stand;
   try {
@@ -11565,6 +11588,8 @@ Future<void> _neemOverVan(BuildContext context, ZoneStaat zone) async {
     stand = null;
   }
   final ok = await verder.neemOverUit(stand);
+  // Bediende je de zone die nu stopt, dan bedien je voortaan dit toestel — zoals bij "Verplaats naar" ([_kiesDoelZone]).
+  if (ok && gekozen != null && gekozen.gekozen == zone.id) gekozen.kies(lijst.hier);
   if (!context.mounted) return;
   if (ok) {
     nav.maybePop();
@@ -11587,7 +11612,7 @@ void _speelOpToestel(BuildContext context, String id, String naam) {
       herhaal: p.repeat.name,
       radio: p.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null);
   _srcToast(context,
-      ok ? 'Naar $naam gestuurd — de pc pauzeert zodra het daar speelt.' : 'Dit nummer kan niet mee (het staat niet in je bibliotheek).');
+      ok ? 'Naar $naam gestuurd — de pc stopt zodra het daar speelt.' : 'Dit nummer kan niet mee (het staat niet in je bibliotheek).');
 }
 
 /// Het hart naast de titel in de spelerbalk: vol als dit nummer een favoriet is, en het klopt met
