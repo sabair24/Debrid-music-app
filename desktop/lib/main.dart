@@ -17257,19 +17257,27 @@ Route<void> nuSpeeltRoute({WidgetBuilder? scherm}) => PageRouteBuilder<void>(
       transitionsBuilder: (_, animatie, __, kind) => SlideTransition(
         position: Tween(begin: const Offset(0, 1), end: Offset.zero)
             .animate(CurvedAnimation(parent: animatie, curve: Curves.easeOutCubic)),
-        // Een meetronde met `foto` (zie `meetronde.dart`): tijdens het schuiven één foto van het scherm.
-        child: zonderVoorMeting('foto') ? FotoTijdensSchuiven(animatie: animatie, child: kind) : kind,
+        // Bij het sluiten één foto van het scherm (gemeten op de Mac, 23-10-2026: piekbeelden van 156 naar 17 ms). Niet
+        // bij het openen: daar komt de vervaagde achtergrond pas een beeld later, en die zou dan inspringen. Een
+        // meetronde vergelijkt met `foto` (ook bij openen) en `levend` (nooit), zie `meetronde.dart`.
+        child: FotoTijdensSchuiven(
+            animatie: animatie,
+            open: zonderVoorMeting('foto'),
+            dicht: !zonderVoorMeting('levend'),
+            child: kind),
       ),
     );
 
-/// Tijdens het in- of uitschuiven één foto van [child] in plaats van het levende scherm: Impeller tekent anders bij
-/// elk beeld het hele scherm opnieuw, met al zijn glas, schaduwen en spiegelingen (gemeten op de Mac, 23-10-2026).
-/// Zodra het stilstaat, weer het echte scherm.
+/// Tijdens het in- ([open]) of uitschuiven ([dicht]) één foto van [child] in plaats van het levende scherm: Impeller
+/// tekent anders bij elk beeld het hele scherm opnieuw, met al zijn lagen (gemeten op de Mac, 23-10-2026). Zodra het
+/// stilstaat, weer het echte scherm. Altijd in de boom, ook als er geen foto genomen wordt: zo blijft het scherm
+/// eronder zijn staat houden.
 class FotoTijdensSchuiven extends StatefulWidget {
-  const FotoTijdensSchuiven({super.key, required this.animatie, required this.child});
+  const FotoTijdensSchuiven({super.key, required this.animatie, required this.child, this.open = false, this.dicht = true});
 
   final Animation<double> animatie;
   final Widget child;
+  final bool open, dicht;
 
   @override
   State<FotoTijdensSchuiven> createState() => _FotoTijdensSchuivenState();
@@ -17278,8 +17286,14 @@ class FotoTijdensSchuiven extends StatefulWidget {
 class _FotoTijdensSchuivenState extends State<FotoTijdensSchuiven> {
   final _foto = SnapshotController();
 
-  void _opStand(AnimationStatus s) =>
-      _foto.allowSnapshotting = s == AnimationStatus.forward || s == AnimationStatus.reverse;
+  void _opStand(AnimationStatus s) => _foto.allowSnapshotting =
+      (s == AnimationStatus.forward && widget.open) || (s == AnimationStatus.reverse && widget.dicht);
+
+  @override
+  void didUpdateWidget(FotoTijdensSchuiven oud) {
+    super.didUpdateWidget(oud);
+    if (oud.open != widget.open || oud.dicht != widget.dicht) _opStand(widget.animatie.status);
+  }
 
   @override
   void initState() {
@@ -24329,6 +24343,7 @@ class OnlineSearchScreen extends StatefulWidget {
 }
 
 class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
+
   final _c = TextEditingController();
 
   /// Skipped when arrowing on a television, for the same reason as the library search: focus opens
@@ -25184,15 +25199,23 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
       // Weinig hoogte — een gsm liggend: de balk en de speler nemen de helft, en kop, tabbladen, zoekveld en downloads
       // de rest. Dan bleef er voor de resultaten niets over en kon je niet scrollen (Saber, 23-10-2026). Dan schuift de
       // kop mee weg met de resultaten.
-      if (ruimte.maxHeight < 520) {
+      //
+      // De hoogte ZONDER toetsenbord: dat neemt ook de helft van het scherm, en dan wisselde de indeling op het moment
+      // dat je wilde typen. Het zoekveld werd opnieuw gebouwd, verloor zijn focus, en het toetsenbord klapte meteen
+      // weer dicht (Saber, 23-10-2026: "men toetsen bord op men gsm springt altijd weg, als ik bij online zoek iets wil
+      // typen"). Een draai wisselt de indeling nog wel; wat je intikte blijft dan staan.
+      final kopKolom =
+          Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: kop);
+      // Van het venster zelf: een Scaffold haalt het toetsenbord uit de MediaQuery van zijn inhoud.
+      final venster = View.of(context);
+      final toetsenbord = venster.viewInsets.bottom / venster.devicePixelRatio;
+      if (ruimte.maxHeight + toetsenbord < 520) {
         return NestedScrollView(
-          headerSliverBuilder: (_, __) => [
-            SliverToBoxAdapter(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: kop)),
-          ],
+          headerSliverBuilder: (_, __) => [SliverToBoxAdapter(child: kopKolom)],
           body: resultaten,
         );
       }
-      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [...kop, Expanded(child: resultaten)]);
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [kopKolom, Expanded(child: resultaten)]);
     });
   }
 

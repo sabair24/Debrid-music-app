@@ -132,6 +132,40 @@ void main() {
     expect(t.takeException(), isNull);
   });
 
+  // Saber, 23-10-2026: "men toetsen bord op men gsm springt altijd weg, als ik bij online zoek iets wil typen".
+  testWidgets('DE KERN: het toetsenbord gaat open en het zoekveld houdt zijn focus', (t) async {
+    await _scherm(t, const Size(411, 860));
+    expect(find.byType(NestedScrollView), findsNothing);
+    final veld = find.byType(TextField).first;
+    await t.tap(veld);
+    await t.pump();
+    expect(t.testTextInput.isVisible, isTrue);
+    final focus = FocusManager.instance.primaryFocus;
+    expect(focus, isNotNull);
+    // Het toetsenbord neemt de helft: de ruimte voor het scherm wordt 520 punten lager.
+    t.view.viewInsets = const FakeViewPadding(bottom: 420);
+    addTearDown(t.view.resetViewInsets);
+    await t.pump();
+    await t.pump();
+    expect(find.byType(NestedScrollView), findsNothing, reason: 'het toetsenbord laat de indeling niet wisselen');
+    expect(FocusManager.instance.primaryFocus, same(focus), reason: 'anders klapt het toetsenbord meteen weer dicht');
+    expect(t.testTextInput.isVisible, isTrue);
+    await t.enterText(veld, 'dominion');
+    expect(find.text('dominion'), findsOneWidget);
+  });
+
+  testWidgets('wisselt de indeling toch (een draai), dan blijft wat je intikte staan', (t) async {
+    await _scherm(t, const Size(411, 860));
+    await t.tap(find.byType(TextField).first);
+    await t.enterText(find.byType(TextField).first, 'iets nieuws');
+    await t.pump();
+    t.view.physicalSize = const Size(860, 411);
+    await t.pump();
+    await t.pump();
+    expect(find.byType(NestedScrollView), findsOneWidget);
+    expect(find.text('iets nieuws'), findsOneWidget, reason: 'wat je intikte staat er nog');
+  });
+
   testWidgets('staand en op een groot scherm blijft de kop staan', (t) async {
     for (final maat in [const Size(411, 800), const Size(1920, 1080)]) {
       await _scherm(t, maat);

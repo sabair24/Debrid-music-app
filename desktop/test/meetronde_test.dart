@@ -10,6 +10,7 @@
 /// - de kantelhoes geeft de grootste hoes voor de muis, en staat stil in een variant zonder kantelen.
 library;
 
+import 'package:debridmusic/main.dart' show FotoTijdensSchuiven;
 import 'package:debridmusic/meetronde.dart';
 import 'package:debridmusic/player.dart' show Rijbediening, Speelbron;
 import 'package:debridmusic/ui/kantel_hoes.dart';
@@ -90,6 +91,30 @@ void main() {
       expect(bereid, 1);
       expect(klaar, 1);
       expect(meetrondeLoopt, isFalse);
+    });
+  });
+
+  group('Nu speelt als foto', () {
+    testWidgets('bij het sluiten een foto, bij het openen levend; de meetronde kan beide omzetten', (t) async {
+      final c = AnimationController(vsync: const TestVSync(), duration: const Duration(milliseconds: 300));
+      addTearDown(c.dispose);
+      Future<bool> foto({bool open = false, bool dicht = true}) async {
+        await t.pumpWidget(MaterialApp(
+            home: FotoTijdensSchuiven(animatie: c, open: open, dicht: dicht, child: const ColoredBox(color: Colors.red))));
+        return t.widget<SnapshotWidget>(find.byType(SnapshotWidget)).controller.allowSnapshotting;
+      }
+
+      c.forward();
+      await t.pump();
+      expect(await foto(), isFalse, reason: 'openen: levend (de vervaagde achtergrond komt pas later)');
+      expect(await foto(open: true), isTrue, reason: 'meetronde "foto"');
+      c.value = 1;
+      c.reverse();
+      await t.pump();
+      expect(await foto(), isTrue, reason: 'sluiten: één foto (Mac: piekbeelden van 156 naar 17 ms)');
+      expect(await foto(dicht: false), isFalse, reason: 'meetronde "levend"');
+      await t.pump(const Duration(seconds: 1));
+      expect(await foto(), isFalse, reason: 'stil: het echte scherm');
     });
   });
 

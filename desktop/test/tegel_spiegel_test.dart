@@ -95,11 +95,53 @@ void main() {
     expect(spiegelStroken(70), greaterThanOrEqualTo(24));
   });
 
-  test('de grote hoes gebruikt dezelfde stroken, geen ShaderMask meer', () {
+  test('de grote hoes gebruikt dezelfde stroken, maar gebakken; geen ShaderMask', () {
     final bron = File('lib/ui/kantel_hoes.dart').readAsStringSync();
     final lijf = bron.substring(bron.indexOf('class HoesSpiegel'));
-    expect(lijf, contains('TegelSpiegel(bron: MemoryImage(beeld), maat: maat, hoek: 10)'));
+    // Gebakken sinds 23-10-2026: in stroken kostte hij op de Mac 7 ms per beeld (zie TegelSpiegel.gebakken).
+    expect(lijf, contains("TegelSpiegel(bron: MemoryImage(beeld), maat: maat, hoek: 10, gebakken: !zonderVoorMeting('stroken'))"));
     expect(lijf, isNot(contains('ShaderMask(')));
+  });
+
+  test('gebakken: precies wat de stroken tekenen, op schermresolutie', () async {
+    final rood = ui.PictureRecorder();
+    final c = Canvas(rood);
+    c.drawRect(const Rect.fromLTWH(0, 0, 40, 20), Paint()..color = const Color(0xFFFF0000));
+    c.drawRect(const Rect.fromLTWH(0, 20, 40, 20), Paint()..color = const Color(0xFF0000FF));
+    final hoes = rood.endRecording().toImageSync(40, 40);
+    final gebakken = bakSpiegel(hoes, maat: 100, hoek: 10, dpr: 2);
+    expect(gebakken.width, 200);
+    expect(gebakken.height, (100 * kTegelSpiegelHoogte * 2).ceil());
+    final los = ui.PictureRecorder();
+    tekenSpiegel(Canvas(los)..scale(2), hoes, maat: 100, hoogte: 100 * kTegelSpiegelHoogte, hoek: 10);
+    final direct = los.endRecording().toImageSync(gebakken.width, gebakken.height);
+    final a = (await gebakken.toByteData())!.buffer.asUint8List();
+    final b = (await direct.toByteData())!.buffer.asUint8List();
+    expect(a, b, reason: 'hetzelfde beeld, alleen één keer getekend');
+    expect(a.any((x) => x != 0), isTrue, reason: 'anders bewijst dit niets');
+  });
+
+  testWidgets('gebakken: één beeld in plaats van de stroken, en opnieuw bij een andere maat', (t) async {
+    final b = _hoes();
+    Widget bouw(double maat) => MaterialApp(
+        home: Center(
+            child: SizedBox(
+                width: maat,
+                height: maat * kTegelSpiegelHoogte,
+                child: TegelSpiegel(bron: MemoryImage(b), maat: maat, hoek: 10, gebakken: true))));
+    await t.pumpWidget(bouw(120));
+    for (var i = 0; i < 40 && find.byKey(const ValueKey('tegel-spiegel-gebakken')).evaluate().isEmpty; i++) {
+      await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await t.pump();
+    }
+    expect(find.byKey(const ValueKey('tegel-spiegel-gebakken')), findsOneWidget);
+    expect(find.byKey(const ValueKey('tegel-spiegel')), findsNothing, reason: 'geen stroken meer per beeld');
+    final eerst = t.widget<RawImage>(find.byType(RawImage)).image!;
+    expect(eerst.width, (120 * t.view.devicePixelRatio).ceil());
+    await t.pumpWidget(bouw(160));
+    await t.pump();
+    final daarna = t.widget<RawImage>(find.byType(RawImage)).image!;
+    expect(daarna.width, (160 * t.view.devicePixelRatio).ceil(), reason: 'een andere maat bakt opnieuw');
   });
 
   test('dezelfde bron als de hoes: geen tweede decodering', () async {

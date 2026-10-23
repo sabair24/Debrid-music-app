@@ -85,7 +85,16 @@ void tekenSpiegel(Canvas c, ui.Image hoes, {required double maat, required doubl
 
 /// De spiegeling van één hoes van [maat] punten. Tekent niets tot de hoes er is.
 class TegelSpiegel extends StatefulWidget {
-  const TegelSpiegel({super.key, required this.bron, required this.maat, this.hoek = kHoek12});
+  const TegelSpiegel({super.key, required this.bron, required this.maat, this.hoek = kHoek12, this.gebakken = false});
+
+  /// Eén keer in een beeld tekenen en daarna alleen dat beeld ([bakSpiegel]) — voor de grote hoes, niet voor de tegels.
+  ///
+  /// **Waarom (gemeten op de Mac, 23-10-2026).** Onder de grote hoes in Nu speelt kostte de spiegeling in stroken ruim
+  /// 7 ms per beeld: met de spiegeling 9,0 ms rasteren bij het kantelen (516 van de 532 beelden te laat op 120 Hz),
+  /// zonder 1,3 ms (geen enkel). Impeller tekent elke strook met zijn eigen doorzichtigheid opnieuw uit de hele hoes,
+  /// en dat elk beeld, want het bewaart niets. Eén gebakken beeld kost hetzelfde als de hoes zelf. Onder de tegels
+  /// blijven de stroken: daar kostte één gebakken beeld per tegel op de pc juist te veel (zie hierboven).
+  final bool gebakken;
 
   /// Dezelfde bron als de hoes erboven: [spiegelVan] of [spiegelVanUrl].
   final ImageProvider bron;
@@ -151,13 +160,33 @@ class _TegelSpiegelState extends State<TegelSpiegel> {
   void dispose() {
     _stroom?.removeListener(_luister);
     _info?.dispose();
+    _bak?.beeld.dispose();
     super.dispose();
   }
+
+  /// Het gebakken beeld ([TegelSpiegel.gebakken]) en waarvoor het gebakken is.
+  ({ui.Image beeld, ui.Image van, double maat, double hoek, double dpr})? _bak;
 
   @override
   Widget build(BuildContext context) {
     final b = _info?.image;
     if (b == null) return const SizedBox.shrink();
+    if (widget.gebakken) {
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final k = _bak;
+      if (k == null || !k.van.isCloneOf(b) || k.maat != widget.maat || k.hoek != widget.hoek || k.dpr != dpr) {
+        k?.beeld.dispose();
+        _bak = (beeld: bakSpiegel(b, maat: widget.maat, hoek: widget.hoek, dpr: dpr), van: b, maat: widget.maat, hoek: widget.hoek, dpr: dpr);
+      }
+      return RawImage(
+        key: const ValueKey('tegel-spiegel-gebakken'),
+        image: _bak!.beeld,
+        width: widget.maat,
+        height: widget.maat * kTegelSpiegelHoogte,
+        fit: BoxFit.fill,
+        filterQuality: FilterQuality.low,
+      );
+    }
     return CustomPaint(
       key: const ValueKey('tegel-spiegel'),
       size: Size(widget.maat, widget.maat * kTegelSpiegelHoogte),
@@ -176,6 +205,21 @@ class _Spiegelschilder extends CustomPainter {
 
   @override
   bool shouldRepaint(_Spiegelschilder oud) => !beeld.isCloneOf(oud.beeld) || maat != oud.maat || hoek != oud.hoek;
+}
+
+/// De spiegeling van [hoes] als één beeld van [maat] × [maat]·[kTegelSpiegelHoogte] punten, op [dpr] pixels per punt:
+/// precies wat [tekenSpiegel] tekent, één keer.
+ui.Image bakSpiegel(ui.Image hoes, {required double maat, double hoek = 0, double dpr = 1}) {
+  final hoogte = maat * kTegelSpiegelHoogte;
+  final opname = ui.PictureRecorder();
+  final c = Canvas(opname)..scale(dpr);
+  tekenSpiegel(c, hoes, maat: maat, hoogte: hoogte, hoek: hoek);
+  final plaat = opname.endRecording();
+  try {
+    return plaat.toImageSync((maat * dpr).ceil().clamp(1, 8192), (hoogte * dpr).ceil().clamp(1, 8192));
+  } finally {
+    plaat.dispose();
+  }
 }
 
 /// De plek van de spiegeling in een `Stack` met de hoes van [maat] bovenaan: eronder, over wat er onder
