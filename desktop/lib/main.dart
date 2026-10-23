@@ -8713,6 +8713,18 @@ class _MetadataEditorState extends State<MetadataEditor> {
                   padding: EdgeInsets.only(bottom: 6),
                   child: LinearProgressIndicator(minHeight: 2, color: _accent, backgroundColor: Colors.transparent),
                 ),
+              // Eén nummer, en het staat op een studioalbum: meteen voorstellen, één tik en klaar (Saber, 23-10-2026:
+              // "Meteen voorstellen"). Wie zelf iets anders aanwijst, ziet dit niet meer.
+              if (widget.nummer != null && _picked == null && _results.isNotEmpty && _results.first.studioalbum)
+                _VoorstelRegel(
+                  album: _results.first.album,
+                  opZetten: _applying
+                      ? null
+                      : () async {
+                          await _pick(_results.first);
+                          if (mounted) await _apply();
+                        },
+                ),
               Expanded(
                 child: _searching && _results.isEmpty
                     ? Center(child: CircularProgressIndicator(color: _accent))
@@ -12674,11 +12686,134 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
           if (!isTv) MenuRegel(Icons.travel_explore_outlined, 'Juiste uitgave zoeken…',
               () => showDialog<bool>(
                   context: context, builder: (_) => MetadataEditor(album, nummer: t))),
+        // Op welke platen dit nummer staat: studioalbum, single, live, verzamelaars (Saber, 23-10-2026: "Ja, in het
+        // menu").
+        if (!isTv) MenuRegel(Icons.library_music_outlined, 'Staat ook op…', () => toonStaatOokOp(context, t)),
         if (!isTv) MenuRegel(Icons.delete_outline_rounded, 'Verwijderen…',
             () => _confirmDelete(context, '“${t.title}”', [t.path])),
       ],
     ],
   );
+}
+
+/// De regel bovenaan "Juiste uitgave zoeken" bij een los nummer: "Hoort bij Reckless — zo zetten?". Zie
+/// [MetadataEditor].
+class _VoorstelRegel extends StatelessWidget {
+  const _VoorstelRegel({required this.album, required this.opZetten});
+
+  final String album;
+  final VoidCallback? opZetten;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        decoration: BoxDecoration(
+          color: _accent.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(kHoek8),
+          border: Border.all(color: _accent.withValues(alpha: 0.45)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.album_rounded, size: 18, color: _accent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('Hoort bij $album — zo zetten?',
+                  maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            const SizedBox(width: 8),
+            FilledButton(onPressed: opZetten, child: const Text('Zo zetten')),
+          ],
+        ),
+      );
+}
+
+/// "Staat ook op…": op welke platen [t] staat, de studioalbums bovenaan en het origineel voor de deluxe — zie
+/// [MetadataSearch.opWelkePlaten]. Alleen kijken; een uitgave kiezen gaat via "Juiste uitgave zoeken…".
+Future<void> toonStaatOokOp(BuildContext context, Track t) => showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: _panel,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(kHoek18))),
+      builder: (_) => _StaatOokOpBlad(track: t, zoeker: MetadataSearch(context.read<AppSettings>())),
+    );
+
+class _StaatOokOpBlad extends StatefulWidget {
+  const _StaatOokOpBlad({required this.track, required this.zoeker});
+
+  final Track track;
+  final MetadataSearch zoeker;
+
+  @override
+  State<_StaatOokOpBlad> createState() => _StaatOokOpBladState();
+}
+
+class _StaatOokOpBladState extends State<_StaatOokOpBlad> {
+  late final Future<List<MetaResult>> _platen =
+      widget.zoeker.opWelkePlaten(widget.track.artist, widget.track.title).catchError((Object _) => <MetaResult>[]);
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.track;
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .75),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 2),
+              child: Text('Staat ook op', style: TextStyle(color: kInkt, fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text('${t.artist} — ${t.title}',
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 12.5)),
+            ),
+            Flexible(
+              child: FutureBuilder<List<MetaResult>>(
+                future: _platen,
+                builder: (context, s) {
+                  if (s.connectionState != ConnectionState.done) {
+                    return Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Center(child: CircularProgressIndicator(color: _accent)),
+                    );
+                  }
+                  final lijst = s.data ?? const <MetaResult>[];
+                  if (lijst.isEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                      child: Text('MusicBrainz kent geen plaat met dit nummer.', style: TextStyle(color: _muted)),
+                    );
+                  }
+                  return ListView(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    children: [
+                      for (final m in lijst)
+                        ListTile(
+                          dense: true,
+                          leading: _netCover(m.coverUrl, size: 40, radius: 6),
+                          title: Text(m.album,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: kInkt, fontWeight: m.studioalbum ? FontWeight.w600 : FontWeight.w400)),
+                          subtitle: Text(
+                              [if (m.soort.isNotEmpty) m.soort, if (m.jaar != null) '${m.jaar}'].join(' · '),
+                              style: TextStyle(color: _muted, fontSize: 12)),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// Het menu voor een plaat van online (Start, zoeken): openen, de artiest, een radio.

@@ -468,9 +468,15 @@ Future<({int? jaar, int nummer, int schijf})?> deezerPlekOpAlbum(String artiest,
       if (r.secondaryTypes.any((s) => s != 'Soundtrack' && !(s == 'Remix' && remix))) continue;
       final datum = r.date.isNotEmpty ? r.date : o.firstReleaseDate;
       final b = beste;
+      // Bij gelijke rang het origineel vóór een deluxe of remaster ([isEditie]), dan de vroegste.
+      int ed(MbRecordingRelease x) => isEditie(x.title) ? 1 : 0;
       final beter = b == null ||
           rang(r) < rang(b.rel) ||
-          (rang(r) == rang(b.rel) && datum.isNotEmpty && (b.datum.isEmpty || datum.compareTo(b.datum) < 0));
+          (rang(r) == rang(b.rel) && ed(r) < ed(b.rel)) ||
+          (rang(r) == rang(b.rel) &&
+              ed(r) == ed(b.rel) &&
+              datum.isNotEmpty &&
+              (b.datum.isEmpty || datum.compareTo(b.datum) < 0));
       if (beter) beste = (rel: r, datum: datum);
     }
   }

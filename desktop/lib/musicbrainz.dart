@@ -409,6 +409,13 @@ class MbReleaseGroup {
 /// One recorded performance. Not a track: the same recording appears as a track on every release
 /// that carries it, which is why a search hit names the release it was found on.
 /// One release a recording appears on: enough to name it, to pin it, and to rank it.
+/// Is [album] een latere editie van een plaat — "Reckless (deluxe edition)", "Rumours (2004 Remaster)", "… (30th
+/// Anniversary Edition)"? Dan hoort het origineel ervoor (Saber, 23-10-2026: "Het oorspronkelijke album").
+bool isEditie(String album) => _editieWoord.hasMatch(album);
+final _editieWoord = RegExp(
+    r'\b(deluxe|remaster(ed)?|expanded|anniversary|edition|reissue|bonus|special|collector|legacy|super)\b',
+    caseSensitive: false);
+
 class MbRecordingRelease {
   final String mbid, title;
 
