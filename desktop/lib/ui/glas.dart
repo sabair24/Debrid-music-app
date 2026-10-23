@@ -482,6 +482,34 @@ class GlasKwaliteit {
     bewaak();
   }
 
+  /// Zolang Nu speelt open- of dichtschuift, op de pc: het glas zonder vervaging (Saber, 23-10-2026, gekozen:
+  /// "Vervaging uit tijdens schuiven"). Gemeten op de pc (Skia, 144 Hz): Nu speelt openen gaf met matglas 61 van de 95
+  /// beelden te laat, zonder glas 6. Een derde seconde, en het scherm schuift er grotendeels overheen. Niet op de Mac,
+  /// de gsm of een tv: daar kostte het glas bij het schuiven niets of weinig. Een meetronde vergelijkt met
+  /// `schuifglas` (vervaging aan tijdens het schuiven, zoals vóór 3.9.593).
+  static bool get glasPlatTijdensSchuiven =>
+      !isTv && (Platform.isWindows || Platform.isLinux) && !zonderVoorMeting('schuifglas');
+
+  static int _schuift = 0;
+  static GlasStand? _voorSchuiven;
+
+  /// Nu speelt begint te schuiven ([glasPlatTijdensSchuiven]): het glas plat tot [schuiftEinde].
+  static void schuiftBegin() {
+    if (!glasPlatTijdensSchuiven) return;
+    if (_schuift++ > 0) return;
+    _voorSchuiven = stand.value;
+    stand.value = GlasStand.plat;
+  }
+
+  /// Het schuiven is klaar: het glas zoals het was.
+  static void schuiftEinde() {
+    if (_schuift == 0) return;
+    if (--_schuift > 0) return;
+    final terug = _voorSchuiven;
+    _voorSchuiven = null;
+    if (terug != null) stand.value = terug;
+  }
+
   /// Staat de bewaker even stil? Tijdens een meetronde (`meetronde.dart`): die zet het glas zelf op een stand, en de
   /// bewaker mag dat niet midden in een meting terugdraaien.
   static bool meetPauze = false;

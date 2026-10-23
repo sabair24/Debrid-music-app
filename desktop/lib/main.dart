@@ -17275,6 +17275,8 @@ Route<void> nuSpeeltRoute({WidgetBuilder? scherm}) => PageRouteBuilder<void>(
             animatie: animatie,
             open: zonderVoorMeting('foto'),
             dicht: !zonderVoorMeting('levend'),
+            // Op de pc het glas zonder vervaging zolang het schuift (Saber: "Vervaging uit tijdens schuiven").
+            glasPlat: true,
             child: kind),
       ),
     );
@@ -17284,11 +17286,15 @@ Route<void> nuSpeeltRoute({WidgetBuilder? scherm}) => PageRouteBuilder<void>(
 /// stilstaat, weer het echte scherm. Altijd in de boom, ook als er geen foto genomen wordt: zo blijft het scherm
 /// eronder zijn staat houden.
 class FotoTijdensSchuiven extends StatefulWidget {
-  const FotoTijdensSchuiven({super.key, required this.animatie, required this.child, this.open = false, this.dicht = true});
+  const FotoTijdensSchuiven(
+      {super.key, required this.animatie, required this.child, this.open = false, this.dicht = true, this.glasPlat = false});
 
   final Animation<double> animatie;
   final Widget child;
   final bool open, dicht;
+
+  /// Het glas zonder vervaging zolang het schuift, waar dat de keuze is ([GlasKwaliteit.glasPlatTijdensSchuiven]).
+  final bool glasPlat;
 
   @override
   State<FotoTijdensSchuiven> createState() => _FotoTijdensSchuivenState();
@@ -17297,8 +17303,20 @@ class FotoTijdensSchuiven extends StatefulWidget {
 class _FotoTijdensSchuivenState extends State<FotoTijdensSchuiven> {
   final _foto = SnapshotController();
 
-  void _opStand(AnimationStatus s) => _foto.allowSnapshotting =
-      (s == AnimationStatus.forward && widget.open) || (s == AnimationStatus.reverse && widget.dicht);
+  bool _glasPlat = false;
+
+  void _opStand(AnimationStatus s) {
+    _foto.allowSnapshotting =
+        (s == AnimationStatus.forward && widget.open) || (s == AnimationStatus.reverse && widget.dicht);
+    final schuift = s == AnimationStatus.forward || s == AnimationStatus.reverse;
+    if (widget.glasPlat && schuift && !_glasPlat) {
+      _glasPlat = true;
+      GlasKwaliteit.schuiftBegin();
+    } else if (_glasPlat && !schuift) {
+      _glasPlat = false;
+      GlasKwaliteit.schuiftEinde();
+    }
+  }
 
   @override
   void didUpdateWidget(FotoTijdensSchuiven oud) {
@@ -17316,6 +17334,7 @@ class _FotoTijdensSchuivenState extends State<FotoTijdensSchuiven> {
   @override
   void dispose() {
     widget.animatie.removeStatusListener(_opStand);
+    if (_glasPlat) GlasKwaliteit.schuiftEinde();
     _foto.dispose();
     super.dispose();
   }

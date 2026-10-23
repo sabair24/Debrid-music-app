@@ -14,7 +14,7 @@ import 'dart:io';
 
 import 'package:debridmusic/main.dart' show FotoTijdensSchuiven;
 import 'package:debridmusic/meetronde.dart';
-import 'package:debridmusic/ui/glas.dart' show glasMat;
+import 'package:debridmusic/ui/glas.dart' show GlasKwaliteit, GlasStand, glasMat;
 import 'package:debridmusic/player.dart' show Rijbediening, Speelbron;
 import 'package:debridmusic/ui/kantel_hoes.dart';
 import 'package:debridmusic/zone_opdracht.dart';
@@ -119,6 +119,41 @@ void main() {
       await t.pump(const Duration(seconds: 1));
       expect(await foto(), isFalse, reason: 'stil: het echte scherm');
     });
+  });
+
+  testWidgets('op de pc: het glas zonder vervaging zolang Nu speelt schuift, daarna weer zoals het was', (t) async {
+    // Saber, 23-10-2026, gekozen: "Vervaging uit tijdens schuiven" (pc: Nu speelt openen 61 → 6 te late beelden).
+    final c = AnimationController(vsync: const TestVSync(), duration: const Duration(milliseconds: 300));
+    addTearDown(c.dispose);
+    final voor = GlasKwaliteit.stand.value;
+    GlasKwaliteit.stand.value = GlasStand.mat;
+    addTearDown(() => GlasKwaliteit.stand.value = voor);
+    await t.pumpWidget(MaterialApp(
+        home: FotoTijdensSchuiven(animatie: c, glasPlat: true, child: const ColoredBox(color: Colors.red))));
+    c.forward();
+    await t.pump();
+    expect(GlasKwaliteit.stand.value, GlasStand.plat, reason: 'hier (een pc) plat tijdens het schuiven');
+    await t.pump(const Duration(milliseconds: 400));
+    expect(GlasKwaliteit.stand.value, GlasStand.mat, reason: 'en weer mat als het stilstaat');
+    c.reverse();
+    await t.pump();
+    expect(GlasKwaliteit.stand.value, GlasStand.plat);
+    await t.pump(const Duration(milliseconds: 400));
+    expect(GlasKwaliteit.stand.value, GlasStand.mat);
+    // Een meetronde met "schuifglas": zoals vroeger.
+    meetZonder.value = {'schuifglas'};
+    c.forward();
+    await t.pump();
+    expect(GlasKwaliteit.stand.value, GlasStand.mat);
+    meetZonder.value = const {};
+    await t.pump(const Duration(milliseconds: 400));
+    // Weg tijdens het schuiven: het glas komt terug.
+    c.reverse();
+    await t.pump();
+    expect(GlasKwaliteit.stand.value, GlasStand.plat);
+    await t.pumpWidget(const SizedBox());
+    expect(GlasKwaliteit.stand.value, GlasStand.mat, reason: 'weg midden in het schuiven: het glas komt terug');
+    c.stop();
   });
 
   test('een andere hoofdpagina wisselt als foto (gsm: 13 van 21 beelden te laat bij Favorieten, zonder overgang 1)', () {
