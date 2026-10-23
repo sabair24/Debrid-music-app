@@ -68,7 +68,7 @@ import 'zone_opdracht.dart';
 import 'volgbron.dart' show Volgbron;
 import 'samen.dart' show KlokIjk, SamenAnker, SamenVolger;
 import 'speaker_radio.dart';
-import 'lan/zones.dart' show RadioOpSpeaker, ZoneSoort, ZoneStaat, positieNu, speeltNu, verplaatstMelding, zoneSoortVoor;
+import 'lan/zones.dart' show RadioOpSpeaker, ZoneSoort, ZoneStaat, ordenVoorHier, positieNu, speeltNu, verplaatstMelding, zoneSoortVoor;
 import 'lan/server.dart' show LanServer;
 import 'ui/knopbewegingen.dart';
 import 'ui/menu_iconen.dart';
@@ -11032,8 +11032,11 @@ class _ZoneBladState extends State<ZoneBlad> {
   @override
   Widget build(BuildContext context) {
     final z = context.watch<ZoneLijst>();
-    final zones = z.zones;
+    // Dit toestel eerst, dan wat speelt, dan de rest (Saber, 23-10-2026).
+    final zones = ordenVoorHier(z.zones, hier: z.hier, nuMs: z.nuOpPc());
     final gekozen = _misschien<GekozenZone>(context, luister: true)?.gekozen ?? z.hier;
+    final bedient = zones.where((x) => x.id == gekozen).firstOrNull;
+    final bedientNaam = [bedient?.naam ?? deviceName(), if (gekozen == z.hier) 'dit toestel'].join(' · ');
     final hoog = MediaQuery.sizeOf(context).height;
     return SafeArea(
       child: Padding(
@@ -11051,19 +11054,26 @@ class _ZoneBladState extends State<ZoneBlad> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(children: [
-                    const Expanded(
-                      child: Text('Zones', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                  // Bovenaan, groot: welke zone je bedient (Saber, 23-10-2026: "Bovenaan, groot"). Die kaart licht op.
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Text.rich(
+                      key: const ValueKey('zone-bedient'),
+                      TextSpan(children: [
+                        TextSpan(text: 'Je bedient: ', style: TextStyle(color: _muted)),
+                        TextSpan(text: bedientNaam, style: TextStyle(color: _accent2)),
+                      ]),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: isTv ? 24 : 19, fontWeight: FontWeight.w700),
                     ),
-                    if (!z.verbonden)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: Text('Even geen verbinding met de pc',
-                            style: TextStyle(color: _muted, fontSize: 11.5)),
-                      ),
-                  ]),
+                  ),
                   const SizedBox(height: 2),
-                  Text('Tik op een zone om ze hier te zien en te bedienen',
+                  // Op een eigen regel: naast "Je bedient" paste het op een gsm niet.
+                  Text(
+                      z.verbonden
+                          ? 'Tik op een zone om die hier te zien en te bedienen'
+                          : 'Even geen verbinding met de pc',
                       style: TextStyle(color: _muted, fontSize: 12)),
                   const SizedBox(height: 10),
                   Flexible(
@@ -11090,6 +11100,17 @@ class _ZoneBladState extends State<ZoneBlad> {
   }
 }
 
+/// Dragen de knoppen op een zonekaart een woordje onder het icoon (aanraken: gsm, iPad, Shield), of een tip bij het
+/// aanwijzen (pc, Mac)? Saber, 23-10-2026: "Icoontjes, maar met uitleg" en "Klein woordje onder het icoon". Null: naar
+/// het toestel.
+@visibleForTesting
+bool? zoneKnoppenMetWoord;
+
+bool get _zoneWoordjes => zoneKnoppenMetWoord ?? (isTv || Platform.isAndroid || Platform.isIOS);
+
+/// Eén zone in het zoneblad (Saber, 23-10-2026: "Maak het practice en overzichtelijker"): wat er speelt, en de knoppen
+/// Pauze of Verder, Stop, Hierheen, Daarheen en Samen. Elke zone die speelt heeft een volumeschuif. Een groep is één
+/// kaart, met per lid een schuif en "Los", en "Opheffen" voor de hele groep. De zone die je bedient, licht op.
 class _ZoneRij extends StatelessWidget {
   const _ZoneRij({super.key, required this.zone, required this.hier, this.gekozen = false});
 
@@ -11109,11 +11130,8 @@ class _ZoneRij extends StatelessWidget {
     final titel = nummer?.title ?? zone.titel;
     final artiest = nummer?.artist ?? zone.artiest;
 
-    final kop = [
-      zone.naam,
-      if (hier) 'dit toestel',
-      if (zone.via.isNotEmpty) 'via ${zone.via}',
-    ].join(' · ');
+    // Geen "via Saber" meer bij een speaker (Saber, 23-10-2026).
+    final kop = [zone.naam, if (hier) 'dit toestel'].join(' · ');
     final String regel;
     final String? tijd;
     // Ging haar muziek net naar een andere zone: dat even zeggen, daarna "Speelt niets" (Saber, 23-10-2026:
@@ -11125,7 +11143,7 @@ class _ZoneRij extends StatelessWidget {
       tijd = null;
     } else if (!speelt) {
       regel = zone.online ? 'Speelt niets' : 'Niet bereikbaar';
-      // Lang gepauzeerd telt als niets, maar verder spelen kan nog: zeg waar.
+      // Lang gepauzeerd of gestopt telt als niets, maar verder spelen kan nog: zeg waar.
       final wat = artiest.isEmpty ? titel : '$titel — $artiest';
       final geleden = Duration(milliseconds: (nuPc - zone.opMs).clamp(0, 1 << 40));
       tijd = zone.speeltIets && zone.verplaatstNaar.isEmpty ? 'Laatst: $wat · ${_geleden(geleden)}' : null;
@@ -11142,28 +11160,100 @@ class _ZoneRij extends StatelessWidget {
       ].join(' · ');
     }
 
-    Widget? actie;
-    if (!hier && zone.speeltIets && zone.verplaatstNaar.isEmpty && zone.toestel != null) {
-      // Overnemen kan van elk toestel, ook een dat weg is: zijn laatste stand staat op de pc.
-      actie = GlasKnop(
-        key: ValueKey('zone-verder-${zone.id}'),
-        icoon: Icons.play_arrow_rounded,
-        label: 'Hier verder',
-        onPressed: () => _neemOverVan(context, zone),
-      );
-    } else if (!hier && zone.online && zone.toestel != null && lijst.opDePc) {
-      final p = context.read<PlayerStore>();
-      if (p.current != null) {
-        actie = GlasKnop(
-          key: ValueKey('zone-daar-${zone.id}'),
-          icoon: Icons.cast_rounded,
-          label: 'Speel daar',
-          onPressed: () => _speelOpToestel(context, zone.toestel!, zone.naam),
-        );
-      }
+    final stuur = lijst.stuur;
+    void opdracht(String zoneId, Map<String, dynamic> op) {
+      final f = stuur;
+      if (f == null) return;
+      unawaited(f(zoneId, op).then((fout) {
+        if (fout != null && context.mounted) _srcToast(context, fout);
+      }));
     }
 
-    return Pressable(
+    final bedienbaar = stuur != null && zone.online && speelt;
+    final groep = zone.leden.length > 1;
+    final elders = zone.speeltIets && zone.verplaatstNaar.isEmpty;
+    final acties = <Widget>[
+      if (bedienbaar)
+        _ZoneActie(
+          key: ValueKey('zone-pauze-${zone.id}'),
+          icoon: zone.playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+          woord: zone.playing ? 'Pauze' : 'Verder',
+          uitleg: zone.playing ? 'Pauzeren' : 'Verder spelen',
+          onPressed: () => opdracht(zone.id, {'cmd': zone.playing ? 'pause' : 'play'}),
+        ),
+      if (bedienbaar)
+        _ZoneActie(
+          key: ValueKey('zone-stop-${zone.id}'),
+          icoon: Icons.stop_rounded,
+          woord: 'Stop',
+          uitleg: 'Stoppen — later verder spelen kan nog',
+          onPressed: () => opdracht(zone.id, {'cmd': 'stop'}),
+        ),
+      // Overnemen kan van elk toestel, ook een dat weg is: zijn laatste stand staat op de pc.
+      if (!hier && elders && (zone.toestel != null || lijst.verplaats != null))
+        _ZoneActie(
+          key: ValueKey('zone-verder-${zone.id}'),
+          icoon: Icons.download_rounded,
+          woord: 'Hierheen',
+          uitleg: 'Hier verder spelen — ${zone.naam} stopt',
+          onPressed: () => zone.toestel != null ? _neemOverVan(context, zone) : _verplaatsHierheen(context, zone),
+        ),
+      // Overdragen naar een andere zone (stap 2.5): de muziek verhuist, deze zone stopt.
+      if (elders && lijst.verplaats != null)
+        _ZoneActie(
+          key: ValueKey('zone-naar-${zone.id}'),
+          icoon: Icons.cast_rounded,
+          woord: 'Daarheen',
+          uitleg: 'Naar een andere zone sturen …',
+          onPressed: () => _kiesDoelZone(context, zone),
+        ),
+      // Samen laten spelen (stap 3.1): Sonossen op de seconde gelijk; toestellen volgen. Alleen waar iets speelt (of al
+      // een groep is): op een lege zone was het ruis.
+      if (zone.kanGroeperen && stuur != null && (bedienbaar || zone.groep.isNotEmpty))
+        _ZoneActie(
+          key: ValueKey('zone-groep-${zone.id}'),
+          icoon: Icons.link_rounded,
+          woord: 'Samen',
+          uitleg: zone.groep.isEmpty ? 'Samen laten spelen …' : 'Groep aanpassen …',
+          aan: zone.groep.isNotEmpty,
+          onPressed: () => _kiesGroep(context, zone),
+        ),
+      if (groep && stuur != null)
+        _ZoneActie(
+          key: ValueKey('zone-ophef-${zone.id}'),
+          icoon: Icons.link_off_rounded,
+          woord: 'Opheffen',
+          uitleg: 'Groep opheffen — iedereen speelt weer alleen',
+          onPressed: () => opdracht(zone.id, {'cmd': 'groepeer', 'leden': const <String>[]}),
+        ),
+    ];
+
+    // Eén schuif voor de groep (zet elk lid even luid), en per lid apart (Saber, 23-10-2026).
+    final metVolume = [for (final l in zone.leden) if (l.volume >= 0) l];
+    final Widget? volume = !bedienbaar
+        ? null
+        : groep
+            ? (metVolume.isEmpty
+                ? null
+                : _ZoneVolumeSchuif(
+                    key: ValueKey('zone-volume-${zone.id}'),
+                    groep: true,
+                    waarde: (metVolume.fold<int>(0, (s, l) => s + l.volume) / metVolume.length).round(),
+                    zet: (v) {
+                      for (final l in zone.leden) {
+                        opdracht(l.id, {'cmd': 'volume', 'waarde': v});
+                      }
+                    },
+                  ))
+            : zone.volume < 0
+                ? null
+                : _ZoneVolumeSchuif(
+                    key: ValueKey('zone-volume-${zone.id}'),
+                    waarde: zone.volume,
+                    zet: (v) => opdracht(zone.id, {'cmd': 'volume', 'waarde': v}),
+                  );
+
+    final info = Pressable(
       key: ValueKey('zone-kies-${zone.id}'),
       // Kiezen: de balk en Nu speelt tonen en bedienen vanaf nu deze zone. De muziek verhuist niet.
       onPressed: () {
@@ -11173,10 +11263,8 @@ class _ZoneRij extends StatelessWidget {
       borderRadius: BorderRadius.circular(10),
       scaleOnFocus: false,
       vastePlek: false,
-      child: Opacity(
-      opacity: zone.online || hier ? 1 : .55,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+        padding: const EdgeInsets.all(4),
         child: Row(children: [
           SizedBox(
             width: 46,
@@ -11202,37 +11290,23 @@ class _ZoneRij extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                            color: zone.playing && speelt ? _accent2 : _muted, fontSize: 11.5, fontWeight: FontWeight.w600)),
+                            color: zone.playing && speelt ? _accent2 : _muted,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600)),
                   ),
                 ]),
                 const SizedBox(height: 2),
+                // Twee regels: op een gsm wordt een titel anders onleesbaar afgekapt (Saber, 23-10-2026).
                 Text(regel,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
                 if (tijd != null)
                   Text(tijd,
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 11.5)),
+                      maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 11.5)),
               ],
             ),
           ),
-          if (actie != null) ...[const SizedBox(width: 8), actie],
-          // Samen laten spelen (stap 3.1): Sonossen, op de seconde gelijk.
-          if (zone.kanGroeperen && lijst.stuur != null)
-            IconButton(
-              key: ValueKey('zone-groep-${zone.id}'),
-              tooltip: zone.groep.isEmpty ? 'Samen laten spelen …' : 'Groep aanpassen …',
-              icon: Icon(Icons.link_rounded, size: 20, color: zone.groep.isEmpty ? _muted : _accent2),
-              onPressed: () => _kiesGroep(context, zone),
-            ),
-          // Overdragen naar een andere zone (stap 2.5): de muziek verhuist, deze zone stopt.
-          if (zone.speeltIets && zone.verplaatstNaar.isEmpty && lijst.verplaats != null)
-            IconButton(
-              key: ValueKey('zone-naar-${zone.id}'),
-              tooltip: 'Verplaats naar …',
-              icon: Icon(Icons.move_down_rounded, size: 20, color: _muted),
-              onPressed: () => _kiesDoelZone(context, zone),
-            ),
           if (gekozen)
             Padding(
               padding: const EdgeInsets.only(left: 8),
@@ -11241,6 +11315,74 @@ class _ZoneRij extends StatelessWidget {
           const SizedBox(width: 4),
         ]),
       ),
+    );
+
+    return Container(
+      key: ValueKey('zone-kaart-${zone.id}'),
+      margin: const EdgeInsets.only(bottom: 8, right: 6),
+      padding: const EdgeInsets.fromLTRB(6, 6, 6, 4),
+      decoration: BoxDecoration(
+        color: gekozen ? _accent2.withValues(alpha: .10) : Colors.white.withValues(alpha: .03),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: gekozen ? _accent2.withValues(alpha: .8) : Colors.white.withValues(alpha: .07),
+            width: gekozen ? 1.5 : 1),
+      ),
+      child: Opacity(
+        opacity: zone.online || hier ? 1 : .55,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            info,
+            if (volume != null) Padding(padding: const EdgeInsets.fromLTRB(6, 2, 4, 0), child: volume),
+            if (groep)
+              for (final l in zone.leden)
+                Padding(
+                  key: ValueKey('zone-lid-${l.id}'),
+                  padding: const EdgeInsets.fromLTRB(14, 2, 0, 0),
+                  child: Row(children: [
+                    Icon(zoneIcoon(l.soort), size: 16, color: _muted),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(l.naam,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                          if (bedienbaar && l.volume >= 0)
+                            _ZoneVolumeSchuif(
+                              key: ValueKey('zone-lidvolume-${l.id}'),
+                              waarde: l.volume,
+                              klein: true,
+                              zet: (v) => opdracht(l.id, {'cmd': 'volume', 'waarde': v}),
+                            ),
+                        ],
+                      ),
+                    ),
+                    if (l.id != zone.id && stuur != null)
+                      _ZoneActie(
+                        key: ValueKey('zone-los-${l.id}'),
+                        icoon: Icons.link_off_rounded,
+                        woord: 'Los',
+                        uitleg: '${l.naam} los van de groep',
+                        onPressed: () => opdracht(zone.id, {
+                          'cmd': 'groepeer',
+                          'leden': [for (final g in zone.groep) if (g != zone.id && g != l.id) g],
+                        }),
+                      ),
+                  ]),
+                ),
+            if (acties.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Wrap(spacing: 2, runSpacing: 2, children: acties),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -11248,6 +11390,173 @@ class _ZoneRij extends StatelessWidget {
   static String _geleden(Duration d) => d.inHours >= 1
       ? '${d.inHours} u geleden'
       : '${d.inMinutes} min geleden';
+}
+
+/// Een knop op een zonekaart: een icoon met een woordje eronder op een aanraakscherm, of met een tip bij het aanwijzen
+/// op pc en Mac ([zoneKnoppenMetWoord]). Op de Shield groter, en met de pijltjes te bereiken ([Pressable]).
+class _ZoneActie extends StatelessWidget {
+  const _ZoneActie({
+    super.key,
+    required this.icoon,
+    required this.woord,
+    required this.uitleg,
+    required this.onPressed,
+    this.aan = false,
+  });
+
+  final IconData icoon;
+  final String woord;
+
+  /// Wat de knop doet, voluit: de tip op pc en Mac, en wat een schermlezer zegt.
+  final String uitleg;
+  final VoidCallback onPressed;
+
+  /// Staat het aan (een groep bij "Samen")?
+  final bool aan;
+
+  @override
+  Widget build(BuildContext context) {
+    final kleur = aan ? _accent2 : _text;
+    if (!_zoneWoordjes) {
+      return IconButton(tooltip: uitleg, onPressed: onPressed, icon: Icon(icoon, size: 21, color: kleur));
+    }
+    final tv = isTv;
+    return Semantics(
+      button: true,
+      label: uitleg,
+      excludeSemantics: true,
+      child: Pressable(
+        onPressed: onPressed,
+        borderRadius: BorderRadius.circular(10),
+        scaleOnFocus: false,
+        vastePlek: false,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minWidth: tv ? 76 : 54),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: tv ? 6 : 4, vertical: tv ? 8 : 5),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icoon, size: tv ? 26 : 21, color: kleur),
+              const SizedBox(height: 3),
+              Text(woord,
+                  maxLines: 1,
+                  style: TextStyle(
+                      fontSize: tv ? 13 : 11, fontWeight: FontWeight.w600, color: aan ? _accent2 : _muted)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// De volumeschuif op een zonekaart. Wat je schuift, staat er meteen; hij stuurt hoogstens vier keer per seconde, en de
+/// laatste stand altijd. Op de Shield twee knoppen (− en +, per 5) in plaats van een schuif: met de pijltjes kom je dan
+/// ook weer weg.
+class _ZoneVolumeSchuif extends StatefulWidget {
+  const _ZoneVolumeSchuif(
+      {super.key, required this.waarde, required this.zet, this.klein = false, this.groep = false});
+
+  /// Het volume zoals de zone het meldt (0–100).
+  final int waarde;
+  final void Function(int v) zet;
+
+  /// Kleiner, voor een lid van een groep.
+  final bool klein;
+
+  /// De schuif van een hele groep: met het groepsicoon ervoor.
+  final bool groep;
+
+  @override
+  State<_ZoneVolumeSchuif> createState() => _ZoneVolumeSchuifState();
+}
+
+class _ZoneVolumeSchuifState extends State<_ZoneVolumeSchuif> {
+  /// Wat je net schoof, tot de zone het zelf meldt (of drie seconden voorbij zijn).
+  double? _eigen;
+  int _verstuurdOp = 0;
+  Timer? _straks;
+  Timer? _vergeet;
+
+  void _stuur(double v, {bool nu = false}) {
+    final t = DateTime.now().millisecondsSinceEpoch;
+    _straks?.cancel();
+    if (nu || t - _verstuurdOp >= 250) {
+      _verstuurdOp = t;
+      widget.zet(v.round());
+    } else {
+      _straks = Timer(Duration(milliseconds: 250 - (t - _verstuurdOp)), () => _stuur(_eigen ?? v, nu: true));
+    }
+    _vergeet?.cancel();
+    _vergeet = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _eigen = null);
+    });
+  }
+
+  void _naar(double v, {bool nu = false}) {
+    final w = v.clamp(0, 100).toDouble();
+    setState(() => _eigen = w);
+    _stuur(w, nu: nu);
+  }
+
+  @override
+  void dispose() {
+    _straks?.cancel();
+    _vergeet?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final v = _eigen ?? widget.waarde.clamp(0, 100).toDouble();
+    final getal = SizedBox(
+      width: 30,
+      child: Text('${v.round()}', textAlign: TextAlign.right, style: TextStyle(color: _muted, fontSize: 12)),
+    );
+    if (isTv) {
+      return Row(children: [
+        Icon(widget.groep ? Icons.speaker_group_rounded : Icons.volume_up_rounded, size: 20, color: _muted),
+        const SizedBox(width: 4),
+        IconButton(tooltip: 'Zachter', icon: const Icon(Icons.remove_rounded), onPressed: () => _naar(v - 5, nu: true)),
+        getal,
+        IconButton(tooltip: 'Luider', icon: const Icon(Icons.add_rounded), onPressed: () => _naar(v + 5, nu: true)),
+      ]);
+    }
+    return Row(children: [
+      Icon(widget.groep ? Icons.speaker_group_rounded : Icons.volume_down_rounded,
+          size: widget.klein ? 16 : 18, color: _muted, semanticLabel: widget.groep ? 'alle leden samen' : null),
+      Expanded(
+        child: SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackHeight: widget.klein ? 2 : 3,
+            thumbShape: RoundSliderThumbShape(enabledThumbRadius: widget.klein ? 5 : 6),
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+            activeTrackColor: _accent,
+            inactiveTrackColor: kLijn,
+            thumbColor: kFel,
+          ),
+          child: Slider(value: v, max: 100, onChanged: _naar, onChangeEnd: (x) => _naar(x, nu: true)),
+        ),
+      ),
+      getal,
+    ]);
+  }
+}
+
+/// "Hierheen" vanaf een speaker: zijn muziek speelt verder op dit toestel, en hij stopt. Bediende je die speaker, dan
+/// bedien je voortaan dit toestel — zoals bij "Verplaats naar" ([_kiesDoelZone]).
+Future<void> _verplaatsHierheen(BuildContext context, ZoneStaat van) async {
+  final lijst = context.read<ZoneLijst>();
+  final gekozen = _misschien<GekozenZone>(context);
+  final nav = Navigator.of(context);
+  final fout = await lijst.verplaats?.call(van.id, lijst.hier);
+  if (fout == null && gekozen != null && gekozen.gekozen == van.id) gekozen.kies(lijst.hier);
+  if (!context.mounted) return;
+  if (fout != null) {
+    _srcToast(context, fout);
+    return;
+  }
+  _srcToast(context, 'Speelt nu hier — ${van.naam} stopt.');
+  nav.maybePop();
 }
 
 /// Het volume van de app in een zone op afstand (Saber, 21-10-2026: "volume van de app"). De schuif
@@ -11596,23 +11905,6 @@ Future<void> _neemOverVan(BuildContext context, ZoneStaat zone) async {
   } else {
     _srcToast(context, stand == null ? 'De pc antwoordt niet.' : 'Dat nummer staat niet in je bibliotheek hier.');
   }
-}
-
-/// "Speel daar" (vroeger "Speel op …", Saber 17-10-2026): wat de pc speelt, naar het toestel [id], op
-/// dezelfde plek in het nummer; de pc pauzeert zodra het daar speelt. Alleen op de pc.
-void _speelOpToestel(BuildContext context, String id, String naam) {
-  final sharing = context.read<LanSharing>();
-  final p = context.read<PlayerStore>();
-  final t = p.current;
-  if (t == null) return;
-  final rij = p.queueTracks;
-  final radio = context.read<RadioBesturing>();
-  final ok = sharing.stuurNaar(id, t.path, p.position, [for (final x in rij) x.path], p.currentIndex,
-      shuffle: p.shuffle,
-      herhaal: p.repeat.name,
-      radio: p.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null);
-  _srcToast(context,
-      ok ? 'Naar $naam gestuurd — de pc stopt zodra het daar speelt.' : 'Dit nummer kan niet mee (het staat niet in je bibliotheek).');
 }
 
 /// Het hart naast de titel in de spelerbalk: vol als dit nummer een favoriet is, en het klopt met
