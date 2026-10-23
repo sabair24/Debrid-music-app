@@ -3837,6 +3837,14 @@ class DownloadManager extends ChangeNotifier {
     final ids = kiesTidalTreffers(treffers, artiest: artiest, titel: titel);
     _log.line('radio "$artiest — $titel": $waarom — TIDAL: ${treffers.length} treffers, ${ids.length} met deze '
         'titel en artiest');
+    // Ook hier het oorspronkelijke album, zoals via Soulseek ([_haalVoorRadio]), alvast terwijl TIDAL haalt. Zonder dit
+    // kwam elk nummer via TIDAL zonder album binnen: Carnival van Natalie Merchant (23-10-2026).
+    final metAlbum = album?.trim() ?? '';
+    final alsSingle = metAlbum.isNotEmpty && albumIsDeSingle(metAlbum, titel);
+    final origineelF = ids.isNotEmpty && (metAlbum.isEmpty || alsSingle)
+        ? origineleUitgave?.call(artiest, titel, seconden).then<({String album, int? jaar})?>((o) => o,
+            onError: (Object _) => null)
+        : null;
     for (final id in ids.take(2)) {
       if (job.cancelled) return null;
       _tidalRadioTijden.add(DateTime.now());
@@ -3879,11 +3887,29 @@ class DownloadManager extends ChangeNotifier {
           if (uit.how != Placement.stuck && File(uit.path).existsSync()) throw RadioAlGehad(uit.path);
           return null;
         }
-        final gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);
+        var gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);
         try {
-          final velden =
-              veldenNaHaal(gezag, eigenAlbum: gezag.album.isEmpty ? null : readTags(File(uit.path))?.album);
-          if (velden.isNotEmpty) await writeTagFields(File(uit.path), velden);
+          ({int? jaar, int nummer, int schijf})? plek;
+          final gevonden =
+              origineelF == null ? null : await origineelF.timeout(const Duration(seconds: 8), onTimeout: () => null);
+          if (gevonden != null && (!alsSingle || normKey(gevonden.album) != normKey(metAlbum))) {
+            final j = gevonden.jaar;
+            gezag = gezagVoorHaal(
+                artiest: artiest,
+                titel: titel,
+                album: gevonden.album,
+                jaar: j == null ? jaar : (jaar == null || j < jaar ? j : jaar),
+                seconden: seconden);
+            _log.line('radio "$artiest — $titel": album uit MusicBrainz — "${gevonden.album}"'
+                '${j == null ? '' : ' ($j)'}');
+            plek = await plekOpAlbum
+                ?.call(artiest, titel, gevonden.album)
+                .timeout(const Duration(seconds: 8), onTimeout: () => null)
+                .then<({int? jaar, int nummer, int schijf})?>((p) => p, onError: (Object _) => null);
+          }
+          final velden = veldenNaHaal(gezag,
+              eigenAlbum: gezag.album.isEmpty ? null : readTags(File(uit.path))?.album, plek: plek);
+          if (velden.isNotEmpty) await schrijfRadioTags(uit.path, velden, '$artiest — $titel');
         } catch (_) {/* het bestand staat goed; een mislukte tagschrijf maakt het niet stuk */}
         _log.line('radio "$artiest — $titel": TIDAL $id GELEVERD${r.kwaliteit == null ? "" : " (${r.kwaliteit})"} '
             'na ${_kort(DateTime.now().difference(t0))} — ${baseName(uit.path)}');
@@ -4547,7 +4573,7 @@ class DownloadManager extends ChangeNotifier {
             }
             final velden = veldenNaHaal(gezag,
                 eigenAlbum: gezag.album.isEmpty ? null : readTags(File(uit.path))?.album, plek: plek);
-            if (velden.isNotEmpty) await writeTagFields(File(uit.path), velden);
+            if (velden.isNotEmpty) await schrijfRadioTags(uit.path, velden, '$artiest — $titel');
           } catch (_) {/* het bestand staat goed; een mislukte tagschrijf maakt het niet stuk */}
           // Zonder jaartal is het gezag niet gezaghebbend en schrijft [stampTags] niets. Heeft het
           // bestand zelf dan ook geen artiest of titel, dan staat het als "Onbekende artiest" met
@@ -5279,6 +5305,53 @@ class DownloadManager extends ChangeNotifier {
   /// zie `origineleUitgaveVan` in enrichment.dart. Gezet bij het opstarten van de pc; null: niet opzoeken.
   static Future<({String album, int? jaar})?> Function(String artiest, String titel, int? seconden)?
       origineleUitgave;
+
+  /// Na tags die pas later in een bestand kwamen ([_schrijfRadioTags]): de bibliotheek leest het opnieuw. Gezet bij het
+  /// opstarten van de pc (`LibraryStore.voegBestandToe`); null (een toets, een toestel): niets.
+  static Future<void> Function(String pad)? naLateTags;
+
+  /// Wie de tags schrijft — [writeTagFields]; een toets zet er een nep in.
+  @visibleForTesting
+  static Future<bool> Function(File f, Map<String, String?> velden, {void Function(String)? waarom}) tagSchrijver =
+      writeTagFields;
+
+  /// Hoe vaak en met welke tussenpoos [_schrijfRadioTags] het opnieuw probeert: twintig keer om de dertig seconden,
+  /// tien minuten — langer dan bijna elk nummer duurt.
+  @visibleForTesting
+  static Duration tagsLaterTussen = const Duration(seconds: 30);
+  static const kTagsLaterPogingen = 20;
+
+  /// De tags van een radiohaal in [pad]: nu, en lukt dat niet, dan later nog eens — om de [tagsLaterTussen], hoogstens
+  /// [kTagsLaterPogingen] keer, zolang het bestand er staat. Daarna leest de bibliotheek het opnieuw ([naLateTags]).
+  /// Klaar (true) als het meteen lukte.
+  ///
+  /// **Waarom (radio vanaf Luka, 23-10-2026).** Bij Luka en Cathedral Song vond de app het juiste album, maar bleef de
+  /// tag van de uploader staan. Dat waren de nummers die al speelden terwijl ze binnenkwamen: Windows laat een bestand
+  /// dat open staat niet vervangen, het schrijven mislukte stil, en niemand probeerde het opnieuw.
+  @visibleForTesting
+  Future<bool> schrijfRadioTags(String pad, Map<String, String?> velden, String wie) async {
+    String? reden;
+    if (await tagSchrijver(File(pad), velden, waarom: (w) => reden = w)) return true;
+    _log.line('radio "$wie": tags nog niet geschreven (${reden ?? 'onbekend'}) — straks opnieuw');
+    unawaited(() async {
+      for (var i = 1; i <= kTagsLaterPogingen; i++) {
+        await Future<void>.delayed(tagsLaterTussen);
+        if (!File(pad).existsSync()) return;
+        String? waarom;
+        if (await tagSchrijver(File(pad), velden, waarom: (w) => waarom = w)) {
+          _log.line('radio "$wie": tags alsnog geschreven (poging $i)');
+          try {
+            await naLateTags?.call(pad);
+          } catch (_) {/* de tags staan in het bestand; de volgende scan ziet ze */}
+          return;
+        }
+        if (i == kTagsLaterPogingen) {
+          _log.line('radio "$wie": tags niet geschreven na $i pogingen (${waarom ?? 'onbekend'})');
+        }
+      }
+    }());
+    return false;
+  }
 
   /// De versiecontrole van de pc — zie [keurOverdracht] en `versiecontrole.dart`. Gezet bij het opstarten
   /// van de pc; null (een toets, een toestel): niet controleren.

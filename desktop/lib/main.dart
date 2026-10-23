@@ -1221,6 +1221,10 @@ Future<void> main() async {
   // Zonder album (de radio, of een verzamelaar): de oorspronkelijke uitgave uit MusicBrainz.
   if (mode.owner) {
     DownloadManager.origineleUitgave = (artiest, titel, seconden) => origineleUitgaveVan(artiest, titel, seconden: seconden);
+    // Tags die pas later lukten (het nummer speelde al): de bibliotheek leest dat ene bestand opnieuw.
+    DownloadManager.naLateTags = (pad) async {
+      await library.voegBestandToe(pad);
+    };
   }
   radio.sfeer = radioSfeer;
   // Als FACTOR de speler in: die hoeft niets van duimen te weten, en `oordeelBonus` blijft daardoor

@@ -118,7 +118,7 @@ List<MetaResult> studioVoorop(List<MetaResult> r) => [
 /// - Eerst de studioalbums van ALLE opnames: MusicBrainz gaf bij Summer Of '69 eerst een rij live-opnames, en die
 ///   vulden de twaalf plaatsen voor Reckless aan de beurt kwam.
 /// - Het oorspronkelijke album eerst, op het jaar van de plaat zelf ([albumDatum]: titel → eerste uitgave volgens
-///   MusicBrainz, uit [MusicBrainzService.albumsVan]). Bij Luka stond de heropname op Close-Up, Volume 2 (2010) boven
+///   MusicBrainz, uit [MusicBrainzService.studioalbumsVan]). Bij Luka stond de heropname op Close-Up, Volume 2 (2010) boven
 ///   Solitude Standing (1987), en de app stelde die ook voor. De datum van de opname helpt daar niet: de zoekvraag gaf
 ///   alleen een geremasterde opname van Solitude Standing terug (eerste datum 2021), en bij Summer Of '69 alleen
 ///   opnames van 2013 en later.
@@ -802,7 +802,7 @@ class MetadataSearch {
       ].firstOrNull;
       if (id != null) {
         try {
-          for (final g in await mb.albumsVan(id)) {
+          for (final g in await mb.studioalbumsVan(id)) {
             final d = g.firstDate ?? '';
             final al = datums[g.title];
             if (d.isNotEmpty && (al == null || d.compareTo(al) < 0)) datums[g.title] = d;

@@ -298,7 +298,7 @@ void main() {
     });
 
     // Zoals MusicBrainz het gaf bij de controle van 23-10-2026: de zoekvraag op opnames brengt vooral heruitgaven mee.
-    // Het jaar van de plaat zelf komt uit de albums van de artiest (`albumsVan`).
+    // Het jaar van de plaat zelf komt uit de albums van de artiest (`studioalbumsVan`).
     test('DE KERN van "Staat ook op…": het origineel bovenaan, met het jaar van de plaat zelf', () {
       final luka = [
         opname('Luka', 'Suzanne Vega', 0, [uitgave('Close-Up, Volume 2: People & Places', 'Album', datum: '2010')],
