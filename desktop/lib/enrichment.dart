@@ -431,6 +431,101 @@ Future<({int? jaar, int nummer, int schijf})?> deezerPlekOpAlbum(String artiest,
   return t == null ? null : plekUitDeezerNummer(t);
 }
 
+/// De oorspronkelijke uitgave van [titel] door [artiest] in wat MusicBrainz' opnamezoeker gaf: het studioalbum, en
+/// pas als dat er niet is de single of ep — nooit een verzamelaar, een live-plaat, een dj-mix of een promo. Null als
+/// geen enkele opname dit nummer is.
+///
+/// **Waarom (Saber, 23-10-2026).** Wat de radio en ▶ binnenhalen, landde in `Singles/` zonder albumtag, want Deezer
+/// noemt bij een radionummer vaak een verzamelaar. Gevraagd of de app het album dan zelf mag invullen: *"Ja"*. Gemeten
+/// op 23-10-2026: "Hate Me" van Ellie Goulding & Juice WRLD staat in MusicBrainz op de single (2019), op Brightest
+/// Blue (2020) en op vier verzamelaars, waaronder EG.0 — het antwoord is Brightest Blue.
+///
+/// Een opname telt als hetzelfde nummer bij dezelfde artiest (de eerste genoemde), dezelfde titel (ook zonder gast),
+/// en — als beide het weten — hoogstens 8 s verschil in lengte: een albumversie van 5:36 is niet de single van 4:17.
+({String album, int? jaar})? origineleUitgaveUit(List<MbRecording> opnames,
+    {required String artiest, required String titel, int? seconden}) {
+  final wil = normKey(titel), wilKaal = normKey(zonderGastTitel(titel));
+  final remix = RegExp(r'\b(re)?mix\b', caseSensitive: false).hasMatch(titel);
+  ({MbRecordingRelease rel, String datum})? beste;
+  int rang(MbRecordingRelease r) => r.primaryType == 'Album' ? 0 : 1;
+  for (final o in opnames) {
+    if (!_zelfdeArtiestAls(o.artist, artiest)) continue;
+    if (normKey(o.title) != wil && normKey(zonderGastTitel(o.title)) != wilKaal) continue;
+    if (seconden != null && seconden > 0 && o.seconds > 0 && (o.seconds - seconden).abs() > 8) continue;
+    for (final r in o.releases) {
+      if (r.status.isNotEmpty && r.status != 'Official') continue;
+      if (!const {'Album', 'Single', 'EP'}.contains(r.primaryType)) continue;
+      // Een soundtrack mag (daar staat een nummer soms eerst op), een remixplaat alleen voor een remix.
+      if (r.secondaryTypes.any((s) => s != 'Soundtrack' && !(s == 'Remix' && remix))) continue;
+      final datum = r.date.isNotEmpty ? r.date : o.firstReleaseDate;
+      final b = beste;
+      final beter = b == null ||
+          rang(r) < rang(b.rel) ||
+          (rang(r) == rang(b.rel) && datum.isNotEmpty && (b.datum.isEmpty || datum.compareTo(b.datum) < 0));
+      if (beter) beste = (rel: r, datum: datum);
+    }
+  }
+  final b = beste;
+  if (b == null) return null;
+  // Het jaar van de plaat zelf: de vroegste persing met die naam en soort die een datum draagt. Pas zonder zo'n persing
+  // de eerste datum van de opname — die van Hate Me is de single (2019), niet Brightest Blue (2020).
+  var datum = '';
+  for (final o in opnames) {
+    for (final r in o.releases) {
+      if (r.date.isEmpty || r.primaryType != b.rel.primaryType || normKey(r.title) != normKey(b.rel.title)) continue;
+      if (datum.isEmpty || r.date.compareTo(datum) < 0) datum = r.date;
+    }
+  }
+  if (datum.isEmpty) datum = b.datum;
+  final jaar = datum.length >= 4 ? int.tryParse(datum.substring(0, 4)) : null;
+  return (album: b.rel.title, jaar: jaar == null || jaar < 1900 ? null : jaar);
+}
+
+/// Zonder wat er over de uitvoering achter staat: "Loneliness (Radio Cut)" is "Loneliness".
+String _zonderUitvoering(String t) {
+  var x = t.replaceAll(RegExp(r'\s*[\(\[][^\)\]]*[\)\]]'), '');
+  final streep = x.indexOf(' - ');
+  if (streep > 0) x = x.substring(0, streep);
+  return x.trim();
+}
+
+/// De Deezer-single die naar [titel] heet en waarop precies dit nummer staat — de terugval van [origineleUitgaveVan]
+/// voor dance, waar MusicBrainz vaak alleen verzamelaars kent. Gemeten op 23-10-2026: van Tomcraft — Loneliness kent
+/// MusicBrainz alleen Viva Hits 19, Electro Tech en Best of House; Deezer heeft "Loneliness (Radio Cut)" op de single
+/// "Loneliness". Een album met een andere naam ("Café Del Mar: The Best of the Remixes") telt hier niet: dat is geen
+/// single, en of het de oorspronkelijke plaat is, valt aan de naam niet te zien.
+String? deezerSingleUit(List<dynamic> data, String artiest, String titel, {int? seconden}) {
+  final wil = normKey(titel), wilKaal = normKey(zonderGastTitel(titel)), naam = normKey(_zonderUitvoering(titel));
+  if (naam.isEmpty) return null;
+  for (final d in data) {
+    if (d is! Map) continue;
+    final art = d['artist'];
+    if (!_zelfdeArtiestAls('${art is Map ? art['name'] ?? '' : ''}', artiest)) continue;
+    final t = '${d['title'] ?? ''}';
+    if (normKey(t) != wil && normKey(zonderGastTitel(t)) != wilKaal) continue;
+    final duur = (d['duration'] as num?)?.toInt() ?? 0;
+    if (seconden != null && seconden > 0 && duur > 0 && (duur - seconden).abs() > 8) continue;
+    final alb = d['album'];
+    final a = alb is Map ? '${alb['title'] ?? ''}' : '';
+    if (a.isEmpty || normKey(a) != naam || lijktVerzamelaar(a)) continue;
+    return a;
+  }
+  return null;
+}
+
+/// De oorspronkelijke uitgave: eerst [origineleUitgaveUit] met een vraag aan MusicBrainz, en kent die alleen
+/// verzamelaars, dan [deezerSingleUit]. Null bij geen antwoord — dan blijft het nummer zonder album, zoals voorheen.
+/// Het jaar van een Deezer-single komt daarna uit [deezerPlekOpAlbum].
+Future<({String album, int? jaar})?> origineleUitgaveVan(String artiest, String titel, {int? seconden}) async {
+  final opnames = await MusicBrainzService().searchRecordings(titel, artist: artiest, max: 15);
+  final mb = origineleUitgaveUit(opnames, artiest: artiest, titel: titel, seconden: seconden);
+  if (mb != null) return mb;
+  final j = await DeezerBaan.haal(
+      'https://api.deezer.com/search?q=${Uri.encodeComponent('$artiest $titel')}&limit=25');
+  final single = deezerSingleUit((j?['data'] as List?) ?? const [], artiest, titel, seconden: seconden);
+  return single == null ? null : (album: single, jaar: null);
+}
+
 /// Hoeveel vragen met voorrang er binnen [kAudioDbSalvoVenster] zonder afstand mogen.
 ///
 /// De drie seconden van de gewone rij zijn geijkt op een lange veeg: zesenvijftig albums aan 1,2 s gaven

@@ -1217,6 +1217,10 @@ Future<void> main() async {
   if (mode.owner) DownloadManager.versiecontrole = Versiecontrole().score;
   // ▶ tagt met het album waarop je het zag; daarbij het nummer en het jaar van die uitgave.
   if (mode.owner) DownloadManager.plekOpAlbum = deezerPlekOpAlbum;
+  // Zonder album (de radio, of een verzamelaar): de oorspronkelijke uitgave uit MusicBrainz.
+  if (mode.owner) {
+    DownloadManager.origineleUitgave = (artiest, titel, seconden) => origineleUitgaveVan(artiest, titel, seconden: seconden);
+  }
   radio.sfeer = radioSfeer;
   // Als FACTOR de speler in: die hoeft niets van duimen te weten, en `oordeelBonus` blijft daardoor
   // op één plek staan in plaats van in de speler én in het scherm.

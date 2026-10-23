@@ -361,6 +361,52 @@ void main() {
       expect(readFlacPicture(File(paden[0])).hoes, gekozen, reason: 'het nieuwe bestand kreeg de hoes ook');
       opnieuw.stop();
     });
+
+    test('alleen-lezen blijft staan, maar weer schrijfbaar krijgt hij de hoes (Alizée en Twarres, 23-10-2026)', () async {
+      final audio = _audio(50000);
+      final oudeHoes = _jpeg(600, 600, 5000, zaad: 2);
+      final f = schrijf('ro.flac', _flac([(4, _vorbis({'TITLE': 'x'})), (6, _picture(3, oudeHoes)), (1, Uint8List(20000))], audio));
+      void zet(bool ro) => Platform.isWindows
+          ? Process.runSync('attrib', [ro ? '+R' : '-R', f.path])
+          : Process.runSync('chmod', [ro ? '444' : '644', f.path]);
+      zet(true);
+      addTearDown(() => zet(false));
+      final gekozen = _jpeg(1200, 1200, 9000, zaad: 3);
+      final lib = LibraryStore()..configDirOverride = map.path;
+      void album() => lib.albums = [
+            Album('Mes courants électriques', 'Alizée', [
+              Track(
+                  path: f.path,
+                  title: 'x',
+                  artist: 'Alizée',
+                  album: 'Mes courants électriques',
+                  isFlac: true,
+                  sizeBytes: f.lengthSync(),
+                  addedMs: f.lastModifiedSync().millisecondsSinceEpoch)
+            ])
+              ..resolvedCover = gekozen
+              ..resolvedFrom = 'dz:1',
+          ];
+      album();
+      final veger = HoesInBestandVeger(library: lib, tussenpoos: Duration.zero, startNa: const Duration(hours: 1));
+      await veger.ronde();
+      expect(readFlacPicture(f).hoes, oudeHoes, reason: 'op alleen-lezen: niet aangeraakt');
+      final logPad = '${map.path}${Platform.pathSeparator}hoes_in_bestand.log';
+      expect(File(logPad).readAsStringSync(), contains('alleen-lezen, niet aangeraakt'));
+      veger.stop();
+
+      // Nog steeds alleen-lezen, na een herstart: niet opnieuw nakijken (een ronde zonder werk schrijft niets).
+      final weer = HoesInBestandVeger(library: lib, tussenpoos: Duration.zero, startNa: const Duration(hours: 1));
+      await weer.ronde();
+      expect('ronde: '.allMatches(File(logPad).readAsStringSync()).length, 1, reason: 'blijft klaar zolang het zo staat');
+
+      // Het kenmerk weg — grootte en datum blijven gelijk — en de volgende ronde schrijft hem.
+      zet(false);
+      album();
+      await weer.ronde();
+      expect(readFlacPicture(f).hoes, gekozen);
+      weer.stop();
+    });
   });
 
   group('aangesloten', () {

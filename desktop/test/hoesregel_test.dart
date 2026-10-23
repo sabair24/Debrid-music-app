@@ -102,8 +102,9 @@ void main() {
       expect(m, contains('titels: widget.titels,'));
       expect(m, contains('titels: [t.title, if (al != null) for (final x in al.tracks) if (x.title != t.title) x.title],'),
           reason: 'Nu speelt: het spelende nummer eerst');
-      expect(File('lib/facts_warmer.dart').readAsStringSync(),
-          contains('.digitaleVoorkant(album.artist, album.title, titels: [for (final t in album.tracks) t.title])'));
+      final fw = File('lib/facts_warmer.dart').readAsStringSync();
+      expect(fw, contains('CoverEnricher(settings).digitaleVoorkant(a, b, titels: t)'));
+      expect(fw, contains('album.artist, album.title, [for (final t in album.tracks) t.title]'));
     });
   });
 
@@ -213,8 +214,8 @@ void main() {
     expect(l, contains('(isDigitaleHerkomst(traced.\$2) || _pinPastBij(album, traced.\$2))'),
         reason: 'ook bij het teruglezen na een herstart');
     final w = File('lib/facts_warmer.dart').readAsStringSync();
-    final al = w.substring(w.indexOf('if (await DiscogsService(settings).hasReleaseArt('));
-    expect(al.indexOf('digitaleVoorkant(album.artist, album.title)'), lessThan(al.indexOf('_neemHoesOver(')),
+    final al = w.substring(w.indexOf('Future<_Art> _warmArtFor('));
+    expect(al.indexOf('await _voorkant(album);'), allOf(greaterThanOrEqualTo(0), lessThan(al.indexOf('_neemHoesOver('))),
         reason: 'de opwarmer haalt de digitale voorkant ook voor platen waarvan de scans er al staan');
   });
 }

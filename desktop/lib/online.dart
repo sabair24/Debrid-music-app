@@ -4337,7 +4337,13 @@ class DownloadManager extends ChangeNotifier {
           '(${tussenstand.length} treffers tot dan) — ${baseName(eerste.filename)}');
     }
 
-    final gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);
+    var gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);
+    // Geen album (de radio), of dat van een verzamelaar: de oorspronkelijke uitgave opzoeken, en die in het bestand
+    // zetten. Saber, 23-10-2026, op de vraag of de app dat zelf mag: "Ja". Ook alvast, terwijl er gezocht wordt.
+    final origineelF = gezag.album.isEmpty
+        ? origineleUitgave?.call(artiest, titel, seconden).then<({String album, int? jaar})?>((o) => o,
+            onError: (Object _) => null)
+        : null;
     // Waar het nummer op dat album staat: alvast opzoeken, terwijl er gezocht en gehaald wordt.
     final plekF = gezag.album.isEmpty
         ? null
@@ -4500,9 +4506,38 @@ class DownloadManager extends ChangeNotifier {
           // uploader.
           ({int? jaar, int nummer, int schijf})? plek;
           try {
-            plek = plekF == null
-                ? null
-                : await plekF.timeout(const Duration(seconds: 8), onTimeout: () => null);
+            final origineel =
+                origineelF == null ? null : await origineelF.timeout(const Duration(seconds: 8), onTimeout: () => null);
+            if (origineel != null) {
+              final j = origineel.jaar;
+              gezag = gezagVoorHaal(
+                  artiest: artiest,
+                  titel: titel,
+                  album: origineel.album,
+                  // Het vroegste: Deezer dateert een heruitgave, MusicBrainz de eerste persing.
+                  jaar: j == null ? jaar : (jaar == null || j < jaar ? j : jaar),
+                  seconden: seconden);
+              _log.line('radio "$artiest — $titel": album uit MusicBrainz — "${origineel.album}"'
+                  '${j == null ? '' : ' ($j)'}');
+              plek = await plekOpAlbum
+                  ?.call(artiest, titel, origineel.album)
+                  .timeout(const Duration(seconds: 8), onTimeout: () => null)
+                  .then<({int? jaar, int nummer, int schijf})?>((p) => p, onError: (Object _) => null);
+              // Een Deezer-single draagt zelf geen jaar: dan dat van de plek op die single.
+              final pj = plek?.jaar;
+              if (j == null && pj != null) {
+                gezag = gezagVoorHaal(
+                    artiest: artiest,
+                    titel: titel,
+                    album: origineel.album,
+                    jaar: jaar == null || pj < jaar ? pj : jaar,
+                    seconden: seconden);
+              }
+            } else {
+              plek = plekF == null
+                  ? null
+                  : await plekF.timeout(const Duration(seconds: 8), onTimeout: () => null);
+            }
             final velden = veldenNaHaal(gezag,
                 eigenAlbum: gezag.album.isEmpty ? null : readTags(File(uit.path))?.album, plek: plek);
             if (velden.isNotEmpty) await writeTagFields(File(uit.path), velden);
@@ -5232,6 +5267,11 @@ class DownloadManager extends ChangeNotifier {
   /// [veldenNaHaal]. Gezet bij het opstarten van de pc; null (een toets, een toestel): niet opzoeken.
   static Future<({int? jaar, int nummer, int schijf})?> Function(String artiest, String titel, String album)?
       plekOpAlbum;
+
+  /// De oorspronkelijke uitgave van een nummer dat zonder album binnenkomt (de radio, of ▶ met een verzamelaar) —
+  /// zie `origineleUitgaveVan` in enrichment.dart. Gezet bij het opstarten van de pc; null: niet opzoeken.
+  static Future<({String album, int? jaar})?> Function(String artiest, String titel, int? seconden)?
+      origineleUitgave;
 
   /// De versiecontrole van de pc — zie [keurOverdracht] en `versiecontrole.dart`. Gezet bij het opstarten
   /// van de pc; null (een toets, een toestel): niet controleren.

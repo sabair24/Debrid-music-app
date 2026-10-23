@@ -21,6 +21,9 @@ import 'package:debridmusic/musicbrainz.dart';
 import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/settings.dart';
 
+/// Geen net: de digitale voorkant is niet wat hier getoetst wordt — zie `FactsWarmer.voorkant`.
+Future<Object?> _geenVoorkant(String artist, String album, List<String> titels) async => null;
+
 void main() {
   late Directory scratch;
   late LibraryStore library;
@@ -78,6 +81,7 @@ void main() {
     bool brokenNetwork = false,
   }) =>
       FactsWarmer(
+        voorkant: _geenVoorkant,
         volledigTussen: Duration.zero,
         library: library,
         settings: settings,
@@ -118,6 +122,7 @@ void main() {
       seedLibrary([for (var i = 0; i < 20; i++) 'Album$i']);
       late FactsWarmer w;
       w = FactsWarmer(
+        voorkant: _geenVoorkant,
         volledigTussen: Duration.zero,
         library: library,
         settings: settings,
@@ -210,6 +215,7 @@ void main() {
       seedLibrary(['Traag']);
       late FactsWarmer w;
       w = FactsWarmer(
+        voorkant: _geenVoorkant,
         volledigTussen: Duration.zero,
         library: library,
         settings: settings,
@@ -252,6 +258,7 @@ void main() {
       var toegevoegd = false;
       late FactsWarmer w;
       w = FactsWarmer(
+        voorkant: _geenVoorkant,
         volledigTussen: Duration.zero,
         library: library,
         settings: settings,
@@ -314,6 +321,7 @@ void main() {
           added: {'Eerste': 3000, 'Blijft hangen': 2000, 'Derde': 1000});
 
       final w = FactsWarmer(
+        voorkant: _geenVoorkant,
         volledigTussen: Duration.zero,
         library: library,
         settings: settings,
@@ -368,6 +376,7 @@ void main() {
 
       late FactsWarmer w;
       w = FactsWarmer(
+        voorkant: _geenVoorkant,
         volledigTussen: Duration.zero,
         library: library,
         settings: settings,
@@ -506,6 +515,7 @@ void main() {
       var n = 0;
       late FactsWarmer w;
       w = FactsWarmer(
+        voorkant: _geenVoorkant,
         volledigTussen: Duration.zero,
         library: library,
         settings: settings,
