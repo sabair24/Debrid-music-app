@@ -8,6 +8,7 @@ import 'dart:ui' as ui;
 import 'package:debridmusic/artwork.dart' show decodeWidth;
 import 'package:debridmusic/ui/maten.dart';
 import 'package:debridmusic/ui/tegel.dart';
+import 'package:debridmusic/meetronde.dart' show meetZonder;
 import 'package:debridmusic/ui/tegel_spiegel.dart';
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
@@ -119,6 +120,29 @@ void main() {
     final b = (await direct.toByteData())!.buffer.asUint8List();
     expect(a, b, reason: 'hetzelfde beeld, alleen één keer getekend');
     expect(a.any((x) => x != 0), isTrue, reason: 'anders bewijst dit niets');
+  });
+
+  testWidgets('tegels: stroken op de pc, gebakken op de Mac en de iPad (of met de meetronde "tegelbak")', (t) async {
+    final b = _hoes();
+    Future<void> tegel() async {
+      await t.pumpWidget(MaterialApp(
+          home: Center(
+              child: SizedBox(
+                  width: 120, height: 120 * kTegelSpiegelHoogte, child: TegelSpiegel(bron: MemoryImage(b), maat: 120)))));
+      for (var i = 0; i < 40 && find.byType(RawImage).evaluate().isEmpty && find.byKey(const ValueKey('tegel-spiegel')).evaluate().isEmpty; i++) {
+        await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+        await t.pump();
+      }
+    }
+
+    expect(bakTegelSpiegels, Platform.isMacOS || Platform.isIOS);
+    await tegel();
+    expect(find.byKey(const ValueKey('tegel-spiegel')), findsOneWidget, reason: 'hier (Windows) de stroken');
+    meetZonder.value = {'tegelbak'};
+    addTearDown(() => meetZonder.value = const {});
+    await t.pumpWidget(const SizedBox());
+    await tegel();
+    expect(find.byKey(const ValueKey('tegel-spiegel-gebakken')), findsOneWidget, reason: 'met "tegelbak" gebakken');
   });
 
   testWidgets('gebakken: één beeld in plaats van de stroken, en opnieuw bij een andere maat', (t) async {

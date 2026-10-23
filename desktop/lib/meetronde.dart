@@ -32,6 +32,9 @@ bool zonderVoorMeting(String effect) => meetZonder.value.contains(effect);
 const kMeetEffecten = {
   'glas': 'glas plat: geen vervaging',
   'glasmat': 'glas mat in plaats van vloeibaar',
+  'dilate': 'matglas zonder het uitlopen van het licht (dilate)',
+  'lichtblur': 'matglas met de halve vervaging (12 × 10 in plaats van 24 × 20)',
+  'verzadiging': 'matglas zonder de extra verzadiging',
   'achter': 'Nu speelt zonder achtergrond (waas, vlekken, vervaagde hoes)',
   'schaduw': 'zonder de schaduw onder de hoes',
   'spiegel': 'zonder de spiegeling onder de hoes',
@@ -42,7 +45,10 @@ const kMeetEffecten = {
   'foto': 'Nu speelt ook bij het openen als één foto',
   'levend': 'Nu speelt ook bij het sluiten levend (zoals vóór 3.9.590)',
   'tegelspiegel': 'zonder de spiegeling onder de albumtegels',
+  'tegelstroken': 'de spiegeling onder de tegels in stroken, ook op de Mac en de iPad (zoals vóór 3.9.593)',
+  'tegelbak': 'de spiegeling onder de tegels gebakken, ook op de pc en de gsm',
   'overgang': 'een andere hoofdpagina meteen, zonder overvloeien en schuiven',
+  'paginalevend': 'een andere hoofdpagina levend laten overvloeien (zoals vóór 3.9.592), niet als foto',
 };
 
 /// De scenario's van een meetronde.
