@@ -719,6 +719,47 @@ List<Albumkandidaat> deezerAlbumsMetNummer(List<dynamic> data, String artiest, S
   return uit;
 }
 
+/// Klopt de albumtag die de uploader in het bestand zette ([album]) voor [titel] van [artiest] — honderd procent? Alleen
+/// dan komt zijn album terug, met de naam en het jaar van MusicBrainz. Het moet:
+/// - een studioalbum van precies deze artiest zijn ([MusicBrainzService.studioalbumsVan]);
+/// - als enige zo heten (zonder editie), dus niet Duran Duran 1981 tegenover 1993;
+/// - het nummer op zijn tracklijst dragen, in een van zijn persingen.
+///
+/// **Waarom (Saber, 23-10-2026).** Vindt het opzoeken niets, dan wist de radio de albumtag van de uploader, om
+/// rommel als "Foute Cd 11" te weren. Maar soms klopt die juist ("First Band On the Moon" bij Lovefool). Zijn antwoord
+/// op de vraag of die mag blijven: *"Ja als het 100 procent klopt ja."* Null: niet zeker, dan niet.
+Future<({String album, int? jaar})?> uploaderAlbumKlopt(String artiest, String titel, String album) async {
+  String kaal(String s) => normKey(s).replaceAll(RegExp(r'[^a-z0-9]'), '');
+  final k = kaal(zonderEditie(album));
+  if (k.isEmpty || lijktVerzamelaar(album)) return null;
+  final zoek = zonderEditie(titel).isEmpty ? titel : zonderEditie(titel);
+  final mbs = MusicBrainzService();
+  // Beide vragen, zoals [origineleUitgaveVan]: de strenge op albums gaf bij Lovefool nul opnames (23-10-2026).
+  final opnames = [
+    ...await mbs.searchRecordings(zoek, artist: artiest, max: 15, alleenAlbums: true),
+    ...await mbs.searchRecordings(zoek, artist: artiest, max: 15),
+  ];
+  final id = [
+    for (final o in opnames)
+      if (o.artistMbid.isNotEmpty && _zelfdeArtiestAls(o.artist, artiest)) o.artistMbid,
+  ].firstOrNull;
+  if (id == null) return null;
+  final passend = [
+    for (final g in await mbs.studioalbumsVan(id))
+      if (g.primaryType == 'Album' && g.secondaryTypes.isEmpty && kaal(g.title) == k) g,
+  ];
+  if (passend.length != 1) return null;
+  final g = passend.single;
+  final wil = _titelvormen(titel);
+  final staatErop = [
+    for (final r in await mbs.editionsOf(g.mbid, max: 10, tracklists: true))
+      for (final t in r.tracks) _titelvormen(t.title).any(wil.contains),
+  ].contains(true);
+  if (!staatErop) return null;
+  final d = g.firstDate ?? '';
+  return (album: g.title, jaar: d.length >= 4 ? int.tryParse(d.substring(0, 4)) : null);
+}
+
 /// De oorspronkelijke uitgave. Eerst het oudste studioalbum van de artiest waarop MusicBrainz of Deezer het nummer
 /// kent ([studioalbumUitGroepen]); kent die geen, dan [origineleUitgaveUit] met de opnames van MusicBrainz (ook een
 /// single of ep), dan [deezerSingleUit], en dan de eigen single bij Discogs ([DiscogsService.eigenSingle]) — zodat

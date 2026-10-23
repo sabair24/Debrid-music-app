@@ -6,6 +6,7 @@ import 'audiodb.dart';
 import 'deezerbaan.dart';
 import 'discogs.dart';
 import 'editions.dart';
+import 'enrichment.dart' show zonderEditie, zonderGastTitel;
 import 'json_body.dart';
 import 'musicbrainz.dart';
 import 'organize.dart' show artistKey, normKey, zonderBeeld;
@@ -206,6 +207,138 @@ List<MetaResult> platenVanOpnames(List<MbRecording> found,
     if (out.length >= max) break;
   }
   return out;
+}
+
+/// Eén plaat in "Staat ook op…": haar naam, soort en jaar, de MusicBrainz-id's van de plaat ([groep]) en van de persing
+/// om op vast te zetten ([uitgave]), en de edities waarin ze óók bestaat ("Special Edition").
+class Plaatregel {
+  const Plaatregel({
+    required this.titel,
+    required this.soort,
+    this.jaar,
+    this.groep = '',
+    this.uitgave = '',
+    this.edities = const [],
+    this.artiest = '',
+  });
+
+  final String titel, soort, groep, uitgave, artiest;
+  final int? jaar;
+  final List<String> edities;
+
+  /// De hoes van de plaat bij het Cover Art Archive. Die van de releasegroep eerst: een losse persing heeft er vaak
+  /// geen, en dan laadde er niets (Saber, 23-10-2026).
+  String hoes({bool groot = false}) {
+    final maat = groot ? 'front-1200' : 'front-250';
+    return groep.isNotEmpty
+        ? 'https://coverartarchive.org/release-group/$groep/$maat'
+        : 'https://coverartarchive.org/release/$uitgave/$maat';
+  }
+
+  @override
+  String toString() => '$titel ($soort${jaar == null ? '' : ', $jaar'}${edities.isEmpty ? '' : '; ook ${edities.join(', ')}'})';
+}
+
+/// De soorten die "Staat ook op…" toont, in deze volgorde — Saber, 23-10-2026: studioalbums, singles en ep's, en
+/// verzamelaars; geen live-platen en geen soundtracks.
+const kStaatOokOpSoorten = {'Studioalbum': 0, 'EP': 1, 'Single': 2, 'Verzamelaar': 3};
+
+/// Is [a] hetzelfde nummer als [b] — ook met of zonder gast ("(feat. Selena Gomez)") en editie ("(2009 Remaster)")?
+bool zelfdeNummer(String a, String b) {
+  Set<String> vormen(String t) {
+    final g = zonderGastTitel(t);
+    String kaal(String s) => normKey(s).replaceAll(RegExp(r'[^a-z0-9]'), '');
+    return {kaal(t), kaal(g), kaal(zonderEditie(t)), kaal(zonderEditie(g))}..remove('');
+  }
+
+  return vormen(a).any(vormen(b).contains);
+}
+
+/// "Staat ook op…": één regel per plaat waarop [titel] van [artiest] staat, uit de opnames van MusicBrainz ([found]).
+/// [groepen]: de studioalbums van de artiest op hun id (naam en eerste datum), voor de naam en het jaar van de plaat zelf.
+///
+/// **Waarom zo (Saber, 23-10-2026).** Bij "We Don't Talk Anymore (feat. Selena Gomez)" stond er één plaat: de titel werd
+/// letterlijk vergeleken, en bij MusicBrainz heet het nummer zonder gast. Zijn keuzes: studioalbums, singles en ep's, en
+/// verzamelaars ([kStaatOokOpSoorten]); één regel per plaat, met de edities erachter.
+List<Plaatregel> platenVoorStaatOokOp(List<MbRecording> found,
+    {required String artiest, required String titel, Map<String, ({String titel, String datum})> groepen = const {}}) {
+  String kaal(String s) => normKey(s).replaceAll(RegExp(r'[^a-z0-9]'), '');
+  // De naam van een persing zonder editie en zonder gast: "We Don't Talk Anymore (f. Selena Gomez)" en "Nine Track
+  // Mind (Special Edition)" zijn "We Don't Talk Anymore" en "Nine Track Mind".
+  String kern(String t) => zonderEditie(zonderGastTitel(t)).trim();
+  final wie = artistKey(artiest);
+  // Eerst per plaat van MusicBrainz (de releasegroep), zodat alle persingen bij elkaar staan.
+  final perGroep = <String, ({String soort, List<MbRecordingRelease> persingen, String artiest})>{};
+  for (final rec in found) {
+    if (!zelfdeNummer(rec.title, titel)) continue;
+    // De opname van de artiest zelf (ook op een verzamelaar van anderen), geen cover: "Billy Joel Tribute Band".
+    final k = artistKey(rec.artist);
+    if (wie.isNotEmpty && k != wie && !wie.startsWith('$k ')) continue;
+    for (final rel in rec.releases) {
+      final soort = soortVan(rel);
+      if (!kStaatOokOpSoorten.containsKey(soort)) continue;
+      final g = perGroep['$soort|${rel.groep.isNotEmpty ? rel.groep : 'r:${rel.mbid}'}'] ??=
+          (soort: soort, persingen: <MbRecordingRelease>[], artiest: rel.artiest.isNotEmpty ? rel.artiest : rec.artist);
+      if (g.persingen.every((p) => p.mbid != rel.mbid)) g.persingen.add(rel);
+    }
+  }
+  // Dan samen op naam: MusicBrainz maakt van "Nine Track Mind (Special Edition)" soms een eigen plaat.
+  String naamVan(String groep, List<MbRecordingRelease> ps) {
+    final g = groepen[groep];
+    if (g != null) return kern(g.titel);
+    final namen = [for (final p in ps) kern(p.title)]..sort((a, b) => a.length.compareTo(b.length));
+    return namen.first;
+  }
+
+  final bundels = <String, ({String titel, String soort, List<MbRecordingRelease> persingen, String artiest})>{};
+  for (final e in perGroep.entries) {
+    final groep = e.value.persingen.first.groep;
+    final naam = naamVan(groep, e.value.persingen);
+    if (naam.isEmpty) continue;
+    final b = bundels['${e.value.soort}|${kaal(naam)}'] ??=
+        (titel: naam, soort: e.value.soort, persingen: <MbRecordingRelease>[], artiest: e.value.artiest);
+    b.persingen.addAll(e.value.persingen);
+  }
+  final uit = <Plaatregel>[];
+  for (final b in bundels.values) {
+    String datum(MbRecordingRelease r) => groepen[r.groep]?.datum ?? r.date;
+    final op = [...b.persingen]..sort((x, y) {
+        final dx = datum(x), dy = datum(y);
+        return dx.isEmpty ? 1 : (dy.isEmpty ? -1 : dx.compareTo(dy));
+      });
+    // Het origineel: een persing die zo heet, zonder editie of gast; de vroegste. Daarop wordt vastgezet, en zijn jaar
+    // is dat van de plaat — niet dat van een "Special Edition" die eerder gedateerd is.
+    final origineel = op.firstWhere((r) => kaal(zonderGastTitel(r.title)) == kaal(b.titel), orElse: () => op.first);
+    final d = datum(origineel).length >= 4
+        ? datum(origineel)
+        : op.map(datum).firstWhere((x) => x.length >= 4, orElse: () => '');
+    final edities = <String>{};
+    for (final r in op) {
+      final n = zonderGastTitel(r.title).trim();
+      if (kaal(n) == kaal(b.titel)) continue;
+      var rest = n.toLowerCase().startsWith(b.titel.toLowerCase()) ? n.substring(b.titel.length) : n;
+      rest = rest.replaceAll(RegExp(r'^[\s\-–:(\[]+|[\s)\]]+$'), '').trim();
+      // Een gast is geen editie: "f. Selena Gomez".
+      if (RegExp(r'^(f|ft|feat|featuring|with)\.?\s', caseSensitive: false).hasMatch(rest)) continue;
+      if (rest.isNotEmpty && kaal(rest) != kaal(b.titel)) edities.add(rest);
+    }
+    uit.add(Plaatregel(
+      titel: b.titel,
+      soort: b.soort,
+      jaar: d.length >= 4 ? int.tryParse(d.substring(0, 4)) : null,
+      groep: origineel.groep,
+      uitgave: origineel.mbid,
+      edities: edities.toList(),
+      artiest: b.artiest,
+    ));
+  }
+  uit.sort((a, b) {
+    final s = kStaatOokOpSoorten[a.soort]!.compareTo(kStaatOokOpSoorten[b.soort]!);
+    if (s != 0) return s;
+    final j = (a.jaar ?? 9999).compareTo(b.jaar ?? 9999);
+    return j != 0 ? j : a.titel.compareTo(b.titel);
+  });
+  return uit;
 }
 
 /// Wat voor plaat [r] is, in één woord voor "Staat ook op…": Studioalbum, Single, EP, Live, Verzamelaar, Soundtrack.
@@ -743,9 +876,38 @@ class MetadataSearch {
   /// tot "Oasis" — één vraag per seconde, en "Alles" stond 7 s te wachten op een artiest die er al
   /// stond.
   /// Op welke platen [titel] van [artiest] staat — voor "Staat ook op…" in het menu van een nummer (Saber,
-  /// 23-10-2026). De studioalbums bovenaan, het origineel voor de deluxe ([studioVoorop]).
-  Future<List<MetaResult>> opWelkePlaten(String artiest, String titel) async =>
-      studioVoorop(await _musicbrainzByTrack('$artiest - $titel', bekendeArtiest: artiest, max: 40, precies: true));
+  /// 23-10-2026): één regel per plaat ([platenVoorStaatOokOp]). Gezocht zonder gast en zonder editie: MusicBrainz kent
+  /// "We Don't Talk Anymore", niet "We Don't Talk Anymore (feat. Selena Gomez)".
+  Future<List<Plaatregel>> staatOokOp(String artiest, String titel) async {
+    final zoek = zonderEditie(zonderGastTitel(titel)).trim();
+    if (zoek.isEmpty || artiest.trim().isEmpty) return const [];
+    final mb = MusicBrainzService();
+    final (gewoon, albums) = await (
+      mb.searchRecordings(zoek, artist: artiest, max: 25),
+      mb.searchRecordings(zoek, artist: artiest, max: 25, alleenAlbums: true),
+    ).wait;
+    final gezien = <String>{};
+    final found = [
+      for (final r in [...albums, ...gewoon])
+        if (gezien.add(r.mbid)) r,
+    ];
+    // De naam en het jaar van de platen zelf — zie [MusicBrainzService.studioalbumsVan]; het id van de artiest staat
+    // al in zijn opnames.
+    final id = [
+      for (final r in found)
+        if (r.artistMbid.isNotEmpty && artistKey(r.artist) == artistKey(artiest)) r.artistMbid,
+    ].firstOrNull;
+    final groepen = <String, ({String titel, String datum})>{};
+    if (id != null) {
+      try {
+        for (final g in await mb.studioalbumsVan(id)) {
+          final d = g.firstDate ?? '';
+          if (d.isNotEmpty) groepen[g.mbid] = (titel: g.title, datum: d);
+        }
+      } catch (_) {/* dan de namen en jaren van de persingen */}
+    }
+    return platenVoorStaatOokOp(found, artiest: artiest, titel: titel, groepen: groepen);
+  }
 
   /// [precies]: alleen opnames die precies zo heten (op hoofdletters en leestekens na) — geen "Summer of 69
   /// (clicktrack)" of karaokeversie bij "Staat ook op…".

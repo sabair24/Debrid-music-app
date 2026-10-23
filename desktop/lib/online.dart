@@ -3910,6 +3910,8 @@ class DownloadManager extends ChangeNotifier {
                 ?.call(artiest, titel, gevonden.album)
                 .timeout(const Duration(seconds: 8), onTimeout: () => null)
                 .then<({int? jaar, int nummer, int schijf})?>((p) => p, onError: (Object _) => null);
+          } else {
+            gezag = await metAlbumVanUploader(gezag, uit.path, artiest, titel, jaar, seconden);
           }
           final velden = veldenNaHaal(gezag,
               eigenAlbum: gezag.album.isEmpty ? null : readTags(File(uit.path))?.album, plek: plek);
@@ -4573,6 +4575,7 @@ class DownloadManager extends ChangeNotifier {
                     seconden: seconden);
               }
             } else {
+              gezag = await metAlbumVanUploader(gezag, uit.path, artiest, titel, jaar, seconden);
               plek = plekF == null
                   ? null
                   : await plekF.timeout(const Duration(seconds: 8), onTimeout: () => null);
@@ -5311,6 +5314,37 @@ class DownloadManager extends ChangeNotifier {
   /// zie `origineleUitgaveVan` in enrichment.dart. Gezet bij het opstarten van de pc; null: niet opzoeken.
   static Future<({String album, int? jaar})?> Function(String artiest, String titel, int? seconden)?
       origineleUitgave;
+
+  /// Klopt de albumtag van de uploader honderd procent — zie `uploaderAlbumKlopt` in enrichment.dart. Gezet bij het
+  /// opstarten van de pc; null (een toets, een toestel): niet nakijken, dan blijft hij weg zoals voorheen.
+  static Future<({String album, int? jaar})?> Function(String artiest, String titel, String album)? albumVanUploader;
+
+  /// [gezag] zonder album (het opzoeken vond niets): dan het album dat de uploader in [pad] zette, als het honderd
+  /// procent klopt ([albumVanUploader]) — anders [gezag] zoals het was, en dan gaat zijn tag weg zoals voorheen. Saber,
+  /// 23-10-2026: "Ja als het 100 procent klopt ja."
+  @visibleForTesting
+  Future<TrackTags> metAlbumVanUploader(
+      TrackTags gezag, String pad, String artiest, String titel, int? jaar, int? seconden) async {
+    final f = albumVanUploader;
+    if (f == null || gezag.album.isNotEmpty) return gezag;
+    final eigen = (readTags(File(pad))?.album ?? '').trim();
+    if (eigen.isEmpty) return gezag;
+    final klopt = await f(artiest, titel, eigen)
+        .timeout(const Duration(seconds: 10), onTimeout: () => null)
+        .then<({String album, int? jaar})?>((o) => o, onError: (Object _) => null);
+    if (klopt == null) {
+      _log.line('radio "$artiest — $titel": album van de uploader "$eigen" niet zeker — weg');
+      return gezag;
+    }
+    final j = klopt.jaar;
+    _log.line('radio "$artiest — $titel": album van de uploader klopt — "${klopt.album}"${j == null ? '' : ' ($j)'}');
+    return gezagVoorHaal(
+        artiest: artiest,
+        titel: titel,
+        album: klopt.album,
+        jaar: j == null ? jaar : (jaar == null || j < jaar ? j : jaar),
+        seconden: seconden);
+  }
 
   /// Zodra bekend is op welke plaat een nummer komt dat nu binnenkomt (de radio, ▶): de hoezen van die plaat alvast
   /// ophalen — `FactsWarmer.alvast`. Gezet bij het opstarten van de pc; null (een toets, een toestel): niets. Saber,

@@ -294,7 +294,7 @@ void main() {
           reason: 'meteen voorstellen');
       expect(m, contains('await _pick(_results.first);\n                          if (mounted) await _apply();'));
       expect(_lees('lib/metadata.dart'),
-          contains("studioVoorop(await _musicbrainzByTrack('\$artiest - \$titel', bekendeArtiest: artiest, max: 40, precies: true));"));
+          contains('return platenVoorStaatOokOp(found, artiest: artiest, titel: titel, groepen: groepen);'));
     });
 
     // Zoals MusicBrainz het gaf bij de controle van 23-10-2026: de zoekvraag op opnames brengt vooral heruitgaven mee.

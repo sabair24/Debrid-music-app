@@ -1225,6 +1225,8 @@ Future<void> main() async {
   if (mode.owner) {
     DownloadManager.origineleUitgave = (artiest, titel, seconden) =>
         origineleUitgaveVan(artiest, titel, seconden: seconden, discogs: DiscogsService(settings));
+    // Vond dat niets: de albumtag van de uploader, als die honderd procent klopt (Saber, 23-10-2026).
+    DownloadManager.albumVanUploader = uploaderAlbumKlopt;
     // Tags die pas later lukten (het nummer speelde al): de bibliotheek leest dat ene bestand opnieuw, en dan staat het
     // op zijn plaat — met de hoezen van die plaat meteen.
     DownloadManager.naLateTags = (pad) async {
@@ -12742,36 +12744,58 @@ class _VoorstelRegel extends StatelessWidget {
       );
 }
 
-/// "Staat ook op…": op welke platen [t] staat, de studioalbums bovenaan en het origineel voor de deluxe — zie
-/// [MetadataSearch.opWelkePlaten]. Alleen kijken; een uitgave kiezen gaat via "Juiste uitgave zoeken…".
+/// "Staat ook op…": op welke platen [t] staat. Eén regel per plaat ([MetadataSearch.staatOokOp]), de platen die je al
+/// hebt bovenaan met een vinkje, en een tik geeft de keuze: openen, dit nummer erop zetten, of de plaat ophalen.
+///
+/// Saber, 23-10-2026, over de eerste versie: *"staat ook op, laadt geen hoes, en kan nie op klikken"* — en daarna zijn
+/// keuzes: een keuzemenu bij een tik; studioalbums, singles en ep's, en verzamelaars; één regel per plaat; wat je hebt
+/// bovenaan.
 Future<void> toonStaatOokOp(BuildContext context, Track t) => showModalBottomSheet<void>(
       context: context,
       backgroundColor: _panel,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(kHoek18))),
-      builder: (_) => _StaatOokOpBlad(track: t, zoeker: MetadataSearch(context.read<AppSettings>())),
+      builder: (_) => StaatOokOpBlad(track: t, zoek: MetadataSearch(context.read<AppSettings>()).staatOokOp),
     );
 
-class _StaatOokOpBlad extends StatefulWidget {
-  const _StaatOokOpBlad({required this.track, required this.zoeker});
-
-  final Track track;
-  final MetadataSearch zoeker;
-
-  @override
-  State<_StaatOokOpBlad> createState() => _StaatOokOpBladState();
+/// De plaat uit je bibliotheek die [p] is en waarop dit nummer ([t]) staat, of null. Op titel (zonder editie) en op het
+/// nummer zelf — een verzamelaar staat onder "Various Artists", en twee platen met dezelfde naam zijn zelden van
+/// hetzelfde nummer.
+Album? albumInBibliotheek(LibraryStore lib, Plaatregel p, Track t) {
+  String kaal(String s) => normKey(s).replaceAll(RegExp(r'[^a-z0-9]'), '');
+  final k = kaal(p.titel);
+  if (k.isEmpty) return null;
+  for (final a in lib.albums) {
+    if (a.isSingle || kaal(zonderEditie(a.title)) != k) continue;
+    if (a.tracks.any((x) => zelfdeNummer(x.title, t.title))) return a;
+  }
+  return null;
 }
 
-class _StaatOokOpBladState extends State<_StaatOokOpBlad> {
-  late final Future<List<MetaResult>> _platen =
-      widget.zoeker.opWelkePlaten(widget.track.artist, widget.track.title).catchError((Object _) => <MetaResult>[]);
+/// Het blad van [toonStaatOokOp]. [zoek] is ingespoten voor de toetsen.
+class StaatOokOpBlad extends StatefulWidget {
+  const StaatOokOpBlad({super.key, required this.track, required this.zoek});
+
+  final Track track;
+  final Future<List<Plaatregel>> Function(String artiest, String titel) zoek;
+
+  @override
+  State<StaatOokOpBlad> createState() => _StaatOokOpBladState();
+}
+
+class _StaatOokOpBladState extends State<StaatOokOpBlad> {
+  // De hoofdartiest: "Charlie Puth" en niet "Charlie Puth feat. Selena Gomez" — anders vindt MusicBrainz niets.
+  late final String _artiest = splitFeatured(widget.track.artist, widget.track.title).main;
+  late final Future<List<Plaatregel>> _platen =
+      widget.zoek(_artiest, widget.track.title).catchError((Object _) => <Plaatregel>[]);
 
   @override
   Widget build(BuildContext context) {
     final t = widget.track;
+    final lib = context.watch<LibraryStore>();
     return SafeArea(
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .75),
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -12783,10 +12807,10 @@ class _StaatOokOpBladState extends State<_StaatOokOpBlad> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
               child: Text('${t.artist} — ${t.title}',
-                  maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 12.5)),
+                  maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 12.5)),
             ),
             Flexible(
-              child: FutureBuilder<List<MetaResult>>(
+              child: FutureBuilder<List<Plaatregel>>(
                 future: _platen,
                 builder: (context, s) {
                   if (s.connectionState != ConnectionState.done) {
@@ -12795,30 +12819,20 @@ class _StaatOokOpBladState extends State<_StaatOokOpBlad> {
                       child: Center(child: CircularProgressIndicator(color: _accent)),
                     );
                   }
-                  final lijst = s.data ?? const <MetaResult>[];
+                  final lijst = s.data ?? const <Plaatregel>[];
                   if (lijst.isEmpty) {
                     return Padding(
                       padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
                       child: Text('MusicBrainz kent geen plaat met dit nummer.', style: TextStyle(color: _muted)),
                     );
                   }
+                  // Wat je al hebt eerst, daarna de volgorde van [platenVoorStaatOokOp].
+                  final regels = [for (final p in lijst) (plaat: p, eigen: albumInBibliotheek(lib, p, t))];
+                  final op = [...regels.where((r) => r.eigen != null), ...regels.where((r) => r.eigen == null)];
                   return ListView(
                     shrinkWrap: true,
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                    children: [
-                      for (final m in lijst)
-                        ListTile(
-                          dense: true,
-                          leading: _netCover(m.coverUrl, size: 40, radius: 6),
-                          title: Text(m.album,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: kInkt, fontWeight: m.studioalbum ? FontWeight.w600 : FontWeight.w400)),
-                          subtitle: Text(
-                              [if (m.soort.isNotEmpty) m.soort, if (m.jaar != null) '${m.jaar}'].join(' · '),
-                              style: TextStyle(color: _muted, fontSize: 12)),
-                        ),
-                    ],
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+                    children: [for (final r in op) _staatOokOpRegel(context, t, r.plaat, r.eigen)],
                   );
                 },
               ),
@@ -12827,6 +12841,103 @@ class _StaatOokOpBladState extends State<_StaatOokOpBlad> {
         ),
       ),
     );
+  }
+}
+
+/// Eén plaat in "Staat ook op…". De naam tot twee regels: op een gsm brak "Nine Track Mind (Special Edition)" anders af.
+Widget _staatOokOpRegel(BuildContext context, Track t, Plaatregel p, Album? eigen) {
+  final hoes = eigen?.cover;
+  return ListTile(
+    onTap: () => _toonItemMenu(context, _staatOokOpMenu(context, t, p, eigen)),
+    leading: hoes != null
+        ? ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: Image.memory(hoes, width: 44, height: 44, fit: BoxFit.cover, gaplessPlayback: true))
+        : _netCover(p.hoes(), size: 44, radius: 6),
+    title: Text(p.titel,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(color: kInkt, fontWeight: p.soort == 'Studioalbum' ? FontWeight.w600 : FontWeight.w400)),
+    subtitle: Text(
+        [
+          if (eigen != null) 'In je bibliotheek',
+          p.soort,
+          if (p.jaar != null) '${p.jaar}',
+          if (p.soort == 'Verzamelaar' && p.artiest.isNotEmpty) p.artiest,
+          if (p.edities.isNotEmpty) 'ook als ${p.edities.take(2).join(', ')}${p.edities.length > 2 ? '…' : ''}',
+        ].join(' · '),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(color: _muted, fontSize: 12)),
+    trailing: eigen != null
+        ? Icon(Icons.check_circle_rounded, size: 20, color: _accent2)
+        : Icon(Icons.more_horiz_rounded, size: 20, color: _muted),
+  );
+}
+
+/// De keuze bij een plaat in "Staat ook op…": openen, dit nummer erop zetten, of de plaat ophalen (Saber, 23-10-2026).
+ItemMenu _staatOokOpMenu(BuildContext context, Track t, Plaatregel p, Album? eigen) {
+  final nav = Navigator.of(context);
+  // Een plaat van online opent op haar releasegroep: de pagina zoekt zelf een persing met een tracklijst.
+  CatalogAlbum online() => CatalogAlbum(0, p.titel, p.hoes(groot: true), p.jaar == null ? null : '${p.jaar}', 0,
+      p.soort == 'Studioalbum' ? 'album' : (p.soort == 'Verzamelaar' ? 'compile' : p.soort.toLowerCase()),
+      origin: p.groep.isNotEmpty ? CatalogRef.musicbrainzGroup(p.groep) : CatalogRef.musicbrainz(p.uitgave));
+  final artiest = p.soort == 'Verzamelaar' && p.artiest.isNotEmpty ? p.artiest : t.artist;
+  return ItemMenu(
+    titel: p.titel,
+    ondertitel: [p.soort, if (p.jaar != null) '${p.jaar}'].join(' · '),
+    blokken: [
+      [
+        MenuRegel(Icons.album_rounded, eigen != null ? 'Album openen' : 'Album online bekijken', () {
+          nav.pop();
+          if (eigen != null) {
+            openOp(nav, (_) => AlbumDetailPage(album: eigen));
+          } else {
+            openOp(nav, (_) => AlbumBrowsePage(artiest, online()));
+          }
+        }),
+        MenuRegel(Icons.drive_file_rename_outline_rounded, 'Dit nummer op deze plaat zetten', () {
+          nav.pop();
+          // De context van de navigator: die van het blad is na het sluiten weg.
+          unawaited(zetNummerOpPlaat(nav.context, t, p));
+        }),
+        if (eigen == null)
+          MenuRegel(Icons.download_rounded, 'Plaat ophalen', () {
+            nav.pop();
+            openOp(nav, (_) => AlbumBrowsePage(artiest, online(), bronnenOpen: true));
+          }),
+      ],
+    ],
+  );
+}
+
+/// [t] op plaat [p] zetten: haar naam als album, de persing vastgezet, en haar hoes — zoals "Juiste uitgave zoeken…" het
+/// voor één nummer doet ([LibraryStore.applyCorrection] met `alleen`). Daarna haalt de pc vanzelf de achterkant en de cd.
+Future<void> zetNummerOpPlaat(BuildContext context, Track t, Plaatregel p) async {
+  final lib = context.read<LibraryStore>();
+  final cfg = context.read<AppSettings>();
+  final album = lib.albums.where((a) => a.tracks.any((x) => x.path == t.path)).firstOrNull;
+  if (album == null) {
+    _srcToast(context, 'Dit nummer staat niet in je bibliotheek.');
+    return;
+  }
+  final hoes = await CoverEnricher(cfg).downloadImage(p.hoes(groot: true)).catchError((Object _) => null);
+  try {
+    final g = await lib.applyCorrection(album, cfg,
+        artist: t.artist,
+        albumTitle: p.titel,
+        title: t.title,
+        coverBytes: hoes,
+        mbid: p.uitgave.isEmpty ? null : p.uitgave,
+        alleen: [t]);
+    if (!context.mounted) return;
+    _srcToast(
+        context,
+        g.failed.isEmpty
+            ? '"${t.title}" staat nu op ${p.titel}'
+            : '"${t.title}" staat in de app op ${p.titel} — het bestand zelf lukte niet (${g.failed.first})');
+  } catch (e) {
+    if (context.mounted) _srcToast(context, 'Op die plaat zetten lukte niet: $e');
   }
 }
 
@@ -29396,7 +29507,10 @@ class AlbumBrowsePage extends StatefulWidget implements OnderDeBalk {
 
   /// Het label van de tegel waar je vandaan kwam: de hoes vliegt mee (16-10-2026). Null = geen vlucht.
   final Object? heroTag;
-  const AlbumBrowsePage(this.artistName, this.album, {super.key, this.heroTag});
+
+  /// Meteen met "Bronnen voor album" open: "Plaat ophalen" in "Staat ook op…" (23-10-2026). Daar kies je de bron.
+  final bool bronnenOpen;
+  const AlbumBrowsePage(this.artistName, this.album, {super.key, this.heroTag, this.bronnenOpen = false});
   @override
   State<AlbumBrowsePage> createState() => _AlbumBrowsePageState();
 }
@@ -29413,7 +29527,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   final _catalog = CatalogService();
   List<CatalogTrack> _tracks = [];
   bool _busy = true;
-  int? _expanded; // track index whose sources are shown; -1 = whole album
+  late int? _expanded = widget.bronnenOpen ? _albumLevel : null; // track index whose sources are shown; -1 = whole album
 
   // Soulseek sources for the WHOLE album, pre-loaded in the background with ONE search when the
   // page opens — so tapping a track's download button is instant (no per-track search). Kept to
