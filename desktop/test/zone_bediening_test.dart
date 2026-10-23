@@ -361,6 +361,16 @@ void main() {
       final zonder = ZoneUitvoerder(speler: s, rij: s, nummer: _t);
       expect(await zonder.voerUit({'id': '2', 'cmd': 'neemOver', 'stand': {'trackId': 'b'}}), isNotNull);
     });
+
+    test('verplaatst: de muziek speelt nu elders, dus hier stoppen (Saber, 23-10-2026: "A stopt helemaal")', () async {
+      final s = _NepSpeler();
+      final naar = <String>[];
+      final u = ZoneUitvoerder(speler: s, rij: s, nummer: _t, verplaatst: naar.add);
+      expect(await u.voerUit({'id': '1', 'cmd': 'verplaatst', 'naar': 'iPad'}), isNull);
+      expect(naar, ['iPad']);
+      final zonder = ZoneUitvoerder(speler: s, rij: s, nummer: _t);
+      expect(await zonder.voerUit({'id': '2', 'cmd': 'verplaatst', 'naar': 'iPad'}), isNotNull);
+    });
   });
 
   group('aangesloten', () {
@@ -410,7 +420,9 @@ void main() {
       expect(main, contains('s.bijZoneOpdracht = zoneUitvoerder.voerUit;'));
       expect(main, contains('opOpdracht: (op) => unawaited(zoneUitvoerder.voerUit(op)),'));
       expect(main, contains("'volume': player.volume.round(),"));
-      expect(main, contains('volume: player.volume.round());'));
+      expect(main, contains('volume: player.volume.round(),\n          alleenZone: m.alleenZone);'));
+      expect(main, contains("if (m.alleenZone) 'alleenZone': true,"));
+      expect(main, contains('verplaatst: (_) => verder.isVerplaatst(),'));
       expect(lees('lib/settings.dart'), contains("'gekozen_zone': gekozenZone,"));
     });
   });

@@ -90,7 +90,15 @@ class ZoneStaat {
     this.radioPast = '',
     this.radioGehaald = false,
     this.radioHouden = false,
+    this.verplaatstNaar = '',
+    this.verplaatstOp = 0,
   });
+
+  /// De muziek van deze zone ging net naar een andere ([verplaatstNaar], de naam van die zone), op [verplaatstOp] (klok
+  /// van de pc). Dan speelt deze zone niets meer — ook al meldde ze dat nog niet (Saber, 23-10-2026: "als ik ze
+  /// verplaats blijft op de andere ook"). Leeg: niet verplaatst. Zie [ZoneRegister.verplaatst].
+  final String verplaatstNaar;
+  final int verplaatstOp;
 
   /// Speelt er een radio van de pc op deze speaker ([radio]): wat hij doet ("Zoekt het volgende nummer…"), leeg
   /// als er niets bijzonders is — zie `radioStatusTekst`. Voor een toestel dat de speaker kiest (speakerradio v2,
@@ -195,6 +203,7 @@ class ZoneStaat {
         if (radioPast.isNotEmpty) 'radioPast': radioPast,
         if (radioGehaald) 'radioGehaald': true,
         if (radioHouden) 'radioHouden': true,
+        if (verplaatstNaar.isNotEmpty) ...{'verplaatstNaar': verplaatstNaar, 'verplaatstOp': verplaatstOp},
       };
 
   static ZoneStaat fromJson(Map<String, dynamic> m) => ZoneStaat(
@@ -225,6 +234,8 @@ class ZoneStaat {
         radioPast: '${m['radioPast'] ?? ''}',
         radioGehaald: m['radioGehaald'] == true,
         radioHouden: m['radioHouden'] == true,
+        verplaatstNaar: '${m['verplaatstNaar'] ?? ''}',
+        verplaatstOp: (m['verplaatstOp'] as num?)?.toInt() ?? 0,
       );
 
   @override
@@ -255,10 +266,33 @@ class ZoneStaat {
       other.radioStatus == radioStatus &&
       other.radioPast == radioPast &&
       other.radioGehaald == radioGehaald &&
-      other.radioHouden == radioHouden;
+      other.radioHouden == radioHouden &&
+      other.verplaatstNaar == verplaatstNaar &&
+      other.verplaatstOp == verplaatstOp;
 
   @override
   int get hashCode => Object.hash(id, online, playing, trackId, positionMs, opMs, index, lengte);
+}
+
+/// Hoe lang "Verplaatst naar …" op de kaart van de oude zone staat (Saber, 23-10-2026: "Ja, een paar seconden").
+const kVerplaatstZichtbaar = Duration(seconds: 5);
+
+/// Hoe lang een gepauzeerde zone nog als spelend telt (Saber, 23-10-2026: "Na 10 minuten bij 'niets'"). Verder spelen
+/// vanaf waar je was blijft kunnen; ze staat alleen niet meer bij wat speelt.
+const kGepauzeerdTeltAlsSpelend = Duration(minutes: 10);
+
+/// "Verplaatst naar …" voor [z] nu, of null als die melding er (niet meer) hoort — zie [kVerplaatstZichtbaar].
+String? verplaatstMelding(ZoneStaat z, {required int nuMs}) {
+  if (z.verplaatstNaar.isEmpty) return null;
+  return nuMs - z.verplaatstOp < kVerplaatstZichtbaar.inMilliseconds ? 'Verplaatst naar ${z.verplaatstNaar}' : null;
+}
+
+/// Telt [z] als een zone die speelt — bovenaan in de lijst, met haar nummer? Ze speelt, of ze staat korter dan
+/// [kGepauzeerdTeltAlsSpelend] gepauzeerd; en haar muziek ging niet naar een andere zone.
+bool speeltNu(ZoneStaat z, {required int nuMs}) {
+  if (!z.speeltIets || z.verplaatstNaar.isNotEmpty) return false;
+  if (z.playing) return true;
+  return z.opMs > 0 && nuMs - z.opMs < kGepauzeerdTeltAlsSpelend.inMilliseconds;
 }
 
 /// Waar het nummer van [z] nu is: de gemelde plek, plus de tijd sindsdien als het speelde, nooit
@@ -670,7 +704,31 @@ class ZoneRegister {
         via: pcNaam,
       ));
     }
-    return ordenZones(uit, hier: 'dev:$pcId');
+    return ordenZones([for (final z in uit) _metVerplaatst(z, t)], hier: 'dev:$pcId');
+  }
+
+  /// Zones waarvan de muziek net naar een andere ging: naar welke (de naam), en wanneer. Zie [ZoneStaat.verplaatstNaar].
+  final Map<String, ({String naar, int op})> _verplaatst = {};
+
+  /// De muziek van [zoneId] ging naar [naar] (de naam van die zone) — gezet door de overdracht op de pc.
+  void verplaatst(String zoneId, String naar) => _verplaatst[zoneId] = (naar: naar, op: nu);
+
+  /// Ging de muziek van [zoneId] de laatste [binnen] al ergens heen? Dan hoeft dat niet nog eens.
+  bool netVerplaatst(String zoneId, {Duration binnen = const Duration(seconds: 15)}) {
+    final v = _verplaatst[zoneId];
+    return v != null && nu - v.op < binnen.inMilliseconds;
+  }
+
+  /// [z] met [ZoneStaat.verplaatstNaar], tot ze weer zelf speelt. Een melding "speelt" van ná het verplaatsen —
+  /// met wat marge voor de bron die het nog niet wist — haalt het weg.
+  ZoneStaat _metVerplaatst(ZoneStaat z, int t) {
+    final v = _verplaatst[z.id];
+    if (v == null) return z;
+    if ((z.playing && z.opMs > v.op + 6000) || t - v.op > const Duration(hours: 12).inMilliseconds) {
+      _verplaatst.remove(z.id);
+      return z;
+    }
+    return ZoneStaat.fromJson({...z.toJson(), 'verplaatstNaar': v.naar, 'verplaatstOp': v.op});
   }
 
   String _naamVanToestel(String id) {

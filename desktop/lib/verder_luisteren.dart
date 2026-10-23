@@ -321,13 +321,23 @@ class VerderLuisteren extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Hoort er bij de volgende melding van dit toestel een `overname` (één keer), en mag er nu
-  /// gemeld worden? Null als er niet gemeld moet worden.
-  ({String? overname})? meldNu() {
-    if (_nu < _stilTot) return null;
+  /// Hoort er bij de volgende melding van dit toestel een `overname` (één keer), en mag die melding "waar je gebleven
+  /// bent" worden? Binnen het stilvenster na een overname ([_stilTot]) alleen voor de eigen zone ([alleenZone]): de
+  /// pauze hoort in de zonelijst, maar mag de stand van wie overnam niet overschrijven. Tot 23-10-2026 werd die melding
+  /// helemaal ingeslikt, en dan stond dit toestel in de lijst nog als spelend, met een klok die doorliep.
+  ({String? overname, bool alleenZone}) meldNu() {
+    if (_nu < _stilTot) return (overname: null, alleenZone: true);
     final van = _overnameVan;
     _overnameVan = null;
-    return (overname: van);
+    return (overname: van, alleenZone: false);
+  }
+
+  /// De muziek van dit toestel speelt nu op een andere zone (de pc zegt het: opdracht 'verplaatst'). Stop hier, zoals
+  /// bij een overname die dit toestel zelf zag ([opStand]): pauzeren, met het stilvenster erbij.
+  /// [_gepauzeerdOp] blijft staan: dat is een tijd op de klok van de pc, niet op die van dit toestel.
+  void isVerplaatst() {
+    _stilTot = _nu + 6000;
+    bron.pauzeer();
   }
 
   /// Speelt er nu hier iets, dan is er niets aan te bieden.

@@ -178,6 +178,12 @@ class LanStateStore {
   /// Het toestel-id telkens als [perToestel] voor dat toestel veranderde.
   Stream<String> get zoneChanges => _zoneChanges.stream;
 
+  final _overnames = StreamController<({String van, String naar, String trackId})>.broadcast();
+
+  /// Een toestel ([naar]) meldt dat het overnam van [van] (een toestel-id, of `spk:<id>` voor een speaker). De pc zegt
+  /// het de bron zelf — zie `LanServer` — want het signaal in de gedeelde stand kon de bron missen.
+  Stream<({String van, String naar, String trackId})> get overnames => _overnames.stream;
+
   /// Per toestel hoeveel zijn klok afwijkt van die van de pc (pc min toestel), voor de speelstand.
   final Map<String, int> _klokVerschil = {};
 
@@ -441,6 +447,14 @@ class LanStateStore {
             perToestel[deviceId] = melding;
             if (deviceId.isNotEmpty) _zoneChanges.add(deviceId);
           }
+          // Nam dit toestel net over: de pc zegt het de bron zelf ([overnames]), want die kon het missen.
+          if (melding.overname.isNotEmpty && melding.overname != deviceId) {
+            _overnames.add((van: melding.overname, naar: deviceId, trackId: melding.trackId));
+          }
+          // Alleen voor zijn eigen zone: de bron die net overgenomen werd en pauzeert, meldt dat ([alleenZone]), maar
+          // "waar je gebleven bent" blijft bij wie overnam. Zonder dit slikte de bron die melding in (zijn stilvenster
+          // van zes seconden), en stond hij in de zonelijst nog als spelend (Saber, 23-10-2026).
+          if (op['alleenZone'] == true) break;
           if (opPc < progress.updatedAt) break;
           progress = melding;
           progressChanged = true;
@@ -500,5 +514,6 @@ class LanStateStore {
     await save();
     await _changes.close();
     await _zoneChanges.close();
+    await _overnames.close();
   }
 }

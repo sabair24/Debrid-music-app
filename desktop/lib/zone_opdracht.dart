@@ -39,6 +39,7 @@ class ZoneUitvoerder {
     this.radio,
     this.radioStop,
     this.kijkInBrievenbus,
+    this.verplaatst,
     this.neemOver,
     this.samen,
     this.samenStop,
@@ -80,6 +81,10 @@ class ZoneUitvoerder {
 
   /// Er ligt een overzicht in de brievenbus van dit toestel (een seintje van de pc): kijk meteen.
   final void Function()? kijkInBrievenbus;
+
+  /// De muziek van dit toestel speelt nu op een andere zone ([naar], haar naam): stop hier, en meld het meteen —
+  /// zie `VerderLuisteren.isVerplaatst` en `LanServer._bronVerplaatst` (Saber, 23-10-2026: "A stopt helemaal").
+  final void Function(String naar)? verplaatst;
 
   /// Na elke opdracht: meld de nieuwe stand meteen, zodat wie bedient het ziet.
   final void Function()? naUitvoeren;
@@ -182,6 +187,13 @@ class ZoneUitvoerder {
             fout = 'Hier kan geen radio afgesloten worden';
           } else {
             f(door: door.isEmpty ? null : door);
+          }
+        case 'verplaatst':
+          final f = verplaatst;
+          if (f == null) {
+            fout = 'Hier kan niet gestopt worden';
+          } else {
+            f('${op['naar'] ?? ''}');
           }
         case 'radioOverzicht':
           kijkInBrievenbus?.call();

@@ -321,9 +321,10 @@ class LanSharing extends ChangeNotifier {
     String overname = '',
     Map<String, dynamic>? radio,
     int volume = -1,
+    bool alleenZone = false,
   }) {
     final op = progressOp(trackPath, position, playing, queuePaths, index,
-        shuffle: shuffle, herhaal: herhaal, overname: overname, radio: radio, volume: volume);
+        shuffle: shuffle, herhaal: herhaal, overname: overname, radio: radio, volume: volume, alleenZone: alleenZone);
     if (op == null) return;
     state.applyOps([op], deviceId: mijnId, deviceName: deviceName());
   }
@@ -343,6 +344,7 @@ class LanSharing extends ChangeNotifier {
     String overname = '',
     Map<String, dynamic>? radio,
     int volume = -1,
+    bool alleenZone = false,
   }) {
     final id = _trackId(trackPath);
     if (id == null) return null;
@@ -359,6 +361,8 @@ class LanSharing extends ChangeNotifier {
       if (radio != null) 'radio': radio,
       // Het appvolume, voor de schuif van deze zone op een ander toestel (zones, 21-10-2026).
       if (volume >= 0) 'volume': volume,
+      // Alleen voor de zonelijst, niet voor "waar je gebleven bent" (zie [VerderLuisteren.meldNu]).
+      if (alleenZone) 'alleenZone': true,
       'at': DateTime.now().millisecondsSinceEpoch,
     };
   }
