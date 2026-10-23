@@ -10,8 +10,11 @@
 /// - de kantelhoes geeft de grootste hoes voor de muis, en staat stil in een variant zonder kantelen.
 library;
 
+import 'dart:io';
+
 import 'package:debridmusic/main.dart' show FotoTijdensSchuiven;
 import 'package:debridmusic/meetronde.dart';
+import 'package:debridmusic/ui/glas.dart' show glasMat;
 import 'package:debridmusic/player.dart' show Rijbediening, Speelbron;
 import 'package:debridmusic/ui/kantel_hoes.dart';
 import 'package:debridmusic/zone_opdracht.dart';
@@ -116,6 +119,23 @@ void main() {
       await t.pump(const Duration(seconds: 1));
       expect(await foto(), isFalse, reason: 'stil: het echte scherm');
     });
+  });
+
+  test('een andere hoofdpagina wisselt als foto (gsm: 13 van 21 beelden te laat bij Favorieten, zonder overgang 1)', () {
+    final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    final wissel = main.substring(main.indexOf('          AnimatedSwitcher(\n              // Een meetronde met `overgang`'));
+    expect(wissel.substring(0, 1800), contains("child: FotoTijdensSchuiven(\n                      animatie: animatie,\n"
+        "                      open: !zonderVoorMeting('paginalevend'),\n"
+        "                      dicht: !zonderVoorMeting('paginalevend'),"));
+  });
+
+  test('het matglas: buiten een meetronde altijd hetzelfde filter (de BackdropGroup voegt alleen gelijke samen)', () {
+    expect(identical(glasMat, glasMat), isTrue);
+    meetZonder.value = {'dilate'};
+    final ander = glasMat;
+    meetZonder.value = const {};
+    expect(identical(ander, glasMat), isFalse, reason: 'een variant heeft zijn eigen filter');
+    expect(identical(glasMat, glasMat), isTrue);
   });
 
   group('de lijst in het midden (scenario "paginas")', () {

@@ -20,6 +20,7 @@
 /// beeld uit dezelfde plek in de `ImageCache` en wordt er niets extra van schijf of van het net gelezen.
 library;
 
+import 'dart:io' show Platform;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -174,7 +175,7 @@ class _TegelSpiegelState extends State<TegelSpiegel> {
     if (b == null) return const SizedBox.shrink();
     // Een meetronde zonder de spiegeling onder de tegels (meetronde.dart).
     if (!widget.gebakken && zonderVoorMeting('tegelspiegel')) return const SizedBox.shrink();
-    if (widget.gebakken) {
+    if (widget.gebakken || bakTegelSpiegels) {
       final dpr = MediaQuery.devicePixelRatioOf(context);
       final k = _bak;
       if (k == null || !k.van.isCloneOf(b) || k.maat != widget.maat || k.hoek != widget.hoek || k.dpr != dpr) {
@@ -209,6 +210,18 @@ class _Spiegelschilder extends CustomPainter {
   @override
   bool shouldRepaint(_Spiegelschilder oud) => !beeld.isCloneOf(oud.beeld) || maat != oud.maat || hoek != oud.hoek;
 }
+
+/// Bakken ook de tegels hun spiegeling ([TegelSpiegel.gebakken])? Op de Mac en de iPad wel, elders niet.
+///
+/// **Waarom per platform (meetronde, 23-10-2026).** Op de Mac kostte de spiegeling in stroken onder de albumtegels
+/// meer dan 30 ms per beeld: Albums scrollen 36,1 ms rasteren met elk beeld te laat, zonder tegelspiegeling 4,4 ms en
+/// geen enkel (Saber: "navigeren tussen vensters is soms stroef ook, vooral tussen start, albums, tracks"). Impeller
+/// op Metal tekent elke strook opnieuw uit de hele hoes. Op de gsm (Impeller op Vulkan) en de pc (Skia) maakte de
+/// tegelspiegeling nauwelijks verschil, en op de pc kostte één gebakken beeld per tegel juist te veel (43 ms bij het
+/// scrollen, 19-10-2026). Een meetronde vergelijkt met `tegelstroken` (de Mac zoals vroeger) en `tegelbak` (elders
+/// gebakken).
+bool get bakTegelSpiegels =>
+    zonderVoorMeting('tegelbak') || ((Platform.isMacOS || Platform.isIOS) && !zonderVoorMeting('tegelstroken'));
 
 /// De spiegeling van [hoes] als één beeld van [maat] × [maat]·[kTegelSpiegelHoogte] punten, op [dpr] pixels per punt:
 /// precies wat [tekenSpiegel] tekent, één keer.

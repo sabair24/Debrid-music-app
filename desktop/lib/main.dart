@@ -4489,7 +4489,15 @@ class _HomeShellState extends State<HomeShell> {
                         tv: isTv, richting: _richting, binnen: kind.key == ValueKey(_view)),
                     end: Offset.zero,
                   ).animate(animatie),
-                  child: kind,
+                  // Tijdens de wissel van elke pagina één foto: overvloeien tekende anders twee volle pagina's met een
+                  // doorzichtigheid, elk beeld opnieuw (meetronde, gsm 23-10-2026: 13 van de 21 beelden te laat bij
+                  // Favorieten, zonder overgang 1). Een foto laten overvloeien kost bijna niets. In een meetronde met
+                  // `paginalevend` zoals vroeger, om te vergelijken.
+                  child: FotoTijdensSchuiven(
+                      animatie: animatie,
+                      open: !zonderVoorMeting('paginalevend'),
+                      dicht: !zonderVoorMeting('paginalevend'),
+                      child: kind),
                 ),
               ),
               child: KeyedSubtree(key: ValueKey(_view), child: _content()),
@@ -17340,11 +17348,15 @@ MeetHaken _meetHaken(PlayerStore player, LibraryStore library) {
       glasVoor ??= GlasKwaliteit.stand.value;
       // De bewaker staat stil zolang er gemeten wordt: anders draait hij een variant midden in de meting terug.
       GlasKwaliteit.meetPauze = !klaar;
-      GlasKwaliteit.stand.value = switch (stand) {
+      final doel = switch (stand) {
         'plat' => GlasStand.plat,
         'mat' => GlasStand.mat,
         _ => glasVoor!,
       };
+      // Eerst even plat en dan pas het doel: zo tekent elk glas opnieuw, ook als alleen het filter van de variant anders
+      // is (`dilate`, `lichtblur`, `verzadiging`) en de stand gelijk blijft.
+      GlasKwaliteit.stand.value = doel == GlasStand.plat ? GlasStand.mat : GlasStand.plat;
+      GlasKwaliteit.stand.value = doel;
       if (klaar) glasVoor = null;
     },
     bereid: ({required spelen}) async {

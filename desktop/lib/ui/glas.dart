@@ -207,12 +207,38 @@ List<double> _verzadig(double s) {
 /// Zwaar vervaagd (24 bij 20, was 16 bij 12): Somati's "zware blur — de drukke achtergrond wordt een
 /// zachte waas". Impeller verkleint het beeld eerst naar de sterkte, dus zwaarder hoort nauwelijks
 /// meer te kosten — nagelezen, niet gemeten; de bewaker meet het wel.
-final ui.ImageFilter glasMat = ui.ImageFilter.compose(
+ui.ImageFilter get glasMat => zonderVoorMeting('dilate')
+    ? _glasZonderDilate
+    : zonderVoorMeting('lichtblur')
+        ? _glasLichteVervaging
+        : zonderVoorMeting('verzadiging')
+            ? _glasZonderVerzadiging
+            : _glasMat;
+
+final ui.ImageFilter _glasMat = ui.ImageFilter.compose(
   outer: ui.ColorFilter.matrix(_verzadig(1.35)),
   inner: ui.ImageFilter.compose(
     outer: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 20, tileMode: TileMode.clamp),
     inner: ui.ImageFilter.dilate(radiusX: 2, radiusY: 2),
   ),
+);
+
+// Voor de meetronde (meetronde.dart): het matglas met telkens één onderdeel anders, om te zien wat het kost. Op de pc
+// kostte het glas ongeveer 2 ms per beeld (23-10-2026: Nu speelt openen 34 te late beelden, zonder glas 5).
+final ui.ImageFilter _glasZonderDilate = ui.ImageFilter.compose(
+  outer: ui.ColorFilter.matrix(_verzadig(1.35)),
+  inner: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 20, tileMode: TileMode.clamp),
+);
+final ui.ImageFilter _glasLichteVervaging = ui.ImageFilter.compose(
+  outer: ui.ColorFilter.matrix(_verzadig(1.35)),
+  inner: ui.ImageFilter.compose(
+    outer: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 10, tileMode: TileMode.clamp),
+    inner: ui.ImageFilter.dilate(radiusX: 2, radiusY: 2),
+  ),
+);
+final ui.ImageFilter _glasZonderVerzadiging = ui.ImageFilter.compose(
+  outer: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 20, tileMode: TileMode.clamp),
+  inner: ui.ImageFilter.dilate(radiusX: 2, radiusY: 2),
 );
 
 /// De stand van het glas voor de hele app, en de bewaker.
