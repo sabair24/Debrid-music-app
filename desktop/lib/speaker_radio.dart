@@ -172,6 +172,11 @@ class SpeakerRadio extends ChangeNotifier implements Radiospeler {
   @override
   RadioItem? wordtLokaalInRadio(RadioItem oud, Track t) => null;
 
+  /// Stilvallen en de radio loslaten: de sessie op de speaker gaat dicht, zodat zijn zone niet meer "radio …" zegt.
+  ///
+  /// **Dicht, niet op pauze (23-10-2026).** Tot 3.9.579 zette dit de speaker op pauze, en de radio "afsluiten" op de
+  /// pc kwam hier niet eens langs: de speaker speelde zijn rij uit en bleef daarna "droog" open staan, met "radio
+  /// Tamino" bij de zone. Nu sluit [RadioBesturing.stop] hem hier, en een radio die elders begint ook.
   @override
   Future<void> verlaatRadio() async {
     if (_weg) return;
@@ -180,7 +185,7 @@ class SpeakerRadio extends ChangeNotifier implements Radiospeler {
     unawaited(_sub?.cancel());
     _sub = null;
     try {
-      await cast.control(speaker, 'pause');
+      await cast.control(speaker, 'stop');
     } catch (_) {}
     notifyListeners();
   }

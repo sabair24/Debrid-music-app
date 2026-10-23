@@ -82,6 +82,13 @@ class _Sonos extends UpnpControlPoint {
   }
 
   @override
+  Future<void> stop(Renderer r) async {
+    opdrachten.add('stop');
+    stilUs = _p();
+    gepauzeerd = true;
+  }
+
+  @override
   Future<void> play(Renderer r) async {
     opdrachten.add('play');
     if (gepauzeerd && stilUs != null) {
@@ -342,7 +349,7 @@ void main() {
     });
   });
 
-  test('een andere wachtrij op de speaker beëindigt de radio; loslaten zet hem op pauze', () {
+  test('een andere wachtrij op de speaker beëindigt de radio; loslaten sluit de sessie (23-10-2026)', () {
     fakeAsync((fa) {
       final m = maak(fa);
       unawaited(m.uit.playRadio([item(ids[0]), item(ids[1])]));
@@ -356,7 +363,9 @@ void main() {
       fa.elapse(const Duration(seconds: 2));
       unawaited(m.uit.verlaatRadio());
       fa.flushMicrotasks();
-      expect(m.sonos.opdrachten.last, 'pause');
+      expect(m.sonos.opdrachten.last, 'stop');
+      expect(m.cast.rijVan(_move.id), isNull, reason: 'dicht: de zone zegt geen "radio …" meer');
+      expect(m.cast.laatsteStanden.where((s) => s.id == _move.id && s.radio.isNotEmpty), isEmpty);
       m.cast.dispose();
       fa.flushTimers(flushPeriodicTimers: false);
     });

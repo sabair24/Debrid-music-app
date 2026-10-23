@@ -122,6 +122,22 @@ void main() {
     expect(radio.opAndereUitgang, isFalse);
   });
 
+  test('"Radio afsluiten" laat een speaker los; dit toestel niet (speakerradio v2, 23-10-2026)', () async {
+    final hier = _Uitgang('pc'), move = _Uitgang('Move');
+    final radio = RadioBesturing(speler: hier, bron: _Bron());
+    await radio.start(plan(), naar: move);
+    hier.log.clear(); // de wissel naar de speaker liet dit toestel al los — zie de toets hierboven
+    radio.stop();
+    expect(move.log.last, 'verlaatRadio', reason: 'zonder dit speelde de speaker zijn rij uit');
+    expect(move.bijRadioEinde, isNull);
+    expect(hier.log, isEmpty);
+
+    await radio.start(plan());
+    hier.log.clear();
+    radio.stop();
+    expect(hier.log, isEmpty, reason: 'op dit toestel blijft wat speelt staan, zoals altijd');
+  });
+
   test('het einde van de radio op de speaker stopt de radio, niet een einde op de oude uitgang', () async {
     final hier = _Uitgang('pc'), move = _Uitgang('Move');
     final radio = RadioBesturing(speler: hier, bron: _Bron());

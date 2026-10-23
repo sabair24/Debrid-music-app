@@ -1089,7 +1089,19 @@ class RadioBesturing extends ChangeNotifier {
   }
 
   /// Stoppen. Laat het plan staan, want daar valt straks nog over te vertellen.
-  void stop() => _stop(laatLos: true);
+  ///
+  /// Speelt hij op een speaker ([opAndereUitgang]), dan valt die ook stil en laat hij de radio los — zonder dit
+  /// speelde de speaker na "Radio afsluiten" zijn rij uit (speakerradio v2, 23-10-2026). Op dit toestel blijft wat
+  /// speelt staan, zoals altijd.
+  void stop() {
+    final uit = opAndereUitgang ? _speler : null;
+    _stop(laatLos: true);
+    if (uit != null) {
+      uit.bijRadioEinde = null;
+      uit.bijRadioOverslaan = null;
+      unawaited(uit.verlaatRadio());
+    }
+  }
 
   /// [naarOverzicht] onwaar bij een nieuwe start: dan gaat de notitie van deze radio niet naar het
   /// overzicht maar terug naar de aanroeper, die hem meeneemt in de radio die begint — zie [start].

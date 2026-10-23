@@ -570,6 +570,21 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
         if (titel != null && titel.isNotEmpty) 'titel': titel,
       });
 
+  /// Speelt hier de radio van de pc ([ZoneStaat.radio] bij een speaker)? Dan gaan [radioStop] en [radioOordeel] erover.
+  bool get radioVanDePc => radioMode && zoneId.startsWith('spk:');
+
+  /// De radio van de pc op deze speaker afsluiten (speakerradio v2, 23-10-2026).
+  Future<void> radioStop() => _stuur('radioStop');
+
+  /// Een oordeel over het spelende nummer: 'past', 'pastNiet', 'houden' of 'weg'. Null als de pc het kreeg, anders
+  /// de reden (die staat dan ook als [speelFout] op het scherm).
+  Future<String?> radioOordeel(String wat) async {
+    final id = _zone?.trackId ?? '';
+    if (id.isEmpty) return 'Er speelt niets.';
+    await _stuur('radioOordeel', {'wat': wat, 'trackId': id});
+    return _fout;
+  }
+
   Future<void> _rijOpdracht(String cmd, List<Track> nummers) {
     final ids = [for (final t in nummers) if (idVan(t) case final id?) id];
     if (ids.isEmpty) return _meld('Dit kan niet mee: het staat niet in je bibliotheek op de pc.');
