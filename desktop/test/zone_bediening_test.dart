@@ -374,12 +374,13 @@ void main() {
       expect(main, contains('ChangeNotifierProvider<GekozenZone>.value(value: gekozenZone),'));
       // Speakerkeuze en de radioknop gaan over dit toestel: weg bij een zone op afstand. De wachtrijknop niet meer:
       // die toont sinds stap 2.4 de wachtrij van de zone. De radioduimen ook niet meer als op die zone de radio van
-      // dit toestel speelt (22-10-2026, een radio van de pc op de KEF) — zie duimen_op_speaker_test.
+      // dit toestel speelt (22-10-2026, een radio van de pc op de KEF) — zie duimen_op_speaker_test. De afsluitknop ook
+      // niet meer: de radio van de pc op een speaker sluit je af vanaf elk toestel (23-10-2026, speakerradio_v2_test).
       expect(
           RegExp(r'if \(_misschien<GekozenZone>\(context, luister: true\)\?\.opAfstand != null\) return const SizedBox\.shrink\(\);')
               .allMatches(main)
               .length,
-          2);
+          1);
       expect(main, contains('if (!_radioHier(context)) return const SizedBox.shrink();'));
       expect(main, contains('if (x.afstand case final zone? when zone.heeftVolume)'));
       expect(main, contains('final Speelbron p = _misschien<GekozenZone>(context, luister: true)?.opAfstand ?? lokaal;'),

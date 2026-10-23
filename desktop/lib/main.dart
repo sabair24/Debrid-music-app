@@ -30,6 +30,7 @@ import 'pc_model.dart';
 import 'tempo.dart' show Radiotempo, Tempometer;
 import 'radiobijvuller.dart';
 import 'radiokeuze.dart';
+import 'radioladder.dart' show kOpruimNa;
 import 'radiobestand.dart' show kRadioSpeling;
 import 'scanmaat.dart';
 import 'booklet.dart' show imageSize;
@@ -67,7 +68,7 @@ import 'zone_opdracht.dart';
 import 'volgbron.dart' show Volgbron;
 import 'samen.dart' show KlokIjk, SamenAnker, SamenVolger;
 import 'speaker_radio.dart';
-import 'lan/zones.dart' show ZoneSoort, ZoneStaat, positieNu;
+import 'lan/zones.dart' show RadioOpSpeaker, ZoneSoort, ZoneStaat, positieNu;
 import 'lan/server.dart' show LanServer;
 import 'ui/knopbewegingen.dart';
 import 'ui/menu_iconen.dart';
@@ -1217,6 +1218,10 @@ Future<void> main() async {
   if (mode.owner) DownloadManager.versiecontrole = Versiecontrole().score;
   // ▶ tagt met het album waarop je het zag; daarbij het nummer en het jaar van die uitgave.
   if (mode.owner) DownloadManager.plekOpAlbum = deezerPlekOpAlbum;
+  // Zonder album (de radio, of een verzamelaar): de oorspronkelijke uitgave uit MusicBrainz.
+  if (mode.owner) {
+    DownloadManager.origineleUitgave = (artiest, titel, seconden) => origineleUitgaveVan(artiest, titel, seconden: seconden);
+  }
   radio.sfeer = radioSfeer;
   // Als FACTOR de speler in: die hoeft niets van duimen te weten, en `oordeelBonus` blijft daardoor
   // op één plek staan in plaats van in de speler én in het scherm.
@@ -1230,6 +1235,25 @@ Future<void> main() async {
   };
   // Groen gaat bij het herhalen voor — zie [RadioBesturing.voegHerhalingBij].
   radio.isGroen = (t) => oordelen.vanTrack(t) == Oordeel.omhoog;
+  // Onderweg opruimen (Saber, 08-10 en 23-10-2026: "Na 20 nummers, ook Past niet"): wat je niet houdt, gaat 20
+  // nummers later naar de prullenbak. Dezelfde regel als het overzicht bij het afsluiten: Houden, favoriet of in een
+  // afspeellijst blijft. Wat de bibliotheek hier niet (meer) kent, blijft ook: daar valt niets te controleren.
+  radio.houdt = (pad) {
+    Track? t;
+    for (final x in library.tracks) {
+      if (x.path == pad) {
+        t = x;
+        break;
+      }
+    }
+    if (t == null) return true;
+    if (oordelen.vanTrack(t) == Oordeel.omhoog || favorieten.isFavorietTrack(t)) return true;
+    final id = library.gedeeldId(t.path);
+    return id != null && lijsten.lijsten.any((l) => l.trackIds.contains(id));
+  };
+  // Niet op tv (daar geeft niemand een oordeel), en alleen waar het naar een prullenbak gaat — op een toestel beslist
+  // de pc, en die heeft er een.
+  radio.opruimenOnderweg = () => !isTv && (library.isRemote || heeftPrullenbak);
   // "Aanbevolen voor jou": op de pc berekend en bewaard, elke zes uur; een toestel vraagt het de pc
   // (`/api/aanbevolen`). Zie `aanbevolen.dart` — Saber, 16-10-2026: "laadt heel traag … ik wil
   // nieuwe muziek ontdekken".
@@ -1592,6 +1616,23 @@ Future<void> main() async {
             zaad: zaad, titel: titel.isEmpty ? null : titel, hier: true, naar: speaker);
         return null;
       };
+      // Die radio bedienen vanaf een toestel, en zien wat hij doet (speakerradio v2, 23-10-2026).
+      s.bijSpeakerRadioOpdracht = (speaker, cmd, op) => bedienSpeakerRadio(
+          radio: radio,
+          sfeer: radioSfeer,
+          oordelen: oordelen,
+          lib: library,
+          dm: downloads,
+          nummer: sharing.nummerVoorId,
+          speaker: speaker,
+          cmd: cmd,
+          opdracht: op);
+      s.zones.radioOpSpeaker = (speaker, trackId) => radioOpSpeakerVan(
+          radio: radio,
+          sfeer: radioSfeer,
+          oordelen: oordelen,
+          speaker: speaker,
+          nummer: trackId.isEmpty ? null : sharing.nummerVoorId(trackId));
       // Het taalmodel voor een radio op een toestel: de sleutel en het budget blijven hier (`pc_model.dart`).
       final radioLog = WarmLog('$appDir${Platform.pathSeparator}radio.log');
       s.modelvragen = Modelvragen(
@@ -1614,6 +1655,24 @@ Future<void> main() async {
 
     sharing.addListener(volgPcZones);
     volgPcZones();
+    // De radio op een speaker staat in de zone ([ZoneStaat.radioStatus]): opnieuw rondsturen als wat erover te zeggen
+    // valt anders wordt — niet bij elke melding van de radio, die er veel geeft.
+    var radioInZone = '';
+    void herzieRadioInZone() {
+      final s = zoneServer;
+      if (s == null) return;
+      final nu = [
+        for (final z in s.zones.lijst())
+          if (z.radio.isNotEmpty) '${z.id}|${z.radioStatus}|${z.radioPast}|${z.radioGehaald}|${z.radioHouden}',
+      ].join('\n');
+      if (nu == radioInZone) return;
+      radioInZone = nu;
+      s.zones.herzie();
+    }
+
+    radio.addListener(herzieRadioInZone);
+    radioSfeer.addListener(herzieRadioInZone);
+    oordelen.addListener(herzieRadioInZone);
     // De pc hoeft niet te vragen: hij houdt de stand zelf bij.
     sharing.state.changes.listen((e) {
       final stand = e['progress'];
@@ -12733,7 +12792,136 @@ class _RadioAfstemming extends StatelessWidget {
               child: Text('Ophalen staat even stil: $pauze',
                   style: TextStyle(color: _muted, fontSize: 12)),
             ),
+          const _RadioGeleerd(),
+          const _RadioOpruimregel(),
         ],
+      ),
+    );
+  }
+}
+
+/// "Wat je niet houdt, gaat 20 nummers later naar de prullenbak · 14 opgeruimd" — alleen waar de radio onderweg
+/// opruimt ([RadioBesturing.opruimenOnderweg]). Saber, 23-10-2026: *"Na 20 nummers, ook Past niet"*.
+class _RadioOpruimregel extends StatelessWidget {
+  const _RadioOpruimregel();
+
+  @override
+  Widget build(BuildContext context) {
+    final (aan, n) = context.select<RadioBesturing, (bool, int)>(
+        (r) => (r.loopt && r.houdt != null && (r.opruimenOnderweg?.call() ?? false), r.opgeruimd));
+    if (!aan) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Text(
+          'Wat je niet houdt, gaat $kOpruimNa nummers later naar de prullenbak${n > 0 ? ' · $n opgeruimd' : ''}',
+          style: TextStyle(color: _muted, fontSize: 12)),
+    );
+  }
+}
+
+/// "Leert van je duimen · 3 past · 7 past niet": wat je in radio's als deze zei ([RadioSfeer.oordelenVoor]). Een tik
+/// toont de lijst, met "Weer toelaten" bij wat niet paste.
+class _RadioGeleerd extends StatelessWidget {
+  const _RadioGeleerd();
+
+  @override
+  Widget build(BuildContext context) {
+    final radio = context.watch<RadioBesturing>();
+    final sfeer = context.watch<RadioSfeer>();
+    if (!radio.loopt) return const SizedBox.shrink();
+    final lijst = sfeer.oordelenVoor(zaad: radio.sfeerZaad, familie: radio.familie);
+    if (lijst.isEmpty) return const SizedBox.shrink();
+    final past = lijst.where((x) => x.oordeel == Sfeeroordeel.past).length;
+    final niet = lijst.length - past;
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(kHoek8),
+        onTap: () => unawaited(showModalBottomSheet<void>(
+          context: context,
+          backgroundColor: _panel,
+          isScrollControlled: true,
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(kHoek18))),
+          builder: (_) => MultiProvider(
+            providers: [
+              ChangeNotifierProvider<RadioBesturing>.value(value: radio),
+              ChangeNotifierProvider<RadioSfeer>.value(value: sfeer),
+            ],
+            child: const _RadioGeleerdBlad(),
+          ),
+        )),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Text(
+              'Leert van je duimen · $past past · $niet past niet ›',
+              style: TextStyle(color: _muted, fontSize: 12)),
+        ),
+      ),
+    );
+  }
+}
+
+class _RadioGeleerdBlad extends StatelessWidget {
+  const _RadioGeleerdBlad();
+
+  @override
+  Widget build(BuildContext context) {
+    final radio = context.watch<RadioBesturing>();
+    final sfeer = context.watch<RadioSfeer>();
+    final lijst = sfeer.oordelenVoor(zaad: radio.sfeerZaad, familie: radio.familie);
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .7),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
+              child: Text('In radio\'s als deze', style: TextStyle(color: kInkt, fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text('Dezelfde startartiest of dezelfde sfeer. "Past niet" komt hier niet meer in.',
+                  style: TextStyle(color: _muted, fontSize: 12)),
+            ),
+            if (lijst.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                child: Text('Nog niets.', style: TextStyle(color: _muted, fontSize: 13)),
+              ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final x in lijst)
+                    ListTile(
+                      dense: true,
+                      leading: Icon(
+                          x.oordeel == Sfeeroordeel.past ? Icons.thumb_up_alt_rounded : Icons.thumb_down_alt_rounded,
+                          size: 18,
+                          color: x.oordeel == Sfeeroordeel.past ? _accent : _muted),
+                      title: Text('${x.artiest} — ${x.titel}',
+                          maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: kInkt, fontSize: 13.5)),
+                      trailing: x.oordeel == Sfeeroordeel.pastNiet
+                          ? TextButton(
+                              onPressed: () => unawaited(sfeer
+                                  .zet(
+                                      artiest: x.artiest,
+                                      titel: x.titel,
+                                      zaad: radio.sfeerZaad,
+                                      familie: radio.familie,
+                                      naar: null)
+                                  .catchError((Object _) {})),
+                              child: const Text('Weer toelaten'),
+                            )
+                          : null,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -14168,6 +14356,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
         naam: o.naam,
         keur: keuring.keur,
         bijvul: bijvuller.call,
+        groen: bijvuller.lastfmVan == null ? null : bijvuller.groenRonde,
         spoor: log.line,
         aantal: o.aantalGenoemd ? o.aantal : null,
         // Het vangnet pas als deze start het werd.
@@ -14670,12 +14859,15 @@ Future<int?> zoekBeterOpPc(LibraryStore lib, List<Track> nummers, {String? album
 /// 20-10-2026: "maar bij radio wel bij nummers die ik beslis om bij te houden"). Alleen waar deze machine
 /// zelf haalt, en alleen als het nummer nú groen werd — uitzetten zoekt niets.
 Future<void> _duimOmhoogRadio(BuildContext context, Track t) async {
-  final oordelen = context.read<Oordelen>();
   final lib = context.read<LibraryStore>();
-  final dm = lib.remote == null ? context.read<DownloadManager>() : null;
+  await radioHouden(context.read<Oordelen>(), lib, lib.remote == null ? context.read<DownloadManager>() : null, t);
+}
+
+/// "Houden" (👍), zonder scherm — voor het speelscherm, en voor een toestel dat de radio van de pc op een speaker
+/// bedient ([_bedienSpeakerRadio]). [dm] null: op een toestel, dan zoekt de pc ([zoekBeterOpPc]).
+Future<void> radioHouden(Oordelen oordelen, LibraryStore lib, DownloadManager? dm, Track t) async {
   final nu = await oordelen.wissel(t, Oordeel.omhoog);
   if (nu != Oordeel.omhoog) return;
-  // Op een toestel zoekt de pc — zie [zoekBeterOpPc].
   if (dm == null) {
     unawaited(zoekBeterOpPc(lib, [t]));
     return;
@@ -14684,23 +14876,24 @@ Future<void> _duimOmhoogRadio(BuildContext context, Track t) async {
 }
 
 Future<void> _duimOmlaag(BuildContext context, Track t) async {
-  final radio = context.read<RadioBesturing>();
-  final oordelen = context.read<Oordelen>();
   final meldingen = ScaffoldMessenger.of(context);
-  final opAfstand = context.read<LibraryStore>().isRemote;
+  final zin = await radioWeg(context.read<RadioBesturing>(), context.read<Oordelen>(), t,
+      opAfstand: context.read<LibraryStore>().isRemote);
+  if (zin == null) return;
+  meldingen.showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 3)));
+}
+
+/// "Weg, ook van je pc", zonder scherm (zie [radioHouden]). Geeft de zin voor op het scherm, of null als er niets
+/// gebeurde.
+Future<String?> radioWeg(RadioBesturing radio, Oordelen oordelen, Track t, {required bool opAfstand}) async {
   final naam = '${t.artist} — ${t.title}';
   final id = oordelen.idVanTrack(t);
   if (id != null) unawaited(oordelen.zet(id, null).catchError((_) {}));
   final weg = await radio.gooiWeg(t);
-  if (weg == null) return;
-  meldingen.showSnackBar(SnackBar(
-    content: Text(weg
-        ? (heeftPrullenbak || opAfstand
-            ? '$naam staat in de prullenbak.'
-            : '$naam is weg — ook van je pc.')
-        : '$naam kon niet naar de prullenbak en staat er nog. Bij het afsluiten van de radio kun je het opnieuw proberen.'),
-    duration: const Duration(seconds: 3),
-  ));
+  if (weg == null) return null;
+  return weg
+      ? (heeftPrullenbak || opAfstand ? '$naam staat in de prullenbak.' : '$naam is weg — ook van je pc.')
+      : '$naam kon niet naar de prullenbak en staat er nog. Bij het afsluiten van de radio kun je het opnieuw proberen.';
 }
 
 /// De duimen in de radiorij: dezelfde knop, ter grootte van een regel.
@@ -14786,7 +14979,12 @@ bool _radioOpGekozenZone(BuildContext context, {bool luister = true}) {
 /// overzicht bij het afsluiten is daar het vangnet.
 /// De radioregel onder de titel — zie [radioStatusTekst]. Null: niets bijzonders.
 String? _radioRegel(BuildContext context, Speelbron p) {
-  // Een zone op afstand: haar radio staat op dat toestel, en hier is daar niets van te zeggen.
+  // De radio van de pc op een speaker: wat de pc erover meldt ([ZoneStaat.radioStatus]).
+  if (p is ZoneSpeler) {
+    final s = p.radioVanDePc ? p.zone?.radioStatus ?? '' : '';
+    return s.isEmpty ? null : s;
+  }
+  // Een andere zone op afstand: haar radio staat op dat toestel, en hier is daar niets van te zeggen.
   if (p is! PlayerStore) return null;
   final r = context.watch<RadioBesturing>();
   return radioStatusTekst(
@@ -14809,6 +15007,9 @@ class _RadioOordeel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Een speaker met de radio van de pc, gekozen op een ander toestel: dezelfde knoppen, via de pc.
+    final zone = _misschien<GekozenZone>(context, luister: true)?.opAfstand;
+    if (zone != null && !isTv && !_radioOpGekozenZone(context)) return _ZoneRadioOordeel(zone: zone, naast: naast);
     // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026) — behalve
     // als daar de radio van dit toestel speelt ([_radioHier]).
     if (!_radioHier(context)) return const SizedBox.shrink();
@@ -14883,39 +15084,212 @@ class _RadioOordeel extends StatelessWidget {
   }
 }
 
+/// [_RadioOordeel] voor de radio van de pc op een speaker, gekozen op een ander toestel (speakerradio v2,
+/// 23-10-2026): de stand komt uit de zone ([ZoneStaat.radioPast] en verder), een tik gaat als opdracht naar de pc
+/// ([ZoneSpeler.radioOordeel]), en die doet wat de knoppen op zijn eigen scherm doen ([bedienSpeakerRadio]).
+class _ZoneRadioOordeel extends StatelessWidget {
+  const _ZoneRadioOordeel({required this.zone, required this.naast});
+
+  final ZoneSpeler zone;
+  final bool naast;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: zone,
+      builder: (context, _) {
+        final z = zone.zone;
+        if (!zone.radioVanDePc || z == null || !z.speeltIets) return const SizedBox.shrink();
+        final naam = '${z.artiest} — ${z.titel}';
+        Future<void> tik(String wat, String? zin) async {
+          final meldingen = ScaffoldMessenger.of(context);
+          final fout = await zone.radioOordeel(wat);
+          if (fout == null && zin != null) {
+            meldingen.showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 3)));
+          }
+        }
+
+        Widget kop(String tekst) => Text(tekst,
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .6, color: kUitgezet));
+        final uitlijning = naast ? MainAxisAlignment.start : MainAxisAlignment.center;
+        return Padding(
+          padding: const EdgeInsets.only(top: kRuimte16, bottom: kRuimte8),
+          child: Column(
+            crossAxisAlignment: naast ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+            children: [
+              kop('Past in deze radio?'),
+              const SizedBox(height: kRuimte8),
+              Row(
+                mainAxisAlignment: uitlijning,
+                children: [
+                  Duim(
+                    kant: Duimkant.omlaag,
+                    aan: z.radioPast == 'pastNiet',
+                    gedempt: z.radioPast == 'past',
+                    bijschrift: 'Past niet',
+                    opTik: () => unawaited(
+                        tik('pastNiet', '$naam past niet in deze radio. Het komt niet meer in radio\'s als deze.')),
+                  ),
+                  const SizedBox(width: kRuimte24),
+                  Duim(
+                    kant: Duimkant.omhoog,
+                    aan: z.radioPast == 'past',
+                    gedempt: z.radioPast == 'pastNiet',
+                    bijschrift: 'Past',
+                    opTik: () => unawaited(
+                        tik('past', z.radioPast == 'past' ? 'Niet meer onthouden.' : 'Onthouden: past in deze radio.')),
+                  ),
+                ],
+              ),
+              if (z.radioGehaald) ...[
+                const SizedBox(height: kRuimte16),
+                kop('Houden of weg?'),
+                const SizedBox(height: kRuimte8),
+                Row(
+                  mainAxisAlignment: uitlijning,
+                  children: [
+                    Duim(
+                      kant: Duimkant.omlaag,
+                      aan: false,
+                      gedempt: z.radioHouden,
+                      bijschrift: 'Weg, ook van je pc',
+                      opTik: () => unawaited(tik('weg', '$naam gaat naar de prullenbak van je pc.')),
+                    ),
+                    const SizedBox(width: kRuimte24),
+                    Duim(
+                      kant: Duimkant.omhoog,
+                      aan: z.radioHouden,
+                      bijschrift: 'Houden',
+                      opTik: () => unawaited(tik('houden', null)),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// "Past niet in deze radio": dit nummer niet meer in radio's met dezelfde startartiest of dezelfde sfeer,
-/// en meteen het volgende. Het bestand blijft staan tot "Radio afsluiten" (Saber, 21-10-2026) — weggooien
-/// is "Weg", hieronder. Zie `radiosfeer.dart`.
+/// en meteen het volgende. Het bestand gaat niet meteen weg — dat is "Weg", hieronder — maar 20 nummers later, zoals
+/// alles wat je niet houdt (Saber, 23-10-2026: "Na 20 nummers, ook Past niet"; zie `teOpruimen`). Zie `radiosfeer.dart`.
 Future<void> _pastNietInRadio(BuildContext context, Track t) async {
-  final radio = context.read<RadioBesturing>();
-  final sfeer = context.read<RadioSfeer>();
   final meldingen = ScaffoldMessenger.of(context);
+  final zin = await radioPastNiet(context.read<RadioBesturing>(), context.read<RadioSfeer>(), t);
+  meldingen.showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 3)));
+}
+
+/// "Past niet", zonder scherm (zie [radioHouden]). Geeft de zin voor op het scherm.
+Future<String> radioPastNiet(RadioBesturing radio, RadioSfeer sfeer, Track t) async {
   // Eerst het oordeel (op de pc meteen, op een toestel alvast hier), dan de radio: die vraagt het meteen na.
   final klaar = sfeer
       .zet(artiest: t.artist, titel: t.title, zaad: radio.sfeerZaad, familie: radio.familie, naar: Sfeeroordeel.pastNiet)
       .catchError((Object _) {});
   await radio.pastNiet(t);
   await klaar;
-  meldingen.showSnackBar(SnackBar(
-    content: Text('${t.artist} — ${t.title} past niet in deze radio. Het komt niet meer in radio\'s als deze.'),
-    duration: const Duration(seconds: 3),
-  ));
+  return '${t.artist} — ${t.title} past niet in deze radio. Het komt niet meer in radio\'s als deze.';
 }
 
 /// "Past in deze radio" — nog eens tikken haalt het oordeel weg.
 Future<void> _pastInRadio(BuildContext context, Track t) async {
-  final radio = context.read<RadioBesturing>();
-  final sfeer = context.read<RadioSfeer>();
   final meldingen = ScaffoldMessenger.of(context);
+  final zin = await radioPast(context.read<RadioBesturing>(), context.read<RadioSfeer>(), t);
+  meldingen.showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 2)));
+}
+
+/// Speelt de radio van de pc op [speaker]? Dan is dat zijn uitgang ([SpeakerRadio]).
+SpeakerRadio? _radioOpSpeaker(RadioBesturing radio, String speaker) {
+  final uit = radio.speler;
+  return radio.loopt && uit is SpeakerRadio && uit.speeltOpZone('spk:$speaker') ? uit : null;
+}
+
+/// Wat de zone van [speaker] over de radio van de pc vertelt ([ZoneStaat.radioStatus]), met [nummer] het spelende
+/// nummer — of null als daar niet de radio van de pc speelt.
+RadioOpSpeaker? radioOpSpeakerVan({
+  required RadioBesturing radio,
+  required RadioSfeer sfeer,
+  required Oordelen oordelen,
+  required String speaker,
+  required Track? nummer,
+}) {
+  final uit = _radioOpSpeaker(radio, speaker);
+  if (uit == null) return null;
+  final status = radioStatusTekst(
+        spelerStatus: '',
+        droog: uit.radioDroog,
+        wilVerder: uit.wilVerder,
+        loopt: true,
+        stand: radio.bijvulStand ?? (radio.pauze == null ? null : 'Even stil: ${radio.pauze}'),
+        aantalBereikt: radio.aantalOp,
+        aantal: radio.aantal,
+      ) ??
+      '';
+  final t = nummer;
+  if (t == null) return (status: status, past: '', gehaald: false, houden: false);
+  final past = sfeer.oordeel(artiest: t.artist, titel: t.title, zaad: radio.sfeerZaad, familie: radio.familie);
+  return (
+    status: status,
+    past: switch (past) { Sfeeroordeel.past => 'past', Sfeeroordeel.pastNiet => 'pastNiet', _ => '' },
+    gehaald: radio.doorDezeRadio(t.path),
+    houden: oordelen.vanTrack(t) == Oordeel.omhoog,
+  );
+}
+
+/// Een opdracht van een toestel voor de radio van de pc op [speaker] (`radioStop`, `radioOordeel`) — zie
+/// `LanServer.bijSpeakerRadioOpdracht`. Hetzelfde als de knoppen op het speelscherm van de pc. Null als het lukte,
+/// anders de reden.
+///
+/// **Waarom (speakerradio v2, 23-10-2026).** Een radio op de KEF draait op de pc. Op je gsm zag je wel "radio …" bij
+/// de zone, maar geen knoppen: niet "Past" of "Houden" bij een mooi nummer, en geen manier om hem af te sluiten.
+Future<String?> bedienSpeakerRadio({
+  required RadioBesturing radio,
+  required RadioSfeer sfeer,
+  required Oordelen oordelen,
+  required LibraryStore lib,
+  required DownloadManager dm,
+  required Track? Function(String id) nummer,
+  required String speaker,
+  required String cmd,
+  required Map<String, dynamic> opdracht,
+}) async {
+  if (_radioOpSpeaker(radio, speaker) == null) return 'Op deze speaker speelt geen radio van de pc.';
+  if (cmd == 'radioStop') {
+    radio.stop();
+    return null;
+  }
+  final t = nummer('${opdracht['trackId'] ?? ''}');
+  if (t == null) return 'Dat nummer staat niet op de pc.';
+  switch ('${opdracht['wat'] ?? ''}') {
+    case 'past':
+      await radioPast(radio, sfeer, t);
+    case 'pastNiet':
+      await radioPastNiet(radio, sfeer, t);
+    case 'houden':
+      await radioHouden(oordelen, lib, dm, t);
+    case 'weg':
+      if (!radio.doorDezeRadio(t.path)) return 'Dat nummer haalde de radio niet: het blijft staan.';
+      await radioWeg(radio, oordelen, t, opAfstand: false);
+    default:
+      return 'Dat kent de pc niet.';
+  }
+  return null;
+}
+
+/// "Past", zonder scherm (zie [radioHouden]); nog eens haalt het weg. Geeft de zin voor op het scherm.
+Future<String> radioPast(RadioBesturing radio, RadioSfeer sfeer, Track t) async {
   final was = sfeer.oordeel(artiest: t.artist, titel: t.title, zaad: radio.sfeerZaad, familie: radio.familie);
   final naar = was == Sfeeroordeel.past ? null : Sfeeroordeel.past;
   await sfeer
       .zet(artiest: t.artist, titel: t.title, zaad: radio.sfeerZaad, familie: radio.familie, naar: naar)
       .catchError((Object _) {});
-  meldingen.showSnackBar(SnackBar(
-    content: Text(naar == null ? 'Niet meer onthouden.' : 'Onthouden: past in deze radio.'),
-    duration: const Duration(seconds: 2),
-  ));
+  if (naar == null) return 'Niet meer onthouden.';
+  // En meteen meer in die richting (Saber, 23-10-2026). Alleen zeggen dat hij zoekt als dat ook zo is.
+  return radio.meerZoals(t)
+      ? 'Onthouden — de radio zoekt meteen meer in deze richting.'
+      : 'Onthouden: past in deze radio.';
 }
 
 /// De weg uit een radio.
@@ -14928,8 +15302,27 @@ class _RadioAfsluitknop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026).
-    if (_misschien<GekozenZone>(context, luister: true)?.opAfstand != null) return const SizedBox.shrink();
+    // Een zone op afstand gekozen: dit gaat over dit toestel, niet over wat je nu ziet (zones, 21-10-2026) — behalve de
+    // radio van de pc op een speaker: die sluit je hier af, vanaf elk toestel (speakerradio v2, 23-10-2026).
+    final zone = _misschien<GekozenZone>(context, luister: true)?.opAfstand;
+    if (zone != null) {
+      return ListenableBuilder(
+        listenable: zone,
+        builder: (context, _) => !zone.radioVanDePc
+            ? const SizedBox.shrink()
+            : Padding(
+                padding: const EdgeInsets.only(top: kRuimte12),
+                child: Center(
+                  child: TextButton.icon(
+                    onPressed: () => unawaited(zone.radioStop()),
+                    icon: const Icon(Icons.close_rounded, size: 15),
+                    label: const Text('Radio afsluiten'),
+                    style: TextButton.styleFrom(foregroundColor: _muted),
+                  ),
+                ),
+              ),
+      );
+    }
     final radio = context.watch<RadioBesturing>();
     final p = context.watch<PlayerStore>();
     if (!radio.loopt) return const SizedBox.shrink();
@@ -17159,7 +17552,7 @@ Future<void> startRadio(BuildContext context, String artist,
           zaad: true),
     for (final p in plan)
       if (p.eigen == null || artiestSleutel(p.artiest) == zelf) p,
-  ], naar: uitgang, naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijvul: bijvuller.call, spoor: log.line,
+  ], naar: uitgang, naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijvul: bijvuller.call, groen: bijvuller.lastfmVan == null ? null : bijvuller.groenRonde, spoor: log.line,
       bijStart: (s) {
     gestart = s;
     _keuring = keuring;

@@ -361,6 +361,11 @@ class LanServer {
   /// [speaker] als uitgang (`speaker_radio.dart`). Gezet door main; geeft null of de reden waarom niet.
   Future<String?> Function(String speaker, Map<String, dynamic> opdracht)? bijSpeakerRadio;
 
+  /// De radio van de pc op [speaker] bedienen vanaf een toestel (speakerradio v2, 23-10-2026): `radioStop` sluit hem
+  /// af, `radioOordeel` met `wat` (past, pastNiet, houden, weg) en `trackId` zegt iets over het spelende nummer.
+  /// Gezet door main; geeft null of de reden waarom niet.
+  Future<String?> Function(String speaker, String cmd, Map<String, dynamic> opdracht)? bijSpeakerRadioOpdracht;
+
   /// De modelvragen van toestellen (`pc_model.dart`), met het budget van de pc. Gezet door main.
   Modelvragen? modelvragen;
 
@@ -479,6 +484,11 @@ class LanServer {
             final f = bijSpeakerRadio;
             if (f == null) return (status: 409, antwoord: {'error': 'De pc kan nu geen radio starten.'});
             final fout = await f(speaker, metVan);
+            if (fout != null) return (status: 409, antwoord: {'error': fout});
+          case 'radioStop' || 'radioOordeel':
+            final f = bijSpeakerRadioOpdracht;
+            if (f == null) return (status: 409, antwoord: {'error': 'Deze pc kent dat nog niet — werk hem bij.'});
+            final fout = await f(speaker, cmd, metVan);
             if (fout != null) return (status: 409, antwoord: {'error': fout});
           case 'groepeer':
             final leden = [

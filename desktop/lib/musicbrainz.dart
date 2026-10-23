@@ -418,8 +418,14 @@ class MbRecordingRelease {
   /// Compilation, Live, Soundtrack, Remix… A studio album has none.
   final List<String> secondaryTypes;
 
+  /// Wanneer deze persing uitkwam ("2019-07-17", "2019-07", "2019"), of leeg.
+  final String date;
+
+  /// Official, Promotion, Bootleg, Pseudo-Release — of leeg als MusicBrainz het niet zegt.
+  final String status;
+
   const MbRecordingRelease(this.mbid, this.title,
-      {this.primaryType = '', this.secondaryTypes = const []});
+      {this.primaryType = '', this.secondaryTypes = const [], this.date = '', this.status = ''});
 
   /// The artist's own record, as opposed to something their song was licensed onto.
   ///
@@ -444,8 +450,11 @@ class MbRecording {
   /// the song, find me the album") is the wrong one about as often as it is the right one.
   final List<MbRecordingRelease> releases;
 
+  /// De vroegste datum van deze opname over alle persingen heen, of leeg.
+  final String firstReleaseDate;
+
   const MbRecording(this.mbid, this.title, this.artist,
-      {this.ms, this.onRelease, this.releases = const []});
+      {this.ms, this.onRelease, this.releases = const [], this.firstReleaseDate = ''});
 
   int get seconds => ms == null ? 0 : (ms! / 1000).round();
 
@@ -470,6 +479,8 @@ class MbRecording {
         secondaryTypes: group is Map
             ? [for (final s in (group['secondary-types'] as List? ?? const [])) s.toString()]
             : const [],
+        date: (r['date'] ?? '').toString(),
+        status: (r['status'] ?? '').toString(),
       ));
     }
     // The artist's own records first, then everything else, and a compilation last of all. Order
@@ -485,6 +496,7 @@ class MbRecording {
       ms: (j['length'] as num?)?.toInt(),
       onRelease: on.isEmpty ? null : on.first.title,
       releases: on,
+      firstReleaseDate: (j['first-release-date'] ?? '').toString(),
     );
   }
 }

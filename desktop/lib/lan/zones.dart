@@ -86,7 +86,25 @@ class ZoneStaat {
     this.kanGroeperen = false,
     this.samenMs = 0,
     this.sonos = false,
+    this.radioStatus = '',
+    this.radioPast = '',
+    this.radioGehaald = false,
+    this.radioHouden = false,
   });
+
+  /// Speelt er een radio van de pc op deze speaker ([radio]): wat hij doet ("Zoekt het volgende nummer…"), leeg
+  /// als er niets bijzonders is — zie `radioStatusTekst`. Voor een toestel dat de speaker kiest (speakerradio v2,
+  /// 23-10-2026): die radio draait op de pc, en zonder dit zag je op je gsm niet waar hij mee bezig was.
+  final String radioStatus;
+
+  /// Het oordeel "past in deze radio" over het spelende nummer: 'past', 'pastNiet' of leeg.
+  final String radioPast;
+
+  /// Haalde deze radio het spelende nummer zelf (dan gaan "Houden" en "Weg" over het bestand)?
+  final bool radioGehaald;
+
+  /// Kreeg het spelende nummer "Houden" (👍)?
+  final bool radioHouden;
 
   /// Een Sonos: die kan met andere Sonossen in één groep (stap 3.1). Toestellen kunnen met elke speaker
   /// meespelen ([kanGroeperen]).
@@ -173,6 +191,10 @@ class ZoneStaat {
         if (kanGroeperen) 'kanGroeperen': true,
         if (samenMs != 0) 'samenMs': samenMs,
         if (sonos) 'sonos': true,
+        if (radioStatus.isNotEmpty) 'radioStatus': radioStatus,
+        if (radioPast.isNotEmpty) 'radioPast': radioPast,
+        if (radioGehaald) 'radioGehaald': true,
+        if (radioHouden) 'radioHouden': true,
       };
 
   static ZoneStaat fromJson(Map<String, dynamic> m) => ZoneStaat(
@@ -199,6 +221,10 @@ class ZoneStaat {
         kanGroeperen: m['kanGroeperen'] == true,
         samenMs: (m['samenMs'] as num?)?.toInt() ?? 0,
         sonos: m['sonos'] == true,
+        radioStatus: '${m['radioStatus'] ?? ''}',
+        radioPast: '${m['radioPast'] ?? ''}',
+        radioGehaald: m['radioGehaald'] == true,
+        radioHouden: m['radioHouden'] == true,
       );
 
   @override
@@ -225,7 +251,11 @@ class ZoneStaat {
       listEquals(other.groep, groep) &&
       other.kanGroeperen == kanGroeperen &&
       other.samenMs == samenMs &&
-      other.sonos == sonos;
+      other.sonos == sonos &&
+      other.radioStatus == radioStatus &&
+      other.radioPast == radioPast &&
+      other.radioGehaald == radioGehaald &&
+      other.radioHouden == radioHouden;
 
   @override
   int get hashCode => Object.hash(id, online, playing, trackId, positionMs, opMs, index, lengte);
@@ -302,6 +332,9 @@ class SseLezer {
 
 /// Wat de pc over een nummer weet, voor in de zonelijst.
 typedef ZoneNummer = ({String titel, String artiest, String album, int duurMs});
+
+/// De radio van de pc op een speaker, voor in de zone — zie [ZoneStaat.radioStatus] en verder.
+typedef RadioOpSpeaker = ({String status, String past, bool gehaald, bool houden});
 
 /// Wat de pc van een speaker weet die hij de muziek gaf. Zie `CastManager.laatsteStand`.
 typedef SpeakerStand = ({
@@ -435,6 +468,14 @@ class ZoneRegister {
 
   /// Waar een speaker is voor wie met hem meespeelt (`CastManager.ankerVan`). Gezet door de server.
   Map<String, dynamic>? Function(String speaker)? speakerAnker;
+
+  /// Wat de radio van de pc op speaker [speaker] doet, en wat er over het spelende nummer [trackId] gezegd is — of
+  /// null als het niet de radio van de pc is. Gezet door main; zie [ZoneStaat.radioStatus]. Verandert dat, dan
+  /// roept main [herzie].
+  RadioOpSpeaker? Function(String speaker, String trackId)? radioOpSpeaker;
+
+  /// Opnieuw rondsturen: iets buiten de zones veranderde wat erin staat (de radio op een speaker).
+  void herzie() => _meld();
 
   /// Per speaker hoeveel later hij klinkt dan hij zegt (ms; de schuif "Sonos gelijkzetten").
   final Map<String, int> speakerVertraging = {};
@@ -578,7 +619,12 @@ class ZoneRegister {
     for (final s in _speakers) {
       if (leden.contains(s.id)) continue;
       final n = s.trackId == null ? null : nummer?.call(s.trackId!);
+      final r = s.radio.isEmpty ? null : radioOpSpeaker?.call(s.id, s.trackId ?? '');
       uit.add(ZoneStaat(
+        radioStatus: r?.status ?? '',
+        radioPast: r?.past ?? '',
+        radioGehaald: r?.gehaald ?? false,
+        radioHouden: r?.houden ?? false,
         id: 'spk:${s.id}',
         soort: ZoneSoort.speaker,
         naam: naamMetVolgers(s.id, s.naam),

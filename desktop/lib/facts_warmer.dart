@@ -121,7 +121,18 @@ class FactsWarmer extends ChangeNotifier {
     this.outageBackoff = const Duration(minutes: 15),
     this.scanWait = const Duration(minutes: 3),
     this.factsDeadline = const Duration(seconds: 90),
+    this.voorkant,
   });
+
+  /// De digitale voorkant van een plaat (Deezer, anders TheAudioDB) — zie `CoverEnricher.digitaleVoorkant`. Null: die
+  /// van [CoverEnricher]. Ingespoten om dezelfde reden als [resolve]: zonder dit ging elke toets van deze warmer echt
+  /// het net op. Gemeten op 23-10-2026: de rij van TheAudioDB hield de tweede plaat drie seconden op, en de toets
+  /// "MIDDEN in de ronde" wachtte zo 2,9–3,4 s op een grens van 5 — op een drukke bouwmachine erover.
+  final Future<Object?> Function(String artist, String album, List<String> titels)? voorkant;
+
+  Future<Object?> _voorkant(Album album) =>
+      (voorkant ?? (a, b, t) => CoverEnricher(settings).digitaleVoorkant(a, b, titels: t))(
+          album.artist, album.title, [for (final t in album.tracks) t.title]).catchError((Object _) => null);
 
   final LibraryStore library;
   final AppSettings settings;
@@ -737,9 +748,7 @@ class FactsWarmer extends ChangeNotifier {
       // Plus de DIGITALE voorkant (Deezer, anders TheAudioDB), ook voor een plaat waarvan de scans er al
       // staan: Saber, 21-10-2026, "digitaal wint altijd". Eén keer per plaat over het net, daarna van
       // schijf — en `cachedReleaseArt` legt hem over de voorkant.
-      await CoverEnricher(settings)
-          .digitaleVoorkant(album.artist, album.title, titels: [for (final t in album.tracks) t.title])
-          .catchError((Object _) => null);
+      await _voorkant(album);
       _neemHoesOver(
           album,
           await DiscogsService(settings).cachedReleaseArt(album.artist, album.title,
@@ -749,9 +758,7 @@ class FactsWarmer extends ChangeNotifier {
     _busy(uid);
     // De digitale voorkant met de titels erbij, zodat een verzamelrip de hoes van zijn originele uitgave
     // krijgt; de keten hieronder vindt hem daarna in de cache.
-    await CoverEnricher(settings)
-        .digitaleVoorkant(album.artist, album.title, titels: [for (final t in album.tracks) t.title])
-        .catchError((Object _) => null);
+    await _voorkant(album);
     try {
       // Logged BEFORE the call, with the clock. Without this a record that takes four minutes is
       // indistinguishable from a loop that has stopped — which is exactly the two hours I spent

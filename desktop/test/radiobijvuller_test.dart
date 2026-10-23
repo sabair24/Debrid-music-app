@@ -838,4 +838,112 @@ void main() {
       r.stop();
     });
   });
+
+  // Saber, 23-10-2026, op de vraag wat "Past" moet doen: "Meteen meer in die richting" — 3 tot 5 nummers van verwante
+  // artiesten die bij de sfeer passen, vooraan; dezelfde artiest pas na 50.
+  group('Past: meteen meer in die richting', () {
+    test('DE KERN: Last.fm bij precies dat nummer, andere artiesten, één per artiest, hoogstens vijf, op sfeer', () async {
+      final r = await radio();
+      final gevraagd = <String>[];
+      final sfeer = <String>[];
+      final log = <String>[];
+      final b = Radiobijvuller(
+        radio: r,
+        deezer: _Deezer().als,
+        ankers: const ['Niels Destadsbader'],
+        metVerwant: true,
+        maakPlan: _plan,
+        lastfmVan: (a, t) async {
+          gevraagd.add('$a — $t');
+          return [
+            Radioplek(artiest: 'Bazart', titel: 'Nog een', bron: 'lastfm'),
+            Radioplek(artiest: 'X-Session', titel: 'On and On', bron: 'lastfm'),
+            Radioplek(artiest: 'X-Session', titel: 'Revolution', bron: 'lastfm'),
+            Radioplek(artiest: 'T-Spoon', titel: 'Mercedes Benz', bron: 'lastfm'),
+            Radioplek(artiest: 'Regi', titel: 'Kom wat dichterbij', bron: 'lastfm'),
+            Radioplek(artiest: 'Natalia', titel: 'Gone to Stay', bron: 'lastfm'),
+            Radioplek(artiest: 'Camille', titel: 'Vleugels', bron: 'lastfm'),
+            Radioplek(artiest: 'Clouseau', titel: 'Daar gaat ze', bron: 'lastfm'),
+          ];
+        },
+        vraagSfeer: (plekken) => sfeer.addAll([for (final p in plekken) p.artiest]),
+        spoor: log.add,
+        toeval: Random(1),
+      );
+      final n = await b.groenRonde(r.sessie, 'Bazart', 'Goud');
+      expect(gevraagd, ['Bazart — Goud'], reason: 'vanaf het nummer dat je goed vond');
+      final erbij = [for (final p in r.plan) if (p.bron == 'lastfm') p.artiest];
+      expect(erbij, ['X-Session', 'T-Spoon', 'Regi', 'Natalia', 'Camille'],
+          reason: 'niet Bazart zelf, één X-Session, en na vijf houdt het op');
+      expect(n, kGroenPerRonde);
+      expect(sfeer, erbij, reason: 'streng op sfeer, zoals elke Last.fm-ronde');
+      expect(log.last, allOf(contains('radio-past "Bazart — Goud"'), contains('vooraan')));
+      // Dit nummer is daarna geen vertrekpunt meer voor een gewone Last.fm-ronde.
+      r.plan.firstWhere((p) => p.zaad).gehoord = false;
+      expect(b.lastfmZaad()?.titel, isNot('Goud'));
+      r.stop();
+    });
+
+    test('vooraan: om en om met wat nog moet komen, niet achter de hele rij', () async {
+      final r = await radio();
+      r.voegBij(r.sessie, [
+        for (var i = 0; i < 6; i++) Radioplek(artiest: 'Buur $i', titel: 'Nummer $i', bron: 'deezer'),
+      ], achteraan: true);
+      final b = Radiobijvuller(
+        radio: r,
+        deezer: _Deezer().als,
+        ankers: const ['Niels Destadsbader'],
+        metVerwant: true,
+        maakPlan: _plan,
+        lastfmVan: (a, t) async => [Radioplek(artiest: 'X-Session', titel: 'On and On', bron: 'lastfm')],
+        toeval: Random(1),
+      );
+      await b.groenRonde(r.sessie, 'Bazart', 'Goud');
+      final i = r.plan.indexWhere((p) => p.artiest == 'X-Session');
+      final laatsteBuur = r.plan.lastIndexWhere((p) => p.artiest.startsWith('Buur'));
+      expect(i, lessThan(laatsteBuur));
+      r.stop();
+    });
+
+    test('zonder Last.fm gebeurt er niets, en een oude radio krijgt niets', () async {
+      final r = await radio();
+      final zonder = Radiobijvuller(
+          radio: r, deezer: _Deezer().als, ankers: const ['Niels Destadsbader'], metVerwant: true, maakPlan: _plan);
+      expect(await zonder.groenRonde(r.sessie, 'Bazart', 'Goud'), 0);
+      final met = Radiobijvuller(
+        radio: r,
+        deezer: _Deezer().als,
+        ankers: const ['Niels Destadsbader'],
+        metVerwant: true,
+        maakPlan: _plan,
+        lastfmVan: (a, t) async => [Radioplek(artiest: 'X-Session', titel: 'On and On', bron: 'lastfm')],
+      );
+      expect(await met.groenRonde(r.sessie - 1, 'Bazart', 'Goud'), 0, reason: 'een tik op een radio die al voorbij is');
+      r.stop();
+    });
+
+    test('het scherm zegt alleen "zoekt meer" als er een ronde begon', () async {
+      final zonder = RadioBesturing(speler: _Speler(), bron: _Bron());
+      await zonder.start([Radioplek(artiest: 'Niels Destadsbader', titel: 'Vuur en vlam', eigen: _t('Niels Destadsbader', 'Vuur en vlam'), zaad: true)]);
+      expect(zonder.meerZoals(_t('Bazart', 'Goud')), isFalse, reason: 'geen ronde aangesloten');
+      zonder.stop();
+
+      final rondes = <String>[];
+      final met = RadioBesturing(speler: _Speler(), bron: _Bron());
+      await met.start([Radioplek(artiest: 'Niels Destadsbader', titel: 'Vuur en vlam', eigen: _t('Niels Destadsbader', 'Vuur en vlam'), zaad: true)],
+          groen: (s, a, t) async {
+        rondes.add('$s|$a|$t');
+        return 1;
+      });
+      expect(met.meerZoals(_t('Bazart', 'Goud')), isTrue);
+      expect(rondes, ['${met.sessie}|Bazart|Goud']);
+      met.stop();
+      expect(met.meerZoals(_t('Bazart', 'Goud')), isFalse, reason: 'een gestopte radio zoekt niets meer');
+
+      final m = File('lib/main.dart').readAsStringSync();
+      expect(RegExp(r'groen: bijvuller\.lastfmVan == null \? null : bijvuller\.groenRonde').allMatches(m).length, 2,
+          reason: 'de gewone radio en de radio uit een zin');
+      expect(m, contains('return radio.meerZoals(t)'));
+    });
+  });
 }

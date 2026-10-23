@@ -147,4 +147,23 @@ class RadioSfeer extends GedeeldeOps {
   }
 
   int get aantal => _regels.values.where((r) => '${r['v'] ?? ''}'.isNotEmpty).length;
+
+  /// Alle oordelen die in radio's als deze gelden (dezelfde zaadartiest of familie), per nummer het laatste — zoals
+  /// [oordeel] het ziet, dus zonder wat weer toegelaten is. Het nieuwste eerst. Voor de lijst in het radiopaneel.
+  List<({String artiest, String titel, Sfeeroordeel oordeel})> oordelenVoor({required String zaad, required String familie}) {
+    final z = sfeerZaad(zaad);
+    final f = familie.trim();
+    final laatst = <String, Map<String, dynamic>>{};
+    for (final r in _regels.values) {
+      if (!((z.isNotEmpty && r['z'] == z) || (f.isNotEmpty && r['f'] == f))) continue;
+      final n = '${r['n'] ?? ''}';
+      final was = laatst[n];
+      if (was == null || ((r['at'] as num?) ?? 0) > ((was['at'] as num?) ?? 0)) laatst[n] = r;
+    }
+    final rijen = [
+      for (final r in laatst.values)
+        if (Sfeeroordeel.vanNaam(r['v']) case final o?) (r: r, o: o),
+    ]..sort((a, b) => ((b.r['at'] as num?) ?? 0).compareTo((a.r['at'] as num?) ?? 0));
+    return [for (final x in rijen) (artiest: '${x.r['a'] ?? ''}', titel: '${x.r['t'] ?? ''}', oordeel: x.o)];
+  }
 }

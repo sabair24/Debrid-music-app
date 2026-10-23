@@ -7,7 +7,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:debridmusic/enrichment.dart' show nummerOpAlbum, plekUitDeezerNummer;
+import 'package:debridmusic/enrichment.dart' show deezerSingleUit, nummerOpAlbum, origineleUitgaveUit, plekUitDeezerNummer;
+import 'package:debridmusic/musicbrainz.dart' show MbRecording;
 import 'package:debridmusic/online.dart';
 
 String _lees(String pad) => File(pad).readAsStringSync().replaceAll('\r\n', '\n');
@@ -113,7 +114,119 @@ void main() {
     });
   });
 
+  group('zonder album: de oorspronkelijke uitgave uit MusicBrainz (Saber, 23-10-2026: "Ja")', () {
+    Map<String, dynamic> uitgave(String titel, String soort,
+            {List<String> ook = const [], String datum = '', String status = 'Official'}) =>
+        {
+          'id': 'id-$titel-$soort-$datum',
+          'title': titel,
+          'status': status,
+          'date': datum,
+          'release-group': {'primary-type': soort, 'secondary-types': ook},
+        };
+    MbRecording opname(String titel, String artiest, int ms, List<Map<String, dynamic>> uitgaven, {String eerste = ''}) =>
+        MbRecording.from({
+          'id': 'rec-$titel-$ms',
+          'title': titel,
+          'length': ms,
+          'first-release-date': eerste,
+          'artist-credit': [
+            {'name': artiest}
+          ],
+          'releases': uitgaven,
+        });
+
+    // Zoals MusicBrainz het op 23-10-2026 gaf voor artist:"Ellie Goulding" AND recording:"Hate Me".
+    final hateMe = [
+      opname('Hate Me (acoustic)', 'Ellie Goulding', 183450, [uitgave('EG.0', 'Album', ook: ['Compilation'], datum: '2026-10-16')]),
+      opname('Hate Me', 'Ellie Goulding', 182000,
+          [uitgave('Promo Only: Mainstream Radio, August 2019', 'Album', ook: ['Compilation'], datum: '2019-07', status: 'Promotion')]),
+      opname('Hate Me', 'Ellie Goulding', 205000,
+          [uitgave('Brightest Blue', 'Album', datum: '2020-07-17'), uitgave('Hate Me', 'Single', datum: '2019-07-17')]),
+      opname('Hate Me', 'Ellie Goulding', 186226, [
+        uitgave('EG.0', 'Album', ook: ['Compilation'], datum: '2026-10-16'),
+        uitgave('Sad Songs of 2022', 'Album', ook: ['Compilation']),
+        uitgave('Brightest Blue', 'Album'),
+      ], eerste: '2019-06-26'),
+    ];
+
+    test('DE KERN: Hate Me hoort bij Brightest Blue — niet bij EG.0 of een andere verzamelaar', () {
+      final o = origineleUitgaveUit(hateMe, artiest: 'Ellie Goulding & Juice WRLD', titel: 'Hate Me', seconden: 186);
+      expect(o?.album, 'Brightest Blue');
+      expect(o?.jaar, 2020, reason: 'het jaar van de plaat (2020-07-17), niet de eerste datum van de opname (2019)');
+    });
+
+    test('dance: geen MusicBrainz-album, wel een Deezer-single die naar het nummer heet', () {
+      // Zoals Deezer het op 23-10-2026 gaf.
+      final tomcraft = [
+        {'title': 'Loneliness (Radio Cut)', 'duration': 227, 'artist': {'name': 'Tomcraft'}, 'album': {'title': 'Loneliness'}},
+        {'title': 'Loneliness', 'duration': 163, 'artist': {'name': 'Hardwell'}, 'album': {'title': 'Loneliness'}},
+      ];
+      expect(deezerSingleUit(tomcraft, 'Tomcraft', 'Loneliness (Radio Cut)', seconden: 227), 'Loneliness');
+      expect(deezerSingleUit(tomcraft, 'Tomcraft', 'Loneliness (Radio Cut)', seconden: 300), isNull,
+          reason: 'een andere lengte');
+      final cafe = [
+        {
+          'title': "Café Del Mar (Three 'N One Radio Edit)",
+          'duration': 229,
+          'artist': {'name': 'Energy 52'},
+          'album': {'title': 'Café Del Mar: The Best of the Remixes'}
+        },
+      ];
+      expect(deezerSingleUit(cafe, 'Energy 52', "Café Del Mar (Three 'N One Radio Edit)"), isNull,
+          reason: 'een plaat met een andere naam is geen single — en een "best of" al helemaal niet');
+    });
+
+    test('het album gaat voor de single, ook als de single eerder uitkwam', () {
+      final o = origineleUitgaveUit([hateMe[2]], artiest: 'Ellie Goulding', titel: 'Hate Me');
+      expect(o, (album: 'Brightest Blue', jaar: 2020));
+    });
+
+    test('alleen een single: dan de single', () {
+      final o = origineleUitgaveUit([
+        opname('Close To Me', 'Ellie Goulding', 183000, [
+          uitgave('Close To Me', 'Single', datum: '2018-10-24'),
+          uitgave('Now 101', 'Album', ook: ['Compilation'], datum: '2018-11-01'),
+        ])
+      ], artiest: 'Ellie Goulding', titel: 'Close To Me', seconden: 183);
+      expect(o, (album: 'Close To Me', jaar: 2018));
+    });
+
+    test('alleen verzamelaars, live of promo: geen album — dan blijft het zoals het was', () {
+      expect(origineleUitgaveUit([hateMe[0], hateMe[1]], artiest: 'Ellie Goulding', titel: 'Hate Me'), isNull);
+      final live = opname('Hate Me', 'Ellie Goulding', 186000, [uitgave('Live at the O2', 'Album', ook: ['Live'], datum: '2021')]);
+      expect(origineleUitgaveUit([live], artiest: 'Ellie Goulding', titel: 'Hate Me'), isNull);
+      final bootleg = opname('Hate Me', 'Ellie Goulding', 186000, [uitgave('Hate Me', 'Single', datum: '2019', status: 'Bootleg')]);
+      expect(origineleUitgaveUit([bootleg], artiest: 'Ellie Goulding', titel: 'Hate Me'), isNull);
+    });
+
+    test('een andere lengte is een andere versie, en een andere artiest een ander nummer', () {
+      expect(origineleUitgaveUit([hateMe[2]], artiest: 'Ellie Goulding', titel: 'Hate Me', seconden: 186), isNull,
+          reason: '205 s tegen 186 s');
+      final karaoke = opname('Hate Me', 'The Karaoke Channel', 186000, [uitgave('Karaoke Hits', 'Album', datum: '2020')]);
+      expect(origineleUitgaveUit([karaoke], artiest: 'Ellie Goulding', titel: 'Hate Me'), isNull);
+    });
+
+    test('een remixplaat alleen voor een remix', () {
+      final remixen = opname('Close To Me (Red Velvet Remix)', 'Ellie Goulding', 191000,
+          [uitgave('Close To Me (Remixes)', 'EP', ook: ['Remix'], datum: '2018-12-07')]);
+      expect(origineleUitgaveUit([remixen], artiest: 'Ellie Goulding', titel: 'Close To Me (Red Velvet Remix)'),
+          (album: 'Close To Me (Remixes)', jaar: 2018));
+      final gewoon = opname('Close To Me', 'Ellie Goulding', 183000, [uitgave('Close To Me (Remixes)', 'EP', ook: ['Remix'])]);
+      expect(origineleUitgaveUit([gewoon], artiest: 'Ellie Goulding', titel: 'Close To Me'), isNull);
+    });
+  });
+
   group('aangesloten', () {
+    test('zonder album zoekt de pc de oorspronkelijke uitgave op en tagt daarmee', () {
+      final online = _lees('lib/online.dart');
+      expect(online, contains('? origineleUitgave?.call(artiest, titel, seconden).then'));
+      expect(online, contains('final origineel =\n                origineelF == null ? null : await origineelF.timeout('));
+      expect(online, contains('              gezag = gezagVoorHaal(\n                  artiest: artiest,\n                  titel: titel,\n                  album: origineel.album,'));
+      final main = _lees('lib/main.dart');
+      expect(main, contains('DownloadManager.origineleUitgave = (artiest, titel, seconden) => origineleUitgaveVan('));
+    });
+
     test('▶ geeft het album mee, op de pc en via de pc', () {
       final main = _lees('lib/main.dart');
       expect(main, contains('final plek = Radioplek(artiest: artiest, titel: titel, seconden: seconden, album: album);'));
@@ -123,7 +236,7 @@ void main() {
       expect(server, contains("album: body['album'] is String ? body['album'] as String : null,"));
       final online = _lees('lib/online.dart');
       expect(online,
-          contains('final gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);'));
+          contains('var gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);'));
       expect(online, contains('vroeg: vroeg, zoekBeter: zoekDaarnaBeter, album: album);'));
       expect(online, contains('final velden = veldenNaHaal(gezag,'));
       expect(online, contains('gezag: metPlek(gezag, plek),'));

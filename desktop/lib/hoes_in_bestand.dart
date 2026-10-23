@@ -51,6 +51,18 @@ const kHoesInBestandZijde = 1600;
 /// Ruimte die erbij komt als de nieuwe hoes niet in de oude ruimte past — voor een volgende keer.
 const kHoesInBestandRuimte = 64 * 1024;
 
+/// Achter wat de index van een bestand onthoudt dat op alleen-lezen bleef staan.
+const kOpAlleenLezen = '|alleen-lezen';
+
+/// Geen schrijfrechten in de modus (Windows: het kenmerk alleen-lezen). Onleesbaar telt niet als alleen-lezen.
+bool opAlleenLezen(String pad) {
+  try {
+    return File(pad).statSync().mode & 0x92 == 0;
+  } catch (_) {
+    return false;
+  }
+}
+
 enum HoesUitkomst {
   /// Geschreven; het bestand is even groot gebleven.
   zelfdeGrootte,
@@ -428,11 +440,13 @@ class HoesInBestandVeger {
     return _opSchijf = uit;
   }
 
-  /// Onthoud dat [pad] klaar is met [merk], met zijn grootte en datum van nu.
-  void _onthoud(String pad, String merk) {
+  /// Onthoud dat [pad] klaar is met [merk], met zijn grootte en datum van nu. [alleenLezen]: het bleef staan
+  /// omdat het op alleen-lezen stond — zie [_isKlaar].
+  void _onthoud(String pad, String merk, {bool alleenLezen = false}) {
     try {
       final st = File(pad).statSync();
-      _laadOpSchijf()[pad.toLowerCase()] = '$merk|${st.size}|${st.modified.millisecondsSinceEpoch}';
+      _laadOpSchijf()[pad.toLowerCase()] =
+          '$merk|${st.size}|${st.modified.millisecondsSinceEpoch}${alleenLezen ? kOpAlleenLezen : ''}';
       _opSchijfVeranderd = true;
     } catch (_) {}
   }
@@ -498,8 +512,14 @@ class HoesInBestandVeger {
   /// Is [t] al klaar met [merk]? Eerst wat de bibliotheek van het bestand weet; loopt die achter (het
   /// bestand groeide door ons, en dat ziet ze pas bij een volgende scan), dan het bestand zelf.
   bool _isKlaar(Track t, String merk) {
-    final al = _laadOpSchijf()[t.path.toLowerCase()];
+    var al = _laadOpSchijf()[t.path.toLowerCase()];
     if (al == null || !al.startsWith('$merk|')) return false;
+    if (al.endsWith(kOpAlleenLezen)) {
+      // Weer schrijfbaar: opnieuw. Het kenmerk weghalen verandert grootte noch datum, dus zonder dit bleef zo'n
+      // bestand voorgoed "klaar" — Saber, 23-10-2026, over zijn vijf (Alizée, Twarres): "Ja", ze mogen een hoes.
+      if (!opAlleenLezen(t.path)) return false;
+      al = al.substring(0, al.length - kOpAlleenLezen.length);
+    }
     if (al == '$merk|${t.sizeBytes}|${t.addedMs}') return true;
     try {
       final st = File(t.path).statSync();
@@ -600,7 +620,7 @@ class HoesInBestandVeger {
               _onthoud(pad, w.merk);
             case HoesUitkomst.alleenLezen:
               overslaanVast++;
-              _onthoud(pad, w.merk);
+              _onthoud(pad, w.merk, alleenLezen: true);
               _log.line('alleen-lezen, niet aangeraakt: $pad');
             case HoesUitkomst.nietTeLezen:
               mis++;
