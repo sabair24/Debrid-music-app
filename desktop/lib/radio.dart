@@ -202,7 +202,12 @@ class EigenRadiobron implements Radiobron {
     required this.soulseek,
     required this.library,
     required this.instellingen,
+    this.naLanding,
   });
+
+  /// Na een landing, met het pad dat nu in de bibliotheek staat: de hoezen van zijn plaat meteen — de app geeft hier
+  /// `FactsWarmer.voorrang` (Saber, 23-10-2026: "het moet direct").
+  final void Function(String pad)? naLanding;
 
   final DownloadManager downloads;
   final SoulseekService soulseek;
@@ -279,6 +284,7 @@ class EigenRadiobron implements Radiobron {
     // (één tegelijk, en een album dat al vergeefs gezocht is wordt overgeslagen), dus hem na elke
     // landing aantikken kost niets als er niets te doen is.
     if (t != null) unawaited(library.enrichFromWeb(instellingen).catchError((_) {}));
+    if (t != null) naLanding?.call(t.path);
     return t;
   }
 

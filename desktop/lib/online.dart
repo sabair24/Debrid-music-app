@@ -3845,6 +3845,10 @@ class DownloadManager extends ChangeNotifier {
         ? origineleUitgave?.call(artiest, titel, seconden).then<({String album, int? jaar})?>((o) => o,
             onError: (Object _) => null)
         : null;
+    if (ids.isNotEmpty) {
+      meldAlbum(artiest, titel, seconden,
+          album: metAlbum.isEmpty || alsSingle || lijktVerzamelaar(metAlbum) ? '' : metAlbum, origineel: origineelF);
+    }
     for (final id in ids.take(2)) {
       if (job.cancelled) return null;
       _tidalRadioTijden.add(DateTime.now());
@@ -4373,6 +4377,8 @@ class DownloadManager extends ChangeNotifier {
         ? origineleUitgave?.call(artiest, titel, seconden).then<({String album, int? jaar})?>((o) => o,
             onError: (Object _) => null)
         : null;
+    // En de hoezen van die plaat alvast, terwijl er gehaald wordt ([albumBekend]).
+    meldAlbum(artiest, titel, seconden, album: alsSingle ? '' : gezag.album, origineel: origineelF);
     // Waar het nummer op dat album staat: alvast opzoeken, terwijl er gezocht en gehaald wordt.
     final plekF = gezag.album.isEmpty
         ? null
@@ -5305,6 +5311,28 @@ class DownloadManager extends ChangeNotifier {
   /// zie `origineleUitgaveVan` in enrichment.dart. Gezet bij het opstarten van de pc; null: niet opzoeken.
   static Future<({String album, int? jaar})?> Function(String artiest, String titel, int? seconden)?
       origineleUitgave;
+
+  /// Zodra bekend is op welke plaat een nummer komt dat nu binnenkomt (de radio, ▶): de hoezen van die plaat alvast
+  /// ophalen — `FactsWarmer.alvast`. Gezet bij het opstarten van de pc; null (een toets, een toestel): niets. Saber,
+  /// 23-10-2026: *"vanaf het moment dat het liedje begint te downloaden moet die hoes, cd afbeelding en achterkant al
+  /// beginnen"*.
+  static void Function(String artiest, String album, String titel, int? seconden)? albumBekend;
+
+  /// [origineel] (de oorspronkelijke uitgave die gezocht wordt) of [album] (al bekend, en geen single van dit nummer):
+  /// meld [albumBekend] zodra er een album is.
+  @visibleForTesting
+  static void meldAlbum(String artiest, String titel, int? seconden,
+      {String album = '', Future<({String album, int? jaar})?>? origineel}) {
+    final f = albumBekend;
+    if (f == null) return;
+    if (album.trim().isNotEmpty) {
+      f(artiest, album, titel, seconden);
+      return;
+    }
+    unawaited(origineel?.then((o) {
+      if (o != null) f(artiest, o.album, titel, seconden);
+    }, onError: (Object _) {}));
+  }
 
   /// Na tags die pas later in een bestand kwamen ([_schrijfRadioTags]): de bibliotheek leest het opnieuw. Gezet bij het
   /// opstarten van de pc (`LibraryStore.voegBestandToe`); null (een toets, een toestel): niets.

@@ -1116,6 +1116,17 @@ Future<void> main() async {
       : RemoteDownloadManager(
           online, soulseek, library.rootPath, onLibraryChanged, () => session.endpoint);
 
+  // Looking records up before you ask for them. Only the machine holding the music does this — a
+  // phone asks the PC for facts, so warming there would be four devices doing one job against one
+  // shared budget. Constructed everywhere so the provider tree is the same shape on every platform.
+  // Vóór de radio: die geeft hem elke landing door (`EigenRadiobron.naLanding`).
+  final warmer = FactsWarmer(
+    library: library,
+    settings: settings,
+    mb: musicbrainz,
+    enabled: mode.owner,
+  );
+
   // De radio die zichzelf aanvult. Eén besturing voor de hele app: hij houdt een plan bij dat een
   // half uur meegaat, en twee daarvan naast elkaar zouden elk denken dat zij de radio zijn.
   //
@@ -1129,7 +1140,9 @@ Future<void> main() async {
             downloads: downloads,
             soulseek: soulseek,
             library: library,
-            instellingen: settings)
+            instellingen: settings,
+            // De hoezen van zijn plaat meteen na het landen, niet als de veeg aan de beurt is.
+            naLanding: (pad) => unawaited(warmer.voorrang(pad)))
         : PcRadiobron(library: library, clientOf: () => library.remote),
   )
     ..idVanPad = library.gedeeldId
@@ -1139,16 +1152,6 @@ Future<void> main() async {
   // Share this library with the Mac, the iPad and the Shield. Started before the scan finishes:
   // a device probing /health then gets a real answer straight away, and the catalogue fills in
   // by itself as the scan lands.
-  // Looking records up before you ask for them. Only the machine holding the music does this — a
-  // phone asks the PC for facts, so warming there would be four devices doing one job against one
-  // shared budget. Constructed everywhere so the provider tree is the same shape on every platform.
-  final warmer = FactsWarmer(
-    library: library,
-    settings: settings,
-    mb: musicbrainz,
-    enabled: mode.owner,
-  );
-
   final sharing = LanSharing(
     library: library,
     settings: settings,
@@ -1221,10 +1224,16 @@ Future<void> main() async {
   // Zonder album (de radio, of een verzamelaar): de oorspronkelijke uitgave uit MusicBrainz.
   if (mode.owner) {
     DownloadManager.origineleUitgave = (artiest, titel, seconden) => origineleUitgaveVan(artiest, titel, seconden: seconden);
-    // Tags die pas later lukten (het nummer speelde al): de bibliotheek leest dat ene bestand opnieuw.
+    // Tags die pas later lukten (het nummer speelde al): de bibliotheek leest dat ene bestand opnieuw, en dan staat het
+    // op zijn plaat — met de hoezen van die plaat meteen.
     DownloadManager.naLateTags = (pad) async {
       await library.voegBestandToe(pad);
+      unawaited(warmer.voorrang(pad));
     };
+    // Zodra bekend is op welke plaat een binnenkomend nummer komt: de hoezen alvast (Saber, 23-10-2026: "vanaf het
+    // moment dat het liedje begint te downloaden").
+    DownloadManager.albumBekend =
+        (artiest, album, titel, seconden) => unawaited(warmer.alvast(artiest, album, titel: titel, seconden: seconden));
   }
   radio.sfeer = radioSfeer;
   // Als FACTOR de speler in: die hoeft niets van duimen te weten, en `oordeelBonus` blijft daardoor
@@ -20059,7 +20068,8 @@ class NieuwSpeler extends ChangeNotifier {
             downloads: context.read<DownloadManager>(),
             soulseek: context.read<SoulseekService>(),
             library: lib,
-            instellingen: instellingen)
+            instellingen: instellingen,
+            naLanding: (pad) => unawaited(_misschien<FactsWarmer>(context)?.voorrang(pad)))
         : PcRadiobron(library: lib, clientOf: () => lib.remote);
     _bezig.add(sleutel);
     notifyListeners();

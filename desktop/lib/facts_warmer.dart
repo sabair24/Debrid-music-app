@@ -793,6 +793,148 @@ class FactsWarmer extends ChangeNotifier {
     }
   }
 
+  /// Platen waarvoor [alvast] deze sessie al liep, op artiest en titel.
+  final Set<String> _alvastGedaan = {};
+
+  /// Eén [alvast] tegelijk: ze delen de rijen van MusicBrainz en Discogs met de keuring van de radio.
+  Future<void> _alvastRij = Future<void>.value();
+
+  /// Alvast, zodra bekend is op welke plaat een nummer komt dat nu binnenkomt (de radio, ▶): de feiten van die plaat,
+  /// de digitale voorkant, en de scans — voorkant, achterkant en cd, en meteen ook via Discogs als de gratis bronnen
+  /// ze niet hebben. Dan staan ze klaar als het nummer landt, en [voorrang] vindt ze daarna op schijf.
+  ///
+  /// **Waarom (Saber, 23-10-2026).** *"het moet direct, eigenlijk vanaf het moment dat het liedje begint te downloaden
+  /// moet die hoes, cd afbeelding en achterkant al beginnen"*. Gemeten bij de radio vanaf Luka: Hounds of Love landde
+  /// om 12:29:01, de feiten kwamen om 12:33:27 (de veeg was met andere platen bezig) en de voorkant om 12:35:42; cd en
+  /// achterkant kwamen bij andere platen pas in de volledige ronde, tot een uur later.
+  ///
+  /// [titel] en [seconden]: het nummer dat straks landt, zoals de bibliotheek het dan kent. De feitenzoeker kiest de
+  /// persing op de nummers, en de sleutel van de scans hangt aan haar id ([artCacheKey]); met dezelfde nummers kiest
+  /// [voorrang] straks dezelfde.
+  Future<void> alvast(String artist, String album, {String titel = '', int? seconden}) {
+    final a = artist.trim(), b = album.trim();
+    if (!enabled || library.isRemote || !settings.warmFacts || a.isEmpty || b.isEmpty) return Future<void>.value();
+    if (!_alvastGedaan.add('${a.toLowerCase()}|${b.toLowerCase()}')) return Future<void>.value();
+    final beurt = _alvastRij.then((_) => _alvastNu(a, b, titel: titel, seconden: seconden));
+    _alvastRij = beurt.catchError((Object _) {});
+    return beurt;
+  }
+
+  Future<void> _alvastNu(String artist, String album, {required String titel, int? seconden}) async {
+    final plaat = Album(album, artist, [
+      if (titel.trim().isNotEmpty)
+        Track(
+            path: '',
+            title: titel,
+            artist: artist,
+            album: album,
+            duration: seconden == null || seconden <= 0 ? null : Duration(seconds: seconden)),
+    ]);
+    final t0 = DateTime.now();
+    try {
+      final facts = await resolve(plaat, uid: '', trackSetHash: '', mb: mb, settings: settings).timeout(factsDeadline);
+      await _voorkant(plaat);
+      if (facts.tracklist.isEmpty) {
+        _log.line('alvast: "$album" — geen tracklijst, alleen de voorkant (${_sinds(t0)})');
+        return;
+      }
+      final klaar = await _scansVoor(artist, album, facts, tag: 'alvast');
+      _log.line('alvast: "$album" klaar in ${_sinds(t0)} — $klaar');
+    } catch (e) {
+      _log.line('alvast: "$album" — $e (${_sinds(t0)})');
+    }
+  }
+
+  /// Meteen, voor de plaat van een nummer dat net landde ([pad]): de feiten en de scans van díe plaat, nu — niet pas
+  /// als de veeg aan de beurt is (zie [alvast] voor de meting). Met [alvast] ervoor zijn de vragen al beantwoord en
+  /// staan de scans al op schijf, en dan is dit een paar tellen.
+  Future<void> voorrang(String pad) async {
+    if (!enabled || library.isRemote || !settings.warmFacts) return;
+    final album = library.albums.where((a) => !a.isSingle && a.tracks.any((t) => t.path == pad)).firstOrNull;
+    if (album == null) return;
+    final uid = library.uidOf(album);
+    if (uid.isEmpty) return;
+    final t0 = DateTime.now();
+    var facts = library.facts.get(uid);
+    try {
+      if (needsResolve(facts,
+          trackSetHash: library.trackSetHashFor(album),
+          nowMs: DateTime.now().millisecondsSinceEpoch,
+          pinnedMbid: library.pinnedMbid(album),
+          pinned: library.pinnedRelease(album),
+          canHear: canHear(settings))) {
+        _tried.add(uid); // de veeg hoeft hem niet nog eens
+        final fresh = await resolve(album,
+                uid: uid,
+                trackSetHash: library.trackSetHashFor(album),
+                mb: mb,
+                settings: settings,
+                pinnedMbid: library.pinnedMbid(album),
+                pinned: library.pinnedRelease(album))
+            .timeout(factsDeadline);
+        if (fresh.isEmpty) {
+          _log.line('voorrang: "${album.title}" — geen feiten (${_sinds(t0)})');
+          return;
+        }
+        library.facts.put(fresh, folder: library.sidecarFolderFor(album));
+        await library.facts.flush();
+        facts = fresh;
+      }
+      if (facts == null || facts.tracklist.isEmpty) return;
+      _artTried.add(uid);
+      _volTried.add(uid);
+      await _voorkant(album);
+      final klaar = await _scansVoor(album.artist, album.title, facts, album: album, tag: 'voorrang');
+      _log.line('voorrang: "${album.title}" klaar in ${_sinds(t0)} — $klaar');
+    } catch (e) {
+      _log.line('voorrang: "${album.title}" — $e (${_sinds(t0)})');
+    }
+  }
+
+  /// De scans van een plaat met deze [facts]: eerst de gratis bronnen, en is de map daarna niet af, meteen ook Discogs
+  /// (de achterkant en de cd). Met [album] (al in de bibliotheek) krijgt die de gevonden hoes ([_neemHoesOver]).
+  /// Zegt wat er staat.
+  Future<String> _scansVoor(String artist, String title, AlbumFacts facts, {Album? album, required String tag}) async {
+    final expected = facts.tracklist.length;
+    final mbid = (album == null ? null : library.pinnedMbid(album)) ?? facts.mbid;
+    final pinned = album == null ? null : library.pinnedRelease(album);
+    final roles = library.albumArtRoles(artist, title);
+    final ds = DiscogsService(settings);
+    Future<bool> af() =>
+        ds.hasReleaseArt(artist, title, expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles);
+    if (await af()) {
+      if (album != null) {
+        _neemHoesOver(album,
+            await ds.cachedReleaseArt(artist, title,
+                expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles));
+      }
+      return 'stond er al';
+    }
+    for (final gratis in [true, false]) {
+      try {
+        final art = await warmArt(artist, title,
+                expectedTracks: expected,
+                pinned: pinned,
+                pinnedMbid: mbid,
+                roles: roles,
+                settings: settings,
+                freeOnly: gratis,
+                trace: artTrace)
+            .timeout(gratis ? _artDeadline : const Duration(minutes: 3));
+        if (album != null) _neemHoesOver(album, art);
+        if (await af()) {
+          return '${art?.back != null ? 'achterkant ' : ''}${art?.disc != null ? 'cd ' : ''}'
+              '${gratis ? '(gratis bronnen)' : '(ook Discogs)'}';
+        }
+      } on TimeoutException {
+        _log.line('$tag: "$title" — scans ${gratis ? 'gratis' : 'Discogs'} te traag, ze lopen op de achtergrond door');
+      }
+    }
+    return 'niet af (geen achterkant of cd te vinden)';
+  }
+
+  static String _sinds(DateTime t0) => '${DateTime.now().difference(t0).inMilliseconds / 1000}s';
+
   /// De gevonden hoes aan de bibliotheek geven.
   ///
   /// **Waarom dit hier hoort en niet alleen op de albumpagina.** Een hoes met een aangewezen persing
