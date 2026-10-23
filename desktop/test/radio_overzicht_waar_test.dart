@@ -122,6 +122,10 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(elders, ['dev:gsm-1:2']);
       expect(r.openstaand, isNull, reason: 'niet ook hier');
+      // Wachten tot de schrijfrij leeg is: het wissen staat achter het schrijven van de landingen. Na één tik stond de
+      // notitie er nog niet eens (23-10-2026): zo bleef deze toets groen zonder het wissen, en onder de last van de
+      // volle reeks was hij soms rood.
+      await r.schrijfrijVoorToets;
       expect(File('${wortel.path}${Platform.pathSeparator}radio_sessie.json').existsSync(), isFalse,
           reason: 'en geen notitie die bij de volgende start hier opduikt');
     });

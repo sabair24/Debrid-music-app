@@ -467,8 +467,12 @@ class MbRecording {
   /// De vroegste datum van deze opname over alle persingen heen, of leeg.
   final String firstReleaseDate;
 
+  /// Het MusicBrainz-id van de eerste genoemde artiest ([artist]), of leeg. Zo hoeft "Staat ook op…" de artiest niet
+  /// opnieuw te raden voor zijn albums (`albumsVan`).
+  final String artistMbid;
+
   const MbRecording(this.mbid, this.title, this.artist,
-      {this.ms, this.onRelease, this.releases = const [], this.firstReleaseDate = ''});
+      {this.ms, this.onRelease, this.releases = const [], this.firstReleaseDate = '', this.artistMbid = ''});
 
   int get seconds => ms == null ? 0 : (ms! / 1000).round();
 
@@ -515,6 +519,9 @@ class MbRecording {
       onRelease: on.isEmpty ? null : on.first.title,
       releases: on,
       firstReleaseDate: (j['first-release-date'] ?? '').toString(),
+      artistMbid: credits.isEmpty || credits.first is! Map || (credits.first as Map)['artist'] is! Map
+          ? ''
+          : ((credits.first as Map)['artist']['id'] ?? '').toString(),
     );
   }
 }
@@ -1079,6 +1086,16 @@ class MusicBrainzService {
       if (byKind != 0) return byKind;
       return (b.firstDate ?? '').compareTo(a.firstDate ?? '');
     });
+    return out;
+  }
+
+  /// De albums van een artiest (releasegroepen van soort Album), hoogstens [dak], elk met de datum van zijn eerste
+  /// uitgave: één vraag per honderd, bewaard zoals elke vraag. Voor het jaar en de volgorde in "Staat ook op…"
+  /// (`platenVanOpnames` in metadata.dart): de zoekvraag op opnames geeft vooral heruitgaven terug.
+  Future<List<MbReleaseGroup>> albumsVan(String artistMbid, {int dak = 100}) async {
+    if (artistMbid.trim().isEmpty) return const [];
+    final out = <MbReleaseGroup>[];
+    await _bladerGroepen(artistMbid, '&type=album', max: 100, dak: dak, out: out, gezien: <String>{});
     return out;
   }
 

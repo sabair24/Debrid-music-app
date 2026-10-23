@@ -454,6 +454,11 @@ class RadioBesturing extends ChangeNotifier {
   @visibleForTesting
   void tikVoorToets() => _pas(_sessie);
 
+  /// Klaar als alles wat nu in de schrijfrij van de notitie staat (schrijven én wissen) op schijf is — voor de toetsen,
+  /// die anders naar de schijf kijken vóór de rij aan de beurt was.
+  @visibleForTesting
+  Future<void> get schrijfrijVoorToets => _schrijfBeurt;
+
   /// Waar de radio nu klinkt: de speler van dit toestel ([_standaard]), of een speaker die de pc stuurt
   /// (`speaker_radio.dart`). Gekozen bij [start]; één radio tegelijk.
   Radiospeler get speler => _speler;

@@ -8,7 +8,7 @@ import 'discogs.dart';
 import 'editions.dart';
 import 'json_body.dart';
 import 'musicbrainz.dart';
-import 'organize.dart' show normKey, zonderBeeld;
+import 'organize.dart' show artistKey, normKey, zonderBeeld;
 import 'settings.dart';
 
 /// One candidate release/track from a metadata provider — used by the manual
@@ -107,6 +107,106 @@ List<MetaResult> studioVoorop(List<MetaResult> r) => [
       for (final m in r)
         if (!m.studioalbum) m,
     ];
+
+/// Eén rij per plaat uit de opnames van een nummer ([found], van MusicBrainz), hoogstens [max]: eerst de studioalbums
+/// van [artiest] zelf, het oorspronkelijke vooraan; dan de rest in de volgorde van MusicBrainz.
+///
+/// One row per RECORD, not per pressing. "Porselein" sits on sixteen releases of which fifteen are compilations, and
+/// listing them all buries the one album somebody wanted under a greatest-hits pile.
+///
+/// **Waarom zo (controle van 23-10-2026, live tegen MusicBrainz).**
+/// - Eerst de studioalbums van ALLE opnames: MusicBrainz gaf bij Summer Of '69 eerst een rij live-opnames, en die
+///   vulden de twaalf plaatsen voor Reckless aan de beurt kwam.
+/// - Het oorspronkelijke album eerst, op het jaar van de plaat zelf ([albumDatum]: titel → eerste uitgave volgens
+///   MusicBrainz, uit [MusicBrainzService.albumsVan]). Bij Luka stond de heropname op Close-Up, Volume 2 (2010) boven
+///   Solitude Standing (1987), en de app stelde die ook voor. De datum van de opname helpt daar niet: de zoekvraag gaf
+///   alleen een geremasterde opname van Solitude Standing terug (eerste datum 2021), en bij Summer Of '69 alleen
+///   opnames van 2013 en later.
+/// - Van de artiest zelf: "A Piano Strings Tribute to Billy Joel" (van "Billy Joel Tribute Band") is een studioalbum,
+///   maar niet het zijne. "Ellie Goulding & Juice WRLD" is wel van haar.
+/// - Het jaar: dat van de plaat zelf, anders de vroegste persing met die naam en soort, anders de eerste datum van de
+///   opname. Anders stond er "Reckless 2014" en "52nd Street 1998", jaren van een heruitgave.
+/// - Dezelfde plaat één keer, ook met andere leestekens ("Of Zo…" en "Of zo...").
+List<MetaResult> platenVanOpnames(List<MbRecording> found,
+    {String artiest = '', int max = 12, Map<String, String> albumDatum = const {}}) {
+  String kaal(String s) => normKey(s).replaceAll(RegExp(r'[^a-z0-9]'), '');
+  final wie = artistKey(artiest);
+  final samen = RegExp(r' (&|and|feat\.?|featuring|ft\.?|with|x|vs\.?|/|\+) |, ', caseSensitive: false);
+  bool zelfde(String naam) {
+    final k = artistKey(naam);
+    if (k.isEmpty || k == wie || wie.startsWith('$k ')) return true;
+    // Langer dan de artiest: alleen als het een samenwerking is ("Ellie Goulding & Juice WRLD"), geen andere naam die
+    // zo begint ("Billy Joel Tribute Band").
+    return k.startsWith('$wie ') && samen.hasMatch(naam);
+  }
+
+  bool eigen(MbRecording rec, MbRecordingRelease rel) =>
+      wie.isEmpty || (zelfde(rec.artist) && (rel.artiest.isEmpty || zelfde(rel.artiest)));
+  final groep = {for (final e in albumDatum.entries) kaal(e.key): e.value};
+
+  // Officieel: een bootleg ("Hot Night In Charlotte") is geen studioalbum, ook als MusicBrainz hem Album noemt.
+  bool studio(MbRecording rec, MbRecordingRelease rel) =>
+      rel.isStudioAlbum && (rel.status.isEmpty || rel.status == 'Official') && eigen(rec, rel);
+  final vroegst = <String, String>{};
+  for (final rec in found) {
+    for (final rel in rec.releases) {
+      if (rel.date.isEmpty) continue;
+      final k = '${rel.primaryType}|${kaal(rel.title)}';
+      final d = vroegst[k];
+      if (d == null || rel.date.compareTo(d) < 0) vroegst[k] = rel.date;
+    }
+  }
+  String plaatDatum(MbRecording rec, MbRecordingRelease rel) {
+    final g = rel.primaryType == 'Album' ? groep[kaal(rel.title)] : null;
+    if (g != null && g.isNotEmpty) return g;
+    return vroegst['${rel.primaryType}|${kaal(rel.title)}'] ?? (rel.date.isNotEmpty ? rel.date : rec.firstReleaseDate);
+  }
+
+  String jaarVan(String d) => d.length >= 4 ? d.substring(0, 4) : '9999';
+  var plek = 0;
+  final studioParen = [
+    for (final rec in found)
+      for (final rel in rec.releases)
+        if (studio(rec, rel)) (rec: rec, rel: rel, plek: plek++),
+  ];
+  // Bij een gelijk jaar de volledige datum als beide die kennen (Lights, februari 2010, vóór de heruitgave Bright Lights
+  // van november), anders de volgorde van MusicBrainz ([plek]): sort is niet stabiel.
+  studioParen.sort((a, b) {
+    final da = plaatDatum(a.rec, a.rel), db = plaatDatum(b.rec, b.rel);
+    final p = jaarVan(da).compareTo(jaarVan(db));
+    if (p != 0) return p;
+    if (da.length >= 7 && db.length >= 7 && da != db) return da.compareTo(db);
+    return a.plek.compareTo(b.plek);
+  });
+  final paren = [
+    for (final p in studioParen) (rec: p.rec, rel: p.rel, studio: true),
+    for (final rec in found)
+      for (final rel in rec.releases)
+        if (!studio(rec, rel)) (rec: rec, rel: rel, studio: false),
+  ];
+  final out = <MetaResult>[];
+  final gehad = <String>{};
+  for (final (:rec, :rel, :studio) in paren) {
+    final k = kaal(rel.title);
+    if (!gehad.add(k.isNotEmpty ? k : rel.title.toLowerCase())) continue;
+    final d = plaatDatum(rec, rel);
+    out.add(MetaResult(
+      title: rel.title,
+      artist: rec.artist,
+      album: rel.title,
+      coverUrl: 'https://coverartarchive.org/release/${rel.mbid}/front-250',
+      coverFullUrl: 'https://coverartarchive.org/release/${rel.mbid}/front-1200',
+      mbid: rel.mbid,
+      detail: MetadataSearch._because(rec.title, rel.isCompilation ? 'verzamelaar' : null),
+      studioalbum: studio,
+      soort: soortVan(rel),
+      jaar: d.length >= 4 ? int.tryParse(d.substring(0, 4)) : null,
+    ));
+    // Enough to find the record without turning the dialog into a discography.
+    if (out.length >= max) break;
+  }
+  return out;
+}
 
 /// Wat voor plaat [r] is, in één woord voor "Staat ook op…": Studioalbum, Single, EP, Live, Verzamelaar, Soundtrack.
 String soortVan(MbRecordingRelease r) {
@@ -692,43 +792,24 @@ class MetadataSearch {
         for (final r in [...albums, ...gewoon])
           if (gezien.add(r.mbid) && (!precies || kaal(r.title) == wil)) r,
       ];
-      final out = <MetaResult>[];
-      // One row per RECORD, not per pressing. "Porselein" sits on sixteen releases of which fifteen
-      // are compilations, and listing them all buries the one album somebody wanted under a
-      // greatest-hits pile. Titles are already ranked studio-album-first by searchRecordings.
-      final byTitle = <String>{};
-      // Eerst de studioalbums van ALLE opnames, dan de rest. Per opname op volgorde was niet genoeg: MusicBrainz geeft
-      // bij Summer Of '69 eerst een rij live-opnames, en die vulden de twaalf plaatsen voor Reckless aan de beurt kwam
-      // (23-10-2026).
-      final paren = [
-        for (final rec in found)
-          for (final rel in rec.releases)
-            if (rel.isStudioAlbum) (rec: rec, rel: rel),
-        for (final rec in found)
-          for (final rel in rec.releases)
-            if (!rel.isStudioAlbum) (rec: rec, rel: rel),
-      ];
-      for (final (:rec, :rel) in paren) {
-        {
-          if (!byTitle.add(rel.title.toLowerCase())) continue;
-          out.add(MetaResult(
-            title: rel.title,
-            artist: rec.artist,
-            album: rel.title,
-            coverUrl: 'https://coverartarchive.org/release/${rel.mbid}/front-250',
-            coverFullUrl: 'https://coverartarchive.org/release/${rel.mbid}/front-1200',
-            mbid: rel.mbid,
-            detail: _because(rec.title, rel.isCompilation ? 'verzamelaar' : null),
-            // Officieel: een bootleg ("Hot Night In Charlotte") is geen studioalbum, ook als MusicBrainz hem Album noemt.
-            studioalbum: rel.isStudioAlbum && (rel.status.isEmpty || rel.status == 'Official'),
-            soort: soortVan(rel),
-            jaar: rel.date.length >= 4 ? int.tryParse(rel.date.substring(0, 4)) : null,
-          ));
-          // Enough to find the record without turning the dialog into a discography.
-          if (out.length >= max) return out;
-        }
+      // De albums van de artiest zelf, voor het jaar van elke plaat — zie [platenVanOpnames]. Zijn id staat al in de
+      // opnames: de artiest opnieuw raden kost een vraag per seconde (metadata_vlot_test).
+      final wie = artist.isNotEmpty ? artist : bekend;
+      final datums = <String, String>{};
+      final id = [
+        for (final r in found)
+          if (r.artistMbid.isNotEmpty && artistKey(r.artist) == artistKey(wie)) r.artistMbid,
+      ].firstOrNull;
+      if (id != null) {
+        try {
+          for (final g in await mb.albumsVan(id)) {
+            final d = g.firstDate ?? '';
+            final al = datums[g.title];
+            if (d.isNotEmpty && (al == null || d.compareTo(al) < 0)) datums[g.title] = d;
+          }
+        } catch (_) {/* dan zonder: de jaren van de persingen */}
       }
-      return out;
+      return platenVanOpnames(found, artiest: wie, max: max, albumDatum: datums);
     } catch (_) {
       return [];
     }

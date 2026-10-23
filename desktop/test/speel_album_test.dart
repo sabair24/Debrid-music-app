@@ -9,7 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/enrichment.dart'
     show albumIsDeSingle, deezerSingleUit, nummerOpAlbum, origineleUitgaveUit, plekUitDeezerNummer;
-import 'package:debridmusic/metadata.dart' show MetaResult, soortVan, studioVoorop;
+import 'package:debridmusic/metadata.dart' show MetaResult, platenVanOpnames, soortVan, studioVoorop;
 import 'package:debridmusic/musicbrainz.dart' show MbRecording, MbRecordingRelease, isEditie;
 import 'package:debridmusic/online.dart';
 
@@ -118,13 +118,17 @@ void main() {
 
   group('zonder album: de oorspronkelijke uitgave uit MusicBrainz (Saber, 23-10-2026: "Ja")', () {
     Map<String, dynamic> uitgave(String titel, String soort,
-            {List<String> ook = const [], String datum = '', String status = 'Official'}) =>
+            {List<String> ook = const [], String datum = '', String status = 'Official', String artiest = ''}) =>
         {
           'id': 'id-$titel-$soort-$datum',
           'title': titel,
           'status': status,
           'date': datum,
           'release-group': {'primary-type': soort, 'secondary-types': ook},
+          if (artiest.isNotEmpty)
+            'artist-credit': [
+              {'name': artiest}
+            ],
         };
     MbRecording opname(String titel, String artiest, int ms, List<Map<String, dynamic>> uitgaven, {String eerste = ''}) =>
         MbRecording.from({
@@ -250,7 +254,8 @@ void main() {
       expect(m, contains('track: widget.album.isSingle && !los,'), reason: 'ook op welke platen dit nummer staat');
       expect(m, contains('List<MetaResult> orden(List<MetaResult> r) => los ? studioVoorop(r) : r;'));
       final meta = _lees('lib/metadata.dart');
-      expect(meta, contains("studioalbum: rel.isStudioAlbum && (rel.status.isEmpty || rel.status == 'Official'),"));
+      expect(meta, contains('return platenVanOpnames(found, artiest: wie, max: max, albumDatum: datums);'),
+          reason: 'de volgorde en het jaar uit [platenVanOpnames], met de albums van de artiest');
       expect(meta, contains('mb.searchRecordings(song, artist: artist, max: 25, alleenAlbums: true),'));
     });
 
@@ -290,6 +295,62 @@ void main() {
       expect(m, contains('await _pick(_results.first);\n                          if (mounted) await _apply();'));
       expect(_lees('lib/metadata.dart'),
           contains("studioVoorop(await _musicbrainzByTrack('\$artiest - \$titel', bekendeArtiest: artiest, max: 40, precies: true));"));
+    });
+
+    // Zoals MusicBrainz het gaf bij de controle van 23-10-2026: de zoekvraag op opnames brengt vooral heruitgaven mee.
+    // Het jaar van de plaat zelf komt uit de albums van de artiest (`albumsVan`).
+    test('DE KERN van "Staat ook op…": het origineel bovenaan, met het jaar van de plaat zelf', () {
+      final luka = [
+        opname('Luka', 'Suzanne Vega', 0, [uitgave('Close-Up, Volume 2: People & Places', 'Album', datum: '2010')],
+            eerste: '2010'),
+        opname('Luka', 'Suzanne Vega', 0, [uitgave('Solitude Standing', 'Album')], eerste: '2021'),
+      ];
+      final r = platenVanOpnames(luka, artiest: 'Suzanne Vega', albumDatum: const {
+        'Solitude Standing': '1987-04-01',
+        'Close-Up, Volume 2: People & Places': '2010-10-12',
+      });
+      expect([for (final m in r) '${m.album} ${m.jaar}'], ['Solitude Standing 1987', 'Close-Up, Volume 2: People & Places 2010'],
+          reason: 'de heropname uit 2010 stond eerst, en de app stelde die ook voor');
+
+      final reckless = [
+        opname('Summer of ’69', 'Bryan Adams', 0, [
+          uitgave('Reckless (deluxe edition)', 'Album'),
+          uitgave('Reckless', 'Album', datum: '2014'),
+        ], eerste: '2014-11-07'),
+      ];
+      final b = studioVoorop(platenVanOpnames(reckless, artiest: 'Bryan Adams', albumDatum: const {'Reckless': '1984-11-05'}));
+      expect([for (final m in b) '${m.album} ${m.jaar}'], ['Reckless 1984', 'Reckless (deluxe edition) 2014'],
+          reason: 'niet "Reckless 2014", het jaar van een heruitgave');
+    });
+
+    test('"Staat ook op…": een tributeplaat is niet van de artiest, een samenwerking wel', () {
+      final myLife = [
+        opname('My Life', 'Billy Joel Tribute Band', 0, [uitgave('A Piano Strings Tribute to Billy Joel', 'Album', datum: '2004')]),
+        opname('My Life', 'Billy Joel', 0, [uitgave('52nd Street', 'Album', datum: '1998', artiest: 'Billy Joel')]),
+      ];
+      final r = platenVanOpnames(myLife, artiest: 'Billy Joel', albumDatum: const {'52nd Street': '1978-10-13'});
+      expect([for (final m in r) '${m.album} ${m.studioalbum}'],
+          ['52nd Street true', 'A Piano Strings Tribute to Billy Joel false']);
+      final hateMe = [
+        opname('Hate Me', 'Ellie Goulding', 0,
+            [uitgave('Brightest Blue', 'Album', datum: '2020-07-17', artiest: 'Ellie Goulding & Juice WRLD')]),
+      ];
+      expect(platenVanOpnames(hateMe, artiest: 'Ellie Goulding').single.studioalbum, isTrue);
+      final bootleg = [opname('Summer of ’69', 'Bryan Adams', 0, [uitgave('Hot Night In Charlotte', 'Album', status: 'Bootleg')])];
+      expect(platenVanOpnames(bootleg, artiest: 'Bryan Adams').single.studioalbum, isFalse, reason: 'een bootleg is geen studioalbum');
+    });
+
+    test('"Staat ook op…": dezelfde plaat één keer, en bij hetzelfde jaar de vroegste datum', () {
+      final domino = [
+        opname('Domino', 'Clouseau', 0, [uitgave('Of Zo…', 'Album'), uitgave('Of zo...', 'Album', datum: '1990')]),
+      ];
+      expect([for (final m in platenVanOpnames(domino, artiest: 'Clouseau')) '${m.album} ${m.jaar}'], ['Of Zo… 1990']);
+      final lights = [
+        opname('Lights', 'Ellie Goulding', 0, [uitgave('Bright Lights', 'Album'), uitgave('Lights', 'Album')]),
+      ];
+      final r = platenVanOpnames(lights,
+          artiest: 'Ellie Goulding', albumDatum: const {'Lights': '2010-02-26', 'Bright Lights': '2010-11-29'});
+      expect([for (final m in r) m.album], ['Lights', 'Bright Lights'], reason: 'Bright Lights is de heruitgave');
     });
 
     test('een remixplaat alleen voor een remix', () {

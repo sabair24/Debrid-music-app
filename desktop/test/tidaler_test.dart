@@ -356,9 +356,19 @@ void main() {
     });
 
     test('het hulpje gooit niets weg en zegt "even niet" of "niet ingelogd"; het scherm zegt het in gewone taal', () {
-      expect(kTidalZoekHulp, contains('os.remove = lambda *a, **k: None\ntry:\n    ok = t.login_token()\nfinally:\n    os.remove = _wis'),
+      expect(kTidalZoekHulp, contains('_wis = os.remove\nos.remove = lambda *a, **k: None\n'),
           reason: 'tijdens het aanmelden mag tidaler de login niet wissen');
-      expect(kTidalZoekHulp, contains('    if t.token_from_storage:\n        uit({"fout": "tijdelijk"})\n        sys.exit(3)'));
+      expect(kTidalZoekHulp, contains('try:\n    ok = t.login_token()\nfinally:\n    os.remove = _wis\n'));
+      // "Even niet" alleen bij een netwerkfout of een storing bij TIDAL, en alleen met een echte login. Na 3.9.582 zei
+      // het scherm "probeer het zo opnieuw" bij het lege bestand dat tidaler zelf neerzet (23-10-2026). Live
+      // nagespeeld met een eigen configmap: leeg bestand 2, neppe login met net 2, zonder net 3.
+      expect(
+          kTidalZoekHulp,
+          contains('    if t.token_from_storage and getattr(t.data, "refresh_token", None) and '
+              'any(_even_niet(e) for e in _fouten):\n        uit({"fout": "tijdelijk"})\n        sys.exit(3)'));
+      expect(kTidalZoekHulp,
+          contains('    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):\n        return True'));
+      expect(kTidalZoekHulp, contains('t.session.load_oauth_session = _vang\n'), reason: 'de fout zelf opvangen');
       Tidaler.laatsteHulpFout = 'tijdelijk';
       expect(tidalHulpFoutZin(), contains('probeer het zo opnieuw'));
       Tidaler.laatsteHulpFout = 'niet ingelogd';
