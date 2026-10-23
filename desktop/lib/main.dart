@@ -3182,6 +3182,7 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    _meetNaarSectie = _gaNaar;
     _gsmKop.addListener(_volgGsmKop);
     if (isTv) HardwareKeyboard.instance.addHandler(_tvVangnet);
     // Stilstand: zie [kTvStilstand]. Elke tien seconden kijken is ruim genoeg voor twee minuten.
@@ -3378,6 +3379,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
+    if (_meetNaarSectie == _gaNaar) _meetNaarSectie = null;
     _gsmKop.dispose();
     _titelInBalk.dispose();
     _zoekPauze?.cancel();
@@ -4475,7 +4477,8 @@ class _HomeShellState extends State<HomeShell> {
           // de richting van de pil"): gaat de pil naar rechts, dan komt de nieuwe pagina van rechts
           // binnen en schuift de oude naar links weg. Kort, zodat je voelt waar je heen gaat.
           AnimatedSwitcher(
-              duration: Duration(milliseconds: isTv ? 160 : 250),
+              // Een meetronde met `overgang` (meetronde.dart): meteen, om de prijs van de overgang te zien.
+              duration: zonderVoorMeting('overgang') ? Duration.zero : Duration(milliseconds: isTv ? 160 : 250),
               switchInCurve: Curves.easeOutCubic,
               switchOutCurve: Curves.easeInCubic,
               transitionBuilder: (kind, animatie) => FadeTransition(
@@ -17314,6 +17317,9 @@ class _FotoTijdensSchuivenState extends State<FotoTijdensSchuiven> {
       SnapshotWidget(controller: _foto, mode: SnapshotMode.permissive, autoresize: true, child: widget.child);
 }
 
+/// Naar een hoofdpagina, voor de meetronde (scenario "paginas"): gezet door de schil ([_HomeShellState._gaNaar]).
+void Function(int id)? _meetNaarSectie;
+
 /// De albumpagina die de meetronde opent (scenario "bronnen"): onder deze naam weet ze wat ze weer moet sluiten.
 const _meetAlbumRoute = 'meet-album';
 
@@ -17373,6 +17379,13 @@ MeetHaken _meetHaken(PlayerStore player, LibraryStore library) {
       return true;
     },
     sluitAlbum: () => appNavigator.currentState?.popUntil((r) => r.settings.name != _meetAlbumRoute),
+    // Scenario "paginas": de hoofdpagina's van dit toestel (op een tv zonder downloaden en Kwaliteit).
+    secties: () => [for (final s in isTv ? NavSections.voorTv : NavSections.items) (s.$1, s.$2)],
+    naarSectie: (id) {
+      // Nu speelt of een albumpagina erboven: eerst dicht, anders schuift er niets dat je ziet.
+      appNavigator.currentState?.popUntil((r) => r.isFirst);
+      _meetNaarSectie?.call(id);
+    },
     klaar: () async {
       final v = volumeVoor;
       if (v == null) return;

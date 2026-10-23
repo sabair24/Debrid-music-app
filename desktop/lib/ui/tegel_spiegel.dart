@@ -26,6 +26,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import '../artwork.dart' show decodeWidth;
+import '../meetronde.dart' show zonderVoorMeting;
 import 'maten.dart';
 
 /// Hoe hoog de spiegeling is, als deel van de hoes: zoals onder de grote hoes op Nu speelt.
@@ -171,6 +172,8 @@ class _TegelSpiegelState extends State<TegelSpiegel> {
   Widget build(BuildContext context) {
     final b = _info?.image;
     if (b == null) return const SizedBox.shrink();
+    // Een meetronde zonder de spiegeling onder de tegels (meetronde.dart).
+    if (!widget.gebakken && zonderVoorMeting('tegelspiegel')) return const SizedBox.shrink();
     if (widget.gebakken) {
       final dpr = MediaQuery.devicePixelRatioOf(context);
       final k = _bak;
