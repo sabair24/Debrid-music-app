@@ -118,6 +118,37 @@ void main() {
     });
   });
 
+  group('de lijst in het midden (scenario "paginas")', () {
+    testWidgets('de verticale lijst die je ziet, niet de rij ernaast; zonder lijst niets', (t) async {
+      t.view.physicalSize = const Size(400, 800);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.reset);
+      final verticaal = ScrollController();
+      addTearDown(verticaal.dispose);
+      await t.pumpWidget(MaterialApp(
+        home: ListView(controller: verticaal, children: [
+          for (var i = 0; i < 6; i++) const SizedBox(height: 300),
+          // Midden in beeld een horizontale rij (zoals op Start): die telt niet.
+          SizedBox(
+            height: 200,
+            child: ListView(scrollDirection: Axis.horizontal, children: [for (var i = 0; i < 9; i++) const SizedBox(width: 300)]),
+          ),
+          for (var i = 0; i < 6; i++) const SizedBox(height: 300),
+        ]),
+      ));
+      verticaal.jumpTo(1700);
+      await t.pump();
+      expect(lijstInHetMidden(), same(verticaal.position));
+      await t.pumpWidget(const MaterialApp(home: SizedBox.expand()));
+      expect(lijstInHetMidden(), isNull);
+    });
+
+    test('alleen bij "alles aan", en standaard niet', () {
+      expect(kMeetScenarios.keys, contains('paginas'));
+      expect(kMeetStandaard, isNot(contains('paginas')), reason: 'duurt ruim een minuut: alleen als je erom vraagt');
+    });
+  });
+
   group('de kantelhoes', () {
     testWidgets('de grootste hoes voor de muis; zonder kantelen geen muis en geen draai', (t) async {
       await t.pumpWidget(const MaterialApp(

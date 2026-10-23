@@ -75,4 +75,35 @@ void main() {
       expect(first.platform, platformName());
     });
   });
+
+  // S26, 23-10-2026: na een paar keer wegvegen stond device_id.json leeg ("Unexpected end of input"), en kreeg de gsm
+  // een nieuw id — voor de pc een ander toestel. Het bestand werd bij elke start leeggemaakt en opnieuw geschreven.
+  group('device_id.json in één keer', () {
+    late Directory map;
+    setUp(() => map = Directory.systemTemp.createTempSync('dm_device_id_'));
+    tearDown(() => map.deleteSync(recursive: true));
+
+    test('nieuw: in één keer erover, zonder een bestand ernaast achter te laten', () async {
+      final f = File('${map.path}/device_id.json')..writeAsStringSync('{"id":"oud"}');
+      await schrijfInEenKeer(f, '{"id":"nieuw"}', alsAnders: '{"id":"oud"}');
+      expect(f.readAsStringSync(), '{"id":"nieuw"}');
+      expect(File('${f.path}.nieuw').existsSync(), isFalse);
+    });
+
+    test('ongewijzigd: niet opnieuw geschreven', () async {
+      final f = File('${map.path}/device_id.json')..writeAsStringSync('{"id":"zelfde"}');
+      final voor = f.lastModifiedSync();
+      // Zou hij toch schrijven, dan liet een map zonder schrijfrecht het zien; hier: geen bestand ernaast en dezelfde tijd.
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await schrijfInEenKeer(f, '{"id":"zelfde"}', alsAnders: '{"id":"zelfde"}');
+      expect(f.lastModifiedSync(), voor);
+      expect(File('${f.path}.nieuw').existsSync(), isFalse);
+    });
+
+    test('de bron schrijft niet meer rechtstreeks', () {
+      final bron = File('lib/cloud/device_identity.dart').readAsStringSync();
+      expect(bron, isNot(contains('await file.writeAsString(')));
+      expect(bron, contains('await schrijfInEenKeer(file, jsonEncode(identity.toJson()), alsAnders: stond);'));
+    });
+  });
 }

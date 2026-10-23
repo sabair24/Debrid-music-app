@@ -34,9 +34,11 @@ Future<DeviceIdentity> thisDevice() async {
 
   final file = appFile('device_id.json');
   String? id;
+  String? stond;
   try {
     if (await file.exists()) {
-      final j = jsonDecode(await file.readAsString());
+      stond = await file.readAsString();
+      final j = jsonDecode(stond);
       if (j is Map && (j['id'] ?? '').toString().isNotEmpty) id = '${j['id']}';
     }
   } catch (e) {
@@ -47,7 +49,10 @@ Future<DeviceIdentity> thisDevice() async {
   final identity = DeviceIdentity(id: id, name: deviceName(), platform: platformName());
 
   try {
-    await file.writeAsString(jsonEncode(identity.toJson()));
+    // Alleen als er iets veranderde, en in één keer: eerst naast het oude, dan erover. Dit bestand werd bij ELKE start
+    // gewoon overschreven (leegmaken, dan schrijven); een app die net dan gestopt werd, liet een leeg bestand achter, en
+    // de volgende start maakte een nieuw id — voor de pc een ander toestel (S26, 23-10-2026: 835f… werd fd4d…).
+    await schrijfInEenKeer(file, jsonEncode(identity.toJson()), alsAnders: stond);
   } catch (e) {
     // A read-only disk means a new id next start — annoying (a duplicate row in the device list)
     // but not fatal, so this is not worth refusing to start over.
@@ -55,6 +60,16 @@ Future<DeviceIdentity> thisDevice() async {
   }
   _cached = identity;
   return identity;
+}
+
+/// Schrijf [inhoud] naar [file] zonder dat er ooit een half of leeg bestand staat: eerst naar een bestand ernaast, dan
+/// erover hernoemen. Staat er al precies [alsAnders], dan niets.
+@visibleForTesting
+Future<void> schrijfInEenKeer(File file, String inhoud, {String? alsAnders}) async {
+  if (alsAnders == inhoud) return;
+  final naast = File('${file.path}.nieuw');
+  await naast.writeAsString(inhoud, flush: true);
+  await naast.rename(file.path);
 }
 
 /// The same channel `tv.dart` uses. A MethodChannel is only a name, so a second handle to it costs

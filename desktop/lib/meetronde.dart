@@ -18,6 +18,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart' show RenderViewportBase;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
@@ -40,6 +41,8 @@ const kMeetEffecten = {
   'kantel': 'de hoes kantelt niet',
   'foto': 'Nu speelt ook bij het openen als één foto',
   'levend': 'Nu speelt ook bij het sluiten levend (zoals vóór 3.9.590)',
+  'tegelspiegel': 'zonder de spiegeling onder de albumtegels',
+  'overgang': 'een andere hoofdpagina meteen, zonder overvloeien en schuiven',
 };
 
 /// De scenario's van een meetronde.
@@ -50,6 +53,7 @@ const kMeetScenarios = {
   'stil': 'Nu speelt drie seconden open laten staan',
   'bronnen': 'een albumpagina met "Bronnen voor album" open, twintig seconden (met `artiest` en `album`; alleen '
       'bij "alles aan")',
+  'paginas': 'elke hoofdpagina openen, en dan de lijst in het midden op en neer schuiven (alleen bij "alles aan")',
 };
 
 /// Wat een ronde zonder opgegeven scenario's doet: alles behalve `bronnen`, dat een album nodig heeft.
@@ -123,6 +127,8 @@ class MeetHaken {
     this.hoesVak,
     this.openAlbum,
     this.sluitAlbum,
+    this.secties,
+    this.naarSectie,
     this.klaar,
   });
 
@@ -143,6 +149,10 @@ class MeetHaken {
 
   /// Waar de grote hoes in Nu speelt nu staat (globaal), voor het scenario `kantel`.
   final Rect? Function()? hoesVak;
+
+  /// De hoofdpagina's (id en naam) en hoe je ernaartoe gaat, voor het scenario `paginas`.
+  final List<(int, String)> Function()? secties;
+  final void Function(int id)? naarSectie;
 
   /// Een albumpagina openen met de bronnen open (scenario `bronnen`). False als het album niet te vinden was.
   final Future<bool> Function(String artiest, String album)? openAlbum;
@@ -197,8 +207,15 @@ Future<void> voerMeetrondeUit(Map<String, dynamic> op, MeetHaken h, {double? hz}
       await Future<void>.delayed(const Duration(milliseconds: 600));
       final regels = <String>[];
       for (final s in scenarios) {
-        // De bronnen gaan niet over de effecten van Nu speelt: één keer, bij "alles aan".
-        if (s == 'bronnen' && zonder.isNotEmpty) continue;
+        // De bronnen en de pagina's: standaard één keer, bij "alles aan"; met opgegeven varianten ook per variant (Saber,
+        // 23-10-2026: "navigeren tussen vensters is soms stroef ook, vooral tussen start, albums, tracks").
+        if ((s == 'bronnen' || s == 'paginas') && zonder.isNotEmpty && op['varianten'] == null) continue;
+        if (s == 'paginas') {
+          for (final (naam, beelden) in await _paginas(h)) {
+            regels.add(Beeldcijfers.van(beelden, hz: scherm).regel(naam, zonder));
+          }
+          continue;
+        }
         final beelden = await _scenario(s, h, artiest: artiest, album: album);
         regels.add(Beeldcijfers.van(beelden, hz: scherm).regel(s, zonder));
       }
@@ -306,6 +323,51 @@ Future<List<ui.FrameTiming>> _scenario(String s, MeetHaken h, {String artiest = 
       return beelden;
   }
   return const [];
+}
+
+/// Elke hoofdpagina: openen (anderhalve seconde), en dan de lijst in het midden van het scherm vier schermen naar
+/// beneden en terug schuiven, zoals een vinger of een muiswiel dat doet. Per pagina twee regels.
+Future<List<(String, List<ui.FrameTiming>)>> _paginas(MeetHaken h) async {
+  final naar = h.naarSectie, lijst = h.secties?.call() ?? const [];
+  if (naar == null || lijst.isEmpty) return const [];
+  final uit = <(String, List<ui.FrameTiming>)>[];
+  for (final (id, naam) in lijst) {
+    uit.add(('$naam openen', await _beeldenVan(() async {
+      naar(id);
+      await _wacht(1500);
+    })));
+    final pos = lijstInHetMidden();
+    if (pos == null) continue;
+    uit.add(('$naam schuiven', await _beeldenVan(() async {
+      final ver = math.min(pos.pixels + pos.viewportDimension * 4, pos.maxScrollExtent);
+      await pos.animateTo(ver, duration: const Duration(milliseconds: 1500), curve: Curves.easeInOut);
+      await pos.animateTo(0, duration: const Duration(milliseconds: 1500), curve: Curves.easeInOut);
+    })));
+  }
+  naar(lijst.first.$1);
+  return uit;
+}
+
+/// De verticale lijst onder het midden van het scherm (of iets erboven of eronder), of null. Een treftoets in plaats
+/// van zoeken in de boom: zo is het de lijst die je ziet, niet een die verborgen op een andere pagina staat.
+@visibleForTesting
+ScrollPosition? lijstInHetMidden() {
+  final views = WidgetsBinding.instance.platformDispatcher.views;
+  if (views.isEmpty) return null;
+  final view = views.first;
+  final maat = view.physicalSize / view.devicePixelRatio;
+  for (final y in const [.5, .35, .65]) {
+    final r = HitTestResult();
+    WidgetsBinding.instance.hitTestInView(r, Offset(maat.width / 2, maat.height * y), view.viewId);
+    for (final e in r.path) {
+      final t = e.target;
+      if (t is RenderViewportBase && t.axis == Axis.vertical) {
+        final o = t.offset;
+        if (o is ScrollPosition && o.maxScrollExtent > 0) return o;
+      }
+    }
+  }
+  return null;
 }
 
 /// Een muis die vier seconden in rondjes over [vak] beweegt, [kMeetMuisHz] keer per seconde — zoals een hand.

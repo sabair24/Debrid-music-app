@@ -61,6 +61,34 @@ void main() {
     expect(_hoekY(t), isNull, reason: 'weg van de hoes: terug in rust');
   });
 
+  // Saber, 23-10-2026: "de cover tilt op pc is trouwens ook niet vloeiend". De pc tekende het in 1,4 ms per beeld; het
+  // zat in de beweging: elke muismelding startte de animatie opnieuw, en een muis meldt zich vóór bijna elk beeld.
+  testWidgets('met de muis: elk beeld een gelijk stukje mee, ook als de muis zich vóór elk beeld meldt', (t) async {
+    await t.pumpWidget(_doos(const KantelHoes(child: _hoes)));
+    final muis = await t.createGesture(kind: PointerDeviceKind.mouse);
+    await muis.addPointer(location: Offset.zero);
+    addTearDown(muis.removePointer);
+    final vak = t.getRect(find.byType(KantelHoes));
+    final hoeken = <double>[];
+    // Van links naar rechts over de hoes, drie meldingen per beeld: een muis van 400 Hz op een scherm van 144 Hz.
+    for (var i = 0; i <= 60; i++) {
+      for (var j = 0; j < 3; j++) {
+        await muis.moveTo(Offset(vak.left + 2 + (vak.width - 4) * (i * 3 + j) / 183, vak.center.dy));
+      }
+      await t.pump(const Duration(microseconds: 6944));
+      hoeken.add(_hoekY(t) ?? 0);
+    }
+    final stappen = [for (var i = 15; i < hoeken.length; i++) hoeken[i] - hoeken[i - 1]];
+    expect(stappen.every((s) => s > 0), isTrue, reason: 'elk beeld een stukje verder, nooit stil of terug: $stappen');
+    final laatste = stappen.sublist(stappen.length - 30);
+    expect(laatste.reduce(math.max) / laatste.reduce(math.min), lessThan(1.5),
+        reason: 'een gelijkmatige beweging, geen schokken: $laatste');
+    await muis.moveTo(const Offset(5, 5));
+    await t.pump();
+    await t.pump(kKantelVolg);
+    expect(_hoekY(t), isNull, reason: 'en weer in rust');
+  });
+
   testWidgets('op een tv: schuin met de selectie, recht zonder', (t) async {
     await t.pumpWidget(_doos(const KantelHoes(bron: KantelBron.selectie, aan: true, child: _hoes)));
     await t.pump(kKantelVolg);

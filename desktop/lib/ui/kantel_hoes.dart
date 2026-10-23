@@ -18,6 +18,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:sensors_plus/sensors_plus.dart';
 
 import '../meetronde.dart' show zonderVoorMeting;
@@ -26,8 +27,19 @@ import 'tegel_spiegel.dart' show TegelSpiegel;
 /// Hoe ver een hoes hooguit kantelt, in radialen: zes graden.
 const double kKantelHoek = 6 * math.pi / 180;
 
-/// Hoe snel hij een nieuwe stand volgt.
+/// Hoe snel hij een nieuwe stand volgt: na deze tijd is hij er (op een honderdste na).
 const Duration kKantelVolg = Duration(milliseconds: 160);
+
+/// De muis volgen ([KantelBron.muis]): bij elk beeld een vast deel van de rest, met deze tijdconstante — een vijfde van
+/// [kKantelVolg], dus na [kKantelVolg] is er minder dan een procent over.
+///
+/// **Waarom geen animatie per muisbeweging meer (Saber, 23-10-2026: "de cover tilt op pc is trouwens ook niet
+/// vloeiend").** Elke beweging startte een animatie van [kKantelVolg] opnieuw vanaf nul. Een muis meldt zich 125 tot
+/// 1000 keer per seconde, dus vóór bijna elk beeld: dan stond de animatie bij elk beeld weer op nul en kroop de hoes
+/// nauwelijks mee zolang je bewoog — om bij te springen zodra je stilhield. De pc tekende het in 1,4 ms per beeld
+/// (meetronde, 23-10-2026); het haperen zat in de beweging, niet in het tekenen. Nu volgt hij per beeld, op de tijd die
+/// verstreek, hoe vaak de muis zich ook meldt.
+double get kKantelMuisTauUs => kKantelVolg.inMicroseconds / 5;
 
 /// Hoe lang er minstens tussen twee standen van het toestel zit: 33 ms, hooguit 30 per seconde.
 const Duration kToestelStap = Duration(milliseconds: 33);
@@ -105,8 +117,37 @@ class KantelHoes extends StatefulWidget {
   State<KantelHoes> createState() => _KantelHoesState();
 }
 
-class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+class _KantelHoesState extends State<KantelHoes> with TickerProviderStateMixin, WidgetsBindingObserver {
   late final AnimationController _c = AnimationController(vsync: this, duration: kKantelVolg);
+
+  /// De stand met de muis ([kKantelMuisTauUs]): waar hij nu staat, waar hij heen wil, en de klok die hem daarheen
+  /// brengt.
+  final _muis = ValueNotifier<Offset>(Offset.zero);
+  Offset _muisDoel = Offset.zero;
+  late final Ticker _volger = createTicker(_volg);
+  Duration? _vorigBeeld;
+
+  void _volg(Duration nu) {
+    final vorig = _vorigBeeld;
+    _vorigBeeld = nu;
+    if (vorig == null) return;
+    final rest = math.exp(-(nu - vorig).inMicroseconds / kKantelMuisTauUs);
+    var stand = _muisDoel + (_muis.value - _muisDoel) * rest;
+    if ((stand - _muisDoel).distance < .01) {
+      stand = _muisDoel;
+      _volger.stop();
+      _vorigBeeld = null;
+    }
+    _muis.value = stand;
+  }
+
+  void _naarMuis(Offset doel) {
+    if (!_mag(context)) doel = Offset.zero;
+    _muisDoel = doel;
+    if (_muis.value == doel || _volger.isActive) return;
+    _vorigBeeld = null;
+    _volger.start();
+  }
   Offset _van = Offset.zero, _naar = Offset.zero;
   StreamSubscription<Offset>? _melder;
 
@@ -152,6 +193,8 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
     _melder?.cancel();
     _wachtToestel?.cancel();
     _c.dispose();
+    _volger.dispose();
+    _muis.dispose();
     super.dispose();
   }
 
@@ -231,7 +274,7 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
   void _opMuis(PointerEvent e, Size maat) {
     if (maat.isEmpty) return;
     final p = e.localPosition;
-    _naarStand(Offset(((p.dx / maat.width) * 2 - 1).clamp(-1.0, 1.0), ((p.dy / maat.height) * 2 - 1).clamp(-1.0, 1.0)));
+    _naarMuis(Offset(((p.dx / maat.width) * 2 - 1).clamp(-1.0, 1.0), ((p.dy / maat.height) * 2 - 1).clamp(-1.0, 1.0)));
   }
 
   @override
@@ -239,11 +282,12 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
     // Een meetronde zonder kantelen (zie `meetronde.dart`): de hoes zoals hij is.
     if (zonderVoorMeting('kantel')) return widget.child;
     final kind = RepaintBoundary(child: widget.child);
+    final muis = widget.bron == KantelBron.muis;
     final getekend = AnimatedBuilder(
-      animation: _c,
+      animation: muis ? _muis : _c,
       child: kind,
       builder: (context, kind) {
-        final o = _stand;
+        final o = muis ? _muis.value : _stand;
         // In rust een rechte transform en geen glans — maar altijd DEZELFDE vorm: wisselde die tussen
         // "kaal" en "Transform met Stack", dan werd de hoes eronder (met zijn draai, zijn Hero en zijn
         // beeld) bij elke beweging van de gsm weggegooid en opnieuw gebouwd (18-10-2026).
@@ -271,7 +315,7 @@ class _KantelHoesState extends State<KantelHoes> with SingleTickerProviderStateM
       final maat = Size(c.maxWidth, c.maxHeight);
       return MouseRegion(
         onHover: (e) => _opMuis(e, context.size ?? maat),
-        onExit: (_) => _naarStand(Offset.zero),
+        onExit: (_) => _naarMuis(Offset.zero),
         child: getekend,
       );
     });
