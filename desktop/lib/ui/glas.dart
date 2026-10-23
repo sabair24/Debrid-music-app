@@ -41,6 +41,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
 import '../artwork.dart' show HoesVlek;
+import '../meetronde.dart' show zonderVoorMeting;
 import '../paths.dart' show appFile;
 import '../tv.dart';
 import 'kantel_hoes.dart' show toestelZwaartekracht;
@@ -455,6 +456,10 @@ class GlasKwaliteit {
     bewaak();
   }
 
+  /// Staat de bewaker even stil? Tijdens een meetronde (`meetronde.dart`): die zet het glas zelf op een stand, en de
+  /// bewaker mag dat niet midden in een meting terugdraaien.
+  static bool meetPauze = false;
+
   /// Leest de tekentijd van elk beeld. Publiek voor de toets.
   static void bewaak() {
     if (_bewaakt) return;
@@ -467,6 +472,11 @@ class GlasKwaliteit {
   /// [bewaak] (in de app de klok, in een toets opgegeven — zonder telt alles mee).
   @visibleForTesting
   static void opBeelden(List<ui.FrameTiming> beelden, {Duration? verstreken}) {
+    if (meetPauze) {
+      _tijden.clear();
+      _vorigKlaar = null;
+      return;
+    }
     final sinds = verstreken ?? _sinds?.elapsed;
     final doel = _bewaakte;
     final niet = _nietTot;
@@ -774,7 +784,7 @@ class HoesVlekkenLaag extends StatelessWidget {
   final double sterkte;
 
   @override
-  Widget build(BuildContext context) => vlekken.isEmpty
+  Widget build(BuildContext context) => vlekken.isEmpty || zonderVoorMeting('achter')
       ? const SizedBox.shrink()
       : IgnorePointer(
           child: RepaintBoundary(

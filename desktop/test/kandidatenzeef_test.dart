@@ -69,10 +69,30 @@ void main() {
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(main.contains('Future<List<SoulseekFile>> zeef(List<SoulseekFile> files) => zeefKandidaten(files,'),
         isTrue, reason: '"Ontbrekende downloaden" zeeft buiten de UI-draad');
-    expect(main.contains('    return _slskPerTitel.putIfAbsent(\n'), isTrue,
-        reason: 'de telling naast elke rij zeeft niet bij elke opbouw opnieuw');
-    expect(main.contains('    if (!identical(_slskPerTitelVan, _albumSlsk)) {'), isTrue,
-        reason: 'een nieuw zoekresultaat begint het geheugen opnieuw');
+    // Sinds 23-10-2026 rekent de telling naast elke rij helemaal niet meer in `build` (Mac: beelden van 6,2 s).
+    final rij = main.substring(main.indexOf('  List<SoulseekFile> _slskForTitle(CatalogTrack t) {'));
+    expect(rij.substring(0, rij.indexOf('\n  }\n')), isNot(contains('zeefKandidatenNu')),
+        reason: 'de telling naast elke rij zeeft niet meer op de UI-draad');
+    expect(main, contains('    return _slskPerTitel[\'\${t.title}|\${t.durationSec}\'] ?? const [];'));
+    expect(main, contains('            : await zeefPerTitel(lijst, [for (final t in sporen)'),
+        reason: 'alle titels samen, buiten de UI-draad');
+    expect(main, contains('  bool get _zeefKlaar => identical(_slskPerTitelVan, _albumSlsk) && identical(_slskPerTitelSporen, _tracks);'),
+        reason: 'een nieuw zoekresultaat (of een andere tracklijst) laat opnieuw zeven');
+    expect(main, contains('      while (mounted && !_zeefKlaar) {'),
+        reason: 'kwam er intussen een nieuwe tussenstand, dan nog eens met de nieuwste');
+  });
+
+  test('per titel in één keer: dezelfde bestanden als de zeef per nummer, als plekken in de lijst', () async {
+    final lijst = _albumbreed(6);
+    final titels = [for (final t in _titels) (titel: t, seconden: 240)];
+    final plekken = await zeefPerTitel(lijst, titels, artiest: 'Oasis', album: '(What\'s the Story) Morning Glory?');
+    expect(plekken, hasLength(_titels.length));
+    for (var i = 0; i < _titels.length; i++) {
+      final los = zeefKandidatenNu(lijst,
+          titel: _titels[i], seconden: 240, artiest: 'Oasis', album: '(What\'s the Story) Morning Glory?');
+      expect([for (final p in plekken[i]) lijst[p]], los, reason: _titels[i]);
+      expect(los, isNotEmpty, reason: 'anders bewijst dit niets: ${_titels[i]}');
+    }
   });
 
   group('een gast in de titel die de bestanden niet noemen', () {

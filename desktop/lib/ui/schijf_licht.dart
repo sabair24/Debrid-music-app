@@ -21,6 +21,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../meetronde.dart' show zonderVoorMeting;
 import 'getekende_schijf.dart';
 import 'kleuren.dart' show Thema;
 
@@ -137,7 +138,9 @@ class SchijfLichtLaag extends StatelessWidget {
   final double etiket;
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
+  Widget build(BuildContext context) => zonderVoorMeting('licht')
+      ? const SizedBox.shrink()
+      : ValueListenableBuilder<bool>(
       valueListenable: SchijfLicht.geladen, builder: (context, _, __) => _bouw(context));
 
   Widget _bouw(BuildContext context) {
@@ -170,7 +173,9 @@ class SchijfGrondschaduw extends StatelessWidget {
   final double maat;
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
+  Widget build(BuildContext context) => zonderVoorMeting('licht')
+      ? const SizedBox.shrink()
+      : ValueListenableBuilder<bool>(
       valueListenable: SchijfLicht.geladen, builder: (context, _, __) => _bouw(context));
 
   Widget _bouw(BuildContext context) {
@@ -211,7 +216,7 @@ class MouwSchaduw extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (rand >= maat) return SizedBox.square(dimension: maat);
+    if (rand >= maat || zonderVoorMeting('licht')) return SizedBox.square(dimension: maat);
     final sterk = Thema.licht ? .30 : .46;
     return IgnorePointer(
       child: ClipOval(

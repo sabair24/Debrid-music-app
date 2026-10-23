@@ -101,6 +101,34 @@ List<SoulseekFile> zonderGast(List<SoulseekFile> files,
   ];
 }
 
+/// Voor elke titel van een plaat welke bestanden uit [files] het zijn — alle titels in één isolate, met één kopie van
+/// de lijst. Per titel de plekken in [files], in de volgorde van [zeefKandidatenNu].
+///
+/// **Waarom (Saber, 23-10-2026: "als ik op de download pagina kom van de album hapert hij … ik wil niet inboeten in
+/// het aantal sources").** De albumpagina zeefde voor het getal naast elke rij de hele albumbrede lijst, per rij, in
+/// `build` en dus op de UI-draad. Elke nieuwe lijst wiste het geheugen, en dan rekenden alle zichtbare rijen in
+/// hetzelfde beeld: op de Mac beelden van 1,2, 3,6 en 6,2 seconden (warmte.log, 23-10-2026). Nu rekent dit
+/// erbuiten, en gaan alleen de plekken terug — geen duizenden bestanden heen en weer.
+Future<List<List<int>>> zeefPerTitel(List<SoulseekFile> files, List<({String titel, int? seconden})> titels,
+        {required String artiest, String? album}) =>
+    Isolate.run(() => zeefPerTitelNu(files, titels, artiest: artiest, album: album));
+
+/// Dezelfde zeef per titel, zonder isolate.
+List<List<int>> zeefPerTitelNu(List<SoulseekFile> files, List<({String titel, int? seconden})> titels,
+    {required String artiest, String? album}) {
+  final plek = Map<SoulseekFile, int>.identity();
+  for (var i = 0; i < files.length; i++) {
+    plek[files[i]] = i;
+  }
+  return [
+    for (final t in titels)
+      [
+        for (final f in zeefKandidatenNu(files, titel: t.titel, seconden: t.seconden, artiest: artiest, album: album))
+          plek[f]!,
+      ],
+  ];
+}
+
 /// Dezelfde zeef in een eigen isolate. Altijd, ook voor een korte lijst: een isolate opstarten kost
 /// een paar milliseconden, en dit draait midden in een download die er seconden over doet.
 ///
