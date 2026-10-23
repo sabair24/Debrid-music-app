@@ -461,17 +461,42 @@ def plaat(al):
 
 t = Tidal(Settings())
 # tidalers login_token gooit de login weg bij ELKE fout, ook een netwerkfout (23-10-2026: zo was de pc om 09:42
-# uitgelogd). Tijdens die ene aanroep mag hij niets wissen. Lukt het niet terwijl er wel een login stond, dan is het
-# "even niet" en geen "niet ingelogd".
+# uitgelogd). Tijdens die ene aanroep mag hij niets wissen. "Even niet" alleen bij een netwerkfout of een storing bij
+# TIDAL; een leeg bestand (dat zet tidaler zelf neer) of een verlopen login is "niet ingelogd" — anders stond er na de
+# uitgave van 3.9.582 "probeer het zo opnieuw" terwijl er niets te proberen viel.
 import os
+import requests
 _wis = os.remove
 os.remove = lambda *a, **k: None
+_laad = t.session.load_oauth_session
+_fouten = []
+
+
+def _vang(*a, **k):
+    try:
+        return _laad(*a, **k)
+    except Exception as e:
+        _fouten.append(e)
+        raise
+
+
+t.session.load_oauth_session = _vang
 try:
     ok = t.login_token()
 finally:
     os.remove = _wis
+    t.session.load_oauth_session = _laad
+
+
+def _even_niet(e):
+    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    r = getattr(e, "response", None)
+    return r is not None and getattr(r, "status_code", 0) >= 500
+
+
 if not ok:
-    if t.token_from_storage:
+    if t.token_from_storage and getattr(t.data, "refresh_token", None) and any(_even_niet(e) for e in _fouten):
         uit({"fout": "tijdelijk"})
         sys.exit(3)
     uit({"fout": "niet ingelogd"})
