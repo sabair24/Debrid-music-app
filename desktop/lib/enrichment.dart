@@ -720,10 +720,12 @@ List<Albumkandidaat> deezerAlbumsMetNummer(List<dynamic> data, String artiest, S
 }
 
 /// De oorspronkelijke uitgave. Eerst het oudste studioalbum van de artiest waarop MusicBrainz of Deezer het nummer
-/// kent ([studioalbumUitGroepen]); kent die geen, dan [origineleUitgaveUit] met de opnames van MusicBrainz, en kent die
-/// alleen verzamelaars, dan [deezerSingleUit]. Null bij geen antwoord — dan blijft het nummer zonder album, zoals
-/// voorheen. Het jaar van een Deezer-single komt daarna uit [deezerPlekOpAlbum].
-Future<({String album, int? jaar})?> origineleUitgaveVan(String artiest, String titel, {int? seconden}) async {
+/// kent ([studioalbumUitGroepen]); kent die geen, dan [origineleUitgaveUit] met de opnames van MusicBrainz (ook een
+/// single of ep), dan [deezerSingleUit], en dan de eigen single bij Discogs ([DiscogsService.eigenSingle]) — zodat
+/// het nummer een plaat heeft, met voorkant, achterkant en cd. Null bij geen antwoord — dan blijft het nummer zonder
+/// album, zoals voorheen. Het jaar van een Deezer-single komt daarna uit [deezerPlekOpAlbum].
+Future<({String album, int? jaar})?> origineleUitgaveVan(String artiest, String titel,
+    {int? seconden, DiscogsService? discogs}) async {
   // Zoeken zonder editie: MusicBrainz kent "Blue Hotel", niet "Blue Hotel (Remastered)" (23-10-2026).
   final zoek = zonderEditie(titel).isEmpty ? titel : zonderEditie(titel);
   // Eerst alleen op albums (de studio-opname staat anders achter tientallen live-opnames), dan gewoon.
@@ -762,7 +764,11 @@ Future<({String album, int? jaar})?> origineleUitgaveVan(String artiest, String 
   final mb = origineleUitgaveUit(opnames, artiest: artiest, titel: zoek, seconden: seconden);
   if (mb != null) return nietTeLaat(mb, nietNa);
   final single = deezerSingleUit(data, artiest, zoek, seconden: seconden);
-  return single == null ? null : (album: single, jaar: null);
+  if (single != null) return (album: single, jaar: null);
+  // Liever de eigen single dan geen plaat: een los nummer krijgt geen achterkant en geen cd (Saber, 23-10-2026). Ook
+  // die uit dezelfde tijd als het nummer ([nietTeLaat]).
+  final eigen = await discogs?.eigenSingle(artiest, zoek).catchError((Object _) => null);
+  return eigen == null ? null : nietTeLaat(eigen, nietNa);
 }
 
 /// Hoeveel vragen met voorrang er binnen [kAudioDbSalvoVenster] zonder afstand mogen.

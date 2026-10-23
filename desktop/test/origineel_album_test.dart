@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:debridmusic/enrichment.dart'
     show deezerAlbumsMetNummer, albumsMetNummerUitOpnames, nietTeLaat, oorsprongJaar, studioalbumUitGroepen, zonderEditie;
+import 'package:debridmusic/discogs.dart' show eigenSingleUit;
 import 'package:debridmusic/musicbrainz.dart' show MbRecording, MbReleaseGroup;
 import 'package:debridmusic/online.dart';
 import 'package:debridmusic/organize.dart' show writeTagFields;
@@ -162,6 +163,25 @@ void main() {
       expect(nietTeLaat((album: 'The Losing', jaar: 2003), al + 4), isNull, reason: 'ook niet de single met de B-kant');
       expect(nietTeLaat((album: 'Get Close', jaar: 1986), al + 4)?.album, 'Get Close');
       expect(nietTeLaat((album: 'Get Close', jaar: null), al + 4)?.album, 'Get Close');
+    });
+
+    test('DE KERN: geen album — dan de eigen single bij Discogs, met voorkant, achterkant en cd (Saber, 23-10-2026)', () {
+      Map<String, dynamic> r(String titel, List<String> soort, String jaar) =>
+          {'title': titel, 'format': soort, 'year': jaar};
+      // Zoals Discogs het vrij gezocht gaf, plus wat er niet mag winnen.
+      final uit = eigenSingleUit([
+        r('Pretenders* - The Losing', ['CD', 'Single'], '2003'), // een andere titel: de B-kant
+        r('The Pretenders - Don\'t Get Me Wrong', ['Vinyl', '7"', 'Single', 'Unofficial Release'], '1985'),
+        r('The Pretenders - Don\'t Get Me Wrong', ['Vinyl', 'LP', 'Album'], '1984'), // geen single
+        r('Kingston Sound System - Don\'t Get Me Wrong', ['CD', 'Single'], '1980'), // iemand anders
+        r('The Pretenders - Don\'t Get Me Wrong', ['CD', 'Single'], '1996'),
+        r('The Pretenders - Don\'t Get Me Wrong', ['Vinyl', '7"', '45 RPM', 'Single'], '1986'),
+      ], 'Pretenders', "Don't Get Me Wrong");
+      expect(uit, (album: "Don't Get Me Wrong", jaar: 1986),
+          reason: 'de oudste officiële single van Pretenders zelf, en "The" telt niet mee');
+      expect(eigenSingleUit([r('Aimee Mann - Red Vines', ['CD', 'Single'], '2001')], 'Aimee Mann', 'Build That Wall'),
+          isNull,
+          reason: 'geen single van dat nummer: dan niets');
     });
 
     test('de editie eraf', () {

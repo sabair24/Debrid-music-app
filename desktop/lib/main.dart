@@ -1223,7 +1223,8 @@ Future<void> main() async {
   if (mode.owner) DownloadManager.plekOpAlbum = deezerPlekOpAlbum;
   // Zonder album (de radio, of een verzamelaar): de oorspronkelijke uitgave uit MusicBrainz.
   if (mode.owner) {
-    DownloadManager.origineleUitgave = (artiest, titel, seconden) => origineleUitgaveVan(artiest, titel, seconden: seconden);
+    DownloadManager.origineleUitgave = (artiest, titel, seconden) =>
+        origineleUitgaveVan(artiest, titel, seconden: seconden, discogs: DiscogsService(settings));
     // Tags die pas later lukten (het nummer speelde al): de bibliotheek leest dat ene bestand opnieuw, en dan staat het
     // op zijn plaat — met de hoezen van die plaat meteen.
     DownloadManager.naLateTags = (pad) async {

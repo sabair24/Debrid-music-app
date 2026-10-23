@@ -372,7 +372,11 @@ void main() {
       expect(online, contains('final origineelF = gezag.album.isEmpty || alsSingle'));
       expect(online, contains('              gezag = gezagVoorHaal(\n                  artiest: artiest,\n                  titel: titel,\n                  album: origineel.album,'));
       final main = _lees('lib/main.dart');
-      expect(main, contains('DownloadManager.origineleUitgave = (artiest, titel, seconden) => origineleUitgaveVan('));
+      expect(
+          main,
+          contains('DownloadManager.origineleUitgave = (artiest, titel, seconden) =>\n'
+              '        origineleUitgaveVan(artiest, titel, seconden: seconden, discogs: DiscogsService(settings));'),
+          reason: 'met Discogs voor de eigen single, als er geen album is');
     });
 
     test('▶ geeft het album mee, op de pc en via de pc', () {
