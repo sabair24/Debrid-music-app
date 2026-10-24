@@ -17237,7 +17237,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                 if (naast)
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte32),
+                      // Op een tv zonder goot: de overscanrand houdt alles al van de rand ([kSpeelGootTv]).
+                      padding: EdgeInsets.fromLTRB(
+                          isTv ? kSpeelGootTv : kGoot, 0, isTv ? kSpeelGootTv : kGoot, kRuimte32),
                       child: Row(
                         children: [
                           Expanded(

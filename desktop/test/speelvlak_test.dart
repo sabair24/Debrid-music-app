@@ -78,13 +78,15 @@ void main() {
       final gestapeld = hoesGestapeld(scherm: const Size(960, 540), compact: false, tv: true, reisfactor: breed);
       final naast = hoesNaastTv(bruikbaar: shield);
       expect(naast, greaterThan(gestapeld * 1.5), reason: 'naast $naast, gestapeld $gestapeld');
-      expect(naast, closeTo(304.6, .1));
+      expect(naast, closeTo(279.0, .1));
     });
 
     test('DE GRENS: de uitgeschoven cd raakt de kolom niet', () {
       final hoes = hoesNaastTv(bruikbaar: shield);
       final blok = blokBreedte(hoes: hoes, reisfactor: kSpeelReisTv);
-      expect(kGoot * 2 + blok + kSpeelGatTv + kSpeelKolomTv, lessThanOrEqualTo(shield.width + .5));
+      expect(kSpeelGootTv * 2 + blok + kSpeelGatTv + kSpeelKolomTv, lessThanOrEqualTo(shield.width + .5));
+      // De cd schuift even ver uit als op de pc (Saber, 24-10-2026: "de cd moet er meer uitkomen op shield !!").
+      expect(kSpeelReisTv, .62);
     });
 
     test('DE VAL: logo, hoes en plaatnaam passen in de hoogte', () {
@@ -127,6 +129,7 @@ void main() {
       expect(main, contains('? hoesNaastTv(bruikbaar: tvOverscan.deflateSize(bruikbaar))'));
       expect(main, contains('? (isTv ? kSpeelKolomTv : kSpeelKolom)'));
       expect(main, contains('SizedBox(width: isTv ? kSpeelGatTv : kSpeelGat),'));
+      expect(main, contains('isTv ? kSpeelGootTv : kGoot, 0, isTv ? kSpeelGootTv : kGoot, kRuimte32),'));
       expect(main, contains('reisFactor: dwars ? kLiggendReis : (_naastOpTv ? kSpeelReisTv : null),'));
     });
   });
