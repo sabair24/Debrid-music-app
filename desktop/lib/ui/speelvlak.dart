@@ -72,11 +72,17 @@ bool naastElkaar({required Size scherm, required bool compact, required bool tv}
 const double kSpeelKolomTv = 380;
 
 /// Tussen het hoesblok en de kolom, op een tv.
-const double kSpeelGatTv = 40;
+const double kSpeelGatTv = 32;
 
-/// De uitschuifruimte van de cd naast elkaar op een tv, als deel van de hoes: zoals een telefoon dwars.
-/// Met de 0,62 van een pc bleef er op de Shield een hoes van 244 over; met 0,30 is hij 304.
-const double kSpeelReisTv = kLiggendReis;
+/// De goot links en rechts naast elkaar op een tv: geen. De overscanrand ([tvOverscan], 48) houdt de hoes en de
+/// knoppen al van de rand, en elke punt hier gaat van de hoes af.
+const double kSpeelGootTv = 0;
+
+/// De uitschuifruimte van de cd naast elkaar op een tv, als deel van de hoes: dezelfde 0,62 als op de pc.
+///
+/// Saber, 24-10-2026, op de Shield (3.9.595 had 0,30, zoals een telefoon dwars): "de cd moet er meer uitkomen op
+/// shield !!". Met 0,30 was de hoes 304 punten maar kwam de cd er maar een derde uit; nu 279, met de cd ver uit.
+const double kSpeelReisTv = .62;
 
 /// Boven en onder het hoesblok op een tv: het artiestlogo (64) met zijn lucht (14), de plaatnaam (12 en
 /// twee regels van 13,5 punt maal 1,35) en de 32 onder de rij. Een balk met de chevron is er niet.
@@ -84,9 +90,9 @@ const double kSpeelLuchtTv = 64 + 14 + 12 + 50 + 32;
 
 /// De hoes naast elkaar op een tv. [bruikbaar] is het scherm zonder de overscanrand ([tvOverscan]).
 ///
-/// Op de Shield (960×540, 864×486 bruikbaar) 304 punten, waar de gestapelde indeling er 184 van maakte.
+/// Op de Shield (960×540, 864×486 bruikbaar) 279 punten, waar de gestapelde indeling er 184 van maakte.
 double hoesNaastTv({required Size bruikbaar}) {
-  final opBreedte = (bruikbaar.width - kGoot * 2 - kSpeelGatTv - kSpeelKolomTv) / (1 + kSpeelReisTv);
+  final opBreedte = (bruikbaar.width - kSpeelGootTv * 2 - kSpeelGatTv - kSpeelKolomTv) / (1 + kSpeelReisTv);
   final opHoogte = bruikbaar.height - kSpeelLuchtTv;
   final kleinste = opBreedte < opHoogte ? opBreedte : opHoogte;
   return kleinste.clamp(160.0, 520.0);
