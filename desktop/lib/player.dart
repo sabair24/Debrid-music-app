@@ -268,6 +268,27 @@ class WachtrijPaneel extends ChangeNotifier {
   }
 }
 
+/// Staat het zonepaneel open, naast de pagina's (en in Nu speelt naast elkaar)?
+///
+/// Saber, 23-10-2026: "Groot scherm (pc 24", iPad liggend, Mac): een paneel aan de zijkant dat open kan
+/// blijven. Op de gsm blijft het een blad van onderen." Eén paneel tegelijk aan die kant: gaan de zones
+/// open, dan gaat de wachtrij ([WachtrijPaneel]) dicht, en omgekeerd.
+class ZonePaneel extends ChangeNotifier {
+  bool _open = false;
+  bool get open => _open;
+
+  void wissel() {
+    _open = !_open;
+    notifyListeners();
+  }
+
+  void sluit() {
+    if (!_open) return;
+    _open = false;
+    notifyListeners();
+  }
+}
+
 /// De hele wachtrij in één waarde: de aangeleverde volgorde, de speelvolgorde, en waar we zijn.
 typedef Wachtrij = ({List<Track> origineel, List<Track> volgorde, int index});
 
