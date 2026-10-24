@@ -1828,6 +1828,7 @@ Future<void> main() async {
         ChangeNotifierProvider<PlayerStore>.value(value: player),
         ChangeNotifierProvider<NetsoortStore>.value(value: netStore),
         ChangeNotifierProvider<WachtrijPaneel>(create: (_) => WachtrijPaneel()),
+        ChangeNotifierProvider<ZonePaneel>(create: (_) => ZonePaneel()),
         // De hoeskleur van de pagina die bovenop ligt. Hoort hier en niet in die pagina, omdat de
         // SCHIL hem tekent — achter de bovenbalk langs tot aan de schermrand. Zie [PaginaWas].
         ChangeNotifierProvider<PaginaWas>(create: (_) => PaginaWas()),
@@ -3939,6 +3940,19 @@ class _HomeShellState extends State<HomeShell> {
                           kleur: _panel,
                           child: const WachtrijPaneelView(opGlas: true),
                         ),
+                      ),
+                    ),
+                  // De zones naast de pagina's (Saber, 23-10-2026: "een paneel aan de zijkant dat open kan blijven"), waar
+                  // Nu speelt naast elkaar staat. Eén van de twee tegelijk: de wachtrij of de zones ([toonZoneBlad]).
+                  if (!isTv &&
+                      (_misschien<ZonePaneel>(context, luister: true)?.open ?? false) &&
+                      zonePaneelNaast(MediaQuery.sizeOf(context), compact: isCompact(context)))
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(kRuimte8, ruimte, kRuimte12, kRuimte12),
+                      child: const SizedBox(
+                        key: ValueKey('zone-paneel'),
+                        width: kZonePaneel,
+                        child: ZoneBlad(weergave: ZoneWeergave.paneel),
                       ),
                     ),
                 ],
@@ -10877,8 +10891,9 @@ class PlayerBar extends StatelessWidget {
                     ),
                     const _WachtrijKnop(),
                     const _SpeakerButton(),
-                    // De zones (Saber, 21-10-2026). Daarin ook "Speel daar" — vroeger "Speel op …".
-                    if (!isTv) const ZoneKiesKnop(alsIcoon: true),
+                    // De zones (Saber, 21-10-2026). Daarin ook "Speel daar" — vroeger "Speel op …". Sinds 24-10-2026 ook op
+                    // de Shield: daar een paneel van rechts ([toonZonePaneelTv]).
+                    const ZoneKiesKnop(alsIcoon: true),
                   ],
                 ),
                 Row(
@@ -10962,15 +10977,20 @@ class ZoneKiesKnop extends StatelessWidget {
       ),
     );
     if (alsIcoon) {
-      return IconButton(
+      final open = _misschien<ZonePaneel>(context, luister: true)?.open ?? false;
+      final kleur = afstand != null || open ? _accent2 : _muted;
+      final knop = IconButton(
         key: const ValueKey('zone-knop'),
         tooltip: elders ? 'Zones — er speelt ook iets op een ander toestel' : 'Zones',
         onPressed: () => toonZoneBlad(context),
+        style: isTv ? tvIcoonStijl(kleur) : null,
         icon: Stack(clipBehavior: Clip.none, children: [
-          Icon(Icons.speaker_group_rounded, size: 20, color: afstand != null ? _accent2 : _muted),
+          Icon(Icons.speaker_group_rounded, size: 20, color: kleur),
           if (elders) stip,
         ]),
       );
+      // Op de Shield met een woordje, zoals de andere knoppen in de balk.
+      return isTv ? TvLabelled(label: 'Zones', child: knop) : knop;
     }
     final naam = gekozen?.naam ?? deviceName();
     // Op afstand in de accentkleur: wat je ziet en bedient, is niet dit toestel.
@@ -11003,12 +11023,61 @@ class ZoneKiesKnop extends StatelessWidget {
   }
 }
 
-/// Het [ZoneBlad] van onderen.
-Future<void> toonZoneBlad(BuildContext context) => showModalBottomSheet<void>(
+/// De zones openen (Saber, 23-10-2026):
+/// - op een groot scherm als paneel aan de zijkant dat open kan blijven ([ZonePaneel]), waar Nu speelt naast elkaar
+///   staat ([zonePaneelNaast]) — daar ook in Nu speelt. Nog eens drukken sluit het. De wachtrij gaat dan dicht;
+/// - op een tv als paneel van rechts dat je met de pijltjes bedient ([toonZonePaneelTv]);
+/// - anders (gsm, iPad staand, een smal venster) van onderen.
+Future<void> toonZoneBlad(BuildContext context) {
+  if (isTv) return toonZonePaneelTv(context);
+  final paneel = _misschien<ZonePaneel>(context);
+  if (paneel != null && zonePaneelNaast(MediaQuery.sizeOf(context), compact: isCompact(context))) {
+    if (!paneel.open) _misschien<WachtrijPaneel>(context)?.sluit();
+    paneel.wissel();
+    return Future<void>.value();
+  }
+  return showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    isScrollControlled: true,
+    builder: (_) => const ZoneBlad(),
+  );
+}
+
+/// Staan de zones als paneel naast de inhoud? Waar Nu speelt naast elkaar staat ([naastElkaar]): dan past het paneel
+/// daar ook.
+bool zonePaneelNaast(Size scherm, {required bool compact}) => naastElkaar(scherm: scherm, compact: compact, tv: false);
+
+/// Hoe breed het zonepaneel naast de pagina's is.
+const double kZonePaneel = 380;
+
+/// Hoe breed het zonepaneel op een tv is (van 960 punten).
+const double kZonePaneelTv = 440;
+
+/// De zones op een tv: een paneel dat van rechts binnenschuift, met de markering op de zone die je bedient. Terug sluit
+/// het (Saber, 23-10-2026: "de zones als paneel zoals op pc en Mac, maar tv-vriendelijk").
+Future<void> toonZonePaneelTv(BuildContext context) => showGeneralDialog<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => const ZoneBlad(),
+      barrierDismissible: true,
+      barrierLabel: 'Zones sluiten',
+      barrierColor: Colors.black.withValues(alpha: .45),
+      transitionDuration: const Duration(milliseconds: 260),
+      pageBuilder: (_, __, ___) => Align(
+        alignment: Alignment.centerRight,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(0, tvOverscan.top, tvOverscan.right, tvOverscan.bottom),
+          child: const SizedBox(
+            key: ValueKey('zone-paneel-tv'),
+            width: kZonePaneelTv,
+            child: Material(type: MaterialType.transparency, child: ZoneBlad(weergave: ZoneWeergave.tvPaneel)),
+          ),
+        ),
+      ),
+      transitionBuilder: (_, a, __, kind) => SlideTransition(
+        position: Tween(begin: const Offset(1, 0), end: Offset.zero)
+            .animate(CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
+        child: kind,
+      ),
     );
 
 /// Alle zones: wat er op elk toestel en elke speaker speelt, waar in het nummer, en of het toestel er
@@ -11018,7 +11087,10 @@ Future<void> toonZoneBlad(BuildContext context) => showModalBottomSheet<void>(
 ///
 /// Deelstap 2.1 van de zones: zien en overnemen. Een zone kiezen en bedienen komt erna.
 class ZoneBlad extends StatefulWidget {
-  const ZoneBlad({super.key});
+  const ZoneBlad({super.key, this.weergave = ZoneWeergave.blad});
+
+  /// Waar hij staat: zie [ZoneWeergave].
+  final ZoneWeergave weergave;
 
   @override
   State<ZoneBlad> createState() => _ZoneBladState();
@@ -11052,67 +11124,119 @@ class _ZoneBladState extends State<ZoneBlad> {
     final gekozen = _misschien<GekozenZone>(context, luister: true)?.gekozen ?? z.hier;
     final bedient = zones.where((x) => x.id == gekozen).firstOrNull;
     final bedientNaam = [bedient?.naam ?? deviceName(), if (gekozen == z.hier) 'dit toestel'].join(' · ');
-    final hoog = MediaQuery.sizeOf(context).height;
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: 600, maxHeight: hoog * .8),
-          child: GlasVlak(
-            vorm: const BorderRadius.all(Radius.circular(18)),
-            kleur: _panel,
-            balk: true,
-            bovenop: true,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 14, 8, 10),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Bovenaan, groot: welke zone je bedient (Saber, 23-10-2026: "Bovenaan, groot"). Die kaart licht op.
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: Text.rich(
-                      key: const ValueKey('zone-bedient'),
-                      TextSpan(children: [
-                        TextSpan(text: 'Je bedient: ', style: TextStyle(color: _muted)),
-                        TextSpan(text: bedientNaam, style: TextStyle(color: _accent2)),
-                      ]),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: isTv ? 24 : 19, fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  // Op een eigen regel: naast "Je bedient" paste het op een gsm niet.
-                  Text(
-                      z.verbonden
-                          ? 'Tik op een zone om die hier te zien en te bedienen'
-                          : 'Even geen verbinding met de pc',
-                      style: TextStyle(color: _muted, fontSize: 12)),
-                  const SizedBox(height: 10),
-                  Flexible(
-                    child: ListView(
-                      shrinkWrap: true,
-                      padding: EdgeInsets.zero,
-                      children: [
-                        for (final zone in zones)
-                          _ZoneRij(
-                              key: ValueKey('zone-${zone.id}'),
-                              zone: zone,
-                              hier: zone.id == z.hier,
-                              gekozen: zone.id == gekozen),
-                      ],
-                    ),
-                  ),
-                ],
+    final w = widget.weergave;
+    final blad = w == ZoneWeergave.blad;
+    final paneel = w == ZoneWeergave.paneel;
+    // Op een tv landt de markering op de zone die je bedient (of de eerste).
+    final opTv = w == ZoneWeergave.tvPaneel;
+    final eerste = bedient == null ? zones.firstOrNull?.id : gekozen;
+    final lijstView = ListView(
+      shrinkWrap: blad,
+      padding: EdgeInsets.zero,
+      children: [
+        for (final zone in zones)
+          _ZoneRij(
+              key: ValueKey('zone-${zone.id}'),
+              zone: zone,
+              hier: zone.id == z.hier,
+              gekozen: zone.id == gekozen,
+              autofocus: opTv && zone.id == eerste),
+      ],
+    );
+    final inhoud = Padding(
+      padding: const EdgeInsets.fromLTRB(14, 14, 8, 10),
+      child: Column(
+        mainAxisSize: blad ? MainAxisSize.min : MainAxisSize.max,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // Bovenaan, groot: welke zone je bedient (Saber, 23-10-2026: "Bovenaan, groot"). Die kaart licht op.
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Text.rich(
+                  key: const ValueKey('zone-bedient'),
+                  TextSpan(children: [
+                    TextSpan(text: 'Je bedient: ', style: TextStyle(color: _muted)),
+                    TextSpan(text: bedientNaam, style: TextStyle(color: _accent2)),
+                  ]),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: isTv ? 24 : 19, fontWeight: FontWeight.w700),
+                ),
               ),
             ),
-          ),
-        ),
+            // Het paneel aan de zijkant blijft open tot je het sluit (Saber, 23-10-2026: "dat open kan blijven").
+            if (paneel)
+              IconButton(
+                key: const ValueKey('zone-paneel-dicht'),
+                tooltip: 'Zones sluiten',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(Icons.close_rounded, size: 20, color: _muted),
+                onPressed: () => _misschien<ZonePaneel>(context)?.sluit(),
+              ),
+          ]),
+          const SizedBox(height: 2),
+          // Op een eigen regel: naast "Je bedient" paste het op een gsm niet.
+          Text(
+              !z.verbonden
+                  ? 'Even geen verbinding met de pc'
+                  : opTv
+                      ? 'Kies een zone om die hier te zien en te bedienen · Terug sluit'
+                      : 'Tik op een zone om die hier te zien en te bedienen',
+              style: TextStyle(color: _muted, fontSize: 12)),
+          const SizedBox(height: 10),
+          if (blad) Flexible(child: lijstView) else Expanded(child: lijstView),
+        ],
       ),
     );
+    // Het blad en het tv-paneel liggen over ander glas (de spelerbalk): `bovenop`, dus dat wordt zolang dicht. Het
+    // paneel aan de zijkant staat ernaast, zoals de wachtrij.
+    final glas = GlasVlak(
+      vorm: const BorderRadius.all(Radius.circular(18)),
+      kleur: _panel,
+      balk: !paneel,
+      bovenop: !paneel,
+      child: inhoud,
+    );
+    return _ZoneWeergaveScope(
+      weergave: w,
+      child: !blad
+          ? glas
+          : SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: 600, maxHeight: MediaQuery.sizeOf(context).height * .8),
+                  child: glas,
+                ),
+              ),
+            ),
+    );
   }
+}
+
+/// Waar de zones staan: een blad van onderen (gsm), een paneel naast de pagina's of in Nu speelt (groot scherm), of
+/// een paneel van rechts op een tv. Zie [toonZoneBlad].
+enum ZoneWeergave { blad, paneel, tvPaneel }
+
+/// Zegt de kaarten in de zones waar ze staan — zie [_naKeuzeInZones].
+class _ZoneWeergaveScope extends InheritedWidget {
+  const _ZoneWeergaveScope({required this.weergave, required super.child});
+
+  final ZoneWeergave weergave;
+
+  @override
+  bool updateShouldNotify(_ZoneWeergaveScope oud) => oud.weergave != weergave;
+}
+
+/// Wat er na een keuze in de zones dichtgaat: het blad en het tv-paneel wel, het paneel aan de zijkant niet — dat kan
+/// open blijven (Saber, 23-10-2026). Vóór een `await` opvragen: daarna kan de context weg zijn.
+VoidCallback _naKeuzeInZones(BuildContext context) {
+  final w = context.getInheritedWidgetOfExactType<_ZoneWeergaveScope>()?.weergave ?? ZoneWeergave.blad;
+  if (w == ZoneWeergave.paneel) return () {};
+  final nav = Navigator.of(context);
+  return () => nav.maybePop();
 }
 
 /// Dragen de knoppen op een zonekaart een woordje onder het icoon (aanraken: gsm, iPad, Shield), of een tip bij het
@@ -11127,10 +11251,13 @@ bool get _zoneWoordjes => zoneKnoppenMetWoord ?? (isTv || Platform.isAndroid || 
 /// Pauze of Verder, Stop, Hierheen, Daarheen en Samen. Elke zone die speelt heeft een volumeschuif. Een groep is één
 /// kaart, met per lid een schuif en "Los", en "Opheffen" voor de hele groep. De zone die je bedient, licht op.
 class _ZoneRij extends StatelessWidget {
-  const _ZoneRij({super.key, required this.zone, required this.hier, this.gekozen = false});
+  const _ZoneRij({super.key, required this.zone, required this.hier, this.gekozen = false, this.autofocus = false});
 
   final ZoneStaat zone;
   final bool hier;
+
+  /// Op een tv: hier landt de markering als het paneel opengaat.
+  final bool autofocus;
 
   /// Is dit de zone die je nu ziet en bedient ([GekozenZone])?
   final bool gekozen;
@@ -11270,10 +11397,12 @@ class _ZoneRij extends StatelessWidget {
 
     final info = Pressable(
       key: ValueKey('zone-kies-${zone.id}'),
-      // Kiezen: de balk en Nu speelt tonen en bedienen vanaf nu deze zone. De muziek verhuist niet.
+      autofocus: autofocus,
+      // Kiezen: de balk en Nu speelt tonen en bedienen vanaf nu deze zone. De muziek verhuist niet. Het paneel aan de
+      // zijkant blijft open ([_naKeuzeInZones]).
       onPressed: () {
         _misschien<GekozenZone>(context)?.kies(zone.id);
-        Navigator.of(context).maybePop();
+        _naKeuzeInZones(context)();
       },
       borderRadius: BorderRadius.circular(10),
       scaleOnFocus: false,
@@ -11562,7 +11691,7 @@ class _ZoneVolumeSchuifState extends State<_ZoneVolumeSchuif> {
 Future<void> _verplaatsHierheen(BuildContext context, ZoneStaat van) async {
   final lijst = context.read<ZoneLijst>();
   final gekozen = _misschien<GekozenZone>(context);
-  final nav = Navigator.of(context);
+  final sluit = _naKeuzeInZones(context);
   final fout = await lijst.verplaats?.call(van.id, lijst.hier);
   if (fout == null && gekozen != null && gekozen.gekozen == van.id) gekozen.kies(lijst.hier);
   if (!context.mounted) return;
@@ -11571,7 +11700,7 @@ Future<void> _verplaatsHierheen(BuildContext context, ZoneStaat van) async {
     return;
   }
   _srcToast(context, 'Speelt nu hier — ${van.naam} stopt.');
-  nav.maybePop();
+  sluit();
 }
 
 /// Het volume van de app in een zone op afstand (Saber, 21-10-2026: "volume van de app"). De schuif
@@ -11825,6 +11954,7 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
 Future<void> _kiesDoelZone(BuildContext context, ZoneStaat van) async {
   final lijst = context.read<ZoneLijst>();
   final gekozen = _misschien<GekozenZone>(context);
+  final sluit = _naKeuzeInZones(context);
   final doelen = [for (final z in lijst.zones) if (z.id != van.id && z.online) z];
   final doel = await showModalBottomSheet<ZoneStaat>(
     context: context,
@@ -11894,7 +12024,7 @@ Future<void> _kiesDoelZone(BuildContext context, ZoneStaat van) async {
   }
   if (gekozen != null && gekozen.gekozen == van.id) gekozen.kies(doel.id);
   _srcToast(context, 'Naar ${doel.naam} verplaatst — ${van.naam} stopt zodra het daar speelt.');
-  Navigator.of(context).maybePop();
+  sluit();
 }
 
 /// "Hier verder" vanaf [zone]: haal haar volledige stand (met de wachtrij) en neem over zoals de balk
@@ -11904,7 +12034,7 @@ Future<void> _neemOverVan(BuildContext context, ZoneStaat zone) async {
   final lijst = context.read<ZoneLijst>();
   final haal = lijst.haalStand;
   final gekozen = _misschien<GekozenZone>(context);
-  final nav = Navigator.of(context);
+  final sluit = _naKeuzeInZones(context);
   Map<String, dynamic>? stand;
   try {
     stand = await haal?.call(zone.id);
@@ -11916,7 +12046,7 @@ Future<void> _neemOverVan(BuildContext context, ZoneStaat zone) async {
   if (ok && gekozen != null && gekozen.gekozen == zone.id) gekozen.kies(lijst.hier);
   if (!context.mounted) return;
   if (ok) {
-    nav.maybePop();
+    sluit();
   } else {
     _srcToast(context, stand == null ? 'De pc antwoordt niet.' : 'Dat nummer staat niet in je bibliotheek hier.');
   }
@@ -13380,6 +13510,8 @@ class _WachtrijKnop extends StatelessWidget {
         tooltip: 'Wachtrij',
         onPressed: () {
           if (!compact) {
+            // Eén paneel tegelijk aan de zijkant: gaat de wachtrij open, dan gaan de zones dicht.
+            if (!paneel.open) _misschien<ZonePaneel>(context)?.sluit();
             paneel.wissel();
             return;
           }
@@ -16065,8 +16197,28 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
       AnimationController(vsync: this, duration: const Duration(milliseconds: 380))..addListener(() => setState(() {}));
 
   void _wisselWachtrij() {
+    // Eén paneel tegelijk: gaat de wachtrij open, dan gaan de zones dicht.
+    if (!_wachtrij) _misschien<ZonePaneel>(context)?.sluit();
     setState(() => _wachtrij = !_wachtrij);
-    _wachtrij ? _paneel.forward() : _paneel.reverse();
+  }
+
+  /// Staat het vak rechts open (de wachtrij of de zones), en welke van de twee staat erin? Tijdens het dichtschuiven
+  /// blijft staan wat er stond.
+  bool _vakOpen = false;
+  bool _vakZones = false;
+
+  /// Het vak rechts volgt [_wachtrij] en het zonepaneel ([ZonePaneel]): die kunnen ook van buiten dit scherm
+  /// veranderen (de knop "Speelt op …" bovenaan), dus dit kijkt bij elke opbouw.
+  void _volgVak({required bool zones}) {
+    if (zones) _wachtrij = false;
+    final open = _wachtrij || zones;
+    if (open) _vakZones = zones;
+    if (open == _vakOpen) return;
+    _vakOpen = open;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _vakOpen ? _paneel.forward() : _paneel.reverse();
+    });
   }
 
   /// Twee tikken op de hoes draaien hem om; één tik vergroot (wat er voor staat). Saber koos dat op
@@ -16253,6 +16405,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     final gestapeld = !zij && !isTv;
     // Hoe breed het wachtrijpaneel nu is (schuivend tussen 0 en [kNuSpeeltWachtrij]); de hoes rekent
     // met wat er naast het paneel overblijft.
+    // De zones staan in hetzelfde vak als de wachtrij, als hun paneel open is (Saber, 23-10-2026); één van de twee.
+    _volgVak(zones: naast && !isTv && (_misschien<ZonePaneel>(context, luister: true)?.open ?? false));
     final paneelBreedte = naast ? Curves.easeOutCubic.transform(_paneel.value) * kNuSpeeltWachtrij : 0.0;
     // De stapel ([WachtrijStapel]) steekt links en boven uit: de hoes is dan kleiner, zodat alles in
     // dezelfde ruimte past. Niet dwars: daar is geen hoogte voor wat erboven uitsteekt.
@@ -16547,6 +16701,12 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     // niet als widget, zodat hij in de gestapelde indeling gewoon in de kolom valt en naast
     // elkaar in de kolom ernaast — zonder een tussenlaag die de hoogte anders zou verdelen.
     final onder = <Widget>[
+      // Op een tv naast elkaar bovenaan de kolom: "Speelt op: … ▾", zoals bovenaan Nu speelt op pc en Mac. Opent het
+      // zonepaneel van rechts; omhoog vanaf de artiest komt de markering er.
+      if (isTv && naast) ...[
+        const Align(alignment: Alignment.centerLeft, child: ZoneKiesKnop()),
+        const SizedBox(height: 6),
+      ],
       // Eén regel op tv gestapeld, met puntjes. Een titel die naar twee regels loopt kost er 40
       // bij, en dat is precies wat er niet is — op 540 punten is dit scherm 80 te lang. Naast elkaar
       // is die hoogte er wel, en een titel hoort niet afgekapt te worden (Saber, 23-10-2026).
@@ -17109,7 +17269,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                                   maxWidth: kNuSpeeltWachtrij,
                                   child: Padding(
                                     padding: const EdgeInsets.fromLTRB(kRuimte24, kRuimte8, 0, kRuimte8),
-                                    child: GlasVlak(
+                                    child: _vakZones
+                                        ? const ZoneBlad(key: ValueKey('np-zonepaneel'), weergave: ZoneWeergave.paneel)
+                                        : GlasVlak(
                                       key: const ValueKey('np-wachtrijpaneel'),
                                       vorm: const BorderRadius.all(Radius.circular(18)),
                                       kleur: _panel,
