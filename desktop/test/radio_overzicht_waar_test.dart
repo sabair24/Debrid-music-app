@@ -166,6 +166,94 @@ void main() {
     });
   });
 
+  group('na een herstart: de notitie op schijf', () {
+    // 24-10-2026 op de Shield: de app werd bijgewerkt terwijl er een radio liep, en bij het opstarten stond "Radio
+    // afsluiten — Céline Dion — Deze gaan weg 91" op de tv. De regel "nooit op de tv" gold alleen bij het afsluiten.
+    Future<void> notitieOpSchijf() async {
+      final r = await radio();
+      r.stop();
+      await r.schrijfrijVoorToets;
+      expect(File('${wortel.path}${Platform.pathSeparator}radio_sessie.json').existsSync(), isTrue);
+    }
+
+    RadioBesturing opDeTv(List<String> elders, {bool Function()? lukt}) =>
+        RadioBesturing(speler: _Speler(), bron: _Bron({'3': _t('3')}))
+          ..hier = 'dev:shield'
+          ..richt = ((doel) => doel == 'dev:shield' ? 'gsm' : doel)
+          ..bijOverzichtElders = (s, doel) async {
+            elders.add('$doel:${s.gehaald.length}');
+            return lukt?.call() ?? true;
+          };
+
+    test('op de tv: naar de gsm, en nooit op het scherm', () async {
+      await notitieOpSchijf();
+      final elders = <String>[];
+      final r = opDeTv(elders);
+      await r.laadOpenstaand();
+      expect(r.openstaand, isNull, reason: 'nooit op de tv');
+      expect(elders, ['gsm:2']);
+      await r.schrijfrijVoorToets;
+      expect(File('${wortel.path}${Platform.pathSeparator}radio_sessie.json').existsSync(), isFalse,
+          reason: 'en niet bij de volgende start nog eens');
+    });
+
+    test('nog geen pc bij het opstarten: niet op de tv, en bij de volgende verbinding alsnog door', () async {
+      await notitieOpSchijf();
+      final elders = <String>[];
+      var pc = false;
+      final r = opDeTv(elders, lukt: () => pc);
+      await r.laadOpenstaand();
+      expect(r.openstaand, isNull);
+      await r.schrijfrijVoorToets;
+      expect(File('${wortel.path}${Platform.pathSeparator}radio_sessie.json').existsSync(), isTrue,
+          reason: 'de notitie blijft tot hij weg is');
+      pc = true;
+      await r.stuurOpenstaandDoor();
+      expect(elders, ['gsm:2', 'gsm:2']);
+      await r.schrijfrijVoorToets;
+      expect(File('${wortel.path}${Platform.pathSeparator}radio_sessie.json').existsSync(), isFalse);
+      await r.stuurOpenstaandDoor();
+      expect(elders, hasLength(2), reason: 'één keer is genoeg');
+    });
+
+    test('een nieuwe radio op de tv voor de pc er was: het oude overzicht gaat mee in de nieuwe', () async {
+      await notitieOpSchijf();
+      final elders = <String>[];
+      var pc = false;
+      final r = opDeTv(elders, lukt: () => pc);
+      await r.laadOpenstaand();
+      await r.start([
+        Radioplek(artiest: 'Zaad', titel: 'Zaad', eigen: _t('zaad'), zaad: true),
+        Radioplek(artiest: 'Artiest 3', titel: '3'),
+      ]);
+      for (var i = 0; i < 100 && r.plan.any((p) => p.stand == Haalstand.onderweg || p.stand == Haalstand.wacht); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        r.tikVoorToets();
+      }
+      pc = true;
+      await r.stuurOpenstaandDoor();
+      expect(elders, ['gsm:2'], reason: 'de oude niet meer apart: hij zit in de nieuwe');
+      r.stop();
+      await Future<void>.delayed(Duration.zero);
+      expect(elders.last, 'gsm:3', reason: 'de twee van toen en de ene van nu');
+    });
+
+    test('op de pc of een gsm: gewoon hier, zoals altijd', () async {
+      await notitieOpSchijf();
+      final elders = <String>[];
+      final r = RadioBesturing(speler: _Speler(), bron: _Bron(const {}))
+        ..hier = 'dev:pc-THUIS'
+        ..richt = ((doel) => doel)
+        ..bijOverzichtElders = (s, doel) async {
+          elders.add(doel);
+          return true;
+        };
+      await r.laadOpenstaand();
+      expect(r.openstaand?.gehaald, hasLength(2));
+      expect(elders, isEmpty);
+    });
+  });
+
   group('de brievenbus op het doeltoestel', () {
     Map<String, dynamic> post(String voor, int at, {bool klaar = false, int nummers = 1}) => klaar
         ? {'klaar': true, 'at': at}

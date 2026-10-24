@@ -164,7 +164,8 @@ void main() {
 
     test('DE VAL: de pc meet een onbekende maat na en levert FLAC achter een .flac-adres', () {
       final s = _bron('lib/lan/server.dart');
-      final stream = s.substring(s.indexOf('Future<void> _stream(HttpRequest req) async {'));
+      // Sinds 24-10-2026 staat het lijf in _streamBestand; _stream telt er de lezers omheen (lan/lezers.dart).
+      final stream = s.substring(s.indexOf('Future<void> _streamBestand(HttpRequest req, Track track, File file) async {'));
       final lijf = stream.substring(0, stream.indexOf('\n  }\n'));
       final meet = lijf.indexOf('await transcoder.meet(file)');
       final grens = lijf.indexOf('castGrenzen(');

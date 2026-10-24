@@ -186,7 +186,12 @@ class Doorgever {
     }
     final wat = req.uri.query.isEmpty ? pad : '$pad?${req.uri.query}';
     final range = req.headers.value(HttpHeaders.rangeHeader);
-    final eerste = groei ? null : _eerste[wat];
+    // Vanaf het begin (geen Range, of `bytes=0-…`, wat ffmpeg bij elke nieuwe start stuurt) is geen hervatting: er valt
+    // niets aan elkaar te plakken, en het nieuwe antwoord wordt het eerste. Hier stond alleen het eerste antwoord ooit,
+    // en dat bleef: veranderde een nummer op de pc (de hoesveger schreef er een hoes in), dan gaf ELKE volgende poging
+    // 412, ook "opnieuw starten" — tot de app herstartte. Saber, 24-10-2026, op de Mac: "Mademoiselle chante le blues"
+    // bleef op "Kan dit nummer niet openen — Failed to open je pc".
+    final eerste = groei || vanafHetBegin(range) ? null : _eerste[wat];
     final klok = Stopwatch()..start();
     final tot = DateTime.now().add(wachtOpAdres);
     var pogingen = 0;
@@ -516,4 +521,11 @@ class DoorgeverIsolaat {
       }
     }
   }
+}
+
+/// Vraagt [range] (de Range-kop van mpv) vanaf het eerste byte? Ook zonder kop: dan het hele bestand.
+bool vanafHetBegin(String? range) {
+  if (range == null || range.trim().isEmpty) return true;
+  final m = RegExp(r'^\s*bytes\s*=\s*(\d+)\s*-').firstMatch(range);
+  return m != null && int.parse(m.group(1)!) == 0;
 }

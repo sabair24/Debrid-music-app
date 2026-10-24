@@ -7,7 +7,7 @@
 import 'dart:io';
 
 import 'package:debridmusic/artwork.dart' show HoesVlek;
-import 'package:debridmusic/main.dart' show balkOpTvLicht;
+import 'package:debridmusic/main.dart' show balkOpTvLicht, gevuldeKnopStijl, kTvKnopGlas;
 import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/glas.dart';
 import 'package:debridmusic/ui/kleuren.dart';
@@ -43,6 +43,27 @@ void main() {
       final stijl = t.widget<FilledButton>(find.byType(FilledButton)).style!;
       expect(stijl.foregroundColor!.resolve({}), Colors.white);
     });
+
+    // 24-10-2026, "Radio afsluiten" op de Shield: de knop "91 naar de prullenbak" was een lege paarse balk — paarse
+    // letters ([_focusOutlineGevuld]) op Materials paarse vulling. Nu is de vulling op de tv glas.
+    for (final licht in [true, false]) {
+      test('een gevulde knop zonder eigen vulling, tv ${licht ? 'licht' : 'donker'}: letters nooit in de kleur van de vulling',
+          () {
+        setTvModeForTest(true);
+        Thema.licht = licht;
+        final stijl = gevuldeKnopStijl;
+        for (final s in [<WidgetState>{}, {WidgetState.focused}]) {
+          final vulling = stijl.backgroundColor!.resolve(s);
+          expect(vulling, kTvKnopGlas, reason: 'glas, zoals de andere knoppen op de tv');
+          final letters = stijl.foregroundColor!.resolve(s) ?? Colors.white;
+          expect(letters, isNot(vulling));
+          expect(vulling, isNot(kAccent), reason: 'paarse letters op paars: een lege balk');
+          expect(letters.a, greaterThan(.9), reason: 'letters die je ziet');
+        }
+        setTvModeForTest(false);
+        expect(gevuldeKnopStijl.backgroundColor!.resolve({}), isNull, reason: 'op de pc en de gsm: Materials vulling');
+      });
+    }
 
     test('de glazen knoppen met de vulling van de tv: in licht ook paars', () {
       final main = _bron('lib/main.dart');
