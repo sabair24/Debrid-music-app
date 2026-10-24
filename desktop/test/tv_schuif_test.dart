@@ -2,6 +2,8 @@
 // er niet meer uit om dat up en down ook de schuiver verzet, das niet de bedoeling enkel links en rechts".
 // Op tv verzetten ← en → de schuif; ↑ en ↓ gaan naar wat erboven of eronder staat. Op de pc blijft een schuif
 // ook met ↑/↓ verschuiven, zoals Flutter dat met een toetsenbord doet.
+import 'dart:io';
+
 import 'package:debridmusic/main.dart' show SamenVertragingInstelling;
 import 'package:debridmusic/settings.dart';
 import 'package:debridmusic/tv.dart';
@@ -70,6 +72,17 @@ void main() {
     expect(_heeftFocus(t, 'boven'), isTrue, reason: '↑ gaat naar wat erboven staat');
 
     await t.pumpWidget(const SizedBox());
+  });
+
+  test('het stuk rechts van het bolletje is zichtbaar: niet de paneelkleur', () {
+    // Op de Shield (24-10-2026) zag −50 ms eruit als helemaal rechts: Material kleurt dat stuk met
+    // `surfaceContainerHighest`, en dat valt in het kleurenschema van de app terug op `surface` (het paneel).
+    final bron = File('lib/main.dart').readAsStringSync();
+    final thema = bron.indexOf('theme: ThemeData(');
+    expect(thema, greaterThan(0));
+    expect(bron.indexOf('sliderTheme: SliderThemeData(inactiveTrackColor: kLijn)', thema), greaterThan(thema));
+    expect(const ColorScheme.light(surface: Color(0xFF123456)).surfaceContainerHighest, const Color(0xFF123456),
+        reason: 'als Flutter dit ooit anders doet, mag de regel weg');
   });
 
   testWidgets('op de pc verschuift ↑ de schuif nog, zoals Flutter dat doet', (t) async {
