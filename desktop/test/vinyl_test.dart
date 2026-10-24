@@ -25,6 +25,11 @@ void main() {
       r'Bonnie Tyler\Secret Dreams (Needle Drop 24-192)\01.flac',
       r'Bonnie Tyler\Secret Dreams [LP-Rip]\01.flac',
       r'X\VinylRip\01.flac',
+      // Africa, 24-10-2026: vanzelf binnengekomen als 24/96; PBTHAL maakt alleen vinylrips.
+      r'@@habkj\PBTHAL rips  [NOT REENCODED]\Toto\Toto - IV (TML)\10 - Africa.flac',
+      r'Genesis - Abacab (1981) (PBTHAL LP 24-96) [FLAC] vtwin88cube\01.-Abacab.flac',
+      r'Genesis - Duke (Piros) PBTHAL (1980 Progressive Rock) [Flac 24-96 LP]\01.flac',
+      r'Joy Division\1988 Substance [LP 24-192]\01.flac',
     ]) {
       expect(isVinylRip(p), isTrue, reason: p);
     }
@@ -33,6 +38,8 @@ void main() {
       r'Daft Punk\Discovery [24bit 96kHz]\03 - Digital Love.flac',
       r'The Remixes LP\01 - Help.flac',
       r'Lionel Richie\Can’t Slow Down (1983)\08 - Hello.flac',
+      r'Music\Prince - 1999\6. Automatic (LP Version).flac',
+      r'Toto - IV [24-96]\10 - Africa.flac',
     ]) {
       expect(isVinylRip(p), isFalse, reason: p);
     }

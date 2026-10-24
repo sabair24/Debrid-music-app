@@ -114,6 +114,33 @@ void main() {
       expect(beterOpTidal(t, lijst, minstens: TidalMinstens.hires), isNull);
     });
 
+    test('tot 6 s alleen van hetzelfde album: Africa (Toto IV, 295 tegen 301 s) wel, de orkestversie (ander album) niet',
+        () {
+      final africa = _nr('a/10 - Africa.flac', artiest: 'Toto', titel: 'Africa', sec: 301);
+      final toto = Track(
+          path: africa.path,
+          title: 'Africa',
+          artist: 'Toto',
+          album: 'Toto IV',
+          duration: const Duration(seconds: 301),
+          isFlac: true,
+          bitsPerSample: 16,
+          sampleRate: 44100);
+      final lijst = tidalStereoNummers([
+        _regel('40', 'TOTO', 'Africa', 295, ['LOSSLESS', 'HIRES_LOSSLESS'], album: 'Toto IV'),
+      ].join('\n'));
+      expect(beterOpTidal(toto, lijst, minstens: TidalMinstens.hires)?.id, '40');
+      expect(beterOpTidal(africa, lijst, minstens: TidalMinstens.hires), isNull, reason: 'Mystery Girl is een ander album');
+      final orkest = _nr('a/You Got It.flac', sec: 216 - 6);
+      expect(beterOpTidal(orkest, tidalStereoNummers(_youGotIt), minstens: TidalMinstens.hires), isNull,
+          reason: '216 tegen 210 s, maar op A Love So Beautiful');
+      final zonderAlbum = tidalStereoNummers(_regel('41', 'TOTO', 'Africa', 295, ['HIRES_LOSSLESS']));
+      expect(beterOpTidal(toto, zonderAlbum, minstens: TidalMinstens.hires), isNull,
+          reason: 'zegt TIDAL het album niet, dan 2 s');
+      final teVer = tidalStereoNummers(_regel('42', 'TOTO', 'Africa', 294, ['HIRES_LOSSLESS'], album: 'Toto IV'));
+      expect(beterOpTidal(toto, teVer, minstens: TidalMinstens.hires), isNull, reason: '7 s');
+    });
+
     test('hi-res gaat voor cd, en een afgewezen id komt niet terug', () {
       final t = _nr('a/You Got It.mp3', bits: 0);
       final lijst = tidalStereoNummers([

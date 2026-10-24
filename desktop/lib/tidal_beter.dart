@@ -37,6 +37,11 @@ const int kTidalBeterOpnieuwDagen = 60;
 /// is een andere opname.
 const int kTidalBeterLengteSpeling = 2;
 
+/// Hoeveel de lengte mag schelen als TIDAL het nummer van HETZELFDE album heeft: zoveel als de keuring na het halen.
+/// Toto, "Africa" (Saber, 24-10-2026): op TIDAL 295 s op Toto IV, elke cd-kopie op Soulseek 301 s — een andere master
+/// van dezelfde plaat, die bij 2 s nooit geprobeerd werd. De orkestversie van "You Got It" staat op een ander album.
+const int kTidalBeterLengteSpelingZelfdeAlbum = 6;
+
 /// Wat TIDAL minstens moet hebben om beter te zijn dan wat er ligt.
 enum TidalMinstens {
   /// Daar is bij TIDAL niets te winnen: 24 bit of meer.
@@ -88,15 +93,22 @@ String _titelSleutel(String titel) => normKey(zonderNeutraalMerk(zonderFeat(tite
 /// Het nummer op TIDAL dat [t] is en beter klinkt, of null.
 ///
 /// Dezelfde opname: de artiest volgens [tidalArtiestPast], de titel gelijk op gast en neutrale haakjes na
-/// ("(2015 Remaster)" telt niet, "(Live)" wel), en de lengte op [kTidalBeterLengteSpeling] seconden. Beter: de
-/// kwaliteit die TIDAL zelf opgeeft haalt [minstens]. Hi-res gaat voor, dan de kleinste lengteafwijking. Zonder
-/// gekende lengte van [t] niets: dan is "dezelfde opname" niet na te gaan.
+/// ("(2015 Remaster)" telt niet, "(Live)" wel), en de lengte op [kTidalBeterLengteSpeling] seconden, of op
+/// [kTidalBeterLengteSpelingZelfdeAlbum] als TIDAL het van hetzelfde album heeft. Beter: de kwaliteit die TIDAL zelf
+/// opgeeft haalt [minstens]. Hi-res gaat voor, dan de kleinste lengteafwijking. Zonder gekende lengte van [t] niets:
+/// dan is "dezelfde opname" niet na te gaan.
 TidalTrack? beterOpTidal(Track t, List<TidalTrack> nummers,
     {required TidalMinstens minstens, Iterable<String> nee = const []}) {
   if (minstens == TidalMinstens.geenWinst) return null;
   final sec = t.duration?.inSeconds ?? 0;
   if (sec <= 0) return null;
   final titel = _titelSleutel(t.title);
+  final album = _titelSleutel(t.album);
+  bool lengtePast(TidalTrack x) {
+    final d = (x.seconden - sec).abs();
+    return d <= kTidalBeterLengteSpeling ||
+        (d <= kTidalBeterLengteSpelingZelfdeAlbum && album.isNotEmpty && _titelSleutel(x.album) == album);
+  }
   final weg = nee.toSet();
   bool goedGenoeg(TidalKwaliteit k) =>
       minstens == TidalMinstens.cd ? k != TidalKwaliteit.onbekend : k == TidalKwaliteit.hires;
@@ -105,7 +117,7 @@ TidalTrack? beterOpTidal(Track t, List<TidalTrack> nummers,
       if (!weg.contains(x.id) &&
           goedGenoeg(x.kwaliteit) &&
           x.seconden > 0 &&
-          (x.seconden - sec).abs() <= kTidalBeterLengteSpeling &&
+          lengtePast(x) &&
           _titelSleutel(x.title) == titel &&
           tidalArtiestPast(t.artist, x.artist))
         x,
