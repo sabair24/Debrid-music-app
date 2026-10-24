@@ -147,6 +147,16 @@ enum TidalBeterUitslag {
 }
 
 /// Het geheugen van de ronde, per pad: wanneer en met welke uitslag, en welke TIDAL-ids de keuring afwees.
+/// De regels waarmee de oordelen in het geheugen geveld zijn. Omhoog bij een regel die vaker "beter" vindt: dan
+/// komen de nummers met "niets beters" van vóór die regel opnieuw aan de beurt, in plaats van pas na
+/// [kTidalBeterOpnieuwDagen] dagen.
+/// 2 (25-10-2026): tot 6 s lengteverschil van hetzelfde album ([kTidalBeterLengteSpelingZelfdeAlbum]) — Africa (Toto)
+/// stond met "niets beters" in het geheugen door de 2 s van toen.
+const int kTidalBeterGeheugenVersie = 2;
+
+/// In het bestand een gewone sleutel naast de paden; [TidalBeterGeheugen.laad] slaat hem over (geen kaart).
+const _versieSleutel = 'versie';
+
 class TidalBeterGeheugen {
   TidalBeterGeheugen(this._pad);
   final String _pad;
@@ -181,12 +191,15 @@ class TidalBeterGeheugen {
       if (!await f.exists()) return;
       final j = jsonDecode(await f.readAsString());
       if (j is! Map) return;
+      final oudeRegels = j[_versieSleutel] != kTidalBeterGeheugenVersie;
       for (final e in j.entries) {
         final v = e.value;
         if (v is! Map) continue;
         final uit = TidalBeterUitslag.values.where((u) => u.name == v['uit']).firstOrNull;
         final ms = v['ms'];
         if (uit == null || ms is! num) continue;
+        // "Niets beters" volgens een oudere regel: opnieuw aan de beurt (zie [kTidalBeterGeheugenVersie]).
+        if (oudeRegels && uit == TidalBeterUitslag.geen) continue;
         _regels['${e.key}'] = (
           ms: ms.toInt(),
           uit: uit,
@@ -200,6 +213,7 @@ class TidalBeterGeheugen {
     try {
       final tmp = File('$_pad.tmp');
       await tmp.writeAsString(jsonEncode({
+        _versieSleutel: kTidalBeterGeheugenVersie,
         for (final e in _regels.entries)
           e.key: {'ms': e.value.ms, 'uit': e.value.uit.name, if (e.value.nee.isNotEmpty) 'nee': e.value.nee},
       }));

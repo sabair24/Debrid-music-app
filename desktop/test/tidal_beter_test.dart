@@ -211,6 +211,25 @@ void main() {
       expect(h.van('a/1.flac')?.ms, 6);
       expect(h.van('a/2.mp3')?.uit, TidalBeterUitslag.vervangen);
     });
+
+    test('"niets beters" van vóór de regel van 6 s komt opnieuw aan de beurt; afgewezen en vervangen blijven', () async {
+      final pad = '${map.path}/tidal_beter.json';
+      // Zoals 3.9.606–615 het schreven: zonder versie.
+      File(pad).writeAsStringSync('{"d:/toto/10 - africa.flac":{"ms":5,"uit":"geen"},'
+          '"a/1.flac":{"ms":6,"uit":"afgewezen","nee":["78580436"]},"a/2.mp3":{"ms":7,"uit":"vervangen"}}');
+      final g = TidalBeterGeheugen(pad);
+      await g.laad();
+      expect(g.van('d:/toto/10 - africa.flac'), isNull);
+      expect(g.aanDeBeurt('d:/toto/10 - africa.flac', 10), isTrue);
+      expect(g.van('a/1.flac')?.nee, ['78580436']);
+      expect(g.van('a/2.mp3')?.uit, TidalBeterUitslag.vervangen);
+      g.zet('d:/toto/10 - africa.flac', TidalBeterUitslag.geen, 8);
+      await g.bewaar();
+      final h = TidalBeterGeheugen(pad);
+      await h.laad();
+      expect(h.van('d:/toto/10 - africa.flac')?.uit, TidalBeterUitslag.geen, reason: 'met de nieuwe regel geveld: blijft');
+      expect(h.aantal, 3);
+    });
   });
 
   group('de ronde zelf', () {

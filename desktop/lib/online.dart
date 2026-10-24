@@ -39,7 +39,8 @@ import 'integriteit.dart';
 import 'keuring.dart' show Heelheid, kwaliteitZin;
 import 'wavpack_kop.dart' show readWvKop;
 import 'tidal.dart' show TidalTrack;
-import 'tidal_beter.dart' show TidalBeterUitslag;
+import 'tidal_beter.dart' show TidalBeterUitslag, TidalMinstens, tidalMinstens;
+import 'torrent_hires.dart';
 import 'vinyl.dart' show isVinylRip, vinylAchteraan;
 import 'wav_naar_flac.dart' show wavNaarFlac;
 import 'tidaler.dart' show Tidaler, haalVanTidal, kTidalRadioPerUur, kiesTidalTreffers, zoekOpTidal;
@@ -3689,6 +3690,156 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  /// Platen waarvoor de torrentjacht nu loopt ([_zoekHiresInTorrents]): twee keer "Zoek hi-res" is één jacht.
+  final _torrentJacht = <String>{};
+
+  /// Hi-res uit torrents voor de nummers van één plaat, bij "Zoek hi-res" (Saber, 25-10-2026: "ook via torrents moet
+  /// worden gezocht, wel losse tracks"). Zie torrent_hires.dart voor welke torrents: wat TorBox al heeft, de plaat
+  /// zelf, verliesvrij (hi-res als er een nummer al cd-kwaliteit is), losse nummers, digitaal vóór vinyl. Per nummer
+  /// één bestand uit de torrent, in een eigen keuringsmap, en dan de keuring van een wens ([_keurVoorWens]); wat
+  /// verliest gaat naar `_dubbel`. Vervangen pas als het nummer niet meer speelt. Geeft terug hoeveel nummers er
+  /// vervangen werden.
+  Future<int> _zoekHiresInTorrents(List<Track> nummers, String album, TrackTags Function(Track)? gezag) async {
+    if (!online.torboxReady || nummers.isEmpty) return 0;
+    final artiest = nummers.first.artist;
+    final sleutel = '${normKey(artiest)}|${normKey(album)}';
+    if (!_torrentJacht.add(sleutel)) return 0;
+    final plaat = '"$artiest — $album"';
+    var vervangen = 0;
+    try {
+      bool verdacht(Track t) {
+        final o = gemeten(t.path);
+        return o != null && (o.band == Bandbreedte.vermoedelijk || o.band == Bandbreedte.afgekapt);
+      }
+
+      final eis = <Track, TidalMinstens>{
+        for (final t in nummers)
+          if (tidalMinstens(t, verdacht: verdacht(t)) case final m when m != TidalMinstens.geenWinst) t: m,
+      };
+      if (eis.isEmpty) {
+        _log.line('$plaat: torrents — niets te winnen, alles is al hi-res');
+        return 0;
+      }
+      final hiresNodig = eis.values.contains(TidalMinstens.hires);
+      final treffers = await online.search(albumZoekvraag(artiest, album, jaar: nummers.first.year));
+      final kandidaten = torrentsVoorHires(treffers,
+          artiest: artiest, album: album, jaar: nummers.first.year, hiresNodig: hiresNodig);
+      _log.line('$plaat: torrents — ${treffers.length} treffers, ${kandidaten.length} bruikbaar '
+          '(bij TorBox, ${hiresNodig ? "hi-res" : "verliesvrij"}, de plaat zelf, geen image)');
+      final open = {...eis.keys};
+      for (final r in kandidaten.take(kTorrentHiresHoogstens)) {
+        if (open.isEmpty) break;
+        final hires = hiresVolgensNaam(r.name);
+        final TbTorrent item;
+        try {
+          final (id, hash) = await online._addOrFind(r);
+          item = await online._pollReady(id, hash, patient: false);
+        } catch (e) {
+          _log.line('   torrent "${r.name}": niet te openen bij TorBox — $e');
+          continue;
+        }
+        final indeling = indelingUitBestanden(item.files.map((f) => f.name));
+        if (indeling != TorrentIndeling.losseNummers) {
+          _log.line('   torrent "${r.name}": ${indeling == TorrentIndeling.image ? "image met cue" : "geen muziek"} '
+              '— overgeslagen');
+          continue;
+        }
+        final muziek = [for (final f in item.files) if (f.isAudio && isVerliesvrij(soortVan(f.name))) f];
+        _log.line('   torrent "${r.name}": ${muziek.length} nummers${isVinylRip(r.name) ? ", vinyl" : ""}');
+        for (final t in [...open]) {
+          if (eis[t] == TidalMinstens.hires && !hires) continue;
+          final f = muziek
+              .where((f) => fileOffersTitle(t.title, t.duration?.inSeconds, artiest, f.name, null, album: album))
+              .firstOrNull;
+          if (f == null) continue;
+          if (await _haalUitTorrentEnKeur(t, r, item, f, gezag)) {
+            open.remove(t);
+            vervangen++;
+          }
+        }
+      }
+      _log.line('$plaat: torrents — $vervangen van ${eis.length} nummers vervangen');
+      if (vervangen > 0) {
+        try {
+          await onLibraryChanged();
+        } catch (_) {}
+      }
+      return vervangen;
+    } catch (e) {
+      _log.line('$plaat: torrents — $e');
+      return vervangen;
+    } finally {
+      _torrentJacht.remove(sleutel);
+    }
+  }
+
+  /// Eén nummer uit een torrent bij TorBox halen en keuren. Waar als het in de bibliotheek staat.
+  Future<bool> _haalUitTorrentEnKeur(
+      Track t, SearchResult r, TbTorrent item, TbFile f, TrackTags Function(Track)? gezag) async {
+    final naam = '${t.artist} — ${t.title}';
+    final map = keuringsmapVoor('torrent-hires-${item.id}-${f.id}');
+    final bron = 'torrent "${r.name}"';
+    var laten = false;
+    http.Client? client;
+    try {
+      final t0 = DateTime.now();
+      final url = await online.resolveTrackUrl(item.id, f.id);
+      client = http.Client();
+      final resp = await client.send(http.Request('GET', Uri.parse(url))).timeout(_torrentStilte);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) throw 'HTTP ${resp.statusCode}';
+      await map.create(recursive: true);
+      final doel = File('${map.path}${Platform.pathSeparator}${baseName(f.label)}');
+      final deel = File('${doel.path}.part');
+      final sink = deel.openWrite();
+      var binnen = 0;
+      try {
+        await for (final stuk in resp.stream.timeout(_torrentStilte)) {
+          sink.add(stuk);
+          binnen += stuk.length;
+        }
+      } finally {
+        await sink.close();
+      }
+      final verwacht = resp.contentLength ?? f.size;
+      if (verwacht > 0 && binnen < verwacht) throw 'incompleet: $binnen van $verwacht bytes';
+      await deel.rename(doel.path);
+      _log.line('   $bron: "${baseName(f.label)}" GELEVERD voor "$naam" na ${_kort(DateTime.now().difference(t0))}, '
+          '${(binnen / 1048576).toStringAsFixed(1)} MB');
+      if (!await _wachtTotNietMeerSpeelt(t.path)) {
+        _log.line('   $bron: "$naam" speelt nog — niet vervangen');
+        return false;
+      }
+      final w = LosslessWant(
+          artist: t.artist,
+          title: t.title,
+          album: t.album,
+          authority: gezag?.call(t) ??
+              TrackTags(
+                  title: t.title,
+                  artist: t.artist,
+                  album: t.album,
+                  trackNo: t.trackNo,
+                  year: t.year,
+                  seconds: t.duration?.inSeconds));
+      final uitslag = await _keurVoorWens(w, doel, bron, inJacht: false);
+      if (uitslag != _Wenskeuring.opgeborgen) return false;
+      laten = doel.existsSync();
+      _log.line('"$naam": vervangen door de kopie uit $bron');
+      return true;
+    } catch (e) {
+      _log.line('   $bron: "$naam" mislukt — $e');
+      return false;
+    } finally {
+      client?.close();
+      if (!laten) {
+        try {
+          if (map.existsSync()) await map.delete(recursive: true);
+        } catch (_) {/* in gebruik; dan keurt de volgende start het restant */}
+      }
+      _geefKeuringsmapVrij(map);
+    }
+  }
+
   /// Wat er met een binnengekomen kandidaat voor een wens gebeurt, van Soulseek of van TIDAL ([bron]
   /// staat in het logboek). Alles wat niet [_Wenskeuring.opgeborgen] is, is al weggegooid.
   ///
@@ -5002,6 +5153,9 @@ class DownloadManager extends ChangeNotifier {
     ];
     if (te.isEmpty) return 0;
     final begonnen = <String>{if (!alleenHires) ...?tidalNu?.call(te)};
+    // "Zoek hi-res" op een plaat: ook de torrents, op de achtergrond (Saber, 25-10-2026: "ook via torrents moet worden
+    // gezocht, wel losse tracks") — zie [_zoekHiresInTorrents].
+    if (!alleenHires && (album?.trim() ?? '').isNotEmpty) unawaited(_zoekHiresInTorrents(te, album!.trim(), gezag));
     if (!soulseek.available) return begonnen.length;
     // Gewoon: de vraag, met "24bit" als eigen zoekopdracht erachter. Na het landen: alleen die tweede.
     Future<List<SoulseekFile>> zoek(String vraag) => alleenHires
