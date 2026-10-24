@@ -42,7 +42,7 @@ const kMeetEffecten = {
   'schijf': 'zonder de cd naast de hoes',
   'licht': 'cd zonder licht en schaduwen',
   'kantel': 'de hoes kantelt niet',
-  'foto': 'Nu speelt ook bij het openen als één foto',
+  'openlevend': 'Nu speelt bij het openen levend, niet als foto (zoals vóór 3.9.594)',
   'levend': 'Nu speelt ook bij het sluiten levend (zoals vóór 3.9.590)',
   'tegelspiegel': 'zonder de spiegeling onder de albumtegels',
   'tegelstroken': 'de spiegeling onder de tegels in stroken, ook op de Mac en de iPad (zoals vóór 3.9.593)',
