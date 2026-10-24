@@ -6205,14 +6205,22 @@ class AlbumsGrid extends StatelessWidget {
 List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
   final groups = _groupAlbums(albums, sort ?? AlbumSort.artiest);
   return [
-    for (final g in groups) ...[
-      SliverPadding(
-        padding: const EdgeInsets.fromLTRB(24, 10, 24, 8),
-        sliver: SliverToBoxAdapter(
-          child: Text(g.$1, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-        ),
-      ),
-      SliverToBoxAdapter(
+    // Eén lijst die alleen bouwt wat in beeld komt, en geen blok per rij (Shield, 24-10-2026). Een viewport maakt elk
+    // los blok (SliverToBoxAdapter) op, ook ver buiten beeld, om de lengte van de pagina te kennen — en een rij
+    // opmaken bouwt zijn tegels. Gemeten met de meetronde: Albums openen bouwde zo 28 rijen en 173 tegels, één beeld van
+    // 360 ms, waar er 12 tegels in beeld stonden. Een SliverList maakt alleen de rijen in beeld en de voorraad erachter.
+    SliverList.builder(
+      itemCount: groups.length,
+      itemBuilder: (context, rij) {
+        final g = groups[rij];
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 10, 24, 8),
+              child: Text(g.$1, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+            ),
         // De rij is hoger dan de tegel, met opzet, en dat is de hele truc.
         //
         // De tegel legt zijn hoes in een `Expanded`, dus hij neemt precies de hoogte die hij krijgt
@@ -6228,7 +6236,7 @@ List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
         // viel de artiestnaam van de gemarkeerde tegel op de Shield onder de spelerbalk. En sinds
         // 18-10-2026 140, de maat van de rijen op Start: op de Shield stond de rij met 180 zo laag dat
         // de titels onder de spelerbalk lagen ("album raster is te groot").
-        child: Builder(builder: (context) {
+            Builder(builder: (context) {
           final hoog = hoogteVanTegel(context, hoes: kTvAlbumHoes);
           // Een rij als blok in een meetronde ([MeetBlok]).
           return MeetBlok('Albumrij', child: SizedBox(
@@ -6247,8 +6255,10 @@ List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
             ),
           ));
         }),
-      ),
-    ],
+          ],
+        );
+      },
+    ),
     const SliverToBoxAdapter(child: SizedBox(height: 16)),
   ];
 }
