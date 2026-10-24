@@ -48,6 +48,7 @@ const kMeetEffecten = {
   'tegelstroken': 'de spiegeling onder de tegels in stroken, ook op de Mac en de iPad (zoals vóór 3.9.593)',
   'tegelbak': 'de spiegeling onder de tegels gebakken, ook op de pc en de gsm',
   'overgang': 'een andere hoofdpagina meteen, zonder overvloeien en schuiven',
+  'schuifglas': 'op de pc het glas mét vervaging terwijl Nu speelt schuift (zoals vóór 3.9.593)',
   'paginalevend': 'een andere hoofdpagina levend laten overvloeien (zoals vóór 3.9.592), niet als foto',
 };
 
