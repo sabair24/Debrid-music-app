@@ -190,6 +190,7 @@ import 'soulseek.dart';
 import 'tidal.dart';
 import 'tidaler.dart';
 import 'tidal_beter.dart';
+import 'vinyl.dart' show isVinylRip;
 import 'torbox.dart';
 import 'torbox_stand.dart';
 import 'torrentvoornummer.dart';
@@ -23930,6 +23931,23 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
             style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: _accent2)),
       ),
     if (_surroundMerk(f) != null) merk(_surroundMerk(f)!),
+    // VINYL (Saber, 24-10-2026: "alleen als ik kies", met een label): van een plaat afgespeeld, geen cd of digitale
+    // uitgave. Geen waarschuwing en geen keurmerk, dus in de gedempte kleur; de app neemt hem nooit vanzelf in de
+    // plaats van jouw versie ([isVinylRip], `magOpwaarderen`).
+    if (isVinylRip(f.filename))
+      Tooltip(
+        message: 'Van een plaat afgespeeld: naaldgeluid en vaak een andere lengte. '
+            'Vervangt nooit vanzelf je eigen versie — alleen als je hem zelf kiest.',
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: _muted.withValues(alpha: .12),
+            borderRadius: BorderRadius.circular(5),
+            border: Border.all(color: _muted.withValues(alpha: .45)),
+          ),
+          child: Text('vinyl', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: _muted)),
+        ),
+      ),
     // TE KLEIN VOOR WAT HET BEWEERT. Meten kan hier niet: je kunt niet in het bestand van een
     // vreemde kijken zonder het eerst binnen te halen. Wat wél kan is de getallen tegen elkaar
     // wegstrepen die de peer zelf meestuurt — een 24/96 die uit een 44,1-bron is opgetild pakt veel
@@ -26268,6 +26286,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ),
         // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
         zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title),
+            // Ook "24bit": de jacht op beter na het downloaden kiest uit deze uitslag (kHiresZoekwoorden).
+            extra: kHiresZoekwoorden,
             seconden: t.seconden,
             zeefOp: (titel: t.title, artiest: t.artist, album: t.album),
             zeef: (l) => zeefKandidaten(l, titel: t.title, seconden: t.seconden, artiest: t.artist, album: t.album)),
@@ -30851,6 +30871,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       // Diam's)" van Amel Bent kreeg zo nul bronnen naast een rij peers met "03. A 20 Ans.flac".
       // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
       for (final f in await soulseek.zoekVroeg(soulseekQuery(widget.artistName, t.title),
+          extra: kHiresZoekwoorden,
           seconden: t.durationSec,
           zeefOp: (titel: t.title, artiest: widget.artistName, album: widget.album.title),
           zeef: (l) => zeefKandidaten(l,

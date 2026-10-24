@@ -78,7 +78,8 @@ void main() {
         lessThan(lus.indexOf('_conn!.send(_message(26,')), reason: 'vóór elke FileSearch');
     final o = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(o, contains('achtergrond: _radiohalen.contains(job),'), reason: 'de radio; ▶ los van de radio niet');
-    expect(o, contains('hits = await soulseek.search(w.query, achtergrond: true);'), reason: 'de verlanglijst');
+    expect(o, contains('hits = await soulseek.search(w.query, achtergrond: true, extra: kHiresZoekwoorden);'),
+        reason: 'de verlanglijst (met 24bit erbij sinds 24-10-2026)');
     expect(o, contains('s.search(variants.toList(), onPartial: onPartial, achtergrond: achtergrond)'));
   });
 }

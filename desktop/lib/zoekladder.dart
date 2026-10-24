@@ -87,6 +87,30 @@ List<List<String>> zoekRondes(String vraag) {
   return uit;
 }
 
+/// Woorden die de jacht op betere kwaliteit als EXTRA vraag meestuurt, naast de gewone ([SoulseekService.search],
+/// `extra`). Saber, 24-10-2026, na een proef met twaalf en zes nummers: "24bit" (zonder streepje) vond hi-res die
+/// de gewone zoekopdracht niet had — Phil Collins +89, Lionel Richie +57, Daft Punk +41 — want een peer stuurt per
+/// zoekopdracht maar een beperkt aantal treffers. "24-bit" met streepje vond meestal niets letterlijks, "wav" bijna
+/// niets, en "vinyl" hoort er niet bij: vinyl alleen als hij zelf kiest. Alleen in de eerste ronde, en de gewone vraag
+/// blijft: zo kan het nooit minder opleveren dan zonder.
+const kHiresZoekwoorden = ['24bit'];
+
+/// [rondes] met in de eerste ronde, achter de vragen die er al stonden, "<volledige vraag> <woord>" voor elk woord uit
+/// [extra]. De andere rondes (de terugval op de eerste twee woorden) blijven zoals ze waren.
+List<List<String>> metExtraWoorden(List<List<String>> rondes, List<String> extra) {
+  if (rondes.isEmpty || extra.isEmpty) return rondes;
+  final eerste = rondes.first;
+  final heel = eerste.first;
+  final bij = [
+    for (final w in extra)
+      if (w.trim().isNotEmpty && !heel.toLowerCase().split(' ').contains(w.trim().toLowerCase())) '$heel ${w.trim()}',
+  ];
+  return [
+    [...eerste, ...bij.where((v) => !eerste.contains(v))],
+    ...rondes.skip(1),
+  ];
+}
+
 /// Hoort er bij de resultaten verteld te worden dat er ruimer gezocht is?
 ///
 /// Zodra er niet op de eerste trede gezocht is, gaat de lijst over een ándere vraag dan die je

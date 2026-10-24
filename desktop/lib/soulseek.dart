@@ -148,9 +148,12 @@ class SlskQueued extends SlskResult {
   SlskQueued(this.place);
 }
 
-/// Audio files, best-first: FLAC, then free slots, then speed, then size.
+/// Audio files, best-first: FLAC, then the other lossless formats (WAV, AIFF, APE …), then the rest; within each,
+/// free slots, then speed, then size.
 ///
-/// WAV is left out entirely, and not merely ranked low as it used to be.
+/// **WAV mag sinds 24-10-2026 weer mee** (Saber: "WAV halen, omzetten naar FLAC"): `keurOverdracht` in online.dart
+/// zet elke binnengekomen WAV verliesvrij om naar FLAC (wav_naar_flac.dart), en dan kan de app er tags in schrijven.
+/// Veel vinyl- en studio-rips staan alleen als WAV. Wat hieronder staat, is waarom hij tot dan toe helemaal wegbleef:
 ///
 /// A WAV cannot carry the tags this app writes. `stampTags` refuses anything but FLAC, and the RIFF
 /// writer in the dependency only rewrites a `LIST/INFO` chunk that is ALREADY there — it never adds
@@ -166,14 +169,14 @@ class SlskQueued extends SlskResult {
 /// voor de 60.143 treffers van "Live V" (gemeten 15-10-2026), op de draad van de pc die ook de muziek
 /// naar de toestellen stuurt — en bij een zoektocht op de pc zelf elke 300 ms opnieuw ([_SearchRun]).
 List<SoulseekFile> sortSoulseek(Iterable<SoulseekFile> files) {
-  final audio = <(SoulseekFile, bool)>[
+  final audio = <(SoulseekFile, int)>[
     for (final f in files)
-      if (f.ext case final e when e != 'wav' && audioSoorten.contains(e)) (f, e == 'flac'),
+      if (f.ext case final e when audioSoorten.contains(e)) (f, e == 'flac' ? 0 : (isVerliesvrij(e) ? 1 : 2)),
   ];
   audio.sort((x, y) {
     final (a, fa) = x;
     final (b, fb) = y;
-    if (fa != fb) return fa ? -1 : 1;
+    if (fa != fb) return fa.compareTo(fb);
     if (a.freeSlots != b.freeSlots) return a.freeSlots ? -1 : 1;
     if (a.speed != b.speed) return b.speed.compareTo(a.speed);
     return b.size.compareTo(a.size);

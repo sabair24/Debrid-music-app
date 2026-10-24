@@ -299,10 +299,12 @@ class RemoteSoulseekService extends SoulseekService {
   Future<List<SoulseekFile>> search(String query,
       {void Function(List<SoulseekFile>)? onPartial,
       void Function(String)? gebruikteVraag,
-      bool achtergrond = false}) async {
+      bool achtergrond = false,
+      List<String> extra = const []}) async {
     gebruikteVraag?.call(query.trim().replaceAll(RegExp(r'\s+'), ' '));
-    final files = await soulseekBestandenUit(
-        await _rpc.getBytes('/api/soulseek/search', query: {'q': query}));
+    // [extra] gaat mee naar de pc, die zoekt ([kHiresZoekwoorden]); een oudere pc laat hem liggen en zoekt zoals vroeger.
+    final files = await soulseekBestandenUit(await _rpc.getBytes('/api/soulseek/search',
+        query: {'q': query, if (extra.isNotEmpty) 'extra': extra.join(',')}));
     onPartial?.call(files);
     return files;
   }
@@ -315,10 +317,12 @@ class RemoteSoulseekService extends SoulseekService {
   Future<List<SoulseekFile>> zoekVroeg(String vraag,
       {required Future<List<SoulseekFile>> Function(List<SoulseekFile>) zeef,
       int? seconden,
-      ({String titel, String artiest, String? album})? zeefOp}) async {
-    if (zeefOp == null) return super.zoekVroeg(vraag, zeef: zeef, seconden: seconden);
+      ({String titel, String artiest, String? album})? zeefOp,
+      List<String> extra = const []}) async {
+    if (zeefOp == null) return super.zoekVroeg(vraag, zeef: zeef, seconden: seconden, extra: extra);
     final files = await soulseekBestandenUit(await _rpc.getBytes('/api/soulseek/search', query: {
       'q': vraag,
+      if (extra.isNotEmpty) 'extra': extra.join(','),
       'vroegTitel': zeefOp.titel,
       'vroegArtiest': zeefOp.artiest,
       if (zeefOp.album != null && zeefOp.album!.isNotEmpty) 'vroegAlbum': zeefOp.album!,

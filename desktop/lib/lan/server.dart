@@ -2519,10 +2519,17 @@ class LanServer {
     final vp = req.uri.queryParameters;
     final titel = vp['vroegTitel'] ?? '';
     final seconden = int.tryParse(vp['seconden'] ?? '');
+    // De extra woorden van de jacht op beter ([kHiresZoekwoorden]), van een toestel. Alleen woorden, en hoogstens drie:
+    // elk woord is een vraag meer bij Soulseek.
+    final extra = [
+      for (final w in (vp['extra'] ?? '').split(','))
+        if (RegExp(r'^[A-Za-z0-9-]{2,12}$').hasMatch(w.trim())) w.trim(),
+    ].take(3).toList();
     try {
       final files = titel.isEmpty
-          ? await service.search(q)
+          ? await service.search(q, extra: extra)
           : await service.zoekVroeg(q,
+              extra: extra,
               seconden: seconden,
               zeef: (l) => zeefKandidaten(l,
                   titel: titel, seconden: seconden, artiest: vp['vroegArtiest'] ?? '', album: vp['vroegAlbum']));
