@@ -101,7 +101,10 @@ class DiscographyService {
   /// remixuitgaven tussen de albums.
   /// v11: MusicBrainz beslist welke platen er zijn en van welke soort ([volgensMusicBrainz]); een
   /// bewaarde lijst draagt nog Deezers verzamelaars en Discogs' concertdownloads tussen de albums.
-  static const schema = 'disco|v11';
+  /// v12: twee platen met dezelfde titel blijven twee regels, elk met zijn eigen Deezer-album en hoes (Seal 1991 en
+  /// 1994, zie [mergeDiscography]). Een bewaarde lijst draagt nog "Seal" 1991 met de hoes en de tracklijst van de
+  /// krantenuitgave van 2007, en de artiestpagina neemt de hoezen van een bewaarde lijst over in haar eigen tabel.
+  static const schema = 'disco|v12';
 
   /// Hoe lang een bewaard antwoord meegaat voor er bij Deezer opnieuw wordt gekeken.
   ///

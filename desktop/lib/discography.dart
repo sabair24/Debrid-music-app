@@ -556,6 +556,7 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
   }
 
   for (final lijst in bronnen) {
+    final klaar = <({DiscoRelease r, String g})>[];
     for (final r0 in lijst) {
       final k = r0.key;
       if (k.isEmpty) continue;
@@ -572,7 +573,30 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
               sources: r0.sources,
               refs: r0.refs,
             );
-      final g = _isKlein(r.kind) ? '$k$_klein' : k;
+      klaar.add((r: r, g: _isKlein(r.kind) ? '$k$_klein' : k));
+    }
+    // Wie het eerst bij een regel aansluit, geeft hem zijn hoes en zijn verwijzing ([DiscoRelease.mergedWith]). Daarom
+    // per bron eerst wat in jaar en soort het dichtst bij een regel ligt die er al staat, en wat geen jaar draagt het
+    // laatst. Seal (24-10-2026): Discogs noemt eerst een dvd uit 2008 en de krantenuitgave van 2007 (The Mail on
+    // Sunday), pas daarna de cd's van 1994 en 1991. In aanvoervolgorde kreeg Seal 1991 de hoes en de tracklijst van
+    // de krant.
+    int rang(({DiscoRelease r, String g}) e) {
+      if (_jaar(e.r) == null) return 1 << 30;
+      var beste = 1 << 29;
+      for (final s in varianten[e.g] ?? const <String>[]) {
+        final b = samen[s]!;
+        final d = _jaarAfstand(b, e.r);
+        if (d == null) continue;
+        final soortAnders = b.kind != e.r.kind && b.kind != RecordKind.other && e.r.kind != RecordKind.other;
+        if (d * 2 + (soortAnders ? 1 : 0) < beste) beste = d * 2 + (soortAnders ? 1 : 0);
+      }
+      return beste;
+    }
+
+    final volgorde = [for (var i = 0; i < klaar.length; i++) (i: i, rang: rang(klaar[i]))]
+      ..sort((a, b) => a.rang != b.rang ? a.rang.compareTo(b.rang) : a.i.compareTo(b.i));
+    for (final v in volgorde) {
+      final (:r, :g) = klaar[v.i];
       final plek = plekVoor(g, r);
       final bestaand = samen[plek];
       samen[plek] = bestaand == null ? r : bestaand.mergedWith(r);
@@ -586,6 +610,16 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
     final k = g.substring(0, g.length - _klein.length);
     final groot = samen[k];
     if (klein == null || groot == null) continue;
+    // Draagt de titel nog een grote plaat die MusicBrainz kent (zie [_anderePlaat]), dan is [groot] een heruitgave
+    // daarvan en niet de single. Eurythmics, "Sweet Dreams (Are Made of This)": Deezer heeft het album vier keer (1987,
+    // 1999, 2003, 2018), MusicBrainz het album van 1983 en de single van 1982, en de heruitgave van 2018 belandde zo
+    // bij de single. Kent MusicBrainz geen album met die titel, dan blijft het zoals het was: Johnny Hallyday,
+    // "Rivière… ouvre ton lit", is bij MusicBrainz alleen een single, en Deezers album (2000, 2020) geeft hem een
+    // hoes en nummers.
+    if ((varianten[k] ?? const <String>[])
+        .any((s) => s != k && (samen[s]?.sources.contains(DiscoSource.musicbrainz) ?? false))) {
+      continue;
+    }
     // Een regel zonder mening (een Discogs-master zonder formaat) bij een titel die verder alleen als
     // single bekend is: bij die single, zoals hij dat altijd deed.
     if (groot.kind == RecordKind.other || _alleenDeezerZegtKlein(klein, groot)) {
@@ -831,7 +865,8 @@ const Duration kNieuwVenster = Duration(days: 183);
 ///   die kent MusicBrainz misschien nog niet.
 ///
 /// Kent MusicBrainz de artiest niet, of minder dan [kMbGenoeg] albums (of antwoordde hij niet), dan
-/// blijft [samen] zoals hij is: dan is er geen beter pad.
+/// blijft [samen] zoals hij is: dan is er geen beter pad. Alleen de heruitgaven die alleen Deezer kent, gaan
+/// eruit ([zonderDeezerDubbels]).
 ///
 /// [artiest]: Deezer zet de naam soms vóór of achter de titel ("Alabina, l'essentiel", "Les amours perdues -
 /// Serge Gainsbourg"). Een MusicBrainz-regel zonder Deezer-link krijgt die van zo'n regel ("L'Essentiel"),
@@ -842,7 +877,7 @@ List<DiscoRelease> volgensMusicBrainz(List<DiscoRelease> samen, List<DiscoReleas
     for (final m in mb)
       if (soortMetTitel(m.kind, m.title) == RecordKind.album) m.key,
   };
-  if (mbAlbums.length < kMbGenoeg) return samen;
+  if (mbAlbums.length < kMbGenoeg) return zonderDeezerDubbels(samen);
   final mbSleutels = {for (final m in mb) m.key};
   final perMbId = <String, DiscoRelease>{
     for (final r in samen)
@@ -915,6 +950,35 @@ List<DiscoRelease> volgensMusicBrainz(List<DiscoRelease> samen, List<DiscoReleas
           _blijftNaastMb(r, mbAlbums, mbSleutels, grens))
         r,
   ];
+}
+
+/// Zonder MusicBrainz als scheidsrechter: één regel per titel en maat voor wat alleen Deezer kent.
+///
+/// Deezer houdt sinds 24-10-2026 twee uitgaven met dezelfde titel die twee jaar of meer uiteen liggen allebei
+/// (Seal 1991 en 1994, zie `CatalogService.ontdubbelArtiestAlbums`), en dan beslist MusicBrainz welke bij welke plaat
+/// hoort. Zonder MusicBrainz is dat meestal een heruitgave (Toto 1978 en 2006). Een regel die alleen Deezer kent valt
+/// dan weg naast een regel met dezelfde titel die een andere bron ook kent; kent alleen Deezer ze allemaal, dan blijft
+/// de nieuwste, zoals vóór 24-10-2026.
+List<DiscoRelease> zonderDeezerDubbels(List<DiscoRelease> rijen) {
+  String plaat(DiscoRelease r) => r.key + (_isKlein(r.kind) ? _klein : '');
+  bool alleenDeezer(DiscoRelease r) => r.sources.length == 1 && r.sources.contains(DiscoSource.deezer);
+  final per = <String, List<DiscoRelease>>{};
+  for (final r in rijen) {
+    (per[plaat(r)] ??= []).add(r);
+  }
+  final weg = Set<DiscoRelease>.identity();
+  for (final groep in per.values) {
+    if (groep.length < 2) continue;
+    final deezer = groep.where(alleenDeezer).toList();
+    if (deezer.isEmpty) continue;
+    if (deezer.length < groep.length) {
+      weg.addAll(deezer);
+    } else {
+      deezer.sort((a, b) => (b.firstDate ?? '').compareTo(a.firstDate ?? ''));
+      weg.addAll(deezer.skip(1));
+    }
+  }
+  return weg.isEmpty ? rijen : [for (final r in rijen) if (!weg.contains(r)) r];
 }
 
 /// Een regel die MusicBrainz niet kent: blijft hij staan? Zie [volgensMusicBrainz].

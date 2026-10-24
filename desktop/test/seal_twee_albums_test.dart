@@ -24,6 +24,28 @@ DiscoRelease _mb(String id, String datum, {RecordKind kind = RecordKind.album, S
       refs: {DiscoSource.musicbrainz: CatalogRef.musicbrainzGroup(id)},
     );
 
+DiscoRelease _dg(CatalogRef ref, String jaar, RecordKind kind, String hoes, {String titel = 'Seal'}) => DiscoRelease(
+      title: titel,
+      kind: kind,
+      firstDate: jaar,
+      cover: hoes,
+      sources: const {DiscoSource.discogs},
+      refs: {DiscoSource.discogs: ref},
+    );
+
+// Discogs, in de volgorde waarin vanDiscogs ze gaf (gemeten 24-10-2026). De dvd, de krant en de 2004-regels droegen
+// allemaal de hoes van de krant (Discogs-uitgave 1511987, "The Mail On Sunday"), via de zoeksweep op titel.
+final _discogs = [
+  _dg(CatalogRef.discogsRelease(26081905), '2008', RecordKind.video, 'krant.jpg'),
+  _dg(CatalogRef.discogsRelease(38613441), '2007', RecordKind.compilation, 'krant.jpg'),
+  _dg(CatalogRef.discogsMaster(386611), '2007', RecordKind.compilation, 'krant.jpg'),
+  _dg(CatalogRef.discogsRelease(14596580), '2004', RecordKind.other, 'krant.jpg'),
+  _dg(CatalogRef.discogsMaster(1284411), '2004', RecordKind.other, 'ander-2004.jpg'),
+  _dg(CatalogRef.discogsMaster(61206), '1994', RecordKind.album, 'dg-1994.jpg'),
+  _dg(CatalogRef.discogsMaster(363645), '1991', RecordKind.video, 'vhs-1991.jpg'),
+  _dg(CatalogRef.discogsMaster(61188), '1991', RecordKind.album, 'dg-1991.jpg'),
+];
+
 const _mb1991 = '97375917-d328-3738-a556-9edfb489cdad';
 const _mb1994 = '3bb226b7-db0b-3288-bea4-e2fecbe20c20';
 const _mb2007 = '5465b2ec-2b45-4c34-aefb-6258be6843f0';
@@ -93,5 +115,74 @@ void main() {
     expect([for (final g in groepenZonderHoes(rijen)) g.sleutel], ['mb:$_mb1991', 'mb:$_mb1994', 'mb:$_mb2007']);
     // Een titel die maar één plaat draagt, krijgt de hoes onder zijn titel zoals vroeger.
     expect(vulHoezenAan([_mb('mb-iv', '2003-06-22', titel: 'Seal IV')], {'seal iv': 'iv.jpg'}).single.cover, 'iv.jpg');
+  });
+  test('Discogs in zijn eigen volgorde: de cd van 1991 en die van 1994 sluiten aan, niet de krant of de dvd', () {
+    final samen = mergeDiscography([deezer, mb, _discogs]);
+    final rijen = volgensMusicBrainz(samen, mb, artiest: 'Seal').where((r) => r.key == 'seal').toList();
+    final eerste = rijen.firstWhere((r) => mbVan(r) == _mb1991);
+    final tweede = rijen.firstWhere((r) => mbVan(r) == _mb1994);
+    expect(eerste.refs[DiscoSource.discogs]?.id, '61188');
+    expect(tweede.refs[DiscoSource.discogs]?.id, '61206');
+    expect(eerste.cover, 'dz-1991.jpg');
+    expect(tweede.cover, 'dz-1994.jpg');
+    expect(eerste.kind, RecordKind.album);
+  });
+
+  test('zonder Deezer-album voor 1991: de hoes van de Discogs-cd, niet die van de krant', () {
+    // Zoals vóór 24-10-2026: Deezer gaf per titel alleen de nieuwste ("Seal" 1994).
+    final samen = mergeDiscography([[deezer.last], mb, _discogs]);
+    final rijen = volgensMusicBrainz(samen, mb, artiest: 'Seal').where((r) => r.key == 'seal').toList();
+    final eerste = rijen.firstWhere((r) => mbVan(r) == _mb1991);
+    expect(eerste.cover, 'dg-1991.jpg');
+    expect(eerste.refs[DiscoSource.discogs]?.id, '61188');
+  });
+
+  test('zonder MusicBrainz: een heruitgave die alleen Deezer kent valt weg, twee echte platen blijven', () {
+    final toto = [
+      _dz(1441741, '2006-04-14', 'toto-2006.jpg', titel: 'Toto'),
+      _dz(116633, '1978-10-10', 'toto-1978.jpg', titel: 'Toto'),
+    ];
+    final metDiscogs = volgensMusicBrainz(
+        mergeDiscography([toto, const [], [_dg(CatalogRef.discogsMaster(1), '1978', RecordKind.album, 'dg.jpg', titel: 'Toto')]]),
+        const []);
+    expect(metDiscogs.map((r) => r.refs[DiscoSource.deezer]?.id), ['116633']);
+    final alleenDeezer = volgensMusicBrainz(mergeDiscography([toto]), const []);
+    expect(alleenDeezer.map((r) => r.refs[DiscoSource.deezer]?.id), ['1441741'], reason: 'de nieuwste, zoals vroeger');
+    final seal = volgensMusicBrainz(mergeDiscography([deezer, const [], _discogs]), const []);
+    expect(seal.where((r) => r.key == 'seal' && r.refs.containsKey(DiscoSource.deezer)).map((r) => r.refs[DiscoSource.deezer]!.id).toSet(),
+        {'86422', '467277'});
+  });
+  test('een titel met meer albums: een losse Deezer-heruitgave gaat niet naar de single (Eurythmics)', () {
+    const t = 'Sweet Dreams (Are Made of This)';
+    final dz = [
+      _dz(1453419, '2018-04-13', '2018.jpg', titel: t),
+      _dz(73280, '2003-10-21', '2003.jpg', titel: t),
+      _dz(1453421, '1999-12-30', '1999.jpg', titel: t),
+      _dz(121458, '1987-10-09', '1987.jpg', titel: t),
+    ];
+    final mbE = [
+      _mb('mb-sd', '1983', titel: t),
+      _mb('mb-sd-single', '1982', kind: RecordKind.single, titel: t),
+      _mb('mb-garden', '1981-10-16', titel: 'In the Garden'),
+      _mb('mb-touch', '1983-11-14', titel: 'Touch'),
+    ];
+    final rijen = volgensMusicBrainz(mergeDiscography([dz, mbE, const []]), mbE, artiest: 'Eurythmics');
+    final single = rijen.firstWhere((r) => mbVan(r) == 'mb-sd-single');
+    expect(dzVan(single), isNull, reason: 'een Deezer-album hoort niet bij een single');
+    expect(dzVan(rijen.firstWhere((r) => mbVan(r) == 'mb-sd')), '121458', reason: 'het jaar dat het dichtst bij 1983 ligt');
+  });
+  test('kent MusicBrainz alleen de single, dan krijgt die het Deezer-album zoals vroeger (Johnny Hallyday)', () {
+    const t = 'Rivière... Ouvre ton lit';
+    final dz = [_dz(150699042, '2020-05-29', '2020.jpg', titel: t), _dz(242145, '2000-04-22', '2000.jpg', titel: t)];
+    final mbJ = [
+      _mb('mb-riv', '1969-03-10', kind: RecordKind.single, titel: t),
+      _mb('mb-a', '1961', titel: 'Salut les copains'),
+      _mb('mb-b', '1962', titel: 'Sings America'),
+      _mb('mb-c', '1964', titel: 'Les Rocks les plus terribles'),
+    ];
+    final rijen = volgensMusicBrainz(mergeDiscography([dz, mbJ, const []]), mbJ, artiest: 'Johnny Hallyday');
+    final single = rijen.firstWhere((r) => mbVan(r) == 'mb-riv');
+    expect(dzVan(single), isNotNull);
+    expect(single.cover, isNotNull);
   });
 }

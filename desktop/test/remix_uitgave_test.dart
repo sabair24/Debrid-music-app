@@ -170,7 +170,7 @@ void main() {
       expect(bron('lib/discography.dart'), contains('      final soort = soortMetTitel(r0.kind, r0.title);\n'));
       expect(bron('lib/main.dart'),
           contains('if (!_gasten.contains(r.key)) metNagekekenSoort(r, singles: _maxisingles, remixen: _remixAlbums),'));
-      expect(bron('lib/discography_service.dart'), contains("static const schema = 'disco|v11';"));
+      expect(bron('lib/discography_service.dart'), contains("static const schema = 'disco|v12';"));
       expect(bron('lib/main.dart'),
           contains('volgensMusicBrainz(mergeDiscography([dz.releases, mb.releases, dg.releases]), mb.releases,\n'
               '            artiest: naam),'));
