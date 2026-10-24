@@ -6,9 +6,12 @@
 // het proberen waard zijn; online.dart (`_zoekHiresInTorrents`) haalt er per nummer één bestand uit en keurt het
 // zoals elke andere kandidaat (echt, even lang, dezelfde opname, bewezen beter).
 //
-// Alleen wat TorBox al heeft ("Instant"): dan staat het bestand er meteen en kost een torrent die niets oplevert
-// alleen een lijst opvragen. Alleen torrents met losse nummers: een image met een cue moet eerst helemaal binnen en
-// geknipt worden, en dat is een hele plaat halen voor één nummer.
+// Eerst wat TorBox al heeft ("Instant"): dan staat het bestand er meteen en kost een torrent die niets oplevert alleen
+// een lijst opvragen. Daarna een paar die TorBox eerst nog moet halen, met genoeg seeders: GEMETEN op acht proefplaten
+// uit Sabers bibliotheek (25-10-2026) had er maar één een hi-res torrent die al Instant was (Adele, 30), en hij wil
+// "nooit inboeten in aantal resultaten". Dat halen gebeurt bij TorBox; naar de pc komen alleen de nummers zelf.
+// Alleen torrents met losse nummers: een image met een cue moet eerst helemaal binnen en geknipt worden, en dat is een
+// hele plaat halen voor één nummer.
 
 import 'audioformaten.dart' show isAudioBestand;
 import 'organize.dart' show surroundLabel;
@@ -17,8 +20,15 @@ import 'torbox.dart' show SearchResult;
 import 'torrentvoornummer.dart';
 import 'vinyl.dart' show isVinylRip;
 
-/// Hoeveel torrents er hoogstens geprobeerd worden per plaat.
+/// Hoeveel torrents die TorBox al heeft (Instant) er hoogstens geprobeerd worden per plaat.
 const int kTorrentHiresHoogstens = 3;
+
+/// Hoeveel torrents die TorBox nog moet halen er hoogstens geprobeerd worden per plaat, na de Instant-torrents. Elk kan
+/// TorBox tot een kwartier kosten (`_pollReady` geduldig, en weg na anderhalve minuut zonder voortgang).
+const int kTorrentHiresNietKlaar = 2;
+
+/// Zoveel seeders minstens voor een torrent die TorBox eerst nog moet halen: met minder komt hij zelden binnen.
+const int kTorrentHiresMinSeeders = 3;
 
 /// Hoe een torrent zijn muziek bewaart.
 enum TorrentIndeling {
@@ -67,16 +77,17 @@ bool hiresVolgensNaam(String naam) {
 /// De torrents die voor de plaat [album] van [artiest] het proberen waard zijn, in de volgorde waarin ze geprobeerd
 /// worden.
 ///
-/// Erin: wat TorBox al heeft, de plaat zelf noemt ([torrentVoorNummer] → album; geen discografie), verliesvrij is en —
-/// als [hiresNodig] — hi-res volgens de naam, in stereo, zonder DSD, en niet als image. Volgorde: een digitale uitgave
-/// vóór vinyl (zoals bij Soulseek, `vinylAchteraan`), hi-res vóór cd-kwaliteit, daarbinnen zoals de zoektocht ze gaf
+/// Erin: wat TorBox al heeft of met minstens [kTorrentHiresMinSeeders] seeders, de plaat zelf noemt
+/// ([torrentVoorNummer] → album; geen discografie), verliesvrij is en — als [hiresNodig] — hi-res volgens de naam, in
+/// stereo, zonder DSD, en niet als image. Volgorde: eerst alles wat TorBox al heeft; daarbinnen een digitale uitgave
+/// vóór vinyl (zoals bij Soulseek, `vinylAchteraan`), hi-res vóór cd-kwaliteit, en dan zoals de zoektocht ze gaf
 /// (seeders).
 List<SearchResult> torrentsVoorHires(List<SearchResult> treffers,
     {required String artiest, required String album, int? jaar, required bool hiresNodig}) {
   final goed = <(int, SearchResult)>[];
   for (var i = 0; i < treffers.length; i++) {
     final r = treffers[i];
-    if (!r.cached) continue;
+    if (!r.cached && r.seeders < kTorrentHiresMinSeeders) continue;
     final q = qualityFromName(r.name);
     final hires = hiresVolgensNaam(r.name);
     if (q.label == 'DSD' || !(q.lossless || hires)) continue;
@@ -86,7 +97,8 @@ List<SearchResult> torrentsVoorHires(List<SearchResult> treffers,
     if (torrentVoorNummer(r.name, artiest: artiest, album: album, jaar: jaar) != TorrentPast.album) continue;
     goed.add((i, r));
   }
-  int rang((int, SearchResult) e) => (isVinylRip(e.$2.name) ? 2 : 0) + (hiresVolgensNaam(e.$2.name) ? 0 : 1);
+  int rang((int, SearchResult) e) =>
+      (e.$2.cached ? 0 : 4) + (isVinylRip(e.$2.name) ? 2 : 0) + (hiresVolgensNaam(e.$2.name) ? 0 : 1);
   goed.sort((a, b) {
     final r = rang(a).compareTo(rang(b));
     return r != 0 ? r : a.$1.compareTo(b.$1);

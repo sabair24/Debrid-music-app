@@ -3725,18 +3725,28 @@ class DownloadManager extends ChangeNotifier {
       final kandidaten = torrentsVoorHires(treffers,
           artiest: artiest, album: album, jaar: nummers.first.year, hiresNodig: hiresNodig);
       _log.line('$plaat: torrents — ${treffers.length} treffers, ${kandidaten.length} bruikbaar '
-          '(bij TorBox, ${hiresNodig ? "hi-res" : "verliesvrij"}, de plaat zelf, geen image)');
+          '(${kandidaten.where((r) => r.cached).length} al bij TorBox; ${hiresNodig ? "hi-res" : "verliesvrij"}, de plaat '
+          'zelf, geen image)');
       final open = {...eis.keys};
-      for (final r in kandidaten.take(kTorrentHiresHoogstens)) {
+      var klaarGeprobeerd = 0, nietKlaarGeprobeerd = 0;
+      for (final r in kandidaten) {
         if (open.isEmpty) break;
+        if (r.cached ? klaarGeprobeerd >= kTorrentHiresHoogstens : nietKlaarGeprobeerd >= kTorrentHiresNietKlaar) continue;
+        r.cached ? klaarGeprobeerd++ : nietKlaarGeprobeerd++;
         final hires = hiresVolgensNaam(r.name);
         final TbTorrent item;
+        final t0 = DateTime.now();
         try {
           final (id, hash) = await online._addOrFind(r);
-          item = await online._pollReady(id, hash, patient: false);
+          // Wat TorBox nog moet halen: geduldig, tot een kwartier, en weg na anderhalve minuut zonder voortgang.
+          item = await online._pollReady(id, hash, patient: !r.cached);
         } catch (e) {
-          _log.line('   torrent "${r.name}": niet te openen bij TorBox — $e');
+          _log.line('   torrent "${r.name}": ${r.cached ? "niet te openen" : "niet binnen"} bij TorBox — $e');
           continue;
+        }
+        if (!r.cached) {
+          _log.line('   torrent "${r.name}": bij TorBox binnen na ${_kort(DateTime.now().difference(t0))} '
+              '(${r.seeders} seeders)');
         }
         final indeling = indelingUitBestanden(item.files.map((f) => f.name));
         if (indeling != TorrentIndeling.losseNummers) {

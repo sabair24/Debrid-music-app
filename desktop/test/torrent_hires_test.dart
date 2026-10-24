@@ -61,7 +61,7 @@ void main() {
   });
 
   group('welke torrents, in welke volgorde', () {
-    test('hi-res nodig: alleen bij TorBox, de plaat zelf, losse nummers, geen surround, geen DSD, geen discografie', () {
+    test('hi-res nodig: de plaat zelf, losse nummers, geen surround, geen DSD, geen discografie; Instant eerst', () {
       final uit = torrentsVoorHires(_stadium,
           artiest: 'Red Hot Chili Peppers', album: 'Stadium Arcadium', jaar: 2006, hiresNodig: true);
       expect([for (final r in uit) r.name], [
@@ -70,6 +70,21 @@ void main() {
         '(Rock/Funk/Alternative) Red Hot Chili Peppers "Stadium Arcadium" (vinyl 24/96) - 2006, FLAC (tracks), 24bit/96kHz',
         '(alternative/funk/rock) [LP][24/96] Red Hot Chili Peppers - Stadium Arcadium {SE 180g Heavy Vinyl, by S. Hoffman} - '
             '2006, FLAC (tracks), lossless',
+        // Nog niet bij TorBox, maar 7 seeders: na alles wat er al is.
+        '(Alternative/Funk) [LP] [24/96] Red Hot Chili Peppers - Stadium Arcadium [PBTHAL] (Original US Pressing) - 2006, '
+            'FLAC (tracks)',
+      ]);
+    });
+
+    test('nog niet bij TorBox: pas na alles wat er al is, ook als het digitaal is; met minder dan 3 seeders niet', () {
+      final uit = torrentsVoorHires([
+        _r('Red Hot Chili Peppers - Stadium Arcadium (2006) [FLAC 24-96] WEB', instant: false, seeders: 30),
+        _r('Red Hot Chili Peppers - Stadium Arcadium [24 bit FLAC] vinyl', seeders: 1),
+        _r('Red Hot Chili Peppers - Stadium Arcadium (2006) [FLAC 24-192] WEB', instant: false, seeders: 2),
+      ], artiest: 'Red Hot Chili Peppers', album: 'Stadium Arcadium', jaar: 2006, hiresNodig: true);
+      expect([for (final r in uit) r.name], [
+        'Red Hot Chili Peppers - Stadium Arcadium [24 bit FLAC] vinyl',
+        'Red Hot Chili Peppers - Stadium Arcadium (2006) [FLAC 24-96] WEB',
       ]);
     });
 
@@ -86,7 +101,7 @@ void main() {
         'Red Hot Chili Peppers - Stadium Arcadium [2006][only1joe]FLAC-EA',
         'Red Hot Chili Peppers - Stadium Arcadium (2006) [FLAC]',
       ]);
-      expect(uit, hasLength(6));
+      expect(uit, hasLength(7));
     });
 
     test('een andere plaat telt niet', () {
