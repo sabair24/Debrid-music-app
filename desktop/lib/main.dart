@@ -10439,6 +10439,14 @@ class _ArtistLineState extends State<ArtistLine> {
 /// a big target; a remote has to stop on both, and the small one is almost never what you meant.
 Widget _maybeFocusable(Widget child) => isTv ? ExcludeFocus(child: child) : child;
 
+/// Op tv verzetten alleen ← en → een schuif; ↑ en ↓ gaan naar wat erboven of eronder staat (Saber, 24-10-2026:
+/// "geraak ik er niet meer uit om dat up en down ook de schuiver verzet … enkel links en rechts"). Flutter's
+/// [Slider] laat ↑/↓ zelf los in [NavigationMode.directional]; dat zetten we alleen rond de schuif, want
+/// app-breed maakt die stand ook uitgeschakelde knoppen kiesbaar.
+Widget _schuifOpTv(BuildContext context, Widget schuif) => isTv
+    ? MediaQuery(data: MediaQuery.of(context).copyWith(navigationMode: NavigationMode.directional), child: schuif)
+    : schuif;
+
 Widget _artistLine(({String main, List<String> featured}) who, TextStyle style) {
   final names = [if (who.main.trim().isNotEmpty) who.main.trim(), ...who.featured];
   if (names.isEmpty) return const SizedBox.shrink();
@@ -11782,7 +11790,7 @@ class _ZoneVolume extends StatelessWidget {
               inactiveTrackColor: kLijn,
               thumbColor: kFel,
             ),
-            child: Slider(value: v, max: 100, onChanged: zone.setVolume),
+            child: _schuifOpTv(context, Slider(value: v, max: 100, onChanged: zone.setVolume)),
           ),
         ),
         Icon(Icons.volume_up_rounded, size: 19, color: _muted),
@@ -11942,14 +11950,17 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
                             }),
                           ),
                           Expanded(
-                            child: Slider(
-                              key: const ValueKey('zone-samen-schuif'),
-                              value: vertraging.clamp(-1000, 1000).toDouble(),
-                              min: -1000,
-                              max: 1000,
-                              divisions: 200,
-                              onChanged: (v) => zet(() => vertraging = v.round()),
-                              onChangeEnd: (_) => schuifNu(keuze),
+                            child: _schuifOpTv(
+                              context,
+                              Slider(
+                                key: const ValueKey('zone-samen-schuif'),
+                                value: vertraging.clamp(-1000, 1000).toDouble(),
+                                min: -1000,
+                                max: 1000,
+                                divisions: 200,
+                                onChanged: (v) => zet(() => vertraging = v.round()),
+                                onChangeEnd: (_) => schuifNu(keuze),
+                              ),
                             ),
                           ),
                           IconButton(
@@ -12881,17 +12892,20 @@ class _SamenVertragingInstellingState extends State<SamenVertragingInstelling> {
         Text('Speelt dit toestel samen met andere en klinkt het erachter aan (Bluetooth), schuif naar links; '
             'klinkt het ervoor, naar rechts.',
             style: TextStyle(color: _muted, fontSize: 11.5, height: 1.35)),
-        Slider(
-          key: const ValueKey('samen-vertraging'),
-          value: v.toDouble().clamp(-500, 500),
-          min: -500,
-          max: 500,
-          divisions: 100,
-          onChanged: (x) {
-            setState(() => settings.samenVertragingMs = x.round());
-            _bewaar?.cancel();
-            _bewaar = Timer(const Duration(milliseconds: 600), () => unawaited(settings.save()));
-          },
+        _schuifOpTv(
+          context,
+          Slider(
+            key: const ValueKey('samen-vertraging'),
+            value: v.toDouble().clamp(-500, 500),
+            min: -500,
+            max: 500,
+            divisions: 100,
+            onChanged: (x) {
+              setState(() => settings.samenVertragingMs = x.round());
+              _bewaar?.cancel();
+              _bewaar = Timer(const Duration(milliseconds: 600), () => unawaited(settings.save()));
+            },
+          ),
         ),
       ],
     );
