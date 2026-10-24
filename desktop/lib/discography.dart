@@ -529,6 +529,32 @@ RecordKind _minKind(RecordKind a, RecordKind b) => kindRank(a) <= kindRank(b) ? 
 /// op titel ÉN maat: single en EP apart van de rest. Eén uitzondering, zie [_alleenDeezerZegtKlein].
 List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
   final samen = <String, DiscoRelease>{};
+  // Per titel (en maat) de plekken in [samen]: de eerste is de titel zelf, een andere plaat met dezelfde titel krijgt
+  // er het jaar achter ("seal#1994") — zie [_anderePlaat]. De rondes hieronder werken op de titel zelf en laten zo'n
+  // tweede plaat met rust.
+  final varianten = <String, List<String>>{};
+  String plekVoor(String g, DiscoRelease r) {
+    final lijst = varianten[g] ??= [];
+    String? beste;
+    int? afstand;
+    for (final s in lijst) {
+      final e = samen[s]!;
+      if (_anderePlaat(e, r)) continue;
+      final d = _jaarAfstand(e, r) ?? 0;
+      if (afstand == null || d < afstand) {
+        beste = s;
+        afstand = d;
+      }
+    }
+    if (beste != null) return beste;
+    var nieuw = lijst.isEmpty ? g : '$g#${_jaar(r) ?? lijst.length}';
+    while (samen.containsKey(nieuw)) {
+      nieuw = '$nieuw+';
+    }
+    lijst.add(nieuw);
+    return nieuw;
+  }
+
   for (final lijst in bronnen) {
     for (final r0 in lijst) {
       final k = r0.key;
@@ -547,8 +573,9 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
               refs: r0.refs,
             );
       final g = _isKlein(r.kind) ? '$k$_klein' : k;
-      final bestaand = samen[g];
-      samen[g] = bestaand == null ? r : bestaand.mergedWith(r);
+      final plek = plekVoor(g, r);
+      final bestaand = samen[plek];
+      samen[plek] = bestaand == null ? r : bestaand.mergedWith(r);
     }
   }
   // Wat bij een titel als single of EP staat naast een regel van een andere maat. In vaste volgorde,
@@ -629,6 +656,35 @@ List<DiscoRelease> mergeDiscography(List<List<DiscoRelease>> bronnen) {
     samen.remove(k);
   }
   return samen.values.toList();
+}
+
+/// Zijn [a] en [b] twee platen, ook al dragen ze dezelfde titel? Ja als één bron ze allebei kent onder een ANDER
+/// nummer, en ze minstens twee jaar uit elkaar liggen.
+///
+/// **Waarom (Saber, 24-10-2026: "hij maakt geen onderscheid tussen album seal 1991 en 1994").** Seal heeft twee
+/// albums die "Seal" heten, en MusicBrainz kent er nog een derde: een krantenuitgave uit 2007 (The Mail on Sunday,
+/// één uitgave). Deezer heeft er ook twee (86422, 1991-06-11 en 467277, 1994-05-31). Op titel alleen werden ze één
+/// regel, met de hoes en de verwijzing van wie het eerst binnenkwam: "Seal · 1991" met de hoes van de krant, en
+/// "Geen tracklijst gevonden". Een heruitgave van dezelfde plaat bij een ándere bron (Deezer 2003, MusicBrainz 1980)
+/// blijft samengaan: die bron kent hem maar onder één nummer.
+bool _anderePlaat(DiscoRelease a, DiscoRelease b) {
+  final d = _jaarAfstand(a, b);
+  if (d == null || d < 2) return false;
+  for (final e in a.refs.entries) {
+    final ander = b.refs[e.key];
+    if (ander != null && ander.id.isNotEmpty && e.value.id.isNotEmpty && ander.id != e.value.id) return true;
+  }
+  return false;
+}
+
+int? _jaar(DiscoRelease r) {
+  final d = r.firstDate ?? '';
+  return d.length >= 4 ? int.tryParse(d.substring(0, 4)) : null;
+}
+
+int? _jaarAfstand(DiscoRelease a, DiscoRelease b) {
+  final x = _jaar(a), y = _jaar(b);
+  return x == null || y == null ? null : (x - y).abs();
 }
 
 /// Een titel die zegt dat de plaat remixen zijn: "Hollywood (Remixes)", "American Life (The Remixes)",
@@ -804,14 +860,29 @@ List<DiscoRelease> volgensMusicBrainz(List<DiscoRelease> samen, List<DiscoReleas
     return rest == null || rest.trim().isEmpty ? null : rest.trim();
   }
   // Op hun eigen sleutel én zonder de artiestnaam; per maat, want een single hoort niet bij een album.
-  final losDeezer = <String, DiscoRelease>{};
+  // Per sleutel ALLE losse Deezer-regels: twee platen kunnen dezelfde titel dragen (Seal, 1991 en 1994 — zie
+  // [_anderePlaat]); welke bij een MusicBrainz-plaat hoort, beslist het jaar ([dichtstBij]).
+  final losDeezer = <String, List<DiscoRelease>>{};
   String maat(RecordKind k) => _isKlein(k) ? _klein : '';
   for (final r in samen) {
     if (r.refs.containsKey(DiscoSource.musicbrainz) || !r.refs.containsKey(DiscoSource.deezer)) continue;
-    losDeezer.putIfAbsent(r.key + maat(r.kind), () => r);
-    if (zonderArtiest(r.key) case final k?) losDeezer.putIfAbsent(k + maat(r.kind), () => r);
+    (losDeezer[r.key + maat(r.kind)] ??= []).add(r);
+    if (zonderArtiest(r.key) case final k?) (losDeezer[k + maat(r.kind)] ??= []).add(r);
   }
-  final gekoppeld = <String>{};
+  final gekoppeld = Set<DiscoRelease>.identity();
+  DiscoRelease? dichtstBij(List<DiscoRelease>? lijst, DiscoRelease m) {
+    DiscoRelease? beste;
+    int? afstand;
+    for (final d in lijst ?? const <DiscoRelease>[]) {
+      if (gekoppeld.contains(d) || _anderePlaat(d, m)) continue;
+      final a = _jaarAfstand(d, m) ?? 0;
+      if (afstand == null || a < afstand) {
+        beste = d;
+        afstand = a;
+      }
+    }
+    return beste;
+  }
   final g = (nu ?? DateTime.now()).subtract(kNieuwVenster);
   String twee(int n) => n.toString().padLeft(2, '0');
   final grens = '${g.year}-${twee(g.month)}-${twee(g.day)}';
@@ -823,8 +894,8 @@ List<DiscoRelease> volgensMusicBrainz(List<DiscoRelease> samen, List<DiscoReleas
     var s = perMbId[ref.id];
     if (s == null || !s.refs.containsKey(DiscoSource.deezer)) {
       final km = zonderArtiest(m.key);
-      final d = losDeezer[m.key + maat(m.kind)] ?? (km == null ? null : losDeezer[km + maat(m.kind)]);
-      if (d != null && gekoppeld.add(d.key)) s = s == null ? d : s.mergedWith(d);
+      final d = dichtstBij(losDeezer[m.key + maat(m.kind)], m) ?? (km == null ? null : dichtstBij(losDeezer[km + maat(m.kind)], m));
+      if (d != null && gekoppeld.add(d)) s = s == null ? d : s.mergedWith(d);
     }
     uit.add(DiscoRelease(
       title: m.title,
@@ -840,7 +911,7 @@ List<DiscoRelease> volgensMusicBrainz(List<DiscoRelease> samen, List<DiscoReleas
     ...uit,
     for (final r in samen)
       if (!r.refs.containsKey(DiscoSource.musicbrainz) &&
-          !gekoppeld.contains(r.key) &&
+          !gekoppeld.contains(r) &&
           _blijftNaastMb(r, mbAlbums, mbSleutels, grens))
         r,
   ];
@@ -967,12 +1038,21 @@ final _tweedeNaam = RegExp(r'^n \d+$');
 /// De sleutel is [discoKey], dezelfde waarop [mergeDiscography] beslist of twee regels dezelfde plaat
 /// zijn. Bewust geen losser criterium: een hoes die bij de verkeerde plaat staat ziet er precies zo
 /// uit als een hoes die klopt, en dat is een fout die je nooit meer opmerkt.
+///
+/// **Per plaat, niet per titel** (Seal, 24-10-2026): eerst op [plaatHoesSleutel] (de MusicBrainz-groep), en op de titel
+/// alleen als geen andere regel die titel draagt. Anders kregen "Seal" 1991, 1994 en de krantenuitgave van 2007
+/// alle drie dezelfde hoes — die van de krant.
 List<DiscoRelease> vulHoezenAan(List<DiscoRelease> rijen, Map<String, String> hoesPerSleutel) {
   if (hoesPerSleutel.isEmpty) return rijen;
+  final perTitel = <String, int>{};
+  for (final r in rijen) {
+    perTitel[r.key] = (perTitel[r.key] ?? 0) + 1;
+  }
+  String? hoesVan(DiscoRelease r) => hoesPerSleutel[plaatHoesSleutel(r)] ?? (perTitel[r.key] == 1 ? hoesPerSleutel[r.key] : null);
   return [
     for (final r in rijen)
       if (r.cover != null && r.cover!.isNotEmpty) r
-      else if (hoesPerSleutel[r.key] case final h? when h.isNotEmpty)
+      else if (hoesVan(r) case final h? when h.isNotEmpty)
         DiscoRelease(
           title: r.title,
           kind: r.kind,
@@ -1259,10 +1339,17 @@ List<({String sleutel, String mbid})> groepenZonderHoes(List<DiscoRelease> rijen
     if (verborgenSoorten.contains(r.blok)) continue;
     final ref = r.refs[DiscoSource.musicbrainz];
     if (ref == null || ref.source != CatalogSource.musicbrainzGroup || ref.id.isEmpty) continue;
-    uit.add((sleutel: r.key, mbid: ref.id, rang: kindRank(r.blok)));
+    uit.add((sleutel: plaatHoesSleutel(r), mbid: ref.id, rang: kindRank(r.blok)));
   }
   uit.sort((a, b) => a.rang.compareTo(b.rang));
   return [for (final u in uit) (sleutel: u.sleutel, mbid: u.mbid)];
+}
+
+/// Waaronder de hoes van [r] bewaard wordt: zijn MusicBrainz-groep als hij die heeft, anders zijn titel
+/// ([DiscoRelease.key]). Twee platen met dezelfde titel (Seal, 1991 en 1994) krijgen zo elk hun eigen hoes.
+String plaatHoesSleutel(DiscoRelease r) {
+  final mb = r.refs[DiscoSource.musicbrainz];
+  return mb != null && mb.id.isNotEmpty ? 'mb:${mb.id}' : r.key;
 }
 
 /// Hoeveel tegels er naast elkaar passen, met dezelfde som als het raster zelf.

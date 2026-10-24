@@ -172,7 +172,8 @@ void main() {
       ]);
       expect([for (final g in lijst) g.mbid], ['g-album', 'g-live'],
           reason: 'de albums eerst; een regel mét hoes, zonder groep of in een verborgen blok niet');
-      expect(lijst.last.sleutel, discoKey('Knebworth 1996'));
+      // Per plaat en niet per titel sinds 24-10-2026 (Seal: drie platen die "Seal" heten) — zie plaatHoesSleutel.
+      expect(lijst.last.sleutel, 'mb:g-live');
     });
 
     test('DE KERN: wat het archief vond komt via de gewone aanvulling op de regel', () {
