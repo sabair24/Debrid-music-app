@@ -785,9 +785,40 @@ class RadioBesturing extends ChangeNotifier {
       if (!await f.exists()) return;
       final s = RadioSessie.fromJson(jsonDecode(await f.readAsString()));
       if (s == null || s.leeg) return;
+      // Hoort het overzicht van dit toestel elders ([richt]: de tv → de gsm), dan nooit hier. Hier stond niets: de
+      // notitie van een radio die liep toen de app stopte (bijwerken, de tv uit) kwam bij het opstarten gewoon op de
+      // tv — 24-10-2026 op de Shield: "Céline Dion … Deze gaan weg 91". Saber, 23-10-2026: "Shield: nooit op de tv".
+      if (_hoortElders != null) {
+        _voorElders = s;
+        await stuurOpenstaandDoor();
+        return;
+      }
       openstaand = s;
       notifyListeners();
     } catch (_) {/* een half geschreven notitie is geen reden om niet op te starten */}
+  }
+
+  /// De notitie van de vorige keer die niet hier hoort ([laadOpenstaand]); wacht op de pc.
+  RadioSessie? _voorElders;
+
+  /// Waar het overzicht van dit toestel heen hoort als dat niet hier is ([richt]), of null.
+  String? get _hoortElders {
+    if (hier.isEmpty) return null;
+    final doel = richt?.call(hier) ?? hier;
+    return doel.isEmpty || doel == hier ? null : doel;
+  }
+
+  /// De notitie die niet hier hoort naar de brievenbus op de pc ([bijOverzichtElders]). Gelukt: hier weg. Nog geen
+  /// pc: dan blijft hij op schijf en probeert main het bij de volgende verbinding opnieuw. Getoond wordt hij hier nooit.
+  Future<void> stuurOpenstaandDoor() async {
+    final s = _voorElders;
+    final doel = _hoortElders;
+    final elders = bijOverzichtElders;
+    if (s == null || doel == null || elders == null) return;
+    final gelukt = await elders(s, doel).catchError((Object _) => false);
+    if (!gelukt || !identical(_voorElders, s)) return;
+    _voorElders = null;
+    await _wisNotitie();
   }
 
   /// Het overzicht is afgehandeld. Weg ermee.
@@ -960,10 +991,14 @@ class RadioBesturing extends ChangeNotifier {
     // En net zo wat de radio ophaalde die nog liep toen deze begon — die gaat niet eerst naar het
     // overzicht, zie [_stop].
     final vorige = openstaand;
-    for (final v in [vorige, nogLopend]) {
+    // Ook een notitie die nog op weg was naar een ander toestel ([stuurOpenstaandDoor]): de eerste landing zou hem
+    // overschrijven. Hij gaat mee, en het overzicht van deze radio gaat straks zelf naar dat toestel.
+    final onderweg = _voorElders;
+    _voorElders = null;
+    for (final v in [vorige, onderweg, nogLopend]) {
       if (v != null) _lopend!.gehaald.addAll(v.gehaald);
     }
-    if (vorige != null || nogLopend != null) {
+    if (vorige != null || onderweg != null || nogLopend != null) {
       openstaand = null;
       unawaited(_bewaar(_lopend));
     }

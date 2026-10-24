@@ -263,7 +263,15 @@ final ButtonStyle _focusOutlineGevuld = _focusOutline.copyWith(
     if (states.contains(WidgetState.focused)) return kAccent;
     return Thema.licht ? kAccent : null;
   }),
+  // En de vulling dan ook glas, voor elke gevulde knop die er zelf geen zet: met Materials paarse vulling onder die
+  // paarse letters stond er niets op de knop — "91 naar de prullenbak" in "Radio afsluiten" was op de Shield een lege
+  // paarse balk (24-10-2026). Een knop met een eigen vulling ([_knopVulling], een rode) houdt die.
+  backgroundColor: WidgetStateProperty.resolveWith(
+      (states) => isTv && !states.contains(WidgetState.disabled) ? kTvKnopGlas : null),
 );
+
+/// [_focusOutlineGevuld] voor de toetsen (tv_licht_test): de letters mogen nooit de kleur van de vulling hebben.
+ButtonStyle get gevuldeKnopStijl => _focusOutlineGevuld;
 
 /// De vulling van een knop die elders paars gevuld is: op een tv glas (16-10-2026, "Bekijken" en
 /// alle andere knoppen hetzelfde), zodat zijn paarse letters bij selectie te zien zijn.
@@ -1963,6 +1971,8 @@ Future<void> main() async {
               (s['radioSfeer'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
           // Een overzicht "Radio afsluiten" dat voor dit toestel klaarligt (Saber, 23-10-2026).
           toonUitBrievenbus((s['radioOverzichten'] as Map?)?.cast<String, dynamic>());
+          // En een overzicht van dit toestel dat elders hoort (de tv → de gsm) en bij het opstarten nog geen pc had.
+          unawaited(radio.stuurOpenstaandDoor());
         } catch (_) {/* geen pc; het hartje blijft staan zoals het stond */}
       }
 
@@ -2232,8 +2242,12 @@ Future<void> main() async {
     // zijn eigen albumtag volgt en ook niet ernaast onder een andere naam. Zie
     // [LibraryStore.fileOfRecording].
     downloads.mapVanBestaande = library.fileOfRecording;
+    // Speelt dit bestand ergens: hier, of leest een toestel of speaker het van deze pc (lan/lezers.dart)? Dan geen
+    // nieuwe hoes erin en geen betere kopie eroverheen. Saber, 24-10-2026: de hoesveger schreef in "Mademoiselle
+    // chante le blues" terwijl de Mac het las, en de Mac kon het daarna niet openen.
+    bool ergensInGebruik(String p) => player.current?.path == p || (sharing.server?.inGebruikBijToestel(p) ?? false);
     // Een betere kopie van een nummer dat je met ▶ aanzette, vervangt het pas als het niet meer speelt.
-    downloads.speeltNu = (p) => player.current?.path == p;
+    downloads.speeltNu = ergensInGebruik;
     // En voor wat onder een ándere titel binnenkomt dan jouw kopie. Zie [LibraryStore.bestandenVanLengte].
     downloads.opLengte = library.bestandenVanLengte;
     // Een torrent die bij het afsluiten nog in de keuringsmap stond: nu alsnog keuren en opbergen. Na
@@ -2258,7 +2272,7 @@ Future<void> main() async {
         library: library,
         enabled: mode.owner,
         bezigElders: () => veger.bezig || echtVeger.bezig,
-        speeltNu: (p) => player.current?.path == p);
+        speeltNu: ergensInGebruik);
     Future<void> laatAllesLos(List<String> paden) async {
       await veger.laatLos(paden);
       await echtVeger.laatLos(paden);
@@ -2284,13 +2298,17 @@ Future<void> main() async {
         zoek: (vraag) => tidalHulpUitvoer([vraag, '20']),
         haal: (t, k) => downloads.haalBeterVanTidal(t, k, gezag: library.tagsVoorVervanger(t)),
         overslaan: (t) => isVasteKeuze(t.path) || radio.doorDezeRadio(t.path),
-        inGebruik: () => [if (player.current case final c?) c.path, for (final q in player.queueTracks) q.path],
+        inGebruik: () => [
+          if (player.current case final c?) c.path,
+          for (final q in player.queueTracks) q.path,
+          ...?sharing.server?.padenInGebruikBijToestel(),
+        ],
         verdacht: (t) => switch (gemeten(t.path)?.band) {
           Bandbreedte.vermoedelijk || Bandbreedte.afgekapt => true,
           _ => false,
         },
         log: downloads.logRegel,
-      )..speeltNu = (pad) => player.current?.path == pad;
+      )..speeltNu = ergensInGebruik;
       // "Zoek hi-res" en 👍 op een radionummer kijken meteen ook bij TIDAL ([DownloadManager.zoekBeterVoor]).
       downloads.tidalNu = tidalBeter.nu;
       unawaited(tidalBeter.start().then(

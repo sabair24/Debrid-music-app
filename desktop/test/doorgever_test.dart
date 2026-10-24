@@ -435,6 +435,31 @@ void main() {
       expect(daarna.status, 412);
       expect(veranderd, ['/stream/ab12cd.flac']);
     });
+
+    test('na een verandering op de pc: opnieuw starten vanaf het begin speelt het nieuwe bestand, geen 412', () async {
+      // Saber, 24-10-2026, op de Mac: de hoesveger schreef een hoes in het nummer terwijl het speelde, en daarna gaf
+      // elke poging 412 ("Kan dit nummer niet openen — Failed to open je pc"), ook opnieuw starten, tot de app herstartte.
+      expect((await _mpv(adres(), range: 'bytes=0-1023')).status, 206);
+      bestand.writeAsBytesSync(_bytes(310 * 1024));
+      bestand.setLastModifiedSync(DateTime.now().add(const Duration(minutes: 1)));
+      expect((await _mpv(adres(), range: 'bytes=1024-')).status, 412, reason: 'hervatten blijft weigeren');
+      final opnieuw = await _mpv(adres(), range: 'bytes=0-');
+      expect(opnieuw.status, 206);
+      expect(opnieuw.lijf, bestand.readAsBytesSync());
+      final stuk = await _mpv(adres(), range: 'bytes=2048-4095');
+      expect(stuk.status, 206, reason: 'en daarna hervat het nieuwe bestand gewoon');
+      expect(stuk.lijf, bestand.readAsBytesSync().sublist(2048, 4096));
+      expect(veranderd, hasLength(1));
+    });
+
+    test('vanaf het begin: geen Range of bytes=0-, en verder niets', () {
+      expect(vanafHetBegin(null), isTrue);
+      expect(vanafHetBegin('bytes=0-'), isTrue);
+      expect(vanafHetBegin('bytes=0-1023'), isTrue);
+      expect(vanafHetBegin('bytes=1024-'), isFalse);
+      expect(vanafHetBegin('bytes=-500'), isFalse, reason: 'de laatste 500 bytes');
+      expect(vanafHetBegin('onzin'), isFalse);
+    });
   });
 
   test('in een eigen isolate: zelfde gedrag, meldingen komen terug', () async {

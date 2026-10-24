@@ -404,7 +404,8 @@ void main() {
     test('de doorgever laat /groei/ door, zonder hem tegen het eerste antwoord te houden', () {
       final d = File('lib/lan/doorgever.dart').readAsStringSync();
       expect(d, contains("final groei = pad.startsWith('/groei/');"));
-      expect(d, contains('final eerste = groei ? null : _eerste[wat];'));
+      // Sinds 24-10-2026 ook niet bij een start vanaf het begin (vanafHetBegin): zie doorgever_test.
+      expect(d, contains('final eerste = groei || vanafHetBegin(range) ? null : _eerste[wat];'));
       expect(d, contains('if (eerste == null && totaal >= 0 && !groei) {'));
     });
 

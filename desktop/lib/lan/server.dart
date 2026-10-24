@@ -37,6 +37,7 @@ import 'accountkoppeling.dart';
 import 'catalog.dart';
 import 'certificaat.dart';
 import 'dtos.dart';
+import 'lezers.dart';
 import 'net.dart';
 import 'pairing.dart';
 import 'pc_bijwerker.dart';
@@ -2171,7 +2172,34 @@ class LanServer {
       req.response.statusCode = HttpStatus.notFound;
       return req.response.close();
     }
+    // Zolang dit loopt (en [kNaLezen] erna) laten de vegers en de TIDAL-ronde dit bestand met rust — zie
+    // [inGebruikBijToestel].
+    lezers.begin(track.path);
+    try {
+      await _streamBestand(req, track, file);
+    } finally {
+      lezers.einde(track.path);
+    }
+  }
 
+  /// Wat toestellen en speakers nu van deze pc lezen ([_stream]).
+  final Lezers lezers = Lezers();
+
+  /// Staat [pad] nu in gebruik bij een toestel of speaker: leest iemand het ([lezers], tot [kNaLezen] erna), of is het
+  /// het huidige nummer van een zone? Dan mag het niet herschreven of vervangen worden — een speler die het half
+  /// gelezen heeft, raakt de draad kwijt (zie lan/lezers.dart: de Mac en "Mademoiselle chante le blues", 24-10-2026).
+  bool inGebruikBijToestel(String pad) => lezers.leest(pad) || Lezers.eenVan(pad, _zonePaden());
+
+  /// Alle paden die [inGebruikBijToestel] noemt, in één keer: voor wie er duizenden naloopt (de TIDAL-ronde).
+  List<String> padenInGebruikBijToestel() => [...lezers.inGebruik, ..._zonePaden()];
+
+  List<String> _zonePaden() => [
+        for (final z in zones.lijst())
+          if (z.trackId.isNotEmpty)
+            if (catalog.track(z.trackId) case final t?) t.path,
+      ];
+
+  Future<void> _streamBestand(HttpRequest req, Track track, File file) async {
     // `?maxRate=` is how a speaker with a ceiling gets a version it can actually play — Sonos
     // stops at 48 kHz and skips anything above rather than downsampling it. Only the cast path
     // ever asks for this; every other client gets the file untouched.
