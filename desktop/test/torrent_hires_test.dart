@@ -1,7 +1,12 @@
 // Hi-res uit torrents bij "Zoek hi-res" (Saber, 25-10-2026: "ook via torrents moet worden gezocht, wel losse tracks").
 // De namen hieronder komen uit zijn lijst "Bronnen voor album" van Stadium Arcadium (Red Hot Chili Peppers).
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:debridmusic/models.dart';
+import 'package:debridmusic/online.dart' show DownloadManager;
+import 'package:debridmusic/organize.dart' show fileOffersTitle;
+import 'package:debridmusic/tidal_beter.dart' show TidalMinstens;
 import 'package:debridmusic/torbox.dart' show SearchResult;
 import 'package:debridmusic/torrent_hires.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -111,10 +116,46 @@ void main() {
     });
   });
 
+  test('een vinylrip noemt zijn nummers naar de plaatkant: "A1 - One More Time.flac" is One More Time', () {
+    // De echte namen bij TorBox (25-10-2026), uit "(House, Disco) [24/96] Daft Punk - Discovery - 2001, FLAC (tracks)".
+    const map = 'Daft Punk - 2001 - Discovery [Virgin, 8496061 V2940, vinyl rip by Guardian]';
+    bool past(String titel, String bestand) =>
+        fileOffersTitle(titel, 320, 'Daft Punk', '$map/$bestand', null, album: 'Discovery');
+    expect(past('One More Time', 'A1 - One More Time.flac'), isTrue);
+    expect(past('Harder, Better, Faster, Stronger', 'B1 - Harder Better Faster Stronger.flac'), isTrue);
+    expect(past('Face to Face', 'D2 - Face To Face.flac'), isTrue);
+    expect(past('One More Time', 'A2 - Aerodynamic.flac'), isFalse);
+    expect(past('Too Long', 'D3 - Too Long (Live).flac'), isFalse, reason: 'een ander merk blijft een andere opname');
+    expect(fileOffersTitle('Voyager', 227, 'Daft Punk', 'x/Voyager B2.flac', null), isFalse,
+        reason: 'alleen vooraan is het een plaatkant');
+  });
+
+  test('intussen al vervangen (Soulseek of TIDAL was sneller): niet nog eens uit de torrent halen', () {
+    final map = Directory.systemTemp.createTempSync('dm_torrent_hires_');
+    addTearDown(() => map.deleteSync(recursive: true));
+    File flac(String naam, int bits, int hz) {
+      final si = Uint8List(34);
+      si[10] = (hz >> 12) & 0xFF;
+      si[11] = (hz >> 4) & 0xFF;
+      si[12] = ((hz & 0x0F) << 4) | (1 << 1) | (((bits - 1) >> 4) & 0x01);
+      si[13] = ((bits - 1) & 0x0F) << 4;
+      si[17] = 100;
+      return File('${map.path}/$naam')..writeAsBytesSync([...'fLaC'.codeUnits, 0x80, 0x00, 0x00, 0x22, ...si]);
+    }
+
+    Track t(String pad) => Track(path: pad, title: 'One More Time', artist: 'Daft Punk', album: 'Discovery', isFlac: true);
+    expect(DownloadManager.intussenVervangen(t(flac('cd.flac', 16, 44100).path), TidalMinstens.hires), isFalse);
+    expect(DownloadManager.intussenVervangen(t(flac('hoog.flac', 24, 96000).path), TidalMinstens.hires), isTrue);
+    expect(DownloadManager.intussenVervangen(t('${map.path}/weg.mp3'), TidalMinstens.cd), isTrue,
+        reason: 'de mp3 is er niet meer: hij werd een FLAC');
+    expect(DownloadManager.intussenVervangen(t(flac('cd2.flac', 16, 44100).path), TidalMinstens.cd), isFalse);
+  });
+
   test('aangesloten: alleen bij "Zoek hi-res" op een plaat, niet na het landen', () {
     final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(online,
         contains("if (!alleenHires && (album?.trim() ?? '').isNotEmpty) unawaited(_zoekHiresInTorrents(te, album!.trim(), gezag));"));
+    expect(online, contains('if (intussenVervangen(t, eis[t]!)) {'), reason: 'niet halen wat Soulseek al verving');
     final i = online.indexOf('Future<bool> _haalUitTorrentEnKeur(');
     expect(i, greaterThan(0));
     final lijf = online.substring(i, online.indexOf('\n  }\n', i));

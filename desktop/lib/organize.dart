@@ -2702,6 +2702,7 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
   // eigen rem voor (gastartiest_test).
   final gastWeg = !_gastRe.hasMatch(eigenlijk) && versionMarkers(eigenlijk).isNotEmpty;
   final naam = withoutFakeVersion(baseName(path));
+  final plek = _plaatkantVooraan.firstMatch(naam)?.group(1)?.toLowerCase();
   final fw = fileWords(_teVergelijken(gastWeg ? naam.replaceAll(_gastRe, ' ') : naam));
   if (fw.isEmpty) return false;
   // Anything the filename says beyond the title must be the artist, the album, or the folders it
@@ -2722,8 +2723,11 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
         fw.difference(tw).any((w) => _versionWordRe.hasMatch(w) && !vanArtiest.contains(w))) {
       return false;
     }
-    // Een los getal dat de titel niet noemt, is een volgnummer ("3586. Alana Dante - …"), geen woord.
-    return !fw.difference(tw).any((w) => !known.contains(w) && !_alleenCijfers.hasMatch(w));
+    // Een los getal dat de titel niet noemt, is een volgnummer ("3586. Alana Dante - …"), geen woord. Net zo de kant
+    // van een plaat vooraan ("A1 - One More Time.flac", "D3 - Too Long.flac"): zo heten de nummers in een vinylrip.
+    // Gemeten op 25-10-2026 bij Daft Punk, Discovery: de torrent "[24/96] … FLAC (tracks)" bij TorBox had alle veertien
+    // nummers zo, en "Zoek hi-res" vond er geen enkel in.
+    return !fw.difference(tw).any((w) => !known.contains(w) && !_alleenCijfers.hasMatch(w) && w != plek);
   }
 
   if (!klopt(eigenlijk) && !(uitMap && klopt(withoutVersionText(eigenlijk)))) return false;
@@ -2733,6 +2737,9 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
 }
 
 final _alleenCijfers = RegExp(r'^\d+$');
+
+/// De kant en de plaats op een plaat vooraan in een bestandsnaam: "A1 - ", "b2. ", "D3_".
+final _plaatkantVooraan = RegExp(r'^\s*([a-hA-H]\d{1,2})(?=[\s._\-])');
 final _haakjesDeelRe = RegExp(r'[(\[{][^)\]}]*[)\]}]');
 
 /// De titel zonder "(feat. Diam's)", of null als er geen gast in staat. Zie `zeefKandidatenNu`.

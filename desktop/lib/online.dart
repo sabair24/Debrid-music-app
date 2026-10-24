@@ -3758,6 +3758,13 @@ class DownloadManager extends ChangeNotifier {
         _log.line('   torrent "${r.name}": ${muziek.length} nummers${isVinylRip(r.name) ? ", vinyl" : ""}');
         for (final t in [...open]) {
           if (eis[t] == TidalMinstens.hires && !hires) continue;
+          // Soulseek of TIDAL kan het intussen al vervangen hebben: die jachten lopen tegelijk. Daft Punk, Discovery
+          // (25-10-2026): negen nummers waren 24 bit vóór TorBox de torrent klaar had.
+          if (intussenVervangen(t, eis[t]!)) {
+            open.remove(t);
+            _log.line('   torrent "${r.name}": "${t.artist} — ${t.title}" is intussen al beter — niet gehaald');
+            continue;
+          }
           final f = muziek
               .where((f) => fileOffersTitle(t.title, t.duration?.inSeconds, artiest, f.name, null, album: album))
               .firstOrNull;
@@ -3781,6 +3788,18 @@ class DownloadManager extends ChangeNotifier {
     } finally {
       _torrentJacht.remove(sleutel);
     }
+  }
+
+  /// Is [t] intussen vervangen: staat het bestand er niet meer (een mp3 die nu een FLAC is), of is een FLAC die
+  /// hi-res moest worden het al ([eis] = [TidalMinstens.hires])? Gelezen uit het bestand zelf, niet uit [t]: dat is
+  /// de stand van vóór de jacht.
+  @visibleForTesting
+  static bool intussenVervangen(Track t, TidalMinstens eis) {
+    final f = File(t.path);
+    if (!f.existsSync()) return true;
+    if (eis != TidalMinstens.hires) return false;
+    final k = readFlacTags(f);
+    return k != null && (k.bitsPerSample > 16 || k.sampleRate > 48000);
   }
 
   /// Eén nummer uit een torrent bij TorBox halen en keuren. Waar als het in de bibliotheek staat.
