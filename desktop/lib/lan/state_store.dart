@@ -59,7 +59,11 @@ class PlaybackProgress {
     this.radio,
     this.volume = -1,
     this.stroom,
+    this.volgend = '',
   });
+
+  /// Bij een radio: het eerstvolgende nummer (id op de pc). De rij noemt dan alleen het spelende nummer. Leeg zonder.
+  final String volgend;
 
   /// Het appvolume van dat toestel (0–100), of -1 als het dat niet meldde (een oudere app).
   final int volume;
@@ -105,6 +109,7 @@ class PlaybackProgress {
         if (radio != null) 'radio': radio,
         if (volume >= 0) 'volume': volume,
         if (stroom != null) 'stroom': stroom,
+        if (volgend.isNotEmpty) 'volgend': volgend,
       };
 
   static PlaybackProgress fromJson(Map<String, dynamic> m) => PlaybackProgress(
@@ -122,6 +127,7 @@ class PlaybackProgress {
         radio: (m['radio'] as Map?)?.cast<String, dynamic>(),
         volume: (m['volume'] as num?)?.toInt() ?? -1,
         stroom: (m['stroom'] as Map?)?.cast<String, dynamic>(),
+        volgend: '${m['volgend'] ?? ''}',
       );
 }
 
@@ -447,6 +453,7 @@ class LanStateStore {
             radio: (op['radio'] as Map?)?.cast<String, dynamic>(),
             volume: (op['volume'] as num?)?.toInt() ?? -1,
             stroom: (op['stroom'] as Map?)?.cast<String, dynamic>(),
+            volgend: '${op['volgend'] ?? ''}',
           );
           // Per toestel eerst: ook een melding die achter de laatste van een ANDER toestel valt, is
           // voor zijn eigen zone nieuw. Alleen een oudere van hetzelfde toestel valt weg.

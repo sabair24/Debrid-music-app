@@ -674,6 +674,31 @@ void main() {
       await sub.cancel();
     });
 
+    test('een radio die van een toestel naar een speaker gaat, gaat als radio mee — met het nummer als zaad', () async {
+      // Saber, 24-10-2026: "ook radio functie, doorgeven naar zones". Tot nu toe ging alleen de rij mee, en die is bij
+      // een radio alleen het spelende nummer: daarna was het stil.
+      server.state.applyOps([
+        {
+          'type': 'progress', 'trackId': 'id-7', 'positionMs': 1500, 'queue': ['id-7'], 'index': 0, 'playing': true,
+          'radio': {'artiest': 'Corona', 'naam': 'Corona'}, 'at': DateTime.now().millisecondsSinceEpoch,
+        }
+      ], deviceId: 'gsm-1', deviceName: 'Galaxy');
+      final gekregen = <(String, Map<String, dynamic>)>[];
+      server.bijSpeakerRadio = (speaker, op) async {
+        gekregen.add((speaker, op));
+        return null;
+      };
+      final r = await server.zoneOverdracht('dev:gsm-1', 'spk:192.168.0.188', wie: 'toets');
+      expect(r.status, 200);
+      expect(gekregen.single.$1, '192.168.0.188');
+      expect(gekregen.single.$2, {'artiest': 'Corona', 'zaad': 'id-7'});
+      // Kan de pc de radio niet starten, dan hoort wie vroeg waarom.
+      server.bijSpeakerRadio = (speaker, op) async => 'De app op de pc staat niet open.';
+      final nee = await server.zoneOverdracht('dev:gsm-1', 'spk:192.168.0.188', wie: 'toets');
+      expect(nee.status, 409);
+      expect(nee.antwoord['error'], 'De app op de pc staat niet open.');
+    });
+
     test('een radio op een speakerzone gaat naar de pc (die draait hem, de speaker speelt)', () async {
       // Nog geen haak (de app op de pc is niet zover): 409 met een reden.
       final zonder = await server.zoneOpdracht(
@@ -706,5 +731,10 @@ void main() {
     expect(hoofd, contains('            hier: true,\n            naar: speaker,'));
     expect(hoofd, contains('  ], naar: uitgang, naam: artist, zaadArtiest: artist,'));
     expect(hoofd, isNot(contains('Een radio op een speaker kan nog niet')));
+    // Van een speaker met de radio van de pc naar een andere zone: de radio gaat mee.
+    expect(hoofd, contains('      s.radioArtiestOpSpeaker = (speaker) {'));
+    final srv = File('lib/lan/server.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(srv, contains("if (radioArtiest.isNotEmpty) bron['radio'] = {'artiest': radioArtiest, 'naam': radioArtiest};"));
+    expect(srv, contains("final fout = await radioOpPc(speaker, {'artiest': radioArtiest, 'zaad': trackId});"));
   });
 }

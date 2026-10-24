@@ -126,6 +126,19 @@ void main() {
       expect(ZoneStaat.fromJson(z.toJson()), z, reason: 'zo gaat het naar de andere toestellen');
     });
 
+    test('een radio op een toestel: de rij is alleen het spelende nummer, "Hierna" komt uit "volgend"', () {
+      reg.stroomOpen('gsm-1', naam: 'Galaxy', soort: ZoneSoort.gsm);
+      staat.applyOps([
+        {
+          'type': 'progress', 'trackId': 'r1', 'positionMs': 0, 'queue': ['r1'], 'index': 0, 'playing': true, 'at': nu,
+          'radio': {'artiest': 'Bryan Adams', 'naam': 'Bryan Adams'}, 'volgend': 's1',
+        }
+      ], deviceId: 'gsm-1', deviceName: 'Galaxy');
+      final z = reg.lijst().firstWhere((x) => x.id == 'dev:gsm-1');
+      expect(z.hierna, 'Summer of 69 — Bryan Adams');
+      expect((z.bronSoort, z.bronNaam), ('radio', 'Bryan Adams'));
+    });
+
     test('DE GRENS: zonder melding van de stroom is het het origineel; een oud toestel meldt het niet', () {
       reg.stroomOpen('gsm-1', naam: 'Galaxy', soort: ZoneSoort.gsm);
       staat.applyOps([
@@ -197,6 +210,7 @@ void main() {
     test('het toestel meldt wat het ontvangt', () {
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(main, contains("if (player.stroomGrens case final g?) 'stroom': {'rate': g.rate, 'bits': g.bits},"));
+      expect(main, contains("if (player.radioVolgend case final v?) 'volgend': library.gedeeldId(v.path) ?? '',"));
     });
   });
 }

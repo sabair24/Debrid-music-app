@@ -1704,6 +1704,12 @@ Future<void> main() async {
         return null;
       };
       // Die radio bedienen vanaf een toestel, en zien wat hij doet (speakerradio v2, 23-10-2026).
+      // Speelt de radio van de pc op deze speaker: rond welke artiest — dan gaat hij bij het doorgeven als radio mee
+      // (Saber, 24-10-2026: "ook radio functie, doorgeven naar zones").
+      s.radioArtiestOpSpeaker = (speaker) {
+        final sp = radio.speler;
+        return radio.loopt && sp is SpeakerRadio && sp.speaker == speaker ? radio.zaadArtiest ?? '' : '';
+      };
       s.bijSpeakerRadioOpdracht = (speaker, cmd, op) => bedienSpeakerRadio(
           radio: radio,
           sfeer: radioSfeer,
@@ -2002,6 +2008,8 @@ Future<void> main() async {
               'volume': player.volume.round(),
               // Zet de pc het onderweg om: naar welke maat — voor "omgezet" op de zonekaart (zones, stap 3).
               if (player.stroomGrens case final g?) 'stroom': {'rate': g.rate, 'bits': g.bits},
+              // Bij een radio staat alleen het spelende nummer in de rij: wat erna komt, apart ("Hierna" op de zonekaart).
+              if (player.radioVolgend case final v?) 'volgend': library.gedeeldId(v.path) ?? '',
               if (m.overname != null) 'overname': m.overname,
               if (player.radioMode) 'radio': {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam},
               // Na een overname alleen voor de zonelijst (zie [VerderLuisteren.meldNu]).

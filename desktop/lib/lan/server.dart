@@ -426,6 +426,9 @@ class LanServer {
   /// Gezet door main; geeft null of de reden waarom niet.
   Future<String?> Function(String speaker, String cmd, Map<String, dynamic> opdracht)? bijSpeakerRadioOpdracht;
 
+  /// Speelt de radio van de pc op [speaker]: rond welke artiest, anders leeg. Gezet door de app — zie [zoneOverdracht].
+  String Function(String speaker)? radioArtiestOpSpeaker;
+
   /// De modelvragen van toestellen (`pc_model.dart`), met het budget van de pc. Gezet door main.
   Modelvragen? modelvragen;
 
@@ -584,7 +587,11 @@ class LanServer {
             return (status: 409, antwoord: {'error': 'Dat kan nog niet op een speaker.'});
         }
       } catch (e) {
-        return (status: 409, antwoord: {'error': '${naam()} antwoordt niet: $e'});
+        // Een StateError zegt zelf wat er is (bv. dat een lid van de groep weg is): dan niet "<deze> antwoordt niet".
+        return (
+          status: 409,
+          antwoord: {'error': e is StateError ? '${naam()}: ${e.message}' : '${naam()} antwoordt niet: $e'},
+        );
       }
       return (status: 200, antwoord: {'bezorgd': 1});
     }
@@ -653,7 +660,17 @@ class LanServer {
     }
     final trackId = '${bron?['trackId'] ?? ''}';
     if (bron == null || trackId.isEmpty) return (status: 409, antwoord: {'error': 'Op die zone speelt niets.'});
-    _zoneLog.line('overdracht $van → $naar  (van $wie)');
+    // Een radio gaat als radio mee (Saber, 24-10-2026: "ook radio functie, doorgeven naar zones"). Tot nu toe ging
+    // alleen de rij mee: bij een radio op een toestel is dat het spelende nummer, en daarna was het stil; bij een
+    // radio op een speaker de paar nummers die al klaarstonden.
+    var radioArtiest = '';
+    if (van.startsWith('spk:')) {
+      radioArtiest = radioArtiestOpSpeaker?.call(van.substring(4)) ?? '';
+      if (radioArtiest.isNotEmpty) bron['radio'] = {'artiest': radioArtiest, 'naam': radioArtiest};
+    } else {
+      radioArtiest = '${(bron['radio'] as Map?)?['artiest'] ?? ''}'.trim();
+    }
+    _zoneLog.line('overdracht $van → $naar  (van $wie)${radioArtiest.isEmpty ? '' : '  — radio rond $radioArtiest'}');
 
     if (naar.startsWith('spk:')) {
       final speaker = naar.substring(4);
@@ -661,9 +678,20 @@ class LanServer {
       if (ids.isEmpty) ids.add(trackId);
       final plek = ((bron['index'] as num?)?.toInt() ?? 0).clamp(0, ids.length - 1);
       final positie = (bron['positionMs'] as num?)?.toInt() ?? 0;
+      final radioOpPc = bijSpeakerRadio;
       try {
-        // Spoelt pas als de speaker het nummer heeft (een Sonos negeert een Seek tijdens het laden).
-        await cast.play(speaker, ids, plek, alsZone: true, vanafMs: positie);
+        if (radioArtiest.isNotEmpty && radioOpPc != null) {
+          // De radio op de pc, met het spelende nummer als zaad: dat speelt eerst, en dan spoelen naar de plek.
+          final fout = await radioOpPc(speaker, {'artiest': radioArtiest, 'zaad': trackId});
+          if (fout != null) {
+            _zoneLog.line('overdracht $van → $naar: de radio startte niet — $fout');
+            return (status: 409, antwoord: {'error': fout});
+          }
+          if (positie > 3000) unawaited(_spoelZodraHetSpeelt(speaker, trackId, positie));
+        } else {
+          // Spoelt pas als de speaker het nummer heeft (een Sonos negeert een Seek tijdens het laden).
+          await cast.play(speaker, ids, plek, alsZone: true, vanafMs: positie);
+        }
       } catch (e) {
         // Ook in het logboek: op het scherm staat het maar even (Saber, 22-10-2026: "een HTTP fout of zoiets ? ik kon
         // het niet lezen").
@@ -679,6 +707,23 @@ class LanServer {
     // missen ([_bronVerplaatst]).
     unawaited(_bronVerplaatst(van, naar, trackId));
     return (status: 200, antwoord: {'bezorgd': 1});
+  }
+
+  /// Een radio die net op [speaker] begon met [trackId]: naar [positieMs] zodra hij het speelt (hoogstens 15 s wachten).
+  Future<void> _spoelZodraHetSpeelt(String speaker, String trackId, int positieMs) async {
+    for (var i = 0; i < 30; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      final z = zones.lijst().where((z) => z.id == 'spk:$speaker').firstOrNull;
+      if (z != null && z.playing && z.trackId == trackId) {
+        try {
+          await cast.control(speaker, 'seek', value: positieMs ~/ 1000);
+          _zoneLog.line('overdracht naar spk:$speaker: radio gespoeld naar ${positieMs ~/ 1000} s');
+        } catch (e) {
+          _zoneLog.line('overdracht naar spk:$speaker: spoelen lukte niet — $e');
+        }
+        return;
+      }
+    }
   }
 
   /// De muziek van [van] ging naar [naar]: zodra [naar] dit nummer ([trackId]) speelt (hoogstens tien seconden

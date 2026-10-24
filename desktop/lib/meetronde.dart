@@ -374,13 +374,22 @@ bool binnen(int begin, int van, int tot) => begin > van && begin <= tot;
 
 /// Een merkteken op de klok van [ui.FrameTiming]: het begin van het volgende beeld. De motor geeft
 /// [SchedulerBinding.currentSystemFrameTimeStamp] precies als [ui.FramePhase.buildStart] van dat beeld door.
+///
+/// Hoogstens [kMeetBeeldGeduld]: tekent de app niet (verborgen, vergrendeld, macOS legt hem stil), dan stopt de ronde
+/// met een reden in plaats van te blijven wachten — en straks, als het scherm terugkomt, ineens Nu speelt te openen
+/// (Mac, 24-10-2026: 14 minuten op het eerste beeld gewacht).
 Future<int> _merk() {
   final c = Completer<int>();
-  SchedulerBinding.instance.addPostFrameCallback(
-      (_) => c.complete(SchedulerBinding.instance.currentSystemFrameTimeStamp.inMicroseconds));
+  SchedulerBinding.instance.addPostFrameCallback((_) {
+    if (!c.isCompleted) c.complete(SchedulerBinding.instance.currentSystemFrameTimeStamp.inMicroseconds);
+  });
   SchedulerBinding.instance.scheduleFrame();
-  return c.future;
+  return c.future.timeout(kMeetBeeldGeduld,
+      onTimeout: () => throw StateError('de app tekent niet — staat hij verborgen, vergrendeld of op de achtergrond?'));
 }
+
+/// Zie [_merk].
+const kMeetBeeldGeduld = Duration(seconds: 8);
 
 Future<List<ui.FrameTiming>> _scenario(String s, MeetHaken h, {String artiest = '', String album = ''}) async {
   switch (s) {
