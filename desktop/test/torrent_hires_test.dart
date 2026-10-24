@@ -143,9 +143,13 @@ void main() {
       return File('${map.path}/$naam')..writeAsBytesSync([...'fLaC'.codeUnits, 0x80, 0x00, 0x00, 0x22, ...si]);
     }
 
-    Track t(String pad) => Track(path: pad, title: 'One More Time', artist: 'Daft Punk', album: 'Discovery', isFlac: true);
+    // [t] is de stand bij de start van de jacht: 16/44,1, tenzij anders gezegd.
+    Track t(String pad, {int bits = 16, int hz = 44100}) => Track(
+        path: pad, title: 'One More Time', artist: 'Daft Punk', album: 'Discovery', isFlac: true, bitsPerSample: bits, sampleRate: hz);
     expect(DownloadManager.intussenVervangen(t(flac('cd.flac', 16, 44100).path), TidalMinstens.hires), isFalse);
     expect(DownloadManager.intussenVervangen(t(flac('hoog.flac', 24, 96000).path), TidalMinstens.hires), isTrue);
+    // Seal, "Stand by Me": 16 bit op 192 kHz bij de start, en nog steeds. Niet "intussen al beter".
+    expect(DownloadManager.intussenVervangen(t(flac('raar.flac', 16, 192000).path, hz: 192000), TidalMinstens.hires), isFalse);
     expect(DownloadManager.intussenVervangen(t('${map.path}/weg.mp3'), TidalMinstens.cd), isTrue,
         reason: 'de mp3 is er niet meer: hij werd een FLAC');
     expect(DownloadManager.intussenVervangen(t(flac('cd2.flac', 16, 44100).path), TidalMinstens.cd), isFalse);

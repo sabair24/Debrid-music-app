@@ -3791,15 +3791,17 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Is [t] intussen vervangen: staat het bestand er niet meer (een mp3 die nu een FLAC is), of is een FLAC die
-  /// hi-res moest worden het al ([eis] = [TidalMinstens.hires])? Gelezen uit het bestand zelf, niet uit [t]: dat is
-  /// de stand van vóór de jacht.
+  /// hi-res moest worden het nu wel en bij de start nog niet ([eis] = [TidalMinstens.hires])? Het bestand zelf is de
+  /// stand van nu, [t] die van vóór de jacht. "Bij de start nog niet": Seal, "Stand by Me", 16 bit op 192 kHz (25-10-2026)
+  /// telde anders als al hi-res, en dan kwam de echte 24 bit uit de torrent er nooit aan te pas.
   @visibleForTesting
   static bool intussenVervangen(Track t, TidalMinstens eis) {
     final f = File(t.path);
     if (!f.existsSync()) return true;
     if (eis != TidalMinstens.hires) return false;
     final k = readFlacTags(f);
-    return k != null && (k.bitsPerSample > 16 || k.sampleRate > 48000);
+    bool hires(int bits, int hz) => bits > 16 || hz > 48000;
+    return k != null && hires(k.bitsPerSample, k.sampleRate) && !hires(t.bitsPerSample, t.sampleRate);
   }
 
   /// Eén nummer uit een torrent bij TorBox halen en keuren. Waar als het in de bibliotheek staat.
