@@ -1,4 +1,5 @@
-// Vinyl alleen als Saber kiest (24-10-2026): nooit vanzelf in de plaats van zijn versie, en een label in de zoeklijst.
+// Vinyl (24-10-2026: alleen als Saber kiest; sinds 25-10-2026 ook vanzelf, na elke digitale kopie) met een label in de
+// zoeklijst.
 import 'dart:io';
 
 import 'package:debridmusic/lossless_want.dart';
@@ -45,27 +46,33 @@ void main() {
     }
   });
 
-  test('nooit een opwaardering, ook niet als hij duidelijk beter klinkt', () {
+  // Sinds 25-10-2026 mag vinyl opwaarderen (Saber: "ik mis wel heel veel goede kwaliteit liedjes door vinyl en lp weg
+  // te laten oor, laat ze toch maar door"), maar na elke digitale kopie.
+  test('vinyl mag opwaarderen, maar een digitale kopie gaat voor', () {
     final van = _f(r'Kaas\Mademoiselle Chante\09 - Mademoiselle Chante Le Blues.flac', rate: 44100, bits: 16);
     final vinyl = _f(r'Kaas\1988 (vinyl rip)\09 Mademoiselle Chante Le Blues.flac', rate: 192000, bits: 24);
     final digitaal = _f(r'Kaas\Mademoiselle Chante [24-96]\09 Mademoiselle Chante Le Blues.flac', rate: 96000, bits: 24);
-    expect(DownloadManager.clearlyBetter(vinyl, van), isTrue, reason: 'op de getallen wél beter');
-    expect(DownloadManager.magOpwaarderen(vinyl, van, 228), isFalse);
+    expect(DownloadManager.magOpwaarderen(vinyl, van, 228), isTrue);
     expect(DownloadManager.magOpwaarderen(digitaal, van, 228), isTrue);
+    expect(DownloadManager.betereKandidaten([vinyl, digitaal], van, 228), [digitaal, vinyl],
+        reason: 'de 24/192 vinyl staat hoger, maar de digitale 24/96 wordt eerst geprobeerd');
+    final online = _bron('lib/online.dart');
+    expect(online, contains('var better = vinylAchteraan(ranked.where((f) => magOpwaarderen(f, from, officieel)).toList(), (f) => f.filename);'),
+        reason: 'ook de jacht na een gewone download');
   });
 
-  test('een wens neemt geen vinyl', () {
+  test('een wens neemt vinyl, na de digitale kopieën; de lengte blijft gelden', () {
     const w = LosslessWant(
         artist: 'Patricia Kaas',
         title: 'Mademoiselle chante le blues',
         authority: TrackTags(title: 'Mademoiselle chante le blues', artist: 'Patricia Kaas', album: '', trackNo: 0, seconds: 228));
-    final uit = DownloadManager.kandidatenVoorWens(w, [
-      _f(r'Patricia Kaas\1988 - Mademoiselle chante (vinyl rip)\09 Patricia Kaas - Mademoiselle Chante Le Blues.flac',
-          rate: 192000, bits: 24),
-      _f(r'Patricia Kaas\Mademoiselle chante\09 - Patricia Kaas - Mademoiselle chante le blues.flac', rate: 44100, bits: 16),
-    ]);
-    expect(uit, hasLength(1));
-    expect(isVinylRip(uit.single.filename), isFalse);
+    final vinyl = _f(r'Patricia Kaas\1988 - Mademoiselle chante (vinyl rip)\09 Patricia Kaas - Mademoiselle Chante Le Blues.flac',
+        rate: 192000, bits: 24);
+    final cd = _f(r'Patricia Kaas\Mademoiselle chante\09 - Patricia Kaas - Mademoiselle chante le blues.flac', rate: 44100, bits: 16);
+    expect(DownloadManager.kandidatenVoorWens(w, [vinyl, cd]), [cd, vinyl]);
+    final teLang = _f(r'Patricia Kaas\Mademoiselle chante (LP rip)\09 Mademoiselle chante le blues.flac',
+        rate: 192000, bits: 24, sec: 235);
+    expect(DownloadManager.kandidatenVoorWens(w, [teLang]), isEmpty, reason: '235 tegen 228 s: andere lengte, ook bij vinyl');
   });
 
   test('kiest de app zelf (▶, de radio): vinyl achteraan, en alleen als er niets anders is', () {

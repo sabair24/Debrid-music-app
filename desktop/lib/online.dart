@@ -2505,9 +2505,7 @@ class DownloadManager extends ChangeNotifier {
       if (vast) return ok;
       // "Beter" mag nooit verder van de officiële lengte liggen dan wat er nu ligt: een 24/96 live-opname
       // van 3:54 is geen opwaardering van een 24/44,1 van 3:59. Zie [lengteKlopt].
-      var better = ranked
-          .where((f) => magOpwaarderen(f, from, officieel))
-          .toList();
+      var better = vinylAchteraan(ranked.where((f) => magOpwaarderen(f, from, officieel)).toList(), (f) => f.filename);
       // BETRAPT BIJ HET LANDEN. Dan deugt "beter" niet meer als maatstaf, want de kopie die we
       // namen had juist de MEESTE bits — dat is precies waarom hij won. `clearlyBetter` vindt hier
       // dus niets en de jacht bleef achterwege, terwijl er honderden andere kandidaten klaarstonden.
@@ -4864,12 +4862,13 @@ class DownloadManager extends ChangeNotifier {
 
   /// De kandidaten die [gekozen] mogen opwaarderen ([magOpwaarderen]: duidelijk beter, en nooit verder
   /// van de officiële lengte), zonder hetzelfde bestand nog eens.
-  static List<SoulseekFile> betereKandidaten(List<SoulseekFile> alle, SoulseekFile gekozen, int? officieel) => [
+  static List<SoulseekFile> betereKandidaten(List<SoulseekFile> alle, SoulseekFile gekozen, int? officieel) =>
+      vinylAchteraan([
         for (final k in alle)
           if (!(k.username == gekozen.username && k.filename == gekozen.filename) &&
               magOpwaarderen(k, gekozen, officieel))
             k
-      ];
+      ], (f) => f.filename);
 
   /// Na ▶: het klonk meteen met de snelste FLAC, en nu dezelfde jacht op beter als na een gewone
   /// download (Saber, 20-10-2026: "eerst de snelste flac, om daarna een betere versie te zoeken").
@@ -5362,12 +5361,12 @@ class DownloadManager extends ChangeNotifier {
   /// officiële lengte dan wat er ligt: een 24/96 live-opname van 3:54 is geen opwaardering van een
   /// 24/44,1 van 3:59. Heeft wat er ligt de lengte zelf niet, dan telt alleen de kwaliteit.
   ///
-  /// **Nooit een vinyl-rip** ([isVinylRip]; Saber, 24-10-2026: "alleen als ik kies"): een andere bron, met naaldgeluid
-  /// en een andere lengte. Wie er een wil, kiest hem zelf in de lijst.
+  /// **Ook een vinyl-rip** ([isVinylRip]), sinds 25-10-2026. Eerst niet (Saber, 24-10-2026: "alleen als ik kies"), maar:
+  /// "ik mis wel heel veel goede kwaliteit liedjes door vinyl en lp weg te laten oor, laat ze toch maar door — LP,
+  /// 24/96, 24/192, PBTHAL". De keuring na het halen (zelfde opname, bewezen beter) blijft; de lijsten die de app zelf
+  /// afloopt, zetten vinyl wel achter een digitale kopie ([vinylAchteraan]).
   static bool magOpwaarderen(SoulseekFile f, SoulseekFile van, int? officieel) =>
-      clearlyBetter(f, van) &&
-      !isVinylRip(f.filename) &&
-      (!lengteKlopt(officieel, van.durationSec) || lengteKlopt(officieel, f.durationSec));
+      clearlyBetter(f, van) && (!lengteKlopt(officieel, van.durationSec) || lengteKlopt(officieel, f.durationSec));
 
   static List<SoulseekFile> kandidatenVoorWens(LosslessWant w, List<SoulseekFile> hits,
       {Set<String> rustendePeers = const {}}) {
@@ -5385,8 +5384,6 @@ class DownloadManager extends ChangeNotifier {
             album: album.isEmpty ? null : album);
     List<SoulseekFile> zeef(bool metRust) => hits
         .where((f) => isLossless(f) && !isMultichannel(f))
-        // Een wens vervangt jouw kopie, en vinyl doet dat nooit vanzelf ([magOpwaarderen]).
-        .where((f) => !isVinylRip(f.filename))
         .where((f) => zelfdeLengte(w.authority?.seconds, f.durationSec))
         .where(isDitNummer)
         .where((f) => !w.refused.containsKey(f.username))
@@ -5401,8 +5398,10 @@ class DownloadManager extends ChangeNotifier {
     var bruikbaar = zeef(true);
     if (bruikbaar.isEmpty) bruikbaar = zeef(false);
     final perPeer = <String>{};
+    // Vinyl mag (Saber, 25-10-2026: "laat ze toch maar door"), maar na elke digitale kopie: wie het eerst bewezen beter
+    // is, wint, en een digitale hi-res is dezelfde uitgave als je cd.
     return [
-      for (final f in bruikbaar)
+      for (final f in vinylAchteraan(bruikbaar, (f) => f.filename))
         if (perPeer.add(f.username)) f,
     ];
   }
