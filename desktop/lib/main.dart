@@ -29071,7 +29071,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         // heeft, en [_bewaar] schrijft zo ook de hoezen van het vorige bezoek weer mee.
         _groepHoezen = {
           for (final r in bewaard.releases)
-            if (r.cover != null && r.cover!.isNotEmpty) r.key: r.cover!,
+            if (r.cover != null && r.cover!.isNotEmpty) plaatHoesSleutel(r): r.cover!,
         };
         _busy = false;
       });
@@ -29129,7 +29129,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       } else {
         _versHoezen = {
           for (final r in alles)
-            if (r.cover != null && r.cover!.isNotEmpty) r.key: r.cover!,
+            if (r.cover != null && r.cover!.isNotEmpty) plaatHoesSleutel(r): r.cover!,
         };
       }
       _busy = false;
