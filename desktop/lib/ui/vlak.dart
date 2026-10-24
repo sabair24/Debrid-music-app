@@ -961,6 +961,9 @@ Widget randAchterDeBalk(double hoogte, {bool naarWaas = false, bool zacht = fals
 const double kParallax = .5;
 
 class HoesAchtergrond extends StatefulWidget {
+  /// Zie [_HoesAchtergrondState.gebakken].
+  static Listenable get opnieuwGebakken => _HoesAchtergrondState.gebakken;
+
   const HoesAchtergrond({
     super.key,
     required this.beeld,
@@ -1068,6 +1071,10 @@ Future<ui.Image> bakHoesAchtergrond(ui.Image hoes, {required Size vak, required 
 }
 
 class _HoesAchtergrondState extends State<HoesAchtergrond> {
+  /// Telt elke keer dat ergens een achtergrond klaar gebakken is. Nu speelt schuift als foto open
+  /// (`FotoTijdensSchuiven` in main.dart): komt de achtergrond pas na de foto, dan neemt die een nieuwe.
+  static final gebakken = ValueNotifier<int>(0);
+
   ImageStream? _stroom;
   ImageStreamListener? _luisteraar;
 
@@ -1172,6 +1179,7 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
         _gebakkenVoor = vak;
         _gebakkenLicht = licht;
       });
+      gebakken.value++;
     }, onError: (Object _) {}).whenComplete(bron.dispose);
   }
 

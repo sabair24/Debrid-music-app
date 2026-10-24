@@ -17271,9 +17271,14 @@ Route<void> nuSpeeltRoute({WidgetBuilder? scherm}) => PageRouteBuilder<void>(
         // Bij het sluiten één foto van het scherm (gemeten op de Mac, 23-10-2026: piekbeelden van 156 naar 17 ms). Niet
         // bij het openen: daar komt de vervaagde achtergrond pas een beeld later, en die zou dan inspringen. Een
         // meetronde vergelijkt met `foto` (ook bij openen) en `levend` (nooit), zie `meetronde.dart`.
+        // Ook bij het openen een foto (Mac, 3.9.592: 45 van de 94 beelden te laat bij het openen, sluiten als foto 0), maar
+        // pas na drie beelden en opnieuw zodra de vervaagde achtergrond gebakken is: die komt een paar beelden later, en
+        // zonder dat schoof Nu speelt zonder achtergrond open.
         child: FotoTijdensSchuiven(
             animatie: animatie,
-            open: zonderVoorMeting('foto'),
+            open: !zonderVoorMeting('openlevend'),
+            openNaBeelden: 3,
+            herFotoBij: HoesAchtergrond.opnieuwGebakken,
             dicht: !zonderVoorMeting('levend'),
             // Op de pc het glas zonder vervaging zolang het schuift (Saber: "Vervaging uit tijdens schuiven").
             glasPlat: true,
@@ -17287,11 +17292,24 @@ Route<void> nuSpeeltRoute({WidgetBuilder? scherm}) => PageRouteBuilder<void>(
 /// eronder zijn staat houden.
 class FotoTijdensSchuiven extends StatefulWidget {
   const FotoTijdensSchuiven(
-      {super.key, required this.animatie, required this.child, this.open = false, this.dicht = true, this.glasPlat = false});
+      {super.key,
+      required this.animatie,
+      required this.child,
+      this.open = false,
+      this.dicht = true,
+      this.glasPlat = false,
+      this.openNaBeelden = 0,
+      this.herFotoBij});
 
   final Animation<double> animatie;
   final Widget child;
   final bool open, dicht;
+
+  /// Bij het openen pas na zoveel beelden een foto: wat er net na het eerste beeld binnenkomt, staat er dan al op.
+  final int openNaBeelden;
+
+  /// Verandert dit terwijl er een foto staat, dan een nieuwe foto (een achtergrond die later klaar is).
+  final Listenable? herFotoBij;
 
   /// Het glas zonder vervaging zolang het schuift, waar dat de keuze is ([GlasKwaliteit.glasPlatTijdensSchuiven]).
   final bool glasPlat;
@@ -17304,10 +17322,32 @@ class _FotoTijdensSchuivenState extends State<FotoTijdensSchuiven> {
   final _foto = SnapshotController();
 
   bool _glasPlat = false;
+  int _wachtBeurt = 0;
+
+  void _herFoto() {
+    if (_foto.allowSnapshotting) _foto.clear();
+  }
 
   void _opStand(AnimationStatus s) {
-    _foto.allowSnapshotting =
-        (s == AnimationStatus.forward && widget.open) || (s == AnimationStatus.reverse && widget.dicht);
+    final wil = (s == AnimationStatus.forward && widget.open) || (s == AnimationStatus.reverse && widget.dicht);
+    final beurt = ++_wachtBeurt;
+    if (wil && s == AnimationStatus.forward && widget.openNaBeelden > 0) {
+      _foto.allowSnapshotting = false;
+      var over = widget.openNaBeelden;
+      void naBeeld(Duration _) {
+        if (!mounted || beurt != _wachtBeurt) return;
+        if (--over > 0) {
+          WidgetsBinding.instance.addPostFrameCallback(naBeeld);
+          WidgetsBinding.instance.scheduleFrame();
+          return;
+        }
+        _foto.allowSnapshotting = widget.animatie.status == AnimationStatus.forward;
+      }
+
+      WidgetsBinding.instance.addPostFrameCallback(naBeeld);
+    } else {
+      _foto.allowSnapshotting = wil;
+    }
     final schuift = s == AnimationStatus.forward || s == AnimationStatus.reverse;
     if (widget.glasPlat && schuift && !_glasPlat) {
       _glasPlat = true;
@@ -17328,12 +17368,14 @@ class _FotoTijdensSchuivenState extends State<FotoTijdensSchuiven> {
   void initState() {
     super.initState();
     widget.animatie.addStatusListener(_opStand);
+    widget.herFotoBij?.addListener(_herFoto);
     _opStand(widget.animatie.status);
   }
 
   @override
   void dispose() {
     widget.animatie.removeStatusListener(_opStand);
+    widget.herFotoBij?.removeListener(_herFoto);
     if (_glasPlat) GlasKwaliteit.schuiftEinde();
     _foto.dispose();
     super.dispose();

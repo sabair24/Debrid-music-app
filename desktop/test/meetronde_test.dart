@@ -121,6 +121,30 @@ void main() {
     });
   });
 
+  testWidgets('openen als foto: pas na drie beelden, en opnieuw zodra de achtergrond klaar is', (t) async {
+    final c = AnimationController(vsync: const TestVSync(), duration: const Duration(milliseconds: 320));
+    addTearDown(c.dispose);
+    final klaar = ValueNotifier<int>(0);
+    addTearDown(klaar.dispose);
+    await t.pumpWidget(MaterialApp(
+        home: FotoTijdensSchuiven(
+            animatie: c, open: true, openNaBeelden: 3, herFotoBij: klaar, child: const ColoredBox(color: Colors.red))));
+    SnapshotController foto() => t.widget<SnapshotWidget>(find.byType(SnapshotWidget)).controller;
+    c.forward();
+    await t.pump(const Duration(milliseconds: 8));
+    expect(foto().allowSnapshotting, isFalse, reason: 'het eerste beeld levend');
+    await t.pump(const Duration(milliseconds: 8));
+    await t.pump(const Duration(milliseconds: 8));
+    await t.pump(const Duration(milliseconds: 8));
+    expect(foto().allowSnapshotting, isTrue, reason: 'daarna een foto');
+    var opnieuw = 0;
+    foto().addListener(() => opnieuw++);
+    klaar.value++;
+    expect(opnieuw, greaterThan(0), reason: 'de achtergrond kwam later: een nieuwe foto');
+    await t.pump(const Duration(milliseconds: 400));
+    expect(foto().allowSnapshotting, isFalse, reason: 'open: het echte scherm');
+  });
+
   testWidgets('op de pc: het glas zonder vervaging zolang Nu speelt schuift, daarna weer zoals het was', (t) async {
     // Saber, 23-10-2026, gekozen: "Vervaging uit tijdens schuiven" (pc: Nu speelt openen 61 → 6 te late beelden).
     final c = AnimationController(vsync: const TestVSync(), duration: const Duration(milliseconds: 300));
