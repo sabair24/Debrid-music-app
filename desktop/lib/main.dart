@@ -2496,6 +2496,11 @@ class DebridApp extends StatelessWidget {
         textButtonTheme: TextButtonThemeData(style: _focusOutline),
         outlinedButtonTheme: OutlinedButtonThemeData(style: _focusOutline),
         iconButtonTheme: IconButtonThemeData(style: _focusOutline),
+        // Het stuk van een schuif rechts van het bolletje had de kleur van het paneel eronder: Material neemt
+        // `surfaceContainerHighest`, en dat valt in dit kleurenschema terug op `surface`. "Vertraging bij samen spelen"
+        // op −50 ms zag er op de Shield uit als helemaal rechts (24-10-2026). Een schuif met een eigen [SliderTheme]
+        // houdt zijn kleur.
+        sliderTheme: SliderThemeData(inactiveTrackColor: kLijn),
         // **Meegeleverd, en dat is nieuw.** Hier stond 'Segoe UI' en er werd geen enkel lettertype
         // meegeleverd — dus kreeg Windows Segoe UI en kozen je telefoon, je Mac en je iPad zelf
         // iets anders. Zie de uitleg in `pubspec.yaml`.
