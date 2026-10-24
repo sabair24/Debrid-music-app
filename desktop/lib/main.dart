@@ -30655,7 +30655,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
 
   /// The copy of this track already in the library (null if we don't have it). Version markers
   /// are part of the identity, so a Live/Radio-Edit/compilation cut still counts as NOT owned.
-  Track? _owned(CatalogTrack t) => context.read<LibraryStore>().ownedTrack(widget.artistName, t.title);
+  /// Ook als alleen de gast anders geschreven staat, met de tracklijst en de lengte erbij — zie
+  /// [LibraryStore.ownedOpPlaat].
+  Track? _owned(CatalogTrack t) => context.read<LibraryStore>().ownedOpPlaat(widget.artistName, t.title,
+      albumTitels: [for (final x in _tracks) x.title], seconden: t.durationSec);
 
   /// What year the RECORD is from, according to whichever catalogue described it.
   ///
@@ -30994,7 +30997,11 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                         style: TextStyle(color: _muted, fontSize: 13))),
                 // Which tracks of this record you already have — the gap in the album, at a glance.
                 Builder(builder: (context) {
-                  final have = context.watch<LibraryStore>().ownedTrack(widget.artistName, t.title) != null;
+                  // Dezelfde vraag als [_owned]: "J'irai où tu iras (with Jean-Jacques Goldman)" is het bestand
+                  // "J'irai où tu iras" (Saber, 24-10-2026).
+                  final have = context.watch<LibraryStore>().ownedOpPlaat(widget.artistName, t.title,
+                          albumTitels: [for (final x in _tracks) x.title], seconden: t.durationSec) !=
+                      null;
                   return SizedBox(
                     width: 22,
                     child: have

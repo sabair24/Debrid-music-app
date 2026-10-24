@@ -896,6 +896,21 @@ class LibraryStore extends ChangeNotifier {
   /// The track we already own that matches this artist+title (null if we don't have it).
   Track? ownedTrack(String artist, String title) => _owned[trackIdentity(artist, title)];
 
+  /// De eigen nummers per titel ZONDER gast ("(feat. …)", "(with …)" — zie [zonderFeat]). Voor [ownedOpPlaat].
+  final Map<String, List<Track>> _ownedKaal = {};
+
+  /// Heb ik [title] van [artist] al, zoals het op een plaat staat met [albumTitels] (de hele tracklijst) en
+  /// [seconden] lang? Eerst precies ([ownedTrack]); anders ook als alleen de gast anders geschreven staat — zie
+  /// [eigenOpPlaat].
+  ///
+  /// Saber, 24-10-2026, bij Céline Dion *D'eux*: "de app zeg dat ik de song nog niet heb, maar ik heb em wel … ook
+  /// verschillende versie's uit elkaar houden". De albumpagina noemde "J'irai où tu iras (with Jean-Jacques
+  /// Goldman)", het bestand heet "J'irai où tu iras".
+  Track? ownedOpPlaat(String artist, String title, {required Iterable<String> albumTitels, int? seconden}) =>
+      ownedTrack(artist, title) ??
+      eigenOpPlaat(title, _ownedKaal[trackIdentity(artist, zonderFeat(title))] ?? const [],
+          albumTitels: albumTitels, seconden: seconden);
+
   /// In welke MAP deze opname al staat, of null als je hem nog niet hebt.
   ///
   /// Voor het opbergen van een download: die hoort naar het album te gaan waar de opname al in zit, en
@@ -3864,8 +3879,10 @@ class LibraryStore extends ChangeNotifier {
   /// client mode, where the paths are stream URLs instead of files.
   void _rebuildTrackIndexes() {
     _owned.clear();
+    _ownedKaal.clear();
     for (final t in tracks) {
       _owned.putIfAbsent(trackIdentity(t.artist, t.title), () => t);
+      _ownedKaal.putIfAbsent(trackIdentity(t.artist, zonderFeat(t.title)), () => []).add(t);
     }
     _albumByPath.clear();
     _trackByPath.clear();
@@ -5616,4 +5633,34 @@ extension LibraryDuplicates on LibraryStore {
     if (srcDir != null && srcDir != targetDir) await pruneVacated(srcDir, rootPath);
     await scan();
   }
+}
+
+/// Hoeveel seconden een eigen nummer van de officiële lengte mag afwijken om hetzelfde nummer te zijn ([eigenOpPlaat]).
+/// Een andere versie (live, radio-edit, extended) scheelt bijna altijd meer; een andere rip een seconde of twee.
+const kZelfdeOpnameSpeling = 5;
+
+/// Welk van [kandidaten] (eigen nummers met dezelfde titel zonder gast) [titel] is op een plaat met [albumTitels].
+///
+/// - Staat dezelfde titel zonder gast ook nog eens op de plaat — Adele's "Easy On Me" naast het duet met Chris
+///   Stapleton — dan is de gast het verschil, en telt alleen een precieze titel: null.
+/// - Liefst een kandidaat met dezelfde vorm (wel of geen gast); heeft de bibliotheek alleen de andere vorm, dan die.
+/// - En de lengte moet kloppen ([kZelfdeOpnameSpeling]), als beide bekend zijn: zo telt een live-opname of een edit
+///   zonder merk in de titel niet als "heb ik al".
+@visibleForTesting
+Track? eigenOpPlaat(String titel, List<Track> kandidaten, {required Iterable<String> albumTitels, int? seconden}) {
+  if (kandidaten.isEmpty) return null;
+  final sleutel = normKey(zonderFeat(titel));
+  for (final t in albumTitels) {
+    if (t != titel && normKey(zonderFeat(t)) == sleutel) return null;
+  }
+  bool gast(String t) => normKey(zonderFeat(t)) != normKey(t);
+  final wil = gast(titel);
+  final zelfdeVorm = [for (final k in kandidaten) if (gast(k.title) == wil) k];
+  for (final k in zelfdeVorm.isEmpty ? kandidaten : zelfdeVorm) {
+    final d = k.duration?.inSeconds;
+    if (seconden == null || seconden <= 0 || d == null || d <= 0 || (d - seconden).abs() <= kZelfdeOpnameSpeling) {
+      return k;
+    }
+  }
+  return null;
 }
