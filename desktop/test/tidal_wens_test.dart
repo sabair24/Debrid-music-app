@@ -121,7 +121,7 @@ void main() {
 
     test('DE KERN: Soulseek eerst; TIDAL alleen in het einde van de ronde, en alleen als Soulseek niets gaf', () {
       final jacht = lijf('  Future<bool> _chaseWant(LosslessWant w) async {');
-      expect(jacht.indexOf('soulseek.search(w.query, achtergrond: true)'), allOf(greaterThan(0), lessThan(jacht.indexOf('_rondWensAf('))));
+      expect(jacht.indexOf('soulseek.search(w.query, achtergrond: true, extra: kHiresZoekwoorden)'), allOf(greaterThan(0), lessThan(jacht.indexOf('_rondWensAf('))));
       expect(jacht, contains('if (lossless.isEmpty) return _rondWensAf(w, goed: false,'));
       expect(jacht, contains('return _rondWensAf(w, goed: goed,'));
       expect(jacht, isNot(contains('_wensViaTidal')));

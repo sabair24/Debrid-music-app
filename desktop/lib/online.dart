@@ -40,6 +40,8 @@ import 'keuring.dart' show Heelheid, kwaliteitZin;
 import 'wavpack_kop.dart' show readWvKop;
 import 'tidal.dart' show TidalTrack;
 import 'tidal_beter.dart' show TidalBeterUitslag;
+import 'vinyl.dart' show isVinylRip, vinylAchteraan;
+import 'wav_naar_flac.dart' show wavNaarFlac;
 import 'tidaler.dart' show Tidaler, haalVanTidal, kTidalRadioPerUur, kiesTidalTreffers, zoekOpTidal;
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
@@ -1043,7 +1045,8 @@ class SoulseekService {
   Future<List<SoulseekFile>> zoekVroeg(String vraag,
       {required Future<List<SoulseekFile>> Function(List<SoulseekFile>) zeef,
       int? seconden,
-      ({String titel, String artiest, String? album})? zeefOp}) {
+      ({String titel, String artiest, String? album})? zeefOp,
+      List<String> extra = const []}) {
     final uit = Completer<List<SoulseekFile>>();
     final klok = Stopwatch()..start();
     var bezig = false;
@@ -1058,7 +1061,7 @@ class SoulseekService {
       }
     }
 
-    search(vraag, onPartial: (l) => unawaited(kijk(l))).then((alles) async {
+    search(vraag, onPartial: (l) => unawaited(kijk(l)), extra: extra).then((alles) async {
       if (uit.isCompleted) return;
       try {
         final z = await zeef(alles);
@@ -1077,23 +1080,30 @@ class SoulseekService {
   ///
   /// [achtergrond]: de radio, de verlanglijst of een betere kopie — die wachten eerder op de zoekrem dan wat je zelf
   /// zoekt (`kZoekVoorJou` in soulseek.dart).
+  ///
+  /// [extra]: woorden die in de EERSTE ronde als eigen vraag meegaan, achter de volledige vraag ([kHiresZoekwoorden]
+  /// voor de jacht op beter). Ze komen bij de gewone vraag, nooit in de plaats ervan.
   Future<List<SoulseekFile>> search(String query,
       {void Function(List<SoulseekFile>)? onPartial,
       void Function(String)? gebruikteVraag,
-      bool achtergrond = false}) async {
+      bool achtergrond = false,
+      List<String> extra = const []}) async {
     // An empty result because we couldn't log in is NOT "no sources" — retrying a broader query
     // would just burn another login and still show the user the wrong answer.
     final blocked = client.whyNotLogin;
     if (blocked != null) throw blocked;
-    final rondes = zoekRondes(query);
+    final gewoon = zoekRondes(query);
+    final rondes = metExtraWoorden(gewoon, extra);
     // Nooit meer dan [kZoekPlafond] bestanden, de best passende eerst — zie zoekplafond.dart. "Live V"
     // gaf 60.143 bestanden: de pc stond 6 s stil om ze te versturen en de gsm crashte erop.
     final deel = onPartial == null ? null : (List<SoulseekFile> p) => onPartial(beperkZoekuitslag(query, p));
     var laatste = <SoulseekFile>[];
-    for (final ronde in rondes) {
+    for (var i = 0; i < rondes.length; i++) {
+      final ronde = rondes[i];
       // De RUIMSTE vraag van deze ronde, want daar kunnen de resultaten vandaan komen. Zie
-      // [ruimerGezocht]: dat is precies waar het scherm eerlijk over hoort te zijn.
-      gebruikteVraag?.call(ronde.last);
+      // [ruimerGezocht]: dat is precies waar het scherm eerlijk over hoort te zijn. De gewone ronde, zonder de
+      // [extra] woorden: die maken de vraag smaller, niet ruimer.
+      gebruikteVraag?.call(gewoon[i].last);
       laatste = beperkZoekuitslag(query, await _searchOnce(ronde, deel, achtergrond: achtergrond));
       if (laatste.isNotEmpty) return laatste;
       if (client.whyNotLogin != null) throw client.whyNotLogin!;
@@ -1787,6 +1797,9 @@ class DownloadManager extends ChangeNotifier {
       bool ruim = false}) async {
     if (!soulseek.available) throw 'Stel je Soulseek-login in (Instellingen).';
     if (candidates.isEmpty) return false;
+    // Kiest de app zelf, dan een vinyl-rip pas als er niets anders is (Saber, 24-10-2026: vinyl "alleen als ik kies").
+    // Wie zelf op een regel klikte ([exact]) of zelf een uitgave koos ([jouwKeuze]), krijgt wat hij koos.
+    if (exact == null && !jouwKeuze) candidates = vinylAchteraan(candidates, (f) => f.filename);
     // Don't start a duplicate if this exact key is already in progress.
     if (key != null) {
       final existing = jobByKey(key);
@@ -3394,7 +3407,8 @@ class DownloadManager extends ChangeNotifier {
     if (w.exact != null) return _chaseExact(w);
     List<SoulseekFile> hits;
     try {
-      hits = await soulseek.search(w.query, achtergrond: true);
+      // Met "24bit" erbij (kHiresZoekwoorden): een wens zoekt een betere kopie.
+      hits = await soulseek.search(w.query, achtergrond: true, extra: kHiresZoekwoorden);
     } catch (_) {
       return false; // geen net; de wens blijft staan en het ritme schuift niet op
     }
@@ -4315,7 +4329,8 @@ class DownloadManager extends ChangeNotifier {
             f
       ];
       // De officiële lengte voorop, net als bij elke andere download — zie [opLengteDanRang].
-      final bruikbaar = passend..sort(opLengteDanRang(seconden));
+      // En een vinyl-rip pas als er niets anders is: de radio kiest zelf, en vinyl is "alleen als ik kies".
+      final bruikbaar = vinylAchteraan(passend..sort(opLengteDanRang(seconden)), (f) => f.filename);
       // Lossless eerst, precies zoals overal in deze app. Maar niet lossless-of-niets: een
       // eurodance-single uit 1993 bestaat op dit netwerk soms alleen als mp3, en dan is die mp3 beter
       // dan stilte. `_rankSlsk` heeft de beste al vooraan gezet.
@@ -4386,6 +4401,8 @@ class DownloadManager extends ChangeNotifier {
     // De radio is achtergrond; ▶ (los van de radio) niet — daar wacht je op.
     final zoek = soulseek.search(zoekvraagVoorNummer(titel, artist: artiest),
         achtergrond: _radiohalen.contains(job),
+        // ▶ met de jacht op beter daarna: ook "24bit" (kHiresZoekwoorden). De radio niet: daar telt snelheid.
+        extra: zoekBeter ? kHiresZoekwoorden : const [],
         onPartial: vroeg == null
             ? null
             : (lijst) {
@@ -4919,7 +4936,8 @@ class DownloadManager extends ChangeNotifier {
     final albumNaam = album?.trim() ?? '';
     if (albumNaam.isNotEmpty && te.length > 1) {
       try {
-        albumHits = await soulseek.search(zoekvraagVoorAlbum(te.first.artist, albumNaam), achtergrond: true);
+        albumHits = await soulseek.search(zoekvraagVoorAlbum(te.first.artist, albumNaam),
+            achtergrond: true, extra: kHiresZoekwoorden);
       } catch (_) {
         return begonnen.length;
       }
@@ -4933,7 +4951,8 @@ class DownloadManager extends ChangeNotifier {
         hits = albumHits;
       } else {
         try {
-          hits = await soulseek.search(zoekvraagVoorNummer(t.title, artist: t.artist), achtergrond: true);
+          hits = await soulseek.search(zoekvraagVoorNummer(t.title, artist: t.artist),
+              achtergrond: true, extra: kHiresZoekwoorden);
         } catch (_) {
           continue;
         }
@@ -5266,8 +5285,12 @@ class DownloadManager extends ChangeNotifier {
   /// Mag [f] de kopie [van] opwaarderen? Duidelijk beter ([clearlyBetter]) — en nooit verder van de
   /// officiële lengte dan wat er ligt: een 24/96 live-opname van 3:54 is geen opwaardering van een
   /// 24/44,1 van 3:59. Heeft wat er ligt de lengte zelf niet, dan telt alleen de kwaliteit.
+  ///
+  /// **Nooit een vinyl-rip** ([isVinylRip]; Saber, 24-10-2026: "alleen als ik kies"): een andere bron, met naaldgeluid
+  /// en een andere lengte. Wie er een wil, kiest hem zelf in de lijst.
   static bool magOpwaarderen(SoulseekFile f, SoulseekFile van, int? officieel) =>
       clearlyBetter(f, van) &&
+      !isVinylRip(f.filename) &&
       (!lengteKlopt(officieel, van.durationSec) || lengteKlopt(officieel, f.durationSec));
 
   static List<SoulseekFile> kandidatenVoorWens(LosslessWant w, List<SoulseekFile> hits,
@@ -5286,6 +5309,8 @@ class DownloadManager extends ChangeNotifier {
             album: album.isEmpty ? null : album);
     List<SoulseekFile> zeef(bool metRust) => hits
         .where((f) => isLossless(f) && !isMultichannel(f))
+        // Een wens vervangt jouw kopie, en vinyl doet dat nooit vanzelf ([magOpwaarderen]).
+        .where((f) => !isVinylRip(f.filename))
         .where((f) => zelfdeLengte(w.authority?.seconds, f.durationSec))
         .where(isDitNummer)
         .where((f) => !w.refused.containsKey(f.username))
@@ -5373,8 +5398,23 @@ class DownloadManager extends ChangeNotifier {
             : '   versie klopt: $naam — $s tegen het Deezer-fragment');
       }
     }
+    // Een WAV wordt hier FLAC (Saber, 24-10-2026: "WAV halen, omzetten naar FLAC"): verliesvrij, en daarna kan de app
+    // er tags en een hoes in schrijven. Hier, en niet later: alles na deze doorgang ziet zo alleen nog een FLAC.
+    if (soortVan(res.path) == 'wav') {
+      final flac = await (wavOmzetter ?? wavNaarFlac)(res.path);
+      if (flac == null) {
+        spoor?.call('   WAV niet om te zetten naar FLAC: $naam — weggegooid, volgende');
+        return SlskFail('WAV niet om te zetten naar FLAC');
+      }
+      spoor?.call('   WAV omgezet naar FLAC: $naam');
+      return SlskDone(flac);
+    }
     return res;
   }
+
+  /// Hoe [keurOverdracht] een WAV omzet; null = [wavNaarFlac]. Voor de toetsen.
+  @visibleForTesting
+  static Future<String?> Function(String wav)? wavOmzetter;
 
   /// Waar een nummer op een uitgave staat (jaar, nummer, schijf) — zie `deezerPlekOpAlbum` en
   /// [veldenNaHaal]. Gezet bij het opstarten van de pc; null (een toets, een toestel): niet opzoeken.

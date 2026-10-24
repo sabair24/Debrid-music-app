@@ -14,6 +14,8 @@
 ///   mee. "Live V 2001" vindt de map `V (2001)`; "Live V" vond alleen "live".
 library;
 
+import 'audioformaten.dart' show isVerliesvrij;
+import 'quality.dart' show capaciteitOpEenSchaal, effectieveBitrate, kwaliteitsRang;
 import 'soulseek.dart';
 
 /// Ruim boven een gewone albumvraag: een volledig album gaf er 4400 (11-10-2026), een nummer 1424.
@@ -33,19 +35,38 @@ int zoekRelevantie(Set<String> vraagWoorden, String pad) {
   return n;
 }
 
-/// Hoogstens [plafond] bestanden: de best passende, en daarbinnen in de volgorde die ze hadden
-/// (`sortSoulseek`: lossless en snelle peers eerst). Onder het plafond verandert er niets, ook de
+/// Hoogstens [plafond] bestanden: de best passende, daarbinnen de best klinkende ([zoekKwaliteit]), en dan in de
+/// volgorde die ze hadden (`sortSoulseek`: FLAC en snelle peers eerst). Onder het plafond verandert er niets, ook de
 /// volgorde niet.
+///
+/// **De kwaliteit erbij (Saber, 24-10-2026):** *"voor het zelfde geldt zijn er voorbij die 5000 resultaten wel goeie
+/// kwaliteit tussen"*. Bij gelijke pasvorm keek dit alleen naar de volgorde van `sortSoulseek`, en daar wint binnen
+/// FLAC wie een vrije plek en een snelle lijn heeft — een hi-res kopie bij een trage peer kon zo afvallen terwijl een
+/// cd-kopie bleef. Nu valt bij gelijke pasvorm altijd het slechtst klinkende af.
 List<SoulseekFile> beperkZoekuitslag(String vraag, List<SoulseekFile> files, {int plafond = kZoekPlafond}) {
   if (files.length <= plafond) return files;
   final vw = _woorden(vraag);
   final score = [for (final f in files) zoekRelevantie(vw, f.filename)];
+  final klank = [for (final f in files) zoekKwaliteit(f)];
   final volgorde = List<int>.generate(files.length, (i) => i)
     ..sort((a, b) {
       final s = score[b].compareTo(score[a]);
-      return s != 0 ? s : a.compareTo(b);
+      if (s != 0) return s;
+      final k = klank[b].compareTo(klank[a]);
+      return k != 0 ? k : a.compareTo(b);
     });
   return [for (final i in volgorde.take(plafond)) files[i]];
+}
+
+/// Hoe goed [f] klinkt volgens wat de peer meldt: verliesvrij boven lossy, daarbinnen bemonstering × bitdiepte (of de
+/// bitrate als hij die niet meldt). Dezelfde maat als de zoeklijst (`_slskRang` in main.dart): [kwaliteitsRang] met
+/// [capaciteitOpEenSchaal].
+int zoekKwaliteit(SoulseekFile f) {
+  final lossless = isVerliesvrij(f.ext);
+  final kbps = effectieveBitrate(bitrate: f.bitrate, durationSec: f.durationSec, size: f.size);
+  return kwaliteitsRang(
+      lossless: lossless,
+      kbps: capaciteitOpEenSchaal(sampleRate: f.sampleRate, bitDepth: f.bitDepth, kbps: kbps, lossless: lossless));
 }
 
 /// Een woord dat Soulseek meetelt: twee tekens of meer. Zie [albumZoekvraag].

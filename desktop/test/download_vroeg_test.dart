@@ -143,7 +143,7 @@ void main() {
     final z = online.substring(online.indexOf('  Future<List<SoulseekFile>> zoekVroeg('));
     expect(z, contains('if (uit.isCompleted || bezig || klok.elapsed < DownloadManager.kVroegZoeken) return;'));
     expect(z, contains('if (!uit.isCompleted && vroegGenoeg(z, seconden)) uit.complete(z);'));
-    expect(z, contains("search(vraag, onPartial: (l) => unawaited(kijk(l))).then((alles) async {"),
+    expect(z, contains("search(vraag, onPartial: (l) => unawaited(kijk(l)), extra: extra).then((alles) async {"),
         reason: 'anders de hele uitslag');
     final main = File('lib/main.dart').readAsStringSync();
     final hit = main.substring(main.indexOf('Future<void> _downloadHit('));
@@ -171,7 +171,8 @@ class _Zoeker extends SoulseekService {
   Future<List<SoulseekFile>> search(String query,
       {void Function(List<SoulseekFile>)? onPartial,
       void Function(String)? gebruikteVraag,
-      bool achtergrond = false}) async {
+      bool achtergrond = false,
+      List<String> extra = const []}) async {
     vragen.add(query);
     final klok = Stopwatch()..start();
     for (final (wanneer, lijst) in tussen) {
