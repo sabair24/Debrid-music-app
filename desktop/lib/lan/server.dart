@@ -657,6 +657,14 @@ class LanServer {
       if (stand != null && rij != null) bron = speakerAlsStand(stand, rij.rij, nuMs: zones.nu);
     } else {
       bron = zones.standVan(van)?.toJson();
+      // De plek zoals hij NU is, niet bij de laatste melding: een toestel meldt hoogstens om de vijf seconden (24-10-2026:
+      // de radio begon op de Amp op 20 s, de Shield was al op 33). Met `updatedAt` op nu, zodat een toestel dat
+      // overneemt de tijd sindsdien niet nog eens optelt.
+      if (bron != null && bron['playing'] == true) {
+        final sinds = zones.nu - ((bron['updatedAt'] as num?)?.toInt() ?? zones.nu);
+        bron['positionMs'] = ((bron['positionMs'] as num?)?.toInt() ?? 0) + sinds.clamp(0, 60000);
+        bron['updatedAt'] = zones.nu;
+      }
     }
     final trackId = '${bron?['trackId'] ?? ''}';
     if (bron == null || trackId.isEmpty) return (status: 409, antwoord: {'error': 'Op die zone speelt niets.'});

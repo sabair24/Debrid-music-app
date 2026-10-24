@@ -674,6 +674,37 @@ void main() {
       await sub.cancel();
     });
 
+    test('doorgeven van een toestel: de plek van nu, niet die van de laatste melding', () async {
+      // 24-10-2026: de radio begon op de Amp op 20 s, terwijl de Shield al op 33 was — een toestel meldt hoogstens om de
+      // vijf seconden.
+      final events = <SseEvent>[];
+      final sub = c.zoneStroom(toestel: 'gsm-1', naam: 'Galaxy').listen(events.add);
+      for (var i = 0; i < 50 && server.zones.bereikbareToestellen().isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      server.state.applyOps([
+        {
+          'type': 'progress', 'trackId': 'id-7', 'positionMs': 10000, 'queue': ['id-7'], 'index': 0, 'playing': true,
+          'at': DateTime.now().millisecondsSinceEpoch,
+        }
+      ], deviceId: 'ipad-1', deviceName: 'iPad');
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      final r = await server.zoneOverdracht('dev:ipad-1', 'dev:gsm-1', wie: 'toets');
+      expect(r.status, 200);
+      Map<String, dynamic>? stand;
+      for (var i = 0; i < 100 && stand == null; i++) {
+        for (final e in events.where((e) => e.event == 'cmd')) {
+          final m = jsonDecode(e.data) as Map<String, dynamic>;
+          if (m['cmd'] == 'neemOver') stand = (m['stand'] as Map).cast<String, dynamic>();
+        }
+        if (stand == null) await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect((stand!['positionMs'] as num).toInt(), greaterThanOrEqualTo(11000), reason: 'de tijd sinds de melding telt mee');
+      expect((stand['updatedAt'] as num).toInt(), greaterThanOrEqualTo(DateTime.now().millisecondsSinceEpoch - 2000),
+          reason: 'en wie overneemt, telt hem niet nog eens');
+      await sub.cancel();
+    });
+
     test('een radio die van een toestel naar een speaker gaat, gaat als radio mee — met het nummer als zaad', () async {
       // Saber, 24-10-2026: "ook radio functie, doorgeven naar zones". Tot nu toe ging alleen de rij mee, en die is bij
       // een radio alleen het spelende nummer: daarna was het stil.
