@@ -224,6 +224,12 @@ void main() {
       expect(blokkenRegel(), isEmpty);
     });
 
+    test('een app die niet tekent: de ronde stopt met een reden in plaats van eindeloos te wachten (Mac, 24-10-2026)', () {
+      expect(kMeetBeeldGeduld, const Duration(seconds: 8));
+      final ronde = File('lib/meetronde.dart').readAsStringSync();
+      expect(ronde, contains('return c.future.timeout(kMeetBeeldGeduld,'));
+    });
+
     test('de bedrading: Albums, de rij, de tegel, de pagina en de sortering; geen stilstand tijdens een meetronde', () {
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(main, contains("return MeetBlok('Albums',"));

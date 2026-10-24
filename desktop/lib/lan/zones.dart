@@ -638,8 +638,10 @@ class ZoneRegister {
     return bron;
   }
 
-  String _hiernaVan(List<String> rij, int index, String repeat) {
-    final id = volgendInRij(rij, index, repeat);
+  String _hiernaVan(List<String> rij, int index, String repeat) => _naamVan(volgendInRij(rij, index, repeat));
+
+  /// "Titel — Artiest" van een nummer-id, of leeg.
+  String _naamVan(String id) {
     final n = id.isEmpty ? null : nummer?.call(id);
     if (n == null || n.titel.isEmpty) return '';
     return n.artiest.isEmpty ? n.titel : '${n.titel} — ${n.artiest}';
@@ -1029,7 +1031,8 @@ class ZoneRegister {
     final b = bestandVan?.call(p.trackId);
     final stroom = p.stroom;
     return ZoneStaat(
-      hierna: _hiernaVan(p.queue, p.index, p.repeat),
+      // Een radio meldt wat erna komt apart ([PlaybackProgress.volgend]); de rij noemt dan alleen het spelende nummer.
+      hierna: p.volgend.isNotEmpty ? _naamVan(p.volgend) : _hiernaVan(p.queue, p.index, p.repeat),
       bronSoort: bron?.soort ?? '',
       bronNaam: bron?.naam ?? '',
       kwaliteit: b == null ? '' : kwaliteitLabel(ext: b.ext, rate: b.rate, bits: b.bits),

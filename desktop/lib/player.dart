@@ -844,6 +844,17 @@ class PlayerStore extends ChangeNotifier
   int _radioSession = 0; // bumped per playRadio() so a stale extend can't pollute a new radio
   @override
   List<RadioItem> get radioQueue => _radio;
+
+  /// Het eerstvolgende radionummer dat al klaarstaat (gehaald of van jou), of null — voor "Hierna" op de zonekaart. De
+  /// melding van een radio noemt alleen het spelende nummer ([_saveProgress]); dit gaat er apart bij (zones, 24-10-2026).
+  Track? get radioVolgend {
+    if (!radioMode) return null;
+    for (var i = _radioIndex + 1; i < _radio.length; i++) {
+      final r = _radio[i];
+      if (!r.failed && r.local != null) return r.local;
+    }
+    return null;
+  }
   @override
   int get radioIndex => _radioIndex;
 

@@ -513,6 +513,9 @@ class CastManager {
       final found = await _upnp.discover();
       final kefs = await _zoekKef().catchError((Object _) => <Renderer>[]);
       _renderers = {for (final r in found) r.id: r, for (final k in kefs) k.id: k};
+      for (final r in _renderers.values) {
+        _namen[r.id] = r.name;
+      }
       _shields = await _findShields();
       bijStand?.call();
       unawaited(leesGroepen());
@@ -1342,12 +1345,16 @@ class CastManager {
     }
   }
 
+  /// De naam van elke speaker die ooit gevonden werd — ook als hij nu weg is, voor een melding die zegt wélke.
+  final Map<String, String> _namen = {};
+
   Future<Renderer> _renderer(String id) async {
     final known = _renderers[id];
     if (known != null) return known;
     await devices();
     final found = _renderers[id];
-    if (found == null) throw StateError('Die speaker is niet (meer) op het netwerk.');
+    // Met de naam (24-10-2026: de Sonos Move sliep, en de melding zei "Sonos Amp antwoordt niet").
+    if (found == null) throw StateError('${_namen[id] ?? 'Die speaker'} is niet (meer) op het netwerk — staat hij aan?');
     return found;
   }
 
