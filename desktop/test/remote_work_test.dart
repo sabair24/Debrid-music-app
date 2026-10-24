@@ -58,7 +58,8 @@ class FakeSoulseek extends SoulseekService {
       {void Function(List<SoulseekFile>)? onPartial,
       void Function(String)? gebruikteVraag,
       bool achtergrond = false,
-      List<String> extra = const []}) async {
+      List<String> extra = const [],
+      bool terugval = true}) async {
     queries.add(query);
     return answer;
   }

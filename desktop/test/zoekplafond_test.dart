@@ -95,7 +95,8 @@ void main() {
 
   test('aangesloten: elke zoekvraag begrensd, en de albumpagina\'s vragen met het jaar', () {
     final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
-    expect(online, contains('laatste = beperkZoekuitslag(query, await _searchOnce(ronde, deel, achtergrond: achtergrond));'));
+    // Sinds 24-10-2026 met de 24bit-zoekopdracht erbij samengevoegd (samen), en dan pas begrensd.
+    expect(online, contains('return beperkZoekuitslag(query, samen);'));
     expect(online, contains('onPartial(beperkZoekuitslag(query, p))'));
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(main, contains('soulseek.search(_albumVraag, onPartial:'));

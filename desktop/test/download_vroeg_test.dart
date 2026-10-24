@@ -172,7 +172,8 @@ class _Zoeker extends SoulseekService {
       {void Function(List<SoulseekFile>)? onPartial,
       void Function(String)? gebruikteVraag,
       bool achtergrond = false,
-      List<String> extra = const []}) async {
+      List<String> extra = const [],
+      bool terugval = true}) async {
     vragen.add(query);
     final klok = Stopwatch()..start();
     for (final (wanneer, lijst) in tussen) {
