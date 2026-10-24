@@ -16148,6 +16148,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     _draai.dispose();
     _tikken.dispose();
     _eersteRondje.dispose();
+    _hoesKnop.dispose();
+    _speelKnop.dispose();
     _hoesX.dispose();
     super.dispose();
   }
@@ -16155,6 +16157,25 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
   /// Het eerste artiestrondje vóór de naam (zie [ArtiestRondjes]): op een tv de plek waar OMHOOG
   /// vanaf de hoes naartoe gaat.
   final _eersteRondje = FocusNode(debugLabel: 'np-eerste-rondje');
+
+  /// De hoes en ▶, voor de pijlen naast elkaar op een tv: omhoog vanaf de knoppen naar de hoes, omlaag
+  /// vanaf de hoes terug naar ▶ (Saber, 23-10-2026).
+  final _hoesKnop = FocusNode(debugLabel: 'np-hoes');
+  final _speelKnop = FocusNode(debugLabel: 'np-speel');
+
+  /// Staat dit scherm op een tv naast elkaar? Bijgehouden in `build`.
+  bool _naastOpTv = false;
+
+  /// Omhoog vanaf de knoppenrij naar de hoes, naast elkaar op een tv. Elders is omhoog gewoon tussen
+  /// de knoppen lopen.
+  KeyEventResult _omhoogNaarHoes(KeyEvent e) {
+    if (!_naastOpTv || e.logicalKey != LogicalKeyboardKey.arrowUp) return KeyEventResult.ignored;
+    if (e is KeyDownEvent && _hoesKnop.context != null && _hoesKnop.canRequestFocus) {
+      _hoesKnop.requestFocus();
+      return KeyEventResult.handled;
+    }
+    return e is KeyRepeatEvent ? KeyEventResult.handled : KeyEventResult.ignored;
+  }
 
   /// Loopt na een eerste OK op de hoes: komt er binnen [kTvTweedeOk] een tweede, dan draait de hoes
   /// om; anders pauzeert (of speelt) hij.
@@ -16218,6 +16239,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     // speler, bibliotheek en speaker na te rekenen — en dit scherm is dat niet.
     final schermmaat = MediaQuery.sizeOf(context);
     final naast = naastElkaar(scherm: schermmaat, compact: isCompact(context), tv: isTv);
+    // Op een tv ook naast elkaar (Saber, 23-10-2026): dan start de markering op ▶ en niet op de hoes.
+    _naastOpTv = isTv && naast;
     // Een telefoon dwars: breder dan hoog, maar te laag om naast elkaar te staan — zie [liggend].
     // Dan de hoes links, de kolom met titel en knoppen rechts.
     final dwars = !naast && liggend(scherm: schermmaat, tv: isTv);
@@ -16234,7 +16257,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     // De stapel ([WachtrijStapel]) steekt links en boven uit: de hoes is dan kleiner, zodat alles in
     // dezelfde ruimte past. Niet dwars: daar is geen hoogte voor wat erboven uitsteekt.
     final stapelAan = StapelKeuze.aan.value && !dwars;
-    final hoesMaatVol = naast
+    final hoesMaatVol = naast && isTv
+        // De overscanrand telt mee: die houdt de SafeArea hieronder vrij ([tvOverscan]).
+        ? hoesNaastTv(bruikbaar: tvOverscan.deflateSize(bruikbaar))
+        : naast
         ? hoesNaast(
             scherm: Size(schermmaat.width - paneelBreedte, schermmaat.height),
             reisfactor: discTravelFactor(context))
@@ -16243,7 +16269,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
             : _sleeve(context);
     final hoesMaat = stapelAan ? hoesMaatVol / (1 + kStapelBoven) : hoesMaatVol;
     final kolom = naast
-        ? kSpeelKolom
+        ? (isTv ? kSpeelKolomTv : kSpeelKolom)
         : dwars
             ? kolomLiggend(bruikbaar: bruikbaar, hoes: hoesMaat)
             : dialogWidth(context, 540);
@@ -16267,7 +16293,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
       // Op tv is de hoes de rustplek: hier landt de markering bij openen, OK pauzeert,
       // en links/rechts zijn vorige en volgende. Uitvergroten is een muisgebaar — er
       // hoort een vergrootglas-cursor bij — en verhuist daarom naar een lange druk.
-      autofocus: isTv,
+      // Naast elkaar (de Shield sinds 23-10-2026) start de markering op ▶ ([_speelKnop]) en komt
+      // hij hier met omhoog.
+      autofocus: isTv && !naast,
+      focusNode: _hoesKnop,
       // Op een tv niet het hele blok met de cd erbij oplichten: alleen de hoes groeit
       // ([AlbumArt.uitgelicht]). "De cd in de hoes moet niet selecteerbaar zijn" (Saber, 16-10-2026).
       scaleOnFocus: !isTv,
@@ -16354,7 +16383,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                     titels: [t.title, if (al != null) for (final x in al.tracks) if (x.title != t.title) x.title],
                     identity: al == null ? '' : bib.uidOf(al),
                     size: hoesMaat,
-                    reisFactor: dwars ? kLiggendReis : null,
+                    reisFactor: dwars ? kLiggendReis : (_naastOpTv ? kSpeelReisTv : null),
                     fallback: p.currentCover,
                     chosen: al?.correctedCover,
                     trackCount: al?.tracks.length ?? 0,
@@ -16434,7 +16463,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         : WachtrijStapel(
             key: _stapel,
             maat: hoesMaat,
-            blok: hoesMaat * (1 + discTravelFactor(context)),
+            blok: hoesMaat * (1 + (_naastOpTv ? kSpeelReisTv : discTravelFactor(context))),
             voorste: hoesMetTikken,
             volgende: volgendeHoezen(p, bib),
             onSpeel: (n) =>
@@ -16468,7 +16497,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
             builder: (_, x, k) => Transform.translate(offset: Offset(x + (stapelAan ? hoesMaat * kStapelLinks : 0), 0), child: k),
             child: kind,
           );
-    final hoesKolom = isTv
+    // Naast elkaar op een tv wél, zoals op pc en Mac: daar is de hoogte er (Saber, 23-10-2026).
+    final hoesKolom = isTv && !naast
         ? hoesOfStapel
         : Column(
             mainAxisSize: MainAxisSize.min,
@@ -16505,7 +16535,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                 const SizedBox(height: 12),
                 metDeHoes(SizedBox(
                   width: hoesMaat,
-                  child: _albumRegel(context, albumNaam, al, gecentreerd: false),
+                  // Op een tv geen stop voor de markering: omlaag van de hoes gaat naar ▶, en "Ga naar
+                  // album" staat onder Meer.
+                  child: _albumRegel(context, albumNaam, isTv ? null : al, gecentreerd: false),
                 )),
               ],
             ],
@@ -16515,10 +16547,11 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     // niet als widget, zodat hij in de gestapelde indeling gewoon in de kolom valt en naast
     // elkaar in de kolom ernaast — zonder een tussenlaag die de hoogte anders zou verdelen.
     final onder = <Widget>[
-      // Eén regel op tv, met puntjes. Een titel die naar twee regels loopt kost er 40
-      // bij, en dat is precies wat er niet is — op 540 punten is dit scherm 80 te lang.
+      // Eén regel op tv gestapeld, met puntjes. Een titel die naar twee regels loopt kost er 40
+      // bij, en dat is precies wat er niet is — op 540 punten is dit scherm 80 te lang. Naast elkaar
+      // is die hoogte er wel, en een titel hoort niet afgekapt te worden (Saber, 23-10-2026).
       Text(t?.title ?? '—',
-          maxLines: isTv ? 1 : null,
+          maxLines: isTv ? (naast ? 2 : 1) : null,
           overflow: isTv ? TextOverflow.ellipsis : null,
           style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800), textAlign: zij ? TextAlign.left : TextAlign.center),
       const SizedBox(height: 6),
@@ -16540,7 +16573,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         // de rij zou het de artiestnaam wegdrukken — en staat op de tv en brede schermen ernaast.
         child: NuSpeeltNaamrij(
           zij: zij,
-          merkInDeRij: !merkEigenRegel(kolom: kolom, tv: isTv),
+          // Naast elkaar op een tv is de kolom 380 smal en de hoogte er wel: dan een eigen regel.
+          merkInDeRij: !merkEigenRegel(kolom: kolom, tv: isTv && !naast),
           // Flexibel (dat doet de rij), zodat de begrenzing hierboven ook echt bij de namen aankomt.
           // En omvouwend, want hier is ruimte: drie gasten zakken naar een tweede regel in plaats
           // van tot puntjes te worden teruggebracht.
@@ -16698,7 +16732,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
       _RadioOordeel(track: t, naast: zij),
       // Krimpen als het niet past: met de wachtrijknop erbij is de rij ~400 punten, en een telefoon
       // heeft er na de marges minder. Op een breed scherm staat hij gewoon op ware grootte.
-      Align(
+      //
+      // Naast elkaar op een tv gaat omhoog vanaf deze rij naar de hoes ([_omhoogNaarHoes]).
+      Focus(
+        canRequestFocus: false,
+        skipTraversal: true,
+        onKeyEvent: (_, e) => _omhoogNaarHoes(e),
+        child: Align(
         alignment: zij ? Alignment.centerLeft : Alignment.center,
         child: FittedBox(
         fit: BoxFit.scaleDown,
@@ -16741,10 +16781,12 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           Container(
             decoration: BoxDecoration(color: kFel, shape: BoxShape.circle),
             child: IconButton(
-              // De markering start op tv niet hier maar op de HOES. Dat was ooit deze
-              // knop, maar die stond op de Shield 80 punten onder de schermrand — dus
-              // begon het scherm met een ring die je niet kon zien. De hoes staat altijd
-              // in beeld, en van daaruit zijn links en rechts vorige en volgende.
+              // Gestapeld start de markering op tv niet hier maar op de HOES: deze knop stond
+              // op de Shield 80 punten onder de schermrand, en het scherm begon met een ring
+              // die je niet kon zien. Naast elkaar staat hij in beeld, en daar start hij hier
+              // (Saber, 23-10-2026: "de markering start op ▶").
+              focusNode: _speelKnop,
+              autofocus: _naastOpTv,
               icon: SpeelPauzeIcoon(speelt: playing, maat: 40),
               color: _bg,
               iconSize: 40,
@@ -16767,7 +16809,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
               onPressed: casting ? null : p.cycleRepeat),
           // De wachtrij naast de hoes, op een breed scherm. Het icoon van Afspeellijsten: de regels
           // schuiven binnen als het paneel opengaat.
-          if (naast) ...[
+          // Niet op een tv: het paneel nam daar 360 van de 864 punten.
+          if (naast && !isTv) ...[
             const SizedBox(width: 8),
             IconButton(
               key: const ValueKey('np-wachtrij'),
@@ -16812,6 +16855,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
             ),
           ],
         ],
+      ),
       ),
       ),
       ),
@@ -17041,9 +17085,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 hoesKolom,
-                                const SizedBox(width: kSpeelGat),
+                                SizedBox(width: isTv ? kSpeelGatTv : kSpeelGat),
                                 SizedBox(
-                                  width: kSpeelKolom,
+                                  width: kolom,
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -17158,6 +17202,15 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     if (e.logicalKey == LogicalKeyboardKey.arrowUp) {
       if (e is KeyDownEvent && _eersteRondje.context != null && _eersteRondje.canRequestFocus) {
         _eersteRondje.requestFocus();
+        return KeyEventResult.handled;
+      }
+      return e is KeyRepeatEvent ? KeyEventResult.handled : KeyEventResult.ignored;
+    }
+    // Naast elkaar: omlaag van de hoes terug naar ▶. Onder de hoes staat alleen de plaatnaam, en die is
+    // op een tv geen stop.
+    if (_naastOpTv && e.logicalKey == LogicalKeyboardKey.arrowDown) {
+      if (e is KeyDownEvent && _speelKnop.context != null && _speelKnop.canRequestFocus) {
+        _speelKnop.requestFocus();
         return KeyEventResult.handled;
       }
       return e is KeyRepeatEvent ? KeyEventResult.handled : KeyEventResult.ignored;

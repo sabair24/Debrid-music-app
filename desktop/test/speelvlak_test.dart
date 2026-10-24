@@ -63,11 +63,71 @@ void main() {
       expect(naastElkaar(scherm: const Size(1600, 400), compact: false, tv: false), isFalse);
     });
 
-    test('een televisie NOOIT, hoe breed ook', () {
-      // De hoes is daar de rustplek van de markering, en rechts is er "volgend nummer". Staat de
-      // knoppenrij rechts van de hoes, dan is hij met de afstandsbediening onbereikbaar.
-      expect(naastElkaar(scherm: const Size(960, 540), compact: false, tv: true), isFalse);
-      expect(naastElkaar(scherm: const Size(1920, 1080), compact: false, tv: true), isFalse);
+    test('een televisie WEL, zoals pc en Mac (Saber, 23-10-2026)', () {
+      // De markering start daar op ▶ en links en rechts lopen door de knoppen; omhoog gaat naar de hoes.
+      expect(naastElkaar(scherm: const Size(960, 540), compact: false, tv: true), isTrue, reason: 'de Shield');
+      expect(naastElkaar(scherm: const Size(1920, 1080), compact: false, tv: true), isTrue);
+    });
+  });
+
+  // De Shield: 960×540 punten, min de overscanrand van 48 × 27 → 864×486 (tv.dart, `tvOverscan`).
+  group('naast elkaar op een televisie', () {
+    const shield = Size(864, 486);
+
+    test('DE KERN: de hoes wordt groter dan gestapeld', () {
+      final gestapeld = hoesGestapeld(scherm: const Size(960, 540), compact: false, tv: true, reisfactor: breed);
+      final naast = hoesNaastTv(bruikbaar: shield);
+      expect(naast, greaterThan(gestapeld * 1.5), reason: 'naast $naast, gestapeld $gestapeld');
+      expect(naast, closeTo(304.6, .1));
+    });
+
+    test('DE GRENS: de uitgeschoven cd raakt de kolom niet', () {
+      final hoes = hoesNaastTv(bruikbaar: shield);
+      final blok = blokBreedte(hoes: hoes, reisfactor: kSpeelReisTv);
+      expect(kGoot * 2 + blok + kSpeelGatTv + kSpeelKolomTv, lessThanOrEqualTo(shield.width + .5));
+    });
+
+    test('DE VAL: logo, hoes en plaatnaam passen in de hoogte', () {
+      final hoes = hoesNaastTv(bruikbaar: shield);
+      // Logo 64 + 14, de hoes, 12 + twee regels plaatnaam (50), en de 32 onder de rij.
+      expect(64 + 14 + hoes + 12 + 50 + 32, lessThanOrEqualTo(shield.height));
+    });
+
+    test('de knoppenrij past in de kolom', () {
+      // Op de Shield gemeten (3.9.592, schermafdruk): shuffle tot Meer is ~375 punten.
+      expect(kSpeelKolomTv, greaterThanOrEqualTo(375));
+    });
+  });
+
+  group('de pijlen naast elkaar op een tv (gelezen uit lib/main.dart)', () {
+    final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+
+    test('de markering start op ▶, niet op de hoes', () {
+      expect(main, contains('              focusNode: _speelKnop,\n              autofocus: _naastOpTv,'));
+      expect(main, contains('      autofocus: isTv && !naast,\n      focusNode: _hoesKnop,'));
+    });
+
+    test('omhoog vanaf de knoppenrij gaat naar de hoes', () {
+      final begin = main.indexOf('KeyEventResult _omhoogNaarHoes(');
+      final lijf = main.substring(begin, main.indexOf('\n  }\n', begin));
+      expect(lijf, contains('if (!_naastOpTv || e.logicalKey != LogicalKeyboardKey.arrowUp) return KeyEventResult.ignored;'));
+      expect(lijf, contains('_hoesKnop.requestFocus();'));
+      expect(main, contains('        onKeyEvent: (_, e) => _omhoogNaarHoes(e),\n        child: Align('));
+    });
+
+    test('omlaag vanaf de hoes gaat terug naar ▶ — alleen vanaf de hoes', () {
+      final begin = main.indexOf('KeyEventResult _pijlAlsNummerknop(');
+      final lijf = main.substring(begin, main.indexOf('return _spoelPijlen.opToets(e);', begin));
+      expect(lijf, contains('if (_naastOpTv && e.logicalKey == LogicalKeyboardKey.arrowDown) {'));
+      expect(lijf, contains('_speelKnop.requestFocus();'));
+      expect(lijf.indexOf('if (!_opHoes)'), lessThan(lijf.indexOf('arrowDown')));
+    });
+
+    test('de tv rekent met haar eigen maten', () {
+      expect(main, contains('? hoesNaastTv(bruikbaar: tvOverscan.deflateSize(bruikbaar))'));
+      expect(main, contains('? (isTv ? kSpeelKolomTv : kSpeelKolom)'));
+      expect(main, contains('SizedBox(width: isTv ? kSpeelGatTv : kSpeelGat),'));
+      expect(main, contains('reisFactor: dwars ? kLiggendReis : (_naastOpTv ? kSpeelReisTv : null),'));
     });
   });
 
@@ -176,7 +236,7 @@ void main() {
       final main = File('lib/main.dart').readAsStringSync();
       expect(main, contains("final dwars = !naast && liggend(scherm: schermmaat, tv: isTv);"));
       expect(main, contains("key: const Key('np-dwars'),"));
-      expect(main, contains('reisFactor: dwars ? kLiggendReis : null,'),
+      expect(main, contains('reisFactor: dwars ? kLiggendReis : (_naastOpTv ? kSpeelReisTv : null),'),
           reason: 'anders rekent de cd met de ruimte van een breed scherm en schuift hij in de kolom');
       expect(main, contains('if (!dwars && artiestVanPlaat.trim().isNotEmpty)'),
           reason: 'het logo boven de hoes past niet in 384 punten hoogte');

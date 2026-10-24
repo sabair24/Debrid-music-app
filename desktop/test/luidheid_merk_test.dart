@@ -369,9 +369,9 @@ void main() {
       expect(kLuidheidOpDeShield, contains('volgt de instelling van de pc'));
     });
 
-    test('DE GRENS: op de tv staat het merk in de naamrij, en de aankondiging is geen kind van de kolom', () {
+    test('DE GRENS: op de tv gestapeld staat het merk in de naamrij (naast elkaar, 380 smal, een eigen regel), en de aankondiging is geen kind van de kolom', () {
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
-      expect(main, contains('merkInDeRij: !merkEigenRegel(kolom: kolom, tv: isTv),'));
+      expect(main, contains('merkInDeRij: !merkEigenRegel(kolom: kolom, tv: isTv && !naast),'));
       // De aankondiging is een overlay (SnackBar) en wordt alleen na het tekenen getoond, nooit als
       // regel in de kolom: precies één aanroep, binnen een post-frame-callback.
       expect('toonLuidheidAankondiging('.allMatches(main).length, 1);
