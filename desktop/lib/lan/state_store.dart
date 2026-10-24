@@ -58,10 +58,15 @@ class PlaybackProgress {
     this.overname = '',
     this.radio,
     this.volume = -1,
+    this.stroom,
   });
 
   /// Het appvolume van dat toestel (0–100), of -1 als het dat niet meldde (een oudere app).
   final int volume;
+
+  /// Zet de pc het nummer onderweg om (`stroomGrens` op het toestel): tot welke frequentie (`rate`) en diepte
+  /// (`bits`, 0 = die van het bestand). Null als het toestel het origineel krijgt. Voor de zonekaart (zones, stap 3).
+  final Map<String, dynamic>? stroom;
 
   /// Speelt er een radio: rond welke artiest (`artiest`) en hoe hij heet (`naam`). Neemt een ander
   /// toestel over, dan start het dezelfde radio. Null zonder radio.
@@ -99,6 +104,7 @@ class PlaybackProgress {
         if (overname.isNotEmpty) 'overname': overname,
         if (radio != null) 'radio': radio,
         if (volume >= 0) 'volume': volume,
+        if (stroom != null) 'stroom': stroom,
       };
 
   static PlaybackProgress fromJson(Map<String, dynamic> m) => PlaybackProgress(
@@ -115,6 +121,7 @@ class PlaybackProgress {
         overname: (m['overname'] ?? '') as String,
         radio: (m['radio'] as Map?)?.cast<String, dynamic>(),
         volume: (m['volume'] as num?)?.toInt() ?? -1,
+        stroom: (m['stroom'] as Map?)?.cast<String, dynamic>(),
       );
 }
 
@@ -439,6 +446,7 @@ class LanStateStore {
             overname: (op['overname'] ?? '') as String,
             radio: (op['radio'] as Map?)?.cast<String, dynamic>(),
             volume: (op['volume'] as num?)?.toInt() ?? -1,
+            stroom: (op['stroom'] as Map?)?.cast<String, dynamic>(),
           );
           // Per toestel eerst: ook een melding die achter de laatste van een ANDER toestel valt, is
           // voor zijn eigen zone nieuw. Alleen een oudere van hetzelfde toestel valt weg.

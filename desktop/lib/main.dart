@@ -68,7 +68,8 @@ import 'zone_opdracht.dart';
 import 'volgbron.dart' show Volgbron;
 import 'samen.dart' show KlokIjk, SamenAnker, SamenVolger;
 import 'speaker_radio.dart';
-import 'lan/zones.dart' show RadioOpSpeaker, ZoneSoort, ZoneStaat, ordenVoorHier, positieNu, speeltNu, verplaatstMelding, zoneSoortVoor;
+import 'lan/zones.dart'
+    show RadioOpSpeaker, ZoneSoort, ZoneStaat, ordenVoorHier, positieNu, speeltNu, verplaatstMelding, zoneBronRegel, zoneSoortVoor;
 import 'lan/server.dart' show LanServer;
 import 'ui/knopbewegingen.dart';
 import 'ui/menu_iconen.dart';
@@ -1999,6 +2000,8 @@ Future<void> main() async {
               'repeat': player.repeat.name,
               // Het appvolume, voor de schuif van deze zone op een ander toestel (zones, 21-10-2026).
               'volume': player.volume.round(),
+              // Zet de pc het onderweg om: naar welke maat — voor "omgezet" op de zonekaart (zones, stap 3).
+              if (player.stroomGrens case final g?) 'stroom': {'rate': g.rate, 'bits': g.bits},
               if (m.overname != null) 'overname': m.overname,
               if (player.radioMode) 'radio': {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam},
               // Na een overname alleen voor de zonelijst (zie [VerderLuisteren.meldNu]).
@@ -11317,12 +11320,17 @@ class _ZoneRij extends StatelessWidget {
       final geleden = Duration(milliseconds: (nuPc - zone.opMs).clamp(0, 1 << 40));
       tijd = [
         zone.playing ? 'Speelt' : 'Gepauzeerd',
-        if (zone.radio.isNotEmpty) 'radio ${zone.radio}',
+        // De radio staat al in de regel met de bron ([zoneBronRegel]).
+        if (zone.radio.isNotEmpty && zone.bronSoort != 'radio') 'radio ${zone.radio}',
         zone.durationMs > 0 ? '${_fmt(plek)} / ${_fmt(Duration(milliseconds: zone.durationMs))}' : _fmt(plek),
         if (!zone.playing && geleden > const Duration(minutes: 1)) _geleden(geleden),
         if (!zone.online) 'niet bereikbaar',
       ].join(' · ');
     }
+
+    // Op een kaart die speelt: waar het vandaan komt en hoe het klinkt, en wat er hierna komt (zones, stap 3).
+    final bronRegel = speelt && verplaatst == null ? zoneBronRegel(zone) : '';
+    final hierna = speelt && verplaatst == null && zone.hierna.isNotEmpty ? 'Hierna: ${zone.hierna}' : '';
 
     final stuur = lijst.stuur;
     void opdracht(String zoneId, Map<String, dynamic> op) {
@@ -11460,6 +11468,12 @@ class _ZoneRij extends StatelessWidget {
                             fontSize: 11.5,
                             fontWeight: FontWeight.w600)),
                   ),
+                  // Een bewegend geluidsicoon op wat nu klinkt (Saber, 23-10-2026).
+                  if (zone.playing && speelt && verplaatst == null) ...[
+                    const SizedBox(width: 6),
+                    // Dezelfde balkjes als bij het spelende nummer in de wachtrij ([_Balkjes]).
+                    SizedBox(key: ValueKey('zone-balkjes-${zone.id}'), width: 13, height: 13, child: const _Balkjes(speelt: true)),
+                  ],
                 ]),
                 const SizedBox(height: 2),
                 // Twee regels: op een gsm wordt een titel anders onleesbaar afgekapt (Saber, 23-10-2026).
@@ -11470,6 +11484,18 @@ class _ZoneRij extends StatelessWidget {
                 if (tijd != null)
                   Text(tijd,
                       maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 11.5)),
+                if (bronRegel.isNotEmpty)
+                  Text(bronRegel,
+                      key: ValueKey('zone-bron-${zone.id}'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
+                if (hierna.isNotEmpty)
+                  Text(hierna,
+                      key: ValueKey('zone-hierna-${zone.id}'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
               ],
             ),
           ),
@@ -14211,9 +14237,10 @@ class _Balkjes extends StatefulWidget {
 class _BalkjesState extends State<_Balkjes> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
 
+  // Na initState, en opnieuw als "animaties verminderen" verandert (MediaQuery).
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     _zet();
   }
 
@@ -14224,7 +14251,8 @@ class _BalkjesState extends State<_Balkjes> with SingleTickerProviderStateMixin 
   }
 
   void _zet() {
-    if (widget.speelt && !isTv) {
+    // Met "animaties verminderen" stil, zoals op een tv (zones, 24-10-2026).
+    if (widget.speelt && !isTv && !MediaQuery.disableAnimationsOf(context)) {
       _c.repeat();
     } else {
       _c.stop();

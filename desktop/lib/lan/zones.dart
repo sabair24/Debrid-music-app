@@ -19,6 +19,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../audioformaten.dart' show isVerliesvrij;
+import '../quality.dart' show depthRateLabel;
 import 'state_store.dart';
 
 /// Wat voor ding een zone is. Bepaalt het icoon, en straks wat je ermee kan.
@@ -124,7 +126,26 @@ class ZoneStaat {
     this.verplaatstNaar = '',
     this.verplaatstOp = 0,
     this.leden = const [],
+    this.hierna = '',
+    this.bronSoort = '',
+    this.bronNaam = '',
+    this.kwaliteit = '',
+    this.omgezet = '',
   });
+
+  /// Wat er na het spelende nummer komt: "Titel — Artiest", leeg als er niets komt (zones, stap 3; Saber, 23-10-2026:
+  /// "Hierna: …").
+  final String hierna;
+
+  /// Waar de wachtrij vandaan komt ([bronVanRij]): 'radio', 'album', 'afspeellijst', 'artiest' of 'wachtrij', met de
+  /// naam erbij ("Reckless", "Zomer", "23 nummers"). Leeg als het niet te zeggen is.
+  final String bronSoort, bronNaam;
+
+  /// Het bestand: "FLAC 24/96", "MP3" — leeg als de pc het niet weet ([kwaliteitLabel]).
+  final String kwaliteit;
+
+  /// Zet de pc het onderweg om: naar welke maat ("16/44.1"). Leeg: het origineel ([omgezetNaar]).
+  final String omgezet;
 
   /// Bij de leider van een groep: elk lid (de leider eerst) met zijn naam en volume. Leeg zonder groep.
   final List<ZoneLid> leden;
@@ -241,6 +262,10 @@ class ZoneStaat {
         if (radioHouden) 'radioHouden': true,
         if (verplaatstOp > 0) ...{'verplaatstNaar': verplaatstNaar, 'verplaatstOp': verplaatstOp},
         if (leden.isNotEmpty) 'leden': [for (final l in leden) l.toJson()],
+        if (hierna.isNotEmpty) 'hierna': hierna,
+        if (bronSoort.isNotEmpty) ...{'bronSoort': bronSoort, 'bronNaam': bronNaam},
+        if (kwaliteit.isNotEmpty) 'kwaliteit': kwaliteit,
+        if (omgezet.isNotEmpty) 'omgezet': omgezet,
       };
 
   static ZoneStaat fromJson(Map<String, dynamic> m) => ZoneStaat(
@@ -277,6 +302,11 @@ class ZoneStaat {
           for (final x in (m['leden'] as List? ?? const []))
             if (x is Map) ZoneLid.fromJson(x.cast<String, dynamic>()),
         ],
+        hierna: '${m['hierna'] ?? ''}',
+        bronSoort: '${m['bronSoort'] ?? ''}',
+        bronNaam: '${m['bronNaam'] ?? ''}',
+        kwaliteit: '${m['kwaliteit'] ?? ''}',
+        omgezet: '${m['omgezet'] ?? ''}',
       );
 
   @override
@@ -310,10 +340,110 @@ class ZoneStaat {
       other.radioHouden == radioHouden &&
       other.verplaatstNaar == verplaatstNaar &&
       other.verplaatstOp == verplaatstOp &&
-      listEquals(other.leden, leden);
+      listEquals(other.leden, leden) &&
+      other.hierna == hierna &&
+      other.bronSoort == bronSoort &&
+      other.bronNaam == bronNaam &&
+      other.kwaliteit == kwaliteit &&
+      other.omgezet == omgezet;
 
   @override
   int get hashCode => Object.hash(id, online, playing, trackId, positionMs, opMs, index, lengte);
+}
+
+// ── Op de kaart: hierna, de bron en de kwaliteit (zones, stap 3) ─────────────
+
+/// Het id na [index] in [rij], zoals de speler verdergaat: bij 'one' hetzelfde, aan het eind bij 'all' weer het
+/// eerste. Leeg als er niets komt.
+String volgendInRij(List<String> rij, int index, String repeat) {
+  if (rij.isEmpty || index < 0 || index >= rij.length) return '';
+  if (repeat == 'one') return rij[index];
+  if (index + 1 < rij.length) return rij[index + 1];
+  return repeat == 'all' ? rij.first : '';
+}
+
+/// Waar een wachtrij vandaan komt.
+typedef ZoneBron = ({String soort, String naam});
+
+/// Waar [rij] vandaan komt, zonder dat het toestel het hoeft te zeggen (Saber, 23-10-2026: "de bron (radio, album,
+/// afspeellijst)"): een radio, een afspeellijst uit [lijsten] (ook geschud: dezelfde nummers), één album, één
+/// artiest, of anders "N nummers". Een rij van één nummer zegt niets: null.
+///
+/// Album en artiest alleen bij een rij tot 300 nummers: een geschudde bibliotheek is dertigduizend ids, en daar is
+/// het antwoord toch "wachtrij".
+ZoneBron? bronVanRij(List<String> rij,
+    {String radio = '',
+    ZoneNummer? Function(String id)? nummer,
+    Iterable<({String naam, List<String> ids})> lijsten = const []}) {
+  if (radio.isNotEmpty) return (soort: 'radio', naam: radio);
+  final ids = [for (final id in rij) if (id.isNotEmpty) id];
+  if (ids.length < 2) return null;
+  final hier = ids.toSet();
+  for (final l in lijsten) {
+    final lijst = l.ids.toSet();
+    if (lijst.length < 2) continue;
+    if (hier.length >= lijst.length * .8 && lijst.containsAll(hier)) return (soort: 'afspeellijst', naam: l.naam);
+  }
+  if (ids.length <= 300 && nummer != null) {
+    String? album, artiest, albumSleutel, artiestSleutel;
+    var zelfdeAlbum = true, zelfdeArtiest = true, bekend = 0;
+    for (final id in ids) {
+      final n = nummer(id);
+      if (n == null) continue;
+      bekend++;
+      final a = n.album.trim().toLowerCase(), ar = n.artiest.trim().toLowerCase();
+      if (albumSleutel == null) {
+        albumSleutel = a;
+        artiestSleutel = ar;
+        album = n.album.trim();
+        artiest = n.artiest.trim();
+      }
+      if (a.isEmpty || a != albumSleutel) zelfdeAlbum = false;
+      if (ar.isEmpty || ar != artiestSleutel) zelfdeArtiest = false;
+    }
+    if (bekend >= 2 && zelfdeAlbum) return (soort: 'album', naam: album!);
+    if (bekend >= 2 && zelfdeArtiest) return (soort: 'artiest', naam: artiest!);
+  }
+  return (soort: 'wachtrij', naam: '${ids.length} nummers');
+}
+
+/// Het bestand als "FLAC 24/96" (verliesvrij met bekende maat) of "MP3"; leeg zonder formaat.
+String kwaliteitLabel({required String ext, int rate = 0, int bits = 0}) {
+  final e = ext.toLowerCase().replaceAll('.', '');
+  if (e.isEmpty) return '';
+  if (isVerliesvrij(e) && rate > 0 && bits > 0) {
+    return '${e.toUpperCase()} ${depthRateLabel(sampleRate: rate, bitsPerSample: bits)}';
+  }
+  return e.toUpperCase();
+}
+
+/// Naar welke maat het onderweg omgezet wordt ("16/44.1"), of leeg als het het origineel is. [stroomBits] 0 laat de
+/// diepte van het bestand staan, zoals `stroomGrens` op een toestel.
+String omgezetNaar({required int bestandRate, required int bestandBits, required int stroomRate, required int stroomBits}) {
+  if (stroomRate <= 0 && stroomBits <= 0) return '';
+  final rate = stroomRate > 0 && (bestandRate <= 0 || stroomRate < bestandRate) ? stroomRate : bestandRate;
+  final bits = stroomBits > 0 && (bestandBits <= 0 || stroomBits < bestandBits) ? stroomBits : bestandBits;
+  if (rate <= 0 || bits <= 0 || (rate == bestandRate && bits == bestandBits)) return '';
+  return depthRateLabel(sampleRate: rate, bitsPerSample: bits);
+}
+
+/// De regel onder de titel op een zonekaart: waar het vandaan komt en hoe het klinkt — "Album: Reckless · FLAC
+/// 16/44.1", of "… · FLAC 24/96, omgezet naar 16/44.1". Leeg als er niets te zeggen is.
+String zoneBronRegel(ZoneStaat z) {
+  final bron = switch (z.bronSoort) {
+    'radio' => 'Radio: ${z.bronNaam}',
+    'album' => 'Album: ${z.bronNaam}',
+    'afspeellijst' => 'Afspeellijst: ${z.bronNaam}',
+    'artiest' => 'Artiest: ${z.bronNaam}',
+    'wachtrij' => 'Wachtrij: ${z.bronNaam}',
+    _ => '',
+  };
+  final klank = z.kwaliteit.isEmpty
+      ? ''
+      : z.omgezet.isEmpty
+          ? z.kwaliteit
+          : '${z.kwaliteit}, omgezet naar ${z.omgezet}';
+  return [bron, klank].where((s) => s.isNotEmpty).join(' · ');
 }
 
 /// Hoe lang "Verplaatst naar …" op de kaart van de oude zone staat (Saber, 23-10-2026: "Ja, een paar seconden").
@@ -460,6 +590,7 @@ class ZoneRegister {
     required this.pcId,
     required this.pcNaam,
     this.nummer,
+    this.bestandVan,
     int Function()? klok,
     Duration tik = const Duration(seconds: 10),
   }) : _klok = klok {
@@ -480,6 +611,39 @@ class ZoneRegister {
 
   /// Een id van de pc als nummer, of null.
   final ZoneNummer? Function(String id)? nummer;
+
+  /// Het bestand achter een nummer-id: extensie, frequentie en diepte — voor [ZoneStaat.kwaliteit].
+  final ({String ext, int rate, int bits})? Function(String id)? bestandVan;
+
+  /// Zet de pc het nummer voor deze speaker om: naar welke maat ("16/48"), of leeg. Gezet door de server, uit de
+  /// plafonds van de speaker (`CastManager.plafondVan`).
+  String Function(String speakerId, String trackId)? omzettingOpSpeaker;
+
+  /// De bron per zone, onthouden zolang de rij en de afspeellijsten dezelfde zijn ([bronVanRij] kost bij een lange rij
+  /// een paar duizend opzoekingen, en de lijst wordt bij elke melding opnieuw gemaakt).
+  final Map<String, ({String sleutel, ZoneBron? bron})> _bronGeheugen = {};
+
+  ZoneBron? _bronVoor(String zoneId, List<String> rij, String radio) {
+    final sleutel = '${state.rev}|$radio|${rij.length}|${rij.isEmpty ? '' : rij.first}|${rij.isEmpty ? '' : rij.last}';
+    final al = _bronGeheugen[zoneId];
+    if (al != null && al.sleutel == sleutel) return al.bron;
+    final bron = bronVanRij(rij,
+        radio: radio,
+        nummer: nummer,
+        lijsten: [
+          for (final l in state.playlists.values)
+            if (l.deletedAt == null) (naam: l.name, ids: l.trackIds),
+        ]);
+    _bronGeheugen[zoneId] = (sleutel: sleutel, bron: bron);
+    return bron;
+  }
+
+  String _hiernaVan(List<String> rij, int index, String repeat) {
+    final id = volgendInRij(rij, index, repeat);
+    final n = id.isEmpty ? null : nummer?.call(id);
+    if (n == null || n.titel.isEmpty) return '';
+    return n.artiest.isEmpty ? n.titel : '${n.titel} — ${n.artiest}';
+  }
 
   final int Function()? _klok;
   int get nu => _klok?.call() ?? DateTime.now().millisecondsSinceEpoch;
@@ -744,7 +908,15 @@ class ZoneRegister {
       if (leden.contains(s.id)) continue;
       final n = s.trackId == null ? null : nummer?.call(s.trackId!);
       final r = s.radio.isEmpty ? null : radioOpSpeaker?.call(s.id, s.trackId ?? '');
+      final rij = speakerRij?.call(s.id);
+      final bron = rij == null ? (s.radio.isEmpty ? null : (soort: 'radio', naam: s.radio)) : _bronVoor('spk:${s.id}', rij.rij, s.radio);
+      final b = s.trackId == null ? null : bestandVan?.call(s.trackId!);
       uit.add(ZoneStaat(
+        hierna: rij == null ? '' : _hiernaVan(rij.rij, rij.index, 'off'),
+        bronSoort: bron?.soort ?? '',
+        bronNaam: bron?.naam ?? '',
+        kwaliteit: b == null ? '' : kwaliteitLabel(ext: b.ext, rate: b.rate, bits: b.bits),
+        omgezet: s.trackId == null ? '' : omzettingOpSpeaker?.call(s.id, s.trackId!) ?? '',
         radioStatus: r?.status ?? '',
         radioPast: r?.past ?? '',
         radioGehaald: r?.gehaald ?? false,
@@ -852,7 +1024,22 @@ class ZoneRegister {
   }) {
     if (p == null || p.trackId.isEmpty) return ZoneStaat(id: id, soort: soort, naam: naam, online: online);
     final n = nummer?.call(p.trackId);
+    final radio = '${p.radio?['naam'] ?? ''}';
+    final bron = _bronVoor(id, p.queue, radio);
+    final b = bestandVan?.call(p.trackId);
+    final stroom = p.stroom;
     return ZoneStaat(
+      hierna: _hiernaVan(p.queue, p.index, p.repeat),
+      bronSoort: bron?.soort ?? '',
+      bronNaam: bron?.naam ?? '',
+      kwaliteit: b == null ? '' : kwaliteitLabel(ext: b.ext, rate: b.rate, bits: b.bits),
+      omgezet: b == null || stroom == null
+          ? ''
+          : omgezetNaar(
+              bestandRate: b.rate,
+              bestandBits: b.bits,
+              stroomRate: (stroom['rate'] as num?)?.toInt() ?? 0,
+              stroomBits: (stroom['bits'] as num?)?.toInt() ?? 0),
       id: id,
       soort: soort,
       naam: naam,
