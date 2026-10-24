@@ -575,26 +575,28 @@ List<String> kiesTidalTreffers(
   required String titel,
   Iterable<String> nee = const [],
 }) {
-  List<String> woorden(String s) => artistKey(s).split(' ').where((w) => w.isNotEmpty).toList();
-  bool artiestPast(List<String> a, List<String> b) {
-    final kort = a.length <= b.length ? a : b, lang = identical(kort, a) ? b : a;
-    if (kort.isEmpty || kort.join(' ').length < 3) return false;
-    for (var i = 0; i < kort.length; i++) {
-      if (kort[i] != lang[i]) return false;
-    }
-    return true;
-  }
-
-  final wil = woorden(artiest);
   final t = normKey(titel), tKaal = normKey(zonderGastTitel(titel));
   final weg = nee.toSet();
   return [
     for (final x in treffers)
       if (!weg.contains(x.id) &&
-          artiestPast(wil, woorden(x.artiest)) &&
+          tidalArtiestPast(artiest, x.artiest) &&
           (normKey(x.titel) == t || normKey(zonderGastTitel(x.titel)) == tKaal))
         x.id,
   ];
+}
+
+/// Is [tidal] (de artiest zoals TIDAL hem noemt: alleen de eerste) dezelfde als [artiest]? De ene naam moet woord voor
+/// woord het begin van de andere zijn: "DJ Massiv" past op "DJ Massiv vs the Rebel", "Sam" niet op "Samantha Fox".
+bool tidalArtiestPast(String artiest, String tidal) {
+  List<String> woorden(String s) => artistKey(s).split(' ').where((w) => w.isNotEmpty).toList();
+  final a = woorden(artiest), b = woorden(tidal);
+  final kort = a.length <= b.length ? a : b, lang = identical(kort, a) ? b : a;
+  if (kort.isEmpty || kort.join(' ').length < 3) return false;
+  for (var i = 0; i < kort.length; i++) {
+    if (kort[i] != lang[i]) return false;
+  }
+  return true;
 }
 
 /// Platen en nummers uit de uitvoer van [kTidalZoekHulp] met "alles" — voor het TIDAL-zoekscherm. Hier ook wat niet
