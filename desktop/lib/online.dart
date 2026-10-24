@@ -1081,19 +1081,22 @@ class SoulseekService {
   /// [achtergrond]: de radio, de verlanglijst of een betere kopie — die wachten eerder op de zoekrem dan wat je zelf
   /// zoekt (`kZoekVoorJou` in soulseek.dart).
   ///
-  /// [extra]: woorden die in de EERSTE ronde als eigen vraag meegaan, achter de volledige vraag ([kHiresZoekwoorden]
-  /// voor de jacht op beter). Ze komen bij de gewone vraag, nooit in de plaats ervan.
+  /// [extra]: woorden waarmee de volledige vraag daarna nog eens als EIGEN zoekopdracht uitgaat ([kHiresZoekwoorden] voor
+  /// de jacht op beter), elk ±8 s; de uitslag komt bij de gewone, nooit in de plaats ervan. Alleen waar niemand wacht.
   Future<List<SoulseekFile>> search(String query,
       {void Function(List<SoulseekFile>)? onPartial,
       void Function(String)? gebruikteVraag,
       bool achtergrond = false,
-      List<String> extra = const []}) async {
+      List<String> extra = const [],
+      bool terugval = true}) async {
     // An empty result because we couldn't log in is NOT "no sources" — retrying a broader query
     // would just burn another login and still show the user the wrong answer.
     final blocked = client.whyNotLogin;
     if (blocked != null) throw blocked;
-    final gewoon = zoekRondes(query);
-    final rondes = metExtraWoorden(gewoon, extra);
+    // [terugval] onwaar: alleen de eerste ronde. Een smalle vraag ("… 24bit" na het landen) die niets vindt, hoort
+    // niet door te vallen naar de eerste twee woorden — dat is een tweede zoekopdracht naar iets wat er niet is.
+    final alle = zoekRondes(query);
+    final rondes = terugval ? alle : alle.take(1).toList();
     // Nooit meer dan [kZoekPlafond] bestanden, de best passende eerst — zie zoekplafond.dart. "Live V"
     // gaf 60.143 bestanden: de pc stond 6 s stil om ze te versturen en de gsm crashte erop.
     final deel = onPartial == null ? null : (List<SoulseekFile> p) => onPartial(beperkZoekuitslag(query, p));
@@ -1101,11 +1104,27 @@ class SoulseekService {
     for (var i = 0; i < rondes.length; i++) {
       final ronde = rondes[i];
       // De RUIMSTE vraag van deze ronde, want daar kunnen de resultaten vandaan komen. Zie
-      // [ruimerGezocht]: dat is precies waar het scherm eerlijk over hoort te zijn. De gewone ronde, zonder de
-      // [extra] woorden: die maken de vraag smaller, niet ruimer.
-      gebruikteVraag?.call(gewoon[i].last);
-      laatste = beperkZoekuitslag(query, await _searchOnce(ronde, deel, achtergrond: achtergrond));
-      if (laatste.isNotEmpty) return laatste;
+      // [ruimerGezocht]: dat is precies waar het scherm eerlijk over hoort te zijn.
+      gebruikteVraag?.call(ronde.last);
+      final gevonden = await _searchOnce(ronde, deel, achtergrond: achtergrond);
+      if (gevonden.isNotEmpty) {
+        // De [extra] woorden als EIGEN zoekopdracht, na de gewone, elk met een eigen venster. Gemeten op 24-10-2026:
+        // meegestuurd in hetzelfde venster leverde "24bit" bijna niets op (9 bestanden met 24bit in het pad, Phil
+        // Collins) — het venster sluit zodra de brede vraag genoeg heeft, na 3,9 s, en de antwoorden op de smalle
+        // vraag komen later. Als eigen zoekopdracht: 112. Alleen na een gewone ronde die iets vond: wat zonder het
+        // woord niets oplevert, levert met het woord ook niets op.
+        final samen = [...gevonden];
+        if (i == 0) {
+          final al = {for (final f in gevonden) '${f.username}|${f.filename}'};
+          for (final v in extraVragen(ronde.first, extra)) {
+            for (final f in await _searchOnce([v], null, achtergrond: achtergrond)) {
+              if (al.add('${f.username}|${f.filename}')) samen.add(f);
+            }
+          }
+        }
+        return beperkZoekuitslag(query, samen);
+      }
+      laatste = gevonden;
       if (client.whyNotLogin != null) throw client.whyNotLogin!;
     }
     return laatste;
@@ -2182,6 +2201,9 @@ class DownloadManager extends ChangeNotifier {
     /// Vijfenveertig peers afgegaan om iets te vervangen wat al in orde was.
     Echtheidsoordeel? oordeelVanWatErLigt;
 
+    /// Waar het bestand ligt dat bleef (zie [oordeelVanWatErLigt]) — voor de 24bit-zoektocht na het landen.
+    String? padVanWatErLigt;
+
     /// Waarom de laatste poging niets opleverde, in de woorden van de peer.
     ///
     /// **Dit bestond al en kwam nergens aan.** Elke poging eindigt in een [SlskFail] met een reden —
@@ -2228,6 +2250,7 @@ class DownloadManager extends ChangeNotifier {
         // Pas HIER, want `uit.path` is het bestand dat blijft — bij `moved` de nieuwe kopie (het
         // oordeel is meeverhuisd), bij `duplicate` de kopie die er al lag en gewonnen heeft.
         oordeelVanWatErLigt = gemeten(uit.path);
+        padVanWatErLigt = uit.path;
         // En na afloop op het pad waar hij écht ligt. `_move` verhuist de markering mee, maar bij
         // `Placement.duplicate` is de bron verwijderd en is `uit.path` de kopie die bleef staan — die
         // hoort de bescherming niet zomaar te erven.
@@ -2505,6 +2528,8 @@ class DownloadManager extends ChangeNotifier {
         }
       }
       if (ok && better.isNotEmpty) _queueUpgrade(better, job);
+      // En "24bit" op de achtergrond, als wat er ligt 16 bit of minder is (Saber, 24-10-2026: "na het landen").
+      if (ok) _naLandenHires(padVanWatErLigt, job.authority, from);
       // FLAC is koning. Landde er lossy, dan blijft de FLAC gewenst -- ook als er vandaag geen enkele
       // lossless bron was, want morgen staat er een andere peer online. Dat is niet theoretisch:
       // gemeten op één nummer waar de enige lossless peer het account geband had, en een dag later
@@ -4401,8 +4426,6 @@ class DownloadManager extends ChangeNotifier {
     // De radio is achtergrond; ▶ (los van de radio) niet — daar wacht je op.
     final zoek = soulseek.search(zoekvraagVoorNummer(titel, artist: artiest),
         achtergrond: _radiohalen.contains(job),
-        // ▶ met de jacht op beter daarna: ook "24bit" (kHiresZoekwoorden). De radio niet: daar telt snelheid.
-        extra: zoekBeter ? kHiresZoekwoorden : const [],
         onPartial: vroeg == null
             ? null
             : (lijst) {
@@ -4853,6 +4876,8 @@ class DownloadManager extends ChangeNotifier {
   /// Uit de hele zoekuitslag van dít nummer; vervangen pas als het niet meer speelt.
   Future<void> _zoekBeterNaHetLanden(DownloadJob job, SoulseekFile gekozen, String pad, int? seconden,
       {required TrackTags gezag, required TrackTags plaatsing, required Future<List<SoulseekFile>> Function() alle}) async {
+    // ▶ is binnen: "24bit" op de achtergrond, los van de kandidaten hieronder (Saber, 24-10-2026: "na het landen").
+    _naLandenHires(pad, plaatsing, gekozen);
     try {
       final beter = betereKandidaten(await alle(), gekozen, seconden);
       if (beter.isEmpty) {
@@ -4908,6 +4933,49 @@ class DownloadManager extends ChangeNotifier {
       authority: TrackTags(
           title: t.title, artist: t.artist, album: t.album, trackNo: t.trackNo, seconds: t.duration?.inSeconds));
 
+  /// Hoe lang [_naLandenHires] wacht op het volgende nummer van hetzelfde album: een album komt nummer voor nummer
+  /// binnen, en het hele album is één zoekopdracht. Ook bij één nummer: dan heeft de bibliotheek het intussen gelezen.
+  static const kNaLandenAdem = Duration(seconds: 90);
+
+  /// Een geland pad als [Track] uit de bibliotheek, en het gezag dat na het vervangen in het bestand komt. Gezet door
+  /// main op de pc; null: geen 24bit-zoektocht na het landen.
+  Track? Function(String pad)? trackVoorPad;
+  TrackTags Function(Track t)? gezagVoor;
+
+  final Map<String, ({Set<String> paden, String album})> _naLanden = {};
+  final Map<String, Timer> _naLandenKlok = {};
+
+  /// ▶ of een download is binnen ([pad], gekozen uit [van]): is dat 16 bit of minder, dan zoekt de app over
+  /// [kNaLandenAdem] op de achtergrond "<artiest> <titel> 24bit", of voor een album één keer "<artiest> <album> 24bit"
+  /// (Saber, 24-10-2026: "na het landen"). ▶ en downloaden worden er zo niet trager door: als eigen zoekopdracht kost
+  /// "24bit" ±8 s, en meegestuurd met de gewone leverde het bijna niets op. Wat jij zelf koos, komt hier niet langs
+  /// (`finish` stopt bij een vaste keuze), en vervangen doet alleen wat bewezen beter is, nooit vinyl.
+  void _naLandenHires(String? pad, TrackTags? gezag, SoulseekFile van) {
+    if (pad == null || trackVoorPad == null) return;
+    if ((van.bitDepth ?? 0) > 16 || (van.sampleRate ?? 0) > 48000) return;
+    final album = gezag?.album.trim() ?? '';
+    final artiest = (gezag?.albumArtist?.trim().isNotEmpty ?? false) ? gezag!.albumArtist!.trim() : gezag?.artist.trim() ?? '';
+    final sleutel = album.isEmpty ? 'los|$pad' : '${normKey(artiest)}|${normKey(album)}';
+    (_naLanden[sleutel] ??= (paden: <String>{}, album: album)).paden.add(pad);
+    _naLandenKlok[sleutel]?.cancel();
+    _naLandenKlok[sleutel] = Timer(kNaLandenAdem, () => unawaited(_zoekHiresNaLanden(sleutel)));
+  }
+
+  Future<void> _zoekHiresNaLanden(String sleutel) async {
+    _naLandenKlok.remove(sleutel);
+    final g = _naLanden.remove(sleutel);
+    final vind = trackVoorPad;
+    if (g == null || vind == null) return;
+    final nummers = [for (final p in g.paden) if (vind(p) case final t?) t];
+    if (nummers.isEmpty) return;
+    _log.line(nummers.length == 1
+        ? '"${nummers.single.artist} — ${nummers.single.title}": na het landen 24bit zoeken'
+        : '"${nummers.first.artist} — ${g.album}": na het landen 24bit zoeken voor ${nummers.length} nummers');
+    try {
+      await zoekBeterVoor(nummers, album: nummers.length > 1 ? g.album : null, gezag: gezagVoor, alleenHires: true);
+    } catch (_) {/* een volgende keer; de TIDAL-ronde komt er ook nog langs */}
+  }
+
   /// Een betere kopie zoeken voor nummers die al in je bibliotheek staan — op jouw vraag (de knop "Zoek
   /// hi-res" op een album) of bij een 👍 op een nummer dat de radio haalde (Saber, 20-10-2026: "alleen
   /// als ik het vraag", en voor de radio "bij nummers die ik beslis om bij te houden").
@@ -4924,20 +4992,29 @@ class DownloadManager extends ChangeNotifier {
   /// de app deze gebruiken"): dezelfde nummers gaan meteen naar de TIDAL-ronde (tidal_beter.dart), die ze één voor
   /// één nakijkt — ook als Soulseek er niet is.
   /// Geeft terug voor hoeveel nummers er een jacht begon (bij Soulseek, bij TIDAL of bij allebei).
-  Future<int> zoekBeterVoor(List<Track> nummers, {String? album, TrackTags Function(Track)? gezag}) async {
+  ///
+  /// [alleenHires]: na het landen ([_naLandenHires]) — alleen "<vraag> 24bit", zonder terugval, en niet bij TIDAL (de
+  /// TIDAL-ronde komt er zelf langs). De gewone vraag ging bij het downloaden al uit.
+  Future<int> zoekBeterVoor(List<Track> nummers,
+      {String? album, TrackTags Function(Track)? gezag, bool alleenHires = false}) async {
     final te = [
       for (final t in nummers)
         if (t.artist.trim().isNotEmpty && t.title.trim().isNotEmpty && !isVasteKeuze(t.path)) t
     ];
     if (te.isEmpty) return 0;
-    final begonnen = <String>{...?tidalNu?.call(te)};
+    final begonnen = <String>{if (!alleenHires) ...?tidalNu?.call(te)};
     if (!soulseek.available) return begonnen.length;
+    // Gewoon: de vraag, met "24bit" als eigen zoekopdracht erachter. Na het landen: alleen die tweede.
+    Future<List<SoulseekFile>> zoek(String vraag) => alleenHires
+        ? (extraVragen(vraag, kHiresZoekwoorden).isEmpty
+            ? Future.value(const <SoulseekFile>[])
+            : soulseek.search(extraVragen(vraag, kHiresZoekwoorden).first, achtergrond: true, terugval: false))
+        : soulseek.search(vraag, achtergrond: true, extra: kHiresZoekwoorden);
     List<SoulseekFile>? albumHits;
     final albumNaam = album?.trim() ?? '';
     if (albumNaam.isNotEmpty && te.length > 1) {
       try {
-        albumHits = await soulseek.search(zoekvraagVoorAlbum(te.first.artist, albumNaam),
-            achtergrond: true, extra: kHiresZoekwoorden);
+        albumHits = await zoek(zoekvraagVoorAlbum(te.first.artist, albumNaam));
       } catch (_) {
         return begonnen.length;
       }
@@ -4951,8 +5028,7 @@ class DownloadManager extends ChangeNotifier {
         hits = albumHits;
       } else {
         try {
-          hits = await soulseek.search(zoekvraagVoorNummer(t.title, artist: t.artist),
-              achtergrond: true, extra: kHiresZoekwoorden);
+          hits = await zoek(zoekvraagVoorNummer(t.title, artist: t.artist));
         } catch (_) {
           continue;
         }

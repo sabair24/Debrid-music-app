@@ -2249,6 +2249,10 @@ Future<void> main() async {
     bool ergensInGebruik(String p) => player.current?.path == p || (sharing.server?.inGebruikBijToestel(p) ?? false);
     // Een betere kopie van een nummer dat je met ▶ aanzette, vervangt het pas als het niet meer speelt.
     downloads.speeltNu = ergensInGebruik;
+    // Na het landen van ▶ of een download in 16 bit of minder: 24bit zoeken op de achtergrond ([DownloadManager._naLandenHires]).
+    downloads
+      ..trackVoorPad = library.trackByPath
+      ..gezagVoor = library.tagsVoorVervanger;
     // En voor wat onder een ándere titel binnenkomt dan jouw kopie. Zie [LibraryStore.bestandenVanLengte].
     downloads.opLengte = library.bestandenVanLengte;
     // Een torrent die bij het afsluiten nog in de keuringsmap stond: nu alsnog keuren en opbergen. Na
@@ -26286,8 +26290,6 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
         ),
         // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
         zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title),
-            // Ook "24bit": de jacht op beter na het downloaden kiest uit deze uitslag (kHiresZoekwoorden).
-            extra: kHiresZoekwoorden,
             seconden: t.seconden,
             zeefOp: (titel: t.title, artiest: t.artist, album: t.album),
             zeef: (l) => zeefKandidaten(l, titel: t.title, seconden: t.seconden, artiest: t.artist, album: t.album)),
@@ -30871,7 +30873,6 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       // Diam's)" van Amel Bent kreeg zo nul bronnen naast een rij peers met "03. A 20 Ans.flac".
       // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
       for (final f in await soulseek.zoekVroeg(soulseekQuery(widget.artistName, t.title),
-          extra: kHiresZoekwoorden,
           seconden: t.durationSec,
           zeefOp: (titel: t.title, artiest: widget.artistName, album: widget.album.title),
           zeef: (l) => zeefKandidaten(l,

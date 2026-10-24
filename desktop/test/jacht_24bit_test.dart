@@ -29,36 +29,42 @@ String _bron(String pad) => File(pad).readAsStringSync().replaceAll('\r\n', '\n'
 
 void main() {
   group('de extra vraag', () {
-    test('"24bit" komt in de eerste ronde bij de gewone vragen; de terugval blijft zoals hij was', () {
-      final rondes = zoekRondes('Phil Collins In the Air Tonight (Remastered)');
-      final met = metExtraWoorden(rondes, kHiresZoekwoorden);
-      expect(met.first.take(rondes.first.length), rondes.first, reason: 'de gewone vragen blijven, vooraan');
-      expect(met.first.last, 'Phil Collins In the Air Tonight (Remastered) 24bit');
-      expect(met.skip(1), rondes.skip(1), reason: 'de terugval op de eerste twee woorden blijft');
-      expect(metExtraWoorden(rondes, const []), rondes);
+    test('"<de volledige vraag> 24bit" als eigen zoekopdracht; staat het woord er al in, dan niet', () {
+      expect(extraVragen('Phil Collins In the Air Tonight (Remastered)', kHiresZoekwoorden),
+          ['Phil Collins In the Air Tonight (Remastered) 24bit']);
+      expect(extraVragen('Daft Punk Discovery 24bit', kHiresZoekwoorden), isEmpty);
+      expect(extraVragen('Daft Punk Discovery', const []), isEmpty);
     });
 
-    test('staat het woord al in de vraag, dan geen tweede keer', () {
-      final r = metExtraWoorden(zoekRondes('Daft Punk Discovery 24bit'), kHiresZoekwoorden);
-      expect(r.first, ['Daft Punk Discovery 24bit']);
+    test('na de gewone ronde, in een eigen venster, en samengevoegd zonder dubbels', () {
+      // Gemeten 24-10-2026 (Phil Collins): meegestuurd in hetzelfde venster 9 bestanden met "24bit", als eigen
+      // zoekopdracht 112 — het venster van de brede vraag sluit na 3,9 s, de smalle antwoorden komen later.
+      final online = _bron('lib/online.dart');
+      final s = online.substring(online.indexOf('  Future<List<SoulseekFile>> search(String query,'));
+      final lijf = s.substring(0, s.indexOf('\n  }\n'));
+      expect(lijf, contains('final gevonden = await _searchOnce(ronde, deel, achtergrond: achtergrond);'));
+      expect(lijf, contains('if (i == 0) {'), reason: 'alleen na de volledige vraag, niet na de terugval');
+      expect(lijf, contains('for (final v in extraVragen(ronde.first, extra)) {'));
+      expect(lijf, contains('await _searchOnce([v], null, achtergrond: achtergrond)'), reason: 'een eigen venster');
+      expect(lijf, contains("if (al.add('\${f.username}|\${f.filename}')) samen.add(f);"), reason: 'de gewone eerst, geen dubbels');
+      expect(lijf, contains('gebruikteVraag?.call(ronde.last);'), reason: 'het scherm meldt de gewone vraag');
     });
 
     test('alleen "24bit": niet "vinyl" (alleen als hij kiest), niet "24-bit" of "wav" (gemeten: vinden bijna niets)', () {
       expect(kHiresZoekwoorden, ['24bit']);
     });
 
-    test('bedrading: de vier jachtplekken zoeken mee, de radio en direct zoeken niet', () {
+    test('bedrading: alleen waar niemand wacht — de wens en Zoek hi-res; ▶, downloaden, de radio en direct zoeken niet', () {
       final online = _bron('lib/online.dart');
       expect(online, contains('hits = await soulseek.search(w.query, achtergrond: true, extra: kHiresZoekwoorden);'),
           reason: 'de FLAC-wens');
-      expect(online, contains('extra: zoekBeter ? kHiresZoekwoorden : const [],'), reason: '▶ met opwaarderen, de radio niet');
-      expect('achtergrond: true, extra: kHiresZoekwoorden);'.allMatches(online).length, 3,
-          reason: 'de wens, en Zoek hi-res voor een album en voor een nummer');
+      expect('achtergrond: true, extra: kHiresZoekwoorden);'.allMatches(online).length, 2,
+          reason: 'de wens, en Zoek hi-res (album en nummer delen één zoekregel)');
+      // ▶ wacht op de volledige uitslag als er niet meteen een bron is: "24bit" erachter maakte dat 8 s trager.
+      final radio = online.substring(online.indexOf('    final zoek = soulseek.search(zoekvraagVoorNummer(titel, artist: artiest),'));
+      expect(radio.substring(0, radio.indexOf(');\n')), isNot(contains('extra:')));
       final main = _bron('lib/main.dart');
-      expect('extra: kHiresZoekwoorden,'.allMatches(main).length, 2, reason: 'een nummer downloaden (twee plekken)');
-      expect(main, contains("soulseek.search(widget.query, gebruikteVraag:"), reason: 'direct zoeken blijft zonder extra');
-      // De pc meldt de gewone vraag als "gebruikt", niet die met 24bit — anders zei het scherm "ruimer gezocht".
-      expect(online, contains('gebruikteVraag?.call(gewoon[i].last);'));
+      expect(main, isNot(contains('extra: kHiresZoekwoorden')), reason: 'downloaden en direct zoeken zonder extra');
     });
 
     test('een toestel stuurt de woorden mee, en de pc neemt alleen gewone woorden aan, hoogstens drie', () {

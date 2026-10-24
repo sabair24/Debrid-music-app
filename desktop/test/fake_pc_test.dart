@@ -122,7 +122,8 @@ class _FakeSoulseek extends SoulseekService {
       {void Function(List<SoulseekFile>)? onPartial,
       void Function(String)? gebruikteVraag,
       bool achtergrond = false,
-      List<String> extra = const []}) async {
+      List<String> extra = const [],
+      bool terugval = true}) async {
     await Future<void>.delayed(const Duration(milliseconds: 300));
     return [
       for (var i = 1; i <= 4; i++)

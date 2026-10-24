@@ -58,8 +58,8 @@ void main() {
     final online = File('lib/online.dart').readAsStringSync();
     final z = online.substring(online.indexOf('  Future<int> zoekBeterVoor('));
     // Sinds 24-10-2026 met "24bit" erbij (kHiresZoekwoorden), zie jacht_24bit_test.
-    expect(z, contains('albumHits = await soulseek.search(zoekvraagVoorAlbum(te.first.artist, albumNaam),'));
-    expect(z, contains('achtergrond: true, extra: kHiresZoekwoorden);'));
+    expect(z, contains('albumHits = await zoek(zoekvraagVoorAlbum(te.first.artist, albumNaam));'));
+    expect(z, contains(': soulseek.search(vraag, achtergrond: true, extra: kHiresZoekwoorden);'));
     expect(z, contains('if (albumHits != null) {\n        hits = albumHits;'), reason: 'niet nog eens per nummer');
     expect(z, contains('!isVasteKeuze(t.path)'), reason: 'wat je zelf koos blijft de baas');
     expect(z, contains('_queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true, blijfZoeken: verdacht);'));

@@ -91,23 +91,18 @@ List<List<String>> zoekRondes(String vraag) {
 /// `extra`). Saber, 24-10-2026, na een proef met twaalf en zes nummers: "24bit" (zonder streepje) vond hi-res die
 /// de gewone zoekopdracht niet had — Phil Collins +89, Lionel Richie +57, Daft Punk +41 — want een peer stuurt per
 /// zoekopdracht maar een beperkt aantal treffers. "24-bit" met streepje vond meestal niets letterlijks, "wav" bijna
-/// niets, en "vinyl" hoort er niet bij: vinyl alleen als hij zelf kiest. Alleen in de eerste ronde, en de gewone vraag
-/// blijft: zo kan het nooit minder opleveren dan zonder.
+/// niets, en "vinyl" hoort er niet bij: vinyl alleen als hij zelf kiest. Als EIGEN zoekopdracht na de gewone (zie
+/// [SoulseekService.search]): meegestuurd in hetzelfde venster gaf het bijna niets, want dat venster sluit zodra de
+/// brede vraag genoeg heeft. De gewone uitslag blijft: zo kan het nooit minder opleveren dan zonder.
 const kHiresZoekwoorden = ['24bit'];
 
-/// [rondes] met in de eerste ronde, achter de vragen die er al stonden, "<volledige vraag> <woord>" voor elk woord uit
-/// [extra]. De andere rondes (de terugval op de eerste twee woorden) blijven zoals ze waren.
-List<List<String>> metExtraWoorden(List<List<String>> rondes, List<String> extra) {
-  if (rondes.isEmpty || extra.isEmpty) return rondes;
-  final eerste = rondes.first;
-  final heel = eerste.first;
-  final bij = [
-    for (final w in extra)
-      if (w.trim().isNotEmpty && !heel.toLowerCase().split(' ').contains(w.trim().toLowerCase())) '$heel ${w.trim()}',
-  ];
+/// De zoekopdrachten die na de gewone [heel] nog uitgaan: "<heel> <woord>" voor elk woord uit [extra] dat er nog niet
+/// in staat.
+List<String> extraVragen(String heel, List<String> extra) {
+  final woorden = heel.toLowerCase().split(' ');
   return [
-    [...eerste, ...bij.where((v) => !eerste.contains(v))],
-    ...rondes.skip(1),
+    for (final w in extra)
+      if (w.trim().isNotEmpty && !woorden.contains(w.trim().toLowerCase())) '$heel ${w.trim()}',
   ];
 }
 
