@@ -508,15 +508,34 @@ class CatalogService {
   /// nieuwer. Dan stond het album in de discografie met de hoes en de nummers van de single, en sloegen
   /// de aanbevelingen (die singles overslaan) het album helemaal over. Zelfde bij Madonna's "True
   /// Blue". Een single of EP is daarom een eigen plaat naast het album met dezelfde naam.
+  ///
+  /// **Alleen binnen twee jaar** (Seal, 24-10-2026). Seal heeft twee albums "Seal": 86422 (1991) en 467277
+  /// (1994). Per titel bleef alleen 1994 over, en dan kreeg Seal 1991 in de discografie geen Deezer-album, geen
+  /// tracklijst en een hoes van elders. Wat twee jaar of meer uiteen ligt, blijft daarom staan; welke van de twee
+  /// bij welke plaat hoort, beslist de discografie (MusicBrainz en het jaar). GEMETEN over vijftig artiesten
+  /// (2977 uitgaven): dertig zulke titels, bijna allemaal heruitgaven (Toto 1978 en 2006, Eurythmics 2005).
   static List<CatalogAlbum> ontdubbelArtiestAlbums(List<CatalogAlbum> albums) {
-    final byTitle = <String, CatalogAlbum>{};
+    int? jaar(CatalogAlbum a) {
+      final d = a.releaseDate ?? '';
+      return d.length >= 4 ? int.tryParse(d.substring(0, 4)) : null;
+    }
+
+    final byTitle = <String, List<CatalogAlbum>>{};
     for (final a in albums) {
       final klein = a.recordType == 'single' || a.recordType == 'ep';
       final k = '${a.title.toLowerCase()}${klein ? '\u0000klein' : ''}';
-      final cur = byTitle[k];
-      if (cur == null || (a.releaseDate ?? '').compareTo(cur.releaseDate ?? '') > 0) byTitle[k] = a;
+      final lijst = byTitle[k] ??= [];
+      final i = lijst.indexWhere((cur) {
+        final x = jaar(cur), y = jaar(a);
+        return x == null || y == null || (x - y).abs() < 2;
+      });
+      if (i < 0) {
+        lijst.add(a);
+      } else if ((a.releaseDate ?? '').compareTo(lijst[i].releaseDate ?? '') > 0) {
+        lijst[i] = a;
+      }
     }
-    return byTitle.values.toList()..sort((a, b) => (b.releaseDate ?? '').compareTo(a.releaseDate ?? ''));
+    return [for (final l in byTitle.values) ...l]..sort((a, b) => (b.releaseDate ?? '').compareTo(a.releaseDate ?? ''));
   }
 
   /// The album (with cover) + its ordered tracklist.

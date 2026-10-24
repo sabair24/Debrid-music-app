@@ -135,14 +135,24 @@ void main() {
       expect(uit.map((x) => x.id), [369725, 227687], reason: 'allebei, nieuwste eerst');
     });
 
-    test('heruitgaven van hetzelfde album: de nieuwste blijft', () {
+    test('heruitgaven van hetzelfde album binnen een jaar: de nieuwste blijft', () {
       final uit = CatalogService.ontdubbelArtiestAlbums([
         a(227687, 'Funhouse', 'album', '2008-10-24'),
-        a(7058960, 'Funhouse', 'album', '2010-01-01'),
+        a(7058960, 'Funhouse', 'album', '2009-11-01'),
         a(1, 'Funhouse', 'ep', '2009-01-01'),
         a(2, 'funhouse', 'single', '2009-07-20'),
       ]);
       expect(uit.map((x) => x.id).toSet(), {7058960, 2}, reason: 'één album en één klein werk');
+    });
+
+    test('twee jaar of meer uiteen: allebei, de discografie beslist (Seal 1991 en 1994)', () {
+      final uit = CatalogService.ontdubbelArtiestAlbums([
+        a(467277, 'Seal', 'album', '1994-05-31'),
+        a(86422, 'Seal', 'album', '1991-06-11'),
+        a(340649, 'Seal IV', 'album', '2003-11-18'),
+        a(453533, 'Seal IV', 'album', '2003-09-09'),
+      ]);
+      expect(uit.map((x) => x.id), [340649, 467277, 86422], reason: 'nieuwste eerst; Seal IV twee keer in 2003 is één plaat');
     });
   });
 }
