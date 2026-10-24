@@ -2496,10 +2496,23 @@ int trackNoFromPosition(String position, int disc, List<ChoiceTrack> all) {
 }
 
 Set<String> fileWords(String displayName) {
-  final noExt = displayName.toLowerCase().replaceAll(_bestandsExtensie, '');
+  // Accenten gevouwen, zoals in [normKey] (Saber, 24-10-2026, Céline Dion *D'eux*): "où" viel hier weg als leesteken,
+  // "ou" in een bestandsnaam zonder accent bleef staan, en dan was dat een vreemd woord — "J'irai où tu iras" en
+  // "Prière païenne" pasten niet op "…ou tu iras.flac" en "Priere paienne.flac". Alleen bij een teken buiten ASCII:
+  // dit draait per bestand per zoekopdracht.
+  var klein = displayName.toLowerCase();
+  if (_buitenAscii(klein)) klein = _fold(klein);
+  final noExt = klein.replaceAll(_bestandsExtensie, '');
   final words = noExt.split(_nietAlfanumeriek).where((w) => w.length > 1).toSet();
   words.removeWhere(_kaalTracknummer.hasMatch); // drop bare track numbers
   return words;
+}
+
+bool _buitenAscii(String s) {
+  for (var i = 0; i < s.length; i++) {
+    if (s.codeUnitAt(i) > 127) return true;
+  }
+  return false;
 }
 
 /// Containment similarity of two word sets (0..1) — high when one filename's words are a
@@ -2734,9 +2747,17 @@ Set<String> gastWoorden(String titel) {
   for (final m in _gastRe.allMatches(titel)) {
     uit.addAll(fileWords(m[0]!));
   }
-  return uit..removeAll(const {'feat', 'featuring', 'ft'});
+  return uit..removeAll(const {'feat', 'featuring', 'ft', 'with'});
 }
-final _gastRe = RegExp(r'[(\[]\s*(?:feat\.?|featuring|ft\.?)\s[^)\]]*[)\]]|\b(?:feat\.|featuring|ft\.)\s[^(\[]*?(?=\s[-–]\s|[(\[]|$)',
+/// Een gast: "(feat. …)", "ft. …", en sinds 24-10-2026 ook "(with …)" vooraan in de haakjes — Deezer schrijft
+/// "J'irai où tu iras (with Jean-Jacques Goldman)", en de zeef eiste die namen dan in elke bestandsnaam (Saber: 14
+/// bronnen, waar de andere nummers van de plaat er 230 hadden). Zoals in de radio (uitvoeringVan in radiokeuze.dart)
+/// geen gast als er een orkest, strijkers of koor staat, of een versiewoord: "(with Strings)" en "(with X Remix)" zijn
+/// een andere uitvoering. Een "with" midden in een titel ("Dance With Me") telt nooit.
+final _gastRe = RegExp(
+    r'[(\[]\s*(?:feat\.?|featuring|ft\.?)\s[^)\]]*[)\]]'
+    r'|[(\[]\s*with\s(?![^)\]]*\b(?:orchestra|orchestral|philharmonic|symphonic|strings|choir|remix|rmx|mix|edit|version|dub|live)\b)[^)\]]*[)\]]'
+    r'|\b(?:feat\.|featuring|ft\.)\s[^(\[]*?(?=\s[-–]\s|[(\[]|$)',
     caseSensitive: false);
 final _afkortingRe = RegExp(r'\b(?:[A-Za-z]\.){2,}');
 final _schijfRe = RegExp(r'\b(?:cd|disc|disk)\s*[-_]?\s*\d{1,2}\b', caseSensitive: false);

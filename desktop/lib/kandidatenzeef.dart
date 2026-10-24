@@ -19,17 +19,52 @@ import 'soulseek.dart' show SoulseekFile;
 /// onthoudt, zoals de telling naast elke rij op de catalogusalbumpagina.
 ///
 /// Vindt de strenge zeef niets bij een titel met een gast, dan [zonderGast].
+///
+/// Met [albumTitels] (de hele tracklijst van de plaat): staat het duet maar één keer op de plaat, dan telt alleen de
+/// titel, ook als de strenge zeef al iets vond ([alleenDeTitel]).
 List<SoulseekFile> zeefKandidatenNu(List<SoulseekFile> files,
-    {required String titel, int? seconden, required String artiest, String? album}) {
-  final streng = [
-    for (final f in files)
-      if (f.isAudio &&
-          fileOffersTitle(titel, seconden, artiest, f.filename, f.durationSec, album: album) &&
-          !algemeneTitelZonderAlbum(titel, album, f.filename))
-        f
-  ];
+    {required String titel, int? seconden, required String artiest, String? album, Iterable<String>? albumTitels}) {
+  List<SoulseekFile> zeef(String t) => [
+        for (final f in files)
+          if (f.isAudio &&
+              fileOffersTitle(t, seconden, artiest, f.filename, f.durationSec, album: album) &&
+              !algemeneTitelZonderAlbum(t, album, f.filename))
+            f
+      ];
+  final streng = zeef(titel);
+  final kaal = albumTitels == null ? null : alleenDeTitel(titel, albumTitels);
+  if (kaal != null) {
+    // Een kaal bestand in een map waar een ander bestand de gast wél noemt, is daar de solo.
+    final gast = gastWoorden(titel);
+    bool noemtGast(SoulseekFile f) => gast.isNotEmpty && fileWords(baseName(f.filename)).containsAll(gast);
+    final mappenMetGast = {for (final f in files) if (f.isAudio && noemtGast(f)) _map(f.filename)};
+    final al = streng.toSet();
+    return [
+      ...streng,
+      for (final f in zeef(kaal))
+        if (!al.contains(f) && (noemtGast(f) || !mappenMetGast.contains(_map(f.filename)))) f,
+    ];
+  }
   if (streng.isNotEmpty) return streng;
   return zonderGast(files, titel: titel, seconden: seconden, artiest: artiest, album: album);
+}
+
+/// De titel zonder gast, als alleen die titel moet tellen: [titel] noemt een gast, en geen ander nummer van de plaat
+/// ([albumTitels]) heeft dezelfde titel zonder gast. Anders null.
+///
+/// Saber, 24-10-2026, bij Céline Dion *D'eux*: "J'irai où tu iras (with Jean-Jacques Goldman)" had 14 bronnen, de
+/// andere nummers rond de 230 — "dat mag er zeker bij staan, maar voor soulseek resultaten … hij moet enkel de titel
+/// zien". De gast blijft in de titel; de zeef kijkt naar de titel zonder hem. Behalve als dezelfde titel ook solo op
+/// de plaat staat, zoals Adele's "Easy On Me" naast het duet met Chris Stapleton: dan is de gast het verschil.
+String? alleenDeTitel(String titel, Iterable<String> albumTitels) {
+  final kaal = titelZonderGast(titel);
+  if (kaal == null) return null;
+  final sleutel = _woorden(kaal).join(' ');
+  for (final t in albumTitels) {
+    if (t == titel) continue;
+    if (_woorden(titelZonderGast(t) ?? t).join(' ') == sleutel) return null;
+  }
+  return kaal;
 }
 
 /// Titels die op duizenden platen staan. Daar zegt de titel samen met de lengte niet welk nummer het is.
@@ -120,10 +155,13 @@ List<List<int>> zeefPerTitelNu(List<SoulseekFile> files, List<({String titel, in
   for (var i = 0; i < files.length; i++) {
     plek[files[i]] = i;
   }
+  // De hele tracklijst, zodat een duet dat maar één keer op de plaat staat op zijn titel alleen gezeefd wordt.
+  final albumTitels = [for (final t in titels) t.titel];
   return [
     for (final t in titels)
       [
-        for (final f in zeefKandidatenNu(files, titel: t.titel, seconden: t.seconden, artiest: artiest, album: album))
+        for (final f in zeefKandidatenNu(files,
+            titel: t.titel, seconden: t.seconden, artiest: artiest, album: album, albumTitels: albumTitels))
           plek[f]!,
       ],
   ];
@@ -135,6 +173,6 @@ List<List<int>> zeefPerTitelNu(List<SoulseekFile> files, List<({String titel, in
 /// Hier op het hoogste niveau en niet in een methode van de pagina: een sluiting die `this` vangt,
 /// sleept de hele `State` mee naar de isolate, en dat weigert Dart.
 Future<List<SoulseekFile>> zeefKandidaten(List<SoulseekFile> files,
-        {required String titel, int? seconden, required String artiest, String? album}) =>
-    Isolate.run(() =>
-        zeefKandidatenNu(files, titel: titel, seconden: seconden, artiest: artiest, album: album));
+        {required String titel, int? seconden, required String artiest, String? album, List<String>? albumTitels}) =>
+    Isolate.run(() => zeefKandidatenNu(files,
+        titel: titel, seconden: seconden, artiest: artiest, album: album, albumTitels: albumTitels));
