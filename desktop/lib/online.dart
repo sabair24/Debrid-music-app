@@ -38,6 +38,8 @@ import 'fingerprint.dart' show Fingerprinter, similarity, maybeSameRecordingScor
 import 'integriteit.dart';
 import 'keuring.dart' show Heelheid, kwaliteitZin;
 import 'wavpack_kop.dart' show readWvKop;
+import 'tidal.dart' show TidalTrack;
+import 'tidal_beter.dart' show TidalBeterUitslag;
 import 'tidaler.dart' show Tidaler, haalVanTidal, kTidalRadioPerUur, kiesTidalTreffers, zoekOpTidal;
 import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
@@ -1435,6 +1437,9 @@ class DownloadManager extends ChangeNotifier {
   /// pending_downloads.json wordt opgeruimd en warm.log gaat alleen over de metadata-warmer, dus na
   /// een uur is er niets meer om naar te kijken. Precies de les die warm.log zelf al opschreef.
   late final WarmLog _log = WarmLog('$appDir${Platform.pathSeparator}downloads.log');
+
+  /// Een regel in `downloads.log` van buiten de beheerder: de TIDAL-ronde over de bibliotheek (tidal_beter.dart).
+  void logRegel(String regel) => _log.line(regel);
 
   /// Wat de vervangjacht doet, voor het scherm. Zie [VervangJacht].
   ///
@@ -3592,14 +3597,72 @@ class DownloadManager extends ChangeNotifier {
     return false;
   }
 
+  /// Een betere kopie van TIDAL voor [t], dat al in je bibliotheek staat — voor de TIDAL-ronde over de hele
+  /// bibliotheek (tidal_beter.dart; Saber, 24-10-2026: "als er een beter versie kwaliteit te vinden is op tidal, moet
+  /// de app deze gebruiken"). Halen in een eigen keuringsmap, en dan de keuring van een wens ([_keurVoorWens]): echt,
+  /// even lang, dezelfde opname, bewezen beter. Je eigen tags gaan mee ([gezag]), dus het album van TIDAL (vaak een
+  /// verzamelaar) komt er niet in; wat verliest, gaat naar `_dubbel`.
+  Future<TidalBeterUitslag> haalBeterVanTidal(Track t, TidalTrack kandidaat, {required TrackTags gezag}) async {
+    final naam = '${t.artist} — ${t.title}';
+    final id = kandidaat.id;
+    final map = keuringsmapVoor('tidal-beter-$id');
+    var laten = false;
+    try {
+      final t0 = DateTime.now();
+      final r = await haalVanTidal(doel: 'track/$id', map: map.path, zoekMap: map.path);
+      if (r.fout != null) {
+        _log.line('   TIDAL $id: mislukt: ${r.fout!.split('\n').last}');
+        return TidalBeterUitslag.mislukt;
+      }
+      final binnen = <File>[];
+      await for (final e in map.list(recursive: true, followLinks: false)) {
+        if (e is File && isVerliesvrij(soortVan(e.path))) binnen.add(e);
+      }
+      if (binnen.length != 1) {
+        _log.line('   TIDAL $id: ${binnen.length} verliesvrije bestanden binnen — overgeslagen');
+        return TidalBeterUitslag.mislukt;
+      }
+      _log.line('   TIDAL $id: GELEVERD${r.kwaliteit == null ? "" : " (${r.kwaliteit})"} '
+          'na ${_kort(DateTime.now().difference(t0))}');
+      final w = LosslessWant(artist: t.artist, title: t.title, album: t.album, authority: gezag);
+      final uitslag = await _keurVoorWens(w, binnen.single, 'TIDAL $id', inJacht: false);
+      switch (uitslag) {
+        case _Wenskeuring.opgeborgen:
+          // Kon hij niet opgeborgen worden, dan blijft de map staan: `hervatKeuring` keurt hem bij de volgende start.
+          laten = binnen.single.existsSync();
+          _log.line('"$naam": vervangen door de kopie van TIDAL${r.kwaliteit == null ? "" : " (${r.kwaliteit})"}');
+          try {
+            await onLibraryChanged();
+          } catch (_) {}
+          return TidalBeterUitslag.vervangen;
+        case _Wenskeuring.afgewezen:
+        case _Wenskeuring.alAanwezig:
+          return TidalBeterUitslag.afgewezen;
+      }
+    } catch (e) {
+      _log.line('   TIDAL $id: $e');
+      return TidalBeterUitslag.mislukt;
+    } finally {
+      if (!laten) {
+        try {
+          if (map.existsSync()) await map.delete(recursive: true);
+        } catch (_) {/* in gebruik; dan keurt de volgende start het restant */}
+      }
+      _geefKeuringsmapVrij(map);
+    }
+  }
+
   /// Wat er met een binnengekomen kandidaat voor een wens gebeurt, van Soulseek of van TIDAL ([bron]
   /// staat in het logboek). Alles wat niet [_Wenskeuring.opgeborgen] is, is al weggegooid.
-  Future<_Wenskeuring> _keurVoorWens(LosslessWant w, File staged, String bron) async {
+  ///
+  /// [inJacht]: meldt zich in de strook van de vervangjacht ([jacht]). De TIDAL-ronde over de bibliotheek
+  /// ([haalBeterVanTidal]) doet dat niet: die is geen wens, en twintig afwijzingen per uur daar zeggen niets.
+  Future<_Wenskeuring> _keurVoorWens(LosslessWant w, File staged, String bron, {bool inJacht = true}) async {
     final oordeel = await _meetEchtheid(staged);
     if (!magBlijven(oordeel)) {
       _log.line('   $bron: betrapt bij binnenkomst '
           '(${waarom(oordeel!)}) — weggegooid, volgende kandidaat');
-      jacht.value = jacht.value.met(
+      if (inJacht) jacht.value = jacht.value.met(
           weggegooid: jacht.value.weggegooid + 1,
           regel: 'Vervalsing betrapt bij $bron (${waarom(oordeel)}) — weggegooid.');
       await _discardStaged(staged.path);
@@ -3615,7 +3678,7 @@ class DownloadManager extends ChangeNotifier {
     if (!zelfdeLengte(w.authority?.seconds, lengte)) {
       _log.line('   $bron: andere uitgave (${lengte}s tegen '
           '${w.authority?.seconds}s) — weggegooid, volgende kandidaat');
-      jacht.value = jacht.value.met(
+      if (inJacht) jacht.value = jacht.value.met(
           weggegooid: jacht.value.weggegooid + 1,
           regel: 'Andere uitgave bij $bron — weggegooid.');
       await _discardStaged(staged.path);
@@ -3641,7 +3704,7 @@ class DownloadManager extends ChangeNotifier {
           : 'niet bewezen beter: ${kwaliteitZin(kwaliteitVan(staged))} tegen '
               '${kwaliteitZin(kwaliteitVan(File(bestaand)))}';
       _log.line('   $bron: $waaromNiet — weggegooid, volgende kandidaat');
-      jacht.value = jacht.value.met(
+      if (inJacht) jacht.value = jacht.value.met(
           weggegooid: jacht.value.weggegooid + 1,
           regel: 'Bij $bron: $waaromNiet — weggegooid.');
       await _discardStaged(staged.path);
@@ -4839,26 +4902,30 @@ class DownloadManager extends ChangeNotifier {
   /// Daarna de gewone jacht ([_queueUpgrade]): een vingerafdruk tegen jouw bestand (dezelfde opname?), de
   /// keuring beslist (alleen bewezen beter vervangt), wat verliest gaat opzij, en een spelend nummer wordt
   /// pas vervangen als het niet meer speelt. Een zelf gekozen bestand ([isVasteKeuze]) blijft met rust.
-  /// Geeft terug voor hoeveel nummers er een jacht begon.
+  ///
+  /// **Ook bij TIDAL** ([tidalNu]; Saber, 24-10-2026: "als er een beter versie kwaliteit te vinden is op tidal, moet
+  /// de app deze gebruiken"): dezelfde nummers gaan meteen naar de TIDAL-ronde (tidal_beter.dart), die ze één voor
+  /// één nakijkt — ook als Soulseek er niet is.
+  /// Geeft terug voor hoeveel nummers er een jacht begon (bij Soulseek, bij TIDAL of bij allebei).
   Future<int> zoekBeterVoor(List<Track> nummers, {String? album, TrackTags Function(Track)? gezag}) async {
-    if (!soulseek.available) return 0;
     final te = [
       for (final t in nummers)
         if (t.artist.trim().isNotEmpty && t.title.trim().isNotEmpty && !isVasteKeuze(t.path)) t
     ];
     if (te.isEmpty) return 0;
+    final begonnen = <String>{...?tidalNu?.call(te)};
+    if (!soulseek.available) return begonnen.length;
     List<SoulseekFile>? albumHits;
     final albumNaam = album?.trim() ?? '';
     if (albumNaam.isNotEmpty && te.length > 1) {
       try {
         albumHits = await soulseek.search(zoekvraagVoorAlbum(te.first.artist, albumNaam), achtergrond: true);
       } catch (_) {
-        return 0;
+        return begonnen.length;
       }
       _log.line('"${te.first.artist} — $albumNaam": betere kwaliteit zoeken — ${albumHits.length} treffers '
           'voor ${te.length} nummers');
     }
-    var begonnen = 0;
     for (final t in te) {
       final naam = '${t.artist} — ${t.title}';
       List<SoulseekFile> hits;
@@ -4895,10 +4962,14 @@ class DownloadManager extends ChangeNotifier {
                 year: t.year,
                 seconds: t.duration?.inSeconds);
       _queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true, blijfZoeken: verdacht);
-      begonnen++;
+      begonnen.add(t.path);
     }
-    return begonnen;
+    return begonnen.length;
   }
+
+  /// De TIDAL-ronde op jouw vraag ([TidalBeterRonde.nu]); gezet door main.dart op de pc met tidaler. Geeft de paden
+  /// terug die TIDAL gaat nakijken.
+  Set<String> Function(List<Track> nummers)? tidalNu;
 
   /// Queue a background hunt for a better copy of a track you can already play.
   ///

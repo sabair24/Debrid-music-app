@@ -189,6 +189,7 @@ import 'speakers.dart';
 import 'soulseek.dart';
 import 'tidal.dart';
 import 'tidaler.dart';
+import 'tidal_beter.dart';
 import 'torbox.dart';
 import 'torbox_stand.dart';
 import 'torrentvoornummer.dart';
@@ -2274,6 +2275,28 @@ Future<void> main() async {
         onError: (Object e) => startLog.line('hoezen in bestanden: veger MISLUKT: $e')));
     unawaited(echtVeger.start().then((_) => startLog.line('echtheid: veger gestart (eerste ronde na 6 min)'),
         onError: (Object e) => startLog.line('echtheid: veger MISLUKT: $e')));
+    // TIDAL voor de hele bibliotheek (Saber, 24-10-2026: "als er een beter versie kwaliteit te vinden is op tidal, moet
+    // de app deze gebruiken" — hij koos de hele bibliotheek, traag). Alleen op de pc met tidaler; zie tidal_beter.dart.
+    if (mode.owner && Tidaler.beschikbaar && Tidaler.python != null && !Tidaler.inToets) {
+      final tidalBeter = TidalBeterRonde(
+        geheugen: TidalBeterGeheugen('$appDir${Platform.pathSeparator}tidal_beter.json'),
+        nummers: () => library.tracks,
+        zoek: (vraag) => tidalHulpUitvoer([vraag, '20']),
+        haal: (t, k) => downloads.haalBeterVanTidal(t, k, gezag: library.tagsVoorVervanger(t)),
+        overslaan: (t) => isVasteKeuze(t.path) || radio.doorDezeRadio(t.path),
+        inGebruik: () => [if (player.current case final c?) c.path, for (final q in player.queueTracks) q.path],
+        verdacht: (t) => switch (gemeten(t.path)?.band) {
+          Bandbreedte.vermoedelijk || Bandbreedte.afgekapt => true,
+          _ => false,
+        },
+        log: downloads.logRegel,
+      )..speeltNu = (pad) => player.current?.path == pad;
+      // "Zoek hi-res" en 👍 op een radionummer kijken meteen ook bij TIDAL ([DownloadManager.zoekBeterVoor]).
+      downloads.tidalNu = tidalBeter.nu;
+      unawaited(tidalBeter.start().then(
+          (_) => startLog.line('TIDAL beter: ronde gestart (eerste na 5 min, dan één per 3 min)'),
+          onError: (Object e) => startLog.line('TIDAL beter: MISLUKT: $e')));
+    }
     // De Shield krijgt per nummer de meting en de plaatwaarde mee, met de stand van deze pc.
     CastManager.luidheidOpgave = (t, rij, plek) {
       if (!luidheidKlaar) return null;
@@ -3272,6 +3295,7 @@ class _HomeShellState extends State<HomeShell> {
       berichten.showSnackBar(SnackBar(
         content: Text(m.tekst),
         duration: const Duration(seconds: 20),
+        persist: false,
         action: SnackBarAction(
           label: 'Intrekken',
           onPressed: () async {
@@ -3302,6 +3326,7 @@ class _HomeShellState extends State<HomeShell> {
       berichten.showSnackBar(SnackBar(
         content: Text(m.tekst),
         duration: const Duration(seconds: 12),
+        persist: false,
         action: SnackBarAction(
           label: 'Intrekken',
           onPressed: () async {
@@ -12750,6 +12775,11 @@ IconData tikKeuzeIcoon(TikKeuze k) => switch (k) {
       TikKeuze.achteraan => Icons.playlist_add_rounded,
     };
 
+/// Hoe lang een melding met "Altijd zo" blijft staan (Saber, 24-10-2026: "deze melding blijft ook altijd staan,
+/// na 5 seconden moet die weg"). Een [SnackBar] met een knop blijft in Flutter 3.47 staan tot je tikt
+/// (`persist` volgt `action != null`); daarom zet elke melding met een knop `persist: false`.
+const Duration kMeldingMetKnop = Duration(seconds: 5);
+
 /// "Altijd zo": de keuze uit het menu wordt de vaste keuze van dit toestel (terug te zetten in Instellingen).
 void _altijdZo(AppSettings instellingen, TikKeuze keuze) {
   instellingen.tikKeuze = keuze.name;
@@ -12813,7 +12843,8 @@ Future<void> speelGetikt(BuildContext context, List<Track> lijst, int index, {Ui
     melding?.hideCurrentSnackBar();
     melding?.showSnackBar(SnackBar(
       content: Text(tekst ?? tikKeuzeTekst(keuze)),
-      duration: const Duration(seconds: 4),
+      duration: kMeldingMetKnop,
+      persist: false,
       action: SnackBarAction(label: 'Altijd zo', onPressed: () => _altijdZo(instellingen, keuze)),
     ));
   } else if (tekst != null) {
@@ -18245,6 +18276,7 @@ void _srcToastAction(BuildContext context, String m, String label, VoidCallback 
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
     content: Text(m),
     duration: const Duration(seconds: 8),
+    persist: false,
     action: SnackBarAction(label: label, onPressed: onTap),
   ));
 }
@@ -20981,7 +21013,8 @@ class NieuwSpeler extends ChangeNotifier {
         ?..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(
             content: Text(m),
-            duration: const Duration(seconds: 4),
+            duration: kMeldingMetKnop,
+            persist: false,
             action: SnackBarAction(label: 'Altijd zo', onPressed: az)));
     }
 
