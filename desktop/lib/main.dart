@@ -30721,11 +30721,18 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// what happened when the old path took every audio result the search returned and, after the
   /// query broadened to just the artist, would have downloaded the wrong song under this one's tags.
   Future<List<SoulseekFile>> _slskCandidatesForTrack(CatalogTrack t, SoulseekService soulseek) async {
+    // De hele tracklijst: een duet dat maar één keer op de plaat staat, wordt op zijn titel alleen gezeefd
+    // ([alleenDeTitel]).
+    final albumTitels = [for (final x in _tracks) x.title];
     // Is de zeef per titel nog bezig, dan deze ene titel zelf (ook buiten de UI-draad): niet wachten, niets missen.
     final eerder = _zeefKlaar
         ? _slskForTitle(t)
         : await zeefKandidaten(_albumSlsk,
-            titel: t.title, seconden: t.durationSec, artiest: widget.artistName, album: widget.album.title);
+            titel: t.title,
+            seconden: t.durationSec,
+            artiest: widget.artistName,
+            album: widget.album.title,
+            albumTitels: albumTitels);
     final pool = <String, SoulseekFile>{
       for (final f in eerder) '${f.username}|${f.filename}': f
     };
@@ -30738,7 +30745,11 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
           seconden: t.durationSec,
           zeefOp: (titel: t.title, artiest: widget.artistName, album: widget.album.title),
           zeef: (l) => zeefKandidaten(l,
-              titel: t.title, seconden: t.durationSec, artiest: widget.artistName, album: widget.album.title))) {
+              titel: t.title,
+              seconden: t.durationSec,
+              artiest: widget.artistName,
+              album: widget.album.title,
+              albumTitels: albumTitels))) {
         pool.putIfAbsent('${f.username}|${f.filename}', () => f);
       }
     } catch (_) {/* the preload's copies are still worth a try on their own */}

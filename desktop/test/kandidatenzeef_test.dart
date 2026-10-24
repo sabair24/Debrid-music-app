@@ -160,6 +160,84 @@ void main() {
 
   // Live — V (15-10-2026): naast "Intro" (0:37) 16 bronnen, de meeste intro's van live-albums van
   // anderen. Op het bewaarde antwoord van "Live V 2001" bleven er na deze regel 11, alle uit een V-map.
+  // Saber, 24-10-2026, Céline Dion *D'eux*: "J'irai où tu iras (with Jean-Jacques Goldman)" had 14 bronnen, de andere
+  // nummers rond de 230. "Dat mag er zeker bij staan, maar voor soulseek resultaten … hij moet enkel de titel zien."
+  group('een duet dat maar één keer op de plaat staat: alleen de titel telt', () {
+    SoulseekFile f(String pad, int sec, {String peer = 'p'}) => SoulseekFile(
+        username: peer, filename: pad, size: 30000000, speed: 1000000, queueLength: 0, freeSlots: true, durationSec: sec);
+    const duet = "J'irai où tu iras (with Jean-Jacques Goldman)";
+    const deux = [
+      'Pour que tu m\'aimes encore', 'Le Ballet', 'Regarde-moi', 'Je sais pas', 'La Mémoire d\'Abraham',
+      'Cherche encore', 'Destin', 'Les derniers seront les premiers', duet, "J'attendais", 'Prière païenne', 'Vole',
+    ];
+    final bestanden = [
+      for (var u = 0; u < 10; u++) f('@@peer$u\\Music\\Celine Dion\\D\'eux (1995)\\09 - J\'irai ou tu iras.flac', 207, peer: 'k$u'),
+      for (var u = 0; u < 2; u++)
+        f('@@gast$u\\Celine Dion - D\'eux\\09 Celine Dion - J\'irai ou tu iras (with Jean-Jacques Goldman).flac', 207,
+            peer: 'g$u'),
+      f('@@peerX\\Celine Dion\\D\'eux (1995)\\03 - Regarde-moi.flac', 237, peer: 'x'),
+    ];
+
+    test('DE KERN: met de tracklijst tellen ook de bestanden met alleen de titel — 12 en niet 2', () {
+      final uit = zeefPerTitelNu(bestanden, [for (final t in deux) (titel: t, seconden: t == duet ? 207 : 237)],
+          artiest: 'Céline Dion', album: "D'eux");
+      expect(uit[deux.indexOf(duet)], hasLength(12));
+      expect(uit[deux.indexOf('Regarde-moi')], [bestanden.length - 1], reason: 'de andere nummers blijven wat ze waren');
+    });
+
+    test('zonder tracklijst (een los nummer) blijft het zoals het was: de strenge zeef, en pas bij niets de terugval', () {
+      final uit = zeefKandidatenNu(bestanden, titel: duet, seconden: 207, artiest: 'Céline Dion', album: "D'eux");
+      expect(uit.map((x) => x.username), ['g0', 'g1']);
+    });
+
+    test('DE GRENS: staat dezelfde titel ook solo op de plaat (Adele), dan blijft de gast het verschil', () {
+      expect(alleenDeTitel('Easy On Me (with Chris Stapleton)', ['Easy On Me', 'My Little Love', 'Easy On Me (with Chris Stapleton)']),
+          isNull);
+      expect(alleenDeTitel(duet, deux), "J'irai où tu iras");
+      final adele = [
+        f(r'Adele\30 (Deluxe)\01 Easy On Me.flac', 224),
+        f(r'Adele\30 (Deluxe)\13 Easy On Me (with Chris Stapleton).flac', 225),
+      ];
+      final uit = zeefPerTitelNu(adele, [(titel: 'Easy On Me', seconden: 224), (titel: 'Easy On Me (with Chris Stapleton)', seconden: 225)],
+          artiest: 'Adele', album: '30 (Deluxe)');
+      expect(uit[1], [1], reason: 'het duet: alleen het bestand met de gast, nooit de solo');
+    });
+
+    test('DE VAL: een kaal bestand naast de gastversie in dezelfde map is daar de solo', () {
+      final map = [
+        f(r"@@a\Celine Dion\Duos\05 - J'irai ou tu iras (with Jean-Jacques Goldman).flac", 207),
+        f(r"@@a\Celine Dion\Duos\06 - J'irai ou tu iras.flac", 207),
+      ];
+      final uit = zeefKandidatenNu(map, titel: duet, seconden: 207, artiest: 'Céline Dion', album: "D'eux", albumTitels: deux);
+      expect(uit.map((x) => x.filename), [map[0].filename]);
+    });
+
+    test('"(with …)" is een gast — behalve strijkers, een orkest, een koor of een versie; en nooit midden in de titel', () {
+      expect(alleenDeTitel('Song (with Ellie Goulding)', const ['Song (with Ellie Goulding)']), 'Song');
+      expect(alleenDeTitel('Song (with Strings)', const ['Song (with Strings)']), isNull);
+      expect(alleenDeTitel('Song (with The Royal Philharmonic Orchestra)', const ['x']), isNull);
+      expect(alleenDeTitel('Song (with X Remix)', const ['x']), isNull);
+      expect(alleenDeTitel('Dance With Me', const ['x']), isNull);
+      expect(alleenDeTitel('À 20 ans (feat. Diam\'s)', const ['x']), 'À 20 ans', reason: 'feat. blijft wat het was');
+    });
+
+    test('accenten tellen niet: "Prière païenne" en "où" passen op een bestandsnaam zonder accent, en omgekeerd', () {
+      final zonder = [f(r"@@p\Celine Dion\D'eux (1995)\11 - Priere paienne.flac", 252)];
+      final met = [f(r"@@p\Celine Dion\D'eux (1995)\11 - Prière païenne.flac", 252)];
+      expect(zeefKandidatenNu(zonder, titel: 'Prière païenne', seconden: 252, artiest: 'Céline Dion', album: "D'eux"), hasLength(1));
+      expect(zeefKandidatenNu(met, titel: 'Priere paienne', seconden: 252, artiest: 'Celine Dion', album: "D'eux"), hasLength(1));
+      expect(zeefKandidatenNu(zonder, titel: 'Vole', seconden: 252, artiest: 'Céline Dion', album: "D'eux"), isEmpty,
+          reason: 'een ander nummer blijft een ander nummer');
+    });
+
+    test('beide plekken op de albumpagina geven de tracklijst mee', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(RegExp(r'albumTitels: albumTitels\)').allMatches(main).length, greaterThanOrEqualTo(2));
+      final zeef = File('lib/kandidatenzeef.dart').readAsStringSync();
+      expect(zeef, contains('final albumTitels = [for (final t in titels) t.titel];'));
+    });
+  });
+
   group('een titel als "Intro"', () {
     SoulseekFile f(String pad, int sec) => SoulseekFile(
         username: 'p', filename: pad, size: 1000000, speed: 1000, queueLength: 0, freeSlots: true, durationSec: sec);
