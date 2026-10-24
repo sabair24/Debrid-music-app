@@ -1,10 +1,13 @@
 // Een vinyl-rip herkennen aan zijn pad.
 //
 // Saber, 24-10-2026: vinyl-rips zijn een andere bron dan de cd of de digitale uitgave — vaak 24/96 of 24/192, maar
-// met naaldgeluid en een andere lengte ("Mademoiselle chante le blues": 235 s tegen 228 s). Zijn keuze: "alleen als
-// ik kies". De app zet er dus nooit vanzelf een in de plaats van jouw versie (`magOpwaarderen`, de FLAC-wens), en in
-// de zoeklijst staat er een label "vinyl" bij. Zoeken met "vinyl" erbij vond er veel: Daft Punk — Digital Love 165
-// hi-res kopieën die de gewone zoekopdracht niet had.
+// met naaldgeluid en een andere lengte ("Mademoiselle chante le blues": 235 s tegen 228 s). In de zoeklijst staat er een
+// label "vinyl" bij. Zoeken met "vinyl" erbij vond er veel: Daft Punk — Digital Love 165 hi-res kopieën die de gewone
+// zoekopdracht niet had.
+//
+// Eerst "alleen als ik kies" (24-10-2026). Sinds 25-10-2026 mag de app er ook vanzelf een nemen (Saber: "ik mis wel heel
+// veel goede kwaliteit liedjes door vinyl en lp weg te laten oor, laat ze toch maar door"), maar altijd na de
+// digitale kopieën ([vinylAchteraan]), en door dezelfde keuring.
 
 // PBTHAL en "LP 24-96" (Saber, 24-10-2026): de Africa die vanzelf binnenkwam, kwam uit "PBTHAL rips [NOT REENCODED]\Toto\
 // Toto - IV (TML)", een vinylrip zonder een van de drie tekens. PBTHAL maakt alleen vinylrips; zijn mappen heten
