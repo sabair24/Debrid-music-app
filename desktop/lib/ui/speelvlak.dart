@@ -56,13 +56,41 @@ const double _lucht = 68 + kRuimte32 * 2;
 
 /// Staat de hoes naast de tekst, of erboven?
 ///
-/// **Een televisie krijgt hem met opzet niet**, hoe breed 960 punten ook zijn. Op de Shield is de
-/// hoes de rustplek van de markering, en links en rechts zijn daar vorige en volgende. Staat de
-/// knoppenrij dan RECHTS van de hoes, dan is hij met de pijlen niet meer te bereiken: rechts wordt
-/// opgeslokt door "volgend nummer". Dat is geen scheve opmaak maar een scherm waar je niet meer uit
-/// komt, en het is van hieruit niet na te kijken.
+/// **Een televisie ook** (Saber, 23-10-2026: "bij Nu speelt dezelfde indeling als pc en Mac"), met
+/// haar eigen maten ([hoesNaastTv]). Dat ging eerst niet: de hoes was de rustplek van de markering,
+/// links en rechts waren daar vorige en volgende, en een knoppenrij RECHTS van de hoes was dan met de
+/// pijlen niet te bereiken. Nu start de markering op ▶ en lopen links en rechts door de knoppen; omhoog
+/// gaat naar de hoes en omlaag van de hoes terug naar ▶ (main.dart, `_pijlAlsNummerknop`).
 bool naastElkaar({required Size scherm, required bool compact, required bool tv}) =>
-    !compact && !tv && scherm.width >= kSpeelVanaf && scherm.height >= kSpeelHoogte;
+    !compact &&
+    (tv ? scherm.width > scherm.height : scherm.width >= kSpeelVanaf && scherm.height >= kSpeelHoogte);
+
+// ── Een televisie naast elkaar ────────────────────────────────────────────────
+
+/// De kolom met titel en knoppen op een tv. Smaller dan de 520 van een pc: de Shield is 960 punten
+/// breed. De knoppenrij (shuffle tot Meer) is daar ~375 punten.
+const double kSpeelKolomTv = 380;
+
+/// Tussen het hoesblok en de kolom, op een tv.
+const double kSpeelGatTv = 40;
+
+/// De uitschuifruimte van de cd naast elkaar op een tv, als deel van de hoes: zoals een telefoon dwars.
+/// Met de 0,62 van een pc bleef er op de Shield een hoes van 244 over; met 0,30 is hij 304.
+const double kSpeelReisTv = kLiggendReis;
+
+/// Boven en onder het hoesblok op een tv: het artiestlogo (64) met zijn lucht (14), de plaatnaam (12 en
+/// twee regels van 13,5 punt maal 1,35) en de 32 onder de rij. Een balk met de chevron is er niet.
+const double kSpeelLuchtTv = 64 + 14 + 12 + 50 + 32;
+
+/// De hoes naast elkaar op een tv. [bruikbaar] is het scherm zonder de overscanrand ([tvOverscan]).
+///
+/// Op de Shield (960×540, 864×486 bruikbaar) 304 punten, waar de gestapelde indeling er 184 van maakte.
+double hoesNaastTv({required Size bruikbaar}) {
+  final opBreedte = (bruikbaar.width - kGoot * 2 - kSpeelGatTv - kSpeelKolomTv) / (1 + kSpeelReisTv);
+  final opHoogte = bruikbaar.height - kSpeelLuchtTv;
+  final kleinste = opBreedte < opHoogte ? opBreedte : opHoogte;
+  return kleinste.clamp(160.0, 520.0);
+}
 
 /// De maat van de hoes in de indeling naast elkaar.
 ///
