@@ -122,7 +122,12 @@ void main() {
         ChangeNotifierProvider<ZonePaneel>.value(value: zones),
         ChangeNotifierProvider<WachtrijPaneel>.value(value: wachtrij),
       ],
-      child: MaterialApp(home: Scaffold(body: Builder(builder: inhoud))),
+      // "Animaties verminderen": de balkjes op een spelende kaart staan dan stil ([_Balkjes]), en anders komt
+      // pumpAndSettle nooit tot rust.
+      child: MaterialApp(
+        builder: (c, kind) => MediaQuery(data: MediaQuery.of(c).copyWith(disableAnimations: true), child: kind!),
+        home: Scaffold(body: Builder(builder: inhoud)),
+      ),
     ));
     await t.pump(const Duration(milliseconds: 100));
     return (zones: zones, wachtrij: wachtrij, gekozen: gekozen);

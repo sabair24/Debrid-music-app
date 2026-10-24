@@ -11,6 +11,7 @@ import '../beeldvorm.dart' show KopInstelling, KopScherm, kopSoort;
 import '../album_facts.dart';
 import '../cloud/device_identity.dart';
 import '../downloadbron.dart';
+import '../quality.dart' show depthRateLabel;
 import '../album_facts_resolver.dart';
 import '../enrichment.dart';
 import '../kapot_bestand.dart';
@@ -184,10 +185,23 @@ class LanServer {
         if (t == null) return null;
         return (titel: t.title, artiest: t.artist, album: t.album, duurMs: t.duration?.inMilliseconds ?? 0);
       },
+      // De kwaliteit op de zonekaart (zones, stap 3).
+      bestandVan: (id) {
+        final t = catalog.track(id);
+        return t == null ? null : (ext: t.ext, rate: t.sampleRate, bits: t.bitsPerSample);
+      },
     );
     cast.bijStand = () =>
         zones.zetSpeakers(cast.laatsteStanden, bekend: cast.bekendeSpeakers, groepen: cast.speakerGroepen);
     zones.speakerRij = cast.rijVan;
+    // Zet de pc voor deze speaker om (een Sonos neemt tot 48 kHz)? Dezelfde som als bij het sturen ([castGrenzen]).
+    zones.omzettingOpSpeaker = (speaker, trackId) {
+      final t = catalog.track(trackId);
+      final p = cast.plafondVan(speaker);
+      if (t == null || p == null) return '';
+      final g = castGrenzen(sampleRate: t.sampleRate, bits: t.bitsPerSample, maxSampleRate: p.rate, maxBitDepth: p.bits);
+      return g.omzetten && g.rate > 0 && g.bits > 0 ? depthRateLabel(sampleRate: g.rate, bitsPerSample: g.bits) : '';
+    };
     // Samen spelen (stap 3.2): elke melding van een leider gaat als anker naar zijn volgers.
     _ankerSub = state.zoneChanges.listen((toestel) {
       if (zones.toestelGroepen.containsKey(toestel)) _stuurAnkers(toestel);

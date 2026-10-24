@@ -703,6 +703,13 @@ class CastManager {
     return s == null ? null : (rij: List.unmodifiable(s.queue), index: s.index);
   }
 
+  /// Tot welke frequentie (0 = geen) en diepte een speaker het origineel neemt — voor "omgezet" op de zonekaart
+  /// (zones, stap 3). Null als de pc de speaker niet kent.
+  ({int rate, int bits})? plafondVan(String id) {
+    final r = _renderers[id];
+    return r == null ? null : (rate: r.maxSampleRate, bits: r.maxBitDepth);
+  }
+
   /// Naar het nummer op [plek] in de wachtrij van de speaker. Met [trackId]: dat nummer, ook als de rij
   /// intussen verschoof ([plekVoorNummer]).
   Future<void> springNaar(String deviceId, int plek, {String trackId = ''}) async {
