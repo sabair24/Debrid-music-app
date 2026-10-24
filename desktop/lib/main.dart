@@ -9652,26 +9652,73 @@ class _CreditsPanelState extends State<CreditsPanel> {
         duration: kOvergang,
         curve: Curves.easeOutCubic,
         alignment: Alignment.topLeft,
-        child: _credits.isEmpty ? const SizedBox(width: double.infinity) : _inhoud(),
+        child: _credits.isEmpty ? const SizedBox(width: double.infinity) : CreditsInklapbaar(credits: _credits),
       );
+}
 
-  Widget _inhoud() {
+/// De credits van een plaat, standaard ingeklapt tot één kopregel: "CREDITS · 14 ›" (Saber, 24-10-2026: "die mogen
+/// standaard ingeklapt zitten, en zeker ook op de gsm, als er veel zijn wordt dit een heel lange lijst onder elkaar").
+/// Een tik — of OK op de tv — klapt ze open; dezelfde regel op elk scherm.
+class CreditsInklapbaar extends StatefulWidget {
+  const CreditsInklapbaar({super.key, required this.credits});
+
+  final List<Credit> credits;
+
+  /// Zoveel namen hoogstens, ook opengeklapt.
+  static const kHoogstens = 14;
+
+  @override
+  State<CreditsInklapbaar> createState() => _CreditsInklapbaarState();
+}
+
+class _CreditsInklapbaarState extends State<CreditsInklapbaar> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final getoond = widget.credits.take(CreditsInklapbaar.kHoogstens).toList();
+    final kop = TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8);
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 4, 24, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('CREDITS',
-              style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8)),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 10,
-            runSpacing: 8,
-            children: [
-              for (final c in _credits.take(14))
-                _CreditChip(credit: c),
-            ],
+          Semantics(
+            button: true,
+            expanded: _open,
+            label: 'Credits, ${getoond.length}',
+            excludeSemantics: true,
+            child: Pressable(
+              key: const ValueKey('credits-kop'),
+              onPressed: () => setState(() => _open = !_open),
+              borderRadius: BorderRadius.circular(8),
+              scaleOnFocus: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text('CREDITS', style: kop),
+                  const SizedBox(width: 6),
+                  Text('${getoond.length}', style: kop.copyWith(fontWeight: FontWeight.w600, letterSpacing: 0)),
+                  const SizedBox(width: 2),
+                  AnimatedRotation(
+                    turns: _open ? .25 : 0,
+                    duration: kOvergang,
+                    child: Icon(Icons.chevron_right_rounded, size: 16, color: _muted),
+                  ),
+                ]),
+              ),
+            ),
           ),
+          if (_open) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              children: [
+                for (final c in getoond) _CreditChip(credit: c),
+              ],
+            ),
+          ],
         ],
       ),
     );
