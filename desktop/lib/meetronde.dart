@@ -18,7 +18,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/rendering.dart' show RenderViewportBase;
+import 'package:flutter/rendering.dart' show PaintingContext, RenderObject, RenderProxyBox, RenderViewportBase;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
@@ -179,6 +179,106 @@ const kMeetMuis = 7117;
 bool get meetrondeLoopt => _loopt;
 bool _loopt = false;
 
+/// Voor een toets: doen alsof er een meetronde loopt ([MeetBlok] telt dan).
+@visibleForTesting
+set meetrondeLooptVoorToets(bool aan) => _loopt = aan;
+
+// ── Wat een stuk van het scherm kost ──────────────────────────────────────────
+
+/// Per naam: hoe vaak, en hoeveel microseconden bouwen, opmaken en tekenen. Zie [MeetBlok].
+final Map<String, ({int keer, int bouwen, int opmaak, int tekenen})> _blokken = {};
+
+/// Tel bij [naam] op, alleen tijdens een meetronde. Voor wat geen widget is (een sortering): [bouwen].
+void meetTel(String naam, {int bouwen = 0, int opmaak = 0, int tekenen = 0, bool keer = true}) {
+  if (!_loopt) return;
+  final o = _blokken[naam];
+  _blokken[naam] = (
+    keer: (o?.keer ?? 0) + (keer ? 1 : 0),
+    bouwen: (o?.bouwen ?? 0) + bouwen,
+    opmaak: (o?.opmaak ?? 0) + opmaak,
+    tekenen: (o?.tekenen ?? 0) + tekenen,
+  );
+}
+
+/// Wat de blokken sinds de vorige keer kostten, als één regel ("Albums 1× bouwen 12 · opmaak 340 · tekenen 4 ms; …"),
+/// en weer op nul. Leeg als er niets gemeten is.
+@visibleForTesting
+String blokkenRegel() {
+  String ms(int us) => (us / 1000).toStringAsFixed(1);
+  final regel = [
+    for (final MapEntry(key: naam, value: b) in _blokken.entries)
+      '$naam ${b.keer}× bouwen ${ms(b.bouwen)} · opmaak ${ms(b.opmaak)} · tekenen ${ms(b.tekenen)} ms',
+  ].join('; ');
+  _blokken.clear();
+  return regel;
+}
+
+/// Meet hoe lang een stuk van het scherm bouwt, opmaakt en tekent — alleen tijdens een meetronde, en dan in de regel
+/// na "… openen" ([blokkenRegel]).
+///
+/// Waarom: op de Shield (24-10-2026, 3.9.595) kostte Albums openen elke keer één beeld van 360 ms bouwen, en de
+/// beeldcijfers zeggen niet wáár. Bouwen telt het hele stuk eronder dat in één keer opgebouwd wordt; wat een lijst
+/// pas bij het opmaken bouwt (de tegels in beeld), valt onder opmaak. Een blok binnen een blok telt in beide.
+class MeetBlok extends SingleChildRenderObjectWidget {
+  const MeetBlok(this.naam, {super.key, required Widget super.child});
+
+  final String naam;
+
+  @override
+  SingleChildRenderObjectElement createElement() => _MeetBlokElement(this);
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _MeetBlokRender(naam);
+
+  @override
+  void updateRenderObject(BuildContext context, RenderObject renderObject) =>
+      (renderObject as _MeetBlokRender).naam = naam;
+}
+
+class _MeetBlokElement extends SingleChildRenderObjectElement {
+  _MeetBlokElement(MeetBlok super.widget);
+
+  String get _naam => (widget as MeetBlok).naam;
+
+  @override
+  void mount(Element? parent, Object? newSlot) {
+    if (!_loopt) return super.mount(parent, newSlot);
+    final sw = Stopwatch()..start();
+    super.mount(parent, newSlot);
+    meetTel(_naam, bouwen: sw.elapsedMicroseconds);
+  }
+
+  @override
+  void update(MeetBlok newWidget) {
+    if (!_loopt) return super.update(newWidget);
+    final sw = Stopwatch()..start();
+    super.update(newWidget);
+    meetTel(_naam, bouwen: sw.elapsedMicroseconds);
+  }
+}
+
+class _MeetBlokRender extends RenderProxyBox {
+  _MeetBlokRender(this.naam);
+
+  String naam;
+
+  @override
+  void performLayout() {
+    if (!_loopt) return super.performLayout();
+    final sw = Stopwatch()..start();
+    super.performLayout();
+    meetTel(naam, opmaak: sw.elapsedMicroseconds, keer: false);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (!_loopt) return super.paint(context, offset);
+    final sw = Stopwatch()..start();
+    super.paint(context, offset);
+    meetTel(naam, tekenen: sw.elapsedMicroseconds, keer: false);
+  }
+}
+
 /// Voer een meetronde uit ([op] uit de opdracht `meet`):
 /// - `scenarios`: welke uit [kMeetScenarios] (standaard [kMeetStandaard]);
 /// - `artiest` en `album`: voor het scenario `bronnen`;
@@ -218,8 +318,9 @@ Future<void> voerMeetrondeUit(Map<String, dynamic> op, MeetHaken h, {double? hz}
         // 23-10-2026: "navigeren tussen vensters is soms stroef ook, vooral tussen start, albums, tracks").
         if ((s == 'bronnen' || s == 'paginas') && zonder.isNotEmpty && op['varianten'] == null) continue;
         if (s == 'paginas') {
-          for (final (naam, beelden) in await _paginas(h)) {
+          for (final (naam, beelden, blokken) in await _paginas(h)) {
             regels.add(Beeldcijfers.van(beelden, hz: scherm).regel(naam, zonder));
+            if (blokken.isNotEmpty) regels.add('[meet] $naam — $blokken');
           }
           continue;
         }
@@ -334,22 +435,25 @@ Future<List<ui.FrameTiming>> _scenario(String s, MeetHaken h, {String artiest = 
 
 /// Elke hoofdpagina: openen (anderhalve seconde), en dan de lijst in het midden van het scherm vier schermen naar
 /// beneden en terug schuiven, zoals een vinger of een muiswiel dat doet. Per pagina twee regels.
-Future<List<(String, List<ui.FrameTiming>)>> _paginas(MeetHaken h) async {
+Future<List<(String, List<ui.FrameTiming>, String)>> _paginas(MeetHaken h) async {
   final naar = h.naarSectie, lijst = h.secties?.call() ?? const [];
   if (naar == null || lijst.isEmpty) return const [];
-  final uit = <(String, List<ui.FrameTiming>)>[];
+  final uit = <(String, List<ui.FrameTiming>, String)>[];
   for (final (id, naam) in lijst) {
-    uit.add(('$naam openen', await _beeldenVan(() async {
+    blokkenRegel();
+    final open = await _beeldenVan(() async {
       naar(id);
       await _wacht(1500);
-    })));
+    });
+    // Wat de blokken ([MeetBlok]) bij het openen kostten.
+    uit.add(('$naam openen', open, blokkenRegel()));
     final pos = lijstInHetMidden();
     if (pos == null) continue;
     uit.add(('$naam schuiven', await _beeldenVan(() async {
       final ver = math.min(pos.pixels + pos.viewportDimension * 4, pos.maxScrollExtent);
       await pos.animateTo(ver, duration: const Duration(milliseconds: 1500), curve: Curves.easeInOut);
       await pos.animateTo(0, duration: const Duration(milliseconds: 1500), curve: Curves.easeInOut);
-    })));
+    }), ''));
   }
   naar(lijst.first.$1);
   return uit;

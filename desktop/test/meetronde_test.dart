@@ -197,6 +197,48 @@ void main() {
     expect(identical(glasMat, glasMat), isTrue);
   });
 
+  group('wat een blok kost (MeetBlok)', () {
+    tearDown(() => meetrondeLooptVoorToets = false);
+
+    testWidgets('DE KERN: tijdens een meetronde telt hij bouwen, opmaak en tekenen, en de regel zet weer op nul',
+        (t) async {
+      meetrondeLooptVoorToets = true;
+      blokkenRegel();
+      await t.pumpWidget(const Directionality(
+        textDirection: TextDirection.ltr,
+        child: MeetBlok('raster', child: Column(children: [MeetBlok('tegel', child: Text('a')), MeetBlok('tegel', child: Text('b'))])),
+      ));
+      final regel = blokkenRegel();
+      expect(regel, contains('raster 1× bouwen'));
+      expect(regel, contains('tegel 2× bouwen'));
+      expect(regel, contains('opmaak'));
+      expect(regel, contains('tekenen'));
+      expect(blokkenRegel(), isEmpty, reason: 'na het lezen weer op nul');
+    });
+
+    testWidgets('DE GRENS: zonder meetronde telt hij niets', (t) async {
+      meetrondeLooptVoorToets = false;
+      await t.pumpWidget(const Directionality(textDirection: TextDirection.ltr, child: MeetBlok('raster', child: Text('a'))));
+      expect(blokkenRegel(), isEmpty);
+      meetTel('sorteren', bouwen: 100);
+      expect(blokkenRegel(), isEmpty);
+    });
+
+    test('de bedrading: Albums, de rij, de tegel, de pagina en de sortering; geen stilstand tijdens een meetronde', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(main, contains("return MeetBlok('Albums',"));
+      expect(main, contains("return MeetBlok('Albumrij', child: SizedBox("));
+      expect(main, contains("return MeetBlok('Albumtegel', child: AlbumTegel("));
+      expect(main, contains("child: KeyedSubtree(key: ValueKey(_view), child: MeetBlok('pagina', child: _content())),"));
+      expect(main, contains("meetTel('sorteren', bouwen: sw.elapsedMicroseconds);"));
+      final begin = main.indexOf('void _kijkStilstand()');
+      final lijf = main.substring(begin, main.indexOf('\n  }\n', begin));
+      expect(lijf, contains('if (meetrondeLoopt) {'));
+      final ronde = File('lib/meetronde.dart').readAsStringSync();
+      expect(ronde, contains(r"uit.add(('$naam openen', open, blokkenRegel()));"));
+    });
+  });
+
   group('de lijst in het midden (scenario "paginas")', () {
     testWidgets('de verticale lijst die je ziet, niet de rij ernaast; zonder lijst niets', (t) async {
       t.view.physicalSize = const Size(400, 800);

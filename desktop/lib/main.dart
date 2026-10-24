@@ -220,7 +220,7 @@ import 'ui/tegel_spiegel.dart';
 import 'ui/getekende_schijf.dart';
 import 'ui/glasproef.dart';
 import 'ui/kantel_hoes.dart';
-import 'meetronde.dart' show MeetHaken, voerMeetrondeUit, zonderVoorMeting;
+import 'meetronde.dart' show MeetBlok, MeetHaken, meetTel, meetrondeLoopt, voerMeetrondeUit, zonderVoorMeting;
 import 'ui/schijf_licht.dart';
 import 'ui/wachtrij_stapel.dart';
 import 'ui/thema.dart';
@@ -3134,6 +3134,12 @@ class _HomeShellState extends State<HomeShell> {
 
   void _kijkStilstand() {
     if (!mounted || _stilRoute != null) return;
+    // Niet tijdens een meetronde: die drukt geen toetsen, en na twee minuten lag Nu speelt dan over de pagina die hij
+    // mat (Shield, 24-10-2026: "Artiesten schuiven" stond acht minuten stil onder de draaiende cd).
+    if (meetrondeLoopt) {
+      _stil.reset();
+      return;
+    }
     final speelt = context.read<PlayerStore>().playing || context.read<SpeakerTarget>().isCasting;
     final bovenaan = ModalRoute.of(context)?.isCurrent ?? false;
     if (!naarNuSpeeltNaStilstand(stil: _stil.elapsed, speelt: speelt, bovenaan: bovenaan)) return;
@@ -4514,7 +4520,8 @@ class _HomeShellState extends State<HomeShell> {
                       child: kind),
                 ),
               ),
-              child: KeyedSubtree(key: ValueKey(_view), child: _content()),
+              // De pagina als blok in een meetronde ([MeetBlok]): wat hij kost tegenover de rest van het beeld.
+              child: KeyedSubtree(key: ValueKey(_view), child: MeetBlok('pagina', child: _content())),
             );
 
   Widget _content() {
@@ -4563,12 +4570,15 @@ class _HomeShellState extends State<HomeShell> {
             opKnop: () => gaNaarSectie?.call(2),
           );
         }
-        return _view == 0
-            ? AlbumsGrid(
-                albums: _sortAlbums(albums),
+        if (_view != 0) return ArtistsView(lib: lib, albums: albums);
+        final sw = Stopwatch()..start();
+        final gesorteerd = _sortAlbums(albums);
+        meetTel('sorteren', bouwen: sw.elapsedMicroseconds);
+        return MeetBlok('Albums',
+            child: AlbumsGrid(
+                albums: gesorteerd,
                 sort: _sort,
-                title: _q.isEmpty ? null : '${albums.length} ${albums.length == 1 ? 'resultaat' : 'resultaten'}')
-            : ArtistsView(lib: lib, albums: albums);
+                title: _q.isEmpty ? null : '${albums.length} ${albums.length == 1 ? 'resultaat' : 'resultaten'}'));
       },
     );
   }
@@ -6220,7 +6230,8 @@ List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
         // de titels onder de spelerbalk lagen ("album raster is te groot").
         child: Builder(builder: (context) {
           final hoog = hoogteVanTegel(context, hoes: kTvAlbumHoes);
-          return SizedBox(
+          // Een rij als blok in een meetronde ([MeetBlok]).
+          return MeetBlok('Albumrij', child: SizedBox(
             height: hoogteVanTegelrij(context, hoes: kTvAlbumHoes),
             // Onthoudt waar je stond, zoals de rijen van Start (16-10-2026). Zie `ui/tv_rij.dart`.
             child: TvRij(
@@ -6234,7 +6245,7 @@ List<Widget> _albumRowSlivers(List<Album> albums, AlbumSort? sort) {
                 ),
               ),
             ),
-          );
+          ));
         }),
       ),
     ],
@@ -6532,7 +6543,8 @@ class AlbumCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final a = album;
     final uid = context.read<LibraryStore>().uidOf(a);
-    return AlbumTegel(
+    // Een tegel als blok in een meetronde ([MeetBlok]).
+    return MeetBlok('Albumtegel', child: AlbumTegel(
       hoes: (maat) {
         // Staat hij op het scherm zonder hoes, dan haalt de ronde hem eerst (zie [LibraryStore.hoesVoorrang]).
         if (a.cover == null) context.read<LibraryStore>().hoesVoorrang(a);
@@ -6580,7 +6592,7 @@ class AlbumCard extends StatelessWidget {
       // radio en verwijderen zaten allemaal een navigatiestap dieper.
       onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
       onSecondaryTap: (bij) => _toonItemMenu(context, _albumMenu(context, a), bij: bij),
-    );
+    ));
   }
 }
 
