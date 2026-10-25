@@ -3298,6 +3298,13 @@ class _HomeShellState extends State<HomeShell> {
   /// lang OK) deed anders alsnog iets.
   bool _okOpslokken = false;
 
+  /// Een echte klok voor [DubbelOk], en NIET `e.timeStamp`: op Android komt die tijd van het laatst getekende beeld.
+  /// Staat het scherm stil — een menu dat open is — dan krijgen twee OK's die seconden uit elkaar liggen bijna dezelfde
+  /// tijd, en dan was de tweede een "dubbele OK": het menu ging dicht om naar Nu speelt te springen en de gekozen regel
+  /// liep nooit. Gezien op de Shield (25-10-2026): lang OK op een nummer, dan OK op "Beluisteren" — niets; met eerst
+  /// omlaag en omhoog wel (een pijl zet [DubbelOk.anders]).
+  static final Stopwatch _okKlok = Stopwatch()..start();
+
   bool _tvDubbelOk(KeyEvent e) {
     if (!kOkToetsen.contains(e.logicalKey)) {
       if (e is KeyDownEvent) _dubbelOk.anders();
@@ -3308,7 +3315,7 @@ class _HomeShellState extends State<HomeShell> {
       _okOpslokken = false;
       return true;
     }
-    if (e is! KeyDownEvent || !_dubbelOk.neer(e.timeStamp) || !_magNaarNuSpeelt()) return false;
+    if (e is! KeyDownEvent || !_dubbelOk.neer(_okKlok.elapsed) || !_magNaarNuSpeelt()) return false;
     _okOpslokken = true;
     _naarNuSpeeltVanOveral();
     return true;
@@ -13582,7 +13589,11 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
             content: Text('De kopie van ${tw.bron} gaat naar de prullenbak. Je eigen "${t.title}" blijft staan, en de app '
                 'zoekt de volgende $soort-kopie.'),
             actions: [
-              TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Nee')),
+              TextButton(
+                  // Op een tv de selectie op Nee, niet op Weggooien: één OK te veel gooide anders weg (Shield, 25-10-2026).
+                  autofocus: true,
+                  onPressed: () => Navigator.of(c).pop(false),
+                  child: const Text('Nee')),
               FilledButton(onPressed: () => Navigator.of(c).pop(true), child: const Text('Weggooien')),
             ],
           ),
@@ -13608,7 +13619,11 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
           content: Text('De kopie van ${tw.bron} gaat naar de prullenbak. Je eigen "${t.title}" blijft staan, en '
               'dezelfde kopie komt niet terug.'),
           actions: [
-            TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Nee')),
+            TextButton(
+                  // Op een tv de selectie op Nee, niet op Weggooien: één OK te veel gooide anders weg (Shield, 25-10-2026).
+                  autofocus: true,
+                  onPressed: () => Navigator.of(c).pop(false),
+                  child: const Text('Nee')),
             FilledButton(onPressed: () => Navigator.of(c).pop(true), child: const Text('Weggooien')),
           ],
         ),
@@ -13811,10 +13826,13 @@ String? _klaarAdres(BuildContext context, Track t, TwijfelInfo tw) {
 /// A/B in Nu speelt bij een klaargezette kopie (Saber, 25-10-2026: "A/B op dezelfde seconde"): A is je eigen kopie, B de
 /// kopie die je vroeg; wisselen houdt de plek. Kiezen opent Deze houden / Weg ([_twijfelMenu]).
 class _AbRegel extends StatelessWidget {
-  const _AbRegel({required this.track, required this.info, this.midden = true});
+  const _AbRegel({required this.track, required this.info, this.midden = true, this.focusA});
   final Track track;
   final TwijfelInfo info;
   final bool midden;
+
+  /// De focus van de knop A, zodat omhoog vanaf de knoppenrij op een tv hier uitkomt ([_omhoogNaarHoes]).
+  final FocusNode? focusA;
 
   @override
   Widget build(BuildContext context) {
@@ -13828,16 +13846,16 @@ class _AbRegel extends StatelessWidget {
       if (!ok && context.mounted) _srcToast(context, 'A/B werkt op dit toestel, niet terwijl een speaker speelt');
     }
 
-    Widget kant(String tekst, bool aan, VoidCallback doe, Key sleutel) => aan
-        ? FilledButton.tonal(key: sleutel, onPressed: doe, child: Text(tekst))
-        : OutlinedButton(key: sleutel, onPressed: doe, child: Text(tekst));
+    Widget kant(String tekst, bool aan, VoidCallback doe, Key sleutel, {FocusNode? focus}) => aan
+        ? FilledButton.tonal(key: sleutel, focusNode: focus, onPressed: doe, child: Text(tekst))
+        : OutlinedButton(key: sleutel, focusNode: focus, onPressed: doe, child: Text(tekst));
     return Wrap(
       alignment: midden ? WrapAlignment.center : WrapAlignment.start,
       crossAxisAlignment: WrapCrossAlignment.center,
       spacing: 8,
       runSpacing: 6,
       children: [
-        kant('A · jouw kopie', !b, () => unawaited(naar(false)), const ValueKey('ab-a')),
+        kant('A · jouw kopie', !b, () => unawaited(naar(false)), const ValueKey('ab-a'), focus: focusA),
         kant('B · ${info.soort} klaar (${info.kwaliteit})', b, () => unawaited(naar(true)), const ValueKey('ab-b')),
         TextButton(
           key: const ValueKey('ab-kiezen'),
@@ -17360,6 +17378,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     _eersteRondje.dispose();
     _hoesKnop.dispose();
     _speelKnop.dispose();
+    _abKnop.dispose();
     _hoesX.dispose();
     super.dispose();
   }
@@ -17373,6 +17392,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
   final _hoesKnop = FocusNode(debugLabel: 'np-hoes');
   final _speelKnop = FocusNode(debugLabel: 'np-speel');
 
+  /// Knop A van de A/B-strook ([_AbRegel]): op een tv eerst daarheen met omhoog, dan pas naar de hoes. Zonder dit was
+  /// A/B met de afstandsbediening niet te bereiken (Shield, 25-10-2026).
+  final _abKnop = FocusNode(debugLabel: 'np-ab');
+
   /// Staat dit scherm op een tv naast elkaar? Bijgehouden in `build`.
   bool _naastOpTv = false;
 
@@ -17380,8 +17403,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
   /// de knoppen lopen.
   KeyEventResult _omhoogNaarHoes(KeyEvent e) {
     if (!_naastOpTv || e.logicalKey != LogicalKeyboardKey.arrowUp) return KeyEventResult.ignored;
-    if (e is KeyDownEvent && _hoesKnop.context != null && _hoesKnop.canRequestFocus) {
-      _hoesKnop.requestFocus();
+    // Een A/B-strook boven de knoppen (een klaargezette kopie): eerst daar, dan pas de hoes.
+    final doel = _abKnop.context != null && _abKnop.canRequestFocus ? _abKnop : _hoesKnop;
+    if (e is KeyDownEvent && doel.context != null && doel.canRequestFocus) {
+      doel.requestFocus();
       return KeyEventResult.handled;
     }
     return e is KeyRepeatEvent ? KeyEventResult.handled : KeyEventResult.ignored;
@@ -17854,7 +17879,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
       // Een kopie die je vroeg staat klaar (studio, cd of vinyl): A/B op dezelfde seconde, en kiezen.
       ] else if ((t == null ? null : twijfelVoor(t.path)) case final tw? when tw.soort != null) ...[
         const SizedBox(height: kRuimte8),
-        SizedBox(width: kolom, child: _AbRegel(track: t!, info: tw, midden: !zij)),
+        SizedBox(width: kolom, child: _AbRegel(track: t!, info: tw, midden: !zij, focusA: _abKnop)),
       ],
       // Geen uitleg meer over wat de pc onderweg stuurt ("Onderweg: je pc stuurt 16/44.1 in plaats van
       // 24/192 …"): het merk naast de artiest zegt al wat je hoort, en de zin nam twee regels (Saber,

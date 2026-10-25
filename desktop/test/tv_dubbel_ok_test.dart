@@ -68,7 +68,11 @@ void main() {
     });
 
     test('de tweede OK springt, en zijn loslaten wordt opgeslokt', () {
-      expect(main, contains('    if (e is! KeyDownEvent || !_dubbelOk.neer(e.timeStamp) || !_magNaarNuSpeelt()) return false;\n'
+      // Een echte klok, niet de tijd van de toets: op Android is dat de tijd van het laatst getekende beeld, en bij een
+      // stilstaand menu werden twee OK's seconden uit elkaar een "dubbele" (Shield, 25-10-2026).
+      expect(main, contains('  static final Stopwatch _okKlok = Stopwatch()..start();'));
+      expect(main.contains('_dubbelOk.neer(e.timeStamp)'), isFalse, reason: 'e.timeStamp staat stil zolang er niets tekent');
+      expect(main, contains('    if (e is! KeyDownEvent || !_dubbelOk.neer(_okKlok.elapsed) || !_magNaarNuSpeelt()) return false;\n'
           '    _okOpslokken = true;\n    _naarNuSpeeltVanOveral();\n    return true;'));
       expect(main, contains('    if (e is KeyUpEvent) {\n      if (!_okOpslokken) return false;\n'
           '      _okOpslokken = false;\n      return true;\n    }'));
