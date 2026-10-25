@@ -8343,7 +8343,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                     ),
                     // Offered only where there is something to merge: the library holds more than
                     // one pressing of this record, or the user already told us to keep them one.
-                    if (album.edition != null || context.watch<LibraryStore>().isMerged(album)) ...[
+                    // Niet bij een plaat die per jaar gescheiden is: daar is het jaar de editie, en "Weer één plaat"
+                    // hieronder brengt hem terug.
+                    if ((album.edition != null && !context.watch<LibraryStore>().isGesplitst(album)) ||
+                        context.watch<LibraryStore>().isMerged(album)) ...[
                       if (!narrow) const SizedBox(width: 10),
                       Builder(builder: (context) {
                         final merged = context.watch<LibraryStore>().isMerged(album);

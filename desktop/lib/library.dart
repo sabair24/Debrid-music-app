@@ -1400,6 +1400,8 @@ class LibraryStore extends ChangeNotifier {
     if (isRemote) return _editOnPc({'op': 'merge', 'albumId': remoteAlbumId(a)});
     _merged.add('album::${artistKey(a.artist)}|${normKey(a.title)}');
     await _saveMerged();
+    // Samenvoegen en scheiden per jaar sluiten elkaar uit ([scheidPerJaar]).
+    if (_gesplitst.remove('album::${artistKey(a.artist)}|${normKey(a.title)}')) await _saveGesplitst();
     rebuildAlbums();
     notifyListeners();
   }
@@ -3850,7 +3852,14 @@ class LibraryStore extends ChangeNotifier {
   /// Bestaat omdat de twee `recordTracks` die dit nodig hebben allebei hun eigen kopie van
   /// [_basisSleutel] hadden staan — en toen die regel over de hoofdartiest ging, was dat twee
   /// plekken die stilletjes de oude sleutel bleven bouwen en dus niets meer zouden vinden.
-  List<Track>? editionsOfTrack(Track t) => _byBase[_basisSleutel(t)];
+  List<Track>? editionsOfTrack(Track t) {
+    final base = _basisSleutel(t);
+    final alle = _byBase[base];
+    if (alle == null || !_gesplitst.contains(base)) return alle;
+    // Per jaar gescheiden ([scheidPerJaar]): de andere jaren zijn andere platen, geen persingen van deze. Zonder dit
+    // telden "Nummers toewijzen", de dubbele opnames en de herkenning Kiss from a Rose (1994) mee bij Seal (1991).
+    return [for (final x in alle) if ((x.year ?? 0) == (t.year ?? 0)) x];
+  }
 
   /// Does this pile of tracks hold more than one EDITION of the record?
   ///
@@ -3925,7 +3934,11 @@ class LibraryStore extends ChangeNotifier {
       final artist = canonical[artistKey(main)] ?? main;
       final al = Album(single ? ts.first.title : ts.first.album, artist, ts, isSingle: single);
       // Only where the title actually split — a lone album needs no edition label.
-      if (!single && editionSplit(_byBase[_basisSleutel(ts.first)])) {
+      if (!single && _gesplitst.contains(_basisSleutel(ts.first))) {
+        // Per jaar gescheiden ([scheidPerJaar]): het jaar is de editie. Zonder editie kregen de twee platen hetzelfde id
+        // (`albumIdFor` neemt artiest, titel en editie), en dan voegde een toestel ze weer samen.
+        al.edition = (ts.first.year ?? 0) > 0 ? '${ts.first.year}' : 'zonder jaar';
+      } else if (!single && editionSplit(_byBase[_basisSleutel(ts.first)])) {
         final n = ts.first.trackTotal;
         al.edition = n > 0 ? '$n nummers' : 'zonder nummering';
       }

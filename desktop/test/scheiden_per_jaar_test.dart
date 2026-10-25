@@ -7,6 +7,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/lan/dtos.dart';
+import 'package:debridmusic/lan/ids.dart' show albumIdFor;
+import 'package:debridmusic/organize.dart' show artistKey, normKey;
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/paths.dart';
@@ -71,13 +73,27 @@ void main() {
     expect(samen.kanScheidenPerJaar(samen.albums.single), isFalse);
   });
 
-  test('scheiden haalt een samenvoeging weg (de twee sluiten elkaar uit)', () async {
+  test('scheiden haalt een samenvoeging weg, en samenvoegen een scheiding (de twee sluiten elkaar uit)', () async {
     final lib = maak(seal);
     await lib.mergeEditions(lib.albums.single);
     expect(lib.isMerged(lib.albums.single), isTrue);
     await lib.scheidPerJaar(lib.albums.single);
     expect(lib.albums, hasLength(2));
     expect(lib.albums.any(lib.isMerged), isFalse);
+    await lib.mergeEditions(lib.albums.first);
+    expect(lib.albums, hasLength(1));
+    expect(lib.isGesplitst(lib.albums.single), isFalse);
+  });
+
+  test('gescheiden: elk jaar een eigen editie en dus een eigen id, en een eigen tracklijst', () async {
+    final lib = maak(seal);
+    await lib.scheidPerJaar(lib.albums.single);
+    expect(lib.albums.map((a) => a.edition).toSet(), {'1991', '1994'});
+    final ids = {for (final a in lib.albums) albumIdFor(artistKey(a.artist), normKey(a.title), a.edition)};
+    expect(ids, hasLength(2), reason: 'met één id voegde een toestel ze weer samen');
+    final killer = lib.albums.firstWhere((a) => a.edition == '1991');
+    expect([for (final t in LibraryNormalise(lib).recordTracks(killer)) t.title], ['Killer'],
+        reason: 'Kiss from a Rose is een andere plaat, geen persing van deze');
   });
 
   group('welke bestanden een eigen map krijgen', () {
