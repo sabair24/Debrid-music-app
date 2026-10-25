@@ -9,6 +9,11 @@
 //
 // Op de pc staat de lijst in `twijfel.json`, de kopieën in de map [twijfelMap] onder de downloadmap (de bibliotheek slaat
 // die over). Een toestel krijgt per nummer alleen [TwijfelInfo] mee met de catalogus, en luistert via `/kandidaat/<id>`.
+//
+// **Klaargezet** (Saber, 25-10-2026): dezelfde lijst draagt ook de kopie die je zelf vroeg — "Download in cd-kwaliteit"
+// en de andere twee ([Twijfelgeval.soort]). Die vervangt niets vanzelf: hij staat klaar met het label "cd klaar", je
+// luistert (A/B op dezelfde seconde), en houdt hem of gooit hem weg. Eén kandidaat per nummer: een gevraagde kopie
+// neemt de plaats in van een twijfelgeval van de app.
 
 import 'dart:convert';
 import 'dart:io';
@@ -16,6 +21,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'fingerprint.dart' show maybeSameRecordingScore;
+import 'kopiesoort.dart';
 
 /// De map onder de downloadmap waar twijfelkopieën wachten. Geen deel van de bibliotheek.
 const String twijfelMap = '_twijfel';
@@ -47,8 +53,13 @@ Opnameoordeel opnameOordeel(double? score) => score == null
             ? Opnameoordeel.twijfel
             : Opnameoordeel.andere;
 
-/// Wat een toestel en de albumpagina over een twijfelgeval weten. Geen pad: dat blijft op de pc.
-typedef TwijfelInfo = ({String id, String bron, double score, String kwaliteit, String ext});
+/// Wat een toestel en de albumpagina over een twijfelgeval weten. Geen pad: dat blijft op de pc. [soort]: een kopie
+/// die je zelf vroeg ("studio", "cd", "vinyl"), null voor een twijfelgeval van de app.
+typedef TwijfelInfo = ({String id, String bron, double score, String kwaliteit, String ext, String? soort});
+
+/// Moet er bij deze klaargezette kopie "misschien een andere opname" staan? Ja onder [maybeSameRecordingScore] — en
+/// ook zonder meting (score 0: geen fpcalc), want dan is er niets nagekeken.
+bool misschienAndereOpname(double score) => score < maybeSameRecordingScore;
 
 /// Eén twijfelgeval.
 class Twijfelgeval {
@@ -78,6 +89,12 @@ class Twijfelgeval {
   /// De tags waarmee hij wordt opgeborgen als je kiest voor vervangen (`TrackTags.toJson`).
   final Map<String, dynamic>? gezag;
 
+  /// Gevraagd als studio, cd of vinyl (klaargezet), of null: een twijfelgeval van de app.
+  final Kopiesoort? soort;
+
+  /// Waar hij vandaan kwam als pad (bij de uploader, in de torrent): wat hem tot vinyl maakt ([kopiesoortVan]).
+  final String? bronpad;
+
   const Twijfelgeval({
     required this.id,
     required this.pad,
@@ -88,7 +105,12 @@ class Twijfelgeval {
     required this.ms,
     required this.grootte,
     this.gezag,
+    this.soort,
+    this.bronpad,
   });
+
+  /// Je vroeg hem zelf (klaargezet), en hij is dus geen twijfel van de app.
+  bool get gevraagd => soort != null;
 
   String get ext {
     final naam = kandidaat.replaceAll('\\', '/').split('/').last;
@@ -96,7 +118,7 @@ class Twijfelgeval {
     return punt < 0 ? 'flac' : naam.substring(punt + 1).toLowerCase();
   }
 
-  TwijfelInfo get info => (id: id, bron: bron, score: score, kwaliteit: kwaliteit, ext: ext);
+  TwijfelInfo get info => (id: id, bron: bron, score: score, kwaliteit: kwaliteit, ext: ext, soort: soort?.naam);
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -108,6 +130,8 @@ class Twijfelgeval {
         'ms': ms,
         'grootte': grootte,
         if (gezag != null) 'gezag': gezag,
+        if (soort != null) 'soort': soort!.naam,
+        if (bronpad != null) 'bronpad': bronpad,
       };
 
   static Twijfelgeval? fromJson(Object? j) {
@@ -124,6 +148,8 @@ class Twijfelgeval {
       ms: (j['ms'] as num?)?.toInt() ?? 0,
       grootte: (j['grootte'] as num?)?.toInt() ?? 0,
       gezag: j['gezag'] is Map ? Map<String, dynamic>.from(j['gezag'] as Map) : null,
+      soort: kopiesoortUit(j['soort']),
+      bronpad: j['bronpad'] is String ? j['bronpad'] as String : null,
     );
   }
 }
@@ -142,8 +168,16 @@ final ValueNotifier<int> twijfelUitgave = ValueNotifier<int>(0);
 /// Het twijfelgeval voor het nummer op [pad], of null.
 TwijfelInfo? twijfelVoor(String pad) => _info[_sleutel(pad)];
 
-/// Wat de pc over [pad] zegt, op een toestel. Null wist.
-void zetTwijfelVanPc(String pad, TwijfelInfo? info) {
+/// Een melding op een toestel: er staat een kopie klaar die je vroeg ("cd klaar: …"). Niet bij de eerste catalogus van
+/// de pc — dan zou elk klaargezet nummer zich bij het opstarten melden.
+final ValueNotifier<String?> klaarVanPc = ValueNotifier<String?>(null);
+bool _catalogusGelezen = false;
+
+/// De eerste catalogus van de pc is verwerkt ([zetTwijfelVanPc] meldt vanaf nu een nieuwe klaargezette kopie).
+void twijfelsVanPcGelezen() => _catalogusGelezen = true;
+
+/// Wat de pc over [pad] zegt, op een toestel. Null wist. [naam]: "artiest — titel", voor de melding.
+void zetTwijfelVanPc(String pad, TwijfelInfo? info, {String? naam}) {
   final k = _sleutel(pad);
   final oud = _info[k];
   if (info == null) {
@@ -153,6 +187,9 @@ void zetTwijfelVanPc(String pad, TwijfelInfo? info) {
   if (oud?.id == info.id) return;
   _info[k] = info;
   twijfelUitgave.value++;
+  if (_catalogusGelezen && info.soort != null) {
+    klaarVanPc.value = '${info.soort} klaar: ${naam ?? pad.split(RegExp(r'[/\\]')).last}';
+  }
 }
 
 /// De twijfelgevallen van de pc, op schijf.
@@ -172,6 +209,9 @@ class Twijfellijst {
   Twijfelgeval? metId(String id) => _perPad.values.where((g) => g.id == id).firstOrNull;
 
   bool afgewezen(String pad, int grootte) => _nee[_sleutel(pad)]?.contains(grootte) ?? false;
+
+  /// De groottes van wat je voor dit nummer weggooide: die komen niet terug (ook niet als klaargezette kopie).
+  Set<int> afgewezenGroottes(String pad) => {...?_nee[_sleutel(pad)]};
 
   void zet(Twijfelgeval g) {
     _perPad[_sleutel(g.pad)] = g;

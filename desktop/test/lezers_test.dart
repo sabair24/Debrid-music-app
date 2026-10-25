@@ -55,8 +55,9 @@ void main() {
     expect(stream.indexOf('lezers.einde(track.path)'), greaterThan(stream.indexOf('lezers.begin(track.path)')));
     expect(stream.indexOf('finally'), lessThan(stream.indexOf('lezers.einde(track.path)')));
     final main = File('lib/main.dart').readAsStringSync();
-    expect(main, contains('bool ergensInGebruik(String p) => player.current?.path == p || '
-        '(sharing.server?.inGebruikBijToestel(p) ?? false);'));
+    // Sinds 25-10-2026: niet als de speler het bestand net losliet om het te vervangen (Deze houden).
+    expect(main, contains('bool ergensInGebruik(String p) =>\n'
+        '        (player.current?.path == p && !player.losgelaten) || (sharing.server?.inGebruikBijToestel(p) ?? false);'));
     expect(main, contains('downloads.speeltNu = ergensInGebruik;'), reason: 'de Soulseek-jacht');
     expect(main, contains('speeltNu: ergensInGebruik);'), reason: 'de hoesveger');
     expect(main, contains('..speeltNu = ergensInGebruik;'), reason: 'de TIDAL-ronde op jouw vraag');

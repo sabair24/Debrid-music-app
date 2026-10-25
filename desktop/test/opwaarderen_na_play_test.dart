@@ -39,7 +39,7 @@ void main() {
     expect(main, contains('await (bron as EigenRadiobron).haal(plek, vroeg: vroeg, zoekBeter: true, los: true)'));
     // Sinds 24-10-2026 ook wat een toestel van de pc leest (lan/lezers.dart).
     expect(main, contains('downloads.speeltNu = ergensInGebruik;'));
-    expect(main, contains('bool ergensInGebruik(String p) => player.current?.path == p ||'));
+    expect(main, contains('bool ergensInGebruik(String p) =>\n        (player.current?.path == p && !player.losgelaten) ||'));
     final radio = File('lib/radio.dart').readAsStringSync();
     expect(radio, contains('zoekDaarnaBeter: zoekBeter,'));
     expect(radio, contains('await (zelf as EigenRadiobron).haal(p, vroeg: vroeg)'),

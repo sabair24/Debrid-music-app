@@ -65,7 +65,11 @@ void main() {
     expect(z, contains('_queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true, blijfZoeken: verdacht);'));
     final main = File('lib/main.dart').readAsStringSync();
     // Sinds 21-10-2026 op elk toestel behalve de tv; op gsm, iPad en Mac zoekt de pc ([zoekBeterOpPc]).
-    expect(main, contains("if (!isTv)\n                            TextButton.icon(\n                              onPressed: () => unawaited(_zoekHires(context, album)),"));
+    // Sinds 25-10-2026 een keuzemenu: de beste kwaliteit zoals altijd, of zelf studio, cd of vinyl.
+    expect(main, contains("if (!isTv)\n                            TextButton.icon(\n"));
+    expect(main, contains('onPressed: () => _toonItemMenu(context, _zoekHiresMenu(context, album)),'));
+    expect(main, contains("MenuRegel(Icons.auto_awesome_rounded, 'Beste kwaliteit (de app kiest)',\n"
+        '              () => unawaited(_zoekHires(context, album))),'));
     expect(main, contains("label: const Text('Zoek hi-res', style: TextStyle(fontSize: 12)),"));
     expect(main, contains('.zoekBeterVoor(album.tracks, album: album.title, gezag: lib.tagsVoorVervanger)'));
     expect(main, contains('final r = await zoekBeterOpPc(lib, album.tracks, album: album.title);'));

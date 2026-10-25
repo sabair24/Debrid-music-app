@@ -269,6 +269,11 @@ class TrackDto {
   /// telde Kwaliteit op de gsm andere getallen: daar was niets "zelf gekozen".
   final bool vast;
 
+  /// Studio, cd of vinyl (kopiesoort.dart): "studio", "cd", "vinyl", of null — alleen nieuwe downloads hebben er een.
+  /// Waar je hem zelf koos, met [soortGekozen]: dan waardeert de app alleen nog op binnen die soort.
+  final String? soort;
+  final bool soortGekozen;
+
   const TrackDto({
     required this.id,
     required this.albumId,
@@ -297,6 +302,8 @@ class TrackDto {
     this.twijfel,
     this.luid,
     this.vast = false,
+    this.soort,
+    this.soortGekozen = false,
   });
 
   /// True when the file is beyond what Sonos will accept (it plays FLAC/ALAC up to 24-bit but
@@ -332,6 +339,8 @@ class TrackDto {
         twijfel: j['twijfel'] is Map ? Map<String, dynamic>.from(j['twijfel'] as Map) : null,
         luid: j['luid'] is Map ? Map<String, dynamic>.from(j['luid'] as Map) : null,
         vast: j['vast'] == true,
+        soort: j['soort'] is String ? j['soort'] as String : null,
+        soortGekozen: j['soortGekozen'] == true,
       );
 
   Map<String, dynamic> toJson() => {
@@ -364,6 +373,8 @@ class TrackDto {
         if (twijfel != null) 'twijfel': twijfel,
         if (luid != null) 'luid': luid,
         if (vast) 'vast': true,
+        if (soort != null) 'soort': soort,
+        if (soortGekozen) 'soortGekozen': true,
       };
 }
 

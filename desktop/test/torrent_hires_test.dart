@@ -167,7 +167,8 @@ void main() {
     final i = online.indexOf('Future<bool> _haalUitTorrentEnKeur(');
     expect(i, greaterThan(0));
     final lijf = online.substring(i, online.indexOf('\n  }\n', i));
-    expect(lijf, contains("final uitslag = await _keurVoorWens(w, doel, bron, inJacht: false);"),
+    // Met het pad in de torrent erbij (vinyl of niet, kopiesoort.dart).
+    expect(lijf, contains("final uitslag = await _keurVoorWens(w, doel, bron, inJacht: false, bronpad: '\${item.name}/\${f.label}');"),
         reason: 'dezelfde keuring als Soulseek en TIDAL');
     expect(lijf, contains('if (!await _wachtTotNietMeerSpeelt(t.path)) {'), reason: 'niet vervangen terwijl het speelt');
   });
