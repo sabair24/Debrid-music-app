@@ -192,6 +192,8 @@ import 'tidaler.dart';
 import 'tidal_beter.dart';
 import 'vinyl.dart' show isVinylRip;
 import 'twijfel.dart';
+import 'kopiesoort.dart';
+import 'soortjacht.dart' show Soortvragen;
 import 'lan/vaste_naam.dart' show kPcHost;
 import 'torbox.dart';
 import 'torbox_stand.dart';
@@ -882,6 +884,8 @@ Future<void> main() async {
   // opruimweg vraagt hier bij het vergelijken naar — en een lijst die nog niet is ingelezen beschermt
   // niets. Op een client verhuist er niets, dus daar valt er ook niets te beschermen.
   if (mode.owner) await laadVasteKeuzes();
+  // Studio, cd of vinyl per nummer (kopiesoort.dart): vóór de eerste scan, want de catalogus en de labels lezen het.
+  if (mode.owner) await laadSoorten();
   // Wat er van elk bestand gemeten is. Vóór de eerste scan, want `firstIsBetter` vraagt hier bij elke
   // vergelijking naar — en een lijst die nog niet is ingelezen beschermt niets.
   if (mode.owner) await laadEchtheid();
@@ -2281,7 +2285,9 @@ Future<void> main() async {
     // Speelt dit bestand ergens: hier, of leest een toestel of speaker het van deze pc (lan/lezers.dart)? Dan geen
     // nieuwe hoes erin en geen betere kopie eroverheen. Saber, 24-10-2026: de hoesveger schreef in "Mademoiselle
     // chante le blues" terwijl de Mac het las, en de Mac kon het daarna niet openen.
-    bool ergensInGebruik(String p) => player.current?.path == p || (sharing.server?.inGebruikBijToestel(p) ?? false);
+    // Niet als de speler het bestand net losliet om het te vervangen (Deze houden, [PlayerStore.laatBestandLos]).
+    bool ergensInGebruik(String p) =>
+        (player.current?.path == p && !player.losgelaten) || (sharing.server?.inGebruikBijToestel(p) ?? false);
     // Een betere kopie van een nummer dat je met ▶ aanzette, vervangt het pas als het niet meer speelt.
     downloads.speeltNu = ergensInGebruik;
     // Na het landen van ▶ of een download in 16 bit of minder: 24bit zoeken op de achtergrond ([DownloadManager._naLandenHires]).
@@ -2335,6 +2341,12 @@ Future<void> main() async {
       final twijfels = Twijfellijst('$appDir${Platform.pathSeparator}twijfel.json');
       await twijfels.laad();
       downloads.twijfel = twijfels;
+      // En de staande vragen om studio, cd of vinyl (soortjacht.dart): na twee minuten de eerste ronde, daarna elke tien.
+      final vragen = Soortvragen('$appDir${Platform.pathSeparator}soortvragen.json');
+      await vragen.laad();
+      downloads.soortvragen = vragen;
+      if (vragen.alle.isNotEmpty) startLog.line('soort: ${vragen.alle.length} staande vragen om studio, cd of vinyl');
+      unawaited(Future<void>.delayed(const Duration(minutes: 2), downloads.soortvragenNakijken));
     }
     // TIDAL voor de hele bibliotheek (Saber, 24-10-2026: "als er een beter versie kwaliteit te vinden is op tidal, moet
     // de app deze gebruiken" — hij koos de hele bibliotheek, traag). Alleen op de pc met tidaler; zie tidal_beter.dart.
@@ -2344,7 +2356,11 @@ Future<void> main() async {
         nummers: () => library.tracks,
         zoek: (vraag) => tidalHulpUitvoer([vraag, '20']),
         haal: (t, k) => downloads.haalBeterVanTidal(t, k, gezag: library.tagsVoorVervanger(t)),
-        overslaan: (t) => isVasteKeuze(t.path) || radio.doorDezeRadio(t.path),
+        // En een nummer waarvoor je zelf cd of vinyl koos: TIDAL zou er studio van maken (kopiesoort.dart).
+        overslaan: (t) =>
+            isVasteKeuze(t.path) ||
+            radio.doorDezeRadio(t.path) ||
+            (gekozenSoort(t.path) ?? Kopiesoort.studio) != Kopiesoort.studio,
         inGebruik: () => [
           if (player.current case final c?) c.path,
           for (final q in player.queueTracks) q.path,
@@ -3403,6 +3419,24 @@ class _HomeShellState extends State<HomeShell> {
     _rood = context.read<LanSharing>().rodeMelding..addListener(_toonRodeMelding);
     // Op een toestel: misbruik van zijn sleutel, of een pc die een ander certificaat noemt.
     _waarschuwing = context.read<ClientSession>().waarschuwing..addListener(_toonWaarschuwing);
+    // Een studio-, cd- of vinylkopie die klaarstaat, of nog niet te vinden is (kopiesoort.dart): op de pc van de
+    // jacht zelf, op een toestel uit de catalogus.
+    _klaar = context.read<DownloadManager>().klaarMelding..addListener(_toonKlaar);
+    klaarVanPc.addListener(_toonKlaarVanPc);
+  }
+
+  ValueNotifier<String?>? _klaar;
+
+  void _toonKlaar() => _toonKort(_klaar?.value);
+  void _toonKlaarVanPc() => _toonKort(klaarVanPc.value);
+
+  void _toonKort(String? tekst) {
+    if (tekst == null || !mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(tekst), duration: const Duration(seconds: 6)));
+    });
   }
 
   ValueNotifier<String?>? _rood;
@@ -3589,6 +3623,8 @@ class _HomeShellState extends State<HomeShell> {
     _sleutels?.nieuweSleutelMelding.removeListener(_toonSleutelMelding);
     _rood?.removeListener(_toonRodeMelding);
     _waarschuwing?.removeListener(_toonWaarschuwing);
+    _klaar?.removeListener(_toonKlaar);
+    klaarVanPc.removeListener(_toonKlaarVanPc);
     _ruilKlok?.cancel();
     if (isTv) HardwareKeyboard.instance.removeHandler(_tvVangnet);
     if (!isTv) HardwareKeyboard.instance.removeHandler(_merkToetsen);
@@ -8001,7 +8037,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                           // wel een knop. Op een toestel zoekt de pc (21-10-2026, zie [zoekBeterOpPc]).
                           if (!isTv)
                             TextButton.icon(
-                              onPressed: () => unawaited(_zoekHires(context, album)),
+                              // Een keuze (Saber, 25-10-2026): de beste kwaliteit zoals altijd, of zelf studio, cd of vinyl.
+                              onPressed: () => _toonItemMenu(context, _zoekHiresMenu(context, album)),
                               icon: const Icon(Icons.high_quality_rounded, size: 15),
                               label: const Text('Zoek hi-res', style: TextStyle(fontSize: 12)),
                               style: TextButton.styleFrom(foregroundColor: _muted),
@@ -9407,6 +9444,8 @@ class _TrackRowState extends State<TrackRow> with LichtBijMuisOfFocus {
               _echtheidMerk(t),
               _twijfelMerk(t),
               _qualityBadge(_trackQuality(t)),
+              // Studio, cd of vinyl (kopiesoort.dart): alleen bij nieuwe downloads.
+              _soortMerk(t),
               Text(_fmt(t.duration), style: kTekstKlein),
               // "≠ 4:33" — je hebt het nummer, maar niet die versie. Klein en naast de tijd, want het
               // is een bijzonderheid en geen probleem.
@@ -13477,14 +13516,22 @@ ItemMenu _ontbrekendMenu(
 /// een titel recht te zetten, en alleen dán staat die regel in het menu — zie [waaromGeenPlaatsMet].
 /// De drie keuzes bij een twijfelkopie (twijfel.dart; Saber, 25-10-2026: beluisteren, vervangen of weggooien). Alles wat
 /// de regels nodig hebben wordt NU opgehaald: tegen de tijd dat er gekozen wordt, is het menu dicht.
+///
+/// Een kopie die je zelf vroeg (studio, cd of vinyl, [TwijfelInfo.soort]): Beluisteren is A/B op dezelfde seconde
+/// ([PlayerStore.vergelijk]), Deze houden vervangt altijd, en Weg zoekt de volgende.
 List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
   final lib = context.read<LibraryStore>();
   final speler = context.read<PlayerStore>();
   final dm = lib.isRemote ? null : context.read<DownloadManager>();
   final melder = ScaffoldMessenger.maybeOf(context);
   final nav = Navigator.of(context);
+  final album = lib.albumForPath(t.path);
   void toon(String zin) => melder?.showSnackBar(SnackBar(content: Text(zin)));
+  final adres = dm != null ? dm.twijfel?.van(t.path)?.kandidaat : 'http://$kPcHost/kandidaat/${tw.id}.${tw.ext}';
   Future<void> kies(String actie) async {
+    // Houden vervangt het nummer, en Windows vervangt geen bestand dat open staat: speelt het (A of B), dan eerst los,
+    // en daarna verder op dezelfde seconde met wat je hield.
+    final los = actie == 'vervang' && speler.current?.path == t.path ? await speler.laatBestandLos() : null;
     try {
       final String zin;
       if (lib.remote case final c?) {
@@ -13499,13 +13546,52 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
       toon(zin);
     } catch (e) {
       toon('$e');
+    } finally {
+      if (los != null) await speler.heropenNaLoslaten(los);
     }
+  }
+
+  final soort = tw.soort;
+  if (soort != null) {
+    final bIsAan = speler.current?.path == t.path && speler.vergelijkBron != null;
+    return [
+      MenuRegel(Icons.compare_arrows_rounded,
+          bIsAan ? 'Terug naar je eigen kopie (A)' : 'Beluisteren: A/B op dezelfde seconde (${tw.kwaliteit})', () async {
+        if (adres == null) return toon('De $soort-kopie staat er niet meer');
+        if (speler.current?.path != t.path) {
+          // Nog niet aan het spelen: het nummer in zijn plaat, en meteen op de klaargezette kopie.
+          final rij = album?.tracks ?? [t];
+          await speler.playQueue(rij, math.max(0, rij.indexWhere((x) => x.path == t.path)));
+        }
+        final ok = await speler.vergelijk(bIsAan ? null : adres);
+        toon(!ok
+            ? 'A/B werkt op dit toestel, niet terwijl een speaker speelt'
+            : bIsAan
+                ? 'A: je eigen kopie'
+                : 'B: de $soort-kopie (${tw.kwaliteit}) — open het menu weer om terug te gaan naar A');
+      }),
+      MenuRegel(Icons.check_rounded, 'Deze houden ($soort)', () => kies('vervang')),
+      MenuRegel(Icons.delete_outline_rounded, 'Weg…', () async {
+        final ja = await showDialog<bool>(
+          context: nav.context,
+          builder: (c) => AlertDialog(
+            title: Text('De $soort-kopie weggooien?'),
+            content: Text('De kopie van ${tw.bron} gaat naar de prullenbak. Je eigen "${t.title}" blijft staan, en de app '
+                'zoekt de volgende $soort-kopie.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Nee')),
+              FilledButton(onPressed: () => Navigator.of(c).pop(true), child: const Text('Weggooien')),
+            ],
+          ),
+        );
+        if (ja == true) await kies('weg');
+      }),
+    ];
   }
 
   return [
     MenuRegel(Icons.headphones_rounded, 'Twijfelkopie beluisteren (${tw.kwaliteit})', () {
       // Op de pc het bestand zelf; op een toestel via de pc, zoals de groeistroom (`/kandidaat/`, server.dart).
-      final adres = dm != null ? dm.twijfel?.van(t.path)?.kandidaat : 'http://$kPcHost/kandidaat/${tw.id}.${tw.ext}';
       if (adres == null) return toon('De twijfelkopie staat er niet meer');
       speler.playUrl(adres, title: '${t.title} (twijfelkopie)', artist: t.artist, album: t.album);
     }),
@@ -13529,16 +13615,31 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
   ];
 }
 
+/// Wat er bij een klaargezette kopie onder de titel van het menu staat: waar hij vandaan komt, en of de vingerafdruk
+/// zegt dat het dezelfde opname is (Saber, 25-10-2026: twijfelzone mag, "met een waarschuwing").
+String klaarOndertitel(TwijfelInfo tw) {
+  final s = tw.score.toStringAsFixed(2).replaceAll('.', ',');
+  final opname = tw.score <= 0
+      ? 'vingerafdruk niet gemeten — misschien een andere opname'
+      : misschienAndereOpname(tw.score)
+          ? 'vingerafdruk $s — misschien een andere opname'
+          : 'vingerafdruk $s: dezelfde opname';
+  return '${tw.bron} · ${tw.kwaliteit} · $opname';
+}
+
 /// Het menu van het label "twijfel" bij een nummer: alleen de drie keuzes, met wat er twijfelt als ondertitel.
 ItemMenu _twijfelMenu(BuildContext context, Track t, TwijfelInfo tw) => ItemMenu(
-      titel: '${t.title} — twijfel',
-      ondertitel: '${tw.bron} · ${tw.kwaliteit} · vingerafdruk ${tw.score.toStringAsFixed(2).replaceAll('.', ',')} '
-          '(dezelfde opname is 0,90 of meer)',
+      titel: tw.soort == null ? '${t.title} — twijfel' : '${t.title} — ${tw.soort} klaar',
+      ondertitel: tw.soort != null
+          ? klaarOndertitel(tw)
+          : '${tw.bron} · ${tw.kwaliteit} · vingerafdruk ${tw.score.toStringAsFixed(2).replaceAll('.', ',')} '
+              '(dezelfde opname is 0,90 of meer)',
       blokken: [_twijfelRegels(context, t, tw)],
     );
 
-/// Het label "twijfel" naast de kwaliteit van een nummer (twijfel.dart). Tik (muis, aanraking) opent de keuzes; op een tv
-/// is het label niet te kiezen — daar staan dezelfde keuzes in het menu van de rij (lang OK).
+/// Het label "twijfel" naast de kwaliteit van een nummer (twijfel.dart), of "cd klaar" bij een kopie die je vroeg. Tik
+/// (muis, aanraking) opent de keuzes; op een tv is het label niet te kiezen — daar staan dezelfde keuzes in het menu van
+/// de rij (lang OK).
 Widget _twijfelMerk(Track? t) => ValueListenableBuilder<int>(
       valueListenable: twijfelUitgave,
       builder: (context, _, __) {
@@ -13546,12 +13647,17 @@ Widget _twijfelMerk(Track? t) => ValueListenableBuilder<int>(
         final tw = pad == null || pad.isEmpty ? null : twijfelVoor(pad);
         if (t == null || tw == null) return const SizedBox.shrink();
         final s = tw.score.toStringAsFixed(2).replaceAll('.', ',');
+        final klaar = tw.soort != null;
         final label = Tooltip(
-          message: 'Twijfel: ${tw.bron} heeft ${tw.kwaliteit} en klinkt beter, maar de vingerafdruk zegt $s — dezelfde '
-              'opname scoort 0,90 of meer. ${isTv ? 'Houd OK ingedrukt' : 'Tik'} om te kiezen.',
+          message: klaar
+              ? '${tw.soort} klaar: ${klaarOndertitel(tw)}. ${isTv ? 'Houd OK ingedrukt' : 'Tik'} om te luisteren en te '
+                  'kiezen.'
+              : 'Twijfel: ${tw.bron} heeft ${tw.kwaliteit} en klinkt beter, maar de vingerafdruk zegt $s — dezelfde '
+                  'opname scoort 0,90 of meer. ${isTv ? 'Houd OK ingedrukt' : 'Tik'} om te kiezen.',
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Text('twijfel', style: kLabel.copyWith(color: leesbaar(const Color(0xFFE0B341)))),
+            child: Text(klaar ? '${tw.soort} klaar' : 'twijfel',
+                style: kLabel.copyWith(color: klaar ? _accent2 : leesbaar(const Color(0xFFE0B341)))),
           ),
         );
         if (isTv) return label;
@@ -13566,6 +13672,145 @@ Widget _twijfelMerk(Track? t) => ValueListenableBuilder<int>(
         );
       },
     );
+
+/// Het label "studio", "cd" of "vinyl" naast de kwaliteit (kopiesoort.dart; Saber, 25-10-2026). Alleen bij nieuwe
+/// downloads; niets bij wat er al stond.
+Widget _soortMerk(Track? t) => ValueListenableBuilder<int>(
+      valueListenable: soortUitgave,
+      builder: (context, _, __) {
+        final pad = t?.path;
+        final s = pad == null || pad.isEmpty ? null : soortVoor(pad);
+        if (s == null) return const SizedBox.shrink();
+        return Tooltip(
+          message: s.gekozen
+              ? 'Door jou gekozen: ${s.soort.voluit}. De app zoekt voor dit nummer alleen nog een betere ${s.soort.naam}-kopie.'
+              : 'Een ${s.soort.voluit}-kopie.',
+          child: Padding(
+            padding: const EdgeInsets.only(left: 2, right: 6),
+            child: Text(s.gekozen ? '${s.soort.naam} ✓' : s.soort.naam, style: kLabel.copyWith(color: kGedempt)),
+          ),
+        );
+      },
+    );
+
+/// "Download in studio-kwaliteit / cd-kwaliteit / vinyl" (kopiesoort.dart). Op de pc zoekt deze machine
+/// ([DownloadManager.vraagSoort]); op een toestel de pc (`/api/soort/vraag`). [album]: een hele plaat, één zoekopdracht.
+Future<void> _vraagSoort(BuildContext context, List<Track> nummers, Kopiesoort soort, {String? album}) async {
+  final lib = context.read<LibraryStore>();
+  final dm = lib.isRemote ? null : context.read<DownloadManager>();
+  final melder = ScaffoldMessenger.maybeOf(context);
+  String zin;
+  try {
+    if (lib.remote case final c?) {
+      final ids = [for (final t in nummers) if (lib.remoteTrackId(t.path) case final id?) id];
+      if (ids.isEmpty) {
+        zin = 'Deze nummers kent de pc niet meer';
+      } else {
+        final a = await c.ask('/api/soort/vraag', {'trackIds': ids, 'soort': soort.naam, if (album != null) 'album': album});
+        zin = '${a['zin'] ?? 'Gevraagd aan je pc'}';
+      }
+    } else {
+      zin = await dm!.vraagSoort(nummers, soort, album: album, gezag: lib.tagsVoorVervanger);
+    }
+  } catch (e) {
+    zin = 'Dat lukte niet: $e';
+  }
+  melder?.showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 6)));
+}
+
+/// De drie regels voor [nummers], zonder de soort die [heeft] al is.
+List<MenuRegel> _soortRegels(BuildContext context, List<Track> nummers, {String? album, Kopiesoort? heeft}) => [
+      for (final s in Kopiesoort.values)
+        if (s != heeft)
+          MenuRegel(
+              switch (s) {
+                Kopiesoort.studio => Icons.high_quality_rounded,
+                Kopiesoort.cd => Icons.album_rounded,
+                Kopiesoort.vinyl => Icons.radio_button_checked_rounded,
+              },
+              album == null ? 'Download in ${s.voluit}' : 'Hele plaat in ${s.voluit}',
+              () => _vraagSoort(context, nummers, s, album: album)),
+    ];
+
+/// Alle kopieën die je op deze plaat vroeg en die klaarstaan, houden — één voor één, zoals Deze houden.
+Future<void> _houdAlleKlaargezette(BuildContext context, List<Track> klaar) async {
+  final lib = context.read<LibraryStore>();
+  final speler = context.read<PlayerStore>();
+  final dm = lib.isRemote ? null : context.read<DownloadManager>();
+  final melder = ScaffoldMessenger.maybeOf(context);
+  var gehouden = 0;
+  for (final t in klaar) {
+    final los = speler.current?.path == t.path ? await speler.laatBestandLos() : null;
+    try {
+      if (lib.remote case final c?) {
+        final id = lib.remoteTrackId(t.path);
+        if (id == null) continue;
+        await c.ask('/api/twijfel', {'trackId': id, 'actie': 'vervang'});
+      } else {
+        await dm!.vervangDoorTwijfel(t.path);
+      }
+      gehouden++;
+    } catch (_) {/* de volgende */} finally {
+      if (los != null) await speler.heropenNaLoslaten(los);
+    }
+  }
+  if (lib.remote != null) await lib.loadRemote(quiet: true);
+  melder?.showSnackBar(SnackBar(
+      content: Text(gehouden == 1 ? 'Eén klaargezette kopie gehouden' : '$gehouden klaargezette kopieën gehouden')));
+}
+
+/// De nummers van [nummers] waarvoor een gevraagde kopie klaarstaat.
+List<Track> _klaargezet(List<Track> nummers) => [for (final t in nummers) if (twijfelVoor(t.path)?.soort != null) t];
+
+/// Waar de klaargezette kopie te horen is: op de pc het bestand zelf, op een toestel via de pc (`/kandidaat/`).
+String? _klaarAdres(BuildContext context, Track t, TwijfelInfo tw) {
+  final lib = context.read<LibraryStore>();
+  if (lib.isRemote) return 'http://$kPcHost/kandidaat/${tw.id}.${tw.ext}';
+  return context.read<DownloadManager>().twijfel?.van(t.path)?.kandidaat;
+}
+
+/// A/B in Nu speelt bij een klaargezette kopie (Saber, 25-10-2026: "A/B op dezelfde seconde"): A is je eigen kopie, B de
+/// kopie die je vroeg; wisselen houdt de plek. Kiezen opent Deze houden / Weg ([_twijfelMenu]).
+class _AbRegel extends StatelessWidget {
+  const _AbRegel({required this.track, required this.info, this.midden = true});
+  final Track track;
+  final TwijfelInfo info;
+  final bool midden;
+
+  @override
+  Widget build(BuildContext context) {
+    final speler = context.watch<PlayerStore>();
+    final b = speler.current?.path == track.path && speler.vergelijkBron != null;
+    Future<void> naar(bool naarB) async {
+      if (naarB == b) return;
+      final adres = naarB ? _klaarAdres(context, track, info) : null;
+      if (naarB && adres == null) return;
+      final ok = await speler.vergelijk(adres);
+      if (!ok && context.mounted) _srcToast(context, 'A/B werkt op dit toestel, niet terwijl een speaker speelt');
+    }
+
+    Widget kant(String tekst, bool aan, VoidCallback doe, Key sleutel) => aan
+        ? FilledButton.tonal(key: sleutel, onPressed: doe, child: Text(tekst))
+        : OutlinedButton(key: sleutel, onPressed: doe, child: Text(tekst));
+    return Wrap(
+      alignment: midden ? WrapAlignment.center : WrapAlignment.start,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 8,
+      runSpacing: 6,
+      children: [
+        kant('A · jouw kopie', !b, () => unawaited(naar(false)), const ValueKey('ab-a')),
+        kant('B · ${info.soort} klaar (${info.kwaliteit})', b, () => unawaited(naar(true)), const ValueKey('ab-b')),
+        TextButton(
+          key: const ValueKey('ab-kiezen'),
+          onPressed: () => _toonItemMenu(context, _twijfelMenu(context, track, info)),
+          child: const Text('Kiezen…'),
+        ),
+        if (misschienAndereOpname(info.score))
+          Text('misschien een andere opname', style: kTekstKlein.copyWith(color: leesbaar(const Color(0xFFE0A33A)))),
+      ],
+    );
+  }
+}
 
 ItemMenu _nummerMenu(BuildContext context, Track t,
     {ChoiceTrack? uitgave, String? albumMbid}) {
@@ -13621,6 +13866,10 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
         if (!isTv) MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
             () => openOp(nav, (_) => _bronnenPagina(t.title, vraag, tags: vervangTags))),
         MenuRegel(Icons.waves_rounded, 'Zoeken met TIDAL', () => openOp(nav, (_) => _tidalPagina(t.title, vraag))),
+      ],
+      // Zelf de soort kiezen (Saber, 25-10-2026): niets wordt vervangen, de kopie staat klaar tot je luistert en kiest.
+      _soortRegels(context, [t], heeft: soortVoor(t.path)?.soort),
+      [
         // Van "dit nummer" naar "dat bestand". De app weet het pad — het staat in `Track.path` en
         // wordt gebruikt om af te spelen, te taggen en te verplaatsen — maar er liep geen enkele weg
         // van het scherm naar de map, dus wie het bestand wilde zien moest zelf gaan zoeken.
@@ -13958,6 +14207,14 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
         if (!isTv) MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
             () => openOp(nav, (_) => _bronnenPagina(a.title, vraag))),
         MenuRegel(Icons.waves_rounded, 'Zoeken met TIDAL', () => openOp(nav, (_) => _tidalPagina(a.title, vraag))),
+      ],
+      // De hele plaat in een soort, en wat er al klaarstaat houden (Saber, 25-10-2026: "Per nummer + alles houden").
+      [
+        ..._soortRegels(context, nummers, album: a.title),
+        if (_klaargezet(nummers) case final k when k.isNotEmpty)
+          MenuRegel(Icons.done_all_rounded, 'Alle klaargezette houden (${k.length})', () => _houdAlleKlaargezette(context, k)),
+      ],
+      [
         // De map van de plaat, via het eerste nummer erin. Zelfde voorwaarde als bij een nummer: dit
         // hoort alleen te bestaan waar de bestanden werkelijk staan.
         if (!context.read<LibraryStore>().isRemote && kanBestandTonen && nummers.isNotEmpty)
@@ -16393,6 +16650,25 @@ Future<void> _zoekHires(BuildContext context, Album album) async {
               'bewezen beter is');
 }
 
+/// Het keuzemenu achter "Zoek hi-res" op een plaat: wat de app zelf kiest (de beste kwaliteit, vervangen alleen als het
+/// bewezen beter is), of zelf een soort voor de hele plaat — dan staat elke kopie eerst klaar ([_soortRegels]).
+ItemMenu _zoekHiresMenu(BuildContext context, Album album) => ItemMenu(
+      titel: 'Zoek hi-res',
+      ondertitel: album.title,
+      blokken: [
+        [
+          MenuRegel(Icons.auto_awesome_rounded, 'Beste kwaliteit (de app kiest)',
+              () => unawaited(_zoekHires(context, album))),
+        ],
+        _soortRegels(context, album.tracks, album: album.title),
+        if (_klaargezet(album.tracks) case final k when k.isNotEmpty)
+          [
+            MenuRegel(Icons.done_all_rounded, 'Alle klaargezette houden (${k.length})',
+                () => _houdAlleKlaargezette(context, k)),
+          ],
+      ],
+    );
+
 /// "Zoek hi-res" of 👍 vanaf een toestel: de pc zoekt (`/api/soulseek/zoek-beter`, server.dart). Saber,
 /// 21-10-2026: "Kan het dat de functie hi res zoeken, niet op de andere platformen staan?" — ze stond alleen
 /// waar het toestel zelf haalt. Geeft terug voor hoeveel nummers de pc een jacht begon, -1 als hij nog
@@ -17489,7 +17765,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   eersteRondje: gestapeld ? null : _eersteRondje,
                   alNoemd: gestapeld ? kopNamen : null,
                 ),
-          echtheid: gestapeld || t == null ? null : _echtheidMerk(t),
+          echtheid: gestapeld || t == null
+              ? null
+              : Row(mainAxisSize: MainAxisSize.min, children: [_echtheidMerk(t), _soortMerk(t)]),
           // Wat je NU hoort, en niet wat er op de schijf van de pc staat. Zie [_stroomKwaliteit]:
           // onderweg stuurt je pc een kleinere versie, en zolang de badge het bestand toonde was
           // er geen enkele manier om te zien dát dat gebeurde. Gestapeld staat hij boven de afspeelbalk.
@@ -17528,6 +17806,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
               textAlign: zij ? TextAlign.start : TextAlign.center,
               style: TextStyle(color: kGedempt, fontSize: 11.5)),
         ),
+      // Een kopie die je vroeg staat klaar (studio, cd of vinyl): A/B op dezelfde seconde, en kiezen.
+      ] else if ((t == null ? null : twijfelVoor(t.path)) case final tw? when tw.soort != null) ...[
+        const SizedBox(height: kRuimte8),
+        SizedBox(width: kolom, child: _AbRegel(track: t!, info: tw, midden: !zij)),
       ],
       // Geen uitleg meer over wat de pc onderweg stuurt ("Onderweg: je pc stuurt 16/44.1 in plaats van
       // 24/192 …"): het merk naast de artiest zegt al wat je hoort, en de zin nam twee regels (Saber,
@@ -17544,7 +17826,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           // de volumezin zelf staat daar en niet meer hier, en de streamknop staat ernaast in plaats van in
           // de bedieningsrij (Saber, 20-10-2026: "playbar is te vol zo").
           child: KwaliteitsRegel(
-            echtheid: _echtheidMerk(t),
+            echtheid: Row(mainAxisSize: MainAxisSize.min, children: [_echtheidMerk(t), _soortMerk(t)]),
             kwaliteit: t.sizeBytes > 0 ? _kwaliteitKnop(context, p, t, cast) : null,
             naast: const _SpeakerButton(iconSize: 22),
           ),
@@ -24005,7 +24287,7 @@ Future<void> _toonKwaliteitBlad(BuildContext context, Speelbron p, Track t, Spea
                     speaker: cast.isCasting ? cast.device?.name : null),
                 style: const TextStyle(fontSize: 13, height: 1.4)),
             kop('Het bestand'),
-            Row(children: [_qualityBadge(bestand), _echtheidMerk(t)]),
+            Row(children: [_qualityBadge(bestand), _echtheidMerk(t), _soortMerk(t)]),
             const SizedBox(height: 6),
             for (final r in bestandRegels(gemeten(t.path),
                 kopSampleRate: t.sampleRate, kopBits: t.bitsPerSample))

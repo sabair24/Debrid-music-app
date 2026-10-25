@@ -8,6 +8,7 @@ import 'package:debridmusic/ui/draaihoes.dart';
 import 'package:debridmusic/ui/kantel_hoes.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter_test/flutter_test.dart';
 
 Widget _doos(KantelHoes k, {bool minderBeweging = false}) => MaterialApp(
@@ -39,6 +40,33 @@ void main() {
     expect(_hoekVan(m).abs(), lessThanOrEqualTo(kKantelHoek + 1e-9));
     expect(_hoekVan(m).abs(), greaterThan(kKantelHoek * .99));
     expect(kKantelHoek, closeTo(6 * math.pi / 180, 1e-12));
+  });
+
+  testWidgets('DE VAL: een schuine hoes wordt getekend (3.9.628: z op nul = determinant 0 = niets)', (t) async {
+    // Gezien op de pc met 3.9.628: met de muis op de grote hoes was hij zwart. Flutter tekent het kind van een transform
+    // met determinant 0 helemaal niet (RenderTransform.paint), en "eerst plat" zette z op nul. De toets van de draai keek
+    // alleen naar de matrix. Hier wordt er echt getekend en op het midden gekeken.
+    expect(kantelMatrix(kKantelSelectie).determinant(), isNot(0));
+    final sleutel = GlobalKey();
+    await t.pumpWidget(MaterialApp(
+      home: Center(
+        child: RepaintBoundary(
+          key: sleutel,
+          child: const SizedBox.square(
+            dimension: 200,
+            child: KantelHoes(bron: KantelBron.selectie, aan: true, child: ColoredBox(color: Color(0xFFFF0000))),
+          ),
+        ),
+      ),
+    ));
+    await t.pumpAndSettle();
+    expect(find.byKey(const ValueKey('kantel-glans')), findsOneWidget, reason: 'hij staat schuin');
+    final rb = t.renderObject<RenderRepaintBoundary>(find.byKey(sleutel));
+    final beeld = (await t.runAsync(() => rb.toImage()))!;
+    final data = (await t.runAsync(() => beeld.toByteData()))!;
+    final o = (100 * beeld.width + 100) * 4;
+    expect(data.getUint8(o), greaterThan(150), reason: 'het midden van de hoes is rood, niet leeg');
+    expect(data.getUint8(o + 3), 255);
   });
 
   testWidgets('in rust niets: geen transform en geen glans', (t) async {

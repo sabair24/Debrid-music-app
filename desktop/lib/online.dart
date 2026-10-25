@@ -44,6 +44,8 @@ import 'torrent_hires.dart';
 import 'twijfel.dart';
 import 'prullenbak.dart' show heeftPrullenbak, naarPrullenbak;
 import 'cachesleutel.dart' show fnv1a;
+import 'kopiesoort.dart';
+import 'soortjacht.dart';
 import 'vinyl.dart' show isVinylRip, vinylAchteraan;
 import 'wav_naar_flac.dart' show wavNaarFlac;
 import 'tidaler.dart' show Tidaler, haalVanTidal, kTidalRadioPerUur, kiesTidalTreffers, zoekOpTidal;
@@ -2217,12 +2219,21 @@ class DownloadManager extends ChangeNotifier {
       await lijst.bewaar();
       return 'De twijfelkopie staat er niet meer';
     }
+    // Net losgelaten om te vervangen (Deze houden terwijl het speelde): even wachten tot niets het nog open heeft.
+    for (var i = 0; i < 25 && (speeltNu?.call(pad) ?? false); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
     if (speeltNu?.call(pad) ?? false) return 'Het nummer speelt nu — vervang het als het niet meer speelt';
     final gezag = g.gezag == null ? null : TrackTags.fromJson(g.gezag!);
     final naam = gezag == null ? baseName(pad) : '${gezag.artist} — ${gezag.title}';
     try {
+      // Een kopie die je zelf vroeg (studio, cd, vinyl): jouw keuze wint altijd, ook van een kopie die op papier beter
+      // is — daarvoor vroeg je hem ([placeFileDetailed] vervangAltijd).
       final uit = await placeFileDetailed(f, _downloadsRoot,
-          tags: gezag, staatAl: (artist, title, {int? seconds}) => pad, parkeerAltijd: true);
+          tags: gezag,
+          staatAl: (artist, title, {int? seconds}) => pad,
+          parkeerAltijd: true,
+          vervangAltijd: g.gevraagd);
       if (uit.how != Placement.moved) {
         // Verloren van wat er nu ligt: de kopie staat in _dubbel/binnengekomen, en het geval is voorbij.
         lijst.verwijder(pad);
@@ -2235,6 +2246,14 @@ class DownloadManager extends ChangeNotifier {
           await stampTags(File(uit.path), gezag);
         } catch (_) {/* het bestand staat goed; een mislukte tagschrijf maakt het niet stuk */}
       }
+      // De soort van wat er nu ligt. Gevraagd: jouw keuze — daarna waardeert de app alleen binnen die soort op.
+      if (g.soort case final s?) {
+        zetSoort(uit.path, s, gekozen: true);
+        if (_soortSleutel(uit.path) != _soortSleutel(pad)) zetSoort(pad, null);
+        if (soortvragen?.verwijder(pad) != null) await soortvragen!.bewaar();
+      } else {
+        _noteerSoort(uit.path, g.bronpad ?? g.bron);
+      }
     } catch (e) {
       return 'Vervangen lukte niet: $e';
     }
@@ -2244,7 +2263,9 @@ class DownloadManager extends ChangeNotifier {
     try {
       await onLibraryChanged();
     } catch (_) {}
-    return 'Vervangen door ${g.kwaliteit} — je vorige kopie staat in _dubbel';
+    return g.soort == null
+        ? 'Vervangen door ${g.kwaliteit} — je vorige kopie staat in _dubbel'
+        : 'Gehouden: ${g.soort!.naam} (${g.kwaliteit}) — je vorige kopie staat in _dubbel';
   }
 
   /// Wie een twijfelkopie naar de prullenbak brengt ([naarPrullenbak]); een toets zet er een nep in, zodat hij nooit
@@ -2270,7 +2291,13 @@ class DownloadManager extends ChangeNotifier {
         await File(g.kandidaat).delete();
       } catch (_) {}
     }
-    _log.line('"${baseName(pad)}": twijfelkopie weggegooid (${g.bron}) — je eigen kopie blijft');
+    _log.line('"${baseName(pad)}": ${g.soort == null ? 'twijfelkopie' : '${g.soort!.naam}-kopie'} weggegooid (${g.bron}) — je eigen kopie blijft');
+    // Gevraagd: de vraag blijft staan en zoekt meteen de volgende (Saber, 25-10-2026: "weg → volgende zoeken").
+    final v = g.soort == null ? null : soortvragen?.van(pad);
+    if (v != null && v.soort == g.soort) {
+      unawaited(_soortRonde([v]));
+      return 'Weggegooid — je eigen kopie blijft. Hij zoekt de volgende ${v.soort.naam}-kopie.';
+    }
     return 'Weggegooid — je eigen kopie blijft';
   }
 
@@ -2283,6 +2310,33 @@ class DownloadManager extends ChangeNotifier {
       await File(g.kandidaat).delete();
     } catch (_) {}
     await twijfel?.bewaar();
+  }
+
+  /// Welke soort [staged] is, uit zijn kop en [bronpad] (kopiesoort.dart).
+  static Kopiesoort? _soortVanBinnen(File staged, String bronpad) {
+    final kop = readFlacTags(staged);
+    return kopiesoortVan(
+        bronpad: bronpad,
+        bits: kop?.bitsPerSample ?? 0,
+        hz: kop?.sampleRate ?? 0,
+        verliesvrij: isVerliesvrij(soortVan(staged.path)));
+  }
+
+  /// Wat er net op [pad] landde, onthouden als studio, cd of vinyl (kopiesoort.dart). [bronpad]: waar hij vandaan kwam
+  /// (het pad bij de uploader, in de torrent, of "TIDAL …") — na het opbergen weet niets anders nog dat het een
+  /// vinylrip was. Diepte en bemonstering uit de kop. Een nieuwe kopie zonder soort wist die van de vorige.
+  void _noteerSoort(String pad, String bronpad, {bool gekozen = false}) {
+    try {
+      final kop = readFlacTags(File(pad));
+      zetSoort(
+          pad,
+          kopiesoortVan(
+              bronpad: bronpad,
+              bits: kop?.bitsPerSample ?? 0,
+              hz: kop?.sampleRate ?? 0,
+              verliesvrij: isVerliesvrij(soortVan(pad))),
+          gekozen: gekozen);
+    } catch (_) {/* dan geen label; het bestand staat goed */}
   }
 
   /// Mag dit binnengehaalde bestand blijven?
@@ -2363,7 +2417,7 @@ class DownloadManager extends ChangeNotifier {
 
     /// Shared success path: file the track away tidily (Albums/Singles/Compilaties per artist)
     /// before the rescan picks it up, so the library never sees the loose landing-zone copy.
-    Future<bool> succeed(SlskDone res) async {
+    Future<bool> succeed(SlskDone res, SoulseekFile from) async {
       final staged = File(res.path);
       var how = Placement.stuck;
       try {
@@ -2398,6 +2452,7 @@ class DownloadManager extends ChangeNotifier {
         // oordeel is meeverhuisd), bij `duplicate` de kopie die er al lag en gewonnen heeft.
         oordeelVanWatErLigt = gemeten(uit.path);
         padVanWatErLigt = uit.path;
+        if (how == Placement.moved) _noteerSoort(uit.path, from.filename);
         // En na afloop op het pad waar hij écht ligt. `_move` verhuist de markering mee, maar bij
         // `Placement.duplicate` is de bron verwijderd en is `uit.path` de kopie die bleef staan — die
         // hoort de bescherming niet zomaar te erven.
@@ -2641,7 +2696,7 @@ class DownloadManager extends ChangeNotifier {
     /// background. Reached from EVERY success path — the copy most worth upgrading is the MP3
     /// we only took because no lossless could be had.
     Future<bool> finish(SlskDone res, SoulseekFile from) async {
-      final ok = await succeed(res);
+      final ok = await succeed(res, from);
       // Bij een handmatige keuze: niets van dit alles. "Beter" is hier een ánder bestand, en de
       // gebruiker heeft juist gezegd dat hij DIT wil. Dagen later alsnog vervangen door een kopie die
       // hoger scoort is dezelfde overrule, alleen trager.
@@ -3664,7 +3719,7 @@ class DownloadManager extends ChangeNotifier {
           // naar `_dubbel` om plaats te maken voor de volgende vervalsing, de wens verviel, en
           // `hasLossless` telde de nieuwe mee. Stilletjes "opgelost", nog steeds nep.
           final staged = File(res.path);
-          final uitslag = await _keurVoorWens(w, staged, f.username);
+          final uitslag = await _keurVoorWens(w, staged, f.username, bronpad: f.filename);
           if (uitslag == _Wenskeuring.afgewezen) {
             betrapt.add(VasteBron(
                 username: f.username,
@@ -4008,7 +4063,7 @@ class DownloadManager extends ChangeNotifier {
                   trackNo: t.trackNo,
                   year: t.year,
                   seconds: t.duration?.inSeconds));
-      final uitslag = await _keurVoorWens(w, doel, bron, inJacht: false);
+      final uitslag = await _keurVoorWens(w, doel, bron, inJacht: false, bronpad: '${item.name}/${f.label}');
       if (uitslag != _Wenskeuring.opgeborgen) return false;
       laten = doel.existsSync();
       _log.line('"$naam": vervangen door de kopie uit $bron');
@@ -4032,7 +4087,10 @@ class DownloadManager extends ChangeNotifier {
   ///
   /// [inJacht]: meldt zich in de strook van de vervangjacht ([jacht]). De TIDAL-ronde over de bibliotheek
   /// ([haalBeterVanTidal]) doet dat niet: die is geen wens, en twintig afwijzingen per uur daar zeggen niets.
-  Future<_Wenskeuring> _keurVoorWens(LosslessWant w, File staged, String bron, {bool inJacht = true}) async {
+  ///
+  /// [bronpad]: waar hij vandaan kwam als pad (bij de uploader, in de torrent) — wat hem tot vinyl maakt ([_noteerSoort]).
+  Future<_Wenskeuring> _keurVoorWens(LosslessWant w, File staged, String bron,
+      {bool inJacht = true, String? bronpad}) async {
     final oordeel = await _meetEchtheid(staged);
     if (!magBlijven(oordeel)) {
       _log.line('   $bron: betrapt bij binnenkomst '
@@ -4071,6 +4129,12 @@ class DownloadManager extends ChangeNotifier {
     final bestaand = await _bereidVergelijkingVoor(
         staged,
         w.authority ?? TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0));
+    // Koos je zelf een soort voor dit nummer (kopiesoort.dart): alleen binnen die soort vervangen — ook TIDAL en torrents.
+    if (bestaand != null && !magVanzelf(bestaand, _soortVanBinnen(staged, bronpad ?? bron))) {
+      _log.line('   $bron: je koos ${gekozenSoort(bestaand)?.voluit} voor dit nummer, en dit is een andere soort — weggegooid');
+      await _discardStaged(staged.path);
+      return _Wenskeuring.afgewezen;
+    }
     final score = bestaand == null ? null : await _opnameScore(staged.path, bestaand);
     final opname = opnameOordeel(score);
     final andereOpname = bestaand != null && (opname == Opnameoordeel.andere || opname == Opnameoordeel.twijfel);
@@ -4108,6 +4172,7 @@ class DownloadManager extends ChangeNotifier {
       // stond er niet: `goed` werd gezet ongeacht de uitkomst, dus een kopie die verloor liet
       // de wens tóch vervallen.
       if (uit.how == Placement.duplicate) return _Wenskeuring.alAanwezig;
+      if (uit.how == Placement.moved) _noteerSoort(uit.path, bronpad ?? bron);
       if (bestaand != null) await _vergeetTwijfel(bestaand);
     } catch (_) {/* de scan vindt hem waar hij ook landde */}
     return _Wenskeuring.opgeborgen;
@@ -4340,6 +4405,7 @@ class DownloadManager extends ChangeNotifier {
           if (uit.how != Placement.stuck && File(uit.path).existsSync()) throw RadioAlGehad(uit.path);
           return null;
         }
+        _noteerSoort(uit.path, 'TIDAL $id');
         var gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);
         try {
           ({int? jaar, int nummer, int schijf})? plek;
@@ -4988,6 +5054,7 @@ class DownloadManager extends ChangeNotifier {
             }
             return _Uit.stop;
           }
+          _noteerSoort(uit.path, f.filename);
           // Pas NA het landen, en dit ontbrak op de hele downloadweg: `rebuildAlbums` groepeert op de
           // tags ván het bestand, dus zonder dit vult je raster zich met de rommelalbums van de
           // uploader.
@@ -5171,6 +5238,7 @@ class DownloadManager extends ChangeNotifier {
           final uit = await placeFileDetailed(File(res.path), _downloadsRoot,
               tags: w.authority, staatAl: mapVanBestaande);
           if (uit.how == Placement.moved) await onthoudVasteKeuze(uit.path);
+          if (uit.how == Placement.moved) _noteerSoort(uit.path, b.filename);
         } catch (_) {/* de scan vindt hem waar hij ook landde */}
         goed = true;
       });
@@ -5300,6 +5368,9 @@ class DownloadManager extends ChangeNotifier {
   /// (`finish` stopt bij een vaste keuze), en vervangen doet alleen wat bewezen beter is, nooit vinyl.
   void _naLandenHires(String? pad, TrackTags? gezag, SoulseekFile van) {
     if (pad == null || trackVoorPad == null) return;
+    // Koos je cd of vinyl voor dit nummer, dan zoekt de app vanzelf geen 24 bit (kopiesoort.dart).
+    final keuze = gekozenSoort(pad);
+    if (keuze != null && keuze != Kopiesoort.studio) return;
     if ((van.bitDepth ?? 0) > 16 || (van.sampleRate ?? 0) > 48000) return;
     final album = gezag?.album.trim() ?? '';
     final artiest = (gezag?.albumArtist?.trim().isNotEmpty ?? false) ? gezag!.albumArtist!.trim() : gezag?.artist.trim() ?? '';
@@ -5387,7 +5458,14 @@ class DownloadManager extends ChangeNotifier {
       // Een muur in het spectrum: dan ook echte cd-kopieën proberen — zie [beterDanWatErLigt].
       final o = gemeten(t.path);
       final verdacht = o != null && (o.band == Bandbreedte.vermoedelijk || o.band == Bandbreedte.afgekapt);
-      final beter = beterDanWatErLigt(t, hits, verdacht: verdacht);
+      // Koos je zelf een soort voor dit nummer (kopiesoort.dart), dan alleen kandidaten die die soort kunnen zijn.
+      final keuze = gekozenSoort(t.path);
+      final beter = [
+        for (final k in beterDanWatErLigt(t, hits, verdacht: verdacht))
+          if (keuze == null ||
+              kanSoortZijn(keuze, bronpad: k.filename, bits: k.bitDepth ?? 0, hz: k.sampleRate ?? 0) != false)
+            k
+      ];
       if (beter.isEmpty) {
         _log.line('"$naam": geen betere kopie dan wat je hebt');
         continue;
@@ -5416,6 +5494,350 @@ class DownloadManager extends ChangeNotifier {
   /// De TIDAL-ronde op jouw vraag ([TidalBeterRonde.nu]); gezet door main.dart op de pc met tidaler. Geeft de paden
   /// terug die TIDAL gaat nakijken.
   Set<String> Function(List<Track> nummers)? tidalNu;
+
+  // ── Studio, cd of vinyl op jouw vraag (kopiesoort.dart, soortjacht.dart; Saber, 25-10-2026) ───────────────────
+
+  /// De staande vragen; gezet door main.dart op de pc (samen met [twijfel]). Null: hier wordt niets gevraagd.
+  Soortvragen? soortvragen;
+
+  /// Een korte melding voor op het scherm ("cd klaar: …", "nog geen …"); main.dart toont hem.
+  final ValueNotifier<String?> klaarMelding = ValueNotifier<String?>(null);
+
+  /// Ook twee keer dezelfde zin is twee meldingen (een ValueNotifier meldt alleen een verandering).
+  void _meldKlaar(String zin) {
+    klaarMelding.value = null;
+    klaarMelding.value = zin;
+  }
+
+  /// Nummers waarvoor nu een ronde loopt: twee keer vragen is één ronde.
+  final Set<String> _soortBezig = {};
+  Timer? _soortKlok;
+
+  static String _soortSleutel(String pad) => pad.replaceAll('\\', '/').toLowerCase();
+
+  /// "Download in studio-kwaliteit / cd-kwaliteit / vinyl" voor [nummers]. Niets wordt vervangen: wat de jacht vindt,
+  /// staat klaar in [twijfelMap] (label "cd klaar") tot je luistert en kiest. Vindt hij niets, dan blijft de vraag
+  /// staan en zoekt hij later opnieuw ([soortvraagWacht]). Geeft de zin voor op het scherm.
+  Future<String> vraagSoort(List<Track> nummers, Kopiesoort soort,
+      {String? album, TrackTags Function(Track)? gezag}) async {
+    final vragen = soortvragen;
+    final lijst = twijfel;
+    if (vragen == null || lijst == null) return 'Dit kan alleen op de pc';
+    final te = [for (final t in nummers) if (t.artist.trim().isNotEmpty && t.title.trim().isNotEmpty) t];
+    if (te.isEmpty) return 'Geen nummer om voor te zoeken';
+    final nu = DateTime.now().millisecondsSinceEpoch;
+    final nieuw = <Soortvraag>[];
+    var klaar = 0;
+    for (final t in te) {
+      if (lijst.van(t.path)?.soort == soort) {
+        klaar++;
+        continue;
+      }
+      final v = Soortvraag(
+        pad: t.path,
+        soort: soort,
+        artiest: t.artist,
+        titel: t.title,
+        album: t.album,
+        seconden: t.duration?.inSeconds,
+        sindsMs: nu,
+        gezag: (gezag?.call(t) ??
+                TrackTags(
+                    title: t.title,
+                    artist: t.artist,
+                    album: t.album,
+                    trackNo: t.trackNo,
+                    year: t.year,
+                    seconds: t.duration?.inSeconds))
+            .toJson(),
+      );
+      vragen.zet(v);
+      nieuw.add(v);
+    }
+    await vragen.bewaar();
+    _log.line(nieuw.length == 1
+        ? '"${nieuw.single.artiest} — ${nieuw.single.titel}": ${soort.voluit} gevraagd'
+        : '${nieuw.length} nummers${album == null ? '' : ' van "$album"'}: ${soort.voluit} gevraagd');
+    if (nieuw.isNotEmpty) unawaited(_soortRonde(nieuw, album: nieuw.length > 1 ? album : null));
+    _planSoortKlok();
+    if (nieuw.isEmpty) return klaar == 1 ? 'Er staat al een ${soort.naam}-kopie klaar' : 'Er staan al ${soort.naam}-kopieën klaar';
+    final wat = nieuw.length == 1 ? '"${nieuw.single.titel}"' : '${nieuw.length} nummers';
+    return 'Zoekt ${soort.voluit} voor $wat. Vindt hij er een, dan staat er "${soort.naam} klaar" bij het nummer — '
+        'je vervangt pas als jij kiest.';
+  }
+
+  /// De vraag voor [pad] intrekken. Een kopie die al klaarstaat, blijft staan tot je kiest.
+  Future<String> trekSoortvraagIn(String pad) async {
+    final v = soortvragen?.verwijder(pad);
+    if (v == null) return 'Er liep geen vraag voor dit nummer';
+    await soortvragen!.bewaar();
+    _log.line('"${v.artiest} — ${v.titel}": vraag om ${v.soort.voluit} ingetrokken');
+    return 'Gestopt met zoeken naar ${v.soort.voluit}';
+  }
+
+  /// Elke tien minuten: de vragen die aan de beurt zijn ([Soortvraag.aanDeBeurt]), en die nog niets klaar hebben staan.
+  void _planSoortKlok() {
+    if (_soortKlok != null || soortvragen == null) return;
+    _soortKlok = Timer.periodic(const Duration(minutes: 10), (_) => unawaited(soortvragenNakijken()));
+  }
+
+  /// De vragen die aan de beurt zijn opnieuw laten zoeken. Ook bij het opstarten (main.dart).
+  Future<void> soortvragenNakijken() async {
+    final vragen = soortvragen;
+    final lijst = twijfel;
+    if (vragen == null || lijst == null) return;
+    _planSoortKlok();
+    final nu = DateTime.now();
+    final weg = [for (final v in vragen.alle) if (!File(v.pad).existsSync()) v];
+    for (final v in weg) {
+      vragen.verwijder(v.pad);
+      _log.line('"${v.artiest} — ${v.titel}": vraag om ${v.soort.voluit} vervallen — het nummer staat er niet meer');
+    }
+    if (weg.isNotEmpty) await vragen.bewaar();
+    final te = [
+      for (final v in vragen.alle)
+        if (lijst.van(v.pad)?.soort != v.soort && v.aanDeBeurt(nu) && !_soortBezig.contains(_soortSleutel(v.pad))) v
+    ];
+    if (te.isNotEmpty) await _soortRonde(te);
+  }
+
+  /// Eén ronde voor [te]: Soulseek (bij een plaat één zoekopdracht voor alle nummers), en anders TIDAL — cd en studio,
+  /// geen vinyl. Wat de keuring doorstaat, staat klaar ([_zetKlaar]); de vraag blijft staan tot je kiest.
+  Future<void> _soortRonde(List<Soortvraag> te, {String? album}) async {
+    final vragen = soortvragen;
+    if (vragen == null) return;
+    final open = [for (final v in te) if (_soortBezig.add(_soortSleutel(v.pad))) v];
+    if (open.isEmpty) return;
+    final nietGevonden = <String>[];
+    try {
+      List<SoulseekFile>? albumHits;
+      final plaat = album?.trim() ?? '';
+      if (soulseek.available && plaat.isNotEmpty && open.length > 1) {
+        try {
+          albumHits = await soulseek.search(zoekvraagVoorAlbum(open.first.artiest, plaat),
+              achtergrond: true, extra: zoekwoordenVoorSoort(open.first.soort));
+          _log.line('"${open.first.artiest} — $plaat": ${open.first.soort.voluit} zoeken — ${albumHits.length} treffers '
+              'voor ${open.length} nummers');
+        } catch (_) {/* dan per nummer */}
+      }
+      for (final v in open) {
+        if (!identical(vragen.van(v.pad), v)) continue; // ingetrokken of opnieuw gevraagd
+        var klaar = false;
+        if (soulseek.available) {
+          var hits = albumHits;
+          if (hits == null) {
+            try {
+              hits = await soulseek.search(zoekvraagVoorNummer(v.titel, artist: v.artiest),
+                  achtergrond: true, extra: zoekwoordenVoorSoort(v.soort));
+            } catch (_) {
+              hits = const [];
+            }
+          }
+          final kandidaten = _soortKandidaten(v, hits);
+          _log.line('"${v.artiest} — ${v.titel}": ${kandidaten.length} kandidaten voor ${v.soort.voluit}'
+              '${kandidaten.isEmpty ? '' : ', de eerste ${kandidaten.first.username} — ${baseName(kandidaten.first.filename)}'}');
+          if (kandidaten.isNotEmpty) klaar = await _soortVanSoulseek(v, kandidaten);
+        }
+        if (!klaar && identical(vragen.van(v.pad), v)) klaar = await _soortViaTidal(v);
+        v.rondes++;
+        v.laatsteMs = DateTime.now().millisecondsSinceEpoch;
+        if (!klaar) {
+          if (v.rondes == 1) nietGevonden.add(v.titel);
+          _log.line('"${v.artiest} — ${v.titel}": nog geen ${v.soort.voluit} — opnieuw over '
+              '${duurTekst(soortvraagWacht(v.rondes))}');
+        }
+      }
+      await vragen.bewaar();
+    } finally {
+      for (final v in open) {
+        _soortBezig.remove(_soortSleutel(v.pad));
+      }
+    }
+    if (nietGevonden.isNotEmpty) {
+      final s = open.first.soort;
+      _meldKlaar(nietGevonden.length == 1
+          ? 'Nog geen ${s.voluit} voor "${nietGevonden.single}" — de app blijft zoeken'
+          : 'Nog geen ${s.voluit} voor ${nietGevonden.length} nummers — de app blijft zoeken');
+    }
+  }
+
+  /// Wat in [hits] een kopie van de gevraagde soort kan zijn: dezelfde zeef als een wens ([kandidatenVoorWens]: titel,
+  /// lengte, verliesvrij, stereo, één per uploader) — bij vinyl met een ruimere lengte ([kVinylLengteSpeling]) — en dan
+  /// [kandidatenVoorSoort]: de soort, niet je eigen bestand, niet wat je weggooide.
+  List<SoulseekFile> _soortKandidaten(Soortvraag v, List<SoulseekFile> hits) {
+    final vinyl = v.soort == Kopiesoort.vinyl;
+    final w = LosslessWant(
+        artist: v.artiest,
+        title: v.titel,
+        album: v.album,
+        authority: TrackTags(
+            title: v.titel, artist: v.artiest, album: v.album, trackNo: 0, seconds: vinyl ? null : v.seconden));
+    var zeef = kandidatenVoorWens(w, hits);
+    final sec = v.seconden;
+    if (vinyl && sec != null) {
+      zeef = [for (final f in zeef) if (f.durationSec == null || (f.durationSec! - sec).abs() <= kVinylLengteSpeling) f];
+    }
+    final eigen = File(v.pad);
+    return kandidatenVoorSoort(v.soort, zeef,
+            eigenGrootte: eigen.existsSync() ? eigen.lengthSync() : 0,
+            afgewezen: twijfel?.afgewezenGroottes(v.pad) ?? const {})
+        .take(kSoortKandidaten)
+        .toList();
+  }
+
+  Future<bool> _soortVanSoulseek(Soortvraag v, List<SoulseekFile> kandidaten) async {
+    final job = DownloadJob('${v.artiest} — ${v.titel}');
+    final deadline = DateTime.now().add(_upgradeBudget);
+    var klaar = false;
+    try {
+      await soulseek.withSession((session) async {
+        for (final f in kandidaten) {
+          if (!identical(soortvragen?.van(v.pad), v)) return;
+          final left = deadline.difference(DateTime.now());
+          if (left <= const Duration(seconds: 30)) return;
+          final t0 = DateTime.now();
+          SlskResult res;
+          try {
+            res = await _rawTransfer(session, f, job, () {}, waitInQueue: true, maxWait: left);
+          } catch (_) {
+            continue;
+          }
+          _log.line('   ${f.username}: ${_uitkomst(res)}  na ${_kort(DateTime.now().difference(t0))}');
+          if (res is! SlskDone) continue;
+          if (await _keurVoorSoort(v, File(res.path), 'Soulseek ${f.username}', f.filename)) {
+            klaar = true;
+            return;
+          }
+        }
+      });
+    } catch (_) {/* geen sessie, geen net: de vraag blijft staan */}
+    return klaar;
+  }
+
+  /// TIDAL voor cd (LOSSLESS, 16/44,1) of studio (HIRES); nooit vinyl. Dezelfde keuring als van Soulseek.
+  Future<bool> _soortViaTidal(Soortvraag v) async {
+    if (v.soort == Kopiesoort.vinyl || Tidaler.pad == null) return false;
+    final treffers = await zoekOpTidal(zoekvraagVoorNummer(v.titel, artist: v.artiest));
+    if (treffers == null) return false;
+    final ids = kiesTidalTreffers(treffers, artiest: v.artiest, titel: v.titel);
+    for (final id in ids.take(2)) {
+      if (!identical(soortvragen?.van(v.pad), v)) return false;
+      final map = keuringsmapVoor('tidal-soort-$id');
+      try {
+        final r = await haalVanTidal(
+            doel: 'track/$id', map: map.path, kwaliteit: v.soort == Kopiesoort.cd ? 'high' : 'max');
+        if (r.fout != null) {
+          _log.line('   TIDAL $id: mislukt: ${r.fout!.split('\n').last}');
+          continue;
+        }
+        final binnen = <File>[];
+        await for (final e in map.list(recursive: true, followLinks: false)) {
+          if (e is File && isVerliesvrij(soortVan(e.path))) binnen.add(e);
+        }
+        if (binnen.length != 1) continue;
+        if (await _keurVoorSoort(v, binnen.single, 'TIDAL $id', 'TIDAL $id')) return true;
+      } catch (e) {
+        _log.line('   TIDAL $id: $e');
+      } finally {
+        try {
+          if (map.existsSync()) await map.delete(recursive: true);
+        } catch (_) {/* de volgende start ruimt het op */}
+        _geefKeuringsmapVrij(map);
+      }
+    }
+    return false;
+  }
+
+  /// De keuring van een kandidaat voor een gevraagde soort. Niet "bewezen beter" (jij kiest de soort, ook als je huidige
+  /// kopie op papier hoger staat), wel: echt, de gevraagde soort volgens zijn kop en zijn bron, ongeveer even lang, en
+  /// dezelfde opname — vanaf [kTwijfelVanaf] mag hij klaarstaan, daaronder (live, remix) nooit. Waar als hij klaarstaat;
+  /// anders is [staged] weggegooid.
+  Future<bool> _keurVoorSoort(Soortvraag v, File staged, String bron, String bronpad) async {
+    final naam = '${v.artiest} — ${v.titel}';
+    Future<bool> weg(String waarom) async {
+      _log.line('   $bron: $waarom — weggegooid, volgende kandidaat');
+      await _discardStaged(staged.path);
+      return false;
+    }
+
+    if (twijfel == null || !File(v.pad).existsSync()) return weg('het nummer staat er niet meer');
+    final oordeel = await _meetEchtheid(staged);
+    if (!magBlijven(oordeel)) return weg('betrapt (${waarom(oordeel!)})');
+    final kop = readFlacTags(staged);
+    final soort = kopiesoortVan(
+        bronpad: bronpad,
+        bits: kop?.bitsPerSample ?? 0,
+        hz: kop?.sampleRate ?? 0,
+        verliesvrij: isVerliesvrij(soortVan(staged.path)));
+    if (soort != v.soort) return weg('geen ${v.soort.voluit} maar ${soort?.voluit ?? kwaliteitZin(kwaliteitVan(staged))}');
+    final lengte = _duurVan(staged.path) ?? gedecodeerdeLengte(staged.path)?.round();
+    final score = await _opnameScore(staged.path, v.pad);
+    final nee = waaromNietKlaar(
+        gevraagd: v.soort, binnen: soort, lengte: lengte, seconden: v.seconden, score: score, drempel: kTwijfelVanaf);
+    if (nee != null) return weg(nee);
+    final ok = await _zetKlaar(v, staged, bron, bronpad, score ?? 0);
+    if (ok) {
+      final let = misschienAndereOpname(score ?? 0) ? ' — misschien een andere opname' : '';
+      _meldKlaar('${v.soort.naam} klaar: $naam$let');
+    }
+    return ok;
+  }
+
+  @visibleForTesting
+  Future<bool> zetKlaarVoorToets(Soortvraag v, File staged, String bron, String bronpad, double score) =>
+      _zetKlaar(v, staged, bron, bronpad, score);
+
+  /// [staged] in [twijfelMap] zetten als de klaargezette kopie voor [v]. Eén kandidaat per nummer: wat er voor dit
+  /// nummer wachtte (een twijfelgeval van de app, of een andere soort) gaat weg.
+  Future<bool> _zetKlaar(Soortvraag v, File staged, String bron, String bronpad, double score) async {
+    final lijst = twijfel!;
+    final kop = readFlacTags(staged);
+    final formaat = soortVan(staged.path).toUpperCase();
+    final kwaliteit = kop == null || kop.bitsPerSample <= 0
+        ? formaat
+        : '$formaat ${kop.bitsPerSample}/${(kop.sampleRate / 1000).toStringAsFixed(1).replaceAll('.0', '').replaceAll('.', ',')}';
+    final grootte = staged.lengthSync();
+    final id = fnv1a('${v.pad.toLowerCase()}|${v.soort.naam}|${DateTime.now().microsecondsSinceEpoch}');
+    final punt = staged.path.lastIndexOf('.');
+    final ext = punt < 0 ? '' : staged.path.substring(punt).toLowerCase();
+    final sep = Platform.pathSeparator;
+    final doel = File('$_downloadsRoot$sep$twijfelMap$sep$id$ext');
+    String bewaard;
+    try {
+      await doel.parent.create(recursive: true);
+      bewaard = await moveWithRetry(staged, doel);
+    } catch (e) {
+      _log.line('   $bron: kopie niet klaar te zetten ($e) — weggegooid');
+      await _discardStaged(staged.path);
+      return false;
+    }
+    try {
+      await staged.parent.delete();
+    } catch (_) {/* de map houdt nog iets vast */}
+    final oud = lijst.verwijder(v.pad);
+    if (oud != null) {
+      try {
+        await File(oud.kandidaat).delete();
+      } catch (_) {}
+    }
+    lijst.zet(Twijfelgeval(
+      id: id,
+      pad: v.pad,
+      kandidaat: bewaard,
+      bron: bron,
+      score: score,
+      kwaliteit: kwaliteit,
+      ms: DateTime.now().millisecondsSinceEpoch,
+      grootte: grootte,
+      gezag: v.gezag,
+      soort: v.soort,
+      bronpad: bronpad,
+    ));
+    await lijst.bewaar();
+    _log.line('"${v.artiest} — ${v.titel}": ${v.soort.naam.toUpperCase()} KLAAR — $bron ($kwaliteit, vingerafdruk '
+        '${score.toStringAsFixed(2).replaceAll('.', ',')}): wacht tot je luistert en kiest');
+    return true;
+  }
 
   /// Queue a background hunt for a better copy of a track you can already play.
   ///
@@ -5512,6 +5934,12 @@ class DownloadManager extends ChangeNotifier {
             // dat verkeerd om: een opgeschaalde of uit mp3 omgezette kopie is juist GROTER dan het
             // origineel, dus de jacht op iets beters kon de betere kopie weggooien.
             final bestaand = await _bereidVergelijkingVoor(staged, job.authority);
+            if (bestaand != null && !magVanzelf(bestaand, _soortVanBinnen(staged, f.filename))) {
+              _log.line('   ${job.name}: je koos ${gekozenSoort(bestaand)?.voluit} voor dit nummer, en dit is een andere soort — '
+                  'weggegooid');
+              await _discardStaged(staged.path);
+              continue;
+            }
             final score = bestaand == null ? null : await _opnameScore(staged.path, bestaand);
             final opname = opnameOordeel(score);
             // Klinkt bewezen beter, maar de vingerafdruk twijfelt: aanbieden in plaats van weggooien (twijfel.dart).
@@ -5544,6 +5972,7 @@ class DownloadManager extends ChangeNotifier {
                 await stampTags(File(uit.path), gezag);
               } catch (_) {/* het bestand staat goed; een mislukte tagschrijf maakt het niet stuk */}
             }
+            if (how == Placement.moved) _noteerSoort(uit.path, f.filename);
             if (how == Placement.moved && bestaand != null) await _vergeetTwijfel(bestaand);
           } catch (_) {/* the scan still finds it wherever it landed */}
           if (how == Placement.duplicate) {

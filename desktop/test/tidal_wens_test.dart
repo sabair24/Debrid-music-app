@@ -133,7 +133,8 @@ void main() {
     test('wat van TIDAL komt, gaat door dezelfde keuring als wat van Soulseek komt', () {
       expect(
         lijf('  Future<bool> _chaseWant(LosslessWant w) async {'),
-        contains('final uitslag = await _keurVoorWens(w, staged, f.username);'),
+        // Sinds 25-10-2026 met het pad bij de uploader: dat maakt hem tot vinyl (kopiesoort.dart).
+        contains('final uitslag = await _keurVoorWens(w, staged, f.username, bronpad: f.filename);'),
       );
       final tidal = lijf('  Future<bool> _wensViaTidal(');
       expect(tidal, contains("await _keurVoorWens(w, binnen.single, 'TIDAL \$id');"));

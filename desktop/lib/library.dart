@@ -38,7 +38,8 @@ import 'luidheid_winkel.dart' show onthoudLuidheidVanPc, zetLuidheidStatusVanPc;
 import 'organize.dart';
 import 'settings.dart';
 import 'vaste_keuze.dart';
-import 'twijfel.dart' show twijfelMap, zetTwijfelVanPc;
+import 'twijfel.dart' show twijfelMap, twijfelsVanPcGelezen, zetTwijfelVanPc;
+import 'kopiesoort.dart' show kopiesoortUit, zetSoortVanPc;
 import 'paths.dart';
 import 'artwork.dart';
 
@@ -3187,6 +3188,8 @@ class LibraryStore extends ChangeNotifier {
       tracks.add(t);
       byAlbum.putIfAbsent(dto.albumId, () => []).add(t);
     }
+    // Vanaf de tweede catalogus meldt een nieuwe klaargezette kopie zich (twijfel.dart, [klaarVanPc]).
+    twijfelsVanPcGelezen();
 
     _rebuildCanonicalArtists();
 
@@ -3414,10 +3417,14 @@ class LibraryStore extends ChangeNotifier {
     }
     // En of je dit bestand zelf koos: de bescherming staat op de pc. Zie [TrackDto.vast].
     zetVasteKeuzeVanPc(pad, d.vast);
+    // Studio, cd of vinyl (kopiesoort.dart), zoals de pc het weet.
+    final soort = kopiesoortUit(d.soort);
+    zetSoortVanPc(pad, soort == null ? null : (soort: soort, gekozen: d.soortGekozen));
     // Een twijfelkopie die op de pc op jouw keuze wacht (twijfel.dart), onder de naam die het nummer hier heeft.
     final tw = d.twijfel;
     zetTwijfelVanPc(
         pad,
+        naam: '${d.artistName} — ${d.title}',
         tw == null || tw['id'] is! String
             ? null
             : (
@@ -3426,6 +3433,7 @@ class LibraryStore extends ChangeNotifier {
                 score: (tw['score'] as num?)?.toDouble() ?? 0,
                 kwaliteit: '${tw['kwaliteit'] ?? ''}',
                 ext: '${tw['ext'] ?? 'flac'}',
+                soort: tw['soort'] is String ? tw['soort'] as String : null,
               ));
     // Gelijk volume: de meting van de pc, onder dezelfde sleutel (grootte|tijd) als op de pc — het
     // Track hier krijgt die twee uit deze DTO. Zie luidheid_winkel.dart.

@@ -15,6 +15,7 @@ import 'echtheid_oordelen.dart';
 import 'integriteit.dart';
 import 'keuring.dart';
 import 'paths.dart' show keuringMap, torrentWerkMap;
+import 'kopiesoort.dart' show herNoemSoort;
 import 'vaste_keuze.dart';
 import 'wavpack_kop.dart' show readWvKop;
 
@@ -1068,7 +1069,8 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
     TrackTags? tags,
     String? Function(String artist, String title, {int? seconds})? staatAl,
     bool parkeerAltijd = false,
-    bool? parkeerBinnenkomend}) async {
+    bool? parkeerBinnenkomend,
+    bool vervangAltijd = false}) async {
   final t = tags ?? readTags(src);
   if (t == null) return PlaceOutcome(src.path, Placement.stuck);
   final base = src.uri.pathSegments.last;
@@ -1117,7 +1119,10 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
   try {
     await dest.parent.create(recursive: true);
 
-    bool newWins(File rival) => firstIsBetter(src, rival);
+    // [vervangAltijd]: jij koos deze kopie ("Deze houden" bij een klaargezette studio-, cd- of vinylkopie, Saber
+    // 25-10-2026) — dan wint hij, ook van een kopie die op papier beter is (een vinylrip van 24/96 tegen jouw cd), en
+    // telt een andere lengte niet: een vinylrip duurt vaak een paar seconden langer.
+    bool newWins(File rival) => vervangAltijd || firstIsBetter(src, rival);
 
     // With an authority the destination path was built from the official tags, so it IS this
     // track's identity — a file already there can only be the same song, a better copy the sweep
@@ -1140,8 +1145,8 @@ Future<PlaceOutcome> placeFileDetailed(File src, String root,
     // Alleen als BEIDE kanten een leesbare looptijd hebben en die duidelijk verschillen. Kan er niet
     // gemeten worden, dan blijft alles zoals het was — liever het oude gedrag dan een gok.
     bool same(File a, File b) =>
-        !_duidelijkAndereLengte(a, b) &&
-        (t.isAuthoritative || elders != null || _sameRecording(a, b));
+        vervangAltijd ||
+        (!_duidelijkAndereLengte(a, b) && (t.isAuthoritative || elders != null || _sameRecording(a, b)));
 
     final parkeerIn = elders != null || parkeerAltijd ? '$root${Platform.pathSeparator}$parkeerMap' : null;
     // Het binnenkomende dat verliest: weg op de downloadweg, opzij als het al van jou was.
@@ -2022,6 +2027,7 @@ Future<String> _install(File src, File dest, List<File> losers, {required String
     // tijdelijke `.incoming` blijven staan, waar hij niets meer beschermt. Zelfde voor de meting.
     herNoemVasteKeuze(landed, at);
     herNoemOordeel(landed, at);
+    herNoemSoort(landed, at);
     return at;
   } catch (_) {
     // Het hernoemen lukte niet (een virusscanner, een speler die het oude bestand vasthield). Dan via
@@ -2118,6 +2124,8 @@ Future<String> _move(File src, File dest) async {
   // zit: één doorgang die niet te vergeten is.
   void volgMee(String naar) {
     herNoemVasteKeuze(src.path, naar);
+    // En studio, cd of vinyl (kopiesoort.dart): na het opbergen weet niets anders nog waar hij vandaan kwam.
+    herNoemSoort(src.path, naar);
     // De meting hangt ook aan het pad, en om precies dezelfde reden: zonder dit geldt een
     // echtheidsmeting maar één keer, want het filen verplaatst het bestand.
     herNoemOordeel(src.path, naar);

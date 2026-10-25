@@ -11,6 +11,7 @@ import '../models.dart';
 import '../organize.dart';
 import '../vaste_keuze.dart';
 import '../twijfel.dart' show twijfelUitgave, twijfelVoor;
+import '../kopiesoort.dart' show KopiesoortTekst, soortUitgave, soortVoor;
 import 'dtos.dart';
 import 'ids.dart';
 
@@ -83,6 +84,8 @@ class LanCatalog {
     luidheidUitgave.addListener(_markDirty);
     // Een twijfelgeval verandert geen enkel nummer, maar wel wat een toestel bij het nummer toont.
     twijfelUitgave.addListener(_markDirty);
+    // Net zo: studio, cd of vinyl (kopiesoort.dart).
+    soortUitgave.addListener(_markDirty);
   }
 
   final LibraryStore library;
@@ -137,6 +140,7 @@ class LanCatalog {
     library.removeListener(_markDirty);
     luidheidUitgave.removeListener(_markDirty);
     twijfelUitgave.removeListener(_markDirty);
+    soortUitgave.removeListener(_markDirty);
   }
 
   CatalogSnapshot snapshot() {
@@ -277,7 +281,14 @@ class LanCatalog {
           rij: rijen[t.path],
           // Een twijfelkopie die op jouw keuze wacht (twijfel.dart). Telt mee in de vingerafdruk hieronder.
           twijfel: switch (twijfelVoor(t.path)) {
-            final i? => {'id': i.id, 'bron': i.bron, 'score': i.score, 'kwaliteit': i.kwaliteit, 'ext': i.ext},
+            final i? => {
+                'id': i.id,
+                'bron': i.bron,
+                'score': i.score,
+                'kwaliteit': i.kwaliteit,
+                'ext': i.ext,
+                if (i.soort != null) 'soort': i.soort,
+              },
             null => null,
           },
           // Gelijk volume: wat de pc GEPUBLICEERD heeft, niet de levende meting — anders zou elke
@@ -285,6 +296,9 @@ class LanCatalog {
           // hele catalogus opnieuw. Zie luidheid_winkel.dart.
           luid: gepubliceerdeLuidheid(t),
           vast: isVasteKeuze(t.path),
+          // Studio, cd of vinyl, en of je die zelf koos (kopiesoort.dart). Telt mee in de vingerafdruk hieronder.
+          soort: soortVoor(t.path)?.soort.naam,
+          soortGekozen: soortVoor(t.path)?.gekozen ?? false,
         ));
       }
     }
@@ -373,6 +387,7 @@ class LanCatalog {
         // de hele bedoeling ervan.
         ..add(t.rij ?? '');
       if (t.twijfel != null) fingerprint.add('T${t.twijfel!['id']}');
+      if (t.soort != null) fingerprint.add('S${t.soort}${t.soortGekozen ? '!' : ''}');
       // De luidheid alleen als hij er is: een bibliotheek zonder metingen (of een pc zonder winkel,
       // zoals in de toetsen) houdt dan exact dezelfde ETag als vóór deze functie.
       if (t.luid != null) fingerprint.add('L${jsonEncode(t.luid)}');

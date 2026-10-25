@@ -27,6 +27,7 @@ import '../paths.dart';
 import '../pc_model.dart' show Modelvragen;
 import '../prullenbak.dart' show heeftPrullenbak;
 import '../schudlog.dart' show kSchudLogBytes, kSchudPerZending;
+import '../kopiesoort.dart' show kopiesoortUit;
 import '../warm_log.dart';
 import '../settings.dart';
 import '../soulseek.dart';
@@ -90,6 +91,7 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
     '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd', '/api/zone/transfer', '/api/tijd',
     '/api/twijfel',
+    '/api/soort/vraag',
     '/api/releaseart',
   };
   // TIDAL ook (Saber, 23-10-2026: "ik moet ook buitenshuis kunnen zoeken en downloaden"); ophalen telt mee in het
@@ -1151,6 +1153,8 @@ class LanServer {
         return _soulseekZoekBeter(req);
       case '/api/twijfel':
         return _twijfel(req);
+      case '/api/soort/vraag':
+        return _soortVraag(req);
       case '/api/tidal/zoek':
         return _tidal(req, 'zoek');
       case '/api/tidal/album':
@@ -2157,6 +2161,28 @@ class LanServer {
       _ => null,
     };
     if (zin == null) return _json(req.response, {'error': 'Onbekende keuze.'}, status: HttpStatus.badRequest);
+    return _json(req.response, {'zin': zin});
+  }
+
+  /// "Download in studio-kwaliteit / cd-kwaliteit / vinyl" vanaf een toestel: {trackIds, soort, album?}. De pc zoekt
+  /// ([DownloadManager.vraagSoort]) en zet klaar; niets wordt vervangen voor je kiest. Antwoord: {zin}.
+  Future<void> _soortVraag(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final soort = kopiesoortUit(body['soort']);
+    if (soort == null) return _json(req.response, {'error': 'Onbekende soort.'}, status: HttpStatus.badRequest);
+    final nummers = <Track>[
+      for (final id in (body['trackIds'] as List? ?? const []))
+        if (id is String)
+          if (catalog.track(id) case final t?) t,
+    ];
+    if (nummers.isEmpty) return _json(req.response, {'zin': 'Deze nummers kent de pc niet.'});
+    final teVeel = _quotum(req, kQuotumDownloads);
+    if (teVeel != null) return _teVeel(req, teVeel);
+    final album = body['album'] is String ? body['album'] as String : null;
+    final zin = await manager.vraagSoort(nummers, soort, album: album, gezag: library.tagsVoorVervanger);
     return _json(req.response, {'zin': zin});
   }
 

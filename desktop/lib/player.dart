@@ -2409,6 +2409,89 @@ class PlayerStore extends ChangeNotifier
     notifyListeners();
   }
 
+  /// A/B: de bron van het spelende nummer als dat niet het nummer zelf is, maar een klaargezette kopie ([vergelijk]).
+  String? get vergelijkBron {
+    final v = _vergelijk;
+    return v != null && v.pad == current?.path ? v.adres : null;
+  }
+
+  ({String pad, String adres})? _vergelijk;
+
+  /// Het bestand van het spelende nummer is losgelaten ([laatBestandLos]): niets heeft het nu open.
+  bool get losgelaten => _losgelaten && current?.path == _losVoor;
+  bool _losgelaten = false;
+  String? _losVoor;
+
+  /// A/B (Saber, 25-10-2026: "A/B op dezelfde seconde"): het spelende nummer verder op [adres] — B, een klaargezette
+  /// studio-, cd- of vinylkopie (op de pc een pad, op een toestel `/kandidaat/` op de pc) — of met null weer op het
+  /// nummer zelf (A). Op dezelfde seconde, spelend als het speelde. Niet als een speaker de muziek heeft: die speelt
+  /// zijn eigen rij. Geeft terug of het lukte.
+  Future<bool> vergelijk(String? adres) async {
+    final t = current;
+    if (t == null || _bijSpeaker != null) return false;
+    _vergelijk = adres == null ? null : (pad: t.path, adres: adres);
+    _log?.line('A/B: ${adres == null ? 'A (het nummer zelf)' : 'B ($adres)'} op $position — ${t.title}');
+    await _openOpZelfdePlek(t, adres ?? t.path, plek: position, spelen: playing);
+    return true;
+  }
+
+  /// Laat het bestand los dat het spelende nummer nu open heeft (A of B): "Deze houden" vervangt het nummer, en Windows
+  /// vervangt of verplaatst geen bestand dat open staat. Daarna [heropenNaLoslaten] op dezelfde plek.
+  Future<({Duration plek, bool speelde})> laatBestandLos() async {
+    final plek = position, speelde = playing;
+    _vergelijk = null;
+    _losgelaten = true;
+    _losVoor = current?.path;
+    await _player.stop();
+    notifyListeners();
+    return (plek: plek, speelde: speelde);
+  }
+
+  /// Na [laatBestandLos]: het nummer opnieuw open, op [plek] — nu het bestand dat je hield. [pad]: waar het nu staat,
+  /// als dat veranderde (een andere extensie).
+  Future<void> heropenNaLoslaten(({Duration plek, bool speelde}) stand, {String? pad}) async {
+    final t = current;
+    _losgelaten = false;
+    if (t == null) return;
+    var nu = t;
+    if (pad != null && pad != t.path) {
+      nu = trackResolver?.call(pad) ?? Track(path: pad, title: t.title, artist: t.artist, album: t.album);
+      if (radioMode) return; // de radio heeft zijn eigen rij; daar alleen het volgende nummer
+      final i = _order.indexWhere((x) => x.path == t.path);
+      if (i >= 0) _order[i] = nu;
+      final j = _original.indexWhere((x) => x.path == t.path);
+      if (j >= 0) _original[j] = nu;
+    }
+    await _openOpZelfdePlek(nu, nu.path, plek: stand.plek, spelen: stand.speelde);
+  }
+
+  /// [t] opnieuw open met de bron [pad], op [plek]: gelijk volume zoals het liep (zelfde nummer), en springen pas als
+  /// het bestand echt loopt — zie [_hervatOpDezelfdePlek] voor waarom.
+  Future<void> _openOpZelfdePlek(Track t, String pad, {required Duration plek, required bool spelen}) async {
+    try {
+      final bron = _bron(pad);
+      final lopend = luidheidToegepast ?? Bijstelling(_luidheidGezet.isNaN ? 0 : _luidheidGezet, Bijstelbron.nummer);
+      _onthoudLuidheid(bron, lopend, t.title);
+      await _player.open(Media(bron), play: spelen);
+      notifyListeners();
+      if (plek <= Duration.zero) return;
+      for (var i = 0; i < 50 && duration <= Duration.zero; i++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        if (current?.path != t.path) return;
+      }
+      for (var poging = 0; poging < 30; poging++) {
+        if (current?.path != t.path) return;
+        await _player.seek(plek);
+        await Future.delayed(const Duration(milliseconds: 150));
+        if ((position - plek).abs() < const Duration(seconds: 3)) break;
+      }
+      position = plek;
+      notifyListeners();
+    } catch (e) {
+      _log?.line('A/B OPENEN MISLUKT: $e');
+    }
+  }
+
   /// Play a remote URL (e.g. a resolved TorBox stream) as a one-item queue.
   ///
   /// [album]: waar het nummer op staat, als dat bekend is (▶ weet het) — dan zoekt Nu speelt al tijdens het
@@ -2776,6 +2859,9 @@ class PlayerStore extends ChangeNotifier
   Future<void> _openCurrent() async {
     final t = current;
     if (t == null) return;
+    // Een nieuw nummer: geen A/B meer ([vergelijk]), en niets losgelaten ([laatBestandLos]).
+    _vergelijk = null;
+    _losgelaten = false;
     // Een nieuw nummer verdient zijn eigen geduld: de klacht van het vorige zegt niets over dit.
     _wacht.reset();
     _meldStilstand(null);
