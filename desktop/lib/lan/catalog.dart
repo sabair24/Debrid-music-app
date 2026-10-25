@@ -222,6 +222,7 @@ class LanCatalog {
         discogsRelease: library.pinnedRelease(album),
         mbid: library.pinnedMbid(album),
         merged: library.isMerged(album),
+        gesplitst: library.isGesplitst(album),
         styles: library.stylesOf(album),
         // Alleen een BEWUSTE keuze krijgt een merkteken: een hoes die de eigenaar zelf gecorrigeerd
         // heeft, of die bij een geïdentificeerde persing hoort. De automatisch verrijkte hoes
@@ -338,6 +339,7 @@ class LanCatalog {
         ..add(a.mbid ?? '')
         // Merging, and what a record sounds like, change no track either.
         ..add(a.merged ? 'm' : '')
+        ..add(a.gesplitst ? 'j' : '')
         ..add(a.styles.join(','))
         // En de hoes die de eigenaar zelf koos. De waarschuwing hierboven blijft staan — daarom
         // draagt dit veld ALLEEN een bewuste keuze en niet de automatische verrijking. Zonder deze

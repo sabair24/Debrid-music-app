@@ -1420,6 +1420,106 @@ class LibraryStore extends ChangeNotifier {
       ? (_remoteAlbums[a]?.merged ?? false)
       : _merged.contains('album::${artistKey(a.artist)}|${normKey(a.title)}');
 
+  // ── Scheiden per jaar ─────────────────────────────────────────────────────
+  // Twee platen met dezelfde naam (Seal 1991 en 1994, Peter Gabriel 1–4) zijn op titel één tegel. Vanzelf op jaar splitsen
+  // kan niet: GEMETEN op 25-10-2026 hebben 26 van de 892 albums in Sabers bibliotheek nummers met jaren die twee of meer
+  // uiteen liggen, en bijna allemaal is dat één plaat met rommelige jaartallen (Off The Wall 1979/1983, HIStory
+  // 1995/2018). Dus alleen als je het zelf vraagt (Saber, 25-10-2026: een knop "Scheiden per jaar"), en net als
+  // samenvoegen blijft het staan na een nieuwe scan.
+  final Set<String> _gesplitst = {};
+  File get _gesplitstFile => File('$_appDir${Platform.pathSeparator}split_albums.json');
+
+  Future<void> loadGesplitst() async {
+    try {
+      final f = _gesplitstFile;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString()) as List<dynamic>;
+      _gesplitst
+        ..clear()
+        ..addAll(j.map((e) => e.toString()));
+    } catch (_) {}
+  }
+
+  Future<void> _saveGesplitst() => _writeJson(_gesplitstFile, _gesplitst.toList());
+
+  String _plaatSleutel(Album a) => 'album::${artistKey(a.artist)}|${normKey(a.title)}';
+
+  /// Heeft de gebruiker deze plaat per jaar laten scheiden? Op een toestel komt het antwoord mee met de catalogus.
+  bool isGesplitst(Album a) =>
+      isRemote ? (_remoteAlbums[a]?.gesplitst ?? false) : _gesplitst.contains(_plaatSleutel(a));
+
+  /// Valt er per jaar te scheiden: nummers uit minstens twee jaren, nog niet gescheiden en niet samengevoegd.
+  bool kanScheidenPerJaar(Album a) =>
+      !a.isSingle &&
+      !isGesplitst(a) &&
+      !isMerged(a) &&
+      {for (final t in a.tracks) if ((t.year ?? 0) > 0) t.year}.length >= 2;
+
+  /// Scheid deze plaat per jaar: elk jaar een eigen tegel. En een jaar dat een map deelt met een ander jaar krijgt een
+  /// eigen map ([planScheidingMappen]): de albumgegevens staan per map (`.debridmusic-album.json`), en twee platen in één
+  /// map schrijven over elkaars briefje heen. Geeft terug hoeveel bestanden er verhuisden.
+  Future<int> scheidPerJaar(Album a) async {
+    if (isRemote) {
+      await _editOnPc({'op': 'splitYear', 'albumId': remoteAlbumId(a)});
+      return 0;
+    }
+    final sleutel = _plaatSleutel(a);
+    final alle = [...(editionsOfRecord(sleutel) ?? a.tracks)];
+    _merged.remove(sleutel);
+    _gesplitst.add(sleutel);
+    await _saveMerged();
+    await _saveGesplitst();
+    rebuildAlbums();
+    final plan = planScheidingMappen(alle, a.title);
+    final landed = plan.isEmpty ? const <String, String>{} : await _apply(plan);
+    if (landed.isNotEmpty) {
+      await saveCorrectionsNow();
+      await scan();
+    }
+    notifyListeners();
+    return landed.length;
+  }
+
+  /// Weer één plaat. De mappen blijven zoals ze zijn; "Uitgaves samenvoegen" brengt de bestanden weer bij elkaar.
+  Future<void> herenigJaren(Album a) async {
+    if (isRemote) return _editOnPc({'op': 'unsplitYear', 'albumId': remoteAlbumId(a)});
+    _gesplitst.remove(_plaatSleutel(a));
+    await _saveGesplitst();
+    rebuildAlbums();
+    notifyListeners();
+  }
+
+  /// Waar elk jaar heen gaat na [scheidPerJaar], zonder iets aan te raken. Per map blijft het jaar met de meeste nummers
+  /// staan (bij gelijkspel het vroegste); elk ander jaar in die map gaat naar een buurmap "<titel> (<jaar>)". Seal: Killer
+  /// (1991) blijft in "Seal", Kiss from a Rose (1994) gaat naar "Seal (1994)". Nummers zonder jaar blijven staan.
+  @visibleForTesting
+  static List<MovePlan> planScheidingMappen(List<Track> tracks, String titel) {
+    final sep = Platform.pathSeparator;
+    final perMap = <String, Map<int, List<Track>>>{};
+    for (final t in tracks) {
+      final j = t.year ?? 0;
+      if (j <= 0) continue;
+      ((perMap[File(t.path).parent.path] ??= {})[j] ??= []).add(t);
+    }
+    final uit = <MovePlan>[];
+    for (final e in perMap.entries) {
+      if (e.value.length < 2) continue;
+      final jaren = e.value.keys.toList()
+        ..sort((a, b) {
+          final n = e.value[b]!.length.compareTo(e.value[a]!.length);
+          return n != 0 ? n : a.compareTo(b);
+        });
+      final ouder = File(e.key).parent.path;
+      for (final j in jaren.skip(1)) {
+        final doel = '$ouder$sep${safeSeg('$titel ($j)')}';
+        for (final t in e.value[j]!) {
+          uit.add(MovePlan(t, t.path, '$doel$sep${File(t.path).uri.pathSegments.last}', MoveFate.moves));
+        }
+      }
+    }
+    return uit;
+  }
+
   /// The exact Discogs release the user pinned to this album, if they pinned one.
   ///
   /// Their choice is the source for everything after it — edition, label, catalogue number, back
@@ -2696,6 +2796,11 @@ class LibraryStore extends ChangeNotifier {
       _merged.add('album::$newKey');
       await _saveMerged();
     }
+    // En "Scheiden per jaar" net zo.
+    if (_gesplitst.remove('album::$oldKey')) {
+      _gesplitst.add('album::$newKey');
+      await _saveGesplitst();
+    }
 
     await CoverEnricher(settings).reKeyFixedCover(oldArtist, oldTitle, newArtist, newTitle);
   }
@@ -3075,6 +3180,7 @@ class LibraryStore extends ChangeNotifier {
         release: dto.discogsRelease,
         mbid: dto.mbid,
         merged: dto.merged,
+        gesplitst: dto.gesplitst,
         styles: dto.styles,
       );
       built.add(al);
@@ -3140,6 +3246,7 @@ class LibraryStore extends ChangeNotifier {
     int? release,
     String? mbid,
     bool merged,
+    bool gesplitst,
     List<String> styles
   })>
       _remoteAlbums = {};
@@ -3726,6 +3833,8 @@ class LibraryStore extends ChangeNotifier {
     final base = _basisSleutel(t);
     // The user's word beats the tags: a record they merged stays merged.
     if (_merged.contains(base)) return base;
+    // En een plaat die ze per jaar lieten scheiden, blijft gescheiden ([scheidPerJaar]).
+    if (_gesplitst.contains(base)) return '$base|j${t.year ?? 0}';
     return editionSplit(_byBase[base]) ? '$base|${t.trackTotal}' : base;
   }
 
