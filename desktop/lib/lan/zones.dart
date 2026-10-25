@@ -1085,8 +1085,9 @@ class ZoneRegister {
 
   /// Een venster op de wachtrij van een zone, rond het spelende nummer: [voor] ervoor en [na] erna. Een
   /// geschudde bibliotheek is dertigduizend ids; die horen niet bij elk nieuw nummer over mobiele data.
-  /// Null als de zone geen wachtrij meldt.
-  Map<String, dynamic>? rijVenster(String zoneId, {int voor = 100, int na = 400}) {
+  /// Null als de zone geen wachtrij meldt. [na] groeit als je in het paneel naar het einde scrolt
+  /// (`ZoneSpeler.meerHierna`).
+  Map<String, dynamic>? rijVenster(String zoneId, {int voor = 100, int na = kZoneRijNa}) {
     final List<String> rij;
     final int index;
     if (zoneId.startsWith('spk:')) {
@@ -1111,8 +1112,17 @@ class ZoneRegister {
   }
 }
 
+/// Hoeveel nummers ná het spelende het venster op de wachtrij van een zone eerst meegeeft.
+const kZoneRijNa = 400;
+
+/// Hoeveel er bij komen als je in het paneel het einde nadert.
+const kZoneRijStap = 400;
+
+/// Meer dan dit geeft de pc in één keer niet: ook een geschudde bibliotheek van dertigduizend past erin.
+const kZoneRijHoogstens = 50000;
+
 /// Het stuk van [rij] van [voor] plekken vóór [index] tot [na] erna, en waar het begint.
-({int van, List<String> rij}) rijVensterUit(List<String> rij, int index, {int voor = 100, int na = 400}) {
+({int van, List<String> rij}) rijVensterUit(List<String> rij, int index, {int voor = 100, int na = kZoneRijNa}) {
   if (rij.isEmpty) return (van: 0, rij: const []);
   final i = index.clamp(0, rij.length - 1);
   final van = (i - voor).clamp(0, rij.length);

@@ -224,6 +224,7 @@ import 'ui/tegel.dart';
 import 'ui/tegel_spiegel.dart';
 import 'ui/getekende_schijf.dart';
 import 'ui/glasproef.dart';
+import 'schudlog.dart' show SchudLogboek, SchudZender, kSchudLogBytes;
 import 'ui/kantel_hoes.dart';
 import 'meetronde.dart' show MeetBlok, MeetHaken, meetTel, meetrondeLoopt, voerMeetrondeUit, zonderVoorMeting;
 import 'ui/schijf_licht.dart';
@@ -1348,6 +1349,37 @@ Future<void> main() async {
     ).start();
   }
 
+  // Het schudlogboek (schudlog.dart; Saber, 25-10-2026: "hou vanaf nu ook een log bij van alle shuffels die ik doe van
+  // de hele bibliotheek, dan kunnen we oordelen wat goed gaat en wat niet"): op de pc rechtstreeks in schud.log, op een
+  // toestel in bundels naar de pc (/api/diag/schud), met de naam van het toestel ervoor. Alles op één plek.
+  {
+    final void Function(List<String> regels) schrijf;
+    if (mode.owner) {
+      final log = WarmLog('$logDir${Platform.pathSeparator}schud.log', maxBytes: kSchudLogBytes);
+      schrijf = (regels) {
+        for (final r in regels) {
+          log.line('[pc] $r');
+        }
+      };
+    } else {
+      final ik = thisDevice();
+      schrijf = SchudZender((regels) async {
+        final e = session.endpoint;
+        if (e == null) throw StateError('nog niet gekoppeld');
+        final c = RemoteClient(e, timeout: const Duration(seconds: 10));
+        try {
+          await c.ask('/api/diag/schud', {'toestel': warmteToestel(await ik), 'regels': regels});
+        } finally {
+          c.close();
+        }
+      }).voegToe;
+    }
+    final schudLog = SchudLogboek(
+        schrijf: schrijf, bibliotheek: () => library.tracks.length, speelstand: (t) => player.speelstandVan?.call(t));
+    player.bijSchudden = schudLog.geschud;
+    player.bijNummerVoorbij = schudLog.voorbij;
+  }
+
   // Wat er in de AUTO te bladeren valt. Dit is de enige plek waar de boom aan de echte bibliotheek
   // hangt; de boom zelf staat in auto_bladeren.dart en weet van niets.
   //
@@ -1581,8 +1613,8 @@ Future<void> main() async {
       stuur: (op) => stuurNaarZone(zone, op),
       // Een venster op haar wachtrij (stap 2.4): op de pc uit zijn eigen server, op een toestel gevraagd.
       haalRij: mode.owner
-          ? () async => sharing.server?.zones.rijVenster(zone)
-          : () async => library.remote?.zoneRij(zone),
+          ? (na) async => sharing.server?.zones.rijVenster(zone, na: na)
+          : (na) async => library.remote?.zoneRij(zone, na: na),
     ),
   );
 
@@ -14439,6 +14471,16 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
     }
 
     final hierna = nu < 0 ? 0 : rij.length - nu - 1;
+    // Een zone op afstand geeft een venster op haar wachtrij ([ZoneSpeler]): de koppen tellen de HELE wachtrij, en wie
+    // het einde van het venster nadert, krijgt er meer bij (Saber, 25-10-2026: "shuffle heel men bibliotheek, hierna
+    // 400 ????" — de Shield had er 1769, allemaal verschillend).
+    final zoneOpAfstand = p is ZoneSpeler ? p : null;
+    final hiernaTotaal = zoneOpAfstand == null ? hierna : math.max(hierna, zoneOpAfstand.hiernaInRij);
+    final eerderTotaal = zoneOpAfstand == null ? nu : math.max(nu, zoneOpAfstand.eerderInRij);
+    void bijHetEinde(int j) {
+      if (j >= hierna - kZoneRijBijhalen) zoneOpAfstand?.meerHierna();
+    }
+
     final kop = Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
       child: Row(
@@ -14561,7 +14603,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
           center: const ValueKey('wachtrij-nu'),
           slivers: [
             if (huidig > 0) ...[
-              SliverToBoxAdapter(child: zoneKop('Eerder gespeeld', extra: '$huidig')),
+              SliverToBoxAdapter(child: zoneKop('Eerder gespeeld', extra: '$eerderTotaal')),
               // Vóór het midden groeit een lijst naar boven: het eerste kind staat het dichtst bij het
               // spelende nummer. Dus het laatst gespeelde eerst.
               SliverList(
@@ -14612,7 +14654,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                       speelt: p.playing || context.watch<SpeakerTarget>().isCasting,
                       regel: radio ? regels[huidig] : null,
                     ),
-                  if (hierna > 0) zoneKop('Hierna', extra: '$hierna'),
+                  if (hierna > 0) zoneKop('Hierna', extra: '$hiernaTotaal'),
                 ],
               ),
             ),
@@ -14623,7 +14665,10 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
             if (radio || tv)
               SliverList(
                 delegate: SliverChildBuilderDelegate(
-                  (_, j) => regel(huidig + 1 + j),
+                  (_, j) {
+                    bijHetEinde(j);
+                    return regel(huidig + 1 + j);
+                  },
                   childCount: hierna,
                   findChildIndexCallback:
                       tv ? (k) => _plekVanSleutel(k, sleutels, (i) => i - huidig - 1, hierna) : null,
@@ -14637,7 +14682,10 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                   // beneden sleept, anders landt alles één te ver. En "Hierna" begint na het spelende.
                   p.verplaatsInWachtrij(huidig + 1 + van, huidig + 1 + (van < naar ? naar - 1 : naar));
                 },
-                itemBuilder: (_, j) => regel(huidig + 1 + j, sleep: j),
+                itemBuilder: (_, j) {
+                  bijHetEinde(j);
+                  return regel(huidig + 1 + j, sleep: j);
+                },
               ),
             SliverToBoxAdapter(child: SizedBox(height: 16 + MediaQuery.paddingOf(context).bottom)),
           ],
@@ -14674,6 +14722,9 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
 /// Ongeveer hoe hoog een regel in de wachtrij is: zoveel schuift de lijst op als het volgende nummer
 /// begint.
 const kWachtrijRegel = 54.0;
+
+/// Hoeveel regels voor het einde van het venster een zone op afstand er meer bij haalt ([ZoneSpeler.meerHierna]).
+const kZoneRijBijhalen = 40;
 
 /// Een regel die binnenschuift als hij nieuw is, en dichtklapt voor hij weggaat
 /// ([_UitklapState.klapDicht]).
@@ -34225,8 +34276,17 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   // Op de pc elke schermtik (op Sabers MSI van 144 Hz dus 144 per seconde): een beeld kost daar 2 ms
   // tekenen en 0,3 ms bouwen, gemeten in fps.log, en er is geen batterij of warmte om te sparen. Op
   // een telefoon of tv hooguit 60, op een heel aantal schermtikken.
+  //
+  // Met massa (Saber, 25-10-2026: "het draaien van de album blijft niet realistisch genoeg"): bij afspelen komt hij op
+  // toeren, bij pauze loopt hij uit — zie [kSchijfAanloop].
   late final LangzameDraai _spin = LangzameDraai(this,
-      omwenteling: const Duration(seconds: 9), maxBeeldenPerSeconde: _isDesktop ? 1000 : 60);
+      omwenteling: const Duration(seconds: 9),
+      maxBeeldenPerSeconde: _isDesktop ? 1000 : 60,
+      aanloop: kSchijfAanloop,
+      uitloop: kSchijfUitloop);
+
+  /// Hoe de hoes nu gekanteld staat ([KantelHoes.deel]): de cd erachter kantelt in hetzelfde vlak mee.
+  final _kantel = ValueNotifier<Offset>(Offset.zero);
 
   /// Wat het scherm haalt zolang de plaat draait.
   ///
@@ -34503,6 +34563,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     widget.draai?.voorInRust.removeListener(_opDraai);
     _slide.dispose();
     _spin.dispose();
+    _kantel.dispose();
     super.dispose();
   }
 
@@ -34656,6 +34717,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
             bron: kantel,
             aan: widget.uitgelicht,
             vorm: BorderRadius.circular(10),
+            deel: _kantel,
             child: kaart,
           );
     return SizedBox(
@@ -34719,7 +34781,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
             // full-bleed cover behind it and its 44-blur shadow. Now the frame stops here.
             child: RepaintBoundary(
                 child: AnimatedBuilder(
-              animation: _slide,
+              animation: Listenable.merge([_slide, _kantel]),
               // Translate rather than reposition: a Positioned inside a builder would relayout the
               // Stack every frame, where a transform only moves an already-painted layer.
               // A resting sliver, always. Standing still the disc used to sit entirely behind the
@@ -34730,12 +34792,31 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               // anders dan de schijf, dus hier per beeld van het uitschuiven (en stil zodra hij uit is).
               builder: (context, child) {
                 final x = hoesEnSchijfX(_slide.value, reis: travel, centreer: centreer);
+                // De cd zit in de hoes: kantelt de hoes, dan kantelt hij mee in hetzelfde vlak, rond het midden van de
+                // hoes — met de schaduw van de hoes erop en dezelfde glans (Saber, 25-10-2026: "bij het tilten van de
+                // hoes, zie je een verschil in kleur/licht"). Kantelde alleen de hoes, dan schoof zijn rand weg van die
+                // schaduw (46 % zwart in het donker), en zweefde de cd plat achter een hoes in 3D.
+                final o = widget.kantel == null ? Offset.zero : _kantel.value;
+                final rust = o.distance < .002;
+                // In de maat van de schijf: hij begint op (x.schijf, s · 0,04) van het blok, de hoes op (x.hoes, 0).
+                final hoesVak = Rect.fromLTWH(x.hoes - x.schijf, -s * .04, s, s);
                 return Transform.translate(
                   offset: Offset(x.schijf, 0),
-                  child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
-                    child!,
-                    MouwSchaduw(key: const ValueKey('albumart-mouwschaduw'), maat: s * .92, rand: x.hoes + s - x.schijf),
-                  ]),
+                  child: Transform(
+                    transform: rust ? Matrix4.identity() : kantelMatrix(o),
+                    origin: hoesVak.center,
+                    child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
+                      child!,
+                      MouwSchaduw(key: const ValueKey('albumart-mouwschaduw'), maat: s * .92, rand: x.hoes + s - x.schijf),
+                      IgnorePointer(
+                        child: CustomPaint(
+                          key: const ValueKey('albumart-schijfglans'),
+                          size: Size.square(s * .92),
+                          painter: SchijfKantelGlans(rust ? Offset.zero : o, hoes: hoesVak),
+                        ),
+                      ),
+                    ]),
+                  ),
                 );
               },
               // Licht en schaduw (Saber, 19-10-2026, "Echt, licht stil"): de slagschaduw op de grond

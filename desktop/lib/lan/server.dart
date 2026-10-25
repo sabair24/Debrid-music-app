@@ -26,6 +26,7 @@ import '../organize.dart';
 import '../paths.dart';
 import '../pc_model.dart' show Modelvragen;
 import '../prullenbak.dart' show heeftPrullenbak;
+import '../schudlog.dart' show kSchudLogBytes, kSchudPerZending;
 import '../warm_log.dart';
 import '../settings.dart';
 import '../soulseek.dart';
@@ -231,6 +232,7 @@ class LanServer {
     _koppelLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}koppeling.log');
     _stroomLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}stroom.log');
     _warmteLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}warmte.log');
+    _schudLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}schud.log', maxBytes: kSchudLogBytes);
   }
 
   /// Met welk account deze pc zelf is ingelogd, of leeg als hij dat niet is.
@@ -320,6 +322,10 @@ class LanServer {
   /// Wat elk toestel tekent en hoe warm het is — zie `warmtemeter.dart`. Een iPad hangt niet aan
   /// een kabel; dit is de enige plek waar zijn metingen te lezen zijn.
   WarmLog? _warmteLog;
+
+  /// Het schudlogboek van alle toestellen (schudlog.dart): elke shuffle van de hele bibliotheek, en wat er daarna mee
+  /// gebeurde.
+  WarmLog? _schudLog;
 
   /// Eén regel per gestart nummer: zonder Range of vanaf byte 0. De vervolgstukken die een speler
   /// opvraagt zouden het logboek anders vullen met hetzelfde nummer.
@@ -1183,6 +1189,8 @@ class LanServer {
         return _radio(req);
       case '/api/diag/warmte':
         return _warmte(req);
+      case '/api/diag/schud':
+        return _schud(req);
     }
 
     if (path.startsWith('/stream/')) return _stream(req);
@@ -2034,7 +2042,10 @@ class LanServer {
   Future<void> _zoneStand(HttpRequest req) async {
     // Met `venster`: alleen een stuk van de wachtrij rond het spelende nummer (het wachtrijpaneel).
     if (req.uri.queryParameters['venster'] == '1') {
-      final v = zones.rijVenster(req.uri.queryParameters['zone'] ?? '');
+      // `na`: hoeveel ná het spelende nummer. Wie naar het einde scrolt, vraagt er meer (Saber, 25-10-2026: "shuffle
+      // heel men bibliotheek, hierna 400 ????" — de wachtrij had er 1769, het venster liet er 400 zien).
+      final na = int.tryParse(req.uri.queryParameters['na'] ?? '')?.clamp(1, kZoneRijHoogstens) ?? kZoneRijNa;
+      final v = zones.rijVenster(req.uri.queryParameters['zone'] ?? '', na: na);
       if (v == null) {
         req.response.statusCode = HttpStatus.notFound;
         return req.response.close();
@@ -2397,6 +2408,28 @@ class LanServer {
     if (regels is List) {
       for (final r in regels.take(60)) {
         _warmteLog?.line('[${toestel.isEmpty ? '?' : toestel} $adres] ${kort(r, 800)}');
+        n++;
+      }
+    }
+    return _json(req.response, {'ok': true, 'regels': n});
+  }
+
+  /// De regels van het schudlogboek van een toestel (schudlog.dart, `SchudZender`), in schud.log met het toestel ervoor —
+  /// zo staan de shuffles van de gsm, de iPad, de Mac en de Shield op één plek bij die van de pc.
+  Future<void> _schud(HttpRequest req) async {
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    String kort(Object? s, int n) {
+      final t = (s is String ? s : '').replaceAll(RegExp(r'[\r\n]+'), ' ');
+      return t.length > n ? t.substring(0, n) : t;
+    }
+
+    final toestel = kort(body['toestel'], 80).trim();
+    final regels = body['regels'];
+    var n = 0;
+    if (regels is List) {
+      for (final r in regels.take(kSchudPerZending)) {
+        _schudLog?.line('[${toestel.isEmpty ? '?' : toestel}] ${kort(r, 4000)}');
         n++;
       }
     }

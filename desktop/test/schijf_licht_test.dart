@@ -107,7 +107,7 @@ void main() {
     expect(main, contains('soort: disc != null\n                        ? SchijfSoort.scan'),
         reason: 'een echte scan krijgt alleen de schaduwen');
     expect(File('lib/ui/tegel.dart').readAsStringSync(), contains('SchijfLichtLaag(maat: maat, soort: SchijfSoort.cd, etiket: .36)'));
-    expect(File('lib/ui/wachtrij_eiland.dart').readAsStringSync(), contains('child: MouwSchaduw(maat: plaat, rand: plaat * .56)'));
+    expect(File('lib/ui/wachtrij_eiland.dart').readAsStringSync(), contains("child: inHoesVlak(MouwSchaduw(key: const ValueKey('wachtrij-mouwschaduw'), maat: plaat, rand: plaat * .56)),"));
     expect(File('lib/ui/glasproef.dart').readAsStringSync(), contains('SchijfLichtLaag(maat: 170, soort: SchijfSoort.cd)'));
     expect(File('pubspec.yaml').readAsStringSync(), contains('    - shaders/schijf_licht.frag'));
   });
