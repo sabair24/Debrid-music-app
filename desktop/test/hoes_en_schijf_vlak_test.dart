@@ -4,7 +4,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:debridmusic/ui/draaihoes.dart' show draaiMatrix, kDraaiDiepte;
+import 'package:debridmusic/ui/draaihoes.dart' show DraaiHoes, DraaiHoesController, draaiMatrix, kDraaiDiepte, kDraaiDuur;
 import 'package:debridmusic/ui/kantel_hoes.dart';
 import 'package:debridmusic/ui/langzame_draai.dart';
 import 'package:debridmusic/ui/wachtrij_eiland.dart';
@@ -139,6 +139,36 @@ void main() {
       }
     });
 
+    testWidgets('DE VAL: in een Positioned zonder breedte (Nu speelt) geldt de meegegeven maat, niet 200', (t) async {
+      // Zo stond hij in 3.9.626: de draai kreeg geen begrensde breedte mee, viel terug op 200, en de grote hoes
+      // ballonde nog steeds (opgenomen op de pc).
+      final c = DraaiHoesController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(MaterialApp(
+        home: Stack(children: [
+          Positioned(
+            left: 0,
+            top: 0,
+            child: DraaiHoes(
+              controller: c,
+              breedte: 720,
+              voor: const SizedBox.square(dimension: 720, child: ColoredBox(color: Colors.blue)),
+              achter: const SizedBox.square(dimension: 720, child: ColoredBox(color: Colors.red)),
+            ),
+          ),
+        ]),
+      ));
+      c.draai(heeftAchterkant: true);
+      await t.pump();
+      await t.pump(kDraaiDuur ~/ 5);
+      final m = t.widget<Transform>(find.byKey(const ValueKey('draai-kant'))).transform;
+      // De diepte, los van waar de draai staat: perspectief × cos(hoek) gedeeld door cos(hoek).
+      expect(m.entry(2, 2).abs(), greaterThan(.2), reason: 'nog niet op zijn kant');
+      expect(m.entry(3, 2) / m.entry(2, 2), closeTo(kDraaiDiepte / 720, 1e-9),
+          reason: 'de draai rekent met 720 punten, niet met 200 (${kDraaiDiepte / 200})');
+      await t.pumpAndSettle();
+    });
+
     test('DE GRENS: de tegel draait zoals altijd', () {
       expect(draaiMatrix(0).entry(3, 2), closeTo(.0014, 1e-9));
       expect(kDraaiDiepte / 200, closeTo(.0014, 1e-9));
@@ -151,6 +181,13 @@ void main() {
       final main = _bron('lib/main.dart');
       expect(main,
           contains('            opacity: _voorInRust ? 1 : 0,\n            duration: _voorInRust ? kSchijfInvloeien : Duration.zero,'));
+      // Elke plek die er een bouwt, geeft de maat mee: Nu speelt, de albumpagina, de tegel, de glasproef.
+      expect(main, contains('            controller: widget.draai!,\n'
+          '            // De maat van de hoes: hier staat hij in een Positioned zonder breedte ([DraaiHoes.breedte]).\n'
+          '            breedte: s,'));
+      expect(main, contains('                      controller: _draai,\n                      breedte: 128,'));
+      expect(_bron('lib/ui/tegel.dart'), contains('            controller: _draai,\n            breedte: maat,'));
+      expect(_bron('lib/ui/glasproef.dart'), contains('                      controller: _draai,\n                      breedte: 180,'));
     });
   });
 

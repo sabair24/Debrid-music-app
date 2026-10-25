@@ -222,6 +222,7 @@ class _GlasproefState extends State<Glasproef> with TickerProviderStateMixin {
                     vorm: BorderRadius.circular(10),
                     child: DraaiHoes(
                       controller: _draai,
+                      breedte: 180,
                       voor: ClipRRect(borderRadius: BorderRadius.circular(10), child: beeld(180)),
                       achter: ClipRRect(
                         borderRadius: BorderRadius.circular(10),

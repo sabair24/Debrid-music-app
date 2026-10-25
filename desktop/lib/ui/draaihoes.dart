@@ -278,10 +278,16 @@ class AchterkantBeeld extends StatelessWidget {
 
 /// De voor- en achterkant van een hoes, met een 3D-draai ertussen.
 class DraaiHoes extends StatefulWidget {
-  const DraaiHoes({super.key, required this.controller, required this.voor, this.achter});
+  const DraaiHoes({super.key, required this.controller, required this.voor, this.achter, this.breedte});
 
   final DraaiHoesController controller;
   final Widget voor;
+
+  /// Hoe breed de hoes is, voor de diepte van de draai ([kDraaiDiepte]). Mee te geven door wie hem bouwt: in Nu speelt
+  /// staat hij in een `Positioned` zonder breedte en op de albumpagina in een `Row`, en daar krijgt hij geen begrensde
+  /// breedte mee — dan viel de draai terug op 200 punten en ballonde de grote hoes nog steeds (opgenomen op de pc, 3.9.626).
+  /// Null: de breedte die hij krijgt, of 200.
+  final double? breedte;
 
   /// Null = er is geen achterkant; [DraaiHoesController.draai] wiebelt dan.
   final Widget? achter;
@@ -416,7 +422,7 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
       builder: (context, maat) => AnimatedBuilder(
       animation: Listenable.merge([_draai, _wiebel]),
       builder: (context, _) {
-        final breedte = maat.maxWidth.isFinite ? maat.maxWidth : 200.0;
+        final breedte = widget.breedte ?? (maat.maxWidth.isFinite ? maat.maxWidth : 200.0);
         final t = _draai.value;
         final w = _wiebel.isAnimating ? wiebelHoek(_wiebel.value) : 0.0;
         final rust = t == 0 && w == 0;

@@ -31624,6 +31624,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                     onDubbel: () => _draai.draai(heeftAchterkant: _achter != null),
                     child: DraaiHoes(
                       controller: _draai,
+                      breedte: 128,
                       voor: widget.heroTag == null
                           ? _netCover(al.cover, size: 128)
                           : Hero(tag: widget.heroTag!, child: _netCover(al.cover, size: 128)),
@@ -34623,6 +34624,8 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
         ? vliegend
         : DraaiHoes(
             controller: widget.draai!,
+            // De maat van de hoes: hier staat hij in een Positioned zonder breedte ([DraaiHoes.breedte]).
+            breedte: s,
             voor: vliegend,
             // Helemaal, in zijn eigen vorm: een cd-achterkant is breder dan hoog (zie
             // [achterkantMaat]).
