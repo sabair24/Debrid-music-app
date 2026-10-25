@@ -224,6 +224,7 @@ import 'ui/tegel.dart';
 import 'ui/tegel_spiegel.dart';
 import 'ui/getekende_schijf.dart';
 import 'ui/glasproef.dart';
+import 'schudlog.dart' show SchudLogboek, SchudZender, kSchudLogBytes;
 import 'ui/kantel_hoes.dart';
 import 'meetronde.dart' show MeetBlok, MeetHaken, meetTel, meetrondeLoopt, voerMeetrondeUit, zonderVoorMeting;
 import 'ui/schijf_licht.dart';
@@ -1346,6 +1347,37 @@ Future<void> main() async {
       },
       extra: () => '${player.playing ? 'speelt' : 'stil'} | ${GlasKwaliteit.verslag()}',
     ).start();
+  }
+
+  // Het schudlogboek (schudlog.dart; Saber, 25-10-2026: "hou vanaf nu ook een log bij van alle shuffels die ik doe van
+  // de hele bibliotheek, dan kunnen we oordelen wat goed gaat en wat niet"): op de pc rechtstreeks in schud.log, op een
+  // toestel in bundels naar de pc (/api/diag/schud), met de naam van het toestel ervoor. Alles op één plek.
+  {
+    final void Function(List<String> regels) schrijf;
+    if (mode.owner) {
+      final log = WarmLog('$logDir${Platform.pathSeparator}schud.log', maxBytes: kSchudLogBytes);
+      schrijf = (regels) {
+        for (final r in regels) {
+          log.line('[pc] $r');
+        }
+      };
+    } else {
+      final ik = thisDevice();
+      schrijf = SchudZender((regels) async {
+        final e = session.endpoint;
+        if (e == null) throw StateError('nog niet gekoppeld');
+        final c = RemoteClient(e, timeout: const Duration(seconds: 10));
+        try {
+          await c.ask('/api/diag/schud', {'toestel': warmteToestel(await ik), 'regels': regels});
+        } finally {
+          c.close();
+        }
+      }).voegToe;
+    }
+    final schudLog = SchudLogboek(
+        schrijf: schrijf, bibliotheek: () => library.tracks.length, speelstand: (t) => player.speelstandVan?.call(t));
+    player.bijSchudden = schudLog.geschud;
+    player.bijNummerVoorbij = schudLog.voorbij;
   }
 
   // Wat er in de AUTO te bladeren valt. Dit is de enige plek waar de boom aan de echte bibliotheek

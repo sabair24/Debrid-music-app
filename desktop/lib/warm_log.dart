@@ -18,12 +18,13 @@ import 'dart:io';
 /// landen kwam van een reparatie die zijn eigen teller via debugPrint schreef: in een release-build
 /// is dat niets, en een teller die niemand kan lezen bewijst niets.
 class WarmLog {
-  WarmLog(this._path);
+  WarmLog(this._path, {int maxBytes = 256 * 1024}) : _maxBytes = maxBytes;
   final String _path;
 
   /// Kept small enough to read in one go and to never matter on disk. Rewritten from the tail rather
-  /// than rotated: there is nothing here worth keeping across sessions.
-  static const _maxBytes = 256 * 1024;
+  /// than rotated: there is nothing here worth keeping across sessions. Een logboek dat over weken moet gaan
+  /// (schud.log) krijgt meer.
+  final int _maxBytes;
 
   /// Zwijgen is niet gratis, en dat bleek duur.
   ///

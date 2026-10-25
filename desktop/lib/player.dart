@@ -1068,24 +1068,66 @@ class PlayerStore extends ChangeNotifier
   void _telMee(Duration nu) {
     final vorig = _vorigePositie;
     _vorigePositie = nu;
-    if (vorig == null || _geteld) return;
+    if (vorig == null) return;
     final stap = nu - vorig;
     // Terug gesleept, of een gat: geen van beide is geluisterde tijd.
     if (stap <= Duration.zero || stap > _maxStap) return;
+    // Ook na het meetellen door: het schudlogboek ([bijNummerVoorbij]) wil weten hoe lang je echt luisterde, niet tot
+    // waar het meetelde. Melden ([onPlayed]) gebeurt nog steeds één keer.
     _geluisterd += stap;
-    if (!telMeeAlsGespeeld(geluisterd: _geluisterd, duur: duurErgens)) return;
+    final duur = duurErgens;
+    if (duur > Duration.zero) _telDuur = duur;
+    if (_geteld || !telMeeAlsGespeeld(geluisterd: _geluisterd, duur: duurErgens)) return;
     _geteld = true;
     final t = current;
     if (t != null) onPlayed?.call(t);
   }
 
-  /// De teller op nul, bij elk nummer dat werkelijk nieuw is.
+  /// De teller op nul, bij elk nummer dat werkelijk nieuw is. Eerst nog melden hoe lang het vorige klonk
+  /// ([bijNummerVoorbij]), met waar het stond toen het begon.
   void _nieuwVoorDeTelling(Track? t) {
+    final vorig = _telNummer;
+    if (vorig != null) {
+      bijNummerVoorbij?.call(vorig,
+          plek: _telPlek,
+          lengte: _telLengte,
+          shuffle: _telInSchud,
+          generatie: _telGeneratie,
+          geluisterd: _geluisterd,
+          duur: _telDuur);
+    }
+    _telNummer = t;
+    _telPlek = _index;
+    _telLengte = _order.length;
+    _telInSchud = shuffle && !radioMode;
+    _telGeneratie = _schudGeneratie;
+    _telDuur = null;
     _geluisterd = Duration.zero;
     _vorigePositie = null;
     _geteld = false;
     if (t != null) _geopendDezeSessie.add(t.path);
   }
+
+  /// Het schudlogboek (schudlog.dart; Saber, 25-10-2026: "hou vanaf nu ook een log bij van alle shuffels die ik doe van
+  /// de hele bibliotheek"): een nieuwe geschudde volgorde. [vanaf]: zoveel stonden al vast (wat al klonk, bij het
+  /// shuffle-icoontje). [generatie] hoort bij [bijNummerVoorbij].
+  void Function(List<Track> volgorde, {required String hoe, int vanaf, required int generatie})? bijSchudden;
+
+  /// Een nummer is voorbij (het volgende begint): hoe lang je luisterde, en waar het stond toen het begon.
+  void Function(Track t,
+      {required int plek,
+      required int lengte,
+      required bool shuffle,
+      required int generatie,
+      required Duration geluisterd,
+      Duration? duur})? bijNummerVoorbij;
+
+  /// Welke trekking het is: elke shuffle één verder. Een nummer draagt de trekking van toen het begon.
+  int _schudGeneratie = 0;
+  Track? _telNummer;
+  int _telPlek = 0, _telLengte = 0, _telGeneratie = 0;
+  bool _telInSchud = false;
+  Duration? _telDuur;
 
   /// Het hapert. Ingehangen vanuit main.dart, precies zoals [mediaResolver] en [onProgress].
   ///
@@ -2336,8 +2378,12 @@ class PlayerStore extends ChangeNotifier
     // hoe er één achterblijft zonder weging: de knop "Shuffle alles" ging langs de ene, het
     // shuffle-icoontje langs de andere.
     final shuffled = ordenVoor(tracks, null, shuffle: true, gewicht: _gewichtVanNummer).order;
+    // Een nieuwe trekking: wat hierna begint, hoort bij deze shuffle ([bijNummerVoorbij]). Het logboek pas ná het openen
+    // van het eerste nummer, zodat het laatste nummer van de vorige shuffle nog bij die vorige landt.
+    final generatie = ++_schudGeneratie;
     if (await _handedToSpeaker(shuffled, 0, null)) {
       shuffle = true;
+      bijSchudden?.call(shuffled, hoe: 'Shuffle alles', generatie: generatie);
       notifyListeners();
       return;
     }
@@ -2351,6 +2397,7 @@ class PlayerStore extends ChangeNotifier
     _order = shuffled;
     _index = _order.isEmpty ? -1 : 0;
     await _openCurrent();
+    bijSchudden?.call(shuffled, hoe: 'Shuffle alles', generatie: generatie);
     _saveQueue();
   }
 
@@ -2947,6 +2994,15 @@ class PlayerStore extends ChangeNotifier
       return;
     }
     _rebuildOrder(behoudGespeeld: true);
+    // Aan gezet: een nieuwe trekking van wat nog komt, met het spelende nummer erbij (dat speelt door, en hoort voortaan
+    // bij deze shuffle). Voor het schudlogboek; alleen de hele bibliotheek telt daar.
+    if (shuffle && !radioMode) {
+      _telGeneratie = ++_schudGeneratie;
+      _telInSchud = true;
+      _telPlek = _index;
+      _telLengte = _order.length;
+      bijSchudden?.call(_order, hoe: 'shuffle-knop', vanaf: _index, generatie: _schudGeneratie);
+    }
     // Heeft een speaker de wachtrij, dan moet DIE dezelfde volgorde krijgen.
     //
     // Zonder deze regel schudde de app haar eigen lijst en liet die van de speaker staan. De index die
