@@ -4023,7 +4023,8 @@ class _HomeShellState extends State<HomeShell> {
                   // ruimte onder de balk hier: anders begint zijn kop achter de pillen.
                   // Een glazen paneel en geen dichte strook (Saber, 18-10-2026: "wachtrij op de pc = glas
                   // naast de inhoud"): los van de rand, met ronde hoeken, zoals in Nu speelt.
-                  if (!isCompact(context) && context.watch<WachtrijPaneel>().open)
+                  // Niet op een tv: daar komt de wachtrij als paneel van rechts ([toonWachtrijPaneelTv]).
+                  if (!isTv && !isCompact(context) && context.watch<WachtrijPaneel>().open)
                     Padding(
                       padding: EdgeInsets.fromLTRB(kRuimte8, ruimte, kRuimte12, kRuimte12),
                       child: SizedBox(
@@ -11277,6 +11278,49 @@ Future<void> toonZonePaneelTv(BuildContext context) => showGeneralDialog<void>(
       ),
     );
 
+/// Hoe breed de wachtrij op een tv is: even breed als de zones.
+const double kWachtrijPaneelTv = kZonePaneelTv;
+
+/// De wachtrij op een tv: een paneel dat van rechts binnenschuift, met de selectie op wat nu speelt. OK speelt een
+/// nummer, lang OK geeft het menu (nu spelen, één plek omhoog of omlaag, uit de wachtrij, en wat je verder met een
+/// nummer kunt); Terug sluit. Saber, 25-10-2026: "de wachtrij op de shield ik kan die niet bedienen en is niet te zien
+/// in de now playing screen" — het paneel naast de pagina's was met de pijltjes niet te bereiken, en in Nu speelt
+/// stond geen knop. Hetzelfde paneel vanuit de spelerbalk en vanuit Nu speelt ([_WachtrijKnop]).
+Future<void> toonWachtrijPaneelTv(BuildContext context) => showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Wachtrij sluiten',
+      barrierColor: Colors.black.withValues(alpha: .45),
+      transitionDuration: const Duration(milliseconds: 260),
+      pageBuilder: (paneelContext, __, ___) => Align(
+        alignment: Alignment.centerRight,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(0, tvOverscan.top, tvOverscan.right, tvOverscan.bottom),
+          child: SizedBox(
+            key: const ValueKey('wachtrij-paneel-tv'),
+            width: kWachtrijPaneelTv,
+            child: Material(
+              type: MaterialType.transparency,
+              // Over ander glas (de spelerbalk, Nu speelt): `bovenop`, zoals de zones.
+              child: GlasVlak(
+                vorm: const BorderRadius.all(Radius.circular(18)),
+                kleur: _panel,
+                balk: true,
+                bovenop: true,
+                child: WachtrijPaneelView(
+                    tvPaneel: true, opGlas: true, onSluit: () => Navigator.of(paneelContext).maybePop()),
+              ),
+            ),
+          ),
+        ),
+      ),
+      transitionBuilder: (_, a, __, kind) => SlideTransition(
+        position: Tween(begin: const Offset(1, 0), end: Offset.zero)
+            .animate(CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
+        child: kind,
+      ),
+    );
+
 /// Alle zones: wat er op elk toestel en elke speaker speelt, waar in het nummer, en of het toestel er
 /// is. Vanaf elke zone "Hier verder" (de wachtrij, de plek in het nummer, shuffle en herhalen, of de
 /// radio; dat toestel pauzeert). Op de pc daarnaast "Speel daar": wat de pc speelt, naar een toestel
@@ -13836,6 +13880,12 @@ class _WachtrijKnop extends StatelessWidget {
         style: tvIcoonStijl(!compact && paneel.open ? _accent : _muted),
         tooltip: 'Wachtrij',
         onPressed: () {
+          // Op een tv een paneel van rechts dat je met de pijltjes bedient ([toonWachtrijPaneelTv]): het paneel naast de
+          // pagina's was daar niet te bereiken (Saber, 25-10-2026: "ik kan die niet bedienen").
+          if (isTv) {
+            unawaited(toonWachtrijPaneelTv(context));
+            return;
+          }
           if (!compact) {
             // Eén paneel tegelijk aan de zijkant: gaat de wachtrij open, dan gaan de zones dicht.
             if (!paneel.open) _misschien<ZonePaneel>(context)?.sluit();
@@ -14058,7 +14108,7 @@ class _RadioGeleerdBlad extends StatelessWidget {
 }
 
 class WachtrijPaneelView extends StatefulWidget {
-  const WachtrijPaneelView({super.key, this.inBlad = false, this.onSluit, this.opGlas = false});
+  const WachtrijPaneelView({super.key, this.inBlad = false, this.onSluit, this.opGlas = false, this.tvPaneel = false});
 
   /// True als hij als blad van onderen komt (telefoon). Dan geen vaste breedte en geen linkerrand,
   /// en sluiten gaat via de bladbeweging in plaats van via het kruisje.
@@ -14070,6 +14120,10 @@ class WachtrijPaneelView extends StatefulWidget {
 
   /// Ligt hij op glas (Nu speelt)? Dan geen eigen dichte vulling.
   final bool opGlas;
+
+  /// Het paneel van rechts op een tv ([toonWachtrijPaneelTv]): elke regel een eigen selectie, OK speelt hem en lang
+  /// OK geeft het menu. Geen greep en geen kruisje.
+  final bool tvPaneel;
 
   static const breedte = 340.0;
 
@@ -14099,11 +14153,131 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
   /// Wat er bij het eerste beeld al stond: dat schuift niet binnen, alleen wat er daarna bij komt.
   Set<String>? _gezien;
 
+  // Op een tv ([WachtrijPaneelView.tvPaneel]) de selectie. Een knoop per NUMMER (zijn sleutel) en niet per plek: schuift
+  // een nummer een plek op, dan gaat de selectie mee. Nu speelt heeft een eigen knoop, zodat de selectie daar blijft
+  // als het volgende nummer begint.
+  final _knopen = <String, FocusNode>{};
+  final _nuKnoop = FocusNode(debugLabel: 'wachtrij-nu');
+
+  /// De sleutel van de regel met de selectie, en zijn plek; null = Nu speelt.
+  String? _focusOp;
+  int _focusOpPlek = -1;
+
+  /// Na een keuze uit het menu: deze plek krijgt de selectie ([plekNaKeuze]).
+  int? _focusNaar;
+
+  FocusNode _knoop(String sleutel) => _knopen[sleutel] ??= FocusNode(debugLabel: 'wachtrij-$sleutel');
+
   @override
   void dispose() {
     _op.dispose();
     _rol.dispose();
+    for (final k in _knopen.values) {
+      k.dispose();
+    }
+    _nuKnoop.dispose();
     super.dispose();
+  }
+
+  /// Waar de selectie hoort na een wijziging in de rij. Na een keuze uit het menu: de plek die daarbij hoort. Is de
+  /// regel met de selectie weg (eruit gehaald, of de rij veranderde elders): de regel die nu op die plek staat — anders
+  /// stond de selectie nergens, en deed de afstandsbediening niets meer. Begon het nummer met de selectie te spelen:
+  /// Nu speelt. Anders blijft hij waar hij is.
+  void _houdSelectie(List<String> sleutels, int nu) {
+    var doel = _focusNaar;
+    _focusNaar = null;
+    final op = _focusOp;
+    if (op != null) {
+      final i = sleutels.indexOf(op);
+      if (i >= 0) _focusOpPlek = i;
+      if (doel == null && i < 0) doel = _focusOpPlek;
+      if (doel == null && i == nu) doel = nu;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // Knopen zonder regel (het nummer is weg, of zijn regel schoof buiten beeld): weg. Komt de regel terug, dan krijgt
+      // hij een nieuwe; de selectie zit altijd op een regel die er staat.
+      _knopen.removeWhere((_, k) {
+        if (k.context != null) return false;
+        k.dispose();
+        return true;
+      });
+      if (doel == null || sleutels.isEmpty) return;
+      final d = doel.clamp(0, sleutels.length - 1);
+      final knoop = d == nu ? _nuKnoop : _knopen[sleutels[d]];
+      if (knoop != null && knoop.context != null && !knoop.hasPrimaryFocus) knoop.requestFocus();
+    });
+  }
+
+  /// Het menu van een regel op een tv (lang OK): de keuzes voor de wachtrij ([wachtrijKeuzes]) bovenaan, daaronder wat
+  /// je met een nummer kunt ([_nummerMenu]).
+  void _tvMenu(BuildContext context, Speelbron p, Track t, int plek, {Radioregel? regel}) {
+    final radio = regel != null;
+    // Bij het kiezen opnieuw opzoeken: speelde intussen het volgende nummer, of veranderde de rij elders, dan is de plek
+    // verschoven (zoals bij het kruisje).
+    int plekNu() {
+      if (radio) return plek;
+      final rij = p.queueTracks;
+      return plek < rij.length && rij[plek].path == t.path ? plek : rij.indexWhere((x) => x.path == t.path);
+    }
+
+    void doe(WachtrijKeuze k) {
+      final i = plekNu();
+      // Een radio zit niet in queueTracks: daar telt alleen dat de plek bestaat.
+      final lengte = radio ? i + 1 : p.queueTracks.length;
+      if (i < 0 || !wachtrijKeuzes(plek: i, huidig: p.currentIndex, lengte: lengte, radio: radio).contains(k)) return;
+      _focusNaar = plekNaKeuze(k, plek: i, lengte: lengte);
+      switch (k) {
+        case WachtrijKeuze.nuSpelen:
+          unawaited(p.springNaar(i));
+        case WachtrijKeuze.omhoog:
+          p.verplaatsInWachtrij(i, i - 1);
+        case WachtrijKeuze.omlaag:
+          p.verplaatsInWachtrij(i, i + 1);
+        case WachtrijKeuze.eruit:
+          p.haalUitWachtrij(i);
+      }
+      if (mounted) setState(() {});
+    }
+
+    final keuzes =
+        wachtrijKeuzes(plek: plek, huidig: p.currentIndex, lengte: radio ? plek + 1 : p.queueTracks.length, radio: radio);
+    final wachtrij = [
+      for (final k in keuzes)
+        switch (k) {
+          WachtrijKeuze.nuSpelen => MenuRegel(Icons.play_arrow_rounded, 'Nu spelen', () => doe(k)),
+          WachtrijKeuze.omhoog => MenuRegel(Icons.arrow_upward_rounded, 'Eén plek omhoog', () => doe(k)),
+          WachtrijKeuze.omlaag => MenuRegel(Icons.arrow_downward_rounded, 'Eén plek omlaag', () => doe(k)),
+          WachtrijKeuze.eruit => MenuRegel(Icons.playlist_remove_rounded, 'Uit de wachtrij', () => doe(k)),
+        },
+    ];
+    // Een radionummer dat je (nog) niet hebt, heeft geen bestand om iets mee te doen: alleen nu spelen.
+    final rest = regel == null || regel.eigen ? _nummerMenu(context, t).blokken : const <List<MenuRegel>>[];
+    unawaited(_toonItemMenu(context, ItemMenu(titel: t.title, ondertitel: t.artist, blokken: [wachtrij, ...rest])));
+  }
+
+  /// Snel omlaag of omhoog op een tv: een regel die nog niet gebouwd is, wacht tot hij er is ([tvSchuifVerder]), in
+  /// plaats van dat de pijl niets vindt.
+  KeyEventResult _tvPijl(KeyEvent e) {
+    if (e is KeyUpEvent) return KeyEventResult.ignored;
+    final richting = e.logicalKey == LogicalKeyboardKey.arrowDown
+        ? TraversalDirection.down
+        : e.logicalKey == LogicalKeyboardKey.arrowUp
+            ? TraversalDirection.up
+            : null;
+    final hier = FocusManager.instance.primaryFocus;
+    if (richting == null || hier == null) return KeyEventResult.ignored;
+    if (tvPijlStap(hier, richting) || tvSchuifVerder(hier, richting)) return KeyEventResult.handled;
+    return KeyEventResult.ignored;
+  }
+
+  /// Op een tv gaat een regel die een plek opschuift, met zijn selectie mee: de lijst zoekt hem op zijn sleutel.
+  static int? _plekVanSleutel(Key k, List<String> sleutels, int Function(int i) plekInLijst, int aantal) {
+    if (k is! ValueKey<String> || !k.value.startsWith('uit-')) return null;
+    final i = sleutels.indexOf(k.value.substring(4));
+    if (i < 0) return null;
+    final j = plekInLijst(i);
+    return j >= 0 && j < aantal ? j : null;
   }
 
   /// Sleutels die niet verschuiven als er iets voor wegvalt: het pad en de hoeveelste keer dat het
@@ -14143,19 +14317,32 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
       });
     }
     _vorigeNu = nu;
+    final tv = widget.tvPaneel;
+    if (tv) _houdSelectie(sleutels, nu);
 
     Widget regel(int i, {bool gespeeld = false, int? sleep}) {
+      final s = sleutels[i];
       Widget r = _WachtrijRij(
-        key: ValueKey(sleutels[i]),
+        key: ValueKey(s),
         track: rij[i],
         plek: i,
         speeltNu: false,
         gespeeld: gespeeld,
-        sleepIndex: sleep,
+        sleepIndex: tv ? null : sleep,
         cover: radio && !regels[i].eigen ? null : lib.coverForTrack(rij[i]),
         regel: radio ? regels[i] : null,
+        tv: tv,
+        focusNode: tv ? _knoop(s) : null,
+        onFocusChange: !tv
+            ? null
+            : (v) {
+                if (!v) return;
+                _focusOp = s;
+                _focusOpPlek = i;
+              },
+        tvMenu: tv ? () => _tvMenu(context, p, rij[i], i, regel: radio ? regels[i] : null) : null,
       );
-      return _Uitklap(key: ValueKey('uit-${sleutels[i]}'), binnenschuiven: nieuw.contains(sleutels[i]), child: r);
+      return _Uitklap(key: ValueKey('uit-$s'), binnenschuiven: nieuw.contains(s), child: r);
     }
 
     final hierna = nu < 0 ? 0 : rij.length - nu - 1;
@@ -14187,7 +14374,20 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                             style: TextStyle(color: _muted, fontSize: 12)),
                     ],
                   )
-                : const Text('Wachtrij', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                : tv
+                    // Op een tv zegt de kop hoe het werkt, zoals bij de zones.
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('Wachtrij', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                          Text('OK speelt een nummer · lang OK: meer · Terug sluit',
+                              key: const ValueKey('wachtrij-tv-uitleg'),
+                              maxLines: 2,
+                              style: TextStyle(color: _muted, fontSize: 12)),
+                        ],
+                      )
+                    : const Text('Wachtrij', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
           ),
           // Het genoemde aantal van een radio uit een zin is gespeeld: hier ook verder, niet alleen
           // op het speelscherm.
@@ -14275,6 +14475,8 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                 delegate: SliverChildBuilderDelegate(
                   (_, j) => regel(huidig - 1 - j, gespeeld: true),
                   childCount: huidig,
+                  findChildIndexCallback:
+                      tv ? (k) => _plekVanSleutel(k, sleutels, (i) => huidig - 1 - i, huidig) : null,
                 ),
               ),
             ],
@@ -14284,12 +14486,39 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   zoneKop('Nu speelt'),
-                  _NuSpeeltRegel(
-                    track: rij[huidig],
-                    cover: radio && !regels[huidig].eigen ? null : lib.coverForTrack(rij[huidig]),
-                    speelt: p.playing || context.watch<SpeakerTarget>().isCasting,
-                    regel: radio ? regels[huidig] : null,
-                  ),
+                  if (tv)
+                    // Op een tv begint de selectie hier. OK speelt verder als het gepauzeerd is; lang OK geeft het
+                    // menu van het nummer.
+                    Pressable(
+                      key: const ValueKey('wachtrij-nu-tv'),
+                      focusNode: _nuKnoop,
+                      autofocus: true,
+                      onPressed: () {
+                        if (!(p.playing || context.read<SpeakerTarget>().isCasting)) p.speelAf();
+                      },
+                      onLongPress: radio && !regels[huidig].eigen
+                          ? null
+                          : () => _toonItemMenu(context, _nummerMenu(context, rij[huidig])),
+                      onFocusChange: (v) {
+                        if (v) _focusOp = null;
+                      },
+                      borderRadius: BorderRadius.circular(14),
+                      scaleOnFocus: false,
+                      vastePlek: false,
+                      child: _NuSpeeltRegel(
+                        track: rij[huidig],
+                        cover: radio && !regels[huidig].eigen ? null : lib.coverForTrack(rij[huidig]),
+                        speelt: p.playing || context.watch<SpeakerTarget>().isCasting,
+                        regel: radio ? regels[huidig] : null,
+                      ),
+                    )
+                  else
+                    _NuSpeeltRegel(
+                      track: rij[huidig],
+                      cover: radio && !regels[huidig].eigen ? null : lib.coverForTrack(rij[huidig]),
+                      speelt: p.playing || context.watch<SpeakerTarget>().isCasting,
+                      regel: radio ? regels[huidig] : null,
+                    ),
                   if (hierna > 0) zoneKop('Hierna', extra: '$hierna'),
                 ],
               ),
@@ -14297,11 +14526,14 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
             // Een radio is geen wachtrij: je kunt er niet in slepen en er niets uit halen. Een gewone
             // lijst dus, en een tik springt binnen de radio in plaats van hem te verlaten — zie
             // [PlayerStore.springInRadio].
-            if (radio)
+            // Op een tv ook een gewone lijst: met pijltjes sleep je niet, verplaatsen gaat via het menu (lang OK).
+            if (radio || tv)
               SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (_, j) => regel(huidig + 1 + j),
                   childCount: hierna,
+                  findChildIndexCallback:
+                      tv ? (k) => _plekVanSleutel(k, sleutels, (i) => i - huidig - 1, hierna) : null,
                 ),
               )
             else
@@ -14333,7 +14565,13 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
         children: [
           kop,
           if (radio) const _RadioAfstemming(),
-          Expanded(child: ClipRect(child: lijst)),
+          Expanded(
+            child: ClipRect(
+              child: tv
+                  ? Focus(canRequestFocus: false, skipTraversal: true, onKeyEvent: (_, e) => _tvPijl(e), child: lijst)
+                  : lijst,
+            ),
+          ),
         ],
       ),
     );
@@ -14589,12 +14827,23 @@ class _WachtrijRij extends StatelessWidget {
     this.regel,
     this.gespeeld = false,
     this.sleepIndex,
+    this.tv = false,
+    this.focusNode,
+    this.onFocusChange,
+    this.tvMenu,
   });
 
   final Track track;
   final int plek;
   final bool speeltNu;
   final Uint8List? cover;
+
+  /// In het paneel op een tv ([WachtrijPaneelView.tvPaneel]): OK speelt dit nummer, lang OK opent [tvMenu]. Geen
+  /// greep en geen kruisje: slepen kan niet met pijltjes, en een knop naast elke regel maakt van rechts een omweg.
+  final bool tv;
+  final FocusNode? focusNode;
+  final ValueChanged<bool>? onFocusChange;
+  final VoidCallback? tvMenu;
 
   /// Al gespeeld: gedimd, en zonder greep (slepen kan alleen in "Hierna").
   final bool gespeeld;
@@ -14617,18 +14866,7 @@ class _WachtrijRij extends StatelessWidget {
         ? null
         : () => _toonItemMenu(context, _nummerMenu(context, track));
     final sleep = sleepIndex;
-    return Opacity(
-      opacity: gespeeld ? .5 : 1,
-      child: Container(
-      color: speeltNu ? _panel2 : Colors.transparent,
-      child: InkWell(
-        onTap: () => p.springNaar(plek),
-        onLongPress: _menuOpHouden ? menu : null,
-        onSecondaryTapDown: menu == null
-            ? null
-            : (d) => _toonItemMenu(context, _nummerMenu(context, track),
-                bij: d.globalPosition),
-        child: Padding(
+    final inhoud = Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
           child: Row(
             children: [
@@ -14746,7 +14984,9 @@ class _WachtrijRij extends StatelessWidget {
                                     : Icons.cloud_download_outlined,
                             size: 15,
                             color: r.eigen ? _accent2 : _muted)
-                        : TvLabelled(
+                        : tv
+                            ? null
+                            : TvLabelled(
                         label: 'Uit de wachtrij halen',
                         child: IconButton(
                         icon: const Icon(Icons.close_rounded, size: 15),
@@ -14778,8 +15018,32 @@ class _WachtrijRij extends StatelessWidget {
               ),
             ],
           ),
+        );
+    if (tv) {
+      return Pressable(
+        focusNode: focusNode,
+        onPressed: () => p.springNaar(plek),
+        onLongPress: tvMenu,
+        onFocusChange: onFocusChange,
+        borderRadius: BorderRadius.circular(10),
+        scaleOnFocus: false,
+        vastePlek: false,
+        // Gedimd binnen de selectie, niet erbuiten: zo blijft de selectie ook op "Eerder gespeeld" goed te zien.
+        child: Opacity(opacity: gespeeld ? .5 : 1, child: inhoud),
+      );
+    }
+    return Opacity(
+      opacity: gespeeld ? .5 : 1,
+      child: Container(
+        color: speeltNu ? _panel2 : Colors.transparent,
+        child: InkWell(
+          onTap: () => p.springNaar(plek),
+          onLongPress: _menuOpHouden ? menu : null,
+          onSecondaryTapDown: menu == null
+              ? null
+              : (d) => _toonItemMenu(context, _nummerMenu(context, track), bij: d.globalPosition),
+          child: inhoud,
         ),
-      ),
       ),
     );
   }
@@ -17298,7 +17562,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
               onPressed: casting ? null : p.cycleRepeat),
           // De wachtrij naast de hoes, op een breed scherm. Het icoon van Afspeellijsten: de regels
           // schuiven binnen als het paneel opengaat.
-          // Niet op een tv: het paneel nam daar 360 van de 864 punten.
+          // Niet op een tv: het paneel nam daar 360 van de 864 punten. Daar de knop hieronder, met een paneel van
+          // rechts dat over Nu speelt schuift ([toonWachtrijPaneelTv]).
           if (naast && !isTv) ...[
             const SizedBox(width: 8),
             IconButton(
@@ -17313,10 +17578,11 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
               ),
               onPressed: _wisselWachtrij,
             ),
-          ] else if (!isTv) ...[
+          ] else ...[
             // Op een telefoon past het paneel er niet naast: dan dezelfde lijst als blad van onderen,
             // zoals vanuit de minispeler. Daarvoor stond er in Nu speelt geen wachtrijknop
             // (S26, 18-10-2026; Saber: "die moet ook in de now playing screen staan").
+            // Op een tv een paneel van rechts (Saber, 25-10-2026: "is niet te zien in de now playing screen").
             const SizedBox(width: 8),
             const _WachtrijKnop(maat: 24),
           ],
