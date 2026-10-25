@@ -34209,6 +34209,9 @@ AlbumArtVooruit albumArtVooruit(LibraryStore bib, Album al) => (
 /// still reads as a disc tucked into a card rather than one lying beside it.
 const _discRest = 0.26;
 
+/// Hoe lang de cd erover doet om weer in te vloeien als de hoes terug op zijn voorkant ligt.
+const kSchijfInvloeien = Duration(milliseconds: 200);
+
 /// Waar de hoes en de cd staan bij uitschuifstand [t]: 0 is de cd in de hoes, 1 is helemaal uit. Het
 /// zijn verschuivingen vanaf de linkerrand van het vak, dat [reis] breder is dan de hoes.
 ///
@@ -34773,6 +34776,12 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
             // Weg zolang de achterkant voor staat, en tot de hoes helemaal TERUG is: anders zie je
             // hem halverwege de draai achter een hoes die op zijn kant staat — op de terugweg stond
             // hij zo een tel volledig in beeld (Saber, 16-10-2026).
+            // Na het terugdraaien vloeit hij in, in plaats van in één beeld te verschijnen (opgenomen op de pc,
+            // 25-10-2026). Weg gaat hij meteen: dan draait de hoes er al voor.
+            child: AnimatedOpacity(
+            key: const ValueKey('albumart-schijf-invloeien'),
+            opacity: _voorInRust ? 1 : 0,
+            duration: _voorInRust ? kSchijfInvloeien : Duration.zero,
             child: Offstage(
             offstage: !_voorInRust,
             // The disc's own clip is cached below; this boundary is about everything ABOVE it.
@@ -34835,6 +34844,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
                             : SchijfSoort.cd),
               ]),
             )),
+            ),
             ),
           ),
           // Never rebuilt: the builder only moves it (see [hoesEnSchijfX]), the sleeve itself is its
