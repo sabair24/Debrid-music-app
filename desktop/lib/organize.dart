@@ -481,6 +481,19 @@ class TrackTags {
   /// True when this came from an official release rather than from a downloaded file's own tags.
   bool get isAuthoritative => !vanBestand && (trackTotal > 0 || year != null || albumArtist != null);
 
+  /// Dezelfde tags met een andere looptijd: die van de kopieën zelf, als de uitgave ernaast zat
+  /// (`lengteVanDeMeerderheid` in kandidatenzeef.dart).
+  TrackTags metSeconden(int? s) => TrackTags(
+      title: title,
+      artist: artist,
+      album: album,
+      trackNo: trackNo,
+      albumArtist: albumArtist,
+      trackTotal: trackTotal,
+      year: year,
+      seconds: s,
+      vanBestand: vanBestand);
+
   Map<String, dynamic> toJson() => {
         'title': title,
         'artist': artist,

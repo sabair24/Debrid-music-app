@@ -24,14 +24,21 @@ import 'soulseek.dart' show SoulseekFile;
 /// titel, ook als de strenge zeef al iets vond ([alleenDeTitel]).
 List<SoulseekFile> zeefKandidatenNu(List<SoulseekFile> files,
     {required String titel, int? seconden, required String artiest, String? album, Iterable<String>? albumTitels}) {
-  List<SoulseekFile> zeef(String t) => [
-        for (final f in files)
-          if (f.isAudio &&
-              fileOffersTitle(t, seconden, artiest, f.filename, f.durationSec, album: album) &&
-              !algemeneTitelZonderAlbum(t, album, f.filename))
-            f
-      ];
-  final streng = zeef(titel);
+  // Eerst de titel, dan de lengte: zo kan de lengte van de kopieën zelf meetellen ([lengteVanDeMeerderheid]) zonder dat
+  // elk bestand twee keer langs [fileOffersTitle] moet.
+  List<SoulseekFile> zeef(String t, {bool metMeerderheid = false}) {
+    final metTitel = [
+      for (final f in files)
+        if (f.isAudio &&
+            fileOffersTitle(t, null, artiest, f.filename, null, album: album) &&
+            !algemeneTitelZonderAlbum(t, album, f.filename))
+          f
+    ];
+    final lengte = (metMeerderheid ? lengteVanDeMeerderheid(metTitel, seconden) : null) ?? seconden;
+    return [for (final f in metTitel) if (binnenLengteMarge(lengte, f.durationSec)) f];
+  }
+
+  final streng = zeef(titel, metMeerderheid: true);
   final kaal = albumTitels == null ? null : alleenDeTitel(titel, albumTitels);
   if (kaal != null) {
     // Een kaal bestand in een map waar een ander bestand de gast wél noemt, is daar de solo.
@@ -47,6 +54,63 @@ List<SoulseekFile> zeefKandidatenNu(List<SoulseekFile> files,
   }
   if (streng.isNotEmpty) return streng;
   return zonderGast(files, titel: titel, seconden: seconden, artiest: artiest, album: album);
+}
+
+/// De lengtekeuring van [fileOffersTitle]: binnen 12 s, of een van beide onbekend.
+bool binnenLengteMarge(int? verwacht, int? bestand) {
+  final a = verwacht ?? 0, b = bestand ?? 0;
+  return a <= 0 || b <= 0 || (a - b).abs() <= 12;
+}
+
+/// Zoveel uploaders moeten dezelfde andere lengte hebben voor [lengteVanDeMeerderheid].
+const int kMeerderheidStemmen = 8;
+
+/// Hebben zoveel uploaders de officiële lengte (±2 s), dan blijft die gelden — ook als de meeste een andere hebben.
+const int kOfficieelBevestigd = 3;
+
+/// De lengte die de kopieën zelf noemen, als die duidelijk afwijkt van [officieel]; anders null, en dan geldt de
+/// officiële.
+///
+/// **Saber, 25-10-2026, bij Jonas Brothers — "Kids Of The Future":** de uitgave op de albumpagina zegt 2:55, en in
+/// SoulseekQt stonden tientallen FLAC's van 3:18–3:19 (Deezer: 198 s), ook in mappen als "Jonas Brothers (2007)". De
+/// zeef hield er één over, de bronnenlijst zette de rest onder de mp3's, en na de overdracht zou de keuring (±12 s) een
+/// goede kopie zelfs weigeren — *"is de filter ergens niet te streng ????"*.
+///
+/// [metTitel]: de bestanden met de juiste titel, de lengte nog niet gekeurd. Elke uploader stemt één keer per lengte die
+/// hij heeft. De grootste groep (binnen 4 s) moet minstens [kMeerderheidStemmen] stemmen en de helft van alle stemmen
+/// hebben, en meer dan 12 s van [officieel] liggen; en minder dan [kOfficieelBevestigd] uploaders mogen de officiële
+/// lengte hebben. Een radio-edit naast een albumversie blijft zo bij de officiële, zolang een paar mensen hem hebben.
+/// Geeft het midden van de groep.
+int? lengteVanDeMeerderheid(Iterable<SoulseekFile> metTitel, int? officieel) {
+  if (officieel == null || officieel <= 0) return null;
+  final perUploader = <String, List<int>>{};
+  for (final f in metTitel) {
+    final d = f.durationSec;
+    if (d == null || d <= 0) continue;
+    final al = perUploader.putIfAbsent(f.username, () => []);
+    if (!al.any((x) => (x - d).abs() <= 2)) al.add(d);
+  }
+  final stemmen = [for (final l in perUploader.values) ...l]..sort();
+  if (stemmen.length < kMeerderheidStemmen) return null;
+  final bevestigd = {
+    for (final e in perUploader.entries)
+      if (e.value.any((d) => (d - officieel).abs() <= 2)) e.key
+  };
+  if (bevestigd.length >= kOfficieelBevestigd) return null;
+  var van = 0, tot = 0;
+  for (var i = 0, j = 0; i < stemmen.length; i++) {
+    while (stemmen[i] - stemmen[j] > 4) {
+      j++;
+    }
+    if (i + 1 - j > tot - van) {
+      van = j;
+      tot = i + 1;
+    }
+  }
+  final groep = stemmen.sublist(van, tot);
+  if (groep.length < kMeerderheidStemmen || groep.length * 2 < stemmen.length) return null;
+  final midden = groep[groep.length ~/ 2];
+  return (midden - officieel).abs() <= 12 ? null : midden;
 }
 
 /// De titel zonder gast, als alleen die titel moet tellen: [titel] noemt een gast, en geen ander nummer van de plaat

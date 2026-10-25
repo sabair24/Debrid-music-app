@@ -44,6 +44,7 @@ import 'torrent_hires.dart';
 import 'twijfel.dart';
 import 'prullenbak.dart' show heeftPrullenbak, naarPrullenbak;
 import 'cachesleutel.dart' show fnv1a;
+import 'kandidatenzeef.dart' show lengteVanDeMeerderheid;
 import 'kopiesoort.dart';
 import 'luidheid.dart' show Gemeten;
 import 'luidheid_veger.dart' show meetLuidheid;
@@ -840,6 +841,9 @@ class SoulseekService {
   String get pauseLabel => client.pauseLabel;
   String? get whyNotLogin => client.whyNotLogin;
 
+  /// Waarom achtergrondwerk nu niet zoekt, als de server zwijgt ([SoulseekClient.serverZwijgt]); anders null.
+  String? get waaromStil => client.serverZwijgt ? kZwijgZin : null;
+
   /// Is de gedeelde sessie nu echt aangemeld? Een zoekopdracht zonder aanmelding geeft een lege lijst,
   /// net als een zoekopdracht zonder treffers — en alleen dit onderscheidt ze.
   bool get verbonden => _session?.verbonden ?? false;
@@ -1083,6 +1087,15 @@ class SoulseekService {
     return uit.future;
   }
 
+  /// Jouw antwoord aan een uploader (uploaderberichten.dart), over de gedeelde login — zoals zoeken. Waar als het
+  /// verstuurd is; gooit als Soulseek nu niet mag inloggen (dezelfde reden als bij zoeken).
+  Future<bool> stuurBericht(String aan, String tekst) async {
+    if (!available) return false;
+    final blocked = client.whyNotLogin;
+    if (blocked != null) throw blocked;
+    return withSession((s) => s.stuurBericht(aan, tekst));
+  }
+
   /// [gebruikteVraag] meldt op welke trede er uiteindelijk gezocht is, zodat het scherm eerlijk kan
   /// zeggen waar deze lijst over gaat.
   ///
@@ -1096,25 +1109,33 @@ class SoulseekService {
       void Function(String)? gebruikteVraag,
       bool achtergrond = false,
       List<String> extra = const [],
-      bool terugval = true}) async {
+      bool terugval = true,
+      bool Function()? nogNodig}) async {
     // An empty result because we couldn't log in is NOT "no sources" — retrying a broader query
     // would just burn another login and still show the user the wrong answer.
     final blocked = client.whyNotLogin;
     if (blocked != null) throw blocked;
+    // **De server zwijgt** ([SoulseekClient.serverZwijgt], [kZwijgDrempel]): achtergrondwerk zoekt niet — het komt later
+    // terug, zoals bij een geweigerde aanmelding — en wat je zelf zoekt krijgt één ronde, zonder terugval, extra woorden
+    // of de vraag zonder "The". Elke vraag erbij vulde op 25-10-2026 alleen de rem, en de volgende pagina wachtte erachter.
+    final stil = client.serverZwijgt;
+    if (stil && achtergrond) throw const SoulseekZwijgt();
     // [terugval] onwaar: alleen de eerste ronde. Een smalle vraag ("… 24bit" na het landen) die niets vindt, hoort
     // niet door te vallen naar de eerste twee woorden — dat is een tweede zoekopdracht naar iets wat er niet is.
     final alle = zoekRondes(query);
-    final rondes = terugval ? alle : alle.take(1).toList();
+    final rondes = terugval && !stil ? alle : alle.take(1).toList();
     // Nooit meer dan [kZoekPlafond] bestanden, de best passende eerst — zie zoekplafond.dart. "Live V"
     // gaf 60.143 bestanden: de pc stond 6 s stil om ze te versturen en de gsm crashte erop.
     final deel = onPartial == null ? null : (List<SoulseekFile> p) => onPartial(beperkZoekuitslag(query, p));
     var laatste = <SoulseekFile>[];
     for (var i = 0; i < rondes.length; i++) {
+      // Wie vroeg is weg (de pagina is dicht): geen volgende ronde.
+      if (nogNodig != null && !nogNodig()) return laatste;
       final ronde = rondes[i];
       // De RUIMSTE vraag van deze ronde, want daar kunnen de resultaten vandaan komen. Zie
       // [ruimerGezocht]: dat is precies waar het scherm eerlijk over hoort te zijn.
       gebruikteVraag?.call(ronde.last);
-      final gevonden = await _searchOnce(ronde, deel, achtergrond: achtergrond);
+      final gevonden = await _searchOnce(ronde, deel, achtergrond: achtergrond, nogNodig: nogNodig);
       if (gevonden.isNotEmpty) {
         // De [extra] woorden als EIGEN zoekopdracht, na de gewone, elk met een eigen venster. Gemeten op 24-10-2026:
         // meegestuurd in hetzelfde venster leverde "24bit" bijna niets op (9 bestanden met 24bit in het pad, Phil
@@ -1122,7 +1143,7 @@ class SoulseekService {
         // vraag komen later. Als eigen zoekopdracht: 112. Alleen na een gewone ronde die iets vond: wat zonder het
         // woord niets oplevert, levert met het woord ook niets op.
         final samen = [...gevonden];
-        if (i == 0) {
+        if (i == 0 && !stil) {
           final al = {for (final f in gevonden) '${f.username}|${f.filename}'};
           for (final v in extraVragen(ronde.first, extra)) {
             for (final f in await _searchOnce([v], null, achtergrond: achtergrond)) {
@@ -1139,8 +1160,8 @@ class SoulseekService {
     // kregen geen enkel antwoord, "Beatles Let It Be" 5000 bestanden en "Weeknd Alone Again" 693 — terwijl "The Police
     // Roxanne" gewoon werkte. Het netwerk weert bepaalde namen met "The" ervoor; dan nog één keer zonder.
     final zonderThe = query.trim().replaceFirst(RegExp(r'^the\s+', caseSensitive: false), '');
-    if (terugval && laatste.isEmpty && zonderThe != query.trim() && zonderThe.isNotEmpty) {
-      final gevonden = await _searchOnce([zonderThe], deel, achtergrond: achtergrond);
+    if (terugval && !stil && laatste.isEmpty && zonderThe != query.trim() && zonderThe.isNotEmpty) {
+      final gevonden = await _searchOnce([zonderThe], deel, achtergrond: achtergrond, nogNodig: nogNodig);
       if (gevonden.isNotEmpty) {
         gebruikteVraag?.call(zonderThe);
         return beperkZoekuitslag(query, gevonden);
@@ -1155,7 +1176,7 @@ class SoulseekService {
   /// kosten hetzelfde als één. Zou je ze na elkaar sturen, dan was elke ronde er ruim acht seconden
   /// bij.
   Future<List<SoulseekFile>> _searchOnce(List<String> vragen, void Function(List<SoulseekFile>)? onPartial,
-      {bool achtergrond = false}) async {
+      {bool achtergrond = false, bool Function()? nogNodig}) async {
     if (!available) return [];
     final variants = <String>{};
     for (final v in vragen) {
@@ -1168,7 +1189,8 @@ class SoulseekService {
     }
     if (variants.isEmpty) return [];
     try {
-      return await withSession((s) => s.search(variants.toList(), onPartial: onPartial, achtergrond: achtergrond));
+      return await withSession(
+          (s) => s.search(variants.toList(), onPartial: onPartial, achtergrond: achtergrond, nogNodig: nogNodig));
     } catch (e) {
       // Leeg, maar niet "niets gevonden" — dus wel in het logboek, anders is het van een lege uitslag niet te onderscheiden.
       client.logboek('zoeken "${variants.last}" mislukte: $e');
@@ -1840,6 +1862,18 @@ class DownloadManager extends ChangeNotifier {
     // Kiest de app zelf, dan een vinyl-rip pas als er niets anders is (Saber, 24-10-2026: vinyl "alleen als ik kies").
     // Wie zelf op een regel klikte ([exact]) of zelf een uitgave koos ([jouwKeuze]), krijgt wat hij koos.
     if (exact == null && !jouwKeuze) candidates = vinylAchteraan(candidates, (f) => f.filename);
+    // De lengte van de kopieën zelf, als de uitgave ernaast zit ([lengteVanDeMeerderheid]): anders gaan in de race de
+    // kopieën met de verkeerde lengte voor, en keurt [keurOverdracht] (±12 s) een goede kopie na de overdracht af.
+    // "Kids Of The Future" (Jonas Brothers, 2007): de uitgave zei 2:55, de kopieën 3:18–3:19.
+    final gezag = authority;
+    if (gezag != null && exact == null && !jouwKeuze) {
+      final lengte = lengteVanDeMeerderheid(candidates, gezag.seconds);
+      if (lengte != null) {
+        _log.line('"${gezag.artist} — ${gezag.title}": de uitgave zegt ${_mmss(gezag.seconds!)}, de kopieën '
+            '${_mmss(lengte)} — die lengte geldt');
+        authority = gezag.metSeconden(lengte);
+      }
+    }
     // Don't start a duplicate if this exact key is already in progress.
     if (key != null) {
       final existing = jobByKey(key);
@@ -2238,7 +2272,10 @@ class DownloadManager extends ChangeNotifier {
     for (var i = 0; i < 25 && (speeltNu?.call(pad) ?? false); i++) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
     }
-    if (speeltNu?.call(pad) ?? false) return 'Het nummer speelt nu — vervang het als het niet meer speelt';
+    if (speeltNu?.call(pad) ?? false) {
+      _log.line('"${baseName(pad)}": houden gaat nu niet — het bestand is in gebruik (hier of op een toestel)');
+      return 'Het nummer speelt nu — vervang het als het niet meer speelt';
+    }
     final gezag = g.gezag == null ? null : TrackTags.fromJson(g.gezag!);
     final naam = gezag == null ? baseName(pad) : '${gezag.artist} — ${gezag.title}';
     try {
@@ -4883,8 +4920,8 @@ class DownloadManager extends ChangeNotifier {
       try {
         return await zoek;
       } catch (_) {
-        // Geen aanmelding is geen mislukte plek — zie [RadioLaterOpnieuw]. Geen net wel.
-        final waarom = soulseek.whyNotLogin;
+        // Geen aanmelding is geen mislukte plek — zie [RadioLaterOpnieuw]. Een zwijgende server ook niet. Geen net wel.
+        final waarom = soulseek.whyNotLogin ?? soulseek.waaromStil;
         if (waarom != null) throw RadioLaterOpnieuw(waarom);
         return null;
       }

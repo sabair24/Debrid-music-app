@@ -290,6 +290,26 @@ Uint8List _message(int code, Uint8List payload) =>
     Uint8List.fromList([...(_W()..u32(4 + payload.length)..u32(code)).bytes(), ...payload]);
 Uint8List _initMessage(int code, Uint8List payload) =>
     Uint8List.fromList([...(_W()..u32(1 + payload.length)..u8(code)).bytes(), ...payload]);
+
+/// Een privébericht van de server (code 22, MessageUser) — wat er na de code komt: het nummer om te bevestigen, wanneer
+/// (seconden), van wie en wat. Null als het niet te lezen is. Zie uploaderberichten.dart.
+({int id, DateTime op, String van, String tekst})? leesPrivebericht(Uint8List naCode) {
+  if (naCode.length < 16) return null;
+  final r = _R(naCode);
+  final id = r.u32();
+  final tijd = r.u32();
+  final van = r.str();
+  final tekst = r.str();
+  if (van.isEmpty) return null;
+  return (id: id, op: DateTime.fromMillisecondsSinceEpoch(tijd * 1000), van: van, tekst: tekst);
+}
+
+/// MessageAcked (code 23). De server bewaart een privébericht tot het bevestigd is, en bezorgt het anders bij elke
+/// login opnieuw — zo zag Saber op zondag in SoulseekQt nog de vragen van vrijdag.
+Uint8List bevestigPrivebericht(int id) => _message(23, (_W()..u32(id)).bytes());
+
+/// Een privébericht aan [aan] (code 22): jouw antwoord aan een uploader.
+Uint8List priveberichtAan(String aan, String tekst) => _message(22, (_W()..str(aan)..str(tekst)).bytes());
 String _md5hex(String s) => md5.convert(utf8.encode(s)).toString();
 Uint8List _zlib(Uint8List data) {
   try {
@@ -836,6 +856,39 @@ class SoulseekClient {
   /// Wat de server in zoekopdrachten weert (bericht 160, ExcludedSearchPhrases), klein geschreven — zie
   /// geweerde_zinnen.dart. Begint met wat er gemeten is, voor het geval de lijst (nog) niet binnen is.
   final Set<String> geweerdeZinnen = {...kBekendeGeweerdeZinnen};
+
+  /// Een privébericht van een uploader kwam binnen (al bevestigd aan de server) — zie uploaderberichten.dart.
+  void Function(int id, DateTime op, String van, String tekst)? bijBericht;
+
+  /// Hoeveel zoekopdrachten na elkaar het hele venster zonder één antwoord bleven, voor de hele app (sessies komen en
+  /// gaan) — zie [kZwijgDrempel].
+  int zonderAntwoordOpRij = 0;
+
+  /// Tot wanneer de server als zwijgend geldt.
+  DateTime? zwijgtTot;
+
+  /// Geeft de server onze zoekopdrachten nu niet door? Dan geen achtergrondzoeken en geen extra rondes: elke vraag
+  /// erbij vult alleen de rem ([kZoekPerVijfMinuten]), en wat je zelf zoekt wacht daarachter.
+  bool get serverZwijgt => zwijgtTot != null && DateTime.now().isBefore(zwijgtTot!);
+
+  /// Na elke zoekopdracht: kwam er [antwoord]? Geeft de regel voor het logboek als de stand omslaat, anders null.
+  String? noteerZoekuitslag({required bool antwoord, DateTime? nu}) {
+    final t = nu ?? DateTime.now();
+    if (antwoord) {
+      final was = zwijgtTot != null;
+      zonderAntwoordOpRij = 0;
+      zwijgtTot = null;
+      return was ? 'de server geeft weer antwoord — achtergrondzoeken en extra rondes mogen weer' : null;
+    }
+    zonderAntwoordOpRij++;
+    if (zonderAntwoordOpRij < kZwijgDrempel) return null;
+    final nieuw = zwijgtTot == null || !t.isBefore(zwijgtTot!);
+    zwijgtTot = t.add(kZwijgPauze);
+    return nieuw
+        ? 'de server geeft al $zonderAntwoordOpRij zoekopdrachten op rij geen enkel antwoord — '
+            '${kZwijgPauze.inMinutes} min geen achtergrondzoeken en geen extra rondes'
+        : null;
+  }
 
   /// Is dit de eerste login sinds het starten, en wel meteen erna? Dan is een INVALIDPASS vrijwel
   /// zeker onze eigen vorige sessie en niet het wachtwoord.
@@ -1622,9 +1675,14 @@ class Zoekrem {
   /// Wacht tot er een zoekopdracht mag, en boekt hem meteen — tussen kijken en boeken zit geen `await`, dus twee
   /// tegelijk nemen nooit dezelfde plek. [achtergrond]: hoogstens `max - voorJou` per minuut en `maxVijf - voorJouVijf`
   /// per vijf minuten. Geeft terug hoe lang er gewacht is.
-  Future<Duration> neem({bool achtergrond = false}) async {
+  ///
+  /// [nogNodig] onwaar (de pagina die vroeg is dicht): null, en er is niets geboekt. Op 25-10-2026 ging
+  /// "*he Weeknd The Highlights" na 209 s alsnog uit, voor een albumpagina die al lang weg was — en elke zo'n vraag
+  /// schoof de volgende verder achteruit.
+  Future<Duration?> neem({bool achtergrond = false, bool Function()? nogNodig}) async {
     var gewacht = Duration.zero;
     while (true) {
+      if (nogNodig != null && !nogNodig()) return null;
       final nu = _klok();
       _tijden.removeWhere((t) => nu.difference(t) >= const Duration(minutes: 5));
       final w1 = zoekWachttijd(_tijden, nu, max: achtergrond ? max - voorJou : max);
@@ -1646,6 +1704,28 @@ final zoekrem = Zoekrem();
 
 /// Korter dan dit, en leeg: dan is er niet gezocht maar is de verbinding dood ([SlskSession.search]).
 const kZoekMeteenLeeg = Duration(milliseconds: 800);
+
+/// Zoveel zoekopdrachten na elkaar zonder één antwoord, en de server geldt als zwijgend ([SoulseekClient.serverZwijgt]).
+///
+/// **Gemeten op de pc, 25-10-2026 18:58–19:03.** Elke zoekopdracht kreeg geen enkel antwoord, ook "Weeknd Starboy" en
+/// "Weeknd" alleen — de server gaf ze niet door (sinds mijn reeks proefvragen om 17:40). Zonder antwoord liep elke
+/// albumpagina alle rondes af, plus de vraag zonder "The": vijf vragen per pagina. Na een paar pagina's zat de rem vol
+/// (40 in 5 min) en wachtten de volgende 3 tot 9 minuten — het wieltje bij elk nummer "blijft maar draaien" (Saber).
+/// Vier op rij: een zeldzaam nummer of een vraag met "24bit" krijgt soms niets, vier gewone vragen na elkaar niet.
+const int kZwijgDrempel = 4;
+
+/// Zolang geldt de server na [kZwijgDrempel] als zwijgend; elke volgende vraag zonder antwoord verlengt het.
+const kZwijgPauze = Duration(minutes: 10);
+
+/// Achtergrondwerk dat niet zoekt omdat de server zwijgt ([SoulseekClient.serverZwijgt]). Zoals een geweigerde
+/// aanmelding: niets mislukt, het komt later terug (de verlanglijst houdt zijn ritme, de radio neemt TIDAL).
+class SoulseekZwijgt implements Exception {
+  const SoulseekZwijgt();
+  @override
+  String toString() => kZwijgZin;
+}
+
+const kZwijgZin = 'Soulseek geeft nu geen antwoord op zoekopdrachten';
 
 /// De regel in `soulseek_login.log` als een zoekopdracht het hele venster zonder één antwoord bleef. [vraag] de laatste
 /// vraag van de ronde, [opRij] hoeveel zoekopdrachten na elkaar zo eindigden, [zoekMinuut]/[zoekVijf] hoeveel vragen we
@@ -1729,9 +1809,8 @@ class SlskSession {
   final List<DateTime> _zoektijden = [];
   bool _relogged = false;
 
-  /// Voor [zoekZonderAntwoordRegel]: hoeveel zoekopdrachten na elkaar het hele venster zonder één antwoord bleven, en
-  /// wanneer "niet ingelogd, niet gezocht" voor het laatst in het logboek kwam (hoogstens eens per minuut).
-  int _zonderAntwoord = 0;
+  /// Wanneer "niet ingelogd, niet gezocht" voor het laatst in het logboek kwam (hoogstens eens per minuut). Hoeveel
+  /// zoekopdrachten op rij zonder antwoord bleven, telt de client ([SoulseekClient.zonderAntwoordOpRij]).
   DateTime? _nietIngelogdGemeld;
 
   /// Staat de verbinding met de server er nu? Zonder een nieuwe te openen  voor wie wil weten of
@@ -1742,6 +1821,14 @@ class SlskSession {
   /// of its own, so the status check costs nothing when we're already online.
   Future<bool> alive() => _ensure();
 
+  /// Jouw antwoord aan een uploader ([priveberichtAan]). Logt in als dat nodig is; waar als het verstuurd is.
+  Future<bool> stuurBericht(String aan, String tekst) async {
+    if (client.blocked || !await _ensure()) return false;
+    _conn!.send(priveberichtAan(aan, tekst));
+    client.logboek('bericht aan $aan: $tekst');
+    return true;
+  }
+
   /// Run a search over the SHARED login instead of opening a second server connection.
   ///
   /// Searching used to open its own server connection and log in per query — so
@@ -1750,8 +1837,11 @@ class SlskSession {
   ///
   /// Elke vraag wacht op de zoekrem ([zoekrem], [kZoekPerMinuut]); [achtergrond] (de radio, de verlanglijst, een
   /// betere kopie) laat [kZoekVoorJou] plaatsen vrij voor wat je zelf zoekt.
+  ///
+  /// [nogNodig] onwaar (wie vroeg is weg, zoals een albumpagina die dicht is): de vragen die nog op de rem wachtten,
+  /// gaan niet meer uit.
   Future<List<SoulseekFile>> search(List<String> queries,
-      {void Function(List<SoulseekFile>)? onPartial, bool achtergrond = false}) async {
+      {void Function(List<SoulseekFile>)? onPartial, bool achtergrond = false, bool Function()? nogNodig}) async {
     if (client.blocked) return const [];
     if (!await _ensure()) {
       // Niet ingelogd en (nog) niet opnieuw mogen: dan is er niet gezocht. Dat stond nergens, en op het scherm was het
@@ -1775,7 +1865,11 @@ class SlskSession {
     try {
       _conn!.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort
       for (final q in queries) {
-        final gewacht = await zoekrem.neem(achtergrond: achtergrond);
+        final gewacht = await zoekrem.neem(achtergrond: achtergrond, nogNodig: nogNodig);
+        if (gewacht == null) {
+          client.logboek('zoekopdracht "$q" niet meer nodig — niet verstuurd');
+          break;
+        }
         if (gewacht >= const Duration(seconds: 1)) {
           client.logboek('zoekrem: "$q" wachtte ${gewacht.inSeconds} s'
               '${achtergrond ? ' (achtergrond)' : ''} — hoogstens $kZoekPerMinuut zoekopdrachten per minuut en '
@@ -1795,6 +1889,8 @@ class SlskSession {
           ..add(nu)
           ..removeWhere((z) => nu.difference(z) > const Duration(minutes: 5));
       }
+      // Niets verstuurd (niet meer nodig, of de verbinding viel weg): dan valt er ook niets af te wachten of te tellen.
+      if (run.tickets.isEmpty) return const [];
       await run.settle();
     } catch (e) {
       // whatever arrived before the failure is still worth returning
@@ -1815,19 +1911,21 @@ class SlskSession {
       // **Het hele venster zonder één antwoord, met hoeveel we zochten.** Op 25-10-2026 om 17:43 gaf ook "Daft Punk
       // Digital Love" (eerder 1002 bestanden) 0 in 8,0 s: de server gaf onze vragen niet meer door, na ~25 proefvragen
       // in tien minuten. Hoeveel er te veel is, stond nergens — met deze regel staat het er de volgende keer wel.
-      _zonderAntwoord++;
+      final omslag = client.noteerZoekuitslag(antwoord: false);
       final nu = DateTime.now();
       client.logboek(zoekZonderAntwoordRegel(
         vraag: queries.isEmpty ? '' : queries.last,
         duur: nu.difference(begon),
-        opRij: _zonderAntwoord,
+        opRij: client.zonderAntwoordOpRij,
         zoekMinuut: _zoektijden.where((z) => nu.difference(z) <= const Duration(minutes: 1)).length,
         zoekVijf: _zoektijden.where((z) => nu.difference(z) <= const Duration(minutes: 5)).length,
         achtergrond: achtergrond,
       ));
+      if (omslag != null) client.logboek(omslag);
     } else if (run.merged.isNotEmpty) {
       // Een antwoord, ook zonder muziek erin: de server geeft onze vragen door.
-      _zonderAntwoord = 0;
+      final omslag = client.noteerZoekuitslag(antwoord: true);
+      if (omslag != null) client.logboek(omslag);
     }
     return uit;
   }
@@ -1917,6 +2015,16 @@ class SlskSession {
             client.logboek('de server weert ${zinnen.length} zoekzinnen (code 160): '
                 '${zinnen.take(40).join(', ')}${zinnen.length > 40 ? ', …' : ''}');
           } catch (_) {/* een kapotte lijst: dan wat er al was */}
+          return;
+        }
+        if (code == 22) {
+          // MessageUser: een uploader schrijft ons, vaak een vraag tegen automatisch downloaden ("type download in this
+          // chat"). Bevestigen, en doorgeven aan wie het toont (uploaderberichten.dart) — jij antwoordt.
+          final b = leesPrivebericht(Uint8List.sublistView(payload, 4));
+          if (b == null) return;
+          c.send(bevestigPrivebericht(b.id));
+          client.logboek('bericht van ${b.van}: ${b.tekst.length > 120 ? '${b.tekst.substring(0, 120)}…' : b.tekst}');
+          client.bijBericht?.call(b.id, b.op, b.van, b.tekst);
           return;
         }
         if (code == 1) {

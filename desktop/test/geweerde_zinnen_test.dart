@@ -40,7 +40,7 @@ void main() {
   test('aangesloten: niets gevonden met "The" vooraan — nog één keer zonder; en meteen leeg is een dode verbinding', () {
     final online = _bron('lib/online.dart');
     expect(online, contains("    final zonderThe = query.trim().replaceFirst(RegExp(r'^the\\s+', caseSensitive: false), '');"));
-    expect(online, contains('    if (terugval && laatste.isEmpty && zonderThe != query.trim() && zonderThe.isNotEmpty) {'));
+    expect(online, contains('    if (terugval && !stil && laatste.isEmpty && zonderThe != query.trim() && zonderThe.isNotEmpty) {'));
     final s = _bron('lib/soulseek.dart');
     expect(s, contains('    if (uit.isEmpty && _alive && (fout != null || DateTime.now().difference(begon) < kZoekMeteenLeeg)) {'));
     expect(s, contains('const kZoekMeteenLeeg = Duration(milliseconds: 800);'));

@@ -13,6 +13,7 @@ import '../catalogus_kopie.dart';
 import '../library.dart';
 import '../paths.dart';
 import '../settings.dart';
+import '../uploaderberichten.dart' show berichtenVanPc;
 import '../warm_log.dart';
 import 'client.dart';
 import 'discovery.dart';
@@ -979,6 +980,7 @@ class ClientSession extends ChangeNotifier {
         // New records may have arrived; only the ones without a cover are fetched.
         unawaited(library.loadRemoteCovers(settings));
       }
+      if (library.geenVerbinding == null) unawaited(_haalBerichten());
       // Vers van de pc: leg hem vast op dit toestel. Alleen als er ECHT iets veranderd is — een
       // poll die 304 krijgt hoeft geen bestand van megabytes opnieuw weg te schrijven, en dat
       // gebeurt hier elke vijftien seconden.
@@ -1039,6 +1041,32 @@ class ClientSession extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('Cloud catalogue unavailable: $e');
+    }
+  }
+
+  /// De versie van de berichten van uploaders die dit toestel heeft (uploaderberichten.dart); null: nog niets.
+  int? _berichtenVersie;
+  bool _berichtenBezig = false;
+
+  /// Een pc van vóór de berichten kent de vraag niet (404): dan deze sessie niet meer vragen.
+  bool _berichtenOnbekend = false;
+
+  /// De berichten van uploaders bij de pc ophalen, bij elke ronde van [_refresh]. Meestal is het antwoord alleen de
+  /// versie; alleen als er iets bij kwam de lijst.
+  Future<void> _haalBerichten() async {
+    final c = library.remote;
+    if (c == null || _berichtenOnbekend || _berichtenBezig) return;
+    _berichtenBezig = true;
+    try {
+      final eerste = _berichtenVersie == null;
+      final a = await c.ask('/api/soulseek/berichten', {if (_berichtenVersie != null) 'versie': _berichtenVersie});
+      _berichtenVersie = berichtenVanPc(a, eerste: eerste) ?? _berichtenVersie;
+    } on RemoteException catch (e) {
+      if (e.statusCode == 404) _berichtenOnbekend = true;
+    } catch (_) {
+      // De volgende ronde opnieuw.
+    } finally {
+      _berichtenBezig = false;
     }
   }
 

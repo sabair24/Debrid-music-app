@@ -42,8 +42,8 @@ void main() {
       final online = _bron('lib/online.dart');
       final s = online.substring(online.indexOf('  Future<List<SoulseekFile>> search(String query,'));
       final lijf = s.substring(0, s.indexOf('\n  }\n'));
-      expect(lijf, contains('final gevonden = await _searchOnce(ronde, deel, achtergrond: achtergrond);'));
-      expect(lijf, contains('if (i == 0) {'), reason: 'alleen na de volledige vraag, niet na de terugval');
+      expect(lijf, contains('final gevonden = await _searchOnce(ronde, deel, achtergrond: achtergrond, nogNodig: nogNodig);'));
+      expect(lijf, contains('if (i == 0 && !stil) {'), reason: 'alleen na de volledige vraag, niet na de terugval, en niet als de server zwijgt');
       expect(lijf, contains('for (final v in extraVragen(ronde.first, extra)) {'));
       expect(lijf, contains('await _searchOnce([v], null, achtergrond: achtergrond)'), reason: 'een eigen venster');
       expect(lijf, contains("if (al.add('\${f.username}|\${f.filename}')) samen.add(f);"), reason: 'de gewone eerst, geen dubbels');

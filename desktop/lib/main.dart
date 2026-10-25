@@ -34,7 +34,9 @@ import 'radioladder.dart' show kOpruimNa;
 import 'radiobestand.dart' show kRadioSpeling;
 import 'scanmaat.dart';
 import 'booklet.dart' show imageSize;
+import 'ui/berichten_scherm.dart';
 import 'ui/kopfoto.dart';
+import 'uploaderberichten.dart';
 import 'ui/kopbewerker.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
@@ -886,6 +888,13 @@ Future<void> main() async {
   if (mode.owner) await laadVasteKeuzes();
   // Studio, cd of vinyl per nummer (kopiesoort.dart): vóór de eerste scan, want de catalogus en de labels lezen het.
   if (mode.owner) await laadSoorten();
+  // Berichten van uploaders (uploaderberichten.dart): wat er al was; en op de pc vanaf nu wat de Soulseek-verbinding
+  // binnenkrijgt. Een toestel haalt ze bij de pc op (ClientSession).
+  await uploaderberichten.laad();
+  if (mode.owner) {
+    soulseek.client.bijBericht = (id, op, van, tekst) => uploaderberichten
+        .voegToe(Uploaderbericht(id: id, ms: op.millisecondsSinceEpoch, uploader: van, tekst: tekst));
+  }
   // Wat er van elk bestand gemeten is. Vóór de eerste scan, want `firstIsBetter` vraagt hier bij elke
   // vergelijking naar — en een lijst die nog niet is ingelezen beschermt niets.
   if (mode.owner) await laadEchtheid();
@@ -3430,6 +3439,40 @@ class _HomeShellState extends State<HomeShell> {
     // jacht zelf, op een toestel uit de catalogus.
     _klaar = context.read<DownloadManager>().klaarMelding..addListener(_toonKlaar);
     klaarVanPc.addListener(_toonKlaarVanPc);
+    // Een uploader schreef je (uploaderberichten.dart): op de pc van de Soulseek-verbinding, op een toestel van de pc.
+    uploaderberichten.nieuw.addListener(_bijNieuwBericht);
+  }
+
+  final List<Uploaderbericht> _nieuweBerichten = [];
+  Timer? _berichtKlok;
+
+  /// Bundelen: bij een login bezorgt de server alles wat nog niet bevestigd was in één keer, en vier meldingen van
+  /// twintig seconden achter elkaar zouden een minuut lang het scherm onderaan bezetten.
+  void _bijNieuwBericht() {
+    final b = uploaderberichten.nieuw.value;
+    if (b == null) return;
+    _nieuweBerichten.add(b);
+    _berichtKlok?.cancel();
+    _berichtKlok = Timer(const Duration(seconds: 2), _toonBerichten);
+  }
+
+  /// Wie je schreef en wat, met "Lezen" om te antwoorden. Twintig seconden: dit vraagt iets van je; het staat daarna
+  /// ook bij Mijn downloads → Berichten.
+  void _toonBerichten() {
+    if (!mounted || _nieuweBerichten.isEmpty) return;
+    final lijst = List<Uploaderbericht>.of(_nieuweBerichten);
+    _nieuweBerichten.clear();
+    final wie = {for (final b in lijst) b.uploader}.toList();
+    final tekst = lijst.length == 1
+        ? 'Bericht van ${lijst.single.uploader}: ${lijst.single.tekst}'
+        : '${lijst.length} berichten van ${wie.join(', ')}';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(tekst, maxLines: 3, overflow: TextOverflow.ellipsis),
+      duration: const Duration(seconds: 20),
+      persist: false,
+      action: SnackBarAction(
+          label: 'Lezen', onPressed: () => openBerichten(context, uploader: wie.length == 1 ? wie.single : null)),
+    ));
   }
 
   ValueNotifier<String?>? _klaar;
@@ -3632,6 +3675,8 @@ class _HomeShellState extends State<HomeShell> {
     _waarschuwing?.removeListener(_toonWaarschuwing);
     _klaar?.removeListener(_toonKlaar);
     klaarVanPc.removeListener(_toonKlaarVanPc);
+    uploaderberichten.nieuw.removeListener(_bijNieuwBericht);
+    _berichtKlok?.cancel();
     _ruilKlok?.cancel();
     if (isTv) HardwareKeyboard.instance.removeHandler(_tvVangnet);
     if (!isTv) HardwareKeyboard.instance.removeHandler(_merkToetsen);
@@ -13723,6 +13768,41 @@ Widget _soortMerk(Track? t) => ListenableBuilder(
       },
     );
 
+/// Berichten van uploaders (uploaderberichten.dart): de lijst, of meteen het gesprek met [uploader].
+void openBerichten(BuildContext context, {String? uploader}) {
+  final verstuur = verstuurAanUploader(context);
+  Navigator.of(context, rootNavigator: true).push(MaterialPageRoute<void>(
+      builder: (_) =>
+          uploader == null ? BerichtenScherm(verstuur: verstuur) : GesprekScherm(uploader: uploader, verstuur: verstuur)));
+}
+
+/// Hoe dit toestel een uploader antwoordt: op de pc rechtstreeks over Soulseek, op een toestel via de pc
+/// (`/api/soulseek/bericht`). Daarna staat het antwoord in het gesprek — op een toestel precies het bericht dat de pc
+/// bewaarde, zodat het er bij de volgende ronde niet twee keer staat.
+VerstuurAntwoord verstuurAanUploader(BuildContext context) {
+  final lib = context.read<LibraryStore>();
+  final dm = lib.isRemote ? null : context.read<DownloadManager>();
+  return (aan, tekst) async {
+    try {
+      if (lib.remote case final c?) {
+        final a = await c.ask('/api/soulseek/bericht', {'aan': aan, 'tekst': tekst});
+        final b = Uploaderbericht.uitJson(a['bericht']);
+        if (b != null) {
+          uploaderberichten.voegToe(b);
+          uploaderberichten.gelezen(aan);
+        }
+        return null;
+      }
+      final b = await verstuurAntwoord(dm!.soulseek.stuurBericht, aan, tekst);
+      return b == null ? 'Soulseek nam het niet aan — is Soulseek ingesteld?' : null;
+    } on RemoteException catch (e) {
+      return e.statusCode == 404 ? 'Werk de pc bij: zijn versie kan nog niet antwoorden.' : e.message;
+    } catch (e) {
+      return 'Versturen lukte niet: $e';
+    }
+  };
+}
+
 /// "Stop met zoeken naar …": op de pc zelf, op een toestel via de pc (`/api/soort/stop`).
 Future<void> _stopSoortvraag(BuildContext context, Track t) async {
   final lib = context.read<LibraryStore>();
@@ -23087,6 +23167,21 @@ class DownloadsView extends StatelessWidget {
                     label: const Text('Wis afgeronde'),
                     style: TextButton.styleFrom(foregroundColor: _muted),
                   ),
+                // Berichten van uploaders (uploaderberichten.dart): hier altijd terug te vinden, ook na de melding.
+                ListenableBuilder(
+                  listenable: uploaderberichten,
+                  builder: (context, _) {
+                    if (uploaderberichten.alle.isEmpty) return const SizedBox.shrink();
+                    final n = uploaderberichten.ongelezen;
+                    return TextButton.icon(
+                      key: const ValueKey('berichten-knop'),
+                      onPressed: () => openBerichten(context),
+                      icon: Icon(n > 0 ? Icons.mark_email_unread_rounded : Icons.mail_outline_rounded, size: 16),
+                      label: Text(n > 0 ? 'Berichten van uploaders ($n nieuw)' : 'Berichten van uploaders'),
+                      style: TextButton.styleFrom(foregroundColor: n > 0 ? _accent : _muted),
+                    );
+                  },
+                ),
                 // De derde bron. Alleen op de machine die de muziek bezit: tidaler is een programma
                 // op die pc, en een telefoon heeft geen muziekmap om iets in te zetten. Hij staat
                 // hier en niet tussen de bronnen op Zoeken, omdat er niets te zoeken valt — je
@@ -25090,7 +25185,7 @@ class _SourcesViewState extends State<SourcesView> {
       });
     }
     if (soulseek.available) {
-      soulseek.search(widget.query, gebruikteVraag: (v) {
+      soulseek.search(widget.query, nogNodig: () => mounted, gebruikteVraag: (v) {
         // Zodra er op een ruimere trede gezocht wordt, gaat deze lijst over een ándere vraag dan je
         // stelde. Dat hoort erbij te staan — zie [zoekLadder].
         if (mounted && v != _gezochtOp) setState(() => _gezochtOp = v);
@@ -25146,11 +25241,18 @@ class _SourcesViewState extends State<SourcesView> {
   /// Het geheugen van één: zie [_SlskKlaar]. Zonder dit werd er bij elke tik en elk deelresultaat
   /// opnieuw gefilterd, gerangschikt en gegroepeerd over duizenden bestanden.
   _SlskKlaar? _klaar;
+
+  /// De lengte waarmee [_klaar] rekende. Verandert hij (er kwamen genoeg kopieën binnen voor [lengteVanDeMeerderheid]),
+  /// dan geldt het geheugen van de rangen niet meer: daar zit "past" in.
+  int? _bronLengte;
+
   _SlskKlaar get _bronnen {
     final k = _klaar;
     if (k != null && k.geldigVoor(_slsk, _filter, null)) return k;
-    return _klaar = _SlskKlaar.van(_slsk, _filter,
-        past: _pastBijNummer, hergebruik: k?.hergebruikVoor(_slsk, null));
+    final (past, lengte) = _pastBijNummer;
+    final zelfde = lengte == _bronLengte;
+    _bronLengte = lengte;
+    return _klaar = _SlskKlaar.van(_slsk, _filter, past: past, hergebruik: zelfde ? k?.hergebruikVoor(_slsk, null) : null);
   }
 
   /// Of een aangeboden bestand bewijsbaar het nummer is dat onder deze lijst hangt.
@@ -25159,10 +25261,16 @@ class _SourcesViewState extends State<SourcesView> {
   /// zijn versie-aanduiding, en de officiële looptijd. [fileOffersTitle] neemt de MAP van de peer
   /// als bewijs mee — zie [versieVolgtUitMap] — en dat is precies waarom "Fields of Gold (My Songs
   /// Version)" nu wél te vinden is in een map die "My Songs" heet.
-  bool Function(SoulseekFile)? get _pastBijNummer {
+  ///
+  /// De lengte is die van de uitgave, tenzij de kopieën het duidelijk oneens zijn ([lengteVanDeMeerderheid]): bij
+  /// "Kids Of The Future" zei de uitgave 2:55 en stonden de echte FLAC's van 3:19 onder de mp3's.
+  (bool Function(SoulseekFile)?, int?) get _pastBijNummer {
     final a = widget.authority, t = widget.track;
-    if (a == null || t == null) return null;
-    return (f) => fileOffersTitle(t.title, t.seconds, a.artist, f.filename, f.durationSec);
+    if (a == null || t == null) return (null, null);
+    final metTitel = Set<SoulseekFile>.identity()
+      ..addAll(_slsk.where((f) => fileOffersTitle(t.title, null, a.artist, f.filename, null)));
+    final lengte = lengteVanDeMeerderheid(metTitel, t.seconds) ?? t.seconds;
+    return ((f) => metTitel.contains(f) && binnenLengteMarge(lengte, f.durationSec), lengte);
   }
 
   @override
@@ -26390,7 +26498,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     _slskRem.herbegin();
     _torrentRem.herbegin();
     if (soulseek.available) {
-      soulseek.search(q, gebruikteVraag: (v) {
+      soulseek.search(q, nogNodig: geldig, gebruikteVraag: (v) {
         if (!geldig()) return;
         ZoekGeheugen.gezochtDirect = v;
         if (mounted && v != _gezochtDirect) setState(() => _gezochtDirect = v);
@@ -31706,7 +31814,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     if (!soulseek.available) return;
     setState(() => _slskBusy = true);
     try {
-      final r = await soulseek.search(_albumVraag, onPartial: (p) {
+      // Ga je weg voor hij uitging (hij wacht soms op de zoekrem), dan gaat hij niet meer uit — zie [Zoekrem.neem].
+      final r = await soulseek.search(_albumVraag, nogNodig: () => mounted, onPartial: (p) {
         if (mounted) setState(() => _albumSlsk = p);
       });
       if (mounted) setState(() { _albumSlsk = r; _slskBusy = false; });

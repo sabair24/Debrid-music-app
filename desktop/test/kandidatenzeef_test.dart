@@ -262,4 +262,61 @@ void main() {
       expect(algemeneTitelZonderAlbum('Intro', null, r'x\01 Intro.flac'), isFalse, reason: 'zonder album geen regel');
     });
   });
+
+  // Saber, 25-10-2026, met SoulseekQt ernaast: "is de filter ergens niet te streng ????". De uitgave op de albumpagina
+  // zei 2:55 (175 s); de kopieën, ook in mappen "Jonas Brothers (2007)", 3:18–3:19 (Deezer: 198 s).
+  group('de lengte van de meerderheid', () {
+    SoulseekFile f(String peer, String pad, int? sec) => SoulseekFile(
+        username: peer, filename: pad, size: 26806672, speed: 1000000, queueLength: 0, freeSlots: true, durationSec: sec);
+    final kids = [
+      for (var i = 0; i < 30; i++)
+        f('jb$i', 'music\\Jonas Brothers (2007)\\Jonas Brothers\\14 - Kids Of The Future.flac', i.isEven ? 199 : 198),
+      for (var i = 0; i < 6; i++) f('mtr$i', 'Danny Elfman - Meet the Robinsons (FLAC)\\18 - Kids of the Future - Jonas Brothers.flac', 350),
+      f('karaoke', 'Artist Karaoke Series\\Jonas Brothers_Artist Karaoke Series_08_Kids Of The Future.flac', 216),
+      f('Tiigripoiss99', 'jonas brothers\\03 - Kids Of The Future.flac', null),
+      f('Noxonix', 'Jonas Brothers\\Kids Of The Future.mp3', null),
+    ];
+
+    test('DE KERN: de kopieën zijn het eens over 3:19 — dan geldt die, en komen de FLAC\'s door de zeef', () {
+      expect(lengteVanDeMeerderheid(kids, 175), 199);
+      final door = zeefKandidatenNu(kids, titel: 'Kids Of The Future', seconden: 175, artiest: 'Jonas Brothers');
+      expect(door.where((x) => x.durationSec == 199 || x.durationSec == 198), hasLength(30));
+      expect(door.where((x) => x.durationSec == 350), isEmpty, reason: '5:50 is iets anders');
+      expect(door.where((x) => x.durationSec == null), hasLength(2), reason: 'zonder lengte blijft het zoals het was');
+    });
+
+    test('hebben drie uploaders de officiële lengte, dan blijft die — een radio-edit naast de albumversie', () {
+      final edit = [
+        for (var i = 0; i < 20; i++) f('lp$i', 'Artiest\\Album\\05 Nummer.flac', 262),
+        for (var i = 0; i < 3; i++) f('edit$i', 'Artiest\\Single\\01 Nummer (Radio Edit).flac', 210),
+      ];
+      expect(lengteVanDeMeerderheid(edit, 210), isNull);
+    });
+
+    test('te weinig stemmen, geen meerderheid, of dichtbij de officiële: niets', () {
+      expect(lengteVanDeMeerderheid(kids.take(7), 175), isNull, reason: 'zeven uploaders is te weinig');
+      final verdeeld = [
+        for (var i = 0; i < 9; i++) f('a$i', 'x\\Nummer.flac', 199),
+        for (var i = 0; i < 10; i++) f('b$i', 'x\\Nummer.flac', 240),
+        for (var i = 0; i < 10; i++) f('c$i', 'x\\Nummer.flac', 300),
+      ];
+      expect(lengteVanDeMeerderheid(verdeeld, 175), isNull, reason: 'geen groep heeft de helft');
+      expect(lengteVanDeMeerderheid(kids, 190), isNull, reason: 'binnen 12 s: de gewone marge vangt het op');
+      expect(lengteVanDeMeerderheid(kids, null), isNull);
+    });
+
+    test('één uploader stemt één keer per lengte', () {
+      final een = [for (var i = 0; i < 20; i++) f('zelfde', 'x\\$i Kids Of The Future.flac', 199)];
+      expect(lengteVanDeMeerderheid(een, 175), isNull);
+    });
+
+    test('aangesloten: de bronnenlijst en de download gebruiken dezelfde lengte', () {
+      final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(m, contains('    final lengte = lengteVanDeMeerderheid(metTitel, t.seconds) ?? t.seconds;\n'));
+      expect(m, contains('    return _klaar = _SlskKlaar.van(_slsk, _filter, past: past, hergebruik: zelfde ? '));
+      final o = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(o, contains('      final lengte = lengteVanDeMeerderheid(candidates, gezag.seconds);\n'));
+      expect(o, contains('        authority = gezag.metSeconden(lengte);\n'), reason: 'ook de keuring na de overdracht');
+    });
+  });
 }

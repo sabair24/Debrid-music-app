@@ -9,7 +9,16 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/soulseek.dart'
-    show Zoekrem, kZoekPerMinuut, kZoekPerVijfMinuten, kZoekVoorJou, kZoekVoorJouVijf, zoekWachttijd;
+    show
+        SoulseekClient,
+        Zoekrem,
+        kZoekPerMinuut,
+        kZoekPerVijfMinuten,
+        kZoekVoorJou,
+        kZoekVoorJouVijf,
+        kZwijgDrempel,
+        kZwijgPauze,
+        zoekWachttijd;
 
 final _t0 = DateTime(2026, 10, 22, 19, 35);
 
@@ -118,16 +127,77 @@ void main() {
     });
   });
 
+  // 25-10-2026: "*he Weeknd The Highlights" ging na 209 s alsnog uit, voor een albumpagina die al weg was.
+  group('niet meer nodig', () {
+    test('DE KERN: wie weg is, neemt geen plek — de volgende krijgt hem', () {
+      fakeAsync((fa) {
+        final rem = Zoekrem(klok: () => _t0.add(fa.elapsed));
+        for (var i = 0; i < kZoekPerMinuut; i++) {
+          unawaited(rem.neem());
+        }
+        fa.flushMicrotasks();
+        var paginaOpen = true;
+        Duration? weg = const Duration(days: 1);
+        var tweede = false;
+        unawaited(rem.neem(nogNodig: () => paginaOpen).then((d) => weg = d));
+        unawaited(rem.neem().then((_) => tweede = true));
+        fa.elapse(const Duration(seconds: 10));
+        paginaOpen = false;
+        fa.elapse(const Duration(seconds: 51));
+        expect(weg, isNull, reason: 'de pagina is dicht: niets geboekt');
+        expect(tweede, isTrue);
+        var derde = false;
+        unawaited(rem.neem().then((_) => derde = true));
+        fa.flushMicrotasks();
+        expect(derde, isTrue, reason: 'de plek van de dichte pagina is nog vrij');
+      });
+    });
+
+    test('al dicht vóór de vraag: meteen null', () async {
+      expect(await Zoekrem().neem(nogNodig: () => false), isNull);
+    });
+  });
+
+  // 25-10-2026, 18:58–19:03: elke zoekopdracht zonder één antwoord, en elke albumpagina vijf vragen.
+  group('een zwijgende server', () {
+    test('DE KERN: vier op rij zonder antwoord = tien minuten stil; één antwoord = weer gewoon', () {
+      final c = SoulseekClient();
+      final t = DateTime(2026, 10, 25, 18, 59);
+      for (var i = 1; i < kZwijgDrempel; i++) {
+        expect(c.noteerZoekuitslag(antwoord: false, nu: t), isNull);
+      }
+      expect(c.zwijgtTot, isNull, reason: 'drie keer niets is nog een zeldzaam nummer');
+      expect(c.noteerZoekuitslag(antwoord: false, nu: t), contains('geen enkel antwoord'));
+      expect(c.zwijgtTot, t.add(kZwijgPauze));
+      expect(c.noteerZoekuitslag(antwoord: false, nu: t.add(const Duration(minutes: 1))), isNull,
+          reason: 'verlengd, maar niet opnieuw gemeld');
+      expect(c.zwijgtTot, t.add(const Duration(minutes: 1)).add(kZwijgPauze));
+      expect(c.noteerZoekuitslag(antwoord: true, nu: t), contains('weer antwoord'));
+      expect(c.zwijgtTot, isNull);
+      expect(c.zonderAntwoordOpRij, 0);
+    });
+
+    test('aangesloten: achtergrond zoekt dan niet, en wat jij zoekt krijgt één ronde zonder terugval', () {
+      final o = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(o, contains('    if (stil && achtergrond) throw const SoulseekZwijgt();\n'));
+      expect(o, contains('    final rondes = terugval && !stil ? alle : alle.take(1).toList();\n'));
+      expect(o, contains('        final waarom = soulseek.whyNotLogin ?? soulseek.waaromStil;\n'),
+          reason: 'de radio: later opnieuw, intussen TIDAL — geen mislukte plek');
+      final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(m, contains('      final r = await soulseek.search(_albumVraag, nogNodig: () => mounted, onPartial: (p) {\n'));
+    });
+  });
+
   test('aangesloten: elke vraag wacht op de rem, en de radio en de verlanglijst zoeken als achtergrond', () {
     final s = File('lib/soulseek.dart').readAsStringSync().replaceAll('\r\n', '\n');
     final zoek = s.substring(s.indexOf('  Future<List<SoulseekFile>> search(List<String> queries,'));
     final lus = zoek.substring(0, zoek.indexOf('await run.settle();'));
-    expect(lus.indexOf('await zoekrem.neem(achtergrond: achtergrond);'),
+    expect(lus.indexOf('await zoekrem.neem(achtergrond: achtergrond, nogNodig: nogNodig);'),
         lessThan(lus.indexOf('_conn!.send(_message(26,')), reason: 'vóór elke FileSearch');
     final o = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(o, contains('achtergrond: _radiohalen.contains(job),'), reason: 'de radio; ▶ los van de radio niet');
     expect(o, contains('hits = await soulseek.search(w.query, achtergrond: true, extra: kHiresZoekwoorden);'),
         reason: 'de verlanglijst (met 24bit erbij sinds 24-10-2026)');
-    expect(o, contains('s.search(variants.toList(), onPartial: onPartial, achtergrond: achtergrond)'));
+    expect(o, contains('(s) => s.search(variants.toList(), onPartial: onPartial, achtergrond: achtergrond, nogNodig: nogNodig)'));
   });
 }
