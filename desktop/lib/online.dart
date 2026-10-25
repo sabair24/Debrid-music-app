@@ -2258,7 +2258,10 @@ class DownloadManager extends ChangeNotifier {
 
   /// "Vervangen" uit het twijfelmenu: de twijfelkopie in de plaats van [pad], zoals een opwaardering — wat er lag gaat
   /// naar `_dubbel`. Geeft de zin voor op het scherm terug.
-  Future<String> vervangDoorTwijfel(String pad) async {
+  ///
+  /// [behalveLezer] en [behalveZone]: het toestel dat vraagt (zijn adres, zijn id) — wat dat zelf leest of speelt, houdt
+  /// het houden niet tegen ([inGebruikVoorHouden]).
+  Future<String> vervangDoorTwijfel(String pad, {String? behalveLezer, String? behalveZone}) async {
     final lijst = twijfel;
     final g = lijst?.van(pad);
     if (lijst == null || g == null) return 'Er wacht geen twijfelkopie meer voor dit nummer';
@@ -2269,10 +2272,13 @@ class DownloadManager extends ChangeNotifier {
       return 'De twijfelkopie staat er niet meer';
     }
     // Net losgelaten om te vervangen (Deze houden terwijl het speelde): even wachten tot niets het nog open heeft.
-    for (var i = 0; i < 25 && (speeltNu?.call(pad) ?? false); i++) {
+    bool inGebruik() =>
+        inGebruikVoorHouden?.call(pad, behalveLezer: behalveLezer, behalveZone: behalveZone) ??
+        (speeltNu?.call(pad) ?? false);
+    for (var i = 0; i < 25 && inGebruik(); i++) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
     }
-    if (speeltNu?.call(pad) ?? false) {
+    if (inGebruik()) {
       _log.line('"${baseName(pad)}": houden gaat nu niet — het bestand is in gebruik (hier of op een toestel)');
       return 'Het nummer speelt nu — vervang het als het niet meer speelt';
     }
@@ -5324,6 +5330,10 @@ class DownloadManager extends ChangeNotifier {
   /// Speelt de speler dit pad nu (ook gepauzeerd)? Gezet in main.dart. Een betere kopie van een nummer
   /// dat je net met ▶ aanzette, vervangt het pas als het niet meer speelt — zie [_chaseUpgrade].
   bool Function(String pad)? speeltNu;
+
+  /// Voor Deze houden ([vervangDoorTwijfel]): [speeltNu], maar zonder wat het vragende toestel zelf leest of speelt.
+  /// Null: dan [speeltNu].
+  bool Function(String pad, {String? behalveLezer, String? behalveZone})? inGebruikVoorHouden;
 
   /// Hoe lang een gevonden betere kopie wacht tot het nummer niet meer speelt. Daarna gaat ze weg: wie
   /// een nummer twintig minuten op pauze laat staan, krijgt de jacht een volgende keer opnieuw.

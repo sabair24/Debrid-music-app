@@ -10,45 +10,58 @@
 /// seconden binnen en speelt het daarna minutenlang uit zijn buffer; spoelt het, dan vraagt het opnieuw.
 const Duration kNaLezen = Duration(minutes: 10);
 
-/// Per pad hoeveel lezingen er lopen, en wanneer de laatste ophield. Paden zonder onderscheid in hoofdletters of
-/// schuine strepen, zoals Windows ze ziet.
+/// Per pad hoeveel lezingen er lopen, en wanneer de laatste ophield — per lezer ([wie]: het adres van het toestel).
+/// Paden zonder onderscheid in hoofdletters of schuine strepen, zoals Windows ze ziet.
+///
+/// **Per lezer** (25-10-2026): Saber luisterde op een toestel met A/B naar Rockin' en koos daar "Deze houden". Dat
+/// toestel las het nummer zelf, dus bleef het tien minuten "in gebruik" — en na elke mislukte poging opende het
+/// het nummer opnieuw (stroom.log 21:12:50, 21:13:01, 21:13:34): houden lukte nooit. Wie vraagt, telt nu niet mee
+/// ([leest] met `behalve`).
 class Lezers {
   Lezers({DateTime Function()? klok}) : _klok = klok ?? DateTime.now;
   final DateTime Function() _klok;
-  final Map<String, int> _nu = {};
-  final Map<String, DateTime> _tot = {};
+  final Map<String, Map<String, int>> _nu = {};
+  final Map<String, Map<String, DateTime>> _tot = {};
 
   static String _sleutel(String pad) => pad.replaceAll('\\', '/').toLowerCase();
 
-  void begin(String pad) => _nu.update(_sleutel(pad), (n) => n + 1, ifAbsent: () => 1);
+  void begin(String pad, {String wie = ''}) =>
+      (_nu[_sleutel(pad)] ??= {}).update(wie, (n) => n + 1, ifAbsent: () => 1);
 
-  void einde(String pad) {
+  void einde(String pad, {String wie = ''}) {
     final k = _sleutel(pad);
-    final over = (_nu[k] ?? 1) - 1;
-    if (over <= 0) {
-      _nu.remove(k);
-    } else {
-      _nu[k] = over;
+    final per = _nu[k];
+    if (per != null) {
+      final over = (per[wie] ?? 1) - 1;
+      if (over <= 0) {
+        per.remove(wie);
+      } else {
+        per[wie] = over;
+      }
+      if (per.isEmpty) _nu.remove(k);
     }
-    _tot[k] = _klok();
+    (_tot[k] ??= {})[wie] = _klok();
     if (_tot.length > 2000) {
       final grens = _klok().subtract(kNaLezen);
-      _tot.removeWhere((_, t) => t.isBefore(grens));
+      _tot.removeWhere((_, m) => m.values.every((t) => t.isBefore(grens)));
     }
   }
 
-  /// Leest iemand [pad] nu, of deed die dat in de laatste [kNaLezen]?
-  bool leest(String pad) {
+  /// Leest iemand [pad] nu, of deed die dat in de laatste [kNaLezen]? [behalve]: wat die lezer leest, telt niet.
+  bool leest(String pad, {String? behalve}) {
     final k = _sleutel(pad);
-    if ((_nu[k] ?? 0) > 0) return true;
-    final tot = _tot[k];
-    return tot != null && _klok().difference(tot) < kNaLezen;
+    if ((_nu[k] ?? const {}).entries.any((e) => e.key != behalve && e.value > 0)) return true;
+    final nu = _klok();
+    return (_tot[k] ?? const {}).entries.any((e) => e.key != behalve && nu.difference(e.value) < kNaLezen);
   }
 
   /// De paden die [leest] nu noemt (in de vorm van [_sleutel]: kleine letters, voorwaartse strepen).
   Iterable<String> get inGebruik {
     final grens = _klok().subtract(kNaLezen);
-    return {..._nu.keys, for (final e in _tot.entries) if (e.value.isAfter(grens)) e.key};
+    return {
+      for (final e in _nu.entries) if (e.value.values.any((n) => n > 0)) e.key,
+      for (final e in _tot.entries) if (e.value.values.any((t) => t.isAfter(grens))) e.key,
+    };
   }
 
   /// Is [pad] een van [paden]? Voor de huidige nummers van de zones.

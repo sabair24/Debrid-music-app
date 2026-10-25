@@ -2164,7 +2164,9 @@ class LanServer {
     final t = id is String ? catalog.track(id) : null;
     if (t == null) return _json(req.response, {'error': 'Dit nummer kent de pc niet.'}, status: HttpStatus.notFound);
     final zin = switch (body['actie']) {
-      'vervang' => await manager.vervangDoorTwijfel(t.path),
+      // Wie vraagt, luisterde vaak net zelf (A/B): wat dát toestel leest of speelt, houdt het houden niet tegen.
+      'vervang' => await manager.vervangDoorTwijfel(t.path,
+          behalveLezer: req.connectionInfo?.remoteAddress.address, behalveZone: body['toestel'] as String?),
       'weg' => await manager.gooiTwijfelWeg(t.path),
       _ => null,
     };
@@ -2298,11 +2300,13 @@ class LanServer {
     }
     // Zolang dit loopt (en [kNaLezen] erna) laten de vegers en de TIDAL-ronde dit bestand met rust — zie
     // [inGebruikBijToestel].
-    lezers.begin(track.path);
+    // Per lezer (het adres van het toestel): wie zelf om Deze houden vraagt, telt niet mee — zie [_twijfel].
+    final wie = req.connectionInfo?.remoteAddress.address ?? '';
+    lezers.begin(track.path, wie: wie);
     try {
       await _streamBestand(req, track, file);
     } finally {
-      lezers.einde(track.path);
+      lezers.einde(track.path, wie: wie);
     }
   }
 
@@ -2312,7 +2316,11 @@ class LanServer {
   /// Staat [pad] nu in gebruik bij een toestel of speaker: leest iemand het ([lezers], tot [kNaLezen] erna), of is het
   /// het huidige nummer van een zone? Dan mag het niet herschreven of vervangen worden — een speler die het half
   /// gelezen heeft, raakt de draad kwijt (zie lan/lezers.dart: de Mac en "Mademoiselle chante le blues", 24-10-2026).
-  bool inGebruikBijToestel(String pad) => lezers.leest(pad) || Lezers.eenVan(pad, _zonePaden());
+  ///
+  /// [behalveLezer] (een adres) en [behalveZone] (het id van een toestel): wat dát toestel leest of speelt, telt niet —
+  /// het toestel dat zelf om Deze houden vraagt ([_twijfel]).
+  bool inGebruikBijToestel(String pad, {String? behalveLezer, String? behalveZone}) =>
+      lezers.leest(pad, behalve: behalveLezer) || Lezers.eenVan(pad, _zonePaden(behalve: behalveZone));
 
   /// Alle paden die [inGebruikBijToestel] noemt, in één keer: voor wie er duizenden naloopt (de TIDAL-ronde).
   List<String> padenInGebruikBijToestel() => [...lezers.inGebruik, ..._zonePaden()];
@@ -2321,9 +2329,9 @@ class LanServer {
   /// ([PlayerStore.laatBestandLos]). Met de pc erbij bleef het nummer "in gebruik" nadat de speler het had losgelaten,
   /// en gaf houden het na vijf seconden op met "Het nummer speelt nu" (Saber, 25-10-2026, Rockin': "ik wil hier de
   /// studio houden maar lukt niet ???").
-  List<String> _zonePaden() => [
+  List<String> _zonePaden({String? behalve}) => [
         for (final z in zones.lijst())
-          if (z.id != 'dev:${zones.pcId}' && z.trackId.isNotEmpty)
+          if (z.id != 'dev:${zones.pcId}' && (behalve == null || z.id != 'dev:$behalve') && z.trackId.isNotEmpty)
             if (catalog.track(z.trackId) case final t?) t.path,
       ];
 
