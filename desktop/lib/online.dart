@@ -3814,7 +3814,17 @@ class DownloadManager extends ChangeNotifier {
     http.Client? client;
     try {
       final t0 = DateTime.now();
-      final url = await online.resolveTrackUrl(item.id, f.id);
+      String? url;
+      for (var poging = 1; url == null; poging++) {
+        try {
+          url = await online.resolveTrackUrl(item.id, f.id);
+        } catch (_) {
+          // Vlak na het toevoegen geeft TorBox soms nog geen adres. Seal, "Stand by Me" (25-10-2026): "Lege download-URL",
+          // en een minuut later kwam hetzelfde bestand gewoon binnen.
+          if (poging >= kTorrentAdresPogingen) rethrow;
+          await Future<void>.delayed(Duration(seconds: 5 * poging));
+        }
+      }
       client = http.Client();
       final resp = await client.send(http.Request('GET', Uri.parse(url))).timeout(_torrentStilte);
       if (resp.statusCode < 200 || resp.statusCode >= 300) throw 'HTTP ${resp.statusCode}';

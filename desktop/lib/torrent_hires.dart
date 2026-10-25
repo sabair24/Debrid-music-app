@@ -30,6 +30,10 @@ const int kTorrentHiresNietKlaar = 2;
 /// Zoveel seeders minstens voor een torrent die TorBox eerst nog moet halen: met minder komt hij zelden binnen.
 const int kTorrentHiresMinSeeders = 3;
 
+/// Zoveel keer vraagt de jacht TorBox om het adres van één bestand, met 5 en 10 s ertussen: vlak na het toevoegen
+/// antwoordt TorBox soms nog niets.
+const int kTorrentAdresPogingen = 3;
+
 /// Hoe een torrent zijn muziek bewaart.
 enum TorrentIndeling {
   /// Eén bestand per nummer: daar is er één uit te halen.
