@@ -44,6 +44,16 @@ class IgdFout implements Exception {
   String toString() => 'UPnP-fout $code${tekst.isEmpty ? '' : ' ($tekst)'}';
 }
 
+/// De modem meldt zich op de zoekvraag, maar zijn beschrijving antwoordt met een fout ([status], bv. 404). Gemeten op
+/// 25-10-2026: sinds de middag ervoor gaf de F3896LG op elke vraag aan zijn UPnP "404 Not Found" (beschrijving,
+/// besturing, alles), terwijl hij zich op het netwerk bleef melden. Dan is UPnP niet uit, maar vastgelopen in de modem.
+class ModemZonderUpnp implements Exception {
+  const ModemZonderUpnp(this.status);
+  final int status;
+  @override
+  String toString() => 'de modem antwoordt op UPnP met HTTP $status';
+}
+
 /// Een deur zoals de modem hem teruggeeft.
 class IgdDeur {
   const IgdDeur({required this.internePoort, required this.client, required this.lease, required this.naam});
@@ -125,15 +135,19 @@ class Igd {
   final Duration wacht;
 
   /// De modem zoeken: SSDP op het netwerk, of — in een toets — rechtstreeks een beschrijving.
-  /// Null als er geen modem met UPnP antwoordt.
+  /// Null als er geen modem met UPnP antwoordt; [ModemZonderUpnp] als er een antwoordde, maar met een fout.
   Future<IgdDienst?> zoek({Duration zoektijd = const Duration(seconds: 3), Uri? locatie}) async {
     final locaties = locatie != null ? {locatie: null} : await _ssdp(zoektijd);
+    ModemZonderUpnp? kapot;
     for (final l in locaties.entries) {
       try {
         final d = await dienstVan(l.key, lokaal: l.value?.address);
         if (d != null) return d;
+      } on ModemZonderUpnp catch (k) {
+        kapot = k;
       } catch (_) {/* de volgende */}
     }
+    if (kapot != null) throw kapot;
     return null;
   }
 
@@ -146,6 +160,7 @@ class Igd {
       req.persistentConnection = false;
       final res = await req.close().timeout(wacht);
       final xml = await utf8.decoder.bind(res).join().timeout(wacht);
+      if (res.statusCode >= 400) throw ModemZonderUpnp(res.statusCode);
       final d = dienstUitBeschrijving(xml, locatie);
       if (d == null) return null;
       var eigen = lokaal;

@@ -169,6 +169,56 @@ void main() {
       await t.pumpAndSettle();
     });
 
+    testWidgets('DE TWEEDE VAL: in een schuine hoes (de muis staat erop) telt alleen de diepte van de draai', (t) async {
+      // Opgenomen op de pc met 3.9.627: de rand die naar je toe kwam, werd nog steeds 1,7 keer zo hoog als de andere.
+      // Wie dubbelklikt, heeft de muis op de hoes, en dan staat hij schuin ([KantelHoes]). Flutter maakt een transform
+      // niet plat: de diepte van het kantelen (.0011) kwam bovenop die van de draai — bij 720 punten vier keer zoveel.
+      final c = DraaiHoesController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(MaterialApp(
+        home: Stack(children: [
+          Positioned(
+            left: 0,
+            top: 0,
+            child: KantelHoes(
+              bron: KantelBron.selectie,
+              aan: true,
+              child: DraaiHoes(
+                controller: c,
+                breedte: 720,
+                voor: const SizedBox.square(dimension: 720, child: ColoredBox(color: Colors.blue)),
+                achter: const SizedBox.square(dimension: 720, child: ColoredBox(color: Colors.red)),
+              ),
+            ),
+          ),
+        ]),
+      ));
+      await t.pumpAndSettle();
+      expect(find.byKey(const ValueKey('kantel-glans')), findsOneWidget, reason: 'de hoes staat schuin');
+      c.draai(heeftAchterkant: true);
+      await t.pump();
+      await t.pump(kDraaiDuur * 2 ~/ 5);
+      // Hoe hoog de linker- en de rechterrand op het scherm staan: hun verhouding is de diepte die je ziet.
+      double verhouding(Offset Function(Offset) naarScherm) {
+        double hoogte(double x) => (naarScherm(Offset(x, 720)).dy - naarScherm(Offset(x, 0)).dy).abs();
+        final l = hoogte(0), r = hoogte(720);
+        return l > r ? l / r : r / l;
+      }
+
+      final d = t.widget<Transform>(find.byKey(const ValueKey('draai-kant'))).transform;
+      // De draai alleen, om het midden van de hoes.
+      final alleen = Matrix4.translationValues(360, 360, 0)
+        ..multiply(d)
+        ..multiply(Matrix4.translationValues(-360, -360, 0));
+      final opScherm = t.renderObject<RenderBox>(find.byKey(const ValueKey('draai-voor'))).getTransformTo(null);
+      final verwacht = verhouding((p) => MatrixUtils.transformPoint(alleen, p));
+      final gezien = verhouding((p) => MatrixUtils.transformPoint(opScherm, p));
+      expect(verwacht, greaterThan(1.1), reason: 'halverwege staat de hoes echt schuin');
+      expect(gezien / verwacht, closeTo(1, .06),
+          reason: 'op het scherm ${gezien.toStringAsFixed(2)}, de draai zelf ${verwacht.toStringAsFixed(2)}');
+      await t.pumpAndSettle();
+    });
+
     test('DE GRENS: de tegel draait zoals altijd', () {
       expect(draaiMatrix(0).entry(3, 2), closeTo(.0014, 1e-9));
       expect(kDraaiDiepte / 200, closeTo(.0014, 1e-9));

@@ -70,10 +70,17 @@ const Offset kKantelSelectie = Offset(-.55, -.45);
 
 /// De transform voor een stand [o] (elk van -1 tot 1): de kant waar de muis staat wijkt een tikje
 /// terug, zoals een plaat die je met je vinger aanraakt. Ook voor de cd die in de hoes zit ([KantelHoes.deel]).
+///
+/// **Eerst plat** (de laatste vermenigvuldiging, die als eerste op de hoes werkt): Flutter maakt een transform niet plat,
+/// dus de diepte van een hoes die erin omdraait ([DraaiHoes]) kwam onder deze perspectief van .0011 terecht — bij de
+/// grote hoes van Nu speelt vier keer de diepte van de draai zelf. Opgenomen op de pc met 3.9.627 (Saber, 25-10-2026:
+/// "test ook draaien van de hoes op pc"): wie dubbelklikt heeft de muis op de hoes, en de rand die naar je toe kwam werd
+/// 1,7 keer zo hoog als de andere. Een platte hoes verandert er niets door.
 Matrix4 kantelMatrix(Offset o) => Matrix4.identity()
   ..setEntry(3, 2, .0011)
   ..rotateX(-o.dy * kKantelHoek)
-  ..rotateY(o.dx * kKantelHoek);
+  ..rotateY(o.dx * kKantelHoek)
+  ..multiply(Matrix4.diagonal3Values(1, 1, 0));
 
 class KantelHoes extends StatefulWidget {
   const KantelHoes({
