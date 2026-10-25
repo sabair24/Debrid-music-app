@@ -4,12 +4,14 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:debridmusic/ui/draaihoes.dart' show draaiMatrix, kDraaiDiepte;
 import 'package:debridmusic/ui/kantel_hoes.dart';
 import 'package:debridmusic/ui/langzame_draai.dart';
 import 'package:debridmusic/ui/wachtrij_eiland.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vector_math/vector_math_64.dart' show Vector4;
 
 String _bron(String pad) => File(pad).readAsStringSync().replaceAll('\r\n', '\n');
 
@@ -120,6 +122,35 @@ void main() {
       await _seconden(t, .05);
       expect(spin.snelheid, greaterThan(half), reason: 'hij versnelt weer, vanaf waar hij was');
       await t.pumpWidget(const SizedBox());
+    });
+  });
+
+  group('het omdraaien van de hoes', () {
+    // Opgenomen op de pc (25-10-2026, 30 beelden per seconde): halverwege de draai werd de rand die naar je toe kwam
+    // bij de grote hoes van Nu speelt twee keer zo groot. De diepte hoort bij de maat van de hoes.
+    double rand(double breedte, double t) {
+      final v = draaiMatrix(t, breedte: breedte).transform(Vector4(breedte / 2, 0, 0, 1));
+      return v.x / v.w / breedte;
+    }
+
+    test('DE KERN: op elke maat dezelfde draai — een tegel van 200 en de grote hoes van 720', () {
+      for (final t in [.2, .35, .45, .55, .8]) {
+        expect(rand(720, t), closeTo(rand(200, t), 1e-9), reason: 't = $t');
+      }
+    });
+
+    test('DE GRENS: de tegel draait zoals altijd', () {
+      expect(draaiMatrix(0).entry(3, 2), closeTo(.0014, 1e-9));
+      expect(kDraaiDiepte / 200, closeTo(.0014, 1e-9));
+    });
+
+    test('aangesloten: de draai kent zijn breedte, en de cd vloeit in na het terugdraaien', () {
+      final draai = _bron('lib/ui/draaihoes.dart');
+      expect(draai, contains('transform: rust ? Matrix4.identity() : (draaiMatrix(t, breedte: breedte)..rotateY(w)),'));
+      expect(draai, contains('    draaiMatrix(t, breedte: breedte)\n      ..translateByDouble(kant * breedte / 2, 0, 0, 1)'));
+      final main = _bron('lib/main.dart');
+      expect(main,
+          contains('            opacity: _voorInRust ? 1 : 0,\n            duration: _voorInRust ? kSchijfInvloeien : Duration.zero,'));
     });
   });
 

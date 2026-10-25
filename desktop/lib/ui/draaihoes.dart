@@ -300,14 +300,24 @@ const _draaiCurve = Cubic(.3, .0, .2, 1.12);
 @visibleForTesting
 double wiebelHoek(double t) => math.sin(t * 3 * math.pi) * (1 - t) * .16;
 
-/// De transform van de draai op moment [t] (0 = voorkant, 1 = achterkant).
+/// Hoe diep de draai lijkt, als deel van de breedte van de hoes: de perspectief van iemand die een hoesje op een
+/// paar keer zijn breedte voor zich omdraait. Op een tegel van 200 punten is dat de .0014 van altijd.
+///
+/// **Waarom gedeeld door de breedte (Saber, 25-10-2026: "het draaien van de album blijft niet realistisch genoeg",
+/// "test ook draaien van de hoes op pc").** Opgenomen op de pc (30 beelden per seconde): de vaste .0014 was afgesteld
+/// op een tegel. Bij de grote hoes van Nu speelt (zo'n 700 punten) werd de rand die naar je toe kwam halverwege twee
+/// keer zo groot en stak hij ver boven en onder het vak uit — een hoesje dat naar je toe vliegt in plaats van
+/// omdraait. Nu ziet de draai er op elke maat hetzelfde uit.
+const double kDraaiDiepte = .28;
+
+/// De transform van de draai op moment [t] (0 = voorkant, 1 = achterkant), voor een hoes van [breedte] punten.
 @visibleForTesting
-Matrix4 draaiMatrix(double t) {
+Matrix4 draaiMatrix(double t, {double breedte = 200}) {
   final hoek = math.pi * t;
   // Even optillen halverwege, alsof je hem oppakt om te draaien.
   final til = 1 + .06 * math.sin(math.pi * t.clamp(0.0, 1.0));
   return Matrix4.identity()
-    ..setEntry(3, 2, .0014)
+    ..setEntry(3, 2, kDraaiDiepte / (breedte > 0 ? breedte : 200))
     ..rotateY(hoek)
     ..scaleByDouble(til, til, 1, 1);
 }
@@ -319,7 +329,7 @@ const double kHoesDikte = .03;
 /// [breedte] breed is, op moment [t]: loodrecht op de hoes, aan zijn rand, en meegedraaid.
 @visibleForTesting
 Matrix4 randMatrix(double t, double breedte, int kant) =>
-    draaiMatrix(t)
+    draaiMatrix(t, breedte: breedte)
       ..translateByDouble(kant * breedte / 2, 0, 0, 1)
       ..rotateY(math.pi / 2);
 
@@ -401,9 +411,12 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
     // een draai naar een andere plek in de boom, en Flutter gooit hem dan weg en bouwt hem opnieuw — met
     // zijn Hero, zijn beeld en alles wat eronder hing (gsm 18-10-2026: "de hoes flipt niet om"). Nu
     // staan voor- en achterkant er allebei, met een sleutel, en wisselt alleen welke zichtbaar is.
-    return AnimatedBuilder(
+    // De breedte voor de diepte van de draai ([kDraaiDiepte]). Altijd dezelfde vorm: de LayoutBuilder staat er ook in rust.
+    return LayoutBuilder(
+      builder: (context, maat) => AnimatedBuilder(
       animation: Listenable.merge([_draai, _wiebel]),
       builder: (context, _) {
+        final breedte = maat.maxWidth.isFinite ? maat.maxWidth : 200.0;
         final t = _draai.value;
         final w = _wiebel.isAnimating ? wiebelHoek(_wiebel.value) : 0.0;
         final rust = t == 0 && w == 0;
@@ -459,7 +472,7 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
             key: const ValueKey('draai-kant'),
             alignment: Alignment.center,
             // In rust de eenheid: een rechte hoes, niets te verrekenen.
-            transform: rust ? Matrix4.identity() : (draaiMatrix(t)..rotateY(w)),
+            transform: rust ? Matrix4.identity() : (draaiMatrix(t, breedte: breedte)..rotateY(w)),
             child: Stack(fit: StackFit.passthrough, children: [
               Offstage(key: const ValueKey('draai-voor'), offstage: achterOp, child: voor),
               if (achter != null) Offstage(key: const ValueKey('draai-achter'), offstage: !achterOp, child: achter),
@@ -474,6 +487,7 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
           ),
         ]);
       },
+    ),
     );
   }
 }
