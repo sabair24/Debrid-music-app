@@ -178,6 +178,34 @@ double dialogHeight(BuildContext context, double preferred) {
 EdgeInsets get tvOverscan =>
     isTv ? const EdgeInsets.symmetric(horizontal: 48, vertical: 27) : EdgeInsets.zero;
 
+/// Was de laatste bediening met toetsen (pijlen, Tab) en niet met de muis of een vinger? Gezet door de app ([merkInvoer]).
+bool _metToetsen = false;
+
+/// Mag focus een rij laten oplichten? Op een tv altijd: daar IS de focus de selectie. Elders alleen als je met toetsen
+/// bedient. Met de muis kreeg een rij soms de focus terug (na een menu of een melding) terwijl de muis al op een andere
+/// stond, en dan lichtten er twee rijen op (Saber, 25-10-2026: "het hoveren met een muis over de lijst is niet goed,
+/// soms 2 rijen in eens").
+bool get focusLichtOp => isTv || _metToetsen;
+
+/// De app meldt hier wat je laatst gebruikte: een toets ([toetsen] waar) of de muis/een vinger.
+void merkInvoer({required bool toetsen}) => _metToetsen = toetsen;
+
+/// Een rij die oplicht als de muis erop staat, of als de focus erop staat en [focusLichtOp]. Muis en focus apart: één vlag
+/// voor beide liet een rij aan staan die de muis al verlaten had.
+mixin LichtBijMuisOfFocus<T extends StatefulWidget> on State<T> {
+  bool _muisErop = false, _focusErop = false;
+
+  bool get oplichten => _muisErop || (_focusErop && focusLichtOp);
+
+  void muisErop(bool v) {
+    if (v != _muisErop) setState(() => _muisErop = v);
+  }
+
+  void focusErop(bool v) {
+    if (v != _focusErop) setState(() => _focusErop = v);
+  }
+}
+
 /// A control that can be reached with a remote, clicked with a mouse and tapped with a finger.
 ///
 /// Wraps whatever it is given rather than replacing it, so applying this to an existing tile does

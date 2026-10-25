@@ -88,12 +88,13 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/move/apply',
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
     '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd', '/api/zone/transfer', '/api/tijd',
+    '/api/twijfel',
     '/api/releaseart',
   };
   // TIDAL ook (Saber, 23-10-2026: "ik moet ook buitenshuis kunnen zoeken en downloaden"); ophalen telt mee in het
   // quotum voor downloads, zoals Soulseek.
   const voorvoegsels = [
-    '/stream/', '/groei/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/', '/api/tidal/', //
+    '/stream/', '/groei/', '/kandidaat/', '/art/', '/waarom/', '/api/online/', '/api/soulseek/', '/api/jobs/', '/api/tidal/', //
   ];
   if (exact.contains(pad) || voorvoegsels.any(pad.startsWith)) return null;
   if (pad == '/api/rutracker/sessie') return 'Kan alleen met je gsm thuis op wifi.';
@@ -1142,6 +1143,8 @@ class LanServer {
         return _soulseekDownloadAlbum(req);
       case '/api/soulseek/zoek-beter':
         return _soulseekZoekBeter(req);
+      case '/api/twijfel':
+        return _twijfel(req);
       case '/api/tidal/zoek':
         return _tidal(req, 'zoek');
       case '/api/tidal/album':
@@ -1184,6 +1187,7 @@ class LanServer {
 
     if (path.startsWith('/stream/')) return _stream(req);
     if (path.startsWith('/groei/')) return _groei(req);
+    if (path.startsWith('/kandidaat/')) return _kandidaat(req);
     if (path.startsWith('/art/')) return _art(req);
     if (path.startsWith('/waarom/')) return _waarom(req);
 
@@ -2110,6 +2114,41 @@ class LanServer {
   /// afhaakt en het lege einde daarna. Daaraan ziet de speler op het toestel dat hij op dezelfde plek
   /// verder moet (zie `Radiohaler`/`PcRadiobron`). Zelf pompen en niet `pipe`: breekt de bovenkant, dan
   /// moet deze kant ook breken, en minder bytes dan beloofd sluiten breekt de verbinding.
+  /// Een twijfelkopie beluisteren vanaf een toestel (twijfel.dart). Op id, nooit op een pad uit het verzoek.
+  Future<void> _kandidaat(HttpRequest req) async {
+    final res = req.response;
+    if (req.method != 'GET' && req.method != 'HEAD') {
+      res.statusCode = HttpStatus.methodNotAllowed;
+      return res.close();
+    }
+    final naam = req.uri.pathSegments.isEmpty ? '' : req.uri.pathSegments.last;
+    final id = naam.contains('.') ? naam.substring(0, naam.indexOf('.')) : naam;
+    final g = downloads?.twijfel?.metId(id);
+    if (g == null || !File(g.kandidaat).existsSync()) {
+      res.statusCode = HttpStatus.notFound;
+      return res.close();
+    }
+    return serveFile(req, File(g.kandidaat), contentType: mimeForExt(g.ext));
+  }
+
+  /// Vervangen of Weggooien uit het twijfelmenu van een toestel: {trackId, actie: vervang | weg}. Antwoord: {zin}.
+  Future<void> _twijfel(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final id = body['trackId'];
+    final t = id is String ? catalog.track(id) : null;
+    if (t == null) return _json(req.response, {'error': 'Dit nummer kent de pc niet.'}, status: HttpStatus.notFound);
+    final zin = switch (body['actie']) {
+      'vervang' => await manager.vervangDoorTwijfel(t.path),
+      'weg' => await manager.gooiTwijfelWeg(t.path),
+      _ => null,
+    };
+    if (zin == null) return _json(req.response, {'error': 'Onbekende keuze.'}, status: HttpStatus.badRequest);
+    return _json(req.response, {'zin': zin});
+  }
+
   Future<void> _groei(HttpRequest req) async {
     final res = req.response;
     final naam = req.uri.pathSegments.isEmpty ? '' : req.uri.pathSegments.last;

@@ -253,6 +253,10 @@ class TrackDto {
   /// Null voor alles wat niemand heeft aangewezen, en dat is verreweg het meeste.
   final String? rij;
 
+  /// Een twijfelgeval voor dit nummer (twijfel.dart): {id, bron, score, kwaliteit, ext}. Null voor bijna alles. Geen
+  /// pad: de kopie blijft op de pc, een toestel luistert via `/kandidaat/<id>.<ext>`.
+  final Map<String, dynamic>? twijfel;
+
   /// Wat de pc over de luidheid van dit bestand weet (gelijk volume, zie luidheid_winkel.dart):
   /// `{'i': LUFS, 'tp': piek}` bij een meting, `{'mk': kanalen}` bij meerkanaals en `{'f': 1}` bij
   /// definitief mislukt — die twee zonder getallen, zodat geen toestel er een versterking op kan
@@ -290,6 +294,7 @@ class TrackDto {
     this.addedMs = 0,
     this.echt,
     this.rij,
+    this.twijfel,
     this.luid,
     this.vast = false,
   });
@@ -324,6 +329,7 @@ class TrackDto {
         addedMs: _int(j['addedMs']),
         echt: j['echt'] is Map ? Map<String, dynamic>.from(j['echt'] as Map) : null,
         rij: j['rij'] as String?,
+        twijfel: j['twijfel'] is Map ? Map<String, dynamic>.from(j['twijfel'] as Map) : null,
         luid: j['luid'] is Map ? Map<String, dynamic>.from(j['luid'] as Map) : null,
         vast: j['vast'] == true,
       );
@@ -355,6 +361,7 @@ class TrackDto {
         // nummer null, en een null per nummer meesturen kost bytes zonder iets te zeggen.
         if (echt != null) 'echt': echt,
         if (rij != null && rij!.isNotEmpty) 'rij': rij,
+        if (twijfel != null) 'twijfel': twijfel,
         if (luid != null) 'luid': luid,
         if (vast) 'vast': true,
       };
