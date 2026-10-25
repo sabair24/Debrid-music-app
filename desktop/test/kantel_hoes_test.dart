@@ -19,12 +19,16 @@ Widget _doos(KantelHoes k, {bool minderBeweging = false}) => MaterialApp(
 
 const _hoes = ColoredBox(color: Color(0xFF884422));
 
+/// De hoek rond y van [m] (rotateX na rotateY): cos uit (0,0), het teken uit (2,0). De kolom van z is leeg — de hoes
+/// wordt eerst plat gemaakt ([kantelMatrix]).
+double _hoekVan(Matrix4 m) => (m.entry(2, 0) > 0 ? -1 : 1) * math.acos(m.entry(0, 0).clamp(-1.0, 1.0));
+
 /// De hoek rond y van de kanteltransform, of null in rust.
 double? _hoekY(WidgetTester t) {
   final glans = find.byKey(const ValueKey('kantel-glans'));
   if (glans.evaluate().isEmpty) return null;
   final tr = t.widget<Transform>(find.ancestor(of: glans, matching: find.byType(Transform)).first);
-  return math.asin(tr.transform.entry(0, 2).clamp(-1.0, 1.0));
+  return _hoekVan(tr.transform);
 }
 
 void main() {
@@ -32,7 +36,8 @@ void main() {
 
   test('nooit meer dan zes graden', () {
     final m = kantelMatrix(const Offset(1, 1));
-    expect(math.asin(m.entry(0, 2)).abs(), lessThanOrEqualTo(kKantelHoek + 1e-9));
+    expect(_hoekVan(m).abs(), lessThanOrEqualTo(kKantelHoek + 1e-9));
+    expect(_hoekVan(m).abs(), greaterThan(kKantelHoek * .99));
     expect(kKantelHoek, closeTo(6 * math.pi / 180, 1e-12));
   });
 
