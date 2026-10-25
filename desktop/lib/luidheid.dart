@@ -407,6 +407,20 @@ class Bijstelling {
   return (db: g, bron: Bijstelbron.nummer);
 }
 
+/// A/B (studio, cd of vinyl; Saber, 25-10-2026): de versterking voor B, zodat B even luid klinkt als A nu klinkt.
+///
+/// [a] is wat A nu krijgt, met zijn eigen meting; [b] de meting van B. Dan B = A + (luidheid A − luidheid B): wat A ook
+/// krijgt (per nummer, als deel van de plaat, of 0 dB met gelijk volume uit), B komt op dezelfde luidheid. Ophogen nooit
+/// boven [kPiekPlafond] (wel tot 0 dB, zodat B nooit luider wordt dan zichzelf zonder bijstelling als hij geen ruimte
+/// heeft); verlagen altijd. Zonder een van beide metingen: wat A krijgt, zoals voorheen.
+Bijstelling abVersterking(Bijstelling a, Luidheidsmeting? b) {
+  final ma = a.meting;
+  if (ma == null || b == null || b.lufs <= kStilteGrens || ma.lufs <= kStilteGrens) return a;
+  final plafond = math.max(kPiekPlafond - b.piek, 0.0);
+  final g = math.min(a.db + (ma.lufs - b.lufs), plafond);
+  return Bijstelling(g, Bijstelbron.nummer, doel: a.doel, meting: b);
+}
+
 /// Eén nummer als bouwsteen voor [albumMeting].
 typedef Albumdeel = ({Luidheidsmeting? meting, bool definitief, Duration? duur});
 

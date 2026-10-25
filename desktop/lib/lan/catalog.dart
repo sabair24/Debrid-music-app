@@ -292,6 +292,7 @@ class LanCatalog {
                 'kwaliteit': i.kwaliteit,
                 'ext': i.ext,
                 if (i.soort != null) 'soort': i.soort,
+                if (i.luid != null) 'luid': i.luid,
               },
             null => null,
           },

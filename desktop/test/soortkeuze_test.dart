@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'package:debridmusic/flac_tags.dart' show readFlacTags;
 import 'package:debridmusic/kopiesoort.dart';
 import 'package:debridmusic/lan/dtos.dart' show TrackDto;
+import 'package:debridmusic/luidheid.dart' show Bijstelbron, Bijstelling, Luidheidsmeting, abVersterking;
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/online.dart';
 import 'package:debridmusic/organize.dart';
@@ -200,6 +201,49 @@ void main() {
       expect(soortVoor(r'D:\a.flac'), (soort: Kopiesoort.cd, gekozen: true));
       expect(soortVoor(r'D:\b.flac'), (soort: Kopiesoort.vinyl, gekozen: false));
       expect(_bron('lib/kopiesoort.dart'), contains("  if (Platform.environment.containsKey('FLUTTER_TEST')) return null;"));
+    });
+  });
+
+  group('eerlijk A/B: B even luid als A', () {
+    // Saber, 25-10-2026: "Eerlijk A/B: B speelt nu met het volume van jouw kopie" — dan hoor je vooral welke harder staat.
+    Bijstelling a(double db, double lufs) =>
+        Bijstelling(db, Bijstelbron.nummer, meting: Luidheidsmeting(lufs: lufs, piek: -1.5));
+    test('DE KERN: B komt op de luidheid waarop A nu klinkt, wat A ook krijgt', () {
+      // A per nummer op −14: −11 LUFS met −3 dB. B is 3 dB luider gemasterd: −6 dB.
+      expect(abVersterking(a(-3, -11), const Luidheidsmeting(lufs: -8, piek: -0.2)).db, closeTo(-6, 1e-9));
+      // Gelijk volume uit (A 0 dB): B 4 dB zachter → 4 dB erbij, er is ruimte (piek −6).
+      expect(abVersterking(a(0, -10), const Luidheidsmeting(lufs: -14, piek: -6)).db, closeTo(4, 1e-9));
+      final b = abVersterking(a(-3, -11), const Luidheidsmeting(lufs: -8, piek: -0.2));
+      expect(b.meting?.lufs, -8, reason: 'het blad toont de meting van B');
+    });
+
+    test('DE GRENS: ophogen nooit boven −1 dBTP, verlagen altijd', () {
+      expect(abVersterking(a(0, -10), const Luidheidsmeting(lufs: -14, piek: -2)).db, closeTo(1, 1e-9),
+          reason: 'nodig +4, ruimte 1');
+      expect(abVersterking(a(0, -10), const Luidheidsmeting(lufs: -14, piek: -0.5)).db, 0,
+          reason: 'geen ruimte: niet ophogen, en ook niet zachter dan zichzelf');
+      expect(abVersterking(a(0, -14), const Luidheidsmeting(lufs: -6, piek: 0.3)).db, closeTo(-8, 1e-9));
+    });
+
+    test('zonder meting van A of van B: wat A krijgt, zoals voorheen', () {
+      const zonder = Bijstelling(-2, Bijstelbron.nummer);
+      expect(abVersterking(zonder, const Luidheidsmeting(lufs: -8, piek: -1)), same(zonder));
+      final metA = a(-2, -12);
+      expect(abVersterking(metA, null), same(metA));
+    });
+
+    test('aangesloten: de pc meet B bij het klaarzetten, het toestel krijgt het mee, de speler gebruikt het', () {
+      final online = _bron('lib/online.dart');
+      expect(online, contains('      final m = await meetLuidheid(bewaard, limiet: const Duration(minutes: 2));'));
+      expect(online, contains('      luid: luid,\n    ));'));
+      expect(_bron('lib/lan/catalog.dart'), contains("                if (i.luid != null) 'luid': i.luid,"));
+      final speler = _bron('lib/player.dart');
+      expect(speler, contains('    if (!wasB) _abA = lopend;'));
+      expect(speler, contains('    final b = adres == null ? a : abVersterking(a, meting);'));
+      expect(speler, contains('    await _openOpZelfdePlek(t, adres ?? t.path, plek: position, spelen: playing, luidheid: b);'));
+      final main = _bron('lib/main.dart');
+      expect(main, contains('meting: Luidheidsmeting.fromJson(tw.luid)'));
+      expect(main, contains('meting: Luidheidsmeting.fromJson(info.luid)'));
     });
   });
 

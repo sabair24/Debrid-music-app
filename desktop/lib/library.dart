@@ -3447,6 +3447,7 @@ class LibraryStore extends ChangeNotifier {
                 kwaliteit: '${tw['kwaliteit'] ?? ''}',
                 ext: '${tw['ext'] ?? 'flac'}',
                 soort: tw['soort'] is String ? tw['soort'] as String : null,
+                luid: tw['luid'] is Map ? Map<String, dynamic>.from(tw['luid'] as Map) : null,
               ));
     // Gelijk volume: de meting van de pc, onder dezelfde sleutel (grootte|tijd) als op de pc — het
     // Track hier krijgt die twee uit deze DTO. Zie luidheid_winkel.dart.

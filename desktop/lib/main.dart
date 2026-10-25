@@ -13566,7 +13566,7 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
           final rij = album?.tracks ?? [t];
           await speler.playQueue(rij, math.max(0, rij.indexWhere((x) => x.path == t.path)));
         }
-        final ok = await speler.vergelijk(bIsAan ? null : adres);
+        final ok = await speler.vergelijk(bIsAan ? null : adres, meting: Luidheidsmeting.fromJson(tw.luid));
         toon(!ok
             ? 'A/B werkt op dit toestel, niet terwijl een speaker speelt'
             : bIsAan
@@ -13824,7 +13824,7 @@ class _AbRegel extends StatelessWidget {
       if (naarB == b) return;
       final adres = naarB ? _klaarAdres(context, track, info) : null;
       if (naarB && adres == null) return;
-      final ok = await speler.vergelijk(adres);
+      final ok = await speler.vergelijk(adres, meting: Luidheidsmeting.fromJson(info.luid));
       if (!ok && context.mounted) _srcToast(context, 'A/B werkt op dit toestel, niet terwijl een speaker speelt');
     }
 

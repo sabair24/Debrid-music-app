@@ -45,6 +45,8 @@ import 'twijfel.dart';
 import 'prullenbak.dart' show heeftPrullenbak, naarPrullenbak;
 import 'cachesleutel.dart' show fnv1a;
 import 'kopiesoort.dart';
+import 'luidheid.dart' show Gemeten;
+import 'luidheid_veger.dart' show meetLuidheid;
 import 'soortjacht.dart';
 import 'vinyl.dart' show isVinylRip, vinylAchteraan;
 import 'wav_naar_flac.dart' show wavNaarFlac;
@@ -5824,6 +5826,12 @@ class DownloadManager extends ChangeNotifier {
     try {
       await staged.parent.delete();
     } catch (_) {/* de map houdt nog iets vast */}
+    // De luidheid, voor een eerlijke A/B: B klinkt dan even luid als jouw kopie (abVersterking in luidheid.dart).
+    Map<String, dynamic>? luid;
+    try {
+      final m = await meetLuidheid(bewaard, limiet: const Duration(minutes: 2));
+      if (m.uitslag case Gemeten(:final meting)) luid = meting.toJson();
+    } catch (_) {/* dan zoals A; de kopie staat er gewoon */}
     final oud = lijst.verwijder(v.pad);
     if (oud != null) {
       try {
@@ -5842,6 +5850,7 @@ class DownloadManager extends ChangeNotifier {
       gezag: v.gezag,
       soort: v.soort,
       bronpad: bronpad,
+      luid: luid,
     ));
     await lijst.bewaar();
     _log.line('"${v.artiest} — ${v.titel}": ${v.soort.naam.toUpperCase()} KLAAR — $bron ($kwaliteit, vingerafdruk '
