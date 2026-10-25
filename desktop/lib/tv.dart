@@ -948,6 +948,39 @@ class SpoelPijlen {
   }
 }
 
+/// De OK-toets: van een afstandsbediening ([LogicalKeyboardKey.select]), een spelcomputer of een toetsenbord.
+final kOkToetsen = <LogicalKeyboardKey>{
+  LogicalKeyboardKey.select,
+  LogicalKeyboardKey.enter,
+  LogicalKeyboardKey.numpadEnter,
+  LogicalKeyboardKey.gameButtonA,
+};
+
+/// Hoe kort twee keer OK na elkaar moet zijn om samen een dubbele druk te zijn, van neerslag tot neerslag.
+const kDubbelOk = Duration(milliseconds: 400);
+
+/// Twee keer OK vlak na elkaar herkennen (Saber, 25-10-2026: "als ik 2 maal op ok knop druk op de afstandsbediening dat
+/// ik van gelijk waar, direct naar de now playing venster spring"). Op de neerslag: lang OK geeft één neerslag en daarna
+/// herhalingen, en telt dus niet mee.
+class DubbelOk {
+  Duration? _vorige;
+
+  /// Een neerslag van OK op [tijd] (de tijd van de toets). True als dit de tweede van twee is; de volgende telt dan weer
+  /// als eerste.
+  bool neer(Duration tijd) {
+    final v = _vorige;
+    if (v != null && tijd >= v && tijd - v <= kDubbelOk) {
+      _vorige = null;
+      return true;
+    }
+    _vorige = tijd;
+    return false;
+  }
+
+  /// Een andere toets ertussen: dan hoort de volgende OK niet meer bij de vorige.
+  void anders() => _vorige = null;
+}
+
 /// Eén stap met een pijl, maar alleen naar iets dat werkelijk een plek op de pagina heeft.
 ///
 /// **Waarom niet gewoon `focusInDirection`.** Gemeten op de Shield (17-10-2026, meetversie b11975):

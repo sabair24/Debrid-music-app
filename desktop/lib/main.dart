@@ -3241,6 +3241,79 @@ class _HomeShellState extends State<HomeShell> {
     return true;
   }
 
+  /// Twee keer OK vlak na elkaar op een tv: naar Nu speelt, van waar je ook bent (Saber, 25-10-2026: "als ik 2 maal op
+  /// ok knop druk op de afstandsbediening dat ik van gelijk waar, direct naar de now playing venster spring"). De eerste
+  /// OK doet gewoon wat hij doet (een nummer spelen, een plaat openen); de tweede wordt de sprong ([DubbelOk]).
+  final _dubbelOk = DubbelOk();
+
+  /// Het loslaten van de OK die naar Nu speelt sprong, opslokken: een regel die op het loslaten reageert ([Pressable] met
+  /// lang OK) deed anders alsnog iets.
+  bool _okOpslokken = false;
+
+  bool _tvDubbelOk(KeyEvent e) {
+    if (!kOkToetsen.contains(e.logicalKey)) {
+      if (e is KeyDownEvent) _dubbelOk.anders();
+      return false;
+    }
+    if (e is KeyUpEvent) {
+      if (!_okOpslokken) return false;
+      _okOpslokken = false;
+      return true;
+    }
+    if (e is! KeyDownEvent || !_dubbelOk.neer(e.timeStamp) || !_magNaarNuSpeelt()) return false;
+    _okOpslokken = true;
+    _naarNuSpeeltVanOveral();
+    return true;
+  }
+
+  /// Is er iets om naartoe te gaan, en staat Nu speelt er niet al bovenop? Daar, en op de knoppen vooruit en terug, blijft
+  /// twee keer OK twee keer drukken: twee nummers verder is daar precies wat je wilt.
+  bool _magNaarNuSpeelt() {
+    final zone = _misschien<GekozenZone>(context)?.opAfstand;
+    if ((zone ?? context.read<PlayerStore>()).current == null && !context.read<SpeakerTarget>().isCasting) {
+      return false;
+    }
+    final hier = FocusManager.instance.primaryFocus?.context;
+    if (hier != null && hier.findAncestorWidgetOfExactType<DuwKnop>() != null) return false;
+    Route<dynamic>? boven;
+    Navigator.of(context, rootNavigator: true).popUntil((r) {
+      boven ??= r;
+      return true; // alleen kijken
+    });
+    return boven?.settings.name != _nuSpeeltRoute;
+  }
+
+  /// Een menu, blad of paneel dat openstaat eerst dicht, dan naar Nu speelt — of terug naar het Nu speelt dat er al ligt
+  /// ([naarNuSpeelt]). Een pagina eronder (een plaat, een artiest) blijft: Terug brengt je daar weer.
+  void _naarNuSpeeltVanOveral() {
+    final nav = Navigator.of(context, rootNavigator: true);
+    nav.popUntil((r) => r is! PopupRoute || r.settings.name == _nuSpeeltRoute);
+    naarNuSpeelt(context);
+  }
+
+  /// Ging er sinds de start al een toets? Dan blijft de selectie waar jij hem zet ([_tvBeginOpStart]).
+  bool _tvAlBediend = false;
+
+  /// Bij een koude start, ook na een update, begint de selectie in de bovenbalk op het tabblad van de pagina — en dat is
+  /// bij een start "Start" (Saber, 25-10-2026: "als de app koud start, of na een update dat de selectie in de menu bar op
+  /// start begint"). Gemeten op de Shield: de app stond op Start, maar de selectie zat onzichtbaar lager op de pagina, en
+  /// omhoog schoof die naar "Nieuwe albums & EP's". Een paar keer opnieuw gezet in de eerste seconden: wat later
+  /// binnenkomt, mag hem niet wegnemen zolang je nog niets gedrukt hebt.
+  void _tvBeginOpStart() {
+    void zet() {
+      if (!mounted || _tvAlBediend) return;
+      final tab = _tvKnoppen.voor(_view);
+      if (tab.hasPrimaryFocus || tab.context == null) return;
+      _tvBalk.requestFocus();
+      tab.requestFocus();
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => zet());
+    for (final na in kTvStartSelectieOpnieuw) {
+      Timer(na, zet);
+    }
+  }
+
   /// Het vangnet op een tv: staat de focus nergens waar een pijl iets mee kan, dan brengt de
   /// eerstvolgende pijl of OK hem naar de bovenbalk. Zie [focusZonderDoel].
   /// Een toets ingedrukt (pc, Mac, iPad met toetsenbord): vanaf nu mag de focus een rij laten oplichten ([focusLichtOp]).
@@ -3251,6 +3324,8 @@ class _HomeShellState extends State<HomeShell> {
 
   bool _tvVangnet(KeyEvent e) {
     if (isTv && mounted && _tvStilWekker(e)) return true;
+    if (isTv && e is KeyDownEvent) _tvAlBediend = true;
+    if (isTv && mounted && _tvDubbelOk(e)) return true;
     if (!isTv || e is! KeyDownEvent || !mounted) return false;
     final toetsen = [
       LogicalKeyboardKey.arrowUp, LogicalKeyboardKey.arrowDown, LogicalKeyboardKey.arrowLeft,
@@ -3275,6 +3350,7 @@ class _HomeShellState extends State<HomeShell> {
     _meetNaarSectie = _gaNaar;
     _gsmKop.addListener(_volgGsmKop);
     if (isTv) HardwareKeyboard.instance.addHandler(_tvVangnet);
+    if (isTv) _tvBeginOpStart();
     // Met toetsen bediend: dan mag de focus een rij laten oplichten ([focusLichtOp]); met de muis niet.
     if (!isTv) HardwareKeyboard.instance.addHandler(_merkToetsen);
     // Stilstand: zie [kTvStilstand]. Elke tien seconden kijken is ruim genoeg voor twee minuten.
@@ -10464,24 +10540,29 @@ class _VensterCapsule extends StatelessWidget {
 class _MenuStatus extends StatelessWidget {
   const _MenuStatus();
 
+  // "Covers ophalen…" alleen als er echt hoezen binnenkomen ([LibraryStore.hoezenOphalen]), niet zolang er een ronde
+  // navraagt wat er al staat (Saber, 25-10-2026: "de melding covers ophalen blijft hangen ???").
   @override
   Widget build(BuildContext context) => Consumer2<LibraryStore, FactsWarmer>(
-        builder: (_, lib, warmer, __) {
-          final tekst = lib.scanning
-              ? 'Scannen… ${lib.scanned}'
-              : lib.enriching
-                  ? 'Covers ophalen…'
-                  : warmer.status;
-          if (tekst.isEmpty) return const SizedBox.shrink();
-          return IgnorePointer(
-            child: MenuGlas(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                child: Text(tekst, maxLines: 1, style: TextStyle(fontSize: 11, color: _muted)),
+        builder: (_, lib, warmer, __) => ValueListenableBuilder<bool>(
+          valueListenable: lib.hoezenOphalen,
+          builder: (_, ophalen, __) {
+            final tekst = lib.scanning
+                ? 'Scannen… ${lib.scanned}'
+                : ophalen
+                    ? 'Covers ophalen…'
+                    : warmer.status;
+            if (tekst.isEmpty) return const SizedBox.shrink();
+            return IgnorePointer(
+              child: MenuGlas(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  child: Text(tekst, maxLines: 1, style: TextStyle(fontSize: 11, color: _muted)),
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       );
 }
 
@@ -18047,6 +18128,10 @@ const kTvTweedeOk = Duration(milliseconds: 350);
 /// 16-10-2026: "Nu speelt schermvullend" — grote hoes, draaiende cd, de kleuren van de hoes; een
 /// toets brengt je terug waar je was).
 const kTvStilstand = Duration(minutes: 2);
+
+/// Wanneer de selectie na een koude start nog eens op het tabblad gezet wordt, zolang er geen toets ging
+/// (`_tvBeginOpStart`).
+const kTvStartSelectieOpnieuw = [Duration(milliseconds: 400), Duration(milliseconds: 1200), Duration(milliseconds: 2500)];
 
 /// De toetsen die bij stilstand gewoon doen wat ze doen, in plaats van Nu speelt te sluiten.
 final kMediatoetsen = <LogicalKeyboardKey>{

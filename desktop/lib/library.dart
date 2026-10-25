@@ -850,7 +850,40 @@ class LibraryStore extends ChangeNotifier {
   List<Album> albums = [];
   bool scanning = false;
   int scanned = 0;
+
+  /// Loopt er een hoezenronde? Voor de hartslag. Het regeltje onder het menu kijkt naar [hoezenOphalen].
   bool enriching = false;
+
+  /// Komen er nu hoezen binnen die hier nog niet lagen? Alleen dit zet "Covers ophalen…" onder het menu aan.
+  ///
+  /// **Waarom niet [enriching] (Saber, 25-10-2026: "de melding covers ophalen blijft hangen ???").** Gemeten tegen
+  /// de pc: zijn catalogus veranderde zes keer in vier minuten (zonder één album of nummer meer), en elke verandering
+  /// start op elk toestel een hoezenronde. Zo'n ronde vraagt vooral na of wat er staat nog klopt — alle 897 in 0,8 s,
+  /// allemaal een lege 304 — en zette de melding telkens aan: om de veertig seconden "Covers ophalen…" terwijl er
+  /// niets binnenkwam. Ook een hoes die de pc zelf niet heeft, wordt stil opnieuw gevraagd.
+  final ValueNotifier<bool> hoezenOphalen = ValueNotifier(false);
+  int _hoezenOnderweg = 0;
+  Timer? _hoezenUit;
+
+  /// [haal] haalt een hoes binnen die hier niet lag: zolang staat de melding aan, en nog even daarna, zodat hij
+  /// tussen twee hoezen niet knippert.
+  Future<T> _haaltHoes<T>(Future<T> Function() haal) async {
+    _hoezenOnderweg++;
+    _hoezenUit?.cancel();
+    hoezenOphalen.value = true;
+    try {
+      return await haal();
+    } finally {
+      if (--_hoezenOnderweg <= 0) {
+        _hoezenOnderweg = 0;
+        _hoezenUit = Timer(kHoezenMeldingNaloop, () => hoezenOphalen.value = false);
+      }
+    }
+  }
+
+  /// Hoe lang "Covers ophalen…" blijft staan na de laatste hoes.
+  static const kHoezenMeldingNaloop = Duration(seconds: 2);
+
   bool _rescanQueued = false;
   final Map<String, Uint8List> artistImages = {};
   final Map<String, String> artistBios = {};
@@ -3483,12 +3516,24 @@ class LibraryStore extends ChangeNotifier {
   /// Zes en niet meer. Het gaat om je eigen pc op je eigen netwerk, en die serveert dit uit het
   /// geheugen; tientallen verzoeken tegelijk maken het niet sneller en zetten de pc wel onder druk
   /// terwijl daar ook nog muziek vandaan moet komen.
+  ///
+  /// [enriching] gaat altijd terug, ook als de ronde halverwege een fout gooit. Voorheen bleef hij dan aan staan tot de
+  /// volgende start (Saber, 25-10-2026: "de melding covers ophalen blijft hangen ???").
   Future<void> _loadRemoteCovers(AppSettings settings) async {
     final client = _remote;
     if (client == null) return;
-    final enricher = CoverEnricher(settings);
     enriching = true;
     notifyListeners();
+    try {
+      await _hoezenRondeOpPc(client, settings);
+    } finally {
+      enriching = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _hoezenRondeOpPc(RemoteClient client, AppSettings settings) async {
+    final enricher = CoverEnricher(settings);
     var since = 0;
 
     // Niet alleen de albums ZONDER hoes.
@@ -3628,7 +3673,15 @@ class LibraryStore extends ChangeNotifier {
         return;
       }
       if (ref != null) gevraagd++;
-      final antwoord = ref == null ? null : await client.artAls(ref, '', maxZijde: kHoesPlafond);
+      // Dit is echt ophalen: hier lag niets (of iets achterhaalds). Alleen dit zet de melding aan — behalve bij een hoes
+      // die de pc eerder niet had: die wordt stil opnieuw gevraagd ([hoezenOphalen]).
+      Future<({bool ongewijzigd, Uint8List? bytes, String? etag})?> vraag() =>
+          client.artAls(ref!, '', maxZijde: kHoesPlafond);
+      final antwoord = ref == null
+          ? null
+          : _hoesNogNiet.containsKey(_hoesSleutel(album))
+              ? await vraag()
+              : await _haaltHoes(vraag);
       if (antwoord != null && antwoord.etag == null) pcKentMerken = false;
       final bytes = antwoord?.bytes;
       if (bytes == null || bytes.isEmpty) {
@@ -3756,8 +3809,6 @@ class LibraryStore extends ChangeNotifier {
       debugPrint('hoezen: $gevraagd gevraagd aan de pc, geen enkele gekregen — '
           'staat de pc aan, en klopt het adres nog?');
     }
-    enriching = false;
-    notifyListeners();
   }
 
   /// Ging de laatste hoezenronde volledig mis?
@@ -4154,7 +4205,8 @@ class LibraryStore extends ChangeNotifier {
               // De uid overleeft een herbouw wél — die is er juist voor gemaakt, zie [uidOf] — dus
               // die wijst na afloop het album aan dat er nu ís.
               final uid = uidOf(album);
-              return enricher.fetchAndCache(album).then((bytes) {
+              // Op het net zoeken naar een hoes die er nog niet is: dat is ophalen ([hoezenOphalen]).
+              return _haaltHoes(() => enricher.fetchAndCache(album)).then((bytes) {
                 if (bytes == null) return;
                 album.enriched = bytes;
                 if (uid.isEmpty) return;

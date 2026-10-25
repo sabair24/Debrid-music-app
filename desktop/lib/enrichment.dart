@@ -1153,10 +1153,16 @@ class CoverEnricher {
   }
 
   Future<Uint8List?> cached(Album a) async {
-    final f = _cacheFile(a);
-    if (!await f.exists()) return null;
-    final b = await f.readAsBytes();
-    return b.length > 100 ? b : null; // skip empty/corrupt cache files
+    // Een bestand dat niet te lezen is (net in gebruik, geen rechten) is gewoon "niet in de cache": een fout hier brak
+    // vroeger de hele hoezenronde af, en dan bleef "Covers ophalen…" staan (25-10-2026).
+    try {
+      final f = _cacheFile(a);
+      if (!await f.exists()) return null;
+      final b = await f.readAsBytes();
+      return b.length > 100 ? b : null; // skip empty/corrupt cache files
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<Uint8List?> cachedArtist(String name) async {

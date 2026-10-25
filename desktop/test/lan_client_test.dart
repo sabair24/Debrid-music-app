@@ -967,6 +967,76 @@ void main() {
       expect(RemoteEndpoint.fromJson({'baseUrl': 'http://pc', 'token': ''}), isNull);
     });
   });
+
+  // Saber, 25-10-2026: "de melding covers ophalen blijft hangen ???". Gemeten: de catalogus van de pc veranderde zes keer
+  // in vier minuten, elke verandering start op elk toestel een hoezenronde, en die zette de melding telkens aan — ook
+  // als hij alleen navroeg wat er al stond (897 hoezen in 0,8 s, allemaal een lege 304).
+  group('"Covers ophalen…" alleen als er echt hoezen binnenkomen', () {
+    Uint8List hoes(int zaad) => Uint8List.fromList(List.generate(600, (i) => (i * zaad) % 256));
+
+    test('DE KERN: de eerste keer komen ze binnen en staat de melding aan; een volgende ronde vraagt alleen na en zwijgt',
+        () async {
+      final pc = _pc();
+      for (final a in pc.library.albums) {
+        a.embeddedCover = hoes(7);
+      }
+      final eerste = _client(pc.library);
+      await eerste.library.loadRemote();
+      var aan = false;
+      eerste.library.hoezenOphalen.addListener(() => aan = aan || eerste.library.hoezenOphalen.value);
+      await eerste.library.loadRemoteCovers(AppSettings());
+      expect(eerste.uitgeleverd, isNotEmpty);
+      expect(aan, isTrue, reason: 'er kwamen hoezen binnen: dan hoort de melding er te staan');
+      await Future<void>.delayed(LibraryStore.kHoezenMeldingNaloop + const Duration(milliseconds: 300));
+      expect(eerste.library.hoezenOphalen.value, isFalse, reason: 'en daarna gaat hij weg');
+
+      // Hetzelfde toestel na een verandering van de catalogus (nieuwe objecten, dezelfde cache op schijf).
+      final tweede = _client(pc.library);
+      await tweede.library.loadRemote();
+      var tweedeAan = false, rondeLiep = false;
+      tweede.library.hoezenOphalen.addListener(() => tweedeAan = tweedeAan || tweede.library.hoezenOphalen.value);
+      tweede.library.addListener(() => rondeLiep = rondeLiep || tweede.library.enriching);
+      await tweede.library.loadRemoteCovers(AppSettings());
+      expect(rondeLiep, isTrue, reason: 'de ronde liep wel');
+      expect(tweede.requests.where((r) => r.startsWith('/art/')), isNotEmpty, reason: 'en vroeg na');
+      expect(tweede.uitgeleverd, isEmpty, reason: 'maar kreeg alleen lege 304\'s');
+      expect(tweedeAan, isFalse, reason: 'navragen is geen ophalen: geen "Covers ophalen…"');
+      expect(tweede.library.enriching, isFalse);
+    });
+
+    test('een hoes die de pc niet heeft: de eerste vraag telt, opnieuw vragen gebeurt stil', () async {
+      final pc = _pc();
+      for (final a in pc.library.albums) {
+        if (a.title != 'Dummy') a.embeddedCover = hoes(11);
+      }
+      final c = _client(pc.library);
+      await c.library.loadRemote();
+      await c.library.loadRemoteCovers(AppSettings());
+      c.library.stopHoesHerkansing();
+      final ref = c.library.remoteAlbumId(c.library.albums.firstWhere((a) => a.title == 'Dummy'))!;
+      expect(c.requests.where((r) => r.startsWith('/art/$ref')), hasLength(1));
+      await Future<void>.delayed(LibraryStore.kHoezenMeldingNaloop + const Duration(milliseconds: 300));
+
+      var aan = false;
+      c.library.hoezenOphalen.addListener(() => aan = aan || c.library.hoezenOphalen.value);
+      await c.library.loadRemoteCovers(AppSettings());
+      c.library.stopHoesHerkansing();
+      expect(c.requests.where((r) => r.startsWith('/art/$ref')), hasLength(2), reason: 'hij vraagt het wel opnieuw');
+      expect(aan, isFalse, reason: 'maar zonder melding: er komt niets binnen');
+    });
+
+    test('aangesloten: de ronde zet [enriching] altijd terug, en de regel onder het menu kijkt naar hoezenOphalen', () {
+      final lib = File('lib/library.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(lib, contains('    try {\n      await _hoezenRondeOpPc(client, settings);\n    } finally {\n'
+          '      enriching = false;\n      notifyListeners();\n    }'));
+      expect(lib, contains('return _haaltHoes(() => enricher.fetchAndCache(album)).then((bytes) {'),
+          reason: 'op de pc: zoeken op het net is ophalen');
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final status = main.substring(main.indexOf('class _MenuStatus extends StatelessWidget {'));
+      expect(status.substring(0, 1500), contains('valueListenable: lib.hoezenOphalen,'));
+      expect(status.substring(0, 1500), isNot(contains('lib.enriching')));
+    });
+  });
 }
 
 /// Editing from a device that holds none of the files.
