@@ -435,6 +435,7 @@ class _AlbumTegelState extends State<AlbumTegel> {
         ? kaal
         : DraaiHoes(
             controller: _draai,
+            breedte: maat,
             voor: kaal,
             // Helemaal, in zijn eigen vorm (zie [achterkantMaat]).
             achter: _achter == null
