@@ -83,6 +83,9 @@ class LanSharing extends ChangeNotifier {
   /// de versleutelde verbinding aan staat, en 47821 echt luistert. Nooit in een toets (poort 0).
   late final DeurNaarBuiten deur = DeurNaarBuiten(
     log: _upnpLog.line,
+    // Zonder UPnP het publieke adres zelf vragen, voor de deur met de hand (deur.dart, [DeurNaarBuiten.metDeHand]).
+    // Nooit in een toets: die raakt het internet niet.
+    vraagPubliekAdres: Platform.environment.containsKey('FLUTTER_TEST') ? null : publiekAdresViaInternet,
     // Waar de modem stond, voor de volgende start (geen zoektocht nodig). Geen geheim: een adres op
     // het eigen netwerk.
     onthouden: (
