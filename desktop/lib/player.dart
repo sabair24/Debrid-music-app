@@ -399,6 +399,35 @@ Wachtrij verplaatsInWachtrijLijst(Wachtrij w, int van, int naar, {required bool 
   return (origineel: origineel, volgorde: volgorde, index: index);
 }
 
+/// Wat je met een nummer in de wachtrij kunt op een tv, waar je niet sleept en geen kruisje raakt (Saber, 25-10-2026:
+/// "OK = dat nummer spelen, lang OK = menu"). Dit zijn de keuzes bovenaan dat menu.
+enum WachtrijKeuze { nuSpelen, omhoog, omlaag, eruit }
+
+/// De keuzes voor het nummer op [plek], terwijl [huidig] speelt. Omhoog en omlaag alleen binnen "Hierna": niet voorbij
+/// het nummer dat speelt (dan stond het bij "Eerder gespeeld") en niet voorbij het einde. Het spelende nummer zelf
+/// heeft er geen: eruit halen zou "stop" of "volgende" zijn, en die knoppen bestaan al. Een radio is geen wachtrij:
+/// daar alleen nu spelen.
+List<WachtrijKeuze> wachtrijKeuzes({required int plek, required int huidig, required int lengte, required bool radio}) {
+  if (plek < 0 || plek >= lengte || plek == huidig) return const [];
+  if (radio) return const [WachtrijKeuze.nuSpelen];
+  return [
+    WachtrijKeuze.nuSpelen,
+    if (plek > huidig + 1) WachtrijKeuze.omhoog,
+    if (plek > huidig && plek < lengte - 1) WachtrijKeuze.omlaag,
+    WachtrijKeuze.eruit,
+  ];
+}
+
+/// Waar de selectie hoort na [keuze] op [plek] in een rij van [lengte]: bij het nummer (een plek op of neer, of nu
+/// spelend), of na eruit halen bij de regel die op die plek kwam — de laatste als het de laatste was. Null: de rij is
+/// leeg.
+int? plekNaKeuze(WachtrijKeuze keuze, {required int plek, required int lengte}) => switch (keuze) {
+      WachtrijKeuze.nuSpelen => plek,
+      WachtrijKeuze.omhoog => plek - 1,
+      WachtrijKeuze.omlaag => plek + 1,
+      WachtrijKeuze.eruit => lengte <= 1 ? null : min(plek, lengte - 2),
+    };
+
 /// Eén regel van de radio, zoals een lijst hem toont.
 ///
 /// [eigen] is het onderscheid waar alles om draait: staat dit nummer als BESTAND in je bibliotheek,
