@@ -2034,7 +2034,10 @@ class LanServer {
   Future<void> _zoneStand(HttpRequest req) async {
     // Met `venster`: alleen een stuk van de wachtrij rond het spelende nummer (het wachtrijpaneel).
     if (req.uri.queryParameters['venster'] == '1') {
-      final v = zones.rijVenster(req.uri.queryParameters['zone'] ?? '');
+      // `na`: hoeveel ná het spelende nummer. Wie naar het einde scrolt, vraagt er meer (Saber, 25-10-2026: "shuffle
+      // heel men bibliotheek, hierna 400 ????" — de wachtrij had er 1769, het venster liet er 400 zien).
+      final na = int.tryParse(req.uri.queryParameters['na'] ?? '')?.clamp(1, kZoneRijHoogstens) ?? kZoneRijNa;
+      final v = zones.rijVenster(req.uri.queryParameters['zone'] ?? '', na: na);
       if (v == null) {
         req.response.statusCode = HttpStatus.notFound;
         return req.response.close();

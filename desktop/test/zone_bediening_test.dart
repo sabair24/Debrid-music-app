@@ -316,7 +316,7 @@ void main() {
           gestuurd.add(op);
           return null;
         },
-        haalRij: () async {
+        haalRij: (_) async {
           gehaald++;
           return {'index': 3, 'lengte': 10, 'van': 2, 'rij': ['a', 'b', 'c', 'd']};
         },

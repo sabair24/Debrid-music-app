@@ -1581,8 +1581,8 @@ Future<void> main() async {
       stuur: (op) => stuurNaarZone(zone, op),
       // Een venster op haar wachtrij (stap 2.4): op de pc uit zijn eigen server, op een toestel gevraagd.
       haalRij: mode.owner
-          ? () async => sharing.server?.zones.rijVenster(zone)
-          : () async => library.remote?.zoneRij(zone),
+          ? (na) async => sharing.server?.zones.rijVenster(zone, na: na)
+          : (na) async => library.remote?.zoneRij(zone, na: na),
     ),
   );
 
@@ -14439,6 +14439,16 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
     }
 
     final hierna = nu < 0 ? 0 : rij.length - nu - 1;
+    // Een zone op afstand geeft een venster op haar wachtrij ([ZoneSpeler]): de koppen tellen de HELE wachtrij, en wie
+    // het einde van het venster nadert, krijgt er meer bij (Saber, 25-10-2026: "shuffle heel men bibliotheek, hierna
+    // 400 ????" — de Shield had er 1769, allemaal verschillend).
+    final zoneOpAfstand = p is ZoneSpeler ? p : null;
+    final hiernaTotaal = zoneOpAfstand == null ? hierna : math.max(hierna, zoneOpAfstand.hiernaInRij);
+    final eerderTotaal = zoneOpAfstand == null ? nu : math.max(nu, zoneOpAfstand.eerderInRij);
+    void bijHetEinde(int j) {
+      if (j >= hierna - kZoneRijBijhalen) zoneOpAfstand?.meerHierna();
+    }
+
     final kop = Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
       child: Row(
@@ -14561,7 +14571,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
           center: const ValueKey('wachtrij-nu'),
           slivers: [
             if (huidig > 0) ...[
-              SliverToBoxAdapter(child: zoneKop('Eerder gespeeld', extra: '$huidig')),
+              SliverToBoxAdapter(child: zoneKop('Eerder gespeeld', extra: '$eerderTotaal')),
               // Vóór het midden groeit een lijst naar boven: het eerste kind staat het dichtst bij het
               // spelende nummer. Dus het laatst gespeelde eerst.
               SliverList(
@@ -14612,7 +14622,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                       speelt: p.playing || context.watch<SpeakerTarget>().isCasting,
                       regel: radio ? regels[huidig] : null,
                     ),
-                  if (hierna > 0) zoneKop('Hierna', extra: '$hierna'),
+                  if (hierna > 0) zoneKop('Hierna', extra: '$hiernaTotaal'),
                 ],
               ),
             ),
@@ -14623,7 +14633,10 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
             if (radio || tv)
               SliverList(
                 delegate: SliverChildBuilderDelegate(
-                  (_, j) => regel(huidig + 1 + j),
+                  (_, j) {
+                    bijHetEinde(j);
+                    return regel(huidig + 1 + j);
+                  },
                   childCount: hierna,
                   findChildIndexCallback:
                       tv ? (k) => _plekVanSleutel(k, sleutels, (i) => i - huidig - 1, hierna) : null,
@@ -14637,7 +14650,10 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                   // beneden sleept, anders landt alles één te ver. En "Hierna" begint na het spelende.
                   p.verplaatsInWachtrij(huidig + 1 + van, huidig + 1 + (van < naar ? naar - 1 : naar));
                 },
-                itemBuilder: (_, j) => regel(huidig + 1 + j, sleep: j),
+                itemBuilder: (_, j) {
+                  bijHetEinde(j);
+                  return regel(huidig + 1 + j, sleep: j);
+                },
               ),
             SliverToBoxAdapter(child: SizedBox(height: 16 + MediaQuery.paddingOf(context).bottom)),
           ],
@@ -14674,6 +14690,9 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
 /// Ongeveer hoe hoog een regel in de wachtrij is: zoveel schuift de lijst op als het volgende nummer
 /// begint.
 const kWachtrijRegel = 54.0;
+
+/// Hoeveel regels voor het einde van het venster een zone op afstand er meer bij haalt ([ZoneSpeler.meerHierna]).
+const kZoneRijBijhalen = 40;
 
 /// Een regel die binnenschuift als hij nieuw is, en dichtklapt voor hij weggaat
 /// ([_UitklapState.klapDicht]).

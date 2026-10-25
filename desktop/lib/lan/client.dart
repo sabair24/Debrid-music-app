@@ -789,12 +789,13 @@ class RemoteClient {
   }
 
   /// Een venster op de wachtrij van een zone (`{index, lengte, van, rij}`, zie `ZoneRegister.rijVenster`),
-  /// of null als die zone geen wachtrij meldt.
-  Future<Map<String, dynamic>?> zoneRij(String zone) async {
+  /// of null als die zone geen wachtrij meldt. [na]: hoeveel nummers ná het spelende.
+  Future<Map<String, dynamic>?> zoneRij(String zone, {int? na}) async {
     final http.Response res;
     try {
       res = await _http
-          .get(_api('/api/zones/stand', {'zone': zone, 'venster': '1'}), headers: _headers)
+          .get(_api('/api/zones/stand', {'zone': zone, 'venster': '1', if (na != null) 'na': '$na'}),
+              headers: _headers)
           .timeout(timeout);
     } catch (e) {
       throw RemoteException('Kon de pc niet bereiken: $e');

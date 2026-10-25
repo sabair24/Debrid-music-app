@@ -84,9 +84,9 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     _lijstVeranderd();
   }
 
-  /// Een venster op de wachtrij van deze zone (`{index, lengte, van, rij}`), of null. Zie
-  /// `ZoneRegister.rijVenster`. Null: geen wachtrij te zien (een oudere pc).
-  final Future<Map<String, dynamic>?> Function()? haalRij;
+  /// Een venster op de wachtrij van deze zone (`{index, lengte, van, rij}`) tot [na] nummers ná het spelende, of
+  /// null. Zie `ZoneRegister.rijVenster`. Null: geen wachtrij te zien (een oudere pc).
+  final Future<Map<String, dynamic>?> Function(int na)? haalRij;
 
   final ZoneLijst lijst;
   final String zoneId;
@@ -155,6 +155,34 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     return z == null ? '' : '${z.trackId}|${z.index}|${z.lengte}';
   }
 
+  /// Hoeveel nummers ná het spelende het venster vraagt. Begint op [kZoneRijNa] en groeit met [meerHierna].
+  int _na = kZoneRijNa;
+
+  /// Hoeveel er nog komen na het spelende nummer, in de HELE wachtrij van de zone — niet in het venster
+  /// ([queueTracks]). Saber, 25-10-2026: *"shuffle heel men bibliotheek, hierna 400 ????"*: de Shield had alle 1769
+  /// nummers in zijn wachtrij (gemeten, geen enkele dubbel), maar het paneel telde het venster.
+  int get hiernaInRij {
+    final z = _zone;
+    return z == null ? 0 : (z.lengte - z.index - 1).clamp(0, 1 << 30);
+  }
+
+  /// Hoeveel er al speelden, in de hele wachtrij.
+  int get eerderInRij => (_zone?.index ?? 0).clamp(0, 1 << 30);
+
+  /// Je scrolt naar het einde van wat er staat: haal er [kZoneRijStap] bij, tot de hele wachtrij er staat. Bouwt niet
+  /// zelf: het halen loopt over een klok ([_haalRijLater]), dus dit mag vanuit het bouwen van een regel.
+  void meerHierna() {
+    final z = _zone;
+    if (z == null || _weg) return;
+    final tot = _rijVan + _rijIds.length;
+    if (tot >= z.lengte) return; // alles staat er al
+    final nodig = tot - z.index - 1 + kZoneRijStap;
+    if (nodig <= _na) return; // al gevraagd
+    _na = nodig;
+    _rijVoor = '';
+    _haalRijLater();
+  }
+
   void _haalRijLater() {
     final h = haalRij;
     if (_rijBezig || h == null || _weg) return;
@@ -162,7 +190,7 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     Timer(const Duration(milliseconds: 150), () async {
       final sleutel = _rijSleutel;
       try {
-        final m = await h();
+        final m = await h(_na);
         if (_weg) return;
         _rijVoor = sleutel;
         final ids = [for (final x in (m?['rij'] as List? ?? const [])) '$x'];
