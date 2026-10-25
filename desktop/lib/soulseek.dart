@@ -1580,6 +1580,19 @@ const int kZoekPerMinuut = 20;
 /// een betere kopie) neemt er hoogstens de rest.
 const int kZoekVoorJou = 6;
 
+/// Hoeveel zoekopdrachten er hoogstens in vijf minuten naar de server gaan, voor de hele app samen.
+///
+/// **Waarom, gemeten.** Twintig per minuut was niet genoeg. In soulseek_login.log ([verbindingWegRegel]) sloot de
+/// server na de rem van 22-10-2026 nog vier keer de verbinding, telkens gevolgd door minuten "geen antwoord" op het
+/// inloggen: bij 55, 68, 70 en 70 zoekopdrachten in vijf minuten, met 5 en drie keer 14 in de laatste minuut — 14 is
+/// precies wat de achtergrond per minuut mocht. Op 25-10-2026 gaf hij onze vragen niet meer door na ~25 proefvragen
+/// van mij in tien minuten (Saber: "ik werd weer uit soulseek gegooid lijk vorige keer met de radio, dus let er op").
+/// Het tempo per minuut deed er dus minder toe dan het volhouden ervan. Veertig blijft ruim onder de laagste 55.
+const int kZoekPerVijfMinuten = 40;
+
+/// Hoeveel van [kZoekPerVijfMinuten] er altijd vrij blijft voor wat JIJ zoekt.
+const int kZoekVoorJouVijf = 10;
+
 /// Hoe lang een zoekopdracht nog moet wachten: nul als er in het laatste [venster] minder dan [max] gingen, anders tot
 /// de oudste die nog meetelt uit het venster valt. [eerder]: de tijdstippen van de vorige zoekopdrachten.
 Duration zoekWachttijd(List<DateTime> eerder, DateTime nu,
@@ -1589,24 +1602,35 @@ Duration zoekWachttijd(List<DateTime> eerder, DateTime nu,
   return binnen[binnen.length - max].add(venster).difference(nu);
 }
 
-/// De zoekrem van de app — zie [kZoekPerMinuut]. Eén voor alle sessies: een sessie sluit na twee minuten stilte, en
-/// een nieuwe zou anders weer met een volle minuut beginnen.
+/// De zoekrem van de app — zie [kZoekPerMinuut] en [kZoekPerVijfMinuten]. Eén voor alle sessies: een sessie sluit na
+/// twee minuten stilte, en een nieuwe zou anders weer met een volle minuut beginnen.
 class Zoekrem {
-  Zoekrem({DateTime Function()? klok, this.max = kZoekPerMinuut, this.voorJou = kZoekVoorJou})
+  Zoekrem(
+      {DateTime Function()? klok,
+      this.max = kZoekPerMinuut,
+      this.voorJou = kZoekVoorJou,
+      this.maxVijf = kZoekPerVijfMinuten,
+      this.voorJouVijf = kZoekVoorJouVijf})
       : _klok = klok ?? DateTime.now;
   final DateTime Function() _klok;
   final int max;
   final int voorJou;
+  final int maxVijf;
+  final int voorJouVijf;
   final _tijden = <DateTime>[];
 
   /// Wacht tot er een zoekopdracht mag, en boekt hem meteen — tussen kijken en boeken zit geen `await`, dus twee
-  /// tegelijk nemen nooit dezelfde plek. [achtergrond]: hoogstens `max - voorJou`. Geeft terug hoe lang er gewacht is.
+  /// tegelijk nemen nooit dezelfde plek. [achtergrond]: hoogstens `max - voorJou` per minuut en `maxVijf - voorJouVijf`
+  /// per vijf minuten. Geeft terug hoe lang er gewacht is.
   Future<Duration> neem({bool achtergrond = false}) async {
     var gewacht = Duration.zero;
     while (true) {
       final nu = _klok();
-      _tijden.removeWhere((t) => nu.difference(t) >= const Duration(minutes: 1));
-      final w = zoekWachttijd(_tijden, nu, max: achtergrond ? max - voorJou : max);
+      _tijden.removeWhere((t) => nu.difference(t) >= const Duration(minutes: 5));
+      final w1 = zoekWachttijd(_tijden, nu, max: achtergrond ? max - voorJou : max);
+      final w5 = zoekWachttijd(_tijden, nu,
+          max: achtergrond ? maxVijf - voorJouVijf : maxVijf, venster: const Duration(minutes: 5));
+      final w = w1 > w5 ? w1 : w5;
       if (w <= Duration.zero) {
         _tijden.add(nu);
         return gewacht;
@@ -1754,7 +1778,8 @@ class SlskSession {
         final gewacht = await zoekrem.neem(achtergrond: achtergrond);
         if (gewacht >= const Duration(seconds: 1)) {
           client.logboek('zoekrem: "$q" wachtte ${gewacht.inSeconds} s'
-              '${achtergrond ? ' (achtergrond)' : ''} — hoogstens $kZoekPerMinuut zoekopdrachten per minuut');
+              '${achtergrond ? ' (achtergrond)' : ''} — hoogstens $kZoekPerMinuut zoekopdrachten per minuut en '
+              '$kZoekPerVijfMinuten per 5 min');
         }
         // Intussen kan de verbinding weg zijn; dan geldt wat er al binnen is.
         if (!_alive) break;
