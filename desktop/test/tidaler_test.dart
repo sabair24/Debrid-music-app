@@ -182,7 +182,9 @@ void main() {
       final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       final zoek = m.substring(m.indexOf('  Future<void> _searchTidal(String q) async {'));
       expect(zoek.substring(0, 900), contains('if (!viaTidaler && !tidal.connected) return;'));
-      expect(zoek.substring(0, 1800), contains('await zoekCatalogusOpTidal(q) ??'));
+      expect(zoek.substring(0, 1800), contains('await tidalCatalogusZoeker(q) ??'));
+      // Een haak voor de toetsen; in de app is het tidaler zelf.
+      expect(m, contains('Future<TidalZoekResultaat?> Function(String vraag) tidalCatalogusZoeker = zoekCatalogusOpTidal;'));
       final scherm = m.substring(m.indexOf('  Widget _tidalResults() {'));
       expect(scherm.substring(0, 400), contains('if (!viaTidaler && !tidal.configured) {'));
       expect(m, contains('return _isDesktop && !lib.isRemote && Tidaler.beschikbaar && Tidaler.python != null;'));

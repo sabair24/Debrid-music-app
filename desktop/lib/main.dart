@@ -13169,6 +13169,15 @@ Widget _bronnenPagina(String titel, String vraag, {TrackTags? tags}) => Scaffold
               padding: onderOp(context, EdgeInsets.zero), child: SourcesView(query: vraag, tags: tags))),
     );
 
+/// TIDAL doorzoeken op dit nummer of deze plaat: het tabblad TIDAL van Online zoeken, met de vraag al ingevuld en
+/// gezocht (Saber, 25-10-2026: "in de menu overal, zoek met tidal optie hebben"). Als pagina, zoals Soulseek: Terug
+/// brengt je waar je was. Ook op een toestel dat aan de pc hangt en op de Shield: dan zoekt de pc ([OnlineSearchScreen]).
+Widget _tidalPagina(String titel, String vraag) => Scaffold(
+      backgroundColor: _bg,
+      appBar: AppBar(backgroundColor: _bg, title: Text(titel)),
+      body: OnlineSearchScreen(tidalVraag: vraag),
+    );
+
 /// De Cloudflare-controle van RuTracker doen en de doorgang bewaren — zie `doeRutrackerControle`.
 ///
 /// Eén handeling voor de knop bij de zoekresultaten en die in Instellingen, zodat ze allebei
@@ -13342,6 +13351,7 @@ ItemMenu _ontbrekendMenu(
         if (!isTv) MenuRegel(Icons.download_rounded, 'Beste kopie downloaden', opHalen),
         if (!isTv) MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
             () => openOp(nav, (_) => _bronnenPagina(slot.title, vraag, tags: tags))),
+        MenuRegel(Icons.waves_rounded, 'Zoeken met TIDAL', () => openOp(nav, (_) => _tidalPagina(slot.title, vraag))),
       ],
     ],
   );
@@ -13497,6 +13507,7 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
         // plaats van die van de peer.
         if (!isTv) MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
             () => openOp(nav, (_) => _bronnenPagina(t.title, vraag, tags: vervangTags))),
+        MenuRegel(Icons.waves_rounded, 'Zoeken met TIDAL', () => openOp(nav, (_) => _tidalPagina(t.title, vraag))),
         // Van "dit nummer" naar "dat bestand". De app weet het pad — het staat in `Track.path` en
         // wordt gebruikt om af te spelen, te taggen en te verplaatsen — maar er liep geen enkele weg
         // van het scherm naar de map, dus wie het bestand wilde zien moest zelf gaan zoeken.
@@ -13833,6 +13844,7 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
         // Geen tags mee: er wordt hier geen bestand vervangen, er wordt een plaat gezocht.
         if (!isTv) MenuRegel(Icons.travel_explore_rounded, 'Zoeken met Soulseek',
             () => openOp(nav, (_) => _bronnenPagina(a.title, vraag))),
+        MenuRegel(Icons.waves_rounded, 'Zoeken met TIDAL', () => openOp(nav, (_) => _tidalPagina(a.title, vraag))),
         // De map van de plaat, via het eerste nummer erin. Zelfde voorwaarde als bij een nummer: dit
         // hoort alleen te bestaan waar de bestanden werkelijk staan.
         if (!context.read<LibraryStore>().isRemote && kanBestandTonen && nummers.isNotEmpty)
@@ -25253,8 +25265,18 @@ class _SoulseekGroepenState extends State<_SoulseekGroepen> {
       marge: const EdgeInsets.fromLTRB(34, 1, 20, 1));
 }
 
+/// Hoe Online zoeken TIDAL doorzoekt via tidaler op deze machine. Een toets zet er een nep in: echt zoeken start een
+/// Python-proces.
+@visibleForTesting
+Future<TidalZoekResultaat?> Function(String vraag) tidalCatalogusZoeker = zoekCatalogusOpTidal;
+
 class OnlineSearchScreen extends StatefulWidget {
-  const OnlineSearchScreen({super.key});
+  const OnlineSearchScreen({super.key, this.tidalVraag});
+
+  /// Geopend vanuit een menu ("Zoeken met TIDAL", [_tidalPagina]): meteen op het tabblad TIDAL, met deze vraag
+  /// ingevuld en gezocht. Null: het scherm begint waar je de vorige keer was ([ZoekGeheugen]).
+  final String? tidalVraag;
+
   @override
   State<OnlineSearchScreen> createState() => _OnlineSearchScreenState();
 }
@@ -25348,6 +25370,15 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     // Wat je typt meteen onthouden, zoals de bediening in [build]: bij een draai komt het nieuwe scherm vóór het oude
     // zijn [dispose] doet.
     _c.addListener(() => ZoekGeheugen.vraag = _c.text);
+    final vraag = widget.tidalVraag?.trim() ?? '';
+    if (vraag.isNotEmpty) {
+      _mode = ZoekTab.tidal;
+      _c.text = vraag;
+      // Na het eerste beeld: [_searchTidal] leest providers en zet de stand met setState.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_search());
+      });
+    }
   }
 
   Future<void> _search() async {
@@ -25389,7 +25420,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           ? await tidal.search(q)
           : _tidalViaPc
               ? await _tidalOpPc(context.read<LibraryStore>(), 'zoek', {'q': q})
-              : await zoekCatalogusOpTidal(q) ??
+              : await tidalCatalogusZoeker(q) ??
                   (throw tidalHulpFoutZin());
       if (!geldig()) return;
       _tidalAlbums = r.albums;
