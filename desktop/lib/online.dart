@@ -4027,41 +4027,8 @@ class DownloadManager extends ChangeNotifier {
     final map = keuringsmapVoor('torrent-hires-${item.id}-${f.id}');
     final bron = 'torrent "${r.name}"';
     var laten = false;
-    http.Client? client;
     try {
-      final t0 = DateTime.now();
-      String? url;
-      for (var poging = 1; url == null; poging++) {
-        try {
-          url = await online.resolveTrackUrl(item.id, f.id);
-        } catch (_) {
-          // Vlak na het toevoegen geeft TorBox soms nog geen adres. Seal, "Stand by Me" (25-10-2026): "Lege download-URL",
-          // en een minuut later kwam hetzelfde bestand gewoon binnen.
-          if (poging >= kTorrentAdresPogingen) rethrow;
-          await Future<void>.delayed(Duration(seconds: 5 * poging));
-        }
-      }
-      client = http.Client();
-      final resp = await client.send(http.Request('GET', Uri.parse(url))).timeout(_torrentStilte);
-      if (resp.statusCode < 200 || resp.statusCode >= 300) throw 'HTTP ${resp.statusCode}';
-      await map.create(recursive: true);
-      final doel = File('${map.path}${Platform.pathSeparator}${baseName(f.label)}');
-      final deel = File('${doel.path}.part');
-      final sink = deel.openWrite();
-      var binnen = 0;
-      try {
-        await for (final stuk in resp.stream.timeout(_torrentStilte)) {
-          sink.add(stuk);
-          binnen += stuk.length;
-        }
-      } finally {
-        await sink.close();
-      }
-      final verwacht = resp.contentLength ?? f.size;
-      if (verwacht > 0 && binnen < verwacht) throw 'incompleet: $binnen van $verwacht bytes';
-      await deel.rename(doel.path);
-      _log.line('   $bron: "${baseName(f.label)}" GELEVERD voor "$naam" na ${_kort(DateTime.now().difference(t0))}, '
-          '${(binnen / 1048576).toStringAsFixed(1)} MB');
+      final doel = await _haalTorrentBestand(item, f, map, bron, naam);
       if (!await _wachtTotNietMeerSpeelt(t.path)) {
         _log.line('   $bron: "$naam" speelt nog — niet vervangen');
         return false;
@@ -4087,13 +4054,55 @@ class DownloadManager extends ChangeNotifier {
       _log.line('   $bron: "$naam" mislukt — $e');
       return false;
     } finally {
-      client?.close();
       if (!laten) {
         try {
           if (map.existsSync()) await map.delete(recursive: true);
         } catch (_) {/* in gebruik; dan keurt de volgende start het restant */}
       }
       _geefKeuringsmapVrij(map);
+    }
+  }
+
+  /// Eén bestand [f] uit de torrent [item] bij TorBox naar [map] halen. Gooit bij een fout of een onvolledig bestand;
+  /// het opruimen van [map] is aan wie hem vroeg.
+  Future<File> _haalTorrentBestand(TbTorrent item, TbFile f, Directory map, String bron, String naam) async {
+    final t0 = DateTime.now();
+    String? url;
+    for (var poging = 1; url == null; poging++) {
+      try {
+        url = await online.resolveTrackUrl(item.id, f.id);
+      } catch (_) {
+        // Vlak na het toevoegen geeft TorBox soms nog geen adres. Seal, "Stand by Me" (25-10-2026): "Lege download-URL",
+        // en een minuut later kwam hetzelfde bestand gewoon binnen.
+        if (poging >= kTorrentAdresPogingen) rethrow;
+        await Future<void>.delayed(Duration(seconds: 5 * poging));
+      }
+    }
+    final client = http.Client();
+    try {
+      final resp = await client.send(http.Request('GET', Uri.parse(url))).timeout(_torrentStilte);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) throw 'HTTP ${resp.statusCode}';
+      await map.create(recursive: true);
+      final doel = File('${map.path}${Platform.pathSeparator}${baseName(f.label)}');
+      final deel = File('${doel.path}.part');
+      final sink = deel.openWrite();
+      var binnen = 0;
+      try {
+        await for (final stuk in resp.stream.timeout(_torrentStilte)) {
+          sink.add(stuk);
+          binnen += stuk.length;
+        }
+      } finally {
+        await sink.close();
+      }
+      final verwacht = resp.contentLength ?? f.size;
+      if (verwacht > 0 && binnen < verwacht) throw 'incompleet: $binnen van $verwacht bytes';
+      await deel.rename(doel.path);
+      _log.line('   $bron: "${baseName(f.label)}" GELEVERD voor "$naam" na ${_kort(DateTime.now().difference(t0))}, '
+          '${(binnen / 1048576).toStringAsFixed(1)} MB');
+      return doel;
+    } finally {
+      client.close();
     }
   }
 
@@ -5617,7 +5626,8 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Eén ronde voor [te]: Soulseek (bij een plaat één zoekopdracht voor alle nummers), en anders TIDAL — cd en studio,
-  /// geen vinyl. Wat de keuring doorstaat, staat klaar ([_zetKlaar]); de vraag blijft staan tot je kiest.
+  /// geen vinyl — en dan torrents, per plaat ([_soortViaTorrents]). Wat de keuring doorstaat, staat klaar ([_zetKlaar]);
+  /// de vraag blijft staan tot je kiest.
   Future<void> _soortRonde(List<Soortvraag> te, {String? album}) async {
     final vragen = soortvragen;
     if (vragen == null) return;
@@ -5635,8 +5645,10 @@ class DownloadManager extends ChangeNotifier {
               'voor ${open.length} nummers');
         } catch (_) {/* dan per nummer */}
       }
+      final gedaan = <Soortvraag>[], nogNiet = <Soortvraag>[];
       for (final v in open) {
         if (!identical(vragen.van(v.pad), v)) continue; // ingetrokken of opnieuw gevraagd
+        gedaan.add(v);
         var klaar = false;
         if (soulseek.available) {
           var hits = albumHits;
@@ -5654,9 +5666,14 @@ class DownloadManager extends ChangeNotifier {
           if (kandidaten.isNotEmpty) klaar = await _soortVanSoulseek(v, kandidaten);
         }
         if (!klaar && identical(vragen.van(v.pad), v)) klaar = await _soortViaTidal(v);
+        if (!klaar) nogNiet.add(v);
+      }
+      // Torrents als derde bron: per plaat, dus pas als elk nummer bij Soulseek en TIDAL langs is geweest.
+      final uitTorrents = nogNiet.isEmpty ? const <Soortvraag>{} : await _soortViaTorrents(nogNiet);
+      for (final v in gedaan) {
         v.rondes++;
         v.laatsteMs = DateTime.now().millisecondsSinceEpoch;
-        if (!klaar) {
+        if (nogNiet.contains(v) && !uitTorrents.contains(v)) {
           if (v.rondes == 1) nietGevonden.add(v.titel);
           _log.line('"${v.artiest} — ${v.titel}": nog geen ${v.soort.voluit} — opnieuw over '
               '${duurTekst(soortvraagWacht(v.rondes))}');
@@ -5771,6 +5788,86 @@ class DownloadManager extends ChangeNotifier {
       }
     }
     return false;
+  }
+
+  /// Torrents voor de vragen in [open] die na Soulseek en TIDAL niets klaar hebben (Saber, 25-10-2026: torrents als
+  /// derde bron). Per plaat één zoektocht ([albumZoekvraag]); welke torrents: [torrentsVoorSoort], hoogstens
+  /// [kTorrentHiresHoogstens] die TorBox al heeft en [kTorrentHiresNietKlaar] die hij nog moet halen. Per nummer één
+  /// bestand (FLAC of WAV, niet je eigen bestand, niet wat je weggooide) in een eigen keuringsmap, en dan dezelfde
+  /// keuring als van Soulseek en TIDAL ([_keurVoorSoort]). Zonder plaat geen torrent. Geeft terug wat nu klaarstaat.
+  Future<Set<Soortvraag>> _soortViaTorrents(List<Soortvraag> open) async {
+    final klaar = <Soortvraag>{};
+    if (!online.torboxReady) return klaar;
+    final perPlaat = <String, List<Soortvraag>>{};
+    for (final v in open) {
+      if (v.album.trim().isEmpty) continue;
+      perPlaat.putIfAbsent('${normKey(v.artiest)}|${normKey(v.album)}|${v.soort.naam}', () => []).add(v);
+    }
+    for (final groep in perPlaat.values) {
+      final eerste = groep.first;
+      final album = eerste.album.trim();
+      final plaat = '"${eerste.artiest} — $album"';
+      try {
+        final treffers = await online.search(albumZoekvraag(eerste.artiest, album));
+        final kandidaten = torrentsVoorSoort(treffers, eerste.soort, artiest: eerste.artiest, album: album);
+        _log.line('$plaat: ${eerste.soort.voluit} in torrents — ${treffers.length} treffers, ${kandidaten.length} '
+            'bruikbaar (${kandidaten.where((r) => r.cached).length} al bij TorBox)');
+        final te = [...groep];
+        var klaarGeprobeerd = 0, nietKlaarGeprobeerd = 0;
+        for (final r in kandidaten) {
+          te.removeWhere((v) => !identical(soortvragen?.van(v.pad), v)); // ingetrokken of opnieuw gevraagd
+          if (te.isEmpty) break;
+          if (r.cached ? klaarGeprobeerd >= kTorrentHiresHoogstens : nietKlaarGeprobeerd >= kTorrentHiresNietKlaar) continue;
+          r.cached ? klaarGeprobeerd++ : nietKlaarGeprobeerd++;
+          final TbTorrent item;
+          try {
+            final (id, hash) = await online._addOrFind(r);
+            item = await online._pollReady(id, hash, patient: !r.cached);
+          } catch (e) {
+            _log.line('   torrent "${r.name}": ${r.cached ? "niet te openen" : "niet binnen"} bij TorBox — $e');
+            continue;
+          }
+          if (indelingUitBestanden(item.files.map((f) => f.name)) != TorrentIndeling.losseNummers) {
+            _log.line('   torrent "${r.name}": geen losse nummers — overgeslagen');
+            continue;
+          }
+          final muziek = [for (final f in item.files) if (f.isAudio && const {'flac', 'wav'}.contains(soortVan(f.name))) f];
+          for (final v in [...te]) {
+            final eigen = File(v.pad);
+            final eigenGrootte = eigen.existsSync() ? eigen.lengthSync() : 0;
+            final afgewezen = twijfel?.afgewezenGroottes(v.pad) ?? const <int>{};
+            final f = muziek
+                .where((f) =>
+                    f.size != eigenGrootte &&
+                    !afgewezen.contains(f.size) &&
+                    fileOffersTitle(v.titel, v.soort == Kopiesoort.vinyl ? null : v.seconden, v.artiest, f.name, null,
+                        album: album))
+                .firstOrNull;
+            if (f == null) continue;
+            final naam = '${v.artiest} — ${v.titel}';
+            final bron = 'torrent "${r.name}"';
+            final map = keuringsmapVoor('torrent-soort-${item.id}-${f.id}');
+            try {
+              final doel = await _haalTorrentBestand(item, f, map, bron, naam);
+              if (await _keurVoorSoort(v, doel, bron, '${item.name}/${f.label}')) {
+                te.remove(v);
+                klaar.add(v);
+              }
+            } catch (e) {
+              _log.line('   $bron: "$naam" mislukt — $e');
+            } finally {
+              try {
+                if (map.existsSync()) await map.delete(recursive: true);
+              } catch (_) {/* de volgende start ruimt het op */}
+              _geefKeuringsmapVrij(map);
+            }
+          }
+        }
+      } catch (e) {
+        _log.line('$plaat: ${eerste.soort.voluit} in torrents — $e');
+      }
+    }
+    return klaar;
   }
 
   /// De keuring van een kandidaat voor een gevraagde soort. Niet "bewezen beter" (jij kiest de soort, ook als je huidige

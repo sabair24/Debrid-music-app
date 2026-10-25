@@ -14,6 +14,7 @@
 // hele plaat halen voor één nummer.
 
 import 'audioformaten.dart' show isAudioBestand;
+import 'kopiesoort.dart' show Kopiesoort;
 import 'organize.dart' show surroundLabel;
 import 'quality.dart';
 import 'torbox.dart' show SearchResult;
@@ -108,4 +109,23 @@ List<SearchResult> torrentsVoorHires(List<SearchResult> treffers,
     return r != 0 ? r : a.$1.compareTo(b.$1);
   });
   return [for (final e in goed) e.$2];
+}
+
+/// De torrents die voor een gevraagde [soort] van de plaat [album] het proberen waard zijn (studio, cd of vinyl kiezen;
+/// Saber, 25-10-2026: torrents als derde bron, na Soulseek en TIDAL). Dezelfde zeef en volgorde als [torrentsVoorHires],
+/// en dan per soort: studio hi-res en geen vinyl, cd geen hi-res en geen vinyl (een cd-kopie is 16/44,1, zie
+/// `kopiesoortVan`), vinyl alleen vinyl — elke diepte.
+List<SearchResult> torrentsVoorSoort(List<SearchResult> treffers, Kopiesoort soort,
+    {required String artiest, required String album, int? jaar}) {
+  final basis =
+      torrentsVoorHires(treffers, artiest: artiest, album: album, jaar: jaar, hiresNodig: soort == Kopiesoort.studio);
+  return [
+    for (final r in basis)
+      if (switch (soort) {
+        Kopiesoort.studio => !isVinylRip(r.name),
+        Kopiesoort.cd => !isVinylRip(r.name) && !hiresVolgensNaam(r.name),
+        Kopiesoort.vinyl => isVinylRip(r.name),
+      })
+        r,
+  ];
 }

@@ -3,6 +3,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:debridmusic/kopiesoort.dart' show Kopiesoort;
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/online.dart' show DownloadManager;
 import 'package:debridmusic/organize.dart' show fileOffersTitle;
@@ -171,5 +172,46 @@ void main() {
     expect(lijf, contains("final uitslag = await _keurVoorWens(w, doel, bron, inJacht: false, bronpad: '\${item.name}/\${f.label}');"),
         reason: 'dezelfde keuring als Soulseek en TIDAL');
     expect(lijf, contains('if (!await _wachtTotNietMeerSpeelt(t.path)) {'), reason: 'niet vervangen terwijl het speelt');
+  });
+
+  // Studio, cd of vinyl kiezen: torrents als derde bron, na Soulseek en TIDAL (Saber, 25-10-2026).
+  group('welke torrents voor een gevraagde soort', () {
+    List<String> voor(Kopiesoort s, List<SearchResult> lijst) => [
+          for (final r in torrentsVoorSoort(lijst, s, artiest: 'Red Hot Chili Peppers', album: 'Stadium Arcadium', jaar: 2006))
+            r.name
+        ];
+
+    test('DE KERN: een vinylrip is nooit studio, ook niet in 24 bit; een digitale hi-res wel', () {
+      expect(voor(Kopiesoort.studio, _stadium), isEmpty, reason: 'alle hi-res torrents van Stadium Arcadium zijn vinyl (PBTHAL, LP)');
+      final web = _r('Red Hot Chili Peppers - Stadium Arcadium (2006) [FLAC 24-96] WEB');
+      expect(voor(Kopiesoort.studio, [..._stadium, web]), [web.name]);
+    });
+
+    test('vinyl: alleen vinyl, elke diepte, Instant eerst; cd: verliesvrij zonder hi-res en zonder vinyl', () {
+      final vinyl = voor(Kopiesoort.vinyl, _stadium);
+      expect(vinyl, hasLength(5));
+      expect(vinyl.first, 'Red Hot Chili Peppers - Stadium Arcadium (2006 PBTHAL LP 24-96)');
+      expect(vinyl.last, contains('[PBTHAL] (Original US Pressing)'), reason: 'nog niet bij TorBox: achteraan');
+      expect(voor(Kopiesoort.cd, _stadium), [
+        'Red Hot Chili Peppers - Stadium Arcadium [2006][only1joe]FLAC-EA',
+        'Red Hot Chili Peppers - Stadium Arcadium (2006) [FLAC]',
+      ]);
+    });
+
+    test('aangesloten: na Soulseek en TIDAL, per plaat, met dezelfde keuring en het pad in de torrent', () {
+      final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(online, contains('        if (!klaar) nogNiet.add(v);\n'));
+      expect(online, contains('      final uitTorrents = nogNiet.isEmpty ? const <Soortvraag>{} : await _soortViaTorrents(nogNiet);'));
+      expect(online, contains('        if (nogNiet.contains(v) && !uitTorrents.contains(v)) {'),
+          reason: 'klaar uit een torrent: geen "nog geen"');
+      final i = online.indexOf('Future<Set<Soortvraag>> _soortViaTorrents(');
+      expect(i, greaterThan(0));
+      final lijf = online.substring(i, online.indexOf('\n  }\n', i));
+      expect(lijf, contains('torrentsVoorSoort(treffers, eerste.soort,'));
+      expect(lijf, contains("if (await _keurVoorSoort(v, doel, bron, '\${item.name}/\${f.label}')) {"));
+      expect(lijf, contains('f.size != eigenGrootte &&'), reason: 'niet je eigen bestand');
+      expect(lijf, contains('!afgewezen.contains(f.size) &&'), reason: 'niet wat je weggooide');
+      expect(lijf, contains("const {'flac', 'wav'}.contains(soortVan(f.name))"), reason: 'wat de keuring kan lezen');
+    });
   });
 }
