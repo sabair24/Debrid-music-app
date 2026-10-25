@@ -40,6 +40,7 @@ class _NepModem {
   final bezet = <int>{}; // AddPortMapping op deze buitenpoort geeft 718
   final verbreekEenKeer = <String>{}; // deze actie verbreekt één keer de verbinding
   bool overschrijftAnderen = false; // sommige modems laten een Add over de deur van een ander toestel heen gaan
+  bool upnpVastgelopen = false; // zoals de F3896LG op 25-10-2026: meldt zich, maar elke vraag geeft 404
 
   Uri get locatie => Uri.parse('http://127.0.0.1:${server.port}/beschrijving.xml');
 
@@ -63,6 +64,11 @@ class _NepModem {
   Future<void> _handel(HttpRequest req) async {
     final lijf = await utf8.decoder.bind(req).join();
     final res = req.response;
+    if (upnpVastgelopen) {
+      res.statusCode = 404;
+      res.write('<html><body><h1>404 Not Found</h1></body></html>');
+      return res.close();
+    }
     if (req.method == 'GET') {
       res.headers.contentType = ContentType('text', 'xml');
       res.write('<?xml version="1.0"?><root xmlns="urn:schemas-upnp-org:device-1-0"><device>'
@@ -437,6 +443,20 @@ void main() {
     addTearDown(d.dispose);
     await d.zetAan();
     expect(bewaard, modem.locatie);
+  });
+
+  test('een modem waarvan UPnP vastliep (404 op alles): herstart je modem, en daarna weer open', () async {
+    // Gemeten op 25-10-2026: de F3896LG meldde zich op de zoekvraag, maar gaf op elke vraag aan zijn UPnP 404. De pc
+    // zei een dag lang "Geen modem met UPnP gevonden. Zet UPnP aan" — terwijl het aanstond — en de gsm kwam onderweg
+    // niet meer binnen.
+    modem.upnpVastgelopen = true;
+    await deur.zetAan();
+    expect(deur.stand, DeurStand.mislukt);
+    expect(deur.waarom, allOf(contains('HTTP 404'), contains('Herstart je modem'), contains('Tailscale')));
+    expect(deur.waarom, isNot(contains('Zet UPnP aan')));
+    modem.upnpVastgelopen = false;
+    await deur.nuEenRonde();
+    expect(deur.stand, DeurStand.open, reason: deur.waarom);
   });
 
   test('geen modem met UPnP: een zin met wat te doen', () async {

@@ -95,8 +95,11 @@ class _BuitenproefKnopState extends State<BuitenproefKnop> {
       setState(() => _uitslag = (
             gelukt: false,
             rood: false,
-            zin: 'Je pc heeft nog geen deur naar buiten. Zet "Bereikbaar van buitenaf" aan op je pc, '
-                'en verbind daarna één keer thuis.',
+            // Niet "zet het aan": het kan ook aanstaan terwijl de modem de deur weigert (25-10-2026: UPnP van de
+            // modem vastgelopen, en de gsm zei een dag lang dat het aan moest). Wat er mis is, staat op de pc.
+            zin: 'Je gsm kent nog geen deur naar buiten van je pc. Staat "Bereikbaar van buitenaf" aan op je pc, '
+                'dan staat daar waarom de deur niet lukt (soms moet de modem herstart). Verbind daarna één keer '
+                'thuis. Tot dan werkt Tailscale.',
           ));
       return;
     }

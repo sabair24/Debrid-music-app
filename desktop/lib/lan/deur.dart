@@ -250,7 +250,15 @@ class DeurNaarBuiten extends ChangeNotifier {
     if (!_aan) return;
     try {
       final had = _dienst;
-      final d = _dienst ??= await _zoek();
+      final IgdDienst? d;
+      try {
+        d = _dienst ??= await _zoek();
+      } on ModemZonderUpnp catch (k) {
+        _misluktMet('Je modem meldt zich, maar zijn UPnP antwoordt niet (HTTP ${k.status}): het is in de modem '
+            'vastgelopen. Herstart je modem, of zet UPnP daar uit en weer aan; daarna zet de pc de deur vanzelf. '
+            'Tailscale werkt intussen.');
+        return;
+      }
       if (d != null && had == null) {
         final l = d.locatie;
         if (l != null) onthouden?.bewaar(l);
