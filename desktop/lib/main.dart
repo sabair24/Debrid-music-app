@@ -2299,6 +2299,10 @@ Future<void> main() async {
         (player.current?.path == p && !player.losgelaten) || (sharing.server?.inGebruikBijToestel(p) ?? false);
     // Een betere kopie van een nummer dat je met ▶ aanzette, vervangt het pas als het niet meer speelt.
     downloads.speeltNu = ergensInGebruik;
+    // Deze houden: hetzelfde, maar het toestel dat vraagt zit zichzelf niet in de weg (Rockin', 25-10-2026).
+    downloads.inGebruikVoorHouden = (p, {behalveLezer, behalveZone}) =>
+        (player.current?.path == p && !player.losgelaten) ||
+        (sharing.server?.inGebruikBijToestel(p, behalveLezer: behalveLezer, behalveZone: behalveZone) ?? false);
     // Na het landen van ▶ of een download in 16 bit of minder: 24bit zoeken op de achtergrond ([DownloadManager._naLandenHires]).
     downloads
       ..trackVoorPad = library.trackByPath
@@ -13592,7 +13596,9 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
       if (lib.remote case final c?) {
         final id = lib.remoteTrackId(t.path);
         if (id == null) return toon('Dit nummer kent de pc niet meer');
-        final res = await c.ask('/api/twijfel', {'trackId': id, 'actie': actie});
+        // Met het eigen id: wat dit toestel zelf speelt (A/B), houdt het houden op de pc niet tegen.
+        final ik = await thisDevice();
+        final res = await c.ask('/api/twijfel', {'trackId': id, 'actie': actie, 'toestel': ik.id});
         zin = '${res['zin'] ?? 'Gedaan'}';
         await lib.loadRemote(quiet: true);
       } else {
