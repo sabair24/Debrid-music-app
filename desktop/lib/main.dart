@@ -13532,6 +13532,9 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
     // Houden vervangt het nummer, en Windows vervangt geen bestand dat open staat: speelt het (A of B), dan eerst los,
     // en daarna verder op dezelfde seconde met wat je hield.
     final los = actie == 'vervang' && speler.current?.path == t.path ? await speler.laatBestandLos() : null;
+    // Weg terwijl B klinkt: eerst terug naar je eigen kopie, op dezelfde seconde — anders speelt het nummer verder van
+    // het bestand dat net weg is (gezien op de pc, 25-10-2026).
+    if (actie == 'weg' && speler.current?.path == t.path && speler.vergelijkBron != null) await speler.vergelijk(null);
     try {
       final String zin;
       if (lib.remote case final c?) {
@@ -13868,7 +13871,16 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
         MenuRegel(Icons.waves_rounded, 'Zoeken met TIDAL', () => openOp(nav, (_) => _tidalPagina(t.title, vraag))),
       ],
       // Zelf de soort kiezen (Saber, 25-10-2026): niets wordt vervangen, de kopie staat klaar tot je luistert en kiest.
-      _soortRegels(context, [t], heeft: soortVoor(t.path)?.soort),
+      [
+        ..._soortRegels(context, [t], heeft: soortVoor(t.path)?.soort),
+        // Een vraag die nog loopt (alleen op de pc bekend): stoppen. Een kopie die al klaarstaat, blijft tot je kiest.
+        if (!lib.isRemote)
+          if (context.read<DownloadManager>().soortvragen?.van(t.path) case final v?)
+            MenuRegel(Icons.search_off_rounded, 'Stop met zoeken naar ${v.soort.voluit}', () async {
+              final zin = await context.read<DownloadManager>().trekSoortvraagIn(t.path);
+              if (context.mounted) _srcToast(context, zin);
+            }),
+      ],
       [
         // Van "dit nummer" naar "dat bestand". De app weet het pad — het staat in `Track.path` en
         // wordt gebruikt om af te spelen, te taggen en te verplaatsen — maar er liep geen enkele weg
@@ -24386,6 +24398,14 @@ Widget _echtheidMerk(Track? t) {
 ///
 /// Nog altijd goud waar het goud verdient: 24/48 over de lijn is nog steeds hi-res.
 Quality _stroomKwaliteit(Speelbron p, Track t) {
+  // A/B: B klinkt, de klaargezette kopie — dan haar kwaliteit (gezien op de pc: de badge bleef 24/96 zeggen).
+  if (p is PlayerStore && p.current?.path == t.path && p.vergelijkBron != null) {
+    final tw = twijfelVoor(t.path);
+    if (tw != null) {
+      final bits = int.tryParse(RegExp(r'(d+)/').firstMatch(tw.kwaliteit)?.group(1) ?? '') ?? 0;
+      return Quality('B · ${tw.kwaliteit}', bits > 16 ? QTier.hires : QTier.lossless);
+    }
+  }
   // Een zone op afstand: wat dat toestel ontvangt, weet het zelf; hier geldt het bestand.
   final g = p is PlayerStore ? p.stroomGrens : null;
   if (g == null) return _trackQuality(t);
