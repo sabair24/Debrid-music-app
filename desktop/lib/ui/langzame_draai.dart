@@ -186,3 +186,10 @@ class LangzameDraai extends ChangeNotifier {
 
 /// Onder dit deel van de volle snelheid staat een uitlopende schijf stil.
 const double kUitgelopen = .02;
+
+/// Hoe snel een cd op toeren komt bij afspelen: een tijdconstante, dus na ongeveer een seconde draait hij op volle
+/// snelheid ([LangzameDraai.aanloop]). Overal waar een plaat draait: Nu speelt, de albumpagina, de wachtrij.
+const kSchijfAanloop = Duration(milliseconds: 350);
+
+/// Hoe lang hij na een pauze uitloopt: na anderhalve seconde staat hij zo goed als stil, en blijft hij staan waar hij is.
+const kSchijfUitloop = Duration(milliseconds: 500);

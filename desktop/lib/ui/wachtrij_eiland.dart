@@ -31,6 +31,11 @@ const double kEilandKanteling = 6 * math.pi / 180;
 /// Hoe lang één omwenteling van het plaatje duurt: als de cd in Nu speelt.
 const Duration kEilandOmwenteling = Duration(seconds: 9);
 
+/// De kanteling van de hoes op het eiland: de linkerkant naar je toe. Het plaatje erachter krijgt dezelfde.
+Matrix4 eilandKanteling() => Matrix4.identity()
+  ..setEntry(3, 2, .0016)
+  ..rotateY(kEilandKanteling);
+
 class WachtrijEiland extends StatefulWidget {
   const WachtrijEiland({
     super.key,
@@ -75,9 +80,12 @@ class WachtrijEiland extends StatefulWidget {
 }
 
 class _WachtrijEilandState extends State<WachtrijEiland> with SingleTickerProviderStateMixin {
+  // Met massa, zoals de cd in Nu speelt: op toeren komen en uitlopen ([kSchijfAanloop]).
   late final LangzameDraai _draai = LangzameDraai(this,
       omwenteling: kEilandOmwenteling,
-      maxBeeldenPerSeconde: Platform.isWindows || Platform.isMacOS || Platform.isLinux ? 1000 : 60);
+      maxBeeldenPerSeconde: Platform.isWindows || Platform.isMacOS || Platform.isLinux ? 1000 : 60,
+      aanloop: kSchijfAanloop,
+      uitloop: kSchijfUitloop);
 
   bool _magDraaien(BuildContext context) => widget.speelt && !isTv && !MediaQuery.disableAnimationsOf(context);
 
@@ -106,6 +114,13 @@ class _WachtrijEilandState extends State<WachtrijEiland> with SingleTickerProvid
     final m = widget.maat;
     final plaat = m * .88;
     final hoes = widget.hoes;
+    // Waar het plaatje ligt, en de kanteling van de hoes rond zijn midden — gemeten vanaf het plaatje. Het plaatje, zijn
+    // licht en de schaduw van de hoes erop liggen in hetzelfde vlak als de hoes (Saber, 25-10-2026: "bij het tilten van
+    // de hoes, zie je een verschil in kleur/licht ... overal"): kantelde alleen de hoes, dan schoof zijn rand weg van de
+    // schaduw die hij op het plaatje werpt. De slagschaduw op het eiland ligt op het eiland, en blijft plat.
+    final plaatLinks = m - plaat * .56, plaatBoven = (m - plaat) / 2;
+    final hoesMidden = Offset(m / 2 - plaatLinks, m / 2 - plaatBoven);
+    Widget inHoesVlak(Widget kind) => Transform(transform: eilandKanteling(), origin: hoesMidden, child: kind);
     final beeld = hoes != null
         ? Image.memory(hoes, width: m, height: m, cacheWidth: (m * 3).round(), fit: BoxFit.cover, gaplessPlayback: true)
         : ColoredBox(
@@ -135,17 +150,17 @@ class _WachtrijEilandState extends State<WachtrijEiland> with SingleTickerProvid
               child: Stack(clipBehavior: Clip.none, children: [
                 // De slagschaduw van het plaatje op het eiland, eronder.
                 Positioned(
-                  left: m - plaat * .56,
-                  top: (m - plaat) / 2,
+                  left: plaatLinks,
+                  top: plaatBoven,
                   child: SchijfGrondschaduw(maat: plaat),
                 ),
                 // Het plaatje, half achter de hoes vandaan.
                 Positioned(
-                  left: m - plaat * .56,
-                  top: (m - plaat) / 2,
+                  left: plaatLinks,
+                  top: plaatBoven,
                   // Twee grenzen: de buitenste houdt het draaien binnen dit vakje, de binnenste bewaart
                   // de getekende plaat, zodat elke tik hem alleen draait en niet opnieuw tekent.
-                  child: RepaintBoundary(
+                  child: inHoesVlak(RepaintBoundary(
                     child: AnimatedBuilder(
                       key: const ValueKey('wachtrij-plaatje'),
                       animation: _draai,
@@ -156,34 +171,32 @@ class _WachtrijEilandState extends State<WachtrijEiland> with SingleTickerProvid
                             child: widget.schijf?.call(plaat) ?? const CustomPaint(painter: EilandPlaat())),
                       ),
                     ),
-                  ),
+                  )),
                 ),
                 // Het licht erover draait niet mee: het komt uit de kamer, niet van de plaat. Een echte
                 // scan krijgt alleen de schaduwen (Saber, 19-10-2026). Plus de schaduw van de hoes op de
                 // plaat, aan de rand waar hij eronder vandaan komt.
                 Positioned(
-                  left: m - plaat * .56,
-                  top: (m - plaat) / 2,
-                  child: SchijfLichtLaag(
+                  left: plaatLinks,
+                  top: plaatBoven,
+                  child: inHoesVlak(SchijfLichtLaag(
                       maat: plaat,
                       soort: !widget.glans
                           ? SchijfSoort.scan
                           : widget.vinyl
                               ? SchijfSoort.vinyl
-                              : SchijfSoort.cd),
+                              : SchijfSoort.cd)),
                 ),
                 Positioned(
-                  left: m - plaat * .56,
-                  top: (m - plaat) / 2,
-                  child: MouwSchaduw(maat: plaat, rand: plaat * .56),
+                  left: plaatLinks,
+                  top: plaatBoven,
+                  child: inHoesVlak(MouwSchaduw(key: const ValueKey('wachtrij-mouwschaduw'), maat: plaat, rand: plaat * .56)),
                 ),
                 // De hoes, licht naar je toe gekanteld: de linkerkant komt naar voren.
                 Transform(
                   key: const ValueKey('wachtrij-hoes'),
                   alignment: Alignment.center,
-                  transform: Matrix4.identity()
-                    ..setEntry(3, 2, .0016)
-                    ..rotateY(kEilandKanteling),
+                  transform: eilandKanteling(),
                   child: DecoratedBox(
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(6),

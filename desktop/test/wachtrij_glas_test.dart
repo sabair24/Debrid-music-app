@@ -46,7 +46,17 @@ void main() {
 
   testWidgets('het plaatje draait zolang er muziek speelt, negen seconden per omwenteling', (t) async {
     await t.pumpWidget(_eiland(speelt: true));
+    // Eerst op toeren (25-10-2026: een plaat heeft massa, zie hoes_en_schijf_vlak_test): de eerste 0,3 s minder ver.
     await t.pump(const Duration(milliseconds: 16));
+    final start = _hoek(t);
+    for (var i = 0; i < 19; i++) {
+      await t.pump(const Duration(milliseconds: 16));
+    }
+    final aanloop = ((_hoek(t) - start) * 180 / math.pi) % 360;
+    expect(aanloop, lessThan(304 / 9000 * 360 * .7), reason: 'op toeren komen, niet meteen op volle snelheid');
+    for (var i = 0; i < 110; i++) {
+      await t.pump(const Duration(milliseconds: 16));
+    }
     final a = _hoek(t);
     // In stapjes van een beeld: één tik telt hooguit een halve seconde (LangzameDraai).
     for (var i = 0; i < 45; i++) {

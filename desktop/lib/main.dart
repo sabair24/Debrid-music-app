@@ -34158,13 +34158,6 @@ AlbumArtVooruit albumArtVooruit(LibraryStore bib, Album al) => (
 /// still reads as a disc tucked into a card rather than one lying beside it.
 const _discRest = 0.26;
 
-/// Hoe snel de cd op toeren komt bij afspelen: een tijdconstante, dus na ongeveer een seconde draait hij op volle
-/// snelheid ([LangzameDraai.aanloop]).
-const kSchijfAanloop = Duration(milliseconds: 350);
-
-/// Hoe lang hij na een pauze uitloopt: na anderhalve seconde staat hij zo goed als stil, en blijft hij staan waar hij is.
-const kSchijfUitloop = Duration(milliseconds: 500);
-
 /// Waar de hoes en de cd staan bij uitschuifstand [t]: 0 is de cd in de hoes, 1 is helemaal uit. Het
 /// zijn verschuivingen vanaf de linkerrand van het vak, dat [reis] breder is dan de hoes.
 ///

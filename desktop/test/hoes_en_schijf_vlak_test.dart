@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:debridmusic/ui/kantel_hoes.dart';
 import 'package:debridmusic/ui/langzame_draai.dart';
+import 'package:debridmusic/ui/wachtrij_eiland.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -165,6 +166,21 @@ void main() {
       expect(SchijfKantelGlans(Offset.zero, hoes: Rect.zero).shouldRepaint(SchijfKantelGlans(Offset.zero, hoes: Rect.zero)),
           isFalse);
       r.endRecording().dispose();
+    });
+
+    testWidgets('het wachtrij-eiland: de schaduw van de hoes op het plaatje ligt tegen de rand van de gekantelde hoes',
+        (t) async {
+      // Groot, zodat het verschil te meten is: op 52 punten is het een fractie van een pixel, op 400 een paar.
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: Center(
+                  child: SizedBox(
+                      width: 900, child: WachtrijEiland(hoes: null, speelt: false, maat: 400, child: const Text('x')))))));
+      final hoes =
+          find.descendant(of: find.byKey(const ValueKey('wachtrij-hoes')), matching: find.byType(DecoratedBox)).first;
+      final rand = t.getTopRight(hoes).dx;
+      final schaduw = t.getTopLeft(find.byKey(const ValueKey('mouw-schaduw'))).dx;
+      expect(schaduw, closeTo(rand, .5), reason: 'rand van de hoes $rand, schaduw $schaduw');
     });
 
     test('aangesloten in Nu speelt (gelezen uit lib/main.dart)', () {
