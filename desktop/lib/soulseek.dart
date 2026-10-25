@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import 'audioformaten.dart';
+import 'geweerde_zinnen.dart';
 import 'paths.dart';
 import 'warm_log.dart';
 
@@ -831,6 +832,10 @@ class SoulseekClient {
   /// Twee kopieën van dezelfde functie betekende ook twee keer dezelfde fout repareren.
   void logboek(String s) =>
       WarmLog('$appDir${Platform.pathSeparator}soulseek_login.log').line(s);
+
+  /// Wat de server in zoekopdrachten weert (bericht 160, ExcludedSearchPhrases), klein geschreven — zie
+  /// geweerde_zinnen.dart. Begint met wat er gemeten is, voor het geval de lijst (nog) niet binnen is.
+  final Set<String> geweerdeZinnen = {...kBekendeGeweerdeZinnen};
 
   /// Is dit de eerste login sinds het starten, en wel meteen erna? Dan is een INVALIDPASS vrijwel
   /// zeker onze eigen vorige sessie en niet het wachtwoord.
@@ -1718,7 +1723,10 @@ class SlskSession {
         final t = client._nextTicket();
         run.tickets.add(t);
         client._searchSinks[t] = run.add;
-        _conn!.send(_message(26, (_W()..u32(t)..str(q)).bytes())); // FileSearch
+        // Een geweerde zin krijgt geen antwoord: vervangen ([zonderGeweerdeZinnen], "the weeknd" → "weeknd").
+        final vraag = zonderGeweerdeZinnen(q, client.geweerdeZinnen);
+        if (vraag != q) client.logboek('zoekopdracht "$q" bevat een geweerde zin — gezocht op "$vraag"');
+        _conn!.send(_message(26, (_W()..u32(t)..str(vraag)).bytes())); // FileSearch
         final nu = DateTime.now();
         _zoektijden
           ..add(nu)
@@ -1804,6 +1812,21 @@ class SlskSession {
           // Soulseek zegt het hier zelf, dus geen gok meer op "binnen een minuut na de login".
           _relogged = true;
           client.logboek('de server meldt: elders ingelogd met dit account (code 41, Relogged)');
+          return;
+        }
+        if (code == 160) {
+          // ExcludedSearchPhrases: wat de server weert. Een zoekopdracht met zo'n zin krijgt geen antwoord ("The Weeknd",
+          // 25-10-2026); [search] vervangt hem daarom ([zonderGeweerdeZinnen]).
+          try {
+            final n = r.u32();
+            final zinnen = <String>[for (var i = 0; i < n && r.remaining >= 4; i++) r.str().toLowerCase().trim()];
+            client.geweerdeZinnen
+              ..clear()
+              ..addAll(kBekendeGeweerdeZinnen)
+              ..addAll(zinnen.where((z) => z.isNotEmpty));
+            client.logboek('de server weert ${zinnen.length} zoekzinnen (code 160): '
+                '${zinnen.take(40).join(', ')}${zinnen.length > 40 ? ', …' : ''}');
+          } catch (_) {/* een kapotte lijst: dan wat er al was */}
           return;
         }
         if (code == 1) {
