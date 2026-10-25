@@ -3208,6 +3208,10 @@ class LanServer {
           await library.mergeEditions(album!);
         case 'unmerge':
           await library.unmergeEditions(album!);
+        case 'splitYear':
+          await library.scheidPerJaar(album!);
+        case 'unsplitYear':
+          await library.herenigJaren(album!);
         case 'artistArt':
           final artist = (body['artist'] ?? '') as String;
           if (artist.isEmpty) {

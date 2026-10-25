@@ -2189,6 +2189,7 @@ Future<void> main() async {
     await library.loadTagUndo(); // the way back from a tag rewrite, before anything can write again
     await library.loadHidden(); // keep "removed from library only" tracks out
     await library.loadMerged(); // records the user told us to keep together
+    await library.loadGesplitst(); // en de platen die ze per jaar lieten scheiden
     await library.loadArtistArtChoice(); // portraits and backdrops the user picked
     await library.loadAlbumArtRoles(); // which scan is the sleeve, the back, the disc
     await library.loadStyles(); // what each record sounds like, for discovery
@@ -8342,7 +8343,10 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                     ),
                     // Offered only where there is something to merge: the library holds more than
                     // one pressing of this record, or the user already told us to keep them one.
-                    if (album.edition != null || context.watch<LibraryStore>().isMerged(album)) ...[
+                    // Niet bij een plaat die per jaar gescheiden is: daar is het jaar de editie, en "Weer één plaat"
+                    // hieronder brengt hem terug.
+                    if ((album.edition != null && !context.watch<LibraryStore>().isGesplitst(album)) ||
+                        context.watch<LibraryStore>().isMerged(album)) ...[
                       if (!narrow) const SizedBox(width: 10),
                       Builder(builder: (context) {
                         final merged = context.watch<LibraryStore>().isMerged(album);
@@ -8360,6 +8364,37 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                           },
                           icoon: merged ? Icons.call_split_rounded : Icons.merge_rounded,
                           label: merged ? 'Uitgaves splitsen' : 'Uitgaves samenvoegen',
+                        );
+                      }),
+                    ],
+                    // Twee platen met dezelfde naam (Saber, 25-10-2026: Seal 1991 en 1994 "uit elkaar halen"). Alleen
+                    // waar de nummers uit minstens twee jaren komen, of als hij al gescheiden is.
+                    if (context.watch<LibraryStore>().kanScheidenPerJaar(album) ||
+                        context.watch<LibraryStore>().isGesplitst(album)) ...[
+                      if (!narrow) const SizedBox(width: 10),
+                      Builder(builder: (context) {
+                        final gesplitst = context.watch<LibraryStore>().isGesplitst(album);
+                        return GlasKnop(
+                          key: const ValueKey('scheiden-per-jaar'),
+                          onPressed: () async {
+                            final lib = context.read<LibraryStore>();
+                            if (gesplitst) {
+                              await lib.herenigJaren(album);
+                              if (context.mounted) _srcToast(context, 'Weer één plaat');
+                              return;
+                            }
+                            final n = await lib.scheidPerJaar(album);
+                            if (!context.mounted) return;
+                            _srcToast(
+                                context,
+                                n > 0
+                                    ? 'Gescheiden per jaar — $n ${n == 1 ? 'bestand' : 'bestanden'} naar een eigen map'
+                                    : 'Gescheiden per jaar');
+                            // Deze tegel bestaat niet meer als één plaat: terug naar waar je vandaan kwam.
+                            Navigator.of(context).maybePop();
+                          },
+                          icoon: gesplitst ? Icons.merge_rounded : Icons.call_split_rounded,
+                          label: gesplitst ? 'Weer één plaat' : 'Scheiden per jaar',
                         );
                       }),
                     ],

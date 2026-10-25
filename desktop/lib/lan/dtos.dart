@@ -106,6 +106,9 @@ class AlbumDto {
   /// client shows the wrong state — offering to merge a record that already is.
   final bool merged;
 
+  /// Per jaar gescheiden (`LibraryStore.scheidPerJaar`). Net als [merged]: zonder dit biedt een toestel de verkeerde knop aan.
+  final bool gesplitst;
+
   /// What this record sounds like, as Discogs describes it. Feeds the Ontdek screen, which is
   /// simply empty on a device that has none.
   final List<String> styles;
@@ -148,6 +151,7 @@ class AlbumDto {
     this.discogsRelease,
     this.mbid,
     this.merged = false,
+    this.gesplitst = false,
     this.styles = const [],
     this.artTag,
     this.artRoles = const {},
@@ -167,6 +171,7 @@ class AlbumDto {
         discogsRelease: _intOrNull(j['discogsRelease']),
         mbid: j['mbid'] as String?,
         merged: j['merged'] == true,
+        gesplitst: j['gesplitst'] == true,
         styles: [
           for (final v in (j['styles'] as List? ?? const []))
             if (v is String) v,
@@ -192,6 +197,7 @@ class AlbumDto {
         'discogsRelease': discogsRelease,
         'mbid': mbid,
         'merged': merged,
+        if (gesplitst) 'gesplitst': true,
         'styles': styles,
         'artTag': artTag,
         if (artRoles.isNotEmpty) 'artRoles': artRoles,
