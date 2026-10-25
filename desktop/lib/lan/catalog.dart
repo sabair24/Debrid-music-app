@@ -10,6 +10,7 @@ import '../luidheid_winkel.dart' show gepubliceerdeLuidheid, gepubliceerdeStatus
 import '../models.dart';
 import '../organize.dart';
 import '../vaste_keuze.dart';
+import '../twijfel.dart' show twijfelUitgave, twijfelVoor;
 import 'dtos.dart';
 import 'ids.dart';
 
@@ -80,6 +81,8 @@ class LanCatalog {
     library.addListener(_markDirty);
     // Een nieuwe publicatie van gelijk volume verandert geen enkel nummer, maar wel de catalogus.
     luidheidUitgave.addListener(_markDirty);
+    // Een twijfelgeval verandert geen enkel nummer, maar wel wat een toestel bij het nummer toont.
+    twijfelUitgave.addListener(_markDirty);
   }
 
   final LibraryStore library;
@@ -133,6 +136,7 @@ class LanCatalog {
   void dispose() {
     library.removeListener(_markDirty);
     luidheidUitgave.removeListener(_markDirty);
+    twijfelUitgave.removeListener(_markDirty);
   }
 
   CatalogSnapshot snapshot() {
@@ -271,6 +275,11 @@ class LanCatalog {
           // Zie [TrackDto.rij]: zonder dit ziet een telefoon nooit terug wat ze zelf heeft
           // aangewezen, want daar staat de keuze niet — hij staat hier.
           rij: rijen[t.path],
+          // Een twijfelkopie die op jouw keuze wacht (twijfel.dart). Telt mee in de vingerafdruk hieronder.
+          twijfel: switch (twijfelVoor(t.path)) {
+            final i? => {'id': i.id, 'bron': i.bron, 'score': i.score, 'kwaliteit': i.kwaliteit, 'ext': i.ext},
+            null => null,
+          },
           // Gelijk volume: wat de pc GEPUBLICEERD heeft, niet de levende meting — anders zou elke
           // herbouw tijdens de veegronde een nieuwe ETag geven, en haalt elk toestel elke 15 s de
           // hele catalogus opnieuw. Zie luidheid_winkel.dart.
@@ -363,6 +372,7 @@ class LanCatalog {
         // terug. Een toewijzing verandert geen enkele titel en geen enkel nummer — dat is nu juist
         // de hele bedoeling ervan.
         ..add(t.rij ?? '');
+      if (t.twijfel != null) fingerprint.add('T${t.twijfel!['id']}');
       // De luidheid alleen als hij er is: een bibliotheek zonder metingen (of een pc zonder winkel,
       // zoals in de toetsen) houdt dan exact dezelfde ETag als vóór deze functie.
       if (t.luid != null) fingerprint.add('L${jsonEncode(t.luid)}');

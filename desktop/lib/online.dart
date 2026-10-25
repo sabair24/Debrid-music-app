@@ -41,6 +41,9 @@ import 'wavpack_kop.dart' show readWvKop;
 import 'tidal.dart' show TidalTrack;
 import 'tidal_beter.dart' show TidalBeterUitslag, TidalMinstens, tidalMinstens;
 import 'torrent_hires.dart';
+import 'twijfel.dart';
+import 'prullenbak.dart' show heeftPrullenbak, naarPrullenbak;
+import 'cachesleutel.dart' show fnv1a;
 import 'vinyl.dart' show isVinylRip, vinylAchteraan;
 import 'wav_naar_flac.dart' show wavNaarFlac;
 import 'tidaler.dart' show Tidaler, haalVanTidal, kTidalRadioPerUur, kiesTidalTreffers, zoekOpTidal;
@@ -2128,15 +2131,158 @@ class DownloadManager extends ChangeNotifier {
   /// opname van precies even lang ziet alleen de vingerafdruk. Onder [maybeSameRecordingScore] is het
   /// een andere opname.
   Future<bool?> _zelfdeOpname(String a, String b) async {
+    final s = await _opnameScore(a, b);
+    return s == null ? null : s >= maybeSameRecordingScore;
+  }
+
+  /// De vingerafdruk van [a] tegen [b] (0–1), of null als het niet te zeggen valt. Zie [opnameOordeel].
+  Future<double?> _opnameScore(String a, String b) async {
     try {
       final fp = Fingerprinter();
       if (!fp.available) return null;
       final x = await fp.of(a), y = await fp.of(b);
       if (x == null || y == null || x.raw.isEmpty || y.raw.isEmpty) return null;
-      return similarity(x.raw, y.raw) >= maybeSameRecordingScore;
+      return similarity(x.raw, y.raw);
     } catch (_) {
       return null;
     }
+  }
+
+  /// De twijfelgevallen (twijfel.dart); gezet door main.dart op de pc. Null: er wordt niets bewaard, en een twijfel is
+  /// "een andere opname" zoals voorheen.
+  Twijfellijst? twijfel;
+
+  /// Een kopie die bewezen beter klinkt maar waarvan de vingerafdruk twijfelt ([Opnameoordeel.twijfel]): niet weggooien
+  /// en niet vervangen, maar bewaren in [twijfelMap] tot je kiest (Saber, 25-10-2026). Waar als hij bewaard is of er al
+  /// een twijfelgeval voor dit nummer wacht — dan is [staged] in beide gevallen weg uit de keuringsmap.
+  @visibleForTesting
+  Future<bool> bewaarAlsTwijfel(File staged, String bestaand, double score, String bron, TrackTags? gezag) async {
+    final lijst = twijfel;
+    if (lijst == null) return false;
+    final naam = gezag == null ? baseName(bestaand) : '${gezag.artist} — ${gezag.title}';
+    final s = score.toStringAsFixed(2).replaceAll('.', ',');
+    final grootte = staged.lengthSync();
+    if (lijst.van(bestaand) != null || lijst.afgewezen(bestaand, grootte)) {
+      _log.line('   $bron: twijfel ($s) voor "$naam", maar er wacht al een twijfelgeval of je gooide deze weg — weggegooid');
+      await _discardStaged(staged.path);
+      return true;
+    }
+    final kop = readFlacTags(staged);
+    final soort = soortVan(staged.path).toUpperCase();
+    final kwaliteit = kop == null || kop.bitsPerSample <= 0
+        ? soort
+        : '$soort ${kop.bitsPerSample}/${(kop.sampleRate / 1000).toStringAsFixed(1).replaceAll('.0', '').replaceAll('.', ',')}';
+    final id = fnv1a('${bestaand.toLowerCase()}|${DateTime.now().microsecondsSinceEpoch}');
+    final punt = staged.path.lastIndexOf('.');
+    final ext = punt < 0 ? '' : staged.path.substring(punt).toLowerCase();
+    final sep = Platform.pathSeparator;
+    final doel = File('$_downloadsRoot$sep$twijfelMap$sep$id$ext');
+    String bewaard;
+    try {
+      await doel.parent.create(recursive: true);
+      bewaard = await moveWithRetry(staged, doel);
+    } catch (e) {
+      _log.line('   $bron: twijfelkopie niet te bewaren ($e) — weggegooid');
+      await _discardStaged(staged.path);
+      return true;
+    }
+    try {
+      await staged.parent.delete();
+    } catch (_) {/* de keuringsmap houdt nog iets vast */}
+    lijst.zet(Twijfelgeval(
+      id: id,
+      pad: bestaand,
+      kandidaat: bewaard,
+      bron: bron,
+      score: score,
+      kwaliteit: kwaliteit,
+      ms: DateTime.now().millisecondsSinceEpoch,
+      grootte: grootte,
+      gezag: gezag?.toJson(),
+    ));
+    await lijst.bewaar();
+    _log.line('"$naam": TWIJFEL — $bron klinkt beter ($kwaliteit), maar de vingerafdruk zegt $s: bewaard tot je kiest');
+    return true;
+  }
+
+  /// "Vervangen" uit het twijfelmenu: de twijfelkopie in de plaats van [pad], zoals een opwaardering — wat er lag gaat
+  /// naar `_dubbel`. Geeft de zin voor op het scherm terug.
+  Future<String> vervangDoorTwijfel(String pad) async {
+    final lijst = twijfel;
+    final g = lijst?.van(pad);
+    if (lijst == null || g == null) return 'Er wacht geen twijfelkopie meer voor dit nummer';
+    final f = File(g.kandidaat);
+    if (!f.existsSync()) {
+      lijst.verwijder(pad);
+      await lijst.bewaar();
+      return 'De twijfelkopie staat er niet meer';
+    }
+    if (speeltNu?.call(pad) ?? false) return 'Het nummer speelt nu — vervang het als het niet meer speelt';
+    final gezag = g.gezag == null ? null : TrackTags.fromJson(g.gezag!);
+    final naam = gezag == null ? baseName(pad) : '${gezag.artist} — ${gezag.title}';
+    try {
+      final uit = await placeFileDetailed(f, _downloadsRoot,
+          tags: gezag, staatAl: (artist, title, {int? seconds}) => pad, parkeerAltijd: true);
+      if (uit.how != Placement.moved) {
+        // Verloren van wat er nu ligt: de kopie staat in _dubbel/binnengekomen, en het geval is voorbij.
+        lijst.verwijder(pad);
+        await lijst.bewaar();
+        _log.line('"$naam": twijfelkopie gekozen (${g.bron}), maar je huidige kopie is intussen even goed of beter');
+        return 'Niet vervangen: je huidige kopie is intussen even goed of beter';
+      }
+      if (gezag != null) {
+        try {
+          await stampTags(File(uit.path), gezag);
+        } catch (_) {/* het bestand staat goed; een mislukte tagschrijf maakt het niet stuk */}
+      }
+    } catch (e) {
+      return 'Vervangen lukte niet: $e';
+    }
+    lijst.verwijder(pad);
+    await lijst.bewaar();
+    _log.line('"$naam": twijfelkopie gekozen (${g.bron}, ${g.kwaliteit}) — vervangen, de vorige staat in _dubbel');
+    try {
+      await onLibraryChanged();
+    } catch (_) {}
+    return 'Vervangen door ${g.kwaliteit} — je vorige kopie staat in _dubbel';
+  }
+
+  /// Wie een twijfelkopie naar de prullenbak brengt ([naarPrullenbak]); een toets zet er een nep in, zodat hij nooit
+  /// de echte prullenbak van Windows raakt.
+  @visibleForTesting
+  static Future<Set<String>> Function(List<String> paden) prullenbak = naarPrullenbak;
+
+  /// "Weggooien" uit het twijfelmenu: de twijfelkopie naar de prullenbak (waar die er is), en dezelfde kandidaat komt
+  /// niet terug ([Twijfellijst.afgewezen]).
+  Future<String> gooiTwijfelWeg(String pad) async {
+    final lijst = twijfel;
+    final g = lijst?.verwijder(pad, nee: true);
+    if (lijst == null || g == null) return 'Er wacht geen twijfelkopie meer voor dit nummer';
+    await lijst.bewaar();
+    var weg = false;
+    if (heeftPrullenbak) {
+      try {
+        weg = (await prullenbak([g.kandidaat])).contains(g.kandidaat);
+      } catch (_) {}
+    }
+    if (!weg) {
+      try {
+        await File(g.kandidaat).delete();
+      } catch (_) {}
+    }
+    _log.line('"${baseName(pad)}": twijfelkopie weggegooid (${g.bron}) — je eigen kopie blijft');
+    return 'Weggegooid — je eigen kopie blijft';
+  }
+
+  /// Een gewone vervanging van [pad]: een twijfelkopie ervoor is dan achterhaald (ze werd tegen het oude bestand
+  /// gemeten).
+  Future<void> _vergeetTwijfel(String pad) async {
+    final g = twijfel?.verwijder(pad);
+    if (g == null) return;
+    try {
+      await File(g.kandidaat).delete();
+    } catch (_) {}
+    await twijfel?.bewaar();
   }
 
   /// Mag dit binnengehaalde bestand blijven?
@@ -3925,8 +4071,18 @@ class DownloadManager extends ChangeNotifier {
     final bestaand = await _bereidVergelijkingVoor(
         staged,
         w.authority ?? TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0));
-    final andereOpname = bestaand != null && await _zelfdeOpname(staged.path, bestaand) == false;
+    final score = bestaand == null ? null : await _opnameScore(staged.path, bestaand);
+    final opname = opnameOordeel(score);
+    final andereOpname = bestaand != null && (opname == Opnameoordeel.andere || opname == Opnameoordeel.twijfel);
     final nietBeter = bestaand != null && !firstIsBetter(staged, File(bestaand));
+    // Klinkt bewezen beter, maar de vingerafdruk twijfelt: niet weggooien, aanbieden (twijfel.dart).
+    if (bestaand != null &&
+        opname == Opnameoordeel.twijfel &&
+        !nietBeter &&
+        await bewaarAlsTwijfel(staged, bestaand, score!, bron, w.authority)) {
+      if (inJacht) jacht.value = jacht.value.met(regel: 'Bij $bron: twijfel — bewaard tot je kiest.');
+      return _Wenskeuring.afgewezen;
+    }
     if (andereOpname || nietBeter) {
       final waaromNiet = andereOpname
           ? 'een andere opname dan wat je hebt'
@@ -3952,6 +4108,7 @@ class DownloadManager extends ChangeNotifier {
       // stond er niet: `goed` werd gezet ongeacht de uitkomst, dus een kopie die verloor liet
       // de wens tóch vervallen.
       if (uit.how == Placement.duplicate) return _Wenskeuring.alAanwezig;
+      if (bestaand != null) await _vergeetTwijfel(bestaand);
     } catch (_) {/* de scan vindt hem waar hij ook landde */}
     return _Wenskeuring.opgeborgen;
   }
@@ -5355,7 +5512,16 @@ class DownloadManager extends ChangeNotifier {
             // dat verkeerd om: een opgeschaalde of uit mp3 omgezette kopie is juist GROTER dan het
             // origineel, dus de jacht op iets beters kon de betere kopie weggooien.
             final bestaand = await _bereidVergelijkingVoor(staged, job.authority);
-            if (bestaand != null && await _zelfdeOpname(staged.path, bestaand) == false) {
+            final score = bestaand == null ? null : await _opnameScore(staged.path, bestaand);
+            final opname = opnameOordeel(score);
+            // Klinkt bewezen beter, maar de vingerafdruk twijfelt: aanbieden in plaats van weggooien (twijfel.dart).
+            if (bestaand != null &&
+                opname == Opnameoordeel.twijfel &&
+                firstIsBetter(staged, File(bestaand)) &&
+                await bewaarAlsTwijfel(staged, bestaand, score!, 'Soulseek ${f.username}', job.authority)) {
+              continue;
+            }
+            if (bestaand != null && (opname == Opnameoordeel.andere || opname == Opnameoordeel.twijfel)) {
               _log.line('   ${job.name}: de betere kandidaat is een andere opname — weggegooid');
               await _discardStaged(staged.path);
               continue;
@@ -5378,6 +5544,7 @@ class DownloadManager extends ChangeNotifier {
                 await stampTags(File(uit.path), gezag);
               } catch (_) {/* het bestand staat goed; een mislukte tagschrijf maakt het niet stuk */}
             }
+            if (how == Placement.moved && bestaand != null) await _vergeetTwijfel(bestaand);
           } catch (_) {/* the scan still finds it wherever it landed */}
           if (how == Placement.duplicate) {
             if (blijfZoeken) {

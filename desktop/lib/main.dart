@@ -191,6 +191,8 @@ import 'tidal.dart';
 import 'tidaler.dart';
 import 'tidal_beter.dart';
 import 'vinyl.dart' show isVinylRip;
+import 'twijfel.dart';
+import 'lan/vaste_naam.dart' show kPcHost;
 import 'torbox.dart';
 import 'torbox_stand.dart';
 import 'torrentvoornummer.dart';
@@ -2295,6 +2297,13 @@ Future<void> main() async {
         onError: (Object e) => startLog.line('hoezen in bestanden: veger MISLUKT: $e')));
     unawaited(echtVeger.start().then((_) => startLog.line('echtheid: veger gestart (eerste ronde na 6 min)'),
         onError: (Object e) => startLog.line('echtheid: veger MISLUKT: $e')));
+    // Twijfelgevallen (Saber, 25-10-2026): een kopie die bewezen beter klinkt maar waarvan de vingerafdruk twijfelt,
+    // wacht in _twijfel tot je kiest. Alleen op de pc; een toestel krijgt ze mee met de catalogus. Zie twijfel.dart.
+    if (mode.owner) {
+      final twijfels = Twijfellijst('$appDir${Platform.pathSeparator}twijfel.json');
+      await twijfels.laad();
+      downloads.twijfel = twijfels;
+    }
     // TIDAL voor de hele bibliotheek (Saber, 24-10-2026: "als er een beter versie kwaliteit te vinden is op tidal, moet
     // de app deze gebruiken" — hij koos de hele bibliotheek, traag). Alleen op de pc met tidaler; zie tidal_beter.dart.
     if (mode.owner && Tidaler.beschikbaar && Tidaler.python != null && !Tidaler.inToets) {
@@ -9272,6 +9281,7 @@ class _TrackRowState extends State<TrackRow> {
                 }),
               ),
               _echtheidMerk(t),
+              _twijfelMerk(t),
               _qualityBadge(_trackQuality(t)),
               Text(_fmt(t.duration), style: kTekstKlein),
               // "≠ 4:33" — je hebt het nummer, maar niet die versie. Klein en naast de tijd, want het
@@ -13287,6 +13297,98 @@ ItemMenu _ontbrekendMenu(
 /// [uitgave] is de rij van de persing waar dit bestand op had moeten passen, en is alleen gevuld
 /// voor een nummer onder "Niet op deze uitgave" waarvoor er één te vinden was. Alleen dán valt er
 /// een titel recht te zetten, en alleen dán staat die regel in het menu — zie [waaromGeenPlaatsMet].
+/// De drie keuzes bij een twijfelkopie (twijfel.dart; Saber, 25-10-2026: beluisteren, vervangen of weggooien). Alles wat
+/// de regels nodig hebben wordt NU opgehaald: tegen de tijd dat er gekozen wordt, is het menu dicht.
+List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
+  final lib = context.read<LibraryStore>();
+  final speler = context.read<PlayerStore>();
+  final dm = lib.isRemote ? null : context.read<DownloadManager>();
+  final melder = ScaffoldMessenger.maybeOf(context);
+  final nav = Navigator.of(context);
+  void toon(String zin) => melder?.showSnackBar(SnackBar(content: Text(zin)));
+  Future<void> kies(String actie) async {
+    try {
+      final String zin;
+      if (lib.remote case final c?) {
+        final id = lib.remoteTrackId(t.path);
+        if (id == null) return toon('Dit nummer kent de pc niet meer');
+        final res = await c.ask('/api/twijfel', {'trackId': id, 'actie': actie});
+        zin = '${res['zin'] ?? 'Gedaan'}';
+        await lib.loadRemote(quiet: true);
+      } else {
+        zin = actie == 'vervang' ? await dm!.vervangDoorTwijfel(t.path) : await dm!.gooiTwijfelWeg(t.path);
+      }
+      toon(zin);
+    } catch (e) {
+      toon('$e');
+    }
+  }
+
+  return [
+    MenuRegel(Icons.headphones_rounded, 'Twijfelkopie beluisteren (${tw.kwaliteit})', () {
+      // Op de pc het bestand zelf; op een toestel via de pc, zoals de groeistroom (`/kandidaat/`, server.dart).
+      final adres = dm != null ? dm.twijfel?.van(t.path)?.kandidaat : 'http://$kPcHost/kandidaat/${tw.id}.${tw.ext}';
+      if (adres == null) return toon('De twijfelkopie staat er niet meer');
+      speler.playUrl(adres, title: '${t.title} (twijfelkopie)', artist: t.artist, album: t.album);
+    }),
+    MenuRegel(Icons.swap_horiz_rounded, 'Twijfelkopie gebruiken (vervangen)', () => kies('vervang')),
+    MenuRegel(Icons.delete_outline_rounded, 'Twijfelkopie weggooien…', () async {
+      // Bevestigen: dit staat naast "gebruiken", en die twee mogen niet per ongeluk verwisseld worden.
+      final ja = await showDialog<bool>(
+        context: nav.context,
+        builder: (c) => AlertDialog(
+          title: const Text('Twijfelkopie weggooien?'),
+          content: Text('De kopie van ${tw.bron} gaat naar de prullenbak. Je eigen "${t.title}" blijft staan, en '
+              'dezelfde kopie komt niet terug.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Nee')),
+            FilledButton(onPressed: () => Navigator.of(c).pop(true), child: const Text('Weggooien')),
+          ],
+        ),
+      );
+      if (ja == true) await kies('weg');
+    }),
+  ];
+}
+
+/// Het menu van het label "twijfel" bij een nummer: alleen de drie keuzes, met wat er twijfelt als ondertitel.
+ItemMenu _twijfelMenu(BuildContext context, Track t, TwijfelInfo tw) => ItemMenu(
+      titel: '${t.title} — twijfel',
+      ondertitel: '${tw.bron} · ${tw.kwaliteit} · vingerafdruk ${tw.score.toStringAsFixed(2).replaceAll('.', ',')} '
+          '(dezelfde opname is 0,90 of meer)',
+      blokken: [_twijfelRegels(context, t, tw)],
+    );
+
+/// Het label "twijfel" naast de kwaliteit van een nummer (twijfel.dart). Tik (muis, aanraking) opent de keuzes; op een tv
+/// is het label niet te kiezen — daar staan dezelfde keuzes in het menu van de rij (lang OK).
+Widget _twijfelMerk(Track? t) => ValueListenableBuilder<int>(
+      valueListenable: twijfelUitgave,
+      builder: (context, _, __) {
+        final pad = t?.path;
+        final tw = pad == null || pad.isEmpty ? null : twijfelVoor(pad);
+        if (t == null || tw == null) return const SizedBox.shrink();
+        final s = tw.score.toStringAsFixed(2).replaceAll('.', ',');
+        final label = Tooltip(
+          message: 'Twijfel: ${tw.bron} heeft ${tw.kwaliteit} en klinkt beter, maar de vingerafdruk zegt $s — dezelfde '
+              'opname scoort 0,90 of meer. ${isTv ? 'Houd OK ingedrukt' : 'Tik'} om te kiezen.',
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Text('twijfel', style: kLabel.copyWith(color: leesbaar(const Color(0xFFE0B341)))),
+          ),
+        );
+        if (isTv) return label;
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            key: ValueKey('twijfel-${t.path}'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _toonItemMenu(context, _twijfelMenu(context, t, tw)),
+            child: label,
+          ),
+        );
+      },
+    );
+
 ItemMenu _nummerMenu(BuildContext context, Track t,
     {ChoiceTrack? uitgave, String? albumMbid}) {
   final p = rijVoor(context);
@@ -13300,10 +13402,13 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
   final vraag = zoekvraagVoorNummer(t.title,
       performer: performerFromFilename(t.path, t.title), artist: t.artist);
   final vervangTags = lib.tagsVoorVervanger(t);
+  final twijfel = twijfelVoor(t.path);
   return ItemMenu(
     titel: t.title,
     ondertitel: t.artist,
     blokken: [
+      // Bovenaan: hier wacht een keuze (twijfel.dart). Ook de weg op een tv, waar het label zelf niet te kiezen is.
+      if (twijfel != null) _twijfelRegels(context, t, twijfel),
       [
         MenuRegel(isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
             isFav ? 'Uit favorieten' : 'Favoriet', () => fav.wisselTrack(t)),

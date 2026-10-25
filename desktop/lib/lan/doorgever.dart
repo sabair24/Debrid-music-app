@@ -176,7 +176,8 @@ class Doorgever {
     // met een leeg einde op de plek waar het ophoudt. Dus niet tegen het eerste antwoord controleren: de
     // speler hoort dat einde, en gaat dan op dezelfde plek verder (`_hervatGroei` in player.dart).
     final groei = pad.startsWith('/groei/');
-    if (!pad.startsWith('/stream/') && !pad.startsWith('/art/') && !groei) {
+    // `/kandidaat/`: een twijfelkopie op de pc (twijfel.dart), een gewoon bestand zoals `/stream/`.
+    if (!pad.startsWith('/stream/') && !pad.startsWith('/art/') && !pad.startsWith('/kandidaat/') && !groei) {
       res.statusCode = HttpStatus.notFound;
       return res.close();
     }

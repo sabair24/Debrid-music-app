@@ -38,6 +38,7 @@ import 'luidheid_winkel.dart' show onthoudLuidheidVanPc, zetLuidheidStatusVanPc;
 import 'organize.dart';
 import 'settings.dart';
 import 'vaste_keuze.dart';
+import 'twijfel.dart' show twijfelMap, zetTwijfelVanPc;
 import 'paths.dart';
 import 'artwork.dart';
 
@@ -279,6 +280,8 @@ ScanUitslag _scanTags(String root, String? cachePad) {
     // deliberately NOT part of the library — otherwise a parked junk WAV keeps scanning back in as
     // its own single and the duplicate cleanup can never finish.
     if (e.path.contains('${Platform.pathSeparator}$dupeFolder${Platform.pathSeparator}')) continue;
+    // En de twijfelkopieën: die wachten op jouw keuze en horen niet in de bibliotheek (twijfel.dart).
+    if (e.path.contains('${Platform.pathSeparator}$twijfelMap${Platform.pathSeparator}')) continue;
     // En de map waarin de torrentmotor werkt. Daar staan halve bestanden, en bestanden die aria2
     // opnieuw ophaalt omdat een eerdere download ze heeft weggehaald. Zonder deze regel komen die
     // in de bibliotheek — gemeld op 29-08-2026 als "er komen liedjes bij die ik nooit heb
@@ -3378,6 +3381,19 @@ class LibraryStore extends ChangeNotifier {
     }
     // En of je dit bestand zelf koos: de bescherming staat op de pc. Zie [TrackDto.vast].
     zetVasteKeuzeVanPc(pad, d.vast);
+    // Een twijfelkopie die op de pc op jouw keuze wacht (twijfel.dart), onder de naam die het nummer hier heeft.
+    final tw = d.twijfel;
+    zetTwijfelVanPc(
+        pad,
+        tw == null || tw['id'] is! String
+            ? null
+            : (
+                id: tw['id'] as String,
+                bron: '${tw['bron'] ?? ''}',
+                score: (tw['score'] as num?)?.toDouble() ?? 0,
+                kwaliteit: '${tw['kwaliteit'] ?? ''}',
+                ext: '${tw['ext'] ?? 'flac'}',
+              ));
     // Gelijk volume: de meting van de pc, onder dezelfde sleutel (grootte|tijd) als op de pc — het
     // Track hier krijgt die twee uit deze DTO. Zie luidheid_winkel.dart.
     onthoudLuidheidVanPc(sizeBytes: d.sizeBytes, addedMs: d.addedMs, luid: d.luid);

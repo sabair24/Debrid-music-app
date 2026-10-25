@@ -144,7 +144,9 @@ void main() {
       for (final stap in [
         'magBlijven(oordeel)',
         'zelfdeLengte(w.authority?.seconds, lengte)',
-        '_zelfdeOpname(',
+        // Dezelfde opname: sinds 25-10-2026 met de score, zodat een twijfel bewaard kan worden (twijfel.dart).
+        '_opnameScore(staged.path, bestaand)',
+        'opnameOordeel(score)',
         'firstIsBetter(staged',
         'placeFileDetailed(staged',
       ]) {
