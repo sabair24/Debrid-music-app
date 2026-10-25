@@ -1102,9 +1102,6 @@ const double kGlansRand = .14;
 const double kGlansVol = .80;
 const double kGlansZacht = .32;
 
-/// Hoe licht de vlek in het glas is waar het licht valt (op zijn felst).
-const double kGlansVlek = .16;
-
 /// Waar de glans op de rand van [vak] valt voor een licht op [licht] (beide lokaal), en hoe fel: de
 /// plek is het dichtstbijzijnde punt van het vak, de sterkte loopt van [kGlansVol] (licht erop of
 /// erin) naar [kGlansZacht] (400 punten of verder weg). Zuiver, voor de toets.
@@ -1172,20 +1169,9 @@ class RenderGlasGlans extends RenderBox {
     final licht = bron == null ? vak.topLeft - const Offset(120, 120) : globalToLocal(bron) + offset;
     final g = glansOp(vak, licht);
     final straal = math.max(48.0, math.min(220.0, math.max(size.width, size.height) * .45));
-    // De vlek IN het glas: een zachte lichtplek waar het licht valt. Zonder bleef het bij een lijntje
-    // van anderhalve punt, en dat zag je op een voorbeeld van 18-10-2026 niet bewegen.
-    canvas.save();
-    canvas.clipRRect(r);
-    canvas.drawRect(
-      vak,
-      Paint()
-        ..shader = ui.Gradient.radial(g.plek, straal * 1.3, [
-          const Color(0xFFFFFFFF).withValues(alpha: kGlansVlek * g.sterkte / kGlansVol),
-          const Color(0x00FFFFFF),
-        ]),
-    );
-    canvas.restore();
-    // En de rand zelf licht daar op.
+    // Alleen de rand licht op. Hier stond ook een zachte vlek IN het glas (18-10-2026: "het lijntje zag je niet bewegen"),
+    // tot 286 punten breed op de plek van de muis; in een groot paneel werd dat een lichtvlek rond de muis (Saber,
+    // 25-10-2026, in de wachtrij: "een soort van licht rond de muis, niet mooi moet weg").
     canvas.drawRRect(
       r,
       Paint()

@@ -411,9 +411,19 @@ void main() {
       expect(r.debugNeedsPaint, isFalse);
     });
 
+    test('geen lichtvlek in het glas rond de muis, alleen de rand licht op (Saber, 25-10-2026, de wachtrij)', () {
+      final glas = File('lib/ui/glas.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final i = glas.indexOf('class RenderGlasGlans extends RenderBox {');
+      final schilder = glas.substring(i, glas.indexOf('\n}\n', i));
+      expect(schilder, isNot(contains('canvas.clipRRect(r);')), reason: 'de vlek werd binnen de rand geknipt');
+      expect(schilder, isNot(contains('straal * 1.3')));
+      expect('ui.Gradient.radial'.allMatches(schilder), hasLength(1), reason: 'alleen het verloop op de rand');
+      expect(glas, isNot(contains('kGlansVlek')));
+    });
+
     test('aangesloten: de muis op de pc, de selectie op een tv, en op de knoppen', () {
-      final main = File('lib/main.dart').readAsStringSync();
-      expect(main, contains('onPointerHover: (e) => GlasLicht.muis(e.position),'));
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(main, contains('                    onPointerHover: (e) {\n                      GlasLicht.muis(e.position);'));
       expect(main, contains('  if (isTv) {\n    GlasLicht.volgSelectie();'));
       expect(File('lib/ui/vlak.dart').readAsStringSync(), contains('const RepaintBoundary(child: GlasGlans(vorm: hoek)),'));
     });

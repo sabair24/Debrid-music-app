@@ -2467,9 +2467,14 @@ class DebridApp extends StatelessWidget {
                   )
                 : Listener(
                     // De muis is het licht dat over de glasranden glijdt (ui/glas.dart, GlasLicht).
-                    onPointerHover: (e) => GlasLicht.muis(e.position),
+                    onPointerHover: (e) {
+                      GlasLicht.muis(e.position);
+                      // De muis bedient weer: focus laat geen rij meer oplichten ([focusLichtOp]).
+                      merkInvoer(toetsen: false);
+                    },
                     onPointerMove: (e) => GlasLicht.muis(e.position),
                     onPointerDown: (e) {
+                      merkInvoer(toetsen: false);
                       if (e.kind == PointerDeviceKind.mouse && e.buttons & kBackMouseButton != 0) stapTerug();
                     },
                     child: inhoud,
@@ -3238,6 +3243,12 @@ class _HomeShellState extends State<HomeShell> {
 
   /// Het vangnet op een tv: staat de focus nergens waar een pijl iets mee kan, dan brengt de
   /// eerstvolgende pijl of OK hem naar de bovenbalk. Zie [focusZonderDoel].
+  /// Een toets ingedrukt (pc, Mac, iPad met toetsenbord): vanaf nu mag de focus een rij laten oplichten ([focusLichtOp]).
+  bool _merkToetsen(KeyEvent e) {
+    if (e is KeyDownEvent) merkInvoer(toetsen: true);
+    return false;
+  }
+
   bool _tvVangnet(KeyEvent e) {
     if (isTv && mounted && _tvStilWekker(e)) return true;
     if (!isTv || e is! KeyDownEvent || !mounted) return false;
@@ -3264,6 +3275,8 @@ class _HomeShellState extends State<HomeShell> {
     _meetNaarSectie = _gaNaar;
     _gsmKop.addListener(_volgGsmKop);
     if (isTv) HardwareKeyboard.instance.addHandler(_tvVangnet);
+    // Met toetsen bediend: dan mag de focus een rij laten oplichten ([focusLichtOp]); met de muis niet.
+    if (!isTv) HardwareKeyboard.instance.addHandler(_merkToetsen);
     // Stilstand: zie [kTvStilstand]. Elke tien seconden kijken is ruim genoeg voor twee minuten.
     if (isTv) {
       _stil.start();
@@ -3470,6 +3483,7 @@ class _HomeShellState extends State<HomeShell> {
     _waarschuwing?.removeListener(_toonWaarschuwing);
     _ruilKlok?.cancel();
     if (isTv) HardwareKeyboard.instance.removeHandler(_tvVangnet);
+    if (!isTv) HardwareKeyboard.instance.removeHandler(_merkToetsen);
     _stilKlok?.cancel();
     _tvBalk.dispose();
     _tvKnoppen.dispose();
@@ -9163,8 +9177,7 @@ class TrackRow extends StatefulWidget {
 
 /// What the hover icons offer, reachable by holding OK.
 ///
-class _TrackRowState extends State<TrackRow> {
-  bool _hover = false;
+class _TrackRowState extends State<TrackRow> with LichtBijMuisOfFocus {
   @override
   Widget build(BuildContext context) {
     final t = widget.track;
@@ -9175,8 +9188,8 @@ class _TrackRowState extends State<TrackRow> {
     final isCurrent =
         context.select<PlayerStore, bool>((p) => p.current?.path == t.path);
     return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
+      onEnter: (_) => muisErop(true),
+      onExit: (_) => muisErop(false),
       child: Pressable(
         onPressed: () => speelGetikt(context, widget.queue, widget.index, cover: widget.albumCover),
         // Hold OK for what the mouse reaches by hovering.
@@ -9203,9 +9216,11 @@ class _TrackRowState extends State<TrackRow> {
         // Alleen de grijze balk (Saber, 16-10-2026: rijen "grijze balk zoals nu"), geen glazen pil
         // er nog eens bovenop.
         ringOnFocus: false,
-        onFocusChange: (v) => setState(() => _hover = v),
+        onFocusChange: focusErop,
         child: AnimatedContainer(
-          duration: kSnel,
+          // Meteen, zonder overgang: met 120 ms doofde de vorige rij nog uit terwijl de volgende al oplichtte, en bij een
+          // snelle muis stonden er twee rijen aan (Saber, 25-10-2026).
+          duration: Duration.zero,
           curve: Curves.easeOut,
           margin: const EdgeInsets.symmetric(horizontal: kGoot, vertical: kRuimte2),
           // Verticaal 12 en niet de 8 van de tekening: op een telefoon is deze rij het ding dat je
@@ -9225,14 +9240,14 @@ class _TrackRowState extends State<TrackRow> {
           decoration: isCurrent
               ? paneelDecoratie(Niveau.hoog, radius: kHoek8, rand: false)
               : BoxDecoration(
-                  color: _hover ? _panel : Colors.transparent,
+                  color: oplichten ? _panel : Colors.transparent,
                   borderRadius: BorderRadius.circular(kHoek8),
                 ),
           child: Row(
             children: [
               SizedBox(
                 width: 28,
-                child: _hover
+                child: oplichten
                     ? Icon(Icons.play_arrow_rounded, size: 18, color: _accent)
                     : Text(widget.label ?? '${t.trackNo > 0 ? t.trackNo : widget.index + 1}',
                         textAlign: TextAlign.right,
@@ -9311,12 +9326,12 @@ class _TrackRowState extends State<TrackRow> {
                 ),
               // Both appear on hover, so neither can be hit by accident.
               //
-              // OP EEN TELEFOON HELEMAAL NIET. `_hover` komt van een MouseRegion en vuurt daar
+              // OP EEN TELEFOON HELEMAAL NIET. `oplichten` komt van een MouseRegion en vuurt daar
               // nooit, dus deze twee vakjes stonden 72 punten breed leeg te zijn — op het smalste
               // scherm dat de app heeft, en dat voor élke nummerrij. Die ruimte gaat nu naar de
               // titel, waar hij te zien is. De functies zelf blijven bereikbaar: lang indrukken
               // opent hetzelfde menu, en dat staat op touch al aan.
-              // Op een tv niet. `_hover` wordt hier ook door FOCUS gezet -- zie onFocusChange
+              // Op een tv niet. `oplichten` wordt hier ook door FOCUS gezet -- zie onFocusChange
               // hierboven, en dat is met opzet, want met een afstandsbediening kun je een knop
               // binnen de scherpe regel anders niet bereiken. Gevolg was wel dat verplaatsen en
               // verwijderen op de tv juist het meest in het oog sprongen: ze verschenen zodra je
@@ -9324,7 +9339,7 @@ class _TrackRowState extends State<TrackRow> {
               if (!isTv && !isCompact(context)) ...[
               SizedBox(
                 width: 36,
-                child: _hover
+                child: oplichten
                     ? TvLabelled(
                         label: 'Naar ander album verplaatsen',
                         child: IconButton(
@@ -9349,7 +9364,7 @@ class _TrackRowState extends State<TrackRow> {
               ),
               SizedBox(
                 width: 36,
-                child: _hover
+                child: oplichten
                     ? TvLabelled(
                         label: 'Nummer verwijderen',
                         child: IconButton(
@@ -9405,16 +9420,15 @@ class MissingTrackRow extends StatefulWidget {
   State<MissingTrackRow> createState() => _MissingTrackRowState();
 }
 
-class _MissingTrackRowState extends State<MissingTrackRow> {
-  bool _hover = false;
+class _MissingTrackRowState extends State<MissingTrackRow> with LichtBijMuisOfFocus {
 
   @override
   Widget build(BuildContext context) {
     final s = widget.slot;
     final dim = _muted.withValues(alpha: .75);
     return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
+      onEnter: (_) => muisErop(true),
+      onExit: (_) => muisErop(false),
       // Unlike TrackRow next to it, this row was not pressable at all — so on a remote the only
       // thing reachable in it was the download button at the far end, and the row itself could not
       // hold the highlight. Same gesture as everywhere else: OK downloads the missing track.
@@ -9430,14 +9444,14 @@ class _MissingTrackRowState extends State<MissingTrackRow> {
             bij: bij),
         borderRadius: BorderRadius.circular(8),
         scaleOnFocus: false,
-        onFocusChange: (v) => setState(() => _hover = v),
+        onFocusChange: focusErop,
         child: Container(
         // Precies de marges van [TrackRow] ernaast, want dat is de hele bedoeling van deze rij: hij
         // staat TUSSEN je eigen nummers en hoort daar op dezelfde lijn te liggen.
         margin: const EdgeInsets.symmetric(horizontal: kGoot, vertical: kRuimte2),
         padding: const EdgeInsets.symmetric(horizontal: kRuimte12, vertical: kRuimte12),
         decoration: BoxDecoration(
-          color: _hover ? _panel.withValues(alpha: .6) : Colors.transparent,
+          color: oplichten ? _panel.withValues(alpha: .6) : Colors.transparent,
           borderRadius: BorderRadius.circular(kHoek8),
         ),
         child: Row(
@@ -9778,27 +9792,26 @@ class _CreditChip extends StatefulWidget {
   State<_CreditChip> createState() => _CreditChipState();
 }
 
-class _CreditChipState extends State<_CreditChip> {
-  bool _hover = false;
+class _CreditChipState extends State<_CreditChip> with LichtBijMuisOfFocus {
 
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
+      onEnter: (_) => muisErop(true),
+      onExit: (_) => muisErop(false),
       child: Pressable(
         onPressed: () =>
             openPagina(context, (_) => PersonPage(widget.credit.name, role: widget.credit.role)),
         borderRadius: BorderRadius.circular(999),
         scaleOnFocus: false,
-        onFocusChange: (v) => setState(() => _hover = v),
+        onFocusChange: focusErop,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
           decoration: BoxDecoration(
-            color: _hover ? _panel2 : _panel,
+            color: oplichten ? _panel2 : _panel,
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: _hover ? kInkt.withValues(alpha: .18) : _line),
+            border: Border.all(color: oplichten ? kInkt.withValues(alpha: .18) : _line),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -9808,7 +9821,7 @@ class _CreditChipState extends State<_CreditChip> {
               const SizedBox(width: 7),
               Text(widget.credit.name,
                   style: TextStyle(
-                      fontSize: 12.5, fontWeight: FontWeight.w600, color: _hover ? kFel : null)),
+                      fontSize: 12.5, fontWeight: FontWeight.w600, color: oplichten ? kFel : null)),
             ],
           ),
         ),
@@ -10002,8 +10015,7 @@ class _RelatedArtistCard extends StatefulWidget {
   State<_RelatedArtistCard> createState() => _RelatedArtistCardState();
 }
 
-class _RelatedArtistCardState extends State<_RelatedArtistCard> {
-  bool _hover = false;
+class _RelatedArtistCardState extends State<_RelatedArtistCard> with LichtBijMuisOfFocus {
 
   @override
   Widget build(BuildContext context) {
@@ -10011,16 +10023,16 @@ class _RelatedArtistCardState extends State<_RelatedArtistCard> {
       width: 118,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
+        onEnter: (_) => muisErop(true),
+        onExit: (_) => muisErop(false),
         child: Pressable(
           onPressed: widget.onTap,
           borderRadius: BorderRadius.circular(14),
           scaleOnFocus: false,
           ringOnFocus: false,
-          onFocusChange: (v) => setState(() => _hover = v),
+          onFocusChange: focusErop,
           child: AnimatedScale(
-            scale: _hover ? tileFocusScale : 1,
+            scale: oplichten ? tileFocusScale : 1,
             duration: const Duration(milliseconds: 170),
             curve: Curves.easeOut,
             child: Column(
@@ -10049,7 +10061,7 @@ class _RelatedArtistCardState extends State<_RelatedArtistCard> {
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 12.5, color: _hover ? kFel : null)),
+                        fontWeight: FontWeight.w600, fontSize: 12.5, color: oplichten ? kFel : null)),
               ],
             ),
           ),
@@ -10272,23 +10284,22 @@ class _ArtistCard extends StatefulWidget {
   State<_ArtistCard> createState() => _ArtistCardState();
 }
 
-class _ArtistCardState extends State<_ArtistCard> {
-  bool _hover = false;
+class _ArtistCardState extends State<_ArtistCard> with LichtBijMuisOfFocus {
 
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
+      onEnter: (_) => muisErop(true),
+      onExit: (_) => muisErop(false),
       child: Pressable(
         onPressed: widget.onTap,
         borderRadius: BorderRadius.circular(14),
         scaleOnFocus: false,
         ringOnFocus: false,
-        onFocusChange: (v) => setState(() => _hover = v),
+        onFocusChange: focusErop,
         child: AnimatedScale(
-          scale: _hover ? tileFocusScale : 1,
+          scale: oplichten ? tileFocusScale : 1,
           duration: const Duration(milliseconds: 170),
           curve: Curves.easeOut,
           child: Column(
@@ -10301,7 +10312,7 @@ class _ArtistCardState extends State<_ArtistCard> {
                     // Een afgerond vierkant en geen cirkel meer: zie [ArtiestPortret].
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(kArtiestHoek),
-                      boxShadow: _hover
+                      boxShadow: oplichten
                           ? [
                               BoxShadow(
                                   color: Colors.black.withValues(alpha: .45),
@@ -10321,7 +10332,7 @@ class _ArtistCardState extends State<_ArtistCard> {
                   style: TextStyle(
                       fontWeight: FontWeight.w600,
                       fontSize: 13,
-                      color: _hover ? kFel : null)),
+                      color: oplichten ? kFel : null)),
             ],
           ),
         ),
