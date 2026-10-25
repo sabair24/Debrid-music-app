@@ -1623,6 +1623,22 @@ final zoekrem = Zoekrem();
 /// Korter dan dit, en leeg: dan is er niet gezocht maar is de verbinding dood ([SlskSession.search]).
 const kZoekMeteenLeeg = Duration(milliseconds: 800);
 
+/// De regel in `soulseek_login.log` als een zoekopdracht het hele venster zonder één antwoord bleef. [vraag] de laatste
+/// vraag van de ronde, [opRij] hoeveel zoekopdrachten na elkaar zo eindigden, [zoekMinuut]/[zoekVijf] hoeveel vragen we
+/// zelf in de laatste minuut en vijf minuten stuurden. Eén lege vraag zegt niets (een zeldzaam nummer); een reeks van
+/// lege vragen bij gewone namen is de server die zwijgt, en dan staat erbij bij welk tempo.
+String zoekZonderAntwoordRegel({
+  required String vraag,
+  required Duration duur,
+  required int opRij,
+  required int zoekMinuut,
+  required int zoekVijf,
+  bool achtergrond = false,
+}) =>
+    'zoekopdracht "$vraag"${achtergrond ? ' (achtergrond)' : ''}: geen enkel antwoord in '
+    '${(duur.inMilliseconds / 1000).toStringAsFixed(1)} s${opRij > 1 ? ' ($opRij op rij)' : ''} — '
+    'zoekopdrachten: $zoekMinuut in de laatste minuut, $zoekVijf in 5 min';
+
 /// Zo lang mag een rechtstreekse verbinding met een uploader duren, voordat de server gevraagd wordt hem
 /// naar ons te laten bellen (ConnectToPeer) — de enige weg naar een uploader achter een firewall.
 ///
@@ -1689,6 +1705,11 @@ class SlskSession {
   final List<DateTime> _zoektijden = [];
   bool _relogged = false;
 
+  /// Voor [zoekZonderAntwoordRegel]: hoeveel zoekopdrachten na elkaar het hele venster zonder één antwoord bleven, en
+  /// wanneer "niet ingelogd, niet gezocht" voor het laatst in het logboek kwam (hoogstens eens per minuut).
+  int _zonderAntwoord = 0;
+  DateTime? _nietIngelogdGemeld;
+
   /// Staat de verbinding met de server er nu? Zonder een nieuwe te openen  voor wie wil weten of
   /// "geen treffers" een antwoord was of een verbinding die er niet is. Zie `_haalVoorRadio`.
   bool get verbonden => _alive;
@@ -1708,7 +1729,19 @@ class SlskSession {
   Future<List<SoulseekFile>> search(List<String> queries,
       {void Function(List<SoulseekFile>)? onPartial, bool achtergrond = false}) async {
     if (client.blocked) return const [];
-    if (!await _ensure()) return const [];
+    if (!await _ensure()) {
+      // Niet ingelogd en (nog) niet opnieuw mogen: dan is er niet gezocht. Dat stond nergens, en op het scherm was het
+      // "geen bronnen" — zoals op 25-10-2026 vanaf 17:44, elke zoekopdracht 0 bestanden in 0,0 s zonder één regel.
+      final nu = DateTime.now();
+      final vorige = _nietIngelogdGemeld;
+      if (vorige == null || nu.difference(vorige) >= const Duration(minutes: 1)) {
+        _nietIngelogdGemeld = nu;
+        final poging = _lastLoginAttempt;
+        client.logboek('zoeken overgeslagen: niet ingelogd (mislukte pogingen op rij: $_loginTries'
+            '${poging == null ? '' : ', vorige poging ${nu.difference(poging).inSeconds} s geleden'})');
+      }
+      return const [];
+    }
     await client.ensureListening(); // so firewalled peers can deliver results to us directly
 
     final run = _SearchRun(client, onPartial);
@@ -1753,6 +1786,23 @@ class SlskSession {
       client.logboek('zoeken gaf meteen niets (${fout ?? 'binnen ${DateTime.now().difference(begon).inMilliseconds} ms'}) — '
           'de verbinding geldt als dood; de volgende zoekopdracht logt opnieuw in');
       _drop();
+    } else if (run.merged.isEmpty && fout == null) {
+      // **Het hele venster zonder één antwoord, met hoeveel we zochten.** Op 25-10-2026 om 17:43 gaf ook "Daft Punk
+      // Digital Love" (eerder 1002 bestanden) 0 in 8,0 s: de server gaf onze vragen niet meer door, na ~25 proefvragen
+      // in tien minuten. Hoeveel er te veel is, stond nergens — met deze regel staat het er de volgende keer wel.
+      _zonderAntwoord++;
+      final nu = DateTime.now();
+      client.logboek(zoekZonderAntwoordRegel(
+        vraag: queries.isEmpty ? '' : queries.last,
+        duur: nu.difference(begon),
+        opRij: _zonderAntwoord,
+        zoekMinuut: _zoektijden.where((z) => nu.difference(z) <= const Duration(minutes: 1)).length,
+        zoekVijf: _zoektijden.where((z) => nu.difference(z) <= const Duration(minutes: 5)).length,
+        achtergrond: achtergrond,
+      ));
+    } else if (run.merged.isNotEmpty) {
+      // Een antwoord, ook zonder muziek erin: de server geeft onze vragen door.
+      _zonderAntwoord = 0;
     }
     return uit;
   }
@@ -1947,7 +1997,9 @@ class SlskSession {
       _conn = c;
       _loginTries = 0; // healthy login → reset the consecutive-failure counter
       return true;
-    } catch (_) {
+    } catch (e) {
+      // Geen server bereikt (netwerk weg, time-out): ook dat telt als mislukte poging, dus ook dat hoort in het logboek.
+      client.logboek('inloggen mislukte vóór een antwoord: $e');
       _drop();
       return false;
     }

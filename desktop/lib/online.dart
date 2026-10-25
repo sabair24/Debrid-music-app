@@ -1169,7 +1169,9 @@ class SoulseekService {
     if (variants.isEmpty) return [];
     try {
       return await withSession((s) => s.search(variants.toList(), onPartial: onPartial, achtergrond: achtergrond));
-    } catch (_) {
+    } catch (e) {
+      // Leeg, maar niet "niets gevonden" — dus wel in het logboek, anders is het van een lege uitslag niet te onderscheiden.
+      client.logboek('zoeken "${variants.last}" mislukte: $e');
       return [];
     }
   }
