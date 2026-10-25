@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:debridmusic/lan/dtos.dart';
 import 'package:debridmusic/online.dart';
+import 'package:debridmusic/prullenbak.dart' show heeftPrullenbak;
 import 'package:debridmusic/settings.dart';
 import 'package:debridmusic/twijfel.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -101,7 +102,9 @@ void main() {
       expect(twijfelVoor(eigen.path), isNotNull);
       final zin = await d.gooiTwijfelWeg(eigen.path);
       expect(zin, contains('je eigen kopie blijft'));
-      expect(naarBak, [kandidaat.path]);
+      // Op Windows en macOS naar de prullenbak; op Linux (de bouwstraat) is er geen, en dan gewoon weg.
+      expect(naarBak, heeftPrullenbak ? [kandidaat.path] : isEmpty);
+      expect(kandidaat.existsSync(), isFalse);
       expect(eigen.existsSync(), isTrue);
       expect(twijfelVoor(eigen.path), isNull, reason: 'het label verdwijnt');
       expect(d.twijfel!.afgewezen(eigen.path, 100), isTrue);
