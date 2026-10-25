@@ -36,7 +36,10 @@ const kQuotumPrullenbak =
 /// Een zone bedienen van buiten (zones, 21-10-2026). Ruim: een volumeschuif stuurt er vier per seconde.
 const kQuotumBediening = Quotumsoort('bediening', perUur: 3000, perDag: 20000, wat: 'een zone bedienen');
 const kQuotumOmzetten = Quotumsoort('omzetten', perUur: 400, perDag: 2000, wat: 'nummers laten omzetten');
-const kQuotumHoezen = Quotumsoort('hoezen', perUur: 3000, perDag: 10000, wat: 'hoezen laten verkleinen');
+/// Ruim: de eerste keer van buiten vraagt een toestel elke hoes in elke maat. Met 3000 per uur raakte de S26 de grens
+/// binnen een kwartier (koppeling.log, 25-10-2026 21:24, 918 albums) en kreeg hij daarna de volle hoezen — zwaar op
+/// mobiel. Saber: "veel ruimer zetten". Een verkleining kost de pc een fractie van een seconde.
+const kQuotumHoezen = Quotumsoort('hoezen', perUur: 30000, perDag: 200000, wat: 'hoezen laten verkleinen');
 
 /// Het tellen zelf. Alleen in het geheugen: een herstart van de pc zet alles op nul, en dat kan wie
 /// van buiten komt niet afdwingen.
