@@ -31,6 +31,21 @@ void main() {
     expect(zonderGeweerdeZinnen('Iets', const <String>{}), 'Iets');
   });
 
+  test('ook "The Beatles" (gemeten: 0 met, 5000 zonder)', () {
+    expect(zonderGeweerdeZinnen('The Beatles Let It Be', kBekendeGeweerdeZinnen), 'Beatles Let It Be');
+    expect(zonderGeweerdeZinnen('The Police Roxanne', kBekendeGeweerdeZinnen), 'The Police Roxanne',
+        reason: '"The Police" werkte gewoon');
+  });
+
+  test('aangesloten: niets gevonden met "The" vooraan — nog één keer zonder; en meteen leeg is een dode verbinding', () {
+    final online = _bron('lib/online.dart');
+    expect(online, contains("    final zonderThe = query.trim().replaceFirst(RegExp(r'^the\\s+', caseSensitive: false), '');"));
+    expect(online, contains('    if (terugval && laatste.isEmpty && zonderThe != query.trim() && zonderThe.isNotEmpty) {'));
+    final s = _bron('lib/soulseek.dart');
+    expect(s, contains('    if (uit.isEmpty && _alive && (fout != null || DateTime.now().difference(begon) < kZoekMeteenLeeg)) {'));
+    expect(s, contains('const kZoekMeteenLeeg = Duration(milliseconds: 800);'));
+  });
+
   test('aangesloten: bericht 160 van de server vult de lijst, en elke zoekopdracht gaat erlangs', () {
     final s = _bron('lib/soulseek.dart');
     expect(s, contains('        if (code == 160) {'));

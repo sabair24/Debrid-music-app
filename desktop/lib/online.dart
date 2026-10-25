@@ -1135,6 +1135,17 @@ class SoulseekService {
       laatste = gevonden;
       if (client.whyNotLogin != null) throw client.whyNotLogin!;
     }
+    // **"The …" zonder "The".** Gemeten op de pc (25-10-2026): "The Beatles Let It Be" en "The Weeknd Alone Again"
+    // kregen geen enkel antwoord, "Beatles Let It Be" 5000 bestanden en "Weeknd Alone Again" 693 — terwijl "The Police
+    // Roxanne" gewoon werkte. Het netwerk weert bepaalde namen met "The" ervoor; dan nog één keer zonder.
+    final zonderThe = query.trim().replaceFirst(RegExp(r'^the\s+', caseSensitive: false), '');
+    if (terugval && laatste.isEmpty && zonderThe != query.trim() && zonderThe.isNotEmpty) {
+      final gevonden = await _searchOnce([zonderThe], deel, achtergrond: achtergrond);
+      if (gevonden.isNotEmpty) {
+        gebruikteVraag?.call(zonderThe);
+        return beperkZoekuitslag(query, gevonden);
+      }
+    }
     return laatste;
   }
 

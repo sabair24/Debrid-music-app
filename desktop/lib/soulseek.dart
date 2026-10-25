@@ -1620,6 +1620,9 @@ class Zoekrem {
 /// De zoekrem van deze app (één Soulseek-account).
 final zoekrem = Zoekrem();
 
+/// Korter dan dit, en leeg: dan is er niet gezocht maar is de verbinding dood ([SlskSession.search]).
+const kZoekMeteenLeeg = Duration(milliseconds: 800);
+
 /// Zo lang mag een rechtstreekse verbinding met een uploader duren, voordat de server gevraagd wordt hem
 /// naar ons te laten bellen (ConnectToPeer) — de enige weg naar een uploader achter een firewall.
 ///
@@ -1710,6 +1713,8 @@ class SlskSession {
 
     final run = _SearchRun(client, onPartial);
     _searches.add(run);
+    final begon = DateTime.now();
+    Object? fout;
     try {
       _conn!.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort
       for (final q in queries) {
@@ -1733,13 +1738,23 @@ class SlskSession {
           ..removeWhere((z) => nu.difference(z) > const Duration(minutes: 5));
       }
       await run.settle();
-    } catch (_) {
+    } catch (e) {
       // whatever arrived before the failure is still worth returning
+      fout = e;
     } finally {
       run.close();
       _searches.remove(run);
     }
-    return sortSoulseek(run.merged.values);
+    final uit = sortSoulseek(run.merged.values);
+    // **Meteen leeg is een dode verbinding, geen "niets gevonden".** Gezien op de pc (25-10-2026, 17:44): elke
+    // zoekopdracht gaf in 0,0 s nul bestanden, ook "Daft Punk Digital Love", en in het logboek stond niets — de sessie
+    // gold als ingelogd, dus logde hij nooit opnieuw in. Echt zoeken duurt seconden (het venster wacht op antwoorden).
+    if (uit.isEmpty && _alive && (fout != null || DateTime.now().difference(begon) < kZoekMeteenLeeg)) {
+      client.logboek('zoeken gaf meteen niets (${fout ?? 'binnen ${DateTime.now().difference(begon).inMilliseconds} ms'}) — '
+          'de verbinding geldt als dood; de volgende zoekopdracht logt opnieuw in');
+      _drop();
+    }
+    return uit;
   }
 
   /// Connect + log in once; reuse on later calls. Reconnects only if the socket dropped.
