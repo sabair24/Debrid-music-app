@@ -76,11 +76,18 @@ const Offset kKantelSelectie = Offset(-.55, -.45);
 /// grote hoes van Nu speelt vier keer de diepte van de draai zelf. Opgenomen op de pc met 3.9.627 (Saber, 25-10-2026:
 /// "test ook draaien van de hoes op pc"): wie dubbelklikt heeft de muis op de hoes, en de rand die naar je toe kwam werd
 /// 1,7 keer zo hoog als de andere. Een platte hoes verandert er niets door.
+///
+/// **Bijna plat, niet helemaal** ([kKantelPlat]): met z op nul is de determinant 0, en dan tekent Flutter het kind niet
+/// (RenderTransform.paint). Zo was de grote hoes in 3.9.628 zwart zodra de muis erop stond — de toets keek alleen naar
+/// de matrix. Een honderdste laat van de diepte van de draai een honderdste over, en de hoes wordt getekend.
 Matrix4 kantelMatrix(Offset o) => Matrix4.identity()
   ..setEntry(3, 2, .0011)
   ..rotateX(-o.dy * kKantelHoek)
   ..rotateY(o.dx * kKantelHoek)
-  ..multiply(Matrix4.diagonal3Values(1, 1, 0));
+  ..multiply(Matrix4.diagonal3Values(1, 1, kKantelPlat));
+
+/// Hoeveel van de diepte van wat erin draait de kanteling overhoudt: genoeg om getekend te worden, te weinig om te zien.
+const double kKantelPlat = .01;
 
 class KantelHoes extends StatefulWidget {
   const KantelHoes({
