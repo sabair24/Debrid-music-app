@@ -105,6 +105,34 @@ void main() {
     expect(lib.enriching, isFalse, reason: 'na het wachten is de sweep ook echt afgelopen');
   });
 
+  test('een cachebestand dat niet te lezen is, is "niet in de cache" — geen fout die de hoezenronde afbreekt', () async {
+    // 25-10-2026: een fout hier brak de ronde af, en dan bleef "Covers ophalen…" staan tot de volgende start.
+    final e = CoverEnricher(settings);
+    final a = albumOf('Iemand', 'Op slot');
+    await e.putCached(a, Uint8List.fromList(List.filled(2000, 5)));
+    final f = File('${e.cacheDir.path}${Platform.pathSeparator}${e.keyFor(a)}.jpg');
+    expect(f.existsSync(), isTrue);
+    if (Platform.isWindows) {
+      // Geen chmod: een slot van een ander handvat maakt het lezen daar onmogelijk (ERROR_LOCK_VIOLATION).
+      final slot = f.openSync(mode: FileMode.append)..lockSync(FileLock.exclusive);
+      addTearDown(() {
+        slot.unlockSync();
+        slot.closeSync();
+      });
+      expect(() => f.readAsBytesSync(), throwsA(isA<FileSystemException>()), reason: 'het slot werkt');
+    } else {
+      Process.runSync('chmod', ['000', f.path]);
+      addTearDown(() => Process.runSync('chmod', ['644', f.path]));
+      // Als beheerder leest hij toch: dan valt er hier niets te bewijzen.
+      try {
+        f.readAsBytesSync();
+        markTestSkipped('leesbaar ondanks chmod 000 (beheerder)');
+        return;
+      } catch (_) {}
+    }
+    expect(await e.cached(a), isNull);
+  });
+
   test('na de sweep staat de statusregel uit', () async {
     final lib = LibraryStore();
     lib.tracks.add(
