@@ -160,6 +160,10 @@ void main() {
     expect(online,
         contains("if (!alleenHires && (album?.trim() ?? '').isNotEmpty) unawaited(_zoekHiresInTorrents(te, album!.trim(), gezag));"));
     expect(online, contains('if (intussenVervangen(t, eis[t]!)) {'), reason: 'niet halen wat Soulseek al verving');
+    // Seal, "Stand by Me": "Lege download-URL" vlak na het toevoegen, een minuut later gewoon binnen.
+    expect(kTorrentAdresPogingen, greaterThanOrEqualTo(3));
+    expect(online, contains('if (poging >= kTorrentAdresPogingen) rethrow;'));
+    expect(online, contains('await Future<void>.delayed(Duration(seconds: 5 * poging));'));
     final i = online.indexOf('Future<bool> _haalUitTorrentEnKeur(');
     expect(i, greaterThan(0));
     final lijf = online.substring(i, online.indexOf('\n  }\n', i));
