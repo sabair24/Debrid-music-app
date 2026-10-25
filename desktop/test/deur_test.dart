@@ -466,4 +466,69 @@ void main() {
     expect(zonder.stand, DeurStand.mislukt);
     expect(zonder.waarom, contains('met de hand'));
   });
+
+  // Saber, 25-10-2026: "buitenshuis werkt nog niet, heb de modem daarnet nochtans herstart ??" — UPnP aan, toch 404, en
+  // de regel TCP 47821 → 192.168.0.117 stond al met de hand in de modem. Het adres voor de toestellen kwam alleen uit UPnP.
+  group('de deur met de hand', () {
+    DeurNaarBuiten metHand(Future<String?> Function() adres) {
+      final d = DeurNaarBuiten(
+        zoekModem: () => Igd(wacht: const Duration(seconds: 2)).zoek(locatie: modem.locatie),
+        igd: Igd(wacht: const Duration(seconds: 2)),
+        log: regels.add,
+        klok: () => klok,
+        vraagPubliekAdres: adres,
+      );
+      addTearDown(d.dispose);
+      return d;
+    }
+
+    test('DE KERN: UPnP vastgelopen — de toestellen krijgen toch het publieke adres met 47821', () async {
+      modem.upnpVastgelopen = true;
+      final d = metHand(() async => '81.83.10.20');
+      await d.zetAan();
+      expect(d.stand, DeurStand.open, reason: d.waarom);
+      expect(d.metDeHand, isTrue);
+      expect(d.adresVoorToestellen, Uri.parse('https://81.83.10.20:47821'));
+      expect(regels.any((r) => r.contains('deur met de hand') && r.contains('81.x.x.x')), isTrue,
+          reason: 'het adres gemaskeerd in het logboek');
+      expect(
+          deurTekst(aan: true, stand: d.stand, poort: d.externePoort, metDeHand: d.metDeHand),
+          allOf(contains('met de hand'), contains('47821'), contains('Nog geen toestel kwam van buiten binnen')));
+      // Doet UPnP het weer, dan gewoon de deur via UPnP.
+      modem.upnpVastgelopen = false;
+      await d.nuEenRonde();
+      expect(d.stand, DeurStand.open);
+      expect(d.metDeHand, isFalse);
+    });
+
+    test('ook zonder modem met UPnP; maar geen publiek adres (CGNAT, niets) = gewoon mislukt', () async {
+      final zonder = DeurNaarBuiten(zoekModem: () async => null, log: regels.add, vraagPubliekAdres: () async => '81.83.10.20');
+      addTearDown(zonder.dispose);
+      await zonder.zetAan();
+      expect(zonder.adresVoorToestellen, Uri.parse('https://81.83.10.20:47821'));
+      for (final ip in <String?>['100.70.1.2', '192.168.0.1', null]) {
+        final d = DeurNaarBuiten(zoekModem: () async => null, log: regels.add, vraagPubliekAdres: () async => ip);
+        addTearDown(d.dispose);
+        await d.zetAan();
+        expect(d.stand, DeurStand.mislukt, reason: '$ip');
+        expect(d.adresVoorToestellen, isNull);
+      }
+    });
+
+    test('uitzetten: niets meer voor de toestellen', () async {
+      modem.upnpVastgelopen = true;
+      final d = metHand(() async => '81.83.10.20');
+      await d.zetAan();
+      await d.zetUit();
+      expect(d.metDeHand, isFalse);
+      expect(d.adresVoorToestellen, isNull);
+    });
+
+    test('aangesloten: de app vraagt het adres zelf, nooit in een toets', () {
+      final s = File('lib/lan/sharing.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(s, contains("    vraagPubliekAdres: Platform.environment.containsKey('FLUTTER_TEST') ? null : publiekAdresViaInternet,"));
+      final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(m, contains('                metDeHand: sharing.deur.metDeHand,\n'));
+    });
+  });
 }

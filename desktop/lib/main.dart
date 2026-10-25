@@ -32934,6 +32934,7 @@ class _SharingSectionState extends State<_SharingSection> {
                 poort: sharing.deur.externePoort,
                 waarom: sharing.deur.waarom,
                 laatstVanBuiten: laatstVanBuiten(sharing.grants.all),
+                metDeHand: sharing.deur.metDeHand,
               ),
               style: TextStyle(
                   color: settings.deurNaarBuiten && sharing.deur.stand == DeurStand.mislukt

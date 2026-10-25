@@ -12,6 +12,8 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -58,12 +60,20 @@ String deurTekst({
   int? poort,
   String? waarom,
   DateTime? laatstVanBuiten,
+  bool metDeHand = false,
 }) {
   if (!aan) {
     return 'Je pc wordt van het internet bereikbaar, alleen voor je eigen toestellen en versleuteld, zoals '
         'Roon ARC. De app zet daarvoor zelf een deur in je modem (UPnP), en haalt hem weg zodra je dit uitzet.';
   }
   String uur(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  final wanneer = laatstVanBuiten == null
+      ? ' Nog geen toestel kwam van buiten binnen.'
+      : ' Laatst via het publieke adres om ${uur(laatstVanBuiten)}.';
+  if (stand == DeurStand.open && metDeHand) {
+    return 'Aan, met de hand: de UPnP van je modem antwoordt niet, dus gebruiken je toestellen je eigen regel in de '
+        'modem (TCP 47821 → deze pc).$wanneer';
+  }
   return switch (stand) {
     DeurStand.open => 'Aan: je toestellen komen er van buiten in, rechtstreeks en versleuteld'
         '${poort != null && poort != kPubliekPoort ? ' (via poort $poort, 47821 was bezet)' : ''}.'
@@ -102,6 +112,7 @@ class DeurNaarBuiten extends ChangeNotifier {
     this.ronde = const Duration(minutes: 10),
     this.adresElke = const Duration(minutes: 5),
     this.onthouden,
+    this.vraagPubliekAdres,
   })  : igd = igd ?? Igd(),
         _klok = klok ?? DateTime.now {
     _zoek = zoekModem ??
@@ -121,6 +132,20 @@ class DeurNaarBuiten extends ChangeNotifier {
           return this.igd.zoek();
         };
   }
+
+  /// Het publieke adres zonder de modem te vragen ([publiekAdresViaInternet]), voor als UPnP niet werkt — zie
+  /// [metDeHand]. Null in een toets: die raakt het internet niet.
+  final Future<String?> Function()? vraagPubliekAdres;
+
+  /// Open met de hand: de UPnP van de modem werkt niet, en de toestellen krijgen het publieke adres met 47821 — de
+  /// regel die je zelf in de modem zette ([deurMetDeHand]).
+  ///
+  /// **Waarom.** Op 25-10-2026 antwoordde de UPnP van de Sagemcom met 404, ook na een herstart en met UPnP aan, terwijl
+  /// de regel TCP 47821 → 192.168.0.117 al lang met de hand in de modem stond. Het adres voor de toestellen kwam
+  /// alleen uit UPnP, dus wist de gsm nergens aan te kloppen: "buitenshuis werkt nog niet, heb de modem daarnet
+  /// nochtans herstart ??". Of de regel er staat, valt van binnenuit niet na te gaan; komt een toestel er van buiten
+  /// binnen, dan staat dat in de zin eronder.
+  bool metDeHand = false;
 
   /// Waar de modem de vorige keer gevonden werd (een bestand in de app-map). Null in een toets.
   final ({Uri? Function() lees, void Function(Uri locatie) bewaar})? onthouden;
@@ -210,6 +235,7 @@ class DeurNaarBuiten extends ChangeNotifier {
     }
     externePoort = null;
     toegekend = null;
+    metDeHand = false;
     stand = DeurStand.uit;
     waarom = null;
     if (was) _log('deur naar buiten: UIT');
@@ -254,6 +280,7 @@ class DeurNaarBuiten extends ChangeNotifier {
       try {
         d = _dienst ??= await _zoek();
       } on ModemZonderUpnp catch (k) {
+        if (await _probeerMetDeHand('de UPnP van de modem antwoordt niet (HTTP ${k.status})')) return;
         _misluktMet('Je modem meldt zich, maar zijn UPnP antwoordt niet (HTTP ${k.status}): het is in de modem '
             'vastgelopen. Herstart je modem, of zet UPnP daar uit en weer aan; daarna zet de pc de deur vanzelf. '
             'Tailscale werkt intussen.');
@@ -264,6 +291,7 @@ class DeurNaarBuiten extends ChangeNotifier {
         if (l != null) onthouden?.bewaar(l);
       }
       if (d == null) {
+        if (await _probeerMetDeHand('geen modem met UPnP gevonden')) return;
         _misluktMet('Geen modem met UPnP gevonden. Zet UPnP aan in je modem, of zet de deur met de hand '
             '(zie de stappen hieronder).');
         return;
@@ -296,10 +324,12 @@ class DeurNaarBuiten extends ChangeNotifier {
       await _controleerAndere(d);
       if (!_aan) return; // intussen uitgezet
       stand = DeurStand.open;
+      metDeHand = false;
       waarom = null;
       _mislukt = 0;
       laatstGezet = _klok();
     } on IgdFout catch (f) {
+      if ((f.code == 606 || f.code == 501) && await _probeerMetDeHand('de modem weigert UPnP-fout ${f.code}')) return;
       _misluktMet(switch (f.code) {
         606 => 'Je modem laat de app geen deur zetten (UPnP-fout 606). Zet de deur met de hand.',
         501 => 'Je modem weigerde de deur (UPnP-fout 501). Zet de deur met de hand.',
@@ -313,6 +343,34 @@ class DeurNaarBuiten extends ChangeNotifier {
       notifyListeners();
       _plan();
     }
+  }
+
+  /// UPnP lukt niet: open met de hand ([metDeHand]) als het publieke adres zonder de modem te achterhalen is. Waar als
+  /// de deur zo open staat. [waarom] komt in het logboek.
+  Future<bool> _probeerMetDeHand(String waarom) async {
+    final vraag = vraagPubliekAdres;
+    if (vraag == null || !_aan) return false;
+    final nu = _klok();
+    final oud = _adresGevraagd;
+    if (!metDeHand || publiekAdres == null || oud == null || nu.difference(oud) >= adresElke) {
+      String? ip;
+      try {
+        ip = await vraag();
+      } catch (_) {/* dan niet */}
+      _adresGevraagd = nu;
+      if (ip == null || !isPubliekAdres(ip)) return false;
+      if (ip != publiekAdres || !metDeHand) _log('deur met de hand ($waarom): publiek adres ${maskeerAdres(ip)}, poort $internePoort');
+      publiekAdres = ip;
+    }
+    if (!_aan) return false;
+    metDeHand = true;
+    externePoort = internePoort;
+    toegekend = null;
+    stand = DeurStand.open;
+    this.waarom = null;
+    _mislukt = 0;
+    laatstGezet = nu;
+    return true;
   }
 
   void _misluktMet(String zin) {
@@ -397,4 +455,25 @@ class DeurNaarBuiten extends ChangeNotifier {
     _volgende?.cancel();
     super.dispose();
   }
+}
+
+/// Het publieke IPv4-adres van deze aansluiting, gevraagd aan twee eenvoudige diensten die alleen het adres teruggeven
+/// waarmee je bij hen aankomt — voor als de modem het via UPnP niet zegt ([DeurNaarBuiten.metDeHand]). Er gaat niets
+/// mee: een gewone GET, zoals elke website die je opent je adres ziet. Null als geen van beide antwoordt.
+Future<String?> publiekAdresViaInternet() async {
+  for (final adres in const ['https://api.ipify.org', 'https://ipv4.icanhazip.com']) {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    try {
+      final req = await client.getUrl(Uri.parse(adres)).timeout(const Duration(seconds: 8));
+      final res = await req.close().timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) continue;
+      final ip = (await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 8))).trim();
+      if (isPubliekAdres(ip)) return ip;
+    } catch (_) {
+      // de volgende
+    } finally {
+      client.close(force: true);
+    }
+  }
+  return null;
 }
