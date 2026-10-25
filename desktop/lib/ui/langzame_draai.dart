@@ -16,6 +16,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
@@ -23,13 +24,30 @@ import 'package:flutter/widgets.dart' show WidgetsBinding;
 
 class LangzameDraai extends ChangeNotifier {
   LangzameDraai(TickerProvider vsync,
-      {required this.omwenteling, this.maxBeeldenPerSeconde = 60, double Function()? schermHz})
+      {required this.omwenteling,
+      this.maxBeeldenPerSeconde = 60,
+      double Function()? schermHz,
+      this.aanloop = Duration.zero,
+      this.uitloop = Duration.zero})
       : _schermHz = schermHz ?? _verversingVanHetScherm {
     _ticker = vsync.createTicker(_tik);
   }
 
   /// Hoelang één volle draai duurt.
   final Duration omwenteling;
+
+  /// Hoe snel hij op snelheid komt na [start], en hoe lang hij na [stop] nog uitloopt: tijdconstanten (na drie keer
+  /// deze tijd zit hij op 5 % na waar hij heen gaat). Nul: meteen, zoals een animatie.
+  ///
+  /// **Waarom (Saber, 25-10-2026: "het draaien van de album blijft niet realistisch genoeg").** Een schijf heeft massa:
+  /// hij komt op toeren en loopt uit. Deze stond meteen op volle snelheid en meteen stil.
+  final Duration aanloop, uitloop;
+
+  /// Hoe hard hij nu draait, als deel van de volle snelheid.
+  double _snelheid = 0;
+
+  /// Draait hij (of komt hij op toeren), of loopt hij uit?
+  bool _wil = false;
 
   /// Hoe vaak er hooguit om een nieuw beeld gevraagd wordt. Het werkelijke ritme is een HEEL aantal
   /// schermtikken — zie [tikkenPerBeeld] — en dus nooit om en om kort en lang.
@@ -55,7 +73,11 @@ class LangzameDraai extends ChangeNotifier {
   /// De stand in omwentelingen, van 0 tot 1 — zoals [AnimationController.value] bij `repeat()`.
   double get value => _waarde;
 
-  bool get isAnimating => _loopt;
+  /// Moet hij draaien? Onwaar zodra [stop] gevraagd is, ook als hij nog uitloopt.
+  bool get isAnimating => _loopt && _wil;
+
+  /// Hoe hard hij nu draait (0 tot 1).
+  double get snelheid => _snelheid;
 
   /// Om de hoeveel schermtikken de plaat een nieuw beeld krijgt: het kleinste hele aantal waarmee
   /// het onder [maxBeeldenPerSeconde] blijft.
@@ -90,16 +112,27 @@ class LangzameDraai extends ChangeNotifier {
   static int _lopend = 0;
 
   void start() {
-    if (_loopt || _weg) return;
+    if (_weg) return;
+    _wil = true;
+    if (_loopt) return; // liep hij nog uit, dan komt hij vanaf daar weer op toeren
     _loopt = true;
     _lopend++;
     _vorige = null;
+    if (aanloop <= Duration.zero) _snelheid = 1;
     if (!_ticker.isActive) _ticker.start();
   }
 
+  /// Stoppen: met [uitloop] loopt hij eerst nog uit, en blijft hij staan waar hij dan is.
   void stop() {
+    _wil = false;
+    if (uitloop <= Duration.zero || !_loopt) _halt();
+  }
+
+  void _halt() {
     if (_loopt) _lopend--;
     _loopt = false;
+    _wil = false;
+    _snelheid = 0;
     _wacht?.cancel();
     _wacht = null;
     if (_ticker.isActive) _ticker.stop();
@@ -119,8 +152,19 @@ class LangzameDraai extends ChangeNotifier {
     if (stap.isNegative) stap = Duration.zero;
     if (stap > const Duration(milliseconds: 500)) stap = const Duration(milliseconds: 500);
     _vorige = nu;
-    _waarde = (_waarde + stap.inMicroseconds / omwenteling.inMicroseconds) % 1.0;
+    final dt = stap.inMicroseconds;
+    final tau = (_wil ? aanloop : uitloop).inMicroseconds;
+    final doel = _wil ? 1.0 : 0.0;
+    final eerder = _snelheid;
+    _snelheid = tau <= 0 ? doel : doel + (_snelheid - doel) * math.exp(-dt / tau);
+    // De gemiddelde snelheid over de stap: zo komt hij even ver als een echte schijf die versnelt of uitloopt.
+    _waarde = (_waarde + (eerder + _snelheid) / 2 * dt / omwenteling.inMicroseconds) % 1.0;
     notifyListeners();
+    // Uitgelopen: nu staat hij echt stil, en vraagt hij geen beelden meer.
+    if (!_wil && _snelheid < kUitgelopen) {
+      _halt();
+      return;
+    }
     // Elke tik een beeld: dan gewoon de Ticker laten lopen, zoals een AnimationController — geen
     // klok ertussen die een tik kan missen.
     if (tikkenPerBeeld <= 1) return;
@@ -134,8 +178,11 @@ class LangzameDraai extends ChangeNotifier {
   @override
   void dispose() {
     _weg = true;
-    stop();
+    _halt();
     _ticker.dispose();
     super.dispose();
   }
 }
+
+/// Onder dit deel van de volle snelheid staat een uitlopende schijf stil.
+const double kUitgelopen = .02;

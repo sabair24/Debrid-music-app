@@ -34158,6 +34158,13 @@ AlbumArtVooruit albumArtVooruit(LibraryStore bib, Album al) => (
 /// still reads as a disc tucked into a card rather than one lying beside it.
 const _discRest = 0.26;
 
+/// Hoe snel de cd op toeren komt bij afspelen: een tijdconstante, dus na ongeveer een seconde draait hij op volle
+/// snelheid ([LangzameDraai.aanloop]).
+const kSchijfAanloop = Duration(milliseconds: 350);
+
+/// Hoe lang hij na een pauze uitloopt: na anderhalve seconde staat hij zo goed als stil, en blijft hij staan waar hij is.
+const kSchijfUitloop = Duration(milliseconds: 500);
+
 /// Waar de hoes en de cd staan bij uitschuifstand [t]: 0 is de cd in de hoes, 1 is helemaal uit. Het
 /// zijn verschuivingen vanaf de linkerrand van het vak, dat [reis] breder is dan de hoes.
 ///
@@ -34225,8 +34232,17 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
   // Op de pc elke schermtik (op Sabers MSI van 144 Hz dus 144 per seconde): een beeld kost daar 2 ms
   // tekenen en 0,3 ms bouwen, gemeten in fps.log, en er is geen batterij of warmte om te sparen. Op
   // een telefoon of tv hooguit 60, op een heel aantal schermtikken.
+  //
+  // Met massa (Saber, 25-10-2026: "het draaien van de album blijft niet realistisch genoeg"): bij afspelen komt hij op
+  // toeren, bij pauze loopt hij uit — zie [kSchijfAanloop].
   late final LangzameDraai _spin = LangzameDraai(this,
-      omwenteling: const Duration(seconds: 9), maxBeeldenPerSeconde: _isDesktop ? 1000 : 60);
+      omwenteling: const Duration(seconds: 9),
+      maxBeeldenPerSeconde: _isDesktop ? 1000 : 60,
+      aanloop: kSchijfAanloop,
+      uitloop: kSchijfUitloop);
+
+  /// Hoe de hoes nu gekanteld staat ([KantelHoes.deel]): de cd erachter kantelt in hetzelfde vlak mee.
+  final _kantel = ValueNotifier<Offset>(Offset.zero);
 
   /// Wat het scherm haalt zolang de plaat draait.
   ///
@@ -34503,6 +34519,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     widget.draai?.voorInRust.removeListener(_opDraai);
     _slide.dispose();
     _spin.dispose();
+    _kantel.dispose();
     super.dispose();
   }
 
@@ -34656,6 +34673,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
             bron: kantel,
             aan: widget.uitgelicht,
             vorm: BorderRadius.circular(10),
+            deel: _kantel,
             child: kaart,
           );
     return SizedBox(
@@ -34719,7 +34737,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
             // full-bleed cover behind it and its 44-blur shadow. Now the frame stops here.
             child: RepaintBoundary(
                 child: AnimatedBuilder(
-              animation: _slide,
+              animation: Listenable.merge([_slide, _kantel]),
               // Translate rather than reposition: a Positioned inside a builder would relayout the
               // Stack every frame, where a transform only moves an already-painted layer.
               // A resting sliver, always. Standing still the disc used to sit entirely behind the
@@ -34730,12 +34748,31 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               // anders dan de schijf, dus hier per beeld van het uitschuiven (en stil zodra hij uit is).
               builder: (context, child) {
                 final x = hoesEnSchijfX(_slide.value, reis: travel, centreer: centreer);
+                // De cd zit in de hoes: kantelt de hoes, dan kantelt hij mee in hetzelfde vlak, rond het midden van de
+                // hoes — met de schaduw van de hoes erop en dezelfde glans (Saber, 25-10-2026: "bij het tilten van de
+                // hoes, zie je een verschil in kleur/licht"). Kantelde alleen de hoes, dan schoof zijn rand weg van die
+                // schaduw (46 % zwart in het donker), en zweefde de cd plat achter een hoes in 3D.
+                final o = widget.kantel == null ? Offset.zero : _kantel.value;
+                final rust = o.distance < .002;
+                // In de maat van de schijf: hij begint op (x.schijf, s · 0,04) van het blok, de hoes op (x.hoes, 0).
+                final hoesVak = Rect.fromLTWH(x.hoes - x.schijf, -s * .04, s, s);
                 return Transform.translate(
                   offset: Offset(x.schijf, 0),
-                  child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
-                    child!,
-                    MouwSchaduw(key: const ValueKey('albumart-mouwschaduw'), maat: s * .92, rand: x.hoes + s - x.schijf),
-                  ]),
+                  child: Transform(
+                    transform: rust ? Matrix4.identity() : kantelMatrix(o),
+                    origin: hoesVak.center,
+                    child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
+                      child!,
+                      MouwSchaduw(key: const ValueKey('albumart-mouwschaduw'), maat: s * .92, rand: x.hoes + s - x.schijf),
+                      IgnorePointer(
+                        child: CustomPaint(
+                          key: const ValueKey('albumart-schijfglans'),
+                          size: Size.square(s * .92),
+                          painter: SchijfKantelGlans(rust ? Offset.zero : o, hoes: hoesVak),
+                        ),
+                      ),
+                    ]),
+                  ),
                 );
               },
               // Licht en schaduw (Saber, 19-10-2026, "Echt, licht stil"): de slagschaduw op de grond

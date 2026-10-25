@@ -18,7 +18,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart' show Ticker;
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase, Ticker;
 import 'package:sensors_plus/sensors_plus.dart';
 
 import '../meetronde.dart' show zonderVoorMeting;
@@ -69,8 +69,7 @@ enum KantelBron {
 const Offset kKantelSelectie = Offset(-.55, -.45);
 
 /// De transform voor een stand [o] (elk van -1 tot 1): de kant waar de muis staat wijkt een tikje
-/// terug, zoals een plaat die je met je vinger aanraakt.
-@visibleForTesting
+/// terug, zoals een plaat die je met je vinger aanraakt. Ook voor de cd die in de hoes zit ([KantelHoes.deel]).
 Matrix4 kantelMatrix(Offset o) => Matrix4.identity()
   ..setEntry(3, 2, .0011)
   ..rotateX(-o.dy * kKantelHoek)
@@ -83,6 +82,7 @@ class KantelHoes extends StatefulWidget {
     this.bron = KantelBron.muis,
     this.aan = false,
     this.vorm = BorderRadius.zero,
+    this.deel,
   });
 
   final Widget child;
@@ -93,6 +93,12 @@ class KantelHoes extends StatefulWidget {
 
   /// De ronding van de hoes: de glans blijft erbinnen.
   final BorderRadius vorm;
+
+  /// Hier zet hij zijn stand in, voor wat in hetzelfde vlak hoort: de cd die uit de hoes steekt kantelt mee, met zijn
+  /// schaduw en de glans (Saber, 25-10-2026: "bij het tilten van de hoes, zie je een verschil in kleur/licht"). Kantelde
+  /// alleen de hoes, dan schoof zijn rand weg van de schaduw die hij op de cd werpt, en lag de cd plat achter een hoes
+  /// in 3D.
+  final ValueNotifier<Offset>? deel;
 
   /// In een toets: een eigen bewegingsmelder in plaats van die van het toestel (x, y in g).
   @visibleForTesting
@@ -167,6 +173,23 @@ class _KantelHoesState extends State<KantelHoes> with TickerProviderStateMixin, 
     super.initState();
     KantelHoes._staten.add(this);
     WidgetsBinding.instance.addObserver(this);
+    _c.addListener(_deel);
+    _muis.addListener(_deel);
+  }
+
+  /// De stand doorgeven aan [KantelHoes.deel]. Niet midden in het bouwen (een stand die dan wijzigt, zou een ander deel
+  /// van het scherm laten herbouwen terwijl dat al gebouwd wordt): dan net daarna.
+  void _deel() {
+    final d = widget.deel;
+    if (d == null) return;
+    final o = widget.bron == KantelBron.muis ? _muis.value : _stand;
+    if (SchedulerBinding.instance.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) d.value = widget.bron == KantelBron.muis ? _muis.value : _stand;
+      });
+      return;
+    }
+    d.value = o;
   }
 
   @override
@@ -329,32 +352,58 @@ class KantelGlans extends CustomPainter {
   final Offset o;
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final sterkte = (o.distance / math.sqrt2).clamp(0.0, 1.0);
-    // Het licht staat tegenover de kant die wegzakt.
-    final midden = Alignment(-o.dx * .9, -o.dy * .9);
-    final vak = Offset.zero & size;
-    canvas.drawRect(
-        vak,
-        Paint()
-          ..shader = RadialGradient(
-            center: midden,
-            radius: .85,
-            colors: [Color.fromRGBO(255, 255, 255, .24 * sterkte), const Color(0x00FFFFFF)],
-          ).createShader(vak));
-    canvas.drawRect(
-        vak,
-        Paint()
-          ..shader = LinearGradient(
-            begin: Alignment(-1 + o.dx * .6, -1),
-            end: Alignment(1 + o.dx * .6, 1),
-            colors: [const Color(0x00FFFFFF), Color.fromRGBO(255, 255, 255, .10 * sterkte), const Color(0x00FFFFFF)],
-            stops: const [.38, .5, .62],
-          ).createShader(vak));
-  }
+  void paint(Canvas canvas, Size size) => tekenKantelGlans(canvas, Offset.zero & size, Offset.zero & size, o);
 
   @override
   bool shouldRepaint(KantelGlans oud) => oud.o != o;
+}
+
+/// De glans van [KantelGlans] in [teken], met het licht gemeten over de hoes [hoes]. Voor de hoes zelf zijn die gelijk;
+/// voor de cd die eruit steekt is [hoes] het vak van de hoes in de maat van de cd, zodat één en dezelfde lichtvlek over
+/// hoes en cd doorloopt.
+void tekenKantelGlans(Canvas canvas, Rect teken, Rect hoes, Offset o) {
+  final sterkte = (o.distance / math.sqrt2).clamp(0.0, 1.0);
+  if (sterkte <= 0) return;
+  // Het licht staat tegenover de kant die wegzakt.
+  final midden = Alignment(-o.dx * .9, -o.dy * .9);
+  canvas.drawRect(
+      teken,
+      Paint()
+        ..shader = RadialGradient(
+          center: midden,
+          radius: .85,
+          colors: [Color.fromRGBO(255, 255, 255, .24 * sterkte), const Color(0x00FFFFFF)],
+        ).createShader(hoes));
+  canvas.drawRect(
+      teken,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment(-1 + o.dx * .6, -1),
+          end: Alignment(1 + o.dx * .6, 1),
+          colors: [const Color(0x00FFFFFF), Color.fromRGBO(255, 255, 255, .10 * sterkte), const Color(0x00FFFFFF)],
+          stops: const [.38, .5, .62],
+        ).createShader(hoes));
+}
+
+/// De glans van een gekantelde hoes, op de cd die eruit steekt: binnen de schijf, met het licht van de hoes
+/// ([tekenKantelGlans]). [hoes] is het vak van de hoes, gemeten vanaf de linkerbovenhoek van de schijf.
+class SchijfKantelGlans extends CustomPainter {
+  SchijfKantelGlans(this.o, {required this.hoes});
+  final Offset o;
+  final Rect hoes;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (o.distance < .002) return;
+    final vak = Offset.zero & size;
+    canvas.save();
+    canvas.clipPath(Path()..addOval(vak));
+    tekenKantelGlans(canvas, vak, hoes, o);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(SchijfKantelGlans oud) => oud.o != o || oud.hoes != hoes;
 }
 
 /// Hoe hoog de spiegeling onder een grote hoes is, als deel van de hoes.
