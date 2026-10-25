@@ -378,12 +378,21 @@ void main() {
     expect(organize, contains('    herNoemSoort(landed, at);'));
     final main = _bron('lib/main.dart');
     expect(main, contains('              _qualityBadge(_trackQuality(t)),\n              // Studio, cd of vinyl (kopiesoort.dart): alleen bij nieuwe downloads.\n              _soortMerk(t),'));
-    expect(main, contains('      _soortRegels(context, [t], heeft: soortVoor(t.path)?.soort),'));
+    expect(main, contains('        ..._soortRegels(context, [t], heeft: soortVoor(t.path)?.soort),'));
     expect(main, contains('        ..._soortRegels(context, nummers, album: a.title),'));
     expect(main, contains("    final los = actie == 'vervang' && speler.current?.path == t.path ? await speler.laatBestandLos() : null;"));
     expect(main, contains('            (gekozenSoort(t.path) ?? Kopiesoort.studio) != Kopiesoort.studio,'));
     expect(main, contains('      downloads.soortvragen = vragen;'));
     expect(main, contains('  if (mode.owner) await laadSoorten();'));
+    // Nagelopen op de pc (25-10-2026): Weg terwijl B klonk speelde verder van het weggegooide bestand; de badge zei de
+    // kwaliteit van A; een AIFF werd gehaald en daarna afgekeurd; en een lopende vraag was niet te stoppen.
+    expect(main, contains("    if (actie == 'weg' && speler.current?.path == t.path && speler.vergelijkBron != null) await speler.vergelijk(null);"));
+    expect(main, contains("      return Quality('B · \${tw.kwaliteit}', bits > 16 ? QTier.hires : QTier.lossless);"));
+    expect(main, contains("MenuRegel(Icons.search_off_rounded, 'Stop met zoeken naar \${v.soort.voluit}', () async {"));
+    expect(online, contains("        if (const {'flac', 'wav'}.contains(soortVan(f.filename))) f"));
+    expect(online, contains('                maxWait: left < _maxWachtPerPeer ? left : _maxWachtPerPeer,\n'
+        '                maxPlaats: _maxWachtrijPlaats);'),
+        reason: 'plaats 7360 in een rij hield de hele ronde vast');
     final server = _bron('lib/lan/server.dart');
     expect(server, contains("      case '/api/soort/vraag':\n        return _soortVraag(req);"));
     expect(server, contains("    '/api/twijfel',\n    '/api/soort/vraag',\n"));

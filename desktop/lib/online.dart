@@ -5672,7 +5672,12 @@ class DownloadManager extends ChangeNotifier {
         album: v.album,
         authority: TrackTags(
             title: v.titel, artist: v.artiest, album: v.album, trackNo: 0, seconds: vinyl ? null : v.seconden));
-    var zeef = kandidatenVoorWens(w, hits);
+    // Alleen wat de app na het halen kan lezen: FLAC, en WAV (wordt FLAC). Een AIFF zegt zijn diepte niet aan
+    // readFlacTags, en werd na het halen alsnog afgekeurd (Digital Love, 25-10-2026: de eerste kandidaat).
+    var zeef = [
+      for (final f in kandidatenVoorWens(w, hits))
+        if (const {'flac', 'wav'}.contains(soortVan(f.filename))) f
+    ];
     final sec = v.seconden;
     if (vinyl && sec != null) {
       zeef = [for (final f in zeef) if (f.durationSec == null || (f.durationSec! - sec).abs() <= kVinylLengteSpeling) f];
@@ -5698,7 +5703,12 @@ class DownloadManager extends ChangeNotifier {
           final t0 = DateTime.now();
           SlskResult res;
           try {
-            res = await _rawTransfer(session, f, job, () {}, waitInQueue: true, maxWait: left);
+            // Zoals een wens: niet achteraan een rij van duizenden aanschuiven (Digital Love, 25-10-2026: plaats 7360
+            // hield de hele ronde vast), en per uploader een begrensde wachttijd.
+            res = await _rawTransfer(session, f, job, () {},
+                waitInQueue: true,
+                maxWait: left < _maxWachtPerPeer ? left : _maxWachtPerPeer,
+                maxPlaats: _maxWachtrijPlaats);
           } catch (_) {
             continue;
           }
