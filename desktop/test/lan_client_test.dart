@@ -276,30 +276,51 @@ void main() {
       final pc = _pc();
       final art = <String, Uint8List>{};
       final c = _client(pc.library, art: art);
+      // **Korte wachttijden, en wachten op wat er gebeurt in plaats van op de klok.** Hier stond de echte 4 + 12 s met
+      // een venster van 24 s eromheen: onder de last van de volle reeks viel de herkansing samen met het hoezenwerk dat
+      // nog liep en kwam ze er net buiten (Apple-bouw van 3.9.576 op 22-10-2026; lokaal in de volle reeks op
+      // 25-10-2026, alleen en onder CPU-last wél groen). Wat er bewezen wordt, blijft: na een 404 vraagt het toestel
+      // vanzelf opnieuw. Dat het in de app 4, 12 en 40 s zijn, legt de toets hieronder vast.
+      c.library.hoesHerkansingen = const [
+        Duration(milliseconds: 50),
+        Duration(milliseconds: 150),
+        Duration(milliseconds: 400),
+      ];
       await c.library.loadRemote();
       await c.library.loadRemoteCovers(AppSettings());
       Album dummy() => c.library.albums.firstWhere((a) => a.title == 'Dummy');
       expect(dummy().cover, isNull, reason: 'de pc had nog niets');
+      expect(c.library.hoesHerkansingGepland, isTrue, reason: 'na een 404 staat er een herkansing klaar');
       final vraag = c.requests.firstWhere((r) => r.startsWith('/art/') && c.library.albums.isNotEmpty);
       final ref = Uri.parse(vraag).pathSegments.last;
+      int vragenNaar() => c.requests.where((r) => r.startsWith('/art/') && Uri.parse(r).pathSegments.last == ref).length;
+      final eerder = vragenNaar();
       final hoes = Uint8List.fromList(List.generate(700, (i) => (i * 13) % 256));
+      // Vóór de eerstvolgende wachtstap: tussen het einde van de ronde en hier ligt geen enkele beurt voor een klok.
       art[ref] = hoes; // intussen gevonden op de pc
-      // Tot en met de TWEEDE herkansing (4 + 12 s), met ruimte: onder de last van de volle reeks viel de eerste soms
-      // samen met het hoezenwerk dat nog liep, en dan kwam de hoes pas bij de tweede — buiten het oude venster van
-      // 10 s. Zo viel de Apple-bouw van 3.9.576 om (22-10-2026), en lokaal één keer op de zes. Wat er bewezen wordt,
-      // blijft: het toestel vraagt vanzelf opnieuw.
-      final tweede = LibraryStore.kHoesHerkansingen[0] + LibraryStore.kHoesHerkansingen[1];
-      final eind = DateTime.now().add(tweede + const Duration(seconds: 8));
+      // Ruim: op een snelle machine is de hoes er na een tiende van een seconde; de bovengrens is er alleen voor een
+      // bouwstraat die even niets doet, en niet voor de wachttijden zelf.
+      final eind = DateTime.now().add(const Duration(seconds: 40));
       while (dummy().cover == null && DateTime.now().isBefore(eind)) {
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await Future<void>.delayed(const Duration(milliseconds: 20));
       }
-      expect(dummy().cover, hoes, reason: 'vanzelf opnieuw gevraagd, na ${LibraryStore.kHoesHerkansingen.first.inSeconds} s');
+      expect(vragenNaar(), greaterThan(eerder), reason: 'het toestel vroeg het zelf opnieuw');
+      expect(dummy().cover, hoes, reason: 'vanzelf opnieuw gevraagd na een 404');
     },
         timeout: const Timeout(Duration(seconds: 60)),
         // Op de macOS-bouwstraat kwam de hoes ook na 24 s niet (3.9.576 en 3.9.578, terwijl 3.9.577 slaagde): daar speelt
         // meer dan timing — op 21-10-2026 kwam de hoes van de ene toets er in de volgende terecht (gedeelde map). Op
         // Windows en Linux blijft deze toets lopen; de Mac-app hoort niet op een wankele toets te sneuvelen.
         skip: Platform.isMacOS ? 'wankel op de macOS-bouwstraat; loopt op Windows en Linux' : false);
+
+    test('HERKANSEN: in de app 4, 12 en 40 s, en daarna niet meer', () {
+      expect(LibraryStore.kHoesHerkansingen,
+          const [Duration(seconds: 4), Duration(seconds: 12), Duration(seconds: 40)]);
+      final l = LibraryStore();
+      addTearDown(l.dispose);
+      expect(l.hoesHerkansingen, same(LibraryStore.kHoesHerkansingen), reason: 'de korte tijden zijn alleen voor de toets');
+      expect(l.hoesHerkansingGepland, isFalse);
+    });
 
     test('een hoes die je al hebt komt van schijf: navragen mag, downloaden niet', () async {
       final pc = _pc();
