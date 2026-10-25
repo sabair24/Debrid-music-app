@@ -1083,6 +1083,15 @@ class SoulseekService {
     return uit.future;
   }
 
+  /// Jouw antwoord aan een uploader (uploaderberichten.dart), over de gedeelde login — zoals zoeken. Waar als het
+  /// verstuurd is; gooit als Soulseek nu niet mag inloggen (dezelfde reden als bij zoeken).
+  Future<bool> stuurBericht(String aan, String tekst) async {
+    if (!available) return false;
+    final blocked = client.whyNotLogin;
+    if (blocked != null) throw blocked;
+    return withSession((s) => s.stuurBericht(aan, tekst));
+  }
+
   /// [gebruikteVraag] meldt op welke trede er uiteindelijk gezocht is, zodat het scherm eerlijk kan
   /// zeggen waar deze lijst over gaat.
   ///

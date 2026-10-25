@@ -290,6 +290,26 @@ Uint8List _message(int code, Uint8List payload) =>
     Uint8List.fromList([...(_W()..u32(4 + payload.length)..u32(code)).bytes(), ...payload]);
 Uint8List _initMessage(int code, Uint8List payload) =>
     Uint8List.fromList([...(_W()..u32(1 + payload.length)..u8(code)).bytes(), ...payload]);
+
+/// Een privébericht van de server (code 22, MessageUser) — wat er na de code komt: het nummer om te bevestigen, wanneer
+/// (seconden), van wie en wat. Null als het niet te lezen is. Zie uploaderberichten.dart.
+({int id, DateTime op, String van, String tekst})? leesPrivebericht(Uint8List naCode) {
+  if (naCode.length < 16) return null;
+  final r = _R(naCode);
+  final id = r.u32();
+  final tijd = r.u32();
+  final van = r.str();
+  final tekst = r.str();
+  if (van.isEmpty) return null;
+  return (id: id, op: DateTime.fromMillisecondsSinceEpoch(tijd * 1000), van: van, tekst: tekst);
+}
+
+/// MessageAcked (code 23). De server bewaart een privébericht tot het bevestigd is, en bezorgt het anders bij elke
+/// login opnieuw — zo zag Saber op zondag in SoulseekQt nog de vragen van vrijdag.
+Uint8List bevestigPrivebericht(int id) => _message(23, (_W()..u32(id)).bytes());
+
+/// Een privébericht aan [aan] (code 22): jouw antwoord aan een uploader.
+Uint8List priveberichtAan(String aan, String tekst) => _message(22, (_W()..str(aan)..str(tekst)).bytes());
 String _md5hex(String s) => md5.convert(utf8.encode(s)).toString();
 Uint8List _zlib(Uint8List data) {
   try {
@@ -836,6 +856,9 @@ class SoulseekClient {
   /// Wat de server in zoekopdrachten weert (bericht 160, ExcludedSearchPhrases), klein geschreven — zie
   /// geweerde_zinnen.dart. Begint met wat er gemeten is, voor het geval de lijst (nog) niet binnen is.
   final Set<String> geweerdeZinnen = {...kBekendeGeweerdeZinnen};
+
+  /// Een privébericht van een uploader kwam binnen (al bevestigd aan de server) — zie uploaderberichten.dart.
+  void Function(int id, DateTime op, String van, String tekst)? bijBericht;
 
   /// Is dit de eerste login sinds het starten, en wel meteen erna? Dan is een INVALIDPASS vrijwel
   /// zeker onze eigen vorige sessie en niet het wachtwoord.
@@ -1742,6 +1765,14 @@ class SlskSession {
   /// of its own, so the status check costs nothing when we're already online.
   Future<bool> alive() => _ensure();
 
+  /// Jouw antwoord aan een uploader ([priveberichtAan]). Logt in als dat nodig is; waar als het verstuurd is.
+  Future<bool> stuurBericht(String aan, String tekst) async {
+    if (client.blocked || !await _ensure()) return false;
+    _conn!.send(priveberichtAan(aan, tekst));
+    client.logboek('bericht aan $aan: $tekst');
+    return true;
+  }
+
   /// Run a search over the SHARED login instead of opening a second server connection.
   ///
   /// Searching used to open its own server connection and log in per query — so
@@ -1917,6 +1948,16 @@ class SlskSession {
             client.logboek('de server weert ${zinnen.length} zoekzinnen (code 160): '
                 '${zinnen.take(40).join(', ')}${zinnen.length > 40 ? ', …' : ''}');
           } catch (_) {/* een kapotte lijst: dan wat er al was */}
+          return;
+        }
+        if (code == 22) {
+          // MessageUser: een uploader schrijft ons, vaak een vraag tegen automatisch downloaden ("type download in this
+          // chat"). Bevestigen, en doorgeven aan wie het toont (uploaderberichten.dart) — jij antwoordt.
+          final b = leesPrivebericht(Uint8List.sublistView(payload, 4));
+          if (b == null) return;
+          c.send(bevestigPrivebericht(b.id));
+          client.logboek('bericht van ${b.van}: ${b.tekst.length > 120 ? '${b.tekst.substring(0, 120)}…' : b.tekst}');
+          client.bijBericht?.call(b.id, b.op, b.van, b.tekst);
           return;
         }
         if (code == 1) {

@@ -28,6 +28,7 @@ import '../pc_model.dart' show Modelvragen;
 import '../prullenbak.dart' show heeftPrullenbak;
 import '../schudlog.dart' show kSchudLogBytes, kSchudPerZending;
 import '../kopiesoort.dart' show kopiesoortUit;
+import '../uploaderberichten.dart' show antwoordVoorUploader, uploaderberichten, verstuurAntwoord;
 import '../warm_log.dart';
 import '../settings.dart';
 import '../soulseek.dart';
@@ -1154,6 +1155,10 @@ class LanServer {
         return _soulseekZoekBeter(req);
       case '/api/twijfel':
         return _twijfel(req);
+      case '/api/soulseek/berichten':
+        return _berichten(req);
+      case '/api/soulseek/bericht':
+        return _berichtSturen(req);
       case '/api/soort/vraag':
         return _soortVraag(req);
       case '/api/soort/stop':
@@ -2190,6 +2195,34 @@ class LanServer {
   }
 
   /// "Stop met zoeken naar …" vanaf een toestel: {trackId}. Een kopie die al klaarstaat, blijft. Antwoord: {zin}.
+  /// De berichten van uploaders voor een toestel (uploaderberichten.dart). Noemt het toestel de versie die het al
+  /// heeft, dan alleen de versie terug: dit wordt om de vijftien seconden gevraagd.
+  Future<void> _berichten(HttpRequest req) async {
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final v = body['versie'];
+    return _json(req.response, uploaderberichten.voorToestel(v is int ? v : null));
+  }
+
+  /// Jouw antwoord aan een uploader, getypt op een toestel: de pc verstuurt het en zet het in het gesprek.
+  Future<void> _berichtSturen(HttpRequest req) async {
+    final service = soulseek;
+    if (service == null || !service.available) return _unavailable(req, 'Op deze pc is Soulseek niet ingesteld.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final aan = body['aan'], tekst = body['tekst'];
+    if (aan is! String || tekst is! String || antwoordVoorUploader(tekst) == null || aan.trim().isEmpty) {
+      return _json(req.response, {'error': 'Aan wie, en wat?'}, status: HttpStatus.badRequest);
+    }
+    try {
+      final b = await verstuurAntwoord(service.stuurBericht, aan, tekst);
+      if (b == null) return await _unavailable(req, 'Soulseek nam het bericht niet aan — de pc is nu niet ingelogd.');
+      return await _json(req.response, {'bericht': b.toJson(), 'versie': uploaderberichten.versie});
+    } catch (e) {
+      return _unavailable(req, 'Versturen lukte niet: $e');
+    }
+  }
+
   Future<void> _soortStop(HttpRequest req) async {
     final manager = downloads;
     if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
