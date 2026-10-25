@@ -2272,7 +2272,10 @@ class DownloadManager extends ChangeNotifier {
     for (var i = 0; i < 25 && (speeltNu?.call(pad) ?? false); i++) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
     }
-    if (speeltNu?.call(pad) ?? false) return 'Het nummer speelt nu — vervang het als het niet meer speelt';
+    if (speeltNu?.call(pad) ?? false) {
+      _log.line('"${baseName(pad)}": houden gaat nu niet — het bestand is in gebruik (hier of op een toestel)');
+      return 'Het nummer speelt nu — vervang het als het niet meer speelt';
+    }
     final gezag = g.gezag == null ? null : TrackTags.fromJson(g.gezag!);
     final naam = gezag == null ? baseName(pad) : '${gezag.artist} — ${gezag.title}';
     try {

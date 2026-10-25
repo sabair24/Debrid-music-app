@@ -2317,9 +2317,13 @@ class LanServer {
   /// Alle paden die [inGebruikBijToestel] noemt, in één keer: voor wie er duizenden naloopt (de TIDAL-ronde).
   List<String> padenInGebruikBijToestel() => [...lezers.inGebruik, ..._zonePaden()];
 
+  /// Zonder de pc zelf: wat hij speelt, weet hij uit zijn eigen speler, en die laat het bestand los voor Deze houden
+  /// ([PlayerStore.laatBestandLos]). Met de pc erbij bleef het nummer "in gebruik" nadat de speler het had losgelaten,
+  /// en gaf houden het na vijf seconden op met "Het nummer speelt nu" (Saber, 25-10-2026, Rockin': "ik wil hier de
+  /// studio houden maar lukt niet ???").
   List<String> _zonePaden() => [
         for (final z in zones.lijst())
-          if (z.trackId.isNotEmpty)
+          if (z.id != 'dev:${zones.pcId}' && z.trackId.isNotEmpty)
             if (catalog.track(z.trackId) case final t?) t.path,
       ];
 

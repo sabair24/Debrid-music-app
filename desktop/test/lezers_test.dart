@@ -63,4 +63,13 @@ void main() {
     expect(main, contains('..speeltNu = ergensInGebruik;'), reason: 'de TIDAL-ronde op jouw vraag');
     expect(main, contains('...?sharing.server?.padenInGebruikBijToestel(),'), reason: 'de TIDAL-ronde');
   });
+
+  // Saber, 25-10-2026, Rockin': "ik wil hier de studio houden maar lukt niet ???". De pc stond zelf in de zones, met het
+  // nummer dat hij speelde: losgelaten of niet, het bleef "in gebruik bij een toestel".
+  test('de zones zonder de pc zelf: die kent zijn eigen speler, en die laat los voor Deze houden', () {
+    final server = File('lib/lan/server.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(server, contains("          if (z.id != 'dev:\${zones.pcId}' && z.trackId.isNotEmpty)\n"));
+    final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(online, contains('houden gaat nu niet — het bestand is in gebruik'), reason: 'en anders staat het in het logboek');
+  });
 }
