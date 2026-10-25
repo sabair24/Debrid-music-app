@@ -1643,8 +1643,11 @@ const int kZoekVoorJou = 6;
 /// Het tempo per minuut deed er dus minder toe dan het volhouden ervan. Veertig blijft ruim onder de laagste 55.
 const int kZoekPerVijfMinuten = 40;
 
-/// Hoeveel van [kZoekPerVijfMinuten] er altijd vrij blijft voor wat JIJ zoekt.
-const int kZoekVoorJouVijf = 10;
+/// Hoeveel van [kZoekPerVijfMinuten] er altijd vrij blijft voor wat JIJ zoekt: de helft. Eerst tien — maar met de
+/// radio, de verlanglijst en studio/cd/vinyl tegelijk bezig hield je dan tien per vijf minuten over, en een
+/// albumpagina vraagt er twee tot vijf (Saber, 25-10-2026: "ik heb echt de indruk dat … alles moeizamer gaat bij
+/// downloaden en zoeken"). De achtergrond houdt er twintig: vier per minuut, genoeg om de radio voor te blijven.
+const int kZoekVoorJouVijf = 20;
 
 /// Hoe lang een zoekopdracht nog moet wachten: nul als er in het laatste [venster] minder dan [max] gingen, anders tot
 /// de oudste die nog meetelt uit het venster valt. [eerder]: de tijdstippen van de vorige zoekopdrachten.

@@ -111,7 +111,7 @@ void main() {
           unawaited(rem.neem(achtergrond: true).then((_) => radio++));
         }
         fa.elapse(const Duration(minutes: 4));
-        expect(radio, kZoekPerVijfMinuten - kZoekVoorJouVijf, reason: '14, 14 en dan nog 2 — niet 14 per minuut volhouden');
+        expect(radio, kZoekPerVijfMinuten - kZoekVoorJouVijf, reason: '14, en dan nog 6 — niet 14 per minuut volhouden');
         for (var i = 0; i < kZoekVoorJouVijf; i++) {
           unawaited(rem.neem().then((_) => jij++));
         }
