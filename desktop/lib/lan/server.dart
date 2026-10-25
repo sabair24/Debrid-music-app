@@ -92,6 +92,7 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd', '/api/zone/transfer', '/api/tijd',
     '/api/twijfel',
     '/api/soort/vraag',
+    '/api/soort/stop',
     '/api/releaseart',
   };
   // TIDAL ook (Saber, 23-10-2026: "ik moet ook buitenshuis kunnen zoeken en downloaden"); ophalen telt mee in het
@@ -1155,6 +1156,8 @@ class LanServer {
         return _twijfel(req);
       case '/api/soort/vraag':
         return _soortVraag(req);
+      case '/api/soort/stop':
+        return _soortStop(req);
       case '/api/tidal/zoek':
         return _tidal(req, 'zoek');
       case '/api/tidal/album':
@@ -2184,6 +2187,18 @@ class LanServer {
     final album = body['album'] is String ? body['album'] as String : null;
     final zin = await manager.vraagSoort(nummers, soort, album: album, gezag: library.tagsVoorVervanger);
     return _json(req.response, {'zin': zin});
+  }
+
+  /// "Stop met zoeken naar …" vanaf een toestel: {trackId}. Een kopie die al klaarstaat, blijft. Antwoord: {zin}.
+  Future<void> _soortStop(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final id = body['trackId'];
+    final t = id is String ? catalog.track(id) : null;
+    if (t == null) return _json(req.response, {'error': 'Dit nummer kent de pc niet.'}, status: HttpStatus.notFound);
+    return _json(req.response, {'zin': await manager.trekSoortvraagIn(t.path)});
   }
 
   Future<void> _groei(HttpRequest req) async {

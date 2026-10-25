@@ -7,6 +7,7 @@ import 'dart:typed_data';
 
 import 'package:debridmusic/flac_tags.dart' show readFlacTags;
 import 'package:debridmusic/kopiesoort.dart';
+import 'package:debridmusic/lan/dtos.dart' show TrackDto;
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/online.dart';
 import 'package:debridmusic/organize.dart';
@@ -202,6 +203,54 @@ void main() {
     });
   });
 
+  group('zien dat er gezocht wordt, ook op een toestel', () {
+    test('DE KERN: een vraag op de pc staat in het register, gaat mee met de catalogus, en weg is weg', () async {
+      final map = Directory.systemTemp.createTempSync('dm_gezocht_');
+      addTearDown(() => map.deleteSync(recursive: true));
+      final l = Soortvragen('${map.path}/soortvragen.json');
+      const pad = r'D:\Muziek\Albums\Daft Punk\Discovery\03 - Digital Love.flac';
+      final v = Soortvraag(pad: pad, soort: Kopiesoort.cd, artiest: 'Daft Punk', titel: 'Digital Love', sindsMs: 1);
+      final voor = soortvraagUitgave.value;
+      l.zet(v);
+      expect(gezochtVoor(pad), Kopiesoort.cd);
+      expect(soortvraagUitgave.value, greaterThan(voor), reason: 'de catalogus moet het merken');
+      l.herNoem(pad, r'D:\Muziek\Albums\Daft Punk\Discovery\03 - Digital Love (2).flac');
+      expect(gezochtVoor(pad), isNull);
+      expect(gezochtVoor(r'D:\Muziek\Albums\Daft Punk\Discovery\03 - Digital Love (2).flac'), Kopiesoort.cd);
+      l.verwijder(r'D:\Muziek\Albums\Daft Punk\Discovery\03 - Digital Love (2).flac');
+      expect(gezochtVoor(r'D:\Muziek\Albums\Daft Punk\Discovery\03 - Digital Love (2).flac'), isNull);
+      // En laden zet ze ook in het register: na een herstart van de pc ziet een toestel ze meteen.
+      l.zet(Soortvraag(pad: pad, soort: Kopiesoort.cd, artiest: 'Daft Punk', titel: 'Digital Love', sindsMs: 1));
+      await l.bewaar();
+      l.verwijder(pad);
+      await Soortvragen('${map.path}/soortvragen.json').laad();
+      expect(gezochtVoor(pad), Kopiesoort.cd);
+    });
+
+    test('op een toestel: wat de pc zegt, en de catalogus draagt het', () {
+      zetSoortvraagVanPc('http://pc.invalid/stream/t9.flac', Kopiesoort.vinyl);
+      expect(gezochtVoor('http://pc.invalid/stream/t9.flac'), Kopiesoort.vinyl);
+      zetSoortvraagVanPc('http://pc.invalid/stream/t9.flac', null);
+      expect(gezochtVoor('http://pc.invalid/stream/t9.flac'), isNull);
+      const met = TrackDto(
+          id: 't', albumId: 'a', artistId: 'b', title: 'Digital Love', artistName: 'Daft Punk', albumTitle: 'Discovery',
+          streamPath: '/stream/t.flac', ext: 'flac', zoekt: 'cd');
+      expect(TrackDto.fromJson(met.toJson()).zoekt, 'cd');
+      const zonder = TrackDto(
+          id: 't', albumId: 'a', artistId: 'b', title: 'Digital Love', artistName: 'Daft Punk', albumTitle: 'Discovery',
+          streamPath: '/stream/t.flac', ext: 'flac');
+      expect(zonder.toJson().containsKey('zoekt'), isFalse, reason: 'null voor bijna alles: de catalogus blijft klein');
+      final catalog = _bron('lib/lan/catalog.dart');
+      expect(catalog, contains('          zoekt: gezochtVoor(t.path)?.naam,'));
+      expect(catalog, contains("      if (t.zoekt != null) fingerprint.add('Z\${t.zoekt}');"));
+      expect(catalog, contains('    soortvraagUitgave.addListener(_markDirty);'));
+      expect(_bron('lib/library.dart'), contains('    zetSoortvraagVanPc(pad, kopiesoortUit(d.zoekt));'));
+      final server = _bron('lib/lan/server.dart');
+      expect(server, contains("      case '/api/soort/stop':\n        return _soortStop(req);"));
+      expect(server, contains("    '/api/soort/stop',\n"));
+    });
+  });
+
   group('de staande vraag', () {
     test('opnieuw zoeken: 30 min, 2 u, 6 u, dan elke dag; en heen en terug op schijf', () async {
       expect(soortvraagWacht(1), const Duration(minutes: 30));
@@ -388,7 +437,9 @@ void main() {
     // kwaliteit van A; een AIFF werd gehaald en daarna afgekeurd; en een lopende vraag was niet te stoppen.
     expect(main, contains("    if (actie == 'weg' && speler.current?.path == t.path && speler.vergelijkBron != null) await speler.vergelijk(null);"));
     expect(main, contains("      return Quality('B · \${tw.kwaliteit}', bits > 16 ? QTier.hires : QTier.lossless);"));
-    expect(main, contains("MenuRegel(Icons.search_off_rounded, 'Stop met zoeken naar \${v.soort.voluit}', () async {"));
+    expect(main, contains("MenuRegel(Icons.search_off_rounded, 'Stop met zoeken naar \${s.voluit}', () => _stopSoortvraag(context, t)),"));
+    expect(main, contains("        zin = '\${(await c.ask('/api/soort/stop', {'trackId': id}))['zin'] ?? 'Gestopt'}';"));
+    expect(main, contains("          if (zoekt != null) 'zoekt \${zoekt.naam}…',"));
     expect(online, contains("        if (const {'flac', 'wav'}.contains(soortVan(f.filename))) f"));
     expect(online, contains('                maxWait: left < _maxWachtPerPeer ? left : _maxWachtPerPeer,\n'
         '                maxPlaats: _maxWachtrijPlaats);'),

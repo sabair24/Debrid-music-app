@@ -40,6 +40,7 @@ import 'settings.dart';
 import 'vaste_keuze.dart';
 import 'twijfel.dart' show twijfelMap, twijfelsVanPcGelezen, zetTwijfelVanPc;
 import 'kopiesoort.dart' show kopiesoortUit, zetSoortVanPc;
+import 'soortjacht.dart' show zetSoortvraagVanPc;
 import 'paths.dart';
 import 'artwork.dart';
 
@@ -3430,6 +3431,8 @@ class LibraryStore extends ChangeNotifier {
     // Studio, cd of vinyl (kopiesoort.dart), zoals de pc het weet.
     final soort = kopiesoortUit(d.soort);
     zetSoortVanPc(pad, soort == null ? null : (soort: soort, gekozen: d.soortGekozen));
+    // En wat de pc voor dit nummer nog zoekt — zodat ook hier "zoekt cd" en "Stop met zoeken" staan.
+    zetSoortvraagVanPc(pad, kopiesoortUit(d.zoekt));
     // Een twijfelkopie die op de pc op jouw keuze wacht (twijfel.dart), onder de naam die het nummer hier heeft.
     final tw = d.twijfel;
     zetTwijfelVanPc(

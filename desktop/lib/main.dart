@@ -193,7 +193,7 @@ import 'tidal_beter.dart';
 import 'vinyl.dart' show isVinylRip;
 import 'twijfel.dart';
 import 'kopiesoort.dart';
-import 'soortjacht.dart' show Soortvragen;
+import 'soortjacht.dart' show Soortvragen, gezochtVoor, soortvraagUitgave;
 import 'lan/vaste_naam.dart' show kPcHost;
 import 'torbox.dart';
 import 'torbox_stand.dart';
@@ -13678,23 +13678,59 @@ Widget _twijfelMerk(Track? t) => ValueListenableBuilder<int>(
 
 /// Het label "studio", "cd" of "vinyl" naast de kwaliteit (kopiesoort.dart; Saber, 25-10-2026). Alleen bij nieuwe
 /// downloads; niets bij wat er al stond.
-Widget _soortMerk(Track? t) => ValueListenableBuilder<int>(
-      valueListenable: soortUitgave,
-      builder: (context, _, __) {
+Widget _soortMerk(Track? t) => ListenableBuilder(
+      listenable: Listenable.merge([soortUitgave, soortvraagUitgave, twijfelUitgave]),
+      builder: (context, _) {
         final pad = t?.path;
-        final s = pad == null || pad.isEmpty ? null : soortVoor(pad);
-        if (s == null) return const SizedBox.shrink();
+        if (pad == null || pad.isEmpty) return const SizedBox.shrink();
+        final s = soortVoor(pad);
+        // Wat er nog gezocht wordt, zolang er niets klaarstaat ("cd klaar" zegt het dan zelf).
+        final zoekt = twijfelVoor(pad)?.soort == null ? gezochtVoor(pad) : null;
+        if (s == null && zoekt == null) return const SizedBox.shrink();
+        final tekst = [
+          if (s != null) s.gekozen ? '${s.soort.naam} ✓' : s.soort.naam,
+          if (zoekt != null) 'zoekt ${zoekt.naam}…',
+        ].join(' · ');
         return Tooltip(
-          message: s.gekozen
-              ? 'Door jou gekozen: ${s.soort.voluit}. De app zoekt voor dit nummer alleen nog een betere ${s.soort.naam}-kopie.'
-              : 'Een ${s.soort.voluit}-kopie.',
+          message: [
+            if (s != null)
+              s.gekozen
+                  ? 'Door jou gekozen: ${s.soort.voluit}. De app zoekt voor dit nummer alleen nog een betere ${s.soort.naam}-kopie.'
+                  : 'Een ${s.soort.voluit}-kopie.',
+            if (zoekt != null)
+              'Je pc zoekt ${zoekt.voluit}; vindt hij er een, dan staat er "${zoekt.naam} klaar". Stoppen kan in het menu.',
+          ].join(' '),
           child: Padding(
             padding: const EdgeInsets.only(left: 2, right: 6),
-            child: Text(s.gekozen ? '${s.soort.naam} ✓' : s.soort.naam, style: kLabel.copyWith(color: kGedempt)),
+            child: Text(tekst, style: kLabel.copyWith(color: kGedempt)),
           ),
         );
       },
     );
+
+/// "Stop met zoeken naar …": op de pc zelf, op een toestel via de pc (`/api/soort/stop`).
+Future<void> _stopSoortvraag(BuildContext context, Track t) async {
+  final lib = context.read<LibraryStore>();
+  final dm = lib.isRemote ? null : context.read<DownloadManager>();
+  final melder = ScaffoldMessenger.maybeOf(context);
+  String zin;
+  try {
+    if (lib.remote case final c?) {
+      final id = lib.remoteTrackId(t.path);
+      if (id == null) {
+        zin = 'Dit nummer kent de pc niet meer';
+      } else {
+        zin = '${(await c.ask('/api/soort/stop', {'trackId': id}))['zin'] ?? 'Gestopt'}';
+        await lib.loadRemote(quiet: true);
+      }
+    } else {
+      zin = await dm!.trekSoortvraagIn(t.path);
+    }
+  } catch (e) {
+    zin = 'Dat lukte niet: $e';
+  }
+  melder?.showSnackBar(SnackBar(content: Text(zin)));
+}
 
 /// "Download in studio-kwaliteit / cd-kwaliteit / vinyl" (kopiesoort.dart). Op de pc zoekt deze machine
 /// ([DownloadManager.vraagSoort]); op een toestel de pc (`/api/soort/vraag`). [album]: een hele plaat, één zoekopdracht.
@@ -13873,13 +13909,10 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
       // Zelf de soort kiezen (Saber, 25-10-2026): niets wordt vervangen, de kopie staat klaar tot je luistert en kiest.
       [
         ..._soortRegels(context, [t], heeft: soortVoor(t.path)?.soort),
-        // Een vraag die nog loopt (alleen op de pc bekend): stoppen. Een kopie die al klaarstaat, blijft tot je kiest.
-        if (!lib.isRemote)
-          if (context.read<DownloadManager>().soortvragen?.van(t.path) case final v?)
-            MenuRegel(Icons.search_off_rounded, 'Stop met zoeken naar ${v.soort.voluit}', () async {
-              final zin = await context.read<DownloadManager>().trekSoortvraagIn(t.path);
-              if (context.mounted) _srcToast(context, zin);
-            }),
+        // Een vraag die nog loopt: stoppen — op de pc zelf, op een toestel via de pc (`/api/soort/stop`; Saber,
+        // 25-10-2026: ook op de gsm en de Shield). Een kopie die al klaarstaat, blijft tot je kiest.
+        if (gezochtVoor(t.path) case final s?)
+          MenuRegel(Icons.search_off_rounded, 'Stop met zoeken naar ${s.voluit}', () => _stopSoortvraag(context, t)),
       ],
       [
         // Van "dit nummer" naar "dat bestand". De app weet het pad — het staat in `Track.path` en
