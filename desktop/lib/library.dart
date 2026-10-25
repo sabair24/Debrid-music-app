@@ -40,6 +40,7 @@ import 'settings.dart';
 import 'vaste_keuze.dart';
 import 'twijfel.dart' show twijfelMap, twijfelsVanPcGelezen, zetTwijfelVanPc;
 import 'kopiesoort.dart' show kopiesoortUit, zetSoortVanPc;
+import 'soortjacht.dart' show zetSoortvraagVanPc;
 import 'paths.dart';
 import 'artwork.dart';
 
@@ -1208,6 +1209,16 @@ class LibraryStore extends ChangeNotifier {
   /// nergens een hoes).
   static const kHoesHerkansingen = [Duration(seconds: 4), Duration(seconds: 12), Duration(seconds: 40)];
 
+  /// De wachttijden die deze bibliotheek gebruikt: [kHoesHerkansingen], en in een toets kortere. Met de echte vier en
+  /// twaalf seconden hing de toets aan de klok van de bouwstraat — onder last kwam de herkansing er net buiten
+  /// (Apple-bouw van 3.9.576, en lokaal één keer in de volle reeks op 25-10-2026).
+  @visibleForTesting
+  List<Duration> hoesHerkansingen = kHoesHerkansingen;
+
+  /// Staat er een herkansing klaar?
+  @visibleForTesting
+  bool get hoesHerkansingGepland => _hoesHerkansing?.isActive ?? false;
+
   static String _hoesSleutel(Album a) => '${a.artist}|${a.title}';
 
   /// Geen herkansing van hoezen meer ([_planHoesHerkansing]). Anders loopt die klok door na het einde van
@@ -1229,9 +1240,9 @@ class LibraryStore extends ChangeNotifier {
     for (final a in missers) {
       final k = _hoesSleutel(a);
       final n = _hoesNogNiet[k] ?? 0;
-      if (n >= kHoesHerkansingen.length) continue;
+      if (n >= hoesHerkansingen.length) continue;
       _hoesNogNiet[k] = n + 1;
-      final w = kHoesHerkansingen[n];
+      final w = hoesHerkansingen[n];
       if (wacht == null || w < wacht) wacht = w;
     }
     if (wacht == null) return;
@@ -3420,6 +3431,8 @@ class LibraryStore extends ChangeNotifier {
     // Studio, cd of vinyl (kopiesoort.dart), zoals de pc het weet.
     final soort = kopiesoortUit(d.soort);
     zetSoortVanPc(pad, soort == null ? null : (soort: soort, gekozen: d.soortGekozen));
+    // En wat de pc voor dit nummer nog zoekt — zodat ook hier "zoekt cd" en "Stop met zoeken" staan.
+    zetSoortvraagVanPc(pad, kopiesoortUit(d.zoekt));
     // Een twijfelkopie die op de pc op jouw keuze wacht (twijfel.dart), onder de naam die het nummer hier heeft.
     final tw = d.twijfel;
     zetTwijfelVanPc(
@@ -3434,6 +3447,7 @@ class LibraryStore extends ChangeNotifier {
                 kwaliteit: '${tw['kwaliteit'] ?? ''}',
                 ext: '${tw['ext'] ?? 'flac'}',
                 soort: tw['soort'] is String ? tw['soort'] as String : null,
+                luid: tw['luid'] is Map ? Map<String, dynamic>.from(tw['luid'] as Map) : null,
               ));
     // Gelijk volume: de meting van de pc, onder dezelfde sleutel (grootte|tijd) als op de pc — het
     // Track hier krijgt die twee uit deze DTO. Zie luidheid_winkel.dart.

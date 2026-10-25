@@ -11,6 +11,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show ValueNotifier;
+
 import 'kopiesoort.dart';
 import 'soulseek.dart' show SoulseekFile;
 
@@ -133,6 +135,30 @@ class Soortvraag {
 
 String _sleutel(String pad) => pad.replaceAll('\\', '/').toLowerCase();
 
+// ── Wat een scherm leest: welke soort er voor een nummer gezocht wordt ─────────────────────────────────────────────
+// Op de pc gevuld door [Soortvragen], op een toestel door de catalogus ([zetSoortvraagVanPc]) — zoals twijfel.dart.
+// Saber, 25-10-2026: op de gsm en de Shield laten zien dat er al gezocht wordt, met "Stop met zoeken" erbij.
+
+final Map<String, Kopiesoort> _gezocht = {};
+
+/// Gaat omhoog bij elke wijziging: de catalogus en het label luisteren ernaar.
+final ValueNotifier<int> soortvraagUitgave = ValueNotifier<int>(0);
+
+/// Welke soort er voor het nummer op [pad] gezocht wordt, of null.
+Kopiesoort? gezochtVoor(String pad) => _gezocht[_sleutel(pad)];
+
+/// Wat de pc zegt, op een toestel. Null wist.
+void zetSoortvraagVanPc(String pad, Kopiesoort? soort) {
+  final k = _sleutel(pad);
+  if (_gezocht[k] == soort) return;
+  if (soort == null) {
+    _gezocht.remove(k);
+  } else {
+    _gezocht[k] = soort;
+  }
+  soortvraagUitgave.value++;
+}
+
 /// De staande vragen van de pc, op schijf. Eén per nummer: een nieuwe vraag voor hetzelfde nummer vervangt de vorige.
 class Soortvragen {
   Soortvragen(this._bestand);
@@ -142,16 +168,24 @@ class Soortvragen {
   Iterable<Soortvraag> get alle => _perPad.values;
   Soortvraag? van(String pad) => _perPad[_sleutel(pad)];
 
-  void zet(Soortvraag v) => _perPad[_sleutel(v.pad)] = v;
+  void zet(Soortvraag v) {
+    _perPad[_sleutel(v.pad)] = v;
+    _gezocht[_sleutel(v.pad)] = v.soort;
+    soortvraagUitgave.value++;
+  }
 
-  Soortvraag? verwijder(String pad) => _perPad.remove(_sleutel(pad));
+  Soortvraag? verwijder(String pad) {
+    final v = _perPad.remove(_sleutel(pad));
+    if (v != null && _gezocht.remove(_sleutel(pad)) != null) soortvraagUitgave.value++;
+    return v;
+  }
 
   /// Het nummer is verplaatst (een opwaardering met een andere extensie): de vraag gaat mee.
   void herNoem(String van, String naar) {
-    final v = _perPad.remove(_sleutel(van));
+    final v = verwijder(van);
     if (v == null) return;
     v.pad = naar;
-    _perPad[_sleutel(naar)] = v;
+    zet(v);
   }
 
   Future<void> laad() async {

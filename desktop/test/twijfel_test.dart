@@ -68,7 +68,7 @@ void main() {
     expect(twijfelVoor(pad), isNull);
 
     const opToestel = 'http://pc.invalid/stream/abc.flac';
-    zetTwijfelVanPc(opToestel, (id: 'x', bron: 'Soulseek a', score: 0.86, kwaliteit: 'FLAC 24/192', ext: 'flac', soort: null));
+    zetTwijfelVanPc(opToestel, (id: 'x', bron: 'Soulseek a', score: 0.86, kwaliteit: 'FLAC 24/192', ext: 'flac', soort: null, luid: null));
     expect(twijfelVoor(opToestel)?.id, 'x');
     zetTwijfelVanPc(opToestel, null);
     expect(twijfelVoor(opToestel), isNull);

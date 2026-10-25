@@ -64,6 +64,36 @@ void main() {
     });
   });
 
+  // 25-10-2026, 17:43: ook "Daft Punk Digital Love" (eerder 1002 bestanden) gaf 0 in 8,0 s — de server gaf onze vragen
+  // niet meer door na ~25 proefvragen in tien minuten — en daarna 0 in 0,0 s, zonder één regel in het logboek.
+  group('een zoekopdracht zonder antwoord laat een spoor na', () {
+    test('DE KERN: welke vraag, hoe lang, hoeveel op rij, en bij welk tempo', () {
+      final r = zoekZonderAntwoordRegel(
+          vraag: 'Daft Punk Digital Love', duur: const Duration(milliseconds: 8040), opRij: 4, zoekMinuut: 18, zoekVijf: 71);
+      expect(r, 'zoekopdracht "Daft Punk Digital Love": geen enkel antwoord in 8.0 s (4 op rij)'
+          ' — zoekopdrachten: 18 in de laatste minuut, 71 in 5 min');
+    });
+
+    test('één lege vraag heet niet "op rij", en achtergrondwerk staat erbij', () {
+      final r = zoekZonderAntwoordRegel(
+          vraag: 'x 24bit', duur: const Duration(seconds: 8), opRij: 1, zoekMinuut: 2, zoekVijf: 3, achtergrond: true);
+      expect(r, 'zoekopdracht "x 24bit" (achtergrond): geen enkel antwoord in 8.0 s'
+          ' — zoekopdrachten: 2 in de laatste minuut, 3 in 5 min');
+    });
+
+    test('aangesloten: leeg venster, niet ingelogd, en een mislukte login of zoekopdracht komen in het logboek', () {
+      final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final s = File('lib/soulseek.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(s, contains('    } else if (run.merged.isEmpty && fout == null) {\n'), reason: 'geen antwoord, ook geen niet-muziek');
+      expect(s, contains('      _zonderAntwoord++;\n'));
+      expect(s, contains('    } else if (run.merged.isNotEmpty) {\n'));
+      expect(s, contains('      _zonderAntwoord = 0;\n'));
+      expect(s, contains("        client.logboek('zoeken overgeslagen: niet ingelogd"));
+      expect(s, contains("      client.logboek('inloggen mislukte vóór een antwoord: \$e');"));
+      expect(online, contains('      client.logboek(\'zoeken "\${variants.last}" mislukte: \$e\');'));
+    });
+  });
+
   group('Relogged is een kick, ook na de eerste minuut', () {
     test('DE KERN: zegt de server het zelf, dan wacht de app in plaats van terug te vechten', () {
       final c = SoulseekClient();

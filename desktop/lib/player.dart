@@ -9,7 +9,7 @@ import 'groeistroom.dart' show Groeistroom, Groeiend;
 import 'kapot_bestand.dart' show waaromNietTeOpenen;
 import 'netsoort.dart' show heropenVoorStand;
 import 'lan/stroomstand.dart' show grensUitUrl;
-import 'luidheid.dart' show Bijstelbron, Bijstelling, adresSleutel;
+import 'luidheid.dart' show Bijstelbron, Bijstelling, Luidheidsmeting, abVersterking, adresSleutel;
 import 'models.dart';
 import 'paths.dart';
 import 'schudvolgorde.dart';
@@ -2417,6 +2417,9 @@ class PlayerStore extends ChangeNotifier
 
   ({String pad, String adres})? _vergelijk;
 
+  /// Wat A kreeg toen B begon: terug naar A is weer precies dat (eerlijk A/B, [abVersterking]).
+  Bijstelling? _abA;
+
   /// Het bestand van het spelende nummer is losgelaten ([laatBestandLos]): niets heeft het nu open.
   bool get losgelaten => _losgelaten && current?.path == _losVoor;
   bool _losgelaten = false;
@@ -2426,12 +2429,22 @@ class PlayerStore extends ChangeNotifier
   /// studio-, cd- of vinylkopie (op de pc een pad, op een toestel `/kandidaat/` op de pc) — of met null weer op het
   /// nummer zelf (A). Op dezelfde seconde, spelend als het speelde. Niet als een speaker de muziek heeft: die speelt
   /// zijn eigen rij. Geeft terug of het lukte.
-  Future<bool> vergelijk(String? adres) async {
+  ///
+  /// [meting]: de luidheid van B (de pc meet hem bij het klaarzetten). Dan krijgt B zoveel versterking dat hij even
+  /// luid klinkt als A nu — anders hoor je bij A/B vooral welke harder staat ([abVersterking]).
+  Future<bool> vergelijk(String? adres, {Luidheidsmeting? meting}) async {
     final t = current;
     if (t == null || _bijSpeaker != null) return false;
+    final wasB = vergelijkBron != null;
+    final lopend = luidheidToegepast ?? Bijstelling(_luidheidGezet.isNaN ? 0 : _luidheidGezet, Bijstelbron.nummer);
+    if (!wasB) _abA = lopend;
+    final a = _abA ?? lopend;
+    final b = adres == null ? a : abVersterking(a, meting);
     _vergelijk = adres == null ? null : (pad: t.path, adres: adres);
-    _log?.line('A/B: ${adres == null ? 'A (het nummer zelf)' : 'B ($adres)'} op $position — ${t.title}');
-    await _openOpZelfdePlek(t, adres ?? t.path, plek: position, spelen: playing);
+    if (adres == null) _abA = null;
+    _log?.line('A/B: ${adres == null ? 'A (het nummer zelf)' : 'B ($adres)'} op $position, '
+        '${b.db.toStringAsFixed(1)} dB — ${t.title}');
+    await _openOpZelfdePlek(t, adres ?? t.path, plek: position, spelen: playing, luidheid: b);
     return true;
   }
 
@@ -2467,10 +2480,12 @@ class PlayerStore extends ChangeNotifier
 
   /// [t] opnieuw open met de bron [pad], op [plek]: gelijk volume zoals het liep (zelfde nummer), en springen pas als
   /// het bestand echt loopt — zie [_hervatOpDezelfdePlek] voor waarom.
-  Future<void> _openOpZelfdePlek(Track t, String pad, {required Duration plek, required bool spelen}) async {
+  Future<void> _openOpZelfdePlek(Track t, String pad,
+      {required Duration plek, required bool spelen, Bijstelling? luidheid}) async {
     try {
       final bron = _bron(pad);
-      final lopend = luidheidToegepast ?? Bijstelling(_luidheidGezet.isNaN ? 0 : _luidheidGezet, Bijstelbron.nummer);
+      final lopend =
+          luidheid ?? luidheidToegepast ?? Bijstelling(_luidheidGezet.isNaN ? 0 : _luidheidGezet, Bijstelbron.nummer);
       _onthoudLuidheid(bron, lopend, t.title);
       await _player.open(Media(bron), play: spelen);
       notifyListeners();
@@ -2861,6 +2876,7 @@ class PlayerStore extends ChangeNotifier
     if (t == null) return;
     // Een nieuw nummer: geen A/B meer ([vergelijk]), en niets losgelaten ([laatBestandLos]).
     _vergelijk = null;
+    _abA = null;
     _losgelaten = false;
     // Een nieuw nummer verdient zijn eigen geduld: de klacht van het vorige zegt niets over dit.
     _wacht.reset();

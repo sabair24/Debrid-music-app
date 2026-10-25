@@ -12,6 +12,7 @@ import '../organize.dart';
 import '../vaste_keuze.dart';
 import '../twijfel.dart' show twijfelUitgave, twijfelVoor;
 import '../kopiesoort.dart' show KopiesoortTekst, soortUitgave, soortVoor;
+import '../soortjacht.dart' show gezochtVoor, soortvraagUitgave;
 import 'dtos.dart';
 import 'ids.dart';
 
@@ -86,6 +87,8 @@ class LanCatalog {
     twijfelUitgave.addListener(_markDirty);
     // Net zo: studio, cd of vinyl (kopiesoort.dart).
     soortUitgave.addListener(_markDirty);
+    // En wat de pc nog zoekt (soortjacht.dart).
+    soortvraagUitgave.addListener(_markDirty);
   }
 
   final LibraryStore library;
@@ -141,6 +144,7 @@ class LanCatalog {
     luidheidUitgave.removeListener(_markDirty);
     twijfelUitgave.removeListener(_markDirty);
     soortUitgave.removeListener(_markDirty);
+    soortvraagUitgave.removeListener(_markDirty);
   }
 
   CatalogSnapshot snapshot() {
@@ -288,6 +292,7 @@ class LanCatalog {
                 'kwaliteit': i.kwaliteit,
                 'ext': i.ext,
                 if (i.soort != null) 'soort': i.soort,
+                if (i.luid != null) 'luid': i.luid,
               },
             null => null,
           },
@@ -299,6 +304,7 @@ class LanCatalog {
           // Studio, cd of vinyl, en of je die zelf koos (kopiesoort.dart). Telt mee in de vingerafdruk hieronder.
           soort: soortVoor(t.path)?.soort.naam,
           soortGekozen: soortVoor(t.path)?.gekozen ?? false,
+          zoekt: gezochtVoor(t.path)?.naam,
         ));
       }
     }
@@ -388,6 +394,7 @@ class LanCatalog {
         ..add(t.rij ?? '');
       if (t.twijfel != null) fingerprint.add('T${t.twijfel!['id']}');
       if (t.soort != null) fingerprint.add('S${t.soort}${t.soortGekozen ? '!' : ''}');
+      if (t.zoekt != null) fingerprint.add('Z${t.zoekt}');
       // De luidheid alleen als hij er is: een bibliotheek zonder metingen (of een pc zonder winkel,
       // zoals in de toetsen) houdt dan exact dezelfde ETag als vóór deze functie.
       if (t.luid != null) fingerprint.add('L${jsonEncode(t.luid)}');

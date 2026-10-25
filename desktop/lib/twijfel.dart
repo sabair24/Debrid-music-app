@@ -55,7 +55,16 @@ Opnameoordeel opnameOordeel(double? score) => score == null
 
 /// Wat een toestel en de albumpagina over een twijfelgeval weten. Geen pad: dat blijft op de pc. [soort]: een kopie
 /// die je zelf vroeg ("studio", "cd", "vinyl"), null voor een twijfelgeval van de app.
-typedef TwijfelInfo = ({String id, String bron, double score, String kwaliteit, String ext, String? soort});
+/// [luid]: de luidheid van de kopie ([Luidheidsmeting.toJson]), voor een eerlijke A/B; null als hij niet gemeten is.
+typedef TwijfelInfo = ({
+  String id,
+  String bron,
+  double score,
+  String kwaliteit,
+  String ext,
+  String? soort,
+  Map<String, dynamic>? luid,
+});
 
 /// Moet er bij deze klaargezette kopie "misschien een andere opname" staan? Ja onder [maybeSameRecordingScore] — en
 /// ook zonder meting (score 0: geen fpcalc), want dan is er niets nagekeken.
@@ -95,6 +104,9 @@ class Twijfelgeval {
   /// Waar hij vandaan kwam als pad (bij de uploader, in de torrent): wat hem tot vinyl maakt ([kopiesoortVan]).
   final String? bronpad;
 
+  /// De luidheid van de kopie (`Luidheidsmeting.toJson`), gemeten bij het klaarzetten: A/B even luid.
+  final Map<String, dynamic>? luid;
+
   const Twijfelgeval({
     required this.id,
     required this.pad,
@@ -107,6 +119,7 @@ class Twijfelgeval {
     this.gezag,
     this.soort,
     this.bronpad,
+    this.luid,
   });
 
   /// Je vroeg hem zelf (klaargezet), en hij is dus geen twijfel van de app.
@@ -118,7 +131,8 @@ class Twijfelgeval {
     return punt < 0 ? 'flac' : naam.substring(punt + 1).toLowerCase();
   }
 
-  TwijfelInfo get info => (id: id, bron: bron, score: score, kwaliteit: kwaliteit, ext: ext, soort: soort?.naam);
+  TwijfelInfo get info =>
+      (id: id, bron: bron, score: score, kwaliteit: kwaliteit, ext: ext, soort: soort?.naam, luid: luid);
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -132,6 +146,7 @@ class Twijfelgeval {
         if (gezag != null) 'gezag': gezag,
         if (soort != null) 'soort': soort!.naam,
         if (bronpad != null) 'bronpad': bronpad,
+        if (luid != null) 'luid': luid,
       };
 
   static Twijfelgeval? fromJson(Object? j) {
@@ -150,6 +165,7 @@ class Twijfelgeval {
       gezag: j['gezag'] is Map ? Map<String, dynamic>.from(j['gezag'] as Map) : null,
       soort: kopiesoortUit(j['soort']),
       bronpad: j['bronpad'] is String ? j['bronpad'] as String : null,
+      luid: j['luid'] is Map ? Map<String, dynamic>.from(j['luid'] as Map) : null,
     );
   }
 }

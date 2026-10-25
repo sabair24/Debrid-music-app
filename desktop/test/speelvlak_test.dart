@@ -113,7 +113,10 @@ void main() {
       final begin = main.indexOf('KeyEventResult _omhoogNaarHoes(');
       final lijf = main.substring(begin, main.indexOf('\n  }\n', begin));
       expect(lijf, contains('if (!_naastOpTv || e.logicalKey != LogicalKeyboardKey.arrowUp) return KeyEventResult.ignored;'));
-      expect(lijf, contains('_hoesKnop.requestFocus();'));
+      // Sinds 25-10-2026 eerst naar de A/B-strook als die er is (een klaargezette kopie), anders de hoes.
+      expect(lijf, contains('final doel = _abKnop.context != null && _abKnop.canRequestFocus ? _abKnop : _hoesKnop;'));
+      expect(lijf, contains('doel.requestFocus();'));
+      expect(main, contains('_AbRegel(track: t!, info: tw, midden: !zij, focusA: _abKnop)'));
       expect(main, contains('        onKeyEvent: (_, e) => _omhoogNaarHoes(e),\n        child: Align('));
     });
 
