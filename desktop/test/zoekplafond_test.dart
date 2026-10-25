@@ -32,6 +32,16 @@ void main() {
       expect(albumZoekvraag('Live', 'V'), 'Live V');
       expect(albumZoekvraag('Live', 'V', jaar: 0), 'Live V');
     });
+
+    // Saber, 25-10-2026: "weinig voor zo bekend te zijn" — "Jonas Brothers Jonas Brothers" is voor Soulseek alleen de
+    // artiest, alle nummers van al hun platen.
+    test('een titelplaat krijgt het jaar erbij; een titel met een eigen woord niet', () {
+      expect(albumZoekvraag('Jonas Brothers', 'Jonas Brothers', jaar: 2007), 'Jonas Brothers Jonas Brothers 2007');
+      expect(albumZoekvraag('Weezer', 'Weezer', jaar: 1994), 'Weezer Weezer 1994');
+      expect(albumZoekvraag('The Weeknd', 'The Highlights', jaar: 2021), 'The Weeknd The Highlights');
+      expect(albumZoekvraag('Jonas Brothers', 'Jonas Brothers'), 'Jonas Brothers Jonas Brothers',
+          reason: 'zonder jaar zoals het was');
+    });
   });
 
   group('beperkZoekuitslag', () {
@@ -99,7 +109,7 @@ void main() {
     expect(online, contains('return beperkZoekuitslag(query, samen);'));
     expect(online, contains('onPartial(beperkZoekuitslag(query, p))'));
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
-    expect(main, contains('soulseek.search(_albumVraag, onPartial:'));
+    expect(main, contains('soulseek.search(_albumVraag, nogNodig: () => mounted, onPartial:'));
     expect(main, contains('SourcesView(query: _albumVraag, authority: _release)'));
     expect(main, contains('soulseek.search(albumZoekvraag(album.artist, album.title, jaar: album.year))'));
     expect(main, contains("SourcesView(query: albumZoekvraag(widget.name, w.title, jaar: int.tryParse(w.year ?? '')))"));

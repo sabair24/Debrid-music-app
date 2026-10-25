@@ -25185,7 +25185,7 @@ class _SourcesViewState extends State<SourcesView> {
       });
     }
     if (soulseek.available) {
-      soulseek.search(widget.query, gebruikteVraag: (v) {
+      soulseek.search(widget.query, nogNodig: () => mounted, gebruikteVraag: (v) {
         // Zodra er op een ruimere trede gezocht wordt, gaat deze lijst over een ándere vraag dan je
         // stelde. Dat hoort erbij te staan — zie [zoekLadder].
         if (mounted && v != _gezochtOp) setState(() => _gezochtOp = v);
@@ -25241,11 +25241,18 @@ class _SourcesViewState extends State<SourcesView> {
   /// Het geheugen van één: zie [_SlskKlaar]. Zonder dit werd er bij elke tik en elk deelresultaat
   /// opnieuw gefilterd, gerangschikt en gegroepeerd over duizenden bestanden.
   _SlskKlaar? _klaar;
+
+  /// De lengte waarmee [_klaar] rekende. Verandert hij (er kwamen genoeg kopieën binnen voor [lengteVanDeMeerderheid]),
+  /// dan geldt het geheugen van de rangen niet meer: daar zit "past" in.
+  int? _bronLengte;
+
   _SlskKlaar get _bronnen {
     final k = _klaar;
     if (k != null && k.geldigVoor(_slsk, _filter, null)) return k;
-    return _klaar = _SlskKlaar.van(_slsk, _filter,
-        past: _pastBijNummer, hergebruik: k?.hergebruikVoor(_slsk, null));
+    final (past, lengte) = _pastBijNummer;
+    final zelfde = lengte == _bronLengte;
+    _bronLengte = lengte;
+    return _klaar = _SlskKlaar.van(_slsk, _filter, past: past, hergebruik: zelfde ? k?.hergebruikVoor(_slsk, null) : null);
   }
 
   /// Of een aangeboden bestand bewijsbaar het nummer is dat onder deze lijst hangt.
@@ -25254,10 +25261,16 @@ class _SourcesViewState extends State<SourcesView> {
   /// zijn versie-aanduiding, en de officiële looptijd. [fileOffersTitle] neemt de MAP van de peer
   /// als bewijs mee — zie [versieVolgtUitMap] — en dat is precies waarom "Fields of Gold (My Songs
   /// Version)" nu wél te vinden is in een map die "My Songs" heet.
-  bool Function(SoulseekFile)? get _pastBijNummer {
+  ///
+  /// De lengte is die van de uitgave, tenzij de kopieën het duidelijk oneens zijn ([lengteVanDeMeerderheid]): bij
+  /// "Kids Of The Future" zei de uitgave 2:55 en stonden de echte FLAC's van 3:19 onder de mp3's.
+  (bool Function(SoulseekFile)?, int?) get _pastBijNummer {
     final a = widget.authority, t = widget.track;
-    if (a == null || t == null) return null;
-    return (f) => fileOffersTitle(t.title, t.seconds, a.artist, f.filename, f.durationSec);
+    if (a == null || t == null) return (null, null);
+    final metTitel = Set<SoulseekFile>.identity()
+      ..addAll(_slsk.where((f) => fileOffersTitle(t.title, null, a.artist, f.filename, null)));
+    final lengte = lengteVanDeMeerderheid(metTitel, t.seconds) ?? t.seconds;
+    return ((f) => metTitel.contains(f) && binnenLengteMarge(lengte, f.durationSec), lengte);
   }
 
   @override
@@ -26485,7 +26498,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     _slskRem.herbegin();
     _torrentRem.herbegin();
     if (soulseek.available) {
-      soulseek.search(q, gebruikteVraag: (v) {
+      soulseek.search(q, nogNodig: geldig, gebruikteVraag: (v) {
         if (!geldig()) return;
         ZoekGeheugen.gezochtDirect = v;
         if (mounted && v != _gezochtDirect) setState(() => _gezochtDirect = v);
@@ -31801,7 +31814,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     if (!soulseek.available) return;
     setState(() => _slskBusy = true);
     try {
-      final r = await soulseek.search(_albumVraag, onPartial: (p) {
+      // Ga je weg voor hij uitging (hij wacht soms op de zoekrem), dan gaat hij niet meer uit — zie [Zoekrem.neem].
+      final r = await soulseek.search(_albumVraag, nogNodig: () => mounted, onPartial: (p) {
         if (mounted) setState(() => _albumSlsk = p);
       });
       if (mounted) setState(() { _albumSlsk = r; _slskBusy = false; });

@@ -75,9 +75,15 @@ bool _telt(String w) => w.length > 1;
 /// De vraag waarmee een hele plaat gezocht wordt: artiest en titel, en het jaar als de titel zelf
 /// niets zegt. "V", "X" of "4" zijn voor Soulseek geen woord; zonder jaar blijft alleen de artiest
 /// over, en bij een artiest als Live is dat elke live-opname ter wereld.
+///
+/// Net zo een titelplaat: "Jonas Brothers Jonas Brothers" is voor Soulseek gewoon "Jonas Brothers", alle nummers van al
+/// hun platen. Het venster sluit na de eerste paar honderd bestanden, en op de albumpagina had "S.O.S." er 129 en de
+/// rest 16 tot 19 (Saber, 25-10-2026: "weinig voor zo bekend te zijn"). Een titel telt dus alleen met een woord dat niet
+/// al in de artiestnaam staat.
 String albumZoekvraag(String artiest, String album, {int? jaar}) {
   final basis = '$artiest $album'.trim().replaceAll(RegExp(r'\s+'), ' ');
-  final titelTelt = album.toLowerCase().split(_scheiding).any(_telt);
+  final vanArtiest = artiest.toLowerCase().split(_scheiding).toSet();
+  final titelTelt = album.toLowerCase().split(_scheiding).any((w) => _telt(w) && !vanArtiest.contains(w));
   if (titelTelt || jaar == null || jaar < 1000) return basis;
   return '$basis $jaar';
 }

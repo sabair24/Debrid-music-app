@@ -85,9 +85,9 @@ void main() {
       final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
       final s = File('lib/soulseek.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(s, contains('    } else if (run.merged.isEmpty && fout == null) {\n'), reason: 'geen antwoord, ook geen niet-muziek');
-      expect(s, contains('      _zonderAntwoord++;\n'));
+      expect(s, contains('      final omslag = client.noteerZoekuitslag(antwoord: false);\n'));
       expect(s, contains('    } else if (run.merged.isNotEmpty) {\n'));
-      expect(s, contains('      _zonderAntwoord = 0;\n'));
+      expect(s, contains('      final omslag = client.noteerZoekuitslag(antwoord: true);\n'));
       expect(s, contains("        client.logboek('zoeken overgeslagen: niet ingelogd"));
       expect(s, contains("      client.logboek('inloggen mislukte vóór een antwoord: \$e');"));
       expect(online, contains('      client.logboek(\'zoeken "\${variants.last}" mislukte: \$e\');'));
