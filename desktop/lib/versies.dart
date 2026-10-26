@@ -93,7 +93,11 @@ String persingUit(String bronpad, {Kopiesoort? soort}) {
     // Bij vinyl zegt het jaar welke persing het is ("LP 1996" tegen "LP 2016 Reissue"). Uit de map waar het vinylteken
     // staat, anders de albummap (de laatste).
     final metTeken = delen.lastWhere(isVinylRip, orElse: () => delen.isEmpty ? '' : delen.last);
-    final j = _jaar.firstMatch(metTeken);
+    // Een torrentnaam met "/" erin ("RnB/Swing", "24/192") valt in stukken: dan het jaar uit de stukken erna — niet
+    // uit de mappen ervóór ("D:\Flac music 2024" is geen persing, gezien 26-10-2026).
+    final na = delen.indexOf(metTeken);
+    final j = _jaar.firstMatch(metTeken) ??
+        (na < 0 ? null : _jaar.firstMatch(delen.skip(na + 1).join(' / ')));
     if (j != null) uit.add(j.group(0)!);
   }
   for (final (patroon, naam) in _merken) {

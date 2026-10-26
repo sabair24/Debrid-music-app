@@ -52,7 +52,7 @@ import 'luidheid_veger.dart' show meetLuidheid;
 import 'soortjacht.dart';
 import 'vinyl.dart' show isVinylRip, vinylAchteraan;
 import 'versie_opbergen.dart';
-import 'versies.dart' show VersieBereik, versieLabel, versies;
+import 'versies.dart' show VersieBereik, versieLabel, versieMapLabel, versies;
 import 'wav_naar_flac.dart' show wavNaarFlac;
 import 'tidaler.dart' show Tidaler, haalVanTidal, kTidalRadioPerUur, kiesTidalTreffers, zoekOpTidal;
 import 'torbox_stand.dart';
@@ -3330,7 +3330,9 @@ class DownloadManager extends ChangeNotifier {
           // download bergt het op als het klaar is. Zie [_inAanmaak].
           slaOver: _inAanmaak.contains,
           keur: _keurVoorBibliotheek,
-          alGehad: _alGehadOnderAndereTitel);
+          alGehad: _alGehadOnderAndereTitel,
+          // Een vinylrip naast je cd (versies.dart): erbij, niet in de plaats.
+          alsVersie: _torrentAlsVersie);
       _log.line('torrent "$naam" gekeurd en opgeborgen: $r');
       for (final p in r.tegengehouden) {
         _log.line('torrent "$naam": ${p.split(Platform.pathSeparator).last} — ${r.uitkomst[p]}');
@@ -4332,6 +4334,9 @@ class DownloadManager extends ChangeNotifier {
     if (plan != null && plan.isVersie && opname == Opnameoordeel.zelfde) {
       final uit = await _bergOpAlsVersie(staged, plan, w.authority, bron, inJacht: inJacht);
       if (uit != null) return uit;
+      // Als versie bewaren lukte niet: dan ook niet alsnog in de plaats van je nummer (een vinylrip vervangt geen cd).
+      await _discardStaged(staged.path);
+      return _Wenskeuring.afgewezen;
     }
     if (alleenAlsVersie) {
       _log.line('   $bron: andere uitgave (${lengte}s tegen ${w.authority?.seconds}s, en geen andere versie dan wat je hebt) — '
@@ -4407,6 +4412,37 @@ class DownloadManager extends ChangeNotifier {
       await onLibraryChanged();
     } catch (_) {}
     return uit.werdAnker ? _Wenskeuring.opgeborgen : _Wenskeuring.alsVersie;
+  }
+
+  /// Een bestand uit een torrent die je zelf koos, dat een andere versie is van [bestaand] (versies.dart): als versie
+  /// bewaren in plaats van vervangen of naar _dubbel. Alleen bij dezelfde opname (de vingerafdruk). Null: geen versie.
+  Future<String?> _torrentAlsVersie(File f, String bestaand) async {
+    var score = await _opnameScore(f.path, bestaand);
+    if (isVinylRip(f.path) && score != null && score < maybeSameRecordingScore) {
+      score = await _opnameScoreRuim(f.path, bestaand) ?? score;
+    }
+    if (opnameOordeel(score) != Opnameoordeel.zelfde) return null;
+    var plan = versieplanVoor(f, bestaand, f.path);
+    if (!plan.isVersie) return null;
+    if (plan.besluit == Versiebesluit.ankerOpzij &&
+        (!firstIsBetter(f, File(bestaand)) || !magVanzelf(bestaand, plan.soort))) {
+      plan = plan.als(Versiebesluit.nieuweVersie);
+    }
+    final tags = readTags(f);
+    final uit = await bergOpAlsVersie(f, plan, root: _downloadsRoot, tags: tags, laatVerliezerStaan: true);
+    if (uit == null) return null;
+    final naam = '${tags?.artist ?? ''} — ${tags?.title ?? baseName(f.path)}';
+    if (uit.verloor) {
+      // Van jou (je koos de torrent): opzij, niet weg.
+      try {
+        await parkeer(f, '$_downloadsRoot${Platform.pathSeparator}$parkeerMap${Platform.pathSeparator}$parkeerBinnenkomer');
+      } catch (_) {}
+      _log.line('"$naam": torrent — dezelfde versie als die je al had, en niet beter; kopie in $parkeerMap');
+      return 'dezelfde versie als die je al had, en niet beter — kopie in $parkeerMap';
+    }
+    final label = versieMapLabel(plan.soort!, plan.persing);
+    _log.line('"$naam": torrent — ${uit.werdAnker ? 'nu het nummer, je vorige kopie bleef als versie' : 'bewaard als versie ($label)'}');
+    return uit.werdAnker ? 'opgeborgen — je vorige kopie bleef als versie' : 'bewaard als versie ($label)';
   }
 
   /// Zoals [_opnameScore], maar met tot vijftien seconden schuiven in plaats van vier: een vinylrip begint vaak met de
@@ -6339,8 +6375,10 @@ class DownloadManager extends ChangeNotifier {
                 settle('kwaliteit verbeterd · ${f.username}');
                 return;
               }
-              // Bewaard als versie, of dezelfde versie als er al een is: de jacht op het nummer zelf gaat door.
-              if (uitslag != null) continue;
+              // Bewaard als versie, of dezelfde versie als er al een is: de jacht op het nummer zelf gaat door. Lukte het
+              // niet, dan ook niet alsnog in de plaats van je nummer.
+              if (uitslag == null) await _discardStaged(staged.path);
+              continue;
             }
             // The SAME authority as the first landing. Without it the sweep would quietly undo the
             // numbering a quarter of an hour later, using whatever this new peer's tags happen to say.

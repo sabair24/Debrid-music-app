@@ -46,6 +46,17 @@ void main() {
     }
   });
 
+  // 26-10-2026 (versies): na het opbergen staat de bron nergens meer, maar de tags van de ripper blijven.
+  test('een vinylrip aan zijn tags: MEDIA=Vinyl, het element in COMMENT', () {
+    expect(vinylUitTags({'media': 'Vinyl (LP,Album)'}), isTrue, reason: 'Patricia Kaas');
+    expect(vinylUitTags({'comment': 'AT150ANV', 'originator': 'iZotope RX 2'}), isTrue, reason: 'Toto IV van PBTHAL');
+    expect(vinylUitTags({'comment': 'Ortofon 2M Blue, Technics SL-1200'}), isTrue);
+    expect(vinylUitTags({'comment': 'Exact Audio Copy V1.6', 'encodedby': 'dBpoweramp Release 16.1'}), isFalse);
+    expect(vinylUitTags({'comment': 'Ripped at 320 kbps'}), isFalse);
+    expect(vinylUitTags({'album': 'Vinyl Days', 'title': 'Vinyl'}), isFalse, reason: 'een naam is geen bron');
+    expect(vinylUitTags({'originator': 'iZotope RX 2'}), isFalse, reason: 'RX alleen is ook gewone restauratie');
+  });
+
   // Sinds 25-10-2026 mag vinyl opwaarderen (Saber: "ik mis wel heel veel goede kwaliteit liedjes door vinyl en lp weg
   // te laten oor, laat ze toch maar door"), maar na elke digitale kopie.
   test('vinyl mag opwaarderen, maar een digitale kopie gaat voor', () {

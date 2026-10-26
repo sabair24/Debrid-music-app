@@ -2392,6 +2392,7 @@ Future<void> main() async {
           nummerVan: (a, t, {int? seconden}) => library.fileOfRecording(a, t, seconds: seconden),
           klaar: library.scan,
           bestand: '$appDir${Platform.pathSeparator}versies_dubbel.json',
+          logboek: '$logDir${Platform.pathSeparator}downloads.log',
           log: versieLog);
       Timer(const Duration(minutes: 10), () => unawaited(terug.ronde()));
     }

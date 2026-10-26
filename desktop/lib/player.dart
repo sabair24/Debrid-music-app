@@ -2670,13 +2670,18 @@ class PlayerStore extends ChangeNotifier
         await n.setProperty('replaygain-fallback', luid.db.toStringAsFixed(2));
       }
       await proef.setVolume(0);
+      final url = mediaResolver(naar.track.path);
+      // Onderweg zet de pc het nummer eerst helemaal om (lan/transcode.dart): dan duurt het even voor het speelt, en de
+      // eerste speler loopt intussen gewoon door. Zo ver vooruit openen helpt dan niet; bijschuiven hieronder wel.
+      final omzetten = grensUitUrl(url) != null;
       const voor = Duration(milliseconds: 400);
-      await proef.open(Media(mediaResolver(naar.track.path), start: Duration(milliseconds: naarPlek(position + voor))),
-          play: true);
-      // Wachten tot hij echt loopt (een stroom van de pc kan even duren).
-      for (var i = 0; i < 100 && (!proef.state.playing || proef.state.position <= Duration.zero); i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+      await proef.open(Media(url, start: Duration(milliseconds: naarPlek(position + voor))), play: true);
+      // Wachten tot hij echt loopt (een stroom van de pc kan even duren, omgezet nog langer).
+      final tot = DateTime.now().add(omzetten ? const Duration(seconds: 25) : const Duration(seconds: 8));
+      while (!proef.state.playing || proef.state.position <= Duration.zero) {
         if (gen != _versieWissel || current?.path != t.path) throw const _WisselGestopt();
+        if (DateTime.now().isAfter(tot)) throw StateError('de nieuwe versie begon niet');
+        await Future<void>.delayed(const Duration(milliseconds: 30));
       }
       // 2. Gelijk laten lopen: hooguit drie keer bijschuiven.
       for (var poging = 0; poging < 3; poging++) {
@@ -2701,8 +2706,19 @@ class PlayerStore extends ChangeNotifier
       _onthoudLuidheid(bron, luid, t.title);
       luidheidNu = luid;
       await _player.open(Media(bron, start: proef.state.position + voor), play: true);
-      for (var i = 0; i < 100 && (!playing || position <= Duration.zero); i++) {
+      final hoofdTot = DateTime.now().add(omzetten ? const Duration(seconds: 25) : const Duration(seconds: 8));
+      while ((!playing || position <= Duration.zero) && DateTime.now().isBefore(hoofdTot)) {
         await Future<void>.delayed(const Duration(milliseconds: 30));
+      }
+      if (!playing) {
+        // De eerste speler kwam niet op gang: dan zelf op de plek van de tweede verder, en die stil.
+        final plek = proef.state.position;
+        await _player.setVolume(_gedempt ? _volume * 0.25 : _volume);
+        await proef.stop();
+        await _openOpZelfdePlek(t, t.path, plek: plek, spelen: true, luidheid: luid);
+        _log?.line('VERSIE: de eerste speler kwam niet op gang — opnieuw geopend op ${plek.inMilliseconds} ms');
+        notifyListeners();
+        return true;
       }
       for (var poging = 0; poging < 3; poging++) {
         final verschil = position.inMilliseconds - proef.state.position.inMilliseconds;

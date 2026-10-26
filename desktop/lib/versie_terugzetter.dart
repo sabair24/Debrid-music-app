@@ -20,9 +20,12 @@ import 'dart:io';
 import 'audioformaten.dart' show isVerliesvrij, soortVan;
 import 'echtheid_oordelen.dart' show gemeten;
 import 'fingerprint.dart';
-import 'kopiesoort.dart' show Kopiesoort;
+import 'flac_tags.dart' show readFlacTags;
+import 'vinyl.dart' show isVinylRip;
+import 'kopiesoort.dart' show Kopiesoort, soortVoor, zetSoort;
 import 'organize.dart' show TrackTags, parkeerAfgekeurd, parkeerMap, readTags;
 import 'versie_opbergen.dart';
+import 'versies.dart' show soortRang;
 import 'warm_log.dart';
 
 /// Wat de ronde deed.
@@ -35,8 +38,56 @@ class VersieTerugzetter {
     required this.klaar,
     required this.bestand,
     this.log,
+    this.droog = false,
+    this.bijBesluit,
+    this.logboek,
     Fingerprinter? vingerafdruk,
   }) : _fp = vingerafdruk ?? Fingerprinter();
+
+  /// Alleen kijken: zeggen wat er zou gebeuren, niets verplaatsen en niets onthouden (meten vóór het echt gebeurt).
+  final bool droog;
+
+  /// Per bestand wat er (zou) gebeuren.
+  final void Function(String pad, String besluit)? bijBesluit;
+
+  /// downloads.log: wat daar nog staat over een torrent die een nummer verving ([vinylUitLogboek]).
+  final String? logboek;
+
+  static final _vervangenDoorTorrent = RegExp(r'"(.+?) — (.+?)": vervangen door de kopie uit torrent "(.+)"\s*$');
+  static final _diepteInNaam = RegExp(r'\b(16|24|32)[\s/_-]+(44|48|88|96|176|192|352|384)\b');
+
+  /// Vandaag (26-10-2026) vervingen torrents cd's door vinylrips met alleen "[LP]" in hun naam, en dat herkende de app
+  /// toen niet als vinyl. Wat [logboek] daarover nog weet, wordt alsnog onthouden — maar alleen als het bestand nog
+  /// dezelfde diepte en frequentie heeft (anders werd het sindsdien vervangen), en nooit over een soort die je zelf
+  /// koos. Geeft het aantal.
+  int vinylUitLogboek() {
+    final pad = logboek;
+    if (pad == null) return 0;
+    var n = 0;
+    try {
+      final f = File(pad);
+      if (!f.existsSync()) return 0;
+      for (final regel in f.readAsLinesSync()) {
+        final m = _vervangenDoorTorrent.firstMatch(regel);
+        if (m == null || !isVinylRip(m.group(3)!)) continue;
+        final anker = nummerVan(m.group(1)!, m.group(2)!);
+        if (anker == null || !File(anker).existsSync()) continue;
+        final nu = soortVoor(anker);
+        if (nu?.gekozen == true || nu?.soort == Kopiesoort.vinyl) continue;
+        final d = _diepteInNaam.firstMatch(m.group(3)!);
+        if (d != null) {
+          final kop = readFlacTags(File(anker));
+          final hz = int.parse(d.group(2)!);
+          final kHz = (kop?.sampleRate ?? 0) ~/ 1000;
+          if (kop == null || kop.bitsPerSample != int.parse(d.group(1)!) || kHz != hz) continue;
+        }
+        if (!droog) zetSoort(anker, Kopiesoort.vinyl);
+        n++;
+        log?.line('vinyl alsnog herkend uit downloads.log: ${m.group(1)} — ${m.group(2)} (${m.group(3)})');
+      }
+    } catch (_) {}
+    return n;
+  }
 
   /// De muziekmap (waar `_dubbel` in staat).
   final String wortel;
@@ -83,6 +134,7 @@ class VersieTerugzetter {
       final sep = Platform.pathSeparator;
       final dubbel = Directory('$wortel$sep$parkeerMap');
       if (!await dubbel.exists()) return (bekeken: 0, versies: 0, nummers: 0, bleven: 0);
+      vinylUitLogboek();
       final gedaan = await _gedaan();
       final kapot = '$sep$parkeerAfgekeurd$sep'.toLowerCase();
       final bestanden = <File>[
@@ -93,6 +145,17 @@ class VersieTerugzetter {
       for (final f in bestanden) {
         bekeken++;
         final uit = await _kijk(f);
+        bijBesluit?.call(f.path, uit);
+        if (droog) {
+          if (!uit.startsWith('zou ')) {
+            bleven++;
+          } else if (uit.startsWith('zou het nummer')) {
+            alsNummer++;
+          } else {
+            alsVersie++;
+          }
+          continue;
+        }
         gedaan.add(f.path);
         switch (uit) {
           case 'versie':
@@ -104,8 +167,8 @@ class VersieTerugzetter {
         }
         if (bekeken % 20 == 0) await _bewaar(gedaan);
       }
-      await _bewaar(gedaan);
-      if (alsVersie + alsNummer > 0) await klaar();
+      if (!droog) await _bewaar(gedaan);
+      if (!droog && alsVersie + alsNummer > 0) await klaar();
       log?.line('_dubbel nagekeken: $bekeken bekeken, $alsVersie als versie terug, $alsNummer weer het nummer, '
           '$bleven bleven staan');
       return (bekeken: bekeken, versies: alsVersie, nummers: alsNummer, bleven: bleven);
@@ -128,11 +191,18 @@ class VersieTerugzetter {
       if (a == null || b == null || a.raw.isEmpty || b.raw.isEmpty) return 'geen vingerafdruk';
       final score = similarity(a.raw, b.raw, maxOffset: 120);
       if (score < maybeSameRecordingScore) return 'andere opname (${score.toStringAsFixed(2)})';
-      var plan = versieplanVoor(f, anker, f.path);
+      // Alleen de bestandsnaam als bron: de mappen erboven ("D:\Flac music 2024\…\_dubbel") zeggen niets over de persing.
+      var plan = versieplanVoor(f, anker, f.uri.pathSegments.last);
       if (!plan.isVersie) return 'dezelfde versie';
-      // Het nummer opzij alleen voor een vinylrip als nummer (studio > cd > vinyl); verder alleen erbij.
-      if (plan.besluit == Versiebesluit.ankerOpzij && plan.ankerSoort != Kopiesoort.vinyl) {
-        plan = plan.als(Versiebesluit.nieuweVersie);
+      // Wie hoger staat dan het nummer en tóch in _dubbel belandde, verloor met een reden — een "studiokopie" die van een
+      // cd verloor, was opgeschaald (gemeten 26-10-2026: 18 van zulke in _dubbel). Die komt niet terug. Behalve tegenover
+      // een vinylrip: die won alleen op zijn 24 bit, en de vaste volgorde is studio > cd > vinyl. Een cd mag dan weer het
+      // nummer worden; een studiokopie alleen als de meting zegt dat hij echt is.
+      final soort = plan.soort, ankerSoort = plan.ankerSoort;
+      if (soort != null && ankerSoort != null && soortRang(soort) < soortRang(ankerSoort)) {
+        final echt = gemeten(f.path) != null && !gemeten(f.path)!.isNep;
+        final mag = ankerSoort == Kopiesoort.vinyl && (soort == Kopiesoort.cd || echt);
+        if (!mag) return 'verloor eerder (${soort.name} tegen ${ankerSoort.name})';
       }
       plan = Versieplan(
           besluit: plan.besluit,
@@ -143,6 +213,10 @@ class VersieTerugzetter {
           ankerSoort: plan.ankerSoort,
           ankerPersing: plan.ankerPersing,
           vervangt: plan.vervangt);
+      if (droog) {
+        return 'zou ${plan.besluit == Versiebesluit.ankerOpzij ? 'het nummer worden' : plan.besluit == Versiebesluit.vervangVersie ? 'een versie vervangen' : 'een versie worden'}: '
+            '${plan.soort?.name} ${plan.persing} naast ${plan.ankerSoort?.name} (vingerafdruk ${score.toStringAsFixed(2)}) — $anker';
+      }
       final uit = await bergOpAlsVersie(f, plan,
           root: wortel, tags: TrackTags(title: tags.title, artist: tags.artist, album: tags.album, trackNo: tags.trackNo),
           laatVerliezerStaan: true);

@@ -25,6 +25,30 @@ final _vinyl = RegExp(
 /// kHz]", "needle drop", "LP rip", PBTHAL, "LP 24-96". Een gewone "LP" in een albumnaam telt niet, "(LP Version)" evenmin.
 bool isVinylRip(String pad) => _vinyl.hasMatch(pad);
 
+/// Wat een ripper in de tags achterlaat bij een vinylrip: "MEDIA=Vinyl (LP,Album)" (Patricia Kaas), het element waarmee hij
+/// draaide ("COMMENT=AT150ANV" — een Audio-Technica, Toto IV van PBTHAL), een draaitafel, of gewoon "vinyl". Gezien op
+/// 26-10-2026 bij de versies: na het opbergen staat de bron nergens meer, maar die velden blijven.
+final _vinylInTags = RegExp(
+    r'vinyl|needle[\s_.-]*drop|\blp[\s_.-]*rip|pbthal|turntable|draaitafel|platenspeler|\bphono\b|cartridge'
+    r'|\bortofon\b|\bshure\s*(v|m)\d|\bgrado\b|\bnagaoka\b|\bsumiko\b|\bgoldring\b|\bclearaudio\b|\bdl-?103\b'
+    r'|audio[\s-]*technica|\bat-?(vm|oc|art)\d+|\bat-?\d{2,3}[a-z]*\b|\btechnics\s*sl-?\d|\bthorens\b|\brega\s*(p|planar)\d',
+    caseSensitive: false);
+
+/// De velden waar zo'n spoor in staat — niet de titel of het album (daar kan "Vinyl" gewoon een naam zijn).
+const _vinylVelden = [
+  'media', 'source', 'sourcemedia', 'comment', 'description', 'encodedby', 'encoded by', 'originator', 'codinghistory', //
+  'ripper', 'lineage', 'notes', 'ripping tool', 'encoder settings',
+];
+
+/// Zeggen de tags van een bestand ([velden], kleine sleutels — `readFlacRawFields`) dat het een vinylrip is?
+bool vinylUitTags(Map<String, String> velden) {
+  for (final k in _vinylVelden) {
+    final v = velden[k];
+    if (v != null && _vinylInTags.hasMatch(v)) return true;
+  }
+  return false;
+}
+
 /// [kandidaten] met de vinyl-rips achteraan, verder in dezelfde volgorde ([padVan]: het pad van een kandidaat). Voor wat
 /// de app zelf kiest (▶, de radio): een vinyl-rip alleen als er niets anders is — anders bleef ▶ stil terwijl er wel
 /// een kopie van het nummer was.

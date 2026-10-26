@@ -116,6 +116,61 @@ void main() {
     expect((await z.ronde()).bekeken, 0, reason: 'al nagekeken');
   });
 
+  test('een cd die een studiokopie verving: de cd komt terug als versie', () async {
+    schrijf(anker, hz: 96000, bits: 24, vulling: 40000);
+    schrijf(dubbelCd, hz: 44100, bits: 16, vulling: 20000);
+    final uit = await zetter().ronde();
+    expect(uit.versies, 1);
+    final cd = '${root.path}${sep}Albums${sep}Toto${sep}Toto IV (cd)${sep}10 - Africa.flac';
+    expect(File(cd).existsSync(), isTrue);
+    expect(versies.ankerVan(cd), anker);
+  });
+
+  test('DE KERN: een "studiokopie" die van een cd verloor, komt niet terug — die was opgeschaald', () async {
+    schrijf(anker, hz: 44100, bits: 16, vulling: 20000);
+    final studio = '${root.path}$sep${'_dubbel'}$sep${'(2) 10 - Africa.flac'}';
+    schrijf(studio, hz: 96000, bits: 24, vulling: 40000);
+    final besluiten = <String>[];
+    final z = VersieTerugzetter(
+      wortel: root.path,
+      nummerVan: (a, t, {int? seconden}) => anker,
+      klaar: () async {},
+      bestand: '${config.path}${sep}versies_dubbel.json',
+      vingerafdruk: _NepVingerafdruk(),
+      bijBesluit: (p, b) => besluiten.add(b),
+    );
+    expect((await z.ronde()).bleven, 1);
+    expect(besluiten.single, 'verloor eerder (studio tegen cd)');
+    expect(File(studio).existsSync(), isTrue);
+  });
+
+  test('vinyl alsnog uit downloads.log: "[LP][24/192]" in de torrentnaam, en het bestand is nog dat bestand', () async {
+    schrijf(anker, hz: 192000, bits: 24, vulling: 40000);
+    final log = File('${config.path}${sep}downloads.log')
+      ..writeAsStringSync('10:40:51.576  "Toto — Africa": vervangen door de kopie uit torrent '
+          '"(Pop, Rock) [LP][24/192] Toto - IV - 1982, FLAC (tracks+.cue), lossless"\n'
+          '10:41:10.891  "Toto — Rosanna": vervangen door de kopie uit torrent "Toto - IV [24-96]"\n');
+    final z = VersieTerugzetter(
+      wortel: root.path,
+      nummerVan: (a, t, {int? seconden}) => t == 'Africa' ? anker : null,
+      klaar: () async {},
+      bestand: '${config.path}${sep}versies_dubbel.json',
+      vingerafdruk: _NepVingerafdruk(),
+      logboek: log.path,
+    );
+    expect(z.vinylUitLogboek(), 1);
+    expect(soortVoor(anker)?.soort, Kopiesoort.vinyl);
+    // Sindsdien vervangen door een cd van 16/44,1: dan zegt de regel niets meer over dit bestand.
+    resetSoortenVoorToets();
+    schrijf(anker, hz: 44100, bits: 16);
+    expect(z.vinylUitLogboek(), 0);
+    expect(soortVoor(anker), isNull);
+    // En een soort die je zelf koos, blijft.
+    schrijf(anker, hz: 192000, bits: 24);
+    zetSoort(anker, Kopiesoort.studio, gekozen: true);
+    expect(z.vinylUitLogboek(), 0);
+  });
+
   test('een andere opname (de vingerafdruk) blijft staan', () async {
     schrijf(anker, hz: 96000, bits: 24);
     zetSoort(anker, Kopiesoort.vinyl);

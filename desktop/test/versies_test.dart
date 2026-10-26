@@ -17,6 +17,13 @@ void main() {
           'LP PBTHAL');
       expect(persingUit(r'Spice (2016 Vinyl Reissue)\01.flac', soort: Kopiesoort.vinyl), 'LP 2016 Reissue');
       expect(persingUit(r'Album [12" Maxi]\A1.flac', soort: Kopiesoort.vinyl), '12"');
+      // Een jaar in een map erboven is geen persing (26-10-2026: "D:\Flac music 2024" gaf "LP 2024").
+      expect(persingUit(r'D:\Flac music 2024\DebridMusic Downloads\Spice (Vinyl)\01.flac', soort: Kopiesoort.vinyl), 'LP');
+      // Een torrentnaam met een / erin valt in stukken (26-10-2026: Spice Girls van JUNLAJUBALAM).
+      expect(
+          persingUit('(Pop, RnB/Swing, Downtempo) [LP][24/192] Spice Girls - Spice - 1996, FLAC (tracks+.cue), lossless/'
+              '06 - Mama.flac', soort: Kopiesoort.vinyl),
+          'LP 1996');
     });
 
     test('digitaal: alleen wat over de master gaat', () {

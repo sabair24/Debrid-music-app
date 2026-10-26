@@ -18,10 +18,11 @@ library;
 import 'dart:io';
 
 import 'audioformaten.dart' show isVerliesvrij, soortVan;
-import 'flac_tags.dart' show readFlacTags;
+import 'flac_tags.dart' show readFlacRawFields, readFlacTags;
 import 'kopiesoort.dart';
 import 'organize.dart';
 import 'versies.dart';
+import 'vinyl.dart' show vinylUitTags;
 
 enum Versiebesluit {
   /// Dezelfde versie als het nummer (of iets zonder soort): vervangen of weggooien, zoals altijd.
@@ -105,12 +106,18 @@ class Versieplan {
 /// De soort van het bestand op [pad], uit [bronpad] en zijn kop (kopiesoort.dart).
 Kopiesoort? soortVanBestand(String pad, String bronpad) {
   try {
-    final kop = readFlacTags(File(pad));
-    return kopiesoortVan(
+    final f = File(pad);
+    final kop = readFlacTags(f);
+    final soort = kopiesoortVan(
         bronpad: bronpad,
         bits: kop?.bitsPerSample ?? 0,
         hz: kop?.sampleRate ?? 0,
         verliesvrij: isVerliesvrij(soortVan(pad)));
+    // Een vinylrip zonder teken in zijn pad: vaak staat het in zijn tags (MEDIA=Vinyl, het element in COMMENT).
+    if (soort != null && soort != Kopiesoort.vinyl && kop != null && vinylUitTags(readFlacRawFields(f))) {
+      return Kopiesoort.vinyl;
+    }
+    return soort;
   } catch (_) {
     return null;
   }

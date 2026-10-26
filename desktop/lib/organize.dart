@@ -2068,6 +2068,9 @@ Future<String> _install(File src, File dest, List<File> losers, {required String
 /// that loses the race would leave half a record moved.
 Future<String> moveWithRetry(File src, File dest) => _move(src, dest);
 
+/// [f] opzij in [parkeerIn] (meestal `_dubbel`), onder een vrije naam. Nooit overschrijven, nooit wissen.
+Future<String> parkeer(File f, String parkeerIn) => _parkeer(f, parkeerIn);
+
 /// Zoals [moveWithRetry], maar ZONDER terugval op kopiëren: lukt hernoemen niet (een speler houdt het bestand open), dan
 /// null — en staat alles zoals het stond. Voor wie een nummer opzij zet om er iets anders op zijn plek te leggen (een
 /// versie, versie_opbergen.dart): met een kopie zou het origineel blijven staan, en dan staat er straks twee keer iets.
@@ -2275,11 +2278,15 @@ int? looptijdInSeconden(File f) {
 /// naar `_dubbel` en niet de bibliotheek in. De torrentweg geeft hier de decodeerproef mee: een afgekapte
 /// FLAC kwam tot 29-09-2026 gewoon binnen, want tot dan toe keek niemand of een bestand wel héél was.
 /// Een keuring die zelf faalt (een uitzondering) houdt niets tegen — niet weten is niet afkeuren.
+///
+/// [alsVersie] (versies.dart): is dit een andere versie van wat er al ligt ([bestaand]) — een vinylrip naast je cd —,
+/// dan bergt die het op als versie en zegt wat er gebeurde; null: geen versie, en de gewone weg beslist.
 Future<TidyReport> bergMapOp(String map, String downloadsRoot,
     {String? Function(String artist, String title, {int? seconds})? staatAl,
     bool Function(String pad)? slaOver,
     Future<String?> Function(File f)? keur,
-    Future<bool> Function(File f)? alGehad}) async {
+    Future<bool> Function(File f)? alGehad,
+    Future<String?> Function(File f, String bestaand)? alsVersie}) async {
   final report = TidyReport();
   final dir = Directory(map);
   if (!await dir.exists()) return report;
@@ -2387,6 +2394,23 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
             seconds: sec,
             vanBestand: eigen.vanBestand,
           );
+    // Een andere versie van wat er al ligt (versies.dart): eerst met de looptijd, dan zonder — een vinylrip duurt vaak een
+    // paar seconden langer. De vingerafdruk bij [alsVersie] beslist of het dezelfde opname is.
+    if (alsVersie != null && staatAl != null && eigen != null && eigen.title.trim().isNotEmpty) {
+      final bestaand = (sec == null ? null : staatAl(eigen.artist, eigen.title, seconds: sec)) ??
+          staatAl(eigen.artist, eigen.title);
+      if (bestaand != null && File(bestaand).existsSync()) {
+        String? zin;
+        try {
+          zin = await alsVersie(f, bestaand);
+        } catch (_) {/* dan de gewone weg */}
+        if (zin != null) {
+          report.moved++;
+          report.uitkomst[before] = zin;
+          continue;
+        }
+      }
+    }
     // `parkeerAltijd`: alles wat hier langskomt stond al op je schijf, dus elke verliezer — de oude
     // kopie én het binnenkomende — gaat naar `_dubbel` en niet weg. Zie [placeFileDetailed].
     final out = await placeFileDetailed(f, downloadsRoot,
