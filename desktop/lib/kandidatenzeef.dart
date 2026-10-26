@@ -68,6 +68,14 @@ const int kMeerderheidStemmen = 8;
 /// Hebben zoveel uploaders de officiële lengte (±2 s), dan blijft die gelden — ook als de meeste een andere hebben.
 const int kOfficieelBevestigd = 3;
 
+/// Zo breed is een groep lengtes die als één lengte telt. Stond op 4 s. Gemeten op 26-10-2026 over 30 nummers uit
+/// Sabers bibliotheek (12 waar zijn bestand en Deezer meer dan 12 s verschillen, 18 waar ze gelijk zijn): Foreigner, "I
+/// Want to Know What Love Is" — Deezer 3:20, 1006 kopieën met de titel, geen enkele van 3:20, maar verspreid over
+/// 4:56–5:08 (rips van verschillende persingen). Binnen 4 s haalde geen groep de helft, dus bleef 3:20 gelden en paste
+/// er niets. Met 8 s grijpt de regel daar terecht in, en verder nergens anders dan met 4 s: geen enkele onterechte.
+/// Met 12 s hetzelfde, maar dan kan een radio-edit vlak naast de albumversie meetellen.
+const int kMeerderheidVenster = 8;
+
 /// De lengte die de kopieën zelf noemen, als die duidelijk afwijkt van [officieel]; anders null, en dan geldt de
 /// officiële.
 ///
@@ -77,7 +85,7 @@ const int kOfficieelBevestigd = 3;
 /// goede kopie zelfs weigeren — *"is de filter ergens niet te streng ????"*.
 ///
 /// [metTitel]: de bestanden met de juiste titel, de lengte nog niet gekeurd. Elke uploader stemt één keer per lengte die
-/// hij heeft. De grootste groep (binnen 4 s) moet minstens [kMeerderheidStemmen] stemmen en de helft van alle stemmen
+/// hij heeft. De grootste groep (binnen [kMeerderheidVenster] s) moet minstens [kMeerderheidStemmen] stemmen en de helft van alle stemmen
 /// hebben, en meer dan 12 s van [officieel] liggen; en minder dan [kOfficieelBevestigd] uploaders mogen de officiële
 /// lengte hebben. Een radio-edit naast een albumversie blijft zo bij de officiële, zolang een paar mensen hem hebben.
 /// Geeft het midden van de groep.
@@ -99,7 +107,7 @@ int? lengteVanDeMeerderheid(Iterable<SoulseekFile> metTitel, int? officieel) {
   if (bevestigd.length >= kOfficieelBevestigd) return null;
   var van = 0, tot = 0;
   for (var i = 0, j = 0; i < stemmen.length; i++) {
-    while (stemmen[i] - stemmen[j] > 4) {
+    while (stemmen[i] - stemmen[j] > kMeerderheidVenster) {
       j++;
     }
     if (i + 1 - j > tot - van) {
