@@ -574,6 +574,7 @@ class CastManager {
   Future<void> play(String deviceId, List<String> trackIds, int index,
       {bool alsZone = false, int vanafMs = 0, String? radio}) async {
     if (trackIds.isEmpty) throw ArgumentError('nothing to play');
+    _tussendoor.remove(deviceId);
     if (!alsZone) {
       for (final ander in _sessies.values.where((x) => !x.alsZone && x.renderer.id != deviceId).toList()) {
         _sluit(ander);
@@ -671,6 +672,16 @@ class CastManager {
     final s = _sessies[deviceId];
     if (s == null) throw StateError('Die speaker speelt nu niets.');
     if (ids.isEmpty) return;
+    // Tussendoor: in de rij die terugkomt — de radio vult gewoon aan, en hoort niets van de kopie.
+    final td = _tussendoor[deviceId];
+    if (td != null) {
+      if (hierna) {
+        td.queue.insertAll(td.index + 1, ids);
+      } else {
+        td.queue.addAll(ids);
+      }
+      return;
+    }
     final nieuw = ids.toSet();
     for (var i = s.queue.length - 1; i > s.index; i--) {
       if (nieuw.contains(s.queue[i])) s.queue.removeAt(i);
@@ -703,6 +714,9 @@ class CastManager {
   /// De wachtrij van een speaker met een sessie, en waar hij is. Null zonder sessie.
   ({List<String> rij, int index})? rijVan(String deviceId) {
     final s = _sessies[deviceId];
+    // Tussendoor ([tussendoor]): de rij die terugkomt, niet de kopie die je even hoort.
+    final td = _tussendoor[deviceId];
+    if (td != null && s != null) return (rij: List.unmodifiable(td.queue), index: td.index);
     return s == null ? null : (rij: List.unmodifiable(s.queue), index: s.index);
   }
 
@@ -718,6 +732,7 @@ class CastManager {
   Future<void> springNaar(String deviceId, int plek, {String trackId = ''}) async {
     final s = _sessies[deviceId];
     if (s == null) throw StateError('Die speaker speelt nu niets.');
+    _zonderTussendoor(s);
     final i = plekVoorNummer(s.queue, plek, trackId);
     if (i < 0) throw StateError('Dat nummer staat niet meer in de wachtrij.');
     s.index = i;
@@ -728,6 +743,7 @@ class CastManager {
   Future<void> haalUit(String deviceId, int plek, {String trackId = ''}) async {
     final s = _sessies[deviceId];
     if (s == null) throw StateError('Die speaker speelt nu niets.');
+    _zonderTussendoor(s);
     final i = plekVoorNummer(s.queue, plek, trackId);
     if (i < 0 || i == s.index) throw StateError('Dat nummer staat niet (meer) in wat er nog komt.');
     s.queue.removeAt(i);
@@ -742,6 +758,7 @@ class CastManager {
   Future<void> verplaats(String deviceId, int van, int naar, {String trackId = ''}) async {
     final s = _sessies[deviceId];
     if (s == null) throw StateError('Die speaker speelt nu niets.');
+    _zonderTussendoor(s);
     final i = plekVoorNummer(s.queue, van, trackId);
     if (i < 0 || i == s.index || naar < 0 || naar >= s.queue.length) {
       throw StateError('Dat nummer staat niet (meer) in wat er nog komt.');
@@ -764,12 +781,109 @@ class CastManager {
   Future<void> speelNu(String deviceId, String id) async {
     final s = _sessies[deviceId];
     if (s == null) throw StateError('Die speaker speelt nu niets.');
+    _zonderTussendoor(s);
     for (var i = s.queue.length - 1; i > s.index; i--) {
       if (s.queue[i] == id) s.queue.removeAt(i);
     }
     s.queue.insert(s.index + 1, id);
     s.index++;
     await _openCurrent(s);
+  }
+
+  // ── Tussendoor beluisteren ─────────────────────────────────────────────────
+
+  /// Een klaargezette kopie beluisteren op een speaker, zonder zijn rij weg te gooien (Saber, 26-10-2026: "als ik
+  /// luister op de kef op de kef … men liedje hervatten en men wachtrij moet er nog staan"). De sessie blijft dezelfde
+  /// — een radio erop hoort niet dat hij weg is ([_meldRadio]) en vult de bewaarde rij gewoon aan ([voegToe]) — maar
+  /// speelt even [b] (`kandidaat-…`, de nieuwe kopie) of [a] (het nummer zelf), A/B op dezelfde seconde
+  /// ([tussendoorAB]). [tussendoorKlaar] zet de rij terug, op het nummer en de seconde waar hij was.
+  Future<void> tussendoor(String deviceId, {required String a, required String b}) async {
+    final s = _sessies[deviceId];
+    if (s == null) throw StateError('Die speaker speelt nu niets.');
+    var td = _tussendoor[deviceId];
+    if (td == null) {
+      final plek = s.klok?.plekNu?.positieMs ?? s.positie?.inMilliseconds ?? 0;
+      td = _Tussendoor(queue: List.of(s.queue), index: s.index, positieMs: plek, speelde: s.speelt ?? true, a: a, b: b);
+      _tussendoor[deviceId] = td;
+    }
+    td.opB = true;
+    _log?.line('tussendoor op ${s.renderer.name}: B ($b); de rij (${td.queue.length}, nummer ${td.index + 1}) wacht '
+        'op ${_sec(Duration(milliseconds: td.positieMs))}');
+    await _speelTussendoor(s, b, vanafMs: 0);
+  }
+
+  /// A en B wisselen bij het tussendoor beluisteren op een speaker, op dezelfde seconde.
+  Future<void> tussendoorAB(String deviceId) async {
+    final s = _sessies[deviceId];
+    final td = _tussendoor[deviceId];
+    if (s == null || td == null) throw StateError('Er wordt op die speaker niets tussendoor beluisterd.');
+    final pos = await _voor(s.renderer).positionInfo(s.renderer).catchError((_) => null);
+    td.opB = !td.opB;
+    final plek = pos?.position?.inMilliseconds ?? s.positie?.inMilliseconds ?? 0;
+    _log?.line('tussendoor op ${s.renderer.name}: ${td.opB ? 'B' : 'A'} op ${_sec(Duration(milliseconds: plek))}');
+    await _speelTussendoor(s, td.opB ? td.b : td.a, vanafMs: plek);
+  }
+
+  /// Tussendoor stoppen: de rij terug, op het nummer en de seconde waar hij was. [hervat] = false: daar op pauze.
+  Future<void> tussendoorKlaar(String deviceId, {bool hervat = true}) async {
+    final s = _sessies[deviceId];
+    final td = _tussendoor.remove(deviceId);
+    if (s == null || td == null) return;
+    s.queue = td.queue;
+    s.index = td.index.clamp(0, td.queue.isEmpty ? 0 : td.queue.length - 1);
+    final spelen = hervat && td.speelde;
+    _log?.line('tussendoor op ${s.renderer.name} klaar: terug naar nummer ${s.index + 1} op '
+        '${_sec(Duration(milliseconds: td.positieMs))}${spelen ? '' : ' (op pauze)'}');
+    await _openCurrent(s);
+    bijStand?.call();
+    _rijVeranderd(s);
+    if (td.positieMs > 3000 || !spelen) {
+      Timer(spoelNa, () async {
+        if (!identical(_sessies[s.renderer.id], s)) return;
+        try {
+          if (td.positieMs > 3000) {
+            s.hoogstePositie = Duration(milliseconds: td.positieMs);
+            await _voor(s.renderer).seek(s.renderer, Duration(milliseconds: td.positieMs));
+          }
+          if (!spelen) await _voor(s.renderer).pause(s.renderer);
+          _meldStil(s, td.positieMs);
+        } catch (_) {/* dan speelt hij vanaf het begin van het nummer: niets kwijt */}
+      });
+    }
+  }
+
+  /// Is er op [deviceId] iets tussendoor te horen, en is dat B?
+  ({bool opB})? tussendoorVan(String deviceId) {
+    final td = _tussendoor[deviceId];
+    return td == null ? null : (opB: td.opB);
+  }
+
+  final _tussendoor = <String, _Tussendoor>{};
+
+  /// [id] op de speaker van [s], als enige in zijn rij, vanaf [vanafMs].
+  Future<void> _speelTussendoor(_Session s, String id, {required int vanafMs}) async {
+    s.queue = [id];
+    s.index = 0;
+    s.droog = false;
+    await _openCurrent(s);
+    bijStand?.call();
+    if (vanafMs > 3000) {
+      Timer(spoelNa, () async {
+        if (!identical(_sessies[s.renderer.id], s)) return;
+        try {
+          s.hoogstePositie = Duration(milliseconds: vanafMs);
+          await _voor(s.renderer).seek(s.renderer, Duration(milliseconds: vanafMs));
+        } catch (_) {}
+      });
+    }
+  }
+
+  /// Iemand bedient de rij (volgende, springen, weghalen): het tussendoor is dan voorbij, en de rij is weer de rij.
+  void _zonderTussendoor(_Session s) {
+    final td = _tussendoor.remove(s.renderer.id);
+    if (td == null) return;
+    s.queue = td.queue;
+    s.index = td.index.clamp(0, td.queue.isEmpty ? 0 : td.queue.length - 1);
   }
 
   /// The Shield gets the whole queue at once — it has a real player and can manage its own gaps.
@@ -1138,6 +1252,11 @@ class CastManager {
           'uri=${_idVanUrl(pos?.trackUri) ?? '-'} nu=${_idVanUrl(session.currentUrl) ?? '-'} '
           'volgende=${_idVanUrl(session.nextUrl) ?? '-'}');
       if (state == null || !state.isStopped) return;
+      // Tussendoor ([tussendoor]): de kopie is uit, en dan wacht hij op je keuze — niet sluiten, niet doorschuiven.
+      if (_tussendoor.containsKey(session.renderer.id)) {
+        _zag(session, speelt: false);
+        return;
+      }
       if (session.index + 1 >= session.queue.length) {
         if (session.radio != null) {
           // Een radio houdt open: de radio vult de rij aan ([voegToe]), en dan speelt het volgende meteen.
@@ -1180,6 +1299,7 @@ class CastManager {
     final sessie = _sessies[renderer.id];
     _log?.line('opdracht $action${value == null ? '' : ' $value'}  '
         '(idx=${sessie?.index ?? -1})');
+    if (sessie != null && (action == 'next' || action == 'previous' || action == 'stop')) _zonderTussendoor(sessie);
     switch (action) {
       case 'play':
         await _voor(renderer).play(renderer);
@@ -1388,6 +1508,17 @@ class CastManager {
     }
     _sessies.clear();
   }
+}
+
+/// Wat een speaker speelde toen er tussendoor iets beluisterd werd ([CastManager.tussendoor]).
+class _Tussendoor {
+  _Tussendoor({required this.queue, required this.index, required this.positieMs, required this.speelde,
+      required this.a, required this.b});
+  final List<String> queue;
+  final int index, positieMs;
+  final bool speelde;
+  final String a, b;
+  bool opB = true;
 }
 
 class _Session {

@@ -48,7 +48,20 @@ class ZoneUitvoerder {
     this.samenStop,
     this.naUitvoeren,
     this.log,
+    this.tussendoor,
+    this.tussendoorAB,
+    this.tussendoorKlaar,
   });
+
+  /// Een klaargezette kopie van [Track] beluisteren zonder de wachtrij aan te raken ("Klaar om te kiezen", Saber
+  /// 26-10-2026: "op de zone die actief is"). Null als het lukte, anders waarom niet. Zie `PlayerStore.tussendoor`.
+  final Future<String?> Function(Track t)? tussendoor;
+
+  /// A en B wisselen bij het tussendoor beluisteren.
+  final Future<void> Function()? tussendoorAB;
+
+  /// Tussendoor stoppen; met [hervat] gaat het nummer dat speelde verder.
+  final Future<void> Function({required bool hervat})? tussendoorKlaar;
 
   /// Een anker van de groep die dit toestel volgt (stap 3.2, zie `samen.dart`), en het einde daarvan.
   final Future<void> Function(Map<String, dynamic> anker)? samen;
@@ -215,6 +228,20 @@ class ZoneUitvoerder {
           }
         case 'radioOverzicht':
           kijkInBrievenbus?.call();
+        case 'tussendoor':
+          final t = nummer('${op['trackId'] ?? ''}');
+          final f = tussendoor;
+          if (f == null) {
+            fout = 'Dit toestel kan nog niet tussendoor beluisteren — werk het bij';
+          } else if (t == null) {
+            fout = 'Dat nummer staat hier niet in de bibliotheek';
+          } else {
+            fout = await f(t);
+          }
+        case 'tussendoorAB':
+          await tussendoorAB?.call();
+        case 'tussendoorKlaar':
+          await tussendoorKlaar?.call(hervat: op['hervat'] != false);
         default:
           fout = 'Onbekende opdracht "$cmd"';
       }
