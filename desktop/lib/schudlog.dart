@@ -15,6 +15,8 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'models.dart';
 import 'organize.dart' show artistKey;
@@ -163,9 +165,23 @@ class SchudLogboek {
 /// dan blijven ze bewaard en gaat het een minuut later opnieuw. Hoogstens [kSchudWachtrij] regels: wat er langer niet weg
 /// kan, valt vooraan af.
 class SchudZender {
-  SchudZender(this.stuur);
+  /// [bewaar]: waar wat nog niet bij de pc is op het toestel blijft staan (Saber, 26-10-2026: "Ik heb vandaag op de gsm
+  /// verschillende keer gesnuffeld" — en er stond niets van in schud.log). Onderweg weigerde de pc de regels (de deur
+  /// liet `/api/diag/schud` niet door), en wat hier in het geheugen wachtte, was weg zodra de app dichtging.
+  SchudZender(this.stuur, {this.bewaar}) {
+    final f = bewaar;
+    if (f == null) return;
+    try {
+      if (f.existsSync()) {
+        final j = jsonDecode(f.readAsStringSync());
+        if (j is List) _wacht.addAll([for (final x in j) '$x']);
+      }
+    } catch (_) {/* een kapot bestand: dan begint hij leeg */}
+    if (_wacht.isNotEmpty) _klok = Timer(kSchudBundel, _verstuur);
+  }
 
   final Future<void> Function(List<String> regels) stuur;
+  final File? bewaar;
   final _wacht = <String>[];
   Timer? _klok;
   bool _bezig = false;
@@ -173,7 +189,20 @@ class SchudZender {
   void voegToe(List<String> regels) {
     _wacht.addAll(regels);
     if (_wacht.length > kSchudWachtrij) _wacht.removeRange(0, _wacht.length - kSchudWachtrij);
+    _bewaar();
     _klok ??= Timer(kSchudBundel, _verstuur);
+  }
+
+  void _bewaar() {
+    final f = bewaar;
+    if (f == null) return;
+    try {
+      if (_wacht.isEmpty) {
+        if (f.existsSync()) f.deleteSync();
+      } else {
+        f.writeAsStringSync(jsonEncode(_wacht));
+      }
+    } catch (_) {/* niet bewaard: dan blijft het tot de app dichtgaat */}
   }
 
   Future<void> _verstuur() async {
@@ -184,6 +213,7 @@ class SchudZender {
     try {
       await stuur(deze);
       _wacht.removeRange(0, deze.length);
+      _bewaar();
       if (_wacht.isNotEmpty) _klok ??= Timer(kSchudBundel, _verstuur);
     } catch (_) {
       _klok ??= Timer(kSchudOpnieuw, _verstuur);

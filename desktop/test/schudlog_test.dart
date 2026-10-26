@@ -2,6 +2,7 @@
 // bibliotheek, dan kunnen we oordelen wat goed gaat en wat niet, of minder goed".
 import 'dart:io';
 
+import 'package:debridmusic/lan/server.dart' show weigerVanBuiten;
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/schudlog.dart';
 import 'package:debridmusic/schudvolgorde.dart';
@@ -116,6 +117,30 @@ void main() {
       expect(aangekomen, ['a', 'b', 'c']);
       expect(z.wachtend, 0);
       z.dispose();
+    });
+
+    // Saber, 26-10-2026: "Ik heb vandaag op de gsm verschillende keer gesnuffeld" — en schud.log stond stil sinds gisteren.
+    testWidgets('wat niet aankwam overleeft een herstart van de app (op het toestel bewaard)', (t) async {
+      final map = Directory.systemTemp.createTempSync('dm_schud_wacht_');
+      addTearDown(() => map.deleteSync(recursive: true));
+      final f = File('${map.path}${Platform.pathSeparator}schud_wacht.json');
+      final eerste = SchudZender((_) async => throw StateError('onderweg: de deur weigerde'), bewaar: f);
+      eerste.voegToe(['SCHUD 26-10-2026 09:12', '#abc 1/1769 Oasis — Wonderwall: gehoord 4:18 van 4:18']);
+      await t.pump(kSchudBundel);
+      eerste.dispose(); // de app gaat dicht
+      expect(f.existsSync(), isTrue);
+      final aangekomen = <String>[];
+      final tweede = SchudZender((r) async => aangekomen.addAll(r), bewaar: f);
+      expect(tweede.wachtend, 2, reason: 'opnieuw gestart: wat wachtte is er nog');
+      await t.pump(kSchudBundel);
+      expect(aangekomen, hasLength(2));
+      expect(f.existsSync(), isFalse, reason: 'aangekomen = niets meer te bewaren');
+      tweede.dispose();
+    });
+
+    test('de pc neemt het schudlogboek ook van buiten aan (onderweg schudt Saber ook)', () {
+      expect(weigerVanBuiten('/api/diag/schud', 'POST'), isNull);
+      expect(_bron('lib/main.dart'), contains("      }, bewaar: appFile('schud_wacht.json')).voegToe;"));
     });
 
     testWidgets('niet eindeloos: hoogstens $kSchudWachtrij regels', (t) async {
