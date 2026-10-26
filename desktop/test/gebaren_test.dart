@@ -93,7 +93,7 @@ void main() {
     // Eén vlieglabel per rij, en de albumpagina's nemen het over.
     expect(main, contains("final tag = 'hoes:\${context.read<LibraryStore>().uidOf(albums[i])}@\$rij';"));
     expect(main, contains('heroTag: widget.heroTag ?? \'hoes:'));
-    expect(main, contains("_localRow(recent.take(15).toList(), rij: 'recent')"));
+    expect(main, contains("_localRow(recent.take(kRecentOpStart).toList(), rij: 'recent')"));
     expect(main, contains("_catalogRow(_charts.take(20).toList(), rij: 'top')"));
     // De nieuwe releases sinds 19-10-2026 als uitgelichte rijen met brede kaarten (ui/nieuw_kaarten.dart).
     expect(main, contains('groot: () => nieuwNummerKaart(context, nummers.first, nu, groot: true),'));

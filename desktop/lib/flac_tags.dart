@@ -430,10 +430,17 @@ bool writeFlacFields(File f, Map<String, String?> fields, {void Function(String)
       trace?.call('het bestand is te klein om een FLAC te zijn');
       return false;
     }
-    if (String.fromCharCodes(raf.readSync(4)) != 'fLaC') {
+    // Een ID3-blok vóór de FLAC gaat byte voor byte mee, zoals in de hoesschrijver (hoes_in_bestand.dart). Hier stond
+    // alleen byte 0, en dan weigerde de schrijver: Little Mix, "No More Sad Songs" (26-10-2026) — een kopie van een
+    // Now-verzamelaar met een ID3-blok ervoor hield "Now That's What I Call Music! 97" in zijn tags, in de map van
+    // Glory Days. De lezers ([flacBegin]) sloegen het blok al over; alleen het schrijven niet.
+    final begin = flacBegin(raf);
+    if (begin < 0) {
       trace?.call('geen FLAC-kenmerk aan het begin van het bestand');
       return false;
     }
+    final voorvoegsel = begin == 0 ? const <int>[] : (raf..setPositionSync(0)).readSync(begin);
+    raf.setPositionSync(begin + 4);
 
     // Walk the metadata blocks, keeping each one's type and raw body. Only the comment block is
     // rebuilt; every other block is carried over exactly as it was found.
@@ -472,6 +479,7 @@ bool writeFlacFields(File f, Map<String, String?> fields, {void Function(String)
     raf = null;
 
     final out = BytesBuilder();
+    out.add(voorvoegsel);
     out.add(const [0x66, 0x4C, 0x61, 0x43]); // "fLaC"
     for (var i = 0; i < types.length; i++) {
       final body = bodies[i];

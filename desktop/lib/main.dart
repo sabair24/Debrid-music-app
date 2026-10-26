@@ -162,6 +162,7 @@ import 'paths.dart';
 import 'fotoblik_bestand.dart';
 import 'musicbrainz.dart';
 import 'navigatie.dart';
+import 'klinkt_als.dart';
 import 'ui/itemmenu.dart';
 import 'offline.dart';
 import 'online.dart';
@@ -192,6 +193,7 @@ import 'soulseek.dart';
 import 'tidal.dart';
 import 'tidaler.dart';
 import 'tidal_beter.dart';
+import 'torrent_beter.dart';
 import 'vinyl.dart' show isVinylRip;
 import 'twijfel.dart';
 import 'kopiesoort.dart';
@@ -2391,6 +2393,35 @@ Future<void> main() async {
           (_) => startLog.line('TIDAL beter: ronde gestart (eerste na 5 min, dan één per 3 min)'),
           onError: (Object e) => startLog.line('TIDAL beter: MISLUKT: $e')));
     }
+    // En torrents voor de hele bibliotheek, op volle snelheid (Saber, 26-10-2026: "torrent mag veel sneller e, daar is
+    // er nie echt controle e, dus die mag vollebak gaan"). Nooit bij halen of ▶; zie torrent_beter.dart.
+    if (mode.owner && !Platform.environment.containsKey('FLUTTER_TEST')) {
+      final torrentBeter = TorrentBeterRonde(
+        geheugen: TorrentBeterGeheugen('$appDir${Platform.pathSeparator}torrent_beter.json'),
+        platen: () => [
+          for (final a in library.albums)
+            if (!a.isSingle) (artiest: a.artist, album: a.title, nummers: a.tracks)
+        ],
+        jaag: downloads.zoekBeterInTorrents,
+        minstens: (t) => tidalMinstens(t,
+            verdacht: switch (gemeten(t.path)?.band) {
+              Bandbreedte.vermoedelijk || Bandbreedte.afgekapt => true,
+              _ => false,
+            }),
+        // Zoals bij TIDAL, en een nummer waarvoor al een kopie op je keuze wacht.
+        overslaan: (t) =>
+            isVasteKeuze(t.path) ||
+            radio.doorDezeRadio(t.path) ||
+            (gekozenSoort(t.path) ?? Kopiesoort.studio) != Kopiesoort.studio ||
+            twijfelVoor(t.path) != null,
+        kan: () => online.torboxReady,
+        log: downloads.logRegel,
+      );
+      unawaited(torrentBeter.start().then(
+          (_) => startLog.line('torrents beter: ronde gestart (eerste na 8 min, dan plaat na plaat, '
+              '$kTorrentBeterTegelijk tegelijk)'),
+          onError: (Object e) => startLog.line('torrents beter: MISLUKT: $e')));
+    }
     // De Shield krijgt per nummer de meting en de plaatwaarde mee, met de stand van deze pc.
     CastManager.luidheidOpgave = (t, rij, plek) {
       if (!luidheidKlaar) return null;
@@ -3428,6 +3459,7 @@ class _HomeShellState extends State<HomeShell> {
     }
     // Zodat een leeg scherm een knop kan hebben die ergens heen gaat. Zie `navigatie.dart`.
     gaNaarSectie = _gaNaar;
+    naarRecentToegevoegd = _naarRecentToegevoegd;
     openZoekveld = _openZoeken;
     _kijkOfErEenNieuweIs();
     _radio = context.read<RadioBesturing>()..addListener(_kijkNaarRadio);
@@ -3711,6 +3743,7 @@ class _HomeShellState extends State<HomeShell> {
     // Alleen loslaten als deze schil hem nog vasthoudt: bij een herstart van de app staat de
     // nieuwe schil er al voordat de oude afgebroken wordt.
     if (gaNaarSectie == _gaNaar) gaNaarSectie = null;
+    if (naarRecentToegevoegd == _naarRecentToegevoegd) naarRecentToegevoegd = null;
     if (openZoekveld == _openZoeken) openZoekveld = null;
     super.dispose();
   }
@@ -4348,6 +4381,13 @@ class _HomeShellState extends State<HomeShell> {
   /// artiest en tik je op Start, dan hoor je op Start te landen -- niet op Start met een albumpagina
   /// eroverheen. Hetzelfde gedrag als een tabbalk: nog eens op de sectie tikken waar je al staat
   /// brengt je terug naar de bovenkant van die sectie.
+  /// "Alles" bij "Recent toegevoegd" op Start: Albums, nieuwst eerst, met de kopjes "Deze week", "Deze maand", "Dit
+  /// jaar" ([_groupKey]). Dezelfde weergave als de sortering in de bibliotheek, op elk scherm.
+  void _naarRecentToegevoegd() {
+    setState(() => _sort = AlbumSort.toegevoegd);
+    _gaNaar(0);
+  }
+
   void _gaNaar(int id) {
     binnenNav.currentState?.popUntil((r) => r.isFirst);
     if (_view != id) GlasKwaliteit.paginaGewisseld();
@@ -7623,7 +7663,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     };
     if (pool.isEmpty) {
       try {
-        for (final f in await zeef(await soulseek.search(soulseekQuery(album.artist, s.title)))) {
+        for (final f in await zeef(await soulseek.search(soulseekQuery(album.artist, s.title, album: album.title)))) {
           pool.putIfAbsent('${f.username}|${f.filename}', () => f);
         }
       } catch (_) {}
@@ -20977,6 +21017,31 @@ class TracksView extends StatelessWidget {
 
 // ── Ontdek (discovery feed) ──────────────────────────────────────────────────
 // ── Start / welcome screen (TIDAL-style rows) ────────────────────────────────
+/// Zoveel platen in "Recent toegevoegd" op Start (was 15).
+const int kRecentOpStart = 50;
+
+/// "Alles (312)" rechts in een kop op Start: naar de hele lijst.
+class _AllesKnop extends StatelessWidget {
+  const _AllesKnop({super.key, required this.aantal, required this.onPressed});
+  final int aantal;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) => TekstLink(
+        onPressed: onPressed,
+        bouw: (gekozen) => Text(
+          'Alles ($aantal)',
+          style: tvLinkStijl(
+              kTekstNormaal.copyWith(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isTv ? kGedempt : _accent,
+              ),
+              gekozen),
+        ),
+      );
+}
+
 class HomeStartView extends StatefulWidget {
   const HomeStartView({super.key});
   @override
@@ -21664,7 +21729,12 @@ class _HomeStartViewState extends State<HomeStartView> {
         ),
         // De twee rijen nieuwe releases, waar de balk stond (Saber, 19-10-2026). Zie [_nieuweRijen].
         ..._nieuweRijen(nu),
-        if (recent.isNotEmpty) _section('Recent toegevoegd', _localRow(recent.take(15).toList(), rij: 'recent')),
+        // Vijftig, met "Alles" erbij (Saber, 26-10-2026: "meer wordt aangevuld tot 50 … plus een button naar allemaal").
+        if (recent.isNotEmpty)
+          _section('Recent toegevoegd', _localRow(recent.take(kRecentOpStart).toList(), rij: 'recent'),
+              rechts: naarRecentToegevoegd == null
+                  ? null
+                  : _AllesKnop(key: const ValueKey('recent-alles'), aantal: recent.length, onPressed: naarRecentToegevoegd)),
         // Boven de netwerkrijen: deze twee staan er meteen en zijn altijd raak.
         if (uitDecennium.length >= 4)
           _section(jarenKop(decennium!), _localRow(uitDecennium.take(20).toList(), rij: 'decennium'),
@@ -21783,7 +21853,7 @@ class _HomeStartViewState extends State<HomeStartView> {
     ];
   }
 
-  Widget _section(String title, Widget row, {String? bij}) => Column(
+  Widget _section(String title, Widget row, {String? bij, Widget? rechts}) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Stond op `fromLTRB(28, 22, 28, 12)` terwijl de rij eronder op 24 staat: vier punten
@@ -21792,7 +21862,7 @@ class _HomeStartViewState extends State<HomeStartView> {
           // [bij] zegt waaróp een rij is samengesteld — bij "Top van dit moment" de genres waarop
           // gefilterd is. Het veld bestond al in `SectieKop` en werd nergens gebruikt; hier is het
           // het verschil tussen een belofte en een verantwoording.
-          SectieKop(title, bij: bij),
+          SectieKop(title, bij: bij, rechts: rechts),
           // Hoger dan de tegel zelf: een liggende `ListView` geeft zijn kinderen een STRAKKE hoogte
           // en knipt ze af, dus zonder lucht wordt de groei bij aanwijzen er boven en onder af
           // gesneden.
@@ -27655,7 +27725,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           seconds: t.seconden,
         ),
         // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
-        zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title),
+        zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title, album: t.album),
             seconden: t.seconden,
             zeefOp: (titel: t.title, artiest: t.artist, album: t.album),
             zeef: (l) => zeefKandidaten(l, titel: t.title, seconden: t.seconden, artiest: t.artist, album: t.album)),
@@ -31012,6 +31082,20 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       if (id == 0) return;
       final r = await _catalog.relatedArtists(id);
       if (mounted && naam == widget.artist.name) setState(() => _related = r);
+      // Tot vijftig (klinkt_als.dart): Deezer geeft er hoogstens twintig. De rij groeit terwijl er gezocht wordt.
+      // Ook als Deezer niemand kent: dan vult Last.fm de rij alleen.
+      if (!mounted) return;
+      final sleutel = context.read<AppSettings>().lastfmKey.trim();
+      await klinktAlsAanvullen(
+        artiest: naam,
+        deezer: r,
+        lastfm: sleutel.isEmpty ? null : () => _lastfmBron.verwanteArtiesten(naam, sleutel: sleutel, limit: 100),
+        zoekArtiest: _catalog.searchArtists,
+        verwanten: _catalog.relatedArtists,
+        tussendoor: (l) {
+          if (mounted && naam == widget.artist.name) setState(() => _related = l);
+        },
+      );
     } catch (_) {/* een pagina zonder "klinkt als" is nog steeds een goede pagina */}
   }
 
@@ -32239,7 +32323,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       // noemen ([zonderGast]). Hier stond een eigen lus met alleen [fileOffersTitle]: "À 20 ans (feat.
       // Diam's)" van Amel Bent kreeg zo nul bronnen naast een rij peers met "03. A 20 Ans.flac".
       // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
-      for (final f in await soulseek.zoekVroeg(soulseekQuery(widget.artistName, t.title),
+      for (final f in await soulseek.zoekVroeg(soulseekQuery(widget.artistName, t.title, album: widget.album.title),
           seconden: t.durationSec,
           zeefOp: (titel: t.title, artiest: widget.artistName, album: widget.album.title),
           zeef: (l) => zeefKandidaten(l,

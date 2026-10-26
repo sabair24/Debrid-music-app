@@ -2725,7 +2725,8 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
   final naam = withoutFakeVersion(baseName(path));
   final plek = _plaatkantVooraan.firstMatch(naam)?.group(1)?.toLowerCase();
   final fw = fileWords(_teVergelijken(gastWeg ? naam.replaceAll(_gastRe, ' ') : naam));
-  if (fw.isEmpty) return false;
+  // Leeg kan: "03 - 5, 6, 7, 8.flac" en "06 - 22.flac" houden na het volgnummer niets over. Een titel met woorden past
+  // dan nooit (de overlap in `klopt` is nul); een titel van losse tekens wel ([_losseTekensPassen]).
   // Anything the filename says beyond the title must be the artist, the album, or the folders it
   // sits in — otherwise it is another song sharing a word with this one.
   final known = fileWords(_teVergelijken('$artist ${path.replaceAll(_padScheiding, ' ')}'.replaceAll(baseName(path), '')));
@@ -2738,7 +2739,16 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
     ..removeAll(fileWords(_teVergelijken([for (final m in _haakjesDeelRe.allMatches(naam)) m[0]!].join(' '))));
   bool klopt(String vergelijkbaar) {
     final tw = fileWords(_teVergelijken(vergelijkbaar));
-    if (tw.isEmpty) return false;
+    if (tw.isEmpty) {
+      if (!_losseTekensPassen(vergelijkbaar, naam)) return false;
+      // Verder niets dat de titel niet noemt: geen versiewoord, en geen woord buiten artiest, plaat en mappen. De plaat
+      // telt hier ook als hij alleen in de bestandsnaam staat ("Step One (1998) - 03 - 5, 6, 7, 8.flac"): naast losse
+      // tekens is er geen titelwoord dat hem zou kunnen dekken.
+      final ookPlaat = {...known, ...fileWords(_teVergelijken(album ?? ''))};
+      return !fw.any((w) =>
+          (_versionWordRe.hasMatch(w) && !vanArtiest.contains(w)) ||
+          (!ookPlaat.contains(w) && !_alleenCijfers.hasMatch(w) && w != plek));
+    }
     if (tw.intersection(fw).length / tw.length < 0.75) return false;
     if (tw.difference(fw).any(_versionWordRe.hasMatch) ||
         fw.difference(tw).any((w) => _versionWordRe.hasMatch(w) && !vanArtiest.contains(w))) {
@@ -2758,6 +2768,32 @@ bool fileOffersTitle(String title, int? titleDur, String artist, String path, in
 }
 
 final _alleenCijfers = RegExp(r'^\d+$');
+
+/// Een titel van losse tekens in een bestandsnaam. [fileWords] laat woorden van één teken en kale getallen vallen
+/// (volgnummers), en dan hield zo'n titel niets over: geen enkel bestand paste. Saber, 26-10-2026, Steps — *Step One*:
+/// "5, 6, 7, 8" kreeg nul bronnen, terwijl één zoekopdracht op de plaat 36 verliesvrije kopieën gaf ("03 - 5, 6, 7,
+/// 8.flac", "Steps - Step One - 03 - 5, 6, 7, 8.flac", "5, 6, 7, 8 - Steps.flac"). Hier beslist de volgorde: dezelfde
+/// tekens aaneengesloten, of samen als één woord ("5678.flac"). Wat er verder in de naam staat, kijkt [fileOffersTitle].
+bool _losseTekensPassen(String titel, String naam) {
+  List<String> tekens(String s) {
+    var klein = s.toLowerCase();
+    if (_buitenAscii(klein)) klein = _fold(klein);
+    return klein.split(_nietAlfanumeriek).where((w) => w.isNotEmpty).toList();
+  }
+
+  final tt = tekens(titel);
+  if (tt.isEmpty) return false;
+  final ft = tekens(naam.replaceAll(RegExp(r'\.[A-Za-z0-9]{2,4}$'), ''));
+  if (ft.contains(tt.join())) return true;
+  for (var i = 0; i + tt.length <= ft.length; i++) {
+    var gelijk = true;
+    for (var j = 0; j < tt.length && gelijk; j++) {
+      gelijk = ft[i + j] == tt[j];
+    }
+    if (gelijk) return true;
+  }
+  return false;
+}
 
 /// De kant en de plaats op een plaat vooraan in een bestandsnaam: "A1 - ", "b2. ", "D3_".
 final _plaatkantVooraan = RegExp(r'^\s*([a-hA-H]\d{1,2})(?=[\s._\-])');
@@ -2812,13 +2848,25 @@ String _teVergelijken(String s) => s
 /// return none while live copies plainly exist — a peer that names the file `You're` tokenises to
 /// `you re`, which the term `youre` never matches. So the brackets and punctuation come off here,
 /// the strong words stay, and the full title still decides which results are really this song.
-String soulseekQuery(String artist, String title) {
+String soulseekQuery(String artist, String title, {String? album}) {
   List<String> tok(String s) =>
       s.toLowerCase().split(RegExp(r'[^a-z0-9]+')).where((w) => w.length > 1).toList();
   // Drop "(You're the One for Me)"-style asides; they hurt the search and are recovered by the
   // title filter. If a title is ALL aside — "(Everything I Do)" — keep it rather than search blank.
   final body = tok(title.replaceAll(RegExp(r'[(\[{][^)\]}]*[)\]}]'), ' '));
-  return [...tok(artist), ...(body.isEmpty ? tok(title) : body)].join(' ');
+  // Een titel van alleen losse tekens ("5, 6, 7, 8"): Soulseek negeert woorden van één teken, dus zocht dit op de
+  // artiest alleen. De plaat vindt de mappen waar het nummer in staat ([titelZonderZoekwoord]).
+  final titel = body.isEmpty ? tok(title) : body;
+  if (titel.isEmpty && album != null) return [...tok(artist), ...tok(album)].join(' ');
+  return [...tok(artist), ...titel].join(' ');
+}
+
+/// Heeft [titel] geen woord van twee tekens of meer? Zo'n titel ("5, 6, 7, 8" van Steps, "3" van Britney Spears) vindt
+/// Soulseek niet: die negeert woorden van één teken ([soulseekQuery], [fileOffersTitle]).
+bool titelZonderZoekwoord(String titel) {
+  var klein = titel.toLowerCase();
+  if (_buitenAscii(klein)) klein = _fold(klein);
+  return !RegExp(r'[a-z0-9]{2,}').hasMatch(klein);
 }
 
 /// A name with Discogs' bookkeeping stripped off.

@@ -147,11 +147,11 @@ void main() {
         reason: 'anders de hele uitslag');
     final main = File('lib/main.dart').readAsStringSync();
     final hit = main.substring(main.indexOf('Future<void> _downloadHit('));
-    expect(hit, contains('zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title),'));
+    expect(hit, contains('zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title, album: t.album),'));
     expect(hit, contains('zeefOp: (titel: t.title, artiest: t.artist, album: t.album),'),
         reason: 'op de gsm zoekt de pc, en die moet weten waarop hij zeeft');
     expect(main, contains('zeefOp: (titel: t.title, artiest: widget.artistName, album: widget.album.title),'));
-    expect(main, contains('for (final f in await soulseek.zoekVroeg(soulseekQuery(widget.artistName, t.title),'));
+    expect(main, contains('for (final f in await soulseek.zoekVroeg(soulseekQuery(widget.artistName, t.title, album: widget.album.title),'));
   });
 }
 

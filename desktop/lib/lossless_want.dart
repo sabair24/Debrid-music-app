@@ -16,7 +16,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-import 'organize.dart' show TrackTags, normKey;
+import 'organize.dart' show TrackTags, normKey, titelZonderZoekwoord;
 
 /// Namen die geen artiest zijn maar "dit is een verzamelaar".
 ///
@@ -118,12 +118,17 @@ class VasteBron {
 ///
 /// Stond eerst als `LosslessWant.query` en is eruit getild toen het menu er "Zoeken met Soulseek"
 /// bij kreeg: dezelfde valkuil, en één plek waar hij opgelost is.
-String zoekvraagVoorNummer(String title, {String? performer, String? artist}) {
+///
+/// [album]: voor een titel van losse tekens ("5, 6, 7, 8" van Steps). Soulseek negeert woorden van één teken, dus zocht
+/// zo'n vraag op de artiest alleen; de plaat vindt de mappen waar het nummer in staat ([titelZonderZoekwoord]).
+String zoekvraagVoorNummer(String title, {String? performer, String? artist, String? album}) {
+  final plaat = (album ?? '').trim();
+  final wat = titelZonderZoekwoord(title) && plaat.isNotEmpty ? plaat : title.trim();
   for (final naam in [performer, artist]) {
     final n = (naam ?? '').trim();
-    if (n.isNotEmpty && !isVerzamelnaam(n)) return '$n $title'.trim();
+    if (n.isNotEmpty && !isVerzamelnaam(n)) return '$n $wat'.trim();
   }
-  return title.trim();
+  return wat;
 }
 
 /// Hetzelfde voor een hele plaat.
@@ -220,7 +225,7 @@ class LosslessWant {
   ///
   /// Dus: [performer] als die bekend is, anders de artiest zolang dat een echte naam is, en anders de
   /// titel alleen. Een matige zoekvraag is beter dan een vergiftigde.
-  String get query => zoekvraagVoorNummer(title, performer: performer, artist: artist);
+  String get query => zoekvraagVoorNummer(title, performer: performer, artist: artist, album: album);
 
   LosslessWant met(
           {int? tries,
