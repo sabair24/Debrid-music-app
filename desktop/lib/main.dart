@@ -7653,7 +7653,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     };
     if (pool.isEmpty) {
       try {
-        for (final f in await zeef(await soulseek.search(soulseekQuery(album.artist, s.title)))) {
+        for (final f in await zeef(await soulseek.search(soulseekQuery(album.artist, s.title, album: album.title)))) {
           pool.putIfAbsent('${f.username}|${f.filename}', () => f);
         }
       } catch (_) {}
@@ -27685,7 +27685,7 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           seconds: t.seconden,
         ),
         // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
-        zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title),
+        zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title, album: t.album),
             seconden: t.seconden,
             zeefOp: (titel: t.title, artiest: t.artist, album: t.album),
             zeef: (l) => zeefKandidaten(l, titel: t.title, seconden: t.seconden, artiest: t.artist, album: t.album)),
@@ -32269,7 +32269,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       // noemen ([zonderGast]). Hier stond een eigen lus met alleen [fileOffersTitle]: "À 20 ans (feat.
       // Diam's)" van Amel Bent kreeg zo nul bronnen naast een rij peers met "03. A 20 Ans.flac".
       // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
-      for (final f in await soulseek.zoekVroeg(soulseekQuery(widget.artistName, t.title),
+      for (final f in await soulseek.zoekVroeg(soulseekQuery(widget.artistName, t.title, album: widget.album.title),
           seconden: t.durationSec,
           zeefOp: (titel: t.title, artiest: widget.artistName, album: widget.album.title),
           zeef: (l) => zeefKandidaten(l,

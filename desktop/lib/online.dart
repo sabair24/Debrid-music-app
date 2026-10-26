@@ -5532,7 +5532,7 @@ class DownloadManager extends ChangeNotifier {
         hits = albumHits;
       } else {
         try {
-          hits = await zoek(zoekvraagVoorNummer(t.title, artist: t.artist));
+          hits = await zoek(zoekvraagVoorNummer(t.title, artist: t.artist, album: t.album));
         } catch (_) {
           continue;
         }
@@ -6167,6 +6167,8 @@ class DownloadManager extends ChangeNotifier {
               _log.line('   ${job.name}: ${f.username} niet bewezen beter dan wat je hebt — volgende');
               continue;
             }
+            // Ook hier een regel: Steps, "5, 6, 7, 8" (26-10-2026) — de 24-bitkopie kwam binnen en verdween zonder woord.
+            _log.line('   ${job.name}: ${f.username} niet bewezen beter dan wat je hebt — weggegooid, de vorige blijft');
             settle('had al de beste kwaliteit');
             return;
           }
