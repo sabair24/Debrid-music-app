@@ -102,7 +102,8 @@ void main() {
   test('aangesloten: geladen bij het opstarten, in AlbumArt, op de tegel, in het eiland en de Glasproef', () {
     final main = File('lib/main.dart').readAsStringSync();
     expect(main, contains('unawaited(SchijfLicht.laad());'));
-    expect(main, contains('SchijfGrondschaduw(maat: s * .92),\n                spinningDisc,\n                SchijfLichtLaag('));
+    expect(main, contains('    final grondschaduw = SchijfGrondschaduw(maat: s * .92);\n'));
+    expect(main, contains('                spinningDisc,\n                SchijfLichtLaag('));
     expect(main, contains('MouwSchaduw(key: const ValueKey(\'albumart-mouwschaduw\'), maat: s * .92, rand: x.hoes + s - x.schijf)'));
     expect(main, contains('soort: disc != null\n                        ? SchijfSoort.scan'),
         reason: 'een echte scan krijgt alleen de schaduwen');

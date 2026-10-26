@@ -55,7 +55,9 @@ void main() {
   test('de hoes, de spiegeling en de cd gebruiken alle drie deze regel', () {
     final bron = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(bron, contains('    final centreer = !isTv;'));
-    expect(bron, contains('child: meeMetDeHoes(HoesSpiegel(beeld: front, maat: s))),'));
+    // De spiegeling schuift mee en kantelt gespiegeld mee (kantel_schaduw_test.dart).
+    expect(bron, contains('child: meeMetDeHoes(VolgtKanteling.spiegel(\n'
+        '                    stand: _kantel, midden: Offset(s / 2, s / 2), child: HoesSpiegel(beeld: front, maat: s)))),'));
     expect(bron, contains('child: meeMetDeHoes(RepaintBoundary(child: kaartGekanteld))),'));
     // Sinds 19-10-2026 één keer uitgerekend: de schijf schuift met .schijf, de schaduw van de hoes erop
     // ligt aan .hoes (zie schijf_licht_test.dart).

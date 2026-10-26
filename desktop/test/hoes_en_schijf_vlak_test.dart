@@ -305,8 +305,8 @@ void main() {
       final main = _bron('lib/main.dart');
       expect(main, contains('            deel: _kantel,\n            child: kaart,'));
       expect(main, contains('              animation: Listenable.merge([_slide, _kantel]),'));
-      expect(main, contains('                    transform: rust ? Matrix4.identity() : kantelMatrix(o),\n'
-          '                    origin: hoesVak.center,'));
+      expect(main, contains('                      transform: rust ? Matrix4.identity() : kantelMatrix(o),\n'
+          '                      origin: hoesVak.center,'));
       expect(main, contains('                final hoesVak = Rect.fromLTWH(x.hoes - x.schijf, -s * .04, s, s);'));
       expect(main, contains('painter: SchijfKantelGlans(rust ? Offset.zero : o, hoes: hoesVak),'));
       expect(main, contains('      aanloop: kSchijfAanloop,\n      uitloop: kSchijfUitloop);'));
