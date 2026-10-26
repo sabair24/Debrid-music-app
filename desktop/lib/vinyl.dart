@@ -15,7 +15,10 @@
 // van de 3007 bestanden met "(LP Version)" (de albumversie, geen rip) kwam er geen enkele door deze tekens bij.
 final _vinyl = RegExp(
     r'vinyl|needle[\s_.-]*drop|\blp[\s_.-]*rip|pbthal'
-    r'|\blp[\s_.-]*(24|16)[\s_.-]*(44|48|88|96|176|192)\b|\b(24|16)[\s_.-]*(44|48|88|96|176|192)[\s_.-]*lp\b',
+    r'|\blp[\s_.\-\[\]()]*(24|16)[\s_./-]*(44|48|88|96|176|192)\b|\b(24|16)[\s_./-]*(44|48|88|96|176|192)[\s_.\-\[\]()]*lp\b'
+    // Een kaal "[LP]" of "(2LP)" als merkje achter de albumnaam (26-10-2026, bij de versies): een vinylrip. "(LP Version)"
+    // niet — daar staat iets achter "LP".
+    r'|[\[(][2-4]?\s*lp[\])]',
     caseSensitive: false);
 
 /// Noemt [pad] (map of bestandsnaam) een vinyl-rip? "1988 - Mademoiselle chante (vinyl rip)", "[Japan Vinyl LP 24-96

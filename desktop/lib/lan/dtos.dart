@@ -277,6 +277,11 @@ class TrackDto {
   /// Welke soort de pc voor dit nummer nog zoekt (soortjacht.dart): "studio", "cd", "vinyl", of null.
   final String? zoekt;
 
+  /// De andere versies van dit nummer (versies.dart): `{s, p, kies, lijst: [{id, stroom, ext, s, p, bits, hz, grootte,
+  /// duur, t, v, x, sinds, luid}]}` — `s`/`p` van het anker zelf, `kies` het id van de versie die standaard speelt (geen:
+  /// het anker). Null zonder versies.
+  final Map<String, dynamic>? versies;
+
   const TrackDto({
     required this.id,
     required this.albumId,
@@ -308,6 +313,7 @@ class TrackDto {
     this.soort,
     this.soortGekozen = false,
     this.zoekt,
+    this.versies,
   });
 
   /// True when the file is beyond what Sonos will accept (it plays FLAC/ALAC up to 24-bit but
@@ -346,6 +352,7 @@ class TrackDto {
         soort: j['soort'] is String ? j['soort'] as String : null,
         soortGekozen: j['soortGekozen'] == true,
         zoekt: j['zoekt'] is String ? j['zoekt'] as String : null,
+        versies: j['versies'] is Map ? Map<String, dynamic>.from(j['versies'] as Map) : null,
       );
 
   Map<String, dynamic> toJson() => {
@@ -381,6 +388,7 @@ class TrackDto {
         if (soort != null) 'soort': soort,
         if (soortGekozen) 'soortGekozen': true,
         if (zoekt != null) 'zoekt': zoekt,
+        if (versies != null) 'versies': versies,
       };
 }
 

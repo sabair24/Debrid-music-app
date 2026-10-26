@@ -15,11 +15,12 @@ void main() {
   test('de keuring: bij twijfel en bewezen beter bewaren, niet weggooien — bij Soulseek, TIDAL, torrents en wensen', () {
     final online = _bron('lib/online.dart');
     // _keurVoorWens: wensen, TIDAL-beter en torrents.
-    expect(online, contains('        opname == Opnameoordeel.twijfel &&\n        !nietBeter &&\n'
+    // Sinds 26-10-2026 ook een andere versie (versies.dart) die niet bewezen beter is: die blijft wachten in Klaar om te kiezen.
+    expect(online, contains('        opname == Opnameoordeel.twijfel &&\n        (!nietBeter || (plan?.isVersie ?? false)) &&\n'
         '        await bewaarAlsTwijfel(staged, bestaand, score!, bron, w.authority)) {'));
     // De Soulseek-jacht op beter.
     expect(online, contains('                opname == Opnameoordeel.twijfel &&\n'
-        '                firstIsBetter(staged, File(bestaand)) &&\n'
+        '                (firstIsBetter(staged, File(bestaand)) || (plan?.isVersie ?? false)) &&\n'
         "                await bewaarAlsTwijfel(staged, bestaand, score!, 'Soulseek \${f.username}', job.authority)) {"));
     // Een gewone vervanging maakt een twijfelkopie achterhaald.
     expect(online, contains('      if (bestaand != null) await _vergeetTwijfel(bestaand);'));

@@ -197,6 +197,7 @@ import 'torrent_beter.dart';
 import 'vinyl.dart' show isVinylRip;
 import 'twijfel.dart';
 import 'kopiesoort.dart';
+import 'versies.dart';
 import 'soortjacht.dart' show Soortvragen, gezochtVoor, soortvraagUitgave;
 import 'lan/vaste_naam.dart' show kPcHost;
 import 'torbox.dart';
@@ -891,6 +892,8 @@ Future<void> main() async {
   if (mode.owner) await laadVasteKeuzes();
   // Studio, cd of vinyl per nummer (kopiesoort.dart): vóór de eerste scan, want de catalogus en de labels lezen het.
   if (mode.owner) await laadSoorten();
+  // De versies van een nummer (versies.dart): vóór de eerste scan, want die houdt ze uit de albums.
+  if (mode.owner) await versies.laad();
   // Berichten van uploaders (uploaderberichten.dart): wat er al was; en op de pc vanaf nu wat de Soulseek-verbinding
   // binnenkrijgt. Een toestel haalt ze bij de pc op (ClientSession).
   await uploaderberichten.laad();

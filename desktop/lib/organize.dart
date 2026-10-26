@@ -16,6 +16,7 @@ import 'integriteit.dart';
 import 'keuring.dart';
 import 'paths.dart' show keuringMap, torrentWerkMap;
 import 'kopiesoort.dart' show herNoemSoort;
+import 'versies.dart' show versies;
 import 'vaste_keuze.dart';
 import 'wavpack_kop.dart' show readWvKop;
 
@@ -2017,6 +2018,9 @@ Future<String> _install(File src, File dest, List<File> losers, {required String
   final tmp = File('${dest.path}.incoming');
   final landed = await _move(src, tmp);
   for (final l in losers) {
+    // De versies van wat verliest (versies.dart) horen voortaan bij wat het vervangt: het is dezelfde opname, alleen
+    // beter. Vóór het parkeren — daarna staat het anker in _dubbel, en daar hoort geen versie bij.
+    versies.verhuisAnker(l.path, dest.path);
     try {
       // Wat de app zelf net binnenhaalde en meteen weer verloor, mag weg -- dat is afval van deze
       // download. Maar een bestand dat AL in de bibliotheek stond is van de gebruiker, en dat wordt
@@ -2064,6 +2068,17 @@ Future<String> _install(File src, File dest, List<File> losers, {required String
 /// that loses the race would leave half a record moved.
 Future<String> moveWithRetry(File src, File dest) => _move(src, dest);
 
+/// Zoals [moveWithRetry], maar ZONDER terugval op kopiëren: lukt hernoemen niet (een speler houdt het bestand open), dan
+/// null — en staat alles zoals het stond. Voor wie een nummer opzij zet om er iets anders op zijn plek te leggen (een
+/// versie, versie_opbergen.dart): met een kopie zou het origineel blijven staan, en dan staat er straks twee keer iets.
+Future<String?> verplaatsZonderKopie(File src, File dest) async {
+  try {
+    return await _move(src, dest, kopie: false);
+  } on FileSystemException {
+    return null;
+  }
+}
+
 /// Een geparkeerde kopie terugzetten op de plek van wat er nu staat; wat er nu staat gaat opzij.
 ///
 /// [geparkeerd] staat in `_dubbel`, [huidig] is de kopie die hem verving. Dit is het omgekeerde van een
@@ -2093,6 +2108,8 @@ Future<String?> zetGeparkeerdeTerug(File geparkeerd, File huidig, {required Stri
   if (doel.path != h && await doel.exists()) return null;
   final elders = huidig.parent.path;
   final String opzij;
+  // De versies van wat er nu staat, horen bij wat terugkomt (versies.dart) — zoals bij een vervanging ([_install]).
+  versies.verhuisAnker(h, doel.path);
   try {
     opzij = await _parkeer(huidig, parkeerIn);
   } catch (_) {
@@ -2126,7 +2143,7 @@ Future<String?> zetGeparkeerdeTerug(File geparkeerd, File huidig, {required Stri
 /// kopieert [_move] en blijft het origineel stil staan. Gezet in `main.dart`.
 Future<void> Function(List<String> paden)? voorVerplaatsen;
 
-Future<String> _move(File src, File dest) async {
+Future<String> _move(File src, File dest, {bool kopie = true}) async {
   try {
     await voorVerplaatsen?.call([src.path]);
   } catch (_) {/* een meting mag het verplaatsen nooit tegenhouden */}
@@ -2139,6 +2156,8 @@ Future<String> _move(File src, File dest) async {
     herNoemVasteKeuze(src.path, naar);
     // En studio, cd of vinyl (kopiesoort.dart): na het opbergen weet niets anders nog waar hij vandaan kwam.
     herNoemSoort(src.path, naar);
+    // En een versie, of het anker van versies (versies.dart).
+    versies.herNoem(src.path, naar);
     // De meting hangt ook aan het pad, en om precies dezelfde reden: zonder dit geldt een
     // echtheidsmeting maar één keer, want het filen verplaatst het bestand.
     herNoemOordeel(src.path, naar);
@@ -2155,6 +2174,7 @@ Future<String> _move(File src, File dest) async {
       if (attempt < 2) await Future.delayed(Duration(milliseconds: 250 * (attempt + 1)));
     }
   }
+  if (!kopie) throw FileSystemException('niet te hernoemen (in gebruik?)', src.path);
   // Still no: copy instead, and only drop the original once the copy is safely in place.
   await src.copy(dest.path);
   try {

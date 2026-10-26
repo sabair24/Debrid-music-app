@@ -13,6 +13,7 @@ import '../vaste_keuze.dart';
 import '../twijfel.dart' show twijfelUitgave, twijfelVoor;
 import '../kopiesoort.dart' show KopiesoortTekst, soortUitgave, soortVoor;
 import '../soortjacht.dart' show gezochtVoor, soortvraagUitgave;
+import '../versies.dart' show versies;
 import 'dtos.dart';
 import 'ids.dart';
 
@@ -92,6 +93,8 @@ class LanCatalog {
     soortUitgave.addListener(_markDirty);
     // En wat de pc nog zoekt (soortjacht.dart).
     soortvraagUitgave.addListener(_markDirty);
+    // En de versies van een nummer, en welke je koos (versies.dart).
+    versies.uitgave.addListener(_markDirty);
   }
 
   final LibraryStore library;
@@ -148,6 +151,7 @@ class LanCatalog {
     twijfelUitgave.removeListener(_markDirty);
     soortUitgave.removeListener(_markDirty);
     soortvraagUitgave.removeListener(_markDirty);
+    versies.uitgave.removeListener(_markDirty);
   }
 
   CatalogSnapshot snapshot() {
@@ -195,6 +199,47 @@ class LanCatalog {
           .take(limit)
           .toList(),
     );
+  }
+
+  /// De versies van [t] voor [TrackDto.versies] (versies.dart). Elke versie wordt speelbaar onder een eigen id
+  /// ([trackById]) — zo speelt een toestel of een speaker hem als elk ander nummer, via `/stream/`.
+  Map<String, dynamic>? _versiesVan(Track t, String root, Map<String, Track> trackById) {
+    final lijst = library.versiesVan(t);
+    if (lijst.isEmpty) return null;
+    String? kies;
+    final uit = <Map<String, dynamic>>[];
+    for (final v in lijst) {
+      if (v.anker || v.soort == null) continue;
+      final vt = v.track;
+      final id = _trackIdCache.putIfAbsent(vt.path, () => trackIdFor(vt.path, root));
+      trackById[id] = vt;
+      if (v.standaard) kies = id;
+      final luid = gepubliceerdeLuidheid(vt);
+      uit.add({
+        'id': id,
+        'stroom': '/stream/$id.${vt.ext}',
+        'ext': vt.ext,
+        's': v.soort!.naam,
+        if (v.persing.isNotEmpty) 'p': v.persing,
+        if (vt.bitsPerSample > 0) 'bits': vt.bitsPerSample,
+        if (vt.sampleRate > 0) 'hz': vt.sampleRate,
+        'grootte': vt.sizeBytes,
+        'duur': vt.duration?.inMilliseconds ?? 0,
+        't': vt.addedMs,
+        if (v.verschuivingMs != null) 'v': v.verschuivingMs,
+        if (v.snelheid != 1.0) 'x': v.snelheid,
+        if (v.sindsMs > 0) 'sinds': v.sindsMs,
+        if (luid != null) 'luid': luid,
+      });
+    }
+    if (uit.isEmpty) return null;
+    final anker = lijst.firstWhere((v) => v.anker);
+    return {
+      if (anker.soort != null) 's': anker.soort!.naam,
+      if (anker.persing.isNotEmpty) 'p': anker.persing,
+      if (kies != null) 'kies': kies,
+      'lijst': uit,
+    };
   }
 
   CatalogSnapshot _build() {
@@ -312,6 +357,7 @@ class LanCatalog {
           soort: soortVoor(t.path)?.soort.naam,
           soortGekozen: soortVoor(t.path)?.gekozen ?? false,
           zoekt: gezochtVoor(t.path)?.naam,
+          versies: _versiesVan(t, root, trackById),
         ));
       }
     }
@@ -402,6 +448,8 @@ class LanCatalog {
       if (t.twijfel != null) fingerprint.add('T${t.twijfel!['id']}');
       if (t.soort != null) fingerprint.add('S${t.soort}${t.soortGekozen ? '!' : ''}');
       if (t.zoekt != null) fingerprint.add('Z${t.zoekt}');
+      // De versies en de keuze ertussen: geen enkel nummer verandert, dus zonder dit hoort geen toestel ervan.
+      if (t.versies != null) fingerprint.add('V${jsonEncode(t.versies)}');
       // De luidheid alleen als hij er is: een bibliotheek zonder metingen (of een pc zonder winkel,
       // zoals in de toetsen) houdt dan exact dezelfde ETag als vóór deze functie.
       if (t.luid != null) fingerprint.add('L${jsonEncode(t.luid)}');

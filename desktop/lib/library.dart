@@ -39,7 +39,8 @@ import 'organize.dart';
 import 'settings.dart';
 import 'vaste_keuze.dart';
 import 'twijfel.dart' show twijfelMap, twijfelsVanPcGelezen, zetTwijfelVanPc;
-import 'kopiesoort.dart' show kopiesoortUit, zetSoortVanPc;
+import 'kopiesoort.dart' show kopiesoortUit, soortVoor, zetSoortVanPc;
+import 'versies.dart';
 import 'soortjacht.dart' show zetSoortvraagVanPc;
 import 'paths.dart';
 import 'artwork.dart';
@@ -1160,6 +1161,74 @@ class LibraryStore extends ChangeNotifier {
   static String _fileName(String path) => path.split(RegExp(r'[\\/]')).last;
   final Map<String, Track> _trackByPath = {};
 
+  // ── Versies (versies.dart) ─────────────────────────────────────────────
+  //
+  // Een versie is een bestand naast een nummer — dezelfde opname als vinyl, cd of studio, of in een andere persing. Hij
+  // staat NIET in [tracks] en dus in geen enkel album, geen telling en geen "heb ik dit al?": voor de rest van de app
+  // bestaat alleen het anker. Alleen de speler en de versieknoppen kennen hem, via [versiesVan].
+
+  /// Op de pc: versiepad (sleutel) → het nummer zoals de scan het las.
+  final Map<String, Track> _versieTracks = {};
+
+  /// Op een toestel: wat de pc per nummer meestuurt (anker-pad → zijn versies, het anker inbegrepen), en de versies als
+  /// nummer op hun stroompad.
+  final Map<String, List<VersieInfo>> _versiesVanPc = {};
+  final Map<String, Track> _versieTracksVanPc = {};
+
+  /// De versies van [t], het anker inbegrepen, op volgorde (studio, cd, vinyl). Leeg: het nummer heeft er geen.
+  List<VersieInfo> versiesVan(Track t) {
+    if (isRemote) return _versiesVanPc[t.path] ?? _versiesVanPc[normaliseerPcPad(t.path)] ?? const [];
+    final lijst = versies.versiesVan(t.path);
+    if (lijst.isEmpty) return const [];
+    final g = versies.groep(t.path);
+    final ankerSoort = soortVoor(t.path)?.soort ?? g?.soort ?? soortUitKop(t);
+    final keuze = versies.speelVersie(t.path, ankerSoort: ankerSoort);
+    final uit = <VersieInfo>[];
+    for (final v in lijst) {
+      final vt = _versieTracks[_padSleutel(v.pad)];
+      if (vt == null) continue;
+      uit.add(VersieInfo(
+        track: vt,
+        soort: v.soort,
+        persing: v.persing,
+        standaard: keuze != null && _padSleutel(keuze.pad) == _padSleutel(v.pad),
+        verschuivingMs: v.verschuivingMs,
+        snelheid: v.snelheid,
+        sindsMs: v.sindsMs,
+      ));
+    }
+    if (uit.isEmpty) return const [];
+    uit.add(VersieInfo(
+        track: t, soort: ankerSoort, persing: g?.persing ?? '', anker: true, standaard: !uit.any((v) => v.standaard)));
+    return opVolgorde(uit);
+  }
+
+  /// Wat er voor [pad] speelt als je niets kiest: de gekozen versie, of [pad] zelf.
+  String speelPadVoor(String pad) {
+    if (isRemote) {
+      final lijst = _versiesVanPc[pad] ?? _versiesVanPc[normaliseerPcPad(pad)];
+      if (lijst == null) return pad;
+      for (final v in lijst) {
+        if (v.standaard) return v.track.path;
+      }
+      return pad;
+    }
+    if (versies.isLeeg) return pad;
+    final v = versies.speelVersie(pad, ankerSoort: soortVoor(pad)?.soort);
+    if (v == null) return pad;
+    return _versieTracks[_padSleutel(v.pad)]?.path ?? pad;
+  }
+
+  /// Alle versies als nummer (op de pc): voor de catalogus, die ze speelbaar maakt.
+  Iterable<Track> get versieTracks => _versieTracks.values;
+
+  /// [tracks] en de versies samen: voor gelijk volume, dat ook een versie moet meten — anders klinkt de wissel naar
+  /// vinyl harder of zachter dan de cd die speelde.
+  List<Track> get metVersies => _versieTracks.isEmpty ? tracks : [...tracks, ..._versieTracks.values];
+
+  /// De versie op [pad] als nummer (op de pc), of null.
+  Track? versieTrack(String pad) => _versieTracks[_padSleutel(pad)];
+
   /// The album cover for a track (covers live on the Album, not the Track).
   Uint8List? coverForTrack(Track t) {
     final album = _albumByPath[t.path];
@@ -1279,7 +1348,12 @@ class LibraryStore extends ChangeNotifier {
   /// Op een toestel herkent dit ook een pad van vóór 14-10-2026, met het adres van de pc erin
   /// (`resume_queue.json`, `resume_pos.json`): dat wordt eerst de vaste naam (`vaste_naam.dart`).
   Track? trackByPath(String path) =>
-      _trackByPath[path] ?? (isRemote ? _trackByPath[normaliseerPcPad(path)] : null);
+      _trackByPath[path] ??
+      (isRemote ? _trackByPath[normaliseerPcPad(path)] : null) ??
+      // Een versie (versies.dart): geen nummer van de bibliotheek, maar de speler vraagt hier wel naar zijn luidheid.
+      (isRemote
+          ? _versieTracksVanPc[path] ?? _versieTracksVanPc[normaliseerPcPad(path)]
+          : (_versieTracks.isEmpty ? null : _versieTracks[_padSleutel(path)]));
 
   /// Bumped whenever a track's TEXT changes — its title, artist, album or numbering.
   ///
@@ -2527,6 +2601,17 @@ class LibraryStore extends ChangeNotifier {
       return null;
     }
     if (rij == null) return null;
+    // Een versie (versies.dart) hoort bij geen album: alleen bij zijn anker.
+    if (versies.isVersie(pad)) {
+      final v = _trackFromMap(rij);
+      _versieTracks[_padSleutel(pad)] = v;
+      tracks.removeWhere((x) => x.path == pad);
+      scanned = tracks.length;
+      rebuildAlbums();
+      _bumpMeta();
+      notifyListeners();
+      return v;
+    }
     final t = _applyCorrection(_trackFromMap(rij));
     final al = tracks.indexWhere((x) => x.path == pad);
     if (al >= 0) {
@@ -2933,12 +3018,23 @@ class LibraryStore extends ChangeNotifier {
       return;
     }
     _stapNu('omzetten', () {
+      final alle = raw.map(_trackFromMap).toList();
+      // Versies (versies.dart): eerst wat er niet meer staat uit het register — een anker dat weg is krijgt zijn beste
+      // versie als opvolger, en die hoort dan gewoon bij de bibliotheek.
+      if (!versies.isLeeg) {
+        final gezien = {for (final t in alle) _padSleutel(t.path)};
+        versies.ruimOp((p) => gezien.contains(_padSleutel(p)));
+      }
+      _versieTracks.clear();
       tracks
         ..clear()
-        ..addAll(raw
-            .map(_trackFromMap)
-            .where((t) => !_hidden.contains(t.path)) // "removed from library only" stays removed
-            .map(_applyCorrection));
+        ..addAll(alle.where((t) {
+          if (versies.isVersie(t.path)) {
+            _versieTracks[_padSleutel(t.path)] = t;
+            return false;
+          }
+          return !_hidden.contains(t.path); // "removed from library only" stays removed
+        }).map(_applyCorrection));
     });
     scanned = tracks.length;
     _stapNu('groeperen', rebuildAlbums);
@@ -3211,6 +3307,8 @@ class LibraryStore extends ChangeNotifier {
 
     final byAlbum = <String, List<Track>>{};
     tracks.clear();
+    _versiesVanPc.clear();
+    _versieTracksVanPc.clear();
     for (final dto in catalog.tracks) {
       final t = _trackFromDto(dto, client);
       tracks.add(t);
@@ -3469,7 +3567,65 @@ class LibraryStore extends ChangeNotifier {
     // Gelijk volume: de meting van de pc, onder dezelfde sleutel (grootte|tijd) als op de pc — het
     // Track hier krijgt die twee uit deze DTO. Zie luidheid_winkel.dart.
     onthoudLuidheidVanPc(sizeBytes: d.sizeBytes, addedMs: d.addedMs, luid: d.luid);
-    return _trackFromDtoMet(d, pad);
+    final t = _trackFromDtoMet(d, pad);
+    if (d.versies case final vs?) _versiesUitDto(t, vs);
+    return t;
+  }
+
+  /// De versies die de pc bij nummer [t] meestuurt ([TrackDto.versies]), als [VersieInfo] — en elke versie als nummer op
+  /// zijn stroompad, met zijn eigen luidheid (gelijk volume bij het wisselen).
+  void _versiesUitDto(Track t, Map<String, dynamic> vs) {
+    final lijst = vs['lijst'];
+    if (lijst is! List || lijst.isEmpty) return;
+    final kies = vs['kies'] is String ? vs['kies'] as String : null;
+    final uit = <VersieInfo>[];
+    for (final v in lijst) {
+      if (v is! Map) continue;
+      final soort = kopiesoortUit(v['s']);
+      final stroom = v['stroom'];
+      if (soort == null || stroom is! String || stroom.isEmpty) continue;
+      final ms = (v['duur'] as num?)?.toInt() ?? 0;
+      final ext = '${v['ext'] ?? ''}';
+      final vt = Track(
+        path: vastePcNaam(stroom),
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        trackNo: t.trackNo,
+        trackTotal: t.trackTotal,
+        duration: ms > 0 ? Duration(milliseconds: ms) : null,
+        isFlac: ext == 'flac',
+        year: t.year,
+        genre: t.genre,
+        addedMs: (v['t'] as num?)?.toInt() ?? 0,
+        sizeBytes: (v['grootte'] as num?)?.toInt() ?? 0,
+        sampleRate: (v['hz'] as num?)?.toInt() ?? 0,
+        bitsPerSample: (v['bits'] as num?)?.toInt() ?? 0,
+      );
+      if (v['luid'] is Map) {
+        onthoudLuidheidVanPc(
+            sizeBytes: vt.sizeBytes, addedMs: vt.addedMs, luid: Map<String, dynamic>.from(v['luid'] as Map));
+      }
+      _versieTracksVanPc[vt.path] = vt;
+      uit.add(VersieInfo(
+        track: vt,
+        soort: soort,
+        persing: '${v['p'] ?? ''}',
+        standaard: kies != null && kies == v['id'],
+        verschuivingMs: (v['v'] as num?)?.toInt(),
+        snelheid: (v['x'] as num?)?.toDouble() ?? 1.0,
+        sindsMs: (v['sinds'] as num?)?.toInt() ?? 0,
+      ));
+    }
+    if (uit.isEmpty) return;
+    uit.add(VersieInfo(
+      track: t,
+      soort: kopiesoortUit(vs['s']),
+      persing: '${vs['p'] ?? ''}',
+      anker: true,
+      standaard: !uit.any((v) => v.standaard),
+    ));
+    _versiesVanPc[t.path] = opVolgorde(uit);
   }
 
   /// Wat de PC als handmatige rij-toewijzing kent, op het pad zoals dit toestel het noemt.
