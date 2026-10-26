@@ -98,6 +98,36 @@ double similarity(List<int> a, List<int> b, {int maxOffset = 30}) {
   return best;
 }
 
+/// Zoals [similarity], maar met de verschuiving erbij: hoeveel items B later begint dan A bij de beste overeenkomst
+/// (versie_uitlijner.dart — een vinylrip begint vaak een paar seconden later dan de cd).
+({double score, int verschuiving}) bestePassing(List<int> a, List<int> b, {int maxOffset = 30}) {
+  if (a.isEmpty || b.isEmpty) return (score: 0, verschuiving: 0);
+  var best = 0.0, waar = 0;
+  for (var offset = -maxOffset; offset <= maxOffset; offset++) {
+    final int ai, bi, overlap;
+    if (offset >= 0) {
+      ai = 0;
+      bi = offset;
+      overlap = (b.length - offset) < a.length ? b.length - offset : a.length;
+    } else {
+      ai = -offset;
+      bi = 0;
+      overlap = (a.length + offset) < b.length ? a.length + offset : b.length;
+    }
+    if (overlap < 20) continue;
+    var bits = 0;
+    for (var i = 0; i < overlap; i++) {
+      bits += _popcount(a[ai + i] ^ b[bi + i]);
+    }
+    final score = 1 - (bits / (overlap * 32));
+    if (score > best) {
+      best = score;
+      waar = offset;
+    }
+  }
+  return (score: best, verschuiving: waar);
+}
+
 /// Certainly the same recording. Measured on the real library, not guessed.
 ///
 /// All 389 tracks were fingerprinted and every pair of matching length compared — 10,231 pairs. Two

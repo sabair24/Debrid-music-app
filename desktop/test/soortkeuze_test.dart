@@ -462,8 +462,13 @@ void main() {
     expect(online, contains('      if (uit.how == Placement.moved) _noteerSoort(uit.path, bronpad ?? bron);'));
     expect(online, contains('            if (how == Placement.moved) _noteerSoort(uit.path, f.filename);'));
     expect(online, contains("        _noteerSoort(uit.path, 'TIDAL \$id');"));
-    expect(online, contains('    if (bestaand != null && !magVanzelf(bestaand, _soortVanBinnen(staged, bronpad ?? bron))) {'));
-    expect(online, contains('            if (bestaand != null && !magVanzelf(bestaand, _soortVanBinnen(staged, f.filename))) {'));
+    // Sinds 26-10-2026 behalve voor een andere versie (versies.dart): die vervangt niets.
+    expect(online, contains('    if (bestaand != null &&\n        !(plan?.isVersie ?? false) &&\n'
+        '        !magVanzelf(bestaand, _soortVanBinnen(staged, bronpad ?? bron))) {'));
+    expect(online, contains('            if (bestaand != null &&\n                !(plan?.isVersie ?? false) &&\n'
+        '                !magVanzelf(bestaand, _soortVanBinnen(staged, f.filename))) {'));
+    expect(online, contains('        (nietBeter || !magVanzelf(bestaand!, plan.soort))) {'),
+        reason: 'het nummer opzij zetten alleen binnen je eigen soortkeuze');
     expect(online, contains('    if (keuze != null && keuze != Kopiesoort.studio) return;'));
     expect(online, contains('          vervangAltijd: g.gevraagd);'));
     final organize = _bron('lib/organize.dart');

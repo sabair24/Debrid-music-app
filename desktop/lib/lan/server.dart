@@ -16,6 +16,8 @@ import '../album_facts_resolver.dart';
 import '../enrichment.dart';
 import '../kapot_bestand.dart';
 import '../flac_tags.dart' show readFlacTags;
+import '../versie_acties.dart';
+import '../versies.dart' show VersieBereik, versies;
 import '../library.dart';
 import '../models.dart';
 import '../musicbrainz.dart';
@@ -97,6 +99,8 @@ String? weigerVanBuiten(String pad, String methode) {
     // Het schudlogboek van een toestel (schudlog.dart): onderweg schudt Saber ook (26-10-2026: "Ik heb vandaag op de gsm
     // verschillende keer gesnuffeld" — en niets kwam aan). schud.log heeft een plafond ([kSchudLogBytes]).
     '/api/diag/schud',
+    // Een versie kiezen of weggooien (versies.dart): onderweg wissel je ook van cd naar vinyl.
+    '/api/versie',
     '/api/soort/stop',
     '/api/releaseart',
   };
@@ -205,6 +209,18 @@ class LanServer {
     // Een klaargezette kopie als nummer (`kandidaat-<id>`): zo speelt een speaker hem tussendoor
     // ([CastManager.tussendoor]), langs dezelfde /stream/ als elk ander nummer.
     catalog.extraTrack = _kandidaatAlsNummer;
+    // De versies van een nummer (versies.dart): een speaker speelt de versie die je koos, en wisselt op hetzelfde moment in
+    // de muziek.
+    cast.speelVersie = (id) {
+      final t = catalog.track(id);
+      if (t == null) return id;
+      final pad = library.speelPadVoor(t.path);
+      return pad == t.path ? id : catalog.idVoorPad(pad);
+    };
+    cast.versiePlek = (van, naar, ms) {
+      final a = catalog.track(van), b = catalog.track(naar);
+      return a == null || b == null ? ms : versies.plekTussen(a.path, b.path, ms);
+    };
     cast.bijStand = () =>
         zones.zetSpeakers(cast.laatsteStanden, bekend: cast.bekendeSpeakers, groepen: cast.speakerGroepen);
     zones.speakerRij = cast.rijVan;
@@ -608,6 +624,11 @@ class LanServer {
             await cast.tussendoorAB(speaker);
           case 'tussendoorKlaar':
             await cast.tussendoorKlaar(speaker, hervat: op['hervat'] != false);
+          // Een andere versie van het spelende nummer (versies.dart): {versieId}.
+          case 'versie':
+            final vid = '${op['versieId'] ?? ''}';
+            if (catalog.track(vid) == null) return (status: 409, antwoord: {'error': 'Die versie kent de pc niet.'});
+            await cast.wisselVersie(speaker, vid);
           case 'jump':
             await cast.springNaar(speaker, (op['plek'] as num?)?.toInt() ?? 0, trackId: '${op['trackId'] ?? ''}');
           case 'remove':
@@ -1183,6 +1204,8 @@ class LanServer {
         return _soortVraag(req);
       case '/api/soort/stop':
         return _soortStop(req);
+      case '/api/versie':
+        return _versie(req);
       case '/api/tidal/zoek':
         return _tidal(req, 'zoek');
       case '/api/tidal/album':
@@ -2209,6 +2232,13 @@ class LanServer {
       // Wie vraagt, luisterde vaak net zelf (A/B): wat dát toestel leest of speelt, houdt het houden niet tegen.
       'vervang' => await manager.vervangDoorTwijfel(t.path,
           behalveLezer: req.connectionInfo?.remoteAddress.address, behalveZone: body['toestel'] as String?),
+      // Bewaren als versie (versies.dart): het nummer blijft, de kopie komt erbij — of meteen als standaard.
+      'bewaar' => await manager.vervangDoorTwijfel(t.path, alsVersie: true),
+      'bewaarStandaard' => await manager.vervangDoorTwijfel(t.path,
+          alsVersie: true,
+          standaard: true,
+          behalveLezer: req.connectionInfo?.remoteAddress.address,
+          behalveZone: body['toestel'] as String?),
       'weg' => await manager.gooiTwijfelWeg(t.path),
       _ => null,
     };
@@ -2235,6 +2265,29 @@ class LanServer {
     if (teVeel != null) return _teVeel(req, teVeel);
     final album = body['album'] is String ? body['album'] as String : null;
     final zin = await manager.vraagSoort(nummers, soort, album: album, gezag: library.tagsVoorVervanger);
+    return _json(req.response, {'zin': zin});
+  }
+
+  /// Een versie kiezen of weggooien vanaf een toestel (versies.dart): {trackId (het nummer), actie: kies | weg, versieId,
+  /// bereik: nummer | plaat | geen}. Kiezen met het id van het nummer zelf zet het nummer terug. Antwoord: {zin}.
+  Future<void> _versie(HttpRequest req) async {
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final anker = catalog.track('${body['trackId'] ?? ''}');
+    final v = catalog.track('${body['versieId'] ?? ''}');
+    if (anker == null || v == null) {
+      return _json(req.response, {'error': 'Dit nummer of deze versie kent de pc niet.'}, status: HttpStatus.notFound);
+    }
+    final zin = switch (body['actie']) {
+      'kies' => kiesVersie(library, anker, v.path, switch (body['bereik']) {
+          'plaat' => VersieBereik.plaat,
+          'nummer' => VersieBereik.nummer,
+          _ => null,
+        }),
+      'weg' => await gooiVersieWeg(library, anker, v.path),
+      _ => null,
+    };
+    if (zin == null) return _json(req.response, {'error': 'Onbekende keuze.'}, status: HttpStatus.badRequest);
     return _json(req.response, {'zin': zin});
   }
 

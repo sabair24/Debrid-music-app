@@ -51,6 +51,8 @@ import 'luidheid.dart' show Gemeten;
 import 'luidheid_veger.dart' show meetLuidheid;
 import 'soortjacht.dart';
 import 'vinyl.dart' show isVinylRip, vinylAchteraan;
+import 'versie_opbergen.dart';
+import 'versies.dart' show VersieBereik, versieLabel, versieMapLabel, versies;
 import 'wav_naar_flac.dart' show wavNaarFlac;
 import 'tidaler.dart' show Tidaler, haalVanTidal, kTidalRadioPerUur, kiesTidalTreffers, zoekOpTidal;
 import 'torbox_stand.dart';
@@ -2208,7 +2210,11 @@ class DownloadManager extends ChangeNotifier {
   /// en niet vervangen, maar bewaren in [twijfelMap] tot je kiest (Saber, 25-10-2026). Waar als hij bewaard is of er al
   /// een twijfelgeval voor dit nummer wacht — dan is [staged] in beide gevallen weg uit de keuringsmap.
   @visibleForTesting
-  Future<bool> bewaarAlsTwijfel(File staged, String bestaand, double score, String bron, TrackTags? gezag) async {
+  ///
+  /// [bronpad]: waar hij vandaan kwam als pad (bij de uploader, in de torrent) — wat hem tot vinyl maakt, als je hem straks
+  /// als versie bewaart (versies.dart).
+  Future<bool> bewaarAlsTwijfel(File staged, String bestaand, double score, String bron, TrackTags? gezag,
+      {String? bronpad}) async {
     final lijst = twijfel;
     if (lijst == null) return false;
     final naam = gezag == null ? baseName(bestaand) : '${gezag.artist} — ${gezag.title}';
@@ -2251,6 +2257,7 @@ class DownloadManager extends ChangeNotifier {
       ms: DateTime.now().millisecondsSinceEpoch,
       grootte: grootte,
       gezag: gezag?.toJson(),
+      bronpad: bronpad,
     ));
     await lijst.bewaar();
     _log.line('"$naam": TWIJFEL — $bron klinkt beter ($kwaliteit), maar de vingerafdruk zegt $s: bewaard tot je kiest');
@@ -2262,7 +2269,12 @@ class DownloadManager extends ChangeNotifier {
   ///
   /// [behalveLezer] en [behalveZone]: het toestel dat vraagt (zijn adres, zijn id) — wat dat zelf leest of speelt, houdt
   /// het houden niet tegen ([inGebruikVoorHouden]).
-  Future<String> vervangDoorTwijfel(String pad, {String? behalveLezer, String? behalveZone}) async {
+  ///
+  /// [alsVersie] (versies.dart, Saber 26-10-2026: "Bewaren" en "Bewaren en standaard maken"): niet vervangen maar erbij
+  /// bewaren, in een eigen versiemap; je nummer blijft. Met [standaard] speelt de nieuwe voortaan voor dit nummer — of
+  /// wordt hij zelf het nummer, als hij hoger staat (een echte studiokopie voor je cd).
+  Future<String> vervangDoorTwijfel(String pad,
+      {String? behalveLezer, String? behalveZone, bool alsVersie = false, bool standaard = false}) async {
     final lijst = twijfel;
     final g = lijst?.van(pad);
     if (lijst == null || g == null) return 'Er wacht geen twijfelkopie meer voor dit nummer';
@@ -2271,6 +2283,10 @@ class DownloadManager extends ChangeNotifier {
       lijst.verwijder(pad);
       await lijst.bewaar();
       return 'De twijfelkopie staat er niet meer';
+    }
+    if (alsVersie) {
+      return _bewaarTwijfelAlsVersie(pad, g, lijst,
+          standaard: standaard, behalveLezer: behalveLezer, behalveZone: behalveZone);
     }
     // Net losgelaten om te vervangen (Deze houden terwijl het speelde): even wachten tot niets het nog open heeft.
     bool inGebruik() =>
@@ -2325,6 +2341,68 @@ class DownloadManager extends ChangeNotifier {
     return g.soort == null
         ? 'Vervangen door ${g.kwaliteit} — je vorige kopie staat in _dubbel'
         : 'Gehouden: ${g.soort!.naam} (${g.kwaliteit}) — je vorige kopie staat in _dubbel';
+  }
+
+  Future<String> _bewaarTwijfelAlsVersie(String pad, Twijfelgeval g, Twijfellijst lijst,
+      {required bool standaard, String? behalveLezer, String? behalveZone}) async {
+    final f = File(g.kandidaat);
+    final gezag = g.gezag == null ? null : TrackTags.fromJson(g.gezag!);
+    final naam = gezag == null ? baseName(pad) : '${gezag.artist} — ${gezag.title}';
+    var plan = versieplanVoor(f, pad, g.bronpad ?? g.bron);
+    if (plan.soort == null) return 'Deze kopie is niet verliesvrij — als versie bewaren kan niet';
+    // Dezelfde versie als je nummer of als een versie die er al is (een twijfel): jij koos bewaren, dus apart.
+    if (plan.besluit == Versiebesluit.gewoon || plan.besluit == Versiebesluit.vervangVersie) {
+      plan = Versieplan(
+          besluit: Versiebesluit.nieuweVersie,
+          anker: pad,
+          soort: plan.soort,
+          persing: plan.persing.isEmpty ? 'andere kopie' : '${plan.persing} andere kopie',
+          bron: plan.bron,
+          ankerSoort: plan.ankerSoort,
+          ankerPersing: plan.ankerPersing);
+    }
+    // Alleen met "standaard maken" mag hij het nummer worden; anders een versie ernaast.
+    if (plan.besluit == Versiebesluit.ankerOpzij && !standaard) plan = plan.als(Versiebesluit.nieuweVersie);
+    if (plan.besluit == Versiebesluit.ankerOpzij) {
+      // Het nummer gaat opzij: even wachten tot niets het nog open heeft (zoals bij vervangen).
+      bool inGebruik() =>
+          inGebruikVoorHouden?.call(pad, behalveLezer: behalveLezer, behalveZone: behalveZone) ??
+          (speeltNu?.call(pad) ?? false);
+      for (var i = 0; i < 25 && inGebruik(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      if (inGebruik()) plan = plan.als(Versiebesluit.nieuweVersie);
+    }
+    Versieuitslag? uit;
+    try {
+      uit = await bergOpAlsVersie(f, plan, root: _downloadsRoot, tags: gezag);
+      if (uit == null && plan.besluit == Versiebesluit.ankerOpzij && f.existsSync()) {
+        plan = plan.als(Versiebesluit.nieuweVersie);
+        uit = await bergOpAlsVersie(f, plan, root: _downloadsRoot, tags: gezag);
+      }
+    } catch (e) {
+      return 'Bewaren lukte niet: $e';
+    }
+    if (uit == null) return 'Bewaren lukte niet — de kopie wacht nog';
+    final kop = readFlacTags(File(uit.pad));
+    final label = versieLabel(plan.soort!, plan.persing, bits: kop?.bitsPerSample ?? 0, hz: kop?.sampleRate ?? 0);
+    if (standaard && !uit.werdAnker) {
+      final v = versies.versie(uit.pad);
+      if (v != null) versies.kies(pad, v.sleutel, bereik: VersieBereik.nummer);
+    }
+    lijst.verwijder(pad);
+    await lijst.bewaar();
+    if (g.soort != null && soortvragen?.verwijder(pad) != null) await soortvragen!.bewaar();
+    _log.line('"$naam": ${g.soort == null ? 'twijfelkopie' : '${g.soort!.naam}-kopie'} bewaard als versie (${g.bron}, '
+        '$label)${uit.werdAnker ? ' — nu het nummer, de vorige bleef als versie' : standaard ? ' — standaard voor dit nummer' : ''}');
+    try {
+      await onLibraryChanged();
+    } catch (_) {}
+    return uit.werdAnker
+        ? 'Bewaard en standaard: $label — je vorige kopie bleef als versie'
+        : standaard
+            ? 'Bewaard en standaard voor dit nummer: $label'
+            : 'Bewaard als versie: $label — je eigen kopie blijft het nummer';
   }
 
   /// Wie een twijfelkopie naar de prullenbak brengt ([naarPrullenbak]); een toets zet er een nep in, zodat hij nooit
@@ -3252,7 +3330,9 @@ class DownloadManager extends ChangeNotifier {
           // download bergt het op als het klaar is. Zie [_inAanmaak].
           slaOver: _inAanmaak.contains,
           keur: _keurVoorBibliotheek,
-          alGehad: _alGehadOnderAndereTitel);
+          alGehad: _alGehadOnderAndereTitel,
+          // Een vinylrip naast je cd (versies.dart): erbij, niet in de plaats.
+          alsVersie: _torrentAlsVersie);
       _log.line('torrent "$naam" gekeurd en opgeborgen: $r');
       for (final p in r.tegengehouden) {
         _log.line('torrent "$naam": ${p.split(Platform.pathSeparator).last} — ${r.uitkomst[p]}');
@@ -3935,6 +4015,7 @@ class DownloadManager extends ChangeNotifier {
           return TidalBeterUitslag.vervangen;
         case _Wenskeuring.afgewezen:
         case _Wenskeuring.alAanwezig:
+        case _Wenskeuring.alsVersie:
           return TidalBeterUitslag.afgewezen;
       }
     } catch (e) {
@@ -4186,7 +4267,13 @@ class DownloadManager extends ChangeNotifier {
     // radio-edit als `(2)` naast het origineel en blijft de vervalsing staan.
     // FLAC uit zijn kop; elk ander formaat uit de decodeerproef die er net overheen ging.
     final lengte = _duurVan(staged.path) ?? gedecodeerdeLengte(staged.path)?.round();
-    if (!zelfdeLengte(w.authority?.seconds, lengte)) {
+    // Een vinylrip duurt vaak een paar seconden langer (de naald erop, de uitloop): die mag tot [kVinylLengteSpeling]
+    // afwijken — maar alleen als VERSIE, en dan beslist de vingerafdruk of het dezelfde opname is (versies.dart).
+    final vinyl = isVinylRip(bronpad ?? bron);
+    final alleenAlsVersie = !zelfdeLengte(w.authority?.seconds, lengte) &&
+        vinyl &&
+        (w.authority!.seconds! - lengte!).abs() <= kVinylLengteSpeling;
+    if (!zelfdeLengte(w.authority?.seconds, lengte) && !alleenAlsVersie) {
       _log.line('   $bron: andere uitgave (${lengte}s tegen '
           '${w.authority?.seconds}s) — weggegooid, volgende kandidaat');
       if (inJacht) jacht.value = jacht.value.met(
@@ -4207,22 +4294,54 @@ class DownloadManager extends ChangeNotifier {
     final bestaand = await _bereidVergelijkingVoor(
         staged,
         w.authority ?? TrackTags(title: w.title, artist: w.artist, album: w.album, trackNo: 0));
+    var score = bestaand == null ? null : await _opnameScore(staged.path, bestaand);
+    // Een vinylrip begint vaak verder van de eerste noot dan de cd: dan nog eens, met meer ruimte om te schuiven.
+    if (vinyl && bestaand != null && score != null && score < maybeSameRecordingScore) {
+      score = await _opnameScoreRuim(staged.path, bestaand) ?? score;
+    }
+    final opname = opnameOordeel(score);
+    final andereOpname = bestaand != null && (opname == Opnameoordeel.andere || opname == Opnameoordeel.twijfel);
+    final nietBeter = bestaand != null && !firstIsBetter(staged, File(bestaand));
+    // Een andere versie dan wat je hebt (versies.dart, Saber 26-10-2026: "Behoud ik alles e, cd, studio, en vinyl"):
+    // bewaren in plaats van weggooien of vervangen. Alleen als de vingerafdruk zegt dat het dezelfde opname is.
+    var plan = bestaand != null && (opname == Opnameoordeel.zelfde || opname == Opnameoordeel.twijfel)
+        ? versieplanVoor(staged, bestaand, bronpad ?? bron)
+        : null;
+    // Het nummer opzij zetten mag alleen voor een kopie die ook bewezen beter is, en die binnen je eigen soortkeuze valt;
+    // anders wordt hij gewoon een versie en blijft wat je had.
+    if (plan != null &&
+        plan.besluit == Versiebesluit.ankerOpzij &&
+        (nietBeter || !magVanzelf(bestaand!, plan.soort))) {
+      plan = plan.als(Versiebesluit.nieuweVersie);
+    }
     // Koos je zelf een soort voor dit nummer (kopiesoort.dart): alleen binnen die soort vervangen — ook TIDAL en torrents.
-    if (bestaand != null && !magVanzelf(bestaand, _soortVanBinnen(staged, bronpad ?? bron))) {
+    // Een versie vervangt niets, en mag dus wel.
+    if (bestaand != null &&
+        !(plan?.isVersie ?? false) &&
+        !magVanzelf(bestaand, _soortVanBinnen(staged, bronpad ?? bron))) {
       _log.line('   $bron: je koos ${gekozenSoort(bestaand)?.voluit} voor dit nummer, en dit is een andere soort — weggegooid');
       await _discardStaged(staged.path);
       return _Wenskeuring.afgewezen;
     }
-    final score = bestaand == null ? null : await _opnameScore(staged.path, bestaand);
-    final opname = opnameOordeel(score);
-    final andereOpname = bestaand != null && (opname == Opnameoordeel.andere || opname == Opnameoordeel.twijfel);
-    final nietBeter = bestaand != null && !firstIsBetter(staged, File(bestaand));
-    // Klinkt bewezen beter, maar de vingerafdruk twijfelt: niet weggooien, aanbieden (twijfel.dart).
+    // Klinkt bewezen beter, of is een andere versie, maar de vingerafdruk twijfelt: niet weggooien, aanbieden (twijfel.dart).
     if (bestaand != null &&
         opname == Opnameoordeel.twijfel &&
-        !nietBeter &&
-        await bewaarAlsTwijfel(staged, bestaand, score!, bron, w.authority)) {
+        (!nietBeter || (plan?.isVersie ?? false)) &&
+        await bewaarAlsTwijfel(staged, bestaand, score!, bron, w.authority, bronpad: bronpad)) {
       if (inJacht) jacht.value = jacht.value.met(regel: 'Bij $bron: twijfel — bewaard tot je kiest.');
+      return _Wenskeuring.afgewezen;
+    }
+    if (plan != null && plan.isVersie && opname == Opnameoordeel.zelfde) {
+      final uit = await _bergOpAlsVersie(staged, plan, w.authority, bron, inJacht: inJacht);
+      if (uit != null) return uit;
+      // Als versie bewaren lukte niet: dan ook niet alsnog in de plaats van je nummer (een vinylrip vervangt geen cd).
+      await _discardStaged(staged.path);
+      return _Wenskeuring.afgewezen;
+    }
+    if (alleenAlsVersie) {
+      _log.line('   $bron: andere uitgave (${lengte}s tegen ${w.authority?.seconds}s, en geen andere versie dan wat je hebt) — '
+          'weggegooid, volgende kandidaat');
+      await _discardStaged(staged.path);
       return _Wenskeuring.afgewezen;
     }
     if (andereOpname || nietBeter) {
@@ -4254,6 +4373,90 @@ class DownloadManager extends ChangeNotifier {
       if (bestaand != null) await _vergeetTwijfel(bestaand);
     } catch (_) {/* de scan vindt hem waar hij ook landde */}
     return _Wenskeuring.opgeborgen;
+  }
+
+  /// [staged] opbergen als versie van wat er ligt ([plan], versie_opbergen.dart), met het logboek en de strook erbij. Null:
+  /// het lukte niet — dan gaat de keuring verder zoals zonder versies. Geeft voor de wens [_Wenskeuring.opgeborgen] als hij
+  /// het nummer werd (een echte studiokopie voor je cd), en anders [_Wenskeuring.alsVersie]: de wens zoekt verder.
+  Future<_Wenskeuring?> _bergOpAlsVersie(File staged, Versieplan plan, TrackTags? gezag, String bron,
+      {bool inJacht = true}) async {
+    final naam = gezag == null ? baseName(plan.anker) : '${gezag.artist} — ${gezag.title}';
+    final label = versieLabel(plan.soort!, plan.persing, bits: readFlacTags(staged)?.bitsPerSample ?? 0,
+        hz: readFlacTags(staged)?.sampleRate ?? 0);
+    Versieuitslag? uit;
+    try {
+      uit = await bergOpAlsVersie(staged, plan, root: _downloadsRoot, tags: gezag);
+      // Het nummer zat vast (een speler had het open): dan wordt de nieuwe een versie, en blijft wat je had.
+      if (uit == null && plan.besluit == Versiebesluit.ankerOpzij && staged.existsSync()) {
+        uit = await bergOpAlsVersie(staged, plan.als(Versiebesluit.nieuweVersie), root: _downloadsRoot, tags: gezag);
+      }
+    } catch (e) {
+      _log.line('   $bron: "$naam" als versie bewaren lukte niet — $e');
+      return null;
+    }
+    if (uit == null) return null;
+    if (uit.verloor) {
+      _log.line('   $bron: "$naam" is dezelfde versie als je ${plan.vervangt?.persing.isNotEmpty == true ? plan.vervangt!.persing : plan.soort!.naam}-versie, '
+          'en niet bewezen beter — weggegooid');
+      return _Wenskeuring.afgewezen;
+    }
+    if (uit.werdAnker) {
+      _log.line('"$naam": $bron BEWEZEN BETER ($label) — nu het nummer; je vorige kopie bleef als versie '
+          '(${plan.ankerSoort?.naam ?? '?'})');
+      if (plan.anker != uit.pad) await _vergeetTwijfel(plan.anker);
+    } else {
+      _log.line('"$naam": $bron bewaard als versie — $label, in "${baseName(File(uit.pad).parent.path)}"');
+    }
+    if (inJacht) jacht.value = jacht.value.met(regel: uit.werdAnker ? 'Bij $bron: beter — je vorige kopie bleef als versie.' : 'Bij $bron: bewaard als versie ($label).');
+    try {
+      await onLibraryChanged();
+    } catch (_) {}
+    return uit.werdAnker ? _Wenskeuring.opgeborgen : _Wenskeuring.alsVersie;
+  }
+
+  /// Een bestand uit een torrent die je zelf koos, dat een andere versie is van [bestaand] (versies.dart): als versie
+  /// bewaren in plaats van vervangen of naar _dubbel. Alleen bij dezelfde opname (de vingerafdruk). Null: geen versie.
+  Future<String?> _torrentAlsVersie(File f, String bestaand) async {
+    var score = await _opnameScore(f.path, bestaand);
+    if (isVinylRip(f.path) && score != null && score < maybeSameRecordingScore) {
+      score = await _opnameScoreRuim(f.path, bestaand) ?? score;
+    }
+    if (opnameOordeel(score) != Opnameoordeel.zelfde) return null;
+    var plan = versieplanVoor(f, bestaand, f.path);
+    if (!plan.isVersie) return null;
+    if (plan.besluit == Versiebesluit.ankerOpzij &&
+        (!firstIsBetter(f, File(bestaand)) || !magVanzelf(bestaand, plan.soort))) {
+      plan = plan.als(Versiebesluit.nieuweVersie);
+    }
+    final tags = readTags(f);
+    final uit = await bergOpAlsVersie(f, plan, root: _downloadsRoot, tags: tags, laatVerliezerStaan: true);
+    if (uit == null) return null;
+    final naam = '${tags?.artist ?? ''} — ${tags?.title ?? baseName(f.path)}';
+    if (uit.verloor) {
+      // Van jou (je koos de torrent): opzij, niet weg.
+      try {
+        await parkeer(f, '$_downloadsRoot${Platform.pathSeparator}$parkeerMap${Platform.pathSeparator}$parkeerBinnenkomer');
+      } catch (_) {}
+      _log.line('"$naam": torrent — dezelfde versie als die je al had, en niet beter; kopie in $parkeerMap');
+      return 'dezelfde versie als die je al had, en niet beter — kopie in $parkeerMap';
+    }
+    final label = versieMapLabel(plan.soort!, plan.persing);
+    _log.line('"$naam": torrent — ${uit.werdAnker ? 'nu het nummer, je vorige kopie bleef als versie' : 'bewaard als versie ($label)'}');
+    return uit.werdAnker ? 'opgeborgen — je vorige kopie bleef als versie' : 'bewaard als versie ($label)';
+  }
+
+  /// Zoals [_opnameScore], maar met tot vijftien seconden schuiven in plaats van vier: een vinylrip begint vaak met de
+  /// naald en een stukje uitloop, en dan valt het begin niet samen met de cd.
+  Future<double?> _opnameScoreRuim(String a, String b) async {
+    try {
+      final fp = Fingerprinter();
+      if (!fp.available) return null;
+      final x = await fp.of(a), y = await fp.of(b);
+      if (x == null || y == null || x.raw.isEmpty || y.raw.isEmpty) return null;
+      return similarity(x.raw, y.raw, maxOffset: 120);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Eén nummer voor de RADIO ophalen. Geeft het pad terug waar het geland is, of null.
@@ -6121,19 +6324,36 @@ class DownloadManager extends ChangeNotifier {
             // dat verkeerd om: een opgeschaalde of uit mp3 omgezette kopie is juist GROTER dan het
             // origineel, dus de jacht op iets beters kon de betere kopie weggooien.
             final bestaand = await _bereidVergelijkingVoor(staged, job.authority);
-            if (bestaand != null && !magVanzelf(bestaand, _soortVanBinnen(staged, f.filename))) {
+            var score = bestaand == null ? null : await _opnameScore(staged.path, bestaand);
+            // Een vinylrip begint vaak verder van de eerste noot dan de cd: dan nog eens, met meer ruimte om te schuiven.
+            if (isVinylRip(f.filename) && bestaand != null && score != null && score < maybeSameRecordingScore) {
+              score = await _opnameScoreRuim(staged.path, bestaand) ?? score;
+            }
+            final opname = opnameOordeel(score);
+            // Een andere versie dan wat je hebt (versies.dart): bewaren in plaats van weggooien of vervangen. Het nummer
+            // opzij zetten alleen voor een kopie die ook bewezen beter is en binnen je eigen soortkeuze valt.
+            var plan = bestaand != null && (opname == Opnameoordeel.zelfde || opname == Opnameoordeel.twijfel)
+                ? versieplanVoor(staged, bestaand, f.filename)
+                : null;
+            if (plan != null &&
+                plan.besluit == Versiebesluit.ankerOpzij &&
+                (!firstIsBetter(staged, File(bestaand!)) || !magVanzelf(bestaand, plan.soort))) {
+              plan = plan.als(Versiebesluit.nieuweVersie);
+            }
+            if (bestaand != null &&
+                !(plan?.isVersie ?? false) &&
+                !magVanzelf(bestaand, _soortVanBinnen(staged, f.filename))) {
               _log.line('   ${job.name}: je koos ${gekozenSoort(bestaand)?.voluit} voor dit nummer, en dit is een andere soort — '
                   'weggegooid');
               await _discardStaged(staged.path);
               continue;
             }
-            final score = bestaand == null ? null : await _opnameScore(staged.path, bestaand);
-            final opname = opnameOordeel(score);
             // Klinkt bewezen beter, maar de vingerafdruk twijfelt: aanbieden in plaats van weggooien (twijfel.dart).
             if (bestaand != null &&
                 opname == Opnameoordeel.twijfel &&
-                firstIsBetter(staged, File(bestaand)) &&
-                await bewaarAlsTwijfel(staged, bestaand, score!, 'Soulseek ${f.username}', job.authority)) {
+                (firstIsBetter(staged, File(bestaand)) || (plan?.isVersie ?? false)) &&
+                await bewaarAlsTwijfel(staged, bestaand, score!, 'Soulseek ${f.username}', job.authority,
+                    bronpad: f.filename)) {
               continue;
             }
             if (bestaand != null && (opname == Opnameoordeel.andere || opname == Opnameoordeel.twijfel)) {
@@ -6148,6 +6368,17 @@ class DownloadManager extends ChangeNotifier {
               await _discardStaged(staged.path);
               settle('beste vrije kwaliteit behouden');
               return;
+            }
+            if (plan != null && plan.isVersie && opname == Opnameoordeel.zelfde) {
+              final uitslag = await _bergOpAlsVersie(staged, plan, job.authority, 'Soulseek ${f.username}', inJacht: false);
+              if (uitslag == _Wenskeuring.opgeborgen) {
+                settle('kwaliteit verbeterd · ${f.username}');
+                return;
+              }
+              // Bewaard als versie, of dezelfde versie als er al een is: de jacht op het nummer zelf gaat door. Lukte het
+              // niet, dan ook niet alsnog in de plaats van je nummer.
+              if (uitslag == null) await _discardStaged(staged.path);
+              continue;
             }
             // The SAME authority as the first landing. Without it the sweep would quietly undo the
             // numbering a quarter of an hour later, using whatever this new peer's tags happen to say.
@@ -6397,6 +6628,9 @@ class DownloadManager extends ChangeNotifier {
   /// Root of the app's own, tidily-organised download tree. Only ever writes inside here — the
   /// user's existing collection elsewhere under musicRoot is never touched or moved.
   String get _downloadsRoot => '$musicRoot${Platform.pathSeparator}DebridMusic Downloads';
+
+  /// Waar de app opbergt (en waar `_dubbel` staat): voor wie van buiten opbergt (versie_terugzetter.dart).
+  String get downloadsRoot => _downloadsRoot;
 
   /// DE DECODEERPROEF op een afgeronde overdracht, voordat iets anders het bestand te zien krijgt.
   ///
@@ -7569,4 +7803,7 @@ enum _Wenskeuring {
 
   /// Verloor van wat er al lag. Niet onthouden: het bestand was in orde.
   alAanwezig,
+
+  /// Bewaard als andere versie van het nummer (versies.dart): het nummer zelf bleef. De wens zoekt verder.
+  alsVersie,
 }

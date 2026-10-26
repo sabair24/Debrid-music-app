@@ -16,6 +16,7 @@ import 'integriteit.dart';
 import 'keuring.dart';
 import 'paths.dart' show keuringMap, torrentWerkMap;
 import 'kopiesoort.dart' show herNoemSoort;
+import 'versies.dart' show versies;
 import 'vaste_keuze.dart';
 import 'wavpack_kop.dart' show readWvKop;
 
@@ -2017,6 +2018,9 @@ Future<String> _install(File src, File dest, List<File> losers, {required String
   final tmp = File('${dest.path}.incoming');
   final landed = await _move(src, tmp);
   for (final l in losers) {
+    // De versies van wat verliest (versies.dart) horen voortaan bij wat het vervangt: het is dezelfde opname, alleen
+    // beter. Vóór het parkeren — daarna staat het anker in _dubbel, en daar hoort geen versie bij.
+    versies.verhuisAnker(l.path, dest.path);
     try {
       // Wat de app zelf net binnenhaalde en meteen weer verloor, mag weg -- dat is afval van deze
       // download. Maar een bestand dat AL in de bibliotheek stond is van de gebruiker, en dat wordt
@@ -2064,6 +2068,20 @@ Future<String> _install(File src, File dest, List<File> losers, {required String
 /// that loses the race would leave half a record moved.
 Future<String> moveWithRetry(File src, File dest) => _move(src, dest);
 
+/// [f] opzij in [parkeerIn] (meestal `_dubbel`), onder een vrije naam. Nooit overschrijven, nooit wissen.
+Future<String> parkeer(File f, String parkeerIn) => _parkeer(f, parkeerIn);
+
+/// Zoals [moveWithRetry], maar ZONDER terugval op kopiëren: lukt hernoemen niet (een speler houdt het bestand open), dan
+/// null — en staat alles zoals het stond. Voor wie een nummer opzij zet om er iets anders op zijn plek te leggen (een
+/// versie, versie_opbergen.dart): met een kopie zou het origineel blijven staan, en dan staat er straks twee keer iets.
+Future<String?> verplaatsZonderKopie(File src, File dest) async {
+  try {
+    return await _move(src, dest, kopie: false);
+  } on FileSystemException {
+    return null;
+  }
+}
+
 /// Een geparkeerde kopie terugzetten op de plek van wat er nu staat; wat er nu staat gaat opzij.
 ///
 /// [geparkeerd] staat in `_dubbel`, [huidig] is de kopie die hem verving. Dit is het omgekeerde van een
@@ -2093,6 +2111,8 @@ Future<String?> zetGeparkeerdeTerug(File geparkeerd, File huidig, {required Stri
   if (doel.path != h && await doel.exists()) return null;
   final elders = huidig.parent.path;
   final String opzij;
+  // De versies van wat er nu staat, horen bij wat terugkomt (versies.dart) — zoals bij een vervanging ([_install]).
+  versies.verhuisAnker(h, doel.path);
   try {
     opzij = await _parkeer(huidig, parkeerIn);
   } catch (_) {
@@ -2126,7 +2146,7 @@ Future<String?> zetGeparkeerdeTerug(File geparkeerd, File huidig, {required Stri
 /// kopieert [_move] en blijft het origineel stil staan. Gezet in `main.dart`.
 Future<void> Function(List<String> paden)? voorVerplaatsen;
 
-Future<String> _move(File src, File dest) async {
+Future<String> _move(File src, File dest, {bool kopie = true}) async {
   try {
     await voorVerplaatsen?.call([src.path]);
   } catch (_) {/* een meting mag het verplaatsen nooit tegenhouden */}
@@ -2139,6 +2159,8 @@ Future<String> _move(File src, File dest) async {
     herNoemVasteKeuze(src.path, naar);
     // En studio, cd of vinyl (kopiesoort.dart): na het opbergen weet niets anders nog waar hij vandaan kwam.
     herNoemSoort(src.path, naar);
+    // En een versie, of het anker van versies (versies.dart).
+    versies.herNoem(src.path, naar);
     // De meting hangt ook aan het pad, en om precies dezelfde reden: zonder dit geldt een
     // echtheidsmeting maar één keer, want het filen verplaatst het bestand.
     herNoemOordeel(src.path, naar);
@@ -2155,6 +2177,7 @@ Future<String> _move(File src, File dest) async {
       if (attempt < 2) await Future.delayed(Duration(milliseconds: 250 * (attempt + 1)));
     }
   }
+  if (!kopie) throw FileSystemException('niet te hernoemen (in gebruik?)', src.path);
   // Still no: copy instead, and only drop the original once the copy is safely in place.
   await src.copy(dest.path);
   try {
@@ -2255,11 +2278,15 @@ int? looptijdInSeconden(File f) {
 /// naar `_dubbel` en niet de bibliotheek in. De torrentweg geeft hier de decodeerproef mee: een afgekapte
 /// FLAC kwam tot 29-09-2026 gewoon binnen, want tot dan toe keek niemand of een bestand wel héél was.
 /// Een keuring die zelf faalt (een uitzondering) houdt niets tegen — niet weten is niet afkeuren.
+///
+/// [alsVersie] (versies.dart): is dit een andere versie van wat er al ligt ([bestaand]) — een vinylrip naast je cd —,
+/// dan bergt die het op als versie en zegt wat er gebeurde; null: geen versie, en de gewone weg beslist.
 Future<TidyReport> bergMapOp(String map, String downloadsRoot,
     {String? Function(String artist, String title, {int? seconds})? staatAl,
     bool Function(String pad)? slaOver,
     Future<String?> Function(File f)? keur,
-    Future<bool> Function(File f)? alGehad}) async {
+    Future<bool> Function(File f)? alGehad,
+    Future<String?> Function(File f, String bestaand)? alsVersie}) async {
   final report = TidyReport();
   final dir = Directory(map);
   if (!await dir.exists()) return report;
@@ -2367,6 +2394,23 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
             seconds: sec,
             vanBestand: eigen.vanBestand,
           );
+    // Een andere versie van wat er al ligt (versies.dart): eerst met de looptijd, dan zonder — een vinylrip duurt vaak een
+    // paar seconden langer. De vingerafdruk bij [alsVersie] beslist of het dezelfde opname is.
+    if (alsVersie != null && staatAl != null && eigen != null && eigen.title.trim().isNotEmpty) {
+      final bestaand = (sec == null ? null : staatAl(eigen.artist, eigen.title, seconds: sec)) ??
+          staatAl(eigen.artist, eigen.title);
+      if (bestaand != null && File(bestaand).existsSync()) {
+        String? zin;
+        try {
+          zin = await alsVersie(f, bestaand);
+        } catch (_) {/* dan de gewone weg */}
+        if (zin != null) {
+          report.moved++;
+          report.uitkomst[before] = zin;
+          continue;
+        }
+      }
+    }
     // `parkeerAltijd`: alles wat hier langskomt stond al op je schijf, dus elke verliezer — de oude
     // kopie én het binnenkomende — gaat naar `_dubbel` en niet weg. Zie [placeFileDetailed].
     final out = await placeFileDetailed(f, downloadsRoot,

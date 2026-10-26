@@ -270,7 +270,7 @@ class LuidheidVeger {
   Future<void> start() async {
     if (!enabled || library.isRemote || _gestart) return;
     _gestart = true;
-    publiceerLuidheid(nummers: library.tracks, ffmpeg: true, kaartOok: true);
+    publiceerLuidheid(nummers: library.metVersies, ffmpeg: true, kaartOok: true);
     library.addListener(_bibliotheekVeranderd);
     _start = Timer(startNa, () => unawaited(ronde()));
   }
@@ -351,12 +351,12 @@ class LuidheidVeger {
       if (!heeftFfmpeg) {
         _log.line('ffmpeg ontbreekt — geen metingen (${Ffmpeg.laatsteFout ?? ''})');
         voortgang.value = 'ffmpeg ontbreekt';
-        publiceerLuidheid(nummers: library.tracks, ffmpeg: false, kaartOok: true);
+        publiceerLuidheid(nummers: library.metVersies, ffmpeg: false, kaartOok: true);
         return;
       }
       do {
         _nogEens = false;
-        final lijst = _volgorde(List<Track>.of(library.tracks));
+        final lijst = _volgorde(List<Track>.of(library.metVersies));
         final eersteRonde = !luidheidKlaar;
         final teMeten = [
           for (final t in lijst)
@@ -473,7 +473,7 @@ class LuidheidVeger {
           onthoudLuidheid(k, pad: t.path, uitslag: u.uitslag, erfbaar: u.erfbaar);
           if ((gemeten + mislukt) % 25 == 0) await bewaarLuidheid();
           if (_nu().difference(_laatstGepubliceerd) >= publiceerElke) {
-            publiceerLuidheid(nummers: library.tracks, ffmpeg: true, kaartOok: !alleenStatus);
+            publiceerLuidheid(nummers: library.metVersies, ffmpeg: true, kaartOok: !alleenStatus);
             _laatstGepubliceerd = _nu();
             _log.line(alleenStatus ? 'status gepubliceerd' : 'kaart gepubliceerd');
           }
@@ -484,7 +484,7 @@ class LuidheidVeger {
           _log.line('eerste ronde klaar');
         }
         await bewaarLuidheid();
-        publiceerLuidheid(nummers: library.tracks, ffmpeg: true, kaartOok: true);
+        publiceerLuidheid(nummers: library.metVersies, ffmpeg: true, kaartOok: true);
         _laatstGepubliceerd = _nu();
         if (teMeten.isNotEmpty) {
           _log.line('klaar: $gemeten gemeten, $overgenomen overgenomen, $mislukt mislukt'

@@ -14,6 +14,7 @@ import 'models.dart';
 import 'paths.dart';
 import 'schudvolgorde.dart';
 import 'vaste_keuze.dart' show sleutelVoor;
+import 'versies.dart' show VersieInfo;
 import 'vooruithalen.dart';
 import 'warm_log.dart';
 
@@ -786,6 +787,11 @@ class Stilstandwacht {
 }
 
 /// Native (libmpv) player with a queue, shuffle, repeat and a Radio mode.
+/// Een wissel van versie die onderweg ophield: een ander nummer, of een nieuwe wissel ([PlayerStore.wisselVersie]).
+class _WisselGestopt implements Exception {
+  const _WisselGestopt();
+}
+
 class PlayerStore extends ChangeNotifier
     implements NowPlayingSource, Speelbron, Rijbediening, VolgSpeler, Radiospeler {
   /// **Ruim vooruit lezen, want de muziek komt over het netwerk.**
@@ -1217,7 +1223,7 @@ class PlayerStore extends ChangeNotifier
   /// twintig seconden — en dat is precies het beeld waar de wacht na tien seconden "Er komt geen
   /// geluid" over zou roepen. Vandaar vijfentwintig zodra er een plafond in de URL staat.
   String _bron(String path) {
-    final url = mediaResolver(path);
+    final url = mediaResolver(_speelPad(path));
     final opDeLijn = grensUitUrl(url);
     // Het geduld hoort alleen bij de lijn: een kopie op het toestel hoeft niemand meer om te zetten.
     _omzetten = opDeLijn != null;
@@ -1234,7 +1240,9 @@ class PlayerStore extends ChangeNotifier
   /// bestand landde heeft een andere grootte en dus een andere meting.
   void _zetLuidheid(Track t,
       {required String adres, required List<Track> rij, required int plek, required bool opVolgorde}) {
-    final vers = trackResolver?.call(t.path) ?? t;
+    // De versie die speelt (versies.dart) heeft haar eigen meting: een vinylrip staat zelden even luid als de cd.
+    final speel = _speelPad(t.path);
+    final vers = trackResolver?.call(speel) ?? (speel == t.path ? null : trackResolver?.call(t.path)) ?? t;
     final f = luidheidVoor;
     final b = f == null ? Bijstelling.nul : f(vers, rij: rij, plek: plek, opVolgorde: opVolgorde);
     luidheidNu = b;
@@ -1548,7 +1556,7 @@ class PlayerStore extends ChangeNotifier
     stand: () => (
       radio: radioMode,
       pad: current?.path,
-      adres: current == null ? null : mediaResolver(current!.path),
+      adres: current == null ? null : mediaResolver(_speelPad(current!.path)),
       opNul: position == Duration.zero,
       netwacht: _pcKlok != null && _pcWachtVoor != null && _pcWachtVoor == current?.path,
       droog: _radioDroog,
@@ -1782,7 +1790,7 @@ class PlayerStore extends ChangeNotifier
     final t = current;
     if (t == null) return;
     // De stroomstand hangt ook aan de weg naar de pc, en die is pas nu bekend — zie `heropenVoorStand`.
-    if (heropenVoorStand(geopend: mpvAdres, nu: mediaResolver(t.path), speelt: playing, plek: position)) {
+    if (heropenVoorStand(geopend: mpvAdres, nu: mediaResolver(_speelPad(t.path)), speelt: playing, plek: position)) {
       _log?.line('STROOMSTAND ANDERS NA DE VERBINDING — opnieuw open — ${t.title}');
       unawaited(playing ? _hervatOpDezelfdePlek() : _heropenGepauzeerd());
       return;
@@ -1859,7 +1867,7 @@ class PlayerStore extends ChangeNotifier
     }
     final i = _index + 1;
     if (i < 0 || i >= _order.length) return false;
-    return !mediaResolver(_order[i].path).startsWith('http');
+    return !mediaResolver(_speelPad(_order[i].path)).startsWith('http');
   }
 
   /// De pc vragen wat er mis is, en de melding bijstellen als hij iets weet.
@@ -1941,7 +1949,7 @@ class PlayerStore extends ChangeNotifier
   Future<void> _meldBufferen(bool wacht) async {
     final pad = current?.path ?? '';
     // Alleen wat van het net komt; een bestand op dit toestel dat even laadt is geen haper.
-    if (!mediaResolver(pad).startsWith('http')) return;
+    if (!mediaResolver(_speelPad(pad)).startsWith('http')) return;
     if (wacht) {
       if (position <= Duration.zero || !playing) return; // het openen zelf, of op pauze
       _buffertSinds = DateTime.now();
@@ -2585,6 +2593,164 @@ class PlayerStore extends ChangeNotifier
   /// Heeft een speaker de muziek ([Speakerbediening])? Dan beluister je daar, via de pc.
   bool get naarSpeaker => _bijSpeaker != null;
 
+  // ── Versies (versies.dart) ────────────────────────────────────────────
+
+  /// Welke versie er voor een nummer speelt als je niets kiest: het pad van die versie, of het pad zelf. Gezet door
+  /// main.dart (`library.speelPadVoor`). Null: altijd het nummer zelf.
+  String Function(String path)? versieVoor;
+
+  /// Een versie die je tijdens het spelen koos ([wisselVersie]): alleen voor dit nummer, tot er een ander begint.
+  ({String anker, String pad})? _versieGekozen;
+
+  /// Gaat omhoog bij elk nieuw nummer en elke wissel: een wissel die nog liep, houdt dan op.
+  int _versieWissel = 0;
+
+  /// Het bestand dat er voor [path] klinkt.
+  String _speelPad(String path) {
+    final g = _versieGekozen;
+    if (g != null && g.anker == path) return g.pad;
+    return versieVoor?.call(path) ?? path;
+  }
+
+  /// Het pad van wat er nu klinkt voor het spelende nummer: het nummer zelf, of een versie ervan.
+  String? get speelPad {
+    final t = current;
+    return t == null ? null : _speelPad(t.path);
+  }
+
+  /// Hoe lang de overvloei duurt (Saber, 26-10-2026: "kort overvloeien"), en de terugweg naar de eerste speler — die is
+  /// korter: daar klinkt aan beide kanten hetzelfde bestand.
+  static const kVersieOvervloei = Duration(milliseconds: 300);
+  static const kVersieTerug = Duration(milliseconds: 150);
+
+  /// Tijdens het spelen naar een andere versie van het nummer (Saber, 26-10-2026: *"tijdens het spelen wil ik
+  /// probleemloos, vloeiend kunnen springen van cd, naar studio of vinyl, en andersom"*). Op hetzelfde moment in de muziek
+  /// ([VersieInfo.plekVanAnker]: een vinylrip begint vaak later en draait niet precies op toeren), even luid (elke versie
+  /// heeft haar eigen meting), met een korte overvloei.
+  ///
+  /// Zo: de tweede speler opent [naar] stil, iets vóór; zodra hij loopt, schuift hij bij tot hij gelijk loopt met de
+  /// eerste, en dan vloeit de eerste in [kVersieOvervloei] over naar de tweede. Daarna neemt de eerste speler het stil
+  /// weer over — op hetzelfde bestand, dus zonder dat je iets hoort — zodat de rij, de telling en het volgende nummer bij
+  /// hem blijven. Op pauze: gewoon op de plek open.
+  ///
+  /// [lijst]: alle versies (`library.versiesVan`), om te weten wat er nu klinkt. Niet als een speaker de muziek heeft:
+  /// dat doet de pc (`CastManager.wisselVersie`). Geeft terug of het lukte.
+  Future<bool> wisselVersie(VersieInfo naar, List<VersieInfo> lijst) async {
+    final t = current;
+    if (t == null || _bijSpeaker != null || _tussendoor != null) return false;
+    final nuPad = _speelPad(t.path);
+    if (nuPad == naar.track.path) return true;
+    final van = lijst.where((v) => v.track.path == nuPad).firstOrNull ?? lijst.where((v) => v.anker).firstOrNull;
+    if (van == null) return false;
+    final gen = ++_versieWissel;
+    final vorige = _versieGekozen;
+    _versieGekozen = (anker: t.path, pad: naar.track.path);
+    final f = luidheidVoor;
+    final luid = f == null ? Bijstelling.nul : f(naar.track, rij: _order, plek: _index, opVolgorde: !shuffle);
+    final volume = _gedempt ? _volume * 0.25 : _volume;
+    int naarPlek(Duration hoofd) => naar.plekVanAnker(van.ankerPlek(hoofd.inMilliseconds));
+    _log?.line('VERSIE: ${van.label} → ${naar.label} op ${position.inMilliseconds} ms '
+        '(daar ${naarPlek(position)} ms), ${luid.db.toStringAsFixed(1)} dB — ${t.title}');
+    notifyListeners();
+    if (!playing) {
+      await _openOpZelfdePlek(t, t.path, plek: Duration(milliseconds: naarPlek(position)), spelen: false, luidheid: luid);
+      luidheidNu = luid;
+      notifyListeners();
+      return true;
+    }
+    final proef = _proef ??= Player();
+    try {
+      // 1. De tweede speler: stil, op de plek waar de eerste zo zal zijn.
+      final n = proef.platform;
+      if (n is NativePlayer) {
+        if (!_proefKlaar) {
+          await n.setProperty('replaygain', 'no');
+          _proefKlaar = true;
+        }
+        await n.setProperty('replaygain-fallback', luid.db.toStringAsFixed(2));
+      }
+      await proef.setVolume(0);
+      final url = mediaResolver(naar.track.path);
+      // Onderweg zet de pc het nummer eerst helemaal om (lan/transcode.dart): dan duurt het even voor het speelt, en de
+      // eerste speler loopt intussen gewoon door. Zo ver vooruit openen helpt dan niet; bijschuiven hieronder wel.
+      final omzetten = grensUitUrl(url) != null;
+      const voor = Duration(milliseconds: 400);
+      await proef.open(Media(url, start: Duration(milliseconds: naarPlek(position + voor))), play: true);
+      // Wachten tot hij echt loopt (een stroom van de pc kan even duren, omgezet nog langer).
+      final tot = DateTime.now().add(omzetten ? const Duration(seconds: 25) : const Duration(seconds: 8));
+      while (!proef.state.playing || proef.state.position <= Duration.zero) {
+        if (gen != _versieWissel || current?.path != t.path) throw const _WisselGestopt();
+        if (DateTime.now().isAfter(tot)) throw StateError('de nieuwe versie begon niet');
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      }
+      // 2. Gelijk laten lopen: hooguit drie keer bijschuiven.
+      for (var poging = 0; poging < 3; poging++) {
+        final verschil = proef.state.position.inMilliseconds - naarPlek(position);
+        if (verschil.abs() <= 40) break;
+        await proef.seek(Duration(milliseconds: naarPlek(position) + 60));
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+      }
+      if (gen != _versieWissel || current?.path != t.path) throw const _WisselGestopt();
+      // 3. Overvloeien: de eerste zachter, de tweede harder (even sterk: cos/sin).
+      const stappen = 12;
+      for (var i = 1; i <= stappen; i++) {
+        final x = i / stappen;
+        await Future.wait([
+          _player.setVolume(volume * cos(x * pi / 2)),
+          proef.setVolume(volume * sin(x * pi / 2)),
+        ]);
+        await Future<void>.delayed(kVersieOvervloei ~/ stappen);
+      }
+      // 4. De eerste speler neemt het stil weer over, op hetzelfde bestand.
+      final bron = _bron(t.path);
+      _onthoudLuidheid(bron, luid, t.title);
+      luidheidNu = luid;
+      await _player.open(Media(bron, start: proef.state.position + voor), play: true);
+      final hoofdTot = DateTime.now().add(omzetten ? const Duration(seconds: 25) : const Duration(seconds: 8));
+      while ((!playing || position <= Duration.zero) && DateTime.now().isBefore(hoofdTot)) {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      }
+      if (!playing) {
+        // De eerste speler kwam niet op gang: dan zelf op de plek van de tweede verder, en die stil.
+        final plek = proef.state.position;
+        await _player.setVolume(_gedempt ? _volume * 0.25 : _volume);
+        await proef.stop();
+        await _openOpZelfdePlek(t, t.path, plek: plek, spelen: true, luidheid: luid);
+        _log?.line('VERSIE: de eerste speler kwam niet op gang — opnieuw geopend op ${plek.inMilliseconds} ms');
+        notifyListeners();
+        return true;
+      }
+      for (var poging = 0; poging < 3; poging++) {
+        final verschil = position.inMilliseconds - proef.state.position.inMilliseconds;
+        if (verschil.abs() <= 30) break;
+        await _player.seek(proef.state.position + const Duration(milliseconds: 60));
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+      }
+      // Hetzelfde bestand aan beide kanten: lineair, dan blijft het samen even luid.
+      const terug = 6;
+      for (var i = 1; i <= terug; i++) {
+        final x = i / terug;
+        await Future.wait([_player.setVolume(volume * x), proef.setVolume(volume * (1 - x))]);
+        await Future<void>.delayed(kVersieTerug ~/ terug);
+      }
+      await proef.stop();
+      await _player.setVolume(_gedempt ? _volume * 0.25 : _volume);
+      _log?.line('VERSIE: klaar — ${naar.label} op ${position.inMilliseconds} ms');
+      notifyListeners();
+      return true;
+    } catch (e) {
+      // Een ander nummer, pauze, of de nieuwe versie wilde niet: terug naar wat er klonk, op volle sterkte.
+      if (gen == _versieWissel && e is! _WisselGestopt) _versieGekozen = vorige;
+      try {
+        await proef.stop();
+      } catch (_) {}
+      await _player.setVolume(_gedempt ? _volume * 0.25 : _volume);
+      _log?.line('VERSIE: wisselen ${e is _WisselGestopt ? 'onderbroken' : 'mislukt: $e'}');
+      notifyListeners();
+      return false;
+    }
+  }
+
   /// [t] opnieuw open met de bron [pad], op [plek]: gelijk volume zoals het liep (zelfde nummer), en springen pas als
   /// het bestand echt loopt — zie [_hervatOpDezelfdePlek] voor waarom.
   Future<void> _openOpZelfdePlek(Track t, String pad,
@@ -2990,6 +3156,9 @@ class PlayerStore extends ChangeNotifier
     _vergelijk = null;
     _abA = null;
     _losgelaten = false;
+    // En de versie die je tijdens het vorige nummer koos ([wisselVersie]) geldt alleen voor dat nummer.
+    if (_versieGekozen?.anker != t.path) _versieGekozen = null;
+    _versieWissel++;
     // Een nieuw nummer verdient zijn eigen geduld: de klacht van het vorige zegt niets over dit.
     _wacht.reset();
     _meldStilstand(null);
@@ -3019,7 +3188,7 @@ class PlayerStore extends ChangeNotifier
     if (onKlaarzetten == null || radioMode) return;
     final volgende = _index + 1;
     if (volgende < 0 || volgende >= _order.length) return;
-    final url = mediaResolver(_order[volgende].path);
+    final url = mediaResolver(_speelPad(_order[volgende].path));
     if (grensUitUrl(url) == null) return;
     onKlaarzetten!(url);
   }

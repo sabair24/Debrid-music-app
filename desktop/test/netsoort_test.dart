@@ -121,7 +121,7 @@ void main() {
       expect(main, contains('netStore.wegNu = () => session.wegVoorStroom ?? wegUitNaam(settings.laatsteWeg);'));
       expect(main, contains('settings.laatsteWeg = w.name;'));
       final speler = File('lib/player.dart').readAsStringSync().replaceAll('\r\n', '\n');
-      expect(speler, contains('if (heropenVoorStand(geopend: mpvAdres, nu: mediaResolver(t.path), speelt: playing, plek: position)) {'));
+      expect(speler, contains('if (heropenVoorStand(geopend: mpvAdres, nu: mediaResolver(_speelPad(t.path)), speelt: playing, plek: position)) {'));
       expect(main, contains('opMobiel: netStore.onderweg,'));
     });
   });

@@ -15,12 +15,14 @@ void main() {
   test('de keuring: bij twijfel en bewezen beter bewaren, niet weggooien — bij Soulseek, TIDAL, torrents en wensen', () {
     final online = _bron('lib/online.dart');
     // _keurVoorWens: wensen, TIDAL-beter en torrents.
-    expect(online, contains('        opname == Opnameoordeel.twijfel &&\n        !nietBeter &&\n'
-        '        await bewaarAlsTwijfel(staged, bestaand, score!, bron, w.authority)) {'));
+    // Sinds 26-10-2026 ook een andere versie (versies.dart) die niet bewezen beter is: die blijft wachten in Klaar om te kiezen.
+    expect(online, contains('        opname == Opnameoordeel.twijfel &&\n        (!nietBeter || (plan?.isVersie ?? false)) &&\n'
+        '        await bewaarAlsTwijfel(staged, bestaand, score!, bron, w.authority, bronpad: bronpad)) {'));
     // De Soulseek-jacht op beter.
     expect(online, contains('                opname == Opnameoordeel.twijfel &&\n'
-        '                firstIsBetter(staged, File(bestaand)) &&\n'
-        "                await bewaarAlsTwijfel(staged, bestaand, score!, 'Soulseek \${f.username}', job.authority)) {"));
+        '                (firstIsBetter(staged, File(bestaand)) || (plan?.isVersie ?? false)) &&\n'
+        "                await bewaarAlsTwijfel(staged, bestaand, score!, 'Soulseek \${f.username}', job.authority,\n"
+        '                    bronpad: f.filename)) {'));
     // Een gewone vervanging maakt een twijfelkopie achterhaald.
     expect(online, contains('      if (bestaand != null) await _vergeetTwijfel(bestaand);'));
     expect(online, contains('            if (how == Placement.moved && bestaand != null) await _vergeetTwijfel(bestaand);'));
@@ -61,7 +63,9 @@ void main() {
     final main = _bron('lib/main.dart');
     expect(main, contains('              _echtheidMerk(t),\n              _twijfelMerk(t),\n              _qualityBadge(_trackQuality(t)),'));
     expect(main, contains('      if (twijfel != null) _twijfelRegels(context, t, twijfel),'));
-    expect(main, contains("'Twijfelkopie gebruiken (vervangen)'"));
+    // Sinds 26-10-2026 (versies): bewaren als versie in plaats van vervangen.
+    expect(main, contains("'Bewaren (als versie)'"));
+    expect(main, contains("'Bewaren en standaard maken'"));
     expect(main, contains("'Twijfelkopie weggooien…'"));
     expect(main, contains("'http://\$kPcHost/kandidaat/\${tw.id}.\${tw.ext}'"));
     expect(main, contains('      downloads.twijfel = twijfels;'));
