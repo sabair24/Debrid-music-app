@@ -605,6 +605,7 @@ Future<void> main() async {
   ThemaStand.laad();
   // De wachtrij als stapel op Nu speelt, per toestel (ui/wachtrij_stapel.dart).
   StapelKeuze.laad();
+  KantelKeuze.laad();
   // Licht en schaduw van de draaiende schijf (ui/schijf_licht.dart): laden zonder op het eerste beeld te
   // wachten; tot dan de oude glans.
   unawaited(SchijfLicht.laad());
@@ -16235,6 +16236,12 @@ ItemMenu _metStapelKeuze(ItemMenu menu) => ItemMenu(titel: menu.titel, ondertite
         StapelKeuze.aan.value
             ? MenuRegel(Icons.crop_square_rounded, 'Gewone hoes', () => StapelKeuze.zet(false))
             : MenuRegel(Icons.layers_rounded, 'Wachtrij als stapel', () => StapelKeuze.zet(true)),
+        // Op een gsm en een iPad beweegt de grote hoes met het toestel; in de auto doet hij dat de hele tijd (Saber,
+        // 26-10-2026: "de tilt van de album kunnen lokken"). Zie [KantelKeuze].
+        if (!isTv && !_isDesktop)
+          KantelKeuze.vast.value
+              ? MenuRegel(Icons.screen_rotation_rounded, 'Hoes laten meebewegen', () => KantelKeuze.zet(false))
+              : MenuRegel(Icons.lock_outline_rounded, 'Hoes stilzetten', () => KantelKeuze.zet(true)),
       ],
     ]);
 
@@ -35537,6 +35544,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
       child: gedraaid,
     );
 
+    final grondschaduw = SchijfGrondschaduw(maat: s * .92);
     final kantel = widget.kantel;
     final kaartGekanteld = kantel == null
         ? kaart
@@ -35563,18 +35571,24 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               width: s,
               height: s,
               child: meeMetDeHoes(IgnorePointer(
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _voorInRust ? schaduw.color : schaduw.color.withValues(alpha: 0),
-                        blurRadius: schaduw.blurRadius,
-                        spreadRadius: schaduw.spreadRadius,
-                        offset: schaduw.offset,
-                      ),
-                    ],
+                // Op de wand: hij schuift en scheert met de kanteling, maar kantelt niet mee ([kantelSchaduwMatrix];
+                // Saber, 26-10-2026: "een reflectie en schaduw die bewegen anders dan de hoes en cd").
+                child: VolgtKanteling.schaduw(
+                  stand: _kantel,
+                  hoes: Offset.zero & Size.square(s),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: _voorInRust ? schaduw.color : schaduw.color.withValues(alpha: 0),
+                          blurRadius: schaduw.blurRadius,
+                          spreadRadius: schaduw.spreadRadius,
+                          offset: schaduw.offset,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               )),
@@ -35590,7 +35604,9 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
                 key: const ValueKey('albumart-spiegel'),
                 left: 0,
                 top: s + kSpiegelAfstand,
-                child: meeMetDeHoes(HoesSpiegel(beeld: front, maat: s))),
+                // Gespiegeld in de vloer: kantelt de hoes, dan kantelt zijn spiegelbeeld mee ([spiegelKantelMatrix]).
+                child: meeMetDeHoes(VolgtKanteling.spiegel(
+                    stand: _kantel, midden: Offset(s / 2, s / 2), child: HoesSpiegel(beeld: front, maat: s)))),
           // Behind the sleeve, and drawn first so it stays there. (Weg in een meetronde zonder schijf.)
           if (!zonderVoorMeting('schijf'))
           Positioned(
@@ -35635,21 +35651,31 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
                 final hoesVak = Rect.fromLTWH(x.hoes - x.schijf, -s * .04, s, s);
                 return Transform.translate(
                   offset: Offset(x.schijf, 0),
-                  child: Transform(
-                    transform: rust ? Matrix4.identity() : kantelMatrix(o),
-                    origin: hoesVak.center,
-                    child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
-                      child!,
-                      MouwSchaduw(key: const ValueKey('albumart-mouwschaduw'), maat: s * .92, rand: x.hoes + s - x.schijf),
-                      IgnorePointer(
-                        child: CustomPaint(
-                          key: const ValueKey('albumart-schijfglans'),
-                          size: Size.square(s * .92),
-                          painter: SchijfKantelGlans(rust ? Offset.zero : o, hoes: hoesVak),
+                  child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
+                    // De schaduw van de cd ligt op de wand, zoals die van de hoes: hij schuift en scheert met de
+                    // kanteling ([kantelSchaduwMatrix]) maar kantelt niet mee. Hij lag in de kanteling, en draaide dan
+                    // in de diepte mee met de cd (Saber, 26-10-2026: "schaduw en reflectie … moet realistisch zijn").
+                    Transform(
+                      key: const ValueKey('albumart-schijfschaduw-wand'),
+                      transform: rust ? Matrix4.identity() : kantelSchaduwMatrix(o, hoesVak),
+                      child: grondschaduw,
+                    ),
+                    Transform(
+                      transform: rust ? Matrix4.identity() : kantelMatrix(o),
+                      origin: hoesVak.center,
+                      child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
+                        child!,
+                        MouwSchaduw(key: const ValueKey('albumart-mouwschaduw'), maat: s * .92, rand: x.hoes + s - x.schijf),
+                        IgnorePointer(
+                          child: CustomPaint(
+                            key: const ValueKey('albumart-schijfglans'),
+                            size: Size.square(s * .92),
+                            painter: SchijfKantelGlans(rust ? Offset.zero : o, hoes: hoesVak),
+                          ),
                         ),
-                      ),
-                    ]),
-                  ),
+                      ]),
+                    ),
+                  ]),
                 );
               },
               // Licht en schaduw (Saber, 19-10-2026, "Echt, licht stil"): de slagschaduw op de grond
@@ -35657,7 +35683,6 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
               // en schuiven wel mee naar buiten. Een echte scan krijgt alleen de schaduwen. Zie
               // ui/schijf_licht.dart: één keer gebakken, per beeld alleen gelegd.
               child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
-                SchijfGrondschaduw(maat: s * .92),
                 spinningDisc,
                 SchijfLichtLaag(
                     maat: s * .92,

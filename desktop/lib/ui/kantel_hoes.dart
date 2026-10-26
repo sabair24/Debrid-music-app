@@ -14,6 +14,8 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -22,7 +24,32 @@ import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase, T
 import 'package:sensors_plus/sensors_plus.dart';
 
 import '../meetronde.dart' show zonderVoorMeting;
+import '../paths.dart' show appFile;
 import 'tegel_spiegel.dart' show TegelSpiegel;
+
+/// De hoes stilzetten: dan beweegt hij niet meer met het toestel (Saber, 26-10-2026: "de tilt van de album kunnen
+/// lokken, want zeker met de gsm en ik rijd met de auto of camionette, beweegt die hoes constant"). Per toestel, in
+/// `kantelen.json`; alleen voor [KantelBron.toestel] — de muis en de tv-selectie kantelen alleen als jij het doet.
+/// Vast = ook geen bewegingsmelder meer.
+class KantelKeuze {
+  KantelKeuze._();
+  static final vast = ValueNotifier<bool>(false);
+  static File get _bestand => appFile('kantelen.json');
+
+  static void laad() {
+    try {
+      final j = jsonDecode(_bestand.readAsStringSync());
+      if (j is Map && j['vast'] is bool) vast.value = j['vast'] as bool;
+    } catch (_) {/* geen bestand: hij beweegt mee */}
+  }
+
+  static Future<void> zet(bool ja) async {
+    vast.value = ja;
+    try {
+      await _bestand.writeAsString(jsonEncode({'vast': ja}));
+    } catch (_) {/* niet bewaard: hij geldt nu wel */}
+  }
+}
 
 /// Hoe ver een hoes hooguit kantelt, in radialen: zes graden.
 const double kKantelHoek = 6 * math.pi / 180;
@@ -68,8 +95,10 @@ enum KantelBron {
 /// De stand van een tv-hoes met de selectie: licht naar rechtsonder gekanteld, het licht linksboven.
 const Offset kKantelSelectie = Offset(-.55, -.45);
 
-/// De transform voor een stand [o] (elk van -1 tot 1): de kant waar de muis staat wijkt een tikje
-/// terug, zoals een plaat die je met je vinger aanraakt. Ook voor de cd die in de hoes zit ([KantelHoes.deel]).
+/// De transform voor een stand [o] (elk van -1 tot 1): de kant in de richting van [o] komt een tikje naar je toe, de
+/// overkant zakt weg. Nagerekend op 26-10-2026 (de hoeken van een hoes van 300 bij o = (1, 0)): de rechterrand wordt 305
+/// punten hoog, de linker 295 — hier stond dat de kant van de muis terugwijkt. Ook voor de cd die in de hoes zit
+/// ([KantelHoes.deel]).
 ///
 /// **Eerst plat** (de laatste vermenigvuldiging, die als eerste op de hoes werkt): Flutter maakt een transform niet plat,
 /// dus de diepte van een hoes die erin omdraait ([DraaiHoes]) kwam onder deze perspectief van .0011 terecht — bij de
@@ -88,6 +117,74 @@ Matrix4 kantelMatrix(Offset o) => Matrix4.identity()
 
 /// Hoeveel van de diepte van wat erin draait de kanteling overhoudt: genoeg om getekend te worden, te weinig om te zien.
 const double kKantelPlat = .01;
+
+/// Hoe hoog de hoes boven de wand zweeft, gemeten aan zijn schaduw: die valt 22 punten onder hem (de schaduw van de
+/// grote hoes in Nu speelt).
+const double kKantelSchaduwHoogte = 22;
+
+/// Hoeveel die hoogte verschilt tussen de twee randen bij de volle kanteling, als deel ervan. Gerekend: zes graden over
+/// een halve hoes van 175 punten is 18 punten dichterbij of verder, op 22 — ruim vier vijfde.
+const double kKantelSchaduwDiepte = .8;
+
+/// De schaduw van een gekantelde hoes op de wand erachter (Saber, 26-10-2026: "als ik tilt, gaat de schaduw en
+/// reflectie niet mee. Moet realistisch zijn … een reflectie en schaduw die bewegen anders dan de hoes en cd").
+///
+/// De schaduw ligt OP de wand: hij kantelt niet mee in de diepte (geen perspectief). Hij schuift wel. Het licht komt van
+/// boven, dus valt elke plek van de hoes zijn hoogte boven de wand naar onder. De kant die naar je toe komt (die in de
+/// richting van [o], zie [kantelMatrix]) zweeft verder van de wand en werpt zijn schaduw verder; de kant die wegzakt komt
+/// dichter bij de wand en zijn schaduw kruipt tegen de hoes aan. Links
+/// en rechts kantelen scheert de schaduw dus schuin; voorover en achterover rekt of krimpt hij in de hoogte. [hoes] is
+/// het vak van de hoes in de maat van wat er getekend wordt; [o] de stand van [kantelMatrix].
+Matrix4 kantelSchaduwMatrix(Offset o, Rect hoes,
+    {double hoogte = kKantelSchaduwHoogte, double diepte = kKantelSchaduwDiepte}) {
+  final hw = hoes.width / 2, hh = hoes.height / 2;
+  if (hw <= 0 || hh <= 0) return Matrix4.identity();
+  final k = hoogte * diepte;
+  // y' = y + k · (o.dx · x̂ + o.dy · ŷ), met x̂ en ŷ van −1 tot 1 over de hoes.
+  return Matrix4.identity()
+    ..setEntry(1, 0, k * o.dx / hw)
+    ..setEntry(1, 1, 1 + k * o.dy / hh)
+    ..setEntry(1, 3, -k * (o.dx * hoes.center.dx / hw + o.dy * hoes.center.dy / hh));
+}
+
+/// De spiegeling van een gekantelde hoes in de vloer eronder: dezelfde draai om de staande as, de omgekeerde om de
+/// liggende — zo blijft de onderrand van de hoes op zijn spiegelbeeld staan. Rond het midden van de gespiegelde hoes,
+/// die net onder de vloerlijn begint ([HoesSpiegel] toont er de bovenste [kSpiegelHoogte] van).
+Matrix4 spiegelKantelMatrix(Offset o) => kantelMatrix(Offset(o.dx, -o.dy));
+
+/// [child] onder een gekantelde hoes, die meebeweegt met [stand] zoals [kantelSchaduwMatrix] (een schaduw op de wand)
+/// of [spiegelKantelMatrix] (een spiegeling in de vloer). Altijd dezelfde vorm, ook in rust: wisselde die, dan werd
+/// [child] bij elke beweging opnieuw gebouwd (zie [KantelHoes]).
+class VolgtKanteling extends StatelessWidget {
+  /// Een schaduw van de hoes in [hoes] (in de maat van [child]).
+  const VolgtKanteling.schaduw({super.key, required this.stand, required Rect this.hoes, required this.child})
+      : midden = null;
+
+  /// Een spiegeling, rond [midden]: het midden van de gespiegelde hoes in de maat van [child].
+  const VolgtKanteling.spiegel({super.key, required this.stand, required Offset this.midden, required this.child})
+      : hoes = null;
+
+  final ValueListenable<Offset> stand;
+  final Rect? hoes;
+  final Offset? midden;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: stand,
+        child: child,
+        builder: (context, kind) {
+          final o = stand.value;
+          final rust = o.distance < .002;
+          final m = rust
+              ? Matrix4.identity()
+              : hoes != null
+                  ? kantelSchaduwMatrix(o, hoes!)
+                  : spiegelKantelMatrix(o);
+          return Transform(transform: m, origin: hoes != null ? null : midden, child: kind);
+        },
+      );
+}
 
 class KantelHoes extends StatefulWidget {
   const KantelHoes({
@@ -189,6 +286,7 @@ class _KantelHoesState extends State<KantelHoes> with TickerProviderStateMixin, 
     WidgetsBinding.instance.addObserver(this);
     _c.addListener(_deel);
     _muis.addListener(_deel);
+    KantelKeuze.vast.addListener(_zetMelder);
   }
 
   /// De stand doorgeven aan [KantelHoes.deel]. Niet midden in het bouwen (een stand die dan wijzigt, zou een ander deel
@@ -227,6 +325,7 @@ class _KantelHoesState extends State<KantelHoes> with TickerProviderStateMixin, 
   void dispose() {
     KantelHoes._staten.remove(this);
     WidgetsBinding.instance.removeObserver(this);
+    KantelKeuze.vast.removeListener(_zetMelder);
     _melder?.cancel();
     _wachtToestel?.cancel();
     _c.dispose();
@@ -253,7 +352,10 @@ class _KantelHoesState extends State<KantelHoes> with TickerProviderStateMixin, 
   }
 
   void _zetMelder() {
+    if (!mounted) return;
+    // Stilgezet ([KantelKeuze]): geen melder, en de hoes gaat recht staan.
     final wil = widget.bron == KantelBron.toestel &&
+        !KantelKeuze.vast.value &&
         _mag(context) &&
         WidgetsBinding.instance.lifecycleState != AppLifecycleState.paused &&
         WidgetsBinding.instance.lifecycleState != AppLifecycleState.hidden;
@@ -261,6 +363,10 @@ class _KantelHoesState extends State<KantelHoes> with TickerProviderStateMixin, 
       _melder?.cancel();
       _melder = null;
       _rust = _glad = null;
+      // Een stand die nog wachtte ([kToestelStap]) zou hem anders na het stilzetten nog één keer laten kantelen.
+      _wachtToestel?.cancel();
+      _wachtToestel = null;
+      _volgendeToestel = null;
       if (widget.bron == KantelBron.toestel) _naarStand(Offset.zero);
       return;
     }
