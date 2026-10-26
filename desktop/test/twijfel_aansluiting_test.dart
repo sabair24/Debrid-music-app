@@ -61,7 +61,8 @@ void main() {
 
   test('de albumpagina: het label naast de kwaliteit, en de keuzes bovenaan het menu van de rij (ook op de tv)', () {
     final main = _bron('lib/main.dart');
-    expect(main, contains('              _echtheidMerk(t),\n              _twijfelMerk(t),\n              _qualityBadge(_trackQuality(t)),'));
+    expect(main, contains('              if (!onder) ...[\n                _echtheidMerk(k),\n                _twijfelMerk(t),\n              ],\n              _qualityBadge(_trackQuality(k)),'));
+    expect(main, contains('                          _twijfelMerk(t, marge: _merkOnderTitel),'), reason: 'op een gsm onder de titel');
     expect(main, contains('      if (twijfel != null) _twijfelRegels(context, t, twijfel),'));
     // Sinds 26-10-2026 (versies): bewaren als versie in plaats van vervangen.
     expect(main, contains("'Bewaren (als versie)'"));

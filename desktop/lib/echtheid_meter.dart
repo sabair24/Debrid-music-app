@@ -42,6 +42,43 @@ const double _bandHz = 50;
 /// Een meting die niet binnen deze tijd klaar is, wordt afgebroken (een uur durende DJ-mix in 32/192).
 const Duration _tijdslimiet = Duration(minutes: 5);
 
+/// Zijn [a] en [b] bit voor bit hetzelfde geluid — dezelfde samples, alleen een andere naam of andere tags?
+///
+/// Saber, 26-10-2026, bij All Saints: *"Ik heb 2 cd kwaliteit"*. De tweede, "CD · andere kopie", kwam van een andere
+/// uploader en bleek sample voor sample de cd uit de albummap. Zo'n kopie voegt niets toe.
+///
+/// Eerst de kop: een andere bemonstering, diepte, kanalen of lengte (tot op het sample) is nooit hetzelfde. Staat in
+/// beide koppen de controlesom van de samples, dan beslist die. Anders rekent ffmpeg hem uit (de twee cd's van 26-10
+/// hadden er geen). Zonder FLAC-kop of zonder ffmpeg: nee — liever een kopie te veel dan een weggegooid.
+Future<bool> zelfdeSamples(String a, String b, {String? ffmpegPad}) async {
+  final ia = leesStreaminfo(a), ib = leesStreaminfo(b);
+  if (ia == null || ib == null || ia.totaal <= 0) return false;
+  if (ia.sr != ib.sr || ia.kanalen != ib.kanalen || ia.bps != ib.bps || ia.totaal != ib.totaal) return false;
+  const leeg = '00000000000000000000000000000000';
+  if (ia.md5 != leeg && ib.md5 != leeg) return ia.md5 == ib.md5;
+  final exe = Ffmpeg(pad: ffmpegPad).pad;
+  if (exe == null) return false;
+  final x = await _samplesMd5(exe, a);
+  return x != null && x == await _samplesMd5(exe, b);
+}
+
+/// De MD5 die ffmpeg over de gedecodeerde samples van [pad] rekent ("MD5=…"), of null.
+Future<String?> _samplesMd5(String exe, String pad) async {
+  try {
+    final p = await Process.start(exe, ['-hide_banner', '-v', 'error', '-nostdin', '-i', pad, '-map', '0:a:0', '-f', 'md5', '-']);
+    final uit = p.stdout.transform(const Utf8Decoder(allowMalformed: true)).join();
+    unawaited(p.stderr.drain<void>());
+    final code = await p.exitCode.timeout(_tijdslimiet, onTimeout: () {
+      p.kill();
+      return -1;
+    });
+    final s = (await uit.timeout(const Duration(seconds: 10), onTimeout: () => '')).trim();
+    return code == 0 && s.startsWith('MD5=') ? s : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /// De STREAMINFO uit de FLAC-kop: kanalen, bits, het aantal samples en de MD5 van de samples.
 ///
 /// Zoekt "fLaC" in de eerste megabyte: een ID3-tag ervoor is niet volgens de standaard maar komt voor

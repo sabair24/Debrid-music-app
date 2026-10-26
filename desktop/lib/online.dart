@@ -2348,6 +2348,16 @@ class DownloadManager extends ChangeNotifier {
     final f = File(g.kandidaat);
     final gezag = g.gezag == null ? null : TrackTags.fromJson(g.gezag!);
     final naam = gezag == null ? baseName(pad) : '${gezag.artist} — ${gezag.title}';
+    // Bit voor bit wat je al hebt: er valt niets te bewaren, en de kopie hoeft niet te blijven wachten.
+    if (await _zelfdeAlsWatJeHebt(f.path, pad) case final wat?) {
+      lijst.verwijder(pad);
+      await lijst.bewaar();
+      try {
+        await f.delete();
+      } catch (_) {/* de opruimronde van de twijfelmap neemt hem mee */}
+      _log.line('"$naam": twijfelkopie niet bewaard — bit voor bit dezelfde als $wat');
+      return 'Niet bewaard: deze kopie is bit voor bit dezelfde als $wat';
+    }
     var plan = versieplanVoor(f, pad, g.bronpad ?? g.bron);
     if (plan.soort == null) return 'Deze kopie is niet verliesvrij — als versie bewaren kan niet';
     // Dezelfde versie als je nummer of als een versie die er al is (een twijfel): jij koos bewaren, dus apart. "andere
@@ -6164,6 +6174,9 @@ class DownloadManager extends ChangeNotifier {
         hz: kop?.sampleRate ?? 0,
         verliesvrij: isVerliesvrij(soortVan(staged.path)));
     if (soort != v.soort) return weg('geen ${v.soort.voluit} maar ${soort?.voluit ?? kwaliteitZin(kwaliteitVan(staged))}');
+    // Bit voor bit wat je al hebt, van een andere uploader en onder een andere naam: die voegt niets toe (Saber,
+    // 26-10-2026, bij All Saints: "Ik heb 2 cd kwaliteit").
+    if (await _zelfdeAlsWatJeHebt(staged.path, v.pad) case final wat?) return weg('bit voor bit dezelfde als $wat');
     final lengte = _duurVan(staged.path) ?? gedecodeerdeLengte(staged.path)?.round();
     final score = await _opnameScore(staged.path, v.pad);
     final nee = waaromNietKlaar(
@@ -6176,6 +6189,19 @@ class DownloadManager extends ChangeNotifier {
     }
     return ok;
   }
+
+  /// "je nummer", of welke versie je al hebt, als [kandidaat] sample voor sample een kopie is die er bij [anker] al
+  /// ligt ([zelfdeSamples]); anders null.
+  Future<String?> _zelfdeAlsWatJeHebt(String kandidaat, String anker) async {
+    if (await zelfdeSamples(kandidaat, anker)) return 'je nummer';
+    for (final x in versies.versiesVan(anker)) {
+      if (await zelfdeSamples(kandidaat, x.pad)) return 'je versie ${versieMapLabel(x.soort, x.persing)}';
+    }
+    return null;
+  }
+
+  @visibleForTesting
+  Future<String?> zelfdeAlsWatJeHebtVoorToets(String kandidaat, String anker) => _zelfdeAlsWatJeHebt(kandidaat, anker);
 
   @visibleForTesting
   Future<bool> zetKlaarVoorToets(Soortvraag v, File staged, String bron, String bronpad, double score) =>

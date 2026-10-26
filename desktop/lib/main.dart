@@ -9514,6 +9514,14 @@ class _TrackRowState extends State<TrackRow> with LichtBijMuisOfFocus {
     // that answer changes twice per record instead of dozens of times per second.
     final isCurrent =
         context.select<PlayerStore, bool>((p) => p.current?.path == t.path);
+    // De kwaliteit, de meting en de soort van wat er speelt als je tikt: de standaardversie (versies.dart). Saber,
+    // 26-10-2026, bij All Saints: "ik heb studio als standaard maar zie de minder goed cd kwaliteit?". `select`: deze
+    // rij tekent alleen opnieuw als een andere keuze iets aan HAAR verandert.
+    final speelt = context.select<LibraryStore, String>((l) => l.speelPadVoor(t.path));
+    final k = speelt == t.path ? t : (context.read<LibraryStore>().trackByPath(speelt) ?? t);
+    // Op een gsm staan de merkjes onder de titel. Ernaast knepen ze hem tot niets — dezelfde schermafdruk: "3", "tot
+    // 20,9 kHz?", "FLAC · 16/44.1", "cd", "6:27 ≠ 5:13", en geen titel.
+    final onder = isCompact(context);
     return MouseRegion(
       onEnter: (_) => muisErop(true),
       onExit: (_) => muisErop(false),
@@ -9602,7 +9610,14 @@ class _TrackRowState extends State<TrackRow> with LichtBijMuisOfFocus {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: kTekstKlein.copyWith(color: leesbaar(const Color(0xFFE0A33A))));
-                  if (guests.isEmpty && reden == null) return title;
+                  final merken = onder
+                      ? Wrap(children: [
+                          _echtheidMerk(k, marge: _merkOnderTitel),
+                          _twijfelMerk(t, marge: _merkOnderTitel),
+                          _soortMerk(t, klinkt: k, marge: _merkOnderTitel),
+                        ])
+                      : null;
+                  if (guests.isEmpty && reden == null && merken == null) return title;
                   return Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -9618,15 +9633,19 @@ class _TrackRowState extends State<TrackRow> with LichtBijMuisOfFocus {
                           // niet te zien, en wat je wél zag was dat één regel vier stemmen had.
                           ArtistNames(names: guests, style: kTekstKlein),
                         ),
+                      if (merken != null) merken,
                     ],
                   );
                 }),
               ),
-              _echtheidMerk(t),
-              _twijfelMerk(t),
-              _qualityBadge(_trackQuality(t)),
+              // Op een gsm staan deze onder de titel ([onder]).
+              if (!onder) ...[
+                _echtheidMerk(k),
+                _twijfelMerk(t),
+              ],
+              _qualityBadge(_trackQuality(k)),
               // Studio, cd of vinyl (kopiesoort.dart): alleen bij nieuwe downloads.
-              _soortMerk(t),
+              if (!onder) _soortMerk(t, klinkt: k),
               Text(_fmt(t.duration), style: kTekstKlein),
               // "≠ 4:33" — je hebt het nummer, maar niet die versie. Klein en naast de tijd, want het
               // is een bijzonderheid en geen probleem.
@@ -11313,9 +11332,9 @@ class PlayerBar extends StatelessWidget {
                           // werd naar nul geknepen, en in de balk stond alleen nog de artiest met twee
                           // getallen erboven. Van drie meter afstand is de titel juist het enige wat
                           // telt -- en de kwaliteit staat voluit op het nu-speelt-scherm, één knop weg.
-                          if (t != null && !isTv) _echtheidMerk(t),
+                          if (t != null && !isTv) _echtheidMerk(_klinktAls(context, t)),
                           if (t != null && !isTv && t.sizeBytes > 0)
-                            _qualityBadge(_trackQuality(t)),
+                            _qualityBadge(_trackQuality(_klinktAls(context, t))),
                         ],
                       ),
                       // Een klacht gaat vóór de artiestnaam. Wie hier kijkt omdat er geen geluid
@@ -13035,7 +13054,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _echtheidMerk(nummers[i]),
+                    _echtheidMerk(standaardVersieVan(lib, nummers[i]), metVraag: !isCompact(context)),
                     TvLabelled(
                       label: 'Uit deze lijst halen',
                       child: IconButton(
@@ -13182,8 +13201,8 @@ class _FavorietRij extends StatelessWidget {
                 ],
               ),
             ),
-            _echtheidMerk(track),
-            _qualityBadge(_trackQuality(track)),
+            _echtheidMerk(standaardVersieVan(lib, track), metVraag: !isCompact(context)),
+            _qualityBadge(_trackQuality(standaardVersieVan(lib, track))),
             const SizedBox(width: 4),
             Text(_fmt(track.duration), style: TextStyle(color: _muted, fontSize: 12)),
             const SizedBox(width: 6),
@@ -14642,7 +14661,8 @@ class _KlaarStrook extends StatelessWidget {
 /// Het label "twijfel" naast de kwaliteit van een nummer (twijfel.dart), of "cd klaar" bij een kopie die je vroeg. Tik
 /// (muis, aanraking) opent de keuzes; op een tv is het label niet te kiezen — daar staan dezelfde keuzes in het menu van
 /// de rij (lang OK).
-Widget _twijfelMerk(Track? t) => ValueListenableBuilder<int>(
+Widget _twijfelMerk(Track? t, {EdgeInsets marge = const EdgeInsets.symmetric(horizontal: 8)}) =>
+    ValueListenableBuilder<int>(
       valueListenable: twijfelUitgave,
       builder: (context, _, __) {
         final pad = t?.path;
@@ -14657,7 +14677,7 @@ Widget _twijfelMerk(Track? t) => ValueListenableBuilder<int>(
               : 'Twijfel: ${tw.bron} heeft ${tw.kwaliteit} en klinkt beter, maar de vingerafdruk zegt $s — dezelfde '
                   'opname scoort 0,90 of meer. ${isTv ? 'Houd OK ingedrukt' : 'Tik'} om te kiezen.',
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            padding: marge,
             child: Text(klaar ? '${tw.soort} klaar' : 'twijfel',
                 style: kLabel.copyWith(color: klaar ? _accent2 : leesbaar(const Color(0xFFE0B341)))),
           ),
@@ -14677,12 +14697,15 @@ Widget _twijfelMerk(Track? t) => ValueListenableBuilder<int>(
 
 /// Het label "studio", "cd" of "vinyl" naast de kwaliteit (kopiesoort.dart; Saber, 25-10-2026). Alleen bij nieuwe
 /// downloads; niets bij wat er al stond.
-Widget _soortMerk(Track? t) => ListenableBuilder(
+///
+/// [klinkt]: de versie die speelt (versies.dart) — de soort is de hare. Wat er nog gezocht wordt, hoort bij het nummer [t].
+Widget _soortMerk(Track? t, {Track? klinkt, EdgeInsets marge = const EdgeInsets.only(left: 2, right: 6)}) =>
+    ListenableBuilder(
       listenable: Listenable.merge([soortUitgave, soortvraagUitgave, twijfelUitgave]),
       builder: (context, _) {
         final pad = t?.path;
         if (pad == null || pad.isEmpty) return const SizedBox.shrink();
-        final s = soortVoor(pad);
+        final s = soortVoor(klinkt?.path ?? pad);
         // Wat er nog gezocht wordt, zolang er niets klaarstaat ("cd klaar" zegt het dan zelf).
         final zoekt = twijfelVoor(pad)?.soort == null ? gezochtVoor(pad) : null;
         if (s == null && zoekt == null) return const SizedBox.shrink();
@@ -14700,7 +14723,7 @@ Widget _soortMerk(Track? t) => ListenableBuilder(
               'Je pc zoekt ${zoekt.voluit}; vindt hij er een, dan staat er "${zoekt.naam} klaar". Stoppen kan in het menu.',
           ].join(' '),
           child: Padding(
-            padding: const EdgeInsets.only(left: 2, right: 6),
+            padding: marge,
             child: Text(tekst, style: kLabel.copyWith(color: kGedempt)),
           ),
         );
@@ -16445,7 +16468,13 @@ class _WachtrijRij extends StatelessWidget {
                   ],
                 ),
               ),
-              if (r == null) _echtheidMerk(track),
+              if (r == null)
+                _echtheidMerk(
+                    switch (_misschien<LibraryStore>(context)) {
+                      final lib? => standaardVersieVan(lib, track),
+                      null => track,
+                    },
+                    metVraag: !isCompact(context)),
               // Het lopende nummer heeft geen kruisje: eruit halen zou "stop" of "volgende" moeten
               // betekenen, en die knoppen staan al onderaan. Zie [PlayerStore.haalUitWachtrij].
               //
@@ -21751,8 +21780,8 @@ class TracksView extends StatelessWidget {
                           ],
                         ),
                       ),
-                      _echtheidMerk(t),
-                      _qualityBadge(_trackQuality(t)),
+                      _echtheidMerk(standaardVersieVan(lib, t), metVraag: !isCompact(context)),
+                      _qualityBadge(_trackQuality(standaardVersieVan(lib, t))),
                       const SizedBox(width: 4),
                       // De looptijd valt weg op een telefoon.
                       //
@@ -25539,6 +25568,18 @@ Widget _kwaliteitKnop(BuildContext context, Speelbron p, Track t, SpeakerTarget 
       child: _qualityBadge(_stroomKwaliteit(p, _klinktAls(context, t))),
     );
 
+/// Het nummer zoals het speelt als je erop tikt: de standaardversie (versies.dart), of [t] zelf. Een nummerregel toont
+/// haar kwaliteit en meting (Saber, 26-10-2026, bij All Saints: "ik heb studio als standaard maar zie de minder goed cd
+/// kwaliteit?"). [Track] in de lijst blijft het anker.
+@visibleForTesting
+Track standaardVersieVan(LibraryStore lib, Track t) {
+  final pad = lib.speelPadVoor(t.path);
+  return pad == t.path ? t : (lib.trackByPath(pad) ?? t);
+}
+
+/// Een merkje onder de titel van een nummerregel op een gsm ([TrackRow]): links in lijn met de titel.
+const _merkOnderTitel = EdgeInsets.only(top: 2, right: 10);
+
 /// Het nummer zoals het nu klinkt: [t] zelf, of de versie ervan die speelt (versies.dart).
 Track _klinktAls(BuildContext context, Track t) {
   final lib = context.read<LibraryStore>();
@@ -25651,7 +25692,9 @@ Future<void> _toonKwaliteitBlad(BuildContext context, Speelbron p, Track anker, 
 ///
 /// De uitleg gaat niet verloren, want de tooltip blijft eronder hangen — één beweging ver, met
 /// dezelfde zin uit [waarom] die de badge ook toonde.
-Widget _echtheidMerk(Track? t) {
+/// [metVraag] onwaar: zonder de gedempte vraag "tot 20,9 kHz?" — in een lijst op een gsm knijpt die de titel tot niets,
+/// en het kwaliteitsblad zegt het voluit. Beschadigd en nep staan er altijd.
+Widget _echtheidMerk(Track? t, {bool metVraag = true, EdgeInsets marge = const EdgeInsets.symmetric(horizontal: 8)}) {
   final pad = t?.path;
   if (t == null || pad == null || pad.isEmpty) return const SizedBox.shrink();
   final sr = t.sampleRate, bits = t.bitsPerSample;
@@ -25662,19 +25705,19 @@ Widget _echtheidMerk(Track? t) {
     return Tooltip(
       message: waarom(o),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
+        padding: marge,
         child: Text('beschadigd', style: kLabel.copyWith(color: leesbaar(const Color(0xFFD9534F)))),
       ),
     );
   }
   // Een muur rond 20 kHz: met een vraagteken en gedempter, want het kan ook de master zijn.
   if (!o.isNep && o.isVermoedelijk) {
-    final vraag = echteResolutie(o, kopSampleRate: sr, kopBits: bits);
+    final vraag = metVraag ? echteResolutie(o, kopSampleRate: sr, kopBits: bits) : null;
     if (vraag == null) return const SizedBox.shrink();
     return Tooltip(
       message: waarom(o),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
+        padding: marge,
         child: Text(vraag, style: kLabel.copyWith(color: kGedempt)),
       ),
     );
@@ -25700,7 +25743,7 @@ Widget _echtheidMerk(Track? t) {
   return Tooltip(
     message: waarom(o),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      padding: marge,
       child: Text(echt, style: kLabel.copyWith(color: leesbaar(const Color(0xFFB98A4A)))),
     ),
   );

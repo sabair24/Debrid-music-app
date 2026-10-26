@@ -233,6 +233,8 @@ class LanCatalog {
         if (v.snelheid != 1.0) 'x': v.snelheid,
         if (v.sindsMs > 0) 'sinds': v.sindsMs,
         if (luid != null) 'luid': luid,
+        // Haar eigen meting: een nummerregel op een toestel toont die van de versie die speelt, niet die van het nummer.
+        if (gemeten(vt.path) case final o?) 'echt': o.toJson(),
       });
     }
     if (uit.isEmpty) return null;
