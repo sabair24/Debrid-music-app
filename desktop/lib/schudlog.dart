@@ -80,15 +80,37 @@ class SchudLogboek {
   /// Wat er bij de vorige shuffle vooraan stond (in dit proces).
   Set<String> _vorigeVooraan = const {};
 
+  /// Een shuffle die hier verder loopt zonder dat hier geschud werd ([hervat]); zijn kop wacht op het eerste nummer.
+  ({List<Track> volgorde, String hoe, int vanaf, int generatie, DateTime op})? _hervat;
+
   String? get sessie => _id;
 
   /// Een nieuwe geschudde volgorde. Alleen de hele bibliotheek telt ([isHeleBibliotheek]); de eerste [vanaf] stonden al
   /// vast (het shuffle-icoontje houdt wat al klonk vooraan). [generatie] is de trekking van de speler: nummers die
   /// daarna voorbijkomen ([voorbij]) horen alleen bij deze shuffle als ze dezelfde dragen.
-  void geschud(List<Track> volgorde, {required String hoe, int vanaf = 0, required int generatie}) {
+  void geschud(List<Track> volgorde, {required String hoe, int vanaf = 0, required int generatie}) =>
+      _kop(volgorde, hoe: hoe, vanaf: vanaf, generatie: generatie, nu: _klok(), verder: false);
+
+  /// Een geschudde volgorde die hier verder speelt zonder dat hier geschud werd: na een herstart van de app (de wachtrij
+  /// komt terug), of overgenomen van een ander toestel. Vanaf plek [vanaf] + 1.
+  ///
+  /// **Waarom (Saber, 26-10-2026).** *"Oe zit het met men shuffle? Log ?"* — hij bediende de Shield met zijn gsm, en
+  /// schud.log stond sinds de vorige dag stil. Het logboek volgde alleen een shuffle die in DIT proces begon: na de update
+  /// (herstart) en na "Hier verder" op de Shield viel elk nummer buiten de trekking en werd niets geschreven.
+  ///
+  /// De kop komt pas bij het eerste nummer dat voorbijkomt: elke update start de app opnieuw, en een kop zonder één
+  /// nummer eronder zegt niets.
+  void hervat(List<Track> volgorde, {required String hoe, int vanaf = 0, required int generatie}) {
+    _hervat = isHeleBibliotheek(volgorde.length, bibliotheek())
+        ? (volgorde: List.of(volgorde), hoe: hoe, vanaf: vanaf, generatie: generatie, op: _klok())
+        : null;
+  }
+
+  void _kop(List<Track> volgorde,
+      {required String hoe, required int vanaf, required int generatie, required DateTime nu, required bool verder}) {
+    _hervat = null;
     final bib = bibliotheek();
     if (!isHeleBibliotheek(volgorde.length, bib)) return;
-    final nu = _klok();
     final regels = <String>[if (_id != null) _slot(nu)];
     _id = (nu.millisecondsSinceEpoch ~/ 1000).toRadixString(36);
     _generatie = generatie;
@@ -101,21 +123,26 @@ class SchudLogboek {
     bool nooit(Track t) => (speelstand?.call(t)?.aantal ?? 0) <= 0;
     final vooraan = staart.take(kSchudVooraan).toList();
     final vooraanPaden = {for (final t in vooraan) t.path};
-    final overlap = _vorigeVooraan.isEmpty ? null : vooraanPaden.intersection(_vorigeVooraan).length;
-    _vorigeVooraan = vooraanPaden;
+    // Een vervolg is geen nieuwe trekking: niet vergelijken met de vorige, en de volgende shuffle vergelijkt niet ermee.
+    final overlap = verder || _vorigeVooraan.isEmpty ? null : vooraanPaden.intersection(_vorigeVooraan).length;
+    if (!verder) _vorigeVooraan = vooraanPaden;
     regels.add([
       'SCHUD ${_datum(nu)} #$_id ($hoe): ${volgorde.length} van $bib nummers in de bibliotheek',
-      if (vanaf > 0) 'de eerste $vanaf blijven staan',
+      if (verder) 'verder vanaf plek ${vanaf + 1}' else if (vanaf > 0) 'de eerste $vanaf blijven staan',
       '$uniek verschillend, ${staart.length - uniek} dubbel',
       'nooit gehoord ${staart.where(nooit).length} (in de eerste ${vooraan.length}: ${vooraan.where(nooit).length})',
-      overlap == null
-          ? 'eerste shuffle sinds de start'
-          : 'van de eerste ${vooraan.length} stonden er $overlap ook vooraan bij de vorige shuffle',
+      if (!verder)
+        overlap == null
+            ? 'eerste shuffle sinds de start'
+            : 'van de eerste ${vooraan.length} stonden er $overlap ook vooraan bij de vorige shuffle',
       'zelfde artiest direct na elkaar in de eerste $kSchudNaastElkaar: '
           '${zelfdeArtiestNaElkaar(staart.take(kSchudNaastElkaar).toList())}',
     ].join(' · '));
-    regels.add('  #$_id eerste $kSchudKopNamen: ${[
-      for (var i = 0; i < staart.length && i < kSchudKopNamen; i++) '${i + 1}. ${_naam(staart[i])} ${_stand(staart[i], nu)}',
+    // Bij een vervolg op de plek in de wachtrij, zoals de regels per nummer eronder.
+    final eerst = verder ? vanaf : 0;
+    regels.add('  #$_id ${verder ? 'volgende' : 'eerste'} $kSchudKopNamen: ${[
+      for (var i = 0; i < staart.length && i < kSchudKopNamen; i++)
+        '${eerst + i + 1}. ${_naam(staart[i])} ${_stand(staart[i], nu)}',
     ].join(' · ')}');
     schrijf(regels);
   }
@@ -129,6 +156,10 @@ class SchudLogboek {
       required int generatie,
       required Duration geluisterd,
       Duration? duur}) {
+    final h = _hervat;
+    if (h != null && shuffle && generatie == h.generatie) {
+      _kop(h.volgorde, hoe: h.hoe, vanaf: h.vanaf, generatie: h.generatie, nu: h.op, verder: true);
+    }
     if (_id == null || !shuffle || generatie != _generatie || !isHeleBibliotheek(lengte, bibliotheek())) return;
     final gehoord = telMeeAlsGespeeld(geluisterd: geluisterd, duur: duur);
     if (gehoord) {

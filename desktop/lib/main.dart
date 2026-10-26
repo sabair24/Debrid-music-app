@@ -1406,6 +1406,7 @@ Future<void> main() async {
         schrijf: schrijf, bibliotheek: () => library.tracks.length, speelstand: (t) => player.speelstandVan?.call(t));
     player.bijSchudden = schudLog.geschud;
     player.bijNummerVoorbij = schudLog.voorbij;
+    player.bijHervatten = schudLog.hervat;
   }
 
   // Wat er in de AUTO te bladeren valt. Dit is de enige plek waar de boom aan de echte bibliotheek
@@ -1635,6 +1636,16 @@ Future<void> main() async {
     maak: (zone) => ZoneSpeler(
       lijst: zoneLijst,
       zoneId: zone,
+      // Naar warmte.log op de pc, met wanneer het op het scherm stond en of de app vooraan lag.
+      meet: (regel) {
+        final t0 = DateTime.now();
+        final voor = WidgetsBinding.instance.lifecycleState;
+        unawaited(WidgetsBinding.instance.endOfFrame.timeout(const Duration(seconds: 5)).then(
+            (_) => '${DateTime.now().difference(t0).inMilliseconds} ms later op het scherm',
+            onError: (Object _) => 'niet op het scherm binnen 5 s').then((beeld) => _meldMeting
+            ?.call(['[zone] $regel · $beeld · app ${voor?.name ?? 'onbekend'}'])
+            .catchError((Object _) {})));
+      },
       nummer: verder.bron.nummer,
       idVan: (t) => library.gedeeldId(t.path),
       hoesVan: library.coverForTrack,

@@ -26,6 +26,14 @@ import 'zone_lijst.dart';
 /// Hoe lang wat je indrukte op het scherm blijft staan als de zone (nog) niets anders meldt.
 const kZoneVerwacht = Duration(seconds: 3);
 
+/// Hoe lang het volgende nummer na "volgende" blijft staan als de zone nog het oude meldt. Ruimer dan
+/// [kZoneVerwacht]: het nummer moet eerst openen, en terugspringen naar het oude en dan weer vooruit is erger dan even
+/// wachten. Gemeten 26-10-2026: de Shield vroeg het nieuwe nummer 250–350 ms na de opdracht aan de pc.
+const kZoneVerwachtNummer = Duration(seconds: 8);
+
+/// Hoe lang een meting van "volgende" wacht op een nieuw nummer ([ZoneSpeler.meet]).
+const kZoneMeetVolgende = Duration(seconds: 15);
+
 /// Een zone die al zo lang op pauze staat, opent de app niet meer vanzelf (Saber: "langer dan 30 min
 /// stil").
 const kZoneStilTeLang = Duration(minutes: 30);
@@ -78,6 +86,7 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     required this.hoesVan,
     required this.stuur,
     this.haalRij,
+    this.meet,
     int Function()? klok,
   }) : _klok = klok {
     lijst.addListener(_lijstVeranderd);
@@ -87,6 +96,11 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   /// Een venster op de wachtrij van deze zone (`{index, lengte, van, rij}`) tot [na] nummers ná het spelende, of
   /// null. Zie `ZoneRegister.rijVenster`. Null: geen wachtrij te zien (een oudere pc).
   final Future<Map<String, dynamic>?> Function(int na)? haalRij;
+
+  /// Elke nummerwissel van deze zone: hoe oud de melding van de pc was toen ze hier aankwam, en na een druk op
+  /// "volgende" hoe lang dat duurde. Saber, 26-10-2026: *"op de shield klonk het volgende liedje, maar op de gsm duurde
+  /// het echt paar seconden eer ik het zag"* — en niets in de logboeken zei waar die seconden zaten.
+  final void Function(String regel)? meet;
 
   final ZoneLijst lijst;
   final String zoneId;
@@ -120,6 +134,15 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   double? _volumeV;
   int _verwachtTot = 0;
 
+  // Na "volgende": het nummer dat de zone gaat openen ([ZoneStaat.volgendeId]), tot ze een ander nummer meldt dan wat
+  // er speelde toen je drukte ([_nogNiet]).
+  String? _nummerV;
+  Set<String> _nogNiet = const {};
+
+  // De meting van een druk op "volgende" ([meet]): wanneer, vanaf welk nummer, en welk nummer we verwachtten.
+  int? _meetOp;
+  String _meetVan = '', _meetNaar = '';
+
   String? _fout;
   Timer? _foutWeg;
   Timer? _tik;
@@ -133,6 +156,7 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     // eerste de beste melding: een gewone melding die vertrok vlak voor je druk aankwam, liet de knop
     // anders even terugspringen.
     if (z != null && (_nu > _verwachtTot || _bevestigt(z))) _wisVerwacht();
+    if (z != null && was != null && z.trackId != was.trackId && z.trackId.isNotEmpty) _meetWissel(z);
     _volgTik();
     // Er keek de laatste tien seconden iemand naar de wachtrij, en die kan nu anders zijn.
     if (_nu - _rijGevraagdOp < 10000 && _rijSleutel != _rijVoor) _haalRijLater();
@@ -221,8 +245,22 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     });
   }
 
+  void _meetWissel(ZoneStaat z) {
+    final m = meet;
+    if (m == null) return;
+    final oud = lijst.nuOpPc() - z.opMs;
+    final druk = _meetOp;
+    final naDruk = druk != null && z.trackId != _meetVan
+        ? ' · ${_nu - druk} ms na je druk op volgende${z.trackId == _meetNaar || _meetNaar.isEmpty ? '' : ' (een ander nummer dan verwacht)'}'
+        : '';
+    if (naDruk.isNotEmpty) _meetOp = null;
+    final wat = [z.artiest, z.titel].where((x) => x.isNotEmpty).join(' — ');
+    m('${z.naam}: nieuw nummer${wat.isEmpty ? '' : ' "$wat"'} · melding ${z.opMs > 0 ? '$oud ms' : 'zonder tijd'} oud bij aankomst$naDruk');
+  }
+
   /// Zegt [z] wat we verwachtten?
   bool _bevestigt(ZoneStaat z) {
+    if (_nummerV != null && _nogNiet.contains(z.trackId)) return false;
     if (_speeltV != null && z.playing != _speeltV) return false;
     if (_shuffleV != null && z.shuffle != _shuffleV) return false;
     if (_herhaalV != null && herhaalUit(z.repeat) != _herhaalV) return false;
@@ -236,6 +274,8 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   }
 
   void _wisVerwacht() {
+    _nummerV = null;
+    _nogNiet = const {};
     _speeltV = null;
     _plekV = null;
     _plekVOp = null;
@@ -244,9 +284,11 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     _volumeV = null;
   }
 
-  void _verwacht() {
-    _verwachtTot = _nu + kZoneVerwacht.inMilliseconds;
-    Timer(kZoneVerwacht + const Duration(milliseconds: 50), () {
+  void _verwacht([Duration hoeLang = kZoneVerwacht]) {
+    // Nooit korter dan wat er al liep: een volumetik vlak na "volgende" laat het volgende nummer niet vroeger los.
+    final tot = _nu + hoeLang.inMilliseconds;
+    if (tot > _verwachtTot) _verwachtTot = tot;
+    Timer(hoeLang + const Duration(milliseconds: 50), () {
       if (_nu > _verwachtTot) {
         _wisVerwacht();
         notifyListeners();
@@ -303,6 +345,11 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   Track? get current {
     final z = _zone;
     if (z == null || !z.speeltIets) return null;
+    final v = _nummerV;
+    if (v != null) {
+      final t = nummer(v);
+      if (t != null) return t;
+    }
     return nummer(z.trackId) ??
         Track(
           path: 'zone:${z.trackId}',
@@ -369,6 +416,11 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   @override
   Duration get duration {
     final z = _zone;
+    // Het volgende nummer staat er al: zijn eigen lengte, niet die van het nummer dat de zone nog meldt.
+    if (_nummerV != null) {
+      final d = current?.duration;
+      if (d != null && d > Duration.zero) return d;
+    }
     if (z != null && z.durationMs > 0) return Duration(milliseconds: z.durationMs);
     return current?.duration ?? Duration.zero;
   }
@@ -420,7 +472,13 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   int get currentIndex {
     final z = _zone;
     if (z == null) return 0;
-    final i = z.index - _rijVan;
+    var i = z.index - _rijVan;
+    // Na "volgende": de regel van het volgende nummer, zoals de balk en Nu speelt.
+    final v = _nummerV;
+    if (v != null) {
+      final j = _rijIds.indexOf(v, i < 0 ? 0 : i);
+      if (j >= 0) i = j;
+    }
     return i >= 0 && i < _rij.length ? i : 0;
   }
 
@@ -465,7 +523,43 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   }
 
   @override
-  Future<void> next() => _stuur('next');
+  Future<void> next() {
+    _verwachtVolgende();
+    return _stuur('next');
+  }
+
+  /// Het volgende nummer meteen op het scherm, met de plek op nul, tot de zone het meldt. Alleen als vaststaat welk
+  /// nummer het wordt ([ZoneStaat.volgendeId], of na een tweede druk het nummer daarna in het venster) en dit toestel
+  /// het kent; anders blijft het scherm wachten op de zone, zoals voorheen.
+  void _verwachtVolgende() {
+    final z = _zone;
+    if (z == null || !z.speeltIets) return;
+    final al = _nummerV;
+    var id = z.volgendeId;
+    if (al != null) {
+      final i = _rijIds.indexOf(al);
+      id = i >= 0 && i + 1 < _rijIds.length ? _rijIds[i + 1] : '';
+    }
+    _meetOp = _nu;
+    _meetVan = z.trackId;
+    _meetNaar = id;
+    final m = meet;
+    if (m != null) {
+      final op = _meetOp;
+      Timer(kZoneMeetVolgende, () {
+        if (_weg || _meetOp != op) return;
+        _meetOp = null;
+        m('${_zone?.naam ?? zoneId}: volgende → geen nieuw nummer binnen ${kZoneMeetVolgende.inSeconds} s');
+      });
+    }
+    if (id.isEmpty || nummer(id) == null) return;
+    _nogNiet = {..._nogNiet, z.trackId, if (al != null) al};
+    _nummerV = id;
+    _plekV = 0;
+    _plekVOp = _nu;
+    _verwacht(kZoneVerwachtNummer);
+    notifyListeners();
+  }
   @override
   Future<void> prev() => _stuur('previous');
 

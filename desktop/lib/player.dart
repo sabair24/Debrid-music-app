@@ -1119,6 +1119,12 @@ class PlayerStore extends ChangeNotifier
   /// shuffle-icoontje). [generatie] hoort bij [bijNummerVoorbij].
   void Function(List<Track> volgorde, {required String hoe, int vanaf, required int generatie})? bijSchudden;
 
+  /// Een geschudde wachtrij die hier verder speelt zonder dat hier geschud werd: terug na een herstart ([restore]), of
+  /// overgenomen van een ander toestel ([neemOver]). Zonder dit volgde het schudlogboek alleen wat in dit proces geschud
+  /// werd (Saber, 26-10-2026: "Oe zit het met men shuffle? Log ?" — na de update en "Hier verder" op de Shield stond er
+  /// niets meer in schud.log). Een eigen trekking, want wat hiervoor in dit proces speelde hoort er niet bij.
+  void Function(List<Track> volgorde, {required String hoe, int vanaf, required int generatie})? bijHervatten;
+
   /// Een nummer is voorbij (het volgende begint): hoe lang je luisterde, en waar het stond toen het begon.
   void Function(Track t,
       {required int plek,
@@ -2288,6 +2294,7 @@ class PlayerStore extends ChangeNotifier
     _original = List.of(rij);
     _order = List.of(rij);
     _index = plek;
+    if (shuffle) bijHervatten?.call(_order, hoe: 'overgenomen', vanaf: plek, generatie: ++_schudGeneratie);
     await _openCurrent();
     if (positie > const Duration(seconds: 1)) {
       // Pas als libmpv het bestand kent (de duur is er), anders valt het zoeken stil weg — zie
@@ -3657,6 +3664,7 @@ class PlayerStore extends ChangeNotifier
       final t = current;
       if (t == null) return;
       currentCover = coverResolver?.call(t);
+      if (shuffle) bijHervatten?.call(_order, hoe: 'na een herstart', vanaf: _index, generatie: ++_schudGeneratie);
       _nieuwVoorDeTelling(t);
       final bron = _bron(t.path);
       _zetLuidheid(t, adres: bron, rij: _order, plek: _index, opVolgorde: !shuffle);

@@ -95,6 +95,64 @@ void main() {
     expect(regels[4], contains('de eerste 10 blijven staan'));
   });
 
+  group('een shuffle die verder loopt (Saber, 26-10-2026: "Oe zit het met men shuffle? Log ?")', () {
+    void voorbij(int plek, int sec, {required int generatie}) => log.voorbij(bib[plek],
+        plek: plek,
+        lengte: 1000,
+        shuffle: true,
+        generatie: generatie,
+        geluisterd: Duration(seconds: sec),
+        duur: const Duration(minutes: 4));
+
+    test('DE KERN: na een herstart volgt het logboek de shuffle verder, vanaf waar hij was', () {
+      log.hervat(bib, hoe: 'na een herstart', vanaf: 55, generatie: 1);
+      expect(regels, isEmpty, reason: 'de kop wacht op het eerste nummer');
+      voorbij(55, 200, generatie: 1);
+      voorbij(56, 9, generatie: 1);
+      expect(regels, hasLength(4));
+      expect(regels[0], startsWith('SCHUD 25-10-2026 11:02:13 #'));
+      expect(regels[0], contains('(na een herstart): 1000 van 1000 nummers in de bibliotheek · verder vanaf plek 56 · '));
+      expect(regels[0], contains('945 verschillend, 0 dubbel'), reason: 'wat nog komt');
+      expect(regels[0], isNot(contains('shuffle sinds de start')), reason: 'geen nieuwe trekking');
+      expect(regels[1], contains('volgende 30: 56. Artiest 5 — Nummer 55 [2×, 3 d] · 57. '),
+          reason: 'genummerd zoals de regels per nummer');
+      expect(regels[2], endsWith(' 56/1000 Artiest 5 — Nummer 55: gehoord 3:20 van 4:00'));
+      expect(regels[3], endsWith(' 57/1000 Artiest 6 — Nummer 56: overgeslagen na 0:09 van 4:00'));
+    });
+
+    test('elke herstart zonder één nummer erna schrijft niets', () {
+      log.hervat(bib, hoe: 'na een herstart', vanaf: 3, generatie: 1);
+      log.hervat(bib, hoe: 'na een herstart', vanaf: 3, generatie: 2);
+      expect(regels, isEmpty);
+      voorbij(3, 200, generatie: 1);
+      expect(regels, isEmpty, reason: 'de vorige herstart telt niet meer');
+    });
+
+    test('overgenomen terwijl hier een eigen shuffle liep: die sluit af, het laatste nummer ervan telt nog mee', () {
+      log.geschud(bib, hoe: 'Shuffle alles', generatie: 1);
+      voorbij(0, 200, generatie: 1);
+      regels.clear();
+      log.hervat(List.of(bib.reversed), hoe: 'overgenomen', vanaf: 10, generatie: 2);
+      voorbij(1, 30, generatie: 1); // het nummer dat hier speelde toen de wachtrij binnenkwam
+      expect(regels.single, endsWith(' 2/1000 Artiest 1 — Nummer 1: overgeslagen na 0:30 van 4:00'));
+      voorbij(10, 200, generatie: 2);
+      expect(regels[1], contains('klaar: 2 nummers voorbij, 1 gehoord, 1 overgeslagen'));
+      expect(regels[2], contains('(overgenomen): 1000 van 1000 nummers in de bibliotheek · verder vanaf plek 11'));
+      expect(regels.last, contains(' 11/1000 '));
+    });
+
+    test('een geschud album dat verder loopt komt er niet in, en een nieuwe shuffle vervangt wat wachtte', () {
+      log.hervat(bib.take(500).toList(), hoe: 'na een herstart', generatie: 1);
+      voorbij(0, 200, generatie: 1);
+      expect(regels, isEmpty);
+      log.hervat(bib, hoe: 'na een herstart', generatie: 2);
+      log.geschud(bib, hoe: 'shuffle-knop', generatie: 3);
+      regels.clear();
+      voorbij(0, 200, generatie: 2);
+      expect(regels, isEmpty);
+    });
+  });
+
   test('zelfde artiest direct na elkaar tellen', () {
     expect(zelfdeArtiestNaElkaar([_t(1, artiest: 'A'), _t(2, artiest: 'a'), _t(3, artiest: 'B'), _t(4, artiest: 'A')]), 1);
   });
@@ -165,6 +223,16 @@ void main() {
     final main = _bron('lib/main.dart');
     expect(main, contains("          await c.ask('/api/diag/schud', {'toestel': warmteToestel(await ik), 'regels': regels});"));
     expect(main, contains('    player.bijSchudden = schudLog.geschud;\n    player.bijNummerVoorbij = schudLog.voorbij;'));
+    expect(main, contains('    player.bijHervatten = schudLog.hervat;'));
+    // Vóór de telling van het eerste nummer: dat draagt dan de trekking van het vervolg.
+    expect(
+        speler,
+        contains("      if (shuffle) bijHervatten?.call(_order, hoe: 'na een herstart', vanaf: _index, "
+            'generatie: ++_schudGeneratie);\n      _nieuwVoorDeTelling(t);'));
+    expect(
+        speler,
+        contains("    if (shuffle) bijHervatten?.call(_order, hoe: 'overgenomen', vanaf: plek, generatie: ++_schudGeneratie);\n"
+            '    await _openCurrent();'));
     expect(main, contains("final log = WarmLog('\$logDir\${Platform.pathSeparator}schud.log', maxBytes: kSchudLogBytes);"));
     final server = _bron('lib/lan/server.dart');
     expect(server, contains("      case '/api/diag/schud':\n        return _schud(req);"));

@@ -127,6 +127,7 @@ class ZoneStaat {
     this.verplaatstOp = 0,
     this.leden = const [],
     this.hierna = '',
+    this.volgendeId = '',
     this.bronSoort = '',
     this.bronNaam = '',
     this.kwaliteit = '',
@@ -136,6 +137,11 @@ class ZoneStaat {
   /// Wat er na het spelende nummer komt: "Titel — Artiest", leeg als er niets komt (zones, stap 3; Saber, 23-10-2026:
   /// "Hierna: …").
   final String hierna;
+
+  /// Het id van het nummer dat "volgende" opent (de wachtrij één verder, bij een radio wat hij klaar heeft), leeg als
+  /// dat niet vaststaat. Zo staat het op het scherm van wie bedient vóór de zone het meldt (Saber, 26-10-2026: "op de
+  /// shield klonk het volgende liedje, maar op de gsm duurde het echt paar seconden eer ik het zag").
+  final String volgendeId;
 
   /// Waar de wachtrij vandaan komt ([bronVanRij]): 'radio', 'album', 'afspeellijst', 'artiest' of 'wachtrij', met de
   /// naam erbij ("Reckless", "Zomer", "23 nummers"). Leeg als het niet te zeggen is.
@@ -263,6 +269,7 @@ class ZoneStaat {
         if (verplaatstOp > 0) ...{'verplaatstNaar': verplaatstNaar, 'verplaatstOp': verplaatstOp},
         if (leden.isNotEmpty) 'leden': [for (final l in leden) l.toJson()],
         if (hierna.isNotEmpty) 'hierna': hierna,
+        if (volgendeId.isNotEmpty) 'volgendeId': volgendeId,
         if (bronSoort.isNotEmpty) ...{'bronSoort': bronSoort, 'bronNaam': bronNaam},
         if (kwaliteit.isNotEmpty) 'kwaliteit': kwaliteit,
         if (omgezet.isNotEmpty) 'omgezet': omgezet,
@@ -303,6 +310,7 @@ class ZoneStaat {
             if (x is Map) ZoneLid.fromJson(x.cast<String, dynamic>()),
         ],
         hierna: '${m['hierna'] ?? ''}',
+        volgendeId: '${m['volgendeId'] ?? ''}',
         bronSoort: '${m['bronSoort'] ?? ''}',
         bronNaam: '${m['bronNaam'] ?? ''}',
         kwaliteit: '${m['kwaliteit'] ?? ''}',
@@ -342,6 +350,7 @@ class ZoneStaat {
       other.verplaatstOp == verplaatstOp &&
       listEquals(other.leden, leden) &&
       other.hierna == hierna &&
+      other.volgendeId == volgendeId &&
       other.bronSoort == bronSoort &&
       other.bronNaam == bronNaam &&
       other.kwaliteit == kwaliteit &&
@@ -361,6 +370,10 @@ String volgendInRij(List<String> rij, int index, String repeat) {
   if (index + 1 < rij.length) return rij[index + 1];
   return repeat == 'all' ? rij.first : '';
 }
+
+/// Het id dat "volgende" opent: de wachtrij één verder, ook bij herhalen van één nummer. Aan het eind leeg: daar
+/// begint bij herhalen een nieuwe trekking (`PlayerStore.next`), en die kent alleen de zone.
+String volgendeOpdracht(List<String> rij, int index) => index >= 0 && index + 1 < rij.length ? rij[index + 1] : '';
 
 /// Waar een wachtrij vandaan komt.
 typedef ZoneBron = ({String soort, String naam});
@@ -918,6 +931,7 @@ class ZoneRegister {
       final b = s.trackId == null ? null : bestandVan?.call(versieOpSpeaker?.call(s.id) ?? s.trackId!);
       uit.add(ZoneStaat(
         hierna: rij == null ? '' : _hiernaVan(rij.rij, rij.index, 'off'),
+        volgendeId: rij == null ? '' : volgendeOpdracht(rij.rij, rij.index),
         bronSoort: bron?.soort ?? '',
         bronNaam: bron?.naam ?? '',
         kwaliteit: b == null ? '' : kwaliteitLabel(ext: b.ext, rate: b.rate, bits: b.bits),
@@ -1037,6 +1051,7 @@ class ZoneRegister {
     return ZoneStaat(
       // Een radio meldt wat erna komt apart ([PlaybackProgress.volgend]); de rij noemt dan alleen het spelende nummer.
       hierna: p.volgend.isNotEmpty ? _naamVan(p.volgend) : _hiernaVan(p.queue, p.index, p.repeat),
+      volgendeId: p.volgend.isNotEmpty ? p.volgend : volgendeOpdracht(p.queue, p.index),
       bronSoort: bron?.soort ?? '',
       bronNaam: bron?.naam ?? '',
       kwaliteit: b == null ? '' : kwaliteitLabel(ext: b.ext, rate: b.rate, bits: b.bits),

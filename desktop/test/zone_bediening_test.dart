@@ -30,7 +30,14 @@ Track _t(String id) => Track(path: 'http://pc.invalid/stream/$id.flac', title: '
 
 const _nu = 10000000;
 
-ZoneStaat _pc({bool online = true, bool playing = true, int opMs = _nu, String trackId = 'b', int volume = 70}) =>
+ZoneStaat _pc(
+        {bool online = true,
+        bool playing = true,
+        int opMs = _nu,
+        String trackId = 'b',
+        int volume = 70,
+        String volgendeId = '',
+        int positionMs = 60000}) =>
     ZoneStaat(
       id: 'dev:pc-THUIS',
       soort: ZoneSoort.pc,
@@ -39,12 +46,13 @@ ZoneStaat _pc({bool online = true, bool playing = true, int opMs = _nu, String t
       playing: playing,
       trackId: trackId,
       titel: 'Titel',
-      positionMs: 60000,
+      positionMs: positionMs,
       durationMs: 240000,
       opMs: opMs,
       index: 3,
       lengte: 10,
       volume: volume,
+      volgendeId: volgendeId,
     );
 
 ZoneLijst _lijst(List<ZoneStaat> zones, {int Function()? klok}) =>
@@ -123,6 +131,123 @@ void main() {
         lijst.zet({'nu': klok, 'zones': [_pc(playing: false, opMs: klok).toJson()]});
         expect(z.playing, isFalse);
         z.dispose();
+      });
+    });
+
+    // Saber, 26-10-2026: "Ik bediende daarnet men shield via men gsm, op de shield klonk het volgende liedje, maar op de
+    // gsm duurde het echt paar seconden eer ik het zag."
+    group('"volgende" staat meteen op het scherm', () {
+      late int klok;
+      late ZoneLijst lijst;
+      late List<Map<String, dynamic>> gestuurd;
+      late List<String> gemeten;
+      late ZoneSpeler z;
+
+      void melding(String trackId, {String volgendeId = '', int oud = 0, int positionMs = 0}) => lijst.zet({
+            'nu': klok,
+            'zones': [_pc(trackId: trackId, volgendeId: volgendeId, opMs: klok - oud, positionMs: positionMs).toJson()],
+          });
+
+      void maak() {
+        klok = _nu;
+        lijst = _lijst([_pc(volgendeId: 'c')], klok: () => klok);
+        gestuurd = [];
+        gemeten = [];
+        z = ZoneSpeler(
+          lijst: lijst,
+          zoneId: 'dev:pc-THUIS',
+          nummer: (id) => id == 'onbekend' ? null : _t(id),
+          idVan: (t) => t.title,
+          hoesVan: (_) => null,
+          stuur: (op) async {
+            gestuurd.add(op);
+            return null;
+          },
+          meet: gemeten.add,
+          klok: () => klok,
+        );
+      }
+
+      test('DE KERN: het volgende nummer vanaf nul, tot de zone het meldt — en de meting zegt hoe lang dat duurde', () {
+        fakeAsync((fa) {
+          maak();
+          expect(z.current!.title, 'Nummer b');
+          z.next();
+          expect(z.current!.title, 'Nummer c', reason: 'meteen, niet pas als de Shield het meldt');
+          expect(z.position, Duration.zero);
+          fa.flushMicrotasks();
+          expect(gestuurd.single, {'cmd': 'next'});
+
+          // Een melding die nog onderweg was: het oude nummer, net begonnen (de plek zegt dan niets). Het scherm springt
+          // niet terug.
+          klok += 200;
+          melding('b', volgendeId: 'c', positionMs: 150);
+          expect(z.current!.title, 'Nummer c');
+          expect(gemeten, isEmpty, reason: 'nog geen ander nummer');
+
+          // Nu meldt de zone het: 450 ms na de druk, de melding 120 ms oud toen ze hier aankwam.
+          klok += 250;
+          melding('c', volgendeId: 'd', oud: 120, positionMs: 300);
+          expect(z.current!.title, 'Nummer c');
+          expect(gemeten.single, 'THUIS: nieuw nummer "Titel" · melding 120 ms oud bij aankomst · 450 ms na je druk op volgende');
+          // Bevestigd: vanaf nu weer wat de zone zelf zegt.
+          klok += 9000;
+          fa.elapse(const Duration(seconds: 9));
+          expect(z.current!.title, 'Nummer c');
+          z.dispose();
+        });
+      });
+
+      test('meldt de zone niets, dan na acht seconden weer het oude nummer; na vijftien zegt de meting het', () {
+        fakeAsync((fa) {
+          maak();
+          z.next();
+          klok += 7000;
+          fa.elapse(const Duration(seconds: 7));
+          expect(z.current!.title, 'Nummer c', reason: 'een nummer moet eerst openen: niet na drie seconden terug');
+          klok += 1500;
+          fa.elapse(const Duration(milliseconds: 1500));
+          expect(z.current!.title, 'Nummer b', reason: 'de opdracht kwam niet aan: niet blijven doen alsof');
+          klok += 7000;
+          fa.elapse(const Duration(seconds: 7));
+          expect(gemeten.single, 'THUIS: volgende → geen nieuw nummer binnen 15 s');
+          z.dispose();
+        });
+      });
+
+      test('een ander nummer dan verwacht (een kapot nummer overgeslagen): meteen dat, en de meting zegt het', () {
+        fakeAsync((fa) {
+          maak();
+          z.next();
+          klok += 900;
+          melding('x', positionMs: 100);
+          expect(z.current!.title, 'Nummer x');
+          expect(gemeten.single, endsWith('900 ms na je druk op volgende (een ander nummer dan verwacht)'));
+          z.dispose();
+        });
+      });
+
+      test('DE GRENS: weet dit toestel niet welk nummer het wordt, dan wacht het op de zone zoals voorheen', () {
+        fakeAsync((fa) {
+          maak();
+          lijst.zet({'nu': klok, 'zones': [_pc().toJson()]}); // een oudere pc: geen volgendeId
+          z.next();
+          expect(z.current!.title, 'Nummer b');
+          lijst.zet({'nu': klok, 'zones': [_pc(volgendeId: 'onbekend').toJson()]});
+          z.next();
+          expect(z.current!.title, 'Nummer b', reason: 'een nummer dat dit toestel niet kent');
+          z.dispose();
+        });
+      });
+
+      test('een nummer dat zelf wisselt (het vorige was uit) wordt ook gemeten', () {
+        fakeAsync((fa) {
+          maak();
+          klok += 1000;
+          melding('c', oud: 2400);
+          expect(gemeten.single, 'THUIS: nieuw nummer "Titel" · melding 2400 ms oud bij aankomst');
+          z.dispose();
+        });
       });
     });
 
