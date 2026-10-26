@@ -1388,7 +1388,7 @@ Future<void> main() async {
         } finally {
           c.close();
         }
-      }).voegToe;
+      }, bewaar: appFile('schud_wacht.json')).voegToe;
     }
     final schudLog = SchudLogboek(
         schrijf: schrijf, bibliotheek: () => library.tracks.length, speelstand: (t) => player.speelstandVan?.call(t));

@@ -93,6 +93,9 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/update', '/api/cast/devices', '/api/cast/control', '/api/cast/status', '/api/releases',
     '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd', '/api/zone/transfer', '/api/tijd',
     '/api/twijfel',
+    // Het schudlogboek van een toestel (schudlog.dart): onderweg schudt Saber ook (26-10-2026: "Ik heb vandaag op de gsm
+    // verschillende keer gesnuffeld" — en niets kwam aan). schud.log heeft een plafond ([kSchudLogBytes]).
+    '/api/diag/schud',
     '/api/soort/vraag',
     '/api/soort/stop',
     '/api/releaseart',
