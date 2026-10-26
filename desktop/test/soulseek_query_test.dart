@@ -16,6 +16,10 @@ void main() {
 
     test('keeps a plain title whole', () {
       expect(soulseekQuery('Backstreet Boys', 'Anywhere for You'), 'backstreet boys anywhere for you');
+      // Letters met een accent blijven heel (26-10-2026: 'france gall branche' gaf 1 bestand, 'france gall débranche' 789).
+      expect(soulseekQuery('France Gall', 'Débranche!'), 'france gall débranche');
+      expect(soulseekQuery('Beyoncé', 'If I Were A Boy'), 'beyoncé if were boy');
+      expect(soulseekQuery('Mylène Farmer', 'Désenchantée'), 'mylène farmer désenchantée');
     });
 
     test('an apostrophe splits rather than merges', () {

@@ -2849,8 +2849,11 @@ String _teVergelijken(String s) => s
 /// `you re`, which the term `youre` never matches. So the brackets and punctuation come off here,
 /// the strong words stay, and the full title still decides which results are really this song.
 String soulseekQuery(String artist, String title, {String? album}) {
+  // Letters met een accent horen bij het woord. Hier stond `[^a-z0-9]`, en dan werd "Débranche!" van France Gall de
+  // zoekterm "branche" en "Beyoncé" "beyonc". Gemeten op 26-10-2026: "france gall branche" gaf 1 bestand, "france gall
+  // debranche" 550 en "france gall débranche" 789 — met accent vindt Soulseek het meest.
   List<String> tok(String s) =>
-      s.toLowerCase().split(RegExp(r'[^a-z0-9]+')).where((w) => w.length > 1).toList();
+      s.toLowerCase().split(RegExp(r'[^\p{L}\p{N}]+', unicode: true)).where((w) => w.length > 1).toList();
   // Drop "(You're the One for Me)"-style asides; they hurt the search and are recovered by the
   // title filter. If a title is ALL aside — "(Everything I Do)" — keep it rather than search blank.
   final body = tok(title.replaceAll(RegExp(r'[(\[{][^)\]}]*[)\]}]'), ' '));

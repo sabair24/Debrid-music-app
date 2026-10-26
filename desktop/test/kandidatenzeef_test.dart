@@ -305,6 +305,17 @@ void main() {
       expect(lengteVanDeMeerderheid(kids, null), isNull);
     });
 
+    // Gemeten op 26-10-2026: 1006 kopieën met de titel, geen enkele van de 3:20 die Deezer zegt, verspreid over 4:56–5:08.
+    test('Foreigner: verspreid over 4:56–5:08, geen enkele met de Deezer-lengte — dan toch de lengte van de kopieën', () {
+      final foreigner = [
+        for (var i = 0; i < 40; i++) f('a$i', r'Foreigner\Agent Provocateur\06 - I Want to Know What Love Is.flac', 296 + (i % 3)),
+        for (var i = 0; i < 60; i++) f('b$i', r'Foreigner\Agent Provocateur\06 - I Want to Know What Love Is.flac', 300 + (i % 5)),
+        for (var i = 0; i < 50; i++) f('c$i', r'Foreigner\Records\I Want to Know What Love Is.flac', 305 + (i % 4)),
+      ];
+      expect(lengteVanDeMeerderheid(foreigner, 200), inInclusiveRange(296, 308));
+      expect(kMeerderheidVenster, 8);
+    });
+
     test('één uploader stemt één keer per lengte', () {
       final een = [for (var i = 0; i < 20; i++) f('zelfde', 'x\\$i Kids Of The Future.flac', 199)];
       expect(lengteVanDeMeerderheid(een, 175), isNull);
