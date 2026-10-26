@@ -51,7 +51,12 @@ class ZoneUitvoerder {
     this.tussendoor,
     this.tussendoorAB,
     this.tussendoorKlaar,
+    this.versie,
   });
+
+  /// Een andere versie van het spelende nummer (versies.dart): [trackId] het nummer, [versieId] de versie (of het nummer
+  /// zelf). Null als het lukte, anders waarom niet. Zie `PlayerStore.wisselVersie`.
+  final Future<String?> Function(String trackId, String versieId)? versie;
 
   /// Een klaargezette kopie van [Track] beluisteren zonder de wachtrij aan te raken ("Klaar om te kiezen", Saber
   /// 26-10-2026: "op de zone die actief is"). Null als het lukte, anders waarom niet. Zie `PlayerStore.tussendoor`.
@@ -242,6 +247,11 @@ class ZoneUitvoerder {
           await tussendoorAB?.call();
         case 'tussendoorKlaar':
           await tussendoorKlaar?.call(hervat: op['hervat'] != false);
+        case 'versie':
+          final f = versie;
+          fout = f == null
+              ? 'Dit toestel kan nog niet van versie wisselen — werk het bij'
+              : await f('${op['trackId'] ?? ''}', '${op['versieId'] ?? ''}');
         default:
           fout = 'Onbekende opdracht "$cmd"';
       }

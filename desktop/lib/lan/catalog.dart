@@ -169,6 +169,9 @@ class LanCatalog {
 
   Track? track(String id) => snapshot().trackById[id] ?? extraTrack?.call(id);
 
+  /// Het id waaronder [pad] gespeeld wordt (ook een versie, versies.dart), zoals [_build] het rekent.
+  String idVoorPad(String pad) => _trackIdCache.putIfAbsent(pad, () => trackIdFor(pad, library.rootPath));
+
   Album? album(String id) => snapshot().albumById[id];
 
   /// Cover bytes for an artwork ref — an album id, or `artist-<id>` for an artist portrait.

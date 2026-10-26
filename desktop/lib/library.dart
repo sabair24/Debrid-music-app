@@ -1219,6 +1219,9 @@ class LibraryStore extends ChangeNotifier {
     return _versieTracks[_padSleutel(v.pad)]?.path ?? pad;
   }
 
+  /// De versies (versies.dart) veranderden — een keuze, een nieuwe versie: de schermen opnieuw tekenen.
+  void versiesVeranderd() => notifyListeners();
+
   /// Alle versies als nummer (op de pc): voor de catalogus, die ze speelbaar maakt.
   Iterable<Track> get versieTracks => _versieTracks.values;
 

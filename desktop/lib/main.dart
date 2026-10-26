@@ -198,6 +198,8 @@ import 'vinyl.dart' show isVinylRip;
 import 'twijfel.dart';
 import 'kopiesoort.dart';
 import 'versies.dart';
+import 'versie_acties.dart';
+import 'versie_uitlijner.dart' show VersieUitlijnRonde;
 import 'soortjacht.dart' show Soortvragen, gezochtVoor, soortvraagUitgave;
 import 'lan/vaste_naam.dart' show kPcHost;
 import 'torbox.dart';
@@ -802,7 +804,8 @@ Future<void> main() async {
       // een album dat thuis begon, komt zo onderweg via Tailscale verder. Offline bewaren krijgt het
       // origineel van de pc (bit-perfect, zie hieronder); het vooruithalen het adres waarmee het
       // nummer zo zal spelen, met de stand van dat moment.
-      offline.adresVoor = resolver;
+      // Offline bewaren neemt de versie die voor dit nummer speelt (versies.dart: "wat speelt voor die plaat").
+      offline.adresVoor = (p) => resolver(library.speelPadVoor(p));
       vooruit.adresVoor = (p) => player.mediaResolver(p);
       player.mediaResolver = (path) {
       final local = offline.localFor(path) ?? vooruit.localFor(path);
@@ -894,6 +897,8 @@ Future<void> main() async {
   if (mode.owner) await laadSoorten();
   // De versies van een nummer (versies.dart): vóór de eerste scan, want die houdt ze uit de albums.
   if (mode.owner) await versies.laad();
+  // Een keuze of een nieuwe versie: de schermen opnieuw tekenen (op een toestel komt dat met de catalogus).
+  if (mode.owner) versies.uitgave.addListener(library.versiesVeranderd);
   // Berichten van uploaders (uploaderberichten.dart): wat er al was; en op de pc vanaf nu wat de Soulseek-verbinding
   // binnenkrijgt. Een toestel haalt ze bij de pc op (ClientSession).
   await uploaderberichten.laad();
@@ -916,6 +921,9 @@ Future<void> main() async {
     ..speaker = speakers
     ..coverResolver = library.coverForTrack
     ..trackResolver = library.trackByPath
+    // Welke versie er speelt (versies.dart): de gekozen versie, behalve als er een kopie op dit toestel staat — die is van
+    // de versie die speelde toen je hem bewaarde, en onderweg is er misschien geen pc.
+    ..versieVoor = ((p) => offline.localFor(p) != null ? p : library.speelPadVoor(p))
     // Tapping a track while a speaker has the music sends the queue THERE. Without this the phone
     // started playing it out loud while the KEF carried on with the old queue — which is what
     // "I pressed the next song and it came out of the phone" was.
@@ -1712,6 +1720,17 @@ Future<void> main() async {
     tussendoorKlaar: ({required bool hervat}) async {
       await player.tussendoorKlaar(hervat: hervat);
     },
+    // Van versie wisselen voor een toestel dat deze zone bedient (versies.dart): met de speler van dit toestel.
+    versie: (trackId, versieId) async {
+      if (player.naarSpeaker) return 'Hier speelt een speaker — kies die speaker als zone';
+      final t = player.current;
+      if (t == null) return 'Er speelt hier niets';
+      if (library.gedeeldId(t.path) != trackId) return 'Dat nummer speelt hier niet (meer)';
+      final lijst = library.versiesVan(t);
+      final v = lijst.where((x) => library.gedeeldId(x.track.path) == versieId).firstOrNull;
+      if (v == null) return 'Die versie kent dit toestel niet — werk het bij';
+      return await player.wisselVersie(v, lijst) ? null : 'Wisselen lukte niet';
+    },
     // Meteen melden wat er nu speelt, zodat wie bedient de uitkomst ziet (niet pas na vijf seconden).
     naUitvoeren: () => Timer(const Duration(milliseconds: 400), player.meldStandNu),
   );
@@ -2360,6 +2379,12 @@ Future<void> main() async {
 
     library.laatLos = laatAllesLos;
     voorVerplaatsen = laatAllesLos;
+    // De versies uitlijnen (versie_uitlijner.dart): waar in de vinylrip hetzelfde moment van de cd valt — één voor één,
+    // op de achtergrond, bij de start en kort na elke nieuwe versie.
+    if (mode.owner) {
+      VersieUitlijnRonde(log: WarmLog('$logDir${Platform.pathSeparator}versies.log'), wacht: const Duration(minutes: 2))
+          .start();
+    }
     meldAanBijHartslag(() =>
         LuidheidVeger.voortgang.value.isEmpty ? '' : 'luidheid ${LuidheidVeger.voortgang.value}');
     meldAanBijHartslag(() => EchtheidVeger.voortgang.value);
@@ -13941,6 +13966,169 @@ Future<String?> tussendoorStart(BuildContext context, Track t) async {
   return null;
 }
 
+// ── Versies (versies.dart) ───────────────────────────────────────────────
+
+/// Wat er op een zone of speaker op afstand voor een nummer klinkt, na een wissel van hier ([wisselNaarVersie]): daar is
+/// geen speler om het aan te vragen. Anker-pad → pad van de versie.
+final Map<String, String> _versieOpAfstand = {};
+
+/// Het pad van wat er voor [t] klinkt, waar de muziek nu is: op dit toestel de speler, op een zone of speaker de laatste
+/// wissel van hier, en anders de standaard.
+String klinktNuVoor(BuildContext context, Track t) {
+  final waar = tussendoorWaar(context);
+  if (waar.zone == null) {
+    final speler = context.read<PlayerStore>();
+    if (speler.current?.path == t.path) return speler.speelPad ?? t.path;
+  } else if (_versieOpAfstand[t.path] case final pad?) {
+    return pad;
+  }
+  return context.read<LibraryStore>().speelPadVoor(t.path);
+}
+
+/// Naar versie [naar] van [anker], waar de muziek nu is ([tussendoorWaar]): op dit toestel met een korte overvloei
+/// ([PlayerStore.wisselVersie]), op een zone of een speaker via de pc. Null als het lukte, anders waarom niet.
+Future<String?> wisselNaarVersie(BuildContext context, Track anker, VersieInfo naar) async {
+  final lib = context.read<LibraryStore>();
+  final speler = context.read<PlayerStore>();
+  final waar = tussendoorWaar(context);
+  final zone = waar.zone;
+  if (zone == null) {
+    if (speler.current?.path != anker.path) return 'Dit nummer speelt nu niet';
+    return await speler.wisselVersie(naar, lib.versiesVan(anker)) ? null : 'Wisselen lukte niet';
+  }
+  final stuur = context.read<ZoneLijst>().stuur;
+  final id = lib.gedeeldId(anker.path), vid = lib.gedeeldId(naar.track.path);
+  if (stuur == null || id == null || vid == null) return 'Dat kan op ${waar.naam} niet';
+  final fout = await stuur(
+      zone, {'cmd': 'versie', 'trackId': id, 'versieId': vid, 'id': 'versie-${DateTime.now().microsecondsSinceEpoch}'});
+  if (fout == null) _versieOpAfstand[anker.path] = naar.track.path;
+  return fout;
+}
+
+/// Onthouden welke versie er voor [anker] speelt ([bereik]: dit nummer of de hele plaat). Op de pc meteen, op een
+/// toestel via de pc — die bewaart het, en elk toestel krijgt het met de catalogus. Geeft de zin terug.
+Future<String> onthoudVersie(BuildContext context, Track anker, VersieInfo v, VersieBereik bereik) async {
+  final lib = context.read<LibraryStore>();
+  final c = lib.remote;
+  if (c == null) return kiesVersie(lib, anker, v.track.path, bereik);
+  final id = lib.gedeeldId(anker.path), vid = lib.gedeeldId(v.track.path);
+  if (id == null || vid == null) return 'Dit nummer kent de pc niet';
+  try {
+    final r = await c.ask('/api/versie', {'trackId': id, 'actie': 'kies', 'versieId': vid, 'bereik': bereik.name});
+    unawaited(lib.loadRemote(quiet: true));
+    return '${r['zin'] ?? 'Onthouden'}';
+  } catch (e) {
+    return 'Onthouden lukte niet: $e';
+  }
+}
+
+/// Na een wissel (Saber, 26-10-2026: "Vragen bij het wisselen"): onthouden voor de plaat, voor dit nummer, of niet
+/// (de melding gaat vanzelf weg). Niet op een tv — daar staat het in het versieblad ([toonVersies]).
+void vraagOnthouden(BuildContext context, Track anker, VersieInfo v) {
+  if (isTv) return;
+  final m = ScaffoldMessenger.maybeOf(context);
+  if (m == null) return;
+  Future<void> kies(VersieBereik b) async {
+    m.hideCurrentSnackBar();
+    final zin = await onthoudVersie(context, anker, v, b);
+    m.showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 3)));
+  }
+
+  m.hideCurrentSnackBar();
+  m.showSnackBar(SnackBar(
+    key: const ValueKey('versie-onthouden'),
+    duration: const Duration(seconds: 8),
+    persist: false,
+    content: Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 4,
+      runSpacing: 2,
+      children: [
+        Text('${v.label} — onthouden?'),
+        TextButton(
+            key: const ValueKey('versie-onthoud-plaat'),
+            onPressed: () => kies(VersieBereik.plaat),
+            child: const Text('Voor deze plaat')),
+        TextButton(
+            key: const ValueKey('versie-onthoud-nummer'),
+            onPressed: () => kies(VersieBereik.nummer),
+            child: const Text('Voor dit nummer')),
+      ],
+    ),
+  ));
+}
+
+/// Het icoon van een versie: studio, cd, vinyl.
+IconData versieIcoon(Kopiesoort? s) => switch (s) {
+      Kopiesoort.studio => Icons.graphic_eq_rounded,
+      Kopiesoort.cd => Icons.album_rounded,
+      Kopiesoort.vinyl => Icons.radio_button_checked_rounded,
+      null => Icons.music_note_rounded,
+    };
+
+/// De versies van [t] als menu: elke versie (tik = wisselen, of spelen als het nummer niet speelt), en daaronder
+/// onthouden voor de plaat of dit nummer. Wat klinkt staat erbij, en wat de standaard is.
+ItemMenu versieMenu(BuildContext context, Track t) {
+  final lib = context.read<LibraryStore>();
+  final speler = context.read<PlayerStore>();
+  final lijst = lib.versiesVan(t);
+  final speelt = speler.current?.path == t.path || tussendoorWaar(context).zone != null;
+  final klinkt = klinktNuVoor(context, t);
+  final nu = lijst.where((v) => v.track.path == klinkt).firstOrNull;
+  void doe(Future<void> Function() f) => unawaited(f());
+  return ItemMenu(
+    titel: '${t.title} — versies',
+    ondertitel: speelt
+        ? 'Tik om te wisselen, op hetzelfde moment in de muziek'
+        : 'Tik om te kiezen wat dit nummer voortaan speelt',
+    blokken: [
+      [
+        for (final v in lijst)
+          MenuRegel(
+            versieIcoon(v.soort),
+            [
+              v.label,
+              if (v.track.path == klinkt && speelt) 'speelt nu',
+              if (v.standaard) 'standaard',
+            ].join(' · '),
+            () => doe(() async {
+              // Speelt het nummer niet: dan kies je wat het voortaan speelt.
+              if (!speelt) return _onthoudEnMeld(context, t, v, VersieBereik.nummer);
+              final fout = await wisselNaarVersie(context, t, v);
+              if (!context.mounted) return;
+              if (fout != null) {
+                ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(fout)));
+              } else {
+                vraagOnthouden(context, t, v);
+              }
+            }),
+          ),
+      ],
+      [
+        if (nu != null && !nu.standaard) ...[
+          MenuRegel(Icons.library_music_rounded, 'Onthouden voor deze plaat: ${nu.label}',
+              () => doe(() => _onthoudEnMeld(context, t, nu, VersieBereik.plaat))),
+          MenuRegel(Icons.music_note_rounded, 'Onthouden voor dit nummer: ${nu.label}',
+              () => doe(() => _onthoudEnMeld(context, t, nu, VersieBereik.nummer))),
+        ],
+      ],
+    ],
+  );
+}
+
+Future<void> _onthoudEnMeld(BuildContext context, Track t, VersieInfo v, VersieBereik b) async {
+  final zin = await onthoudVersie(context, t, v, b);
+  if (context.mounted) _meldVersieZin(context, zin);
+}
+
+void _meldVersieZin(BuildContext context, String zin) {
+  if (!context.mounted) return;
+  ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 3)));
+}
+
+/// Het versieblad van [t] openen (lang drukken op de hoes met de stapel, het kwaliteitsblad, een nummermenu, Meer op tv).
+Future<void> toonVersies(BuildContext context, Track t) => _toonItemMenu(context, versieMenu(context, t));
+
 /// Wat er bij een klaargezette kopie onder de titel van het menu staat: waar hij vandaan komt, en of de vingerafdruk
 /// zegt dat het dezelfde opname is (Saber, 25-10-2026: twijfelzone mag, "met een waarschuwing").
 String klaarOndertitel(TwijfelInfo tw) {
@@ -14533,6 +14721,11 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
       ],
       // Zelf de soort kiezen (Saber, 25-10-2026): niets wordt vervangen, de kopie staat klaar tot je luistert en kiest.
       [
+        // De versies die je al hebt (versies.dart): wisselen als hij speelt, anders kiezen wat hij voortaan speelt. Ook de
+        // weg op een tv, waar na een wissel geen melding met knoppen komt.
+        if (lib.versiesVan(t) case final vs when vs.length > 1)
+          MenuRegel(Icons.layers_rounded, 'Versies (${vs.length}): ${vs.map((v) => v.soort?.naam ?? '?').toSet().join(', ')}…',
+              () => unawaited(toonVersies(context, t))),
         ..._soortRegels(context, [t], heeft: soortVoor(t.path)?.soort),
         // Een vraag die nog loopt: stoppen — op de pc zelf, op een toestel via de pc (`/api/soort/stop`; Saber,
         // 25-10-2026: ook op de gsm en de Shield). Een kopie die al klaarstaat, blijft tot je kiest.
@@ -17968,6 +18161,45 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
   final _stapel = GlobalKey<WachtrijStapelState>();
   final _stapelBesturing = StapelBesturing();
 
+  /// Het label op de hoes bij een wissel van versie (versies.dart): "Vinyl · LP 1996 · 24/192", twee tellen lang.
+  final _versieLabel = ValueNotifier<String?>(null);
+  Timer? _versieLabelKlok;
+
+  void _toonVersieLabel(String tekst) {
+    _versieLabel.value = tekst;
+    _versieLabelKlok?.cancel();
+    _versieLabelKlok = Timer(const Duration(milliseconds: 2400), () => _versieLabel.value = null);
+  }
+
+  /// De versie [stap] verder (omhoog: de volgende in de lijst studio → cd → vinyl; omlaag: de vorige), of null als er in
+  /// die richting geen is.
+  VersieInfo? _versieNaast(Track t, int stap) {
+    final lijst = context.read<LibraryStore>().versiesVan(t);
+    if (lijst.length < 2) return null;
+    final klinkt = klinktNuVoor(context, t);
+    var i = lijst.indexWhere((v) => v.track.path == klinkt);
+    if (i < 0) i = lijst.indexWhere((v) => v.standaard);
+    final j = i + stap;
+    return j < 0 || j >= lijst.length ? null : lijst[j];
+  }
+
+  /// Vegen over de hoes of een pijl op de tv (Saber, 26-10-2026): naar de versie [stap] verder.
+  Future<void> _naarVersie(Track t, int stap) async {
+    final naar = _versieNaast(t, stap);
+    if (naar == null) {
+      _toonVersieLabel(stap > 0 ? 'Geen volgende versie' : 'Geen vorige versie');
+      return;
+    }
+    _toonVersieLabel(naar.label);
+    final fout = await wisselNaarVersie(context, t, naar);
+    if (!mounted) return;
+    if (fout != null) {
+      _toonVersieLabel(fout);
+      return;
+    }
+    vraagOnthouden(context, t, naar);
+  }
+
   void _opStapelKeuze() {
     if (mounted) setState(() {});
   }
@@ -17981,6 +18213,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
   @override
   void dispose() {
     StapelKeuze.aan.removeListener(_opStapelKeuze);
+    _versieLabelKlok?.cancel();
+    _versieLabel.dispose();
     _stapelBesturing.dispose();
     _paneel.dispose();
     _levensloop?.dispose();
@@ -18136,6 +18370,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     // komt. Saber, 10-10-2026: "een lichte verspringing als je naar het volgende liedje gaat".
     final volgendNummer = p.volgendNummer;
     final volgendAlbum = volgendNummer == null ? null : bib.albumForPath(volgendNummer.path);
+    // De versies van wat speelt (versies.dart): studio, cd, vinyl. Eén versie is geen keuze.
+    final versiesNu = t == null ? const <VersieInfo>[] : bib.versiesVan(t);
+    final metVersies = versiesNu.length > 1;
 
     // De hoes met de draaiende plaat, één keer beschreven. Hij staat in beide indelingen, en
     // twee kopieën van zeventig regels zouden binnen een maand uit elkaar lopen.
@@ -18172,7 +18409,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
       onLongPress: isTv && (_shown ?? p.currentCover) != null
           ? () => showDialog(
               context: context, builder: (_) => _ZoomView((_shown ?? p.currentCover)!))
-          : null,
+          // Lang drukken: de versies van dit nummer (Saber, 26-10-2026: "als de stapel er is dan lang drukken voor
+          // andere versie"). Ook zonder stapel — daar is vegen de snelle weg.
+          : (!isTv && t != null && metVersies ? () => unawaited(toonVersies(context, t)) : null),
       borderRadius: BorderRadius.circular(10),
       child: MouseRegion(
         cursor: (_shown ?? p.currentCover) == null
@@ -18213,6 +18452,36 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
               ),
             ),
             kind!,
+            // De versie waar je naartoe wisselt, even op de hoes (versies.dart).
+            Positioned(
+              left: 0,
+              top: 12,
+              width: hoesMaat,
+              child: IgnorePointer(
+                child: ValueListenableBuilder<String?>(
+                  valueListenable: _versieLabel,
+                  builder: (_, tekst, __) => AnimatedOpacity(
+                    opacity: tekst == null ? 0 : 1,
+                    duration: const Duration(milliseconds: 220),
+                    child: Center(
+                      child: tekst == null
+                          ? const SizedBox.shrink()
+                          : Container(
+                              key: const ValueKey('np-versie-label'),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: .62),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(tekst,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                            ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ]),
           // Same sleeve-and-disc as the album page, at the size this screen deserves.
           // The album is taken from the track that is playing, so the disc that comes
@@ -18308,8 +18577,24 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
 
     // De wachtrij als stapel (Saber, 19-10-2026; ⋯-menu): de hoes met de cd vooraan, wat hierna komt
     // erachter. Een tik op een gebladerde hoes springt ernaartoe, zoals een tik in de wachtrijlijst.
-    final hoesOfStapel = !stapelAan || t == null
+    // Omhoog en omlaag vegen over de hoes wisselt van versie, als het album alleen staat (Saber, 26-10-2026). Alleen met
+    // twee of meer versies: anders sluit omlaag vegen het scherm, zoals altijd.
+    final hoesMetVersies = isTv || stapelAan || t == null || !metVersies
         ? hoesMetTikken
+        : GestureDetector(
+            key: const ValueKey('np-hoes-versies'),
+            onVerticalDragEnd: (d) {
+              final v = d.primaryVelocity ?? 0;
+              if (v < -300) {
+                unawaited(_naarVersie(t, 1));
+              } else if (v > 300) {
+                unawaited(_naarVersie(t, -1));
+              }
+            },
+            child: hoesMetTikken,
+          );
+    final hoesOfStapel = !stapelAan || t == null
+        ? hoesMetVersies
         : WachtrijStapel(
             key: _stapel,
             maat: hoesMaat,
@@ -19066,6 +19351,15 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
     if (!_opHoes) {
       _spoelPijlen.vergeet();
       return KeyEventResult.ignored;
+    }
+    // Omhoog en omlaag op de hoes: een andere versie (Saber, 26-10-2026). Is er in die richting geen versie meer, dan doen
+    // de pijlen wat ze altijd deden — anders kom je niet meer bij de rondjes of ▶.
+    final nu = x.track;
+    if (nu != null &&
+        (e.logicalKey == LogicalKeyboardKey.arrowUp || e.logicalKey == LogicalKeyboardKey.arrowDown) &&
+        _versieNaast(nu, e.logicalKey == LogicalKeyboardKey.arrowUp ? 1 : -1) != null) {
+      if (e is KeyDownEvent) unawaited(_naarVersie(nu, e.logicalKey == LogicalKeyboardKey.arrowUp ? 1 : -1));
+      return KeyEventResult.handled;
     }
     if (e.logicalKey == LogicalKeyboardKey.arrowUp) {
       if (e is KeyDownEvent && _eersteRondje.context != null && _eersteRondje.canRequestFocus) {
@@ -24988,20 +25282,65 @@ Widget _luidheidMerk(BuildContext context, Speelbron p, Track t, SpeakerTarget c
   );
 }
 
-/// De kwaliteitsbadge van Nu speelt als knop: hij opent [_toonKwaliteitBlad].
+/// De kwaliteitsbadge van Nu speelt als knop: hij opent [_toonKwaliteitBlad]. De kwaliteit van wat er KLINKT: een
+/// versie (versies.dart) heeft haar eigen.
 Widget _kwaliteitKnop(BuildContext context, Speelbron p, Track t, SpeakerTarget cast) => Pressable(
       key: const ValueKey('np-kwaliteit-knop'),
       onPressed: () => _toonKwaliteitBlad(context, p, t, cast),
       borderRadius: BorderRadius.circular(6),
       scaleOnFocus: false,
-      child: _qualityBadge(_stroomKwaliteit(p, t)),
+      child: _qualityBadge(_stroomKwaliteit(p, _klinktAls(context, t))),
+    );
+
+/// Het nummer zoals het nu klinkt: [t] zelf, of de versie ervan die speelt (versies.dart).
+Track _klinktAls(BuildContext context, Track t) {
+  final lib = context.read<LibraryStore>();
+  if (lib.versiesVan(t).length < 2) return t;
+  final pad = klinktNuVoor(context, t);
+  return pad == t.path ? t : (lib.trackByPath(pad) ?? t);
+}
+
+/// Eén versie in het kwaliteitsblad: tik = daarheen wisselen.
+Widget _versieRegel(BuildContext context, BuildContext blad, Track t, VersieInfo v, {required bool klinkt}) => Pressable(
+      key: ValueKey('kwaliteit-versie-${v.sleutel}'),
+      onPressed: klinkt
+          ? null
+          : () {
+              Navigator.of(blad).pop();
+              unawaited(() async {
+                final fout = await wisselNaarVersie(context, t, v);
+                if (!context.mounted) return;
+                if (fout != null) {
+                  _meldVersieZin(context, fout);
+                } else {
+                  vraagOnthouden(context, t, v);
+                }
+              }());
+            },
+      borderRadius: BorderRadius.circular(8),
+      scaleOnFocus: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        child: Row(children: [
+          Icon(versieIcoon(v.soort), size: 18, color: klinkt ? kAccent : kGedempt),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Text(v.label,
+                  style: TextStyle(fontSize: 14, fontWeight: klinkt ? FontWeight.w700 : FontWeight.w500))),
+          if (klinkt) Text('speelt nu', style: kLabel.copyWith(color: kAccent)),
+          if (v.standaard && !klinkt) Text('standaard', style: kLabel.copyWith(color: kGedempt)),
+        ]),
+      ),
     );
 
 /// Het kwaliteitsblad (Saber, 20-10-2026: "als ik op de kwaliteit klik … dat ik zie wat de echte
 /// kwaliteit is"): wat je NU hoort — onderweg stuurt je pc een kleinere versie —, wat het BESTAND echt
 /// is volgens de volle meting en de controlesom, en gelijk volume. Die zin stond naast de badge en maakte
 /// de regel te vol; hier opent hij nog steeds het volumeblad.
-Future<void> _toonKwaliteitBlad(BuildContext context, Speelbron p, Track t, SpeakerTarget cast) {
+Future<void> _toonKwaliteitBlad(BuildContext context, Speelbron p, Track anker, SpeakerTarget cast) {
+  // Wat er klinkt: een versie (versies.dart) heeft haar eigen bestand, meting en luidheid.
+  final t = _klinktAls(context, anker);
+  final versiesNu = context.read<LibraryStore>().versiesVan(anker);
   final nu = _stroomKwaliteit(p, t);
   final bestand = _trackQuality(t);
   final settings = context.read<AppSettings>();
@@ -25021,6 +25360,11 @@ Future<void> _toonKwaliteitBlad(BuildContext context, Speelbron p, Track t, Spea
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text('Kwaliteit', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            // De versies van dit nummer (Saber, 26-10-2026: "Tik op de kwaliteitsregel" — een lijstje).
+            if (versiesNu.length > 1) ...[
+              kop('Versies'),
+              for (final v in versiesNu) _versieRegel(context, ctx, anker, v, klinkt: v.track.path == t.path),
+            ],
             kop('Nu'),
             Row(children: [_qualityBadge(nu)]),
             const SizedBox(height: 6),

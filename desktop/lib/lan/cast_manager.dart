@@ -860,6 +860,60 @@ class CastManager {
 
   final _tussendoor = <String, _Tussendoor>{};
 
+  // ── Versies (versies.dart) ────────────────────────────────────────────
+
+  /// Welke versie er voor een nummer speelt als je niets kiest: het id van die versie, of [id] zelf. Gezet door de
+  /// server (`library.speelPadVoor`).
+  String Function(String id)? speelVersie;
+
+  /// Waar het moment [ms] van versie [van] in versie [naar] valt (een vinylrip begint vaak later). Gezet door de server;
+  /// zonder: dezelfde ms.
+  int Function(String van, String naar, int ms)? versiePlek;
+
+  String _speelId(_Session s, int index, String anker) {
+    final v = s.versie;
+    if (v != null && v.index == index && v.anker == anker) return v.id;
+    return speelVersie?.call(anker) ?? anker;
+  }
+
+  /// Welke versie er nu klinkt op [deviceId] (het id), of null zonder sessie.
+  String? versieVan(String deviceId) {
+    final s = _sessies[deviceId];
+    final anker = s?.queue.elementAtOrNull(s.index);
+    return s == null || anker == null ? null : _speelId(s, s.index, anker);
+  }
+
+  /// Een andere versie van het spelende nummer op de speaker (Saber, 26-10-2026: speakers ook, "met ~1 s stilte"): hij
+  /// opent [versieId] en spoelt naar hetzelfde moment in de muziek ([versiePlek]). De rij en de radio blijven staan.
+  Future<void> wisselVersie(String deviceId, String versieId) async {
+    final s = _sessies[deviceId];
+    if (s == null) throw StateError('Die speaker speelt nu niets.');
+    if (_tussendoor.containsKey(deviceId)) throw StateError('Er wordt tussendoor iets beluisterd.');
+    final anker = s.queue.elementAtOrNull(s.index);
+    if (anker == null) return;
+    final van = _speelId(s, s.index, anker);
+    if (van == versieId) return;
+    final pos = await _voor(s.renderer).positionInfo(s.renderer).catchError((_) => null);
+    final plek = pos?.position?.inMilliseconds ?? s.klok?.plekNu?.positieMs ?? s.positie?.inMilliseconds ?? 0;
+    final speelde = s.speelt ?? true;
+    final t0 = _klokUs();
+    s.versie = (index: s.index, anker: anker, id: versieId);
+    _log?.line('versie op ${s.renderer.name}: ${_naam(van)} → ${_naam(versieId)} op ${_sec(Duration(milliseconds: plek))}');
+    await _openCurrent(s);
+    bijStand?.call();
+    Timer(spoelNa, () async {
+      if (!identical(_sessies[s.renderer.id], s)) return;
+      // Waar de muziek nu zou zijn: de plek van toen, plus de tijd van het openen, in de nieuwe versie.
+      final doel = (versiePlek?.call(van, versieId, plek) ?? plek) + (_klokUs() - t0) ~/ 1000;
+      try {
+        s.hoogstePositie = Duration(milliseconds: doel);
+        await _voor(s.renderer).seek(s.renderer, Duration(milliseconds: doel));
+        if (!speelde) await _voor(s.renderer).pause(s.renderer);
+        _meldStil(s, doel);
+      } catch (_) {/* dan speelt hij vanaf het begin van het nummer: niets kwijt */}
+    });
+  }
+
   /// [id] op de speaker van [s], als enige in zijn rij, vanaf [vanafMs].
   Future<void> _speelTussendoor(_Session s, String id, {required int vanafMs}) async {
     s.queue = [id];
@@ -896,9 +950,11 @@ class CastManager {
   Future<void> _playOnShield(ShieldTarget shield, List<String> trackIds, int index) async {
     final base = await lanAddressFor(shield.host);
     if (base == null) throw StateError('no route to ${shield.host}');
-    final tracks = [for (final id in trackIds) catalog.track(id)];
+    // De versie die voor elk nummer speelt (versies.dart).
+    final ids = [for (final id in trackIds) speelVersie?.call(id) ?? id];
+    final tracks = [for (final id in ids) catalog.track(id)];
     final lijst = shieldLijst(
-      trackIds: trackIds,
+      trackIds: ids,
       tracks: tracks,
       adres: (id, t) => 'http://$base:$port/stream/$id.${t.ext}?token=$token',
       opgave: luidheidOpgave,
@@ -935,7 +991,9 @@ class CastManager {
   }
 
   Future<void> _openCurrent(_Session session) async {
-    final id = session.queue.elementAtOrNull(session.index);
+    final anker = session.queue.elementAtOrNull(session.index);
+    // De versie die voor dit nummer speelt (versies.dart): de rij houdt het nummer zelf, alleen het adres verandert.
+    final id = anker == null ? null : _speelId(session, session.index, anker);
     final track = id == null ? null : catalog.track(id);
     if (id == null || track == null) return;
     // Een nieuw nummer op de speaker: meteen in de zonelijst.
@@ -994,7 +1052,8 @@ class CastManager {
   /// melden. Hem terugzien in TrackURI is NODIG om de overgang te zien, maar niet genoeg: een Sonos
   /// meldt hem al zodra hij hem ontvangt. Wat de overgang bewijst staat in [_echtGewisseld].
   Future<void> _armNext(_Session session) async {
-    final nextId = session.queue.elementAtOrNull(session.index + 1);
+    final volgend = session.queue.elementAtOrNull(session.index + 1);
+    final nextId = volgend == null ? null : _speelId(session, session.index + 1, volgend);
     final nextTrack = nextId == null ? null : catalog.track(nextId);
     if (nextId == null || nextTrack == null) return;
     final nextUrl = await _streamUrlFor(
@@ -1591,6 +1650,10 @@ class _Session {
 
   /// Een radiosessie waarvan de rij op is: hij blijft open tot de radio aanvult ([CastManager.voegToe]).
   bool droog = false;
+
+  /// Een versie die je tijdens het spelen koos (versies.dart, [CastManager.wisselVersie]): voor het nummer [anker] op plek
+  /// [index] in de rij — een ander nummer speelt weer de versie die je voor de plaat of het nummer koos.
+  ({int index, String anker, String id})? versie;
 }
 
 extension _ElementAtOrNull<E> on List<E> {

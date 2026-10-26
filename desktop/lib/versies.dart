@@ -436,6 +436,15 @@ class Versieregister {
     return weg;
   }
 
+  /// Waar het moment [ms] van het bestand [van] in het bestand [naar] valt — elk van beide het nummer zelf of een versie
+  /// ervan (een speaker die wisselt, `CastManager.wisselVersie`).
+  int plekTussen(String van, String naar, int ms) {
+    final v = versie(van);
+    final ankerMs = v == null ? ms : plekInAnker(ms, verschuivingMs: v.verschuivingMs, snelheid: v.snelheid);
+    final n = versie(naar);
+    return n == null ? ankerMs : plekInVersie(ankerMs, verschuivingMs: n.verschuivingMs, snelheid: n.snelheid);
+  }
+
   /// De uitlijning van [pad] is gemeten.
   void zetUitlijning(String pad, {required int verschuivingMs, required double snelheid}) {
     final g = _groepen[_ankerVan[_sleutel(pad)]];
