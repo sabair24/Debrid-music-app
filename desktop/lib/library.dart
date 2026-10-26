@@ -873,9 +873,11 @@ class LibraryStore extends ChangeNotifier {
     _hoezenOnderweg++;
     _hoezenUit?.cancel();
     hoezenOphalen.value = true;
+    _waakOverHoezen();
     try {
       return await haal();
     } finally {
+      _waakOverHoezen();
       if (--_hoezenOnderweg <= 0) {
         _hoezenOnderweg = 0;
         _hoezenUit = Timer(kHoezenMeldingNaloop, () => hoezenOphalen.value = false);
@@ -885,6 +887,21 @@ class LibraryStore extends ChangeNotifier {
 
   /// Hoe lang "Covers ophalen…" blijft staan na de laatste hoes.
   static const kHoezenMeldingNaloop = Duration(seconds: 2);
+
+  /// Zo lang mag "Covers ophalen…" blijven staan zonder dat er één hoes vertrekt of binnenkomt, ook als er nog een
+  /// vraag openstaat. Saber, 26-10-2026, op de Mac: *"covers ophalen , gaat niet weg"* — de verbindingen van de Mac met
+  /// de pc stonden stil (netstat, drie keer in tien seconden dezelfde), er kwam dus niets meer binnen; één vraag die
+  /// nooit afrondt (een bron op internet zonder antwoord) hield het regeltje voor altijd aan.
+  static const kHoezenMeldingStil = Duration(seconds: 8);
+  Timer? _hoezenWaakhond;
+
+  void _waakOverHoezen() {
+    _hoezenWaakhond?.cancel();
+    _hoezenWaakhond = Timer(kHoezenMeldingStil, () => hoezenOphalen.value = false);
+  }
+
+  @visibleForTesting
+  Future<T> haaltHoesVoorToets<T>(Future<T> Function() haal) => _haaltHoes(haal);
 
   bool _rescanQueued = false;
   final Map<String, Uint8List> artistImages = {};

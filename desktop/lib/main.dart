@@ -3481,8 +3481,23 @@ class _HomeShellState extends State<HomeShell> {
 
   ValueNotifier<String?>? _klaar;
 
-  void _toonKlaar() => _toonKort(_klaar?.value);
-  void _toonKlaarVanPc() => _toonKort(klaarVanPc.value);
+  void _toonKlaar() => _toonKlaarMelding(_klaar?.value);
+  void _toonKlaarVanPc() => _toonKlaarMelding(klaarVanPc.value);
+
+  /// Een kopie staat klaar ("studio klaar: …"): met Kiezen erbij, dat [KlaarOmTeKiezenScherm] opent. "Nog geen …" niet.
+  void _toonKlaarMelding(String? tekst) {
+    if (tekst == null || !mounted) return;
+    if (!tekst.contains('klaar')) return _toonKort(tekst);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tekst),
+        duration: const Duration(seconds: 10),
+        persist: false,
+        action: SnackBarAction(label: 'Kiezen', onPressed: () => openKlaarOmTeKiezen(context)),
+      ));
+    });
+  }
 
   void _toonKort(String? tekst) {
     if (tekst == null || !mounted) return;
@@ -13706,6 +13721,235 @@ ItemMenu _twijfelMenu(BuildContext context, Track t, TwijfelInfo tw) => ItemMenu
       blokken: [_twijfelRegels(context, t, tw)],
     );
 
+/// De nummers met een kopie die op jouw keuze wacht (twijfel.dart): een studio-, cd- of vinylkopie die je vroeg, of een
+/// betere kopie waar de vingerafdruk over twijfelt. Op elk toestel uit hetzelfde register ([twijfelVoor]): op de pc
+/// gevuld door de twijfellijst, op een toestel door de catalogus. Op artiest en dan titel.
+@visibleForTesting
+List<({Track t, TwijfelInfo tw})> klaarOmTeKiezen(Iterable<Track> nummers) {
+  final uit = [for (final t in nummers) if (twijfelVoor(t.path) case final tw?) (t: t, tw: tw)];
+  uit.sort((a, b) {
+    final x = a.t.artist.toLowerCase().compareTo(b.t.artist.toLowerCase());
+    return x != 0 ? x : a.t.title.toLowerCase().compareTo(b.t.title.toLowerCase());
+  });
+  return uit;
+}
+
+/// "Klaar om te kiezen" openen — van Start, Mijn downloads of de melding "… klaar".
+void openKlaarOmTeKiezen(BuildContext context) => Navigator.of(context, rootNavigator: true)
+    .push(MaterialPageRoute<void>(builder: (_) => const KlaarOmTeKiezenScherm()));
+
+/// Alle kopieën die op jouw keuze wachten, op één plek (Saber, 26-10-2026: "waar zie ik die keuze's ?? nu is dit niet
+/// duidelijk" — ze stonden alleen als klein label bij het nummer in zijn plaat). Per nummer: beluisteren met A/B,
+/// houden of weg — dezelfde keuzes als het label ([_twijfelRegels]). Op een smal scherm vallen de knoppen onder de
+/// tekst, op een breed scherm staat de lijst in het midden; titels worden nooit afgekapt; op een tv staat de selectie
+/// op de eerste knop.
+class KlaarOmTeKiezenScherm extends StatelessWidget {
+  const KlaarOmTeKiezenScherm({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    // Zodat "Beluisteren" "Terug naar je kopie (A)" wordt zodra B klinkt.
+    context.watch<PlayerStore>();
+    return ValueListenableBuilder<int>(
+      valueListenable: twijfelUitgave,
+      builder: (context, _, __) {
+        final klaar = klaarOmTeKiezen(lib.tracks);
+        return Scaffold(
+          backgroundColor: kAchtergrond,
+          appBar: AppBar(
+              backgroundColor: kAchtergrond,
+              title: Text(klaar.isEmpty ? 'Klaar om te kiezen' : 'Klaar om te kiezen (${klaar.length})')),
+          body: SafeArea(
+            top: false,
+            child: klaar.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(kRuimte24),
+                      child: Text(
+                          'Niets meer om te kiezen. Vraag je een studio-, cd- of vinylkopie, of vindt de app een betere '
+                          'kopie waar hij aan twijfelt, dan staat die hier.',
+                          textAlign: TextAlign.center,
+                          style: kTekstBij),
+                    ),
+                  )
+                : Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 920),
+                      child: ListView.separated(
+                        key: const ValueKey('klaar-lijst'),
+                        padding: const EdgeInsets.fromLTRB(kRuimte16, kRuimte12, kRuimte16, kRuimte32),
+                        itemCount: klaar.length + 1,
+                        separatorBuilder: (_, __) => const SizedBox(height: kRuimte12),
+                        itemBuilder: (context, i) => i == 0
+                            ? Text(
+                                'Luister met A/B naar jouw kopie en de nieuwe, op dezelfde seconde. Houden vervangt je '
+                                'kopie (de vorige gaat naar _dubbel), Weg gooit de nieuwe weg.',
+                                style: kTekstKlein)
+                            : _KlaarKaart(nummer: klaar[i - 1].t, tw: klaar[i - 1].tw, eerste: i == 1),
+                      ),
+                    ),
+                  ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Eén kopie die op je keuze wacht, in [KlaarOmTeKiezenScherm].
+class _KlaarKaart extends StatelessWidget {
+  const _KlaarKaart({required this.nummer, required this.tw, required this.eerste});
+  final Track nummer;
+  final TwijfelInfo tw;
+  final bool eerste;
+
+  @override
+  Widget build(BuildContext context) {
+    final hoes = context.read<LibraryStore>().coverForTrack(nummer);
+    final speler = context.read<PlayerStore>();
+    final soort = tw.soort;
+    final bIsAan = speler.current?.path == nummer.path && speler.vergelijkBron != null;
+    final twijfelt = misschienAndereOpname(tw.score);
+    final oranje = leesbaar(const Color(0xFFE0A33A));
+    // De keuzes zelf uit het menu van het label, pas bij het tikken: één weg voor houden en weggooien.
+    void doe(int i) {
+      final regels = _twijfelRegels(context, nummer, tw);
+      if (i < regels.length) regels[i].doen();
+    }
+
+    final labels = soort == null
+        ? ['Beluisteren', 'Gebruiken', 'Weg…']
+        : [bIsAan ? 'Terug naar jouw kopie (A)' : 'Beluisteren (A/B)', 'Houden ($soort)', 'Weg…'];
+    final iconen = [
+      soort == null ? Icons.headphones_rounded : Icons.compare_arrows_rounded,
+      Icons.check_rounded,
+      Icons.delete_outline_rounded,
+    ];
+    return Container(
+      key: ValueKey('klaar-${nummer.path}'),
+      padding: const EdgeInsets.all(kRuimte16),
+      decoration: BoxDecoration(
+        color: kPaneel,
+        borderRadius: BorderRadius.circular(kHoek12),
+        border: Border.all(color: kLijnZacht),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(kHoek8),
+            child: SizedBox.square(
+              dimension: 64,
+              child: hoes == null
+                  ? ColoredBox(color: kPaneelHoog, child: Icon(Icons.album_rounded, color: kGedempt))
+                  : Image.memory(hoes, fit: BoxFit.cover, gaplessPlayback: true, cacheWidth: 192),
+            ),
+          ),
+          const SizedBox(width: kRuimte12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(nummer.title, style: kKopKlein),
+              const SizedBox(height: kRuimte2),
+              Text('${nummer.artist} — ${nummer.album}', style: kTekstBij),
+              const SizedBox(height: kRuimte6),
+              Wrap(spacing: kRuimte8, runSpacing: kRuimte4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: kRuimte8, vertical: kRuimte2),
+                  decoration: BoxDecoration(
+                    color: (soort == null ? oranje : kAccent2).withValues(alpha: .16),
+                    borderRadius: BorderRadius.circular(kHoekRond),
+                  ),
+                  child: Text(soort == null ? 'twijfel' : '$soort klaar',
+                      style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w700, color: soort == null ? oranje : kAccent2)),
+                ),
+                Text(tw.kwaliteit, style: kTekstKlein),
+              ]),
+              const SizedBox(height: kRuimte4),
+              Text(
+                  soort != null
+                      ? klaarOndertitel(tw)
+                      : '${tw.bron} · vingerafdruk ${tw.score.toStringAsFixed(2).replaceAll('.', ',')} — '
+                          '${twijfelt ? 'misschien een andere opname' : 'dezelfde opname'}',
+                  style: kTekstKlein.copyWith(color: twijfelt ? oranje : null)),
+            ]),
+          ),
+        ]),
+        const SizedBox(height: kRuimte12),
+        Wrap(spacing: kRuimte8, runSpacing: kRuimte8, children: [
+          FilledButton.tonalIcon(
+            key: ValueKey('klaar-luister-${nummer.path}'),
+            autofocus: eerste && isTv,
+            onPressed: () => doe(0),
+            icon: Icon(iconen[0], size: 18),
+            label: Text(labels[0]),
+          ),
+          FilledButton.icon(
+            key: ValueKey('klaar-houd-${nummer.path}'),
+            onPressed: () => doe(1),
+            icon: Icon(iconen[1], size: 18),
+            label: Text(labels[1]),
+          ),
+          // Apart en lichter: weggooien staat niet tegen houden aan (en vraagt eerst of het zeker is).
+          Padding(
+            padding: const EdgeInsets.only(left: kRuimte8),
+            child: OutlinedButton.icon(
+              key: ValueKey('klaar-weg-${nummer.path}'),
+              onPressed: () => doe(2),
+              icon: Icon(iconen[2], size: 18),
+              label: Text(labels[2]),
+            ),
+          ),
+        ]),
+      ]),
+    );
+  }
+}
+
+/// De strook op Start zolang er kopieën op je keuze wachten — op elk scherm, ook op de tv (daar staat Mijn downloads
+/// niet in de balk).
+class _KlaarStrook extends StatelessWidget {
+  const _KlaarStrook();
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    return ValueListenableBuilder<int>(
+      valueListenable: twijfelUitgave,
+      builder: (context, _, __) {
+        final n = klaarOmTeKiezen(lib.tracks).length;
+        if (n == 0) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(kGoot, kRuimte12, kGoot, kRuimte4),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(kRuimte16, kRuimte12, kRuimte12, kRuimte12),
+            decoration: BoxDecoration(
+              color: kAccent2.withValues(alpha: .10),
+              borderRadius: BorderRadius.circular(kHoek12),
+              border: Border.all(color: kAccent2.withValues(alpha: .35)),
+            ),
+            child: Wrap(
+              spacing: kRuimte12,
+              runSpacing: kRuimte8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Icon(Icons.fact_check_rounded, color: kAccent2),
+                Text(n == 1 ? '1 kopie wacht op je keuze' : '$n kopieën wachten op je keuze', style: kTekstNormaal),
+                FilledButton(
+                  key: const ValueKey('klaar-strook-knop'),
+                  onPressed: () => openKlaarOmTeKiezen(context),
+                  child: const Text('Kiezen'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// Het label "twijfel" naast de kwaliteit van een nummer (twijfel.dart), of "cd klaar" bij een kopie die je vroeg. Tik
 /// (muis, aanraking) opent de keuzes; op een tv is het label niet te kiezen — daar staan dezelfde keuzes in het menu van
 /// de rij (lang OK).
@@ -21410,6 +21654,8 @@ class _HomeStartViewState extends State<HomeStartView> {
           child: Text('Ontdek nieuwe muziek en pak op waar je gebleven was',
               style: TextStyle(color: _muted, fontSize: 13.5)),
         ),
+        // Kopieën die op je keuze wachten (studio, cd, vinyl, twijfel): bovenaan, en alleen als er iets wacht.
+        const _KlaarStrook(),
         // Boven de hitlijsten, want dit is het snelste wat je hier kunt doen: één zin en er speelt
         // muziek. Alles eronder vraagt eerst dat je ergens doorheen bladert.
         const Padding(
@@ -23185,6 +23431,21 @@ class DownloadsView extends StatelessWidget {
                       icon: Icon(n > 0 ? Icons.mark_email_unread_rounded : Icons.mail_outline_rounded, size: 16),
                       label: Text(n > 0 ? 'Berichten van uploaders ($n nieuw)' : 'Berichten van uploaders'),
                       style: TextButton.styleFrom(foregroundColor: n > 0 ? _accent : _muted),
+                    );
+                  },
+                ),
+                // Kopieën die op je keuze wachten — zie [KlaarOmTeKiezenScherm].
+                ValueListenableBuilder<int>(
+                  valueListenable: twijfelUitgave,
+                  builder: (context, _, __) {
+                    final n = klaarOmTeKiezen(context.read<LibraryStore>().tracks).length;
+                    if (n == 0) return const SizedBox.shrink();
+                    return TextButton.icon(
+                      key: const ValueKey('klaar-knop'),
+                      onPressed: () => openKlaarOmTeKiezen(context),
+                      icon: const Icon(Icons.fact_check_rounded, size: 16),
+                      label: Text('Klaar om te kiezen ($n)'),
+                      style: TextButton.styleFrom(foregroundColor: _accent),
                     );
                   },
                 ),
