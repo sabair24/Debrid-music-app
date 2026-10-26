@@ -39,7 +39,7 @@ import 'organize.dart';
 import 'settings.dart';
 import 'vaste_keuze.dart';
 import 'twijfel.dart' show twijfelMap, twijfelsVanPcGelezen, zetTwijfelVanPc;
-import 'kopiesoort.dart' show kopiesoortUit, soortVoor, zetSoortVanPc;
+import 'kopiesoort.dart' show Kopiesoort, kopiesoortUit, soortVoor, zetSoortVanPc;
 import 'versies.dart';
 import 'soortjacht.dart' show zetSoortvraagVanPc;
 import 'paths.dart';
@@ -1219,6 +1219,37 @@ class LibraryStore extends ChangeNotifier {
     return _versieTracks[_padSleutel(v.pad)]?.path ?? pad;
   }
 
+  /// De platen met een versie die de laatste [binnen] binnenkwam, de nieuwste eerst (Start, "Nieuwe versies"; Saber
+  /// 26-10-2026). Per plaat de nieuwste versie: "vinyl LP 1996".
+  List<({Album album, String label, int sindsMs})> nieuweVersies(
+      {Duration binnen = const Duration(days: 30), DateTime? nu}) {
+    final grens = (nu ?? DateTime.now()).subtract(binnen).millisecondsSinceEpoch;
+    final per = <Album, ({String label, int sindsMs})>{};
+    void kijk(String anker, Kopiesoort soort, String persing, int sinds) {
+      if (sinds < grens) return;
+      final al = albumForPath(anker);
+      if (al == null) return;
+      final oud = per[al];
+      if (oud == null || sinds > oud.sindsMs) per[al] = (label: versieMapLabel(soort, persing), sindsMs: sinds);
+    }
+
+    if (isRemote) {
+      for (final e in _versiesVanPc.entries) {
+        for (final v in e.value) {
+          if (!v.anker && v.soort != null) kijk(e.key, v.soort!, v.persing, v.sindsMs);
+        }
+      }
+    } else {
+      for (final g in versies.groepen) {
+        for (final v in g.versies) {
+          kijk(g.anker, v.soort, v.persing, v.sindsMs);
+        }
+      }
+    }
+    return [for (final e in per.entries) (album: e.key, label: e.value.label, sindsMs: e.value.sindsMs)]
+      ..sort((a, b) => b.sindsMs.compareTo(a.sindsMs));
+  }
+
   /// De versies (versies.dart) veranderden — een keuze, een nieuwe versie: de schermen opnieuw tekenen.
   void versiesVeranderd() => notifyListeners();
 
@@ -1536,6 +1567,54 @@ class LibraryStore extends ChangeNotifier {
   }
 
   Future<void> _saveMerged() => _writeJson(_mergedFile, _merged.toList());
+
+  // ── Wanneer een plaat voor het eerst binnenkwam ([Album.eerstGezienMs]) ──────────────
+
+  /// Plaat-uid → de eerste keer dat hij er stond (ms).
+  final Map<String, int> _eerstGezien = {};
+  bool _eerstGeladen = false;
+  Timer? _eerstBewaren;
+
+  File get _eerstFile => File('$_appDir${Platform.pathSeparator}album_eerst.json');
+
+  /// Inlezen bij het opstarten. Pas daarna wordt er bewaard — een toets die platen bouwt, schrijft niets.
+  Future<void> loadEerstGezien() async {
+    try {
+      final f = _eerstFile;
+      if (await f.exists()) {
+        final j = jsonDecode(await f.readAsString());
+        if (j is Map) {
+          for (final e in j.entries) {
+            if (e.value is num) _eerstGezien['${e.key}'] = (e.value as num).toInt();
+          }
+        }
+      }
+    } catch (_) {/* dan begint het opnieuw bij de oudste bestanden */}
+    _eerstGeladen = true;
+  }
+
+  /// Na het groeperen: elke plaat krijgt de dag dat hij voor het eerst binnenkwam — wat bekend was, of het oudste
+  /// bestand erin (een plaat waarvan één nummer vandaag opgewaardeerd werd, blijft zo oud als ze is).
+  void _zetEerstGezien() {
+    var vuil = false;
+    for (final a in albums) {
+      var oudst = 0;
+      for (final t in a.tracks) {
+        if (t.addedMs > 0 && (oudst == 0 || t.addedMs < oudst)) oudst = t.addedMs;
+      }
+      final uid = uids.uidOf(a);
+      final bekend = uid.isEmpty ? null : _eerstGezien[uid];
+      final v = bekend == null ? oudst : (oudst > 0 && oudst < bekend ? oudst : bekend);
+      if (uid.isNotEmpty && v > 0 && v != bekend) {
+        _eerstGezien[uid] = v;
+        vuil = true;
+      }
+      a.eerstGezienMs = v > 0 ? v : null;
+    }
+    if (!vuil || !_eerstGeladen) return;
+    _eerstBewaren?.cancel();
+    _eerstBewaren = Timer(const Duration(seconds: 5), () => unawaited(_writeJson(_eerstFile, _eerstGezien)));
+  }
 
   /// Put every edition of this record back together, and keep it that way.
   Future<void> mergeEditions(Album a) async {
@@ -3330,7 +3409,9 @@ class LibraryStore extends ChangeNotifier {
       if (ts == null || ts.isEmpty) continue;
       ts.sort((a, b) => a.trackNo.compareTo(b.trackNo));
       final al = Album(dto.title, dto.artistName, ts, isSingle: dto.isSingle)
-        ..edition = dto.edition;
+        ..edition = dto.edition
+        // Wanneer de plaat voor het eerst binnenkwam, zoals de pc het weet (Recent toegevoegd).
+        ..eerstGezienMs = dto.addedMs > 0 ? dto.addedMs : null;
       for (final t in ts) {
         final saved = coversByPath[t.path];
         if (saved == null) continue;
@@ -4227,6 +4308,8 @@ class LibraryStore extends ChangeNotifier {
     // loop where a previous answer constrains the next one.
     uids.reconcile(albums);
     _albumsPerDir = albumsPerDirOf(albums);
+    // Recent toegevoegd: wanneer de plaat voor het eerst binnenkwam (Saber, 26-10-2026: "alleen echt nieuwe platen").
+    _zetEerstGezien();
   }
 
   /// Een ingebakken hoes die óók op een andere plaat van een andere artiest zit, is van geen van

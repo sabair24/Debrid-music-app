@@ -79,7 +79,7 @@ void main() {
     ('iPad', const Size(1024, 768)),
     ('pc 24"', const Size(1920, 1080)),
   ]) {
-    testWidgets('$naam: elke kaart heeft zijn drie knoppen, niets loopt over', (tester) async {
+    testWidgets('$naam: elke kaart heeft zijn vier knoppen, niets loopt over', (tester) async {
       tester.view.physicalSize = maat;
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
@@ -96,6 +96,8 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byKey(ValueKey('klaar-luister-${t.path}')), findsOneWidget);
         expect(find.byKey(ValueKey('klaar-houd-${t.path}')), findsOneWidget);
+        // Sinds 26-10-2026 (versies): bewaren, of bewaren en meteen standaard maken.
+        expect(find.byKey(ValueKey('klaar-standaard-${t.path}')), findsOneWidget);
         final titel = tester.widget<Text>(find.text(t.title));
         expect(titel.maxLines, isNull, reason: 'titels niet afkappen');
         expect(titel.overflow, isNot(TextOverflow.ellipsis));
@@ -104,7 +106,7 @@ void main() {
         expect(
             find.descendant(
                 of: find.byKey(ValueKey('klaar-houd-${t.path}')),
-                matching: find.text(soort == null ? 'Gebruiken' : 'Houden ($soort)')),
+                matching: find.text(soort == null ? 'Bewaren' : 'Bewaren ($soort)')),
             findsOneWidget);
       }
     });

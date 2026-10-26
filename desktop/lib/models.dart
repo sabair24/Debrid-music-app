@@ -204,13 +204,22 @@ class Album {
   /// `late final` mag hier omdat [tracks] vastligt zodra het album bestaat: nergens in de app wordt
   /// er achteraf een nummer aan toegevoegd of uit verwijderd. Een scan, een correctie of een
   /// samenvoeging bouwt NIEUWE albumobjecten, en die rekenen dus vanzelf opnieuw.
-  late final int addedMs = () {
-    var m = 0;
-    for (final t in tracks) {
-      if (t.addedMs > m) m = t.addedMs;
-    }
-    return m;
-  }();
+  ///
+  /// **Sinds 26-10-2026 de dag dat de plaat voor het eerst binnenkwam** ([eerstGezienMs], waar die bekend is). Saber:
+  /// "alleen echt nieuwe platen" — een opwaardering of een nieuwe versie (versies.dart) gaf een oud bestand een nieuwe
+  /// tijd, en dan stond een plaat van jaren terug weer bovenaan Recent toegevoegd.
+  late final int addedMs = eerstGezienMs ??
+      () {
+        var m = 0;
+        for (final t in tracks) {
+          if (t.addedMs > m) m = t.addedMs;
+        }
+        return m;
+      }();
+
+  /// Wanneer deze plaat voor het eerst in de bibliotheek stond (op de pc bijgehouden per plaat, `album_eerst.json`; een
+  /// toestel krijgt het van de pc). Gezet vóór [addedMs] gelezen wordt. Null: onbekend.
+  int? eerstGezienMs;
 }
 
 /// Zet [Album.embeddedIsVanEenAndere] voor elke plaat wiens ingebakken hoes óók op een plaat staat

@@ -200,6 +200,7 @@ import 'kopiesoort.dart';
 import 'versies.dart';
 import 'versie_acties.dart';
 import 'versie_uitlijner.dart' show VersieUitlijnRonde;
+import 'versie_terugzetter.dart';
 import 'soortjacht.dart' show Soortvragen, gezochtVoor, soortvraagUitgave;
 import 'lan/vaste_naam.dart' show kPcHost;
 import 'torbox.dart';
@@ -2275,6 +2276,7 @@ Future<void> main() async {
     await library.loadTagUndo(); // the way back from a tag rewrite, before anything can write again
     await library.loadHidden(); // keep "removed from library only" tracks out
     await library.loadMerged(); // records the user told us to keep together
+    await library.loadEerstGezien(); // wanneer elke plaat voor het eerst binnenkwam (Recent toegevoegd)
     await library.loadGesplitst(); // en de platen die ze per jaar lieten scheiden
     await library.loadArtistArtChoice(); // portraits and backdrops the user picked
     await library.loadAlbumArtRoles(); // which scan is the sleeve, the back, the disc
@@ -2382,8 +2384,16 @@ Future<void> main() async {
     // De versies uitlijnen (versie_uitlijner.dart): waar in de vinylrip hetzelfde moment van de cd valt — één voor één,
     // op de achtergrond, bij de start en kort na elke nieuwe versie.
     if (mode.owner) {
-      VersieUitlijnRonde(log: WarmLog('$logDir${Platform.pathSeparator}versies.log'), wacht: const Duration(minutes: 2))
-          .start();
+      final versieLog = WarmLog('$logDir${Platform.pathSeparator}versies.log');
+      VersieUitlijnRonde(log: versieLog, wacht: const Duration(minutes: 2)).start();
+      // De oude kopieën in _dubbel nakijken (versie_terugzetter.dart): na tien minuten, als de rest is opgestart.
+      final terug = VersieTerugzetter(
+          wortel: downloads.downloadsRoot,
+          nummerVan: (a, t, {int? seconden}) => library.fileOfRecording(a, t, seconds: seconden),
+          klaar: library.scan,
+          bestand: '$appDir${Platform.pathSeparator}versies_dubbel.json',
+          log: versieLog);
+      Timer(const Duration(minutes: 10), () => unawaited(terug.ronde()));
     }
     meldAanBijHartslag(() =>
         LuidheidVeger.voortgang.value.isEmpty ? '' : 'luidheid ${LuidheidVeger.voortgang.value}');
@@ -8138,6 +8148,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                         : WarmingLine(uid: context.read<LibraryStore>().uidOf(album)),
                   ),
                 ),
+                // De versies van deze plaat (versies.dart): studio, cd, vinyl, persingen — één tegel, hier de keuze.
+                SliverToBoxAdapter(child: AlbumVersies(album: album)),
                 if (_officialBusy && _official.isEmpty && !album.isSingle)
                   SliverToBoxAdapter(
                     child: Padding(
@@ -13689,6 +13701,9 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
     // Houden vervangt het nummer, en Windows vervangt geen bestand dat open staat: speelt het (A of B), dan eerst los,
     // en daarna verder op dezelfde seconde met wat je hield.
     final los = actie == 'vervang' && speler.current?.path == t.path ? await speler.laatBestandLos() : null;
+    // Bewaren en standaard maken kan het nummer opzij zetten (een echte studiokopie wordt het nummer): dan ook los.
+    final losStandaard =
+        los == null && actie == 'bewaarStandaard' && speler.current?.path == t.path ? await speler.laatBestandLos() : null;
     // Weg terwijl B klinkt: eerst terug naar je eigen kopie, op dezelfde seconde — anders speelt het nummer verder van
     // het bestand dat net weg is (gezien op de pc, 25-10-2026).
     if (actie == 'weg' && speler.current?.path == t.path && speler.vergelijkBron != null) await speler.vergelijk(null);
@@ -13703,13 +13718,20 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
         zin = '${res['zin'] ?? 'Gedaan'}';
         await lib.loadRemote(quiet: true);
       } else {
-        zin = actie == 'vervang' ? await dm!.vervangDoorTwijfel(t.path) : await dm!.gooiTwijfelWeg(t.path);
+        zin = switch (actie) {
+          'weg' => await dm!.gooiTwijfelWeg(t.path),
+          // Bewaren als versie (versies.dart, Saber 26-10-2026): je nummer blijft, de kopie komt erbij.
+          'bewaar' => await dm!.vervangDoorTwijfel(t.path, alsVersie: true),
+          'bewaarStandaard' => await dm!.vervangDoorTwijfel(t.path, alsVersie: true, standaard: true),
+          _ => await dm!.vervangDoorTwijfel(t.path),
+        };
       }
       toon(zin);
     } catch (e) {
       toon('$e');
     } finally {
       if (los != null) await speler.heropenNaLoslaten(los);
+      if (losStandaard != null) await speler.heropenNaLoslaten(losStandaard);
       if (laterVerder) speler.speelAf();
     }
   }
@@ -13764,7 +13786,9 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
     return [
       // Hier stond: niet aan het spelen → de hele plaat als nieuwe wachtrij. Nu tussendoor ([beluister]).
       MenuRegel(Icons.compare_arrows_rounded, beluisterLabel(), beluister),
-      MenuRegel(Icons.check_rounded, 'Deze houden ($soort)', () => kies('vervang')),
+      // Bewaren (Saber, 26-10-2026): je nummer blijft, de $soort-kopie komt erbij als versie — of meteen als standaard.
+      MenuRegel(Icons.check_rounded, 'Bewaren ($soort)', () => kies('bewaar')),
+      MenuRegel(Icons.star_outline_rounded, 'Bewaren en standaard maken', () => kies('bewaarStandaard')),
       MenuRegel(Icons.delete_outline_rounded, 'Weg…', () async {
         final ja = await showDialog<bool>(
           context: nav.context,
@@ -13791,7 +13815,9 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
   return [
     // Hier stond `playUrl`: een rij van één, je wachtrij weg. Nu tussendoor, met A/B ([beluister]).
     MenuRegel(Icons.headphones_rounded, beluisterLabel(), beluister),
-    MenuRegel(Icons.swap_horiz_rounded, 'Twijfelkopie gebruiken (vervangen)', () => kies('vervang')),
+    // Twijfel blijft wachten tot je kiest (Saber, 26-10-2026): bewaren als versie, of meteen als standaard.
+    MenuRegel(Icons.check_rounded, 'Bewaren (als versie)', () => kies('bewaar')),
+    MenuRegel(Icons.star_outline_rounded, 'Bewaren en standaard maken', () => kies('bewaarStandaard')),
     MenuRegel(Icons.delete_outline_rounded, 'Twijfelkopie weggooien…', () async {
       // Bevestigen: dit staat naast "gebruiken", en die twee mogen niet per ongeluk verwisseld worden.
       final ja = await showDialog<bool>(
@@ -14129,6 +14155,181 @@ void _meldVersieZin(BuildContext context, String zin) {
 /// Het versieblad van [t] openen (lang drukken op de hoes met de stapel, het kwaliteitsblad, een nummermenu, Meer op tv).
 Future<void> toonVersies(BuildContext context, Track t) => _toonItemMenu(context, versieMenu(context, t));
 
+/// Eén versie van een plaat, over al haar nummers heen: "Vinyl · LP 1996", bij hoeveel nummers, welke kwaliteit, en of
+/// het de standaard is.
+@visibleForTesting
+typedef Plaatversie = ({
+  String sleutel,
+  Kopiesoort? soort,
+  String persing,
+  bool anker,
+  int nummers,
+  int standaard,
+  Set<String> kwaliteit,
+  List<({Track nummer, VersieInfo versie})> leden,
+});
+
+/// De versies van [nummers] per soort en persing, op volgorde (studio, cd, vinyl). Leeg als geen nummer er twee heeft.
+@visibleForTesting
+List<Plaatversie> plaatversies(List<Track> nummers, List<VersieInfo> Function(Track) versiesVan) {
+  final per = <String, List<({Track nummer, VersieInfo versie})>>{};
+  for (final t in nummers) {
+    final lijst = versiesVan(t);
+    if (lijst.length < 2) continue;
+    for (final v in lijst) {
+      final k = v.soort == null ? '?' : (v.anker ? 'anker|${v.soort!.naam}' : v.sleutel);
+      per.putIfAbsent(k, () => []).add((nummer: t, versie: v));
+    }
+  }
+  final uit = <Plaatversie>[
+    for (final e in per.entries)
+      (
+        sleutel: e.key,
+        soort: e.value.first.versie.soort,
+        persing: e.value.first.versie.persing,
+        anker: e.value.first.versie.anker,
+        nummers: e.value.length,
+        standaard: e.value.where((x) => x.versie.standaard).length,
+        kwaliteit: {
+          for (final x in e.value)
+            if (x.versie.track.bitsPerSample > 0 && x.versie.track.sampleRate > 0)
+              depthRateLabel(sampleRate: x.versie.track.sampleRate, bitsPerSample: x.versie.track.bitsPerSample),
+        },
+        leden: e.value,
+      ),
+  ];
+  uit.sort((a, b) {
+    final r = (a.soort == null ? 9 : soortRang(a.soort!)).compareTo(b.soort == null ? 9 : soortRang(b.soort!));
+    if (r != 0) return r;
+    return a.anker == b.anker ? 0 : (a.anker ? -1 : 1);
+  });
+  return uit;
+}
+
+/// Het blok "Versies" op de albumpagina (Saber, 26-10-2026: "één tegel, de versies op de albumpagina"). Niets als de
+/// plaat geen versies heeft.
+class AlbumVersies extends StatelessWidget {
+  const AlbumVersies({super.key, required this.album});
+
+  final Album album;
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final lijst = plaatversies(album.tracks, lib.versiesVan);
+    if (lijst.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      key: const ValueKey('album-versies'),
+      padding: const EdgeInsets.fromLTRB(kGoot, kRuimte8, kGoot, kRuimte8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('VERSIES', style: kOpschrift),
+          const SizedBox(height: 6),
+          for (final v in lijst)
+            Pressable(
+              key: ValueKey('album-versie-${v.sleutel}'),
+              onPressed: () => _toonItemMenu(context, _plaatversieMenu(context, album, v)),
+              borderRadius: BorderRadius.circular(8),
+              scaleOnFocus: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Icon(versieIcoon(v.soort), size: 18, color: v.standaard > 0 ? kAccent : kGedempt),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(
+                          v.soort == null
+                              ? 'Origineel'
+                              : versieLabel(v.soort!, v.persing),
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      Text(
+                          [
+                            '${v.nummers} van ${album.tracks.length} nummers',
+                            if (v.kwaliteit.isNotEmpty) v.kwaliteit.join(', '),
+                            if (v.anker) 'in de albummap',
+                          ].join(' · '),
+                          style: kLabel.copyWith(color: kGedempt)),
+                    ]),
+                  ),
+                  if (v.standaard > 0)
+                    Text(v.standaard == v.nummers ? 'standaard' : 'standaard bij ${v.standaard}',
+                        style: kLabel.copyWith(color: kAccent)),
+                ]),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+ItemMenu _plaatversieMenu(BuildContext context, Album album, Plaatversie v) {
+  final naam = v.soort == null ? 'Origineel' : versieLabel(v.soort!, v.persing);
+  final eerste = v.leden.first;
+  return ItemMenu(
+    titel: naam,
+    ondertitel: '${album.title} · ${v.nummers} van ${album.tracks.length} nummers',
+    blokken: [
+      [
+        if (v.standaard < v.nummers)
+          MenuRegel(Icons.check_circle_outline_rounded, 'Standaard voor deze plaat',
+              () => unawaited(_onthoudEnMeld(context, eerste.nummer, eerste.versie, VersieBereik.plaat))),
+      ],
+      // Weggooien apart en met een vraag ervoor (een vernietigende knop naast een gewone ging vier keer mis).
+      [
+        if (!v.anker && !isTv)
+          MenuRegel(Icons.delete_outline_rounded, 'Deze versie weggooien (${v.nummers} nummers)…',
+              () => unawaited(_gooiPlaatversieWeg(context, album, v))),
+      ],
+    ],
+  );
+}
+
+Future<void> _gooiPlaatversieWeg(BuildContext context, Album album, Plaatversie v) async {
+  final naam = v.soort == null ? 'Origineel' : versieLabel(v.soort!, v.persing);
+  final zeker = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text('$naam weggooien?'),
+      content: Text('${v.nummers} nummers van "${album.title}" gaan naar de prullenbak. Je andere versies blijven.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Nee')),
+        const SizedBox(width: 24),
+        TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Naar de prullenbak')),
+      ],
+    ),
+  );
+  if (zeker != true || !context.mounted) return;
+  final lib = context.read<LibraryStore>();
+  final c = lib.remote;
+  var weg = 0;
+  String? laatste;
+  for (final x in v.leden) {
+    if (c == null) {
+      laatste = await gooiVersieWeg(lib, x.nummer, x.versie.track.path);
+      if (laatste.startsWith('Versie in de prullenbak')) weg++;
+      continue;
+    }
+    final id = lib.gedeeldId(x.nummer.path), vid = lib.gedeeldId(x.versie.track.path);
+    if (id == null || vid == null) continue;
+    try {
+      final r = await c.ask('/api/versie', {'trackId': id, 'actie': 'weg', 'versieId': vid});
+      laatste = '${r['zin'] ?? ''}';
+      if (laatste.startsWith('Versie in de prullenbak')) weg++;
+    } catch (e) {
+      laatste = 'Weggooien lukte niet: $e';
+    }
+  }
+  if (c != null) unawaited(lib.loadRemote(quiet: true));
+  if (!context.mounted) return;
+  _meldVersieZin(context, weg == v.leden.length ? '$naam: $weg nummers in de prullenbak' : (laatste ?? 'Niets weggegooid'));
+}
+
 /// Wat er bij een klaargezette kopie onder de titel van het menu staat: waar hij vandaan komt, en of de vingerafdruk
 /// zegt dat het dezelfde opname is (Saber, 25-10-2026: twijfelzone mag, "met een waarschuwing").
 String klaarOndertitel(TwijfelInfo tw) {
@@ -14272,10 +14473,12 @@ class _KlaarKaart extends StatelessWidget {
             : soort == null
                 ? 'Beluisteren'
                 : 'Beluisteren (A/B)';
-    final labels = soort == null ? [beluisteren, 'Gebruiken', 'Weg…'] : [beluisteren, 'Houden ($soort)', 'Weg…'];
+    // In de volgorde van [_twijfelRegels]: beluisteren, bewaren, bewaren en standaard maken, weg.
+    final labels = [beluisteren, soort == null ? 'Bewaren' : 'Bewaren ($soort)', 'Bewaren en standaard', 'Weg…'];
     final iconen = [
       soort == null ? Icons.headphones_rounded : Icons.compare_arrows_rounded,
       Icons.check_rounded,
+      Icons.star_outline_rounded,
       Icons.delete_outline_rounded,
     ];
     return Container(
@@ -14342,14 +14545,20 @@ class _KlaarKaart extends StatelessWidget {
             icon: Icon(iconen[1], size: 18),
             label: Text(labels[1]),
           ),
+          FilledButton.tonalIcon(
+            key: ValueKey('klaar-standaard-${nummer.path}'),
+            onPressed: () => doe(2),
+            icon: Icon(iconen[2], size: 18),
+            label: Text(labels[2]),
+          ),
           // Apart en lichter: weggooien staat niet tegen houden aan (en vraagt eerst of het zeker is).
           Padding(
             padding: const EdgeInsets.only(left: kRuimte8),
             child: OutlinedButton.icon(
               key: ValueKey('klaar-weg-${nummer.path}'),
-              onPressed: () => doe(2),
-              icon: Icon(iconen[2], size: 18),
-              label: Text(labels[2]),
+              onPressed: () => doe(3),
+              icon: Icon(iconen[3], size: 18),
+              label: Text(labels[3]),
             ),
           ),
           // Tussendoor: stoppen zonder te kiezen, en dan gaat je eigen nummer verder.
@@ -14594,9 +14803,9 @@ Future<void> _houdAlleKlaargezette(BuildContext context, List<Track> klaar) asyn
       if (lib.remote case final c?) {
         final id = lib.remoteTrackId(t.path);
         if (id == null) continue;
-        await c.ask('/api/twijfel', {'trackId': id, 'actie': 'vervang'});
+        await c.ask('/api/twijfel', {'trackId': id, 'actie': 'bewaar'});
       } else {
-        await dm!.vervangDoorTwijfel(t.path);
+        await dm!.vervangDoorTwijfel(t.path, alsVersie: true);
       }
       gehouden++;
     } catch (_) {/* de volgende */} finally {
@@ -22272,6 +22481,16 @@ class _HomeStartViewState extends State<HomeStartView> {
               rechts: naarRecentToegevoegd == null
                   ? null
                   : _AllesKnop(key: const ValueKey('recent-alles'), aantal: recent.length, onPressed: naarRecentToegevoegd)),
+        // Een nieuwe versie van een plaat die je al had (versies.dart, Saber 26-10-2026): een eigen rij — Recent
+        // toegevoegd blijft voor echt nieuwe platen. De tegel draagt de naam van de versie, zoals de map op schijf.
+        if (lib.nieuweVersies() case final nv when nv.isNotEmpty)
+          _section(
+              'Nieuwe versies',
+              _localRow([for (final x in nv.take(20)) x.album], rij: 'versies', titel: (a) {
+                final l = nv.where((x) => identical(x.album, a)).firstOrNull?.label;
+                return l == null ? a.title : '${a.title} ($l)';
+              }),
+              bij: 'de laatste 30 dagen'),
         // Boven de netwerkrijen: deze twee staan er meteen en zijn altijd raak.
         if (uitDecennium.length >= 4)
           _section(jarenKop(decennium!), _localRow(uitDecennium.take(20).toList(), rij: 'decennium'),
@@ -22419,7 +22638,7 @@ class _HomeStartViewState extends State<HomeStartView> {
   /// op hun eigen moment landen, en het startscherm stond te springen terwijl je las.
   Widget _loadingRow() => const SkeletRij();
 
-  Widget _localRow(List<Album> albums, {required String rij}) => ListView.separated(
+  Widget _localRow(List<Album> albums, {required String rij, String Function(Album a)? titel}) => ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: kGoot),
         itemCount: albums.length,
@@ -22434,7 +22653,7 @@ class _HomeStartViewState extends State<HomeStartView> {
                   if (albums[i].cover == null) context.read<LibraryStore>().hoesVoorrang(albums[i]);
                   return cover(albums[i].cover, size: kTegelHoes);
                 })(),
-                albums[i].title, albums[i].artist,
+                titel?.call(albums[i]) ?? albums[i].title, albums[i].artist,
                 () => openPagina(context, (_) => AlbumDetailPage(album: albums[i], heroTag: tag)),
                 artist: albums[i].artist,
                 achterkant: () => achterkantVan(context, albums[i]),

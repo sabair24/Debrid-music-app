@@ -2232,6 +2232,13 @@ class LanServer {
       // Wie vraagt, luisterde vaak net zelf (A/B): wat dát toestel leest of speelt, houdt het houden niet tegen.
       'vervang' => await manager.vervangDoorTwijfel(t.path,
           behalveLezer: req.connectionInfo?.remoteAddress.address, behalveZone: body['toestel'] as String?),
+      // Bewaren als versie (versies.dart): het nummer blijft, de kopie komt erbij — of meteen als standaard.
+      'bewaar' => await manager.vervangDoorTwijfel(t.path, alsVersie: true),
+      'bewaarStandaard' => await manager.vervangDoorTwijfel(t.path,
+          alsVersie: true,
+          standaard: true,
+          behalveLezer: req.connectionInfo?.remoteAddress.address,
+          behalveZone: body['toestel'] as String?),
       'weg' => await manager.gooiTwijfelWeg(t.path),
       _ => null,
     };

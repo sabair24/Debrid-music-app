@@ -119,7 +119,9 @@ Kopiesoort? soortVanBestand(String pad, String bronpad) {
 /// Wat [nieuw] (net binnen, van [bronpad]) is tegenover het nummer [anker]: zijn soort en persing, die van het nummer
 /// (soorten.json, het register, en anders de kop), en het besluit.
 Versieplan versieplanVoor(File nieuw, String anker, String bronpad) {
-  final soort = soortVanBestand(nieuw.path, bronpad);
+  // Wat er al over hem bekend is (een kopie die in _dubbel belandde, nam zijn soort mee), anders zijn kop en waar hij
+  // vandaan kwam.
+  final soort = soortVoor(nieuw.path)?.soort ?? soortVanBestand(nieuw.path, bronpad);
   final persing = soort == null ? '' : persingUit(bronpad, soort: soort);
   final g = versies.groep(anker);
   final ankerSoort = soortVoor(anker)?.soort ?? g?.soort ?? soortVanBestand(anker, anker);
@@ -198,7 +200,7 @@ typedef Versieuitslag = ({String pad, bool werdAnker, bool verloor});
 ///
 /// [nu]: voor de toets.
 Future<Versieuitslag?> bergOpAlsVersie(File src, Versieplan plan,
-    {required String root, TrackTags? tags, DateTime Function()? nu}) async {
+    {required String root, TrackTags? tags, DateTime Function()? nu, bool laatVerliezerStaan = false}) async {
   final soort = plan.soort;
   if (soort == null || !plan.isVersie) return null;
   final sinds = (nu ?? DateTime.now)().millisecondsSinceEpoch;
@@ -225,12 +227,16 @@ Future<Versieuitslag?> bergOpAlsVersie(File src, Versieplan plan,
       if (!File(oud.pad).existsSync()) {
         // De versie staat er niet meer: deze komt in haar plaats.
         versies.verwijder(oud.pad);
-        return bergOpAlsVersie(src, plan.als(Versiebesluit.nieuweVersie), root: root, tags: tags, nu: nu);
+        return bergOpAlsVersie(src, plan.als(Versiebesluit.nieuweVersie),
+            root: root, tags: tags, nu: nu, laatVerliezerStaan: laatVerliezerStaan);
       }
       if (!firstIsBetter(src, File(oud.pad))) {
-        try {
-          await src.delete();
-        } catch (_) {}
+        // [laatVerliezerStaan]: een oude kopie uit _dubbel die terug zou komen — die is van jou, en blijft waar hij was.
+        if (!laatVerliezerStaan) {
+          try {
+            await src.delete();
+          } catch (_) {}
+        }
         return (pad: oud.pad, werdAnker: false, verloor: true);
       }
       // Bewezen beter dan de versie die er was: die gaat naar _dubbel (zoals bij een gewone vervanging), deze komt op
