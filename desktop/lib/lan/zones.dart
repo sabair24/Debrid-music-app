@@ -615,6 +615,9 @@ class ZoneRegister {
   /// Het bestand achter een nummer-id: extensie, frequentie en diepte — voor [ZoneStaat.kwaliteit].
   final ({String ext, int rate, int bits})? Function(String id)? bestandVan;
 
+  /// Welke versie er op een speaker klinkt (versies.dart, `CastManager.versieVan`): voor de kwaliteit op de kaart.
+  String? Function(String speaker)? versieOpSpeaker;
+
   /// Zet de pc het nummer voor deze speaker om: naar welke maat ("16/48"), of leeg. Gezet door de server, uit de
   /// plafonds van de speaker (`CastManager.plafondVan`).
   String Function(String speakerId, String trackId)? omzettingOpSpeaker;
@@ -912,7 +915,7 @@ class ZoneRegister {
       final r = s.radio.isEmpty ? null : radioOpSpeaker?.call(s.id, s.trackId ?? '');
       final rij = speakerRij?.call(s.id);
       final bron = rij == null ? (s.radio.isEmpty ? null : (soort: 'radio', naam: s.radio)) : _bronVoor('spk:${s.id}', rij.rij, s.radio);
-      final b = s.trackId == null ? null : bestandVan?.call(s.trackId!);
+      final b = s.trackId == null ? null : bestandVan?.call(versieOpSpeaker?.call(s.id) ?? s.trackId!);
       uit.add(ZoneStaat(
         hierna: rij == null ? '' : _hiernaVan(rij.rij, rij.index, 'off'),
         bronSoort: bron?.soort ?? '',
@@ -1028,7 +1031,8 @@ class ZoneRegister {
     final n = nummer?.call(p.trackId);
     final radio = '${p.radio?['naam'] ?? ''}';
     final bron = _bronVoor(id, p.queue, radio);
-    final b = bestandVan?.call(p.trackId);
+    // De kwaliteit van wat klinkt: een versie (versies.dart) heeft haar eigen.
+    final b = bestandVan?.call(p.versie.isNotEmpty ? p.versie : p.trackId);
     final stroom = p.stroom;
     return ZoneStaat(
       // Een radio meldt wat erna komt apart ([PlaybackProgress.volgend]); de rij noemt dan alleen het spelende nummer.

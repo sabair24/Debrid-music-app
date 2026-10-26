@@ -3691,6 +3691,8 @@ class LibraryStore extends ChangeNotifier {
             sizeBytes: vt.sizeBytes, addedMs: vt.addedMs, luid: Map<String, dynamic>.from(v['luid'] as Map));
       }
       _versieTracksVanPc[vt.path] = vt;
+      // Zijn soort, zoals bij elk nummer van de pc: het label "vinyl" naast de kwaliteit in Nu speelt.
+      zetSoortVanPc(vt.path, (soort: soort, gekozen: false));
       uit.add(VersieInfo(
         track: vt,
         soort: soort,

@@ -325,9 +325,16 @@ class LanSharing extends ChangeNotifier {
     Map<String, dynamic>? radio,
     int volume = -1,
     bool alleenZone = false,
+    String versiePad = '',
   }) {
     final op = progressOp(trackPath, position, playing, queuePaths, index,
-        shuffle: shuffle, herhaal: herhaal, overname: overname, radio: radio, volume: volume, alleenZone: alleenZone);
+        shuffle: shuffle,
+        herhaal: herhaal,
+        overname: overname,
+        radio: radio,
+        volume: volume,
+        alleenZone: alleenZone,
+        versiePad: versiePad);
     if (op == null) return;
     state.applyOps([op], deviceId: mijnId, deviceName: deviceName());
   }
@@ -348,9 +355,11 @@ class LanSharing extends ChangeNotifier {
     Map<String, dynamic>? radio,
     int volume = -1,
     bool alleenZone = false,
+    String versiePad = '',
   }) {
     final id = _trackId(trackPath);
     if (id == null) return null;
+    final versie = versiePad.isEmpty || versiePad == trackPath ? null : _trackId(versiePad);
     return {
       'type': 'progress',
       'trackId': id,
@@ -366,6 +375,8 @@ class LanSharing extends ChangeNotifier {
       if (volume >= 0) 'volume': volume,
       // Alleen voor de zonelijst, niet voor "waar je gebleven bent" (zie [VerderLuisteren.meldNu]).
       if (alleenZone) 'alleenZone': true,
+      // De versie die klinkt (versies.dart), voor de kwaliteit op de zonekaart.
+      if (versie != null) 'versie': versie,
       'at': DateTime.now().millisecondsSinceEpoch,
     };
   }
@@ -387,8 +398,12 @@ class LanSharing extends ChangeNotifier {
   /// Een id van de gedeelde staat als nummer hier (op de pc: een bestand in de bibliotheek).
   Track? nummerVoorId(String id) {
     final tracks = library.tracks;
-    if (_idsVoor != tracks.length) {
+    // Ook na elke scan opnieuw, niet alleen als het aantal verandert: een cd die op de plek van een vinylrip terugkomt
+    // (versies, 26-10-2026) laat het aantal gelijk, en dan gaf dit het oude nummer terug — met de kwaliteit, de lengte
+    // en de luidheid van de vinylrip.
+    if (_idsVoor != tracks.length || _idsRev != library.metaRev) {
       _idsVoor = tracks.length;
+      _idsRev = library.metaRev;
       _nummers
         ..clear()
         ..addEntries([
@@ -401,6 +416,7 @@ class LanSharing extends ChangeNotifier {
 
   final Map<String, Track> _nummers = {};
   int _idsVoor = -1;
+  int _idsRev = -1;
 
   // `reportPlayed` stond hier, en is op 28-08-2026 weggehaald. Hij telde een beluistering bij het
   // OPENEN van een nummer, hij hing alleen op de pc ingehangen, en hij was een tweede schrijver naar

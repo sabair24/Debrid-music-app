@@ -2,6 +2,7 @@
 import 'dart:io';
 
 import 'package:debridmusic/lan/server.dart' show weigerVanBuiten;
+import 'package:debridmusic/lan/state_store.dart' show PlaybackProgress;
 import 'package:flutter_test/flutter_test.dart';
 
 String _bron(String pad) => File(pad).readAsStringSync().replaceAll('\r\n', '\n');
@@ -64,6 +65,28 @@ void main() {
     expect(catalog, contains('          versies: _versiesVan(t, root, trackById),'));
     expect(catalog, contains("      if (t.versies != null) fingerprint.add('V\${jsonEncode(t.versies)}');"));
     expect(catalog, contains('    versies.uitgave.addListener(_markDirty);'));
+  });
+
+  // Nagelopen op de pc (26-10-2026): de vinylrip van 24/192 speelde, de zonekaart zei "FLAC 16/44.1".
+  test('de zonekaart toont de kwaliteit van de versie die klinkt', () {
+    final p = PlaybackProgress.fromJson(PlaybackProgress(trackId: 'a', versie: 'v').toJson());
+    expect(p.versie, 'v');
+    expect(PlaybackProgress.fromJson(PlaybackProgress(trackId: 'a').toJson()).toJson().containsKey('versie'), isFalse);
+    final zones = _bron('lib/lan/zones.dart');
+    expect(zones, contains('    final b = bestandVan?.call(p.versie.isNotEmpty ? p.versie : p.trackId);'));
+    expect(zones, contains('bestandVan?.call(versieOpSpeaker?.call(s.id) ?? s.trackId!);'));
+    expect(_bron('lib/lan/server.dart'), contains('    zones.versieOpSpeaker = cast.versieVan;'));
+    expect(_bron('lib/lan/state_store.dart'), contains("            versie: '\${op['versie'] ?? ''}',"));
+    final main = _bron('lib/main.dart');
+    expect(main, contains("              if (player.speelPad case final v? when v != track.path) 'versie': library.gedeeldId(v) ?? '',"));
+    expect(main, contains("          versiePad: player.speelPad ?? '');"));
+  });
+
+  // Nagelopen op de pc (26-10-2026): na het terugzetten stond de cd op de plek van de vinylrip, evenveel nummers — en de
+  // zone kreeg het oude nummer (24/192) terug.
+  test('een nummer op id volgt elke scan, niet alleen een ander aantal', () {
+    expect(_bron('lib/lan/sharing.dart'), contains('    if (_idsVoor != tracks.length || _idsRev != library.metaRev) {'));
+    expect(_bron('lib/main.dart'), contains('    if (_idsVoor != tracks.length || _idsRev != library.metaRev) {'));
   });
 
   test('opbergen: elke weg kent versies, en een verhuizing neemt het register mee', () {
