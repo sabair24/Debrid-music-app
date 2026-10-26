@@ -94,11 +94,11 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd', '/api/zone/transfer', '/api/tijd',
     '/api/twijfel',
     '/api/soort/vraag',
-    '/api/soort/stop',
-    '/api/releaseart',
     // Het schudlogboek van een toestel (schudlog.dart): onderweg schudt Saber ook (26-10-2026: "Ik heb vandaag op de gsm
     // verschillende keer gesnuffeld" — en niets kwam aan). schud.log heeft een plafond ([kSchudLogBytes]).
     '/api/diag/schud',
+    '/api/soort/stop',
+    '/api/releaseart',
   };
   // TIDAL ook (Saber, 23-10-2026: "ik moet ook buitenshuis kunnen zoeken en downloaden"); ophalen telt mee in het
   // quotum voor downloads, zoals Soulseek.
