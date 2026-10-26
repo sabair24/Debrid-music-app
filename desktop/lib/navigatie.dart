@@ -270,6 +270,10 @@ Future<T?> openOp<T>(NavigatorState vanaf, WidgetBuilder bouw) {
 /// het koppelscherm en een toets draaien zonder — en dan doet de knop niets in plaats van te vallen.
 void Function(int sectie)? gaNaarSectie;
 
+/// Naar Albums, nieuwst binnengekomen eerst — "Alles" bij "Recent toegevoegd" op Start (Saber, 26-10-2026: "plus een
+/// button naar allemaal"). Leeg zonder schil, zoals [gaNaarSectie].
+void Function()? naarRecentToegevoegd;
+
 /// Wat de terugknop hoort te doen.
 ///
 /// Zuiver, en dat is het punt. Zowel `canPop` als de afhandelaar van de `PopScope` leidt hieruit af,
