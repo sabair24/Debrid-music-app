@@ -110,6 +110,26 @@ void main() {
     });
   }
 
+  // Saber, 26-10-2026: beluisteren gooit de wachtrij niet meer weg, en het klinkt op de zone die speelt.
+  testWidgets('tussendoor: de knop zegt wat er klinkt, waar, en Stoppen staat erbij', (tester) async {
+    tester.view.physicalSize = const Size(360, 780);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    addTearDown(() => TussendoorStand.nu.stop());
+    _zet();
+    TussendoorStand.nu.zetVoorToets(_nummers[2].path, zone: 'spk:kef', waar: 'KEF');
+    final lib = LibraryStore()..tracks.addAll(_nummers);
+    await tester.pumpWidget(_scherm(lib));
+    await tester.pumpAndSettle();
+    final p = _nummers[2].path;
+    expect(find.byKey(ValueKey('klaar-stop-$p')), findsOneWidget);
+    expect(find.textContaining('Klinkt op KEF'), findsOneWidget);
+    expect(find.descendant(of: find.byKey(ValueKey('klaar-luister-$p')), matching: find.text('Nu B · naar A (jouw kopie)')),
+        findsOneWidget);
+    expect(find.byKey(ValueKey('klaar-stop-${_nummers[0].path}')), findsNothing, reason: 'alleen bij wat klinkt');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('leeg: een zin die zegt wat hier komt', (tester) async {
     final lib = LibraryStore()..tracks.addAll(_nummers);
     await tester.pumpWidget(_scherm(lib));

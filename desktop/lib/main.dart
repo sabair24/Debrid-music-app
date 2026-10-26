@@ -1695,6 +1695,20 @@ Future<void> main() async {
       if (radio.loopt) radio.stop(naar: door);
     },
     kijkInBrievenbus: () => kijkInBrievenbus(),
+    // Tussendoor beluisteren voor een toestel dat deze zone gekozen heeft ("Klaar om te kiezen", Saber 26-10-2026: "op
+    // de zone die actief is"): met de speler van dit toestel, de wachtrij blijft staan.
+    tussendoor: (t) async {
+      if (player.naarSpeaker) return 'Hier speelt een speaker — kies die speaker als zone';
+      final k = kandidaatVoorSpeler(t, opPc: mode.owner, dm: downloads);
+      if (k == null) return 'Er wacht geen kopie meer voor dit nummer';
+      return await player.tussendoor(t, k.adres, meting: k.meting) ? null : 'Beluisteren lukte niet';
+    },
+    tussendoorAB: () async {
+      await player.tussendoorAB();
+    },
+    tussendoorKlaar: ({required bool hervat}) async {
+      await player.tussendoorKlaar(hervat: hervat);
+    },
     // Meteen melden wat er nu speelt, zodat wie bedient de uitkomst ziet (niet pas na vijf seconden).
     naUitvoeren: () => Timer(const Duration(milliseconds: 400), player.meldStandNu),
   );
@@ -13637,10 +13651,13 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
   final dm = lib.isRemote ? null : context.read<DownloadManager>();
   final melder = ScaffoldMessenger.maybeOf(context);
   final nav = Navigator.of(context);
-  final album = lib.albumForPath(t.path);
   void toon(String zin) => melder?.showSnackBar(SnackBar(content: Text(zin)));
   final adres = dm != null ? dm.twijfel?.van(t.path)?.kandidaat : 'http://$kPcHost/kandidaat/${tw.id}.${tw.ext}';
   Future<void> kies(String actie) async {
+    // Tussendoor beluisterd ([TussendoorStand]): eerst stoppen, want de kopie die klinkt moet dicht voor houden of
+    // weggooien; je eigen nummer gaat daarna verder, met je wachtrij (Saber, 26-10-2026).
+    final stand = TussendoorStand.nu;
+    final laterVerder = stand.pad == t.path ? await stand.stop(hervat: false) : false;
     // Houden vervangt het nummer, en Windows vervangt geen bestand dat open staat: speelt het (A of B), dan eerst los,
     // en daarna verder op dezelfde seconde met wat je hield.
     final los = actie == 'vervang' && speler.current?.path == t.path ? await speler.laatBestandLos() : null;
@@ -13665,28 +13682,60 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
       toon('$e');
     } finally {
       if (los != null) await speler.heropenNaLoslaten(los);
+      if (laterVerder) speler.speelAf();
     }
   }
 
+  // Beluisteren: speelt dit nummer hier al (geen zone, geen speaker), dan A/B op het nummer zelf zoals het was; anders
+  // tussendoor, op de zone waar de muziek is, zonder de wachtrij aan te raken ([tussendoorStart]).
+  final stand = TussendoorStand.nu;
+  final hierZelf = speler.current?.path == t.path && !stand.bezig && tussendoorWaar(context).zone == null;
+  final bIsHier = speler.current?.path == t.path && speler.vergelijkBron != null;
+  String beluisterLabel() {
+    if (stand.pad == t.path) {
+      return stand.opB ? 'Nu B — wissel naar A (jouw kopie)' : 'Nu A — wissel naar B (${tw.kwaliteit})';
+    }
+    if (bIsHier) return 'Terug naar je eigen kopie (A)';
+    return tw.soort != null
+        ? 'Beluisteren: A/B op dezelfde seconde (${tw.kwaliteit})'
+        : 'Twijfelkopie beluisteren (${tw.kwaliteit})';
+  }
+
+  Future<void> beluister() async {
+    if (adres == null) return toon('De kopie staat er niet meer');
+    if (hierZelf) {
+      final ok = await speler.vergelijk(bIsHier ? null : adres, meting: Luidheidsmeting.fromJson(tw.luid));
+      toon(!ok
+          ? 'A/B lukte niet'
+          : bIsHier
+              ? 'A: je eigen kopie'
+              : 'B: de nieuwe kopie (${tw.kwaliteit}) — tik nog eens om terug te gaan naar A');
+      return;
+    }
+    if (stand.pad == t.path) {
+      final ok = await stand.wissel();
+      toon(!ok ? 'Wisselen lukte niet' : stand.opB ? 'B: de nieuwe kopie' : 'A: je eigen kopie');
+      return;
+    }
+    final fout = await tussendoorStart(context, t);
+    toon(fout ??
+        'B: de nieuwe kopie (${tw.kwaliteit}) op ${stand.waar} — je nummer en je wachtrij wachten tot je kiest');
+  }
+
+  // Zolang er tussendoor beluisterd wordt: stoppen kan ook zonder te kiezen.
+  final stoppen = [
+    if (stand.pad == t.path)
+      MenuRegel(Icons.stop_rounded, 'Stoppen — je eigen nummer gaat verder', () async {
+        await stand.stop();
+        toon('Gestopt — je nummer gaat verder');
+      }),
+  ];
+
   final soort = tw.soort;
   if (soort != null) {
-    final bIsAan = speler.current?.path == t.path && speler.vergelijkBron != null;
     return [
-      MenuRegel(Icons.compare_arrows_rounded,
-          bIsAan ? 'Terug naar je eigen kopie (A)' : 'Beluisteren: A/B op dezelfde seconde (${tw.kwaliteit})', () async {
-        if (adres == null) return toon('De $soort-kopie staat er niet meer');
-        if (speler.current?.path != t.path) {
-          // Nog niet aan het spelen: het nummer in zijn plaat, en meteen op de klaargezette kopie.
-          final rij = album?.tracks ?? [t];
-          await speler.playQueue(rij, math.max(0, rij.indexWhere((x) => x.path == t.path)));
-        }
-        final ok = await speler.vergelijk(bIsAan ? null : adres, meting: Luidheidsmeting.fromJson(tw.luid));
-        toon(!ok
-            ? 'A/B werkt op dit toestel, niet terwijl een speaker speelt'
-            : bIsAan
-                ? 'A: je eigen kopie'
-                : 'B: de $soort-kopie (${tw.kwaliteit}) — open het menu weer om terug te gaan naar A');
-      }),
+      // Hier stond: niet aan het spelen → de hele plaat als nieuwe wachtrij. Nu tussendoor ([beluister]).
+      MenuRegel(Icons.compare_arrows_rounded, beluisterLabel(), beluister),
       MenuRegel(Icons.check_rounded, 'Deze houden ($soort)', () => kies('vervang')),
       MenuRegel(Icons.delete_outline_rounded, 'Weg…', () async {
         final ja = await showDialog<bool>(
@@ -13707,15 +13756,13 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
         );
         if (ja == true) await kies('weg');
       }),
+      ...stoppen,
     ];
   }
 
   return [
-    MenuRegel(Icons.headphones_rounded, 'Twijfelkopie beluisteren (${tw.kwaliteit})', () {
-      // Op de pc het bestand zelf; op een toestel via de pc, zoals de groeistroom (`/kandidaat/`, server.dart).
-      if (adres == null) return toon('De twijfelkopie staat er niet meer');
-      speler.playUrl(adres, title: '${t.title} (twijfelkopie)', artist: t.artist, album: t.album);
-    }),
+    // Hier stond `playUrl`: een rij van één, je wachtrij weg. Nu tussendoor, met A/B ([beluister]).
+    MenuRegel(Icons.headphones_rounded, beluisterLabel(), beluister),
     MenuRegel(Icons.swap_horiz_rounded, 'Twijfelkopie gebruiken (vervangen)', () => kies('vervang')),
     MenuRegel(Icons.delete_outline_rounded, 'Twijfelkopie weggooien…', () async {
       // Bevestigen: dit staat naast "gebruiken", en die twee mogen niet per ongeluk verwisseld worden.
@@ -13737,7 +13784,158 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
       );
       if (ja == true) await kies('weg');
     }),
+    ...stoppen,
   ];
+}
+
+/// Tussendoor beluisteren uit "Klaar om te kiezen" en het label bij een nummer (Saber, 26-10-2026: "als ik op
+/// beluisteren knop klik … mag het wel niet men wachtrij weggooien … dan klik ik op gebruiken of weg, en dan moet men
+/// liedje hervatten en men wachtrij moet er nog staan. Plus als de muziek speelt op de gsm, moet het op de gsm gebeuren
+/// en als ik luister op de kef op de kef … op de zone die actief is").
+///
+/// Waar: de gekozen zone op afstand; anders hier — en heeft een speaker hier de muziek, dan die speaker (de pc speelt
+/// hem, `CastManager.tussendoor`). Hier zelf: een tweede speler, de rij blijft staan (`PlayerStore.tussendoor`). Wat
+/// er moet gebeuren om te wisselen of te stoppen, wordt bij het starten vastgelegd: zo kan het scherm het ook nog als
+/// het al weg is.
+class TussendoorStand extends ChangeNotifier {
+  TussendoorStand._();
+  static final nu = TussendoorStand._();
+
+  /// Het nummer waarvan de kopie beluisterd wordt, of null.
+  String? pad;
+
+  /// De zone waar het klinkt (null = deze speler), en haar naam voor op het scherm.
+  String? zone;
+  String waar = 'hier';
+
+  /// Klinkt B (de nieuwe kopie)? Anders A (jouw kopie).
+  bool opB = true;
+
+  Future<bool> Function()? _wissel;
+  Future<bool> Function({required bool hervat})? _stop;
+
+  bool get bezig => pad != null;
+
+  /// A en B wisselen, op dezelfde seconde.
+  Future<bool> wissel() async {
+    final f = _wissel;
+    if (f == null) return false;
+    final ok = await f();
+    if (!ok) {
+      _leeg();
+    } else {
+      opB = !opB;
+    }
+    notifyListeners();
+    return ok;
+  }
+
+  /// Stoppen. [hervat]: het nummer dat speelde gaat verder. Geeft terug of de aanroeper het daarna zelf weer moet
+  /// aanzetten (alleen hier, met [hervat] = false — een zone zet het zelf weer aan).
+  Future<bool> stop({bool hervat = true}) async {
+    final f = _stop;
+    _leeg();
+    notifyListeners();
+    return f == null ? false : f(hervat: hervat);
+  }
+
+  void _begin(String pad,
+      {String? zone,
+      required String waar,
+      required Future<bool> Function() wissel,
+      required Future<bool> Function({required bool hervat}) stop}) {
+    this.pad = pad;
+    this.zone = zone;
+    this.waar = waar;
+    opB = true;
+    _wissel = wissel;
+    _stop = stop;
+    notifyListeners();
+  }
+
+  void _leeg() {
+    pad = null;
+    zone = null;
+    opB = true;
+    _wissel = null;
+    _stop = null;
+  }
+
+  @visibleForTesting
+  void zetVoorToets(String p, {String? zone, String waar = 'hier', bool opB = true}) {
+    pad = p;
+    this.zone = zone;
+    this.waar = waar;
+    this.opB = opB;
+    notifyListeners();
+  }
+}
+
+/// Waar de klaargezette kopie van [t] staat voor de speler hier: op de pc het bestand, op een toestel via de pc
+/// (`/kandidaat/`). Null als er geen meer wacht.
+({String adres, Luidheidsmeting? meting})? kandidaatVoorSpeler(Track t, {required bool opPc, DownloadManager? dm}) {
+  final tw = twijfelVoor(t.path);
+  if (tw == null) return null;
+  final adres = opPc ? dm?.twijfel?.van(t.path)?.kandidaat : 'http://$kPcHost/kandidaat/${tw.id}.${tw.ext}';
+  if (adres == null) return null;
+  return (adres: adres, meting: Luidheidsmeting.fromJson(tw.luid));
+}
+
+/// De zone waar tussendoor beluisteren hoort: de gekozen zone op afstand, anders de speaker die hier de muziek heeft,
+/// anders null (deze speler). Met haar naam.
+({String? zone, String naam}) tussendoorWaar(BuildContext context) {
+  final opAfstand = context.read<GekozenZone>().opAfstand;
+  final lijst = context.read<ZoneLijst>();
+  String naamVan(String id) => lijst.zones.where((z) => z.id == id).map((z) => z.naam).firstOrNull ?? 'die zone';
+  if (opAfstand != null) return (zone: opAfstand.zoneId, naam: naamVan(opAfstand.zoneId));
+  final speaker = context.read<SpeakerTarget>().device;
+  if (context.read<PlayerStore>().naarSpeaker && speaker != null) {
+    return (zone: 'spk:${speaker.id}', naam: speaker.name);
+  }
+  return (zone: null, naam: 'dit toestel');
+}
+
+/// Begin met beluisteren van de kopie van [t] (B), waar de muziek nu is ([tussendoorWaar]). Null als het lukte, anders
+/// waarom niet.
+Future<String?> tussendoorStart(BuildContext context, Track t) async {
+  final stand = TussendoorStand.nu;
+  final lib = context.read<LibraryStore>();
+  final speler = context.read<PlayerStore>();
+  final waar = tussendoorWaar(context);
+  // Een ander nummer stond al tussendoor: dat eerst netjes terug.
+  if (stand.bezig && stand.pad != t.path) await stand.stop();
+  final zone = waar.zone;
+  if (zone == null) {
+    final k = kandidaatVoorSpeler(t, opPc: !lib.isRemote, dm: lib.isRemote ? null : context.read<DownloadManager>());
+    if (k == null) return 'Er wacht geen kopie meer voor dit nummer';
+    if (!await speler.tussendoor(t, k.adres, meting: k.meting)) return 'Beluisteren lukte niet';
+    stand._begin(t.path, waar: waar.naam, wissel: speler.tussendoorAB, stop: ({required bool hervat}) async {
+      final speelde = await speler.tussendoorKlaar(hervat: hervat);
+      return !hervat && speelde;
+    });
+    return null;
+  }
+  final stuur = context.read<ZoneLijst>().stuur;
+  final id = lib.gedeeldId(t.path);
+  if (stuur == null || id == null) return 'Dat kan op ${waar.naam} niet';
+  final fout = await stuur(zone, {'cmd': 'tussendoor', 'trackId': id, 'id': 'tussendoor-${DateTime.now().microsecondsSinceEpoch}'});
+  if (fout != null) return fout;
+  stand._begin(
+    t.path,
+    zone: zone,
+    waar: waar.naam,
+    wissel: () async =>
+        await stuur(zone, {'cmd': 'tussendoorAB', 'id': 'ab-${DateTime.now().microsecondsSinceEpoch}'}) == null,
+    // Een zone zet haar nummer zelf weer aan (als het speelde), ook vóór houden of weggooien: de kopie die ze speelde
+    // gaat van de pc dicht, en daarna even wachten tot dat aankwam.
+    stop: ({required bool hervat}) async {
+      await stuur(
+          zone, {'cmd': 'tussendoorKlaar', 'hervat': true, 'id': 'klaar-${DateTime.now().microsecondsSinceEpoch}'});
+      if (!hervat) await Future<void>.delayed(const Duration(milliseconds: 1500));
+      return false;
+    },
+  );
+  return null;
 }
 
 /// Wat er bij een klaargezette kopie onder de titel van het menu staat: waar hij vandaan komt, en of de vingerafdruk
@@ -13784,8 +13982,20 @@ void openKlaarOmTeKiezen(BuildContext context) => Navigator.of(context, rootNavi
 /// houden of weg — dezelfde keuzes als het label ([_twijfelRegels]). Op een smal scherm vallen de knoppen onder de
 /// tekst, op een breed scherm staat de lijst in het midden; titels worden nooit afgekapt; op een tv staat de selectie
 /// op de eerste knop.
-class KlaarOmTeKiezenScherm extends StatelessWidget {
+class KlaarOmTeKiezenScherm extends StatefulWidget {
   const KlaarOmTeKiezenScherm({super.key});
+
+  @override
+  State<KlaarOmTeKiezenScherm> createState() => _KlaarOmTeKiezenSchermState();
+}
+
+class _KlaarOmTeKiezenSchermState extends State<KlaarOmTeKiezenScherm> {
+  // Weg van dit scherm zonder te kiezen: wat je tussendoor beluisterde stopt, en je eigen nummer gaat verder.
+  @override
+  void dispose() {
+    if (TussendoorStand.nu.bezig) unawaited(TussendoorStand.nu.stop());
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -13847,11 +14057,15 @@ class _KlaarKaart extends StatelessWidget {
   final bool eerste;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      ListenableBuilder(listenable: TussendoorStand.nu, builder: (context, _) => _bouw(context));
+
+  Widget _bouw(BuildContext context) {
     final hoes = context.read<LibraryStore>().coverForTrack(nummer);
     final speler = context.read<PlayerStore>();
     final soort = tw.soort;
     final bIsAan = speler.current?.path == nummer.path && speler.vergelijkBron != null;
+    final tussendoor = TussendoorStand.nu.pad == nummer.path ? TussendoorStand.nu : null;
     final twijfelt = misschienAndereOpname(tw.score);
     final oranje = leesbaar(const Color(0xFFE0A33A));
     // De keuzes zelf uit het menu van het label, pas bij het tikken: één weg voor houden en weggooien.
@@ -13860,9 +14074,14 @@ class _KlaarKaart extends StatelessWidget {
       if (i < regels.length) regels[i].doen();
     }
 
-    final labels = soort == null
-        ? ['Beluisteren', 'Gebruiken', 'Weg…']
-        : [bIsAan ? 'Terug naar jouw kopie (A)' : 'Beluisteren (A/B)', 'Houden ($soort)', 'Weg…'];
+    final beluisteren = tussendoor != null
+        ? (tussendoor.opB ? 'Nu B · naar A (jouw kopie)' : 'Nu A · naar B (nieuw)')
+        : bIsAan
+            ? 'Terug naar jouw kopie (A)'
+            : soort == null
+                ? 'Beluisteren'
+                : 'Beluisteren (A/B)';
+    final labels = soort == null ? [beluisteren, 'Gebruiken', 'Weg…'] : [beluisteren, 'Houden ($soort)', 'Weg…'];
     final iconen = [
       soort == null ? Icons.headphones_rounded : Icons.compare_arrows_rounded,
       Icons.check_rounded,
@@ -13942,7 +14161,21 @@ class _KlaarKaart extends StatelessWidget {
               label: Text(labels[2]),
             ),
           ),
+          // Tussendoor: stoppen zonder te kiezen, en dan gaat je eigen nummer verder.
+          if (tussendoor != null)
+            TextButton.icon(
+              key: ValueKey('klaar-stop-${nummer.path}'),
+              onPressed: () => unawaited(tussendoor.stop()),
+              icon: const Icon(Icons.stop_rounded, size: 18),
+              label: const Text('Stoppen'),
+            ),
         ]),
+        if (tussendoor != null)
+          Padding(
+            padding: const EdgeInsets.only(top: kRuimte8),
+            child: Text('Klinkt op ${tussendoor.waar}. Je nummer en je wachtrij wachten tot je kiest of stopt.',
+                key: ValueKey('klaar-waar-${nummer.path}'), style: kTekstKlein),
+          ),
       ]),
     );
   }

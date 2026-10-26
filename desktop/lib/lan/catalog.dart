@@ -78,6 +78,9 @@ class CatalogSnapshot {
 ///
 /// Rebuilt lazily. The store notifies on every enriched cover — hundreds of times during startup —
 /// and rebuilding eagerly would spend the whole startup hashing ids nobody asked for yet.
+/// Het voorvoegsel van een klaargezette kopie als nummer: `kandidaat-<id van het twijfelgeval>` ([LanCatalog.extraTrack]).
+const kKandidaatId = 'kandidaat-';
+
 class LanCatalog {
   LanCatalog(this.library) {
     library.addListener(_markDirty);
@@ -156,7 +159,11 @@ class LanCatalog {
     return built;
   }
 
-  Track? track(String id) => snapshot().trackById[id];
+  /// Een nummer dat niet in de bibliotheek staat maar wel te spelen is: een klaargezette kopie onder [kKandidaatId]
+  /// (tussendoor beluisteren op een speaker, `CastManager.tussendoor`). Gezet door de server.
+  Track? Function(String id)? extraTrack;
+
+  Track? track(String id) => snapshot().trackById[id] ?? extraTrack?.call(id);
 
   Album? album(String id) => snapshot().albumById[id];
 

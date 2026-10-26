@@ -2478,6 +2478,113 @@ class PlayerStore extends ChangeNotifier
     await _openOpZelfdePlek(nu, nu.path, plek: stand.plek, spelen: stand.speelde);
   }
 
+  // ── Tussendoor beluisteren ────────────────────────────────────────────────
+
+  /// Een klaargezette kopie beluisteren zonder iets van de wachtrij aan te raken (Saber, 26-10-2026: "als ik op
+  /// beluisteren knop klik … mag het wel niet men wachtrij weggooien, ik wil kunnen beluisteren men actuele liedje
+  /// stopt dan even om te beluisteren, dan klik ik op gebruiken of weg, en dan moet men liedje hervatten en men
+  /// wachtrij moet er nog staan"). Hier stond `playQueue` (de hele plaat als nieuwe rij) of `playUrl` (een rij van
+  /// één): de rij was weg.
+  ///
+  /// Een TWEEDE speler: de eerste pauzeert op zijn plek, met zijn rij, zijn radio en zijn bestand, en wordt niet
+  /// aangeraakt. De tweede speelt [Track] [t] zelf (A, jouw kopie) of [b] (B, de nieuwe), A/B op dezelfde seconde
+  /// ([tussendoorAB]), even luid ([abVersterking] met [meting]). [tussendoorKlaar] laat hem los (het bestand is dan
+  /// dicht: houden kan het vervangen) en zet de eerste weer aan als hij speelde.
+  ///
+  /// Niet als een speaker de muziek heeft: die speelt zijn eigen rij, en dat doet de pc ([naarSpeaker]; zie
+  /// `CastManager.tussendoor`). Geeft terug of het lukte.
+  Future<bool> tussendoor(Track t, String b, {Luidheidsmeting? meting}) async {
+    if (_bijSpeaker != null) return false;
+    final al = _tussendoor;
+    final speelde = al?.speelde ?? playing;
+    if (al == null && playing) await _player.pause();
+    final vers = trackResolver?.call(t.path) ?? t;
+    final f = luidheidVoor;
+    final luidA = f == null ? Bijstelling.nul : f(vers, rij: [vers], plek: 0, opVolgorde: true);
+    final luidB = abVersterking(luidA, meting);
+    _tussendoor = (t: vers, b: b, opB: true, speelde: speelde, luidA: luidA, luidB: luidB);
+    _log?.line('TUSSENDOOR: B ($b) — ${vers.title}; de rij blijft staan'
+        '${speelde ? ', het spelende nummer wacht' : ''}');
+    notifyListeners();
+    return _proefOpen(b, luidB.db, plek: Duration.zero, spelen: true);
+  }
+
+  /// Wat er tussendoor beluisterd wordt: het nummer, en of B (de nieuwe kopie) klinkt. Null: niets.
+  ({Track t, bool opB})? get tussendoorStand => _tussendoor == null ? null : (t: _tussendoor!.t, opB: _tussendoor!.opB);
+
+  /// Speelt de tweede speler nu ([tussendoor])?
+  bool get tussendoorSpeelt => _tussendoor != null && (_proef?.state.playing ?? false);
+
+  /// A en B wisselen bij het tussendoor beluisteren, op dezelfde seconde.
+  Future<bool> tussendoorAB() async {
+    final td = _tussendoor;
+    final p = _proef;
+    if (td == null || p == null) return false;
+    final naarB = !td.opB;
+    final plek = p.state.position, spelen = p.state.playing;
+    _tussendoor = (t: td.t, b: td.b, opB: naarB, speelde: td.speelde, luidA: td.luidA, luidB: td.luidB);
+    _log?.line('TUSSENDOOR: ${naarB ? 'B' : 'A'} op $plek — ${td.t.title}');
+    notifyListeners();
+    return _proefOpen(naarB ? td.b : td.t.path, (naarB ? td.luidB : td.luidA).db, plek: plek, spelen: spelen);
+  }
+
+  /// Tussendoor beluisteren stoppen. [hervat]: het nummer dat speelde, gaat verder waar het stond. Geeft terug of het
+  /// speelde — wie eerst nog iets vervangt ("Gebruiken"), zet het daarna zelf weer aan ([speelAf]).
+  Future<bool> tussendoorKlaar({bool hervat = true}) async {
+    final td = _tussendoor;
+    if (td == null) return false;
+    _tussendoor = null;
+    try {
+      // Stop sluit het bestand: anders kan Windows het niet vervangen of weggooien.
+      await _proef?.stop();
+    } catch (_) {}
+    _log?.line('TUSSENDOOR klaar${td.speelde && hervat ? ' — het nummer gaat verder' : ''}');
+    if (hervat && td.speelde && !playing && _bijSpeaker == null) await _player.play();
+    notifyListeners();
+    return td.speelde;
+  }
+
+  ({Track t, String b, bool opB, bool speelde, Bijstelling luidA, Bijstelling luidB})? _tussendoor;
+
+  /// De tweede speler, voor [tussendoor]. Pas gemaakt bij de eerste keer, en daarna bewaard.
+  Player? _proef;
+  bool _proefKlaar = false;
+
+  /// [bron] open in de tweede speler, met [db] versterking (zoals [_luidheidHaak] doet bij de eerste), op [plek].
+  Future<bool> _proefOpen(String bron, double db, {required Duration plek, required bool spelen}) async {
+    try {
+      final p = _proef ??= Player();
+      final n = p.platform;
+      if (n is NativePlayer) {
+        if (!_proefKlaar) {
+          await n.setProperty('replaygain', 'no');
+          _proefKlaar = true;
+        }
+        await n.setProperty('replaygain-fallback', db.toStringAsFixed(2));
+      }
+      await p.setVolume(_gedempt ? _volume * 0.25 : _volume);
+      await p.open(Media(mediaResolver(bron)), play: spelen);
+      if (plek > Duration.zero) {
+        for (var i = 0; i < 50 && p.state.duration <= Duration.zero; i++) {
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+        for (var poging = 0; poging < 30; poging++) {
+          await p.seek(plek);
+          await Future.delayed(const Duration(milliseconds: 150));
+          if ((p.state.position - plek).abs() < const Duration(seconds: 3)) break;
+        }
+      }
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _log?.line('TUSSENDOOR OPENEN MISLUKT: $e');
+      return false;
+    }
+  }
+
+  /// Heeft een speaker de muziek ([Speakerbediening])? Dan beluister je daar, via de pc.
+  bool get naarSpeaker => _bijSpeaker != null;
+
   /// [t] opnieuw open met de bron [pad], op [plek]: gelijk volume zoals het liep (zelfde nummer), en springen pas als
   /// het bestand echt loopt — zie [_hervatOpDezelfdePlek] voor waarom.
   Future<void> _openOpZelfdePlek(Track t, String pad,
@@ -2874,6 +2981,11 @@ class PlayerStore extends ChangeNotifier
   Future<void> _openCurrent() async {
     final t = current;
     if (t == null) return;
+    // Een ander nummer dan wat je tussendoor beluisterde: dat stopt ([tussendoor]); jij koos iets anders.
+    if (_tussendoor != null) {
+      _tussendoor = null;
+      unawaited(_proef?.stop());
+    }
     // Een nieuw nummer: geen A/B meer ([vergelijk]), en niets losgelaten ([laatBestandLos]).
     _vergelijk = null;
     _abA = null;
@@ -2923,8 +3035,16 @@ class PlayerStore extends ChangeNotifier
     // Een pauze na "volgende" op het laatste radionummer: dan hoort wat er landt niet midden in die
     // pauze te beginnen.
     if (playing) _wilVerder = false;
+    // Tussendoor ([tussendoor]): de knop van het toestel (oortjes, een telefoontje) bedient wat je nu hoort.
+    if (_proefSpeeltMee) {
+      unawaited(_proef!.playOrPause());
+      return;
+    }
     _player.playOrPause();
   }
+
+  /// Hoort wat je bedient bij [tussendoor]? Dan bedienen afspelen en pauzeren de tweede speler, niet de wachtrij.
+  bool get _proefSpeeltMee => _tussendoor != null && _proef != null;
 
   /// Wat er klinkt, en waar het staat -- niet wat libmpv doet.
   ///
@@ -2947,6 +3067,11 @@ class PlayerStore extends ChangeNotifier
   /// er in de kamer muziek speelt. Zo werd "afspelen" op de afstandsbediening een pauze op de Sonos.
   @override
   void speelAf() {
+    if (_proefSpeeltMee) {
+      if (!_proef!.state.playing) unawaited(_proef!.play());
+      notifyListeners();
+      return;
+    }
     final s = _bijSpeaker;
     if (s != null) {
       if (!s.isPlaying) unawaited(s.playPause());
@@ -2961,6 +3086,11 @@ class PlayerStore extends ChangeNotifier
     // begint zodra de verbinding terug is. En niet zodra er een radionummer landt.
     _stopPcWacht();
     _wilVerder = false;
+    if (_proefSpeeltMee) {
+      if (_proef!.state.playing) unawaited(_proef!.pause());
+      notifyListeners();
+      return;
+    }
     final s = _bijSpeaker;
     if (s != null) {
       if (s.isPlaying) unawaited(s.playPause());
@@ -3383,6 +3513,7 @@ class PlayerStore extends ChangeNotifier
   void dispose() {
     _stilstandTikker?.cancel();
     _player.dispose();
+    _proef?.dispose();
     super.dispose();
   }
 }

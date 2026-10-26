@@ -15,6 +15,7 @@ import '../quality.dart' show depthRateLabel;
 import '../album_facts_resolver.dart';
 import '../enrichment.dart';
 import '../kapot_bestand.dart';
+import '../flac_tags.dart' show readFlacTags;
 import '../library.dart';
 import '../models.dart';
 import '../musicbrainz.dart';
@@ -198,6 +199,9 @@ class LanServer {
         return t == null ? null : (ext: t.ext, rate: t.sampleRate, bits: t.bitsPerSample);
       },
     );
+    // Een klaargezette kopie als nummer (`kandidaat-<id>`): zo speelt een speaker hem tussendoor
+    // ([CastManager.tussendoor]), langs dezelfde /stream/ als elk ander nummer.
+    catalog.extraTrack = _kandidaatAlsNummer;
     cast.bijStand = () =>
         zones.zetSpeakers(cast.laatsteStanden, bekend: cast.bekendeSpeakers, groepen: cast.speakerGroepen);
     zones.speakerRij = cast.rijVan;
@@ -588,6 +592,19 @@ class LanServer {
                 if ('$x'.startsWith('spk:')) '$x'.substring(4),
             ];
             await cast.groepeer(speaker, leden);
+          // Tussendoor beluisteren uit "Klaar om te kiezen" (Saber, 26-10-2026: "als ik luister op de kef op de kef").
+          case 'tussendoor':
+            final tid = '${op['trackId'] ?? ''}';
+            final t = catalog.track(tid);
+            final g = t == null ? null : downloads?.twijfel?.van(t.path);
+            if (t == null || g == null) {
+              return (status: 409, antwoord: {'error': 'Er wacht geen kopie meer voor dit nummer.'});
+            }
+            await cast.tussendoor(speaker, a: tid, b: '$kKandidaatId${g.id}');
+          case 'tussendoorAB':
+            await cast.tussendoorAB(speaker);
+          case 'tussendoorKlaar':
+            await cast.tussendoorKlaar(speaker, hervat: op['hervat'] != false);
           case 'jump':
             await cast.springNaar(speaker, (op['plek'] as num?)?.toInt() ?? 0, trackId: '${op['trackId'] ?? ''}');
           case 'remove':
@@ -2152,6 +2169,28 @@ class LanServer {
       return res.close();
     }
     return serveFile(req, File(g.kandidaat), contentType: mimeForExt(g.ext));
+  }
+
+  /// Een klaargezette kopie als nummer ([kKandidaatId]): het bestand, met de titel van het nummer waar hij voor
+  /// klaarstaat en zijn eigen frequentie en diepte (een Sonos neemt tot 48 kHz: dan zet de stroom om).
+  Track? _kandidaatAlsNummer(String id) {
+    if (!id.startsWith(kKandidaatId)) return null;
+    final g = downloads?.twijfel?.metId(id.substring(kKandidaatId.length));
+    if (g == null) return null;
+    final f = File(g.kandidaat);
+    if (!f.existsSync()) return null;
+    final eigen = library.trackByPath(g.pad);
+    final kop = g.ext == 'flac' ? readFlacTags(f) : null;
+    return Track(
+      path: g.kandidaat,
+      title: eigen?.title ?? 'Klaargezette kopie',
+      artist: eigen?.artist ?? '',
+      album: eigen?.album ?? '',
+      duration: kop?.duration ?? eigen?.duration,
+      isFlac: g.ext == 'flac',
+      sampleRate: kop?.sampleRate ?? 0,
+      bitsPerSample: kop?.bitsPerSample ?? 0,
+    );
   }
 
   /// Vervangen of Weggooien uit het twijfelmenu van een toestel: {trackId, actie: vervang | weg}. Antwoord: {zin}.
