@@ -475,7 +475,8 @@ void main() {
     expect(organize, contains('    herNoemSoort(src.path, naar);'));
     expect(organize, contains('    herNoemSoort(landed, at);'));
     final main = _bron('lib/main.dart');
-    expect(main, contains('              _qualityBadge(_trackQuality(t)),\n              // Studio, cd of vinyl (kopiesoort.dart): alleen bij nieuwe downloads.\n              _soortMerk(t),'));
+    expect(main, contains('              _qualityBadge(_trackQuality(k)),\n              // Studio, cd of vinyl (kopiesoort.dart): alleen bij nieuwe downloads.\n              if (!onder) _soortMerk(t, klinkt: k),'));
+    expect(main, contains('                          _soortMerk(t, klinkt: k, marge: _merkOnderTitel),'), reason: 'op een gsm onder de titel');
     expect(main, contains('        ..._soortRegels(context, [t], heeft: soortVoor(t.path)?.soort),'));
     expect(main, contains('        ..._soortRegels(context, nummers, album: a.title),'));
     expect(main, contains("    final los = actie == 'vervang' && speler.current?.path == t.path ? await speler.laatBestandLos() : null;"));
