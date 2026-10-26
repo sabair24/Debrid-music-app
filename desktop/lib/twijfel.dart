@@ -70,6 +70,11 @@ typedef TwijfelInfo = ({
 /// ook zonder meting (score 0: geen fpcalc), want dan is er niets nagekeken.
 bool misschienAndereOpname(double score) => score < maybeSameRecordingScore;
 
+/// Mag een gevraagde kopie van [soort] meteen blijven, zonder eerst te luisteren? Alleen een cd (Saber, 26-10-2026: "cd
+/// kwaliteit is altijd e"), en alleen als de vingerafdruk zeker dezelfde opname zegt. Studio en vinyl verschillen per
+/// bron; die kies je zelf.
+bool cdMeteenHouden(Kopiesoort soort, double score) => soort == Kopiesoort.cd && !misschienAndereOpname(score);
+
 /// Eén twijfelgeval.
 class Twijfelgeval {
   /// Ondoorzichtig, voor `/kandidaat/<id>.<ext>` en de opdrachten van een toestel.

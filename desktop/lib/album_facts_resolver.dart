@@ -18,6 +18,7 @@ import 'editions.dart';
 import 'fingerprint.dart';
 import 'models.dart';
 import 'musicbrainz.dart';
+import 'release_format.dart' show zonderJapansePersingen;
 import 'settings.dart';
 
 /// Somewhere to write which STEP of a resolve is running. Set once by the warmer.
@@ -135,7 +136,9 @@ Future<AlbumFacts> resolveAlbumFacts(
         // With the tracklists in the browse itself this is the LAST MusicBrainz request for most
         // records: the loop below then finds every pressing already carrying its tracks.
         stap('persingen ophalen voor groep ${g.mbid}…');
-        final all = await mb.editionsOf(g.mbid, tracklists: true);
+        // Zonder de Japanse persingen als er een andere is: ook een kleinere Japanse mag het dan niet worden
+        // ([isJapansePersing]; All Saints, 26-10-2026).
+        final all = zonderJapansePersingen(await mb.editionsOf(g.mbid, tracklists: true), (r) => r.country);
         stap('persingen: ${all.length}');
         final owned = albumTrackCount(album.tracks);
         final counts = [for (final r in all) r.trackCount];

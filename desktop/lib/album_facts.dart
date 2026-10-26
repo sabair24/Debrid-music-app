@@ -61,6 +61,14 @@ const int kAlbumFactsSchema = 2;
 /// 2 — the plus became a space.
 const int kSoundVersion = 2;
 
+/// Welke regel voor het kiezen van de persing een antwoord gaf. Een antwoord met een MusicBrainz-persing van een oudere
+/// regel wordt bij de volgende ronde opnieuw bepaald — en blijft intussen staan, anders dan bij [kAlbumFactsSchema].
+/// MusicBrainz' antwoorden staan in de cache, dus dat kost geen vragen.
+///
+/// 1 — 26-10-2026: nooit een Japanse persing (Saber: "Japans wil ik nooit"). Gemeten in de cache: 24 albums stonden
+///     erop, waaronder All Saints, Off The Wall, Like A Virgin, Toto IV en drie van Survivor.
+const int kPersingKeuze = 1;
+
 /// The name of the file dropped next to an album's music.
 const String kSidecarName = '.debridmusic-album.json';
 
@@ -82,6 +90,7 @@ class AlbumFacts {
     this.failedMs,
     this.networkFailed = false,
     this.heardVersion = 0,
+    this.persingKeuze = kPersingKeuze,
   });
 
   /// The album this belongs to — see album_id.dart. Not artist+title, precisely so that correcting
@@ -146,6 +155,9 @@ class AlbumFacts {
   /// [kAlbumFactsSchema] and the `v6` in the artwork key.
   final int heardVersion;
 
+  /// Met welke regel de persing gekozen werd ([kPersingKeuze]); 0 = van vóór de eerste.
+  final int persingKeuze;
+
   bool get isEmpty => tracklist.isEmpty;
 
   /// Has the album itself changed under these facts?
@@ -173,6 +185,7 @@ class AlbumFacts {
         if (year != null) 'year': year,
         if (failedMs != null) 'failedMs': failedMs,
         if (heardVersion > 0) 'heard': heardVersion,
+        if (persingKeuze > 0) 'persing': persingKeuze,
         if (tracklist.isNotEmpty)
           'tracks': [
             for (final t in tracklist)
@@ -239,6 +252,7 @@ class AlbumFacts {
       // `true` is what the one build that wrote a bool put there. It means "version 1 was tried",
       // and version 1 is exactly the broken one, so reading it as 1 gives those records their turn.
       heardVersion: j['heard'] == true ? 1 : (j['heard'] as num?)?.toInt() ?? 0,
+      persingKeuze: (j['persing'] as num?)?.toInt() ?? 0,
       tracklist: [
         for (final t in (j['tracks'] as List? ?? const []))
           if (t is Map) track(t),
@@ -291,6 +305,8 @@ bool needsResolve(
   // so the hash above cannot see it — and serving the tracklist of the pressing someone just
   // replaced is the one staleness they would certainly notice.
   if (pinnedMbid != null && pinnedMbid.isNotEmpty && known.mbid != pinnedMbid) return true;
+  // Een MusicBrainz-persing die met een oudere regel gekozen werd ([kPersingKeuze]): één keer opnieuw, uit de cache.
+  if ((known.mbid ?? '').isNotEmpty && known.persingKeuze < kPersingKeuze) return true;
   // Idem voor een vastgezette Discogs-persing — maar mét een rem erop.
   //
   // Deze regel stond er kaal, en dat was de helft van een lus. De oplosser vroeg Discogs alleen als

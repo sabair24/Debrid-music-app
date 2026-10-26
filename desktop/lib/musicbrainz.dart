@@ -983,6 +983,9 @@ class MusicBrainzService {
           r
     ];
     out.sort((a, b) {
+      // Nooit een Japanse persing vooraan, ook niet als het de oudste cd is ([isJapansePersing]).
+      final byJapan = (isJapansePersing(a.country) ? 1 : 0).compareTo(isJapansePersing(b.country) ? 1 : 0);
+      if (byJapan != 0) return byJapan;
       // Official beats a bootleg or a promo for describing what the record is.
       final byStatus = ((a.status ?? '') == 'Official' ? 0 : 1)
           .compareTo((b.status ?? '') == 'Official' ? 0 : 1);

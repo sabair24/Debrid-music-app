@@ -925,6 +925,9 @@ class DiscogsService {
   static List<DiscogsVersion> orderByPreference(List<DiscogsVersion> all, {int main = 0}) {
     final out = [...all.where((v) => v.id > 0)];
     out.sort((a, b) {
+      // Nooit een Japanse persing vooraan — ook niet als Discogs haar de hoofdpersing noemt ([isJapansePersing]).
+      final byJapan = (isJapansePersing(a.country) ? 1 : 0).compareTo(isJapansePersing(b.country) ? 1 : 0);
+      if (byJapan != 0) return byJapan;
       // The master's own main release, when it happens to be of this format, is the canonical copy.
       if (main > 0 && (a.id == main) != (b.id == main)) return a.id == main ? -1 : 1;
       // Documented entries first WITHIN a format, but never across one: a documented CD must not
@@ -1026,19 +1029,26 @@ class DiscogsService {
       if (expectedTracks > 0 && masterTracks > 0 && masterTracks < expectedTracks - 2) continue;
       // Ask per format, in the order asked for, and stop at the first that delivers. This is what
       // makes "digital, else CD, else vinyl" true for a record with hundreds of pressings.
-      for (final format in releaseFormatOrder) {
-        final ordered = orderByPreference(await _versions(master, format: format), main: main);
-        stap('  master $master, formaat $format: ${ordered.length} persingen');
-        if (ordered.isEmpty) continue;
-        // Only ever fetch a handful in full: each one is a request out of sixty a minute.
-        for (final v in ordered.take(3)) {
-          final e = await release(v.id, albumYear: masterYear);
-          if (e == null) continue;
-          fallback ??= e;
-          if (masterTracks > 0 && !fitsTrackCount(e.tracklist.length, masterTracks)) continue;
-          if (!v.isDocumented && format != releaseFormatOrder.last)
-            break; // undocumented → try the next format
-          return e;
+      //
+      // Twee rondes: eerst elk formaat zonder Japanse persingen, en pas als dat niets geeft de Japanse
+      // ([isJapansePersing]) — een Japanse cd gaat zo ook niet voor een vinyl uit Europa.
+      final perFormaat = <String, List<DiscogsVersion>>{};
+      for (final japans in const [false, true]) {
+        for (final format in releaseFormatOrder) {
+          final alle = perFormaat[format] ??= orderByPreference(await _versions(master, format: format), main: main);
+          final ordered = [for (final v in alle) if (isJapansePersing(v.country) == japans) v];
+          stap('  master $master, formaat $format${japans ? ' (Japans)' : ''}: ${ordered.length} persingen');
+          if (ordered.isEmpty) continue;
+          // Only ever fetch a handful in full: each one is a request out of sixty a minute.
+          for (final v in ordered.take(3)) {
+            final e = await release(v.id, albumYear: masterYear);
+            if (e == null) continue;
+            fallback ??= e;
+            if (masterTracks > 0 && !fitsTrackCount(e.tracklist.length, masterTracks)) continue;
+            if (!v.isDocumented && format != releaseFormatOrder.last)
+              break; // undocumented → try the next format
+            return e;
+          }
         }
       }
     }

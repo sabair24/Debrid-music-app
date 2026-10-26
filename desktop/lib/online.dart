@@ -5822,8 +5822,10 @@ class DownloadManager extends ChangeNotifier {
   static String _soortSleutel(String pad) => pad.replaceAll('\\', '/').toLowerCase();
 
   /// "Download in studio-kwaliteit / cd-kwaliteit / vinyl" voor [nummers]. Niets wordt vervangen: wat de jacht vindt,
-  /// staat klaar in [twijfelMap] (label "cd klaar") tot je luistert en kiest. Vindt hij niets, dan blijft de vraag
-  /// staan en zoekt hij later opnieuw ([soortvraagWacht]). Geeft de zin voor op het scherm.
+  /// staat klaar in [twijfelMap] (label "studio klaar") tot je luistert en kiest — behalve een cd, die meteen blijft
+  /// ([_houdCdMeteen]). Vindt hij niets, dan blijft de vraag staan en zoekt hij later opnieuw ([soortvraagWacht]). Een
+  /// nummer dat die soort al heeft, als nummer of als versie ([heeftSoortAl]), slaat hij over. Geeft de zin voor op het
+  /// scherm.
   Future<String> vraagSoort(List<Track> nummers, Kopiesoort soort,
       {String? album, TrackTags Function(Track)? gezag}) async {
     final vragen = soortvragen;
@@ -5833,10 +5835,14 @@ class DownloadManager extends ChangeNotifier {
     if (te.isEmpty) return 'Geen nummer om voor te zoeken';
     final nu = DateTime.now().millisecondsSinceEpoch;
     final nieuw = <Soortvraag>[];
-    var klaar = 0;
+    var klaar = 0, al = 0;
     for (final t in te) {
       if (lijst.van(t.path)?.soort == soort) {
         klaar++;
+        continue;
+      }
+      if (heeftSoortAl(t.path, soort)) {
+        al++;
         continue;
       }
       final v = Soortvraag(
@@ -5866,10 +5872,28 @@ class DownloadManager extends ChangeNotifier {
         : '${nieuw.length} nummers${album == null ? '' : ' van "$album"'}: ${soort.voluit} gevraagd');
     if (nieuw.isNotEmpty) unawaited(_soortRonde(nieuw, album: nieuw.length > 1 ? album : null));
     _planSoortKlok();
+    if (nieuw.isEmpty && klaar == 0) {
+      return al == 1 ? 'Dit nummer heeft al ${soort.voluit}' : 'Deze $al nummers hebben al ${soort.voluit}';
+    }
     if (nieuw.isEmpty) return klaar == 1 ? 'Er staat al een ${soort.naam}-kopie klaar' : 'Er staan al ${soort.naam}-kopieën klaar';
     final wat = nieuw.length == 1 ? '"${nieuw.single.titel}"' : '${nieuw.length} nummers';
-    return 'Zoekt ${soort.voluit} voor $wat. Vindt hij er een, dan staat er "${soort.naam} klaar" bij het nummer — '
+    final over = al == 0 ? '' : ' ($al ${al == 1 ? 'heeft' : 'hebben'} het al)';
+    if (soort == Kopiesoort.cd) {
+      return 'Zoekt cd-kwaliteit voor $wat$over. Wat hij vindt, bewaart hij meteen — je hoeft niets te kiezen.';
+    }
+    return 'Zoekt ${soort.voluit} voor $wat$over. Vindt hij er een, dan staat er "${soort.naam} klaar" bij het nummer — '
         'je vervangt pas als jij kiest.';
+  }
+
+  /// Heeft [pad] soort [soort] al — zelf, of als versie ernaast? Dan valt er niets te zoeken (Saber, 26-10-2026, All
+  /// Saints: "Hele plaat in cd-kwaliteit" gaf een tweede cd naast de cd die er al lag). Een nummer dat bewezen nep is,
+  /// heeft de soort van zijn kop niet echt: dat zoekt hij wel.
+  @visibleForTesting
+  bool heeftSoortAl(String pad, Kopiesoort soort) {
+    if (versies.versiesVan(pad).any((x) => x.soort == soort)) return true;
+    if (bewezenNep(pad)) return false;
+    final eigen = soortVoor(pad)?.soort ?? versies.groep(pad)?.soort ?? soortVanBestand(pad, pad);
+    return eigen == soort;
   }
 
   /// De vraag voor [pad] intrekken. Een kopie die al klaarstaat, blijft staan tot je kiest.
@@ -5900,6 +5924,21 @@ class DownloadManager extends ChangeNotifier {
       _log.line('"${v.artiest} — ${v.titel}": vraag om ${v.soort.voluit} vervallen — het nummer staat er niet meer');
     }
     if (weg.isNotEmpty) await vragen.bewaar();
+    // Een cd die nog klaarstaat van vóór "cd meteen" ([_houdCdMeteen]): nu houden, zoals een nieuwe. Op 26-10-2026
+    // stonden er acht van Adele's 30.
+    final cds = [
+      for (final g in lijst.alle)
+        if (g.soort == Kopiesoort.cd && cdMeteenHouden(Kopiesoort.cd, g.score) && !_soortBezig.contains(_soortSleutel(g.pad)))
+          g
+    ];
+    var gehouden = 0;
+    for (final g in cds) {
+      final gezag = g.gezag == null ? null : TrackTags.fromJson(g.gezag!);
+      if (await _houdCdMeteen(g.pad, gezag == null ? baseName(g.pad) : '${gezag.artist} — ${gezag.title}') != null) {
+        gehouden++;
+      }
+    }
+    if (gehouden > 0) _meldKlaar(gehouden == 1 ? 'Een klaargezette cd is bewaard' : '$gehouden klaargezette cd\'s zijn bewaard');
     final te = [
       for (final v in vragen.alle)
         if (lijst.van(v.pad)?.soort != v.soort && v.aanDeBeurt(nu) && !_soortBezig.contains(_soortSleutel(v.pad))) v
@@ -6185,10 +6224,35 @@ class DownloadManager extends ChangeNotifier {
     final ok = await _zetKlaar(v, staged, bron, bronpad, score ?? 0);
     if (ok) {
       final let = misschienAndereOpname(score ?? 0) ? ' — misschien een andere opname' : '';
+      // Een cd meteen houden — tenzij de vingerafdruk twijfelt: dan eerst luisteren.
+      if (cdMeteenHouden(v.soort, score ?? 0)) {
+        if (await _houdCdMeteen(v.pad, naam) case final zin?) {
+          _meldKlaar(zin);
+          return ok;
+        }
+      }
       _meldKlaar('${v.soort.naam} klaar: $naam$let');
     }
     return ok;
   }
+
+  /// De cd die je vroeg meteen houden (Saber, 26-10-2026: "als ik kies voor cd kwaliteit downloaden mag da direct
+  /// gebeuren, want cd kwaliteit is altijd e"): als versie naast je nummer, of in zijn plaats als je nummer niet
+  /// verliesvrij is. Je standaard blijft. Null als het nu niet lukt (het nummer speelt): dan staat hij klaar om te
+  /// kiezen, zoals voorheen.
+  Future<String?> _houdCdMeteen(String pad, String naam) async {
+    final zin = await vervangDoorTwijfel(pad, alsVersie: isVerliesvrij(soortVan(pad)));
+    if (twijfel?.van(pad) != null) {
+      _log.line('"$naam": cd niet meteen gehouden ($zin) — staat klaar om te kiezen');
+      return null;
+    }
+    _log.line('"$naam": cd meteen gehouden — $zin');
+    // Zonder het woord "klaar": dan geen knop Kiezen in de melding, want er valt niets te kiezen.
+    return 'cd binnen: $naam';
+  }
+
+  @visibleForTesting
+  Future<String?> houdCdMeteenVoorToets(Soortvraag v) => _houdCdMeteen(v.pad, '${v.artiest} — ${v.titel}');
 
   /// "je nummer", of welke versie je al hebt, als [kandidaat] sample voor sample een kopie is die er bij [anker] al
   /// ligt ([zelfdeSamples]); anders null.

@@ -44,11 +44,13 @@ void main() {
   });
 
   group('orderByPreference', () {
+    // De cd's hieronder waren Japans (SICP-6425 is de Japanse cd van 30). Sinds 26-10-2026 staat een Japanse persing
+    // altijd achteraan (Saber: "Japans wil ik nooit"; cd_meteen_en_japan_test.dart), dus hier een Britse.
     test('CD leads and digital trails, whatever order they arrive in', () {
       final out = MusicBrainzService.orderByPreference([
         _r('Digital Media', country: 'XW', date: '2021'),
         _r('12" Vinyl', country: 'US', catno: 'B0034', date: '2021'),
-        _r('CD', country: 'JP', catno: 'SICP-6425', date: '2021'),
+        _r('CD', country: 'GB', catno: 'SICP-6425', date: '2021'),
       ]);
       expect(out.map((r) => r.major).toList(), ['CD', 'Vinyl', 'File']);
     });
@@ -56,7 +58,7 @@ void main() {
     test('a documented CD is never overtaken by an undocumented one', () {
       final out = MusicBrainzService.orderByPreference([
         _r('CD', date: '2021'), // no country, no label, no catalogue number
-        _r('CD', country: 'JP', catno: 'SICP-6425', date: '2021'),
+        _r('CD', country: 'GB', catno: 'SICP-6425', date: '2021'),
       ]);
       expect(out.first.catno, 'SICP-6425');
     });

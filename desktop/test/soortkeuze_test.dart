@@ -422,7 +422,8 @@ void main() {
           duration: const Duration(seconds: 228));
       final zin = await d.vraagSoort([t], Kopiesoort.cd);
       expect(zin, contains('Zoekt cd-kwaliteit voor "Nightvision"'));
-      expect(zin, contains('je vervangt pas als jij kiest'));
+      // Sinds 26-10-2026 blijft een cd meteen (cd_meteen_en_japan_test.dart); studio en vinyl wachten op je keuze.
+      expect(zin, contains('Wat hij vindt, bewaart hij meteen'));
       expect(d.soortvragen!.van(mijn.path)?.soort, Kopiesoort.cd);
       for (var i = 0; i < 50 && d.klaarMelding.value == null; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 20));
