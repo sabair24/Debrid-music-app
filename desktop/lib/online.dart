@@ -41,6 +41,7 @@ import 'wavpack_kop.dart' show readWvKop;
 import 'tidal.dart' show TidalTrack;
 import 'tidal_beter.dart' show TidalBeterUitslag, TidalMinstens, tidalMinstens;
 import 'torrent_hires.dart';
+import 'torrent_beter.dart' show TorrentJacht;
 import 'twijfel.dart';
 import 'prullenbak.dart' show heeftPrullenbak, naarPrullenbak;
 import 'cachesleutel.dart' show fnv1a;
@@ -3957,14 +3958,16 @@ class DownloadManager extends ChangeNotifier {
   /// zelf, verliesvrij (hi-res als er een nummer al cd-kwaliteit is), losse nummers, digitaal vóór vinyl. Per nummer
   /// één bestand uit de torrent, in een eigen keuringsmap, en dan de keuring van een wens ([_keurVoorWens]); wat
   /// verliest gaat naar `_dubbel`. Vervangen pas als het nummer niet meer speelt. Geeft terug hoeveel nummers er
-  /// vervangen werden.
-  Future<int> _zoekHiresInTorrents(List<Track> nummers, String album, TrackTags Function(Track)? gezag) async {
-    if (!online.torboxReady || nummers.isEmpty) return 0;
+  /// vervangen werden, en voor de torrent-ronde (torrent_beter.dart) of het aan TorBox lag.
+  Future<TorrentJacht> _zoekHiresInTorrents(List<Track> nummers, String album, TrackTags Function(Track)? gezag) async {
+    if (!online.torboxReady || nummers.isEmpty) return (vervangen: 0, bruikbaar: 0, storing: true, alBezig: false);
     final artiest = nummers.first.artist;
     final sleutel = '${normKey(artiest)}|${normKey(album)}';
-    if (!_torrentJacht.add(sleutel)) return 0;
+    if (!_torrentJacht.add(sleutel)) return (vervangen: 0, bruikbaar: 0, storing: false, alBezig: true);
     final plaat = '"$artiest — $album"';
-    var vervangen = 0;
+    var vervangen = 0, bruikbaar = 0;
+    // Torrents die TorBox al had maar niet opende: gaan ze allemaal niet open, dan hapert TorBox zelf.
+    var klaarDicht = 0, klaarOpen = 0;
     try {
       bool verdacht(Track t) {
         final o = gemeten(t.path);
@@ -3977,7 +3980,7 @@ class DownloadManager extends ChangeNotifier {
       };
       if (eis.isEmpty) {
         _log.line('$plaat: torrents — niets te winnen, alles is al hi-res');
-        return 0;
+        return (vervangen: 0, bruikbaar: 0, storing: false, alBezig: false);
       }
       final hiresNodig = eis.values.contains(TidalMinstens.hires);
       final treffers = await online.search(albumZoekvraag(artiest, album, jaar: nummers.first.year));
@@ -3992,6 +3995,7 @@ class DownloadManager extends ChangeNotifier {
         if (open.isEmpty) break;
         if (r.cached ? klaarGeprobeerd >= kTorrentHiresHoogstens : nietKlaarGeprobeerd >= kTorrentHiresNietKlaar) continue;
         r.cached ? klaarGeprobeerd++ : nietKlaarGeprobeerd++;
+        bruikbaar++;
         final hires = hiresVolgensNaam(r.name);
         final TbTorrent item;
         final t0 = DateTime.now();
@@ -4001,8 +4005,10 @@ class DownloadManager extends ChangeNotifier {
           item = await online._pollReady(id, hash, patient: !r.cached);
         } catch (e) {
           _log.line('   torrent "${r.name}": ${r.cached ? "niet te openen" : "niet binnen"} bij TorBox — $e');
+          if (r.cached) klaarDicht++;
           continue;
         }
+        if (r.cached) klaarOpen++;
         if (!r.cached) {
           _log.line('   torrent "${r.name}": bij TorBox binnen na ${_kort(DateTime.now().difference(t0))} '
               '(${r.seeders} seeders)');
@@ -4040,14 +4046,19 @@ class DownloadManager extends ChangeNotifier {
           await onLibraryChanged();
         } catch (_) {}
       }
-      return vervangen;
+      return (vervangen: vervangen, bruikbaar: bruikbaar, storing: klaarDicht > 0 && klaarOpen == 0, alBezig: false);
     } catch (e) {
       _log.line('$plaat: torrents — $e');
-      return vervangen;
+      return (vervangen: vervangen, bruikbaar: bruikbaar, storing: true, alBezig: false);
     } finally {
       _torrentJacht.remove(sleutel);
     }
   }
+
+  /// De torrentjacht voor de ronde over de hele bibliotheek (torrent_beter.dart): [nummers] zijn de nummers van één
+  /// plaat die beter kunnen. Dezelfde jacht als bij "Zoek hi-res", met het gezag van de bibliotheek ([gezagVoor]).
+  Future<TorrentJacht> zoekBeterInTorrents(List<Track> nummers, String album) =>
+      _zoekHiresInTorrents(nummers, album, gezagVoor);
 
   /// Is [t] intussen vervangen: staat het bestand er niet meer (een mp3 die nu een FLAC is), of is een FLAC die
   /// hi-res moest worden het nu wel en bij de start nog niet ([eis] = [TidalMinstens.hires])? Het bestand zelf is de

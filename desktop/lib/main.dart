@@ -192,6 +192,7 @@ import 'soulseek.dart';
 import 'tidal.dart';
 import 'tidaler.dart';
 import 'tidal_beter.dart';
+import 'torrent_beter.dart';
 import 'vinyl.dart' show isVinylRip;
 import 'twijfel.dart';
 import 'kopiesoort.dart';
@@ -2390,6 +2391,35 @@ Future<void> main() async {
       unawaited(tidalBeter.start().then(
           (_) => startLog.line('TIDAL beter: ronde gestart (eerste na 5 min, dan één per 3 min)'),
           onError: (Object e) => startLog.line('TIDAL beter: MISLUKT: $e')));
+    }
+    // En torrents voor de hele bibliotheek, op volle snelheid (Saber, 26-10-2026: "torrent mag veel sneller e, daar is
+    // er nie echt controle e, dus die mag vollebak gaan"). Nooit bij halen of ▶; zie torrent_beter.dart.
+    if (mode.owner && !Platform.environment.containsKey('FLUTTER_TEST')) {
+      final torrentBeter = TorrentBeterRonde(
+        geheugen: TorrentBeterGeheugen('$appDir${Platform.pathSeparator}torrent_beter.json'),
+        platen: () => [
+          for (final a in library.albums)
+            if (!a.isSingle) (artiest: a.artist, album: a.title, nummers: a.tracks)
+        ],
+        jaag: downloads.zoekBeterInTorrents,
+        minstens: (t) => tidalMinstens(t,
+            verdacht: switch (gemeten(t.path)?.band) {
+              Bandbreedte.vermoedelijk || Bandbreedte.afgekapt => true,
+              _ => false,
+            }),
+        // Zoals bij TIDAL, en een nummer waarvoor al een kopie op je keuze wacht.
+        overslaan: (t) =>
+            isVasteKeuze(t.path) ||
+            radio.doorDezeRadio(t.path) ||
+            (gekozenSoort(t.path) ?? Kopiesoort.studio) != Kopiesoort.studio ||
+            twijfelVoor(t.path) != null,
+        kan: () => online.torboxReady,
+        log: downloads.logRegel,
+      );
+      unawaited(torrentBeter.start().then(
+          (_) => startLog.line('torrents beter: ronde gestart (eerste na 8 min, dan plaat na plaat, '
+              '$kTorrentBeterTegelijk tegelijk)'),
+          onError: (Object e) => startLog.line('torrents beter: MISLUKT: $e')));
     }
     // De Shield krijgt per nummer de meting en de plaatwaarde mee, met de stand van deze pc.
     CastManager.luidheidOpgave = (t, rij, plek) {
