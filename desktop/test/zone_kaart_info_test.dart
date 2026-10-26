@@ -41,6 +41,13 @@ void main() {
       expect(volgendInRij(const [], 0, 'off'), '');
       expect(volgendInRij(const ['a'], 5, 'off'), '', reason: 'een plek buiten de rij');
     });
+
+    test('wat "volgende" opent: één verder, ook bij herhalen van één; aan het eind niets (een nieuwe trekking)', () {
+      expect(volgendeOpdracht(const ['a', 'b', 'c'], 0), 'b');
+      expect(volgendeOpdracht(const ['a', 'b', 'c'], 2), '');
+      expect(volgendeOpdracht(const ['a', 'b'], -1), '');
+      expect(volgendeOpdracht(const [], 0), '');
+    });
   });
 
   group('de bron', () {
@@ -120,6 +127,7 @@ void main() {
       ], deviceId: 'gsm-1', deviceName: 'Galaxy');
       final z = reg.lijst().firstWhere((x) => x.id == 'dev:gsm-1');
       expect(z.hierna, 'Nummer r2 — Bryan Adams');
+      expect(z.volgendeId, 'r2', reason: 'zo staat het op het scherm van wie bedient vóór de zone het meldt');
       expect((z.bronSoort, z.bronNaam), ('album', 'Reckless'));
       expect(z.kwaliteit, 'FLAC 24/96');
       expect(z.omgezet, '16/44.1');
@@ -136,6 +144,7 @@ void main() {
       ], deviceId: 'gsm-1', deviceName: 'Galaxy');
       final z = reg.lijst().firstWhere((x) => x.id == 'dev:gsm-1');
       expect(z.hierna, 'Summer of 69 — Bryan Adams');
+      expect(z.volgendeId, 's1');
       expect((z.bronSoort, z.bronNaam), ('radio', 'Bryan Adams'));
     });
 
@@ -158,6 +167,7 @@ void main() {
       ], bekend: [(id: 'amp', naam: 'Sonos Amp', sonos: true)]);
       final z = reg.lijst().firstWhere((x) => x.id == 'spk:amp');
       expect(z.hierna, 'Nummer r2 — Bryan Adams');
+      expect(z.volgendeId, 'r2');
       expect((z.bronSoort, z.bronNaam), ('album', 'Reckless'));
       expect(z.omgezet, '24/48');
     });
