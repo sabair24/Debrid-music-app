@@ -229,4 +229,24 @@ void main() {
     expect(t.year, 1996);
     expect(t.duration, isNotNull, reason: 'STREAMINFO came through intact');
   });
+
+  // Little Mix, "No More Sad Songs" (26-10-2026): de Soulseek-kopie van een Now-verzamelaar begon met een ID3-blok, de
+  // schrijver weigerde, en het bestand hield "Now That's What I Call Music! 97" in de map van Glory Days.
+  test('een ID3-blok vóór de FLAC: de tags worden geschreven, het blok en de audio blijven byte voor byte', () {
+    // ID3v2.3, grootte 20 (synchsafe), twintig bytes inhoud.
+    final id3 = [0x49, 0x44, 0x33, 3, 0, 0, 0, 0, 0, 20, ...List.filled(20, 0x41)];
+    final f = _write(Uint8List.fromList([
+      ...id3,
+      ..._flac(comments: ["ALBUM=Now That's What I Call Music! 97", 'ARTIST=Little Mix Feat. Machine Gun Kelly']),
+    ]));
+    final voor = f.readAsBytesSync();
+    expect(writeFlacFields(f, {'ALBUM': 'Glory Days (Expanded Edition)', 'ARTIST': 'Little Mix'}), isTrue);
+    final na = f.readAsBytesSync();
+    expect(na.sublist(0, id3.length), id3, reason: 'het ID3-blok blijft staan');
+    expect(String.fromCharCodes(na.sublist(id3.length, id3.length + 4)), 'fLaC');
+    expect(na.sublist(na.length - 4096), voor.sublist(voor.length - 4096), reason: 'de audio is onaangeroerd');
+    final t = readFlacTags(f)!;
+    expect(t.album, 'Glory Days (Expanded Edition)');
+    expect(t.artist, 'Little Mix');
+  });
 }
