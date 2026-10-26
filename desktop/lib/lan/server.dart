@@ -224,6 +224,7 @@ class LanServer {
     cast.bijStand = () =>
         zones.zetSpeakers(cast.laatsteStanden, bekend: cast.bekendeSpeakers, groepen: cast.speakerGroepen);
     zones.speakerRij = cast.rijVan;
+    zones.versieOpSpeaker = cast.versieVan;
     // Zet de pc voor deze speaker om (een Sonos neemt tot 48 kHz)? Dezelfde som als bij het sturen ([castGrenzen]).
     zones.omzettingOpSpeaker = (speaker, trackId) {
       final t = catalog.track(trackId);

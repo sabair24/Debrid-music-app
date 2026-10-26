@@ -427,7 +427,8 @@ void main() {
       expect(main, contains('s.bijZoneOpdracht = zoneUitvoerder.voerUit;'));
       expect(main, contains('opOpdracht: (op) => unawaited(zoneUitvoerder.voerUit(op)),'));
       expect(main, contains("'volume': player.volume.round(),"));
-      expect(main, contains('volume: player.volume.round(),\n          alleenZone: m.alleenZone);'));
+      expect(main,
+          contains("volume: player.volume.round(),\n          alleenZone: m.alleenZone,\n          versiePad: player.speelPad ?? '');"));
       expect(main, contains("if (m.alleenZone) 'alleenZone': true,"));
       expect(main, contains('verplaatst: (_) => verder.isVerplaatst(),'));
       expect(lees('lib/settings.dart'), contains("'gekozen_zone': gekozenZone,"));

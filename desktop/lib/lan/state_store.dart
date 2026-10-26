@@ -60,7 +60,12 @@ class PlaybackProgress {
     this.volume = -1,
     this.stroom,
     this.volgend = '',
+    this.versie = '',
   });
+
+  /// De versie die klinkt (versies.dart), als dat niet het nummer zelf is: haar id op de pc. Leeg zonder. Voor de
+  /// kwaliteit op de zonekaart — anders stond daar "16/44.1" terwijl de vinylrip van 24/192 speelde (26-10-2026).
+  final String versie;
 
   /// Bij een radio: het eerstvolgende nummer (id op de pc). De rij noemt dan alleen het spelende nummer. Leeg zonder.
   final String volgend;
@@ -110,6 +115,7 @@ class PlaybackProgress {
         if (volume >= 0) 'volume': volume,
         if (stroom != null) 'stroom': stroom,
         if (volgend.isNotEmpty) 'volgend': volgend,
+        if (versie.isNotEmpty) 'versie': versie,
       };
 
   static PlaybackProgress fromJson(Map<String, dynamic> m) => PlaybackProgress(
@@ -128,6 +134,7 @@ class PlaybackProgress {
         volume: (m['volume'] as num?)?.toInt() ?? -1,
         stroom: (m['stroom'] as Map?)?.cast<String, dynamic>(),
         volgend: '${m['volgend'] ?? ''}',
+        versie: '${m['versie'] ?? ''}',
       );
 }
 
@@ -454,6 +461,7 @@ class LanStateStore {
             volume: (op['volume'] as num?)?.toInt() ?? -1,
             stroom: (op['stroom'] as Map?)?.cast<String, dynamic>(),
             volgend: '${op['volgend'] ?? ''}',
+            versie: '${op['versie'] ?? ''}',
           );
           // Per toestel eerst: ook een melding die achter de laatste van een ANDER toestel valt, is
           // voor zijn eigen zone nieuw. Alleen een oudere van hetzelfde toestel valt weg.

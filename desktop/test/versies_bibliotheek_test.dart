@@ -158,6 +158,7 @@ void main() {
     expect(gsm.speelPadVoor(t.path), vs.last.track.path, reason: 'de keuze van de pc');
     expect(gsm.speelPadVoor(t.path), contains('/stream/'));
     expect(gsm.trackByPath(vs.last.track.path)?.sampleRate, 96000);
+    expect(soortVoor(vs.last.track.path)?.soort, Kopiesoort.vinyl, reason: 'het label naast de kwaliteit in Nu speelt');
     expect(gsm.nieuweVersies().single.label, 'vinyl LP 1996');
   });
 

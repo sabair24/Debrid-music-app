@@ -1767,7 +1767,8 @@ Future<void> main() async {
           overname: m.overname ?? '',
           radio: player.radioMode ? {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam} : null,
           volume: player.volume.round(),
-          alleenZone: m.alleenZone);
+          alleenZone: m.alleenZone,
+          versiePad: player.speelPad ?? '');
     };
     // De zones van de pc staan in zijn eigen server; die kan opnieuw opgezet worden (andere poort,
     // andere instellingen), dan de nieuwe volgen.
@@ -2109,6 +2110,8 @@ Future<void> main() async {
               if (player.stroomGrens case final g?) 'stroom': {'rate': g.rate, 'bits': g.bits},
               // Bij een radio staat alleen het spelende nummer in de rij: wat erna komt, apart ("Hierna" op de zonekaart).
               if (player.radioVolgend case final v?) 'volgend': library.gedeeldId(v.path) ?? '',
+              // De versie die klinkt (versies.dart), voor de kwaliteit op de zonekaart.
+              if (player.speelPad case final v? when v != track.path) 'versie': library.gedeeldId(v) ?? '',
               if (m.overname != null) 'overname': m.overname,
               if (player.radioMode) 'radio': {'artiest': radio.zaadArtiest ?? '', 'naam': radio.naam},
               // Na een overname alleen voor de zonelijst (zie [VerderLuisteren.meldNu]).
@@ -18943,13 +18946,21 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                   eersteRondje: gestapeld ? null : _eersteRondje,
                   alNoemd: gestapeld ? kopNamen : null,
                 ),
+          // Van wat er KLINKT (versies.dart): gezien op de Shield (26-10-2026) stond er "cd · 16/44.1" terwijl de vinylrip
+          // van 24/192 speelde.
           echtheid: gestapeld || t == null
               ? null
-              : Row(mainAxisSize: MainAxisSize.min, children: [_echtheidMerk(t), _soortMerk(t)]),
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [_echtheidMerk(_klinktAls(context, t)), _soortMerk(_klinktAls(context, t))]),
           // Wat je NU hoort, en niet wat er op de schijf van de pc staat. Zie [_stroomKwaliteit]:
           // onderweg stuurt je pc een kleinere versie, en zolang de badge het bestand toonde was
           // er geen enkele manier om te zien dát dat gebeurde. Gestapeld staat hij boven de afspeelbalk.
-          kwaliteit: !gestapeld && t != null && t.sizeBytes > 0 ? _qualityBadge(_stroomKwaliteit(p, t)) : null,
+          // Naast elkaar ook een knop naar het kwaliteitsblad met de versies (pc, Mac, iPad liggend); op een tv niet — daar
+          // geen extra halte in de rij, en de versies staan onder omhoog/omlaag op de hoes en onder Meer.
+          kwaliteit: !gestapeld && t != null && t.sizeBytes > 0
+              ? (isTv ? _qualityBadge(_stroomKwaliteit(p, _klinktAls(context, t))) : _kwaliteitKnop(context, p, t, cast))
+              : null,
           merk: gestapeld || t == null ? null : _luidheidMerk(context, p, t, cast),
         ),
       ),
@@ -19004,7 +19015,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
           // de volumezin zelf staat daar en niet meer hier, en de streamknop staat ernaast in plaats van in
           // de bedieningsrij (Saber, 20-10-2026: "playbar is te vol zo").
           child: KwaliteitsRegel(
-            echtheid: Row(mainAxisSize: MainAxisSize.min, children: [_echtheidMerk(t), _soortMerk(t)]),
+            echtheid: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [_echtheidMerk(_klinktAls(context, t)), _soortMerk(_klinktAls(context, t))]),
             kwaliteit: t.sizeBytes > 0 ? _kwaliteitKnop(context, p, t, cast) : null,
             naast: const _SpeakerButton(iconSize: 22),
           ),
@@ -19951,12 +19964,15 @@ class _ToestelVerderBron implements VerderBron {
 
   final Map<String, Track> _nummers = {};
   int _idsVoor = -1;
+  int _idsRev = -1;
 
   @override
   Track? nummer(String id) {
     final tracks = library.tracks;
-    if (_idsVoor != tracks.length) {
+    // Ook na elke nieuwe catalogus (zie `LanSharing.nummerVoorId`): evenveel nummers is niet dezelfde nummers.
+    if (_idsVoor != tracks.length || _idsRev != library.metaRev) {
       _idsVoor = tracks.length;
+      _idsRev = library.metaRev;
       _nummers
         ..clear()
         ..addEntries([

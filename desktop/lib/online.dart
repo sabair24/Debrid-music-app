@@ -52,7 +52,7 @@ import 'luidheid_veger.dart' show meetLuidheid;
 import 'soortjacht.dart';
 import 'vinyl.dart' show isVinylRip, vinylAchteraan;
 import 'versie_opbergen.dart';
-import 'versies.dart' show VersieBereik, versieLabel, versieMapLabel, versies;
+import 'versies.dart' show VersieBereik, versieLabel, versieMapLabel, versieSleutel, versies;
 import 'wav_naar_flac.dart' show wavNaarFlac;
 import 'tidaler.dart' show Tidaler, haalVanTidal, kTidalRadioPerUur, kiesTidalTreffers, zoekOpTidal;
 import 'torbox_stand.dart';
@@ -2350,13 +2350,24 @@ class DownloadManager extends ChangeNotifier {
     final naam = gezag == null ? baseName(pad) : '${gezag.artist} — ${gezag.title}';
     var plan = versieplanVoor(f, pad, g.bronpad ?? g.bron);
     if (plan.soort == null) return 'Deze kopie is niet verliesvrij — als versie bewaren kan niet';
-    // Dezelfde versie als je nummer of als een versie die er al is (een twijfel): jij koos bewaren, dus apart.
+    // Dezelfde versie als je nummer of als een versie die er al is (een twijfel): jij koos bewaren, dus apart. "andere
+    // kopie" alleen als ze anders precies hetzelfde zouden heten (gezien 26-10-2026: "Vinyl · LP 2001 andere kopie" naast
+    // een kale "Vinyl" — daar was "LP 2001" al genoeg).
     if (plan.besluit == Versiebesluit.gewoon || plan.besluit == Versiebesluit.vervangVersie) {
+      final bezet = {
+        if (plan.ankerSoort != null) versieSleutel(plan.ankerSoort!, plan.ankerPersing),
+        for (final v in versies.versiesVan(pad)) v.sleutel,
+      };
+      final botst = bezet.contains(versieSleutel(plan.soort!, plan.persing));
       plan = Versieplan(
           besluit: Versiebesluit.nieuweVersie,
           anker: pad,
           soort: plan.soort,
-          persing: plan.persing.isEmpty ? 'andere kopie' : '${plan.persing} andere kopie',
+          persing: !botst
+              ? plan.persing
+              : plan.persing.isEmpty
+                  ? 'andere kopie'
+                  : '${plan.persing} andere kopie',
           bron: plan.bron,
           ankerSoort: plan.ankerSoort,
           ankerPersing: plan.ankerPersing);

@@ -161,7 +161,9 @@ void main() {
     });
 
     test('kwaliteit en volume uit de naamrij, naar boven de afspeelbalk', () {
-      expect(bron, contains('kwaliteit: !gestapeld && t != null && t.sizeBytes > 0 ? _qualityBadge(_stroomKwaliteit(p, t)) : null,'));
+      // Sinds 26-10-2026 (versies): de kwaliteit van wat klinkt, en naast elkaar een knop (niet op een tv).
+      expect(bron, contains('          kwaliteit: !gestapeld && t != null && t.sizeBytes > 0\n'
+          '              ? (isTv ? _qualityBadge(_stroomKwaliteit(p, _klinktAls(context, t))) : _kwaliteitKnop(context, p, t, cast))\n'));
       expect(bron, contains('merk: gestapeld || t == null ? null : _luidheidMerk(context, p, t, cast),'));
       final regel = bron.indexOf("key: const ValueKey('np-kwaliteitsregel'),");
       final balk = bron.indexOf('Text(_fmt(position), style: TextStyle(color: _muted, fontSize: 12)),');
