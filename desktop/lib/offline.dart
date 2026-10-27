@@ -242,6 +242,25 @@ class OfflineStore extends ChangeNotifier {
   /// Hoeveel er misgingen en nog op een tweede poging wachten.
   int get mislukt => _jobs.values.where((j) => !j.bezig).length;
 
+  /// Mag er nu opgehaald worden? Null = altijd. Voor "Offline bewaren": alleen via wifi (Saber, 27-10-2026) — op
+  /// mobiele data wacht de rij, ook midden in een nummer (het halve bestand blijft staan en gaat later verder), tot
+  /// [verder] zegt dat het weer mag. Het vooruithalen heeft dit niet: dat bestaat juist voor mobiel.
+  bool Function()? magOphalen;
+
+  /// De rij staat stil omdat [magOphalen] nee zei.
+  bool get wachtOpWifi => _wachtOpWifi && _wachtrij.isNotEmpty;
+  bool _wachtOpWifi = false;
+
+  /// Het netwerk veranderde: mag het weer, dan loopt de rij verder.
+  void verder() {
+    if (_wachtrij.isEmpty || !(magOphalen?.call() ?? true)) return;
+    _wachtOpWifi = false;
+    notifyListeners();
+    unawaited(_pomp());
+  }
+
+  bool get _magNu => magOphalen?.call() ?? true;
+
   /// Zet deze nummers op het toestel. Keert meteen terug; het ophalen loopt door.
   ///
   /// Eén tegelijk, net als voorheen: een telefoonradio wordt er niet sneller van om vijf bestanden
@@ -268,6 +287,12 @@ class OfflineStore extends ChangeNotifier {
     _pompt = true;
     try {
       while (_wachtrij.isNotEmpty) {
+        if (!_magNu) {
+          _wachtOpWifi = true;
+          notifyListeners();
+          break;
+        }
+        _wachtOpWifi = false;
         final r = _wachtrij.removeAt(0);
         // Nooit gooien: één nummer dat niet lukt mag de rest van de plaat niet meenemen.
         await download(
@@ -461,7 +486,7 @@ class OfflineStore extends ChangeNotifier {
     _cancelled.remove(libraryPath);
     notifyListeners();
 
-    final target = _fileFor(libraryPath, _extVan(libraryPath));
+    var target = _fileFor(libraryPath, _extVan(libraryPath));
     final temp = _deelFor(libraryPath);
 
     // Held outside the try so the failure path can close it. A connection that drops mid-stream
@@ -482,6 +507,10 @@ class OfflineStore extends ChangeNotifier {
       final adres = url ?? adresVoor?.call(libraryPath);
       if (adres == null || isVastePcNaam(adres)) {
         throw const HttpException('geen verbinding met de pc — probeer het zo opnieuw');
+      }
+      // Omgezet (cd-kwaliteit, "Offline bewaren in"): de pc stuurt dan FLAC, ook voor een APE of WavPack.
+      if (grensUitUrl(adres) != null && _extVan(libraryPath).toLowerCase() != 'flac') {
+        target = _fileFor(libraryPath, 'flac');
       }
       // De sleutel uit het adres en in de kop (stap 5 van "verbinden zoals Roon ARC"): het adres komt van
       // de speler, die hem voor mpv in het adres zet; dit verzoek kan een kop zetten, en een adres met een
@@ -540,6 +569,18 @@ class OfflineStore extends ChangeNotifier {
           sink = null;
           await _gooiDeelWeg(libraryPath);
           _jobs.remove(libraryPath);
+          notifyListeners();
+          return false;
+        }
+        // Van wifi naar mobiel midden in een nummer: stoppen, het halve bestand laten staan, en vooraan terug in de rij.
+        if (!_magNu) {
+          await out.close();
+          sink = null;
+          job
+            ..wacht = true
+            ..progress = total > 0 ? written / total : null;
+          _wachtrij.insert(0, verzoek);
+          _wachtOpWifi = true;
           notifyListeners();
           return false;
         }

@@ -141,7 +141,9 @@ class EchtheidVeger {
         if (!await _wachtOpRust()) break;
         if (gemeten(t.path) != null || _isGeblokkeerd(t.path) || !File(t.path).existsSync()) continue;
         voortgang.value = 'echtheid ${gedaan + 1}/${gedaan + lijst.length + 1}';
+        final vers = moetVersGemeten(t.path);
         final o = await _meter.van(t.path,
+            gebruikCache: !vers,
             kopSampleRate: t.sampleRate,
             kopBits: t.bitsPerSample,
             duurSeconden: (t.duration?.inSeconds ?? 0).toDouble(), opStart: (pid) {
@@ -150,6 +152,7 @@ class EchtheidVeger {
         });
         _pid = null;
         _pidPad = null;
+        if (vers) versGemeten(t.path);
         gedaan++;
         if (o == null || o.isOnbekend) {
           niets++;

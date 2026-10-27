@@ -25,7 +25,8 @@ void main() {
     final main = _bron('lib/main.dart');
     expect(main, contains('    ..versieVoor = ((p) => offline.localFor(p) != null ? p : library.speelPadVoor(p))'),
         reason: 'onderweg zonder pc speelt de offline kopie');
-    expect(main, contains('      offline.adresVoor = (p) => resolver(library.speelPadVoor(p));'));
+    // Offline bewaren neemt de versie die speelt — sinds 27-10-2026 in cd-kwaliteit als je dat koos.
+    expect(main, contains('        final pad = library.speelPadVoor(p);\n        final url = resolver(pad);'));
     expect(main, contains('  if (mode.owner) await versies.laad();'));
     expect(main, contains('  if (mode.owner) versies.uitgave.addListener(library.versiesVeranderd);'));
     expect(main, contains('      VersieUitlijnRonde(log: versieLog, wacht: const Duration(minutes: 2)).start();'));

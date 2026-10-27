@@ -164,6 +164,11 @@ class AppSettings extends ChangeNotifier {
   /// seconde precies wat hapert, en het is ook nog je databundel.
   String stroomOnderweg = 'cd';
 
+  /// In welke kwaliteit "Offline bewaren" een nummer op dit toestel zet: 'cd' (FLAC 16/44,1; wat al zo is, blijft het
+  /// origineel) of 'origineel' (het bestand van de pc, bit-perfect). Saber, 27-10-2026: *"ik wil ook in cd kwaliteit kunnen
+  /// opslaan offline gebruik op de gsm"* — een instelling, standaard cd. Per toestel, zoals de streamkwaliteit.
+  String offlineKwaliteit = 'cd';
+
   /// Mag de app zelf wisselen op grond van wifi of mobiel?
   ///
   /// Staat dit uit, dan geldt [stroomThuis] altijd en is er één stand en verder niets.
@@ -392,6 +397,7 @@ class AppSettings extends ChangeNotifier {
         stroomThuis = (m['stroom_thuis'] ?? 'max') as String;
         stroomOnderweg = (m['stroom_onderweg'] ?? 'cd') as String;
         stroomAdaptief = (m['stroom_adaptief'] ?? true) as bool;
+        offlineKwaliteit = (m['offline_kwaliteit'] ?? 'cd') as String;
         laatsteWeg = (m['laatste_weg'] ?? '') as String;
         tikKeuze = (m['tik_keuze'] ?? 'vragen') as String;
         appVolume = ((m['app_volume'] as num?) ?? 100).toDouble().clamp(0, 100).toDouble();
@@ -450,6 +456,7 @@ class AppSettings extends ChangeNotifier {
         'stroom_thuis': stroomThuis,
         'stroom_onderweg': stroomOnderweg,
         'stroom_adaptief': stroomAdaptief,
+        'offline_kwaliteit': offlineKwaliteit,
         'laatste_weg': laatsteWeg,
         'tik_keuze': tikKeuze,
         'app_volume': appVolume,
