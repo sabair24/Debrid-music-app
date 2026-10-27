@@ -953,7 +953,8 @@ Future<void> main() async {
   if (mode.owner) {
     await laadEchtheid();
     // Een val van 20-25 dB in de mp3-zone heet nu vermoedelijk (echtheid.dart, Destin): wat ertussen viel, nog één keer meten.
-    final n = await herkeurOndiepeMuren('$appDir${Platform.pathSeparator}echtheid_herkeur_20db.txt');
+    // (Het tweede merkteken: de eerste keer gaf de cache van de meter de oude uitslag terug — zie [moetVersGemeten].)
+    final n = await herkeurOndiepeMuren('$appDir${Platform.pathSeparator}echtheid_herkeur_20db_2.txt');
     if (n > 0) {
       WarmLog('$logDir${Platform.pathSeparator}echtheid.log').line('herkeuren: $n bestanden met een muur van 20-25 dB '
           'onder 19,4 kHz opnieuw laten meten (nu vermoedelijk)');

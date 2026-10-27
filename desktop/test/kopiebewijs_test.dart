@@ -200,6 +200,29 @@ void main() {
     });
   });
 
+  test('opnieuw meten in de zone van 20-25 dB: één keer, en buiten de cache van de meter om', () async {
+    // 27-10-2026: de eerste keer gaf de cache van de meter in 3 s precies de oude uitslag terug.
+    resetEchtheidVoorTest();
+    final map = Directory.systemTemp.createTempSync('dm_herkeur_');
+    addTearDown(() => map.deleteSync(recursive: true));
+    final destin = '${map.path}${Platform.pathSeparator}07 - Destin.flac';
+    final echt = '${map.path}${Platform.pathSeparator}01 - Echt.flac';
+    onthoudOordeelVanPc(destin, _o(Bandbreedte.doorlopend, 17150, 22.7));
+    onthoudOordeelVanPc(echt, _o(Bandbreedte.doorlopend, 17150, 9.8));
+    final merk = '${map.path}${Platform.pathSeparator}herkeur.txt';
+    expect(await herkeurOndiepeMuren(merk), 1);
+    expect(gemeten(destin), isNull, reason: 'zonder oordeel meet de veger hem opnieuw');
+    expect(moetVersGemeten(destin), isTrue);
+    expect(gemeten(echt), isNotNull);
+    expect(moetVersGemeten(echt), isFalse);
+    versGemeten(destin);
+    expect(moetVersGemeten(destin), isFalse);
+    onthoudOordeelVanPc(destin, _o(Bandbreedte.doorlopend, 17150, 22.7));
+    expect(await herkeurOndiepeMuren(merk), 0, reason: 'één keer');
+    expect(File('lib/echtheid_veger.dart').readAsStringSync(), contains('            gebruikCache: !vers,'));
+    resetEchtheidVoorTest();
+  });
+
   test('aangesloten: de jacht bergt geen nep op als versie; elke keuring doet eerst het kopiebewijs', () {
     String bron(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
     final online = bron('lib/online.dart');

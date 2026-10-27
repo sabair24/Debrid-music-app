@@ -122,6 +122,18 @@ void vergeetOordeel(String pad) {
   if (_oordelen.remove(_sleutel(pad)) != null) unawaited(_bewaar());
 }
 
+/// Wat vers gemeten moet worden, buiten de cache van de meter om ([moetVersGemeten]). Alleen in het geheugen: wat in deze
+/// sessie niet gemeten werd, komt bij de volgende start niet terug — dan is de cache van de meter nog altijd de oude.
+final Set<String> _vers = {};
+
+/// Moet [pad] vers gemeten worden, zonder de cache van de meter? Zo na [herkeurOndiepeMuren]: die cache onthoudt de
+/// uitslag per bestand, en gaf de oude terug — op 27-10-2026 kwamen de negen "opnieuw" gemeten bestanden zo in 3 s
+/// terug met precies hun oude oordeel.
+bool moetVersGemeten(String pad) => _vers.contains(_sleutel(pad));
+
+/// [pad] is vers gemeten.
+void versGemeten(String pad) => _vers.remove(_sleutel(pad));
+
 /// Eén keer opnieuw laten meten wat onder [volBijnaMuurDb] (27-10-2026) een ander oordeel kan krijgen: doorlopend, met
 /// een val van minstens 20 maar minder dan 25 dB onder [zekerAfkapTot]. Zonder oordeel meet de echtheidsveger ze opnieuw.
 /// [merk]: het bestand dat zegt dat het al gebeurde. Geeft het aantal.
@@ -138,6 +150,7 @@ Future<int> herkeurOndiepeMuren(String merk) async {
   ];
   for (final k in weg) {
     _oordelen.remove(k);
+    _vers.add(k);
   }
   if (weg.isNotEmpty) await _bewaar();
   try {
