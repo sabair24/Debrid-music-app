@@ -2367,10 +2367,27 @@ class DownloadManager extends ChangeNotifier {
     // Eén kopie per soort (Saber, 27-10-2026: "enkel studio, cd of vinyl drie soorten"; tot dan kwam hij er als "andere
     // kopie" naast). Is je nummer van dezelfde soort, dan is bewaren vervangen: deze in zijn plaats, het vorige naar
     // _dubbel. Is er een versie van die soort, dan komt deze in háár plaats — jij koos hem, dus zonder keuring ([dwing]).
+    //
+    // Dat geldt alleen voor wat je aangeboden kreeg: een "studio" die hier vinyl blijkt (zijn tags, een tweeling), gaat
+    // door de keuring zoals elke vinyl — anders verdrong hij je betere vinyl (Voyager, 27-10-2026).
+    final aangeboden = g.soort == null || g.soort == plan.soort;
+    Future<String> nietBewaard() async {
+      lijst.verwijder(pad);
+      await lijst.bewaar();
+      try {
+        if (f.existsSync()) await f.delete();
+      } catch (_) {/* de opruimronde van de twijfelmap neemt hem mee */}
+      _log.line('"$naam": niet bewaard — hij is ${plan.soort!.naam}, niet ${g.soort?.naam}, en niet bewezen beter dan je '
+          '${plan.soort!.naam}-kopie');
+      return 'Niet bewaard: deze kopie bleek ${plan.soort!.naam}, en je hebt al een ${plan.soort!.naam}-kopie die minstens '
+          'zo goed is';
+    }
+
     if (plan.besluit == Versiebesluit.gewoon) {
+      if (!aangeboden && !firstIsBetter(f, File(pad))) return nietBewaard();
       return vervangDoorTwijfel(pad, behalveLezer: behalveLezer, behalveZone: behalveZone);
     }
-    final dwing = plan.besluit == Versiebesluit.vervangVersie;
+    final dwing = plan.besluit == Versiebesluit.vervangVersie && aangeboden;
     // Alleen met "standaard maken" mag hij het nummer worden; anders een versie ernaast.
     if (plan.besluit == Versiebesluit.ankerOpzij && !standaard) plan = plan.als(Versiebesluit.nieuweVersie);
     if (plan.besluit == Versiebesluit.ankerOpzij) {
@@ -2394,6 +2411,7 @@ class DownloadManager extends ChangeNotifier {
       return 'Bewaren lukte niet: $e';
     }
     if (uit == null) return 'Bewaren lukte niet — de kopie wacht nog';
+    if (uit.verloor) return nietBewaard();
     final kop = readFlacTags(File(uit.pad));
     final label = versieLabel(plan.soort!, plan.persing, bits: kop?.bitsPerSample ?? 0, hz: kop?.sampleRate ?? 0);
     if (standaard && !uit.werdAnker) {
@@ -2462,14 +2480,8 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Welke soort [staged] is, uit zijn kop en [bronpad] (kopiesoort.dart).
-  static Kopiesoort? _soortVanBinnen(File staged, String bronpad) {
-    final kop = readFlacTags(staged);
-    return kopiesoortVan(
-        bronpad: bronpad,
-        bits: kop?.bitsPerSample ?? 0,
-        hz: kop?.sampleRate ?? 0,
-        verliesvrij: isVerliesvrij(soortVan(staged.path)));
-  }
+  // Met de tags erbij (MEDIA=12" Vinyl), zoals het opbergen ([soortVanBestand]).
+  static Kopiesoort? _soortVanBinnen(File staged, String bronpad) => soortVanBestand(staged.path, bronpad);
 
   /// Wat er net op [pad] landde, onthouden als studio, cd of vinyl (kopiesoort.dart). [bronpad]: waar hij vandaan kwam
   /// (het pad bij de uploader, in de torrent, of "TIDAL …") — na het opbergen weet niets anders nog dat het een
@@ -6291,12 +6303,10 @@ class DownloadManager extends ChangeNotifier {
     if (twijfel == null || !File(v.pad).existsSync()) return weg('het nummer staat er niet meer');
     final oordeel = await _meetEchtheid(staged);
     if (!magBlijven(oordeel)) return weg('betrapt (${waarom(oordeel!)})');
-    final kop = readFlacTags(staged);
-    final soort = kopiesoortVan(
-        bronpad: bronpad,
-        bits: kop?.bitsPerSample ?? 0,
-        hz: kop?.sampleRate ?? 0,
-        verliesvrij: isVerliesvrij(soortVan(staged.path)));
+    // Wat hij werkelijk is, zoals het opbergen het straks ziet ([versieplanVoor]): ook zijn tags en of hij een tweeling is
+    // van wat je al hebt. Hier keken alleen pad en kop — en electron2's "studio" Voyager was je vinylrip LP 2021
+    // (MEDIA=12" Vinyl, tot op het sample even lang); bij Bewaren verving hij je vinyl (27-10-2026).
+    final soort = versieplanVoor(staged, v.pad, bronpad).soort;
     if (soort != v.soort) return weg('geen ${v.soort.voluit} maar ${soort?.voluit ?? kwaliteitZin(kwaliteitVan(staged))}');
     // Bit voor bit wat je al hebt, van een andere uploader en onder een andere naam: die voegt niets toe (Saber,
     // 26-10-2026, bij All Saints: "Ik heb 2 cd kwaliteit").

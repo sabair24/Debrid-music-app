@@ -17,12 +17,14 @@ import 'package:debridmusic/soortjacht.dart';
 import 'package:debridmusic/soulseek.dart' show SoulseekFile;
 import 'package:debridmusic/tidaler.dart' show Tidaler;
 import 'package:debridmusic/twijfel.dart';
+import 'package:debridmusic/versies.dart' show Versie, versies;
 import 'package:flutter_test/flutter_test.dart';
 
 String _bron(String pad) => File(pad).readAsStringSync().replaceAll('\r\n', '\n');
 
 /// Een minimale FLAC: STREAMINFO met [rate], [bits] en [seconden], en één Vorbis-commentaar.
-Uint8List _flac({int rate = 44100, int bits = 16, int seconden = 10, String titel = 'Nightvision'}) {
+Uint8List _flac(
+    {int rate = 44100, int bits = 16, int seconden = 10, String titel = 'Nightvision', List<String> extra = const []}) {
   final b = BytesBuilder()..add(ascii.encode('fLaC'));
   b.add([0x00, 0x00, 0x00, 0x22]);
   final si = Uint8List(34);
@@ -39,13 +41,17 @@ Uint8List _flac({int rate = 44100, int bits = 16, int seconden = 10, String tite
   b.add(si);
   final v = BytesBuilder();
   List<int> le32(int x) => [x & 0xFF, (x >> 8) & 0xFF, (x >> 16) & 0xFF, (x >> 24) & 0xFF];
-  final verkoper = utf8.encode('toets'), commentaar = utf8.encode('TITLE=$titel');
+  final verkoper = utf8.encode('toets');
+  final velden = [for (final x in ['TITLE=$titel', ...extra]) utf8.encode(x)];
   v
     ..add(le32(verkoper.length))
     ..add(verkoper)
-    ..add(le32(1))
-    ..add(le32(commentaar.length))
-    ..add(commentaar);
+    ..add(le32(velden.length));
+  for (final c in velden) {
+    v
+      ..add(le32(c.length))
+      ..add(c);
+  }
   final vb = v.takeBytes();
   b.add([0x84, (vb.length >> 16) & 0xFF, (vb.length >> 8) & 0xFF, vb.length & 0xFF]);
   b.add(vb);
@@ -376,6 +382,37 @@ void main() {
           map.listSync(recursive: true).any((e) => e is File && e.path.replaceAll(r'\', '/').contains('/$parkeerMap/')),
           isTrue,
           reason: 'de vinyl staat in _dubbel, niet weg');
+    });
+
+    test('DE KERN (Voyager, 27-10-2026): een "studio" die bij het opbergen vinyl blijkt, verdringt je vinyl niet', () async {
+      versies.wis();
+      addTearDown(versies.wis);
+      final mijn = eigen(rate: 44100, bits: 16, seconden: 228); // de cd is het nummer
+      zetSoort(mijn.path, Kopiesoort.cd);
+      final vinyl = File('${map.path}/Albums/Daft Punk/Discovery (vinyl)/06 - Nightvision.flac')
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(_flac(rate: 96000, bits: 24, seconden: 229));
+      versies.voegToe(mijn.path, Versie(pad: vinyl.path, soort: Kopiesoort.vinyl, persing: 'LP 2022'),
+          ankerSoort: Kopiesoort.cd);
+      zetSoort(vinyl.path, Kopiesoort.vinyl);
+      final v = vraag(mijn, Kopiesoort.studio);
+      d.soortvragen!.zet(v);
+      // Klaargezet als studio (het pad zegt niets over vinyl), maar zijn tags zeggen vinyl.
+      final binnen = File('${map.path}/_keuring/e/06.flac')
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(_flac(rate: 96000, bits: 24, seconden: 230, extra: ['MEDIA=12" Vinyl']));
+      expect(await d.zetKlaarVoorToets(v, binnen, 'Soulseek e', r'@@e\Discovery (2001) [24-96]\06.flac', .9), isTrue);
+      final zin = await d.vervangDoorTwijfel(mijn.path, alsVersie: true);
+      expect(zin, contains('Niet bewaard'));
+      expect(versies.versiesVan(mijn.path).single.pad, vinyl.path, reason: 'je vinyl blijft');
+      expect(readFlacTags(vinyl)?.duration?.inSeconds, 229);
+      expect(twijfelVoor(mijn.path), isNull, reason: 'er wacht niets meer');
+      expect(d.soortvragen!.van(mijn.path), isNotNull, reason: 'je vroeg studio, en die is er nog niet');
+    });
+
+    test('aangesloten: de soortkeuring vraagt wat het opbergen ziet (tags, tweeling)', () {
+      final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(online, contains('    final soort = versieplanVoor(staged, v.pad, bronpad).soort;\n    if (soort != v.soort) return weg('));
     });
 
     test('een gevraagde kopie neemt de plaats in van een twijfelgeval van de app; een twijfel niet van een gevraagde', () async {
