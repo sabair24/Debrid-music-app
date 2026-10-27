@@ -9,6 +9,7 @@ import 'package:debridmusic/flac_tags.dart' show readFlacTags;
 import 'package:debridmusic/organize.dart' show readTags, writeTagFields;
 import 'package:debridmusic/versie_opbergen.dart';
 import 'package:debridmusic/versies.dart';
+import 'package:debridmusic/vinylspoor.dart' show stilteVan;
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een kleine maar echte FLAC: STREAMINFO met [hz], [bits] en [sec] seconden, de tags, en wat "audio" ([vulling] maakt
@@ -310,6 +311,70 @@ void main() {
       expect(r.albumnaam, 1);
       expect(readTags(File(pad))?.album, 'Spice (vinyl)');
       expect((await eenPerSoort(dubbel: dubbel())).albumnaam, 0, reason: 'een tweede keer niets: geen tags herschrijven');
+    });
+
+    test('DE KERN (vinylspoor): een "studio"-nummer met groefruis waar de cd stil is, wordt vinyl — en blijft', () async {
+      // High Life, 27-10-2026: valentinchpx' "24/96" hield −52 dB waar de cd −200 dB is. Saber: "niet weg".
+      schrijf(anker, _flac(hz: 96000, bits: 24, sec: 201, tags: _tags));
+      zetSoort(anker, Kopiesoort.studio);
+      final cd = versie('Spice (cd)', Kopiesoort.cd, '', hz: 44100, bits: 16, sec: 202, sinds: 1,
+          ankerSoort: Kopiesoort.studio);
+      final regels = <String>[];
+      final r = await eenPerSoort(
+          dubbel: dubbel(),
+          log: regels.add,
+          stilte: (p) async => (stilste: p == cd ? -200.0 : -52.0, seconden: p == cd ? 202.0 : 201.0));
+      expect(r.vinylspoor, 1);
+      expect(File(anker).existsSync(), isTrue, reason: 'niets weg');
+      expect(soortVoor(anker)?.soort, Kopiesoort.vinyl);
+      expect(versies.groep(anker)?.soort, Kopiesoort.vinyl);
+      expect(versies.versiesVan(anker).single.pad, cd);
+      expect(inDubbel(), isEmpty);
+      expect(regels.single, contains('klinkt als vinyl'));
+    });
+
+    test('vinylspoor op een studio-versie, met al een vinyl ernaast: één vinyl blijft, de map "(studio)" is weg', () async {
+      zetSoort(anker, Kopiesoort.cd); // de cd is het nummer en wordt stil
+      final studio = versie('Spice (studio)', Kopiesoort.studio, '', sec: 199, sinds: 2);
+      final vinyl = versie('Spice (vinyl)', Kopiesoort.vinyl, 'LP 2001', sec: 203, sinds: 1);
+      final r = await eenPerSoort(
+          dubbel: dubbel(), stilte: (p) async => (stilste: p == anker ? -200.0 : -60.0, seconden: 200.0));
+      expect(r.vinylspoor, 1);
+      expect([for (final v in versies.versiesVan(anker)) (v.soort, v.pad)], [(Kopiesoort.vinyl, vinyl)],
+          reason: 'twee vinyls, gelijk: de oudste blijft');
+      expect(File(studio).existsSync(), isFalse);
+      expect(Directory(File(studio).parent.path).existsSync(), isFalse);
+      expect(inDubbel(), hasLength(1), reason: 'de andere in _dubbel, niet gewist');
+    });
+
+    test('zonder stille cd geen vinylspoor', () async {
+      zetSoort(anker, Kopiesoort.cd);
+      versie('Spice (studio)', Kopiesoort.studio, '', sec: 199, sinds: 2);
+      final r = await eenPerSoort(dubbel: dubbel(), stilte: (p) async => (stilste: -50.0, seconden: 200.0));
+      expect(r.vinylspoor, 0);
+      expect(versies.versiesVan(anker).single.soort, Kopiesoort.studio);
+    });
+
+    test('bij binnenkomst: een "studio" met groefruis wordt als vinyl genoteerd; versieplanVoor neemt het over', () async {
+      zetSoort(anker, Kopiesoort.cd);
+      final binnen = schrijf('${root.path}$sep${'_keuring'}${sep}h${sep}01.flac',
+          _flac(hz: 96000, bits: 24, sec: 200, tags: {'TITLE': 'Wannabe', 'ARTIST': 'Spice Girls'}));
+      final gemeten = <String>[];
+      stilteVan = (p) async {
+        gemeten.add(p);
+        return (stilste: p == anker ? -200.0 : -55.0, seconden: 200.0);
+      };
+      addTearDown(() => stilteVan = null);
+      const bron = r'valentinchpx\Spice [24-96]\01.flac';
+      expect(versieplanVoor(binnen, anker, bron).soort, Kopiesoort.studio, reason: 'zonder het spoor: studio');
+      expect(await merkVinylspoor(binnen.path, anker, bron), isTrue);
+      expect(versieplanVoor(binnen, anker, bron).soort, Kopiesoort.vinyl);
+      expect(versieplanVoor(binnen, anker, bron).besluit, Versiebesluit.nieuweVersie, reason: 'een vinyl naast je cd');
+      gemeten.clear();
+      final vinylpad = schrijf('${root.path}$sep${'_keuring'}${sep}i${sep}A1.flac',
+          _flac(hz: 96000, bits: 24, sec: 201, tags: {'TITLE': 'Wannabe', 'ARTIST': 'Spice Girls'}));
+      expect(await merkVinylspoor(vinylpad.path, anker, r'X\Spice (Vinyl 24-96)\A1.flac'), isFalse);
+      expect(gemeten, isEmpty, reason: 'al vinyl volgens zijn pad: niets te meten');
     });
 
     test('wat speelt, blijft tot de volgende start', () async {

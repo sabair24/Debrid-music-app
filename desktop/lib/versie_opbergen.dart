@@ -26,6 +26,7 @@ import 'kopiesoort.dart';
 import 'organize.dart';
 import 'versies.dart';
 import 'vinyl.dart' show vinylUitTags;
+import 'vinylspoor.dart';
 
 enum Versiebesluit {
   /// Dezelfde versie als het nummer (of iets zonder soort): vervangen of weggooien, zoals altijd.
@@ -143,6 +144,36 @@ bool isTweeling(String pad, Kopiesoort? soort, String ander, Kopiesoort? anderSo
   const leeg = '00000000000000000000000000000000';
   if (a.md5 != leeg && a.md5 == b.md5) return true;
   return soort == Kopiesoort.vinyl || anderSoort == Kopiesoort.vinyl;
+}
+
+/// De kopie van [anker] die vaststaat als digitaal — de cd, het nummer zelf of een versie — of null.
+String? digitaleReferentie(String anker) {
+  final ankerSoort = soortVoor(anker)?.soort ?? versies.groep(anker)?.soort ?? soortVanBestand(anker, anker);
+  if (ankerSoort == Kopiesoort.cd) return anker;
+  for (final v in versies.versiesVan(anker)) {
+    if (v.soort == Kopiesoort.cd && File(v.pad).existsSync()) return v.pad;
+  }
+  return null;
+}
+
+/// Het vinylspoor bij binnenkomst ([klinktAlsVinyl]): is [kandidaat] studio volgens pad ([bronpad]) en tags, maar houdt
+/// hij groefruis waar je cd van [anker] stil wordt, dan wordt hij als vinyl genoteerd — [versieplanVoor] neemt dat over.
+/// Waar als het zo is. Zonder meter ([stilteVan]) of zonder cd: niets.
+Future<bool> merkVinylspoor(String kandidaat, String anker, String bronpad, {void Function(String regel)? log}) async {
+  final meet = stilteVan;
+  if (meet == null) return false;
+  final soort = soortVoor(kandidaat)?.soort ?? soortVanBestand(kandidaat, bronpad);
+  if (soort != Kopiesoort.studio) return false;
+  final cd = digitaleReferentie(anker);
+  if (cd == null) return false;
+  final ref = await meet(cd);
+  if (ref == null || ref.stilste >= kDigitaalStil) return false;
+  final k = await meet(kandidaat);
+  if (k == null || !klinktAlsVinyl(k, ref)) return false;
+  zetSoort(kandidaat, Kopiesoort.vinyl);
+  log?.call('   klinkt als vinyl: groefruis op ${k.stilste.toStringAsFixed(0)} dB waar je cd stil wordt '
+      '(${ref.stilste.toStringAsFixed(0)} dB) — telt als vinyl');
+  return true;
 }
 
 /// Wat [nieuw] (net binnen, van [bronpad]) is tegenover het nummer [anker]: zijn soort en persing, die van het nummer
@@ -364,7 +395,7 @@ void _ruimLegeMapOp(String map) {
 
 /// Wat [eenPerSoort] deed: kopieën naar `_dubbel`, tweelingen die het nummer waren, versies naar de map van hun soort,
 /// versies waarvan alleen de albumnaam nog een persing droeg, en nummers die bleven omdat er iets speelde.
-typedef Soortopruiming = ({int naarDubbel, int tweelingen, int verhuisd, int albumnaam, int overgeslagen});
+typedef Soortopruiming = ({int naarDubbel, int tweelingen, int vinylspoor, int verhuisd, int albumnaam, int overgeslagen});
 
 /// Per nummer hoogstens één kopie van elke soort: studio, cd en vinyl (Saber, 27-10-2026, bij Discovery met negen
 /// versies: *"Das teveel, enkel studio, cd of vinyl drie soorten"*). Wat er nieuw binnenkomt, houdt zich daar al aan
@@ -375,14 +406,20 @@ typedef Soortopruiming = ({int naarDubbel, int tweelingen, int verhuisd, int alb
 ///   plek — de cd die er voor de tweeling stond.
 /// * **Twee van dezelfde soort**: de bewezen betere blijft ([firstIsBetter]). Bij gelijkspel blijft wat er al zat: het
 ///   nummer, dan de versie die je koos, dan de oudste. De rest gaat naar `_dubbel` (na 30 dagen de prullenbak).
+/// * **Een studio die als vinyl klinkt** ([klinktAlsVinyl], [stilte]; 27-10-2026: zes op Discovery): hij telt als vinyl
+///   — en heb je er al een, dan blijft de bewezen betere.
 /// * **Een versie in een map met een persing** ("Discovery (vinyl LP 2001)"): naar de map van haar soort
 ///   ("Discovery (vinyl)"), met die albumnaam; "andere kopie" valt weg uit het label.
 ///
 /// [dubbel]: de map `_dubbel`. [inGebruik]: speelt of leest iets dit bestand — dan blijft dat nummer tot de volgende
 /// start. [log]: één regel per ingreep.
 Future<Soortopruiming> eenPerSoort(
-    {required String dubbel, bool Function(String pad)? inGebruik, void Function(String regel)? log}) async {
-  var naarDubbel = 0, tweelingen = 0, verhuisd = 0, albumnaam = 0, overgeslagen = 0;
+    {required String dubbel,
+    bool Function(String pad)? inGebruik,
+    void Function(String regel)? log,
+    Future<Stilte?> Function(String pad)? stilte}) async {
+  var naarDubbel = 0, tweelingen = 0, vinylspoor = 0, verhuisd = 0, albumnaam = 0, overgeslagen = 0;
+  final meet = stilte ?? stilteVan;
   final sep = Platform.pathSeparator;
   for (final g in versies.groepen.toList()) {
     final anker = g.anker;
@@ -393,7 +430,8 @@ Future<Soortopruiming> eenPerSoort(
       continue;
     }
     final naam = _stam(_naam(anker));
-    final ankerSoort = soortVoor(anker)?.soort ?? g.soort ?? soortVanBestand(anker, anker);
+    final geregistreerd = soortVoor(anker)?.soort ?? g.soort ?? soortVanBestand(anker, anker);
+    var ankerSoort = geregistreerd;
     // Wat elke versie werkelijk is: twee versies die tweelingen zijn, zijn één soort — vinyl als een van beide vinyl is
     // (dat is wat [isTweeling] dan vroeg), anders die van de oudste.
     final soortVan = <String, Kopiesoort>{for (final v in lijst) v.pad: v.soort};
@@ -406,6 +444,30 @@ Future<Soortopruiming> eenPerSoort(
             : (a.sindsMs <= b.sindsMs ? a.soort : b.soort);
         soortVan[a.pad] = s;
         soortVan[b.pad] = s;
+      }
+    }
+    // Het vinylspoor: een studio met groefruis waar je cd stil wordt, is vinyl ([klinktAlsVinyl]).
+    final cd = ankerSoort == Kopiesoort.cd
+        ? anker
+        : lijst.where((v) => soortVan[v.pad] == Kopiesoort.cd).firstOrNull?.pad;
+    final ref = meet == null || cd == null ? null : await meet(cd);
+    if (meet != null && ref != null && ref.stilste < kDigitaalStil) {
+      final studio = [
+        if (ankerSoort == Kopiesoort.studio) anker,
+        for (final v in lijst)
+          if (soortVan[v.pad] == Kopiesoort.studio) v.pad,
+      ];
+      for (final p in studio) {
+        final k = await meet(p);
+        if (k == null || !klinktAlsVinyl(k, ref)) continue;
+        if (p == anker) {
+          ankerSoort = Kopiesoort.vinyl;
+        } else {
+          soortVan[p] = Kopiesoort.vinyl;
+        }
+        vinylspoor++;
+        log?.call('"$naam": ${p == anker ? 'het nummer' : 'je studio-versie'} klinkt als vinyl — groefruis op '
+            '${k.stilste.toStringAsFixed(0)} dB waar je cd stil wordt (${ref.stilste.toStringAsFixed(0)} dB): nu vinyl');
       }
     }
     final tweelingVan = ankerSoort == null
@@ -501,6 +563,12 @@ Future<Soortopruiming> eenPerSoort(
       }
     }
 
+    // Het nummer bleef, maar is vinyl (het vinylspoor): zo in het register en in soorten.json.
+    if (nu == anker && ankerSoort != null && ankerSoort != geregistreerd && File(anker).existsSync()) {
+      versies.verhuisAnker(anker, anker, soort: ankerSoort, persing: '');
+      zetSoort(anker, ankerSoort);
+    }
+
     // 3. Wat blijft naar de map van zijn soort, zonder "andere kopie" in het label.
     for (final v in versies.versiesVan(nu)) {
       if (!File(v.pad).existsSync()) continue;
@@ -544,6 +612,7 @@ Future<Soortopruiming> eenPerSoort(
   return (
     naarDubbel: naarDubbel,
     tweelingen: tweelingen,
+    vinylspoor: vinylspoor,
     verhuisd: verhuisd,
     albumnaam: albumnaam,
     overgeslagen: overgeslagen
