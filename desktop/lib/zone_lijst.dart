@@ -24,6 +24,25 @@ const kZoneStilte = Duration(seconds: 45);
 /// Hoe lang een pc zonder zones met rust gelaten wordt.
 const kZoneOudePc = Duration(minutes: 5);
 
+/// Een opdracht naar de pc ([vraag]), en één keer opnieuw als de eerste geen antwoord kreeg ([RemoteException] zonder
+/// status). Null als ze aankwam, anders waarom niet.
+///
+/// Gemeten op 27-10-2026 met de gsm als afstandsbediening van de Shield: na vijf minuten op de achtergrond kwam de
+/// tik op "volgende" wel in de app aan (logcat 06:14:28.401), maar nooit bij de pc. De eerste vraag na het terugkomen
+/// viel op een verbinding die de pc intussen gesloten had en die de gsm nog in voorraad hield; een tweede vraag opent
+/// een verse. Het id van de opdracht zorgt dat de pc hem hoogstens één keer uitvoert ([LanServer.zoneOpdracht]), ook
+/// als de eerste toch aankwam en alleen het antwoord wegviel. Een antwoord van de pc (een status) wordt niet herhaald.
+Future<String?> stuurMetHerkansing(Future<void> Function() vraag) async {
+  for (var poging = 1;; poging++) {
+    try {
+      await vraag();
+      return null;
+    } on RemoteException catch (e) {
+      if (e.statusCode != null || poging >= 2) return e.message;
+    }
+  }
+}
+
 /// Wat dit toestel van de zones weet. Eén per app.
 class ZoneLijst extends ChangeNotifier {
   ZoneLijst({required this.hier, this.opDePc = false, int Function()? klok}) : _klok = klok;
