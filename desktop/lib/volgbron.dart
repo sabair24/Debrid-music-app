@@ -26,8 +26,9 @@ abstract interface class Afstandsvolume {
   void zetAfstandsvolume(int v);
 }
 
-/// De stap van één druk op een volumeknop, voor een zone op afstand.
-const kVolumeStap = 5;
+/// De stap van één druk op een volumeknop, voor een zone op afstand. Eén (Saber, 27-10-2026: "kan dit ook in 1 stap
+/// per keer, en echt vloeiend en snel reactie wil ik"); was vijf. Ingedrukt houden herhaalt de knop.
+const kVolumeStap = 1;
 
 /// Volgt dit toestel of de gekozen zone, zie de uitleg bovenaan.
 class Volgbron extends ChangeNotifier implements NowPlayingSource, Afstandsvolume {

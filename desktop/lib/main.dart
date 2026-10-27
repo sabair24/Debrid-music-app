@@ -12204,8 +12204,8 @@ class _ZoneActie extends StatelessWidget {
   }
 }
 
-/// De volumeschuif op een zonekaart. Wat je schuift, staat er meteen; hij stuurt hoogstens vier keer per seconde, en de
-/// laatste stand altijd. Op de Shield twee knoppen (− en +, per 5) in plaats van een schuif: met de pijltjes kom je dan
+/// De volumeschuif op een zonekaart. Wat je schuift, staat er meteen; hij stuurt hoogstens elke [kZoneVolumeTussen] (was
+/// 250 ms), en de laatste stand altijd. Op de Shield twee knoppen (− en +, per 5) in plaats van een schuif: met de pijltjes kom je dan
 /// ook weer weg.
 class _ZoneVolumeSchuif extends StatefulWidget {
   const _ZoneVolumeSchuif(
@@ -12235,11 +12235,12 @@ class _ZoneVolumeSchuifState extends State<_ZoneVolumeSchuif> {
   void _stuur(double v, {bool nu = false}) {
     final t = DateTime.now().millisecondsSinceEpoch;
     _straks?.cancel();
-    if (nu || t - _verstuurdOp >= 250) {
+    final tussen = kZoneVolumeTussen.inMilliseconds;
+    if (nu || t - _verstuurdOp >= tussen) {
       _verstuurdOp = t;
       widget.zet(v.round());
     } else {
-      _straks = Timer(Duration(milliseconds: 250 - (t - _verstuurdOp)), () => _stuur(_eigen ?? v, nu: true));
+      _straks = Timer(Duration(milliseconds: tussen - (t - _verstuurdOp)), () => _stuur(_eigen ?? v, nu: true));
     }
     _vergeet?.cancel();
     _vergeet = Timer(const Duration(seconds: 3), () {

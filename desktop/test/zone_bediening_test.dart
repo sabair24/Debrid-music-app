@@ -251,7 +251,62 @@ void main() {
       });
     });
 
-    test('de volumeschuif stuurt hoogstens vier keer per seconde, en de laatste stand komt aan', () {
+    test('een trage pc: nooit twee volumes tegelijk onderweg, en de laatste stand komt aan', () {
+      fakeAsync((fa) {
+        final gestuurd = <Map<String, dynamic>>[];
+        var onderweg = 0, hoogstens = 0;
+        final z = ZoneSpeler(
+          lijst: _lijst([_pc()]),
+          zoneId: 'dev:pc-THUIS',
+          nummer: _t,
+          idVan: (t) => t.title,
+          hoesVan: (_) => null,
+          stuur: (op) async {
+            gestuurd.add(op);
+            onderweg++;
+            if (onderweg > hoogstens) hoogstens = onderweg;
+            await Future<void>.delayed(const Duration(milliseconds: 400));
+            onderweg--;
+            return null;
+          },
+        );
+        for (var v = 11; v <= 20; v++) {
+          z.setVolume(v.toDouble());
+          fa.elapse(const Duration(milliseconds: 50));
+        }
+        fa.elapse(const Duration(seconds: 2));
+        expect(hoogstens, 1, reason: 'twee tegelijk kunnen elkaar inhalen');
+        expect(gestuurd.last, {'cmd': 'volume', 'waarde': 20});
+        z.dispose();
+      });
+    });
+
+    test('met één stap per druk: een melding één ernaast is de vorige druk, niet de laatste', () {
+      fakeAsync((fa) {
+        var klok = _nu;
+        final lijst = _lijst([_pc(volume: 12)], klok: () => klok);
+        final z = ZoneSpeler(
+          lijst: lijst,
+          zoneId: 'dev:pc-THUIS',
+          nummer: _t,
+          idVan: (t) => t.title,
+          hoesVan: (_) => null,
+          stuur: (op) async => null,
+          klok: () => klok,
+        );
+        z.setVolume(13);
+        z.setVolume(14);
+        klok += 100;
+        lijst.zet({'nu': klok, 'zones': [_pc(volume: 13, opMs: klok).toJson()]});
+        expect(z.volume, 14, reason: 'de zone meldt de vorige druk; de laatste blijft staan');
+        klok += 100;
+        lijst.zet({'nu': klok, 'zones': [_pc(volume: 14, opMs: klok).toJson()]});
+        expect(z.volume, 14);
+        z.dispose();
+      });
+    });
+
+    test('de volumeschuif stuurt hoogstens elke 80 ms, één tegelijk, en de laatste stand komt aan', () {
       fakeAsync((fa) {
         final gestuurd = <Map<String, dynamic>>[];
         final z = ZoneSpeler(
@@ -271,11 +326,19 @@ void main() {
         fa.flushMicrotasks();
         expect(gestuurd, [
           {'cmd': 'volume', 'waarde': 10}
-        ]);
+        ], reason: 'de eerste meteen');
+        fa.elapse(const Duration(milliseconds: 79));
+        expect(gestuurd, hasLength(1), reason: 'nog geen 80 ms');
         fa.elapse(const Duration(milliseconds: 600));
-        expect(gestuurd.length, 2);
+        expect(gestuurd.length, 2, reason: 'de tussenstanden zijn voorbij: alleen de laatste');
         expect(gestuurd.last, {'cmd': 'volume', 'waarde': 60});
         expect(z.volume, 60);
+        // Ingedrukt houden: elke 100 ms één stap — elke stap gaat mee.
+        for (var i = 1; i <= 5; i++) {
+          z.setVolume(60.0 + i);
+          fa.elapse(const Duration(milliseconds: 100));
+        }
+        expect([for (final g in gestuurd.skip(2)) g['waarde']], [61, 62, 63, 64, 65]);
         z.dispose();
       });
     });

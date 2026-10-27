@@ -26,6 +26,10 @@ import 'zone_lijst.dart';
 /// Hoe lang wat je indrukte op het scherm blijft staan als de zone (nog) niets anders meldt.
 const kZoneVerwacht = Duration(seconds: 3);
 
+/// Hoogstens zo vaak een nieuw volume naar de zone ([ZoneSpeler.setVolume]). Was 250 ms; gemeten op 27-10-2026 haalt een
+/// opdracht de Shield in 140–230 ms, dus kan het vlotter zonder dat er een rij ontstaat.
+const kZoneVolumeTussen = Duration(milliseconds: 80);
+
 /// Hoe lang het volgende nummer na "volgende" blijft staan als de zone nog het oude meldt. Ruimer dan
 /// [kZoneVerwacht]: het nummer moet eerst openen, en terugspringen naar het oude en dan weer vooruit is erger dan even
 /// wachten. Gemeten 26-10-2026: de Shield vroeg het nieuwe nummer 250–350 ms na de opdracht aan de pc.
@@ -264,7 +268,8 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     if (_speeltV != null && z.playing != _speeltV) return false;
     if (_shuffleV != null && z.shuffle != _shuffleV) return false;
     if (_herhaalV != null && herhaalUit(z.repeat) != _herhaalV) return false;
-    if (_volumeV != null && (z.volume - _volumeV!).abs() > 1) return false;
+    // Een halve: met één stap per druk zou "één ernaast" de vorige druk al als de laatste aanzien.
+    if (_volumeV != null && (z.volume - _volumeV!).abs() > 0.5) return false;
     final plek = _plekV;
     if (plek != null) {
       final sinds = (_speeltV ?? z.playing) && _plekVOp != null ? _nu - _plekVOp! : 0;
@@ -594,29 +599,34 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   @override
   void cycleRepeat() => zetHerhaal(volgendeHerhaal(repeat));
 
-  Timer? _volumeKlok;
+  bool _volumeBezig = false;
   double? _volumeTeSturen;
 
-  /// Hoogstens vier keer per seconde, en de laatste stand komt altijd aan.
+  /// Zo snel als de pc antwoordt, hoogstens elke [kZoneVolumeTussen]: één opdracht tegelijk, zodat ze in volgorde
+  /// aankomen (twee tegelijk over twee verbindingen kunnen elkaar inhalen, en dan blijft een oudere stand staan). De
+  /// laatste stand komt altijd aan; tussenstanden die intussen al voorbij zijn, slaat hij over.
   @override
   void setVolume(double v) {
     _volumeV = v.clamp(0, 100).toDouble();
     _verwacht();
     notifyListeners();
     _volumeTeSturen = _volumeV;
-    if (_volumeKlok != null) return;
-    void verstuur() {
-      final w = _volumeTeSturen;
-      _volumeTeSturen = null;
-      if (w == null) {
-        _volumeKlok = null;
-        return;
+    if (_volumeBezig) return;
+    _volumeBezig = true;
+    unawaited(() async {
+      try {
+        while (!_weg) {
+          final w = _volumeTeSturen;
+          if (w == null) break;
+          _volumeTeSturen = null;
+          final klaar = Future<void>.delayed(kZoneVolumeTussen);
+          await _stuur('volume', {'waarde': w.round()});
+          await klaar;
+        }
+      } finally {
+        _volumeBezig = false;
       }
-      unawaited(_stuur('volume', {'waarde': w.round()}));
-      _volumeKlok = Timer(const Duration(milliseconds: 250), verstuur);
-    }
-
-    verstuur();
+    }());
   }
 
   /// Een zone op afstand: haar volume regel je hier niet zachter voor een navigatiestem.
@@ -740,7 +750,6 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     lijst.removeListener(_lijstVeranderd);
     _tik?.cancel();
     _foutWeg?.cancel();
-    _volumeKlok?.cancel();
     super.dispose();
   }
 }
