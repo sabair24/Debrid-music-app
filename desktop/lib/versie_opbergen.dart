@@ -20,8 +20,11 @@ library;
 import 'dart:io';
 
 import 'audioformaten.dart' show isVerliesvrij, soortVan;
+import 'echtheid.dart' show Echtheidsoordeel, waarom;
 import 'echtheid_meter.dart' show leesStreaminfo;
+import 'echtheid_oordelen.dart' show bewezenNep, gemeten, onthoudOordeel;
 import 'flac_tags.dart' show readFlacRawFields, readFlacTags;
+import 'keuring.dart' show muurBewezenDoor, muurBewijsZin;
 import 'kopiesoort.dart';
 import 'nultoets.dart';
 import 'nultoets_meter.dart';
@@ -174,17 +177,55 @@ Future<({String diep, String plat, Nuluitkomst uitkomst})?> nultoetsTussen(Strin
   if (o == null) return null;
   onthoudNultoets(diep, plat, o.uitkomst);
   log?.call('nultoets "${_naam(diep)}" tegen "${_naam(_map(plat))}": ${nulZin(o)}');
+  if (o.uitkomst == Nuluitkomst.lossy) await _bewijs(diep, nulZin(o));
   return (diep: diep, plat: plat, uitkomst: o.uitkomst);
 }
 
-/// Vóór de keuring: [kandidaat] door de nultoets tegen het nummer [anker] en elke versie ervan ([nultoetsTussen]).
-/// Zonder dit telt zijn diepte nergens — de keuring meet zelf niet ([firstIsBetter] is synchroon).
+/// [pad] is bewezen afgekapt door een andere kopie: zo in het oordeel ([Echtheidsoordeel.bewezenDoor]). Niets als het
+/// al nep was of nooit gemeten.
+Future<bool> _bewijs(String pad, String bewijs) async {
+  final o = gemeten(pad);
+  if (o == null || o.isNep) return false;
+  await onthoudOordeel(pad, o.bewezenDoor(bewijs));
+  return true;
+}
+
+/// Hoe een kopie heet in een bewijs: "cd", "studio", "vinyl", of "andere kopie".
+String _wieIs(String pad) => soortVoor(pad)?.soort.naam ?? versies.groep(pad)?.soort?.naam ?? 'andere kopie';
+
+/// Het kopiebewijs ([muurBewezenDoor]) tussen [pad] en elk van [anderen], in beide richtingen: bewijst een andere kopie
+/// van dezelfde opname dat een muur niet in de master zat, dan wordt die kopie afgekapt genoteerd. Geeft het aantal
+/// nieuwe bewijzen.
+Future<int> merkKopiebewijs(String pad, Iterable<String> anderen, {void Function(String regel)? log}) async {
+  var n = 0;
+  for (final ander in anderen) {
+    if (ander.toLowerCase() == pad.toLowerCase()) continue;
+    for (final (a, b) in [(pad, ander), (ander, pad)]) {
+      final oa = gemeten(a), ob = gemeten(b);
+      if (oa == null || oa.isNep || !muurBewezenDoor(oa, ob)) continue;
+      final zin = muurBewijsZin(ob!, _wieIs(b));
+      if (await _bewijs(a, zin)) {
+        n++;
+        log?.call('kopiebewijs "${_naam(a)}" (${_naam(_map(a))}): ${waarom(gemeten(a)!)}');
+      }
+    }
+  }
+  return n;
+}
+
+/// Vóór de keuring: [kandidaat] door de nultoets tegen het nummer [anker] en elke versie ervan ([nultoetsTussen]), en
+/// het kopiebewijs ([merkKopiebewijs]) in beide richtingen. Zonder dit telt zijn diepte nergens en ziet niets dat een muur
+/// bewezen is — de keuring meet zelf niet ([firstIsBetter] is synchroon).
 Future<void> bereidNultoets(String kandidaat, String anker, {void Function(String regel)? log}) async {
   final k = kandidaat.toLowerCase();
-  for (final ander in {anker, for (final v in versies.versiesVan(anker)) v.pad}) {
-    if (ander.toLowerCase() == k || !File(ander).existsSync()) continue;
+  final anderen = [
+    for (final ander in {anker, for (final v in versies.versiesVan(anker)) v.pad})
+      if (ander.toLowerCase() != k && File(ander).existsSync()) ander,
+  ];
+  for (final ander in anderen) {
     await nultoetsTussen(kandidaat, ander, log: log);
   }
+  await merkKopiebewijs(kandidaat, anderen, log: log);
 }
 
 /// De kopie van [anker] die vaststaat als digitaal — de cd, het nummer zelf of een versie — of null.
@@ -445,6 +486,8 @@ typedef Soortopruiming = ({
   int albumnaam,
   int overgeslagen,
   int nultoets,
+  int kopiebewijs,
+  int nep,
 });
 
 /// Per nummer hoogstens één kopie van elke soort: studio, cd en vinyl (Saber, 27-10-2026, bij Discovery met negen
@@ -472,6 +515,7 @@ Future<Soortopruiming> eenPerSoort(
     void Function(String regel)? log,
     Future<Stilte?> Function(String pad)? stilte}) async {
   var naarDubbel = 0, tweelingen = 0, vinylspoor = 0, verhuisd = 0, albumnaam = 0, overgeslagen = 0, nultoets = 0;
+  var kopiebewijzen = 0, nep = 0;
   final meet = stilte ?? stilteVan;
   final sep = Platform.pathSeparator;
   for (final g in versies.groepen.toList()) {
@@ -542,9 +586,29 @@ Future<Soortopruiming> eenPerSoort(
         }
       }
     }
+    // Het kopiebewijs ([merkKopiebewijs]): een muur die een andere kopie van dezelfde opname weerlegt.
+    for (var i = 0; i < alle.length; i++) {
+      kopiebewijzen += await merkKopiebewijs(alle[i], alle.skip(i + 1), log: (z) => log?.call('"$naam": $z'));
+    }
+    // Wat bewezen nep is (afgekapt — ook door een andere kopie —, opgeblazen, leeg boven) terwijl er een gezonde kopie van
+    // dezelfde opname naast staat, voegt niets toe: naar _dubbel, en is het het nummer, dan komt de gezonde op zijn plek.
+    // Saber, 27-10-2026: "zorg er eens voor dat dit goed werkt" — hier stonden zes D'Eux-"studio's" van mp3 naast zijn cd.
+    bool gezond(String p) => gemeten(p) != null && !bewezenNep(p);
+    final nepVersies = [
+      for (final v in lijst)
+        if (bewezenNep(v.pad) && (gezond(anker) || lijst.any((w) => w != v && gezond(w.pad)))) v,
+    ];
+    Versie? nepAnkerOpvolger;
+    String? nepAnkerWaarom;
+    if (bewezenNep(anker)) {
+      final kandidaten = [for (final v in lijst) if (gezond(v.pad)) v]
+        ..sort((a, b) => soortRang(soortVan[a.pad]!).compareTo(soortRang(soortVan[b.pad]!)));
+      nepAnkerOpvolger = kandidaten.firstOrNull;
+      nepAnkerWaarom = waarom(gemeten(anker)!);
+    }
     final tweelingVan = ankerSoort == null
         ? null
-        : lijst.where((v) => isTweeling(anker, ankerSoort, v.pad, v.soort)).firstOrNull ?? nulVan;
+        : lijst.where((v) => isTweeling(anker, ankerSoort, v.pad, v.soort)).firstOrNull ?? nulVan ?? nepAnkerOpvolger;
     final keuze = versies.speelVersie(anker, ankerSoort: ankerSoort);
 
     // Per soort de kopieën; het nummer telt mee, behalve als het een tweeling is (dan gaat het hoe dan ook weg).
@@ -552,6 +616,7 @@ Future<Soortopruiming> eenPerSoort(
       if (ankerSoort != null && tweelingVan == null) ankerSoort: [(pad: anker, v: null)],
     };
     for (final v in lijst) {
+      if (nepVersies.contains(v)) continue;
       perSoort.putIfAbsent(soortVan[v.pad]!, () => []).add((pad: v.pad, v: v));
     }
     int zittend(({String pad, Versie? v}) x) => x.v == null ? 0 : (identical(x.v, keuze) ? 1 : 2);
@@ -584,7 +649,19 @@ Future<Soortopruiming> eenPerSoort(
       opvolger = blijven.firstOrNull;
     }
 
-    // 1. Wat het aflegt naar _dubbel (het verplaatsen haalt het uit het register: versies.herNoem).
+    // 1. Wat het aflegt naar _dubbel (het verplaatsen haalt het uit het register: versies.herNoem). Eerst het nep.
+    for (final v in nepVersies) {
+      final wat = waarom(gemeten(v.pad)!);
+      try {
+        await parkeer(File(v.pad), dubbel);
+        _ruimLegeMapOp(_map(v.pad));
+        naarDubbel++;
+        nep++;
+        log?.call('"$naam": ${versieLabel(v.soort, v.persing)} naar _dubbel — $wat; er staat een echte kopie naast');
+      } catch (e) {
+        log?.call('"$naam": ${versieLabel(v.soort, v.persing)} naar _dubbel lukte niet — $e');
+      }
+    }
     for (final v in verliezers) {
       try {
         await parkeer(File(v.pad), dubbel);
@@ -615,7 +692,11 @@ Future<Soortopruiming> eenPerSoort(
         if (album != null) await _zetAlbumTerug(at, album);
         nu = at;
         naarDubbel++;
-        if (tweelingVan != null && identical(tweelingVan, nulVan)) {
+        if (tweelingVan != null && identical(tweelingVan, nepAnkerOpvolger) && !identical(tweelingVan, nulVan)) {
+          nep++;
+          log?.call('"$naam": het nummer is $nepAnkerWaarom — naar _dubbel; '
+              '${versieLabel(soort, o.persing)} is weer het nummer');
+        } else if (tweelingVan != null && identical(tweelingVan, nulVan)) {
           log?.call('"$naam": het nummer was je ${versieLabel(tweelingVan.soort, tweelingVan.persing)}, '
               '${nulHoe == Nuluitkomst.lossy ? 'als gedecodeerde stream' : 'bewerkt'} (nultoets) — naar _dubbel; '
               '${versieLabel(soort, o.persing)} is weer het nummer');
@@ -693,5 +774,7 @@ Future<Soortopruiming> eenPerSoort(
     albumnaam: albumnaam,
     overgeslagen: overgeslagen,
     nultoets: nultoets,
+    kopiebewijs: kopiebewijzen,
+    nep: nep,
   );
 }

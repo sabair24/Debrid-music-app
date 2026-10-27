@@ -106,6 +106,27 @@ Kwaliteit kwaliteitUit(
 /// eerste geen filter in de master was — zie [metMuurBewijs].
 const kMuurBewijsHz = 500.0;
 
+/// Zo diep moet een muur onder [zekerAfkapTot] minstens zijn om door een andere kopie bewezen te kunnen worden, ook als
+/// de meter hem op zichzelf te ondiep vond (die wil er 25). Destin (27-10-2026): 22,7 dB op 17,15 kHz. Een natuurlijke
+/// afloop zakt over een kilohertz geen 20 dB: in de bibliotheek lagen 506 van de 552 "doorlopende" bestanden met hun
+/// steilste val onder 19,4 kHz onder 10 dB.
+const kKopieWandDb = 20.0;
+
+/// Bewijst [ob] (een andere kopie van dezelfde opname) dat de muur in [oa] niet in de master zat? Dat is zo als [oa] een
+/// verdachte muur heeft — [Bandbreedte.vermoedelijk], of een doorlopend oordeel met een muur van minstens [kKopieWandDb]
+/// onder [zekerAfkapTot] (waar een studio niet filtert) — en [ob] bewezen doorloopt tot minstens [kMuurBewijsHz] verder.
+bool muurBewezenDoor(Echtheidsoordeel? oa, Echtheidsoordeel? ob) {
+  if (oa == null || ob == null || ob.isNep || ob.band != Bandbreedte.doorlopend) return false;
+  final xa = oa.afkapHz, xb = ob.afkapHz;
+  if (xa == null || xb == null || xb < xa + kMuurBewijsHz) return false;
+  return oa.band == Bandbreedte.vermoedelijk ||
+      (oa.band == Bandbreedte.doorlopend && (oa.wandDb ?? 0) >= kKopieWandDb && xa < zekerAfkapTot);
+}
+
+/// Wat [ob] bewees, voor [Echtheidsoordeel.bewijs]: "je cd loopt door tot 21,3 kHz". [wie]: hoe de andere kopie heet.
+String muurBewijsZin(Echtheidsoordeel ob, String wie) =>
+    'je $wie loopt door tot ${((ob.afkapHz ?? 0) / 1000).toStringAsFixed(2).replaceAll('.', ',')} kHz';
+
 /// [a] met wat een ANDERE kopie van dezelfde opname over zijn muur bewijst.
 ///
 /// **Waarom (Saber, 21-10-2026, Snoop Dogg — Beautiful).** Zijn 24/48 heeft een muur op 20,0 kHz: "past bij
@@ -114,12 +135,11 @@ const kMuurBewijsHz = 500.0;
 /// Maar loopt een andere kopie van dezelfde opname wél door, tot ver voorbij die muur
 /// ([Bandbreedte.doorlopend], minstens [kMuurBewijsHz] hoger), dan zat die muur niet in de master: dan is
 /// bewezen dat [a] afgekapt is, en telt het als [Klasse.uitLossy]. Saber: "Ja, dat telt als bewijs."
+///
+/// Sinds 27-10-2026 ook een te ondiepe muur in de mp3-zone ([muurBewezenDoor]): Destin.
 Kwaliteit metMuurBewijs(Kwaliteit a, Echtheidsoordeel? oa, Echtheidsoordeel? ob) {
-  if (oa == null || ob == null) return a;
   if (a.klasse != Klasse.cd && a.klasse != Klasse.onbewezenHires) return a;
-  if (oa.band != Bandbreedte.vermoedelijk || ob.band != Bandbreedte.doorlopend) return a;
-  final xa = oa.afkapHz, xb = ob.afkapHz;
-  if (xa == null || xb == null || xb < xa + kMuurBewijsHz) return a;
+  if (!muurBewezenDoor(oa, ob)) return a;
   return (klasse: Klasse.uitLossy, rate: a.rate, formaat: a.formaat, diep: a.diep, bewerkt: a.bewerkt);
 }
 

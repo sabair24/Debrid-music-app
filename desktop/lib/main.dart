@@ -916,7 +916,15 @@ Future<void> main() async {
   }
   // Wat er van elk bestand gemeten is. Vóór de eerste scan, want `firstIsBetter` vraagt hier bij elke
   // vergelijking naar — en een lijst die nog niet is ingelezen beschermt niets.
-  if (mode.owner) await laadEchtheid();
+  if (mode.owner) {
+    await laadEchtheid();
+    // Een val van 20-25 dB in de mp3-zone heet nu vermoedelijk (echtheid.dart, Destin): wat ertussen viel, nog één keer meten.
+    final n = await herkeurOndiepeMuren('$appDir${Platform.pathSeparator}echtheid_herkeur_20db.txt');
+    if (n > 0) {
+      WarmLog('$logDir${Platform.pathSeparator}echtheid.log').line('herkeuren: $n bestanden met een muur van 20-25 dB '
+          'onder 19,4 kHz opnieuw laten meten (nu vermoedelijk)');
+    }
+  }
   // De nultoets (nultoets.dart, 27-10-2026): "24 bit" wint alleen nog met bewijs tegen je eigen 16 bit. Wat hij zei,
   // staat in nultoets.json; meten doet alleen de pc, en alleen wie een vergelijking voorbereidt.
   if (mode.owner) {
@@ -2462,7 +2470,8 @@ Future<void> main() async {
                 inGebruik: (p) => downloads.speeltNu?.call(p) ?? false,
                 log: downloads.logRegel);
             downloads.logRegel('één per soort: ${r.naarDubbel} kopieën naar _dubbel (${r.tweelingen} tweelingen, '
-                '${r.nultoets} door de nultoets als je cd herkend), '
+                '${r.nultoets} door de nultoets als je cd herkend, ${r.nep} nep naast een echte kopie; '
+                '${r.kopiebewijs} muren door een andere kopie bewezen), '
                 '${r.vinylspoor} klonken als vinyl, '
                 '${r.verhuisd} naar de map van hun soort, ${r.albumnaam} albumnamen rechtgezet${r.overgeslagen > 0 ? ', ${r.overgeslagen} nummers wachten (ze speelden)' : ''}');
             if (r.naarDubbel + r.verhuisd + r.albumnaam > 0) await library.scan();
