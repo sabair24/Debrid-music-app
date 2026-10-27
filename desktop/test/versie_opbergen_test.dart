@@ -6,7 +6,7 @@ import 'dart:typed_data';
 
 import 'package:debridmusic/kopiesoort.dart';
 import 'package:debridmusic/flac_tags.dart' show readFlacTags;
-import 'package:debridmusic/organize.dart' show readTags;
+import 'package:debridmusic/organize.dart' show readTags, writeTagFields;
 import 'package:debridmusic/versie_opbergen.dart';
 import 'package:debridmusic/versies.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -299,6 +299,17 @@ void main() {
       expect([for (final v in versies.versiesVan(anker)) v.soort], [Kopiesoort.vinyl], reason: 'de echte vinylrip blijft');
       expect(inDubbel().single.lengthSync(), greaterThan(0), reason: 'de tweeling in _dubbel, niet gewist');
       expect(regels.single, contains('dezelfde rip'));
+      expect(Directory('${root.path}${sep}Albums${sep}Spice Girls${sep}Spice (cd)').existsSync(), isFalse,
+          reason: 'de versiemap van de cd bleef leeg achter (Cutting Crew)');
+    });
+
+    test('al in de map van zijn soort, maar de albumnaam draagt nog een persing: rechtgezet (Voyager)', () async {
+      final pad = versie('Spice (vinyl)', Kopiesoort.vinyl, 'LP 2022', sinds: 1);
+      await writeTagFields(File(pad), {'ALBUM': 'Spice (vinyl LP 2022)'});
+      final r = await eenPerSoort(dubbel: dubbel());
+      expect(r.albumnaam, 1);
+      expect(readTags(File(pad))?.album, 'Spice (vinyl)');
+      expect((await eenPerSoort(dubbel: dubbel())).albumnaam, 0, reason: 'een tweede keer niets: geen tags herschrijven');
     });
 
     test('wat speelt, blijft tot de volgende start', () async {
@@ -313,7 +324,7 @@ void main() {
     test('één per soort en al in de map van zijn soort: niets te doen', () async {
       versie('Spice (vinyl)', Kopiesoort.vinyl, 'LP 2001', sinds: 1);
       final r = await eenPerSoort(dubbel: dubbel());
-      expect((r.naarDubbel, r.verhuisd, r.tweelingen), (0, 0, 0));
+      expect((r.naarDubbel, r.verhuisd, r.tweelingen, r.albumnaam), (0, 0, 0, 0));
     });
   });
 }
