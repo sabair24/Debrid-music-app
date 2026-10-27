@@ -564,4 +564,62 @@ void main() {
       expect(vooruit.tracks, isEmpty);
     });
   });
+
+  // Saber, 27-10-2026: "ik wil ook in cd kwaliteit kunnen opslaan offline gebruik op de gsm" — en ophalen alleen via wifi.
+  group('offline in cd-kwaliteit, alleen via wifi', () {
+    OfflineRequest verzoek(String pad) =>
+        OfflineRequest(libraryPath: pad, title: 'Strangers By Nature', artist: 'Adele', album: '30');
+
+    test('DE KERN: op mobiele data wacht de rij; weer op wifi gaat hij verder', () async {
+      var wifi = false;
+      store.magOphalen = () => wifi;
+      store.bewaarAlles([verzoek(path)]);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(server.requests, 0, reason: 'niets over je databundel');
+      expect(store.wachtOpWifi, isTrue);
+      expect(store.isBusy(path), isTrue, reason: 'hij staat in de rij');
+      wifi = true;
+      store.verder();
+      await wachtTot(() => store.has(path), 'het nummer staat er');
+      expect(store.wachtOpWifi, isFalse);
+      expect(File(store.localFor(path)!).readAsBytesSync(), payload);
+    });
+
+    test('midden in een nummer naar mobiel: stoppen, het halve bestand bewaren, later verder met Range', () async {
+      var wifi = true;
+      store.magOphalen = () => wifi;
+      server.chunkDelay = const Duration(milliseconds: 2);
+      store.bewaarAlles([verzoek(path)]);
+      await wachtTot(() => (store.taakVoor(path)?.gedaan ?? 0) > 2000, 'een stuk binnen');
+      wifi = false;
+      await wachtTot(() => store.wachtOpWifi, 'de rij wacht');
+      expect(store.has(path), isFalse);
+      server.chunkDelay = Duration.zero;
+      wifi = true;
+      store.verder();
+      await wachtTot(() => store.has(path), 'het nummer staat er');
+      expect(server.laatsteBereik, startsWith('bytes='), reason: 'verder waar hij stopte, niet opnieuw');
+      expect(File(store.localFor(path)!).readAsBytesSync(), payload);
+    });
+
+    test('een omgezette kopie heet .flac en onthoudt in welke kwaliteit ze kwam', () async {
+      const wv = 'http://pc.invalid/stream/abc.wv';
+      store.adresVoor = (_) => '$url?maxRate=44100&maxBits=16';
+      store.bewaarAlles([verzoek(wv)]);
+      await wachtTot(() => store.has(wv), 'de kopie staat er');
+      expect(store.localFor(wv), endsWith('.flac'));
+      expect(store.grensVoor(wv), (rate: 44100, bits: 16));
+    });
+  });
+
+  test('aangesloten: offline bewaren in cd-kwaliteit, alleen via wifi, thuis het origineel', () {
+    String bron(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
+    final main = bron('lib/main.dart');
+    expect(main, contains("        if (settings.offlineKwaliteit != 'cd') return url;"));
+    expect(main, contains('            stand: Stroomstand.cd,'));
+    expect(main, contains('  offline.magOphalen = () => netStore.net != Netsoort.mobiel;'));
+    expect(main, contains('      if (local != null && !thuisBeter(path)) return local;'));
+    expect(main, contains('      (path) => offline.localFor(path) != null ? offline.grensVoor(path) : vooruit.grensVoor(path);'));
+    expect(bron('lib/settings.dart'), contains("        offlineKwaliteit = (m['offline_kwaliteit'] ?? 'cd') as String;"));
+  });
 }

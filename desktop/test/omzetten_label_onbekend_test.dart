@@ -120,8 +120,9 @@ void main() {
 
       final main = _bron('lib/main.dart');
       expect(main,
-          contains('(path) => offline.localFor(path) != null ? null : vooruit.grensVoor(path);'),
-          reason: 'een zelf bewaarde offline kopie is het origineel en gaat vóór de vooruit gehaalde');
+          contains('(path) => offline.localFor(path) != null ? offline.grensVoor(path) : vooruit.grensVoor(path);'),
+          reason: 'een zelf bewaarde offline kopie gaat vóór de vooruit gehaalde — en kan sinds 27-10-2026 zelf in '
+              'cd-kwaliteit zijn ("Offline bewaren in")');
     });
   });
 

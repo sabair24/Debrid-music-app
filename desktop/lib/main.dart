@@ -816,11 +816,42 @@ Future<void> main() async {
       // origineel van de pc (bit-perfect, zie hieronder); het vooruithalen het adres waarmee het
       // nummer zo zal spelen, met de stand van dat moment.
       // Offline bewaren neemt de versie die voor dit nummer speelt (versies.dart: "wat speelt voor die plaat").
-      offline.adresVoor = (p) => resolver(library.speelPadVoor(p));
+      //
+      // Sinds 27-10-2026 in cd-kwaliteit, tenzij je bij Instellingen "Origineel" koos (Saber: "ik wil ook in cd kwaliteit
+      // kunnen opslaan offline gebruik op de gsm"). Wat al 16/44,1 is, blijft het origineel ([metStand]). Een versie
+      // (studio, vinyl) zonder eigen maat laat de pc nameten.
+      offline.adresVoor = (p) {
+        final pad = library.speelPadVoor(p);
+        final url = resolver(pad);
+        if (settings.offlineKwaliteit != 'cd') return url;
+        final t = library.trackByPath(p);
+        final eigen = pad == p;
+        return metStand(url,
+            stand: Stroomstand.cd,
+            sampleRate: eigen ? t?.sampleRate ?? 0 : 0,
+            bits: eigen ? t?.bitsPerSample ?? 0 : 0,
+            lossless: losslessExtensie(t?.ext ?? 'flac'));
+      };
       vooruit.adresVoor = (p) => player.mediaResolver(p);
+      // Thuis het origineel (Saber, 27-10-2026): een kopie in cd-kwaliteit speelt onderweg en zonder pc; thuis, met de pc
+      // bereikbaar, stroomt wat je thuis-stand vraagt als dat méér is dan de kopie.
+      bool thuisBeter(String p) {
+        final g = offline.localFor(p) != null ? offline.grensVoor(p) : vooruit.grensVoor(p);
+        if (g == null || netStore.onderweg || library.remote == null || library.geenVerbinding != null) return false;
+        final t = library.trackByPath(p);
+        if (t == null || t.sampleRate <= 0) return false;
+        final stroom = metStand(resolver(p),
+            stand: netStore.geldendeStand(settings),
+            sampleRate: t.sampleRate,
+            bits: t.bitsPerSample,
+            lossless: losslessExtensie(t.ext));
+        final w = grensUitUrl(stroom) ?? (rate: t.sampleRate, bits: t.bitsPerSample);
+        return w.rate > g.rate || (w.bits > 0 && g.bits > 0 && w.bits > g.bits);
+      }
+
       player.mediaResolver = (path) {
       final local = offline.localFor(path) ?? vooruit.localFor(path);
-      if (local != null) return local;
+      if (local != null && !thuisBeter(path)) return local;
       // **Hier en niet in `client.authorized`.** Die wordt ook gebruikt door de knop "Offline
       // bewaren", en een kopie die je op je toestel zet hoort bit-perfect te blijven — die neem je
       // juist mee omdat er onderweg geen netwerk is. Dit is de enige plek die alleen over AFSPELEN
@@ -1064,11 +1095,10 @@ Future<void> main() async {
   // daar kijkt de speler rechtstreeks naar het bestand en is er niets te vragen.
   player.vraagDeBron = (url) async => library.remote?.waarom(url);
   player.onKlaarzetten = (url) => unawaited(_zetKlaar(url));
-  // Wat er in een kopie op het toestel zit. Dezelfde volgorde als de resolver hierboven: een
-  // offline bewaarde kopie is bit voor bit het origineel en gaat voor; alleen een vooruit gehaalde
-  // kan omgezet zijn. Zie `OfflineTrack.grens`.
+  // Wat er in een kopie op het toestel zit. Dezelfde volgorde als de resolver hierboven. Sinds 27-10-2026 kan ook een
+  // offline bewaarde kopie omgezet zijn (cd-kwaliteit, "Offline bewaren in"). Zie `OfflineTrack.grens`.
   player.kopieGrens =
-      (path) => offline.localFor(path) != null ? null : vooruit.grensVoor(path);
+      (path) => offline.localFor(path) != null ? offline.grensVoor(path) : vooruit.grensVoor(path);
   // Gelijk volume: de versterking per nummer (luidheid_winkel.dart `bijstellingVoorNummer`). Op het
   // Track, niet op de bron: offline, vooruit en gestreamd krijgen dezelfde dB.
   player.luidheidVoor = (Track t,
@@ -1142,7 +1172,11 @@ Future<void> main() async {
   // niets als het getal niet veranderde — dus dit mag bij elke melding langskomen.
   netStore.addListener(() {
     unawaited(player.zetVooruitlezen(secs: vooruitleesSeconden(netStore.net)));
+    // Weer op wifi: offline bewaren loopt verder (offline.dart, [OfflineStore.magOphalen]).
+    offline.verder();
   });
+  // Offline bewaren alleen via wifi (Saber, 27-10-2026); het vooruithalen blijft juist op mobiel.
+  offline.magOphalen = () => netStore.net != Netsoort.mobiel;
   // De speaker vertelt elke twee seconden bij welk nummer hij is; hier gaat dat de speler in. Zonder
   // deze regel werd die index netjes doorgegeven en door niemand gelezen: de app bleef staan op het
   // nummer van de overdracht terwijl de speaker doorliep, en dan hoort de hoes op het scherm bij iets
@@ -6511,6 +6545,8 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
     // die is niet bezig, en de knop moet juist weer aan te tikken zijn om hem opnieuw te proberen.
     final bezig = tracks.any((t) => offline.isBusy(t.path));
     final stuk = !bezig && tracks.any((t) => offline.foutVoor(t.path) != null);
+    // Op mobiele data wacht de rij (alleen via wifi, 27-10-2026).
+    final wachtWifi = bezig && offline.wachtOpWifi;
 
     // Hoever het lopende nummer is. **Bij een plaat die uit één bestand bestaat is dit het enige
     // wat beweegt**: "Ophalen 0/1" stond een half uur lang stil bij Thriller (32 bit/384 kHz), en
@@ -6546,7 +6582,9 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
             },
       icoon: stuk
           ? Icons.refresh_rounded
-          : bezig
+          : wachtWifi
+              ? Icons.wifi_rounded
+              : bezig
               ? Icons.downloading_rounded
               : all
                   ? Icons.offline_pin_rounded
@@ -6556,7 +6594,9 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
       // gebeurt.
       label: stuk
           ? 'Opnieuw proberen'
-          : bezig
+          : wachtWifi
+              ? 'Wacht op wifi ($here/${tracks.length})'
+              : bezig
               ? 'Ophalen $here/${tracks.length}$deel'
               : all
                   ? 'Op dit toestel'
@@ -42170,6 +42210,31 @@ class StroomkwaliteitKeuze extends StatelessWidget {
             'Een wijziging geldt vanaf het volgende nummer.',
             style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
           ),
+          // Offline bewaren (Saber, 27-10-2026): waar de muziek elders woont en je hem meeneemt — niet op de pc, niet op tv.
+          if (context.read<LibraryStore>().isRemote && !isTv) ...[
+            const SizedBox(height: 14),
+            const Text('Offline bewaren', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            Wrap(spacing: 8, runSpacing: 4, children: [
+              for (final (naam, label) in const [('cd', 'Cd-kwaliteit'), ('origineel', 'Origineel')])
+                ChoiceChip(
+                  label: Text(label),
+                  selected: (settings.offlineKwaliteit == 'origineel' ? 'origineel' : 'cd') == naam,
+                  onSelected: (aan) {
+                    if (!aan) return;
+                    settings.offlineKwaliteit = naam;
+                    unawaited(settings.save());
+                  },
+                ),
+            ]),
+            const SizedBox(height: 6),
+            Text(
+              'Cd-kwaliteit: FLAC 16/44,1, bit voor bit cd — een hi-res plaat neemt zo 300 à 400 MB in plaats van 1 à 2 GB. '
+              'Origineel: het bestand van je pc, zoals het is. Ophalen gebeurt alleen via wifi; thuis speelt het origineel '
+              'van je pc. Geldt voor wat je vanaf nu bewaart.',
+              style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
+            ),
+          ],
         ],
       ),
     );
