@@ -66,3 +66,20 @@ String majorFormat(String raw) {
   }
   return '';
 }
+
+/// Een Japanse persing? MusicBrainz schrijft het land als code ("JP"), Discogs voluit ("Japan").
+///
+/// Saber, 26-10-2026: *"Japans wil ik nooit"*. Een Japanse persing komt vaak het eerst uit — *All Saints* op 15-10-1997
+/// in Japan, op 24-11 in Europa — en "de oudste persing" werd dan die: een andere volgorde, eigen bonusnummers, en hier
+/// een "Never Ever" van 5:13 tegen de 6:27 op de cd die hij heeft. Zo stonden er 24 albums op een Japanse persing.
+bool isJapansePersing(String? land) {
+  final l = (land ?? '').trim().toLowerCase();
+  return l == 'jp' || l == 'japan';
+}
+
+/// [alle] zonder de Japanse persingen ([isJapansePersing]) — tenzij er niets anders is: een Japanse tracklijst is nog
+/// altijd meer dan geen.
+List<T> zonderJapansePersingen<T>(List<T> alle, String? Function(T) land) {
+  final rest = [for (final x in alle) if (!isJapansePersing(land(x))) x];
+  return rest.isEmpty ? alle : rest;
+}
