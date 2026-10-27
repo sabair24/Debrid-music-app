@@ -22,6 +22,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../album_facts.dart';
+import '../dataverbruik.dart' show TellendeClient;
 import 'dtos.dart';
 import 'pin_client.dart';
 import 'poorten.dart';
@@ -170,8 +171,10 @@ class RemoteEndpoint {
 /// (`remote_services.dart`) een eigen `http.Client()` met de HTTP-sleutel te hebben: op de versleutelde
 /// weg (sinds 3.9.482) vertrouwde die het certificaat van de pc niet, en zoeken en downloaden mislukten
 /// thuis én onderweg, terwijl afspelen gewoon werkte.
+///
+/// En geteld (dataverbruik.dart, 27-10-2026): wat er over de lijn gaat, voor Instellingen › Info en `verbruik.log`.
 http.Client clientVoor(RemoteEndpoint e) =>
-    e.versleuteld ? pinClient(pin: e.pin.isEmpty ? '-' : e.pin) : http.Client();
+    TellendeClient(e.versleuteld ? pinClient(pin: e.pin.isEmpty ? '-' : e.pin) : http.Client());
 
 /// De sleutel in de kop voor [e]: versleuteld de TLS-sleutel, anders de HTTP-sleutel. Nooit door elkaar:
 /// een TLS-sleutel op 47820 wordt door de pc ingetrokken, een HTTP-sleutel op 47822/47821 geweigerd.

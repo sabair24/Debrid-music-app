@@ -849,6 +849,16 @@ Map<String, String?> veldenBijTitelherstel({required String titel, String? artie
       if (artiest != null && artiest.trim().isNotEmpty) 'ARTIST': cleanArtistName(artiest),
     };
 
+/// Het merkteken van een hoes zoals de pc hem stuurde (`/art/<ref>?w=1024` → "f660aba6-w1024", server.dart), zonder het
+/// plafond: zo is het te vergelijken met het merkteken in de catalogus (`artTag`, "f660aba6").
+///
+/// **Waarom (Saber, 27-10-2026: "data verbruik buitenshuis … is echt nog veel").** Hier stond `bewaard != merk`, en die
+/// twee waren nooit gelijk: elke gekozen hoes gold dus als verouderd, en kwam bij elke hoezenronde opnieuw volledig binnen,
+/// zonder merkteken. Gemeten die dag: 898 van de 928 albums, gemiddeld 130 KB, ongeveer 114 MB per ronde — en er komt een
+/// ronde bij elke wijziging van de catalogus, toen ongeveer elke 45 s. Op 25-10 raakte de S26 zo binnen een kwartier de
+/// grens van 3000 hoezen per uur (koppeling.log); die werd daarna verruimd, en de fout bleef.
+String? hoesMerkZonderPlafond(String? merk) => merk?.replaceFirst(RegExp(r'-w\d+$'), '');
+
 class LibraryStore extends ChangeNotifier {
   final List<Track> tracks = [];
   List<Album> albums = [];
@@ -3885,7 +3895,7 @@ class LibraryStore extends ChangeNotifier {
       // vaak de eigenaar het ook corrigeerde.
       final merk = _remoteAlbums[album]?.artTag ?? '';
       final bewaard = bewaardeMerken[album] ?? await enricher.bewaardMerk(album);
-      final verouderd = merk.isNotEmpty && bewaard != merk;
+      final verouderd = merk.isNotEmpty && hoesMerkZonderPlafond(bewaard) != merk;
       // Er staat al iets én het klopt: niets te doen. Deze uitgang stond vroeger in de wachtrij
       // zelf, en daarom werd `verouderd` hierboven nooit voor zo'n album berekend. Wat de
       // leesronde hierboven net van schijf zette telt niet als "klopt": dat moet nog nagevraagd.

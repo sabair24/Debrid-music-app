@@ -222,6 +222,10 @@ class ClientSession extends ChangeNotifier {
   @visibleForTesting
   DoorgeverIsolaat? get doorgever => _doorgever;
 
+  /// Wat de doorgever van de pc haalde voor mpv (muziek en hoezen): het pad met vraag, en de bytes. Gezet in main.dart
+  /// (dataverbruik.dart).
+  void Function(String pad, int bytes)? doorgeverLeverde;
+
   /// De doorgever op [e] richten: versleuteld → (één keer) starten en de pc aanwijzen; anders niets meer
   /// doorgeven. Start hij niet, dan speelt alles via de gewone ingang (zie `RemoteClient.authorized`).
   Future<void> _doorgeverVoor(RemoteEndpoint e) async {
@@ -235,6 +239,7 @@ class ClientSession extends ChangeNotifier {
       // houdt mpv intussen vast en gaat verder zodra er een nieuw adres is.
       storing: () => unawaited(netwerkVeranderd('doorgever: de pc antwoordt niet op ${_endpoint?.baseUrl.authority}')),
       veranderd: (_) => waarschuwing.value = 'Dit nummer veranderde op je pc terwijl het speelde. Start het opnieuw.',
+      geleverd: (pad, bytes) => doorgeverLeverde?.call(pad, bytes),
     );
     if (!d.draait) {
       try {

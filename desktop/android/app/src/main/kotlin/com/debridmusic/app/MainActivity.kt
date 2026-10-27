@@ -1,5 +1,7 @@
 package com.debridmusic.app
 
+import android.app.usage.NetworkStats
+import android.app.usage.NetworkStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -8,11 +10,13 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.TrafficStats
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.Process
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.ryanheise.audioservice.AudioServiceActivity
@@ -157,6 +161,29 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    /** Bytes (ontvangen + verzonden) van deze app per soort netwerk, of null als Android het niet zegt. */
+    @Suppress("DEPRECATION")
+    private fun verbruik(vanaf: Long, tot: Long): Map<String, Long>? {
+        return try {
+            val nsm = getSystemService(Context.NETWORK_STATS_SERVICE) as? NetworkStatsManager ?: return null
+            val uid = Process.myUid()
+            fun som(soort: Int): Long {
+                var totaal = 0L
+                val stats = nsm.queryDetailsForUid(soort, null, vanaf, tot, uid)
+                val b = NetworkStats.Bucket()
+                while (stats.hasNextBucket()) {
+                    stats.getNextBucket(b)
+                    totaal += b.rxBytes + b.txBytes
+                }
+                stats.close()
+                return totaal
+            }
+            mapOf("mobiel" to som(ConnectivityManager.TYPE_MOBILE), "wifi" to som(ConnectivityManager.TYPE_WIFI))
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun deviceName(): String {
         try {
             val chosen = Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
@@ -193,6 +220,18 @@ class MainActivity : AudioServiceActivity() {
                     )
                     "deviceName" -> result.success(deviceName())
                     "netsoort" -> result.success(netsoort())
+                    // Dataverbruik (lib/dataverbruik.dart): wat deze app sinds het opstarten van het toestel ontving en
+                    // verstuurde, over elk netwerk.
+                    "verkeer" -> result.success(
+                        mapOf("rx" to TrafficStats.getUidRxBytes(Process.myUid()),
+                            "tx" to TrafficStats.getUidTxBytes(Process.myUid()))
+                    )
+                    // En wat Android zelf telt voor deze app, mobiel en wifi apart, tussen twee tijdstippen: hetzelfde
+                    // getal als in Instellingen › Verbindingen › Dataverbruik. Eigen verbruik vragen mag zonder recht.
+                    "verbruik" -> result.success(
+                        verbruik(call.argument<Number>("vanaf")?.toLong() ?: 0L,
+                            call.argument<Number>("tot")?.toLong() ?: System.currentTimeMillis())
+                    )
                     else -> result.notImplemented()
                 }
             }
