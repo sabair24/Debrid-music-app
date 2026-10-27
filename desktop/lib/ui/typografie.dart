@@ -50,20 +50,21 @@ TextStyle get kDisplayKlein => TextStyle(
 
 /// Hoe groot de artiestnaam op dít scherm mag zijn.
 ///
-/// Eén plek in plaats van vier losse getallen. De maten komen uit de ontwerpschetsen: 132 op een
-/// bureaublad, 84 op een iPad liggend, 76 staand, 46 op een telefoon of televisie. Alles daarbuiten
-/// schaalt mee met de breedte, met een bodem zodat een heel smal venster niet in onleesbaarheid
-/// eindigt.
+/// Eén plek in plaats van vier losse getallen. Kleiner sinds 27-10-2026 (Saber: "de naam van de artist is
+/// te groot"): 64 op een bureaublad in plaats van 132, 54 op een iPad liggend, 48 staand, 34 op een gsm —
+/// de maten uit het ontwerp dat hij goedkeurde. Meestal staat er nu het logo (`KopLogo`); dit is de naam
+/// voor wie er geen heeft. Alles daarbuiten schaalt mee met de breedte, met een bodem zodat een heel
+/// smal venster niet in onleesbaarheid eindigt.
 ///
 /// Een televisie hoort hier niet in: een Shield is 960 punten breed en zou de maat van een iPad
 /// krijgen. Die gebruikt [kTvArtiestNaam].
 double artiestNaamGrootte(double breedte) {
-  if (breedte >= 1280) return 132;
-  if (breedte >= 1100) return 96;
-  if (breedte >= 900) return 84;
-  if (breedte >= 700) return 76;
-  if (breedte >= 500) return 58;
-  return (breedte * .118).clamp(34, 46);
+  if (breedte >= 1280) return 64;
+  if (breedte >= 1100) return 58;
+  if (breedte >= 900) return 54;
+  if (breedte >= 700) return 48;
+  if (breedte >= 500) return 40;
+  return (breedte * .083).clamp(30, 36);
 }
 
 /// De artiestnaam op een televisie: de 46 uit de ontwerpschets. Met de 1,35 waarmee een tv alle

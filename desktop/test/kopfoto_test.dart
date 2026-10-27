@@ -39,15 +39,34 @@ void main() {
       expect(KopInstelling.lees('0.5,0.4,1'), const KopInstelling(fx: .5, fy: .4));
     });
 
+    test('de naam in plaats van het logo reist mee, ook zonder eigen hoogte', () {
+      // Saber, 27-10-2026: "Kop toont: Logo | Naam" in de bewerker, per scherm.
+      const metHoogte = KopInstelling(fx: .62, fy: .31, zoom: 1.25, hoogte: 380, naam: true);
+      expect(metHoogte.schrijf(), '0.620,0.310,1.250,380,naam');
+      expect(KopInstelling.lees(metHoogte.schrijf()), metHoogte);
+      const zonder = KopInstelling(fx: .5, fy: .4, naam: true);
+      expect(zonder.schrijf(), '0.500,0.400,1.000,,naam');
+      expect(KopInstelling.lees(zonder.schrijf()), zonder);
+      expect(KopInstelling.lees('0.5,0.4,1,,logo'), const KopInstelling(fx: .5, fy: .4));
+      expect(const KopInstelling(fx: .5, fy: .4).schrijf(), '0.500,0.400,1.000', reason: 'zonder naam zoals altijd');
+      expect(const KopInstelling(fx: .5, fy: .4).met(naam: true), zonder);
+    });
+
+    test('opzij mag hij voorbij de rand, en dat blijft bij lezen staan', () {
+      expect(KopInstelling.lees('-0.4,0.3,1')!.fx, -.4);
+      expect(KopInstelling.lees('1.6,0.3,1')!.fx, 1.6);
+      expect(const KopInstelling(fx: .5, fy: .3).met(fx: 1.7).fx, 1.7);
+    });
+
     test('wat geen instelling is, wordt er geen — ook geen half verzonnen', () {
-      for (final fout in [null, '', 'https://i.discogs.com/foto.jpg', '1,2', '0.5,x,1', '0.5,0.5,1,hoog', 'NaN,0.5,1', '1,2,3,4,5']) {
+      for (final fout in [null, '', 'https://i.discogs.com/foto.jpg', '1,2', '0.5,x,1', '0.5,0.5,1,hoog', 'NaN,0.5,1', '1,2,3,4,5', '1,2,3,4,5,6', '0.5,0.5,1,,']) {
         expect(KopInstelling.lees(fout), isNull, reason: '"$fout"');
       }
     });
 
     test('buiten de grenzen wordt binnen de grenzen', () {
-      final i = KopInstelling.lees('-1,7,99,20')!;
-      expect(i.fx, 0);
+      final i = KopInstelling.lees('-3,7,99,20')!;
+      expect(i.fx, KopInstelling.kFxVanaf, reason: 'opzij mag voorbij de rand, maar niet eindeloos');
       expect(i.fy, 1);
       expect(i.zoom, KopInstelling.kZoomTot);
       expect(i.hoogte, KopInstelling.kHoogteVanaf, reason: 'een kop van 20 punten past de naam niet');

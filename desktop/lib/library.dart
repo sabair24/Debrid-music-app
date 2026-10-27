@@ -1995,8 +1995,19 @@ class LibraryStore extends ChangeNotifier {
   /// keuze die je op het toestel maakte belandde dus in een bestandje dat niemand meer las: de foto
   /// sprong meteen terug en het leek alsof de knop niets deed. Precies dezelfde vorm als de
   /// albumhoes, die daarom al over [_editOnPc] gaat.
+  ///
+  /// En op een client meteen ook hier, zoals bij [setKop]: tot de catalogus van de pc terug is, bleef de kop
+  /// op een Mac of iPad zoals hij was, en leek de klik in "Foto kiezen" niets te doen (Saber, 27-10-2026: "op
+  /// mac kan ik geen andere foto slecteren"). Mislukt het op de pc, dan zet de volgende catalogus het terug.
   Future<void> setArtistArt(String artist, String kind, String url) async {
     if (isRemote) {
+      final vak = _remoteArtistArt[artistKey(artist)] = {...?_remoteArtistArt[artistKey(artist)]};
+      if (url.isEmpty) {
+        vak.remove(kind);
+      } else {
+        vak[kind] = url;
+      }
+      notifyListeners();
       return _editOnPc({'op': 'artistArt', 'artist': artist, 'kind': kind, 'url': url});
     }
     // Leeg WIST, en dat stond er al vijf regels hierboven beloofd zonder dat het waar was: een

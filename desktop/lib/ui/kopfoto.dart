@@ -364,6 +364,9 @@ Future<FotoBlik?> _bekijkVers(Uint8List beeld) async {
 /// Past dat niet, dan de gezichten zelf, in het midden van [zicht]; en is zelfs één gezicht groter
 /// dan [zicht] (een close-up), dan de ogen in het midden. Eerst stond hier "de kruin gaat voor", en
 /// bij een close-up van Alicia Keys zag je dan alleen haar haar (gemeten op 17-10-2026).
+///
+/// [opzij] is hoeveel van de breedte van het vak de foto opzij mag vrijlaten (zie [kOpzijVrij]): 0 is
+/// altijd vullend, zoals de app zelf kiest.
 Rect kopPlek({
   required Size vak,
   required Size beeld,
@@ -372,6 +375,7 @@ Rect kopPlek({
   double zoom = 1,
   Rect? gezichten,
   Rect? zicht,
+  double opzij = 0,
 }) {
   if (beeld.width <= 0 || beeld.height <= 0 || vak.isEmpty || !vak.isFinite) return Offset.zero & vak;
   final s = math.max(vak.width / beeld.width, vak.height / beeld.height) *
@@ -403,15 +407,47 @@ Rect kopPlek({
   // De ondergrens met `min(…, 0)`: past de foto precies, dan is `vak - w` door afronding soms een
   // haar boven nul (gemeten: 1,1e-13 bij een foto van 600 breed), en `clamp` met een ondergrens
   // boven de bovengrens gooit een fout in plaats van een getal.
-  links = links.clamp(math.min(vak.width - w, 0.0), 0.0).toDouble();
+  final vrij = opzij * vak.width;
+  links = links.clamp(math.min(vak.width - w, 0.0) - vrij, vrij).toDouble();
   boven = boven.clamp(math.min(vak.height - h, 0.0), 0.0).toDouble();
   return Rect.fromLTWH(links, boven, w, h);
 }
 
+/// Hoeveel van de breedte een foto die je zelf instelt opzij mag vrijlaten. Saber, 27-10-2026: "het moet
+/// ook zijdelings verschoven kunnen worden" — zonder dat kon een liggende foto in een brede kop alleen op
+/// en neer, want vullend is hij precies zo breed als de kop. Wat vrijkomt loopt zacht over in de
+/// achtergrond ([zachteRanden]). Op en neer blijft hij vullend: daar zou vrijlaten lege ruimte zijn.
+const double kOpzijVrij = .4;
+
+/// [kind] met zachte zijranden: [links] en [rechts] zijn het deel van zijn breedte dat naar doorzichtig
+/// loopt. Een masker en geen kleurverloop erover: de foto staat in een grijsfilter, en een verloop in de
+/// kleur van de achtergrond werd daar grijs.
+Widget zachteRanden(Widget kind, {required double links, required double rechts}) => ShaderMask(
+      blendMode: BlendMode.dstIn,
+      shaderCallback: (r) => LinearGradient(
+        colors: const [Color(0x00000000), Color(0xFF000000), Color(0xFF000000), Color(0x00000000)],
+        stops: [0, links.clamp(0.0, .5), 1 - rechts.clamp(0.0, .5), 1],
+      ).createShader(r),
+      child: kind,
+    );
+
+/// Hoe breed de zachte rand is aan een kant waar de foto niet tot de rand van het vak komt — 0 waar hij
+/// dat wel doet. Als deel van de breedte van de foto, voor [zachteRanden].
+({double links, double rechts}) randenVan(Rect plek, Size vak) {
+  if (plek.width <= 0) return (links: 0, rechts: 0);
+  final rand = (vak.width * .11).clamp(40.0, 160.0);
+  return (
+    links: plek.left > .5 ? rand / plek.width : 0,
+    rechts: plek.right < vak.width - .5 ? rand / plek.width : 0,
+  );
+}
+
 /// Het omgekeerde van [kopPlek]: welk punt van de foto er op [doel] staat als de foto op [plek]
 /// ligt. Voor de bewerker — slepen verschuift de plek, en bewaard wordt het punt.
+///
+/// Opzij mag het punt buiten de foto liggen (zie [kOpzijVrij]): dan staat de foto naast de vaste plek.
 Brandpunt puntOpDoel({required Size vak, required Rect plek, required Offset doel}) => Brandpunt(
-      ((doel.dx * vak.width - plek.left) / plek.width).clamp(0.0, 1.0),
+      ((doel.dx * vak.width - plek.left) / plek.width).clamp(KopInstelling.kFxVanaf, KopInstelling.kFxTot),
       ((doel.dy * vak.height - plek.top) / plek.height).clamp(0.0, 1.0),
     );
 
@@ -497,11 +533,15 @@ class KopFoto extends StatelessWidget {
               errorBuilder: (_, __, ___) => const SizedBox());
         }
         final plek = plekVoor(vak: vak, maat: maat, blik: blik, instelling: instelling, smal: smal, bovenRand: bovenRand);
-        final foto = Image.memory(beeld,
+        Widget foto = Image.memory(beeld,
             fit: BoxFit.fill,
             cacheWidth: decodeerBreedte(plek.width * dpr),
             gaplessPlayback: true,
             errorBuilder: (_, __, ___) => const SizedBox());
+        final randen = randenVan(plek, vak);
+        if (randen.links > 0 || randen.rechts > 0) {
+          foto = zachteRanden(foto, links: randen.links, rechts: randen.rechts);
+        }
         return ClipRect(
           child: Stack(fit: StackFit.expand, children: [
             if (direct)
@@ -533,7 +573,7 @@ class KopFoto extends StatelessWidget {
     final doel = doelInVak(kopDoel(smal: smal), vak, bovenRand);
     final i = instelling;
     if (i != null) {
-      return kopPlek(vak: vak, beeld: maat, punt: Brandpunt(i.fx, i.fy), doel: doel, zoom: i.zoom);
+      return kopPlek(vak: vak, beeld: maat, punt: Brandpunt(i.fx, i.fy), doel: doel, zoom: i.zoom, opzij: kOpzijVrij);
     }
     final g = blik?.gezichten;
     return kopPlek(
