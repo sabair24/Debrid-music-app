@@ -60,7 +60,8 @@ class FakeSoulseek extends SoulseekService {
       bool achtergrond = false,
       List<String> extra = const [],
       bool terugval = true,
-      bool Function()? nogNodig}) async {
+      bool Function()? nogNodig,
+      Zoekrem? eigenRem}) async {
     queries.add(query);
     return answer;
   }

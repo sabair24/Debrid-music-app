@@ -54,7 +54,7 @@ import 'radiostijl.dart'
 import 'radiovoorraad.dart' show Haalstand, RadioKeuringLater, RadioLaterOpnieuw, Weerreden;
 import 'radioplan.dart';
 import 'oordelen.dart';
-import 'prullenbak.dart' show heeftPrullenbak;
+import 'prullenbak.dart' show heeftPrullenbak, naarPrullenbak;
 import 'radiosessie.dart';
 import 'ui/draaihoes.dart';
 import 'ui/tv_rij.dart';
@@ -193,6 +193,8 @@ import 'soulseek.dart';
 import 'tidal.dart';
 import 'tidaler.dart';
 import 'tidal_beter.dart';
+import 'blijvende_jacht.dart';
+import 'dubbel_opruimer.dart';
 import 'torrent_beter.dart';
 import 'vinyl.dart' show isVinylRip;
 import 'twijfel.dart';
@@ -2428,9 +2430,11 @@ Future<void> main() async {
     }
     // TIDAL voor de hele bibliotheek (Saber, 24-10-2026: "als er een beter versie kwaliteit te vinden is op tidal, moet
     // de app deze gebruiken" — hij koos de hele bibliotheek, traag). Alleen op de pc met tidaler; zie tidal_beter.dart.
+    // Ook gelezen door de blijvende jacht hieronder: het beste dat TIDAL van een opname heeft ([Jachtbewijs.officieel]).
+    TidalBeterGeheugen? tidalGeheugen;
     if (mode.owner && Tidaler.beschikbaar && Tidaler.python != null && !Tidaler.inToets) {
       final tidalBeter = TidalBeterRonde(
-        geheugen: TidalBeterGeheugen('$appDir${Platform.pathSeparator}tidal_beter.json'),
+        geheugen: tidalGeheugen = TidalBeterGeheugen('$appDir${Platform.pathSeparator}tidal_beter.json'),
         nummers: () => library.tracks,
         zoek: (vraag) => tidalHulpUitvoer([vraag, '20']),
         haal: (t, k) => downloads.haalBeterVanTidal(t, k, gezag: library.tagsVoorVervanger(t)),
@@ -2484,6 +2488,53 @@ Future<void> main() async {
           (_) => startLog.line('torrents beter: ronde gestart (eerste na 8 min, dan plaat na plaat, '
               '$kTorrentBeterTegelijk tegelijk)'),
           onError: (Object e) => startLog.line('torrents beter: MISLUKT: $e')));
+    }
+    // De blijvende jacht op een betere kopie (Saber, 27-10-2026: "eigelijk mag de jacht niet stoppen, ten ware er echt
+    // 100 procent bewezen is dat die plaat of nummer gewoon niet bestaat in betere kwaliteit"). Alleen op de pc; zie
+    // blijvende_jacht.dart. Geen mp3 of aac: daarvoor loopt de verlanglijst al.
+    if (mode.owner && !Platform.environment.containsKey('FLUTTER_TEST')) {
+      final jachten = BlijvendeJachten('$appDir${Platform.pathSeparator}blijvende_jacht.json');
+      downloads.blijvend = jachten;
+      Jachtbewijs bewijs(Track t, Jachtstand? s) =>
+          bewijsVoor(t, o: gemeten(t.path), tidalHoogste: tidalGeheugen?.hoogsteVan(t.path), nee: s?.nee ?? const []);
+      downloads.bewijsVoorJacht = bewijs;
+      final ronde = BlijvendeJachtRonde(
+        jachten: jachten,
+        nummers: () => library.tracks,
+        bewijs: bewijs,
+        jaag: downloads.jaagBlijvend,
+        kan: () => downloads.kanBlijvendJagen,
+        overslaan: (t) =>
+            !(t.isFlac || isVerliesvrij(t.ext)) ||
+            isVasteKeuze(t.path) ||
+            radio.doorDezeRadio(t.path) ||
+            twijfelVoor(t.path) != null,
+        log: downloads.logRegel,
+      );
+      unawaited(ronde.start().then(
+          (_) => startLog.line('blijvende jacht: ${jachten.aantal} nummers in het geheugen (eerste ronde na '
+              '${kJachtStart.inMinutes} min, hoogstens $kJachtZoekPerVijfMinuten zoekopdrachten per 5 min)'),
+          onError: (Object e) => startLog.line('blijvende jacht: MISLUKT: $e')));
+      // _dubbel: na 30 dagen naar de prullenbak (Saber, 27-10-2026). Een kwartier na het opstarten, daarna elke dag.
+      if (heeftPrullenbak) {
+        final gezien = DubbelGeheugen('$appDir${Platform.pathSeparator}dubbel_gezien.json');
+        Future<void> ruimOp() async {
+          try {
+            await gezien.laad();
+            final r = await ruimDubbelOp(
+                map: Directory('${downloads.downloadsRoot}${Platform.pathSeparator}$parkeerMap'),
+                geheugen: gezien,
+                prullenbak: naarPrullenbak);
+            downloads.logRegel('_dubbel: ${r.bestanden} bestanden (${(r.bytes / 1e9).toStringAsFixed(1)} GB) langer dan '
+                '$kDubbelBewaarDagen dagen in _dubbel — naar de prullenbak; ${gezien.aantal} blijven nog');
+          } catch (e) {
+            downloads.logRegel('_dubbel opruimen mislukte: $e');
+          }
+        }
+
+        Timer(const Duration(minutes: 15), () => unawaited(ruimOp()));
+        Timer.periodic(const Duration(days: 1), (_) => unawaited(ruimOp()));
+      }
     }
     // De Shield krijgt per nummer de meting en de plaatwaarde mee, met de stand van deze pc.
     CastManager.luidheidOpgave = (t, rij, plek) {
@@ -25576,6 +25627,15 @@ Track standaardVersieVan(LibraryStore lib, Track t) {
 /// Een merkje onder de titel van een nummerregel op een gsm ([TrackRow]): links in lijn met de titel.
 const _merkOnderTitel = EdgeInsets.only(top: 2, right: 10);
 
+/// Wat de blijvende jacht van [t] weet, of null waar er geen is (een toestel, of een pc zonder Soulseek).
+String? _jachtZin(BuildContext context, Track t) {
+  final dm = _misschien<DownloadManager>(context);
+  final jachten = dm?.blijvend, bewijs = dm?.bewijsVoorJacht;
+  if (jachten == null || bewijs == null) return null;
+  final s = jachten.van(t.path);
+  return jachtZin(t, s, bewijs(t, s), nu: DateTime.now());
+}
+
 /// Het nummer zoals het nu klinkt: [t] zelf, of de versie ervan die speelt (versies.dart).
 Track _klinktAls(BuildContext context, Track t) {
   final lib = context.read<LibraryStore>();
@@ -25668,6 +25728,11 @@ Future<void> _toonKwaliteitBlad(BuildContext context, Speelbron p, Track anker, 
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(r, style: const TextStyle(fontSize: 13, height: 1.4)),
               ),
+            // Wat de blijvende jacht van dit nummer weet (blijvende_jacht.dart), op de pc.
+            if (_jachtZin(context, anker) case final z?) ...[
+              kop('Betere kopie'),
+              Text(z, style: const TextStyle(fontSize: 13, height: 1.4)),
+            ],
             kop('Gelijk volume'),
             if (volumeUit)
               Text('Uit: elk nummer speelt zoals het op de schijf staat.',

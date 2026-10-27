@@ -26,6 +26,7 @@ import 'cue_knippen.dart';
 import 'meldrem.dart';
 import 'warm_log.dart';
 import 'werkrij.dart';
+import 'blijvende_jacht.dart';
 import 'paths.dart';
 import 'audioformaten.dart' show isAudioBestand, isVerliesvrij, soortVan;
 import 'echtheid.dart';
@@ -1113,7 +1114,8 @@ class SoulseekService {
       bool achtergrond = false,
       List<String> extra = const [],
       bool terugval = true,
-      bool Function()? nogNodig}) async {
+      bool Function()? nogNodig,
+      Zoekrem? eigenRem}) async {
     // An empty result because we couldn't log in is NOT "no sources" — retrying a broader query
     // would just burn another login and still show the user the wrong answer.
     final blocked = client.whyNotLogin;
@@ -1138,7 +1140,7 @@ class SoulseekService {
       // De RUIMSTE vraag van deze ronde, want daar kunnen de resultaten vandaan komen. Zie
       // [ruimerGezocht]: dat is precies waar het scherm eerlijk over hoort te zijn.
       gebruikteVraag?.call(ronde.last);
-      final gevonden = await _searchOnce(ronde, deel, achtergrond: achtergrond, nogNodig: nogNodig);
+      final gevonden = await _searchOnce(ronde, deel, achtergrond: achtergrond, nogNodig: nogNodig, eigenRem: eigenRem);
       if (gevonden.isNotEmpty) {
         // De [extra] woorden als EIGEN zoekopdracht, na de gewone, elk met een eigen venster. Gemeten op 24-10-2026:
         // meegestuurd in hetzelfde venster leverde "24bit" bijna niets op (9 bestanden met 24bit in het pad, Phil
@@ -1149,7 +1151,7 @@ class SoulseekService {
         if (i == 0 && !stil) {
           final al = {for (final f in gevonden) '${f.username}|${f.filename}'};
           for (final v in extraVragen(ronde.first, extra)) {
-            for (final f in await _searchOnce([v], null, achtergrond: achtergrond)) {
+            for (final f in await _searchOnce([v], null, achtergrond: achtergrond, eigenRem: eigenRem)) {
               if (al.add('${f.username}|${f.filename}')) samen.add(f);
             }
           }
@@ -1164,7 +1166,8 @@ class SoulseekService {
     // Roxanne" gewoon werkte. Het netwerk weert bepaalde namen met "The" ervoor; dan nog één keer zonder.
     final zonderThe = query.trim().replaceFirst(RegExp(r'^the\s+', caseSensitive: false), '');
     if (terugval && !stil && laatste.isEmpty && zonderThe != query.trim() && zonderThe.isNotEmpty) {
-      final gevonden = await _searchOnce([zonderThe], deel, achtergrond: achtergrond, nogNodig: nogNodig);
+      final gevonden =
+          await _searchOnce([zonderThe], deel, achtergrond: achtergrond, nogNodig: nogNodig, eigenRem: eigenRem);
       if (gevonden.isNotEmpty) {
         gebruikteVraag?.call(zonderThe);
         return beperkZoekuitslag(query, gevonden);
@@ -1179,7 +1182,7 @@ class SoulseekService {
   /// kosten hetzelfde als één. Zou je ze na elkaar sturen, dan was elke ronde er ruim acht seconden
   /// bij.
   Future<List<SoulseekFile>> _searchOnce(List<String> vragen, void Function(List<SoulseekFile>)? onPartial,
-      {bool achtergrond = false, bool Function()? nogNodig}) async {
+      {bool achtergrond = false, bool Function()? nogNodig, Zoekrem? eigenRem}) async {
     if (!available) return [];
     final variants = <String>{};
     for (final v in vragen) {
@@ -1193,7 +1196,8 @@ class SoulseekService {
     if (variants.isEmpty) return [];
     try {
       return await withSession(
-          (s) => s.search(variants.toList(), onPartial: onPartial, achtergrond: achtergrond, nogNodig: nogNodig));
+          (s) => s.search(variants.toList(),
+              onPartial: onPartial, achtergrond: achtergrond, nogNodig: nogNodig, eigenRem: eigenRem));
     } catch (e) {
       // Leeg, maar niet "niets gevonden" — dus wel in het logboek, anders is het van een lege uitslag niet te onderscheiden.
       client.logboek('zoeken "${variants.last}" mislukte: $e');
@@ -5732,6 +5736,13 @@ class DownloadManager extends ChangeNotifier {
     ];
     if (te.isEmpty) return 0;
     final begonnen = <String>{if (!alleenHires) ...?tidalNu?.call(te)};
+    // Je klikte zelf: deze zoekopdracht is de eerste ronde van de blijvende jacht, in het snelle ritme
+    // (blijvende_jacht.dart, [kJachtRitmeGevraagd]). Na het landen ([alleenHires]) niet: daar vroeg niemand iets.
+    final jachten = blijvend;
+    if (!alleenHires && jachten != null) {
+      jachten.vraag([for (final t in te) t.path], DateTime.now().millisecondsSinceEpoch);
+      unawaited(jachten.bewaar());
+    }
     // "Zoek hi-res" op een plaat: ook de torrents, op de achtergrond (Saber, 25-10-2026: "ook via torrents moet worden
     // gezocht, wel losse tracks") — zie [_zoekHiresInTorrents].
     if (!alleenHires && (album?.trim() ?? '').isNotEmpty) unawaited(_zoekHiresInTorrents(te, album!.trim(), gezag));
@@ -5772,8 +5783,9 @@ class DownloadManager extends ChangeNotifier {
       final keuze = gekozenSoort(t.path);
       final beter = [
         for (final k in beterDanWatErLigt(t, hits, verdacht: verdacht))
-          if (keuze == null ||
-              kanSoortZijn(keuze, bronpad: k.filename, bits: k.bitDepth ?? 0, hz: k.sampleRate ?? 0) != false)
+          if ((keuze == null ||
+                  kanSoortZijn(keuze, bronpad: k.filename, bits: k.bitDepth ?? 0, hz: k.sampleRate ?? 0) != false) &&
+              !(jachten?.isAfgewezen(t.path, k.username, k.size) ?? false))
             k
       ];
       if (beter.isEmpty) {
@@ -5795,10 +5807,92 @@ class DownloadManager extends ChangeNotifier {
                 trackNo: t.trackNo,
                 year: t.year,
                 seconds: t.duration?.inSeconds);
-      _queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true);
+      _queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true, bijUitslag: _onthoudVoor(t.path));
       begonnen.add(t.path);
     }
     return begonnen.length;
+  }
+
+  /// Het geheugen van de blijvende jacht (blijvende_jacht.dart), op de pc; gezet door main.dart.
+  BlijvendeJachten? blijvend;
+
+  /// Is een nummer bewezen het beste ([bewijsVoor], met de meting en wat TIDAL heeft)? Gezet door main.dart, voor het
+  /// kwaliteitsblad.
+  Jachtbewijs Function(Track t, Jachtstand? s)? bewijsVoorJacht;
+
+  /// Hoogstens [kJachtZoekPerVijfMinuten] zoekopdrachten per vijf minuten voor de blijvende jacht, vóór de rem van de
+  /// app ([zoekrem]).
+  final Zoekrem _jachtRem = Zoekrem(
+      max: kJachtZoekPerVijfMinuten, voorJou: 0, maxVijf: kJachtZoekPerVijfMinuten, voorJouVijf: 0);
+
+  /// Wat een jacht voor [pad] binnenkreeg, in het geheugen van de blijvende jacht: zo komt dezelfde kopie nooit terug, en
+  /// tellen echte kopieën die niet beter waren mee voor het bewijs ([Jachtbewijs.eensgezind]).
+  void Function(SoulseekFile f, Kopieuitslag u)? _onthoudVoor(String pad) {
+    final jachten = blijvend;
+    if (jachten == null) return null;
+    return (f, u) {
+      jachten.noteer(pad, f.username, f.size, u, DateTime.now());
+      unawaited(jachten.bewaar());
+    };
+  }
+
+  /// Mag de blijvende jacht nu een plaat zoeken? Soulseek is er en zwijgt niet, en er wacht geen jacht in de rij: een
+  /// plaat met twaalf kandidaten zou anders twaalf jachten achter de vorige zetten.
+  bool get kanBlijvendJagen =>
+      blijvend != null && soulseek.available && !soulseek.client.serverZwijgt && _jachten.wachtend == 0;
+
+  /// De blijvende jacht (blijvende_jacht.dart): één zoekopdracht voor [plaat] — met "24bit" als eigen zoekopdracht
+  /// erachter — en voor elk nummer met een kandidaat die beter kan zijn en nog niet binnen was, de gewone jacht
+  /// ([_queueUpgrade]). Geen TIDAL en geen torrents: die hebben hun eigen ronde. Hoogstens [kJachtZoekPerVijfMinuten]
+  /// zoekopdrachten per vijf minuten ([_jachtRem]).
+  Future<Jachtronde> jaagBlijvend(Jachtplaat plaat) async {
+    final jachten = blijvend;
+    if (jachten == null || !soulseek.available) return Jachtronde.nietGezocht;
+    final te = [
+      for (final t in plaat.nummers)
+        if (t.artist.trim().isNotEmpty && t.title.trim().isNotEmpty && !isVasteKeuze(t.path)) t
+    ];
+    if (te.isEmpty) return Jachtronde.gezocht;
+    final eerste = te.first;
+    final vraag = plaat.album.isNotEmpty && te.length > 1
+        ? zoekvraagVoorAlbum(eerste.artist, plaat.album)
+        : zoekvraagVoorNummer(eerste.title, artist: eerste.artist, album: eerste.album);
+    final List<SoulseekFile> hits;
+    try {
+      hits = await soulseek.search(vraag, achtergrond: true, extra: kHiresZoekwoorden, eigenRem: _jachtRem);
+    } catch (_) {
+      // De server zwijgt, of we zijn niet ingelogd: dan is er niet gezocht, en telt de ronde niet.
+      return Jachtronde.nietGezocht;
+    }
+    var gestart = 0;
+    for (final t in te) {
+      final o = gemeten(t.path);
+      final verdacht = o != null && (o.band == Bandbreedte.vermoedelijk || o.band == Bandbreedte.afgekapt);
+      final keuze = gekozenSoort(t.path);
+      final beter = [
+        for (final k in beterDanWatErLigt(t, hits, verdacht: verdacht))
+          if ((keuze == null ||
+                  kanSoortZijn(keuze, bronpad: k.filename, bits: k.bitDepth ?? 0, hz: k.sampleRate ?? 0) != false) &&
+              !jachten.isAfgewezen(t.path, k.username, k.size))
+            k
+      ];
+      if (beter.isEmpty) continue;
+      final job = DownloadJob('${t.artist} — ${t.title}')
+        ..authority = gezagVoor?.call(t) ??
+            TrackTags(
+                title: t.title,
+                artist: t.artist,
+                album: t.album,
+                trackNo: t.trackNo,
+                year: t.year,
+                seconds: t.duration?.inSeconds);
+      _queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true, bijUitslag: _onthoudVoor(t.path));
+      gestart++;
+    }
+    final wat = plaat.album.isNotEmpty ? '${eerste.artist} — ${plaat.album}' : '${eerste.artist} — ${eerste.title}';
+    _log.line('blijvende jacht: "$wat" — ${hits.length} treffers, '
+        '${gestart == 0 ? 'niets beters voor ${te.length == 1 ? 'dit nummer' : 'deze ${te.length} nummers'}' : '$gestart van ${te.length} op jacht'}');
+    return Jachtronde.gezocht;
   }
 
   /// De TIDAL-ronde op jouw vraag ([TidalBeterRonde.nu]); gezet door main.dart op de pc met tidaler. Geeft de paden
@@ -6341,8 +6435,13 @@ class DownloadManager extends ChangeNotifier {
   /// wat verliest gaat opzij, nooit weg — zoals bij de eerste landing van ▶.
   ///
   /// Is een binnengehaalde kopie niet bewezen beter, dan probeert de jacht de volgende, tot [kJachtKopieen] kopieën.
+  ///
+  /// [bijUitslag]: wat elke binnengehaalde kopie bleek (blijvende_jacht.dart, [Kopieuitslag]).
   void _queueUpgrade(List<SoulseekFile> better, DownloadJob job,
-      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false}) {
+      {TrackTags? gezag,
+      String? speeltPad,
+      bool parkeerAltijd = false,
+      void Function(SoulseekFile f, Kopieuitslag u)? bijUitslag}) {
     job.status = 'upgrading';
     job.detail = 'speelbaar · betere kwaliteit zoeken';
     notifyListeners();
@@ -6353,7 +6452,7 @@ class DownloadManager extends ChangeNotifier {
         '${_jachten.wachtend > 0 ? ", ${_jachten.wachtend} wachtend" : ""})');
     _jachten.voegToe(() =>
         _chaseUpgrade(better, job,
-            gezag: gezag, speeltPad: speeltPad, parkeerAltijd: parkeerAltijd));
+            gezag: gezag, speeltPad: speeltPad, parkeerAltijd: parkeerAltijd, bijUitslag: bijUitslag));
   }
 
 
@@ -6364,7 +6463,10 @@ class DownloadManager extends ChangeNotifier {
   /// fire and make the next attempt a fresh LOGIN, which is what gets the account blocked — and
   /// deliberately takes no download slot, so a track you have nothing of never waits behind it.
   Future<void> _chaseUpgrade(List<SoulseekFile> better, DownloadJob job,
-      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false}) async {
+      {TrackTags? gezag,
+      String? speeltPad,
+      bool parkeerAltijd = false,
+      void Function(SoulseekFile f, Kopieuitslag u)? bijUitslag}) async {
     final deadline = DateTime.now().add(_upgradeBudget);
     // Hoeveel kopieën er al binnen waren die niet bewezen beter bleken ([kJachtKopieen]).
     var nietBeter = 0;
@@ -6451,6 +6553,7 @@ class DownloadManager extends ChangeNotifier {
                 !magVanzelf(bestaand, _soortVanBinnen(staged, f.filename))) {
               _log.line('   ${job.name}: je koos ${gekozenSoort(bestaand)?.voluit} voor dit nummer, en dit is een andere soort — '
                   'weggegooid');
+              bijUitslag?.call(f, Kopieuitslag.anders);
               await _discardStaged(staged.path);
               continue;
             }
@@ -6464,6 +6567,7 @@ class DownloadManager extends ChangeNotifier {
             }
             if (bestaand != null && (opname == Opnameoordeel.andere || opname == Opnameoordeel.twijfel)) {
               _log.line('   ${job.name}: de betere kandidaat is een andere opname — weggegooid');
+              bijUitslag?.call(f, Kopieuitslag.anders);
               await _discardStaged(staged.path);
               continue;
             }
@@ -6477,6 +6581,7 @@ class DownloadManager extends ChangeNotifier {
             }
             if (plan != null && plan.isVersie && opname == Opnameoordeel.zelfde) {
               final uitslag = await _bergOpAlsVersie(staged, plan, job.authority, 'Soulseek ${f.username}', inJacht: false);
+              bijUitslag?.call(f, uitslag == _Wenskeuring.opgeborgen ? Kopieuitslag.versie : Kopieuitslag.gelijk);
               if (uitslag == _Wenskeuring.opgeborgen) {
                 settle('kwaliteit verbeterd · ${f.username}');
                 return;
@@ -6488,9 +6593,20 @@ class DownloadManager extends ChangeNotifier {
             }
             // The SAME authority as the first landing. Without it the sweep would quietly undo the
             // numbering a quarter of an hour later, using whatever this new peer's tags happen to say.
+            // Vóór het opbergen: daarna staat de meting onder een ander pad.
+            final nepKopie = bewezenNep(staged.path);
+            // Je eigen kopie die verliest, gaat opzij ([parkeerAltijd]); een download die verliest, gaat weg — in
+            // `_dubbel` zag niemand hem ooit nog, en daar ruimt niets op (27-10-2026: 20 GB, 163 bestanden in een week).
             final uit = await placeFileDetailed(staged, _downloadsRoot,
-                tags: job.authority, staatAl: mapVanBestaande, parkeerAltijd: parkeerAltijd);
+                tags: job.authority, staatAl: mapVanBestaande, parkeerAltijd: parkeerAltijd, parkeerBinnenkomend: false);
             how = uit.how;
+            bijUitslag?.call(
+                f,
+                how == Placement.moved
+                    ? Kopieuitslag.beter
+                    : nepKopie
+                        ? Kopieuitslag.nep
+                        : Kopieuitslag.gelijk);
             if (how == Placement.moved && gezag != null) {
               try {
                 await stampTags(File(uit.path), gezag);

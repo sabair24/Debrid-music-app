@@ -302,7 +302,8 @@ class RemoteSoulseekService extends SoulseekService {
       bool achtergrond = false,
       List<String> extra = const [],
       bool terugval = true,
-      bool Function()? nogNodig}) async {
+      bool Function()? nogNodig,
+      Zoekrem? eigenRem}) async {
     gebruikteVraag?.call(query.trim().replaceAll(RegExp(r'\s+'), ' '));
     // [extra] gaat mee naar de pc, die zoekt ([kHiresZoekwoorden]); een oudere pc laat hem liggen en zoekt zoals vroeger.
     final files = await soulseekBestandenUit(await _rpc.getBytes('/api/soulseek/search',

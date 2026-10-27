@@ -124,7 +124,8 @@ class _FakeSoulseek extends SoulseekService {
       bool achtergrond = false,
       List<String> extra = const [],
       bool terugval = true,
-      bool Function()? nogNodig}) async {
+      bool Function()? nogNodig,
+      Zoekrem? eigenRem}) async {
     await Future<void>.delayed(const Duration(milliseconds: 300));
     return [
       for (var i = 1; i <= 4; i++)
