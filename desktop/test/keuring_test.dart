@@ -16,6 +16,8 @@ import 'package:debridmusic/echtheid_oordelen.dart';
 import 'package:debridmusic/ffmpeg.dart';
 import 'package:debridmusic/integriteit.dart';
 import 'package:debridmusic/keuring.dart';
+import 'package:debridmusic/nultoets.dart';
+import 'package:debridmusic/nultoets_meter.dart' show nulSleutel;
 import 'package:debridmusic/online.dart';
 import 'package:debridmusic/organize.dart';
 import 'package:debridmusic/paths.dart';
@@ -159,19 +161,45 @@ void main() {
       expect(vergelijkKwaliteit(_flac(96000, vol24), _flac(96000, _vol)), greaterThan(0));
     });
 
-    test('ook als beide jouw keuze zijn — wat TIDAL ophaalt is altijd jouw keuze', () {
+    test('ook als beide jouw keuze zijn — wat TIDAL ophaalt is altijd jouw keuze; sinds 27-10 met de nultoets', () {
       final map = Directory.systemTemp.createTempSync('dm_diep_');
       addTearDown(() => map.deleteSync(recursive: true));
       final oud = File('${map.path}${Platform.pathSeparator}Close To Me.flac')..writeAsBytesSync(List.filled(64, 0));
       final nieuw = File('${map.path}${Platform.pathSeparator}Close To Me (2).flac')
-        ..writeAsBytesSync(List.filled(64, 0));
-      final Voorkennis kennis = (
-        vast: {sleutelVoor(oud.path), sleutelVoor(nieuw.path)},
-        oordelen: {echtheidSleutelVoor(oud.path): zestien, echtheidSleutelVoor(nieuw.path): vierentwintig},
-        kapot: <String>{},
-      );
-      expect(firstIsBetter(nieuw, oud, kennis: kennis), isTrue);
-      expect(firstIsBetter(oud, nieuw, kennis: kennis), isFalse);
+        ..writeAsBytesSync(List.filled(64, 1));
+      Voorkennis kennis(Nuluitkomst? nul) => (
+            vast: {sleutelVoor(oud.path), sleutelVoor(nieuw.path)},
+            oordelen: {echtheidSleutelVoor(oud.path): zestien, echtheidSleutelVoor(nieuw.path): vierentwintig},
+            kapot: <String>{},
+            nul: {if (nul != null) nulSleutel(nieuw.path, oud.path): nul},
+          );
+      // Je 16 bit is de 24 bit, afgerond (Ellie Goulding — Close To Me, TIDAL HIRES tegen LOSSLESS: rest −97,7 dBFS).
+      expect(firstIsBetter(nieuw, oud, kennis: kennis(Nuluitkomst.bron)), isTrue);
+      expect(firstIsBetter(oud, nieuw, kennis: kennis(Nuluitkomst.bron)), isFalse);
+      // Niet gemeten, of een andere master: de bits bewijzen niets — beide jouw keuze, dus blijft wat er stond.
+      for (final nul in [null, Nuluitkomst.anders]) {
+        expect(firstIsBetter(nieuw, oud, kennis: kennis(nul)), isFalse, reason: '$nul');
+        expect(firstIsBetter(oud, nieuw, kennis: kennis(nul)), isFalse, reason: '$nul');
+      }
+      // Je cd, verzet (D'Eux 01), of een gedecodeerde stream (Destin): de cd wint.
+      for (final nul in [Nuluitkomst.bewerkt, Nuluitkomst.lossy]) {
+        expect(firstIsBetter(oud, nieuw, kennis: kennis(nul)), isTrue, reason: '$nul');
+        expect(firstIsBetter(nieuw, oud, kennis: kennis(nul)), isFalse, reason: '$nul');
+      }
+    });
+
+    test('metNultoets: alleen een bron houdt zijn diepte', () {
+      final diep = _flac(44100, vierentwintig), plat = _flac(44100, zestien);
+      expect(metNultoets(diep, plat, Nuluitkomst.bron).diep, isTrue);
+      expect(vergelijkKwaliteit(metNultoets(diep, plat, Nuluitkomst.bron), plat), greaterThan(0));
+      for (final nul in [null, Nuluitkomst.anders]) {
+        expect(vergelijkKwaliteit(metNultoets(diep, plat, nul), plat), 0, reason: '$nul');
+      }
+      expect(vergelijkKwaliteit(metNultoets(diep, plat, Nuluitkomst.bewerkt), plat), lessThan(0));
+      expect(metNultoets(diep, plat, Nuluitkomst.lossy).klasse, Klasse.uitLossy);
+      // Waar de diepte niet beslist, verandert er niets — ook niet bij een "bewerkt".
+      expect(metNultoets(plat, diep, Nuluitkomst.bewerkt), plat);
+      expect(metNultoets(diep, diep, Nuluitkomst.bewerkt), diep);
     });
   });
 

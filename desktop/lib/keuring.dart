@@ -39,11 +39,20 @@
 /// een mp3 die tot 24 bit gedecodeerd is gebruiken ze ook allemaal. Een opgeblazen 16 bit telt nooit als diep;
 /// in het ergste geval (een 16-bitmaster met een volumeaanpassing) is het dezelfde muziek in een groter bestand.
 ///
+/// **En sinds 27-10-2026 alleen nog met bewijs tegen je eigen 16-bitkopie: de nultoets (nultoets.dart).** Saber, bij
+/// D'Eux van Céline Dion: *"volgens bronnen zou het album nooit in high res uitgekomen zijn … toch staan er liedjes bij
+/// van 24bit"*. Het "ergste geval" hierboven was precies wat er gebeurde: zijn cd, 0,8 dB verzet en als 24 bit
+/// bewaard, duwde de cd opzij; en een gedecodeerde stream (precies 1024 monsters achter de cd) ook. Nu telt de diepte
+/// alleen als de nultoets zegt dat je 16-bitkopie deze kopie IS, afgerond ([Nuluitkomst.bron]) — zie [metNultoets].
+/// Een bewerkte cd verliest bij gelijke stand van het origineel ([Kwaliteit.bewerkt]), een gedecodeerde stream telt als
+/// [Klasse.uitLossy], en wat niet gemeten is, bewijst niets.
+///
 /// Puur en zonder `dart:io`: elke regel hieronder staat met de gemeten gevallen in
 /// `test/keuring_test.dart`.
 library;
 
 import 'echtheid.dart';
+import 'nultoets.dart';
 
 /// Hoe goed een bestand BEWEZEN is. De volgorde van de waarden is de rangorde.
 enum Klasse { kapot, lossy, uitLossy, cd, onbewezenHires, hires }
@@ -51,8 +60,9 @@ enum Klasse { kapot, lossy, uitLossy, cd, onbewezenHires, hires }
 /// Wat de keuring van één bestand weet. [rate] is de bemonstering uit de kop — alleen van belang
 /// tussen twee bewezen hires-bestanden. [formaat] is `formatRank` uit organize.dart: binnen dezelfde
 /// klasse gaat een FLAC voor een WAV, en een aac voor een mp3. [diep]: Proef A zag meer dan 16 bits in gebruik, in
-/// een doorlopend en niet opgeschaald spectrum — zie hierboven, "de bits als scheidsrechter".
-typedef Kwaliteit = ({Klasse klasse, int rate, int formaat, bool diep});
+/// een doorlopend en niet opgeschaald spectrum — zie hierboven, "de bits als scheidsrechter". [bewerkt]: de nultoets
+/// zag dat dit een andere kopie is, verzet in volume of door iets gehaald ([Nuluitkomst.bewerkt]).
+typedef Kwaliteit = ({Klasse klasse, int rate, int formaat, bool diep, bool bewerkt});
 
 /// De klasse van een bestand uit wat er over bekend is.
 ///
@@ -89,7 +99,7 @@ Kwaliteit kwaliteitUit(
       (oordeel.gebruikteBits ?? 0) > 16 &&
       oordeel.band == Bandbreedte.doorlopend &&
       oordeel.boven != Bovenband.leeg;
-  return (klasse: k, rate: kopRate, formaat: formaat, diep: diep);
+  return (klasse: k, rate: kopRate, formaat: formaat, diep: diep, bewerkt: false);
 }
 
 /// Hoeveel verder een andere kopie van dezelfde opname echt moet doorlopen om te bewijzen dat de muur van de
@@ -110,7 +120,26 @@ Kwaliteit metMuurBewijs(Kwaliteit a, Echtheidsoordeel? oa, Echtheidsoordeel? ob)
   if (oa.band != Bandbreedte.vermoedelijk || ob.band != Bandbreedte.doorlopend) return a;
   final xa = oa.afkapHz, xb = ob.afkapHz;
   if (xa == null || xb == null || xb < xa + kMuurBewijsHz) return a;
-  return (klasse: Klasse.uitLossy, rate: a.rate, formaat: a.formaat, diep: a.diep);
+  return (klasse: Klasse.uitLossy, rate: a.rate, formaat: a.formaat, diep: a.diep, bewerkt: a.bewerkt);
+}
+
+/// [a] met wat de nultoets over hem zei ([nul]: [a] tegen [b]), als zijn diepte tegen [b] zou beslissen — [a] is
+/// [Kwaliteit.diep] en [b] niet.
+///
+/// Drie gevallen, en het derde hardop beslist:
+/// * [Nuluitkomst.bron]: je 16-bitkopie is [a], afgerond — de diepte telt, zoals sinds 23-10-2026.
+/// * [Nuluitkomst.bewerkt]: je cd, verzet of door iets gehaald — geen diepte, en bij gelijke stand verliest hij van het
+///   origineel. [Nuluitkomst.lossy]: een gedecodeerde stream — [Klasse.uitLossy].
+/// * [Nuluitkomst.anders] en niet gemeten (null): niets bewezen, dus geen diepte. Een andere master in 24 bit kan
+///   beter zijn, maar ook een opname door een geluidskaart; "24 bits in gebruik" zegt dat niet.
+Kwaliteit metNultoets(Kwaliteit a, Kwaliteit b, Nuluitkomst? nul) {
+  if (!a.diep || b.diep) return a;
+  return switch (nul) {
+    Nuluitkomst.bron => a,
+    Nuluitkomst.lossy => (klasse: Klasse.uitLossy, rate: a.rate, formaat: a.formaat, diep: false, bewerkt: false),
+    Nuluitkomst.bewerkt => (klasse: a.klasse, rate: a.rate, formaat: a.formaat, diep: false, bewerkt: true),
+    Nuluitkomst.anders || null => (klasse: a.klasse, rate: a.rate, formaat: a.formaat, diep: false, bewerkt: false),
+  };
 }
 
 /// Groter dan nul als [a] BEWEZEN beter is dan [b], kleiner dan nul als [b] het is, nul als het gelijk
@@ -135,6 +164,8 @@ int vergelijkKwaliteit(Kwaliteit a, Kwaliteit b) {
   if (ka == Klasse.hires && a.rate != b.rate) return a.rate.compareTo(b.rate);
   // Verder gelijk en verliesvrij: wat meer dan 16 bits in gebruik heeft, wint van 16 bit ([Kwaliteit.diep]).
   if ((ka == Klasse.cd || ka == Klasse.hires) && a.diep != b.diep) return a.diep ? 1 : -1;
+  // Een kopie die de nultoets als bewerkt zag, verliest van wat ze bewerkte ([metNultoets]).
+  if (a.bewerkt != b.bewerkt) return a.bewerkt ? -1 : 1;
   // Zelfde klasse: het formaat, en alleen als dat een echt verschil is (FLAC boven WAV, aac boven mp3).
   // Een WavPack is geen stap vooruit tegen een FLAC en andersom ook niet: beide [formatRank] 4.
   return a.formaat.compareTo(b.formaat);

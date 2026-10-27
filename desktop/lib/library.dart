@@ -33,6 +33,7 @@ import 'prullenbak.dart' as pb;
 import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
+import 'nultoets_meter.dart' show alleNultoetsen;
 import 'integriteit.dart' show kapotSleutels, onthoudHeelheid;
 import 'luidheid_winkel.dart' show onthoudLuidheidVanPc, zetLuidheidStatusVanPc;
 import 'organize.dart';
@@ -5928,7 +5929,8 @@ extension LibraryDuplicates on LibraryStore {
           ],
         ),
     ];
-    final kennis = (vast: vasteKeuzeSleutels(), oordelen: alleOordelen(), kapot: kapotSleutels());
+    final kennis = (
+        vast: vasteKeuzeSleutels(), oordelen: alleOordelen(), kapot: kapotSleutels(), nul: alleNultoetsen());
 
     final aantalBij = albums.length;
     List<_PlatTreffer> gevonden;

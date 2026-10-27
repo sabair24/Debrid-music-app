@@ -2179,6 +2179,8 @@ class DownloadManager extends ChangeNotifier {
     if (bestaand == null || !File(bestaand).existsSync()) return null;
     if (gemeten(bestaand) == null) await _meetEchtheid(File(bestaand));
     await controleerHeel(bestaand);
+    // De nultoets (nultoets.dart, 27-10-2026): telt "24 bit" hier, dan alleen met bewijs tegen je eigen 16 bit.
+    await bereidNultoets(nieuw.path, bestaand, log: (z) => _log.line('   $z'));
     return bestaand;
   }
 
@@ -2362,6 +2364,7 @@ class DownloadManager extends ChangeNotifier {
       _log.line('"$naam": twijfelkopie niet bewaard — bit voor bit dezelfde als $wat');
       return 'Niet bewaard: deze kopie is bit voor bit dezelfde als $wat';
     }
+    await bereidNultoets(f.path, pad, log: (z) => _log.line('   $z'));
     await merkVinylspoor(f.path, pad, g.bronpad ?? g.bron, log: _log.line);
     var plan = versieplanVoor(f, pad, g.bronpad ?? g.bron);
     if (plan.soort == null) return 'Deze kopie is niet verliesvrij — als versie bewaren kan niet';
@@ -3602,6 +3605,7 @@ class DownloadManager extends ChangeNotifier {
     if (bestaand != null && File(bestaand).existsSync()) {
       if (gemeten(bestaand) == null) await _meetEchtheid(File(bestaand));
       await controleerHeel(bestaand);
+      await bereidNultoets(f.path, bestaand, log: (z) => _log.line('   $z'));
     }
     return null;
   }
@@ -3631,6 +3635,7 @@ class DownloadManager extends ChangeNotifier {
       if (await _zelfdeOpname(f.path, c) != true) continue;
       if (gemeten(c) == null) await _meetEchtheid(File(c));
       await controleerHeel(c);
+      await nultoetsTussen(f.path, c, log: (z) => _log.line('   $z'));
       if (firstIsBetter(f, File(c))) continue;
       _log.line('keuring: ${f.uri.pathSegments.last} is dezelfde opname als '
           '${c.split(Platform.pathSeparator).last} (andere titel) en niet beter — opzij');
@@ -6311,6 +6316,7 @@ class DownloadManager extends ChangeNotifier {
     // Wat hij werkelijk is, zoals het opbergen het straks ziet ([versieplanVoor]): ook zijn tags en of hij een tweeling is
     // van wat je al hebt. Hier keken alleen pad en kop — en electron2's "studio" Voyager was je vinylrip LP 2021
     // (MEDIA=12" Vinyl, tot op het sample even lang); bij Bewaren verving hij je vinyl (27-10-2026).
+    await bereidNultoets(staged.path, v.pad, log: (z) => _log.line('   $z'));
     await merkVinylspoor(staged.path, v.pad, bronpad, log: _log.line);
     final soort = versieplanVoor(staged, v.pad, bronpad).soort;
     if (soort != v.soort) return weg('geen ${v.soort.voluit} maar ${soort?.voluit ?? kwaliteitZin(kwaliteitVan(staged))}');

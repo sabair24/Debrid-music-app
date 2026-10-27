@@ -202,6 +202,7 @@ import 'kopiesoort.dart';
 import 'versies.dart';
 import 'versie_acties.dart';
 import 'versie_uitlijner.dart' show VersieUitlijnRonde;
+import 'nultoets_meter.dart' show Nultoetser, laadNultoetsen, meetNultoets;
 import 'versie_opbergen.dart' show eenPerSoort;
 import 'vinylspoor.dart' show Stiltemeter, stilteVan;
 import 'versie_terugzetter.dart';
@@ -914,6 +915,12 @@ Future<void> main() async {
   // Wat er van elk bestand gemeten is. Vóór de eerste scan, want `firstIsBetter` vraagt hier bij elke
   // vergelijking naar — en een lijst die nog niet is ingelezen beschermt niets.
   if (mode.owner) await laadEchtheid();
+  // De nultoets (nultoets.dart, 27-10-2026): "24 bit" wint alleen nog met bewijs tegen je eigen 16 bit. Wat hij zei,
+  // staat in nultoets.json; meten doet alleen de pc, en alleen wie een vergelijking voorbereidt.
+  if (mode.owner) {
+    await laadNultoetsen('$appDir${Platform.pathSeparator}nultoets.json');
+    meetNultoets = Nultoetser().meet;
+  }
   // Gelijk volume: wat de pc al gemeten heeft. Vóór de server start, zodat zijn eerste catalogus de
   // status al draagt ("de pc begint zo met meten") — zie luidheid_winkel.dart.
   if (mode.owner) await laadLuidheid();
@@ -2419,7 +2426,8 @@ Future<void> main() async {
                 dubbel: '${downloads.downloadsRoot}${Platform.pathSeparator}$parkeerMap',
                 inGebruik: (p) => downloads.speeltNu?.call(p) ?? false,
                 log: downloads.logRegel);
-            downloads.logRegel('één per soort: ${r.naarDubbel} kopieën naar _dubbel (${r.tweelingen} tweelingen), '
+            downloads.logRegel('één per soort: ${r.naarDubbel} kopieën naar _dubbel (${r.tweelingen} tweelingen, '
+                '${r.nultoets} door de nultoets als je cd herkend), '
                 '${r.vinylspoor} klonken als vinyl, '
                 '${r.verhuisd} naar de map van hun soort, ${r.albumnaam} albumnamen rechtgezet${r.overgeslagen > 0 ? ', ${r.overgeslagen} nummers wachten (ze speelden)' : ''}');
             if (r.naarDubbel + r.verhuisd + r.albumnaam > 0) await library.scan();
