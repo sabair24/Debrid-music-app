@@ -189,7 +189,7 @@ void main() {
       expect(volg.afstandsvolume, isNull, reason: 'de volumeknoppen gaan weer naar de gsm');
     });
 
-    test('de volumeknoppen regelen de zone, in stappen van vijf', () async {
+    test('de volumeknoppen regelen de zone, één stap per druk (Saber, 27-10-2026)', () async {
       gekozen.kies('dev:pc-THUIS');
       final h = NowPlayingHandler(volg, null);
       final info = h.androidPlaybackInfo.value;
@@ -197,7 +197,7 @@ void main() {
       expect((info as RemoteAndroidPlaybackInfo).volume, 70);
       await h.androidAdjustRemoteVolume(AndroidVolumeDirection.raise);
       await Future<void>.delayed(Duration.zero);
-      expect(gestuurd.last, {'cmd': 'volume', 'waarde': 75});
+      expect(gestuurd.last, {'cmd': 'volume', 'waarde': 71});
       await h.androidSetRemoteVolume(30);
       await Future<void>.delayed(const Duration(milliseconds: 300));
       expect(gestuurd.last, {'cmd': 'volume', 'waarde': 30});
