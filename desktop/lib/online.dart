@@ -2362,6 +2362,7 @@ class DownloadManager extends ChangeNotifier {
       _log.line('"$naam": twijfelkopie niet bewaard — bit voor bit dezelfde als $wat');
       return 'Niet bewaard: deze kopie is bit voor bit dezelfde als $wat';
     }
+    await merkVinylspoor(f.path, pad, g.bronpad ?? g.bron, log: _log.line);
     var plan = versieplanVoor(f, pad, g.bronpad ?? g.bron);
     if (plan.soort == null) return 'Deze kopie is niet verliesvrij — als versie bewaren kan niet';
     // Eén kopie per soort (Saber, 27-10-2026: "enkel studio, cd of vinyl drie soorten"; tot dan kwam hij er als "andere
@@ -4328,6 +4329,9 @@ class DownloadManager extends ChangeNotifier {
     final nietBeter = bestaand != null && !firstIsBetter(staged, File(bestaand));
     // Een andere versie dan wat je hebt (versies.dart, Saber 26-10-2026: "Behoud ik alles e, cd, studio, en vinyl"):
     // bewaren in plaats van weggooien of vervangen. Alleen als de vingerafdruk zegt dat het dezelfde opname is.
+    if (bestaand != null && (opname == Opnameoordeel.zelfde || opname == Opnameoordeel.twijfel)) {
+      await merkVinylspoor(staged.path, bestaand, bronpad ?? bron, log: _log.line);
+    }
     var plan = bestaand != null && (opname == Opnameoordeel.zelfde || opname == Opnameoordeel.twijfel)
         ? versieplanVoor(staged, bestaand, bronpad ?? bron)
         : null;
@@ -4446,6 +4450,7 @@ class DownloadManager extends ChangeNotifier {
       score = await _opnameScoreRuim(f.path, bestaand) ?? score;
     }
     if (opnameOordeel(score) != Opnameoordeel.zelfde) return null;
+    await merkVinylspoor(f.path, bestaand, f.path, log: _log.line);
     var plan = versieplanVoor(f, bestaand, f.path);
     if (!plan.isVersie) return null;
     if (plan.besluit == Versiebesluit.ankerOpzij &&
@@ -6306,6 +6311,7 @@ class DownloadManager extends ChangeNotifier {
     // Wat hij werkelijk is, zoals het opbergen het straks ziet ([versieplanVoor]): ook zijn tags en of hij een tweeling is
     // van wat je al hebt. Hier keken alleen pad en kop — en electron2's "studio" Voyager was je vinylrip LP 2021
     // (MEDIA=12" Vinyl, tot op het sample even lang); bij Bewaren verving hij je vinyl (27-10-2026).
+    await merkVinylspoor(staged.path, v.pad, bronpad, log: _log.line);
     final soort = versieplanVoor(staged, v.pad, bronpad).soort;
     if (soort != v.soort) return weg('geen ${v.soort.voluit} maar ${soort?.voluit ?? kwaliteitZin(kwaliteitVan(staged))}');
     // Bit voor bit wat je al hebt, van een andere uploader en onder een andere naam: die voegt niets toe (Saber,
@@ -6537,6 +6543,9 @@ class DownloadManager extends ChangeNotifier {
             final opname = opnameOordeel(score);
             // Een andere versie dan wat je hebt (versies.dart): bewaren in plaats van weggooien of vervangen. Het nummer
             // opzij zetten alleen voor een kopie die ook bewezen beter is en binnen je eigen soortkeuze valt.
+            if (bestaand != null && (opname == Opnameoordeel.zelfde || opname == Opnameoordeel.twijfel)) {
+              await merkVinylspoor(staged.path, bestaand, f.filename, log: _log.line);
+            }
             var plan = bestaand != null && (opname == Opnameoordeel.zelfde || opname == Opnameoordeel.twijfel)
                 ? versieplanVoor(staged, bestaand, f.filename)
                 : null;

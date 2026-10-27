@@ -203,6 +203,7 @@ import 'versies.dart';
 import 'versie_acties.dart';
 import 'versie_uitlijner.dart' show VersieUitlijnRonde;
 import 'versie_opbergen.dart' show eenPerSoort;
+import 'vinylspoor.dart' show Stiltemeter, stilteVan;
 import 'versie_terugzetter.dart';
 import 'soortjacht.dart' show Soortvragen, gezochtVoor, soortvraagUitgave;
 import 'lan/vaste_naam.dart' show kPcHost;
@@ -2409,6 +2410,8 @@ Future<void> main() async {
       Timer(const Duration(minutes: 10), () => unawaited(terug.ronde()));
       // Eén kopie per soort (versie_opbergen.dart; Saber, 27-10-2026: "enkel studio, cd of vinyl drie soorten"): na drie
       // minuten, vóór de terugzetter — wat hier naar _dubbel gaat, ziet die als dezelfde soort, en laat hij staan.
+      // Het vinylspoor (vinylspoor.dart): wat het stilste moment van een bestand is, onthouden in vinylspoor.json.
+      stilteVan = Stiltemeter(bestand: '$appDir${Platform.pathSeparator}vinylspoor.json').meet;
       Timer(const Duration(minutes: 3), () {
         unawaited(() async {
           try {
@@ -2417,6 +2420,7 @@ Future<void> main() async {
                 inGebruik: (p) => downloads.speeltNu?.call(p) ?? false,
                 log: downloads.logRegel);
             downloads.logRegel('één per soort: ${r.naarDubbel} kopieën naar _dubbel (${r.tweelingen} tweelingen), '
+                '${r.vinylspoor} klonken als vinyl, '
                 '${r.verhuisd} naar de map van hun soort, ${r.albumnaam} albumnamen rechtgezet${r.overgeslagen > 0 ? ', ${r.overgeslagen} nummers wachten (ze speelden)' : ''}');
             if (r.naarDubbel + r.verhuisd + r.albumnaam > 0) await library.scan();
           } catch (e) {

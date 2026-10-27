@@ -192,6 +192,7 @@ class VersieTerugzetter {
       final score = similarity(a.raw, b.raw, maxOffset: 120);
       if (score < maybeSameRecordingScore) return 'andere opname (${score.toStringAsFixed(2)})';
       // Alleen de bestandsnaam als bron: de mappen erboven ("D:\Flac music 2024\…\_dubbel") zeggen niets over de persing.
+      await merkVinylspoor(f.path, anker, f.uri.pathSegments.last);
       var plan = versieplanVoor(f, anker, f.uri.pathSegments.last);
       if (!plan.isVersie) return 'dezelfde versie';
       // Wie hoger staat dan het nummer en tóch in _dubbel belandde, verloor met een reden — een "studiokopie" die van een
