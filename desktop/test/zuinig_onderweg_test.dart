@@ -14,6 +14,7 @@ import 'package:debridmusic/lan/range.dart';
 import 'package:debridmusic/lan/server.dart';
 import 'package:debridmusic/lan/state_store.dart';
 import 'package:debridmusic/lan/stroomcache.dart';
+import 'package:debridmusic/lan/verzendteller.dart';
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/models.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -148,6 +149,18 @@ void main() {
       final kaalBytes = await kaal.fold<List<int>>([], (a, b) => a..addAll(b));
       expect(bytes.length, lessThan(kaalBytes.length ~/ 3));
       expect(utf8.decode(gzip.decode(bytes)), utf8.decode(kaalBytes));
+    });
+
+    test('verbruik.log: een stroom telt bij het adres dat hem vroeg, ook al is het antwoord al dicht', () async {
+      Verzendteller.vandaag.value = const {};
+      final cat = jsonDecode(await (await get('/api/catalog', koppen: {HttpHeaders.acceptEncodingHeader: 'identity'}))
+          .transform(utf8.decoder)
+          .join()) as Map;
+      final pad = ((cat['tracks'] as List).first as Map)['streamPath'] as String;
+      await (await get(pad)).drain<void>();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(Verzendteller.vandaag.value['thuis|muziek'], 4096, reason: 'stond als "?" en "buiten" (27-10-2026)');
+      expect(Verzendteller.vandaag.value.keys.where((k) => k.startsWith('buiten')), isEmpty);
     });
 
     test('DE KERN: onderweg alleen het merkteken van de catalogus, zonder de catalogus', () async {

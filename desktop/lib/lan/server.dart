@@ -1075,6 +1075,9 @@ class LanServer {
 
     final path = req.uri.path;
     _padVan[res] = path;
+    // Het adres nu al: na het sluiten van een antwoord is `connectionInfo` weg, en een stroom telt pas daarna (in
+    // verbruik.log stond de muziek dan als "?" en "buiten", 27-10-2026).
+    _adresVan[res] = req.connectionInfo?.remoteAddress.address;
     if ((req.headers.value(HttpHeaders.acceptEncodingHeader) ?? '').toLowerCase().contains('gzip')) _magInpakken[res] = true;
 
     // Unauthenticated on purpose: this is how a device confirms it found the right machine, and
@@ -2669,6 +2672,9 @@ class LanServer {
   /// Het pad van de aanvraag achter een antwoord, zodat [_json] weet wat hij telt.
   final Expando<String> _padVan = Expando('pad');
 
+  /// Van welk adres de aanvraag achter dit antwoord kwam ([_telVerzonden]).
+  final Expando<String> _adresVan = Expando('adres');
+
   /// Vroeg de aanvraag achter dit antwoord om gzip? Dan pakt [_json] een groot antwoord in.
   final Expando<bool> _magInpakken = Expando('gzip');
 
@@ -2682,7 +2688,8 @@ class LanServer {
     final t = _verzonden;
     if (t == null || bytes <= 0) return;
     t.start();
-    t.tel(res.connectionInfo?.remoteAddress.address ?? '?', soort, bytes, wat: wat, totaal: totaal, vraag: vraag);
+    t.tel(_adresVan[res] ?? res.connectionInfo?.remoteAddress.address ?? '?', soort, bytes,
+        wat: wat, totaal: totaal, vraag: vraag);
   }
 
   /// Wat een toestel zelf telde (dataverbruik.dart), in `verbruik.log` met het toestel ervoor. Begrensd zoals [_warmte].
