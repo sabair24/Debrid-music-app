@@ -1843,8 +1843,14 @@ class SlskSession {
   ///
   /// [nogNodig] onwaar (wie vroeg is weg, zoals een albumpagina die dicht is): de vragen die nog op de rem wachtten,
   /// gaan niet meer uit.
+  ///
+  /// [eigenRem]: een rem die vóór [zoekrem] komt, voor werk dat zelf minder mag dan de rest van de achtergrond (de
+  /// blijvende jacht, [kJachtZoekPerVijfMinuten] in blijvende_jacht.dart).
   Future<List<SoulseekFile>> search(List<String> queries,
-      {void Function(List<SoulseekFile>)? onPartial, bool achtergrond = false, bool Function()? nogNodig}) async {
+      {void Function(List<SoulseekFile>)? onPartial,
+      bool achtergrond = false,
+      bool Function()? nogNodig,
+      Zoekrem? eigenRem}) async {
     if (client.blocked) return const [];
     if (!await _ensure()) {
       // Niet ingelogd en (nog) niet opnieuw mogen: dan is er niet gezocht. Dat stond nergens, en op het scherm was het
@@ -1868,6 +1874,10 @@ class SlskSession {
     try {
       _conn!.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort
       for (final q in queries) {
+        if (eigenRem != null && await eigenRem.neem(nogNodig: nogNodig) == null) {
+          client.logboek('zoekopdracht "$q" niet meer nodig — niet verstuurd');
+          break;
+        }
         final gewacht = await zoekrem.neem(achtergrond: achtergrond, nogNodig: nogNodig);
         if (gewacht == null) {
           client.logboek('zoekopdracht "$q" niet meer nodig — niet verstuurd');

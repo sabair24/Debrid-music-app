@@ -52,7 +52,8 @@ void main() {
         lessThan(jacht.indexOf('final uit = await placeFileDetailed(staged, _downloadsRoot,')),
         reason: 'eerst wachten, dan pas vervangen');
     expect(jacht, contains('if (how == Placement.moved && gezag != null) {'));
-    expect(jacht, contains('tags: job.authority, staatAl: mapVanBestaande, parkeerAltijd: parkeerAltijd);'));
+    // Sinds 27-10-2026: je eigen kopie die verliest gaat opzij, een download die verliest gaat weg (blijvende_jacht_test).
+    expect(jacht, contains('tags: job.authority, staatAl: mapVanBestaande, parkeerAltijd: parkeerAltijd, parkeerBinnenkomend: false);'));
     expect(online, contains('_queueUpgrade(beter, job, gezag: gezag, speeltPad: pad, parkeerAltijd: true);'));
   });
 }

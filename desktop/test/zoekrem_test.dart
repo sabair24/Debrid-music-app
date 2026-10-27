@@ -198,6 +198,9 @@ void main() {
     expect(o, contains('achtergrond: _radiohalen.contains(job),'), reason: 'de radio; ▶ los van de radio niet');
     expect(o, contains('hits = await soulseek.search(w.query, achtergrond: true, extra: kHiresZoekwoorden);'),
         reason: 'de verlanglijst (met 24bit erbij sinds 24-10-2026)');
-    expect(o, contains('(s) => s.search(variants.toList(), onPartial: onPartial, achtergrond: achtergrond, nogNodig: nogNodig)'));
+    expect(o, contains('(s) => s.search(variants.toList(),\n              onPartial: onPartial, achtergrond: achtergrond, nogNodig: nogNodig, eigenRem: eigenRem));'));
+    // Sinds 27-10-2026: een eigen rem vóór die van de app (de blijvende jacht, tien per vijf minuten).
+    expect(lus.indexOf('if (eigenRem != null && await eigenRem.neem(nogNodig: nogNodig) == null) {'),
+        lessThan(lus.indexOf('await zoekrem.neem(achtergrond: achtergrond, nogNodig: nogNodig);')));
   });
 }

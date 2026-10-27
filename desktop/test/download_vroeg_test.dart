@@ -174,7 +174,8 @@ class _Zoeker extends SoulseekService {
       bool achtergrond = false,
       List<String> extra = const [],
       bool terugval = true,
-      bool Function()? nogNodig}) async {
+      bool Function()? nogNodig,
+      Zoekrem? eigenRem}) async {
     vragen.add(query);
     final klok = Stopwatch()..start();
     for (final (wanneer, lijst) in tussen) {

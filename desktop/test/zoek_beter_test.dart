@@ -62,7 +62,7 @@ void main() {
     expect(z, contains(': soulseek.search(vraag, achtergrond: true, extra: kHiresZoekwoorden);'));
     expect(z, contains('if (albumHits != null) {\n        hits = albumHits;'), reason: 'niet nog eens per nummer');
     expect(z, contains('!isVasteKeuze(t.path)'), reason: 'wat je zelf koos blijft de baas');
-    expect(z, contains('_queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true);'));
+    expect(z, contains('_queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true, bijUitslag: _onthoudVoor(t.path));'));
     // Sinds 27-10-2026: niet bewezen beter → de volgende kandidaat, ook bij een gewoon nummer, tot kJachtKopieen.
     final jacht = online.substring(online.indexOf('  Future<void> _chaseUpgrade('));
     expect(jacht, contains("            if (++nietBeter < kJachtKopieen) {\n              _log.line('   \${job.name}: \${f.username} niet bewezen beter dan wat je hebt — volgende');\n              continue;"));

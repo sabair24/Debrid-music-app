@@ -102,25 +102,12 @@ TidalTrack? beterOpTidal(Track t, List<TidalTrack> nummers,
   if (minstens == TidalMinstens.geenWinst) return null;
   final sec = t.duration?.inSeconds ?? 0;
   if (sec <= 0) return null;
-  final titel = _titelSleutel(t.title);
-  final album = _titelSleutel(t.album);
-  bool lengtePast(TidalTrack x) {
-    final d = (x.seconden - sec).abs();
-    return d <= kTidalBeterLengteSpeling ||
-        (d <= kTidalBeterLengteSpelingZelfdeAlbum && album.isNotEmpty && _titelSleutel(x.album) == album);
-  }
   final weg = nee.toSet();
   bool goedGenoeg(TidalKwaliteit k) =>
       minstens == TidalMinstens.cd ? k != TidalKwaliteit.onbekend : k == TidalKwaliteit.hires;
   final kandidaten = [
-    for (final x in nummers)
-      if (!weg.contains(x.id) &&
-          goedGenoeg(x.kwaliteit) &&
-          x.seconden > 0 &&
-          lengtePast(x) &&
-          _titelSleutel(x.title) == titel &&
-          tidalArtiestPast(t.artist, x.artist))
-        x,
+    for (final x in zelfdeOpnameOpTidal(t, nummers))
+      if (!weg.contains(x.id) && goedGenoeg(x.kwaliteit)) x,
   ];
   if (kandidaten.isEmpty) return null;
   int rang(TidalTrack x) => x.kwaliteit == TidalKwaliteit.hires ? 0 : 1;
@@ -129,6 +116,35 @@ TidalTrack? beterOpTidal(Track t, List<TidalTrack> nummers,
     return r != 0 ? r : (a.seconden - sec).abs().compareTo((b.seconden - sec).abs());
   });
   return kandidaten.first;
+}
+
+/// De nummers in [nummers] die precies [t] zijn: de artiest volgens [tidalArtiestPast], de titel gelijk op gast en
+/// neutrale haakjes na, en de lengte zoals bij [beterOpTidal]. Leeg zonder gekende lengte van [t].
+List<TidalTrack> zelfdeOpnameOpTidal(Track t, List<TidalTrack> nummers) {
+  final sec = t.duration?.inSeconds ?? 0;
+  if (sec <= 0) return const [];
+  final titel = _titelSleutel(t.title);
+  final album = _titelSleutel(t.album);
+  bool lengtePast(TidalTrack x) {
+    final d = (x.seconden - sec).abs();
+    return d <= kTidalBeterLengteSpeling ||
+        (d <= kTidalBeterLengteSpelingZelfdeAlbum && album.isNotEmpty && _titelSleutel(x.album) == album);
+  }
+
+  return [
+    for (final x in nummers)
+      if (x.seconden > 0 && lengtePast(x) && _titelSleutel(x.title) == titel && tidalArtiestPast(t.artist, x.artist)) x,
+  ];
+}
+
+/// Het beste dat TIDAL van precies [t] heeft ([zelfdeOpnameOpTidal]): hi-res, cd, of null als TIDAL hem niet heeft of
+/// niet zegt in welke kwaliteit. "Cd" is het bewijs dat er officieel geen hi-res van deze opname bestaat
+/// (blijvende_jacht.dart, [Jachtbewijs.officieel]).
+TidalKwaliteit? hoogsteOpTidal(Track t, List<TidalTrack> nummers) {
+  final zelfde = zelfdeOpnameOpTidal(t, nummers);
+  if (zelfde.any((x) => x.kwaliteit == TidalKwaliteit.hires)) return TidalKwaliteit.hires;
+  if (zelfde.any((x) => x.kwaliteit == TidalKwaliteit.cd)) return TidalKwaliteit.cd;
+  return null;
 }
 
 /// Wat de ronde voor één bestand vond.
@@ -160,13 +176,13 @@ const _versieSleutel = 'versie';
 class TidalBeterGeheugen {
   TidalBeterGeheugen(this._pad);
   final String _pad;
-  final Map<String, ({int ms, TidalBeterUitslag uit, List<String> nee})> _regels = {};
+  final Map<String, ({int ms, TidalBeterUitslag uit, List<String> nee, TidalKwaliteit? hoogste})> _regels = {};
 
   static String _sleutel(String pad) => pad.replaceAll('\\', '/').toLowerCase();
 
   int get aantal => _regels.length;
 
-  ({int ms, TidalBeterUitslag uit, List<String> nee})? van(String pad) => _regels[_sleutel(pad)];
+  ({int ms, TidalBeterUitslag uit, List<String> nee, TidalKwaliteit? hoogste})? van(String pad) => _regels[_sleutel(pad)];
 
   /// Is [pad] aan de beurt op [nuMs]? Nooit bekeken: ja. Mislukt: na een dag. Anders na [kTidalBeterOpnieuwDagen].
   bool aanDeBeurt(String pad, int nuMs) {
@@ -176,14 +192,19 @@ class TidalBeterGeheugen {
     return nuMs - r.ms >= wacht.inMilliseconds;
   }
 
-  void zet(String pad, TidalBeterUitslag uit, int nuMs, {String? afgewezenId}) {
+  /// [hoogste]: het beste dat TIDAL van deze opname heeft ([hoogsteOpTidal]); zonder blijft wat er stond.
+  void zet(String pad, TidalBeterUitslag uit, int nuMs, {String? afgewezenId, TidalKwaliteit? hoogste}) {
     final oud = van(pad);
     _regels[_sleutel(pad)] = (
       ms: nuMs,
       uit: uit,
       nee: [...?oud?.nee, if (afgewezenId != null && !(oud?.nee.contains(afgewezenId) ?? false)) afgewezenId],
+      hoogste: hoogste ?? oud?.hoogste,
     );
   }
+
+  /// Het beste dat TIDAL van de opname van [pad] heeft, zoals de ronde het laatst zag; null als hij het niet weet.
+  TidalKwaliteit? hoogsteVan(String pad) => van(pad)?.hoogste;
 
   Future<void> laad() async {
     try {
@@ -204,6 +225,7 @@ class TidalBeterGeheugen {
           ms: ms.toInt(),
           uit: uit,
           nee: [for (final x in (v['nee'] is List ? v['nee'] as List : const [])) '$x'],
+          hoogste: TidalKwaliteit.values.where((k) => k.name == v['max']).firstOrNull,
         );
       }
     } catch (_) {/* een kapot geheugen begint opnieuw: dat kost alleen zoekwerk */}
@@ -215,7 +237,12 @@ class TidalBeterGeheugen {
       await tmp.writeAsString(jsonEncode({
         _versieSleutel: kTidalBeterGeheugenVersie,
         for (final e in _regels.entries)
-          e.key: {'ms': e.value.ms, 'uit': e.value.uit.name, if (e.value.nee.isNotEmpty) 'nee': e.value.nee},
+          e.key: {
+            'ms': e.value.ms,
+            'uit': e.value.uit.name,
+            if (e.value.nee.isNotEmpty) 'nee': e.value.nee,
+            if (e.value.hoogste != null) 'max': e.value.hoogste!.name,
+          },
       }));
       await tmp.rename(_pad);
     } catch (_) {/* volgende keer opnieuw */}
@@ -388,11 +415,12 @@ class TidalBeterRonde {
       return TidalBeterUitslag.mislukt;
     }
     final treffers = tidalStereoNummers(uitvoer);
+    final hoogste = hoogsteOpTidal(t, treffers);
     final k = beterOpTidal(t, treffers, minstens: m, nee: geheugen.van(t.path)?.nee ?? const []);
     if (k == null) {
       log?.call('TIDAL beter "$naam" (${_watErLigt(t)}): niets beters van deze opname '
-          '(${treffers.length} treffers)');
-      geheugen.zet(t.path, TidalBeterUitslag.geen, nuMs);
+          '(${treffers.length} treffers${hoogste == null ? '' : ', TIDAL heeft hem in ${hoogste == TidalKwaliteit.hires ? 'hi-res' : 'cd-kwaliteit'}'})');
+      geheugen.zet(t.path, TidalBeterUitslag.geen, nuMs, hoogste: hoogste);
       await geheugen.bewaar();
       return TidalBeterUitslag.geen;
     }
@@ -400,7 +428,7 @@ class TidalBeterRonde {
         'TIDAL (${k.id}, "${k.album}", ${k.seconden} s) — halen en keuren');
     final uit = await haal(t, k);
     geheugen.zet(t.path, uit, _klok().millisecondsSinceEpoch,
-        afgewezenId: uit == TidalBeterUitslag.afgewezen ? k.id : null);
+        afgewezenId: uit == TidalBeterUitslag.afgewezen ? k.id : null, hoogste: hoogste);
     await geheugen.bewaar();
     return uit;
   }
