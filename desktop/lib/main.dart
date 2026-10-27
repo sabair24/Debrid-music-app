@@ -30604,6 +30604,15 @@ class EditorialeKop extends StatelessWidget {
     };
     final logoHoogte = isTv || smal ? 64.0 : (breedte >= 1280 ? 104.0 : 88.0);
 
+    // Een eigen hoogte nooit hoger dan het venster, met de spelerbalk eronder: anders staan de knoppen onder
+    // de vouw. Bij Claude François stond er 1357 (Saber, 27-10-2026) — ingesteld toen een hogere kop nog lege
+    // ruimte onder de knoppen gaf, en sinds de tekst onderaan staat een foto van 1421 punten hoog op een
+    // venster van 1352.
+    final eigenHoogte = switch (uitsnede?.hoogte) {
+      final h? => math.min(h, math.max(KopInstelling.kHoogteVanaf, MediaQuery.sizeOf(context).height - bovenBloed - 110)),
+      null => null,
+    };
+
     final naamTekst = LayoutBuilder(builder: (context, c) {
       final stijl = kDisplay.copyWith(
         fontSize: naamGrootte,
@@ -30778,7 +30787,7 @@ class EditorialeKop extends StatelessWidget {
           //
           // Op een gsm is dit sinds 27-10-2026 alleen de foto met de naam erop ([kGsmKopFoto]); de feiten en de
           // knoppen staan eronder, op de achtergrond.
-          minHeight: (uitsnede?.hoogte ?? (smal ? kGsmKopFoto : (isTv ? kTvKopZicht : (breedte * .40).clamp(340.0, 620.0)))) +
+          minHeight: (eigenHoogte ?? (smal ? kGsmKopFoto : (isTv ? kTvKopZicht : (breedte * .40).clamp(340.0, 620.0)))) +
               bovenBloed,
           // En de volle breedte, EXPLICIET. Dit stond nergens: een `Stack` meet zich aan zijn
           // niet-gepositioneerde kinderen, en `Positioned.fill` telt daarin niet mee. Op de pagina
@@ -30830,6 +30839,9 @@ class EditorialeKop extends StatelessWidget {
                   },
                   instelling: uitsnede,
                   bovenRand: bovenBloed,
+                  // Scherp op de pc, de Mac en de iPad (Saber, 27-10-2026: "waarom worden foto's zo uitgerokken");
+                  // op de gsm en de tv vullend, zoals hij koos op 19-10.
+                  scherpTot: smal || isTv ? null : kScherpTot,
                 )),
               ),
             // Het verloop hieronder begint ONDER de balk, niet bovenaan het vak. Het is afgesteld op
@@ -32516,9 +32528,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                             context: context, builder: (_) => ArtistArtGallery(widget.artist.name)),
                       ),
                     // De kop zelf uitsnijden, per soort scherm (Saber, 17-10-2026: "op pc, Mac en
-                    // iPad"). Niet op een gsm: daar is geen ruimte voor drie kaders, en wat je daar
-                    // ziet stel je op de pc in onder "Gsm".
-                    if (!isTv && !isCompact(context) && (_keuzeBytes ?? _art?.backdropBytes ?? _deezerFoto) != null)
+                    // iPad"). Sinds 27-10-2026 op elk toestel: "zorg dat ik ook op de gsm de foto kan
+                    // positioneren zoals ik het wil en uitvergroten en verkleinen hoe ik het wil, overal op
+                    // alle platforms". Op een tv met de pijlknoppen in de bewerker.
+                    if ((_keuzeBytes ?? _art?.backdropBytes ?? _deezerFoto) != null)
                       GlasKnop(
                         icoon: Icons.crop_rounded,
                         label: 'Kop aanpassen',

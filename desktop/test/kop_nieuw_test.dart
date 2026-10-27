@@ -117,7 +117,7 @@ void main() {
     });
 
     test('een zachte rand alleen aan de kant die vrijkomt', () {
-      expect(randenVan(const Rect.fromLTWH(0, 0, 1440, 810), vak), (links: 0.0, rechts: 0.0));
+      expect(randenVan(const Rect.fromLTWH(0, 0, 1440, 810), vak), (links: 0.0, rechts: 0.0, boven: 0.0, onder: 0.0));
       final rechts = randenVan(const Rect.fromLTWH(300, 0, 1440, 810), vak);
       expect(rechts.links, greaterThan(0));
       expect(rechts.rechts, 0, reason: 'rechts loopt de foto nog voorbij de rand');
@@ -142,6 +142,88 @@ void main() {
       final terug = puntOpDoel(vak: vak, plek: plek, doel: doel);
       expect(terug.x, closeTo(1.05, 1e-6));
       expect(terug.y, closeTo(.4, 1e-6));
+    });
+  });
+
+  group("scherp en vrij (Saber, 27-10-2026: 'waarom worden foto's zo uitgerokken')", () {
+    // Claude François: 1496 × 1994 van Wikipedia, op zijn scherm van 2560 punten (dpr 1) 1,7 keer opgerekt.
+    const bron = Size(1496, 1994);
+    const vak = Size(2560, 1242);
+    const doel = Offset(.68, .3);
+
+    test('nooit meer dan 1,25 keer: kleiner dan de breedte, rechts tegen de rand, op en neer vullend', () {
+      final grens = scherpteGrens(tot: kScherpTot, bron: bron, maat: bron, vak: vak.width, pixels: 2560);
+      expect(grens, closeTo(1.25, 1e-9));
+      final r = kopPlek(vak: vak, beeld: bron, punt: Brandpunt.midden, doel: doel, maxSchaal: grens);
+      expect(r.width, closeTo(1496 * 1.25, 1e-6));
+      expect(r.right, closeTo(vak.width, 1e-6), reason: 'de app zet hem rechts, waar de naam niet staat');
+      expect(r.top, lessThanOrEqualTo(0));
+      expect(r.bottom, greaterThanOrEqualTo(vak.height));
+      expect(randenVan(r, vak).links, greaterThan(0), reason: 'links loopt hij zacht over in de achtergrond');
+    });
+
+    test('de grens rekent met de echte pixels, ook als de foto verkleind bekeken is', () {
+      // Een bekeken foto heeft de maat van zijn verkleinde versie (480 lang), de bron die van het bestand.
+      final viaBlik = scherpteGrens(tot: kScherpTot, bron: bron, maat: const Size(360, 480), vak: 2560, pixels: 2560);
+      expect(360 * viaBlik!, closeTo(1496 * 1.25, 1), reason: 'dezelfde breedte op het scherm');
+      // Een Mac tekent twee pixels per punt: dezelfde foto wordt daar half zo breed in punten.
+      final mac = scherpteGrens(tot: kScherpTot, bron: bron, maat: bron, vak: 1440, pixels: 2880);
+      expect(1496 * mac!, closeTo(1496 * 1.25 / 2, 1e-6));
+      expect(scherpteGrens(tot: kScherpTot, bron: null, maat: bron, vak: 2560, pixels: 2560), isNull);
+    });
+
+    test('een te kleine foto vult op en neer toch, ook boven de grens', () {
+      const klein = Size(339, 510);
+      final grens = scherpteGrens(tot: kScherpTot, bron: klein, maat: klein, vak: 2560, pixels: 2560);
+      final r = kopPlek(vak: const Size(2560, 640), beeld: klein, punt: Brandpunt.midden, doel: doel, maxSchaal: grens);
+      expect(r.height, greaterThanOrEqualTo(640));
+    });
+
+    test('een scherpe foto vult gewoon, zoals altijd', () {
+      const groot = Size(3840, 2160);
+      final grens = scherpteGrens(tot: kScherpTot, bron: groot, maat: groot, vak: 2560, pixels: 2560);
+      final r = kopPlek(vak: const Size(2560, 640), beeld: groot, punt: Brandpunt.midden, doel: doel, maxSchaal: grens);
+      expect(r.left, lessThanOrEqualTo(0));
+      expect(r.right, greaterThanOrEqualTo(2560));
+    });
+
+    test('kleiner dan vullend: hij staat helemaal in de kop, met zachte randen waar hij vrijkomt', () {
+      const i = KopInstelling(fx: .5, fy: .5, zoom: .5);
+      const pc = Size(1440, 764);
+      final r = KopFoto.plekVoor(vak: pc, maat: const Size(1280, 720), blik: null, instelling: i, smal: false);
+      expect(r.width, closeTo(1440 * .5, 1e-6));
+      expect(r.top, greaterThanOrEqualTo(0));
+      expect(r.bottom, lessThanOrEqualTo(pc.height + 1e-6));
+      final randen = randenVan(r, pc);
+      expect(randen.boven + randen.onder, greaterThan(0));
+      expect(randen.links + randen.rechts, greaterThan(0));
+      expect(KopInstelling.lees(i.schrijf()), i, reason: 'een zoom onder 1 reist mee');
+    });
+
+    testWidgets('een eigen hoogte nooit hoger dan het venster: de knoppen blijven in beeld', (t) async {
+      t.view.physicalSize = const Size(1440, 1000);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.reset);
+      await t.pumpWidget(_omhulsel(EditorialeKop(
+        naam: 'Claude François',
+        bovenBloed: 64,
+        uitsnede: const KopInstelling(fx: .49, fy: .26, hoogte: 1357),
+        actions: [FilledButton(onPressed: () {}, child: const Text('Radio'))],
+      )));
+      await t.pump();
+      expect(t.getRect(find.byType(EditorialeKop)).height, lessThanOrEqualTo(1000 - 110 + 1));
+      expect(t.getRect(find.widgetWithText(FilledButton, 'Radio')).bottom, lessThan(1000 - 96));
+    });
+
+    testWidgets('scherp op een breed scherm, vullend op een gsm', (t) async {
+      for (final (breed, grens) in [(1440.0, kScherpTot), (411.0, null)]) {
+        t.view.physicalSize = Size(breed, 900);
+        t.view.devicePixelRatio = 1;
+        addTearDown(t.view.reset);
+        await t.pumpWidget(_omhulsel(EditorialeKop(naam: 'Amy Winehouse', art: ArtistArt(backdropBytes: _liggend))));
+        await t.pump();
+        expect(t.widget<KopFoto>(find.byType(KopFoto)).scherpTot, grens, reason: 'op $breed punten');
+      }
     });
   });
 
@@ -244,6 +326,21 @@ void main() {
       await t.pump();
       expect(bewaard.single.$1, KopScherm.pc);
       expect(bewaard.single.$2!.naam, isTrue);
+    });
+
+    testWidgets('met knoppen kleiner dan vullend en een stap opzij — ook met een afstandsbediening', (t) async {
+      final bewaard = await open(t);
+      for (var k = 0; k < 4; k++) {
+        await t.tap(find.byKey(const ValueKey('kop-kleiner')));
+        await t.pump();
+      }
+      await t.tap(find.byKey(const ValueKey('kop-rechts')));
+      await t.pump();
+      await t.tap(find.byKey(const ValueKey('kop-opslaan')));
+      await t.pump();
+      final i = bewaard.single.$2!;
+      expect(i.zoom, lessThan(1), reason: 'verkleinen mag');
+      expect(i.zoom, closeTo(1 / (1.1 * 1.1 * 1.1 * 1.1), 1e-3));
     });
 
     testWidgets('zonder bruikbaar logo geen keuze', (t) async {

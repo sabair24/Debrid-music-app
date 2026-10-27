@@ -104,13 +104,52 @@ class _KopBewerkerState extends State<KopBewerker> {
     final i = _instellingVan(s);
     if (i != null) return i;
     final blik = _blik;
-    final maat = blik?.maat ?? widget.bronMaat ?? const Size(16, 9);
-    final plek = KopFoto.plekVoor(vak: vak, maat: maat, blik: blik, instelling: null, smal: smal, bovenRand: balk);
+    final maat = _maat;
+    final plek = KopFoto.plekVoor(
+        vak: vak, maat: maat, blik: blik, instelling: null, smal: smal, bovenRand: balk, maxSchaal: _grens(s, vak, maat));
     final p = puntOpDoel(vak: vak, plek: plek, doel: doelInVak(kopDoel(smal: smal), vak, balk));
     return KopInstelling(fx: p.x, fy: p.y);
   }
 
+  Size get _maat => _blik?.maat ?? widget.bronMaat ?? const Size(16, 9);
+
+  /// De scherptegrens voor het kader van [s] ([scherpteGrens]): op de pc, de Mac en de iPad, zoals de echte
+  /// kop; op de gsm en de tv vullend. Het kader is altijd even breed, het scherm niet: hoeveel pixels de echte
+  /// kop breed is, komt van dit toestel als je het scherm bewerkt waar je op zit, en is anders een schatting
+  /// (een iPad tekent twee pixels per punt).
+  double? _grens(KopScherm s, Size vak, Size maat) {
+    if (s == KopScherm.gsm || s == KopScherm.tv) return null;
+    final pixels = s == widget.begin
+        ? MediaQuery.sizeOf(context).width * (MediaQuery.maybeDevicePixelRatioOf(context) ?? 1)
+        : vak.width * (s == KopScherm.staand ? 2 : 1);
+    return scherpteGrens(tot: kScherpTot, bron: widget.bronMaat, maat: maat, vak: vak.width, pixels: pixels);
+  }
+
   void _zet(KopInstelling i) => setState(() => _bewerkt[_scherm] = i);
+
+  /// Een stap met een knop: de foto [richting] op, 3 % van het kader. Op een tv is er geen vinger en geen
+  /// muis, en op een gsm is een kleine stap met een knop preciezer dan met je duim.
+  void _stap(Offset richting, Size vak, double balk, bool smal) {
+    final start = _beginVan(_scherm, vak, balk, smal);
+    final plek = KopFoto.plekVoor(
+            vak: vak,
+            maat: _maat,
+            blik: _blik,
+            instelling: start,
+            smal: smal,
+            bovenRand: balk,
+            maxSchaal: _grens(_scherm, vak, _maat))
+        .shift(Offset(richting.dx * vak.width * .03, richting.dy * vak.height * .03));
+    final p = puntOpDoel(vak: vak, plek: plek, doel: doelInVak(kopDoel(smal: smal), vak, balk));
+    _zet(start.met(fx: p.x, fy: p.y));
+  }
+
+  /// Groter of kleiner met een knop, ook kleiner dan vullend (Saber, 27-10-2026: "uitvergroten en verkleinen
+  /// hoe ik het wil").
+  void _zoomStap(double factor, Size vak, double balk, bool smal) {
+    final start = _beginVan(_scherm, vak, balk, smal);
+    _zet(start.met(zoom: start.zoom * factor));
+  }
 
   /// Een logo dat de kop kan tonen: alleen met een doorzichtige achtergrond (zie [heeftDoorzichtigheid]).
   Uint8List? get _bruikbaarLogo => switch (widget.logo) {
@@ -165,8 +204,8 @@ class _KopBewerkerState extends State<KopBewerker> {
               ]),
               const SizedBox(height: 4),
               Text(
-                  'Sleep de foto in elke richting, opzij ook voorbij de rand · scroll of knijp om te zoomen · '
-                  'sleep de onderrand voor de hoogte. Elk scherm apart.',
+                  'Sleep de foto in elke richting, opzij ook voorbij de rand · scroll, knijp of − en + om hem groter '
+                  'of kleiner te maken · sleep de onderrand voor de hoogte. Elk scherm apart.',
                   style: TextStyle(color: kGedempt, fontSize: 12)),
               const SizedBox(height: 14),
               Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
@@ -211,6 +250,7 @@ class _KopBewerkerState extends State<KopBewerker> {
                         smal: kader.smal,
                         tv: _scherm == KopScherm.tv,
                         logo: (i?.naam ?? false) ? null : _bruikbaarLogo,
+                        maxSchaal: _grens(_scherm, vak, _maat),
                         schaal: schaal,
                         begin: () => _beginVan(_scherm, vak, kader.balk, kader.smal),
                         wijzig: _zet,
@@ -219,7 +259,33 @@ class _KopBewerkerState extends State<KopBewerker> {
                   );
                 }),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 10),
+              Wrap(spacing: 2, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                IconButton(
+                    key: const ValueKey('kop-kleiner'),
+                    tooltip: 'Kleiner',
+                    icon: const Icon(Icons.zoom_out_rounded),
+                    onPressed: () => _zoomStap(1 / 1.1, vak, kader.balk, kader.smal)),
+                Text('${((i?.zoom ?? 1) * 100).round()} %', style: TextStyle(color: kGedempt, fontSize: 12)),
+                IconButton(
+                    key: const ValueKey('kop-groter'),
+                    tooltip: 'Groter',
+                    icon: const Icon(Icons.zoom_in_rounded),
+                    onPressed: () => _zoomStap(1.1, vak, kader.balk, kader.smal)),
+                const SizedBox(width: 12),
+                for (final (sleutel, icoon, tip, richting) in const [
+                  ('kop-links', Icons.arrow_back_rounded, 'Naar links', Offset(-1, 0)),
+                  ('kop-omhoog', Icons.arrow_upward_rounded, 'Omhoog', Offset(0, -1)),
+                  ('kop-omlaag', Icons.arrow_downward_rounded, 'Omlaag', Offset(0, 1)),
+                  ('kop-rechts', Icons.arrow_forward_rounded, 'Naar rechts', Offset(1, 0)),
+                ])
+                  IconButton(
+                      key: ValueKey(sleutel),
+                      tooltip: tip,
+                      icon: Icon(icoon),
+                      onPressed: () => _stap(richting, vak, kader.balk, kader.smal)),
+              ]),
+              const SizedBox(height: 6),
               Row(children: [
                 TextButton.icon(
                   key: const ValueKey('kop-herstel'),
@@ -229,8 +295,11 @@ class _KopBewerkerState extends State<KopBewerker> {
                   onPressed: i == null ? null : () => setState(() => _bewerkt[_scherm] = null),
                 ),
                 const SizedBox(width: 6),
-                Text(i == null ? 'De app kiest zelf, op de gezichten' : 'Zelf ingesteld',
-                    style: TextStyle(color: kGedempt, fontSize: 12)),
+                // Krimpt op een gsm, waar de bewerker sinds 27-10-2026 ook opengaat.
+                Flexible(
+                  child: Text(i == null ? 'De app kiest zelf, op de gezichten' : 'Zelf ingesteld',
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: kGedempt, fontSize: 12)),
+                ),
                 const Spacer(),
                 TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuleren')),
                 const SizedBox(width: 8),
@@ -262,6 +331,7 @@ class _Kader extends StatefulWidget {
     required this.smal,
     required this.tv,
     required this.logo,
+    required this.maxSchaal,
     required this.schaal,
     required this.begin,
     required this.wijzig,
@@ -276,6 +346,7 @@ class _Kader extends StatefulWidget {
   final double balk, schaal;
   final bool smal, tv;
   final Uint8List? logo;
+  final double? maxSchaal;
   final KopInstelling Function() begin;
   final void Function(KopInstelling) wijzig;
 
@@ -291,7 +362,13 @@ class _KaderState extends State<_Kader> {
   Size get _maat => widget.blik?.maat ?? widget.bronMaat ?? const Size(16, 9);
 
   Rect _plek(KopInstelling? i) => KopFoto.plekVoor(
-      vak: widget.vak, maat: _maat, blik: widget.blik, instelling: i, smal: widget.smal, bovenRand: widget.balk);
+      vak: widget.vak,
+      maat: _maat,
+      blik: widget.blik,
+      instelling: i,
+      smal: widget.smal,
+      bovenRand: widget.balk,
+      maxSchaal: widget.maxSchaal);
 
   /// De foto verschuiven met [delta] punten op het scherm (dus [delta] / schaal in het kader).
   void _schuif(KopInstelling vanaf, Offset delta) {
@@ -442,6 +519,8 @@ class _Voorbeeld extends StatelessWidget {
                 errorBuilder: (_, __, ___) => const SizedBox()),
             links: randen.links,
             rechts: randen.rechts,
+            boven: randen.boven,
+            onder: randen.onder,
           ),
         ),
       ),

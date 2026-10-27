@@ -127,9 +127,13 @@ String kopSoort(KopScherm s) => 'kop_${s.name}';
 /// naam, onder het menu. [zoom] is hoeveel verder dan "net vullend" (1 = niet), en [hoogte] de
 /// hoogte van de kop in punten (null = de gewone hoogte van dat scherm).
 ///
-/// [fx] mag buiten 0..1 liggen: opzij schuift de foto ook voorbij de rand (Saber, 27-10-2026: "het moet
-/// ook zijdelings verschoven kunnen worden"), en dan ligt de vaste plek naast de foto in plaats van erin.
-/// Hoe ver precies, zegt `kopPlek` (`kOpzijVrij`); hier alleen een ruime grens tegen onzin.
+/// [fx] en [fy] mogen buiten 0..1 liggen: opzij schuift de foto ook voorbij de rand (Saber, 27-10-2026: "het
+/// moet ook zijdelings verschoven kunnen worden"), en een verkleinde foto mag overal in de kop staan — dan
+/// ligt de vaste plek naast de foto in plaats van erin. Hoe ver precies, zegt `kopPlek` (`kOpzijVrij`);
+/// hier alleen een ruime grens tegen onzin.
+///
+/// [zoom] mag ook onder 1 (tot [kZoomVanaf]): kleiner dan vullend. Saber, 27-10-2026: "uitvergroten en
+/// verkleinen hoe ik het wil, overal op alle platforms".
 ///
 /// [naam]: de kop toont de naam in letters, ook als TheAudioDB een logo heeft (de keuze "Kop toont" in
 /// de bewerker). Onwaar is het logo als dat er is.
@@ -140,10 +144,10 @@ class KopInstelling {
   final double? hoogte;
   final bool naam;
 
-  static const double kZoomTot = 4;
+  static const double kZoomVanaf = .3, kZoomTot = 4;
 
-  /// Hoe ver [fx] buiten de foto mag: een ruime grens, de echte zit in `kopPlek`.
-  static const double kFxVanaf = -1, kFxTot = 2;
+  /// Hoe ver [fx] en [fy] buiten de foto mogen: een ruime grens, de echte zit in `kopPlek`.
+  static const double kPuntVanaf = -1, kPuntTot = 2;
 
   /// De laagste kop die je kunt maken. Lager en de naam en Radio passen er niet meer in, en dan duwt
   /// de inhoud hem toch weer op.
@@ -167,9 +171,9 @@ class KopInstelling {
     if (metHoogte && (h == null || !h.isFinite)) return null;
     if (d.length == 5 && d[4] != 'naam' && d[4] != 'logo') return null;
     return KopInstelling(
-      fx: fx.clamp(kFxVanaf, kFxTot),
-      fy: fy.clamp(0.0, 1.0),
-      zoom: zoom.clamp(1.0, kZoomTot),
+      fx: fx.clamp(kPuntVanaf, kPuntTot),
+      fy: fy.clamp(kPuntVanaf, kPuntTot),
+      zoom: zoom.clamp(kZoomVanaf, kZoomTot),
       hoogte: h?.clamp(kHoogteVanaf, kHoogteTot),
       naam: d.length == 5 && d[4] == 'naam',
     );
@@ -185,9 +189,9 @@ class KopInstelling {
 
   KopInstelling met({double? fx, double? fy, double? zoom, double? hoogte, bool geenHoogte = false, bool? naam}) =>
       KopInstelling(
-        fx: (fx ?? this.fx).clamp(kFxVanaf, kFxTot),
-        fy: (fy ?? this.fy).clamp(0.0, 1.0),
-        zoom: (zoom ?? this.zoom).clamp(1.0, kZoomTot),
+        fx: (fx ?? this.fx).clamp(kPuntVanaf, kPuntTot),
+        fy: (fy ?? this.fy).clamp(kPuntVanaf, kPuntTot),
+        zoom: (zoom ?? this.zoom).clamp(kZoomVanaf, kZoomTot),
         hoogte: geenHoogte ? null : (hoogte ?? this.hoogte)?.clamp(kHoogteVanaf, kHoogteTot),
         naam: naam ?? this.naam,
       );
