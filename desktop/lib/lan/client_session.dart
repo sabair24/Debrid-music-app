@@ -1038,8 +1038,10 @@ class ClientSession extends ChangeNotifier {
     final m = mirror;
     if (m == null) return;
     try {
-      final copy = await m.fetch();
+      // Dezelfde kopie als de vorige keer, en er staat een bibliotheek: alleen het merkteken vragen (dataverbruik).
+      final copy = await m.fetch(behalve: library.tracks.isEmpty ? null : _kopieMerk);
       if (copy == null) return;
+      _kopieMerk = copy.etag;
       if (library.adoptMirror(copy.json, updatedAt: copy.updatedAt)) {
         unawaited(library.loadRemoteCovers(settings));
         notifyListeners();
@@ -1048,6 +1050,9 @@ class ClientSession extends ChangeNotifier {
       debugPrint('Cloud catalogue unavailable: $e');
     }
   }
+
+  /// Het merkteken van de cloudkopie die het laatst gehaald werd ([_fillFromMirror]).
+  String? _kopieMerk;
 
   /// De versie van de berichten van uploaders die dit toestel heeft (uploaderberichten.dart); null: nog niets.
   int? _berichtenVersie;

@@ -116,6 +116,17 @@ void main() {
               '${a.tracks.map((t) => '${t.trackNo} ${t.title}').join('|')}'
       ];
 
+  test('dataverbruik: wie deze kopie al heeft, leest alleen het merkteken (één document, geen stukken)', () async {
+    await mirror().publish(catalog.snapshot());
+    final copy = (await mirror().fetch())!;
+    db.reads = 0;
+    expect(await mirror().fetch(behalve: copy.etag), isNull);
+    expect(db.reads, 1, reason: 'elke 15 s zonder pc: was elke keer alle stukken, ingepakt een halve megabyte');
+    db.reads = 0;
+    expect(await mirror().fetch(behalve: 'een-oudere-kopie'), isNotNull);
+    expect(db.reads, greaterThan(1));
+  });
+
   group('the copy is the catalogue', () {
     test('albums, pressings and track order survive the round trip', () async {
       await mirror().publish(catalog.snapshot());
