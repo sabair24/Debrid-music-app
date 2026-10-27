@@ -468,6 +468,9 @@ class LanServer {
   /// De modelvragen van toestellen (`pc_model.dart`), met het budget van de pc. Gezet door main.
   Modelvragen? modelvragen;
 
+  /// De ids van de laatste zone-opdrachten ([zoneOpdracht]), om er een die twee keer komt maar één keer uit te voeren.
+  final List<String> _zoneOpdrachtIds = [];
+
   /// Per toestel de open lijnen (`/api/zones/events`) waarover een opdracht naar dat toestel kan.
   final Map<String, List<void Function(String event, Map<String, dynamic> data)>> _zoneLijnen = {};
 
@@ -481,7 +484,17 @@ class LanServer {
   /// - Een speaker: de pc stuurt hem zelf ([CastManager.control] / [CastManager.play]).
   Future<({int status, Map<String, dynamic> antwoord})> zoneOpdracht(Map<String, dynamic> op,
       {required String van}) async {
+    // Dezelfde opdracht (hetzelfde id) twee keer: een toestel stuurt haar opnieuw als het antwoord uitbleef
+    // ([stuurMetHerkansing]). Kwam de eerste toch aan, dan niet nog eens: anders slaat "volgende" er twee over.
+    final id = '${op['id'] ?? ''}';
+    if (id.isNotEmpty) {
+      if (_zoneOpdrachtIds.contains(id)) return (status: 200, antwoord: <String, dynamic>{'bezorgd': 1, 'dubbel': true});
+      _zoneOpdrachtIds.add(id);
+      if (_zoneOpdrachtIds.length > 200) _zoneOpdrachtIds.removeAt(0);
+    }
     final r = await _zoneOpdracht(op, van: van);
+    // Lukte ze niet, dan mag hetzelfde id het opnieuw proberen.
+    if (r.status != 200 && id.isNotEmpty) _zoneOpdrachtIds.remove(id);
     if (r.status == 200) {
       final zone = '${op['zone'] ?? ''}';
       final cmd = '${op['cmd'] ?? ''}';

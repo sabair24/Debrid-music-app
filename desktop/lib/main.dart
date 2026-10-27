@@ -1615,12 +1615,7 @@ Future<void> main() async {
     }
     final c = library.remote;
     if (c == null) return 'Geen verbinding met de pc.';
-    try {
-      await c.ask('/api/zone/cmd', op);
-      return null;
-    } on RemoteException catch (e) {
-      return e.message;
-    }
+    return stuurMetHerkansing(() => c.ask('/api/zone/cmd', op));
   }
 
   // Een opdracht vanuit het zoneblad (groeperen, stap 3.1).
