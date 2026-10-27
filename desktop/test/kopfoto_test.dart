@@ -66,8 +66,9 @@ void main() {
 
     test('buiten de grenzen wordt binnen de grenzen', () {
       final i = KopInstelling.lees('-3,7,99,20')!;
-      expect(i.fx, KopInstelling.kFxVanaf, reason: 'opzij mag voorbij de rand, maar niet eindeloos');
-      expect(i.fy, 1);
+      expect(i.fx, KopInstelling.kPuntVanaf, reason: 'opzij mag voorbij de rand, maar niet eindeloos');
+      expect(i.fy, KopInstelling.kPuntTot);
+      expect(KopInstelling.lees('0.5,0.5,0.01')!.zoom, KopInstelling.kZoomVanaf, reason: 'verkleinen mag, tot een grens');
       expect(i.zoom, KopInstelling.kZoomTot);
       expect(i.hoogte, KopInstelling.kHoogteVanaf, reason: 'een kop van 20 punten past de naam niet');
     });
@@ -279,14 +280,16 @@ void main() {
     test('de artiestkop tekent zijn foto met KopFoto, met de instelling van dit soort scherm', () {
       expect(bron, contains('child: grijs(KopFoto('));
       expect(bron, contains('uitsnede: lib.kopVoor(widget.artist.name, kopSchermVan(context)),'));
-      expect(bron, contains('minHeight: (uitsnede?.hoogte ??'));
+      expect(bron, contains('minHeight: (eigenHoogte ??'));
       final kop = bron.substring(bron.indexOf('class EditorialeKop '), bron.indexOf('child: grijs(KopFoto('));
       expect(kop, isNot(contains('alignment: const Alignment(0, -.35)')),
           reason: 'de vaste uitlijning die de hoofden afsneed');
     });
 
-    test('Kop aanpassen alleen op pc, Mac en iPad', () {
-      expect(bron, contains('if (!isTv && !isCompact(context) && (_keuzeBytes ?? _art?.backdropBytes ?? _deezerFoto) != null)'));
+    test('Kop aanpassen op elk toestel, ook de gsm en de tv (Saber, 27-10-2026: "overal op alle platforms")', () {
+      expect(bron, contains('                    if ((_keuzeBytes ?? _art?.backdropBytes ?? _deezerFoto) != null)\n'
+          '                      GlasKnop(\n'
+          '                        icoon: Icons.crop_rounded,'));
     });
 
     test('wat over een foto bekend is, wordt bewaard — één keer per foto', () {

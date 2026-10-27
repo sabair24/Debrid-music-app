@@ -367,6 +367,10 @@ Future<FotoBlik?> _bekijkVers(Uint8List beeld) async {
 ///
 /// [opzij] is hoeveel van de breedte van het vak de foto opzij mag vrijlaten (zie [kOpzijVrij]): 0 is
 /// altijd vullend, zoals de app zelf kiest.
+///
+/// [maxSchaal] is de scherptegrens ([scherpteGrens]): verder dan dat wordt de foto niet opgerekt, ook als
+/// hij dan niet de hele breedte vult. Op en neer vult hij wel altijd — tenzij je zelf uitzoomt ([zoom]
+/// onder 1): dan staat er een kleinere foto in de kop, waar je hem neerzet.
 Rect kopPlek({
   required Size vak,
   required Size beeld,
@@ -376,10 +380,14 @@ Rect kopPlek({
   Rect? gezichten,
   Rect? zicht,
   double opzij = 0,
+  double? maxSchaal,
 }) {
   if (beeld.width <= 0 || beeld.height <= 0 || vak.isEmpty || !vak.isFinite) return Offset.zero & vak;
-  final s = math.max(vak.width / beeld.width, vak.height / beeld.height) *
-      zoom.clamp(1.0, KopInstelling.kZoomTot);
+  final vullend = math.max(vak.width / beeld.width, vak.height / beeld.height);
+  final basis = maxSchaal == null || maxSchaal >= vullend
+      ? vullend
+      : math.max(maxSchaal, vak.height / beeld.height);
+  final s = basis * zoom.clamp(KopInstelling.kZoomVanaf, KopInstelling.kZoomTot);
   final w = beeld.width * s, h = beeld.height * s;
   var links = doel.dx * vak.width - punt.x * w;
   var boven = doel.dy * vak.height - punt.y * h;
@@ -408,10 +416,37 @@ Rect kopPlek({
   // haar boven nul (gemeten: 1,1e-13 bij een foto van 600 breed), en `clamp` met een ondergrens
   // boven de bovengrens gooit een fout in plaats van een getal.
   final vrij = opzij * vak.width;
-  links = links.clamp(math.min(vak.width - w, 0.0) - vrij, vrij).toDouble();
-  boven = boven.clamp(math.min(vak.height - h, 0.0), 0.0).toDouble();
+  if (opzij == 0 && w < vak.width) {
+    // Smaller dan de kop (de scherptegrens) en door de app zelf geplaatst: rechts, tegen de rand, waar
+    // de naam niet staat.
+    links = vak.width - w;
+  } else {
+    links = links.clamp(math.min(vak.width - w, 0.0) - vrij, math.max(vak.width - w, 0.0) + vrij).toDouble();
+  }
+  // Op en neer: vullend zonder rand, en een kleinere foto helemaal binnen de kop.
+  boven = boven.clamp(math.min(vak.height - h, 0.0), math.max(vak.height - h, 0.0)).toDouble();
   return Rect.fromLTWH(links, boven, w, h);
 }
+
+/// Hoe ver een foto in de kop opgerekt mag worden, als [KopFoto.plekVoor] hem wil: [tot] keer zijn eigen
+/// pixels op het scherm. Saber, 27-10-2026, bij Claude François (1496 × 1994, 1,7 keer opgerekt over zijn
+/// scherm van 2560): "waarom worden foto's zo uitgerokken ?? … dit is een hoog resolutie foto". Hij koos
+/// 1,25 op de pc, de Mac en de iPad; de gsm blijft vullend ([kScherpTot]).
+///
+/// [bron] is de echte pixelmaat (uit de kop van het bestand), [maat] de maat waarmee gerekend wordt (die
+/// van een bekeken foto is verkleind), [vak] de breedte van de kop in die rekenpunten en [pixels] hoeveel
+/// schermpixels de echte kop breed is. Gemeten over het oppervlak, zodat een gedraaide JPEG (breedte en
+/// hoogte omgewisseld in de kop van het bestand) hetzelfde antwoord geeft.
+double? scherpteGrens({required double tot, required Size? bron, required Size maat, required double vak, required double pixels}) {
+  if (bron == null || bron.isEmpty || maat.isEmpty || vak <= 0 || pixels <= 0) return null;
+  final perPunt = math.sqrt((bron.width * bron.height) / (maat.width * maat.height));
+  // Getekend is de foto maat.width × s rekenpunten, dat is × pixels / vak schermpixels; hij heeft maat.width × perPunt
+  // eigen pixels. Die verhouding hoogstens [tot].
+  return tot * perPunt * vak / pixels;
+}
+
+/// De scherptegrens op de pc, de Mac en de iPad: nooit meer dan 1,25 keer de eigen pixels.
+const double kScherpTot = 1.25;
 
 /// Hoeveel van de breedte een foto die je zelf instelt opzij mag vrijlaten. Saber, 27-10-2026: "het moet
 /// ook zijdelings verschoven kunnen worden" — zonder dat kon een liggende foto in een brede kop alleen op
@@ -419,36 +454,48 @@ Rect kopPlek({
 /// achtergrond ([zachteRanden]). Op en neer blijft hij vullend: daar zou vrijlaten lege ruimte zijn.
 const double kOpzijVrij = .4;
 
-/// [kind] met zachte zijranden: [links] en [rechts] zijn het deel van zijn breedte dat naar doorzichtig
-/// loopt. Een masker en geen kleurverloop erover: de foto staat in een grijsfilter, en een verloop in de
-/// kleur van de achtergrond werd daar grijs.
-Widget zachteRanden(Widget kind, {required double links, required double rechts}) => ShaderMask(
-      blendMode: BlendMode.dstIn,
-      shaderCallback: (r) => LinearGradient(
-        colors: const [Color(0x00000000), Color(0xFF000000), Color(0xFF000000), Color(0x00000000)],
-        stops: [0, links.clamp(0.0, .5), 1 - rechts.clamp(0.0, .5), 1],
-      ).createShader(r),
-      child: kind,
-    );
+/// [kind] met zachte randen: [links], [rechts], [boven] en [onder] zijn het deel van zijn breedte of hoogte
+/// dat naar doorzichtig loopt. Een masker en geen kleurverloop erover: de foto staat in een grijsfilter, en
+/// een verloop in de kleur van de achtergrond werd daar grijs.
+Widget zachteRanden(Widget kind, {double links = 0, double rechts = 0, double boven = 0, double onder = 0}) {
+  Widget masker(Widget k, Alignment van, Alignment naar, double a, double b) => ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (r) => LinearGradient(
+          begin: van,
+          end: naar,
+          colors: const [Color(0x00000000), Color(0xFF000000), Color(0xFF000000), Color(0x00000000)],
+          stops: [0, a.clamp(0.0, .5), 1 - b.clamp(0.0, .5), 1],
+        ).createShader(r),
+        child: k,
+      );
+  var uit = kind;
+  if (links > 0 || rechts > 0) uit = masker(uit, Alignment.centerLeft, Alignment.centerRight, links, rechts);
+  if (boven > 0 || onder > 0) uit = masker(uit, Alignment.topCenter, Alignment.bottomCenter, boven, onder);
+  return uit;
+}
 
 /// Hoe breed de zachte rand is aan een kant waar de foto niet tot de rand van het vak komt — 0 waar hij
-/// dat wel doet. Als deel van de breedte van de foto, voor [zachteRanden].
-({double links, double rechts}) randenVan(Rect plek, Size vak) {
-  if (plek.width <= 0) return (links: 0, rechts: 0);
+/// dat wel doet. Als deel van de breedte (links, rechts) of hoogte (boven, onder) van de foto, voor
+/// [zachteRanden].
+({double links, double rechts, double boven, double onder}) randenVan(Rect plek, Size vak) {
+  if (plek.width <= 0 || plek.height <= 0) return (links: 0, rechts: 0, boven: 0, onder: 0);
   final rand = (vak.width * .11).clamp(40.0, 160.0);
+  final randH = math.min(rand, plek.height * .3);
   return (
     links: plek.left > .5 ? rand / plek.width : 0,
     rechts: plek.right < vak.width - .5 ? rand / plek.width : 0,
+    boven: plek.top > .5 ? randH / plek.height : 0,
+    onder: plek.bottom < vak.height - .5 ? randH / plek.height : 0,
   );
 }
 
 /// Het omgekeerde van [kopPlek]: welk punt van de foto er op [doel] staat als de foto op [plek]
 /// ligt. Voor de bewerker — slepen verschuift de plek, en bewaard wordt het punt.
 ///
-/// Opzij mag het punt buiten de foto liggen (zie [kOpzijVrij]): dan staat de foto naast de vaste plek.
+/// Het punt mag buiten de foto liggen (zie [kOpzijVrij]): dan staat de foto naast de vaste plek.
 Brandpunt puntOpDoel({required Size vak, required Rect plek, required Offset doel}) => Brandpunt(
-      ((doel.dx * vak.width - plek.left) / plek.width).clamp(KopInstelling.kFxVanaf, KopInstelling.kFxTot),
-      ((doel.dy * vak.height - plek.top) / plek.height).clamp(0.0, 1.0),
+      ((doel.dx * vak.width - plek.left) / plek.width).clamp(KopInstelling.kPuntVanaf, KopInstelling.kPuntTot),
+      ((doel.dy * vak.height - plek.top) / plek.height).clamp(KopInstelling.kPuntVanaf, KopInstelling.kPuntTot),
     );
 
 /// Waar in de kop het brandpunt hoort, als deel van het vak onder [KopFoto.bovenRand].
@@ -499,9 +546,13 @@ class KopFoto extends StatelessWidget {
     this.instelling,
     this.bovenRand = 0,
     this.direct = false,
+    this.scherpTot,
   });
 
   final Uint8List beeld;
+
+  /// Hoe ver de foto hoogstens opgerekt wordt ([kScherpTot]), of null: altijd vullend (de gsm, de tv).
+  final double? scherpTot;
 
   /// Gsm-vorm (naam onder de foto) of breed (naam links ernaast) — zie [kopDoel] en [kopZicht].
   final bool smal;
@@ -532,15 +583,20 @@ class KopFoto extends StatelessWidget {
               gaplessPlayback: true,
               errorBuilder: (_, __, ___) => const SizedBox());
         }
-        final plek = plekVoor(vak: vak, maat: maat, blik: blik, instelling: instelling, smal: smal, bovenRand: bovenRand);
+        final grens = scherpTot == null
+            ? null
+            : scherpteGrens(tot: scherpTot!, bron: bronMaat, maat: maat, vak: vak.width, pixels: vak.width * dpr);
+        final plek = plekVoor(
+            vak: vak, maat: maat, blik: blik, instelling: instelling, smal: smal, bovenRand: bovenRand, maxSchaal: grens);
         Widget foto = Image.memory(beeld,
             fit: BoxFit.fill,
             cacheWidth: decodeerBreedte(plek.width * dpr),
             gaplessPlayback: true,
             errorBuilder: (_, __, ___) => const SizedBox());
         final randen = randenVan(plek, vak);
-        if (randen.links > 0 || randen.rechts > 0) {
-          foto = zachteRanden(foto, links: randen.links, rechts: randen.rechts);
+        if (randen.links > 0 || randen.rechts > 0 || randen.boven > 0 || randen.onder > 0) {
+          foto = zachteRanden(foto,
+              links: randen.links, rechts: randen.rechts, boven: randen.boven, onder: randen.onder);
         }
         return ClipRect(
           child: Stack(fit: StackFit.expand, children: [
@@ -569,11 +625,19 @@ class KopFoto extends StatelessWidget {
     required KopInstelling? instelling,
     required bool smal,
     double bovenRand = 0,
+    double? maxSchaal,
   }) {
     final doel = doelInVak(kopDoel(smal: smal), vak, bovenRand);
     final i = instelling;
     if (i != null) {
-      return kopPlek(vak: vak, beeld: maat, punt: Brandpunt(i.fx, i.fy), doel: doel, zoom: i.zoom, opzij: kOpzijVrij);
+      return kopPlek(
+          vak: vak,
+          beeld: maat,
+          punt: Brandpunt(i.fx, i.fy),
+          doel: doel,
+          zoom: i.zoom,
+          opzij: kOpzijVrij,
+          maxSchaal: maxSchaal);
     }
     final g = blik?.gezichten;
     return kopPlek(
@@ -583,6 +647,7 @@ class KopFoto extends StatelessWidget {
       doel: doel,
       gezichten: g,
       zicht: g == null ? null : kopZicht(smal: smal, vak: vak, bovenRand: bovenRand),
+      maxSchaal: maxSchaal,
     );
   }
 }
