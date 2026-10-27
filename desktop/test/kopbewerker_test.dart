@@ -60,7 +60,8 @@ void main() {
     await t.tap(find.byKey(const ValueKey('kop-scherm-gsm')));
     await t.pump();
     final gsm = kader(KopScherm.gsm);
-    expect(gsm.width / (gsm.height - 24), closeTo(411 / 520, .02));
+    // Alleen de foto met de naam erop (sinds 27-10-2026): de feiten en de knoppen staan eronder.
+    expect(gsm.width / (gsm.height - 24), closeTo(411 / 440, .02));
     // Een iPad rechtop: een eigen, bijna vierkant kader (Saber, 17-10-2026).
     await t.tap(find.byKey(const ValueKey('kop-scherm-staand')));
     await t.pump();

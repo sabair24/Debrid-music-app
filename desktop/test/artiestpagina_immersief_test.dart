@@ -121,7 +121,8 @@ void main() {
         final d = w.decoration;
         if (d is! BoxDecoration || d.gradient is! LinearGradient) return false;
         final g = d.gradient! as LinearGradient;
-        return g.begin == Alignment.topCenter && g.colors.last == const Color(0x44000000) && g.colors.first != g.colors.last;
+        // Sinds 27-10-2026 lost hij op in de foto (doorzichtig) en niet meer in het verloop over de hele kop.
+        return g.begin == Alignment.topCenter && g.colors.last == const Color(0x00000000) && g.colors.first != g.colors.last;
       });
       expect(f, findsOneWidget);
       return (t.widget<DecoratedBox>(f).decoration as BoxDecoration).gradient! as LinearGradient;

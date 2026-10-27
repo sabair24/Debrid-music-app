@@ -16,7 +16,9 @@ import 'package:flutter/material.dart';
 
 import '../beeldvorm.dart';
 import 'kleuren.dart';
+import 'kop_logo.dart';
 import 'kopfoto.dart';
+import 'typografie.dart';
 
 /// Hoe groot de kop op elk soort scherm is, in punten — het kader waarin je hem instelt. [balk] is
 /// het stuk achter de zwevende balk (de foto loopt erachter door, het brandpunt hoort eronder).
@@ -27,10 +29,13 @@ import 'kopfoto.dart';
 ///
 /// Een iPad rechtop: 834 breed, de kop gemeten op zo'n 740 hoog (zie `beeldvorm.dart`), met de
 /// zwevende balk en de statusbalk (64 + 24) erboven.
+///
+/// Op een gsm is het kader sinds 27-10-2026 alleen de foto met de naam erop (`kGsmKopFoto`, 440): de feiten
+/// en de knoppen staan daar onder de foto.
 ({Size maat, double balk, bool smal}) kopKader(KopScherm s) => switch (s) {
       KopScherm.pc => (maat: const Size(1440, 700), balk: 64, smal: false),
       KopScherm.tv => (maat: const Size(960, 435), balk: 75, smal: false),
-      KopScherm.gsm => (maat: const Size(411, 520), balk: 0, smal: true),
+      KopScherm.gsm => (maat: const Size(411, 440), balk: 0, smal: true),
       KopScherm.staand => (maat: const Size(834, 828), balk: 88, smal: false),
     };
 
@@ -52,10 +57,14 @@ class KopBewerker extends StatefulWidget {
     required this.bewaar,
     this.begin = KopScherm.pc,
     this.bronMaat,
+    this.logo,
   });
 
   final String naam;
   final Uint8List beeld;
+
+  /// Het logo van TheAudioDB, of null. Is er een, dan kies je per scherm of de kop het logo of de naam toont.
+  final Uint8List? logo;
 
   /// De maat uit de kop van het bestand, voor zolang de foto nog niet bekeken is. Zonder deze maat
   /// rekende de bewerker dan met 16:9, en tekende hij een staande foto uitgerekt.
@@ -102,6 +111,12 @@ class _KopBewerkerState extends State<KopBewerker> {
   }
 
   void _zet(KopInstelling i) => setState(() => _bewerkt[_scherm] = i);
+
+  /// Een logo dat de kop kan tonen: alleen met een doorzichtige achtergrond (zie [heeftDoorzichtigheid]).
+  Uint8List? get _bruikbaarLogo => switch (widget.logo) {
+        final l? when heeftDoorzichtigheid(l) => l,
+        _ => null,
+      };
 
   Future<void> _opslaan() async {
     setState(() => _bezig = true);
@@ -150,11 +165,11 @@ class _KopBewerkerState extends State<KopBewerker> {
               ]),
               const SizedBox(height: 4),
               Text(
-                  'Sleep de foto om hem te verschuiven · scroll of knijp om te zoomen · sleep de onderrand '
-                  'voor de hoogte. Elk scherm apart.',
+                  'Sleep de foto in elke richting, opzij ook voorbij de rand · scroll of knijp om te zoomen · '
+                  'sleep de onderrand voor de hoogte. Elk scherm apart.',
                   style: TextStyle(color: kGedempt, fontSize: 12)),
               const SizedBox(height: 14),
-              Wrap(spacing: 8, children: [
+              Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
                 for (final s in KopScherm.values)
                   ChoiceChip(
                     key: ValueKey('kop-scherm-${s.name}'),
@@ -162,6 +177,18 @@ class _KopBewerkerState extends State<KopBewerker> {
                     selected: s == _scherm,
                     onSelected: (_) => setState(() => _scherm = s),
                   ),
+                // Logo of naam, per scherm (Saber, 27-10-2026): alleen als TheAudioDB een bruikbaar logo heeft.
+                if (_bruikbaarLogo != null) ...[
+                  const SizedBox(width: 12),
+                  Text('Kop toont', style: TextStyle(color: kGedempt, fontSize: 12)),
+                  for (final metNaam in const [false, true])
+                    ChoiceChip(
+                      key: ValueKey(metNaam ? 'kop-toont-naam' : 'kop-toont-logo'),
+                      label: Text(metNaam ? 'Naam' : 'Logo'),
+                      selected: (i?.naam ?? false) == metNaam,
+                      onSelected: (_) => _zet((i ?? _beginVan(_scherm, vak, kader.balk, kader.smal)).met(naam: metNaam)),
+                    ),
+                ],
               ]),
               const SizedBox(height: 14),
               Expanded(
@@ -182,6 +209,8 @@ class _KopBewerkerState extends State<KopBewerker> {
                         vak: vak,
                         balk: kader.balk,
                         smal: kader.smal,
+                        tv: _scherm == KopScherm.tv,
+                        logo: (i?.naam ?? false) ? null : _bruikbaarLogo,
                         schaal: schaal,
                         begin: () => _beginVan(_scherm, vak, kader.balk, kader.smal),
                         wijzig: _zet,
@@ -231,6 +260,8 @@ class _Kader extends StatefulWidget {
     required this.vak,
     required this.balk,
     required this.smal,
+    required this.tv,
+    required this.logo,
     required this.schaal,
     required this.begin,
     required this.wijzig,
@@ -243,7 +274,8 @@ class _Kader extends StatefulWidget {
   final KopInstelling? instelling;
   final Size vak;
   final double balk, schaal;
-  final bool smal;
+  final bool smal, tv;
+  final Uint8List? logo;
   final KopInstelling Function() begin;
   final void Function(KopInstelling) wijzig;
 
@@ -313,6 +345,8 @@ class _KaderState extends State<_Kader> {
                   vak: widget.vak,
                   balk: widget.balk,
                   smal: widget.smal,
+                  tv: widget.tv,
+                  logo: widget.logo,
                   schaal: s,
                 ),
               ),
@@ -350,7 +384,10 @@ class _KaderState extends State<_Kader> {
 }
 
 /// De kop zoals hij op dat scherm komt: grijs, met het verloop onderaan, het verloop van links op een
-/// breed scherm, de balk erboven en de naam op zijn plek.
+/// breed scherm, de balk erboven en de naam (of het logo) op zijn plek.
+///
+/// Zoals de kop sinds 27-10-2026 is: een vaste strook onderaan en de tekst onderaan, behalve op een tv
+/// ([tv]), die zijn verloop over de hele kop houdt.
 class _Voorbeeld extends StatelessWidget {
   const _Voorbeeld({
     required this.naam,
@@ -359,6 +396,8 @@ class _Voorbeeld extends StatelessWidget {
     required this.vak,
     required this.balk,
     required this.smal,
+    required this.tv,
+    required this.logo,
     required this.schaal,
   });
 
@@ -367,12 +406,20 @@ class _Voorbeeld extends StatelessWidget {
   final Rect plek;
   final Size vak;
   final double balk, schaal;
-  final bool smal;
+  final bool smal, tv;
+  final Uint8List? logo;
 
   @override
   Widget build(BuildContext context) {
     final s = schaal;
     final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
+    final randen = randenVan(plek, vak);
+    final grootte = tv ? 46.0 : artiestNaamGrootte(vak.width);
+    final naamTekst = Text(naam.toUpperCase(),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(color: kTekst, fontSize: math.max(9, grootte * s), fontWeight: FontWeight.w800, height: .95));
+    final l = logo;
     return Stack(fit: StackFit.expand, children: [
       ColoredBox(color: kAchtergrond),
       Positioned(
@@ -387,35 +434,59 @@ class _Voorbeeld extends StatelessWidget {
             0.2126, 0.7152, 0.0722, 0, 0, //
             0, 0, 0, 1, 0, //
           ]),
-          child: Image.memory(beeld,
-              fit: BoxFit.fill,
-              cacheWidth: decodeerBreedte(plek.width * s * dpr),
-              gaplessPlayback: true,
-              errorBuilder: (_, __, ___) => const SizedBox()),
-        ),
-      ),
-      Positioned(
-        top: balk * s,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [paginaWaas(0x44, donker: Colors.black), paginaWaas(0x66, donker: Colors.black), paginaWaas(0xDB), kAchtergrond, kAchtergrond],
-              stops: [0, .30, .58, .92, 1],
-            ),
+          child: zachteRanden(
+            Image.memory(beeld,
+                fit: BoxFit.fill,
+                cacheWidth: decodeerBreedte(plek.width * s * dpr),
+                gaplessPlayback: true,
+                errorBuilder: (_, __, ___) => const SizedBox()),
+            links: randen.links,
+            rechts: randen.rechts,
           ),
         ),
       ),
+      if (tv)
+        Positioned(
+          top: balk * s,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [paginaWaas(0x44, donker: Colors.black), paginaWaas(0x66, donker: Colors.black), paginaWaas(0xDB), kAchtergrond, kAchtergrond],
+                stops: [0, .30, .58, .92, 1],
+              ),
+            ),
+          ),
+        )
+      else
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: (smal ? 170 : 160) * s,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [paginaWaas(0x00), paginaWaas(0xDB), kAchtergrond],
+                stops: const [0, .6, 1],
+              ),
+            ),
+          ),
+        ),
       if (!smal)
         DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [kAchtergrond, paginaWaas(0x59), paginaWaas(0x00)],
-              stops: [0, .44, .74],
+              colors: tv
+                  ? [kAchtergrond, paginaWaas(0x59), paginaWaas(0x00)]
+                  : [paginaWaas(0xF0), paginaWaas(0xB8), paginaWaas(0x00)],
+              stops: tv ? const [0, .44, .74] : const [0, .38, .60],
             ),
           ),
         ),
@@ -427,17 +498,24 @@ class _Voorbeeld extends StatelessWidget {
           height: balk * s,
           child: ColoredBox(color: paginaWaas(0x66)),
         ),
-      // De naam, ongeveer waar hij in de echte kop staat — om te zien wat hij bedekt.
+      // De naam of het logo, ongeveer waar hij in de echte kop staat — om te zien wat hij bedekt. Op een breed
+      // scherm staan de feiten en de knoppen er nog onder (zo'n 180 punten), op een gsm onder de foto.
       Positioned(
         left: (smal ? 18 : 56) * s,
         right: smal ? 18 * s : vak.width * s * .45,
-        bottom: vak.height * s * (smal ? .14 : .30),
+        bottom: (smal ? 14 : (tv ? vak.height * .30 : 180)) * s,
         child: IgnorePointer(
-          child: Text(naam.toUpperCase(),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  color: kTekst, fontSize: math.max(9, (smal ? 40 : 84) * s), fontWeight: FontWeight.w900, height: .95)),
+          child: l == null
+              ? naamTekst
+              : Align(
+                  alignment: Alignment.bottomLeft,
+                  child: KopLogo(
+                      logo: l,
+                      kleur: kTekst,
+                      hoogte: (tv || smal ? 64 : (vak.width >= 1280 ? 104 : 88)) * s,
+                      breedte: (smal ? vak.width - 36 : 520) * s,
+                      terugval: naamTekst),
+                ),
         ),
       ),
     ]);

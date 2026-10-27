@@ -38,6 +38,7 @@ import 'ui/berichten_scherm.dart';
 import 'ui/kopfoto.dart';
 import 'uploaderberichten.dart';
 import 'ui/kopbewerker.dart';
+import 'ui/kop_logo.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
 import 'radiostijl.dart'
@@ -30393,6 +30394,10 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
 /// voor de balk min 105 voor de spelerbalk. Zo hoog is de kop van de artiestpagina daar minstens.
 const double kTvKopZicht = 360;
 
+/// Hoe hoog de foto bovenaan de artiestpagina op een gsm is, met de naam erop — de feiten en de knoppen staan
+/// eronder (het ontwerp van 27-10-2026). Een eigen hoogte uit "Kop aanpassen" gaat voor.
+const double kGsmKopFoto = 440;
+
 /// Voor welk soort scherm de kop hier getekend wordt — welke van de instellingen telt (zie
 /// [KopScherm]). Een iPad en een Mac tellen als pc: ze hebben dezelfde brede kop met de naam links —
 /// behalve een iPad die je rechtop houdt, die heeft zijn eigen ([KopScherm.staand]).
@@ -30404,8 +30409,9 @@ KopScherm kopSchermVan(BuildContext context) {
       : KopScherm.pc;
 }
 
-/// Open "Kop aanpassen" voor [naam], met [beeld] — de foto die de kop nu toont.
-Future<void> toonKopBewerker(BuildContext context, String naam, Uint8List beeld) {
+/// Open "Kop aanpassen" voor [naam], met [beeld] — de foto die de kop nu toont — en [logo], het logo van
+/// TheAudioDB als dat er is (dan kies je ook of de kop het logo of de naam toont).
+Future<void> toonKopBewerker(BuildContext context, String naam, Uint8List beeld, {Uint8List? logo}) {
   final lib = context.read<LibraryStore>();
   return showDialog<void>(
     context: context,
@@ -30415,6 +30421,7 @@ Future<void> toonKopBewerker(BuildContext context, String naam, Uint8List beeld)
       huidig: {for (final s in KopScherm.values) s: lib.kopVoor(naam, s)},
       bewaar: (s, i) => lib.setKop(naam, s, i),
       begin: kopSchermVan(context),
+      logo: logo,
       bronMaat: switch (imageSize(beeld)) {
         (:final w, :final h) => Size(w.toDouble(), h.toDouble()),
         null => null,
@@ -30588,7 +30595,172 @@ class EditorialeKop extends StatelessWidget {
 
     final naamKleur = Theme.of(context).textTheme.bodyLarge?.color ?? kTekst;
 
-    return ClipRect(
+    // Het logo van TheAudioDB in plaats van de naam, zoals in Nu speelt (Saber, 27-10-2026), in de kleur van de
+    // tekst — zie [KopLogo]. Niet als je in "Kop aanpassen" de naam koos, en niet als het logo geen doorzichtige
+    // achtergrond heeft: dan zou het een egaal blok worden.
+    final logo = switch (art?.logoBytes) {
+      final l? when !(uitsnede?.naam ?? false) && heeftDoorzichtigheid(l) => l,
+      _ => null,
+    };
+    final logoHoogte = isTv || smal ? 64.0 : (breedte >= 1280 ? 104.0 : 88.0);
+
+    final naamTekst = LayoutBuilder(builder: (context, c) {
+      final stijl = kDisplay.copyWith(
+        fontSize: naamGrootte,
+        letterSpacing: -naamGrootte * .027,
+        color: naamKleur,
+      );
+      final regels = naamRegels(naam, stijl, c.maxWidth,
+          inspring: naamGrootte * .52, schaal: MediaQuery.textScalerOf(context));
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < regels.length; i++)
+            Padding(
+              padding: EdgeInsets.only(left: i == 0 ? 0 : naamGrootte * .52),
+              // Krimpen in plaats van afkappen: een woord dat alleen al te breed is
+              // ("AND THE WAILE…" op een gsm van 46 punten). Een naam die je niet
+              // helemaal kunt lezen is geen kop.
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(regels[i], maxLines: 1, style: stijl),
+              ),
+            ),
+        ],
+      );
+    });
+
+    // De tekst in twee stukken: wat op de foto staat (de naam of het logo) en wat eronder komt (de echte
+    // naam, de feiten en de knoppen). Op een gsm staat het tweede deel onder de foto, op de achtergrond;
+    // elders staan ze samen links op de foto.
+    //
+    // Geen "[ Artiest ]" meer boven de naam (Saber, 27-10-2026, op het ontwerp: "dit moet weg"), en dus ook
+    // niet de 150 punten (op een gsm 104) tussen dat kopje en de naam: nu de tekst onderaan staat, was dat
+    // gat lege ruimte.
+    final opDeFoto = <Widget>[
+      if (isTv) ...[
+        Padding(
+          padding: EdgeInsets.only(left: 10 + tvOverscan.left + 44 + 12 - marge),
+          // Op een tv de echte naam op deze regel, naast de terugknop, en niet onder de
+          // naam. Daar kostte hij 31 punten, en bij een naam van twee regels ("MICHAEL /
+          // JACKSON", met "Michael Joseph Jackson" eronder) stond Radio daardoor bij het
+          // openen half onder de spelerbalk (Shield, 17-10-2026) — terwijl de keuze was:
+          // alles van de kop in één scherm. Zonder echte naam een lege regel: de naam hoort
+          // onder de terugknop, niet ernaast.
+          child: Text(echteNaam?.trim() ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: kOpschrift),
+        ),
+        const SizedBox(height: 10),
+      ],
+      // De naam. Geen laatste trap nodig als er geen beeld is: dan draagt hij het
+      // kader alleen, en dat is een compositie in plaats van een gat.
+      // Eén regel als de naam past, anders afgebroken tussen woorden met elke volgende
+      // regel ingesprongen — het ritme uit het ontwerp. Hiervoor ging elke naam van twee
+      // woorden altijd over twee regels, ook als hij ruim paste: "2" boven "FABIOLA"
+      // (Saber, 18-10-2026: "één regel als het past").
+      if (logo != null)
+        KopLogo(
+          logo: logo,
+          kleur: naamKleur,
+          hoogte: logoHoogte,
+          breedte: smal ? double.infinity : (isTv ? 420 : 520),
+          terugval: naamTekst,
+        )
+      else
+        naamTekst,
+    ];
+    final onderDeFoto = <Widget>[
+      if (!isTv && echteNaam != null && echteNaam!.trim().isNotEmpty) ...[
+        const SizedBox(height: 12),
+        Padding(
+          // Ingesprongen onder de naam in letters, het ritme van de ingesprongen regels; onder een logo niet.
+          padding: EdgeInsets.only(left: logo != null ? 0 : naamGrootte * .55),
+          child: Text(echteNaam!, style: kOpschrift),
+        ),
+      ],
+
+      SizedBox(height: smal ? 20 : (isTv ? 10 : 30)),
+      // De rechtermarge hield ruimte vrij voor de figuur die hier stond. Nu er niets
+      // meer rechts staat, mag de feitenstrook de breedte hebben — maar niet de hele:
+      // vier kolommen over tweeduizend punten lezen als losse eilanden. Een derde vrij
+      // laten houdt ze bij elkaar, en de foto blijft daar zichtbaar. Op een tv minder:
+      // daar is het scherm geen tweeduizend punten, en elke regel feiten die er
+      // bijkomt, duwt Radio onder de spelerbalk.
+      Padding(
+        padding: EdgeInsets.only(right: smal ? 0 : breedte * (isTv ? .12 : .30)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Hier stond een scheidingslijn over de volle breedte van de strook. Saber
+            // wees hem aan op 06-09-2026: hij loopt dwars door de kop en langs de
+            // artiest, en hij scheidt niets wat niet al door de witruimte gescheiden is.
+            // De sectiekoppen hebben er wél een — daar staat hij tússen twee blokken.
+            SizedBox(height: isTv ? 0 : 19),
+            Wrap(
+              spacing: isTv ? 32 : 40,
+              runSpacing: isTv ? 8 : 16,
+              children: [
+                if (soort != null && soort!.trim().isNotEmpty)
+                  _Feit('Soort', tekst: soort),
+                // Leeg niet tonen: bij een artiest waar je niets van hebt stond hier een
+                // kopje zonder inhoud (Shield, 17-10-2026).
+                if (bibliotheek != null && bibliotheek!.trim().isNotEmpty)
+                  _Feit('In je bibliotheek', tekst: bibliotheek),
+                if (genres.isNotEmpty)
+                  _Feit('Genre', tekst: genres.take(3).join(' · ')),
+                if (groepen.isNotEmpty)
+                  _Feit(zijnLeden ? 'Leden' : 'Ook in',
+                      kind: Wrap(
+                        spacing: 12,
+                        children: [
+                          for (final g in groepen.take(3))
+                            // Niet zelf schuiven: de kop gaat in zijn geheel naar boven
+                            // zodra de selectie erin komt (zie de artiestpagina).
+                            TekstLink(
+                              onPressed: onGroep == null ? null : () => onGroep!(g),
+                              schuifInBeeld: false,
+                              bouw: (gekozen) => Text(g,
+                                  style: tvLinkStijl(
+                                      kTekstNormaal.copyWith(
+                                        fontSize: 13.5,
+                                        // Op een tv grijs tot hij de selectie heeft: wit
+                                        // met een witte lijn is dan het verschil.
+                                        color: isTv ? kGedempt : null,
+                                        decoration: TextDecoration.underline,
+                                        decorationColor: kLijn,
+                                      ),
+                                      gekozen)),
+                            ),
+                        ],
+                      )),
+              ],
+            ),
+          ],
+        ),
+      ),
+
+      if (actions.isNotEmpty) ...[
+        // Op een tv krap: zie tv_kop_past_test — met 16 en de ruimtes hierboven eindigde Radio
+        // bij Michael Jackson 3 punten boven de spelerbalk.
+        SizedBox(height: smal ? 18 : (isTv ? 12 : 26)),
+        // Een Wrap, om exact de reden die in [ArtistHero] staat: drie knoppen naast
+        // elkaar passen niet op 411 punten, en een knop die van het vak afloopt vangt
+        // geen tik meer.
+        Wrap(spacing: 10, runSpacing: 10, children: actions),
+      ],
+    ];
+    Widget tekst(List<Widget> kinderen, EdgeInsets padding) => Padding(
+          padding: padding,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: kinderen,
+          ),
+        );
+
+    final kop = ClipRect(
       child: ConstrainedBox(
         // MINIMUM, geen vaste maat. Zie de klasse-uitleg: inhoud die meer nodig heeft duwt hem op,
         // dus er kan hier nooit iets buiten het vak vallen.
@@ -30603,7 +30775,10 @@ class EditorialeKop extends StatelessWidget {
           //
           // Een hoogte die je zelf instelde gaat voor (Saber, 17-10-2026: "zelf de hero van hoogte
           // veranderen"). Ook dat is een ondergrens: lager dan de inhoud nodig heeft kan hij niet.
-          minHeight: (uitsnede?.hoogte ?? (smal ? 0 : (isTv ? kTvKopZicht : (breedte * .40).clamp(340.0, 620.0)))) +
+          //
+          // Op een gsm is dit sinds 27-10-2026 alleen de foto met de naam erop ([kGsmKopFoto]); de feiten en de
+          // knoppen staan eronder, op de achtergrond.
+          minHeight: (uitsnede?.hoogte ?? (smal ? kGsmKopFoto : (isTv ? kTvKopZicht : (breedte * .40).clamp(340.0, 620.0)))) +
               bovenBloed,
           // En de volle breedte, EXPLICIET. Dit stond nergens: een `Stack` meet zich aan zijn
           // niet-gepositioneerde kinderen, en `Positioned.fill` telt daarin niet mee. Op de pagina
@@ -30617,6 +30792,11 @@ class EditorialeKop extends StatelessWidget {
         ),
         child: Stack(
           fit: StackFit.loose,
+          // Onderaan, zodat een hogere kop meer FOTO is (Saber, 27-10-2026: "als ik die hoger maak, dan creeer
+          // ik heel veel lege nutteloze ruimte"). Bovenaan uitgelijnd kwam elke punt extra onder de knoppen
+          // terecht, als vervaagd vlak. Niet op een tv: daar staat het kopje naast de terugknop, en de kop is
+          // precies het eerste scherm.
+          alignment: isTv ? AlignmentDirectional.topStart : AlignmentDirectional.bottomStart,
           children: [
             if (achtergrond != null)
               Positioned.fill(
@@ -30655,42 +30835,65 @@ class EditorialeKop extends StatelessWidget {
             // Het verloop hieronder begint ONDER de balk, niet bovenaan het vak. Het is afgesteld op
             // waar de naam en de knoppen staan, en die schuiven met [bovenBloed] mee omlaag — dus
             // zakt het verloop mee, en is alles onder de balk precies wat het was.
-            Positioned(
-              top: bovenBloed,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  // Eén sterkte, en dat is de lichte. Hier stonden er twee — een donkere voor
-                  // artiesten zónder uitgeknipte figuur, omdat de foto dan zelf het onderwerp werd.
-                  // Nu er nooit meer een figuur voor staat zou die donkere de norm worden, en dat
-                  // is niet wat gevraagd is: "hou enkel de achtergrond image in volle breedte lijk
-                  // het is" — en zoals het IS, is deze. De leesbaarheid van de naam hangt niet aan
-                  // dit verloop maar aan het verloop van links hieronder.
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      paginaWaas(0x44, donker: Colors.black),
-                      paginaWaas(0x66, donker: Colors.black),
-                      paginaWaas(0xDB),
-                      kAchtergrond,
-                      kAchtergrond,
-                    ],
-                    // De laatste kleur TWEE keer, en dat is de reden: met één stop op 1 is de
-                    // onderrand pas op de allerlaatste rij dekkend, en dan blijft er van de foto
-                    // een paar procent over dat als een streep over het scherm loopt. Vanaf .92 is
-                    // het gewoon de achtergrond.
-                    stops: const [0, .30, .58, .92, 1],
+            //
+            // Dat verloop rekent in PROCENTEN van de kop, en dat was de lege ruimte uit Sabers schermafdruk: een
+            // hogere kop kreeg evenveel meer vervaagd niets. Het blijft alleen op een tv, waar de kop vast is.
+            // Elders een vaste strook onderaan, achter de knoppen: hoger is meer foto.
+            if (isTv)
+              Positioned(
+                top: bovenBloed,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    // Eén sterkte, en dat is de lichte. Hier stonden er twee — een donkere voor
+                    // artiesten zónder uitgeknipte figuur, omdat de foto dan zelf het onderwerp werd.
+                    // Nu er nooit meer een figuur voor staat zou die donkere de norm worden, en dat
+                    // is niet wat gevraagd is: "hou enkel de achtergrond image in volle breedte lijk
+                    // het is" — en zoals het IS, is deze. De leesbaarheid van de naam hangt niet aan
+                    // dit verloop maar aan het verloop van links hieronder.
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        paginaWaas(0x44, donker: Colors.black),
+                        paginaWaas(0x66, donker: Colors.black),
+                        paginaWaas(0xDB),
+                        kAchtergrond,
+                        kAchtergrond,
+                      ],
+                      // De laatste kleur TWEE keer, en dat is de reden: met één stop op 1 is de
+                      // onderrand pas op de allerlaatste rij dekkend, en dan blijft er van de foto
+                      // een paar procent over dat als een streep over het scherm loopt. Vanaf .92 is
+                      // het gewoon de achtergrond.
+                      stops: const [0, .30, .58, .92, 1],
+                    ),
+                  ),
+                ),
+              )
+            else
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: smal ? 170 : 160,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [paginaWaas(0x00), paginaWaas(0xDB), kAchtergrond],
+                      stops: const [0, .6, 1],
+                    ),
                   ),
                 ),
               ),
-            ),
             // Achter de zwevende balk: de donkere rand die de pillen, de tellingen en de
             // vensterknoppen leesbaar houdt — zie [randAchterDeBalk]. Hij eindigt op de 27 procent
             // waar het verloop hierboven begint, zodat er geen naad over de foto loopt.
-            if (bovenBloed > 0) randAchterDeBalk(bovenBloed, naarWaas: true, zacht: bloedZacht),
+            // Op het oude verloop uitkomen alleen op een tv: elders ligt er onder de balk gewoon foto.
+            if (bovenBloed > 0) randAchterDeBalk(bovenBloed, naarWaas: isTv, zacht: bloedZacht),
             // En van links, zodat de letters altijd op een rustige ondergrond staan — ook als de
             // foto daar toevallig licht is.
             if (!smal)
@@ -30700,169 +30903,43 @@ class EditorialeKop extends StatelessWidget {
                     gradient: LinearGradient(
                       begin: Alignment.centerLeft,
                       end: Alignment.centerRight,
-                      colors: [kAchtergrond, paginaWaas(0x59), paginaWaas(0x00)],
-                      stops: const [0, .44, .74],
+                      // Sterker dan op een tv: zonder het verloop over de hele kop draagt dit alleen de tekst.
+                      colors: isTv
+                          ? [kAchtergrond, paginaWaas(0x59), paginaWaas(0x00)]
+                          : [paginaWaas(0xF0), paginaWaas(0xB8), paginaWaas(0x00)],
+                      stops: isTv ? const [0, .44, .74] : const [0, .38, .60],
                     ),
                   ),
                 ),
               ),
 
 
-            Padding(
-              // Omlaag met [bovenBloed]: het vak begint achter de balk, de tekst hoort eronder.
-              // Op een gsm onder de ronde terugknop (8 + 44 punten): op 44 viel "[ Artiest ]" er half
-              // onder (gezien op 11-10-2026). Wat het kopje zakt, gaat van de witruimte eronder af,
-              // zodat de naam op dezelfde plek in de foto blijft.
-              //
-              // Op een tv krapper, zodat foto, naam, genre, "Ook in" en Radio samen in het eerste
-              // scherm passen. Daar stond de naam 150 punten onder het kopje, en dan bleef er onder de
-              // naam niets over: genre en Radio kwamen pas na twee keer omlaag.
-              //
-              // Het kopje staat daar NAAST de terugknop van de pagina (8 punten onder de balk, 44
-              // hoog, vanaf 10 + de zijmarge) en niet eronder: een naam van twee regels ("MICHAEL /
-              // JACKSON") duwde Radio anders net onder de spelerbalk.
-              padding: EdgeInsets.fromLTRB(
-                  marge, (smal ? 60 : (isTv ? 18 : 56)) + bovenBloed, marge, smal ? 18 : (isTv ? 14 : 28)),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: EdgeInsets.only(left: isTv ? 10 + tvOverscan.left + 44 + 12 - marge : 0),
-                    // Op een tv de echte naam op deze regel, naast de terugknop, en niet onder de
-                    // naam. Daar kostte hij 31 punten, en bij een naam van twee regels ("MICHAEL /
-                    // JACKSON", met "Michael Joseph Jackson" eronder) stond Radio daardoor bij het
-                    // openen half onder de spelerbalk (Shield, 17-10-2026) — terwijl de keuze was:
-                    // alles van de kop in één scherm.
-                    child: isTv && (echteNaam?.trim().isNotEmpty ?? false)
-                        ? Row(children: [
-                            Text('[ Artiest ]', style: kOpschrift),
-                            const SizedBox(width: 14),
-                            Flexible(
-                              child: Text(echteNaam!.trim(),
-                                  maxLines: 1, overflow: TextOverflow.ellipsis, style: kOpschrift),
-                            ),
-                          ])
-                        : Text('[ Artiest ]', style: kOpschrift),
-                  ),
-                  SizedBox(height: smal ? 104 : (isTv ? 10 : 150)),
-                  // De naam. Geen laatste trap nodig als er geen beeld is: dan draagt hij het
-                  // kader alleen, en dat is een compositie in plaats van een gat.
-                  // Eén regel als de naam past, anders afgebroken tussen woorden met elke volgende
-                  // regel ingesprongen — het ritme uit het ontwerp. Hiervoor ging elke naam van twee
-                  // woorden altijd over twee regels, ook als hij ruim paste: "2" boven "FABIOLA"
-                  // (Saber, 18-10-2026: "één regel als het past").
-                  LayoutBuilder(builder: (context, c) {
-                    final stijl = kDisplay.copyWith(
-                      fontSize: naamGrootte,
-                      letterSpacing: -naamGrootte * .027,
-                      color: naamKleur,
-                    );
-                    final regels = naamRegels(naam, stijl, c.maxWidth,
-                        inspring: naamGrootte * .52, schaal: MediaQuery.textScalerOf(context));
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        for (var i = 0; i < regels.length; i++)
-                          Padding(
-                            padding: EdgeInsets.only(left: i == 0 ? 0 : naamGrootte * .52),
-                            // Krimpen in plaats van afkappen: een woord dat alleen al te breed is
-                            // ("AND THE WAILE…" op een gsm van 46 punten). Een naam die je niet
-                            // helemaal kunt lezen is geen kop.
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              alignment: Alignment.centerLeft,
-                              child: Text(regels[i], maxLines: 1, style: stijl),
-                            ),
-                          ),
-                      ],
-                    );
-                  }),
-                  if (!isTv && echteNaam != null && echteNaam!.trim().isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    Padding(
-                      padding: EdgeInsets.only(left: naamGrootte * .55),
-                      child: Text(echteNaam!, style: kOpschrift),
-                    ),
-                  ],
-
-                  SizedBox(height: smal ? 20 : (isTv ? 10 : 30)),
-                  // De rechtermarge hield ruimte vrij voor de figuur die hier stond. Nu er niets
-                  // meer rechts staat, mag de feitenstrook de breedte hebben — maar niet de hele:
-                  // vier kolommen over tweeduizend punten lezen als losse eilanden. Een derde vrij
-                  // laten houdt ze bij elkaar, en de foto blijft daar zichtbaar. Op een tv minder:
-                  // daar is het scherm geen tweeduizend punten, en elke regel feiten die er
-                  // bijkomt, duwt Radio onder de spelerbalk.
-                  Padding(
-                    padding: EdgeInsets.only(right: smal ? 0 : breedte * (isTv ? .12 : .30)),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Hier stond een scheidingslijn over de volle breedte van de strook. Saber
-                        // wees hem aan op 06-09-2026: hij loopt dwars door de kop en langs de
-                        // artiest, en hij scheidt niets wat niet al door de witruimte gescheiden is.
-                        // De sectiekoppen hebben er wél een — daar staat hij tússen twee blokken.
-                        SizedBox(height: isTv ? 0 : 19),
-                        Wrap(
-                          spacing: isTv ? 32 : 40,
-                          runSpacing: isTv ? 8 : 16,
-                          children: [
-                            if (soort != null && soort!.trim().isNotEmpty)
-                              _Feit('Soort', tekst: soort),
-                            // Leeg niet tonen: bij een artiest waar je niets van hebt stond hier een
-                            // kopje zonder inhoud (Shield, 17-10-2026).
-                            if (bibliotheek != null && bibliotheek!.trim().isNotEmpty)
-                              _Feit('In je bibliotheek', tekst: bibliotheek),
-                            if (genres.isNotEmpty)
-                              _Feit('Genre', tekst: genres.take(3).join(' · ')),
-                            if (groepen.isNotEmpty)
-                              _Feit(zijnLeden ? 'Leden' : 'Ook in',
-                                  kind: Wrap(
-                                    spacing: 12,
-                                    children: [
-                                      for (final g in groepen.take(3))
-                                        // Niet zelf schuiven: de kop gaat in zijn geheel naar boven
-                                        // zodra de selectie erin komt (zie de artiestpagina).
-                                        TekstLink(
-                                          onPressed: onGroep == null ? null : () => onGroep!(g),
-                                          schuifInBeeld: false,
-                                          bouw: (gekozen) => Text(g,
-                                              style: tvLinkStijl(
-                                                  kTekstNormaal.copyWith(
-                                                    fontSize: 13.5,
-                                                    // Op een tv grijs tot hij de selectie heeft: wit
-                                                    // met een witte lijn is dan het verschil.
-                                                    color: isTv ? kGedempt : null,
-                                                    decoration: TextDecoration.underline,
-                                                    decorationColor: kLijn,
-                                                  ),
-                                                  gekozen)),
-                                        ),
-                                    ],
-                                  )),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  if (actions.isNotEmpty) ...[
-                    // Op een tv krap: zie tv_kop_past_test — met 16 en de ruimtes hierboven eindigde Radio
-                    // bij Michael Jackson 3 punten boven de spelerbalk.
-                    SizedBox(height: smal ? 18 : (isTv ? 12 : 26)),
-                    // Een Wrap, om exact de reden die in [ArtistHero] staat: drie knoppen naast
-                    // elkaar passen niet op 411 punten, en een knop die van het vak afloopt vangt
-                    // geen tik meer.
-                    Wrap(spacing: 10, runSpacing: 10, children: actions),
-                  ],
-                ],
-              ),
+            // Omlaag met [bovenBloed]: het vak begint achter de balk, de tekst hoort eronder.
+            // Op een gsm onder de ronde terugknop (8 + 44 punten): op 44 viel "[ Artiest ]" er half
+            // onder (gezien op 11-10-2026). Wat het kopje zakt, gaat van de witruimte eronder af,
+            // zodat de naam op dezelfde plek in de foto blijft.
+            //
+            // Op een tv krapper, zodat foto, naam, genre, "Ook in" en Radio samen in het eerste
+            // scherm passen. Daar stond de naam 150 punten onder het kopje, en dan bleef er onder de
+            // naam niets over: genre en Radio kwamen pas na twee keer omlaag.
+            //
+            // Het kopje staat daar NAAST de terugknop van de pagina (8 punten onder de balk, 44
+            // hoog, vanaf 10 + de zijmarge) en niet eronder: een naam van twee regels ("MICHAEL /
+            // JACKSON") duwde Radio anders net onder de spelerbalk.
+            tekst(
+              smal ? opDeFoto : [...opDeFoto, ...onderDeFoto],
+              EdgeInsets.fromLTRB(marge, (smal ? 60 : (isTv ? 18 : 56)) + bovenBloed, marge, smal ? 14 : (isTv ? 14 : 28)),
             ),
           ],
         ),
       ),
+    );
+    if (!smal) return kop;
+    // Op een gsm de rest onder de foto, op de achtergrond — zoals in het ontwerp van 27-10-2026.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [kop, tekst(onderDeFoto, EdgeInsets.fromLTRB(marge, 0, marge, 18))],
     );
   }
 }
@@ -32446,7 +32523,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                         icoon: Icons.crop_rounded,
                         label: 'Kop aanpassen',
                         onPressed: () => toonKopBewerker(
-                            context, widget.artist.name, (_keuzeBytes ?? _art?.backdropBytes ?? _deezerFoto)!),
+                            context, widget.artist.name, (_keuzeBytes ?? _art?.backdropBytes ?? _deezerFoto)!,
+                            logo: _art?.logoBytes),
                       ),
                     // Alleen waar er iets te hernoemen valt: een artiest uit de catalogus waarvan
                     // je niets hebt, heeft geen tags om te corrigeren.
@@ -38929,6 +39007,21 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
 
   /// Eigen foto's die je in dit venster van internet toevoegde ([_voegToe]).
   final List<DiscogsImage> _eigen = [];
+
+  /// Waarom de laatste keuze niet bewaard werd, of null. Op een Mac, iPad of gsm gaat een keuze naar de pc en
+  /// kan hij daar mislukken; die fout verdween eerst ongezien, want de klik wachtte er niet op (Saber,
+  /// 27-10-2026: "op mac kan ik geen andere foto slecteren").
+  String? _keuzeFout;
+
+  Future<void> _kies(String soort, String adres) async {
+    final lib = context.read<LibraryStore>();
+    if (_keuzeFout != null) setState(() => _keuzeFout = null);
+    try {
+      await lib.setArtistArt(widget.artist, soort, adres);
+    } catch (e) {
+      if (mounted) setState(() => _keuzeFout = 'Niet bewaard: $e');
+    }
+  }
   final _adres = TextEditingController();
   bool _haalt = false;
   String? _melding;
@@ -39157,6 +39250,10 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
                   style: TextStyle(color: _muted, fontSize: 11.5)),
               const SizedBox(height: 12),
               _vanInternet(),
+              if (_keuzeFout != null) ...[
+                const SizedBox(height: 6),
+                Text(_keuzeFout!, style: TextStyle(color: kAccent, fontSize: 12, fontWeight: FontWeight.w600)),
+              ],
               const SizedBox(height: 6),
               Expanded(child: _body(portrait, liggend, staand)),
             ],
@@ -39251,7 +39348,6 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
       {required bool breed, required String? gekozen, required String? portrait}) {
     final isPortret = portrait == img.uri;
     final isGekozen = gekozen == img.uri;
-    final lib = context.read<LibraryStore>();
     final soort = breed ? kSoortLiggend : kSoortStaand;
     // DE KLIK ZET DE ACHTERGROND VAN DIT VAK, en dat is wat de kop erboven al zegt — geen
     // verborgen toets. Hij zette ooit het portret, en dat was de storing: deze kiezer wordt maar
@@ -39266,9 +39362,9 @@ class _ArtistArtGalleryState extends State<ArtistArtGallery> {
     // houden hetzelfde. Afgeschermd, want op een telefoon of iPad is lang drukken op een foto voor
     // niemand "stel in als portret".
     return Pressable(
-      onPressed: () => lib.setArtistArt(widget.artist, soort, img.uri),
-      onSecondaryTap: (_) => lib.setArtistArt(widget.artist, 'portrait', img.uri),
-      onLongPress: isTv ? () => lib.setArtistArt(widget.artist, 'portrait', img.uri) : null,
+      onPressed: () => _kies(soort, img.uri),
+      onSecondaryTap: (_) => _kies('portrait', img.uri),
+      onLongPress: isTv ? () => _kies('portrait', img.uri) : null,
       borderRadius: BorderRadius.circular(10),
       child: Container(
         decoration: BoxDecoration(

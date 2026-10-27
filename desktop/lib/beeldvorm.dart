@@ -126,13 +126,24 @@ String kopSoort(KopScherm s) => 'kop_${s.name}';
 /// [fx] en [fy] zijn het punt in de foto (0..1) dat op de vaste plek in de kop komt — rechts van de
 /// naam, onder het menu. [zoom] is hoeveel verder dan "net vullend" (1 = niet), en [hoogte] de
 /// hoogte van de kop in punten (null = de gewone hoogte van dat scherm).
+///
+/// [fx] mag buiten 0..1 liggen: opzij schuift de foto ook voorbij de rand (Saber, 27-10-2026: "het moet
+/// ook zijdelings verschoven kunnen worden"), en dan ligt de vaste plek naast de foto in plaats van erin.
+/// Hoe ver precies, zegt `kopPlek` (`kOpzijVrij`); hier alleen een ruime grens tegen onzin.
+///
+/// [naam]: de kop toont de naam in letters, ook als TheAudioDB een logo heeft (de keuze "Kop toont" in
+/// de bewerker). Onwaar is het logo als dat er is.
 class KopInstelling {
-  const KopInstelling({required this.fx, required this.fy, this.zoom = 1, this.hoogte});
+  const KopInstelling({required this.fx, required this.fy, this.zoom = 1, this.hoogte, this.naam = false});
 
   final double fx, fy, zoom;
   final double? hoogte;
+  final bool naam;
 
   static const double kZoomTot = 4;
+
+  /// Hoe ver [fx] buiten de foto mag: een ruime grens, de echte zit in `kopPlek`.
+  static const double kFxVanaf = -1, kFxTot = 2;
 
   /// De laagste kop die je kunt maken. Lager en de naam en Radio passen er niet meer in, en dan duwt
   /// de inhoud hem toch weer op.
@@ -141,20 +152,26 @@ class KopInstelling {
 
   /// "0.620,0.310,1.250,380" — zo staat hij in de keuzelijst van de artiest. Ongeldig geeft null,
   /// zodat een kapotte regel in een bestand nooit een vreemde uitsnede wordt.
+  ///
+  /// Met de naam erbij een vijfde veld: "0.620,0.310,1.250,380,naam", of zonder eigen hoogte
+  /// "0.620,0.310,1.250,,naam". Een oudere app leest dat als ongeldig en kiest dan zelf — geen vreemde uitsnede.
   static KopInstelling? lees(String? s) {
     if (s == null || s.isEmpty) return null;
     final d = s.split(',');
-    if (d.length < 3 || d.length > 4) return null;
+    if (d.length < 3 || d.length > 5) return null;
     final fx = double.tryParse(d[0]), fy = double.tryParse(d[1]), zoom = double.tryParse(d[2]);
     if (fx == null || fy == null || zoom == null) return null;
     if (!fx.isFinite || !fy.isFinite || !zoom.isFinite) return null;
-    final h = d.length > 3 ? double.tryParse(d[3]) : null;
-    if (d.length > 3 && (h == null || !h.isFinite)) return null;
+    final metHoogte = d.length > 3 && !(d.length == 5 && d[3].isEmpty);
+    final h = metHoogte ? double.tryParse(d[3]) : null;
+    if (metHoogte && (h == null || !h.isFinite)) return null;
+    if (d.length == 5 && d[4] != 'naam' && d[4] != 'logo') return null;
     return KopInstelling(
-      fx: fx.clamp(0.0, 1.0),
+      fx: fx.clamp(kFxVanaf, kFxTot),
       fy: fy.clamp(0.0, 1.0),
       zoom: zoom.clamp(1.0, kZoomTot),
       hoogte: h?.clamp(kHoogteVanaf, kHoogteTot),
+      naam: d.length == 5 && d[4] == 'naam',
     );
   }
 
@@ -162,23 +179,30 @@ class KopInstelling {
         fx.toStringAsFixed(3),
         fy.toStringAsFixed(3),
         zoom.toStringAsFixed(3),
-        if (hoogte != null) hoogte!.round().toString(),
+        if (hoogte != null) hoogte!.round().toString() else if (naam) '',
+        if (naam) 'naam',
       ].join(',');
 
-  KopInstelling met({double? fx, double? fy, double? zoom, double? hoogte, bool geenHoogte = false}) =>
+  KopInstelling met({double? fx, double? fy, double? zoom, double? hoogte, bool geenHoogte = false, bool? naam}) =>
       KopInstelling(
-        fx: (fx ?? this.fx).clamp(0.0, 1.0),
+        fx: (fx ?? this.fx).clamp(kFxVanaf, kFxTot),
         fy: (fy ?? this.fy).clamp(0.0, 1.0),
         zoom: (zoom ?? this.zoom).clamp(1.0, kZoomTot),
         hoogte: geenHoogte ? null : (hoogte ?? this.hoogte)?.clamp(kHoogteVanaf, kHoogteTot),
+        naam: naam ?? this.naam,
       );
 
   @override
   bool operator ==(Object other) =>
-      other is KopInstelling && other.fx == fx && other.fy == fy && other.zoom == zoom && other.hoogte == hoogte;
+      other is KopInstelling &&
+      other.fx == fx &&
+      other.fy == fy &&
+      other.zoom == zoom &&
+      other.hoogte == hoogte &&
+      other.naam == naam;
 
   @override
-  int get hashCode => Object.hash(fx, fy, zoom, hoogte);
+  int get hashCode => Object.hash(fx, fy, zoom, hoogte, naam);
 
   @override
   String toString() => 'KopInstelling(${schrijf()})';

@@ -698,7 +698,12 @@ void main() {
       final c = _client(pc.library);
       await c.library.loadRemote();
 
-      await c.library.setArtistArt('Portishead', 'portrait', 'https://ergens/portret.jpg');
+      final klaar = c.library.setArtistArt('Portishead', 'portrait', 'https://ergens/portret.jpg');
+      // En meteen ook hier, zoals de kop: tot de catalogus terug is, leek de klik op een Mac niets te doen
+      // (Saber, 27-10-2026: "op mac kan ik geen andere foto slecteren").
+      expect(c.library.chosenArtistArt('Portishead', 'portrait'), 'https://ergens/portret.jpg',
+          reason: 'meteen, niet pas na de catalogus');
+      await klaar;
 
       expect(c.edits.single['op'], 'artistArt');
       expect(c.edits.single['artist'], 'Portishead');
