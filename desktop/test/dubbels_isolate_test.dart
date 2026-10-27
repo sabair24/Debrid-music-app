@@ -19,6 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/echtheid.dart';
 import 'package:debridmusic/echtheid_oordelen.dart';
+import 'package:debridmusic/nultoets.dart' show Nuluitkomst;
 import 'package:debridmusic/organize.dart';
 import 'package:debridmusic/vaste_keuze.dart';
 
@@ -39,7 +40,7 @@ void main() {
     File maak(String naam, int bytes) => File('${krab.path}${Platform.pathSeparator}$naam')
       ..writeAsBytesSync(List<int>.filled(bytes, 0));
 
-    const leeg = (vast: <String>{}, oordelen: <String, Echtheidsoordeel>{}, kapot: <String>{});
+    const leeg = (vast: <String>{}, oordelen: <String, Echtheidsoordeel>{}, kapot: <String>{}, nul: <String, Nuluitkomst>{});
 
     test('zonder voorkennis beslist de grootte NIET: gelijk, en wat er stond blijft', () {
       final groot = maak('a.flac', 2000);
@@ -53,7 +54,7 @@ void main() {
       // hand had uitgezocht.
       final groot = maak('a.flac', 2000);
       final gekozen = maak('b.flac', 1000);
-      final kennis = (vast: <String>{sleutelVoor(gekozen.path)}, oordelen: <String, Echtheidsoordeel>{}, kapot: <String>{});
+      final kennis = (vast: <String>{sleutelVoor(gekozen.path)}, oordelen: <String, Echtheidsoordeel>{}, kapot: <String>{}, nul: <String, Nuluitkomst>{});
       expect(firstIsBetter(groot, gekozen, kennis: kennis), isFalse);
       expect(firstIsBetter(gekozen, groot, kennis: kennis), isTrue);
     });
@@ -73,6 +74,7 @@ void main() {
               afkapHz: 16000),
         },
         kapot: <String>{},
+        nul: <String, Nuluitkomst>{},
       );
       expect(firstIsBetter(nep, echt, kennis: kennis), isFalse);
       expect(firstIsBetter(echt, nep, kennis: kennis), isTrue);
@@ -81,7 +83,7 @@ void main() {
     test('wat bewezen kapot is verliest van alles wat heel is', () {
       final kapot = maak('a.flac', 2000);
       final mp3 = maak('b.mp3', 1000);
-      final kennis = (vast: <String>{}, oordelen: <String, Echtheidsoordeel>{}, kapot: <String>{kapot.path.toLowerCase()});
+      final kennis = (vast: <String>{}, oordelen: <String, Echtheidsoordeel>{}, kapot: <String>{kapot.path.toLowerCase()}, nul: <String, Nuluitkomst>{});
       expect(firstIsBetter(mp3, kapot, kennis: kennis), isTrue, reason: 'een heel mp3 boven een kapotte FLAC');
       expect(firstIsBetter(kapot, mp3, kennis: kennis), isFalse);
     });

@@ -23,6 +23,8 @@ import 'audioformaten.dart' show isVerliesvrij, soortVan;
 import 'echtheid_meter.dart' show leesStreaminfo;
 import 'flac_tags.dart' show readFlacRawFields, readFlacTags;
 import 'kopiesoort.dart';
+import 'nultoets.dart';
+import 'nultoets_meter.dart';
 import 'organize.dart';
 import 'versies.dart';
 import 'vinyl.dart' show vinylUitTags;
@@ -146,6 +148,45 @@ bool isTweeling(String pad, Kopiesoort? soort, String ander, Kopiesoort? anderSo
   return soort == Kopiesoort.vinyl || anderSoort == Kopiesoort.vinyl;
 }
 
+/// Is [pad] volgens de nultoets (nultoets.dart) [ander] zelf: bewerkt — verzet in volume, of door iets gehaald — of als
+/// gedecodeerde stream? Dan is hij geen eigen soort maar een slechtere kopie van [ander], net als een [isTweeling].
+///
+/// Gemeten 27-10-2026: Sabers "studio" D'Eux 01 was zijn cd, 0,83 dB verzet; Destin en Le Ballet lagen precies 1024
+/// monsters achter zijn cd, Like Glue en Get Busy (Sean Paul) 2112. Allemaal "studio · 24/44.1".
+bool isNulTweeling(String pad, String ander) {
+  final u = nultoetsUitslag(pad, ander);
+  return u == Nuluitkomst.bewerkt || u == Nuluitkomst.lossy;
+}
+
+/// [a] en [b] door de nultoets, als de diepte tussen hen zou beslissen: dezelfde klasse, en één van de twee met meer dan
+/// 16 bits in gebruik ([Kwaliteit.diep]). Wat al gemeten is, wordt gelezen; anders meet [meetNultoets] (alleen op de pc).
+/// Null: niets te meten, of niet te meten.
+Future<({String diep, String plat, Nuluitkomst uitkomst})?> nultoetsTussen(String a, String b,
+    {void Function(String regel)? log}) async {
+  final ka = kwaliteitVan(File(a)), kb = kwaliteitVan(File(b));
+  if (ka.diep == kb.diep || ka.klasse != kb.klasse) return null;
+  final diep = ka.diep ? a : b, plat = ka.diep ? b : a;
+  final al = nultoetsUitslag(diep, plat);
+  if (al != null) return (diep: diep, plat: plat, uitkomst: al);
+  final meet = meetNultoets;
+  if (meet == null) return null;
+  final o = await meet(diep, plat);
+  if (o == null) return null;
+  onthoudNultoets(diep, plat, o.uitkomst);
+  log?.call('nultoets "${_naam(diep)}" tegen "${_naam(_map(plat))}": ${nulZin(o)}');
+  return (diep: diep, plat: plat, uitkomst: o.uitkomst);
+}
+
+/// Vóór de keuring: [kandidaat] door de nultoets tegen het nummer [anker] en elke versie ervan ([nultoetsTussen]).
+/// Zonder dit telt zijn diepte nergens — de keuring meet zelf niet ([firstIsBetter] is synchroon).
+Future<void> bereidNultoets(String kandidaat, String anker, {void Function(String regel)? log}) async {
+  final k = kandidaat.toLowerCase();
+  for (final ander in {anker, for (final v in versies.versiesVan(anker)) v.pad}) {
+    if (ander.toLowerCase() == k || !File(ander).existsSync()) continue;
+    await nultoetsTussen(kandidaat, ander, log: log);
+  }
+}
+
 /// De kopie van [anker] die vaststaat als digitaal — de cd, het nummer zelf of een versie — of null.
 String? digitaleReferentie(String anker) {
   final ankerSoort = soortVoor(anker)?.soort ?? versies.groep(anker)?.soort ?? soortVanBestand(anker, anker);
@@ -188,13 +229,14 @@ Versieplan versieplanVoor(File nieuw, String anker, String bronpad) {
   final ankerPersing = g?.persing ?? '';
   final bestaande = versies.versiesVan(anker);
   // Een tweeling van het nummer of van een versie IS die, met haar soort en persing ([isTweeling]): dan beslist de
-  // keuring binnen die soort, en verliest hij — want hij is niet beter dan zichzelf.
-  if (isTweeling(nieuw.path, soort, anker, ankerSoort)) {
+  // keuring binnen die soort, en verliest hij — want hij is niet beter dan zichzelf. Zo ook wat de nultoets als die
+  // kopie zag, bewerkt of gedecodeerd ([isNulTweeling]).
+  if (isTweeling(nieuw.path, soort, anker, ankerSoort) || isNulTweeling(nieuw.path, anker)) {
     soort = ankerSoort;
     persing = ankerPersing;
   } else {
     for (final v in bestaande) {
-      if (!isTweeling(nieuw.path, soort, v.pad, v.soort)) continue;
+      if (!isTweeling(nieuw.path, soort, v.pad, v.soort) && !isNulTweeling(nieuw.path, v.pad)) continue;
       soort = v.soort;
       persing = v.persing;
       break;
@@ -395,7 +437,15 @@ void _ruimLegeMapOp(String map) {
 
 /// Wat [eenPerSoort] deed: kopieën naar `_dubbel`, tweelingen die het nummer waren, versies naar de map van hun soort,
 /// versies waarvan alleen de albumnaam nog een persing droeg, en nummers die bleven omdat er iets speelde.
-typedef Soortopruiming = ({int naarDubbel, int tweelingen, int vinylspoor, int verhuisd, int albumnaam, int overgeslagen});
+typedef Soortopruiming = ({
+  int naarDubbel,
+  int tweelingen,
+  int vinylspoor,
+  int verhuisd,
+  int albumnaam,
+  int overgeslagen,
+  int nultoets,
+});
 
 /// Per nummer hoogstens één kopie van elke soort: studio, cd en vinyl (Saber, 27-10-2026, bij Discovery met negen
 /// versies: *"Das teveel, enkel studio, cd of vinyl drie soorten"*). Wat er nieuw binnenkomt, houdt zich daar al aan
@@ -406,6 +456,9 @@ typedef Soortopruiming = ({int naarDubbel, int tweelingen, int vinylspoor, int v
 ///   plek — de cd die er voor de tweeling stond.
 /// * **Twee van dezelfde soort**: de bewezen betere blijft ([firstIsBetter]). Bij gelijkspel blijft wat er al zat: het
 ///   nummer, dan de versie die je koos, dan de oudste. De rest gaat naar `_dubbel` (na 30 dagen de prullenbak).
+/// * **Een kopie die de nultoets als je cd zag** ([isNulTweeling]; 27-10-2026: D'Eux 01 0,83 dB verzet, Destin een
+///   gedecodeerde stream): geen eigen soort, maar die cd. Was het het nummer, dan gaat het naar `_dubbel` en wordt de cd
+///   weer het nummer; was het een versie, dan wint de cd binnen zijn soort.
 /// * **Een studio die als vinyl klinkt** ([klinktAlsVinyl], [stilte]; 27-10-2026: zes op Discovery): hij telt als vinyl
 ///   — en heb je er al een, dan blijft de bewezen betere.
 /// * **Een versie in een map met een persing** ("Discovery (vinyl LP 2001)"): naar de map van haar soort
@@ -418,7 +471,7 @@ Future<Soortopruiming> eenPerSoort(
     bool Function(String pad)? inGebruik,
     void Function(String regel)? log,
     Future<Stilte?> Function(String pad)? stilte}) async {
-  var naarDubbel = 0, tweelingen = 0, vinylspoor = 0, verhuisd = 0, albumnaam = 0, overgeslagen = 0;
+  var naarDubbel = 0, tweelingen = 0, vinylspoor = 0, verhuisd = 0, albumnaam = 0, overgeslagen = 0, nultoets = 0;
   final meet = stilte ?? stilteVan;
   final sep = Platform.pathSeparator;
   for (final g in versies.groepen.toList()) {
@@ -470,9 +523,28 @@ Future<Soortopruiming> eenPerSoort(
             '${k.stilste.toStringAsFixed(0)} dB waar je cd stil wordt (${ref.stilste.toStringAsFixed(0)} dB): nu vinyl');
       }
     }
+    // De nultoets (nultoets.dart): waar de diepte tussen het nummer en een versie, of tussen twee versies, zou beslissen.
+    // Wat als die andere kopie bleek (bewerkt of gedecodeerd), is die kopie: het nummer gaat weg zoals een tweeling, een
+    // versie krijgt haar soort.
+    Versie? nulVan;
+    Nuluitkomst? nulHoe;
+    final alle = [anker, for (final v in lijst) v.pad];
+    for (var i = 0; i < alle.length; i++) {
+      for (var j = i + 1; j < alle.length; j++) {
+        final n = await nultoetsTussen(alle[i], alle[j], log: (z) => log?.call('"$naam": $z'));
+        if (n == null || (n.uitkomst != Nuluitkomst.bewerkt && n.uitkomst != Nuluitkomst.lossy)) continue;
+        nultoets++;
+        if (n.diep == anker) {
+          nulVan ??= lijst.firstWhere((v) => v.pad == n.plat);
+          nulHoe ??= n.uitkomst;
+        } else {
+          soortVan[n.diep] = n.plat == anker ? (ankerSoort ?? soortVan[n.diep]!) : soortVan[n.plat]!;
+        }
+      }
+    }
     final tweelingVan = ankerSoort == null
         ? null
-        : lijst.where((v) => isTweeling(anker, ankerSoort, v.pad, v.soort)).firstOrNull;
+        : lijst.where((v) => isTweeling(anker, ankerSoort, v.pad, v.soort)).firstOrNull ?? nulVan;
     final keuze = versies.speelVersie(anker, ankerSoort: ankerSoort);
 
     // Per soort de kopieën; het nummer telt mee, behalve als het een tweeling is (dan gaat het hoe dan ook weg).
@@ -543,7 +615,11 @@ Future<Soortopruiming> eenPerSoort(
         if (album != null) await _zetAlbumTerug(at, album);
         nu = at;
         naarDubbel++;
-        if (tweelingVan != null) {
+        if (tweelingVan != null && identical(tweelingVan, nulVan)) {
+          log?.call('"$naam": het nummer was je ${versieLabel(tweelingVan.soort, tweelingVan.persing)}, '
+              '${nulHoe == Nuluitkomst.lossy ? 'als gedecodeerde stream' : 'bewerkt'} (nultoets) — naar _dubbel; '
+              '${versieLabel(soort, o.persing)} is weer het nummer');
+        } else if (tweelingVan != null) {
           tweelingen++;
           log?.call('"$naam": het nummer was dezelfde rip als je ${versieLabel(tweelingVan.soort, tweelingVan.persing)} '
               'onder een ander etiket — naar _dubbel; ${versieLabel(soort, o.persing)} is weer het nummer');
@@ -615,6 +691,7 @@ Future<Soortopruiming> eenPerSoort(
     vinylspoor: vinylspoor,
     verhuisd: verhuisd,
     albumnaam: albumnaam,
-    overgeslagen: overgeslagen
+    overgeslagen: overgeslagen,
+    nultoets: nultoets,
   );
 }

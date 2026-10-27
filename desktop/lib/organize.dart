@@ -14,6 +14,8 @@ import 'echtheid.dart';
 import 'echtheid_oordelen.dart';
 import 'integriteit.dart';
 import 'keuring.dart';
+import 'nultoets.dart' show Nuluitkomst;
+import 'nultoets_meter.dart' show nulSleutel, nultoetsUitslag;
 import 'paths.dart' show keuringMap, torrentWerkMap;
 import 'kopiesoort.dart' show herNoemSoort;
 import 'versies.dart' show versies;
@@ -854,11 +856,13 @@ int formatRank(String path) {
 /// en dan vallen de twee regels weg die bóven de kwaliteitsgronden staan — stil, met een andere
 /// winnaar als enig spoor.
 ///
-/// Null betekent "vraag het de winkels zelf", en dat is wat elke aanroeper op de hoofdisolate doet.
+/// Null betekent "vraag het de winkels zelf", en dat is wat elke aanroeper op de hoofdisolate doet. [nul]: wat de
+/// nultoets zei (nultoets_meter.dart, `alleNultoetsen`) — zonder zou de isolate elke 24 bit als ongemeten zien.
 typedef Voorkennis = ({
   Set<String> vast,
   Map<String, Echtheidsoordeel> oordelen,
   Set<String> kapot,
+  Map<String, Nuluitkomst> nul,
 });
 
 /// Is [a] BEWEZEN beter dan [b]? Onwaar bij gelijk — dan blijft [b], wat er al stond, staan.
@@ -884,10 +888,8 @@ typedef Voorkennis = ({
 /// Hier en niet bij de aanroepers, want dit is het enige punt waar élke opruimweg langskomt: het filen
 /// van een download, Opruimen, de dubbelveger per album en die over de hele bibliotheek.
 bool firstIsBetter(File a, File b, {Voorkennis? kennis}) {
-  // Wat de ene kopie over de muur van de andere bewijst (21-10-2026) — zie [metMuurBewijs].
-  final oa = _oordeelVan(a, kennis), ob = _oordeelVan(b, kennis);
-  final c = vergelijkKwaliteit(metMuurBewijs(kwaliteitVan(a, kennis: kennis), oa, ob),
-      metMuurBewijs(kwaliteitVan(b, kennis: kennis), ob, oa));
+  final k = _kwaliteitenVan(a, b, kennis);
+  final c = vergelijkKwaliteit(k.a, k.b);
   if (c != 0) return c > 0;
   final va = kennis == null ? isVasteKeuze(a.path) : kennis.vast.contains(sleutelVoor(a.path));
   final vb = kennis == null ? isVasteKeuze(b.path) : kennis.vast.contains(sleutelVoor(b.path));
@@ -905,6 +907,22 @@ bool firstIsBetter(File a, File b, {Voorkennis? kennis}) {
   }
   return false;
 }
+
+/// Wat de keuring van [a] en [b] tegenover elkaar weet: wat de ene kopie over de muur van de andere bewijst
+/// (21-10-2026, [metMuurBewijs]), en wat de nultoets zei als de diepte zou beslissen (27-10-2026, [metNultoets]). Op
+/// één plek, zodat [whyBetter] nooit iets anders zegt dan [firstIsBetter] kiest.
+({Kwaliteit a, Kwaliteit b, Nuluitkomst? nul}) _kwaliteitenVan(File a, File b, Voorkennis? kennis) {
+  final oa = _oordeelVan(a, kennis), ob = _oordeelVan(b, kennis);
+  final ka = metMuurBewijs(kwaliteitVan(a, kennis: kennis), oa, ob);
+  final kb = metMuurBewijs(kwaliteitVan(b, kennis: kennis), ob, oa);
+  if (ka.diep == kb.diep) return (a: ka, b: kb, nul: null);
+  // Alleen nu: de sleutel leest de kop van beide bestanden, en de dubbelveger vraagt dit tienduizenden keren.
+  final nul = ka.diep ? _nulVan(a.path, b.path, kennis) : _nulVan(b.path, a.path, kennis);
+  return (a: metNultoets(ka, kb, nul), b: metNultoets(kb, ka, nul), nul: nul);
+}
+
+Nuluitkomst? _nulVan(String diep, String plat, Voorkennis? kennis) =>
+    kennis == null ? nultoetsUitslag(diep, plat) : kennis.nul[nulSleutel(diep, plat)];
 
 /// Wat de keuring van dit bestand weet: formaat, de bemonstering uit de kop, het oordeel van de
 /// echtheidsmeter en de decodeerproef. Zie [kwaliteitUit].
@@ -958,13 +976,21 @@ String whyBetter(File keep, File drop) {
   }
 
   // In dezelfde volgorde als [firstIsBetter] beslist, zodat de zin nooit iets anders zegt dan de keuze.
-  final ok = _oordeelVan(keep, null), od = _oordeelVan(drop, null);
-  final kk = metMuurBewijs(kwaliteitVan(keep), ok, od), kd = metMuurBewijs(kwaliteitVan(drop), od, ok);
+  final ok = _oordeelVan(keep, null);
+  final k = _kwaliteitenVan(keep, drop, null);
+  final kk = k.a, kd = k.b;
   final c = vergelijkKwaliteit(kk, kd);
   if (c != 0) {
     final zelfdeRate = kk.klasse != Klasse.hires || kk.rate == kd.rate;
     if (kk.klasse == kd.klasse && zelfdeRate && kk.diep && !kd.diep) {
       return '${ok?.gebruikteBits ?? 24} bits in gebruik boven 16 bit';
+    }
+    if (kk.klasse == kd.klasse && kd.bewerkt && !kk.bewerkt) {
+      return 'het origineel boven een bewerkte kopie ervan (nultoets: dezelfde master, verzet in volume)';
+    }
+    if (k.nul == Nuluitkomst.lossy && kd.klasse == Klasse.uitLossy) {
+      return '${kwaliteitZin(kk)} boven een gedecodeerde stream (nultoets: precies de voorloop van een aac-encoder '
+          'achter)';
     }
     if (kk.klasse == kd.klasse) return '${ext(keep)} boven ${ext(drop)}';
     return '${kwaliteitZin(kk)} boven ${kwaliteitZin(kd)}';
@@ -978,6 +1004,9 @@ String whyBetter(File keep, File drop) {
       String mb(File f) => '${(f.lengthSync() / 1024 / 1024).toStringAsFixed(1)} MB';
       return 'hogere bitrate: ${mb(keep)} tegen ${mb(drop)}';
     } catch (_) {/* dan de algemene zin */}
+  }
+  if (k.nul != null && k.nul != Nuluitkomst.bron) {
+    return 'gelijk (${kwaliteitZin(kk)}) — de 24 bits bewezen niets tegen de nultoets; wat er stond blijft staan';
   }
   return 'gelijk (${kwaliteitZin(kk)}) — wat er stond blijft staan';
 }
