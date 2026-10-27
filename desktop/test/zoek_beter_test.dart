@@ -62,7 +62,11 @@ void main() {
     expect(z, contains(': soulseek.search(vraag, achtergrond: true, extra: kHiresZoekwoorden);'));
     expect(z, contains('if (albumHits != null) {\n        hits = albumHits;'), reason: 'niet nog eens per nummer');
     expect(z, contains('!isVasteKeuze(t.path)'), reason: 'wat je zelf koos blijft de baas');
-    expect(z, contains('_queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true, blijfZoeken: verdacht);'));
+    expect(z, contains('_queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true);'));
+    // Sinds 27-10-2026: niet bewezen beter → de volgende kandidaat, ook bij een gewoon nummer, tot kJachtKopieen.
+    final jacht = online.substring(online.indexOf('  Future<void> _chaseUpgrade('));
+    expect(jacht, contains("            if (++nietBeter < kJachtKopieen) {\n              _log.line('   \${job.name}: \${f.username} niet bewezen beter dan wat je hebt — volgende');\n              continue;"));
+    expect(DownloadManager.kJachtKopieen, 6);
     final main = File('lib/main.dart').readAsStringSync();
     // Sinds 21-10-2026 op elk toestel behalve de tv; op gsm, iPad en Mac zoekt de pc ([zoekBeterOpPc]).
     // Sinds 25-10-2026 een keuzemenu: de beste kwaliteit zoals altijd, of zelf studio, cd of vinyl.

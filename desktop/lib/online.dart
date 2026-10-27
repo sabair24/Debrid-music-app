@@ -5648,6 +5648,10 @@ class DownloadManager extends ChangeNotifier {
   /// Zoveel kandidaten hoogstens voor een verdacht bestand — elke verliezer gaat naar `_dubbel`.
   static const kVerdachtKandidaten = 6;
 
+  /// Zoveel kopieën hoogstens per jacht die binnenkomen en niet bewezen beter zijn ([_chaseUpgrade]): elke verliezer
+  /// gaat naar `_dubbel`, en daar ruimt niets op (gemeten 27-10-2026: 20 GB, 163 bestanden in een week).
+  static const kJachtKopieen = 6;
+
   static LosslessWant _wensVoor(Track t) => LosslessWant(
       artist: t.artist,
       title: t.title,
@@ -5791,7 +5795,7 @@ class DownloadManager extends ChangeNotifier {
                 trackNo: t.trackNo,
                 year: t.year,
                 seconds: t.duration?.inSeconds);
-      _queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true, blijfZoeken: verdacht);
+      _queueUpgrade(beter, job, speeltPad: t.path, parkeerAltijd: true);
       begonnen.add(t.path);
     }
     return begonnen.length;
@@ -6336,10 +6340,9 @@ class DownloadManager extends ChangeNotifier {
   /// gezag — zie `_haalVoorRadio`). [speeltPad]: vervang pas als dat niet meer speelt. [parkeerAltijd]:
   /// wat verliest gaat opzij, nooit weg — zoals bij de eerste landing van ▶.
   ///
-  /// [blijfZoeken]: is een binnengehaalde kopie niet bewezen beter, dan de volgende proberen in plaats van te
-  /// stoppen — voor een verdacht bestand, waar meerdere uploaders hetzelfde opgeblazen bestand delen.
+  /// Is een binnengehaalde kopie niet bewezen beter, dan probeert de jacht de volgende, tot [kJachtKopieen] kopieën.
   void _queueUpgrade(List<SoulseekFile> better, DownloadJob job,
-      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false, bool blijfZoeken = false}) {
+      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false}) {
     job.status = 'upgrading';
     job.detail = 'speelbaar · betere kwaliteit zoeken';
     notifyListeners();
@@ -6350,7 +6353,7 @@ class DownloadManager extends ChangeNotifier {
         '${_jachten.wachtend > 0 ? ", ${_jachten.wachtend} wachtend" : ""})');
     _jachten.voegToe(() =>
         _chaseUpgrade(better, job,
-            gezag: gezag, speeltPad: speeltPad, parkeerAltijd: parkeerAltijd, blijfZoeken: blijfZoeken));
+            gezag: gezag, speeltPad: speeltPad, parkeerAltijd: parkeerAltijd));
   }
 
 
@@ -6361,8 +6364,10 @@ class DownloadManager extends ChangeNotifier {
   /// fire and make the next attempt a fresh LOGIN, which is what gets the account blocked — and
   /// deliberately takes no download slot, so a track you have nothing of never waits behind it.
   Future<void> _chaseUpgrade(List<SoulseekFile> better, DownloadJob job,
-      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false, bool blijfZoeken = false}) async {
+      {TrackTags? gezag, String? speeltPad, bool parkeerAltijd = false}) async {
     final deadline = DateTime.now().add(_upgradeBudget);
+    // Hoeveel kopieën er al binnen waren die niet bewezen beter bleken ([kJachtKopieen]).
+    var nietBeter = 0;
     // A shadow job absorbs the transfer's own status/progress writes: the visible job is already
     // finished and must not flip back to "Bezig 34%" with a half-full bar.
     final shadow = DownloadJob(job.name);
@@ -6495,12 +6500,16 @@ class DownloadManager extends ChangeNotifier {
             if (how == Placement.moved && bestaand != null) await _vergeetTwijfel(bestaand);
           } catch (_) {/* the scan still finds it wherever it landed */}
           if (how == Placement.duplicate) {
-            if (blijfZoeken) {
+            // Niet bewezen beter: dan de volgende kandidaat. Een andere uploader kan wél de betere hebben (Saber,
+            // 27-10-2026: "bij een gewoon nummer is één mislukte kopie genoeg om de jacht te stoppen" — "ja, doe maar").
+            // Vroeger alleen bij een verdacht bestand. Hoogstens [kJachtKopieen]: elke verliezer gaat naar _dubbel.
+            if (++nietBeter < kJachtKopieen) {
               _log.line('   ${job.name}: ${f.username} niet bewezen beter dan wat je hebt — volgende');
               continue;
             }
             // Ook hier een regel: Steps, "5, 6, 7, 8" (26-10-2026) — de 24-bitkopie kwam binnen en verdween zonder woord.
-            _log.line('   ${job.name}: ${f.username} niet bewezen beter dan wat je hebt — weggegooid, de vorige blijft');
+            _log.line('   ${job.name}: ${f.username} niet bewezen beter dan wat je hebt — $kJachtKopieen kopieën '
+                'geprobeerd, de vorige blijft');
             settle('had al de beste kwaliteit');
             return;
           }
