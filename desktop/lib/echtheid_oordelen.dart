@@ -122,6 +122,30 @@ void vergeetOordeel(String pad) {
   if (_oordelen.remove(_sleutel(pad)) != null) unawaited(_bewaar());
 }
 
+/// Eén keer opnieuw laten meten wat onder [volBijnaMuurDb] (27-10-2026) een ander oordeel kan krijgen: doorlopend, met
+/// een val van minstens 20 maar minder dan 25 dB onder [zekerAfkapTot]. Zonder oordeel meet de echtheidsveger ze opnieuw.
+/// [merk]: het bestand dat zegt dat het al gebeurde. Geeft het aantal.
+Future<int> herkeurOndiepeMuren(String merk) async {
+  final m = File(merk);
+  if (m.existsSync()) return 0;
+  final weg = [
+    for (final e in _oordelen.entries)
+      if (e.value.band == Bandbreedte.doorlopend &&
+          (e.value.afkapHz ?? 1e9) < zekerAfkapTot &&
+          (e.value.wandDb ?? 0) >= volBijnaMuurDb &&
+          (e.value.wandDb ?? 0) < volMuurDb)
+        e.key,
+  ];
+  for (final k in weg) {
+    _oordelen.remove(k);
+  }
+  if (weg.isNotEmpty) await _bewaar();
+  try {
+    await m.writeAsString('${DateTime.now().toIso8601String()} ${weg.length}');
+  } catch (_) {/* dan de volgende start nog eens: het zijn er weinig */}
+  return weg.length;
+}
+
 /// Tests delen dit proces.
 void resetEchtheidVoorTest() {
   _oordelen.clear();

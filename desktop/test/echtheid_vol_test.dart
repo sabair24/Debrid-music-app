@@ -69,11 +69,20 @@ void main() {
       expect(o.band, Bandbreedte.doorlopend);
     });
 
-    test('DE GRENS: een steile maar geleidelijke afloop (18 dB/kHz) is geen muur', () {
+    test('DE GRENS: een steile maar geleidelijke afloop (18 dB/kHz) is geen bewijs — wel verdacht', () {
       // De val over de afkap is dan ~21 dB: boven wat de echte bronnen haalden (13), onder wat elke mp3
-      // haalde (23 en meer). Precies de ruimte waar [volMuurDb] = 25 voor staat.
+      // haalde (23 en meer). Precies de ruimte waar [volMuurDb] = 25 voor staat. Sinds 27-10-2026 (Destin, 22,7 dB op
+      // 17,15 kHz) heet dat vermoedelijk: een vraagteken, geen nep — een andere kopie of de nultoets beslist.
       final o = oordeelVan(staat(tot: 16000, afloop: 18, vloer: -130));
-      expect(o.wandDb, inInclusiveRange(15, 24.9));
+      expect(o.wandDb, inInclusiveRange(20, 24.9));
+      expect(o.band, Bandbreedte.vermoedelijk);
+      expect(o.isNep, isFalse);
+      expect(waarom(o), contains('te zacht om zeker te zijn'));
+    });
+
+    test('een val onder 20 dB in de mp3-zone blijft doorlopend', () {
+      final o = oordeelVan(staat(tot: 16000, afloop: 12, vloer: -130));
+      expect(o.wandDb, lessThan(volBijnaMuurDb));
       expect(o.band, Bandbreedte.doorlopend);
     });
 

@@ -4414,6 +4414,14 @@ class DownloadManager extends ChangeNotifier {
   Future<_Wenskeuring?> _bergOpAlsVersie(File staged, Versieplan plan, TrackTags? gezag, String bron,
       {bool inJacht = true}) async {
     final naam = gezag == null ? baseName(plan.anker) : '${gezag.artist} — ${gezag.title}';
+    // Een nep-kopie wordt nooit een versie (27-10-2026): zo kwamen er zes D'Eux-"studio's" van mp3 naast Sabers cd. Ook wat
+    // een andere kopie als afgekapt bewees ([bereidNultoets]).
+    final oordeel = gemeten(staged.path);
+    if (oordeel != null && oordeel.isNep) {
+      _log.line('   $bron: "$naam" is ${waarom(oordeel)} — geen versie, weggegooid');
+      await _discardStaged(staged.path);
+      return _Wenskeuring.afgewezen;
+    }
     final label = versieLabel(plan.soort!, plan.persing, bits: readFlacTags(staged)?.bitsPerSample ?? 0,
         hz: readFlacTags(staged)?.sampleRate ?? 0);
     Versieuitslag? uit;
@@ -5994,10 +6002,11 @@ class DownloadManager extends ChangeNotifier {
 
   /// Heeft [pad] soort [soort] al — zelf, of als versie ernaast? Dan valt er niets te zoeken (Saber, 26-10-2026, All
   /// Saints: "Hele plaat in cd-kwaliteit" gaf een tweede cd naast de cd die er al lag). Een nummer dat bewezen nep is,
-  /// heeft de soort van zijn kop niet echt: dat zoekt hij wel.
+  /// heeft de soort van zijn kop niet echt: dat zoekt hij wel. Een versie ook niet (Saber, 27-10-2026, bij een "studio" van
+  /// Nothing Compares 2 U die zijn eigen cd als omgezet bewees: "Kan ik weer klikken op studio downloaden?").
   @visibleForTesting
   bool heeftSoortAl(String pad, Kopiesoort soort) {
-    if (versies.versiesVan(pad).any((x) => x.soort == soort)) return true;
+    if (versies.versiesVan(pad).any((x) => x.soort == soort && !bewezenNep(x.pad))) return true;
     if (bewezenNep(pad)) return false;
     final eigen = soortVoor(pad)?.soort ?? versies.groep(pad)?.soort ?? soortVanBestand(pad, pad);
     return eigen == soort;

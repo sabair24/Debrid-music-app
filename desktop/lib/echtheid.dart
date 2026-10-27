@@ -79,6 +79,10 @@ class Echtheidsoordeel {
   /// 24,5-40 kHz ten opzichte van de muziek (dB), alleen boven 48 kHz.
   final double? ultraDb;
 
+  /// Waarmee een ANDERE kopie van dezelfde opname bewees dat deze afgekapt is ([bewezenDoor]): "je cd loopt door tot
+  /// 21,3 kHz", "precies 1024 monsters achter je cd". Null als alleen deze meting sprak.
+  final String? bewijs;
+
   const Echtheidsoordeel({
     required this.bits,
     required this.boven,
@@ -89,7 +93,28 @@ class Echtheidsoordeel {
     this.vensters = 0,
     this.integriteit = Integriteit.onbekend,
     this.ultraDb,
+    this.bewijs,
   });
+
+  /// Dit oordeel, maar afgekapt — bewezen door een andere kopie van dezelfde opname ([bewijs]).
+  ///
+  /// **Waarom (Saber, 27-10-2026: "Amai, weer een foute meting, zorg er eens voor dat dit goed werkt, daarnet ook al bij
+  /// Céline Dion").** Destin had een muur op 17,15 kHz van 22,7 dB — te ondiep om op zichzelf afgekapt te heten — en zijn
+  /// "studio" van Nothing Compares 2 U een muur op 20,35 kHz, "vermoedelijk". In beide gevallen liep zijn eigen cd van
+  /// dezelfde opname verder door (21,25 en 20,95 kHz): dan zat die muur niet in de master. Dat bewijs hoort bij het
+  /// oordeel zelf, zodat de hele app het ziet — de badge, de keuring, de jacht, "studio downloaden".
+  Echtheidsoordeel bewezenDoor(String bewijs) => Echtheidsoordeel(
+        bits: bits,
+        boven: boven,
+        band: Bandbreedte.afgekapt,
+        gebruikteBits: gebruikteBits,
+        afkapHz: afkapHz,
+        wandDb: wandDb,
+        vensters: vensters,
+        integriteit: integriteit,
+        ultraDb: ultraDb,
+        bewijs: bewijs,
+      );
 
   /// Alleen wat BEWEZEN is telt. `onbekend` is nadrukkelijk geen "nep" — zie [isOnbekend].
   bool get isNep =>
@@ -119,6 +144,7 @@ class Echtheidsoordeel {
         'vensters': vensters,
         'integriteit': integriteit.name,
         if (ultraDb != null) 'ultraDb': ultraDb,
+        if (bewijs != null) 'bewijs': bewijs,
       };
 
   /// Null voor rommel én voor een oordeel van een oudere meting ([echtheidsVersie]): dat wordt dan
@@ -147,6 +173,7 @@ class Echtheidsoordeel {
       vensters: (j['vensters'] as num?)?.toInt() ?? 0,
       integriteit: lees(Integriteit.values, 'integriteit') ?? Integriteit.onbekend,
       ultraDb: (j['ultraDb'] as num?)?.toDouble(),
+      bewijs: j['bewijs'] as String?,
     );
   }
 }
@@ -236,6 +263,18 @@ class Spectrumstaat {
 /// Hoeveel dB de val over een afkap minstens is om een MUUR te heten: gemiddeld over 1 kHz eronder
 /// min 1 kHz erboven. De zes echte bronnen haalden hooguit 13, MP3 128-320 en Opus 23 tot 68.
 const double volMuurDb = 25;
+
+/// Onder [zekerAfkapTot], waar een studio niet filtert: een val van minstens dit (maar minder dan [volMuurDb]) heet
+/// [Bandbreedte.vermoedelijk] — verdacht, met een vraagteken, geen bewijs.
+///
+/// **Waarom (27-10-2026).** Destin van Céline Dion — een gedecodeerde stream, precies 1024 monsters achter Sabers cd —
+/// had een val van 22,7 dB op 17,15 kHz en ging als "doorlopend" door; Saber: *"Amai, weer een foute meting"*. Gemeten
+/// over de bibliotheek, de steilste val onder 19,4 kHz van 552 doorlopende bestanden: 506 onder 10 dB, 31 tussen 10 en
+/// 15, 6 tussen 15 en 20, en tussen 20 en 25 negen, allemaal op een mp3-grens (15,7 tot 19,3 kHz). Maar daar zit ook
+/// Children (Radio Edit) bij, met zijn val op 16,1 kHz in de officiële TIDAL-master, en een steile geleidelijke afloop
+/// (18 dB/kHz) geeft ook 21 dB: dus verdacht, niet bewezen. Bewezen wordt het door een andere kopie van dezelfde opname
+/// die verder doorloopt (`muurBewezenDoor`, keuring.dart) of door de nultoets.
+const double volBijnaMuurDb = 20;
 
 /// Boven de muur gemiddeld minstens zoveel stiller dan de muziek (500-5000 Hz): echt leeg.
 const double volErbovenDb = -45;
@@ -327,10 +366,13 @@ Echtheidsoordeel oordeelVol({
       wandDb = w.db;
       final erboven = (s.db(w.hz + 150, nyq - 200) ?? muziek) - muziek;
       final eronder = (s.db(w.hz - 3000, w.hz - 500) ?? muziek) - muziek;
-      final muur = w.db >= volMuurDb && erboven <= volErbovenDb && (eronder - erboven) >= volInhoudDb;
+      final leegErboven = erboven <= volErbovenDb && (eronder - erboven) >= volInhoudDb;
+      final muur = w.db >= volMuurDb && leegErboven;
       if (muur && w.hz >= laagsteAfkapHz && w.hz < zekerAfkapTot) {
         band = Bandbreedte.afgekapt;
       } else if (muur && w.hz >= zekerAfkapTot && w.hz <= vermoedelijkAfkapTot) {
+        band = Bandbreedte.vermoedelijk;
+      } else if (leegErboven && w.db >= volBijnaMuurDb && w.hz >= laagsteAfkapHz && w.hz < zekerAfkapTot) {
         band = Bandbreedte.vermoedelijk;
       }
     }
@@ -412,9 +454,15 @@ String? vermoedelijkeBron(double hz) {
   return null;
 }
 
-/// Een muur rond 20 kHz: wat hij kan zijn, zonder te beweren wat hij is.
-String vermoedelijkZin(double hz) {
+/// Een verdachte muur: wat hij kan zijn, zonder te beweren wat hij is. Rond 20 kHz een mp3 320 of een filter in de
+/// master; daaronder een val die te zacht is om zeker te zijn ([volBijnaMuurDb]).
+String vermoedelijkZin(double hz, {double? db}) {
   final k = (hz / 1000).toStringAsFixed(1).replaceAll('.', ',');
+  if (hz < zekerAfkapTot) {
+    final d = db == null ? '' : ' van ${db.round()} dB';
+    final bron = vermoedelijkeBron(hz);
+    return 'val$d op $k kHz — past bij ${bron ?? 'een mp3'}, maar is te zacht om zeker te zijn';
+  }
   return 'muur op $k kHz — past bij mp3 320 of Opus, maar ook bij een 20 kHz-filter in de master; niet zeker';
 }
 
@@ -508,10 +556,17 @@ String waarom(Echtheidsoordeel o) {
     return 'boven 24,5 kHz vrijwel leeg — opgeschaald uit 44,1 of 48 kHz, geen echte hi-res';
   }
   if (o.band == Bandbreedte.afgekapt) {
+    final b = o.bewijs;
+    if (b != null) {
+      final hz = o.afkapHz;
+      return hz == null
+          ? 'omgezet uit een lossy bestand — $b'
+          : 'muur op ${(hz / 1000).toStringAsFixed(1).replaceAll('.', ',')} kHz, en $b: omgezet uit een lossy bestand';
+    }
     return afkapZin(o.afkapHz!);
   }
   if (o.band == Bandbreedte.vermoedelijk && o.afkapHz != null) {
-    return vermoedelijkZin(o.afkapHz!);
+    return vermoedelijkZin(o.afkapHz!, db: o.wandDb);
   }
   if (o.isOnbekend) return 'niet te beoordelen';
   final stukken = <String>[];
