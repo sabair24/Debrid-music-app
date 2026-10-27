@@ -202,6 +202,7 @@ import 'kopiesoort.dart';
 import 'versies.dart';
 import 'versie_acties.dart';
 import 'versie_uitlijner.dart' show VersieUitlijnRonde;
+import 'versie_opbergen.dart' show eenPerSoort;
 import 'versie_terugzetter.dart';
 import 'soortjacht.dart' show Soortvragen, gezochtVoor, soortvraagUitgave;
 import 'lan/vaste_naam.dart' show kPcHost;
@@ -2406,6 +2407,23 @@ Future<void> main() async {
           logboek: '$logDir${Platform.pathSeparator}downloads.log',
           log: versieLog);
       Timer(const Duration(minutes: 10), () => unawaited(terug.ronde()));
+      // Eén kopie per soort (versie_opbergen.dart; Saber, 27-10-2026: "enkel studio, cd of vinyl drie soorten"): na drie
+      // minuten, vóór de terugzetter — wat hier naar _dubbel gaat, ziet die als dezelfde soort, en laat hij staan.
+      Timer(const Duration(minutes: 3), () {
+        unawaited(() async {
+          try {
+            final r = await eenPerSoort(
+                dubbel: '${downloads.downloadsRoot}${Platform.pathSeparator}$parkeerMap',
+                inGebruik: (p) => downloads.speeltNu?.call(p) ?? false,
+                log: downloads.logRegel);
+            downloads.logRegel('één per soort: ${r.naarDubbel} kopieën naar _dubbel (${r.tweelingen} tweelingen), '
+                '${r.verhuisd} naar de map van hun soort${r.overgeslagen > 0 ? ', ${r.overgeslagen} nummers wachten (ze speelden)' : ''}');
+            if (r.naarDubbel + r.verhuisd > 0) await library.scan();
+          } catch (e) {
+            downloads.logRegel('één per soort: MISLUKT: $e');
+          }
+        }());
+      });
     }
     meldAanBijHartslag(() =>
         LuidheidVeger.voortgang.value.isEmpty ? '' : 'luidheid ${LuidheidVeger.voortgang.value}');
@@ -14250,7 +14268,12 @@ typedef Plaatversie = ({
   List<({Track nummer, VersieInfo versie})> leden,
 });
 
-/// De versies van [nummers] per soort en persing, op volgorde (studio, cd, vinyl). Leeg als geen nummer er twee heeft.
+/// De versies van [nummers] per soort: studio, cd, vinyl, op die volgorde. Leeg als geen nummer er twee heeft.
+///
+/// Saber, 27-10-2026, bij Discovery: *"Das teveel, enkel studio, cd of vinyl drie soorten"*. Hier stond een regel per
+/// soort én persing, en apart voor wat in de albummap staat: negen regels — vijf vinylpersingen, en de cd twee keer
+/// (drie nummers waar de cd het nummer is, tien waar hij een versie is). [persing]: de persingen van de versies, achter
+/// elkaar; [anker]: alleen nummers uit de albummap.
 @visibleForTesting
 List<Plaatversie> plaatversies(List<Track> nummers, List<VersieInfo> Function(Track) versiesVan) {
   final per = <String, List<({Track nummer, VersieInfo versie})>>{};
@@ -14258,8 +14281,7 @@ List<Plaatversie> plaatversies(List<Track> nummers, List<VersieInfo> Function(Tr
     final lijst = versiesVan(t);
     if (lijst.length < 2) continue;
     for (final v in lijst) {
-      final k = v.soort == null ? '?' : (v.anker ? 'anker|${v.soort!.naam}' : v.sleutel);
-      per.putIfAbsent(k, () => []).add((nummer: t, versie: v));
+      per.putIfAbsent(v.soort?.naam ?? '?', () => []).add((nummer: t, versie: v));
     }
   }
   final uit = <Plaatversie>[
@@ -14267,8 +14289,11 @@ List<Plaatversie> plaatversies(List<Track> nummers, List<VersieInfo> Function(Tr
       (
         sleutel: e.key,
         soort: e.value.first.versie.soort,
-        persing: e.value.first.versie.persing,
-        anker: e.value.first.versie.anker,
+        persing: {
+          for (final x in e.value)
+            if (!x.versie.anker && x.versie.persing.trim().isNotEmpty) x.versie.persing.trim(),
+        }.join(', '),
+        anker: e.value.every((x) => x.versie.anker),
         nummers: e.value.length,
         standaard: e.value.where((x) => x.versie.standaard).length,
         kwaliteit: {
@@ -14279,11 +14304,7 @@ List<Plaatversie> plaatversies(List<Track> nummers, List<VersieInfo> Function(Tr
         leden: e.value,
       ),
   ];
-  uit.sort((a, b) {
-    final r = (a.soort == null ? 9 : soortRang(a.soort!)).compareTo(b.soort == null ? 9 : soortRang(b.soort!));
-    if (r != 0) return r;
-    return a.anker == b.anker ? 0 : (a.anker ? -1 : 1);
-  });
+  uit.sort((a, b) => (a.soort == null ? 9 : soortRang(a.soort!)).compareTo(b.soort == null ? 9 : soortRang(b.soort!)));
   return uit;
 }
 
@@ -14323,16 +14344,17 @@ class AlbumVersies extends StatelessWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(
-                          v.soort == null
-                              ? 'Origineel'
-                              : versieLabel(v.soort!, v.persing),
+                      Text(v.soort == null ? 'Origineel' : soortKop(v.soort!),
                           style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                       Text(
                           [
                             '${v.nummers} van ${album.tracks.length} nummers',
                             if (v.kwaliteit.isNotEmpty) v.kwaliteit.join(', '),
-                            if (v.anker) 'in de albummap',
+                            if (v.persing.isNotEmpty) v.persing,
+                            if (v.anker)
+                              'in de albummap'
+                            else if (_inAlbummap(v) > 0)
+                              '${_inAlbummap(v)} in de albummap',
                           ].join(' · '),
                           style: kLabel.copyWith(color: kGedempt)),
                     ]),
@@ -14349,9 +14371,14 @@ class AlbumVersies extends StatelessWidget {
   }
 }
 
+/// Bij hoeveel nummers van [v] het de kopie in de albummap is (het nummer zelf, geen versie).
+int _inAlbummap(Plaatversie v) => v.leden.where((x) => x.versie.anker).length;
+
 ItemMenu _plaatversieMenu(BuildContext context, Album album, Plaatversie v) {
-  final naam = v.soort == null ? 'Origineel' : versieLabel(v.soort!, v.persing);
-  final eerste = v.leden.first;
+  final naam = v.soort == null ? 'Origineel' : soortKop(v.soort!);
+  // Een versie als keuze voor de plaat, geen nummer uit de albummap: dat laatste speelt toch al.
+  final eerste = v.leden.firstWhere((x) => !x.versie.anker, orElse: () => v.leden.first);
+  final versieleden = v.nummers - _inAlbummap(v);
   return ItemMenu(
     titel: naam,
     ondertitel: '${album.title} · ${v.nummers} van ${album.tracks.length} nummers',
@@ -14364,7 +14391,7 @@ ItemMenu _plaatversieMenu(BuildContext context, Album album, Plaatversie v) {
       // Weggooien apart en met een vraag ervoor (een vernietigende knop naast een gewone ging vier keer mis).
       [
         if (!v.anker && !isTv)
-          MenuRegel(Icons.delete_outline_rounded, 'Deze versie weggooien (${v.nummers} nummers)…',
+          MenuRegel(Icons.delete_outline_rounded, 'Deze versie weggooien ($versieleden nummers)…',
               () => unawaited(_gooiPlaatversieWeg(context, album, v))),
       ],
     ],
@@ -14372,12 +14399,14 @@ ItemMenu _plaatversieMenu(BuildContext context, Album album, Plaatversie v) {
 }
 
 Future<void> _gooiPlaatversieWeg(BuildContext context, Album album, Plaatversie v) async {
-  final naam = v.soort == null ? 'Origineel' : versieLabel(v.soort!, v.persing);
+  final naam = v.soort == null ? 'Origineel' : soortKop(v.soort!);
+  // Alleen de versies: een nummer uit de albummap van deze soort blijft (dat is het nummer zelf).
+  final leden = [for (final x in v.leden) if (!x.versie.anker) x];
   final zeker = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
       title: Text('$naam weggooien?'),
-      content: Text('${v.nummers} nummers van "${album.title}" gaan naar de prullenbak. Je andere versies blijven.'),
+      content: Text('${leden.length} nummers van "${album.title}" gaan naar de prullenbak. Je andere versies blijven.'),
       actions: [
         TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Nee')),
         const SizedBox(width: 24),
@@ -14390,7 +14419,7 @@ Future<void> _gooiPlaatversieWeg(BuildContext context, Album album, Plaatversie 
   final c = lib.remote;
   var weg = 0;
   String? laatste;
-  for (final x in v.leden) {
+  for (final x in leden) {
     if (c == null) {
       laatste = await gooiVersieWeg(lib, x.nummer, x.versie.track.path);
       if (laatste.startsWith('Versie in de prullenbak')) weg++;
@@ -14408,7 +14437,7 @@ Future<void> _gooiPlaatversieWeg(BuildContext context, Album album, Plaatversie 
   }
   if (c != null) unawaited(lib.loadRemote(quiet: true));
   if (!context.mounted) return;
-  _meldVersieZin(context, weg == v.leden.length ? '$naam: $weg nummers in de prullenbak' : (laatste ?? 'Niets weggegooid'));
+  _meldVersieZin(context, weg == leden.length ? '$naam: $weg nummers in de prullenbak' : (laatste ?? 'Niets weggegooid'));
 }
 
 /// Wat er bij een klaargezette kopie onder de titel van het menu staat: waar hij vandaan komt, en of de vingerafdruk

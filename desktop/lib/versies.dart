@@ -118,42 +118,18 @@ String versieLabel(Kopiesoort soort, String persing, {int bits = 0, int hz = 0})
 String versieMapLabel(Kopiesoort soort, String persing) =>
     [soort.naam, if (persing.trim().isNotEmpty) persing.trim()].join(' ');
 
-/// De map van een versie naast de map van zijn anker: `…/Spice` → `…/Spice (vinyl LP 1996)`. Tekens die Windows in een
-/// mapnaam weigert, gaan eruit.
-String versieMap(String ankerMap, Kopiesoort soort, String persing) {
-  final label = versieMapLabel(soort, persing).replaceAll(RegExp(r'[<>:"/\\|?*]'), '');
-  return '$ankerMap ($label)';
-}
+/// De map van een versie naast de map van zijn anker: `…/Spice` → `…/Spice (vinyl)`. Eén map per soort (Saber,
+/// 27-10-2026: "enkel studio, cd of vinyl drie soorten"): de persing staat in het label, niet in de mapnaam — anders
+/// werd één vinylplaat in Roon vijf halve albums ("Discovery (vinyl LP 2001)", "… (vinyl LP 2021)", …).
+String versieMap(String ankerMap, Kopiesoort soort) => '$ankerMap (${soort.naam})';
 
-/// De persing in kleine letters en in vaste volgorde, om te vergelijken.
-List<String> _facetten(String persing) => persing.toLowerCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-
-/// Zijn [a] en [b] dezelfde versie van een nummer — dan wint de bewezen betere en blijft er één ([soort] gelijk, en
-/// niets in hun persing dat elkaar tegenspreekt)?
+/// Zijn [a] en [b] dezelfde versie van een nummer — dan wint de bewezen betere en blijft er één? Ja als ze van dezelfde
+/// soort zijn: studio, cd of vinyl.
 ///
-/// **Onbekend is geen verschil.** De meeste kopieën zeggen niets over hun persing: een cd-rip van Soulseek en een
-/// cd-rip uit een torrent zijn dan twee rips van dezelfde cd, en daar blijft er één van (Saber, 26-10-2026: "alleen echt
-/// andere versies"). Pas als BEIDE een jaar noemen en dat verschilt ("LP 1996" tegen "LP 2016"), of beide een merk
-/// en dat verschilt ("MFSL" tegen "Japan"), zijn het twee versies.
-bool zelfdeVersie(Kopiesoort soortA, String persingA, Kopiesoort soortB, String persingB) {
-  if (soortA != soortB) return false;
-  final a = _facetten(persingA), b = _facetten(persingB);
-  final jaarA = a.where((w) => _jaar.hasMatch(w)).toSet(), jaarB = b.where((w) => _jaar.hasMatch(w)).toSet();
-  if (jaarA.isNotEmpty && jaarB.isNotEmpty && jaarA.intersection(jaarB).isEmpty) return false;
-  final merkA = _merkenIn(a), merkB = _merkenIn(b);
-  if (merkA.isNotEmpty && merkB.isNotEmpty && (merkA.difference(merkB).isNotEmpty || merkB.difference(merkA).isNotEmpty)) {
-    return false;
-  }
-  return true;
-}
-
-Set<String> _merkenIn(List<String> woorden) {
-  final tekst = woorden.join(' ');
-  return {
-    for (final (_, naam) in _merken)
-      if (tekst.contains(naam.toLowerCase())) naam,
-  };
-}
+/// Saber, 27-10-2026, bij Discovery met negen versies (vijf vinylpersingen, twee keer cd, een "andere kopie"): *"Das
+/// teveel, enkel studio, cd of vinyl drie soorten"*. Tot dan waren twee persingen met een ander jaar ("LP 1996" tegen
+/// "LP 2016") of een ander merk ("MFSL" tegen "Japan") twee versies. De persing blijft in het label; ze beslist niets.
+bool zelfdeVersie(Kopiesoort soortA, String persingA, Kopiesoort soortB, String persingB) => soortA == soortB;
 
 /// De sleutel waaronder een keuze bewaard wordt: soort en persing ("vinyl|lp 1996").
 String versieSleutel(Kopiesoort soort, String persing) => '${soort.naam}|${persing.trim().toLowerCase()}';

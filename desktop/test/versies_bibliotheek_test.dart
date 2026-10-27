@@ -162,7 +162,7 @@ void main() {
     expect(gsm.nieuweVersies().single.label, 'vinyl LP 1996');
   });
 
-  test('het blok op de albumpagina: per soort en persing, met hoeveel nummers', () async {
+  test('het blok op de albumpagina: per soort, met hoeveel nummers', () async {
     final lib = await pc();
     final a = lib.albums.single;
     final pv = plaatversies(a.tracks, lib.versiesVan);
@@ -182,5 +182,25 @@ void main() {
   test('alleen een album met versies krijgt het blok; [Track] blijft het anker in de rij', () {
     final t = Track(path: 'x', title: 'x', artist: 'y', album: 'z');
     expect(plaatversies([t], (_) => const []), isEmpty);
+  });
+
+  test('DE KERN: hoogstens drie regels — studio, cd, vinyl — wat er ook in de albummap staat (Saber 27-10-2026)', () {
+    // Discovery toonde er negen: per persing een regel, en de cd twee keer (als nummer en als versie).
+    Track t(String n) => Track(path: n, title: n, artist: 'Daft Punk', album: 'Discovery');
+    final a = t('a'), b = t('b'), c = t('c');
+    VersieInfo vi(String pad, Kopiesoort s, {String persing = '', bool anker = false}) =>
+        VersieInfo(track: t(pad), soort: s, persing: persing, anker: anker, standaard: anker);
+    final lijsten = {
+      'a': [vi('a', Kopiesoort.studio, anker: true), vi('a-cd', Kopiesoort.cd), vi('a-v', Kopiesoort.vinyl, persing: 'LP 2001')],
+      'b': [vi('b', Kopiesoort.cd, anker: true), vi('b-v', Kopiesoort.vinyl, persing: 'LP 2021')],
+      'c': [vi('c', Kopiesoort.cd, anker: true), vi('c-v', Kopiesoort.vinyl, persing: 'LP 2001')],
+    };
+    final pv = plaatversies([a, b, c], (x) => lijsten[x.path]!);
+    expect([for (final x in pv) x.soort], [Kopiesoort.studio, Kopiesoort.cd, Kopiesoort.vinyl]);
+    expect([for (final x in pv) x.nummers], [1, 3, 3]);
+    expect(pv[1].anker, isFalse, reason: 'twee in de albummap, één versie: één regel');
+    expect(pv[1].standaard, 2);
+    expect(pv[2].persing, 'LP 2001, LP 2021');
+    expect(pv[0].anker, isTrue);
   });
 }

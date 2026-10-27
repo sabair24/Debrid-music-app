@@ -53,7 +53,7 @@ import 'luidheid_veger.dart' show meetLuidheid;
 import 'soortjacht.dart';
 import 'vinyl.dart' show isVinylRip, vinylAchteraan;
 import 'versie_opbergen.dart';
-import 'versies.dart' show VersieBereik, versieLabel, versieMapLabel, versieSleutel, versies;
+import 'versies.dart' show VersieBereik, versieLabel, versieMapLabel, versies;
 import 'wav_naar_flac.dart' show wavNaarFlac;
 import 'tidaler.dart' show Tidaler, haalVanTidal, kTidalRadioPerUur, kiesTidalTreffers, zoekOpTidal;
 import 'torbox_stand.dart';
@@ -2364,28 +2364,13 @@ class DownloadManager extends ChangeNotifier {
     }
     var plan = versieplanVoor(f, pad, g.bronpad ?? g.bron);
     if (plan.soort == null) return 'Deze kopie is niet verliesvrij — als versie bewaren kan niet';
-    // Dezelfde versie als je nummer of als een versie die er al is (een twijfel): jij koos bewaren, dus apart. "andere
-    // kopie" alleen als ze anders precies hetzelfde zouden heten (gezien 26-10-2026: "Vinyl · LP 2001 andere kopie" naast
-    // een kale "Vinyl" — daar was "LP 2001" al genoeg).
-    if (plan.besluit == Versiebesluit.gewoon || plan.besluit == Versiebesluit.vervangVersie) {
-      final bezet = {
-        if (plan.ankerSoort != null) versieSleutel(plan.ankerSoort!, plan.ankerPersing),
-        for (final v in versies.versiesVan(pad)) v.sleutel,
-      };
-      final botst = bezet.contains(versieSleutel(plan.soort!, plan.persing));
-      plan = Versieplan(
-          besluit: Versiebesluit.nieuweVersie,
-          anker: pad,
-          soort: plan.soort,
-          persing: !botst
-              ? plan.persing
-              : plan.persing.isEmpty
-                  ? 'andere kopie'
-                  : '${plan.persing} andere kopie',
-          bron: plan.bron,
-          ankerSoort: plan.ankerSoort,
-          ankerPersing: plan.ankerPersing);
+    // Eén kopie per soort (Saber, 27-10-2026: "enkel studio, cd of vinyl drie soorten"; tot dan kwam hij er als "andere
+    // kopie" naast). Is je nummer van dezelfde soort, dan is bewaren vervangen: deze in zijn plaats, het vorige naar
+    // _dubbel. Is er een versie van die soort, dan komt deze in háár plaats — jij koos hem, dus zonder keuring ([dwing]).
+    if (plan.besluit == Versiebesluit.gewoon) {
+      return vervangDoorTwijfel(pad, behalveLezer: behalveLezer, behalveZone: behalveZone);
     }
+    final dwing = plan.besluit == Versiebesluit.vervangVersie;
     // Alleen met "standaard maken" mag hij het nummer worden; anders een versie ernaast.
     if (plan.besluit == Versiebesluit.ankerOpzij && !standaard) plan = plan.als(Versiebesluit.nieuweVersie);
     if (plan.besluit == Versiebesluit.ankerOpzij) {
@@ -2400,7 +2385,7 @@ class DownloadManager extends ChangeNotifier {
     }
     Versieuitslag? uit;
     try {
-      uit = await bergOpAlsVersie(f, plan, root: _downloadsRoot, tags: gezag);
+      uit = await bergOpAlsVersie(f, plan, root: _downloadsRoot, tags: gezag, dwing: dwing);
       if (uit == null && plan.besluit == Versiebesluit.ankerOpzij && f.existsSync()) {
         plan = plan.als(Versiebesluit.nieuweVersie);
         uit = await bergOpAlsVersie(f, plan, root: _downloadsRoot, tags: gezag);
@@ -2425,7 +2410,9 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {}
     return uit.werdAnker
         ? 'Bewaard en standaard: $label — je vorige kopie bleef als versie'
-        : standaard
+        : dwing && !standaard
+            ? 'Bewaard: $label — je vorige ${plan.soort!.naam}-versie staat in _dubbel (één per soort)'
+            : standaard
             ? 'Bewaard en standaard voor dit nummer: $label'
             : 'Bewaard als versie: $label — je eigen kopie blijft het nummer';
   }
