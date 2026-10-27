@@ -44,21 +44,22 @@ void main() {
     expect(versieLabel(Kopiesoort.vinyl, 'LP 1996', bits: 24, hz: 192000), 'Vinyl · LP 1996 · 24/192');
     expect(versieLabel(Kopiesoort.cd, '', bits: 16, hz: 44100), 'CD · 16/44.1');
     expect(versieLabel(Kopiesoort.studio, 'Remaster 2011'), 'Studio · Remaster 2011');
-    expect(versieMap(r'D:\Muziek\Albums\Spice Girls\Spice', Kopiesoort.vinyl, 'LP 1996'),
-        r'D:\Muziek\Albums\Spice Girls\Spice (vinyl LP 1996)');
-    expect(versieMap(r'D:\A\Album', Kopiesoort.vinyl, '12"'), r'D:\A\Album (vinyl 12)', reason: 'geen " in een mapnaam');
+    expect(versieMap(r'D:\Muziek\Albums\Spice Girls\Spice', Kopiesoort.vinyl), r'D:\Muziek\Albums\Spice Girls\Spice (vinyl)',
+        reason: 'één map per soort (Saber, 27-10-2026: "drie soorten") — de persing staat in het label');
+    expect(versieMap(r'D:\A\Album', Kopiesoort.cd), r'D:\A\Album (cd)');
   });
 
-  test('DE KERN: twee rips van dezelfde uitgave zijn één versie; een andere soort of persing is een andere', () {
+  test('DE KERN: één versie per soort — studio, cd, vinyl; de persing beslist niets meer', () {
+    // Saber, 27-10-2026, bij Discovery met vijf vinylpersingen: "Das teveel, enkel studio, cd of vinyl drie soorten".
     expect(zelfdeVersie(Kopiesoort.cd, '', Kopiesoort.cd, ''), isTrue);
-    expect(zelfdeVersie(Kopiesoort.cd, '', Kopiesoort.cd, 'Remaster 2011'), isTrue, reason: 'onbekend is geen verschil');
+    expect(zelfdeVersie(Kopiesoort.cd, '', Kopiesoort.cd, 'Remaster 2011'), isTrue);
     expect(zelfdeVersie(Kopiesoort.cd, '', Kopiesoort.vinyl, 'LP'), isFalse);
     expect(zelfdeVersie(Kopiesoort.studio, '', Kopiesoort.cd, ''), isFalse);
-    expect(zelfdeVersie(Kopiesoort.vinyl, 'LP 1996', Kopiesoort.vinyl, 'LP 2016 Reissue'), isFalse);
-    expect(zelfdeVersie(Kopiesoort.vinyl, 'LP 1996', Kopiesoort.vinyl, '2LP'), isTrue);
-    expect(zelfdeVersie(Kopiesoort.cd, 'Remaster 2011', Kopiesoort.cd, 'Remaster 2009'), isFalse);
-    expect(zelfdeVersie(Kopiesoort.studio, 'MFSL', Kopiesoort.studio, 'Japan'), isFalse);
-    expect(zelfdeVersie(Kopiesoort.studio, 'MFSL', Kopiesoort.studio, ''), isTrue);
+    expect(zelfdeVersie(Kopiesoort.vinyl, 'LP 1996', Kopiesoort.vinyl, 'LP 2016 Reissue'), isTrue,
+        reason: 'tot 27-10 twee versies; nu wint de bewezen betere');
+    expect(zelfdeVersie(Kopiesoort.vinyl, 'LP 2001', Kopiesoort.vinyl, 'LP 2001 andere kopie'), isTrue);
+    expect(zelfdeVersie(Kopiesoort.cd, 'Remaster 2011', Kopiesoort.cd, 'Remaster 2009'), isTrue);
+    expect(zelfdeVersie(Kopiesoort.studio, 'MFSL', Kopiesoort.studio, 'Japan'), isTrue);
   });
 
   test('een kaal [LP] of (2LP) is een vinylrip, "(LP Version)" niet', () {
