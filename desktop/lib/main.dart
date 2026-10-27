@@ -121,6 +121,7 @@ import 'cloud/settings_sync.dart';
 import 'cloud/device_identity.dart';
 import 'lan/cast_receiver.dart';
 import 'lan/client.dart';
+import 'lan/state_store.dart' show rijMerk;
 import 'lan/client_mode.dart';
 import 'lan/client_session.dart';
 import 'lan/uitwijk.dart' show leesAdressen;
@@ -781,6 +782,8 @@ Future<void> main() async {
   // de speelweg in en die leest deze winkel. Zie netsoort.dart.
   final netStore = NetsoortStore();
   unawaited(netStore.ververs());
+  // Onderweg de catalogus hoogstens om de vijf minuten helemaal (library.dart, dataverbruik 27-10-2026).
+  library.zuinigeCatalogus = () => netStore.onderweg;
 
   // Hier al gedeclareerd, verderop pas gemaakt: de sessie hieronder wil hem kunnen vragen om een
   // verse sleutel, en dat gebeurt pas als er ooit een pc geweigerd heeft -- lang na dit punt.
@@ -1098,6 +1101,13 @@ Future<void> main() async {
       stroomt: (p) => player.mediaResolver(p).startsWith('http'),
     );
     unawaited(vooruit.houdAlleen(plan.houden));
+    // Speelt het nummer al als stroom terwijl het vooruithalen nog bezig is, dan haalden ze het allebei: stop het
+    // vooruithalen (dataverbruik, 27-10-2026). De stroom zelf belandt in de cache.
+    final nu = huidig?.path;
+    if (nu != null && vooruit.localFor(nu) == null && vooruit.jobs.any((j) => j.path == nu)) {
+      vooruit.cancel(nu);
+      player.logRegel('VOORUIT gestopt — ${huidig!.title} speelt al als stroom');
+    }
     final halen = plan.halen;
     if (halen == null || volgende == null) return;
     player.logRegel('VOORUIT halen — ${volgende.title}');
@@ -1375,6 +1385,11 @@ Future<void> main() async {
     final verbruik = dataverbruik!;
     unawaited(verbruik.laad());
     telVerkeer = (u, n) => verbruik.tel(soortVanPad(u.path, vanDePc: true), n, wat: u.path);
+    // De cache van nummers (lan/stroomcache.dart): wat de speler al eens helemaal las, komt van de eigen schijf. Zoals de
+    // app van TIDAL (2 GB) en Spotify (Saber, 27-10-2026: "cache geheugen??").
+    session.stroomcacheMap = '$appDir${Platform.pathSeparator}stroomcache';
+    session.doorgeverUitCache =
+        (pad, n) => verbruik.bespaard(n, wat: stroomNaam(library.tracks.map((t) => (pad: t.path, naam: '${t.artist} – ${t.title}')), pad));
     session.doorgeverLeverde =
         (pad, n) => verbruik.tel(soortVanPad(pad, vanDePc: true), n,
             wat: stroomNaam(library.tracks.map((t) => (pad: t.path, naam: '${t.artist} – ${t.title}')), pad));
@@ -2146,6 +2161,12 @@ Future<void> main() async {
       schrijfStaat = duw;
       // Wat er hier speelt, naar de pc, onder het eigen id van dit toestel: zo kan elk ander toestel
       // "Hier verder luisteren" aanbieden (Saber, 17-10-2026). Tot nu toe meldde alleen de pc.
+      //
+      // De rij alleen als die veranderde (dataverbruik, 27-10-2026): een geschudde bibliotheek van 1805 nummers is 48 KB, en
+      // die ging elke vijf seconden mee. Een pc die dat kent ([rijMerk]: hij antwoordt `rijApart`) krijgt anders alleen
+      // het merkteken; vraagt hij de rij (`rijNodig`, na een herstart), dan gaat hij de volgende keer weer heel mee.
+      String? verstuurdeRij;
+      var pcKentRijApart = false;
       player.onProgress = (track, position, playing, queue, index) {
         final c = library.remote;
         // Zie de pc hierboven: een alleen teruggezette stand is geen melding.
@@ -2153,13 +2174,17 @@ Future<void> main() async {
         final m = verder.meldNu();
         final id = library.gedeeldId(track.path);
         if (id == null) return;
+        final rij = [for (final t in queue) library.gedeeldId(t.path) ?? ''];
+        final merk = rijMerk(rij);
+        final zonderRij = pcKentRijApart && merk == verstuurdeRij;
         unawaited(c.ask('/api/state/ops', {
           'ops': [
             {
               'type': 'progress',
               'trackId': id,
               'positionMs': position.inMilliseconds,
-              'queue': [for (final t in queue) library.gedeeldId(t.path) ?? ''],
+              if (!zonderRij) 'queue': rij,
+              'queueMerk': merk,
               'index': index,
               'playing': playing,
               'shuffle': player.shuffle,
@@ -2180,7 +2205,10 @@ Future<void> main() async {
           ],
           'deviceId': ik!.id,
           'deviceName': deviceName(),
-        }).then((_) {}, onError: (Object _) {}));
+        }).then((a) {
+          pcKentRijApart = a['rijApart'] == 1;
+          verstuurdeRij = a['rijNodig'] == 1 ? null : (zonderRij ? verstuurdeRij : merk);
+        }, onError: (Object _) => verstuurdeRij = null));
       };
       session.addListener(() {
         if (session.ready) unawaited(verder.kijkNu());

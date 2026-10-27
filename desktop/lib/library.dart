@@ -3265,9 +3265,24 @@ class LibraryStore extends ChangeNotifier {
   List<int>? laatsteCatalogusBytes;
 
   set remote(RemoteClient? client) {
+    // Dezelfde pc langs een ander adres (een netwerkwissel onderweg): het merkteken blijft geldig, en dan kost het
+    // opnieuw verbinden geen hele catalogus (dataverbruik, 27-10-2026). De cloudkopie heeft haar eigen herkansing.
+    final oud = _remote?.endpoint.serverId ?? '';
+    final zelfdePc = client != null && oud.isNotEmpty && client.endpoint.serverId == oud;
     _remote = client;
-    _catalogEtag = null;
+    if (!zelfdePc) _catalogEtag = null;
   }
+
+  /// Zuinig met de catalogus (onderweg, gezet in main.dart): verandert hij, dan hoogstens om de
+  /// [kCatalogusOnderwegElke] helemaal ophalen. Null of onwaar: altijd meteen, zoals thuis.
+  bool Function()? zuinigeCatalogus;
+
+  /// Wanneer de catalogus het laatst helemaal binnenkwam.
+  DateTime? _laatsteVolleCatalogus;
+
+  /// Zo vaak hoogstens een nieuwe catalogus onderweg. Gemeten 27-10-2026: hij veranderde elke ~45 s door een
+  /// achtergrondronde op de pc, 373 KB per keer — zo'n 30 MB per uur.
+  static const kCatalogusOnderwegElke = Duration(minutes: 5);
 
   /// Fill the library from the paired PC. The counterpart of [scan].
   ///
@@ -3289,8 +3304,14 @@ class LibraryStore extends ChangeNotifier {
     if (!quiet) notifyListeners();
 
     CatalogResponse res;
+    final laatst = _laatsteVolleCatalogus;
+    final alleenMerk = (zuinigeCatalogus?.call() ?? false) &&
+        _catalogEtag != null &&
+        !fromCloudMirror &&
+        laatst != null &&
+        DateTime.now().difference(laatst) < kCatalogusOnderwegElke;
     try {
-      res = await client.catalog(etag: _catalogEtag);
+      res = await client.catalog(etag: _catalogEtag, alleenMerk: alleenMerk);
     } catch (e) {
       // Keep the library we already have. A Mac that loses the PC mid-song should keep showing the
       // record it is playing, not blank the screen — the same reasoning as a failed disk scan.
@@ -3308,6 +3329,12 @@ class LibraryStore extends ChangeNotifier {
       return false;
     }
     geenVerbinding = null;
+    if (res.uitgesteld) {
+      // Er is een nieuwe, maar die komt bij de eerste ronde na [kCatalogusOnderwegElke]: het oude merkteken blijft staan.
+      scanning = false;
+      if (!quiet) notifyListeners();
+      return false;
+    }
     _catalogEtag = res.etag;
     final catalog = res.catalog;
     if (catalog == null) {
@@ -3339,6 +3366,7 @@ class LibraryStore extends ChangeNotifier {
 
     _adoptCatalog(catalog, client);
     laatsteCatalogusBytes = res.bytes;
+    _laatsteVolleCatalogus = DateTime.now();
     // Live again: what is on screen is playable, whatever it was a moment ago.
     fromCloudMirror = false;
     mirrorUpdatedAt = null;
