@@ -200,11 +200,14 @@ String _ext(String naam) => naam.contains('.') ? naam.substring(naam.lastIndexOf
 Future<void> _zetVersieAlbum(String pad, String? album, Kopiesoort soort) async {
   try {
     if (album == null || album.trim().isEmpty) return;
-    final label = soort.naam;
-    final naam = album.endsWith('($label)') ? album : '$album ($label)';
+    final naam = _versieAlbumnaam(album, soort);
     await writeTagFields(File(pad), {'ALBUM': naam});
   } catch (_) {/* het bestand staat goed; alleen de albumnaam bleef die van het nummer */}
 }
+
+/// "Spice" → "Spice (vinyl)" ([_zetVersieAlbum]).
+String _versieAlbumnaam(String album, Kopiesoort soort) =>
+    album.endsWith('(${soort.naam})') ? album : '$album (${soort.naam})';
 
 /// De albumnaam van het nummer op [pad], of null.
 String? _albumVan(String pad) {
@@ -360,8 +363,8 @@ void _ruimLegeMapOp(String map) {
 }
 
 /// Wat [eenPerSoort] deed: kopieën naar `_dubbel`, tweelingen die het nummer waren, versies naar de map van hun soort,
-/// en nummers die bleven omdat er iets speelde.
-typedef Soortopruiming = ({int naarDubbel, int tweelingen, int verhuisd, int overgeslagen});
+/// versies waarvan alleen de albumnaam nog een persing droeg, en nummers die bleven omdat er iets speelde.
+typedef Soortopruiming = ({int naarDubbel, int tweelingen, int verhuisd, int albumnaam, int overgeslagen});
 
 /// Per nummer hoogstens één kopie van elke soort: studio, cd en vinyl (Saber, 27-10-2026, bij Discovery met negen
 /// versies: *"Das teveel, enkel studio, cd of vinyl drie soorten"*). Wat er nieuw binnenkomt, houdt zich daar al aan
@@ -379,7 +382,7 @@ typedef Soortopruiming = ({int naarDubbel, int tweelingen, int verhuisd, int ove
 /// start. [log]: één regel per ingreep.
 Future<Soortopruiming> eenPerSoort(
     {required String dubbel, bool Function(String pad)? inGebruik, void Function(String regel)? log}) async {
-  var naarDubbel = 0, tweelingen = 0, verhuisd = 0, overgeslagen = 0;
+  var naarDubbel = 0, tweelingen = 0, verhuisd = 0, albumnaam = 0, overgeslagen = 0;
   final sep = Platform.pathSeparator;
   for (final g in versies.groepen.toList()) {
     final anker = g.anker;
@@ -471,6 +474,8 @@ Future<Soortopruiming> eenPerSoort(
       try {
         opzij = await parkeer(File(anker), dubbel);
         final at = await moveWithRetry(File(o.pad), doel);
+        // Zijn versiemap bleef leeg achter ("Cutting Crew (cd)", 27-10-2026).
+        _ruimLegeMapOp(_map(o.pad));
         versies.verhuisAnker(anker, at, soort: soort, persing: _zonderAndereKopie(o.persing));
         zetSoort(at, soort);
         if (album != null) await _zetAlbumTerug(at, album);
@@ -515,6 +520,11 @@ Future<Soortopruiming> eenPerSoort(
           log?.call('"$naam": ${versieLabel(soort, persing)} naar "${_naam(map)}" lukte niet — $e');
           continue;
         }
+      } else if (album != null && _albumVan(pad) != _versieAlbumnaam(album, soort)) {
+        // Al in de map van zijn soort, maar met de albumnaam van zijn persing: Voyager stond in "Discovery (vinyl)" als
+        // "Discovery (vinyl LP 2022)" — in Roon een album van één nummer naast "Discovery (vinyl)" (27-10-2026).
+        await _zetVersieAlbum(pad, album, soort);
+        albumnaam++;
       }
       if (soort != v.soort || persing != v.persing) {
         versies.voegToe(
@@ -531,5 +541,11 @@ Future<Soortopruiming> eenPerSoort(
       }
     }
   }
-  return (naarDubbel: naarDubbel, tweelingen: tweelingen, verhuisd: verhuisd, overgeslagen: overgeslagen);
+  return (
+    naarDubbel: naarDubbel,
+    tweelingen: tweelingen,
+    verhuisd: verhuisd,
+    albumnaam: albumnaam,
+    overgeslagen: overgeslagen
+  );
 }

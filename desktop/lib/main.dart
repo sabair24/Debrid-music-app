@@ -2417,8 +2417,8 @@ Future<void> main() async {
                 inGebruik: (p) => downloads.speeltNu?.call(p) ?? false,
                 log: downloads.logRegel);
             downloads.logRegel('één per soort: ${r.naarDubbel} kopieën naar _dubbel (${r.tweelingen} tweelingen), '
-                '${r.verhuisd} naar de map van hun soort${r.overgeslagen > 0 ? ', ${r.overgeslagen} nummers wachten (ze speelden)' : ''}');
-            if (r.naarDubbel + r.verhuisd > 0) await library.scan();
+                '${r.verhuisd} naar de map van hun soort, ${r.albumnaam} albumnamen rechtgezet${r.overgeslagen > 0 ? ', ${r.overgeslagen} nummers wachten (ze speelden)' : ''}');
+            if (r.naarDubbel + r.verhuisd + r.albumnaam > 0) await library.scan();
           } catch (e) {
             downloads.logRegel('één per soort: MISLUKT: $e');
           }
