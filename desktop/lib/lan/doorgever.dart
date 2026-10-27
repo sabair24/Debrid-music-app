@@ -32,6 +32,8 @@ import 'dart:isolate';
 import 'dart:math';
 
 import 'certificaat.dart' show pinVan;
+import 'range.dart' show parseRange, rangeNotSatisfiable;
+import 'stroomcache.dart';
 
 /// Waar de pc nu is: het versleutelde adres (`https://192.168.0.117:47822`), de TLS-sleutel en de pin.
 class DoorgeverBron {
@@ -70,6 +72,8 @@ class Doorgever {
     this.veranderd,
     this.geweigerd,
     this.geleverd,
+    this.cache,
+    this.uitCache,
     String? geheim,
   }) : geheim = geheim ?? _maakGeheim();
 
@@ -100,6 +104,12 @@ class Doorgever {
   /// Zoveel bytes kwamen er van de pc voor [pad] (met vraag) — het dataverbruik (dataverbruik.dart). Na elk antwoord,
   /// ook een afgebroken: wat over de lijn ging, telt.
   final void Function(String pad, int bytes)? geleverd;
+
+  /// De nummers op dit toestel ([Stroomcache]); null = geen cache.
+  final Stroomcache? cache;
+
+  /// Zoveel bytes kwamen uit de [cache] in plaats van van de pc.
+  final void Function(String pad, int bytes)? uitCache;
 
   HttpServer? _server;
   DoorgeverBron? _bron;
@@ -192,6 +202,18 @@ class Doorgever {
     }
     final wat = req.uri.query.isEmpty ? pad : '$pad?${req.uri.query}';
     final range = req.headers.value(HttpHeaders.rangeHeader);
+    // Al eens helemaal gelezen: van de eigen schijf (stroomcache.dart), en op de achtergrond bij de pc nagaan of het
+    // nummer intussen veranderde.
+    final c = cache;
+    if (c != null && pad.startsWith('/stream/')) {
+      final stuk = c.zoek(wat);
+      if (stuk != null) {
+        final n = await _uitCache(req, stuk);
+        if (req.method == 'GET') uitCache?.call(wat, n);
+        unawaited(_kijkNa(wat, pad, req.uri.query, stuk.etag));
+        return;
+      }
+    }
     // Vanaf het begin (geen Range, of `bytes=0-…`, wat ffmpeg bij elke nieuwe start stuurt) is geen hervatting: er valt
     // niets aan elkaar te plakken, en het nieuwe antwoord wordt het eerste. Hier stond alleen het eerste antwoord ooit,
     // en dat bleef: veranderde een nummer op de pc (de hoesveger schreef er een hoes in), dan gaf ELKE volgende poging
@@ -309,12 +331,84 @@ class Doorgever {
       await boven.drain<void>().catchError((_) {});
       return res.close();
     }
-    final binnen = await _pomp(boven, res, pad);
+    // Het hele nummer van het begin af (200, of 206 van 0 tot het einde): een kopie voor de cache.
+    final heel = status == HttpStatus.ok && range == null ||
+        status == HttpStatus.partialContent && totaal > 0 && bereik == 'bytes 0-${totaal - 1}/$totaal';
+    final kopie = c != null && !groei && pad.startsWith('/stream/') && heel && totaal > 0 && totaal < c.maxBytes ~/ 4
+        ? c.begin(wat)
+        : null;
+    final binnen = await _pomp(boven, res, pad, kopie: kopie);
     geleverd?.call(wat, binnen);
+    if (kopie != null) {
+      if (binnen == totaal) {
+        await c!.klaar(wat, kopie, totaal: totaal, etag: etag, soort: boven.headers.value(HttpHeaders.contentTypeHeader));
+      } else {
+        await c!.laatVallen(wat, kopie);
+      }
+    }
+  }
+
+  /// [stuk] uit de cache naar mpv, met Range zoals de pc het doet (`serveFile`). Geeft de verstuurde bytes.
+  Future<int> _uitCache(HttpRequest req, Cachestuk stuk) async {
+    final res = req.response;
+    final range = parseRange(req.headers.value(HttpHeaders.rangeHeader), stuk.totaal);
+    if (range == rangeNotSatisfiable) {
+      res.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+      res.headers.set(HttpHeaders.contentRangeHeader, 'bytes */${stuk.totaal}');
+      await res.close();
+      return 0;
+    }
+    final start = range?.start ?? 0;
+    final end = range?.end ?? (stuk.totaal - 1);
+    res.statusCode = range == null ? HttpStatus.ok : HttpStatus.partialContent;
+    res.headers
+      ..set(HttpHeaders.acceptRangesHeader, 'bytes')
+      ..set(HttpHeaders.contentTypeHeader, stuk.soort ?? 'audio/flac');
+    if (stuk.etag != null) res.headers.set(HttpHeaders.etagHeader, stuk.etag!);
+    if (range != null) res.headers.set(HttpHeaders.contentRangeHeader, 'bytes $start-$end/${stuk.totaal}');
+    res.headers.chunkedTransferEncoding = false;
+    res.contentLength = end - start + 1;
+    if (req.method == 'HEAD') {
+      await res.close();
+      return 0;
+    }
+    var n = 0;
+    try {
+      await res.addStream(stuk.bestand.openRead(start, end + 1).map((d) {
+        n += d.length;
+        return d;
+      }));
+    } catch (_) {/* mpv haakte af: een skip */}
+    try {
+      await res.close();
+    } catch (_) {}
+    return n;
+  }
+
+  /// Een treffer uit de cache nakijken bij de pc: een HEAD (geen muziek), en is het merkteken anders — het nummer werd
+  /// vervangen of opnieuw getagd — dan uit de cache, zodat de volgende keer de nieuwe komt.
+  Future<void> _kijkNa(String wat, String pad, String vraag, String? etag) async {
+    final bron = _bron;
+    if (bron == null || etag == null) return;
+    try {
+      final r = await _client
+          .openUrl('HEAD', bron.basis.replace(path: pad, query: vraag.isEmpty ? null : vraag))
+          .then((v) {
+        v.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${bron.sleutel}');
+        return v.close();
+      }).timeout(wachtOpKop);
+      await r.drain<void>().catchError((_) {});
+      final nieuw = r.headers.value(HttpHeaders.etagHeader);
+      if ((r.statusCode == HttpStatus.ok || r.statusCode == HttpStatus.partialContent) && nieuw != null && nieuw != etag) {
+        cache?.vergeet(wat);
+        _log('cache: $pad veranderde op de pc — de volgende keer opnieuw van de pc');
+      }
+    } catch (_) {/* geen pc nu: dan blijft wat er ligt */}
   }
 
   /// Van de pc naar mpv, met een wacht op stilte. Zie de uitleg bovenaan. Geeft terug hoeveel bytes er van de pc kwamen.
-  Future<int> _pomp(HttpClientResponse boven, HttpResponse naar, String pad) async {
+  /// [kopie]: wat er binnenkomt gaat ook daarheen (de cache).
+  Future<int> _pomp(HttpClientResponse boven, HttpResponse naar, String pad, {IOSink? kopie}) async {
     var laatst = DateTime.now();
     var wachtOpMpv = false;
     var geleverd = 0;
@@ -349,6 +443,7 @@ class Doorgever {
         laatst = DateTime.now();
         geleverd += d.length;
         c.add(d);
+        kopie?.add(d);
       },
       onError: (Object e) => breek('pc viel weg (${_kort(e)})'),
       onDone: () {
@@ -411,13 +506,18 @@ class Doorgever {
 
 /// [Doorgever] in een eigen isolate. Zelfde gebruik; de meldingen komen terug op deze isolate.
 class DoorgeverIsolaat {
-  DoorgeverIsolaat({this.log, this.storing, this.veranderd, this.geweigerd, this.geleverd});
+  DoorgeverIsolaat(
+      {this.log, this.storing, this.veranderd, this.geweigerd, this.geleverd, this.uitCache, this.cacheMap = ''});
 
   final void Function(String regel)? log;
   final void Function()? storing;
   final void Function(String pad)? veranderd;
   final void Function()? geweigerd;
   final void Function(String pad, int bytes)? geleverd;
+  final void Function(String pad, int bytes)? uitCache;
+
+  /// Waar de [Stroomcache] staat; leeg = geen cache.
+  final String cacheMap;
 
   Isolate? _isolaat;
   SendPort? _naar;
@@ -454,9 +554,11 @@ class DoorgeverIsolaat {
           geweigerd?.call();
         case 'geleverd':
           geleverd?.call('${m['pad']}', (m['bytes'] as num?)?.toInt() ?? 0);
+        case 'uitCache':
+          uitCache?.call('${m['pad']}', (m['bytes'] as num?)?.toInt() ?? 0);
       }
     });
-    _isolaat = await Isolate.spawn(_hoofd, (van.sendPort, poort, geheim ?? ''), debugName: 'doorgever');
+    _isolaat = await Isolate.spawn(_hoofd, (van.sendPort, poort, geheim ?? '', cacheMap), debugName: 'doorgever');
     await klaar.future;
     return _poort;
   }
@@ -504,9 +606,11 @@ class DoorgeverIsolaat {
     _van = null;
   }
 
-  static Future<void> _hoofd((SendPort, int, String) beginwaarden) async {
-    final (terug, poort, geheim) = beginwaarden;
+  static Future<void> _hoofd((SendPort, int, String, String) beginwaarden) async {
+    final (terug, poort, geheim, cacheMap) = beginwaarden;
     final d = Doorgever(
+      cache: cacheMap.isEmpty ? null : (Stroomcache(cacheMap)..snoei()),
+      uitCache: (p, n) => terug.send({'soort': 'uitCache', 'pad': p, 'bytes': n}),
       geheim: geheim.isEmpty ? null : geheim,
       log: (r) => terug.send({'soort': 'log', 'tekst': r}),
       storing: () => terug.send({'soort': 'storing'}),

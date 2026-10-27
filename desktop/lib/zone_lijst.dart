@@ -15,7 +15,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
-import 'lan/client.dart' show RemoteClient, RemoteException;
+import 'lan/client.dart' show RemoteClient, RemoteException, rijGeheugen;
 import 'lan/zones.dart';
 
 /// Langer stil dan dit: de lijn is dood, ook al zegt het besturingssysteem van niet.
@@ -272,7 +272,7 @@ class ZoneVerbinding {
           case 'cmd':
             opOpdracht?.call(m);
           case 'stand':
-            opStand?.call((m['progress'] as Map?)?.cast<String, dynamic>(),
+            opStand?.call(rijGeheugen.herstel((m['progress'] as Map?)?.cast<String, dynamic>()),
                 (m['verzoek'] as Map?)?.cast<String, dynamic>());
         }
       },

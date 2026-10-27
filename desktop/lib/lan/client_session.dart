@@ -226,6 +226,12 @@ class ClientSession extends ChangeNotifier {
   /// (dataverbruik.dart).
   void Function(String pad, int bytes)? doorgeverLeverde;
 
+  /// En wat hij uit de cache op dit toestel gaf in plaats van van de pc (lan/stroomcache.dart).
+  void Function(String pad, int bytes)? doorgeverUitCache;
+
+  /// Waar de cache van nummers staat ([Stroomcache]); gezet in main.dart vóór er verbonden wordt. Null: geen cache.
+  String? stroomcacheMap;
+
   /// De doorgever op [e] richten: versleuteld → (één keer) starten en de pc aanwijzen; anders niets meer
   /// doorgeven. Start hij niet, dan speelt alles via de gewone ingang (zie `RemoteClient.authorized`).
   Future<void> _doorgeverVoor(RemoteEndpoint e) async {
@@ -240,6 +246,8 @@ class ClientSession extends ChangeNotifier {
       storing: () => unawaited(netwerkVeranderd('doorgever: de pc antwoordt niet op ${_endpoint?.baseUrl.authority}')),
       veranderd: (_) => waarschuwing.value = 'Dit nummer veranderde op je pc terwijl het speelde. Start het opnieuw.',
       geleverd: (pad, bytes) => doorgeverLeverde?.call(pad, bytes),
+      uitCache: (pad, bytes) => doorgeverUitCache?.call(pad, bytes),
+      cacheMap: stroomcacheMap ?? '',
     );
     if (!d.draait) {
       try {

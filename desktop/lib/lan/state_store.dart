@@ -43,6 +43,33 @@ class Playlist {
 
 /// Where you are in a track, and what is queued behind it — the "carry on where you left off"
 /// that follows you from the Mac to the iPad.
+/// Het merkteken van een wachtrij (de id's op volgorde): hetzelfde merkteken is dezelfde rij. De lengte, en FNV-1a over
+/// de id's.
+///
+/// **Waarom (dataverbruik, 27-10-2026).** Elke stand droeg de hele wachtrij: met een geschudde bibliotheek van 1805
+/// nummers 48 KB, elke vijf seconden van de telefoon naar de pc en via de zonestroom weer terug — zo'n 70 MB per uur
+/// terwijl je onderweg luistert. Met dit merkteken gaat de rij alleen mee als hij veranderde.
+String rijMerk(List<String> rij) {
+  var h = 0x811c9dc5;
+  for (final id in rij) {
+    for (final c in id.codeUnits) {
+      h = ((h ^ c) * 0x01000193) & 0xffffffff;
+    }
+    h = ((h ^ 0x2c) * 0x01000193) & 0xffffffff;
+  }
+  return '${rij.length}-${h.toRadixString(16)}';
+}
+
+/// Een stand van de pc ([PlaybackProgress.toJson]) voor wie de rij met merkteken [heeftAl] al heeft: zonder de rij, met
+/// het merkteken erbij (`rijMerk`). Wie het merkteken niet kent of geen [heeftAl] meegaf, krijgt alles.
+Map<String, dynamic> standVoor(PlaybackProgress p, {String? heeftAl}) {
+  final j = p.toJson();
+  final merk = rijMerk(p.queue);
+  j['rijMerk'] = merk;
+  if (heeftAl != null && heeftAl == merk) j.remove('queue');
+  return j;
+}
+
 class PlaybackProgress {
   PlaybackProgress({
     this.trackId = '',
@@ -303,6 +330,8 @@ class LanStateStore {
   Map<String, int> applyOps(List<dynamic> ops, {String deviceId = '', String deviceName = ''}) {
     var durableChanged = false;
     var progressChanged = false;
+    // Een stand zonder rij ("queueMerk" alleen) waarvan de pc de rij niet (meer) heeft: het toestel moet hem opnieuw sturen.
+    var rijNodig = false;
     final now = DateTime.now().millisecondsSinceEpoch;
     // Voor wie er een overzicht in de brievenbus kwam: die krijgen een seintje (zie de server).
     final overzichtVoor = <String>{};
@@ -445,10 +474,23 @@ class LanStateStore {
           final schatting = bekend == null || verschil < bekend ? verschil : bekend;
           _klokVerschil[deviceId] = schatting;
           final opPc = at + schatting;
+          // De rij, of — als het toestel alleen zijn merkteken stuurde ([rijMerk]) — de rij die hij de vorige keer meegaf.
+          final gestuurd = op['queue'] as List?;
+          final merk = op['queueMerk'] as String?;
+          final vorige = perToestel[deviceId]?.queue;
+          final List<String> rij;
+          if (gestuurd != null) {
+            rij = [for (final t in gestuurd) t.toString()];
+          } else if (merk != null && vorige != null && rijMerk(vorige) == merk) {
+            rij = vorige;
+          } else {
+            rij = vorige ?? const [];
+            if (merk != null) rijNodig = true;
+          }
           final melding = PlaybackProgress(
             trackId: (op['trackId'] ?? '') as String,
             positionMs: (op['positionMs'] as int?) ?? 0,
-            queue: [for (final t in (op['queue'] as List? ?? const [])) t.toString()],
+            queue: rij,
             index: (op['index'] as int?) ?? 0,
             playing: (op['playing'] ?? false) as bool,
             updatedAt: opPc,
@@ -505,7 +547,8 @@ class LanStateStore {
         if (overzichtVoor.isNotEmpty) 'overzichtVoor': overzichtVoor.toList(),
       });
     }
-    return {'rev': rev, 'progressRev': progressRev};
+    // [rijApart]: deze pc kent een stand zonder rij ([rijMerk]); een oudere zegt het niet, en krijgt dus altijd de rij.
+    return {'rev': rev, 'progressRev': progressRev, 'rijApart': 1, if (rijNodig) 'rijNodig': 1};
   }
 
   void _pruneTombstones() {

@@ -24,6 +24,7 @@ import 'package:http/http.dart' as http;
 import '../album_facts.dart';
 import '../dataverbruik.dart' show TellendeClient;
 import 'dtos.dart';
+import 'state_store.dart' show rijMerk;
 import 'pin_client.dart';
 import 'poorten.dart';
 import 'tokens.dart' show toestelWeg;
@@ -231,9 +232,13 @@ class CatalogResponse {
   /// download is dat om de paar seconden.
   final List<int>? bytes;
 
-  const CatalogResponse(this.catalog, this.etag, {this.bytes});
+  const CatalogResponse(this.catalog, this.etag, {this.bytes, this.uitgesteld = false});
 
   bool get unchanged => catalog == null;
+
+  /// De pc zegt alleen dát er een nieuwe catalogus is (`alleenMerk`), zonder hem te sturen: [etag] is dan het nieuwe
+  /// merkteken, en de catalogus komt later.
+  final bool uitgesteld;
 }
 
 /// What a PC says about itself before any pairing has happened.
@@ -344,6 +349,48 @@ class RemoteException implements Exception {
   String toString() => message;
 }
 
+/// De laatste wachtrijen die de pc stuurde, op hun merkteken ([rijMerk]). Een stand zonder rij (`queue` weg, `rijMerk`
+/// erbij) krijgt hier zijn rij terug, zodat de rest van de app altijd een volledige stand ziet (dataverbruik, 27-10-2026:
+/// de rij van 48 KB ging elke vijf seconden mee).
+class RijGeheugen {
+  final _rijen = <String, List<Object?>>{};
+  String? _laatste;
+
+  /// Het merkteken van de rij die het laatst binnenkwam: wat dit toestel aan de pc zegt te hebben.
+  String? get merk => _laatste;
+
+  /// [stand] (een `progress`-map van de pc) aangevuld: met rij onthouden, zonder rij teruggezet als het merkteken bekend
+  /// is. Een onbekend merkteken laat de stand zoals hij is.
+  Map<String, dynamic>? herstel(Map<String, dynamic>? stand) {
+    if (stand == null) return null;
+    final rij = stand['queue'];
+    if (rij is List) {
+      final m = (stand['rijMerk'] as String?) ?? rijMerk([for (final x in rij) '$x']);
+      _rijen.remove(m);
+      _rijen[m] = rij;
+      _laatste = m;
+      while (_rijen.length > 8) {
+        _rijen.remove(_rijen.keys.first);
+      }
+      return stand;
+    }
+    final m = stand['rijMerk'];
+    final bekend = m is String ? _rijen[m] : null;
+    if (bekend == null) return stand;
+    _laatste = m as String;
+    return {...stand, 'queue': bekend};
+  }
+
+  /// Tests delen dit proces.
+  void wis() {
+    _rijen.clear();
+    _laatste = null;
+  }
+}
+
+/// Eén geheugen voor alles wat met de pc praat: de zonestroom, de speelstand en de gedeelde staat.
+final rijGeheugen = RijGeheugen();
+
 class RemoteClient {
   final RemoteEndpoint endpoint;
   final http.Client _http;
@@ -375,9 +422,13 @@ class RemoteClient {
   /// The library. Pass the ETag from last time and the PC answers 304 when nothing changed, which
   /// is the ordinary case on every poll — the fingerprint is over the CONTENT, so enriching a
   /// cover does not re-push twelve thousand tracks.
-  Future<CatalogResponse> catalog({String? etag}) async {
-    final res = await _get('/api/catalog', etag: etag);
+  ///
+  /// [alleenMerk] (onderweg, dataverbruik 27-10-2026): is er iets veranderd, dan zegt een pc die dat kent het alleen,
+  /// zonder de catalogus van 373 KB te sturen ([CatalogResponse.uitgesteld]). Een oudere pc stuurt hem gewoon.
+  Future<CatalogResponse> catalog({String? etag, bool alleenMerk = false}) async {
+    final res = await _get('/api/catalog', etag: etag, query: alleenMerk ? {'alleenMerk': '1'} : null);
     if (res.statusCode == 304) return CatalogResponse(null, etag);
+    if (res.headers['x-alleen-merk'] == '1') return CatalogResponse(null, res.headers['etag'], uitgesteld: true);
     // Op een ANDERE isolate. Zie [ontleedCatalogus] voor waarom dat hier het verschil maakt.
     final decoded = await ontleedCatalogus(res.bodyBytes);
     if (decoded == null) {
@@ -747,12 +798,19 @@ class RemoteClient {
   /// bewust weggelaten: dit toestel houdt geen revisie bij, en een volledige momentopname is een
   /// paar kilobytes.
   Future<Map<String, dynamic>> gedeeldeStaat() async {
-    final res = await _get('/api/state');
+    final res = await _get('/api/state', query: {if (rijGeheugen.merk case final m?) 'rijMerk': m});
     if (res.statusCode != 200) {
       throw RemoteException('De pc antwoordde met ${res.statusCode}.', statusCode: res.statusCode);
     }
     final decoded = res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
-    return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+    return _metRij(decoded is Map<String, dynamic> ? decoded : <String, dynamic>{});
+  }
+
+  /// De rij terug in de stand ([RijGeheugen.herstel]).
+  static Map<String, dynamic> _metRij(Map<String, dynamic> antwoord) {
+    final p = antwoord['progress'];
+    if (p is Map) antwoord['progress'] = rijGeheugen.herstel(p.cast<String, dynamic>());
+    return antwoord;
   }
 
   /// De speelstand van de pc, en wie wat speelt ("Hier verder luisteren"). Met [sinds] de revisie die
@@ -859,6 +917,8 @@ class RemoteClient {
               'naam': naam,
               if (platform.isNotEmpty) 'platform': platform,
               if (tv) 'tv': '1',
+              // De rij alleen als die veranderde ([RijGeheugen], dataverbruik 27-10-2026).
+              'rijApart': '1',
             }))
           ..headers.addAll({..._headers, 'Accept': 'text/event-stream'});
         final http.StreamedResponse res;
@@ -901,12 +961,13 @@ class RemoteClient {
       if (sinds != null) 'since': '$sinds',
       'toestel': toestel,
       'naam': naam,
+      if (rijGeheugen.merk case final m?) 'rijMerk': m,
     });
     if (res.statusCode != 200) {
       throw RemoteException('De pc antwoordde met ${res.statusCode}.', statusCode: res.statusCode);
     }
     final decoded = res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
-    return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+    return _metRij(decoded is Map<String, dynamic> ? decoded : <String, dynamic>{});
   }
 
   /// Ask the PC a question whose answer is a JSON object. Same shape as [edit], but the body

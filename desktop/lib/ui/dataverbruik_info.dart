@@ -109,6 +109,13 @@ class _DataverbruikInfoState extends State<DataverbruikInfo> {
         mobVandaag.isEmpty ? 'Vandaag nog niets over mobiel.' : 'Vandaag over mobiel: $mobVandaag',
         style: klein));
     if (mobMaand.isNotEmpty) regels.add(Text('Deze maand over mobiel: $mobMaand', style: klein));
+    final cacheVandaag = vandaag.geteld('cache'), cacheMaand = maand.geteld('cache');
+    if (cacheMaand > 0) {
+      regels.add(Text(
+          'Uit de cache op dit toestel (niet opnieuw gehaald): vandaag ${bytesZin(cacheVandaag)} · deze maand '
+          '${bytesZin(cacheMaand)}',
+          style: klein));
+    }
     final dagen = (s?.dagen.toList() ?? <String>[])..sort((a, b) => b.compareTo(a));
     if (dagen.isNotEmpty) {
       regels.add(Align(

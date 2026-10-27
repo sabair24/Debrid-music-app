@@ -274,6 +274,17 @@ class DataverbruikStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// [bytes] kwamen uit de cache op dit toestel in plaats van over het netwerk (lan/stroomcache.dart): bespaard. Ze
+  /// staan apart (onder "cache"), niet bij mobiel of wifi.
+  void bespaard(int bytes, {String? wat}) {
+    if (bytes <= 0) return;
+    final nu = _klok();
+    _dagen.putIfAbsent(dagSleutel(nu), Verbruiksdag.new).tel('cache', Verkeerssoort.muziek.name, bytes);
+    if (bytes >= kEigenRegel) _regel(nu, 'uit de cache  ${bytesZin(bytes)}${wat == null ? '' : '  $wat'}  (niet opnieuw gehaald)');
+    _bewaarStraks();
+    notifyListeners();
+  }
+
   /// De samenvatting van het kwartier, met wat Android in die tijd voor de hele app zag (alle netwerken).
   Future<void> kwartier() async {
     final nu = _klok();

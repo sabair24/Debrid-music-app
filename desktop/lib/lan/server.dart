@@ -1075,6 +1075,7 @@ class LanServer {
 
     final path = req.uri.path;
     _padVan[res] = path;
+    if ((req.headers.value(HttpHeaders.acceptEncodingHeader) ?? '').toLowerCase().contains('gzip')) _magInpakken[res] = true;
 
     // Unauthenticated on purpose: this is how a device confirms it found the right machine, and
     // how the app itself checks whether a second copy is already running.
@@ -1459,6 +1460,16 @@ class LanServer {
     if (req.headers.value(HttpHeaders.ifNoneMatchHeader) == snap.etag) {
       res.statusCode = HttpStatus.notModified;
       res.headers.set(HttpHeaders.etagHeader, snap.etag);
+      return res.close();
+    }
+    // Alleen het merkteken (een toestel onderweg, dataverbruik 27-10-2026): de catalogus verandert soms elke 45 s door
+    // een achtergrondronde, en dan ging hij telkens helemaal mee. Het toestel haalt hem zelf als het tijd is.
+    if (req.uri.queryParameters['alleenMerk'] == '1') {
+      res.statusCode = HttpStatus.ok;
+      res.headers
+        ..set(HttpHeaders.etagHeader, snap.etag)
+        ..set('X-Alleen-Merk', '1');
+      res.headers.contentLength = 0;
       return res.close();
     }
     res.statusCode = HttpStatus.ok;
@@ -1967,16 +1978,20 @@ class LanServer {
     }
     // Nothing durable has changed since the client last looked. The position may well have, so
     // it rides along — it is a handful of bytes and saves a second round trip.
+    // De rij alleen als die anders is dan wat het toestel al heeft ([rijMerk], dataverbruik 27-10-2026).
+    final heeftAl = req.uri.queryParameters['rijMerk'];
     if (since != null && since == state.rev) {
       return _json(req.response, {
         'rev': state.rev,
         'progressRev': state.progressRev,
         'unchanged': true,
-        'progress': state.progress.toJson(),
+        'progress': standVoor(state.progress, heeftAl: heeftAl),
         if (state.verzoek != null) 'verzoek': state.verzoek,
       });
     }
-    return _json(req.response, state.snapshot());
+    final snap = state.snapshot();
+    if (heeftAl != null) snap['progress'] = standVoor(state.progress, heeftAl: heeftAl);
+    return _json(req.response, snap);
   }
 
   Future<void> _stateOps(HttpRequest req) async {
@@ -2079,10 +2094,18 @@ class LanServer {
       }
     }
 
-    Map<String, dynamic> stand() => {
-          'progress': state.progress.toJson(),
-          if (state.verzoek != null) 'verzoek': state.verzoek,
-        };
+    // Een toestel dat `rijApart` meegaf, krijgt de rij alleen als die veranderde sinds de vorige stand op deze lijn
+    // ([standVoor]; dataverbruik 27-10-2026: 48 KB elke vijf seconden).
+    final rijApart = req.uri.queryParameters['rijApart'] == '1';
+    String? rijOpLijn;
+    Map<String, dynamic> stand() {
+      final p = standVoor(state.progress, heeftAl: rijApart ? rijOpLijn : null);
+      rijOpLijn = p['rijMerk'] as String?;
+      return {
+        'progress': p,
+        if (state.verzoek != null) 'verzoek': state.verzoek,
+      };
+    }
 
     if (toestel.isNotEmpty) {
       zones.stroomOpen(toestel, naam: naam, soort: soort);
@@ -2645,6 +2668,14 @@ class LanServer {
 
   /// Het pad van de aanvraag achter een antwoord, zodat [_json] weet wat hij telt.
   final Expando<String> _padVan = Expando('pad');
+
+  /// Vroeg de aanvraag achter dit antwoord om gzip? Dan pakt [_json] een groot antwoord in.
+  final Expando<bool> _magInpakken = Expando('gzip');
+
+  /// Vanaf deze grootte gaat een JSON-antwoord ingepakt, als de vrager dat aankan. De gedeelde staat was 179 KB (waarvan
+  /// 130 KB aan speeltellingen) en ging bij elke gespeelde track opnieuw naar elk toestel; JSON drukt ongeveer
+  /// vijfvoudig samen. Daaronder is de moeite niet de rekentijd waard.
+  static const int _inpakkenVanaf = 8 * 1024;
 
   /// Telt [bytes] van [soort] naar wie [res] vroeg. De klok van de samenvatting start bij het eerste antwoord.
   void _telVerzonden(HttpResponse res, Verkeerssoort soort, int bytes, {String? wat, int? totaal, String? vraag}) {
@@ -3958,9 +3989,15 @@ class LanServer {
   /// Niets meegeven laat de code staan die er al stond; dat kan geen enkele weigering meer
   /// wegpoetsen. De zes plekken hieronder geven hem nu expliciet mee.
   Future<void> _json(HttpResponse res, Object body, {int? status}) async {
-    final bytes = utf8.encode(jsonEncode(body));
+    var bytes = utf8.encode(jsonEncode(body));
     if (status != null) res.statusCode = status;
     res.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+    if (bytes.length >= _inpakkenVanaf && (_magInpakken[res] ?? false)) {
+      bytes = Uint8List.fromList(gzip.encode(bytes));
+      res.headers
+        ..set(HttpHeaders.contentEncodingHeader, 'gzip')
+        ..set(HttpHeaders.varyHeader, HttpHeaders.acceptEncodingHeader);
+    }
     res.headers.contentLength = bytes.length;
     res.add(bytes);
     _telVerzonden(res, soortVanPad(_padVan[res] ?? '', vanDePc: true), bytes.length);
