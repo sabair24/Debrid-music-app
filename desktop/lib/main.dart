@@ -208,6 +208,8 @@ import 'vinylspoor.dart' show Stiltemeter, stilteVan;
 import 'versie_terugzetter.dart';
 import 'soortjacht.dart' show Soortvragen, gezochtVoor, soortvraagUitgave;
 import 'lan/vaste_naam.dart' show kPcHost;
+import 'dataverbruik.dart';
+import 'ui/dataverbruik_info.dart';
 import 'torbox.dart';
 import 'torbox_stand.dart';
 import 'torrentvoornummer.dart';
@@ -1350,6 +1352,39 @@ Future<void> main() async {
     unawaited(aanbevolen.laad().then((_) => aanbevolen.start()));
     // Taal en stijl per artiest (Last.fm), voor de bibliotheek — zie [_vulArtiestTags].
     unawaited(_vulArtiestTags(library, settings));
+  }
+
+  // Het dataverbruik (dataverbruik.dart; Saber, 27-10-2026: "data verbruik buitenshuis … ik wil een volledige analyse, de
+  // app moet vanaf nu alles bijhouden in een log"): wat dit toestel haalt, per dag en netwerk, in dataverbruik.json en
+  // verbruik.log — en elke tien minuten naar verbruik.log op de pc, zodat het te lezen is terwijl de gsm onderweg is. De
+  // pc telt zelf wat hij stuurt (lan/verzendteller.dart).
+  dataverbruik = DataverbruikStore(
+    bestand: mode.owner ? null : '$appDir${Platform.pathSeparator}dataverbruik.json',
+    logboek: mode.owner ? null : WarmLog('$logDir${Platform.pathSeparator}verbruik.log', maxBytes: 1 << 20).line,
+    netNu: () => netStore.net,
+  );
+  if (!mode.owner) {
+    final verbruik = dataverbruik!;
+    unawaited(verbruik.laad());
+    telVerkeer = (u, n) => verbruik.tel(soortVanPad(u.path, vanDePc: true), n, wat: u.path);
+    session.doorgeverLeverde =
+        (pad, n) => verbruik.tel(soortVanPad(pad, vanDePc: true), n,
+            wat: stroomNaam(library.tracks.map((t) => (pad: t.path, naam: '${t.artist} – ${t.title}')), pad));
+    final ik = thisDevice();
+    Timer.periodic(const Duration(minutes: 10), (_) async {
+      final regels = verbruik.neemRegels();
+      if (regels.isEmpty) return;
+      final e = session.endpoint;
+      if (e == null) return verbruik.legTerug(regels);
+      final c = RemoteClient(e, timeout: const Duration(seconds: 10));
+      try {
+        await c.ask('/api/diag/verbruik', {'toestel': warmteToestel(await ik), 'regels': regels});
+      } catch (_) {
+        verbruik.legTerug(regels);
+      } finally {
+        c.close();
+      }
+    });
   }
 
   // Wat dit toestel tekent en hoe warm het wordt, naar `warmte.log` op de pc. Zie warmtemeter.dart:
@@ -19966,6 +20001,9 @@ const _meetAlbumRoute = 'meet-album';
 /// begint.
 Future<void> Function(List<String> regels)? _meldMeting;
 
+/// Het dataverbruik van dit toestel (dataverbruik.dart), voor Instellingen › Info. Gezet in `main`; leeg op de pc.
+DataverbruikStore? dataverbruik;
+
 /// Wat de meetronde in deze app doet: Nu speelt openen en sluiten, het glas omzetten, en zo nodig een nummer
 /// klaarzetten. Zie `meetronde.dart`.
 MeetHaken _meetHaken(PlayerStore player, LibraryStore library) {
@@ -33708,6 +33746,10 @@ class _AboutSectionState extends State<_AboutSection> {
             ),
           ],
         ),
+        // Het dataverbruik (Saber, 27-10-2026: "ik wil bij instellingen, sectie info wat men data verbruik is").
+        const SizedBox(height: 12),
+        DataverbruikInfo(store: dataverbruik, isPc: context.read<ClientSession>().owner),
+        const SizedBox(height: 6),
         // De vermelding die Last.fm vraagt (voorwaarden, art. 2.7): "powered by AudioScrobbler", met een verwijzing. Alleen
         // als er een sleutel is — zonder sleutel komt er niets van Last.fm.
         if (context.read<AppSettings>().lastfmKey.trim().isNotEmpty) ...[

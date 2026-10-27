@@ -222,6 +222,10 @@ class ClientSession extends ChangeNotifier {
   @visibleForTesting
   DoorgeverIsolaat? get doorgever => _doorgever;
 
+  /// Wat de doorgever van de pc haalde voor mpv (muziek en hoezen): het pad met vraag, en de bytes. Gezet in main.dart
+  /// (dataverbruik.dart).
+  void Function(String pad, int bytes)? doorgeverLeverde;
+
   /// De doorgever op [e] richten: versleuteld → (één keer) starten en de pc aanwijzen; anders niets meer
   /// doorgeven. Start hij niet, dan speelt alles via de gewone ingang (zie `RemoteClient.authorized`).
   Future<void> _doorgeverVoor(RemoteEndpoint e) async {
@@ -235,6 +239,7 @@ class ClientSession extends ChangeNotifier {
       // houdt mpv intussen vast en gaat verder zodra er een nieuw adres is.
       storing: () => unawaited(netwerkVeranderd('doorgever: de pc antwoordt niet op ${_endpoint?.baseUrl.authority}')),
       veranderd: (_) => waarschuwing.value = 'Dit nummer veranderde op je pc terwijl het speelde. Start het opnieuw.',
+      geleverd: (pad, bytes) => doorgeverLeverde?.call(pad, bytes),
     );
     if (!d.draait) {
       try {
@@ -1033,8 +1038,10 @@ class ClientSession extends ChangeNotifier {
     final m = mirror;
     if (m == null) return;
     try {
-      final copy = await m.fetch();
+      // Dezelfde kopie als de vorige keer, en er staat een bibliotheek: alleen het merkteken vragen (dataverbruik).
+      final copy = await m.fetch(behalve: library.tracks.isEmpty ? null : _kopieMerk);
       if (copy == null) return;
+      _kopieMerk = copy.etag;
       if (library.adoptMirror(copy.json, updatedAt: copy.updatedAt)) {
         unawaited(library.loadRemoteCovers(settings));
         notifyListeners();
@@ -1043,6 +1050,9 @@ class ClientSession extends ChangeNotifier {
       debugPrint('Cloud catalogue unavailable: $e');
     }
   }
+
+  /// Het merkteken van de cloudkopie die het laatst gehaald werd ([_fillFromMirror]).
+  String? _kopieMerk;
 
   /// De versie van de berichten van uploaders die dit toestel heeft (uploaderberichten.dart); null: nog niets.
   int? _berichtenVersie;

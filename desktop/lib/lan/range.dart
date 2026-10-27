@@ -80,6 +80,7 @@ Future<void> serveFile(
   File file, {
   required String contentType,
   String? merk,
+  void Function(int bytes)? verstuurd,
 }) async {
   final stat = await file.stat();
   final total = stat.size;
@@ -126,10 +127,18 @@ Future<void> serveFile(
     return;
   }
 
+  // Wat er werkelijk de deur uit ging (dataverbruik, lan/verzendteller.dart): ook bij een speler die halverwege afhaakt.
+  var weg = 0;
   try {
-    await res.addStream(file.openRead(start, end + 1));
+    await res.addStream(verstuurd == null
+        ? file.openRead(start, end + 1)
+        : file.openRead(start, end + 1).map((d) {
+            weg += d.length;
+            return d;
+          }));
   } on Exception {
     // The client hung up mid-track — normal when you skip to the next song. Nothing to report.
   }
   await res.close();
+  verstuurd?.call(weg);
 }

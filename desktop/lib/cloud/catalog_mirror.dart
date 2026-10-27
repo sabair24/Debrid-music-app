@@ -87,10 +87,16 @@ class CatalogMirror {
     }
   }
 
-  /// Read the copy back. Null when there is none, or it is incomplete.
-  Future<MirroredCatalog?> fetch() async {
+  /// Read the copy back. Null when there is none, or it is incomplete — and when [behalve] is its merkteken: dan heeft
+  /// de vrager deze kopie al, en kost het één klein document in plaats van alle stukken.
+  ///
+  /// **Waarom [behalve] (dataverbruik, 27-10-2026).** Een toestel dat de pc niet bereikt, vraagt dit bij elke ronde van
+  /// de catalogus — elke vijftien seconden. Zonder [behalve] waren dat telkens alle stukken, ingepakt ongeveer een halve
+  /// megabyte: zo'n 120 MB per uur op precies de plek waar de pc onbereikbaar is (de sportschool, mobiele data).
+  Future<MirroredCatalog?> fetch({String? behalve}) async {
     final meta = await db.get(_meta);
     if (meta == null) return null;
+    if (behalve != null && behalve.isNotEmpty && (meta.data['etag'] ?? '').toString() == behalve) return null;
     final count = (meta.data['chunks'] as num?)?.toInt() ?? 0;
     if (count <= 0) return null;
 

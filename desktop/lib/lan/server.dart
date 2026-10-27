@@ -50,6 +50,7 @@ import 'pc_bijwerker.dart';
 import 'range.dart';
 import 'state_store.dart';
 import 'tls_ingang.dart';
+import 'verzendteller.dart';
 import 'zones.dart';
 import 'poorten.dart';
 export 'poorten.dart';
@@ -58,6 +59,7 @@ import 'tokens.dart';
 import 'transcode.dart';
 import 'upnp.dart';
 import '../artwork.dart';
+import '../dataverbruik.dart' show Verkeerssoort, soortVanPad;
 import '../discogs.dart' show DiscogsArtwork, DiscogsService, ReleaseArt, kunstNaarJson, persingUitHerkomst;
 import '../aanbevolen.dart';
 import '../vertaler.dart';
@@ -261,6 +263,9 @@ class LanServer {
     _stroomLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}stroom.log');
     _warmteLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}warmte.log');
     _schudLog = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}schud.log', maxBytes: kSchudLogBytes);
+    final verbruik = WarmLog('${dir.isEmpty ? logDir : dir}${Platform.pathSeparator}verbruik.log', maxBytes: 1 << 20);
+    _verbruikLog = verbruik;
+    _verzonden = Verzendteller(log: verbruik.line, publiek: () => buitenAdres?.call()?.host);
   }
 
   /// Met welk account deze pc zelf is ingelogd, of leeg als hij dat niet is.
@@ -990,6 +995,8 @@ class LanServer {
   }
 
   Future<void> stop() async {
+    _verzonden?.kwartier();
+    _verzonden?.stop();
     final http = _http;
     _http = null;
     await http?.close(force: true);
@@ -1067,6 +1074,7 @@ class LanServer {
     }
 
     final path = req.uri.path;
+    _padVan[res] = path;
 
     // Unauthenticated on purpose: this is how a device confirms it found the right machine, and
     // how the app itself checks whether a second copy is already running.
@@ -1258,6 +1266,8 @@ class LanServer {
         return _radio(req);
       case '/api/diag/warmte':
         return _warmte(req);
+      case '/api/diag/verbruik':
+        return _verbruik(req);
       case '/api/diag/schud':
         return _schud(req);
     }
@@ -1473,6 +1483,7 @@ class LanServer {
     res.headers.set(HttpHeaders.varyHeader, HttpHeaders.acceptEncodingHeader);
     res.headers.contentLength = lijf.length;
     res.add(lijf);
+    _telVerzonden(res, Verkeerssoort.catalogus, lijf.length);
     return res.close();
   }
 
@@ -2059,7 +2070,10 @@ class LanServer {
     void send(String event, Map<String, dynamic> data) {
       if (dicht) return;
       try {
-        res.write('event: $event\ndata: ${jsonEncode(data)}\n\n');
+        final regel = 'event: $event\ndata: ${jsonEncode(data)}\n\n';
+        res.write(regel);
+        // De wachtrij zit in elke "stand": op een toestel dat onderweg meeluistert telt dat (dataverbruik).
+        _telVerzonden(res, Verkeerssoort.zones, regel.length);
       } catch (_) {
         dicht = true;
       }
@@ -2492,8 +2506,18 @@ class LanServer {
     }
     _stroomRegel(req, track,
         'origineel${maxRate == null ? '' : ' (vraag $maxRate/${maxBits ?? '-'}, valt eronder)'}  ${_mb(track.sizeBytes)}');
-    return serveFile(req, file, contentType: mimeForExt(track.ext));
+    return serveFile(req, file,
+        contentType: mimeForExt(track.ext), verstuurd: (n) => _telStroom(req, track, n, 'origineel', track.sizeBytes));
   }
+
+  void _telStroom(HttpRequest req, Track? track, int bytes, String hoe, int totaal) => _telVerzonden(
+      req.response, Verkeerssoort.muziek, bytes,
+      wat: track == null ? null : '${track.artist} – ${track.title}',
+      totaal: totaal,
+      vraag: [
+        if (req.headers.value(HttpHeaders.rangeHeader) case final r?) r,
+        hoe,
+      ].join(', '));
 
   /// De omgezette versie serveren — als BESTAND, nooit als pijp.
   ///
@@ -2518,7 +2542,9 @@ class LanServer {
         !transcoder.alOmgezet(file, maxSampleRate: maxRate, maxBits: maxBits, recept: recept, cacheDir: cache) &&
         _quotum(req, kQuotumOmzetten) != null) {
       if (track != null) _stroomRegel(req, track, 'quotum omzetten geraakt — origineel  ${_mb(track.sizeBytes)}');
-      return serveFile(req, file, contentType: mimeForExt(track?.ext ?? 'flac'));
+      return serveFile(req, file,
+          contentType: mimeForExt(track?.ext ?? 'flac'),
+          verstuurd: (n) => _telStroom(req, track, n, 'origineel (quotum)', track?.sizeBytes ?? 0));
     }
     final klok = Stopwatch()..start();
     final klaar = await transcoder.resampleToFile(file,
@@ -2539,8 +2565,11 @@ class LanServer {
     }
     // Het merkteken van een omzetting is bron plus recept: de naam in de cache (`_sleutel`).
     final naam = klaar?.uri.pathSegments.last ?? '';
+    final grootte = (klaar ?? file).lengthSync();
     return serveFile(req, klaar ?? file,
-        contentType: 'audio/flac', merk: naam.endsWith('.flac') ? naam.substring(0, naam.length - 5) : null);
+        contentType: 'audio/flac',
+        merk: naam.endsWith('.flac') ? naam.substring(0, naam.length - 5) : null,
+        verstuurd: (n) => _telStroom(req, track, n, klaar == null ? 'origineel' : 'omgezet $maxBits/$maxRate', grootte));
   }
 
 
@@ -2603,6 +2632,44 @@ class LanServer {
     if (regels is List) {
       for (final r in regels.take(60)) {
         _warmteLog?.line('[${toestel.isEmpty ? '?' : toestel} $adres] ${kort(r, 800)}');
+        n++;
+      }
+    }
+    return _json(req.response, {'ok': true, 'regels': n});
+  }
+
+  /// Het dataverbruik (Saber, 27-10-2026: "data verbruik buitenshuis … ik wil een volledige analyse"): wat de pc naar
+  /// elk adres stuurde ([Verzendteller]), en de regels die de toestellen zelf tellen (`/api/diag/verbruik`).
+  WarmLog? _verbruikLog;
+  Verzendteller? _verzonden;
+
+  /// Het pad van de aanvraag achter een antwoord, zodat [_json] weet wat hij telt.
+  final Expando<String> _padVan = Expando('pad');
+
+  /// Telt [bytes] van [soort] naar wie [res] vroeg. De klok van de samenvatting start bij het eerste antwoord.
+  void _telVerzonden(HttpResponse res, Verkeerssoort soort, int bytes, {String? wat, int? totaal, String? vraag}) {
+    final t = _verzonden;
+    if (t == null || bytes <= 0) return;
+    t.start();
+    t.tel(res.connectionInfo?.remoteAddress.address ?? '?', soort, bytes, wat: wat, totaal: totaal, vraag: vraag);
+  }
+
+  /// Wat een toestel zelf telde (dataverbruik.dart), in `verbruik.log` met het toestel ervoor. Begrensd zoals [_warmte].
+  Future<void> _verbruik(HttpRequest req) async {
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    String kort(Object? s, int n) {
+      final t = (s is String ? s : '').replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+      return t.length > n ? t.substring(0, n) : t;
+    }
+
+    final toestel = kort(body['toestel'], 80);
+    final adres = req.connectionInfo?.remoteAddress.address ?? '?';
+    final regels = body['regels'];
+    var n = 0;
+    if (regels is List) {
+      for (final r in regels.take(200)) {
+        _verbruikLog?.line('[${toestel.isEmpty ? '?' : toestel} $adres] ${kort(r, 600)}');
         n++;
       }
     }
@@ -3864,7 +3931,10 @@ class LanServer {
       // precies de vraag onbeantwoord laten die we hierboven stellen.
       ..set(HttpHeaders.cacheControlHeader, 'private, max-age=0, must-revalidate');
     res.headers.contentLength = bytes.length;
-    if (req.method != 'HEAD') res.add(bytes);
+    if (req.method != 'HEAD') {
+      res.add(bytes);
+      _telVerzonden(res, Verkeerssoort.hoezen, bytes.length);
+    }
     return res.close();
   }
 
@@ -3893,6 +3963,7 @@ class LanServer {
     res.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
     res.headers.contentLength = bytes.length;
     res.add(bytes);
+    _telVerzonden(res, soortVanPad(_padVan[res] ?? '', vanDePc: true), bytes.length);
     return res.close();
   }
 

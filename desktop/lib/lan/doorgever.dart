@@ -69,6 +69,7 @@ class Doorgever {
     this.storing,
     this.veranderd,
     this.geweigerd,
+    this.geleverd,
     String? geheim,
   }) : geheim = geheim ?? _maakGeheim();
 
@@ -95,6 +96,10 @@ class Doorgever {
 
   /// De pc weigert de sleutel (401).
   final void Function()? geweigerd;
+
+  /// Zoveel bytes kwamen er van de pc voor [pad] (met vraag) — het dataverbruik (dataverbruik.dart). Na elk antwoord,
+  /// ook een afgebroken: wat over de lijn ging, telt.
+  final void Function(String pad, int bytes)? geleverd;
 
   HttpServer? _server;
   DoorgeverBron? _bron;
@@ -304,11 +309,12 @@ class Doorgever {
       await boven.drain<void>().catchError((_) {});
       return res.close();
     }
-    await _pomp(boven, res, pad);
+    final binnen = await _pomp(boven, res, pad);
+    geleverd?.call(wat, binnen);
   }
 
-  /// Van de pc naar mpv, met een wacht op stilte. Zie de uitleg bovenaan.
-  Future<void> _pomp(HttpClientResponse boven, HttpResponse naar, String pad) async {
+  /// Van de pc naar mpv, met een wacht op stilte. Zie de uitleg bovenaan. Geeft terug hoeveel bytes er van de pc kwamen.
+  Future<int> _pomp(HttpClientResponse boven, HttpResponse naar, String pad) async {
     var laatst = DateTime.now();
     var wachtOpMpv = false;
     var geleverd = 0;
@@ -369,6 +375,7 @@ class Doorgever {
       wacht.cancel();
       unawaited(sub.cancel());
     }
+    return geleverd;
   }
 
   static Future<void> _dichtZonderAntwoord(HttpRequest req) async {
@@ -404,12 +411,13 @@ class Doorgever {
 
 /// [Doorgever] in een eigen isolate. Zelfde gebruik; de meldingen komen terug op deze isolate.
 class DoorgeverIsolaat {
-  DoorgeverIsolaat({this.log, this.storing, this.veranderd, this.geweigerd});
+  DoorgeverIsolaat({this.log, this.storing, this.veranderd, this.geweigerd, this.geleverd});
 
   final void Function(String regel)? log;
   final void Function()? storing;
   final void Function(String pad)? veranderd;
   final void Function()? geweigerd;
+  final void Function(String pad, int bytes)? geleverd;
 
   Isolate? _isolaat;
   SendPort? _naar;
@@ -444,6 +452,8 @@ class DoorgeverIsolaat {
           veranderd?.call('${m['pad']}');
         case 'geweigerd':
           geweigerd?.call();
+        case 'geleverd':
+          geleverd?.call('${m['pad']}', (m['bytes'] as num?)?.toInt() ?? 0);
       }
     });
     _isolaat = await Isolate.spawn(_hoofd, (van.sendPort, poort, geheim ?? ''), debugName: 'doorgever');
@@ -502,6 +512,7 @@ class DoorgeverIsolaat {
       storing: () => terug.send({'soort': 'storing'}),
       veranderd: (p) => terug.send({'soort': 'veranderd', 'pad': p}),
       geweigerd: () => terug.send({'soort': 'geweigerd'}),
+      geleverd: (p, n) => terug.send({'soort': 'geleverd', 'pad': p, 'bytes': n}),
     );
     final hier = ReceivePort();
     try {
