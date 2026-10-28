@@ -6081,6 +6081,18 @@ class DownloadManager extends ChangeNotifier {
       _log.line('"${v.artiest} — ${v.titel}": vraag om ${v.soort.voluit} vervallen — het nummer staat er niet meer');
     }
     if (weg.isNotEmpty) await vragen.bewaar();
+    // Een kopie die klaarstaat maar een nep-studio is ([nepStudioZin]) en niet beter dan je nummer: weg, zoals Weg… in het
+    // menu. Saber, 28-10-2026, over Lil' Kim, die er nog van vóór die regel stond: "How many licks staat weer tussen
+    // kiezen" — en eerder: "Ik wil geen fake enkel echt dus dan moet de app gewoon wegsmijten".
+    for (final g in lijst.alle.toList()) {
+      if (_soortBezig.contains(_soortSleutel(g.pad))) continue;
+      final kandidaat = File(g.kandidaat);
+      if (!kandidaat.existsSync()) continue;
+      final nep = nepStudioZin(kandidaat);
+      if (nep == null || (File(g.pad).existsSync() && firstIsBetter(kandidaat, File(g.pad)))) continue;
+      _log.line('"${baseName(g.pad)}": de klaargezette kopie is een $nep — weg');
+      await gooiTwijfelWeg(g.pad);
+    }
     // Een cd die nog klaarstaat van vóór "cd meteen" ([_houdCdMeteen]): nu houden, zoals een nieuwe. Op 26-10-2026
     // stonden er acht van Adele's 30.
     final cds = [
