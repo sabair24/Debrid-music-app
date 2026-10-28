@@ -51,10 +51,31 @@ void rutrackerSpoor(String s) {
 
 /// Wat een opgehaalde pagina is, in een paar woorden voor het logboek: status, lengte, en of het de
 /// Cloudflare-controle was. Zie [RuTrackerService.cloudflareUitdaging].
+///
+/// In de bytes gezocht, zonder de pagina eerst om te zetten: dit loopt voor élke opgehaalde pagina (tot zestig
+/// topicpagina's van een half tot een heel megabyte per zoekopdracht), alleen voor een logregel, op de tekendraad.
+/// Dezelfde uitkomst als [RuTrackerService.cloudflareUitdaging] zonder koppen; zie [_cfKenmerk].
 String rutrackerPaginaKenmerk(int status, List<int> bytes) {
-  final tekst = latin1.decode(bytes, allowInvalid: true);
-  final controle = RuTrackerService.cloudflareUitdaging(const {}, tekst);
+  final controle = _cfKenmerk.any((n) => _bevatKlein(bytes, n));
   return '$status, ${bytes.length} bytes${controle ? ', CONTROLE' : ''}';
+}
+
+/// De kenmerken van [RuTrackerService.cloudflareUitdaging], als kleine ASCII-letters.
+final _cfKenmerk = [for (final s in ['_cf_chl_opt', 'challenges.cloudflare.com', '__cf_chl']) s.codeUnits];
+
+/// Staat [naald] (kleine letters) in [bytes], zonder op hoofdletters te letten (alleen A–Z)?
+bool _bevatKlein(List<int> bytes, List<int> naald) {
+  final laatste = bytes.length - naald.length;
+  buiten:
+  for (var i = 0; i <= laatste; i++) {
+    for (var j = 0; j < naald.length; j++) {
+      var b = bytes[i + j];
+      if (b >= 0x41 && b <= 0x5A) b += 0x20;
+      if (b != naald[j]) continue buiten;
+    }
+    return true;
+  }
+  return false;
 }
 
 /// Wat een zoekpagina zonder één herkende resultaatrij is.

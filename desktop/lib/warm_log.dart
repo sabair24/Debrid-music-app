@@ -57,6 +57,7 @@ class WarmLog {
   void line(String s) {
     final t = DateTime.now().toIso8601String().substring(11, 23);
     final regel = '$t  $s\n';
+    if (_viaOpenBestand(regel)) return;
     for (var poging = 0; poging < 3; poging++) {
       final f = File(_path);
       try {
@@ -84,5 +85,61 @@ class WarmLog {
       // waar een verloren regel het duurst is. Twee keer 40 ms is onmerkbaar.
       if (poging < 2) sleep(const Duration(milliseconds: 40));
     }
+  }
+
+  /// Open schrijfbestanden per pad, gedeeld door elke [WarmLog] in deze isolate (er worden er overal los gemaakt).
+  ///
+  /// **Waarom (28-10-2026).** Saber: *"ik merk soms happering"*. Elke regel opende, schreef, flushte en sloot zijn
+  /// bestand, op de tekendraad, en dat kost op deze pc gemeten ~5 ms per regel (open bestand: 0,25 ms mét flush).
+  /// Er vallen tientallen regels per seconde: 43 RuTracker-regels in een halve seconde waren zo al 200 ms vast.
+  static final Map<String, RandomAccessFile> _open = {};
+
+  /// Alleen de app zet dit aan (main.dart). Uit = elke regel opent en sluit zijn bestand zoals vóór 28-10-2026: een
+  /// toets die zijn tijdelijke map opruimt, struikelt dan niet over een bestand dat nog openstaat (Windows).
+  static bool houdOpen = false;
+
+  /// Eén regel langs het open bestand, met flush zoals voorheen. Onwaar = de gewone weg hierboven doet het: het
+  /// bestand is te groot (die halveert hem), weg, of het openen faalt (zie [laatsteFout]).
+  bool _viaOpenBestand(String regel) {
+    if (!houdOpen) return false;
+    try {
+      final f = File(_path);
+      var raf = _open[_path];
+      // Weggehaald onder een open bestand: dan zou alles in een bestand zonder naam belanden.
+      if (raf != null && !f.existsSync()) {
+        _sluit();
+        raf = null;
+      }
+      raf ??= _open[_path] = f.openSync(mode: FileMode.append);
+      if (raf.lengthSync() > _maxBytes) {
+        _sluit();
+        return false;
+      }
+      raf
+        ..writeStringSync(regel)
+        ..flushSync();
+      return true;
+    } catch (e) {
+      laatsteFout = 'open $_path: $e';
+      _sluit();
+      return false;
+    }
+  }
+
+  void _sluit() {
+    try {
+      _open.remove(_path)?.closeSync();
+    } catch (_) {/* dicht is dicht */}
+  }
+
+  /// Alle open logbestanden van deze isolate dicht — voor een toets die zijn tijdelijke map wil opruimen (op
+  /// Windows gaat een open bestand niet weg). De volgende regel opent ze gewoon weer.
+  static void sluitAlles() {
+    for (final raf in _open.values) {
+      try {
+        raf.closeSync();
+      } catch (_) {/* dicht is dicht */}
+    }
+    _open.clear();
   }
 }

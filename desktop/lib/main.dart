@@ -106,6 +106,7 @@ import 'editions.dart';
 import 'connectivity.dart';
 import 'enrichment.dart';
 import 'hoes_in_bestand.dart';
+import 'haperlog.dart';
 import 'facts_warmer.dart';
 import 'ffmpeg.dart';
 import 'fingerprint.dart';
@@ -529,6 +530,11 @@ Future<void> afsluiten(LibraryStore library, SoulseekService soulseek) async {
 /// enige zin tussen verdwijnt. Twaalf is ruim genoeg om de aanroeper van de aanroeper te zien.
 void _logStapel(WarmLog log, StackTrace? stapel) {
   if (stapel == null) return;
+  // Eerst de bovenste regels zoals ze zijn, ook die van Flutter zelf: daar staat WAAR het misging. Op 28-10-2026 stond
+  // er alleen "#3 … main.dart:33979" en "#22 ZachtWiel.opPakket", en welke Flutter-aanroep de null vond, ontbrak.
+  for (final regel in stapel.toString().split('\n').take(4)) {
+    if (regel.trim().isNotEmpty && !regel.contains('package:debridmusic/')) log.line('    $regel');
+  }
   var geteld = 0;
   for (final regel in stapel.toString().split('\n')) {
     if (!regel.contains('package:debridmusic/')) continue;
@@ -717,13 +723,18 @@ Future<void> main() async {
   // `startLog` werd pas aangemaakt ná veertien awaits. Alles wat dáárvoor omviel was per definitie
   // onzichtbaar: `runApp` staat op regel 545, dus het venster blijft gewoon staan met een halfgevulde
   // app terwijl de rest van het opstarten nooit is gebeurd.
+  // Logbestanden openhouden in plaats van per regel openen en sluiten: ~5 ms → 0,25 ms per regel op de tekendraad
+  // (gemeten 28-10-2026, warm_log.dart). Alleen in de app; toetsen houden de oude weg.
+  WarmLog.houdOpen = true;
   final startLog = WarmLog('$appDir${Platform.pathSeparator}start.log');
   startLog.line('--- proces gestart (pid $pid) ---');
   // En elke fout die daarna nog ontsnapt gaat naar hetzelfde bestand. `debugPrint` wordt in een
   // release-build weggegooid, dus zonder dit verdwijnt een uitzondering spoorloos en blijft alleen het
   // symptoom over.
   FlutterError.onError = (details) {
-    startLog.line('FLUTTERFOUT: ${details.exceptionAsString()}');
+    // Met de handeling erbij ("while handling a gesture", "during layout"): dat scheidt een klik van een bouwfout.
+    startLog.line('FLUTTERFOUT: ${details.exceptionAsString()}'
+        '${details.context == null ? '' : ' — ${details.context!.toDescription()}'}');
     _logStapel(startLog, details.stack);
     FlutterError.presentError(details);
   };
@@ -1545,7 +1556,11 @@ Future<void> main() async {
         }
       },
       extra: () => '${player.playing ? 'speelt' : 'stil'} | ${GlasKwaliteit.verslag()}',
+      // Elke stilstand van de tekendraad apart in haper.log, naast de andere logboeken te leggen (28-10-2026).
+      bijStilstand: haperVast,
+      bijTraagBeeld: haperBeeld,
     ).start();
+    haperlogAan = true;
   }
 
   // Het schudlogboek (schudlog.dart; Saber, 25-10-2026: "hou vanaf nu ook een log bij van alle shuffels die ik doe van
@@ -10768,7 +10783,7 @@ class _PersonPageState extends State<PersonPage> {
                   child: GlasKnop.rond(
                     icoon: Icons.arrow_back_rounded,
                     tooltip: 'Terug',
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: () => paginaTerug(context),
                   ),
                 ),
               ],
@@ -32948,7 +32963,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   child: GlasKnop.rond(
                     icoon: Icons.arrow_back_rounded,
                     tooltip: 'Terug',
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: () => paginaTerug(context),
                   ),
                 ),
               ],
@@ -33994,7 +34009,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 GlasKnop.rond(
                     icoon: Icons.arrow_back_rounded,
                     tooltip: 'Terug',
-                    onPressed: () => Navigator.pop(context)),
+                    onPressed: () => paginaTerug(context)),
                 const SizedBox(width: 4),
                 // Twee tikken: omdraaien naar de achterkant, of wiebelen als die er (nog) niet is.
                 if (isTv)

@@ -307,4 +307,57 @@ void main() {
     expect(cast.rijVan(_a.id)!.index, 2);
     await expectLater(cast.haalUit(_a.id, 2, trackId: ids[2]), throwsStateError, reason: 'het spelende nummer niet');
   });
+
+  // Saber, 28-10-2026: "als ik de app sluit dat de kef wireless verder speelt maar de app ziet wel de kef maar niet meer
+  // wat er speelt". De sessie stond alleen in het geheugen.
+  group('na een herstart van de app', () {
+    CastManager nieuw(String pad) =>
+        CastManager(catalog: catalog, token: 't', port: 47820, upnp: upnp, startGrace: Duration.zero, sessiePad: pad)
+          ..kenSpeakersVoorToets([_a, _b]);
+
+    test('DE KERN: de app volgt de speaker weer waar hij is, zonder hem opnieuw te starten', () async {
+      final pad = '${map.path}/cast_sessies.json';
+      final eerste = nieuw(pad);
+      await eerste.play(_a.id, [ids[0], ids[1], ids[2], ids[3]], 0, alsZone: true);
+      upnp.stand[_a.id] = 'STOPPED';
+      await eerste.tikVoorToets(); // doorgeschoven naar het tweede nummer
+      await eerste.tikVoorToets(); // en die stand bewaard
+      await eerste.bewaardVoorToets;
+      eerste.dispose(); // de app gaat dicht; de speaker speelt door
+
+      upnp.opdrachten.clear();
+      final tweede = nieuw(pad);
+      addTearDown(tweede.dispose);
+      await tweede.herstelSessies();
+      expect({for (final s in tweede.laatsteStanden) s.id: titel(s.trackId!)}, {_a.id: 'Een'},
+          reason: 'wat de speaker speelt, staat weer in de zone');
+      expect(upnp.van(_a.id), isEmpty, reason: 'niet opnieuw gestart: hij speelde al');
+
+      // Is het nummer op, dan opent de app het volgende uit dezelfde rij.
+      upnp.stand[_a.id] = 'STOPPED';
+      await tweede.tikVoorToets();
+      expect(upnp.van(_a.id).first, 'open Twee');
+    });
+
+    test('DE GRENS: speelt de speaker intussen iets anders, dan laat de app hem met rust', () async {
+      final pad = '${map.path}/cast_sessies.json';
+      final eerste = nieuw(pad);
+      await eerste.play(_a.id, [ids[0], ids[1]], 0, alsZone: true);
+      await eerste.bewaardVoorToets;
+      eerste.dispose();
+
+      upnp.uri[_a.id] = 'http://192.168.0.50/radio.mp3'; // de eigen app van de speaker
+      final tweede = nieuw(pad);
+      addTearDown(tweede.dispose);
+      await tweede.herstelSessies();
+      expect(tweede.laatsteStanden, isEmpty);
+    });
+
+    test('herstelPlek: de bewaarde plek, anders waar het nummer staat, anders niets', () {
+      expect(herstelPlek(['a', 'b', 'a'], 2, 'a'), 2, reason: 'hetzelfde nummer twee keer: de bewaarde plek');
+      expect(herstelPlek(['a', 'b', 'c'], 0, 'c'), 2, reason: 'verder dan bewaard');
+      expect(herstelPlek(['a', 'b'], 1, 'z'), isNull);
+      expect(herstelPlek(['a', 'b'], 0, null), isNull, reason: 'geen antwoord van de speaker');
+    });
+  });
 }
