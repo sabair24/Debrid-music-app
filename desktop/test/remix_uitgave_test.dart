@@ -171,9 +171,9 @@ void main() {
       expect(bron('lib/main.dart'),
           contains('if (!_gasten.contains(r.key)) metNagekekenSoort(r, singles: _maxisingles, remixen: _remixAlbums),'));
       expect(bron('lib/discography_service.dart'), contains("static const schema = 'disco|v12';"));
+      expect(bron('lib/main.dart'), contains('final samen = mergeDiscography([dz.releases, mb.releases, dg.releases]);\n'));
       expect(bron('lib/main.dart'),
-          contains('volgensMusicBrainz(mergeDiscography([dz.releases, mb.releases, dg.releases]), mb.releases,\n'
-              '            artiest: naam),'));
+          contains('final alles = vulHoezenAan(volgensMusicBrainz(samen, mb.releases, artiest: naam), dg.hoezen);'));
     });
   });
 
