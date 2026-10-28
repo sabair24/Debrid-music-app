@@ -59,3 +59,8 @@ void haperNav(String s) {
 void haperVerzoek(String pad, int ms) {
   if (haperlogAan) _log.line('verzoek: $pad $ms ms');
 }
+
+/// Een groot of traag antwoord van de clouddatabase: welke verzameling, hoeveel, hoe groot.
+void haperCloud(String s) {
+  if (haperlogAan) _log.line('cloud: $s');
+}
