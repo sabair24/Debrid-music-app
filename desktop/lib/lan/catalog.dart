@@ -11,7 +11,7 @@ import '../models.dart';
 import '../organize.dart';
 import '../vaste_keuze.dart';
 import '../twijfel.dart' show twijfelUitgave, twijfelVoor;
-import '../kopiesoort.dart' show KopiesoortTekst, soortUitgave, soortVoor;
+import '../kopiesoort.dart' show KopiesoortTekst, echteSoort, soortUitgave, soortVoor;
 import '../soortjacht.dart' show gezochtVoor, soortvraagUitgave;
 import '../versies.dart' show versies;
 import 'dtos.dart';
@@ -361,7 +361,8 @@ class LanCatalog {
           luid: gepubliceerdeLuidheid(t),
           vast: isVasteKeuze(t.path),
           // Studio, cd of vinyl, en of je die zelf koos (kopiesoort.dart). Telt mee in de vingerafdruk hieronder.
-          soort: soortVoor(t.path)?.soort.naam,
+          // Zoals de meter hem laat staan: een opgeschaalde of uit een mp3 omgezette "studio" heet geen studio (28-10-2026).
+          soort: echteSoort(soortVoor(t.path)?.soort, gemeten(t.path))?.naam,
           soortGekozen: soortVoor(t.path)?.gekozen ?? false,
           zoekt: gezochtVoor(t.path)?.naam,
           versies: _versiesVan(t, root, trackById),

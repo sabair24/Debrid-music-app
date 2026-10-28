@@ -238,6 +238,40 @@ void main() {
         expect(d.heeftSoortAl(cd.path, Kopiesoort.studio), isFalse);
       });
 
+      test('een studio-VERSIE met een muur rond 20 kHz is geen bewezen studio — "studio downloaden" zoekt (28-10-2026)', () async {
+        final cd = eigen(rate: 44100, bits: 16);
+        final studio = '${map.path}/Albums/Daft Punk/Discovery (studio)/06 - Nightvision.flac';
+        versies.voegToe(cd.path, Versie(pad: studio, soort: Kopiesoort.studio), ankerSoort: Kopiesoort.cd);
+        expect(d.heeftSoortAl(cd.path, Kopiesoort.studio), isTrue);
+        onthoudOordeelVanPc(
+            studio,
+            const Echtheidsoordeel(
+                bits: Bitdiepte.spreektNietTegen,
+                boven: Bovenband.onbekend,
+                band: Bandbreedte.vermoedelijk,
+                gebruikteBits: 24,
+                afkapHz: 20850,
+                wandDb: 63.7));
+        expect(bewezenNep(studio), isFalse, reason: 'niet bewezen nep — maar ook niet bewezen studio');
+        expect(d.heeftSoortAl(cd.path, Kopiesoort.studio), isFalse);
+      });
+
+      test('je NUMMER is een "studio" met een muur rond 20 kHz: ook dan zoekt "studio downloaden" (28-10-2026)', () async {
+        final mijn = eigen(rate: 44100, bits: 24);
+        zetSoort(mijn.path, Kopiesoort.studio);
+        expect(d.heeftSoortAl(mijn.path, Kopiesoort.studio), isTrue);
+        onthoudOordeelVanPc(
+            mijn.path,
+            const Echtheidsoordeel(
+                bits: Bitdiepte.spreektNietTegen,
+                boven: Bovenband.onbekend,
+                band: Bandbreedte.vermoedelijk,
+                gebruikteBits: 24,
+                afkapHz: 20850,
+                wandDb: 63.7));
+        expect(d.heeftSoortAl(mijn.path, Kopiesoort.studio), isFalse);
+      });
+
       test('een cd die al klaarstond (van vóór de update) wordt bij het nakijken gehouden; een twijfelachtige niet', () async {
         final mijn = eigen();
         zetSoort(mijn.path, Kopiesoort.studio);

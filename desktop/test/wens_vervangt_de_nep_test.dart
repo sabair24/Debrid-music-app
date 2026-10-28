@@ -61,16 +61,17 @@ void main() {
     return f;
   }
 
-  test('DE KERN: een gemeten cd en een opgeschaalde 24/96 zijn gelijk — wat er stond blijft', () async {
-    // Tot 29-09-2026 won de cd hier. Maar een opgeschaald bestand draagt dezelfde muziek als de cd, in
-    // vier keer zoveel bytes — geen winst om een bestand van Saber voor weg te duwen.
+  test('DE KERN: een gemeten, schone cd wint van een opgeschaalde 24/96 — sinds 28-10-2026 weer', () async {
+    // Tot 29-09-2026 won de cd hier, daarna was het gelijk: een opgeschaald bestand draagt dezelfde muziek als de cd.
+    // Saber, 28-10-2026: "Ik wil geen fake enkel echt … liever cd kwaliteit dan fake studio!" Nu wint de eerlijke —
+    // maar alleen gemeten en schoon (de toets hieronder: ongemeten bewijst nog steeds niets).
     final opgeschaald = schrijf('opgeschaald.flac', 108);
     final echt = schrijf('echt.flac', 27);
     await onthoudOordeel(opgeschaald.path, _opgeschaald);
     await onthoudOordeel(echt.path, _echteCd);
 
-    expect(firstIsBetter(echt, opgeschaald), isFalse, reason: 'gelijk: de opgeschaalde blijft staan');
-    expect(firstIsBetter(opgeschaald, echt), isFalse, reason: 'en andersom evenmin');
+    expect(firstIsBetter(echt, opgeschaald), isTrue, reason: 'de eerlijke cd vervangt de nep');
+    expect(firstIsBetter(opgeschaald, echt), isFalse, reason: 'en andersom nooit');
   });
 
   test('DE STORING IS DICHT: een ONGEMETEN binnenkomer wint niet meer', () async {

@@ -988,6 +988,10 @@ String whyBetter(File keep, File drop) {
     if (kk.klasse == kd.klasse && kd.bewerkt && !kk.bewerkt) {
       return 'het origineel boven een bewerkte kopie ervan (nultoets: dezelfde master, verzet in volume)';
     }
+    if (kk.klasse == kd.klasse && kd.kopLiegt && !kk.kopLiegt) {
+      final od = _oordeelVan(drop, null);
+      return 'een eerlijke kopie boven een kop die liegt (${od == null ? 'opgeschaald' : waarom(od)})';
+    }
     if (k.nul == Nuluitkomst.lossy && kd.klasse == Klasse.uitLossy) {
       return '${kwaliteitZin(kk)} boven een gedecodeerde stream (nultoets: precies de voorloop van een aac-encoder '
           'achter)';
