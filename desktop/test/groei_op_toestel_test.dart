@@ -80,7 +80,7 @@ class _Catalogus extends LibraryStore {
   final String id;
 
   @override
-  Future<bool> loadRemote({bool quiet = false, bool naEen304 = false}) async {
+  Future<bool> loadRemote({bool quiet = false, bool naEen304 = false, bool vers = false}) async {
     tracks
       ..clear()
       ..add(t);

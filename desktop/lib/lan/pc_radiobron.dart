@@ -255,7 +255,7 @@ class PcRadiobron implements Radiobron {
       final trackId = a['trackId'];
       if (trackId is! String || trackId.isEmpty) {
         try {
-          await library.loadRemote(quiet: true);
+          await library.loadRemote(quiet: true, vers: true);
         } catch (_) {
           return null;
         }
@@ -275,7 +275,7 @@ class PcRadiobron implements Radiobron {
         if (poging > 0) await Future<void>.delayed(catalogusRitme);
         if (ronde != _ronde) return null;
         try {
-          await library.loadRemote(quiet: true);
+          await library.loadRemote(quiet: true, vers: true);
         } catch (_) {
           continue;
         }

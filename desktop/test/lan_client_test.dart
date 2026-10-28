@@ -711,6 +711,26 @@ void main() {
       expect(c.edits.single['url'], 'https://ergens/portret.jpg');
     });
 
+    test('na je eigen keuze vraagt het toestel de echte catalogus, ook onderweg', () async {
+      // Saber, 28-10-2026, op de wifi van een bedrijf: "Al men behandelingen blijven hangen als ik bevoorbeeld vinyl
+      // als standaard wil kiezen, moet ik de app sluiten voor de verandering er is". Onderweg vroeg elke herlading
+      // alleen het merkteken (zuinig, 3.9.659) — ook die na je eigen keuze.
+      final pc = _pc();
+      final c = _client(pc.library);
+      c.library.zuinigeCatalogus = () => true;
+      await c.library.loadRemote();
+      c.requests.clear();
+      await c.library.loadRemote(quiet: true);
+      expect(c.requests.where((r) => r.startsWith('/api/catalog')).single, contains('alleenMerk=1'),
+          reason: 'de gewone peiling blijft zuinig');
+      c.requests.clear();
+      await c.library.loadRemote(quiet: true, vers: true);
+      expect(c.requests.where((r) => r.startsWith('/api/catalog')).single, isNot(contains('alleenMerk')),
+          reason: 'na je eigen keuze de echte catalogus');
+      final main = File('lib/main.dart').readAsStringSync();
+      expect(main, isNot(contains('loadRemote(quiet: true)')), reason: 'elke herlading na een eigen keuze is vers');
+    });
+
     test('een kop die je op de iPad instelt, gaat naar de pc en staat hier meteen goed', () async {
       // Zelfde val als de artiestfoto hierboven, plus één: tot de catalogus terug is, sprong de kop
       // anders even terug naar wat hij was — en een knop die even het omgekeerde doet, leest als stuk.
