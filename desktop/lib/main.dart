@@ -9289,6 +9289,9 @@ class _MetadataEditorState extends State<MetadataEditor> {
   String? _pickedMbid;
   Uint8List? _pickedCover;
 
+  /// De volle hoes van de rij die je aanwees, zolang hij nog onderweg is. [_applyInner] wacht erop.
+  Future<void>? _hoesOnderweg;
+
   /// Welke regels je hebt opengeklapt, en wat er onder zit.
   ///
   /// **Gevraagd op 05-09-2026.** Saber: *"moet ik ook op voorhand de uitgavens kunnen openklappen,
@@ -9506,12 +9509,17 @@ class _MetadataEditorState extends State<MetadataEditor> {
     // Zonder dat zou er een hoes van 150 pixels als `correctedCover` weggeschreven worden: de
     // hoogste voorrang die er is, bewaard op schijf, en bij elke start weer teruggeladen.
     final zoeker = MetadataSearch(context.read<AppSettings>());
-    final teBewaren = m.bewaarCover ?? (m.coverIsMiniatuur ? await zoeker.volleHoes(m) : null);
-    if (!mounted || !identical(_picked, m)) return;
-    if (teBewaren != null) {
-      final bytes = await CoverEnricher(context.read<AppSettings>()).downloadImage(teBewaren);
-      if (mounted && identical(_picked, m)) setState(() => _pickedCover = bytes);
-    }
+    final verrijker = CoverEnricher(context.read<AppSettings>());
+    final hoes = () async {
+      try {
+        final teBewaren = m.bewaarCover ?? (m.coverIsMiniatuur ? await zoeker.volleHoes(m) : null);
+        if (!mounted || !identical(_picked, m) || teBewaren == null) return;
+        final bytes = await verrijker.downloadImage(teBewaren);
+        if (mounted && identical(_picked, m)) setState(() => _pickedCover = bytes);
+      } catch (_) {/* geen hoes is geen fout: de correctie gaat dan zonder hoes door */}
+    }();
+    _hoesOnderweg = hoes;
+    await hoes;
   }
 
   Future<void> _apply() async {
@@ -9532,7 +9540,29 @@ class _MetadataEditorState extends State<MetadataEditor> {
     // Eén nummer aangewezen? Dan gaat de PLAAT in het albumveld en de opname in het titelveld — ook
     // als dit album verder geen single is. Zie [MetadataEditor.nummer].
     final los = widget.nummer;
-    final geschreven = await context.read<LibraryStore>().applyCorrection(
+    // Eerst de hoes van de rij die je aanwees: die wordt pas bij het aanwijzen opgehaald. Wie meteen
+    // op Toepassen drukte, kreeg zijn VORIGE voorkant terug, want [_pickedCover] was nog leeg en dan
+    // laat [LibraryStore.applyCorrection] de hoes staan. Hoogstens 20 s, daarna zonder hoes verder.
+    final hoes = _hoesOnderweg;
+    if (hoes != null) {
+      try {
+        await hoes.timeout(const Duration(seconds: 20));
+      } catch (_) {/* zonder hoes verder, zoals bij een rij die er geen heeft */}
+    }
+    if (!mounted) return;
+    final lib = context.read<LibraryStore>();
+    // Een andere persing = haar voorkant, achterkant en cd, zoals in "Uitgave kiezen". Niet bij één
+    // aangewezen nummer: de scans horen bij het album dat blijft staan. Zie [LibraryStore.wisseltPersing].
+    if (los == null &&
+        LibraryStore.wisseltPersing(
+            nieuweRelease: _pickedRelease,
+            nieuweMbid: _pickedMbid,
+            huidigeRelease: lib.pinnedRelease(widget.album),
+            huidigeMbid: lib.pinnedMbid(widget.album))) {
+      await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title);
+    }
+    if (!mounted) return;
+    final geschreven = await lib.applyCorrection(
           widget.album,
           context.read<AppSettings>(),
           artist: _artist.text,
