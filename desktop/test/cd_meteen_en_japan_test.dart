@@ -294,6 +294,21 @@ void main() {
         await d.soortvragenNakijken();
         expect(d.twijfel!.van(mijn.path)?.id, 'echt', reason: 'een echte 24 bit blijft staan tot je kiest');
         expect(echt.existsSync(), isTrue);
+
+        // Een vinylrip die opgeschaald is, kwam bij binnenkomst als vinylversie door: het nakijken houdt dezelfde maat.
+        d.twijfel!.verwijder(mijn.path);
+        final vinyl = File('${map.path}/_twijfel/vinyl.flac')
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(_flac(rate: 192000, bits: 24, seconden: 235));
+        onthoudOordeelVanPc(
+            vinyl.path,
+            const Echtheidsoordeel(
+                bits: Bitdiepte.spreektNietTegen, boven: Bovenband.leeg, band: Bandbreedte.doorlopend, gebruikteBits: 24));
+        d.twijfel!.zet(Twijfelgeval(
+            id: 'vinyl', pad: mijn.path, kandidaat: vinyl.path, bron: 'Soulseek x', score: .86, kwaliteit: 'FLAC 24/192',
+            ms: 1, grootte: vinyl.lengthSync(), bronpad: r'@@x\Like A Virgin (Vinyl 24-192)\01.flac'));
+        await d.soortvragenNakijken();
+        expect(d.twijfel!.van(mijn.path)?.id, 'vinyl', reason: 'zoals bij binnenkomst: een vinylversie, geen nep-studio');
       });
 
       test('je NUMMER is een "studio" met een muur rond 20 kHz: ook dan zoekt "studio downloaden" (28-10-2026)', () async {
