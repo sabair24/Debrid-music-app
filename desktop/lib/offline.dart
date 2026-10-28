@@ -64,6 +64,19 @@ class OfflineTrack {
   ({int rate, int bits})? get grens =>
       grensRate > 0 ? (rate: grensRate, bits: grensBits < 0 ? 0 : grensBits) : null;
 
+  /// Dezelfde kopie op een andere plek (zie [OfflineStore.verhuisNaarOpenbaar]).
+  OfflineTrack metBestand(String nieuw) => OfflineTrack(
+        path: path,
+        file: nieuw,
+        bytes: bytes,
+        title: title,
+        artist: artist,
+        album: album,
+        savedAt: savedAt,
+        grensRate: grensRate,
+        grensBits: grensBits,
+      );
+
   Map<String, dynamic> toJson() => {
         'path': path,
         'file': file,
@@ -207,6 +220,9 @@ class OfflineStore extends ChangeNotifier {
 
   bool has(String path) => _tracks.containsKey(path);
 
+  /// Hoeveel ruimte de kopieën van [paden] hier innemen — voor de vraag vóór het weghalen.
+  int bytesVan(Iterable<String> paden) => paden.fold(0, (som, p) => som + (_tracks[p]?.bytes ?? 0));
+
   /// Loopt of wacht dit nummer? **Een mislukte taak is niet bezig.** Anders blijft de knop die
   /// hierop afgaat uitgezet staan en is opnieuw proberen onmogelijk.
   bool isBusy(String path) => _jobs[path]?.bezig ?? false;
@@ -328,6 +344,102 @@ class OfflineStore extends ChangeNotifier {
   ({int rate, int bits})? grensVoor(String libraryPath) => _tracks[libraryPath]?.grens;
 
   Directory get _dir => appSubdir(map);
+
+  /// De openbare map voor de kopieën, of null: dan in de eigen map van de app, zoals eerst.
+  ///
+  /// Saber, 28-10-2026: "ik moet ook direct naar de map kunnen gaan" — een echte map in Bestanden
+  /// (Muziek/Debrid Music op een gsm, Op mijn iPad › Debrid Music), met de indeling van de pc ([pcPadVoor]).
+  /// Alleen voor wat je zelf bewaart: het vooruithalen blijft in zijn eigen map.
+  Directory? Function()? openbareMap;
+
+  /// Waar [libraryPath] op de pc staat, ten opzichte van de bibliotheekmap (`TrackDto.rel`), of null.
+  String? Function(String libraryPath)? pcPadVoor;
+
+  /// Na het wegzetten of weghalen van een bestand in de openbare map: Android laat andere apps (en Bestanden) het
+  /// pas zien na een mediascan.
+  void Function(String bestand)? naWijziging;
+
+  /// Waar de kopie van [libraryPath] in de openbare map hoort, of null als die er niet is of de pc het pad niet
+  /// meegaf. De indeling van de pc, met [extensie] in plaats van de eigen (een omgezette APE wordt FLAC).
+  String? openbaarPad(String libraryPath, String extensie) {
+    final open = openbareMap?.call();
+    final rel = pcPadVoor?.call(libraryPath);
+    if (open == null || rel == null || rel.trim().isEmpty) return null;
+    // Nooit uit de map: geen "..", geen lege stukken, en tekens die gedeelde opslag op Android weigert.
+    final stukken = [
+      for (final s in rel.replaceAll('\\', '/').split('/'))
+        if (s.trim().isNotEmpty && s != '.' && s != '..') s.replaceAll(RegExp(r'[<>:"|?*\x00-\x1F]'), '_'),
+    ];
+    if (stukken.isEmpty) return null;
+    final laatste = stukken.removeLast();
+    final punt = laatste.lastIndexOf('.');
+    final stam = punt > 0 ? laatste.substring(0, punt) : laatste;
+    final ext = extensie.isEmpty ? 'flac' : extensie;
+    return [open.path, ...stukken, '$stam.$ext'].join(Platform.pathSeparator);
+  }
+
+  /// Staat [bestand] in de openbare map?
+  bool _inOpenbaar(String bestand) {
+    final open = openbareMap?.call();
+    return open != null && bestand.startsWith('${open.path}${Platform.pathSeparator}');
+  }
+
+  /// Verplaatsen, ook naar een andere schijf: op Android liggen de eigen map van de app en Muziek/ op twee
+  /// verschillende, en dan weigert hernoemen.
+  static Future<void> _verplaats(File van, String naar) async {
+    await File(naar).parent.create(recursive: true);
+    if (await File(naar).exists()) await File(naar).delete();
+    try {
+      await van.rename(naar);
+    } on FileSystemException {
+      await van.copy(naar);
+      await van.delete();
+    }
+  }
+
+  /// Lege mappen opruimen tot aan de openbare map, na het weghalen van [bestand].
+  void _ruimLegeMappenOp(String bestand) {
+    final open = openbareMap?.call();
+    if (open == null) return;
+    var map = File(bestand).parent;
+    while (map.path.length > open.path.length && map.path.startsWith(open.path)) {
+      try {
+        if (map.listSync().isNotEmpty) return;
+        map.deleteSync();
+      } catch (_) {
+        return;
+      }
+      map = map.parent;
+    }
+  }
+
+  /// Alles wat nog in de eigen map van de app staat, één keer naar de openbare map — zonder opnieuw te
+  /// downloaden (Saber, 28-10-2026: "Verhuizen naar de map"). Wat de pc nog niet beschreef ([pcPadVoor] null),
+  /// blijft tot een volgende keer staan. Geeft het aantal verhuisde kopieën.
+  Future<int> verhuisNaarOpenbaar() async {
+    if (openbareMap?.call() == null) return 0;
+    var n = 0;
+    for (final t in List.of(_tracks.values)) {
+      if (_inOpenbaar(t.file)) continue;
+      final punt = t.file.lastIndexOf('.');
+      final naar = openbaarPad(t.path, punt > 0 ? t.file.substring(punt + 1) : 'flac');
+      if (naar == null) continue;
+      try {
+        if (!await File(t.file).exists()) continue;
+        await _verplaats(File(t.file), naar);
+        _tracks[t.path] = t.metBestand(naar);
+        naWijziging?.call(naar);
+        n++;
+      } catch (e) {
+        debugPrint('Offline: niet verhuisd: $e');
+      }
+    }
+    if (n > 0) {
+      await _save();
+      notifyListeners();
+    }
+    return n;
+  }
   File get _index => appFile(indexNaam);
 
   Future<void> load() async {
@@ -365,6 +477,14 @@ class OfflineStore extends ChangeNotifier {
   /// characters Android's filesystem refuses, and two pressings of one album share a title — the
   /// path is already unique and the index knows what it means.
   File _fileFor(String libraryPath, String extension) {
+    final open = openbaarPad(libraryPath, extension.isEmpty ? 'bin' : extension);
+    if (open != null) return File(open);
+    return _eigenBestand(libraryPath, extension);
+  }
+
+  /// Een naam in de eigen map van de app. Daar staan ook altijd de halve bestanden: in de openbare map zou een
+  /// `.part` midden in je muziek staan, en een andere speler zou hem proberen te lezen.
+  File _eigenBestand(String libraryPath, String extension) {
     final digest = sha1.convert(utf8.encode(libraryPath)).toString().substring(0, 16);
     final ext = extension.isEmpty ? 'bin' : extension;
     return File('${_dir.path}${Platform.pathSeparator}$digest.$ext');
@@ -378,7 +498,7 @@ class OfflineStore extends ChangeNotifier {
   }
 
   File _deelFor(String libraryPath) =>
-      File('${_fileFor(libraryPath, _extVan(libraryPath)).path}.part');
+      File('${_eigenBestand(libraryPath, _extVan(libraryPath)).path}.part');
 
   /// Naast het halve bestand: hoe groot het hele hoort te worden.
   ///
@@ -387,7 +507,7 @@ class OfflineStore extends ChangeNotifier {
   /// helften van twee verschillende bestanden aan elkaar plakken. Dat speelt af als ruis, en niets
   /// meldt dat er iets mis is. De maat vergelijken vangt precies dat geval.
   File _stempelFor(String libraryPath) =>
-      File('${_fileFor(libraryPath, _extVan(libraryPath)).path}.part.json');
+      File('${_eigenBestand(libraryPath, _extVan(libraryPath)).path}.part.json');
 
   Future<void> _gooiDeelWeg(String libraryPath) async {
     for (final f in [_deelFor(libraryPath), _stempelFor(libraryPath)]) {
@@ -613,8 +733,8 @@ class OfflineStore extends ChangeNotifier {
 
       // Into place only once it is whole. A half file that a crash left behind would otherwise be
       // indistinguishable from a finished one and would play as a track that stops halfway.
-      if (await target.exists()) await target.delete();
-      await temp.rename(target.path);
+      await _verplaats(temp, target.path);
+      if (_inOpenbaar(target.path)) naWijziging?.call(target.path);
       await _gooiDeelWeg(libraryPath); // de stempel hoort bij het halve bestand, niet bij het hele
 
       // De grens uit het adres waarmee hij gehaald is, zodat het scherm straks kan zeggen wat er in
@@ -702,6 +822,10 @@ class OfflineStore extends ChangeNotifier {
     try {
       final f = File(t.file);
       if (await f.exists()) await f.delete();
+      if (_inOpenbaar(t.file)) {
+        _ruimLegeMappenOp(t.file);
+        naWijziging?.call(t.file);
+      }
     } catch (e) {
       debugPrint('Offline file not deleted: $e');
     }

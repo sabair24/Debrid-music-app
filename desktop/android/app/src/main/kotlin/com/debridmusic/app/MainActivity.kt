@@ -1,10 +1,12 @@
 package com.debridmusic.app
 
+import android.Manifest
 import android.app.usage.NetworkStats
 import android.app.usage.NetworkStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
@@ -13,10 +15,12 @@ import android.net.NetworkRequest
 import android.net.TrafficStats
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.Process
+import android.provider.DocumentsContract
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.ryanheise.audioservice.AudioServiceActivity
@@ -285,6 +289,31 @@ class MainActivity : AudioServiceActivity() {
                 }
             }
 
+        // De openbare map voor wat je op dit toestel bewaart (Saber, 28-10-2026): Muziek/Debrid Music, met de
+        // indeling van de pc. Zie lib/toestelmap.dart.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "debridmusic/bestanden")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "mag" -> result.success(magAlleBestanden())
+                    "vraag" -> {
+                        vraagAlleBestanden()
+                        result.success(null)
+                    }
+                    "muziekMap" -> result.success(
+                        File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Debrid Music")
+                            .absolutePath
+                    )
+                    "scan" -> {
+                        // Andere apps (en Bestanden) zien een nieuw of weggehaald bestand pas na een mediascan.
+                        val pad = call.argument<String>("pad")
+                        if (!pad.isNullOrBlank()) MediaScannerConnection.scanFile(this, arrayOf(pad), null, null)
+                        result.success(null)
+                    }
+                    "open" -> result.success(openMap(call.argument<String>("pad") ?: ""))
+                    else -> result.notImplemented()
+                }
+            }
+
         // Bijwerken vanuit de app. Zie lib/updater.dart voor de kant die de APK binnenhaalt.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "debridmusic/updater")
             .setMethodCallHandler { call, result ->
@@ -319,6 +348,64 @@ class MainActivity : AudioServiceActivity() {
      * Zonder dit vooraf te vragen opent het installatiescherm en sluit het meteen weer, zonder een
      * woord — wat leest als een update die stuk is in plaats van als een ontbrekend vinkje.
      */
+    /** Mag de app overal in de gedeelde opslag schrijven ("Toegang tot alle bestanden" vanaf Android 11)? */
+    private fun magAlleBestanden(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+
+    /**
+     * Het scherm waar je "Toegang tot alle bestanden" voor deze app aanzet. De app zet het nooit zelf aan; jij
+     * doet het daar, één keer. Onder Android 11 de gewone vraag om schrijfrechten.
+     */
+    private fun vraagAlleBestanden() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                        .setData(Uri.parse("package:$packageName"))
+                )
+            } catch (e: Exception) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+        } else {
+            requestPermissions(
+                arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.READ_EXTERNAL_STORAGE), 4711
+            )
+        }
+    }
+
+    /**
+     * De map in een bestandsbeheerder openen. Eerst Mijn bestanden van Samsung (dat opent een pad rechtstreeks;
+     * de S26), anders de map via de Bestanden-app van Android.
+     */
+    private fun openMap(pad: String): Boolean {
+        try {
+            startActivity(Intent("samsung.myfiles.intent.action.LAUNCH_MY_FILES").apply {
+                setPackage("com.sec.android.app.myfiles")
+                putExtra("samsung.myfiles.intent.extra.START_PATH", pad)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+            return true
+        } catch (e: Exception) {
+            // Geen Samsung: hieronder verder.
+        }
+        val wortel = Environment.getExternalStorageDirectory().absolutePath
+        val rel = pad.removePrefix(wortel).trimStart('/')
+        val uri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:$rel")
+        return try {
+            startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun magInstalleren(): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             packageManager.canRequestPackageInstalls()

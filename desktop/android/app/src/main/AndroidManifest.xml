@@ -16,6 +16,13 @@
          meteen weer, zonder een woord — wat leest als een update die stuk is. Het is bovendien een
          recht dat de gebruiker per app moet aanzetten; de app vraagt er zelf om, één keer. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- Wat je op dit toestel bewaart, in een echte map: Muziek/Debrid Music, met de indeling van de pc (Saber,
+         28-10-2026: "ik moet ook direct naar de map kunnen gaan"). "Toegang tot alle bestanden" zodat de app die map
+         ook na een herinstallatie kan herkennen, vervangen en opruimen; Saber zet het zelf aan, de app vraagt het
+         één keer. Onder Android 11 de gewone schrijfrechten. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
 
     <!-- One APK for the phone and the TV. A Shield has no touchscreen, and required="true" — the
          default — would hide the app from its store and its launcher entirely. -->

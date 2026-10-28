@@ -24,7 +24,11 @@ class Afspeellijsten extends GedeeldeOps {
 
   final _random = Random();
 
+  /// Heeft de pc al een keer gezegd welke lijsten er zijn? Zie `Favorieten.gehoord`.
+  bool gehoord = false;
+
   void vanServer(Iterable<dynamic> ruw) {
+    gehoord = true;
     _vanPc
       ..clear()
       ..addEntries([

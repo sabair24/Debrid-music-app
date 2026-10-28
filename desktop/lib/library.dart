@@ -3615,6 +3615,14 @@ class LibraryStore extends ChangeNotifier {
     if (hoesInstellingen != null) unawaited(loadRemoteCovers(hoesInstellingen));
   }
 
+  /// Waar elk nummer op de pc staat, ten opzichte van de bibliotheekmap (`TrackDto.rel`), per pad zoals het hier
+  /// heet. Voor de openbare map op een gsm of iPad (`OfflineStore.openbareMap`): dezelfde indeling als op de pc.
+  final Map<String, String> _pcPaden = {};
+
+  /// Zie [_pcPaden]. Op de pc zelf het pad ten opzichte van de bibliotheekmap.
+  String? pcPadVan(String path) =>
+      isRemote ? _pcPaden[path] : (rootPath.isEmpty ? null : relPathOf(path, rootPath));
+
   /// The PC's id for a track we are showing, for anything that has to name tracks TO the PC —
   /// removing them, moving them, or handing a queue to a speaker.
   String? remoteTrackId(String path) => _remoteTrackId(path);
@@ -3701,6 +3709,7 @@ class LibraryStore extends ChangeNotifier {
     // Gelijk volume: de meting van de pc, onder dezelfde sleutel (grootte|tijd) als op de pc — het
     // Track hier krijgt die twee uit deze DTO. Zie luidheid_winkel.dart.
     onthoudLuidheidVanPc(sizeBytes: d.sizeBytes, addedMs: d.addedMs, luid: d.luid);
+    if (d.rel case final r?) _pcPaden[pad] = r;
     final t = _trackFromDtoMet(d, pad);
     if (d.versies case final vs?) _versiesUitDto(t, vs);
     return t;

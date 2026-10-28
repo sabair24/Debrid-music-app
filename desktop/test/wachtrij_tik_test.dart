@@ -70,9 +70,10 @@ void main() {
   group('aangesloten', () {
     test('elke tik op een nummer in een lijst vraagt; Speel alles en Shuffle alles vervangen gewoon', () {
       final main = _lees('lib/main.dart');
-      expect(main, contains('onPressed: () => speelGetikt(context, widget.queue, widget.index, cover: widget.albumCover),'),
+      // Zolang je nummers kiest (Saber, 28-10-2026) kiest een tik; anders vraagt hij, zoals altijd.
+      expect(main, contains(': speelGetikt(context, widget.queue, widget.index, cover: widget.albumCover),'),
           reason: 'een album');
-      expect(main, contains('onTap: () => speelGetikt(context, tracks, i),'), reason: 'de Tracks-lijst');
+      expect(main, contains('onTap: () => nummerKeuze.actief ? nummerKeuze.wissel(t) : speelGetikt(context, tracks, i),'), reason: 'de Tracks-lijst');
       expect(main, contains('onTap: () => speelGetikt(context, nummers, i),'), reason: 'een afspeellijst');
       expect(main, contains('onTap: () => speelGetikt(context, alles, plek),'), reason: 'de favorieten');
       expect(main, contains('playQueue(tracks, 0)'), reason: 'Speel alles blijft vervangen');
