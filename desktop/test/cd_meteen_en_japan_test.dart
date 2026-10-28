@@ -256,6 +256,46 @@ void main() {
         expect(d.heeftSoortAl(cd.path, Kopiesoort.studio), isFalse);
       });
 
+      test('een nep-studio die al klaarstond (Lil\' Kim, van vóór de regel) gaat bij het nakijken weg; een echte blijft', () async {
+        // Saber, 28-10-2026: "How many licks staat weer tussen kiezen, of was dit nog voor de update ??"
+        final oud = DownloadManager.prullenbak;
+        DownloadManager.prullenbak = (_) async => <String>{};
+        addTearDown(() => DownloadManager.prullenbak = oud);
+        final mijn = eigen(rate: 44100, bits: 16);
+        onthoudOordeelVanPc(mijn.path,
+            const Echtheidsoordeel(bits: Bitdiepte.onbekend, boven: Bovenband.onbekend, band: Bandbreedte.doorlopend));
+        File kandidaat(String id) => File('${map.path}/_twijfel/$id.flac')
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(_flac(rate: 44100, bits: 24, seconden: 235));
+        Twijfelgeval geval(String id, File k, String pad) => Twijfelgeval(
+            id: id, pad: pad, kandidaat: k.path, bron: 'Soulseek LGSONE', score: .86, kwaliteit: 'FLAC 24/44,1', ms: 1,
+            grootte: k.lengthSync());
+        final nep = kandidaat('nep');
+        onthoudOordeelVanPc(
+            nep.path,
+            const Echtheidsoordeel(
+                bits: Bitdiepte.spreektNietTegen,
+                boven: Bovenband.onbekend,
+                band: Bandbreedte.vermoedelijk,
+                gebruikteBits: 24,
+                afkapHz: 20850,
+                wandDb: 63.7));
+        d.twijfel!.zet(geval('nep', nep, mijn.path));
+        await d.soortvragenNakijken();
+        expect(d.twijfel!.van(mijn.path), isNull, reason: 'een mp3 in 24 bit, niet beter dan je cd: weg');
+        expect(nep.existsSync(), isFalse);
+
+        final echt = kandidaat('echt');
+        onthoudOordeelVanPc(
+            echt.path,
+            const Echtheidsoordeel(
+                bits: Bitdiepte.spreektNietTegen, boven: Bovenband.onbekend, band: Bandbreedte.doorlopend, gebruikteBits: 24));
+        d.twijfel!.zet(geval('echt', echt, mijn.path));
+        await d.soortvragenNakijken();
+        expect(d.twijfel!.van(mijn.path)?.id, 'echt', reason: 'een echte 24 bit blijft staan tot je kiest');
+        expect(echt.existsSync(), isTrue);
+      });
+
       test('je NUMMER is een "studio" met een muur rond 20 kHz: ook dan zoekt "studio downloaden" (28-10-2026)', () async {
         final mijn = eigen(rate: 44100, bits: 24);
         zetSoort(mijn.path, Kopiesoort.studio);
