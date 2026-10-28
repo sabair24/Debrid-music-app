@@ -6089,7 +6089,12 @@ class DownloadManager extends ChangeNotifier {
       final kandidaat = File(g.kandidaat);
       if (!kandidaat.existsSync()) continue;
       final nep = nepStudioZin(kandidaat);
-      if (nep == null || (File(g.pad).existsSync() && firstIsBetter(kandidaat, File(g.pad)))) continue;
+      if (nep == null) continue;
+      // Dezelfde maat als bij binnenkomst: wat beter is dan je nummer, of een andere versie (een vinylrip), blijft.
+      if (File(g.pad).existsSync() &&
+          (firstIsBetter(kandidaat, File(g.pad)) || versieplanVoor(kandidaat, g.pad, g.bronpad ?? g.bron).isVersie)) {
+        continue;
+      }
       _log.line('"${baseName(g.pad)}": de klaargezette kopie is een $nep — weg');
       await gooiTwijfelWeg(g.pad);
     }
