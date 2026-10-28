@@ -228,7 +228,18 @@ class Warmtemeter {
     this.venster = const Duration(seconds: 10),
     this.perZending = 3,
     this.toestelstand = iosToestelstand,
+    this.bijStilstand,
+    this.stilstandVanafMs = 120,
+    this.bijTraagBeeld,
   });
+
+  /// Elke keer dat de klok van 100 ms [stilstandVanafMs] of meer te laat afging, met hoeveel (ms). Op de pc schrijft
+  /// dat `haper.log` (haperlog.dart); los meegegeven, zodat een toets nooit in de echte appmap schrijft.
+  final void Function(int ms)? bijStilstand;
+  final int stilstandVanafMs;
+
+  /// Elk beeld dat 25 ms of langer bouwde of rasterde (ms, ms) — los, met zijn eigen tijdstip in haper.log.
+  final void Function(int bouwenMs, int rasterenMs)? bijTraagBeeld;
 
   /// Stuurt een bundel regels naar de pc. Gooit bij een fout; de regels blijven dan bewaard.
   final Future<void> Function(List<String> regels) stuur;
@@ -284,6 +295,7 @@ class Warmtemeter {
         ..start();
       final te = us - 100000;
       if (te > 0) _vertraagdUs += te > 2000000 ? 2000000 : te;
+      if (te >= stilstandVanafMs * 1000) bijStilstand?.call(te ~/ 1000);
     });
     _vensterKlok = Timer.periodic(venster, (_) => unawaited(sluitVenster()));
   }
@@ -321,6 +333,7 @@ class Warmtemeter {
       _rasterUs += r;
       if (b > _buildMaxUs) _buildMaxUs = b;
       if (r > _rasterMaxUs) _rasterMaxUs = r;
+      if (b >= 25000 || r >= 25000) bijTraagBeeld?.call(b ~/ 1000, r ~/ 1000);
     }
   }
 

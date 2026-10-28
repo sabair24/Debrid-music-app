@@ -60,6 +60,7 @@ import 'torbox_stand.dart';
 import 'vaste_keuze.dart';
 import 'vervangjacht.dart';
 import 'zoekplafond.dart';
+import 'haperlog.dart';
 
 /// Hoort deze bron te worden teruggedeeld nadat je hem hebt binnengehaald?
 ///
@@ -1324,6 +1325,10 @@ class DownloadJob {
 
 /// Streams TorBox + Soulseek downloads into the music library (with progress), then rescans.
 class DownloadManager extends ChangeNotifier {
+  /// Wat de luisteraars samen kosten, in haper.log als het traag is (28-10-2026). Zie haperlog.dart.
+  @override
+  void notifyListeners() => traagMeten('downloads meldt', super.notifyListeners);
+
   final OnlineService online;
   final SoulseekService soulseek;
   final String musicRoot;

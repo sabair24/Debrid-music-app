@@ -287,7 +287,7 @@ jobs:
             test/album_facts_test.dart test/album_genre_test.dart \
             test/album_id_test.dart test/api_url_test.dart \
             test/aria2_test.dart test/aria2_zoeken_test.dart \
-            test/art_roles_test.dart test/artist_name_test.dart \
+            test/art_roles_test.dart test/warm_log_open_test.dart test/artist_name_test.dart \
             test/artwork_test.dart test/atomic_state_test.dart \
             test/audiodb_art_test.dart test/auto_bladeren_test.dart \
             test/auto_hoezen_test.dart test/beeldmedia_test.dart \

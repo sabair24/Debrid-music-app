@@ -33,6 +33,7 @@ import 'prullenbak.dart' as pb;
 import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
+import 'haperlog.dart';
 import 'nultoets_meter.dart' show alleNultoetsen;
 import 'integriteit.dart' show kapotSleutels, onthoudHeelheid;
 import 'luidheid_winkel.dart' show onthoudLuidheidVanPc, zetLuidheidStatusVanPc;
@@ -864,6 +865,11 @@ class LibraryStore extends ChangeNotifier {
   List<Album> albums = [];
   bool scanning = false;
   int scanned = 0;
+
+  /// Wat de luisteraars van een melding samen op de tekendraad kosten, in haper.log als het traag is (28-10-2026:
+  /// een herscan na een download hield de draad ~0,5 s vast, en het meeste daarvan stond in geen enkele stap).
+  @override
+  void notifyListeners() => traagMeten('bibliotheek meldt', super.notifyListeners);
 
   /// Loopt er een hoezenronde? Voor de hartslag. Het regeltje onder het menu kijkt naar [hoezenOphalen].
   bool enriching = false;

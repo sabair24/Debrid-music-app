@@ -6,6 +6,7 @@ import '../beeldvorm.dart';
 import '../library.dart';
 import '../echtheid_oordelen.dart';
 import '../enrichment.dart';
+import '../haperlog.dart';
 import '../luidheid_winkel.dart' show gepubliceerdeLuidheid, gepubliceerdeStatus, luidheidUitgave;
 import '../models.dart';
 import '../organize.dart';
@@ -53,7 +54,7 @@ class CatalogSnapshot {
   /// Eén hoesje dat je iPad opvraagt kon dus een volledige JSON-codering van de hele bibliotheek op
   /// de pc uitlokken. Die twee wegen hebben aan `trackById` en `albumById` genoeg; nu betalen ze ook
   /// alleen daarvoor.
-  late final List<int> json = utf8.encode(jsonEncode(catalog.toJson()));
+  late final List<int> json = traagMeten('catalogus json', () => utf8.encode(jsonEncode(catalog.toJson())));
 
   /// Dezelfde catalogus, ingepakt — één keer berekend per versie.
   ///
@@ -68,7 +69,7 @@ class CatalogSnapshot {
   /// Lui en gecachet, want dit hangt aan de momentopname en niet aan het verzoek: een tweede toestel
   /// dat dezelfde versie ophaalt betaalt het inpakken geen tweede keer. En de ETag blijft die van de
   /// ONgecomprimeerde inhoud, zodat een 304 hetzelfde blijft betekenen.
-  late final List<int> gzipJson = gzip.encode(json);
+  late final List<int> gzipJson = traagMeten('catalogus inpakken', () => gzip.encode(json));
 }
 
 /// Turns [LibraryStore] into the wire catalogue, and keeps it fresh.
@@ -157,7 +158,7 @@ class LanCatalog {
   CatalogSnapshot snapshot() {
     final cached = _snapshot;
     if (!_dirty && cached != null) return cached;
-    final built = _build();
+    final built = traagMeten('catalogus bouwen', _build);
     _snapshot = built;
     _dirty = false;
     return built;

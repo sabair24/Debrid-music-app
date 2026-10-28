@@ -18,6 +18,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'haperlog.dart';
 import 'tv.dart';
 import 'ui/glas.dart';
 import 'ui/maten.dart';
@@ -51,7 +52,12 @@ PageRoute<T> paginaRoute<T>(WidgetBuilder bouw) => PaginaRoute<T>(bouw);
 class PaginaRoute<T> extends PageRouteBuilder<T> {
   PaginaRoute(WidgetBuilder bouw)
       : super(
-          pageBuilder: (context, _, terug) => _metBalkRuimte(bouw(context), terug),
+          pageBuilder: (context, _, terug) {
+            final pagina = bouw(context);
+            // Welke pagina er bovenop komt, in haper.log (28-10-2026: een pagina die op niets meer reageerde).
+            haperNav('pagina ${pagina.runtimeType}');
+            return _metBalkRuimte(pagina, terug);
+          },
           transitionDuration: kOvergang,
           reverseTransitionDuration: kOvergang,
           transitionsBuilder: _schuif,
@@ -240,6 +246,23 @@ Widget _schuif(
 Future<T?> openPagina<T>(BuildContext c, WidgetBuilder bouw) =>
     (binnenNav.currentState ?? Navigator.of(c)).push<T>(paginaRoute<T>(bouw));
 
+/// De terugknop van een pagina: terug langs haar eigen navigator, en als haar context daar niet meer aan hangt,
+/// langs de binnennavigator.
+///
+/// **Waarom (28-10-2026, 19:43).** Saber zat vast op een albumpagina uit de catalogus ("bevroren scherm"): acht klikken
+/// op terug, en elke keer "Null check operator used on a null value" uit `Navigator.pop(context)` — die context hing niet
+/// meer in de boom, dus `Navigator.of` vond niets. De app tekende gewoon door; alleen terug deed niets. Hoe de knop aan
+/// een losse context kwam, is nog niet gevonden: daarom staat het in haper.log als het gebeurt.
+void paginaTerug(BuildContext context) {
+  final eigen = context.mounted ? Navigator.maybeOf(context) : null;
+  if (eigen != null) {
+    eigen.maybePop();
+    return;
+  }
+  haperNav('terug: de context van de pagina hing los — langs de binnennavigator');
+  binnenNav.currentState?.maybePop();
+}
+
 /// Zoals [openPagina], maar met een navigator die eerder is vastgelegd in plaats van een context.
 ///
 /// Nodig waar het menu al dicht is tegen de tijd dat er iets opengaat: dan is de `BuildContext` van
@@ -331,17 +354,32 @@ class StapelDiepte extends NavigatorObserver {
     GlasKwaliteit.paginaGewisseld();
   }
 
-  @override
-  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) => _meet();
+  /// Hoeveel routes er op deze navigator liggen, voor haper.log.
+  int _routes = 0;
 
   @override
-  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) => _meet();
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    haperNav('erop → ${++_routes}');
+    _meet();
+  }
 
   @override
-  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) => _meet();
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    haperNav('eraf → ${--_routes}');
+    _meet();
+  }
 
   @override
-  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) => _meet();
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    haperNav('weg → ${--_routes}');
+    _meet();
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    haperNav('vervangen → $_routes');
+    _meet();
+  }
 }
 
 /// De navigator binnen de schil, met [wortel] als enige route eronder.

@@ -17,6 +17,7 @@ import 'vaste_keuze.dart' show sleutelVoor;
 import 'versies.dart' show VersieInfo;
 import 'vooruithalen.dart';
 import 'warm_log.dart';
+import 'haperlog.dart';
 
 enum RepeatMode { off, all, one }
 
@@ -794,6 +795,11 @@ class _WisselGestopt implements Exception {
 
 class PlayerStore extends ChangeNotifier
     implements NowPlayingSource, Speelbron, Rijbediening, VolgSpeler, Radiospeler {
+  /// Wat de luisteraars samen kosten, in haper.log als het traag is (28-10-2026: een nummerwissel hield de
+  /// tekendraad tot 1,3 s vast). Zie haperlog.dart.
+  @override
+  void notifyListeners() => traagMeten('speler meldt', super.notifyListeners);
+
   /// **Ruim vooruit lezen, want de muziek komt over het netwerk.**
   ///
   /// Gemeld op 15-08-2026 na een rit: draadloos Android Auto verloor geregeld de verbinding, "zeker
