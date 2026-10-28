@@ -22068,6 +22068,8 @@ class TracksView extends StatelessWidget {
                         ),
                       ),
                       _echtheidMerk(standaardVersieVan(lib, t), metVraag: !isCompact(context)),
+                      // Op dit toestel (Saber, 28-10-2026: "merkje overal") — ook hier, in de eigen rij van Tracks.
+                      OpToestelMerk(paden: [t.path]),
                       _qualityBadge(_trackQuality(standaardVersieVan(lib, t))),
                       const SizedBox(width: 4),
                       // De looptijd valt weg op een telefoon.

@@ -110,5 +110,7 @@ void main() {
     // De merkjes.
     expect(main, contains('              OpToestelMerk(paden: [t.path]),\n              Text(_fmt(t.duration), style: kTekstKlein),'));
     expect(main, contains('OpToestelMerk(paden: [for (final t in a.tracks) t.path], rond: true)'));
+    expect(main, contains('                      OpToestelMerk(paden: [t.path]),\n                      _qualityBadge(_trackQuality(standaardVersieVan(lib, t))),'),
+        reason: 'ook in de eigen rij van Tracks');
   });
 }
