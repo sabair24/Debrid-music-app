@@ -41,6 +41,9 @@ import 'ui/kopbewerker.dart';
 import 'ui/kop_logo.dart';
 import 'ui/op_toestel.dart';
 import 'toestelmap.dart';
+import 'toestel_bijhouden.dart';
+import 'toestel_redenen.dart';
+import 'ui/nummerkeuze.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
 import 'radiostijl.dart'
@@ -1206,6 +1209,7 @@ Future<void> main() async {
   }
 
   library.addListener(naCatalogus);
+
   // De speaker vertelt elke twee seconden bij welk nummer hij is; hier gaat dat de speler in. Zonder
   // deze regel werd die index netjes doorgegeven en door niemand gelezen: de app bleef staan op het
   // nummer van de overdracht terwijl de speaker doorliep, en dan hoort de hoes op het scherm bij iets
@@ -1317,6 +1321,41 @@ Future<void> main() async {
       ..wortel = () => library.rootPath;
   }
   final lijsten = Afspeellijsten();
+  // Favorieten en de afspeellijsten die je op dit toestel houdt (Saber, 28-10-2026): wat erbij komt gaat op je gsm,
+  // wat eruit gaat verdwijnt vanzelf — tenzij het er ook om een andere reden staat (toestel_redenen.dart). Even
+  // wachten na elke wijziging, zodat een rits hartjes één ronde is.
+  await toestelRedenen.laad();
+  if (!isTv && !mode.owner) {
+    Timer? bijhoudPauze;
+    void houdBij() {
+      bijhoudPauze?.cancel();
+      bijhoudPauze = Timer(const Duration(seconds: 3), () async {
+        // Pas als de catalogus én het antwoord van de pc er zijn: anders lijkt elke favoriet verdwenen, en ging
+        // alles van je gsm.
+        if (library.tracks.isEmpty || !favorieten.gehoord || !lijsten.gehoord) return;
+        final perId = {
+          for (final t in library.tracks)
+            if (library.gedeeldId(t.path) case final id?) id: t,
+        };
+        final gewenst = <String, List<Track>>{
+          kRedenFavoriet: favorieten.nummers(library.tracks),
+          for (final id in toestelRedenen.lijsten)
+            if (lijsten.byId(id) case final l?)
+              redenLijst(id): [
+                for (final tid in l.trackIds)
+                  if (perId[tid] case final t?) t,
+              ],
+        };
+        final r = await houdLijstenBij(redenen: toestelRedenen, offline: offline, gewenst: gewenst);
+        if (r.erbij > 0 || r.weg > 0) startLog.line('op dit toestel bijgehouden: ${r.erbij} erbij, ${r.weg} weg');
+      });
+    }
+
+    favorieten.addListener(houdBij);
+    lijsten.addListener(houdBij);
+    toestelRedenen.addListener(houdBij);
+    library.addListener(houdBij);
+  }
   // Hoe vaak en hoe lang geleden je iets hoorde — de brandstof van de shuffle. Zelfde vorm als de
   // favorieten hierboven: op de pc rechtstreeks in de gedeelde staat, op een telefoon over de lijn.
   //
@@ -3727,6 +3766,7 @@ class _HomeShellState extends State<HomeShell> {
     super.initState();
     _meetNaarSectie = _gaNaar;
     _gsmKop.addListener(_volgGsmKop);
+    nummerKeuze.addListener(_keuzeVeranderd);
     if (isTv) HardwareKeyboard.instance.addHandler(_tvVangnet);
     if (isTv) _tvBeginOpStart();
     // Met toetsen bediend: dan mag de focus een rij laten oplichten ([focusLichtOp]); met de muis niet.
@@ -3997,9 +4037,19 @@ class _HomeShellState extends State<HomeShell> {
   /// staan -- en dan sluit een druk op TERUG de app terwijl er een albumpagina openstaat.
   final _kanTerug = ValueNotifier<bool>(false);
 
+  /// Hertekent de schil alleen als het kiezen begint of stopt: dan staat de balk er, en doet TERUG iets anders
+  /// (het kiezen stoppen in plaats van een pagina sluiten of de app verlaten).
+  bool _koosAl = false;
+  void _keuzeVeranderd() {
+    if (nummerKeuze.actief == _koosAl) return;
+    _koosAl = nummerKeuze.actief;
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     if (_meetNaarSectie == _gaNaar) _meetNaarSectie = null;
+    nummerKeuze.removeListener(_keuzeVeranderd);
     _gsmKop.dispose();
     _titelInBalk.dispose();
     _zoekPauze?.cancel();
@@ -4384,9 +4434,14 @@ class _HomeShellState extends State<HomeShell> {
     return ValueListenableBuilder<bool>(
       valueListenable: _kanTerug,
       builder: (context, paginaOpen, _) => PopScope(
-      canPop: terugVanaf(paginaOpen: paginaOpen, sectie: _view) == TerugActie.appVerlaten,
+      canPop: !nummerKeuze.actief && terugVanaf(paginaOpen: paginaOpen, sectie: _view) == TerugActie.appVerlaten,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
+        // Eerst het kiezen stoppen, zoals overal op Android.
+        if (nummerKeuze.actief) {
+          nummerKeuze.stop();
+          return;
+        }
         switch (terugVanaf(paginaOpen: paginaOpen, sectie: _view)) {
           // De pagina die over de sectie heen ligt.
           case TerugActie.paginaSluiten:
@@ -4677,6 +4732,15 @@ class _HomeShellState extends State<HomeShell> {
             if (zweeft)
               Positioned(top: 0, left: 0, right: 0, child: RepaintBoundary(child: _topBar())),
             if (isTv) Positioned(top: 0, left: 0, right: 0, child: _tvBovenlaag()),
+            // Nummers kiezen (Saber, 28-10-2026): de balk bovenaan, over de zoekbalk, zolang er gekozen wordt — zoals
+            // Android dat doet.
+            if (nummerKeuze.actief)
+              Positioned(
+                top: MediaQuery.paddingOf(context).top + 8,
+                left: 12,
+                right: 12,
+                child: const _NummerKeuzeBalk(),
+              ),
             // "Hier verder luisteren" stond hier, als balk boven de spelerbalk. Saber, 18-10-2026:
             // "het stoort, en als ik het wegklik kan ik het niet meer selecteren". Nu in de spelerbalk
             // zelf ([VerderKnop]).
@@ -6550,6 +6614,7 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
   /// Een download hoort niet aan een scherm te hangen. De winkel leeft langer, dus de rij zit daar;
   /// deze knop leest hem alleen nog uit.
   void _fetch(OfflineStore offline, RemoteClient client) {
+    unawaited(toestelRedenen.voegToe([for (final t in widget.album.tracks) t.path], kRedenZelf));
     offline.bewaarAlles([
       for (final t in widget.album.tracks)
         OfflineRequest(
@@ -6638,6 +6703,7 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
                 final zeker = await vraagVanToestelHalen(context, aantal: tracks.length,
                     bytes: offline.bytesVan([for (final t in tracks) t.path]));
                 if (!zeker) return;
+                await toestelRedenen.haalWeg([for (final t in tracks) t.path], kRedenZelf);
                 for (final t in tracks) {
                   await offline.remove(t.path);
                 }
@@ -6686,6 +6752,119 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
 ///
 /// Een raster met hoezen waar je op tikt is waar je naar muziek zoekt. Een lijst met bestandsnamen
 /// achter een menu is waar je naar een probleem zoekt.
+/// Het nummer van een rij, of zolang er gekozen wordt een vinkje (zie [nummerKeuze]).
+class _KeuzeOfNummer extends StatelessWidget {
+  const _KeuzeOfNummer({required this.pad, required this.nummer, this.rechts = false});
+  final String pad;
+  final Widget nummer;
+  final bool rechts;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: nummerKeuze,
+        builder: (_, __) {
+          if (!nummerKeuze.actief) return nummer;
+          final aan = nummerKeuze.isGekozen(pad);
+          return Align(
+            alignment: rechts ? Alignment.centerRight : Alignment.centerLeft,
+            child: Icon(aan ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+                size: 19, color: aan ? _accent : _muted),
+          );
+        },
+      );
+}
+
+/// De balk bovenaan zolang je nummers kiest (Saber, 28-10-2026: "ik moet kunnen opslaan op men gsm vanaf tracks,
+/// kunnen selecteren"): op dit toestel zetten, eraf halen (met de vraag ervóór), alles kiezen, en bij één nummer het
+/// menu van dat nummer — lang drukken opende dat eerst, en het mag niet zoekraken.
+class _NummerKeuzeBalk extends StatelessWidget {
+  const _NummerKeuzeBalk();
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: nummerKeuze,
+        builder: (context, _) {
+          final gekozen = nummerKeuze.gekozen;
+          final offline = context.watch<OfflineStore>();
+          final opToestel = [for (final t in gekozen) if (offline.has(t.path)) t];
+          final kanBewaren = context.read<LibraryStore>().isRemote && !isTv;
+          return Material(
+            key: const ValueKey('nummer-keuze-balk'),
+            color: kPaneel,
+            elevation: 6,
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Row(children: [
+                IconButton(
+                    key: const ValueKey('keuze-stop'),
+                    tooltip: 'Stoppen met kiezen',
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: nummerKeuze.stop),
+                Expanded(
+                  child: Text(gekozen.length == 1 ? '1 gekozen' : '${gekozen.length} gekozen',
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
+                ),
+                if (nummerKeuze.kanAllesKiezen)
+                  IconButton(
+                      key: const ValueKey('keuze-alles'),
+                      tooltip: 'Alles kiezen',
+                      icon: const Icon(Icons.select_all_rounded),
+                      onPressed: nummerKeuze.kiesAlles),
+                if (kanBewaren)
+                  IconButton(
+                      key: const ValueKey('keuze-bewaar'),
+                      tooltip: 'Op dit toestel',
+                      icon: Icon(Icons.download_for_offline_outlined, color: kAccent2),
+                      onPressed: gekozen.isEmpty ? null : () => _bewaar(context, gekozen)),
+                if (kanBewaren && opToestel.isNotEmpty)
+                  IconButton(
+                      key: const ValueKey('keuze-weg'),
+                      tooltip: 'Van dit toestel halen',
+                      icon: const Icon(Icons.delete_sweep_outlined),
+                      onPressed: () => _haalWeg(context, opToestel)),
+                if (gekozen.length == 1)
+                  IconButton(
+                      key: const ValueKey('keuze-meer'),
+                      tooltip: 'Meer',
+                      icon: const Icon(Icons.more_vert_rounded),
+                      onPressed: () {
+                        final t = gekozen.single;
+                        nummerKeuze.stop();
+                        _toonItemMenu(context, _nummerMenu(context, t));
+                      }),
+              ]),
+            ),
+          );
+        },
+      );
+
+  static Future<void> _bewaar(BuildContext context, List<Track> nummers) async {
+    final offline = context.read<OfflineStore>();
+    final melder = ScaffoldMessenger.maybeOf(context);
+    await toestelRedenen.voegToe([for (final t in nummers) t.path], kRedenZelf);
+    offline.bewaarAlles([
+      for (final t in nummers)
+        if (!offline.has(t.path)) OfflineRequest(libraryPath: t.path, title: t.title, artist: t.artist, album: t.album),
+    ]);
+    nummerKeuze.stop();
+    melder?.showSnackBar(SnackBar(
+        content: Text('${toestelOmvang(nummers.length, 0)} op dit toestel${offline.wachtOpWifi ? ' — wacht op wifi' : ''}.')));
+  }
+
+  static Future<void> _haalWeg(BuildContext context, List<Track> nummers) async {
+    final offline = context.read<OfflineStore>();
+    final zeker = await vraagVanToestelHalen(context,
+        aantal: nummers.length, bytes: offline.bytesVan([for (final t in nummers) t.path]));
+    if (!zeker) return;
+    await toestelRedenen.haalWeg([for (final t in nummers) t.path], kRedenZelf);
+    for (final t in nummers) {
+      await offline.remove(t.path);
+    }
+    nummerKeuze.stop();
+  }
+}
+
 /// Houdt "Op dit toestel" opnieuw kijkend naar de openbare map als je terugkomt in de app (zie main).
 AppLifecycleListener? toestelLeven;
 
@@ -9796,7 +9975,9 @@ class _TrackRowState extends State<TrackRow> with LichtBijMuisOfFocus {
       onEnter: (_) => muisErop(true),
       onExit: (_) => muisErop(false),
       child: Pressable(
-        onPressed: () => speelGetikt(context, widget.queue, widget.index, cover: widget.albumCover),
+        onPressed: () => nummerKeuze.actief
+            ? nummerKeuze.wissel(t)
+            : speelGetikt(context, widget.queue, widget.index, cover: widget.albumCover),
         // Hold OK for what the mouse reaches by hovering.
         //
         // "Verplaatsen" and "Verwijderen" live INSIDE this row, and Flutter's directional traversal
@@ -9806,10 +9987,11 @@ class _TrackRowState extends State<TrackRow> with LichtBijMuisOfFocus {
         //
         // Bewust NIET met een muis: daar betekent een ingehouden knop niets, en dan gooit een trage
         // klik ineens een menu open. De muis heeft de rechterknop hieronder.
-        onLongPress: _menuOpHouden
+        // Lang drukken begint het kiezen op een aanraakscherm (Saber, 28-10-2026); op een tv blijft het het menu.
+        onLongPress: isTv
             ? () => _toonItemMenu(context,
                 _nummerMenu(context, t, uitgave: widget.uitgaveRij, albumMbid: widget.albumMbid))
-            : null,
+            : (_isTouch ? () => nummerKeuze.begin(t, alles: () => widget.queue) : null),
         onSecondaryTap: (bij) => _toonItemMenu(
             context,
             _nummerMenu(context, t, uitgave: widget.uitgaveRij, albumMbid: widget.albumMbid),
@@ -9852,11 +10034,15 @@ class _TrackRowState extends State<TrackRow> with LichtBijMuisOfFocus {
             children: [
               SizedBox(
                 width: 28,
-                child: oplichten
-                    ? Icon(Icons.play_arrow_rounded, size: 18, color: _accent)
-                    : Text(widget.label ?? '${t.trackNo > 0 ? t.trackNo : widget.index + 1}',
-                        textAlign: TextAlign.right,
-                        style: kTekstKlein),
+                child: _KeuzeOfNummer(
+                  pad: t.path,
+                  rechts: true,
+                  nummer: oplichten
+                      ? Icon(Icons.play_arrow_rounded, size: 18, color: _accent)
+                      : Text(widget.label ?? '${t.trackNo > 0 ? t.trackNo : widget.index + 1}',
+                          textAlign: TextAlign.right,
+                          style: kTekstKlein),
+                ),
               ),
               const SizedBox(width: kRuimte12),
               Expanded(
@@ -13282,6 +13468,30 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
             ),
             ),
           ],
+          // Deze lijst op dit toestel houden (Saber, 28-10-2026): wat je er later aan toevoegt komt mee, wat eruit
+          // gaat verdwijnt vanzelf (main, toestel_bijhouden.dart). Niet op de pc en de tv.
+          if (context.read<LibraryStore>().isRemote && !isTv)
+            ListenableBuilder(
+              listenable: toestelRedenen,
+              builder: (context, _) {
+                final aan = toestelRedenen.houdtLijst(id);
+                return IconButton(
+                  key: const ValueKey('lijst-op-toestel'),
+                  icon: Icon(aan ? Icons.offline_pin_rounded : Icons.download_for_offline_outlined,
+                      color: aan ? kAccent2 : null),
+                  tooltip: aan ? 'Staat op dit toestel — tik om eraf te halen' : 'Op dit toestel houden',
+                  onPressed: () async {
+                    if (aan) {
+                      final offline = context.read<OfflineStore>();
+                      final zeker = await vraagVanToestelHalen(context,
+                          aantal: nummers.length, bytes: offline.bytesVan([for (final t in nummers) t.path]));
+                      if (!zeker) return;
+                    }
+                    await toestelRedenen.zetLijst(id, !aan);
+                  },
+                );
+              },
+            ),
           ]) glasInBalk(actie, plat: isCompact(context)),
           const SizedBox(width: 8),
         ],
@@ -22027,12 +22237,15 @@ class TracksView extends StatelessWidget {
                   return (ik, ik && p.playing);
                 });
                 return InkWell(
-                onTap: () => speelGetikt(context, tracks, i),
+                onTap: () => nummerKeuze.actief ? nummerKeuze.wissel(t) : speelGetikt(context, tracks, i),
                 // Op een tv de selectie op een vaste plek, zoals elke andere lijst (16-10-2026). Een
                 // InkWell is geen Pressable, dus hier stond de vierde rij half onder de spelerbalk.
                 onFocusChange: tvVolgFocus(rij),
-                onLongPress:
-                    _menuOpHouden ? () => _toonItemMenu(rij, _nummerMenu(rij, t)) : null,
+                // Lang drukken begint het kiezen (Saber, 28-10-2026); op een tv blijft het het menu. Het menu
+                // van één nummer staat dan in de balk ("Meer").
+                onLongPress: isTv
+                    ? () => _toonItemMenu(rij, _nummerMenu(rij, t))
+                    : (_isTouch ? () => nummerKeuze.begin(t, alles: () => tracks) : null),
                 onSecondaryTapDown: (d) =>
                     _toonItemMenu(rij, _nummerMenu(rij, t), bij: d.globalPosition),
                 child: Container(
@@ -22040,7 +22253,7 @@ class TracksView extends StatelessWidget {
                   color: isCurrent ? _panel : Colors.transparent,
                   child: Row(
                     children: [
-                      SizedBox(width: 22, child: Text('${i + 1}', style: TextStyle(color: _muted, fontSize: 11))),
+                      SizedBox(width: 22, child: _KeuzeOfNummer(pad: t.path, nummer: Text('${i + 1}', style: TextStyle(color: _muted, fontSize: 11)))),
                       cover(lib.coverForTrack(t), size: 40, radius: 6),
                       const SizedBox(width: 12),
                       Expanded(
@@ -32625,6 +32838,27 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                       ),
                     // Alleen waar er iets te hernoemen valt: een artiest uit de catalogus waarvan
                     // je niets hebt, heeft geen tags om te corrigeren.
+                    // Alles van deze artiest op dit toestel (Saber, 28-10-2026: "Een hele artiest").
+                    if (mine.isNotEmpty && !isTv && lib.isRemote)
+                      GlasKnop(
+                        key: const ValueKey('artiest-op-toestel'),
+                        icoon: Icons.download_for_offline_outlined,
+                        label: 'Op dit toestel',
+                        onPressed: () async {
+                          final offline = context.read<OfflineStore>();
+                          final melder = ScaffoldMessenger.maybeOf(context);
+                          final nummers = [for (final a in mine) ...a.tracks];
+                          await toestelRedenen.voegToe([for (final t in nummers) t.path], kRedenZelf);
+                          offline.bewaarAlles([
+                            for (final t in nummers)
+                              if (!offline.has(t.path))
+                                OfflineRequest(libraryPath: t.path, title: t.title, artist: t.artist, album: t.album),
+                          ]);
+                          melder?.showSnackBar(SnackBar(
+                              content: Text('${toestelOmvang(nummers.length, 0)} van ${widget.artist.name} op dit toestel'
+                                  '${offline.wachtOpWifi ? ' — wacht op wifi' : ''}.')));
+                        },
+                      ),
                     if (mine.isNotEmpty && !isTv) ...[
                       // Waar een in tweeën gevallen discografie weer één wordt. De naam is het
                       // enige waar groeperen op af kan gaan, dus één album getagd als “Enrique”

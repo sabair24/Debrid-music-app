@@ -39,7 +39,12 @@ class Favorieten extends GedeeldeOps {
   final Set<String> _vanPc = {};
 
   /// Zet wat de pc als favoriet meldt. Alleen op een client; de pc is zijn eigen bron.
+  /// Heeft de pc al een keer gezegd wat je favorieten zijn? Tot dan is "geen favorieten" geen antwoord — en mag
+  /// "Op dit toestel" er niets vanzelf om weghalen (main, toestel_bijhouden.dart).
+  bool gehoord = false;
+
   void vanServer(Iterable<String> nummers, Iterable<String> albums) {
+    gehoord = true;
     final nieuw = {...nummers, ...albums};
     if (setEquals(_vanPc, nieuw)) return;
     _vanPc
