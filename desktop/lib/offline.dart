@@ -207,6 +207,9 @@ class OfflineStore extends ChangeNotifier {
 
   bool has(String path) => _tracks.containsKey(path);
 
+  /// Hoeveel ruimte de kopieën van [paden] hier innemen — voor de vraag vóór het weghalen.
+  int bytesVan(Iterable<String> paden) => paden.fold(0, (som, p) => som + (_tracks[p]?.bytes ?? 0));
+
   /// Loopt of wacht dit nummer? **Een mislukte taak is niet bezig.** Anders blijft de knop die
   /// hierop afgaat uitgezet staan en is opnieuw proberen onmogelijk.
   bool isBusy(String path) => _jobs[path]?.bezig ?? false;

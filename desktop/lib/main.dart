@@ -39,6 +39,7 @@ import 'ui/kopfoto.dart';
 import 'uploaderberichten.dart';
 import 'ui/kopbewerker.dart';
 import 'ui/kop_logo.dart';
+import 'ui/op_toestel.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
 import 'radiostijl.dart'
@@ -3948,6 +3949,10 @@ class _HomeShellState extends State<HomeShell> {
   final _searchFocus = FocusNode(skipTraversal: isTv, debugLabel: 'library search');
   String _q = '';
   QFilter _qFilter = QFilter.all;
+
+  /// Alleen wat op dit toestel staat, in Albums en Tracks (Saber, 28-10-2026). Alleen op een toestel dat
+  /// met een pc praat: op de pc zelf staat alles.
+  bool _alleenToestel = false;
   AlbumSort _sort = AlbumSort.titel;
 
   final _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -4087,6 +4092,7 @@ class _HomeShellState extends State<HomeShell> {
     // onvoorwaardelijk ja. Zonder deze regel bouwde hij per nummer per toetsaanslag twee
     // Quality-objecten en draaide hij twee regexen, om het antwoord daarna weg te gooien.
     if (_qFilter != QFilter.all && !_qFilter.matches(_trackQuality(t))) return false;
+    if (_alleenToestel && !(context.read<OfflineStore?>()?.has(t.path) ?? false)) return false;
     if (_q.isEmpty) return true;
     if (normKey(t.title).contains(_nq) ||
         normKey(t.artist).contains(_nq) ||
@@ -4227,7 +4233,32 @@ class _HomeShellState extends State<HomeShell> {
                 ),
               );
 
+  /// De schakelaar "Op dit toestel" naast het kwaliteitsfilter — alleen waar er iets op het toestel kan staan.
+  List<Widget> _toestelFilter() {
+    if (!context.read<LibraryStore>().isRemote || isTv) return const [];
+    final aan = _alleenToestel;
+    return [
+      Padding(
+        padding: const EdgeInsets.only(left: 6),
+        child: ChoiceChip(
+          key: const ValueKey('filter-op-dit-toestel'),
+          avatar: Icon(Icons.offline_pin_rounded, size: 15, color: aan ? Colors.white : kAccent2),
+          label: const Text('Op dit toestel', style: TextStyle(fontSize: 12)),
+          selected: aan,
+          onSelected: (_) => setState(() => _alleenToestel = !aan),
+          backgroundColor: kInkt.withValues(alpha: .06),
+          selectedColor: _accent,
+          labelStyle: TextStyle(color: aan ? Colors.white : _muted),
+          side: BorderSide(color: aan ? _accent : kInkt.withValues(alpha: .12)),
+          shape: const StadiumBorder(),
+          showCheckmark: false,
+        ),
+      ),
+    ];
+  }
+
   List<Widget> _filterChips() => [
+            ..._toestelFilter(),
             ...QFilter.values.map((f) {
               final sel = _qFilter == f;
               return Padding(
@@ -4353,6 +4384,9 @@ class _HomeShellState extends State<HomeShell> {
         // width. Only on a phone — a television has 960 points and a desktop has more, and the
         // strip is the better thing there.
         drawer: isCompact(context) ? _SectionsDrawer(huidig: _view, gaNaar: _gaNaar) : null,
+        // Niet met vegen vanaf de linkerrand (Saber, 28-10-2026): op Android en iOS is dat "terug", en dan opende de la
+        // telkens mee. Alleen de drie streepjes openen hem.
+        drawerEnableOpenDragGesture: false,
         // Televisions overscan: a strip around the edge of the picture falls off the screen, and
         // how much differs per set. The margin goes on the CONTENTS of the bars rather than around
         // the whole app, so the top bar's glass and the player bar's surface still reach the panel
@@ -5002,6 +5036,7 @@ class _HomeShellState extends State<HomeShell> {
                   ),
                 ),
                 _filterKeuze(),
+                ..._toestelFilter(),
                 ..._sortControl(),
                 IconButton(
                   key: const ValueKey('menu-zoek-sluiten'),
@@ -6572,6 +6607,11 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
           ? null
           : () async {
               if (all) {
+                // Eerst vragen (Saber, 28-10-2026: "als ik de knop offline dus uitschakel (weer online) dan wordt het
+                // nummer van men gsm gewist e ??"). Hier haalde één tik alles meteen weg.
+                final zeker = await vraagVanToestelHalen(context, aantal: tracks.length,
+                    bytes: offline.bytesVan([for (final t in tracks) t.path]));
+                if (!zeker) return;
                 for (final t in tracks) {
                   await offline.remove(t.path);
                 }
@@ -7160,7 +7200,11 @@ class AlbumCard extends StatelessWidget {
       hoes: (maat) {
         // Staat hij op het scherm zonder hoes, dan haalt de ronde hem eerst (zie [LibraryStore.hoesVoorrang]).
         if (a.cover == null) context.read<LibraryStore>().hoesVoorrang(a);
-        return cover(a.cover, size: maat);
+        // Met een merkje rechtsboven als de hele plaat op dit toestel staat (Saber, 28-10-2026: "merkje overal").
+        return Stack(children: [
+          cover(a.cover, size: maat),
+          Positioned(top: 6, right: 6, child: OpToestelMerk(paden: [for (final t in a.tracks) t.path], rond: true)),
+        ]);
       },
       spiegel: spiegelVan(a.cover),
       // De hoes VLIEGT naar de albumpagina in plaats van te knippen. Het label is wat de app zelf
@@ -9836,6 +9880,8 @@ class _TrackRowState extends State<TrackRow> with LichtBijMuisOfFocus {
               _qualityBadge(_trackQuality(k)),
               // Studio, cd of vinyl (kopiesoort.dart): alleen bij nieuwe downloads.
               if (!onder) _soortMerk(t, klinkt: k),
+              // Op dit toestel (Saber, 28-10-2026: "merkje overal").
+              OpToestelMerk(paden: [t.path]),
               Text(_fmt(t.duration), style: kTekstKlein),
               // "≠ 4:33" — je hebt het nummer, maar niet die versie. Klein en naast de tijd, want het
               // is een bijzonderheid en geen probleem.
