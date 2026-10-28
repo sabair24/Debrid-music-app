@@ -32056,10 +32056,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final dz = uit[0], mb = uit[1], dg = uit[2];
     // MusicBrainz beslist welke platen er zijn en van welke soort, als hij de artiest kent (Saber,
     // 20-10-2026: "gebruik dan 1 pad, MusicBrainz"); Deezer en Discogs leveren hoes, nummers en link.
-    final alles = vulHoezenAan(
-        volgensMusicBrainz(mergeDiscography([dz.releases, mb.releases, dg.releases]), mb.releases,
-            artiest: naam),
-        dg.hoezen);
+    final samen = mergeDiscography([dz.releases, mb.releases, dg.releases]);
+    final alles = vulHoezenAan(volgensMusicBrainz(samen, mb.releases, artiest: naam), dg.hoezen);
     // De hoesregel alleen als er iets IS om hoezen mee aan te vullen. Zonder Discogs-token draait de
     // zoeksweep niet, en dan zou de regel elke plaat wegvegen die alleen MusicBrainz kent. Bij
     // Michael Jackson zijn dat Off The Wall, Dangerous en Invincible.
@@ -32092,10 +32090,30 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     // Op de achtergrond: de pagina staat al, dit maakt hem alleen mooier.
     unawaited(_haalGroepHoezen(naam, alles));
 
+    // Deezer-albums die MusicBrainz niet als eigen plaat kent, maar wel als uitgave BINNEN een van zijn
+    // albums: onder Uitgaven (Saber, 28-10-2026, "Millennium 2.0" van Backstreet Boys). Na het tonen, zoals het
+    // nakijken hieronder: het kost een zoekvraag per album en gaat naar schijf, voor het volgende bezoek.
+    var vers = alles;
+    final weg = wegGevallenAlbums(samen, alles);
+    if (weg.isNotEmpty && mb.releases.isNotEmpty) {
+      final groepVan = await svc.mbGroepenVoor(naam, weg);
+      WarmLog('$logDir${Platform.pathSeparator}disco.log').line('"$naam": uitgaven volgens MusicBrainz '
+          '${groepVan.length} van ${weg.length}${groepVan.isEmpty ? '' : ': ${[
+              for (final r in weg)
+                if (groepVan.containsKey(r.refs[DiscoSource.deezer]?.id)) r.title
+            ].join(', ')}'}');
+      if (groepVan.isNotEmpty) {
+        vers = vulHoezenAan(
+            volgensMusicBrainz(samen, mb.releases, artiest: naam, mbGroepVan: groepVan), dg.hoezen);
+        _versAlles = vers;
+        _bewaar(svc, naam);
+      }
+    }
+
     // Pas NA de drie bronnen, want wat MusicBrainz of Discogs ook kent, hoeft niet nagevraagd: die
     // twee laten een gastoptreden al vallen. Dit kost een verzoek per regel die alleen Deezer kent
     // (bij Enrique Iglesias 47), en het gaat alleen naar schijf, voor het volgende bezoek.
-    final nagekeken = await svc.nakijken(naam, alles);
+    final nagekeken = await svc.nakijken(naam, vers);
     if (!mounted ||
         (nagekeken.gasten.isEmpty && nagekeken.maxisingles.isEmpty && nagekeken.remixAlbums.isEmpty)) {
       return;

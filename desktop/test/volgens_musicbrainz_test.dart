@@ -2,6 +2,8 @@
 // het beste en precies is"). De titels zijn echt, uit de metingen van 20-10-2026 (remix_bij_albums_live_test).
 import 'package:debridmusic/catalog.dart';
 import 'package:debridmusic/discography.dart';
+import 'package:debridmusic/discography_service.dart';
+import 'package:debridmusic/musicbrainz.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 var _mbNr = 0;
@@ -162,6 +164,82 @@ void main() {
       final uit = _pad([_dz('Chante Noël', '1981-01-01', 10)], mb, artiest: 'Céline Dion');
       expect(uit, hasLength(3));
       expect(uit.firstWhere((r) => r.title == 'Céline Dion chante Noël').refs[DiscoSource.deezer]?.intId, 10);
+    });
+  });
+
+  // Saber, 28-10-2026: "waarom staat de album millenium 2.0 niet in het overzicht, staat wel bij tidal". Gemeten:
+  // MusicBrainz zet "Millennium 2.0" (deluxe edition, 25th anniversary edition) in de groep van Millennium
+  // (a8fb6ac6), Deezer heeft hem als album 782757601 van 11-07-2025. "2.0" is geen staart en hij is ouder dan een
+  // halfjaar, dus viel hij weg. Saber koos: onder Uitgaven, MusicBrainz beslist.
+  group('een uitgave die MusicBrainz binnen een album kent', () {
+    const millennium = 'a8fb6ac6-a659-320f-8736-87b52ad65e3a';
+    DiscoRelease mbGroep(String t, String d, String id, {RecordKind k = RecordKind.album}) => DiscoRelease(
+          title: t,
+          kind: k,
+          firstDate: d,
+          sources: const {DiscoSource.musicbrainz},
+          refs: {DiscoSource.musicbrainz: CatalogRef.musicbrainzGroup(id)},
+        );
+    final mb = [
+      mbGroep('Backstreet Boys', '1996-05-06', 'g-bsb'),
+      mbGroep("Backstreet's Back", '1997-08-11', 'g-back'),
+      mbGroep('Millennium', '1999-04-28', millennium),
+      mbGroep('Black & Blue', '2000-11-21', 'g-bb'),
+      mbGroep('The Hits: Chapter One', '2001-10-23', 'g-hits', k: RecordKind.compilation),
+    ];
+    final dz = [
+      _dz('Millennium', '1999-05-18', 1205922),
+      _dz('Millennium 2.0', '2025-07-11', 782757601),
+    ];
+    List<DiscoRelease> pad({Map<String, String> groepVan = const {}}) => volgensMusicBrainz(
+        mergeDiscography([dz, mb]), mb,
+        artiest: 'Backstreet Boys', nu: _nu, mbGroepVan: groepVan);
+
+    test('DE KERN: Millennium 2.0 komt onder Uitgaven, en Millennium blijft één album', () {
+      final uit = pad(groepVan: {'782757601': millennium});
+      expect(_blok(uit, RecordKind.albumVersie), ['Millennium 2.0']);
+      expect(_blok(uit, RecordKind.album).where((t) => t.startsWith('Millennium')), ['Millennium']);
+      expect(uit.firstWhere((r) => r.title == 'Millennium 2.0').refs[DiscoSource.deezer]?.intId, 782757601,
+          reason: 'af te spelen via Deezer');
+    });
+
+    test('zonder antwoord van MusicBrainz blijft hij weg, zoals voorheen', () {
+      expect(pad().where((r) => r.title == 'Millennium 2.0'), isEmpty);
+    });
+
+    test('DE GRENS: alleen onder een ALBUM van MusicBrainz, niet onder een verzamelaar of een onbekende groep', () {
+      expect(pad(groepVan: {'782757601': 'g-hits'}).where((r) => r.title == 'Millennium 2.0'), isEmpty);
+      expect(pad(groepVan: {'782757601': 'g-niet-van-deze-artiest'}).where((r) => r.title == 'Millennium 2.0'),
+          isEmpty);
+    });
+
+    test('wegGevallenAlbums noemt alleen wat wegviel, niet wat aan een MusicBrainz-plaat hangt', () {
+      final samen = mergeDiscography([dz, mb]);
+      final weg = wegGevallenAlbums(samen, volgensMusicBrainz(samen, mb, artiest: 'Backstreet Boys', nu: _nu));
+      expect([for (final r in weg) r.title], ['Millennium 2.0'],
+          reason: 'Deezers Millennium zit al in de MusicBrainz-regel; daar hoeft niets gevraagd');
+    });
+
+    MbRelease zoek(String titel, String artiest, String? groep) => MbRelease.from({
+          'id': 'r-$titel',
+          'title': titel,
+          'artist-credit': [
+            {'name': artiest}
+          ],
+          if (groep != null) 'release-group': {'id': groep},
+        });
+
+    test('de zoekuitslag: precies die titel van precies die artiest', () {
+      final uitslag = [
+        zoek('Millennium', 'Backstreet Boys', millennium),
+        zoek('Millennium 2.0', 'Backstreet Boys Tribute Band', 'g-tribute'),
+        zoek('Millennium 2.0', 'Backstreet Boys', millennium),
+      ];
+      expect(groepUitZoekuitslag('Backstreet Boys', 'Millennium 2.0', uitslag), millennium);
+      expect(groepUitZoekuitslag('Backstreet Boys', 'Millennium 2.0', uitslag.take(2).toList()), isNull,
+          reason: 'Millennium zelf en een naamgenoot zeggen niets over waar 2.0 hoort');
+      expect(groepUitZoekuitslag('Backstreet Boys', 'Millennium 2.0', [zoek('Millennium 2.0', 'Backstreet Boys', null)]),
+          isNull);
     });
   });
 }

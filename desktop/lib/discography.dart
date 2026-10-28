@@ -871,13 +871,28 @@ const Duration kNieuwVenster = Duration(days: 183);
 /// [artiest]: Deezer zet de naam soms vóór of achter de titel ("Alabina, l'essentiel", "Les amours perdues -
 /// Serge Gainsbourg"). Een MusicBrainz-regel zonder Deezer-link krijgt die van zo'n regel ("L'Essentiel"),
 /// anders was hij niet af te spelen; de Deezer-regel staat dan niet nog eens apart.
+///
+/// [mbGroepVan]: Deezer-nummer → de MusicBrainz-groep waar MusicBrainz die uitgave zelf onder zet (zie
+/// [wegGevallenAlbums]). Is dat een van zijn albums, dan komt het Deezer-album onder de uitgaven, ook zonder
+/// staart in de titel en ook als het ouder is dan [kNieuwVenster]. Saber, 28-10-2026: *"waarom staat de album
+/// millenium 2.0 niet in het overzicht, staat wel bij tidal"* — voor MusicBrainz is "Millennium 2.0" (2025) de
+/// "deluxe edition, 25th anniversary edition" in de groep van Millennium, en "2.0" is geen staart.
 List<DiscoRelease> volgensMusicBrainz(List<DiscoRelease> samen, List<DiscoRelease> mb,
-    {String artiest = '', DateTime? nu}) {
+    {String artiest = '', DateTime? nu, Map<String, String> mbGroepVan = const {}}) {
   final mbAlbums = {
     for (final m in mb)
       if (soortMetTitel(m.kind, m.title) == RecordKind.album) m.key,
   };
   if (mbAlbums.length < kMbGenoeg) return zonderDeezerDubbels(samen);
+  final mbAlbumGroepen = {
+    for (final m in mb)
+      if (soortMetTitel(m.kind, m.title) == RecordKind.album)
+        if (m.refs[DiscoSource.musicbrainz] case final ref?) ref.id,
+  };
+  bool uitgaveVolgensMb(DiscoRelease r) {
+    final dz = r.refs[DiscoSource.deezer]?.id;
+    return r.kind == RecordKind.album && dz != null && mbAlbumGroepen.contains(mbGroepVan[dz]);
+  }
   final mbSleutels = {for (final m in mb) m.key};
   final perMbId = <String, DiscoRelease>{
     for (final r in samen)
@@ -945,10 +960,37 @@ List<DiscoRelease> volgensMusicBrainz(List<DiscoRelease> samen, List<DiscoReleas
   return [
     ...uit,
     for (final r in samen)
-      if (!r.refs.containsKey(DiscoSource.musicbrainz) &&
-          !gekoppeld.contains(r) &&
-          _blijftNaastMb(r, mbAlbums, mbSleutels, grens))
-        r,
+      if (!r.refs.containsKey(DiscoSource.musicbrainz) && !gekoppeld.contains(r))
+        if (_blijftNaastMb(r, mbAlbums, mbSleutels, grens))
+          r
+        else if (uitgaveVolgensMb(r))
+          DiscoRelease(
+            title: r.title,
+            kind: RecordKind.albumVersie,
+            firstDate: r.firstDate,
+            cover: r.cover,
+            trackCount: r.trackCount,
+            sources: r.sources,
+            refs: r.refs,
+          ),
+  ];
+}
+
+/// De Deezer-albums uit [samen] die [volgensMusicBrainz] liet vallen: niet bij een MusicBrainz-plaat
+/// gekoppeld en ook niet naast MusicBrainz blijven staan. Dat zijn de albums waarvoor het zin heeft MusicBrainz
+/// te vragen of hij ze als uitgave van een van zijn albums kent ([volgensMusicBrainz] `mbGroepVan`).
+///
+/// Op het Deezer-nummer en niet op het object: een gekoppelde regel zit samengevoegd in een andere regel van
+/// [uit], met hetzelfde Deezer-nummer erin.
+List<DiscoRelease> wegGevallenAlbums(List<DiscoRelease> samen, List<DiscoRelease> uit) {
+  final nogDaar = {
+    for (final r in uit)
+      if (r.refs[DiscoSource.deezer] case final ref?) ref.id,
+  };
+  return [
+    for (final r in samen)
+      if (r.kind == RecordKind.album && !r.refs.containsKey(DiscoSource.musicbrainz))
+        if (r.refs[DiscoSource.deezer] case final ref? when !nogDaar.contains(ref.id)) r,
   ];
 }
 

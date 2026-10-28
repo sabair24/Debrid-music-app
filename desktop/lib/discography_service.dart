@@ -59,6 +59,21 @@ class DiscoCache {
       DateTime.now().millisecondsSinceEpoch - fetchedMs > d.inMilliseconds;
 }
 
+/// De MusicBrainz-groep van de uitgave die [titel] heet en van [artiest] is, uit een zoekuitslag — of null.
+///
+/// Precies dezelfde titel ([discoKey]) en dezelfde artiest: de zoekvraag geeft ook "Millennium" zelf en platen
+/// van naamgenoten terug, en die zeggen niets over waar "Millennium 2.0" hoort.
+String? groepUitZoekuitslag(String artiest, String titel, List<MbRelease> uitslag) {
+  final k = discoKey(titel);
+  for (final r in uitslag) {
+    final g = r.releaseGroupId;
+    if (g == null || g.isEmpty || discoKey(r.title) != k) continue;
+    if (r.artist.isNotEmpty && artistKey(r.artist) != artistKey(artiest)) continue;
+    return g;
+  }
+  return null;
+}
+
 class DiscographyService {
   DiscographyService(this.catalog, this.mb, this.discogs);
 
@@ -230,6 +245,26 @@ class DiscographyService {
     } catch (_) {
       return const BronUitkomst(DiscoSource.musicbrainz, BronStatus.onbereikbaar, []);
     }
+  }
+
+  /// Hoogstens zoveel albums per bezoek bij [mbGroepenVoor]: één zoekvraag per stuk op de baan van 1,1 s.
+  /// Wat gevraagd is, ligt daarna in de cache van [MusicBrainzService]; de rest komt bij een volgend bezoek.
+  static const kUitgaveVragen = 12;
+
+  /// Voor elk album in [albums] (uit [wegGevallenAlbums]): onder welke MusicBrainz-groep staat die uitgave
+  /// daar? Deezer-nummer → groep, alleen waar MusicBrainz een uitgave met precies die titel van deze artiest
+  /// kent ([groepUitZoekuitslag]). Een fout of geen antwoord laat het album weg, zoals voorheen.
+  Future<Map<String, String>> mbGroepenVoor(String naam, List<DiscoRelease> albums) async {
+    final uit = <String, String>{};
+    for (final r in albums.take(kUitgaveVragen)) {
+      final dz = r.refs[DiscoSource.deezer]?.id;
+      if (dz == null) continue;
+      try {
+        final g = groepUitZoekuitslag(naam, r.title, await mb.searchReleases(naam, r.title, max: 10));
+        if (g != null) uit[dz] = g;
+      } catch (_) {/* dan blijft hij weg, zoals vóór 28-10-2026 */}
+    }
+    return uit;
   }
 
   /// Welke Discogs-artiest deze naam is: eerst via de verwijzing van MusicBrainz, dan pas op naam.
