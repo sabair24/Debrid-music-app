@@ -332,6 +332,8 @@ class LanCatalog {
           streamPath: '/stream/$tId.$ext',
           artworkRef: albId,
           ext: ext,
+          // Waar hij op de pc staat, zodat een gsm zijn kopie op dezelfde plek legt (zie [TrackDto.rel]).
+          rel: relPathOf(t.path, root),
           addedMs: t.addedMs,
           // De meting gaat mee de lijn over. Alleen hier is `t.path` nog een echt bestandspad; op
           // een iPad heet ditzelfde nummer straks een stream-URL, en dan valt er niets meer te

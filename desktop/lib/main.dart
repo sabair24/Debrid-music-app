@@ -40,6 +40,7 @@ import 'uploaderberichten.dart';
 import 'ui/kopbewerker.dart';
 import 'ui/kop_logo.dart';
 import 'ui/op_toestel.dart';
+import 'toestelmap.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
 import 'radiosmaak.dart';
 import 'radiostijl.dart'
@@ -1180,6 +1181,31 @@ Future<void> main() async {
   });
   // Offline bewaren alleen via wifi (Saber, 27-10-2026); het vooruithalen blijft juist op mobiel.
   offline.magOphalen = () => netStore.net != Netsoort.mobiel;
+  // Wat je zelf bewaart in een echte map (Saber, 28-10-2026): Muziek/Debrid Music op de gsm, Bestanden › Op mijn
+  // iPad › Debrid Music, met de indeling van de pc. Zonder "Toegang tot alle bestanden" (Android) in de eigen map,
+  // zoals eerst. Bij elke terugkeer in de app opnieuw gekeken: daar kom je vandaan als je hem net aanzette.
+  offline.openbareMap = () => openbareMapNu.value;
+  offline.pcPadVoor = library.pcPadVan;
+  offline.naWijziging = scanBestand;
+  Future<void> kijkOpenbaar() async {
+    if (isTv || mode.owner) return;
+    final map = await magOpenbaarBewaren() ? await openbareMuziekMap() : null;
+    openbareMapNu.value = map;
+    if (map == null) return;
+    final n = await offline.verhuisNaarOpenbaar();
+    if (n > 0) startLog.line('op dit toestel: $n kopieën naar ${map.path} verhuisd');
+  }
+
+  unawaited(kijkOpenbaar());
+  toestelLeven = AppLifecycleListener(onResume: () => unawaited(kijkOpenbaar()));
+  // En als de catalogus binnen is: pas dan weet de app waar elk nummer op de pc staat.
+  void naCatalogus() {
+    if (library.tracks.isEmpty) return;
+    library.removeListener(naCatalogus);
+    unawaited(kijkOpenbaar());
+  }
+
+  library.addListener(naCatalogus);
   // De speaker vertelt elke twee seconden bij welk nummer hij is; hier gaat dat de speler in. Zonder
   // deze regel werd die index netjes doorgegeven en door niemand gelezen: de app bleef staan op het
   // nummer van de overdracht terwijl de speaker doorliep, en dan hoort de hoes op het scherm bij iets
@@ -6660,6 +6686,9 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
 ///
 /// Een raster met hoezen waar je op tikt is waar je naar muziek zoekt. Een lijst met bestandsnamen
 /// achter een menu is waar je naar een probleem zoekt.
+/// Houdt "Op dit toestel" opnieuw kijkend naar de openbare map als je terugkomt in de app (zie main).
+AppLifecycleListener? toestelLeven;
+
 class OpDitToestelView extends StatelessWidget {
   const OpDitToestelView({super.key});
 
@@ -6682,6 +6711,7 @@ class OpDitToestelView extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              const ToestelMapKaart(),
               Icon(Icons.offline_pin_outlined, size: 44, color: _muted),
               const SizedBox(height: 16),
               const Text('Nog niets op dit toestel',
@@ -6700,10 +6730,16 @@ class OpDitToestelView extends StatelessWidget {
       );
     }
 
-    return AlbumsGrid(
-      albums: hier,
-      title: '${hier.length} ${hier.length == 1 ? 'plaat' : 'platen'} op dit toestel',
-    );
+    // Bovenaan de echte map (Saber, 28-10-2026: "ik moet ook direct naar de map kunnen gaan").
+    return Column(children: [
+      const ToestelMapKaart(),
+      Expanded(
+        child: AlbumsGrid(
+          albums: hier,
+          title: '${hier.length} ${hier.length == 1 ? 'plaat' : 'platen'} op dit toestel',
+        ),
+      ),
+    ]);
   }
 }
 
