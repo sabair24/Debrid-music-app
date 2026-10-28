@@ -82,10 +82,15 @@ Kopiesoort? kopiesoortVan(
 /// de kop zei 24 bit, dus heette hij studio en bood de app hem aan als studioversie naast je cd. *"Ik wil geen fake
 /// enkel echt dus dan moet de app gewoon wegsmijten … liever cd kwaliteit dan fake studio"*. Zonder soort is hij geen
 /// versie ([versiebesluit] → gewoon), en beslist de keuring alleen: niet beter, dus weg.
+///
+/// Een vinylrip waarvan de kop liegt — "24/192" maar opgeschaald uit 44,1, of opgeblazen — is evengoed nep. Saber,
+/// 28-10-2026, op de vraag of zo'n vinylrip als vinyl mag blijven: *"Weggooien"*. Een muur rond 20 kHz laat een vinylrip
+/// wel staan: dat is vaak de omzetter waarmee hij opgenomen is.
 Kopiesoort? echteSoort(Kopiesoort? soort, Echtheidsoordeel? o) {
   if (soort == null || o == null) return soort;
   if (o.band == Bandbreedte.afgekapt) return null;
   if (soort == Kopiesoort.studio && studioTegengesproken(o)) return null;
+  if (soort == Kopiesoort.vinyl && o.isNep) return null;
   return soort;
 }
 
