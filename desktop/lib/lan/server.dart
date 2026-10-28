@@ -14,6 +14,7 @@ import '../downloadbron.dart';
 import '../quality.dart' show depthRateLabel;
 import '../album_facts_resolver.dart';
 import '../enrichment.dart';
+import '../haperlog.dart';
 import '../kapot_bestand.dart';
 import '../flac_tags.dart' show readFlacTags;
 import '../versie_acties.dart';
@@ -1039,6 +1040,8 @@ class LanServer {
 
   Future<void> _serve(HttpServer server, [Ingang ingang = Ingang.http]) async {
     await for (final request in server) {
+      final klok = Stopwatch()..start();
+      final pad = request.uri.path;
       // One bad request must never take the server — and with it the whole app — down.
       unawaited(_handle(request, ingang).catchError((Object e, StackTrace s) {
         debugPrint('LAN request failed (${request.uri.path}): $e');
@@ -1046,8 +1049,18 @@ class LanServer {
           request.response.statusCode = HttpStatus.internalServerError;
           request.response.close();
         } catch (_) {/* already closed or hung up */}
+      }).whenComplete(() {
+        _meldTraagVerzoek(pad, klok.elapsedMilliseconds);
       }));
     }
+  }
+
+  /// Een verzoek dat lang duurde, in haper.log — met alleen het pad, nooit de vraag erachter (daar kan een sleutel in
+  /// staan). Haperde de pc op een vast ritme zonder één logregel (28-10-2026: om de 20,8 s ~150 ms), dan is dit waar te
+  /// zien welk toestel wat vroeg. Muziek en stromen (die lopen minuten) vallen erbuiten.
+  static void _meldTraagVerzoek(String pad, int ms) {
+    if (ms < 100 || ms >= 5000 || pad.startsWith('/stream/')) return;
+    haperVerzoek(pad, ms);
   }
 
   Future<void> _handle(HttpRequest req, [Ingang ingang = Ingang.http]) async {

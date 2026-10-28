@@ -1018,6 +1018,9 @@ class CoverEnricher {
     return gevonden == null ? null : _onthoudDigitaal(sleutel, gevonden);
   }
 
+  /// Het merk per hoes, zie [hoesMerk]. Een Expando: verdwijnt de hoes, dan verdwijnt het merk mee.
+  static final Expando<String> _merken = Expando<String>('hoesMerk');
+
   /// Een kort merkteken voor precies déze hoes.
   ///
   /// **Waarom dit bestaat.** De cachesleutel van een hoes is `fnv(artiest|titel)` — die verandert
@@ -1032,12 +1035,15 @@ class CoverEnricher {
   /// twee grepen in, en dan zou een toestel een nieuwe hoes voor de oude houden. Precies de fout die
   /// dit merk moet vóórkomen.
   ///
-  /// De kosten vallen mee: FNV over een paar honderd kilobyte is een kwestie van microseconden, en
-  /// dit gebeurt alleen bij het bouwen van een catalogusmomentopname — niet per verzoek.
+  /// **De kosten vielen níet mee (gemeten 28-10-2026).** Hier stond "een kwestie van microseconden", maar het is ~0,4 ms
+  /// per hoes van 200 KB, en de catalogus bouwt het voor élke plaat (bij Saber ~944 hoezen, ~200 MB) bij élke opbouw —
+  /// en dat is na elke wijziging van de bibliotheek, op de tekendraad. haper.log op de pc: "catalogus bouwen 756 ms",
+  /// drie keer na één download. Daarom één keer per hoes: [_merken] onthoudt het merk bij precies dát bytes-object (een
+  /// hoes wordt vervangen, nooit ter plekke veranderd), en geeft een nieuwe hoes vanzelf een nieuw merk.
   static String hoesMerk(List<int>? bytes) {
     if (bytes == null || bytes.length < 100) return '';
     // Eerst de lengte als tekst, dan de bytes zelf — twee stukken achter elkaar in dezelfde hash.
-    return fnv1aBytes(bytes, fnv1aVan(bytes.length.toString())).toRadixString(16);
+    return _merken[bytes] ??= fnv1aBytes(bytes, fnv1aVan(bytes.length.toString())).toRadixString(16);
   }
 
   String keyFor(Album a) => fnv1a('${a.artist.toLowerCase()}|${a.title.toLowerCase()}');

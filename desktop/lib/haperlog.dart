@@ -54,3 +54,8 @@ void haperBeeld(int bouwenMs, int rasterenMs) {
 void haperNav(String s) {
   if (haperlogAan) _log.line('nav: $s');
 }
+
+/// Een verzoek van een toestel aan de pc dat [ms] duurde (alleen het pad).
+void haperVerzoek(String pad, int ms) {
+  if (haperlogAan) _log.line('verzoek: $pad $ms ms');
+}

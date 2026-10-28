@@ -55,4 +55,19 @@ void main() {
   test('het merk is kort — het gaat over de lijn, per album', () {
     expect(CoverEnricher.hoesMerk(plaatje(3)).length, lessThanOrEqualTo(8));
   });
+
+  // 28-10-2026: de catalogus rekende bij elke opbouw alle ~944 hoezen opnieuw (haper.log: "catalogus bouwen 756 ms").
+  test('DE KERN: dezelfde hoes wordt één keer gerekend, niet bij elke opbouw van de catalogus', () {
+    final groot = plaatje(7, lengte: 5 * 1024 * 1024);
+    final eerste = CoverEnricher.hoesMerk(groot);
+    final klok = Stopwatch()..start();
+    for (var i = 0; i < 200; i++) {
+      expect(CoverEnricher.hoesMerk(groot), eerste);
+    }
+    // Zonder geheugen: 200 × 5 MB rekenen, seconden. Met: een opzoeking per keer.
+    expect(klok.elapsedMilliseconds, lessThan(1000));
+    // En een andere hoes (een kopie met één byte anders) krijgt gewoon zijn eigen merk.
+    final ander = Uint8List.fromList(groot)..[123456] ^= 1;
+    expect(CoverEnricher.hoesMerk(ander), isNot(eerste));
+  });
 }
