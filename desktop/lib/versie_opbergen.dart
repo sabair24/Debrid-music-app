@@ -112,21 +112,26 @@ class Versieplan {
       vervangt: vervangt);
 }
 
-/// De soort van het bestand op [pad], uit [bronpad] en zijn kop (kopiesoort.dart).
-Kopiesoort? soortVanBestand(String pad, String bronpad) {
+/// De soort van het bestand op [pad], uit [bronpad] en zijn kop (kopiesoort.dart), zoals de echtheidsmeter hem laat
+/// staan ([echteSoort]).
+///
+/// [metMeter] uit: alleen wat de kop en de tags beweren. Voor het vinylspoor ([merkVinylspoor]): een vinylrip op 44,1
+/// kHz draagt de muur van zijn omzetter, en de meter noemt dat "vermoedelijk" — dan bleef er van de studio die hij
+/// beweert niets over om op groefruis na te kijken.
+Kopiesoort? soortVanBestand(String pad, String bronpad, {bool metMeter = true}) {
   try {
     final f = File(pad);
     final kop = readFlacTags(f);
-    final soort = kopiesoortVan(
+    var soort = kopiesoortVan(
         bronpad: bronpad,
         bits: kop?.bitsPerSample ?? 0,
         hz: kop?.sampleRate ?? 0,
         verliesvrij: isVerliesvrij(soortVan(pad)));
     // Een vinylrip zonder teken in zijn pad: vaak staat het in zijn tags (MEDIA=Vinyl, het element in COMMENT).
     if (soort != null && soort != Kopiesoort.vinyl && kop != null && vinylUitTags(readFlacRawFields(f))) {
-      return Kopiesoort.vinyl;
+      soort = Kopiesoort.vinyl;
     }
-    return soort;
+    return metMeter ? echteSoort(soort, gemeten(pad)) : soort;
   } catch (_) {
     return null;
   }
@@ -244,7 +249,7 @@ String? digitaleReferentie(String anker) {
 Future<bool> merkVinylspoor(String kandidaat, String anker, String bronpad, {void Function(String regel)? log}) async {
   final meet = stilteVan;
   if (meet == null) return false;
-  final soort = soortVoor(kandidaat)?.soort ?? soortVanBestand(kandidaat, bronpad);
+  final soort = soortVoor(kandidaat)?.soort ?? soortVanBestand(kandidaat, bronpad, metMeter: false);
   if (soort != Kopiesoort.studio) return false;
   final cd = digitaleReferentie(anker);
   if (cd == null) return false;
@@ -262,11 +267,12 @@ Future<bool> merkVinylspoor(String kandidaat, String anker, String bronpad, {voi
 /// (soorten.json, het register, en anders de kop), en het besluit.
 Versieplan versieplanVoor(File nieuw, String anker, String bronpad) {
   // Wat er al over hem bekend is (een kopie die in _dubbel belandde, nam zijn soort mee), anders zijn kop en waar hij
-  // vandaan kwam.
-  var soort = soortVoor(nieuw.path)?.soort ?? soortVanBestand(nieuw.path, bronpad);
+  // vandaan kwam — zoals de meter hem laat staan ([echteSoort]).
+  var soort = echteSoort(soortVoor(nieuw.path)?.soort ?? soortVanBestand(nieuw.path, bronpad), gemeten(nieuw.path));
   var persing = soort == null ? '' : persingUit(bronpad, soort: soort);
   final g = versies.groep(anker);
-  final ankerSoort = soortVoor(anker)?.soort ?? g?.soort ?? soortVanBestand(anker, anker);
+  final ankerSoort =
+      ankerSoortGemeten(soortVoor(anker)?.soort ?? g?.soort ?? soortVanBestand(anker, anker, metMeter: false), gemeten(anker));
   final ankerPersing = g?.persing ?? '';
   final bestaande = versies.versiesVan(anker);
   // Een tweeling van het nummer of van een versie IS die, met haar soort en persing ([isTweeling]): dan beslist de

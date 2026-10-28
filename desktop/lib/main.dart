@@ -2521,6 +2521,10 @@ Future<void> main() async {
     // offline is, is dat over vijf minuten ook. Elke wens heeft bovendien zijn eigen wachttijd; dit
     // is alleen het kloppen op de deur.
     downloads.haveLossless = library.hasLossless;
+    // Wat de meter als nep betrapte, zoekt de app vanzelf opnieuw in echt (Saber, 28-10-2026: "Je mag van mij die andere
+    // fakes ook weggooien, en download ze weer in echte formaat") — zie [DownloadManager.nepInBibliotheek].
+    downloads.nepInBibliotheek = () => [for (final r in library.teVervangenBestanden()) r.track];
+    downloads.gezagVoorVervanger = library.tagsVoorVervanger;
     // Een betere versie hoort OP het bestand te landen dat er al ligt, niet in een nieuwe map die uit
     // zijn eigen albumtag volgt en ook niet ernaast onder een andere naam. Zie
     // [LibraryStore.fileOfRecording].
@@ -15199,7 +15203,11 @@ Widget _soortMerk(Track? t, {Track? klinkt, EdgeInsets marge = const EdgeInsets.
       builder: (context, _) {
         final pad = t?.path;
         if (pad == null || pad.isEmpty) return const SizedBox.shrink();
-        final s = soortVoor(klinkt?.path ?? pad);
+        // Zoals de meter hem laat staan ([echteSoort]): een opgeschaalde "studio" heet hier geen studio (28-10-2026). Op een
+        // toestel deed de pc dat al in de catalogus.
+        final ruw = soortVoor(klinkt?.path ?? pad);
+        final echt = ruw == null ? null : echteSoort(ruw.soort, gemeten(klinkt?.path ?? pad));
+        final SoortInfo? s = echt == null ? null : (soort: echt, gekozen: ruw!.gekozen);
         // Wat er nog gezocht wordt, zolang er niets klaarstaat ("cd klaar" zegt het dan zelf).
         final zoekt = twijfelVoor(pad)?.soort == null ? gezochtVoor(pad) : null;
         if (s == null && zoekt == null) return const SizedBox.shrink();

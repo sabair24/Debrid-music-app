@@ -39,14 +39,15 @@ Kwaliteit _flac(int rate, [Echtheidsoordeel? o]) =>
 
 void main() {
   group('Blood On The Dance Floor, zoals het op 29-09-2026 lag', () {
-    test('DE KERN: Is It Scary — een eerlijke 24/48 duwt een opgeschaalde 24/96 niet weg', () {
-      // Oud: 24/96, boven 22 kHz leeg (opgeschaald). Nieuw: 24/48, niets te bewijzen boven de cd.
+    test('DE KERN: Is It Scary — een ONGEMETEN 24/48 duwt een opgeschaalde 24/96 niet weg', () {
+      // Oud: 24/96, boven 22 kHz leeg (opgeschaald). Nieuw: 24/48, niets te bewijzen boven de cd, en niet gemeten.
       expect(vergelijkKwaliteit(_flac(48000), _flac(96000, _leeg)), 0,
           reason: 'gelijk — en dan blijft wat er stond');
     });
 
-    test('Stranger In Moscow — een 24/44,1 tegen een opgeschaalde 24/96: gelijk', () {
-      expect(vergelijkKwaliteit(_flac(44100, _schoon), _flac(96000, _leeg)), 0);
+    test('Stranger In Moscow — een GEMETEN schone 24/44,1 wint sinds 28-10-2026 van een opgeschaalde 24/96', () {
+      // Saber, 28-10-2026: "Ik wil geen fake enkel echt … liever cd kwaliteit dan fake studio!" Tot dan was dit gelijk.
+      expect(vergelijkKwaliteit(_flac(44100, _schoon), _flac(96000, _leeg)), greaterThan(0));
     });
 
     test('Earth Song — een ongemeten WavPack 24/96 bewijst niets tegen een FLAC', () {
@@ -116,14 +117,16 @@ void main() {
       const opgeblazen = Echtheidsoordeel(
           bits: Bitdiepte.opgeblazen, boven: Bovenband.onbekend, band: Bandbreedte.doorlopend, gebruikteBits: 16);
       expect(_flac(44100, opgeblazen).diep, isFalse);
-      expect(vergelijkKwaliteit(_flac(44100, opgeblazen), _flac(44100, zestien)), 0);
+      // En sinds 28-10-2026 verliest hij van de eerlijke 16 bit: zijn kop liegt (nep_studio_test.dart).
+      expect(vergelijkKwaliteit(_flac(44100, opgeblazen), _flac(44100, zestien)), lessThan(0));
     });
 
     test('een opgeschaalde cd vult ook alle bits — en wint dus niet', () {
       const opgeschaald = Echtheidsoordeel(
           bits: Bitdiepte.spreektNietTegen, boven: Bovenband.leeg, band: Bandbreedte.doorlopend, gebruikteBits: 24);
       expect(_flac(96000, opgeschaald).diep, isFalse);
-      expect(vergelijkKwaliteit(_flac(96000, opgeschaald), _flac(44100, zestien)), 0);
+      // En sinds 28-10-2026 verliest hij van de eerlijke cd (nep_studio_test.dart).
+      expect(vergelijkKwaliteit(_flac(96000, opgeschaald), _flac(44100, zestien)), lessThan(0));
     });
 
     test('een vermoedelijke mp3-muur met 24 bits in gebruik wint niet', () {

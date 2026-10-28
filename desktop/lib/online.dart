@@ -1335,6 +1335,13 @@ class DownloadManager extends ChangeNotifier {
   /// administratie zou ernaast gaan lopen zodra de gebruiker een map verplaatst.
   bool Function(String artist, String title)? haveLossless;
 
+  /// Wat de echtheidsmeter in je bibliotheek als nep betrapte (opgeschaald, opgeblazen, uit een mp3 omgezet, kapot), zonder
+  /// wat je zelf koos — `LibraryStore.teVervangenBestanden`. [sweepLosslessWants] zet het vanzelf op de verlanglijst.
+  List<Track> Function()? nepInBibliotheek;
+
+  /// De tags waarmee een vervanger van een betrapt nummer landt (`LibraryStore.tagsVoorVervanger`), zie [wensEchteVersies].
+  TrackTags Function(Track t)? gezagVoorVervanger;
+
   /// Waar deze opname al staat, zodat een betere versie er NAARTOE gaat in plaats van ernaast.
   ///
   /// Zonder dit bergt de app een download op volgens diens eigen albumtag, en dan landt een 24/192 van
@@ -2499,7 +2506,8 @@ class DownloadManager extends ChangeNotifier {
               bronpad: bronpad,
               bits: kop?.bitsPerSample ?? 0,
               hz: kop?.sampleRate ?? 0,
-              verliesvrij: isVerliesvrij(soortVan(pad))),
+              verliesvrij: isVerliesvrij(soortVan(pad)),
+              oordeel: gemeten(pad)),
           gekozen: gekozen);
     } catch (_) {/* dan geen label; het bestand staat goed */}
   }
@@ -2515,6 +2523,19 @@ class DownloadManager extends ChangeNotifier {
   /// draait pas boven de 48 kHz en proef A pas boven de 16 bits. "Mag blijven" betekent hier dus
   /// "niets sprak het tegen", niet "bewezen echt".
   static bool magBlijven(Echtheidsoordeel? o) => o == null || !o.isNep;
+
+  /// Waarom [f] zich studio noemt maar het niet is ([echteSoort]): "nep-studio: 24/44,1 volgens de kop, maar muur op
+  /// 20,9 kHz — …", of null. Zonder dit ging zo'n kopie weg als "een andere opname dan wat je hebt" (Lil' Kim — How
+  /// Many Licks?, 28-10-2026), of werd hij als studioversie aangeboden.
+  @visibleForTesting
+  static String? nepStudioZin(File f) {
+    final o = gemeten(f.path);
+    if (o == null || !studioTegengesproken(o)) return null;
+    final kop = readFlacTags(f);
+    if (kop == null || (kop.bitsPerSample < 24 && kop.sampleRate <= 48000)) return null;
+    final khz = (kop.sampleRate / 1000).toStringAsFixed(1).replaceAll('.0', '').replaceAll('.', ',');
+    return 'nep-studio: ${kop.bitsPerSample}/$khz volgens de kop, maar ${waarom(o)}';
+  }
 
   /// Hoe lang het bestand op dit pad werkelijk duurt, of null als dat niet te lezen valt.
   int? _duurVan(String pad) {
@@ -3759,6 +3780,12 @@ class DownloadManager extends ChangeNotifier {
     _sweeping = true;
     try {
       await vergeetWatErAlIs();
+      // Wat de meter als nep betrapte, gaat er vanzelf op — tot 28-10-2026 alleen met de knop "Laat de app zoeken". Saber,
+      // bij een opgeschaalde "studio": "Je mag van mij die andere fakes ook weggooien, en download ze weer in echte
+      // formaat, liever cd kwaliteit dan fake studio!" Weggooien doet de keuring zodra de echte binnen is (de nep gaat
+      // naar _dubbel): eerder zou je het nummer kwijt zijn. Wat er al op staat, telt niet dubbel ([wensEchteVersies]).
+      final nep = nepInBibliotheek?.call();
+      if (nep != null && nep.isNotEmpty) await wensEchteVersies(nep, gezag: gezagVoorVervanger);
       final nu = DateTime.now().millisecondsSinceEpoch;
       final rij = _wants.due(nu);
       jacht.value = jacht.value.met(opDeLijst: _wants.count);
@@ -4353,6 +4380,17 @@ class DownloadManager extends ChangeNotifier {
         !(plan?.isVersie ?? false) &&
         !magVanzelf(bestaand, _soortVanBinnen(staged, bronpad ?? bron))) {
       _log.line('   $bron: je koos ${gekozenSoort(bestaand)?.voluit} voor dit nummer, en dit is een andere soort — weggegooid');
+      await _discardStaged(staged.path);
+      return _Wenskeuring.afgewezen;
+    }
+    // Een studio die geen studio is: weg, met die reden (Saber, 28-10-2026: "Ik wil geen fake enkel echt dus dan moet de
+    // app gewoon wegsmijten"). Hij is geen versie ([echteSoort]) en niet beter, dus dit is alleen de zin.
+    final nep = nietBeter && !(plan?.isVersie ?? false) ? nepStudioZin(staged) : null;
+    if (nep != null) {
+      _log.line('   $bron: $nep — weggegooid, volgende kandidaat');
+      if (inJacht) {
+        jacht.value = jacht.value.met(weggegooid: jacht.value.weggegooid + 1, regel: 'Bij $bron: $nep — weggegooid.');
+      }
       await _discardStaged(staged.path);
       return _Wenskeuring.afgewezen;
     }
@@ -6006,10 +6044,13 @@ class DownloadManager extends ChangeNotifier {
   /// Nothing Compares 2 U die zijn eigen cd als omgezet bewees: "Kan ik weer klikken op studio downloaden?").
   @visibleForTesting
   bool heeftSoortAl(String pad, Kopiesoort soort) {
-    if (versies.versiesVan(pad).any((x) => x.soort == soort && !bewezenNep(x.pad))) return true;
+    if (versies.versiesVan(pad).any((x) => x.soort == soort && !bewezenNep(x.pad) && echteSoort(x.soort, gemeten(x.pad)) == soort)) {
+      return true;
+    }
     if (bewezenNep(pad)) return false;
     final eigen = soortVoor(pad)?.soort ?? versies.groep(pad)?.soort ?? soortVanBestand(pad, pad);
-    return eigen == soort;
+    // Een studio met een muur rond 20 kHz is geen bewezen studio ([echteSoort]): daar mag hij er wel een zoeken.
+    return echteSoort(eigen, gemeten(pad)) == soort;
   }
 
   /// De vraag voor [pad] intrekken. Een kopie die al klaarstaat, blijft staan tot je kiest.
@@ -6328,7 +6369,7 @@ class DownloadManager extends ChangeNotifier {
     await bereidNultoets(staged.path, v.pad, log: (z) => _log.line('   $z'));
     await merkVinylspoor(staged.path, v.pad, bronpad, log: _log.line);
     final soort = versieplanVoor(staged, v.pad, bronpad).soort;
-    if (soort != v.soort) return weg('geen ${v.soort.voluit} maar ${soort?.voluit ?? kwaliteitZin(kwaliteitVan(staged))}');
+    if (soort != v.soort) return weg(nepStudioZin(staged) ?? 'geen ${v.soort.voluit} maar ${soort?.voluit ?? kwaliteitZin(kwaliteitVan(staged))}');
     // Bit voor bit wat je al hebt, van een andere uploader en onder een andere naam: die voegt niets toe (Saber,
     // 26-10-2026, bij All Saints: "Ik heb 2 cd kwaliteit").
     if (await _zelfdeAlsWatJeHebt(staged.path, v.pad) case final wat?) return weg('bit voor bit dezelfde als $wat');
@@ -6577,6 +6618,21 @@ class DownloadManager extends ChangeNotifier {
               bijUitslag?.call(f, Kopieuitslag.anders);
               await _discardStaged(staged.path);
               continue;
+            }
+            // Een studio die geen studio is: weg, met die reden (28-10-2026, Lil' Kim — How Many Licks?: een mp3 in 24 bit
+            // die hier als studioversie werd aangeboden).
+            final nep = bestaand != null && !(plan?.isVersie ?? false) && !firstIsBetter(staged, File(bestaand))
+                ? nepStudioZin(staged)
+                : null;
+            if (nep != null) {
+              _log.line('   ${job.name}: ${f.username}: $nep — weggegooid');
+              bijUitslag?.call(f, Kopieuitslag.nep);
+              await _discardStaged(staged.path);
+              // Telt als een kopie die niet beter was, zoals vóór 28-10-2026 (toen verloor hij bij het opbergen).
+              if (++nietBeter < kJachtKopieen) continue;
+              _log.line('   ${job.name}: $kJachtKopieen kopieën geprobeerd, de vorige blijft');
+              settle('had al de beste kwaliteit');
+              return;
             }
             // Klinkt bewezen beter, maar de vingerafdruk twijfelt: aanbieden in plaats van weggooien (twijfel.dart).
             if (bestaand != null &&
