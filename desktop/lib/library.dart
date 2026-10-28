@@ -1935,6 +1935,29 @@ class LibraryStore extends ChangeNotifier {
     }
   }
 
+  /// Zet deze correctie een ANDERE persing vast dan er nu staat? Dan horen haar scans erbij, en
+  /// gaan de scans die je eerder aanwees weg — zie [clearAlbumArtRoles].
+  ///
+  /// **Waarom.** "Uitgave kiezen" wiste ze al, "Metadata corrigeren" niet: die zette de nieuwe
+  /// persing vast en nam je oude aanwijzingen mee naar de nieuwe naam, waar ze van die persing
+  /// bleven winnen. Saber op 28-10-2026: *"als ik bij album detail screen metadata wil corrigeren,
+  /// dan past hij de hoes, cd achterkant niet mee aan?"* Gemeten die dag: bij 48 van de 188 platen
+  /// met een persing uit een correctie stond minstens één scan van een andere persing.
+  ///
+  /// Geen nieuwe persing (een rij van Deezer of TheAudioDB, of alleen een naam rechtgezet), of
+  /// dezelfde nog eens: niets wisselt, je scans blijven staan. Een Discogs-persing in plaats van een
+  /// MusicBrainz-pin is wél een wissel, want [applyCorrection] haalt die pin dan weg.
+  static bool wisseltPersing(
+      {int? nieuweRelease, String? nieuweMbid, int? huidigeRelease, String? huidigeMbid}) {
+    if (nieuweMbid != null && nieuweMbid.isNotEmpty) {
+      return nieuweMbid.toLowerCase() != (huidigeMbid ?? '').toLowerCase();
+    }
+    if (nieuweRelease != null && nieuweRelease > 0) {
+      return nieuweRelease != huidigeRelease || (huidigeMbid ?? '').isNotEmpty;
+    }
+    return false;
+  }
+
   Future<void> _saveAlbumArtRoles() => _writeJson(_albumArtRolesFile, _albumArtRoles);
 
   // ── Chosen artist art ─────────────────────────────────────────────────────

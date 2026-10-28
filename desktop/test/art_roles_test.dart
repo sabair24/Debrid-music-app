@@ -116,4 +116,60 @@ void main() {
       expect(again.albumArtRoles('X', 'Rec'), isEmpty);
     });
   });
+
+  // Saber, 28-10-2026: "als ik bij album detail screen metadata wil corrigeren, dan past hij de hoes, cd
+  // achterkant niet mee aan?" "Metadata corrigeren" zette de nieuwe persing vast en liet je oude scans winnen.
+  group('Metadata corrigeren: een andere persing neemt haar eigen scans', () {
+    test('een andere Discogs-persing wisselt, dezelfde niet', () {
+      expect(LibraryStore.wisseltPersing(nieuweRelease: 9452134, huidigeRelease: 3190165), isTrue);
+      expect(LibraryStore.wisseltPersing(nieuweRelease: 9452134, huidigeRelease: 9452134), isFalse,
+          reason: 'dezelfde persing nog eens kiezen laat je scans staan');
+      expect(LibraryStore.wisseltPersing(nieuweRelease: 9452134), isTrue,
+          reason: 'nog niets vastgezet: de eerste persing is ook een wissel');
+    });
+
+    test('MusicBrainz net zo, zonder op hoofdletters te letten', () {
+      const a = '0d36931b-0000-4000-8000-000000000001', b = 'f7499a40-0000-4000-8000-000000000002';
+      expect(LibraryStore.wisseltPersing(nieuweMbid: b, huidigeMbid: a), isTrue);
+      expect(LibraryStore.wisseltPersing(nieuweMbid: a.toUpperCase(), huidigeMbid: a), isFalse);
+    });
+
+    test('van de ene catalogus naar de andere is een wissel', () {
+      // applyCorrection haalt de MusicBrainz-pin weg zodra er een Discogs-persing komt, en omgekeerd.
+      expect(
+          LibraryStore.wisseltPersing(nieuweRelease: 9452134, huidigeRelease: 9452134, huidigeMbid: 'abc'),
+          isTrue);
+      expect(LibraryStore.wisseltPersing(nieuweMbid: 'abc', huidigeRelease: 9452134), isTrue);
+    });
+
+    test('DE GRENS: geen persing (Deezer, TheAudioDB, alleen een naam) wisselt niets', () {
+      expect(LibraryStore.wisseltPersing(huidigeRelease: 9452134), isFalse);
+      expect(LibraryStore.wisseltPersing(nieuweRelease: 0, nieuweMbid: '', huidigeMbid: 'abc'), isFalse);
+      expect(LibraryStore.wisseltPersing(), isFalse);
+    });
+
+    String toepassen() {
+      final bron = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final begin = bron.indexOf('  Future<void> _applyInner() async {');
+      expect(begin, isNonNegative);
+      return bron.substring(begin, bron.indexOf('\n  }\n', begin));
+    }
+
+    test('DE KERN: het venster wist de scans vóór de correctie, alleen bij een hele plaat', () {
+      final lijf = toepassen();
+      final wis = lijf.indexOf('await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title);');
+      expect(wis, isNonNegative, reason: 'anders blijven je oude achterkant en cd van de nieuwe persing winnen');
+      expect(lijf.substring(0, wis), contains('if (los == null &&\n        LibraryStore.wisseltPersing('),
+          reason: 'één aangewezen nummer verhuist; de scans horen bij het album dat blijft');
+      expect(wis, lessThan(lijf.indexOf('await lib.applyCorrection(')),
+          reason: 'eerst wissen: applyCorrection neemt wat er staat mee naar de nieuwe naam');
+    });
+
+    test('DE KERN: Toepassen wacht op de hoes van de aangewezen rij', () {
+      final lijf = toepassen();
+      final wacht = lijf.indexOf('await hoes.timeout(const Duration(seconds: 20));');
+      expect(wacht, isNonNegative, reason: 'snel op Toepassen drukken gaf je vorige voorkant terug');
+      expect(wacht, lessThan(lijf.indexOf('coverBytes: _pickedCover,')));
+    });
+  });
 }
