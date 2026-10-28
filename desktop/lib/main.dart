@@ -14233,7 +14233,7 @@ List<MenuRegel> _twijfelRegels(BuildContext context, Track t, TwijfelInfo tw) {
         final ik = await thisDevice();
         final res = await c.ask('/api/twijfel', {'trackId': id, 'actie': actie, 'toestel': ik.id});
         zin = '${res['zin'] ?? 'Gedaan'}';
-        await lib.loadRemote(quiet: true);
+        await lib.loadRemote(quiet: true, vers: true);
       } else {
         zin = switch (actie) {
           'weg' => await dm!.gooiTwijfelWeg(t.path),
@@ -14558,7 +14558,7 @@ Future<String> onthoudVersie(BuildContext context, Track anker, VersieInfo v, Ve
   if (id == null || vid == null) return 'Dit nummer kent de pc niet';
   try {
     final r = await c.ask('/api/versie', {'trackId': id, 'actie': 'kies', 'versieId': vid, 'bereik': bereik.name});
-    unawaited(lib.loadRemote(quiet: true));
+    unawaited(lib.loadRemote(quiet: true, vers: true));
     return '${r['zin'] ?? 'Onthouden'}';
   } catch (e) {
     return 'Onthouden lukte niet: $e';
@@ -14853,7 +14853,7 @@ Future<void> _gooiPlaatversieWeg(BuildContext context, Album album, Plaatversie 
       laatste = 'Weggooien lukte niet: $e';
     }
   }
-  if (c != null) unawaited(lib.loadRemote(quiet: true));
+  if (c != null) unawaited(lib.loadRemote(quiet: true, vers: true));
   if (!context.mounted) return;
   _meldVersieZin(context, weg == leden.length ? '$naam: $weg nummers in de prullenbak' : (laatste ?? 'Niets weggegooid'));
 }
@@ -15272,7 +15272,7 @@ Future<void> _stopSoortvraag(BuildContext context, Track t) async {
         zin = 'Dit nummer kent de pc niet meer';
       } else {
         zin = '${(await c.ask('/api/soort/stop', {'trackId': id}))['zin'] ?? 'Gestopt'}';
-        await lib.loadRemote(quiet: true);
+        await lib.loadRemote(quiet: true, vers: true);
       }
     } else {
       zin = await dm!.trekSoortvraagIn(t.path);
@@ -15344,7 +15344,7 @@ Future<void> _houdAlleKlaargezette(BuildContext context, List<Track> klaar) asyn
       if (los != null) await speler.heropenNaLoslaten(los);
     }
   }
-  if (lib.remote != null) await lib.loadRemote(quiet: true);
+  if (lib.remote != null) await lib.loadRemote(quiet: true, vers: true);
   melder?.showSnackBar(SnackBar(
       content: Text(gehouden == 1 ? 'Eén klaargezette kopie gehouden' : '$gehouden klaargezette kopieën gehouden')));
 }

@@ -39,7 +39,7 @@ class _Catalogus extends LibraryStore {
   int geladen = 0;
 
   @override
-  Future<bool> loadRemote({bool quiet = false, bool naEen304 = false}) async {
+  Future<bool> loadRemote({bool quiet = false, bool naEen304 = false, bool vers = false}) async {
     final i = geladen < perLading.length ? geladen : perLading.length - 1;
     geladen++;
     tracks
@@ -58,7 +58,7 @@ class _Eigen extends LibraryStore {
   final Track t;
 
   @override
-  Future<bool> loadRemote({bool quiet = false, bool naEen304 = false}) async => true;
+  Future<bool> loadRemote({bool quiet = false, bool naEen304 = false, bool vers = false}) async => true;
 
   @override
   Track? ownedTrack(String artist, String title) => t;

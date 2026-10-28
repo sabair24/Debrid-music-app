@@ -3291,6 +3291,9 @@ class LibraryStore extends ChangeNotifier {
   /// Wanneer de catalogus het laatst helemaal binnenkwam.
   DateTime? _laatsteVolleCatalogus;
 
+  /// Zie [loadRemote]: de wachtende vraag moest vers zijn.
+  bool _rescanVers = false;
+
   /// Zo vaak hoogstens een nieuwe catalogus onderweg. Gemeten 27-10-2026: hij veranderde elke ~45 s door een
   /// achtergrondronde op de pc, 373 KB per keer — zo'n 30 MB per uur.
   static const kCatalogusOnderwegElke = Duration(minutes: 5);
@@ -3304,11 +3307,18 @@ class LibraryStore extends ChangeNotifier {
   /// PC has already split editions, applied the corrections you typed and honoured the pressings
   /// you pinned, and re-deriving any of that from tags would be a second implementation that
   /// drifts. Whatever you see on the PC is what lands here, including next year's grouping rule.
-  Future<bool> loadRemote({bool quiet = false, bool naEen304 = false}) async {
+  ///
+  /// [vers]: na iets wat je zelf deed (een versie kiezen, een twijfelkopie houden, een soort stoppen) altijd de echte
+  /// catalogus, ook onderweg. Saber, 28-10-2026, op de wifi van een bedrijf: "Al men behandelingen blijven hangen als ik
+  /// bevoorbeeld vinyl als standaard wil kiezen, moet ik de app sluiten voor de verandering er is" — onderweg kwam er
+  /// alleen het merkteken terug ([zuinigeCatalogus]), en de keuze pas na vijf minuten.
+  Future<bool> loadRemote({bool quiet = false, bool naEen304 = false, bool vers = false}) async {
     final client = _remote;
     if (client == null) return false;
     if (scanning) {
       _rescanQueued = true;
+      // De vraag die wacht, onthoudt of hij vers moest: anders bleef een keuze alsnog vijf minuten hangen.
+      _rescanVers = _rescanVers || vers;
       return false;
     }
     scanning = !quiet;
@@ -3316,7 +3326,8 @@ class LibraryStore extends ChangeNotifier {
 
     CatalogResponse res;
     final laatst = _laatsteVolleCatalogus;
-    final alleenMerk = (zuinigeCatalogus?.call() ?? false) &&
+    final alleenMerk = !vers &&
+        (zuinigeCatalogus?.call() ?? false) &&
         _catalogEtag != null &&
         !fromCloudMirror &&
         laatst != null &&
@@ -3368,7 +3379,7 @@ class LibraryStore extends ChangeNotifier {
       if (fromCloudMirror && !naEen304) {
         _catalogEtag = null;
         scanning = false;
-        return loadRemote(quiet: quiet, naEen304: true);
+        return loadRemote(quiet: quiet, naEen304: true, vers: vers);
       }
       scanning = false;
       if (!quiet) notifyListeners();
@@ -3388,7 +3399,9 @@ class LibraryStore extends ChangeNotifier {
 
     if (_rescanQueued) {
       _rescanQueued = false;
-      await loadRemote(quiet: quiet);
+      final metVers = _rescanVers;
+      _rescanVers = false;
+      await loadRemote(quiet: quiet, vers: metVers);
     }
     return true;
   }
@@ -3604,7 +3617,7 @@ class LibraryStore extends ChangeNotifier {
     // Straight away rather than on the next poll: the screen that asked is still open, and a
     // correction that takes fifteen seconds to appear reads as one that did not work.
     _catalogEtag = null;
-    await loadRemote(quiet: true);
+    await loadRemote(quiet: true, vers: true);
     // En de hoezen erbij halen.
     //
     // `loadRemote` bouwt NIEUWE albumobjecten, en die hebben geen hoes. Zonder deze regel stond het
@@ -5869,7 +5882,7 @@ extension LibraryMove on LibraryStore {
           ],
       });
       _catalogEtag = null;
-      await loadRemote(quiet: true);
+      await loadRemote(quiet: true, vers: true);
       return (res['moved'] as num?)?.toInt() ?? 0;
     }
     // The plan the user read, when there was one. Re-planning here would let the folder change
