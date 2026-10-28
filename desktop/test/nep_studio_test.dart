@@ -119,10 +119,13 @@ void main() {
       expect(kopiesoortVan(bronpad: 'x.flac', bits: 16, hz: 44100, oordeel: _mp3), isNull);
     });
 
-    test('een vinylrip met de muur van zijn omzetter blijft vinyl; een vinylrip uit een mp3 niet', () {
+    test('een vinylrip met de muur van zijn omzetter blijft vinyl; opgeschaald, opgeblazen of uit een mp3 niet', () {
+      // Saber, 28-10-2026, over een vinylrip die 24/192 zegt maar opgeschaald is uit 44,1: "Weggooien".
       const vinyl = r'@@x\Daft Punk - Discovery (Vinyl 24-96)\06.flac';
       expect(kopiesoortVan(bronpad: vinyl, bits: 24, hz: 44100, oordeel: _licksKandidaat), Kopiesoort.vinyl);
-      expect(kopiesoortVan(bronpad: vinyl, bits: 24, hz: 96000, oordeel: _haddawayOpgeschaald), Kopiesoort.vinyl);
+      expect(kopiesoortVan(bronpad: vinyl, bits: 16, hz: 44100, oordeel: _licksCd), Kopiesoort.vinyl);
+      expect(kopiesoortVan(bronpad: vinyl, bits: 24, hz: 96000, oordeel: _haddawayOpgeschaald), isNull);
+      expect(kopiesoortVan(bronpad: vinyl, bits: 24, hz: 44100, oordeel: _opgeblazen), isNull);
       expect(kopiesoortVan(bronpad: vinyl, bits: 24, hz: 44100, oordeel: _mp3), isNull);
     });
 

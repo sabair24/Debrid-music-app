@@ -295,7 +295,7 @@ void main() {
         expect(d.twijfel!.van(mijn.path)?.id, 'echt', reason: 'een echte 24 bit blijft staan tot je kiest');
         expect(echt.existsSync(), isTrue);
 
-        // Een vinylrip die opgeschaald is, kwam bij binnenkomst als vinylversie door: het nakijken houdt dezelfde maat.
+        // Een vinylrip die opgeschaald is: ook weg (Saber, 28-10-2026: "Weggooien"), zoals bij binnenkomst.
         d.twijfel!.verwijder(mijn.path);
         final vinyl = File('${map.path}/_twijfel/vinyl.flac')
           ..createSync(recursive: true)
@@ -308,7 +308,27 @@ void main() {
             id: 'vinyl', pad: mijn.path, kandidaat: vinyl.path, bron: 'Soulseek x', score: .86, kwaliteit: 'FLAC 24/192',
             ms: 1, grootte: vinyl.lengthSync(), bronpad: r'@@x\Like A Virgin (Vinyl 24-192)\01.flac'));
         await d.soortvragenNakijken();
-        expect(d.twijfel!.van(mijn.path)?.id, 'vinyl', reason: 'zoals bij binnenkomst: een vinylversie, geen nep-studio');
+        expect(d.twijfel!.van(mijn.path), isNull, reason: 'een vinylrip waarvan de kop liegt, is geen versie');
+        expect(vinyl.existsSync(), isFalse);
+
+        // Maar een vinylrip met alleen de muur van zijn omzetter (rond 20 kHz) is een versie, en blijft.
+        final omzetter = File('${map.path}/_twijfel/omzetter.flac')
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(_flac(rate: 44100, bits: 24, seconden: 235));
+        onthoudOordeelVanPc(
+            omzetter.path,
+            const Echtheidsoordeel(
+                bits: Bitdiepte.spreektNietTegen,
+                boven: Bovenband.onbekend,
+                band: Bandbreedte.vermoedelijk,
+                gebruikteBits: 24,
+                afkapHz: 20850,
+                wandDb: 40));
+        d.twijfel!.zet(Twijfelgeval(
+            id: 'omzetter', pad: mijn.path, kandidaat: omzetter.path, bron: 'Soulseek y', score: .86,
+            kwaliteit: 'FLAC 24/44,1', ms: 1, grootte: omzetter.lengthSync(), bronpad: r'@@y\Like A Virgin (Vinyl 24-44)\A1.flac'));
+        await d.soortvragenNakijken();
+        expect(d.twijfel!.van(mijn.path)?.id, 'omzetter', reason: 'zoals bij binnenkomst: een vinylversie');
       });
 
       test('je NUMMER is een "studio" met een muur rond 20 kHz: ook dan zoekt "studio downloaden" (28-10-2026)', () async {
