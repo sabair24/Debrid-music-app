@@ -153,6 +153,15 @@ Future<String?> probeShield(String host, {int port = ShieldTarget.port}) async {
 /// Zo lang wacht een speaker die een nummer niet aannam, voor hij het nog één keer krijgt (zie `_openCurrent`).
 const kOpnieuwOpenen = Duration(seconds: 1);
 
+/// Waar een bewaarde sessie verdergaat na een herstart ([CastManager.herstelSessies]): de bewaarde plek als de speaker
+/// daar nog staat, anders waar hij nu wel staat in de rij, en null als hij iets speelt wat niet in de rij staat.
+int? herstelPlek(List<String> rij, int bewaard, String? speeltId) {
+  if (speeltId == null) return null;
+  if (bewaard >= 0 && bewaard < rij.length && rij[bewaard] == speeltId) return bewaard;
+  final i = rij.indexOf(speeltId);
+  return i < 0 ? null : i;
+}
+
 class CastManager {
   CastManager({
     required this.catalog,
@@ -168,6 +177,7 @@ class CastManager {
     @visibleForTesting this.toeval,
     @visibleForTesting KefBediening? kef,
     @visibleForTesting Future<List<Renderer>> Function()? zoekKef,
+    this.sessiePad,
   })  : _upnp = upnp ?? UpnpControlPoint(),
         _kef = kef ?? KefBediening(),
         _zoekKef = zoekKef ?? zoekKefs,
@@ -603,6 +613,7 @@ class CastManager {
     session.aanloop = spoelen;
     _zetKlok(session);
     bijStand?.call();
+    _bewaarSessies();
     try {
       await _openCurrent(session);
     } catch (e) {
@@ -650,6 +661,103 @@ class CastManager {
     s.klok = null;
     if (identical(_sessies[s.renderer.id], s)) _sessies.remove(s.renderer.id);
     if (melden) bijStand?.call();
+    _bewaarSessies();
+  }
+
+  /// Waar de speakersessies op schijf staan (`cast_sessies.json`), of null: dan niets bewaren (een toets).
+  ///
+  /// **Waarom (Saber, 28-10-2026).** *"als ik de app sluit dat de kef wireless verder speelt maar de app ziet wel de kef
+  /// maar niet meer wat er speelt"*. De rij, de plek en welke speaker stonden alleen in het geheugen. De KEF speelt na
+  /// het sluiten zijn nummer uit; na een herstart wist de app niet meer dat het zijn nummer was, en deed hij niets meer.
+  final String? sessiePad;
+
+  /// Wat er het laatst bewaard is, als korte vingerafdruk: bewaren gebeurt alleen bij een verschil.
+  String _bewaardAls = '';
+
+  /// Achter elkaar schrijven, nooit twee tegelijk.
+  Future<void> _bewaarRij = Future.value();
+
+  /// Voor een toets: klaar met wegschrijven.
+  @visibleForTesting
+  Future<void> get bewaardVoorToets => _bewaarRij;
+
+  void _bewaarSessies() {
+    final pad = sessiePad;
+    if (pad == null) return;
+    final vinger = [
+      for (final s in _sessies.values)
+        '${s.renderer.id}|${s.index}|${s.queue.length}|${s.queue.isEmpty ? '' : s.queue.last}|${s.alsZone}',
+    ].join(';');
+    if (vinger == _bewaardAls) return;
+    _bewaardAls = vinger;
+    final tekst = jsonEncode([
+      for (final s in _sessies.values)
+        {'id': s.renderer.id, 'naam': s.renderer.name, 'rij': s.queue, 'plek': s.index, 'zone': s.alsZone},
+    ]);
+    _bewaarRij = _bewaarRij.then((_) async {
+      try {
+        await File(pad).writeAsString(tekst, flush: true);
+      } catch (e) {
+        _log?.line('sessies bewaren lukte niet: $e');
+      }
+    });
+  }
+
+  /// Na een herstart van de app: de speakers die nog spelen wat deze pc ze gaf, weer volgen — zonder ze opnieuw te
+  /// starten. Een speaker die intussen iets anders speelt (een eigen app, de radio van de KEF) laat hij met rust.
+  ///
+  /// Welk nummer hij speelt, zegt de speaker zelf: het id in zijn adres (`/stream/<id>.…`). Staat dat in de bewaarde rij,
+  /// dan gaat de sessie daar verder; als het nummer op is, opent de app het volgende, zoals altijd.
+  Future<void> herstelSessies() async {
+    final pad = sessiePad;
+    if (pad == null) return;
+    List<dynamic> lijst;
+    try {
+      final f = File(pad);
+      if (!await f.exists()) return;
+      lijst = jsonDecode(await f.readAsString()) as List<dynamic>;
+    } catch (e) {
+      _log?.line('herstel: cast_sessies.json niet te lezen: $e');
+      return;
+    }
+    if (lijst.isEmpty) return;
+    // Zoeken alleen als er een speaker bij is die hij nog niet kent (na een herstart: allemaal).
+    if (lijst.any((e) => e is! Map || !_renderers.containsKey(e['id']))) {
+      try {
+        await devices();
+      } catch (_) {/* dan kent hij alleen wat hij al kende */}
+    }
+    for (final e in lijst.whereType<Map>()) {
+      final id = e['id'];
+      if (id is! String || _sessies.containsKey(id)) continue;
+      final r = _renderers[id];
+      final rij = [for (final x in (e['rij'] as List<dynamic>? ?? const [])) '$x'];
+      if (r == null || rij.isEmpty) {
+        _log?.line('herstel: ${e['naam'] ?? id} ${r == null ? 'niet gevonden' : 'zonder rij'} — niet gevolgd');
+        continue;
+      }
+      ({Duration? position, Duration duration, String? trackUri})? pos;
+      try {
+        pos = await _voor(r).positionInfo(r);
+      } catch (_) {/* geen antwoord: dan niet */}
+      final plek = herstelPlek(rij, (e['plek'] as num?)?.toInt() ?? -1, _idVanUrl(pos?.trackUri));
+      if (plek == null) {
+        _log?.line('herstel: ${r.name} speelt niet meer uit deze rij — niet gevolgd');
+        continue;
+      }
+      final s = _Session(renderer: r, queue: rij, index: plek, alsZone: e['zone'] == true);
+      s.currentUrl = pos?.trackUri;
+      // Meteen geloven wat hij meldt: hij speelt al lang, er is geen aanloop om af te wachten.
+      s.startedAt = DateTime.now().subtract(startGrace);
+      _sessies[r.id] = s;
+      _zetKlok(s);
+      if (pos?.position case final p?) _zag(s, positie: p, duur: pos!.duration);
+      s.advance = Timer.periodic(Duration(seconds: isKef(r) ? 1 : 5), (_) => _maybeAdvance(s));
+      _log?.line('herstel: volgt ${r.name} weer — ${_naam(rij[plek])} (${plek + 1}/${rij.length})');
+      unawaited(_haalVolume(s));
+    }
+    bijStand?.call();
+    _bewaarSessies();
   }
 
   /// Het volume van de speaker, voor de schuif van zijn zone. Stil bij een speaker zonder volume.
@@ -1289,6 +1397,8 @@ class CastManager {
     if (session.advancing) return;
     // Een sessie die intussen vervangen of gesloten is, schuift niets meer door.
     if (!identical(_sessies[session.renderer.id], session)) return;
+    // Waar de rij nu staat, op schijf als dat veranderde (volgende, vorige, doorgeschoven). Zie [herstelSessies].
+    _bewaarSessies();
     // Om de zes tikken (een halve minuut) het volume: dat verandert zelden vanzelf.
     if (++session.tikken % 6 == 0) unawaited(_haalVolume(session));
     // Give the renderer a moment after a start before believing "STOPPED" — a Sonos reports

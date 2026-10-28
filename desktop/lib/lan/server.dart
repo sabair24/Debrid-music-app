@@ -190,6 +190,8 @@ class LanServer {
       token: token,
       port: port,
       logPath: dir.isEmpty ? null : '$dir${Platform.pathSeparator}cast.log',
+      // Wat de speakers spelen, ook na een herstart van de app (zie [CastManager.herstelSessies]).
+      sessiePad: dir.isEmpty ? null : '$dir${Platform.pathSeparator}cast_sessies.json',
     );
     zones = ZoneRegister(
       state: state,
@@ -961,6 +963,8 @@ class LanServer {
     _http!.autoCompress = false; // audio and covers are already compressed
     _meldStand();
     unawaited(_serve(_http!));
+    // Pas nu: een speaker die na de herstart verder speelt, haalt zijn volgende nummer weer hier.
+    unawaited(cast.herstelSessies());
     await _startTls();
     return null;
   }
