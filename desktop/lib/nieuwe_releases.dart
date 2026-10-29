@@ -43,6 +43,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'catalog.dart';
+import 'haperlog.dart';
 import 'isrc.dart';
 import 'organize.dart' show artistKey, normKey, versionMarkers, withoutVersionText;
 import 'startrijen.dart' show bezitssleutel, zonderHerlevering;
@@ -1061,7 +1062,9 @@ class NieuweReleasesZoeker {
     for (final c in namen.take(kandidaten)) {
       final id = (c['id'] as num).toInt();
       final albums = await uitgavenVan(id, nuMs: nuMs, vers: vers);
-      var raak = zelfdeArtiest(eigen, albums: [for (final a in albums) a.title]);
+      // In haper.log: midden in een ronde zat de tekendraad 1,16 s vast (28-10-2026, 21:45:58).
+      var raak = traagMeten('releases: zelfde artiest "${eigen.naam}" (${albums.length} albums)',
+          () => zelfdeArtiest(eigen, albums: [for (final a in albums) a.title]));
       if (!raak) {
         final top = await _haal('/artist/$id/top?limit=50');
         raak = zelfdeArtiest(eigen,
@@ -1217,16 +1220,19 @@ class NieuweReleasesZoeker {
           artiest: a.naam, relevantie: relevantie(a, nuMs: nuMs), albums: h.albums, eerder: a.titelJaar));
     }
 
+    // Gemeten: het afronden van een ronde hield de tekendraad 0,84 s vast (haper.log 28-10-2026, 534 artiesten).
     List<NieuweUitgave> kies(List<Aanbod> van, Set<UitgaveSoort> soorten, {int perArtiest = kNieuwPerArtiest}) =>
-        kiesUitgaven(van,
-            nu: nu,
-            alInBezit: alInBezit,
-            terug: kNieuwTerug,
-            vooruit: kNieuwVooruit,
-            perArtiest: perArtiest,
-            max: kNieuwMax,
-            soorten: soorten,
-            weg: v.weg);
+        traagMeten(
+            'releases kiezen (${van.length} artiesten)',
+            () => kiesUitgaven(van,
+                nu: nu,
+                alInBezit: alInBezit,
+                terug: kNieuwTerug,
+                vooruit: kNieuwVooruit,
+                perArtiest: perArtiest,
+                max: kNieuwMax,
+                soorten: soorten,
+                weg: v.weg));
 
     const albumSoorten = {UitgaveSoort.album, UitgaveSoort.ep};
     const singleSoort = {UitgaveSoort.single};
