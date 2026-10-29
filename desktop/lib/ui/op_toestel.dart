@@ -9,10 +9,74 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models.dart';
 import '../offline.dart';
+import '../organize.dart' show artistKey, normKey;
 import '../toestelmap.dart';
 import '../tv.dart';
 import 'kleuren.dart';
+
+/// Wat de pagina "Op dit toestel" toont: de nummers en de platen die hier staan, gefilterd op [zoek] en in de gekozen
+/// volgorde. Zuiver, zodat het zonder scherm te toetsen is.
+///
+/// **Waarom (Saber, 29-10-2026).** *"liedjes die ik op men toestel heb opgeslaan moet ik kunnen shuffelen en allemaal
+/// spelen kunnen doen, plus ook een zoek functie"*. Gekozen: standaard laatst opgeslagen eerst, te wisselen naar A–Z; een
+/// eigen zoekveld dat alleen hier zoekt (titel, artiest, album). Een plaat staat er als er minstens één nummer van hier
+/// staat — die helft speelt.
+///
+/// [opgeslagen]: zoals [OfflineStore.tracks] (nieuwste eerst). [nummerVan]: het nummer in de bibliotheek bij een pad;
+/// een nummer dat de bibliotheek (nog) niet kent, valt weg.
+({List<Track> nummers, List<Album> albums}) opToestelLijst({
+  required List<OfflineTrack> opgeslagen,
+  required Track? Function(String pad) nummerVan,
+  required List<Album> albums,
+  String zoek = '',
+  bool az = false,
+}) {
+  final woorden = normKey(zoek).split(' ').where((w) => w.isNotEmpty).toList();
+  bool past(String tekst) {
+    if (woorden.isEmpty) return true;
+    final k = normKey(tekst);
+    return woorden.every(k.contains);
+  }
+
+  final wanneer = <String, int>{for (final o in opgeslagen) o.path: o.savedAt.millisecondsSinceEpoch};
+  final nummers = [
+    for (final o in opgeslagen)
+      if (nummerVan(o.path) case final t? when past('${t.title} ${t.artist} ${t.album}')) t,
+  ];
+  int laatst(Album a) {
+    var m = -1;
+    for (final t in a.tracks) {
+      final w = wanneer[t.path];
+      if (w != null && w > m) m = w;
+    }
+    return m;
+  }
+
+  final platen = [
+    for (final a in albums)
+      if (laatst(a) >= 0 &&
+          (past('${a.title} ${a.artist}') ||
+              a.tracks.any((t) => wanneer.containsKey(t.path) && past('${t.title} ${t.artist} ${t.album}'))))
+        a,
+  ];
+  if (az) {
+    nummers.sort((x, y) {
+      final a = artistKey(x.artist).compareTo(artistKey(y.artist));
+      if (a != 0) return a;
+      final b = normKey(x.album).compareTo(normKey(y.album));
+      return b != 0 ? b : x.trackNo.compareTo(y.trackNo);
+    });
+    platen.sort((x, y) {
+      final a = artistKey(x.artist).compareTo(artistKey(y.artist));
+      return a != 0 ? a : normKey(x.title).compareTo(normKey(y.title));
+    });
+  } else {
+    platen.sort((x, y) => laatst(y).compareTo(laatst(x)));
+  }
+  return (nummers: nummers, albums: platen);
+}
 
 /// Een klein merkje als ALLE [paden] op dit toestel staan; anders niets. [rond] is de vorm voor op een hoes:
 /// een schijfje eronder, zodat het ook op een lichte hoes te zien is.

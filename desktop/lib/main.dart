@@ -6411,198 +6411,6 @@ class Onderbalk extends StatelessWidget {
   }
 }
 
-/// The music this device is carrying.
-///
-/// Shown above the PC's own download queue, and only when there is something to show or something
-/// on the way — an empty heading on the machine that holds the library would be noise.
-class _OfflineSection extends StatelessWidget {
-  const _OfflineSection();
-
-  static String _size(int bytes) {
-    if (bytes >= 1000 * 1000 * 1000) return '${(bytes / 1e9).toStringAsFixed(1)} GB';
-    if (bytes >= 1000 * 1000) return '${(bytes / 1e6).round()} MB';
-    return '${(bytes / 1000).round()} kB';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // Nothing to manage on a television, because nothing can be put there — see the button on the
-    // album page. Kept as a guard rather than assumed: a Shield that carries copies from an older
-    // build should still be able to get rid of them.
-    final offline = context.watch<OfflineStore>();
-    final tracks = offline.tracks;
-    final jobs = offline.jobs;
-    if (tracks.isEmpty && jobs.isEmpty) return const SizedBox.shrink();
-
-    // A copy on this device keeps the artist and album it was downloaded WITH, and that is the only
-    // list in the app a correction never reached: rename a record and its downloads went on calling
-    // themselves by the old name forever. So ask the library, by path, and fall back to the stored
-    // strings only for a track the library no longer has — where they are all there is.
-    final lib = context.watch<LibraryStore>();
-    String artistOf(OfflineTrack t) => lib.trackByPath(t.path)?.artist ?? t.artist;
-    String albumOf(OfflineTrack t) => lib.trackByPath(t.path)?.album ?? t.album;
-
-    // Grouped by album, because that is how it was put there and how anyone thinks about it.
-    final byAlbum = <String, List<OfflineTrack>>{};
-    for (final t in tracks) {
-      byAlbum.putIfAbsent('${artistOf(t)}|${albumOf(t)}', () => []).add(t);
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Kop, telling en knop. Precies dezelfde rekensom als bij de kop van "Mijn downloads"
-        // eronder: naast elkaar is dit breder dan een telefoon, en dan hangt "Alles weghalen" over
-        // de rechterrand. Gevouwen blijft het één regel waar het past en valt het door waar niet.
-        Wrap(
-          crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: 14,
-          runSpacing: 4,
-          children: [
-            if (!schilKop(context))
-              const Text('Op dit toestel',
-                  style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
-            Text('${tracks.length} nummers · ${_size(offline.bytes)}',
-                style: TextStyle(color: _muted, fontSize: 12.5)),
-            if (tracks.isNotEmpty)
-              TextButton.icon(
-                onPressed: () async {
-                  final sure = await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      backgroundColor: _panel,
-                      title: const Text('Alles van dit toestel halen?',
-                          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-                      content: Text(
-                          'Je muziek blijft gewoon op je pc staan. Alleen de kopieën op dit '
-                          'toestel gaan weg.',
-                          style: TextStyle(color: _muted, height: 1.4)),
-                      actions: [
-                        TextButton(
-                          autofocus: isTv,
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('Annuleren'),
-                        ),
-                        TextButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: const Text('Alles weghalen')),
-                      ],
-                    ),
-                  );
-                  if (sure == true) await offline.clear();
-                },
-                icon: const Icon(Icons.delete_sweep_outlined, size: 17),
-                label: const Text('Alles weghalen'),
-              ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        for (final job in jobs)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(children: [
-              SizedBox(
-                width: 22,
-                height: 22,
-                child: job.bezig
-                    ? CircularProgressIndicator(
-                        strokeWidth: 2.4, value: job.progress, color: _accent)
-                    : Icon(Icons.error_outline_rounded, size: 20, color: _mislukt),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(job.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                    // De reden, en hoever hij kwam. Bij een bestand van gigabytes is "afgebroken
-                    // bij 1,2 van 4,7 GB" het verschil tussen "het doet niets" en "hij was ver".
-                    if (!job.bezig)
-                      Text(job.error!,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: _mislukt, fontSize: 12)),
-                  ],
-                ),
-              ),
-              if (job.bezig)
-                Text(job.progress == null ? '' : '${(job.progress! * 100).round()}%',
-                    style: TextStyle(color: _muted, fontSize: 12.5))
-              else ...[
-                TvLabelled(
-                  label: 'Opnieuw',
-                  child: IconButton(
-                    icon: const Icon(Icons.refresh_rounded, size: 18),
-                    color: _mislukt,
-                    tooltip: 'Nog eens proberen',
-                    // Gaat verder waar hij stopte: het halve bestand blijft staan.
-                    onPressed: () => offline.opnieuw(job.path),
-                  ),
-                ),
-                TvLabelled(
-                  label: 'Weghalen',
-                  child: IconButton(
-                    icon: const Icon(Icons.close_rounded, size: 18),
-                    color: _muted,
-                    tooltip: 'Deze poging opgeven',
-                    onPressed: () => offline.cancel(job.path),
-                  ),
-                ),
-              ],
-            ]),
-          ),
-        for (final entry in byAlbum.entries)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-              decoration: BoxDecoration(
-                color: _panel,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: _line),
-              ),
-              child: Row(children: [
-                Icon(Icons.offline_pin_rounded, size: 18, color: _accent2),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(albumOf(entry.value.first),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-                      Text(
-                          '${artistOf(entry.value.first)} · ${entry.value.length} nummers · '
-                          '${_size(entry.value.fold(0, (n, t) => n + t.bytes))}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: _muted, fontSize: 12)),
-                    ],
-                  ),
-                ),
-                TvLabelled(
-                  label: 'Weghalen',
-                  child: IconButton(
-                    icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                    color: _muted,
-                    tooltip: 'Van dit toestel halen',
-                    onPressed: () async {
-                      for (final t in entry.value) {
-                        await offline.remove(t.path);
-                      }
-                    },
-                  ),
-                ),
-              ]),
-            ),
-          ),
-        const SizedBox(height: 26),
-      ],
-    );
-  }
-}
-
 /// Put a record on this device, or take it off again.
 ///
 /// One button for a whole album rather than one per track: nobody wants a record where nine of
@@ -6887,22 +6695,40 @@ class _NummerKeuzeBalk extends StatelessWidget {
 /// Houdt "Op dit toestel" opnieuw kijkend naar de openbare map als je terugkomt in de app (zie main).
 AppLifecycleListener? toestelLeven;
 
-class OpDitToestelView extends StatelessWidget {
+/// Welk deel van "Op dit toestel" open staat.
+enum _ToestelTab { albums, nummers, artiesten, afspeellijsten, favorieten }
+
+/// Wat er op dit toestel staat, los van "Mijn downloads" (Saber, 29-10-2026: *"downloads en op een toestel opslaan zijn 2
+/// verschillende dingen e"*). Tabs zoals de gewone bibliotheek, Alles afspelen en Shuffle, een eigen zoekveld, en hier —
+/// niet meer in Mijn downloads — wat nog onderweg is naar dit toestel. Zie [opToestelLijst] voor wat er in welke volgorde
+/// staat.
+class OpDitToestelView extends StatefulWidget {
   const OpDitToestelView({super.key});
+
+  @override
+  State<OpDitToestelView> createState() => _OpDitToestelViewState();
+}
+
+class _OpDitToestelViewState extends State<OpDitToestelView> {
+  var _tab = _ToestelTab.albums;
+
+  /// Standaard laatst opgeslagen eerst; A–Z op de knop ernaast.
+  var _az = false;
+  final _zoek = TextEditingController();
+
+  @override
+  void dispose() {
+    _zoek.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final offline = context.watch<OfflineStore>();
     final lib = context.watch<LibraryStore>();
+    final opgeslagen = offline.tracks;
 
-    // Minstens één nummer, niet per se de hele plaat: een album waarvan de helft is opgehaald hoort
-    // hier te staan, want die helft speelt.
-    final hier = [
-      for (final a in lib.albums)
-        if (a.tracks.any((t) => offline.has(t.path))) a,
-    ];
-
-    if (hier.isEmpty) {
+    if (opgeslagen.isEmpty && offline.jobs.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 34),
@@ -6928,17 +6754,313 @@ class OpDitToestelView extends StatelessWidget {
       );
     }
 
-    // Bovenaan de echte map (Saber, 28-10-2026: "ik moet ook direct naar de map kunnen gaan").
-    return Column(children: [
+    final lijst = opToestelLijst(
+        opgeslagen: opgeslagen, nummerVan: lib.trackByPath, albums: lib.albums, zoek: _zoek.text, az: _az);
+    final alleHier = _zoek.text.trim().isEmpty
+        ? lijst.nummers
+        : opToestelLijst(opgeslagen: opgeslagen, nummerVan: lib.trackByPath, albums: const [], az: _az).nummers;
+    // Saber, 29-10-2026: met de pc bereikbaar spelen deze knoppen je hele bibliotheek; zonder pc alleen wat hier staat.
+    final pcBereikbaar = lib.isRemote && lib.geenVerbinding == null;
+    final teSpelen = pcBereikbaar ? lib.tracks : alleHier;
+    final speler = rijVoor(context);
+    final narrow = isCompact(context);
+    final rand = narrow ? 18.0 : 28.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
       const ToestelMapKaart(),
-      Expanded(
-        child: AlbumsGrid(
-          albums: hier,
-          title: '${hier.length} ${hier.length == 1 ? 'plaat' : 'platen'} op dit toestel',
+        Padding(
+          padding: EdgeInsets.fromLTRB(rand, 18, rand, 4),
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 10,
+            runSpacing: 8,
+            children: [
+              if (!schilKop(context))
+                const Text('Op dit toestel',
+                    style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+              Text(toestelOmvang(opgeslagen.length, offline.bytes), style: TextStyle(color: _muted, fontSize: 12.5)),
+              GlasKnop(
+                key: const ValueKey('toestel-shuffle'),
+                onPressed: teSpelen.isEmpty
+                    ? null
+                    : () {
+                        speler.shuffleAll(teSpelen);
+                        _srcToast(context, 'Shuffle · ${toestelOmvang(teSpelen.length, 0)}');
+                      },
+                icoon: Icons.shuffle_rounded,
+                label: 'Shuffle',
+              ),
+              GlasKnop(
+                key: const ValueKey('toestel-alles'),
+                onPressed: teSpelen.isEmpty
+                    ? null
+                    : () {
+                        speler.playQueue(teSpelen, 0);
+                        _srcToast(context, 'Speelt alles vanaf “${teSpelen.first.title}”');
+                      },
+                icoon: Icons.play_arrow_rounded,
+                label: 'Alles afspelen',
+              ),
+              if (opgeslagen.isNotEmpty)
+                TextButton.icon(
+                  key: const ValueKey('toestel-alles-weg'),
+                  onPressed: () async {
+                    final zeker = await vraagVanToestelHalen(context, aantal: opgeslagen.length, bytes: offline.bytes);
+                    if (zeker) await offline.clear();
+                  },
+                  icon: const Icon(Icons.delete_sweep_outlined, size: 17),
+                  label: const Text('Alles weghalen'),
+                ),
+            ],
+          ),
         ),
-      ),
-    ]);
+        Padding(
+          padding: EdgeInsets.fromLTRB(rand, 0, rand, 6),
+          child: Text(
+              pcBereikbaar
+                  ? 'Shuffle en Alles afspelen spelen je hele bibliotheek zolang je pc bereikbaar is.'
+                  : 'Zonder pc spelen Shuffle en Alles afspelen alleen wat op dit toestel staat.',
+              style: TextStyle(color: _muted, fontSize: 11.5)),
+        ),
+        _Overzetten(rand: rand),
+        Padding(
+          padding: EdgeInsets.fromLTRB(rand, 4, rand, 8),
+          child: TextField(
+            key: const ValueKey('toestel-zoek'),
+            controller: _zoek,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: 'Zoeken op dit toestel',
+              prefixIcon: const Icon(Icons.search_rounded, size: 20),
+              suffixIcon: _zoek.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Wissen',
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      onPressed: () => setState(_zoek.clear)),
+              filled: true,
+              fillColor: _panel,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+            ),
+          ),
+        ),
+        SizedBox(
+          height: 48,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.symmetric(horizontal: rand),
+            children: [
+              for (final (tab, naam) in [
+                (_ToestelTab.albums, 'Albums · ${lijst.albums.length}'),
+                (_ToestelTab.nummers, 'Nummers · ${lijst.nummers.length}'),
+                (_ToestelTab.artiesten, 'Artiesten'),
+                (_ToestelTab.afspeellijsten, 'Afspeellijsten'),
+                (_ToestelTab.favorieten, 'Favorieten'),
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    key: ValueKey('toestel-tab-${tab.name}'),
+                    label: Text(naam),
+                    selected: _tab == tab,
+                    onSelected: (_) => setState(() => _tab = tab),
+                  ),
+                ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                key: const ValueKey('toestel-volgorde'),
+                avatar: Icon(_az ? Icons.sort_by_alpha_rounded : Icons.schedule_rounded, size: 16),
+                label: Text(_az ? 'A–Z' : 'Laatst opgeslagen'),
+                selected: false,
+                onSelected: (_) => setState(() => _az = !_az),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Expanded(child: _inhoud(context, lib, lijst)),
+      ],
+    );
   }
+
+  Widget _inhoud(BuildContext context, LibraryStore lib, ({List<Track> nummers, List<Album> albums}) lijst) {
+    final zoek = _zoek.text.trim();
+    Widget niets(String kop, String uitleg) => LeegVlak(teken: Icons.search_off_rounded, kop: kop, uitleg: uitleg);
+    switch (_tab) {
+      case _ToestelTab.albums:
+        if (lijst.albums.isEmpty) return niets('Niets gevonden', 'Geen plaat op dit toestel past bij “$zoek”.');
+        return AlbumsGrid(
+          albums: lijst.albums,
+          title: '${lijst.albums.length} ${lijst.albums.length == 1 ? 'plaat' : 'platen'} op dit toestel',
+        );
+      case _ToestelTab.nummers:
+        return TracksView(lijst: lijst.nummers, kop: false, query: zoek);
+      case _ToestelTab.artiesten:
+        if (lijst.albums.isEmpty) return niets('Niets gevonden', 'Geen artiest op dit toestel past bij “$zoek”.');
+        return ArtistsView(key: ValueKey('toestel-artiesten-$zoek-$_az'), lib: lib, albums: lijst.albums);
+      case _ToestelTab.afspeellijsten:
+        return _ToestelAfspeellijsten(hier: lijst.nummers);
+      case _ToestelTab.favorieten:
+        final fav = context.watch<Favorieten>();
+        final paden = <String>{};
+        final nummers = [
+          for (final t in [...fav.nummers(lijst.nummers), for (final a in fav.albums(lijst.albums)) ...a.tracks])
+            if (lijst.nummers.any((h) => h.path == t.path) && paden.add(t.path)) t,
+        ];
+        if (nummers.isEmpty) {
+          return niets('Geen favorieten op dit toestel',
+              'Een favoriet nummer of album dat je op dit toestel bewaart, staat hier.');
+        }
+        return TracksView(lijst: nummers, kop: false, query: zoek);
+    }
+  }
+}
+
+/// Wat nog onderweg is naar dit toestel, bovenaan "Op dit toestel" (vroeger bovenaan "Mijn downloads").
+class _Overzetten extends StatelessWidget {
+  const _Overzetten({required this.rand});
+  final double rand;
+
+  @override
+  Widget build(BuildContext context) {
+    final offline = context.watch<OfflineStore>();
+    final jobs = offline.jobs;
+    if (jobs.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(rand, 2, rand, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Onderweg naar dit toestel · ${jobs.where((j) => j.bezig).length}'
+              '${offline.wachtOpWifi ? ' — wacht op wifi' : ''}',
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+          const SizedBox(height: 6),
+          // Hoogstens vier regels; de rest telt de kop. Een album van twintig nummers duwt de lijst anders van het scherm.
+          for (final job in jobs.take(4))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(children: [
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: job.bezig
+                      ? CircularProgressIndicator(strokeWidth: 2.2, value: job.progress, color: _accent)
+                      : Icon(Icons.error_outline_rounded, size: 19, color: _mislukt),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(job.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      if (!job.bezig)
+                        Text(job.error ?? '',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: _mislukt, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                if (job.bezig)
+                  Text(job.progress == null ? '' : '${(job.progress! * 100).round()}%',
+                      style: TextStyle(color: _muted, fontSize: 12.5))
+                else ...[
+                  IconButton(
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    color: _mislukt,
+                    tooltip: 'Nog eens proberen',
+                    onPressed: () => offline.opnieuw(job.path),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    color: _muted,
+                    tooltip: 'Deze poging opgeven',
+                    onPressed: () => offline.cancel(job.path),
+                  ),
+                ],
+              ]),
+            ),
+          if (jobs.length > 4)
+            Text('en nog ${jobs.length - 4}', style: TextStyle(color: _muted, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+}
+
+/// De afspeellijsten, met alleen de nummers die op dit toestel staan.
+class _ToestelAfspeellijsten extends StatelessWidget {
+  const _ToestelAfspeellijsten({required this.hier});
+  final List<Track> hier;
+
+  @override
+  Widget build(BuildContext context) {
+    final lijsten = context.watch<Afspeellijsten>();
+    final lib = context.watch<LibraryStore>();
+    final paden = {for (final t in hier) t.path};
+    final perId = <String, Track>{
+      for (final t in hier)
+        if (lib.gedeeldId(t.path) case final i?) i: t,
+    };
+    final rijen = [
+      for (final l in lijsten.lijsten)
+        if ([for (final t in lijsten.nummersVan(l, (i) => perId[i])) if (paden.contains(t.path)) t] case final n
+            when n.isNotEmpty)
+          (lijst: l, nummers: n),
+    ];
+    if (rijen.isEmpty) {
+      return const LeegVlak(
+        teken: Icons.queue_music_rounded,
+        kop: 'Geen afspeellijsten op dit toestel',
+        uitleg: 'Staat er een nummer van een afspeellijst op dit toestel, dan staat die lijst hier — met alleen die '
+            'nummers.',
+      );
+    }
+    return ListView(
+      padding: onderOp(context, EdgeInsets.symmetric(horizontal: isCompact(context) ? 18 : 28)),
+      children: [
+        for (final r in rijen)
+          Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(10)),
+            child: ListTile(
+              leading: Icon(Icons.queue_music_rounded, color: _accent),
+              title: Text(r.lijst.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text('${r.nummers.length} van ${r.lijst.trackIds.length} op dit toestel',
+                  style: TextStyle(color: _muted, fontSize: 12)),
+              onTap: () => openPagina(context, (_) => _ToestelNummersPagina(titel: r.lijst.name, nummers: r.nummers)),
+              trailing: IconButton(
+                tooltip: 'Shuffle',
+                icon: const Icon(Icons.shuffle_rounded),
+                onPressed: () => rijVoor(context).shuffleAll(r.nummers),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Een lijst nummers van dit toestel als eigen pagina (een afspeellijst, beperkt tot wat hier staat).
+class _ToestelNummersPagina extends StatelessWidget {
+  const _ToestelNummersPagina({required this.titel, required this.nummers});
+  final String titel;
+  final List<Track> nummers;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: _bg,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          title: Text(titel, maxLines: 2, overflow: TextOverflow.ellipsis),
+        ),
+        body: TracksView(lijst: nummers),
+      );
 }
 
 // ── Albums grid ──────────────────────────────────────────────────────────────
@@ -22152,7 +22274,13 @@ class TracksView extends StatelessWidget {
   /// Library search + quality filter from the shell (null = show everything).
   final bool Function(Track)? match;
   final String query;
-  const TracksView({super.key, this.match, this.query = ''});
+
+  /// Een eigen lijst in een eigen volgorde in plaats van de hele bibliotheek (Op dit toestel, 29-10-2026).
+  final List<Track>? lijst;
+
+  /// De kop met de telling en Shuffle/Speel alles. Uit waar de pagina zelf die knoppen al heeft.
+  final bool kop;
+  const TracksView({super.key, this.match, this.query = '', this.lijst, this.kop = true});
 
   @override
   Widget build(BuildContext context) {
@@ -22170,7 +22298,7 @@ class TracksView extends StatelessWidget {
     // weten of zij het is die speelt. Dat laatste staat hieronder per rij in een `select`, precies
     // zoals `TrackRow` het al doet — met dezelfde uitleg erboven.
     final player = rijVoor(context);
-    final all = lib.tracks;
+    final all = lijst ?? lib.tracks;
     final tracks = match == null ? all : all.where(match!).toList();
     if (lib.scanning && all.isEmpty) {
       // Regels in de vorm van nummerregels, op dezelfde marges, zodat er niets verspringt zodra de
@@ -22199,6 +22327,7 @@ class TracksView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (kop)
         Builder(builder: (context) {
           final narrow = isCompact(context);
           final title = Row(mainAxisSize: MainAxisSize.min, children: [
@@ -24829,10 +24958,8 @@ class DownloadsView extends StatelessWidget {
         return ListView(
           padding: onderOp(context, const EdgeInsets.fromLTRB(28, 22, 28, 30)),
           children: [
-            // What is kept on THIS device, above what is being fetched onto the PC. Two different
-            // things that both live under "downloads": one is music arriving into your library,
-            // the other is a copy of your library travelling with you.
-            const _OfflineSection(),
+            // Alleen wat de pc binnenhaalt. Wat op dit toestel staat (en onderweg is), staat op "Op dit toestel":
+            // Saber, 29-10-2026: "downloads en op een toestel opslaan zijn 2 verschillende dingen e".
             // Title, a running count and a clear button. Side by side that is wider than a phone —
             // the count ran under the button and "Wis afgeronde" hung off the right edge. Wrapped,
             // so it stays one line where there is room and folds where there is not.
