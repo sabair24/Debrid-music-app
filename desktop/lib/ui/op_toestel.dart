@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 
 import '../audioformaten.dart' show isVerliesvrij;
 import '../lan/stroomstand.dart' show losslessExtensie;
+import '../library.dart' show LibraryStore;
 import '../models.dart';
 import '../offline.dart';
 import '../organize.dart' show artistKey, normKey;
@@ -112,6 +113,42 @@ class OpToestelMerk extends StatelessWidget {
           : Padding(padding: const EdgeInsets.only(right: 6), child: icoon),
     );
   }
+}
+
+/// Is de pc van dit toestel nu weg? Alleen op een toestel dat de pc uitleest; dan speelt alleen wat hier staat.
+bool pcWeg(LibraryStore l) => l.isRemote && l.geenVerbinding != null;
+
+/// Grijs als de pc weg is en GEEN van [paden] op dit toestel staat: het staat in de lijst, maar speelt nu niet.
+///
+/// Saber, 29-10-2026, bij "Op dit toestel": zonder pc *"Alles, maar grijs wat niet op je gsm staat"*. Een plaat waarvan
+/// één nummer hier staat, blijft gewoon: die helft speelt. Zonder [OfflineStore] (de pc zelf, een toets) nooit grijs.
+class NietHierGrijs extends StatelessWidget {
+  const NietHierGrijs({super.key, required this.paden, required this.child});
+
+  final List<String> paden;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final weg = context.select<LibraryStore?, bool>((l) => l != null && pcWeg(l));
+    final nietHier = context.select<OfflineStore?, bool>((o) => o != null && !paden.any(o.has));
+    // Opacity tekent een eigen laag, maar alleen zolang de pc weg is.
+    return weg && nietHier ? Opacity(opacity: .38, child: child) : child;
+  }
+}
+
+/// Wat een tik zonder pc speelt: alleen de nummers van [lijst] die hier staan, en het getikte daartussen. Null als het
+/// getikte zelf er niet staat — dan speelt er niets en zegt de app waarom.
+({List<Track> lijst, int index})? alleenHier(List<Track> lijst, int index, bool Function(String pad) staatHier) {
+  if (index < 0 || index >= lijst.length || !staatHier(lijst[index].path)) return null;
+  final hier = <Track>[];
+  var nieuw = 0;
+  for (var i = 0; i < lijst.length; i++) {
+    if (!staatHier(lijst[i].path)) continue;
+    if (i == index) nieuw = hier.length;
+    hier.add(lijst[i]);
+  }
+  return (lijst: hier, index: nieuw);
 }
 
 /// De kleur van [OpToestelMerk] bij een nummer onder cd-kwaliteit: amber, zoals een waarschuwing die geen fout is.

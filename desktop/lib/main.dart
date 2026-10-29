@@ -7593,11 +7593,15 @@ class AlbumCard extends StatelessWidget {
       hoes: (maat) {
         // Staat hij op het scherm zonder hoes, dan haalt de ronde hem eerst (zie [LibraryStore.hoesVoorrang]).
         if (a.cover == null) context.read<LibraryStore>().hoesVoorrang(a);
-        // Met een merkje rechtsboven als de hele plaat op dit toestel staat (Saber, 28-10-2026: "merkje overal").
-        return Stack(children: [
-          cover(a.cover, size: maat),
-          Positioned(top: 6, right: 6, child: OpToestelMerk(paden: [for (final t in a.tracks) t.path], rond: true)),
-        ]);
+        // Met een merkje rechtsboven als de hele plaat op dit toestel staat (Saber, 28-10-2026: "merkje overal"). Grijs
+        // als de pc weg is en er geen nummer van hier staat (29-10-2026).
+        return NietHierGrijs(
+          paden: [for (final t in a.tracks) t.path],
+          child: Stack(children: [
+            cover(a.cover, size: maat),
+            Positioned(top: 6, right: 6, child: OpToestelMerk(paden: [for (final t in a.tracks) t.path], rond: true)),
+          ]),
+        );
       },
       spiegel: spiegelVan(a.cover),
       // De hoes VLIEGT naar de albumpagina in plaats van te knippen. Het label is wat de app zelf
@@ -10162,8 +10166,11 @@ class TrackRow extends StatefulWidget {
 /// What the hover icons offer, reachable by holding OK.
 ///
 class _TrackRowState extends State<TrackRow> with LichtBijMuisOfFocus {
+  // Grijs als de pc weg is en dit nummer niet hier staat (Saber, 29-10-2026: "Alles, maar grijs wat niet op je gsm staat").
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => NietHierGrijs(paden: [widget.track.path], child: _bouw(context));
+
+  Widget _bouw(BuildContext context) {
     final t = widget.track;
     // `select`, not `watch`. PlayerStore notifies on every mpv position event — unthrottled — and
     // watching it rebuilt every visible row of the album, each one re-running _trackQuality with
@@ -14020,6 +14027,16 @@ bool tikVraagtIets({required bool speelt, required bool radio, required int leng
 /// ([AppSettings.tikKeuze]). Ook tijdens een radio. "Speel alles", "Shuffle alles" en ▶ blijven vervangen.
 Future<void> speelGetikt(BuildContext context, List<Track> lijst, int index, {Uint8List? cover}) async {
   if (index < 0 || index >= lijst.length) return;
+  // Zonder pc speelt alleen wat op dit toestel staat (Saber, 29-10-2026); de rest staat grijs ([NietHierGrijs]).
+  final hierAlleen = context.read<OfflineStore?>();
+  if (hierAlleen != null && pcWeg(context.read<LibraryStore>())) {
+    final hier = alleenHier(lijst, index, hierAlleen.has);
+    if (hier == null) {
+      _srcToast(context, 'Staat niet op dit toestel, en je pc is nu niet bereikbaar');
+      return;
+    }
+    (lijst, index) = (hier.lijst, hier.index);
+  }
   // In de gekozen zone (Saber, 21-10-2026: "Tik in de bibliotheek speelt in de gekozen zone"); de vraag
   // gaat over HAAR wachtrij.
   final afstand = _misschien<GekozenZone>(context)?.opAfstand;
@@ -22489,6 +22506,9 @@ class TracksView extends StatelessWidget {
               // nu-speelt-scherm.
               return Binnenkomst(
                 index: i,
+                // Grijs als de pc weg is en dit nummer niet hier staat (29-10-2026).
+                child: NietHierGrijs(
+                paden: [t.path],
                 child: Builder(
                 builder: (rij) {
                 // Hier hoort de vraag "speel ik?" en nergens hoger. De context van `itemBuilder` is
@@ -22579,7 +22599,7 @@ class TracksView extends StatelessWidget {
                 ),
               );
               },
-              ),
+              )),
               );
             },
           ),

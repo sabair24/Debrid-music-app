@@ -204,4 +204,48 @@ void main() {
           reason: 'eerst de vraag, dan pas weghalen');
     });
   });
+
+  group('zonder pc: alles zichtbaar, grijs wat niet hier staat (Saber, 29-10-2026)', () {
+    final a = _t('a.flac', 'A', 'X', 'P', nr: 1);
+    final b = _t('b.flac', 'B', 'X', 'P', nr: 2);
+    final c = _t('c.flac', 'C', 'X', 'P', nr: 3);
+    final d = _t('d.flac', 'D', 'X', 'P', nr: 4);
+    bool hier(String p) => p != 'b.flac' && p != 'd.flac';
+
+    test('DE KERN: een tik speelt alleen wat hier staat, vanaf het getikte', () {
+      final uit = alleenHier([a, b, c, d], 2, hier)!;
+      expect(uit.lijst, [a, c]);
+      expect(uit.index, 1, reason: 'c was plek 2 en is nu plek 1');
+      expect(alleenHier([a, b, c, d], 0, hier)!.index, 0);
+    });
+
+    test('staat het getikte er niet, dan speelt er niets', () {
+      expect(alleenHier([a, b, c, d], 1, hier), isNull);
+      expect(alleenHier([a, b], 5, hier), isNull);
+    });
+
+    testWidgets('zonder bibliotheek of winkel in de boom (de pc, een toets) nooit grijs', (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: NietHierGrijs(paden: ['a.flac'], child: Text('rij'))));
+      expect(find.byType(Opacity), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    test('aangesloten: rijen, tegels, de tik, en de bibliotheek meldt als de pc terug is', () {
+      final main = _bron('lib/main.dart');
+      expect(main, contains('  Widget build(BuildContext context) => NietHierGrijs(paden: [widget.track.path], child: _bouw(context));\n'),
+          reason: 'de rij van een album');
+      expect(main, contains('                child: NietHierGrijs(\n                paden: [t.path],\n                child: Builder(\n'),
+          reason: 'de rij van Tracks');
+      expect(main, contains('        return NietHierGrijs(\n          paden: [for (final t in a.tracks) t.path],\n'),
+          reason: 'de tegel op Albums en Start');
+      final tik = main.indexOf('Future<void> speelGetikt(BuildContext context');
+      expect(main.indexOf('    final hier = alleenHier(lijst, index, hierAlleen.has);\n', tik), greaterThan(tik));
+      expect(main.indexOf('    (lijst, index) = (hier.lijst, hier.index);\n', tik),
+          lessThan(main.indexOf('  final afstand = _misschien<GekozenZone>(context)?.opAfstand;', tik)),
+          reason: 'eerst filteren, dan pas spelen');
+      final lib = _bron('lib/library.dart');
+      expect(lib, contains('    final wasWeg = geenVerbinding != null;\n    geenVerbinding = null;\n    if (wasWeg) notifyListeners();\n'),
+          reason: 'anders blijft alles grijs na een stille ronde die op 304 eindigt');
+    });
+  });
 }
