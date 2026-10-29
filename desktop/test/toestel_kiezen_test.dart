@@ -132,6 +132,21 @@ void main() {
         reason: 'anders lijkt elke favoriet verdwenen en gaat alles van je gsm');
     expect(main, contains("key: const ValueKey('lijst-op-toestel'),"));
     expect(main, contains("key: const ValueKey('artiest-op-toestel'),"));
-    expect(main, contains('    unawaited(toestelRedenen.voegToe([for (final t in widget.album.tracks) t.path], kRedenZelf));\n'));
+    expect(main, contains('  Future<void> _fetch() => _zetOpToestel(context, widget.album.tracks, album: widget.album.title);\n'));
+  });
+
+  test('aangesloten: elke knop die op dit toestel zet, vraagt eerst met de grootte en de vrije ruimte', () {
+    final main = _bron('lib/main.dart');
+    expect(main, contains('    if (!await _zetOpToestel(context, nummers)) return;\n'), reason: 'de keuzebalk');
+    expect(main, contains('                          if (!await _zetOpToestel(context, nummers)) return;\n'),
+        reason: 'de artiestpagina');
+    expect(main, contains('                    } else if (!await _magOpToestel(context, nummers)) {\n'), reason: 'een afspeellijst');
+    expect(main, contains('  await toestelRedenen.voegToe([for (final t in nummers) t.path], kRedenZelf);\n'));
+    expect(main, contains('  if (!await _magOpToestel(context, nummers)) return false;\n'),
+        reason: 'de vraag komt vóór de reden en de rij');
+    expect(main, contains("  final bytes = geschatteOmvang(komen, cd: context.read<AppSettings>().offlineKwaliteit == 'cd');\n"),
+        reason: 'dezelfde regel als offline.adresVoor');
+    expect(RegExp(r'offline\.bewaarAlles\(\[').allMatches(main).length, 1,
+        reason: 'alleen _zetOpToestel zet nog zelf in de rij — een nieuwe knop die het zelf doet, slaat de vraag over');
   });
 }

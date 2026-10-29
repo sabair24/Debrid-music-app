@@ -600,7 +600,8 @@ void main() {
     test('een tik, een menu, een album en een radio gaan naar de gekozen zone', () {
       final main = lees('lib/main.dart');
       final tik = main.substring(main.indexOf('Future<void> speelGetikt('));
-      expect(tik.substring(0, 900), contains('final Rijbediening p = afstand ?? lokaal;'));
+      // 1500: sinds 29-10-2026 staat het filter "zonder pc alleen wat hier staat" ervoor.
+      expect(tik.substring(0, 1500), contains('final Rijbediening p = afstand ?? lokaal;'));
       expect(RegExp(r'final p = rijVoor\(context\);').allMatches(main).length, greaterThanOrEqualTo(4),
           reason: 'nummermenu, albummenu, afspeellijst, favorieten');
       expect(main, contains(': () => rijVoor(context).playQueue(a.tracks, 0, cover: a.cover),'));

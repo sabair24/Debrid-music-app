@@ -3379,7 +3379,12 @@ class LibraryStore extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+    // Was hij weg, dan zeggen dat hij terug is, ook bij een stille ronde die op 304 of "uitgesteld" eindigt: anders
+    // bleef wat op [geenVerbinding] tekent (de grijze nummers van "Op dit toestel", 29-10-2026) staan tot er iets
+    // anders veranderde.
+    final wasWeg = geenVerbinding != null;
     geenVerbinding = null;
+    if (wasWeg) notifyListeners();
     if (res.uitgesteld) {
       // Er is een nieuwe, maar die komt bij de eerste ronde na [kCatalogusOnderwegElke]: het oude merkteken blijft staan.
       scanning = false;
