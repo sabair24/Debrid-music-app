@@ -135,7 +135,7 @@ class LanSharing extends ChangeNotifier {
         ..._remote,
         ..._home,
         // De eigen deur, versleuteld: een toestel probeert hem alleen met de pin (zie `adreswedloop.dart`).
-        if (deur.adresVoorToestellen != null) '${deur.adresVoorToestellen}',
+        for (final u in deur.adressenVoorToestellen) '$u',
       ];
 
   /// Only the ones that stop at the front door — so the settings panel can label them honestly.

@@ -53,6 +53,7 @@ import 'state_store.dart';
 import 'tls_ingang.dart';
 import 'verzendteller.dart';
 import 'zones.dart';
+import 'deur.dart' show buitenAdressen;
 import 'poorten.dart';
 export 'poorten.dart';
 import 'quota.dart';
@@ -3383,8 +3384,9 @@ class LanServer {
       // De pin is geen geheim: hij zegt alleen welk certificaat bij deze pc hoort. Een toestel leert
       // hem hier, thuis of via Tailscale, en vertrouwt daarna alleen dat certificaat.
       if (c != null) 'pin': c.pin,
-      // De eigen deur naar buiten: alleen versleuteld, alleen met de pin. Zie `deur.dart`.
-      if (buitenAdres?.call() != null) 'buiten': ['${buitenAdres!()}'],
+      // De eigen deur naar buiten: alleen versleuteld, alleen met de pin. Zie `deur.dart`. Ook op 443, voor een netwerk
+      // dat alleen webverkeer doorlaat ([kWebPoort]); een oudere app probeert elk adres in deze lijst al.
+      if (buitenAdres?.call() case final b?) 'buiten': [for (final u in buitenAdressen(b)) '$u'],
       if (c != null && _tls != null) 'tlsPoort': _tls!.port,
     });
   }

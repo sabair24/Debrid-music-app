@@ -72,7 +72,7 @@ String deurTekst({
       : ' Laatst via het publieke adres om ${uur(laatstVanBuiten)}.';
   if (stand == DeurStand.open && metDeHand) {
     return 'Aan, met de hand: de UPnP van je modem antwoordt niet, dus gebruiken je toestellen je eigen regel in de '
-        'modem (TCP 47821 → deze pc).$wanneer';
+        'modem (TCP 47821 → deze pc, en 443 → 47821 als je die tweede regel ook zette).$wanneer';
   }
   return switch (stand) {
     DeurStand.open => 'Aan: je toestellen komen er van buiten in, rechtstreeks en versleuteld'
@@ -99,7 +99,16 @@ String deurMetDeHand(String? ditAdres) {
   final pc = ditAdres ?? 'deze pc';
   return 'Met de hand: open je modem (meestal http://192.168.0.1). Geef $pc een vaste plaats '
       '(DHCP-reservering), en maak bij "Port Forwarding" één regel: TCP, buiten 47821 → binnen 47821, naar $pc. '
-      'Nooit 47820 of 47822.';
+      'Nooit 47820 of 47822. Voor een netwerk dat alleen webverkeer doorlaat (veel bedrijfs- en gastwifi) nog een '
+      'tweede regel: TCP, buiten 443 → binnen 47821, naar $pc.';
+}
+
+/// De buitenadressen voor de toestellen bij één deur [deur]: de deur zelf, en hetzelfde publieke adres op [kWebPoort]
+/// (de tweede regel in de modem, [deurMetDeHand]). Leeg zonder deur. Een toestel probeert ze naast elkaar
+/// (`adreswedloop.dart`) en vertrouwt alleen het certificaat van de pc, dus een 443 waar iets anders op zit kost niets.
+List<Uri> buitenAdressen(Uri? deur) {
+  if (deur == null) return const [];
+  return [deur, if (deur.port != kWebPoort) deur.replace(port: kWebPoort)];
 }
 
 class DeurNaarBuiten extends ChangeNotifier {
@@ -202,6 +211,10 @@ class DeurNaarBuiten extends ChangeNotifier {
     if (stand != DeurStand.open || ip == null || p == null) return null;
     return Uri(scheme: 'https', host: ip, port: p);
   }
+
+  /// Alle buitenadressen voor de toestellen: de deur zelf, en hetzelfde adres op [kWebPoort] (443) voor een netwerk dat
+  /// alleen webverkeer doorlaat ([buitenAdressen]).
+  List<Uri> get adressenVoorToestellen => buitenAdressen(adresVoorToestellen);
 
   void _log(String r) => log?.call(r);
 
