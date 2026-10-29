@@ -876,6 +876,10 @@ class SoulseekService {
   Timer? _idle;
   int _users = 0;
 
+  /// In een toets een eigen sessie (nep-uploaders) in plaats van een aanmelding bij Soulseek.
+  @visibleForTesting
+  set sessieVoorToets(SlskSession s) => _session = s;
+
   Future<T> withSession<T>(Future<T> Function(SlskSession) body) async {
     _users++;
     _idle?.cancel();
@@ -2478,7 +2482,7 @@ class DownloadManager extends ChangeNotifier {
     // Gevraagd: de vraag blijft staan en zoekt meteen de volgende (Saber, 25-10-2026: "weg → volgende zoeken").
     final v = g.soort == null ? null : soortvragen?.van(pad);
     if (v != null && v.soort == g.soort) {
-      unawaited(_soortRonde([v]));
+      unawaited(_soortRonde([v], gevraagd: true));
       return 'Weggegooid — je eigen kopie blijft. Hij zoekt de volgende ${v.soort.naam}-kopie.';
     }
     return 'Weggegooid — je eigen kopie blijft';
@@ -4849,9 +4853,18 @@ class DownloadManager extends ChangeNotifier {
   /// vult aan tot [kWedloopLopers]. Wie het eerst bytes stuurt wint (de `claim` van [_rawTransfer]); de rest
   /// stopt meteen. Zo doet het gewone downloaden het ook — één aanmelding, de verliezers afgebroken voor ze
   /// iets sturen. Null als niemand iets stuurde.
+  ///
+  /// Zonder [vroeg] (geen groeistroom) speelt er niets mee tijdens het binnenkomen: de jacht op een cd
+  /// ([_cdWedloop]). [kop] begint elke regel in het logboek; [wacht] is hoe lang een loper in een rij mag staan.
   Future<({SoulseekFile f, SlskResult res, bool afgekeurd})?> _wedloop(SlskSession session, DownloadJob job,
-      SoulseekFile eerste, SoulseekFile? Function(Set<String> al) volgende, Groei vroeg,
-      {required String artiest, required String titel, required int? seconden, void Function(String)? viel}) async {
+      SoulseekFile eerste, SoulseekFile? Function(Set<String> al) volgende, Groei? vroeg,
+      {required String artiest,
+      required String titel,
+      required int? seconden,
+      void Function(String)? viel,
+      String? kop,
+      Duration wacht = kMaxWacht}) async {
+    final regel = kop ?? 'radio "$artiest — $titel"';
     SoulseekFile? winnaar;
     final lopers = <SoulseekFile, ({SlskCancel stop, Future<SlskResult> res})>{};
     final klaar = <SoulseekFile>{};
@@ -4866,7 +4879,7 @@ class DownloadManager extends ChangeNotifier {
       final stop = SlskCancel();
       job.live.add(stop);
       final res = _rawTransfer(session, f, job, () => inRij.add(f),
-          waitInQueue: true, maxWait: kMaxWacht, cancel: stop, claim: () {
+          waitInQueue: true, maxWait: wacht, cancel: stop, claim: () {
         if (winnaar != null) return false;
         winnaar = f;
         winstMs = klok.elapsedMilliseconds;
@@ -4915,7 +4928,7 @@ class DownloadManager extends ChangeNotifier {
       for (final l in lopers.values) {
         l.stop.cancel();
       }
-      _log.line('radio "$artiest — $titel": wedloop zonder winnaar — niemand van de ${lopers.length} stuurde '
+      _log.line('$regel: wedloop zonder winnaar — niemand van de ${lopers.length} stuurde '
           'iets (${klok.elapsedMilliseconds} ms)');
       for (final u in uitkomsten) {
         _log.line('   $u');
@@ -4924,11 +4937,11 @@ class DownloadManager extends ChangeNotifier {
     }
     // Welke loper won (#1 = de eerste die begon) en hoeveel er toen al afgevallen waren: daaruit valt af te
     // lezen of de lopers achteraan ooit winnen — zie [kWedloopTegelijk].
-    _log.line('radio "$artiest — $titel": ${w.username} stuurde als eerste, na $winstMs ms '
+    _log.line('$regel: ${w.username} stuurde als eerste, na $winstMs ms '
         '(loper #${lopers.keys.toList().indexOf(w) + 1} van $lopend, $afgevallen al afgevallen) — '
         '${baseName(w.filename)}');
     var overdrachtKlaar = false;
-    final afgekeurd = w.size > 0 && w.filename.toLowerCase().endsWith('.flac')
+    final afgekeurd = vroeg != null && w.size > 0 && w.filename.toLowerCase().endsWith('.flac')
         ? _vroegKeuren(vroeg, _bestemming(w), w, lopers[w]!.stop, () => overdrachtKlaar,
             artiest: artiest, titel: titel, seconden: seconden)
         : Future.value(false);
@@ -4944,7 +4957,7 @@ class DownloadManager extends ChangeNotifier {
             : (binnen, bezig) => teTraag(binnen: binnen, totaal: w.size, bezig: bezig, verbruik: verbruik),
         gestopt: (binnen, waarom) {
       viel?.call(w.username);
-      _log.line('radio "$artiest — $titel": ${w.username} viel af — $waarom op '
+      _log.line('$regel: ${w.username} viel af — $waarom op '
           '${(binnen / 1048576).toStringAsFixed(1)} van ${(w.size / 1048576).toStringAsFixed(1)} MB; gestopt, volgende');
     });
     final res = await lopers[w]!.res;
@@ -6028,7 +6041,7 @@ class DownloadManager extends ChangeNotifier {
     _log.line(nieuw.length == 1
         ? '"${nieuw.single.artiest} — ${nieuw.single.titel}": ${soort.voluit} gevraagd'
         : '${nieuw.length} nummers${album == null ? '' : ' van "$album"'}: ${soort.voluit} gevraagd');
-    if (nieuw.isNotEmpty) unawaited(_soortRonde(nieuw, album: nieuw.length > 1 ? album : null));
+    if (nieuw.isNotEmpty) unawaited(_soortRonde(nieuw, album: nieuw.length > 1 ? album : null, gevraagd: true));
     _planSoortKlok();
     if (nieuw.isEmpty && klaar == 0) {
       return al == 1 ? 'Dit nummer heeft al ${soort.voluit}' : 'Deze $al nummers hebben al ${soort.voluit}';
@@ -6128,7 +6141,10 @@ class DownloadManager extends ChangeNotifier {
   /// Eén ronde voor [te]: Soulseek (bij een plaat één zoekopdracht voor alle nummers), en anders TIDAL — cd en studio,
   /// geen vinyl — en dan torrents, per plaat ([_soortViaTorrents]). Wat de keuring doorstaat, staat klaar ([_zetKlaar]);
   /// de vraag blijft staan tot je kiest.
-  Future<void> _soortRonde(List<Soortvraag> te, {String? album}) async {
+  ///
+  /// [gevraagd]: je vroeg het net zelf (de knop, of Weg… van een klaargezette kopie). Dan zoekt hij voor bij de zoekrem
+  /// en zoeken [kSoortNummersTegelijk] nummers samen; de ronde die vanzelf terugkomt, gaat achteraan en één voor één.
+  Future<void> _soortRonde(List<Soortvraag> te, {String? album, bool gevraagd = false}) async {
     final vragen = soortvragen;
     if (vragen == null) return;
     final open = [for (final v in te) if (_soortBezig.add(_soortSleutel(v.pad))) v];
@@ -6140,14 +6156,14 @@ class DownloadManager extends ChangeNotifier {
       if (soulseek.available && plaat.isNotEmpty && open.length > 1) {
         try {
           albumHits = await soulseek.search(zoekvraagVoorAlbum(open.first.artiest, plaat),
-              achtergrond: true, extra: zoekwoordenVoorSoort(open.first.soort));
+              achtergrond: !gevraagd, extra: zoekwoordenVoorSoort(open.first.soort));
           _log.line('"${open.first.artiest} — $plaat": ${open.first.soort.voluit} zoeken — ${albumHits.length} treffers '
               'voor ${open.length} nummers');
         } catch (_) {/* dan per nummer */}
       }
       final gedaan = <Soortvraag>[], nogNiet = <Soortvraag>[];
-      for (final v in open) {
-        if (!identical(vragen.van(v.pad), v)) continue; // ingetrokken of opnieuw gevraagd
+      await metHoogstens(gevraagd ? kSoortNummersTegelijk : 1, open, (v) async {
+        if (!identical(vragen.van(v.pad), v)) return; // ingetrokken of opnieuw gevraagd
         gedaan.add(v);
         var klaar = false;
         if (soulseek.available) {
@@ -6155,7 +6171,7 @@ class DownloadManager extends ChangeNotifier {
           if (hits == null) {
             try {
               hits = await soulseek.search(zoekvraagVoorNummer(v.titel, artist: v.artiest),
-                  achtergrond: true, extra: zoekwoordenVoorSoort(v.soort));
+                  achtergrond: !gevraagd, extra: zoekwoordenVoorSoort(v.soort));
             } catch (_) {
               hits = const [];
             }
@@ -6163,11 +6179,13 @@ class DownloadManager extends ChangeNotifier {
           final kandidaten = _soortKandidaten(v, hits);
           _log.line('"${v.artiest} — ${v.titel}": ${kandidaten.length} kandidaten voor ${v.soort.voluit}'
               '${kandidaten.isEmpty ? '' : ', de eerste ${kandidaten.first.username} — ${baseName(kandidaten.first.filename)}'}');
-          if (kandidaten.isNotEmpty) klaar = await _soortVanSoulseek(v, kandidaten);
+          if (kandidaten.isNotEmpty) {
+            klaar = v.soort == Kopiesoort.cd ? await _cdWedloop(v, kandidaten) : await _soortVanSoulseek(v, kandidaten);
+          }
         }
         if (!klaar && identical(vragen.van(v.pad), v)) klaar = await _soortViaTidal(v);
         if (!klaar) nogNiet.add(v);
-      }
+      });
       // Torrents als derde bron: per plaat, dus pas als elk nummer bij Soulseek en TIDAL langs is geweest.
       final uitTorrents = nogNiet.isEmpty ? const <Soortvraag>{} : await _soortViaTorrents(nogNiet);
       for (final v in gedaan) {
@@ -6218,7 +6236,7 @@ class DownloadManager extends ChangeNotifier {
     return kandidatenVoorSoort(v.soort, zeef,
             eigenGrootte: eigen.existsSync() ? eigen.lengthSync() : 0,
             afgewezen: twijfel?.afgewezenGroottes(v.pad) ?? const {})
-        .take(kSoortKandidaten)
+        .take(v.soort == Kopiesoort.cd ? kCdKandidaten : kSoortKandidaten)
         .toList();
   }
 
@@ -6250,6 +6268,48 @@ class DownloadManager extends ChangeNotifier {
             klaar = true;
             return;
           }
+        }
+      });
+    } catch (_) {/* geen sessie, geen net: de vraag blijft staan */}
+    return klaar;
+  }
+
+  /// Een cd via de wedloop ([_wedloop], [kCdKandidaten]): alle kandidaten beginnen samen, wie in een rij staat neemt geen
+  /// plaats in, en wie het eerst stuurt wint — de rest stopt voor hij iets stuurt. Keurt [_keurVoorSoort] de winnaar af,
+  /// dan een nieuwe wedloop met wie overblijft. Wie uit zichzelf afviel of afgekeurd werd, doet niet meer mee; wie
+  /// stopte omdat een ander won wel. Eén uploader in een rij hield hier eerst de hele plaat op (Jam, Dangerous,
+  /// 29-10-2026: plaats 16, acht minuten wachten, en vijf anderen erachter).
+  Future<bool> _cdWedloop(Soortvraag v, List<SoulseekFile> kandidaten) async {
+    final job = DownloadJob('${v.artiest} — ${v.titel}');
+    final deadline = DateTime.now().add(_upgradeBudget);
+    final af = <String>{};
+    var klaar = false;
+    try {
+      await soulseek.withSession((session) async {
+        while (!klaar) {
+          if (!identical(soortvragen?.van(v.pad), v)) return;
+          final left = deadline.difference(DateTime.now());
+          if (left <= const Duration(seconds: 30)) return;
+          final over = [for (final f in kandidaten) if (!af.contains(f.username)) f];
+          if (over.isEmpty) return;
+          final w = await _wedloop(session, job, over.first, (al) {
+            for (final f in over) {
+              if (!al.contains(f.username)) return f;
+            }
+            return null;
+          }, null,
+              artiest: v.artiest,
+              titel: v.titel,
+              seconden: v.seconden,
+              viel: af.add,
+              kop: '"${v.artiest} — ${v.titel}": cd-wedloop',
+              wacht: left < _maxWachtPerPeer ? left : _maxWachtPerPeer);
+          if (w == null) return; // niemand stuurde iets: TIDAL, torrents, en later opnieuw
+          af.add(w.f.username);
+          _log.line('   ${w.f.username}: ${_uitkomst(w.res)}');
+          final res = w.res;
+          if (res is! SlskDone) continue;
+          klaar = await _keurVoorSoort(v, File(res.path), 'Soulseek ${w.f.username}', w.f.filename);
         }
       });
     } catch (_) {/* geen sessie, geen net: de vraag blijft staan */}
@@ -6374,7 +6434,27 @@ class DownloadManager extends ChangeNotifier {
   /// kopie op papier hoger staat), wel: echt, de gevraagde soort volgens zijn kop en zijn bron, ongeveer even lang, en
   /// dezelfde opname — vanaf [kTwijfelVanaf] mag hij klaarstaan, daaronder (live, remix) nooit. Waar als hij klaarstaat;
   /// anders is [staged] weggegooid.
-  Future<bool> _keurVoorSoort(Soortvraag v, File staged, String bron, String bronpad) async {
+  ///
+  /// **Eén tegelijk**, ook als er nummers samen zoeken ([kSoortNummersTegelijk]) of twee rondes naast elkaar lopen: het
+  /// bewaren daarna verplaatst bestanden en schrijft de twijfellijst en de versies, en dat liep altijd na elkaar.
+  Future<bool> _keurVoorSoort(Soortvraag v, File staged, String bron, String bronpad) {
+    final beurt =
+        _soortKeuring.then((_) => keurSoortVoorToets?.call(v, staged, bron) ?? _keurVoorSoortNu(v, staged, bron, bronpad));
+    _soortKeuring = beurt.then((_) {}, onError: (Object _) {});
+    return beurt;
+  }
+
+  /// Waar de volgende keuring van [_keurVoorSoort] op wacht.
+  Future<void> _soortKeuring = Future<void>.value();
+
+  /// In een toets de keuring zelf (echtheid, vingerafdruk, bewaren) vervangen; de volgorde blijft één tegelijk.
+  @visibleForTesting
+  Future<bool> Function(Soortvraag v, File binnen, String bron)? keurSoortVoorToets;
+
+  @visibleForTesting
+  Future<bool> cdWedloopVoorToets(Soortvraag v, List<SoulseekFile> kandidaten) => _cdWedloop(v, kandidaten);
+
+  Future<bool> _keurVoorSoortNu(Soortvraag v, File staged, String bron, String bronpad) async {
     final naam = '${v.artiest} — ${v.titel}';
     Future<bool> weg(String waarom) async {
       _log.line('   $bron: $waarom — weggegooid, volgende kandidaat');
