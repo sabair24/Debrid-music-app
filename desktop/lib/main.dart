@@ -20193,11 +20193,15 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
             // hoes ("MADONNA ray of light") groot achter de titel en de tijdbalk. Dezelfde gebakken
             // waas als bovenaan een albumpagina ([HoesAchtergrond]): bij het tekenen kost hij niets,
             // en bij een nieuw nummer blijft de vorige staan tot de volgende klaar is.
+            //
+            // Met een dunnere waas dan op de albumpagina (Saber, 29-10-2026: "iets meer de kleur
+            // zien"), zie [HoesAchtergrond.nuSpeeltWaas].
             Positioned.fill(
               key: const Key('np-hoes-achter'),
               child: IgnorePointer(
                 child: LayoutBuilder(
-                  builder: (_, c) => HoesAchtergrond(beeld: MemoryImage(p.currentCover!), hoogte: c.maxHeight),
+                  builder: (_, c) => HoesAchtergrond(
+                      beeld: MemoryImage(p.currentCover!), hoogte: c.maxHeight, waas: HoesAchtergrond.nuSpeeltWaas),
                 ),
               ),
             ),

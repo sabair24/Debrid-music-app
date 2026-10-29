@@ -17,6 +17,7 @@ library;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:debridmusic/ui/kleuren.dart' show Thema;
 import 'package:debridmusic/ui/vlak.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -172,6 +173,54 @@ void main() {
     expect(g.colors.last.a, 0,
         reason: 'de hoes heeft zijn eigen donkering; eindigt de rand niet doorzichtig, dan telt die '
             'donkering in de balk dubbel en staat er op de onderrand van de balk een streep');
+  });
+
+  group('de waas van Nu speelt (Saber, 29-10-2026: "iets meer de kleur zien")', () {
+    tearDown(() => Thema.licht = false);
+
+    test('60 % in plaats van 70 %, op licht en op donker; de albumpagina houdt 70 %', () {
+      for (final licht in [false, true]) {
+        Thema.licht = licht;
+        expect(HoesAchtergrond.nuSpeeltWaas.a, closeTo(.60, .01), reason: licht ? 'licht' : 'donker');
+        expect(HoesAchtergrond.nuSpeeltWaas.withValues(alpha: 1), HoesAchtergrond.donkering.withValues(alpha: 1),
+            reason: 'dezelfde kleur als de albumpagina, alleen dunner');
+        expect(HoesAchtergrond.donkering.a, closeTo(.70, .01),
+            reason: 'bovenaan een albumpagina staan witte letters en glasknoppen op de hoes (kGrondDonkereKop)');
+      }
+    });
+
+    testWidgets('DE KERN: de meegegeven waas zit in het gebakken beeld, ook als hij wisselt', (t) async {
+      final rood = (await t.runAsync(() async {
+        final r = ui.PictureRecorder();
+        Canvas(r).drawRect(const Rect.fromLTWH(0, 0, 16, 16), Paint()..color = const Color(0xFFD03030));
+        final b = await r.endRecording().toImage(16, 16);
+        final png = (await b.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
+        b.dispose();
+        return png;
+      }))!;
+      final beeld = MemoryImage(rood);
+
+      // Het rood midden in de kop, waar de waas dicht is.
+      Future<int> rodeKop(Color? waas) async {
+        await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+            body: Stack(children: [Positioned.fill(child: HoesAchtergrond(beeld: beeld, hoogte: 400, waas: waas))]),
+          ),
+        ));
+        for (var i = 0; i < 5; i++) {
+          await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+          await t.pump();
+        }
+        final b = t.widget<RawImage>(find.descendant(of: find.byType(HoesAchtergrond), matching: find.byType(RawImage))).image!;
+        final px = (await t.runAsync(() => _pixels(b)))!;
+        return px[(((b.height - 1) * .3).round() * b.width + b.width ~/ 2) * 4];
+      }
+
+      // 30 % van 208 plus 70 % van 7, tegen 40 % en 60 %.
+      expect(await rodeKop(null), closeTo(67, 4), reason: 'zonder waas de donkering van de albumpagina');
+      expect(await rodeKop(HoesAchtergrond.nuSpeeltWaas), closeTo(87, 4),
+          reason: 'dezelfde hoes met een andere waas wordt opnieuw gebakken');
+    });
   });
 }
 

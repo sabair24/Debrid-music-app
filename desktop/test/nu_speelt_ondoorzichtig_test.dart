@@ -110,7 +110,9 @@ void main() {
     final i = main.indexOf("key: const Key('np-hoes-achter'),");
     expect(i, greaterThan(0));
     final stuk = main.substring(i, i + 300);
-    expect(stuk, contains('HoesAchtergrond(beeld: MemoryImage(p.currentCover!), hoogte: c.maxHeight)'));
+    expect(stuk, contains('HoesAchtergrond(\n'));
+    expect(stuk, contains('beeld: MemoryImage(p.currentCover!), hoogte: c.maxHeight, waas: HoesAchtergrond.nuSpeeltWaas)'),
+        reason: 'Nu speelt laat meer van de hoes door dan een albumpagina (Saber, 29-10-2026)');
     expect(stuk, isNot(contains('Image.memory')));
   });
 }
