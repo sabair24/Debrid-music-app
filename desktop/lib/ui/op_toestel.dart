@@ -11,7 +11,9 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../audioformaten.dart' show isVerliesvrij;
+import '../lan/client_session.dart' show ClientSession;
 import '../lan/stroomstand.dart' show losslessExtensie;
+import '../lan/verbindingsstand.dart' show Verbindingssoort, Verbindingsstand;
 import '../library.dart' show LibraryStore;
 import '../models.dart';
 import '../offline.dart';
@@ -116,7 +118,27 @@ class OpToestelMerk extends StatelessWidget {
 }
 
 /// Is de pc van dit toestel nu weg? Alleen op een toestel dat de pc uitleest; dan speelt alleen wat hier staat.
-bool pcWeg(LibraryStore l) => l.isRemote && l.geenVerbinding != null;
+///
+/// **Ook de [verbinding], niet alleen de bibliotheek (Saber, 29-10-2026).** *"als ik muziek speelde online, en dan
+/// lokaal omdat ik geen internet had … hij bleef de online sessie shuffelen, terwijl ik de lokale muziek shuffle knop had
+/// gedrukt"*. Gemeten op zijn gsm: om 15:42:46 viel het netwerk weg en zocht de verbinding meteen ("Zoekt je pc… 0 s",
+/// om 15:43:22 "Je pc reageert niet"). [LibraryStore.geenVerbinding] komt pas bij de volgende mislukte catalogusvraag, en
+/// om 15:42:59 schudde Shuffle op "Op dit toestel" daardoor alle 1841 nummers in plaats van de 136 die hier staan.
+bool pcWeg(LibraryStore l, {Verbindingsstand? verbinding, DateTime? nu}) =>
+    l.isRemote && (l.geenVerbinding != null || verbindingWeg(verbinding, nu: nu ?? DateTime.now()));
+
+/// Hoe lang "Zoekt je pc…" mag duren voordat dit toestel het als "geen pc" neemt. Een netwerkwissel vindt de pc meestal
+/// binnen een seconde terug (verbinding.log, 29-10-2026: 10:53:09.000 zoekt, .133 verbonden); vandaag bleef hij 36 s
+/// zoeken voordat hij "reageert niet" zei.
+const kZoektAlsWeg = Duration(seconds: 3);
+
+/// Zegt de [v]erbinding dat de pc weg is: weg, of al minstens [kZoektAlsWeg] aan het zoeken. Null (geen sessie, een
+/// toets) zegt niets.
+bool verbindingWeg(Verbindingsstand? v, {required DateTime nu}) => switch (v?.soort) {
+      null || Verbindingssoort.verbonden => false,
+      Verbindingssoort.weg => true,
+      Verbindingssoort.zoekt => nu.difference(v!.sinds!) >= kZoektAlsWeg,
+    };
 
 /// Grijs als de pc weg is en GEEN van [paden] op dit toestel staat: het staat in de lijst, maar speelt nu niet.
 ///
@@ -130,7 +152,9 @@ class NietHierGrijs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final weg = context.select<LibraryStore?, bool>((l) => l != null && pcWeg(l));
+    // Van de verbinding alleen ja of nee: elke rij luistert hiernaar, en de sessie meldt zich vaak.
+    final losVanPc = context.select<ClientSession?, bool>((s) => verbindingWeg(s?.verbinding, nu: DateTime.now()));
+    final weg = context.select<LibraryStore?, bool>((l) => l != null && (pcWeg(l) || (l.isRemote && losVanPc)));
     final nietHier = context.select<OfflineStore?, bool>((o) => o != null && !paden.any(o.has));
     // Opacity tekent een eigen laag, maar alleen zolang de pc weg is.
     return weg && nietHier ? Opacity(opacity: .38, child: child) : child;
