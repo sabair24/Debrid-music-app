@@ -22,6 +22,7 @@
 /// blijft een zwevend menu juist, maar dan kort en bij de cursor.
 library;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../tv.dart';
@@ -106,6 +107,9 @@ const _bladSluitDuur = Duration(milliseconds: 220);
 /// [bij] is waar de muis stond bij een rechtsklik. Null betekent: hang aan het aangewezen ding zelf —
 /// dat is juist bij een knop, want daar is de knop het anker en een muispositie willekeurig.
 Future<void> toonItemMenu(BuildContext context, ItemMenu menu, {Offset? bij}) async {
+  // Een menu zonder één regel gaat niet open: op de pc was dat een lege witte balk (Saber, 29-10-2026,
+  // Versies → Studio, dat al de standaard was en in de albummap stond).
+  if (menu.regels.isEmpty) return;
   final keuze = menuVorm(compact: isCompact(context), tv: isTv) == MenuVorm.blad
       ? await _viaBlad(context, menu)
       : await _viaZwever(context, menu, bij);
@@ -183,10 +187,15 @@ Future<MenuRegel?> _viaZwever(BuildContext context, ItemMenu menu, Offset? bij) 
   if (bij != null) {
     punt = laag.globalToLocal(bij);
   } else {
-    // Geen muispositie: hang aan het ding zelf, rechts in het midden.
+    // Geen rechtsklik: bij de muis als die net op dit ding klikte, anders rechts in het midden ervan.
     final box = context.findRenderObject() as RenderBox?;
     if (box == null || !box.attached) return null;
-    punt = box.localToGlobal(box.size.centerRight(Offset.zero), ancestor: laag);
+    final op = _muisNeerOp;
+    final vers = op != null && DateTime.now().difference(op) < _muisVers;
+    punt = zweefPunt(
+      muis: vers ? laag.globalToLocal(_muisNeer!) : null,
+      ding: box.localToGlobal(Offset.zero, ancestor: laag) & box.size,
+    );
   }
 
   final keuze = await showMenu<MenuRegel>(
@@ -210,6 +219,40 @@ Future<MenuRegel?> _viaZwever(BuildContext context, ItemMenu menu, Offset? bij) 
   // pakken, maar de duur kiezen we zelf, dus die afwachten is precies genoeg.
   await Future<void>.delayed(kItemMenuDuur);
   return keuze;
+}
+
+/// Waar en wanneer de muis het laatst indrukte, in schermcoördinaten.
+///
+/// **Waarom (Saber, 29-10-2026: "zorg ervoor op pc en mac, dat de menu naast de muis komt niet op het einde").** Een
+/// menu zonder [toonItemMenu]'s `bij` hing rechts aan wat je aanklikte. Bij een knop is dat naast de muis, maar bij een
+/// brede rij — een versie op de albumpagina, een nummerrij — stond het aan de rechterrand van het venster. Een klik geeft
+/// zijn plek niet door aan `onPressed`, dus onthoudt dit de laatste muisklik voor het hele programma.
+Offset? _muisNeer;
+DateTime? _muisNeerOp;
+bool _volgtMuis = false;
+
+/// Hoe lang een muisklik als "deze klik" telt; een lange druk duurt een halve seconde.
+const _muisVers = Duration(seconds: 2);
+
+/// Begin muisklikken te onthouden (main.dart, bij de start). Een tweede keer doet niets.
+void volgMuisVoorMenus() {
+  if (_volgtMuis) return;
+  _volgtMuis = true;
+  GestureBinding.instance.pointerRouter.addGlobalRoute((e) {
+    if (e is PointerDownEvent && e.kind == PointerDeviceKind.mouse) {
+      _muisNeer = e.position;
+      _muisNeerOp = DateTime.now();
+    }
+  });
+}
+
+/// Waar het zwevende menu komt, in de coördinaten van de overlay: waar de rechtsklik was ([bij]); anders bij de muis
+/// als die net op [ding] klikte; en zonder muis (toetsenbord, een tik) rechts in het midden van [ding].
+@visibleForTesting
+Offset zweefPunt({Offset? bij, Offset? muis, required Rect ding}) {
+  if (bij != null) return bij;
+  if (muis != null && ding.inflate(1).contains(muis)) return muis;
+  return ding.centerRight;
 }
 
 /// De posten voor het zwevende menu: regels met strepen ertussen.

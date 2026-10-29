@@ -581,6 +581,8 @@ String versieRegel(String versie, String bouw) {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Een menu na een klik komt bij de muis, niet aan het eind van een brede rij (itemmenu.dart).
+  volgMuisVoorMenus();
   // Op een bureaublad mag de beeldcache ruim. Standaard houdt Flutter 100 MB aan gedecodeerde beelden
   // vast; een hoes op tegelmaat is daar ~325 KB, met de cd en de albumpagina erbij op andere maten,
   // en een bibliotheek van 726 hoezen past er dan niet in: terugscrollen decodeerde opnieuw, en
@@ -15068,17 +15070,23 @@ ItemMenu _plaatversieMenu(BuildContext context, Album album, Plaatversie v) {
   return ItemMenu(
     titel: naam,
     ondertitel: '${album.title} · ${v.nummers} van ${album.tracks.length} nummers',
+    // Wat niet kan staat er grijs bij, met waarom: Studio die al de standaard was en in de albummap stond gaf een leeg
+    // menu, een witte balk (Saber, 29-10-2026: "als ik op studio klik krijg ik dit ?").
     blokken: [
       [
         if (v.standaard < v.nummers)
           MenuRegel(Icons.check_circle_outline_rounded, 'Standaard voor deze plaat',
-              () => unawaited(_onthoudEnMeld(context, eerste.nummer, eerste.versie, VersieBereik.plaat))),
+              () => unawaited(_onthoudEnMeld(context, eerste.nummer, eerste.versie, VersieBereik.plaat)))
+        else
+          MenuRegel(Icons.check_circle_rounded, 'Is al de standaard voor deze plaat', () {}, uit: true),
       ],
       // Weggooien apart en met een vraag ervoor (een vernietigende knop naast een gewone ging vier keer mis).
       [
-        if (!v.anker && !isTv)
-          MenuRegel(Icons.delete_outline_rounded, 'Deze versie weggooien ($versieleden nummers)…',
-              () => unawaited(_gooiPlaatversieWeg(context, album, v))),
+        if (!isTv)
+          v.anker
+              ? MenuRegel(Icons.delete_outline_rounded, 'Niet weg te gooien: staat in de albummap', () {}, uit: true)
+              : MenuRegel(Icons.delete_outline_rounded, 'Deze versie weggooien ($versieleden nummers)…',
+                  () => unawaited(_gooiPlaatversieWeg(context, album, v))),
       ],
     ],
   );
