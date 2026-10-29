@@ -341,4 +341,27 @@ void main() {
       expect(queue.items['a']!.progress, 1.0);
     });
   });
+
+  // 28-10-2026: een afgeronde opdracht die in de rij bleef staan, hield de pc voor altijd in het ritme van 20 s.
+  group('wat de wachtrij wakker houdt', () {
+    final nu = DateTime(2026, 10, 28, 21, 50);
+    QueueItem item(String status, {DateTime? gevraagd}) =>
+        QueueItem(id: 'x', kind: QueueKind.soulseek, title: 't', payload: const {}, status: status, requestedAt: gevraagd);
+
+    test('wat nog wacht of loopt, houdt hem wakker', () {
+      expect(houdtWachtrijWakker(item(QueueStatus.queued), nu), isTrue);
+      expect(houdtWachtrijWakker(item(QueueStatus.claimed), nu), isTrue);
+      expect(houdtWachtrijWakker(item(QueueStatus.running), nu), isTrue);
+    });
+
+    test('DE KERN: een opdracht die lang geleden afliep, niet', () {
+      expect(houdtWachtrijWakker(item(QueueStatus.done, gevraagd: nu.subtract(const Duration(days: 3))), nu), isFalse);
+      expect(houdtWachtrijWakker(item(QueueStatus.failed, gevraagd: nu.subtract(const Duration(hours: 1))), nu), isFalse);
+      expect(houdtWachtrijWakker(item(QueueStatus.done), nu), isFalse, reason: 'zonder tijdstip: oud');
+    });
+
+    test('een opdracht die pas gevraagd is en al klaar, wel: er gebeurt net iets', () {
+      expect(houdtWachtrijWakker(item(QueueStatus.done, gevraagd: nu.subtract(const Duration(minutes: 2))), nu), isTrue);
+    });
+  });
 }

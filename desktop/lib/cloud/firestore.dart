@@ -12,10 +12,20 @@ library;
 
 import 'dart:convert';
 import 'dart:io' show HttpDate;
+import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import '../haperlog.dart';
 import 'config.dart';
+
+/// Vanaf deze grootte wordt een antwoord buiten de tekendraad omgezet ([_jsonInIsolate]).
+const int kGrootCloudAntwoord = 256 * 1024;
+
+/// JSON uit [bytes], in een eigen isolate. Op het hoogste niveau, zodat de closure alleen [bytes] meeneemt (zie
+/// isolate-closure in het geheugen van dit project: een closure in een methode nam `this` mee).
+Future<Object?> _jsonInIsolate(Uint8List bytes) => Isolate.run(() => jsonDecode(utf8.decode(bytes)));
 
 class FirestoreException implements Exception {
   const FirestoreException(this.message, {this.statusCode});
@@ -93,18 +103,33 @@ class Firestore {
   /// Every document in a collection. `pageSize` is generous because the collections here are
   /// small: a handful of devices, a handful of servers, a queue of wishes.
   Future<List<FirestoreDoc>> list(String collectionPath, {int pageSize = 300}) async {
+    final klok = Stopwatch()..start();
     final res = await _send(() => _http.get(
           config.documentsUrl(collectionPath, {'pageSize': '$pageSize'}),
           headers: _headers,
         ));
     if (res.statusCode == 404) return const [];
-    final body = _decode(res);
+    // Een groot antwoord buiten de tekendraad omzetten. 28-10-2026: de pc hield om de 20,8 s ~150 ms de tekendraad vast,
+    // met telkens ~100 MB geheugen erbij en meteen weer weg — precies het ritme van de cloudwachtrij (queue_worker.dart).
+    final groot = res.bodyBytes.length >= kGrootCloudAntwoord && res.statusCode >= 200 && res.statusCode < 300;
+    final body = groot
+        ? switch (await _jsonInIsolate(res.bodyBytes)) {
+            final Map<String, dynamic> m => m,
+            _ => <String, dynamic>{},
+          }
+        : _decode(res);
     final docs = body['documents'];
     if (docs is! List) return const [];
-    return [
-      for (final d in docs)
-        if (d is Map<String, dynamic>) _toDoc(d, serverTijd: _datum(res)),
-    ];
+    final uit = traagMeten('cloud ${collectionPath.split('/').last} omzetten', () => [
+          for (final d in docs)
+            if (d is Map<String, dynamic>) _toDoc(d, serverTijd: _datum(res)),
+        ]);
+    // Alleen de laatste naam van de verzameling: de rest van het pad draagt het account.
+    if (groot || klok.elapsedMilliseconds >= 1000) {
+      haperCloud('${collectionPath.split('/').last}: ${uit.length} stuks, ${res.bodyBytes.length ~/ 1024} KB, '
+          '${klok.elapsedMilliseconds} ms');
+    }
+    return uit;
   }
 
   /// Create or overwrite. Only the named fields are touched — everything else in the document

@@ -14,6 +14,18 @@ import '../online.dart';
 import 'queue.dart';
 import 'zuinig.dart';
 
+/// Houdt [item] de wachtrij in het snelle ritme ([kSnelRitme])? Alles wat nog wacht of loopt, en wat in de laatste
+/// [kStilteVoorTraag] gevraagd werd — niet een opdracht die lang geleden afliep.
+///
+/// **Waarom (28-10-2026).** Hier telde élk item mee, ook een afgerond. Wat afloopt, blijft in de rij staan (de pc ruimt
+/// het niet op), dus bleef de pc voor altijd om de 20 s de hele rij lezen: tot 300 documenten per keer, elk een leesbeurt
+/// van de gratis daglimiet, en op de pc om de 20,8 s ~150 ms vast met ~100 MB geheugen erbij.
+bool houdtWachtrijWakker(QueueItem item, DateTime nu) {
+  if (!item.isFinished) return true;
+  final gevraagd = item.requestedAt;
+  return gevraagd != null && nu.difference(gevraagd) < kStilteVoorTraag;
+}
+
 class QueueWorker {
   QueueWorker({
     required this.backend,
@@ -91,8 +103,9 @@ class QueueWorker {
     try {
       final items = await backend.list();
       // Iets in de rij betekent: blijf snel kijken. Ook een item dat al klaar is telt mee -- er is
-      // dan zojuist iets gebeurd, en de kans is groot dat er meer volgt.
-      if (items.isNotEmpty) _laatsteWerk = now();
+      // dan zojuist iets gebeurd, en de kans is groot dat er meer volgt. Maar alleen als het pas gevraagd is: zie
+      // [houdtWachtrijWakker].
+      if (items.any((i) => houdtWachtrijWakker(i, now()))) _laatsteWerk = now();
       for (final item in items) {
         if (_running.contains(item.id)) continue;
         if (item.isFinished) continue;
