@@ -34,6 +34,32 @@ List<String> zoekwoordenVoorSoort(Kopiesoort s) => switch (s) {
 /// Hoeveel kandidaten één ronde hoogstens binnenhaalt voor één nummer: elke mislukte kost een download.
 const int kSoortKandidaten = 6;
 
+/// Bij cd zoveel kandidaten, en die beginnen allemaal samen: wie het eerst stuurt wint, de rest stopt voor hij iets
+/// stuurt (de wedloop van ▶, `DownloadManager._wedloop`). Elke cd-kopie is 16/44,1, dus de snelste is goed genoeg. Saber,
+/// 29-10-2026, bij Dangerous: *"zeker cd kwaliteit moet instant gaan bijna, studio en vinyl dat snap ik maar cd is echt
+/// basis"* — daar stond Jam op plaats 16 in de rij van de eerste uploader, en de vijf anderen wachtten erachter. Studio
+/// en vinyl blijven de beste eerst, één voor één: daar kan de snelste een 24/48 zijn waar ook een 24/192 klaarstond.
+const int kCdKandidaten = 12;
+
+/// Hoeveel nummers van een plaat er samen zoeken als je zelf een soort vroeg (zie [kCdKandidaten]): de veertien van
+/// Dangerous gingen één voor één. De ronde die vanzelf terugkomt ([soortvraagWacht]) blijft één voor één.
+const int kSoortNummersTegelijk = 4;
+
+/// [werk] voor elk van [items], in volgorde begonnen en hoogstens [n] tegelijk. Een fout stopt alleen die ene loper: de
+/// andere werken de rij af, en daarna komt de eerste fout terug.
+Future<void> metHoogstens<T>(int n, Iterable<T> items, Future<void> Function(T) werk) async {
+  final rij = items.toList();
+  if (rij.isEmpty) return;
+  var volgende = 0;
+  Future<void> loper() async {
+    while (volgende < rij.length) {
+      await werk(rij[volgende++]);
+    }
+  }
+
+  await Future.wait([for (var i = 0; i < n.clamp(1, rij.length); i++) loper()]);
+}
+
 /// Hoeveel een vinylrip in lengte mag schelen vóór het binnenhalen: een plaat draait vaak een paar seconden langer
 /// ("Mademoiselle chante le blues": 235 s tegen 228 s). De vingerafdruk beslist daarna of het dezelfde opname is.
 const int kVinylLengteSpeling = 15;
