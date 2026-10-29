@@ -291,19 +291,33 @@ void main() {
       Album dummy() => c.library.albums.firstWhere((a) => a.title == 'Dummy');
       expect(dummy().cover, isNull, reason: 'de pc had nog niets');
       expect(c.library.hoesHerkansingGepland, isTrue, reason: 'na een 404 staat er een herkansing klaar');
-      final vraag = c.requests.firstWhere((r) => r.startsWith('/art/') && c.library.albums.isNotEmpty);
-      final ref = Uri.parse(vraag).pathSegments.last;
+      // De hoes van DUMMY, en niet die van "de eerste vraag naar /art/". **Dat was de wankelheid**, niet de klok. De single
+      // Teardrop heeft ook geen hoes, dus gaan er twee vragen tegelijk naar de pc, en welke het eerst aankomt hangt af van
+      // welk bestand eerder gelezen is. Kwam Teardrop eerst, dan kreeg Teardrop de hoes en vroeg het toestel drie keer
+      // tevergeefs naar die van Dummy: in het logboek "2, 1, 1 gevraagd, geen enkele gekregen" en null na het hele venster
+      // (Linux, 3.9.681, 29-10-2026). Op macOS stonden in 3.9.576 en 3.9.578 dezelfde regels. Nagespeeld onder CPU-last:
+      // 1 keer op 192 vanzelf, en altijd zodra Teardrop voorrang krijgt.
+      final ref = c.library.remoteAlbumId(dummy())!;
       int vragenNaar() => c.requests.where((r) => r.startsWith('/art/') && Uri.parse(r).pathSegments.last == ref).length;
       final eerder = vragenNaar();
+      expect(eerder, 1, reason: 'de eerste ronde vroeg de hoes van Dummy één keer aan de pc');
       final hoes = Uint8List.fromList(List.generate(700, (i) => (i * 13) % 256));
       // Vóór de eerstvolgende wachtstap: tussen het einde van de ronde en hier ligt geen enkele beurt voor een klok.
       art[ref] = hoes; // intussen gevonden op de pc
       // Ruim: op een snelle machine is de hoes er na een tiende van een seconde; de bovengrens is er alleen voor een
       // bouwstraat die even niets doet, en niet voor de wachttijden zelf.
+      //
+      // Wachten tot de hoes er is ÉN de ronde die hem bracht klaar is. Hij staat al op het album voordat hij in de hoescache
+      // staat, en daarna vraagt de ronde nog naar Teardrop. Stopte de toets meteen, dan wiste tearDown de map terwijl er nog
+      // in geschreven werd (op Windows errno 32: 50 van 192 onder last), en plande die ronde daarna nog een herkansing voor
+      // Teardrop, die in de volgende toets afging.
       final eind = DateTime.now().add(const Duration(seconds: 40));
-      while (dummy().cover == null && DateTime.now().isBefore(eind)) {
+      while ((dummy().cover == null || c.library.enriching) && DateTime.now().isBefore(eind)) {
         await Future<void>.delayed(const Duration(milliseconds: 20));
       }
+      // In dezelfde beurt als de laatste blik hierboven: er loopt geen ronde meer, en de klok die nog voor Teardrop
+      // klaarstaat gaat nu niet meer af.
+      c.library.stopHoesHerkansing();
       expect(vragenNaar(), greaterThan(eerder), reason: 'het toestel vroeg het zelf opnieuw');
       expect(dummy().cover, hoes, reason: 'vanzelf opnieuw gevraagd na een 404');
     },
@@ -311,6 +325,7 @@ void main() {
         // Op de macOS-bouwstraat kwam de hoes ook na 24 s niet (3.9.576 en 3.9.578, terwijl 3.9.577 slaagde): daar speelt
         // meer dan timing — op 21-10-2026 kwam de hoes van de ene toets er in de volgende terecht (gedeelde map). Op
         // Windows en Linux blijft deze toets lopen; de Mac-app hoort niet op een wankele toets te sneuvelen.
+        // (29-10-2026: de logboeken van 3.9.576 en 3.9.578 tonen dezelfde wedloop als de Linux-storing hierboven.)
         skip: Platform.isMacOS ? 'wankel op de macOS-bouwstraat; loopt op Windows en Linux' : false);
 
     test('HERKANSEN: in de app 4, 12 en 40 s, en daarna niet meer', () {
