@@ -6799,9 +6799,17 @@ class _OpDitToestelViewState extends State<OpDitToestelView> {
         ? lijst.nummers
         : opToestelLijst(opgeslagen: opgeslagen, nummerVan: lib.trackByPath, albums: const [], az: _az).nummers;
     // Saber, 29-10-2026: met de pc bereikbaar spelen deze knoppen je hele bibliotheek; zonder pc alleen wat hier staat.
-    final pcBereikbaar = lib.isRemote && lib.geenVerbinding == null;
+    // Ook de verbinding telt ([pcWeg]): de bibliotheek merkt pas bij haar volgende vraag dat de pc weg is.
+    final sessie = _misschien<ClientSession>(context, luister: true);
+    final pcBereikbaar = lib.isRemote && !pcWeg(lib, verbinding: sessie?.verbinding);
     final teSpelen = pcBereikbaar ? lib.tracks : alleHier;
-    final speler = rijVoor(context);
+    // Bij de tik opnieuw gevraagd, niet bij het tekenen: "Zoekt je pc…" wordt pas na [kZoektAlsWeg] "weg", en daar
+    // tekent niets voor opnieuw. Zonder pc speelt het op dit toestel, ook als er een zone gekozen is — die bereik je
+    // alleen via de pc.
+    ({List<Track> lijst, Rijbediening speler}) nuTeSpelen() =>
+        lib.isRemote && !pcWeg(lib, verbinding: sessie?.verbinding)
+            ? (lijst: lib.tracks, speler: rijVoor(context))
+            : (lijst: alleHier, speler: context.read<PlayerStore>());
     final narrow = isCompact(context);
     final rand = narrow ? 18.0 : 28.0;
 
@@ -6825,8 +6833,10 @@ class _OpDitToestelViewState extends State<OpDitToestelView> {
                 onPressed: teSpelen.isEmpty
                     ? null
                     : () {
-                        speler.shuffleAll(teSpelen);
-                        _srcToast(context, 'Shuffle · ${toestelOmvang(teSpelen.length, 0)}');
+                        final nu = nuTeSpelen();
+                        if (nu.lijst.isEmpty) return;
+                        nu.speler.shuffleAll(nu.lijst);
+                        _srcToast(context, 'Shuffle · ${toestelOmvang(nu.lijst.length, 0)}');
                       },
                 icoon: Icons.shuffle_rounded,
                 label: 'Shuffle',
@@ -6836,8 +6846,10 @@ class _OpDitToestelViewState extends State<OpDitToestelView> {
                 onPressed: teSpelen.isEmpty
                     ? null
                     : () {
-                        speler.playQueue(teSpelen, 0);
-                        _srcToast(context, 'Speelt alles vanaf “${teSpelen.first.title}”');
+                        final nu = nuTeSpelen();
+                        if (nu.lijst.isEmpty) return;
+                        nu.speler.playQueue(nu.lijst, 0);
+                        _srcToast(context, 'Speelt alles vanaf “${nu.lijst.first.title}”');
                       },
                 icoon: Icons.play_arrow_rounded,
                 label: 'Alles afspelen',
@@ -14031,7 +14043,10 @@ Future<void> speelGetikt(BuildContext context, List<Track> lijst, int index, {Ui
   if (index < 0 || index >= lijst.length) return;
   // Zonder pc speelt alleen wat op dit toestel staat (Saber, 29-10-2026); de rest staat grijs ([NietHierGrijs]).
   final hierAlleen = context.read<OfflineStore?>();
-  if (hierAlleen != null && pcWeg(context.read<LibraryStore>())) {
+  // Ook de verbinding: de bibliotheek merkt pas bij haar volgende vraag dat de pc weg is ([pcWeg], 29-10-2026).
+  final zonderPc =
+      hierAlleen != null && pcWeg(context.read<LibraryStore>(), verbinding: _misschien<ClientSession>(context)?.verbinding);
+  if (zonderPc) {
     final hier = alleenHier(lijst, index, hierAlleen.has);
     if (hier == null) {
       _srcToast(context, 'Staat niet op dit toestel, en je pc is nu niet bereikbaar');
@@ -14040,8 +14055,8 @@ Future<void> speelGetikt(BuildContext context, List<Track> lijst, int index, {Ui
     (lijst, index) = (hier.lijst, hier.index);
   }
   // In de gekozen zone (Saber, 21-10-2026: "Tik in de bibliotheek speelt in de gekozen zone"); de vraag
-  // gaat over HAAR wachtrij.
-  final afstand = _misschien<GekozenZone>(context)?.opAfstand;
+  // gaat over HAAR wachtrij. Zonder pc op dit toestel: een zone bereik je alleen via de pc.
+  final afstand = zonderPc ? null : _misschien<GekozenZone>(context)?.opAfstand;
   final lokaal = context.read<PlayerStore>();
   final Rijbediening p = afstand ?? lokaal;
   final instellingen = context.read<AppSettings>();

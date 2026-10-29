@@ -241,7 +241,7 @@ void main() {
       final tik = main.indexOf('Future<void> speelGetikt(BuildContext context');
       expect(main.indexOf('    final hier = alleenHier(lijst, index, hierAlleen.has);\n', tik), greaterThan(tik));
       expect(main.indexOf('    (lijst, index) = (hier.lijst, hier.index);\n', tik),
-          lessThan(main.indexOf('  final afstand = _misschien<GekozenZone>(context)?.opAfstand;', tik)),
+          lessThan(main.indexOf('  final afstand = zonderPc ? null : _misschien<GekozenZone>(context)?.opAfstand;', tik)),
           reason: 'eerst filteren, dan pas spelen');
       final lib = _bron('lib/library.dart');
       expect(lib, contains('    final wasWeg = geenVerbinding != null;\n    geenVerbinding = null;\n    if (wasWeg) notifyListeners();\n'),
