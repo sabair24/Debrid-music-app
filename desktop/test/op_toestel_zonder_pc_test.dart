@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:debridmusic/lan/client.dart';
 import 'package:debridmusic/lan/client_session.dart';
 import 'package:debridmusic/lan/verbindingsstand.dart';
+import 'package:debridmusic/lan/zones.dart';
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/main.dart';
 import 'package:debridmusic/models.dart';
@@ -17,6 +18,8 @@ import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/player.dart';
 import 'package:debridmusic/settings.dart';
 import 'package:debridmusic/ui/op_toestel.dart';
+import 'package:debridmusic/zone_lijst.dart';
+import 'package:debridmusic/zone_speler.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -222,6 +225,140 @@ void main() {
       expect(find.ancestor(of: find.text('hier'), matching: find.byType(Opacity)), findsNothing);
     });
 
+    // Saber, 29-10-2026, over Shuffle alles op Nummers: "ja doe da maar ook".
+    Future<_Speler> nummers(WidgetTester tester, Verbindingsstand stand) async {
+      final r = await bouw(tester, stand);
+      final lib = tester.element(find.byType(OpDitToestelView)).read<LibraryStore>();
+      // iPad-breedte: het toetslettertype meet ongeveer dubbel zo breed, en op 360 liepen de twee knoppen over.
+      tester.view.physicalSize = const Size(2048, 1536);
+      tester.view.devicePixelRatio = 2;
+      await tester.pumpWidget(MultiProvider(
+        providers: [
+          ChangeNotifierProvider<LibraryStore>.value(value: lib),
+          ChangeNotifierProvider<OfflineStore>.value(value: offline),
+          ChangeNotifierProvider<AppSettings>.value(value: AppSettings()),
+          ListenableProvider<PlayerStore>.value(value: r.speler),
+          ListenableProvider<ClientSession>.value(value: r.sessie),
+        ],
+        child: const MaterialApp(home: Scaffold(body: TracksView())),
+      ));
+      await tester.pumpAndSettle();
+      return r.speler;
+    }
+
+    testWidgets('DE KERN: Shuffle alles op Nummers zonder pc schudt alleen wat hier staat, en zegt dat', (tester) async {
+      final speler = await nummers(tester, Verbindingsstand.zoekt(DateTime.now().subtract(const Duration(seconds: 13))));
+      await tester.tap(find.byKey(const ValueKey('nummers-shuffle-alles')));
+      await tester.pump();
+      expect(speler.geschud.single.toSet(), hier);
+      expect(find.text('Shuffle · 2 nummers · alleen wat op dit toestel staat'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('Speel alles op Nummers zonder internet: alleen wat hier staat', (tester) async {
+      final speler = await nummers(tester, const Verbindingsstand.weg(Waarom.geenInternet));
+      await tester.tap(find.byKey(const ValueKey('nummers-speel-alles')));
+      await tester.pump();
+      expect(speler.gespeeld.single.toSet(), hier);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('Shuffle alles op Nummers met de pc: de hele bibliotheek, zonder extra zin', (tester) async {
+      final speler = await nummers(tester, const Verbindingsstand.verbonden(Verbindingsweg.thuis));
+      await tester.tap(find.byKey(const ValueKey('nummers-shuffle-alles')));
+      await tester.pump();
+      expect(speler.geschud.single.toSet(), alles);
+      expect(find.text('Shuffle · 4 nummers'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('een gekozen zone: met de pc gaat Shuffle alles daarheen, zonder pc speelt het op dit toestel',
+        (tester) async {
+      const nu = 10000000;
+      final zones = ZoneLijst(hier: 'dev:gsm-1', klok: () => nu)
+        ..zet({
+          'nu': nu,
+          'zones': [
+            const ZoneStaat(
+                    id: 'dev:pc-THUIS',
+                    soort: ZoneSoort.pc,
+                    naam: 'THUIS',
+                    online: true,
+                    playing: true,
+                    trackId: 'b',
+                    titel: 'Titel',
+                    positionMs: 60000,
+                    durationMs: 240000,
+                    opMs: nu,
+                    index: 3,
+                    lengte: 10,
+                    volume: 70)
+                .toJson()
+          ],
+        });
+      final naarZone = <Map<String, dynamic>>[];
+      final gekozen = GekozenZone(
+        lijst: zones,
+        bewaar: (_) {},
+        maak: (id) => ZoneSpeler(
+            lijst: zones,
+            zoneId: id,
+            nummer: (_) => null,
+            idVan: (t) => t.title,
+            hoesVan: (_) => null,
+            stuur: (op) async {
+              naarZone.add(op);
+              return null;
+            }),
+      )..kies('dev:pc-THUIS');
+      final r = await bouw(tester, const Verbindingsstand.verbonden(Verbindingsweg.thuis));
+      final lib = tester.element(find.byType(OpDitToestelView)).read<LibraryStore>();
+      tester.view.physicalSize = const Size(2048, 1536);
+      tester.view.devicePixelRatio = 2;
+      await tester.pumpWidget(MultiProvider(
+        providers: [
+          ChangeNotifierProvider<LibraryStore>.value(value: lib),
+          ChangeNotifierProvider<OfflineStore>.value(value: offline),
+          ChangeNotifierProvider<AppSettings>.value(value: AppSettings()),
+          ChangeNotifierProvider<GekozenZone>.value(value: gekozen),
+          ListenableProvider<PlayerStore>.value(value: r.speler),
+          ListenableProvider<ClientSession>.value(value: r.sessie),
+        ],
+        child: const MaterialApp(home: Scaffold(body: TracksView())),
+      ));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('nummers-shuffle-alles')));
+      await tester.pump();
+      expect(naarZone.single['cmd'], 'speel');
+      expect(naarZone.single['shuffle'], isTrue);
+      expect(r.speler.geschud, isEmpty, reason: 'met de pc speelt het in de gekozen zone');
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+
+      r.sessie.verbinding = const Verbindingsstand.weg(Waarom.geenInternet);
+      await tester.tap(find.byKey(const ValueKey('nummers-shuffle-alles')));
+      await tester.pump();
+      expect(naarZone, hasLength(1), reason: 'een zone bereik je alleen via de pc');
+      expect(r.speler.geschud.single.toSet(), hier);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await tester.pumpWidget(const SizedBox());
+      gekozen.dispose(); // de zone tikt elke halve seconde
+    });
+
+    testWidgets('niets hiervan op dit toestel en geen pc: er speelt niets, en de melding zegt waarom', (tester) async {
+      final r = await bouw(tester, const Verbindingsstand.weg(Waarom.onbekend));
+      final ctx = tester.element(find.byType(OpDitToestelView));
+      expect(speelLijst(ctx, [pc1, pc2], schud: true), isEmpty);
+      await tester.pump();
+      expect(r.speler.geschud, isEmpty);
+      expect(find.text('Hiervan staat niets op dit toestel, en je pc is nu niet bereikbaar'), findsOneWidget);
+      await tester.pumpAndSettle(const Duration(seconds: 3)); // de melding weg, anders wacht de volgende erachter
+      expect(speelLijst(ctx, [pc1, hier2, pc2], schud: false).map((t) => t.path), [hier2.path],
+          reason: 'een album waarvan één nummer hier staat: dat ene speelt');
+      await tester.pump();
+      expect(find.text('Zonder pc: 1 van de 3 nummers, wat op dit toestel staat'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
     testWidgets('een tik in Nummers (de hele bibliotheek) zonder pc: alleen wat hier staat, en niets van de pc',
         (tester) async {
       final r = await bouw(tester, Verbindingsstand.zoekt(DateTime.now().subtract(const Duration(seconds: 13))));
@@ -261,6 +398,17 @@ void main() {
     expect(pagina, contains(': (lijst: alleHier, speler: context.read<PlayerStore>());'),
         reason: 'zonder pc op dit toestel, ook als er een zone gekozen is');
     expect(pagina, isNot(contains('lib.geenVerbinding == null')), reason: 'de oude regel keek alleen naar de bibliotheek');
+    for (final (waar, regel) in [
+      ('albumpagina', 'onPressed: () => speelLijst(context, album.tracks, schud: false, cover: album.cover),'),
+      ('albumtegel', ': () => speelLijst(context, a.tracks, schud: false, cover: a.cover),'),
+      ('albummenu', "'Afspelen', () => speelLijst(context, nummers, schud: false, cover: a.cover)),"),
+      ('afspeellijst', 'onPressed: () => speelLijst(context, nummers, schud: true),'),
+      ('afspeellijst', 'onPressed: () => speelLijst(context, nummers, schud: false),'),
+    ]) {
+      expect(main, contains(regel), reason: '$waar: zonder pc alleen wat hier staat');
+    }
+    expect(RegExp(r'\.shuffleAll\(').allMatches(main).length, 2,
+        reason: 'alleen speelLijst en de knop van Op dit toestel schudden zelf; de rest gaat via speelLijst');
     final grijs = _bron('lib/ui/op_toestel.dart');
     expect(grijs, contains('(pcWeg(l) || (l.isRemote && losVanPc))'), reason: 'grijs zodra de verbinding weg is');
   });

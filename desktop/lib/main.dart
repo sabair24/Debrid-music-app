@@ -7086,7 +7086,7 @@ class _ToestelAfspeellijsten extends StatelessWidget {
               trailing: IconButton(
                 tooltip: 'Shuffle',
                 icon: const Icon(Icons.shuffle_rounded),
-                onPressed: () => rijVoor(context).shuffleAll(r.nummers),
+                onPressed: () => speelLijst(context, r.nummers, schud: true),
               ),
             ),
           ),
@@ -7654,7 +7654,7 @@ class AlbumCard extends StatelessWidget {
       schijf: a.cover == null ? null : (maat) => _TegelCd(album: a, maat: maat),
       onAfspelen: a.tracks.isEmpty
           ? null
-          : () => rijVoor(context).playQueue(a.tracks, 0, cover: a.cover),
+          : () => speelLijst(context, a.tracks, schud: false, cover: a.cover),
       // Tot nu toe kon een albumtegel precies één ding: opengaan. Afspelen, in de wachtrij zetten,
       // radio en verwijderen zaten allemaal een navigatiestap dieper.
       onLongPress: _menuOpHouden ? () => _toonItemMenu(context, _albumMenu(context, a)) : null,
@@ -9207,7 +9207,6 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
   static const _minTitelBreedte = 300.0;
 
   Widget _kop(BuildContext context, double breedte) {
-    final player = rijVoor(context);
     // 18 op een telefoon en 28 op een pc — terwijl de tracklijst eronder op 20 stond en de rest van
     // de app sinds ronde 1 op [kGoot]. Drie gootbreedtes op één pagina, en dat is precies wat je als
     // "het rammelt" ziet zonder te kunnen aanwijzen waarom. De hoes wordt hierdoor op een telefoon
@@ -9317,7 +9316,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                       // default is the first focusable thing in the route, which here is the back
                       // arrow — so opening a record put the highlight on "leave this record".
                       autofocus: isTv,
-                      onPressed: () => player.playQueue(album.tracks, 0, cover: album.cover),
+                      onPressed: () => speelLijst(context, album.tracks, schud: false, cover: album.cover),
                       icoon: Icons.play_arrow_rounded,
                       label: 'Afspelen',
                     ),
@@ -11769,6 +11768,30 @@ T? _misschien<T>(BuildContext context, {bool luister = false}) {
 Rijbediening rijVoor(BuildContext context) =>
     _misschien<GekozenZone>(context)?.opAfstand ?? context.read<PlayerStore>();
 
+/// Een hele lijst spelen of schudden: Shuffle alles, Speel alles, Afspelen van een album of een afspeellijst. Zonder pc
+/// alleen wat op dit toestel staat, en op dit toestel, ook als er een zone gekozen is (Saber, 29-10-2026, over Shuffle
+/// alles op Nummers: *"ja doe da maar ook"*). [melding] zegt wat er gebeurde; zonder [melding] alleen iets als er zonder
+/// pc minder speelt dan er staat. Geeft terug wat er speelt: leeg als er zonder pc niets van [lijst] hier staat.
+List<Track> speelLijst(BuildContext context, List<Track> lijst,
+    {required bool schud, Uint8List? cover, String Function(List<Track> nu)? melding}) {
+  final hier = _misschien<OfflineStore>(context);
+  final lib = _misschien<LibraryStore>(context);
+  final zonderPc = hier != null && lib != null && pcWeg(lib, verbinding: _misschien<ClientSession>(context)?.verbinding);
+  final nu = zonderPc ? [for (final t in lijst) if (hier.has(t.path)) t] : lijst;
+  if (nu.isEmpty) {
+    if (zonderPc) _srcToast(context, 'Hiervan staat niets op dit toestel, en je pc is nu niet bereikbaar');
+    return nu;
+  }
+  final Rijbediening speler = zonderPc ? context.read<PlayerStore>() : rijVoor(context);
+  unawaited(schud ? speler.shuffleAll(nu) : speler.playQueue(nu, 0, cover: cover));
+  if (melding != null) {
+    _srcToast(context, '${melding(nu)}${zonderPc ? ' · alleen wat op dit toestel staat' : ''}');
+  } else if (zonderPc && nu.length < lijst.length) {
+    _srcToast(context, 'Zonder pc: ${nu.length} van de ${lijst.length} nummers, wat op dit toestel staat');
+  }
+  return nu;
+}
+
 /// Move the playhead by [seconds], clamped to the track.
 ///
 /// Clamped rather than left to the player: seeking past the end restarts the queue on some
@@ -13629,7 +13652,6 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
   Widget build(BuildContext context) {
     final lijsten = context.watch<Afspeellijsten>();
     final lib = context.watch<LibraryStore>();
-    final p = rijVoor(context);
     final lijst = lijsten.byId(id);
     if (lijst == null) {
       return Scaffold(
@@ -13685,7 +13707,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
               child: IconButton(
               icon: const Icon(Icons.play_arrow_rounded),
               tooltip: 'Afspelen',
-              onPressed: () => p.playQueue(nummers, 0),
+              onPressed: () => speelLijst(context, nummers, schud: false),
             ),
             ),
             TvLabelled(
@@ -13693,7 +13715,7 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
               child: IconButton(
               icon: const Icon(Icons.shuffle_rounded),
               tooltip: 'Shuffle',
-              onPressed: () => p.shuffleAll(nummers),
+              onPressed: () => speelLijst(context, nummers, schud: true),
             ),
             ),
           ],
@@ -13817,7 +13839,6 @@ class FavorietenView extends StatelessWidget {
   Widget build(BuildContext context) {
     final fav = context.watch<Favorieten>();
     final lib = context.watch<LibraryStore>();
-    final p = rijVoor(context);
     final albums = fav.albums(lib.albums);
     final nummers = fav.nummers(lib.tracks);
     final narrow = isCompact(context);
@@ -13852,10 +13873,8 @@ class FavorietenView extends StatelessWidget {
             if (nummers.isNotEmpty) ...[
               SizedBox(height: narrow ? 12 : 0),
               GlasKnop(
-                onPressed: () {
-                  p.shuffleAll(nummers);
-                  _srcToast(context, 'Shuffle · ${nummers.length} ${nummers.length == 1 ? 'nummer' : 'nummers'}');
-                },
+                onPressed: () => speelLijst(context, nummers,
+                    schud: true, melding: (nu) => 'Shuffle · ${nu.length} ${nu.length == 1 ? 'nummer' : 'nummers'}'),
                 icoon: Icons.shuffle_rounded,
                 label: 'Shuffle alles',
               ),
@@ -16087,7 +16106,7 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
             isFav ? 'Uit favorieten' : 'Favoriet', () => fav.wisselAlbum(a)),
       ],
       [
-        MenuRegel(Icons.play_arrow_rounded, 'Afspelen', () => p.playQueue(nummers, 0, cover: a.cover)),
+        MenuRegel(Icons.play_arrow_rounded, 'Afspelen', () => speelLijst(context, nummers, schud: false, cover: a.cover)),
         MenuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna(nummers)),
         MenuRegel(Icons.playlist_add_rounded, 'Toevoegen aan de wachtrij',
             () => p.zetAchteraan(nummers)),
@@ -22426,10 +22445,9 @@ class TracksView extends StatelessWidget {
     // spoelbalk bewoog.
     //
     // Wat dit scherm van de speler nodig heeft is tweeledig, en de twee helften horen niet bij
-    // elkaar: de KNOPPEN roepen hem aan (daar is `read` genoeg, die luistert niet), en één RIJ wil
+    // elkaar: de KNOPPEN roepen hem aan (via [speelLijst], pas bij de tik), en één RIJ wil
     // weten of zij het is die speelt. Dat laatste staat hieronder per rij in een `select`, precies
     // zoals `TrackRow` het al doet — met dezelfde uitleg erboven.
-    final player = rijVoor(context);
     final all = lijst ?? lib.tracks;
     final tracks = match == null ? all : all.where(match!).toList();
     if (lib.scanning && all.isEmpty) {
@@ -22478,19 +22496,17 @@ class TracksView extends StatelessWidget {
           // welke knop Ik intik"). Eerst was de ene paars en de andere donker, zonder iets terug.
           final buttons = [
             GlasKnop(
-              onPressed: () {
-                player.shuffleAll(tracks);
-                _srcToast(context, 'Shuffle · ${tracks.length} ${tracks.length == 1 ? 'nummer' : 'nummers'}');
-              },
+              key: const ValueKey('nummers-shuffle-alles'),
+              onPressed: () => speelLijst(context, tracks,
+                  schud: true, melding: (nu) => 'Shuffle · ${nu.length} ${nu.length == 1 ? 'nummer' : 'nummers'}'),
               icoon: Icons.shuffle_rounded,
               label: 'Shuffle alles',
             ),
             const SizedBox(width: 8),
             GlasKnop(
-              onPressed: () {
-                player.playQueue(tracks, 0);
-                _srcToast(context, 'Speelt alles vanaf “${tracks.first.title}”');
-              },
+              key: const ValueKey('nummers-speel-alles'),
+              onPressed: () =>
+                  speelLijst(context, tracks, schud: false, melding: (nu) => 'Speelt alles vanaf “${nu.first.title}”'),
               icoon: Icons.play_arrow_rounded,
               label: 'Speel alles',
             ),

@@ -103,6 +103,8 @@ void main() {
     // De onderbalk in de tint van de speler.
     expect(main, contains('builder: (_, was, __) => Onderbalk(view: _view, onPick: _gaNaar, wasKleur: was),'));
     // Shuffle en Speel alles zijn glas en zeggen wat ze deden.
-    expect(main, contains("_srcToast(context, 'Shuffle · \${tracks.length}"));
+    // Sinds 29-10-2026 via speelLijst: zonder pc alleen wat hier staat, en de melding telt die lijst.
+    expect(main, contains("schud: true, melding: (nu) => 'Shuffle · \${nu.length} \${nu.length == 1 ? 'nummer' : 'nummers'}'),"));
+    expect(main, contains("    _srcToast(context, '\${melding(nu)}"));
   });
 }
