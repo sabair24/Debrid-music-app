@@ -14,6 +14,9 @@
 /// dus staat het menu los in `ui/itemmenu.dart`. Dat maakt dit meetbaar.
 library;
 
+import 'dart:io';
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -203,6 +206,84 @@ void main() {
 
       await tester.pumpAndSettle();
       expect(gelopen, isTrue, reason: 'en nu wel, want het blad is echt weg');
+    });
+  });
+
+  group('bij de muis en nooit leeg (Saber, 29-10-2026)', () {
+    const rij = Rect.fromLTWH(20, 300, 1360, 48);
+
+    test('de rechtsklik wint; dan de muis als die op het ding klikte; anders rechts in het midden', () {
+      expect(zweefPunt(bij: const Offset(5, 6), muis: const Offset(100, 320), ding: rij), const Offset(5, 6));
+      expect(zweefPunt(muis: const Offset(100, 320), ding: rij), const Offset(100, 320),
+          reason: '"dat de menu naast de muis komt niet op het einde"');
+      expect(zweefPunt(muis: const Offset(100, 700), ding: rij), rij.centerRight,
+          reason: 'een klik ergens anders is niet de klik die dit menu opende');
+      expect(zweefPunt(ding: rij), rij.centerRight, reason: 'zonder muis (toetsenbord) aan het ding zelf');
+    });
+
+    Widget breed(ItemMenu menu) => MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Padding(
+                padding: const EdgeInsets.only(top: 300, left: 20, right: 20),
+                child: SizedBox(
+                  height: 48,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => toonItemMenu(context, menu),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+    void wijd(WidgetTester tester) {
+      tester.view.physicalSize = const Size(1400, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+    }
+
+    // Vóór de muisklik: de laatste muisklik blijft twee seconden "vers".
+    testWidgets('een tik zonder muis: rechts aan de rij, zoals het was', (tester) async {
+      volgMuisVoorMenus();
+      wijd(tester);
+      await tester.pumpWidget(breed(_menu()));
+      await tester.tapAt(const Offset(100, 324));
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(find.text('Favoriet')).dx, greaterThan(1000));
+    });
+
+    testWidgets('DE KERN: een muisklik links op een brede rij opent het menu daar, niet aan het eind', (tester) async {
+      volgMuisVoorMenus();
+      wijd(tester);
+      await tester.pumpWidget(breed(_menu()));
+      await tester.tapAt(const Offset(100, 324), kind: PointerDeviceKind.mouse);
+      await tester.pumpAndSettle();
+      expect(find.text('Favoriet'), findsOneWidget);
+      expect(tester.getTopLeft(find.text('Favoriet')).dx, lessThan(400),
+          reason: 'het menu hoort naast de muis (x 100), niet aan de rechterrand van het venster');
+    });
+
+    testWidgets('DE VAL: een menu zonder regels gaat niet open (was een lege witte balk)', (tester) async {
+      wijd(tester);
+      await tester.pumpWidget(breed(const ItemMenu(titel: 'Studio', blokken: [[], []])));
+      await tester.tapAt(const Offset(100, 324), kind: PointerDeviceKind.mouse);
+      await tester.pumpAndSettle();
+      expect(find.byType(PopupMenuDivider), findsNothing);
+      expect(find.byWidgetPredicate((w) => w.runtimeType.toString().startsWith('_PopupMenu')), findsNothing,
+          reason: 'geen leeg zwevend menu');
+    });
+
+    test('aangesloten: bij de start, en Versies geeft grijze regels in plaats van een leeg menu', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final start = main.indexOf('Future<void> main() async {');
+      expect(main.substring(start, start + 300), contains('volgMuisVoorMenus();'));
+      final versie = main.indexOf('ItemMenu _plaatversieMenu(');
+      final lijf = main.substring(versie, main.indexOf('\n}\n', versie));
+      expect(lijf, contains("'Is al de standaard voor deze plaat', () {}, uit: true"));
+      expect(lijf, contains("'Niet weg te gooien: staat in de albummap', () {}, uit: true"));
     });
   });
 }
