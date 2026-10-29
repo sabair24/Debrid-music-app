@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/lan/deur.dart';
 import 'package:debridmusic/lan/igd.dart';
+import 'package:debridmusic/lan/poorten.dart';
 import 'package:debridmusic/lan/tokens.dart';
 
 class _Deur {
@@ -198,6 +199,26 @@ void main() {
       expect(deurTekst(aan: true, stand: DeurStand.mislukt, waarom: 'CGNAT'), 'CGNAT');
       expect(deurMetDeHand('192.168.0.117'), contains('buiten 47821 → binnen 47821, naar 192.168.0.117'));
       expect(deurMetDeHand(null), contains('Nooit 47820 of 47822'));
+    });
+
+    // Saber, 28-10-2026: op een bedrijfswifi ging rechtstreeks niet (geen enkele poging op 47821 bij de pc); Tailscale wel.
+    test('DE KERN: dezelfde deur ook op 443, voor een netwerk dat alleen webverkeer doorlaat', () {
+      expect(buitenAdressen(Uri.parse('https://81.82.83.84:47821')),
+          [Uri.parse('https://81.82.83.84:47821'), Uri.parse('https://81.82.83.84:443')]);
+      expect(buitenAdressen(Uri.parse('https://81.82.83.84:443')), [Uri.parse('https://81.82.83.84:443')],
+          reason: 'staat de deur al op 443, dan niet twee keer');
+      expect(buitenAdressen(null), isEmpty, reason: 'geen deur: geen adressen');
+      expect(deurMetDeHand('192.168.0.117'), contains('buiten 443 → binnen 47821, naar 192.168.0.117'));
+      expect(kWebPoort, 443);
+    });
+
+    test('de pc geeft beide adressen door, en de gsm neemt elk adres uit de lijst mee', () {
+      final server = File('lib/lan/server.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(server, contains(r"'buiten': [for (final u in buitenAdressen(b)) '$u'],"));
+      final sharing = File('lib/lan/sharing.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(sharing, contains(r"for (final u in deur.adressenVoorToestellen) '$u',"));
+      final client = File('lib/lan/client.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(client, contains(r"for (final u in (j['buiten'] as List? ?? const [])) '$u',"));
     });
 
     test('"laatst via het publieke adres": alleen wat langs de deur binnenkwam', () {
