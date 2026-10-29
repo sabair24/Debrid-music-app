@@ -58,6 +58,7 @@ class MainFlutterWindow: NSWindow {
   private let netwerkWacht = NetwerkWacht()
   private var netwerkKanaal: FlutterEventChannel?
   private var systeemKanaal: FlutterMethodChannel?
+  private var ruimteKanaal: FlutterMethodChannel?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -89,6 +90,25 @@ class MainFlutterWindow: NSWindow {
       result(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency || zuinig)
     }
     systeemKanaal = systeem
+
+    // Vrije ruimte op deze Mac, voor de vraag vóór "Op dit toestel" (lib/ui/op_toestel.dart, Saber 29-10-2026).
+    let ruimte = FlutterMethodChannel(
+      name: "debridmusic/ruimte", binaryMessenger: flutterViewController.engine.binaryMessenger)
+    ruimte.setMethodCallHandler { call, result in
+      guard call.method == "vrij" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let map = URL(fileURLWithPath: NSHomeDirectory())
+      if let w = try? map.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+        let vrij = w.volumeAvailableCapacityForImportantUsage
+      {
+        result(NSNumber(value: vrij))
+      } else {
+        result(nil)
+      }
+    }
+    ruimteKanaal = ruimte
 
     super.awakeFromNib()
   }

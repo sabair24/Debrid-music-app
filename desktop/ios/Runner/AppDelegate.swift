@@ -60,6 +60,7 @@ final class NetwerkWacht: NSObject, FlutterStreamHandler {
   private var warmteKanaal: FlutterMethodChannel?
   private var systeemKanaal: FlutterMethodChannel?
   private var netwerkKanaal: FlutterEventChannel?
+  private var ruimteKanaal: FlutterMethodChannel?
   private let netwerkWacht = NetwerkWacht()
 
   override func application(
@@ -106,6 +107,27 @@ final class NetwerkWacht: NSObject, FlutterStreamHandler {
         result(UIAccessibility.isReduceTransparencyEnabled || ProcessInfo.processInfo.isLowPowerModeEnabled)
       }
       systeemKanaal = kanaal
+    }
+
+    // Vrije ruimte op dit toestel, voor de vraag vóór "Op dit toestel" (lib/ui/op_toestel.dart, Saber 29-10-2026).
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "DebridMusicRuimte") {
+      let kanaal = FlutterMethodChannel(
+        name: "debridmusic/ruimte", binaryMessenger: registrar.messenger())
+      kanaal.setMethodCallHandler { call, result in
+        guard call.method == "vrij" else {
+          result(FlutterMethodNotImplemented)
+          return
+        }
+        let map = URL(fileURLWithPath: NSHomeDirectory())
+        if let w = try? map.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+          let vrij = w.volumeAvailableCapacityForImportantUsage
+        {
+          result(NSNumber(value: vrij))
+        } else {
+          result(nil)
+        }
+      }
+      ruimteKanaal = kanaal
     }
 
     // Netwerkwissels, zie NetwerkWacht hierboven.

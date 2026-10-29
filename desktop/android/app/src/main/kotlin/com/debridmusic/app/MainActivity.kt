@@ -20,6 +20,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.Process
+import android.os.StatFs
 import android.provider.DocumentsContract
 import android.provider.Settings
 import androidx.core.content.FileProvider
@@ -223,6 +224,10 @@ class MainActivity : AudioServiceActivity() {
                             packageManager.hasSystemFeature("android.hardware.type.television")
                     )
                     "deviceName" -> result.success(deviceName())
+                    // Vrije ruimte, voor de vraag vóór "Op dit toestel" (lib/ui/op_toestel.dart, Saber 29-10-2026).
+                    "vrijeRuimte" -> result.success(
+                        try { StatFs(filesDir.path).availableBytes } catch (e: Exception) { -1L }
+                    )
                     "netsoort" -> result.success(netsoort())
                     // Dataverbruik (lib/dataverbruik.dart): wat deze app sinds het opstarten van het toestel ontving en
                     // verstuurde, over elk netwerk.

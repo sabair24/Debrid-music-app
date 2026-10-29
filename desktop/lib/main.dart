@@ -6446,20 +6446,10 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
   ///
   /// Een download hoort niet aan een scherm te hangen. De winkel leeft langer, dus de rij zit daar;
   /// deze knop leest hem alleen nog uit.
-  void _fetch(OfflineStore offline, RemoteClient client) {
-    unawaited(toestelRedenen.voegToe([for (final t in widget.album.tracks) t.path], kRedenZelf));
-    offline.bewaarAlles([
-      for (final t in widget.album.tracks)
-        OfflineRequest(
-          // Alleen de vaste naam van het nummer; het adres komt bij elke poging van
-          // `offline.adresVoor` (stap 3, `lan/vaste_naam.dart`).
-          libraryPath: t.path,
-          title: t.title,
-          artist: t.artist,
-          album: widget.album.title,
-        ),
-    ]);
-  }
+  ///
+  /// Sinds 29-10-2026 eerst de vraag met de grootte en de vrije ruimte ([_zetOpToestel]). In de rij staat alleen de vaste
+  /// naam van het nummer; het adres komt bij elke poging van `offline.adresVoor` (stap 3, `lan/vaste_naam.dart`).
+  Future<void> _fetch() => _zetOpToestel(context, widget.album.tracks, album: widget.album.title);
 
   /// De reden die al gemeld is, zodat één mislukking niet bij elke hertekening opnieuw langskomt.
   String? _gemeld;
@@ -6545,7 +6535,7 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
               // Ook de weg terug na een mislukking: opnieuw vragen gaat verder waar het stopte,
               // want het halve bestand blijft staan.
               _gemeld = null;
-              _fetch(offline, client);
+              await _fetch();
             },
       icoon: stuk
           ? Icons.refresh_rounded
@@ -6566,7 +6556,8 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
               : bezig
               ? 'Ophalen $here/${tracks.length}$deel'
               : all
-                  ? 'Op dit toestel'
+                  // Met de ruimte die de plaat hier inneemt (Saber, 29-10-2026: "Hoeveel ruimte het inneemt").
+                  ? 'Op dit toestel · ${toestelMaat(offline.bytesVan([for (final t in tracks) t.path]))}'
                   // Partly here is worth saying: it is the state a failed or cancelled run leaves
                   // behind, and "Offline" would claim more than is true.
                   : here > 0
@@ -6675,11 +6666,7 @@ class _NummerKeuzeBalk extends StatelessWidget {
   static Future<void> _bewaar(BuildContext context, List<Track> nummers) async {
     final offline = context.read<OfflineStore>();
     final melder = ScaffoldMessenger.maybeOf(context);
-    await toestelRedenen.voegToe([for (final t in nummers) t.path], kRedenZelf);
-    offline.bewaarAlles([
-      for (final t in nummers)
-        if (!offline.has(t.path)) OfflineRequest(libraryPath: t.path, title: t.title, artist: t.artist, album: t.album),
-    ]);
+    if (!await _zetOpToestel(context, nummers)) return;
     nummerKeuze.stop();
     melder?.showSnackBar(SnackBar(
         content: Text('${toestelOmvang(nummers.length, 0)} op dit toestel${offline.wachtOpWifi ? ' — wacht op wifi' : ''}.')));
@@ -6696,6 +6683,50 @@ class _NummerKeuzeBalk extends StatelessWidget {
     }
     nummerKeuze.stop();
   }
+}
+
+/// Zet [nummers] op dit toestel, na de vraag met de grootte en de vrije ruimte ([vraagOpToestelZetten]). Waar als ze in
+/// de rij staan; onwaar als je annuleerde.
+///
+/// Saber, 29-10-2026: *"voor ik begin met downloaden wil ik ook al zien hoeveel ruimte het zal innemen"*. De grootte is
+/// die van de versie die voor het nummer speelt (offline bewaren neemt die, zie `offline.adresVoor`), in de kwaliteit
+/// waarin hij komt; wat er al staat telt niet mee. Staat alles er al, dan valt er niets te vragen.
+Future<bool> _zetOpToestel(BuildContext context, List<Track> nummers, {String? album}) async {
+  final offline = context.read<OfflineStore>();
+  if (!await _magOpToestel(context, nummers)) return false;
+  await toestelRedenen.voegToe([for (final t in nummers) t.path], kRedenZelf);
+  offline.bewaarAlles([
+    for (final t in nummers)
+      if (!offline.has(t.path))
+        OfflineRequest(libraryPath: t.path, title: t.title, artist: t.artist, album: album ?? t.album),
+  ]);
+  return true;
+}
+
+/// Alleen de vraag van [_zetOpToestel]: waar als het mag, of als alles er al staat.
+Future<bool> _magOpToestel(BuildContext context, List<Track> nummers) async {
+  final offline = context.read<OfflineStore>();
+  final lib = context.read<LibraryStore>();
+  final nieuw = [for (final t in nummers) if (!offline.has(t.path)) t];
+  if (nieuw.isEmpty) return true;
+  final komen = [for (final t in nieuw) lib.trackByPath(lib.speelPadVoor(t.path)) ?? t];
+  final bytes = geschatteOmvang(komen, cd: context.read<AppSettings>().offlineKwaliteit == 'cd');
+  return vraagOpToestelZetten(context,
+      aantal: nieuw.length, bytes: bytes, onderCdAantal: komen.where(onderCd).length);
+}
+
+/// Haalt [nummers] van dit toestel, na de vraag ([vraagVanToestelHalen]); de pc houdt ze. Wat er niet staat, telt niet
+/// mee. Waar als ze weg zijn (of er niets te halen viel).
+Future<bool> _haalVanToestel(BuildContext context, List<Track> nummers) async {
+  final offline = context.read<OfflineStore>();
+  final hier = [for (final t in nummers) if (offline.has(t.path)) t.path];
+  if (hier.isEmpty) return true;
+  if (!await vraagVanToestelHalen(context, aantal: hier.length, bytes: offline.bytesVan(hier))) return false;
+  await toestelRedenen.haalWeg(hier, kRedenZelf);
+  for (final p in hier) {
+    await offline.remove(p);
+  }
+  return true;
 }
 
 /// Houdt "Op dit toestel" opnieuw kijkend naar de openbare map als je terugkomt in de app (zie main).
@@ -10280,7 +10311,7 @@ class _TrackRowState extends State<TrackRow> with LichtBijMuisOfFocus {
               // Studio, cd of vinyl (kopiesoort.dart): alleen bij nieuwe downloads.
               if (!onder) _soortMerk(t, klinkt: k),
               // Op dit toestel (Saber, 28-10-2026: "merkje overal").
-              OpToestelMerk(paden: [t.path]),
+              OpToestelMerk(paden: [t.path], nummer: t),
               Text(_fmt(t.duration), style: kTekstKlein),
               // "≠ 4:33" — je hebt het nummer, maar niet die versie. Klein en naast de tijd, want het
               // is een bijzonderheid en geen probleem.
@@ -13663,6 +13694,9 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
                       final zeker = await vraagVanToestelHalen(context,
                           aantal: nummers.length, bytes: offline.bytesVan([for (final t in nummers) t.path]));
                       if (!zeker) return;
+                    } else if (!await _magOpToestel(context, nummers)) {
+                      // Eerst de grootte en de vrije ruimte (Saber, 29-10-2026); het ophalen zelf doet toestel_bijhouden.
+                      return;
                     }
                     await toestelRedenen.zetLijst(id, !aan);
                   },
@@ -15640,6 +15674,8 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
       performer: performerFromFilename(t.path, t.title), artist: t.artist);
   final vervangTags = lib.tagsVoorVervanger(t);
   final twijfel = twijfelVoor(t.path);
+  // Per nummer op of van dit toestel (Saber, 29-10-2026: "Weghalen per nummer en per album"). Niet op de pc, niet op tv.
+  final offline = lib.isRemote && !isTv ? context.read<OfflineStore?>() : null;
   return ItemMenu(
     titel: t.title,
     ondertitel: t.artist,
@@ -15649,6 +15685,12 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
       [
         MenuRegel(isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
             isFav ? 'Uit favorieten' : 'Favoriet', () => fav.wisselTrack(t)),
+        if (offline != null)
+          offline.has(t.path)
+              ? MenuRegel(Icons.offline_pin_rounded, 'Van dit toestel halen…',
+                  () => unawaited(_haalVanToestel(context, [t])))
+              : MenuRegel(Icons.download_for_offline_outlined, 'Op dit toestel…',
+                  () => unawaited(_zetOpToestel(context, [t]))),
       ],
       [
         MenuRegel(Icons.playlist_play_rounded, 'Hierna spelen', () => p.speelHierna([t])),
@@ -22510,7 +22552,7 @@ class TracksView extends StatelessWidget {
                       ),
                       _echtheidMerk(standaardVersieVan(lib, t), metVraag: !isCompact(context)),
                       // Op dit toestel (Saber, 28-10-2026: "merkje overal") — ook hier, in de eigen rij van Tracks.
-                      OpToestelMerk(paden: [t.path]),
+                      OpToestelMerk(paden: [t.path], nummer: t),
                       _qualityBadge(_trackQuality(standaardVersieVan(lib, t))),
                       const SizedBox(width: 4),
                       // De looptijd valt weg op een telefoon.
@@ -33092,12 +33134,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                           final offline = context.read<OfflineStore>();
                           final melder = ScaffoldMessenger.maybeOf(context);
                           final nummers = [for (final a in mine) ...a.tracks];
-                          await toestelRedenen.voegToe([for (final t in nummers) t.path], kRedenZelf);
-                          offline.bewaarAlles([
-                            for (final t in nummers)
-                              if (!offline.has(t.path))
-                                OfflineRequest(libraryPath: t.path, title: t.title, artist: t.artist, album: t.album),
-                          ]);
+                          if (!await _zetOpToestel(context, nummers)) return;
                           melder?.showSnackBar(SnackBar(
                               content: Text('${toestelOmvang(nummers.length, 0)} van ${widget.artist.name} op dit toestel'
                                   '${offline.wachtOpWifi ? ' — wacht op wifi' : ''}.')));

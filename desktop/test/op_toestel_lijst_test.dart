@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/offline.dart';
 import 'package:debridmusic/ui/op_toestel.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Track _t(String pad, String titel, String artiest, String album, {int nr = 1}) =>
@@ -79,5 +80,128 @@ void main() {
     for (final tab in ['albums', 'nummers', 'artiesten', 'afspeellijsten', 'favorieten']) {
       expect(main, contains('_ToestelTab.$tab'), reason: tab);
     }
+  });
+
+  group('hoe groot het wordt (Saber, 29-10-2026: "voor ik begin met downloaden wil ik ook al zien hoeveel ruimte")', () {
+    Track m(String pad, {int bytes = 0, int hz = 0, int bits = 0, int sec = 0}) => Track(
+        path: pad, title: 't', artist: 'a', album: 'b', sizeBytes: bytes, sampleRate: hz, bitsPerSample: bits,
+        duration: sec > 0 ? Duration(seconds: sec) : null);
+
+    test('DE KERN: hi-res komt als cd, dus de grootte zakt met de bitstroom', () {
+      // 24/96 → 16/44,1: 44100×16 / (96000×24) = 0,30625.
+      expect(geschatteOmvang([m('x.flac', bytes: 100000000, hz: 96000, bits: 24)], cd: true), 30625000);
+      expect(geschatteOmvang([m('x.flac', bytes: 100000000, hz: 96000, bits: 24)], cd: false), 100000000,
+          reason: 'Origineel gekozen: zoals hij is');
+    });
+
+    test('wat al cd is of lager, en lossy, blijft zoals het is', () {
+      expect(geschatteOmvang([m('x.flac', bytes: 30000000, hz: 44100, bits: 16)], cd: true), 30000000);
+      expect(geschatteOmvang([m('x.mp3', bytes: 9000000, hz: 48000, bits: 0)], cd: true), 9000000,
+          reason: 'een mp3 wordt niet omgezet');
+      expect(geschatteOmvang([m('x.flac', bytes: 40000000, hz: 48000, bits: 16)], cd: true), 36750000,
+          reason: '16/48 is boven cd: × 44100/48000');
+    });
+
+    test('zonder bekende grootte: de duur maal 110 kB/s, en het totaal telt op', () {
+      expect(geschatteOmvang([m('x.flac', sec: 200)], cd: true), 22000000);
+      expect(
+          geschatteOmvang([m('x.flac', sec: 200), m('y.flac', bytes: 5000000, hz: 44100, bits: 16)], cd: true), 27000000);
+      expect(geschatteOmvang(const [], cd: true), 0);
+    });
+
+    test('de maat leest zoals de vraag hem toont', () {
+      expect(toestelMaat(380 * 1000 * 1000), '380 MB');
+      expect(toestelMaat(1200 * 1000 * 1000), '1,2 GB');
+      expect(toestelOmvang(12, 380 * 1000 * 1000), '12 nummers · 380 MB');
+    });
+
+    test('de vrije ruimte komt van Android, iOS en macOS, en Opslaan kan niet als het niet past', () {
+      final ui = _bron('lib/ui/op_toestel.dart');
+      expect(ui, contains("const MethodChannel('debridmusic/device').invokeMethod<Object>('vrijeRuimte')"));
+      expect(ui, contains("const MethodChannel('debridmusic/ruimte').invokeMethod<Object>('vrij')"));
+      expect(ui, contains('            onPressed: teVeel ? null : () => Navigator.pop(ctx, true),\n'));
+      expect(_bron('android/app/src/main/kotlin/com/debridmusic/app/MainActivity.kt'),
+          contains('try { StatFs(filesDir.path).availableBytes } catch (e: Exception) { -1L }'));
+      for (final f in ['ios/Runner/AppDelegate.swift', 'macos/Runner/MainFlutterWindow.swift']) {
+        final s = _bron(f);
+        expect(s, contains('name: "debridmusic/ruimte"'), reason: f);
+        expect(s, contains('volumeAvailableCapacityForImportantUsage'), reason: f);
+      }
+    });
+  });
+
+  group('de vraag vóór het opslaan', () {
+    Future<bool?> vraag(WidgetTester tester, {required int bytes, required int vrij}) async {
+      bool? uit;
+      await tester.pumpWidget(MaterialApp(
+          home: Builder(
+              builder: (context) => TextButton(
+                  onPressed: () async => uit = await vraagOpToestelZetten(context, aantal: 12, bytes: bytes, vrij: vrij),
+                  child: const Text('open')))));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      return uit;
+    }
+
+    testWidgets('toont de grootte en wat er nog vrij is, en Opslaan zegt ja', (tester) async {
+      await vraag(tester, bytes: 380 * 1000 * 1000, vrij: 12 * 1000 * 1000 * 1000);
+      expect(find.text('12 nummers, ongeveer 380 MB — nog 12,0 GB vrij op dit toestel.'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('toestel-op-ja')));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+    });
+
+    testWidgets('past het niet, dan zegt hij het en kan Opslaan niet', (tester) async {
+      await vraag(tester, bytes: 2 * 1000 * 1000 * 1000, vrij: 500 * 1000 * 1000);
+      expect(find.textContaining('niet genoeg ruimte'), findsOneWidget);
+      final knop = tester.widget<FilledButton>(find.byKey(const ValueKey('toestel-op-ja')));
+      expect(knop.onPressed, isNull);
+    });
+  });
+
+  group('onder cd-kwaliteit: gewoon zo, met een merkje (Saber, 29-10-2026)', () {
+    Track m(String pad, {int hz = 0, int bits = 0, bool flac = false}) =>
+        Track(path: pad, title: 't', artist: 'a', album: 'b', sampleRate: hz, bitsPerSample: bits, isFlac: flac);
+
+    test('DE KERN: mp3 en aac zijn onder cd; cd en hi-res niet', () {
+      expect(onderCd(m('x.mp3', hz: 44100)), isTrue);
+      expect(onderCd(m('x.ogg')), isTrue);
+      expect(onderCd(m('x.flac', hz: 44100, bits: 16)), isFalse);
+      expect(onderCd(m('x.flac', hz: 96000, bits: 24)), isFalse, reason: 'hi-res komt als cd');
+      expect(onderCd(m('x.flac')), isFalse, reason: 'zonder kop: een flac telt als cd');
+    });
+
+    test('verliesvrij onder 16/44,1 is ook onder cd; m4a hangt aan de diepte', () {
+      expect(onderCd(m('x.flac', hz: 22050, bits: 16)), isTrue);
+      expect(onderCd(m('x.wav', hz: 44100, bits: 8)), isTrue);
+      expect(onderCd(m('x.m4a', hz: 44100, bits: 16)), isFalse, reason: 'ALAC');
+      expect(onderCd(m('x.m4a', hz: 44100)), isTrue, reason: 'AAC');
+    });
+
+    testWidgets('de vraag zegt hoeveel er onder cd zijn', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+          home: Builder(
+              builder: (context) => TextButton(
+                  onPressed: () => vraagOpToestelZetten(context, aantal: 12, bytes: 1000, vrij: 5000, onderCdAantal: 3),
+                  child: const Text('open')))));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('3 daarvan zijn onder cd-kwaliteit'), findsOneWidget);
+    });
+
+    test('aangesloten: het merkje in de rijen, het nummermenu en de ruimte op de albumknop', () {
+      final main = _bron('lib/main.dart');
+      expect(main, contains("      aantal: nieuw.length, bytes: bytes, onderCdAantal: komen.where(onderCd).length);\n"));
+      expect(main, contains("              ? MenuRegel(Icons.offline_pin_rounded, 'Van dit toestel halen…',\n"
+          "                  () => unawaited(_haalVanToestel(context, [t])))\n"));
+      expect(main, contains("              : MenuRegel(Icons.download_for_offline_outlined, 'Op dit toestel…',\n"
+          "                  () => unawaited(_zetOpToestel(context, [t]))),\n"));
+      expect(main, contains("  final offline = lib.isRemote && !isTv ? context.read<OfflineStore?>() : null;\n"),
+          reason: 'niet op de pc en niet op tv');
+      expect(main, contains(r"? 'Op dit toestel · ${toestelMaat(offline.bytesVan([for (final t in tracks) t.path]))}'"));
+      final weg = main.indexOf('Future<bool> _haalVanToestel(');
+      expect(main.indexOf('vraagVanToestelHalen(', weg), lessThan(main.indexOf('await offline.remove(p);', weg)),
+          reason: 'eerst de vraag, dan pas weghalen');
+    });
   });
 }

@@ -7,8 +7,11 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../audioformaten.dart' show isVerliesvrij;
+import '../lan/stroomstand.dart' show losslessExtensie;
 import '../models.dart';
 import '../offline.dart';
 import '../organize.dart' show artistKey, normKey;
@@ -83,18 +86,22 @@ import 'kleuren.dart';
 ///
 /// Zonder [OfflineStore] in de boom (een toets, de pc die er geen nodig heeft) gewoon niets.
 class OpToestelMerk extends StatelessWidget {
-  const OpToestelMerk({super.key, required this.paden, this.rond = false});
+  const OpToestelMerk({super.key, required this.paden, this.rond = false, this.nummer});
 
   final List<String> paden;
   final bool rond;
+
+  /// Het nummer van een rij: staat het hier [onderCd], dan krijgt het merkje een andere kleur en zegt het dat.
+  final Track? nummer;
 
   @override
   Widget build(BuildContext context) {
     final erop = context.select<OfflineStore?, bool>((o) => o != null && paden.isNotEmpty && paden.every(o.has));
     if (!erop) return const SizedBox.shrink();
-    final icoon = Icon(Icons.offline_pin_rounded, size: rond ? 18 : 14, color: kAccent2);
+    final laag = nummer != null && onderCd(nummer!);
+    final icoon = Icon(Icons.offline_pin_rounded, size: rond ? 18 : 14, color: laag ? kOnderCd : kAccent2);
     return Tooltip(
-      message: 'Op dit toestel',
+      message: laag ? 'Op dit toestel — onder cd-kwaliteit (${nummer!.ext.toUpperCase()}), zo bewaard' : 'Op dit toestel',
       child: rond
           ? DecoratedBox(
               decoration: BoxDecoration(color: kBovenop, shape: BoxShape.circle, boxShadow: const [
@@ -107,14 +114,104 @@ class OpToestelMerk extends StatelessWidget {
   }
 }
 
+/// De kleur van [OpToestelMerk] bij een nummer onder cd-kwaliteit: amber, zoals een waarschuwing die geen fout is.
+const kOnderCd = Color(0xFFE0A030);
+
+/// Komt dit nummer onder cd-kwaliteit op dit toestel: verliesgevend (mp3, aac, ogg), of verliesvrij onder 16/44,1?
+///
+/// Saber, 29-10-2026 (*"plus wat met nummers die geen cd kwaliteit hebben ?"*): gewoon zo opslaan, met een merkje.
+/// Omzetten maakt ze niet beter, en een hi-res-nummer komt als cd en is dus niet "onder". Een m4a is ALAC als de kop een
+/// diepte noemt, anders AAC.
+bool onderCd(Track t) {
+  final verliesvrij = t.isFlac || isVerliesvrij(t.ext) || (t.ext == 'm4a' && t.bitsPerSample >= 16);
+  if (!verliesvrij) return true;
+  return (t.sampleRate > 0 && t.sampleRate < 44100) || (t.bitsPerSample > 0 && t.bitsPerSample < 16);
+}
+
 /// "12 nummers · 380 MB" — wat er van dit toestel zou gaan.
 String toestelOmvang(int aantal, int bytes) {
   final n = aantal == 1 ? '1 nummer' : '$aantal nummers';
   if (bytes <= 0) return n;
-  final maat = bytes >= 1000 * 1000 * 1000
-      ? '${(bytes / 1e9).toStringAsFixed(1).replaceAll('.', ',')} GB'
-      : '${(bytes / 1e6).round()} MB';
-  return '$n · $maat';
+  return '$n · ${toestelMaat(bytes)}';
+}
+
+/// "380 MB", "1,2 GB".
+String toestelMaat(int bytes) => bytes >= 1000 * 1000 * 1000
+    ? '${(bytes / 1e9).toStringAsFixed(1).replaceAll('.', ',')} GB'
+    : '${(bytes / 1e6).round()} MB';
+
+/// Hoe groot [nummers] ongeveer worden op dit toestel, in de kwaliteit waarin ze komen.
+///
+/// [cd]: "Offline bewaren in cd-kwaliteit" (de standaard, Saber 29-10-2026: hi-res wordt cd). Dan gaat een lossless
+/// nummer boven 16/44,1 omlaag naar wat 16/44,1 is — de grootte geschaald met de bitstroom, want FLAC drukt beide
+/// ongeveer even goed samen. Wat al 16/44,1 of lager is, en lossy (mp3, aac), blijft zoals het is. Zonder bekende grootte:
+/// de duur maal ~110 kB/s (FLAC 16/44,1 gemiddeld).
+int geschatteOmvang(Iterable<Track> nummers, {required bool cd}) {
+  var som = 0;
+  for (final t in nummers) {
+    var b = t.sizeBytes > 0 ? t.sizeBytes : (t.duration?.inSeconds ?? 0) * 110 * 1000;
+    final hoger = t.sampleRate > 44100 || t.bitsPerSample > 16;
+    if (cd && hoger && losslessExtensie(t.ext)) {
+      final rate = t.sampleRate > 0 ? t.sampleRate : 44100;
+      final bits = t.bitsPerSample > 0 ? t.bitsPerSample : 16;
+      b = (b * (44100 * 16) / (rate * bits)).round();
+    }
+    som += b;
+  }
+  return som;
+}
+
+/// Hoeveel ruimte er nog vrij is op dit toestel (bytes), of null als het toestel het niet zegt (pc, tv, een toets).
+Future<int?> vrijeRuimteOpToestel() async {
+  try {
+    final Object? v;
+    if (Platform.isAndroid) {
+      v = await const MethodChannel('debridmusic/device').invokeMethod<Object>('vrijeRuimte');
+    } else if (Platform.isIOS || Platform.isMacOS) {
+      v = await const MethodChannel('debridmusic/ruimte').invokeMethod<Object>('vrij');
+    } else {
+      return null;
+    }
+    final n = v is num ? v.toInt() : null;
+    return n == null || n < 0 ? null : n;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Vraag vóór het opslaan of [aantal] nummers van ongeveer [bytes] op dit toestel mogen, met de vrije ruimte erbij.
+/// Waar als het mag. Saber, 29-10-2026: *"voor ik begin met downloaden wil ik ook al zien hoeveel ruimte het zal
+/// innemen"*. Is er te weinig ruimte, dan kan Opslaan niet.
+///
+/// [onderCdAantal]: hoeveel ervan onder cd-kwaliteit zijn ([onderCd]); die komen zoals ze zijn, en dat staat erbij.
+Future<bool> vraagOpToestelZetten(BuildContext context,
+    {required int aantal, required int bytes, int? vrij, int onderCdAantal = 0}) async {
+  final ruimte = vrij ?? await vrijeRuimteOpToestel();
+  if (!context.mounted) return false;
+  final teVeel = ruimte != null && bytes > ruimte;
+  final ja = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Op dit toestel zetten?'),
+      content: Text([
+        '${aantal == 1 ? '1 nummer' : '$aantal nummers'}, ongeveer ${toestelMaat(bytes)}'
+            '${ruimte == null ? '.' : ' — nog ${toestelMaat(ruimte)} vrij op dit toestel.'}',
+        if (onderCdAantal > 0)
+          '${onderCdAantal == aantal ? (aantal == 1 ? 'Het is' : 'Ze zijn allemaal') : '$onderCdAantal daarvan zijn'} '
+              'onder cd-kwaliteit (bv. mp3) en komen zoals ze zijn, met een merkje.',
+        if (teVeel) 'Daar is niet genoeg ruimte voor. Maak eerst ruimte vrij, of kies minder.',
+      ].join('\n\n')),
+      actions: [
+        TextButton(
+            key: const ValueKey('toestel-op-nee'), onPressed: () => Navigator.pop(ctx, false), child: const Text('Annuleren')),
+        FilledButton(
+            key: const ValueKey('toestel-op-ja'),
+            onPressed: teVeel ? null : () => Navigator.pop(ctx, true),
+            child: const Text('Opslaan')),
+      ],
+    ),
+  );
+  return ja ?? false;
 }
 
 /// Vraag of [aantal] nummers ([bytes] groot) van dit toestel mogen. Waar als het mag.
