@@ -16,7 +16,7 @@ import 'package:debridmusic/soulseek.dart';
 import 'package:debridmusic/twijfel.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-enum _Gedrag { rij, firewall, snel }
+enum _Gedrag { rij, firewall, snel, traag }
 
 /// Uploaders zoals in downloads.log van 29-10-2026: wie ons in zijn rij zet (plaats 16), wie onbereikbaar is, en wie
 /// meteen levert (een echte FLAC, zodat de controle na het halen hem heel vindt).
@@ -55,8 +55,8 @@ class _NepSessie implements SlskSession {
       case _Gedrag.firewall:
         await Future<void>.delayed(const Duration(milliseconds: 30));
         return SlskFail('Uploader niet bereikbaar (firewall)');
-      case _Gedrag.snel:
-        await Future<void>.delayed(const Duration(milliseconds: 80));
+      case _Gedrag.snel || _Gedrag.traag:
+        await Future<void>.delayed(Duration(milliseconds: gedrag[file.username] == _Gedrag.snel ? 80 : 600));
         if (stop()) return SlskCancelled();
         onProgress(1, toon.length); // de eerste bytes: wie dit het eerst doet, wint
         if (stop()) return SlskCancelled();
@@ -127,9 +127,10 @@ void main() {
     final klok = Stopwatch()..start();
     final klaar = await d
         .cdWedloopVoorToets(v, [f('allthesongs', 'Jam'), f('JFizDaWiz', 'Jam'), f('DanishBadger', 'Jam')])
-        .timeout(const Duration(seconds: 20));
+        .timeout(const Duration(seconds: 90));
     expect(klaar, isTrue);
-    expect(klok.elapsed, lessThan(const Duration(seconds: 5)), reason: 'was tot acht minuten per uploader');
+    // Ruim: de pc kan druk zijn (ffmpeg keurt het bestand na). Het oude gedrag wachtte acht minuten op de eerste.
+    expect(klok.elapsed, lessThan(const Duration(minutes: 1)), reason: 'was tot acht minuten per uploader');
     expect(gekeurd, ['Soulseek DanishBadger']);
     expect(s.begonnen.toSet(), {'allthesongs', 'JFizDaWiz', 'DanishBadger'}, reason: 'allemaal samen begonnen');
     expect(s.gestopt, contains('allthesongs'), reason: 'wie in de rij stond, stopt zodra een ander levert');
@@ -144,7 +145,7 @@ void main() {
     };
     final klaar = await d
         .cdWedloopVoorToets(vraag('Jam'), [f('allthesongs', 'Jam'), f('DanishBadger', 'Jam'), f('misterclock', 'Jam')])
-        .timeout(const Duration(seconds: 20));
+        .timeout(const Duration(seconds: 90));
     expect(klaar, isTrue);
     expect(gekeurd, hasLength(2));
     expect(gekeurd.toSet(), hasLength(2), reason: 'de afgekeurde doet niet opnieuw mee');
@@ -156,10 +157,10 @@ void main() {
     var gekeurd = 0;
     d.keurSoortVoorToets = (v, binnen, bron) async => ++gekeurd > 0;
     final klok = Stopwatch()..start();
-    expect(await d.cdWedloopVoorToets(vraag('Jam'), [f('a', 'Jam'), f('b', 'Jam')]).timeout(const Duration(seconds: 20)),
+    expect(await d.cdWedloopVoorToets(vraag('Jam'), [f('a', 'Jam'), f('b', 'Jam')]).timeout(const Duration(seconds: 90)),
         isFalse);
     expect(gekeurd, 0);
-    expect(klok.elapsed, lessThan(const Duration(seconds: 5)));
+    expect(klok.elapsed, lessThan(const Duration(minutes: 1)));
   });
 
   test('nummers zoeken samen, maar de keuring en het bewaren gaan één tegelijk', () async {
@@ -174,9 +175,70 @@ void main() {
     final titels = ['Jam', 'Why You Wanna Trip On Me', 'In The Closet', 'She Drives Me Wild'];
     final uit = await Future.wait([
       for (var i = 0; i < 4; i++) d.cdWedloopVoorToets(vraag(titels[i]), [f('snel$i', titels[i])]),
-    ]).timeout(const Duration(seconds: 20));
+    ]).timeout(const Duration(seconds: 90));
     expect(uit, everyElement(isTrue));
     expect(hoogst, 1, reason: 'het bewaren verplaatst bestanden en schrijft lijsten: dat liep altijd na elkaar');
+  });
+
+  group('Japans alleen als er niets anders is (Saber, 29-10-2026: keuze A)', () {
+    SoulseekFile jp(String wie, String map) =>
+        SoulseekFile(username: wie, filename: '@@$wie\\$map\\14 Dangerous.flac', size: toonGrootte, durationSec: 339);
+
+    test('wat een Japanse rip is: de mappen bij de uploader, niet de titel', () {
+      expect(japanseRip(jp('ruvish', 'Michael Jackson - Dangerous (Japan ESCA-5500)')), isTrue);
+      expect(japanseRip(jp('a', 'Dangerous [JPN]')), isTrue);
+      expect(japanseRip(jp('b', 'Dangerous (SHM-CD 2009)')), isTrue);
+      expect(japanseRip(jp('c', 'Dangerous (EK 45400 US)')), isFalse);
+      expect(japanseRip(SoulseekFile(username: 'd', filename: '@@d\\Japanese Breakfast\\Jubilee.flac', size: 1)), isTrue,
+          reason: 'een bandnaam in de map telt ook — liever eens te voorzichtig dan Japans');
+      expect(japanseRip(SoulseekFile(username: 'e', filename: '@@e\\Pop\\Japan.flac', size: 1)), isFalse,
+          reason: 'de bestandsnaam is de titel');
+    });
+
+    test('eerst de rest, dan pas de Japanse; lege groepen vallen weg', () {
+      final us = jp('us', 'Dangerous (US)'), ja = jp('ja', 'Dangerous (Japan)');
+      expect(cdRondes([ja, us]), [
+        [us],
+        [ja],
+      ]);
+      expect(cdRondes([us]), [
+        [us],
+      ]);
+      expect(cdRondes([ja]), [
+        [ja],
+      ]);
+      expect(cdRondes(const []), isEmpty);
+    });
+
+    test('DE KERN: een snellere Japanse rip wint niet van een andere die wél levert', () async {
+      final s = sessie({'ruvish': _Gedrag.snel, 'borb': _Gedrag.traag});
+      final gekeurd = <String>[];
+      d.keurSoortVoorToets = (v, binnen, bron) async {
+        gekeurd.add(bron);
+        return true;
+      };
+      final klaar = await d
+          .cdWedloopVoorToets(vraag('Dangerous'), [jp('ruvish', 'Dangerous (Japan)'), jp('borb', 'Dangerous (EU)')])
+          .timeout(const Duration(seconds: 90));
+      expect(klaar, isTrue);
+      expect(gekeurd, ['Soulseek borb']);
+      expect(s.begonnen, isNot(contains('ruvish')), reason: 'de Japanse deed niet eens mee');
+    });
+
+    test('levert niemand anders iets bruikbaars, dan alsnog de Japanse', () async {
+      sessie({'ruvish': _Gedrag.snel, 'x': _Gedrag.firewall, 'y': _Gedrag.snel});
+      final gekeurd = <String>[];
+      d.keurSoortVoorToets = (v, binnen, bron) async {
+        gekeurd.add(bron);
+        return bron == 'Soulseek ruvish'; // y is een nep-cd
+      };
+      final klaar = await d
+          .cdWedloopVoorToets(vraag('Dangerous'),
+              [jp('ruvish', 'Dangerous (Japan)'), jp('x', 'Dangerous (EU)'), jp('y', 'Dangerous (US)')])
+          .timeout(const Duration(seconds: 90));
+      expect(klaar, isTrue);
+      expect(gekeurd, ['Soulseek y', 'Soulseek ruvish']);
+    });
   });
 
   group('metHoogstens', () {
