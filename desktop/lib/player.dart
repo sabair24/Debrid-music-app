@@ -2625,6 +2625,13 @@ class PlayerStore extends ChangeNotifier
     return versieVoor?.call(path) ?? path;
   }
 
+  /// Het bestand dat er voor [path] gaat klinken — voor wie het alvast wil klaarzetten (het vooruithalen in main.dart).
+  ///
+  /// **Waarom (29-10-2026).** Het vooruithalen haalde het nummer uit de rij (bij "Etta James – At Last" de 24/96), en de
+  /// speler speelde de gekozen versie (de 24/192): de kopie stond onder het verkeerde pad, en het nummer kwam twee keer
+  /// over de lijn (stroom.log 28-10, 10:55 en 10:59 op een zwakke wifi).
+  String speelPadVan(String path) => _speelPad(path);
+
   /// Het pad van wat er nu klinkt voor het spelende nummer: het nummer zelf, of een versie ervan.
   String? get speelPad {
     final t = current;

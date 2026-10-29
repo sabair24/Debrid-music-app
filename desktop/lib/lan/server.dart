@@ -2707,7 +2707,7 @@ class LanServer {
     if (t == null || bytes <= 0) return;
     t.start();
     t.tel(_adresVan[res] ?? res.connectionInfo?.remoteAddress.address ?? '?', soort, bytes,
-        wat: wat, totaal: totaal, vraag: vraag);
+        wat: wat, totaal: totaal, vraag: vraag, pad: _padVan[res]);
   }
 
   /// Wat een toestel zelf telde (dataverbruik.dart), in `verbruik.log` met het toestel ervoor. Begrensd zoals [_warmte].

@@ -1141,9 +1141,15 @@ Future<void> main() async {
   // Het volgende nummer alvast op de telefoon, alleen op mobiele data. Zie vooruithalen.dart.
   player.onVooruithalen = (huidig, volgende) {
     if (mode.owner) return; // de pc heeft alles zelf al
+    // De versie die gaat klinken (versies.dart), niet het nummer uit de rij: de speler zoekt de kopie onder dát pad.
+    // Hier stond `huidig?.path`, en dan haalde het vooruithalen bij een nummer met een gekozen versie het verkeerde
+    // bestand, dat nooit speelde (Etta James – At Last, 28-10-2026: twee keer over een zwakke wifi). Zie
+    // [PlayerStore.speelPadVan].
+    final huidigPad = huidig == null ? null : player.speelPadVan(huidig.path);
+    final volgendPad = volgende == null ? null : player.speelPadVan(volgende.path);
     final plan = vooruitPlan(
-      huidig: huidig?.path,
-      volgende: volgende?.path,
+      huidig: huidigPad,
+      volgende: volgendPad,
       // Onderweg, ook op een wifi die niet de jouwe is — zie `isOnderweg`.
       opMobiel: netStore.onderweg,
       stroomt: (p) => player.mediaResolver(p).startsWith('http'),
@@ -1151,7 +1157,7 @@ Future<void> main() async {
     unawaited(vooruit.houdAlleen(plan.houden));
     // Speelt het nummer al als stroom terwijl het vooruithalen nog bezig is, dan haalden ze het allebei: stop het
     // vooruithalen (dataverbruik, 27-10-2026). De stroom zelf belandt in de cache.
-    final nu = huidig?.path;
+    final nu = huidigPad;
     if (nu != null && vooruit.localFor(nu) == null && vooruit.jobs.any((j) => j.path == nu)) {
       vooruit.cancel(nu);
       player.logRegel('VOORUIT gestopt — ${huidig!.title} speelt al als stroom');
