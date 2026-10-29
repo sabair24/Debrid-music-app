@@ -186,6 +186,20 @@ void main() {
     expect(album.cover, bytesOf(9));
   });
 
+  test('een gekozen hoes die al in het geheugen staat, wordt niet opnieuw van schijf gelezen (29-10-2026)', () async {
+    // Na elke download liep enrich; elke herlezing gaf een nieuw object, en de catalogus rekende dan alle hoesmerken
+    // opnieuw (CoverEnricher.hoesMerk onthoudt het merk per object).
+    final enricher = CoverEnricher(settings);
+    final album = albumOf('Céline Dion', "D'Eux", embedded: bytesOf(1));
+    await enricher.saveFixedCover(album, bytesOf(9));
+    final lib = LibraryStore()..albums = [album];
+    await lib.enrich(settings);
+    final eerste = album.correctedCover;
+    expect(eerste, bytesOf(9));
+    await lib.enrich(settings);
+    expect(identical(album.correctedCover, eerste), isTrue, reason: 'hetzelfde object, dus het merk blijft onthouden');
+  });
+
   test('the key ignores case, so the same record is one entry', () async {
     final enricher = CoverEnricher(settings);
     await enricher.saveResolvedCover(albumOf('CÉLINE DION', "D'EUX"), bytesOf(7), 'mb:x');

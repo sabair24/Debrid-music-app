@@ -4503,6 +4503,11 @@ class LibraryStore extends ChangeNotifier {
     // Phase 1 — instant: on-disk cache only, no network. User-corrected covers first
     // (they win over embedded/enriched and must survive a rescan).
     for (final album in albums) {
+      // Al in het geheugen: niet opnieuw van schijf. Dit liep na ELKE download (onLibraryChanged → enrich) voor elke
+      // gekozen hoes (bij Saber 619 bestanden, 117 MB), en elke herlezing gaf een nieuw object — waarop de catalogus
+      // alle merken opnieuw rekende ([CoverEnricher.hoesMerk]): haper.log 29-10-2026, "catalogus bouwen 792 ms" na een
+      // download, 44 ms zonder. Wie een hoes kiest of corrigeert, zet hem hier ook in het geheugen.
+      if (album.correctedCover != null) continue;
       final fixed = await enricher.fixedCover(album);
       if (fixed != null) {
         album.correctedCover = fixed;
