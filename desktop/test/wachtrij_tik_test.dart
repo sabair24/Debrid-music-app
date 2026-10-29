@@ -76,7 +76,9 @@ void main() {
       expect(main, contains('onTap: () => nummerKeuze.actief ? nummerKeuze.wissel(t) : speelGetikt(context, tracks, i),'), reason: 'de Tracks-lijst');
       expect(main, contains('onTap: () => speelGetikt(context, nummers, i),'), reason: 'een afspeellijst');
       expect(main, contains('onTap: () => speelGetikt(context, alles, plek),'), reason: 'de favorieten');
-      expect(main, contains('playQueue(tracks, 0)'), reason: 'Speel alles blijft vervangen');
+      expect(main, contains('speelLijst(context, tracks, schud: false,'), reason: 'Speel alles blijft vervangen');
+      expect(main, contains('unawaited(schud ? speler.shuffleAll(nu) : speler.playQueue(nu, 0, cover: cover));'),
+          reason: 'via speelLijst, dat de wachtrij vervangt (zonder pc met alleen wat hier staat)');
     });
 
     test('een tik in de wachtrij springt, zonder opnieuw te schudden', () {
