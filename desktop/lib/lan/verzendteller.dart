@@ -57,11 +57,16 @@ class Verzendteller {
 
   /// [bytes] van soort [soort] gingen naar [adres]. [wat]: het nummer; [totaal]: hoe groot het hele bestand is; [vraag]:
   /// de Range-kop en de omzetting, voor de eigen regel.
-  void tel(String adres, Verkeerssoort soort, int bytes, {String? wat, int? totaal, String? vraag}) {
+  void tel(String adres, Verkeerssoort soort, int bytes, {String? wat, int? totaal, String? vraag, String? pad}) {
     if (bytes <= 0) return;
     final m = _per.putIfAbsent(adres, () => {});
     final oud = m[soort] ?? (bytes: 0, keer: 0);
     m[soort] = (bytes: oud.bytes + bytes, keer: oud.keer + 1);
+    // Muziek en hoezen tellen per nummer al mee; het gaat om de kleine vragen die zich opstapelen.
+    if (pad != null && soort != Verkeerssoort.muziek && soort != Verkeerssoort.hoezen) {
+      final p = _paden.putIfAbsent(adres, () => {});
+      p[pad] = (p[pad] ?? 0) + 1;
+    }
     final dag = dagSleutel(_klok());
     final weg = wegVanAdres(adres, publiek: publiek?.call());
     final k = '$weg|${soort.name}';
@@ -83,10 +88,24 @@ class Verzendteller {
           if (e.value[s] case final x?) '${s.name} ${bytesZin(x.bytes)} (${x.keer}×)',
       ];
       final som = e.value.values.fold(0, (a, b) => a + b.bytes);
+      final drukst = drukstePaden(_paden[e.key] ?? const {});
       log('${_dag()}  kwartier  ${e.key} (${wegVanAdres(e.key, publiek: publiek?.call())})  ${bytesZin(som)}: '
-          '${delen.join(', ')}');
+          '${delen.join(', ')}${drukst.isEmpty ? '' : ' · meest: $drukst'}');
     }
     _per.clear();
+    _paden.clear();
+  }
+
+  /// Per adres: hoe vaak elk pad gevraagd werd (behalve muziek en hoezen), sinds de vorige samenvatting.
+  ///
+  /// **Waarom (29-10-2026).** Op een zwakke wifi vroeg de gsm in een kwartier 505 keer iets van soort "zones" (~elke
+  /// 2 s), en welk pad dat was stond nergens.
+  final Map<String, Map<String, int>> _paden = {};
+
+  /// De drie drukste paden vanaf 20 keer, als "pad 300×, pad 120×". Leeg als er geen is.
+  static String drukstePaden(Map<String, int> paden) {
+    final rij = paden.entries.where((e) => e.value >= 20).toList()..sort((a, b) => b.value.compareTo(a.value));
+    return [for (final e in rij.take(3)) '${e.key} ${e.value}×'].join(', ');
   }
 
   String _dag() {

@@ -122,5 +122,18 @@ void main() {
       staatErin(main, 'await vooruit.leegMap();', 'wat er van een vorige keer ligt, hoort weg');
       staatErin(main, 'opMobiel: netStore.onderweg,', 'alleen onderweg halen (mobiele data, of niet thuis verbonden)');
     });
+
+    // 28-10-2026, zwakke wifi: "Etta James – At Last" werd om 10:55 vooruitgehaald (de 24/96 uit de rij) en om 10:59
+    // opnieuw gestroomd (de gekozen versie, 24/192). De speler zoekt de kopie onder het pad van wat er klinkt.
+    test('DE KERN: het vooruithalen haalt de versie die gaat klinken, onder het pad waar de speler zoekt', () {
+      final main = bron('lib/main.dart');
+      staatErin(main, 'final volgendPad = volgende == null ? null : player.speelPadVan(volgende.path);',
+          'anders staat de kopie onder het verkeerde pad en speelt hij nooit');
+      staatErin(main, 'volgende: volgendPad,', 'het plan rekent met de versie');
+      staatErin(main, 'final nu = huidigPad;', 'en het stoppen bij een stroom ook');
+      final speler = bron('lib/player.dart');
+      staatErin(speler, 'String speelPadVan(String path) => _speelPad(path);', 'dezelfde keuze als bij het openen');
+      staatErin(speler, 'final url = mediaResolver(_speelPad(path));', 'het openen zoekt onder dat pad');
+    });
   });
 }

@@ -159,6 +159,29 @@ void main() {
       expect(Verzendteller.vandaag.value['thuis|catalogus'], 373 << 10);
     });
 
+    // 29-10-2026: op een zwakke wifi 505 kleine vragen van soort "zones" per kwartier, en niet te zien welke.
+    test('het kwartier noemt de drukste kleine vragen, niet de muziek', () {
+      final regels = <String>[];
+      final t = Verzendteller(log: regels.add, klok: () => DateTime(2026, 10, 28, 11, 0));
+      for (var i = 0; i < 300; i++) {
+        t.tel('100.71.219.104', Verkeerssoort.zones, 3000, pad: '/api/zones/stand');
+      }
+      for (var i = 0; i < 25; i++) {
+        t.tel('100.71.219.104', Verkeerssoort.zones, 3000, pad: '/api/state');
+      }
+      t.tel('100.71.219.104', Verkeerssoort.pc, 100, pad: '/api/tijd');
+      for (var i = 0; i < 40; i++) {
+        t.tel('100.71.219.104', Verkeerssoort.muziek, 1000, pad: '/stream/x.flac');
+      }
+      t.kwartier();
+      expect(regels.single, endsWith(' · meest: /api/zones/stand 300×, /api/state 25×'),
+          reason: 'muziek telt per nummer al mee; een pad onder de 20 keer is geen stapel');
+      regels.clear();
+      t.tel('100.71.219.104', Verkeerssoort.zones, 3000, pad: '/api/zones/stand');
+      t.kwartier();
+      expect(regels.single, isNot(contains('meest')), reason: 'elk kwartier begint opnieuw te tellen');
+    });
+
     test('de weg van een adres', () {
       expect(wegVanAdres('192.168.0.176'), 'thuis');
       expect(wegVanAdres('127.0.0.1'), 'thuis');
