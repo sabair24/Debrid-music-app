@@ -7,7 +7,7 @@ import 'package:debridmusic/kopiesoort.dart';
 import 'package:debridmusic/lan/catalog.dart';
 import 'package:debridmusic/lan/client.dart';
 import 'package:debridmusic/library.dart';
-import 'package:debridmusic/main.dart' show plaatversies;
+import 'package:debridmusic/main.dart' show enkeleVersieZin, plaatversieZin, plaatversies;
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/versies.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -202,5 +202,33 @@ void main() {
     expect(pv[1].standaard, 2);
     expect(pv[2].persing, 'LP 2001, LP 2021');
     expect(pv[0].anker, isTrue);
+  });
+
+  test('DE KERN: de zin zegt waarnaast je kiest, en wat er met de rest is (Saber 29-10-2026, Gainsbourg & Birkin)', () {
+    // "er staat 1 op de 3 studio, maar er staan toch drie" — de andere twee waren ook 24/48, met één bestand elk.
+    Track t(String n, {int rate = 48000, int bits = 24}) => Track(
+        path: n,
+        title: n,
+        artist: 'Jane Birkin',
+        album: 'Jane Birkin - Serge Gainsbourg',
+        isFlac: true,
+        sampleRate: rate,
+        bitsPerSample: bits);
+    final slogan = t('12 - La Chanson De Slogan.flac', rate: 44100, bits: 16);
+    final studio = t('(studio)/12 - La Chanson De Slogan.flac');
+    final erotique = t('06 - 69 Année Érotique.flac'), sucettes = t('10 - Les Sucettes.flac');
+    final lijsten = {
+      slogan.path: [
+        VersieInfo(track: studio, soort: Kopiesoort.studio, persing: '', anker: false, standaard: true),
+        VersieInfo(track: slogan, soort: Kopiesoort.cd, persing: '', anker: true, standaard: false),
+      ],
+    };
+    List<VersieInfo> van(Track x) => lijsten[x.path] ?? const [];
+    final nummers = [slogan, erotique, sucettes];
+    final pv = plaatversies(nummers, van);
+    expect([for (final v in pv) plaatversieZin(v, pv)],
+        ['bij 1 nummer naast de cd · 24/48', 'bij 1 nummer naast de studioversie · 16/44.1 · in de albummap']);
+    expect(enkeleVersieZin(nummers, van), 'De andere 2 nummers hebben één versie (FLAC 24/48)');
+    expect(enkeleVersieZin([slogan], van), isNull, reason: 'elk nummer heeft versies: geen regel');
   });
 }

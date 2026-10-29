@@ -14897,6 +14897,49 @@ List<Plaatversie> plaatversies(List<Track> nummers, List<VersieInfo> Function(Tr
   return uit;
 }
 
+/// De zin onder een versie in het blok "Versies": "bij 1 nummer naast de cd · 24/48 · standaard…".
+///
+/// **Waarom zo (Saber, 29-10-2026).** Er stond "1 van 3 nummers", en dat las als "maar één van de drie is studio" — terwijl
+/// de andere twee ook 24/48 waren, alleen met één bestand en dus niets te kiezen. Nu zegt de zin waarnáást je kiest, en
+/// [enkeleVersieZin] zegt wat er met de rest is.
+@visibleForTesting
+String plaatversieZin(Plaatversie v, List<Plaatversie> alle) {
+  String naam(Kopiesoort? s) => switch (s) {
+        Kopiesoort.studio => 'de studioversie',
+        Kopiesoort.cd => 'de cd',
+        Kopiesoort.vinyl => 'de vinylversie',
+        null => 'het origineel',
+      };
+  final anderen = [for (final a in alle) if (a.sleutel != v.sleutel) naam(a.soort)];
+  return [
+    'bij ${v.nummers} ${v.nummers == 1 ? 'nummer' : 'nummers'}'
+        '${anderen.isEmpty ? '' : ' naast ${anderen.length == 1 ? anderen.single : '${anderen.sublist(0, anderen.length - 1).join(', ')} en ${anderen.last}'}'}',
+    if (v.kwaliteit.isNotEmpty) v.kwaliteit.join(', '),
+    if (v.persing.isNotEmpty) v.persing,
+    if (v.anker)
+      'in de albummap'
+    else if (_inAlbummap(v) > 0)
+      '${_inAlbummap(v)} in de albummap',
+  ].join(' · ');
+}
+
+/// "De andere 2 nummers hebben één versie (FLAC 24/48)" — de nummers van de plaat die maar één bestand hebben, en dus
+/// niet in het blok "Versies" staan. Null als elk nummer versies heeft.
+@visibleForTesting
+String? enkeleVersieZin(List<Track> nummers, List<VersieInfo> Function(Track) versiesVan) {
+  final enkel = [for (final t in nummers) if (versiesVan(t).length < 2) t];
+  if (enkel.isEmpty) return null;
+  final soorten = {
+    for (final t in enkel)
+      [
+        t.ext.toUpperCase(),
+        if (t.bitsPerSample > 0 && t.sampleRate > 0) depthRateLabel(sampleRate: t.sampleRate, bitsPerSample: t.bitsPerSample),
+      ].join(' '),
+  }.toList();
+  final wat = soorten.length <= 3 ? ' (${soorten.join(', ')})' : '';
+  return enkel.length == 1 ? 'Het andere nummer heeft één versie$wat' : 'De andere ${enkel.length} nummers hebben één versie$wat';
+}
+
 /// Het blok "Versies" op de albumpagina (Saber, 26-10-2026: "één tegel, de versies op de albumpagina"). Niets als de
 /// plaat geen versies heeft.
 class AlbumVersies extends StatelessWidget {
@@ -14935,17 +14978,7 @@ class AlbumVersies extends StatelessWidget {
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(v.soort == null ? 'Origineel' : soortKop(v.soort!),
                           style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      Text(
-                          [
-                            '${v.nummers} van ${album.tracks.length} nummers',
-                            if (v.kwaliteit.isNotEmpty) v.kwaliteit.join(', '),
-                            if (v.persing.isNotEmpty) v.persing,
-                            if (v.anker)
-                              'in de albummap'
-                            else if (_inAlbummap(v) > 0)
-                              '${_inAlbummap(v)} in de albummap',
-                          ].join(' · '),
-                          style: kLabel.copyWith(color: kGedempt)),
+                      Text(plaatversieZin(v, lijst), style: kLabel.copyWith(color: kGedempt)),
                     ]),
                   ),
                   if (v.standaard > 0)
@@ -14953,6 +14986,13 @@ class AlbumVersies extends StatelessWidget {
                         style: kLabel.copyWith(color: kAccent)),
                 ]),
               ),
+            ),
+          // Wat er met de rest is (Saber, 29-10-2026: "er staat 1 op de 3 studio, maar er staan toch drie").
+          if (enkeleVersieZin(album.tracks, lib.versiesVan) case final zin?)
+            Padding(
+              key: const ValueKey('album-versies-enkel'),
+              padding: const EdgeInsets.fromLTRB(4, 2, 4, 0),
+              child: Text(zin, style: kLabel.copyWith(color: kGedempt)),
             ),
         ],
       ),
