@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart' show ValueNotifier;
 
 import 'kopiesoort.dart';
 import 'soulseek.dart' show SoulseekFile;
+import 'versies.dart' show persingUit;
 
 /// Wanneer een vraag opnieuw zoekt, na [rondes] rondes zonder klaargezette kopie: 30 min, 2 u, 6 u, dan elke dag.
 Duration soortvraagWacht(int rondes) => switch (rondes) {
@@ -40,6 +41,21 @@ const int kSoortKandidaten = 6;
 /// basis"* — daar stond Jam op plaats 16 in de rij van de eerste uploader, en de vijf anderen wachtten erachter. Studio
 /// en vinyl blijven de beste eerst, één voor één: daar kan de snelste een 24/48 zijn waar ook een 24/192 klaarstond.
 const int kCdKandidaten = 12;
+
+/// Is [f] een rip van een Japanse persing? Zijn mappen bij de uploader zeggen het ([persingUit]: "Japan", "JPN", SHM-CD).
+bool japanseRip(SoulseekFile f) {
+  final p = persingUit(f.filename, soort: Kopiesoort.cd);
+  return p.contains('Japan') || p.contains('SHM-CD');
+}
+
+/// De wedlopen voor een cd: eerst [kandidaten] zonder Japanse rips ([japanseRip]), en die pas als er niets anders
+/// bruikbaars kwam. Saber, 29-10-2026, toen het nummer Dangerous een "CD · Japan" kreeg: een Japanse cd-rip alleen als er
+/// geen andere kandidaat is — zoals hij al gold voor de nummerlijst (zonderJapansePersingen in release_format.dart).
+/// Lege groepen vallen weg.
+List<List<SoulseekFile>> cdRondes(List<SoulseekFile> kandidaten) => [
+      for (final japans in [false, true])
+        if (kandidaten.where((f) => japanseRip(f) == japans).toList() case final g when g.isNotEmpty) g,
+    ];
 
 /// Hoeveel nummers van een plaat er samen zoeken als je zelf een soort vroeg (zie [kCdKandidaten]): de veertien van
 /// Dangerous gingen één voor één. De ronde die vanzelf terugkomt ([soortvraagWacht]) blijft één voor één.

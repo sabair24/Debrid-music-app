@@ -6286,33 +6286,37 @@ class DownloadManager extends ChangeNotifier {
     var klaar = false;
     try {
       await soulseek.withSession((session) async {
-        while (!klaar) {
-          if (!identical(soortvragen?.van(v.pad), v)) return;
-          final left = deadline.difference(DateTime.now());
-          if (left <= const Duration(seconds: 30)) return;
-          final over = [for (final f in kandidaten) if (!af.contains(f.username)) f];
-          if (over.isEmpty) return;
-          final w = await _wedloop(session, job, over.first, (al) {
-            for (final f in over) {
-              if (!al.contains(f.username)) return f;
-            }
-            return null;
-          }, null,
-              artiest: v.artiest,
-              titel: v.titel,
-              seconden: v.seconden,
-              viel: af.add,
-              kop: '"${v.artiest} — ${v.titel}": cd-wedloop',
-              wacht: left < _maxWachtPerPeer ? left : _maxWachtPerPeer);
-          if (w == null) return; // niemand stuurde iets: TIDAL, torrents, en later opnieuw
-          af.add(w.f.username);
-          _log.line('   ${w.f.username}: ${_uitkomst(w.res)}');
-          final res = w.res;
-          if (res is! SlskDone) continue;
-          klaar = await _keurVoorSoort(v, File(res.path), 'Soulseek ${w.f.username}', w.f.filename);
+        // Japanse rips pas als er uit de rest niets bruikbaars kwam ([cdRondes]).
+        for (final groep in cdRondes(kandidaten)) {
+          while (!klaar) {
+            if (!identical(soortvragen?.van(v.pad), v)) return;
+            final left = deadline.difference(DateTime.now());
+            if (left <= const Duration(seconds: 30)) return;
+            final over = [for (final f in groep) if (!af.contains(f.username)) f];
+            if (over.isEmpty) break;
+            final w = await _wedloop(session, job, over.first, (al) {
+              for (final f in over) {
+                if (!al.contains(f.username)) return f;
+              }
+              return null;
+            }, null,
+                artiest: v.artiest,
+                titel: v.titel,
+                seconden: v.seconden,
+                viel: af.add,
+                kop: '"${v.artiest} — ${v.titel}": cd-wedloop',
+                wacht: left < _maxWachtPerPeer ? left : _maxWachtPerPeer);
+            if (w == null) break; // niemand uit deze groep stuurde iets
+            af.add(w.f.username);
+            _log.line('   ${w.f.username}: ${_uitkomst(w.res)}');
+            final res = w.res;
+            if (res is! SlskDone) continue;
+            klaar = await _keurVoorSoort(v, File(res.path), 'Soulseek ${w.f.username}', w.f.filename);
+          }
+          if (klaar) return;
         }
       });
-    } catch (_) {/* geen sessie, geen net: de vraag blijft staan */}
+    } catch (_) {/* geen sessie, geen net: de vraag blijft staan; TIDAL, torrents en later opnieuw */}
     return klaar;
   }
 
