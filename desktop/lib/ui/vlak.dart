@@ -970,7 +970,11 @@ class HoesAchtergrond extends StatefulWidget {
     required this.hoogte,
     this.balkRuimte = 0,
     this.rol,
+    this.waas,
   });
+
+  /// De waas over de vervaagde hoes; zonder is het [donkering].
+  final Color? waas;
 
   /// De hoes, of null als er (nog) geen is — dan tekent dit niets en blijft de pagina zoals hij was.
   final ImageProvider? beeld;
@@ -1000,6 +1004,18 @@ class HoesAchtergrond extends StatefulWidget {
   /// Op licht is het een waas van gebroken wit, om dezelfde reden andersom: daar staat de titel in
   /// donkere letters, en die moeten ook boven een zwarte hoes lezen (Saber, 18-10-2026).
   static Color get donkering => Thema.licht ? const Color(0xB3F3EFE7) : const Color(0xB307080C);
+
+  /// De waas achter Nu speelt: 60 % in plaats van 70 %, dus 40 % hoes in plaats van 30 %.
+  ///
+  /// Saber, 29-10-2026: "dat de hoes op de achtergrond er iets meer doorkomt, niet veel meer, maar
+  /// wil iets meer de kleur zien" — en koos van drie voorbeelden op zijn eigen schermafdruk (Gala,
+  /// licht thema) "een tikje meer". 50 % hoes maakte de grijze regels bovenaan ("Speelt op…" en de
+  /// albumnaam) net te zwak: 2,95:1 tegen 3,86:1 nu; bij 40 % is dat 3,38:1. Waar de titel en de
+  /// knoppen staan verandert niets: daar ligt [hoesUitdoving] er al bijna dicht overheen.
+  ///
+  /// Alleen hier: bovenaan een albumpagina staan witte letters en glasknoppen op de hoes
+  /// ([kGrondDonkereKop] rekent met 70 %).
+  static Color get nuSpeeltWaas => Thema.licht ? const Color(0x99F3EFE7) : const Color(0x9907080C);
 
   /// Het masker: tot iets over de helft het volle beeld, daarna naar niets.
   static const LinearGradient vervloeiing = LinearGradient(
@@ -1105,6 +1121,7 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
   void didUpdateWidget(HoesAchtergrond oud) {
     super.didUpdateWidget(oud);
     if (oud.beeld != widget.beeld) _hoesStroom();
+    if (oud.waas != widget.waas) _gevraagdVoor = _gebakkenVoor = null;
   }
 
   /// De hoes op 128 pixels breed: na deze vervaging is er geen detail meer dat een grotere
@@ -1168,7 +1185,7 @@ class _HoesAchtergrondState extends State<HoesAchtergrond> {
     final beurt = ++_beurt;
     final schaal = math.min(dpr, HoesAchtergrond.gebakkenBreedte / vak.width);
     final bron = hoes.image.clone();
-    bakHoesAchtergrond(bron, vak: vak, schaal: schaal, donkering: HoesAchtergrond.donkering).then((beeld) {
+    bakHoesAchtergrond(bron, vak: vak, schaal: schaal, donkering: widget.waas ?? HoesAchtergrond.donkering).then((beeld) {
       if (!mounted || beurt != _beurt) {
         beeld.dispose();
         return;
