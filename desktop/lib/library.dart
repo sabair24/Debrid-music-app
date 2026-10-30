@@ -4102,7 +4102,22 @@ class LibraryStore extends ChangeNotifier {
       }
     }
 
-    ({Album album, bool voorrang, bool gelezen})? volgendeAlbum() {
+    // Hoeveel albums van het scherm nu van schijf gelezen worden. Zolang dat er een is, begint geen
+    // lezer aan een gewoon album.
+    //
+    // **Vooraan in de rij was niet genoeg.** Voorrang gaf het album op het scherm alleen een voorsprong
+    // van één vraag; daarna liepen de zes lezers naast elkaar. Elke stap op schijf (bestaat het, openen,
+    // lezen, sluiten) is een eigen rit langs de IO-draden, en in welke volgorde die terugkomen ligt
+    // nergens vast. Onder last (toets VOORRANG, 30-10-2026, 56 branders, 600 rondes) ging het 12 keer
+    // mis: negen keer stonden er al 9 tot 21 andere hoezen vóór de zijne, drie keer ging de bundel van
+    // 24 helemaal voor. Op de Shield is dat niet gemeten, maar een koude start is daar wel een moment
+    // van last. Gewacht wordt alleen op de schijf:
+    // wat daarna naar de pc moet ([haalBijPc]) loopt los, anders hield een pc die niet antwoordt de
+    // hele leesronde op.
+    var voorrangOpSchijf = 0;
+    Completer<void>? schijfVrij;
+
+    ({Album album, bool voorrang, bool gelezen})? volgendeAlbum({required bool ookGewoon}) {
       while (_voorrang.isNotEmpty) {
         final pad = _voorrang.first;
         _voorrang.remove(pad);
@@ -4112,6 +4127,7 @@ class LibraryStore extends ChangeNotifier {
         // Al van schijf gelezen en nog steeds zonder hoes: die ligt niet op dit toestel.
         if (a.cover == null && !bijPc.contains(a)) return (album: a, voorrang: true, gelezen: true);
       }
+      if (!ookGewoon) return null;
       while (gelezen < volgorde.length) {
         final a = volgorde[gelezen++];
         if (gedaan.add(a)) return (album: a, voorrang: false, gelezen: false);
@@ -4119,45 +4135,65 @@ class LibraryStore extends ChangeNotifier {
       return null;
     }
 
+    // Eén album van schijf lezen en neerzetten. Waar: hij moet van de pc komen, omdat wat hier ligt
+    // achterhaald is of omdat hier niets ligt.
+    Future<bool> vanSchijf(Album album, {required bool voorrang}) async {
+      final merk = _remoteAlbums[album]?.artTag ?? '';
+      // Het merkteken alleen lezen waar de pc er een heeft: dat is de enige vergelijking die hier
+      // gebeurt. De werker hieronder leest het voor de rest zelf, op de achtergrond. Zo kost een
+      // gewoon album in deze ronde één bestand in plaats van twee.
+      if (merk.isNotEmpty) {
+        final bewaard = await enricher.bewaardMerk(album);
+        bewaardeMerken[album] = bewaard;
+        if (bewaard != merk) return true;
+      }
+      if (album.zekereHoes != null) return false;
+      final c = await enricher.cached(album);
+      if (c == null) return true;
+      uitSchijf[album] = c;
+      album.enriched = c;
+      _onthoudHoes(album, c);
+      // Wat op het scherm staat meteen, de rest gebundeld per 24.
+      if (voorrang || ++since >= 24) {
+        since = 0;
+        notifyListeners();
+      }
+      return false;
+    }
+
     Future<void> lezer() async {
       while (true) {
-        final volgende = volgendeAlbum();
-        if (volgende == null) return;
+        final volgende = volgendeAlbum(ookGewoon: voorrangOpSchijf == 0);
+        if (volgende == null) {
+          if (voorrangOpSchijf == 0) return;
+          await (schijfVrij ??= Completer<void>()).future;
+          continue;
+        }
         final album = volgende.album;
         if (volgende.gelezen) {
           if (bijPc.add(album)) await haalBijPc(album, meteen: true);
           continue;
         }
-        final merk = _remoteAlbums[album]?.artTag ?? '';
-        // Het merkteken alleen lezen waar de pc er een heeft: dat is de enige vergelijking die hier
-        // gebeurt. De werker hieronder leest het voor de rest zelf, op de achtergrond. Zo kost een
-        // gewoon album in deze ronde één bestand in plaats van twee.
-        if (merk.isNotEmpty) {
-          final bewaard = await enricher.bewaardMerk(album);
-          bewaardeMerken[album] = bewaard;
-          if (bewaard != merk) {
-            // Op het scherm en achterhaald: meteen de goede bij de pc, niet achteraan in de navraag.
-            if (volgende.voorrang && bijPc.add(album)) await haalBijPc(album, meteen: true);
-            continue;
-          }
-        }
-        if (album.zekereHoes != null) continue;
-        final c = await enricher.cached(album);
-        if (c == null) {
-          // Op het scherm en nog nooit op dit toestel geweest (een nieuwe plaat): meteen bij de pc.
-          // Anders wachtte hij tot alles van schijf gelezen was en de navraag hem in de vaste
-          // volgorde tegenkwam — op de Shield ~6 s voor de hoes in de spelerbalk (18-10-2026).
-          if (volgende.voorrang && bijPc.add(album)) await haalBijPc(album, meteen: true);
+        if (!volgende.voorrang) {
+          await vanSchijf(album, voorrang: false);
           continue;
         }
-        uitSchijf[album] = c;
-        album.enriched = c;
-        _onthoudHoes(album, c);
-        // Wat op het scherm staat meteen, de rest gebundeld per 24.
-        if (volgende.voorrang || ++since >= 24) {
-          since = 0;
-          notifyListeners();
+        voorrangOpSchijf++;
+        final bool naarPc;
+        try {
+          naarPc = await vanSchijf(album, voorrang: true);
+        } finally {
+          if (--voorrangOpSchijf == 0) {
+            final vrij = schijfVrij;
+            schijfVrij = null;
+            vrij?.complete();
+          }
         }
+        // Op het scherm en achterhaald, of nog nooit op dit toestel geweest (een nieuwe plaat): meteen
+        // bij de pc, niet achteraan in de navraag. Anders wachtte hij tot alles van schijf gelezen was en
+        // de navraag hem in de vaste volgorde tegenkwam — op de Shield ~6 s voor de hoes in de
+        // spelerbalk (18-10-2026).
+        if (naarPc && bijPc.add(album)) await haalBijPc(album, meteen: true);
       }
     }
 
