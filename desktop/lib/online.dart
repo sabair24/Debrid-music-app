@@ -4856,12 +4856,14 @@ class DownloadManager extends ChangeNotifier {
   ///
   /// Zonder [vroeg] (geen groeistroom) speelt er niets mee tijdens het binnenkomen: de jacht op een cd
   /// ([_cdWedloop]). [kop] begint elke regel in het logboek; [wacht] is hoe lang een loper in een rij mag staan.
+  /// [afloop] hoort, naast [viel], ook hoe wie uit zichzelf afviel eindigde: "bezet" is iets anders dan "mislukt".
   Future<({SoulseekFile f, SlskResult res, bool afgekeurd})?> _wedloop(SlskSession session, DownloadJob job,
       SoulseekFile eerste, SoulseekFile? Function(Set<String> al) volgende, Groei? vroeg,
       {required String artiest,
       required String titel,
       required int? seconden,
       void Function(String)? viel,
+      void Function(String gebruiker, SlskResult uitkomst)? afloop,
       String? kop,
       Duration wacht = kMaxWacht}) async {
     final regel = kop ?? 'radio "$artiest — $titel"';
@@ -4898,6 +4900,7 @@ class DownloadManager extends ChangeNotifier {
         // rij). Wie pas daarna stopt, stopte omdat een ander won — die blijft goed voor een volgende ronde.
         if (winnaar == null && !job.cancelled) {
           viel?.call(f.username);
+          afloop?.call(f.username, r);
           uitkomsten.add('${f.username}: ${_uitkomst(r)} na ${klok.elapsedMilliseconds} ms'
               '${inRij.contains(f) ? ' (stond in de rij)' : ''}');
         }
@@ -6288,12 +6291,14 @@ class DownloadManager extends ChangeNotifier {
       await soulseek.withSession((session) async {
         // Japanse rips pas als er uit de rest niets bruikbaars kwam ([cdRondes]).
         for (final groep in cdRondes(kandidaten)) {
+          var bezetRondes = 0;
           while (!klaar) {
             if (!identical(soortvragen?.van(v.pad), v)) return;
             final left = deadline.difference(DateTime.now());
             if (left <= const Duration(seconds: 30)) return;
             final over = [for (final f in groep) if (!af.contains(f.username)) f];
             if (over.isEmpty) break;
+            final gevallen = <String>{}, bezet = <String>{};
             final w = await _wedloop(session, job, over.first, (al) {
               for (final f in over) {
                 if (!al.contains(f.username)) return f;
@@ -6303,10 +6308,23 @@ class DownloadManager extends ChangeNotifier {
                 artiest: v.artiest,
                 titel: v.titel,
                 seconden: v.seconden,
-                viel: af.add,
+                viel: gevallen.add,
+                afloop: (u, r) {
+                  if (r is SlskQueued) bezet.add(u);
+                },
                 kop: '"${v.artiest} — ${v.titel}": cd-wedloop',
                 wacht: left < _maxWachtPerPeer ? left : _maxWachtPerPeer);
-            if (w == null) break; // niemand uit deze groep stuurde iets
+            // Bezet is niet afgevallen: met vier nummers samen staan dezelfde uploaders bovenaan bij elk nummer, en de
+            // sessie geeft er per uploader één tegelijk (Liberian Girl, Bad, 30-10-2026: alle vijf "in de wachtrij" na
+            // 15 s, en toen won de Japanse). Die komen na [kCdBezetPauze] terug, hoogstens [kCdBezetRondes] keer.
+            af.addAll(gevallen.difference(bezet));
+            if (w == null) {
+              if (bezet.isEmpty || ++bezetRondes > kCdBezetRondes) break; // niemand uit deze groep stuurde iets
+              _log.line('"${v.artiest} — ${v.titel}": cd-wedloop — ${bezet.length} bezet, over '
+                  '${kCdBezetPauze.inSeconds} s opnieuw ($bezetRondes/$kCdBezetRondes)');
+              await Future<void>.delayed(kCdBezetPauze);
+              continue;
+            }
             af.add(w.f.username);
             _log.line('   ${w.f.username}: ${_uitkomst(w.res)}');
             final res = w.res;
