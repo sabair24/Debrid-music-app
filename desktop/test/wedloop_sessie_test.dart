@@ -5,6 +5,7 @@
 /// `onderweg_ander_adres_test`.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -25,6 +26,30 @@ Future<int> _dichtePoort() async {
   final poort = s.port;
   await s.close();
   return poort;
+}
+
+/// Een luik voor [doel] op een eigen poort, zodat de toets bepaalt wie eerst antwoordt. Wat
+/// binnenkomt gaat ongewijzigd door, maar pas als [eerst] klaar is; [opgehangen] hoort het als
+/// de vrager ophangt.
+Future<Uri> _luik(Uri doel, {Future<void>? eerst, void Function()? opgehangen}) async {
+  final luik = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+  addTearDown(luik.close);
+  luik.listen((vrager) async {
+    await eerst;
+    final Socket pc;
+    try {
+      pc = await Socket.connect(InternetAddress.loopbackIPv4, doel.port);
+    } catch (_) {
+      vrager.destroy();
+      return;
+    }
+    pc.listen(vrager.add, onDone: vrager.destroy, onError: (Object _) => vrager.destroy());
+    vrager.listen(pc.add, onDone: () {
+      pc.destroy();
+      opgehangen?.call();
+    }, onError: (Object _) => pc.destroy());
+  });
+  return Uri.parse('http://127.0.0.1:${luik.port}');
 }
 
 Future<void> _wachtTot(bool Function() klaar, {Duration max = const Duration(seconds: 20)}) async {
@@ -106,13 +131,27 @@ void main() {
   });
 
   test('een andere pc op een uitwijkadres wint niet; de eigen pc wel', () async {
-    final (_, vreemd) = await pc('pc-van-de-buren');
-    final (_, eigen) = await pc('pc-saber-0001');
+    final (_, buren) = await pc('pc-van-de-buren');
+    final (_, saber) = await pc('pc-saber-0001');
+    // De buren antwoorden eerst, en dat staat vast: de eigen pc krijgt de vraag pas als de buren
+    // opgehangen zijn. **Waarom het luik.** Alle drie de adressen zijn 127.0.0.1, dus "thuis": ze
+    // beginnen tegelijk, en het eerste juiste antwoord wint meteen. Wie dan eerst antwoordt, is
+    // toeval. Op 30-10-2026 antwoordde onder last de eigen pc eerst in 17 van de 288 rondes (24
+    // kopieën met 40 branders). In elk van die rondes ontbrak de regel van de buren in het verloop,
+    // omdat hun antwoord pas na de uitslag kwam. Het antwoord kwam op de poort van de eigen pc, niet
+    // op het dode adres: Windows gaf in 48.424 pogingen nooit een bezette poort uit. Het luik wacht
+    // op het ophangen, niet op het antwoord. De wedloop verwerkt het antwoord in microtaken, en het
+    // ophangen ziet het luik pas bij de volgende gebeurtenis, als de regel er al staat.
+    final burenOpgehangen = Completer<void>();
+    final vreemd = await _luik(buren, opgehangen: () {
+      if (!burenOpgehangen.isCompleted) burenOpgehangen.complete();
+    });
+    final eigen = await _luik(saber, eerst: burenOpgehangen.future);
     final dood = Uri.parse('http://127.0.0.1:${await _dichtePoort()}');
     final lib = LibraryStore();
     final s = sessie(lib);
     addTearDown(s.dispose);
-    // Thuisadres dood; als uitwijk eerst de buren (antwoordt sneller of even snel), dan de eigen pc.
+    // Thuisadres dood; als uitwijk eerst de buren, dan de eigen pc.
     await s.connect(
       RemoteEndpoint(
         baseUrl: dood,
