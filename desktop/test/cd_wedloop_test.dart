@@ -16,7 +16,7 @@ import 'package:debridmusic/soulseek.dart';
 import 'package:debridmusic/twijfel.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-enum _Gedrag { rij, firewall, snel, traag }
+enum _Gedrag { rij, firewall, snel, traag, eerstBezet, altijdBezet }
 
 /// Uploaders zoals in downloads.log van 29-10-2026: wie ons in zijn rij zet (plaats 16), wie onbereikbaar is, en wie
 /// meteen levert (een echte FLAC, zodat de controle na het halen hem heel vindt).
@@ -47,6 +47,16 @@ class _NepSessie implements SlskSession {
       return false;
     }
 
+    // Eerst bezet: zoals soulseek.dart na 15 s wachten op een uploader die een ander nummer van de plaat stuurt
+    // (SlskQueued(0)); de keer daarna levert hij.
+    if (gedrag[file.username] == _Gedrag.eerstBezet && begonnen.where((u) => u == file.username).length == 1) {
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      return SlskQueued(0);
+    }
+    if (gedrag[file.username] == _Gedrag.altijdBezet) {
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      return SlskQueued(0);
+    }
     switch (gedrag[file.username]!) {
       case _Gedrag.rij:
         onStatus?.call(SlskQueued(16));
@@ -55,7 +65,7 @@ class _NepSessie implements SlskSession {
       case _Gedrag.firewall:
         await Future<void>.delayed(const Duration(milliseconds: 30));
         return SlskFail('Uploader niet bereikbaar (firewall)');
-      case _Gedrag.snel || _Gedrag.traag:
+      case _Gedrag.snel || _Gedrag.traag || _Gedrag.eerstBezet || _Gedrag.altijdBezet:
         await Future<void>.delayed(Duration(milliseconds: gedrag[file.username] == _Gedrag.snel ? 80 : 600));
         if (stop()) return SlskCancelled();
         onProgress(1, toon.length); // de eerste bytes: wie dit het eerst doet, wint
@@ -224,6 +234,43 @@ void main() {
       expect(gekeurd, ['Soulseek borb']);
       expect(s.begonnen, isNot(contains('ruvish')), reason: 'de Japanse deed niet eens mee');
     });
+
+    test('DE KERN (Bad, 30-10-2026): bezet is niet afgevallen — even later nog eens, en de Japanse wacht', () async {
+      // Liberian Girl: alle vijf de anderen gaven na 15 s "in de wachtrij" (ze stuurden een ander nummer van de plaat),
+      // en toen won meteen solaristico met een Japanse rip.
+      final s = sessie({'lithium': _Gedrag.eerstBezet, 'solaristico': _Gedrag.snel});
+      final gekeurd = <String>[];
+      d.keurSoortVoorToets = (v, binnen, bron) async {
+        gekeurd.add(bron);
+        return true;
+      };
+      final klaar = await d
+          .cdWedloopVoorToets(
+              vraag('Liberian Girl'), [jp('lithium', 'Bad (EU)'), jp('solaristico', 'Bad (Japan 32·8P-200)')])
+          .timeout(const Duration(seconds: 90));
+      expect(klaar, isTrue);
+      expect(gekeurd, ['Soulseek lithium']);
+      expect(s.begonnen.where((u) => u == 'lithium').length, 2, reason: 'na de pauze nog eens');
+      expect(s.begonnen, isNot(contains('solaristico')));
+    });
+
+    test('blijft iedereen bezet, dan na kCdBezetRondes keer toch de Japanse', () async {
+      final s = sessie({'lithium': _Gedrag.altijdBezet, 'solaristico': _Gedrag.snel});
+      final gekeurd = <String>[];
+      d.keurSoortVoorToets = (v, binnen, bron) async {
+        gekeurd.add(bron);
+        return true;
+      };
+      final klaar = await d
+          .cdWedloopVoorToets(
+              vraag('Liberian Girl'), [jp('lithium', 'Bad (EU)'), jp('solaristico', 'Bad (Japan 32·8P-200)')])
+          .timeout(const Duration(seconds: 120));
+      expect(klaar, isTrue);
+      expect(gekeurd, ['Soulseek solaristico'], reason: 'liever Japans dan niets');
+      expect(s.begonnen.where((u) => u == 'lithium').length, kCdBezetRondes + 1);
+      expect(kCdBezetPauze * kCdBezetRondes, lessThanOrEqualTo(const Duration(seconds: 30)),
+          reason: 'de Japanse wacht hoogstens een halve minuut extra');
+    }, timeout: const Timeout(Duration(minutes: 2))); // zes keer vijf seconden pauze, met opzet
 
     test('levert niemand anders iets bruikbaars, dan alsnog de Japanse', () async {
       sessie({'ruvish': _Gedrag.snel, 'x': _Gedrag.firewall, 'y': _Gedrag.snel});

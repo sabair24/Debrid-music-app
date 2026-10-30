@@ -57,6 +57,11 @@ List<List<SoulseekFile>> cdRondes(List<SoulseekFile> kandidaten) => [
         if (kandidaten.where((f) => japanseRip(f) == japans).toList() case final g when g.isNotEmpty) g,
     ];
 
+/// Hoe vaak een cd-wedloop waarin iedereen alleen BEZET was (een ander nummer van de plaat haalt bij dezelfde uploader),
+/// na [kCdBezetPauze] opnieuw begint vóór de volgende groep ([cdRondes]) aan de beurt komt.
+const int kCdBezetRondes = 6;
+const Duration kCdBezetPauze = Duration(seconds: 5);
+
 /// Hoeveel nummers van een plaat er samen zoeken als je zelf een soort vroeg (zie [kCdKandidaten]): de veertien van
 /// Dangerous gingen één voor één. De ronde die vanzelf terugkomt ([soortvraagWacht]) blijft één voor één.
 const int kSoortNummersTegelijk = 4;
