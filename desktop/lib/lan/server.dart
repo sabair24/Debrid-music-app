@@ -28,6 +28,7 @@ import '../online.dart';
 import '../tidaler.dart' show Tidaler, haalVanTidal, tidalDoel, tidalHulpFoutZin, tidalHulpUitvoer;
 import '../organize.dart';
 import '../paths.dart';
+import '../wekker.dart' show wachtTot, wektToestel;
 import '../pc_model.dart' show Modelvragen;
 import '../prullenbak.dart' show heeftPrullenbak;
 import '../schudlog.dart' show kSchudLogBytes, kSchudPerZending;
@@ -607,7 +608,26 @@ class LanServer {
       return (status: 200, antwoord: {'bezorgd': 1});
     }
     if (zone.startsWith('dev:')) {
-      final lijnen = List.of(_zoneLijnen[zone.substring(4)] ?? const <void Function(String, Map<String, dynamic>)>[]);
+      final t = zone.substring(4);
+      var lijnen = List.of(_zoneLijnen[t] ?? const <void Function(String, Map<String, dynamic>)>[]);
+      // De reserve (Saber, 31-10-2026): een tv die niet antwoordt terwijl er muziek naartoe moet — wekken en Debrid
+      // Music starten via netwerk-adb, en wachten tot zijn lijn terug is. Normaal houdt de dienst op de tv hem bereikbaar
+      // (Ontvanger.kt); dit is voor als de app toch dicht is.
+      final reserve = wekViaAdb;
+      // Alleen tv's krijgen een adres ([_onthoudAdres]), dus een adres is genoeg — ook na een herstart van de pc, als die
+      // het toestel nog niet zag.
+      final adres = lijnen.isEmpty ? _adresVoor(t) : null;
+      if (lijnen.isEmpty && reserve != null && adres != null && wektToestel(cmd)) {
+        final klok = Stopwatch()..start();
+        _zoneLog.line('reserve: ${naam()} antwoordt niet — wekken via adb op $adres');
+        final terug = await reserve(t, adres) &&
+            await wachtTot(() => (_zoneLijnen[t] ?? const []).isNotEmpty, geduld: const Duration(seconds: 25));
+        _zoneLog.line('reserve: ${naam()} ${terug ? 'terug na ${(klok.elapsedMilliseconds / 1000).toStringAsFixed(1)} s' : 'niet terug'}');
+        // Even de tijd voor de app om zijn bibliotheek te lezen: de lijn komt soms eerder dan de catalogus, en dan
+        // zou "speel" de nummers nog niet kennen.
+        if (terug) await Future<void>.delayed(kNaReserve);
+        lijnen = List.of(_zoneLijnen[t] ?? const <void Function(String, Map<String, dynamic>)>[]);
+      }
       if (lijnen.isEmpty) {
         return (status: 409, antwoord: {'error': '${naam()} is niet bereikbaar (de app is dicht, of het toestel slaapt).'});
       }
@@ -945,6 +965,44 @@ class LanServer {
 
   late final WarmLog _zoneLog =
       WarmLog('${library.configDir.isEmpty ? logDir : library.configDir}${Platform.pathSeparator}zones.log');
+
+  /// Na de reserve, als de lijn terug is: zoveel wachten voor de opdracht gaat. Een veld zodat een toets niet hoeft te
+  /// wachten.
+  @visibleForTesting
+  Duration kNaReserve = const Duration(seconds: 3);
+
+  /// De reserve voor een tv zonder lijn ([zoneOpdracht]): wek [adres] via netwerk-adb en start Debrid Music
+  /// (`adb_wekker.dart`). Gezet door main op de pc als adb er staat; null = geen reserve, zoals voorheen.
+  Future<bool> Function(String toestel, String adres)? wekViaAdb;
+
+  /// Per toestel het laatste adres waarvan zijn zonelijn kwam: daar woont het toestel voor de reserve. Op schijf, want de
+  /// reserve is juist nodig als het toestel er na een herstart van de pc nog niet was.
+  final Map<String, String> _tvAdres = {};
+  bool _adressenGelezen = false;
+  File get _adresBestand =>
+      File('${library.configDir.isEmpty ? appDir : library.configDir}${Platform.pathSeparator}toestel_adressen.json');
+
+  String? _adresVoor(String toestel) {
+    if (!_adressenGelezen) {
+      _adressenGelezen = true;
+      try {
+        final m = jsonDecode(_adresBestand.readAsStringSync());
+        if (m is Map) {
+          for (final e in m.entries) {
+            _tvAdres.putIfAbsent('${e.key}', () => '${e.value}');
+          }
+        }
+      } catch (_) {/* nog geen bestand */}
+    }
+    return _tvAdres[toestel];
+  }
+
+  void _onthoudAdres(String toestel, String adres) {
+    _adresVoor(toestel);
+    if (_tvAdres[toestel] == adres) return;
+    _tvAdres[toestel] = adres;
+    unawaited(_adresBestand.writeAsString(jsonEncode(_tvAdres)).then((_) {}, onError: (Object _) {}));
+  }
   final Transcoder transcoder = Transcoder();
 
   /// Zichzelf bijwerken op verzoek van een gekoppeld toestel. Zie `pc_bijwerker.dart`.
@@ -2161,6 +2219,9 @@ class LanServer {
     if (toestel.isNotEmpty) {
       zones.stroomOpen(toestel, naam: naam, soort: soort);
       _zoneLijnen.putIfAbsent(toestel, () => []).add(send);
+      // Waar een tv woont, voor de reserve als hij later niet meer antwoordt (adb_wekker.dart).
+      final adres = req.connectionInfo?.remoteAddress;
+      if (soort == ZoneSoort.tv && adres != null && !adres.isLoopback) _onthoudAdres(toestel, adres.address);
       // Een volger die (opnieuw) verbindt: meteen weten waar de groep is.
       final leider = zones.leiderVan(toestel);
       if (leider != null) scheduleMicrotask(() => _stuurAnkers(leider, enkel: toestel));

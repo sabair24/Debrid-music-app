@@ -84,6 +84,7 @@ import 'ui/menu_iconen.dart';
 import 'lan/pc_radiobron.dart';
 import 'auto_hoezen.dart';
 import 'bestandsbeheer.dart';
+import 'adb_wekker.dart';
 import 'cache_snoei.dart';
 import 'album_facts.dart';
 import 'album_facts_resolver.dart';
@@ -2094,6 +2095,11 @@ Future<void> main() async {
             {'type': 'opened', 'trackId': id, 'at': DateTime.now().millisecondsSinceEpoch}
           ], deviceId: 'spk:$speaker');
       s.schudIds = (ids) => schudIdsGewogen(ids, nummer: verder.bron.nummer, gewicht: player.schudGewicht);
+      // De reserve voor een tv die niet antwoordt (Saber, 31-10-2026: "Wekken, en dan via adb starten"): alleen als adb
+      // op deze pc staat. Zie adb_wekker.dart.
+      final adb = zoekAdb();
+      final adbLog = WarmLog('$logDir${Platform.pathSeparator}zones.log');
+      s.wekViaAdb = adb == null ? null : (toestel, adres) => wekViaAdb(adres, adb: adb, log: adbLog.line);
     }
 
     sharing.addListener(volgPcZones);
@@ -2346,6 +2352,26 @@ Future<void> main() async {
       radioSfeer.duwOps = duw;
       // De brievenbus van het overzicht "Radio afsluiten" staat op de pc.
       schrijfStaat = duw;
+      // Slaapt deze tv (scherm uit)? Dan staat er op de zonekaart "Slaapt · wordt gewekt als je hier speelt" (Saber,
+      // 31-10-2026). Om de twintig seconden kijken; een verandering meteen naar de pc, en om de vijf minuten toch eens —
+      // na een herstart van de pc weet die het anders niet meer.
+      if (isTv) {
+        bool? gemeld;
+        var gemeldOp = DateTime(2000);
+        Future<void> meldSlaap() async {
+          final s = await toestelSlaapt();
+          if (s == gemeld && DateTime.now().difference(gemeldOp) < const Duration(minutes: 5)) return;
+          try {
+            await duw([
+              {'type': 'slaapt', 'value': s}
+            ]);
+            gemeld = s;
+            gemeldOp = DateTime.now();
+          } catch (_) {/* geen pc: de volgende keer */}
+        }
+
+        Timer.periodic(const Duration(seconds: 20), (_) => unawaited(meldSlaap()));
+      }
       // Wat er hier speelt, naar de pc, onder het eigen id van dit toestel: zo kan elk ander toestel
       // "Hier verder luisteren" aanbieden (Saber, 17-10-2026). Tot nu toe meldde alleen de pc.
       //
@@ -12660,7 +12686,12 @@ class _ZoneRij extends StatelessWidget {
       regel = verplaatst;
       tijd = null;
     } else if (!speelt) {
-      regel = zone.online ? 'Speelt niets' : 'Niet bereikbaar';
+      // Een Shield die slaapt maar bereikbaar is (Saber, 31-10-2026): zeggen dat hij gewekt wordt, niet alleen "niets".
+      regel = !zone.online
+          ? 'Niet bereikbaar'
+          : zone.slaapt
+              ? 'Slaapt · wordt gewekt als je hier speelt'
+              : 'Speelt niets';
       // Lang gepauzeerd of gestopt telt als niets, maar verder spelen kan nog: zeg waar.
       final wat = artiest.isEmpty ? titel : '$titel — $artiest';
       final geleden = Duration(milliseconds: (nuPc - zone.opMs).clamp(0, 1 << 40));
