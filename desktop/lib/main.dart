@@ -2340,7 +2340,10 @@ Future<void> main() async {
         if (c == null) throw 'Geen verbinding met de pc.';
         await c.ask('/api/state/ops', {
           'ops': ops,
-          'deviceId': settings.serverId,
+          // Dezelfde id als de speelstand en de zonelijn (`ik.id`): `settings.serverId` is alleen op de pc gevuld, en hier
+          // dus leeg — zo leek elke melding ("geopend", "slaapt") van de pc zelf te komen, en gooide elk toestel die van
+          // de andere weg als zijn eigen (31-10-2026, gemeten: 49 van 50 `geopend` met een lege dev).
+          'deviceId': ik?.id ?? settings.serverId,
           'deviceName': deviceName(),
         });
       }
@@ -2443,7 +2446,7 @@ Future<void> main() async {
         // Een nummer opende op een ander toestel of een speaker: onthouden, en in de shuffle hier naar achteren — behalve
         // wie een groep volgt, die speelt de rij van de leider (samen.dart).
         opGeopend: (id, dev, at) {
-          if (dev == settings.serverId) return;
+          if (dev == ik.id) return;
           speelstanden.elders(id, at);
           if (samenVolger.volgt) return;
           final t = verder.bron.nummer(id);

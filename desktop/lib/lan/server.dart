@@ -616,17 +616,29 @@ class LanServer {
       final reserve = wekViaAdb;
       // Alleen tv's krijgen een adres ([_onthoudAdres]), dus een adres is genoeg — ook na een herstart van de pc, als die
       // het toestel nog niet zag.
-      final adres = lijnen.isEmpty ? _adresVoor(t) : null;
-      if (lijnen.isEmpty && reserve != null && adres != null && wektToestel(cmd)) {
+      final adres = reserve != null && wektToestel(cmd) ? _adresVoor(t) : null;
+      var dood = lijnen.isEmpty;
+      // Een lijn kan nog open lijken terwijl de app er niet meer is: geforceerd gestopt, en de slapende Shield sluit de
+      // verbinding pas later (gemeten 31-10-2026: "bezorgd: 1" aan een dode lijn, en er gebeurde niets). Dan de ontvanger
+      // zelf vragen; die draait in dezelfde app en antwoordt ook in de slaap (Ontvanger.kt).
+      if (!dood && adres != null && !await leeftOp(adres)) {
+        _zoneLog.line('reserve: ${naam()} heeft nog een lijn, maar de app op $adres antwoordt niet');
+        dood = true;
+      }
+      if (dood && reserve != null && adres != null) {
+        final oud = Set.of(lijnen);
+        bool nieuw() => (_zoneLijnen[t] ?? const []).any((l) => !oud.contains(l));
         final klok = Stopwatch()..start();
         _zoneLog.line('reserve: ${naam()} antwoordt niet — wekken via adb op $adres');
-        final terug = await reserve(t, adres) &&
-            await wachtTot(() => (_zoneLijnen[t] ?? const []).isNotEmpty, geduld: const Duration(seconds: 25));
+        final terug = await reserve(t, adres) && await wachtTot(nieuw, geduld: const Duration(seconds: 25));
         _zoneLog.line('reserve: ${naam()} ${terug ? 'terug na ${(klok.elapsedMilliseconds / 1000).toStringAsFixed(1)} s' : 'niet terug'}');
         // Even de tijd voor de app om zijn bibliotheek te lezen: de lijn komt soms eerder dan de catalogus, en dan
         // zou "speel" de nummers nog niet kennen.
         if (terug) await Future<void>.delayed(kNaReserve);
-        lijnen = List.of(_zoneLijnen[t] ?? const <void Function(String, Map<String, dynamic>)>[]);
+        // Alleen de nieuwe lijnen: de oude liep naar een app die er niet meer is.
+        lijnen = [for (final l in _zoneLijnen[t] ?? const <void Function(String, Map<String, dynamic>)>[]) if (!oud.contains(l)) l];
+      } else if (dood) {
+        lijnen = const [];
       }
       if (lijnen.isEmpty) {
         return (status: 409, antwoord: {'error': '${naam()} is niet bereikbaar (de app is dicht, of het toestel slaapt).'});
@@ -966,6 +978,11 @@ class LanServer {
   late final WarmLog _zoneLog =
       WarmLog('${library.configDir.isEmpty ? logDir : library.configDir}${Platform.pathSeparator}zones.log');
 
+  /// Leeft de app op dit adres (zijn ontvanger, 8124)? Voor de reserve: een open lijn bewijst dat niet. Een veld zodat een
+  /// toets het kan zetten.
+  @visibleForTesting
+  Future<bool> Function(String adres) leeftOp = (adres) async => await probeShield(adres) != null;
+
   /// Na de reserve, als de lijn terug is: zoveel wachten voor de opdracht gaat. Een veld zodat een toets niet hoeft te
   /// wachten.
   @visibleForTesting
@@ -996,6 +1013,10 @@ class LanServer {
     }
     return _tvAdres[toestel];
   }
+
+  /// Voor een toets: een lijn van 127.0.0.1 onthoudt geen adres (geen echte tv).
+  @visibleForTesting
+  void onthoudAdresVoorToets(String toestel, String adres) => _onthoudAdres(toestel, adres);
 
   void _onthoudAdres(String toestel, String adres) {
     _adresVoor(toestel);

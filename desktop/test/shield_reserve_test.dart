@@ -3,13 +3,18 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/adb_wekker.dart';
+import 'package:debridmusic/lan/client.dart';
+import 'package:debridmusic/lan/pairing.dart';
+import 'package:debridmusic/lan/server.dart';
 import 'package:debridmusic/lan/state_store.dart';
 import 'package:debridmusic/lan/zones.dart';
+import 'package:debridmusic/library.dart';
 import 'package:debridmusic/wekker.dart' show wachtTot;
 
 String _bron(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
@@ -169,14 +174,119 @@ void main() {
     });
   });
 
+  // Op een echte server met echte zonelijnen (RemoteClient.zoneStroom, zoals de tv ze opent).
+  group('de reserve op de pc', () {
+    late Directory map;
+    late LanServer server;
+    late RemoteClient c;
+    late List<StreamSubscription<SseEvent>> lijnen;
+
+    setUp(() async {
+      map = Directory.systemTemp.createTempSync('dm_reserve_');
+      server = LanServer(
+        library: LibraryStore()
+          ..rootPath = map.path
+          ..configDirOverride = map.path,
+        token: 'sleutel',
+        state: LanStateStore(File('${map.path}${Platform.pathSeparator}state.json')),
+        pairing: PairingStore(),
+        port: 0,
+      );
+      expect(await server.start(), isNull);
+      server.kNaReserve = Duration.zero;
+      server.onthoudAdresVoorToets('shield', '192.168.0.238');
+      c = RemoteClient(RemoteEndpoint(baseUrl: Uri.parse('http://127.0.0.1:${server.boundPort}'), token: 'sleutel'));
+      lijnen = [];
+    });
+
+    tearDown(() async {
+      for (final l in lijnen) {
+        await l.cancel();
+      }
+      c.close();
+      await server.stop();
+      try {
+        map.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+
+    /// Een zonelijn zoals de tv hem opent; wat er als opdracht over binnenkomt, gaat in [cmds].
+    Future<void> lijn(List<String> cmds) async {
+      final klaar = Completer<void>();
+      lijnen.add(c.zoneStroom(toestel: 'shield', naam: 'Tv in woonkamer', platform: 'android', tv: true).listen((e) {
+        if (!klaar.isCompleted) klaar.complete();
+        if (e.event == 'cmd') cmds.add('${(jsonDecode(e.data) as Map)['cmd']}');
+      }));
+      await klaar.future.timeout(const Duration(seconds: 5));
+    }
+
+    Map<String, dynamic> speel() => {'zone': 'dev:shield', 'cmd': 'speel', 'ids': ['x'], 'plek': 0};
+
+    test('DE KERN: geen lijn — wekken via adb, wachten op de nieuwe lijn, en dan de opdracht', () async {
+      final nieuw = <String>[];
+      final gewekt = <String>[];
+      server.wekViaAdb = (t, adres) async {
+        gewekt.add('$t@$adres');
+        unawaited(lijn(nieuw));
+        return true;
+      };
+      final r = await server.zoneOpdracht(speel(), van: 'gsm');
+      expect(r.status, 200);
+      expect(gewekt, ['shield@192.168.0.238']);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(nieuw, ['speel']);
+    });
+
+    test('een lijn die open lijkt maar de app antwoordt niet: de reserve, en alleen de nieuwe lijn krijgt het', () async {
+      final oud = <String>[], nieuw = <String>[];
+      await lijn(oud);
+      server.leeftOp = (_) async => false;
+      server.wekViaAdb = (t, adres) async {
+        unawaited(lijn(nieuw));
+        return true;
+      };
+      final r = await server.zoneOpdracht(speel(), van: 'gsm');
+      expect(r.status, 200);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(nieuw, ['speel']);
+      expect(oud, isEmpty, reason: 'de oude lijn liep naar een app die er niet meer is');
+    });
+
+    test('de app leeft: gewoon over de lijn, geen adb', () async {
+      final cmds = <String>[];
+      await lijn(cmds);
+      server.leeftOp = (_) async => true;
+      var gewekt = 0;
+      server.wekViaAdb = (_, __) async => ++gewekt > 0;
+      expect((await server.zoneOpdracht(speel(), van: 'gsm')).status, 200);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(cmds, ['speel']);
+      expect(gewekt, 0);
+    });
+
+    test('pauze of volume: geen vraag aan de app en geen adb', () async {
+      final cmds = <String>[];
+      await lijn(cmds);
+      var gevraagd = 0, gewekt = 0;
+      server.leeftOp = (_) async => ++gevraagd < 0;
+      server.wekViaAdb = (_, __) async => ++gewekt > 0;
+      await server.zoneOpdracht({'zone': 'dev:shield', 'cmd': 'pause'}, van: 'gsm');
+      expect(gevraagd, 0);
+      expect(gewekt, 0);
+    });
+
+    test('adb lukt niet: zoals vroeger "niet bereikbaar"', () async {
+      server.wekViaAdb = (_, __) async => false;
+      final r = await server.zoneOpdracht(speel(), van: 'gsm');
+      expect(r.status, 409);
+      expect('${r.antwoord['error']}', contains('niet bereikbaar'));
+    });
+  });
+
   test('aangesloten: de pc onthoudt waar een tv woont en wekt hem als hij niet antwoordt; de tv meldt zijn slaap', () {
     final server = _bron('lib/lan/server.dart');
     expect(server, contains(
         "      if (soort == ZoneSoort.tv && adres != null && !adres.isLoopback) _onthoudAdres(toestel, adres.address);\n"));
-    expect(server, contains('      if (lijnen.isEmpty && reserve != null && adres != null && wektToestel(cmd)) {\n'));
-    expect(server, contains('        final terug = await reserve(t, adres) &&\n'
-        '            await wachtTot(() => (_zoneLijnen[t] ?? const []).isNotEmpty, geduld: const Duration(seconds: 25));\n'));
-    expect(server, contains('        if (terug) await Future<void>.delayed(kNaReserve);\n'));
     final zones = _bron('lib/lan/zones.dart');
     expect(zones, contains("        if (online && state.slapend.contains(id)) 'slaapt': true,\n"));
     final hoofd = _bron('lib/main.dart');
