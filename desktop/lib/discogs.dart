@@ -9,6 +9,7 @@ import 'booklet.dart' show imageSize;
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
+import 'cache_snoei.dart' show gezienMerk;
 import 'catalog.dart';
 import 'discography.dart';
 import 'editions.dart';
@@ -1840,6 +1841,8 @@ extension DiscogsArtwork on DiscogsService {
         : null;
     final cached = await _readArt(dir);
     if (cached != null && await _afgerond(dir, cached)) {
+      // Getoond: zo blijft hij op een toestel staan als er gesnoeid wordt (cache_snoei.dart, kReleaseartToestel).
+      unawaited(gezienMerk(dir, artist, album));
       return _metDigitaal(cached, await digitaalF);
     }
 
@@ -1879,8 +1882,10 @@ extension DiscogsArtwork on DiscogsService {
 
     final work =
         _vanPcOfVers(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld)
-            .then((a) async => _metDigitaal(a, await digitaalF))
-            .whenComplete(() {
+            .then((a) async {
+      unawaited(gezienMerk(dir, artist, album));
+      return _metDigitaal(a, await digitaalF);
+    }).whenComplete(() {
       _artInFlight.remove(lane);
       _artTussen.remove(lane);
       trace?.call('  [kunst] whenComplete — uit de in-flight tabel');

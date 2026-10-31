@@ -1409,6 +1409,26 @@ Future<void> main() async {
   // opende, komt in elke shuffle achteraan (schudvolgorde.dart, kSchudWeg).
   player.geopendOp = speelstanden.geopendOp;
   player.bijGeopend = (t) => unawaited(speelstanden.geopend(t));
+
+  // De scans van albums (cd, achterkant) op een TOESTEL binnen een grens (Saber, 31-10-2026: op de Mac 800 MB, nooit
+  // gesnoeid). De pc bewaart alles en geeft ze weer als je het album opent; wat hier bewaard is ("Op dit toestel"),
+  // blijft. Twee minuten na het starten en dan elke dag — de Shield draait nu dagen achter elkaar. Zolang de bibliotheek
+  // er nog niet is, valt niet te zien welke albums hier bewaard zijn: dan niet.
+  if (!mode.owner) {
+    Future<void> snoeiScansHier() async {
+      if (library.tracks.isEmpty) return;
+      final hier = {
+        for (final t in library.tracks)
+          if (offline.has(t.path)) normKey(t.album),
+      };
+      if (offline.tracks.isNotEmpty && hier.isEmpty) return;
+      await snoeiMap(Directory('$appDir${Platform.pathSeparator}releaseart'),
+          maxBytes: kReleaseartToestel, perMap: true, houd: (map) => gezienVoor(map, hier));
+    }
+
+    Timer(const Duration(minutes: 2), () => unawaited(snoeiScansHier()));
+    Timer.periodic(const Duration(hours: 24), (_) => unawaited(snoeiScansHier()));
+  }
   // Engelse beschrijvingen in het Nederlands: de pc vertaalt met zijn AI-sleutel, een toestel vraagt het
   // de pc. Allebei bewaren ze wat ze kregen. Zie `vertaler.dart`.
   Vertaler.instantie
