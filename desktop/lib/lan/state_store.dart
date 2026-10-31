@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../schudvolgorde.dart' show kSchudWeg;
+
 /// A playlist, as every device sees it.
 ///
 /// [deletedAt] is a tombstone rather than a removal: a device that was off when you deleted a
@@ -211,6 +213,19 @@ class LanStateStore {
   /// je afsluit, of waar je startte). Sleutel → `{voor, sessie, at}`, met [voor] een zone (`dev:<id>`) of `'gsm'`.
   /// Afgehandeld blijft als `{klaar: true, at}` staan, zodat een late op het niet terugzet. Zie `radio.dart`.
   final Map<String, Map<String, dynamic>> radioOverzichten = {};
+
+  /// Wat er de laatste [kSchudWeg] op een van je toestellen opende, gehoord of overgeslagen: id → `{at, dev}` (wanneer, en
+  /// welk toestel: zijn deviceId, `spk:<id>` voor een speaker, leeg voor de pc zelf). Elke shuffle houdt er rekening mee
+  /// (schudvolgorde.dart, Saber 31-10-2026). Ouder dan [kSchudWeg] valt eruit.
+  final Map<String, Map<String, dynamic>> geopend = {};
+
+  final _geopendNu = StreamController<({String trackId, String dev, int at})>.broadcast();
+
+  /// Elk nummer dat ergens opent, meteen: zo schuiven de shuffles die elders lopen het naar achteren (de pc zegt het
+  /// over de zonelijnen, zie `LanServer`).
+  Stream<({String trackId, String dev, int at})> get geopendNu => _geopendNu.stream;
+
+  void _snoeiGeopend(int nu) => geopend.removeWhere((_, v) => nu - ((v['at'] as num?)?.toInt() ?? 0) > kSchudWeg.inMilliseconds);
   PlaybackProgress progress = PlaybackProgress();
 
   /// Wat elk toestel het laatst meldde, per toestel-id — de zones (Saber, 21-10-2026: "als ik op de pc
@@ -285,6 +300,10 @@ class LanStateStore {
         if (r['klaar'] == true && ((r['at'] as num?) ?? 0) < oud) return;
         radioOverzichten[k.toString()] = r;
       });
+      (m['geopend'] as Map?)?.forEach((k, v) {
+        if (v is Map) geopend[k.toString()] = v.cast<String, dynamic>();
+      });
+      _snoeiGeopend(DateTime.now().millisecondsSinceEpoch);
       if (m['progress'] != null) {
         progress = PlaybackProgress.fromJson((m['progress'] as Map).cast<String, dynamic>());
       }
@@ -304,6 +323,7 @@ class LanStateStore {
         'ratings': ratings,
         'radioSfeer': radioSfeer,
         'radioOverzichten': radioOverzichten,
+        'geopend': geopend,
         'progress': progress.toJson(),
       };
 
@@ -319,6 +339,7 @@ class LanStateStore {
         'ratings': ratings,
         'radioSfeer': radioSfeer,
         'radioOverzichten': radioOverzichten,
+        'geopend': geopend,
         'progress': progress.toJson(),
         if (verzoek != null) 'verzoek': verzoek,
       };
@@ -406,6 +427,17 @@ class LanStateStore {
           final stat = plays.putIfAbsent(id, PlayStat.new);
           stat.count += 1;
           if (at > stat.lastPlayedMs) stat.lastPlayedMs = at;
+          durableChanged = true;
+
+        case 'opened':
+          // Een nummer opende op [deviceId] — gehoord of overgeslagen, dat weet niemand nog. Telt NIET als beluisterd
+          // (dat is 'played'); alleen om het drie dagen uit elke shuffle te houden (Saber, 31-10-2026).
+          final id = (op['trackId'] ?? '') as String;
+          if (id.isEmpty) break;
+          final was = (geopend[id]?['at'] as num?)?.toInt() ?? 0;
+          if (at >= was) geopend[id] = {'at': at, 'dev': deviceId};
+          _snoeiGeopend(now);
+          _geopendNu.add((trackId: id, dev: deviceId, at: at));
           durableChanged = true;
 
         case 'rating':
@@ -581,5 +613,6 @@ class LanStateStore {
     await _changes.close();
     await _zoneChanges.close();
     await _overnames.close();
+    await _geopendNu.close();
   }
 }

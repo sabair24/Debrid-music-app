@@ -245,6 +245,16 @@ class LanServer {
     });
     // Een overzicht in de brievenbus: dat toestel een seintje — zie [_seinOverzicht].
     _overzichtSub = state.changes.listen(_seinOverzicht);
+    // Een nummer opende ergens: elk toestel met een lijn hoort het meteen, zodat zijn shuffle het naar achteren schuift
+    // (Saber, 31-10-2026: "alle shuffle sessies … met elkaar rekening houden"). Het toestel zelf herkent zijn eigen
+    // melding aan `dev`. Een oudere app kent de gebeurtenis niet en laat haar liggen.
+    _geopendSub = state.geopendNu.listen((g) {
+      for (final lijnen in _zoneLijnen.values.toList()) {
+        for (final l in List.of(lijnen)) {
+          l('geopend', {'trackId': g.trackId, 'dev': g.dev, 'at': g.at});
+        }
+      }
+    });
     // Een toestel nam over ("Hier verder", "Speel daar"): de bron hoort het van de pc zelf — zie [_bronVerplaatst].
     _overnameSub = state.overnames.listen((o) => unawaited(
         _bronVerplaatst(o.van.startsWith('spk:') ? o.van : 'dev:${o.van}', 'dev:${o.naar}', o.trackId)));
@@ -413,6 +423,7 @@ class LanServer {
   late final ZoneRegister zones;
   StreamSubscription<String>? _ankerSub;
   StreamSubscription<Map<String, dynamic>>? _overzichtSub;
+  StreamSubscription<({String trackId, String dev, int at})>? _geopendSub;
   StreamSubscription<({String van, String naar, String trackId})>? _overnameSub;
 
   /// Een overzicht "Radio afsluiten" kwam in de brievenbus van een toestel (`radio.overzicht`): dat toestel krijgt een
@@ -465,6 +476,13 @@ class LanServer {
   /// Een radio op een speaker (Saber, 22-10-2026: "pc draait, speaker speelt"): de pc start hem, met
   /// [speaker] als uitgang (`speaker_radio.dart`). Gezet door main; geeft null of de reden waarom niet.
   Future<String?> Function(String speaker, Map<String, dynamic> opdracht)? bijSpeakerRadio;
+
+  /// "Shuffle alles" naar een speaker: dezelfde gewogen trekking als op elk toestel (`ordenVoor`: wat je veel hoorde en
+  /// wat de laatste drie dagen ergens opende achteraan). Gezet door main; null = gewoon door elkaar.
+  ///
+  /// Hier stond alleen `ids.shuffle()`: een shuffle naar de Sonos keek naar niets — niet naar wat je al hoorde, niet naar
+  /// wat er net op de gsm speelde (Saber, 31-10-2026).
+  List<String> Function(List<String> ids)? schudIds;
 
   /// De radio van de pc op [speaker] bedienen vanaf een toestel (speakerradio v2, 23-10-2026): `radioStop` sluit hem
   /// af, `radioOordeel` met `wat` (past, pastNiet, houden, weg) en `trackId` zegt iets over het spelende nummer.
@@ -611,8 +629,19 @@ class LanServer {
           case 'speel':
             final ids = [for (final x in (op['ids'] as List? ?? const [])) '$x'];
             if (ids.isEmpty) return (status: 400, antwoord: {'error': 'Geen nummers.'});
-            if (op['shuffle'] == true) ids.shuffle();
-            await cast.play(speaker, ids, (op['plek'] as num?)?.toInt() ?? 0, alsZone: true);
+            final geschud = op['shuffle'] == true;
+            if (geschud) {
+              final f = schudIds;
+              if (f != null) {
+                final uit = f(ids);
+                ids
+                  ..clear()
+                  ..addAll(uit);
+              } else {
+                ids.shuffle();
+              }
+            }
+            await cast.play(speaker, ids, (op['plek'] as num?)?.toInt() ?? 0, alsZone: true, geschud: geschud);
           case 'hierna' || 'achteraan':
             final ids = [for (final x in (op['ids'] as List? ?? const [])) '$x'];
             await cast.voegToe(speaker, ids, hierna: cmd == 'hierna');
@@ -1031,6 +1060,7 @@ class LanServer {
     cast.dispose();
     await _ankerSub?.cancel();
     await _overzichtSub?.cancel();
+    await _geopendSub?.cancel();
     await _overnameSub?.cancel();
     await zones.dispose();
     catalog.dispose();

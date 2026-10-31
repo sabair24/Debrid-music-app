@@ -122,6 +122,27 @@ Future<String?> probeShield(String host, {int port = ShieldTarget.port}) async {
   return (ja: false, reden: 'geen positie, pas ${gespeeld.inSeconds}s van ${lengte.inSeconds}s gespeeld');
 }
 
+/// [id] achteraan [rij] zetten als het daar nog komt, na het volgende nummer (vanaf [index] + 2). Null als er niets
+/// verschoof.
+///
+/// Niet het volgende nummer zelf: dat heeft de speaker al (SetNextAVTransportURI, voor de naadloze overgang), en het
+/// daar weghalen zou de rij en wat er klinkt uit elkaar trekken. Voor de shuffles die rekening houden met elkaar
+/// (Saber, 31-10-2026): opent [id] op een ander toestel, dan klinkt het hier niet straks nog eens.
+List<String>? naarAchterIds(List<String> rij, int index, String id) {
+  final van = index + 2;
+  if (van >= rij.length - 1) return null;
+  final blijft = <String>[], achteraan = <String>[];
+  for (var i = van; i < rij.length; i++) {
+    (rij[i] == id ? achteraan : blijft).add(rij[i]);
+  }
+  if (achteraan.isEmpty || blijft.isEmpty) return null;
+  final uit = [...rij.take(van), ...blijft, ...achteraan];
+  for (var i = van; i < rij.length; i++) {
+    if (uit[i] != rij[i]) return uit;
+  }
+  return null;
+}
+
 /// Sends music to a speaker or the TV, and keeps it going.
 ///
 /// The PC does this, not the iPad. Three reasons, in order of how much they matter:
@@ -252,6 +273,25 @@ class CastManager {
 
   /// Waar een speaker met meespelers is, veranderde: de server stuurt ze een nieuw anker ([ankerVan]).
   void Function(String speakerId)? bijAnker;
+
+  /// Een nummer begon op een speaker die als zone speelt: [trackId] (het id in de rij) op [speakerId]. main.dart meldt
+  /// het aan de gedeelde staat, net als op een toestel (`opened`), zodat elke shuffle het drie dagen achteraan houdt.
+  void Function(String trackId, String speakerId)? bijGeopend;
+
+  /// [trackId] opende ergens anders: in elke geschudde zone-sessie (behalve op [behalve]) naar achteren, na het volgende
+  /// nummer ([naarAchterIds]). Hoeveel sessies er iets verschoven.
+  int schuifNaarAchteren(String trackId, {String? behalve}) {
+    var n = 0;
+    for (final s in _sessies.values) {
+      if (!s.alsZone || !s.geschud || s.radio != null || s.renderer.id == behalve) continue;
+      final uit = naarAchterIds(s.queue, s.index, trackId);
+      if (uit == null) continue;
+      s.queue = uit;
+      n++;
+    }
+    if (n > 0) _bewaarSessies();
+    return n;
+  }
 
   /// Wat er met een radiosessie gebeurt (`speaker_radio.dart` volgt hem): de rij of de plek veranderde, hij
   /// staat droog, iemand wil verder (volgende op het laatste nummer), of de sessie is weg (een andere
@@ -511,6 +551,10 @@ class CastManager {
     if (speelt != null) s.speelt = speelt;
     s.gezienOp = nu;
     if (speeltWas != s.speelt || s.zagIndex != s.index || gesprongen) {
+      if (s.zagIndex != s.index && s.alsZone) {
+        final id = s.queue.elementAtOrNull(s.index);
+        if (id != null) bijGeopend?.call(id, s.renderer.id);
+      }
       s.zagIndex = s.index;
       bijStand?.call();
       _meldRadio(s);
@@ -582,7 +626,7 @@ class CastManager {
   /// [radio]: een radio van de pc speelt hier (`speaker_radio.dart`), met deze naam. Zo'n sessie blijft open
   /// als de rij op is ([_Session.droog]) — de radio vult hem aan — en meldt wat er gebeurt ([radioGebeurtenis]).
   Future<void> play(String deviceId, List<String> trackIds, int index,
-      {bool alsZone = false, int vanafMs = 0, String? radio}) async {
+      {bool alsZone = false, int vanafMs = 0, String? radio, bool geschud = false}) async {
     if (trackIds.isEmpty) throw ArgumentError('nothing to play');
     _tussendoor.remove(deviceId);
     if (!alsZone) {
@@ -608,6 +652,7 @@ class CastManager {
         index: index.clamp(0, trackIds.length - 1),
         alsZone: alsZone);
     session.radio = radio;
+    session.geschud = geschud;
     _sessies[renderer.id] = session;
     final spoelen = vanafMs > 3000;
     session.aanloop = spoelen;
@@ -692,7 +737,7 @@ class CastManager {
     _bewaardAls = vinger;
     final tekst = jsonEncode([
       for (final s in _sessies.values)
-        {'id': s.renderer.id, 'naam': s.renderer.name, 'rij': s.queue, 'plek': s.index, 'zone': s.alsZone},
+        {'id': s.renderer.id, 'naam': s.renderer.name, 'rij': s.queue, 'plek': s.index, 'zone': s.alsZone, if (s.geschud) 'geschud': true},
     ]);
     _bewaarRij = _bewaarRij.then((_) async {
       try {
@@ -745,7 +790,7 @@ class CastManager {
         _log?.line('herstel: ${r.name} speelt niet meer uit deze rij — niet gevolgd');
         continue;
       }
-      final s = _Session(renderer: r, queue: rij, index: plek, alsZone: e['zone'] == true);
+      final s = _Session(renderer: r, queue: rij, index: plek, alsZone: e['zone'] == true)..geschud = e['geschud'] == true;
       s.currentUrl = pos?.trackUri;
       // Meteen geloven wat hij meldt: hij speelt al lang, er is geen aanloop om af te wachten.
       s.startedAt = DateTime.now().subtract(startGrace);
@@ -1697,6 +1742,10 @@ class _Session {
 
   /// Gestart vanuit de zones: loopt naast de andere sessies door. Zie [CastManager.play].
   final bool alsZone;
+
+  /// "Shuffle alles" vanuit de zones: dan schuift wat elders opent naar achteren ([CastManager.schuifNaarAchteren]). Een
+  /// album of een afspeellijst speelt in zijn volgorde.
+  bool geschud = false;
 
   /// De tijdklok die het volgende nummer stuurt, en het slot ertegen dat twee doorschuivingen elkaar
   /// kruisen (vroeger één voor de hele castmanager; nu per speaker).

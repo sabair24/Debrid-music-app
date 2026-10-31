@@ -65,6 +65,27 @@ double gewichtVan(
   return (1 / (1 + kracht * druk)).clamp(bodem, 1.0).toDouble();
 }
 
+/// Hoe lang een nummer dat op een van je toestellen opende — gehoord óf overgeslagen — uit elke shuffle wegblijft.
+///
+/// **Waarom (Saber, 31-10-2026).** *"ik wil dat alle shuffle sessies, op elk apparaat met elkaar rekening houden, om zo
+/// de kans om zelfde liedjes die afspelen te vermijden."* Gemeten in schud.log (25–30 okt): van 487 geopende nummers
+/// kwam er binnen drie dagen 85 keer een terug, 47 keer op een ander toestel. Bij alleen de gehoorde waren het er 10:
+/// wat terugkwam, was vooral wat je oversloeg, en dat wist alleen het toestel zelf (en maar tot de app herstartte).
+/// Saber koos: drie dagen, en overslaan telt even zwaar — maar niet als beluisterd ([gewichtVan] blijft zoals hij was).
+const kSchudWeg = Duration(days: 3);
+
+/// Het gewicht van een nummer dat binnen [kSchudWeg] ergens opende, als factor op [gewichtVan].
+///
+/// In [gewogenVolgorde] komt een nummer met gewicht 0,03 vóór een gewoon nummer (1,0) met een kans van 0,03/1,03 — één op
+/// drieëndertig. Het komt dus nog wel (elk nummer één keer per shuffle), maar achteraan. Niet nul: dat is
+/// [gewogenVolgorde] alleen een getal kleiner dan alles, en een bibliotheek die in drie dagen helemaal klonk, moet nog
+/// schudden.
+const kRecentGewicht = .03;
+
+/// [kRecentGewicht] als [geopendOpMs] (wanneer het nummer het laatst ergens opende) binnen [kSchudWeg] valt, anders 1.
+double recentFactor(int? geopendOpMs, {required int nuMs}) =>
+    geopendOpMs != null && geopendOpMs > 0 && nuMs - geopendOpMs < kSchudWeg.inMilliseconds ? kRecentGewicht : 1;
+
 /// Telt dit als beluisterd? De helft van het nummer, of twee minuten — wat het eerst komt.
 ///
 /// **[geluisterd] is opgetelde luistertijd, niet de stand van de teller.** Dat verschil is de hele
