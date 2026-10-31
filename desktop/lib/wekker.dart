@@ -41,6 +41,18 @@ const kWekOpdrachten = {'play', 'speel', 'nu', 'radio', 'neemOver', 'jump', 'tus
 
 bool wektToestel(String cmd) => kWekOpdrachten.contains(cmd);
 
+/// Wacht tot [klaar] waar is, hoogstens [geduld]. Waar als het lukte. Voor de pc die na het wekken via adb wacht tot de
+/// zonelijn van het toestel terug is (server.dart).
+Future<bool> wachtTot(bool Function() klaar,
+    {required Duration geduld, Duration stap = const Duration(milliseconds: 250)}) async {
+  final klok = Stopwatch()..start();
+  while (!klaar()) {
+    if (klok.elapsed >= geduld) return false;
+    await Future<void>.delayed(stap);
+  }
+  return true;
+}
+
 /// Hoe lang na het wakker worden nog wachten voor de muziek begint: de tv gaat via HDMI-CEC aan en neemt pas daarna
 /// geluid aan.
 ///

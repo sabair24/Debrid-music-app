@@ -225,6 +225,10 @@ class LanStateStore {
   /// over de zonelijnen, zie `LanServer`).
   Stream<({String trackId, String dev, int at})> get geopendNu => _geopendNu.stream;
 
+  /// De toestellen die nu slapen (een Shield met het scherm uit, wekker.dart): voor "slaapt" op de zonekaart (Saber,
+  /// 31-10-2026). Niet op schijf: na een herstart van de pc meldt elk toestel het opnieuw.
+  final Set<String> slapend = {};
+
   void _snoeiGeopend(int nu) => geopend.removeWhere((_, v) => nu - ((v['at'] as num?)?.toInt() ?? 0) > kSchudWeg.inMilliseconds);
   PlaybackProgress progress = PlaybackProgress();
 
@@ -428,6 +432,12 @@ class LanStateStore {
           stat.count += 1;
           if (at > stat.lastPlayedMs) stat.lastPlayedMs = at;
           durableChanged = true;
+
+        case 'slaapt':
+          // Een toestel valt in slaap of wordt wakker. Alleen de zonelijst hoeft het te weten.
+          if (deviceId.isEmpty) break;
+          final nu = op['value'] == true;
+          if (nu ? slapend.add(deviceId) : slapend.remove(deviceId)) _zoneChanges.add(deviceId);
 
         case 'opened':
           // Een nummer opende op [deviceId] — gehoord of overgeslagen, dat weet niemand nog. Telt NIET als beluisterd

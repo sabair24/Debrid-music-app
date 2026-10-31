@@ -115,6 +115,7 @@ class ZoneStaat {
     this.radio = '',
     this.via = '',
     this.volume = -1,
+    this.slaapt = false,
     this.groep = const [],
     this.kanGroeperen = false,
     this.samenMs = 0,
@@ -196,6 +197,10 @@ class ZoneStaat {
   /// Het appvolume (0–100), of -1 als de zone het niet meldt.
   final int volume;
 
+  /// Een toestel dat slaapt (de Shield met het scherm uit) maar bereikbaar is: speel je er iets, dan wordt het gewekt
+  /// (wekker.dart). Saber, 31-10-2026: niet "Speelt niets" maar "slaapt".
+  final bool slaapt;
+
   /// `dev:<toestel-id>` voor een toestel (de pc: `dev:pc-<naam>`), `spk:<speaker-id>` voor een speaker.
   final String id;
   final ZoneSoort soort;
@@ -258,6 +263,7 @@ class ZoneStaat {
         if (radio.isNotEmpty) 'radio': radio,
         if (via.isNotEmpty) 'via': via,
         if (volume >= 0) 'volume': volume,
+        if (slaapt) 'slaapt': true,
         if (groep.isNotEmpty) 'groep': groep,
         if (kanGroeperen) 'kanGroeperen': true,
         if (samenMs != 0) 'samenMs': samenMs,
@@ -295,6 +301,7 @@ class ZoneStaat {
         radio: '${m['radio'] ?? ''}',
         via: '${m['via'] ?? ''}',
         volume: (m['volume'] as num?)?.toInt() ?? -1,
+        slaapt: m['slaapt'] == true,
         groep: [for (final x in (m['groep'] as List? ?? const [])) '$x'],
         kanGroeperen: m['kanGroeperen'] == true,
         samenMs: (m['samenMs'] as num?)?.toInt() ?? 0,
@@ -338,6 +345,7 @@ class ZoneStaat {
       other.radio == radio &&
       other.via == via &&
       other.volume == volume &&
+      other.slaapt == slaapt &&
       listEquals(other.groep, groep) &&
       other.kanGroeperen == kanGroeperen &&
       other.samenMs == samenMs &&
@@ -875,6 +883,7 @@ class ZoneRegister {
         ...z.toJson(),
         // Elk toestel met de app kan met andere samen spelen (stap 3.2).
         'kanGroeperen': true,
+        if (online && state.slapend.contains(id)) 'slaapt': true,
         if (groep != null) 'groep': ['dev:$id', for (final v in groep) 'dev:$v'],
         if (groep != null)
           'leden': [
