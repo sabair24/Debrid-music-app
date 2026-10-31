@@ -43,7 +43,12 @@ bool wektToestel(String cmd) => kWekOpdrachten.contains(cmd);
 
 /// Hoe lang na het wakker worden nog wachten voor de muziek begint: de tv gaat via HDMI-CEC aan en neemt pas daarna
 /// geluid aan.
-const kNaWekken = Duration(seconds: 3);
+///
+/// Gemeten op de Shield, 31-10-2026 ("screen on OneTouchPlay success" in `dumpsys hdmi_control`, na het wakker
+/// worden): 8,1 s, 5,1 s, 6,9 s en 3,3 s. De Shield vraagt de tv om de twee seconden of hij al aan is, dus de tv is
+/// tot twee seconden eerder aan dan dat. Met 3 s begon Bad 4,5 s voor de tv er was; met 7 s mis je hoogstens een
+/// seconde, en wacht je nooit langer dan de tv zelf.
+const kNaWekken = Duration(seconds: 7);
 
 /// Hoe lang er hoogstens gewacht wordt tot het scherm echt aan is.
 const kWekGeduld = Duration(seconds: 4);
