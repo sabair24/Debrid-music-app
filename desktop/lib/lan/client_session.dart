@@ -1092,8 +1092,16 @@ class ClientSession extends ChangeNotifier {
   /// the PC, and a 304 over wifi costs less than keeping a socket open on a sleeping iPad.
   void _startPolling() {
     _poll?.cancel();
-    _poll = Timer.periodic(const Duration(seconds: 15), (_) => _refresh());
+    _poll = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (rust?.call() ?? false) return;
+      _refresh();
+    });
   }
+
+  /// Waar: de ronde van vijftien seconden overslaan. Voor een Shield die slaapt (wekker.dart): zijn netwerk blijft nu
+  /// open voor de ontvanger, en zonder dit haalde hij elke keer dat de pc iets binnenkreeg de catalogus en de hoezen
+  /// op, de hele nacht. Bij terugkomen in de app ververst [refreshNow] meteen, en wekken doet dat ook.
+  bool Function()? rust;
 
   /// Called when the app comes back to the foreground — an iPad that was in a pocket for an hour
   /// should not wait out the timer before showing what arrived meanwhile.

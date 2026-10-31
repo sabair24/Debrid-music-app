@@ -160,6 +160,7 @@ import 'zoek_artiesten.dart';
 import 'fotomaat.dart';
 import 'wikipedia.dart';
 import 'warm_log.dart' show WarmLog;
+import 'wekker.dart';
 import 'warmtemeter.dart';
 import 'zacht_wiel.dart';
 import 'eigen_foto.dart';
@@ -1250,14 +1251,33 @@ Future<void> main() async {
   //
   // "Stop" pauses rather than tearing the queue down — a sender that stops casting has usually
   // moved the music somewhere else, and coming back to a cleared queue loses your place.
+  //
+  // Ook als de Shield slaapt (Saber, 31-10-2026: "zoals sonos"): de voorgronddienst houdt het netwerk open
+  // (Ontvanger.kt), en wie muziek stuurt, wekt hem eerst — scherm aan, de tv via HDMI-CEC mee, de app vooraan. Zie
+  // wekker.dart. Na het wekken de catalogus meteen: die rustte tijdens de slaap ([ClientSession.rust]).
+  final wekLog = WarmLog('$logDir${Platform.pathSeparator}wekker.log');
+  Future<void> wekVoorDeMuziek() async {
+    final sliep = await wekVoorMuziek(slaapt: toestelSlaapt, wek: wekToestel, log: wekLog.line);
+    if (sliep && !mode.owner) {
+      try {
+        await session.refreshNow().timeout(const Duration(seconds: 5));
+      } catch (_) {/* dan met de catalogus die er is */}
+    }
+  }
+
   if (isTv) {
     unawaited(CastReceiver(
       deviceName: deviceName,
+      slaapt: toestelSlaapt,
+      wek: wekVoorDeMuziek,
       onPlay: (tracks, index) => player.playQueue(tracks, index),
       onStop: () {
         if (player.playing) player.playPause();
       },
     ).start());
+    // Slaapt de Shield en speelt er niets, dan geen catalogusrondes: zijn netwerk is nu open, en de pc verandert de
+    // catalogus om de paar tellen (bij elke download).
+    session.rust = () => !player.playing && WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
   }
 
   // What "the library changed" means differs: the PC rescans its disk, a client asks the PC for
@@ -1882,6 +1902,8 @@ Future<void> main() async {
   final zoneUitvoerder = ZoneUitvoerder(
     speler: player,
     rij: player,
+    // Een slapende Shield wakker maken vóór de muziek (wekker.dart).
+    wek: isTv ? wekVoorDeMuziek : null,
     nummer: verder.bron.nummer,
     idVan: (t) => library.gedeeldId(t.path),
     // Een andere zone verplaatst haar muziek hierheen (stap 2.5): overnemen zoals bij "Hier verder".
@@ -2366,7 +2388,9 @@ Future<void> main() async {
           final voor = s == null || s == AppLifecycleState.resumed || s == AppLifecycleState.inactive;
           // Ook open met een zone op afstand gekozen: het vergrendelscherm toont dan die zone (stap 2.6),
           // en zonder lijn zou het blijven staan op wat ze speelde toen je de gsm wegstak.
-          if (voor || player.playing || gekozenZone.opAfstand != null) {
+          // Een tv houdt haar altijd open: dat is hoe je hem vindt en wekt als hij slaapt (wekker.dart). Hij zit aan
+          // wifi of een kabel, niet aan een databundel.
+          if (voor || isTv || player.playing || gekozenZone.opAfstand != null) {
             zoneLijn.start();
           } else {
             zoneLijn.stop();

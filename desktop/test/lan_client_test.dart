@@ -189,6 +189,41 @@ List<String> _shape(LibraryStore s) => [
         ].join(' · '),
     ];
 
+/// Eén bestand dat later van schijf terugkomt dan de rest: zijn `exists()` wacht eerst [wacht]. Zo
+/// gebeurt elke keer wat onder last soms gebeurt.
+final class _TraagOpSchijf extends IOOverrides {
+  _TraagOpSchijf(this.naam, this.wacht);
+  final String naam;
+  final Duration wacht;
+
+  @override
+  File createFile(String path) {
+    final echt = super.createFile(path);
+    return path.endsWith(naam) ? _TraagBestand(echt, wacht) : echt;
+  }
+}
+
+class _TraagBestand implements File {
+  _TraagBestand(this._echt, this._wacht);
+  final File _echt;
+  final Duration _wacht;
+
+  @override
+  String get path => _echt.path;
+
+  @override
+  Future<bool> exists() async {
+    await Future<void>.delayed(_wacht);
+    return _echt.exists();
+  }
+
+  @override
+  Future<Uint8List> readAsBytes() => _echt.readAsBytes();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   late Directory scratch;
 
@@ -397,11 +432,10 @@ void main() {
       await ronde;
     });
 
-    test('VOORRANG: wat op het scherm staat heeft bij de eerste melding al zijn hoes', () async {
-      // Gemeten op de Shield bij een koude start (18-10-2026): de app stond er na 1,5 s, de hoes in
-      // de spelerbalk kwam na ~10 s. De ronde las de albums "nieuwste eerst" en kwam pas laat bij het
-      // album dat speelde. Hier: dertig albums, en het OUDSTE (dat de ronde als laatste zou lezen)
-      // vraagt voorrang.
+    /// Dertig albums met elk een hoes op schijf; het OUDSTE (dat de ronde als laatste zou lezen) vraagt
+    /// voorrang. Hoe het er bij de eerste melding met hoezen voor stond. Met [traag] komt het bestand
+    /// van dat album zoveel later van schijf terug.
+    Future<({bool? hadHem, int zonder})> voorrangBijEersteMelding({Duration? traag}) async {
       final root = Directory.systemTemp.createTempSync('dm_voorrang_');
       final pcLib = LibraryStore()
         ..rootPath = root.path
@@ -434,11 +468,36 @@ void main() {
       }
 
       tweede.library.addListener(bijMelding);
-      await tweede.library.loadRemoteCovers(AppSettings());
+      Future<void> ronde() => tweede.library.loadRemoteCovers(AppSettings());
+      if (traag == null) {
+        await ronde();
+      } else {
+        final naam = '${CoverEnricher(AppSettings()).keyFor(oudste)}.jpg';
+        await IOOverrides.runWithIOOverrides(ronde, _TraagOpSchijf(naam, traag));
+      }
       tweede.library.removeListener(bijMelding);
-      expect(hadHem, isTrue, reason: 'bij de eerste melding stond de gevraagde hoes er al');
-      expect(zonder, greaterThan(20), reason: 'en dat kwam door de voorrang, niet doordat alles er al was');
       root.deleteSync(recursive: true);
+      return (hadHem: hadHem, zonder: zonder);
+    }
+
+    test('VOORRANG: wat op het scherm staat heeft bij de eerste melding al zijn hoes', () async {
+      // Gemeten op de Shield bij een koude start (18-10-2026): de app stond er na 1,5 s, de hoes in
+      // de spelerbalk kwam na ~10 s. De ronde las de albums "nieuwste eerst" en kwam pas laat bij het
+      // album dat speelde. Hier: dertig albums, en het OUDSTE (dat de ronde als laatste zou lezen)
+      // vraagt voorrang.
+      final r = await voorrangBijEersteMelding();
+      expect(r.hadHem, isTrue, reason: 'bij de eerste melding stond de gevraagde hoes er al');
+      expect(r.zonder, greaterThan(20), reason: 'en dat kwam door de voorrang, niet doordat alles er al was');
+    });
+
+    test('VOORRANG: ook als zijn bestand als laatste van schijf terugkomt', () async {
+      // De toets hierboven viel onder last af en toe om (30-10-2026, 56 branders: 12 van 600). Album 1
+      // vroeg zijn bestand als eerste, maar de zes lezers liepen daarna naast elkaar: kwam dat bestand
+      // later terug dan de andere, dan stonden er bij zijn melding al 9 tot 21 andere hoezen, of ging
+      // de bundel van 24 voor. Hier komt het met opzet later terug, zodat dat elke keer gebeurt.
+      final r = await voorrangBijEersteMelding(traag: const Duration(milliseconds: 200));
+      expect(r.hadHem, isTrue, reason: 'bij de eerste melding stond de gevraagde hoes er al');
+      expect(r.zonder, 29, reason: 'en nog geen andere: de rest wacht tot wat op het scherm staat van schijf is');
     });
 
     /// Dertig albums met elk een eigen hoes op de pc. Een eerste toestel legt ze op schijf, behalve
