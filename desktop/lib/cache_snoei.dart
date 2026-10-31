@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'organize.dart' show normKey;
+
 /// Een bovengrens op een cachemap, want geen van deze mappen had er een.
 ///
 /// **Wat er stond, gemeten op 10-08-2026 in `%APPDATA%\DebridMusic`:**
@@ -38,11 +40,14 @@ import 'package:flutter/foundation.dart';
 ///
 /// Een mapje is dus één ondeelbaar ding: helemaal houden of helemaal weg. Weg kost één keer opnieuw
 /// ophalen, precies zoals de bedoeling was.
-Future<int> snoeiMap(Directory map, {required int maxBytes, bool perMap = false}) async {
+///
+/// [houd] (alleen met [perMap]): een ondermap die hierop waar geeft, blijft altijd — ook boven de grens. Voor de scans van
+/// albums die op een toestel bewaard zijn ([gezienVoor]): zonder pc moeten die er nog staan.
+Future<int> snoeiMap(Directory map, {required int maxBytes, bool perMap = false, bool Function(Directory map)? houd}) async {
   try {
     if (!map.existsSync()) return 0;
     final bestanden = <({FileSystemEntity f, int grootte, DateTime tijd})>[];
-    var totaal = 0;
+    var totaal = 0, beschermd = 0;
     if (perMap) {
       await for (final sub in map.list(followLinks: false)) {
         if (sub is! Directory) continue;
@@ -59,8 +64,13 @@ Future<int> snoeiMap(Directory map, {required int maxBytes, bool perMap = false}
           }
         } catch (_) {/* net weggehaald door iemand anders */}
         if (nieuwste == null) continue;
-        bestanden.add((f: sub, grootte: grootte, tijd: nieuwste));
         totaal += grootte;
+        // Wat blijft, telt wel mee in het totaal maar staat niet in de rij van wat weg kan.
+        if (houd != null && houd(sub)) {
+          beschermd += grootte;
+          continue;
+        }
+        bestanden.add((f: sub, grootte: grootte, tijd: nieuwste));
       }
     } else {
       await for (final e in map.list(recursive: true, followLinks: false)) {
@@ -76,7 +86,7 @@ Future<int> snoeiMap(Directory map, {required int maxBytes, bool perMap = false}
 
     // Nieuwste eerst, dan naar beneden lopen tot de begroting op is.
     bestanden.sort((a, b) => b.tijd.compareTo(a.tijd));
-    var gehouden = 0, bevrijd = 0;
+    var gehouden = beschermd, bevrijd = 0;
     for (final b in bestanden) {
       if (gehouden + b.grootte <= maxBytes) {
         gehouden += b.grootte;
@@ -135,6 +145,45 @@ const cacheGrenzen = <String, int>{
   // Scans van boekjes bij een album. Groeit met wat je opent, niet met wat je hebt.
   'booklets': 100 * 1024 * 1024,
 };
+
+/// De grens voor `releaseart` op een TOESTEL (gsm, iPad, Mac, Shield) — op de pc is het [cacheGrenzen].
+///
+/// **Waarom (Saber, 31-10-2026).** Op de Mac stond `releaseart` op 800 MB: op een toestel werd er nooit gesnoeid, alleen op
+/// de pc (na de scan). Saber: *"ok, maar ik ga toch alles zien e"* — ja: de pc bewaart alles (3 GB, de hele bibliotheek is
+/// ~0,9 GB), en een album dat hier weg is, vraagt het toestel bij het openen weer aan de pc (`DiscogsArtwork.vanDePc`,
+/// altijd op volle grootte). Wat weg gaat is wat het langst niet getoond is ([gezienMerk]); wat op dit toestel bewaard
+/// is, blijft ([gezienVoor]). ~1,1 MB per album, dus zo'n 270 albums blijven hier staan.
+const kReleaseartToestel = 300 * 1024 * 1024;
+
+/// Wanneer de scans in [map] het laatst getoond werden, en van welk album ze zijn: het bestandje `gezien`
+/// (artiest, een nieuwe regel, album). [snoeiMap] houdt per map de nieuwste tijd aan, dus wat je net bekeek, staat
+/// vooraan.
+///
+/// Hoogstens eens per twaalf uur opnieuw geschreven: een albumpagina vraagt de scans bij elke hertekening.
+Future<void> gezienMerk(Directory map, String artiest, String album, {DateTime? nu}) async {
+  try {
+    if (!await map.exists()) return;
+    final f = File('${map.path}${Platform.pathSeparator}gezien');
+    final tijd = nu ?? DateTime.now();
+    if (await f.exists() && tijd.difference(await f.lastModified()) < const Duration(hours: 12)) return;
+    await f.writeAsString('$artiest\n$album');
+  } catch (_) {/* niet kunnen merken is geen reden om de hoes niet te tonen */}
+}
+
+/// Hoort [map] bij een van [albums] (genormaliseerde albumtitels, [normKey])? Op de titel alleen: een album met dezelfde
+/// titel van iemand anders blijft dan ook staan, en dat kost hooguit een megabyte. Zonder `gezien` (van vóór 31-10-2026):
+/// onbekend, dus niet beschermd.
+bool gezienVoor(Directory map, Set<String> albums) {
+  if (albums.isEmpty) return false;
+  try {
+    final f = File('${map.path}${Platform.pathSeparator}gezien');
+    if (!f.existsSync()) return false;
+    final regels = f.readAsLinesSync();
+    return regels.length > 1 && albums.contains(normKey(regels[1]));
+  } catch (_) {
+    return false;
+  }
+}
 
 /// Welke van die mappen per ONDERMAP gesnoeid moeten worden in plaats van per bestand.
 ///

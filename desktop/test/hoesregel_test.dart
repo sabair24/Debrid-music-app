@@ -205,7 +205,7 @@ void main() {
   test('aangesloten: de voorkant ligt over elk antwoord heen, en komt meteen als tussenstand', () {
     final d = File('lib/discogs.dart').readAsStringSync();
     expect(d, contains('return _metDigitaal(cached, await digitaalF);'), reason: 'ook een afgerond antwoord uit de cache');
-    expect(d, contains('.then((a) async => _metDigitaal(a, await digitaalF))'));
+    expect(d, contains('            .then((a) async {\n      unawaited(gezienMerk(dir, artist, album));\n      return _metDigitaal(a, await digitaalF);\n'));
     expect(d, contains('meld(ReleaseArt(front: d.bytes, bron: d.bron));'));
     final m = File('lib/main.dart').readAsStringSync();
     expect(m, contains('final digitaal = t.front != null && isDigitaleHerkomst(t.bron) && !isDigitaleHerkomst(nu?.bron);'));
