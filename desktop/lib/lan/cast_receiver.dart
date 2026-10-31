@@ -24,7 +24,7 @@ import '../models.dart';
 const int kCastReceiverPort = 8124;
 
 class CastReceiver {
-  CastReceiver({required this.onPlay, required this.onStop, required this.deviceName});
+  CastReceiver({required this.onPlay, required this.onStop, required this.deviceName, this.slaapt, this.wek});
 
   /// Hand a queue of stream URLs to the player. Called AFTER the sender has been answered.
   final void Function(List<Track> tracks, int index) onPlay;
@@ -32,6 +32,13 @@ class CastReceiver {
 
   /// What this device calls itself in the sender's list.
   final String Function() deviceName;
+
+  /// Slaapt de Shield? Gaat mee in `/ping`, zodat de pc weet dat hij gewekt wordt (wekker.dart).
+  final Future<bool> Function()? slaapt;
+
+  /// Vóór de muziek: een slapende Shield wekken, en wachten tot de tv aan is ([wekVoorMuziek]). Een fout hierin houdt
+  /// de muziek niet tegen.
+  final Future<void> Function()? wek;
 
   HttpServer? _server;
 
@@ -61,7 +68,11 @@ class CastReceiver {
     try {
       switch (req.uri.path) {
         case '/ping':
-          await _json(req, {'app': 'debridmusic', 'ready': true, 'name': deviceName()});
+          var slaaptNu = false;
+          try {
+            slaaptNu = await slaapt?.call() ?? false;
+          } catch (_) {/* niet te vragen: dan wakker */}
+          await _json(req, {'app': 'debridmusic', 'ready': true, 'name': deviceName(), if (slaaptNu) 'slaapt': true});
         case '/play':
           if (req.method != 'POST') return await _notFound(req);
           final body = await utf8.decoder.bind(req).join();
@@ -109,6 +120,10 @@ class CastReceiver {
                 isFlac: urls[i].contains('.flac'),
               ),
           ];
+          // Slaapt de Shield, dan eerst wakker (en de tv aan): anders begint het nummer voor niemand.
+          try {
+            await wek?.call();
+          } catch (_) {/* wekken mislukt: de muziek begint toch */}
           onPlay(tracks, index);
         case '/stop':
           if (req.method != 'POST') return await _notFound(req);

@@ -206,4 +206,70 @@ void main() {
       client.close();
     });
   });
+
+  // Saber, 31-10-2026: "dat de app de shield vindt ook al slaapt hij … en dan wekt hij de shield" (wekker.dart).
+  group('een Shield die slaapt', () {
+    late List<String> gedaan;
+
+    /// Een ontvanger met wek-haken, op dezelfde poort: de gewone uit setUp eerst weg (tearDown stopt deze).
+    Future<void> metWekker({required bool slaapt, Future<void> Function()? wek}) async {
+      await receiver.stop();
+      gedaan = [];
+      receiver = CastReceiver(
+        deviceName: () => 'Woonkamer',
+        slaapt: () async => slaapt,
+        wek: wek ?? () async => gedaan.add('wek'),
+        onPlay: (tracks, index) => gedaan.add('speel ${tracks.length}'),
+        onStop: () => gedaan.add('stop'),
+      );
+      await receiver.start();
+    }
+
+    final payload = {
+      'streamUrls': ['http://192.168.0.117:47820/stream/abc.flac?token=t'],
+      'index': 0,
+    };
+
+    test('ping zegt het, zodat de pc weet dat hij gewekt wordt', () async {
+      await metWekker(slaapt: true);
+      final body = await getJson('/ping');
+      expect(body['app'], 'debridmusic', reason: 'de pc vindt hem gewoon, ook slapend');
+      expect(body['slaapt'], true);
+    });
+
+    test('wakker: ping zoals altijd', () async {
+      await metWekker(slaapt: false);
+      expect((await getJson('/ping')).containsKey('slaapt'), isFalse);
+    });
+
+    test('DE KERN: eerst wekken, dan pas de muziek', () async {
+      await metWekker(slaapt: true);
+      await (await post('/play', payload)).drain<void>();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(gedaan, ['wek', 'speel 1']);
+    });
+
+    test('het antwoord wacht niet op het wekken', () async {
+      await metWekker(slaapt: true, wek: () => Future<void>.delayed(const Duration(seconds: 3)));
+      final klok = Stopwatch()..start();
+      final res = await post('/play', payload);
+      expect(res.statusCode, 200);
+      await res.drain<void>();
+      expect(klok.elapsed, lessThan(const Duration(seconds: 2)), reason: 'de pc wacht hoogstens acht seconden');
+    });
+
+    test('wekken mislukt: de muziek begint toch', () async {
+      await metWekker(slaapt: true, wek: () async => throw StateError('geen scherm'));
+      await (await post('/play', payload)).drain<void>();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(gedaan, ['speel 1']);
+    });
+
+    test('stop wekt niemand', () async {
+      await metWekker(slaapt: true);
+      await (await post('/stop', {})).drain<void>();
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(gedaan, ['stop']);
+    });
+  });
 }

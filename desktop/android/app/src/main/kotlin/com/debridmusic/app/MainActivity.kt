@@ -210,6 +210,10 @@ class MainActivity : AudioServiceActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // De Shield vindbaar houden terwijl hij slaapt, en hem wekken als er muziek komt. Zie Ontvanger.kt.
+        registreerWekker(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+        OntvangerDienst.start(applicationContext)
+
         // Is this a television?
         //
         // Asked of the system rather than guessed from the screen size. A tablet in landscape and

@@ -12,6 +12,7 @@ import 'dart:async';
 import 'models.dart';
 import 'lan/zones.dart' show plekVoorNummer;
 import 'player.dart' show Rijbediening, Speelbron;
+import 'wekker.dart' show wektToestel;
 import 'zone_speler.dart' show herhaalUit;
 
 /// Hoeveel opdracht-ids er onthouden worden om een dubbele te herkennen.
@@ -52,7 +53,12 @@ class ZoneUitvoerder {
     this.tussendoorAB,
     this.tussendoorKlaar,
     this.versie,
+    this.wek,
   });
+
+  /// Vóór een opdracht die muziek laat beginnen ([wektToestel]): een slapende Shield wekken en wachten tot de tv aan
+  /// is (wekker.dart, Saber 31-10-2026). Null: hier valt niets te wekken.
+  final Future<void> Function()? wek;
 
   /// Een andere versie van het spelende nummer (versies.dart): [trackId] het nummer, [versieId] de versie (of het nummer
   /// zelf). Null als het lukte, anders waarom niet. Zie `PlayerStore.wisselVersie`.
@@ -129,6 +135,11 @@ class ZoneUitvoerder {
     final ids = [for (final x in (op['ids'] as List? ?? const [])) '$x'];
     String? fout;
     try {
+      if (wektToestel(cmd)) {
+        try {
+          await wek?.call();
+        } catch (_) {/* niet wakker gekregen: de opdracht gaat toch door */}
+      }
       switch (cmd) {
         case 'play':
           speler.speelAf();

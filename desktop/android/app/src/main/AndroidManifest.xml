@@ -12,6 +12,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- De Shield vindbaar en wekbaar terwijl hij slaapt (Ontvanger.kt): de dienst die luistert, opnieuw starten na
+         een herstart, en de app vooraan zetten als er muziek binnenkomt. Dat laatste mag een app op de achtergrond
+         alleen met "weergeven over andere apps"; op de Shield gegeven via adb, zoals bij Debrid Media. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <!-- Bijwerken vanuit de app zelf. Zonder dit recht opent het installatiescherm en sluit het
          meteen weer, zonder een woord — wat leest als een update die stuk is. Het is bovendien een
          recht dat de gebruiker per app moet aanzetten; de app vraagt er zelf om, één keer. -->
@@ -160,6 +166,24 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MEDIA_BUTTON"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- De Shield vindbaar terwijl hij slaapt (Saber, 31-10-2026; zie Ontvanger.kt). Een voorgronddienst houdt het
+             netwerk van de app open in Doze: gemeten REJECT_ALL zonder, ALLOW_ALL met. connectedDevice en niet
+             mediaPlayback: hij luistert, hij speelt niet, en vanaf Android 15 mag een mediaPlayback-dienst niet meer
+             starten na het opstarten van het toestel. Alleen op een televisie gestart. -->
+        <service
+            android:name=".OntvangerDienst"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false"/>
+        <!-- En na een herstart of een update opnieuw, zonder dat iemand de app opent. -->
+        <receiver
+            android:name=".OntvangerStart"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
             </intent-filter>
         </receiver>
 
