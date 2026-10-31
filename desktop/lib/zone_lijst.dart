@@ -126,6 +126,7 @@ class ZoneVerbinding {
     this.tv = false,
     this.opStand,
     this.opOpdracht,
+    this.opGeopend,
     this.log,
   });
 
@@ -144,6 +145,10 @@ class ZoneVerbinding {
   /// Een opdracht voor DIT toestel, van een ander toestel dat het als zone bedient (`{cmd, …}`, zie
   /// zone_opdracht.dart).
   final void Function(Map<String, dynamic> opdracht)? opOpdracht;
+
+  /// Een nummer opende op een van je toestellen of speakers (`{trackId, dev, at}`): voor de shuffle hier, die het naar
+  /// achteren schuift (Saber, 31-10-2026). Ook de eigen melding komt langs; [dev] zegt van wie ze is.
+  final void Function(String trackId, String dev, int at)? opGeopend;
 
   /// Eén regel per verandering van de lijn, voor een logboek. Nooit per bericht.
   final void Function(String)? log;
@@ -271,6 +276,8 @@ class ZoneVerbinding {
             lijst.zet(m);
           case 'cmd':
             opOpdracht?.call(m);
+          case 'geopend':
+            opGeopend?.call('${m['trackId'] ?? ''}', '${m['dev'] ?? ''}', (m['at'] as num?)?.toInt() ?? 0);
           case 'stand':
             opStand?.call(rijGeheugen.herstel((m['progress'] as Map?)?.cast<String, dynamic>()),
                 (m['verzoek'] as Map?)?.cast<String, dynamic>());

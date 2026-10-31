@@ -337,7 +337,7 @@ jobs:
             test/opnamesleutel_test.dart test/player_cover_test.dart \
             test/player_refresh_test.dart test/potlood_schrijft_bestand_test.dart \
             test/pressing_line_test.dart test/prune_empty_folders_test.dart \
-            test/quality_test.dart test/queue_worker_test.dart test/firestore_groot_test.dart test/op_toestel_lijst_test.dart test/op_toestel_zonder_pc_test.dart test/cd_wedloop_test.dart test/wekker_test.dart \
+            test/quality_test.dart test/queue_worker_test.dart test/firestore_groot_test.dart test/op_toestel_lijst_test.dart test/op_toestel_zonder_pc_test.dart test/cd_wedloop_test.dart test/wekker_test.dart test/schudden_samen_test.dart \
             test/recognise_write_real_test.dart test/redacted_test.dart \
             test/release_format_test.dart test/resolved_cover_test.dart \
             test/resume_downloads_test.dart test/rij_toewijzen_sync_test.dart \

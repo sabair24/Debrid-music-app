@@ -248,6 +248,25 @@ Uint8List? hoesOpScherm(Uint8List? staatEr, Uint8List? gevonden, {required bool 
   );
 }
 
+/// "Shuffle alles" voor een rij ids van de pc — een speaker in een zone (server.dart `schudIds`): dezelfde trekking als
+/// [PlayerStore.shuffleAll], met [gewicht] (`PlayerStore.schudGewicht`). Ids die [nummer] niet kent, gaan door elkaar
+/// achteraan: weggooien zou de rij korter maken dan wat er gevraagd was.
+List<String> schudIdsGewogen(List<String> ids,
+    {required Track? Function(String id) nummer, double Function(Track)? gewicht, Random? toeval}) {
+  final idVan = Map<Track, String>.identity();
+  final los = <String>[];
+  for (final id in ids) {
+    final t = nummer(id);
+    if (t == null || idVan.containsKey(t)) {
+      los.add(id);
+    } else {
+      idVan[t] = id;
+    }
+  }
+  final volgorde = ordenVoor(idVan.keys.toList(), null, shuffle: true, gewicht: gewicht, toeval: toeval).order;
+  return [for (final t in volgorde) idVan[t]!, ...(los..shuffle(toeval))];
+}
+
 /// Staat het wachtrijpaneel open?
 ///
 /// Een eigen notifier omdat de knop en het paneel ver uit elkaar liggen: de knop zit in de
@@ -360,6 +379,30 @@ Wachtrij haalUitWachtrijLijst(Wachtrij w, int plek) {
     volgorde: volgorde,
     index: plek < w.index ? w.index - 1 : w.index,
   );
+}
+
+/// Wat in [paden] staat en hier nog moet komen, achteraan zetten — in dezelfde onderlinge volgorde. Wat al klonk en het
+/// spelende nummer blijven staan. Dezelfde lijst terug als er niets te verschuiven viel.
+///
+/// Voor de shuffles die met elkaar rekening houden (Saber, 31-10-2026): opent een nummer op een ander toestel, dan
+/// schuift het hier naar achteren in plaats van straks nog eens te klinken. Alleen de speelvolgorde: het origineel is
+/// bij shuffle de albumvolgorde, en daar hoort het niet anders te staan.
+Wachtrij naarAchterenLijst(Wachtrij w, Set<String> paden) {
+  if (paden.isEmpty || w.index + 1 >= w.volgorde.length) return w;
+  final blijft = <Track>[], achteraan = <Track>[];
+  for (var i = w.index + 1; i < w.volgorde.length; i++) {
+    final t = w.volgorde[i];
+    (paden.contains(t.path) ? achteraan : blijft).add(t);
+  }
+  if (achteraan.isEmpty || blijft.isEmpty) return w;
+  final volgorde = [...w.volgorde.take(w.index + 1), ...blijft, ...achteraan];
+  // Stond het al achteraan, dan is er niets veranderd — en dan ook niets te melden aan een speaker.
+  var zelfde = true;
+  for (var i = w.index + 1; i < volgorde.length && zelfde; i++) {
+    zelfde = identical(volgorde[i], w.volgorde[i]);
+  }
+  if (zelfde) return w;
+  return (origineel: w.origineel, volgorde: volgorde, index: w.index);
 }
 
 /// Van [van] naar [naar] slepen.
@@ -1058,6 +1101,15 @@ class PlayerStore extends ChangeNotifier
   /// blijft `oordeelBonus` op één plek staan. main.dart hangt hem erin.
   double Function(Track track)? oordeelWeging;
 
+  /// Wanneer een nummer het laatst op een van je toestellen opende (ms sinds 1970), gehoord of overgeslagen — of null.
+  /// Binnen `kSchudWeg` komt het in elke shuffle achteraan ([recentFactor], Saber 31-10-2026). Ingehangen vanuit
+  /// main.dart (`Speelstanden.geopendOp`).
+  int? Function(Track track)? geopendOp;
+
+  /// Een nummer opent hier (ook als het straks overgeslagen wordt): main.dart meldt het aan de pc
+  /// (`Speelstanden.geopend`), zodat de shuffles op de andere toestellen het naar achteren schuiven.
+  void Function(Track track)? bijGeopend;
+
   /// Wat er deze sessie geopend werd, ongeacht of het als beluisterd telde. Zie [_gewichtVanNummer].
   final Set<String> _geopendDezeSessie = {};
 
@@ -1117,7 +1169,10 @@ class PlayerStore extends ChangeNotifier
     _geluisterd = Duration.zero;
     _vorigePositie = null;
     _geteld = false;
-    if (t != null) _geopendDezeSessie.add(t.path);
+    if (t != null) {
+      _geopendDezeSessie.add(t.path);
+      bijGeopend?.call(t);
+    }
   }
 
   /// Het schudlogboek (schudlog.dart; Saber, 25-10-2026: "hou vanaf nu ook een log bij van alle shuffels die ik doe van
@@ -3040,14 +3095,20 @@ class PlayerStore extends ChangeNotifier
   ///
   /// Null wordt doorgegeven als "gelijk gewicht", en dat is wat een verse installatie, een toestel
   /// zonder gedeelde staat en elke toets krijgt: dan is het gewoon de shuffle die er altijd was.
+  /// De weging van een shuffle hier, voor wie elders schudt met dezelfde regels (een speaker in een zone, `schudIdsGewogen`).
+  double Function(Track)? get schudGewicht => _gewichtVanNummer;
+
   double Function(Track)? get _gewichtVanNummer {
     final lees = speelstandVan;
     final duim = oordeelWeging;
-    if (lees == null && duim == null) return null;
+    final recent = geopendOp;
+    if (lees == null && duim == null && recent == null) return null;
     final nu = DateTime.now().millisecondsSinceEpoch;
     return (t) {
       var basis = lees == null ? 1.0 : gewichtVan(lees(t), nuMs: nu);
       if (duim != null) basis *= duim(t);
+      // Opende het de laatste drie dagen op een van je toestellen — gehoord of overgeslagen — dan achteraan.
+      if (recent != null) basis *= recentFactor(recent(t), nuMs: nu);
       // **Wat deze sessie al geopend werd, weegt lichter — ook als het niet als beluisterd telde.**
       // "Precies één keer" geldt per trekking. Druk je halverwege nog eens op shuffle, dan is dat
       // een nieuwe trekking, en een nummer dat je na twintig seconden wegklikte draagt geen straf
@@ -3589,6 +3650,17 @@ class PlayerStore extends ChangeNotifier
   bool verplaatsInWachtrij(int van, int naar) {
     if (radioMode) return false;
     final uit = verplaatsInWachtrijLijst(_nu, van, naar, shuffle: shuffle);
+    if (identical(uit.volgorde, _order)) return false;
+    _pas(uit);
+    return true;
+  }
+
+  /// Wat in [paden] staat en hier nog moet komen, naar achteren ([naarAchterenLijst]): een ander toestel speelde het net.
+  /// Alleen in een gewone shuffle — niet in een radio (die vult zichzelf), niet zonder shuffle (een album speelt in zijn
+  /// volgorde). Waar of er iets verschoof.
+  bool schuifNaarAchteren(Set<String> paden) {
+    if (!shuffle || radioMode || _order.isEmpty) return false;
+    final uit = naarAchterenLijst(_nu, paden);
     if (identical(uit.volgorde, _order)) return false;
     _pas(uit);
     return true;

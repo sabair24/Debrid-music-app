@@ -57,6 +57,52 @@ class Speelstanden extends GedeeldeOps {
     notifyListeners();
   }
 
+  /// Wanneer elk nummer het laatst ergens opende (id → ms), zoals de pc het meegaf ([vanServerGeopend]) of de zonelijn
+  /// het net meldde ([elders]), plus wat hier opende. Op de pc leeg: daar leest [geopendOp] de winkel.
+  final Map<String, int> _geopend = {};
+
+  /// `geopend` uit `/api/state` overnemen. Alleen op een client. Samengevoegd, niet vervangen: wat de zonelijn intussen
+  /// meldde of hier opende, kan nieuwer zijn dan dit antwoord.
+  void vanServerGeopend(Map<String, dynamic> geopend) {
+    for (final e in geopend.entries) {
+      final at = ((e.value is Map ? e.value['at'] : null) as num?)?.toInt() ?? 0;
+      if (at > (_geopend[e.key] ?? 0)) _geopend[e.key] = at;
+    }
+  }
+
+  /// De zonelijn meldt dat [id] ergens anders opende.
+  void elders(String id, int at) {
+    if (id.isEmpty) return;
+    if (at > (_geopend[id] ?? 0)) _geopend[id] = at;
+  }
+
+  /// Wanneer [t] het laatst op een van je toestellen opende (ms), of null. Zie `kSchudWeg` in schudvolgorde.dart.
+  int? geopendOp(Track t) {
+    final id = idVanPad?.call(t.path);
+    if (id == null || id.isEmpty) return null;
+    final w = winkel;
+    if (w != null) return (w.geopend[id]?['at'] as num?)?.toInt();
+    return _geopend[id];
+  }
+
+  /// [t] opende hier — gehoord of overgeslagen, dat weet nog niemand. Naar de pc, zodat elke shuffle op elk toestel het
+  /// drie dagen achteraan houdt (Saber, 31-10-2026). Telt niet als beluisterd: dat blijft [meld]. Stil bij een fout.
+  Future<void> geopend(Track t) async {
+    final id = idVanPad?.call(t.path);
+    if (id == null || id.isEmpty) return;
+    final nu = this.nu;
+    try {
+      await pasToe(
+        [
+          {'type': 'opened', 'trackId': id, 'at': nu}
+        ],
+        vooruit: () => _geopend[id] = nu,
+      );
+    } catch (_) {
+      // Geen pc: hier weet hij het toch (vooruit), en de volgende shuffle op dit toestel houdt er rekening mee.
+    }
+  }
+
   /// Wat er van dit nummer bekend is, of null als het nooit klonk.
   Speelstand? standVan(Track t) {
     final id = idVanPad?.call(t.path);

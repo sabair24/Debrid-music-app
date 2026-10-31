@@ -1405,6 +1405,10 @@ Future<void> main() async {
   final speelstanden = Speelstanden()..idVanPad = library.gedeeldId;
   if (mode.owner) speelstanden.winkel = sharing.state;
   player.speelstandVan = speelstanden.standVan;
+  // Schudden met elkaar (Saber, 31-10-2026): elk nummer dat hier opent, naar de pc; wat ergens de laatste drie dagen
+  // opende, komt in elke shuffle achteraan (schudvolgorde.dart, kSchudWeg).
+  player.geopendOp = speelstanden.geopendOp;
+  player.bijGeopend = (t) => unawaited(speelstanden.geopend(t));
   // Engelse beschrijvingen in het Nederlands: de pc vertaalt met zijn AI-sleutel, een toestel vraagt het
   // de pc. Allebei bewaren ze wat ze kregen. Zie `vertaler.dart`.
   Vertaler.instantie
@@ -2064,10 +2068,24 @@ Future<void> main() async {
         ..zetVerbonden(true)
         ..zet(s.zones.snapshot());
       zoneSub = s.zones.veranderd.listen((_) => zoneLijst.zet(s.zones.snapshot()));
+      // Schudden met elkaar (Saber, 31-10-2026): wat op een speaker in een zone opent, telt als geopend, en "Shuffle
+      // alles" naar een speaker weegt zoals hier.
+      s.cast.bijGeopend = (id, speaker) => s.state.applyOps([
+            {'type': 'opened', 'trackId': id, 'at': DateTime.now().millisecondsSinceEpoch}
+          ], deviceId: 'spk:$speaker');
+      s.schudIds = (ids) => schudIdsGewogen(ids, nummer: verder.bron.nummer, gewicht: player.schudGewicht);
     }
 
     sharing.addListener(volgPcZones);
     volgPcZones();
+    // Een nummer opende ergens (een toestel, een speaker, of hier): in de geschudde speakerrijen naar achteren, en in de
+    // shuffle van de pc zelf als het niet hier opende.
+    sharing.state.geopendNu.listen((g) {
+      zoneServer?.cast.schuifNaarAchteren(g.trackId, behalve: g.dev.startsWith('spk:') ? g.dev.substring(4) : null);
+      if (g.dev.isEmpty || samenVolger.volgt) return;
+      final t = verder.bron.nummer(g.trackId);
+      if (t != null) player.schuifNaarAchteren({t.path});
+    });
     // De radio op een speaker staat in de zone ([ZoneStaat.radioStatus]): opnieuw rondsturen als wat erover te zeggen
     // valt anders wordt — niet bij elke melding van de radio, die er veel geeft.
     var radioInZone = '';
@@ -2276,6 +2294,8 @@ Future<void> main() async {
           // wat de shuffle op een telefoon nodig heeft om te weten wat je al veel gehoord hebt.
           speelstanden.vanServer(
               (s['plays'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
+          speelstanden.vanServerGeopend(
+              (s['geopend'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
           oordelen.vanServer(
               (s['ratings'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
           radioSfeer.vanServer(
@@ -2374,6 +2394,15 @@ Future<void> main() async {
         opStand: (p, v) => unawaited(verder.opStand(p, verzoek: v)),
         // Een ander toestel bedient dit toestel als zone.
         opOpdracht: (op) => unawaited(zoneUitvoerder.voerUit(op)),
+        // Een nummer opende op een ander toestel of een speaker: onthouden, en in de shuffle hier naar achteren — behalve
+        // wie een groep volgt, die speelt de rij van de leider (samen.dart).
+        opGeopend: (id, dev, at) {
+          if (dev == settings.serverId) return;
+          speelstanden.elders(id, at);
+          if (samenVolger.volgt) return;
+          final t = verder.bron.nummer(id);
+          if (t != null) player.schuifNaarAchteren({t.path});
+        },
         log: zoneLog.line,
       );
       zoneLijst.addListener(() => verder.lijn(zoneLijst.verbonden));
