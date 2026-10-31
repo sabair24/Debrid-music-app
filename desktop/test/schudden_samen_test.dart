@@ -208,7 +208,10 @@ void main() {
     expect(hoofd, contains('  player.geopendOp = speelstanden.geopendOp;\n'));
     expect(hoofd, contains('  player.bijGeopend = (t) => unawaited(speelstanden.geopend(t));\n'));
     expect(hoofd, contains('          speelstanden.vanServerGeopend(\n'));
-    expect(hoofd, contains('          if (dev == settings.serverId) return;\n          speelstanden.elders(id, at);\n'
+    // Eigen melding herkend aan dezelfde id die de pc in `dev` zet (`ik.id`). Niet settings.serverId: die is op een
+    // toestel leeg, en dan gooide elk toestel ook de meldingen van de andere weg (31-10-2026: 49 van 50 met dev '').
+    expect(hoofd, contains("          'deviceId': ik?.id ?? settings.serverId,\n"));
+    expect(hoofd, contains('          if (dev == ik.id) return;\n          speelstanden.elders(id, at);\n'
         '          if (samenVolger.volgt) return;\n'));
     expect(hoofd, contains('    sharing.state.geopendNu.listen((g) {\n'));
     expect(hoofd, contains("          ], deviceId: 'spk:\$speaker');\n"));
