@@ -69,6 +69,21 @@ void main() {
       expect(receptCast.naam, isNot(receptStroom.naam));
     });
 
+    test('een speaker krijgt geen ingebakken hoes (die krijgt hij apart); een toestel houdt hem', () {
+      // "Bad" droeg 14 MB hoes mee naar de Nest, bij elk nummer (01-11-2026).
+      expect(args(rate: 96000, bits: 24, recept: receptCast), contains('-vn'));
+      expect(args(rate: 44100, bits: 16, recept: receptStroom), isNot(contains('-vn')));
+      // Het toestel houdt de hoes, maar ongewijzigd: opnieuw gecodeerd als PNG werd hij vele malen groter (Adele "Hello":
+      // 1,45 MB werd 3,23 MB, over iemands databundel).
+      expect(na(args(rate: 44100, bits: 16, recept: receptStroom), '-c:v'), 'copy');
+      expect(args(rate: 96000, bits: 24, recept: receptCast), isNot(contains('-c:v')));
+      expect(receptStroom.naam, isNot('s5'), reason: 'een oude kopie met de opgeblazen hoes telt niet meer');
+      // Vóór de uitvoer, en de naam is anders dan vroeger: een oude kopie met hoes telt niet meer.
+      final a = args(rate: 96000, bits: 24, recept: receptCast);
+      expect(a.indexOf('-vn'), lessThan(a.indexOf('/cache/b.tmp')));
+      expect(receptCast.naam, isNot('c0'));
+    });
+
     test('en een eigen bewaaraantal', () {
       // Vierentwintig is minder dan één album; voor een speaker is het één nummer.
       expect(receptStroom.bewaar, greaterThan(receptCast.bewaar));

@@ -24,7 +24,7 @@ import 'package:flutter/foundation.dart';
 /// stilzwijgend oude bestanden blijven serveren die met de vórige vlaggen gemaakt zijn — en dat is
 /// precies het soort fout dat maanden meegaat.
 class Omzetrecept {
-  const Omzetrecept({required this.naam, required this.compressie, required this.bewaar});
+  const Omzetrecept({required this.naam, required this.compressie, required this.bewaar, this.zonderHoes = false});
 
   /// Kort, en uniek per set vlaggen. Gaat in de cachesleutel.
   final String naam;
@@ -34,17 +34,26 @@ class Omzetrecept {
 
   /// Hoeveel omgezette bestanden er in deze map bewaard blijven.
   final int bewaar;
+
+  /// De hoes uit het origineel NIET meenemen (`-vn`). Voor een speaker: die krijgt zijn hoes apart, als adres. Gezien
+  /// 01-11-2026: "Bad" (24/192 → 24/96 voor een Nest) droeg een PICTURE-blok van 14 MB, dat bij elk nummer eerst over het
+  /// netwerk moest; de Nest "Hal" begon pas na ~8 s en bleef aan het eind van het nummer hangen.
+  ///
+  /// Anders gaat de hoes ongewijzigd mee (`-c:v copy`). Zonder die vlag codeerde ffmpeg hem opnieuw, als PNG, en die is
+  /// vele malen groter dan de JPEG in het origineel. Gemeten op Adele "Hello" (24/192, hoes 1,45 MB), 20 s: naar de gsm
+  /// 4,36 MB met een hoes van 3,23 MB, met `copy` 2,58 MB; naar een speaker 12,1 MB (hoes 6,0 MB), met `-vn` 6,1 MB.
+  final bool zonderHoes;
 }
 
 /// Voor een speaker: snelheid boven grootte, want de kopie wordt na het spelen weggegooid.
-const receptCast = Omzetrecept(naam: 'c0', compressie: 0, bewaar: 24);
+const receptCast = Omzetrecept(naam: 'c1', compressie: 0, bewaar: 24, zonderHoes: true);
 
 /// Voor een gekoppeld toestel: grootte boven snelheid, want elke byte gaat over iemands databundel.
 ///
 /// Niveau 5 scheelt tegenover 0 ruwweg acht tot twaalf procent, en dat is precies waar deze stroom
 /// voor bestaat. Meer bewaren dan bij cast, want dit is een ALBUM dat iemand aan het luisteren is en
 /// niet één nummer op een speaker: vierentwintig is minder dan één plaat.
-const receptStroom = Omzetrecept(naam: 's5', compressie: 5, bewaar: 60);
+const receptStroom = Omzetrecept(naam: 's6', compressie: 5, bewaar: 60);
 
 /// De opdracht voor ffmpeg. Zuiver, want hier zitten de fouten die je pas op het toestel hoort.
 ///
@@ -87,6 +96,7 @@ List<String> omzetArgumenten({
     '-hide_banner', '-loglevel', 'error',
     '-y',
     '-i', bronPad,
+    if (recept.zonderHoes) '-vn' else ...['-c:v', 'copy'],
     '-af', keten.toString(),
     '-sample_fmt', naarZestien ? 's16' : 's32',
     // De bitdiepte UITSPREKEN in plaats van ffmpeg hem laten kiezen.

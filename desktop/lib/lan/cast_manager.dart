@@ -723,7 +723,9 @@ class CastManager {
         // 248,18 van 248,18 s, de pc wachtte niet (rest 0) en laadde het volgende opnieuw — Hal 1,4 s te laat.
         final rest = (pos?.duration ?? Duration.zero) - (pos?.position ?? Duration.zero);
         if (pos?.position != null && pos!.duration > Duration.zero && rest < const Duration(seconds: 3)) {
-          final tot = v.wachtTotUs ??= nu + 4000000;
+          // Tot zijn eigen eind plus anderhalve seconde. Gaat hij dan nog niet zelf door, dan doet hij het niet: Hal bleef
+          // met de omgezette "Bad" eindeloos op 248,19 van 248,19 s staan, terwijl het volgende in zijn rij stond.
+          final tot = v.wachtTotUs ??= nu + (rest.isNegative ? 0 : rest.inMicroseconds) + 1500000;
           if (nu < tot) return;
         }
         final url = await _streamUrlFor(id, track.ext, r, track.sampleRate, track.bitsPerSample);
