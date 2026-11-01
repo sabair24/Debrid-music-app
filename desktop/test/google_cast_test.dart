@@ -126,7 +126,9 @@ class _NepNest {
         speelt = true;
         _stuur(s, m.doel, kCastMedia, _media(r));
       case 'SEEK':
-        tijd = (d['currentTime'] as num).toDouble();
+        // Zoals de echte (gemeten op Hal en Kantoor): een sprong kleiner dan een seconde negeert hij.
+        final naar = (d['currentTime'] as num).toDouble();
+        if ((naar - tijd).abs() >= 1.0) tijd = naar;
         _stuur(s, m.doel, kCastMedia, _media(r));
       case 'STOP':
         speelt = false;
@@ -358,6 +360,22 @@ void main() {
       expect(rij(), ['u5', 'u6']);
       expect(nest.binnen.where((m) => m['type'] == 'QUEUE_REMOVE'), hasLength(weg));
       expect(nest.lanceringen, 1);
+    });
+
+    test('een kleine sprong (0,6 s, de Nest negeert die) komt toch aan: eerst ernaast, dan naar het doel', () async {
+      await cast.playUrl(r, 'http://pc/stream/1.flac', title: 'a', artist: 'b', album: 'c', mime: 'audio/flac');
+      nest.tijd = 60;
+      await cast.seek(r, const Duration(milliseconds: 60600));
+      expect(nest.tijd, 60.6);
+      expect([for (final m in nest.binnen) if (m['type'] == 'SEEK') m['currentTime']], [58.1, 60.6]);
+      // Een grote sprong in één keer.
+      await cast.seek(r, const Duration(seconds: 120));
+      expect(nest.tijd, 120);
+      expect(nest.binnen.where((m) => m['type'] == 'SEEK'), hasLength(3));
+      // Vlak bij het begin: ernaast is erná.
+      nest.tijd = 1;
+      await cast.seek(r, const Duration(milliseconds: 1500));
+      expect(nest.binnen.where((m) => m['type'] == 'SEEK').skip(3).map((m) => m['currentTime']), [4.0, 1.5]);
     });
 
     test('pauze, verder, spoelen en volume', () async {
