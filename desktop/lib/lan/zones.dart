@@ -65,7 +65,8 @@ const kZoneTotEenDag = Duration(hours: 24);
 /// groep (Saber, 23-10-2026: "Bij een groep één schuif, plus per lid apart").
 @immutable
 class ZoneLid {
-  const ZoneLid({required this.id, required this.naam, required this.soort, this.volume = -1});
+  const ZoneLid(
+      {required this.id, required this.naam, required this.soort, this.volume = -1, this.viaPc = false, this.samenMs = 0});
 
   /// Het zone-id van het lid (`dev:…` of `spk:…`): daarheen gaat zijn eigen volume.
   final String id;
@@ -75,21 +76,41 @@ class ZoneLid {
   /// 0–100, of -1 als het lid het niet meldt.
   final int volume;
 
-  Map<String, dynamic> toJson() => {'id': id, 'naam': naam, 'soort': soort.name, if (volume >= 0) 'volume': volume};
+  /// Een speaker die via de pc meespeelt (een ander merk dan de leider, speaker_volger.dart), met zijn eigen schuif
+  /// [samenMs] (positief = later).
+  final bool viaPc;
+  final int samenMs;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'naam': naam,
+        'soort': soort.name,
+        if (volume >= 0) 'volume': volume,
+        if (viaPc) 'viaPc': true,
+        if (samenMs != 0) 'samenMs': samenMs,
+      };
 
   static ZoneLid fromJson(Map<String, dynamic> m) => ZoneLid(
         id: '${m['id'] ?? ''}',
         naam: '${m['naam'] ?? ''}',
         soort: ZoneSoort.values.firstWhere((s) => s.name == m['soort'], orElse: () => ZoneSoort.gsm),
         volume: (m['volume'] as num?)?.toInt() ?? -1,
+        viaPc: m['viaPc'] == true,
+        samenMs: (m['samenMs'] as num?)?.toInt() ?? 0,
       );
 
   @override
   bool operator ==(Object other) =>
-      other is ZoneLid && other.id == id && other.naam == naam && other.soort == soort && other.volume == volume;
+      other is ZoneLid &&
+      other.id == id &&
+      other.naam == naam &&
+      other.soort == soort &&
+      other.volume == volume &&
+      other.viaPc == viaPc &&
+      other.samenMs == samenMs;
 
   @override
-  int get hashCode => Object.hash(id, naam, soort, volume);
+  int get hashCode => Object.hash(id, naam, soort, volume, viaPc, samenMs);
 }
 
 /// Wat één zone doet, zoals de pc het weet.
@@ -913,6 +934,8 @@ class ZoneRegister {
     List<ZoneLid> ledenVan(String id) {
       final ids = groepIds(id);
       if (ids.isEmpty) return const [];
+      // Een Sonos bij een Sonos speelt vanzelf mee; elke andere speaker in de groep via de pc (speaker_volger.dart).
+      bool viaPc(String lid) => lid != id && !(sonos.contains(id) && sonos.contains(lid));
       // De leider eerst, zoals bij een toestelgroep.
       return [
         for (final g in ['spk:$id', ...ids.where((g) => g != 'spk:$id')])
@@ -921,7 +944,9 @@ class ZoneRegister {
                 id: g,
                 naam: namen[g.substring(4)] ?? g.substring(4),
                 soort: ZoneSoort.speaker,
-                volume: volumeVan[g.substring(4)] ?? -1)
+                volume: volumeVan[g.substring(4)] ?? -1,
+                viaPc: viaPc(g.substring(4)),
+                samenMs: viaPc(g.substring(4)) ? speakerVertraging[g.substring(4)] ?? 0 : 0)
           else
             _toestelLid(g.substring(4)),
       ];

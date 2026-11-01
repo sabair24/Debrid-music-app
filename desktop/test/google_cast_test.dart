@@ -27,6 +27,19 @@ class _NepNest {
   /// Na een LAUNCH zegt hij (zoals wanneer iemand anders iets castte) dat onze speler niet meer draait.
   bool vergeetApp = false;
 
+  /// Zijn rij (LOAD begint er een, QUEUE_INSERT zet achteraan, QUEUE_REMOVE haalt weg), en welk item speelt.
+  final rij = <({int id, String url})>[];
+  int huidigItem = 0, _volgendItem = 1;
+
+  /// Het huidige is op: hij speelt vanzelf het volgende uit zijn rij (zoals de echte Nest, naadloos).
+  void naarVolgende() {
+    final i = rij.indexWhere((x) => x.id == huidigItem);
+    final v = rij[i + 1];
+    huidigItem = v.id;
+    contentId = v.url;
+    tijd = 0;
+  }
+
   int get poort => server.port;
 
   Future<void> start() async {
@@ -88,8 +101,21 @@ class _NepNest {
         _stuur(s, 'receiver-0', kCastOntvanger, _ontvanger(r));
       case 'LOAD':
         contentId = (d['media'] as Map)['contentId'] as String;
+        rij
+          ..clear()
+          ..add((id: _volgendItem++, url: contentId!));
+        huidigItem = rij.single.id;
         speelt = true;
         tijd = (d['currentTime'] as num?)?.toDouble() ?? 0;
+        _stuur(s, m.doel, kCastMedia, _media(r));
+      case 'QUEUE_INSERT':
+        for (final i in d['items'] as List) {
+          rij.add((id: _volgendItem++, url: ((i as Map)['media'] as Map)['contentId'] as String));
+        }
+        _stuur(s, m.doel, kCastMedia, _media(r));
+      case 'QUEUE_REMOVE':
+        final weg = {for (final x in d['itemIds'] as List) (x as num).toInt()};
+        rij.removeWhere((x) => weg.contains(x.id));
         _stuur(s, m.doel, kCastMedia, _media(r));
       case 'GET_STATUS' when m.ns == kCastMedia:
         _stuur(s, m.doel, kCastMedia, _media(r));
@@ -117,6 +143,14 @@ class _NepNest {
               'mediaSessionId': 1,
               'playerState': speelt ? 'PLAYING' : 'PAUSED',
               'currentTime': tijd,
+              'currentItemId': huidigItem,
+              'items': [
+                for (final i in rij)
+                  {
+                    'itemId': i.id,
+                    'media': {'contentId': i.url},
+                  }
+              ],
               'media': {'contentId': contentId, 'duration': 245.5},
             }
         ],
@@ -296,6 +330,33 @@ void main() {
 
       await cast.playUrl(r, 'http://pc/stream/2.flac', title: 'Speed Demon', artist: 'Michael Jackson', album: 'Bad', mime: 'audio/flac');
       expect(nest.lanceringen, 1, reason: 'het volgende nummer: de speler draait al');
+    });
+
+    test('het volgende staat klaar in de rij van de Nest (naadloos), en er staat nooit een oud "volgende" tussen', () async {
+      Future<void> volgende(String u) =>
+          cast.setNextUrl(r, u, title: u, artist: 'MJ', album: 'Bad', mime: 'audio/flac');
+      List<String> rij() => [for (final i in nest.rij) i.url];
+      await cast.playUrl(r, 'u1', title: 'a', artist: 'b', album: 'c', mime: 'audio/flac');
+      await volgende('u2');
+      expect(rij(), ['u1', 'u2']);
+      final insert = nest.binnen.lastWhere((m) => m['type'] == 'QUEUE_INSERT');
+      expect(insert['_doel'], 'web-7');
+      expect((((insert['items'] as List).single as Map)['media'] as Map)['metadata'], containsPair('title', 'u2'));
+      // De rij hier veranderde (iets "hierna"): het oude volgende gaat eruit.
+      await volgende('u3');
+      expect(rij(), ['u1', 'u3']);
+      // De Nest gaat vanzelf naar u3, en de cast ziet dat aan het adres.
+      nest.naarVolgende();
+      expect((await cast.positionInfo(r))!.trackUri, 'u3');
+      await volgende('u4');
+      expect(rij(), ['u1', 'u3', 'u4'], reason: 'wat nu speelt, blijft staan');
+      // Een nieuw nummer van voren (LOAD): een nieuwe rij, niets weg te halen.
+      final weg = nest.binnen.where((m) => m['type'] == 'QUEUE_REMOVE').length;
+      await cast.playUrl(r, 'u5', title: 'a', artist: 'b', album: 'c', mime: 'audio/flac');
+      await volgende('u6');
+      expect(rij(), ['u5', 'u6']);
+      expect(nest.binnen.where((m) => m['type'] == 'QUEUE_REMOVE'), hasLength(weg));
+      expect(nest.lanceringen, 1);
     });
 
     test('pauze, verder, spoelen en volume', () async {

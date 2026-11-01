@@ -262,6 +262,8 @@ class LanServer {
     // En met een speaker (stap 3.3): de speakerklok meldt waar hij is, op de ms.
     zones.speakerAnker = cast.ankerVan;
     zones.speakerVertraging.addAll(settings?.samenSpeakerMs ?? const {});
+    // De schuif van een speaker die via de pc met een andere meespeelt (speaker_volger.dart).
+    cast.volgVertraging = (id) => zones.speakerVertraging[id] ?? 0;
     cast.bijAnker = (id) {
       if (zones.toestelGroepen.containsKey('spk:$id')) _stuurAnkers('spk:$id');
     };
@@ -557,7 +559,13 @@ class LanServer {
       // Een toestel met een Sonos (stap 3.3, Saber 21-10-2026: "pc + Sonos ongeveer, met een schuif"): de
       // Sonos kan niet bijsturen, dus wordt hij de leider. Hij neemt de muziek van het toestel over, op
       // dezelfde plek; het toestel speelt door en volgt hem.
-      final speaker = groepSpeakers.first;
+      // Meer speakers, van verschillende merken: de minst precieze leidt (speaker_volger.dart), de rest volgt hem.
+      final String speaker;
+      try {
+        speaker = await cast.besteLeiderVan(groepSpeakers);
+      } catch (e) {
+        return (status: 409, antwoord: {'error': 'De speaker antwoordt niet: $e'});
+      }
       final bron = zones.standVan(zone)?.toJson();
       final tid = '${bron?['trackId'] ?? ''}';
       if (bron != null && tid.isNotEmpty) {
@@ -572,16 +580,29 @@ class LanServer {
           return (status: 409, antwoord: {'error': 'De speaker nam het niet aan: $e'});
         }
       }
-      return _groepeerSpeaker(speaker, groepSpeakers.skip(1).toList(), [zone.substring(4), ...groepToestellen],
+      return _groepeerSpeaker(
+          speaker, groepSpeakers.where((x) => x != speaker).toList(), [zone.substring(4), ...groepToestellen],
           vertragingMs: (op['vertragingMs'] as num?)?.toInt());
     }
     final metToestellen = groepToestellen.isNotEmpty || zones.toestelGroepen.containsKey(zone);
     if (cmd == 'groepeer' && zone.startsWith('spk:') && metToestellen) {
-      return _groepeerSpeaker(zone.substring(4), groepSpeakers, groepToestellen,
+      final gekozen = zone.substring(4);
+      final String leider;
+      try {
+        leider = await cast.leiderVoor(gekozen, groepSpeakers);
+      } catch (e) {
+        return (status: 409, antwoord: {'error': '${naam()} antwoordt niet: $e'});
+      }
+      return _groepeerSpeaker(leider, [gekozen, ...groepSpeakers].where((x) => x != leider).toList(), groepToestellen,
           vertragingMs: (op['vertragingMs'] as num?)?.toInt());
     }
     if (cmd == 'samenVertraging' && zone.startsWith('spk:')) {
-      _zetSpeakerVertraging(zone.substring(4), (op['ms'] as num?)?.toInt() ?? 0);
+      // Met `lid`: de schuif van een speaker die via de pc meespeelt (speaker_volger.dart); anders die van de leider,
+      // voor de toestellen die hem volgen.
+      final lid = '${op['lid'] ?? ''}';
+      final wie = lid.startsWith('spk:') ? lid.substring(4) : zone.substring(4);
+      _zetSpeakerVertraging(wie, (op['ms'] as num?)?.toInt() ?? 0);
+      if (lid.startsWith('spk:')) cast.herijkVolger(wie);
       return (status: 200, antwoord: {'bezorgd': 1});
     }
     if (cmd == 'groepeer' && zone.startsWith('dev:')) {
@@ -694,7 +715,9 @@ class LanServer {
               for (final x in (op['leden'] as List? ?? const []))
                 if ('$x'.startsWith('spk:')) '$x'.substring(4),
             ];
-            await cast.groepeer(speaker, leden);
+            // Van verschillende merken: de minst precieze leidt (en neemt de muziek over), de rest volgt.
+            final leider = await cast.leiderVoor(speaker, leden);
+            await cast.groepeer(leider, [speaker, ...leden].where((x) => x != leider).toList());
           // Tussendoor beluisteren uit "Klaar om te kiezen" (Saber, 26-10-2026: "als ik luister op de kef op de kef").
           case 'tussendoor':
             final tid = '${op['trackId'] ?? ''}';

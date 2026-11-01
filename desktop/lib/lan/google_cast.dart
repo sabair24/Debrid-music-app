@@ -313,6 +313,11 @@ class CastKanaal {
   /// De Default Media Receiver zoals die nu draait: zijn transport (waar de media heen gaat) en sessie. Null: niet (meer).
   String? _transport, _sessie;
 
+  String? get transport => _transport;
+
+  /// Wat wij als volgende klaarzetten ([zetVolgende]) en nog niet weghaalden: hun `itemId` in de rij van de speler.
+  final _klaar = <int>{};
+
   /// Het transport van onze speler volgens de LAATSTE melding van de ontvanger (null: daar draaide hij niet). Een melding
   /// "weg" kan binnenkomen vlak na het antwoord op LAUNCH, nog vóór [zorgVoorSpeler] het transport onthield.
   String? _laatsteApp;
@@ -345,6 +350,7 @@ class CastKanaal {
 
   void _weg(String waarom) {
     log?.call('cast $host: verbinding $waarom');
+    _klaar.clear();
     _hart?.cancel();
     _hart = null;
     _s = null;
@@ -454,6 +460,8 @@ class CastKanaal {
   /// Speel [url].
   Future<void> laad(String url, {required String mime, required Map<String, dynamic> metadata, double vanaf = 0}) async {
     final t = await zorgVoorSpeler();
+    // Een LOAD begint een nieuwe rij: wat klaarstond, is weg.
+    _klaar.clear();
     final a = await vraag(t, kCastMedia, {
       'type': 'LOAD',
       'autoplay': true,
@@ -463,6 +471,46 @@ class CastKanaal {
     if (a == null || a['type'] == 'LOAD_FAILED' || a['type'] == 'LOAD_CANCELLED' || a['type'] == 'INVALID_REQUEST') {
       throw StateError('de Cast-speler op $host nam het nummer niet aan (${a?['type'] ?? 'geen antwoord'})');
     }
+  }
+
+  /// Zet [url] klaar als het volgende nummer (`QUEUE_INSERT`): de speler speelt het naadloos na het huidige, zoals een
+  /// Sonos met SetNextAVTransportURI. Gemeten op de Nest "Kantoor" (01-11-2026): van item 1 naar 2 zonder IDLE ertussen,
+  /// in dezelfde mediasessie, en de plek begon weer bij 0.
+  ///
+  /// Wat er eerder klaarstond en nog niet speelt, gaat eerst weg (`QUEUE_REMOVE`): anders groeit de rij bij elke
+  /// wijziging, en speelt hij na het huidige een oud "volgende". Eerst vers vragen welk item speelt: is het vorige
+  /// "volgende" intussen begonnen, dan blijft het staan.
+  Future<void> zetVolgende(String url, {required String mime, required Map<String, dynamic> metadata}) async {
+    await mediaStand();
+    final t = _transport, ms = mediaSessie;
+    if (t == null || ms == null) return;
+    final huidig = (laatsteMedia?['currentItemId'] as num?)?.toInt();
+    final weg = [for (final i in _klaar) if (i != huidig) i];
+    if (weg.isNotEmpty) {
+      await vraag(t, kCastMedia, {'type': 'QUEUE_REMOVE', 'mediaSessionId': ms, 'itemIds': weg});
+      _klaar.removeAll(weg);
+    }
+    final a = await vraag(t, kCastMedia, {
+      'type': 'QUEUE_INSERT',
+      'mediaSessionId': ms,
+      'items': [
+        {
+          'media': {'contentId': url, 'contentType': mime, 'streamType': 'BUFFERED', 'metadata': metadata},
+          'autoplay': true,
+          // Al beginnen met laden: dan staat het begin in zijn buffer als het huidige ophoudt.
+          'preloadTime': 10,
+        }
+      ],
+    });
+    final st = a?['status'];
+    final items = st is List && st.isNotEmpty && st.first is Map ? (st.first as Map)['items'] : null;
+    final ids = [
+      if (items is List)
+        for (final i in items)
+          if (i is Map && i['itemId'] is num) (i['itemId'] as num).toInt(),
+    ];
+    // Het nieuwe staat achteraan, met het hoogste id.
+    if (ids.isNotEmpty) _klaar.add(ids.reduce((x, y) => x > y ? x : y));
   }
 
   /// Een mediaopdracht (`PLAY`, `PAUSE`, `STOP`, `SEEK`) voor wat er nu speelt. Niets als er niets speelt.
@@ -525,8 +573,8 @@ class CastKanaal {
 // ── Voor de cast ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// Wat de cast met een Cast-speaker doet, in de vorm van [UpnpControlPoint] — zoals [KefBediening]: de cast hoeft niet
-/// te weten welke taal een speaker spreekt. Een volgend nummer klaarzetten kent deze eerste versie niet; de cast ziet het
-/// einde aan "stopped" (de speler valt op IDLE met `FINISHED`) en opent dan het volgende.
+/// te weten welke taal een speaker spreekt. Het volgende nummer staat klaar in de rij van de speler ([setNextUrl]), dus hij
+/// speelt naadloos door; de cast ziet de overgang aan het adres dat hij meldt, zoals bij een Sonos.
 class CastBediening extends UpnpControlPoint {
   CastBediening({this.log, this.verbind});
 
@@ -555,7 +603,9 @@ class CastBediening extends UpnpControlPoint {
           required String mime,
           String? artUrl,
           Duration? duration}) =>
-      kanaal(renderer).laad(url, mime: mime, metadata: {
+      kanaal(renderer).laad(url, mime: mime, metadata: _metadata(title, artist, album, artUrl));
+
+  Map<String, dynamic> _metadata(String title, String artist, String album, String? artUrl) => {
         // 3 = een muzieknummer: dan toont Google Home titel, artiest en plaat.
         'metadataType': 3,
         'title': title,
@@ -565,16 +615,17 @@ class CastBediening extends UpnpControlPoint {
           'images': [
             {'url': artUrl}
           ],
-      });
+      };
 
   @override
   Future<void> setNextUrl(Renderer renderer, String url,
-      {required String title,
-      required String artist,
-      required String album,
-      required String mime,
-      String? artUrl,
-      Duration? duration}) async {}
+          {required String title,
+          required String artist,
+          required String album,
+          required String mime,
+          String? artUrl,
+          Duration? duration}) =>
+      kanaal(renderer).zetVolgende(url, mime: mime, metadata: _metadata(title, artist, album, artUrl));
 
   @override
   Future<void> play(Renderer r) => kanaal(r).media('PLAY');

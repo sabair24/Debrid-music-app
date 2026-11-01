@@ -13,6 +13,7 @@ import 'google_cast.dart';
 import 'kef.dart';
 import 'net.dart';
 import 'speaker_klok.dart';
+import 'speaker_volger.dart';
 import 'transcode.dart';
 import 'upnp.dart';
 import 'zones.dart' show SpeakerStand, plekVoorNummer;
@@ -283,6 +284,17 @@ class CastManager {
   /// met een schuif"). Die krijgen een [SpeakerKlok], ook als hun sessie pas later begint.
   final Set<String> _klokGewenst = {};
 
+  /// Speakers die via de pc met een speaker van een ander merk meespelen (speaker_volger.dart), per volger-id.
+  final Map<String, _Volger> _volgers = {};
+  Timer? _volgTik;
+
+  /// Hoe vaak de volgers bijgezet worden. Een toets zet hem op een uur, om te zien wat de rest zonder de ronde doet.
+  @visibleForTesting
+  Duration volgElke = const Duration(milliseconds: 500);
+
+  /// De schuif per volger (ms; positief = hij later), uit de zones. Zonder: 0.
+  int Function(String speakerId)? volgVertraging;
+
   /// Waar een speaker met meespelers is, veranderde: de server stuurt ze een nieuw anker ([ankerVan]).
   void Function(String speakerId)? bijAnker;
 
@@ -331,7 +343,8 @@ class CastManager {
   }
 
   void _zetKlok(_Session s) {
-    final wil = _klokGewenst.contains(s.renderer.id);
+    // Ook voor wie via de pc meespeelt: die volgt de plek van deze klok.
+    final wil = _klokGewenst.contains(s.renderer.id) || _volgersVan(s.renderer.id).isNotEmpty;
     if (wil && s.klok == null) {
       _log?.line('klok aan voor ${s.renderer.name}');
       s.klok = SpeakerKlok(
@@ -430,7 +443,25 @@ class CastManager {
 
   /// Wat elke speaker met een sessie het laatst zei — zonder hem iets te vragen: de tijdklok van vijf
   /// seconden en elke statusvraag houden het bij. Zie `zones.dart`.
-  List<SpeakerStand> get laatsteStanden => [for (final sessie in _sessies.values) _standVan(sessie)];
+  List<SpeakerStand> get laatsteStanden => [
+        for (final sessie in _sessies.values) _standVan(sessie),
+        // Wie via de pc meespeelt, staat in de groep van zijn leider (zones.dart): hier alleen voor zijn eigen volume.
+        for (final v in _volgers.values)
+          if (!_sessies.containsKey(v.renderer.id))
+            (
+              id: v.renderer.id,
+              naam: v.renderer.name,
+              trackId: v.trackId,
+              index: 0,
+              lengte: 0,
+              speelt: v.trackId != null && !v.gepauzeerd,
+              positieMs: 0,
+              duurMs: 0,
+              opMs: DateTime.now().millisecondsSinceEpoch,
+              volume: v.volume ?? -1,
+              radio: '',
+            ),
+      ];
 
   SpeakerStand _standVan(_Session s) {
     final tid = s.queue.elementAtOrNull(s.index);
@@ -464,7 +495,21 @@ class CastManager {
   /// Hoe de Sonossen gegroepeerd zijn (stap 3.1, Saber 21-10-2026: "Sonos onderling"), in renderer-ids:
   /// per groep van meer dan één bekende speaker de leider en alle leden (de leider erbij). Gelezen bij het
   /// zoeken, om de minuut (de Sonos-app kan ze ook veranderen) en na elke wijziging hier.
-  List<({String leider, List<String> leden})> get speakerGroepen => _groepen;
+  ///
+  /// Wie via de pc meespeelt ([_volgers]), staat erbij in de groep van zijn leider.
+  List<({String leider, List<String> leden})> get speakerGroepen {
+    if (_volgers.isEmpty) return _groepen;
+    final per = <String, List<String>>{};
+    for (final v in _volgers.values) {
+      (per[v.leider] ??= []).add(v.renderer.id);
+    }
+    return [
+      for (final g in _groepen) (leider: g.leider, leden: [...g.leden, ...?per.remove(g.leider)]),
+      for (final e in per.entries) (leider: e.key, leden: [e.key, ...e.value]),
+    ];
+  }
+
+  /// Alleen de groepen die de Sonossen zelf vormen.
   List<({String leider, List<String> leden})> _groepen = const [];
 
   Renderer? _vanUdn(String udn) => _renderers.values.where((r) => r.udn == udn).firstOrNull;
@@ -492,15 +537,25 @@ class CastManager {
   }
 
   /// [leiderId] met precies [ledenIds] in één groep: wie er nog niet in zat, komt erbij (en houdt op met
-  /// zijn eigen muziek); wie er wel in zat en niet in [ledenIds] staat, gaat eruit. Alleen Sonossen: die
-  /// lopen onderling op de seconde gelijk.
+  /// zijn eigen muziek); wie er wel in zat en niet in [ledenIds] staat, gaat eruit. Sonossen bij een Sonos
+  /// doen het zelf (op de seconde gelijk); een speaker van een ander merk speelt via de pc mee ([_zetVolgers],
+  /// speaker_volger.dart, Saber 01-11-2026: de Nest Minis met de Sonos en de KEF).
   ///
   /// **De Sonossen melden een nieuwe groep pas na een paar seconden** (gemeten 21-10-2026: "los" kort na
   /// "samen" deed niets, want de pc zag de groep nog niet). Daarom eerst de echte groepen lezen, dan meteen
   /// tonen wat er gevraagd is, en na 2 en 5 s nog eens nalezen.
   Future<void> groepeer(String leiderId, List<String> ledenIds) async {
     final leider = await _renderer(leiderId);
-    if (!leider.isSonos || leider.udn.isEmpty) throw StateError('Alleen Sonossen kunnen (nog) samen spelen.');
+    // Sonossen bij een Sonos doen het zelf, op de seconde gelijk; de rest speelt via de pc mee (speaker_volger.dart).
+    final vanzelf = <String>[], viaPc = <String>[];
+    for (final id in {...ledenIds}..remove(leiderId)) {
+      (speeltVanzelfMee(leider, await _renderer(id)) ? vanzelf : viaPc).add(id);
+    }
+    _zetVolgers(leiderId, viaPc);
+    if (!leider.isSonos || leider.udn.isEmpty) {
+      bijStand?.call();
+      return;
+    }
     // Wat er net gevraagd was (misschien nog niet door de Sonossen gemeld) én wat ze nu melden.
     final gevraagd = {...?_groepVan(leiderId)?.leden};
     await leesGroepen();
@@ -508,7 +563,7 @@ class CastManager {
     if (_groepen.any((g) => g.leider != leiderId && g.leden.contains(leiderId))) {
       await _upnp.maakLosUitGroep(leider);
     }
-    final willen = {...ledenIds}..remove(leiderId);
+    final willen = {...vanzelf};
     final nu = {...gevraagd, ...?_groepVan(leiderId)?.leden}..remove(leiderId);
     for (final id in willen.difference(nu)) {
       final lid = await _renderer(id);
@@ -532,6 +587,288 @@ class CastManager {
     bijStand?.call();
     for (final na in const [Duration(seconds: 2), Duration(seconds: 5)]) {
       Timer(na, () => unawaited(leesGroepen()));
+    }
+  }
+
+  // ── Meespelen via de pc: speakers van verschillende merken (speaker_volger.dart) ──
+
+  Iterable<_Volger> _volgersVan(String leiderId) => _volgers.values.where((v) => v.leider == leiderId).toList();
+
+  /// Wie leidt als [ids] samen spelen: de minst precieze ([besteLeider]).
+  Future<String> besteLeiderVan(List<String> ids) async =>
+      besteLeider([for (final id in ids) await _renderer(id)]).id;
+
+  /// Wie leidt als [gekozen] samen speelt met [leden]. Is dat een ander dan [gekozen] en speelt [gekozen] iets, dan neemt
+  /// die leider het over, op dezelfde plek; [gekozen] volgt hem daarna ([groepeer]). Een radio blijft waar hij is: die
+  /// hoort bij zijn speaker (de pc vult hem daar aan), en dan leidt wie je koos.
+  Future<String> leiderVoor(String gekozen, List<String> leden) async {
+    final beste = await besteLeiderVan([gekozen, ...leden.where((x) => x != gekozen)]);
+    if (beste == gekozen) return gekozen;
+    final s = _sessies[gekozen];
+    if (s != null && s.radio != null) return gekozen;
+    if (s != null && s.queue.isNotEmpty) {
+      final plek = s.klok?.plekNu?.positieMs ??
+          (s.positie?.inMilliseconds ?? 0) +
+              ((s.speelt ?? true) && s.gezienOp != null ? DateTime.now().millisecondsSinceEpoch - s.gezienOp! : 0);
+      _log?.line('samen: ${_renderers[beste]?.name ?? beste} leidt en neemt over van ${s.renderer.name} (op $plek ms)');
+      await play(beste, s.queue, s.index, alsZone: true, vanafMs: plek, geschud: s.geschud);
+    }
+    return beste;
+  }
+
+  /// [ids] spelen via de pc met [leiderId] mee; wie er eerst bij hoorde en nu niet meer, houdt op.
+  void _zetVolgers(String leiderId, List<String> ids) {
+    for (final v in _volgersVan(leiderId)) {
+      if (!ids.contains(v.renderer.id)) _laatVolgerGaan(v, stil: true);
+    }
+    // De leider volgt zelf niemand.
+    final zelf = _volgers[leiderId];
+    if (zelf != null) _laatVolgerGaan(zelf, stil: false);
+    for (final id in ids) {
+      final r = _renderers[id];
+      final oud = _volgers[id];
+      if (r == null || oud?.leider == leiderId) continue;
+      if (oud != null) _laatVolgerGaan(oud, stil: false);
+      // Wie meespeelt, heeft geen eigen muziek meer — en geen eigen volgers (net als een Sonos die bij een groep komt).
+      final eigen = _sessies[id];
+      if (eigen != null) _sluit(eigen);
+      for (final w in _volgersVan(id)) {
+        _laatVolgerGaan(w, stil: true);
+      }
+      final v = _volgers[id] = _Volger(r, leiderId);
+      _log?.line('samen: ${r.name} speelt via de pc mee met ${_renderers[leiderId]?.name ?? leiderId}');
+      unawaited(_volgerVolume(v));
+      unawaited(_volgerBijNummer(v));
+    }
+    final s = _sessies[leiderId];
+    if (s != null) _zetKlok(s);
+    _zetVolgTik();
+  }
+
+  void _laatVolgerGaan(_Volger v, {required bool stil}) {
+    v.klok?.stop();
+    v.klok = null;
+    if (!identical(_volgers[v.renderer.id], v)) return;
+    _volgers.remove(v.renderer.id);
+    _log?.line('samen: ${v.renderer.name} speelt niet meer mee met ${_renderers[v.leider]?.name ?? v.leider}');
+    // Uit de groep is stil, zoals een Sonos die uit een groep gaat.
+    if (stil && v.trackId != null) unawaited(_voor(v.renderer).stop(v.renderer).catchError((Object _) {}));
+    final s = _sessies[v.leider];
+    if (s != null) _zetKlok(s);
+    _zetVolgTik();
+  }
+
+  void _zetVolgTik() {
+    if (_volgers.isEmpty) {
+      _volgTik?.cancel();
+      _volgTik = null;
+    } else {
+      _volgTik ??= Timer.periodic(volgElke, (_) => _volgRonde());
+    }
+  }
+
+  /// De schuif voor [id] veranderde: opnieuw bijzetten mag weer.
+  void herijkVolger(String id) => _volgers[id]?.pogingen = 0;
+
+  int _vertraging(_Volger v) => volgVertraging?.call(v.renderer.id) ?? 0;
+
+  /// Het nummer (de versie) dat [s] nu speelt.
+  String? _huidigId(_Session s) {
+    final a = s.queue.elementAtOrNull(s.index);
+    return a == null ? null : _speelId(s, s.index, a);
+  }
+
+  Future<void> _volgerVolume(_Volger v) async {
+    try {
+      v.volume = await _voor(v.renderer).getVolume(v.renderer);
+      bijStand?.call();
+    } catch (_) {}
+  }
+
+  void _volgKlok(_Volger v) {
+    final k = v.klok;
+    if (k != null) {
+      k.verstoord();
+      return;
+    }
+    final r = v.renderer;
+    v.klok = SpeakerKlok(
+      klokUs: _klokUs,
+      toeval: toeval,
+      houdMs: isKef(r) ? 1150 : (isCast(r) ? 100 : 1000),
+      korrelMs: isKef(r) ? 48 : 0,
+      gericht: !isKef(r) && !isCast(r),
+      vraag: () async => (await _voor(r).positionInfo(r))?.position?.inMilliseconds,
+      bijVerandering: () {},
+    )..start();
+  }
+
+  /// De volger [v] naar het nummer van zijn leider. Speelt hij het al (zelf naadloos doorgegaan), dan alleen het volgende
+  /// klaarzetten; is zijn eigen nummer bijna op, dan even wachten of hij zelf doorgaat.
+  Future<void> _volgerBijNummer(_Volger v) async {
+    final s = _sessies[v.leider];
+    final id = s == null ? null : _huidigId(s);
+    final track = id == null ? null : catalog.track(id);
+    final nu = _klokUs();
+    if (s == null || id == null || track == null || v.trackId == id || v.bezig || nu < v.opnieuwNaUs) return;
+    v.bezig = true;
+    final r = v.renderer;
+    try {
+      final pos = await _voor(r).positionInfo(r).catchError((Object _) => null);
+      if (_idVanUrl(pos?.trackUri) == id) {
+        _log?.line('samen: ${r.name} ging zelf door naar ${_naam(id)}');
+      } else {
+        final rest = (pos?.duration ?? Duration.zero) - (pos?.position ?? Duration.zero);
+        if (pos?.position != null && rest > Duration.zero && rest < const Duration(seconds: 3)) {
+          final tot = v.wachtTotUs ??= nu + 4000000;
+          if (nu < tot) return;
+        }
+        final url = await _streamUrlFor(id, track.ext, r, track.sampleRate, track.bitsPerSample);
+        await _voor(r).playUrl(r, url,
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            mime: mimeForExt(track.ext),
+            artUrl: await _artUrlFor(id, r),
+            duration: track.duration);
+        // Een nieuw nummer van voren is een nieuwe rij op de speaker: wat klaarstond, is weg.
+        v.klaarPaar = null;
+        _log?.line('samen: ${r.name} speelt mee — ${_naam(id)}');
+      }
+      v.wachtTotUs = null;
+      v.trackId = id;
+      v.pogingen = 0;
+      v.gepauzeerd = false;
+      v.naSpoelen = false;
+      v.gespoeldOpUs = _klokUs();
+      _volgKlok(v);
+      bijStand?.call();
+      await _volgerKlaarzetten(v, s);
+    } catch (e) {
+      _log?.line('samen: ${r.name} nam ${_naam(id)} niet aan: $e — over 10 s nog eens');
+      v.wachtTotUs = null;
+      v.opnieuwNaUs = _klokUs() + 10000000;
+    } finally {
+      v.bezig = false;
+    }
+  }
+
+  /// Het nummer ná dat van de leider ook klaarzetten op de volger: dan gaan ze allebei naadloos door, en blijft de
+  /// afstand die de pc net instelde over de overgang heen staan.
+  Future<void> _volgerKlaarzetten(_Volger v, _Session s) async {
+    if (v.trackId == null || v.trackId != _huidigId(s)) return;
+    final volgend = s.queue.elementAtOrNull(s.index + 1);
+    final id = volgend == null ? null : _speelId(s, s.index + 1, volgend);
+    final t = id == null ? null : catalog.track(id);
+    if (id == null || t == null) return;
+    // Eén keer per paar: de cast zet het volgende ook klaar na zijn eigen [_armNext], vaak op hetzelfde moment.
+    final paar = '${v.trackId}>$id';
+    if (v.klaarPaar == paar) return;
+    v.klaarPaar = paar;
+    final r = v.renderer;
+    try {
+      final url = await _streamUrlFor(id, t.ext, r, t.sampleRate, t.bitsPerSample);
+      await _voor(r).setNextUrl(r, url,
+          title: t.title, artist: t.artist, album: t.album, mime: mimeForExt(t.ext), duration: t.duration);
+    } catch (e) {
+      v.klaarPaar = null;
+      _log?.line('samen: ${r.name} kreeg het volgende niet mee: $e');
+    }
+  }
+
+  /// Wat de leider deed, doet de volger ook (pauze, verder, stop, spoelen). Volgende en vorige gaan via het nummer.
+  Future<void> _volgerDoet(_Volger v, String action, int? value) async {
+    final r = v.renderer;
+    try {
+      switch (action) {
+        case 'pause':
+          v.gepauzeerd = true;
+          await _voor(r).pause(r);
+        case 'play':
+          if (!v.gepauzeerd) return;
+          v.gepauzeerd = false;
+          v.pogingen = 0;
+          v.gespoeldOpUs = _klokUs();
+          await _voor(r).play(r);
+        case 'stop':
+          v.trackId = null;
+          await _voor(r).stop(r);
+        case 'seek':
+          v.pogingen = 0;
+          v.naSpoelen = true;
+          v.gespoeldOpUs = _klokUs();
+          await _voor(r).seek(r, Duration(milliseconds: (value ?? 0) * 1000 + _vertraging(v) + v.voorsprongMs));
+        default:
+          return;
+      }
+      v.klok?.verstoord();
+    } catch (e) {
+      _log?.line('samen: ${r.name} deed "$action" niet: $e');
+    }
+  }
+
+  Future<void> _volgerSpoel(_Volger v, int doelMs, int foutMs) async {
+    v.bezig = true;
+    v.pogingen++;
+    final r = v.renderer;
+    try {
+      await _voor(r).seek(r, Duration(milliseconds: doelMs));
+      _log?.line('samen: ${r.name} ${foutMs > 0 ? '+' : ''}$foutMs ms ernaast — gespoeld naar $doelMs ms '
+          '(${v.pogingen}/$kVolgPogingen, voorsprong ${v.voorsprongMs} ms)');
+    } catch (e) {
+      _log?.line('samen: ${r.name} spoelde niet: $e');
+    } finally {
+      v.naSpoelen = true;
+      v.gespoeldOpUs = _klokUs();
+      v.klok?.verstoord();
+      v.bezig = false;
+    }
+  }
+
+  /// Om de halve seconde: elke volger bij de plek van zijn leider houden ([volgBesluit]).
+  void _volgRonde() {
+    final nuUs = _klokUs();
+    for (final v in _volgers.values.toList()) {
+      final s = _sessies[v.leider];
+      if (v.bezig || s == null) continue;
+      if (v.trackId != _huidigId(s)) {
+        unawaited(_volgerBijNummer(v));
+        continue;
+      }
+      final a = ankerVan(v.leider);
+      if (a == null) continue;
+      final leider = (speelt: a['speelt'] == true, positieMs: a['positieMs'] as int);
+      final p = v.klok?.plekNu;
+      final volger = p == null ? null : (speelt: p.speelt, positieMs: p.positieMs);
+      final vertraging = _vertraging(v);
+      final sinds = (nuUs - v.gespoeldOpUs) ~/ 1000;
+      if (v.naSpoelen && volger != null && volger.speelt && leider.speelt && sinds >= kVolgRust) {
+        final fout = volger.positieMs - (leider.positieMs + vertraging);
+        v.voorsprongMs = leerVoorsprong(v.voorsprongMs, fout);
+        v.naSpoelen = false;
+        _log?.line('samen: ${v.renderer.name} na spoelen ${fout > 0 ? '+' : ''}$fout ms ernaast — voorsprong nu '
+            '${v.voorsprongMs} ms');
+      }
+      final duur = s.duur?.inMilliseconds ?? catalog.track(v.trackId ?? '')?.duration?.inMilliseconds;
+      final b = volgBesluit(
+        leider: leider,
+        volger: volger,
+        vertragingMs: vertraging,
+        voorsprongMs: v.voorsprongMs,
+        pogingen: v.pogingen,
+        sindsSpoelenMs: sinds,
+        leiderRestMs: duur == null || duur <= 0 ? null : duur - leider.positieMs,
+      );
+      switch (b.stap) {
+        case VolgStap.niets:
+          break;
+        case VolgStap.pauze:
+          if (!v.gepauzeerd) unawaited(_volgerDoet(v, 'pause', null));
+        case VolgStap.verder:
+          if (v.gepauzeerd) unawaited(_volgerDoet(v, 'play', null));
+        case VolgStap.spoel:
+          unawaited(_volgerSpoel(v, b.doelMs, volger!.positieMs - leider.positieMs - vertraging));
+      }
     }
   }
 
@@ -568,6 +905,11 @@ class CastManager {
       if (s.zagIndex != s.index && s.alsZone) {
         final id = s.queue.elementAtOrNull(s.index);
         if (id != null) bijGeopend?.call(id, s.renderer.id);
+      }
+      if (s.zagIndex != s.index) {
+        for (final v in _volgersVan(s.renderer.id)) {
+          unawaited(_volgerBijNummer(v));
+        }
       }
       s.zagIndex = s.index;
       bijStand?.call();
@@ -654,6 +996,9 @@ class CastManager {
       {bool alsZone = false, int vanafMs = 0, String? radio, bool geschud = false}) async {
     if (trackIds.isEmpty) throw ArgumentError('nothing to play');
     _tussendoor.remove(deviceId);
+    // Wie via de pc meespeelde en nu zelf iets krijgt, speelt niet meer mee.
+    final volgde = _volgers[deviceId];
+    if (volgde != null) _laatVolgerGaan(volgde, stil: false);
     if (!alsZone) {
       for (final ander in _sessies.values.where((x) => !x.alsZone && x.renderer.id != deviceId).toList()) {
         _sluit(ander);
@@ -1247,6 +1592,9 @@ class CastManager {
     );
     session.nextUrl = nextUrl;
     _log?.line('    volgende meegegeven: ${_naam(nextId)}  (${_idVanUrl(nextUrl)})');
+    for (final v in _volgersVan(session.renderer.id)) {
+      unawaited(_volgerKlaarzetten(v, session));
+    }
   }
 
   /// Een andere volgorde voor wat er nog komt, zonder het lopende nummer aan te raken.
@@ -1575,6 +1923,9 @@ class CastManager {
         if (sessie != null) {
           sessie.volume = value ?? 50;
           bijStand?.call();
+        } else if (_volgers[renderer.id] case final v?) {
+          v.volume = value ?? 50;
+          bijStand?.call();
         }
       case 'seek':
         // Seconds on the wire rather than a formatted time: the phone has a slider, not a clock,
@@ -1587,6 +1938,10 @@ class CastManager {
         if (sessie != null) _meldStil(sessie, (value ?? 0) * 1000);
       default:
         throw ArgumentError('unknown action: $action');
+    }
+    // Wie via de pc meespeelt, doet hetzelfde. Volgende en vorige gaan via het nummer ([_zag]).
+    for (final v in _volgersVan(renderer.id)) {
+      unawaited(_volgerDoet(v, action, value));
     }
   }
 
@@ -1739,6 +2094,10 @@ class CastManager {
   void dispose() {
     _kef.sluit();
     _cast.sluit();
+    _volgTik?.cancel();
+    for (final v in _volgers.values) {
+      v.klok?.stop();
+    }
     unawaited(_radioGebeurtenis.close());
     _zoeker?.cancel();
     _groepKijker?.cancel();
@@ -1759,6 +2118,47 @@ class _Tussendoor {
   final bool speelde;
   final String a, b;
   bool opB = true;
+}
+
+/// Een speaker die via de pc met een speaker van een ander merk meespeelt ([CastManager.groepeer], speaker_volger.dart).
+class _Volger {
+  _Volger(this.renderer, this.leider);
+
+  final Renderer renderer;
+
+  /// Het renderer-id van de leider.
+  final String leider;
+
+  /// Het nummer (de versie) dat hij van ons speelt, of null.
+  String? trackId;
+
+  /// Zijn eigen plek, zoals die van de leider ([SpeakerKlok]).
+  SpeakerKlok? klok;
+
+  /// Hoeveel vóór de plek van de leider hij gespoeld wordt (geleerd: [leerVoorsprong]).
+  int voorsprongMs = kVoorsprongStart;
+
+  /// Hoe vaak hij in dit nummer gespoeld is, en wanneer het laatst (µs, pc-klok).
+  int pogingen = 0;
+  int gespoeldOpUs = 0;
+
+  /// Na het spoelen: de eerstvolgende meting zegt hoeveel de voorsprong moet veranderen.
+  bool naSpoelen = false;
+
+  /// Door ons gepauzeerd (met de leider mee): alleen dan "verder".
+  bool gepauzeerd = false;
+
+  /// Een opdracht onderweg: de ronde laat hem dan met rust.
+  bool bezig = false;
+
+  /// Wachten tot hier (µs) of hij zelf naar het volgende nummer gaat; en na een mislukte poging pas weer na [opnieuwNaUs].
+  int? wachtTotUs;
+  int opnieuwNaUs = 0;
+
+  /// Welk paar (huidig > volgend) er het laatst klaargezet is.
+  String? klaarPaar;
+
+  int? volume;
 }
 
 class _Session {
