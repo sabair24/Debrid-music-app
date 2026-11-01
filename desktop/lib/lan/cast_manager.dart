@@ -719,8 +719,10 @@ class CastManager {
       if (_idVanUrl(pos?.trackUri) == id) {
         _log?.line('samen: ${r.name} ging zelf door naar ${_naam(id)}');
       } else {
+        // Ook als hij er precies op of voorbij staat: dan zit hij in de overgang. Gezien 01-11-2026 (3.9.694): Hal stond op
+        // 248,18 van 248,18 s, de pc wachtte niet (rest 0) en laadde het volgende opnieuw — Hal 1,4 s te laat.
         final rest = (pos?.duration ?? Duration.zero) - (pos?.position ?? Duration.zero);
-        if (pos?.position != null && rest > Duration.zero && rest < const Duration(seconds: 3)) {
+        if (pos?.position != null && pos!.duration > Duration.zero && rest < const Duration(seconds: 3)) {
           final tot = v.wachtTotUs ??= nu + 4000000;
           if (nu < tot) return;
         }
@@ -2083,6 +2085,10 @@ class CastManager {
     final k = _sessies[id]?.klok?.schatting;
     return k == null ? null : (houdMs: k.houdMs, korrelMs: k.korrelMs, gericht: k.gericht);
   }
+
+  /// Voor een toets: één ronde van het bijzetten ([_volgRonde]), nu meteen.
+  @visibleForTesting
+  void volgRondeVoorToets() => _volgRonde();
 
   /// Voor een toets: wat de tijdklok van vijf seconden doet, nu meteen, voor elke speaker.
   @visibleForTesting

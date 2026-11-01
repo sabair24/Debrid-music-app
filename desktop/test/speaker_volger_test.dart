@@ -315,6 +315,24 @@ void main() {
       expect(nest.opdrachten, ['volgende Drie']);
     });
 
+    test('staat de Nest op het eind (plek = lengte), dan wacht de pc tot hij zelf naadloos doorgaat', () async {
+      await cast.play(_amp.id, [ids[0], ids[1], ids[2]], 0, alsZone: true);
+      await cast.groepeer(_amp.id, [_kantoor.id]);
+      await _tot(() => nest.opdrachten.contains('volgende Een'));
+      // De Nest is op het eind van Drie en zit in de overgang (gezien op Hal: 248,18 van 248,18 s).
+      nest.plek = nest.duur;
+      nest.opdrachten.clear();
+      await cast.control(_amp.id, 'next');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(nest.opdrachten.where((o) => o.startsWith('open')), isEmpty, reason: 'niet opnieuw laden: hij gaat zelf');
+      // Even later speelt hij Een, uit zijn eigen rij: de volgende ronde ziet dat en zet alleen Twee klaar.
+      nest.uri = 'http://pc/stream/${ids[1]}.flac';
+      nest.plek = const Duration(milliseconds: 300);
+      cast.volgRondeVoorToets();
+      await _tot(() => nest.opdrachten.contains('volgende Twee'));
+      expect(nest.opdrachten, ['volgende Twee']);
+    });
+
     test('iets hierna bij de Sonos: ook op de Nest staat dan het juiste volgende klaar', () async {
       await cast.play(_amp.id, [ids[0], ids[1]], 0, alsZone: true);
       await cast.groepeer(_amp.id, [_kantoor.id]);
