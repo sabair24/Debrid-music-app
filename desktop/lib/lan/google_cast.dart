@@ -620,6 +620,17 @@ class CastBediening extends UpnpControlPoint {
           Duration? duration}) =>
       kanaal(renderer).laad(url, mime: mime, metadata: _metadata(title, artist, album, artUrl));
 
+  /// Zoals [playUrl], maar meteen vanaf [vanaf]: voor een volger die instapt in een nummer dat de leider al speelt.
+  Future<void> playUrlVanaf(Renderer renderer, String url,
+          {required String title,
+          required String artist,
+          required String album,
+          required String mime,
+          String? artUrl,
+          required Duration vanaf}) =>
+      kanaal(renderer)
+          .laad(url, mime: mime, metadata: _metadata(title, artist, album, artUrl), vanaf: vanaf.inMilliseconds / 1000);
+
   Map<String, dynamic> _metadata(String title, String artist, String album, String? artUrl) => {
         // 3 = een muzieknummer: dan toont Google Home titel, artiest en plaat.
         'metadataType': 3,

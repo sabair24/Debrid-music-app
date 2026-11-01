@@ -94,6 +94,22 @@ enum VolgStap { niets, pauze, verder, spoel }
   return (stap: VolgStap.spoel, doelMs: naar < 0 ? 0 : naar);
 }
 
+/// Waar de volger een nummer begint dat de leider al speelt (ms): op de plek van de leider plus de schuif en de
+/// voorsprong, zodat hij er niet vanaf 0 achteraan hobbelt. 0 als de leider niet speelt, of een ander nummer.
+///
+/// Gezien 01-11-2026 (3.9.696): Hal bleef aan het eind van een omgezet nummer hangen, de pc laadde het volgende na 2 s
+/// opnieuw — vanaf 0, terwijl Kantoor al op 2,3 s zat — en pas 3 s later zette het bijzetten hem gelijk.
+int volgerBegintOp({
+  required ({String trackId, bool speelt, int positieMs})? leider,
+  required String trackId,
+  required int vertragingMs,
+  required int voorsprongMs,
+}) {
+  if (leider == null || !leider.speelt || leider.trackId != trackId) return 0;
+  final op = leider.positieMs + vertragingMs + voorsprongMs;
+  return op < 1000 ? 0 : op;
+}
+
 /// De voorsprong na een keer spoelen: liep de volger daarna [foutMs] voor (positief) of achter (negatief), dan de
 /// volgende keer zoveel minder of meer.
 int leerVoorsprong(int voorsprongMs, int foutMs) => (voorsprongMs - foutMs).clamp(-kVoorsprongMax, kVoorsprongMax);
