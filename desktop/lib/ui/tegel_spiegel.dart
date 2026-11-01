@@ -5,15 +5,15 @@
 /// proefbord: variant B, 22 % van de hoes, van 20 % naar niets, een diepere schaduw ([kSchaduwTegel]),
 /// en de titel staat gewoon óver de spiegeling.
 ///
-/// **Getekend uit de hoes zelf, in stroken.** Onder de grote hoes op Nu speelt doet `HoesSpiegel`
+/// **Getekend uit de hoes zelf.** Onder de grote hoes op Nu speelt doet `HoesSpiegel`
 /// (ui/kantel_hoes.dart) het met een `ShaderMask`: een eigen laag die in elk beeld opnieuw gemengd
 /// wordt. Daar staat er één; in een raster staan er zestien tot dertig tegelijk te scrollen, en Impeller
 /// bewaart zo'n laag niet tussen twee beelden. De eerste versie bakte daarom per hoes een klein beeld
 /// (`toImageSync`): op de pc (Skia) kost elk gebakken beeld een eigen doel op de videokaart, en bij het
 /// scrollen door Albums kwam een hele rij nieuwe tegels in één beeld binnen — rasteren tot 43 ms
 /// (warmte.log, 19-10-2026). Nu tekent elke spiegeling de omgekeerde hoes rechtstreeks, als
-/// [ImageShader], in [kTegelSpiegelStroken] stroken die elk wat doorzichtiger zijn. Geen laag, geen
-/// masker, geen eigen beeld: alleen een handvol vlakjes uit een textuur die er al is.
+/// [ImageShader], met de dekking per hoekpunt (één `drawVertices`; tot 01-11-2026 in stroken, die strepen gaven — zie
+/// [tekenSpiegel]). Geen laag, geen masker, geen eigen beeld: één tekenopdracht uit een textuur die er al is.
 ///
 /// **Geen tweede decodering.** De hoes is al gedecodeerd door `cover`/`_netCover`, met
 /// `cacheWidth: decodeWidth(maat)`. Hier wordt precies dezelfde [ResizeImage] opgevraagd, dus komt het
@@ -40,13 +40,6 @@ const double kTegelSpiegelAfstand = 4;
 const double kTegelSpiegelDekking = .2;
 const double _kTegelSpiegelTot = .92;
 
-/// In hoeveel stroken het verloop loopt: één per [_kStrookHoogte] punten, tussen [kTegelSpiegelStroken]
-/// en 32. Onder een tegel (30 punten hoog) zijn dat er 11, treden van 2 % dekking; onder de grote hoes
-/// van Nu speelt (70 punten en meer) 24 of meer, anders werd elke trede 7 punten breed en zichtbaar.
-const int kTegelSpiegelStroken = 10;
-const double _kStrookHoogte = 3;
-int spiegelStroken(double hoogte) => (hoogte / _kStrookHoogte).ceil().clamp(kTegelSpiegelStroken, 32);
-
 /// De bron voor de spiegeling van een hoes uit je eigen bibliotheek (de bytes die `cover` tekent).
 ImageProvider? spiegelVan(Uint8List? hoes) => hoes == null ? null : MemoryImage(hoes);
 
@@ -57,7 +50,16 @@ ImageProvider? spiegelVanUrl(String? url) => url == null || url.isEmpty ? null :
 /// [hoogte] hoog dat vlak onder de hoes ligt: de onderrand van de hoes bovenaan, omgekeerd, van
 /// [kTegelSpiegelDekking] naar niets. Bijgesneden zoals `BoxFit.cover` de hoes zelf bijsnijdt; [hoek] is
 /// de afronding van de hoes.
-void tekenSpiegel(Canvas c, ui.Image hoes, {required double maat, required double hoogte, double hoek = 0}) {
+///
+/// **Een glad verloop, geen treden (Saber, 01-11-2026: "zit er in de reflectie altijd lijk strepen in").** Hier stonden
+/// tien tot tweeëndertig stroken van elk één dekking: gemeten (test/spiegel_zonder_strepen_test.dart) onder de grote hoes op de
+/// gsm treden van 8 à 9 pixelrijen met sprongen van 2 à 3 op 255 (50, 48, 45, 42 …), onder een tegel op de pc sprongen
+/// van 5 — op een lichte achtergrond elke trede een streep. Nu:
+/// * [gebakken] (één keer, [bakSpiegel]): de omgekeerde hoes in een laag, met een echt verloop als masker erover;
+/// * anders (elk beeld, de tegels op pc, gsm en tv): één [Canvas.drawVertices] met de dekking per hoekpunt, die de
+///   videokaart over elke pixelrij verloopt. Eén tekenopdracht in plaats van tien tot tweeëndertig, en geen laag.
+void tekenSpiegel(Canvas c, ui.Image hoes,
+    {required double maat, required double hoogte, double hoek = 0, bool gebakken = false}) {
   final bronMaat = Size(hoes.width.toDouble(), hoes.height.toDouble());
   final pas = applyBoxFit(BoxFit.cover, bronMaat, Size(maat, maat));
   final uit = Alignment.center.inscribe(pas.source, Offset.zero & bronMaat);
@@ -71,16 +73,28 @@ void tekenSpiegel(Canvas c, ui.Image hoes, {required double maat, required doubl
   if (hoek > 0) {
     c.clipRRect(RRect.fromRectAndCorners(vlak, topLeft: Radius.circular(hoek), topRight: Radius.circular(hoek)));
   }
-  final stroken = spiegelStroken(hoogte);
-  for (var i = 0; i < stroken; i++) {
-    final boven = hoogte * i / stroken, onder = hoogte * (i + 1) / stroken;
-    final dekking = kTegelSpiegelDekking * (1 - (boven + onder) / 2 / (hoogte * _kTegelSpiegelTot)).clamp(0.0, 1.0);
-    if (dekking <= 0) break;
-    // Met een shader telt van de kleur alleen de dekking: die maakt de strook doorzichtiger.
-    c.drawRect(Rect.fromLTRB(0, boven, maat, onder),
+  // Van [kTegelSpiegelDekking] bovenaan naar niets op [_kTegelSpiegelTot] van de hoogte; daaronder niets.
+  final tot = hoogte * _kTegelSpiegelTot;
+  const boven = Color.fromRGBO(255, 255, 255, kTegelSpiegelDekking), onder = Color(0x00FFFFFF);
+  if (gebakken) {
+    c.saveLayer(vlak, Paint());
+    c.drawRect(vlak, Paint()..shader = beeld);
+    // Het masker ruimer dan het vlak: de laag is op de pixel afgerond groter, en een rij die het masker maar half
+    // bedekt, liet de hoes erdoor — gemeten: de laatste rij op 41 van 255 (de oude "streep onderaan", 19-10-2026).
+    c.drawRect(
+        vlak.inflate(1),
         Paint()
-          ..shader = beeld
-          ..color = Color.fromRGBO(0, 0, 0, dekking));
+          ..blendMode = BlendMode.dstIn
+          ..shader = ui.Gradient.linear(Offset.zero, Offset(0, tot), const [boven, onder]));
+    c.restore();
+  } else {
+    // modulate: de kleur van de hoes keer die van het hoekpunt — wit met de dekking, dus alleen doorzichtiger.
+    final hoeken = ui.Vertices(
+      VertexMode.triangles,
+      [Offset.zero, Offset(maat, 0), Offset(0, tot), Offset(maat, 0), Offset(maat, tot), Offset(0, tot)],
+      colors: const [boven, boven, onder, boven, onder, onder],
+    );
+    c.drawVertices(hoeken, BlendMode.modulate, Paint()..shader = beeld);
   }
   c.restore();
 }
@@ -229,7 +243,7 @@ ui.Image bakSpiegel(ui.Image hoes, {required double maat, double hoek = 0, doubl
   final hoogte = maat * kTegelSpiegelHoogte;
   final opname = ui.PictureRecorder();
   final c = Canvas(opname)..scale(dpr);
-  tekenSpiegel(c, hoes, maat: maat, hoogte: hoogte, hoek: hoek);
+  tekenSpiegel(c, hoes, maat: maat, hoogte: hoogte, hoek: hoek, gebakken: true);
   final plaat = opname.endRecording();
   try {
     return plaat.toImageSync((maat * dpr).ceil().clamp(1, 8192), (hoogte * dpr).ceil().clamp(1, 8192));

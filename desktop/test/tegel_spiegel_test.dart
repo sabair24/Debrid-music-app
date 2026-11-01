@@ -91,9 +91,9 @@ void main() {
       expect(a(y), 0, reason: 'rij $y: de onderrand van het vak tekent niets');
     }
     for (var y = 1; y < 64; y++) {
-      expect((a(y) - a(y - 1)).abs(), lessThanOrEqualTo(3), reason: 'rij $y: geen zichtbare trede');
+      // 2 en niet 3: met 3 kwamen de treden van de stroken erdoor, die Saber als strepen zag (01-11-2026).
+      expect((a(y) - a(y - 1)).abs(), lessThanOrEqualTo(2), reason: 'rij $y: geen zichtbare trede');
     }
-    expect(spiegelStroken(70), greaterThanOrEqualTo(24));
   });
 
   test('de grote hoes gebruikt dezelfde stroken, maar gebakken; geen ShaderMask', () {
@@ -104,7 +104,7 @@ void main() {
     expect(lijf, isNot(contains('ShaderMask(')));
   });
 
-  test('gebakken: precies wat de stroken tekenen, op schermresolutie', () async {
+  test('gebakken: hetzelfde als rechtstreeks getekend, op schermresolutie', () async {
     final rood = ui.PictureRecorder();
     final c = Canvas(rood);
     c.drawRect(const Rect.fromLTWH(0, 0, 40, 20), Paint()..color = const Color(0xFFFF0000));
@@ -118,7 +118,14 @@ void main() {
     final direct = los.endRecording().toImageSync(gebakken.width, gebakken.height);
     final a = (await gebakken.toByteData())!.buffer.asUint8List();
     final b = (await direct.toByteData())!.buffer.asUint8List();
-    expect(a, b, reason: 'hetzelfde beeld, alleen één keer getekend');
+    // Gebakken met een masker in een laag, rechtstreeks met de dekking per hoekpunt: op de afronding na hetzelfde.
+    expect(a.length, b.length);
+    var verschil = 0;
+    for (var i = 0; i < a.length; i++) {
+      final d = (a[i] - b[i]).abs();
+      if (d > verschil) verschil = d;
+    }
+    expect(verschil, lessThanOrEqualTo(3), reason: 'hetzelfde beeld, alleen één keer getekend');
     expect(a.any((x) => x != 0), isTrue, reason: 'anders bewijst dit niets');
   });
 
@@ -225,11 +232,10 @@ void main() {
       expect(s, findsNWidgets(3));
       expect(PaintingBinding.instance.imageCache.currentSize, 1, reason: 'de spiegeling decodeert niets extra');
       final ro = t.renderObject(s.first);
-      // Negen vlakjes uit de textuur van de hoes (de tiende ligt voorbij 92 %, daar is niets meer), binnen
-      // één afgeronde knip. Geen saveLayer: die zou in elk beeld van elke tegel een eigen laag mengen.
-      final n = spiegelStroken(140 * kTegelSpiegelHoogte);
-      final zichtbaar = [for (var i = 0; i < n; i++) if ((i + .5) / n < .92) i].length;
-      expect(ro, paintsExactlyCountTimes(#drawRect, zichtbaar));
+      // Eén tekenopdracht met de dekking per hoekpunt (niet meer de stroken, die strepen gaven), binnen één
+      // afgeronde knip. Geen saveLayer: die zou in elk beeld van elke tegel een eigen laag mengen.
+      expect(ro, paintsExactlyCountTimes(#drawVertices, 1));
+      expect(ro, paintsExactlyCountTimes(#drawRect, 0));
       expect(ro, paintsExactlyCountTimes(#saveLayer, 0));
       expect(ro, paintsExactlyCountTimes(#clipRRect, 1));
     });

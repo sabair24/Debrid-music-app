@@ -537,11 +537,11 @@ const double kSpiegelAfstand = 6;
 /// omgekeerd, van 20 % naar niets. Alleen de voorkant: een cd die draait wordt niet gespiegeld (dat
 /// zou hem twee keer per beeld laten tekenen).
 ///
-/// **Getekend zoals onder de tegels ([TegelSpiegel]), in stroken.** Hier stond een `ShaderMask` met
+/// **Getekend zoals onder de tegels ([TegelSpiegel]).** Hier stond een `ShaderMask` met
 /// een verloop over het hele vak, en onderaan bleef een harde streep staan: de laag van het masker is
 /// op de pixel afgerond groter dan het verloop, en die laatste rij hoes kreeg geen masker (Saber, gsm,
-/// 19-10-2026: "die streep mag er niet zijn, moet mooi overvloeien zonder brute stop"). De stroken
-/// zijn op 92 % van de hoogte al niets, dus de onderrand van het vak tekent nooit iets.
+/// 19-10-2026: "die streep mag er niet zijn, moet mooi overvloeien zonder brute stop"). Het verloop
+/// is op 92 % van de hoogte al niets, dus de onderrand van het vak tekent nooit iets.
 class HoesSpiegel extends StatelessWidget {
   const HoesSpiegel({super.key, required this.beeld, required this.maat});
 
