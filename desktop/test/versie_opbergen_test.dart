@@ -374,6 +374,20 @@ void main() {
       expect(versies.speelVersie(anker), isNull, reason: 'geen vinyl meer: de cd speelt');
     });
 
+    test('een cd draagt geen plaatpersing: "CD · LP 1978" (de nep-vinyl van Destiny) wordt "CD", ook wat er al zo stond',
+        () async {
+      zetSoort(anker, Kopiesoort.studio);
+      final cd = versie('Spice (cd)', Kopiesoort.cd, 'LP 1978', hz: 44100, bits: 16, sec: 199, sinds: 1,
+          ankerSoort: Kopiesoort.studio);
+      await eenPerSoort(dubbel: dubbel());
+      expect(versies.versie(cd)?.soort, Kopiesoort.cd);
+      expect(versies.versie(cd)?.persing, '');
+      expect(persingVoorSoort(Kopiesoort.cd, '12" 1986'), '');
+      expect(persingVoorSoort(Kopiesoort.cd, '2LP 1978 PBTHAL'), 'PBTHAL');
+      expect(persingVoorSoort(Kopiesoort.cd, 'Japan 1990'), 'Japan 1990', reason: 'een cd-persing blijft');
+      expect(persingVoorSoort(Kopiesoort.vinyl, 'LP 1978'), 'LP 1978');
+    });
+
     test('een echte plaat met gedempte stiltes draait niet precies even snel: blijft vinyl', () async {
       zetSoort(anker, Kopiesoort.cd);
       versie('Spice (vinyl)', Kopiesoort.vinyl, 'LP 2001', hz: 44100, bits: 16, sec: 203, sinds: 1);
