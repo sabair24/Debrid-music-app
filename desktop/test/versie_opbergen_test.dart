@@ -9,7 +9,7 @@ import 'package:debridmusic/flac_tags.dart' show readFlacTags;
 import 'package:debridmusic/organize.dart' show readTags, writeTagFields;
 import 'package:debridmusic/versie_opbergen.dart';
 import 'package:debridmusic/versies.dart';
-import 'package:debridmusic/vinylspoor.dart' show stilteVan;
+import 'package:debridmusic/vinylspoor.dart' show stilteVan, uitlijningVan;
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een kleine maar echte FLAC: STREAMINFO met [hz], [bits] en [sec] seconden, de tags, en wat "audio" ([vulling] maakt
@@ -345,6 +345,88 @@ void main() {
       expect(File(studio).existsSync(), isFalse);
       expect(Directory(File(studio).parent.path).existsSync(), isFalse);
       expect(inDubbel(), hasLength(1), reason: 'de andere in _dubbel, niet gewist');
+    });
+
+    test('DE KERN (andersom): een "vinyl" die je cd is — even snel, even stil — telt als cd en gaat als dubbel weg', () async {
+      // Trip on This, 01-11-2026: "US 12'' Vinyl LP Compilation", 0 ppm en −200 dB. Saber: "Geen vinyl, als dubbel weg".
+      // En hij koos zelf vinyl voor de plaat: die keuze blijft, en tot er een echte plaat is speelt de cd.
+      zetSoort(anker, Kopiesoort.cd);
+      final vinyl = versie('Spice (vinyl)', Kopiesoort.vinyl, 'LP 1990', hz: 44100, bits: 16, sec: 199, sinds: 1);
+      versies.kies(anker, versieSleutel(Kopiesoort.vinyl, 'LP 1990'), bereik: VersieBereik.plaat);
+      final gevraagd = <String>[];
+      final regels = <String>[];
+      final r = await eenPerSoort(
+          dubbel: dubbel(),
+          log: regels.add,
+          stilte: (p) async => (stilste: -200.0, seconden: 200.0),
+          uitlijning: (cd, p) async {
+            gevraagd.add('$cd > $p');
+            return (snelheid: 1.0, hoe: 'twee metingen');
+          });
+      expect(r.nepVinyl, 1);
+      expect(gevraagd, ['$anker > $vinyl'], reason: 'tegen je cd gemeten');
+      expect(versies.versiesVan(anker), isEmpty);
+      expect(inDubbel(), hasLength(1), reason: 'in _dubbel, niet gewist');
+      expect(File(anker).existsSync(), isTrue);
+      expect(soortVoor(anker)?.soort, Kopiesoort.cd);
+      expect(regels.first, contains('noemt zich vinyl, maar is digitaal'));
+      expect(versies.keuzeVoor(anker), versieSleutel(Kopiesoort.vinyl, 'LP 1990'), reason: 'jouw keuze blijft staan');
+      expect(versies.speelVersie(anker), isNull, reason: 'geen vinyl meer: de cd speelt');
+    });
+
+    test('een echte plaat met gedempte stiltes draait niet precies even snel: blijft vinyl', () async {
+      zetSoort(anker, Kopiesoort.cd);
+      versie('Spice (vinyl)', Kopiesoort.vinyl, 'LP 2001', hz: 44100, bits: 16, sec: 203, sinds: 1);
+      final r = await eenPerSoort(
+          dubbel: dubbel(),
+          stilte: (p) async => (stilste: -200.0, seconden: 200.0),
+          uitlijning: (cd, p) async => (snelheid: 1.000231, hoe: 'twee metingen'));
+      expect(r.nepVinyl, 0);
+      expect(versies.versiesVan(anker).single.soort, Kopiesoort.vinyl);
+      expect(inDubbel(), isEmpty);
+    });
+
+    test('al uitgelijnd op een andere snelheid, of groefruis: niet opnieuw gemeten', () async {
+      zetSoort(anker, Kopiesoort.cd);
+      final a = versie('Spice (vinyl)', Kopiesoort.vinyl, 'LP 2001', hz: 44100, bits: 16, sec: 203, sinds: 1);
+      versies.zetUitlijning(a, verschuivingMs: 1800, snelheid: 1.000231);
+      final gevraagd = <String>[];
+      await eenPerSoort(
+          dubbel: dubbel(),
+          stilte: (p) async => (stilste: -200.0, seconden: 200.0),
+          uitlijning: (cd, p) async {
+            gevraagd.add(p);
+            return (snelheid: 1.0, hoe: 'twee metingen');
+          });
+      expect(gevraagd, isEmpty, reason: 'een plaat: hij draaide al niet even snel');
+      versies.zetUitlijning(a, verschuivingMs: 1800, snelheid: 1.0);
+      await eenPerSoort(
+          dubbel: dubbel(),
+          stilte: (p) async => (stilste: p == anker ? -200.0 : -58.0, seconden: 200.0),
+          uitlijning: (cd, p) async {
+            gevraagd.add(p);
+            return (snelheid: 1.0, hoe: 'twee metingen');
+          });
+      expect(gevraagd, isEmpty, reason: 'groefruis: dan is hij het wel');
+      expect(versies.versiesVan(anker).single.soort, Kopiesoort.vinyl);
+    });
+
+    test('bij binnenkomst: een "vinyl" die digitaal is, wordt als cd genoteerd — en is dan geen nieuwe versie', () async {
+      zetSoort(anker, Kopiesoort.cd);
+      final binnen = schrijf('${root.path}$sep${'_keuring'}${sep}t${sep}01.flac',
+          _flac(hz: 44100, bits: 16, sec: 199, tags: {'TITLE': 'Wannabe', 'ARTIST': 'Spice Girls'}));
+      stilteVan = (p) async => (stilste: -200.0, seconden: 200.0);
+      addTearDown(() => stilteVan = null);
+      const bron = r"@@ymwkw\Muzika\1990 - Trip On This - US 12'' Vinyl LP Compilation\(01) - Wannabe.flac";
+      expect(versieplanVoor(binnen, anker, bron).soort, Kopiesoort.vinyl, reason: 'zijn pad zegt vinyl');
+      expect(await merkVinylspoor(binnen.path, anker, bron), isFalse, reason: 'zonder uitlijner: geen oordeel');
+      uitlijningVan = (cd, p) async => (snelheid: 1.0, hoe: 'twee metingen');
+      addTearDown(() => uitlijningVan = null);
+      final regels = <String>[];
+      expect(await merkVinylspoor(binnen.path, anker, bron, log: regels.add), isTrue);
+      expect(versieplanVoor(binnen, anker, bron).soort, Kopiesoort.cd);
+      expect(versieplanVoor(binnen, anker, bron).besluit, isNot(Versiebesluit.nieuweVersie));
+      expect(regels.single, contains('noemt zich vinyl, maar is digitaal'));
     });
 
     test('zonder stille cd geen vinylspoor', () async {

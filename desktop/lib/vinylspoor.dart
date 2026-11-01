@@ -49,6 +49,31 @@ bool klinktAlsVinyl(Stilte kandidaat, Stilte digitaal) =>
 /// geen vinylspoor, zoals in een toets of op een toestel.
 Future<Stilte?> Function(String pad)? stilteVan;
 
+/// Zoveel mag een "vinyl" in snelheid van je cd afwijken en toch digitaal heten (als fractie: 10 ppm). De uitlijner
+/// (versie_uitlijner.dart) meet op de milliseconde op twee plekken die drie vijfde van het nummer uit elkaar liggen: over
+/// drie minuten is 1 ms ruim 5 ppm. Een draaitafel komt daar niet: gemeten tot 231 ppm (Burning Heart), en ook een
+/// kwartsdraaitafel met de klok van een geluidskaart ernaast wijkt tientallen ppm af.
+const double kSnelheidGelijk = 1e-5;
+
+/// Hoe een kopie tegen je cd uitlijnt: de snelheid, en hoe dat gemeten is ('twee metingen', 'één meting', …).
+typedef Uitlijning = ({double snelheid, String hoe});
+
+/// Wie dat meet ([meetUitlijning] in versie_uitlijner.dart); null tot de pc hem zet (main.dart).
+Future<Uitlijning?> Function(String digitaal, String kandidaat)? uitlijningVan;
+
+/// Is [kandidaat], die zich vinyl noemt, een digitale kopie? Hij wordt digitaal stil, net als je cd ([digitaal]), en hij
+/// draait precies even snel ([uitlijning], uit twee metingen).
+///
+/// Gemeten 01-11-2026 op Technotronic "Trip on This (The Remixes)" (Soulseek, map "US 12'' Vinyl LP Compilation"): alle
+/// acht "vinyl"-nummers 0 ppm tegen de cd en −200 dB stil; zeven waren na aftrekken je cd (−72 tot −82 dB, allemaal 0,07 dB
+/// harder), één een luidere digitale master. Alleen de stilte is niet genoeg: 5 van de 18 vinylrips hadden gedempte
+/// stiltes. Saber: *"Geen vinyl, als dubbel weg"* — dan telt hij als cd, en beslist de keuring tegen de jouwe.
+bool isDigitaleVinyl(Stilte kandidaat, Stilte digitaal, Uitlijning uitlijning) =>
+    digitaal.stilste < kDigitaalStil &&
+    kandidaat.stilste < kDigitaalStil &&
+    uitlijning.hoe == 'twee metingen' &&
+    (uitlijning.snelheid - 1).abs() <= kSnelheidGelijk;
+
 /// Het laagste niveau uit het logboek van ffmpeg (`ametadata=mode=print`), of null als er geen meting in staat.
 @visibleForTesting
 double? stilsteUitLog(String log) {

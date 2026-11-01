@@ -245,18 +245,30 @@ String? digitaleReferentie(String anker) {
 
 /// Het vinylspoor bij binnenkomst ([klinktAlsVinyl]): is [kandidaat] studio volgens pad ([bronpad]) en tags, maar houdt
 /// hij groefruis waar je cd van [anker] stil wordt, dan wordt hij als vinyl genoteerd — [versieplanVoor] neemt dat over.
-/// Waar als het zo is. Zonder meter ([stilteVan]) of zonder cd: niets.
+/// En andersom ([isDigitaleVinyl]): noemt hij zich vinyl maar is hij digitaal, dan wordt hij als cd genoteerd. Waar als
+/// de soort zo veranderde. Zonder meter ([stilteVan], voor vinyl ook [uitlijningVan]) of zonder cd: niets.
 Future<bool> merkVinylspoor(String kandidaat, String anker, String bronpad, {void Function(String regel)? log}) async {
   final meet = stilteVan;
   if (meet == null) return false;
   final soort = soortVoor(kandidaat)?.soort ?? soortVanBestand(kandidaat, bronpad, metMeter: false);
-  if (soort != Kopiesoort.studio) return false;
+  final lijn = uitlijningVan;
+  if (soort != Kopiesoort.studio && (soort != Kopiesoort.vinyl || lijn == null)) return false;
   final cd = digitaleReferentie(anker);
   if (cd == null) return false;
   final ref = await meet(cd);
   if (ref == null || ref.stilste >= kDigitaalStil) return false;
   final k = await meet(kandidaat);
-  if (k == null || !klinktAlsVinyl(k, ref)) return false;
+  if (k == null) return false;
+  if (soort == Kopiesoort.vinyl) {
+    if (k.stilste >= kDigitaalStil) return false;
+    final u = await lijn!(cd, kandidaat);
+    if (u == null || !isDigitaleVinyl(k, ref, u)) return false;
+    zetSoort(kandidaat, Kopiesoort.cd);
+    log?.call('   noemt zich vinyl, maar is digitaal: precies even snel als je cd en stil op '
+        '${k.stilste.toStringAsFixed(0)} dB — telt als cd');
+    return true;
+  }
+  if (!klinktAlsVinyl(k, ref)) return false;
   zetSoort(kandidaat, Kopiesoort.vinyl);
   log?.call('   klinkt als vinyl: groefruis op ${k.stilste.toStringAsFixed(0)} dB waar je cd stil wordt '
       '(${ref.stilste.toStringAsFixed(0)} dB) — telt als vinyl');
@@ -494,6 +506,7 @@ typedef Soortopruiming = ({
   int nultoets,
   int kopiebewijs,
   int nep,
+  int nepVinyl,
 });
 
 /// Per nummer hoogstens één kopie van elke soort: studio, cd en vinyl (Saber, 27-10-2026, bij Discovery met negen
@@ -519,10 +532,12 @@ Future<Soortopruiming> eenPerSoort(
     {required String dubbel,
     bool Function(String pad)? inGebruik,
     void Function(String regel)? log,
-    Future<Stilte?> Function(String pad)? stilte}) async {
+    Future<Stilte?> Function(String pad)? stilte,
+    Future<Uitlijning?> Function(String digitaal, String kandidaat)? uitlijning}) async {
   var naarDubbel = 0, tweelingen = 0, vinylspoor = 0, verhuisd = 0, albumnaam = 0, overgeslagen = 0, nultoets = 0;
-  var kopiebewijzen = 0, nep = 0;
+  var kopiebewijzen = 0, nep = 0, nepVinyl = 0;
   final meet = stilte ?? stilteVan;
+  final lijn = uitlijning ?? uitlijningVan;
   final sep = Platform.pathSeparator;
   for (final g in versies.groepen.toList()) {
     final anker = g.anker;
@@ -571,6 +586,32 @@ Future<Soortopruiming> eenPerSoort(
         vinylspoor++;
         log?.call('"$naam": ${p == anker ? 'het nummer' : 'je studio-versie'} klinkt als vinyl — groefruis op '
             '${k.stilste.toStringAsFixed(0)} dB waar je cd stil wordt (${ref.stilste.toStringAsFixed(0)} dB): nu vinyl');
+      }
+    }
+    // Andersom: een "vinyl" die digitaal stil wordt en precies even snel draait als je cd, is een digitale kopie
+    // ([isDigitaleVinyl]; Trip on This, 01-11-2026). Dan telt hij als cd, en beslist de keuring tegen je cd (één per soort).
+    if (cd != null && meet != null && lijn != null && ref != null && ref.stilste < kDigitaalStil) {
+      final vinyls = [
+        if (ankerSoort == Kopiesoort.vinyl) anker,
+        for (final v in lijst)
+          if (soortVan[v.pad] == Kopiesoort.vinyl) v.pad,
+      ];
+      for (final p in vinyls) {
+        // Wat de uitlijner al mat (versies.json) en niet 1 is, is een plaat: niet elke start opnieuw meten.
+        final al = lijst.where((v) => v.pad == p).firstOrNull?.snelheid;
+        if (al != null && (al - 1).abs() > kSnelheidGelijk) continue;
+        final k = await meet(p);
+        if (k == null || k.stilste >= kDigitaalStil) continue;
+        final u = await lijn(cd, p);
+        if (u == null || !isDigitaleVinyl(k, ref, u)) continue;
+        if (p == anker) {
+          ankerSoort = Kopiesoort.cd;
+        } else {
+          soortVan[p] = Kopiesoort.cd;
+        }
+        nepVinyl++;
+        log?.call('"$naam": ${p == anker ? 'het nummer' : 'je vinyl-versie'} noemt zich vinyl, maar is digitaal — '
+            'precies even snel als je cd en stil op ${k.stilste.toStringAsFixed(0)} dB: telt als cd');
       }
     }
     // De nultoets (nultoets.dart): waar de diepte tussen het nummer en een versie, of tussen twee versies, zou beslissen.
@@ -782,5 +823,6 @@ Future<Soortopruiming> eenPerSoort(
     nultoets: nultoets,
     kopiebewijs: kopiebewijzen,
     nep: nep,
+    nepVinyl: nepVinyl,
   );
 }

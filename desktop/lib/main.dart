@@ -211,10 +211,10 @@ import 'twijfel.dart';
 import 'kopiesoort.dart';
 import 'versies.dart';
 import 'versie_acties.dart';
-import 'versie_uitlijner.dart' show VersieUitlijnRonde;
+import 'versie_uitlijner.dart' show VersieUitlijnRonde, meetUitlijning;
 import 'nultoets_meter.dart' show Nultoetser, laadNultoetsen, meetNultoets;
 import 'versie_opbergen.dart' show eenPerSoort;
-import 'vinylspoor.dart' show Stiltemeter, stilteVan;
+import 'vinylspoor.dart' show Stiltemeter, stilteVan, uitlijningVan;
 import 'versie_terugzetter.dart';
 import 'soortjacht.dart' show Soortvragen, gezochtVoor, soortvraagUitgave;
 import 'lan/vaste_naam.dart' show kPcHost;
@@ -2721,6 +2721,11 @@ Future<void> main() async {
       // minuten, vóór de terugzetter — wat hier naar _dubbel gaat, ziet die als dezelfde soort, en laat hij staan.
       // Het vinylspoor (vinylspoor.dart): wat het stilste moment van een bestand is, onthouden in vinylspoor.json.
       stilteVan = Stiltemeter(bestand: '$appDir${Platform.pathSeparator}vinylspoor.json').meet;
+      // En andersom: een "vinyl" die precies even snel draait als je cd, is digitaal (Trip on This, 01-11-2026).
+      uitlijningVan = (digitaal, kandidaat) async {
+        final u = await meetUitlijning(digitaal, kandidaat);
+        return u == null ? null : (snelheid: u.snelheid, hoe: u.hoe);
+      };
       Timer(const Duration(minutes: 3), () {
         unawaited(() async {
           try {
@@ -2731,7 +2736,7 @@ Future<void> main() async {
             downloads.logRegel('één per soort: ${r.naarDubbel} kopieën naar _dubbel (${r.tweelingen} tweelingen, '
                 '${r.nultoets} door de nultoets als je cd herkend, ${r.nep} nep naast een echte kopie; '
                 '${r.kopiebewijs} muren door een andere kopie bewezen), '
-                '${r.vinylspoor} klonken als vinyl, '
+                '${r.vinylspoor} klonken als vinyl, ${r.nepVinyl} "vinyl" bleek digitaal, '
                 '${r.verhuisd} naar de map van hun soort, ${r.albumnaam} albumnamen rechtgezet${r.overgeslagen > 0 ? ', ${r.overgeslagen} nummers wachten (ze speelden)' : ''}');
             if (r.naarDubbel + r.verhuisd + r.albumnaam > 0) await library.scan();
           } catch (e) {
