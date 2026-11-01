@@ -38,6 +38,27 @@ void main() {
     });
   });
 
+  group('andersom: een "vinyl" die digitaal is (Trip on This, 01-11-2026)', () {
+    const cd = (stilste: -200.0, seconden: 335.3);
+    test('DE KERN: digitaal stil en precies even snel als je cd (twee metingen) — geen plaat', () {
+      // Alle acht "vinyl"-nummers van de Soulseek-map "US 12'' Vinyl LP Compilation": 0 ppm en −200 dB.
+      expect(isDigitaleVinyl((stilste: -200.0, seconden: 335.3), cd, (snelheid: 1.0, hoe: 'twee metingen')), isTrue);
+      expect(isDigitaleVinyl((stilste: -200.0, seconden: 335.3), cd, (snelheid: 1.000006, hoe: 'twee metingen')), isTrue,
+          reason: '6 ppm: binnen één milliseconde over drie minuten');
+    });
+    test('een echte plaat met gedempte stiltes draait niet precies even snel: blijft vinyl', () {
+      expect(isDigitaleVinyl((stilste: -200.0, seconden: 335.3), cd, (snelheid: 1.000231, hoe: 'twee metingen')), isFalse,
+          reason: 'Burning Heart: 231 ppm');
+      expect(isDigitaleVinyl((stilste: -200.0, seconden: 335.3), cd, (snelheid: 0.99996, hoe: 'twee metingen')), isFalse);
+    });
+    test('groefruis, of maar één meting, of een cd die zelf niet stil wordt: geen oordeel', () {
+      expect(isDigitaleVinyl((stilste: -58.0, seconden: 335.3), cd, (snelheid: 1.0, hoe: 'twee metingen')), isFalse);
+      expect(isDigitaleVinyl((stilste: -200.0, seconden: 40.0), cd, (snelheid: 1.0, hoe: 'één meting')), isFalse);
+      expect(isDigitaleVinyl((stilste: -200.0, seconden: 335.3), (stilste: -51.6, seconden: 335.3),
+          (snelheid: 1.0, hoe: 'twee metingen')), isFalse);
+    });
+  });
+
   test('het logboek van ffmpeg lezen: het laagste niveau, digitale stilte als −200', () {
     const log = '[Parsed_ametadata_2 @ 0x1] lavfi.astats.Overall.RMS_level=-31.902505\n'
         '[Parsed_ametadata_2 @ 0x1] lavfi.astats.Overall.RMS_level=-62.5\n'
@@ -66,5 +87,6 @@ void main() {
     expect(bron('lib/versie_terugzetter.dart'), contains('      await merkVinylspoor(f.path, anker, f.uri.pathSegments.last);'));
     expect(bron('lib/main.dart'),
         contains(r"      stilteVan = Stiltemeter(bestand: '$appDir${Platform.pathSeparator}vinylspoor.json').meet;"));
+    expect(bron('lib/main.dart'), contains('        final u = await meetUitlijning(digitaal, kandidaat);\n'));
   });
 }
