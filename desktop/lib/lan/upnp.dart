@@ -38,7 +38,11 @@ class Renderer {
   /// before it is sent, instead of the music simply not playing.
   bool get isSonos => manufacturer.toLowerCase().contains('sonos');
 
-  int get maxSampleRate => isSonos ? 48000 : 0; // 0 = no known ceiling
+  /// Een Nest Mini (of een groep uit Google Home) via Google Cast, zie google_cast.dart.
+  bool get isCast => avTransportUrl.startsWith('cast://');
+
+  // Een Cast-speaker tot 96 kHz (Saber, 01-11-2026: "origineel tot 24/96"): daarboven zet de pc om.
+  int get maxSampleRate => isSonos ? 48000 : (isCast ? 96000 : 0); // 0 = no known ceiling
 
   /// Het plafond op de BITDIEPTE, en dat is een andere as dan [maxSampleRate].
   ///
@@ -64,7 +68,7 @@ class Renderer {
         'model': model,
         'manufacturer': manufacturer,
         // Een KEF die via zijn eigen API speelt (kef.dart): 'kef'. Alleen 'shield' wordt ergens gelezen.
-        'kind': isSonos ? 'sonos' : (avTransportUrl.startsWith('kef://') ? 'kef' : 'upnp'),
+        'kind': isSonos ? 'sonos' : (avTransportUrl.startsWith('kef://') ? 'kef' : (isCast ? 'cast' : 'upnp')),
         if (udn.isNotEmpty) 'udn': udn,
         'maxSampleRate': maxSampleRate,
         'maxBitDepth': maxBitDepth,
