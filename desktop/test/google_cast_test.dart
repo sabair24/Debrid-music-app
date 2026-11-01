@@ -130,6 +130,7 @@ class _NepNest {
         _stuur(s, m.doel, kCastMedia, _media(r));
       case 'STOP':
         speelt = false;
+        if (m.ns == kCastOntvanger) appDraait = false;
         _stuur(s, m.doel, m.ns, m.ns == kCastMedia ? _media(r) : _ontvanger(r));
     }
   }
@@ -414,6 +415,17 @@ void main() {
       final pong = nest.binnen.where((m) => m['type'] == 'PONG').single;
       expect(pong['_ns'], kCastHartslag);
       expect(pong['_doel'], 'receiver-0');
+    });
+
+    test('stop sluit de speler van Google af: de Nest is weer vrij, en het volgende start hem opnieuw', () async {
+      await cast.playUrl(r, 'http://pc/stream/1.flac', title: 'a', artist: 'b', album: 'c', mime: 'audio/flac');
+      await cast.stop(r);
+      final weg = nest.binnen.lastWhere((m) => m['type'] == 'STOP');
+      expect(weg['_ns'], kCastOntvanger);
+      expect(weg['sessionId'], 'sessie-7');
+      expect(nest.appDraait, isFalse);
+      await cast.playUrl(r, 'http://pc/stream/2.flac', title: 'a', artist: 'b', album: 'c', mime: 'audio/flac');
+      expect(nest.lanceringen, 2);
     });
 
     test('niets van ons op de speaker: geen plek, en "stopped"', () async {

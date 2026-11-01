@@ -633,8 +633,15 @@ class CastBediening extends UpnpControlPoint {
   @override
   Future<void> pause(Renderer r) => kanaal(r).media('PAUSE');
 
+  /// Stoppen, en de speler van Google afsluiten: dan is de Nest weer vrij (Google Home toont hem niet meer als bezig, en
+  /// zijn eigen assistent kan weer). Gezien op "Kantoor" (01-11-2026): na alleen STOP bleef de "Default Media Receiver"
+  /// draaien. Wat daarna weer speelt, start hem opnieuw (~3 s).
   @override
-  Future<void> stop(Renderer r) => kanaal(r).media('STOP');
+  Future<void> stop(Renderer r) async {
+    final k = kanaal(r);
+    await k.media('STOP');
+    await k.stopSpeler();
+  }
 
   @override
   Future<void> seek(Renderer r, Duration to) => kanaal(r).media('SEEK', {'currentTime': to.inMilliseconds / 1000});
