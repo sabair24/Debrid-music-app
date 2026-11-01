@@ -212,6 +212,8 @@ jobs:
           $L.Add("[Files]")
           $L.Add("Source: `"$buildDir\*`"; DestDir: `"{app}`"; Flags: ignoreversion recursesubdirs createallsubdirs")
           $L.Add("Source: `"$vcRedist`"; DestDir: `"{tmp}`"; Flags: deleteafterinstall")
+          # Het herstartscript na een stille update (zie [Run] hieronder en windows/installer/herstart.ps1).
+          $L.Add("Source: `"$wsDesktop\windows\installer\herstart.ps1`"; DestDir: `"{app}`"; Flags: ignoreversion")
           $L.Add("")
           $L.Add("[Icons]")
           $L.Add('Name: "{group}\DebridMusic"; Filename: "{app}\debridmusic.exe"')
@@ -229,7 +231,11 @@ jobs:
           # hangt ervan af of Windows hem daar herkend heeft. Deze regel is het vangnet, en dubbel
           # starten is onschadelijk: de app houdt een poort vast als eenmalige grendel en een tweede
           # kopie meldt zich bij de eerste en sluit zichzelf (zie _instancePort in main.dart).
-          $L.Add('Filename: "{app}\debridmusic.exe"; Flags: nowait; Check: StilleInstallatie')
+          #
+          # En niet de kale exe maar herstart.ps1: op 31-10-2026 (3.9.689) bleef de app die deze regel startte hangen vóór
+          # zijn eerste regel -- een thread, 5 MB, geen venster -- en kwam de pc pas de volgende ochtend terug, met de hand.
+          # Het script start hem, kijkt in start.log of hij opkomt, en stopt en herstart hem anders (hoogstens drie keer).
+          $L.Add('Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\herstart.ps1"" -App ""{app}\debridmusic.exe"""; Flags: nowait runhidden; Check: StilleInstallatie')
           $L.Add("")
           $L.Add("[Code]")
           $L.Add("function StilleInstallatie: Boolean;")
