@@ -33,6 +33,11 @@ const kCastVoorvoegsel = 'cast://';
 /// De Default Media Receiver: de speler van Google zelf, die een adres speelt.
 const kStandaardOntvanger = 'CC1AD845';
 
+/// Hoe dicht bij zijn eigen plek een Cast-speler een SEEK negeert (s). Gemeten 01-11-2026 op Hal en Kantoor: een sprong van
+/// ±0,4 of ±0,8 s negeerden ze allebei (het antwoord noemde gewoon hun eigen plek), 1,2 s en meer niet; 1,0 s de een wel,
+/// de ander niet. Zonder dit kon de pc een Nest die 0,6 s voor liep nooit bijzetten.
+const kCastSpoelDrempel = 1.5;
+
 const kCastVerbinding = 'urn:x-cast:com.google.cast.tp.connection';
 const kCastHartslag = 'urn:x-cast:com.google.cast.tp.heartbeat';
 const kCastOntvanger = 'urn:x-cast:com.google.cast.receiver';
@@ -513,6 +518,16 @@ class CastKanaal {
     if (ids.isNotEmpty) _klaar.add(ids.reduce((x, y) => x > y ? x : y));
   }
 
+  /// Spoel naar [sec]. Een kleine sprong ([kCastSpoelDrempel]) negeert de speler; dan eerst 2,5 s ernaast en meteen door
+  /// naar het doel — één hikje, zoals elk spoelen (de tweede komt binnen de stilte van de eerste).
+  Future<void> spoel(double sec) async {
+    final nu = ((await mediaStand())?['currentTime'] as num?)?.toDouble();
+    if (nu != null && (sec - nu).abs() < kCastSpoelDrempel) {
+      await media('SEEK', {'currentTime': sec >= 2.5 ? sec - 2.5 : sec + 2.5});
+    }
+    await media('SEEK', {'currentTime': sec});
+  }
+
   /// Een mediaopdracht (`PLAY`, `PAUSE`, `STOP`, `SEEK`) voor wat er nu speelt. Niets als er niets speelt.
   Future<void> media(String type, [Map<String, dynamic> extra = const {}]) async {
     final t = _transport, ms = mediaSessie;
@@ -644,7 +659,7 @@ class CastBediening extends UpnpControlPoint {
   }
 
   @override
-  Future<void> seek(Renderer r, Duration to) => kanaal(r).media('SEEK', {'currentTime': to.inMilliseconds / 1000});
+  Future<void> seek(Renderer r, Duration to) => kanaal(r).spoel(to.inMilliseconds / 1000);
 
   @override
   Future<int?> getVolume(Renderer r) => kanaal(r).volume();

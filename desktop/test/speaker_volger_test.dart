@@ -209,8 +209,10 @@ void main() {
     test('de voorsprong leert: liep hij 450 ms achter (de Nest met een lege buffer), dan 450 ms meer', () {
       expect(leerVoorsprong(200, -450), 650);
       expect(leerVoorsprong(650, 100), 550);
-      expect(leerVoorsprong(100, 500), 0);
+      // Ook onder nul: liep hij na het spoelen voor, dan de volgende keer eerder (Hal, +600 ms).
+      expect(leerVoorsprong(100, 500), -400);
       expect(leerVoorsprong(1900, -500), kVoorsprongMax);
+      expect(leerVoorsprong(-1900, 500), -kVoorsprongMax);
     });
   });
 

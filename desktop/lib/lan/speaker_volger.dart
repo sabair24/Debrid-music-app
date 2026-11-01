@@ -4,6 +4,9 @@
 /// Sonossen onderling spelen zelf op de seconde gelijk (een groep in de Sonos). Tussen merken kan dat niet: daar laat de
 /// pc de VOLGER hetzelfde nummer spelen en zet hem bij op de plek van de LEIDER, door te spoelen.
 ///
+/// Een sprong kleiner dan ~1 s negeert een Nest (gemeten op Hal en Kantoor): dat vangt google_cast.dart op met twee keer
+/// spoelen ([kCastSpoelDrempel]).
+///
 /// **Gemeten op de echte Nest Mini "Kantoor" (01-11-2026, volume 0):** na een SEEK staat zijn plek 0,2–0,4 s stil en
 /// loopt hij daarna gewoon mee — maar achter: 650 ms (het stuk stond nog niet in zijn buffer, BUFFERING), 200 ms en
 /// 145 ms (wel). Hoeveel hij achterloopt hangt dus af van zijn buffer: daarom leert de volger het ([leerVoorsprong]) en
@@ -45,10 +48,13 @@ const kVolgPogingen = 4;
 /// nieuwe plek eerst weer zien.
 const kVolgRust = 2500;
 
-/// Waarmee de volger begint te spoelen vóór de plek van de leider (ms): de 145–200 ms die de Nest meestal achterliep.
-const kVoorsprongStart = 200;
+/// Waarmee de volger begint te spoelen vóór de plek van de leider (ms). Gemeten met Hal tegen Kantoor (01-11-2026, de dubbele
+/// sprong van google_cast.dart, een 16/44,1-FLAC): hij kwam telkens 220–280 ms achter het doel uit, en een voorsprong van
+/// +300 / +200 / −150 / −300 ms schoof dat precies zoveel op.
+const kVoorsprongStart = 250;
 
-/// Hoogstens zoveel vooruit (ms).
+/// Hoogstens zoveel vooruit of achteruit (ms). Ook achteruit: Hal liep na het spoelen telkens +600 ms vóór (01-11-2026),
+/// en een voorsprong die niet onder 0 mocht, kon dat nooit rechtzetten.
 const kVoorsprongMax = 2000;
 
 /// In de laatste zoveel ms van het nummer niet meer spoelen: de volger kan dan al naadloos naar het volgende zijn, en zijn
@@ -90,4 +96,4 @@ enum VolgStap { niets, pauze, verder, spoel }
 
 /// De voorsprong na een keer spoelen: liep de volger daarna [foutMs] voor (positief) of achter (negatief), dan de
 /// volgende keer zoveel minder of meer.
-int leerVoorsprong(int voorsprongMs, int foutMs) => (voorsprongMs - foutMs).clamp(0, kVoorsprongMax);
+int leerVoorsprong(int voorsprongMs, int foutMs) => (voorsprongMs - foutMs).clamp(-kVoorsprongMax, kVoorsprongMax);
