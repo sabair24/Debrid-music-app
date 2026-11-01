@@ -90,6 +90,19 @@ class _NepCast extends CastBediening {
     uri = url;
   }
 
+  /// Instappen op een plek: alleen opschrijven (de echte zou een verbinding met de Nest maken).
+  @override
+  Future<void> playUrlVanaf(Renderer renderer, String url,
+      {required String title,
+      required String artist,
+      required String album,
+      required String mime,
+      String? artUrl,
+      required Duration vanaf}) async {
+    opdrachten.add('open $title vanaf ${(vanaf.inMilliseconds / 1000).round()} s');
+    uri = url;
+  }
+
   @override
   Future<void> setNextUrl(Renderer renderer, String url,
           {required String title,
@@ -341,6 +354,15 @@ void main() {
       cast.volgRondeVoorToets();
       await _tot(() => nest.opdrachten.contains('volgende Twee'));
       expect(nest.opdrachten, ['volgende Twee']);
+    });
+
+    test('stapt de Nest in terwijl de Sonos al op 30 s is, dan laadt hij daar (ook zonder klok: de laatste melding)', () async {
+      await cast.play(_amp.id, [ids[0], ids[1]], 0, alsZone: true);
+      // De Sonos meldt 30 s (de nep zegt dat altijd); de klok van de leider weet nog niets.
+      await cast.tikVoorToets();
+      await cast.groepeer(_amp.id, [_kantoor.id]);
+      await _tot(() => nest.opdrachten.any((o) => o.startsWith('open')));
+      expect(nest.opdrachten.first, 'open Drie vanaf 30 s');
     });
 
     test('iets hierna bij de Sonos: ook op de Nest staat dan het juiste volgende klaar', () async {

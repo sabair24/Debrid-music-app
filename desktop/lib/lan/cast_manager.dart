@@ -733,12 +733,20 @@ class CastManager {
         final url = await _streamUrlFor(id, track.ext, r, track.sampleRate, track.bitsPerSample);
         final a = ankerVan(v.leider);
         final bediening = _voor(r);
-        // Speelt de leider dit nummer al, dan instappen waar hij is (een Nest kan dat bij het laden).
+        // Speelt de leider dit nummer al, dan instappen waar hij is (een Nest kan dat bij het laden). Vlak na een wissel
+        // kent zijn klok de plek nog niet (hij begint opnieuw): dan de laatste melding plus de tijd sindsdien — gezien op
+        // 3.9.697, waar Hal daardoor toch vanaf 0 begon, 1,4 s achter Kantoor.
+        final gezien = s.gezienOp;
         vanaf = bediening is CastBediening
             ? volgerBegintOp(
-                leider: a == null
-                    ? null
-                    : (trackId: '${a['trackId']}', speelt: a['speelt'] == true, positieMs: a['positieMs'] as int),
+                leider: a != null
+                    ? (trackId: '${a['trackId']}', speelt: a['speelt'] == true, positieMs: a['positieMs'] as int)
+                    : (
+                        trackId: s.queue.elementAtOrNull(s.index) ?? '',
+                        speelt: (s.speelt ?? true) && gezien != null,
+                        positieMs: (s.positie?.inMilliseconds ?? 0) +
+                            (gezien == null ? 0 : DateTime.now().millisecondsSinceEpoch - gezien),
+                      ),
                 trackId: s.queue.elementAtOrNull(s.index) ?? '',
                 vertragingMs: _vertraging(v),
                 voorsprongMs: v.voorsprongMs)
