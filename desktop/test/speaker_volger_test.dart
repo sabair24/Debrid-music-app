@@ -253,6 +253,7 @@ void main() {
           upnp: upnp,
           cast: nest,
           zoekCast: () async => const [],
+          zoekKef: () async => const [],
           startGrace: Duration.zero)
         ..kenSpeakersVoorToets([_amp, _kantoor])
         // Zonder de ronde van elke halve seconde: wat hier gebeurt, doet de cast meteen.
@@ -338,6 +339,13 @@ void main() {
       await cast.play(_kantoor.id, [ids[2]], 0, alsZone: true);
       expect(cast.speakerGroepen, isEmpty);
       expect(_id(nest.uri!), ids[2]);
+    });
+
+    test('zonder andere speakers (alleen toestellen, of los) leidt wie je koos — zonder hem op het netwerk te zoeken', () async {
+      // Een speaker die de pc (nog) niet kent: in de bouwstraat is er geen netwerk met speakers.
+      expect(await cast.leiderVoor('uuid:onbekend', []), 'uuid:onbekend');
+      expect(await cast.leiderVoor('uuid:onbekend', ['uuid:onbekend']), 'uuid:onbekend');
+      expect(await cast.besteLeiderVan(['uuid:onbekend']), 'uuid:onbekend');
     });
 
     test('kies je de Nest en zet je de Sonos erbij, dan neemt de Sonos de muziek over en volgt de Nest', () async {

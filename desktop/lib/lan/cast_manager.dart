@@ -594,14 +594,15 @@ class CastManager {
 
   Iterable<_Volger> _volgersVan(String leiderId) => _volgers.values.where((v) => v.leider == leiderId).toList();
 
-  /// Wie leidt als [ids] samen spelen: de minst precieze ([besteLeider]).
+  /// Wie leidt als [ids] samen spelen: de minst precieze ([besteLeider]). Eén speaker leidt zelf, zonder hem op te zoeken.
   Future<String> besteLeiderVan(List<String> ids) async =>
-      besteLeider([for (final id in ids) await _renderer(id)]).id;
+      ids.length == 1 ? ids.single : besteLeider([for (final id in ids) await _renderer(id)]).id;
 
   /// Wie leidt als [gekozen] samen speelt met [leden]. Is dat een ander dan [gekozen] en speelt [gekozen] iets, dan neemt
   /// die leider het over, op dezelfde plek; [gekozen] volgt hem daarna ([groepeer]). Een radio blijft waar hij is: die
   /// hoort bij zijn speaker (de pc vult hem daar aan), en dan leidt wie je koos.
   Future<String> leiderVoor(String gekozen, List<String> leden) async {
+    // Geen andere speakers (alleen toestellen, of los): wie je koos, leidt — zonder hem op te zoeken.
     final beste = await besteLeiderVan([gekozen, ...leden.where((x) => x != gekozen)]);
     if (beste == gekozen) return gekozen;
     final s = _sessies[gekozen];
