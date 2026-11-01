@@ -206,6 +206,16 @@ void main() {
       expect(besluit(leider: null, volger: (speelt: true, positieMs: 1)).stap, VolgStap.niets);
     });
 
+    test('instappen: waar de leider nu is (plus schuif en voorsprong), niet vanaf 0', () {
+      int op(({String trackId, bool speelt, int positieMs})? l) =>
+          volgerBegintOp(leider: l, trackId: 't2', vertragingMs: 40, voorsprongMs: 250);
+      expect(op((trackId: 't2', speelt: true, positieMs: 2300)), 2590);
+      expect(op((trackId: 't1', speelt: true, positieMs: 2300)), 0, reason: 'de leider speelt nog iets anders');
+      expect(op((trackId: 't2', speelt: false, positieMs: 2300)), 0, reason: 'staat stil: gewoon laden');
+      expect(op(null), 0);
+      expect(op((trackId: 't2', speelt: true, positieMs: 300)), 0, reason: 'vlak na het begin: vanaf 0 is goed genoeg');
+    });
+
     test('de voorsprong leert: liep hij 450 ms achter (de Nest met een lege buffer), dan 450 ms meer', () {
       expect(leerVoorsprong(200, -450), 650);
       expect(leerVoorsprong(650, 100), 550);
@@ -420,6 +430,13 @@ void main() {
   test('de klok van de leider loopt ook voor wie via de pc meespeelt', () {
     final s = File('lib/lan/cast_manager.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(s, contains('    final wil = _klokGewenst.contains(s.renderer.id) || _volgersVan(s.renderer.id).isNotEmpty;\n'));
+  });
+
+  test('een Nest stapt in waar de leider is, en hangt hij aan het eind, dan na 0,6 s opnieuw', () {
+    final s = File('lib/lan/cast_manager.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(s, contains('        if (bediening is CastBediening && vanaf > 0) {\n          await bediening.playUrlVanaf(r, url,\n'));
+    expect(s, contains('      v.naSpoelen = vanaf > 0;\n'));
+    expect(s, contains('(rest.isNegative ? 0 : rest.inMicroseconds) + 600000;\n'));
   });
 
   test('de server: de minst precieze leidt, ook vanuit een toestel; de schuif per lid herijkt', () {

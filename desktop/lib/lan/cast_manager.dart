@@ -714,6 +714,7 @@ class CastManager {
     if (s == null || id == null || track == null || v.trackId == id || v.bezig || nu < v.opnieuwNaUs) return;
     v.bezig = true;
     final r = v.renderer;
+    var vanaf = 0;
     try {
       final pos = await _voor(r).positionInfo(r).catchError((Object _) => null);
       if (_idVanUrl(pos?.trackUri) == id) {
@@ -723,28 +724,53 @@ class CastManager {
         // 248,18 van 248,18 s, de pc wachtte niet (rest 0) en laadde het volgende opnieuw — Hal 1,4 s te laat.
         final rest = (pos?.duration ?? Duration.zero) - (pos?.position ?? Duration.zero);
         if (pos?.position != null && pos!.duration > Duration.zero && rest < const Duration(seconds: 3)) {
-          // Tot zijn eigen eind plus anderhalve seconde. Gaat hij dan nog niet zelf door, dan doet hij het niet: Hal bleef
+          // Tot zijn eigen eind plus 0,6 s (wie zelf doorgaat, doet dat binnen ~50 ms van de leider: hij loopt gelijk).
+          // Gaat hij dan nog niet zelf door, dan doet hij het niet: Hal bleef
           // met de omgezette "Bad" eindeloos op 248,19 van 248,19 s staan, terwijl het volgende in zijn rij stond.
-          final tot = v.wachtTotUs ??= nu + (rest.isNegative ? 0 : rest.inMicroseconds) + 1500000;
+          final tot = v.wachtTotUs ??= nu + (rest.isNegative ? 0 : rest.inMicroseconds) + 600000;
           if (nu < tot) return;
         }
         final url = await _streamUrlFor(id, track.ext, r, track.sampleRate, track.bitsPerSample);
-        await _voor(r).playUrl(r, url,
-            title: track.title,
-            artist: track.artist,
-            album: track.album,
-            mime: mimeForExt(track.ext),
-            artUrl: await _artUrlFor(id, r),
-            duration: track.duration);
+        final a = ankerVan(v.leider);
+        final bediening = _voor(r);
+        // Speelt de leider dit nummer al, dan instappen waar hij is (een Nest kan dat bij het laden).
+        vanaf = bediening is CastBediening
+            ? volgerBegintOp(
+                leider: a == null
+                    ? null
+                    : (trackId: '${a['trackId']}', speelt: a['speelt'] == true, positieMs: a['positieMs'] as int),
+                trackId: s.queue.elementAtOrNull(s.index) ?? '',
+                vertragingMs: _vertraging(v),
+                voorsprongMs: v.voorsprongMs)
+            : 0;
+        final hoes = await _artUrlFor(id, r);
+        if (bediening is CastBediening && vanaf > 0) {
+          await bediening.playUrlVanaf(r, url,
+              title: track.title,
+              artist: track.artist,
+              album: track.album,
+              mime: mimeForExt(track.ext),
+              artUrl: hoes,
+              vanaf: Duration(milliseconds: vanaf));
+        } else {
+          await bediening.playUrl(r, url,
+              title: track.title,
+              artist: track.artist,
+              album: track.album,
+              mime: mimeForExt(track.ext),
+              artUrl: hoes,
+              duration: track.duration);
+        }
         // Een nieuw nummer van voren is een nieuwe rij op de speaker: wat klaarstond, is weg.
         v.klaarPaar = null;
-        _log?.line('samen: ${r.name} speelt mee — ${_naam(id)}');
+        _log?.line('samen: ${r.name} speelt mee — ${_naam(id)}${vanaf > 0 ? ' (vanaf $vanaf ms, waar de leider is)' : ''}');
       }
       v.wachtTotUs = null;
       v.trackId = id;
       v.pogingen = 0;
       v.gepauzeerd = false;
-      v.naSpoelen = false;
+      // Ingestapt op de plek van de leider: de eerste meting zegt hoe goed dat lukte (en leert de voorsprong).
+      v.naSpoelen = vanaf > 0;
       v.gespoeldOpUs = _klokUs();
       _volgKlok(v);
       bijStand?.call();
