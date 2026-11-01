@@ -13262,9 +13262,11 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
                       const SizedBox(height: 2),
                       Text(
                           speaker
-                              ? 'Sonossen spelen op de seconde gelijk met deze. Toestellen volgen hem ongeveer: zet '
-                                  'het op het oor gelijk met de schuif.'
-                              : 'Ze volgen dit toestel. Kies je een Sonos, dan speelt die verder wat hier speelt en '
+                              ? (leider.sonos
+                                  ? 'Sonossen spelen op de seconde gelijk met deze. Toestellen volgen hem ongeveer: zet '
+                                      'het op het oor gelijk met de schuif.'
+                                  : 'Toestellen volgen deze speaker ongeveer: zet het op het oor gelijk met de schuif.')
+                              : 'Ze volgen dit toestel. Kies je een speaker, dan speelt die verder wat hier speelt en '
                                   'volgen de toestellen hem. Klinkt een toestel achter (Bluetooth)? Zet het bij in '
                                   'Instellingen op dat toestel: "Vertraging bij samen spelen".',
                           style: TextStyle(color: _muted, fontSize: 12)),
@@ -13299,14 +13301,14 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
                         const SizedBox(height: 6),
                         Row(children: [
                           const Expanded(
-                            child: Text('Sonos gelijkzetten',
+                            child: Text('Speaker gelijkzetten',
                                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                           ),
                           Text(vertraging == 0 ? 'gelijk' : '${vertraging > 0 ? '+' : ''}$vertraging ms',
                               style: TextStyle(color: _muted, fontSize: 12)),
                         ]),
                         Text(
-                            'Klinkt de Sonos ná de toestellen, schuif naar rechts; ervoor, naar links. Hij meldt '
+                            'Klinkt de speaker ná de toestellen, schuif naar rechts; ervoor, naar links. Hij meldt '
                             'zijn plek per seconde: dit zet het op het oor gelijk.',
                             style: TextStyle(color: _muted, fontSize: 12)),
                         Row(children: [

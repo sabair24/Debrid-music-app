@@ -9,6 +9,7 @@ import '../models.dart';
 import '../warm_log.dart';
 import 'catalog.dart';
 import 'dtos.dart';
+import 'google_cast.dart';
 import 'kef.dart';
 import 'net.dart';
 import 'speaker_klok.dart';
@@ -198,10 +199,14 @@ class CastManager {
     @visibleForTesting this.toeval,
     @visibleForTesting KefBediening? kef,
     @visibleForTesting Future<List<Renderer>> Function()? zoekKef,
+    @visibleForTesting CastBediening? cast,
+    @visibleForTesting Future<List<Renderer>> Function()? zoekCast,
     this.sessiePad,
   })  : _upnp = upnp ?? UpnpControlPoint(),
         _kef = kef ?? KefBediening(),
         _zoekKef = zoekKef ?? zoekKefs,
+        _cast = cast ?? CastBediening(),
+        _zoekCast = zoekCast ?? zoekCasts,
         _transcoder = transcoder ?? Transcoder(),
         _klokUs = klokUs ?? (() => DateTime.now().microsecondsSinceEpoch),
         _adresVoor = adresVoor ?? lanAddressFor,
@@ -227,8 +232,15 @@ class CastManager {
   final KefBediening _kef;
   final Future<List<Renderer>> Function() _zoekKef;
 
-  /// Wie [r] bedient: de KEF-API of UPnP.
-  UpnpControlPoint _voor(Renderer r) => isKef(r) ? _kef : _upnp;
+  /// De Nest Minis en groepen uit Google Home via Google Cast (zie `google_cast.dart`), in dezelfde vorm.
+  final CastBediening _cast;
+  final Future<List<Renderer>> Function() _zoekCast;
+
+  /// Wie [r] bedient: Google Cast, de KEF-API of UPnP.
+  UpnpControlPoint _voor(Renderer r) => isCast(r) ? _cast : (isKef(r) ? _kef : _upnp);
+
+  /// Een speaker die zijn plek zelf bijhoudt en die we om de seconde vragen (KEF, Cast), in plaats van om de vijf.
+  bool _snelVragen(Renderer r) => isKef(r) || isCast(r);
   final Transcoder _transcoder;
   final int port;
   String token;
@@ -326,9 +338,11 @@ class CastManager {
         klokUs: _klokUs,
         toeval: toeval,
         // Een KEF werkt zijn plek bij op een eigen klokje (~1 s, blokjes van 48 ms): zie speaker_klok.dart.
-        houdMs: isKef(s.renderer) ? 1150 : 1000,
+        // Een Cast-speaker rekent zijn plek uit op het moment van de vraag, tot op de ms (google_cast.dart): vers, geen
+        // blokjes, geen hele seconden.
+        houdMs: isKef(s.renderer) ? 1150 : (isCast(s.renderer) ? 100 : 1000),
         korrelMs: isKef(s.renderer) ? 48 : 0,
-        gericht: !isKef(s.renderer),
+        gericht: !isKef(s.renderer) && !isCast(s.renderer),
         vraag: () async => (await _voor(s.renderer).positionInfo(s.renderer))?.position?.inMilliseconds,
         bijVerandering: () {
           final p = s.klok?.plekNu;
@@ -564,9 +578,20 @@ class CastManager {
   /// Every place the music can go, this device excluded.
   Future<List<Map<String, dynamic>>> devices({bool refresh = true}) async {
     if (refresh || _renderers.isEmpty) {
+      // Alle drie tegelijk: elk luistert een paar seconden, na elkaar zou dat optellen.
+      final kefsKomen = _zoekKef().catchError((Object _) => <Renderer>[]);
+      final castsKomen = _zoekCast().catchError((Object _) => <Renderer>[]);
       final found = await _upnp.discover();
-      final kefs = await _zoekKef().catchError((Object _) => <Renderer>[]);
-      _renderers = {for (final r in found) r.id: r, for (final k in kefs) k.id: k};
+      final kefs = await kefsKomen;
+      final casts = await castsKomen;
+      // Een KEF of Sonos die ook Cast spreekt, staat er al via zijn eigen weg: niet nog eens als Cast-speaker.
+      final alBekend = {for (final r in [...found, ...kefs]) r.host};
+      _renderers = {
+        for (final r in found) r.id: r,
+        for (final k in kefs) k.id: k,
+        for (final c in casts)
+          if (!alBekend.contains(c.host) || castAdres(c).poort != 8009) c.id: c,
+      };
       for (final r in _renderers.values) {
         _namen[r.id] = r.name;
       }
@@ -676,7 +701,7 @@ class CastManager {
     // The renderer plays one track; something has to notice it ended and send the next.
     // Een KEF zet geen volgend nummer klaar (naadloos): hij stopt, en dan opent de cast het volgende. Elke
     // seconde kijken houdt dat gat kort; om de 5 s was het tot 5 s stilte.
-    session.advance = Timer.periodic(Duration(seconds: isKef(renderer) ? 1 : 5), (_) => _maybeAdvance(session));
+    session.advance = Timer.periodic(Duration(seconds: _snelVragen(renderer) ? 1 : 5), (_) => _maybeAdvance(session));
     unawaited(_haalVolume(session));
   }
 
@@ -797,7 +822,7 @@ class CastManager {
       _sessies[r.id] = s;
       _zetKlok(s);
       if (pos?.position case final p?) _zag(s, positie: p, duur: pos!.duration);
-      s.advance = Timer.periodic(Duration(seconds: isKef(r) ? 1 : 5), (_) => _maybeAdvance(s));
+      s.advance = Timer.periodic(Duration(seconds: _snelVragen(r) ? 1 : 5), (_) => _maybeAdvance(s));
       _log?.line('herstel: volgt ${r.name} weer — ${_naam(rij[plek])} (${plek + 1}/${rij.length})');
       unawaited(_haalVolume(s));
     }
@@ -1713,6 +1738,7 @@ class CastManager {
 
   void dispose() {
     _kef.sluit();
+    _cast.sluit();
     unawaited(_radioGebeurtenis.close());
     _zoeker?.cancel();
     _groepKijker?.cancel();
