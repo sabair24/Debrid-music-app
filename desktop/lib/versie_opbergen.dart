@@ -486,6 +486,15 @@ Future<Versieuitslag?> bergOpAlsVersie(File src, Versieplan plan,
 String _zonderAndereKopie(String persing) =>
     persing.replaceAll(RegExp(r'\s*andere kopie\s*', caseSensitive: false), ' ').trim();
 
+/// [persing] voor een kopie van [soort]: wat alleen een plaat heeft ("LP 1978", "2LP", '12"', "Maxi", met het jaar erbij)
+/// gaat weg als hij geen vinyl is. Gezien 01-11-2026: de nep-vinyl van The Jacksons "Destiny" won als cd de keuring en heette
+/// daarna "CD · LP 1978".
+String persingVoorSoort(Kopiesoort soort, String persing) => soort == Kopiesoort.vinyl
+    ? persing
+    : persing
+        .replaceFirst(RegExp(r'^(?:\d*LP|\d+"|Maxi)(?=\s|$)\s*(?:\d{4}(?=\s|$))?\s*', caseSensitive: false), '')
+        .trim();
+
 /// Een map die leeg achterbleef (een versie verhuisde naar de map van zijn soort).
 void _ruimLegeMapOp(String map) {
   try {
@@ -734,7 +743,7 @@ Future<Soortopruiming> eenPerSoort(
         final at = await moveWithRetry(File(o.pad), doel);
         // Zijn versiemap bleef leeg achter ("Cutting Crew (cd)", 27-10-2026).
         _ruimLegeMapOp(_map(o.pad));
-        versies.verhuisAnker(anker, at, soort: soort, persing: _zonderAndereKopie(o.persing));
+        versies.verhuisAnker(anker, at, soort: soort, persing: persingVoorSoort(soort, _zonderAndereKopie(o.persing)));
         zetSoort(at, soort);
         if (album != null) await _zetAlbumTerug(at, album);
         nu = at;
@@ -777,7 +786,7 @@ Future<Soortopruiming> eenPerSoort(
     for (final v in versies.versiesVan(nu)) {
       if (!File(v.pad).existsSync()) continue;
       final soort = soortVan[v.pad] ?? v.soort;
-      final persing = _zonderAndereKopie(v.persing);
+      final persing = persingVoorSoort(soort, _zonderAndereKopie(v.persing));
       final map = versieMap(_map(nu), soort);
       var pad = v.pad;
       if (_map(v.pad).toLowerCase() != map.toLowerCase()) {

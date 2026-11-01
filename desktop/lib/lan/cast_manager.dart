@@ -777,8 +777,9 @@ class CastManager {
       v.trackId = id;
       v.pogingen = 0;
       v.gepauzeerd = false;
-      // Ingestapt op de plek van de leider: de eerste meting zegt hoe goed dat lukte (en leert de voorsprong).
-      v.naSpoelen = vanaf > 0;
+      // Niet leren van het instappen: Hal negeerde de beginplek (3.9.698: "vanaf 1220 ms", toch vanaf 0), de pc nam die
+      // 1,8 s voor spoelvertraging, sprong 2 s te ver en zette het pas na 6 s recht. De voorsprong is van het spoelen.
+      v.naSpoelen = false;
       v.gespoeldOpUs = _klokUs();
       _volgKlok(v);
       bijStand?.call();

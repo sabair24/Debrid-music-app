@@ -457,7 +457,9 @@ void main() {
   test('een Nest stapt in waar de leider is, en hangt hij aan het eind, dan na 0,6 s opnieuw', () {
     final s = File('lib/lan/cast_manager.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(s, contains('        if (bediening is CastBediening && vanaf > 0) {\n          await bediening.playUrlVanaf(r, url,\n'));
-    expect(s, contains('      v.naSpoelen = vanaf > 0;\n'));
+    // Niet leren van het instappen (Hal negeerde de beginplek; de pc sprong daarna 2 s te ver).
+    expect(s, contains('      // 1,8 s voor spoelvertraging, sprong 2 s te ver en zette het pas na 6 s recht. De voorsprong is van het spoelen.\n'
+        '      v.naSpoelen = false;\n'));
     expect(s, contains('(rest.isNegative ? 0 : rest.inMicroseconds) + 600000;\n'));
   });
 
