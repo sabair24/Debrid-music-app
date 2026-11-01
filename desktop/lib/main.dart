@@ -13182,20 +13182,18 @@ class _ZoneVolume extends StatelessWidget {
 /// - Een Sonos met toestellen: de Sonos wordt de leider (hij laat zich niet bijsturen) en de toestellen
 ///   volgen hem — ongeveer, want hij meldt zijn plek per seconde; de schuif "Sonos gelijkzetten" zet het op
 ///   het oor gelijk. Komt de groep van een toestel, dan speelt de Sonos verder wat dat toestel speelde.
+/// - Speakers van verschillende merken (Saber, 01-11-2026: de Nest Minis met de Sonos en de KEF): de pc laat de
+///   volger hetzelfde spelen en zet hem bij; de minst precieze leidt (`speaker_volger.dart`). Elk zo'n lid heeft zijn
+///   eigen schuif.
 Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
   final lijst = context.read<ZoneLijst>();
   final gekozen = _misschien<GekozenZone>(context);
   final speaker = leider.soort == ZoneSoort.speaker;
-  // Speakers onderling alleen Sonossen (die lopen samen op de seconde gelijk); toestellen met elke speaker.
+  // Elke speaker en elk toestel: Sonossen onderling doen het zelf, een ander merk speelt via de pc mee.
   final kandidaten = [
     for (final z in lijst.zones)
-      if (z.id != leider.id &&
-          z.kanGroeperen &&
-          z.online &&
-          (z.soort != ZoneSoort.speaker || !speaker || (leider.sonos && z.sonos)))
-        z,
+      if (z.id != leider.id && z.kanGroeperen && z.online) z,
   ];
-  bool isSonos(String id) => kandidaten.where((z) => z.id == id).map((z) => z.sonos).firstOrNull ?? true;
   // Wie al in de groep zit, staat niet apart in de lijst: die halen we uit de groep zelf, en hun namen uit
   // de naam van de groep ("Sonos Move + THUIS": de leider, dan de anderen in de volgorde van de groep).
   final inGroep = {...leider.groep}..remove(leider.id);
@@ -13229,6 +13227,10 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
   // Bestaat de groep al, dan schuift de schuif meteen (op het oor, terwijl het speelt).
   final bestaatAl = speaker && inGroep.any((id) => id.startsWith('dev:'));
   var vertraging = leider.samenMs;
+  // De schuif van elke speaker die via de pc meespeelt (positief = later): meteen, op het oor.
+  final volgMs = {for (final l in leider.leden) if (l.viaPc) l.id: l.samenMs};
+  void schuifVolger(String id) =>
+      unawaited(lijst.stuur?.call(leider.id, {'cmd': 'samenVertraging', 'lid': id, 'ms': volgMs[id] ?? 0}));
   void schuifNu(Set<String> k) {
     if (bestaatAl && setEquals(k, inGroep)) {
       unawaited(lijst.stuur?.call(leider.id, {'cmd': 'samenVertraging', 'ms': vertraging}));
@@ -13263,9 +13265,10 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
                       Text(
                           speaker
                               ? (leider.sonos
-                                  ? 'Sonossen spelen op de seconde gelijk met deze. Toestellen volgen hem ongeveer: zet '
-                                      'het op het oor gelijk met de schuif.'
-                                  : 'Toestellen volgen deze speaker ongeveer: zet het op het oor gelijk met de schuif.')
+                                  ? 'Sonossen spelen op de seconde gelijk met deze. Andere speakers en toestellen volgen '
+                                      'hem ongeveer: zet het op het oor gelijk met de schuif.'
+                                  : 'Andere speakers en toestellen volgen deze ongeveer: zet het op het oor gelijk met '
+                                      'de schuif.')
                               : 'Ze volgen dit toestel. Kies je een speaker, dan speelt die verder wat hier speelt en '
                                   'volgen de toestellen hem. Klinkt een toestel achter (Bluetooth)? Zet het bij in '
                                   'Instellingen op dat toestel: "Vertraging bij samen spelen".',
@@ -13289,10 +13292,6 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
                             if (v != true) {
                               keuze.remove(id);
                               return;
-                            }
-                            // Meer dan één speaker kan alleen als het allemaal Sonossen zijn.
-                            if (id.startsWith('spk:')) {
-                              keuze.removeWhere((k) => k.startsWith('spk:') && (!isSonos(k) || !isSonos(id)));
                             }
                             keuze.add(id);
                           }),
@@ -13346,6 +13345,57 @@ Future<void> _kiesGroep(BuildContext context, ZoneStaat leider) async {
                           ),
                         ]),
                       ],
+                      for (final l in leider.leden)
+                        if (l.viaPc && keuze.contains(l.id)) ...[
+                          const SizedBox(height: 6),
+                          Row(children: [
+                            Expanded(
+                              child: Text('${l.naam} gelijkzetten',
+                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                            ),
+                            Text(
+                                volgMs[l.id] == 0
+                                    ? 'gelijk'
+                                    : '${volgMs[l.id]! > 0 ? '+' : ''}${volgMs[l.id]} ms',
+                                style: TextStyle(color: _muted, fontSize: 12)),
+                          ]),
+                          Text('Klinkt hij vóór de rest, schuif naar rechts; erna, naar links.',
+                              style: TextStyle(color: _muted, fontSize: 12)),
+                          Row(children: [
+                            IconButton(
+                              key: ValueKey('zone-volg-min-${l.id}'),
+                              tooltip: '10 ms eerder',
+                              icon: const Icon(Icons.remove_rounded),
+                              onPressed: () => zet(() {
+                                volgMs[l.id] = ((volgMs[l.id] ?? 0) - 10).clamp(-1000, 1000);
+                                schuifVolger(l.id);
+                              }),
+                            ),
+                            Expanded(
+                              child: _schuifOpTv(
+                                context,
+                                Slider(
+                                  key: ValueKey('zone-volg-schuif-${l.id}'),
+                                  value: (volgMs[l.id] ?? 0).clamp(-1000, 1000).toDouble(),
+                                  min: -1000,
+                                  max: 1000,
+                                  divisions: 200,
+                                  onChanged: (v) => zet(() => volgMs[l.id] = v.round()),
+                                  onChangeEnd: (_) => schuifVolger(l.id),
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              key: ValueKey('zone-volg-plus-${l.id}'),
+                              tooltip: '10 ms later',
+                              icon: const Icon(Icons.add_rounded),
+                              onPressed: () => zet(() {
+                                volgMs[l.id] = ((volgMs[l.id] ?? 0) + 10).clamp(-1000, 1000);
+                                schuifVolger(l.id);
+                              }),
+                            ),
+                          ]),
+                        ],
                       Align(
                         alignment: Alignment.centerRight,
                         child: GlasKnop(
