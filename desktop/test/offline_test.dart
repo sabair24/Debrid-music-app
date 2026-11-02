@@ -612,12 +612,13 @@ void main() {
     });
   });
 
-  test('aangesloten: offline bewaren in cd-kwaliteit, alleen via wifi, thuis het origineel', () {
+  // Sinds 02-11-2026 ook over mobiele data (Saber: "Ja, alles over mobiele data"); de wachtrij kan het nog.
+  test('aangesloten: offline bewaren in cd-kwaliteit, ook over mobiele data, thuis het origineel', () {
     String bron(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
     final main = bron('lib/main.dart');
     expect(main, contains("        if (settings.offlineKwaliteit != 'cd') return url;"));
     expect(main, contains('            stand: Stroomstand.cd,'));
-    expect(main, contains('  offline.magOphalen = () => netStore.net != Netsoort.mobiel;'));
+    expect(main, contains('  offline.magOphalen = () => true;'));
     expect(main, contains('      if (local != null && !thuisBeter(path)) return local;'));
     expect(main, contains('      (path) => offline.localFor(path) != null ? offline.grensVoor(path) : vooruit.grensVoor(path);'));
     expect(bron('lib/settings.dart'), contains("        offlineKwaliteit = (m['offline_kwaliteit'] ?? 'cd') as String;"));

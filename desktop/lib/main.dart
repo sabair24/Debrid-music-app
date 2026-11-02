@@ -39,6 +39,7 @@ import 'ui/kopfoto.dart';
 import 'uploaderberichten.dart';
 import 'ui/kopbewerker.dart';
 import 'ui/kop_logo.dart';
+import 'ui/herkomst_teken.dart';
 import 'ui/op_toestel.dart';
 import 'toestelmap.dart';
 import 'toestel_bijhouden.dart';
@@ -1142,9 +1143,24 @@ Future<void> main() async {
     luidheidKeuze = nu;
     unawaited(player.herzieLuidheid());
   });
+  // Op mobiele data alleen wat op dit toestel staat (Saber, 02-11-2026: "Buiten alleen gsm" — geen mobiele data voor
+  // muziek; op elke wifi mag het van de pc). Een zone thuis kiezen blijft kunnen: die speelt thuis, niet over je bundel.
+  bool alleenHierNu() => !mode.owner && !isTv && netStore.net == Netsoort.mobiel;
+  player.alleenHier = alleenHierNu;
+  // En in de lijsten grijs wat dan niet speelt (ui/op_toestel.dart, NietHierGrijs).
+  alleenHierOokNu = alleenHierOpMobiel;
+  // Waar het nummer vandaan komt, voor het icoontje (Saber, 02-11-2026: "of ik online of offline stream").
+  player.herkomstVan = (adres) => mode.owner
+      ? null
+      : !adres.startsWith('http')
+          ? Herkomst.toestel
+          : (netStore.onderweg ? Herkomst.internet : Herkomst.thuis);
   // Het volgende nummer alvast op de telefoon, alleen op mobiele data. Zie vooruithalen.dart.
   player.onVooruithalen = (huidig, volgende) {
     if (mode.owner) return; // de pc heeft alles zelf al
+    // Behalve nu: op mobiele data speelt alleen wat al op dit toestel staat, en wat vooruit binnenkwam speelde daarna
+    // als kopie hier — gewoon stromen over je bundel ([alleenHierNu]).
+    if (alleenHierNu()) return;
     // De versie die gaat klinken (versies.dart), niet het nummer uit de rij: de speler zoekt de kopie onder dát pad.
     // Hier stond `huidig?.path`, en dan haalde het vooruithalen bij een nummer met een gekozen versie het verkeerde
     // bestand, dat nooit speelde (Etta James – At Last, 28-10-2026: twee keer over een zwakke wifi). Zie
@@ -1203,8 +1219,9 @@ Future<void> main() async {
     // Weer op wifi: offline bewaren loopt verder (offline.dart, [OfflineStore.magOphalen]).
     offline.verder();
   });
-  // Offline bewaren alleen via wifi (Saber, 27-10-2026); het vooruithalen blijft juist op mobiel.
-  offline.magOphalen = () => netStore.net != Netsoort.mobiel;
+  // Ophalen naar dit toestel ook over mobiele data (Saber, 02-11-2026: "Ja, alles over mobiele data"): dit vervangt
+  // "alleen via wifi" van 27-10-2026. De haak blijft: een rij die ooit stilstond, gaat bij een netwerkwissel verder.
+  offline.magOphalen = () => true;
   // Wat je zelf bewaart in een echte map (Saber, 28-10-2026): Muziek/Debrid Music op de gsm, Bestanden › Op mijn
   // iPad › Debrid Music, met de indeling van de pc. Zonder "Toegang tot alle bestanden" (Android) in de eigen map,
   // zoals eerst. Bij elke terugkeer in de app opnieuw gekeken: daar kom je vandaan als je hem net aanzette.
@@ -5669,13 +5686,7 @@ class _OfflineBannerState extends State<_OfflineBanner> {
   }
 
   /// Hoe de tekst dit toestel noemt ("Geen internet op je gsm").
-  static String _toestel(BuildContext context) {
-    if (isTv) return 'dit toestel';
-    if (Platform.isAndroid) return isCompact(context) ? 'je gsm' : 'dit toestel';
-    if (Platform.isIOS) return isCompact(context) ? 'je iPhone' : 'je iPad';
-    if (Platform.isMacOS) return 'je Mac';
-    return 'dit toestel';
-  }
+  static String _toestel(BuildContext context) => toestelNaam(context);
 
   /// Een smalle, rustige regel zonder knop: zoeken, of de nieuwe weg.
   static Widget _rustig({required IconData icoon, required String tekst, required Color kleur, required Color achter}) =>
@@ -6908,13 +6919,14 @@ class _OpDitToestelViewState extends State<OpDitToestelView> {
     // Saber, 29-10-2026: met de pc bereikbaar spelen deze knoppen je hele bibliotheek; zonder pc alleen wat hier staat.
     // Ook de verbinding telt ([pcWeg]): de bibliotheek merkt pas bij haar volgende vraag dat de pc weg is.
     final sessie = _misschien<ClientSession>(context, luister: true);
-    final pcBereikbaar = lib.isRemote && !pcWeg(lib, verbinding: sessie?.verbinding);
+    // Op mobiele data (en dit toestel speelt zelf) ook alleen wat hier staat ([alleenHierOpMobiel]).
+    final pcBereikbaar = lib.isRemote && !pcWeg(lib, verbinding: sessie?.verbinding) && !alleenHierOpMobiel(context);
     final teSpelen = pcBereikbaar ? lib.tracks : alleHier;
     // Bij de tik opnieuw gevraagd, niet bij het tekenen: "Zoekt je pc…" wordt pas na [kZoektAlsWeg] "weg", en daar
     // tekent niets voor opnieuw. Zonder pc speelt het op dit toestel, ook als er een zone gekozen is — die bereik je
     // alleen via de pc.
     ({List<Track> lijst, Rijbediening speler}) nuTeSpelen() =>
-        lib.isRemote && !pcWeg(lib, verbinding: sessie?.verbinding)
+        lib.isRemote && !pcWeg(lib, verbinding: sessie?.verbinding) && !alleenHierOpMobiel(context)
             ? (lijst: lib.tracks, speler: rijVoor(context))
             : (lijst: alleHier, speler: context.read<PlayerStore>());
     final narrow = isCompact(context);
@@ -6979,7 +6991,9 @@ class _OpDitToestelViewState extends State<OpDitToestelView> {
           child: Text(
               pcBereikbaar
                   ? 'Shuffle en Alles afspelen spelen je hele bibliotheek zolang je pc bereikbaar is.'
-                  : 'Zonder pc spelen Shuffle en Alles afspelen alleen wat op dit toestel staat.',
+                  : alleenHierOpMobiel(context)
+                      ? 'Op mobiele data spelen Shuffle en Alles afspelen alleen wat op dit toestel staat.'
+                      : 'Zonder pc spelen Shuffle en Alles afspelen alleen wat op dit toestel staat.',
               style: TextStyle(color: _muted, fontSize: 11.5)),
         ),
         _Overzetten(rand: rand),
@@ -11872,6 +11886,32 @@ T? _misschien<T>(BuildContext context, {bool luister = false}) {
 
 /// Waar een nieuwe wachtrij heen gaat (een tik op een nummer, "Afspelen", "Hierna spelen" …): de gekozen
 /// zone op afstand, of dit toestel (Saber, 21-10-2026: "Tik in de bibliotheek speelt in de gekozen zone").
+/// Hoe de tekst dit toestel noemt: "je gsm", "je iPad", "je Mac", of "dit toestel".
+String toestelNaam(BuildContext context) {
+  if (isTv) return 'dit toestel';
+  if (Platform.isAndroid) return isCompact(context) ? 'je gsm' : 'dit toestel';
+  if (Platform.isIOS) return isCompact(context) ? 'je iPhone' : 'je iPad';
+  if (Platform.isMacOS) return 'je Mac';
+  return 'dit toestel';
+}
+
+/// Speelt een tik nu alleen wat op dit toestel staat omdat het op mobiele data zit (Saber, 02-11-2026: "Buiten alleen
+/// gsm")? Alleen als dit toestel zelf speelt: een zone thuis speelt thuis, niet over je bundel.
+bool alleenHierOpMobiel(BuildContext context) =>
+    !isTv &&
+    (_misschien<LibraryStore>(context)?.isRemote ?? false) &&
+    _misschien<NetsoortStore>(context)?.net == Netsoort.mobiel &&
+    _misschien<GekozenZone>(context)?.opAfstand == null;
+
+/// Wat een tik zegt als het nummer niet op dit toestel staat en er alleen wat hier staat speelt.
+String nietHierZin({required bool zonderPc}) => zonderPc
+    ? 'Staat niet op dit toestel, en je pc is nu niet bereikbaar'
+    : 'Staat niet op dit toestel — op mobiele data speelt alleen wat erop staat';
+
+/// Waar het nummer van [p] vandaan komt ([HerkomstTeken]): alleen bij de speler van dit toestel, niet bij een zone.
+Widget _herkomst(BuildContext context, Speelbron p, {bool metWoord = false}) =>
+    HerkomstTeken(herkomst: p is PlayerStore ? p.herkomst : null, toestel: toestelNaam(context), metWoord: metWoord);
+
 Rijbediening rijVoor(BuildContext context) =>
     _misschien<GekozenZone>(context)?.opAfstand ?? context.read<PlayerStore>();
 
@@ -11884,17 +11924,21 @@ List<Track> speelLijst(BuildContext context, List<Track> lijst,
   final hier = _misschien<OfflineStore>(context);
   final lib = _misschien<LibraryStore>(context);
   final zonderPc = hier != null && lib != null && pcWeg(lib, verbinding: _misschien<ClientSession>(context)?.verbinding);
-  final nu = zonderPc ? [for (final t in lijst) if (hier.has(t.path)) t] : lijst;
+  // Op mobiele data net zo, als dit toestel zelf speelt ([alleenHierOpMobiel]).
+  final opMobiel = hier != null && !zonderPc && alleenHierOpMobiel(context);
+  final alleenHier = zonderPc || opMobiel;
+  final nu = alleenHier ? [for (final t in lijst) if (hier.has(t.path)) t] : lijst;
   if (nu.isEmpty) {
     if (zonderPc) _srcToast(context, 'Hiervan staat niets op dit toestel, en je pc is nu niet bereikbaar');
+    if (opMobiel) _srcToast(context, 'Hiervan staat niets op dit toestel — op mobiele data speelt alleen wat erop staat');
     return nu;
   }
-  final Rijbediening speler = zonderPc ? context.read<PlayerStore>() : rijVoor(context);
+  final Rijbediening speler = alleenHier ? context.read<PlayerStore>() : rijVoor(context);
   unawaited(schud ? speler.shuffleAll(nu) : speler.playQueue(nu, 0, cover: cover));
   if (melding != null) {
-    _srcToast(context, '${melding(nu)}${zonderPc ? ' · alleen wat op dit toestel staat' : ''}');
-  } else if (zonderPc && nu.length < lijst.length) {
-    _srcToast(context, 'Zonder pc: ${nu.length} van de ${lijst.length} nummers, wat op dit toestel staat');
+    _srcToast(context, '${melding(nu)}${alleenHier ? ' · alleen wat op dit toestel staat' : ''}');
+  } else if (alleenHier && nu.length < lijst.length) {
+    _srcToast(context, '${zonderPc ? 'Zonder pc' : 'Op mobiele data'}: ${nu.length} van de ${lijst.length} nummers, wat op dit toestel staat');
   }
   return nu;
 }
@@ -12133,6 +12177,8 @@ class PlayerBar extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontWeight: FontWeight.w600)),
                           ),
+                          // Waar het vandaan komt (Saber, 02-11-2026): thuis, via internet, of van dit toestel.
+                          if (t != null) _herkomst(context, p),
                           // Het hart: vol als het een favoriet is, en het klopt als het er een wordt.
                           if (t != null && !isTv) _HartKnop(track: t),
                           // 👍 "houden" bij een nummer dat de radio haalde, ook als hij op een speaker speelt — zie
@@ -14229,10 +14275,11 @@ Future<void> speelGetikt(BuildContext context, List<Track> lijst, int index, {Ui
   // Ook de verbinding: de bibliotheek merkt pas bij haar volgende vraag dat de pc weg is ([pcWeg], 29-10-2026).
   final zonderPc =
       hierAlleen != null && pcWeg(context.read<LibraryStore>(), verbinding: _misschien<ClientSession>(context)?.verbinding);
-  if (zonderPc) {
+  // Op mobiele data ook, als dit toestel zelf speelt (Saber, 02-11-2026: "Buiten alleen gsm"; [alleenHierOpMobiel]).
+  if (zonderPc || (hierAlleen != null && alleenHierOpMobiel(context))) {
     final hier = alleenHier(lijst, index, hierAlleen.has);
     if (hier == null) {
-      _srcToast(context, 'Staat niet op dit toestel, en je pc is nu niet bereikbaar');
+      _srcToast(context, nietHierZin(zonderPc: zonderPc));
       return;
     }
     (lijst, index) = (hier.lijst, hier.index);
@@ -17808,11 +17855,16 @@ Widget _compactBar(BuildContext context, _Transport x, double bottomInset, {bool
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(t?.title ?? '—',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w600, fontSize: 14)),
+                              Row(children: [
+                                Flexible(
+                                  child: Text(t?.title ?? '—',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                                ),
+                                // Waar het vandaan komt (Saber, 02-11-2026): thuis, via internet, of van je gsm.
+                                if (t != null) _herkomst(context, p),
+                              ]),
                               // Een klacht gaat vóór de artiestnaam. Wie hier kijkt omdat er geen
                               // geluid komt, wil weten waaróm — de naam staat er toch al boven.
                               if (p.speelFout != null)
@@ -26557,12 +26609,20 @@ Widget _luidheidMerk(BuildContext context, Speelbron p, Track t, SpeakerTarget c
 
 /// De kwaliteitsbadge van Nu speelt als knop: hij opent [_toonKwaliteitBlad]. De kwaliteit van wat er KLINKT: een
 /// versie (versies.dart) heeft haar eigen.
-Widget _kwaliteitKnop(BuildContext context, Speelbron p, Track t, SpeakerTarget cast) => Pressable(
-      key: const ValueKey('np-kwaliteit-knop'),
-      onPressed: () => _toonKwaliteitBlad(context, p, t, cast),
-      borderRadius: BorderRadius.circular(6),
-      scaleOnFocus: false,
-      child: _qualityBadge(_stroomKwaliteit(p, _klinktAls(context, t))),
+///
+/// Ernaast waar het vandaan komt ([HerkomstTeken]): thuis, via internet, of van dit toestel.
+Widget _kwaliteitKnop(BuildContext context, Speelbron p, Track t, SpeakerTarget cast) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Pressable(
+          key: const ValueKey('np-kwaliteit-knop'),
+          onPressed: () => _toonKwaliteitBlad(context, p, t, cast),
+          borderRadius: BorderRadius.circular(6),
+          scaleOnFocus: false,
+          child: _qualityBadge(_stroomKwaliteit(p, _klinktAls(context, t))),
+        ),
+        _herkomst(context, p, metWoord: true),
+      ],
     );
 
 /// Het nummer zoals het speelt als je erop tikt: de standaardversie (versies.dart), of [t] zelf. Een nummerregel toont

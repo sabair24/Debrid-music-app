@@ -13,10 +13,12 @@ import 'package:debridmusic/lan/zones.dart';
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/main.dart';
 import 'package:debridmusic/models.dart';
+import 'package:debridmusic/netsoort.dart';
 import 'package:debridmusic/offline.dart';
 import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/player.dart';
 import 'package:debridmusic/settings.dart';
+import 'package:debridmusic/ui/herkomst_teken.dart';
 import 'package:debridmusic/ui/op_toestel.dart';
 import 'package:debridmusic/zone_lijst.dart';
 import 'package:debridmusic/zone_speler.dart';
@@ -124,7 +126,7 @@ void main() {
       } catch (_) {}
     });
 
-    Future<({_Speler speler, _Sessie sessie})> bouw(WidgetTester tester, Verbindingsstand stand) async {
+    Future<({_Speler speler, _Sessie sessie})> bouw(WidgetTester tester, Verbindingsstand stand, {Netsoort? net}) async {
       tester.view.physicalSize = const Size(1080, 2340);
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
@@ -143,6 +145,7 @@ void main() {
           ChangeNotifierProvider<AppSettings>.value(value: AppSettings()),
           ListenableProvider<PlayerStore>.value(value: speler),
           ListenableProvider<ClientSession>.value(value: sessie),
+          if (net != null) ChangeNotifierProvider<NetsoortStore>.value(value: NetsoortStore()..zetVoorToets(net)),
         ],
         child: const MaterialApp(home: Scaffold(body: OpDitToestelView())),
       ));
@@ -223,6 +226,55 @@ void main() {
       ));
       expect(find.ancestor(of: find.text('van de pc'), matching: find.byType(Opacity)), findsOneWidget);
       expect(find.ancestor(of: find.text('hier'), matching: find.byType(Opacity)), findsNothing);
+    });
+
+    // Saber, 02-11-2026: "Buiten alleen gsm" — op mobiele data alleen wat op dit toestel staat, ook met de pc erbij; op
+    // elke wifi de hele bibliotheek.
+    testWidgets('DE KERN (mobiele data): met de pc erbij schudt Shuffle alleen wat hier staat, en de uitleg zegt waarom',
+        (tester) async {
+      final r = await bouw(tester, const Verbindingsstand.verbonden(Verbindingsweg.tailscale), net: Netsoort.mobiel);
+      expect(find.text('Op mobiele data spelen Shuffle en Alles afspelen alleen wat op dit toestel staat.'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('toestel-shuffle')));
+      await tester.pump();
+      expect(r.speler.geschud.single.toSet(), hier, reason: 'geen mobiele data voor muziek');
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('op wifi (ook een vreemde) de hele bibliotheek', (tester) async {
+      final r = await bouw(tester, const Verbindingsstand.verbonden(Verbindingsweg.tailscale), net: Netsoort.wifi);
+      await tester.tap(find.byKey(const ValueKey('toestel-shuffle')));
+      await tester.pump();
+      expect(r.speler.geschud.single.toSet(), alles);
+      await tester.pump(const Duration(seconds: 4));
+    });
+
+    testWidgets('op mobiele data grijs wat niet hier staat, ook met de pc erbij', (tester) async {
+      await tester.runAsync(offline.load);
+      final lib = LibraryStore()
+        ..remote = RemoteClient(RemoteEndpoint(baseUrl: Uri.parse('http://192.168.0.117:47820'), token: 't'));
+      final sessie = _Sessie(const Verbindingsstand.verbonden(Verbindingsweg.tailscale));
+      final net = NetsoortStore()..zetVoorToets(Netsoort.mobiel);
+      alleenHierOokNu = alleenHierOpMobiel;
+      addTearDown(() => alleenHierOokNu = null);
+      Widget boom() => MultiProvider(
+            providers: [
+              ChangeNotifierProvider<LibraryStore>.value(value: lib),
+              ChangeNotifierProvider<OfflineStore>.value(value: offline),
+              ListenableProvider<ClientSession>.value(value: sessie),
+              ChangeNotifierProvider<NetsoortStore>.value(value: net),
+            ],
+            child: MaterialApp(
+                home: Column(children: [
+              NietHierGrijs(paden: [pc1.path], child: const Text('van de pc')),
+              NietHierGrijs(paden: [hier1.path], child: const Text('hier')),
+            ])),
+          );
+      await tester.pumpWidget(boom());
+      expect(find.ancestor(of: find.text('van de pc'), matching: find.byType(Opacity)), findsOneWidget);
+      expect(find.ancestor(of: find.text('hier'), matching: find.byType(Opacity)), findsNothing);
+      net.zetVoorToets(Netsoort.wifi);
+      await tester.pump();
+      expect(find.byType(Opacity), findsNothing, reason: 'weer op wifi: alles speelt');
     });
 
     // Saber, 29-10-2026, over Shuffle alles op Nummers: "ja doe da maar ook".
@@ -411,5 +463,53 @@ void main() {
         reason: 'alleen speelLijst en de knop van Op dit toestel schudden zelf; de rest gaat via speelLijst');
     final grijs = _bron('lib/ui/op_toestel.dart');
     expect(grijs, contains('(pcWeg(l) || (l.isRemote && losVanPc))'), reason: 'grijs zodra de verbinding weg is');
+  });
+
+  group('onderweg alleen wat hier staat (Saber, 02-11-2026: "Buiten alleen gsm")', () {
+    test('de speler slaat een stroom over: het eerstvolgende nummer dat hier staat', () {
+      final rij = [pc1, pc2, hier1, pc1, hier2];
+      bool hierStaat(Track t) => hier.contains(t.path);
+      expect(eersteHierVanaf(rij, 1, hierStaat), 2);
+      expect(eersteHierVanaf(rij, 3, hierStaat), 4);
+      expect(eersteHierVanaf(rij, 5, hierStaat), isNull, reason: 'niets meer: dan stil, met de reden');
+      expect(eersteHierVanaf(rij, -1, hierStaat), 2);
+    });
+
+    testWidgets('het icoontje: thuis, via internet, of op je gsm — en niets voor een zone', (tester) async {
+      Future<void> toon(Herkomst? h) => tester.pumpWidget(MaterialApp(
+          home: Scaffold(body: HerkomstTeken(herkomst: h, toestel: 'je gsm', metWoord: true))));
+      await toon(Herkomst.thuis);
+      expect(find.byIcon(Icons.home_rounded), findsOneWidget);
+      expect(find.text('thuis'), findsOneWidget);
+      await toon(Herkomst.internet);
+      expect(find.byIcon(Icons.cloud_rounded), findsOneWidget);
+      expect(find.text('via internet'), findsOneWidget);
+      await toon(Herkomst.toestel);
+      expect(find.byIcon(Icons.offline_pin_rounded), findsOneWidget);
+      expect(find.text('op je gsm'), findsOneWidget);
+      expect(find.byWidgetPredicate((w) => w is Semantics && w.properties.label == 'Van je gsm, zonder internet'),
+          findsOneWidget);
+      await toon(null);
+      expect(find.byType(Icon), findsNothing);
+    });
+
+    test('aangesloten: speler, vooruithalen, ophalen over mobiele data, en elke tik', () {
+      String bron(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
+      final speler = bron('lib/player.dart');
+      final open = speler.substring(speler.indexOf('  Future<void> _openCurrent() async {'));
+      expect(open.indexOf('if (alleenHier?.call() == true && mediaResolver(_speelPad(t.path)).startsWith(\'http\')) {'),
+          lessThan(open.indexOf('    final bron = _bron(t.path);')));
+      expect(speler, contains('    herkomst = herkomstVan?.call(url);\n'));
+      final main = bron('lib/main.dart');
+      expect(main, contains('  bool alleenHierNu() => !mode.owner && !isTv && netStore.net == Netsoort.mobiel;\n'));
+      expect(main, contains('  player.alleenHier = alleenHierNu;\n'));
+      expect(main, contains('  alleenHierOokNu = alleenHierOpMobiel;\n'));
+      expect(main, contains('    if (alleenHierNu()) return;\n'), reason: 'op mobiele data niets vooruit halen');
+      expect(main, contains('  offline.magOphalen = () => true;\n'));
+      expect(main, contains('          : (netStore.onderweg ? Herkomst.internet : Herkomst.thuis);\n'));
+      expect(main, contains('  if (zonderPc || (hierAlleen != null && alleenHierOpMobiel(context))) {\n'));
+      expect(main, contains('  final opMobiel = hier != null && !zonderPc && alleenHierOpMobiel(context);\n'));
+      expect('_herkomst(context, p'.allMatches(main), hasLength(3), reason: 'Nu speelt, de minispeler, de brede balk');
+    });
   });
 }
