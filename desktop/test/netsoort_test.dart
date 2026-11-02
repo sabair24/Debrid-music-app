@@ -10,9 +10,78 @@ import 'package:debridmusic/lan/stroomstand.dart';
 import 'package:debridmusic/lan/tokens.dart' show bronIsThuis;
 import 'package:debridmusic/lan/verbindingsstand.dart' show Verbindingsweg;
 import 'package:debridmusic/netsoort.dart';
+import 'package:debridmusic/verder_luisteren.dart';
+import 'package:debridmusic/zone_lijst.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+class _TelBron implements VerderBron {
+  int gevraagd = 0;
+  @override
+  Future<({Map<String, dynamic>? stand, Map<String, dynamic>? verzoek})?> haal() async {
+    gevraagd++;
+    return null;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation i) => null;
+}
+
 void main() {
+  group('zones op mobiele data: helemaal stil (Saber, 02-11-2026)', () {
+    test('de lijn: dicht op mobiele data, behalve voor een tv of een zone op afstand', () {
+      expect(zoneLijnOpen(voor: true, tv: false, speelt: true, opAfstand: false, mobiel: true), isFalse,
+          reason: 'vooraan en spelend, maar op mobiele data: dicht');
+      expect(zoneLijnOpen(voor: true, tv: false, speelt: false, opAfstand: false, mobiel: false), isTrue);
+      expect(zoneLijnOpen(voor: false, tv: false, speelt: true, opAfstand: false, mobiel: false), isTrue);
+      expect(zoneLijnOpen(voor: false, tv: false, speelt: false, opAfstand: false, mobiel: false), isFalse,
+          reason: 'achtergrond zonder muziek: zoals altijd dicht');
+      expect(zoneLijnOpen(voor: false, tv: false, speelt: false, opAfstand: true, mobiel: true), isTrue,
+          reason: 'wie van hieruit een zone bedient, wil haar zien');
+      expect(zoneLijnOpen(voor: false, tv: true, speelt: false, opAfstand: false, mobiel: true), isTrue);
+    });
+
+    test('de stand melden: op mobiele data één per minuut, meteen bij een ander nummer of pauze', () {
+      bool melden({bool mobiel = true, String nummer = 'a', bool speelt = true, Duration sinds = const Duration(seconds: 5)}) =>
+          standMelden(mobiel: mobiel, nummer: nummer, speelt: speelt, vorigNummer: 'a', vorigSpeelt: true, sinds: sinds);
+      expect(melden(), isFalse, reason: 'vijf seconden later, zelfde nummer: niet');
+      expect(melden(sinds: const Duration(seconds: 59)), isFalse);
+      expect(melden(sinds: const Duration(minutes: 1)), isTrue);
+      expect(melden(nummer: 'b'), isTrue, reason: 'een ander nummer: meteen');
+      expect(melden(speelt: false), isTrue, reason: 'pauze: meteen');
+      expect(melden(mobiel: false), isTrue, reason: 'op wifi zoals altijd om de vijf seconden');
+      expect(standMelden(mobiel: true, nummer: 'a', speelt: true, sinds: Duration.zero), isTrue,
+          reason: 'de eerste melding gaat altijd');
+    });
+
+    test('verder luisteren vraagt de pc niet zelf zolang het stil is', () async {
+      final bron = _TelBron();
+      final v = VerderLuisteren(bron);
+      var stil = true;
+      v.stil = () => stil;
+      await v.kijkNu();
+      expect(bron.gevraagd, 0);
+      stil = false;
+      await v.kijkNu();
+      expect(bron.gevraagd, 1);
+    });
+
+    test('de zonelijst zegt dat ze stil is, en het blad vraagt ze één keer', () {
+      final l = ZoneLijst(hier: 'dev:x');
+      var gemeld = 0;
+      l.addListener(() => gemeld++);
+      l.zetStil(true);
+      l.zetStil(true);
+      expect(l.stil, isTrue);
+      expect(gemeld, 1);
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(main, contains('    if (z != null && z.stil) unawaited(z.vraagVers?.call());\n'));
+      expect(main, contains('          zoneLijst.zetStil(mobiel && gekozenZone.opAfstand == null);\n'));
+      expect(main, contains('        netStore.addListener(lijnNaarStand);\n        lijnNaarStand();\n'));
+      expect(main, contains('      verder.stil = () => zoneLijst.stil;\n'));
+      expect(main, contains('            mobiel: !isTv && netStore.net == Netsoort.mobiel,\n            nummer: track.path,\n'));
+    });
+  });
+
   Stroomstand stand({
     Stroomstand thuis = Stroomstand.max,
     Stroomstand onderweg = Stroomstand.cd,

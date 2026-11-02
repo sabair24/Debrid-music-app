@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/player.dart' show Rijbediening, Speelbron;
 import 'package:debridmusic/wekker.dart';
+import 'package:debridmusic/zone_lijst.dart' show zoneLijnOpen;
 import 'package:debridmusic/zone_opdracht.dart';
 
 String _bron(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
@@ -146,7 +147,10 @@ void main() {
       final hoofd = _bron('lib/main.dart');
       expect(hoofd, contains('      slaapt: toestelSlaapt,\n      wek: wekVoorDeMuziek,\n'));
       expect(hoofd, contains('    wek: isTv ? wekVoorDeMuziek : null,\n'));
-      expect(hoofd, contains('if (voor || isTv || player.playing || gekozenZone.opAfstand != null) {'));
+      expect(hoofd, contains('          if (zoneLijnOpen(\n'
+          '              voor: voor, tv: isTv, speelt: player.playing, opAfstand: gekozenZone.opAfstand != null, mobiel: mobiel)) {'));
+      expect(zoneLijnOpen(voor: false, tv: true, speelt: false, opAfstand: false, mobiel: true), isTrue,
+          reason: 'een tv houdt de lijn altijd open: zo vind en wek je hem');
       expect(hoofd, contains(
           '    session.rust = () => !player.playing && WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;\n'));
       expect(hoofd, contains('        await session.refreshNow().timeout(const Duration(seconds: 5));\n'));
