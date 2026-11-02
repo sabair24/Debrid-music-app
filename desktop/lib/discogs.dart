@@ -1639,6 +1639,10 @@ class ReleaseArt {
   bool get isEmpty => front == null && back == null && disc == null;
 }
 
+/// De langste zijde van de scans in gsm-formaat (`/api/releaseart?klein=1`, op mobiele data): ~50 KB per scan in
+/// plaats van ~350 KB. Zie [DiscogsArtwork.zuinig].
+const kKleinScan = 500;
+
 /// De scans van een album als JSON, zoals de pc ze aan een toestel geeft (`/api/releaseart`, server.dart).
 Map<String, dynamic> kunstNaarJson(ReleaseArt a, {required bool klaar}) => {
       if (a.front != null) 'front': base64Encode(a.front!),
@@ -1915,7 +1919,12 @@ extension DiscogsArtwork on DiscogsService {
   /// lang had: onder een andere sleutel (de gsm kende de uitgave van het album nog niet, want die feiten komen
   /// pas als je de albumpagina opent), of op een toestel dat hem nog nooit gezien had. De pc zoekt het album
   /// op zijn id op, met zijn eigen feiten en keuzes — dus altijd de juiste map.
-  static Future<({ReleaseArt art, bool klaar})?> Function(String artist, String album)? vanDePc;
+  static Future<({ReleaseArt art, bool klaar})?> Function(String artist, String album, {bool klein})? vanDePc;
+
+  /// Op mobiele data? Dan vraagt een toestel de scans in gsm-formaat ([kKleinScan]) en laat het de keten liggen;
+  /// op wifi komen ze daarna op volle resolutie. Saber, 02-11-2026: elk album dat op het scherm kwam, haalde
+  /// ~1,1 MB van de pc over mobiele data — gekozen: "Kleiner op mobiele data". Null (de pc, een toets): nooit.
+  static bool Function()? zuinig;
 
   /// Eerst de pc ([vanDePc]), dan pas de keten. Wat de pc gaf staat meteen op het scherm ([meld]) en op schijf;
   /// heet het daar af, dan is dat het antwoord.
@@ -1932,17 +1941,28 @@ extension DiscogsArtwork on DiscogsService {
       void Function(ReleaseArt) meld) async {
     final pc = vanDePc;
     if (pc != null && !freeOnly) {
+      // Op mobiele data: wat er al in gsm-formaat ligt, volstaat — geen net.
+      final klein = zuinig?.call() == true;
+      if (klein && await File('${dir.path}${Platform.pathSeparator}klein').exists()) {
+        final al = await _readArt(dir);
+        if (al != null && (al.back != null || al.disc != null)) {
+          trace?.call('  [kunst] in gsm-formaat van schijf — op wifi volle resolutie');
+          meld(al);
+          return al;
+        }
+      }
       ({ReleaseArt art, bool klaar})? v;
       try {
-        v = await pc(artist, album).timeout(const Duration(seconds: 10));
+        v = await pc(artist, album, klein: klein).timeout(const Duration(seconds: 10));
       } catch (_) {/* dan de keten, zoals altijd */}
       final a = v?.art;
       if (v != null && a != null && (a.back != null || a.disc != null)) {
         trace?.call('  [kunst] van de pc:${a.front != null ? " voorkant" : ""}${a.back != null ? " achterkant" : ""}'
-            '${a.disc != null ? " cd" : ""}${v.klaar ? " — af" : " — de keten vult aan"}');
+            '${a.disc != null ? " cd" : ""}${klein ? " — gsm-formaat" : v.klaar ? " — af" : " — de keten vult aan"}');
         meld(a);
-        await _writeArt(dir, a, done: v.klaar);
-        if (v.klaar) return a;
+        // Klein is nooit af (op wifi opnieuw), en op mobiele data geen keten over je databundel.
+        await _writeArt(dir, a, done: v.klaar && !klein, klein: klein);
+        if (v.klaar || klein) return a;
       }
     }
     return _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld);
@@ -2687,7 +2707,7 @@ extension DiscogsArtwork on DiscogsService {
     } catch (_) {/* zonder briefje kost het één herhaalde zoektocht */}
   }
 
-  Future<void> _writeArt(Directory dir, ReleaseArt art, {bool done = true}) async {
+  Future<void> _writeArt(Directory dir, ReleaseArt art, {bool done = true, bool klein = false}) async {
     // Nieuwe scans: wat er van deze map in het geheugen lag, klopt niet meer. Ook ná het schrijven
     // (zie `finally`), want een lezing tussendoor zou een half geschreven map onthouden.
     _gelezen.remove(dir.path);
@@ -2716,6 +2736,14 @@ extension DiscogsArtwork on DiscogsService {
       // Withheld when the background warmer wrote a partial answer from the free sources only. The
       // images are worth keeping — the sleeve shows at once — but the record has not been fully looked
       // up, and marking it done would mean the page never goes on to find the back and the disc.
+      // In gsm-formaat (op mobiele data, zie [_vanPcOfVers]): het briefje "klein", zodat wifi ze op volle resolutie
+      // haalt. Volle scans erover halen het weg.
+      final kleinMerk = File('${dir.path}${Platform.pathSeparator}klein');
+      if (klein) {
+        await kleinMerk.writeAsString('1');
+      } else if (await kleinMerk.exists()) {
+        await kleinMerk.delete();
+      }
       if (!done) return;
       await File('${dir.path}${Platform.pathSeparator}done').writeAsString('1');
     } catch (_) {

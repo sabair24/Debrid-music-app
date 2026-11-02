@@ -1096,14 +1096,16 @@ Future<void> main() async {
     netStore.wegNu = () => session.wegVoorStroom ?? wegUitNaam(settings.laatsteWeg);
     // De cd en de achterkant eerst van de pc: die heeft ze al (Saber, 21-10-2026, Azizam) — zie
     // [DiscogsService.vanDePc]. Op het id van het album, zodat de pc in zijn eigen, juiste map kijkt.
-    DiscogsArtwork.vanDePc = (artist, album) async {
+    DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async {
       final c = library.remote;
       if (c == null) return null;
       final al = library.albums.where((a) => a.artist == artist && a.title == album).firstOrNull;
       final id = al == null ? '' : library.uidOf(al);
       if (id.isEmpty) return null;
-      return kunstUitJson(await c.releaseArtJson(id));
+      return kunstUitJson(await c.releaseArtJson(id, klein: klein));
     };
+    // Op mobiele data de scans in gsm-formaat (Saber, 02-11-2026: "Kleiner op mobiele data"); op wifi volle resolutie.
+    DiscogsArtwork.zuinig = () => netStore.net == Netsoort.mobiel;
     // En die weg onthouden over herstarts heen: bij een koude start hervat de speler het laatste nummer
     // vóór de verbinding er is (Perfect en Black Velvet als origineel op de wifi van de kliniek, 21-10-2026).
     session.addListener(() {
@@ -1217,6 +1219,10 @@ Future<void> main() async {
   // niets als het getal niet veranderde — dus dit mag bij elke melding langskomen.
   netStore.addListener(() {
     unawaited(player.zetVooruitlezen(secs: vooruitleesSeconden(netStore.net)));
+    // Van wifi naar mobiele data midden in een nummer van de pc: de rest in de stand van nu (Saber, 02-11-2026: "Rest
+    // in cd-kwaliteit"; Barry White haalde 83 MB hi-res over mobiele data). De weg naar de pc doet hetzelfde via
+    // [PlayerStore.pcWeerBereikbaar].
+    if (!mode.owner) player.kijkNaarStand();
     // Weer op wifi: offline bewaren loopt verder (offline.dart, [OfflineStore.magOphalen]).
     offline.verder();
   });

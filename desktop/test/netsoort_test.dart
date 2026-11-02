@@ -99,14 +99,39 @@ void main() {
       expect(heropenVoorStand(geopend: origineel, nu: cd, speelt: false, plek: const Duration(seconds: 95)), isTrue,
           reason: 'koude start: hervat en gepauzeerd');
       expect(heropenVoorStand(geopend: origineel, nu: cd, speelt: true, plek: const Duration(seconds: 3)), isTrue);
-      expect(heropenVoorStand(geopend: origineel, nu: cd, speelt: true, plek: const Duration(minutes: 2)), isFalse,
-          reason: 'midden in een nummer geen hik voor wat data');
+      expect(heropenVoorStand(geopend: origineel, nu: cd, speelt: true, plek: const Duration(minutes: 2)), isTrue,
+          reason: 'omlaag ook midden in een nummer: de rest in cd-kwaliteit (Barry White, 83 MB hi-res over 5G)');
+      expect(heropenVoorStand(geopend: cd, nu: origineel, speelt: true, plek: const Duration(minutes: 2)), isFalse,
+          reason: 'omhoog midden in een nummer geen hik voor betere kwaliteit');
+      const hoog = 'http://pc/stream/abc.flac?token=x&maxRate=96000&maxBits=24';
+      expect(heropenVoorStand(geopend: hoog, nu: cd, speelt: true, plek: const Duration(minutes: 2)), isTrue,
+          reason: 'van 24/96 naar 16/44,1 is ook omlaag');
+      expect(heropenVoorStand(geopend: cd, nu: hoog, speelt: true, plek: const Duration(minutes: 2)), isFalse);
       expect(heropenVoorStand(geopend: cd, nu: cd, speelt: false, plek: Duration.zero), isFalse);
       expect(heropenVoorStand(geopend: '/storage/abc.flac', nu: cd, speelt: false, plek: Duration.zero), isFalse,
           reason: 'een kopie op het toestel');
       expect(heropenVoorStand(geopend: null, nu: cd, speelt: false, plek: Duration.zero), isFalse);
       expect(heropenVoorStand(geopend: cd, nu: origineel, speelt: false, plek: Duration.zero), isTrue,
           reason: 'andersom ook: thuis na een koude start met de weg van buiten');
+    });
+
+    test('strenger omzetten: geen grens is het origineel, bits 0 is een vrije diepte', () {
+      expect(grensLager((rate: 44100, bits: 16), dan: null), isTrue);
+      expect(grensLager(null, dan: (rate: 44100, bits: 16)), isFalse);
+      expect(grensLager((rate: 44100, bits: 16), dan: (rate: 44100, bits: 0)), isTrue);
+      expect(grensLager((rate: 44100, bits: 0), dan: (rate: 44100, bits: 16)), isFalse);
+      expect(grensLager((rate: 48000, bits: 24), dan: (rate: 96000, bits: 24)), isTrue);
+      expect(grensLager((rate: 44100, bits: 16), dan: (rate: 44100, bits: 16)), isFalse);
+    });
+
+    test('een wissel naar mobiele data kijkt meteen naar de stand van het lopende nummer', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final i = main.indexOf('  netStore.addListener(() {\n    unawaited(player.zetVooruitlezen(');
+      expect(i, greaterThan(0));
+      expect(main.substring(i, main.indexOf('\n  });\n', i)), contains('    if (!mode.owner) player.kijkNaarStand();\n'));
+      final speler = File('lib/player.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final p = speler.indexOf('  void pcWeerBereikbaar() {');
+      expect(speler.substring(p, speler.indexOf('\n  }\n', p)), contains('    if (kijkNaarStand()) return;\n'));
     });
 
     test('een bewaarde weg terug', () {
@@ -121,7 +146,7 @@ void main() {
       expect(main, contains('netStore.wegNu = () => session.wegVoorStroom ?? wegUitNaam(settings.laatsteWeg);'));
       expect(main, contains('settings.laatsteWeg = w.name;'));
       final speler = File('lib/player.dart').readAsStringSync().replaceAll('\r\n', '\n');
-      expect(speler, contains('if (heropenVoorStand(geopend: mpvAdres, nu: mediaResolver(_speelPad(t.path)), speelt: playing, plek: position)) {'));
+      expect(speler, contains('if (!heropenVoorStand(geopend: mpvAdres, nu: mediaResolver(_speelPad(t.path)), speelt: playing, plek: position)) {'));
       expect(main, contains('opMobiel: netStore.onderweg,'));
     });
   });

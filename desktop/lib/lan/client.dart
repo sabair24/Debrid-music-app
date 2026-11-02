@@ -452,8 +452,9 @@ class RemoteClient {
   /// ask after that, from any device, is instant.
   /// De scans van een album zoals de pc ze heeft (`/api/releaseart`), als JSON — zie `kunstUitJson` in
   /// discogs.dart. Null als de pc ze niet heeft of het niet kent.
-  Future<Map<String, dynamic>?> releaseArtJson(String albumId) async {
-    final res = await _get('/api/releaseart', query: {'albumId': albumId});
+  /// [klein]: in gsm-formaat (`kKleinScan`, op mobiele data).
+  Future<Map<String, dynamic>?> releaseArtJson(String albumId, {bool klein = false}) async {
+    final res = await _get('/api/releaseart', query: {'albumId': albumId, if (klein) 'klein': '1'});
     if (res.statusCode != 200) return null;
     final decoded = jsonDecode(utf8.decode(res.bodyBytes));
     return decoded is Map<String, dynamic> ? decoded : null;

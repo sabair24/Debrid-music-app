@@ -92,12 +92,25 @@ Verbindingsweg? wegUitNaam(String naam) {
 /// laatste nummer meteen — vóór de verbinding met de pc er is, dus vóór de weg bekend is. Android zegt
 /// "wifi", en dan gold thuis: Perfect (24/192, 108 MB) en Black Velvet (32/192, 197 MB) gingen als origineel
 /// de deur uit, de nummers erna wel als cd. Is de verbinding er en geldt nu een andere grens dan die in
-/// [geopend], dan opnieuw — maar alleen gepauzeerd of in de eerste [kHeropenTot]: midden in een nummer
-/// een hik voor wat data is geen ruil.
+/// [geopend], dan opnieuw — omhoog alleen gepauzeerd of in de eerste [kHeropenTot]: midden in een nummer
+/// een hik voor betere kwaliteit is geen ruil.
+///
+/// **Omlaag altijd, ook midden in een nummer (Saber, 02-11-2026).** Barry White (24/192, 156 MB) speelde
+/// thuis als origineel; na het vertrek haalde de gsm de rest, 83 MB, in hi-res over mobiele data. Gekozen:
+/// "Rest in cd-kwaliteit" — een hik van een seconde is daar wél de ruil.
 bool heropenVoorStand({required String? geopend, required String nu, required bool speelt, required Duration plek}) {
   if (geopend == null || !geopend.startsWith('http') || !nu.startsWith('http')) return false;
-  if (grensUitUrl(geopend) == grensUitUrl(nu)) return false;
+  final oud = grensUitUrl(geopend), nieuw = grensUitUrl(nu);
+  if (oud == nieuw) return false;
+  if (grensLager(nieuw, dan: oud)) return true;
   return !speelt || plek < kHeropenTot;
+}
+
+/// Zet [nieuw] strenger om dan [dan]? Null is geen grens (het origineel); `bits: 0` is een vrije diepte.
+bool grensLager(({int rate, int bits})? nieuw, {required ({int rate, int bits})? dan}) {
+  if (nieuw == null) return false;
+  if (dan == null || nieuw.rate < dan.rate) return true;
+  return nieuw.bits > 0 && (dan.bits == 0 || nieuw.bits < dan.bits);
 }
 
 const kHeropenTot = Duration(seconds: 30);
