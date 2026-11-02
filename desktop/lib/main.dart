@@ -44,6 +44,7 @@ import 'ui/op_toestel.dart';
 import 'toestelmap.dart';
 import 'toestel_bijhouden.dart';
 import 'nieuw_op_toestel.dart';
+import 'scans_vooraf.dart';
 import 'toestel_redenen.dart';
 import 'ui/nummerkeuze.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
@@ -1542,12 +1543,50 @@ Future<void> main() async {
           if (offline.has(t.path)) normKey(t.album),
       };
       if (offline.tracks.isNotEmpty && hier.isEmpty) return;
+      // Haalt dit toestel de hele bibliotheek vooraf (hieronder), dan de grens van de pc: anders snoeit het weg wat het net
+      // haalde, en haalt het dat morgen opnieuw.
       await snoeiMap(Directory('$appDir${Platform.pathSeparator}releaseart'),
-          maxBytes: kReleaseartToestel, perMap: true, houd: (map) => gezienVoor(map, hier));
+          maxBytes: !isTv && settings.scansVooraf ? kReleaseartVooraf : kReleaseartToestel,
+          perMap: true,
+          houd: (map) => gezienVoor(map, hier));
     }
 
     Timer(const Duration(minutes: 2), () => unawaited(snoeiScansHier()));
     Timer.periodic(const Duration(hours: 24), (_) => unawaited(snoeiScansHier()));
+
+    // De hoezen en scans van de hele bibliotheek vooraf hier, thuis op wifi en op volle grootte van de pc
+    // (scans_vooraf.dart; Saber, 02-11-2026: "Je hele bibliotheek", "Volle resolutie"). Zonder pc zocht de gsm ze
+    // anders zelf op internet, over mobiele data. Niet op een tv: die zit altijd op wifi.
+    if (!isTv) {
+      final vooraf = scansVoorafHier = ScansVooraf<Album>(
+        albums: () => [...library.albums],
+        mag: () =>
+            settings.scansVooraf && library.remote != null && netStore.net == Netsoort.wifi && !netStore.onderweg,
+        haal: (al) async {
+          final v = albumArtVooruit(library, al);
+          final s = await DiscogsService(settings).scansVooraf(v.artist, v.album,
+              expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+          // En de digitale voorkant, die Nu speelt over de scan heen legt ("digitaal wint altijd").
+          if (s != Voorafstand.geenPc && (v.roles['front'] ?? '').isEmpty) {
+            await CoverEnricher(settings).digitaleVoorkant(v.artist, v.album, titels: [for (final t in al.tracks) t.title]);
+          }
+          return s;
+        },
+        log: kunstLog.line,
+      );
+      // Bij een ander netwerk, en als er albums bijkomen; anders om de zes uur. Niet bij elke catalogus: die verandert
+      // thuis om de 40 s, en een ronde kijkt elk album op schijf na.
+      var albumsGezien = -1;
+      library.addListener(() {
+        final n = library.albums.length;
+        if (n == albumsGezien || library.tracks.isEmpty) return;
+        albumsGezien = n;
+        vooraf.kijk();
+      });
+      netStore.addListener(vooraf.kijk);
+      settings.addListener(vooraf.kijk);
+      Timer(const Duration(minutes: 3), vooraf.start);
+    }
   }
   // Engelse beschrijvingen in het Nederlands: de pc vertaalt met zijn AI-sleutel, een toestel vraagt het
   // de pc. Allebei bewaren ze wat ze kregen. Zie `vertaler.dart`.
@@ -20997,6 +21036,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
 
 /// De sleutel naar de Navigator, zodat "ga naar Nu speelt" van buiten de boom kan.
 final appNavigator = GlobalKey<NavigatorState>();
+
+/// De hoezen en scans vooraf op dit toestel (scans_vooraf.dart), voor de stand in Instellingen. Null op de pc en een tv.
+ScansVooraf<Album>? scansVoorafHier;
 
 /// Naar "Nu speelt", vanaf waar je ook bent.
 ///
@@ -43566,6 +43608,26 @@ class StroomkwaliteitKeuze extends StatelessWidget {
                 subtitle: Text('Daarna een waarschuwing in Op dit toestel.', style: TextStyle(color: _muted, fontSize: 11.5)),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => kiesNieuwGrens(context),
+              ),
+            // Saber, 02-11-2026: de hoezen en scans van de hele bibliotheek vooraf hier (scans_vooraf.dart).
+            if (!isTv)
+              ValueListenableBuilder<({int klaar, int totaal})?>(
+                valueListenable: scansVoorafHier?.stand ?? ValueNotifier(null),
+                builder: (context, stand, _) => SwitchListTile(
+                  key: const ValueKey('instelling-scans-vooraf'),
+                  contentPadding: EdgeInsets.zero,
+                  value: settings.scansVooraf,
+                  title: const Text('Hoezen en scans vooraf op dit toestel', style: TextStyle(fontSize: 13.5)),
+                  subtitle: Text(
+                      'Thuis op wifi haalt dit toestel van elk album de voorkant, de achterkant en de cd van je pc, op volle '
+                      'grootte (~1 MB per album). Zo zie je ze ook zonder pc, en kosten ze geen mobiele data.'
+                      '${stand == null || !settings.scansVooraf ? '' : ' · ${stand.klaar} van ${stand.totaal} albums hier'}',
+                      style: TextStyle(color: _muted, fontSize: 11.5)),
+                  onChanged: (aan) {
+                    settings.scansVooraf = aan;
+                    unawaited(settings.save());
+                  },
+                ),
               ),
           ],
         ],

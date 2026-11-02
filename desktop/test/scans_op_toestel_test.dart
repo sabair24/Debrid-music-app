@@ -102,7 +102,8 @@ void main() {
     final hoofd = _bron('lib/main.dart');
     expect(hoofd, contains('  if (!mode.owner) {\n    Future<void> snoeiScansHier() async {\n      if (library.tracks.isEmpty) return;\n'));
     expect(hoofd, contains('      if (offline.tracks.isNotEmpty && hier.isEmpty) return;\n'));
-    expect(hoofd, contains('maxBytes: kReleaseartToestel, perMap: true, houd: (map) => gezienVoor(map, hier));'));
+    expect(hoofd, contains('          maxBytes: !isTv && settings.scansVooraf ? kReleaseartVooraf : kReleaseartToestel,\n'
+        '          perMap: true,\n          houd: (map) => gezienVoor(map, hier));'));
     expect(hoofd, contains('    Timer.periodic(const Duration(hours: 24), (_) => unawaited(snoeiScansHier()));\n'));
   });
 }

@@ -10,6 +10,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import 'cache_snoei.dart' show gezienMerk;
+import 'scans_vooraf.dart' show Voorafstand;
 import 'catalog.dart';
 import 'discography.dart';
 import 'editions.dart';
@@ -2488,6 +2489,33 @@ extension DiscogsArtwork on DiscogsService {
   }
 
   String get artDir => '$appDir${Platform.pathSeparator}releaseart';
+
+  /// De scans van dit album van de pc naar dit toestel, op volle grootte en zonder de keten: "vooraf op dit toestel"
+  /// (scans_vooraf.dart). Wat er al af ligt, kost niets; gsm-formaat is nooit af ([_vanPcOfVers]), dat komt opnieuw.
+  Future<Voorafstand> scansVooraf(
+    String artist,
+    String album, {
+    int expectedTracks = 0,
+    int? pinned,
+    String? pinnedMbid,
+    Map<String, String> roles = const {},
+  }) async {
+    final dir = artMap(artist, album, expectedTracks, pinned, pinnedMbid, roles);
+    final al = await _readArt(dir);
+    if (al != null && await _afgerond(dir, al)) return Voorafstand.al;
+    final pc = vanDePc;
+    if (pc == null) return Voorafstand.geenPc;
+    final ({ReleaseArt art, bool klaar})? v;
+    try {
+      v = await pc(artist, album).timeout(const Duration(seconds: 30));
+    } catch (_) {
+      return Voorafstand.geenPc;
+    }
+    final a = v?.art;
+    if (v == null || a == null || (a.back == null && a.disc == null)) return Voorafstand.nietOpPc;
+    await _writeArt(dir, a, done: v.klaar);
+    return Voorafstand.gehaald;
+  }
 
   /// Are this record's scans already on disk?
   ///
