@@ -831,6 +831,21 @@ class Stilstandwacht {
 }
 
 /// Native (libmpv) player with a queue, shuffle, repeat and a Radio mode.
+/// Waar het nummer dat nu speelt vandaan komt (Saber, 02-11-2026: *"ik zou het ergens ook duidelijk moeten zien met een
+/// icontje of ik online of offline stream"*): van je pc thuis, van je pc via internet, of van dit toestel zelf.
+enum Herkomst { thuis, internet, toestel }
+
+/// Het eerste nummer vanaf plek [van] in [rij] dat op dit toestel staat ([staatHier]), of null. Zie [PlayerStore.alleenHier].
+int? eersteHierVanaf(List<Track> rij, int van, bool Function(Track t) staatHier) {
+  for (var i = van < 0 ? 0 : van; i < rij.length; i++) {
+    if (staatHier(rij[i])) return i;
+  }
+  return null;
+}
+
+/// Wat de speler zegt als hij op mobiele data niets meer heeft dat op dit toestel staat ([PlayerStore.alleenHier]).
+const kAlleenHierZin = 'Op mobiele data speelt alleen wat op dit toestel staat, en de rest van de rij staat er niet op';
+
 /// Een wissel van versie die onderweg ophield: een ander nummer, of een nieuwe wissel ([PlayerStore.wisselVersie]).
 class _WisselGestopt implements Exception {
   const _WisselGestopt();
@@ -1257,6 +1272,20 @@ class PlayerStore extends ChangeNotifier
   /// boven een kopie van 16/44.1. Zie `OfflineTrack.grens`.
   ({int rate, int bits})? Function(String path)? kopieGrens;
 
+  /// Waar het geopende nummer vandaan komt ([Herkomst]); null op de pc zelf, of zolang niemand het zegt.
+  Herkomst? herkomst;
+
+  /// Wie dat bepaalt uit het adres dat mpv krijgt (main.dart): een pad op het toestel, of een stroom van de pc.
+  Herkomst? Function(String adres)? herkomstVan;
+
+  /// Speelt dit toestel nu alleen wat erop staat? Op mobiele data wel (Saber, 02-11-2026: "Buiten alleen gsm" — geen
+  /// mobiele data voor muziek); dan slaat het openen een stroom van de pc over ([_openCurrent]). Ingehangen vanuit main.dart.
+  bool Function()? alleenHier;
+
+  /// Het eerste nummer vanaf plek [van] in de rij dat op dit toestel staat ([mediaResolver] geeft dan een pad), of null.
+  int? _eerstHierVanaf(int van) =>
+      eersteHierVanaf(_order, van, (t) => !mediaResolver(_speelPad(t.path)).startsWith('http'));
+
   /// Gelijk volume: de versterking voor een nummer. Ingehangen vanuit main.dart, waar de bibliotheek
   /// en de instellingen zitten (zie luidheid_winkel.dart `bijstellingVoorNummer`). Null = uit.
   Bijstelling Function(Track t, {required List<Track> rij, required int plek, required bool opVolgorde})?
@@ -1295,6 +1324,7 @@ class PlayerStore extends ChangeNotifier
     // Het geduld hoort alleen bij de lijn: een kopie op het toestel hoeft niemand meer om te zetten.
     _omzetten = opDeLijn != null;
     stroomGrens = opDeLijn ?? (url.startsWith('http') ? null : kopieGrens?.call(path));
+    herkomst = herkomstVan?.call(url);
     _wacht = Stilstandwacht(
         geduld: Duration(seconds: _omzetten ? 25 : 10));
     return url;
@@ -3228,6 +3258,21 @@ class PlayerStore extends ChangeNotifier
   Future<void> _openCurrent() async {
     final t = current;
     if (t == null) return;
+    // Op mobiele data alleen wat op dit toestel staat ([alleenHier]): een stroom van de pc slaat hij over, door naar het
+    // eerstvolgende nummer dat hier staat. Staat er niets meer, dan stil, met de reden erbij.
+    if (alleenHier?.call() == true && mediaResolver(_speelPad(t.path)).startsWith('http')) {
+      final i = _eerstHierVanaf(_index + 1);
+      if (i == null) {
+        _log?.line('ALLEEN HIER — op mobiele data, en verder in de rij staat niets op dit toestel — ${t.title}');
+        await _player.stop();
+        _meldStilstand(kAlleenHierZin);
+        notifyListeners();
+        return;
+      }
+      _log?.line('ALLEEN HIER — op mobiele data: ${t.title} staat niet op dit toestel, door naar ${_order[i].title}');
+      _index = i;
+      return _openCurrent();
+    }
     // Een ander nummer dan wat je tussendoor beluisterde: dat stopt ([tussendoor]); jij koos iets anders.
     if (_tussendoor != null) {
       _tussendoor = null;

@@ -608,7 +608,8 @@ void main() {
           reason: 'afspeellijst, favorieten, Nummers, albumpagina, albumtegel, albummenu: via speelLijst naar de zone');
       // Sinds 29-10-2026 via [speelLijst]: met de pc in de gekozen zone, zonder pc op dit toestel.
       expect(main, contains(': () => speelLijst(context, a.tracks, schud: false, cover: a.cover),'));
-      expect(main, contains('  final Rijbediening speler = zonderPc ? context.read<PlayerStore>() : rijVoor(context);\n'));
+      // Sinds 02-11-2026 ook op mobiele data op dit toestel (alleenHier = zonder pc, of op mobiele data).
+      expect(main, contains('  final Rijbediening speler = alleenHier ? context.read<PlayerStore>() : rijVoor(context);\n'));
       final radio = main.substring(main.indexOf('Future<void> startRadio(BuildContext context, String artist,'));
       expect(radio.substring(0, 1200), contains('return afstand.startRadio(artist, zaad: zaad, titel: titel);'));
       expect(main, contains('await startRadio(ctx, radioArtiest, zaad: zaad, hier: true);'),

@@ -15,6 +15,7 @@ import '../lan/client_session.dart' show ClientSession;
 import '../lan/stroomstand.dart' show losslessExtensie;
 import '../lan/verbindingsstand.dart' show Verbindingssoort, Verbindingsstand;
 import '../library.dart' show LibraryStore;
+import '../netsoort.dart' show Netsoort, NetsoortStore;
 import '../models.dart';
 import '../offline.dart';
 import '../organize.dart' show artistKey, normKey;
@@ -140,7 +141,12 @@ bool verbindingWeg(Verbindingsstand? v, {required DateTime nu}) => switch (v?.so
       Verbindingssoort.zoekt => nu.difference(v!.sinds!) >= kZoektAlsWeg,
     };
 
+/// Speelt een tik hier nu alleen wat op dit toestel staat, ook mét de pc erbij? Op mobiele data wel, als dit toestel zelf
+/// speelt (Saber, 02-11-2026: "Buiten alleen gsm"); main.dart zet hem. Dan staat ook [NietHierGrijs] grijs.
+bool Function(BuildContext context)? alleenHierOokNu;
+
 /// Grijs als de pc weg is en GEEN van [paden] op dit toestel staat: het staat in de lijst, maar speelt nu niet.
+/// Op mobiele data net zo ([alleenHierOokNu]).
 ///
 /// Saber, 29-10-2026, bij "Op dit toestel": zonder pc *"Alles, maar grijs wat niet op je gsm staat"*. Een plaat waarvan
 /// één nummer hier staat, blijft gewoon: die helft speelt. Zonder [OfflineStore] (de pc zelf, een toets) nooit grijs.
@@ -156,8 +162,10 @@ class NietHierGrijs extends StatelessWidget {
     final losVanPc = context.select<ClientSession?, bool>((s) => verbindingWeg(s?.verbinding, nu: DateTime.now()));
     final weg = context.select<LibraryStore?, bool>((l) => l != null && (pcWeg(l) || (l.isRemote && losVanPc)));
     final nietHier = context.select<OfflineStore?, bool>((o) => o != null && !paden.any(o.has));
-    // Opacity tekent een eigen laag, maar alleen zolang de pc weg is.
-    return weg && nietHier ? Opacity(opacity: .38, child: child) : child;
+    final mobiel = context.select<NetsoortStore?, bool>((n) => n?.net == Netsoort.mobiel) &&
+        (alleenHierOokNu?.call(context) ?? false);
+    // Opacity tekent een eigen laag, maar alleen zolang de pc weg is (of je op mobiele data zit).
+    return (weg || mobiel) && nietHier ? Opacity(opacity: .38, child: child) : child;
   }
 }
 

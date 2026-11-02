@@ -198,6 +198,13 @@ class NetsoortStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Voor een toets: alsof het toestel nu op [n] zit.
+  @visibleForTesting
+  void zetVoorToets(Netsoort n) {
+    _net = n;
+    notifyListeners();
+  }
+
   Future<void> ververs() async {
     final nu = await leesNetsoort();
     if (nu == _net) return;
