@@ -217,6 +217,10 @@ class VerderLuisteren extends ChangeNotifier {
   /// stand van het toestel dat net overnam.
   int _stilTot = 0;
 
+  /// Op mobiele data niet zelf kijken (Saber, 02-11-2026: "Helemaal stil"): zonder de lijn met de zones was dat om de
+  /// [kijkElke] een vraag aan de pc. Gezet door main; null: altijd kijken.
+  bool Function()? stil;
+
   Timer? _kijk;
   bool _bezig = false;
   bool _zelfKijken = false;
@@ -261,7 +265,7 @@ class VerderLuisteren extends ChangeNotifier {
 
   /// Nu meteen kijken (bij het openen van de app, of als de pc weer bereikbaar is).
   Future<void> kijkNu() async {
-    if (_bezig) return;
+    if (_bezig || stil?.call() == true) return;
     _bezig = true;
     try {
       final r = await bron.haal();

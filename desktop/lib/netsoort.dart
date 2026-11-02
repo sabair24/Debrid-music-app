@@ -78,6 +78,20 @@ Stroomstand welkeStand({
 bool isOnderweg({required Netsoort net, Verbindingsweg? weg}) =>
     net == Netsoort.mobiel || (weg != null && weg != Verbindingsweg.thuis);
 
+/// Moet een toestel zijn stand nu aan de pc melden? De speler meldt om de vijf seconden; op mobiele data gaat er
+/// hoogstens één per [kMeldenOpMobiel] door, en meteen bij een ander nummer of als het gaat spelen of pauzeert (Saber,
+/// 02-11-2026: "Helemaal stil" — om de vijf seconden waren dat ~700 meldingen per uur over je databundel).
+bool standMelden(
+        {required bool mobiel,
+        required String nummer,
+        required bool speelt,
+        String? vorigNummer,
+        bool? vorigSpeelt,
+        required Duration sinds}) =>
+    !mobiel || nummer != vorigNummer || speelt != vorigSpeelt || sinds >= kMeldenOpMobiel;
+
+const kMeldenOpMobiel = Duration(minutes: 1);
+
 /// Een bewaarde weg ([AppSettings.laatsteWeg]) terug, of null.
 Verbindingsweg? wegUitNaam(String naam) {
   for (final w in Verbindingsweg.values) {

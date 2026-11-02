@@ -24,6 +24,15 @@ const kZoneStilte = Duration(seconds: 45);
 /// Hoe lang een pc zonder zones met rust gelaten wordt.
 const kZoneOudePc = Duration(minutes: 5);
 
+/// Moet de lijn naar de zones open staan? Een tv altijd (zo vind en wek je hem), en wie van hieruit een zone op afstand
+/// bedient ook. **Op mobiele data niet** (Saber, 02-11-2026: "Helemaal stil"): gemeten ~3,5 MB per uur aan zonelijsten
+/// en standen die de pc na elke melding van wie dan ook rondstuurt. Anders: als de app vooraan ligt of speelt.
+bool zoneLijnOpen({required bool voor, required bool tv, required bool speelt, required bool opAfstand, required bool mobiel}) {
+  if (tv || opAfstand) return true;
+  if (mobiel) return false;
+  return voor || speelt;
+}
+
 /// Een opdracht naar de pc ([vraag]), en één keer opnieuw als de eerste geen antwoord kreeg ([RemoteException] zonder
 /// status). Null als ze aankwam, anders waarom niet.
 ///
@@ -66,6 +75,20 @@ class ZoneLijst extends ChangeNotifier {
 
   final int Function()? _klok;
   int get _nu => _klok?.call() ?? DateTime.now().millisecondsSinceEpoch;
+
+  /// Staat de lijn bewust dicht, op mobiele data ([zoneLijnOpen])? Dan zijn de zones niet live: ze komen één keer als
+  /// je ze opent ([vraagVers]).
+  bool get stil => _stil;
+  bool _stil = false;
+
+  void zetStil(bool stil) {
+    if (stil == _stil) return;
+    _stil = stil;
+    notifyListeners();
+  }
+
+  /// Eén keer de lijst van de pc, voor wie de zones opent terwijl de lijn [stil] dicht staat. Gezet door main.
+  Future<void> Function()? vraagVers;
 
   ZoneLijstStand? _stand;
 

@@ -2475,10 +2475,27 @@ Future<void> main() async {
       // het merkteken; vraagt hij de rij (`rijNodig`, na een herstart), dan gaat hij de volgende keer weer heel mee.
       String? verstuurdeRij;
       var pcKentRijApart = false;
+      // Op mobiele data één melding per minuut, en meteen bij een ander nummer of pauze ([standMelden]).
+      String? gemeldNummer;
+      bool? gemeldSpeelt;
+      var gemeldOp = DateTime(0);
       player.onProgress = (track, position, playing, queue, index) {
         final c = library.remote;
         // Zie de pc hierboven: een alleen teruggezette stand is geen melding.
         if (c == null || player.resumedPaused) return;
+        final nu = DateTime.now();
+        if (!standMelden(
+            mobiel: !isTv && netStore.net == Netsoort.mobiel,
+            nummer: track.path,
+            speelt: playing,
+            vorigNummer: gemeldNummer,
+            vorigSpeelt: gemeldSpeelt,
+            sinds: nu.difference(gemeldOp))) {
+          return;
+        }
+        gemeldNummer = track.path;
+        gemeldSpeelt = playing;
+        gemeldOp = nu;
         final m = verder.meldNu();
         final id = library.gedeeldId(track.path);
         if (id == null) return;
@@ -2559,8 +2576,11 @@ Future<void> main() async {
           // Ook open met een zone op afstand gekozen: het vergrendelscherm toont dan die zone (stap 2.6),
           // en zonder lijn zou het blijven staan op wat ze speelde toen je de gsm wegstak.
           // Een tv houdt haar altijd open: dat is hoe je hem vindt en wekt als hij slaapt (wekker.dart). Hij zit aan
-          // wifi of een kabel, niet aan een databundel.
-          if (voor || isTv || player.playing || gekozenZone.opAfstand != null) {
+          // wifi of een kabel, niet aan een databundel. Op mobiele data dicht ([zoneLijnOpen]).
+          final mobiel = !isTv && netStore.net == Netsoort.mobiel;
+          zoneLijst.zetStil(mobiel && gekozenZone.opAfstand == null);
+          if (zoneLijnOpen(
+              voor: voor, tv: isTv, speelt: player.playing, opAfstand: gekozenZone.opAfstand != null, mobiel: mobiel)) {
             zoneLijn.start();
           } else {
             zoneLijn.stop();
@@ -2570,7 +2590,18 @@ Future<void> main() async {
         AppLifecycleListener(onStateChange: (_) => lijnNaarStand());
         player.addListener(lijnNaarStand);
         gekozenZone.addListener(lijnNaarStand);
+        netStore.addListener(lijnNaarStand);
+        lijnNaarStand();
       }
+      // Op mobiele data geen lijn: wie de zones opent, krijgt ze één keer ([ZoneLijst.vraagVers]); en "Hier verder
+      // luisteren" vraagt de pc dan ook niet zelf om de vier seconden.
+      zoneLijst.vraagVers = () async {
+        try {
+          final c = library.remote;
+          if (c != null) zoneLijst.zet(await c.zones());
+        } catch (_) {/* geen pc: de lijst blijft wat ze was */}
+      };
+      verder.stil = () => zoneLijst.stil;
       // Een ander adres voor de pc (netwerkwissel, de deur naar buiten): de oude lijn loopt nog naar
       // het vorige, dus meteen opnieuw. Verder bij elke "klaar": dan wacht hij niet op zijn klok.
       Uri? zoneAdres = library.remote?.endpoint.baseUrl;
@@ -12795,6 +12826,9 @@ class _ZoneBladState extends State<ZoneBlad> {
     _tik = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
+    // Op mobiele data staat de lijn dicht ([ZoneLijst.stil]): dan nu één keer de lijst.
+    final z = _misschien<ZoneLijst>(context);
+    if (z != null && z.stil) unawaited(z.vraagVers?.call());
   }
 
   @override
@@ -12866,7 +12900,9 @@ class _ZoneBladState extends State<ZoneBlad> {
           const SizedBox(height: 2),
           // Op een eigen regel: naast "Je bedient" paste het op een gsm niet.
           Text(
-              !z.verbonden
+              z.stil
+                  ? 'Op mobiele data niet live — bijgewerkt toen je dit opende'
+                  : !z.verbonden
                   ? 'Even geen verbinding met de pc'
                   : opTv
                       ? 'Kies een zone om die hier te zien en te bedienen · Terug sluit'
