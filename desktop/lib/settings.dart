@@ -169,6 +169,13 @@ class AppSettings extends ChangeNotifier {
   /// opslaan offline gebruik op de gsm"* — een instelling, standaard cd. Per toestel, zoals de streamkwaliteit.
   String offlineKwaliteit = 'cd';
 
+  /// Wat er op de pc binnenkomt, vanzelf op dit toestel (nieuw_op_toestel.dart; Saber, 02-11-2026: "direct lokaal kunnen
+  /// opslaan op men gsm, ook buitenshuis en automatisch"). Standaard aan op een Android-gsm, uit op een iPad of Mac.
+  bool nieuwOpToestel = Platform.isAndroid;
+
+  /// Tot hoeveel GB op dit toestel (Saber: "met limiet van 150 GB"); vol = een waarschuwing.
+  int nieuwOpToestelGB = 150;
+
   /// Mag de app zelf wisselen op grond van wifi of mobiel?
   ///
   /// Staat dit uit, dan geldt [stroomThuis] altijd en is er één stand en verder niets.
@@ -398,6 +405,8 @@ class AppSettings extends ChangeNotifier {
         stroomOnderweg = (m['stroom_onderweg'] ?? 'cd') as String;
         stroomAdaptief = (m['stroom_adaptief'] ?? true) as bool;
         offlineKwaliteit = (m['offline_kwaliteit'] ?? 'cd') as String;
+        nieuwOpToestel = (m['nieuw_op_toestel'] ?? Platform.isAndroid) as bool;
+        nieuwOpToestelGB = ((m['nieuw_op_toestel_gb'] as num?) ?? 150).toInt().clamp(1, 4000);
         laatsteWeg = (m['laatste_weg'] ?? '') as String;
         tikKeuze = (m['tik_keuze'] ?? 'vragen') as String;
         appVolume = ((m['app_volume'] as num?) ?? 100).toDouble().clamp(0, 100).toDouble();
@@ -457,6 +466,8 @@ class AppSettings extends ChangeNotifier {
         'stroom_onderweg': stroomOnderweg,
         'stroom_adaptief': stroomAdaptief,
         'offline_kwaliteit': offlineKwaliteit,
+        'nieuw_op_toestel': nieuwOpToestel,
+        'nieuw_op_toestel_gb': nieuwOpToestelGB,
         'laatste_weg': laatsteWeg,
         'tik_keuze': tikKeuze,
         'app_volume': appVolume,

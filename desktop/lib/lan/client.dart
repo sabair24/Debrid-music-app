@@ -816,6 +816,20 @@ class RemoteClient {
   /// De speelstand van de pc, en wie wat speelt ("Hier verder luisteren"). Met [sinds] de revisie die
   /// dit toestel kent: dan komt alleen de stand mee zolang er verder niets veranderde. [toestel] en
   /// [naam] zeggen de pc dat dit toestel er is, voor "Speel op …".
+  /// Wat een radio op de pc op proef haalde (gedeelde id's): dat gaat niet vanzelf naar dit toestel
+  /// (nieuw_op_toestel.dart). Leeg op een pc van vóór 02-11-2026, of als hij niet antwoordt.
+  Future<Set<String>> radioOpProef() async {
+    try {
+      final res = await _get('/api/radio/opproef');
+      if (res.statusCode != 200) return const {};
+      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      final l = j is Map ? j['ids'] : null;
+      return {if (l is List) for (final x in l) '$x'};
+    } catch (_) {
+      return const {};
+    }
+  }
+
   /// Alle zones zoals de pc ze kent (`{nu, zones}`, zie `zones.dart`). 404 op een pc van vóór de zones.
   Future<Map<String, dynamic>> zones() async {
     final res = await _get('/api/zones');

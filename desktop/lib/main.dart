@@ -43,6 +43,7 @@ import 'ui/herkomst_teken.dart';
 import 'ui/op_toestel.dart';
 import 'toestelmap.dart';
 import 'toestel_bijhouden.dart';
+import 'nieuw_op_toestel.dart';
 import 'toestel_redenen.dart';
 import 'ui/nummerkeuze.dart';
 import 'radiolijst.dart' show AiNummer, kMinModelNummers;
@@ -1403,8 +1404,72 @@ Future<void> main() async {
                   if (perId[tid] case final t?) t,
               ],
         };
-        final r = await houdLijstenBij(redenen: toestelRedenen, offline: offline, gewenst: gewenst);
+        // Wat de gsm ophaalt, is wat er speelt: de gekozen versie (versies.dart). Haar handtekening ziet een betere kopie.
+        String geluidHier(Track t) => geluidVan(library.trackByPath(library.speelPadVoor(t.path)) ?? t);
+        // Wat er op de pc binnenkomt, vanzelf hier (nieuw_op_toestel.dart; Saber, 02-11-2026: "direct lokaal kunnen
+        // opslaan op men gsm, ook buitenshuis en automatisch, met limiet van 150 GB"). Geen radionummers op proef.
+        if (settings.nieuwOpToestel) {
+          if (await bekendOpPc.begin(library.tracks)) {
+            startLog.line('vanzelf op dit toestel: begonnen — ${bekendOpPc.paden.length} nummers gekend, wat erbij komt gaat mee');
+          }
+          final opProef = {
+            ...await (library.remote?.radioOpProef() ?? Future.value(const <String>{})),
+            for (final g in radio.opProef)
+              if (g.id case final id?) id,
+          };
+          final nieuw = nieuweNummers(
+              bibliotheek: library.tracks,
+              bekend: bekendOpPc.paden,
+              sindsMs: bekendOpPc.sinds ?? 0,
+              opProef: opProef,
+              idVan: library.gedeeldId,
+              isVersie: versies.isVersie);
+          final cd = settings.offlineKwaliteit == 'cd';
+          final vrij = await vrijeRuimteOpToestel();
+          final grensGB = settings.nieuwOpToestelGB * 1000000000;
+          // Nooit de laatste 2 GB van je gsm.
+          final ruimte = vrij == null ? grensGB : offline.bytes + vrij - 2000000000;
+          final tot = ruimte < grensGB ? ruimte : grensGB;
+          final b = binnenGrens(
+              nieuw: nieuw,
+              al: toestelRedenen.padenMet(kRedenNieuw),
+              bezet: offline.bytes,
+              grens: tot,
+              omvang: (t) => geschatteOmvang([t], cd: cd));
+          gewenst[kRedenNieuw] = b.houden;
+          final vol = b.nietMeer == 0
+              ? null
+              : (aantal: b.nietMeer, grensGB: settings.nieuwOpToestelGB, vrijeRuimte: tot < grensGB);
+          if (vol != null && nieuwOpToestelVol.value == null) {
+            startLog.line('vanzelf op dit toestel: vol — ${vol.aantal} nummers passen niet meer '
+                '(${vol.vrijeRuimte ? 'vrije ruimte' : 'grens ${vol.grensGB} GB'})');
+          }
+          nieuwOpToestelVol.value = vol;
+        }
+        final r = await houdLijstenBij(redenen: toestelRedenen, offline: offline, gewenst: gewenst, geluidVan: geluidHier);
         if (r.erbij > 0 || r.weg > 0) startLog.line('op dit toestel bijgehouden: ${r.erbij} erbij, ${r.weg} weg');
+        // Een betere kopie op de pc vervangt die hier (Saber: "Betere kopieën"); de oude speelt tot de nieuwe binnen is.
+        // Een kopie van vóór de handtekening krijgt die van nu, zonder hem opnieuw te halen.
+        if (settings.nieuwOpToestel) {
+          final zonder = <String, String>{};
+          final beter = <OfflineRequest>[];
+          for (final o in offline.tracks) {
+            final t = library.trackByPath(o.path);
+            if (t == null) continue;
+            final g = geluidHier(t);
+            if (o.geluid == null) {
+              zonder[o.path] = g;
+            } else if (o.geluid != g) {
+              beter.add(OfflineRequest(
+                  libraryPath: o.path, title: t.title, artist: t.artist, album: t.album, geluid: g, vervang: true));
+            }
+          }
+          if (zonder.isNotEmpty) await offline.zetGeluid(zonder);
+          if (beter.isNotEmpty) {
+            startLog.line('vanzelf op dit toestel: ${beter.length} betere kopieën van de pc');
+            offline.bewaarAlles(beter);
+          }
+        }
       });
     }
 
@@ -1412,6 +1477,8 @@ Future<void> main() async {
     lijsten.addListener(houdBij);
     toestelRedenen.addListener(houdBij);
     library.addListener(houdBij);
+    // Aan, uit, of een andere grens: meteen opnieuw bekijken.
+    settings.addListener(houdBij);
   }
   // Hoe vaak en hoe lang geleden je iets hoorde — de brandstof van de shuffle. Zelfde vorm als de
   // favorieten hierboven: op de pc rechtstreeks in de gedeelde staat, op een telefoon over de lijn.
@@ -2050,6 +2117,8 @@ Future<void> main() async {
       }
       // Een opdracht van een toestel voor de zone van de pc zelf.
       s.bijZoneOpdracht = zoneUitvoerder.voerUit;
+      // Wat een radio hier op proef haalde, gaat niet vanzelf naar een toestel (nieuw_op_toestel.dart).
+      s.radioOpProef = () => [for (final g in radio.opProef) g.pad];
       // Een radio op een speaker: de pc draait hem, de speaker speelt (Saber, 22-10-2026).
       s.bijSpeakerRadio = (speaker, op) async {
         final ctx = appNavigator.currentContext;
@@ -6646,7 +6715,7 @@ class _OfflineAlbumButtonState extends State<_OfflineAlbumButton> {
                 final zeker = await vraagVanToestelHalen(context, aantal: tracks.length,
                     bytes: offline.bytesVan([for (final t in tracks) t.path]));
                 if (!zeker) return;
-                await toestelRedenen.haalWeg([for (final t in tracks) t.path], kRedenZelf);
+                await zelfVanToestel([for (final t in tracks) t.path]);
                 for (final t in tracks) {
                   await offline.remove(t.path);
                 }
@@ -6797,7 +6866,7 @@ class _NummerKeuzeBalk extends StatelessWidget {
     final zeker = await vraagVanToestelHalen(context,
         aantal: nummers.length, bytes: offline.bytesVan([for (final t in nummers) t.path]));
     if (!zeker) return;
-    await toestelRedenen.haalWeg([for (final t in nummers) t.path], kRedenZelf);
+    await zelfVanToestel([for (final t in nummers) t.path]);
     for (final t in nummers) {
       await offline.remove(t.path);
     }
@@ -6842,7 +6911,7 @@ Future<bool> _haalVanToestel(BuildContext context, List<Track> nummers) async {
   final hier = [for (final t in nummers) if (offline.has(t.path)) t.path];
   if (hier.isEmpty) return true;
   if (!await vraagVanToestelHalen(context, aantal: hier.length, bytes: offline.bytesVan(hier))) return false;
-  await toestelRedenen.haalWeg(hier, kRedenZelf);
+  await zelfVanToestel(hier);
   for (final p in hier) {
     await offline.remove(p);
   }
@@ -6859,6 +6928,154 @@ enum _ToestelTab { albums, nummers, artiesten, afspeellijsten, favorieten }
 /// verschillende dingen e"*). Tabs zoals de gewone bibliotheek, Alles afspelen en Shuffle, een eigen zoekveld, en hier —
 /// niet meer in Mijn downloads — wat nog onderweg is naar dit toestel. Zie [opToestelLijst] voor wat er in welke volgorde
 /// staat.
+/// De waarschuwing als er niets meer vanzelf op dit toestel past ([nieuwOpToestelVol]): ruimte maken, of de grens hoger.
+class _NieuwVolBalk extends StatelessWidget {
+  const _NieuwVolBalk({required this.vol, required this.rand});
+
+  final ({int aantal, int grensGB, bool vrijeRuimte}) vol;
+  final double rand;
+
+  @override
+  Widget build(BuildContext context) {
+    final kleur = leesbaar(const Color(0xFFE8C36A));
+    final wie = toestelNaam(context);
+    final zin = vol.vrijeRuimte
+        ? '${wie[0].toUpperCase()}${wie.substring(1)} is bijna vol: ${vol.aantal} nieuwe nummers van je pc kwamen er niet '
+            'vanzelf op.'
+        : 'De grens van ${vol.grensGB} GB is bereikt: ${vol.aantal} nieuwe nummers van je pc kwamen er niet vanzelf op.';
+    return Container(
+      key: const ValueKey('toestel-vol'),
+      width: double.infinity,
+      margin: EdgeInsets.fromLTRB(rand, 12, rand, 0),
+      padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
+      decoration: BoxDecoration(color: vlakOpThema(const Color(0xFF2A2416)), borderRadius: BorderRadius.circular(12)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.sd_card_alert_outlined, size: 18, color: kleur),
+          const SizedBox(width: 10),
+          Expanded(child: Text(zin, style: TextStyle(color: kleur, fontSize: 13, height: 1.35))),
+        ]),
+        Wrap(spacing: 4, children: [
+          TextButton(
+            key: const ValueKey('toestel-vol-ruimte'),
+            onPressed: () => toonRuimteMaken(context),
+            child: const Text('Ruimte maken'),
+          ),
+          if (!vol.vrijeRuimte)
+            TextButton(
+              key: const ValueKey('toestel-vol-grens'),
+              onPressed: () => kiesNieuwGrens(context),
+              child: const Text('Limiet verhogen'),
+            ),
+        ]),
+      ]),
+    );
+  }
+}
+
+/// De grootste platen op dit toestel, elk met "Weghalen" (de pc houdt ze): zo maak je ruimte voor wat er nieuw binnenkomt.
+Future<void> toonRuimteMaken(BuildContext context) async {
+  final offline = context.read<OfflineStore>();
+  final lib = context.read<LibraryStore>();
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: kPaneel,
+    builder: (ctx) => ListenableBuilder(
+      listenable: offline,
+      builder: (ctx, _) {
+        final per = <String, ({String album, String artiest, List<Track> nummers, int bytes})>{};
+        for (final o in offline.tracks) {
+          final k = '${o.artist}|${o.album}';
+          final t = lib.trackByPath(o.path) ?? Track(path: o.path, title: o.title, artist: o.artist, album: o.album);
+          final w = per[k];
+          per[k] = (
+            album: o.album,
+            artiest: o.artist,
+            nummers: [...?w?.nummers, t],
+            bytes: (w?.bytes ?? 0) + o.bytes,
+          );
+        }
+        final lijst = per.values.toList()..sort((a, b) => b.bytes.compareTo(a.bytes));
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * .8),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 4),
+                child: Text('Ruimte maken · ${_mbOfGb(offline.bytes)} op ${toestelNaam(ctx)}',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
+                child: Text('De grootste platen eerst. Weghalen haalt ze alleen van dit toestel; je pc houdt ze.',
+                    style: TextStyle(color: _muted, fontSize: 12)),
+              ),
+              Flexible(
+                child: ListView(shrinkWrap: true, children: [
+                  for (final a in lijst.take(60))
+                    ListTile(
+                      dense: true,
+                      title: Text(a.album.isEmpty ? '(geen album)' : a.album, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text('${a.artiest} · ${a.nummers.length} nummers · ${_mbOfGb(a.bytes)}',
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      trailing: TextButton(
+                        onPressed: () => _haalVanToestel(ctx, a.nummers),
+                        child: const Text('Weghalen'),
+                      ),
+                    ),
+                ]),
+              ),
+            ]),
+          ),
+        );
+      },
+    ),
+  );
+}
+
+String _mbOfGb(int bytes) =>
+    bytes >= 1000000000 ? '${(bytes / 1000000000).toStringAsFixed(1)} GB' : '${(bytes / 1000000).round()} MB';
+
+/// Tot hoeveel GB er vanzelf op dit toestel mag ([AppSettings.nieuwOpToestelGB]); nooit meer dan er vrij is.
+Future<void> kiesNieuwGrens(BuildContext context) async {
+  final settings = context.read<AppSettings>();
+  final offline = context.read<OfflineStore>();
+  final vrij = await vrijeRuimteOpToestel();
+  if (!context.mounted) return;
+  final kan = vrij == null ? null : ((offline.bytes + vrij) / 1000000000).floor();
+  final keuzes = [for (final g in const [100, 150, 200, 250, 300, 400, 500, 750, 1000]) if (kan == null || g <= kan) g];
+  final gekozen = await showModalBottomSheet<int>(
+    context: context,
+    backgroundColor: kPaneel,
+    builder: (ctx) => SafeArea(
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 4),
+          child: Text('Grens voor nieuwe nummers op ${toestelNaam(ctx)}',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
+          child: Text(
+              'Nu ${_mbOfGb(offline.bytes)} in gebruik${vrij == null ? '' : ', nog ${_mbOfGb(vrij)} vrij'}.',
+              style: TextStyle(color: _muted, fontSize: 12)),
+        ),
+        for (final g in keuzes)
+          ListTile(
+            key: ValueKey('nieuw-grens-$g'),
+            title: Text('$g GB'),
+            trailing: g == settings.nieuwOpToestelGB ? Icon(Icons.check_rounded, color: kAccent2) : null,
+            onTap: () => Navigator.of(ctx).pop(g),
+          ),
+      ]),
+    ),
+  );
+  if (gekozen == null || gekozen == settings.nieuwOpToestelGB) return;
+  settings.nieuwOpToestelGB = gekozen;
+  await settings.save();
+}
+
 class OpDitToestelView extends StatefulWidget {
   const OpDitToestelView({super.key});
 
@@ -6936,6 +7153,11 @@ class _OpDitToestelViewState extends State<OpDitToestelView> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
       const ToestelMapKaart(),
+      // Vol (Saber, 02-11-2026: "me een waarschuwing tonen, en opties geven om te verwijderen of limiet te verhogen").
+      ValueListenableBuilder(
+        valueListenable: nieuwOpToestelVol,
+        builder: (context, vol, _) => vol == null ? const SizedBox.shrink() : _NieuwVolBalk(vol: vol, rand: rand),
+      ),
         Padding(
           padding: EdgeInsets.fromLTRB(rand, 18, rand, 4),
           child: Wrap(
@@ -6978,7 +7200,10 @@ class _OpDitToestelViewState extends State<OpDitToestelView> {
                   key: const ValueKey('toestel-alles-weg'),
                   onPressed: () async {
                     final zeker = await vraagVanToestelHalen(context, aantal: opgeslagen.length, bytes: offline.bytes);
-                    if (zeker) await offline.clear();
+                    if (!zeker) return;
+                    // Niet vanzelf terug (nieuw_op_toestel.dart): wat je zelf weghaalt, blijft weg.
+                    await zelfVanToestel([for (final t in opgeslagen) t.path]);
+                    await offline.clear();
                   },
                   icon: const Icon(Icons.delete_sweep_outlined, size: 17),
                   label: const Text('Alles weghalen'),
@@ -43226,10 +43451,35 @@ class StroomkwaliteitKeuze extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               'Cd-kwaliteit: FLAC 16/44,1, bit voor bit cd — een hi-res plaat neemt zo 300 à 400 MB in plaats van 1 à 2 GB. '
-              'Origineel: het bestand van je pc, zoals het is. Ophalen gebeurt alleen via wifi; thuis speelt het origineel '
-              'van je pc. Geldt voor wat je vanaf nu bewaart.',
+              'Origineel: het bestand van je pc, zoals het is. Ophalen gebeurt ook over mobiele data; thuis speelt het '
+              'origineel van je pc. Geldt voor wat je vanaf nu bewaart.',
               style: TextStyle(color: _muted, fontSize: 11.5, height: 1.4),
             ),
+            // Saber, 02-11-2026: wat er op de pc binnenkomt, vanzelf hier (nieuw_op_toestel.dart).
+            SwitchListTile(
+              key: const ValueKey('instelling-nieuw-op-toestel'),
+              contentPadding: EdgeInsets.zero,
+              value: settings.nieuwOpToestel,
+              title: const Text('Nieuwe nummers vanzelf op dit toestel', style: TextStyle(fontSize: 13.5)),
+              subtitle: Text(
+                  'Wat je pc vanaf nu binnenhaalt, en een betere kopie van wat hier al staat. Geen radionummers op proef. '
+                  'Wat je zelf weghaalt, komt niet terug.',
+                  style: TextStyle(color: _muted, fontSize: 11.5)),
+              onChanged: (aan) {
+                settings.nieuwOpToestel = aan;
+                unawaited(settings.save());
+              },
+            ),
+            if (settings.nieuwOpToestel)
+              ListTile(
+                key: const ValueKey('instelling-nieuw-grens'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text('Tot ${settings.nieuwOpToestelGB} GB', style: const TextStyle(fontSize: 13.5)),
+                subtitle: Text('Daarna een waarschuwing in Op dit toestel.', style: TextStyle(color: _muted, fontSize: 11.5)),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => kiesNieuwGrens(context),
+              ),
           ],
         ],
       ),

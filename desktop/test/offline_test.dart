@@ -566,6 +566,46 @@ void main() {
   });
 
   // Saber, 27-10-2026: "ik wil ook in cd kwaliteit kunnen opslaan offline gebruik op de gsm" — en ophalen alleen via wifi.
+  // Saber, 02-11-2026: "Betere kopieën" — komt er een betere versie op de pc, dan vervangt die de kopie op de gsm.
+  group('een betere kopie vervangt de kopie hier', () {
+    OfflineRequest verzoek({String? geluid, bool vervang = false}) => OfflineRequest(
+        libraryPath: path, title: 'Strangers By Nature', artist: 'Adele', album: '30', geluid: geluid, vervang: vervang);
+
+    test('DE KERN: de oude speelt tot de nieuwe heel binnen is; de handtekening gaat mee; zonder vervang niets', () async {
+      store.bewaarAlles([verzoek(geluid: '44100/16/200000/flac')]);
+      await wachtTot(() => store.has(path), 'de eerste kopie staat er');
+      expect(store.tracks.single.geluid, '44100/16/200000/flac');
+      final n = server.requests;
+      store.bewaarAlles([verzoek(geluid: '44100/16/200000/flac')]);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(server.requests, n, reason: 'staat er al: niets opnieuw');
+      final beter = List<int>.generate(30000, (i) => (i * 7) % 256);
+      server.bytes = beter;
+      server.chunkDelay = const Duration(milliseconds: 2);
+      store.bewaarAlles([verzoek(geluid: '96000/24/200011/flac', vervang: true)]);
+      await wachtTot(() => server.requests > n, 'de betere kopie wordt gehaald');
+      expect(store.has(path), isTrue, reason: 'intussen speelt de oude');
+      expect(File(store.localFor(path)!).readAsBytesSync(), payload);
+      server.chunkDelay = Duration.zero;
+      await wachtTot(() => store.tracks.single.geluid == '96000/24/200011/flac', 'de betere kopie staat er');
+      expect(File(store.localFor(path)!).readAsBytesSync(), beter);
+    });
+
+    test('een kopie van vóór de handtekening krijgt die van nu, zonder op te halen — en houdt hem na opnieuw laden',
+        () async {
+      store.bewaarAlles([verzoek()]);
+      await wachtTot(() => store.has(path), 'de kopie staat er');
+      expect(store.tracks.single.geluid, isNull);
+      final n = server.requests;
+      await store.zetGeluid({path: '44100/16/200000/flac'});
+      expect(server.requests, n);
+      final weer = OfflineStore();
+      await weer.load();
+      expect(weer.tracks.single.geluid, '44100/16/200000/flac');
+      weer.dispose();
+    });
+  });
+
   group('offline in cd-kwaliteit, alleen via wifi', () {
     OfflineRequest verzoek(String pad) =>
         OfflineRequest(libraryPath: pad, title: 'Strangers By Nature', artist: 'Adele', album: '30');
