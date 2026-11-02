@@ -14,6 +14,7 @@ import 'package:debridmusic/library.dart';
 import 'package:debridmusic/main.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/netsoort.dart';
+import 'package:debridmusic/nieuw_op_toestel.dart';
 import 'package:debridmusic/offline.dart';
 import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/player.dart';
@@ -275,6 +276,27 @@ void main() {
       net.zetVoorToets(Netsoort.wifi);
       await tester.pump();
       expect(find.byType(Opacity), findsNothing, reason: 'weer op wifi: alles speelt');
+    });
+
+    // Saber, 02-11-2026: vol = "een waarschuwing tonen, en opties geven om te verwijderen of limiet te verhogen".
+    testWidgets('vol: een waarschuwing met Ruimte maken en Limiet verhogen; vol door de ruimte zelf alleen Ruimte maken',
+        (tester) async {
+      addTearDown(() => nieuwOpToestelVol.value = null);
+      await bouw(tester, const Verbindingsstand.verbonden(Verbindingsweg.thuis));
+      expect(find.byKey(const ValueKey('toestel-vol')), findsNothing);
+      nieuwOpToestelVol.value = (aantal: 12, grensGB: 150, vrijeRuimte: false);
+      await tester.pump();
+      expect(find.text('De grens van 150 GB is bereikt: 12 nieuwe nummers van je pc kwamen er niet vanzelf op.'),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('toestel-vol-ruimte')), findsOneWidget);
+      expect(find.byKey(const ValueKey('toestel-vol-grens')), findsOneWidget);
+      nieuwOpToestelVol.value = (aantal: 3, grensGB: 150, vrijeRuimte: true);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('toestel-vol-grens')), findsNothing, reason: 'een hogere grens helpt dan niet');
+      nieuwOpToestelVol.value = null;
+      await tester.pump();
+      expect(find.byKey(const ValueKey('toestel-vol')), findsNothing);
+      await tester.pump(const Duration(seconds: 4));
     });
 
     // Saber, 29-10-2026, over Shuffle alles op Nummers: "ja doe da maar ook".

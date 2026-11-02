@@ -19,6 +19,9 @@ const kRedenFavoriet = 'favoriet';
 /// Een afspeellijst die je op dit toestel houdt.
 String redenLijst(String id) => 'lijst:$id';
 
+/// Nieuw op de pc binnengekomen, vanzelf hier (nieuw_op_toestel.dart; Saber, 02-11-2026).
+const kRedenNieuw = 'nieuw';
+
 class ToestelRedenen extends ChangeNotifier {
   ToestelRedenen({this.bestandsnaam = 'toestel_redenen.json'});
 

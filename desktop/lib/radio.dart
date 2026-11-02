@@ -776,6 +776,10 @@ class RadioBesturing extends ChangeNotifier {
 
   RadioSessie? _lopend;
 
+  /// Wat deze radio ophaalde en nog niet nagekeken is — de lopende radio en het overzicht dat wacht: op proef. Dat gaat
+  /// pas vanzelf naar een toestel als het blijft (nieuw_op_toestel.dart; Saber, 02-11-2026: geen radionummers).
+  List<Gehaald> get opProef => [...?_lopend?.gehaald, ...?openstaand?.gehaald];
+
   File get _bestand => File('$appDir${Platform.pathSeparator}radio_sessie.json');
 
   /// De notitie van de vorige keer. Eén keer bij het opstarten.

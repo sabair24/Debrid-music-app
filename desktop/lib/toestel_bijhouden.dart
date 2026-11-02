@@ -1,6 +1,6 @@
 // Favorieten en de afspeellijsten die je op dit toestel houdt, bijgehouden (Saber, 28-10-2026): wat erbij komt gaat
 // op je gsm, wat eruit gaat verdwijnt "vanzelf" — tenzij het er ook om een andere reden staat (zie
-// toestel_redenen.dart). Alleen via wifi, zoals al het offline bewaren (offline.dart, magOphalen).
+// toestel_redenen.dart). Ook over mobiele data, zoals al het offline bewaren sinds 02-11-2026 (offline.dart, magOphalen).
 import 'models.dart';
 import 'offline.dart';
 import 'toestel_redenen.dart';
@@ -13,6 +13,7 @@ Future<({int erbij, int weg})> houdLijstenBij({
   required ToestelRedenen redenen,
   required OfflineStore offline,
   required Map<String, List<Track>> gewenst,
+  String? Function(Track t)? geluidVan,
 }) async {
   var erbij = 0;
   final vanToestel = <String>{};
@@ -24,7 +25,9 @@ Future<({int erbij, int weg})> houdLijstenBij({
       await redenen.voegToe([for (final t in nieuw) t.path], e.key, alOpToestel: offline.has);
       final ophalen = [
         for (final t in nieuw)
-          if (!offline.has(t.path)) OfflineRequest(libraryPath: t.path, title: t.title, artist: t.artist, album: t.album),
+          if (!offline.has(t.path))
+            OfflineRequest(
+                libraryPath: t.path, title: t.title, artist: t.artist, album: t.album, geluid: geluidVan?.call(t)),
       ];
       if (ophalen.isNotEmpty) offline.bewaarAlles(ophalen);
       erbij += ophalen.length;

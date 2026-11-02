@@ -33,7 +33,12 @@ class OfflineTrack {
     required this.savedAt,
     this.grensRate = 0,
     this.grensBits = 0,
+    this.geluid,
   });
+
+  /// De handtekening van het geluid van het bestand op de pc toen deze kopie kwam (nieuw_op_toestel.dart, [geluidVan]),
+  /// of null (van vóór 02-11-2026). Anders dan nu op de pc = daar staat een betere kopie, en die vervangt deze.
+  final String? geluid;
 
   /// The library path, exactly as the PC's catalogue gives it. The key to everything: it is what
   /// [Track.path] holds, so a lookup needs no matching on titles.
@@ -75,6 +80,21 @@ class OfflineTrack {
         savedAt: savedAt,
         grensRate: grensRate,
         grensBits: grensBits,
+        geluid: geluid,
+      );
+
+  /// Dezelfde kopie met handtekening [g] ([OfflineStore.zetGeluid]).
+  OfflineTrack metGeluid(String g) => OfflineTrack(
+        path: path,
+        file: file,
+        bytes: bytes,
+        title: title,
+        artist: artist,
+        album: album,
+        savedAt: savedAt,
+        grensRate: grensRate,
+        grensBits: grensBits,
+        geluid: g,
       );
 
   Map<String, dynamic> toJson() => {
@@ -87,6 +107,7 @@ class OfflineTrack {
         'savedAt': savedAt.toUtc().toIso8601String(),
         if (grensRate > 0) 'grensRate': grensRate,
         if (grensRate > 0 && grensBits > 0) 'grensBits': grensBits,
+        if (geluid != null) 'geluid': geluid,
       };
 
   static OfflineTrack? fromJson(Map<String, dynamic> j) {
@@ -104,6 +125,7 @@ class OfflineTrack {
       savedAt: DateTime.tryParse((j['savedAt'] ?? '').toString()) ?? DateTime(1970),
       grensRate: (j['grensRate'] as num?)?.toInt() ?? 0,
       grensBits: (j['grensBits'] as num?)?.toInt() ?? 0,
+      geluid: j['geluid'] is String ? j['geluid'] as String : null,
     );
   }
 }
@@ -157,12 +179,20 @@ class OfflineRequest {
     required this.title,
     required this.artist,
     required this.album,
+    this.geluid,
+    this.vervang = false,
   });
 
   final String libraryPath;
   final String title;
   final String artist;
   final String album;
+
+  /// De handtekening van het geluid op de pc ([OfflineTrack.geluid]), of null.
+  final String? geluid;
+
+  /// Ook als er al een kopie staat: een betere kopie op de pc vervangt die. De oude speelt tot de nieuwe heel binnen is.
+  final bool vervang;
 }
 
 /// What this device is holding, and what is on its way.
@@ -219,6 +249,19 @@ class OfflineStore extends ChangeNotifier {
   int get bytes => _tracks.values.fold(0, (sum, t) => sum + t.bytes);
 
   bool has(String path) => _tracks.containsKey(path);
+
+  /// Een kopie van vóór de handtekening krijgt die van nu ([OfflineTrack.geluid]), zonder hem opnieuw te halen: vanaf
+  /// dan ziet [nieuw_op_toestel.dart] een betere kopie op de pc.
+  Future<void> zetGeluid(Map<String, String> perPad) async {
+    var veranderd = false;
+    for (final e in perPad.entries) {
+      final t = _tracks[e.key];
+      if (t == null || t.geluid == e.value) continue;
+      _tracks[e.key] = t.metGeluid(e.value);
+      veranderd = true;
+    }
+    if (veranderd) await _save();
+  }
 
   /// Hoeveel ruimte de kopieën van [paden] hier innemen — voor de vraag vóór het weghalen.
   int bytesVan(Iterable<String> paden) => paden.fold(0, (som, p) => som + (_tracks[p]?.bytes ?? 0));
@@ -284,7 +327,7 @@ class OfflineStore extends ChangeNotifier {
   void bewaarAlles(Iterable<OfflineRequest> items) {
     var toegevoegd = 0;
     for (final r in items) {
-      if (_tracks.containsKey(r.libraryPath)) continue;
+      if (_tracks.containsKey(r.libraryPath) && !r.vervang) continue;
       // Wat al loopt of nog wacht laten we met rust. Wat MISGING mag wel opnieuw — dat is de hele
       // bedoeling van een tweede keer tikken, en de vorige versie sloeg het stilletjes over.
       final loopt = _jobs[r.libraryPath];
@@ -316,6 +359,8 @@ class OfflineStore extends ChangeNotifier {
           title: r.title,
           artist: r.artist,
           album: r.album,
+          geluid: r.geluid,
+          vervang: r.vervang,
         );
       }
     } finally {
@@ -583,8 +628,10 @@ class OfflineStore extends ChangeNotifier {
     required String title,
     required String artist,
     required String album,
+    String? geluid,
+    bool vervang = false,
   }) async {
-    if (_tracks.containsKey(libraryPath)) return true;
+    if (_tracks.containsKey(libraryPath) && !vervang) return true;
 
     // Een taak die al WACHT is er eentje uit [_wachtrij] en wordt hier overgenomen; een taak die al
     // LOOPT is een tweede klik op hetzelfde nummer en hoort niets te doen. Een taak die MISLUKTE
@@ -597,6 +644,8 @@ class OfflineStore extends ChangeNotifier {
       title: title,
       artist: artist,
       album: album,
+      geluid: geluid,
+      vervang: vervang,
     );
     final job = bestaand ?? OfflineJob(verzoek);
     job
@@ -741,6 +790,13 @@ class OfflineStore extends ChangeNotifier {
       // deze kopie zit. Alleen de twee getallen: het adres zelf draagt een sleutel, en die hoort niet
       // in een index op schijf.
       final grens = grensUitUrl(adres);
+      // Een betere kopie met een andere naam: de oude gaat weg ([OfflineRequest.vervang]).
+      final oud = _tracks[libraryPath];
+      if (oud != null && oud.file != target.path) {
+        try {
+          await File(oud.file).delete();
+        } catch (_) {/* dan blijft er een wees, geen gat */}
+      }
       _tracks[libraryPath] = OfflineTrack(
         path: libraryPath,
         file: target.path,
@@ -751,6 +807,7 @@ class OfflineStore extends ChangeNotifier {
         savedAt: DateTime.now(),
         grensRate: grens?.rate ?? 0,
         grensBits: grens?.bits ?? 0,
+        geluid: geluid,
       );
       // Eerst afmelden, dan pas de index wegschrijven. Andersom is er een moment — de tijd van één
       // schrijfactie — waarop dit nummer zowel "staat op het toestel" als "wordt nog opgehaald" is,

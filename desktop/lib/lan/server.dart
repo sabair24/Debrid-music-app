@@ -108,6 +108,9 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/versie',
     '/api/soort/stop',
     '/api/releaseart',
+    // Wat een radio op proef haalde (alleen id's): onderweg komt er ook vanzelf op je gsm wat de pc binnenhaalt
+    // (nieuw_op_toestel.dart; Saber, 02-11-2026: "ook buitenshuis").
+    '/api/radio/opproef',
   };
   // TIDAL ook (Saber, 23-10-2026: "ik moet ook buitenshuis kunnen zoeken en downloaden"); ophalen telt mee in het
   // quotum voor downloads, zoals Soulseek.
@@ -479,6 +482,10 @@ class LanServer {
   /// Een radio op een speaker (Saber, 22-10-2026: "pc draait, speaker speelt"): de pc start hem, met
   /// [speaker] als uitgang (`speaker_radio.dart`). Gezet door main; geeft null of de reden waarom niet.
   Future<String?> Function(String speaker, Map<String, dynamic> opdracht)? bijSpeakerRadio;
+
+  /// De paden die een radio op de pc ophaalde en nog niet nagekeken is (radio.dart, `opProef`): die gaan niet vanzelf naar
+  /// een toestel (nieuw_op_toestel.dart; Saber, 02-11-2026: geen radionummers). Gezet door main.
+  List<String> Function()? radioOpProef;
 
   /// "Shuffle alles" naar een speaker: dezelfde gewogen trekking als op elk toestel (`ordenVoor`: wat je veel hoorde en
   /// wat de laatste drie dagen ergens opende achteraan). Gezet door main; null = gewoon door elkaar.
@@ -1320,6 +1327,11 @@ class LanServer {
         return _events(req);
       case '/api/zones':
         return _json(res, zones.snapshot());
+      case '/api/radio/opproef':
+        // Wat een radio op de pc op proef haalde, als gedeelde id's (nieuw_op_toestel.dart).
+        return _json(res, {
+          'ids': [for (final p in radioOpProef?.call() ?? const <String>[]) catalog.idVoorPad(p)],
+        });
       case '/api/tijd':
         // De klok van de pc, voor samen spelen (samen.dart `KlokIjk`). Zo kort mogelijk: elke ms telt.
         return _json(res, {'nu': DateTime.now().microsecondsSinceEpoch});
