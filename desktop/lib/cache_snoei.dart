@@ -155,6 +155,10 @@ const cacheGrenzen = <String, int>{
 /// is, blijft ([gezienVoor]). ~1,1 MB per album, dus zo'n 270 albums blijven hier staan.
 const kReleaseartToestel = 300 * 1024 * 1024;
 
+/// En op een toestel dat de hele bibliotheek vooraf haalt (scans_vooraf.dart): de grens van de pc. De hele bibliotheek is
+/// ~0,9 GB; snoeien op 300 MB zou elke dag weggooien wat de nacht ervoor gehaald werd.
+const kReleaseartVooraf = 3 * 1024 * 1024 * 1024;
+
 /// Wanneer de scans in [map] het laatst getoond werden, en van welk album ze zijn: het bestandje `gezien`
 /// (artiest, een nieuwe regel, album). [snoeiMap] houdt per map de nieuwste tijd aan, dus wat je net bekeek, staat
 /// vooraan.

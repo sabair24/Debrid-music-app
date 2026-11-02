@@ -176,6 +176,10 @@ class AppSettings extends ChangeNotifier {
   /// Tot hoeveel GB op dit toestel (Saber: "met limiet van 150 GB"); vol = een waarschuwing.
   int nieuwOpToestelGB = 150;
 
+  /// De hoezen en scans van de hele bibliotheek vooraf op dit toestel, thuis op wifi (scans_vooraf.dart; Saber,
+  /// 02-11-2026). Standaard aan op een Android-gsm.
+  bool scansVooraf = Platform.isAndroid;
+
   /// Mag de app zelf wisselen op grond van wifi of mobiel?
   ///
   /// Staat dit uit, dan geldt [stroomThuis] altijd en is er één stand en verder niets.
@@ -407,6 +411,7 @@ class AppSettings extends ChangeNotifier {
         offlineKwaliteit = (m['offline_kwaliteit'] ?? 'cd') as String;
         nieuwOpToestel = (m['nieuw_op_toestel'] ?? Platform.isAndroid) as bool;
         nieuwOpToestelGB = ((m['nieuw_op_toestel_gb'] as num?) ?? 150).toInt().clamp(1, 4000);
+        scansVooraf = (m['scans_vooraf'] ?? Platform.isAndroid) as bool;
         laatsteWeg = (m['laatste_weg'] ?? '') as String;
         tikKeuze = (m['tik_keuze'] ?? 'vragen') as String;
         appVolume = ((m['app_volume'] as num?) ?? 100).toDouble().clamp(0, 100).toDouble();
@@ -468,6 +473,7 @@ class AppSettings extends ChangeNotifier {
         'offline_kwaliteit': offlineKwaliteit,
         'nieuw_op_toestel': nieuwOpToestel,
         'nieuw_op_toestel_gb': nieuwOpToestelGB,
+        'scans_vooraf': scansVooraf,
         'laatste_weg': laatsteWeg,
         'tik_keuze': tikKeuze,
         'app_volume': appVolume,
