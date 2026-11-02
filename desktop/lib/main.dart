@@ -1391,6 +1391,9 @@ Future<void> main() async {
   await toestelRedenen.laad();
   if (!isTv && !mode.owner) {
     Timer? bijhoudPauze;
+    // Wacht er een nieuw nummer op de keuring van de pc ([wachtOpDePc]), dan straks nog eens kijken: klaar zijn met keuren
+    // verandert de catalogus niet altijd.
+    Timer? nogEensKijken;
     void houdBij() {
       bijhoudPauze?.cancel();
       bijhoudPauze = Timer(const Duration(seconds: 3), () async {
@@ -1412,6 +1415,8 @@ Future<void> main() async {
         };
         // Wat de gsm ophaalt, is wat er speelt: de gekozen versie (versies.dart). Haar handtekening ziet een betere kopie.
         String geluidHier(Track t) => geluidVan(library.trackByPath(library.speelPadVoor(t.path)) ?? t);
+        // Wat de pc nog keurt of verbetert (gedeelde id's, `/api/toestel/nogbezig`).
+        var bezigOpPc = const <String>{};
         // Wat er op de pc binnenkomt, vanzelf hier (nieuw_op_toestel.dart; Saber, 02-11-2026: "direct lokaal kunnen
         // opslaan op men gsm, ook buitenshuis en automatisch, met limiet van 150 GB"). Geen radionummers op proef.
         if (settings.nieuwOpToestel) {
@@ -1430,6 +1435,24 @@ Future<void> main() async {
               opProef: opProef,
               idVan: library.gedeeldId,
               isVersie: versies.isVersie);
+          // Wat de pc nog keurt of verbetert, nog niet (Saber, 02-11-2026: "Wachten tot de keuring af is"). Wat er al om
+          // "nieuw" staat, blijft gewoon staan.
+          bezigOpPc = await (library.remote?.nogBezig() ?? Future.value(const <String>{}));
+          final nuMs = DateTime.now().millisecondsSinceEpoch;
+          final alNieuw = toestelRedenen.padenMet(kRedenNieuw);
+          final wacht = {
+            for (final t in nieuw)
+              if (!alNieuw.contains(t.path) &&
+                  wachtOpDePc(toegevoegdMs: t.addedMs, nuMs: nuMs, bezig: bezigOpPc.contains(library.gedeeldId(t.path))))
+                t.path,
+          };
+          if (wacht.isNotEmpty) {
+            nieuw.removeWhere((t) => wacht.contains(t.path));
+            nogEensKijken ??= Timer(kKeuringAdem, () {
+              nogEensKijken = null;
+              houdBij();
+            });
+          }
           final cd = settings.offlineKwaliteit == 'cd';
           final vrij = await vrijeRuimteOpToestel();
           final grensGB = settings.nieuwOpToestelGB * 1000000000;
@@ -1465,6 +1488,12 @@ Future<void> main() async {
             final g = geluidHier(t);
             if (o.geluid == null) {
               zonder[o.path] = g;
+            } else if (o.geluid != g && bezigOpPc.contains(library.gedeeldId(o.path))) {
+              // De pc zoekt nog iets beters: pas daarna.
+              nogEensKijken ??= Timer(kKeuringAdem, () {
+                nogEensKijken = null;
+                houdBij();
+              });
             } else if (o.geluid != g) {
               beter.add(OfflineRequest(
                   libraryPath: o.path, title: t.title, artist: t.artist, album: t.album, geluid: g, vervang: true));
@@ -24514,6 +24543,11 @@ class NieuwSpeler extends ChangeNotifier {
     bool magNog() => mijnTik == _tikken && speler.keuzes == keuzes;
     final online = context.read<OnlineService>();
     final instellingen = context.read<AppSettings>();
+    // Op mobiele data eerst op je gsm, dan spelen (Saber, 02-11-2026: "Eerst op je gsm, dan spelen"): het speelt dan van
+    // je gsm, en "vanzelf op dit toestel" haalt het niet nog eens. Dus ook niet al laten klinken terwijl de pc het haalt.
+    final opGsm = lib.remote != null && !isTv && _misschien<NetsoortStore>(context)?.net == Netsoort.mobiel
+        ? _misschien<OfflineStore>(context)
+        : null;
     // Het gelande (of al aanwezige) nummer, zoals [keuze] het wil. Niet bij vervangen: daar beslist de staart
     // hieronder, die ook weet of het al klinkt.
     void zetNaarKeuze(Track t) {
@@ -24625,7 +24659,7 @@ class NieuwSpeler extends ChangeNotifier {
       // Speelt de speler [adres] echt — geopend, met een duur?
       bool opende(String? adres) => adres != null && speler.current?.path == adres && speler.duration > Duration.zero;
       void klinktOpPc(String groeiId) {
-        if (klaar || !magNog()) return;
+        if (klaar || opGsm != null || !magNog()) return;
         // Klinkt een vorige ronde nog, dan niet onderbreken. Ging die nooit open of viel hij stil (de groei
         // ging dicht, er kwam op de pc geen uploader meer), dan deze ronde. Niet op `playing`: dat blijft
         // na een mislukte opening gewoon waar (gemeten, Stargazing 20-10-2026).
@@ -24675,6 +24709,17 @@ class NieuwSpeler extends ChangeNotifier {
             _srcToast(context, '"$titel" nergens gevonden — lang drukken voor de bronnen.');
           }
           return;
+        }
+        if (opGsm != null) {
+          final pad = t.path;
+          if (context.mounted) _srcToast(context, '"$titel" komt eerst op je gsm (mobiele data)…');
+          unawaited(toestelRedenen.voegToe([pad], kRedenZelf));
+          if (!await opGsm.haalEnWacht(libraryPath: pad, title: t.title, artist: t.artist, album: t.album)) {
+            if (context.mounted) {
+              _srcToast(context, '"$titel" staat in je bibliotheek, maar kwam niet op je gsm — op wifi speelt hij van je pc');
+            }
+            return;
+          }
         }
         // De achterkant en de cd alvast, uit de gratis bronnen en met de sleutel die Nu speelt en de tegels
         // gebruiken ([albumArtVooruit]): dan staan ze klaar als je Nu speelt opent, en opent het intussen,

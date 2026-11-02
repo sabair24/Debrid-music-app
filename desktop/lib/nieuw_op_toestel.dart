@@ -45,6 +45,21 @@ List<Track> nieuweNummers({
   return uit;
 }
 
+/// Wacht een nieuw nummer nog op de pc? De eerste [kKeuringAdem] altijd (de pc keurt wat net landde), daarna zolang hij er
+/// nog mee bezig is ([bezig]: een jacht op een betere kopie, 24 bit zoeken), maar nooit langer dan [kKeuringHoogstens].
+///
+/// **Waarom (Saber, 02-11-2026).** Got My Mind Set On You landde om 09:47 als nep (afgekapt op 16,1 kHz); de gsm haalde
+/// hem meteen, 33,7 MB over mobiele data, en een minuut later verving de pc hem door een echte. Gekozen: "Wachten tot de
+/// keuring af is", op zijn laatst na 30 minuten.
+bool wachtOpDePc({required int toegevoegdMs, required int nuMs, required bool bezig}) {
+  final leeftijd = nuMs - toegevoegdMs;
+  if (leeftijd < kKeuringAdem.inMilliseconds) return true;
+  return bezig && leeftijd < kKeuringHoogstens.inMilliseconds;
+}
+
+const kKeuringAdem = Duration(minutes: 2);
+const kKeuringHoogstens = Duration(minutes: 30);
+
 /// Wat er van [nieuw] op dit toestel mag: wat er al om deze reden staat ([al]) blijft altijd; van de rest zoveel als er
 /// binnen [grens] bytes past bovenop [bezet], in volgorde. [nietMeer]: hoeveel er niet meer pasten — dan een waarschuwing.
 ({List<Track> houden, int nietMeer}) binnenGrens({

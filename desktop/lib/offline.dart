@@ -250,6 +250,36 @@ class OfflineStore extends ChangeNotifier {
 
   bool has(String path) => _tracks.containsKey(path);
 
+  /// [libraryPath] op dit toestel, en wachten tot hij er is — of het mislukte, of [tot] om is. Ook als hij al onderweg
+  /// was ([download] geeft dan meteen true). Voor "eerst op je gsm, dan spelen" op mobiele data (Saber, 02-11-2026).
+  Future<bool> haalEnWacht(
+      {required String libraryPath,
+      required String title,
+      required String artist,
+      required String album,
+      Duration tot = const Duration(minutes: 5)}) async {
+    final ok = await download(libraryPath: libraryPath, title: title, artist: artist, album: album);
+    if (has(libraryPath)) return true;
+    if (!ok || foutVoor(libraryPath) != null) return false;
+    final klaar = Completer<bool>();
+    void kijk() {
+      if (klaar.isCompleted) return;
+      if (has(libraryPath)) {
+        klaar.complete(true);
+      } else if (foutVoor(libraryPath) != null) {
+        klaar.complete(false);
+      }
+    }
+
+    addListener(kijk);
+    kijk();
+    try {
+      return await klaar.future.timeout(tot, onTimeout: () => has(libraryPath));
+    } finally {
+      removeListener(kijk);
+    }
+  }
+
   /// Een kopie van vóór de handtekening krijgt die van nu ([OfflineTrack.geluid]), zonder hem opnieuw te halen: vanaf
   /// dan ziet [nieuw_op_toestel.dart] een betere kopie op de pc.
   Future<void> zetGeluid(Map<String, String> perPad) async {

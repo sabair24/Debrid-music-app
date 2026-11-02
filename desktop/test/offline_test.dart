@@ -566,6 +566,30 @@ void main() {
   });
 
   // Saber, 27-10-2026: "ik wil ook in cd kwaliteit kunnen opslaan offline gebruik op de gsm" — en ophalen alleen via wifi.
+  // Saber, 02-11-2026: "Eerst op je gsm, dan spelen" — een nummer uit zoeken online op mobiele data.
+  group('ophalen en wachten tot hij er is', () {
+    test('haalt hem en zegt dat hij er is', () async {
+      expect(await store.haalEnWacht(libraryPath: path, title: 't', artist: 'a', album: 'b'), isTrue);
+      expect(store.has(path), isTrue);
+    });
+
+    test('was hij al onderweg, dan wacht hij op die download in plaats van meteen ja te zeggen', () async {
+      server.chunkDelay = const Duration(milliseconds: 2);
+      final eerste = download();
+      await wachtTot(() => store.taakVoor(path) != null, 'de eerste download loopt');
+      expect(store.has(path), isFalse);
+      expect(await store.haalEnWacht(libraryPath: path, title: 't', artist: 'a', album: 'b'), isTrue);
+      expect(store.has(path), isTrue, reason: 'pas ja als hij er echt is');
+      await eerste;
+    });
+
+    test('mislukt het, dan nee', () async {
+      store.adresVoor = (_) => 'http://127.0.0.1:1/geen.flac';
+      expect(await store.haalEnWacht(libraryPath: path, title: 't', artist: 'a', album: 'b'), isFalse);
+      expect(store.has(path), isFalse);
+    });
+  });
+
   // Saber, 02-11-2026: "Betere kopieën" — komt er een betere versie op de pc, dan vervangt die de kopie op de gsm.
   group('een betere kopie vervangt de kopie hier', () {
     OfflineRequest verzoek({String? geluid, bool vervang = false}) => OfflineRequest(
