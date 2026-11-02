@@ -1887,11 +1887,7 @@ class PlayerStore extends ChangeNotifier
     final t = current;
     if (t == null) return;
     // De stroomstand hangt ook aan de weg naar de pc, en die is pas nu bekend — zie `heropenVoorStand`.
-    if (heropenVoorStand(geopend: mpvAdres, nu: mediaResolver(_speelPad(t.path)), speelt: playing, plek: position)) {
-      _log?.line('STROOMSTAND ANDERS NA DE VERBINDING — opnieuw open — ${t.title}');
-      unawaited(playing ? _hervatOpDezelfdePlek() : _heropenGepauzeerd());
-      return;
-    }
+    if (kijkNaarStand()) return;
     if (heropenNaVerbinding(radio: radioMode, nietGeopend: _nietGeopend == t.path, speelt: playing)) {
       unawaited(_heropenGepauzeerd());
       return;
@@ -1902,6 +1898,26 @@ class PlayerStore extends ChangeNotifier
     _log?.line('VERBINDING MET DE PC TERUG — opnieuw — ${t.title}');
     unawaited(_hervatOpDezelfdePlek());
   }
+
+  /// Geldt er nu een andere stroomstand dan toen het nummer openging (een andere weg naar de pc, een andere netsoort)?
+  /// Dan opnieuw open op dezelfde plek — zie `heropenVoorStand`: omlaag ook midden in een nummer (Saber, 02-11-2026:
+  /// "Rest in cd-kwaliteit"). Geeft terug of hij opnieuw opent. Eén tegelijk: de sessie en de netsoort melden een
+  /// wissel vaak vlak na elkaar, en mpv kent het nieuwe adres pas als het open is.
+  bool kijkNaarStand() {
+    final t = current;
+    if (t == null || _standHeropen) return false;
+    if (!heropenVoorStand(geopend: mpvAdres, nu: mediaResolver(_speelPad(t.path)), speelt: playing, plek: position)) {
+      return false;
+    }
+    _log?.line('STROOMSTAND ANDERS — opnieuw open op $position — ${t.title}');
+    _standHeropen = true;
+    unawaited((playing ? _hervatOpDezelfdePlek() : _heropenGepauzeerd()).whenComplete(() {
+      _standHeropen = false;
+    }));
+    return true;
+  }
+
+  bool _standHeropen = false;
 
   /// Het pad van het nummer dat hier nog nooit openging (geen duur), of null.
   ///

@@ -63,7 +63,7 @@ import 'transcode.dart';
 import 'upnp.dart';
 import '../artwork.dart';
 import '../dataverbruik.dart' show Verkeerssoort, soortVanPad;
-import '../discogs.dart' show DiscogsArtwork, DiscogsService, ReleaseArt, kunstNaarJson, persingUitHerkomst;
+import '../discogs.dart' show DiscogsArtwork, DiscogsService, ReleaseArt, kKleinScan, kunstNaarJson, persingUitHerkomst;
 import '../aanbevolen.dart';
 import '../vertaler.dart';
 
@@ -3308,7 +3308,18 @@ class LanServer {
     }
     // Op volle resolutie, zoals de pc ze bewaart — niet verkleind (Saber, 21-10-2026: "worden die nooit op
     // volle resolutie getoond dan ??? Da wil ik wel"). Het is één keer per album; daarna staan ze op het
-    // toestel.
+    // toestel. Behalve op mobiele data (`klein=1`, Saber, 02-11-2026: "Kleiner op mobiele data"): dan in
+    // gsm-formaat, ~150 KB in plaats van ~1,1 MB per album, en op wifi haalt het toestel ze opnieuw.
+    if (req.uri.queryParameters['klein'] == '1') {
+      Future<Uint8List?> klein(Uint8List? b) async =>
+          b == null ? null : (await verkleindeHoesBuitenDeTekendraad(b, kKleinScan)) ?? b;
+      art = ReleaseArt(
+          front: await klein(art.front),
+          back: await klein(art.back),
+          disc: await klein(art.disc),
+          bron: art.bron,
+          formaat: art.formaat);
+    }
     return _json(req.response, kunstNaarJson(art, klaar: klaar));
   }
 

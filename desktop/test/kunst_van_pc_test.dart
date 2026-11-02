@@ -45,6 +45,7 @@ void main() {
     });
     tearDown(() {
       DiscogsArtwork.vanDePc = null;
+      DiscogsArtwork.zuinig = null;
       try {
         krab.deleteSync(recursive: true);
       } catch (_) {}
@@ -53,7 +54,7 @@ void main() {
     test('heeft de pc het af, dan is dat het antwoord: meteen op het scherm en op schijf', () async {
       final vanPc = ReleaseArt(front: _b(1), back: _b(2), disc: _b(3), bron: 'rel:42');
       final gevraagd = <String>[];
-      DiscogsArtwork.vanDePc = (artist, album) async {
+      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async {
         gevraagd.add('$artist|$album');
         return (art: vanPc, klaar: true);
       };
@@ -67,9 +68,39 @@ void main() {
       expect(art?.back, vanPc.back);
       expect(tussen, isNotEmpty, reason: 'de cd staat er meteen, ook als de rest nog loopt');
       // En de volgende keer van schijf, zonder de pc: na een koude start meteen.
-      DiscogsArtwork.vanDePc = (artist, album) async => fail('niet nog eens vragen');
+      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async => fail('niet nog eens vragen');
       final opnieuw = await dienst.cachedReleaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen);
       expect(opnieuw?.disc, vanPc.disc);
+      expect(await dienst.hasReleaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen), isTrue);
+    });
+
+    test('op mobiele data in gsm-formaat, nooit af en zonder keten; op wifi daarna op volle resolutie', () async {
+      // Saber, 02-11-2026: elk album haalde ~1,1 MB van de pc over mobiele data. Gekozen: "Kleiner op mobiele data".
+      final klein = ReleaseArt(front: _b(1, 50), back: _b(2, 50), disc: _b(3, 50));
+      final vol = ReleaseArt(front: _b(1), back: _b(2), disc: _b(3));
+      final gevraagd = <bool>[];
+      var mobiel = true;
+      DiscogsArtwork.zuinig = () => mobiel;
+      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async {
+        gevraagd.add(klein);
+        return (art: klein ? ReleaseArt(front: _b(1, 50), back: _b(2, 50), disc: _b(3, 50)) : vol, klaar: true);
+      };
+      const rollen = {'front': 'https://voorbeeld.invalid/voor.jpg'};
+      final dienst = DiscogsService(AppSettings());
+      final eerst = await dienst.releaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen);
+      expect(gevraagd, [true]);
+      expect(eerst?.disc, klein.disc);
+      expect(await dienst.hasReleaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen), isFalse,
+          reason: 'klein is nooit af: op wifi komen ze op volle resolutie');
+      // Nog op mobiele data: van schijf, zonder de pc en zonder de keten.
+      final weer = await dienst.releaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen);
+      expect(gevraagd, [true], reason: 'het gsm-formaat ligt er al');
+      expect(weer?.disc, klein.disc);
+      // Op wifi: de volle scans, en dan is het af.
+      mobiel = false;
+      final opWifi = await dienst.releaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen);
+      expect(gevraagd, [true, false]);
+      expect(opWifi?.disc, vol.disc);
       expect(await dienst.hasReleaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen), isTrue);
     });
   });
@@ -78,14 +109,18 @@ void main() {
     test('het toestel zet de haak, de pc heeft het eindpunt, en de pc gooit de scans niet meer weg', () {
       String lees(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
       final main = lees('lib/main.dart');
-      expect(main, contains('DiscogsArtwork.vanDePc = (artist, album) async {'));
-      expect(main, contains('return kunstUitJson(await c.releaseArtJson(id));'));
+      expect(main, contains('DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async {'));
+      expect(main, contains('return kunstUitJson(await c.releaseArtJson(id, klein: klein));'));
+      expect(main, contains('    DiscogsArtwork.zuinig = () => netStore.net == Netsoort.mobiel;\n'));
       final server = lees('lib/lan/server.dart');
       expect(server, contains("case '/api/releaseart':\n        return _releaseArt(req);"));
       expect(server, contains("    '/api/releaseart',\n"), reason: 'ook van buitenaf: het zijn alleen plaatjes');
       final eindpunt = server.substring(server.indexOf('  Future<void> _releaseArt(HttpRequest req) async {'));
-      expect(eindpunt.substring(0, eindpunt.indexOf('\n  }\n')), isNot(contains('verkleindeHoes')),
+      final lijf = eindpunt.substring(0, eindpunt.indexOf('\n  }\n'));
+      expect('verkleindeHoes'.allMatches(lijf), hasLength(1),
           reason: 'op volle resolutie (Saber: "worden die nooit op volle resolutie getoond dan ???")');
+      expect(lijf, contains("    if (req.uri.queryParameters['klein'] == '1') {\n"),
+          reason: 'alleen verkleind als het toestel op mobiele data zit');
       expect(server, contains('return _json(req.response, kunstNaarJson(art, klaar: klaar));'));
       final discogs = lees('lib/discogs.dart');
       expect(discogs, contains('_vanPcOfVers(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld)'));
