@@ -154,5 +154,30 @@ void main() {
         expect(keur, contains(stap));
       }
     });
+
+    // Saber, 02-11-2026: "Meteen naar TIDAL" — Got My Mind Set On You stond tien minuten op plaats 500 en 4511 in een
+    // wachtrij, terwijl TIDAL hem had.
+    test('een los nummer: levert Soulseek in stereo niet, dan TIDAL vóór 5.1 en MP3 — ook als alleen wachtrijen open staan',
+        () {
+      final best = lijf('  Future<bool> _soulseekBest(');
+      expect(best, contains('      if (tidalGeprobeerd || keuze != null || vast || job.cancelled) return false;\n'),
+          reason: 'één keer, en niet bij jouw eigen keuze');
+      // In de wedloop van de stereo-kopieën: na het geduld alleen nog wachtrijen, en niemand zendt.
+      expect(best, contains("      if (label == 'poging' && winner == null && !job.cancelled && runners.isNotEmpty) {\n"
+          '        await Future.any([Future.wait(runners), decided.future, Future<void>.delayed(kWachtrijGeduld)]);\n'
+          '        if (winner == null && leader == null && queued > 0 && await probeerTidal()) {\n'));
+      // Na stereo, en vóór 5.1 en een MP3.
+      final tidal = best.indexOf('    if (viaTidal || await probeerTidal()) {\n');
+      expect(tidal, greaterThan(best.indexOf("    final first = await bak(stereo, 'poging');")));
+      expect(tidal, lessThan(best.indexOf("      final second = await bak(surround, '5.1-poging');")));
+      expect(tidal, lessThan(best.indexOf("      final third = await bak(lossy, 'MP3-poging', alsLossy: true);")));
+      final via = lijf('  Future<bool> _wachtrijViaTidal(DownloadJob job) async {');
+      expect(via, contains('kiesTidalTreffers(treffers, artiest: t.artist, titel: t.title)'));
+      expect(via, contains('zoekWachttijd(_tidalRadioTijden, nu, max: kTidalRadioPerUur,'),
+          reason: 'dezelfde grens per uur als de radio: anders een geblokkeerd account');
+      expect(via, contains("keurBinnengekomen(map, 'TIDAL track/\$id', zichtbaar: tidalRest, jouwKeuze: false)"),
+          reason: 'dezelfde keuring als wat een toestel van TIDAL liet halen, en de app mag er later iets beters voor halen');
+      expect(via, contains('if ((rapport?.moved ?? 0) > 0) return true;'));
+    });
   });
 }

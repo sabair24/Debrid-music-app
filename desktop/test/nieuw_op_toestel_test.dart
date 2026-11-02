@@ -116,6 +116,50 @@ void main() {
     });
   });
 
+  group('wachten op de keuring van de pc (Saber, 02-11-2026: "Wachten tot de keuring af is")', () {
+    const min = 60000;
+    test('de eerste twee minuten altijd; daarna zolang de pc bezig is, maar nooit langer dan een halfuur', () {
+      const nu = 100 * min;
+      expect(wachtOpDePc(toegevoegdMs: nu - 1 * min, nuMs: nu, bezig: false), isTrue,
+          reason: 'net geland: de pc keurt nog (de nep van Got My Mind Set On You werd na 15 s betrapt)');
+      expect(wachtOpDePc(toegevoegdMs: nu - 3 * min, nuMs: nu, bezig: false), isFalse);
+      expect(wachtOpDePc(toegevoegdMs: nu - 3 * min, nuMs: nu, bezig: true), isTrue, reason: 'de jacht loopt nog');
+      expect(wachtOpDePc(toegevoegdMs: nu - 29 * min, nuMs: nu, bezig: true), isTrue);
+      expect(wachtOpDePc(toegevoegdMs: nu - 30 * min, nuMs: nu, bezig: true), isFalse, reason: 'op zijn laatst na 30 min');
+    });
+
+    test('aangesloten: de pc zegt wat hij nog keurt, de gsm wacht, en wat al op de gsm staat blijft', () {
+      String bron(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
+      final online = bron('lib/online.dart');
+      expect(online, contains('      if (ok && better.isNotEmpty) _queueUpgrade(better, job, behandeld: padVanWatErLigt);\n'));
+      expect(online, contains('    if (pad != null) _jachtVoor[pad] = (_jachtVoor[pad] ?? 0) + 1;\n'));
+      expect(online, contains('    _naLandenBezig.addAll(g.paden);\n'));
+      expect(online, contains('      _naLandenBezig.removeAll(g.paden);\n'));
+      final server = bron('lib/lan/server.dart');
+      expect(server, contains("      case '/api/toestel/nogbezig':"));
+      expect(server, contains("    '/api/toestel/nogbezig',\n"), reason: 'ook van buitenaf: alleen id\'s');
+      final main = bron('lib/main.dart');
+      expect(main, contains('          bezigOpPc = await (library.remote?.nogBezig() ?? Future.value(const <String>{}));\n'));
+      expect(main, contains('              if (!alNieuw.contains(t.path) &&\n'
+          '                  wachtOpDePc(toegevoegdMs: t.addedMs, nuMs: nuMs, bezig: bezigOpPc.contains(library.gedeeldId(t.path))))\n'));
+      expect(main, contains('            nieuw.removeWhere((t) => wacht.contains(t.path));\n'));
+      expect(main, contains('            } else if (o.geluid != g && bezigOpPc.contains(library.gedeeldId(o.path))) {\n'),
+          reason: 'ook een betere kopie pas als de pc klaar is met zoeken');
+    });
+  });
+
+  test('zoeken online op mobiele data: eerst op je gsm, dan spelen (Saber, 02-11-2026)', () {
+    final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(main, contains('    final opGsm = lib.remote != null && !isTv && _misschien<NetsoortStore>(context)?.net == Netsoort.mobiel\n'));
+    expect(main, contains('        if (klaar || opGsm != null || !magNog()) return;\n'),
+        reason: 'niet al laten klinken van de pc terwijl hij binnenkomt');
+    final i = main.indexOf('        if (opGsm != null) {\n          final pad = t.path;\n');
+    expect(i, greaterThan(0));
+    expect(main.substring(i, i + 700), contains('if (!await opGsm.haalEnWacht(libraryPath: pad, title: t.title'));
+    expect(i, lessThan(main.indexOf('        final klinkendAdres = vroeg?.adres ?? elders?.pad;\n')),
+        reason: 'eerst op de gsm, pas dan spelen');
+  });
+
   test('aangesloten: het bijhouden, de grens, betere kopieën, zelf weghalen, de pc en de deur naar buiten', () {
     String bron(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
     final main = bron('lib/main.dart');

@@ -111,6 +111,8 @@ String? weigerVanBuiten(String pad, String methode) {
     // Wat een radio op proef haalde (alleen id's): onderweg komt er ook vanzelf op je gsm wat de pc binnenhaalt
     // (nieuw_op_toestel.dart; Saber, 02-11-2026: "ook buitenshuis").
     '/api/radio/opproef',
+    // En wat de pc nog keurt of verbetert (alleen id's): daar wacht de gsm mee.
+    '/api/toestel/nogbezig',
   };
   // TIDAL ook (Saber, 23-10-2026: "ik moet ook buitenshuis kunnen zoeken en downloaden"); ophalen telt mee in het
   // quotum voor downloads, zoals Soulseek.
@@ -1331,6 +1333,12 @@ class LanServer {
         // Wat een radio op de pc op proef haalde, als gedeelde id's (nieuw_op_toestel.dart).
         return _json(res, {
           'ids': [for (final p in radioOpProef?.call() ?? const <String>[]) catalog.idVoorPad(p)],
+        });
+      case '/api/toestel/nogbezig':
+        // Wat de pc nog keurt of verbetert ([DownloadManager.inBehandeling]): een toestel haalt het pas daarna
+        // (nieuw_op_toestel.dart; Saber, 02-11-2026: "Wachten tot de keuring af is").
+        return _json(res, {
+          'ids': [for (final p in downloads?.inBehandeling ?? const <String>{}) catalog.idVoorPad(p)],
         });
       case '/api/tijd':
         // De klok van de pc, voor samen spelen (samen.dart `KlokIjk`). Zo kort mogelijk: elke ms telt.

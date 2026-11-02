@@ -817,6 +817,20 @@ class RemoteClient {
   /// De speelstand van de pc, en wie wat speelt ("Hier verder luisteren"). Met [sinds] de revisie die
   /// dit toestel kent: dan komt alleen de stand mee zolang er verder niets veranderde. [toestel] en
   /// [naam] zeggen de pc dat dit toestel er is, voor "Speel op …".
+  /// Wat de pc nog keurt of verbetert (gedeelde id's, `/api/toestel/nogbezig`): daar wacht dit toestel mee
+  /// (nieuw_op_toestel.dart). Leeg op een oudere pc, of als hij niet antwoordt.
+  Future<Set<String>> nogBezig() async {
+    try {
+      final res = await _get('/api/toestel/nogbezig');
+      if (res.statusCode != 200) return const {};
+      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      final l = j is Map ? j['ids'] : null;
+      return {if (l is List) for (final x in l) '$x'};
+    } catch (_) {
+      return const {};
+    }
+  }
+
   /// Wat een radio op de pc op proef haalde (gedeelde id's): dat gaat niet vanzelf naar dit toestel
   /// (nieuw_op_toestel.dart). Leeg op een pc van vóór 02-11-2026, of als hij niet antwoordt.
   Future<Set<String>> radioOpProef() async {

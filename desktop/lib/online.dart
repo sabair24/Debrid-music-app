@@ -1431,6 +1431,10 @@ class DownloadManager extends ChangeNotifier {
   /// Zo lang wacht de race van een los nummer ([DownloadJob.ruim]) op een antwoord voor hij de volgende
   /// vraagt. Gemeten op 20-10-2026: vijftien onbereikbare peers hielden elk 18 s een plek bezet.
   static const kVerbindGeduld = Duration(seconds: 4);
+
+  /// Zo lang staan de stereo-kopieën van een los nummer alleen nog in wachtrijen voor TIDAL het haalt
+  /// ([_wachtrijViaTidal]). Een peer die je op plaats 1 of 2 zet, begint meestal binnen de minuut.
+  static const kWachtrijGeduld = Duration(seconds: 60);
   static const _maxLossyTries = 8;
 
   /// How fast the race opens new peer connections. Not a cap on how many run at once: a peer that
@@ -2600,6 +2604,20 @@ class DownloadManager extends ChangeNotifier {
     /// Waar het bestand ligt dat bleef (zie [oordeelVanWatErLigt]) — voor de 24bit-zoektocht na het landen.
     String? padVanWatErLigt;
 
+    /// Leveren de stereo-kopieën op Soulseek niet — iedereen faalde, of er staan alleen nog wachtrijen — dan haalt TIDAL
+    /// het ([_wachtrijViaTidal]; Saber, 02-11-2026: "Meteen naar TIDAL"). Eén keer per download, en niet bij jouw eigen
+    /// keuze: dan wil je dát bestand.
+    var tidalGeprobeerd = false;
+    var viaTidal = false;
+    Future<bool> probeerTidal() async {
+      if (tidalGeprobeerd || keuze != null || vast || job.cancelled) return false;
+      tidalGeprobeerd = true;
+      job.detail = 'Soulseek levert niet — TIDAL probeert het';
+      notifyListeners();
+      viaTidal = await _wachtrijViaTidal(job);
+      return viaTidal;
+    }
+
     /// Waarom de laatste poging niets opleverde, in de woorden van de peer.
     ///
     /// **Dit bestond al en kwam nergens aan.** Elke poging eindigt in een [SlskFail] met een reden —
@@ -2875,6 +2893,19 @@ class DownloadManager extends ChangeNotifier {
       // FIRST queued peer (as the old sequential wait did) meant a twelve-track album could have
       // every track racing twenty peers at once — the cap stopped capping anything.
       if (winner == null) releaseSlot();
+      // Alleen nog wachtrijen bij de stereo-kopieën: na [kWachtrijGeduld] haalt TIDAL het, en de wachtrijen blijven
+      // intussen staan. Lukte het, dan zijn ze overbodig. Gemeten op 02-11-2026: Got My Mind Set On You stond tien
+      // minuten op plaats 500 en 4511, terwijl TIDAL hem had.
+      if (label == 'poging' && winner == null && !job.cancelled && runners.isNotEmpty) {
+        await Future.any([Future.wait(runners), decided.future, Future<void>.delayed(kWachtrijGeduld)]);
+        if (winner == null && leader == null && queued > 0 && await probeerTidal()) {
+          _log.line('"${job.name}": $queued wachtrij(en) op Soulseek niet meer nodig — TIDAL leverde');
+          for (final live in [...job.live]) {
+            live.cancel();
+          }
+          return null;
+        }
+      }
       // Now sit on the ones still queued until one comes up.
       if (winner == null && !job.cancelled && runners.isNotEmpty) {
         await Future.any([Future.wait(runners), decided.future]);
@@ -2922,7 +2953,7 @@ class DownloadManager extends ChangeNotifier {
           better = anders;
         }
       }
-      if (ok && better.isNotEmpty) _queueUpgrade(better, job);
+      if (ok && better.isNotEmpty) _queueUpgrade(better, job, behandeld: padVanWatErLigt);
       // En "24bit" op de achtergrond, als wat er ligt 16 bit of minder is (Saber, 24-10-2026: "na het landen").
       if (ok) _naLandenHires(padVanWatErLigt, job.authority, from);
       // FLAC is koning. Landde er lossy, dan blijft de FLAC gewenst -- ook als er vandaag geen enkele
@@ -2970,6 +3001,17 @@ class DownloadManager extends ChangeNotifier {
     final first = await bak(stereo, 'poging');
     if (first != null) return finish(first.$1, first.$2);
 
+    if (job.cancelled) return false;
+
+    // Geen stereo-kopie: eerst TIDAL (cd-kwaliteit), pas daarna 5.1 of een MP3. Stond hij al in een wachtrij
+    // ([race]), dan is dat al geprobeerd.
+    if (viaTidal || await probeerTidal()) {
+      job.status = 'done';
+      job.progress = 1;
+      job.detail = 'via TIDAL — Soulseek leverde niet';
+      notifyListeners();
+      return true;
+    }
     if (job.cancelled) return false;
 
     // ── 2. Surround — lossless, but it downmixes on a stereo system and costs ten times the space
@@ -4693,6 +4735,40 @@ class DownloadManager extends ChangeNotifier {
   /// Wanneer de radio (en ▶) TIDAL vroeg — voor [kTidalRadioPerUur].
   final List<DateTime> _tidalRadioTijden = [];
 
+  /// Een los nummer dat Soulseek niet in stereo levert — iedereen faalde, of er staan alleen nog wachtrijen — via TIDAL
+  /// (Saber, 02-11-2026: "Meteen naar TIDAL"; Got My Mind Set On You stond tien minuten op plaats 500 en 4511, en TIDAL
+  /// had hem). Het juiste nummer met [kiesTidalTreffers], dezelfde grens per uur als de radio ([kTidalRadioPerUur]), en
+  /// dezelfde keuring en hetzelfde opbergen als wat een toestel van TIDAL liet halen ([keurBinnengekomen]). Geeft terug
+  /// of er iets opgeborgen werd.
+  Future<bool> _wachtrijViaTidal(DownloadJob job) async {
+    final t = job.authority;
+    if (t == null || t.artist.trim().isEmpty || t.title.trim().isEmpty) return false;
+    if (job.cancelled || Tidaler.inToets || !Tidaler.beschikbaar || Tidaler.python == null) return false;
+    final nu = DateTime.now();
+    _tidalRadioTijden.removeWhere((x) => nu.difference(x) >= const Duration(hours: 1));
+    if (zoekWachttijd(_tidalRadioTijden, nu, max: kTidalRadioPerUur, venster: const Duration(hours: 1)) > Duration.zero) {
+      _log.line('"${job.name}": Soulseek levert niet — TIDAL niet: al $kTidalRadioPerUur dit uur');
+      return false;
+    }
+    final treffers = await zoekOpTidal(zoekvraagVoorNummer(t.title, artist: t.artist));
+    if (treffers == null) return false;
+    final ids = kiesTidalTreffers(treffers, artiest: t.artist, titel: t.title);
+    _log.line('"${job.name}": Soulseek levert niet — TIDAL: ${treffers.length} treffers, ${ids.length} met deze '
+        'titel en artiest');
+    for (final id in ids.take(2)) {
+      if (job.cancelled) return false;
+      _tidalRadioTijden.add(DateTime.now());
+      final map = keuringsmapVoor('tidal-los-$id');
+      final r = await haalVanTidal(doel: 'track/$id', map: map.path);
+      // Ook na een fout keuren: wat er wél binnenkwam hoort niet onzichtbaar in de keuringsmap te blijven.
+      final rapport = await keurBinnengekomen(map, 'TIDAL track/$id', zichtbaar: tidalRest, jouwKeuze: false);
+      _log.line('   TIDAL $id: ${r.fout == null ? 'binnen${r.kwaliteit == null ? '' : ' (${r.kwaliteit})'}' : 'mislukt — '
+          '${r.fout!.split('\n').last}'}${rapport == null || rapport.keuringZin.isEmpty ? '' : ' · ${rapport.keuringZin}'}');
+      if ((rapport?.moved ?? 0) > 0) return true;
+    }
+    return false;
+  }
+
   /// TIDAL als reserve voor een radiohaal: zoeken met tidaler, het juiste nummer kiezen ([kiesTidalTreffers]),
   /// halen in een eigen keuringsmap, en dan dezelfde keuringen als een kopie van Soulseek in [_haalVoorRadio] — de
   /// tags moeten dit nummer zijn, de lengte moet kloppen, en wat je al had blijft van jou ([RadioAlGehad]).
@@ -5751,6 +5827,22 @@ class DownloadManager extends ChangeNotifier {
   final Map<String, ({Set<String> paden, String album})> _naLanden = {};
   final Map<String, Timer> _naLandenKlok = {};
 
+  /// Wat [_zoekHiresNaLanden] nu zoekt.
+  final Set<String> _naLandenBezig = {};
+
+  /// Per pad hoeveel jachten op een betere kopie er nog lopen of wachten ([_queueUpgrade]).
+  final Map<String, int> _jachtVoor = {};
+
+  /// De paden waar de pc nog mee bezig is: een jacht op een betere kopie (ook na een betrapte nep bij het landen), of
+  /// 24 bit zoeken na het landen. Een toestel wacht daarmee voor het een nieuw nummer ophaalt (nieuw_op_toestel.dart;
+  /// Saber, 02-11-2026: "Wachten tot de keuring af is" — de gsm haalde een nep van 33,7 MB, een minuut voor de pc hem
+  /// verving).
+  Set<String> get inBehandeling => {
+        ..._jachtVoor.keys,
+        for (final g in _naLanden.values) ...g.paden,
+        ..._naLandenBezig,
+      };
+
   /// ▶ of een download is binnen ([pad], gekozen uit [van]): is dat 16 bit of minder, dan zoekt de app over
   /// [kNaLandenAdem] op de achtergrond "<artiest> <titel> 24bit", of voor een album één keer "<artiest> <album> 24bit"
   /// (Saber, 24-10-2026: "na het landen"). ▶ en downloaden worden er zo niet trager door: als eigen zoekopdracht kost
@@ -5780,9 +5872,12 @@ class DownloadManager extends ChangeNotifier {
     _log.line(nummers.length == 1
         ? '"${nummers.single.artist} — ${nummers.single.title}": na het landen 24bit zoeken'
         : '"${nummers.first.artist} — ${g.album}": na het landen 24bit zoeken voor ${nummers.length} nummers');
+    _naLandenBezig.addAll(g.paden);
     try {
       await zoekBeterVoor(nummers, album: nummers.length > 1 ? g.album : null, gezag: gezagVoor, alleenHires: true);
-    } catch (_) {/* een volgende keer; de TIDAL-ronde komt er ook nog langs */}
+    } catch (_) {/* een volgende keer; de TIDAL-ronde komt er ook nog langs */} finally {
+      _naLandenBezig.removeAll(g.paden);
+    }
   }
 
   /// Een betere kopie zoeken voor nummers die al in je bibliotheek staan — op jouw vraag (de knop "Zoek
@@ -6620,9 +6715,12 @@ class DownloadManager extends ChangeNotifier {
   /// Is een binnengehaalde kopie niet bewezen beter, dan probeert de jacht de volgende, tot [kJachtKopieen] kopieën.
   ///
   /// [bijUitslag]: wat elke binnengehaalde kopie bleek (blijvende_jacht.dart, [Kopieuitslag]).
+  ///
+  /// [behandeld]: het pad dat net landde — tot de jacht klaar is, staat het in [inBehandeling] (anders [speeltPad]).
   void _queueUpgrade(List<SoulseekFile> better, DownloadJob job,
       {TrackTags? gezag,
       String? speeltPad,
+      String? behandeld,
       bool parkeerAltijd = false,
       void Function(SoulseekFile f, Kopieuitslag u)? bijUitslag}) {
     job.status = 'upgrading';
@@ -6633,9 +6731,19 @@ class DownloadManager extends ChangeNotifier {
     _log.line('"${job.name}": ${better.length} betere kandidaten, opwaarderen in de rij'
         ' (${_jachten.lopend} van $_maxParallelleJachten jachten bezig'
         '${_jachten.wachtend > 0 ? ", ${_jachten.wachtend} wachtend" : ""})');
-    _jachten.voegToe(() =>
-        _chaseUpgrade(better, job,
-            gezag: gezag, speeltPad: speeltPad, parkeerAltijd: parkeerAltijd, bijUitslag: bijUitslag));
+    final pad = behandeld ?? speeltPad;
+    if (pad != null) _jachtVoor[pad] = (_jachtVoor[pad] ?? 0) + 1;
+    _jachten.voegToe(() => _chaseUpgrade(better, job,
+            gezag: gezag, speeltPad: speeltPad, parkeerAltijd: parkeerAltijd, bijUitslag: bijUitslag)
+        .whenComplete(() {
+      if (pad == null) return;
+      final n = (_jachtVoor[pad] ?? 1) - 1;
+      if (n > 0) {
+        _jachtVoor[pad] = n;
+      } else {
+        _jachtVoor.remove(pad);
+      }
+    }));
   }
 
 
