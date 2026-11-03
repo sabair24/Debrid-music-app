@@ -331,6 +331,35 @@ Map<String, dynamic>? kiesDigitaalAlbum(List<dynamic> data, String artiest, Stri
   return kaal;
 }
 
+/// ALLE Deezer-albums van [artiest] met deze titel, de precieze eerst en dan die zonder editie-aanduiding — voor een
+/// naam die over meer platen verdeeld is, waar [kiesDigitaalAlbum] (de eerste die past) een gok tussen twee platen zou
+/// zijn. Welke het is, zegt pas het jaar ([deezerJaar]).
+List<Map<String, dynamic>> digitaleAlbumsMetNaam(List<dynamic> data, String artiest, String album) {
+  final wilTitel = normKey(album);
+  if (wilTitel.isEmpty) return const [];
+  final wilKaal = normKey(DiscogsService.plainTitle(album));
+  final precies = <Map<String, dynamic>>[], kaal = <Map<String, dynamic>>[];
+  for (final d in data) {
+    if (d is! Map<String, dynamic>) continue;
+    final art = d['artist'];
+    if (!_zelfdeArtiestAls('${art is Map ? art['name'] ?? '' : ''}', artiest)) continue;
+    final titel = '${d['title'] ?? ''}';
+    if (normKey(titel) == wilTitel) {
+      precies.add(d);
+    } else if (wilKaal.isNotEmpty && normKey(DiscogsService.plainTitle(titel)) == wilKaal) {
+      kaal.add(d);
+    }
+  }
+  return [...precies, ...kaal];
+}
+
+/// Het jaar uit Deezers `release_date` ("2001-05-14"), of null. Deezer zet "0000-00-00" waar het niets weet.
+int? deezerJaar(Object? v) {
+  final s = '${v ?? ''}';
+  final j = s.length >= 4 ? int.tryParse(s.substring(0, 4)) : null;
+  return j == null || j < 1900 ? null : j;
+}
+
 /// Ziet deze albumtitel eruit als een verzamelaar — "Foute Cd 11 Cd2", "NOW 121", "Bravo Hits 00's",
 /// "Sublime Top 1000"? Alleen gevraagd nadat het album zelf nergens te vinden was.
 bool lijktVerzamelaar(String album) => RegExp(
@@ -907,11 +936,20 @@ class CoverEnricher {
   /// lijkt het een verzamelrip — één of twee nummers van deze artiest, of een titel als "Foute Cd 11 Cd2" —
   /// dan de hoes van de originele uitgave van het NUMMER (Saber, 21-10-2026, over Jordy — Dur Dur D'être
   /// Bébé uit de Foute CD van Q-music: "het moet echt de originele hoes zijn").
+  ///
+  /// [plaat] en [jaar]: voor een tegel van een naam die over meer platen verdeeld is ([gedeeldeNamen]). Zonder plaat
+  /// geeft zo'n naam niets; mét plaat een eigen bestand en alleen een Deezer-album uit het jaar van die plaat
+  /// ([_zoekDigitaalOpJaar]). Voor elke andere naam verandert er niets, ook de bestandsnaam niet.
   Future<({Uint8List bytes, String bron})?> digitaleVoorkant(String artistRaw, String albumRaw,
-      {bool voorrang = false, bool netwerk = true, List<String> titels = const []}) async {
+      {bool voorrang = false,
+      bool netwerk = true,
+      List<String> titels = const [],
+      String? plaat,
+      int? jaar}) async {
+    if (plaat == null && gedeeldeNamen.contains(naamSleutel(artistRaw, albumRaw))) return null;
     final artist = _cleanArtist(artistRaw), album = _cleanAlbum(albumRaw);
     if (album.isEmpty) return null;
-    final sleutel = fnv1a('${artist.toLowerCase()}|${album.toLowerCase()}');
+    final sleutel = fnv1a('${artist.toLowerCase()}|${album.toLowerCase()}${plaat == null ? '' : '|$plaat'}');
     final al = _digitaalGelezen[sleutel];
     if (al != null) return al;
     final sep = Platform.pathSeparator;
@@ -924,6 +962,13 @@ class CoverEnricher {
       }
     } catch (_) {/* niets te lezen: dan zoeken */}
     if (!netwerk) return null;
+    if (plaat != null) {
+      if (jaar == null) return null;
+      final lopend = '$sleutel|plaat';
+      return _digitaalOnderweg[lopend] ??= _zoekDigitaalOpJaar(sleutel, artist, album, jaar, img, van).whenComplete(() {
+        _digitaalOnderweg.remove(lopend);
+      });
+    }
     final generiek = _generic.contains(artist.toLowerCase());
     final perNummer = !generiek &&
         titels.any((t) => t.trim().isNotEmpty) &&
@@ -958,6 +1003,50 @@ class CoverEnricher {
       } catch (_) {/* het volgende nummer */}
     }
     return null;
+  }
+
+  /// De digitale voorkant van één PLAAT van een gedeelde naam: het Deezer-album met deze artiest en titel waarvan het
+  /// jaar (`release_date`) bij [jaar] past, op één na. Marc Lavoine (1985) en Marc Lavoine (2001) heten bij Deezer
+  /// hetzelfde; alleen het jaar zegt welke van de twee het is, en dat staat pas in het album zelf — één vraag per
+  /// kandidaat, hoogstens vier. Geen TheAudioDB en geen zoektocht per nummer: die kennen het jaar niet, en dan is het
+  /// weer een gok. Niets gevonden: geen digitale voorkant, en de scan van de vastgezette persing blijft staan.
+  Future<({Uint8List bytes, String bron})?> _zoekDigitaalOpJaar(
+      String sleutel, String artist, String album, int jaar, File img, File van) async {
+    final mis = File('${digitaalDir.path}${Platform.pathSeparator}$sleutel.none');
+    try {
+      if (await mis.exists() && DateTime.now().difference(await mis.lastModified()) <= _digitaalMisDuur) return null;
+    } catch (_) {}
+    ({Uint8List bytes, String bron})? gevonden;
+    var deezerAntwoordde = false;
+    try {
+      final j = await DeezerBaan.haal(
+          'https://api.deezer.com/search/album?q=${Uri.encodeComponent('$artist $album')}&limit=10',
+          client: client);
+      deezerAntwoordde = j != null;
+      for (final d in digitaleAlbumsMetNaam((j?['data'] as List?) ?? const [], artist, album).take(4)) {
+        final info = await DeezerBaan.haal('https://api.deezer.com/album/${d['id']}', client: client);
+        final dj = deezerJaar(info?['release_date']);
+        if (dj == null || (dj - jaar).abs() > 1) continue;
+        final url = '${info?['cover_xl'] ?? d['cover_xl'] ?? d['cover_big'] ?? ''}';
+        if (url.isEmpty) continue;
+        final groot = deezerHoes1200(url);
+        final b = (groot == url ? null : await _download(groot)) ?? await _download(url);
+        if (b == null) continue;
+        gevonden = (bytes: b, bron: 'dz:${d['id']}');
+        break;
+      }
+    } catch (_) {/* Deezer weigerde of zweeg: dan de scan van de persing */}
+    try {
+      await digitaalDir.create(recursive: true);
+      if (gevonden != null) {
+        await img.writeAsBytes(gevonden.bytes);
+        await van.writeAsString(gevonden.bron);
+        if (await mis.exists()) await mis.delete();
+      } else if (deezerAntwoordde) {
+        await mis.writeAsString('plaat');
+      }
+    } catch (_) {/* niet bewaard kost alleen een tweede zoektocht */}
+    return gevonden == null ? null : _onthoudDigitaal(sleutel, gevonden);
   }
 
   ({Uint8List bytes, String bron}) _onthoudDigitaal(String sleutel, ({Uint8List bytes, String bron}) d) {
@@ -1046,7 +1135,22 @@ class CoverEnricher {
     return _merken[bytes] ??= fnv1aBytes(bytes, fnv1aVan(bytes.length.toString())).toRadixString(16);
   }
 
-  String keyFor(Album a) => fnv1a('${a.artist.toLowerCase()}|${a.title.toLowerCase()}');
+  /// De naam waaronder de hoezen van [a] op schijf staan: artiest en titel, en bij een naam die over meer platen
+  /// verdeeld is ook de plaat ([Album.plaat]). Zonder plaat precies de sleutel die er altijd was — geen enkele andere
+  /// tegel haalt zijn hoes opnieuw op.
+  String keyFor(Album a) => fnv1a('${a.artist.toLowerCase()}|${a.title.toLowerCase()}'
+      '${a.plaat == null ? '' : '|${a.plaat}'}');
+
+  /// De namen (`artiest|titel`, kleine letters) die in de bibliotheek over meer platen verdeeld zijn ([Album.plaat]).
+  ///
+  /// **Daar is zoeken op naam een gok tussen twee platen.** Deezer kent voor "Marc Lavoine — Marc Lavoine" de plaat uit
+  /// 2001 (dz:109504), en die kwam als "digitale voorkant" — die altijd wint — op allebei de tegels. Voor zo'n naam
+  /// geeft een zoektocht zonder plaat dus niets ([digitaleVoorkant], [fetchAndCache]); de tegel krijgt de scan van zijn
+  /// eigen vastgezette persing, of een digitale hoes die op het jaar van ZIJN plaat gevonden is. Gezet door de
+  /// bibliotheek na elke herbouw, op de pc en op een toestel.
+  static Set<String> gedeeldeNamen = const {};
+
+  static String naamSleutel(String artist, String album) => '${artist.trim().toLowerCase()}|${album.trim().toLowerCase()}';
 
   /// Het merkteken van de hoes die op de telefoon in [cacheDir] ligt.
   File _merkFile(Album a) => File('${cacheDir.path}${Platform.pathSeparator}${keyFor(a)}.merk');
@@ -1125,9 +1229,12 @@ class CoverEnricher {
   /// under. Within the session nothing showed, because the cover is carried across a regroup by
   /// track path — but at the next start the lookup went to the new name, found nothing, and the
   /// cover the user chose by hand was gone. Nobody would connect that to a rename days earlier.
-  Future<void> reKeyFixedCover(
-      String oldArtist, String oldTitle, String newArtist, String newTitle) async {
-    final from = fnv1a('${oldArtist.toLowerCase()}|${oldTitle.toLowerCase()}');
+  ///
+  /// [oudePlaat]: de tegel kwam van een naam die over meer platen verdeeld was ([Album.plaat]), dus stond zijn hoes
+  /// onder zijn plaat ([keyFor]).
+  Future<void> reKeyFixedCover(String oldArtist, String oldTitle, String newArtist, String newTitle,
+      {String? oudePlaat}) async {
+    final from = fnv1a('${oldArtist.toLowerCase()}|${oldTitle.toLowerCase()}${oudePlaat == null ? '' : '|$oudePlaat'}');
     final to = fnv1a('${newArtist.toLowerCase()}|${newTitle.toLowerCase()}');
     if (from == to) return;
     // Both caches are keyed the same way, so both go stale on the same rename.
@@ -1896,6 +2003,9 @@ class CoverEnricher {
   }
 
   Future<Uint8List?> fetchAndCache(Album a) async {
+    // Een tegel van een naam die over meer platen verdeeld is: op naam vind je één van de twee, en dan staat op de
+    // andere de verkeerde hoes ([gedeeldeNamen]). Zijn hoes komt van zijn eigen persing.
+    if (a.plaat != null) return null;
     final bytes = await _find(a.artist, a.title);
     try {
       await cacheDir.create(recursive: true);
@@ -2014,7 +2124,8 @@ class CoverEnricher {
 
   Future<Uint8List?> _download(String url) async {
     try {
-      final r = await http.get(Uri.parse(url), headers: {'User-Agent': _ua}).timeout(const Duration(seconds: 12));
+      // Via [_haal], zodat een toets met een eigen [client] ook de beelden zelf in de hand heeft.
+      final r = await _haal(Uri.parse(url), headers: {'User-Agent': _ua}).timeout(const Duration(seconds: 12));
       if (r.statusCode == 200 && r.bodyBytes.length > 1500 && _isImage(r.bodyBytes)) {
         return r.bodyBytes;
       }

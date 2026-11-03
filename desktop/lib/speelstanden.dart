@@ -1,3 +1,9 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'gedeelde_ops.dart';
 import 'lan/state_store.dart';
 import 'models.dart';
@@ -32,6 +38,78 @@ class Speelstanden extends GedeeldeOps {
   /// Wat een client van de pc kreeg. Op de pc blijft dit leeg en wordt [winkel] gelezen.
   final Map<String, Speelstand> _vanPc = {};
 
+  /// Op een client: waar dit alles bewaard wordt — wat de pc gaf, wat er ergens opende, en wat hier klonk terwijl de pc
+  /// het niet aannam ([_hierGehoord]). Null: niets bewaren (de pc, een toets).
+  ///
+  /// **Waarom (Saber, 03-11-2026: "Geheugen op de gsm").** Stond de pc uit, dan wist de gsm niets meer: het schudlogboek
+  /// zei "nooit gehoord 1750 (in de eerste 100: 100)", en een nieuwe shuffle had niet geweten wat je de dagen ervoor
+  /// hoorde.
+  String? bestand;
+
+  /// Wat hier klonk terwijl de pc het niet aannam (id → ms): telt mee tot de pc het zelf weet, hoogstens [_hierBewaren].
+  final Map<String, int> _hierGehoord = {};
+  static const _hierBewaren = Duration(days: 7);
+  Timer? _bewaren;
+
+  /// Hoe lang na een wijziging er bewaard wordt: een rits meldingen is één keer schrijven.
+  @visibleForTesting
+  Duration bewaarNa = const Duration(seconds: 5);
+
+  /// Lezen wat [bestand] bewaarde. Vóór de pc antwoordt; wat de pc daarna geeft, gaat voor ([vanServer]).
+  Future<void> laad() async {
+    final b = bestand;
+    if (b == null) return;
+    try {
+      final f = File(b);
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString());
+      if (j is! Map) return;
+      final plays = j['plays'];
+      if (plays is Map && _vanPc.isEmpty) {
+        for (final e in plays.entries) {
+          final v = e.value;
+          if (v is List && v.length == 2) {
+            _vanPc['${e.key}'] = Speelstand(aantal: (v[0] as num).toInt(), laatstMs: (v[1] as num).toInt());
+          }
+        }
+      }
+      final geopend = j['geopend'];
+      if (geopend is Map) {
+        for (final e in geopend.entries) {
+          final at = (e.value as num?)?.toInt() ?? 0;
+          if (at > (_geopend['${e.key}'] ?? 0)) _geopend['${e.key}'] = at;
+        }
+      }
+      final hier = j['hier'];
+      if (hier is Map) {
+        for (final e in hier.entries) {
+          _hierGehoord['${e.key}'] = (e.value as num?)?.toInt() ?? 0;
+        }
+      }
+      notifyListeners();
+    } catch (_) {/* een kapot bestand: dan zoals vroeger, alleen wat de pc geeft */}
+  }
+
+  void _bewaarStraks() {
+    final b = bestand;
+    if (b == null) return;
+    _bewaren?.cancel();
+    _bewaren = Timer(bewaarNa, () async {
+      final grens = nu - _hierBewaren.inMilliseconds;
+      _hierGehoord.removeWhere((_, ms) => ms < grens);
+      _geopend.removeWhere((_, at) => at < nu - kSchudWeg.inMilliseconds);
+      try {
+        final tmp = File('$b.tmp');
+        await tmp.writeAsString(jsonEncode({
+          'plays': {for (final e in _vanPc.entries) e.key: [e.value.aantal, e.value.laatstMs]},
+          'geopend': _geopend,
+          'hier': _hierGehoord,
+        }));
+        await tmp.rename(b);
+      } catch (_) {/* de volgende keer */}
+    });
+  }
+
   /// Overnemen wat `/api/state` meestuurde. Alleen op een client.
   void vanServer(Map<String, dynamic> plays) {
     final nieuw = <String, Speelstand>{};
@@ -54,6 +132,7 @@ class Speelstanden extends GedeeldeOps {
     _vanPc
       ..clear()
       ..addAll(nieuw);
+    _bewaarStraks();
     notifyListeners();
   }
 
@@ -68,12 +147,14 @@ class Speelstanden extends GedeeldeOps {
       final at = ((e.value is Map ? e.value['at'] : null) as num?)?.toInt() ?? 0;
       if (at > (_geopend[e.key] ?? 0)) _geopend[e.key] = at;
     }
+    _bewaarStraks();
   }
 
   /// De zonelijn meldt dat [id] ergens anders opende.
   void elders(String id, int at) {
     if (id.isEmpty) return;
     if (at > (_geopend[id] ?? 0)) _geopend[id] = at;
+    _bewaarStraks();
   }
 
   /// Wanneer [t] het laatst op een van je toestellen opende (ms), of null. Zie `kSchudWeg` in schudvolgorde.dart.
@@ -101,6 +182,7 @@ class Speelstanden extends GedeeldeOps {
     } catch (_) {
       // Geen pc: hier weet hij het toch (vooruit), en de volgende shuffle op dit toestel houdt er rekening mee.
     }
+    _bewaarStraks();
   }
 
   /// Wat er van dit nummer bekend is, of null als het nooit klonk.
@@ -112,7 +194,11 @@ class Speelstanden extends GedeeldeOps {
       final p = w.plays[id];
       return p == null ? null : Speelstand(aantal: p.count, laatstMs: p.lastPlayedMs);
     }
-    return _vanPc[id];
+    final pc = _vanPc[id];
+    // Klonk het hier zonder dat de pc het aannam ([_hierGehoord]): één keer meer, en zo recent.
+    final hier = _hierGehoord[id];
+    if (hier != null && hier > (pc?.laatstMs ?? 0)) return Speelstand(aantal: (pc?.aantal ?? 0) + 1, laatstMs: hier);
+    return pc;
   }
 
   /// Dit nummer is beluisterd. Zie `schudvolgorde.dart` voor wat "beluisterd" betekent.
@@ -148,7 +234,13 @@ class Speelstanden extends GedeeldeOps {
         },
       );
     } catch (_) {
-      // De pc nam het niet aan; `terug` heeft de eigen telling al hersteld.
+      // De pc nam het niet aan; `terug` heeft de eigen telling al hersteld. Hier blijft het wel bewaard ([_hierGehoord]),
+      // zodat een shuffle zonder pc weet dat je het net hoorde.
+      if (isClient) {
+        _hierGehoord[id] = nu;
+        notifyListeners();
+      }
     }
+    _bewaarStraks();
   }
 }

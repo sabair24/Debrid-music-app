@@ -97,13 +97,14 @@ void main() {
       final e = File('lib/enrichment.dart').readAsStringSync();
       expect(e, contains('if (gevonden == null && perNummer.isNotEmpty) gevonden = await _origineleVoorkant(artist, perNummer);'));
       expect(e, contains('(titels.length <= 2 || lijktVerzamelaar(album))'));
-      expect(File('lib/discogs.dart').readAsStringSync(), contains('.digitaleVoorkant(artist, album, voorrang: !freeOnly, titels: titels)'));
+      expect(File('lib/discogs.dart').readAsStringSync(),
+          contains('.digitaleVoorkant(artist, album, voorrang: !freeOnly, titels: titels, plaat: plaat, jaar: jaar)'));
       final m = File('lib/main.dart').readAsStringSync();
       expect(m, contains('titels: widget.titels,'));
       expect(m, contains('titels: [t.title, if (al != null) for (final x in al.tracks) if (x.title != t.title) x.title],'),
           reason: 'Nu speelt: het spelende nummer eerst');
       final fw = File('lib/facts_warmer.dart').readAsStringSync();
-      expect(fw, contains('CoverEnricher(settings).digitaleVoorkant(a, b, titels: t)'));
+      expect(fw, contains('CoverEnricher(settings).digitaleVoorkant(a, b,\n              titels: t, plaat: album.plaat,'));
       expect(fw, contains('album.artist, album.title, [for (final t in album.tracks) t.title]'));
     });
   });
@@ -215,7 +216,8 @@ void main() {
         reason: 'ook bij het teruglezen na een herstart');
     final w = File('lib/facts_warmer.dart').readAsStringSync();
     final al = w.substring(w.indexOf('Future<_Art> _warmArtFor('));
-    expect(al.indexOf('await _voorkant(album);'), allOf(greaterThanOrEqualTo(0), lessThan(al.indexOf('_neemHoesOver('))),
+    expect(al.indexOf('_neemDigitaalOver(album, await _voorkant(album));'),
+        allOf(greaterThanOrEqualTo(0), lessThan(al.indexOf('_neemHoesOver('))),
         reason: 'de opwarmer haalt de digitale voorkant ook voor platen waarvan de scans er al staan');
   });
 }

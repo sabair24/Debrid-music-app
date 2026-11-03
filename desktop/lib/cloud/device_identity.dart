@@ -79,6 +79,11 @@ const _platform = MethodChannel('debridmusic/device');
 /// What Android says this device is called. Null everywhere else, and until [initDeviceName] runs.
 String? _platformName;
 
+/// De naam die Android de vorige keer gaf, bewaard in [_naamBestand]. Saber, 03-11-2026: de gsm heette vier keer op één
+/// dag "Android-toestel" — telkens na een herstart op de achtergrond, als het kanaal nog niet antwoordde.
+String? _bewaardeNaam;
+File get _naamBestand => File('$appDir${Platform.pathSeparator}toestelnaam.txt');
+
 /// Ask Android for this device's name, before anything publishes one.
 ///
 /// Same shape and the same reason as [initTvMode]: `audio_service` warms an engine up front, so
@@ -86,11 +91,27 @@ String? _platformName;
 /// never answers simply falls back below.
 Future<void> initDeviceName() async {
   if (!Platform.isAndroid) return;
+  // Wat Android de vorige keer zei, als terugval ([deviceName]).
+  try {
+    final f = _naamBestand;
+    if (await f.exists()) {
+      final b = (await f.readAsString()).trim();
+      if (b.isNotEmpty) _bewaardeNaam = b;
+    }
+  } catch (_) {}
   for (var attempt = 0; attempt < 20; attempt++) {
     try {
       final name = await _platform.invokeMethod<String>('deviceName');
       final trimmed = name?.trim() ?? '';
-      if (trimmed.isNotEmpty) _platformName = trimmed;
+      if (trimmed.isNotEmpty) {
+        _platformName = trimmed;
+        if (trimmed != _bewaardeNaam) {
+          _bewaardeNaam = trimmed;
+          try {
+            await _naamBestand.writeAsString(trimmed);
+          } catch (_) {}
+        }
+      }
       return;
     } on MissingPluginException {
       await Future<void>.delayed(const Duration(milliseconds: 25));
@@ -118,6 +139,10 @@ String deviceName() {
   // not with whoever happened to set it.
   final fromPlatform = _platformName?.trim();
   if (fromPlatform != null && fromPlatform.isNotEmpty) return fromPlatform;
+  // Zweeg het kanaal (de app startte op de achtergrond, vóór de activiteit er was), dan wat Android de vorige keer zei.
+  // Alleen ooit een naam van Android zelf, nooit een terugval hieronder: zo blijft een slechte naam niet hangen.
+  final bewaard = _bewaardeNaam;
+  if (bewaard != null && bewaard.isNotEmpty) return bewaard;
   try {
     final host = Platform.localHostname;
     if (host.isNotEmpty && !_namesNobody(host)) return host;
@@ -137,6 +162,10 @@ String deviceName() {
 /// For tests: pretend the platform answered (or didn't).
 @visibleForTesting
 void setPlatformDeviceNameForTest(String? name) => _platformName = name;
+
+/// For tests: wat Android de vorige keer zei ([_bewaardeNaam]).
+@visibleForTesting
+void setBewaardeNaamForTest(String? name) => _bewaardeNaam = name;
 
 String platformName() {
   if (Platform.isIOS) return 'ios';

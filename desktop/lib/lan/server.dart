@@ -3294,7 +3294,7 @@ class LanServer {
     final dienst = DiscogsService(config);
     final feiten = library.facts.get(library.uidOf(al));
     final persing = persingUitHerkomst(al.resolvedFrom);
-    final rollen = library.albumArtRoles(al.artist, al.title);
+    final rollen = library.albumArtRoles(al.artist, al.title, plaat: al.plaat);
     final pins = library.pinnedRelease(al);
     final mbid = library.pinnedMbid(al);
     final sleutels = <({int tracks, int? pinned, String? mbid})>{
@@ -3306,7 +3306,12 @@ class LanServer {
     var klaar = false;
     for (final s in sleutels) {
       final a = await dienst.cachedReleaseArt(al.artist, al.title,
-          expectedTracks: s.tracks, pinned: s.pinned, pinnedMbid: s.mbid, roles: rollen);
+          expectedTracks: s.tracks,
+          pinned: s.pinned,
+          pinnedMbid: s.mbid,
+          roles: rollen,
+          plaat: al.plaat,
+          jaar: al.year);
       if (a == null || (a.back == null && a.disc == null)) continue;
       art = a;
       klaar = await dienst.hasReleaseArt(al.artist, al.title,
@@ -3844,11 +3849,14 @@ class LanServer {
             return await _json(req.response, {'error': 'Geen album opgegeven.'},
                 status: HttpStatus.badRequest);
           }
+          // Bij een naam die over meer platen verdeeld is, zegt `plaat` welke tegel ([Album.plaat]); een oudere gsm
+          // stuurt hem niet, en dan op de naam zoals altijd.
+          final rolPlaat = body['plaat'] is String && (body['plaat'] as String).isNotEmpty ? body['plaat'] as String : null;
           if (body['clear'] == true) {
-            await library.clearAlbumArtRoles(rolArtiest, rolAlbum);
+            await library.clearAlbumArtRoles(rolArtiest, rolAlbum, plaat: rolPlaat);
           } else {
             await library.setAlbumArtRole(rolArtiest, rolAlbum, (body['role'] ?? '') as String,
-                (body['url'] ?? '') as String);
+                (body['url'] ?? '') as String, plaat: rolPlaat);
           }
         case 'assignRows':
           // "Nummers toewijzen" namens een ander toestel.

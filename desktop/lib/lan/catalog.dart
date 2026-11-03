@@ -300,7 +300,8 @@ class LanCatalog {
         artTag: CoverEnricher.hoesMerk(album.correctedCover ?? album.resolvedCover),
         // De scans die de eigenaar zelf heeft aangewezen. Stonden alleen op het toestel waar ze
         // gemaakt waren; zie [AlbumDto.artRoles].
-        artRoles: library.albumArtRoles(album.artist, album.title),
+        artRoles: library.albumArtRoles(album.artist, album.title, plaat: album.plaat),
+        plaat: album.plaat,
       ));
 
       // Wat er per plaat handmatig is aangewezen. Eén keer per album opgevraagd en niet per nummer:
@@ -441,6 +442,8 @@ class LanCatalog {
         // verandert geen enkel nummer, dus zonder deze regel beweegt de vingerafdruk niet, krijgt
         // elk toestel een 304, en blijft die keuze op één toestel hangen.
         ..add(a.artRoles.entries.map((e) => '${e.key}=${e.value}').join(','));
+      // De plaat van een gedeelde naam: alleen als hij er is, zodat de vingerafdruk van elke andere plaat blijft wat hij was.
+      if (a.plaat != null) fingerprint.add('P${a.plaat}');
     }
     for (final t in tracks) {
       fingerprint

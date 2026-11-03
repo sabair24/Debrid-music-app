@@ -50,7 +50,7 @@ void main() {
     final s = m.substring(m.indexOf('  Future<void> speelNummer(BuildContext context,'));
     final voor = s.substring(0, s.indexOf('final klinkendAdres = vroeg?.adres ?? elders?.pad;'));
     expect(voor, contains('final v = albumArtVooruit(lib, landAl);'));
-    expect(voor, contains('roles: v.roles, freeOnly: true)'), reason: 'vooraf: nooit het Discogs-budget');
+    expect(voor, contains('roles: v.roles,\n                  freeOnly: true,\n'), reason: 'vooraf: nooit het Discogs-budget');
   });
 
   group('cd en achterkant', () {
