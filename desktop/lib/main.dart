@@ -1731,18 +1731,25 @@ Future<void> main() async {
         (pad, n) => verbruik.tel(soortVanPad(pad, vanDePc: true), n,
             wat: stroomNaam(library.tracks.map((t) => (pad: t.path, naam: '${t.artist} – ${t.title}')), pad));
     final ik = thisDevice();
+    DateTime? verbruikFoutGemeld;
     Timer.periodic(const Duration(minutes: 10), (_) async {
       final regels = verbruik.neemRegels();
       if (regels.isEmpty) return;
-      final e = session.endpoint;
-      if (e == null) return verbruik.legTerug(regels);
-      final c = RemoteClient(e, timeout: const Duration(seconds: 10));
+      // Over de verbinding waar al het andere over gaat (de doorgever, de pin, de sleutel van nu), en ook van buiten
+      // (`weigerVanBuiten`). Sinds 01-11-2026 20:07 kwam er geen regel van de gsm meer aan, en dat zei niemand.
+      final c = library.remote;
+      if (c == null) return verbruik.legTerug(regels);
       try {
-        await c.ask('/api/diag/verbruik', {'toestel': warmteToestel(await ik), 'regels': regels});
-      } catch (_) {
+        await c.ask('/api/diag/verbruik', {'toestel': warmteToestel(await ik), 'regels': regels})
+            .timeout(const Duration(seconds: 20));
+        verbruikFoutGemeld = null;
+      } catch (e) {
         verbruik.legTerug(regels);
-      } finally {
-        c.close();
+        final nu = DateTime.now();
+        if (verbruikFoutGemeld == null || nu.difference(verbruikFoutGemeld!) > const Duration(hours: 1)) {
+          verbruikFoutGemeld = nu;
+          ClientSession.logRegel('verbruik naar de pc mislukt (${regels.length} regels wachten): $e');
+        }
       }
     });
   }

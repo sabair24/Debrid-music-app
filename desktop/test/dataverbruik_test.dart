@@ -258,7 +258,13 @@ void main() {
     final main = bron('lib/main.dart');
     expect(main, contains('    telVerkeer = (u, n) => verbruik.tel(soortVanPad(u.path, vanDePc: true), n, wat: u.path);'));
     expect(main, contains('    session.doorgeverLeverde ='));
-    expect(main, contains("        await c.ask('/api/diag/verbruik', {'toestel': warmteToestel(await ik), 'regels': regels});"));
+    // Over de verbinding van de sessie, en ook van buiten: sinds 01-11-2026 20:07 kwam er niets meer aan (03-11-2026).
+    expect(main, contains("        await c.ask('/api/diag/verbruik', {'toestel': warmteToestel(await ik), 'regels': regels})\n"));
+    final zender = main.substring(main.indexOf("        await c.ask('/api/diag/verbruik'") - 400);
+    expect(zender.substring(0, 900), contains('      final c = library.remote;\n'));
+    expect(zender.substring(0, 900), isNot(contains('RemoteClient(e, timeout:')));
+    expect(main, contains("          ClientSession.logRegel('verbruik naar de pc mislukt (\${regels.length} regels wachten): \$e');"),
+        reason: 'waarom het niet lukt, staat in het logboek');
     expect(main, contains('        DataverbruikInfo(store: dataverbruik, isPc: context.read<ClientSession>().owner),'));
     expect(bron('lib/library.dart'), contains('      final verouderd = merk.isNotEmpty && hoesMerkZonderPlafond(bewaard) != merk;'));
   });

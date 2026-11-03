@@ -104,6 +104,9 @@ String? weigerVanBuiten(String pad, String methode) {
     // Het schudlogboek van een toestel (schudlog.dart): onderweg schudt Saber ook (26-10-2026: "Ik heb vandaag op de gsm
     // verschillende keer gesnuffeld" — en niets kwam aan). schud.log heeft een plafond ([kSchudLogBytes]).
     '/api/diag/schud',
+    // Wat de gsm zelf aan data telde (dataverbruik.dart), ook onderweg: daar is het mobiele data (Saber, 02-11-2026: "heel
+    // nauwkeurig men mobile data in de gaten houden"). Begrensd tot 200 regels van 600 tekens per keer ([_verbruik]).
+    '/api/diag/verbruik',
     // Een versie kiezen of weggooien (versies.dart): onderweg wissel je ook van cd naar vinyl.
     '/api/versie',
     '/api/soort/stop',

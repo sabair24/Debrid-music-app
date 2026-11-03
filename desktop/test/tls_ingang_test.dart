@@ -219,6 +219,8 @@ void main() {
       expect(weigerVanBuiten('/api/online/search', 'POST'), isNull);
       expect(weigerVanBuiten('/api/nieuw-morgen', 'GET'), isNotNull, reason: 'wat er morgen bij komt, kan van buiten niet');
       expect(weigerVanBuiten('/api/diag/warmte', 'POST'), isNotNull);
+      expect(weigerVanBuiten('/api/diag/verbruik', 'POST'), isNull,
+          reason: 'de eigen telling van de gsm onderweg: daar is het mobiele data (03-11-2026)');
       // TIDAL van buitenshuis: zoeken, een plaat, een artiest, ophalen (Saber, 23-10-2026).
       for (final p in ['/api/tidal/zoek', '/api/tidal/album', '/api/tidal/artiest', '/api/tidal/haal']) {
         expect(weigerVanBuiten(p, 'POST'), isNull, reason: p);
