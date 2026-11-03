@@ -35,6 +35,7 @@ class ScansVooraf<T> {
     this.log,
     this.adem = const Duration(milliseconds: 200),
     this.elke = const Duration(hours: 6),
+    this.opnieuwNa = const Duration(minutes: 5),
   });
 
   final List<T> Function() albums;
@@ -45,6 +46,10 @@ class ScansVooraf<T> {
   /// Tussen twee albums die de pc moest geven: de pc is ook nog voor iets anders.
   final Duration adem;
   final Duration elke;
+
+  /// Een ronde die onderbroken werd (geen pc, even geen wifi): zo lang later nog eens, en niet pas na [elke].
+  final Duration opnieuwNa;
+  Timer? _herkans;
 
   /// Hoe ver de laatste ronde is: hoeveel albums er af op dit toestel staan, van hoeveel. Null zolang er geen ronde was.
   final ValueNotifier<({int klaar, int totaal})?> stand = ValueNotifier(null);
@@ -61,6 +66,8 @@ class ScansVooraf<T> {
   void stop() {
     _klok?.cancel();
     _klok = null;
+    _herkans?.cancel();
+    _herkans = null;
   }
 
   /// Nu een ronde, of meteen na de lopende.
@@ -70,7 +77,14 @@ class ScansVooraf<T> {
       return;
     }
     if (!mag()) return;
-    _ronde = ronde().whenComplete(() {
+    _ronde = ronde().then((r) {
+      if (r.onderbroken) {
+        _herkans ??= Timer(opnieuwNa, () {
+          _herkans = null;
+          kijk();
+        });
+      }
+    }).whenComplete(() {
       _ronde = null;
       if (_nogEens) {
         _nogEens = false;

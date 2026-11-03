@@ -57,6 +57,23 @@ bool wachtOpDePc({required int toegevoegdMs, required int nuMs, required bool be
   return bezig && leeftijd < kKeuringHoogstens.inMilliseconds;
 }
 
+/// Mag een betere kopie ([geluidVan] veranderde op de pc) nu al naar dit toestel? Thuis op wifi altijd. Onderweg alleen als
+/// wat hier staat ([oudGeluid]) echt slecht is: verliesgevend (mp3, aac…) of onder cd-kwaliteit. Een opwaardering naar
+/// studiokwaliteit wordt hier toch cd, en dat wacht op wifi thuis.
+///
+/// **Waarom (Saber, 02-11-2026 → 03-11-2026).** Om 07:16 haalde de gsm bij het vertrek zes betere kopieën (174 MB) over
+/// mobiele data: 24/96 van de pc, hier weer 16/44,1, net als wat er al stond. Gekozen: "Pas thuis op wifi".
+bool beterNuOphalen({required bool thuisOpWifi, required String? oudGeluid}) {
+  if (thuisOpWifi) return true;
+  final d = (oudGeluid ?? '').split('/');
+  if (d.length < 4) return true;
+  final rate = int.tryParse(d[0]) ?? 0, bits = int.tryParse(d[1]) ?? 0;
+  if (!_verliesvrij.contains(d[3])) return true;
+  return (rate > 0 && rate < 44100) || (bits > 0 && bits < 16);
+}
+
+const _verliesvrij = {'flac', 'wav', 'aif', 'aiff', 'ape', 'wv', 'dsf', 'dff'};
+
 const kKeuringAdem = Duration(minutes: 2);
 const kKeuringHoogstens = Duration(minutes: 30);
 

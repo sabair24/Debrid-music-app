@@ -654,6 +654,13 @@ class ClientSession extends ChangeNotifier {
     if (!herkansing) {
       _wisselBegon = DateTime.now();
       _wisselWaarom = waarom;
+      // Een ander netwerk: "thuis" geldt pas weer als de pc het opnieuw zegt ([_vraagOfThuis]). Gemeten op 03-11-2026: de
+      // gsm bleef via de eigen deur verbonden van de thuiswifi naar mobiele data, hield zich voor thuis, en haalde
+      // George Harrison als origineel (107 MB) vooruit over mobiele data.
+      if (_pcZegtThuis != null) {
+        _pcZegtThuis = null;
+        notifyListeners();
+      }
     }
     _zoekt = true;
     try {

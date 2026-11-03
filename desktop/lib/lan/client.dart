@@ -454,7 +454,15 @@ class RemoteClient {
   /// discogs.dart. Null als de pc ze niet heeft of het niet kent.
   /// [klein]: in gsm-formaat (`kKleinScan`, op mobiele data).
   Future<Map<String, dynamic>?> releaseArtJson(String albumId, {bool klein = false}) async {
-    final res = await _get('/api/releaseart', query: {'albumId': albumId, if (klein) 'klein': '1'});
+    final http.Response res;
+    try {
+      res = await _get('/api/releaseart', query: {'albumId': albumId, if (klein) 'klein': '1'});
+    } on RemoteException catch (e) {
+      // 404: de pc heeft (nog) geen scans van dit album — dat is een antwoord, geen storing. Als storing stopte
+      // "vooraf op dit toestel" bij het eerste album zonder scans (03-11-2026: 1 van 962 albums).
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
     if (res.statusCode != 200) return null;
     final decoded = jsonDecode(utf8.decode(res.bodyBytes));
     return decoded is Map<String, dynamic> ? decoded : null;

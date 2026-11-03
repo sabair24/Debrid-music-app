@@ -5,7 +5,10 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:debridmusic/discogs.dart';
+import 'package:debridmusic/lan/client.dart';
 import 'package:debridmusic/paths.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:debridmusic/scans_vooraf.dart';
 import 'package:debridmusic/settings.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -92,6 +95,40 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 200));
       expect(rondes, 2, reason: 'de tweede kijk kwam tijdens de eerste ronde');
     });
+  });
+
+  test('onderbroken (geen pc): na een paar minuten opnieuw, niet pas na zes uur', () async {
+    var pc = false;
+    var rondes = 0;
+    final v = ScansVooraf<String>(
+      albums: () {
+        rondes++;
+        return ['a'];
+      },
+      mag: () => true,
+      haal: (a) async => pc ? Voorafstand.al : Voorafstand.geenPc,
+      adem: Duration.zero,
+      opnieuwNa: const Duration(milliseconds: 60),
+    );
+    v.kijk();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(rondes, 1);
+    pc = true;
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    expect(rondes, 2, reason: 'de pc is terug: de volgende ronde kwam vanzelf');
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    expect(rondes, 2, reason: 'en niet blijven herhalen als het lukte');
+    v.stop();
+  });
+
+  test('de pc zegt 404 (nog geen scans van dit album): dat is geen storing', () async {
+    final c = RemoteClient(RemoteEndpoint(baseUrl: Uri.parse('http://pc.invalid:47820'), token: 'x'),
+        client: MockClient((req) async => http.Response('', req.url.path == '/api/releaseart' ? 404 : 500)));
+    expect(await c.releaseArtJson('abc'), isNull,
+        reason: 'als storing stopte "vooraf op dit toestel" bij het eerste album zonder scans (03-11-2026: 1 van 962)');
+    final kapot = RemoteClient(RemoteEndpoint(baseUrl: Uri.parse('http://pc.invalid:47820'), token: 'x'),
+        client: MockClient((req) async => http.Response('', 500)));
+    expect(() => kapot.releaseArtJson('abc'), throwsA(isA<RemoteException>()), reason: 'een echte storing blijft er een');
   });
 
   group('van de pc naar dit toestel', () {

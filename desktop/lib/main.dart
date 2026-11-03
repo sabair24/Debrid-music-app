@@ -1151,6 +1151,10 @@ Future<void> main() async {
   // muziek; op elke wifi mag het van de pc). Een zone thuis kiezen blijft kunnen: die speelt thuis, niet over je bundel.
   bool alleenHierNu() => !mode.owner && !isTv && netStore.net == Netsoort.mobiel;
   player.alleenHier = alleenHierNu;
+  // Weet een gsm nog niet of hij op wifi of mobiel zit (een netwerkwissel, wakker worden), dan wacht wat op de
+  // achtergrond data kost — vooruithalen, vanzelf opslaan — tot hij het weet. Gemeten op 03-11-2026 om 07:16: drie minuten
+  // "onbekend" bij het vertrek, en in die tijd 281 MB over mobiele data. Alleen op Android: elders is het altijd onbekend.
+  bool netOnzeker() => !mode.owner && !isTv && Platform.isAndroid && netStore.net == Netsoort.onbekend;
   // En in de lijsten grijs wat dan niet speelt (ui/op_toestel.dart, NietHierGrijs).
   alleenHierOokNu = alleenHierOpMobiel;
   // Waar het nummer vandaan komt, voor het icoontje (Saber, 02-11-2026: "of ik online of offline stream").
@@ -1164,7 +1168,7 @@ Future<void> main() async {
     if (mode.owner) return; // de pc heeft alles zelf al
     // Behalve nu: op mobiele data speelt alleen wat al op dit toestel staat, en wat vooruit binnenkwam speelde daarna
     // als kopie hier — gewoon stromen over je bundel ([alleenHierNu]).
-    if (alleenHierNu()) return;
+    if (alleenHierNu() || netOnzeker()) return;
     // De versie die gaat klinken (versies.dart), niet het nummer uit de rij: de speler zoekt de kopie onder dát pad.
     // Hier stond `huidig?.path`, en dan haalde het vooruithalen bij een nummer met een gekozen versie het verkeerde
     // bestand, dat nooit speelde (Etta James – At Last, 28-10-2026: twee keer over een zwakke wifi). Zie
@@ -1401,6 +1405,8 @@ Future<void> main() async {
         // Pas als de catalogus én het antwoord van de pc er zijn: anders lijkt elke favoriet verdwenen, en ging
         // alles van je gsm.
         if (library.tracks.isEmpty || !favorieten.gehoord || !lijsten.gehoord) return;
+        // Nog niet zeker of dit wifi of mobiel is ([netOnzeker]): even wachten — de netsoort zelf roept straks ook.
+        if (netOnzeker()) return;
         final perId = {
           for (final t in library.tracks)
             if (library.gedeeldId(t.path) case final id?) id: t,
@@ -1495,6 +1501,11 @@ Future<void> main() async {
                 nogEensKijken = null;
                 houdBij();
               });
+            } else if (o.geluid != g &&
+                !beterNuOphalen(
+                    thuisOpWifi: !netStore.onderweg && (!Platform.isAndroid || netStore.net == Netsoort.wifi),
+                    oudGeluid: o.geluid)) {
+              // Wordt hier toch cd-kwaliteit, en wat er staat is goed: pas thuis op wifi (de netsoort roept dan).
             } else if (o.geluid != g) {
               beter.add(OfflineRequest(
                   libraryPath: o.path, title: t.title, artist: t.artist, album: t.album, geluid: g, vervang: true));
@@ -1515,6 +1526,8 @@ Future<void> main() async {
     library.addListener(houdBij);
     // Aan, uit, of een andere grens: meteen opnieuw bekijken.
     settings.addListener(houdBij);
+    // Thuis op wifi (of de netsoort is eindelijk bekend): wat wachtte, nu ([netOnzeker], [beterNuOphalen]).
+    netStore.addListener(houdBij);
   }
   // Hoe vaak en hoe lang geleden je iets hoorde — de brandstof van de shuffle. Zelfde vorm als de
   // favorieten hierboven: op de pc rechtstreeks in de gedeelde staat, op een telefoon over de lijn.

@@ -526,7 +526,7 @@ void main() {
       expect(main, contains('  bool alleenHierNu() => !mode.owner && !isTv && netStore.net == Netsoort.mobiel;\n'));
       expect(main, contains('  player.alleenHier = alleenHierNu;\n'));
       expect(main, contains('  alleenHierOokNu = alleenHierOpMobiel;\n'));
-      expect(main, contains('    if (alleenHierNu()) return;\n'), reason: 'op mobiele data niets vooruit halen');
+      expect(main, contains('    if (alleenHierNu() || netOnzeker()) return;\n'), reason: 'op mobiele data niets vooruit halen');
       expect(main, contains('  offline.magOphalen = () => true;\n'));
       expect(main, contains('          : (netStore.onderweg ? Herkomst.internet : Herkomst.thuis);\n'));
       expect(main, contains('  if (zonderPc || (hierAlleen != null && alleenHierOpMobiel(context))) {\n'));
