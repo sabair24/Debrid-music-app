@@ -38,6 +38,7 @@ import 'nultoets_meter.dart' show alleNultoetsen;
 import 'integriteit.dart' show kapotSleutels, onthoudHeelheid;
 import 'luidheid_winkel.dart' show onthoudLuidheidVanPc, zetLuidheidStatusVanPc;
 import 'organize.dart';
+import 'plaat_indeling.dart';
 import 'settings.dart';
 import 'vaste_keuze.dart';
 import 'twijfel.dart' show twijfelMap, twijfelsVanPcGelezen, zetTwijfelVanPc;
@@ -1759,6 +1760,191 @@ class LibraryStore extends ChangeNotifier {
     }
     return uit;
   }
+
+  // ── Scheiden op plaat ─────────────────────────────────────────────────────
+  // Marc Lavoine heeft twee albums die "Marc Lavoine" heten (1985 en 2001), en zijn twee nummers zijn elk vastgezet op een
+  // persing van een ANDERE plaat — toch één tegel, één uid. Saber, 03-11-2026: "Vanzelf, op de plaat". Geen knop zoals bij
+  // [scheidPerJaar], want hier beslist geen tagjaar maar de persing die hij zelf aanwees. Zie plaat_indeling.dart.
+
+  /// Persing ([plaatPin]) → haar plaat en het jaar daarvan. Op schijf: elk antwoord kostte een verzoek bij Discogs of
+  /// MusicBrainz, en zonder deze lijst viel Marc Lavoine bij elke start eerst weer samen.
+  final Map<String, PlaatFeit> _platen = {};
+  File get _platenFile => File('$_appDir${Platform.pathSeparator}plaat_register.json');
+
+  Future<void> loadPlaten() async {
+    try {
+      final f = _platenFile;
+      if (!await f.exists()) return;
+      final j = jsonDecode(await f.readAsString());
+      if (j is! Map) return;
+      _platen.clear();
+      for (final e in j.entries) {
+        final feit = PlaatFeit.fromJson(e.value);
+        if (feit != null) _platen['${e.key}'] = feit;
+      }
+    } catch (_) {/* dan wordt het opnieuw opgezocht */}
+  }
+
+  Future<void> _savePlaten() =>
+      _writeJson(_platenFile, {for (final e in _platen.entries) e.key: e.value.toJson()});
+
+  /// Wie de plaat van een persing opzoekt. Alleen op de pc gezet (main.dart): een toestel krijgt de tegels kant-en-klaar
+  /// met de catalogus. Zolang dit null is wordt er niets opgezocht en niets in bestanden geschreven — ook in elke toets
+  /// die het niet zelf zet.
+  PlaatOpzoeker? plaatOpzoeker;
+
+  /// Per artiest+titel ([_basisSleutel]) hoe hij over platen verdeeld is — alleen wat echt gescheiden wordt.
+  final Map<String, PlaatIndeling> _plaatIndeling = {};
+
+  /// Per artiest+titel de persingen waarvan de plaat nog niet bekend is. Zolang die er zijn, blijft het één tegel.
+  final Map<String, Set<String>> _onbekendePlaten = {};
+
+  /// Wat deze sessie al geprobeerd heeft. Een persing zonder antwoord (geen token, geen net) en een bestand dat niet te
+  /// schrijven was komen pas de volgende sessie weer aan de beurt — anders vraagt elke herbouw het opnieuw.
+  final Set<String> _plaatGeprobeerd = {};
+  final Set<String> _jaarGeprobeerd = {};
+
+  Future<void>? _plaatWerk;
+  bool _plaatWerkOpnieuw = false;
+
+  /// Na [_byBase]: welke artiest+titel over meer dan één plaat verdeeld moet worden. Wat de gebruiker samenvoegde of per
+  /// jaar liet scheiden, beslist hij zelf ([_groupKey]).
+  void _deelOpPlaten() {
+    _plaatIndeling.clear();
+    _onbekendePlaten.clear();
+    for (final e in _byBase.entries) {
+      if (e.value.length < 2 || _merged.contains(e.key) || _gesplitst.contains(e.key)) continue;
+      final uit = deelOpPlaat(e.value, pinVan: (t) => plaatPin(_corrections[t.path]), feitVan: (p) => _platen[p]);
+      final indeling = uit.indeling;
+      if (indeling != null) _plaatIndeling[e.key] = indeling;
+      if (uit.onbekend.isNotEmpty) _onbekendePlaten[e.key] = uit.onbekend;
+    }
+  }
+
+  /// Aan het eind van [rebuildAlbums]: is er een plaat op te zoeken of een jaartal recht te zetten, dan een ronde.
+  void _plaatWerkAanzetten() {
+    if (plaatOpzoeker == null || isRemote) return;
+    final werk = _onbekendePlaten.values.any((s) => s.any((p) => !_plaatGeprobeerd.contains(p))) ||
+        _plaatIndeling.values.any((i) => i.jaarRecht.any((s) => !_jaarGeprobeerd.contains(s.track.path)));
+    if (werk) unawaited(zoekPlatenOp());
+  }
+
+  /// Zoek de platen op die nog ontbreken en zet daarna de jaartallen in de bestanden recht. Eén ronde tegelijk; wie
+  /// erom vraagt terwijl er een loopt, wacht op die ronde (en die kijkt aan het eind nog één keer). Publiek zodat een
+  /// toets kan wachten tot het klaar is.
+  Future<void> zoekPlatenOp() {
+    final bezig = _plaatWerk;
+    if (bezig != null) {
+      _plaatWerkOpnieuw = true;
+      return bezig;
+    }
+    final f = _plaatRondes().whenComplete(() => _plaatWerk = null);
+    _plaatWerk = f;
+    return f;
+  }
+
+  Future<void> _plaatRondes() async {
+    // Eerst de herbouw laten afmaken die dit aanzette: [scan] zet `scanning` pas daarna uit.
+    await Future<void>.delayed(Duration.zero);
+    do {
+      _plaatWerkOpnieuw = false;
+      try {
+        await _zoekOntbrekendePlaten();
+        await _zetPlaatJarenRecht();
+      } catch (e) {
+        meetlog?.call('  platen: ronde brak: $e');
+      }
+    } while (_plaatWerkOpnieuw && plaatOpzoeker != null && !isRemote);
+  }
+
+  /// Per artiest+titel tegelijk, één persing na de andere, en pas als er iets nieuws bekend is één herbouw. De diensten
+  /// houden hun eigen wachtrij en schijfcache (`DiscogsService.plaatVan`); dit vraagt er nooit twee tegelijk.
+  Future<void> _zoekOntbrekendePlaten() async {
+    while (true) {
+      final zoeker = plaatOpzoeker;
+      if (zoeker == null || isRemote) return;
+      final open = _onbekendePlaten.values
+          .map((s) => [for (final p in s) if (!_plaatGeprobeerd.contains(p)) p])
+          .firstWhere((l) => l.isNotEmpty, orElse: () => const []);
+      if (open.isEmpty) return;
+      var nieuw = false;
+      for (final pin in open) {
+        _plaatGeprobeerd.add(pin);
+        PlaatFeit? feit;
+        try {
+          feit = await zoeker(pin);
+        } catch (_) {
+          feit = null;
+        }
+        meetlog?.call('  platen: $pin → ${feit == null ? 'onbekend' : '${feit.plaat} (${feit.jaar ?? '?'})'}');
+        if (feit == null) continue;
+        _platen[pin] = feit;
+        nieuw = true;
+      }
+      if (!nieuw) continue;
+      await _savePlaten();
+      rebuildAlbums();
+      _bumpMeta();
+      notifyListeners();
+    }
+  }
+
+  /// Het jaartal van de plaat in het bestand, voor elk vastgezet nummer op een gescheiden plaat waar het iets anders
+  /// zegt ("J'ai tout oublié" droeg 1985, "Elle a les yeux revolver" 1994 van de verzamelaar). Alleen DATE, langs
+  /// [writeTagFields] en mét [_tagUndo] — de oudere regel wint, net als in [_schrijfBewerking], zodat "Tags terugzetten"
+  /// naar de oorspronkelijke waarde gaat. Nummers zonder pin blijven staan: van die is de plaat een gok.
+  Future<void> _zetPlaatJarenRecht() async {
+    if (plaatOpzoeker == null || isRemote || scanning) return;
+    final stappen = [
+      for (final indeling in _plaatIndeling.values)
+        for (final s in indeling.jaarRecht)
+          if (!_jaarGeprobeerd.contains(s.track.path)) s,
+    ];
+    var geschreven = 0;
+    for (final s in stappen) {
+      final pad = s.track.path;
+      _jaarGeprobeerd.add(pad);
+      final laag = pad.toLowerCase();
+      final mp3 = laag.endsWith('.mp3');
+      // Wat [writeTagFields] niet veilig kan, houdt zijn jaar; de tegel zegt toch het goede ([Album.plaatJaar]).
+      if (!mp3 && !laag.endsWith('.flac')) continue;
+      final f = File(pad);
+      final raw = mp3 ? readMp3RawFields(f) : readFlacRawFields(f);
+      String? reden;
+      if (!await writeTagFields(f, {'DATE': '${s.jaar}'}, waarom: (w) => reden = w)) {
+        meetlog?.call('  platen: jaar ${s.jaar} niet in $pad — ${reden ?? 'onbekend waarom'}');
+        continue;
+      }
+      _tagUndo[pad] = {'DATE': raw['date'], ...?_tagUndo[pad]};
+      // In het geheugen meteen; de volgende scan leest het bestand toch opnieuw (de tijd van het bestand is veranderd).
+      final i = tracks.indexWhere((t) => t.path == pad);
+      if (i >= 0) tracks[i] = _metJaar(tracks[i], s.jaar);
+      meetlog?.call('  platen: jaar ${s.jaar} in $pad');
+      geschreven++;
+    }
+    if (geschreven == 0) return;
+    await _saveTagUndo();
+    rebuildAlbums();
+    _bumpMeta();
+    notifyListeners();
+  }
+
+  static Track _metJaar(Track t, int jaar) => Track(
+        path: t.path,
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        trackNo: t.trackNo,
+        trackTotal: t.trackTotal,
+        duration: t.duration,
+        isFlac: t.isFlac,
+        year: jaar,
+        genre: t.genre,
+        addedMs: t.addedMs,
+        sizeBytes: t.sizeBytes,
+        sampleRate: t.sampleRate,
+        bitsPerSample: t.bitsPerSample,
+      );
 
   /// The exact Discogs release the user pinned to this album, if they pinned one.
   ///
@@ -3507,6 +3693,9 @@ class LibraryStore extends ChangeNotifier {
       ts.sort((a, b) => a.trackNo.compareTo(b.trackNo));
       final al = Album(dto.title, dto.artistName, ts, isSingle: dto.isSingle)
         ..edition = dto.edition
+        // Het jaar zoals de pc het zegt: bij een op plaat gescheiden tegel dat van de plaat, ook als het nog niet in het
+        // bestand staat ([Album.plaatJaar]). Voor elke andere plaat is het hetzelfde als wat de nummers zeggen.
+        ..plaatJaar = dto.year
         // Wanneer de plaat voor het eerst binnenkwam, zoals de pc het weet (Recent toegevoegd).
         ..eerstGezienMs = dto.addedMs > 0 ? dto.addedMs : null;
       for (final t in ts) {
@@ -4332,6 +4521,13 @@ class LibraryStore extends ChangeNotifier {
     if (_merged.contains(base)) return base;
     // En een plaat die ze per jaar lieten scheiden, blijft gescheiden ([scheidPerJaar]).
     if (_gesplitst.contains(base)) return '$base|j${t.year ?? 0}';
+    // Hangen de nummers aan persingen van verschillende platen met deze naam, dan elke plaat een eigen tegel
+    // ([deelOpPlaat]) — en binnen één plaat nog altijd de uitgaves die op hun nummers botsen.
+    final plaat = _plaatIndeling[base]?.groepVanNummer(t);
+    if (plaat != null) {
+      final sleutel = '$base|p${plaat.sleutel}';
+      return editionSplit(plaat.leden) ? '$sleutel|${t.trackTotal}' : sleutel;
+    }
     return editionSplit(_byBase[base]) ? '$base|${t.trackTotal}' : base;
   }
 
@@ -4350,7 +4546,12 @@ class LibraryStore extends ChangeNotifier {
   List<Track>? editionsOfTrack(Track t) {
     final base = _basisSleutel(t);
     final alle = _byBase[base];
-    if (alle == null || !_gesplitst.contains(base)) return alle;
+    if (alle == null) return null;
+    // Op plaat gescheiden ([deelOpPlaat]): de andere platen zijn ook geen persingen van deze, om dezelfde reden als
+    // hieronder — "Tags gelijktrekken" op Marc Lavoine (1985) zou anders het nummer van 2001 mee hernummeren.
+    final plaat = _plaatIndeling[base]?.groepVanNummer(t);
+    if (plaat != null) return plaat.leden;
+    if (!_gesplitst.contains(base)) return alle;
     // Per jaar gescheiden ([scheidPerJaar]): de andere jaren zijn andere platen, geen persingen van deze. Zonder dit
     // telden "Nummers toewijzen", de dubbele opnames en de herkenning Kiss from a Rose (1994) mee bij Seal (1991).
     return [for (final x in alle) if ((x.year ?? 0) == (t.year ?? 0)) x];
@@ -4394,6 +4595,8 @@ class LibraryStore extends ChangeNotifier {
       if (t.album.isEmpty) continue;
       _byBase.putIfAbsent(_basisSleutel(t), () => []).add(t);
     }
+    // En welke titels over meer dan één PLAAT gaan (Marc Lavoine 1985 en 2001) — ook dat vóór het eerste nummer.
+    _deelOpPlaten();
 
     // Snapshot the covers of the CURRENT albums. Rebuilding makes fresh Album objects with null
     // covers, so without this ANY caller (delete, correction, …) would blank the grid until the
@@ -4428,11 +4631,20 @@ class LibraryStore extends ChangeNotifier {
       final main = splitFeatured(ts.first.artist, ts.first.title).main;
       final artist = canonical[artistKey(main)] ?? main;
       final al = Album(single ? ts.first.title : ts.first.album, artist, ts, isSingle: single);
+      final plaat = single ? null : _plaatIndeling[_basisSleutel(ts.first)]?.groepVanNummer(ts.first);
       // Only where the title actually split — a lone album needs no edition label.
       if (!single && _gesplitst.contains(_basisSleutel(ts.first))) {
         // Per jaar gescheiden ([scheidPerJaar]): het jaar is de editie. Zonder editie kregen de twee platen hetzelfde id
         // (`albumIdFor` neemt artiest, titel en editie), en dan voegde een toestel ze weer samen.
         al.edition = (ts.first.year ?? 0) > 0 ? '${ts.first.year}' : 'zonder jaar';
+      } else if (plaat != null) {
+        // Op plaat gescheiden ([deelOpPlaat]): het jaar van de plaat is de editie (om dezelfde reden als hierboven) én
+        // het jaar van de tegel, ook voordat het in het bestand staat.
+        al.plaatJaar = plaat.jaar;
+        final n = ts.first.trackTotal;
+        al.edition = editionSplit(plaat.leden)
+            ? '${plaat.editie} · ${n > 0 ? '$n nummers' : 'zonder nummering'}'
+            : plaat.editie;
       } else if (!single && editionSplit(_byBase[_basisSleutel(ts.first)])) {
         final n = ts.first.trackTotal;
         al.edition = n > 0 ? '$n nummers' : 'zonder nummering';
@@ -4459,6 +4671,8 @@ class LibraryStore extends ChangeNotifier {
     _albumsPerDir = albumsPerDirOf(albums);
     // Recent toegevoegd: wanneer de plaat voor het eerst binnenkwam (Saber, 26-10-2026: "alleen echt nieuwe platen").
     _zetEerstGezien();
+    // Een plaat om op te zoeken of een jaartal om recht te zetten: op de achtergrond, één tegelijk ([zoekPlatenOp]).
+    _plaatWerkAanzetten();
   }
 
   /// Een ingebakken hoes die óók op een andere plaat van een andere artiest zit, is van geen van

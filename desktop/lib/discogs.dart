@@ -1128,6 +1128,23 @@ class DiscogsService {
     );
   }
 
+  /// Van welke PLAAT deze persing is (de master), en uit welk jaar die plaat komt.
+  ///
+  /// Voor `deelOpPlaat` (plaat_indeling.dart): Marc Lavoine heeft twee albums die "Marc Lavoine" heten, en de persing
+  /// van 1987 (2436536) is van de plaat uit 1985 (master 95856). Het jaar is dus dat van de MASTER en niet van de
+  /// persing — de master is één verzoek extra, en zonder kreeg de tegel 1987. Null als het niet te zeggen valt (geen token, geen antwoord, of de
+  /// master gaf niets): dan wordt er niet gesplitst, en de volgende sessie vraagt het opnieuw. Een persing zonder master
+  /// geeft `master: null` met het jaar van de persing.
+  Future<({int? master, int? jaar})?> plaatVan(int release) async {
+    final b = await _get('https://api.discogs.com/releases/$release');
+    if (b == null) return null;
+    final master = (b['master_id'] as num?)?.toInt();
+    if (master == null || master <= 0) return (master: null, jaar: discogsJaar(b['year']));
+    final m = await _get('https://api.discogs.com/masters/$master');
+    if (m == null) return null;
+    return (master: master, jaar: discogsJaar(m['year']) ?? discogsJaar(b['year']));
+  }
+
   /// Every cover Discogs holds for an album — across all its pressings, not just the one we chose.
   /// This is the pool the user picks their cover from; a Japanese CD often has the best scan.
   Future<List<DiscogsImage>> coverChoices(String artist, String album, {int max = 6}) async {

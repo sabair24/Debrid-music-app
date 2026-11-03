@@ -180,6 +180,7 @@ import 'ui/itemmenu.dart';
 import 'offline.dart';
 import 'online.dart';
 import 'organize.dart';
+import 'plaat_indeling.dart' show plaatOpzoekerVoor;
 import 'echtheid.dart';
 import 'echtheid_oordelen.dart';
 import 'audioformaten.dart';
@@ -2807,6 +2808,8 @@ Future<void> main() async {
     await library.loadMerged(); // records the user told us to keep together
     await library.loadEerstGezien(); // wanneer elke plaat voor het eerst binnenkwam (Recent toegevoegd)
     await library.loadGesplitst(); // en de platen die ze per jaar lieten scheiden
+    await library.loadPlaten(); // van welke plaat elke vastgezette persing is (Marc Lavoine 1985 en 2001)
+    library.plaatOpzoeker = plaatOpzoekerVoor(settings); // alleen hier, op de pc: een toestel krijgt de tegels mee
     await library.loadArtistArtChoice(); // portraits and backdrops the user picked
     await library.loadAlbumArtRoles(); // which scan is the sleeve, the back, the disc
     await library.loadStyles(); // what each record sounds like, for discovery
