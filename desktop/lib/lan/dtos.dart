@@ -137,6 +137,11 @@ class AlbumDto {
   /// Het zijn adressen, geen bytes: klein genoeg om gewoon in de catalogus mee te reizen.
   final Map<String, String> artRoles;
 
+  /// Welke plaat van een gedeelde naam dit is (`Album.plaat`): `master:95856` of `jaar:1991`, en anders null. Een
+  /// toestel bewaart de hoezen en scans van zo'n tegel onder die plaat, net als de pc — anders deelden Marc Lavoine
+  /// (1985) en (2001) op de gsm één hoes.
+  final String? plaat;
+
   const AlbumDto({
     required this.id,
     required this.artistId,
@@ -155,6 +160,7 @@ class AlbumDto {
     this.styles = const [],
     this.artTag,
     this.artRoles = const {},
+    this.plaat,
   });
 
   factory AlbumDto.fromJson(Map<String, dynamic> j) => AlbumDto(
@@ -181,6 +187,7 @@ class AlbumDto {
           for (final e in (j['artRoles'] as Map? ?? const {}).entries)
             if (e.value is String) '${e.key}': e.value as String,
         },
+        plaat: j['plaat'] is String && (j['plaat'] as String).isNotEmpty ? j['plaat'] as String : null,
       );
 
   Map<String, dynamic> toJson() => {
@@ -201,6 +208,7 @@ class AlbumDto {
         'styles': styles,
         'artTag': artTag,
         if (artRoles.isNotEmpty) 'artRoles': artRoles,
+        if (plaat != null) 'plaat': plaat,
       };
 }
 

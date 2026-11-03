@@ -1098,10 +1098,11 @@ Future<void> main() async {
     netStore.wegNu = () => session.wegVoorStroom ?? wegUitNaam(settings.laatsteWeg);
     // De cd en de achterkant eerst van de pc: die heeft ze al (Saber, 21-10-2026, Azizam) — zie
     // [DiscogsService.vanDePc]. Op het id van het album, zodat de pc in zijn eigen, juiste map kijkt.
-    DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async {
+    DiscogsArtwork.vanDePc = (artist, album, {bool klein = false, String? plaat}) async {
       final c = library.remote;
       if (c == null) return null;
-      final al = library.albums.where((a) => a.artist == artist && a.title == album).firstOrNull;
+      // En de plaat: Marc Lavoine (1985) en (2001) heten hetzelfde ([Album.plaat]).
+      final al = library.albums.where((a) => a.artist == artist && a.title == album && a.plaat == plaat).firstOrNull;
       final id = al == null ? '' : library.uidOf(al);
       if (id.isEmpty) return null;
       return kunstUitJson(await c.releaseArtJson(id, klein: klein));
@@ -1389,6 +1390,8 @@ Future<void> main() async {
     favorieten
       ..winkel = sharing.state
       ..wortel = () => library.rootPath;
+    // Valt een tegel uiteen (Marc Lavoine 1985 en 2001) of weer samen, dan gaat het hartje mee ([Favorieten.volgTegels]).
+    library.addListener(() => favorieten.volgTegels(library.albums));
   }
   final lijsten = Afspeellijsten();
   // Favorieten en de afspeellijsten die je op dit toestel houdt (Saber, 28-10-2026): wat erbij komt gaat op je gsm,
@@ -1585,10 +1588,11 @@ Future<void> main() async {
         haal: (al) async {
           final v = albumArtVooruit(library, al);
           final s = await DiscogsService(settings).scansVooraf(v.artist, v.album,
-              expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+              expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles, plaat: v.plaat);
           // En de digitale voorkant, die Nu speelt over de scan heen legt ("digitaal wint altijd").
           if (s != Voorafstand.geenPc && (v.roles['front'] ?? '').isEmpty) {
-            await CoverEnricher(settings).digitaleVoorkant(v.artist, v.album, titels: [for (final t in al.tracks) t.title]);
+            await CoverEnricher(settings).digitaleVoorkant(v.artist, v.album,
+                titels: [for (final t in al.tracks) t.title], plaat: v.plaat, jaar: v.jaar);
           }
           return s;
         },
@@ -7949,11 +7953,21 @@ Future<Uint8List?> achterkantVan(BuildContext context, Album al) async {
   final v = albumArtVooruit(context.read<LibraryStore>(), al);
   final dienst = DiscogsService(context.read<AppSettings>());
   final uit = await dienst.cachedReleaseArt(v.artist, v.album,
-      expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+      expectedTracks: v.trackCount,
+      pinned: v.pinned,
+      pinnedMbid: v.pinnedMbid,
+      roles: v.roles,
+      plaat: v.plaat,
+      jaar: v.jaar);
   if (uit?.back == null) {
     unawaited(dienst
         .releaseArt(v.artist, v.album,
-            expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles)
+            expectedTracks: v.trackCount,
+            pinned: v.pinned,
+            pinnedMbid: v.pinnedMbid,
+            roles: v.roles,
+            plaat: v.plaat,
+            jaar: v.jaar)
         .then((_) {}, onError: (_) {}));
   }
   return uit?.back;
@@ -7972,7 +7986,12 @@ const double kAlbumKopHoes = 200;
 Future<Uint8List?> voorladenVan(BuildContext context, Album al) async {
   final v = albumArtVooruit(context.read<LibraryStore>(), al);
   final art = await DiscogsService(context.read<AppSettings>()).cachedReleaseArt(v.artist, v.album,
-      expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+      expectedTracks: v.trackCount,
+      pinned: v.pinned,
+      pinnedMbid: v.pinnedMbid,
+      roles: v.roles,
+      plaat: v.plaat,
+      jaar: v.jaar);
   if (art == null || !context.mounted) return null;
   final f = art.front, d = art.disc;
   if (f != null) {
@@ -8024,7 +8043,12 @@ class _TegelCdState extends State<_TegelCd> {
   Future<void> _lees(DiscogsService dienst, AlbumArtVooruit v) async {
     try {
       final art = await dienst.cachedReleaseArt(v.artist, v.album,
-          expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+          expectedTracks: v.trackCount,
+          pinned: v.pinned,
+          pinnedMbid: v.pinnedMbid,
+          roles: v.roles,
+          plaat: v.plaat,
+          jaar: v.jaar);
       final d = art?.disc;
       if (d != null && mounted) setState(() => _scan = d);
     } catch (_) {/* geen scan: dan blijft de getekende schijf */}
@@ -9266,8 +9290,9 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                         trackCount: album.tracks.length,
                         pinned: context.watch<LibraryStore>().pinnedRelease(album),
                         pinnedMbid: context.watch<LibraryStore>().pinnedMbid(album),
-                        roles:
-                            context.watch<LibraryStore>().albumArtRoles(album.artist, album.title)),
+                        roles: context
+                            .watch<LibraryStore>()
+                            .albumArtRoles(album.artist, album.title, plaat: album.plaat)),
                   ),
                 if (!album.isSingle)
                   SliverToBoxAdapter(
@@ -9715,6 +9740,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
             album: album.title,
             titels: [for (final t in album.tracks) t.title],
             identity: context.watch<LibraryStore>().uidOf(album),
+            plaat: album.plaat,
+            jaar: album.plaat == null ? null : album.year,
             // Het label van de tegel waar je vandaan kwam: de hoes groeit door in plaats van dat
             // het ene scherm hard door het andere vervangen wordt. Zelfde uid als in AlbumCard.
             heroTag: widget.heroTag ?? 'hoes:${context.watch<LibraryStore>().uidOf(album)}',
@@ -9734,7 +9761,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
                 _officialMbid,
             trackCount: _official.isNotEmpty ? _official.length : album.tracks.length,
             playing: _albumIsPlaying(context),
-            roles: context.watch<LibraryStore>().albumArtRoles(album.artist, album.title),
+            roles: context.watch<LibraryStore>().albumArtRoles(album.artist, album.title, plaat: album.plaat),
             // De hoes die hier uiteindelijk getekend wordt, is ook de hoes waar de achtergrond zijn
             // kleur uit haalt. Vandaar via deze terugroep en niet uit album.cover: dit widget kiest
             // zelf tussen jouw gekozen scan, de gepinde persing en het bestand, en de was moet bij het
@@ -10230,7 +10257,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
             nieuweMbid: _pickedMbid,
             huidigeRelease: lib.pinnedRelease(widget.album),
             huidigeMbid: lib.pinnedMbid(widget.album))) {
-      await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title);
+      await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title, plaat: widget.album.plaat);
     }
     if (!mounted) return;
     final geschreven = await lib.applyCorrection(
@@ -17584,7 +17611,12 @@ class _NuSpeeltRegelState extends State<_NuSpeeltRegel> {
     unawaited(() async {
       try {
         final a = await dienst.cachedReleaseArt(v.artist, v.album,
-            expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+            expectedTracks: v.trackCount,
+            pinned: v.pinned,
+            pinnedMbid: v.pinnedMbid,
+            roles: v.roles,
+            plaat: v.plaat,
+            jaar: v.jaar);
         if (a == null || !mounted || _voor != sleutel) return;
         setState(() {
           _scan = a.disc;
@@ -20150,6 +20182,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                     // uitgave (zie CoverEnricher.digitaleVoorkant).
                     titels: [t.title, if (al != null) for (final x in al.tracks) if (x.title != t.title) x.title],
                     identity: al == null ? '' : bib.uidOf(al),
+                    plaat: al?.plaat,
+                    jaar: al?.plaat == null ? null : al?.year,
                     size: hoesMaat,
                     reisFactor: dwars ? kLiggendReis : (_naastOpTv ? kSpeelReisTv : null),
                     fallback: p.currentCover,
@@ -20171,7 +20205,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                     pinnedMbid: al == null ? null : albumArtVooruit(bib, al).pinnedMbid,
                     roles: al == null
                         ? const {}
-                        : bib.albumArtRoles(al.artist, al.title),
+                        : bib.albumArtRoles(al.artist, al.title, plaat: al.plaat),
                     // Out and spinning while a speaker has it too. This device is
                     // deliberately silent then, so p.playing is false — but the record
                     // IS playing, just somewhere else, and that is what you came to
@@ -24800,7 +24834,13 @@ class NieuwSpeler extends ChangeNotifier {
           final v = albumArtVooruit(lib, landAl);
           unawaited(DiscogsService(instellingen)
               .releaseArt(v.artist, v.album,
-                  expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles, freeOnly: true)
+                  expectedTracks: v.trackCount,
+                  pinned: v.pinned,
+                  pinnedMbid: v.pinnedMbid,
+                  roles: v.roles,
+                  freeOnly: true,
+                  plaat: v.plaat,
+                  jaar: v.jaar)
               .then((_) {}, onError: (_) {}));
         }
         final klinkendAdres = vroeg?.adres ?? elders?.pad;
@@ -31593,13 +31633,15 @@ class _GetrapteLijstState extends State<GetrapteLijst> {
               album: a.title,
               titels: [for (final t in a.tracks) t.title],
               identity: bib.uidOf(a),
+              plaat: a.plaat,
+              jaar: a.plaat == null ? null : a.year,
               size: hoes,
               fallback: a.cover,
               chosen: a.correctedCover,
               trackCount: a.tracks.length,
               pinned: bib.pinnedRelease(a) ?? persingUitHerkomst(a.resolvedFrom).release,
               pinnedMbid: bib.pinnedMbid(a) ?? persingUitHerkomst(a.resolvedFrom).mbid,
-              roles: bib.albumArtRoles(a.artist, a.title),
+              roles: bib.albumArtRoles(a.artist, a.title, plaat: a.plaat),
               uitgeschoven: _schuift,
               reisFactor: _reis,
             ),
@@ -33293,13 +33335,15 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                 album: eigen.title,
                 titels: [for (final t in eigen.tracks) t.title],
                 identity: bib.uidOf(eigen),
+                plaat: eigen.plaat,
+                jaar: eigen.plaat == null ? null : eigen.year,
                 size: hoes,
                 fallback: eigen.cover,
                 chosen: eigen.correctedCover,
                 trackCount: eigen.tracks.length,
                 pinned: bib.pinnedRelease(eigen) ?? persingUitHerkomst(eigen.resolvedFrom).release,
                 pinnedMbid: bib.pinnedMbid(eigen) ?? persingUitHerkomst(eigen.resolvedFrom).mbid,
-                roles: bib.albumArtRoles(eigen.artist, eigen.title),
+                roles: bib.albumArtRoles(eigen.artist, eigen.title, plaat: eigen.plaat),
                 uitgeschoven: true,
                 uitschuifTeller: teller,
                 reisFactor: reis,
@@ -37327,6 +37371,11 @@ class AlbumArt extends StatefulWidget {
   /// through the first, and must not be through the second.
   final String identity;
 
+  /// Welke plaat van een naam die over meer platen verdeeld is ([Album.plaat]), en het jaar ervan: de digitale voorkant
+  /// van díe plaat, en de hoes die terug naar de bibliotheek gaat landt op díe tegel. Null: zoals altijd.
+  final String? plaat;
+  final int? jaar;
+
   final int trackCount;
   final bool playing;
 
@@ -37426,6 +37475,8 @@ class AlbumArt extends StatefulWidget {
     required this.size,
     this.titels = const [],
     this.identity = '',
+    this.plaat,
+    this.jaar,
     this.fallback,
     this.chosen,
     this.trackCount = 0,
@@ -37462,6 +37513,9 @@ typedef AlbumArtVooruit = ({
   int? pinned,
   String? pinnedMbid,
   Map<String, String> roles,
+  // Bij een naam die over meer platen verdeeld is: welke, en van welk jaar ([Album.plaat]).
+  String? plaat,
+  int? jaar,
 });
 
 /// De gegevens van [AlbumArt] voor dit album, zoals Nu speelt ze voor het huidige nummer bepaalt —
@@ -37480,7 +37534,9 @@ AlbumArtVooruit albumArtVooruit(LibraryStore bib, Album al) => (
       pinnedMbid: bib.pinnedMbid(al) ??
           persingUitHerkomst(al.resolvedFrom).mbid ??
           bib.facts.get(bib.uidOf(al))?.mbid,
-      roles: bib.albumArtRoles(al.artist, al.title),
+      roles: bib.albumArtRoles(al.artist, al.title, plaat: al.plaat),
+      plaat: al.plaat,
+      jaar: al.plaat == null ? null : al.year,
     );
 
 /// How far the disc stays out when nothing is playing.
@@ -37642,7 +37698,12 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
     unawaited(() async {
       try {
         final art = await dienst.cachedReleaseArt(v.artist, v.album,
-            expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles);
+            expectedTracks: v.trackCount,
+            pinned: v.pinned,
+            pinnedMbid: v.pinnedMbid,
+            roles: v.roles,
+            plaat: v.plaat,
+            jaar: v.jaar);
         final f = art?.front, d = art?.disc;
         if (f != null && mounted) {
           await precacheImage(ResizeImage(MemoryImage(f), width: decodeWidth(s)), context);
@@ -37670,6 +37731,7 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
         old.album != widget.album ||
         old.pinned != widget.pinned ||
         old.pinnedMbid != widget.pinnedMbid ||
+        old.plaat != widget.plaat ||
         !mapEquals(old.roles, widget.roles)) {
       // Een andere plaat begint met zijn voorkant, ook als de vorige omgedraaid stond. Na dit beeld:
       // het seintje laat luisteraars opnieuw bouwen, en dat hoort niet midden in een opbouw.
@@ -37764,7 +37826,9 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           expectedTracks: widget.trackCount,
           pinned: widget.pinned,
           pinnedMbid: widget.pinnedMbid,
-          roles: widget.roles);
+          roles: widget.roles,
+          plaat: widget.plaat,
+          jaar: widget.jaar);
       // Hetzelfde object als wat er al staat: niets te doen. Een `setState` hier liet Flutter vroeger
       // het beeld opnieuw decoderen — zie [DiscogsService._readArt].
       if (uitCache != null && mounted && mine == _gen && !identical(uitCache, _art)) {
@@ -37782,6 +37846,8 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
           roles: widget.roles,
           trace: spoor,
           titels: widget.titels,
+          plaat: widget.plaat,
+          jaar: widget.jaar,
           // De cd en de achterkant zodra TheAudioDB ze heeft, en niet pas na het archief (7 tot 10 s):
           // alleen wat hier nog ontbreekt — wat er al staat, blijft staan.
           tussenstand: (t) {
@@ -37830,9 +37896,8 @@ class _AlbumArtState extends State<AlbumArt> with TickerProviderStateMixin {
             artBron: art?.bron, pinnedMbid: widget.pinnedMbid, pinned: widget.pinned);
         // With the settings, a traced sleeve is written down and survives the next start; the
         // correction used to live only for as long as the window stayed open.
-        context
-            .read<LibraryStore>()
-            .adoptAlbumCover(artist, album, front, from: from, settings: context.read<AppSettings>());
+        context.read<LibraryStore>().adoptAlbumCover(artist, album, front,
+            from: from, settings: context.read<AppSettings>(), plaat: widget.plaat);
       }
       widget.onFront?.call(widget.chosen ?? front ?? widget.fallback);
     } catch (_) {/* no artwork is not an error worth showing */}
@@ -38391,7 +38456,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
         teBewaren[e.key] = await _volleScan(e.key, e.value, settings);
       }
       for (final e in teBewaren.entries) {
-        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value.uri);
+        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value.uri, plaat: widget.album.plaat);
       }
       final front = teBewaren['front'];
       if (front != null) {
@@ -38857,7 +38922,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     if (!mounted) return;
     final lib = context.read<LibraryStore>();
     Map<String, String> lees() =>
-        {...lib.albumArtRoles(widget.album.artist, widget.album.title)};
+        {...lib.albumArtRoles(widget.album.artist, widget.album.title, plaat: widget.album.plaat)};
     final voor = lees();
     final gekozen = await showDialog<Map<String, ChoiceImage>>(
         context: context, builder: (_) => AssignScansDialog(album: widget.album, choice: c));
@@ -38912,12 +38977,12 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       // Choosing an EDITION means using its scans — all three of them. Any single scan picked
       // earlier is an override that outranks the pressing, so leaving those in place made this
       // button look like it did nothing: you chose the CD and kept the digital sleeve.
-      await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title);
+      await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title, plaat: widget.album.plaat);
       // Behalve wat je in ditzelfde venster net zelf hebt aangewezen. Anders is "zoek de scan op,
       // wijs hem toe, kies dan deze uitgave" een handeling die zichzelf ongedaan maakt — en dat is
       // precies de weg die openstaat als de app de schijf-scan in het verkeerde vak zette.
       for (final e in _eigenRollen.entries) {
-        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value);
+        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value, plaat: widget.album.plaat);
       }
       await lib.applyCorrection(widget.album, settings,
           coverBytes: front,
@@ -39826,7 +39891,7 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
   void initState() {
     super.initState();
     final lib = context.read<LibraryStore>();
-    _begin = {...lib.albumArtRoles(widget.album.artist, widget.album.title)};
+    _begin = {...lib.albumArtRoles(widget.album.artist, widget.album.title, plaat: widget.album.plaat)};
     _rollen.addAll(_begin);
     _load();
   }
@@ -39838,9 +39903,9 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
     final lib = context.read<LibraryStore>();
     try {
       // Wissen en opnieuw zetten: wat hier staat IS de keuze, inclusief wat je weghaalde.
-      await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title);
+      await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title, plaat: widget.album.plaat);
       for (final e in _rollen.entries) {
-        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value);
+        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value, plaat: widget.album.plaat);
       }
     } catch (e) {
       if (!mounted) return;

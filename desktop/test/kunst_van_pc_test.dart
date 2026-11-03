@@ -54,7 +54,7 @@ void main() {
     test('heeft de pc het af, dan is dat het antwoord: meteen op het scherm en op schijf', () async {
       final vanPc = ReleaseArt(front: _b(1), back: _b(2), disc: _b(3), bron: 'rel:42');
       final gevraagd = <String>[];
-      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async {
+      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false, String? plaat}) async {
         gevraagd.add('$artist|$album');
         return (art: vanPc, klaar: true);
       };
@@ -68,7 +68,7 @@ void main() {
       expect(art?.back, vanPc.back);
       expect(tussen, isNotEmpty, reason: 'de cd staat er meteen, ook als de rest nog loopt');
       // En de volgende keer van schijf, zonder de pc: na een koude start meteen.
-      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async => fail('niet nog eens vragen');
+      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false, String? plaat}) async => fail('niet nog eens vragen');
       final opnieuw = await dienst.cachedReleaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen);
       expect(opnieuw?.disc, vanPc.disc);
       expect(await dienst.hasReleaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen), isTrue);
@@ -81,7 +81,7 @@ void main() {
       final gevraagd = <bool>[];
       var mobiel = true;
       DiscogsArtwork.zuinig = () => mobiel;
-      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async {
+      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false, String? plaat}) async {
         gevraagd.add(klein);
         return (art: klein ? ReleaseArt(front: _b(1, 50), back: _b(2, 50), disc: _b(3, 50)) : vol, klaar: true);
       };
@@ -109,7 +109,7 @@ void main() {
     test('het toestel zet de haak, de pc heeft het eindpunt, en de pc gooit de scans niet meer weg', () {
       String lees(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
       final main = lees('lib/main.dart');
-      expect(main, contains('DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async {'));
+      expect(main, contains('DiscogsArtwork.vanDePc = (artist, album, {bool klein = false, String? plaat}) async {'));
       expect(main, contains('return kunstUitJson(await c.releaseArtJson(id, klein: klein));'));
       expect(main, contains('    DiscogsArtwork.zuinig = () => netStore.net == Netsoort.mobiel;\n'));
       final server = lees('lib/lan/server.dart');
@@ -123,7 +123,7 @@ void main() {
           reason: 'alleen verkleind als het toestel op mobiele data zit');
       expect(server, contains('return _json(req.response, kunstNaarJson(art, klaar: klaar));'));
       final discogs = lees('lib/discogs.dart');
-      expect(discogs, contains('_vanPcOfVers(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld)'));
+      expect(discogs, contains('_vanPcOfVers(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld, plaat)'));
       final snoei = lees('lib/cache_snoei.dart');
       expect(snoei, contains("'releaseart': 3 * 1024 * 1024 * 1024,"));
     });

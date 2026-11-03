@@ -130,9 +130,23 @@ class FactsWarmer extends ChangeNotifier {
   /// "MIDDEN in de ronde" wachtte zo 2,9–3,4 s op een grens van 5 — op een drukke bouwmachine erover.
   final Future<Object?> Function(String artist, String album, List<String> titels)? voorkant;
 
-  Future<Object?> _voorkant(Album album) =>
-      (voorkant ?? (a, b, t) => CoverEnricher(settings).digitaleVoorkant(a, b, titels: t))(
-          album.artist, album.title, [for (final t in album.tracks) t.title]).catchError((Object _) => null);
+  Future<Object?> _voorkant(Album album) => (voorkant ??
+          (a, b, t) => CoverEnricher(settings).digitaleVoorkant(a, b,
+              titels: t, plaat: album.plaat, jaar: album.plaat == null ? null : album.year))(
+      album.artist, album.title, [for (final t in album.tracks) t.title]).catchError((Object _) => null);
+
+  /// Een tegel van een naam die over meer platen verdeeld is ([Album.plaat]): zijn digitale voorkant zit niet in de
+  /// scans — die zoeken op naam, en een gedeelde naam geeft daar niets (`CoverEnricher.gedeeldeNamen`). Dus hier zelf
+  /// overnemen, op deze tegel.
+  void _neemDigitaalOver(Album album, Object? d) {
+    if (album.plaat == null || d is! ({Uint8List bytes, String bron})) return;
+    if (!library.adoptAlbumCover(album.artist, album.title, d.bytes,
+        from: d.bron, settings: settings, plaat: album.plaat)) {
+      return;
+    }
+    _hoezen++;
+    _log.line('scans: "${album.title}" (${album.plaat}) digitale hoes overgenomen van ${d.bron}');
+  }
 
   final LibraryStore library;
   final AppSettings settings;
@@ -565,7 +579,7 @@ class FactsWarmer extends ChangeNotifier {
       final expected = facts.tracklist.length;
       final mbid = library.pinnedMbid(album) ?? facts.mbid;
       final pinned = library.pinnedRelease(album);
-      final roles = library.albumArtRoles(album.artist, album.title);
+      final roles = library.albumArtRoles(album.artist, album.title, plaat: album.plaat);
       if (await DiscogsService(settings).hasReleaseArt(album.artist, album.title,
           expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles)) {
         continue;
@@ -731,7 +745,7 @@ class FactsWarmer extends ChangeNotifier {
     final expected = facts.tracklist.length;
     final mbid = library.pinnedMbid(album) ?? facts.mbid;
     final pinned = library.pinnedRelease(album);
-    final roles = library.albumArtRoles(album.artist, album.title);
+    final roles = library.albumArtRoles(album.artist, album.title, plaat: album.plaat);
 
     // One attempt per album per session, whatever the outcome — recorded before the attempt so a
     // throw cannot cause a re-pick.
@@ -748,7 +762,7 @@ class FactsWarmer extends ChangeNotifier {
       // Plus de DIGITALE voorkant (Deezer, anders TheAudioDB), ook voor een plaat waarvan de scans er al
       // staan: Saber, 21-10-2026, "digitaal wint altijd". Eén keer per plaat over het net, daarna van
       // schijf — en `cachedReleaseArt` legt hem over de voorkant.
-      await _voorkant(album);
+      _neemDigitaalOver(album, await _voorkant(album));
       _neemHoesOver(
           album,
           await DiscogsService(settings).cachedReleaseArt(album.artist, album.title,
@@ -758,7 +772,7 @@ class FactsWarmer extends ChangeNotifier {
     _busy(uid);
     // De digitale voorkant met de titels erbij, zodat een verzamelrip de hoes van zijn originele uitgave
     // krijgt; de keten hieronder vindt hem daarna in de cache.
-    await _voorkant(album);
+    _neemDigitaalOver(album, await _voorkant(album));
     try {
       // Logged BEFORE the call, with the clock. Without this a record that takes four minutes is
       // indistinguishable from a loop that has stopped — which is exactly the two hours I spent
@@ -883,7 +897,7 @@ class FactsWarmer extends ChangeNotifier {
       if (facts == null || facts.tracklist.isEmpty) return;
       _artTried.add(uid);
       _volTried.add(uid);
-      await _voorkant(album);
+      _neemDigitaalOver(album, await _voorkant(album));
       final klaar = await _scansVoor(album.artist, album.title, facts, album: album, tag: 'voorrang');
       _log.line('voorrang: "${album.title}" klaar in ${_sinds(t0)} — $klaar');
     } catch (e) {
@@ -898,7 +912,7 @@ class FactsWarmer extends ChangeNotifier {
     final expected = facts.tracklist.length;
     final mbid = (album == null ? null : library.pinnedMbid(album)) ?? facts.mbid;
     final pinned = album == null ? null : library.pinnedRelease(album);
-    final roles = library.albumArtRoles(artist, title);
+    final roles = library.albumArtRoles(artist, title, plaat: album?.plaat);
     final ds = DiscogsService(settings);
     Future<bool> af() =>
         ds.hasReleaseArt(artist, title, expectedTracks: expected, pinned: pinned, pinnedMbid: mbid, roles: roles);
@@ -956,7 +970,7 @@ class FactsWarmer extends ChangeNotifier {
     final front = art?.front;
     if (front == null) return;
     final veranderd = library.adoptAlbumCover(album.artist, album.title, front,
-        from: art!.bron, settings: settings);
+        from: art!.bron, settings: settings, plaat: album.plaat);
     // Alleen wat écht voorgaat wordt geteld en gemeld. Een gok op naam belandt in `enriched` en
     // verandert niets aan wat je ziet; en `adoptAlbumCover` slaat een plaat over waar jij zelf een
     // hoes koos. In beide gevallen zou "hoes overgenomen" in het logboek een onwaarheid zijn.

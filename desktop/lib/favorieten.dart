@@ -104,6 +104,59 @@ class Favorieten extends GedeeldeOps {
     return wissel(id: id, album: true);
   }
 
+  /// Een hartje op een tegel die er niet meer is, gaat mee naar de tegel(s) die eruit voortkwamen. Alleen op de pc
+  /// (daar staat de winkel); een toestel krijgt het daarna met de gedeelde staat. Geeft het aantal nieuwe hartjes.
+  ///
+  /// **Waarom.** Het id van een album is artiest, titel en editie ([albumIdFor]). Valt een naam vanzelf uiteen in twee
+  /// platen (Marc Lavoine 1985 en 2001, plaat_indeling.dart) of laat je hem per jaar scheiden, dan krijgt elke tegel
+  /// een editie — en dus een ander id dan de tegel waar je hart op stond. Zonder dit was het hartje stil weg.
+  ///
+  /// **Welke tegels.** Een tegel mét editie stamt van het id zonder editie: beide platen van Marc Lavoine krijgen het
+  /// hartje, want je gaf het aan de tegel waar ze allebei op stonden. Omgekeerd (weer samengevoegd) krijgt de tegel
+  /// zonder editie het hartje van een verdwenen tegel met een editie die zijn nummers dragen: het jaar ervan, of
+  /// "12 nummers". Het oude id gaat er pas uit als een tegel het overnam — wie zelf een hartje weghaalt, ziet het niet
+  /// terugkomen, want dan is het oude id al weg. Alleen ids die bij geen enkele tegel meer horen tellen mee.
+  int volgTegels(List<Album> albums) {
+    final w = winkel;
+    if (w == null || w.favoriteAlbums.isEmpty || albums.isEmpty) return 0;
+    // Bij elke melding van de bibliotheek, en die komen vaak (elke hoes): alleen opnieuw kijken als de tegels of de
+    // hartjes veranderden. Een id is een sha256, en dat negenhonderd keer per hoes is zonde.
+    if (identical(albums, _gevolgd) && w.favoriteAlbums.length == _gevolgdAantal) return 0;
+    _gevolgd = albums;
+    _gevolgdAantal = w.favoriteAlbums.length;
+    final ids = {for (final a in albums) idVanAlbum(a)};
+    final wees = w.favoriteAlbums.where((id) => !ids.contains(id)).toSet();
+    if (wees.isEmpty) return 0;
+    final aan = <String>{}, overgenomen = <String>{};
+    for (final a in albums) {
+      final id = idVanAlbum(a);
+      if (id == null || w.favoriteAlbums.contains(id)) continue;
+      final basis = (artistKey(a.artist), normKey(a.title));
+      final kandidaten = a.edition != null
+          ? {albumIdFor(basis.$1, basis.$2, null)}
+          : {
+              for (final t in a.tracks) ...[
+                if ((t.year ?? 0) > 0) albumIdFor(basis.$1, basis.$2, '${t.year}'),
+                albumIdFor(basis.$1, basis.$2, t.trackTotal > 0 ? '${t.trackTotal} nummers' : 'zonder nummering'),
+              ],
+            };
+      final van = kandidaten.where(wees.contains).toSet();
+      if (van.isEmpty) continue;
+      aan.add(id);
+      overgenomen.addAll(van);
+    }
+    if (aan.isEmpty) return 0;
+    unawaited(pasToe([
+      for (final id in aan) {'type': 'favorite', 'kind': 'album', 'id': id, 'on': true, 'at': nu},
+      for (final id in overgenomen) {'type': 'favorite', 'kind': 'album', 'id': id, 'on': false, 'at': nu},
+    ]));
+    _gevolgdAantal = w.favoriteAlbums.length;
+    return aan.length;
+  }
+
+  List<Album>? _gevolgd;
+  int _gevolgdAantal = -1;
+
   /// Alle nummers uit [alles] die favoriet zijn, in de volgorde van je bibliotheek.
   List<Track> nummers(List<Track> alles) =>
       [for (final t in alles) if (isFavorietTrack(t)) t];

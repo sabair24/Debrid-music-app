@@ -161,6 +161,15 @@ class Album {
   /// uit kwam, en de tegel van Marc Lavoine (1985) hoort 1985 te zeggen, ook voordat dat jaar in het bestand staat.
   int? plaatJaar;
 
+  /// Welke PLAAT van deze naam dit is — alleen als de naam over meer platen verdeeld is: vanzelf op de vastgezette
+  /// persing (`master:95856`, plaat_indeling.dart) of met "Scheiden per jaar" (`jaar:1991`). Null voor elke andere
+  /// tegel, en dan blijft alles op de sleutel van artiest en titel staan zoals het altijd stond.
+  ///
+  /// **Waarom.** Hoezen, scans en de aangewezen rollen hingen aan `artiest|titel`, en dat is voor Marc Lavoine (1985)
+  /// en Marc Lavoine (2001) dezelfde sleutel: de hoes die Saber op 03-11-2026 voor de ene koos, kwam op allebei, en de
+  /// hoesveger schreef hem ook in het bestand van de andere plaat. Met dit veld krijgt elke tegel zijn eigen sleutel.
+  String? plaat;
+
   int? get year {
     if (plaatJaar != null) return plaatJaar;
     for (final t in tracks) {

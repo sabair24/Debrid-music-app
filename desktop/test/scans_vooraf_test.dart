@@ -148,7 +148,7 @@ void main() {
     test('op volle grootte, één keer; wat in gsm-formaat lag, wordt vervangen', () async {
       final vol = ReleaseArt(front: _b(1), back: _b(2), disc: _b(3));
       final gevraagd = <bool>[];
-      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async {
+      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false, String? plaat}) async {
         gevraagd.add(klein);
         return (art: klein ? ReleaseArt(front: _b(1, 50), back: _b(2, 50), disc: _b(3, 50)) : vol, klaar: true);
       };
@@ -168,9 +168,9 @@ void main() {
     test('heeft de pc niets, dan niets; zonder pc houdt het op', () async {
       final dienst = DiscogsService(AppSettings());
       expect(await dienst.scansVooraf('A', 'B'), Voorafstand.geenPc);
-      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async => null;
+      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false, String? plaat}) async => null;
       expect(await dienst.scansVooraf('A', 'B'), Voorafstand.nietOpPc);
-      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false}) async => throw const SocketException('weg');
+      DiscogsArtwork.vanDePc = (artist, album, {bool klein = false, String? plaat}) async => throw const SocketException('weg');
       expect(await dienst.scansVooraf('A', 'B'), Voorafstand.geenPc);
     });
   });
@@ -180,7 +180,8 @@ void main() {
     final main = lees('lib/main.dart');
     expect(main, contains('            settings.scansVooraf && library.remote != null && netStore.net == Netsoort.wifi && !netStore.onderweg,\n'));
     expect(main, contains('        albums: () => [...library.albums],\n'));
-    expect(main, contains('await CoverEnricher(settings).digitaleVoorkant(v.artist, v.album, titels:'));
+    expect(main, contains('await CoverEnricher(settings).digitaleVoorkant(v.artist, v.album,\n'
+        '                titels: [for (final t in al.tracks) t.title], plaat: v.plaat, jaar: v.jaar);'));
     expect(main, contains('          maxBytes: !isTv && settings.scansVooraf ? kReleaseartVooraf : kReleaseartToestel,\n'));
     expect(main, contains('      netStore.addListener(vooraf.kijk);\n'));
     expect(lees('lib/settings.dart'), contains("        scansVooraf = (m['scans_vooraf'] ?? Platform.isAndroid) as bool;\n"));

@@ -152,6 +152,8 @@ void main() {
           pinned: null,
           pinnedMbid: null,
           roles: <String, String>{},
+          plaat: null,
+          jaar: null,
         ),
       )));
       // Het lezen begon binnen de nepklok van de toets: elke stap ervan wil echte tijd én een pump.

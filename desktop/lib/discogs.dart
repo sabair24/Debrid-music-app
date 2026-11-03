@@ -1820,6 +1820,10 @@ extension DiscogsArtwork on DiscogsService {
     /// De nummers van dit album, voor de digitale voorkant van een verzamelrip — zie
     /// `CoverEnricher.digitaleVoorkant`.
     List<String> titels = const [],
+    /// Welke plaat van een naam die over meer platen verdeeld is (`Album.plaat`), met het jaar ervan: dan komt de
+    /// digitale voorkant van DIE plaat, en vraagt een toestel de scans van díe tegel aan de pc. Null: zoals altijd.
+    String? plaat,
+    int? jaar,
   }) async {
     // Both pins are part of the cache key. Without that a new choice would keep answering with the
     // scans fetched for the old one — which is half of why picking a release changed the front
@@ -1858,7 +1862,7 @@ extension DiscogsArtwork on DiscogsService {
     // hoes werd na 27 s vervangen door een scheve Discogs-foto van de fysieke hoes.
     final digitaalF = (roles['front'] ?? '').isEmpty && artist.isNotEmpty && album.isNotEmpty
         ? CoverEnricher(settings)
-            .digitaleVoorkant(artist, album, voorrang: !freeOnly, titels: titels)
+            .digitaleVoorkant(artist, album, voorrang: !freeOnly, titels: titels, plaat: plaat, jaar: jaar)
             .catchError((Object _) => null)
         : null;
     final cached = await _readArt(dir);
@@ -1887,7 +1891,8 @@ extension DiscogsArtwork on DiscogsService {
     // already in progress and get its answer, so the metered pass it exists to perform never
     // happened. And they do overlap: warm.log shows the free sweep re-arming at 16:03:02 while the
     // backfill was working on a record from 16:02:53.
-    final lane = '$key|${freeOnly ? 'vrij' : 'vol'}';
+    // En de plaat: twee tegels van een gedeelde naam zonder pin delen anders één keten, en dan ook één digitale voorkant.
+    final lane = '$key|${freeOnly ? 'vrij' : 'vol'}${plaat == null ? '' : '|$plaat'}';
     if (tussenstand != null) (_artTussen[lane] ??= []).add(tussenstand);
     final running = _artInFlight[lane];
     if (running != null) {
@@ -1903,7 +1908,7 @@ extension DiscogsArtwork on DiscogsService {
     }
 
     final work =
-        _vanPcOfVers(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld)
+        _vanPcOfVers(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld, plaat)
             .then((a) async {
       unawaited(gezienMerk(dir, artist, album));
       return _metDigitaal(a, await digitaalF);
@@ -1937,7 +1942,11 @@ extension DiscogsArtwork on DiscogsService {
   /// lang had: onder een andere sleutel (de gsm kende de uitgave van het album nog niet, want die feiten komen
   /// pas als je de albumpagina opent), of op een toestel dat hem nog nooit gezien had. De pc zoekt het album
   /// op zijn id op, met zijn eigen feiten en keuzes — dus altijd de juiste map.
-  static Future<({ReleaseArt art, bool klaar})?> Function(String artist, String album, {bool klein})? vanDePc;
+  ///
+  /// [plaat]: bij een naam die over meer platen verdeeld is welke tegel (`Album.plaat`) — op artiest en titel alleen
+  /// vond een toestel de eerste van de twee, en kreeg Marc Lavoine (1985) de scans van (2001).
+  static Future<({ReleaseArt art, bool klaar})?> Function(String artist, String album, {bool klein, String? plaat})?
+      vanDePc;
 
   /// Op mobiele data? Dan vraagt een toestel de scans in gsm-formaat ([kKleinScan]) en laat het de keten liggen;
   /// op wifi komen ze daarna op volle resolutie. Saber, 02-11-2026: elk album dat op het scherm kwam, haalde
@@ -1956,7 +1965,8 @@ extension DiscogsArtwork on DiscogsService {
       Directory dir,
       void Function(String)? trace,
       bool freeOnly,
-      void Function(ReleaseArt) meld) async {
+      void Function(ReleaseArt) meld,
+      [String? plaat]) async {
     final pc = vanDePc;
     if (pc != null && !freeOnly) {
       // Op mobiele data: wat er al in gsm-formaat ligt, volstaat — geen net.
@@ -1971,7 +1981,7 @@ extension DiscogsArtwork on DiscogsService {
       }
       ({ReleaseArt art, bool klaar})? v;
       try {
-        v = await pc(artist, album, klein: klein).timeout(const Duration(seconds: 10));
+        v = await pc(artist, album, klein: klein, plaat: plaat).timeout(const Duration(seconds: 10));
       } catch (_) {/* dan de keten, zoals altijd */}
       final a = v?.art;
       if (v != null && a != null && (a.back != null || a.disc != null)) {
@@ -2516,6 +2526,7 @@ extension DiscogsArtwork on DiscogsService {
     int? pinned,
     String? pinnedMbid,
     Map<String, String> roles = const {},
+    String? plaat,
   }) async {
     final dir = artMap(artist, album, expectedTracks, pinned, pinnedMbid, roles);
     final al = await _readArt(dir);
@@ -2524,7 +2535,7 @@ extension DiscogsArtwork on DiscogsService {
     if (pc == null) return Voorafstand.geenPc;
     final ({ReleaseArt art, bool klaar})? v;
     try {
-      v = await pc(artist, album).timeout(const Duration(seconds: 30));
+      v = await pc(artist, album, plaat: plaat).timeout(const Duration(seconds: 30));
     } catch (_) {
       return Voorafstand.geenPc;
     }
@@ -2583,12 +2594,17 @@ extension DiscogsArtwork on DiscogsService {
     int? pinned,
     String? pinnedMbid,
     Map<String, String> roles = const {},
+    String? plaat,
+    int? jaar,
   }) async {
     final art = await _readArt(artMap(artist, album, expectedTracks, pinned, pinnedMbid, roles));
     if ((roles['front'] ?? '').isNotEmpty || artist.isEmpty || album.isEmpty) return art;
     // De digitale voorkant als hij al op schijf ligt — zie [releaseArt]. Geen netwerk: wie dit vraagt,
-    // wil meteen tekenen.
-    return _metDigitaal(art, await CoverEnricher(settings).digitaleVoorkant(artist, album, netwerk: false));
+    // wil meteen tekenen. Met [plaat] die van díe plaat (zie [releaseArt]).
+    return _metDigitaal(
+        art,
+        await CoverEnricher(settings)
+            .digitaleVoorkant(artist, album, netwerk: false, plaat: plaat, jaar: jaar));
   }
 
   /// Wat er al eens van schijf gelezen is, per map — en dan HETZELFDE object terug.

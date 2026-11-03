@@ -98,12 +98,16 @@ String _baseName(String p) {
 /// along with it and a `List<Uint8List?>` has nowhere to put that. Naming the fields also means the
 /// two places that restore it can no longer disagree about which index was which.
 class _Covers {
-  const _Covers(this.embedded, this.enriched, this.corrected, this.resolved, this.resolvedFrom);
+  const _Covers(this.embedded, this.enriched, this.corrected, this.resolved, this.resolvedFrom, this.plaat);
   final Uint8List? embedded, enriched, corrected, resolved;
   final String? resolvedFrom;
 
+  /// Van welke plaat de tegel was ([Album.plaat]). Wisselt dat bij de herbouw, dan gaan de hoezen NIET mee — zie
+  /// [LibraryStore.rebuildAlbums].
+  final String? plaat;
+
   factory _Covers.of(Album a) =>
-      _Covers(a.embeddedCover, a.enriched, a.correctedCover, a.resolvedCover, a.resolvedFrom);
+      _Covers(a.embeddedCover, a.enriched, a.correctedCover, a.resolvedCover, a.resolvedFrom, a.plaat);
 
   void applyTo(Album a) {
     a.embeddedCover = embedded;
@@ -2000,8 +2004,10 @@ class LibraryStore extends ChangeNotifier {
     } catch (_) {}
   }
 
-  static String albumArtKey(String artist, String album) =>
-      '${artistKey(artist)}|${normKey(album)}';
+  /// [plaat]: bij een naam die over meer platen verdeeld is ([Album.plaat]) heeft elke tegel zijn eigen scans — de cd
+  /// van Marc Lavoine (1985) is niet die van (2001). Zonder plaat de sleutel die er altijd was.
+  static String albumArtKey(String artist, String album, [String? plaat]) =>
+      '${artistKey(artist)}|${normKey(album)}${plaat == null ? '' : '|$plaat'}';
 
   /// The images the user assigned for this record: 'front', 'back' and/or 'disc' → image URL.
   ///
@@ -2015,8 +2021,8 @@ class LibraryStore extends ChangeNotifier {
   /// Op een client eerst wat de pc zegt, en anders wat hier ligt. Die terugval is er voor een pc die
   /// deze bewerking nog niet kent: dan reist de keuze niet mee, maar hij blijft wél bestaan op het
   /// toestel waar je hem maakte — precies zoals het vóór de synchronisatie werkte.
-  Map<String, String> albumArtRoles(String artist, String album) {
-    final k = albumArtKey(artist, album);
+  Map<String, String> albumArtRoles(String artist, String album, {String? plaat}) {
+    final k = albumArtKey(artist, album, plaat);
     if (isRemote) {
       final vanPc = _remoteAlbumRoles[k];
       if (vanPc != null && vanPc.isNotEmpty) return vanPc;
@@ -2073,7 +2079,7 @@ class LibraryStore extends ChangeNotifier {
   }
 
   /// Say what an image IS. [url] empty clears that role and lets the app guess again.
-  Future<void> setAlbumArtRole(String artist, String album, String role, String url) async {
+  Future<void> setAlbumArtRole(String artist, String album, String role, String url, {String? plaat}) async {
     // Op een client: HIER schrijven én het aan de pc vertellen. In die volgorde, en allebei.
     //
     // **Waarom niet alleen naar de pc.** Dat was de eerste opzet, en het was een terugval. Kent de
@@ -2084,7 +2090,7 @@ class LibraryStore extends ChangeNotifier {
     // Nu: lokaal is de bodem die er altijd is, de pc is de winst als hij meedoet. Weigert hij, dan
     // komt die reden naar boven — de aanroeper mag weten dat het bij dit toestel blijft — maar de
     // keuze zelf staat er al.
-    final k = albumArtKey(artist, album);
+    final k = albumArtKey(artist, album, plaat);
     final m = _albumArtRoles.putIfAbsent(k, () => {});
     if (url.isEmpty) {
       m.remove(role);
@@ -2098,8 +2104,15 @@ class LibraryStore extends ChangeNotifier {
     await _saveAlbumArtRoles();
     notifyListeners();
     if (isRemote) {
-      await _editOnPc(
-          {'op': 'albumArtRole', 'artist': artist, 'album': album, 'role': role, 'url': url});
+      // De plaat erbij: een pc die hem nog niet kent, laat het veld liggen en zet de rol op de naam — zoals eerst.
+      await _editOnPc({
+        'op': 'albumArtRole',
+        'artist': artist,
+        'album': album,
+        if (plaat != null) 'plaat': plaat,
+        'role': role,
+        'url': url,
+      });
     }
   }
 
@@ -2113,17 +2126,18 @@ class LibraryStore extends ChangeNotifier {
   /// went on winning after you deliberately chose the CD, and choosing an edition looked like it did
   /// nothing. Picking an edition means "use its scans"; picking a single scan is the exception you
   /// make afterwards.
-  Future<void> clearAlbumArtRoles(String artist, String album) async {
+  Future<void> clearAlbumArtRoles(String artist, String album, {String? plaat}) async {
     // Zelfde verhaal als bij [setAlbumArtRole]: lokaal wissen is de bodem, de pc is de winst.
     //
     // De vroege uitgang is hier bewust weg. Lokaal kan er niets staan terwijl de pc nog wél rollen
     // heeft — dan zou "wis alles" op een client niets doen, en na de eerstvolgende synchronisatie
     // stonden ze er weer.
-    _albumArtRoles.remove(albumArtKey(artist, album));
+    _albumArtRoles.remove(albumArtKey(artist, album, plaat));
     await _saveAlbumArtRoles();
     notifyListeners();
     if (isRemote) {
-      await _editOnPc({'op': 'albumArtRole', 'artist': artist, 'album': album, 'clear': true});
+      await _editOnPc(
+          {'op': 'albumArtRole', 'artist': artist, 'album': album, if (plaat != null) 'plaat': plaat, 'clear': true});
     }
   }
 
@@ -2455,13 +2469,16 @@ class LibraryStore extends ChangeNotifier {
     return true;
   }
 
+  /// [plaat]: welke tegel van een naam die over meer platen verdeeld is ([Album.plaat]). Een hoes zonder plaat komt
+  /// alleen op een tegel zonder plaat — de hoes van Marc Lavoine (2001) kwam anders ook op (1985) terecht.
   bool adoptAlbumCover(String artist, String album, Uint8List bytes,
-      {String? from, AppSettings? settings}) {
+      {String? from, AppSettings? settings, String? plaat}) {
     if (bytes.length < 500) return false;
     var changed = false;
     for (final a in albums) {
       if (a.tracks.isEmpty) continue;
       if (artistKey(a.artist) != artistKey(artist) || normKey(a.title) != normKey(album)) continue;
+      if (a.plaat != plaat) continue;
       if (a.correctedCover != null) continue;
       // **Een persing die JIJ hebt vastgezet wint van elke andere.**
       //
@@ -3226,7 +3243,7 @@ class LibraryStore extends ChangeNotifier {
     // bestaan met de rest erin — zijn hoezen, zijn rollen en zijn samenvoegkeuze meeverhuizen naar
     // de naam van één weggelopen nummer zou dat album leegroven.
     if (!perNummer) {
-      await _carryAlbumKeys(settings, target.artist, target.title, newArtist, newTitle);
+      await _carryAlbumKeys(settings, target.artist, target.title, newArtist, newTitle, oudePlaat: target.plaat);
     }
     _bumpMeta();
     notifyListeners();
@@ -3245,12 +3262,14 @@ class LibraryStore extends ChangeNotifier {
   /// ignores the edition, so two split pressings of one record share their scans today. Giving them
   /// separate uids would quietly split that too.
   Future<void> _carryAlbumKeys(AppSettings settings, String oldArtist, String oldTitle,
-      String newArtist, String newTitle) async {
+      String newArtist, String newTitle, {String? oudePlaat}) async {
     final oldKey = albumArtKey(oldArtist, oldTitle);
     final newKey = albumArtKey(newArtist, newTitle);
     if (oldKey == newKey) return;
 
-    final roles = _albumArtRoles.remove(oldKey);
+    // Een tegel van een gedeelde naam ([Album.plaat]) draagt zijn rollen en zijn hoes onder zijn plaat; onder een
+    // eigen naam is hij gewoon één tegel. De andere plaat van de oude naam houdt de hare.
+    final roles = _albumArtRoles.remove(albumArtKey(oldArtist, oldTitle, oudePlaat));
     if (roles != null && roles.isNotEmpty) {
       _albumArtRoles[newKey] = roles;
       await _saveAlbumArtRoles();
@@ -3273,7 +3292,7 @@ class LibraryStore extends ChangeNotifier {
       await _saveGesplitst();
     }
 
-    await CoverEnricher(settings).reKeyFixedCover(oldArtist, oldTitle, newArtist, newTitle);
+    await CoverEnricher(settings).reKeyFixedCover(oldArtist, oldTitle, newArtist, newTitle, oudePlaat: oudePlaat);
   }
 
   /// Waar [scan] zijn tussentijden kwijt kan. Null = niets meten, geen kosten.
@@ -3696,17 +3715,23 @@ class LibraryStore extends ChangeNotifier {
         // Het jaar zoals de pc het zegt: bij een op plaat gescheiden tegel dat van de plaat, ook als het nog niet in het
         // bestand staat ([Album.plaatJaar]). Voor elke andere plaat is het hetzelfde als wat de nummers zeggen.
         ..plaatJaar = dto.year
+        // Welke plaat van een gedeelde naam dit is ([Album.plaat]): de hoezencache hier staat er net als op de pc onder.
+        ..plaat = dto.plaat
         // Wanneer de plaat voor het eerst binnenkwam, zoals de pc het weet (Recent toegevoegd).
         ..eerstGezienMs = dto.addedMs > 0 ? dto.addedMs : null;
+      var wisselde = false;
       for (final t in ts) {
         final saved = coversByPath[t.path];
         if (saved == null) continue;
-        saved.applyTo(al);
+        // Net gescheiden of weer samen: de hoes van de oude tegel niet overnemen — zie [rebuildAlbums]. De eigen hoes
+        // komt van de pc ([loadRemoteCovers]).
+        if (saved.plaat == al.plaat) saved.applyTo(al);
+        wisselde = saved.plaat != al.plaat;
         break;
       }
       // Wat de hoezenronde las terwijl deze catalogus onderweg was, landde op de oude objecten en
       // staat dus niet in [coversByPath]. Zie [_hoesPerPad].
-      if (al.cover == null) {
+      if (al.cover == null && !wisselde) {
         final eerder = _hoesPerPad[ts.first.path];
         if (eerder != null) al.enriched = eerder;
       }
@@ -3730,8 +3755,12 @@ class LibraryStore extends ChangeNotifier {
       ..addEntries([
         for (final dto in catalog.albums)
           if (dto.artRoles.isNotEmpty)
-            MapEntry(albumArtKey(dto.artistName, dto.title), dto.artRoles),
+            MapEntry(albumArtKey(dto.artistName, dto.title, dto.plaat), dto.artRoles),
       ]);
+    CoverEnricher.gedeeldeNamen = {
+      for (final a in albums)
+        if (a.plaat != null) CoverEnricher.naamSleutel(a.artist, a.title),
+    };
 
     _remoteArtistArt
       ..clear()
@@ -4624,6 +4653,7 @@ class LibraryStore extends ChangeNotifier {
       // straight ' are the same album and must not show up twice.
       map.putIfAbsent(_groupKey(t), () => []).add(t);
     }
+    final plaatWissel = <Album>[];
     albums = map.entries.map((e) {
       final single = e.key.startsWith('single::');
       final ts = single ? e.value : _dedupeTracks(e.value);
@@ -4637,10 +4667,13 @@ class LibraryStore extends ChangeNotifier {
         // Per jaar gescheiden ([scheidPerJaar]): het jaar is de editie. Zonder editie kregen de twee platen hetzelfde id
         // (`albumIdFor` neemt artiest, titel en editie), en dan voegde een toestel ze weer samen.
         al.edition = (ts.first.year ?? 0) > 0 ? '${ts.first.year}' : 'zonder jaar';
+        // En elk jaar zijn eigen hoezen, scans en rollen ([Album.plaat]): Seal (1994) droeg de hoes van 1991.
+        al.plaat = 'jaar:${ts.first.year ?? 0}';
       } else if (plaat != null) {
         // Op plaat gescheiden ([deelOpPlaat]): het jaar van de plaat is de editie (om dezelfde reden als hierboven) én
         // het jaar van de tegel, ook voordat het in het bestand staat.
         al.plaatJaar = plaat.jaar;
+        al.plaat = plaat.sleutel;
         final n = ts.first.trackTotal;
         al.edition = editionSplit(plaat.leden)
             ? '${plaat.editie} · ${n > 0 ? '$n nummers' : 'zonder nummering'}'
@@ -4654,12 +4687,24 @@ class LibraryStore extends ChangeNotifier {
       for (final t in ts) {
         final saved = coversByPath[t.path];
         if (saved == null) continue;
-        saved.applyTo(al);
+        if (saved.plaat == al.plaat) {
+          saved.applyTo(al);
+        } else {
+          // Net gescheiden, of weer samen ([Album.plaat]): de hoezen van de oude tegel zijn niet per se die van deze
+          // plaat. Marc Lavoine was één tegel met de hoes van 2001, en die zat zo ook op het nummer van 1985. Niets
+          // overnemen; de eigen hoezen komen van schijf, onder de eigen sleutel ([_hoezenNaPlaatwissel]).
+          plaatWissel.add(al);
+        }
         break;
       }
       return al;
     }).toList()
       ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+    // Voor elke hoes die op naam gezocht wordt: welke namen over meer platen verdeeld zijn ([CoverEnricher.gedeeldeNamen]).
+    CoverEnricher.gedeeldeNamen = {
+      for (final a in albums)
+        if (a.plaat != null) CoverEnricher.naamSleutel(a.artist, a.title),
+    };
 
     _rebuildTrackIndexes();
     _merkVreemdeHoezen();
@@ -4673,6 +4718,46 @@ class LibraryStore extends ChangeNotifier {
     _zetEerstGezien();
     // Een plaat om op te zoeken of een jaartal om recht te zetten: op de achtergrond, één tegelijk ([zoekPlatenOp]).
     _plaatWerkAanzetten();
+    // Na de uid's: daarop worden de tegels straks teruggevonden, ook als er intussen opnieuw gebouwd is.
+    if (plaatWissel.isNotEmpty) {
+      final uidsVanWissel = {for (final a in plaatWissel) uids.uidOf(a)}..remove('');
+      final vorige = hoezenNaPlaatwissel;
+      hoezenNaPlaatwissel = vorige.then((_) => _hoezenNaPlaatwissel(uidsVanWissel));
+    }
+  }
+
+  /// De laatste [_hoezenNaPlaatwissel] die loopt — één tegelijk, achter elkaar. Voor een toets om op te wachten.
+  @visibleForTesting
+  Future<void> hoezenNaPlaatwissel = Future<void>.value();
+
+  /// De eigen hoezen van tegels die net van plaat wisselden ([Album.plaat]): de ingebedde hoes van hun EIGEN eerste
+  /// nummer (de hoescache, zoals de scan), en dan wat er onder hun eigen sleutel op schijf ligt ([_hoesVanSchijf]).
+  /// Op [uidVan] teruggevonden, op de lijst zoals die dán is: de herbouw die het jaartal schrijft, komt er vaak
+  /// meteen achteraan. Geen net — wat ontbreekt komt van de vastgezette persing (de albumpagina en de warmer).
+  Future<void> _hoezenNaPlaatwissel(Set<String> uidVan) async {
+    if (uidVan.isEmpty) return;
+    try {
+      List<Album> doelen() => [for (final a in albums) if (uidVan.contains(uids.uidOf(a))) a];
+      final eerste = [for (final a in doelen()) if (a.tracks.isNotEmpty) a.tracks.first.path];
+      final alle = [for (final a in albums) if (a.tracks.isNotEmpty) a.tracks.first.path];
+      Map<String, Uint8List> ingebed = const {};
+      if (eerste.isNotEmpty && !isRemote) {
+        try {
+          ingebed = await readCoversInIsolate(eerste, hoesCacheMap, alle).timeout(const Duration(seconds: 30));
+        } catch (_) {/* dan zonder ingebedde hoes; de rest komt toch */}
+      }
+      final enricher = CoverEnricher(_verrijkInstellingen ?? AppSettings());
+      for (final a in doelen()) {
+        if (a.tracks.isEmpty) continue;
+        final eigen = ingebed[a.tracks.first.path];
+        if (eigen != null && eigen.isNotEmpty) a.embeddedCover ??= eigen;
+        await _hoesVanSchijf(a, enricher);
+      }
+      _merkVreemdeHoezen();
+      notifyListeners();
+    } catch (e) {
+      meetlog?.call('  platen: hoezen na het scheiden niet geladen: $e');
+    }
   }
 
   /// Een ingebakken hoes die óók op een andere plaat van een andere artiest zit, is van geen van
@@ -4751,41 +4836,51 @@ class LibraryStore extends ChangeNotifier {
     }
   }
 
+  /// Fase 1 van [enrich] voor één album: wat er op schijf ligt, zonder net. Ook voor een tegel die net van plaat
+  /// wisselde ([_hoezenNaPlaatwissel]).
+  Future<void> _hoesVanSchijf(Album album, CoverEnricher enricher) async {
+    // Al in het geheugen: niet opnieuw van schijf. Dit liep na ELKE download (onLibraryChanged → enrich) voor elke
+    // gekozen hoes (bij Saber 619 bestanden, 117 MB), en elke herlezing gaf een nieuw object — waarop de catalogus
+    // alle merken opnieuw rekende ([CoverEnricher.hoesMerk]): haper.log 29-10-2026, "catalogus bouwen 792 ms" na een
+    // download, 44 ms zonder. Wie een hoes kiest of corrigeert, zet hem hier ook in het geheugen.
+    if (album.correctedCover != null) return;
+    final fixed = await enricher.fixedCover(album);
+    if (fixed != null) {
+      album.correctedCover = fixed;
+      return;
+    }
+    // A sleeve traced to a pinned pressing on an earlier run. Restored BEFORE the check below,
+    // because it has to win against the embedded art rather than fill in for its absence — for a
+    // rip tagged with the wrong record, `album.cover` is not null, it is confidently wrong.
+    if (album.resolvedCover == null) {
+      final traced = await enricher.resolvedCover(album);
+      // Ook hier de pin nakijken, en niet alleen bij het overnemen. Wat er vóór deze regel al
+      // weggeschreven was blijft anders voor altijd staan: de app zou hem netjes weigeren te
+      // vervangen en tegelijk elke keer de verkeerde inlezen. Zo repareert een plaat die al
+      // omgeslagen is zichzelf bij de eerstvolgende scan.
+      // Een digitale voorkant altijd (zie [adoptAlbumCover]); een scan alleen als hij bij de pin past.
+      if (traced != null && (isDigitaleHerkomst(traced.$2) || _pinPastBij(album, traced.$2))) {
+        album.resolvedCover = traced.$1;
+        album.resolvedFrom = traced.$2;
+      }
+    }
+    if (album.zekereHoes != null) return;
+    final bytes = await enricher.cached(album);
+    if (bytes != null) album.enriched = bytes;
+  }
+
+  /// De instellingen van de laatste [enrich] (op de pc), voor [_hoezenNaPlaatwissel].
+  AppSettings? _verrijkInstellingen;
+
   /// Fill missing album covers. Phase 1 loads everything already on disk (instant,
   /// can't hang); phase 2 fetches the rest from the web (each call has a timeout).
   Future<void> enrich(AppSettings settings) async {
+    _verrijkInstellingen = settings;
     final enricher = CoverEnricher(settings);
     // Phase 1 — instant: on-disk cache only, no network. User-corrected covers first
     // (they win over embedded/enriched and must survive a rescan).
     for (final album in albums) {
-      // Al in het geheugen: niet opnieuw van schijf. Dit liep na ELKE download (onLibraryChanged → enrich) voor elke
-      // gekozen hoes (bij Saber 619 bestanden, 117 MB), en elke herlezing gaf een nieuw object — waarop de catalogus
-      // alle merken opnieuw rekende ([CoverEnricher.hoesMerk]): haper.log 29-10-2026, "catalogus bouwen 792 ms" na een
-      // download, 44 ms zonder. Wie een hoes kiest of corrigeert, zet hem hier ook in het geheugen.
-      if (album.correctedCover != null) continue;
-      final fixed = await enricher.fixedCover(album);
-      if (fixed != null) {
-        album.correctedCover = fixed;
-        continue;
-      }
-      // A sleeve traced to a pinned pressing on an earlier run. Restored BEFORE the check below,
-      // because it has to win against the embedded art rather than fill in for its absence — for a
-      // rip tagged with the wrong record, `album.cover` is not null, it is confidently wrong.
-      if (album.resolvedCover == null) {
-        final traced = await enricher.resolvedCover(album);
-        // Ook hier de pin nakijken, en niet alleen bij het overnemen. Wat er vóór deze regel al
-        // weggeschreven was blijft anders voor altijd staan: de app zou hem netjes weigeren te
-        // vervangen en tegelijk elke keer de verkeerde inlezen. Zo repareert een plaat die al
-        // omgeslagen is zichzelf bij de eerstvolgende scan.
-        // Een digitale voorkant altijd (zie [adoptAlbumCover]); een scan alleen als hij bij de pin past.
-        if (traced != null && (isDigitaleHerkomst(traced.$2) || _pinPastBij(album, traced.$2))) {
-          album.resolvedCover = traced.$1;
-          album.resolvedFrom = traced.$2;
-        }
-      }
-      if (album.zekereHoes != null) continue;
-      final bytes = await enricher.cached(album);
-      if (bytes != null) album.enriched = bytes;
+      await _hoesVanSchijf(album, enricher);
     }
     notifyListeners();
     // Phase 2 fills the gaps over the network, and startup does NOT wait for it — see

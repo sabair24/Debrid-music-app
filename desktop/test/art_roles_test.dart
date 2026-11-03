@@ -157,7 +157,8 @@ void main() {
 
     test('DE KERN: het venster wist de scans vóór de correctie, alleen bij een hele plaat', () {
       final lijf = toepassen();
-      final wis = lijf.indexOf('await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title);');
+      final wis = lijf.indexOf(
+          'await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title, plaat: widget.album.plaat);');
       expect(wis, isNonNegative, reason: 'anders blijven je oude achterkant en cd van de nieuwe persing winnen');
       expect(lijf.substring(0, wis), contains('if (los == null &&\n        LibraryStore.wisseltPersing('),
           reason: 'één aangewezen nummer verhuist; de scans horen bij het album dat blijft');
