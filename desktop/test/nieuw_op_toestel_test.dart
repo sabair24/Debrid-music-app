@@ -148,6 +148,33 @@ void main() {
     });
   });
 
+  group('een betere kopie onderweg (Saber, 03-11-2026: "Pas thuis op wifi")', () {
+    test('thuis op wifi altijd; onderweg alleen als wat hier staat echt slecht is', () {
+      expect(beterNuOphalen(thuisOpWifi: true, oudGeluid: '44100/16/200000/flac'), isTrue);
+      expect(beterNuOphalen(thuisOpWifi: false, oudGeluid: '44100/16/200000/flac'), isFalse,
+          reason: 'een cd-kopie: de 24/96 van de pc wordt hier toch weer cd — wacht op wifi');
+      expect(beterNuOphalen(thuisOpWifi: false, oudGeluid: '44100/0/200000/mp3'), isTrue, reason: 'een mp3: meteen');
+      expect(beterNuOphalen(thuisOpWifi: false, oudGeluid: '22050/16/200000/flac'), isTrue, reason: 'onder cd: meteen');
+      expect(beterNuOphalen(thuisOpWifi: false, oudGeluid: null), isTrue, reason: 'niets geweten: zoals vroeger');
+    });
+
+    test('aangesloten: de pass van de betere kopieën, de onzekere netsoort, en "thuis" na een netwerkwissel', () {
+      String bron(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
+      final main = bron('lib/main.dart');
+      expect(main, contains('            } else if (o.geluid != g &&\n                !beterNuOphalen(\n'
+          '                    thuisOpWifi: !netStore.onderweg && (!Platform.isAndroid || netStore.net == Netsoort.wifi),\n'));
+      expect(main, contains('    netStore.addListener(houdBij);\n'), reason: 'thuis op wifi: wat wachtte, nu');
+      expect(main, contains('        if (netOnzeker()) return;\n'), reason: 'vanzelf opslaan wacht op een bekende netsoort');
+      expect(main, contains('    if (alleenHierNu() || netOnzeker()) return;\n'), reason: 'vooruithalen ook');
+      expect(main, contains(
+          '  bool netOnzeker() => !mode.owner && !isTv && Platform.isAndroid && netStore.net == Netsoort.onbekend;\n'));
+      final sessie = bron('lib/lan/client_session.dart');
+      final i = sessie.indexOf('  Future<void> netwerkVeranderd(String waarom) async {');
+      expect(sessie.substring(i, i + 1600), contains('        _pcZegtThuis = null;\n'),
+          reason: 'van de thuiswifi naar mobiel via dezelfde deur: niet meer thuis tot de pc het weer zegt');
+    });
+  });
+
   test('zoeken online op mobiele data: eerst op je gsm, dan spelen (Saber, 02-11-2026)', () {
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(main, contains('    final opGsm = lib.remote != null && !isTv && _misschien<NetsoortStore>(context)?.net == Netsoort.mobiel\n'));
