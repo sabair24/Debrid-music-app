@@ -1539,6 +1539,12 @@ Future<void> main() async {
   // op de pc.
   final speelstanden = Speelstanden()..idVanPad = library.gedeeldId;
   if (mode.owner) speelstanden.winkel = sharing.state;
+  // Op een toestel ook bewaard (Saber, 03-11-2026: "Geheugen op de gsm"): zonder pc weet een shuffle dan nog wat je de
+  // laatste dagen hoorde. Vóór het hervatten van de speler, die het klaarstaande nummer ernaar beoordeelt.
+  if (!mode.owner) {
+    speelstanden.bestand = '$appDir${Platform.pathSeparator}speelstanden_hier.json';
+    await speelstanden.laad();
+  }
   player.speelstandVan = speelstanden.standVan;
   // Schudden met elkaar (Saber, 31-10-2026): elk nummer dat hier opent, naar de pc; wat ergens de laatste drie dagen
   // opende, komt in elke shuffle achteraan (schudvolgorde.dart, kSchudWeg).

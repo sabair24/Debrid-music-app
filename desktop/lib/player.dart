@@ -405,6 +405,30 @@ Wachtrij naarAchterenLijst(Wachtrij w, Set<String> paden) {
   return (origineel: w.origineel, volgorde: volgorde, index: w.index);
 }
 
+/// Moet het KLAARSTAANDE nummer van een shuffle (gepauzeerd, nog niet begonnen: [plek] onder een seconde) naar achteren?
+/// Ja als het binnen [kSchudWeg] ergens opende ([geopendOp], ms) — na de laatste keer dat het hier opende ([hierOp]),
+/// of na een herstart ([hierOp] null) gewoon binnen die drie dagen.
+///
+/// **Waarom (Saber, 03-11-2026: "Ook het klaarstaande nummer").** De Shield nam om 18:09 de shuffle van de gsm over en
+/// sloeg daar Rehab over; om 19:23 ging de gsm na een herstart verder met... Rehab. [naarAchterenLijst] laat het spelende
+/// nummer met opzet staan.
+bool klaarstaandWeg({required int? geopendOp, required int? hierOp, required Duration plek, required int nuMs}) {
+  if (geopendOp == null || plek >= const Duration(seconds: 1)) return false;
+  if (nuMs - geopendOp > kSchudWeg.inMilliseconds) return false;
+  return hierOp == null || geopendOp > hierOp + 2000;
+}
+
+/// Het klaarstaande nummer ([Wachtrij.index]) achteraan in de speelvolgorde; het volgende staat dan klaar. Dezelfde
+/// lijst terug als er niets na komt.
+Wachtrij klaarstaandNaarAchteren(Wachtrij w) {
+  if (w.index < 0 || w.index + 1 >= w.volgorde.length) return w;
+  return (
+    origineel: w.origineel,
+    volgorde: [...w.volgorde.take(w.index), ...w.volgorde.skip(w.index + 1), w.volgorde[w.index]],
+    index: w.index,
+  );
+}
+
 /// Van [van] naar [naar] slepen.
 ///
 /// Bij shuffle UIT lopen beide lijsten gelijk en verhuist het in allebei. Bij shuffle AAN is het
@@ -1186,8 +1210,30 @@ class PlayerStore extends ChangeNotifier
     _geteld = false;
     if (t != null) {
       _geopendDezeSessie.add(t.path);
+      _geopendHierOp[t.path] = DateTime.now().millisecondsSinceEpoch;
       bijGeopend?.call(t);
     }
+  }
+
+  /// Wanneer elk nummer HIER het laatst opende (ms), voor [klaarstaandWeg].
+  final Map<String, int> _geopendHierOp = {};
+
+  /// Het klaarstaande nummer naar achteren als het intussen elders opende ([klaarstaandWeg]). Waar of het verschoof.
+  bool _klaarstaandElders() {
+    final t = current;
+    if (t == null || !shuffle || radioMode) return false;
+    if (!klaarstaandWeg(
+        geopendOp: geopendOp?.call(t),
+        hierOp: _geopendHierOp[t.path],
+        plek: position,
+        nuMs: DateTime.now().millisecondsSinceEpoch)) {
+      return false;
+    }
+    final uit = klaarstaandNaarAchteren(_nu);
+    if (identical(uit, _nu) || uit.volgorde.length != _order.length) return false;
+    _log?.line('KLAARSTAAND NAAR ACHTEREN — ${t.title}: opende intussen elders');
+    _pas(uit);
+    return true;
   }
 
   /// Het schudlogboek (schudlog.dart; Saber, 25-10-2026: "hou vanaf nu ook een log bij van alle shuffels die ik doe van
@@ -3388,6 +3434,11 @@ class PlayerStore extends ChangeNotifier
       if (!s.isPlaying) unawaited(s.playPause());
       return;
     }
+    // Het klaarstaande nummer klonk intussen elders (of werd er overgeslagen): dan het volgende ([klaarstaandWeg]).
+    if (!playing && _klaarstaandElders()) {
+      unawaited(_openCurrent());
+      return;
+    }
     if (!playing) _player.playOrPause();
   }
 
@@ -3807,8 +3858,24 @@ class PlayerStore extends ChangeNotifier
       _index = idx.clamp(0, _order.length - 1);
       _resumable = true;
       _verlaatRadio();
-      final t = current;
+      var t = current;
       if (t == null) return;
+      // Na een herstart: klonk het klaarstaande nummer intussen al — hier vóór de herstart, of op een ander toestel —
+      // dan staat het volgende klaar ([klaarstaandWeg]). Vóór [_nieuwVoorDeTelling]: die meldt het als geopend.
+      if (shuffle &&
+          klaarstaandWeg(
+              geopendOp: geopendOp?.call(t),
+              hierOp: null,
+              plek: Duration(milliseconds: posMs),
+              nuMs: DateTime.now().millisecondsSinceEpoch)) {
+        final uit = klaarstaandNaarAchteren(_nu);
+        if (!identical(uit, _nu)) {
+          _log?.line('KLAARSTAAND NAAR ACHTEREN na een herstart — ${t.title}: opende intussen al');
+          _pas(uit);
+          posMs = 0;
+          t = current!;
+        }
+      }
       currentCover = coverResolver?.call(t);
       if (shuffle) bijHervatten?.call(_order, hoe: 'na een herstart', vanaf: _index, generatie: ++_schudGeneratie);
       _nieuwVoorDeTelling(t);

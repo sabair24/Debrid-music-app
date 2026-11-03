@@ -14,7 +14,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/lan/cast_manager.dart' show naarAchterIds;
 import 'package:debridmusic/lan/state_store.dart';
 import 'package:debridmusic/models.dart';
-import 'package:debridmusic/player.dart' show Wachtrij, naarAchterenLijst, ordenVoor, schudIdsGewogen;
+import 'package:debridmusic/cloud/device_identity.dart'
+    show deviceName, setBewaardeNaamForTest, setPlatformDeviceNameForTest;
+import 'package:debridmusic/player.dart'
+    show Wachtrij, klaarstaandNaarAchteren, klaarstaandWeg, naarAchterenLijst, ordenVoor, schudIdsGewogen;
 import 'package:debridmusic/schudvolgorde.dart';
 import 'package:debridmusic/speelstanden.dart';
 
@@ -61,7 +64,8 @@ void main() {
       final s = _bron('lib/player.dart');
       expect(s, contains('    if (lees == null && duim == null && recent == null) return null;\n'));
       expect(s, contains('      if (recent != null) basis *= recentFactor(recent(t), nuMs: nu);\n'));
-      expect(s, contains('      _geopendDezeSessie.add(t.path);\n      bijGeopend?.call(t);\n'));
+      expect(s, contains('      _geopendDezeSessie.add(t.path);\n'
+          '      _geopendHierOp[t.path] = DateTime.now().millisecondsSinceEpoch;\n      bijGeopend?.call(t);\n'));
     });
   });
 
@@ -216,6 +220,102 @@ void main() {
     expect(hoofd, contains('    sharing.state.geopendNu.listen((g) {\n'));
     expect(hoofd, contains("          ], deviceId: 'spk:\$speaker');\n"));
     expect(hoofd, contains('      s.schudIds = (ids) => schudIdsGewogen(ids, nummer: verder.bron.nummer, gewicht: player.schudGewicht);\n'));
+  });
+
+  // Saber, 03-11-2026, na het schudlogboek: "Geheugen op de gsm", "Altijd de juiste naam", "Ook het klaarstaande nummer".
+  group('het klaarstaande nummer', () {
+    const uur = 3600000;
+    const nu = 100 * uur;
+    test('opende het intussen elders, dan naar achteren — maar niet als het hier al speelt of lang geleden was', () {
+      expect(klaarstaandWeg(geopendOp: nu - uur, hierOp: nu - 2 * uur, plek: Duration.zero, nuMs: nu), isTrue,
+          reason: 'de Shield sloeg Rehab over nadat de gsm het klaarzette');
+      expect(klaarstaandWeg(geopendOp: nu - 2 * uur, hierOp: nu - 2 * uur, plek: Duration.zero, nuMs: nu), isFalse,
+          reason: 'alleen hier geopend: gewoon verder');
+      expect(klaarstaandWeg(geopendOp: nu - uur, hierOp: null, plek: Duration.zero, nuMs: nu), isTrue,
+          reason: 'na een herstart: binnen drie dagen ergens geopend');
+      expect(klaarstaandWeg(geopendOp: nu - uur, hierOp: null, plek: const Duration(seconds: 30), nuMs: nu), isFalse,
+          reason: 'al begonnen: verder waar je was');
+      expect(klaarstaandWeg(geopendOp: nu - 80 * uur, hierOp: null, plek: Duration.zero, nuMs: nu), isFalse,
+          reason: 'ouder dan drie dagen');
+      expect(klaarstaandWeg(geopendOp: null, hierOp: null, plek: Duration.zero, nuMs: nu), isFalse);
+    });
+
+    test('het klaarstaande nummer gaat achteraan, het volgende staat klaar', () {
+      final a = Track(path: 'a', title: 'A', artist: 'x', album: '');
+      final b = Track(path: 'b', title: 'B', artist: 'y', album: '');
+      final c = Track(path: 'c', title: 'C', artist: 'z', album: '');
+      final w = klaarstaandNaarAchteren((origineel: [a, b, c], volgorde: [a, b, c], index: 1));
+      expect([for (final t in w.volgorde) t.path], ['a', 'c', 'b']);
+      expect(w.index, 1);
+      final laatste = (origineel: [a, b], volgorde: [a, b], index: 1);
+      expect(identical(klaarstaandNaarAchteren(laatste), laatste), isTrue, reason: 'er komt niets na: laten staan');
+    });
+
+    test('aangesloten: bij verder spelen en na een herstart', () {
+      final speler = File('lib/player.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(speler, contains('    if (!playing && _klaarstaandElders()) {\n      unawaited(_openCurrent());\n'));
+      final h = speler.indexOf('  Future<void> restore(');
+      final herstart = speler.substring(h, h + 4000);
+      expect(herstart.indexOf('klaarstaandWeg('), greaterThan(0));
+      expect(herstart.indexOf('klaarstaandWeg('), lessThan(herstart.indexOf('      _nieuwVoorDeTelling(t);')),
+          reason: 'vóór het melden als geopend, anders telt de herstart zelf als "elders geopend"');
+    });
+  });
+
+  group('geheugen op de gsm', () {
+    late Directory krab;
+    setUp(() => krab = Directory.systemTemp.createTempSync('dm_speelstanden_'));
+    tearDown(() {
+      try {
+        krab.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+
+    Speelstanden nieuw() => Speelstanden()
+      ..idVanPad = ((p) => p)
+      ..bestand = '${krab.path}${Platform.pathSeparator}speelstanden_hier.json'
+      ..bewaarNa = Duration.zero;
+    final t = Track(path: 'id1', title: 'Rehab', artist: 'Amy Winehouse', album: '');
+
+    test('wat de pc gaf en wat ergens opende, overleeft een herstart zonder pc', () async {
+      final s = nieuw();
+      s.vanServer({
+        'id1': {'count': 3, 'lastPlayedMs': 1000}
+      });
+      s.elders('id1', DateTime.now().millisecondsSinceEpoch);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final na = nieuw();
+      await na.laad();
+      expect(na.standVan(t)?.aantal, 3);
+      expect(na.geopendOp(t), isNotNull, reason: 'anders weet een shuffle zonder pc niet wat net klonk');
+    });
+
+    test('geen pc: wat hier klonk telt toch, en blijft bewaard', () async {
+      final s = nieuw()..duwOps = (ops) async => throw 'geen pc';
+      await s.meld(t);
+      expect(s.standVan(t)?.aantal, 1);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final na = nieuw();
+      await na.laad();
+      expect(na.standVan(t)?.aantal, 1);
+      na.vanServer({
+        'id1': {'count': 1, 'lastPlayedMs': DateTime.now().millisecondsSinceEpoch + 1000}
+      });
+      expect(na.standVan(t)?.aantal, 1, reason: 'weet de pc het zelf, dan niet dubbel tellen');
+    });
+
+    test('de gsm heet zoals Android de vorige keer zei, ook als het kanaal zwijgt', () {
+      setPlatformDeviceNameForTest(null);
+      setBewaardeNaamForTest('Saber ultra 26');
+      expect(deviceName(), 'Saber ultra 26');
+      setBewaardeNaamForTest(null);
+      expect(deviceName(), isNot('Saber ultra 26'));
+      final id = File('lib/cloud/device_identity.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(id, contains('            await _naamBestand.writeAsString(trimmed);\n'));
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(main, contains("    speelstanden.bestand = '\$appDir\${Platform.pathSeparator}speelstanden_hier.json';\n"
+          '    await speelstanden.laad();\n'));
+    });
   });
 }
 
