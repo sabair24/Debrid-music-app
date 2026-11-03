@@ -156,7 +156,13 @@ class Album {
       resolvedCover ??
       (embeddedIsVanEenAndere ? enriched : (embeddedCover ?? enriched));
 
+  /// Het jaar van de PLAAT, als de bibliotheek die kent — gezet bij het scheiden op plaat (plaat_indeling.dart), en op
+  /// een toestel uit de catalogus. Gaat voor de tags: "Elle a les yeux revolver" droeg 1994 van de verzamelaar waar hij
+  /// uit kwam, en de tegel van Marc Lavoine (1985) hoort 1985 te zeggen, ook voordat dat jaar in het bestand staat.
+  int? plaatJaar;
+
   int? get year {
+    if (plaatJaar != null) return plaatJaar;
     for (final t in tracks) {
       if (t.year != null) return t.year;
     }
