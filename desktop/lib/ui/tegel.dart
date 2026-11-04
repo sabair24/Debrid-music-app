@@ -476,6 +476,9 @@ class _AlbumTegelState extends State<AlbumTegel> {
         : DraaiHoes(
             controller: _draai,
             breedte: maat,
+            // De rand volgt de achterkant in zijn eigen vorm, en laat de hoeken vrij ([randVlak]).
+            achterMaat: _achter == null ? null : achterkantMaat(maat, beeldVerhouding(_achter!)),
+            hoek: kHoek12,
             voor: kaal,
             // Helemaal, in zijn eigen vorm (zie [achterkantMaat]).
             achter: _achter == null

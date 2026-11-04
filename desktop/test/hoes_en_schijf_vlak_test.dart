@@ -227,7 +227,8 @@ void main() {
     test('aangesloten: de draai kent zijn breedte, en de cd vloeit in na het terugdraaien', () {
       final draai = _bron('lib/ui/draaihoes.dart');
       expect(draai, contains('transform: rust ? Matrix4.identity() : (draaiMatrix(t, breedte: breedte)..rotateY(w)),'));
-      expect(draai, contains('    draaiMatrix(t, breedte: breedte)\n      ..translateByDouble(kant * breedte / 2, 0, 0, 1)'));
+      expect(draai, contains('    draaiMatrix(t, breedte: breedte)\n      ..translateByDouble(kant * (x ?? breedte / 2), 0, z, 1)'),
+          reason: 'de rand draait met dezelfde diepte als de hoes, aan de rand van wat je ziet ([randVlak])');
       final main = _bron('lib/main.dart');
       expect(main,
           contains('            opacity: _voorInRust ? 1 : 0,\n            duration: _voorInRust ? kSchijfInvloeien : Duration.zero,'));

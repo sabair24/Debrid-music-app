@@ -237,6 +237,93 @@ void main() {
     expect(veegSterkte(.5), closeTo(.32, 1e-9));
   });
 
+  // Saber, 04-11-2026, opname van de gsm (Melanie C — I Turn To You): "bij het draaien van de hoes zie je zwarte
+  // verticale lijnen". De rand stak boven en onder de hoes uit: half vóór het vlak (het perspectief maakte hem groter
+  // dan de hoes) en altijd zo hoog als het vak, ook bij een achterkant die breder is dan hoog.
+  group('de rand van een draaiende hoes steekt nergens uit', () {
+    // Waar punt (x, y, z) van het vlak op het scherm komt, vanaf het midden (Matrix4 staat per kolom opgeslagen).
+    Offset scherm(Matrix4 m, double x, double y, double z) {
+      final s = m.storage;
+      final w = s[3] * x + s[7] * y + s[11] * z + s[15];
+      return Offset((s[0] * x + s[4] * y + s[8] * z + s[12]) / w, (s[1] * x + s[5] * y + s[9] * z + s[13]) / w);
+    }
+
+    const w = 280.0, hoek = 12.0;
+    for (final (naam, achter) in [
+      ('vierkante achterkant', null),
+      ('cd-achterkant, breder dan hoog', const Size(w, w / 1.3)),
+      ('staande achterkant', const Size(w * .8, w)),
+    ]) {
+      test(naam, () {
+        const voor = Size(w, w);
+        const dikte = w * kHoesDikte;
+        for (var i = 1; i < 100; i++) {
+          final t = i / 100;
+          // Rond de helft staat de hoes op zijn kant en gaat de rand van de ene vorm naar de andere.
+          if (t > .38 && t < .62) continue;
+          final r = randVlak(t, voor: voor, achter: achter, hoek: hoek, dikte: dikte);
+          final vlak = t < .5 ? voor : (achter ?? voor);
+          for (final k in [-1, 1]) {
+            final m = randMatrix(t, w, k, x: r.x, z: r.z);
+            final vlakBoven = scherm(draaiMatrix(t, breedte: w), k * vlak.width / 2, -(vlak.height / 2 - hoek), 0);
+            for (final dx in [-dikte / 2, dikte / 2]) {
+              final randBoven = scherm(m, dx, -r.hoogte / 2, 0);
+              expect(randBoven.dy, greaterThanOrEqualTo(vlakBoven.dy - .5),
+                  reason: 't = $t, kant $k: de rand steekt boven de hoes uit');
+            }
+            expect(r.x, closeTo(vlak.width / 2, .01), reason: 't = $t: de rand staat aan de rand van wat je ziet');
+          }
+        }
+      });
+    }
+
+    test('halverwege op het midden, en verder altijd achter het vlak dat je ziet', () {
+      const voor = Size(w, w);
+      expect(randVlak(.5, voor: voor, dikte: 8).z, closeTo(0, 1e-9));
+      expect(randVlak(.1, voor: voor, dikte: 8).z, greaterThan(0), reason: 'voorkant: van je af is +z');
+      expect(randVlak(.9, voor: voor, dikte: 8).z, lessThan(0), reason: 'achterkant: de hoes is omgedraaid');
+      expect(randVlak(.1, voor: voor, hoek: 12, dikte: 8).hoogte, w - 24, reason: 'de afgeronde hoeken blijven vrij');
+    });
+
+    testWidgets('in het widget: bij een brede achterkant wordt de rand zo laag als die achterkant', (t) async {
+      final c = DraaiHoesController();
+      await t.pumpWidget(MaterialApp(
+        home: Center(
+          child: SizedBox.square(
+            dimension: 200,
+            child: DraaiHoes(
+              controller: c,
+              voor: _hoes,
+              achter: const ColoredBox(color: Color(0xFF224488)),
+              achterMaat: const Size(200, 150),
+              hoek: 10,
+            ),
+          ),
+        ),
+      ));
+      c.draai(heeftAchterkant: true);
+      await t.pump();
+      // Beeld voor beeld door de draai: de hoogte van de rand zolang hij er is.
+      final hoogtes = <double>[];
+      for (var i = 0; i < 30; i++) {
+        await t.pump(const Duration(milliseconds: 16));
+        final rand = find.byKey(const ValueKey('draai-rand-1'));
+        if (rand.evaluate().isNotEmpty) hoogtes.add(t.getSize(rand).height);
+      }
+      expect(hoogtes.first, 180, reason: 'eerst de voorkant van 200 hoog, zonder de hoeken');
+      expect(hoogtes.last, closeTo(130, .5), reason: 'daarna de achterkant van 150 hoog, zonder de hoeken');
+      await t.pumpAndSettle();
+    });
+
+    test('aangesloten: de tegel, de albumpagina en Nu speelt geven de vorm van de achterkant mee', () {
+      final tegel = File('lib/ui/tegel.dart').readAsStringSync();
+      expect(tegel, contains('achterMaat: _achter == null ? null : achterkantMaat(maat, beeldVerhouding(_achter!)),'));
+      final main = File('lib/main.dart').readAsStringSync();
+      expect(main, contains('achterMaat: _achter == null ? null : achterkantMaat(128, beeldVerhouding(_achter!)),'));
+      expect(main, contains('achterMaat: achter == null ? null : achterkantMaat(s, beeldVerhouding(achter)),'));
+    });
+  });
+
   test('de rand staat loodrecht op de hoes, aan zijn kant', () {
     // Op t = 0 staat de rand rechts op x = +w/2 en wijst hij naar je toe (een kwartslag).
     final m = randMatrix(0, 200, 1);
