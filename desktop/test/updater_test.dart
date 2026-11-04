@@ -7,6 +7,8 @@
 /// precies wat hier zonder toestel te toetsen valt.
 library;
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/updater.dart';
@@ -191,6 +193,71 @@ void main() {
       // Een enkele apostrof zou het script anders halverwege afkappen en `rm -rf` op iets anders
       // laten los gaan.
       expect(raar, contains(r"PAKKET='/Users/ik/Ann'\''s Mac/DebridMusic.app'"));
+    });
+  });
+
+  // Saber, 04-11-2026: elke update bleef staan — 98 installers (4,4 GB) op de pc, 14 GB cache op de gsm.
+  group('de pakketten van eerdere updates', () {
+    late Directory map;
+    setUp(() => map = Directory.systemTemp.createTempSync('dm_update_'));
+    tearDown(() {
+      if (map.existsSync()) map.deleteSync(recursive: true);
+    });
+    File maak(String naam) => File('${map.path}${Platform.pathSeparator}$naam')..writeAsStringSync('x');
+
+    test('de oude gaan weg, de nieuwe en wat niet van ons is blijven', () async {
+      final oudApk = maak('DebridMusic-12570.apk');
+      final oudExe = maak('DebridMusic-Setup-3.9.709.exe');
+      final oudZip = maak('DebridMusic-3.9.709.zip');
+      final nieuw = maak('DebridMusic-12572.apk');
+      final vreemd = maak('notities.txt');
+      final half = maak('DebridMusic-12571.apk.part');
+      final uitgepakt = Directory('${map.path}${Platform.pathSeparator}uitgepakt')..createSync();
+      final weg = await ruimOudeUpdatesOp(map, houd: nieuw.path, prullenbak: (p) async {
+        for (final x in p) {
+          File(x).deleteSync();
+        }
+        return p.toSet();
+      });
+      expect(weg, 3);
+      expect([oudApk.existsSync(), oudExe.existsSync(), oudZip.existsSync()], [false, false, false]);
+      expect(nieuw.existsSync(), isTrue, reason: 'die wordt zo geïnstalleerd');
+      expect(vreemd.existsSync(), isTrue);
+      expect(half.existsSync(), isTrue, reason: 'alleen .apk, .exe en .zip');
+      expect(uitgepakt.existsSync(), isTrue, reason: 'het uitgepakte pakket op de Mac ruimt het ruilscript zelf op');
+    });
+
+    test('naar de prullenbak waar die er is, en wat daar bleef staan telt niet', () async {
+      maak('DebridMusic-1.apk');
+      maak('DebridMusic-2.apk');
+      final nieuw = maak('DebridMusic-3.apk');
+      List<String>? gevraagd;
+      final weg = await ruimOudeUpdatesOp(map, houd: nieuw.path, prullenbak: (p) async {
+        gevraagd = p;
+        return {p.first};
+      });
+      expect(gevraagd, hasLength(2));
+      expect(weg, 1);
+    });
+
+    test('zonder prullenbak gewoon weg (Android: de cachemap van de app)', () async {
+      final oud = maak('DebridMusic-1.apk');
+      final nieuw = maak('DebridMusic-2.apk');
+      if (Platform.isWindows || Platform.isMacOS) return; // daar kiest hij de prullenbak; hierboven getoetst
+      expect(await ruimOudeUpdatesOp(map, houd: nieuw.path), 1);
+      expect(oud.existsSync(), isFalse);
+    });
+
+    test('een map die er niet is, is geen fout', () async {
+      map.deleteSync(recursive: true);
+      expect(await ruimOudeUpdatesOp(map, houd: ''), 0);
+    });
+
+    test('aangesloten: elke haal ruimt de vorige op, en niet het pakket dat hij net gaat schrijven', () {
+      final bron = File('lib/updater.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(bron, contains('    if (await doel.exists()) await doel.delete();\n'
+          '    // En de pakketten van eerdere updates: die dienen nergens meer voor ([ruimOudeUpdatesOp]).\n'
+          '    unawaited(ruimOudeUpdatesOp(map, houd: doel.path));\n'));
     });
   });
 }

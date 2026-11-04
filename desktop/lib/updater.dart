@@ -27,7 +27,41 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'paths.dart';
+import 'prullenbak.dart' show heeftPrullenbak, naarPrullenbak;
 import 'ui/kleuren.dart';
+
+/// De pakketten van eerdere updates in [map], behalve [houd]: geeft terug hoeveel er weggingen.
+///
+/// Elke update bleef staan (Saber, 04-11-2026: "Ja, dichten"): op de pc stonden er toen 98 in %TEMP%\update, 4,4 GB
+/// sinds 24-10, en de gsm had 14 GB cache. Alleen de eigen pakketten ([_eigenPakket]); wat er verder in de map staat,
+/// zoals het uitgepakte pakket op de Mac, blijft. Op de pc en de Mac naar de prullenbak, op Android weg: daar is geen
+/// prullenbak, en het is de cachemap van de app. [prullenbak] is ingespoten voor de toetsen.
+Future<int> ruimOudeUpdatesOp(Directory map,
+    {required String houd, Future<Set<String>> Function(List<String> paden)? prullenbak}) async {
+  final oud = <File>[];
+  try {
+    await for (final e in map.list(followLinks: false)) {
+      if (e is File && e.path != houd && _eigenPakket.hasMatch(e.path.split(Platform.pathSeparator).last)) oud.add(e);
+    }
+  } catch (_) {
+    return 0;
+  }
+  if (oud.isEmpty) return 0;
+  final naar = prullenbak ?? (heeftPrullenbak ? (List<String> p) => naarPrullenbak(p) : null);
+  if (naar != null) return (await naar([for (final f in oud) f.path])).length;
+  var weg = 0;
+  for (final f in oud) {
+    try {
+      await f.delete();
+      weg++;
+    } catch (_) {/* in gebruik: de volgende update */}
+  }
+  return weg;
+}
+
+/// Hoe [Updater.haal] zijn pakketten noemt: `DebridMusic-12572.apk`, `DebridMusic-Setup-3.9.710.exe`,
+/// `DebridMusic-3.9.710.zip`.
+final _eigenPakket = RegExp(r'^DebridMusic-[^\\/]*\.(apk|exe|zip)$');
 
 /// De APK's staan in een APARTE, openbare repo. De broncode-repo was ooit privé en de ingebouwde
 /// updater moest zonder in te loggen bij de bestanden kunnen; dat is nog steeds waar deze naar
@@ -457,6 +491,8 @@ class Updater {
 
     // Een half binnengehaald bestand van een vorige poging is geen APK maar ziet er wel zo uit.
     if (await doel.exists()) await doel.delete();
+    // En de pakketten van eerdere updates: die dienen nergens meer voor ([ruimOudeUpdatesOp]).
+    unawaited(ruimOudeUpdatesOp(map, houd: doel.path));
 
     final client = http.Client();
     try {
