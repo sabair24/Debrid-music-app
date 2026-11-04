@@ -5100,7 +5100,7 @@ class _HomeShellState extends State<HomeShell> {
                 top: MediaQuery.paddingOf(context).top + 8,
                 left: 12,
                 right: 12,
-                child: const _NummerKeuzeBalk(),
+                child: _NummerKeuzeBalk(schil: this.context),
               ),
             // "Hier verder luisteren" stond hier, als balk boven de spelerbalk. Saber, 18-10-2026:
             // "het stoort, en als ik het wegklik kan ik het niet meer selecteren". Nu in de spelerbalk
@@ -6932,7 +6932,13 @@ class _KeuzeOfNummer extends StatelessWidget {
 /// kunnen selecteren"): op dit toestel zetten, eraf halen (met de vraag ervóór), alles kiezen, en bij één nummer het
 /// menu van dat nummer — lang drukken opende dat eerst, en het mag niet zoekraken.
 class _NummerKeuzeBalk extends StatelessWidget {
-  const _NummerKeuzeBalk();
+  const _NummerKeuzeBalk({required this.schil});
+
+  /// De context van de schil, voor het menu van één nummer. Niet die van deze balk: de balk is weg zodra het kiezen
+  /// stopt, en een keuze in het menu handelt pas als het blad dicht is. Saber, 04-11-2026, op de gsm: "Staat ook op…"
+  /// deed niets — `Navigator.of` op de gesloten balk ("Null check operator used on a null value"), en zo ook "Naar ander
+  /// album…", "Verwijderen…", "Ga naar artiest" en de downloadkeuzes.
+  final BuildContext schil;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -6985,7 +6991,7 @@ class _NummerKeuzeBalk extends StatelessWidget {
                       onPressed: () {
                         final t = gekozen.single;
                         nummerKeuze.stop();
-                        _toonItemMenu(context, _nummerMenu(context, t));
+                        _toonItemMenu(schil, _nummerMenu(schil, t));
                       }),
               ]),
             ),

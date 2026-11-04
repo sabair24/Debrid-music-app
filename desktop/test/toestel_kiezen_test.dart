@@ -124,7 +124,11 @@ void main() {
     expect(main, contains('onTap: () => nummerKeuze.actief ? nummerKeuze.wissel(t) : speelGetikt(context, tracks, i),'));
     expect(main, contains(': (_isTouch ? () => nummerKeuze.begin(t, alles: () => tracks) : null),'));
     expect(main, contains(': (_isTouch ? () => nummerKeuze.begin(t, alles: () => widget.queue) : null),'));
-    expect(main, contains('              child: const _NummerKeuzeBalk(),\n'));
+    expect(main, contains('              child: _NummerKeuzeBalk(schil: this.context),\n'));
+    // Het menu van één nummer aan de schil, niet aan de balk: die is weg als het kiezen stopt, en elke keuze die een
+    // venster opende deed dan niets (Saber, 04-11-2026: "Staat ook op…" op de gsm).
+    expect(main, contains('                        nummerKeuze.stop();\n'
+        '                        _toonItemMenu(schil, _nummerMenu(schil, t));\n'));
     expect(main, contains('        if (nummerKeuze.actief) {\n          nummerKeuze.stop();\n          return;\n        }'),
         reason: 'TERUG stopt eerst het kiezen');
     expect(main, contains('canPop: !nummerKeuze.actief && terugVanaf('));
