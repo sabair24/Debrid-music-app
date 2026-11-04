@@ -177,8 +177,10 @@ class AppSettings extends ChangeNotifier {
   int nieuwOpToestelGB = 150;
 
   /// De hoezen en scans van de hele bibliotheek vooraf op dit toestel, thuis op wifi (scans_vooraf.dart; Saber,
-  /// 02-11-2026). Standaard aan op een Android-gsm.
-  bool scansVooraf = Platform.isAndroid;
+  /// 02-11-2026). Standaard aan op elk toestel: ook op de Mac, de iPad en de Shield (Saber, 04-11-2026: daar toonde het
+  /// albumscherm de getekende schijf in plaats van de cd, en begon een nummer met een lege cd). Een eigen sleutel
+  /// (`scans_vooraf_alle`): de oude stond daar al bewaard als uit.
+  bool scansVooraf = true;
 
   /// Mag de app zelf wisselen op grond van wifi of mobiel?
   ///
@@ -411,7 +413,7 @@ class AppSettings extends ChangeNotifier {
         offlineKwaliteit = (m['offline_kwaliteit'] ?? 'cd') as String;
         nieuwOpToestel = (m['nieuw_op_toestel'] ?? Platform.isAndroid) as bool;
         nieuwOpToestelGB = ((m['nieuw_op_toestel_gb'] as num?) ?? 150).toInt().clamp(1, 4000);
-        scansVooraf = (m['scans_vooraf'] ?? Platform.isAndroid) as bool;
+        scansVooraf = (m['scans_vooraf_alle'] ?? true) as bool;
         laatsteWeg = (m['laatste_weg'] ?? '') as String;
         tikKeuze = (m['tik_keuze'] ?? 'vragen') as String;
         appVolume = ((m['app_volume'] as num?) ?? 100).toDouble().clamp(0, 100).toDouble();
@@ -473,7 +475,7 @@ class AppSettings extends ChangeNotifier {
         'offline_kwaliteit': offlineKwaliteit,
         'nieuw_op_toestel': nieuwOpToestel,
         'nieuw_op_toestel_gb': nieuwOpToestelGB,
-        'scans_vooraf': scansVooraf,
+        'scans_vooraf_alle': scansVooraf,
         'laatste_weg': laatsteWeg,
         'tik_keuze': tikKeuze,
         'app_volume': appVolume,
