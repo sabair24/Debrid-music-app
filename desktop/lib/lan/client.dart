@@ -762,6 +762,31 @@ class RemoteClient {
   /// [onbekend] is waar als de pc de vraag niet kent — een oudere pc. Dan rekent dit toestel zelf;
   /// bij een pc die gewoon even niet antwoordt niet, want dat kost honderd vragen aan Deezer voor iets
   /// wat de pc straks gewoon heeft.
+  /// Ontdek van de pc (`ontdek.dart`). [onbekend] = de pc kent `/api/ontdek` nog niet (oude versie): dan zoekt dit
+  /// toestel zelf, zoals vroeger. Met [ververs] wacht de pc tot de nieuwe trekking er is (hoogstens 45 s).
+  Future<({Map<String, dynamic>? lijst, bool onbekend})> ontdek({bool ververs = false}) async {
+    try {
+      final res = await _get('/api/ontdek', query: ververs ? const {'ververs': '1'} : null)
+          .timeout(const Duration(seconds: 60));
+      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      return (lijst: j is Map<String, dynamic> ? j : null, onbekend: false);
+    } on RemoteException catch (e) {
+      return (lijst: null, onbekend: e.statusCode == 404);
+    } catch (_) {
+      return (lijst: null, onbekend: false);
+    }
+  }
+
+  /// Een nummer uit Ontdek wegtikken op de pc, of met [terug] ongedaan maken. Waar als de pc het bewaarde.
+  Future<bool> ontdekWeg(String artiest, String titel, {String via = '', bool terug = false}) async {
+    try {
+      await ask('/api/ontdek/weg', {'artiest': artiest, 'titel': titel, 'via': via, 'terug': terug});
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// "Aanbevolen voor jou" van de pc. [onbekend] = de pc kent `/api/aanbevolen` nog niet (oude versie).
   Future<({Map<String, dynamic>? lijst, bool onbekend})> aanbevolen({bool ververs = false}) async {
     try {

@@ -101,6 +101,10 @@ double hoogteVanTegel(BuildContext context, {double hoes = kTegelHoes}) {
 double _regelhoogte(TextScaler schaal, TextStyle stijl) =>
     (schaal.scale(stijl.fontSize!) * _regel).ceilToDouble();
 
+/// De hoogte van één extra regel onder een tegel in [stijl], op de tekstschaal van dit toestel: voor [tegelRaster]'s
+/// `extra` als een tegel meer tekst draagt dan titel en ondertitel (Ontdek: de reden; 04-11-2026).
+double tegelRegel(BuildContext context, TextStyle stijl) => _regelhoogte(MediaQuery.textScalerOf(context), stijl);
+
 /// Een raster van tegels waarin de hoes vierkant blijft.
 ///
 /// Een vaste verhouding (`childAspectRatio: .78`) gaf de tegel een vaste hoogte per breedte, en de
@@ -234,6 +238,28 @@ class _AfspeelRondjeState extends State<_AfspeelRondje> {
       );
 }
 
+/// Het rondje om [AlbumTegel.knop]: wit zoals de afspeelknop, met de knop (die zijn eigen kleur houdt) erin.
+class _KnopRondje extends StatelessWidget {
+  const _KnopRondje({required this.maat, required this.child});
+
+  final double maat;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        key: const ValueKey('tegel-knop'),
+        width: maat,
+        height: maat,
+        decoration: const BoxDecoration(
+          color: Color(0xF2FFFFFF),
+          shape: BoxShape.circle,
+          boxShadow: [BoxShadow(color: Color(0x73000000), blurRadius: 14, offset: Offset(0, 4))],
+        ),
+        alignment: Alignment.center,
+        child: FittedBox(child: child),
+      );
+}
+
 /// Een album (of een nummer, of een aanbeveling) als tegel.
 ///
 /// [breedte] leeg laten betekent "vul de cel waarin je staat" — dat is het raster op Albums. Een
@@ -255,9 +281,23 @@ class AlbumTegel extends StatefulWidget {
     this.achterkant,
     this.schijf,
     this.onAfspelen,
+    this.knop,
+    this.knoppenAltijd = false,
+    this.knopAltijd = false,
     this.voorladen,
     this.spiegel,
   });
+
+  /// Een tweede knop op de hoes, links onderaan in een wit rondje (Ontdek: de downloadknop met zijn voortgang; Saber,
+  /// 04-11-2026: "Tegels met ▶ en ⬇ op de tegel"). Verschijnt zoals de afspeelknop, bij het aanwijzen.
+  final Widget? knop;
+
+  /// De afspeelknop en [knop] altijd tonen, ook zonder muis: op een aanraakscherm (iPad) wijst niemand iets aan.
+  final bool knoppenAltijd;
+
+  /// Alleen [knop] altijd tonen: zolang hij iets doet (een download loopt), hoort hij niet weg te gaan als de muis
+  /// van de tegel gaat.
+  final bool knopAltijd;
 
   /// De spiegeling onder de hoes: dezelfde bron als de hoes ([spiegelVan] voor bytes, [spiegelVanUrl]
   /// voor een url). Null = geen spiegeling.
@@ -477,7 +517,8 @@ class _AlbumTegelState extends State<AlbumTegel> {
     ]);
     final schijf = widget.schijf;
     final speel = widget.onAfspelen;
-    if (isTv || (schijf == null && speel == null)) return metSchaduw;
+    final knop = widget.knop;
+    if (isTv || (schijf == null && speel == null && knop == null)) return metSchaduw;
     // De muis op de hoes: de cd schuift er een stuk rechts uit (zoals in de lijst op de artiestpagina)
     // en er komt een ronde afspeelknop op. Niet zolang de achterkant voor staat.
     //
@@ -485,6 +526,10 @@ class _AlbumTegelState extends State<AlbumTegel> {
     // later, en die dekte een cd die alleen naar rechts schoof voor het grootste deel af; zo blijft
     // hij binnen de eigen cel plus de tussenruimte.
     final uit = _muis && _draai.voorInRust.value;
+    // De knoppen: bij het aanwijzen, of altijd ([AlbumTegel.knoppenAltijd], [AlbumTegel.knopAltijd]).
+    final speelZien = uit || widget.knoppenAltijd;
+    final knopZien = uit || widget.knoppenAltijd || widget.knopAltijd;
+    final rondje = (maat * .26).clamp(34.0, 52.0);
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -514,26 +559,42 @@ class _AlbumTegelState extends State<AlbumTegel> {
             ),
           ),
         AnimatedSlide(
-          offset: Offset(uit ? -kTegelSchijfUit / 2 : 0, 0),
+          // Alleen opzij als er een cd uitschuift: zonder cd schoof de hoes voor niets naar links.
+          offset: Offset(uit && schijf != null ? -kTegelSchijfUit / 2 : 0, 0),
           duration: const Duration(milliseconds: 320),
           curve: Curves.easeOutBack,
           child: Stack(clipBehavior: Clip.none, children: [
         metSchaduw,
-        if (speel != null && _extraGebouwd)
+        if (speel != null && (_extraGebouwd || widget.knoppenAltijd))
           Positioned(
             right: maat * .06,
             bottom: maat * .06,
             child: AnimatedScale(
-              scale: uit ? 1 : .6,
+              scale: speelZien ? 1 : .6,
               duration: const Duration(milliseconds: 220),
               curve: Curves.easeOutBack,
               child: AnimatedOpacity(
-                opacity: uit ? 1 : 0,
+                opacity: speelZien ? 1 : 0,
                 duration: const Duration(milliseconds: 160),
                 child: IgnorePointer(
-                  ignoring: !uit,
-                  child: _AfspeelRondje(maat: (maat * .26).clamp(34.0, 52.0), onTap: speel),
+                  ignoring: !speelZien,
+                  child: _AfspeelRondje(maat: rondje, onTap: speel),
                 ),
+              ),
+            ),
+          ),
+        if (knop != null && (_extraGebouwd || widget.knoppenAltijd || widget.knopAltijd))
+          Positioned(
+            left: maat * .06,
+            bottom: maat * .06,
+            child: AnimatedScale(
+              scale: knopZien ? 1 : .6,
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutBack,
+              child: AnimatedOpacity(
+                opacity: knopZien ? 1 : 0,
+                duration: const Duration(milliseconds: 160),
+                child: IgnorePointer(ignoring: !knopZien, child: _KnopRondje(maat: rondje, child: knop)),
               ),
             ),
           ),

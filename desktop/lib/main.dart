@@ -118,6 +118,8 @@ import 'flac_tags.dart';
 import 'groeistroom.dart';
 import 'mp3_tags.dart';
 import 'aanbevolen.dart' show AanbevolenLijst, AanbevolenVoorJou;
+import 'ontdek.dart';
+import 'ontdek_bronnen.dart';
 import 'afspeellijsten.dart';
 import 'favorieten.dart';
 import 'buitenproef.dart';
@@ -1719,6 +1721,54 @@ Future<void> main() async {
     );
     AanbevolenVoorJou.pc = aanbevolen;
     unawaited(aanbevolen.laad().then((_) => aanbevolen.start()));
+    // Ontdek (Saber, 04-11-2026; `ontdek.dart`): elke dag ~50 nummers uit Deezer, Last.fm en Claude, gespreid zoals je
+    // bibliotheek en één per artiest. Een toestel vraagt het de pc (`/api/ontdek`).
+    List<OntdekEigen> ontdekEigen() => [
+          for (final t in library.tracks)
+            () {
+              final s = speelstanden.standVan(t);
+              final al = library.albumForPath(t.path);
+              return (
+                artiest: t.artist,
+                album: t.album,
+                titel: t.title,
+                genre: t.genre,
+                jaar: t.year,
+                beurten: s?.aantal ?? 0,
+                laatstMs: s?.laatstMs ?? 0,
+                groen: oordelen.vanTrack(t) == Oordeel.omhoog,
+                favoriet: favorieten.isFavorietTrack(t) || (al != null && favorieten.isFavorietAlbum(al)),
+              );
+            }(),
+        ];
+    Set<String>? ontdekBezit;
+    library.addListener(() => ontdekBezit = null);
+    late final OntdekVoorJou ontdek;
+    ontdek = OntdekVoorJou(
+      artiesten: (weg) => ontdekArtiesten(ontdekEigen(),
+          tags: library.tagsOf, nuMs: DateTime.now().millisecondsSinceEpoch, weg: weg, overslaan: _genericArtist),
+      heb: (a, t) => inBezit(
+          ontdekBezit ??= {
+            for (final x in library.tracks) ...bezitSleutelsVan(x.artist, x.title),
+          },
+          a,
+          t),
+      bestand: appFile('ontdek.json'),
+      wegBestand: appFile('ontdek_weg.json'),
+      deezer: deezerOntdekBron(rec, eigen: () => {for (final t in library.tracks) ontdekArtiest(t.artist)}),
+      lastfm: lastfmOntdekBron(_lastfmBron, () => settings.lastfmKey, rec),
+      claude: claudeOntdekBron(AiService(() => settings.anthropicKey, werkruimteVan: () => settings.anthropicWorkspace),
+          () {
+        final eigen = ontdekEigen();
+        final nuMs = DateTime.now().millisecondsSinceEpoch;
+        return ontdekProfiel(
+            eigen, ontdekArtiesten(eigen, tags: library.tagsOf, nuMs: nuMs, weg: ontdek.weg, overslaan: _genericArtist),
+            nuMs: nuMs, weggetikt: ontdek.weg.namen());
+      }, rec),
+      log: WarmLog('$logDir${Platform.pathSeparator}releases.log').line,
+    );
+    OntdekVoorJou.pc = ontdek;
+    unawaited(ontdek.laad().then((_) => ontdek.start()));
     // Taal en stijl per artiest (Last.fm), voor de bibliotheek — zie [_vulArtiestTags].
     unawaited(_vulArtiestTags(library, settings));
   }
@@ -25093,17 +25143,99 @@ class _NieuwMeerPaginaState extends State<NieuwMeerPagina> {
   }
 }
 
-/// Hoe lang een oogst van Ontdek blijft staan als je het tabblad verlaat en terugkomt.
+/// Hoe lang een opgehaalde lijst van Ontdek blijft staan als je het tabblad verlaat en terugkomt, voor hij hem
+/// opnieuw aan de pc vraagt. Tot dan staat hij er meteen (Saber, 05-10-2026: "de app moet snel navigeren").
 const kOntdekBewaard = Duration(minutes: 30);
 
-/// Ontdek als raster van hoezen: op een pc, Mac en iPad (Saber, 18-10-2026). Op een gsm (smal) en een
-/// tv blijft het de lijst: daar staan de knoppen voor afspelen en radio naast elk nummer, en een
-/// afstandsbediening heeft geen rechtermuisknop.
+/// Ontdek als raster van hoezen: op een pc, Mac en iPad (Saber, 18-10-2026; 04-11-2026: "Tegels met ▶ en ⬇ op de
+/// tegel"). Op een gsm (smal) en een tv blijft het de lijst, met ▶, radio en ⬇ naast elk nummer.
 bool ontdekAlsRaster({required bool tv, required bool smal}) => !tv && !smal;
 
-/// Mag de bewaarde oogst van [om] op [nu] nog getoond worden?
+/// Mag de bewaarde lijst van [om] op [nu] nog staan zonder hem opnieuw te vragen?
 bool ontdekBewaardBruikbaar(DateTime? om, DateTime nu) =>
     om != null && !nu.isBefore(om) && nu.difference(om) < kOntdekBewaard;
+
+/// Wat Ontdek op het scherm zet: de lijst zonder wat je nu hebt ([bezit], [bezitSleutelsVan]) en wat je hier
+/// wegtikte ([weg]), hoogstens [max]. Wat je ophaalt verdwijnt zo vanzelf, en de reserve schuift in (Saber,
+/// 04-11-2026: "Verdwijnt meteen, er komt een nieuw bij").
+List<OntdekNummer> ontdekZichtbaar(List<OntdekNummer> lijst,
+        {required Set<String> bezit, Set<String> weg = const {}, int max = kOntdekGetoond}) =>
+    [
+      for (final n in lijst)
+        if (!inBezit(bezit, n.nummer.artist, n.nummer.title) && !weg.contains(n.sleutel)) n,
+    ].take(max).toList();
+
+/// De regel onder de kop: hoe vers de lijst is en hoeveel erin staan.
+String ontdekKopregel({required int berekendMs, required int aantal, required DateTime nu, bool bezig = false}) {
+  if (bezig) return 'Een nieuwe lijst wordt samengesteld…';
+  if (berekendMs <= 0 || aantal == 0) return '';
+  final d = DateTime.fromMillisecondsSinceEpoch(berekendMs);
+  final dag = DateTime(d.year, d.month, d.day), vandaag = DateTime(nu.year, nu.month, nu.day);
+  final verschil = vandaag.difference(dag).inDays;
+  final wanneer = verschil <= 0 ? 'Vandaag' : (verschil == 1 ? 'Van gisteren' : 'Van ${d.day}-${d.month}');
+  return '$wanneer · $aantal ${aantal == 1 ? 'nummer' : 'nummers'}';
+}
+
+/// Eén regel van Ontdek op een gsm en een tv: hoes (52), de titel tot twee regels, de artiest (aantikbaar), de reden
+/// licht eronder, en rechts [knoppen]. Publiek voor de toets die nameet dat het op een smalle gsm past.
+class OntdekRegel extends StatelessWidget {
+  const OntdekRegel({super.key, required this.nummer, required this.knoppen, this.onTap, this.onMenu});
+
+  final OntdekNummer nummer;
+  final Widget knoppen;
+  final VoidCallback? onTap;
+
+  /// Lang drukken (null) of de rechtermuisknop (met de plek).
+  final void Function(Offset? bij)? onMenu;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = nummer.nummer;
+    final menu = onMenu;
+    return InkWell(
+      key: ValueKey('ontdek-rij-${nummer.sleutel}'),
+      canRequestFocus: onTap != null,
+      onTap: onTap,
+      onLongPress: menu == null ? null : () => menu(null),
+      onSecondaryTapUp: menu == null ? null : (d) => menu(d.globalPosition),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+        child: Row(
+          children: [
+            _netCover(t.cover, size: 52, radius: 8),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(t.title,
+                      key: const ValueKey('ontdek-titel'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15, height: 1.2)),
+                  const SizedBox(height: 2),
+                  _artistLine(splitFeatured(t.artist, t.title), TextStyle(color: _muted, fontSize: 12.5)),
+                  if (nummer.waarom.isNotEmpty)
+                    Text(nummer.waarom,
+                        key: const ValueKey('ontdek-waarom'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: _muted.withValues(alpha: .7), fontSize: 11.5)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 4),
+            knoppen,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Op een gsm (opzij vegen) en een iPad kan een regel weggeveegd worden; niet met een muis, niet op een tv.
+bool get _ontdekVegen => _isTouch && !isTv;
 
 class OntdekView extends StatefulWidget {
   const OntdekView({super.key});
@@ -25112,110 +25244,227 @@ class OntdekView extends StatefulWidget {
 }
 
 class _OntdekViewState extends State<OntdekView> {
-  /// De laatste oogst, zolang de app draait.
-  ///
-  /// **Gemeten op 05-10-2026 op Sabers S26:** elke keer dat je het tabblad Ontdek opende, stond er
-  /// opnieuw 5 seconden een draaiwieltje — ook als je er net nog was. Het tabblad wordt bij elke
-  /// wissel opnieuw opgebouwd, en dan vroeg hij alles opnieuw aan Deezer. Saber: *"de app moet snel
-  /// navigeren tussen alle schermen"*. Nu staat de vorige oogst er meteen; de verversknop haalt nog
-  /// steeds een nieuwe.
-  static List<RecTrack>? _bewaard;
+  /// De laatste lijst, zolang de app draait: bij een volgend bezoek staat hij er meteen.
+  static List<OntdekNummer>? _bewaard;
+  static int _bewaardBerekend = 0;
   static DateTime? _bewaardOm;
 
+  /// Wat hier weggetikt is. Meteen weg van het scherm; de pc weet het een tel later en laat het daarna zelf weg.
+  static final Set<String> _wegHier = {};
+
   final _rec = RecommendService();
-  List<RecTrack> _tracks = [];
-  bool _busy = false;
+  List<OntdekNummer> _lijst = const [];
+  int _berekendMs = 0;
+  bool _laden = false;
+  bool _ververst = false;
   String? _status;
-  int? _expanded;
-  int? _playing; // row whose source is being resolved (shows a spinner)
+
+  // De sleutels van je bibliotheek, opnieuw zodra die verandert (een nummer dat landt, verdwijnt meteen).
+  List<Track>? _bezitVan;
+  Set<String> _bezit = const {};
 
   @override
   void initState() {
     super.initState();
     final b = _bewaard;
-    if (b != null && ontdekBewaardBruikbaar(_bewaardOm, DateTime.now())) {
-      // Opnieuw gezeefd tegen wat je NU hebt: wat je intussen hebt binnengehaald hoort er niet meer
-      // tussen te staan.
-      final vers = nogNietInBezit(b, bezitSleutels(context.read<LibraryStore>().tracks));
-      if (vers.isNotEmpty) {
-        _tracks = vers;
-        return;
-      }
+    if (b != null) {
+      _lijst = b;
+      _berekendMs = _bewaardBerekend;
+      if (ontdekBewaardBruikbaar(_bewaardOm, DateTime.now())) return;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
-  Future<void> _load() async {
-    final lib = context.read<LibraryStore>();
-    final seeds = lib.artists.where((a) => !_genericArtist(a)).toList()..shuffle();
-    if (seeds.isEmpty) {
-      setState(() => _status = 'Nog geen bibliotheek om op te ontdekken.');
-      return;
-    }
+  void _toon(OntdekLijst l) {
+    if (l.nummers.isEmpty) return;
+    _bewaard = l.nummers;
+    _bewaardBerekend = l.berekendMs;
+    _bewaardOm = DateTime.now();
+    if (!mounted) return;
     setState(() {
-      _busy = true;
-      _tracks = [];
-      _status = null;
-      _expanded = null;
+      _lijst = l.nummers;
+      _berekendMs = l.berekendMs;
     });
-    final owned = bezitSleutels(lib.tracks);
-    List<RecTrack> recs;
-    // "The lookup failed" and "your library already has everything it suggested" are different
-    // answers, and they were both reported as the second one. Told that nothing new was found, the
-    // obvious conclusion is that there is nothing left to discover — not that the request never
-    // arrived. Refreshing then looks pointless when it is exactly the thing that would help.
-    var failed = false;
-    try {
-      recs = await _rec.discover(seeds.take(4).toList());
-    } catch (_) {
-      recs = const [];
-      failed = true;
-    }
-    final fresh = nogNietInBezit(recs, owned);
-    if (!failed && recs.isNotEmpty) {
-      _bewaard = recs;
-      _bewaardOm = DateTime.now();
-    }
-    if (mounted) {
-      setState(() {
-        _tracks = fresh;
-        _busy = false;
-        _status = fresh.isNotEmpty
-            ? null
-            : failed
-                ? 'De suggesties konden niet worden opgehaald. Zit je online? Probeer het nog eens.'
-                : 'Niets nieuws gevonden — ververs eens.';
-      });
-    }
   }
 
-  Future<void> _play(int i, RecTrack t) async {
-    final online = context.read<OnlineService>();
-    final player = context.read<PlayerStore>();
-    setState(() => _playing = i);
-    _srcToast(context, 'Bron voorbereiden voor ${t.title}…');
+  /// De lijst van de pc (op de pc zelf: van [OntdekVoorJou.pc]). Met [ververs] een nieuwe trekking.
+  Future<void> _load({bool ververs = false}) async {
+    final lib = context.read<LibraryStore>();
+    setState(() {
+      _laden = _lijst.isEmpty;
+      _ververst = ververs;
+      _status = null;
+    });
+    OntdekLijst? l;
+    String? fout;
     try {
-      final url = await online.resolveRadio(t.artist, t.title, instantOnly: false);
-      if (!mounted) return;
-      if (url == null) {
-        _srcToast(context, 'Geen bron gevonden — open de bronnen (⬇) om te downloaden.');
-        return;
+      final pc = OntdekVoorJou.pc;
+      if (pc != null) {
+        if (ververs || pc.lijst == null) {
+          await pc.ververs();
+        } else if (pc.verouderd) {
+          // Van gisteren: die van vandaag komt zo, en tot dan de vorige.
+          unawaited(pc.ververs().then((_) {
+            if (mounted) _toon(OntdekLijst(pc.lijst?.berekendMs ?? 0, pc.zichtbaar));
+          }));
+        }
+        l = OntdekLijst(pc.lijst?.berekendMs ?? 0, pc.zichtbaar);
+      } else if (lib.remote case final c?) {
+        final r = await c.ontdek(ververs: ververs);
+        if (r.onbekend) {
+          l = await _zelf(lib);
+        } else if (r.lijst case final j?) {
+          l = OntdekLijst.fromJson(j);
+          if (l != null && l.nummers.isNotEmpty) unawaited(_bewaarHier(j));
+          // Rekent de pc nog (de eerste keer van de dag), dan straks nog eens kijken.
+          if (j['bezig'] == true && !ververs) {
+            Timer(const Duration(seconds: 25), () {
+              if (mounted && !_ververst) unawaited(_load());
+            });
+          }
+        } else {
+          l = await _uitBestand();
+          fout = 'Je pc antwoordde niet — dit is de vorige lijst.';
+        }
+      } else {
+        l = await _uitBestand() ?? await _zelf(lib);
       }
-      player.playUrl(url, title: t.title, artist: t.artist);
     } catch (e) {
-      if (mounted) _srcToast(context, 'Kan niet afspelen: $e');
-    } finally {
-      if (mounted) setState(() => _playing = null);
+      fout = 'Ontdek kon niet geladen worden: $e';
     }
+    if (!mounted) return;
+    if (l != null) _toon(l);
+    setState(() {
+      _laden = false;
+      _ververst = false;
+      _status = _lijst.isEmpty
+          ? (fout ?? 'Nog niets gevonden — ververs over een minuut.')
+          : (l == null || l.nummers.isEmpty ? fout : null);
+    });
+  }
+
+  /// Op een toestel bewaard, voor als de pc er niet is.
+  Future<void> _bewaarHier(Map<String, dynamic> j) async {
+    try {
+      await appFile('ontdek.json').writeAsString(jsonEncode(j));
+    } catch (_) {}
+  }
+
+  Future<OntdekLijst?> _uitBestand() async {
+    try {
+      final f = appFile('ontdek.json');
+      if (await f.exists()) return OntdekLijst.fromJson(jsonDecode(await f.readAsString()));
+    } catch (_) {}
+    return null;
+  }
+
+  /// Een pc die Ontdek nog niet kent (of geen pc): dan zoekt dit toestel zelf, zoals vroeger, maar wel met één nummer
+  /// per artiest en zonder versies ([stelOntdekSamen]).
+  Future<OntdekLijst?> _zelf(LibraryStore lib) async {
+    final seeds = lib.artists.where((a) => !_genericArtist(a)).toList()..shuffle();
+    if (seeds.isEmpty) return null;
+    final recs = await _rec.discover(seeds.take(6).toList());
+    final bezit = {for (final t in lib.tracks) ...bezitSleutelsVan(t.artist, t.title)};
+    final nummers = stelOntdekSamen({
+      Ontdekbron.deezer: [for (final t in recs) OntdekNummer(t, bron: Ontdekbron.deezer)],
+    }, heb: (a, t) => inBezit(bezit, a, t), nuMs: DateTime.now().millisecondsSinceEpoch);
+    return OntdekLijst(DateTime.now().millisecondsSinceEpoch, nummers);
+  }
+
+  /// Wegtikken ("niet voor mij"): meteen van het scherm, met Ongedaan, en naar de pc die het onthoudt.
+  void _weg(OntdekNummer n) {
+    setState(() => _wegHier.add(n.sleutel));
+    unawaited(_stuurWeg(n, terug: false));
+    final melder = ScaffoldMessenger.maybeOf(context);
+    melder
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text('“${n.nummer.title}” komt niet meer in Ontdek.'),
+        duration: kMeldingMetKnop,
+        persist: false,
+        action: SnackBarAction(
+          label: 'Ongedaan',
+          onPressed: () {
+            if (mounted) setState(() => _wegHier.remove(n.sleutel));
+            unawaited(_stuurWeg(n, terug: true));
+          },
+        ),
+      ));
+  }
+
+  Future<void> _stuurWeg(OntdekNummer n, {required bool terug}) async {
+    final pc = OntdekVoorJou.pc;
+    if (pc != null) return pc.zetWeg(n.nummer.artist, n.nummer.title, via: n.via, terug: terug);
+    await context.read<LibraryStore>().remote?.ontdekWeg(n.nummer.artist, n.nummer.title, via: n.via, terug: terug);
+  }
+
+  /// ⬇: meteen de beste bron, zoals in Online zoeken ([haalTrefferBesteBron]; Saber, 04-11-2026).
+  void _haal(OntdekNummer n) {
+    final t = n.nummer;
+    unawaited(haalTrefferBesteBron(
+        context,
+        CatalogTrackHit(t.title, t.artist, t.cover,
+            album: t.album.isEmpty ? null : t.album, seconden: t.seconds > 0 ? t.seconds : null),
+        sleutel: zoekSleutelVoor(t.artist, t.title)));
+  }
+
+  /// ▶: ophalen en spelen, zoals een nieuwe release ([speelGetiktNieuw]): met een wachtrij eerst de keuze.
+  void _speel(OntdekNummer n) {
+    final t = n.nummer;
+    unawaited(speelGetiktNieuw(context,
+        artiest: t.artist,
+        titel: t.title,
+        seconden: t.seconds > 0 ? t.seconds : null,
+        album: t.album.isEmpty ? null : t.album,
+        hoes: t.cover));
+  }
+
+  /// Naar de plaat waar het nummer op staat, zoals op Start. Zonder plaat: ophalen en spelen.
+  void _open(OntdekNummer n, {Object? heroTag}) {
+    final t = n.nummer;
+    if (!t.hasAlbum) return _speel(n);
+    final album = CatalogAlbum(t.albumId, t.album, t.cover, null, 0, 'album');
+    openPagina(context, (_) => AlbumBrowsePage(t.artist, album, heroTag: heroTag));
+  }
+
+  void _menu(OntdekNummer n, {Offset? bij}) {
+    final t = n.nummer;
+    _toonItemMenu(
+        context,
+        ItemMenu(titel: t.title, ondertitel: t.artist, blokken: [
+          [MenuRegel(Icons.play_arrow_rounded, 'Afspelen', () => _speel(n))],
+          [
+            if (t.hasAlbum) MenuRegel(Icons.album_rounded, 'Album openen', () => _open(n)),
+            MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
+            MenuRegel(Icons.radio_rounded, 'Radio vanaf hier',
+                () => startRadio(context, t.artist, titel: t.title, seconden: t.seconds)),
+          ],
+          [
+            MenuRegel(Icons.download_rounded, 'Downloaden (beste bron)', () => _haal(n)),
+            if (!isTv)
+              MenuRegel(Icons.travel_explore_rounded, 'Bronnen zelf kiezen',
+                  () => _bronnenVenster(context, '${t.artist} — ${t.title}', t.query)),
+          ],
+          [MenuRegel(Icons.do_not_disturb_on_outlined, 'Niet voor mij', () => _weg(n))],
+        ]),
+        bij: bij);
   }
 
   @override
   Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    if (!identical(_bezitVan, lib.tracks)) {
+      _bezitVan = lib.tracks;
+      _bezit = {for (final t in lib.tracks) ...bezitSleutelsVan(t.artist, t.title)};
+    }
+    final zichtbaar = ontdekZichtbaar(_lijst, bezit: _bezit, weg: _wegHier);
+    final kop = ontdekKopregel(
+        berekendMs: _berekendMs, aantal: zichtbaar.length, nu: DateTime.now(), bezig: _ververst);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 22, 24, 8),
+          padding: const EdgeInsets.fromLTRB(24, 22, 16, 8),
           child: Row(
             children: [
               if (!schilKop(context)) ...[
@@ -25223,51 +25472,80 @@ class _OntdekViewState extends State<OntdekView> {
                 const SizedBox(width: 12),
               ],
               Expanded(
-                  child: Text('Nieuwe muziek op basis van je bibliotheek',
-                      style: TextStyle(color: _muted, fontSize: 13))),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('Nieuwe muziek op basis van je bibliotheek',
+                        maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: _muted, fontSize: 13)),
+                    if (kop.isNotEmpty)
+                      Text(kop,
+                          key: const ValueKey('ontdek-kopregel'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: _muted.withValues(alpha: .75), fontSize: 11.5)),
+                  ],
+                ),
+              ),
               TvLabelled(
                 label: 'Ververs',
-                child: IconButton(
-                  onPressed: _busy ? null : _load,
-                  icon: const Icon(Icons.refresh_rounded),
-                  color: _muted,
-                  tooltip: 'Ververs'),
+                child: _ververst
+                    ? SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: Center(
+                            child: SizedBox(
+                                width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))))
+                    : IconButton(
+                        key: const ValueKey('ontdek-ververs'),
+                        onPressed: _laden ? null : () => _load(ververs: true),
+                        icon: const Icon(Icons.refresh_rounded),
+                        color: _muted,
+                        tooltip: 'Een andere lijst'),
               ),
             ],
           ),
         ),
         if (_status != null)
-          Padding(padding: const EdgeInsets.all(24), child: Text(_status!, style: TextStyle(color: _muted))),
-        if (_busy)
+          Padding(
+              padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
+              child: Text(_status!, style: TextStyle(color: _muted))),
+        if (_laden)
           Expanded(child: Center(child: CircularProgressIndicator(color: _accent)))
+        else if (zichtbaar.isEmpty && _lijst.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text('Alles uit deze lijst heb je nu, of je tikte het weg — ververs voor een nieuwe.',
+                style: TextStyle(color: _muted)),
+          )
         else if (ontdekAlsRaster(tv: isTv, smal: isCompact(context)))
-          Expanded(child: _raster())
+          Expanded(child: _raster(zichtbaar))
         else
           Expanded(
             child: ListView.builder(
               padding: onderOp(context, const EdgeInsets.only(bottom: 24)),
-              itemCount: _tracks.length,
-              itemBuilder: (_, i) => _row(i, _tracks[i]),
+              itemCount: zichtbaar.length,
+              itemBuilder: (_, i) => _row(zichtbaar[i]),
             ),
           ),
       ],
     );
   }
 
-  /// Op een pc, Mac en iPad een raster van hoezen (Saber, 18-10-2026: "tegels met hoezen"), met
-  /// dezelfde tegel als Albums en de rijen op Start: een tik opent de plaat, de afspeelknop staat op
-  /// de hoes zodra de muis erop staat, en de rest (radio, bronnen) zit onder de rechtermuisknop.
-  Widget _raster() => BinnenkomstGroep(
+  /// Op een pc, Mac en iPad een raster van hoezen, met dezelfde tegel als Albums: een tik opent de plaat, ▶ en ⬇
+  /// staan op de hoes (met een muis bij het aanwijzen, op een aanraakscherm altijd), de rest onder de rechtermuisknop.
+  /// Onder de artiest de reden, op een eigen regel die in de celhoogte meetelt (anders gaat hij van de hoes af).
+  Widget _raster(List<OntdekNummer> ns) => BinnenkomstGroep(
         child: CustomScrollView(slivers: [
           SliverPadding(
             padding: onderOp(context, const EdgeInsets.fromLTRB(24, 8, 24, 24)),
             // De hoogte uit de echte celbreedte, zodat de hoes vierkant blijft: zie [tegelRaster].
             sliver: SliverLayoutBuilder(
               builder: (context, c) => SliverGrid(
-                gridDelegate: tegelRaster(context, c.crossAxisExtent, extra: 2),
+                gridDelegate: tegelRaster(context, c.crossAxisExtent, extra: 2 + tegelRegel(context, kTegelOnder)),
                 delegate: SliverChildBuilderDelegate(
-                  (_, i) => Binnenkomst(index: i, child: _tegel(i, _tracks[i])),
-                  childCount: _tracks.length,
+                  (_, i) => Binnenkomst(index: i, child: _tegel(i, ns[i])),
+                  childCount: ns.length,
                 ),
               ),
             ),
@@ -25275,103 +25553,118 @@ class _OntdekViewState extends State<OntdekView> {
         ]),
       );
 
-  Widget _tegel(int i, RecTrack t) {
+  Widget _tegel(int i, OntdekNummer n) {
+    final t = n.nummer;
     final held = t.hasAlbum ? 'ontdek:${t.albumId}:$i' : null;
-    return AlbumTegel(
-      key: ValueKey('ontdek-tegel-$i'),
-      hoes: (maat) => _netCover(t.cover, size: maat),
-      spiegel: spiegelVanUrl(t.cover),
-      titel: t.title,
-      ondertitel: t.artist,
-      ondertitelWidget: t.artist.trim().isEmpty ? null : _HomeStartViewState._naamLink(t.artist),
-      onTap: () => _open(i, t, heroTag: held),
-      onAfspelen: () => _play(i, t),
-      onLongPress: () => _menu(i, t),
-      onSecondaryTap: (bij) => _menu(i, t, bij: bij),
-      heroTag: held,
-      // Twee punten, ook als er niets loopt: dan staan alle tegels op dezelfde hoogte.
-      onderHoes: SizedBox(
-        height: 2,
-        child: _playing == i
-            ? LinearProgressIndicator(minHeight: 2, color: _accent, backgroundColor: Colors.transparent)
-            : null,
+    final sleutel = zoekSleutelVoor(t.artist, t.title);
+    // De hoes op 1200 in plaats van 250: een tegel op een 24"-scherm is groter dan 250 punten (Saber, 04-11-2026:
+    // "alles moet mooi passen … albumhoezen").
+    final groot = t.cover == null ? null : deezerHoes1200(t.cover!);
+    return Selector<DownloadManager, bool>(
+      selector: (_, dm) => dm.jobByKey(sleutel)?.busy ?? false,
+      builder: (context, haalt, _) => AlbumTegel(
+        key: ValueKey('ontdek-tegel-${n.sleutel}'),
+        hoes: (maat) => _netCover(groot, size: maat),
+        spiegel: spiegelVanUrl(groot),
+        titel: t.title,
+        ondertitel: t.artist,
+        ondertitelWidget: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (t.artist.trim().isEmpty) const SizedBox.shrink() else _HomeStartViewState._naamLink(t.artist),
+            Text(n.waarom,
+                key: ValueKey('ontdek-waarom-${n.sleutel}'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: kTegelOnder.copyWith(color: kTegelOnder.color?.withValues(alpha: .7))),
+          ],
+        ),
+        onTap: () => _open(n, heroTag: held),
+        onAfspelen: () => _speel(n),
+        knop: _downloadControl(context, jobKey: sleutel, onDownload: () => _haal(n), tooltip: 'Downloaden (beste bron)'),
+        knoppenAltijd: _isTouch,
+        knopAltijd: haalt,
+        onLongPress: () => _menu(n),
+        onSecondaryTap: (bij) => _menu(n, bij: bij),
+        heroTag: held,
+        // Twee punten, ook als er niets loopt: dan staan alle tegels op dezelfde hoogte. Loopt ▶ (ophalen en
+        // spelen), dan een streep.
+        onderHoes: SizedBox(
+          height: 2,
+          child: ListenableBuilder(
+            listenable: _StartCache.nieuwSpeler,
+            builder: (_, __) => _StartCache.nieuwSpeler.bezigMet(t.artist, t.title)
+                ? LinearProgressIndicator(minHeight: 2, color: _accent, backgroundColor: Colors.transparent)
+                : const SizedBox.shrink(),
+          ),
+        ),
       ),
     );
   }
 
-  /// Naar de plaat waar het nummer op staat, zoals op Start. Zonder plaat: meteen afspelen.
-  void _open(int i, RecTrack t, {Object? heroTag}) {
-    if (!t.hasAlbum) {
-      unawaited(_play(i, t));
-      return;
-    }
-    final album = CatalogAlbum(t.albumId, t.album, t.cover, null, 0, 'album');
-    openPagina(context, (_) => AlbumBrowsePage(t.artist, album, heroTag: heroTag));
-  }
-
-  void _menu(int i, RecTrack t, {Offset? bij}) => _toonItemMenu(
-      context,
-      ItemMenu(titel: t.title, ondertitel: t.artist, blokken: [
-        [MenuRegel(Icons.play_arrow_rounded, 'Afspelen', () => _play(i, t))],
-        [
-          if (t.hasAlbum) MenuRegel(Icons.album_rounded, 'Album openen', () => _open(i, t)),
-          MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
-          MenuRegel(Icons.radio_rounded, 'Radio vanaf hier',
-              () => startRadio(context, t.artist, titel: t.title, seconden: t.seconds)),
-          MenuRegel(Icons.download_rounded, 'Bronnen / download', () => _bronnen(t)),
-        ],
-      ]),
-      bij: bij);
-
-  /// De bronnen van één aanbeveling, zoals de lijst ze openklapt; in een raster kan dat niet tussen
-  /// de tegels, dus in een venster ([_bronnenVenster], dat de nieuwe releases ook gebruiken).
-  void _bronnen(RecTrack t) => _bronnenVenster(context, '${t.artist} — ${t.title}', t.query);
-
-  Widget _row(int i, RecTrack t) {
-    final open = _expanded == i;
-    return Column(
-      children: [
-        Container(
-          margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(color: open ? _panel : Colors.transparent, borderRadius: BorderRadius.circular(8)),
-          child: Row(
-            children: [
-              _netCover(t.cover, size: 44, radius: 6),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    _artistLine(splitFeatured(t.artist, t.title),
-                        TextStyle(color: _muted, fontSize: 12)),
-                  ],
-                ),
-              ),
-              _playing == i
-                  ? SizedBox(
-                      width: 48,
-                      height: 48,
-                      child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _accent))))
-                  : TvLabelled(label: 'Afspelen', child: IconButton(icon: const Icon(Icons.play_arrow_rounded), color: _accent, tooltip: 'Afspelen', onPressed: () => _play(i, t))),
-              TvLabelled(label: 'Radio', child: IconButton(icon: const Icon(Icons.radio_rounded, size: 20), color: _muted, tooltip: 'Radio hieruit', onPressed: () => startRadio(context, t.artist, titel: t.title, seconden: t.seconds))),
-              // Niet op een tv: daar is dit scherm er om een aanbeveling te laten klínken, en het
-              // ophalen doe je op een pc of telefoon. Afspelen en Radio hiernaast blijven staan.
-              if (!isTv)
-                TvLabelled(
-                  label: 'Bronnen / download',
-                  child: IconButton(
-                    icon: Icon(open ? Icons.expand_less_rounded : Icons.download_rounded, size: 20),
-                    color: _muted,
-                    tooltip: 'Bronnen / download',
-                    onPressed: () => setState(() => _expanded = open ? null : i)),
-                ),
-            ],
-          ),
+  /// Eén regel op een gsm (staand en liggend) en een tv: hoes, de titel tot twee regels, de artiest, de reden, en
+  /// rechts ▶ (ophalen en spelen), radio en ⬇ (de beste bron, met voortgang). Op een tv daarnaast ⋯ voor het menu
+  /// (Niet voor mij, Album openen, …); op een aanraakscherm opzij vegen om weg te tikken.
+  Widget _row(OntdekNummer n) {
+    final t = n.nummer;
+    final klein = VisualDensity.compact;
+    final knoppen = Theme(
+      data: Theme.of(context).copyWith(visualDensity: klein),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        SpeelNuKnop(
+            artiest: t.artist,
+            titel: t.title,
+            seconden: t.seconds > 0 ? t.seconds : null,
+            album: t.album.isEmpty ? null : t.album,
+            hoes: t.cover),
+        TvLabelled(
+            label: 'Radio',
+            child: IconButton(
+                icon: const Icon(Icons.radio_rounded, size: 20),
+                color: _muted,
+                tooltip: 'Radio hieruit',
+                onPressed: () => startRadio(context, t.artist, titel: t.title, seconden: t.seconds))),
+        TvLabelled(
+          label: 'Downloaden',
+          child: _downloadControl(context,
+              jobKey: zoekSleutelVoor(t.artist, t.title), onDownload: () => _haal(n), tooltip: 'Downloaden (beste bron)'),
         ),
-        if (open) Padding(padding: const EdgeInsets.only(bottom: 8), child: SourcesView(query: t.query)),
-      ],
+        if (isTv)
+          TvLabelled(
+              label: 'Meer',
+              child: IconButton(
+                  icon: const Icon(Icons.more_horiz_rounded, size: 20),
+                  color: _muted,
+                  tooltip: 'Meer',
+                  onPressed: () => _menu(n))),
+      ]),
+    );
+    final regel = OntdekRegel(
+      nummer: n,
+      knoppen: knoppen,
+      // Op een tv gaan de knoppen voor: de regel zelf is daar geen stop (anders vier stops per nummer).
+      onTap: isTv ? null : () => _open(n),
+      onMenu: (bij) => _menu(n, bij: bij),
+    );
+    if (!_ontdekVegen) return regel;
+    // Opzij vegen = niet voor mij (Saber, 04-11-2026: "Opzij vegen"). Alleen naar links, zodat een veeg naar rechts
+    // niets weggooit; met Ongedaan in de melding.
+    return Dismissible(
+      key: ValueKey('ontdek-veeg-${n.sleutel}'),
+      direction: DismissDirection.endToStart,
+      onDismissed: (_) => _weg(n),
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        color: const Color(0xFFB3261E).withValues(alpha: .16),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text('Niet voor mij', style: TextStyle(color: leesbaar(const Color(0xFFB3261E)), fontWeight: FontWeight.w600)),
+          const SizedBox(width: 8),
+          Icon(Icons.do_not_disturb_on_outlined, color: leesbaar(const Color(0xFFB3261E))),
+        ]),
+      ),
+      child: regel,
     );
   }
 }
@@ -26047,6 +26340,61 @@ class DlRow extends StatelessWidget {
               ],
             ),
     );
+  }
+}
+
+/// De sleutel van een download die eerst een bron zoekt, voor één nummer: dezelfde in Online zoeken en Ontdek, zodat
+/// de knop op beide plekken dezelfde voortgang toont.
+String zoekSleutelVoor(String artiest, String titel) => 'zoek:${artistKey(artiest)}|${normKey(titel)}';
+
+/// Eén zoektreffer downloaden zoals een nummer op een albumpagina ([_AlbumBrowsePageState]): de zeef
+/// kiest de bron op titel, artiest en looptijd, en [DownloadManager.zoekEnHaal] zet hem meteen in de
+/// lijst — ook op de telefoon, waar de pc het werk doet. Voor Online zoeken ([_downloadHit]) en Ontdek (Saber,
+/// 04-11-2026: "de automatisch downloaden daar integreren zoals elders in de app"): dezelfde sleutel, dus dezelfde
+/// voortgang in de knop ([zoekSleutelVoor]).
+Future<void> haalTrefferBesteBron(BuildContext context, CatalogTrackHit t, {required String sleutel}) async {
+  final dm = context.read<DownloadManager>();
+  final soulseek = context.read<SoulseekService>();
+  if (context.read<LibraryStore>().ownedTrack(t.artist, t.title) != null) {
+    _srcToast(context, '“${t.title}” heb je al — niet opnieuw gedownload.');
+    return;
+  }
+  if (!soulseek.available) {
+    _srcToast(context, 'Stel je Soulseek-login in (Instellingen).');
+    return;
+  }
+  _srcToast(context, 'Bron zoeken voor “${t.title}”…');
+  try {
+    final uit = await dm.zoekEnHaal(
+      naam: t.title,
+      key: sleutel,
+      authority: TrackTags(
+        title: t.title,
+        artist: t.artist,
+        album: t.album ?? '',
+        albumArtist: t.artist,
+        trackNo: 0,
+        seconds: t.seconden,
+      ),
+      // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
+      zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title, album: t.album),
+          seconden: t.seconden,
+          zeefOp: (titel: t.title, artiest: t.artist, album: t.album),
+          zeef: (l) => zeefKandidaten(l, titel: t.title, seconden: t.seconden, artiest: t.artist, album: t.album)),
+    );
+    if (!context.mounted) return;
+    switch (uit) {
+      case ZoekUitkomst.gestart:
+        _srcToast(context, '“${t.title}” via Soulseek…');
+      case ZoekUitkomst.geenBron:
+        _srcToast(context, 'Geen Soulseek-bron gevonden voor “${t.title}”.');
+      case ZoekUitkomst.loopt:
+        _srcToast(context, '“${t.title}” loopt al — zie Mijn downloads.');
+      case ZoekUitkomst.geannuleerd:
+        break;
+    }
+  } catch (e) {
+    if (context.mounted) _srcToast(context, 'Download mislukt: $e');
   }
 }
 
@@ -30075,56 +30423,10 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     );
   }
 
-  String _zoekSleutel(CatalogTrackHit t) => 'zoek:${artistKey(t.artist)}|${normKey(t.title)}';
+  String _zoekSleutel(CatalogTrackHit t) => zoekSleutelVoor(t.artist, t.title);
 
-  /// Eén zoektreffer downloaden zoals een nummer op een albumpagina ([_AlbumBrowsePageState]): de zeef
-  /// kiest de bron op titel, artiest en looptijd, en [DownloadManager.zoekEnHaal] zet hem meteen in de
-  /// lijst — ook op de telefoon, waar de pc het werk doet.
-  Future<void> _downloadHit(CatalogTrackHit t) async {
-    final dm = context.read<DownloadManager>();
-    final soulseek = context.read<SoulseekService>();
-    if (context.read<LibraryStore>().ownedTrack(t.artist, t.title) != null) {
-      _srcToast(context, '“${t.title}” heb je al — niet opnieuw gedownload.');
-      return;
-    }
-    if (!soulseek.available) {
-      _srcToast(context, 'Stel je Soulseek-login in (Instellingen).');
-      return;
-    }
-    _srcToast(context, 'Bron zoeken voor “${t.title}”…');
-    try {
-      final uit = await dm.zoekEnHaal(
-        naam: t.title,
-        key: _zoekSleutel(t),
-        authority: TrackTags(
-          title: t.title,
-          artist: t.artist,
-          album: t.album ?? '',
-          albumArtist: t.artist,
-          trackNo: 0,
-          seconds: t.seconden,
-        ),
-        // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
-        zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title, album: t.album),
-            seconden: t.seconden,
-            zeefOp: (titel: t.title, artiest: t.artist, album: t.album),
-            zeef: (l) => zeefKandidaten(l, titel: t.title, seconden: t.seconden, artiest: t.artist, album: t.album)),
-      );
-      if (!mounted) return;
-      switch (uit) {
-        case ZoekUitkomst.gestart:
-          _srcToast(context, '“${t.title}” via Soulseek…');
-        case ZoekUitkomst.geenBron:
-          _srcToast(context, 'Geen Soulseek-bron gevonden voor “${t.title}”.');
-        case ZoekUitkomst.loopt:
-          _srcToast(context, '“${t.title}” loopt al — zie Mijn downloads.');
-        case ZoekUitkomst.geannuleerd:
-          break;
-      }
-    } catch (e) {
-      if (mounted) _srcToast(context, 'Download mislukt: $e');
-    }
-  }
+  /// Zie [haalTrefferBesteBron].
+  Future<void> _downloadHit(CatalogTrackHit t) => haalTrefferBesteBron(context, t, sleutel: _zoekSleutel(t));
 
   /// Zelfde geheugen van één als bij [SourcesView] — zie [_SlskKlaar].
   ///

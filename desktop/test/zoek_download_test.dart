@@ -23,7 +23,8 @@ void main() {
   });
 
   test('de knop kiest op looptijd: geen radio-edit of liveversie onder de naam van het nummer', () {
-    final f = main.substring(main.indexOf('Future<void> _downloadHit('), main.indexOf('/// Zelfde geheugen van één als bij [SourcesView]'));
+    final f = main.substring(
+        main.indexOf('Future<void> haalTrefferBesteBron('), main.indexOf('Widget _downloadControl(BuildContext context,'));
     expect(f, contains('titel: t.title, seconden: t.seconden, artiest: t.artist, album: t.album'));
     expect(f, contains('seconds: t.seconden,'));
     expect(f, contains('dm.zoekEnHaal('), reason: 'dezelfde weg als op de albumpagina, ook vanaf de telefoon');

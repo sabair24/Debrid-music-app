@@ -273,7 +273,7 @@ void main() {
       'spiegel: spiegelVanUrl(items[i].hit.album.cover),', // de rij van het taalmodel
       'spiegel: spiegelVanUrl(ts[i].cover),', // aanbevelingen
       'spiegel: spiegelVanUrl(u.album.cover),', // nieuwe releases
-      'spiegel: spiegelVanUrl(t.cover),', // Ontdek
+      'spiegel: spiegelVanUrl(groot),', // Ontdek: dezelfde grote hoes als de tegel zelf
       'spiegel: spiegelVanUrl(h.album.cover),', // zoeken
       'spiegel: spiegelVanUrl(al.cover),', // discografie op de artiestpagina
       'spiegel: spiegelVanUrl(hit.album.cover),', // een stijlpagina

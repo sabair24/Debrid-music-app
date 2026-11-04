@@ -65,6 +65,7 @@ import '../artwork.dart';
 import '../dataverbruik.dart' show Verkeerssoort, soortVanPad;
 import '../discogs.dart' show DiscogsArtwork, DiscogsService, ReleaseArt, kKleinScan, kunstNaarJson, persingUitHerkomst;
 import '../aanbevolen.dart';
+import '../ontdek.dart' show OntdekLijst, OntdekVoorJou;
 import '../vertaler.dart';
 
 /// The port the other devices look for. Fixed on purpose — an ephemeral port would mean every
@@ -116,6 +117,8 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/radio/opproef',
     // En wat de pc nog keurt of verbetert (alleen id's): daar wacht de gsm mee.
     '/api/toestel/nogbezig',
+    // Ontdek (ontdek.dart; Saber, 04-11-2026): de lijst (klein, zonder hoezen) en een weggetikt nummer.
+    '/api/ontdek', '/api/ontdek/weg',
   };
   // TIDAL ook (Saber, 23-10-2026: "ik moet ook buitenshuis kunnen zoeken en downloaden"); ophalen telt mee in het
   // quotum voor downloads, zoals Soulseek.
@@ -1381,6 +1384,10 @@ class LanServer {
         return _vertaal(req);
       case '/api/aanbevolen':
         return _aanbevolen(req);
+      case '/api/ontdek':
+        return _ontdek(req);
+      case '/api/ontdek/weg':
+        return _ontdekWeg(req);
       case '/api/online/tracklist':
         return _onlineTracklist(req);
       case '/api/online/download':
@@ -2952,6 +2959,39 @@ class LanServer {
       unawaited(d.ververs());
     }
     return _json(req.response, {...(l ?? const AanbevolenLijst(0, [])).toJson(), 'bezig': d.bezig});
+  }
+
+  /// Ontdek voor een toestel (`ontdek.dart`): de lijst van vandaag, of met `ververs=1` meteen een nieuwe trekking
+  /// (hoogstens 45 s wachten; anders de vorige, met `bezig`).
+  Future<void> _ontdek(HttpRequest req) async {
+    final d = OntdekVoorJou.pc;
+    if (d == null) return _unavailable(req, 'Deze pc rekent Ontdek niet uit.');
+    var l = d.lijst;
+    if (l == null || req.uri.queryParameters['ververs'] == '1') {
+      l = await d.ververs().timeout(const Duration(seconds: 45), onTimeout: () => d.lijst);
+    } else if (d.verouderd) {
+      unawaited(d.ververs());
+    }
+    // Zonder wat er intussen weggetikt is: dat hoort ook op een ander toestel meteen weg te zijn.
+    return _json(req.response, {...OntdekLijst(l?.berekendMs ?? 0, d.zichtbaar).toJson(), 'bezig': d.bezig});
+  }
+
+  /// Een nummer uit Ontdek wegtikken ("niet voor mij"), of met `terug` ongedaan maken.
+  Future<void> _ontdekWeg(HttpRequest req) async {
+    if (req.method != 'POST') {
+      req.response.statusCode = HttpStatus.methodNotAllowed;
+      return req.response.close();
+    }
+    final d = OntdekVoorJou.pc;
+    if (d == null) return _unavailable(req, 'Deze pc rekent Ontdek niet uit.');
+    final map = await _body(req);
+    if (map == null) return;
+    final artiest = '${map['artiest'] ?? ''}'.trim(), titel = '${map['titel'] ?? ''}'.trim();
+    if (artiest.isEmpty || titel.isEmpty || artiest.length > 300 || titel.length > 300) {
+      return _json(req.response, {'error': 'Artiest en titel nodig.'}, status: HttpStatus.badRequest);
+    }
+    await d.zetWeg(artiest, titel, via: '${map['via'] ?? ''}', terug: map['terug'] == true);
+    return _json(req.response, {'ok': true});
   }
 
   /// Een beschrijving in het Nederlands, voor een toestel (16-10-2026). De AI-sleutel blijft op de pc;
