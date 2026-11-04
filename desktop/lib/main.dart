@@ -1569,7 +1569,7 @@ Future<void> main() async {
       // Haalt dit toestel de hele bibliotheek vooraf (hieronder), dan de grens van de pc: anders snoeit het weg wat het net
       // haalde, en haalt het dat morgen opnieuw.
       await snoeiMap(Directory('$appDir${Platform.pathSeparator}releaseart'),
-          maxBytes: !isTv && settings.scansVooraf ? kReleaseartVooraf : kReleaseartToestel,
+          maxBytes: settings.scansVooraf ? kReleaseartVooraf : kReleaseartToestel,
           perMap: true,
           houd: (map) => gezienVoor(map, hier));
     }
@@ -1579,38 +1579,41 @@ Future<void> main() async {
 
     // De hoezen en scans van de hele bibliotheek vooraf hier, thuis op wifi en op volle grootte van de pc
     // (scans_vooraf.dart; Saber, 02-11-2026: "Je hele bibliotheek", "Volle resolutie"). Zonder pc zocht de gsm ze
-    // anders zelf op internet, over mobiele data. Niet op een tv: die zit altijd op wifi.
-    if (!isTv) {
-      final vooraf = scansVoorafHier = ScansVooraf<Album>(
-        albums: () => [...library.albums],
-        mag: () =>
-            settings.scansVooraf && library.remote != null && netStore.net == Netsoort.wifi && !netStore.onderweg,
-        haal: (al) async {
-          final v = albumArtVooruit(library, al);
-          final s = await DiscogsService(settings).scansVooraf(v.artist, v.album,
-              expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles, plaat: v.plaat);
-          // En de digitale voorkant, die Nu speelt over de scan heen legt ("digitaal wint altijd").
-          if (s != Voorafstand.geenPc && (v.roles['front'] ?? '').isEmpty) {
-            await CoverEnricher(settings).digitaleVoorkant(v.artist, v.album,
-                titels: [for (final t in al.tracks) t.title], plaat: v.plaat, jaar: v.jaar);
-          }
-          return s;
-        },
-        log: kunstLog.line,
-      );
-      // Bij een ander netwerk, en als er albums bijkomen; anders om de zes uur. Niet bij elke catalogus: die verandert
-      // thuis om de 40 s, en een ronde kijkt elk album op schijf na.
-      var albumsGezien = -1;
-      library.addListener(() {
-        final n = library.albums.length;
-        if (n == albumsGezien || library.tracks.isEmpty) return;
-        albumsGezien = n;
-        vooraf.kijk();
-      });
-      netStore.addListener(vooraf.kijk);
-      settings.addListener(vooraf.kijk);
-      Timer(const Duration(minutes: 3), vooraf.start);
-    }
+    // anders zelf op internet, over mobiele data. Ook op de Mac, de iPad en de Shield (Saber, 04-11-2026): het albumscherm
+    // tekent alleen wat al op schijf staat, en het voorladen van het volgende nummer ook.
+    final vooraf = scansVoorafHier = ScansVooraf<Album>(
+      albums: () => [...library.albums],
+      mag: () =>
+          settings.scansVooraf &&
+          library.remote != null &&
+          !netStore.onderweg &&
+          // Alleen Android zegt wifi of mobiel; een tv zit aan wifi of een kabel, een Mac of iPad thuis ook.
+          (isTv || !Platform.isAndroid || netStore.net == Netsoort.wifi),
+      haal: (al) async {
+        final v = albumArtVooruit(library, al);
+        final s = await DiscogsService(settings).scansVooraf(v.artist, v.album,
+            expectedTracks: v.trackCount, pinned: v.pinned, pinnedMbid: v.pinnedMbid, roles: v.roles, plaat: v.plaat);
+        // En de digitale voorkant, die Nu speelt over de scan heen legt ("digitaal wint altijd").
+        if (s != Voorafstand.geenPc && (v.roles['front'] ?? '').isEmpty) {
+          await CoverEnricher(settings).digitaleVoorkant(v.artist, v.album,
+              titels: [for (final t in al.tracks) t.title], plaat: v.plaat, jaar: v.jaar);
+        }
+        return s;
+      },
+      log: kunstLog.line,
+    );
+    // Bij een ander netwerk, en als er albums bijkomen; anders om de zes uur. Niet bij elke catalogus: die verandert
+    // thuis om de 40 s, en een ronde kijkt elk album op schijf na.
+    var albumsGezien = -1;
+    library.addListener(() {
+      final n = library.albums.length;
+      if (n == albumsGezien || library.tracks.isEmpty) return;
+      albumsGezien = n;
+      vooraf.kijk();
+    });
+    netStore.addListener(vooraf.kijk);
+    settings.addListener(vooraf.kijk);
+    Timer(const Duration(minutes: 3), vooraf.start);
   }
   // Engelse beschrijvingen in het Nederlands: de pc vertaalt met zijn AI-sleutel, een toestel vraagt het
   // de pc. Allebei bewaren ze wat ze kregen. Zie `vertaler.dart`.

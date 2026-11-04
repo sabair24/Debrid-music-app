@@ -175,15 +175,27 @@ void main() {
     });
   });
 
-  test('aangesloten: thuis op wifi, de hele bibliotheek, de digitale voorkant erbij, en niet weggesnoeid', () {
+  test('aangesloten: op elk toestel thuis (een Android-gsm alleen op wifi), de hele bibliotheek, de digitale voorkant '
+      'erbij, en niet weggesnoeid', () {
     String lees(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
     final main = lees('lib/main.dart');
-    expect(main, contains('            settings.scansVooraf && library.remote != null && netStore.net == Netsoort.wifi && !netStore.onderweg,\n'));
-    expect(main, contains('        albums: () => [...library.albums],\n'));
+    expect(main, contains('          settings.scansVooraf &&\n          library.remote != null &&\n          !netStore.onderweg &&\n'));
+    expect(main, contains('          (isTv || !Platform.isAndroid || netStore.net == Netsoort.wifi),\n'));
+    // Ook op een tv: geen `if (!isTv)` meer om het blok of ervoor (Saber, 04-11-2026: Mac, iPad en Shield). Het enige
+    // `isTv` van snoeien tot starten is dat in `mag`.
+    expect(main, contains('    final vooraf = scansVoorafHier = ScansVooraf<Album>(\n'));
+    final begin = main.indexOf('    Future<void> snoeiScansHier() async {\n');
+    final blok = main.substring(begin, main.indexOf('    Timer(const Duration(minutes: 3), vooraf.start);\n', begin));
+    expect(RegExp(r'\bisTv\b').allMatches(blok).length, 1);
+    expect(main, contains('      albums: () => [...library.albums],\n'));
     expect(main, contains('await CoverEnricher(settings).digitaleVoorkant(v.artist, v.album,\n'
-        '                titels: [for (final t in al.tracks) t.title], plaat: v.plaat, jaar: v.jaar);'));
-    expect(main, contains('          maxBytes: !isTv && settings.scansVooraf ? kReleaseartVooraf : kReleaseartToestel,\n'));
-    expect(main, contains('      netStore.addListener(vooraf.kijk);\n'));
-    expect(lees('lib/settings.dart'), contains("        scansVooraf = (m['scans_vooraf'] ?? Platform.isAndroid) as bool;\n"));
+        '              titels: [for (final t in al.tracks) t.title], plaat: v.plaat, jaar: v.jaar);'));
+    expect(main, contains('          maxBytes: settings.scansVooraf ? kReleaseartVooraf : kReleaseartToestel,\n'));
+    expect(main, contains('    netStore.addListener(vooraf.kijk);\n'));
+    // Een eigen sleutel: 3.9.706 tot 3.9.709 bewaarden `scans_vooraf: false` op de Mac, de iPad en de Shield.
+    final instellingen = lees('lib/settings.dart');
+    expect(instellingen, contains("        scansVooraf = (m['scans_vooraf_alle'] ?? true) as bool;\n"));
+    expect(instellingen, contains("        'scans_vooraf_alle': scansVooraf,\n"));
+    expect(instellingen, contains('  bool scansVooraf = true;\n'));
   });
 }
