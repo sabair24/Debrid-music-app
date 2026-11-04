@@ -278,7 +278,15 @@ class AchterkantBeeld extends StatelessWidget {
 
 /// De voor- en achterkant van een hoes, met een 3D-draai ertussen.
 class DraaiHoes extends StatefulWidget {
-  const DraaiHoes({super.key, required this.controller, required this.voor, this.achter, this.breedte});
+  const DraaiHoes(
+      {super.key, required this.controller, required this.voor, this.achter, this.breedte, this.achterMaat, this.hoek = 0});
+
+  /// De maat van de achterkant zoals hij getekend wordt ([achterkantMaat]): een cd-achterkant is breder dan hoog. De
+  /// rand volgt hem ([randVlak]). Null: het hele vak.
+  final Size? achterMaat;
+
+  /// De afronding van de hoeken: daar loopt de rand niet door.
+  final double hoek;
 
   final DraaiHoesController controller;
   final Widget voor;
@@ -332,12 +340,43 @@ Matrix4 draaiMatrix(double t, {double breedte = 200}) {
 const double kHoesDikte = .03;
 
 /// De transform van de rand (de dikte) aan kant [kant] (-1 links, 1 rechts) van een hoes die
-/// [breedte] breed is, op moment [t]: loodrecht op de hoes, aan zijn rand, en meegedraaid.
+/// [breedte] breed is, op moment [t]: loodrecht op de hoes, aan zijn rand, en meegedraaid. [x] is waar de rand staat
+/// (standaard de halve breedte), [z] hoe ver hij achter het vlak ligt ([randVlak]).
 @visibleForTesting
-Matrix4 randMatrix(double t, double breedte, int kant) =>
+Matrix4 randMatrix(double t, double breedte, int kant, {double? x, double z = 0}) =>
     draaiMatrix(t, breedte: breedte)
-      ..translateByDouble(kant * breedte / 2, 0, 0, 1)
+      ..translateByDouble(kant * (x ?? breedte / 2), 0, z, 1)
       ..rotateY(math.pi / 2);
+
+/// Waar en hoe groot de rand is op moment [t]: aan de rand van het vlak dat je ziet ([voor] tot halverwege, [achter]
+/// daarna; rond de helft vloeiend van het ene naar het andere), zonder de afgeronde hoeken ([hoek]), en helemaal
+/// ACHTER dat vlak ([z]: een halve dikte, naar de kant die van je af staat).
+///
+/// **Waarom (Saber, 04-11-2026, opname van de gsm: "bij het draaien van de hoes zie je zwarte verticale lijnen").**
+/// De rand stond half vóór en half achter de hoes. Het deel dat naar je toe stond, maakte het perspectief groter
+/// dan de hoes zelf, dus stak hij boven en onder uit. En hij had altijd de hoogte van het vak, ook bij een
+/// cd-achterkant die breder is dan hoog ([achterkantMaat]): dan stak hij nog verder uit. Nu volgt hij het vlak.
+@visibleForTesting
+({double x, double hoogte, double z}) randVlak(double t,
+    {required Size voor, Size? achter, double hoek = 0, required double dikte}) {
+  final v = vlakMaat(t, voor: voor, achter: achter);
+  return (
+    x: v.width / 2,
+    hoogte: math.max(0, v.height - 2 * hoek),
+    // Achter het vlak dat je ziet: tot halverwege is dat +z (van je af), daarna draait de hoes om en is het -z.
+    z: dikte / 2 * math.cos(math.pi * t.clamp(0.0, 1.0)),
+  );
+}
+
+/// De maat van het vlak dat je ziet op moment [t]: [voor] tot halverwege, [achter] daarna (null = het hele vak), rond
+/// de helft (0,4 tot 0,6) vloeiend van het ene naar het andere — daar staat de hoes op zijn kant en zie je het vlak
+/// zelf bijna niet. De rand ([randVlak]) en de schaduw volgen deze maat.
+@visibleForTesting
+Size vlakMaat(double t, {required Size voor, Size? achter}) {
+  final a = achter ?? voor;
+  final f = Curves.easeInOut.transform(((t - .4) / .2).clamp(0.0, 1.0));
+  return Size(voor.width + (a.width - voor.width) * f, voor.height + (a.height - voor.height) * f);
+}
 
 /// Hoe fel de glansveeg is op moment [t]: niets in rust, het felst halverwege.
 @visibleForTesting
@@ -437,15 +476,26 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
             Positioned.fill(
               key: const ValueKey('draai-schaduw-laag'),
               child: IgnorePointer(
-                child: Transform.scale(
-                  scaleX: math.max(dwars, .08),
-                  child: const DecoratedBox(
-                    key: ValueKey('draai-schaduw'),
-                    decoration: BoxDecoration(boxShadow: [
-                      BoxShadow(color: Color(0x59000000), blurRadius: 18, offset: Offset(0, 10)),
-                    ]),
-                  ),
-                ),
+                // In de vorm van wat je ziet ([vlakMaat]): een vierkante schaduw achter een cd-achterkant die
+                // breder is dan hoog, was een grijze band boven en onder (gemeten 04-11-2026, beeld voor beeld).
+                child: LayoutBuilder(builder: (_, c) {
+                  final v = vlakMaat(t, voor: Size(c.maxWidth, c.maxHeight), achter: widget.achterMaat);
+                  return Center(
+                    child: Transform.scale(
+                      scaleX: math.max(dwars, .08),
+                      child: SizedBox(
+                        width: v.width,
+                        height: v.height,
+                        child: DecoratedBox(
+                          key: const ValueKey('draai-schaduw'),
+                          decoration: BoxDecoration(borderRadius: BorderRadius.circular(widget.hoek), boxShadow: const [
+                            BoxShadow(color: Color(0x59000000), blurRadius: 18, offset: Offset(0, 10)),
+                          ]),
+                        ),
+                      ),
+                    ),
+                  );
+                }),
               ),
             ),
           // Beide randen vóór de hoes getekend: de rand die van je af staat, valt dan achter de hoes.
@@ -454,24 +504,29 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
               Positioned.fill(
                 key: ValueKey('draai-rand-laag-$k'),
                 child: IgnorePointer(
-                  child: LayoutBuilder(
-                    builder: (_, c) => Transform(
+                  child: LayoutBuilder(builder: (_, c) {
+                    final dikte = c.maxWidth * kHoesDikte;
+                    final r = randVlak(t,
+                        voor: Size(c.maxWidth, c.maxHeight), achter: widget.achterMaat, hoek: widget.hoek, dikte: dikte);
+                    return Transform(
                       alignment: Alignment.center,
-                      transform: randMatrix(t, c.maxWidth, k),
+                      transform: randMatrix(t, c.maxWidth, k, x: r.x, z: r.z),
                       child: Center(
                         child: SizedBox(
                           key: ValueKey('draai-rand-$k'),
-                          width: c.maxWidth * kHoesDikte,
-                          height: c.maxHeight,
+                          width: dikte,
+                          height: r.hoogte,
+                          // Grijs als de zijkant van een doosje, niet bijna zwart: naast een lichte hoes (een witte
+                          // cd-achterkant) las dat als twee zwarte lijnen.
                           child: const DecoratedBox(
                             decoration: BoxDecoration(
-                              gradient: LinearGradient(colors: [Color(0xFF2A2B30), Color(0xFF4A4C54), Color(0xFF2A2B30)]),
+                              gradient: LinearGradient(colors: [Color(0xFF5E6068), Color(0xFF8E9098), Color(0xFF5E6068)]),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  ),
+                    );
+                  }),
                 ),
               ),
           Transform(
@@ -485,8 +540,22 @@ class _DraaiHoesState extends State<DraaiHoes> with TickerProviderStateMixin {
               if (draait)
                 Positioned.fill(
                   key: const ValueKey('draai-veeg-laag'),
+                  // Alleen over het vlak dat je ziet ([vlakMaat]): over het hele vak lag hij boven en onder een brede
+                  // achterkant als een lichte waas.
                   child: IgnorePointer(
-                    child: CustomPaint(key: const ValueKey('draai-veeg'), painter: _Veeg(t)),
+                    child: LayoutBuilder(builder: (_, c) {
+                      final v = vlakMaat(t, voor: Size(c.maxWidth, c.maxHeight), achter: widget.achterMaat);
+                      return Center(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(widget.hoek),
+                          child: SizedBox(
+                            width: v.width,
+                            height: v.height,
+                            child: CustomPaint(key: const ValueKey('draai-veeg'), painter: _Veeg(t)),
+                          ),
+                        ),
+                      );
+                    }),
                   ),
                 ),
             ]),
