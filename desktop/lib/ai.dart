@@ -13,6 +13,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'aanbevelingplan.dart';
+import 'ontdekvraag.dart';
 import 'radiobuurt.dart';
 import 'radiolijst.dart';
 import 'radiosmaak.dart';
@@ -204,6 +205,30 @@ class AiService {
       werkruimte,
     );
     return leesVoorstellen(jsonUitAntwoord(body));
+  }
+
+  /// Nummers voor Ontdek bij een smaakprofiel (`ontdekvraag.dart`; Saber, 04-11-2026). Zelfde vorm en lage inspanning
+  /// als [maakAanbevelingen]: opzoekwerk in wat het model al weet. Elk voorstel wordt daarna bij Deezer nageslagen.
+  /// Zonder sleutel of profiel een lege lijst, geen uitzondering.
+  Future<List<OntdekVoorstel>> maakOntdekLijst(OntdekProfiel profiel) async {
+    final sleutel = sleutelVan().trim();
+    if (sleutel.isEmpty || profiel.leeg) return const [];
+    final body = await _verstuur(
+      {
+        'model': kRadioModel,
+        'max_tokens': kRadioMaxTokens,
+        'output_config': {
+          'effort': 'low',
+          'format': {'type': 'json_schema', 'schema': ontdekSchema()},
+        },
+        'messages': [
+          {'role': 'user', 'content': ontdekPrompt(profiel)}
+        ],
+      },
+      sleutel,
+      werkruimteVan().trim(),
+    );
+    return leesOntdekVoorstellen(jsonUitAntwoord(body));
   }
 
   /// De buurt rond één nummer: wie er naast hoort die Deezer niet noemt.

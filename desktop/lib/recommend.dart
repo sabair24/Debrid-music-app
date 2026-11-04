@@ -1,5 +1,5 @@
 import 'dart:math';
-import 'aanbevolen.dart' show kiesNummers, rangschikKandidaten;
+import 'aanbevolen.dart' show Kandidaat, kiesNummers, rangschikKandidaten;
 
 import 'deezerbaan.dart';
 import 'isrc.dart' as isrc;
@@ -708,6 +708,94 @@ class RecommendService {
     final toppers = await Future.wait([for (final k in top) _top(k.id, k.naam, limit: 8)]);
     return kiesNummers([for (var i = 0; i < top.length; i++) (kandidaat: top[i], toppers: _tracks(toppers[i]))],
         max: max);
+  }
+
+  /// Ontdek (Saber, 04-11-2026; `ontdek.dart`): de verwanten van alle zaden samen, gerangschikt
+  /// ([rangschikKandidaten]: verwant aan meer van jouw artiesten = hoger), met hun toppers — en de tweede graad: de
+  /// verwanten van de bovenste [verderVan] kandidaten die geen enkel zaad noemt en die je niet hebt ([eigen], als
+  /// [artistKey]s). Dat is "iets verder": één stap buiten wat je artiesten zelf aanwijzen.
+  ///
+  /// Anders dan [ontdekVoorJou] mogen artiesten die je hebt hier blijven (Saber: "Alleen nummers die ik niet heb");
+  /// de zeef op nummers zit in `stelOntdekSamen`. Alle zaden tegelijk, dan alle kandidaten tegelijk: met 14 zaden en
+  /// 40 kandidaten zo'n 90 vragen in vier golven, door de rijbaan van `deezerbaan.dart`.
+  Future<
+      ({
+        List<({Kandidaat kandidaat, List<RecTrack> toppers})> dichtbij,
+        List<({String via, String naam, List<RecTrack> toppers})> verder,
+      })> ontdekVerwanten(List<({String naam, double gewicht})> zaden,
+      {Set<String> eigen = const {}, int kandidaten = 60, int verderVan = 10, int perVerder = 2, int toppers = 8}) async {
+    final verwant = await Future.wait([
+      for (final z in zaden)
+        () async {
+          final id = await _artistId(z.naam);
+          if (id == null) return (z.naam, const <({int id, String naam})>[]);
+          final rel = ((await _get('$_base/artist/$id/related?limit=20'))?['data'] as List?) ?? const [];
+          return (
+            z.naam,
+            [
+              for (final a in rel)
+                if (a is Map && a['id'] is num) (id: (a['id'] as num).toInt(), naam: '${a['name'] ?? ''}'),
+            ]
+          );
+        }(),
+    ]);
+    final rang = rangschikKandidaten({for (final (zaad, lijst) in verwant) zaad: lijst},
+        gewicht: {for (final z in zaden) z.naam: z.gewicht}, bezit: const {});
+    final top = rang.take(kandidaten).toList();
+    final eersteGraad = {
+      for (final (zaad, lijst) in verwant) ...[artistKey(zaad), for (final a in lijst) artistKey(a.naam)],
+    };
+    final (tops, tweede) = await (
+      Future.wait([for (final k in top) _top(k.id, k.naam, limit: toppers)]),
+      Future.wait([
+        // Van elk zaad zijn beste kandidaat, niet de bovenste acht van allemaal samen: anders kwam "iets verder"
+        // telkens uit dezelfde hoek (gemeten 04-11-2026: vier keer "Een stap verder dan Katy Perry").
+        for (final k in eenPerZaad(top, verderVan))
+          () async {
+            final rel = ((await _get('$_base/artist/${k.id}/related?limit=20'))?['data'] as List?) ?? const [];
+            return (
+              via: k.naam,
+              verwant: [
+                for (final a in rel)
+                  if (a is Map && a['id'] is num)
+                    if ('${a['name'] ?? ''}' case final n when n.isNotEmpty)
+                      if (!eersteGraad.contains(artistKey(n)) && !eigen.contains(artistKey(n)))
+                        (id: (a['id'] as num).toInt(), naam: n),
+              ].take(perVerder).toList(),
+            );
+          }(),
+      ]),
+    ).wait;
+    final gezien = <String>{};
+    final verderKandidaten = [
+      for (final t in tweede)
+        for (final a in t.verwant)
+          if (gezien.add(artistKey(a.naam))) (via: t.via, id: a.id, naam: a.naam),
+    ];
+    final verderTops = await Future.wait([for (final v in verderKandidaten) _top(v.id, v.naam, limit: 5)]);
+    return (
+      dichtbij: [for (var i = 0; i < top.length; i++) (kandidaat: top[i], toppers: _tracks(tops[i]))],
+      verder: [
+        for (var i = 0; i < verderKandidaten.length; i++)
+          (via: verderKandidaten[i].via, naam: verderKandidaten[i].naam, toppers: _tracks(verderTops[i])),
+      ],
+    );
+  }
+
+  /// Uit [top] (op score) de eerste kandidaat van elk zaad ([Kandidaat.via] eerst genoemd), hoogstens [hoeveel]; is
+  /// er dan nog plaats, de volgende op score.
+  static List<Kandidaat> eenPerZaad(List<Kandidaat> top, int hoeveel) {
+    final uit = <Kandidaat>[];
+    final zaden = <String>{};
+    for (final k in top) {
+      if (uit.length >= hoeveel) break;
+      if (zaden.add(k.via.isEmpty ? '' : k.via.first)) uit.add(k);
+    }
+    for (final k in top) {
+      if (uit.length >= hoeveel) break;
+      if (!uit.contains(k)) uit.add(k);
+    }
+    return uit;
   }
 
   /// Discovery feed: top tracks from artists related to the given library seeds.

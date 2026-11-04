@@ -45,23 +45,26 @@ void main() {
           reason: 'met een negatief verschil bleef de oogst staan tot de klok hem weer inhaalde');
     });
 
-    test('initState toont de bewaarde oogst, opnieuw gezeefd tegen wat je nu hebt', () {
+    test('initState toont de bewaarde lijst meteen, en vraagt pas opnieuw na een halfuur', () {
       final lijf = _lijf('class _OntdekViewState extends State<OntdekView> {');
       final init = lijf.indexOf('void initState()');
+      final toon = lijf.indexOf('_lijst = b;', init);
       final bewaard = lijf.indexOf('ontdekBewaardBruikbaar(_bewaardOm', init);
       final laden = lijf.indexOf('addPostFrameCallback((_) => _load())', init);
-      expect(bewaard, greaterThan(init), reason: 'initState kijkt niet naar de bewaarde oogst');
-      expect(laden, greaterThan(bewaard),
-          reason: 'initState laadt opnieuw vóór hij naar de bewaarde oogst kijkt');
-      expect(lijf.substring(bewaard, laden), contains('nogNietInBezit('),
-          reason: 'wat je intussen binnenhaalde blijft als aanbeveling staan');
+      expect(toon, greaterThan(init), reason: 'initState toont de bewaarde lijst niet');
+      expect(bewaard, greaterThan(toon), reason: 'initState kijkt niet naar hoe oud de lijst is');
+      expect(laden, greaterThan(bewaard), reason: 'initState laadt opnieuw vóór hij naar de bewaarde lijst kijkt');
     });
 
-    test('alleen een gelukte oogst wordt bewaard', () {
+    test('wat je intussen binnenhaalde, staat er niet meer: het scherm zeeft bij elke opbouw', () {
       final lijf = _lijf('class _OntdekViewState extends State<OntdekView> {');
-      expect(lijf, contains('if (!failed && recs.isNotEmpty) {'),
-          reason: 'een mislukte of lege oogst blijft een halfuur staan in plaats van opnieuw te '
-              'proberen');
+      expect(lijf, contains('final zichtbaar = ontdekZichtbaar(_lijst, bezit: _bezit, weg: _wegHier);'));
+    });
+
+    test('alleen een lijst met nummers wordt bewaard', () {
+      final lijf = _lijf('class _OntdekViewState extends State<OntdekView> {');
+      expect(lijf, contains('  void _toon(OntdekLijst l) {\n    if (l.nummers.isEmpty) return;\n    _bewaard = l.nummers;'),
+          reason: 'een lege lijst blijft een halfuur staan in plaats van opnieuw te proberen');
     });
   });
 

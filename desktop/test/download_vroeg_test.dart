@@ -146,7 +146,7 @@ void main() {
     expect(z, contains("search(vraag, onPartial: (l) => unawaited(kijk(l)), extra: extra).then((alles) async {"),
         reason: 'anders de hele uitslag');
     final main = File('lib/main.dart').readAsStringSync();
-    final hit = main.substring(main.indexOf('Future<void> _downloadHit('));
+    final hit = main.substring(main.indexOf('Future<void> haalTrefferBesteBron('));
     expect(hit, contains('zoek: () => soulseek.zoekVroeg(soulseekQuery(t.artist, t.title, album: t.album),'));
     expect(hit, contains('zeefOp: (titel: t.title, artiest: t.artist, album: t.album),'),
         reason: 'op de gsm zoekt de pc, en die moet weten waarop hij zeeft');
