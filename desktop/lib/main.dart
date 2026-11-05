@@ -2930,7 +2930,13 @@ Future<void> main() async {
     // Een betere versie hoort OP het bestand te landen dat er al ligt, niet in een nieuwe map die uit
     // zijn eigen albumtag volgt en ook niet ernaast onder een andere naam. Zie
     // [LibraryStore.fileOfRecording].
-    downloads.mapVanBestaande = library.fileOfRecording;
+    // Altijd het NUMMER, nooit een van zijn versies: op artiest en titel vond de bibliotheek soms de cd-versie in
+    // "30 (cd)", en dan werd die het anker van de volgende versie — "30 (cd) (cd)", "30 (cd) (cd) (cd)" (Adele — To Be
+    // Loved, gemeten 05-11-2026), en wat je eerder koos hing aan het oude pad.
+    downloads.mapVanBestaande = (artist, title, {seconds, nietIn}) {
+      final p = library.fileOfRecording(artist, title, seconds: seconds, nietIn: nietIn);
+      return p == null ? null : (versies.ankerVan(p) ?? p);
+    };
     // Speelt dit bestand ergens: hier, of leest een toestel of speaker het van deze pc (lan/lezers.dart)? Dan geen
     // nieuwe hoes erin en geen betere kopie eroverheen. Saber, 24-10-2026: de hoesveger schreef in "Mademoiselle
     // chante le blues" terwijl de Mac het las, en de Mac kon het daarna niet openen.

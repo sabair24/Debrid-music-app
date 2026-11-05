@@ -2246,8 +2246,19 @@ class DownloadManager extends ChangeNotifier {
     final naam = gezag == null ? baseName(bestaand) : '${gezag.artist} — ${gezag.title}';
     final s = score.toStringAsFixed(2).replaceAll('.', ',');
     final grootte = staged.lengthSync();
-    if (lijst.van(bestaand) != null || lijst.afgewezen(bestaand, grootte)) {
+    final md5 = _geluidVan(staged.path);
+    final weggegooid = lijst.afgewezen(bestaand, grootte) ||
+        (md5 != null && gezag != null && lijst.afgewezenGeluid(gezag.artist, gezag.title, md5));
+    if (lijst.van(bestaand) != null || weggegooid) {
       _log.line('   $bron: twijfel ($s) voor "$naam", maar er wacht al een twijfelgeval of je gooide deze weg — weggegooid');
+      await _discardStaged(staged.path);
+      return true;
+    }
+    // Wat je al hebt, sample voor sample (je nummer of een van je versies), vraag je niet nog eens (Saber, 05-11-2026:
+    // "bij klaar om te kiezen komen vaak dezelfde liedjes steeds terug"). Gala en Kings Of Leon kwamen van dezelfde
+    // uploader en uit dezelfde map als hun vinylversie; je koos Bewaren, en dan pas zei de app "bit voor bit dezelfde".
+    if (await _zelfdeAlsWatJeHebt(staged.path, bestaand) case final wat?) {
+      _log.line('   $bron: twijfel ($s) voor "$naam", maar bit voor bit dezelfde als $wat — niet gevraagd, weggegooid');
       await _discardStaged(staged.path);
       return true;
     }
@@ -2284,6 +2295,7 @@ class DownloadManager extends ChangeNotifier {
       grootte: grootte,
       gezag: gezag?.toJson(),
       bronpad: bronpad,
+      md5: md5,
     ));
     await lijst.bewaar();
     _log.line('"$naam": TWIJFEL — $bron klinkt beter ($kwaliteit), maar de vingerafdruk zegt $s: bewaard tot je kiest');
@@ -6643,6 +6655,28 @@ class DownloadManager extends ChangeNotifier {
   @visibleForTesting
   Future<String?> zelfdeAlsWatJeHebtVoorToets(String kandidaat, String anker) => _zelfdeAlsWatJeHebt(kandidaat, anker);
 
+  /// De controlesom van de samples uit de FLAC-kop van [pad] ([leesStreaminfo]), of null: geen FLAC of een lege som.
+  static String? _geluidVan(String pad) {
+    final md5 = leesStreaminfo(pad)?.md5;
+    return md5 == null || md5 == '00000000000000000000000000000000' ? null : md5;
+  }
+
+  /// Heb je [f] al? Hetzelfde bestand bij een uploader (zijn pad) als waar je nummer of een van je versies vandaan
+  /// kwam ([Versie.bron]), of een kopie van deze grootte die je weggooide. Dan haalt de jacht hem niet nog eens binnen:
+  /// Gala's drie twijfels van 04-11-2026 kwamen van koii, uit "music\Gala\Come Into My Life (1997)", net als de
+  /// vinylversie die je op 31-10 bewaarde. Null: nieuw.
+  @visibleForTesting
+  String? alGekend(SoulseekFile f, String? anker) {
+    if (anker == null) return null;
+    String n(String p) => p.replaceAll('/', r'\').toLowerCase();
+    final pad = n(f.filename);
+    for (final v in versies.versiesVan(anker)) {
+      if (v.bron.isNotEmpty && n(v.bron) == pad) return 'je versie ${versieMapLabel(v.soort, v.persing)}';
+    }
+    if (twijfel?.afgewezen(anker, f.size) ?? false) return 'een kopie die je weggooide';
+    return null;
+  }
+
   @visibleForTesting
   Future<bool> zetKlaarVoorToets(Soortvraag v, File staged, String bron, String bronpad, double score) =>
       _zetKlaar(v, staged, bron, bronpad, score);
@@ -6775,10 +6809,17 @@ class DownloadManager extends ChangeNotifier {
 
     _log.line('"${job.name}": jacht op betere kwaliteit start, budget ${_kort(_upgradeBudget)} '
         'voor ${better.length} peers samen');
+    // Jouw nummer, om te weten wat je al hebt ([alGekend]).
+    final g = job.authority;
+    final anker = speeltPad ?? (g == null ? null : mapVanBestaande?.call(g.artist, g.title, seconds: g.seconds));
     try {
       await soulseek.withSession((session) async {
         for (final f in better) {
           if (job.cancelled) return; // the user stopped this track; don't keep chasing it
+          if (alGekend(f, anker) case final wat?) {
+            _log.line('   ${f.username}: overgeslagen — hetzelfde bestand als $wat');
+            continue;
+          }
           final left = deadline.difference(DateTime.now());
           if (left <= const Duration(seconds: 30)) {
             // DE grens waar dit stukloopt, en zonder deze regel is hij van buitenaf onzichtbaar: de

@@ -112,6 +112,10 @@ class Twijfelgeval {
   /// De luidheid van de kopie (`Luidheidsmeting.toJson`), gemeten bij het klaarzetten: A/B even luid.
   final Map<String, dynamic>? luid;
 
+  /// De controlesom van de samples uit de FLAC-kop, of null: wat je weggooit komt zo ook niet terug als dezelfde opname
+  /// bij een andere uploader (andere tags, dus een andere grootte) — zie [Twijfellijst.afgewezenGeluid].
+  final String? md5;
+
   const Twijfelgeval({
     required this.id,
     required this.pad,
@@ -125,6 +129,7 @@ class Twijfelgeval {
     this.soort,
     this.bronpad,
     this.luid,
+    this.md5,
   });
 
   /// Je vroeg hem zelf (klaargezet), en hij is dus geen twijfel van de app.
@@ -152,6 +157,7 @@ class Twijfelgeval {
         if (soort != null) 'soort': soort!.naam,
         if (bronpad != null) 'bronpad': bronpad,
         if (luid != null) 'luid': luid,
+        if (md5 != null) 'md5': md5,
       };
 
   static Twijfelgeval? fromJson(Object? j) {
@@ -171,11 +177,18 @@ class Twijfelgeval {
       soort: kopiesoortUit(j['soort']),
       bronpad: j['bronpad'] is String ? j['bronpad'] as String : null,
       luid: j['luid'] is Map ? Map<String, dynamic>.from(j['luid'] as Map) : null,
+      md5: j['md5'] is String ? j['md5'] as String : null,
     );
   }
 }
 
 String _sleutel(String pad) => pad.replaceAll('\\', '/').toLowerCase();
+
+/// Een nummer los van zijn map: artiest en titel, klein en zonder leestekens.
+String twijfelNummer(String artiest, String titel) {
+  String k(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9À-ɏ]'), '');
+  return '${k(artiest)}|${k(titel)}';
+}
 
 // ── Wat de albumpagina leest ────────────────────────────────────────────────────────────────────
 // Op de pc gevuld door [Twijfellijst], op een toestel door de catalogus ([zetTwijfelVanPc]) — zoals `gemeten()`.
@@ -240,12 +253,25 @@ class Twijfellijst {
     twijfelUitgave.value++;
   }
 
-  /// Weg uit de lijst; met [nee] komt een kandidaat van dezelfde grootte niet terug.
+  /// Per nummer (artiest en titel, [twijfelNummer]) de controlesommen van de samples van wat je weggooide: dezelfde
+  /// opname bij een andere uploader komt niet terug, en ook niet als het nummer intussen in een andere map staat
+  /// (Saber, 05-11-2026: "bij klaar om te kiezen komen vaak dezelfde liedjes steeds terug").
+  final Map<String, Set<String>> _neeGeluid = {};
+
+  bool afgewezenGeluid(String artiest, String titel, String md5) =>
+      _neeGeluid[twijfelNummer(artiest, titel)]?.contains(md5) ?? false;
+
+  /// Weg uit de lijst; met [nee] komt een kandidaat van dezelfde grootte niet terug, en (met een controlesom en tags)
+  /// dezelfde opname ook niet ([afgewezenGeluid]).
   Twijfelgeval? verwijder(String pad, {bool nee = false}) {
     final g = _perPad.remove(_sleutel(pad));
     if (g == null) return null;
     _info.remove(_sleutel(pad));
     if (nee) (_nee[_sleutel(pad)] ??= {}).add(g.grootte);
+    final md5 = g.md5, gezag = g.gezag;
+    if (nee && md5 != null && gezag != null) {
+      (_neeGeluid[twijfelNummer('${gezag['artist'] ?? ''}', '${gezag['title'] ?? ''}')] ??= {}).add(md5);
+    }
     twijfelUitgave.value++;
     return g;
   }
@@ -268,6 +294,12 @@ class Twijfellijst {
           _nee['${e.key}'] = {for (final x in (e.value is List ? e.value as List : const [])) if (x is num) x.toInt()};
         }
       }
+      final geluid = j['neeGeluid'];
+      if (geluid is Map) {
+        for (final e in geluid.entries) {
+          _neeGeluid['${e.key}'] = {for (final x in (e.value is List ? e.value as List : const [])) if (x is String) x};
+        }
+      }
       twijfelUitgave.value++;
     } catch (_) {/* een kapotte lijst begint leeg; de kopieën blijven in de map staan */}
   }
@@ -279,6 +311,7 @@ class Twijfellijst {
         'versie': 1,
         'gevallen': [for (final g in _perPad.values) g.toJson()],
         'nee': {for (final e in _nee.entries) e.key: e.value.toList()},
+        'neeGeluid': {for (final e in _neeGeluid.entries) e.key: e.value.toList()},
       }));
       await tmp.rename(_bestand);
     } catch (_) {/* volgende keer opnieuw */}

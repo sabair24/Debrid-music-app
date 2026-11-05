@@ -121,7 +121,19 @@ String versieMapLabel(Kopiesoort soort, String persing) =>
 /// De map van een versie naast de map van zijn anker: `…/Spice` → `…/Spice (vinyl)`. Eén map per soort (Saber,
 /// 27-10-2026: "enkel studio, cd of vinyl drie soorten"): de persing staat in het label, niet in de mapnaam — anders
 /// werd één vinylplaat in Roon vijf halve albums ("Discovery (vinyl LP 2001)", "… (vinyl LP 2021)", …).
-String versieMap(String ankerMap, Kopiesoort soort) => '$ankerMap (${soort.naam})';
+String versieMap(String ankerMap, Kopiesoort soort) => '${zonderSoortAchtervoegsel(ankerMap)} (${soort.naam})';
+
+/// "30 (cd) (cd)" → "30": de achtervoegsels die [versieMap] erachter zet, er weer af. Staat een anker zelf in een
+/// versiemap (een versie die het nummer werd), dan kreeg zijn volgende versie er nog een bij: Adele — To Be Loved
+/// stond op 05-11-2026 in "30 (cd) (cd)" met een versie in "30 (cd) (cd) (cd)".
+String zonderSoortAchtervoegsel(String naam) {
+  final patroon = RegExp(r'\s+\((?:' '${Kopiesoort.values.map((s) => RegExp.escape(s.naam)).join('|')}' r')\)$');
+  var uit = naam;
+  while (patroon.hasMatch(uit)) {
+    uit = uit.replaceFirst(patroon, '');
+  }
+  return uit;
+}
 
 /// Zijn [a] en [b] dezelfde versie van een nummer — dan wint de bewezen betere en blijft er één? Ja als ze van dezelfde
 /// soort zijn: studio, cd of vinyl.
