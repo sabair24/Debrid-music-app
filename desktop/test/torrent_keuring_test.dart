@@ -226,7 +226,7 @@ void main() {
 
     test('bij het opstarten wordt een achtergebleven keuring afgemaakt', () {
       final main = File('lib/main.dart').readAsStringSync();
-      final koppel = main.indexOf('downloads.mapVanBestaande = library.fileOfRecording;');
+      final koppel = main.indexOf('downloads.mapVanBestaande = (artist, title, {seconds, nietIn}) {');
       final hervat = main.indexOf('downloads.hervatKeuring()');
       expect(koppel, greaterThan(0));
       expect(hervat, greaterThan(koppel), reason: 'de keuring vraagt de bibliotheek wat er al ligt');

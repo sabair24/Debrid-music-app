@@ -332,14 +332,14 @@ String _ext(String naam) => naam.contains('.') ? naam.substring(naam.lastIndexOf
 Future<void> _zetVersieAlbum(String pad, String? album, Kopiesoort soort) async {
   try {
     if (album == null || album.trim().isEmpty) return;
-    final naam = _versieAlbumnaam(album, soort);
+    final naam = versieAlbumnaam(album, soort);
     await writeTagFields(File(pad), {'ALBUM': naam});
   } catch (_) {/* het bestand staat goed; alleen de albumnaam bleef die van het nummer */}
 }
 
-/// "Spice" → "Spice (vinyl)" ([_zetVersieAlbum]).
-String _versieAlbumnaam(String album, Kopiesoort soort) =>
-    album.endsWith('(${soort.naam})') ? album : '$album (${soort.naam})';
+/// "Spice" → "Spice (vinyl)" ([_zetVersieAlbum]); "30 (cd)" → "30 (studio)", nooit "30 (cd) (studio)"
+/// ([zonderSoortAchtervoegsel]).
+String versieAlbumnaam(String album, Kopiesoort soort) => '${zonderSoortAchtervoegsel(album)} (${soort.naam})';
 
 /// De albumnaam van het nummer op [pad], of null.
 String? _albumVan(String pad) {
@@ -801,7 +801,7 @@ Future<Soortopruiming> eenPerSoort(
           log?.call('"$naam": ${versieLabel(soort, persing)} naar "${_naam(map)}" lukte niet — $e');
           continue;
         }
-      } else if (album != null && _albumVan(pad) != _versieAlbumnaam(album, soort)) {
+      } else if (album != null && _albumVan(pad) != versieAlbumnaam(album, soort)) {
         // Al in de map van zijn soort, maar met de albumnaam van zijn persing: Voyager stond in "Discovery (vinyl)" als
         // "Discovery (vinyl LP 2022)" — in Roon een album van één nummer naast "Discovery (vinyl)" (27-10-2026).
         await _zetVersieAlbum(pad, album, soort);
