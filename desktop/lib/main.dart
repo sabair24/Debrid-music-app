@@ -219,10 +219,10 @@ import 'versies.dart';
 import 'versie_acties.dart';
 import 'versie_uitlijner.dart' show VersieUitlijnRonde, meetUitlijning;
 import 'nultoets_meter.dart' show Nultoetser, laadNultoetsen, meetNultoets;
-import 'versie_opbergen.dart' show eenPerSoort;
+import 'versie_opbergen.dart' show eenPerSoort, heeftSchoneCd, zetScheveAnkersRecht;
 import 'vinylspoor.dart' show Stiltemeter, stilteVan, uitlijningVan;
 import 'versie_terugzetter.dart';
-import 'soortjacht.dart' show Soortvragen, gezochtVoor, soortvraagUitgave;
+import 'soortjacht.dart' show CdjachtStand, Soortvragen, gezochtVoor, soortvraagUitgave;
 import 'lan/vaste_naam.dart' show kPcHost;
 import 'dataverbruik.dart';
 import 'ui/dataverbruik_info.dart';
@@ -2998,6 +2998,8 @@ Future<void> main() async {
           klaar: library.scan,
           bestand: '$appDir${Platform.pathSeparator}versies_dubbel.json',
           logboek: '$logDir${Platform.pathSeparator}downloads.log',
+          // Een cd die al eens nagekeken was, opnieuw als zijn nummer nog geen schone cd heeft (05-11-2026).
+          cdNodig: (anker) => !heeftSchoneCd(anker),
           log: versieLog);
       Timer(const Duration(minutes: 10), () => unawaited(terug.ronde()));
       // Eén kopie per soort (versie_opbergen.dart; Saber, 27-10-2026: "enkel studio, cd of vinyl drie soorten"): na drie
@@ -3011,6 +3013,14 @@ Future<void> main() async {
       };
       Timer(const Duration(minutes: 3), () {
         unawaited(() async {
+          try {
+            // Een nummer dat in een versiemap belandde ("30 (cd) (cd)"), terug naar zijn album (05-11-2026).
+            final recht = await zetScheveAnkersRecht(
+                inGebruik: (p) => downloads.speeltNu?.call(p) ?? false, log: downloads.logRegel);
+            if (recht > 0) await library.scan();
+          } catch (e) {
+            downloads.logRegel('scheve nummers rechtzetten: MISLUKT: $e');
+          }
           try {
             final r = await eenPerSoort(
                 dubbel: '${downloads.downloadsRoot}${Platform.pathSeparator}$parkeerMap',
@@ -3049,6 +3059,14 @@ Future<void> main() async {
       await vragen.laad();
       downloads.soortvragen = vragen;
       if (vragen.alle.isNotEmpty) startLog.line('soort: ${vragen.alle.length} staande vragen om studio, cd of vinyl');
+      // De cd-jacht (Saber, 05-11-2026: "zoiezo bij alle liedjes de cd kwaliteit"): stil, in een eigen lijst, één plaat
+      // per ronde; de eerste ronde na een kwartier, als één-per-soort en het nakijken van _dubbel gedaan zijn.
+      final cdVragen = Soortvragen('$appDir${Platform.pathSeparator}cdjacht.json', toon: false);
+      await cdVragen.laad();
+      downloads.cdjacht = cdVragen;
+      downloads.cdjachtNummers = () => List<Track>.of(library.tracks);
+      downloads.werkCdjachtStandBij();
+      startLog.line('cd-jacht: ${cdVragen.alle.length} nummers zoeken een cd, ${cdVragen.binnen} kregen er al een');
       unawaited(Future<void>.delayed(const Duration(minutes: 2), downloads.soortvragenNakijken));
     }
     // TIDAL voor de hele bibliotheek (Saber, 24-10-2026: "als er een beter versie kwaliteit te vinden is op tidal, moet
@@ -27194,6 +27212,20 @@ class _KwaliteitViewState extends State<KwaliteitView> {
         ValueListenableBuilder<VervangJacht>(
           valueListenable: context.read<DownloadManager>().jacht,
           builder: (context, j, _) => VervangJachtStrook(jacht: j, nu: DateTime.now()),
+        ),
+        // De cd-jacht (Saber, 05-11-2026): stil op de achtergrond, zonder meldingen — hier staat hoe ver hij is.
+        ValueListenableBuilder<CdjachtStand>(
+          valueListenable: context.read<DownloadManager>().cdjachtStand,
+          builder: (context, s, _) => s.zin == null
+              ? const SizedBox.shrink()
+              : Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Row(children: [
+                    Icon(Icons.album_outlined, size: 16, color: _muted),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(s.zin!, style: TextStyle(color: _muted, fontSize: 12.5))),
+                  ]),
+                ),
         ),
         if (_terug != null) _terugBlok(_terug!),
         const SizedBox(height: 6),

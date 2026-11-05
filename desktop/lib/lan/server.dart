@@ -3440,14 +3440,14 @@ class LanServer {
   /// lege verlanglijst: de strook verscheen daar nooit, en "Laat de app zoeken" zette wensen op een
   /// lijst waar niemand naar zocht.
   ///
-  /// GET: `{jacht}`. POST `{ids, vrijgeven}`: die nummers op de verlanglijst; met `vrijgeven` eerst de
+  /// GET: `{jacht, cd}` (cd: de stand van de cd-jacht, [CdjachtStand]). POST `{ids, vrijgeven}`: die nummers op de verlanglijst; met `vrijgeven` eerst de
   /// bescherming van je eigen keuzes eraf. Antwoord `{vrij, nieuw, gevonden, jacht}`.
   Future<void> _kwaliteit(HttpRequest req) async {
     final manager = downloads;
     if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
     if (req.method != 'POST') {
       await manager.ververJachtStand();
-      return _json(req.response, {'jacht': manager.jacht.value.toJson()});
+      return _json(req.response, {'jacht': manager.jacht.value.toJson(), 'cd': manager.cdjachtStand.value.toJson()});
     }
     final body = await _jsonBody(req);
     if (body == null) return;

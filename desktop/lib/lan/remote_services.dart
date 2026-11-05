@@ -23,6 +23,7 @@ import '../cloud/queue.dart';
 import '../online.dart';
 import '../organize.dart';
 import '../search.dart';
+import '../soortjacht.dart' show CdjachtStand;
 import '../soulseek.dart';
 import '../torbox.dart';
 import '../models.dart' show Track;
@@ -425,6 +426,8 @@ class RemoteDownloadManager extends DownloadManager {
     try {
       final res = await _rpc.get('/api/kwaliteit', timeout: const Duration(seconds: 15));
       _neemJacht(res['jacht']);
+      // De cd-jacht loopt ook op de pc: zijn teller komt mee (een oude pc stuurt hem niet, dan blijft hij leeg).
+      if (res['cd'] case final Map<String, dynamic> cd) cdjachtStand.value = CdjachtStand.fromJson(cd);
     } catch (_) {/* de strook blijft staan zoals hij was; de volgende tik vraagt het opnieuw */}
   }
 

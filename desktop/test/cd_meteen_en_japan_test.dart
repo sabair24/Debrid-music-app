@@ -387,8 +387,12 @@ void main() {
 
       test('aangesloten: de keuring houdt een cd meteen, een nummer dat niet verliesvrij is wordt vervangen', () {
         final online = _bron('lib/online.dart');
-        expect(online, contains('      if (cdMeteenHouden(v.soort, score ?? 0)) {\n        if (await _houdCdMeteen(v.pad, naam) case final zin?) {'));
-        expect(online, contains('    final zin = await vervangDoorTwijfel(pad, alsVersie: isVerliesvrij(soortVan(pad)));'));
+        expect(
+            online,
+            contains('      if (cdMeteenHouden(v.soort, score ?? 0)) {\n'
+                '        if (await _houdCdMeteen(v.pad, naam, standaard: v.vanzelf && cdWordtStandaard(v.pad)) case final zin?) {'));
+        expect(online,
+            contains('    final zin = await vervangDoorTwijfel(pad, alsVersie: isVerliesvrij(soortVan(pad)), standaard: standaard);'));
         expect(online, contains('      if (heeftSoortAl(t.path, soort)) {'));
       });
     });

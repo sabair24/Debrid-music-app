@@ -25,6 +25,23 @@ Duration soortvraagWacht(int rondes) => switch (rondes) {
       _ => const Duration(days: 1),
     };
 
+/// Wanneer een vraag van de cd-jacht ([Soortvraag.vanzelf]) opnieuw zoekt, na [rondes] rondes zonder cd: na 2, 4 en 7
+/// dagen, daarna om de 14 dagen — en om de 30 als TIDAL de opname zelf niet kent ([tidalKentHemNiet]). Saber, 05-11-2026:
+/// *"Blijven proberen"*, zoals de blijvende jacht.
+Duration cdjachtWacht(int rondes, {bool tidalKentHemNiet = false}) => switch (rondes) {
+      <= 1 => const Duration(days: 2),
+      2 => const Duration(days: 4),
+      3 => const Duration(days: 7),
+      _ => tidalKentHemNiet ? const Duration(days: 30) : const Duration(days: 14),
+    };
+
+/// Hoeveel nummers van één plaat de cd-jacht in één ronde neemt (één plaat per ronde, één nummer tegelijk).
+const int kCdjachtPerRonde = 12;
+
+/// Hoeveel cd's de cd-jacht hoogstens per uur van TIDAL haalt: de opwaardeerronde van TIDAL (20 per uur) en de radio (15)
+/// lopen ernaast.
+const int kCdjachtTidalPerUur = 10;
+
 /// De extra zoekopdracht bij Soulseek per soort: "<vraag> 24bit", "<vraag> vinyl". Een cd-kopie vindt de gewone vraag.
 List<String> zoekwoordenVoorSoort(Kopiesoort s) => switch (s) {
       Kopiesoort.studio => const ['24bit'],
@@ -130,7 +147,10 @@ class Soortvraag {
     this.rondes = 0,
     this.laatsteMs = 0,
     this.gezag,
-  });
+    this.vanzelf = false,
+    Set<int>? nee,
+    this.tidalKentHemNiet = false,
+  }) : nee = nee ?? <int>{};
 
   /// Het nummer in de bibliotheek.
   String pad;
@@ -144,9 +164,21 @@ class Soortvraag {
   /// De tags voor het opbergen (`TrackTags.toJson`).
   final Map<String, dynamic>? gezag;
 
+  /// Een vraag van de cd-jacht (Saber, 05-11-2026: *"zoiezo bij alle liedjes de cd kwaliteit"*), niet van jou: geen label
+  /// op het scherm, geen melding, en een kopie waar de vingerafdruk over twijfelt wordt niet aangeboden.
+  final bool vanzelf;
+
+  /// De groottes die de cd-jacht voor dit nummer al binnenhaalde en weggooide: niet nog eens halen.
+  final Set<int> nee;
+
+  /// TIDAL vond bij de laatste ronde niets van deze opname ([cdjachtWacht]).
+  bool tidalKentHemNiet;
+
   /// Mag hij nu weer zoeken?
   bool aanDeBeurt(DateTime nu) =>
-      rondes == 0 || nu.millisecondsSinceEpoch - laatsteMs >= soortvraagWacht(rondes).inMilliseconds;
+      rondes == 0 ||
+      nu.millisecondsSinceEpoch - laatsteMs >=
+          (vanzelf ? cdjachtWacht(rondes, tidalKentHemNiet: tidalKentHemNiet) : soortvraagWacht(rondes)).inMilliseconds;
 
   Map<String, dynamic> toJson() => {
         'pad': pad,
@@ -159,6 +191,9 @@ class Soortvraag {
         'rondes': rondes,
         'laatste': laatsteMs,
         if (gezag != null) 'gezag': gezag,
+        if (vanzelf) 'vanzelf': true,
+        if (nee.isNotEmpty) 'nee': nee.toList(),
+        if (tidalKentHemNiet) 'tidalNiet': true,
       };
 
   static Soortvraag? fromJson(Object? j) {
@@ -176,8 +211,30 @@ class Soortvraag {
       rondes: (j['rondes'] as num?)?.toInt() ?? 0,
       laatsteMs: (j['laatste'] as num?)?.toInt() ?? 0,
       gezag: j['gezag'] is Map ? Map<String, dynamic>.from(j['gezag'] as Map) : null,
+      vanzelf: j['vanzelf'] == true,
+      nee: {for (final x in (j['nee'] is List ? j['nee'] as List : const [])) if (x is num) x.toInt()},
+      tidalKentHemNiet: j['tidalNiet'] == true,
     );
   }
+}
+
+/// Hoe ver de cd-jacht is (Kwaliteit, op de pc en op een toestel): hoeveel nummers er sinds de start een cd bij kregen,
+/// en hoeveel er nog zoeken.
+class CdjachtStand {
+  const CdjachtStand({this.binnen = 0, this.zoekt = 0});
+  final int binnen, zoekt;
+
+  Map<String, dynamic> toJson() => {'binnen': binnen, 'zoekt': zoekt};
+
+  static CdjachtStand fromJson(Map<String, dynamic> j) =>
+      CdjachtStand(binnen: (j['binnen'] as num?)?.toInt() ?? 0, zoekt: (j['zoekt'] as num?)?.toInt() ?? 0);
+
+  /// De regel onder Kwaliteit, of null als er niets te zeggen valt.
+  String? get zin => binnen == 0 && zoekt == 0
+      ? null
+      : zoekt == 0
+          ? 'Cd erbij: $binnen — elk nummer heeft nu een cd'
+          : 'Cd erbij: $binnen · zoekt nog $zoekt';
 }
 
 String _sleutel(String pad) => pad.replaceAll('\\', '/').toLowerCase();
@@ -208,22 +265,28 @@ void zetSoortvraagVanPc(String pad, Kopiesoort? soort) {
 
 /// De staande vragen van de pc, op schijf. Eén per nummer: een nieuwe vraag voor hetzelfde nummer vervangt de vorige.
 class Soortvragen {
-  Soortvragen(this._bestand);
+  /// [toon] uit: de vragen van de cd-jacht (`cdjacht.json`) — geen "zoekt cd" bij honderden nummers op het scherm.
+  Soortvragen(this._bestand, {this.toon = true});
   final String _bestand;
+  final bool toon;
   final Map<String, Soortvraag> _perPad = {};
+
+  /// Hoeveel nummers hun vraag zagen uitkomen ([CdjachtStand.binnen]); bewaard met de lijst.
+  int binnen = 0;
 
   Iterable<Soortvraag> get alle => _perPad.values;
   Soortvraag? van(String pad) => _perPad[_sleutel(pad)];
 
   void zet(Soortvraag v) {
     _perPad[_sleutel(v.pad)] = v;
+    if (!toon) return;
     _gezocht[_sleutel(v.pad)] = v.soort;
     soortvraagUitgave.value++;
   }
 
   Soortvraag? verwijder(String pad) {
     final v = _perPad.remove(_sleutel(pad));
-    if (v != null && _gezocht.remove(_sleutel(pad)) != null) soortvraagUitgave.value++;
+    if (toon && v != null && _gezocht.remove(_sleutel(pad)) != null) soortvraagUitgave.value++;
     return v;
   }
 
@@ -244,6 +307,7 @@ class Soortvragen {
         final v = Soortvraag.fromJson(x);
         if (v != null) zet(v);
       }
+      if (j is Map && j['binnen'] is num) binnen = (j['binnen'] as num).toInt();
     } catch (_) {/* een kapotte lijst begint leeg */}
   }
 
@@ -252,6 +316,7 @@ class Soortvragen {
       final tmp = File('$_bestand.tmp');
       await tmp.writeAsString(jsonEncode({
         'versie': 1,
+        if (binnen > 0) 'binnen': binnen,
         'vragen': [for (final v in _perPad.values) v.toJson()],
       }));
       await tmp.rename(_bestand);

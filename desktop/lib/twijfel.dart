@@ -116,6 +116,10 @@ class Twijfelgeval {
   /// bij een andere uploader (andere tags, dus een andere grootte) — zie [Twijfellijst.afgewezenGeluid].
   final String? md5;
 
+  /// Gevonden door de cd-jacht ([Soortvraag.vanzelf]), niet door jou gevraagd: hij wordt nooit "jouw keuze" (de app blijft
+  /// daarna ook naar betere zoeken, Saber 05-11-2026: "wel nog betere versies zoeken").
+  final bool vanzelf;
+
   const Twijfelgeval({
     required this.id,
     required this.pad,
@@ -130,6 +134,7 @@ class Twijfelgeval {
     this.bronpad,
     this.luid,
     this.md5,
+    this.vanzelf = false,
   });
 
   /// Je vroeg hem zelf (klaargezet), en hij is dus geen twijfel van de app.
@@ -158,6 +163,7 @@ class Twijfelgeval {
         if (bronpad != null) 'bronpad': bronpad,
         if (luid != null) 'luid': luid,
         if (md5 != null) 'md5': md5,
+        if (vanzelf) 'vanzelf': true,
       };
 
   static Twijfelgeval? fromJson(Object? j) {
@@ -178,6 +184,7 @@ class Twijfelgeval {
       bronpad: j['bronpad'] is String ? j['bronpad'] as String : null,
       luid: j['luid'] is Map ? Map<String, dynamic>.from(j['luid'] as Map) : null,
       md5: j['md5'] is String ? j['md5'] as String : null,
+      vanzelf: j['vanzelf'] == true,
     );
   }
 }
