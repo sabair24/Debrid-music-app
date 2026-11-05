@@ -70,6 +70,23 @@ typedef TwijfelInfo = ({
 /// ook zonder meting (score 0: geen fpcalc), want dan is er niets nagekeken.
 bool misschienAndereOpname(double score) => score < maybeSameRecordingScore;
 
+/// Vanaf welke vingerafdruk een cd naast je nummer een andere MASTERING van dezelfde opname mag zijn ([cdAlsVersieGoed]).
+const double kCdMasteringVanaf = 0.80;
+
+/// Hoeveel seconden zo'n cd hoogstens langer of korter mag zijn dan je nummer.
+const int kCdMasteringLengte = 3;
+
+/// Mag een cd stil als versie blijven naast je nummer — de cd-jacht, of een cd die terugkomt uit _dubbel? Zeker dezelfde
+/// opname ([maybeSameRecordingScore]), of een andere mastering: vanaf [kCdMasteringVanaf] en even lang (hoogstens
+/// [kCdMasteringLengte] s verschil). Gemeten 05-11-2026: een cd naast een geremasterde studio (24/88,2–24/192 van een oud
+/// nummer) scoort 0,80–0,88 — Wicked Game 0,83, Don't You 0,86, Babacar 0,88 — en een live- of remixversie onder 0,70,
+/// met een andere lengte. Saber: *"Bewaren vanaf 0,80, lengte ±3 s"*. Zonder bekende lengte alleen de zekere.
+bool cdAlsVersieGoed(double score, {int? lengte, int? seconden}) {
+  if (!misschienAndereOpname(score)) return true;
+  if (score < kCdMasteringVanaf || lengte == null || seconden == null) return false;
+  return (lengte - seconden).abs() <= kCdMasteringLengte;
+}
+
 /// Mag een gevraagde kopie van [soort] meteen blijven, zonder eerst te luisteren? Alleen een cd (Saber, 26-10-2026: "cd
 /// kwaliteit is altijd e"), en alleen als de vingerafdruk zeker dezelfde opname zegt. Studio en vinyl verschillen per
 /// bron; die kies je zelf.

@@ -389,7 +389,7 @@ void main() {
         final online = _bron('lib/online.dart');
         expect(
             online,
-            contains('      if (cdMeteenHouden(v.soort, score ?? 0)) {\n'
+            contains('      if (v.vanzelf || cdMeteenHouden(v.soort, score ?? 0)) {\n'
                 '        if (await _houdCdMeteen(v.pad, naam, standaard: v.vanzelf && cdWordtStandaard(v.pad)) case final zin?) {'));
         expect(online,
             contains('    final zin = await vervangDoorTwijfel(pad, alsVersie: isVerliesvrij(soortVan(pad)), standaard: standaard);'));

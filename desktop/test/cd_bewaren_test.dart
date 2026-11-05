@@ -70,13 +70,19 @@ Echtheidsoordeel _o(Bandbreedte band, {Integriteit integriteit = Integriteit.onb
     gebruikteBits: 16,
     integriteit: integriteit);
 
-/// Alles klinkt hetzelfde: dezelfde opname.
+/// Alles klinkt hetzelfde (1,00), behalve wat in _dubbel staat met [dubbelBits] andere bits per 32: 4 geeft 0,875 (een
+/// andere mastering), 8 geeft 0,75.
 class _NepVingerafdruk extends Fingerprinter {
+  _NepVingerafdruk({this.dubbelBits = 0});
+  final int dubbelBits;
   @override
   bool get available => true;
   @override
-  Future<Fingerprint?> of(String path, {bool compressed = false, bool heel = false}) async =>
-      Fingerprint(200, [for (var i = 0; i < 400; i++) i * 31], null);
+  Future<Fingerprint?> of(String path, {bool compressed = false, bool heel = false}) async {
+    final anders = path.contains('_dubbel') ? (1 << dubbelBits) - 1 : 0;
+    // Willekeurig ogende waarden: een andere verschuiving past dan nergens (~0,5), alleen de juiste.
+    return Fingerprint(200, [for (var i = 0; i < 400; i++) ((i * 2654435761) & 0xFFFFFFFF) ^ anders], null);
+  }
 }
 
 (int, int) _kop(String pad) {
@@ -88,9 +94,10 @@ void main() {
   late Directory root;
   late String sep;
 
-  File schrijf(String pad, {required int hz, required int bits, Map<String, String> tags = const {}, int vulling = 4096}) {
+  File schrijf(String pad,
+      {required int hz, required int bits, Map<String, String> tags = const {}, int vulling = 4096, int sec = 200}) {
     final f = File(pad)..parent.createSync(recursive: true);
-    f.writeAsBytesSync(_flac(hz: hz, bits: bits, tags: tags, vulling: vulling));
+    f.writeAsBytesSync(_flac(hz: hz, bits: bits, sec: sec, tags: tags, vulling: vulling));
     return f;
   }
 
@@ -322,7 +329,9 @@ void main() {
 
     test('aangesloten: geen melding, niets in Klaar om te kiezen bij twijfel, TIDAL begrensd, de teller ook op een toestel', () {
       final online = File('lib/online.dart').readAsStringSync();
-      expect(online, contains("if (v.vanzelf && !cdMeteenHouden(v.soort, score ?? 0)) {"));
+      expect(online, contains('if (v.vanzelf && !cdAlsVersieGoed(score ?? 0, lengte: lengte, seconden: v.seconden)) {'));
+      expect(online, contains('      if (v.vanzelf || cdMeteenHouden(v.soort, score ?? 0)) {'));
+      expect(online, contains('if (g.soort == Kopiesoort.cd && (g.vanzelf || cdMeteenHouden(Kopiesoort.cd, g.score)) && '));
       expect(online, contains('if (!v.vanzelf) _meldKlaar(zin);'));
       expect(online, contains('if (v.rondes == 1 && !v.vanzelf) nietGevonden.add(v.titel);'));
       expect(online, contains('max: kCdjachtTidalPerUur'));
@@ -336,6 +345,45 @@ void main() {
       expect(File('lib/lan/server.dart').readAsStringSync(), contains("'cd': manager.cdjachtStand.value.toJson()"));
       expect(File('lib/lan/remote_services.dart').readAsStringSync(),
           contains("if (res['cd'] case final Map<String, dynamic> cd) cdjachtStand.value = CdjachtStand.fromJson(cd);"));
+    });
+  });
+
+  group('een andere mastering (Saber, 05-11-2026: "Bewaren vanaf 0,80, lengte ±3 s")', () {
+    test('zeker dezelfde opname altijd; vanaf 0,80 alleen als hij even lang is; daaronder nooit', () {
+      expect(cdAlsVersieGoed(.91), isTrue);
+      expect(cdAlsVersieGoed(.83, lengte: 289, seconden: 289), isTrue, reason: 'Wicked Game: cd naast de 24/88,2');
+      expect(cdAlsVersieGoed(.88, lengte: 289, seconden: 287), isTrue);
+      expect(cdAlsVersieGoed(.88, lengte: 291, seconden: 287), isFalse, reason: '4 s: een andere versie');
+      expect(cdAlsVersieGoed(.79, lengte: 200, seconden: 200), isFalse, reason: 'onder 0,80');
+      expect(cdAlsVersieGoed(.85), isFalse, reason: 'zonder lengte alleen de zekere');
+      expect(cdAlsVersieGoed(.85, lengte: 200), isFalse);
+    });
+
+    test('DE KERN: een cd in _dubbel van een andere mastering (0,875) komt terug als het nummer geen cd heeft', () async {
+      const tags = {'ARTIST': 'Chris Isaak', 'ALBUM': 'Heart Shaped World', 'TITLE': 'Wicked Game', 'TRACKNUMBER': '5'};
+      final anker = '${root.path}${sep}Albums${sep}Chris Isaak${sep}Heart Shaped World${sep}05 - Wicked Game.flac';
+      final dubbel = '${root.path}$sep${'_dubbel'}$sep${'05 - Wicked Game.flac'}';
+      schrijf(anker, hz: 88200, bits: 24, tags: tags, vulling: 40000, sec: 289);
+      zetSoort(anker, Kopiesoort.studio);
+      VersieTerugzetter zetter({int bits = 4, bool metCd = true, String naam = 'versies_dubbel.json'}) => VersieTerugzetter(
+            wortel: root.path,
+            nummerVan: (a, t, {int? seconden}) => t == 'Wicked Game' ? anker : null,
+            klaar: () async {},
+            bestand: '${root.path}$sep$naam',
+            cdNodig: metCd ? (a) => !heeftSchoneCd(a) : null,
+            vingerafdruk: _NepVingerafdruk(dubbelBits: bits),
+          );
+      schrijf(dubbel, hz: 44100, bits: 16, tags: tags, vulling: 20000, sec: 293);
+      expect((await zetter(naam: 'a.json').ronde()).versies, 0, reason: '4 s langer: een andere versie');
+      schrijf(dubbel, hz: 44100, bits: 16, tags: tags, vulling: 20000, sec: 289);
+      expect((await zetter(bits: 8, naam: 'b.json').ronde()).versies, 0, reason: '0,75: geen zelfde opname');
+      expect((await zetter(metCd: false, naam: 'c.json').ronde()).versies, 0,
+          reason: 'zonder cd-nood blijft de strenge maat (0,90)');
+      final uit = await zetter(naam: 'd.json').ronde();
+      expect(uit.versies, 1);
+      final cd = '${root.path}${sep}Albums${sep}Chris Isaak${sep}Heart Shaped World (cd)${sep}05 - Wicked Game.flac';
+      expect(File(cd).existsSync(), isTrue);
+      expect(_kop(anker), (24, 88200), reason: 'je studio blijft het nummer');
     });
   });
 

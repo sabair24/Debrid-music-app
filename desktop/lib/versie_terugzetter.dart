@@ -23,7 +23,8 @@ import 'fingerprint.dart';
 import 'flac_tags.dart' show readFlacTags;
 import 'vinyl.dart' show isVinylRip;
 import 'kopiesoort.dart' show Kopiesoort, soortVoor, zetSoort;
-import 'organize.dart' show TrackTags, parkeerAfgekeurd, parkeerMap, readTags;
+import 'organize.dart' show TrackTags, looptijdInSeconden, parkeerAfgekeurd, parkeerMap, readTags;
+import 'twijfel.dart' show cdAlsVersieGoed;
 import 'versie_opbergen.dart';
 import 'versies.dart' show soortRang;
 import 'warm_log.dart';
@@ -208,7 +209,12 @@ class VersieTerugzetter {
       final a = await _fp.of(anker), b = await _fp.of(f.path);
       if (a == null || b == null || a.raw.isEmpty || b.raw.isEmpty) return 'geen vingerafdruk';
       final score = similarity(a.raw, b.raw, maxOffset: 120);
-      if (score < maybeSameRecordingScore) return 'andere opname (${score.toStringAsFixed(2)})';
+      // Een cd voor een nummer dat nog geen cd heeft, mag ook een andere mastering zijn als hij even lang is
+      // ([cdAlsVersieGoed]; Saber, 05-11-2026: "Bewaren vanaf 0,80, lengte ±3 s").
+      final goed = _isCdKop(f) && (cdNodig?.call(anker) ?? false)
+          ? cdAlsVersieGoed(score, lengte: looptijdInSeconden(f), seconden: looptijdInSeconden(File(anker)))
+          : score >= maybeSameRecordingScore;
+      if (!goed) return 'andere opname (${score.toStringAsFixed(2)})';
       // Alleen de bestandsnaam als bron: de mappen erboven ("D:\Flac music 2024\…\_dubbel") zeggen niets over de persing.
       // Wat de nultoets als je cd zag (bewerkt, of gedecodeerd), komt niet terug als eigen soort ([isNulTweeling]).
       await bereidNultoets(f.path, anker);
