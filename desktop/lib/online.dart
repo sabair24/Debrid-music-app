@@ -2361,9 +2361,14 @@ class DownloadManager extends ChangeNotifier {
       }
       // De soort van wat er nu ligt. Gevraagd: jouw keuze — daarna waardeert de app alleen binnen die soort op.
       if (g.soort case final s?) {
-        zetSoort(uit.path, s, gekozen: true);
+        // Wat de cd-jacht vond, is niet jouw keuze: daarna zoekt de app ook nog naar betere ([magVanzelf]).
+        zetSoort(uit.path, s, gekozen: !g.vanzelf);
         if (_soortSleutel(uit.path) != _soortSleutel(pad)) zetSoort(pad, null);
-        if (soortvragen?.verwijder(pad) != null) await soortvragen!.bewaar();
+        await _vraagUitgekomen(pad, s);
+        if (_soortSleutel(uit.path) != _soortSleutel(pad)) {
+          soortvragen?.herNoem(pad, uit.path);
+          cdjacht?.herNoem(pad, uit.path);
+        }
       } else {
         _noteerSoort(uit.path, g.bronpad ?? g.bron);
       }
@@ -2456,7 +2461,14 @@ class DownloadManager extends ChangeNotifier {
     }
     lijst.verwijder(pad);
     await lijst.bewaar();
-    if (g.soort != null && soortvragen?.verwijder(pad) != null) await soortvragen!.bewaar();
+    if (g.soort case final s?) {
+      await _vraagUitgekomen(pad, s);
+      // Werd hij het nummer, dan staat het vorige nummer nu elders: een vraag die er nog voor liep, gaat mee.
+      if (uit.werdAnker && _soortSleutel(uit.pad) != _soortSleutel(pad)) {
+        soortvragen?.herNoem(pad, uit.pad);
+        cdjacht?.herNoem(pad, uit.pad);
+      }
+    }
     _log.line('"$naam": ${g.soort == null ? 'twijfelkopie' : '${g.soort!.naam}-kopie'} bewaard als versie (${g.bron}, '
         '$label)${uit.werdAnker ? ' — nu het nummer, de vorige bleef als versie' : standaard ? ' — standaard voor dit nummer' : ''}');
     try {
@@ -6110,6 +6122,155 @@ class DownloadManager extends ChangeNotifier {
   /// De staande vragen; gezet door main.dart op de pc (samen met [twijfel]). Null: hier wordt niets gevraagd.
   Soortvragen? soortvragen;
 
+  // ── De cd-jacht (Saber, 05-11-2026) ───────────────────────────────────────────────────────────────────────────
+  // *"kunnen we ervoor zorgen dat zoiezo bij alle liedjes de cd kwaliteit wordt bijgehouden. dus wel nog betere versies
+  // zoeken, maar de cd kwaliteit mag zoiezo blijven, uitgenomen als die wordt afgekapt, dan blijven zoeken naar een niet
+  // afgekapte cd kwaliteit versie."* Gemeten die dag: 1241 van de 1961 nummers hadden een schone cd; 673 alleen studio,
+  // 14 alleen vinyl, 33 iets zonder soort (16/48, AIFF, WavPack, mp3) en 1 een afgekapte cd. Elk nummer zonder schone cd
+  // ([heeftSchoneCd]) krijgt een stille vraag om een cd ([Soortvraag.vanzelf]) in `cdjacht.json`: één plaat per ronde
+  // van tien minuten, Soulseek eerst, dan TIDAL (hoogstens [kCdjachtTidalPerUur] per uur), dan torrents; geen melding,
+  // geen label, en een kopie waar de vingerafdruk over twijfelt wordt niet aangeboden. Wat hij vindt, blijft meteen
+  // als versie ([_houdCdMeteen]); bij een nummer met alleen vinyl wordt de cd ook wat je hoort ([cdWordtStandaard]).
+
+  /// De vragen van de cd-jacht; gezet door main.dart op de pc. Null: geen cd-jacht.
+  Soortvragen? cdjacht;
+
+  /// De nummers van de bibliotheek (zonder versies), voor [cdjachtVegen]; gezet door main.dart.
+  List<Track> Function()? cdjachtNummers;
+
+  /// Hoe ver de cd-jacht is, voor de regel onder Kwaliteit (ook op een toestel, via `/api/kwaliteit`).
+  final ValueNotifier<CdjachtStand> cdjachtStand = ValueNotifier<CdjachtStand>(const CdjachtStand());
+
+  /// Pas na het opstarten: eerst moeten één-per-soort (3 min) en het nakijken van _dubbel (10 min) gedaan zijn, want wat
+  /// die terugzetten, hoeft de jacht niet te zoeken.
+  @visibleForTesting
+  DateTime cdjachtVanaf = DateTime.now().add(const Duration(minutes: 15));
+  DateTime? _cdjachtGeveegd;
+  final List<DateTime> _tidalCdTijden = [];
+  final Set<Soortvraag> _tidalLater = {};
+
+  /// Leeft [v] nog: staat hij nog in zijn lijst ([soortvragen] of [cdjacht]), en niet vervangen door een nieuwe vraag?
+  bool _leeft(Soortvraag v) => identical((v.vanzelf ? cdjacht : soortvragen)?.van(v.pad), v);
+
+  void werkCdjachtStandBij() {
+    final c = cdjacht;
+    if (c != null) cdjachtStand.value = CdjachtStand(binnen: c.binnen, zoekt: c.alle.length);
+  }
+
+  /// De vraag om [soort] voor [pad] is uitgekomen. Weg uit jouw vragen als hij van die soort was — een vraag om een ándere
+  /// soort voor hetzelfde nummer blijft staan (eerder ging elke vraag weg) — en bij een cd uit de cd-jacht, waar hij
+  /// meetelt ([CdjachtStand.binnen]).
+  Future<void> _vraagUitgekomen(String pad, Kopiesoort soort) async {
+    final eigen = soortvragen;
+    if (eigen != null && eigen.van(pad)?.soort == soort) {
+      eigen.verwijder(pad);
+      await eigen.bewaar();
+    }
+    final c = cdjacht;
+    if (soort == Kopiesoort.cd && c != null && c.van(pad) != null) {
+      c.verwijder(pad);
+      c.binnen++;
+      await c.bewaar();
+      werkCdjachtStandBij();
+    }
+  }
+
+  /// Welke nummers een cd nodig hebben ([heeftSchoneCd]): wie er geen heeft, krijgt een vraag; wie er intussen een kreeg
+  /// (de jacht, een download, het nakijken van _dubbel), is klaar. Bij de eerste ronde en daarna om de zes uur.
+  @visibleForTesting
+  Future<({int nieuw, int binnen})> cdjachtVegen() async {
+    final c = cdjacht, bron = cdjachtNummers;
+    if (c == null || bron == null) return (nieuw: 0, binnen: 0);
+    _cdjachtGeveegd = DateTime.now();
+    final nu = DateTime.now().millisecondsSinceEpoch;
+    var nieuw = 0, binnen = 0, i = 0;
+    final gezien = <String>{};
+    for (final t in bron()) {
+      // Niet de hele bibliotheek in één adem: elke kop lezen houdt het scherm anders even vast.
+      if (++i % 10 == 0) await Future<void>.delayed(Duration.zero);
+      if (t.artist.trim().isEmpty || t.title.trim().isEmpty) continue;
+      gezien.add(_soortSleutel(t.path));
+      final v = c.van(t.path);
+      if (heeftSchoneCd(t.path)) {
+        if (v != null) {
+          c.verwijder(t.path);
+          c.binnen++;
+          binnen++;
+        }
+        continue;
+      }
+      if (v != null) continue;
+      c.zet(Soortvraag(
+        pad: t.path,
+        soort: Kopiesoort.cd,
+        artiest: t.artist,
+        titel: t.title,
+        album: t.album,
+        seconden: t.duration?.inSeconds,
+        sindsMs: nu,
+        vanzelf: true,
+        gezag: TrackTags(
+                title: t.title,
+                artist: t.artist,
+                album: t.album,
+                trackNo: t.trackNo,
+                year: t.year,
+                seconds: t.duration?.inSeconds)
+            .toJson(),
+      ));
+      nieuw++;
+    }
+    var weg = 0;
+    for (final v in c.alle.toList()) {
+      if (gezien.contains(_soortSleutel(v.pad)) || File(v.pad).existsSync()) continue;
+      c.verwijder(v.pad);
+      weg++;
+    }
+    if (nieuw + binnen + weg > 0) await c.bewaar();
+    werkCdjachtStandBij();
+    _log.line('cd-jacht: ${c.alle.length} nummers zoeken een cd ($nieuw nieuw, $binnen kregen er een'
+        '${weg > 0 ? ', $weg staan er niet meer' : ''}; ${c.binnen} sinds het begin)');
+    return (nieuw: nieuw, binnen: binnen);
+  }
+
+  /// Eén ronde van de cd-jacht: één plaat, het langst wachtende eerst, hoogstens [kCdjachtPerRonde] nummers, één voor één
+  /// ([_soortRonde]). Alleen als er niets anders zoekt: geen eigen vraag of andere ronde bezig, geen jacht die wacht.
+  @visibleForTesting
+  Future<void> cdjachtRonde() async {
+    final c = cdjacht, lijst = twijfel;
+    if (c == null || lijst == null || DateTime.now().isBefore(cdjachtVanaf)) return;
+    if (_soortBezig.isNotEmpty || _jachten.wachtend > 0) return;
+    final geveegd = _cdjachtGeveegd;
+    if (geveegd == null || DateTime.now().difference(geveegd) >= const Duration(hours: 6)) await cdjachtVegen();
+    final nu = DateTime.now();
+    final klaar = <Soortvraag>[];
+    var binnen = 0;
+    for (final v in c.alle.toList()) {
+      if (!v.aanDeBeurt(nu) || lijst.van(v.pad) != null || !File(v.pad).existsSync()) continue;
+      if (heeftSchoneCd(v.pad)) {
+        c.verwijder(v.pad);
+        c.binnen++;
+        binnen++;
+        continue;
+      }
+      klaar.add(v);
+    }
+    if (binnen > 0) {
+      await c.bewaar();
+      werkCdjachtStandBij();
+    }
+    if (klaar.isEmpty) return;
+    int wacht(Soortvraag v) => v.laatsteMs == 0 ? v.sindsMs : v.laatsteMs;
+    klaar.sort((a, b) => wacht(a).compareTo(wacht(b)));
+    String plaat(Soortvraag v) => '${normKey(v.artiest)}|${normKey(v.album)}';
+    final eerste = klaar.first;
+    final groep = [for (final v in klaar) if (plaat(v) == plaat(eerste)) v].take(kCdjachtPerRonde).toList();
+    _log.line('cd-jacht: "${eerste.artiest} — ${eerste.album.isEmpty ? eerste.titel : eerste.album}" — '
+        '${groep.length} ${groep.length == 1 ? 'nummer' : 'nummers'} zonder cd (${c.alle.length} zoeken)');
+    await _soortRonde(groep, album: groep.length > 1 && eerste.album.trim().isNotEmpty ? eerste.album : null);
+    werkCdjachtStandBij();
+  }
+
   /// Een korte melding voor op het scherm ("cd klaar: …", "nog geen …"); main.dart toont hem.
   final ValueNotifier<String?> klaarMelding = ValueNotifier<String?>(null);
 
@@ -6259,7 +6420,11 @@ class DownloadManager extends ChangeNotifier {
     var gehouden = 0;
     for (final g in cds) {
       final gezag = g.gezag == null ? null : TrackTags.fromJson(g.gezag!);
-      if (await _houdCdMeteen(g.pad, gezag == null ? baseName(g.pad) : '${gezag.artist} — ${gezag.title}') != null) {
+      // Een cd van de cd-jacht die niet meteen kon blijven (het nummer speelde): nu, en stil.
+      if (await _houdCdMeteen(g.pad, gezag == null ? baseName(g.pad) : '${gezag.artist} — ${gezag.title}',
+                  standaard: g.vanzelf && cdWordtStandaard(g.pad)) !=
+              null &&
+          !g.vanzelf) {
         gehouden++;
       }
     }
@@ -6269,6 +6434,8 @@ class DownloadManager extends ChangeNotifier {
         if (lijst.van(v.pad)?.soort != v.soort && v.aanDeBeurt(nu) && !_soortBezig.contains(_soortSleutel(v.pad))) v
     ];
     if (te.isNotEmpty) await _soortRonde(te);
+    // En de cd-jacht, als er verder niets zoekt.
+    await cdjachtRonde();
   }
 
   /// Eén ronde voor [te]: Soulseek (bij een plaat één zoekopdracht voor alle nummers), en anders TIDAL — cd en studio,
@@ -6278,7 +6445,8 @@ class DownloadManager extends ChangeNotifier {
   /// [gevraagd]: je vroeg het net zelf (de knop, of Weg… van een klaargezette kopie). Dan zoekt hij voor bij de zoekrem
   /// en zoeken [kSoortNummersTegelijk] nummers samen; de ronde die vanzelf terugkomt, gaat achteraan en één voor één.
   Future<void> _soortRonde(List<Soortvraag> te, {String? album, bool gevraagd = false}) async {
-    final vragen = soortvragen;
+    // De vragen van de cd-jacht staan in hun eigen lijst ([cdjacht]); een ronde is van de ene of van de andere.
+    final vragen = te.isNotEmpty && te.first.vanzelf ? cdjacht : soortvragen;
     if (vragen == null) return;
     final open = [for (final v in te) if (_soortBezig.add(_soortSleutel(v.pad))) v];
     if (open.isEmpty) return;
@@ -6296,7 +6464,7 @@ class DownloadManager extends ChangeNotifier {
       }
       final gedaan = <Soortvraag>[], nogNiet = <Soortvraag>[];
       await metHoogstens(gevraagd ? kSoortNummersTegelijk : 1, open, (v) async {
-        if (!identical(vragen.van(v.pad), v)) return; // ingetrokken of opnieuw gevraagd
+        if (!_leeft(v)) return; // ingetrokken of opnieuw gevraagd
         gedaan.add(v);
         var klaar = false;
         if (soulseek.available) {
@@ -6316,24 +6484,29 @@ class DownloadManager extends ChangeNotifier {
             klaar = v.soort == Kopiesoort.cd ? await _cdWedloop(v, kandidaten) : await _soortVanSoulseek(v, kandidaten);
           }
         }
-        if (!klaar && identical(vragen.van(v.pad), v)) klaar = await _soortViaTidal(v);
+        if (!klaar && _leeft(v)) klaar = await _soortViaTidal(v);
         if (!klaar) nogNiet.add(v);
       });
       // Torrents als derde bron: per plaat, dus pas als elk nummer bij Soulseek en TIDAL langs is geweest.
       final uitTorrents = nogNiet.isEmpty ? const <Soortvraag>{} : await _soortViaTorrents(nogNiet);
       for (final v in gedaan) {
+        // De cd-jacht die TIDAL dit uur niet meer mocht vragen: deze ronde telt niet, de volgende probeert het opnieuw.
+        if (_tidalLater.remove(v) && nogNiet.contains(v) && !uitTorrents.contains(v)) continue;
         v.rondes++;
         v.laatsteMs = DateTime.now().millisecondsSinceEpoch;
         if (nogNiet.contains(v) && !uitTorrents.contains(v)) {
-          if (v.rondes == 1) nietGevonden.add(v.titel);
-          _log.line('"${v.artiest} — ${v.titel}": nog geen ${v.soort.voluit} — opnieuw over '
-              '${duurTekst(soortvraagWacht(v.rondes))}');
+          if (v.rondes == 1 && !v.vanzelf) nietGevonden.add(v.titel);
+          final wacht =
+              v.vanzelf ? cdjachtWacht(v.rondes, tidalKentHemNiet: v.tidalKentHemNiet) : soortvraagWacht(v.rondes);
+          _log.line('"${v.artiest} — ${v.titel}": nog geen ${v.soort.voluit}${v.vanzelf ? ' (cd-jacht)' : ''} — opnieuw '
+              'over ${duurTekst(wacht)}');
         }
       }
       await vragen.bewaar();
     } finally {
       for (final v in open) {
         _soortBezig.remove(_soortSleutel(v.pad));
+        _tidalLater.remove(v);
       }
     }
     if (nietGevonden.isNotEmpty) {
@@ -6368,7 +6541,7 @@ class DownloadManager extends ChangeNotifier {
     final eigen = File(v.pad);
     return kandidatenVoorSoort(v.soort, zeef,
             eigenGrootte: eigen.existsSync() ? eigen.lengthSync() : 0,
-            afgewezen: twijfel?.afgewezenGroottes(v.pad) ?? const {})
+            afgewezen: {...?twijfel?.afgewezenGroottes(v.pad), ...v.nee})
         .take(v.soort == Kopiesoort.cd ? kCdKandidaten : kSoortKandidaten)
         .toList();
   }
@@ -6380,7 +6553,7 @@ class DownloadManager extends ChangeNotifier {
     try {
       await soulseek.withSession((session) async {
         for (final f in kandidaten) {
-          if (!identical(soortvragen?.van(v.pad), v)) return;
+          if (!_leeft(v)) return;
           final left = deadline.difference(DateTime.now());
           if (left <= const Duration(seconds: 30)) return;
           final t0 = DateTime.now();
@@ -6423,7 +6596,7 @@ class DownloadManager extends ChangeNotifier {
         for (final groep in cdRondes(kandidaten)) {
           var bezetRondes = 0;
           while (!klaar) {
-            if (!identical(soortvragen?.van(v.pad), v)) return;
+            if (!_leeft(v)) return;
             final left = deadline.difference(DateTime.now());
             if (left <= const Duration(seconds: 30)) return;
             final over = [for (final f in groep) if (!af.contains(f.username)) f];
@@ -6471,11 +6644,23 @@ class DownloadManager extends ChangeNotifier {
   /// TIDAL voor cd (LOSSLESS, 16/44,1) of studio (HIRES); nooit vinyl. Dezelfde keuring als van Soulseek.
   Future<bool> _soortViaTidal(Soortvraag v) async {
     if (v.soort == Kopiesoort.vinyl || Tidaler.pad == null) return false;
+    // De cd-jacht vraagt TIDAL hoogstens [kCdjachtTidalPerUur] keer per uur; daarboven wacht dit nummer op de volgende
+    // ronde ([_tidalLater]) in plaats van dagen.
+    if (v.vanzelf) {
+      final nu = DateTime.now();
+      _tidalCdTijden.removeWhere((x) => nu.difference(x) >= const Duration(hours: 1));
+      if (zoekWachttijd(_tidalCdTijden, nu, max: kCdjachtTidalPerUur, venster: const Duration(hours: 1)) > Duration.zero) {
+        _tidalLater.add(v);
+        return false;
+      }
+      _tidalCdTijden.add(nu);
+    }
     final treffers = await zoekOpTidal(zoekvraagVoorNummer(v.titel, artist: v.artiest));
     if (treffers == null) return false;
     final ids = kiesTidalTreffers(treffers, artiest: v.artiest, titel: v.titel);
+    if (v.vanzelf) v.tidalKentHemNiet = ids.isEmpty;
     for (final id in ids.take(2)) {
-      if (!identical(soortvragen?.van(v.pad), v)) return false;
+      if (!_leeft(v)) return false;
       final map = keuringsmapVoor('tidal-soort-$id');
       try {
         final r = await haalVanTidal(
@@ -6527,7 +6712,7 @@ class DownloadManager extends ChangeNotifier {
         final te = [...groep];
         var klaarGeprobeerd = 0, nietKlaarGeprobeerd = 0;
         for (final r in kandidaten) {
-          te.removeWhere((v) => !identical(soortvragen?.van(v.pad), v)); // ingetrokken of opnieuw gevraagd
+          te.removeWhere((v) => !_leeft(v)); // ingetrokken of opnieuw gevraagd
           if (te.isEmpty) break;
           if (r.cached ? klaarGeprobeerd >= kTorrentHiresHoogstens : nietKlaarGeprobeerd >= kTorrentHiresNietKlaar) continue;
           r.cached ? klaarGeprobeerd++ : nietKlaarGeprobeerd++;
@@ -6608,13 +6793,18 @@ class DownloadManager extends ChangeNotifier {
 
   Future<bool> _keurVoorSoortNu(Soortvraag v, File staged, String bron, String bronpad) async {
     final naam = '${v.artiest} — ${v.titel}';
-    Future<bool> weg(String waarom) async {
+    final grootte = staged.existsSync() ? staged.lengthSync() : 0;
+    Future<bool> weg(String waarom, {bool onthoud = true}) async {
       _log.line('   $bron: $waarom — weggegooid, volgende kandidaat');
       await _discardStaged(staged.path);
+      // De cd-jacht haalt dezelfde kopie niet nog eens binnen ([Soortvraag.nee]).
+      if (v.vanzelf && onthoud && grootte > 0) v.nee.add(grootte);
       return false;
     }
 
-    if (twijfel == null || !File(v.pad).existsSync()) return weg('het nummer staat er niet meer');
+    if (twijfel == null || !File(v.pad).existsSync()) return weg('het nummer staat er niet meer', onthoud: false);
+    // Wacht er voor dit nummer al een keuze, dan laat de cd-jacht die met rust: klaarzetten zou hem vervangen.
+    if (v.vanzelf && twijfel!.van(v.pad) != null) return weg('er wacht al een keuze voor dit nummer', onthoud: false);
     final oordeel = await _meetEchtheid(staged);
     if (!magBlijven(oordeel)) return weg('betrapt (${waarom(oordeel!)})');
     // Wat hij werkelijk is, zoals het opbergen het straks ziet ([versieplanVoor]): ook zijn tags en of hij een tweeling is
@@ -6632,27 +6822,46 @@ class DownloadManager extends ChangeNotifier {
     final nee = waaromNietKlaar(
         gevraagd: v.soort, binnen: soort, lengte: lengte, seconden: v.seconden, score: score, drempel: kTwijfelVanaf);
     if (nee != null) return weg(nee);
+    // De cd-jacht biedt niets aan waar de vingerafdruk over twijfelt (Saber, 05-11-2026: "Niet aanbieden, verder
+    // zoeken"): alleen een cd die zeker dezelfde opname is, blijft.
+    if (v.vanzelf && !cdMeteenHouden(v.soort, score ?? 0)) {
+      return weg('de vingerafdruk twijfelt (${(score ?? 0).toStringAsFixed(2).replaceAll('.', ',')}) — niet aangeboden');
+    }
     final ok = await _zetKlaar(v, staged, bron, bronpad, score ?? 0);
     if (ok) {
       final let = misschienAndereOpname(score ?? 0) ? ' — misschien een andere opname' : '';
       // Een cd meteen houden — tenzij de vingerafdruk twijfelt: dan eerst luisteren.
       if (cdMeteenHouden(v.soort, score ?? 0)) {
-        if (await _houdCdMeteen(v.pad, naam) case final zin?) {
-          _meldKlaar(zin);
+        if (await _houdCdMeteen(v.pad, naam, standaard: v.vanzelf && cdWordtStandaard(v.pad)) case final zin?) {
+          // De cd-jacht is stil: de teller onder Kwaliteit telt mee ([cdjachtStand]).
+          if (!v.vanzelf) _meldKlaar(zin);
           return ok;
         }
       }
-      _meldKlaar('${v.soort.naam} klaar: $naam$let');
+      if (!v.vanzelf) _meldKlaar('${v.soort.naam} klaar: $naam$let');
     }
     return ok;
+  }
+
+  /// Wordt een cd die de cd-jacht vindt ook wat je hoort? Bij een nummer dat alleen vinyl heeft, en dat je niet zelf zo
+  /// koos (een keuze voor dit nummer of deze plaat, of de soort die je vroeg). Saber, 05-11-2026: *"Cd wordt standaard"*.
+  @visibleForTesting
+  bool cdWordtStandaard(String pad) {
+    final info = soortVoor(pad);
+    final soort = info?.soort ?? versies.groep(pad)?.soort ?? soortVanBestand(pad, pad, metMeter: false);
+    if (soort != Kopiesoort.vinyl || info?.gekozen == true) return false;
+    return versies.keuzeVoor(pad) == null;
   }
 
   /// De cd die je vroeg meteen houden (Saber, 26-10-2026: "als ik kies voor cd kwaliteit downloaden mag da direct
   /// gebeuren, want cd kwaliteit is altijd e"): als versie naast je nummer, of in zijn plaats als je nummer niet
   /// verliesvrij is. Je standaard blijft. Null als het nu niet lukt (het nummer speelt): dan staat hij klaar om te
   /// kiezen, zoals voorheen.
-  Future<String?> _houdCdMeteen(String pad, String naam) async {
-    final zin = await vervangDoorTwijfel(pad, alsVersie: isVerliesvrij(soortVan(pad)));
+  ///
+  /// [standaard]: de cd wordt ook wat je hoort — bij een nummer dat alleen vinyl had (Saber, 05-11-2026: *"Cd wordt
+  /// standaard"*, zijn volgorde studio > cd > vinyl).
+  Future<String?> _houdCdMeteen(String pad, String naam, {bool standaard = false}) async {
+    final zin = await vervangDoorTwijfel(pad, alsVersie: isVerliesvrij(soortVan(pad)), standaard: standaard);
     if (twijfel?.van(pad) != null) {
       _log.line('"$naam": cd niet meteen gehouden ($zin) — staat klaar om te kiezen');
       return null;
@@ -6663,7 +6872,8 @@ class DownloadManager extends ChangeNotifier {
   }
 
   @visibleForTesting
-  Future<String?> houdCdMeteenVoorToets(Soortvraag v) => _houdCdMeteen(v.pad, '${v.artiest} — ${v.titel}');
+  Future<String?> houdCdMeteenVoorToets(Soortvraag v) =>
+      _houdCdMeteen(v.pad, '${v.artiest} — ${v.titel}', standaard: v.vanzelf && cdWordtStandaard(v.pad));
 
   /// "je nummer", of welke versie je al hebt, als [kandidaat] sample voor sample een kopie is die er bij [anker] al
   /// ligt ([zelfdeSamples]); anders null.
@@ -6755,6 +6965,7 @@ class DownloadManager extends ChangeNotifier {
       gezag: v.gezag,
       soort: v.soort,
       bronpad: bronpad,
+      vanzelf: v.vanzelf,
       luid: luid,
     ));
     await lijst.bewaar();

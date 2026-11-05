@@ -41,8 +41,14 @@ class VersieTerugzetter {
     this.droog = false,
     this.bijBesluit,
     this.logboek,
+    this.cdNodig,
     Fingerprinter? vingerafdruk,
   }) : _fp = vingerafdruk ?? Fingerprinter();
+
+  /// Heeft het nummer op dit pad nog geen schone cd (`heeftSchoneCd`)? Dan komt een cd-kopie in _dubbel die al eens
+  /// nagekeken was opnieuw aan de beurt: toen was het nummer misschien zelf nog een cd. Saber, 05-11-2026: "Ja,
+  /// terugzetten" — 24 cd's in _dubbel hoorden bij een nummer zonder cd (Bruno Mars, Chris Isaak, Eric Clapton …).
+  final bool Function(String anker)? cdNodig;
 
   /// Alleen kijken: zeggen wat er zou gebeuren, niets verplaatsen en niets onthouden (meten vóór het echt gebeurt).
   final bool droog;
@@ -139,12 +145,17 @@ class VersieTerugzetter {
       final kapot = '$sep$parkeerAfgekeurd$sep'.toLowerCase();
       final bestanden = <File>[
         await for (final e in dubbel.list(recursive: true, followLinks: false))
-          if (e is File && isVerliesvrij(soortVan(e.path)) && !e.path.toLowerCase().contains(kapot) && !gedaan.contains(e.path))
+          if (e is File &&
+              isVerliesvrij(soortVan(e.path)) &&
+              !e.path.toLowerCase().contains(kapot) &&
+              (!gedaan.contains(e.path) || (cdNodig != null && _isCdKop(e))))
             e,
       ];
       for (final f in bestanden) {
+        final herkans = gedaan.contains(f.path);
+        final uit = await _kijk(f, herkans: herkans);
+        if (uit == 'al nagekeken') continue;
         bekeken++;
-        final uit = await _kijk(f);
         bijBesluit?.call(f.path, uit);
         if (droog) {
           if (!uit.startsWith('zou ')) {
@@ -177,16 +188,23 @@ class VersieTerugzetter {
     }
   }
 
-  /// Wat er met [f] gebeurde: 'versie', 'nummer', of waarom hij bleef.
-  Future<String> _kijk(File f) async {
+  static bool _isCdKop(File f) {
+    final kop = readFlacTags(f);
+    return kop != null && kop.bitsPerSample == 16 && kop.sampleRate == 44100;
+  }
+
+  /// Wat er met [f] gebeurde: 'versie', 'nummer', of waarom hij bleef. [herkans]: al eens nagekeken; alleen opnieuw als
+  /// het nummer nog een cd nodig heeft ([cdNodig]), anders 'al nagekeken'.
+  Future<String> _kijk(File f, {bool herkans = false}) async {
     try {
       // Nep (opgeschaald, uit een mp3) komt niet terug.
-      if (gemeten(f.path)?.isNep ?? false) return 'nep';
+      if (gemeten(f.path)?.isNep ?? false) return herkans ? 'al nagekeken' : 'nep';
       final tags = readTags(f);
-      if (tags == null || tags.title.trim().isEmpty) return 'geen tags';
+      if (tags == null || tags.title.trim().isEmpty) return herkans ? 'al nagekeken' : 'geen tags';
       final anker = nummerVan(tags.artist, tags.title, seconden: tags.seconds) ??
           nummerVan(tags.artist, tags.title);
-      if (anker == null || !File(anker).existsSync()) return 'geen nummer';
+      if (anker == null || !File(anker).existsSync()) return herkans ? 'al nagekeken' : 'geen nummer';
+      if (herkans && !(cdNodig?.call(anker) ?? false)) return 'al nagekeken';
       final a = await _fp.of(anker), b = await _fp.of(f.path);
       if (a == null || b == null || a.raw.isEmpty || b.raw.isEmpty) return 'geen vingerafdruk';
       final score = similarity(a.raw, b.raw, maxOffset: 120);

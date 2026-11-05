@@ -20,10 +20,11 @@ library;
 import 'dart:io';
 
 import 'audioformaten.dart' show isVerliesvrij, soortVan;
-import 'echtheid.dart' show Echtheidsoordeel, waarom;
+import 'echtheid.dart' show Bandbreedte, Echtheidsoordeel, waarom;
 import 'echtheid_meter.dart' show leesStreaminfo;
 import 'echtheid_oordelen.dart' show bewezenNep, gemeten, onthoudOordeel;
 import 'flac_tags.dart' show readFlacRawFields, readFlacTags;
+import 'integriteit.dart' show bekendKapot;
 import 'keuring.dart' show muurBewezenDoor, muurBewijsZin;
 import 'kopiesoort.dart';
 import 'nultoets.dart';
@@ -49,13 +50,24 @@ enum Versiebesluit {
 
 /// Wat er met een binnenkomer van [soort] en [persing] gebeurt naast een nummer van [ankerSoort] en [ankerPersing] met
 /// [bestaande] versies. Zonder soort aan een van beide kanten (verliesgevend, 16/48): [Versiebesluit.gewoon].
+///
+/// [ankerSchoonZonderSoort]: het nummer is verliesvrij en gezond, maar zonder soort (16/48, AIFF, WavPack). Een cd die
+/// erbij komt en niet bewezen beter is, blijft dan als versie — Saber, 05-11-2026: *"de cd kwaliteit mag zoiezo
+/// blijven"*; tot dan ging hij weg ("niet bewezen beter").
 ({Versiebesluit besluit, Versie? vervangt}) versiebesluit({
   required Kopiesoort? soort,
   required String persing,
   required Kopiesoort? ankerSoort,
   required String ankerPersing,
   List<Versie> bestaande = const [],
+  bool ankerSchoonZonderSoort = false,
 }) {
+  if (soort == Kopiesoort.cd && ankerSoort == null && ankerSchoonZonderSoort) {
+    for (final v in bestaande) {
+      if (zelfdeVersie(Kopiesoort.cd, persing, v.soort, v.persing)) return (besluit: Versiebesluit.vervangVersie, vervangt: v);
+    }
+    return (besluit: Versiebesluit.nieuweVersie, vervangt: null);
+  }
   if (soort == null || ankerSoort == null) return (besluit: Versiebesluit.gewoon, vervangt: null);
   if (zelfdeVersie(soort, persing, ankerSoort, ankerPersing)) return (besluit: Versiebesluit.gewoon, vervangt: null);
   for (final v in bestaande) {
@@ -233,6 +245,40 @@ Future<void> bereidNultoets(String kandidaat, String anker, {void Function(Strin
   await merkKopiebewijs(kandidaat, anderen, log: log);
 }
 
+/// Wat een kopie is die zich vinyl noemde maar digitaal bleek ([isDigitaleVinyl]): in 24 bit studio, anders cd. Saber,
+/// 25-10-2026: *"Studio = alles 24-bit digitaal"*, *"Cd = elke digitale 16/44,1"*. Als cd geteld won zo'n 24/96 op zijn
+/// diepte van je cd, en die ging naar _dubbel (Bruno Mars — Locked out of Heaven, 05-11-2026).
+Kopiesoort digitaleSoort(String pad) =>
+    (readFlacTags(File(pad))?.bitsPerSample ?? 0) >= 24 ? Kopiesoort.studio : Kopiesoort.cd;
+
+/// Niet bewezen stuk: geen afgekapte band (uit een mp3), geen fout in de controlesom, en geen mislukte decodeerproef.
+/// Wat niet gemeten is, is gezond — net als bij [bewezenNep].
+bool isGezond(String pad) {
+  final o = gemeten(pad);
+  if (o != null && (o.band == Bandbreedte.afgekapt || o.isKapot)) return false;
+  return !bekendKapot(pad);
+}
+
+/// Een schone cd: een verliesvrije 16/44,1 die als cd geldt (geen vinylrip die naar 16 bit ging) en gezond is
+/// ([isGezond]). Saber, 05-11-2026: *"de cd kwaliteit mag zoiezo blijven, uitgenomen als die wordt afgekapt"*.
+bool isSchoneCd(String pad, Kopiesoort? soort) {
+  if (soort != Kopiesoort.cd || !File(pad).existsSync() || !isVerliesvrij(soortVan(pad))) return false;
+  final kop = readFlacTags(File(pad));
+  if (kop != null && (kop.bitsPerSample != 16 || kop.sampleRate != 44100)) return false;
+  return isGezond(pad);
+}
+
+/// Heeft het nummer [anker] een schone cd ([isSchoneCd]) — het nummer zelf of een van zijn versies? Dan hoeft de cd-jacht
+/// er niet voor te zoeken.
+bool heeftSchoneCd(String anker) {
+  final ruw = soortVoor(anker)?.soort ?? versies.groep(anker)?.soort ?? soortVanBestand(anker, anker, metMeter: false);
+  if (isSchoneCd(anker, ruw)) return true;
+  for (final v in versies.versiesVan(anker)) {
+    if (isSchoneCd(v.pad, v.soort)) return true;
+  }
+  return false;
+}
+
 /// De kopie van [anker] die vaststaat als digitaal — de cd, het nummer zelf of een versie — of null.
 String? digitaleReferentie(String anker) {
   final ankerSoort = soortVoor(anker)?.soort ?? versies.groep(anker)?.soort ?? soortVanBestand(anker, anker);
@@ -263,9 +309,10 @@ Future<bool> merkVinylspoor(String kandidaat, String anker, String bronpad, {voi
     if (k.stilste >= kDigitaalStil) return false;
     final u = await lijn!(cd, kandidaat);
     if (u == null || !isDigitaleVinyl(k, ref, u)) return false;
-    zetSoort(kandidaat, Kopiesoort.cd);
+    final s = digitaleSoort(kandidaat);
+    zetSoort(kandidaat, s);
     log?.call('   noemt zich vinyl, maar is digitaal: precies even snel als je cd en stil op '
-        '${k.stilste.toStringAsFixed(0)} dB — telt als cd');
+        '${k.stilste.toStringAsFixed(0)} dB — telt als ${s.naam}');
     return true;
   }
   if (!klinktAlsVinyl(k, ref)) return false;
@@ -281,23 +328,32 @@ Versieplan versieplanVoor(File nieuw, String anker, String bronpad) {
   // Wat er al over hem bekend is (een kopie die in _dubbel belandde, nam zijn soort mee), anders zijn kop en waar hij
   // vandaan kwam — zoals de meter hem laat staan ([echteSoort]).
   var soort = echteSoort(soortVoor(nieuw.path)?.soort ?? soortVanBestand(nieuw.path, bronpad), gemeten(nieuw.path));
+  // Een 24-bitkopie is nooit je cd (Saber, 25-10-2026: "Cd = elke digitale 16/44,1"; studio = alles 24 bit digitaal).
+  // Bruno Mars — Locked out of Heaven, 05-11-2026: een 24/96 die zich vinyl noemde maar digitaal bleek, werd als cd
+  // geteld, won op zijn diepte van je cd — en die ging naar _dubbel.
+  if (soort == Kopiesoort.cd && (readFlacTags(nieuw)?.bitsPerSample ?? 0) >= 24) {
+    soort = echteSoort(Kopiesoort.studio, gemeten(nieuw.path));
+  }
   var persing = soort == null ? '' : persingUit(bronpad, soort: soort);
   final g = versies.groep(anker);
-  final ankerSoort =
-      ankerSoortGemeten(soortVoor(anker)?.soort ?? g?.soort ?? soortVanBestand(anker, anker, metMeter: false), gemeten(anker));
+  final ruw = soortVoor(anker)?.soort ?? g?.soort ?? soortVanBestand(anker, anker, metMeter: false);
+  final ankerSoort = ankerSoortGemeten(ruw, gemeten(anker));
   final ankerPersing = g?.persing ?? '';
   final bestaande = versies.versiesVan(anker);
   // Een tweeling van het nummer of van een versie IS die, met haar soort en persing ([isTweeling]): dan beslist de
   // keuring binnen die soort, en verliest hij — want hij is niet beter dan zichzelf. Zo ook wat de nultoets als die
   // kopie zag, bewerkt of gedecodeerd ([isNulTweeling]).
+  var tweeling = false;
   if (isTweeling(nieuw.path, soort, anker, ankerSoort) || isNulTweeling(nieuw.path, anker)) {
     soort = ankerSoort;
     persing = ankerPersing;
+    tweeling = true;
   } else {
     for (final v in bestaande) {
       if (!isTweeling(nieuw.path, soort, v.pad, v.soort) && !isNulTweeling(nieuw.path, v.pad)) continue;
       soort = v.soort;
       persing = v.persing;
+      tweeling = true;
       break;
     }
   }
@@ -306,7 +362,12 @@ Versieplan versieplanVoor(File nieuw, String anker, String bronpad) {
       persing: persing,
       ankerSoort: ankerSoort,
       ankerPersing: ankerPersing,
-      bestaande: bestaande);
+      bestaande: bestaande,
+      ankerSchoonZonderSoort: !tweeling &&
+          ruw == null &&
+          isVerliesvrij(soortVan(anker)) &&
+          isGezond(anker) &&
+          !firstIsBetter(nieuw, File(anker)));
   return Versieplan(
       besluit: b.besluit,
       anker: anker,
@@ -335,6 +396,45 @@ Future<void> _zetVersieAlbum(String pad, String? album, Kopiesoort soort) async 
     final naam = versieAlbumnaam(album, soort);
     await writeTagFields(File(pad), {'ALBUM': naam});
   } catch (_) {/* het bestand staat goed; alleen de albumnaam bleef die van het nummer */}
+}
+
+/// Een nummer (het anker van een groep) dat in een versiemap terechtkwam, terug naar zijn album: "30 (cd) (cd)\11 - To Be
+/// Loved.flac" → "30\11 - To Be Loved.flac", met ALBUM "30" in plaats van "30 (cd)". Alleen als daar nog niets staat en
+/// niets het bestand open heeft ([inGebruik]); het register, de soort en de metingen verhuizen mee ([verplaatsZonderKopie]).
+/// Saber, 05-11-2026: *"gewoon 30, waarom die cd erachter? hoeft toch niet"*. Een lege versiemap gaat weg. Geeft het
+/// aantal.
+Future<int> zetScheveAnkersRecht({bool Function(String pad)? inGebruik, void Function(String regel)? log}) async {
+  var n = 0;
+  final sep = Platform.pathSeparator;
+  for (final g in versies.groepen.toList()) {
+    final anker = g.anker;
+    final map = _map(anker);
+    final i = map.lastIndexOf(RegExp(r'[\\/]'));
+    if (i < 0) continue;
+    final mapNaam = map.substring(i + 1);
+    final basis = zonderSoortAchtervoegsel(mapNaam);
+    if (basis == mapNaam || basis.trim().isEmpty) continue;
+    final f = File(anker);
+    if (!f.existsSync() || (inGebruik?.call(anker) ?? false)) continue;
+    final doel = File('${map.substring(0, i)}$sep$basis$sep${_naam(anker)}');
+    if (doel.existsSync()) continue;
+    try {
+      await doel.parent.create(recursive: true);
+      final naar = await verplaatsZonderKopie(f, doel);
+      if (naar == null) continue;
+      final album = readTags(File(naar))?.album;
+      if (album != null && zonderSoortAchtervoegsel(album) != album) {
+        await writeTagFields(File(naar), {'ALBUM': zonderSoortAchtervoegsel(album)});
+      }
+      final oud = Directory(map);
+      if (oud.existsSync() && oud.listSync().isEmpty) await oud.delete();
+      n++;
+      log?.call('"${_stam(_naam(anker))}": het nummer stond in "$mapNaam" — terug in "$basis"');
+    } catch (e) {
+      log?.call('"${_stam(_naam(anker))}": terugzetten naar "$basis" lukte niet ($e)');
+    }
+  }
+  return n;
 }
 
 /// "Spice" → "Spice (vinyl)" ([_zetVersieAlbum]); "30 (cd)" → "30 (studio)", nooit "30 (cd) (studio)"
@@ -613,14 +713,15 @@ Future<Soortopruiming> eenPerSoort(
         if (k == null || k.stilste >= kDigitaalStil) continue;
         final u = await lijn(cd, p);
         if (u == null || !isDigitaleVinyl(k, ref, u)) continue;
+        final digitaal = digitaleSoort(p);
         if (p == anker) {
-          ankerSoort = Kopiesoort.cd;
+          ankerSoort = digitaal;
         } else {
-          soortVan[p] = Kopiesoort.cd;
+          soortVan[p] = digitaal;
         }
         nepVinyl++;
         log?.call('"$naam": ${p == anker ? 'het nummer' : 'je vinyl-versie'} noemt zich vinyl, maar is digitaal — '
-            'precies even snel als je cd en stil op ${k.stilste.toStringAsFixed(0)} dB: telt als cd');
+            'precies even snel als je cd en stil op ${k.stilste.toStringAsFixed(0)} dB: telt als ${digitaal.naam}');
       }
     }
     // De nultoets (nultoets.dart): waar de diepte tussen het nummer en een versie, of tussen twee versies, zou beslissen.
