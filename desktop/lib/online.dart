@@ -6414,7 +6414,7 @@ class DownloadManager extends ChangeNotifier {
     // stonden er acht van Adele's 30.
     final cds = [
       for (final g in lijst.alle)
-        if (g.soort == Kopiesoort.cd && cdMeteenHouden(Kopiesoort.cd, g.score) && !_soortBezig.contains(_soortSleutel(g.pad)))
+        if (g.soort == Kopiesoort.cd && (g.vanzelf || cdMeteenHouden(Kopiesoort.cd, g.score)) && !_soortBezig.contains(_soortSleutel(g.pad)))
           g
     ];
     var gehouden = 0;
@@ -6823,15 +6823,17 @@ class DownloadManager extends ChangeNotifier {
         gevraagd: v.soort, binnen: soort, lengte: lengte, seconden: v.seconden, score: score, drempel: kTwijfelVanaf);
     if (nee != null) return weg(nee);
     // De cd-jacht biedt niets aan waar de vingerafdruk over twijfelt (Saber, 05-11-2026: "Niet aanbieden, verder
-    // zoeken"): alleen een cd die zeker dezelfde opname is, blijft.
-    if (v.vanzelf && !cdMeteenHouden(v.soort, score ?? 0)) {
-      return weg('de vingerafdruk twijfelt (${(score ?? 0).toStringAsFixed(2).replaceAll('.', ',')}) — niet aangeboden');
+    // zoeken"): alleen een cd die dezelfde opname is — zeker, of een andere mastering die even lang is
+    // ([cdAlsVersieGoed]; "Bewaren vanaf 0,80, lengte ±3 s") — blijft, en dan stil.
+    if (v.vanzelf && !cdAlsVersieGoed(score ?? 0, lengte: lengte, seconden: v.seconden)) {
+      return weg('de vingerafdruk twijfelt (${(score ?? 0).toStringAsFixed(2).replaceAll('.', ',')}'
+          '${lengte != null && v.seconden != null ? ', ${lengte}s tegen ${v.seconden}s' : ''}) — niet aangeboden');
     }
     final ok = await _zetKlaar(v, staged, bron, bronpad, score ?? 0);
     if (ok) {
       final let = misschienAndereOpname(score ?? 0) ? ' — misschien een andere opname' : '';
-      // Een cd meteen houden — tenzij de vingerafdruk twijfelt: dan eerst luisteren.
-      if (cdMeteenHouden(v.soort, score ?? 0)) {
+      // Een cd meteen houden — tenzij de vingerafdruk twijfelt: dan eerst luisteren. Wat de cd-jacht vond, mocht al.
+      if (v.vanzelf || cdMeteenHouden(v.soort, score ?? 0)) {
         if (await _houdCdMeteen(v.pad, naam, standaard: v.vanzelf && cdWordtStandaard(v.pad)) case final zin?) {
           // De cd-jacht is stil: de teller onder Kwaliteit telt mee ([cdjachtStand]).
           if (!v.vanzelf) _meldKlaar(zin);

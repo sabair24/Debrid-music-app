@@ -308,6 +308,15 @@ class Soortvragen {
         if (v != null) zet(v);
       }
       if (j is Map && j['binnen'] is num) binnen = (j['binnen'] as num).toInt();
+      // De cd-jacht van 3.9.716 gooide een andere mastering weg (0,80–0,90) en onthield die kopieën ([Soortvraag.nee]):
+      // Haddaway — Life kreeg er op 05-11-2026 zeven (0,86–0,87), en die haalde hij daarna nooit meer. Eén keer opnieuw.
+      if (!toon && j is Map && ((j['versie'] as num?) ?? 1) < 2) {
+        for (final v in _perPad.values) {
+          v.nee.clear();
+          v.rondes = 0;
+          v.laatsteMs = 0;
+        }
+      }
     } catch (_) {/* een kapotte lijst begint leeg */}
   }
 
@@ -315,7 +324,7 @@ class Soortvragen {
     try {
       final tmp = File('$_bestand.tmp');
       await tmp.writeAsString(jsonEncode({
-        'versie': 1,
+        'versie': 2,
         if (binnen > 0) 'binnen': binnen,
         'vragen': [for (final v in _perPad.values) v.toJson()],
       }));
