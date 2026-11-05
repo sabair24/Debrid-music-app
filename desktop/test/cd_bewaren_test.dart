@@ -265,6 +265,32 @@ void main() {
       }
     });
 
+    test('wat de cd-jacht van 3.9.716 weggooide (een andere mastering), haalt hij één keer opnieuw', () async {
+      final pad = '${root.path}${sep}cdjacht.json';
+      Map<String, dynamic> vraag() => Soortvraag(
+              pad: 'p', soort: Kopiesoort.cd, artiest: 'Haddaway', titel: 'Life', sindsMs: 1, vanzelf: true, nee: {77})
+          .toJson()
+        ..['rondes'] = 1
+        ..['laatste'] = 5;
+      File(pad).writeAsStringSync(jsonEncode({'versie': 1, 'binnen': 3, 'vragen': [vraag()]}));
+      final oud = Soortvragen(pad, toon: false);
+      await oud.laad();
+      expect(oud.van('p')!.nee, isEmpty, reason: 'de zeven kopieën van 0,86–0,87 mogen weer');
+      expect(oud.van('p')!.rondes, 0);
+      expect(oud.binnen, 3, reason: 'de teller blijft');
+      await oud.bewaar();
+      final j = jsonDecode(File(pad).readAsStringSync()) as Map;
+      expect(j['versie'], 2);
+      File(pad).writeAsStringSync(jsonEncode({'versie': 2, 'vragen': [vraag()]}));
+      final nieuw = Soortvragen(pad, toon: false);
+      await nieuw.laad();
+      expect(nieuw.van('p')!.nee, {77}, reason: 'daarna blijft onthouden wat weg moest');
+      final eigen = Soortvragen(pad);
+      File(pad).writeAsStringSync(jsonEncode({'versie': 1, 'vragen': [vraag()]}));
+      await eigen.laad();
+      expect(eigen.van('p')!.rondes, 1, reason: 'jouw eigen vragen raakt het niet');
+    });
+
     test('het ritme: na 2, 4 en 7 dagen, dan om de 14 — om de 30 als TIDAL hem niet kent', () {
       expect(cdjachtWacht(1), const Duration(days: 2));
       expect(cdjachtWacht(2), const Duration(days: 4));
