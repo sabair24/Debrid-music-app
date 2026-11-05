@@ -2504,6 +2504,29 @@ class DownloadManager extends ChangeNotifier {
     return 'Weggegooid — je eigen kopie blijft';
   }
 
+  /// De wachtende twijfels die je al hebt, sample voor sample (je nummer of een van zijn versies): weg, zonder vraag.
+  /// Wat er nog wachtte van vóór de controle in [bewaarAlsTwijfel] (Saber, 05-11-2026: "bij klaar om te kiezen komen vaak
+  /// dezelfde liedjes steeds terug"; Gala's drie nummers waren hun eigen vinylversie). Geeft terug hoeveel er weg zijn.
+  /// Gevraagde kopieën (studio, cd of vinyl die je zelf vroeg) blijven: daar beslis jij.
+  Future<int> ruimBekendeTwijfelsOp() async {
+    final lijst = twijfel;
+    if (lijst == null) return 0;
+    var weg = 0;
+    for (final g in [...lijst.alle]) {
+      if (g.gevraagd || !File(g.kandidaat).existsSync()) continue;
+      final wat = await _zelfdeAlsWatJeHebt(g.kandidaat, versies.ankerVan(g.pad) ?? g.pad);
+      if (wat == null) continue;
+      lijst.verwijder(g.pad);
+      try {
+        await File(g.kandidaat).delete();
+      } catch (_) {/* de opruimronde van de twijfelmap neemt hem mee */}
+      _log.line('"${baseName(g.pad)}": wachtende twijfel weg — bit voor bit dezelfde als $wat (${g.bron})');
+      weg++;
+    }
+    if (weg > 0) await lijst.bewaar();
+    return weg;
+  }
+
   /// Een gewone vervanging van [pad]: een twijfelkopie ervoor is dan achterhaald (ze werd tegen het oude bestand
   /// gemeten).
   Future<void> _vergeetTwijfel(String pad) async {

@@ -3042,6 +3042,8 @@ Future<void> main() async {
       final twijfels = Twijfellijst('$appDir${Platform.pathSeparator}twijfel.json');
       await twijfels.laad();
       downloads.twijfel = twijfels;
+      // Wat er wacht en je al hebt (je eigen versie, sample voor sample), hoef je niet te kiezen (05-11-2026).
+      unawaited(downloads.ruimBekendeTwijfelsOp());
       // En de staande vragen om studio, cd of vinyl (soortjacht.dart): na twee minuten de eerste ronde, daarna elke tien.
       final vragen = Soortvragen('$appDir${Platform.pathSeparator}soortvragen.json');
       await vragen.laad();

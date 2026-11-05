@@ -134,6 +134,30 @@ void main() {
       expect(d.twijfel!.van(eigen.path)!.md5, '03' * 16);
     });
 
+    test('wat er al wachtte en je al hebt, ruimt de pc zelf op; een andere opname en wat je zelf vroeg, blijven', () async {
+      final sep = Platform.pathSeparator;
+      final eigen = _flac('${map.path}/Albums/Gala/C/03 - Suddenly.flac', som: 1);
+      final vinyl = _flac('${map.path}/Albums/Gala/C (vinyl)/03 - Suddenly.flac', som: 2);
+      versies.voegToe(eigen.path, Versie(pad: vinyl.path, soort: Kopiesoort.vinyl), ankerSoort: Kopiesoort.cd);
+      final dubbel = _flac('${map.path}$sep$twijfelMap${sep}d1.flac', som: 2, extra: 99);
+      final eigen2 = _flac('${map.path}/Albums/Gala/C/10 - Freed From Desire.flac', som: 4);
+      final ander = _flac('${map.path}$sep$twijfelMap${sep}d2.flac', som: 5);
+      final eigen3 = _flac('${map.path}/Albums/Gala/C/08 - Come Into My Life.flac', som: 6);
+      final gevraagd = _flac('${map.path}$sep$twijfelMap${sep}d3.flac', som: 6);
+      Twijfelgeval g(String id, File eigen, File k, {Kopiesoort? soort}) => Twijfelgeval(
+          id: id, pad: eigen.path, kandidaat: k.path, bron: 'Soulseek koii', score: .87, kwaliteit: 'FLAC 24/96',
+          ms: 1, grootte: k.lengthSync(), soort: soort);
+      d.twijfel!
+        ..zet(g('d1', eigen, dubbel))
+        ..zet(g('d2', eigen2, ander))
+        ..zet(g('d3', eigen3, gevraagd, soort: Kopiesoort.studio));
+      expect(await d.ruimBekendeTwijfelsOp(), 1);
+      expect(d.twijfel!.van(eigen.path), isNull, reason: 'zijn eigen vinylversie');
+      expect(dubbel.existsSync(), isFalse);
+      expect(d.twijfel!.van(eigen2.path), isNotNull, reason: 'een andere opname blijft wachten');
+      expect(d.twijfel!.van(eigen3.path), isNotNull, reason: 'wat je zelf vroeg, beslis jij');
+    });
+
     test('wat je weggooide, komt niet terug als dezelfde opname bij een andere uploader', () async {
       final eigen = _flac('${map.path}/Albums/Adele/30/11 - To Be Loved.flac', som: 1);
       const gezag = TrackTags(title: 'To Be Loved', artist: 'Adele', album: '30', albumArtist: 'Adele', trackNo: 11);
@@ -169,6 +193,10 @@ void main() {
   test('aangesloten: altijd het nummer (nooit een versie), en de jacht slaat bekend over vóór het binnenhalen', () {
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(main, contains('      return p == null ? null : (versies.ankerVan(p) ?? p);\n'));
+    expect(main, contains('      downloads.twijfel = twijfels;\n'
+        '      // Wat er wacht en je al hebt (je eigen versie, sample voor sample), hoef je niet te kiezen (05-11-2026).\n'
+        '      unawaited(downloads.ruimBekendeTwijfelsOp());\n'),
+        reason: 'bij het opstarten: wat er nog van vroeger wachtte');
     final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
     final jacht = online.substring(online.indexOf('  Future<void> _chaseUpgrade('));
     final over = jacht.indexOf('if (alGekend(f, anker) case final wat?) {');
