@@ -17,9 +17,10 @@ import 'package:debridmusic/models.dart';
 import 'package:debridmusic/cloud/device_identity.dart'
     show deviceName, setBewaardeNaamForTest, setPlatformDeviceNameForTest;
 import 'package:debridmusic/player.dart'
-    show Wachtrij, klaarstaandNaarAchteren, klaarstaandWeg, naarAchterenLijst, ordenVoor, schudIdsGewogen;
+    show Wachtrij, klaarstaandNaarAchteren, klaarstaandWeg, naarAchterenLijst, ordenVoor, recentGeopendInRij, schudIdsGewogen;
 import 'package:debridmusic/schudvolgorde.dart';
 import 'package:debridmusic/speelstanden.dart';
+import 'package:debridmusic/verder_luisteren.dart' show overgenomenVanMij;
 
 Track _t(int i) => Track(path: 'n$i.flac', title: 'Nummer $i', artist: 'Artiest ${i % 37}', album: 'Plaat ${i % 53}',
     trackNo: 1, isFlac: true);
@@ -315,6 +316,79 @@ void main() {
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       expect(main, contains("    speelstanden.bestand = '\$appDir\${Platform.pathSeparator}speelstanden_hier.json';\n"
           '    await speelstanden.laad();\n'));
+    });
+  });
+
+  // Gemeten 06-11-2026 in schud.log: sinds 3.9.709 kwam 5 % terug binnen drie dagen (was 15 %), 15 keer op een ander
+  // toestel. 8 daarvan: de pc speelde of sloeg het over terwijl de app op de gsm dicht was. 1: de Shield nam No Scrubs
+  // over, en de gsm speelde het later nog eens verder. Saber: "ja doe maar".
+  group('na een herstart en na een overname', () {
+    const nu = 1762450000000;
+    const min = 60 * 1000;
+
+    test('wat nog komt en de laatste drie dagen ergens opende — niet wat al klonk of nu speelt', () {
+      final rij = [for (var i = 0; i < 8; i++) _t(i)];
+      final op = <String, int>{
+        'n1.flac': nu - 5 * min, // klonk al in deze shuffle
+        'n2.flac': nu - 5 * min, // staat klaar
+        'n4.flac': nu - 10 * min,
+        'n5.flac': 0,
+        'n6.flac': nu - 3 * _dag + 1000,
+        'n7.flac': nu - 3 * _dag, // precies drie dagen: niet meer
+      };
+      final w = (origineel: rij, volgorde: rij, index: 2);
+      expect(recentGeopendInRij(w, (t) => op[t.path], nuMs: nu), {'n4.flac', 'n6.flac'});
+      expect(recentGeopendInRij((origineel: rij, volgorde: rij, index: 7), (t) => op[t.path], nuMs: nu), isEmpty);
+    });
+
+    test('DE KERN: de gsm gaat na een herstart verder, en wat de pc net oversloeg komt achteraan', () {
+      // 05-11: de pc sloeg om 17:45–17:51 Kalemba, Enrique Iglesias en P!nk over; de gsm ging om 17:55 verder vanaf plek
+      // 533, met Kalemba op 537, Enrique op 557 en P!nk op 595.
+      final rij = [for (var i = 0; i < 700; i++) _t(i)];
+      final op = {'n537.flac': nu - 10 * min, 'n557.flac': nu - 4 * min, 'n595.flac': nu - 10 * min};
+      final w = (origineel: rij, volgorde: rij, index: 533);
+      final uit = naarAchterenLijst(w, recentGeopendInRij(w, (t) => op[t.path], nuMs: nu));
+      final na = [for (final t in uit.volgorde) t.path];
+      expect(na.take(537), [for (var i = 0; i < 537; i++) 'n$i.flac'], reason: 'wat klonk en wat klaarstaat, blijft');
+      expect(na[537], 'n538.flac', reason: 'Kalemba is weg uit de volgende nummers');
+      expect(na.skip(697), ['n537.flac', 'n557.flac', 'n595.flac'], reason: 'achteraan, niet weg');
+      expect(na.toSet().length, 700, reason: 'elk nummer één keer');
+      expect(uit.index, 533);
+    });
+
+    test('een overname: alleen als een ander toestel van HIER overnam, ook als hier niets meer speelde, één keer', () {
+      final p = {'trackId': 'x', 'deviceId': 'tv-1', 'overname': 'gsm-1', 'updatedAt': 1000};
+      expect(overgenomenVanMij(p, mijnId: 'gsm-1'), isTrue);
+      expect(overgenomenVanMij(p, mijnId: 'gsm-1', alGedaanOp: 1000), isFalse, reason: 'al gezien');
+      expect(overgenomenVanMij(p, mijnId: 'ipad-2'), isFalse, reason: 'van een ander toestel overgenomen');
+      expect(overgenomenVanMij({...p, 'deviceId': 'gsm-1'}, mijnId: 'gsm-1'), isFalse);
+      expect(overgenomenVanMij({...p}..remove('overname'), mijnId: 'gsm-1'), isFalse);
+      expect(overgenomenVanMij(p, mijnId: ''), isFalse);
+      expect(overgenomenVanMij(null, mijnId: 'gsm-1'), isFalse);
+    });
+
+    test('aangesloten: bij afspelen, bij het bewaren van de plek, na een herstart en als de pc zijn geopend geeft', () {
+      final speler = _bron('lib/player.dart');
+      expect(speler, contains('    if (!playing && _overgenomenWeg()) {\n      unawaited(_openCurrent());\n'));
+      expect(speler, contains("        if (_overgenomenPad == t.path) 'overgenomen': true,\n"));
+      final h = speler.indexOf('  Future<void> restore(');
+      final herstart = speler.substring(h, speler.indexOf('reopen PAUSED', h));
+      expect(herstart, contains("overgenomen = byPath >= 0 && p['overgenomen'] == true;"));
+      expect(herstart, contains('          (overgenomen ||\n              klaarstaandWeg('));
+      final inhalen = herstart.indexOf("haalGeopendIn(waarom: 'na een herstart')");
+      expect(inhalen, greaterThan(herstart.indexOf('klaarstaandNaarAchteren(_nu)')));
+      expect(inhalen, lessThan(herstart.indexOf("bijHervatten?.call(_order, hoe: 'na een herstart'")),
+          reason: 'schud.log toont dan de volgorde die echt komt');
+      final telling = speler.substring(speler.indexOf('  void _nieuwVoorDeTelling('));
+      expect(telling.indexOf('_overgenomenPad = null;'), greaterThan(0));
+      expect(telling.indexOf('_overgenomenPad = null;'), lessThan(telling.indexOf('bijGeopend?.call(t);')));
+      final main = _bron('lib/main.dart');
+      expect(main, contains('          if (!samenVolger.volgt) player.haalGeopendIn();\n'));
+      expect(main.indexOf('player.haalGeopendIn();'), greaterThan(main.indexOf('speelstanden.vanServerGeopend(')));
+      expect(main, contains('  verder.bijOvername = (id) {\n'));
+      final verder = _bron('lib/verder_luisteren.dart');
+      expect(verder, contains("      bijOvername?.call('\${stand['trackId'] ?? ''}');\n"));
+      expect(verder, contains('    bron.pauzeer();\n    bijOvername?.call(null);\n'));
     });
   });
 }

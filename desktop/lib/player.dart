@@ -418,6 +418,24 @@ bool klaarstaandWeg({required int? geopendOp, required int? hierOp, required Dur
   return hierOp == null || geopendOp > hierOp + 2000;
 }
 
+/// Wat in een lopende shuffle nog moet komen ([Wachtrij.index] + 1 en verder) en binnen [kSchudWeg] ergens opende
+/// ([geopendOp], ms): de paden voor [naarAchterenLijst].
+///
+/// **Waarom (Saber, 06-11-2026: "ja doe maar").** Live schuift een shuffle naar achteren wat een ander toestel opent (de
+/// zonelijn), maar een app die dicht was, hoorde dat niet. Op 05-11 sloeg je tussen 17:45 en 17:51 op de pc Kalemba,
+/// P!nk en Enrique Iglesias over; de gsm ging om 17:55 en de ochtend erna verder met zijn bewaarde volgorde, en ze kwamen
+/// terug — 8 van de 15 herhalingen sinds 3.9.709 (schud.log). Na een herstart en bij elke `geopend` van de pc haalt
+/// [PlayerStore.haalGeopendIn] dat in.
+Set<String> recentGeopendInRij(Wachtrij w, int? Function(Track t) geopendOp, {required int nuMs}) {
+  final uit = <String>{};
+  for (var i = w.index + 1; i < w.volgorde.length; i++) {
+    final t = w.volgorde[i];
+    final op = geopendOp(t);
+    if (op != null && op > 0 && nuMs - op < kSchudWeg.inMilliseconds) uit.add(t.path);
+  }
+  return uit;
+}
+
 /// Het klaarstaande nummer ([Wachtrij.index]) achteraan in de speelvolgorde; het volgende staat dan klaar. Dezelfde
 /// lijst terug als er niets na komt.
 Wachtrij klaarstaandNaarAchteren(Wachtrij w) {
@@ -1209,6 +1227,8 @@ class PlayerStore extends ChangeNotifier
     _vorigePositie = null;
     _geteld = false;
     if (t != null) {
+      // Wat hier opent, klinkt hier: de overname ([markeerOvergenomen]) is voorbij.
+      _overgenomenPad = null;
       _geopendDezeSessie.add(t.path);
       _geopendHierOp[t.path] = DateTime.now().millisecondsSinceEpoch;
       bijGeopend?.call(t);
@@ -1234,6 +1254,48 @@ class PlayerStore extends ChangeNotifier
     _log?.line('KLAARSTAAND NAAR ACHTEREN — ${t.title}: opende intussen elders');
     _pas(uit);
     return true;
+  }
+
+  /// Het nummer dat hier klaarstond toen een ander toestel deze muziek overnam ([markeerOvergenomen]).
+  String? _overgenomenPad;
+
+  /// Een ander toestel nam de muziek van hier over ("Hier verder" daar, of de pc verplaatste haar; verder_luisteren.dart)
+  /// terwijl [pad] hier klaarstond — of het klaarstaande nummer als [pad] null is. Wie hier daarna weer op afspelen
+  /// drukt, hoort het volgende: dit klonk daar al ([_overgenomenWeg]).
+  ///
+  /// **Waarom (Saber, 06-11-2026).** Op 04-11 nam de Shield om 17:13 de shuffle van de gsm over midden in TLC — No
+  /// Scrubs en speelde het uit; om 18:56 ging de gsm verder met... No Scrubs. [klaarstaandWeg] keek alleen naar een
+  /// nummer dat nog niet begonnen was.
+  void markeerOvergenomen([String? pad]) {
+    final t = current;
+    if (t == null || radioMode || (pad != null && pad != t.path)) return;
+    _overgenomenPad = t.path;
+    unawaited(_saveProgress(force: true));
+  }
+
+  bool _overgenomenWeg() {
+    final t = current;
+    if (t == null || t.path != _overgenomenPad || !shuffle || radioMode) return false;
+    _overgenomenPad = null;
+    final uit = klaarstaandNaarAchteren(_nu);
+    if (identical(uit, _nu) || uit.volgorde.length != _order.length) return false;
+    _log?.line('OVERGENOMEN NAAR ACHTEREN — ${t.title}: speelde verder op een ander toestel');
+    _pas(uit);
+    return true;
+  }
+
+  /// Wat in de lopende shuffle nog moet komen en de laatste [kSchudWeg] ergens opende, naar achteren
+  /// ([recentGeopendInRij]): na een herstart ([restore]) en als de pc zijn `geopend` geeft (main.dart, `haalFavorieten`
+  /// — bij het opstarten, bij het openen van de app en als de pc er weer is). Hoeveel er achteraan staan.
+  int haalGeopendIn({String waarom = 'van de pc'}) {
+    final op = geopendOp;
+    if (op == null || !shuffle || radioMode || _order.isEmpty) return 0;
+    final paden = recentGeopendInRij(_nu, op, nuMs: DateTime.now().millisecondsSinceEpoch);
+    final uit = naarAchterenLijst(_nu, paden);
+    if (identical(uit.volgorde, _order)) return 0;
+    _log?.line('NAAR ACHTEREN $waarom — ${paden.length} nummers die de laatste 3 dagen ergens openden');
+    _pas(uit);
+    return paden.length;
   }
 
   /// Het schudlogboek (schudlog.dart; Saber, 25-10-2026: "hou vanaf nu ook een log bij van alle shuffels die ik doe van
@@ -3439,6 +3501,11 @@ class PlayerStore extends ChangeNotifier
       unawaited(_openCurrent());
       return;
     }
+    // Een ander toestel nam deze muziek over en speelde dit nummer verder ([markeerOvergenomen]): dan het volgende.
+    if (!playing && _overgenomenWeg()) {
+      unawaited(_openCurrent());
+      return;
+    }
     if (!playing) _player.playOrPause();
   }
 
@@ -3829,6 +3896,7 @@ class PlayerStore extends ChangeNotifier
         'index': _index,
         'positionMs': position.inMilliseconds,
         'path': t.path,
+        if (_overgenomenPad == t.path) 'overgenomen': true,
       }));
     } catch (_) {}
   }
@@ -3849,11 +3917,13 @@ class PlayerStore extends ChangeNotifier
       _order = tracks;
 
       var idx = 0, posMs = 0;
+      var overgenomen = false;
       if (await _posFile.exists()) {
         final p = jsonDecode(await _posFile.readAsString()) as Map<String, dynamic>;
         final byPath = _order.indexWhere((t) => t.path == (p['path'] as String? ?? ''));
         idx = byPath >= 0 ? byPath : ((p['index'] as int?) ?? 0);
         posMs = (p['positionMs'] as int?) ?? 0;
+        overgenomen = byPath >= 0 && p['overgenomen'] == true;
       }
       _index = idx.clamp(0, _order.length - 1);
       _resumable = true;
@@ -3862,20 +3932,26 @@ class PlayerStore extends ChangeNotifier
       if (t == null) return;
       // Na een herstart: klonk het klaarstaande nummer intussen al — hier vóór de herstart, of op een ander toestel —
       // dan staat het volgende klaar ([klaarstaandWeg]). Vóór [_nieuwVoorDeTelling]: die meldt het als geopend.
+      // Of een ander toestel nam deze muziek over en speelde dit nummer verder ([markeerOvergenomen]).
       if (shuffle &&
-          klaarstaandWeg(
-              geopendOp: geopendOp?.call(t),
-              hierOp: null,
-              plek: Duration(milliseconds: posMs),
-              nuMs: DateTime.now().millisecondsSinceEpoch)) {
+          (overgenomen ||
+              klaarstaandWeg(
+                  geopendOp: geopendOp?.call(t),
+                  hierOp: null,
+                  plek: Duration(milliseconds: posMs),
+                  nuMs: DateTime.now().millisecondsSinceEpoch))) {
         final uit = klaarstaandNaarAchteren(_nu);
         if (!identical(uit, _nu)) {
-          _log?.line('KLAARSTAAND NAAR ACHTEREN na een herstart — ${t.title}: opende intussen al');
+          _log?.line(overgenomen
+              ? 'OVERGENOMEN NAAR ACHTEREN na een herstart — ${t.title}: speelde verder op een ander toestel'
+              : 'KLAARSTAAND NAAR ACHTEREN na een herstart — ${t.title}: opende intussen al');
           _pas(uit);
           posMs = 0;
           t = current!;
         }
       }
+      // En wat er nog komt en intussen ergens opende, terwijl deze app dicht was ([haalGeopendIn]).
+      if (shuffle) haalGeopendIn(waarom: 'na een herstart');
       currentCover = coverResolver?.call(t);
       if (shuffle) bijHervatten?.call(_order, hoe: 'na een herstart', vanaf: _index, generatie: ++_schudGeneratie);
       _nieuwVoorDeTelling(t);
