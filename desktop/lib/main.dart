@@ -2024,6 +2024,16 @@ Future<void> main() async {
       mode.owner ? _PcVerderBron(sharing, player) : _ToestelVerderBron(library, player, ik!.id),
       // Op de klok van de pc: daarop staan de meldingen, ook die van een toestel met een scheve klok.
       klok: mode.owner ? null : zoneLijst.nuOpPc);
+  // Nam een ander toestel deze muziek over, dan klinkt hier daarna niet opnieuw wat daar verder speelde (Saber,
+  // 06-11-2026: No Scrubs op de Shield, en daarna nog eens op de gsm). Zie PlayerStore.markeerOvergenomen.
+  verder.bijOvername = (id) {
+    if (id == null || id.isEmpty) {
+      player.markeerOvergenomen();
+      return;
+    }
+    final t = verder.bron.nummer(id);
+    if (t != null) player.markeerOvergenomen(t.path);
+  };
 
   // Het overzicht "Radio afsluiten" op het juiste toestel (Saber, 23-10-2026): waar je afsluit, of — vanzelf geëindigd
   // — waar je startte; nooit op de tv (dan de gsm); een ander toestel krijgt het via de brievenbus op de pc.
@@ -2566,6 +2576,9 @@ Future<void> main() async {
               (s['plays'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
           speelstanden.vanServerGeopend(
               (s['geopend'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
+          // Wat elders opende terwijl deze app dicht was of de lijn weg was, ook uit de lopende shuffle hier (Saber,
+          // 06-11-2026; PlayerStore.haalGeopendIn) — behalve wie een groep volgt: die speelt de rij van de leider.
+          if (!samenVolger.volgt) player.haalGeopendIn();
           oordelen.vanServer(
               (s['ratings'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{});
           radioSfeer.vanServer(

@@ -158,6 +158,15 @@ bool moetPauzeren(Map<String, dynamic>? p, {required String mijnId, required boo
   return (p['overname'] ?? '') == mijnId && (p['deviceId'] ?? '') != mijnId && op > alGedaanOp;
 }
 
+/// Nam een ander toestel de muziek van dit toestel over (de melding draagt `overname` = mijn id), en is dat nieuw? Ook als
+/// hier niets meer speelde — anders dan [moetPauzeren]: wie hier daarna op afspelen drukt, hoort niet opnieuw wat daar al
+/// klonk (Saber, 06-11-2026; `PlayerStore.markeerOvergenomen`).
+bool overgenomenVanMij(Map<String, dynamic>? p, {required String mijnId, int alGedaanOp = 0}) {
+  if (p == null || mijnId.isEmpty) return false;
+  final op = (p['updatedAt'] as num?)?.toInt() ?? 0;
+  return (p['overname'] ?? '') == mijnId && (p['deviceId'] ?? '') != mijnId && op > alGedaanOp;
+}
+
 /// Is er een verzoek van de pc ("Speel op …") voor dit toestel dat nog niet afgehandeld is?
 bool verzoekVoorMij(Map<String, dynamic>? v, {required String mijnId, required int nuMs, int alGedaanOp = 0}) {
   if (v == null) return false;
@@ -209,6 +218,11 @@ class VerderLuisteren extends ChangeNotifier {
   final _afgewezen = <String>{};
   int _gepauzeerdOp = 0;
   int _verzoekOp = 0;
+  int _overnameGezienOp = 0;
+
+  /// Een ander toestel nam de muziek van hier over ([overgenomenVanMij], of de pc verplaatste haar: [isVerplaatst]), met
+  /// het nummer dat daar verder speelde (null: wat hier klaarstaat). Gezet door main: `PlayerStore.markeerOvergenomen`.
+  void Function(String? trackId)? bijOvername;
 
   /// Het toestel waarvan zojuist overgenomen werd: gaat één keer mee in de volgende melding.
   String? _overnameVan;
@@ -285,6 +299,10 @@ class VerderLuisteren extends ChangeNotifier {
       _stilTot = nu + 6000;
       bron.pauzeer();
     }
+    if (overgenomenVanMij(stand, mijnId: bron.mijnId, alGedaanOp: _overnameGezienOp)) {
+      _overnameGezienOp = (stand!['updatedAt'] as num?)?.toInt() ?? nu;
+      bijOvername?.call('${stand['trackId'] ?? ''}');
+    }
     if (verzoekVoorMij(verzoek, mijnId: bron.mijnId, nuMs: nu, alGedaanOp: _verzoekOp)) {
       _verzoekOp = (verzoek!['at'] as num?)?.toInt() ?? nu;
       final a = aanbodUit({...verzoek, 'updatedAt': _verzoekOp},
@@ -342,6 +360,7 @@ class VerderLuisteren extends ChangeNotifier {
   void isVerplaatst() {
     _stilTot = _nu + 6000;
     bron.pauzeer();
+    bijOvername?.call(null);
   }
 
   /// Speelt er nu hier iets, dan is er niets aan te bieden.

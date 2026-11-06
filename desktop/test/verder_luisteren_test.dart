@@ -176,6 +176,22 @@ void main() {
       expect(n.pauzes, 1);
     });
 
+    test('een overname meldt het nummer dat daar verder speelt — ook als hier niets speelde, één keer (06-11-2026)',
+        () async {
+      final n = _Nep();
+      final v = VerderLuisteren(n, klok: () => 2000000);
+      final gemeld = <String?>[];
+      v.bijOvername = gemeld.add;
+      await v.opStand(_stand(van: 'tv-1', overname: 'gsm-1', op: 1999000));
+      await v.opStand(_stand(van: 'tv-1', overname: 'gsm-1', op: 1999000));
+      expect(gemeld, ['b']);
+      expect(n.pauzes, 0, reason: 'hier speelde niets: niets te pauzeren');
+      await v.opStand(_stand(van: 'ipad-2', overname: 'pc-THUIS', op: 1999500));
+      expect(gemeld, ['b'], reason: 'een overname van een ander toestel gaat dit toestel niet aan');
+      v.isVerplaatst();
+      expect(gemeld, ['b', null], reason: 'de pc verplaatste de muziek van hier: het nummer dat hier klaarstaat');
+    });
+
     test('de pc zegt "verplaatst": pauzeren, en de pauze alleen in de eigen zone melden', () {
       var nu = 3000000;
       final n = _Nep(speelt: true);
