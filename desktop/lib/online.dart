@@ -6149,12 +6149,21 @@ class DownloadManager extends ChangeNotifier {
   final List<DateTime> _tidalCdTijden = [];
   final Set<Soortvraag> _tidalLater = {};
 
+  /// Nummers van de cd-jacht die nog even niet aan de beurt zijn, zonder dat er een ronde telde: TIDAL mocht dit uur niet
+  /// meer ([kCdjachtTidalPerUur]), of Soulseek kon niet zoeken (een pauze, de server zwijgt). Sinds de jacht zonder
+  /// pauze doorloopt ([kCdjachtTik]) zou hij anders elke minuut dezelfde plaat opnieuw zoeken.
+  final Map<String, DateTime> _cdjachtNietVoor = {};
+  Timer? _cdjachtKlok;
+
   /// Leeft [v] nog: staat hij nog in zijn lijst ([soortvragen] of [cdjacht]), en niet vervangen door een nieuwe vraag?
   bool _leeft(Soortvraag v) => identical((v.vanzelf ? cdjacht : soortvragen)?.van(v.pad), v);
 
   void werkCdjachtStandBij() {
     final c = cdjacht;
-    if (c != null) cdjachtStand.value = CdjachtStand(binnen: c.binnen, zoekt: c.alle.length);
+    if (c != null) {
+      cdjachtStand.value = CdjachtStand(
+          binnen: c.binnen, zoekt: c.alle.length, zoekPerVijf: zoekrem.perVijf, zoekGemeten: zoekgrens.gemeten);
+    }
   }
 
   /// De vraag om [soort] voor [pad] is uitgekomen. Weg uit jouw vragen als hij van die soort was — een vraag om een ándere
@@ -6233,20 +6242,24 @@ class DownloadManager extends ChangeNotifier {
     return (nieuw: nieuw, binnen: binnen);
   }
 
-  /// Eén ronde van de cd-jacht: één plaat, het langst wachtende eerst, hoogstens [kCdjachtPerRonde] nummers, één voor één
-  /// ([_soortRonde]). Alleen als er niets anders zoekt: geen eigen vraag of andere ronde bezig, geen jacht die wacht.
+  /// Eén ronde van de cd-jacht: één plaat, het langst wachtende eerst, hoogstens [kCdjachtPerRonde] nummers,
+  /// [kCdjachtNummersTegelijk] tegelijk ([_soortRonde]). Niet terwijl er een andere ronde loopt (een eigen vraag, of de
+  /// vorige plaat). Wachten op de andere jachten deed hij tot 07-11-2026 ook, en daardoor kwam hij soms urenlang niet
+  /// aan de beurt — de zoekrem verdeelt het zoeken al ([Zoekrem]).
   @visibleForTesting
   Future<void> cdjachtRonde() async {
     final c = cdjacht, lijst = twijfel;
     if (c == null || lijst == null || DateTime.now().isBefore(cdjachtVanaf)) return;
-    if (_soortBezig.isNotEmpty || _jachten.wachtend > 0) return;
+    if (_soortBezig.isNotEmpty) return;
     final geveegd = _cdjachtGeveegd;
     if (geveegd == null || DateTime.now().difference(geveegd) >= const Duration(hours: 6)) await cdjachtVegen();
     final nu = DateTime.now();
     final klaar = <Soortvraag>[];
     var binnen = 0;
+    _cdjachtNietVoor.removeWhere((_, t) => !t.isAfter(nu));
     for (final v in c.alle.toList()) {
       if (!v.aanDeBeurt(nu) || lijst.van(v.pad) != null || !File(v.pad).existsSync()) continue;
+      if (_cdjachtNietVoor.containsKey(_soortSleutel(v.pad))) continue;
       if (heeftSchoneCd(v.pad)) {
         c.verwijder(v.pad);
         c.binnen++;
@@ -6375,9 +6388,21 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Elke tien minuten: de vragen die aan de beurt zijn ([Soortvraag.aanDeBeurt]), en die nog niets klaar hebben staan.
+  /// En elke [kCdjachtTik] de cd-jacht ([_cdjachtTik]).
   void _planSoortKlok() {
     if (_soortKlok != null || soortvragen == null) return;
     _soortKlok = Timer.periodic(const Duration(minutes: 10), (_) => unawaited(soortvragenNakijken()));
+    _cdjachtKlok ??= Timer.periodic(kCdjachtTik, (_) => unawaited(_cdjachtTik()));
+  }
+
+  /// De cd-jacht zonder pauze tussen de platen: is de vorige ronde klaar, dan de volgende (Saber, 07-11-2026: *"kan het
+  /// afhalen van de cd kwaliteit sneller"* — één plaat per tien minuten, ongeveer 700 nummers te gaan). Alleen als
+  /// Soulseek kan zoeken: zonder Soulseek gaat elke ronde naar TIDAL en de torrents, en dat blijft op het oude ritme van
+  /// [soortvragenNakijken].
+  Future<void> _cdjachtTik() async {
+    werkCdjachtStandBij(); // ook de zoekgrens, die tussen de rondes door kan veranderen
+    if (!soulseek.available || soulseek.blocked || soulseek.waaromStil != null) return;
+    await cdjachtRonde();
   }
 
   /// De vragen die aan de beurt zijn opnieuw laten zoeken. Ook bij het opstarten (main.dart).
@@ -6462,19 +6487,24 @@ class DownloadManager extends ChangeNotifier {
               'voor ${open.length} nummers');
         } catch (_) {/* dan per nummer */}
       }
-      final gedaan = <Soortvraag>[], nogNiet = <Soortvraag>[];
-      await metHoogstens(gevraagd ? kSoortNummersTegelijk : 1, open, (v) async {
+      final gedaan = <Soortvraag>[], nogNiet = <Soortvraag>[], nietGezocht = <Soortvraag>{};
+      final tegelijk = gevraagd ? kSoortNummersTegelijk : (open.first.vanzelf ? kCdjachtNummersTegelijk : 1);
+      await metHoogstens(tegelijk, open, (v) async {
         if (!_leeft(v)) return; // ingetrokken of opnieuw gevraagd
         gedaan.add(v);
         var klaar = false;
         if (soulseek.available) {
           var hits = albumHits;
-          if (hits == null) {
+          // Had de plaat niets voor dit nummer (een andere albumnaam bij de uploaders, een afgekapte uitslag), dan alsnog
+          // per nummer. Tot 07-11-2026 ging zo'n nummer meteen door naar TIDAL, dat de cd-jacht maar tien keer per uur mag.
+          if (hits == null || _soortKandidaten(v, hits).isEmpty) {
             try {
               hits = await soulseek.search(zoekvraagVoorNummer(v.titel, artist: v.artiest),
                   achtergrond: !gevraagd, extra: zoekwoordenVoorSoort(v.soort));
             } catch (_) {
-              hits = const [];
+              // Niet gezocht (een pauze, de server zwijgt): geen "niets gevonden", en dus geen ronde die telt.
+              nietGezocht.add(v);
+              hits = albumHits ?? const [];
             }
           }
           final kandidaten = _soortKandidaten(v, hits);
@@ -6490,8 +6520,20 @@ class DownloadManager extends ChangeNotifier {
       // Torrents als derde bron: per plaat, dus pas als elk nummer bij Soulseek en TIDAL langs is geweest.
       final uitTorrents = nogNiet.isEmpty ? const <Soortvraag>{} : await _soortViaTorrents(nogNiet);
       for (final v in gedaan) {
-        // De cd-jacht die TIDAL dit uur niet meer mocht vragen: deze ronde telt niet, de volgende probeert het opnieuw.
-        if (_tidalLater.remove(v) && nogNiet.contains(v) && !uitTorrents.contains(v)) continue;
+        // De cd-jacht die TIDAL dit uur niet meer mocht vragen: deze ronde telt niet, en het nummer komt terug zodra
+        // TIDAL weer mag — intussen eerst de andere platen ([_cdjachtNietVoor]).
+        if (_tidalLater.remove(v) && nogNiet.contains(v) && !uitTorrents.contains(v)) {
+          final nu = DateTime.now();
+          final tidal = zoekWachttijd(_tidalCdTijden, nu, max: kCdjachtTidalPerUur, venster: const Duration(hours: 1));
+          _cdjachtNietVoor[_soortSleutel(v.pad)] = nu.add(tidal > Duration.zero ? tidal : const Duration(minutes: 5));
+          continue;
+        }
+        // Soulseek kon niet zoeken: ook dan telt de ronde niet (anders twee dagen wachten voor niets), over vijf minuten
+        // opnieuw.
+        if (v.vanzelf && nietGezocht.contains(v) && nogNiet.contains(v) && !uitTorrents.contains(v)) {
+          _cdjachtNietVoor[_soortSleutel(v.pad)] = DateTime.now().add(const Duration(minutes: 5));
+          continue;
+        }
         v.rondes++;
         v.laatsteMs = DateTime.now().millisecondsSinceEpoch;
         if (nogNiet.contains(v) && !uitTorrents.contains(v)) {

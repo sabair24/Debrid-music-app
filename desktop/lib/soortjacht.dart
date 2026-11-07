@@ -35,8 +35,16 @@ Duration cdjachtWacht(int rondes, {bool tidalKentHemNiet = false}) => switch (ro
       _ => tidalKentHemNiet ? const Duration(days: 30) : const Duration(days: 14),
     };
 
-/// Hoeveel nummers van één plaat de cd-jacht in één ronde neemt (één plaat per ronde, één nummer tegelijk).
+/// Hoeveel nummers van één plaat de cd-jacht in één ronde neemt (één plaat per ronde).
 const int kCdjachtPerRonde = 12;
+
+/// Hoeveel nummers van die plaat de cd-jacht samen zoekt en haalt, zoals de knop ([kSoortNummersTegelijk]). Tot
+/// 07-11-2026 één voor één, één plaat per tien minuten — Saber: *"nu gaat echt traag, als al die liedjes nog moeten
+/// afgehaald worden in cd kwaliteit dan gaat nog lang duren zo"*. Het zoeken zelf begrenst de zoekrem (soulseek.dart).
+const int kCdjachtNummersTegelijk = 4;
+
+/// Hoe vaak de cd-jacht kijkt of de vorige plaat klaar is: dan meteen de volgende, in plaats van om de tien minuten.
+const kCdjachtTik = Duration(minutes: 1);
 
 /// Hoeveel cd's de cd-jacht hoogstens per uur van TIDAL haalt: de opwaardeerronde van TIDAL (20 per uur) en de radio (15)
 /// lopen ernaast.
@@ -221,13 +229,33 @@ class Soortvraag {
 /// Hoe ver de cd-jacht is (Kwaliteit, op de pc en op een toestel): hoeveel nummers er sinds de start een cd bij kregen,
 /// en hoeveel er nog zoeken.
 class CdjachtStand {
-  const CdjachtStand({this.binnen = 0, this.zoekt = 0});
+  const CdjachtStand({this.binnen = 0, this.zoekt = 0, this.zoekPerVijf = 0, this.zoekGemeten});
   final int binnen, zoekt;
 
-  Map<String, dynamic> toJson() => {'binnen': binnen, 'zoekt': zoekt};
+  /// De zoekgrens van Soulseek zoals de pc hem nu afgetast heeft (zoekgrens.dart): hoeveel zoekopdrachten er per vijf
+  /// minuten mogen (0: onbekend), en bij hoeveel de server het laatst moeilijk deed (null: nog nooit).
+  final int zoekPerVijf;
+  final int? zoekGemeten;
 
-  static CdjachtStand fromJson(Map<String, dynamic> j) =>
-      CdjachtStand(binnen: (j['binnen'] as num?)?.toInt() ?? 0, zoekt: (j['zoekt'] as num?)?.toInt() ?? 0);
+  Map<String, dynamic> toJson() => {
+        'binnen': binnen,
+        'zoekt': zoekt,
+        if (zoekPerVijf > 0) 'zoekPerVijf': zoekPerVijf,
+        if (zoekGemeten != null) 'zoekGemeten': zoekGemeten,
+      };
+
+  static CdjachtStand fromJson(Map<String, dynamic> j) => CdjachtStand(
+      binnen: (j['binnen'] as num?)?.toInt() ?? 0,
+      zoekt: (j['zoekt'] as num?)?.toInt() ?? 0,
+      zoekPerVijf: (j['zoekPerVijf'] as num?)?.toInt() ?? 0,
+      zoekGemeten: (j['zoekGemeten'] as num?)?.toInt());
+
+  /// De regel over de zoekgrens onder Kwaliteit, of null als hij onbekend is (Saber, 07-11-2026: *"kijk wat de grens
+  /// is"*).
+  String? get zoekgrensZin => zoekPerVijf <= 0
+      ? null
+      : 'Soulseek: $zoekPerVijf zoekopdrachten per 5 min'
+          '${zoekGemeten == null ? ' — de grens is nog niet geraakt' : ' — grens geraakt bij $zoekGemeten'}';
 
   /// De regel onder Kwaliteit, of null als er niets te zeggen valt.
   String? get zin => binnen == 0 && zoekt == 0

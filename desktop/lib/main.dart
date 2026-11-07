@@ -27229,16 +27229,20 @@ class _KwaliteitViewState extends State<KwaliteitView> {
         // De cd-jacht (Saber, 05-11-2026): stil op de achtergrond, zonder meldingen — hier staat hoe ver hij is.
         ValueListenableBuilder<CdjachtStand>(
           valueListenable: context.read<DownloadManager>().cdjachtStand,
-          builder: (context, s, _) => s.zin == null
+          builder: (context, s, _) => s.zin == null && s.zoekgrensZin == null
               ? const SizedBox.shrink()
-              : Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Row(children: [
-                    Icon(Icons.album_outlined, size: 16, color: _muted),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(s.zin!, style: TextStyle(color: _muted, fontSize: 12.5))),
-                  ]),
-                ),
+              : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  for (final (icoon, zin) in [(Icons.album_outlined, s.zin), (Icons.speed_outlined, s.zoekgrensZin)])
+                    if (zin != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Row(children: [
+                          Icon(icoon, size: 16, color: _muted),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text(zin, style: TextStyle(color: _muted, fontSize: 12.5))),
+                        ]),
+                      ),
+                ]),
         ),
         if (_terug != null) _terugBlok(_terug!),
         const SizedBox(height: 6),

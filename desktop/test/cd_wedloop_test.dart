@@ -335,7 +335,9 @@ void main() {
     final ronde = online.substring(online.indexOf('  Future<void> _soortRonde('));
     final lijf = ronde.substring(0, ronde.indexOf('\n  }\n'));
     expect(RegExp(r'achtergrond: !gevraagd').allMatches(lijf).length, 2, reason: 'plaat en nummer: voor bij de zoekrem');
-    expect(lijf, contains('await metHoogstens(gevraagd ? kSoortNummersTegelijk : 1, open, (v) async {'));
+    expect(lijf, contains('final tegelijk = gevraagd ? kSoortNummersTegelijk : (open.first.vanzelf ? kCdjachtNummersTegelijk : 1);'),
+        reason: 'de cd-jacht samen sinds 07-11-2026; een eigen vraag die vanzelf terugkomt, één voor één');
+    expect(lijf, contains('await metHoogstens(tegelijk, open, (v) async {'));
     expect(lijf, contains('klaar = v.soort == Kopiesoort.cd ? await _cdWedloop(v, kandidaten) : await _soortVanSoulseek(v, kandidaten);'));
     expect(online, contains('.take(v.soort == Kopiesoort.cd ? kCdKandidaten : kSoortKandidaten)'));
     expect(kCdKandidaten, greaterThan(kSoortKandidaten));
