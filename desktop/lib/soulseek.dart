@@ -10,6 +10,7 @@ import 'audioformaten.dart';
 import 'geweerde_zinnen.dart';
 import 'paths.dart';
 import 'warm_log.dart';
+import 'zoekgrens.dart';
 
 /// Wat een peer per bestand aan eigenschappen meestuurt, in `soulseek.log`.
 ///
@@ -1666,14 +1667,36 @@ class Zoekrem {
       this.max = kZoekPerMinuut,
       this.voorJou = kZoekVoorJou,
       this.maxVijf = kZoekPerVijfMinuten,
-      this.voorJouVijf = kZoekVoorJouVijf})
+      this.voorJouVijf = kZoekVoorJouVijf,
+      this.grens,
+      this.voorJouVijfRustig})
       : _klok = klok ?? DateTime.now;
   final DateTime Function() _klok;
   final int max;
   final int voorJou;
   final int maxVijf;
   final int voorJouVijf;
+
+  /// De zelf afgetaste grens per vijf minuten ([Zoekgrens]); null: [maxVijf] vast.
+  final Zoekgrens? grens;
+
+  /// Zoek je zelf al [kJijZochtNet] niet meer, dan houdt de achtergrond er in vijf minuten nog maar zoveel voor jou over
+  /// in plaats van [voorJouVijf]; null: altijd [voorJouVijf]. Zie [kZoekVoorJouVijfRustig].
+  final int? voorJouVijfRustig;
+  DateTime? _jijLaatst;
   final _tijden = <DateTime>[];
+
+  /// Hoeveel zoekopdrachten er nu in de laatste vijf minuten gingen.
+  int get inVijf {
+    final nu = _klok();
+    return _tijden.where((t) => nu.difference(t) < const Duration(minutes: 5)).length;
+  }
+
+  /// De grens die nu geldt voor vijf minuten.
+  int get perVijf => grens?.perVijf ?? maxVijf;
+
+  /// De server deed moeilijk: voor de zelf afgetaste grens ([Zoekgrens.probleem]).
+  void probleem(String waarom) => grens?.probleem(waarom, inVijf);
 
   /// Wacht tot er een zoekopdracht mag, en boekt hem meteen — tussen kijken en boeken zit geen `await`, dus twee
   /// tegelijk nemen nooit dezelfde plek. [achtergrond]: hoogstens `max - voorJou` per minuut en `maxVijf - voorJouVijf`
@@ -1684,16 +1707,22 @@ class Zoekrem {
   /// schoof de volgende verder achteruit.
   Future<Duration?> neem({bool achtergrond = false, bool Function()? nogNodig}) async {
     var gewacht = Duration.zero;
+    if (!achtergrond) _jijLaatst = _klok();
     while (true) {
       if (nogNodig != null && !nogNodig()) return null;
       final nu = _klok();
       _tijden.removeWhere((t) => nu.difference(t) >= const Duration(minutes: 5));
+      final vijf = perVijf;
+      final rustig = voorJouVijfRustig;
+      final jij = _jijLaatst;
+      final voorJouNu = rustig != null && (jij == null || nu.difference(jij) >= kJijZochtNet) ? rustig : voorJouVijf;
       final w1 = zoekWachttijd(_tijden, nu, max: achtergrond ? max - voorJou : max);
       final w5 = zoekWachttijd(_tijden, nu,
-          max: achtergrond ? maxVijf - voorJouVijf : maxVijf, venster: const Duration(minutes: 5));
+          max: achtergrond ? vijf - voorJouNu : vijf, venster: const Duration(minutes: 5));
       final w = w1 > w5 ? w1 : w5;
       if (w <= Duration.zero) {
         _tijden.add(nu);
+        grens?.naZoeken(_tijden.length);
         return gewacht;
       }
       gewacht += w;
@@ -1702,8 +1731,24 @@ class Zoekrem {
   }
 }
 
+/// Zo lang na wat je zelf zocht, houdt de achtergrond er [kZoekVoorJouVijf] voor jou vrij; daarna nog maar
+/// [kZoekVoorJouVijfRustig]. Een albumpagina vraagt er twee tot vijf, en wie net zocht, zoekt vaak verder.
+const kJijZochtNet = Duration(minutes: 5);
+
+/// Wat de achtergrond in vijf minuten altijd voor jou vrijhoudt, ook als je al even niets zocht: genoeg voor een
+/// albumpagina zonder wachten. Saber, 07-11-2026: de cd-jacht ging *"echt traag"* — twintig van de veertig lagen vast
+/// voor zoeken dat niet kwam.
+const int kZoekVoorJouVijfRustig = 8;
+
+/// De zelf afgetaste grens van deze app (zoekgrens.dart): bewaard in `soulseek_zoekgrens.json`, elke stap in
+/// `soulseek_login.log`.
+final zoekgrens = Zoekgrens(
+  bestand: () => '$appDir${Platform.pathSeparator}soulseek_zoekgrens.json',
+  log: (s) => WarmLog('$appDir${Platform.pathSeparator}soulseek_login.log').line(s),
+);
+
 /// De zoekrem van deze app (één Soulseek-account).
-final zoekrem = Zoekrem();
+final zoekrem = Zoekrem(grens: zoekgrens, voorJouVijfRustig: kZoekVoorJouVijfRustig);
 
 /// Korter dan dit, en leeg: dan is er niet gezocht maar is de verbinding dood ([SlskSession.search]).
 const kZoekMeteenLeeg = Duration(milliseconds: 800);
@@ -1886,7 +1931,7 @@ class SlskSession {
         if (gewacht >= const Duration(seconds: 1)) {
           client.logboek('zoekrem: "$q" wachtte ${gewacht.inSeconds} s'
               '${achtergrond ? ' (achtergrond)' : ''} — hoogstens $kZoekPerMinuut zoekopdrachten per minuut en '
-              '$kZoekPerVijfMinuten per 5 min');
+              '${zoekrem.perVijf} per 5 min');
         }
         // Intussen kan de verbinding weg zijn; dan geldt wat er al binnen is.
         if (!_alive) break;
@@ -1934,7 +1979,11 @@ class SlskSession {
         zoekVijf: _zoektijden.where((z) => nu.difference(z) <= const Duration(minutes: 5)).length,
         achtergrond: achtergrond,
       ));
-      if (omslag != null) client.logboek(omslag);
+      if (omslag != null) {
+        client.logboek(omslag);
+        // De server zwijgt: zo stopte hij op 25-10-2026 na een reeks vragen — ook dat kan de zoekgrens zijn.
+        zoekrem.probleem('de server zwijgt');
+      }
     } else if (run.merged.isNotEmpty) {
       // Een antwoord, ook zonder muziek erin: de server geeft onze vragen door.
       final omslag = client.noteerZoekuitslag(antwoord: true);
@@ -2169,6 +2218,8 @@ class SlskSession {
         zoekVijf: _zoektijden.where((z) => nu.difference(z) <= const Duration(minutes: 5)).length,
         relogged: _relogged,
       ));
+      // Elders ingelogd is een andere client, geen tempo; al het andere kan de zoekgrens zijn ([Zoekgrens.probleem]).
+      if (!_relogged) zoekrem.probleem('verbinding weg ($hoe)');
       client.noteConnectionLost(relogged: _relogged);
     }
     _relogged = false;
