@@ -106,6 +106,24 @@ void main() {
       expect(titels(uit.where((s) => s.soort == SuggestieSoort.nummer)), ['Vuur en vlam']);
     });
 
+    test('de beste treffer valt nooit af tegen tien mindere ervoor', () {
+      final veel = EigenIndex.van([
+        plaat('Halo Band', 'Plaat', [for (var i = 0; i < 10; i++) 'Liedje $i']),
+        plaat('Beyoncé', 'I Am', ['Halo']),
+      ]);
+      final nummers = eigenSuggesties(veel, 'halo').where((s) => s.soort == SuggestieSoort.nummer);
+      expect(nummers.first.titel, 'Halo');
+      expect(nummers, hasLength(8));
+    });
+
+    test('hetzelfde nummer op twee platen is één rij', () {
+      final dubbel = EigenIndex.van([
+        plaat('Beyoncé', 'I Am', ['Halo']),
+        plaat('Beyoncé', 'Live', ['Halo (Live)']),
+      ]);
+      expect(eigenSuggesties(dubbel, 'halo').where((s) => s.soort == SuggestieSoort.nummer), hasLength(1));
+    });
+
     test('een rij weet waar hij bij hoort', () {
       final n = eigenSuggesties(index, 'halo').firstWhere((s) => s.soort == SuggestieSoort.nummer);
       expect(n.track!.title, 'Halo');

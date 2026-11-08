@@ -162,22 +162,32 @@ bool beginLijktOp(String woord, String q) {
 ///
 /// 1,0 precies · 0,9 begint ermee · 0,8 een woord begint ermee · 0,6 zonder leestekens ("backstreets" in "Backstreet's")
 /// · 0,5 ergens midden in een woord (vanaf drie letters) · 0,4 op één letter na · 0 past niet.
-double trefScore(String naam, String q, {bool typfout = true}) {
-  if (q.isEmpty || naam.isEmpty) return 0;
-  if (naam == q) return 1;
-  if (naam.startsWith(q)) return .9;
-  if (naam.contains(' $q')) return .8;
-  final platQ = q.replaceAll(' ', '');
-  if (platQ.length >= 3 && naam.replaceAll(' ', '').startsWith(platQ)) return .6;
-  if (q.length >= 3 && naam.contains(q)) return .5;
-  if (typfout && q.length >= kTypfoutVanaf) {
-    for (final w in naam.split(' ')) {
-      if (beginLijktOp(w, q)) return .4;
+double trefScore(String naam, String q, {bool typfout = true}) => _Vraag(q).score(naam, naam.replaceAll(' ', ''), typfout);
+
+/// Wat je typte, klaargezet voor heel veel vergelijkingen. Gemeten op 08-11-2026 met 20.000 nummers: 300 ms per letter toen er
+/// per naam nog tekst werd aangemaakt en elke treffer een eigen rij kreeg; dit draait op de hoofddraad, terwijl je typt.
+class _Vraag {
+  _Vraag(this.q)
+      : spatieQ = ' $q',
+        platQ = q.replaceAll(' ', '');
+  final String q, spatieQ, platQ;
+
+  double score(String naam, String plat, bool typfout, [List<String>? woorden]) {
+    if (q.isEmpty || naam.isEmpty) return 0;
+    if (naam == q) return 1;
+    if (naam.startsWith(q)) return .9;
+    if (naam.contains(spatieQ)) return .8;
+    if (platQ.length >= 3 && plat.startsWith(platQ)) return .6;
+    if (q.length >= 3 && naam.contains(q)) return .5;
+    if (typfout && q.length >= kTypfoutVanaf) {
+      for (final w in woorden ?? naam.split(' ')) {
+        if (beginLijktOp(w, q)) return .4;
+      }
+      // "rihana" tegen "rihanna" zit hierboven al; dit is de hele naam met spaties erin ("daftpunk", "daft punc").
+      if (beginLijktOp(naam, q)) return .4;
     }
-    // "rihana" tegen "rihanna" zit hierboven al; dit is de hele naam met spaties erin ("daftpunk", "daft punc").
-    if (beginLijktOp(naam, q)) return .4;
+    return 0;
   }
-  return 0;
 }
 
 /// Past [q] op een nummer of plaat, als je er ook de artiest bij typt ("daft get", "rihanna umbrella")? Elk woord van [q] moet
@@ -197,14 +207,20 @@ double woordenPassen(String titel, String artiest, String q) {
 class _Regel {
   _Regel(this.soort, this.titel, this.artiest, this.album, this.track)
       : nTitel = normKey(titel),
-        nArtiest = artistKey(artiest);
+        nArtiest = artistKey(artiest) {
+    pTitel = nTitel.replaceAll(' ', '');
+    pArtiest = nArtiest.replaceAll(' ', '');
+  }
   final SuggestieSoort soort;
   final String titel, artiest;
   final Album? album;
   final Track? track;
   final String nTitel, nArtiest;
+  late final String pTitel, pArtiest;
+  late final List<String> wTitel = nTitel.split(' ');
+  late final List<String> wArtiest = nArtiest.split(' ');
 
-  String get sleutel => switch (soort) {
+  late final String sleutel = switch (soort) {
         SuggestieSoort.artiest => 'a:$nArtiest',
         SuggestieSoort.album => 'p:$nArtiest|$nTitel',
         SuggestieSoort.nummer => 'n:${eigenSleutel(artiest, titel)}',
@@ -254,13 +270,14 @@ Suggestie _rijVan(_Regel r, double score) => Suggestie(
       track: r.track,
     );
 
-double _scoreVan(_Regel r, String q, bool typfout) {
-  final eigen = trefScore(r.nTitel, q, typfout: typfout);
-  if (r.soort == SuggestieSoort.artiest) return eigen;
-  final samen = woordenPassen(r.nTitel, r.nArtiest, q);
+double _scoreVan(_Regel r, _Vraag v, bool typfout) {
+  final eigen = v.score(r.nTitel, r.pTitel, typfout, r.wTitel);
+  if (r.soort == SuggestieSoort.artiest || eigen >= .7) return eigen;
+  final samen = woordenPassen(r.nTitel, r.nArtiest, v.q);
+  if (samen > eigen) return samen;
   // Een nummer of plaat van de artiest die je typt: lager dan wat zelf zo heet, want "halo" is eerst het nummer Halo.
-  final vanArtiest = trefScore(r.nArtiest, q, typfout: typfout) * .7;
-  return [eigen, samen, vanArtiest].reduce((a, b) => a > b ? a : b);
+  final vanArtiest = v.score(r.nArtiest, r.pArtiest, typfout, r.wArtiest) * .7;
+  return vanArtiest > eigen ? vanArtiest : eigen;
 }
 
 /// Wat er in je bibliotheek past bij [tekst], per soort, de beste eerst.
@@ -271,23 +288,28 @@ double _scoreVan(_Regel r, String q, bool typfout) {
 List<Suggestie> eigenSuggesties(EigenIndex index, String tekst, {int perSoort = 8}) {
   final q = normKey(tekst);
   if (q.isEmpty) return const [];
+  final vraag = _Vraag(q);
   final uit = <Suggestie>[];
   for (final lijst in [index._artiesten, index._albums, index._nummers]) {
-    final raak = <Suggestie>[];
-    final gezien = <String>{};
+    final raak = <(_Regel, double)>[];
     void ronde(bool typfout) {
+      raak.clear();
       for (final r in lijst) {
-        final s = _scoreVan(r, q, typfout);
-        if (s <= 0) continue;
-        if (!gezien.add(r.sleutel)) continue;
-        raak.add(_rijVan(r, s));
+        final s = _scoreVan(r, vraag, typfout);
+        if (s > 0) raak.add((r, s));
       }
     }
 
     ronde(false);
     if (raak.length < 3 && q.length >= kTypfoutVanaf) ronde(true);
-    raak.sort((a, b) => b.score.compareTo(a.score));
-    uit.addAll(raak.take(perSoort));
+    raak.sort((a, b) => b.$2.compareTo(a.$2));
+    // Pas nu de rijen, en alleen wat in het paneel past: dubbele komen hier pas aan bod.
+    final gezien = <String>{};
+    for (final (r, s) in raak) {
+      if (!gezien.add(r.sleutel)) continue;
+      uit.add(_rijVan(r, s));
+      if (gezien.length >= perSoort) break;
+    }
   }
   return uit;
 }
