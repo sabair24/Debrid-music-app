@@ -75,6 +75,89 @@ class ArtistArt {
   }
 }
 
+/// Is de ene naam woord voor woord het begin van de andere? "Amir" en "Amir Haddad" wel, "Khaled" en "DJ Khaled" niet.
+bool naamWoordVoorWoord(String a, String b) {
+  List<String> woorden(String s) => artistKey(s).split(' ').where((w) => w.isNotEmpty).toList();
+  final x = woorden(a), y = woorden(b);
+  if (x.isEmpty || y.isEmpty) return false;
+  final kort = x.length <= y.length ? x : y, lang = identical(kort, x) ? y : x;
+  for (var i = 0; i < kort.length; i++) {
+    if (kort[i] != lang[i]) return false;
+  }
+  return true;
+}
+
+/// Is [rij], wat TheAudioDB op de naam [naam] teruggaf, wel deze artiest? En zo niet: wie dan wel?
+///
+/// **Waarom.** Saber, 08-11-2026, op de pagina van Khaled: de foto en het logo van DJ Khaled. `search.php?s=khaled` geeft
+/// DJ Khaled (112356, hiphop, Florida), want die heeft "Khaled" als `strArtistAlternate`; en dat veld is dus geen bewijs.
+/// De echte staat er wel: `artist-mb.php?i=b4a479aa…` geeft Khaled (115335, Oran). Ook de biografie, de feiten en het genre
+/// voor de radio kwamen zo van de verkeerde.
+///
+/// Gemeten op 08-11-2026 over alle 561 artiesten in de bibliotheek: 475 dezelfde naam, 81 geen rij, 5 een andere naam. Daarvan
+/// was alleen Khaled echt iemand anders; Amir, 2 Be 3, Alice DJ en A Touch Of Class zijn dezelfde act.
+///
+/// Op volgorde, van goedkoop naar duur:
+///  1. dezelfde naam, of woord voor woord het begin ("Amir" is "Amir Haddad"), of een gemeten uitzondering: dit is hem;
+///  2. anders MusicBrainz: wie heet er zo? Heeft TheAudioDB bij deze rij datzelfde nummer, dan is het dezelfde onder een andere
+///     schrijfwijze ("Alice DJ" is "Alice DeeJay");
+///  3. heet er bij MusicBrainz iemand precies zo, dan zijn rij bij TheAudioDB, op nummer;
+///  4. niets: liever geen foto dan die van een naamgenoot.
+///
+/// Een fout van [mb] gooit door: "geen antwoord" is niet "bestaat niet", en mag dus niet onthouden worden.
+/// Wie bij TheAudioDB echt onder een andere naam staat, terwijl MusicBrainz onder de naam uit je bibliotheek iemand anders
+/// kent: A Touch Of Class is ATC ("Around the World", Duitsland); MusicBrainz kent onder die naam een techno-duo uit New York.
+/// De alternatieve naam bij TheAudioDB kan dit niet beslissen: die zou ook DJ Khaled goedkeuren.
+const kAudioDbOokBekendAls = <String, String>{'a touch of class': 'atc'};
+
+Future<Map<String, dynamic>?> kiesAudioDbArtiest(
+  String naam,
+  Map<String, dynamic> rij, {
+  required Future<MbArtist?> Function(String naam) mb,
+  required Future<Map<String, dynamic>?> Function(String mbid) opMb,
+}) async {
+  final gevonden = '${rij['strArtist'] ?? ''}'.trim();
+  if (naamWoordVoorWoord(naam, gevonden)) return rij;
+  if (kAudioDbOokBekendAls[artistKey(naam)] == artistKey(gevonden)) return rij;
+  final kent = await mb(naam);
+  if (kent == null) return null;
+  final rijMb = '${rij['strMusicBrainzID'] ?? ''}'.trim().toLowerCase();
+  if (rijMb.isNotEmpty && rijMb == kent.mbid.toLowerCase()) return rij;
+  if (artistKey(kent.name) != artistKey(naam)) return null;
+  return opMb(kent.mbid);
+}
+
+/// Wat er onder de naam van een naamgenoot in de buffers staat, gaat één keer weg (3.9.721). De nieuwe keuze
+/// ([kiesAudioDbArtiest]) kijkt alleen naar nieuwe vragen, en de foto's staan op de naam van de artiest op schijf.
+///
+/// De lijst komt uit een meting: alle artiesten uit de bibliotheek langs TheAudioDB op 08-11-2026.
+const kAudioDbNaamgenoten = <String>['Khaled'];
+const kAudioDbOpruimVersie = 1;
+
+Future<void> ruimAudioDbNaamgenotenOp(String map) async {
+  final sep = Platform.pathSeparator;
+  final merk = File('$map${sep}audiodb_naamgenoten.txt');
+  try {
+    if (await merk.exists() && (await merk.readAsString()).trim() == '$kAudioDbOpruimVersie') return;
+    for (final naam in kAudioDbNaamgenoten) {
+      final h = fnv1a(naam.toLowerCase());
+      for (final pad in [
+        'artistart$sep$h.json',
+        'artistart$sep$h.none',
+        for (final soort in const ['logo', 'backdrop', 'thumb', 'cutout', 'clearart']) 'artistart$sep${h}_$soort.img',
+        'bios$sep$h.txt',
+        'bios$sep$h.geen',
+        'artistfeiten$sep$h.json',
+        'artists$sep$h.jpg',
+      ]) {
+        final f = File('$map$sep$pad');
+        if (await f.exists()) await f.delete();
+      }
+    }
+    await merk.writeAsString('$kAudioDbOpruimVersie');
+  } catch (_) {/* dan de volgende start opnieuw: het merkje staat er niet */}
+}
+
 /// Wie een artiest IS in feiten: geboren, opgericht, land, label.
 ///
 /// **Dit stond al in de respons en werd weggegooid.** [CoverEnricher.fetchArtistBio] en
@@ -1535,8 +1618,8 @@ class CoverEnricher {
     if (r.statusCode != 200) return null;
     final list =
         (jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true))['artists'] as List?) ?? const [];
-    if (list.isEmpty) return null;
-    final a = list.first as Map<String, dynamic>;
+    final a = await _audioDbDezeArtiest(q, list);
+    if (a == null) return null;
     String? s(String k) {
       final v = (a[k] as String?)?.trim();
       // `null` als TEKST van vier letters, en dat stuurt deze bron echt — [albumInfo]'s versie van
@@ -1679,9 +1762,36 @@ class CoverEnricher {
     ).timeout(const Duration(seconds: 8));
     if (r.statusCode != 200) throw HttpException('TheAudioDB gaf ${r.statusCode}');
     final lijst = (jsonBody(r)['artists'] as List?) ?? const [];
-    if (lijst.isEmpty) return null;
-    final g = ((lijst.first as Map<String, dynamic>)['strGenre'] as String?)?.trim();
+    final a = await _audioDbDezeArtiest(artiest, lijst);
+    if (a == null) return null;
+    final g = (a['strGenre'] as String?)?.trim();
     return g == null || g.isEmpty || g.toLowerCase() == 'null' ? null : g;
+  }
+
+  /// De rij die bij deze artiest hoort, uit wat TheAudioDB op zijn naam teruggaf. Zie [kiesAudioDbArtiest].
+  static Future<Map<String, dynamic>?> _audioDbDezeArtiest(String naam, List<dynamic> rijen) async {
+    if (rijen.isEmpty) return null;
+    return kiesAudioDbArtiest(naam, rijen.first as Map<String, dynamic>, mb: audioDbMbVoor, opMb: audioDbOpMb);
+  }
+
+  /// Wie er bij MusicBrainz zo heet. `MusicBrainzService` slikt fouten; daarom de teller, zodat "geen antwoord" doorgooit.
+  static Future<MbArtist?> audioDbMbVoor(String naam) async {
+    final voor = MusicBrainzService.transportErrors;
+    final a = await MusicBrainzService().resolveArtist(naam);
+    if (a == null && MusicBrainzService.transportErrors > voor) throw const HttpException('MusicBrainz antwoordde niet');
+    return a;
+  }
+
+  /// De rij bij TheAudioDB op een MusicBrainz-nummer. Daar doen namen niet mee.
+  static Future<Map<String, dynamic>?> audioDbOpMb(String mbid) async {
+    await _audioDbSlot();
+    final r = await http.get(
+      Uri.parse('$kAudioDbBasis/artist-mb.php?i=${Uri.encodeQueryComponent(mbid)}'),
+      headers: {'User-Agent': _ua},
+    ).timeout(const Duration(seconds: 8));
+    if (r.statusCode != 200) throw HttpException('TheAudioDB gaf ${r.statusCode}');
+    final lijst = (jsonBody(r)['artists'] as List?) ?? const [];
+    return lijst.isEmpty ? null : lijst.first as Map<String, dynamic>;
   }
 
   /// Een vraag die iemand nu op het scherm wacht (de artiestpagina, Nu speelt): niet achter de hele rij
@@ -1897,11 +2007,11 @@ class CoverEnricher {
       ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 200) return null;
       final artists = (jsonBody(r)['artists'] as List?) ?? const [];
-      if (artists.isEmpty) {
+      final a = await _audioDbDezeArtiest(name, artists);
+      if (a == null) {
         await _onthoudGeenBio(name);
         return null;
       }
-      final a = artists.first as Map<String, dynamic>;
       // De feiten liggen HIER al op tafel, in dezelfde rij. Ze wegschrijven kost geen verzoek en
       // geen wachttijd; ze later apart ophalen zou allebei wél kosten. Buiten de bio-tak, want een
       // artiest zonder biografie heeft vaak wél een geboortejaar en een land.

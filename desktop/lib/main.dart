@@ -610,6 +610,8 @@ Future<void> main() async {
   // Before anything reads a setting or a cache: on iOS the app's own folder cannot be worked out
   // from the environment, it has to be asked for.
   await initAppPaths();
+  // Vóór er een artiestpagina opengaat: anders leest die nog de foto van de naamgenoot.
+  await ruimAudioDbNaamgenotenOp(appDir);
   // Gemeten hoesmaten van "Uitgave kiezen" bewaren. Hier en niet in scanmaat.dart zelf, zodat een
   // toets die de map vergeet niet in de echte app-map schrijft. Zie `scanmaat.dart`.
   bewaarScanmatenIn(appFile('scanmaten.json'));
