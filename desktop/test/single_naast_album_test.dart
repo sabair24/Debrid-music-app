@@ -163,7 +163,7 @@ class _NepCatalogus extends CatalogService {
   final List<CatalogAlbum> albums;
 
   @override
-  Future<List<CatalogArtist>> searchArtists(String q) async => [CatalogArtist(1, q, null, albums.length)];
+  Future<List<CatalogArtist>> searchArtists(String q, {int limit = 25}) async => [CatalogArtist(1, q, null, albums.length)];
 
   @override
   Future<List<CatalogAlbum>> artistAlbums(int artistId) async => albums;
