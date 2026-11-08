@@ -36,6 +36,8 @@ import 'scanmaat.dart';
 import 'booklet.dart' show imageSize;
 import 'ui/berichten_scherm.dart';
 import 'ui/kopfoto.dart';
+import 'ui/zoek_paneel.dart';
+import 'zoek_suggesties.dart';
 import 'uploaderberichten.dart';
 import 'ui/kopbewerker.dart';
 import 'ui/kop_logo.dart';
@@ -4230,6 +4232,7 @@ class _HomeShellState extends State<HomeShell> {
     gaNaarSectie = _gaNaar;
     naarRecentToegevoegd = _naarRecentToegevoegd;
     openZoekveld = _openZoeken;
+    zoekOnlineMet = _zoekOnlineMet;
     _kijkOfErEenNieuweIs();
     _radio = context.read<RadioBesturing>()..addListener(_kijkNaarRadio);
     // De notitie van de vorige keer. Legde je je telefoon weg terwijl er een radio liep, dan komt het
@@ -4463,6 +4466,74 @@ class _HomeShellState extends State<HomeShell> {
   /// covering half the screen and the album grid below it is unreachable. Pressing down from the
   /// navigation must land on the records, not in a keyboard nobody asked for.
   final _searchFocus = FocusNode(skipTraversal: isTv, debugLabel: 'library search');
+
+  /// De suggesties onder het zoekveld van de bibliotheek (Saber, 08-11-2026). Het paneel ligt over de gefilterde lijst; naast
+  /// tikken of Enter sluit het, en dan zie je die lijst.
+  late final _bibBron =
+      SuggestieBron(albums: () => context.read<LibraryStore>().albums, online: (q) => CatalogService().suggesties(q));
+  final _bibStuur = ZoekPaneelStuur();
+  final _bibVeld = GlobalKey();
+
+  /// Je woord naar Online zoeken, en daar meteen zoeken. Saber, 08-11-2026: *"dat moet hij direct beginnen zoeken op men zoek
+  /// invoer"*. Hier ging de knop gewoon naar het tabblad, en daar stond wat je de vorige keer zocht.
+  void _zoekOnlineMet(String woord) {
+    final q = woord.trim();
+    if (q.isEmpty) {
+      _gaNaar(2);
+      return;
+    }
+    final van = rechthoekVan(_bibVeld);
+    zoekRecent.voegToe(q);
+    ZoekGeheugen.startMet(q);
+    _bibStuur.sluit();
+    _zoekPauze?.cancel();
+    setState(() {
+      _leggenZoekterm('');
+      _searchCtl.clear();
+    });
+    final vliegt = van != null && !isTv;
+    ZoekGeheugen.woordVliegt.value = vliegt;
+    _gaNaar(2);
+    if (!vliegt) return;
+    vliegWoord(context,
+        woord: q,
+        van: van,
+        naar: () {
+          final r = onlineVeldPlek?.call();
+          // De tekst begint achter het vergrootglas.
+          return r == null ? null : Rect.fromLTWH(r.left + 48, r.top, math.max(0, r.width - 48), r.height);
+        },
+        klaar: () => ZoekGeheugen.woordVliegt.value = false);
+  }
+
+  /// Het paneel om een zoekveld van de bibliotheek.
+  Widget _metSuggesties(BuildContext context, Widget veld) => ZoekSuggesties(
+        key: _bibVeld,
+        controller: _searchCtl,
+        focus: _searchFocus,
+        bron: _bibBron,
+        recent: zoekRecent,
+        stuur: _bibStuur,
+        klein: isCompact(context),
+        beeld: suggestieBeeld,
+        opKies: (s, van, beeld) {
+          _bibStuur.sluit();
+          zoekRecent.voegToe(_searchCtl.text);
+          kiesSuggestie(context, s, van, beeld);
+        },
+        opZoek: _zoekOnlineMet,
+        zoekTekst: (t) => 'Zoek online op “$t”',
+        opRecent: (t) {
+          _searchCtl.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
+          _zetZoekterm(t);
+        },
+        child: veld,
+      );
+
+  void _bibEnter(String tekst) {
+    _bibStuur.sluit();
+    zoekRecent.voegToe(tekst);
+  }
   String _q = '';
   QFilter _qFilter = QFilter.all;
 
@@ -4528,6 +4599,9 @@ class _HomeShellState extends State<HomeShell> {
     if (gaNaarSectie == _gaNaar) gaNaarSectie = null;
     if (naarRecentToegevoegd == _naarRecentToegevoegd) naarRecentToegevoegd = null;
     if (openZoekveld == _openZoeken) openZoekveld = null;
+    if (zoekOnlineMet == _zoekOnlineMet) zoekOnlineMet = null;
+    _bibBron.dispose();
+    _bibStuur.dispose();
     super.dispose();
   }
 
@@ -4544,25 +4618,60 @@ class _HomeShellState extends State<HomeShell> {
   /// cannot see is not a result.
   Future<void> _tvSearch() async {
     final ctl = TextEditingController(text: _q);
+    final veld = FocusNode(debugLabel: 'tv zoekveld');
+    final stuur = ZoekPaneelStuur();
+    // Een raster van drie kolommen (Saber, 08-11-2026), dus per soort drie: dan is elke rij vol.
+    final bron = SuggestieBron(
+      albums: () => context.read<LibraryStore>().albums,
+      online: (q) => CatalogService().suggesties(q),
+      maxArtiesten: 3,
+      maxAlbums: 3,
+      maxNummers: 3,
+    );
     final woorden = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: _panel,
         title: const Text('Zoeken', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
         content: SizedBox(
-          width: dialogWidth(ctx, 560),
-          child: TextField(
+          width: dialogWidth(ctx, 900),
+          child: ZoekSuggesties(
             controller: ctl,
-            autofocus: true,
-            style: const TextStyle(fontSize: 16),
-            decoration: InputDecoration(
-              hintText: 'Artiest, album of nummer…',
-              hintStyle: TextStyle(color: _muted),
+            focus: veld,
+            bron: bron,
+            recent: zoekRecent,
+            stuur: stuur,
+            tv: true,
+            inline: true,
+            beeld: suggestieBeeld,
+            opKies: (s, _, beeld) {
+              zoekRecent.voegToe(ctl.text);
+              Navigator.pop(ctx);
+              kiesSuggestie(context, s, null, beeld);
+            },
+            opZoek: (t) {
+              zoekRecent.voegToe(t);
+              Navigator.pop(ctx, t.trim());
+            },
+            zoekTekst: (t) => 'Zoek in je bibliotheek op “$t”',
+            opRecent: (t) => ctl.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length)),
+            child: TextField(
+              controller: ctl,
+              focusNode: veld,
+              autofocus: true,
+              groupId: stuur.groep,
+              style: const TextStyle(fontSize: 16),
+              decoration: InputDecoration(
+                hintText: 'Artiest, album of nummer…',
+                hintStyle: TextStyle(color: _muted),
+              ),
+              // De "klaar"-toets van de afstandsbediening sluit het toetsenbord en wijst de eerste rij aan: dat is "Zoek in je
+              // bibliotheek", dus nog eens OK doet wat deze toets eerst meteen deed. Pijltjes lopen door de suggesties.
+              textInputAction: TextInputAction.search,
+              onSubmitted: (v) {
+                if (!stuur.naarEerste()) Navigator.pop(ctx, v.trim());
+              },
             ),
-            // The remote's "done" key closes the keyboard AND the dialog, which is the whole
-            // gesture: type, done, results. Without it you have to find a button behind a keyboard.
-            textInputAction: TextInputAction.search,
-            onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
           ),
         ),
         actions: [
@@ -4575,6 +4684,9 @@ class _HomeShellState extends State<HomeShell> {
       ),
     );
     ctl.dispose();
+    veld.dispose();
+    stuur.dispose();
+    bron.dispose();
     if (woorden == null || !mounted) return;
     // De pagina die er eventueel overheen ligt gaat dicht: je zoekt om iets in de LIJST te vinden,
     // en die staat eronder.
@@ -4688,7 +4800,7 @@ class _HomeShellState extends State<HomeShell> {
     if (!narrow) return _searchBarRow(context);
     return Column(
       children: [
-        _glassPill(context: context, child: Row(children: [Expanded(child: _searchField())])),
+        _glassPill(context: context, child: Row(children: [Expanded(child: _metSuggesties(context, _searchField()))])),
         const SizedBox(height: 8),
         SizedBox(
           height: 38,
@@ -4708,7 +4820,7 @@ class _HomeShellState extends State<HomeShell> {
         context: context,
         child: Row(
           children: [
-            Expanded(child: _searchField()),
+            Expanded(child: _metSuggesties(context, _searchField())),
             const SizedBox(width: 10),
             ..._filterChips(),
             ..._sortControl(),
@@ -4728,7 +4840,10 @@ class _HomeShellState extends State<HomeShell> {
                 child: TextField(
                   controller: _searchCtl,
                   focusNode: _searchFocus,
+                  groupId: _bibStuur.groep,
                   onChanged: _zetZoekterm,
+                  onSubmitted: _bibEnter,
+                  textInputAction: TextInputAction.search,
                   style: const TextStyle(fontSize: 14),
                 decoration: InputDecoration(
                   isDense: true,
@@ -4887,6 +5002,8 @@ class _HomeShellState extends State<HomeShell> {
       canPop: !nummerKeuze.actief && terugVanaf(paginaOpen: paginaOpen, sectie: _view) == TerugActie.appVerlaten,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
+        // Een open suggestiepaneel gaat eerst dicht, zoals een menu.
+        if (ZoekPaneelStuur.sluitOpenPaneel()) return;
         // Eerst het kiezen stoppen, zoals overal op Android.
         if (nummerKeuze.actief) {
           nummerKeuze.stop();
@@ -5563,15 +5680,21 @@ class _HomeShellState extends State<HomeShell> {
                 Icon(Icons.search_rounded, size: 18, color: _muted),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: TextField(
-                    key: const ValueKey('menu-zoekveld'),
-                    controller: _searchCtl,
-                    focusNode: _searchFocus,
-                    onChanged: _zetZoekterm,
-                    style: const TextStyle(fontSize: 14),
-                    decoration: InputDecoration.collapsed(
-                      hintText: 'Zoek in je bibliotheek — artiest, album of nummer…',
-                      hintStyle: TextStyle(color: _muted, fontSize: 13.5),
+                  child: _metSuggesties(
+                    context,
+                    TextField(
+                      key: const ValueKey('menu-zoekveld'),
+                      controller: _searchCtl,
+                      focusNode: _searchFocus,
+                      groupId: _bibStuur.groep,
+                      onChanged: _zetZoekterm,
+                      onSubmitted: _bibEnter,
+                      textInputAction: TextInputAction.search,
+                      style: const TextStyle(fontSize: 14),
+                      decoration: InputDecoration.collapsed(
+                        hintText: 'Zoek in je bibliotheek — artiest, album of nummer…',
+                        hintStyle: TextStyle(color: _muted, fontSize: 13.5),
+                      ),
                     ),
                   ),
                 ),
@@ -5738,7 +5861,7 @@ class _HomeShellState extends State<HomeShell> {
             uitleg: 'Geen enkel album hier heet “$_q”, en geen enkel nummer erop ook. '
                 'Online zoeken kijkt verder dan je eigen kast.',
             knop: 'Online zoeken',
-            opKnop: () => gaNaarSectie?.call(2),
+            opKnop: () => zoekOnlineMet?.call(_q),
           );
         }
         if (_view != 0) return ArtistsView(lib: lib, albums: albums);
@@ -21854,6 +21977,60 @@ void stapTerug() {
 /// Het zoekveld van de schil, voor Ctrl+F (die buiten de schil zit). Zoals [gaNaarSectie].
 void Function()? openZoekveld;
 
+/// Naar Online zoeken, en daar meteen zoeken op dit woord. Zoals [gaNaarSectie]; de schil zet hem.
+void Function(String woord)? zoekOnlineMet;
+
+/// Waar het zoekveld van Online zoeken nu staat: daar landt het woord uit de bibliotheek ([vliegWoord]). Een functie en geen
+/// GlobalKey: bij een draai bestaat het nieuwe scherm al voordat het oude weg is, en een sleutel mag maar op een plek.
+Rect? Function()? onlineVeldPlek;
+
+/// De laatste zoekopdrachten op dit toestel, voor elk zoekveld dezelfde.
+final zoekRecent = ZoekRecent(bestand: () => '$appDir${Platform.pathSeparator}zoek_recent.json');
+
+/// De foto of hoes in een rij met suggesties: van jou als je hem hebt, anders van Deezer in de kleinste maat.
+Widget suggestieBeeld(BuildContext context, Suggestie s, double maat) {
+  final rond = s.soort == SuggestieSoort.artiest;
+  if (s.eigen && rond) return ArtiestPortret(naam: s.titel, maat: maat, hoek: maat / 2, terugvalUrl: s.beeldUrl);
+  final hoes = s.album?.cover;
+  if (s.eigen && hoes != null) return cover(hoes, size: maat, radius: 7);
+  return _netCover(s.beeldUrl, size: maat, radius: 7, circle: rond);
+}
+
+/// Een suggestie gekozen: een artiest of album opent zijn pagina en de foto vliegt mee, een nummer doet wat een tik overal doet
+/// (je instelling of het menu; wat je nog niet hebt, wordt op de achtergrond gehaald).
+void kiesSuggestie(BuildContext context, Suggestie s, Rect? van, Widget beeld) {
+  FocusManager.instance.primaryFocus?.unfocus();
+  String? hoesLabel;
+  switch (s.soort) {
+    case SuggestieSoort.nummer:
+      final album = s.album, track = s.track, online = s.onlineNummer;
+      if (s.eigen && album != null && track != null) {
+        unawaited(speelGetikt(context, album.tracks, album.tracks.indexOf(track), cover: album.cover));
+      } else if (online != null) {
+        unawaited(speelGetiktNieuw(context,
+            artiest: online.artist, titel: online.title, seconden: online.seconden, album: online.album, hoes: online.cover));
+      }
+      return;
+    case SuggestieSoort.artiest:
+      final online = s.onlineArtiest;
+      if (s.eigen) {
+        unawaited(openArtist(context, s.titel));
+      } else if (online != null) {
+        unawaited(openPagina(context, (_) => ArtistBrowsePage(online)));
+      }
+    case SuggestieSoort.album:
+      final album = s.album, online = s.onlineAlbum;
+      if (s.eigen && album != null) {
+        hoesLabel = 'suggestie:${s.sleutel}';
+        final label = hoesLabel;
+        unawaited(openPagina(context, (_) => AlbumDetailPage(album: album, heroTag: label)));
+      } else if (online != null) {
+        unawaited(openPagina(context, (_) => AlbumBrowsePage(online.artist, online.album)));
+      }
+  }
+  if (van != null && !isTv) vliegBeeld(context, van: van, beeld: beeld, heroTag: hoesLabel, zoekIn: binnenNav.currentContext);
+}
+
 /// Een sneltoets die niets doet zolang je in een tekstveld typt. Uitgeschakeld en niet "doet niets":
 /// een ingeschakelde actie slikt de toets in, en dan komt de spatie niet meer in het veld.
 class AlsNietTypend<T extends Intent> extends Action<T> {
@@ -23186,7 +23363,9 @@ class TracksView extends StatelessWidget {
         kop: query.isEmpty ? 'Niets binnen dit filter' : 'Niets gevonden',
         uitleg: query.isEmpty
             ? 'Geen enkel nummer voldoet aan wat je hierboven hebt aangevinkt.'
-            : 'Geen enkel nummer heet “$query”. Probeer een deel van de titel of de artiest.',
+            : 'Geen enkel nummer heet “$query”. Online zoeken kijkt verder dan je eigen kast.',
+        knop: query.isEmpty ? null : 'Online zoeken',
+        opKnop: query.isEmpty ? null : () => zoekOnlineMet?.call(query),
       );
     }
     return Column(
@@ -29096,6 +29275,14 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     // Wat je typt meteen onthouden, zoals de bediening in [build]: bij een draai komt het nieuwe scherm vóór het oude
     // zijn [dispose] doet.
     _c.addListener(() => ZoekGeheugen.vraag = _c.text);
+    // De losse TIDAL-pagina ligt over dit scherm heen; daar landt niets.
+    if (widget.tidalVraag == null) onlineVeldPlek = _veldPlek;
+    // Vanuit je bibliotheek hierheen gestuurd: het woord staat er al ([ZoekGeheugen.startMet]), en het zoeken begint nu.
+    if (ZoekGeheugen.neemStart() != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_search());
+      });
+    }
     final vraag = widget.tidalVraag?.trim() ?? '';
     if (vraag.isNotEmpty) {
       _mode = ZoekTab.tidal;
@@ -29107,9 +29294,42 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     }
   }
 
+  /// De suggesties onder dit zoekveld. Op de Shield per soort drie, voor het raster.
+  late final _suggesties = SuggestieBron(
+    albums: () => context.read<LibraryStore>().albums,
+    online: (q) => _catalog.suggesties(q),
+    maxArtiesten: isTv ? 3 : 4,
+    maxAlbums: 3,
+    maxNummers: isTv ? 3 : 4,
+  );
+  final _stuur = ZoekPaneelStuur();
+  final _veldSleutel = GlobalKey(debugLabel: 'online zoekveld');
+  Rect? _veldPlek() => rechthoekVan(_veldSleutel);
+
+  /// Bladeren opent de pagina of speelt het nummer. Bij Direct zoeken en TIDAL zet een tik de naam in het veld en zoekt hij
+  /// daar: daarvoor was je op dat tabblad (Saber, 08-11-2026).
+  void _kiesSuggestie(Suggestie s, Rect? van, Widget beeld) {
+    if (_mode == ZoekTab.bladeren) {
+      _stuur.sluit();
+      zoekRecent.voegToe(_c.text);
+      kiesSuggestie(context, s, van, beeld);
+      return;
+    }
+    final artiest = s.track?.artist ?? s.album?.artist ?? s.onlineNummer?.artist ?? s.onlineAlbum?.artist;
+    final tekst = s.soort == SuggestieSoort.artiest || artiest == null ? s.titel : '$artiest ${s.titel}';
+    _zetEnZoek(tekst);
+  }
+
+  void _zetEnZoek(String tekst) {
+    _c.value = TextEditingValue(text: tekst, selection: TextSelection.collapsed(offset: tekst.length));
+    unawaited(_search());
+  }
+
   Future<void> _search() async {
     final q = _c.text.trim();
     if (q.isEmpty) return;
+    _stuur.sluit();
+    zoekRecent.voegToe(q);
     if (_mode == 0) {
       await _searchBrowse(q);
     } else if (_mode == 1) {
@@ -29673,6 +29893,9 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
     ZoekGeheugen.nummerOpen = _trackExpanded;
     ZoekGeheugen.tidalNummerOpen = _tidalExpanded;
     ZoekGeheugen.tidalAlbumOpen = _tidalAlbumExpanded;
+    if (onlineVeldPlek == _veldPlek) onlineVeldPlek = null;
+    _suggesties.dispose();
+    _stuur.dispose();
     _c.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -29715,14 +29938,42 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
           child: Row(
             children: [
               Expanded(
-                child: MaybePressable(
+                child: ZoekSuggesties(
+                  key: _veldSleutel,
+                  controller: _c,
+                  focus: _searchFocus,
+                  bron: _suggesties,
+                  recent: zoekRecent,
+                  stuur: _stuur,
+                  tv: isTv,
+                  klein: isCompact(context),
+                  beeld: suggestieBeeld,
+                  opKies: _kiesSuggestie,
+                  opZoek: (_) => unawaited(_search()),
+                  zoekTekst: (t) => switch (_mode) {
+                    ZoekTab.direct => 'Zoek direct op “$t”',
+                    ZoekTab.tidal => 'Zoek in TIDAL op “$t”',
+                    _ => 'Zoek op “$t”',
+                  },
+                  opRecent: _zetEnZoek,
+                  child: MaybePressable(
                   enabled: isTv,
                   onPressed: _searchFocus.requestFocus,
                   borderRadius: BorderRadius.circular(11),
-                  child: TextField(
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: ZoekGeheugen.woordVliegt,
+                    builder: (_, vliegt, kind) => TextField(
                   controller: _c,
                   focusNode: _searchFocus,
-                  onSubmitted: (_) => _search(),
+                  groupId: _stuur.groep,
+                  // Het woord is nog onderweg uit je bibliotheek ([vliegWoord]): het landt hier zo meteen.
+                  style: vliegt ? const TextStyle(color: Colors.transparent) : null,
+                  textInputAction: TextInputAction.search,
+                  // Op de Shield eerst naar de suggesties; de eerste is "Zoek op …", dus nog eens OK zoekt.
+                  onSubmitted: (_) {
+                    if (isTv && _stuur.naarEerste()) return;
+                    unawaited(_search());
+                  },
                   decoration: InputDecoration(
                     hintText: _mode == 0
                         ? 'Zoek artiest, album of nummer…'
@@ -29734,6 +29985,8 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                         borderRadius: BorderRadius.circular(11), borderSide: BorderSide(color: _line)),
                     enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(11), borderSide: BorderSide(color: _line)),
+                  ),
+                ),
                   ),
                 ),
                 ),

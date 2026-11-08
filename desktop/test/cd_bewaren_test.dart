@@ -214,6 +214,31 @@ void main() {
     Track nummer(String pad, String titel, {String plaat = 'Unorthodox Jukebox'}) =>
         Track(path: pad, title: titel, artist: 'Bruno Mars', album: plaat, duration: const Duration(seconds: 200));
 
+    test('een hernoemde artiest: de vraag zoekt onder de nieuwe naam, houdt wat hij weet, en TIDAL krijgt een nieuwe kans', () async {
+      final p = schrijf(album("N'Ssi N'Ssi", '01.flac'), hz: 48000, bits: 24).path;
+      Track als(String artiest) => Track(path: p, title: 'Bakhta', artist: artiest, album: "N'Ssi N'Ssi");
+      nummers = [als('Cheb Khaled')];
+      await d.cdjachtVegen();
+      d.cdjacht!.van(p)!
+        ..rondes = 1
+        ..laatsteMs = 123
+        ..tidalKentHemNiet = true
+        ..nee.add(77);
+      nummers = [als('Khaled')];
+      final r = await d.cdjachtVegen();
+      expect(r.nieuw, 0, reason: 'dezelfde vraag, geen nieuwe');
+      final v = d.cdjacht!.van(p)!;
+      expect(v.artiest, 'Khaled');
+      expect(v.gezag?['artist'], 'Khaled');
+      expect(v.rondes, 1);
+      expect(v.laatsteMs, 123);
+      expect(v.nee, {77});
+      expect(v.tidalKentHemNiet, isFalse);
+      final terug = Soortvragen('${root.path}${sep}cdjacht.json', toon: false);
+      await terug.laad();
+      expect(terug.van(p)?.artiest, 'Khaled', reason: 'bewaard');
+    });
+
     test('DE KERN: wie geen schone cd heeft, krijgt een stille vraag; wie er een kreeg, telt mee', () async {
       final cd = schrijf(album('Unorthodox Jukebox', '01.flac'), hz: 44100, bits: 16).path;
       final studio = schrijf(album('Unorthodox Jukebox', '02.flac'), hz: 96000, bits: 24).path;
