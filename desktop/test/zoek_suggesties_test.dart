@@ -146,6 +146,16 @@ void main() {
       expect(a.single.beeldUrl, isNotNull, reason: 'de foto van Deezer blijft erbij voor als de jouwe er niet is');
     });
 
+    test('twee verschillende nummers die even goed passen: dat van jou staat boven', () {
+      final uit = mengSuggesties(
+        eigenSuggesties(index, 'halo'),
+        onlineSuggesties(deezer(nummers: [('Iemand Anders', 'Halo')]), 'halo'),
+      );
+      final n = uit.firstWhere((g) => g.soort == SuggestieSoort.nummer).rijen;
+      expect([for (final s in n) s.onder], ['Beyoncé', 'Iemand Anders']);
+      expect(n.first.eigen, isTrue);
+    });
+
     test('DJ Khaled en Khaled blijven twee rijen, en Khaled staat bovenaan', () {
       final uit = mengSuggesties(
         eigenSuggesties(index, 'khaled'),

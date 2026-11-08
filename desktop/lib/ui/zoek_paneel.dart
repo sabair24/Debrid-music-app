@@ -9,7 +9,6 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../zoek_suggesties.dart';
@@ -369,10 +368,10 @@ class _ZoekSuggestiesState extends State<ZoekSuggesties> with SingleTickerProvid
     );
   }
 
-  /// Waar het veld staat. Buiten de bouwronde gemeten: tijdens het bouwen na een draai zijn de lagen erboven nog niet
-  /// opgemaakt, en dan valt `localToGlobal` om (gezien in tidal_smal_scherm_test).
+  /// Waar het veld staat. Buiten het bouwen van het paneel gemeten: tijdens het bouwen na een draai zijn de lagen erboven nog
+  /// niet opgemaakt, en dan valt `localToGlobal` om (gezien in tidal_smal_scherm_test).
   void _meetVeld() {
-    if (!mounted || SchedulerBinding.instance.schedulerPhase == SchedulerPhase.persistentCallbacks) return;
+    if (!mounted) return;
     final d = context.findRenderObject();
     if (d is! RenderBox || !d.attached || !d.hasSize) return;
     final r = d.localToGlobal(Offset.zero) & d.size;
