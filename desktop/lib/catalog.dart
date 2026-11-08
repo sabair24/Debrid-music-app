@@ -343,8 +343,8 @@ class CatalogService {
   /// the most listeners wins — searching "Michael Jackson" otherwise returns a namesake with a
   /// single release ahead of the real one, and every page that follows is then about the wrong
   /// person.
-  Future<List<CatalogArtist>> searchArtists(String q) async {
-    final j = await _get('$_base/search/artist?q=${Uri.encodeComponent(q)}&limit=25');
+  Future<List<CatalogArtist>> searchArtists(String q, {int limit = 25}) async {
+    final j = await _get('$_base/search/artist?q=${Uri.encodeComponent(q)}&limit=$limit');
     final data = (j?['data'] as List?) ?? const [];
     String norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
     final wanted = norm(q);
@@ -387,45 +387,21 @@ class CatalogService {
   /// treffers. Null als alle drie niets gaven door een fout, en niet omdat er niets is: dan blijft het paneel staan zoals het
   /// was. Gemeten op 08-11-2026 vanaf de pc: 0,17–0,27 s per vraag, 3,3 KB samen (gzip).
   Future<OnlineTreffers?> suggesties(String q) async {
-    final v = Uri.encodeComponent(q);
     final res = await Future.wait([
-      _get('$_base/search/artist?q=$v&limit=4'),
-      _get('$_base/search/album?q=$v&limit=4'),
-      _get('$_base/search?q=$v&limit=5'),
+      searchArtists(q, limit: 4),
+      searchAlbums(q, limit: 4),
+      searchTracks(q, limit: 5),
     ]);
-    if (res.every((j) => j == null)) return null;
-    final artiesten = <CatalogArtist>[
-      for (final a in ((res[0]?['data'] as List?) ?? const []))
-        if (((a['name'] ?? '') as String).isNotEmpty)
-          CatalogArtist(a['id'] as int, a['name'] as String, (a['picture_medium'] ?? a['picture_big']) as String?,
-              (a['nb_album'] ?? 0) as int),
-    ];
-    final albums = <CatalogAlbumHit>[
-      for (final a in ((res[1]?['data'] as List?) ?? const []))
-        if (((a['title'] ?? '') as String).isNotEmpty && a['record_type'] != 'single')
-          CatalogAlbumHit(_album(a), (a['artist']?['name'] ?? '') as String),
-    ];
-    final gezien = <String>{};
-    final nummers = <CatalogTrackHit>[
-      for (final t in ((res[2]?['data'] as List?) ?? const []))
-        if (((t['title'] ?? '') as String).isNotEmpty &&
-            gezien.add('${t['artist']?['name'] ?? ''}|${t['title']}'.toLowerCase()))
-          CatalogTrackHit(
-            t['title'] as String,
-            (t['artist']?['name'] ?? '') as String,
-            (t['album']?['cover_medium'] ?? t['album']?['cover']) as String?,
-            album: t['album']?['title'] as String?,
-            seconden: (t['duration'] as num?)?.toInt(),
-            artistId: (t['artist']?['id'] as num?)?.toInt(),
-            artistPicture: (t['artist']?['picture_big'] ?? t['artist']?['picture_medium']) as String?,
-          ),
-    ];
+    final artiesten = res[0] as List<CatalogArtist>;
+    final albums = [for (final h in res[1] as List<CatalogAlbumHit>) if (h.album.recordType != 'single') h];
+    final nummers = res[2] as List<CatalogTrackHit>;
+    if (artiesten.isEmpty && albums.isEmpty && nummers.isEmpty && laatsteFout.isNotEmpty) return null;
     return OnlineTreffers(artiesten, albums, nummers);
   }
 
   /// Browse: albums matching a query (each keeps its artist for the tracklist page).
-  Future<List<CatalogAlbumHit>> searchAlbums(String q) async {
-    final j = await _get('$_base/search/album?q=${Uri.encodeComponent(q)}&limit=20');
+  Future<List<CatalogAlbumHit>> searchAlbums(String q, {int limit = 20}) async {
+    final j = await _get('$_base/search/album?q=${Uri.encodeComponent(q)}&limit=$limit');
     final data = (j?['data'] as List?) ?? const [];
     return data
         .map((a) => CatalogAlbumHit(_album(a), (a['artist']?['name'] ?? '') as String))
@@ -434,8 +410,8 @@ class CatalogService {
   }
 
   /// Browse: individual tracks matching a query (→ sources on tap).
-  Future<List<CatalogTrackHit>> searchTracks(String q) async {
-    final j = await _get('$_base/search?q=${Uri.encodeComponent(q)}&limit=25');
+  Future<List<CatalogTrackHit>> searchTracks(String q, {int limit = 25}) async {
+    final j = await _get('$_base/search?q=${Uri.encodeComponent(q)}&limit=$limit');
     final data = (j?['data'] as List?) ?? const [];
     final seen = <String>{};
     return data
