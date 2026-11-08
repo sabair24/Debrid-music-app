@@ -6192,7 +6192,7 @@ class DownloadManager extends ChangeNotifier {
     if (c == null || bron == null) return (nieuw: 0, binnen: 0);
     _cdjachtGeveegd = DateTime.now();
     final nu = DateTime.now().millisecondsSinceEpoch;
-    var nieuw = 0, binnen = 0, i = 0;
+    var nieuw = 0, binnen = 0, hernoemd = 0, i = 0;
     final gezien = <String>{};
     for (final t in bron()) {
       // Niet de hele bibliotheek in één adem: elke kop lezen houdt het scherm anders even vast.
@@ -6208,7 +6208,15 @@ class DownloadManager extends ChangeNotifier {
         }
         continue;
       }
-      if (v != null) continue;
+      if (v != null) {
+        // Hernoemd in de bibliotheek (Khaled, 08-11-2026: de vragen zochten door als "Cheb Khaled", en TIDAL weigerde daardoor
+        // elke treffer). De vraag volgt, met alles wat hij al weet.
+        if (v.artiest != t.artist) {
+          c.zet(v.metArtiest(t.artist));
+          hernoemd++;
+        }
+        continue;
+      }
       c.zet(Soortvraag(
         pad: t.path,
         soort: Kopiesoort.cd,
@@ -6235,7 +6243,7 @@ class DownloadManager extends ChangeNotifier {
       c.verwijder(v.pad);
       weg++;
     }
-    if (nieuw + binnen + weg > 0) await c.bewaar();
+    if (nieuw + binnen + weg + hernoemd > 0) await c.bewaar();
     werkCdjachtStandBij();
     _log.line('cd-jacht: ${c.alle.length} nummers zoeken een cd ($nieuw nieuw, $binnen kregen er een'
         '${weg > 0 ? ', $weg staan er niet meer' : ''}; ${c.binnen} sinds het begin)');

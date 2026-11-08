@@ -182,6 +182,22 @@ class Soortvraag {
   /// TIDAL vond bij de laatste ronde niets van deze opname ([cdjachtWacht]).
   bool tidalKentHemNiet;
 
+  /// Dezelfde vraag voor een hernoemde artiest. TIDAL krijgt een nieuwe kans: onder de oude naam kon hij de opname niet kennen.
+  Soortvraag metArtiest(String nieuw) => Soortvraag(
+        pad: pad,
+        soort: soort,
+        artiest: nieuw,
+        titel: titel,
+        album: album,
+        seconden: seconden,
+        sindsMs: sindsMs,
+        rondes: rondes,
+        laatsteMs: laatsteMs,
+        gezag: gezag == null ? null : {...gezag!, 'artist': nieuw},
+        vanzelf: vanzelf,
+        nee: nee,
+      );
+
   /// Mag hij nu weer zoeken?
   bool aanDeBeurt(DateTime nu) =>
       rondes == 0 ||

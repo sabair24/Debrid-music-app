@@ -25,6 +25,8 @@
 /// toestel en zonder netwerk, net als `zoekladder.dart` en `slsk_groepen.dart`.
 library;
 
+import 'package:flutter/foundation.dart';
+
 import 'catalog.dart';
 import 'quality.dart';
 import 'soulseek.dart';
@@ -43,6 +45,32 @@ class ZoekGeheugen {
   /// Welk tabblad open stond, en wat er in het zoekveld stond.
   static int tab = ZoekTab.bladeren;
   static String vraag = '';
+
+  /// Wat er meteen gezocht moet worden als Online zoeken opengaat, of null: je zocht iets in je bibliotheek en tikte op
+  /// "Online zoeken" (Saber, 08-11-2026: *"dat moet hij direct beginnen zoeken op men zoek invoer"*). [neemStart] leest het
+  /// één keer, zodat een latere sectiewissel niet opnieuw zoekt.
+  static String? _start;
+
+  /// Het woord is nog onderweg van het ene zoekveld naar het andere (`vliegWoord`): zolang staat het er nog niet.
+  static final woordVliegt = ValueNotifier<bool>(false);
+
+  /// Zet Online zoeken klaar voor [woord]: op Bladeren, met dat woord, en zonder de lijsten van de vorige keer.
+  static void startMet(String woord) {
+    _start = woord;
+    vraag = woord;
+    tab = ZoekTab.bladeren;
+    artiesten = const [];
+    albums = const [];
+    nummers = const [];
+    nummerOpen = null;
+    status = null;
+  }
+
+  static String? neemStart() {
+    final s = _start;
+    _start = null;
+    return s;
+  }
 
   // ── Bladeren ──────────────────────────────────────────────────────────────
   static List<CatalogArtist> artiesten = const [];

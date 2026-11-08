@@ -129,6 +129,14 @@ class CatalogAlbumHit {
   const CatalogAlbumHit(this.album, this.artist);
 }
 
+/// Wat Deezer bij een paar letters vond, voor de suggesties. Zie [CatalogService.suggesties].
+class OnlineTreffers {
+  const OnlineTreffers(this.artiesten, this.albums, this.nummers);
+  final List<CatalogArtist> artiesten;
+  final List<CatalogAlbumHit> albums;
+  final List<CatalogTrackHit> nummers;
+}
+
 /// Alleen de albums die in [jaar] zijn uitgekomen.
 ///
 /// Bestaat omdat de balk "NIEUWE RELEASE" albums uit 2011 en 2016 toonde. Er zat helemaal geen
@@ -373,6 +381,46 @@ class CatalogService {
             ))
         .where((a) => a.name.isNotEmpty)
         .toList();
+  }
+
+  /// Voor de suggesties terwijl je typt (`zoek_suggesties.dart`): dezelfde drie vragen als bij zoeken, maar elk maar een paar
+  /// treffers. Null als alle drie niets gaven door een fout, en niet omdat er niets is: dan blijft het paneel staan zoals het
+  /// was. Gemeten op 08-11-2026 vanaf de pc: 0,17–0,27 s per vraag, 3,3 KB samen (gzip).
+  Future<OnlineTreffers?> suggesties(String q) async {
+    final v = Uri.encodeComponent(q);
+    final res = await Future.wait([
+      _get('$_base/search/artist?q=$v&limit=4'),
+      _get('$_base/search/album?q=$v&limit=4'),
+      _get('$_base/search?q=$v&limit=5'),
+    ]);
+    if (res.every((j) => j == null)) return null;
+    final artiesten = <CatalogArtist>[
+      for (final a in ((res[0]?['data'] as List?) ?? const []))
+        if (((a['name'] ?? '') as String).isNotEmpty)
+          CatalogArtist(a['id'] as int, a['name'] as String, (a['picture_medium'] ?? a['picture_big']) as String?,
+              (a['nb_album'] ?? 0) as int),
+    ];
+    final albums = <CatalogAlbumHit>[
+      for (final a in ((res[1]?['data'] as List?) ?? const []))
+        if (((a['title'] ?? '') as String).isNotEmpty && a['record_type'] != 'single')
+          CatalogAlbumHit(_album(a), (a['artist']?['name'] ?? '') as String),
+    ];
+    final gezien = <String>{};
+    final nummers = <CatalogTrackHit>[
+      for (final t in ((res[2]?['data'] as List?) ?? const []))
+        if (((t['title'] ?? '') as String).isNotEmpty &&
+            gezien.add('${t['artist']?['name'] ?? ''}|${t['title']}'.toLowerCase()))
+          CatalogTrackHit(
+            t['title'] as String,
+            (t['artist']?['name'] ?? '') as String,
+            (t['album']?['cover_medium'] ?? t['album']?['cover']) as String?,
+            album: t['album']?['title'] as String?,
+            seconden: (t['duration'] as num?)?.toInt(),
+            artistId: (t['artist']?['id'] as num?)?.toInt(),
+            artistPicture: (t['artist']?['picture_big'] ?? t['artist']?['picture_medium']) as String?,
+          ),
+    ];
+    return OnlineTreffers(artiesten, albums, nummers);
   }
 
   /// Browse: albums matching a query (each keeps its artist for the tracklist page).
