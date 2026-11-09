@@ -73,7 +73,8 @@ void main() {
     final rij = main.substring(main.indexOf('  List<SoulseekFile> _slskForTitle(CatalogTrack t) {'));
     expect(rij.substring(0, rij.indexOf('\n  }\n')), isNot(contains('zeefKandidatenNu')),
         reason: 'de telling naast elke rij zeeft niet meer op de UI-draad');
-    expect(main, contains('    return _slskPerTitel[\'\${t.title}|\${t.durationSec}\'] ?? const [];'));
+    // Uit het geheugen per titel, samen met wat elk nummer zelf vond (per_nummer_zoeker.dart).
+    expect(main, contains('    return samenPerNummer(_slskPerTitel[sleutel] ?? const [], _perNummer[sleutel],'));
     expect(main, contains('            : await zeefPerTitel(lijst, [for (final t in sporen)'),
         reason: 'alle titels samen, buiten de UI-draad');
     expect(main, contains('  bool get _zeefKlaar => identical(_slskPerTitelVan, _albumSlsk) && identical(_slskPerTitelSporen, _tracks);'),
