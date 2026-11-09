@@ -8,7 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'editions.dart';
-import 'organize.dart' show isBeeldFormaat;
+import 'organize.dart' show isAansprekingVan, isBeeldFormaat;
 import 'release_format.dart';
 import 'paths.dart';
 
@@ -1038,10 +1038,33 @@ class MusicBrainzService {
     // An exact name match beats a higher-scoring near-miss: searching "Backstreet" must not
     // resolve to "Backstreet Girls" because it scored well on a shared word.
     final want = name.trim().toLowerCase();
+    MbArtist? exact;
     for (final a in hits) {
-      if (a.name.toLowerCase() == want) return a;
+      if (a.name.toLowerCase() == want) {
+        exact = a;
+        break;
+      }
     }
-    return hits.first;
+    // De echte kan er een aanspreking voor hebben ([isAansprekingVan]). MusicBrainz kent geen fans, maar wel hoeveel platen
+    // iemand heeft: "Lauryn Hill" (christelijke zangeres) één, "Ms. Lauryn Hill" veel meer. Twee vragen, alleen in dit geval.
+    MbArtist? metAanspreking;
+    for (final a in hits) {
+      if (isAansprekingVan(a.name, name)) {
+        metAanspreking = a;
+        break;
+      }
+    }
+    if (metAanspreking == null) return exact ?? hits.first;
+    if (exact == null) return metAanspreking;
+    final vanExact = await _aantalGroepen(exact.mbid);
+    final vanAndere = await _aantalGroepen(metAanspreking.mbid);
+    return vanAndere > vanExact ? metAanspreking : exact;
+  }
+
+  /// Hoeveel platen MusicBrainz van deze artiest kent, zonder ze op te halen.
+  Future<int> _aantalGroepen(String mbid) async {
+    final j = await _ws('$_root/release-group/?artist=${Uri.encodeQueryComponent(mbid)}&fmt=json&limit=1');
+    return (j?['release-group-count'] as num?)?.toInt() ?? 0;
   }
 
   /// Records — not pressings — matching a title, optionally scoped to an artist.

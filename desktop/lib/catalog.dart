@@ -1,4 +1,5 @@
 import 'deezerbaan.dart';
+import 'organize.dart' show isAansprekingVan, kAansprekingWint;
 
 /// Deezer catalog (keyless) — powers the Stremio-style browse:
 /// search artist → their albums → an album's tracks. Sources (torrents/Soulseek)
@@ -360,9 +361,19 @@ class CatalogService {
               fans: (a['nb_fan'] as num?)?.toInt() ?? 0,
             ))
         .toList();
+    var besteExact = 0;
+    for (final e in scored) {
+      if (norm(e.artist.name) == wanted && e.fans > besteExact) besteExact = e.fans;
+    }
+    // Exacte naam eerst, tenzij de echte er een aanspreking voor heeft: zie [isAansprekingVan].
+    int rang(String naam, int fans) {
+      if (isAansprekingVan(naam, q) && fans >= besteExact * kAansprekingWint) return 0;
+      return norm(naam) == wanted ? 1 : 2;
+    }
+
     scored.sort((a, b) {
-      final ea = norm(a.artist.name) == wanted, eb = norm(b.artist.name) == wanted;
-      if (ea != eb) return ea ? -1 : 1;
+      final r = rang(a.artist.name, a.fans).compareTo(rang(b.artist.name, b.fans));
+      if (r != 0) return r;
       return b.fans.compareTo(a.fans);
     });
     return scored.map((e) => e.artist).toList();

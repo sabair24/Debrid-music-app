@@ -35,6 +35,7 @@ import 'radiobestand.dart' show kRadioSpeling;
 import 'scanmaat.dart';
 import 'booklet.dart' show imageSize;
 import 'ui/berichten_scherm.dart';
+import 'per_nummer_zoeker.dart';
 import 'ui/kopfoto.dart';
 import 'ui/zoek_paneel.dart';
 import 'zoek_suggesties.dart';
@@ -35025,6 +35026,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// Saber, 22-10-2026, bij de Last.fm-ideeën: "hits aanduiden". Per nummer de luisteraars (een maand in de buffer),
   /// en een sterretje bij de bekendste — alleen met een Last.fm-sleutel.
   Future<void> _laadHits() async {
+    _tracksKlaar = true;
+    _zorgVoorPerNummer();
     final sleutel = context.read<AppSettings>().lastfmKey.trim();
     final lijst = _tracks;
     if (sleutel.isEmpty || lijst.isEmpty || lijst.length > 40) return;
@@ -35295,6 +35298,50 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     } catch (_) {
       if (mounted) setState(() => _slskBusy = false);
     }
+    _zorgVoorPerNummer();
+  }
+
+  /// Wat elk nummer met een eigen vraag vond ([zoekPerNummer]), op dezelfde sleutel als [_slskPerTitel].
+  final _perNummer = <String, List<SoulseekFile>>{};
+  bool _tracksKlaar = false, _perNummerGestart = false, _perNummerLoopt = false;
+
+  /// Pas als de nummers vaststaan (de tracklijst kan nog van naam wisselen, [_preferOfficialTracklist]) en de albumvraag klaar
+  /// is: dan gaat die eerst, en kost het geen dubbel werk tegelijk.
+  void _zorgVoorPerNummer() {
+    if (_perNummerGestart || !_tracksKlaar || _slskBusy || !mounted || _tracks.isEmpty) return;
+    _perNummerGestart = true;
+    unawaited(_zoekPerNummer());
+  }
+
+  Future<void> _zoekPerNummer() async {
+    final soulseek = context.read<SoulseekService>();
+    if (!soulseek.available) return;
+    final sporen = _tracks;
+    final albumTitels = [for (final x in sporen) x.title];
+    setState(() => _perNummerLoopt = true);
+    await zoekPerNummer<CatalogTrack>(
+      sporen,
+      nodig: (t) => _owned(t) == null,
+      nogNodig: () => mounted,
+      zoek: (t) async {
+        final gevonden = await soulseek.search(
+          soulseekQuery(widget.artistName, t.title, album: widget.album.title),
+          achtergrond: true,
+          terugval: false,
+          nogNodig: () => mounted,
+        );
+        if (gevonden.isEmpty || !mounted) return;
+        final passend = await zeefKandidaten(gevonden,
+            titel: t.title,
+            seconden: t.durationSec,
+            artiest: widget.artistName,
+            album: widget.album.title,
+            albumTitels: albumTitels);
+        if (passend.isEmpty || !mounted) return;
+        setState(() => _perNummer['${t.title}|${t.durationSec}'] = passend);
+      },
+    );
+    if (mounted) setState(() => _perNummerLoopt = false);
   }
 
   /// Pre-loaded Soulseek copies of one track. Empty if the album-wide search didn't cover it.
@@ -35309,7 +35356,8 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// telling, of het wieltje.
   List<SoulseekFile> _slskForTitle(CatalogTrack t) {
     _zorgVoorZeef();
-    return _slskPerTitel['${t.title}|${t.durationSec}'] ?? const [];
+    final sleutel = '${t.title}|${t.durationSec}';
+    return samenPerNummer(_slskPerTitel[sleutel] ?? const [], _perNummer[sleutel], (f) => '${f.username}|${f.filename}');
   }
 
   final _slskPerTitel = <String, List<SoulseekFile>>{};
@@ -35734,7 +35782,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                     child: Text('$srcCount ⌄',
                         style: TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
                   )
-                else if (soulseekReady && (_slskBusy || !_zeefKlaar))
+                else if (soulseekReady && (_slskBusy || !_zeefKlaar || _perNummerLoopt))
                   Padding(
                     padding: EdgeInsets.only(right: 8),
                     child: SizedBox(width: 11, height: 11, child: CircularProgressIndicator(strokeWidth: 1.6, color: _muted)),

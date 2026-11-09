@@ -387,7 +387,8 @@ List<Suggestiegroep> mengSuggesties(
     final al = samen[o.sleutel];
     if (al == null) {
       samen[o.sleutel] = o;
-    } else if (al.eigen) {
+    } else if (al.eigen && al.beeldUrl == null) {
+      // Alleen de eerste: Deezer zet wie het meest beluisterd wordt vooraan, en onder "Khaled" staan er bij Deezer vijf.
       samen[o.sleutel] = al.metOnline(o, al.score > o.score ? al.score : o.score);
     }
   }

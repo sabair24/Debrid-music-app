@@ -174,6 +174,17 @@ void main() {
       expect(n.first.eigen, isTrue);
     });
 
+    test('onder één naam meerdere bij Deezer: jouw rij houdt de foto van de eerste, de bekendste', () {
+      final o = OnlineTreffers([
+        CatalogArtist(75354, 'Khaled', 'https://cdn-images.dzcdn.net/images/artist/echte/250x250-0.jpg', 33),
+        CatalogArtist(1, 'Khaled', 'https://cdn-images.dzcdn.net/images/artist/andere/250x250-0.jpg', 1),
+      ], const [], const []);
+      final a = mengSuggesties(eigenSuggesties(index, 'khaled'), onlineSuggesties(o, 'khaled')).firstWhere((g) => g.soort == SuggestieSoort.artiest).rijen;
+      expect(a, hasLength(1));
+      expect(a.single.beeldUrl, contains('echte'));
+      expect(a.single.onlineArtiest?.id, 75354);
+    });
+
     test('DJ Khaled en Khaled blijven twee rijen, en Khaled staat bovenaan', () {
       final uit = mengSuggesties(
         eigenSuggesties(index, 'khaled'),
