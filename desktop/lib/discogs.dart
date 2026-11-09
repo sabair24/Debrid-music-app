@@ -930,6 +930,10 @@ class DiscogsService {
       // Nooit een Japanse persing vooraan — ook niet als Discogs haar de hoofdpersing noemt ([isJapansePersing]).
       final byJapan = (isJapansePersing(a.country) ? 1 : 0).compareTo(isJapansePersing(b.country) ? 1 : 0);
       if (byJapan != 0) return byJapan;
+      // Nooit een promo of sampler vooraan: dezelfde hoes, maar vaak maar een deel van de nummers (Lauryn Hill: 1180247).
+      bool promo(DiscogsVersion v) => isPromoFormaat(v.format) || isSamplerFormaat(v.format);
+      final byPromo = (promo(a) ? 1 : 0).compareTo(promo(b) ? 1 : 0);
+      if (byPromo != 0) return byPromo;
       // The master's own main release, when it happens to be of this format, is the canonical copy.
       if (main > 0 && (a.id == main) != (b.id == main)) return a.id == main ? -1 : 1;
       // Documented entries first WITHIN a format, but never across one: a documented CD must not
@@ -1390,6 +1394,8 @@ class DiscogsService {
         // albums). Discogs zet het in het formaat ("CD, Album, Unofficial Release"); de kiezer van
         // persingen gebruikt dezelfde vlag al ([noemtOnofficieel]).
         if (noemtOnofficieel(formaat)) continue;
+        // Een sampler is geen plaat maar een greep eruit, vaak onder precies de titel van het album.
+        if (!master && isSamplerFormaat(formaat)) continue;
         // Aan wie de plaat gecrediteerd is, en dat veld werd weggegooid. Discogs schrijft bij een
         // verzamelplaat "Various …" — voor "Brimstone & Treacle (Original Soundtrack Album)" staat
         // er letterlijk `Various Featuring The Police, Sting, Go.Go's* & Squeeze (2)`. Dat is geen

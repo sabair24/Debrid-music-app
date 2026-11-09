@@ -300,6 +300,25 @@ String artistKey(String s) {
   return k.startsWith('the ') ? k.substring(4) : k;
 }
 
+/// Is [kandidaat] dezelfde naam als [naam], met een aanspreking ervoor? "Ms. Lauryn Hill" is "Lauryn Hill"; "DJ Khaled" is geen
+/// "Khaled" en "Pink Floyd" geen "Pink".
+///
+/// **Waarom (Saber, 09-11-2026, "ik mis heel veel resultaten").** Bij Deezer en MusicBrainz heet de echte "Ms. Lauryn Hill"
+/// (Deezer 1117, 557.606 fans). Onder de exacte naam "Lauryn Hill" staat daar een christelijke zangeres (Deezer 127408692, 1.775
+/// fans), en die kreeg de hele artiestpagina: twee platen, en de echte alleen via Discogs.
+///
+/// Bewust alleen aansprekingen. Gemeten over de 562 namen in de bibliotheek: 21 keer heeft een langere naam vijf keer of meer
+/// fans dan de exacte (Pink Floyd bij Pink, Five Finger Death Punch bij Five); dat zijn andere artiesten, en meer fans zegt
+/// daar niets.
+bool isAansprekingVan(String kandidaat, String naam) {
+  final k = artistKey(kandidaat), n = artistKey(naam);
+  if (n.isEmpty) return false;
+  return const ['ms', 'mrs', 'mr', 'miss'].any((voor) => k == '$voor $n');
+}
+
+/// Zoveel keer meer fans moet de naam met aanspreking hebben om van de exacte naam te winnen. Lauryn Hill: 314 keer.
+const int kAansprekingWint = 20;
+
 /// Hoeveel letters met een teken erop deze naam draagt — "Édith Piaf" heeft er één, "Edith Piaf"
 /// geen.
 ///

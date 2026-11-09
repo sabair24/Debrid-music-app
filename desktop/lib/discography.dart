@@ -147,6 +147,12 @@ RecordKind kindFromMb(String primaryType, List<String> secondaryTypes) {
 /// waren geen rariteiten maar gewone singles mét hoes: Thunderclouds, Helium, Never Give Up. Discogs
 /// schrijft daar "File, MP3, Single" of "Maxi-Single" of "Single, Promo", en op exacte woorden matchen
 /// mist dat allemaal. Een vijfde van de lijst verkeerd indelen maakt sorteren op type waardeloos.
+/// Noemt dit Discogs-formaat een promo of een sampler? Op velden: "CD, Promo, Smplr" op `/artists/{id}/releases`, en "Album,
+/// Promo, Sampler" op de versies van een master.
+bool isPromoFormaat(String format) => format.toLowerCase().split(RegExp(r'[,+]')).map((s) => s.trim()).any((s) => s == 'promo');
+bool isSamplerFormaat(String format) =>
+    format.toLowerCase().split(RegExp(r'[,+]')).map((s) => s.trim()).any((s) => s == 'smplr' || s == 'sampler');
+
 RecordKind kindFromDiscogs(String format) {
   if (alleenVideo(format)) return RecordKind.video;
   if (isTranscriptie(format)) return RecordKind.uitzending;
@@ -415,8 +421,24 @@ class DiscoRelease {
       cover: (cover != null && cover!.isNotEmpty) ? cover : other.cover,
       trackCount: trackCount > 0 ? trackCount : other.trackCount,
       sources: {...sources, ...other.sources},
-      refs: {...other.refs, ...refs},
+      refs: _samenVerwijzingen(other),
     );
+  }
+
+  /// De verwijzingen van twee regels. Per bron één; bij Discogs de plaat en niet een persing, en anders de regel die zegt wat
+  /// hij is. Saber, 09-11-2026: *The Miseducation Of Lauryn Hill* opende met 7 nummers: Discogs noemt onder die titel ook een
+  /// promo-sampler (5891520), en die kwam voor het master (57279).
+  Map<DiscoSource, CatalogRef> _samenVerwijzingen(DiscoRelease other) {
+    final samen = {...other.refs, ...refs};
+    final a = refs[DiscoSource.discogs], b = other.refs[DiscoSource.discogs];
+    if (a == null || b == null) return samen;
+    final aPlaat = a.source == CatalogSource.discogsMaster, bPlaat = b.source == CatalogSource.discogsMaster;
+    if (bPlaat && !aPlaat) {
+      samen[DiscoSource.discogs] = b;
+    } else if (aPlaat == bPlaat && kind == RecordKind.other && other.kind != RecordKind.other) {
+      samen[DiscoSource.discogs] = b;
+    }
+    return samen;
   }
 }
 

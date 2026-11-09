@@ -18,7 +18,7 @@ import 'catalog.dart';
 import 'discography.dart';
 import 'discogs.dart';
 import 'musicbrainz.dart';
-import 'organize.dart' show artistKey;
+import 'organize.dart' show artistKey, isAansprekingVan;
 import 'paths.dart';
 
 /// Wat één bron opleverde, en waarom hij niets opleverde als dat zo is.
@@ -178,7 +178,7 @@ class DiscographyService {
   /// Een lijst met de platen van iemand anders erin is erger dan een korte lijst, dus een bron die een
   /// andere naam teruggeeft dan gevraagd valt af — en zegt dat ook.
   static bool _zelfdeArtiest(String gevraagd, String gevonden) =>
-      artistKey(gevraagd) == artistKey(gevonden);
+      artistKey(gevraagd) == artistKey(gevonden) || isAansprekingVan(gevonden, gevraagd);
 
   Future<BronUitkomst> vanDeezer(String naam, {int? bekendId}) async {
     try {

@@ -9,7 +9,7 @@ import 'radiolijst.dart';
 import 'radiosmaak.dart';
 
 import 'models.dart' show Track;
-import 'organize.dart' show artistKey;
+import 'organize.dart' show artistKey, isAansprekingVan, kAansprekingWint;
 
 /// De sleutel waarop "heb ik dit al?" beantwoord wordt.
 ///
@@ -111,13 +111,21 @@ int? pickArtist(List<dynamic> hits, String wanted) {
 
   final rows = [for (final r in alle) if (verwant(r['name'])) r];
   if (rows.isEmpty) return null;
+  int fans(dynamic r) => (r['nb_fan'] as num?)?.toInt() ?? 0;
+  var besteExact = 0;
+  for (final r in rows) {
+    if (artistKey('${r['name'] ?? ''}') == want && fans(r) > besteExact) besteExact = fans(r);
+  }
+  // Exacte naam eerst, tenzij de echte er een aanspreking voor heeft: zie [isAansprekingVan].
+  int rang(dynamic r) {
+    final naam = '${r['name'] ?? ''}';
+    if (isAansprekingVan(naam, wanted) && fans(r) >= besteExact * kAansprekingWint) return 0;
+    return artistKey(naam) == want ? 1 : 2;
+  }
+
   rows.sort((a, b) {
-    final ea = artistKey('${a['name'] ?? ''}') == want;
-    final eb = artistKey('${b['name'] ?? ''}') == want;
-    if (ea != eb) return ea ? -1 : 1;
-    final fa = (a['nb_fan'] as num?)?.toInt() ?? 0;
-    final fb = (b['nb_fan'] as num?)?.toInt() ?? 0;
-    return fb.compareTo(fa);
+    final s = rang(a).compareTo(rang(b));
+    return s != 0 ? s : fans(b).compareTo(fans(a));
   });
   return (rows.first['id'] as num?)?.toInt();
 }
