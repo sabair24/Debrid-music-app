@@ -1113,12 +1113,17 @@ class SoulseekService {
   ///
   /// [extra]: woorden waarmee de volledige vraag daarna nog eens als EIGEN zoekopdracht uitgaat ([kHiresZoekwoorden] voor
   /// de jacht op beter), elk ±8 s; de uitslag komt bij de gewone, nooit in de plaats ervan. Alleen waar niemand wacht.
+  ///
+  /// [telling]: de telling per nummer op een albumpagina (`zoekPerNummer`). Het laagste werk van de app: achtergrond, en dan
+  /// nog onder die grens ([kZoekTellingMarge]); één ronde, en zonder jokervariant — één zoekopdracht per nummer in plaats van
+  /// twee. Een telling hoeft niet elke kopie te vinden; ⬇ zoekt zelf als het nodig is.
   Future<List<SoulseekFile>> search(String query,
       {void Function(List<SoulseekFile>)? onPartial,
       void Function(String)? gebruikteVraag,
       bool achtergrond = false,
       List<String> extra = const [],
       bool terugval = true,
+      bool telling = false,
       bool Function()? nogNodig,
       Zoekrem? eigenRem}) async {
     // An empty result because we couldn't log in is NOT "no sources" — retrying a broader query
@@ -1129,11 +1134,11 @@ class SoulseekService {
     // terug, zoals bij een geweigerde aanmelding — en wat je zelf zoekt krijgt één ronde, zonder terugval, extra woorden
     // of de vraag zonder "The". Elke vraag erbij vulde op 25-10-2026 alleen de rem, en de volgende pagina wachtte erachter.
     final stil = client.serverZwijgt;
-    if (stil && achtergrond) throw const SoulseekZwijgt();
+    if (stil && (achtergrond || telling)) throw const SoulseekZwijgt();
     // [terugval] onwaar: alleen de eerste ronde. Een smalle vraag ("… 24bit" na het landen) die niets vindt, hoort
     // niet door te vallen naar de eerste twee woorden — dat is een tweede zoekopdracht naar iets wat er niet is.
     final alle = zoekRondes(query);
-    final rondes = terugval && !stil ? alle : alle.take(1).toList();
+    final rondes = terugval && !telling && !stil ? alle : alle.take(1).toList();
     // Nooit meer dan [kZoekPlafond] bestanden, de best passende eerst — zie zoekplafond.dart. "Live V"
     // gaf 60.143 bestanden: de pc stond 6 s stil om ze te versturen en de gsm crashte erop.
     final deel = onPartial == null ? null : (List<SoulseekFile> p) => onPartial(beperkZoekuitslag(query, p));
@@ -1145,7 +1150,8 @@ class SoulseekService {
       // De RUIMSTE vraag van deze ronde, want daar kunnen de resultaten vandaan komen. Zie
       // [ruimerGezocht]: dat is precies waar het scherm eerlijk over hoort te zijn.
       gebruikteVraag?.call(ronde.last);
-      final gevonden = await _searchOnce(ronde, deel, achtergrond: achtergrond, nogNodig: nogNodig, eigenRem: eigenRem);
+      final gevonden = await _searchOnce(ronde, deel,
+          achtergrond: achtergrond, telling: telling, nogNodig: nogNodig, eigenRem: eigenRem);
       if (gevonden.isNotEmpty) {
         // De [extra] woorden als EIGEN zoekopdracht, na de gewone, elk met een eigen venster. Gemeten op 24-10-2026:
         // meegestuurd in hetzelfde venster leverde "24bit" bijna niets op (9 bestanden met 24bit in het pad, Phil
@@ -1153,7 +1159,7 @@ class SoulseekService {
         // vraag komen later. Als eigen zoekopdracht: 112. Alleen na een gewone ronde die iets vond: wat zonder het
         // woord niets oplevert, levert met het woord ook niets op.
         final samen = [...gevonden];
-        if (i == 0 && !stil) {
+        if (i == 0 && !stil && !telling) {
           final al = {for (final f in gevonden) '${f.username}|${f.filename}'};
           for (final v in extraVragen(ronde.first, extra)) {
             for (final f in await _searchOnce([v], null, achtergrond: achtergrond, eigenRem: eigenRem)) {
@@ -1170,7 +1176,7 @@ class SoulseekService {
     // kregen geen enkel antwoord, "Beatles Let It Be" 5000 bestanden en "Weeknd Alone Again" 693 — terwijl "The Police
     // Roxanne" gewoon werkte. Het netwerk weert bepaalde namen met "The" ervoor; dan nog één keer zonder.
     final zonderThe = query.trim().replaceFirst(RegExp(r'^the\s+', caseSensitive: false), '');
-    if (terugval && !stil && laatste.isEmpty && zonderThe != query.trim() && zonderThe.isNotEmpty) {
+    if (terugval && !telling && !stil && laatste.isEmpty && zonderThe != query.trim() && zonderThe.isNotEmpty) {
       final gevonden =
           await _searchOnce([zonderThe], deel, achtergrond: achtergrond, nogNodig: nogNodig, eigenRem: eigenRem);
       if (gevonden.isNotEmpty) {
@@ -1187,7 +1193,7 @@ class SoulseekService {
   /// kosten hetzelfde als één. Zou je ze na elkaar sturen, dan was elke ronde er ruim acht seconden
   /// bij.
   Future<List<SoulseekFile>> _searchOnce(List<String> vragen, void Function(List<SoulseekFile>)? onPartial,
-      {bool achtergrond = false, bool Function()? nogNodig, Zoekrem? eigenRem}) async {
+      {bool achtergrond = false, bool telling = false, bool Function()? nogNodig, Zoekrem? eigenRem}) async {
     if (!available) return [];
     final variants = <String>{};
     for (final v in vragen) {
@@ -1195,20 +1201,37 @@ class SoulseekService {
       if (q.isEmpty) continue;
       // Alleen op de eerste vraag. De jokervariant vangt één weggevallen eerste teken op; hem voor
       // élke vraag meesturen verdubbelt het aantal tickets zonder er iets tegenover te zetten.
-      if (variants.isEmpty && jokerHelpt(q)) variants.add('*${q.substring(1)}');
+      // Een telling ([search] met telling) zonder: die zou anders elk nummer twee zoekopdrachten kosten.
+      if (!telling && variants.isEmpty && jokerHelpt(q)) variants.add('*${q.substring(1)}');
       variants.add(q);
     }
     if (variants.isEmpty) return [];
     try {
       return await withSession(
           (s) => s.search(variants.toList(),
-              onPartial: onPartial, achtergrond: achtergrond, nogNodig: nogNodig, eigenRem: eigenRem));
+              onPartial: onPartial,
+              achtergrond: achtergrond,
+              telling: telling,
+              nogNodig: nogNodig,
+              eigenRem: eigenRem));
     } catch (e) {
       // Leeg, maar niet "niets gevonden" — dus wel in het logboek, anders is het van een lege uitslag niet te onderscheiden.
       client.logboek('zoeken "${variants.last}" mislukte: $e');
       return [];
     }
   }
+}
+
+/// Wat een download zegt tussen binnenkomen en opbergen ([DownloadManager] `succeed`).
+const kBinnenKeuren = 'binnen — keuren en opbergen';
+
+/// De regel in downloads.log als een nummer van Soulseek in de bibliotheek staat: hoe lang keuren (echtheid meten,
+/// vergelijken), opbergen (tags, hoes, verplaatsen) en de bibliotheek bijwerken duurden. Gemeten op 11-11-2026: tussen
+/// GELEVERD en de scan zat ruim vier seconden zonder één regel.
+String landenRegel(String naam, {required Duration keuren, required Duration opbergen, required Duration bibliotheek}) {
+  String s(Duration d) => '${(d.inMilliseconds / 1000).toStringAsFixed(1)} s';
+  return '   $naam: in de bibliotheek na ${s(keuren + opbergen + bibliotheek)} — keuren ${s(keuren)}, '
+      'opbergen ${s(opbergen)}, bibliotheek ${s(bibliotheek)}';
 }
 
 /// Hoe een [DownloadManager.zoekEnHaal] afliep, zodat het scherm (als het er nog is) het juiste zegt.
@@ -2680,6 +2703,16 @@ class DownloadManager extends ChangeNotifier {
     Future<bool> succeed(SlskDone res, SoulseekFile from) async {
       final staged = File(res.path);
       var how = Placement.stuck;
+      // Binnen. Zeg dat meteen, ook op een toestel dat elke twee seconden kijkt, in plaats van de zandloper van de wachtrij
+      // die er nog stond: het keuren en opbergen hieronder duurde op 11-11-2026 ruim vier seconden (Milow — You Don't
+      // Know, op de gsm). Bezig op 100 %: "voorbereiden" leest elders als TorBox.
+      job.status = 'downloading';
+      job.progress = 1;
+      job.queuePlace = 0;
+      job.detail = kBinnenKeuren;
+      notifyListeners();
+      final landKlok = Stopwatch()..start();
+      var gekeurdNa = Duration.zero, opgeborgenNa = Duration.zero;
       try {
         // Koos de gebruiker dit bestand zelf, dan wordt het NU al onthouden — vóór het filen, want
         // tijdens het filen wordt er al vergeleken. Andersom kwam het net te laat: `placeFileDetailed`
@@ -2694,6 +2727,7 @@ class DownloadManager extends ChangeNotifier {
         // Een halve seconde op een download die seconden tot minuten duurde is onzichtbaar, en een
         // mislukte meting kost niets: dan is er simpelweg geen oordeel.
         final bestaand = await _bereidVergelijkingVoor(staged, job.authority);
+        gekeurdNa = landKlok.elapsed;
         // Een ANDERE opname dan wat je hebt: niet eroverheen, maar ernaast. Zonder dit stuurt
         // [mapVanBestaande] hem op artiest en titel naar jouw bestand, en dan vergelijkt de keuring
         // twee verschillende nummers met elkaar.
@@ -2703,6 +2737,7 @@ class DownloadManager extends ChangeNotifier {
         }
         final uit = await placeFileDetailed(staged, _downloadsRoot,
             tags: job.authority, staatAl: andere ? null : mapVanBestaande);
+        opgeborgenNa = landKlok.elapsed;
         how = uit.how;
         if (how == Placement.duplicate && bestaand != null) {
           _log.line('   ${job.name}: niet bewezen beter dan wat je hebt — ${whyBetter(File(uit.path), staged)}; '
@@ -2734,6 +2769,8 @@ class DownloadManager extends ChangeNotifier {
       try {
         await onLibraryChanged();
       } catch (_) {/* library rescan hiccup shouldn't un-succeed the download */}
+      _log.line(landenRegel(job.name, keuren: gekeurdNa, opbergen: opgeborgenNa - gekeurdNa,
+          bibliotheek: landKlok.elapsed - opgeborgenNa));
       return true;
     }
 

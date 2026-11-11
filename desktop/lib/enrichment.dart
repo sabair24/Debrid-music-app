@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 
 import 'cachesleutel.dart';
@@ -1418,18 +1419,22 @@ class CoverEnricher {
   /// wordmark. The logo is the reason this exists — you can't render a name in an artist's
   /// official typography from a font (nobody ships those), but the wordmark itself is a real
   /// image and that IS the official lettering.
-  Future<ArtistArt?> artistArt(String name) {
+  ///
+  /// [voorrang]: de artiestpagina die nu open gaat — zie [_audioDbVoorrang]. Gemeten op 11-11-2026: de kopfoto van Zornik,
+  /// geopend via "Klinkt als" bij Milow, kwam pas na 5 tot 20 s. De vijftig tegels van die rij vroegen elk hun portret op
+  /// de gewone rij van TheAudioDB (een vraag per 3 s), en de kop van de nieuwe pagina stond achteraan.
+  Future<ArtistArt?> artistArt(String name, {bool voorrang = false}) {
     final sleutel = name.toLowerCase();
     final al = _artiestUitGeheugen(sleutel);
     if (al != null) return Future.value(al);
     final loopt = _artistArtInFlight[sleutel];
-    if (loopt != null) return loopt;
+    if (loopt != null && !voorrang) return loopt;
     // Een BLOKlichaam, en dat is geen stijlkwestie. Zie `discogs.dart:838-848`: met een pijl
     // (`() => map.remove(k)`) geeft de opruimer terug wát `remove()` teruggeeft — op een
     // `Map<String, Future<…>>` is dat de verwijderde Future zélf, en `whenComplete` wacht dan op het
     // werk dat het net afrondde. Voor altijd, zonder socket, zonder logregel. Die fout kostte daar
     // zes herschrijvingen; hier staat hij één keer opgeschreven en niet nog eens gemaakt.
-    final werk = _artistArtVers(name).then((art) {
+    final werk = _artistArtVers(name, voorrang: voorrang).then((art) {
       if (art != null) _artiestOnthoud(sleutel, art);
       return art;
     }).whenComplete(() {
@@ -1480,15 +1485,19 @@ class CoverEnricher {
   /// dit is dezelfde, voor de andere helft van hetzelfde scherm.
   static final _artistArtInFlight = <String, Future<ArtistArt?>>{};
 
-  Future<ArtistArt?> _artistArtVers(String name) async {
-    final art = await _artiestMeta(name);
+  Future<ArtistArt?> _artistArtVers(String name, {bool voorrang = false}) async {
+    final art = await _artiestMeta(name, voorrang: voorrang);
     if (art == null) return null;
     // Keep the bytes locally too: these render on every visit and shouldn't refetch each time.
-    final logo = await _cachedArt(name, 'logo', art.logo);
-    final backdrop = await _cachedArt(name, 'backdrop', art.backdrop);
-    final thumb = await _cachedArt(name, 'thumb', art.thumb);
-    final cutout = await _cachedArt(name, 'cutout', art.cutout);
-    final clearart = await _cachedArt(name, 'clearart', art.clearart);
+    // Tegelijk, niet na elkaar: vijf losse downloads achter elkaar hielden de kop op tot de laatste binnen was.
+    final beelden = await Future.wait([
+      _cachedArt(name, 'logo', art.logo),
+      _cachedArt(name, 'backdrop', art.backdrop),
+      _cachedArt(name, 'thumb', art.thumb),
+      _cachedArt(name, 'cutout', art.cutout),
+      _cachedArt(name, 'clearart', art.clearart),
+    ]);
+    final [logo, backdrop, thumb, cutout, clearart] = beelden;
     return ArtistArt(
       logo: art.logo,
       backdrop: art.backdrop,
@@ -1544,18 +1553,30 @@ class CoverEnricher {
   static final _metaInFlight = <String, Future<ArtistArt?>>{};
 
   /// Wat TheAudioDB van deze artiest heeft (alleen de adressen): van schijf, of één zoekopdracht.
-  Future<ArtistArt?> _artiestMeta(String name) {
+  ///
+  /// [voorrang]: niet aansluiten bij een gewone vraag die nog in de rij staat (een tegel van "Klinkt als"), maar zelf
+  /// vragen met voorrang. Het antwoord van TheAudioDB wordt gedeeld ([_audioDbZoek]), dus de gewone vraag kost daarna
+  /// niets meer.
+  Future<ArtistArt?> _artiestMeta(String name, {bool voorrang = false}) {
     final sleutel = name.toLowerCase();
     final loopt = _metaInFlight[sleutel];
-    if (loopt != null) return loopt;
-    final werk = _artiestMetaVers(name).whenComplete(() {
-      _metaInFlight.remove(sleutel);
-    });
+    if (loopt != null && (!voorrang || _metaMetVoorrang.contains(sleutel))) return loopt;
+    final werk = _artiestMetaVers(name, voorrang: voorrang);
     _metaInFlight[sleutel] = werk;
+    if (voorrang) _metaMetVoorrang.add(sleutel);
+    werk.whenComplete(() {
+      if (identical(_metaInFlight[sleutel], werk)) {
+        _metaInFlight.remove(sleutel);
+        _metaMetVoorrang.remove(sleutel);
+      }
+    });
     return werk;
   }
 
-  Future<ArtistArt?> _artiestMetaVers(String name) async {
+  /// Welke van [_metaInFlight] met voorrang vragen.
+  static final _metaMetVoorrang = <String>{};
+
+  Future<ArtistArt?> _artiestMetaVers(String name, {bool voorrang = false}) async {
     final meta = _artistArtFile(name);
     ArtistArt? art;
     if (await meta.exists()) {
@@ -1581,10 +1602,10 @@ class CoverEnricher {
         // Via [normKey] en niet met een eigen zeef: die vouwt accenten al plat, haalt de apostrof
         // weg en normaliseert de spaties — precies wat hier nodig is, en het is één begrip van
         // "dezelfde naam" in plaats van twee.
-        art = await _zoekArtiestBeeld(name);
+        art = await _zoekArtiestBeeld(name, voorrang: voorrang);
         final plat = normKey(name);
         if (art == null && plat.isNotEmpty && plat != name.toLowerCase()) {
-          art = await _zoekArtiestBeeld(plat);
+          art = await _zoekArtiestBeeld(plat, voorrang: voorrang);
         }
         if (art == null) {
           await _onthoudGeenArtiestBeeld(name);
@@ -1604,20 +1625,13 @@ class CoverEnricher {
 
   /// Eén zoekopdracht bij TheAudioDB. Null als er niets is — dan probeert de aanroeper het nog
   /// eens met een platgeslagen naam; zie [artistArt].
-  Future<ArtistArt?> _zoekArtiestBeeld(String q) async {
+  Future<ArtistArt?> _zoekArtiestBeeld(String q, {bool voorrang = false}) async {
     // OP DE RIJ, net als [albumInfo]. Dit was de enige TheAudioDB-aanroeper zónder wachtrij, terwijl
     // `_enrichArtistsFromWeb` er zes tegelijk afvuurt op precies deze host. De meting bij
     // [_audioDbGap] gaat over albums, maar er is geen reden waarom het artiesteneindpunt zich anders
     // gedraagt — en het gevolg is hier erger: een geweigerd antwoord is niet een trage pagina maar
-    // een lege.
-    await _audioDbSlot();
-    final r = await http.get(
-      Uri.parse('$kAudioDbBasis/search.php?s=${Uri.encodeComponent(q)}'),
-      headers: {'User-Agent': _ua},
-    ).timeout(const Duration(seconds: 8));
-    if (r.statusCode != 200) return null;
-    final list =
-        (jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true))['artists'] as List?) ?? const [];
+    // een lege. Sinds 3.9.724 via [_audioDbZoek]: de bio vraagt precies hetzelfde.
+    final list = await _audioDbZoek(q, voorrang: voorrang);
     final a = await _audioDbDezeArtiest(q, list);
     if (a == null) return null;
     String? s(String k) {
@@ -1755,13 +1769,7 @@ class CoverEnricher {
   /// host met dezelfde grens. Een fout gooit door: "geen antwoord" is niet hetzelfde als "geen genre",
   /// en alleen dat laatste mag onthouden worden.
   static Future<String?> audioDbGenre(String artiest) async {
-    await _audioDbSlot();
-    final r = await http.get(
-      Uri.parse('$kAudioDbBasis/search.php?s=${Uri.encodeComponent(artiest)}'),
-      headers: {'User-Agent': _ua},
-    ).timeout(const Duration(seconds: 8));
-    if (r.statusCode != 200) throw HttpException('TheAudioDB gaf ${r.statusCode}');
-    final lijst = (jsonBody(r)['artists'] as List?) ?? const [];
+    final lijst = await _audioDbZoek(artiest);
     final a = await _audioDbDezeArtiest(artiest, lijst);
     if (a == null) return null;
     final g = (a['strGenre'] as String?)?.trim();
@@ -1793,6 +1801,47 @@ class CoverEnricher {
     final lijst = (jsonBody(r)['artists'] as List?) ?? const [];
     return lijst.isEmpty ? null : lijst.first as Map<String, dynamic>;
   }
+
+  /// Eén `search.php?s=[q]` voor de bio, de kopfoto en het genre samen, tien minuten onthouden.
+  ///
+  /// **Waarom.** Gemeten op 11-11-2026 met een lege cache (Heather Nova, Selah Sue): de artiestpagina vroeg de bio en de
+  /// foto elk apart met precies dezelfde vraag aan TheAudioDB, en de tweede wachtte de 3 s van de rij ([_audioDbGap]) af.
+  /// De foto kwam pas na 3,8 tot 4,8 s. Gooit bij een fout (geen 200, geen antwoord): een weigering is geen "niets".
+  ///
+  /// [voorrang]: zie [_audioDbVoorrang]. Een gewone vraag die nog onderweg is, wordt door een vraag met voorrang niet
+  /// afgewacht maar ingehaald.
+  static Future<List<dynamic>> _audioDbZoek(String q, {bool voorrang = false}) {
+    final sleutel = q.trim().toLowerCase();
+    final nu = DateTime.now();
+    _audioDbZoeken.removeWhere((_, z) => nu.difference(z.op) >= kAudioDbZoekOnthouden);
+    final al = _audioDbZoeken[sleutel];
+    if (al != null && (al.klaar || al.voorrang || !voorrang)) return al.lijst;
+    final z = _GedeeldeZoek(nu, voorrang);
+    z.lijst = () async {
+      await (voorrang ? _audioDbVoorrang() : _audioDbSlot());
+      final r = await http.get(
+        Uri.parse('$kAudioDbBasis/search.php?s=${Uri.encodeComponent(q)}'),
+        headers: {'User-Agent': _ua},
+      ).timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) throw HttpException('TheAudioDB gaf ${r.statusCode}');
+      return (jsonDecode(utf8.decode(r.bodyBytes, allowMalformed: true))['artists'] as List?) ?? const <dynamic>[];
+    }();
+    _audioDbZoeken[sleutel] = z;
+    z.lijst.then((_) => z.klaar = true, onError: (Object _) {
+      // Een fout wordt niet onthouden: de volgende vraag probeert het opnieuw.
+      if (identical(_audioDbZoeken[sleutel], z)) _audioDbZoeken.remove(sleutel);
+    });
+    return z.lijst;
+  }
+
+  static final _audioDbZoeken = <String, _GedeeldeZoek>{};
+
+  /// Zo lang deelt [_audioDbZoek] een antwoord.
+  static const kAudioDbZoekOnthouden = Duration(minutes: 10);
+
+  /// Alles vergeten wat [_audioDbZoek] deelt. Voor toetsen.
+  @visibleForTesting
+  static void vergeetAudioDbZoeken() => _audioDbZoeken.clear();
 
   /// Een vraag die iemand nu op het scherm wacht (de artiestpagina, Nu speelt): niet achter de hele rij
   /// van de achtergrond. Op de pc stond de bio van een geopende artiest anders minuten achter de
@@ -2000,13 +2049,8 @@ class CoverEnricher {
     try {
       // Op de rij, om dezelfde reden als in [_zoekArtiestBeeld]: dit is dezelfde URL naar dezelfde
       // host, en `_enrichArtistsFromWeb` roept ze allebei aan voor zes artiesten tegelijk.
-      await (voorrang ? _audioDbVoorrang() : _audioDbSlot());
-      final r = await http.get(
-        Uri.parse('$kAudioDbBasis/search.php?s=${Uri.encodeComponent(name)}'),
-        headers: {'User-Agent': _ua},
-      ).timeout(const Duration(seconds: 8));
-      if (r.statusCode != 200) return null;
-      final artists = (jsonBody(r)['artists'] as List?) ?? const [];
+      // Hetzelfde antwoord als de kopfoto ([_audioDbZoek]): de artiestpagina vraagt beide tegelijk.
+      final artists = await _audioDbZoek(name, voorrang: voorrang);
       final a = await _audioDbDezeArtiest(name, artists);
       if (a == null) {
         await _onthoudGeenBio(name);
@@ -2255,4 +2299,13 @@ class CoverEnricher {
   String _cleanAlbum(String s) =>
       s.replaceAll(_albumJunk, '').replaceAll(RegExp(r'\s{2,}'), ' ').trim().replaceAll(RegExp(r'^[\s\-_.]+|[\s\-_.]+$'), '');
   String _cleanArtist(String s) => s.replaceAll(_featRe, '').trim();
+}
+
+/// Eén gedeelde zoekvraag bij TheAudioDB — zie `CoverEnricher._audioDbZoek`.
+class _GedeeldeZoek {
+  _GedeeldeZoek(this.op, this.voorrang);
+  final DateTime op;
+  final bool voorrang;
+  late final Future<List<dynamic>> lijst;
+  bool klaar = false;
 }

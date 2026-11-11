@@ -74,9 +74,9 @@ void main() {
       expect(RegExp(r'_zorgVoorPerNummer\(\);').allMatches(pagina).length, 2, reason: 'na het laden en na de albumvraag');
     });
 
-    test('als achtergrondwerk en zonder extra varianten, zodat een album niet het dubbele kost', () {
+    test('als telling en zonder extra varianten, zodat een album niet het dubbele kost', () {
       final lijf = pagina.substring(pagina.indexOf('Future<void> _zoekPerNummer()'));
-      expect(lijf, contains('achtergrond: true,'));
+      expect(lijf, contains('telling: true,'), reason: 'het laagste werk van de app, niet gewoon achtergrond');
       expect(lijf, contains('terugval: false,'));
       expect(lijf, contains('nogNodig: () => mounted'));
       expect(lijf, contains('nodig: (t) => _owned(t) == null,'), reason: 'wat je al hebt, kost geen vraag');

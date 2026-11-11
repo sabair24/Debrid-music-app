@@ -34058,7 +34058,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final naam = widget.artist.name;
     final settings = context.read<AppSettings>();
     final enr = CoverEnricher(settings);
-    final art = await enr.artistArt(naam);
+    // Met voorrang: niet achter de portretten van "Klinkt als" op de rij van TheAudioDB (zie [CoverEnricher.artistArt]).
+    final art = await enr.artistArt(naam, voorrang: true);
     if (!mounted || naam != widget.artist.name) return;
     setState(() => _art = art);
     // Geen achtergrond bij TheAudioDB en geen eigen keuze: dan de foto van Deezer als kop (Saber,
@@ -34200,6 +34201,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         tussendoor: (l) {
           if (mounted && naam == widget.artist.name) setState(() => _related = l);
         },
+        // Weg van deze pagina: niet verder zoeken (tot ±70 vragen bij Deezer, op de rij van de volgende pagina).
+        nogNodig: () => mounted && naam == widget.artist.name,
       );
     } catch (_) {/* een pagina zonder "klinkt als" is nog steeds een goede pagina */}
   }
@@ -34403,13 +34406,13 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   art: _wachtOpKeuze ? null : _art,
                   fallbackImage: _wachtOpKeuze ? null : _deezerFoto,
                   soort: widget.artist.detail,
-                  bibliotheek: _busy
-                      ? 'Albums laden…'
-                      : [
-                          if (mine.isNotEmpty) '${mine.length} ${mine.length == 1 ? 'album' : 'albums'}',
-                          if (_eigenNummers > 0) '$_eigenNummers ${_eigenNummers == 1 ? 'nummer' : 'nummers'}',
-                          if (_eigenTijd != null) _eigenTijd,
-                        ].join(' · '),
+                  // Uit je bibliotheek, en die ligt er al: niet wachten op de discografie. Tot 3.9.724 stond hier
+                  // "Albums laden…" zolang die liep — bij Zornik, die je niet hebt, vijf seconden "In je bibliotheek".
+                  bibliotheek: [
+                    if (mine.isNotEmpty) '${mine.length} ${mine.length == 1 ? 'album' : 'albums'}',
+                    if (_eigenNummers > 0) '$_eigenNummers ${_eigenNummers == 1 ? 'nummer' : 'nummers'}',
+                    if (_eigenTijd != null) _eigenTijd,
+                  ].join(' · '),
                   genres: [for (final e in _eigenGenres) e.key],
                   groepen: _groepen,
                   zijnLeden: _zijnLeden,
@@ -35294,12 +35297,22 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       final r = await soulseek.search(_albumVraag, nogNodig: () => mounted, onPartial: (p) {
         if (mounted) setState(() => _albumSlsk = p);
       });
-      if (mounted) setState(() { _albumSlsk = r; _slskBusy = false; });
+      if (mounted) {
+        setState(() {
+          _albumSlsk = r;
+          _albumSlskOp = DateTime.now();
+          _slskBusy = false;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _slskBusy = false);
     }
     _zorgVoorPerNummer();
   }
+
+  /// Wanneer de albumvraag en elke vraag per nummer binnenkwamen — voor [meteenMetTelling] bij ⬇.
+  DateTime? _albumSlskOp;
+  final _perNummerOp = <String, DateTime>{};
 
   /// Wat elk nummer met een eigen vraag vond ([zoekPerNummer]), op dezelfde sleutel als [_slskPerTitel].
   final _perNummer = <String, List<SoulseekFile>>{};
@@ -35324,9 +35337,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       nodig: (t) => _owned(t) == null,
       nogNodig: () => mounted,
       zoek: (t) async {
+        // Het laagste werk van de app: één zoekopdracht, alleen in wat de achtergrond overlaat (`telling`).
         final gevonden = await soulseek.search(
           soulseekQuery(widget.artistName, t.title, album: widget.album.title),
-          achtergrond: true,
+          telling: true,
           terugval: false,
           nogNodig: () => mounted,
         );
@@ -35338,7 +35352,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
             album: widget.album.title,
             albumTitels: albumTitels);
         if (passend.isEmpty || !mounted) return;
-        setState(() => _perNummer['${t.title}|${t.durationSec}'] = passend);
+        setState(() {
+          _perNummer['${t.title}|${t.durationSec}'] = passend;
+          _perNummerOp['${t.title}|${t.durationSec}'] = DateTime.now();
+        });
       },
     );
     if (mounted) setState(() => _perNummerLoopt = false);
@@ -35488,6 +35505,13 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     final pool = <String, SoulseekFile>{
       for (final f in eerder) '${f.username}|${f.filename}': f
     };
+    // Een verse telling met genoeg zeker goede kopieën: meteen, zonder nieuwe zoekopdracht ([meteenMetTelling]).
+    if (meteenMetTelling(
+        gevondenOp: _perNummerOp['${t.title}|${t.durationSec}'] ?? _albumSlskOp,
+        nu: DateTime.now(),
+        genoeg: vroegGenoeg(eerder, t.durationSec))) {
+      return pool.values.toList();
+    }
     try {
       // Dezelfde zeef als de telling naast de rij, mét de terugval voor een gast die de bestanden niet
       // noemen ([zonderGast]). Hier stond een eigen lus met alleen [fileOffersTitle]: "À 20 ans (feat.

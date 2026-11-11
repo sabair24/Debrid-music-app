@@ -38,6 +38,30 @@ import 'musicbrainz.dart';
 import 'organize.dart' show normKey;
 import 'paths.dart';
 
+/// Een bewaarde keuze "naam → artikel" met deze versie is nagekeken: het artikel hoort bij een artiest ([heeftKenmerk]).
+/// Zonder (van vóór 3.9.723) kijkt [WikipediaService.titelVoor] hem één keer na.
+const int kWikiNaamVersie = 2;
+
+/// De Wikidata-kenmerken waaraan een artiest te herkennen is: een nummer bij MusicBrainz (P434), Discogs (P1953) of
+/// Spotify (P1902). Op volgorde van hoe vaak ze er staan; het eerste dat er is, beslist.
+const kArtiestKenmerken = ['P434', 'P1953', 'P1902'];
+
+/// Staat er in een antwoord van `wbgetclaims` minstens één waarde voor [kenmerk]?
+bool heeftKenmerk(Map<String, dynamic> j, String kenmerk) {
+  final rijen = ((j['claims'] as Map?)?[kenmerk] as List?) ?? const [];
+  return rijen.any((r) => ((((r as Map?)?['mainsnak'] as Map?)?['datavalue'] as Map?)?['value']) is String);
+}
+
+/// Het Wikidata-nummer uit een antwoord van `prop=pageprops&ppprop=wikibase_item` (formatversion=2), of null.
+String? wikidataNummerUit(Map<String, dynamic> j) {
+  final paginas = ((j['query'] as Map?)?['pages'] as List?) ?? const [];
+  for (final p in paginas) {
+    final q = (((p as Map?)?['pageprops'] as Map?)?['wikibase_item'] as String?)?.trim() ?? '';
+    if (q.isNotEmpty) return q;
+  }
+  return null;
+}
+
 /// Eén sectie uit een artikel: een kop, zijn niveau, en de tekst eronder.
 class WikiAfdeling {
   final int niveau;
@@ -297,7 +321,18 @@ class WikipediaService {
       } else {
         final taal = (bewaard['taal'] as String?) ?? '';
         final titel = (bewaard['titel'] as String?) ?? '';
-        if (taal.isNotEmpty && titel.isNotEmpty) return (taal: taal, titel: titel);
+        if (taal.isNotEmpty && titel.isNotEmpty) {
+          if (bewaard['v'] == kWikiNaamVersie) return (taal: taal, titel: titel);
+          // Van vóór 3.9.723: toen kon een naamgenoot erin komen (Milow de gemeente). Eén keer nakijken.
+          final q = (bewaard['q'] as String?)?.trim() ?? '';
+          final klopt = q.isNotEmpty ? await _isArtiest(q) : await _artikelIsArtiest(taal, titel);
+          if (klopt == null) return (taal: taal, titel: titel); // Wikidata zweeg: voorlopig houden, later nakijken
+          if (klopt) {
+            await _schrijf(f, {...bewaard, 'v': kWikiNaamVersie});
+            return (taal: taal, titel: titel);
+          }
+          // Geen artiest: opnieuw zoeken, hieronder. Hem nog eens tegenkomen kost niets ([_oordeel]).
+        }
       }
     }
 
@@ -307,7 +342,7 @@ class WikipediaService {
       await _schrijf(f, _misteken(nietGevonden: !_haperde));
       return null;
     }
-    await _schrijf(f, {'taal': gevonden.taal, 'titel': gevonden.titel, 'q': gevonden.q});
+    await _schrijf(f, {'taal': gevonden.taal, 'titel': gevonden.titel, 'q': gevonden.q, 'v': kWikiNaamVersie});
     return (taal: gevonden.taal, titel: gevonden.titel);
   }
 
@@ -320,7 +355,8 @@ class WikipediaService {
       if (sitelink != null) return (taal: sitelink.taal, titel: sitelink.titel, q: q);
     }
     // 2. Zoeken op naam, en ALLEEN een titel aannemen die na normKey gelijk is. Zonder die tucht
-    //    wordt "Air" het scheikundige artikel en "Bush" een president.
+    //    wordt "Air" het scheikundige artikel en "Bush" een president. En alleen het artikel van een artiest: een gelijke
+    //    titel alleen is niet genoeg ([_artikelIsArtiest]).
     for (final taal in ['nl', 'en']) {
       final j = await _haal(Uri.parse('https://$taal.wikipedia.org/w/api.php'
           '?action=query&list=search&srsearch=${Uri.encodeQueryComponent(naam)}'
@@ -328,12 +364,45 @@ class WikipediaService {
       final rijen = ((j?['query'] as Map?)?['search'] as List?) ?? const [];
       for (final rij in rijen) {
         final titel = ((rij as Map?)?['title'] as String?)?.trim() ?? '';
-        if (titel.isNotEmpty && normKey(titel) == normKey(naam)) {
+        if (titel.isNotEmpty && normKey(titel) == normKey(naam) && await _artikelIsArtiest(taal, titel) == true) {
           return (taal: taal, titel: titel, q: null);
         }
       }
     }
     return null;
+  }
+
+  /// Is dit Wikidata-item een artiest? Ja als het een nummer heeft bij MusicBrainz, Discogs of Spotify
+  /// ([kArtiestKenmerken]) — een gemeente, een rivier of een scheikundig element heeft dat nooit. Null: Wikidata
+  /// antwoordde niet, dan weten we het niet.
+  ///
+  /// **Waarom.** Saber, 11-11-2026, schermafdruk van de artiestpagina van Milow: onder "Over Milow · Wikipedia" stond
+  /// *"Milow is een gemeente in de Duitse deelstaat Mecklenburg-Voor-Pommeren"*. Wikidata geeft bij "Milow" eerst de
+  /// gemeente (Q674445), dan pas de zanger (Q784453), en [_wikidataViaNaam] nam de eerste met dezelfde naam.
+  Future<bool?> _isArtiest(String q) async {
+    final al = _oordeel[q];
+    if (al != null) return al;
+    for (final kenmerk in kArtiestKenmerken) {
+      final j = await _haal(Uri.parse('https://www.wikidata.org/w/api.php'
+          '?action=wbgetclaims&entity=${Uri.encodeQueryComponent(q)}&property=$kenmerk&format=json'));
+      if (j == null) return null;
+      if (heeftKenmerk(j, kenmerk)) return _oordeel[q] = true;
+    }
+    return _oordeel[q] = false;
+  }
+
+  /// Wat [_isArtiest] binnen deze zoektocht al wist: de gemeente Milow komt via Wikidata én via de zoekval in nl en en
+  /// voorbij, en elke keer drie verzoeken op een rij van één per seconde.
+  final _oordeel = <String, bool>{};
+
+  /// [_isArtiest] voor een artikel: via het Wikidata-nummer dat bij de pagina hoort.
+  Future<bool?> _artikelIsArtiest(String taal, String titel) async {
+    final j = await _haal(Uri.parse('https://$taal.wikipedia.org/w/api.php'
+        '?action=query&prop=pageprops&ppprop=wikibase_item&titles=${Uri.encodeQueryComponent(titel)}'
+        '&format=json&formatversion=2'));
+    if (j == null) return null;
+    final q = wikidataNummerUit(j);
+    return q == null ? false : _isArtiest(q);
   }
 
   /// Wikidata's eigen zoekfunctie, als er geen MBID is.
@@ -345,7 +414,9 @@ class WikipediaService {
       if (rij is! Map) continue;
       final label = (rij['label'] as String?)?.trim() ?? '';
       final id = rij['id'] as String?;
-      if (id != null && normKey(label) == normKey(naam)) return id;
+      // Niet de eerste met dezelfde naam, maar de eerste ARTIEST met dezelfde naam ([_isArtiest]).
+      if (id == null || normKey(label) != normKey(naam)) continue;
+      if (await _isArtiest(id) == true) return id;
     }
     return null;
   }
@@ -353,9 +424,11 @@ class WikipediaService {
   /// Het Wikidata-nummer van deze artiest, zoals [titelVoor] het bewaarde — alleen van schijf, zonder
   /// verzoek. Voor `wikifotos.dart`: de foto's komen uit het Engelse artikel, en dat vind je via dit
   /// nummer, ook als de biografie zelf Nederlands is.
+  ///
+  /// Alleen een nagekeken keuze ([kWikiNaamVersie]); een oudere laat [titelVoor] eerst nakijken.
   Future<String?> wikidataVoor(String naam) async {
     final j = await _lees(_naamFile(naam));
-    if (j == null || _isMis(j)) return null;
+    if (j == null || _isMis(j) || j['v'] != kWikiNaamVersie) return null;
     final q = (j['q'] as String?)?.trim() ?? '';
     return q.isEmpty ? null : q;
   }

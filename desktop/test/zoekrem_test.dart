@@ -179,8 +179,8 @@ void main() {
 
     test('aangesloten: achtergrond zoekt dan niet, en wat jij zoekt krijgt één ronde zonder terugval', () {
       final o = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
-      expect(o, contains('    if (stil && achtergrond) throw const SoulseekZwijgt();\n'));
-      expect(o, contains('    final rondes = terugval && !stil ? alle : alle.take(1).toList();\n'));
+      expect(o, contains('    if (stil && (achtergrond || telling)) throw const SoulseekZwijgt();\n'));
+      expect(o, contains('    final rondes = terugval && !telling && !stil ? alle : alle.take(1).toList();\n'));
       expect(o, contains('        final waarom = soulseek.whyNotLogin ?? soulseek.waaromStil;\n'),
           reason: 'de radio: later opnieuw, intussen TIDAL — geen mislukte plek');
       final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
@@ -192,15 +192,16 @@ void main() {
     final s = File('lib/soulseek.dart').readAsStringSync().replaceAll('\r\n', '\n');
     final zoek = s.substring(s.indexOf('  Future<List<SoulseekFile>> search(List<String> queries,'));
     final lus = zoek.substring(0, zoek.indexOf('await run.settle();'));
-    expect(lus.indexOf('await zoekrem.neem(achtergrond: achtergrond, nogNodig: nogNodig);'),
+    expect(lus.indexOf('await zoekrem.neem(achtergrond: achtergrond, telling: telling, nogNodig: nogNodig);'),
         lessThan(lus.indexOf('_conn!.send(_message(26,')), reason: 'vóór elke FileSearch');
     final o = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(o, contains('achtergrond: _radiohalen.contains(job),'), reason: 'de radio; ▶ los van de radio niet');
     expect(o, contains('hits = await soulseek.search(w.query, achtergrond: true, extra: kHiresZoekwoorden);'),
         reason: 'de verlanglijst (met 24bit erbij sinds 24-10-2026)');
-    expect(o, contains('(s) => s.search(variants.toList(),\n              onPartial: onPartial, achtergrond: achtergrond, nogNodig: nogNodig, eigenRem: eigenRem));'));
+    expect(o, contains('(s) => s.search(variants.toList(),\n              onPartial: onPartial,\n              achtergrond: achtergrond,\n'
+        '              telling: telling,\n              nogNodig: nogNodig,\n              eigenRem: eigenRem));'));
     // Sinds 27-10-2026: een eigen rem vóór die van de app (de blijvende jacht, tien per vijf minuten).
     expect(lus.indexOf('if (eigenRem != null && await eigenRem.neem(nogNodig: nogNodig) == null) {'),
-        lessThan(lus.indexOf('await zoekrem.neem(achtergrond: achtergrond, nogNodig: nogNodig);')));
+        lessThan(lus.indexOf('await zoekrem.neem(achtergrond: achtergrond, telling: telling, nogNodig: nogNodig);')));
   });
 }

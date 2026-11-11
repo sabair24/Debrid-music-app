@@ -5,8 +5,13 @@
 /// dezelfde Doo Wop bij het downloaden 226 kandidaten gaf. Soulseek sluit na de eerste paar honderd bestanden, en een
 /// albumvraag vindt alleen wat in een map met de naam van het album staat. Hij koos: per nummer, op de achtergrond.
 ///
-/// Elke vraag gaat langs de zoekrem als achtergrondwerk (`Zoekrem`), dus de grens van Soulseek blijft bewaakt. Ga je weg, dan
-/// gaan de vragen die nog niet weg zijn niet meer uit.
+/// Elke vraag gaat langs de zoekrem als het laagste werk van de app (`telling` in `Zoekrem.neem`): één zoekopdracht per nummer,
+/// alleen in wat de achtergrond overlaat, dus de grens van Soulseek blijft bewaakt en niets anders wacht erop. Ga je weg,
+/// dan gaan de vragen die nog niet weg zijn niet meer uit.
+///
+/// **Tot 3.9.723 was dat niet zo.** Gemeten op 11-11-2026: vanaf de gsm telden de vragen per nummer op de pc als jouw eigen
+/// vragen, twee per nummer. "Milow You Don't Know" — de single die Saber net opende — wachtte 78 s in de zoekrem, en ⬇
+/// "Scared of Yourself" 20 s, achter de tellingen van de plaat ervoor.
 library;
 
 /// Zoveel nummers tegelijk: genoeg om een album in een halve minuut rond te hebben, en de rem doet de rest.
@@ -36,6 +41,19 @@ Future<void> zoekPerNummer<T>(
 
   await Future.wait([for (var i = 0; i < tegelijk; i++) werker()]);
 }
+
+/// Zo lang is wat de albumpagina voor een nummer vond vers genoeg om ⬇ er meteen mee te laten beginnen ([meteenMetTelling]).
+/// Een uploader die tien minuten geleden een vrije plek had, heeft die meestal nog; de race probeert er twintig tegelijk.
+const kTellingVers = Duration(minutes: 10);
+
+/// Mag ⬇ meteen beginnen met wat de pagina al vond, zonder nieuwe zoekopdracht? Alleen als het vers is ([kTellingVers]) en
+/// er genoeg zeker goede kopieën bij zitten ([genoeg]: `vroegGenoeg` — waar een nieuwe zoekopdracht anders ook als eerste
+/// op wacht voor de race begint).
+///
+/// **Waarom.** ⬇ zocht altijd opnieuw, ook naast een telling van een minuut oud: twee zoekopdrachten erbij, en op 11-11-2026
+/// wachtte die vraag 20 s in de zoekrem voor "Scared of Yourself" van Zornik (soulseek_login.log, 21:16:27).
+bool meteenMetTelling({required DateTime? gevondenOp, required DateTime nu, required bool genoeg}) =>
+    genoeg && gevondenOp != null && !nu.isBefore(gevondenOp) && nu.difference(gevondenOp) <= kTellingVers;
 
 /// De kopieën uit de albumvraag plus die uit de vraag per nummer, zonder dubbele. Wat de albumvraag vond blijft vooraan.
 List<F> samenPerNummer<F>(List<F> uitAlbum, List<F>? perNummer, String Function(F kopie) sleutel) {

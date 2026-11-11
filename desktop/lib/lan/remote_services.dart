@@ -17,6 +17,7 @@ import 'dart:convert';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 
 import '../cloud/queue.dart';
@@ -294,8 +295,12 @@ class RemoteSoulseekService extends SoulseekService {
   /// [gebruikteVraag] meldt hier altijd de vraag zoals hij gesteld is: de trappenladder van
   /// [zoekLadder] wordt aan de PC-kant afgelopen, en welke trede het geworden is komt niet over de
   /// lijn terug. Liever niets melden dan iets melden dat niet klopt — het scherm zegt dan gewoon
-  /// niets over een ruimere zoekopdracht. [achtergrond] doet hier niets: de zoekrem zit op de pc, die de
-  /// zoekopdracht stuurt (`Zoekrem` in soulseek.dart).
+  /// niets over een ruimere zoekopdracht.
+  ///
+  /// [achtergrond], [telling] en [terugval] gaan mee: de zoekrem zit op de pc, die de zoekopdracht stuurt (`Zoekrem` in
+  /// soulseek.dart). **Tot 3.9.723 bleven ze hier liggen**, en dan telde de pc de telling per nummer van een albumpagina op
+  /// de gsm als jouw eigen vragen: op 11-11-2026 wachtte "Milow You Don't Know" — de single die Saber net opende — 78 s
+  /// achter de tellingen van de vorige plaat, en ⬇ "Scared of Yourself" 20 s.
   @override
   Future<List<SoulseekFile>> search(String query,
       {void Function(List<SoulseekFile>)? onPartial,
@@ -303,12 +308,14 @@ class RemoteSoulseekService extends SoulseekService {
       bool achtergrond = false,
       List<String> extra = const [],
       bool terugval = true,
+      bool telling = false,
       bool Function()? nogNodig,
       Zoekrem? eigenRem}) async {
+    if (nogNodig != null && !nogNodig()) return const [];
     gebruikteVraag?.call(query.trim().replaceAll(RegExp(r'\s+'), ' '));
     // [extra] gaat mee naar de pc, die zoekt ([kHiresZoekwoorden]); een oudere pc laat hem liggen en zoekt zoals vroeger.
     final files = await soulseekBestandenUit(await _rpc.getBytes('/api/soulseek/search',
-        query: {'q': query, if (extra.isNotEmpty) 'extra': extra.join(',')}));
+        query: zoekvraagVoorPc(query, extra: extra, achtergrond: achtergrond, telling: telling, terugval: terugval)));
     onPartial?.call(files);
     return files;
   }
@@ -337,6 +344,18 @@ class RemoteSoulseekService extends SoulseekService {
 
   void dispose() => _rpc.close();
 }
+
+/// De vraag aan `/api/soulseek/search` voor een gewone zoekopdracht van een toestel ([RemoteSoulseekService.search]).
+/// Wat de pc al als standaard neemt, gaat niet mee: een oudere pc kent de nieuwe sleutels niet en zoekt dan zoals vroeger.
+Map<String, String> zoekvraagVoorPc(String query,
+        {List<String> extra = const [], bool achtergrond = false, bool telling = false, bool terugval = true}) =>
+    {
+      'q': query,
+      if (extra.isNotEmpty) 'extra': extra.join(','),
+      if (achtergrond) 'achtergrond': '1',
+      if (telling) 'telling': '1',
+      if (!terugval) 'terugval': '0',
+    };
 
 /// De bestanden uit een antwoord van `/api/soulseek/search`, ontleed in een eigen isolate.
 ///
@@ -540,10 +559,53 @@ class RemoteDownloadManager extends DownloadManager {
     // er niets te zien, dan telt de stilte op en wordt de klok trager. Een NIEUWE download hoeft
     // daar niet op te wachten: `enqueue` roept zelf `refresh()` aan zodra hij verstuurd is.
     _stilteRondes = jobs.any((j) => j.busy) ? 0 : _stilteRondes + 1;
+    _merkLanding();
     // Only notify when something actually moved. Rebuilding the downloads screen on every tick
     // makes a list that will not hold still under a finger.
     if (_fingerprint() != before) notifyListeners();
   }
+
+  /// Wat er bij de vorige peiling al binnen was (klaar, of speelbaar met een jacht op beter). Null: nog niet gepeild.
+  Set<String>? _geland;
+  bool _naLandingBezig = false;
+
+  /// Kwam er sinds de vorige peiling iets binnen, dan nu de catalogus — niet bij de volgende ronde van vijftien seconden
+  /// (`ClientSession._startPolling`). Gemeten op 11-11-2026: Milow stond na 4,6 s op de pc, de gsm toonde hem pas na 13,8 s.
+  void _merkLanding() {
+    final nu = {
+      for (final j in jobs)
+        if (j.status == 'done' || j.status == 'upgrading') j.key ?? j.name,
+    };
+    final vorige = _geland;
+    _geland = nu;
+    // De eerste peiling: wat er al stond, is niet net binnengekomen.
+    if (vorige == null || nu.difference(vorige).isEmpty || _naLandingBezig) return;
+    unawaited(_catalogusNaLanding());
+  }
+
+  /// Een paar keer kort na elkaar ([catalogusNaLanding]): de pc zet "klaar" vlak vóór hij zijn bibliotheek bijwerkt, en
+  /// een vraag die daar net vóór valt krijgt nog de oude catalogus (304).
+  Future<void> _catalogusNaLanding() async {
+    _naLandingBezig = true;
+    try {
+      for (final wacht in catalogusNaLanding) {
+        if (wacht > Duration.zero) await Future<void>.delayed(wacht);
+        await onLibraryChanged();
+      }
+    } catch (_) {
+      // De ronde van vijftien seconden haalt hem dan.
+    } finally {
+      _naLandingBezig = false;
+    }
+  }
+
+  /// Wanneer na een landing de catalogus gevraagd wordt, gerekend vanaf de vorige vraag.
+  @visibleForTesting
+  static List<Duration> catalogusNaLanding = const [
+    Duration.zero,
+    Duration(milliseconds: 1500),
+    Duration(milliseconds: 2500),
+  ];
 
   String _fingerprint() =>
       [for (final j in jobs) '${j.key ?? j.name}|${j.status}|${j.progress.toStringAsFixed(3)}|${j.detail ?? ''}']
