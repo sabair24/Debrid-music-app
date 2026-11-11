@@ -497,6 +497,48 @@ void main() {
     });
   });
 
+  // 11-11-2026: Milow stond na 4,6 s op de pc, de gsm toonde hem pas na 13,8 s — hij vroeg de catalogus alleen in zijn
+  // ronde van vijftien seconden.
+  group('na een landing op de pc', () {
+    setUp(() => RemoteDownloadManager.catalogusNaLanding = const [Duration.zero]);
+    tearDown(() => RemoteDownloadManager.catalogusNaLanding = const [
+          Duration.zero,
+          Duration(milliseconds: 1500),
+          Duration(milliseconds: 2500),
+        ]);
+
+    test('DE KERN: wat net binnenkwam, haalt de catalogus meteen', () async {
+      var ververst = 0;
+      final dev = RemoteDownloadManager(online, soulseek, scratch.path, () async => ververst++, () => endpoint);
+      final job = DownloadJob("Milow — You Don't Know", key: 'k1')..status = 'waiting';
+      downloads.jobs.add(job);
+      await dev.refresh();
+      expect(ververst, 0, reason: 'nog niets binnen');
+      job.status = 'upgrading'; // speelbaar, met een jacht op beter
+      await dev.refresh();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(ververst, 1);
+      job.status = 'done';
+      await dev.refresh();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(ververst, 1, reason: 'dezelfde landing één keer');
+    });
+
+    test('wat er bij de eerste peiling al stond, is niet net binnengekomen', () async {
+      var ververst = 0;
+      final dev = RemoteDownloadManager(online, soulseek, scratch.path, () async => ververst++, () => endpoint);
+      downloads.jobs.add(DownloadJob('Zornik — Scared of Yourself', key: 'k2')..status = 'done');
+      await dev.refresh();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(ververst, 0);
+    });
+
+    test('de pc zet "klaar" vlak vóór hij zijn bibliotheek bijwerkt: daarom een paar keer kort na elkaar', () {
+      final r = File('lib/lan/remote_services.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(r, contains('    Duration.zero,\n    Duration(milliseconds: 1500),\n    Duration(milliseconds: 2500),\n'));
+    });
+  });
+
   group('what a client cannot do', () {
     test('playing an online result straight through is refused, with a way forward', () async {
       final service = remoteOnline();

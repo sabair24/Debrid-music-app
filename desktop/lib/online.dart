@@ -1222,6 +1222,18 @@ class SoulseekService {
   }
 }
 
+/// Wat een download zegt tussen binnenkomen en opbergen ([DownloadManager] `succeed`).
+const kBinnenKeuren = 'binnen — keuren en opbergen';
+
+/// De regel in downloads.log als een nummer van Soulseek in de bibliotheek staat: hoe lang keuren (echtheid meten,
+/// vergelijken), opbergen (tags, hoes, verplaatsen) en de bibliotheek bijwerken duurden. Gemeten op 11-11-2026: tussen
+/// GELEVERD en de scan zat ruim vier seconden zonder één regel.
+String landenRegel(String naam, {required Duration keuren, required Duration opbergen, required Duration bibliotheek}) {
+  String s(Duration d) => '${(d.inMilliseconds / 1000).toStringAsFixed(1)} s';
+  return '   $naam: in de bibliotheek na ${s(keuren + opbergen + bibliotheek)} — keuren ${s(keuren)}, '
+      'opbergen ${s(opbergen)}, bibliotheek ${s(bibliotheek)}';
+}
+
 /// Hoe een [DownloadManager.zoekEnHaal] afliep, zodat het scherm (als het er nog is) het juiste zegt.
 enum ZoekUitkomst { gestart, geenBron, loopt, geannuleerd }
 
@@ -2691,6 +2703,16 @@ class DownloadManager extends ChangeNotifier {
     Future<bool> succeed(SlskDone res, SoulseekFile from) async {
       final staged = File(res.path);
       var how = Placement.stuck;
+      // Binnen. Zeg dat meteen, ook op een toestel dat elke twee seconden kijkt, in plaats van de zandloper van de wachtrij
+      // die er nog stond: het keuren en opbergen hieronder duurde op 11-11-2026 ruim vier seconden (Milow — You Don't
+      // Know, op de gsm). Bezig op 100 %: "voorbereiden" leest elders als TorBox.
+      job.status = 'downloading';
+      job.progress = 1;
+      job.queuePlace = 0;
+      job.detail = kBinnenKeuren;
+      notifyListeners();
+      final landKlok = Stopwatch()..start();
+      var gekeurdNa = Duration.zero, opgeborgenNa = Duration.zero;
       try {
         // Koos de gebruiker dit bestand zelf, dan wordt het NU al onthouden — vóór het filen, want
         // tijdens het filen wordt er al vergeleken. Andersom kwam het net te laat: `placeFileDetailed`
@@ -2705,6 +2727,7 @@ class DownloadManager extends ChangeNotifier {
         // Een halve seconde op een download die seconden tot minuten duurde is onzichtbaar, en een
         // mislukte meting kost niets: dan is er simpelweg geen oordeel.
         final bestaand = await _bereidVergelijkingVoor(staged, job.authority);
+        gekeurdNa = landKlok.elapsed;
         // Een ANDERE opname dan wat je hebt: niet eroverheen, maar ernaast. Zonder dit stuurt
         // [mapVanBestaande] hem op artiest en titel naar jouw bestand, en dan vergelijkt de keuring
         // twee verschillende nummers met elkaar.
@@ -2714,6 +2737,7 @@ class DownloadManager extends ChangeNotifier {
         }
         final uit = await placeFileDetailed(staged, _downloadsRoot,
             tags: job.authority, staatAl: andere ? null : mapVanBestaande);
+        opgeborgenNa = landKlok.elapsed;
         how = uit.how;
         if (how == Placement.duplicate && bestaand != null) {
           _log.line('   ${job.name}: niet bewezen beter dan wat je hebt — ${whyBetter(File(uit.path), staged)}; '
@@ -2745,6 +2769,8 @@ class DownloadManager extends ChangeNotifier {
       try {
         await onLibraryChanged();
       } catch (_) {/* library rescan hiccup shouldn't un-succeed the download */}
+      _log.line(landenRegel(job.name, keuren: gekeurdNa, opbergen: opgeborgenNa - gekeurdNa,
+          bibliotheek: landKlok.elapsed - opgeborgenNa));
       return true;
     }
 

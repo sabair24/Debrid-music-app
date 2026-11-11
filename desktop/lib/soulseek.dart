@@ -361,11 +361,14 @@ class _Inbound {
   // 0 = awaiting init, 1 = framed messages, 2 = raw file stream, 3 = dead.
   int _mode = 0;
 
-  _Inbound(this.sock, this.owner) {
+  _Inbound(this.sock, this.owner, {this.alleenVerwacht = false}) {
     owner.levendeInbound++;
     _sub = sock.listen(_onData, onError: (_) => _drop(), onDone: _drop);
-    _bump(const Duration(seconds: 30));
+    _bump(alleenVerwacht ? kBovenGrensKijktijd : const Duration(seconds: 30));
   }
+
+  /// Boven de grens binnengelaten: alleen welkom als iemand op hem wacht — zie [SoulseekClient._onInbound].
+  final bool alleenVerwacht;
 
   /// Raw bytes after the init message — the file stream. Only valid after [takeRaw].
   Stream<Uint8List> get raw => _raw.stream;
@@ -445,13 +448,13 @@ class _Inbound {
     final code = r.u8();
     if (code == 0) {
       if (r.remaining < 4) return false;
-      return owner._routeInbound(this, 0, '', '', r.u32());
+      return owner._routeInbound(this, 0, '', '', r.u32(), alleenVerwacht: alleenVerwacht);
     }
     if (code == 1) {
       final user = r.str();
       final type = r.str();
       final token = r.remaining >= 4 ? r.u32() : 0;
-      return owner._routeInbound(this, 1, user, type, token);
+      return owner._routeInbound(this, 1, user, type, token, alleenVerwacht: alleenVerwacht);
     }
     return false;
   }
@@ -682,23 +685,56 @@ class SoulseekClient {
   /// van 4367 verschillende adressen, en de app stond 7,3 seconden stil. Zeshonderd is ruim — bij
   /// gewoon gebruik staan er enkele tientallen open — en een geweigerde peer kost hoogstens één
   /// zoektreffer van de duizenden.
+  ///
+  /// **Boven de grens komt wie we verwachten nog binnen** ([wachtOpBinnenkomend]): een uploader die we via de server lieten
+  /// terugbellen (PierceFirewall) of die het bestand komt brengen ('F'). Een download begint vlak na zijn zoekopdracht, juist
+  /// als honderden peers hun zoektreffers komen brengen. Zo'n verbinding krijgt [kBovenGrensKijktijd] om te zeggen wie hij
+  /// is; een zoektreffer gaat dan meteen dicht, zonder ontleden. Gemeten op 11-11-2026: de uploader die het eerst vrij was
+  /// (h3b) viel in de wedloop af als "niet bereikbaar (firewall)", en leverde vijftien seconden later wél — twee keer.
   void _onInbound(Socket sock) {
     if (levendeInbound >= maxInbound) {
-      _geweigerdInbound++;
-      sock.destroy();
+      if (!wachtOpBinnenkomend || levendeInbound >= maxInboundNood) {
+        _weiger(sock);
+        return;
+      }
+      _Inbound(sock, this, alleenVerwacht: true);
       return;
     }
     _Inbound(sock, this);
   }
 
+  /// Voor de toets: wacht op een terugbel met dit kaartje, zoals de omweg (`SlskSession._reverseConnect`) dat doet.
+  @visibleForTesting
+  void wachtOpTerugbelVoorToets(int token, void Function() bijAankomst) => _pierceWaiters[token] = (_) => bijAankomst();
+
+  /// Wacht er iemand op een binnenkomende verbinding (een omweg of een bestand)?
+  bool get wachtOpBinnenkomend => _pierceWaiters.isNotEmpty || _fInbound.isNotEmpty;
+
+  void _weiger(Socket sock) {
+    _geweigerdInbound++;
+    final nu = DateTime.now();
+    final vorige = _weigerGemeld;
+    if (vorige == null || nu.difference(vorige) >= const Duration(minutes: 1)) {
+      _weigerGemeld = nu;
+      logboek('binnenkomend: grens van $maxInbound open verbindingen bereikt — nieuwe geweigerd '
+          '($_geweigerdInbound sinds de start)');
+    }
+    sock.destroy();
+  }
+
+  DateTime? _weigerGemeld;
+
   /// Hoeveel binnengekomen peerverbindingen er nu openstaan, en hoeveel er geweigerd zijn.
   static int maxInbound = 600;
+
+  /// Boven [maxInbound] komen alleen verwachte verbindingen nog binnen, en ook dat niet meer boven dit getal.
+  static int maxInboundNood = 2000;
   int levendeInbound = 0;
   int _geweigerdInbound = 0;
   int get geweigerdInbound => _geweigerdInbound;
 
   /// Routes a fully-initialised incoming connection. Returns false if nobody wanted it.
-  bool _routeInbound(_Inbound c, int initCode, String user, String type, int token) {
+  bool _routeInbound(_Inbound c, int initCode, String user, String type, int token, {bool alleenVerwacht = false}) {
     if (initCode == 0) {
       // PierceFirewall — a peer the SERVER told to call us back, for a ConnectToPeer we sent.
       final p = _pierceWaiters.remove(token);
@@ -713,6 +749,11 @@ class SoulseekClient {
       if (f == null) return false;
       f(c);
       return true;
+    }
+    // Boven de grens binnengelaten voor een omweg of een bestand ([_onInbound]): zoektreffers niet.
+    if (alleenVerwacht) {
+      _geweigerdInbound++;
+      return false;
     }
     return true; // keep framing: search results
   }
@@ -1822,6 +1863,19 @@ String zoekZonderAntwoordRegel({
 /// is, staat er bijna altijd binnen een tel.
 const kRechtstreeksGeduld = Duration(seconds: 3);
 
+/// Zo lang wacht de omweg (ConnectToPeer) tot de uploader ons terugbelt.
+const kOmwegGeduld = Duration(seconds: 15);
+
+/// Zo lang mag een verbinding die boven [SoulseekClient.maxInbound] binnenkwam doen over zeggen wie hij is.
+const kBovenGrensKijktijd = Duration(seconds: 4);
+
+/// De regel in `soulseek_login.log` als een uploader ons via de omweg niet terugbelde. [open]: hoeveel binnenkomende
+/// verbindingen er toen openstonden; [geweigerd]: hoeveel er tijdens het wachten aan de grens geweigerd werden. Is dat
+/// laatste geen nul, dan kan de terugbel van de uploader er een van geweest zijn.
+String omwegZonderAntwoordRegel({required String peer, required Duration duur, required int open, required int geweigerd}) =>
+    'omweg naar $peer: geen terugbel in ${(duur.inMilliseconds / 1000).toStringAsFixed(1)} s — '
+    '$open binnenkomende verbindingen open, $geweigerd geweigerd tijdens het wachten';
+
 /// A reusable, logged-in Soulseek SERVER connection for a batch of downloads.
 ///
 /// Soulseek allows only ONE login per username and rate-limits/blocks repeated logins. The
@@ -2325,18 +2379,36 @@ class SlskSession {
   /// Ask the SERVER to tell [username] to call US back. This is the only way to reach an uploader
   /// that is itself firewalled: we can't dial them, but they can dial us — provided we are
   /// listening on an advertised port. They arrive with PierceFirewall(token).
-  Future<(_Inbound, Stream<Uint8List>)?> _reverseConnect(String username) async {
+  ///
+  /// [cancel]: een ander leverde al — dan meteen stoppen. Tot 3.9.724 wachtte de omweg zijn vijftien seconden uit, en
+  /// stonden de verliezers van een gewonnen wedloop daarna als "niet bereikbaar (firewall)" in downloads.log: op
+  /// 11-11-2026 zeventien tegelijk, 15 s nadat mesself "You Don't Know" al geleverd had.
+  Future<(_Inbound, Stream<Uint8List>)?> _reverseConnect(String username, {SlskCancel? cancel}) async {
     if (await client.ensureListening() == 0) return null; // not reachable ourselves → no point
     final token = client._nextTicket();
-    final got = Completer<(_Inbound, Stream<Uint8List>)>();
+    final got = Completer<(_Inbound, Stream<Uint8List>)?>();
     client._pierceWaiters[token] = (c) {
       // takeMessages() synchronously, before the connection's read loop moves on: anything the
       // peer already sent must land in our queue, not in the search-result sink.
       if (!got.isCompleted) got.complete((c, c.takeMessages()));
     };
+    final begon = DateTime.now();
+    final geweigerdVoor = client.geweigerdInbound;
     try {
       _conn!.send(_message(18, (_W()..u32(token)..str(username)..str('P')).bytes()));
-      return await got.future.timeout(const Duration(seconds: 15));
+      cancel?.whenCancelled.then((_) {
+        if (!got.isCompleted) got.complete(null);
+      });
+      final r = await got.future.timeout(kOmwegGeduld, onTimeout: () => null);
+      if (r == null && !(cancel?.isCancelled ?? false)) {
+        client.logboek(omwegZonderAntwoordRegel(
+          peer: username,
+          duur: DateTime.now().difference(begon),
+          open: client.levendeInbound,
+          geweigerd: client.geweigerdInbound - geweigerdVoor,
+        ));
+      }
+      return r;
     } catch (_) {
       return null;
     } finally {
@@ -2366,12 +2438,17 @@ class SlskSession {
       _conn!.send(_message(3, (_W()..str(file.username)).bytes()));
       (String, int) peerAddr = ('0.0.0.0', 0);
       try {
-        peerAddr = await addr.future.timeout(const Duration(seconds: 10));
+        peerAddr = await Future.any([
+          addr.future,
+          // Een ander leverde al: niet tien seconden op een adres wachten dat niemand meer nodig heeft.
+          if (cancel != null) cancel.whenCancelled.then((_) => ('0.0.0.0', 0)),
+        ]).timeout(const Duration(seconds: 10));
       } catch (_) {
         // no address — the reverse path below is still worth a try
       } finally {
         _addrWaiters.remove(file.username);
       }
+      if (cancel != null && cancel.isCancelled) return SlskCancelled();
       final (ip, port) = peerAddr;
 
       final delivered = Completer<SlskResult>();
@@ -2438,7 +2515,8 @@ class SlskSession {
         pmsgs = pconn.messages;
         pconn.send(_initMessage(1, (_W()..str(user)..str('P')..u32(dlToken)).bytes())); // PeerInit "P"
       } else {
-        final rev = await _reverseConnect(file.username);
+        final rev = await _reverseConnect(file.username, cancel: cancel);
+        if (cancel != null && cancel.isCancelled) return SlskCancelled();
         if (rev == null) return SlskFail('Uploader niet bereikbaar (firewall)');
         viaServer = rev.$1;
         psend = (b) => rev.$1.send(b);

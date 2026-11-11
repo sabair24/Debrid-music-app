@@ -34058,7 +34058,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final naam = widget.artist.name;
     final settings = context.read<AppSettings>();
     final enr = CoverEnricher(settings);
-    final art = await enr.artistArt(naam);
+    // Met voorrang: niet achter de portretten van "Klinkt als" op de rij van TheAudioDB (zie [CoverEnricher.artistArt]).
+    final art = await enr.artistArt(naam, voorrang: true);
     if (!mounted || naam != widget.artist.name) return;
     setState(() => _art = art);
     // Geen achtergrond bij TheAudioDB en geen eigen keuze: dan de foto van Deezer als kop (Saber,
@@ -34200,6 +34201,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
         tussendoor: (l) {
           if (mounted && naam == widget.artist.name) setState(() => _related = l);
         },
+        // Weg van deze pagina: niet verder zoeken (tot ±70 vragen bij Deezer, op de rij van de volgende pagina).
+        nogNodig: () => mounted && naam == widget.artist.name,
       );
     } catch (_) {/* een pagina zonder "klinkt als" is nog steeds een goede pagina */}
   }
@@ -34403,13 +34406,13 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                   art: _wachtOpKeuze ? null : _art,
                   fallbackImage: _wachtOpKeuze ? null : _deezerFoto,
                   soort: widget.artist.detail,
-                  bibliotheek: _busy
-                      ? 'Albums laden…'
-                      : [
-                          if (mine.isNotEmpty) '${mine.length} ${mine.length == 1 ? 'album' : 'albums'}',
-                          if (_eigenNummers > 0) '$_eigenNummers ${_eigenNummers == 1 ? 'nummer' : 'nummers'}',
-                          if (_eigenTijd != null) _eigenTijd,
-                        ].join(' · '),
+                  // Uit je bibliotheek, en die ligt er al: niet wachten op de discografie. Tot 3.9.724 stond hier
+                  // "Albums laden…" zolang die liep — bij Zornik, die je niet hebt, vijf seconden "In je bibliotheek".
+                  bibliotheek: [
+                    if (mine.isNotEmpty) '${mine.length} ${mine.length == 1 ? 'album' : 'albums'}',
+                    if (_eigenNummers > 0) '$_eigenNummers ${_eigenNummers == 1 ? 'nummer' : 'nummers'}',
+                    if (_eigenTijd != null) _eigenTijd,
+                  ].join(' · '),
                   genres: [for (final e in _eigenGenres) e.key],
                   groepen: _groepen,
                   zijnLeden: _zijnLeden,

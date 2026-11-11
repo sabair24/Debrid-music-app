@@ -69,9 +69,13 @@ Future<List<CatalogArtist>> klinktAlsAanvullen({
   required Future<List<CatalogArtist>> Function(int id) verwanten,
   int doel = kKlinktAlsDoel,
   void Function(List<CatalogArtist> tussenstand)? tussendoor,
+  bool Function()? nogNodig,
 }) async {
   final uit = [...deezer];
   if (uit.length >= doel) return uit;
+  // [nogNodig] onwaar (de pagina is dicht): geen volgende ronde. Gemeten op 11-11-2026: na het openen van Zornik vanuit
+  // "Klinkt als" bij Milow zocht de rij van Milow nog door, op dezelfde rij bij Deezer als de nieuwe pagina.
+  bool weg() => nogNodig != null && !nogNodig();
   List<String> namen() => [for (final a in uit) a.name];
 
   if (lastfm != null) {
@@ -81,7 +85,7 @@ Future<List<CatalogArtist>> klinktAlsAanvullen({
     } catch (_) {/* dan de terugval */}
     // Ruim vragen: niet elke naam staat bij Deezer onder precies die naam.
     final te = lijst == null ? const <String>[] : klinktAlsNamen(artiest, namen(), lijst, ruimte: (doel - uit.length) * 2);
-    for (var i = 0; i < te.length && uit.length < doel; i += kKlinktAlsTegelijk) {
+    for (var i = 0; i < te.length && uit.length < doel && !weg(); i += kKlinktAlsTegelijk) {
       final stuk = te.sublist(i, (i + kKlinktAlsTegelijk).clamp(0, te.length));
       final gevonden = await Future.wait([
         for (final n in stuk)
@@ -98,7 +102,7 @@ Future<List<CatalogArtist>> klinktAlsAanvullen({
     }
   }
 
-  if (uit.length < doel && deezer.isNotEmpty) {
+  if (uit.length < doel && deezer.isNotEmpty && !weg()) {
     final lijsten = await Future.wait([
       for (final a in deezer.take(kKlinktAlsTweedeKring))
         verwanten(a.id).catchError((Object _) => const <CatalogArtist>[]),

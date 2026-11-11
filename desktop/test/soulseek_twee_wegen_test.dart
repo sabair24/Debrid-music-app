@@ -21,7 +21,7 @@ void main() {
 
   test('na elkaar: de server pas als rechtstreeks niets gaf — nooit twee lijnen naar dezelfde uploader', () {
     final rechtstreeks = t.indexOf('peer = await Socket.connect(ip, port, timeout: kRechtstreeksGeduld);');
-    final viaServer = t.indexOf('final rev = await _reverseConnect(file.username);');
+    final viaServer = t.indexOf('final rev = await _reverseConnect(file.username, cancel: cancel);');
     expect(rechtstreeks, greaterThan(0));
     expect(viaServer, greaterThan(rechtstreeks));
     expect(t.substring(rechtstreeks, viaServer), contains('} else {'),

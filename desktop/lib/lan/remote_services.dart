@@ -17,6 +17,7 @@ import 'dart:convert';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 
 import '../cloud/queue.dart';
@@ -558,10 +559,53 @@ class RemoteDownloadManager extends DownloadManager {
     // er niets te zien, dan telt de stilte op en wordt de klok trager. Een NIEUWE download hoeft
     // daar niet op te wachten: `enqueue` roept zelf `refresh()` aan zodra hij verstuurd is.
     _stilteRondes = jobs.any((j) => j.busy) ? 0 : _stilteRondes + 1;
+    _merkLanding();
     // Only notify when something actually moved. Rebuilding the downloads screen on every tick
     // makes a list that will not hold still under a finger.
     if (_fingerprint() != before) notifyListeners();
   }
+
+  /// Wat er bij de vorige peiling al binnen was (klaar, of speelbaar met een jacht op beter). Null: nog niet gepeild.
+  Set<String>? _geland;
+  bool _naLandingBezig = false;
+
+  /// Kwam er sinds de vorige peiling iets binnen, dan nu de catalogus — niet bij de volgende ronde van vijftien seconden
+  /// (`ClientSession._startPolling`). Gemeten op 11-11-2026: Milow stond na 4,6 s op de pc, de gsm toonde hem pas na 13,8 s.
+  void _merkLanding() {
+    final nu = {
+      for (final j in jobs)
+        if (j.status == 'done' || j.status == 'upgrading') j.key ?? j.name,
+    };
+    final vorige = _geland;
+    _geland = nu;
+    // De eerste peiling: wat er al stond, is niet net binnengekomen.
+    if (vorige == null || nu.difference(vorige).isEmpty || _naLandingBezig) return;
+    unawaited(_catalogusNaLanding());
+  }
+
+  /// Een paar keer kort na elkaar ([catalogusNaLanding]): de pc zet "klaar" vlak vóór hij zijn bibliotheek bijwerkt, en
+  /// een vraag die daar net vóór valt krijgt nog de oude catalogus (304).
+  Future<void> _catalogusNaLanding() async {
+    _naLandingBezig = true;
+    try {
+      for (final wacht in catalogusNaLanding) {
+        if (wacht > Duration.zero) await Future<void>.delayed(wacht);
+        await onLibraryChanged();
+      }
+    } catch (_) {
+      // De ronde van vijftien seconden haalt hem dan.
+    } finally {
+      _naLandingBezig = false;
+    }
+  }
+
+  /// Wanneer na een landing de catalogus gevraagd wordt, gerekend vanaf de vorige vraag.
+  @visibleForTesting
+  static List<Duration> catalogusNaLanding = const [
+    Duration.zero,
+    Duration(milliseconds: 1500),
+    Duration(milliseconds: 2500),
+  ];
 
   String _fingerprint() =>
       [for (final j in jobs) '${j.key ?? j.name}|${j.status}|${j.progress.toStringAsFixed(3)}|${j.detail ?? ''}']
