@@ -42,8 +42,9 @@ void main() {
       final online = _bron('lib/online.dart');
       final s = online.substring(online.indexOf('  Future<List<SoulseekFile>> search(String query,'));
       final lijf = s.substring(0, s.indexOf('\n  }\n'));
-      expect(lijf, contains('final gevonden = await _searchOnce(ronde, deel, achtergrond: achtergrond, nogNodig: nogNodig, eigenRem: eigenRem);'));
-      expect(lijf, contains('if (i == 0 && !stil) {'), reason: 'alleen na de volledige vraag, niet na de terugval, en niet als de server zwijgt');
+      expect(lijf, contains('final gevonden = await _searchOnce(ronde, deel,\n          achtergrond: achtergrond, telling: telling, nogNodig: nogNodig, eigenRem: eigenRem);'));
+      expect(lijf, contains('if (i == 0 && !stil && !telling) {'),
+          reason: 'alleen na de volledige vraag, niet na de terugval, niet als de server zwijgt en niet voor een telling');
       expect(lijf, contains('for (final v in extraVragen(ronde.first, extra)) {'));
       expect(lijf, contains('await _searchOnce([v], null, achtergrond: achtergrond, eigenRem: eigenRem)'), reason: 'een eigen venster');
       expect(lijf, contains("if (al.add('\${f.username}|\${f.filename}')) samen.add(f);"), reason: 'de gewone eerst, geen dubbels');
@@ -73,7 +74,7 @@ void main() {
       final s = _bron('lib/lan/server.dart');
       expect(s, contains(r"if (RegExp(r'^[A-Za-z0-9-]{2,12}$').hasMatch(w.trim())) w.trim(),"));
       expect(s, contains('].take(3).toList();'));
-      expect(s, contains('? await service.search(q, extra: extra)'));
+      expect(s, contains('? await service.search(q,\n              extra: extra,\n'));
     });
   });
 

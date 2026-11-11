@@ -1650,6 +1650,20 @@ const int kZoekPerVijfMinuten = 40;
 /// downloaden en zoeken"). De achtergrond houdt er twintig: vier per minuut, genoeg om de radio voor te blijven.
 const int kZoekVoorJouVijf = 20;
 
+/// Wat een telling per nummer ([Zoekrem.neem] met `telling`) bovenop de achtergrondgrens nóg vrijlaat, per minuut en per
+/// vijf minuten: plaats voor de radio, de verlanglijst en een betere kopie. De telling is het laagste werk van de app — ze
+/// zoekt alleen in wat er over is.
+///
+/// **Waarom.** Gemeten op 11-11-2026 (soulseek_login.log): sinds 3.9.722 zoekt een albumpagina per nummer, twee zoekopdrachten
+/// per nummer. Vanaf de gsm kwamen die als jouw eigen vragen op de pc aan, en om 20:52 wachtte "Milow You Don't Know" — de
+/// albumvraag van de single die Saber net opende — 78 s achter "*ilow North and South", "milow stephanie" en de rest; de
+/// achtergrond wachtte tot 449 s. Om 19:29 sloot de server de verbinding bij 42 zoekopdrachten in vijf minuten.
+const int kZoekTellingMarge = 4;
+const int kZoekTellingMargeVijf = 6;
+
+/// Een grens van nul of minder liet [zoekWachttijd] buiten de lijst grijpen; één blijft er altijd.
+int _minstensEen(int n) => n < 1 ? 1 : n;
+
 /// Hoe lang een zoekopdracht nog moet wachten: nul als er in het laatste [venster] minder dan [max] gingen, anders tot
 /// de oudste die nog meetelt uit het venster valt. [eerder]: de tijdstippen van de vorige zoekopdrachten.
 Duration zoekWachttijd(List<DateTime> eerder, DateTime nu,
@@ -1705,9 +1719,13 @@ class Zoekrem {
   /// [nogNodig] onwaar (de pagina die vroeg is dicht): null, en er is niets geboekt. Op 25-10-2026 ging
   /// "*he Weeknd The Highlights" na 209 s alsnog uit, voor een albumpagina die al lang weg was — en elke zo'n vraag
   /// schoof de volgende verder achteruit.
-  Future<Duration?> neem({bool achtergrond = false, bool Function()? nogNodig}) async {
+  ///
+  /// [telling]: de telling per nummer op een albumpagina — achtergrond, en dan nog [kZoekTellingMarge] en
+  /// [kZoekTellingMargeVijf] onder die grens, zodat ze nooit iets anders laat wachten.
+  Future<Duration?> neem({bool achtergrond = false, bool telling = false, bool Function()? nogNodig}) async {
     var gewacht = Duration.zero;
-    if (!achtergrond) _jijLaatst = _klok();
+    final achter = achtergrond || telling;
+    if (!achter) _jijLaatst = _klok();
     while (true) {
       if (nogNodig != null && !nogNodig()) return null;
       final nu = _klok();
@@ -1716,9 +1734,10 @@ class Zoekrem {
       final rustig = voorJouVijfRustig;
       final jij = _jijLaatst;
       final voorJouNu = rustig != null && (jij == null || nu.difference(jij) >= kJijZochtNet) ? rustig : voorJouVijf;
-      final w1 = zoekWachttijd(_tijden, nu, max: achtergrond ? max - voorJou : max);
-      final w5 = zoekWachttijd(_tijden, nu,
-          max: achtergrond ? vijf - voorJouNu : vijf, venster: const Duration(minutes: 5));
+      final perMinuutNu = !achter ? max : _minstensEen(max - voorJou - (telling ? kZoekTellingMarge : 0));
+      final perVijfNu = !achter ? vijf : _minstensEen(vijf - voorJouNu - (telling ? kZoekTellingMargeVijf : 0));
+      final w1 = zoekWachttijd(_tijden, nu, max: perMinuutNu);
+      final w5 = zoekWachttijd(_tijden, nu, max: perVijfNu, venster: const Duration(minutes: 5));
       final w = w1 > w5 ? w1 : w5;
       if (w <= Duration.zero) {
         _tijden.add(nu);
@@ -1894,6 +1913,7 @@ class SlskSession {
   Future<List<SoulseekFile>> search(List<String> queries,
       {void Function(List<SoulseekFile>)? onPartial,
       bool achtergrond = false,
+      bool telling = false,
       bool Function()? nogNodig,
       Zoekrem? eigenRem}) async {
     if (client.blocked) return const [];
@@ -1923,14 +1943,14 @@ class SlskSession {
           client.logboek('zoekopdracht "$q" niet meer nodig — niet verstuurd');
           break;
         }
-        final gewacht = await zoekrem.neem(achtergrond: achtergrond, nogNodig: nogNodig);
+        final gewacht = await zoekrem.neem(achtergrond: achtergrond, telling: telling, nogNodig: nogNodig);
         if (gewacht == null) {
           client.logboek('zoekopdracht "$q" niet meer nodig — niet verstuurd');
           break;
         }
         if (gewacht >= const Duration(seconds: 1)) {
           client.logboek('zoekrem: "$q" wachtte ${gewacht.inSeconds} s'
-              '${achtergrond ? ' (achtergrond)' : ''} — hoogstens $kZoekPerMinuut zoekopdrachten per minuut en '
+              '${telling ? ' (telling)' : achtergrond ? ' (achtergrond)' : ''} — hoogstens $kZoekPerMinuut zoekopdrachten per minuut en '
               '${zoekrem.perVijf} per 5 min');
         }
         // Intussen kan de verbinding weg zijn; dan geldt wat er al binnen is.

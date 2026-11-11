@@ -35294,12 +35294,22 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       final r = await soulseek.search(_albumVraag, nogNodig: () => mounted, onPartial: (p) {
         if (mounted) setState(() => _albumSlsk = p);
       });
-      if (mounted) setState(() { _albumSlsk = r; _slskBusy = false; });
+      if (mounted) {
+        setState(() {
+          _albumSlsk = r;
+          _albumSlskOp = DateTime.now();
+          _slskBusy = false;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _slskBusy = false);
     }
     _zorgVoorPerNummer();
   }
+
+  /// Wanneer de albumvraag en elke vraag per nummer binnenkwamen — voor [meteenMetTelling] bij ⬇.
+  DateTime? _albumSlskOp;
+  final _perNummerOp = <String, DateTime>{};
 
   /// Wat elk nummer met een eigen vraag vond ([zoekPerNummer]), op dezelfde sleutel als [_slskPerTitel].
   final _perNummer = <String, List<SoulseekFile>>{};
@@ -35324,9 +35334,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       nodig: (t) => _owned(t) == null,
       nogNodig: () => mounted,
       zoek: (t) async {
+        // Het laagste werk van de app: één zoekopdracht, alleen in wat de achtergrond overlaat (`telling`).
         final gevonden = await soulseek.search(
           soulseekQuery(widget.artistName, t.title, album: widget.album.title),
-          achtergrond: true,
+          telling: true,
           terugval: false,
           nogNodig: () => mounted,
         );
@@ -35338,7 +35349,10 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
             album: widget.album.title,
             albumTitels: albumTitels);
         if (passend.isEmpty || !mounted) return;
-        setState(() => _perNummer['${t.title}|${t.durationSec}'] = passend);
+        setState(() {
+          _perNummer['${t.title}|${t.durationSec}'] = passend;
+          _perNummerOp['${t.title}|${t.durationSec}'] = DateTime.now();
+        });
       },
     );
     if (mounted) setState(() => _perNummerLoopt = false);
@@ -35488,6 +35502,13 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     final pool = <String, SoulseekFile>{
       for (final f in eerder) '${f.username}|${f.filename}': f
     };
+    // Een verse telling met genoeg zeker goede kopieën: meteen, zonder nieuwe zoekopdracht ([meteenMetTelling]).
+    if (meteenMetTelling(
+        gevondenOp: _perNummerOp['${t.title}|${t.durationSec}'] ?? _albumSlskOp,
+        nu: DateTime.now(),
+        genoeg: vroegGenoeg(eerder, t.durationSec))) {
+      return pool.values.toList();
+    }
     try {
       // Dezelfde zeef als de telling naast de rij, mét de terugval voor een gast die de bestanden niet
       // noemen ([zonderGast]). Hier stond een eigen lus met alleen [fileOffersTitle]: "À 20 ans (feat.

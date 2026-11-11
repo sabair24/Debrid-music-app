@@ -174,6 +174,7 @@ class _Zoeker extends SoulseekService {
       bool achtergrond = false,
       List<String> extra = const [],
       bool terugval = true,
+      bool telling = false,
       bool Function()? nogNodig,
       Zoekrem? eigenRem}) async {
     vragen.add(query);

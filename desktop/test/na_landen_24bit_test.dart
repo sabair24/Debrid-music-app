@@ -24,6 +24,7 @@ class _Zoeker extends SoulseekService {
       bool achtergrond = false,
       List<String> extra = const [],
       bool terugval = true,
+      bool telling = false,
       bool Function()? nogNodig,
       Zoekrem? eigenRem}) async {
     vragen.add((q: query, extra: extra, terugval: terugval));
@@ -89,7 +90,7 @@ void main() {
     expect(o, contains('    _naLandenHires(pad, plaatsing, gekozen);'), reason: 'na ▶');
     expect(o, contains('if ((van.bitDepth ?? 0) > 16 || (van.sampleRate ?? 0) > 48000) return;'),
         reason: 'wat al hi-res is, hoeft niet');
-    expect(o, contains('final rondes = terugval && !stil ? alle : alle.take(1).toList();'));
+    expect(o, contains('final rondes = terugval && !telling && !stil ? alle : alle.take(1).toList();'));
     final m = _bron('lib/main.dart');
     expect(m, contains('..trackVoorPad = library.trackByPath'));
     expect(m, contains('..gezagVoor = library.tagsVoorVervanger;'));

@@ -3094,6 +3094,10 @@ class LanServer {
     return _json(req.response, {'ok': true});
   }
 
+  /// Zo lang wacht een toestel op `/api/soulseek/search` (90 s in `_Rpc.getBytes`), min een marge: wat daarna pas uit
+  /// zou gaan, zoekt voor niemand.
+  static const kToestelZoekGeduld = Duration(seconds: 80);
+
   Future<void> _soulseekSearch(HttpRequest req) async {
     final service = soulseek;
     if (service == null || !service.available) {
@@ -3113,9 +3117,18 @@ class LanServer {
       for (final w in (vp['extra'] ?? '').split(','))
         if (RegExp(r'^[A-Za-z0-9-]{2,12}$').hasMatch(w.trim())) w.trim(),
     ].take(3).toList();
+    // Achtergrond, telling en terugval zoals het toestel vroeg (`zoekvraagVoorPc`). Tot 3.9.723 bleven ze daar liggen, en
+    // telde de telling per nummer van een albumpagina op de gsm hier als jouw eigen vragen — zie `kZoekTellingMarge`.
+    // Wacht een vraag langer in de zoekrem dan het toestel op antwoord wacht, dan gaat hij niet meer uit: niemand wacht erop.
+    final geduld = Stopwatch()..start();
     try {
       final files = titel.isEmpty
-          ? await service.search(q, extra: extra)
+          ? await service.search(q,
+              extra: extra,
+              achtergrond: vp['achtergrond'] == '1',
+              telling: vp['telling'] == '1',
+              terugval: vp['terugval'] != '0',
+              nogNodig: () => geduld.elapsed < kToestelZoekGeduld)
           : await service.zoekVroeg(q,
               extra: extra,
               seconden: seconden,
