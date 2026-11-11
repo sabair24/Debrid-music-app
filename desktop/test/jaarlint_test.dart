@@ -223,26 +223,27 @@ void main() {
 
   group('de feiten zelf', () {
     test('DE KERN: "actief" leest als een periode', () {
-      expect(_mj.actief, '1958 – 2009');
+      expect(const ArtiestFeiten(geborenJaar: 1958, opgerichtJaar: 1964, gestorvenJaar: 2009, aantalLeden: 1).actief,
+          '1964 – 2009');
+      expect(_mj.actief, isNull, reason: 'zonder begin van de loopbaan geen regel — het geboortejaar is het niet');
       expect(const ArtiestFeiten(opgerichtJaar: 1993).actief, 'sinds 1993');
       expect(const ArtiestFeiten(opgerichtJaar: 1993, ontbonden: '2011').actief, '1993 – 2011');
       expect(const ArtiestFeiten(land: 'BE').actief, isNull,
           reason: 'zonder beginjaar is er geen periode en hoort er geen regel te staan');
     });
 
-    test('DE VAL: bij een PERSOON telt het geboortejaar, bij een GROEP de oprichting', () {
-      // Gemeten op het scherm op 10-09-2026: bij Michael Jackson stond er "1964 – 2009" — het jaar
-      // dat The Jackson 5 begon — terwijl de app 1958 gewoon in huis had. TheAudioDB vult
-      // `intFormedYear` ook voor een solo-artiest, met het jaar dat hij begon te spelen, en dat is
-      // niet het begin van zíjn verhaal.
-      //
-      // `intMembers` zegt welk van de twee het is. Staat dat er niet, dan wint de geboorte: een
-      // groep heeft nu eenmaal geen geboortejaar, dus als er een staat is het een persoon.
-      expect(const ArtiestFeiten(geborenJaar: 1958, opgerichtJaar: 1964, aantalLeden: 1).actief,
-          'sinds 1958',
-          reason: 'de loopbaan van een persoon begint niet bij de oprichting van zijn eerste band');
-      expect(const ArtiestFeiten(geborenJaar: 1975, opgerichtJaar: 1993).actief, 'sinds 1975',
-          reason: 'zonder ledental is een geboortejaar het bewijs dat het om een persoon gaat');
+    test('DE VAL: bij een PERSOON telt de loopbaan, nooit het geboortejaar; bij een GROEP de oprichting', () {
+      // Saber, 11-11-2026, na een testronde: bij Rachid Taha stond "Actief sinds 1958" — zijn geboortejaar; TheAudioDB
+      // geeft 1983 als begin van zijn loopbaan — en bij Milow "sinds 1981" (2004). Tot dan telde bij een persoon het
+      // geboortejaar (10-09-2026, om Michael Jackson niet bij The Jackson 5 te laten beginnen); maar dat ís zijn loopbaan.
+      expect(const ArtiestFeiten(geborenJaar: 1958, opgerichtJaar: 1983, aantalLeden: 1).actief, 'sinds 1983',
+          reason: 'Rachid Taha');
+      expect(const ArtiestFeiten(geborenJaar: 1981, opgerichtJaar: 2004, aantalLeden: 1).actief, 'sinds 2004',
+          reason: 'Milow');
+      expect(const ArtiestFeiten(geborenJaar: 1958, opgerichtJaar: 1958, aantalLeden: 1).actief, isNull,
+          reason: 'een begin van de loopbaan in het geboortejaar is het geboortejaar, en dat staat al onder "geboren"');
+      expect(const ArtiestFeiten(geborenJaar: 1975, opgerichtJaar: 1993).actief, 'sinds 1993',
+          reason: 'zonder ledental een persoon: zijn loopbaan');
       expect(const ArtiestFeiten(opgerichtJaar: 1993, aantalLeden: 4).actief, 'sinds 1993');
       expect(const ArtiestFeiten(geborenJaar: 1975, opgerichtJaar: 1993, aantalLeden: 4).actief,
           'sinds 1993',

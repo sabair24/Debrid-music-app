@@ -25,7 +25,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'editions.dart';
-import 'enrichment.dart' show CoverEnricher, kiesAudioDbArtiest;
+import 'enrichment.dart' show AudioDbOordelen, CoverEnricher, kiesAudioDbArtiest;
 import 'organize.dart' show normKey;
 import 'settings.dart';
 
@@ -259,7 +259,11 @@ class AudioDbService {
   Future<({String id, String naam})?> _artiest(String wie) async {
     final l = _lijst(await _v1('search.php?s=${Uri.encodeQueryComponent(wie)}'), 'artists');
     if (l.isEmpty) return null;
-    final rij = await kiesAudioDbArtiest(wie, Map<String, dynamic>.from(l.first), mb: CoverEnricher.audioDbMbVoor, opMb: CoverEnricher.audioDbOpMb);
+    final rij = await kiesAudioDbArtiest(wie, Map<String, dynamic>.from(l.first),
+        mb: CoverEnricher.audioDbMbVoor,
+        opMb: CoverEnricher.audioDbOpMb,
+        oordeel: AudioDbOordelen.oordeel,
+        nakijken: CoverEnricher.nakijkenOpAchtergrond);
     if (rij == null) return null;
     final id = AudioDbAlbum._tekst(rij['idArtist']);
     final naam = AudioDbAlbum._tekst(rij['strArtist']);

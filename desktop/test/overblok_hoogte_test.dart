@@ -32,6 +32,7 @@ const _feiten = ArtiestFeiten(
   geboren: '29 augustus 1958 · Gary, Indiana',
   geborenJaar: 1958,
   gestorvenJaar: 2009,
+  opgerichtJaar: 1964,
   land: 'Verenigde Staten',
   label: 'Epic',
 );
@@ -67,10 +68,10 @@ Widget _omhulsel(Widget kind, {bool zonderAnimatie = false}) => MaterialApp(
       ),
     );
 
-OverBlok _blok({int secties = 6, bool metBeeld = true, Bandlagen Function(Jaarpunt, int)? beeld}) =>
+OverBlok _blok({int secties = 6, bool metBeeld = true, Bandlagen Function(Jaarpunt, int)? beeld, ArtiestFeiten feiten = _feiten}) =>
     OverBlok(
       naam: 'Michael Jackson',
-      feiten: _feiten,
+      feiten: feiten,
       jaren: _jaren,
       artikel: WikiArtikel(
         taal: 'nl',
@@ -107,12 +108,38 @@ void main() {
     await t.pumpAndSettle();
   }
 
+  // Saber, 11-11-2026, na een testronde: "Geboren 1995" bij Hooverphonic, en "Actief sinds 1958" (zijn geboortejaar) bij
+  // Rachid Taha.
+  testWidgets('een groep is opgericht, niet geboren; en "sinds" alleen herhaalt de oprichting niet', (t) async {
+    await pomp(t, _omhulsel(_blok(feiten: const ArtiestFeiten(geborenJaar: 1995, opgerichtJaar: 1995, aantalLeden: 3,
+        land: 'Sint-Niklaas, Belgium'))));
+    expect(find.text('OPGERICHT'), findsOneWidget);
+    expect(find.text('GEBOREN'), findsNothing);
+    expect(find.text('ACTIEF'), findsNothing);
+  });
+
+  testWidgets('een ontbonden groep: opgericht, en actief als periode', (t) async {
+    await pomp(t, _omhulsel(_blok(feiten: const ArtiestFeiten(opgerichtJaar: 1993, ontbonden: '2011', aantalLeden: 4))));
+    expect(find.text('OPGERICHT'), findsOneWidget);
+    expect(find.text('1993 – 2011'), findsOneWidget);
+  });
+
+  testWidgets('een persoon: geboren, en actief vanaf zijn loopbaan', (t) async {
+    await pomp(t, _omhulsel(_blok(feiten: const ArtiestFeiten(geborenJaar: 1958, opgerichtJaar: 1983, aantalLeden: 1,
+        land: 'Sig, Algeria'))));
+    expect(find.text('GEBOREN'), findsOneWidget);
+    expect(find.text('sinds 1983'), findsOneWidget);
+    expect(find.text('sinds 1958'), findsNothing);
+    expect(find.text('OVERLEDEN'), findsNothing);
+  });
+
   testWidgets('DE KERN: ingeklapt staat de feitenstrook, de eerste alinea en de uitklapper', (t) async {
     await pomp(t, _omhulsel(_blok()));
 
     expect(find.text('GEBOREN'), findsOneWidget);
     expect(find.text('ACTIEF'), findsOneWidget);
-    expect(find.text('1958 – 2009'), findsOneWidget);
+    expect(find.text('1964 – 2009'), findsOneWidget, reason: 'zijn loopbaan, niet zijn leven');
+    expect(find.text('OVERLEDEN'), findsOneWidget);
     expect(find.textContaining('Amerikaans zanger'), findsOneWidget);
     expect(find.text('Meer lezen'), findsOneWidget);
 

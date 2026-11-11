@@ -33532,6 +33532,7 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     _loadLastfmTop();
     _loadArt();
     _loadWie();
+    CoverEnricher.naamgenootGevonden.addListener(_naamgenoot);
     // Op een tv vijf tellen beeldtijden in fps.log: bouwen, tekenen en "wacht op start". Het openen
     // van een artiest kostte op de Shield na 17-10-2026 opeens 8 tot 12 beelden boven 17 ms, en
     // zonder dit onderscheid is niet te zeggen of dat de hoofddraad is of het tekenen.
@@ -33546,10 +33547,39 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
   @override
   void dispose() {
+    CoverEnricher.naamgenootGevonden.removeListener(_naamgenoot);
     _fpsKlok?.cancel();
     _fps.stop();
     _rol.dispose();
     super.dispose();
+  }
+
+  /// TheAudioDB gaf voor deze naam een naamgenoot ([CoverEnricher.kijkNaamgenootNa], Natalia, 11-11-2026): zijn foto, logo,
+  /// bio en feiten weg, en opnieuw halen — dan van Deezer, of van de juiste rij als TheAudioDB die kent. Wikipedia blijft:
+  /// die kiest zelf ([WikipediaService]).
+  void _naamgenoot() {
+    final wie = CoverEnricher.naamgenootGevonden.value;
+    if (wie == null || !mounted || artistKey(wie) != artistKey(widget.artist.name)) return;
+    setState(() {
+      _art = null;
+      _deezerFoto = null;
+      _bio = null;
+      _feiten = null;
+    });
+    unawaited(_loadArt());
+    unawaited(_herlaadAudioDb());
+  }
+
+  Future<void> _herlaadAudioDb() async {
+    final naam = widget.artist.name;
+    final enricher = CoverEnricher(context.read<AppSettings>());
+    final bio = await enricher.fetchArtistBio(naam, voorrang: true);
+    final feiten = await enricher.artistFeiten(naam, voorrang: true);
+    if (!mounted || naam != widget.artist.name) return;
+    setState(() {
+      _bio = bio;
+      _feiten = feiten;
+    });
   }
 
   DiscographyService get _disco => DiscographyService(

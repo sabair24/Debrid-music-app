@@ -761,6 +761,17 @@ class MusicBrainzService {
   /// `<appDir>/musicbrainz` en beide misduren. Dat in een tweede bestand overdoen geeft
   /// musicbrainz.org twee wachtrijen die allebei denken dat ze beleefd zijn — precies de storing
   /// die honderd regels hierboven beschreven staat.
+  /// Het nummer waaronder MusicBrainz deze artiest nu kent. Een nummer dat in een ander is opgegaan (samengevoegd), geeft
+  /// dat andere. Null als MusicBrainz niet antwoordde of hem niet kent. Dezelfde vraag als [wikidataId], dus uit dezelfde
+  /// buffer.
+  Future<String?> huidigNummer(String mbid) async {
+    final id = mbid.trim();
+    if (id.isEmpty) return null;
+    final body = await _ws('$_root/artist/$id?inc=url-rels&fmt=json');
+    final nu = (body?['id'] as String?)?.trim().toLowerCase();
+    return nu == null || nu.isEmpty ? null : nu;
+  }
+
   Future<String?> wikidataId(String mbid) async {
     final id = mbid.trim();
     if (id.isEmpty) return null;

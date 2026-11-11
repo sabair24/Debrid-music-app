@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show ValueNotifier, visibleForTesting;
 import 'package:http/http.dart' as http;
 
 import 'cachesleutel.dart';
@@ -11,6 +13,7 @@ import 'isrc.dart' show isrcJaar;
 import 'discogs.dart';
 import 'models.dart';
 import 'musicbrainz.dart';
+import 'wikipedia.dart' show WikipediaService;
 import 'organize.dart' show normKey, artistKey;
 import 'settings.dart';
 import 'paths.dart';
@@ -111,21 +114,83 @@ bool naamWoordVoorWoord(String a, String b) {
 /// De alternatieve naam bij TheAudioDB kan dit niet beslissen: die zou ook DJ Khaled goedkeuren.
 const kAudioDbOokBekendAls = <String, String>{'a touch of class': 'atc'};
 
+///
+/// **Dezelfde naam is nog geen bewijs** (Saber, 11-11-2026, na een testronde): bij "Natalia" gaf TheAudioDB alleen de Spaanse
+/// (135583, Sanlúcar de Barrameda, 1982), en de pagina van de Belgische toonde haar geboortejaar en land. Heeft de rij een
+/// MusicBrainz-nummer, dan wordt hij nu toch meteen aangenomen — de foto komt meteen — maar [nakijken] legt dat nummer op de
+/// achtergrond naast wie MusicBrainz onder die naam kent ([CoverEnricher.kijkNaamgenootNa]). Een bewezen naamgenoot
+/// ([oordeel] "naamgenoot") gaat daarna langs MusicBrainz, zoals een andere naam.
 Future<Map<String, dynamic>?> kiesAudioDbArtiest(
   String naam,
   Map<String, dynamic> rij, {
   required Future<MbArtist?> Function(String naam) mb,
   required Future<Map<String, dynamic>?> Function(String mbid) opMb,
+  Future<String?> Function(String naam, String rijId)? oordeel,
+  void Function(String naam, Map<String, dynamic> rij)? nakijken,
 }) async {
   final gevonden = '${rij['strArtist'] ?? ''}'.trim();
-  if (naamWoordVoorWoord(naam, gevonden)) return rij;
-  if (kAudioDbOokBekendAls[artistKey(naam)] == artistKey(gevonden)) return rij;
+  final rijMb = '${rij['strMusicBrainzID'] ?? ''}'.trim().toLowerCase();
+  final rijId = '${rij['idArtist'] ?? ''}'.trim();
+  if (naamWoordVoorWoord(naam, gevonden) || kAudioDbOokBekendAls[artistKey(naam)] == artistKey(gevonden)) {
+    // Zonder nummer valt er niets na te kijken.
+    if (rijMb.isEmpty || rijId.isEmpty || oordeel == null) return rij;
+    final o = await oordeel(naam, rijId);
+    if (o != kOordeelNaamgenoot) {
+      if (o == null) nakijken?.call(naam, rij);
+      return rij;
+    }
+    // Een bewezen naamgenoot: MusicBrainz beslist, zoals bij een andere naam.
+  }
   final kent = await mb(naam);
   if (kent == null) return null;
-  final rijMb = '${rij['strMusicBrainzID'] ?? ''}'.trim().toLowerCase();
   if (rijMb.isNotEmpty && rijMb == kent.mbid.toLowerCase()) return rij;
   if (artistKey(kent.name) != artistKey(naam)) return null;
   return opMb(kent.mbid);
+}
+
+/// Wat [CoverEnricher.kijkNaamgenootNa] over een rij van TheAudioDB besliste.
+const kOordeelKlopt = 'klopt';
+const kOordeelNaamgenoot = 'naamgenoot';
+
+/// De oordelen over rijen van TheAudioDB, per artiest en rij: `audiodb_oordelen.json` in de app-map. Eén keer nagekeken is
+/// genoeg; een naamgenoot blijft een naamgenoot.
+class AudioDbOordelen {
+  AudioDbOordelen._();
+  static Map<String, String>? _geheugen;
+  static String get _pad => '$appDir${Platform.pathSeparator}audiodb_oordelen.json';
+  static String _sleutel(String naam, String rijId) => '${artistKey(naam)}|$rijId';
+
+  static Future<Map<String, String>> _lees() async {
+    final al = _geheugen;
+    if (al != null) return al;
+    final uit = <String, String>{};
+    try {
+      final f = File(_pad);
+      if (await f.exists()) {
+        final j = jsonDecode(await f.readAsString());
+        if (j is Map) {
+          for (final e in j.entries) {
+            if (e.value is String) uit['${e.key}'] = e.value as String;
+          }
+        }
+      }
+    } catch (_) {/* onleesbaar: dan opnieuw nakijken */}
+    return _geheugen = uit;
+  }
+
+  /// [kOordeelKlopt], [kOordeelNaamgenoot], of null als deze rij nog niet nagekeken is.
+  static Future<String?> oordeel(String naam, String rijId) async => (await _lees())[_sleutel(naam, rijId)];
+
+  static Future<void> zet(String naam, String rijId, String oordeel) async {
+    final m = await _lees();
+    m[_sleutel(naam, rijId)] = oordeel;
+    try {
+      await File(_pad).writeAsString(jsonEncode(m));
+    } catch (_) {/* niet te bewaren: dan wordt hij een volgende keer opnieuw nagekeken */}
+  }
+
+  @visibleForTesting
+  static void vergeet() => _geheugen = null;
 }
 
 /// Wat er onder de naam van een naamgenoot in de buffers staat, gaat één keer weg (3.9.721). De nieuwe keuze
@@ -141,22 +206,28 @@ Future<void> ruimAudioDbNaamgenotenOp(String map) async {
   try {
     if (await merk.exists() && (await merk.readAsString()).trim() == '$kAudioDbOpruimVersie') return;
     for (final naam in kAudioDbNaamgenoten) {
-      final h = fnv1a(naam.toLowerCase());
-      for (final pad in [
-        'artistart$sep$h.json',
-        'artistart$sep$h.none',
-        for (final soort in const ['logo', 'backdrop', 'thumb', 'cutout', 'clearart']) 'artistart$sep${h}_$soort.img',
-        'bios$sep$h.txt',
-        'bios$sep$h.geen',
-        'artistfeiten$sep$h.json',
-        'artists$sep$h.jpg',
-      ]) {
-        final f = File('$map$sep$pad');
-        if (await f.exists()) await f.delete();
-      }
+      await ruimAudioDbNaamOp(map, naam);
     }
     await merk.writeAsString('$kAudioDbOpruimVersie');
   } catch (_) {/* dan de volgende start opnieuw: het merkje staat er niet */}
+}
+
+/// Alles wat TheAudioDB over [naam] in de buffers zette: foto's, logo, bio, feiten.
+Future<void> ruimAudioDbNaamOp(String map, String naam) async {
+  final sep = Platform.pathSeparator;
+  final h = fnv1a(naam.toLowerCase());
+  for (final pad in [
+    'artistart$sep$h.json',
+    'artistart$sep$h.none',
+    for (final soort in const ['logo', 'backdrop', 'thumb', 'cutout', 'clearart']) 'artistart$sep${h}_$soort.img',
+    'bios$sep$h.txt',
+    'bios$sep$h.geen',
+    'artistfeiten$sep$h.json',
+    'artists$sep$h.jpg',
+  ]) {
+    final f = File('$map$sep$pad');
+    if (await f.exists()) await f.delete();
+  }
 }
 
 /// Wie een artiest IS in feiten: geboren, opgericht, land, label.
@@ -211,13 +282,23 @@ class ArtiestFeiten {
   /// voor een persoon en is voor een groep meestal simpelweg afwezig.
   bool get isPersoon => (aantalLeden ?? 1) <= 1;
 
-  /// "1958 – 2009", "sinds 1993", "1993 – 2011" — of null als er niets te zeggen valt.
+  /// De LOOPBAAN: "1964 – 2009", "sinds 2004", "1993 – 2011" — of null als er niets te zeggen valt.
   ///
-  /// Bij een GROEP telt het jaar van oprichting; bij een PERSOON het geboortejaar. Andersom stond
-  /// er bij Michael Jackson "1964 – 2009" — het jaar dat The Jackson 5 begon, onder een label dat
-  /// over hem gaat.
+  /// Bij een GROEP van de oprichting (of het jaar dat TheAudioDB bij een groep als "geboren" geeft: dat is daar hetzelfde)
+  /// tot de ontbinding. Bij een PERSOON van het begin van de loopbaan (`intFormedYear`) tot het overlijden, en nooit het
+  /// geboortejaar: dat staat al onder "geboren". Saber, 11-11-2026, na een testronde: bij Rachid Taha stond "Actief sinds 1958"
+  /// (zijn geboortejaar; zijn loopbaan begon in 1983) en bij Milow "sinds 1981" (2004). Tot dan telde bij een persoon het
+  /// geboortejaar, zodat Michael Jackson niet bij The Jackson 5 begon; nu is dat juist zijn loopbaan: "1964 – 2009".
+  ///
+  /// Een begin van de loopbaan dat niet ná de geboorte ligt, telt niet: TheAudioDB vult dat veld soms met het geboortejaar.
   String? get actief {
-    final van = isPersoon ? (geborenJaar ?? opgerichtJaar) : (opgerichtJaar ?? geborenJaar);
+    final int? van;
+    if (isPersoon) {
+      final begin = opgerichtJaar, geboorte = geborenJaar;
+      van = begin == null || (geboorte != null && begin <= geboorte) ? null : begin;
+    } else {
+      van = opgerichtJaar ?? geborenJaar;
+    }
     if (van == null) return null;
     final tot = gestorvenJaar ?? _jaarUit(ontbonden);
     return tot == null ? 'sinds $van' : '$van – $tot';
@@ -1779,7 +1860,74 @@ class CoverEnricher {
   /// De rij die bij deze artiest hoort, uit wat TheAudioDB op zijn naam teruggaf. Zie [kiesAudioDbArtiest].
   static Future<Map<String, dynamic>?> _audioDbDezeArtiest(String naam, List<dynamic> rijen) async {
     if (rijen.isEmpty) return null;
-    return kiesAudioDbArtiest(naam, rijen.first as Map<String, dynamic>, mb: audioDbMbVoor, opMb: audioDbOpMb);
+    return kiesAudioDbArtiest(naam, rijen.first as Map<String, dynamic>,
+        mb: audioDbMbVoor, opMb: audioDbOpMb, oordeel: AudioDbOordelen.oordeel, nakijken: nakijkenOpAchtergrond);
+  }
+
+  /// [kijkNaamgenootNa] zonder te wachten: de foto en de feiten komen meteen.
+  static void nakijkenOpAchtergrond(String naam, Map<String, dynamic> rij) => unawaited(kijkNaamgenootNa(naam, rij));
+
+  /// Een artiest wiens rij bij TheAudioDB een naamgenoot bleek: de artiestpagina die open staat, laat zijn foto en feiten
+  /// vallen en haalt ze opnieuw — dan van Deezer, of van de juiste rij als TheAudioDB die kent.
+  static final naamgenootGevonden = ValueNotifier<String?>(null);
+
+  static final _nakijkLoopt = <String>{};
+
+  /// Is [rij], die TheAudioDB op [naam] gaf en die al getoond wordt, wel deze artiest? Een naamgenoot alleen als TWEE bronnen
+  /// het oneens zijn met het MusicBrainz-nummer van de rij:
+  ///  1. MusicBrainz kent onder precies die naam iemand anders ([mb]) — en het is geen samengevoegd nummer ([huidigMb]), en
+  ///     TheAudioDB kent die ander niet als dezelfde rij ([opMb]);
+  ///  2. het Wikidata-item dat Wikipedia voor die naam kiest, draagt ook een ander nummer ([wikidata]).
+  ///
+  /// **Waarom twee.** Gemeten op 11-11-2026 over de 475 artiesten uit de bibliotheek met dezelfde naam bij TheAudioDB: 465
+  /// hetzelfde nummer, 8 anders — en bij Eve, Mya en Jordy koos MusicBrainz zélf een naamgenoot (een Japanse zangeres, een
+  /// Argentijns duo, een zanger uit Los Angeles). Met MusicBrainz alleen als rechter waren hun juiste foto en feiten
+  /// weggegooid. Bij Natalia zijn beide het oneens: de Belgische, en TheAudioDB kent alleen de Spaanse.
+  ///
+  /// Het oordeel wordt onthouden ([AudioDbOordelen]); bij een naamgenoot gaan de buffers weg en hoort de open pagina het
+  /// ([naamgenootGevonden]). Zwijgt een bron, dan een andere keer.
+  static Future<String?> kijkNaamgenootNa(
+    String naam,
+    Map<String, dynamic> rij, {
+    Future<MbArtist?> Function(String naam)? mb,
+    Future<Map<String, dynamic>?> Function(String mbid)? opMb,
+    Future<String?> Function(String mbid)? huidigMb,
+    Future<List<String>?> Function(String naam)? wikidata,
+  }) async {
+    final rijMb = '${rij['strMusicBrainzID'] ?? ''}'.trim().toLowerCase();
+    final rijId = '${rij['idArtist'] ?? ''}'.trim();
+    if (rijMb.isEmpty || rijId.isEmpty) return null;
+    final sleutel = '${artistKey(naam)}|$rijId';
+    if (!_nakijkLoopt.add(sleutel)) return null;
+    try {
+      final kent = await (mb ?? audioDbMbVoor)(naam);
+      var oordeel = kOordeelKlopt;
+      // MusicBrainz moet iemand kennen met PRECIES die naam: "Betty Everett" bij "Betty" bewijst niets.
+      if (kent != null && kent.mbid.toLowerCase() != rijMb && artistKey(kent.name) == artistKey(naam)) {
+        final nu = await (huidigMb ?? MusicBrainzService().huidigNummer)(rijMb);
+        final echt = nu == kent.mbid.toLowerCase() ? null : await (opMb ?? audioDbOpMb)(kent.mbid);
+        final zelfde = nu == kent.mbid.toLowerCase() || '${echt?['idArtist'] ?? ''}'.trim() == rijId;
+        if (!zelfde) {
+          final nummers = await (wikidata ?? WikipediaService().musicBrainzNummersVoor)(naam);
+          if (nummers == null) return null; // Wikimedia zweeg: een andere keer
+          if (nummers.isNotEmpty && !nummers.contains(rijMb)) oordeel = kOordeelNaamgenoot;
+        }
+      }
+      await AudioDbOordelen.zet(naam, rijId, oordeel);
+      if (oordeel == kOordeelNaamgenoot) {
+        await ruimAudioDbNaamOp(appDir, naam);
+        final k = naam.toLowerCase();
+        _artiestGelezen.remove(k);
+        _portretGelezen.remove(k);
+        naamgenootGevonden.value = null;
+        naamgenootGevonden.value = naam;
+      }
+      return oordeel;
+    } catch (_) {
+      return null; // MusicBrainz of TheAudioDB zweeg: een volgende keer opnieuw
+    } finally {
+      _nakijkLoopt.remove(sleutel);
+    }
   }
 
   /// Wie er bij MusicBrainz zo heet. `MusicBrainzService` slikt fouten; daarom de teller, zodat "geen antwoord" doorgooit.
