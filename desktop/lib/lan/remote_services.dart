@@ -523,11 +523,18 @@ class RemoteDownloadManager extends DownloadManager {
   /// peilingen door veranderen, en dat kan een periodieke klok niet.
   void _planPeiling() {
     _poll?.cancel();
-    _poll = Timer(peilTempo(_stilteRondes), () {
+    final tempo = peilTempo(_stilteRondes);
+    _peilTempoNu = tempo;
+    _poll = Timer(tempo, () {
       unawaited(refresh());
       if (_poll != null) _planPeiling();
     });
   }
+
+  /// Met welk tempo de klok nu loopt. Voor de toets.
+  Duration? _peilTempoNu;
+  @visibleForTesting
+  Duration? get peilTempoNu => _peilTempoNu;
 
   Future<void> refresh() async {
     try {
@@ -558,7 +565,12 @@ class RemoteDownloadManager extends DownloadManager {
     // Voer voor [peilTempo]. Loopt er iets, dan gaat de teller op nul en peilt de app weer snel; is
     // er niets te zien, dan telt de stilte op en wordt de klok trager. Een NIEUWE download hoeft
     // daar niet op te wachten: `enqueue` roept zelf `refresh()` aan zodra hij verstuurd is.
+    final traag = peilTempo(_stilteRondes) > peilTempo(0);
     _stilteRondes = jobs.any((j) => j.busy) ? 0 : _stilteRondes + 1;
+    // **De klok die al liep, opnieuw zetten.** De teller ging hier wel op nul, maar de peiling die er al stond liep nog op
+    // het oude tempo — na een rustige periode tot dertig seconden. Gemeten op 11-11-2026 met ⬇ Ya Rayah (Rachid Taha): de
+    // pc had hem na 10,8 s in de bibliotheek, de gsm toonde 22 s lang de zandloper.
+    if (traag && _stilteRondes == 0 && _poll != null) _planPeiling();
     _merkLanding();
     // Only notify when something actually moved. Rebuilding the downloads screen on every tick
     // makes a list that will not hold still under a finger.
