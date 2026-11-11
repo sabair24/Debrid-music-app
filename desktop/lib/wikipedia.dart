@@ -395,6 +395,31 @@ class WikipediaService {
   /// voorbij, en elke keer drie verzoeken op een rij van één per seconde.
   final _oordeel = <String, bool>{};
 
+  /// De MusicBrainz-nummers (P434) van een Wikidata-item, klein geschreven. Leeg als het er geen heeft; null als Wikidata
+  /// niet antwoordde.
+  Future<List<String>?> musicBrainzNummers(String q) async {
+    final j = await _haal(Uri.parse('https://www.wikidata.org/w/api.php'
+        '?action=wbgetclaims&entity=${Uri.encodeQueryComponent(q)}&property=P434&format=json'));
+    if (j == null) return null;
+    return [
+      for (final r in ((j['claims'] as Map?)?['P434'] as List?) ?? const [])
+        if ((((r as Map?)?['mainsnak'] as Map?)?['datavalue'] as Map?)?['value'] case final String v) v.trim().toLowerCase(),
+    ];
+  }
+
+  /// Wie Wikipedia onder [naam] verstaat, als MusicBrainz-nummers: het Wikidata-item van het artikel (zoals [titelVoor] het
+  /// koos). Leeg als er geen artikel is; null als Wikimedia niet antwoordde.
+  Future<List<String>?> musicBrainzNummersVoor(String naam) async {
+    var q = await wikidataVoor(naam);
+    if (q == null) {
+      final t = await titelVoor(naam);
+      if (t == null) return _haperde ? null : const [];
+      q = await wikidataVoor(naam);
+    }
+    if (q == null) return const [];
+    return musicBrainzNummers(q);
+  }
+
   /// [_isArtiest] voor een artikel: via het Wikidata-nummer dat bij de pagina hoort.
   Future<bool?> _artikelIsArtiest(String taal, String titel) async {
     final j = await _haal(Uri.parse('https://$taal.wikipedia.org/w/api.php'

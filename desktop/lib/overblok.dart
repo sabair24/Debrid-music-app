@@ -477,12 +477,20 @@ class _FeitenStrook extends StatelessWidget {
     // 10-09-2026: bij Michael Jackson stond er "OPGERICHT 1964", terwijl de app 1958 gewoon in
     // huis had. `strBorn` was leeg maar `intBornYear` niet, en de strook keek alleen naar die
     // eerste. Voor iemand met één lid leest "opgericht" bovendien als een band.
-    final geboren = feiten.geboren ?? (feiten.geborenJaar == null ? null : '${feiten.geborenJaar}');
+    //
+    // **Een groep is niet geboren** (Saber, 11-11-2026, na een testronde: "Geboren 1995" bij Hooverphonic). Bij een groep
+    // staat er "opgericht", en "actief" alleen als hij ontbonden is — "sinds 1995" zegt dan niets meer dan "opgericht 1995".
+    // Een persoon krijgt naast "geboren" ook "overleden", en "actief" is zijn loopbaan ([ArtiestFeiten.actief]).
+    final persoon = feiten.isPersoon;
+    final geboren = !persoon ? null : feiten.geboren ?? (feiten.geborenJaar == null ? null : '${feiten.geborenJaar}');
+    final opgericht = persoon ? null : feiten.opgerichtJaar ?? feiten.geborenJaar;
+    final actief = feiten.actief;
     final paren = <(String, String)>[
       if (geboren != null) ('GEBOREN', geboren),
-      if (feiten.opgerichtJaar case final j? when geboren == null) ('OPGERICHT', '$j'),
+      if (persoon && feiten.gestorvenJaar != null) ('OVERLEDEN', '${feiten.gestorvenJaar}'),
+      if (opgericht != null) ('OPGERICHT', '$opgericht'),
       if (feiten.land case final l?) ('LAND', l),
-      if (feiten.actief case final a?) ('ACTIEF', a),
+      if (actief != null && (persoon || actief.contains('–'))) ('ACTIEF', actief),
       if (feiten.label case final l?) ('LABEL', l),
     ];
     if (paren.isEmpty) return const SizedBox.shrink();

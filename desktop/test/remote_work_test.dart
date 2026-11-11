@@ -524,6 +524,21 @@ void main() {
       expect(ververst, 1, reason: 'dezelfde landing één keer');
     });
 
+    test('DE KLOK: na een rustige periode peilt het toestel weer om de twee seconden zodra er iets loopt', () async {
+      // 11-11-2026, ⬇ Ya Rayah: de pc had hem na 10,8 s in de bibliotheek, de gsm toonde 22 s lang de zandloper — de
+      // peiling die er al stond, liep nog op het tempo van de stilte.
+      final dev = RemoteDownloadManager(online, soulseek, scratch.path, () async {}, () => endpoint);
+      addTearDown(dev.dispose);
+      for (var i = 0; i < 25; i++) {
+        await dev.refresh(); // niets te doen: de klok wordt trager
+      }
+      dev.startWatching();
+      expect(dev.peilTempoNu, const Duration(seconds: 30));
+      downloads.jobs.add(DownloadJob('Rachid Taha — Ya Rayah', key: 'k3')..status = 'waiting');
+      await dev.refresh(); // zoals enqueue dat doet
+      expect(dev.peilTempoNu, const Duration(seconds: 2), reason: 'de klok die al liep, is opnieuw gezet');
+    });
+
     test('wat er bij de eerste peiling al stond, is niet net binnengekomen', () async {
       var ververst = 0;
       final dev = RemoteDownloadManager(online, soulseek, scratch.path, () async => ververst++, () => endpoint);
