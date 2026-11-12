@@ -43,6 +43,7 @@ class _NepBron implements VinylBron {
       : _persingen = persingen ?? _spice;
   int? id;
   List<Map<String, dynamic>>? _persingen;
+  bool volledig = true;
   final Map<int, List<String>> nummers;
   int persingVragen = 0;
   final List<int> plaatVragen = [];
@@ -51,9 +52,10 @@ class _NepBron implements VinylBron {
   Future<int?> discogsId(String artiest) async => id;
 
   @override
-  Future<List<Map<String, dynamic>>?> persingen(int discogsId) async {
+  Future<({List<Map<String, dynamic>> rijen, bool volledig})?> persingen(int discogsId) async {
     persingVragen++;
-    return _persingen;
+    final r = _persingen;
+    return r == null ? null : (rijen: r, volledig: volledig);
   }
 
   @override
@@ -166,21 +168,41 @@ void main() {
   });
 
   group('de dienst', () {
-    test('DE KERN: eerst de platen, dan de tracklijsten; een week uit het geheugen', () async {
+    test('DE KERN: een bezoek haalt de persingen; een zoektocht de tracklijsten, plaat voor plaat tot het nummer er is',
+        () async {
       final d = VinylBestaan();
-      final bron = _NepBron(nummers: {10: ['Wannabe', 'Love Thing'], 40: ['Spice Up Your Life']});
-      VinylKennis? voorlopig;
-      final k = await d.voor('Spice Girls', bron, opPlaten: (v) => voorlopig = v);
-      expect(voorlopig!.platen.every((p) => p.nummers == null), isTrue, reason: 'de sectie hoeft niet te wachten');
+      final bron = _NepBron(nummers: _alleNummers);
+      final k = await d.voor('Spice Girls', bron);
       expect(k!.platen, hasLength(4));
-      expect(d.bestaatOpVinyl('Spice Girls', 'Love Thing'), isTrue);
-      expect(d.bestaatOpVinyl('spice girls', 'Spice Up Your Life (Radio Edit)'), isTrue, reason: 'naam zonder hoofdletters');
+      expect(bron.plaatVragen, isEmpty, reason: 'de artiestpagina vraagt geen tracklijsten');
+      expect(d.bestaatOpVinyl('Spice Girls', 'Love Thing'), isNull, reason: 'nog niet bekend');
+      expect(await d.bestaatMetNummers('Spice Girls', 'Love Thing', bron), isTrue);
+      expect(bron.plaatVragen, [10], reason: 'de LP eerst, en stoppen zodra hij gevonden is');
+      expect(await d.bestaatMetNummers('spice girls', 'Spice Up Your Life (Radio Edit)', bron), isTrue,
+          reason: 'naam zonder hoofdletters; de tweede LP');
+      expect(bron.plaatVragen, [10, 40]);
+      expect(await d.bestaatMetNummers('Spice Girls', 'Viva Forever', bron), isFalse,
+          reason: 'alle tracklijsten opgehaald, op geen enkele plaat');
+      expect(bron.plaatVragen, [10, 40, 20, 30]);
+      expect(d.bestaatOpVinyl('Spice Girls', 'Viva Forever'), isFalse, reason: 'en nu bekend zonder te vragen');
       await d.voor('Spice Girls', bron);
       expect(bron.persingVragen, 1, reason: 'binnen de week niet opnieuw');
       await d.voor('Spice Girls', bron, vers: true);
       expect(bron.persingVragen, 2);
-      expect(bron.plaatVragen.where((m) => m == 10), hasLength(1),
-          reason: 'een tracklijst die er al is, wordt niet opnieuw gevraagd');
+      expect(d.bestaatOpVinyl('Spice Girls', 'Love Thing'), isTrue,
+          reason: 'een tracklijst die er al was, blijft na het verversen');
+      expect(bron.plaatVragen, hasLength(4));
+    });
+
+    test('meer persingen dan de app ophaalt (The Beatles): wat er staat klopt, maar nooit een nee', () async {
+      final d = VinylBestaan();
+      final bron = _NepBron(nummers: _alleNummers)..volledig = false;
+      await d.voor('Spice Girls', bron);
+      expect(await d.bestaatMetNummers('Spice Girls', 'Love Thing', bron), isTrue);
+      expect(await d.bestaatMetNummers('Spice Girls', 'Viva Forever', bron), isNull,
+          reason: 'die kan op een plaat staan die de app niet ophaalde');
+      expect(d.bekend('Spice Girls')!.volledig, isFalse);
+      expect(VinylKennis.uitJson(d.bekend('Spice Girls')!.toJson())!.volledig, isFalse, reason: 'ook na bewaren');
     });
 
     test('ouder dan een week: opnieuw bij Discogs', () async {
@@ -220,7 +242,9 @@ void main() {
       addTearDown(() => map.delete(recursive: true));
       final f = File('${map.path}/vinyl_bestaan.json');
       final d = VinylBestaan(bestand: f);
-      await d.voor('Spice Girls', _NepBron(nummers: {10: ['Love Thing']}));
+      final bron = _NepBron(nummers: {10: ['Love Thing']});
+      await d.voor('Spice Girls', bron);
+      await d.bestaatMetNummers('Spice Girls', 'Love Thing', bron);
       await d.bewaarNu();
       final terug = VinylBestaan(bestand: f);
       await terug.laad();
@@ -232,7 +256,9 @@ void main() {
   group('zoeken', () {
     Future<VinylBestaan> metSpice() async {
       final d = VinylBestaan();
-      await d.voor('Spice Girls', _NepBron(nummers: _alleNummers));
+      final bron = _NepBron(nummers: _alleNummers);
+      await d.voor('Spice Girls', bron);
+      await d.bestaatMetNummers('Spice Girls', 'Viva Forever', bron); // haalt elke tracklijst
       return d;
     }
 
@@ -294,6 +320,7 @@ void main() {
     final dg = _bron('lib/discogs.dart');
     expect(dg, contains("'https://api.discogs.com/database/search?artist_id=\$artistId&format=Vinyl&type=release&per_page=100&page=\$p',\n          vers: true);"));
     expect(dg, contains('    final cached = vers ? null : await _readCache(url);'));
+    expect(dg, contains('      if (p == maxPaginas) volledig = false;'), reason: 'een halve lijst zegt nooit nee');
     final ds = _bron('lib/discography_service.dart');
     expect(ds, contains('      _svc.discogs.available ? _svc.discogsIdVoor(artiest, bekendeMbid: _mbid) : null;'));
     final m = _bron('lib/main.dart');

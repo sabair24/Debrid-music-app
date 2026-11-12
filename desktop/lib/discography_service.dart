@@ -421,7 +421,8 @@ class _DiscogsVinylBron implements VinylBron {
       _svc.discogs.available ? _svc.discogsIdVoor(artiest, bekendeMbid: _mbid) : null;
 
   @override
-  Future<List<Map<String, dynamic>>?> persingen(int discogsId) => _svc.discogs.vinylPersingen(discogsId);
+  Future<({List<Map<String, dynamic>> rijen, bool volledig})?> persingen(int discogsId) =>
+      _svc.discogs.vinylPersingen(discogsId);
 
   @override
   Future<Map<String, dynamic>?> plaat({int? master, int? release}) =>

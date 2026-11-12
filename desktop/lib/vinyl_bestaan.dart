@@ -6,9 +6,11 @@
 ///
 /// **Waar het vandaan komt.** Eén zoekopdracht bij Discogs op het nummer van de artiest (`artist_id`, dus geen
 /// naamgenoten: op naam kwam bij "Celeste" ook een Franse metalband mee) en `format=Vinyl`, honderd persingen per
-/// pagina. Gemeten 12-11-2026: Spice Girls 111 persingen in twee pagina's, Milow 11 in één. MusicBrainz kent veel
-/// minder vinyl (17 bij Spice Girls) — Discogs is hier de bron. Daarna per plaat één tracklijst (`/masters/{id}`),
-/// zodat de app per NUMMER weet of het op vinyl bestaat.
+/// pagina. Gemeten 12-11-2026: Spice Girls 111 persingen in twee pagina's, Milow 11 in één, Michael Jackson 3644 in 37.
+/// MusicBrainz kent veel minder vinyl (17 bij Spice Girls) — Discogs is hier de bron. Per NUMMER weten of het op vinyl
+/// bestaat kost een tracklijst per plaat (`/masters/{id}`); die haalt de app pas als een vinylzoektocht het vraagt, en
+/// dan plaat voor plaat tot het nummer gevonden is ([VinylBestaan.bestaatMetNummers]) — een bezoek aan de
+/// artiestpagina kost zo alleen de persingen.
 ///
 /// **Zijn keuzes** (zie het geheugen, vinyl-sectie-keuzes-12-11):
 ///  * bootlegs ("Unofficial Release") tellen nergens mee;
@@ -32,9 +34,10 @@ import 'vinyl.dart' show isVinylRip;
 /// Zo lang geldt wat Discogs zei; daarna kijkt de app bij het volgende bezoek of de volgende vinylzoektocht opnieuw.
 const Duration kVinylVers = Duration(days: 7);
 
-/// Hoogstens zoveel pagina's van honderd persingen. Elvis of The Beatles hebben er duizenden; voor "bestaat er vinyl"
-/// en de sectie is dit ruim genoeg, en elke pagina is een vraag uit een budget van zestig per minuut.
-const int kVinylPaginas = 10;
+/// Hoogstens zoveel pagina's van honderd persingen: Michael Jackson past erin (37). Wie meer heeft (The Beatles, Elvis),
+/// krijgt een onvolledige lijst ([VinylKennis.volledig]), en daaruit volgt nooit een nee. Elke pagina is een vraag uit
+/// een budget van zestig per minuut, en dat één keer per week.
+const int kVinylPaginas = 40;
 
 /// LP of single (7", 12", 10", EP, maxi).
 enum VinylVorm { lp, single }
@@ -132,10 +135,13 @@ class VinylPlaat {
 /// Wat Discogs over het vinyl van één artiest zei, en wanneer.
 @immutable
 class VinylKennis {
-  const VinylKennis({required this.discogsId, required this.gemetenMs, required this.platen});
+  const VinylKennis({required this.discogsId, required this.gemetenMs, required this.platen, this.volledig = true});
 
   final int discogsId;
   final int gemetenMs;
+
+  /// Alle persingen binnen ([kVinylPaginas]). Anders kan een plaat ontbreken, en zegt [bestaat] nooit nee.
+  final bool volledig;
 
   /// Alle platen met minstens één officiële persing of promo. Bootlegs staan er niet in.
   final List<VinylPlaat> platen;
@@ -171,16 +177,24 @@ class VinylKennis {
       }
       if (n.any((t) => vinylNummerSleutel(t) == sleutel)) return true;
     }
-    return onbekend ? null : false;
+    return onbekend || !volledig ? null : false;
   }
 
-  Map<String, dynamic> toJson() => {'id': discogsId, 'ms': gemetenMs, 'platen': [for (final p in platen) p.toJson()]};
+  VinylKennis metPlaat(int i, VinylPlaat p) =>
+      VinylKennis(discogsId: discogsId, gemetenMs: gemetenMs, volledig: volledig, platen: [...platen]..[i] = p);
+
+  Map<String, dynamic> toJson() => {
+        'id': discogsId,
+        'ms': gemetenMs,
+        if (!volledig) 'vol': false,
+        'platen': [for (final p in platen) p.toJson()]
+      };
 
   static VinylKennis? uitJson(Object? j) {
     if (j is! Map) return null;
     final id = j['id'], ms = j['ms'], platen = j['platen'];
     if (id is! int || ms is! int || platen is! List) return null;
-    return VinylKennis(discogsId: id, gemetenMs: ms, platen: [
+    return VinylKennis(discogsId: id, gemetenMs: ms, volledig: j['vol'] != false, platen: [
       for (final p in platen)
         if (VinylPlaat.uitJson(p) case final v?) v
     ]);
@@ -308,8 +322,8 @@ abstract class VinylBron {
   /// Het Discogs-nummer van de artiest, of null als Discogs hem niet kent.
   Future<int?> discogsId(String artiest);
 
-  /// De vinylpersingen van [discogsId]; null als Discogs niet (volledig) antwoordde.
-  Future<List<Map<String, dynamic>>?> persingen(int discogsId);
+  /// De vinylpersingen van [discogsId], en of het ze allemaal zijn ([kVinylPaginas]); null als Discogs niet antwoordde.
+  Future<({List<Map<String, dynamic>> rijen, bool volledig})?> persingen(int discogsId);
 
   /// De tracklijst van een plaat; null als Discogs niet antwoordde.
   Future<Map<String, dynamic>?> plaat({int? master, int? release});
@@ -335,18 +349,16 @@ class VinylBestaan extends ChangeNotifier {
   /// Bestaat dit nummer op vinyl? Uit wat er bekend is, zonder te vragen; null als de app het niet weet.
   bool? bestaatOpVinyl(String artiest, String titel) => bekend(artiest)?.bestaat(titel);
 
-  /// Wat Discogs over [artiest] weet: uit het geheugen als het minder dan een week oud is, anders opnieuw gevraagd.
-  /// [opPlaten] krijgt de platen al vóór de tracklijsten binnen zijn (die kosten één vraag per plaat). Null als Discogs
-  /// het niet weet — dan blijft wat er was staan.
-  Future<VinylKennis?> voor(String artiest, VinylBron bron,
-      {bool vers = false, void Function(VinylKennis voorlopig)? opPlaten}) async {
+  /// Wat Discogs over [artiest] weet: uit het geheugen als het minder dan een week oud is, anders opnieuw gevraagd (de
+  /// persingen; tracklijsten die er al waren blijven). Null als Discogs het niet weet — dan blijft wat er was staan.
+  Future<VinylKennis?> voor(String artiest, VinylBron bron, {bool vers = false}) async {
     await laad();
     final k = _sleutel(artiest);
     final al = _kennis[k];
     if (!vers && al != null && al.isVers) return al;
     final bezig = _onderweg[k];
     if (bezig != null) return bezig;
-    final f = _haal(artiest, bron, al, opPlaten);
+    final f = _haal(artiest, bron, al);
     _onderweg[k] = f;
     try {
       return await f;
@@ -355,37 +367,54 @@ class VinylBestaan extends ChangeNotifier {
     }
   }
 
-  Future<VinylKennis?> _haal(
-      String artiest, VinylBron bron, VinylKennis? oud, void Function(VinylKennis)? opPlaten) async {
+  Future<VinylKennis?> _haal(String artiest, VinylBron bron, VinylKennis? oud) async {
     try {
       final id = oud?.discogsId ?? await bron.discogsId(artiest);
       if (id == null) return oud;
-      final rijen = await bron.persingen(id);
-      if (rijen == null) return oud;
-      var platen = vinylPlatenUit(rijen);
+      final uit = await bron.persingen(id);
+      if (uit == null) return oud;
       // Wat er vorige keer al aan tracklijsten was, hoeft niet opnieuw: een plaat verandert zijn nummers niet.
       final eerder = {for (final p in oud?.platen ?? const <VinylPlaat>[]) '${p.master}|${p.release}': p.nummers};
-      platen = [for (final p in platen) p.metNummers(eerder['${p.master}|${p.release}'])];
-      final nu = DateTime.now().millisecondsSinceEpoch;
-      opPlaten?.call(VinylKennis(discogsId: id, gemetenMs: nu, platen: platen));
-      final uit = <VinylPlaat>[];
-      for (final p in platen) {
-        if (p.nummers != null) {
-          uit.add(p);
-          continue;
-        }
-        final body = await bron.plaat(master: p.master, release: p.release);
-        uit.add(body == null ? p : p.metNummers(tracklijstUit(body)));
-      }
-      final kennis = VinylKennis(discogsId: id, gemetenMs: nu, platen: uit);
-      _kennis[_sleutel(artiest)] = kennis;
-      notifyListeners();
-      _bewaarStraks();
+      final kennis = VinylKennis(
+          discogsId: id,
+          gemetenMs: DateTime.now().millisecondsSinceEpoch,
+          volledig: uit.volledig,
+          platen: [for (final p in vinylPlatenUit(uit.rijen)) p.metNummers(eerder['${p.master}|${p.release}'])]);
+      _zet(artiest, kennis);
       return kennis;
     } catch (e) {
       debugPrint('Vinyl van $artiest niet opgehaald: $e');
       return oud;
     }
+  }
+
+  void _zet(String artiest, VinylKennis k) {
+    _kennis[_sleutel(artiest)] = k;
+    notifyListeners();
+    _bewaarStraks();
+  }
+
+  /// Bestaat [titel] op vinyl, en haal daarvoor de tracklijsten die nog ontbreken — plaat voor plaat, LP's eerst (daar
+  /// staat een nummer het vaakst), en stoppen zodra het gevonden is. Alleen als alle tracklijsten er zijn, kan het
+  /// antwoord nee zijn. Null: Discogs weet het niet.
+  Future<bool?> bestaatMetNummers(String artiest, String titel, VinylBron bron) async {
+    var k = bekend(artiest);
+    if (k == null) return null;
+    final eerst = k.bestaat(titel);
+    if (eerst != null) return eerst;
+    final volgorde = [for (var i = 0; i < k.platen.length; i++) if (k.platen[i].nummers == null) i]
+      ..sort((a, b) => k!.platen[a].vorm.index.compareTo(k.platen[b].vorm.index));
+    final sleutel = vinylNummerSleutel(titel);
+    for (final i in volgorde) {
+      final p = k!.platen[i];
+      final body = await bron.plaat(master: p.master, release: p.release);
+      if (body == null) continue; // dan blijft die plaat onbekend, en het antwoord hoogstens null
+      final n = tracklijstUit(body);
+      k = k.metPlaat(i, p.metNummers(n));
+      _zet(artiest, k);
+      if (n.any((t) => vinylNummerSleutel(t) == sleutel)) return true;
+    }
+    return k!.bestaat(titel);
   }
 
   /// Inlezen, één keer.
@@ -439,12 +468,13 @@ VinylBron Function()? vinylBronVoorZoeken;
 Future<bool?> vinylVoorNummer(String artiest, String titel, {VinylBestaan? dienst}) async {
   final d = dienst ?? vinylBestaan;
   final maak = vinylBronVoorZoeken;
-  if (maak != null) {
-    await d.voor(artiest, maak());
-  } else {
+  if (maak == null) {
     await d.laad();
+    return d.bestaatOpVinyl(artiest, titel);
   }
-  return d.bestaatOpVinyl(artiest, titel);
+  final bron = maak();
+  await d.voor(artiest, bron);
+  return d.bestaatMetNummers(artiest, titel, bron);
 }
 
 /// Wat een AUTOMATISCHE keuze uit [kandidaten] laat vallen: een vinylrip van een nummer dat volgens Discogs nooit op

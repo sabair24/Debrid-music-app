@@ -1328,11 +1328,13 @@ class DiscogsService {
   }
 
   /// Alle vinylpersingen van deze artiest (vinyl_bestaan.dart): op zijn nummer, dus zonder naamgenoten, honderd per
-  /// pagina, vers. Null als Discogs niet elke pagina gaf — een halve lijst zou platen als "niet op vinyl" laten
-  /// lijken.
-  Future<List<Map<String, dynamic>>?> vinylPersingen(int artistId, {int maxPaginas = kVinylPaginas}) async {
+  /// pagina, vers. Null als Discogs een pagina niet gaf — een halve lijst zou platen als "niet op vinyl" laten lijken.
+  /// [volledig] onwaar: er zijn meer dan [maxPaginas] pagina's (The Beatles), en dan zegt de app nooit nee.
+  Future<({List<Map<String, dynamic>> rijen, bool volledig})?> vinylPersingen(int artistId,
+      {int maxPaginas = kVinylPaginas}) async {
     if (!available) return null;
     final uit = <Map<String, dynamic>>[];
+    var volledig = true;
     for (var p = 1; p <= maxPaginas; p++) {
       final b = await _get(
           'https://api.discogs.com/database/search?artist_id=$artistId&format=Vinyl&type=release&per_page=100&page=$p',
@@ -1343,8 +1345,9 @@ class DiscogsService {
       }
       final paginas = _getal(b, 'pages');
       if (paginas == null || p >= paginas) break;
+      if (p == maxPaginas) volledig = false;
     }
-    return uit;
+    return (rijen: uit, volledig: volledig);
   }
 
   /// Een master of losse persing met zijn tracklijst (vinyl_bestaan.dart). Uit de cache als die er is: een plaat

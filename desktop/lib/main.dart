@@ -222,6 +222,7 @@ import 'vinyl_bestaan.dart'
         VinylPlaat,
         VinylVorm,
         geenVinylBekend,
+        kVinylPaginas,
         vinylBestaan,
         vinylBronVoorZoeken,
         vinylNummerSleutel,
@@ -34909,16 +34910,14 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
 
   /// Eén plaat uit de samengevoegde discografie.
   /// De sectie "Vinyl & LP" vullen (Saber, 12-11-2026): meteen wat er bekend is, en opnieuw bij Discogs als dat
-  /// ouder is dan een week ([kVinylVers]). De platen staan er al vóór de tracklijsten binnen zijn.
+  /// ouder is dan een week ([kVinylVers]). Alleen de persingen; tracklijsten haalt pas een vinylzoektocht.
   Future<void> _laadVinyl(DiscographyService svc, String? mbid) async {
     final naam = widget.artist.name;
     await vinylBestaan.laad();
     if (!mounted || naam != widget.artist.name) return;
     final al = vinylBestaan.bekend(naam);
     if (al != null) setState(() => _vinyl = al);
-    final k = await vinylBestaan.voor(naam, svc.vinylBron(bekendeMbid: mbid), opPlaten: (v) {
-      if (mounted && naam == widget.artist.name) setState(() => _vinyl = v);
-    });
+    final k = await vinylBestaan.voor(naam, svc.vinylBron(bekendeMbid: mbid));
     if (!mounted || naam != widget.artist.name) return;
     setState(() {
       _vinyl = k ?? _vinyl;
@@ -34959,6 +34958,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
       final d = v.gemeten;
       regel = 'Geen vinyl bekend bij Discogs (nagekeken ${d.day}-${d.month}-${d.year}).';
     }
+    // Meer dan 4000 persingen (The Beatles): wat er staat klopt, maar er kan een plaat ontbreken.
+    final onvolledig = v != null && !v.volledig;
     const raster = SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 180, mainAxisSpacing: 14, crossAxisSpacing: 14, childAspectRatio: .74);
     return [
@@ -34973,6 +34974,14 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           ),
         )
       else ...[
+        if (onvolledig)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(_marge, 0, _marge, 12),
+              child: Text('Meer dan ${kVinylPaginas * 100} persingen bij Discogs: niet elke plaat staat hier.',
+                  style: TextStyle(color: _muted, fontSize: 12.5)),
+            ),
+          ),
         for (final (kop, platen, inklapbaar) in [('LP', lps, false), ('Singles 7" / 12"', singles, true)])
           if (platen.isNotEmpty) ...[
             SliverToBoxAdapter(
