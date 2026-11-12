@@ -14,6 +14,12 @@
 /// Op de pc vult de Soulseek-verbinding de lijst (`SoulseekClient.bijBericht`) en staat hij op schijf
 /// (`soulseek_berichten.json`); een toestel haalt hem bij de pc op (`/api/soulseek/berichten`) en antwoordt via de pc
 /// (`/api/soulseek/bericht`).
+///
+/// **Gelezen en verwijderd gelden overal** (Saber, 12-11-2026: *"die syncronizeren niet tussen toestellen, ik moet steeds
+/// open doen, maar die heb ik al gelezen op een ander toestel"*). Per uploader staat er een tijd: tot waar je las, en tot
+/// waar je het gesprek weggooide. Een toestel stuurt wat jij daar doet naar de pc (`/api/soulseek/berichten-staat`), de
+/// pc neemt de verste tijd en geeft hem met de lijst door aan je andere toestellen. Altijd de verste tijd, nooit
+/// "vervangen": dan maakt het niet uit wat eerst aankomt, en zet een oude lading niets terug op ongelezen.
 library;
 
 import 'dart:async';
@@ -78,6 +84,14 @@ class Uploaderberichten extends ChangeNotifier {
   /// Tot wanneer je alles las (ms), per uploader.
   final Map<String, int> _gelezenTot = {};
 
+  /// Tot wanneer je het gesprek weggooide (ms), per uploader. Bezorgt de server daarna nog eens iets van toen (met de
+  /// oude tijd), dan komt het niet terug; een nieuw bericht van dezelfde uploader wel.
+  final Map<String, int> _wegTot = {};
+
+  /// Op een toestel: wat je hier las of weggooide, naar de pc, die het aan je andere toestellen doorgeeft. Null op de
+  /// pc — daar is deze lijst de bron — en in een toets.
+  void Function(Map<String, dynamic> staat)? naarPc;
+
   /// Het laatste bericht van een uploader dat er net bij kwam — voor de melding onderaan het scherm.
   final ValueNotifier<Uploaderbericht?> nieuw = ValueNotifier<Uploaderbericht?>(null);
 
@@ -112,6 +126,8 @@ class Uploaderberichten extends ChangeNotifier {
   /// Erbij, tenzij hij er al is ([Uploaderbericht.zelfdeAls]). Waar als hij nieuw was. [melden]: een bericht van een
   /// uploader komt in [nieuw] (de eerste lading van een toestel meldt zich niet bericht voor bericht).
   bool voegToe(Uploaderbericht b, {bool melden = true}) {
+    final weg = _wegTot[b.uploader];
+    if (weg != null && b.ms <= weg) return false;
     if (_alle.any(b.zelfdeAls)) return false;
     _alle.add(b);
     _alle.sort((x, y) => x.ms.compareTo(y.ms));
@@ -125,11 +141,78 @@ class Uploaderberichten extends ChangeNotifier {
     return true;
   }
 
-  /// Alles van [uploader] gelezen (het gesprek staat open).
+  /// Het laatste bericht in het gesprek met [uploader] (ms); 0 als er niets is.
+  int _laatsteVan(String uploader) => gesprek(uploader).fold(0, (n, b) => b.ms > n ? b.ms : n);
+
+  /// Alles van [uploader] gelezen: het gesprek staat open, of je koos "Zet als gelezen". Ook op je andere toestellen.
   void gelezen(String uploader) {
-    final tot = gesprek(uploader).fold(0, (n, b) => b.ms > n ? b.ms : n);
-    if ((_gelezenTot[uploader] ?? 0) >= tot) return;
+    final tot = _laatsteVan(uploader);
+    if (!_zetGelezen(uploader, tot)) return;
+    _veranderd();
+    naarPc?.call({
+      'gelezen': {uploader: tot}
+    });
+  }
+
+  /// Alle gesprekken gelezen, in één keer naar de pc.
+  void allesGelezen() {
+    final staat = <String, int>{};
+    for (final g in gesprekken) {
+      final tot = _laatsteVan(g.uploader);
+      if (_zetGelezen(g.uploader, tot)) staat[g.uploader] = tot;
+    }
+    if (staat.isEmpty) return;
+    _veranderd();
+    naarPc?.call({'gelezen': staat});
+  }
+
+  /// Het gesprek met [uploader] weg, op alle toestellen. Schrijft hij je later opnieuw, dan staat hij er weer.
+  void verwijder(String uploader) {
+    final tot = _laatsteVan(uploader);
+    if (tot == 0 || !_zetWeg(uploader, tot)) return;
+    _veranderd();
+    naarPc?.call({
+      'weg': {uploader: tot}
+    });
+  }
+
+  /// Wat je op een ander toestel las of weggooide: op de pc van dat toestel, op een toestel van de pc. Per uploader de
+  /// verste tijd; stuurt niets terug. Waar als er iets veranderde.
+  bool neemStaatOver({Object? gelezen, Object? weg}) {
+    var veranderd = false;
+    if (weg is Map) {
+      for (final e in weg.entries) {
+        if (e.value is int && _zetWeg('${e.key}', e.value as int)) veranderd = true;
+      }
+    }
+    if (gelezen is Map) {
+      for (final e in gelezen.entries) {
+        if (e.value is int && _zetGelezen('${e.key}', e.value as int)) veranderd = true;
+      }
+    }
+    if (veranderd) _veranderd();
+    return veranderd;
+  }
+
+  bool _zetGelezen(String uploader, int tot) {
+    if (tot <= 0 || (_gelezenTot[uploader] ?? 0) >= tot) return false;
     _gelezenTot[uploader] = tot;
+    return true;
+  }
+
+  bool _zetWeg(String uploader, int tot) {
+    final oud = _wegTot[uploader];
+    final verder = oud == null || tot > oud;
+    if (verder) _wegTot[uploader] = tot;
+    final grens = _wegTot[uploader]!;
+    final voor = _alle.length;
+    _alle.removeWhere((b) => b.uploader == uploader && b.ms <= grens);
+    return verder || _alle.length != voor;
+  }
+
+  /// Een nieuwe versie: een toestel haalt dan de lijst met wat er gelezen en weg is.
+  void _veranderd() {
+    versie++;
     notifyListeners();
     _bewaarStraks();
   }
@@ -138,12 +221,17 @@ class Uploaderberichten extends ChangeNotifier {
   /// alle berichten.
   Map<String, dynamic> voorToestel(int? heeft) => {
         'versie': versie,
-        if (heeft != versie) 'berichten': [for (final b in _alle) b.toJson()],
+        if (heeft != versie) ...{
+          'berichten': [for (final b in _alle) b.toJson()],
+          'gelezen': _gelezenTot,
+          'weg': _wegTot,
+        },
       };
 
   Map<String, dynamic> toJson() => {
         'berichten': [for (final b in _alle) b.toJson()],
         'gelezen': _gelezenTot,
+        'weg': _wegTot,
       };
 
   /// Inlezen bij het opstarten. Een kapot bestand begint leeg.
@@ -166,6 +254,12 @@ class Uploaderberichten extends ChangeNotifier {
       if (g is Map) {
         for (final e in g.entries) {
           if (e.value is int) _gelezenTot['${e.key}'] = e.value as int;
+        }
+      }
+      final w = j['weg'];
+      if (w is Map) {
+        for (final e in w.entries) {
+          if (e.value is int) _zetWeg('${e.key}', e.value as int);
         }
       }
       notifyListeners();
@@ -228,6 +322,8 @@ Future<Uploaderbericht?> verstuurAntwoord(Future<bool> Function(String aan, Stri
 /// voor bericht — anders kwamen bij elke start alle oude vragen als nieuw in beeld.
 int? berichtenVanPc(Map<String, dynamic> antwoord, {required bool eerste, Uploaderberichten? lijst}) {
   final l = lijst ?? uploaderberichten;
+  // Eerst wat weg en gelezen is: dan meldt een bericht dat je elders al weggooide zich hier niet als nieuw.
+  l.neemStaatOver(gelezen: antwoord['gelezen'], weg: antwoord['weg']);
   final lading = antwoord['berichten'];
   if (lading is List) {
     for (final e in lading) {

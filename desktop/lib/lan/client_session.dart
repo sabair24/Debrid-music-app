@@ -13,7 +13,7 @@ import '../catalogus_kopie.dart';
 import '../library.dart';
 import '../paths.dart';
 import '../settings.dart';
-import '../uploaderberichten.dart' show berichtenVanPc;
+import '../uploaderberichten.dart' show berichtenVanPc, uploaderberichten;
 import '../warm_log.dart';
 import 'client.dart';
 import 'discovery.dart';
@@ -40,7 +40,10 @@ class ClientSession extends ChangeNotifier {
     this.hartslagUitAccount,
     Future<List<FoundServer>> Function()? zoekOpNetwerk,
   })  : _endpoint = endpoint,
-        _zoekOpNetwerk = zoekOpNetwerk ?? LanBrowser.find;
+        _zoekOpNetwerk = zoekOpNetwerk ?? LanBrowser.find {
+    // Wat je hier las of weggooide bij de berichten van uploaders, naar de pc (uploaderberichten.dart).
+    uploaderberichten.naarPc = _berichtenStaatNaarPc;
+  }
 
   /// Hoe er op het lokale netwerk naar de pc gezocht wordt. Standaard [LanBrowser.find]; een toets
   /// zet hier iets anders, want op de pc waar hij draait staat vaak de echte app.
@@ -1095,6 +1098,16 @@ class ClientSession extends ChangeNotifier {
     }
   }
 
+  /// Gelezen of weggegooid bij de berichten van uploaders, naar de pc: die geeft het door aan je andere toestellen. Lukt
+  /// het niet (geen pc, of een pc van vóór 3.9.726), dan blijft het hier wel gelezen.
+  void _berichtenStaatNaarPc(Map<String, dynamic> staat) {
+    final c = library.remote;
+    if (c == null || _berichtenOnbekend) return;
+    unawaited(c.ask('/api/soulseek/berichten-staat', staat).then((_) {}, onError: (Object e) {
+      debugPrint('Berichtenstaat niet naar de pc: $e');
+    }));
+  }
+
   /// Every fifteen seconds. Not a live push: the catalogue only changes when a download lands on
   /// the PC, and a 304 over wifi costs less than keeping a socket open on a sleeping iPad.
   void _startPolling() {
@@ -1139,6 +1152,7 @@ class ClientSession extends ChangeNotifier {
   @override
   void dispose() {
     _opgeruimd = true;
+    if (uploaderberichten.naarPc == _berichtenStaatNaarPc) uploaderberichten.naarPc = null;
     _poll?.cancel();
     final d = _doorgever;
     _doorgever = null;
