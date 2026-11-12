@@ -34959,7 +34959,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
           : 'Vinyl opzoeken bij Discogs…';
     } else if (lps.isEmpty && singles.isEmpty) {
       final d = v.gemeten;
-      regel = 'Geen vinyl bekend bij Discogs (nagekeken ${d.day}-${d.month}-${d.year}).';
+      regel = v.volledig
+          ? 'Geen vinyl bekend bij Discogs (nagekeken ${d.day}-${d.month}-${d.year}).'
+          : 'Geen vinyl gevonden, maar Discogs kent te weinig van deze artiest om het zeker te zeggen.';
     }
     // Meer dan 4000 persingen (The Beatles): wat er staat klopt, maar er kan een plaat ontbreken.
     final onvolledig = v != null && !v.volledig;
