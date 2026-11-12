@@ -108,7 +108,7 @@ class FpsProbe {
     // Off the UI thread, always.
     //
     // This runs from addTimingsCallback, which fires on the UI thread immediately after a frame.
-    // WarmLog.line does an existsSync plus a FLUSHED synchronous write, and on failure sleeps up to
+    // WarmLog.line does a synchronous write (no fsync since 12-11-2026), and on failure sleeps up to
     // 80 ms — on the thread that is supposed to be drawing. A meter that measures jank must not be
     // able to cause it. scheduleMicrotask alone would still be on this thread; a zero Timer hands it
     // to the event loop, after the frame is done.

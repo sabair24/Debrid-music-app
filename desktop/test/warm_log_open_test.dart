@@ -67,6 +67,17 @@ void main() {
     expect(traagMeten('iets', () => 42, vanafMs: 0), 42);
   });
 
+  test('geen flush naar de schijf: de cd op de Shield bevroor tot 3,9 s op een fsync achter een gecachet nummer',
+      () {
+    // Een write is genoeg om een crash te overleven; een fsync wacht op de eMMC. Gemeten 12-11-2026 met atrace: de
+    // hoofddraad stond 1,7 s in toestand D in de fps-regel, terwijl de stroomcache 40 MB had weggeschreven.
+    final bron = File('lib/warm_log.dart').readAsStringSync();
+    final code = bron.split('\n').where((r) => !r.trimLeft().startsWith('//')).join('\n');
+    expect(code, isNot(contains('flushSync(')), reason: 'het open bestand mag niet fsyncen');
+    expect(code, isNot(contains('flush: true')), reason: 'de gewone weg ook niet');
+    expect(code, contains('raf.writeStringSync(regel);'));
+  });
+
   test('RuTracker: de Cloudflare-controle wordt in de bytes gevonden, ook met hoofdletters', () {
     final gewoon = 'x' * 50000;
     expect(rutrackerPaginaKenmerk(200, '$gewoon<html>gewoon</html>'.codeUnits), '200, 50019 bytes');

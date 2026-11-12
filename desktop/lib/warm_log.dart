@@ -54,6 +54,14 @@ class WarmLog {
   ///
   /// Append blijft de eerste keus, want het hele bestand herschrijven kost bij warm.log 256 KB lezen
   /// én schrijven per regel, en die krijgt er honderden. Pas als append faalt gaat hij om.
+  ///
+  /// **Geen flush naar de schijf (12-11-2026).** Een regel is geschreven zodra het besturingssysteem hem heeft (de
+  /// write-aanroep): een app die vastloopt, crasht of afgeschoten wordt verliest dan niets, en wie het bestand leest
+  /// ziet hem meteen. Een flush (fsync) wacht bovendien tot de schijf zelf klaar is, en dat kan seconden duren. Op de
+  /// Shield gemeten: na een sprong naar het volgende nummer schrijft de doorgever het hele nummer (40–90 MB) naar de
+  /// stroomcache, en ext4 moet bij een fsync eerst al die megabytes wegschrijven. De fps-regel van de draaiende cd
+  /// stond zo 1,7 s in toestand D (wacht op de eMMC, gewekt door mmcqd/jbd2) — de cd bevroor 1,7 tot 3,9 s, telkens
+  /// 3 tot 9 s na een sprong. Alleen stroomuitval verliest nu de laatste regels, en daar helpt een logboek niet bij.
   void line(String s) {
     final t = DateTime.now().toIso8601String().substring(11, 23);
     final regel = '$t  $s\n';
@@ -63,9 +71,9 @@ class WarmLog {
       try {
         if (f.existsSync() && f.lengthSync() > _maxBytes) {
           final keep = f.readAsStringSync();
-          f.writeAsStringSync(keep.substring(keep.length ~/ 2), flush: true);
+          f.writeAsStringSync(keep.substring(keep.length ~/ 2));
         }
-        f.writeAsStringSync(regel, mode: FileMode.append, flush: true);
+        f.writeAsStringSync(regel, mode: FileMode.append);
         return;
       } catch (e) {
         laatsteFout = 'append $_path: $e';
@@ -76,7 +84,7 @@ class WarmLog {
           houden = f.readAsStringSync();
           if (houden.length > _maxBytes) houden = houden.substring(houden.length ~/ 2);
         }
-        f.writeAsStringSync('$houden$regel', flush: true);
+        f.writeAsStringSync('$houden$regel');
         return;
       } catch (e) {
         laatsteFout = 'herschrijf $_path: $e';
@@ -98,8 +106,8 @@ class WarmLog {
   /// toets die zijn tijdelijke map opruimt, struikelt dan niet over een bestand dat nog openstaat (Windows).
   static bool houdOpen = false;
 
-  /// Eén regel langs het open bestand, met flush zoals voorheen. Onwaar = de gewone weg hierboven doet het: het
-  /// bestand is te groot (die halveert hem), weg, of het openen faalt (zie [laatsteFout]).
+  /// Eén regel langs het open bestand, zonder flush naar de schijf (zie [line]). Onwaar = de gewone weg hierboven
+  /// doet het: het bestand is te groot (die halveert hem), weg, of het openen faalt (zie [laatsteFout]).
   bool _viaOpenBestand(String regel) {
     if (!houdOpen) return false;
     try {
@@ -115,9 +123,7 @@ class WarmLog {
         _sluit();
         return false;
       }
-      raf
-        ..writeStringSync(regel)
-        ..flushSync();
+      raf.writeStringSync(regel);
       return true;
     } catch (e) {
       laatsteFout = 'open $_path: $e';
