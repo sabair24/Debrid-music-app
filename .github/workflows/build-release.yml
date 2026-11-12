@@ -484,14 +484,53 @@ jobs:
             refs/tags/win-v*) VERSION="${GITHUB_REF#refs/tags/win-v}" ;;
             *) VERSION=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: *//' | cut -d+ -f1) ;;
           esac
-          flutter build apk --release \
-            --target-platform android-arm64 \
-            --build-name "${VERSION}" \
-            --build-number "${BUILD_NUMBER}"
-          mv build/app/outputs/flutter-apk/app-release.apk \
+          # Twee smaken (build.gradle.kts): de telefoon zonder "weergeven over andere apps" en "starten na het opstarten",
+          # de Shield met. Saber, 12-11-2026: Play Protect noemde de app op de gsm schadelijk zolang ook de telefoon die
+          # vroeg. De telefoonversie houdt de oude naam; de tv-versie heet …build<N>.tv.apk. GitHub geeft de bestanden
+          # alfabetisch of nieuwste-eerst terug (win-v3.9.724: de zip vóór de exe) — met deze naam en de tv-versie eerst
+          # omhoog staat de telefoonversie in beide gevallen vooraan, en die neemt een oudere app (de eerste .apk). De
+          # updater van de Shield kiest de tv-versie (apkUit in updater.dart).
+          for SMAAK in telefoon tv; do
+            flutter build apk --release --flavor "${SMAAK}" \
+              --target-platform android-arm64 \
+              --build-name "${VERSION}" \
+              --build-number "${BUILD_NUMBER}"
+          done
+          mv build/app/outputs/flutter-apk/app-telefoon-release.apk \
              "build/app/outputs/flutter-apk/DebridMusic-v${VERSION}-build${BUILD_NUMBER}.apk"
+          mv build/app/outputs/flutter-apk/app-tv-release.apk \
+             "build/app/outputs/flutter-apk/DebridMusic-v${VERSION}-build${BUILD_NUMBER}.tv.apk"
           echo "APK_NAME=DebridMusic-v${VERSION}-build${BUILD_NUMBER}.apk" >> "$GITHUB_ENV"
+          echo "TV_APK_NAME=DebridMusic-v${VERSION}-build${BUILD_NUMBER}.tv.apk" >> "$GITHUB_ENV"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      # De twee smaken moeten van elkaar te onderscheiden zijn op wat Play Protect leest: de telefoonversie zonder de
+      # Shield-rechten, de tv-versie met — en allebei met dezelfde sleutel, anders werkt de een de ander niet bij.
+      - name: Two flavours, right permissions, same key
+        working-directory: desktop
+        run: |
+          set -uo pipefail
+          OUT=build/app/outputs/flutter-apk
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | tail -1 || true)
+          SIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | tail -1 || true)
+          [ -f "$OUT/${APK_NAME}" ] && [ -f "$OUT/${TV_APK_NAME}" ] || { echo "::error::Een van de twee APK's ontbreekt."; ls -la "$OUT"; exit 1; }
+          if [ -n "$AAPT" ]; then
+            TEL=$("$AAPT" dump permissions "$OUT/${APK_NAME}")
+            TV=$("$AAPT" dump permissions "$OUT/${TV_APK_NAME}")
+            for R in SYSTEM_ALERT_WINDOW RECEIVE_BOOT_COMPLETED; do
+              if echo "$TEL" | grep -q "$R"; then echo "::error::De telefoonversie vraagt $R."; exit 1; fi
+              if ! echo "$TV" | grep -q "$R"; then echo "::error::De tv-versie mist $R."; exit 1; fi
+            done
+            echo "Rechten kloppen: de telefoon zonder, de Shield met."
+          else
+            echo "::warning::aapt2 niet gevonden — de rechten van de twee smaken niet nagekeken."
+          fi
+          if [ -n "$SIGNER" ]; then
+            A=$("$SIGNER" verify --print-certs "$OUT/${APK_NAME}" 2>&1 | grep -i "SHA-256 digest" | head -1)
+            B=$("$SIGNER" verify --print-certs "$OUT/${TV_APK_NAME}" 2>&1 | grep -i "SHA-256 digest" | head -1)
+            if [ -z "$A" ] || [ "$A" != "$B" ]; then echo "::error::De twee smaken dragen niet dezelfde sleutel."; exit 1; fi
+            echo "Zelfde sleutel: $A"
+          fi
 
       # Read the certificate back OUT of the finished APK rather than trusting what we think we
       # configured. A debug key identifies itself: "CN=Android Debug, O=Android, C=US".
@@ -592,7 +631,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: debrid-music-build${{ env.BUILD_NUMBER }}
-          path: desktop/build/app/outputs/flutter-apk/${{ env.APK_NAME }}
+          path: |
+            desktop/build/app/outputs/flutter-apk/${{ env.APK_NAME }}
+            desktop/build/app/outputs/flutter-apk/${{ env.TV_APK_NAME }}
           retention-days: 30
 
       # Publishes only the built APK to a SEPARATE PUBLIC repo so the in-app updater can read releases
@@ -681,8 +722,10 @@ jobs:
         run: |
           set -uo pipefail
           apk="desktop/build/app/outputs/flutter-apk/${APK_NAME}"
+          tvapk="desktop/build/app/outputs/flutter-apk/${TV_APK_NAME}"
           tag="v${VERSION}-build${BUILD_NUMBER}"
           [ -f "$apk" ] || { echo "::error::De APK staat niet waar hij verwacht wordt: $apk"; exit 1; }
+          [ -f "$tvapk" ] || { echo "::error::De tv-APK staat niet waar hij verwacht wordt: $tvapk"; exit 1; }
 
           cat > "$RUNNER_TEMP/notities.md" <<EOF
           ## DebridMusic v${VERSION} (build ${BUILD_NUMBER})
@@ -690,8 +733,8 @@ jobs:
           Dezelfde app als op je pc, Mac en iPad — één codebase, ook op Android en Android TV.
 
           ### Installeren
-          Download de APK hieronder en installeer hem op je telefoon of je Shield. Hij vervangt
-          de app die er staat; daarna één keer opnieuw inloggen met je account.
+          Download de APK hieronder en installeer hem: \`….apk\` op je telefoon, \`….tv.apk\` op je
+          Shield. Hij vervangt de app die er staat; daarna één keer opnieuw inloggen met je account.
 
           > Mogelijk moet je "Installeren uit onbekende bronnen" aanzetten.
 
@@ -747,11 +790,14 @@ jobs:
           publiceer() {
             if gh release view "$tag" --repo "$DOEL" >/dev/null 2>&1; then
               # Bestaat al — dat is een herhaalde poging, geen fout. Alleen het bestand erover.
-              gh release upload "$tag" "$apk" --repo "$DOEL" --clobber
+              gh release upload "$tag" "$tvapk" --repo "$DOEL" --clobber && \
+                gh release upload "$tag" "$apk" --repo "$DOEL" --clobber
             else
-              gh release create "$tag" "$apk" --repo "$DOEL" \
+              # De tv-versie eerst, de telefoonversie daarna als losse upload: dan is die de nieuwste — zie hierboven.
+              gh release create "$tag" "$tvapk" --repo "$DOEL" \
                 --title "DebridMusic v${VERSION} (build ${BUILD_NUMBER})" \
-                --notes-file "$RUNNER_TEMP/notities.md"
+                --notes-file "$RUNNER_TEMP/notities.md" && \
+                gh release upload "$tag" "$apk" --repo "$DOEL" --clobber
             fi
           }
 

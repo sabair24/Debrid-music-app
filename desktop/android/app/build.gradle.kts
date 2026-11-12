@@ -71,6 +71,17 @@ android {
         }
     }
 
+    // Twee smaken van dezelfde app — zelfde id, zelfde handtekening, dus de een werkt de ander gewoon bij. "tv" draagt
+    // src/tv/AndroidManifest.xml mee: "weergeven over andere apps" en "starten na het opstarten", die alleen de Shield
+    // nodig heeft (Ontvanger.kt). Saber, 12-11-2026: Play Protect noemde DebridMusic op de gsm schadelijk zolang de
+    // telefoon ze ook vroeg, naast "andere apps installeren" voor de updater. Bouwen: `flutter build apk --flavor telefoon`
+    // of `--flavor tv`.
+    flavorDimensions += "toestel"
+    productFlavors {
+        create("telefoon") { dimension = "toestel" }
+        create("tv") { dimension = "toestel" }
+    }
+
     buildTypes {
         release {
             // A real key when this machine has one, the debug key otherwise. Falling back rather
