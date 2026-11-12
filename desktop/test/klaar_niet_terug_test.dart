@@ -170,6 +170,106 @@ void main() {
       expect(d.twijfel!.van(eigen.path), isNull, reason: 'zelfde samples, andere grootte: toch weg');
     });
 
+    // Saber, 12-11-2026: "Deze blijven maar terugkomen om te kiezen??? Is heel ambetant" — drie van de vijf waren bit voor
+    // bit een kopie uit _dubbel (Shiny Happy People er zelfs twee keer), die de blijvende jacht weer binnenhaalde.
+    test('DE KERN (12-11): wat al eens bij je stond en verloor (_dubbel), wordt geen twijfel — ook niet na het legen', () async {
+      final sep = Platform.pathSeparator;
+      final eigen = _flac('${map.path}/Albums/R.E.M/Out Of Time/06 - Shiny Happy People.flac', som: 1);
+      final studio = _flac('${map.path}/Albums/R.E.M/Out Of Time (studio)/06 - Shiny Happy People.flac', som: 2);
+      versies.voegToe(eigen.path, Versie(pad: studio.path, soort: Kopiesoort.studio), ankerSoort: Kopiesoort.cd);
+      final dubbel =
+          _flac('${map.path}${sep}DebridMusic Downloads${sep}_dubbel$sep(2) 06 - Shiny Happy People.flac', som: 9, extra: 3);
+      const gezag = TrackTags(
+          title: 'Shiny Happy People', artist: 'R.E.M.', album: 'Out Of Time', albumArtist: 'R.E.M.', trackNo: 6);
+      final binnen = _flac('${map.path}/_keuring/a/06 - Shiny Happy People.flac', som: 9);
+      expect(await d.bewaarAlsTwijfel(binnen, eigen.path, .88, 'Soulseek hubberb', gezag), isTrue);
+      expect(d.twijfel!.van(eigen.path), isNull, reason: 'stond al eens bij je en verloor: niet vragen');
+      expect(binnen.existsSync(), isFalse, reason: 'weg uit de keuringsmap');
+      expect(dubbel.existsSync(), isTrue, reason: '_dubbel zelf blijft onaangeroerd');
+      expect(d.twijfel!.afgewezenGeluid('R.E.M.', 'Shiny Happy People', '09' * 16), isTrue, reason: 'onthouden op het geluid');
+
+      // _dubbel na 30 dagen geleegd: dezelfde rip bij nog een uploader blijft toch weg.
+      dubbel.deleteSync();
+      final weer = _flac('${map.path}/_keuring/b/06 - Shiny Happy People.flac', som: 9, extra: 77);
+      expect(await d.bewaarAlsTwijfel(weer, eigen.path, .88, 'Soulseek willhub', gezag), isTrue);
+      expect(d.twijfel!.van(eigen.path), isNull);
+
+      final ander = _flac('${map.path}/_keuring/c/06 - Shiny Happy People.flac', som: 5);
+      expect(await d.bewaarAlsTwijfel(ander, eigen.path, .88, 'Soulseek x', gezag), isTrue);
+      expect(d.twijfel!.van(eigen.path), isNotNull, reason: 'een andere opname mag je wel kiezen');
+    });
+
+    test('_alEensVerloren: ook onder de naam van de uploader (binnengekomen), maar nooit met andere samples of lengte',
+        () async {
+      final sep = Platform.pathSeparator;
+      final dub = '${map.path}${sep}DebridMusic Downloads${sep}_dubbel';
+      final eigen = _flac('${map.path}/Albums/Daft Punk/RAM/08 - Get Lucky.flac', som: 1);
+      _flac('$dub${sep}binnengekomen${sep}Daft Punk - Get Lucky (feat. Pharrell Williams).flac', som: 7, extra: 48);
+      _flac('$dub${sep}08 - Get Lucky.flac', som: 8, totaal: 441001);
+      final zelfde = _flac('${map.path}/_keuring/a/Get Lucky.flac', som: 7);
+      expect(await d.alEensVerlorenVoorToets(zelfde.path, eigen.path), contains('_dubbel'),
+          reason: 'zoals de uploader hem noemde, zelfde samples');
+      final langer = _flac('${map.path}/_keuring/b/Get Lucky.flac', som: 8);
+      expect(await d.alEensVerlorenVoorToets(langer.path, eigen.path), isNull,
+          reason: 'zelfde naam, maar één sample verschil in lengte: een andere kopie');
+      final nieuw = _flac('${map.path}/_keuring/c/Get Lucky.flac', som: 3);
+      expect(await d.alEensVerlorenVoorToets(nieuw.path, eigen.path), isNull);
+    });
+
+    test('wat er al wachtte en al eens verloor, ruimt de pc bij het opstarten op — en onthoudt het als weggegooid', () async {
+      final sep = Platform.pathSeparator;
+      final eigen = _flac('${map.path}/Albums/Marvin Gaye/Favorites/07 - Ain\'t No Mountain High Enough.flac', som: 1);
+      _flac("${map.path}${sep}DebridMusic Downloads${sep}_dubbel$sep(2) 07 - Ain't No Mountain High Enough.flac", som: 6);
+      final wacht = _flac('${map.path}$sep$twijfelMap${sep}m1.flac', som: 6, extra: 340);
+      d.twijfel!.zet(Twijfelgeval(
+          id: 'm1',
+          pad: eigen.path,
+          kandidaat: wacht.path,
+          bron: 'Soulseek Duane.M',
+          score: .88,
+          kwaliteit: 'FLAC 24/192',
+          ms: 1,
+          grootte: wacht.lengthSync(),
+          gezag: const {'artist': 'Marvin Gaye & Tammi Terrell', 'title': "Ain't No Mountain High Enough"},
+          md5: '06' * 16));
+      expect(await d.ruimBekendeTwijfelsOp(), 1);
+      expect(d.twijfel!.van(eigen.path), isNull);
+      expect(wacht.existsSync(), isFalse);
+      expect(d.twijfel!.afgewezenGeluid('Marvin Gaye & Tammi Terrell', "Ain't No Mountain High Enough", '06' * 16), isTrue);
+    });
+
+    // Saber, 12-11-2026: 19 wezen in _twijfel (2,36 GB), want de beloofde opruimronde bestond niet.
+    test('DE KERN (12-11): wat in _twijfel ligt maar niet in de lijst staat, gaat naar de prullenbak — niet wat wacht of net binnenkwam',
+        () async {
+      final sep = Platform.pathSeparator;
+      final tw = '${map.path}${sep}DebridMusic Downloads$sep$twijfelMap';
+      final eigen = _flac('${map.path}/Albums/Adele/30/11 - To Be Loved.flac', som: 1);
+      final wacht = _flac('$tw${sep}a1.flac', som: 2)..setLastModifiedSync(DateTime(2026, 10, 26));
+      final wees = _flac('$tw${sep}50709dda.flac', som: 3)..setLastModifiedSync(DateTime(2026, 11, 4));
+      final vers = _flac('$tw${sep}b2.flac', som: 4);
+      d.twijfel!.zet(Twijfelgeval(
+          id: 'a1', pad: eigen.path, kandidaat: wacht.path, bron: 'Soulseek x', score: .88, kwaliteit: 'FLAC 24/192',
+          ms: 1, grootte: wacht.lengthSync()));
+      final weg = <String>[];
+      DownloadManager.prullenbak = (paden) async {
+        weg.addAll(paden);
+        for (final p in paden) {
+          File(p).deleteSync();
+        }
+        return paden.toSet();
+      };
+      expect(await d.ruimTwijfelWezenOp(), 1);
+      expect(weg, [wees.path], reason: 'alleen de wees, en via de prullenbak');
+      expect(wees.existsSync(), isFalse);
+      expect(wacht.existsSync(), isTrue, reason: 'wat in de lijst staat, wacht op je keuze');
+      expect(vers.existsSync(), isTrue, reason: 'net binnengezet en nog niet in de lijst: blijft (6 uur rust)');
+    });
+
+    test('aangesloten: de opruimronde van de twijfelmap draait bij het opstarten, vóór het nakijken', () {
+      final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(online, contains('    if (lijst == null) return 0;\n    await ruimTwijfelWezenOp();\n    var weg = 0;\n'));
+    });
+
     test('hetzelfde bestand bij de uploader als je versie, of een weggegooide grootte: niet nog eens binnenhalen', () {
       const anker = 'D:/M/Albums/Gala/Come Into My Life (The Album)/03 - Suddenly.flac';
       versies.voegToe(

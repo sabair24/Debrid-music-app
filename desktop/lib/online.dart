@@ -2293,6 +2293,17 @@ class DownloadManager extends ChangeNotifier {
       await _discardStaged(staged.path);
       return true;
     }
+    // Wat al eens bij je stond en verloor (nu in _dubbel), vraag je evenmin opnieuw ([_alEensVerloren]). Onthouden op het
+    // geluid, zodat het ook wegblijft als _dubbel na 30 dagen geleegd is.
+    if (await _alEensVerloren(staged.path, versies.ankerVan(bestaand) ?? bestaand) case final wat?) {
+      _log.line('   $bron: twijfel ($s) voor "$naam", maar bit voor bit dezelfde als $wat — niet gevraagd, weggegooid');
+      if (md5 != null && gezag != null) {
+        lijst.onthoudNeeGeluid(gezag.artist, gezag.title, md5);
+        await lijst.bewaar();
+      }
+      await _discardStaged(staged.path);
+      return true;
+    }
     final kop = readFlacTags(staged);
     final soort = soortVan(staged.path).toUpperCase();
     final kwaliteit = kop == null || kop.bitsPerSample <= 0
@@ -2554,12 +2565,17 @@ class DownloadManager extends ChangeNotifier {
   Future<int> ruimBekendeTwijfelsOp() async {
     final lijst = twijfel;
     if (lijst == null) return 0;
+    await ruimTwijfelWezenOp();
     var weg = 0;
     for (final g in [...lijst.alle]) {
       if (g.gevraagd || !File(g.kandidaat).existsSync()) continue;
-      final wat = await _zelfdeAlsWatJeHebt(g.kandidaat, versies.ankerVan(g.pad) ?? g.pad);
+      final anker = versies.ankerVan(g.pad) ?? g.pad;
+      final heb = await _zelfdeAlsWatJeHebt(g.kandidaat, anker);
+      final verloren = heb == null ? await _alEensVerloren(g.kandidaat, anker) : null;
+      final wat = heb ?? verloren;
       if (wat == null) continue;
-      lijst.verwijder(g.pad);
+      // Wat al eens verloor, onthoudt de lijst als weggegooid (grootte en geluid): de jacht brengt hem anders terug.
+      lijst.verwijder(g.pad, nee: verloren != null);
       try {
         await File(g.kandidaat).delete();
       } catch (_) {/* de opruimronde van de twijfelmap neemt hem mee */}
@@ -2569,6 +2585,50 @@ class DownloadManager extends ChangeNotifier {
     if (weg > 0) await lijst.bewaar();
     return weg;
   }
+
+  /// De opruimronde van [twijfelMap]: wat daar ligt maar niet (meer) in de lijst staat, naar de prullenbak. Bij het
+  /// opstarten, vóór er een jacht loopt. Geeft terug hoeveel er weg zijn.
+  ///
+  /// Wie een twijfelgeval sluit (Weg…, Bewaren, Vervangen, bit voor bit bekend) verwijdert de kopie, en slikt een fout:
+  /// "de opruimronde van de twijfelmap neemt hem mee". Die ronde bestond niet. Saber, 12-11-2026 — "ja doe maar": er
+  /// lagen 19 zulke wezen (26-10 tot 06-11, 2,36 GB). 18 waren bit voor bit een kopie die hij al had (zijn nummer, een
+  /// versie of in `_dubbel`), de laatste een Adele — To Be Loved die hij zelf had weggegooid.
+  ///
+  /// Wat jonger is dan [_wezenRust] blijft: een kopie die net is binnengezet en nog niet in de lijst staat (een download
+  /// is net geschreven; een verplaatsing houdt die datum).
+  Future<int> ruimTwijfelWezenOp() async {
+    final lijst = twijfel;
+    if (lijst == null) return 0;
+    final map = Directory('$_downloadsRoot${Platform.pathSeparator}$twijfelMap');
+    final List<FileSystemEntity> inhoud;
+    try {
+      if (!map.existsSync()) return 0;
+      inhoud = map.listSync(followLinks: false);
+    } catch (_) {
+      return 0;
+    }
+    final bekend = {for (final g in lijst.alle) baseName(g.kandidaat).toLowerCase()};
+    final grens = DateTime.now().subtract(_wezenRust);
+    final wezen = <String>[];
+    for (final e in inhoud) {
+      if (e is! File || bekend.contains(baseName(e.path).toLowerCase())) continue;
+      try {
+        if (e.lastModifiedSync().isAfter(grens)) continue;
+      } catch (_) {
+        continue;
+      }
+      wezen.add(e.path);
+    }
+    if (wezen.isEmpty) return 0;
+    var weg = 0;
+    try {
+      weg = (await prullenbak(wezen)).length;
+    } catch (_) {}
+    _log.line('twijfelmap: $weg van ${wezen.length} kopieën die niet meer in de lijst stonden naar de prullenbak');
+    return weg;
+  }
+
+  static const _wezenRust = Duration(hours: 6);
 
   /// Een gewone vervanging van [pad]: een twijfelkopie ervoor is dan achterhaald (ze werd tegen het oude bestand
   /// gemeten).
@@ -7025,6 +7085,53 @@ class DownloadManager extends ChangeNotifier {
 
   @visibleForTesting
   Future<String?> zelfdeAlsWatJeHebtVoorToets(String kandidaat, String anker) => _zelfdeAlsWatJeHebt(kandidaat, anker);
+
+  /// Stond [kandidaat] al eens bij je, en verloor hij? Een kopie in `_dubbel` (vervangen, of door één per soort opzij
+  /// gezet) of in `_dubbel\binnengekomen` (binnengekomen en verloren), sample voor sample dezelfde ([zelfdeSamples]).
+  /// Null: nieuw.
+  ///
+  /// Saber, 12-11-2026: *"Deze blijven maar terugkomen om te kiezen??? Is heel ambetant"*. Gemeten die avond: van de vijf
+  /// in Klaar om te kiezen waren er drie bit voor bit een kopie uit `_dubbel` — Shiny Happy People 24/192 (er zelfs twee
+  /// keer: 27-10 en 08-11), Get Lucky 24/96 en Ain't No Mountain High Enough 24/192. Ooit bewaard als studio-versie; één
+  /// per soort hield de bewezen betere van die soort; en de blijvende jacht haalde dezelfde rip bij een andere uploader
+  /// weer binnen. [_zelfdeAlsWatJeHebt] keek alleen naar je nummer en je versies van nu.
+  ///
+  /// Welke kopieën: waarvan de bestandsnaam de titel van je nummer of een van zijn versies draagt — "(2) 06 - Shiny Happy
+  /// People.flac" in `_dubbel`, "1-08 Get Lucky.flac" zoals de uploader hem noemde in `binnengekomen`. Los van
+  /// hoofdletters en leestekens (Ain’t en Ain't). Dan [zelfdeSamples]: zelfde samplefrequentie, bits, kanalen en precies
+  /// evenveel samples, en dan de controlesom (of ffmpeg, als die leeg is).
+  Future<String?> _alEensVerloren(String kandidaat, String anker) async {
+    String plat(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9À-ɏ]'), '');
+    String titel(String p) {
+      final n = baseName(p);
+      final punt = n.lastIndexOf('.');
+      return plat((punt > 0 ? n.substring(0, punt) : n).replaceFirst(RegExp(r'^(\(\d+\)\s*)?(\d+\s*[-.]\s*)?'), ''));
+    }
+
+    final titels = {titel(anker), for (final v in versies.versiesVan(anker)) titel(v.pad)}..remove('');
+    if (titels.isEmpty) return null;
+    final sep = Platform.pathSeparator;
+    for (final map in ['$_downloadsRoot$sep$parkeerMap', '$_downloadsRoot$sep$parkeerMap$sep$parkeerBinnenkomer']) {
+      final List<FileSystemEntity> inhoud;
+      try {
+        final d = Directory(map);
+        if (!d.existsSync()) continue;
+        inhoud = d.listSync(followLinks: false);
+      } catch (_) {
+        continue;
+      }
+      for (final e in inhoud) {
+        if (e is! File || !isAudioBestand(e.path)) continue;
+        final naam = plat(baseName(e.path));
+        if (!titels.any(naam.contains)) continue;
+        if (await zelfdeSamples(kandidaat, e.path)) return 'een kopie die al eens bij je stond en verloor ($parkeerMap)';
+      }
+    }
+    return null;
+  }
+
+  @visibleForTesting
+  Future<String?> alEensVerlorenVoorToets(String kandidaat, String anker) => _alEensVerloren(kandidaat, anker);
 
   /// De controlesom van de samples uit de FLAC-kop van [pad] ([leesStreaminfo]), of null: geen FLAC of een lege som.
   static String? _geluidVan(String pad) {
