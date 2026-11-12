@@ -108,6 +108,7 @@ import 'versiecontrole.dart';
 import 'discogs.dart';
 import 'discography.dart';
 import 'discography_service.dart';
+import 'cd_niet_meer.dart' show cdNietMeer;
 import 'audiodb.dart';
 import 'editions.dart';
 import 'connectivity.dart';
@@ -980,6 +981,8 @@ Future<void> main() async {
   if (mode.owner) await laadVasteKeuzes();
   // Studio, cd of vinyl per nummer (kopiesoort.dart): vóór de eerste scan, want de catalogus en de labels lezen het.
   if (mode.owner) await laadSoorten();
+  // Nummers waarvan je de cd-versie weggooide (cd_niet_meer.dart): daar zoekt de cd-jacht niet meer.
+  if (mode.owner) await cdNietMeer.laad();
   // De versies van een nummer (versies.dart): vóór de eerste scan, want die houdt ze uit de albums.
   if (mode.owner) await versies.laad();
   // Een keuze of een nieuwe versie: de schermen opnieuw tekenen (op een toestel komt dat met de catalogus).
@@ -3033,7 +3036,7 @@ Future<void> main() async {
           bestand: '$appDir${Platform.pathSeparator}versies_dubbel.json',
           logboek: '$logDir${Platform.pathSeparator}downloads.log',
           // Een cd die al eens nagekeken was, opnieuw als zijn nummer nog geen schone cd heeft (05-11-2026).
-          cdNodig: (anker) => !heeftSchoneCd(anker),
+          cdNodig: (anker) => !heeftSchoneCd(anker) && !cdNietMeer.bevat(anker),
           log: versieLog);
       Timer(const Duration(minutes: 10), () => unawaited(terug.ronde()));
       // Eén kopie per soort (versie_opbergen.dart; Saber, 27-10-2026: "enkel studio, cd of vinyl drie soorten"): na drie

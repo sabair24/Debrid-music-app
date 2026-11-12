@@ -53,6 +53,7 @@ import 'luidheid_veger.dart' show meetLuidheid;
 import 'soortjacht.dart';
 import 'vinyl.dart' show isVinylRip, vinylAchteraan;
 import 'vinyl_bestaan.dart' show vinylVoorNummer, zonderNepVinyl;
+import 'cd_niet_meer.dart' show cdNietMeer;
 import 'versie_opbergen.dart';
 import 'versies.dart' show VersieBereik, versieLabel, versieMapLabel, versies;
 import 'wav_naar_flac.dart' show wavNaarFlac;
@@ -6248,6 +6249,11 @@ class DownloadManager extends ChangeNotifier {
       if (t.artist.trim().isEmpty || t.title.trim().isEmpty) continue;
       gezien.add(_soortSleutel(t.path));
       final v = c.van(t.path);
+      // Je gooide de cd-versie weg die de jacht vond (cd_niet_meer.dart): niet opnieuw zoeken.
+      if (cdNietMeer.bevat(t.path)) {
+        if (v != null) c.verwijder(t.path);
+        continue;
+      }
       if (heeftSchoneCd(t.path)) {
         if (v != null) {
           c.verwijder(t.path);
@@ -6367,6 +6373,8 @@ class DownloadManager extends ChangeNotifier {
     if (vragen == null || lijst == null) return 'Dit kan alleen op de pc';
     final te = [for (final t in nummers) if (t.artist.trim().isNotEmpty && t.title.trim().isNotEmpty) t];
     if (te.isEmpty) return 'Geen nummer om voor te zoeken';
+    // Zelf om cd-kwaliteit vragen heft "geen cd meer" op (cd_niet_meer.dart).
+    if (soort == Kopiesoort.cd) await cdNietMeer.haalWeg([for (final t in te) t.path]);
     final nu = DateTime.now().millisecondsSinceEpoch;
     final nieuw = <Soortvraag>[];
     var klaar = 0, al = 0;
@@ -6530,6 +6538,14 @@ class DownloadManager extends ChangeNotifier {
     final vragen = te.isNotEmpty && te.first.vanzelf ? cdjacht : soortvragen;
     if (vragen == null) return;
     final open = [for (final v in te) if (_soortBezig.add(_soortSleutel(v.pad))) v];
+    if (open.isEmpty) return;
+    // Een vraag van de cd-jacht voor een nummer waarvan je de cd-versie weggooide (cd_niet_meer.dart): weg, niet zoeken.
+    for (final v in [for (final v in open) if (v.vanzelf && cdNietMeer.bevat(v.pad)) v]) {
+      vragen.verwijder(v.pad);
+      _soortBezig.remove(_soortSleutel(v.pad));
+      open.remove(v);
+      _log.line('"${v.artiest} — ${v.titel}": cd-jacht overgeslagen — je verwijderde de cd-versie');
+    }
     if (open.isEmpty) return;
     // Vinyl alleen voor wat op vinyl bestaat (vinyl_bestaan.dart; Saber, 12-11-2026: "als die artist er zeker geen heeft
     // dan hoeft de app niet te zoeken"). Eerst Discogs, als dat ouder is dan een week; weet Discogs het niet, dan zoekt hij

@@ -391,7 +391,7 @@ void main() {
       expect(online, contains('    // En de cd-jacht, als er verder niets zoekt.\n    await cdjachtRonde();'));
       final main = File('lib/main.dart').readAsStringSync();
       expect(main, contains("Soortvragen('\$appDir\${Platform.pathSeparator}cdjacht.json', toon: false)"));
-      expect(main, contains('cdNodig: (anker) => !heeftSchoneCd(anker),'));
+      expect(main, contains('cdNodig: (anker) => !heeftSchoneCd(anker) && !cdNietMeer.bevat(anker),'));
       expect(main, contains('valueListenable: context.read<DownloadManager>().cdjachtStand,'));
       expect(File('lib/lan/server.dart').readAsStringSync(), contains("'cd': manager.cdjachtStand.value.toJson()"));
       expect(File('lib/lan/remote_services.dart').readAsStringSync(),
