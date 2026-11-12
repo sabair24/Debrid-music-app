@@ -285,7 +285,7 @@ class DiscographyService {
     }
     if (mbid != null) {
       try {
-        final id = await mb.discogsArtistId(mbid);
+        final id = await kiesDiscogsPagina(naam, await mb.discogsArtistIds(mbid), discogs.artiestNaam);
         if (id != null) return id;
       } catch (_) {/* dan maar op naam */}
     }
@@ -410,15 +410,40 @@ class DiscographyService {
   }
 }
 
+/// Welke van de Discogs-pagina's die MusicBrainz noemt de artiest zelf is ([discogsIdsUitRelaties]). Eén: die. Meer:
+/// de eerste die zo heet als [naam] ([zelfdeDiscogsNaam]); heet er geen zo, de eerste, zoals vroeger. De namen kosten
+/// één vraag per pagina, en die blijven in de cache van Discogs.
+Future<int?> kiesDiscogsPagina(String naam, List<int> ids, Future<String?> Function(int id) naamVan) async {
+  if (ids.isEmpty) return null;
+  if (ids.length == 1) return ids.first;
+  for (final id in ids) {
+    final n = await naamVan(id);
+    if (n != null && zelfdeDiscogsNaam(naam, n)) return id;
+  }
+  return ids.first;
+}
+
+/// Heet de Discogs-pagina [discogsNaam] zoals de artiest [naam]? Discogs nummert naamgenoten: "Adele (3)" is "Adele".
+bool zelfdeDiscogsNaam(String naam, String discogsNaam) =>
+    artistKey(discogsNaam.replaceFirst(RegExp(r'\s*\(\d+\)$'), '')) == artistKey(naam);
+
 /// [VinylBron] op Discogs, met de artiest zoals de discografie hem kent.
 class _DiscogsVinylBron implements VinylBron {
   _DiscogsVinylBron(this._svc, this._mbid);
   final DiscographyService _svc;
   final String? _mbid;
 
+  /// Alleen een pagina die zo heet als de artiest: een pagina onder de echte naam ("Adele Adkins") of van een ander
+  /// heeft geen vinyl, en dan zou de app ten onrechte "bestaat niet op vinyl" zeggen. Dan liever niets: zoeken zoals
+  /// altijd (12-11-2026, de eerste lijst met 60 valse "nee"s).
   @override
-  Future<int?> discogsId(String artiest) async =>
-      _svc.discogs.available ? _svc.discogsIdVoor(artiest, bekendeMbid: _mbid) : null;
+  Future<int?> discogsId(String artiest) async {
+    if (!_svc.discogs.available) return null;
+    final id = await _svc.discogsIdVoor(artiest, bekendeMbid: _mbid);
+    if (id == null) return null;
+    final n = await _svc.discogs.artiestNaam(id);
+    return n != null && zelfdeDiscogsNaam(artiest, n) ? id : null;
+  }
 
   @override
   Future<({List<Map<String, dynamic>> rijen, bool volledig})?> persingen(int discogsId) =>

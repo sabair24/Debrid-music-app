@@ -1350,6 +1350,13 @@ class DiscogsService {
     return (rijen: uit, volledig: volledig);
   }
 
+  /// De naam waaronder Discogs artiest [id] kent ("Adele (3)"), of null. Uit de cache als die er is.
+  Future<String?> artiestNaam(int id) async {
+    final b = await _get('https://api.discogs.com/artists/$id');
+    final n = b?['name'];
+    return n is String && n.trim().isNotEmpty ? n.trim() : null;
+  }
+
   /// Een master of losse persing met zijn tracklijst (vinyl_bestaan.dart). Uit de cache als die er is: een plaat
   /// verandert zijn nummers niet.
   Future<Map<String, dynamic>?> plaatMetNummers({int? master, int? release}) {

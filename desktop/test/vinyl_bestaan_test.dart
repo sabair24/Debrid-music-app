@@ -4,6 +4,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:debridmusic/discography_service.dart' show kiesDiscogsPagina, zelfdeDiscogsNaam;
+import 'package:debridmusic/musicbrainz.dart' show discogsIdsUitRelaties;
 import 'package:debridmusic/vinyl_bestaan.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -316,13 +318,61 @@ void main() {
     });
   });
 
+  // 12-11-2026, de eerste lijst over Sabers vinyl: 60 keer "nee", ook voor Adele "Hello" en John Lennon "Imagine".
+  // MusicBrainz noemde meer Discogs-pagina's, en de app nam de eerste: een pagina onder de echte naam, zonder vinyl.
+  group('de juiste Discogs-pagina', () {
+    Map<String, dynamic> rel(int id) => {'type': 'discogs', 'url': {'resource': 'https://www.discogs.com/artist/$id'}};
+
+    test('DE KERN: de pagina die zo heet als de artiest, niet de eerste', () async {
+      final namen = {1638187: 'Adele Adkins', 819015: 'Adele (3)', 2053803: "Booker Table And The Maitre D's",
+          46481: 'John Lennon', 779927: 'Lennon-McCartney', 156117: 'Eithne Ni Bhraonain', 9807: 'Enya'};
+      Future<String?> naam(int id) async => namen[id];
+      expect(discogsIdsUitRelaties([rel(1638187), rel(819015)]), [1638187, 819015]);
+      expect(await kiesDiscogsPagina('Adele', [1638187, 819015], naam), 819015);
+      expect(await kiesDiscogsPagina('John Lennon', [2053803, 46481, 779927], naam), 46481);
+      expect(await kiesDiscogsPagina('Enya', [156117, 9807], naam), 9807);
+    });
+
+    test('één pagina: die, zonder te vragen; geen die zo heet: de eerste, zoals vroeger', () async {
+      var gevraagd = 0;
+      Future<String?> naam(int id) async {
+        gevraagd++;
+        return 'Iets anders';
+      }
+
+      expect(await kiesDiscogsPagina('Milow', [816797], naam), 816797);
+      expect(gevraagd, 0);
+      expect(await kiesDiscogsPagina('Milow', [1, 2], naam), 1);
+      expect(await kiesDiscogsPagina('Milow', const [], naam), isNull);
+    });
+
+    test('de naam: Discogs nummert naamgenoten, een ander streepje telt niet', () {
+      expect(zelfdeDiscogsNaam('Adele', 'Adele (3)'), isTrue);
+      expect(zelfdeDiscogsNaam('a‐ha', 'a-ha'), isTrue);
+      expect(zelfdeDiscogsNaam('Beyoncé', 'Beyonce'), isTrue);
+      expect(zelfdeDiscogsNaam('Enya', 'Eithne Ni Bhraonain'), isFalse);
+      expect(zelfdeDiscogsNaam('Adele', 'Adele Adkins'), isFalse);
+    });
+
+    test('wat met de verkeerde pagina bewaard werd (vóór vorm 2), telt niet meer', () {
+      expect(VinylKennis.uitJson({'id': 1638187, 'ms': 1, 'platen': []}), isNull);
+      expect(VinylKennis.uitJson(const VinylKennis(discogsId: 819015, gemetenMs: 1, platen: []).toJson()), isNotNull);
+    });
+
+    test('aangesloten: de discografie kiest, en vinyl alleen op een pagina met de naam van de artiest', () {
+      final ds = _bron('lib/discography_service.dart');
+      expect(ds, contains('        final id = await kiesDiscogsPagina(naam, await mb.discogsArtistIds(mbid), discogs.artiestNaam);'));
+      expect(ds, contains('    return n != null && zelfdeDiscogsNaam(artiest, n) ? id : null;'));
+    });
+  });
+
   test('aangesloten: Discogs op het artiestnummer en vers, de artiestpagina toont de sectie na de discografie', () {
     final dg = _bron('lib/discogs.dart');
     expect(dg, contains("'https://api.discogs.com/database/search?artist_id=\$artistId&format=Vinyl&type=release&per_page=100&page=\$p',\n          vers: true);"));
     expect(dg, contains('    final cached = vers ? null : await _readCache(url);'));
     expect(dg, contains('      if (p == maxPaginas) volledig = false;'), reason: 'een halve lijst zegt nooit nee');
     final ds = _bron('lib/discography_service.dart');
-    expect(ds, contains('      _svc.discogs.available ? _svc.discogsIdVoor(artiest, bekendeMbid: _mbid) : null;'));
+    expect(ds, contains('    final id = await _svc.discogsIdVoor(artiest, bekendeMbid: _mbid);'));
     final m = _bron('lib/main.dart');
     expect(m, contains('    unawaited(_laadVinyl(svc, ref.isMb ? ref.id : null));\n'));
     expect(m, contains('          ..._vinylSectie(_eigenVinyl(lib, mine)),\n'));

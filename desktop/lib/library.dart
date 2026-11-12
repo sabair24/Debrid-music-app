@@ -44,6 +44,7 @@ import 'vaste_keuze.dart';
 import 'twijfel.dart' show twijfelMap, twijfelsVanPcGelezen, zetTwijfelVanPc;
 import 'kopiesoort.dart' show Kopiesoort, kopiesoortUit, soortVoor, zetSoortVanPc;
 import 'versies.dart';
+import 'cd_niet_meer.dart' show cdNietMeer;
 import 'soortjacht.dart' show zetSoortvraagVanPc;
 import 'paths.dart';
 import 'artwork.dart';
@@ -2606,6 +2607,14 @@ class LibraryStore extends ChangeNotifier {
       await laatLos?.call(list);
     } catch (_) {/* een meting mag het wissen ook nooit tegenhouden */}
     var deleted = 0;
+    // Een cd-versie die je weggooit, komt niet terug (cd_niet_meer.dart; Saber, 12-11-2026, "Diwân (cd)": "ik wil die niet
+    // meer"): het nummer waar hij bij hoorde, vóór het register hem vergeet.
+    final cdVan = <String, String>{
+      for (final p in list)
+        if (fromDisk && versies.versie(p)?.soort == Kopiesoort.cd)
+          if (versies.ankerVan(p) case final anker?) p: anker,
+    };
+    final cdWeg = <String>[];
     // De mappen waar iets uit weggehaald is. Een map die daardoor leegloopt hoort niet te blijven
     // staan: een radio van vijfhonderd nummers laat anders honderden lege `Singles/<Artiest>`-mappen
     // achter, en die zie je pas als je zelf in je muziekmap gaat kijken.
@@ -2622,6 +2631,7 @@ class LibraryStore extends ChangeNotifier {
             mappen.add(f.parent.path);
             if (inPrullenbak == null) await f.delete();
             deleted++;
+            if (cdVan[p] case final anker?) cdWeg.add(anker);
             // Het bestand is weg, dus de meting slaat nergens meer op. Zonder dit blijft ze staan
             // en telt "701 onderzocht" spoken mee — en erger: een pad dat later opnieuw gebruikt
             // wordt zou het oordeel van een héél ander bestand erven.
@@ -2634,6 +2644,7 @@ class LibraryStore extends ChangeNotifier {
           }
         } catch (_) {/* locked/permission — leave it, it stays visible */}
       }
+      if (cdWeg.isNotEmpty) await cdNietMeer.zet(cdWeg);
       // Files are gone, so they can't come back on a rescan; no need to remember them.
       _hidden.removeAll(list);
       for (final m in mappen) {
