@@ -20,6 +20,7 @@ import 'discogs.dart';
 import 'musicbrainz.dart';
 import 'organize.dart' show artistKey, isAansprekingVan;
 import 'paths.dart';
+import 'vinyl_bestaan.dart' show VinylBron;
 
 /// Wat één bron opleverde, en waarom hij niets opleverde als dat zo is.
 ///
@@ -291,6 +292,10 @@ class DiscographyService {
     return discogs.artistId(naam);
   }
 
+  /// De bron voor de sectie "Vinyl & LP" en het vinylzoeken (vinyl_bestaan.dart): dezelfde artiest als de discografie
+  /// ([discogsIdVoor], via MusicBrainz), dus geen naamgenoot.
+  VinylBron vinylBron({String? bekendeMbid}) => _DiscogsVinylBron(this, bekendeMbid);
+
   Future<BronUitkomst> vanDiscogs(String naam, {String? bekendeMbid}) async {
     // De aanroeper MOET dit zelf lezen: zonder token faalt elke aanroep in DiscogsService stil, en dan
     // is "geen token" niet te onderscheiden van "niets gevonden".
@@ -403,4 +408,22 @@ class DiscographyService {
       },
     );
   }
+}
+
+/// [VinylBron] op Discogs, met de artiest zoals de discografie hem kent.
+class _DiscogsVinylBron implements VinylBron {
+  _DiscogsVinylBron(this._svc, this._mbid);
+  final DiscographyService _svc;
+  final String? _mbid;
+
+  @override
+  Future<int?> discogsId(String artiest) async =>
+      _svc.discogs.available ? _svc.discogsIdVoor(artiest, bekendeMbid: _mbid) : null;
+
+  @override
+  Future<List<Map<String, dynamic>>?> persingen(int discogsId) => _svc.discogs.vinylPersingen(discogsId);
+
+  @override
+  Future<Map<String, dynamic>?> plaat({int? master, int? release}) =>
+      _svc.discogs.plaatMetNummers(master: master, release: release);
 }

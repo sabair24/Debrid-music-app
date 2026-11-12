@@ -25,6 +25,7 @@ import 'release_format.dart';
 import 'release_format.dart' as fmt;
 import 'settings.dart';
 import 'paths.dart';
+import 'vinyl_bestaan.dart' show kVinylPaginas;
 import 'radiostijl.dart'
     show
         DiscogsUitgave,
@@ -420,11 +421,13 @@ class DiscogsService {
   /// en het eerste echte antwoord kreeg pas na drie plekken op de baan een beurt.
   static final Map<String, Future<Map<String, dynamic>?>> _onderweg = {};
 
-  Future<Map<String, dynamic>?> _get(String url) {
+  /// [vers]: niet uit de schijfcache — voor wat verandert (de vinylpersingen van een artiest: er komen heruitgaves
+  /// bij). Het antwoord gaat wel weer in de cache.
+  Future<Map<String, dynamic>?> _get(String url, {bool vers = false}) {
     if (!available) return Future.value(null);
     final bezig = _onderweg[url];
     if (bezig != null) return bezig;
-    final f = _getEcht(url);
+    final f = _getEcht(url, vers: vers);
     _onderweg[url] = f;
     f.whenComplete(() {
       _onderweg.remove(url);
@@ -432,8 +435,8 @@ class DiscogsService {
     return f;
   }
 
-  Future<Map<String, dynamic>?> _getEcht(String url) async {
-    final cached = await _readCache(url);
+  Future<Map<String, dynamic>?> _getEcht(String url, {bool vers = false}) async {
+    final cached = vers ? null : await _readCache(url);
     if (cached != null) return cached;
 
     // The lane hands out a START SLOT; it does not hold the request. Sixty a minute is a budget of
@@ -1322,6 +1325,34 @@ class DiscogsService {
       }
     }
     return DiscogsSweep(perMaster, hoesPerSleutel, hoesPerMaster, meesters);
+  }
+
+  /// Alle vinylpersingen van deze artiest (vinyl_bestaan.dart): op zijn nummer, dus zonder naamgenoten, honderd per
+  /// pagina, vers. Null als Discogs niet elke pagina gaf — een halve lijst zou platen als "niet op vinyl" laten
+  /// lijken.
+  Future<List<Map<String, dynamic>>?> vinylPersingen(int artistId, {int maxPaginas = kVinylPaginas}) async {
+    if (!available) return null;
+    final uit = <Map<String, dynamic>>[];
+    for (var p = 1; p <= maxPaginas; p++) {
+      final b = await _get(
+          'https://api.discogs.com/database/search?artist_id=$artistId&format=Vinyl&type=release&per_page=100&page=$p',
+          vers: true);
+      if (b == null) return null;
+      for (final r in b['results'] as List<dynamic>? ?? const []) {
+        if (r is Map<String, dynamic>) uit.add(r);
+      }
+      final paginas = _getal(b, 'pages');
+      if (paginas == null || p >= paginas) break;
+    }
+    return uit;
+  }
+
+  /// Een master of losse persing met zijn tracklijst (vinyl_bestaan.dart). Uit de cache als die er is: een plaat
+  /// verandert zijn nummers niet.
+  Future<Map<String, dynamic>?> plaatMetNummers({int? master, int? release}) {
+    if (master != null) return _get('https://api.discogs.com/masters/$master');
+    if (release != null) return _get('https://api.discogs.com/releases/$release');
+    return Future.value(null);
   }
 
   /// Alles wat deze artiest zelf uitbracht, voor de discografie.

@@ -216,6 +216,8 @@ import 'blijvende_jacht.dart';
 import 'dubbel_opruimer.dart';
 import 'torrent_beter.dart';
 import 'vinyl.dart' show isVinylRip;
+import 'vinyl_bestaan.dart'
+    show VinylKennis, VinylPlaat, VinylVorm, vinylBestaan, vinylNummerSleutel, vinylOnderregel;
 import 'twijfel.dart';
 import 'kopiesoort.dart';
 import 'versies.dart';
@@ -33418,6 +33420,14 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   /// De blokken die helemaal open staan. Zie [zichtbaarInBlok].
   final Set<RecordKind> _openBlokken = {};
 
+  /// Wat Discogs over het vinyl van deze artiest weet (vinyl_bestaan.dart), voor de sectie "Vinyl & LP". Null: nog
+  /// niet bekend. [_vinylKlaar]: de vraag is af, ook als Discogs niets wist.
+  VinylKennis? _vinyl;
+  bool _vinylKlaar = false;
+
+  /// De vinylsingles helemaal open (ingeklapt twee rijen, zoals de blokken erboven). De LP's staan altijd open.
+  bool _vinylSinglesOpen = false;
+
   /// De [discoKey]s van regels die in werkelijkheid andermans plaat zijn.
   ///
   /// Saber wees "Pavarotti & Friends for Cambodia and Tibet" aan tussen de albums van Enrique
@@ -33611,6 +33621,9 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     final metDiscogs = DiscogsService(context.read<AppSettings>()).available;
     final klok = Stopwatch()..start();
     final spoor = <String>[];
+
+    // Het vinyl ernaast, op zijn eigen tempo: de discografie wacht er niet op.
+    unawaited(_laadVinyl(svc, ref.isMb ? ref.id : null));
 
     final bewaard = await svc.lees(naam);
     if (mounted && bewaard != null && bewaard.releases.isNotEmpty) {
@@ -34709,6 +34722,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
               ),
             ],
           ],
+          // Vinyl & LP, ná de discografie (Saber, 12-11-2026: "Eigen blok na de discografie").
+          ..._vinylSectie(_eigenVinyl(lib, mine)),
           // De biografie ná de platen. Wie deze pagina opent komt voor de muziek; het verhaal is
           // waar je blijft hangen als je gevonden hebt wat je zocht — dezelfde plek als "ABOUT
           // ALBUM" in het ontwerp waar dit op gebaseerd is.
@@ -34871,6 +34886,132 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
   }
 
   /// Eén plaat uit de samengevoegde discografie.
+  /// De sectie "Vinyl & LP" vullen (Saber, 12-11-2026): meteen wat er bekend is, en opnieuw bij Discogs als dat
+  /// ouder is dan een week ([kVinylVers]). De platen staan er al vóór de tracklijsten binnen zijn.
+  Future<void> _laadVinyl(DiscographyService svc, String? mbid) async {
+    final naam = widget.artist.name;
+    await vinylBestaan.laad();
+    if (!mounted || naam != widget.artist.name) return;
+    final al = vinylBestaan.bekend(naam);
+    if (al != null) setState(() => _vinyl = al);
+    final k = await vinylBestaan.voor(naam, svc.vinylBron(bekendeMbid: mbid), opPlaten: (v) {
+      if (mounted && naam == widget.artist.name) setState(() => _vinyl = v);
+    });
+    if (!mounted || naam != widget.artist.name) return;
+    setState(() {
+      _vinyl = k ?? _vinyl;
+      _vinylKlaar = true;
+    });
+  }
+
+  /// Welke platen je al op vinyl hebt: een album van deze artiest met een vinylkopie (het nummer zelf, of een versie
+  /// ernaast), op de titelsleutel van de discografie; en per nummer, voor de singles.
+  Set<String> _eigenVinyl(LibraryStore lib, List<Album> mine) {
+    final uit = <String>{};
+    for (final a in mine) {
+      for (final t in a.tracks) {
+        final vinyl = soortVoor(t.path)?.soort == Kopiesoort.vinyl ||
+            lib.versiesVan(t).any((v) => v.soort == Kopiesoort.vinyl);
+        if (!vinyl) continue;
+        uit
+          ..add(discoKey(a.title))
+          ..add(vinylNummerSleutel(t.title));
+      }
+    }
+    return uit;
+  }
+
+  /// De sectie "Vinyl & LP" onder de discografie (Saber, 12-11-2026): LP's en vinylsingles apart, oudste eerst, met per
+  /// plaat het formaat, het aantal persingen, de jaren en een vinkje als jij hem al op vinyl hebt. Promo's en bootlegs
+  /// staan er niet in.
+  List<Widget> _vinylSectie(Set<String> eigen) {
+    final v = _vinyl;
+    final lps = v?.lps ?? const <VinylPlaat>[];
+    final singles = v?.singles ?? const <VinylPlaat>[];
+    String? regel;
+    if (v == null) {
+      regel = _vinylKlaar
+          ? 'Nog niet bekend: Discogs gaf geen antwoord. De app zoekt vinyl zoals altijd.'
+          : 'Vinyl opzoeken bij Discogs…';
+    } else if (lps.isEmpty && singles.isEmpty) {
+      final d = v.gemeten;
+      regel = 'Geen vinyl bekend bij Discogs (nagekeken ${d.day}-${d.month}-${d.year}).';
+    }
+    const raster = SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 180, mainAxisSpacing: 14, crossAxisSpacing: 14, childAspectRatio: .74);
+    return [
+      SliverToBoxAdapter(
+          key: const ValueKey('vinyl-sectie'),
+          child: _sectionTitle('Vinyl & LP', v == null ? 'Discogs' : '${lps.length + singles.length}')),
+      if (regel != null)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(_marge, 0, _marge, 24),
+            child: Text(regel, style: TextStyle(color: _muted, fontSize: 12.5)),
+          ),
+        )
+      else ...[
+        for (final (kop, platen, inklapbaar) in [('LP', lps, false), ('Singles 7" / 12"', singles, true)])
+          if (platen.isNotEmpty) ...[
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(_marge, 0, _marge, 10),
+                child: Text('${kop.toUpperCase()} · ${platen.length}', style: kOpschrift),
+              ),
+            ),
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(_marge, 0, _marge, 24),
+              sliver: SliverLayoutBuilder(builder: (context, c) {
+                final ingeklapt = zichtbaarInBlok(
+                    aantal: platen.length, kolommen: kolommenVoor(c.crossAxisExtent), open: false);
+                final open = !inklapbaar || _vinylSinglesOpen;
+                final n = open ? platen.length : ingeklapt;
+                final knop = inklapbaar && ingeklapt < platen.length;
+                return SliverMainAxisGroup(slivers: [
+                  SliverGrid(
+                    gridDelegate: raster,
+                    delegate: SliverChildBuilderDelegate((_, i) => _vinylKaart(platen[i], eigen), childCount: n),
+                  ),
+                  if (knop)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: TekstLink(
+                            onPressed: () => setState(() => _vinylSinglesOpen = !_vinylSinglesOpen),
+                            bouw: (gekozen) => Text(
+                              open ? 'Minder tonen' : 'Toon alle ${platen.length}',
+                              style: tvLinkStijl(
+                                  kTekstNormaal.copyWith(
+                                    fontSize: 12.5,
+                                    color: isTv ? kGedempt : null,
+                                    decoration: TextDecoration.underline,
+                                    decorationColor: kLijn,
+                                  ),
+                                  gekozen),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ]);
+              }),
+            ),
+          ],
+      ],
+    ];
+  }
+
+  /// Eén vinylplaat als tegel: tik = de albumpagina van die Discogs-plaat. Het vinkje: jij hebt hem al op vinyl.
+  Widget _vinylKaart(VinylPlaat p, Set<String> eigen) {
+    final opVinyl = eigen.contains(discoKey(p.titel)) ||
+        (p.vorm == VinylVorm.single && p.titel.split(' / ').any((t) => eigen.contains(vinylNummerSleutel(t))));
+    final al = CatalogAlbum(0, p.titel, p.hoes, p.jaarVan?.toString(), 0, p.vorm == VinylVorm.lp ? 'album' : 'single',
+        origin: p.master != null ? CatalogRef.discogsMaster(p.master!) : CatalogRef.discogsRelease(p.release!));
+    return _albumCard(al, opVinyl, vinylOnderregel(p));
+  }
+
   Widget _discoCard(DiscoRelease r, bool owned) {
     final al = r.toCatalogAlbum();
     // Het merkje: welke catalogi deze plaat kennen. Alleen tonen als het iets toevoegt — bij één bron
@@ -34903,8 +35044,8 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     ]);
   }
 
-  Widget _albumCard(CatalogAlbum al, [bool owned = false]) {
-    final sub = [
+  Widget _albumCard(CatalogAlbum al, [bool owned = false, String? onder]) {
+    final sub = onder ?? [
       if (al.year != null) al.year!,
       if (al.isSingle) 'Single' else if (al.trackCount > 0) '${al.trackCount} nummers',
     ].join(' · ');
