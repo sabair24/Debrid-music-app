@@ -2565,6 +2565,7 @@ class DownloadManager extends ChangeNotifier {
   Future<int> ruimBekendeTwijfelsOp() async {
     final lijst = twijfel;
     if (lijst == null) return 0;
+    await ruimTwijfelWezenOp();
     var weg = 0;
     for (final g in [...lijst.alle]) {
       if (g.gevraagd || !File(g.kandidaat).existsSync()) continue;
@@ -2584,6 +2585,50 @@ class DownloadManager extends ChangeNotifier {
     if (weg > 0) await lijst.bewaar();
     return weg;
   }
+
+  /// De opruimronde van [twijfelMap]: wat daar ligt maar niet (meer) in de lijst staat, naar de prullenbak. Bij het
+  /// opstarten, vóór er een jacht loopt. Geeft terug hoeveel er weg zijn.
+  ///
+  /// Wie een twijfelgeval sluit (Weg…, Bewaren, Vervangen, bit voor bit bekend) verwijdert de kopie, en slikt een fout:
+  /// "de opruimronde van de twijfelmap neemt hem mee". Die ronde bestond niet. Saber, 12-11-2026 — "ja doe maar": er
+  /// lagen 19 zulke wezen (26-10 tot 06-11, 2,36 GB). 18 waren bit voor bit een kopie die hij al had (zijn nummer, een
+  /// versie of in `_dubbel`), de laatste een Adele — To Be Loved die hij zelf had weggegooid.
+  ///
+  /// Wat jonger is dan [_wezenRust] blijft: een kopie die net is binnengezet en nog niet in de lijst staat (een download
+  /// is net geschreven; een verplaatsing houdt die datum).
+  Future<int> ruimTwijfelWezenOp() async {
+    final lijst = twijfel;
+    if (lijst == null) return 0;
+    final map = Directory('$_downloadsRoot${Platform.pathSeparator}$twijfelMap');
+    final List<FileSystemEntity> inhoud;
+    try {
+      if (!map.existsSync()) return 0;
+      inhoud = map.listSync(followLinks: false);
+    } catch (_) {
+      return 0;
+    }
+    final bekend = {for (final g in lijst.alle) baseName(g.kandidaat).toLowerCase()};
+    final grens = DateTime.now().subtract(_wezenRust);
+    final wezen = <String>[];
+    for (final e in inhoud) {
+      if (e is! File || bekend.contains(baseName(e.path).toLowerCase())) continue;
+      try {
+        if (e.lastModifiedSync().isAfter(grens)) continue;
+      } catch (_) {
+        continue;
+      }
+      wezen.add(e.path);
+    }
+    if (wezen.isEmpty) return 0;
+    var weg = 0;
+    try {
+      weg = (await prullenbak(wezen)).length;
+    } catch (_) {}
+    _log.line('twijfelmap: $weg van ${wezen.length} kopieën die niet meer in de lijst stonden naar de prullenbak');
+    return weg;
+  }
+
+  static const _wezenRust = Duration(hours: 6);
 
   /// Een gewone vervanging van [pad]: een twijfelkopie ervoor is dan achterhaald (ze werd tegen het oude bestand
   /// gemeten).

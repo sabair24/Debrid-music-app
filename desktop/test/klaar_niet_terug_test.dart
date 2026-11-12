@@ -238,6 +238,38 @@ void main() {
       expect(d.twijfel!.afgewezenGeluid('Marvin Gaye & Tammi Terrell', "Ain't No Mountain High Enough", '06' * 16), isTrue);
     });
 
+    // Saber, 12-11-2026: 19 wezen in _twijfel (2,36 GB), want de beloofde opruimronde bestond niet.
+    test('DE KERN (12-11): wat in _twijfel ligt maar niet in de lijst staat, gaat naar de prullenbak — niet wat wacht of net binnenkwam',
+        () async {
+      final sep = Platform.pathSeparator;
+      final tw = '${map.path}${sep}DebridMusic Downloads$sep$twijfelMap';
+      final eigen = _flac('${map.path}/Albums/Adele/30/11 - To Be Loved.flac', som: 1);
+      final wacht = _flac('$tw${sep}a1.flac', som: 2)..setLastModifiedSync(DateTime(2026, 10, 26));
+      final wees = _flac('$tw${sep}50709dda.flac', som: 3)..setLastModifiedSync(DateTime(2026, 11, 4));
+      final vers = _flac('$tw${sep}b2.flac', som: 4);
+      d.twijfel!.zet(Twijfelgeval(
+          id: 'a1', pad: eigen.path, kandidaat: wacht.path, bron: 'Soulseek x', score: .88, kwaliteit: 'FLAC 24/192',
+          ms: 1, grootte: wacht.lengthSync()));
+      final weg = <String>[];
+      DownloadManager.prullenbak = (paden) async {
+        weg.addAll(paden);
+        for (final p in paden) {
+          File(p).deleteSync();
+        }
+        return paden.toSet();
+      };
+      expect(await d.ruimTwijfelWezenOp(), 1);
+      expect(weg, [wees.path], reason: 'alleen de wees, en via de prullenbak');
+      expect(wees.existsSync(), isFalse);
+      expect(wacht.existsSync(), isTrue, reason: 'wat in de lijst staat, wacht op je keuze');
+      expect(vers.existsSync(), isTrue, reason: 'net binnengezet en nog niet in de lijst: blijft (6 uur rust)');
+    });
+
+    test('aangesloten: de opruimronde van de twijfelmap draait bij het opstarten, vóór het nakijken', () {
+      final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(online, contains('    if (lijst == null) return 0;\n    await ruimTwijfelWezenOp();\n    var weg = 0;\n'));
+    });
+
     test('hetzelfde bestand bij de uploader als je versie, of een weggegooide grootte: niet nog eens binnenhalen', () {
       const anker = 'D:/M/Albums/Gala/Come Into My Life (The Album)/03 - Suddenly.flac';
       versies.voegToe(
