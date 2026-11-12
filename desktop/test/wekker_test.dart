@@ -116,11 +116,19 @@ void main() {
       final manifest = _bron('android/app/src/main/AndroidManifest.xml');
       expect(manifest, contains('android:name=".OntvangerDienst"\n            android:foregroundServiceType="connectedDevice"'));
       expect(manifest, contains('<uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>'));
-      expect(manifest, contains('<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>'));
-      expect(manifest, contains('<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>'));
-      expect(manifest, contains('android:name=".OntvangerStart"'));
-      expect(manifest, contains('<action android:name="android.intent.action.BOOT_COMPLETED"/>'));
-      expect(manifest, contains('<action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>'));
+      // 12-11-2026: Play Protect noemde de app op de gsm schadelijk. "Starten na het opstarten" en "weergeven over andere
+      // apps" staan alleen nog in de Shield-versie (smaak "tv").
+      expect(manifest, isNot(contains('RECEIVE_BOOT_COMPLETED')), reason: 'niet op de telefoon');
+      expect(manifest, isNot(contains('SYSTEM_ALERT_WINDOW')), reason: 'niet op de telefoon');
+      final tv = _bron('android/app/src/tv/AndroidManifest.xml');
+      expect(tv, contains('<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>'));
+      expect(tv, contains('<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>'));
+      expect(tv, contains('android:name="com.debridmusic.app.OntvangerStart"'));
+      expect(tv, contains('<action android:name="android.intent.action.BOOT_COMPLETED"/>'));
+      expect(tv, contains('<action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>'));
+      final gradle = _bron('android/app/build.gradle.kts');
+      expect(gradle, contains('create("telefoon") { dimension = "toestel" }'));
+      expect(gradle, contains('create("tv") { dimension = "toestel" }'));
 
       final kt = _bron('android/app/src/main/kotlin/com/debridmusic/app/Ontvanger.kt');
       expect(kt, contains('startForeground(MELDING, melding, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)'));

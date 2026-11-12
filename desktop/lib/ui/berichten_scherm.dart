@@ -27,6 +27,29 @@ String berichtTijd(int ms, {DateTime? nu}) {
   return '${twee(t.day)}-${twee(t.month)} $uur';
 }
 
+/// "Gesprek met … verwijderen?" — waar als je ja zei. Saber, 12-11-2026: *"plus verwijderen, zet als gelezen wil ik
+/// erbij als optie"*. Eerst vragen: het gaat op al je toestellen weg, en een uploader die een woord vroeg kun je dan
+/// niet meer antwoorden tot hij opnieuw schrijft.
+Future<bool> vraagVerwijderen(BuildContext context, String uploader) async {
+  final ja = await showDialog<bool>(
+    context: context,
+    builder: (c) => AlertDialog(
+      title: Text('Gesprek met $uploader verwijderen?'),
+      content: const Text('Het verdwijnt op al je toestellen. Schrijft deze uploader je opnieuw, dan staat het er weer.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Annuleren')),
+        FilledButton(
+            key: const ValueKey('verwijder-ja'),
+            onPressed: () => Navigator.of(c).pop(true),
+            child: const Text('Verwijderen')),
+      ],
+    ),
+  );
+  return ja == true;
+}
+
+enum _Keuze { gelezen, verwijder }
+
 /// De lijst van gesprekken.
 class BerichtenScherm extends StatelessWidget {
   const BerichtenScherm({super.key, required this.verstuur, this.lijst});
@@ -41,7 +64,20 @@ class BerichtenScherm extends StatelessWidget {
     final l = lijst ?? uploaderberichten;
     return Scaffold(
       backgroundColor: kAchtergrond,
-      appBar: AppBar(backgroundColor: kAchtergrond, title: const Text('Berichten van uploaders')),
+      appBar: AppBar(backgroundColor: kAchtergrond, title: const Text('Berichten van uploaders'), actions: [
+        ListenableBuilder(
+          listenable: l,
+          builder: (context, _) => l.ongelezen == 0
+              ? const SizedBox.shrink()
+              : TextButton.icon(
+                  key: const ValueKey('alles-gelezen'),
+                  onPressed: l.allesGelezen,
+                  icon: const Icon(Icons.done_all),
+                  label: const Text('Alles gelezen'),
+                ),
+        ),
+        const SizedBox(width: kRuimte8),
+      ]),
       body: ListenableBuilder(
         listenable: l,
         builder: (context, _) {
@@ -74,14 +110,37 @@ class BerichtenScherm extends StatelessWidget {
                   ]),
                   subtitle: Text('${g.laatste.vanMij ? 'Jij: ' : ''}${g.laatste.tekst}',
                       maxLines: 3, overflow: TextOverflow.ellipsis, style: kTekstBij),
-                  trailing: g.ongelezen > 0
-                      ? Container(
-                          padding: const EdgeInsets.symmetric(horizontal: kRuimte8, vertical: kRuimte2),
-                          decoration: BoxDecoration(color: kAccent, borderRadius: BorderRadius.circular(kHoekRond)),
-                          child: Text('${g.ongelezen}',
-                              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
-                        )
-                      : null,
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (g.ongelezen > 0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: kRuimte8, vertical: kRuimte2),
+                        decoration: BoxDecoration(color: kAccent, borderRadius: BorderRadius.circular(kHoekRond)),
+                        child: Text('${g.ongelezen}',
+                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+                      ),
+                    PopupMenuButton<_Keuze>(
+                      key: ValueKey('gesprek-menu-${g.uploader}'),
+                      tooltip: 'Meer',
+                      onSelected: (k) async {
+                        if (k == _Keuze.gelezen) return l.gelezen(g.uploader);
+                        if (await vraagVerwijderen(context, g.uploader)) l.verwijder(g.uploader);
+                      },
+                      itemBuilder: (_) => [
+                        PopupMenuItem(
+                          key: const ValueKey('keuze-gelezen'),
+                          value: _Keuze.gelezen,
+                          enabled: g.ongelezen > 0,
+                          child: const ListTile(
+                              leading: Icon(Icons.mark_email_read_outlined), title: Text('Zet als gelezen')),
+                        ),
+                        const PopupMenuItem(
+                          key: ValueKey('keuze-verwijder'),
+                          value: _Keuze.verwijder,
+                          child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Verwijderen')),
+                        ),
+                      ],
+                    ),
+                  ]),
                   onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
                       builder: (_) => GesprekScherm(uploader: g.uploader, verstuur: verstuur, lijst: lijst))),
                 ),
@@ -159,7 +218,18 @@ class _GesprekSchermState extends State<GesprekScherm> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kAchtergrond,
-      appBar: AppBar(backgroundColor: kAchtergrond, title: Text(widget.uploader)),
+      appBar: AppBar(backgroundColor: kAchtergrond, title: Text(widget.uploader), actions: [
+        IconButton(
+          key: const ValueKey('gesprek-verwijder'),
+          tooltip: 'Verwijderen',
+          icon: const Icon(Icons.delete_outline),
+          onPressed: () async {
+            if (!await vraagVerwijderen(context, widget.uploader)) return;
+            _lijst.verwijder(widget.uploader);
+            if (mounted) Navigator.of(this.context).maybePop();
+          },
+        ),
+      ]),
       body: SafeArea(
         top: false,
         child: Column(children: [

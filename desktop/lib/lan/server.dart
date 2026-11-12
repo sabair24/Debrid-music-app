@@ -1406,6 +1406,8 @@ class LanServer {
         return _berichten(req);
       case '/api/soulseek/bericht':
         return _berichtSturen(req);
+      case '/api/soulseek/berichten-staat':
+        return _berichtenStaat(req);
       case '/api/soort/vraag':
         return _soortVraag(req);
       case '/api/soort/stop':
@@ -2536,6 +2538,15 @@ class LanServer {
     if (body == null) return;
     final v = body['versie'];
     return _json(req.response, uploaderberichten.voorToestel(v is int ? v : null));
+  }
+
+  /// Wat je op een toestel las of weggooide ({gelezen: {uploader: ms}, weg: {uploader: ms}}): de pc neemt het over en
+  /// geeft het met de volgende lading door aan je andere toestellen. Antwoord: {versie}.
+  Future<void> _berichtenStaat(HttpRequest req) async {
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    uploaderberichten.neemStaatOver(gelezen: body['gelezen'], weg: body['weg']);
+    return _json(req.response, {'versie': uploaderberichten.versie});
   }
 
   /// Jouw antwoord aan een uploader, getypt op een toestel: de pc verstuurt het en zet het in het gesprek.

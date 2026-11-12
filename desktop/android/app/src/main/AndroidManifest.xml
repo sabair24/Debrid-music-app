@@ -12,12 +12,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <!-- De Shield vindbaar en wekbaar terwijl hij slaapt (Ontvanger.kt): de dienst die luistert, opnieuw starten na
-         een herstart, en de app vooraan zetten als er muziek binnenkomt. Dat laatste mag een app op de achtergrond
-         alleen met "weergeven over andere apps"; op de Shield gegeven via adb, zoals bij Debrid Media. -->
+    <!-- De Shield vindbaar terwijl hij slaapt (Ontvanger.kt): de dienst die luistert. "Starten na het opstarten" en
+         "weergeven over andere apps" staan in src/tv/AndroidManifest.xml, alleen in de Shield-versie: Play Protect noemde
+         de app op de gsm schadelijk (12-11-2026) zolang de telefoon ze ook vroeg. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <!-- Bijwerken vanuit de app zelf. Zonder dit recht opent het installatiescherm en sluit het
          meteen weer, zonder een woord — wat leest als een update die stuk is. Het is bovendien een
          recht dat de gebruiker per app moet aanzetten; de app vraagt er zelf om, één keer. -->
@@ -177,15 +175,7 @@
             android:name=".OntvangerDienst"
             android:foregroundServiceType="connectedDevice"
             android:exported="false"/>
-        <!-- En na een herstart of een update opnieuw, zonder dat iemand de app opent. -->
-        <receiver
-            android:name=".OntvangerStart"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED"/>
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
-            </intent-filter>
-        </receiver>
+        <!-- Opnieuw na een herstart of een update: OntvangerStart, alleen in de Shield-versie (src/tv/AndroidManifest.xml). -->
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

@@ -28,6 +28,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'paths.dart';
 import 'prullenbak.dart' show heeftPrullenbak, naarPrullenbak;
+import 'tv.dart' show isTv;
 import 'ui/kleuren.dart';
 
 /// De pakketten van eerdere updates in [map], behalve [houd]: geeft terug hoeveel er weggingen.
@@ -183,14 +184,25 @@ String versieUit(String tag) {
 /// Een release kan meer dan één ding dragen. Op naam en op extensie, want een release met alleen
 /// een `.txt` erbij mag niet als "geen APK" gelden en andersom mag een `.sha256`-bestand nooit als
 /// installatiebestand doorgaan.
-Map<String, dynamic>? apkUit(List<dynamic> assets) {
+///
+/// [tv]: de Shield neemt de tv-versie (`….tv.apk`, [isTvApk]), een telefoon de andere. Sinds 12-11-2026 zijn er twee:
+/// Play Protect noemde de app op de gsm schadelijk zolang ook de telefoon "weergeven over andere apps" en "starten na het
+/// opstarten" vroeg, die alleen de Shield nodig heeft. Een release met maar één APK (van vroeger) geeft die aan iedereen.
+Map<String, dynamic>? apkUit(List<dynamic> assets, {bool tv = false}) {
+  Map<String, dynamic>? eerste;
   for (final a in assets) {
     if (a is! Map<String, dynamic>) continue;
     final naam = (a['name'] as String?)?.toLowerCase() ?? '';
-    if (naam.endsWith('.apk')) return a;
+    if (!naam.endsWith('.apk')) continue;
+    if (isTvApk(naam) == tv) return a;
+    eerste ??= a;
   }
-  return null;
+  return eerste;
 }
+
+/// Is dit de APK van de Shield-versie? Zo noemt de bouwstraat hem: `DebridMusic-v3.9.725-build12613.tv.apk` — met die
+/// naam staat hij achter de telefoonversie, zodat een oudere app die de eerste .apk neemt de telefoonversie krijgt.
+bool isTvApk(String naam) => naam.toLowerCase().endsWith('.tv.apk');
 
 /// Is [daar] nieuwer dan wat hier draait?
 ///
@@ -400,7 +412,7 @@ class Updater {
   Uitgave? _android(String tag, List<dynamic> assets, List<String> nieuw) {
     final nummer = buildnummerUit(tag);
     if (nummer == null) return null;
-    final asset = apkUit(assets);
+    final asset = apkUit(assets, tv: isTv);
     final url = asset?['browser_download_url'] as String?;
     if (url == null || url.isEmpty) return null;
     return Uitgave(

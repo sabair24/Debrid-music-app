@@ -1,0 +1,23 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Alleen de Shield-versie (smaak "tv", build.gradle.kts). Saber, 12-11-2026: Play Protect noemde DebridMusic op de
+         gsm "schadelijk". Sinds 31-10 (3.9.685) vroeg de ene APK voor elk toestel tegelijk "weergeven over andere apps",
+         "starten na het opstarten", "andere apps installeren" (de updater) en "toegang tot alle bestanden" — de
+         combinatie van een app die zichzelf over andere legt en apps kan binnenhalen. De eerste twee heeft alleen de
+         Shield nodig: de dienst die hem vindbaar houdt terwijl hij slaapt opnieuw starten, en de app vooraan zetten als
+         er muziek binnenkomt (Ontvanger.kt). Een app op de achtergrond mag dat laatste alleen met "weergeven over
+         andere apps"; op de Shield gegeven via adb, zoals bij Debrid Media. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+
+    <application>
+        <!-- Na een herstart of een update de dienst opnieuw, zonder dat iemand de app opent. -->
+        <receiver
+            android:name="com.debridmusic.app.OntvangerStart"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

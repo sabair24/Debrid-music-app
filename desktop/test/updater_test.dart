@@ -92,6 +92,43 @@ void main() {
       expect(apkUit(const []), isNull);
     });
 
+    // Saber, 12-11-2026: Play Protect noemde de app op de gsm schadelijk zolang ook de telefoon "weergeven over andere apps"
+    // en "starten na het opstarten" vroeg. Sindsdien twee APK's; de Shield neemt de tv-versie, een telefoon de andere.
+    test('DE KERN: de telefoon de telefoonversie, de Shield de tv-versie — in welke volgorde ze ook hangen', () {
+      for (final volgorde in [
+        ['DebridMusic-v3.9.725-build12613.apk', 'DebridMusic-v3.9.725-build12613.tv.apk'],
+        ['DebridMusic-v3.9.725-build12613.tv.apk', 'DebridMusic-v3.9.725-build12613.apk'],
+      ]) {
+        expect(apkUit(lijst(volgorde))?['name'], 'DebridMusic-v3.9.725-build12613.apk');
+        expect(apkUit(lijst(volgorde), tv: true)?['name'], 'DebridMusic-v3.9.725-build12613.tv.apk');
+      }
+    });
+
+    test('een oudere app neemt de eerste .apk: GitHub zet de telefoonversie vooraan, alfabetisch én als nieuwste', () {
+      final tel = 'DebridMusic-v3.9.725-build12613.apk', tv = 'DebridMusic-v3.9.725-build12613.tv.apk';
+      expect(tel.toLowerCase().compareTo(tv.toLowerCase()), lessThan(0), reason: 'alfabetisch, zonder hoofdletters');
+      final w = File('../.github/workflows/build-release.yml').readAsStringSync().replaceAll('\r\n', '\n');
+      final tvEerst = w.indexOf(r'gh release create "$tag" "$tvapk"');
+      final telLaatst = w.indexOf(r'gh release upload "$tag" "$apk" --repo "$DOEL" --clobber' '\n            fi');
+      final telBij = w.indexOf(r'gh release upload "$tag" "$tvapk" --repo "$DOEL" --clobber && \' '\n'
+          r'                gh release upload "$tag" "$apk" --repo "$DOEL" --clobber');
+      expect(tvEerst, greaterThan(0), reason: 'een nieuwe release begint met de tv-versie');
+      expect(telLaatst, greaterThan(tvEerst), reason: 'de telefoonversie als laatste omhoog: de nieuwste');
+      expect(telBij, greaterThan(0), reason: 'ook bij een bestaande release eerst tv, dan telefoon');
+      expect(w, isNot(contains(r'"$apk" "$tvapk"')), reason: 'nooit samen in één upload: dan is de volgorde niet de onze');
+    });
+
+    test('een release met één APK (van vroeger) geeft die aan iedereen', () {
+      expect(apkUit(lijst(['DebridMusic-v3.9.724-build12610.apk']), tv: true)?['name'], 'DebridMusic-v3.9.724-build12610.apk');
+      expect(isTvApk('DebridMusic-v3.9.725-build12613.tv.apk'), isTrue);
+      expect(isTvApk('DebridMusic-v3.9.725-build12613.apk'), isFalse);
+    });
+
+    test('bedrading: de updater vraagt de tv-versie op een tv', () {
+      final u = File('lib/updater.dart').readAsStringSync();
+      expect(u, contains('    final asset = apkUit(assets, tv: isTv);'));
+    });
+
     test('de installer, niet de zip van de Mac', () {
       // In dezelfde release hangen allebei. Op naam én extensie, want ".exe" alleen zou ook een
       // los hulpprogramma pakken en ".zip" is de Mac-app.
