@@ -285,6 +285,11 @@ class Twijfellijst {
   bool afgewezenGeluid(String artiest, String titel, String md5) =>
       _neeGeluid[twijfelNummer(artiest, titel)]?.contains(md5) ?? false;
 
+  /// Dezelfde opname als iets wat al eens bij je stond en verloor (12-11-2026): komt niet terug, ook niet als `_dubbel`
+  /// na 30 dagen geleegd is.
+  void onthoudNeeGeluid(String artiest, String titel, String md5) =>
+      (_neeGeluid[twijfelNummer(artiest, titel)] ??= {}).add(md5);
+
   /// Weg uit de lijst; met [nee] komt een kandidaat van dezelfde grootte niet terug, en (met een controlesom en tags)
   /// dezelfde opname ook niet ([afgewezenGeluid]).
   Twijfelgeval? verwijder(String pad, {bool nee = false}) {
