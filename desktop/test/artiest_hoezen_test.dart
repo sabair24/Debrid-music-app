@@ -44,6 +44,9 @@ class _NepMb extends MusicBrainzService {
   Future<int?> discogsArtistId(String mbid) async => mbid == artiest?.mbid || artiest == null
       ? discogs
       : null;
+
+  @override
+  Future<List<int>> discogsArtistIds(String mbid) async => [if (await discogsArtistId(mbid) case final id?) id];
 }
 
 /// Discogs zonder netwerk: op naam komt altijd het tranceproject terug, zoals bij Oasis.

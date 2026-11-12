@@ -106,7 +106,14 @@ ChoiceImage vasteScan(String mbid, String rol) => ChoiceImage(
 /// De verwijzing ziet eruit als `https://www.discogs.com/artist/140140`, soms met de naam erachter
 /// (`/artist/140140-Oasis-2`). Alleen het soort `discogs`: een artiest verwijst ook naar zijn
 /// labels, en die staan op dezelfde site.
-int? discogsIdUitRelaties(List<dynamic> relaties) {
+int? discogsIdUitRelaties(List<dynamic> relaties) => discogsIdsUitRelaties(relaties).firstOrNull;
+
+/// ALLE Discogs-artiestnummers in url-rels, in de volgorde van MusicBrainz. Vaak meer dan één, en de eerste is dan
+/// niet de artiest: gemeten 12-11-2026 bij Adele ("Adele Adkins", 0 vinylpersingen, vóór "Adele (3)", 114), Enya
+/// ("Eithne Ni Bhraonain" vóór "Enya", 204) en John Lennon (eerst een andere band, dan "John Lennon", 2483). Welke
+/// het is, kiest [kiesDiscogsPagina] in discography_service.dart.
+List<int> discogsIdsUitRelaties(List<dynamic> relaties) {
+  final uit = <int>[];
   for (final r in relaties) {
     if (r is! Map || r['type'] != 'discogs') continue;
     final bron = ((r['url'] as Map?)?['resource'] as String?)?.trim() ?? '';
@@ -114,9 +121,9 @@ int? discogsIdUitRelaties(List<dynamic> relaties) {
     final i = stukken.indexOf('artist');
     if (i < 0 || i + 1 >= stukken.length) continue;
     final m = RegExp(r'^(\d+)').firstMatch(stukken[i + 1]);
-    if (m != null) return int.parse(m.group(1)!);
+    if (m != null && !uit.contains(int.parse(m.group(1)!))) uit.add(int.parse(m.group(1)!));
   }
-  return null;
+  return uit;
 }
 
 class MbTrack {
@@ -799,11 +806,14 @@ class MusicBrainzService {
   /// rechtstreeks naar `discogs.com/artist/140140`.
   ///
   /// Dezelfde respons als [wikidataId], dus na het eerste bezoek uit de cache en zonder verzoek.
-  Future<int?> discogsArtistId(String mbid) async {
+  Future<int?> discogsArtistId(String mbid) async => (await discogsArtistIds(mbid)).firstOrNull;
+
+  /// Alle Discogs-pagina's die MusicBrainz bij deze artiest noemt ([discogsIdsUitRelaties]).
+  Future<List<int>> discogsArtistIds(String mbid) async {
     final id = mbid.trim();
-    if (id.isEmpty) return null;
+    if (id.isEmpty) return const [];
     final body = await _ws('$_root/artist/$id?inc=url-rels&fmt=json');
-    return discogsIdUitRelaties((body?['relations'] as List?) ?? const []);
+    return discogsIdsUitRelaties((body?['relations'] as List?) ?? const []);
   }
 
   // ── Cache ───────────────────────────────────────────────────────────────────

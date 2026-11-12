@@ -183,7 +183,12 @@ class VinylKennis {
   VinylKennis metPlaat(int i, VinylPlaat p) =>
       VinylKennis(discogsId: discogsId, gemetenMs: gemetenMs, volledig: volledig, platen: [...platen]..[i] = p);
 
+  /// De vorm van het bestand. 2: sinds de juiste Discogs-pagina gekozen wordt (12-11-2026) — wat ervoor bewaard werd,
+  /// kan op een pagina onder de echte naam staan ("Adele Adkins": 0 vinyl) en telt niet meer.
+  static const kVorm = 2;
+
   Map<String, dynamic> toJson() => {
+        'v': kVorm,
         'id': discogsId,
         'ms': gemetenMs,
         if (!volledig) 'vol': false,
@@ -193,7 +198,7 @@ class VinylKennis {
   static VinylKennis? uitJson(Object? j) {
     if (j is! Map) return null;
     final id = j['id'], ms = j['ms'], platen = j['platen'];
-    if (id is! int || ms is! int || platen is! List) return null;
+    if (id is! int || ms is! int || platen is! List || j['v'] != kVorm) return null;
     return VinylKennis(discogsId: id, gemetenMs: ms, volledig: j['vol'] != false, platen: [
       for (final p in platen)
         if (VinylPlaat.uitJson(p) case final v?) v
