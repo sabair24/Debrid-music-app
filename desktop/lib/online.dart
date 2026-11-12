@@ -52,6 +52,7 @@ import 'luidheid.dart' show Gemeten;
 import 'luidheid_veger.dart' show meetLuidheid;
 import 'soortjacht.dart';
 import 'vinyl.dart' show isVinylRip, vinylAchteraan;
+import 'vinyl_bestaan.dart' show vinylVoorNummer, zonderNepVinyl;
 import 'versie_opbergen.dart';
 import 'versies.dart' show VersieBereik, versieLabel, versieMapLabel, versies;
 import 'wav_naar_flac.dart' show wavNaarFlac;
@@ -1911,7 +1912,13 @@ class DownloadManager extends ChangeNotifier {
     if (candidates.isEmpty) return false;
     // Kiest de app zelf, dan een vinyl-rip pas als er niets anders is (Saber, 24-10-2026: vinyl "alleen als ik kies").
     // Wie zelf op een regel klikte ([exact]) of zelf een uitgave koos ([jouwKeuze]), krijgt wat hij koos.
-    if (exact == null && !jouwKeuze) candidates = vinylAchteraan(candidates, (f) => f.filename);
+    if (exact == null && !jouwKeuze) {
+      // En een vinylrip van een nummer dat nooit op vinyl verscheen, helemaal niet (vinyl_bestaan.dart).
+      candidates = vinylAchteraan(
+          zonderNepVinyl(candidates, authority?.artist ?? '', authority?.title ?? '', (f) => f.filename),
+          (f) => f.filename);
+      if (candidates.isEmpty) return false;
+    }
     // De lengte van de kopieën zelf, als de uitgave ernaast zit ([lengteVanDeMeerderheid]): anders gaan in de race de
     // kopieën met de verkeerde lengte voor, en keurt [keurOverdracht] (±12 s) een goede kopie na de overdracht af.
     // "Kids Of The Future" (Jonas Brothers, 2007): de uitgave zei 2:55, de kopieën 3:18–3:19.
@@ -3017,7 +3024,10 @@ class DownloadManager extends ChangeNotifier {
       if (vast) return ok;
       // "Beter" mag nooit verder van de officiële lengte liggen dan wat er nu ligt: een 24/96 live-opname
       // van 3:54 is geen opwaardering van een 24/44,1 van 3:59. Zie [lengteKlopt].
-      var better = vinylAchteraan(ranked.where((f) => magOpwaarderen(f, from, officieel)).toList(), (f) => f.filename);
+      var better = vinylAchteraan(
+          zonderNepVinyl(ranked.where((f) => magOpwaarderen(f, from, officieel)).toList(), job.authority?.artist ?? '',
+              job.authority?.title ?? '', (f) => f.filename),
+          (f) => f.filename);
       // BETRAPT BIJ HET LANDEN. Dan deugt "beter" niet meer als maatstaf, want de kopie die we
       // namen had juist de MEESTE bits — dat is precies waarom hij won. `clearlyBetter` vindt hier
       // dus niets en de jacht bleef achterwege, terwijl er honderden andere kandidaten klaarstonden.
@@ -5310,7 +5320,8 @@ class DownloadManager extends ChangeNotifier {
       ];
       // De officiële lengte voorop, net als bij elke andere download — zie [opLengteDanRang].
       // En een vinyl-rip pas als er niets anders is: de radio kiest zelf, en vinyl is "alleen als ik kies".
-      final bruikbaar = vinylAchteraan(passend..sort(opLengteDanRang(seconden)), (f) => f.filename);
+      final bruikbaar = vinylAchteraan(
+          zonderNepVinyl(passend..sort(opLengteDanRang(seconden)), artiest, titel, (f) => f.filename), (f) => f.filename);
       // Lossless eerst, precies zoals overal in deze app. Maar niet lossless-of-niets: een
       // eurodance-single uit 1993 bestaat op dit netwerk soms alleen als mp3, en dan is die mp3 beter
       // dan stilte. `_rankSlsk` heeft de beste al vooraan gezet.
@@ -6520,6 +6531,28 @@ class DownloadManager extends ChangeNotifier {
     if (vragen == null) return;
     final open = [for (final v in te) if (_soortBezig.add(_soortSleutel(v.pad))) v];
     if (open.isEmpty) return;
+    // Vinyl alleen voor wat op vinyl bestaat (vinyl_bestaan.dart; Saber, 12-11-2026: "als die artist er zeker geen heeft
+    // dan hoeft de app niet te zoeken"). Eerst Discogs, als dat ouder is dan een week; weet Discogs het niet, dan zoekt hij
+    // zoals altijd. Een vraag die er niet toe doet, stopt — met een melding.
+    if (open.first.soort == Kopiesoort.vinyl) {
+      final geen = <Soortvraag>[];
+      for (final v in open) {
+        if (await vinylVoorNummer(v.artiest, v.titel) == false) geen.add(v);
+      }
+      if (geen.isNotEmpty) {
+        for (final v in geen) {
+          vragen.verwijder(v.pad);
+          _soortBezig.remove(_soortSleutel(v.pad));
+          open.remove(v);
+          _log.line('"${v.artiest} — ${v.titel}": vraag om vinyl gestopt — bestaat niet op vinyl volgens Discogs');
+        }
+        await vragen.bewaar();
+        _meldKlaar(geen.length == 1
+            ? 'Geen vinyl van "${geen.single.titel}": bestaat niet op vinyl volgens Discogs'
+            : 'Geen vinyl voor ${geen.length} nummers: die bestaan niet op vinyl volgens Discogs');
+      }
+      if (open.isEmpty) return;
+    }
     final nietGevonden = <String>[];
     try {
       List<SoulseekFile>? albumHits;
@@ -7511,7 +7544,7 @@ class DownloadManager extends ChangeNotifier {
     // Vinyl mag (Saber, 25-10-2026: "laat ze toch maar door"), maar na elke digitale kopie: wie het eerst bewezen beter
     // is, wint, en een digitale hi-res is dezelfde uitgave als je cd.
     return [
-      for (final f in vinylAchteraan(bruikbaar, (f) => f.filename))
+      for (final f in vinylAchteraan(zonderNepVinyl(bruikbaar, artiest, titel, (f) => f.filename), (f) => f.filename))
         if (perPeer.add(f.username)) f,
     ];
   }

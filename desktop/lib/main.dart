@@ -217,7 +217,15 @@ import 'dubbel_opruimer.dart';
 import 'torrent_beter.dart';
 import 'vinyl.dart' show isVinylRip;
 import 'vinyl_bestaan.dart'
-    show VinylKennis, VinylPlaat, VinylVorm, vinylBestaan, vinylNummerSleutel, vinylOnderregel;
+    show
+        VinylKennis,
+        VinylPlaat,
+        VinylVorm,
+        geenVinylBekend,
+        vinylBestaan,
+        vinylBronVoorZoeken,
+        vinylNummerSleutel,
+        vinylOnderregel;
 import 'twijfel.dart';
 import 'kopiesoort.dart';
 import 'versies.dart';
@@ -978,6 +986,11 @@ Future<void> main() async {
   // Berichten van uploaders (uploaderberichten.dart): wat er al was; en op de pc vanaf nu wat de Soulseek-verbinding
   // binnenkrijgt. Een toestel haalt ze bij de pc op (ClientSession).
   await uploaderberichten.laad();
+  // Wat Discogs over vinyl weet (vinyl_bestaan.dart): voor het grijze "Download in vinyl" en de zeef tegen nep-vinyl, die
+  // alleen lezen wat al bekend is. En hoe de app er buiten de artiestpagina naar vraagt: dezelfde artiest als de
+  // discografie, via MusicBrainz.
+  await vinylBestaan.laad();
+  vinylBronVoorZoeken = () => DiscographyService(CatalogService(), musicbrainz, DiscogsService(settings)).vinylBron();
   if (mode.owner) {
     soulseek.client.bijBericht = (id, op, van, tekst) => uploaderberichten
         .voegToe(Uploaderbericht(id: id, ms: op.millisecondsSinceEpoch, uploader: van, tekst: tekst));
@@ -16450,19 +16463,28 @@ Future<void> _vraagSoort(BuildContext context, List<Track> nummers, Kopiesoort s
   melder?.showSnackBar(SnackBar(content: Text(zin), duration: const Duration(seconds: 6)));
 }
 
-/// De drie regels voor [nummers], zonder de soort die [heeft] al is.
-List<MenuRegel> _soortRegels(BuildContext context, List<Track> nummers, {String? album, Kopiesoort? heeft}) => [
-      for (final s in Kopiesoort.values)
-        if (s != heeft)
-          MenuRegel(
-              switch (s) {
-                Kopiesoort.studio => Icons.high_quality_rounded,
-                Kopiesoort.cd => Icons.album_rounded,
-                Kopiesoort.vinyl => Icons.radio_button_checked_rounded,
-              },
-              album == null ? 'Download in ${s.voluit}' : 'Hele plaat in ${s.voluit}',
-              () => _vraagSoort(context, nummers, s, album: album)),
-    ];
+/// De drie regels voor [nummers], zonder de soort die [heeft] al is. Vinyl grijs als Discogs zegt dat geen van deze
+/// nummers op vinyl bestaat (vinyl_bestaan.dart; Saber, 12-11-2026: "Grijs met uitleg").
+List<MenuRegel> _soortRegels(BuildContext context, List<Track> nummers, {String? album, Kopiesoort? heeft}) {
+  final geenVinyl = geenVinylBekend([for (final t in nummers) (artiest: t.artist, titel: t.title)]);
+  return [
+    for (final s in Kopiesoort.values)
+      if (s != heeft)
+        MenuRegel(
+            switch (s) {
+              Kopiesoort.studio => Icons.high_quality_rounded,
+              Kopiesoort.cd => Icons.album_rounded,
+              Kopiesoort.vinyl => Icons.radio_button_checked_rounded,
+            },
+            s == Kopiesoort.vinyl && geenVinyl
+                ? 'Bestaat niet op vinyl (Discogs)'
+                : album == null
+                    ? 'Download in ${s.voluit}'
+                    : 'Hele plaat in ${s.voluit}',
+            () => _vraagSoort(context, nummers, s, album: album),
+            uit: s == Kopiesoort.vinyl && geenVinyl),
+  ];
+}
 
 /// Alle kopieën die je op deze plaat vroeg en die klaarstaan, houden — één voor één, zoals Deze houden.
 Future<void> _houdAlleKlaargezette(BuildContext context, List<Track> klaar) async {

@@ -30,6 +30,14 @@ final _spice = [
   _p(9, 40, 'Spiceworld', ['Vinyl', 'LP', 'Album'], jaar: 1997),
 ];
 
+/// Een tracklijst voor elke plaat in [_spice]: dan weet de app van elk nummer of het op vinyl staat.
+const _alleNummers = {
+  10: ['Wannabe', 'Love Thing'],
+  20: ['Wannabe (Radio Edit)', 'Wannabe (Dave Way Alternative Mix)'],
+  30: ['Wannabe (25 Mix)'],
+  40: ['Spice Up Your Life'],
+};
+
 class _NepBron implements VinylBron {
   _NepBron({this.id = 47109, List<Map<String, dynamic>>? persingen, this.nummers = const {}})
       : _persingen = persingen ?? _spice;
@@ -218,6 +226,67 @@ void main() {
       await terug.laad();
       expect(terug.bekend('Spice Girls')!.platen, hasLength(4));
       expect(terug.bestaatOpVinyl('Spice Girls', 'Love Thing'), isTrue);
+    });
+  });
+
+  group('zoeken', () {
+    Future<VinylBestaan> metSpice() async {
+      final d = VinylBestaan();
+      await d.voor('Spice Girls', _NepBron(nummers: _alleNummers));
+      return d;
+    }
+
+    test('DE KERN: een vinylrip van een nummer dat nooit op vinyl verscheen, valt weg; de rest blijft', () async {
+      final d = await metSpice();
+      const paden = [
+        'Muziek/Spice Girls - Spice (1996) [Vinyl 24-96]/05 - Viva Forever.flac',
+        'Muziek/Spice Girls - Spice (1996) [FLAC]/05 - Viva Forever.flac',
+      ];
+      // 'Viva Forever' staat op geen van de platen (alleen als bootleg, en die tellen niet).
+      expect(d.bekend('Spice Girls')!.platen.where((p) => p.nummers == null), isEmpty,
+          reason: 'van elke plaat is de tracklijst bekend, anders zegt de app geen nee');
+      expect(zonderNepVinyl(paden, 'Spice Girls', 'Viva Forever', (p) => p, dienst: d), [paden[1]]);
+      expect(zonderNepVinyl(paden, 'Spice Girls', 'Love Thing', (p) => p, dienst: d), paden,
+          reason: 'Love Thing staat op de LP: vinyl mag');
+      expect(zonderNepVinyl(paden, 'Celeste', 'Strange', (p) => p, dienst: d), paden,
+          reason: 'niets bekend over Celeste: geen antwoord is geen nee');
+      expect(zonderNepVinyl(paden, '', 'Viva Forever', (p) => p, dienst: d), paden);
+    });
+
+    test('vóór een vinylzoektocht vraagt de app Discogs eerst', () async {
+      final d = VinylBestaan();
+      final bron = _NepBron(nummers: {..._alleNummers, 40: ['Stop']});
+      vinylBronVoorZoeken = () => bron;
+      addTearDown(() => vinylBronVoorZoeken = null);
+      expect(await vinylVoorNummer('Spice Girls', 'Stop', dienst: d), isTrue);
+      expect(await vinylVoorNummer('Spice Girls', 'Viva Forever', dienst: d), isFalse);
+      expect(bron.persingVragen, 1, reason: 'binnen de week één keer');
+      vinylBronVoorZoeken = null;
+      expect(await vinylVoorNummer('Milow', 'Ayo Technology', dienst: d), isNull, reason: 'zonder bron vraagt hij niets');
+    });
+
+    test('het menu grijs: alleen als GEEN van de nummers op vinyl bestaat', () async {
+      final d = await metSpice();
+      expect(geenVinylBekend([(artiest: 'Spice Girls', titel: 'Viva Forever')], dienst: d), isTrue);
+      expect(
+          geenVinylBekend(
+              [(artiest: 'Spice Girls', titel: 'Viva Forever'), (artiest: 'Spice Girls', titel: 'Wannabe')],
+              dienst: d),
+          isFalse);
+      expect(geenVinylBekend([(artiest: 'Celeste', titel: 'Strange')], dienst: d), isFalse, reason: 'onbekend');
+      expect(geenVinylBekend(const [], dienst: d), isFalse);
+    });
+
+    test('aangesloten: elke automatische keuze, de vinylvragen en het menu', () {
+      final o = _bron('lib/online.dart');
+      expect(RegExp(r'zonderNepVinyl\(').allMatches(o).length, 4,
+          reason: 'de gewone keuze, opwaarderen, de radio en de wensen/soorten/jacht');
+      expect(o, contains("          zonderNepVinyl(candidates, authority?.artist ?? '', authority?.title ?? '', (f) => f.filename),"));
+      expect(o, contains('        if (await vinylVoorNummer(v.artiest, v.titel) == false) geen.add(v);'));
+      expect(o, contains('          vragen.verwijder(v.pad);'));
+      final m = _bron('lib/main.dart');
+      expect(m, contains('  vinylBronVoorZoeken = () => DiscographyService(CatalogService(), musicbrainz, DiscogsService(settings)).vinylBron();'));
+      expect(m, contains('            uit: s == Kopiesoort.vinyl && geenVinyl),'));
     });
   });
 

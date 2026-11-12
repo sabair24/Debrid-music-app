@@ -27,6 +27,7 @@ import 'package:flutter/foundation.dart';
 
 import 'organize.dart' show normKey;
 import 'paths.dart';
+import 'vinyl.dart' show isVinylRip;
 
 /// Zo lang geldt wat Discogs zei; daarna kijkt de app bij het volgende bezoek of de volgende vinylzoektocht opnieuw.
 const Duration kVinylVers = Duration(days: 7);
@@ -426,6 +427,45 @@ class VinylBestaan extends ChangeNotifier {
       debugPrint('vinyl_bestaan.json niet bewaard: $e');
     }
   }
+}
+
+/// Hoe de app buiten de artiestpagina bij Discogs vraagt, met dezelfde artiest als de discografie (main.dart zet dit,
+/// via [DiscographyService.vinylBron]). Null in een toets: dan vraagt hij niets en geldt alleen wat bekend is.
+VinylBron Function()? vinylBronVoorZoeken;
+
+/// Bestaat [titel] van [artiest] op vinyl? Vóór een vinylzoektocht (Saber, 12-11-2026: "Bij bezoek + vóór elke
+/// vinylzoektocht"): wat ouder is dan een week, wordt eerst opnieuw gevraagd. Null: niet te zeggen — dan zoekt de app
+/// zoals altijd.
+Future<bool?> vinylVoorNummer(String artiest, String titel, {VinylBestaan? dienst}) async {
+  final d = dienst ?? vinylBestaan;
+  final maak = vinylBronVoorZoeken;
+  if (maak != null) {
+    await d.voor(artiest, maak());
+  } else {
+    await d.laad();
+  }
+  return d.bestaatOpVinyl(artiest, titel);
+}
+
+/// Wat een AUTOMATISCHE keuze uit [kandidaten] laat vallen: een vinylrip van een nummer dat volgens Discogs nooit op
+/// vinyl verscheen (Saber, 12-11-2026: "Weigeren") — bijna altijd een cd met een verkeerd etiket, of een andere plaat.
+/// Alleen op wat al bekend is; hier vraagt de app Discogs niets. Weet hij het niet, dan blijft alles staan.
+List<T> zonderNepVinyl<T>(List<T> kandidaten, String artiest, String titel, String Function(T) pad,
+    {VinylBestaan? dienst}) {
+  if (artiest.trim().isEmpty || titel.trim().isEmpty) return kandidaten;
+  if ((dienst ?? vinylBestaan).bestaatOpVinyl(artiest, titel) != false) return kandidaten;
+  return [for (final k in kandidaten) if (!isVinylRip(pad(k))) k];
+}
+
+/// Bestaat geen van [nummers] (artiest, titel) op vinyl, volgens wat er bekend is? Voor het grijze "Download in vinyl".
+bool geenVinylBekend(Iterable<({String artiest, String titel})> nummers, {VinylBestaan? dienst}) {
+  final d = dienst ?? vinylBestaan;
+  var een = false;
+  for (final n in nummers) {
+    if (d.bestaatOpVinyl(n.artiest, n.titel) != false) return false;
+    een = true;
+  }
+  return een;
 }
 
 /// Het bestand. **In een toets niets naar schijf**: de appmap is daar die van de echte app.

@@ -68,7 +68,8 @@ void main() {
     expect(DownloadManager.betereKandidaten([vinyl, digitaal], van, 228), [digitaal, vinyl],
         reason: 'de 24/192 vinyl staat hoger, maar de digitale 24/96 wordt eerst geprobeerd');
     final online = _bron('lib/online.dart');
-    expect(online, contains('var better = vinylAchteraan(ranked.where((f) => magOpwaarderen(f, from, officieel)).toList(), (f) => f.filename);'),
+    // Sinds 12-11-2026 met de zeef tegen nep-vinyl erin (vinyl_bestaan.dart): vinyl nog altijd achteraan.
+    expect(online, contains('      var better = vinylAchteraan(\n          zonderNepVinyl(ranked.where((f) => magOpwaarderen(f, from, officieel)).toList(),'),
         reason: 'ook de jacht na een gewone download');
   });
 
@@ -91,9 +92,9 @@ void main() {
     expect([for (final f in vinylAchteraan(l, (f) => f.filename)) f.filename],
         [r'a\cd\1.flac', r'a\web\1.flac', r'a\(vinyl rip)\1.flac', r'a\LP rip\1.flac']);
     final online = _bron('lib/online.dart');
-    expect(online, contains('if (exact == null && !jouwKeuze) candidates = vinylAchteraan(candidates, (f) => f.filename);'),
+    expect(online, contains('    if (exact == null && !jouwKeuze) {\n      // En een vinylrip van een nummer dat nooit op vinyl verscheen, helemaal niet (vinyl_bestaan.dart).\n      candidates = vinylAchteraan('),
         reason: 'wat je zelf aanklikt krijg je, ook vinyl');
-    expect(online, contains('final bruikbaar = vinylAchteraan(passend..sort(opLengteDanRang(seconden)), (f) => f.filename);'),
+    expect(online, contains('      final bruikbaar = vinylAchteraan(\n          zonderNepVinyl(passend..sort(opLengteDanRang(seconden)), artiest, titel, (f) => f.filename), (f) => f.filename);'),
         reason: 'de radio');
   });
 
