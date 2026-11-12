@@ -452,4 +452,7 @@ class _DiscogsVinylBron implements VinylBron {
   @override
   Future<Map<String, dynamic>?> plaat({int? master, int? release}) =>
       _svc.discogs.plaatMetNummers(master: master, release: release);
+
+  @override
+  Future<int?> uitgaven(int discogsId) => _svc.discogs.aantalUitgaven(discogsId);
 }

@@ -46,6 +46,7 @@ class _NepBron implements VinylBron {
   int? id;
   List<Map<String, dynamic>>? _persingen;
   bool volledig = true;
+  int? aantal = 100;
   final Map<int, List<String>> nummers;
   int persingVragen = 0;
   final List<int> plaatVragen = [];
@@ -59,6 +60,9 @@ class _NepBron implements VinylBron {
     final r = _persingen;
     return r == null ? null : (rijen: r, volledig: volledig);
   }
+
+  @override
+  Future<int?> uitgaven(int discogsId) async => aantal;
 
   @override
   Future<Map<String, dynamic>?> plaat({int? master, int? release}) async {
@@ -136,6 +140,18 @@ void main() {
       expect(vinylNummerSleutel('Wannabe (Dave Way Alternative Mix)'), isNot(vinylNummerSleutel('Wannabe')));
       expect(vinylNummerSleutel('Wannabe (Live)'), isNot(vinylNummerSleutel('Wannabe')));
       expect(vinylNummerSleutel('Wannabe - Acoustic'), isNot(vinylNummerSleutel('Wannabe')));
+    });
+
+    test('de tweede lijst (12-11-2026): ″ is een inch, "(My Songs Version)" is het nummer, een taal of akoestisch niet', () {
+      expect(vinylNummerSleutel('Get Outta My Dreams, Get Into My Car (7″ Version)'),
+          vinylNummerSleutel('Get Outta My Dreams, Get Into My Car'));
+      expect(vinylNummerSleutel('Get Outta My Dreams, Get Into My Car (7″ Edit)'),
+          vinylNummerSleutel('Get Outta My Dreams, Get Into My Car'), reason: 'ook zonder het woord Version');
+      expect(vinylNummerSleutel('Shape Of My Heart (My Songs Version)'), vinylNummerSleutel('Shape Of My Heart'));
+      expect(vinylNummerSleutel('Si Te Vas (Spanish Version)'), isNot(vinylNummerSleutel('Si Te Vas')));
+      expect(vinylNummerSleutel('Hello (Acoustic Version)'), isNot(vinylNummerSleutel('Hello')));
+      expect(vinylNummerSleutel('Hello - Live Version'), isNot(vinylNummerSleutel('Hello')));
+      expect(vinylNummerSleutel('Hello (Extended Version)'), isNot(vinylNummerSleutel('Hello')));
     });
 
     test('op de LP, op de single (ook een dubbele A-kant), en niet', () {
@@ -225,6 +241,23 @@ void main() {
       await terug.voor('Spice Girls', bron2);
       expect(bron2.persingVragen, 1);
       expect(oud.isVers, isFalse);
+    });
+
+    test('een pagina zonder vinyl: alleen "nee" als hij echt een discografie heeft ("The Black-Eyed Peas": 0 uitgaven)',
+        () async {
+      final d = VinylBestaan();
+      final leeg = _NepBron(persingen: const [])..aantal = 0;
+      final k = await d.voor('The Black Eyed Peas', leeg);
+      expect(k!.platen, isEmpty);
+      expect(k.volledig, isFalse);
+      expect(d.bestaatOpVinyl('The Black Eyed Peas', 'My Style'), isNull, reason: 'een lege pagina zegt niets');
+      final echt = _NepBron(persingen: const [])..aantal = 40;
+      await d.voor('Billie Eilish Digitaal', echt);
+      expect(d.bestaatOpVinyl('Billie Eilish Digitaal', 'Iets'), isFalse,
+          reason: 'veertig uitgaven en geen enkele op vinyl: dan bestaat er geen vinyl');
+      final stil = _NepBron(persingen: const [])..aantal = null;
+      await d.voor('Onbekend', stil);
+      expect(d.bestaatOpVinyl('Onbekend', 'Iets'), isNull, reason: 'Discogs gaf het aantal niet');
     });
 
     test('Discogs weet het niet: wat er was blijft, en zonder iets is het antwoord null', () async {

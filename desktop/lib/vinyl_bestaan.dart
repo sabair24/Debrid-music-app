@@ -39,6 +39,10 @@ const Duration kVinylVers = Duration(days: 7);
 /// een budget van zestig per minuut, en dat één keer per week.
 const int kVinylPaginas = 40;
 
+/// Zoveel uitgaven moet een Discogs-pagina zonder vinyl hebben voor de app "geen vinyl" gelooft: anders is het een lege
+/// of bijna lege pagina (een alias, een dubbele invoer), en zegt dat niets.
+const int kVinylEchtePagina = 5;
+
 /// LP of single (7", 12", 10", EP, maxi).
 enum VinylVorm { lp, single }
 
@@ -213,16 +217,30 @@ final RegExp _neutraal = RegExp(
     r'(?:\s+(?:edit|version|mix))?|edit|mono|stereo|explicit|clean|(?:feat|ft|featuring|with)\b.*)$',
     caseSensitive: false);
 final RegExp _haakjes = RegExp(r'\s*[\(\[]([^\)\]]*)[\)\]]');
+
+/// Een "… Version" is meestal dezelfde opname onder een andere naam: "(My Songs Version)" heet op de vinylplaat My
+/// Songs gewoon "Shape Of My Heart" (Sting, de tweede lijst van 12-11-2026). Behalve als er een ander soort opname of
+/// een andere taal in staat — dan blijft hij in de sleutel ([_eigenSoort]).
+final RegExp _versieStaart = RegExp(r'\bversion$|\bversie$', caseSensitive: false);
+final RegExp _eigenSoort = RegExp(
+    r'remix|\bmix\b|live|acoustic|akoestisch|unplugged|instrumental|extended|\bdub\b|club|demo|piano|orchestral|symphonic'
+    r'|karaoke|cappella|acapella|rework|reprise|strings|spanish|espa[nñ]ol|french|fran[cç]ais|italian|italiano|german'
+    r'|deutsch|english|portugu[eê]s|dutch|nederlands',
+    caseSensitive: false);
+
+bool _isNeutraal(String binnen) =>
+    _neutraal.hasMatch(binnen) || (_versieStaart.hasMatch(binnen) && !_eigenSoort.hasMatch(binnen));
 final RegExp _streepStaart = RegExp(r'\s+-\s+([^-]+)$');
 final RegExp _featLos = RegExp(r'\s+(?:feat\.?|ft\.?|featuring)\s+.*$', caseSensitive: false);
 
 /// De sleutel waarop een nummer met een nummer op een vinylplaat vergeleken wordt. Zie [VinylKennis.bestaat].
 String vinylNummerSleutel(String titel) {
-  var t = titel.trim();
+  // "(7″ Version)" met een dubbel accent in plaats van een aanhalingsteken (Billy Ocean, de tweede lijst): dat is een inch.
+  var t = titel.trim().replaceAll(RegExp('[″”“]'), '"');
   // "Wannabe - Radio Edit" (Deezer, TIDAL): een staart na een streep die niets verandert, gaat weg.
   final streep = _streepStaart.firstMatch(t);
-  if (streep != null && _neutraal.hasMatch(streep.group(1)!.trim())) t = t.substring(0, streep.start);
-  t = t.replaceAllMapped(_haakjes, (m) => _neutraal.hasMatch(m.group(1)!.trim()) ? '' : ' ${m.group(1)}');
+  if (streep != null && _isNeutraal(streep.group(1)!.trim())) t = t.substring(0, streep.start);
+  t = t.replaceAllMapped(_haakjes, (m) => _isNeutraal(m.group(1)!.trim()) ? '' : ' ${m.group(1)}');
   t = t.replaceAll(_featLos, '');
   return normKey(t);
 }
@@ -332,6 +350,9 @@ abstract class VinylBron {
 
   /// De tracklijst van een plaat; null als Discogs niet antwoordde.
   Future<Map<String, dynamic>?> plaat({int? master, int? release});
+
+  /// Hoeveel uitgaven (alle formaten) Discogs op deze pagina heeft; null als Discogs niet antwoordde.
+  Future<int?> uitgaven(int discogsId);
 }
 
 /// Eén voor de hele app: onthoudt per artiest wat Discogs zei (`vinyl_bestaan.json`) en vraagt hoogstens één keer
@@ -378,12 +399,19 @@ class VinylBestaan extends ChangeNotifier {
       if (id == null) return oud;
       final uit = await bron.persingen(id);
       if (uit == null) return oud;
+      // Geen enkele vinylpersing: alleen een nee als de pagina echt een discografie heeft. "The Black-Eyed Peas" is bij
+      // Discogs een lege pagina naast de echte groep (de tweede lijst van 12-11-2026) — daaruit volgt niets.
+      var volledig = uit.volledig;
+      if (uit.rijen.isEmpty) {
+        final n = await bron.uitgaven(id);
+        if (n == null || n < kVinylEchtePagina) volledig = false;
+      }
       // Wat er vorige keer al aan tracklijsten was, hoeft niet opnieuw: een plaat verandert zijn nummers niet.
       final eerder = {for (final p in oud?.platen ?? const <VinylPlaat>[]) '${p.master}|${p.release}': p.nummers};
       final kennis = VinylKennis(
           discogsId: id,
           gemetenMs: DateTime.now().millisecondsSinceEpoch,
-          volledig: uit.volledig,
+          volledig: volledig,
           platen: [for (final p in vinylPlatenUit(uit.rijen)) p.metNummers(eerder['${p.master}|${p.release}'])]);
       _zet(artiest, kennis);
       return kennis;

@@ -1350,6 +1350,11 @@ class DiscogsService {
     return (rijen: uit, volledig: volledig);
   }
 
+  /// Hoeveel uitgaven (alle formaten) Discogs op de pagina van artiest [id] heeft, of null.
+  Future<int?> aantalUitgaven(int id) async =>
+      _getal(await _get('https://api.discogs.com/database/search?artist_id=$id&type=release&per_page=1', vers: true),
+          'items');
+
   /// De naam waaronder Discogs artiest [id] kent ("Adele (3)"), of null. Uit de cache als die er is.
   Future<String?> artiestNaam(int id) async {
     final b = await _get('https://api.discogs.com/artists/$id');
