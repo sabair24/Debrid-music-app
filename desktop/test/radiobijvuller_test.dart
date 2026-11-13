@@ -697,7 +697,7 @@ void main() {
     test('aangesloten: de start zet de artiest van het zaadnummer vast, en afstemmen neemt die over', () {
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
       final start = main.indexOf('final id = await rec.artiestVanNummer(artist, zaadTitel)');
-      final mix = main.indexOf('    recs = await rec.mixRadio(artist, smaak: smaak);');
+      final mix = main.indexOf('    recs = await rec.mixRadio(buurArtiest, smaak: smaak);');
       expect(start, greaterThan(0));
       expect(start < mix, isTrue, reason: 'vóór de startlijst');
       expect(main.contains('        rec.zetArtiest(artist, id);\n        keuring.deezerArtiest = id;'), isTrue);
