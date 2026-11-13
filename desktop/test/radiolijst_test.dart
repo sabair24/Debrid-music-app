@@ -5,6 +5,8 @@
 /// erdoor komt.
 library;
 
+import 'dart:io';
+
 import 'package:debridmusic/aanbevelingplan.dart' show SmaakProfiel;
 import 'package:debridmusic/radiolijst.dart';
 import 'package:debridmusic/radiosmaak.dart';
@@ -48,6 +50,87 @@ void main() {
       expect(leesNummers(veel), hasLength(kMaxModelNummers));
       expect(leesNummers('geen json'), isEmpty);
       expect(leesNummers({'nummers': 'geen lijst'}), isEmpty);
+    });
+  });
+
+  // Saber, 13-11-2026: een radio vanaf "In Common (Black Coffee Remix)" werd R&B — "klopte totaal niet met de black
+  // coffee mix". Een remix klinkt als de remixer.
+  group('een remix als zaad', () {
+    test('DE KERN: de remixer uit de titel, ook na een streep of met "Radio Mix"', () {
+      expect(remixerUit('In Common (Black Coffee Remix)'), 'Black Coffee');
+      expect(remixerUit('In Common - Black Coffee Remix'), 'Black Coffee');
+      expect(remixerUit('In Common [Black Coffee Remix]'), 'Black Coffee');
+      expect(remixerUit('In Common (Kaskade Radio Mix)'), 'Kaskade');
+      expect(remixerUit('Cola (CamelPhat & Elderbrook Remix)'), 'CamelPhat & Elderbrook');
+      expect(remixerUit('Suit & Tie (feat. Jay-Z) [Black Coffee Remix]'), 'Black Coffee');
+    });
+
+    test('DE GRENS: geen naam, geen remixer', () {
+      for (final t in [
+        'Get Lucky (Radio Edit)',
+        'Freed From Desire (Extended Mix)',
+        'Show Me Love (Original Mix)',
+        'Tous les mêmes (2015 Remix)',
+        'Like a Prayer (12" Dance Mix)',
+        'Blue (Deep House Remix)',
+        'Yeah! (Remix)',
+        'Yeah! (feat. Lil Jon & Ludacris)',
+        'Lady (Hear Me Tonight)',
+        'In Common',
+        '',
+      ]) {
+        expect(remixerUit(t), isNull, reason: t);
+      }
+      expect(remixerUit(null), isNull);
+    });
+
+    const profiel = SmaakProfiel(topArtiesten: ['Beyoncé (40)'], perDecennium: {2010: 500}, gespeeld: [], genres: []);
+
+    test('DE KERN: de lijstvraag zegt dat de klank die van de remixer is, en dat de stijl over het origineel gaat', () {
+      final v = nummersPrompt(
+          artiest: 'Alicia Keys',
+          titel: 'In Common (Black Coffee Remix)',
+          jaar: 2016,
+          stijlen: ['Pop'],
+          genre: 'R&B',
+          profiel: profiel);
+      expect(v, contains('Let op: dit is een remix door Black Coffee.'));
+      expect(v, contains('niet die van het origineel van Alicia Keys'));
+      expect(v, contains('(uit 2016, stijl Pop, genre R&B), gaat over de uitgave en over Alicia Keys'));
+      expect(v, contains('Je stelt een radio samen rond: Alicia Keys - In Common (Black Coffee Remix)\n\nLet op:'),
+          reason: 'de stijl staat niet meer als kenmerk achter het zaad');
+    });
+
+    test('DE KERN: de sfeerkeuring beoordeelt de remix, in beide vragen', () {
+      for (final gekozen in [false, true]) {
+        final v = sfeerPrompt(
+            artiest: 'Alicia Keys',
+            titel: 'In Common (Black Coffee Remix)',
+            stijlen: ['Pop'],
+            kandidaten: const [(artiest: 'Black Coffee', titel: 'Superman')],
+            gekozen: gekozen);
+        expect(v, contains('Let op: het zaad is een remix door Black Coffee.'), reason: 'gekozen: $gekozen');
+        expect(v, contains('niet die van het origineel van Alicia Keys'));
+        expect(v, startsWith('Een radio rond: Alicia Keys - In Common (Black Coffee Remix)\n\nLet op:'));
+      }
+    });
+
+    test('DE GRENS: zonder remix blijft de vraag precies zoals hij was', () {
+      final v = nummersPrompt(artiest: 'Alicia Keys', titel: 'In Common', jaar: 2016, stijlen: ['Pop'], profiel: profiel);
+      expect(v, startsWith('Je stelt een radio samen rond: Alicia Keys - In Common (uit 2016, stijl Pop)\n\nGeef '));
+      expect(v, isNot(contains('remix door')));
+      final s = sfeerPrompt(
+          artiest: 'Alicia Keys', titel: 'In Common', stijlen: ['Pop'], kandidaten: const [(artiest: 'A', titel: 'B')]);
+      expect(s, startsWith('Een radio rond: Alicia Keys - In Common (stijl Pop)\n\nEen ander systeem'));
+    });
+
+    test('aangesloten: de Deezer-mix en de buren vertrekken van de remixer, bij de start en bij het afstemmen', () {
+      final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(main, contains('  final remixer = remixerUit(zaadTitel);\n  final buurArtiest = remixer ?? artist;\n'));
+      expect(main, contains('    recs = await rec.mixRadio(buurArtiest, smaak: smaak);\n'));
+      expect(main, contains('    ankers: [buurArtiest],\n'));
+      expect(main, contains('    final remixer = remixerUit(keuring?.zaadTitel ?? zaad?.title);\n'
+          '    recs = await rec.mixRadio(remixer ?? artist, smaak: smaak);\n'));
     });
   });
 
