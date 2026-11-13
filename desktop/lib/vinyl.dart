@@ -18,7 +18,11 @@ final _vinyl = RegExp(
     r'|\blp[\s_.\-\[\]()]*(24|16)[\s_./-]*(44|48|88|96|176|192)\b|\b(24|16)[\s_./-]*(44|48|88|96|176|192)[\s_.\-\[\]()]*lp\b'
     // Een kaal "[LP]" of "(2LP)" als merkje achter de albumnaam (26-10-2026, bij de versies): een vinylrip. "(LP Version)"
     // niet — daar staat iets achter "LP".
-    r'|[\[(][2-4]?\s*lp[\])]',
+    r'|[\[(][2-4]?\s*lp[\])]'
+    // De trackerschrijfwijze "[LP TR24]" (13-11-2026): LP en TR24 ("tracks, 24 bit") samen tussen haakjes. Gwen Stefani —
+    // What You Waiting For? kwam uit "Love.Angel.Music.Baby. [LP TR24]" en heette studio, terwijl Hollaback Girl uit
+    // dezelfde rip (zelfde recorder in de tags) groefruis had. "[TR24][OF]" (officieel, digitaal) telt niet: geen LP.
+    r'|[\[(][2-4]?\s*lp[\s_.-]+tr\s*(16|24|32)\b|[\[(]\s*tr\s*(16|24|32)[\s_.-]+[2-4]?\s*lp[\])]',
     caseSensitive: false);
 
 /// Noemt [pad] (map of bestandsnaam) een vinyl-rip? "1988 - Mademoiselle chante (vinyl rip)", "[Japan Vinyl LP 24-96

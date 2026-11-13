@@ -31,7 +31,7 @@ import 'nultoets.dart';
 import 'nultoets_meter.dart';
 import 'organize.dart';
 import 'versies.dart';
-import 'vinyl.dart' show vinylUitTags;
+import 'vinyl.dart' show isVinylRip, vinylUitTags;
 import 'vinylspoor.dart';
 
 enum Versiebesluit {
@@ -616,6 +616,7 @@ typedef Soortopruiming = ({
   int kopiebewijs,
   int nep,
   int nepVinyl,
+  int bronVinyl,
 });
 
 /// Per nummer hoogstens één kopie van elke soort: studio, cd en vinyl (Saber, 27-10-2026, bij Discovery met negen
@@ -644,7 +645,7 @@ Future<Soortopruiming> eenPerSoort(
     Future<Stilte?> Function(String pad)? stilte,
     Future<Uitlijning?> Function(String digitaal, String kandidaat)? uitlijning}) async {
   var naarDubbel = 0, tweelingen = 0, vinylspoor = 0, verhuisd = 0, albumnaam = 0, overgeslagen = 0, nultoets = 0;
-  var kopiebewijzen = 0, nep = 0, nepVinyl = 0;
+  var kopiebewijzen = 0, nep = 0, nepVinyl = 0, bronVinyl = 0;
   final meet = stilte ?? stilteVan;
   final lijn = uitlijning ?? uitlijningVan;
   final sep = Platform.pathSeparator;
@@ -662,6 +663,18 @@ Future<Soortopruiming> eenPerSoort(
     // Wat elke versie werkelijk is: twee versies die tweelingen zijn, zijn één soort — vinyl als een van beide vinyl is
     // (dat is wat [isTweeling] dan vroeg), anders die van de oudste.
     final soortVan = <String, Kopiesoort>{for (final v in lijst) v.pad: v.soort};
+    // Een studio-versie waarvan de bron een vinylrip noemt ([isVinylRip]), is vinyl — zoals een binnenkomer met dat pad
+    // nu zou heten. Wat de app bij het binnenkomen nog niet herkende ("[LP TR24]", 13-11-2026), telt zo alsnog. Niet als
+    // je de soort zelf koos.
+    for (final v in lijst) {
+      if (v.soort != Kopiesoort.studio || v.bron.isEmpty || !isVinylRip(v.bron)) continue;
+      if (soortVoor(v.pad)?.gekozen == true) continue;
+      soortVan[v.pad] = Kopiesoort.vinyl;
+      bronVinyl++;
+      final delen = v.bron.split(RegExp(r'[\\/]'));
+      log?.call('"$naam": je studio-versie komt uit een vinylrip ("${delen.length > 1 ? delen[delen.length - 2] : delen.last}") '
+          '— nu vinyl');
+    }
     for (var i = 0; i < lijst.length; i++) {
       for (var j = i + 1; j < lijst.length; j++) {
         final a = lijst[i], b = lijst[j];
@@ -934,5 +947,6 @@ Future<Soortopruiming> eenPerSoort(
     kopiebewijs: kopiebewijzen,
     nep: nep,
     nepVinyl: nepVinyl,
+    bronVinyl: bronVinyl,
   );
 }

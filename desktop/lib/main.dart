@@ -3066,7 +3066,8 @@ Future<void> main() async {
             downloads.logRegel('één per soort: ${r.naarDubbel} kopieën naar _dubbel (${r.tweelingen} tweelingen, '
                 '${r.nultoets} door de nultoets als je cd herkend, ${r.nep} nep naast een echte kopie; '
                 '${r.kopiebewijs} muren door een andere kopie bewezen), '
-                '${r.vinylspoor} klonken als vinyl, ${r.nepVinyl} "vinyl" bleek digitaal, '
+                '${r.vinylspoor} klonken als vinyl, ${r.bronVinyl} studio-versies kwamen uit een vinylrip, '
+                '${r.nepVinyl} "vinyl" bleek digitaal, '
                 '${r.verhuisd} naar de map van hun soort, ${r.albumnaam} albumnamen rechtgezet${r.overgeslagen > 0 ? ', ${r.overgeslagen} nummers wachten (ze speelden)' : ''}');
             if (r.naarDubbel + r.verhuisd + r.albumnaam > 0) await library.scan();
           } catch (e) {
