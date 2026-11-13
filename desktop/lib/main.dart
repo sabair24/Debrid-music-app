@@ -50,7 +50,7 @@ import 'nieuw_op_toestel.dart';
 import 'scans_vooraf.dart';
 import 'toestel_redenen.dart';
 import 'ui/nummerkeuze.dart';
-import 'radiolijst.dart' show AiNummer, kMinModelNummers;
+import 'radiolijst.dart' show AiNummer, kMinModelNummers, remixerUit;
 import 'radiosmaak.dart';
 import 'radiostijl.dart'
     show
@@ -22450,6 +22450,14 @@ Future<void> startRadio(BuildContext context, String artist,
   // weerde en waarom. Een eigen bestand, want `warm.log` houdt maar een paar duizend regels en de
   // regel van een radio van een half uur geleden was er op 26-09-2026 al uit.
   final log = WarmLog('$appDir${Platform.pathSeparator}radio.log');
+  // Een remix klinkt als de remixer (Saber, 13-11-2026, vanaf "In Common (Black Coffee Remix)": "wat er dan werd
+  // aangeboden klopte totaal niet met de black coffee mix"). De mix van Deezer en de buren vertrekken dan van hem; de
+  // vraag aan het model leest hem zelf uit de titel ([remixerUit]).
+  final remixer = remixerUit(zaadTitel);
+  final buurArtiest = remixer ?? artist;
+  if (remixer != null) {
+    log.line('radio "$artist — $zaadTitel": een remix van $remixer — de Deezer-mix en de buren vertrekken van $remixer');
+  }
 
   // De keuring — zie `radiostijl.dart`. Het zaad wordt op de achtergrond opgezocht: de radio begint
   // meteen, en wat er gehaald moet worden wacht in zijn eigen haal op dit antwoord.
@@ -22528,7 +22536,9 @@ Future<void> startRadio(BuildContext context, String artist,
   }
   List<RecTrack> recs;
   try {
-    recs = await rec.mixRadio(artist, smaak: smaak);
+    recs = await rec.mixRadio(buurArtiest, smaak: smaak);
+    // Kent Deezer de remixer niet, dan toch de artiest van het nummer: liever die radio dan geen.
+    if (recs.isEmpty && remixer != null) recs = await rec.mixRadio(artist, smaak: smaak);
   } catch (_) {
     recs = const [];
   }
@@ -22561,7 +22571,7 @@ Future<void> startRadio(BuildContext context, String artist,
       bronArtiesten: (a, verwant) => rec.bronArtiesten(a, metVerwant: verwant),
       toppers: (id, naam, limit, index) => rec.toppers(id, naam, limit: limit, index: index),
     ),
-    ankers: [artist],
+    ankers: [buurArtiest],
     metVerwant: true,
     maakPlan: (recs) => _radioplan(recs, lib,
         zaadArtiest: artist,
@@ -23258,7 +23268,10 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
   if (keuring?.deezerArtiest case final id?) rec.zetArtiest(artist, id);
   List<RecTrack> recs;
   try {
-    recs = await rec.mixRadio(artist, smaak: smaak);
+    // Vanaf een remix de mix van de remixer, zoals bij de start ([remixerUit]).
+    final remixer = remixerUit(keuring?.zaadTitel ?? zaad?.title);
+    recs = await rec.mixRadio(remixer ?? artist, smaak: smaak);
+    if (recs.isEmpty && remixer != null) recs = await rec.mixRadio(artist, smaak: smaak);
   } catch (_) {
     recs = const [];
   }

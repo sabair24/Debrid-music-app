@@ -115,14 +115,17 @@ String sfeerPrompt({
     if (jaar != null) 'uit $jaar',
     if (stijlen.isNotEmpty) 'stijl ${stijlen.join(', ')}',
   ].join(', ');
+  final remixer = remixerUit(titel);
+  final kop = '$zaad${feiten.isEmpty || remixer != null ? '' : ' ($feiten)'}';
+  final remix = remixer == null ? '' : '\n${remixSfeerZin(artiest, remixer, feiten)}\n';
   String tempo(int i) => i < bpm.length && bpm[i] != null ? ' (${tempoTekst(bpm[i]!)})' : '';
   final lijst = [
     for (var i = 0; i < kandidaten.length; i++) '${i + 1}. ${kandidaten[i].artiest} - ${kandidaten[i].titel}${tempo(i)}'
   ];
   if (gekozen) {
     return '''
-Een radio rond: $zaad${feiten.isEmpty ? '' : ' ($feiten)'}
-
+Een radio rond: $kop
+$remix
 $kGekozenSfeerZin $kTaalSfeerZin
 ${zaadBpm == null ? '' : '\n${tempoZin(zaadBpm)}\n'}${_voorbeeldZinnen(pastNiet, pastWel)}
 ${lijst.join('\n')}
@@ -131,8 +134,8 @@ Geef de nummers terug die weg moeten.
 ''';
   }
   return '''
-Een radio rond: $zaad${feiten.isEmpty ? '' : ' ($feiten)'}
-
+Een radio rond: $kop
+$remix
 Een ander systeem stelde de nummers hieronder voor. Welke passen NIET in de sfeer van dit nummer?
 Kijk naar tempo, energie, stemming en klank - niet alleen naar het genre. $kGeenJaargrensZin Een radio
 rond een rustig, zwoel soulnummer heeft geen uptempo dancepop; een radio rond een eurodanceplaat heeft
@@ -143,6 +146,62 @@ ${lijst.join('\n')}
 Geef de nummers terug die weg moeten.
 ''';
 }
+
+/// De remixer in een titel: "In Common (Black Coffee Remix)" → "Black Coffee", ook "In Common - Black Coffee Remix" en
+/// "(Kaskade Radio Mix)" → "Kaskade". Null als er geen naam staat: "(Radio Edit)", "(Extended Mix)", "(2015 Remix)",
+/// "(12" Dance Mix)", "(Deep House Remix)", "(Remix)".
+///
+/// **Waarom (Saber, 13-11-2026).** Een radio vanaf Alicia Keys — In Common (Black Coffee Remix) werd Usher, All Saints,
+/// Justin Timberlake, Mariah Carey en Toni Braxton: *"wat er dan werd aangeboden klopte totaal niet met de black coffee
+/// mix"*. Discogs noemt die remix-EP alleen "Pop", bij Alicia Keys staat R&B, en de mix van Deezer en de buren vertrokken
+/// van haar. Een remix klinkt als de remixer: Black Coffee maakte er Zuid-Afrikaanse deep/afro house van.
+String? remixerUit(String? titel) {
+  if (titel == null || titel.trim().isEmpty) return null;
+  final kandidaten = [
+    for (final m in _remixTussenHaakjes.allMatches(titel)) m.group(1)!,
+    if (_remixNaStreep.firstMatch(titel) case final m?) m.group(1)!,
+  ];
+  for (final k in kandidaten) {
+    final woorden = k.trim().split(RegExp(r'\s+'));
+    while (woorden.isNotEmpty && _geenRemixer.contains(_kaal(woorden.last))) {
+      woorden.removeLast();
+    }
+    final naam = woorden.join(' ').trim();
+    if (naam.length < 2 || RegExp(r"^[\d'’\s.]+$").hasMatch(naam)) continue;
+    return naam;
+  }
+  return null;
+}
+
+String _kaal(String woord) => woord.toLowerCase().replaceAll(RegExp(r'[^a-z0-9"]'), '');
+
+const _remixWoord = r'(?:re-?mix|rmx|rework|re-?edit|refix|bootleg|edit|mix|dub)';
+final _remixTussenHaakjes = RegExp('[(\\[]([^()\\[\\]]+?)\\s+$_remixWoord\\s*[)\\]]', caseSensitive: false);
+final _remixNaStreep = RegExp('\\s[-–—]\\s+([^()\\[\\]\\-–—]+?)\\s+$_remixWoord\\s*\$', caseSensitive: false);
+
+/// Woorden die geen remixer zijn: soorten mixen, formaten, jaartallen ("(Kaskade Radio Mix)" verliest "Radio").
+const Set<String> _geenRemixer = {
+  'radio', 'extended', 'club', 'vocal', 'instrumental', 'original', 'main', 'album', 'single', 'short', 'long', //
+  'full', 'dub', 'edit', 'remastered', 'remaster', 'version', 'dance', 'house', 'deep', 'disco', '12', '12"', '7',
+  '7"', 'inch', 'clean', 'explicit', 'acoustic', 'live', 'mono', 'stereo', 'special', 'new', 'the', 'official',
+  'video', 'alternate', 'alternative', 'uk', 'us', 'european', 'classic', 're', 'tv', 'mixed', 'maxi', 'mega',
+  'megamix', 'party', 'a', 'b', 'remix', 'mix',
+};
+
+/// Wat het model hoort als het zaad een remix is ([remixerUit]): de klank is die van de remixer, en wat Discogs en
+/// TheAudioDB zeggen ([feiten]) gaat over de uitgave en de artiest van het origineel.
+String remixZin(String artiest, String remixer, String feiten) =>
+    'Let op: dit is een remix door $remixer. De klank, het genre en de scene van deze radio zijn die van $remixer en '
+    'van deze remix - niet die van het origineel van $artiest.'
+    '${feiten.isEmpty ? '' : ' Wat Discogs en TheAudioDB erover zeggen ($feiten), gaat over de uitgave en over $artiest, niet over deze remix.'}'
+    ' Kies nummers die naast deze remix passen: van $remixer zelf (hoogstens twee) en uit zijn scene. Een nummer van '
+    '$artiest alleen als het echt die klank heeft.';
+
+/// Hetzelfde voor de sfeerkeuring: de sfeer van de remix, niet die van het origineel.
+String remixSfeerZin(String artiest, String remixer, String feiten) =>
+    'Let op: het zaad is een remix door $remixer. Beoordeel de sfeer van die remix - de klank, het tempo en de scene '
+    'van $remixer -, niet die van het origineel van $artiest.'
+    '${feiten.isEmpty ? '' : ' Wat Discogs erover zegt ($feiten), gaat over de uitgave en over $artiest.'}';
 
 /// Wat de luisteraar zelf zei over nummers in radio's als deze — "past niet" en "past" (Saber, 21-10-2026:
 /// "dan moet de app daar absoluut rekening mee houden"). Leeg als hij nog niets zei.
@@ -292,9 +351,10 @@ String nummersPrompt({
     if (stijlen.isNotEmpty) 'stijl ${stijlen.join(', ')}',
     if (genre != null && genre.trim().isNotEmpty) 'genre $genre',
   ].join(', ');
+  final remixer = remixerUit(titel);
   return '''
-Je stelt een radio samen rond: $zaad${feiten.isEmpty ? '' : ' ($feiten)'}
-
+Je stelt een radio samen rond: $zaad${feiten.isEmpty || remixer != null ? '' : ' ($feiten)'}
+${remixer == null ? '' : '\n${remixZin(artiest, remixer, feiten)}\n'}
 Geef $kMaxModelNummers nummers die op deze radio horen. Blijf in het genre en de sfeer van DIT nummer:
 dezelfde klank, dezelfde scene. $kGeenJaargrensZin Bijvoorbeeld: rond een eurodanceplaat horen
 eurodance, dance en happy hardcore uit die scene - geen disco en geen EDM, ook al heet het allemaal
