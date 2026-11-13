@@ -31,6 +31,9 @@ void main() {
       r'Genesis - Abacab (1981) (PBTHAL LP 24-96) [FLAC] vtwin88cube\01.-Abacab.flac',
       r'Genesis - Duke (Piros) PBTHAL (1980 Progressive Rock) [Flac 24-96 LP]\01.flac',
       r'Joy Division\1988 Substance [LP 24-192]\01.flac',
+      // 13-11-2026: de trackerschrijfwijze, LP en TR24 tussen dezelfde haakjes.
+      r'muzak\Gwen Stefani\2004 - Gwen Stefani - Love.Angel.Music.Baby. [LP TR24]\01 - What You Waiting For?.flac',
+      r'X\Album (1979) [TR24 LP]\01.flac',
     ]) {
       expect(isVinylRip(p), isTrue, reason: p);
     }
@@ -41,6 +44,10 @@ void main() {
       r'Lionel Richie\Can’t Slow Down (1983)\08 - Hello.flac',
       r'Music\Prince - 1999\6. Automatic (LP Version).flac',
       r'Toto - IV [24-96]\10 - Africa.flac',
+      // "[TR24][OF]": tracks, 24 bit, officieel — digitaal.
+      r'[TR24][OF] Eagles - Hotel California (40th Anniversary Expanded Edition)\01. Hotel California.flac',
+      r'[TR24][OF][LDR] Sia - This Is Acting\01.flac',
+      r'Prince\1999 (LP Version TR24)\01.flac',
     ]) {
       expect(isVinylRip(p), isFalse, reason: p);
     }

@@ -240,10 +240,16 @@ void main() {
   group('eenPerSoort: wat er al dubbel lag', () {
     String dubbel() => '${root.path}${sep}_dubbel';
     String versie(String map, Kopiesoort soort, String persing,
-        {int hz = 96000, int bits = 24, int sec = 200, int sinds = 0, Kopiesoort ankerSoort = Kopiesoort.cd}) {
+        {int hz = 96000,
+        int bits = 24,
+        int sec = 200,
+        int sinds = 0,
+        Kopiesoort ankerSoort = Kopiesoort.cd,
+        String bron = ''}) {
       final pad = '${root.path}${sep}Albums${sep}Spice Girls$sep$map${sep}01 - Wannabe.flac';
       schrijf(pad, _flac(hz: hz, bits: bits, sec: sec, tags: {..._tags, 'ALBUM': map}));
-      versies.voegToe(anker, Versie(pad: pad, soort: soort, persing: persing, sindsMs: sinds), ankerSoort: ankerSoort);
+      versies.voegToe(anker, Versie(pad: pad, soort: soort, persing: persing, sindsMs: sinds, bron: bron),
+          ankerSoort: ankerSoort);
       zetSoort(pad, soort);
       return pad;
     }
@@ -302,6 +308,40 @@ void main() {
       expect(regels.single, contains('dezelfde rip'));
       expect(Directory('${root.path}${sep}Albums${sep}Spice Girls${sep}Spice (cd)').existsSync(), isFalse,
           reason: 'de versiemap van de cd bleef leeg achter (Cutting Crew)');
+    });
+
+    // Saber, 13-11-2026: "wat maakt het verschil tussen vinyl en studio volgens de app? en is het wel juist?" — What You
+    // Waiting For? heette studio, maar kwam uit "Love.Angel.Music.Baby. [LP TR24]", dezelfde vinylrip als Hollaback Girl.
+    test('DE KERN (13-11): een studio-versie uit een vinylrip ("[LP TR24]") wordt vinyl, in "Spice (vinyl)"', () async {
+      zetSoort(anker, Kopiesoort.cd);
+      final studio = versie('Spice (studio)', Kopiesoort.studio, '', sinds: 1,
+          bron: r'muzak\Gwen Stefani\2004 - Gwen Stefani - Love.Angel.Music.Baby. [LP TR24]\01 - What You Waiting For?.flac');
+      final regels = <String>[];
+      final r = await eenPerSoort(dubbel: dubbel(), log: regels.add);
+      expect(r.bronVinyl, 1);
+      final v = versies.versiesVan(anker).single;
+      expect(v.soort, Kopiesoort.vinyl);
+      expect(v.pad, contains('Spice (vinyl)'));
+      expect(File(v.pad).existsSync(), isTrue);
+      expect(File(studio).existsSync(), isFalse, reason: 'verhuisd, niet gekopieerd');
+      expect(soortVoor(v.pad)?.soort, Kopiesoort.vinyl);
+      expect(v.bron, contains('[LP TR24]'), reason: 'de bron blijft bewaard');
+      expect(inDubbel(), isEmpty, reason: 'niets weg');
+      expect(regels.first, contains('vinylrip ("2004 - Gwen Stefani - Love.Angel.Music.Baby. [LP TR24]")'));
+      expect((await eenPerSoort(dubbel: dubbel())).bronVinyl, 0, reason: 'een tweede keer niets');
+    });
+
+    test('een officiële studio ("[TR24][OF]") blijft studio, en een studio die je zelf koos ook', () async {
+      zetSoort(anker, Kopiesoort.cd);
+      final of = versie('Spice (studio)', Kopiesoort.studio, '', sinds: 1,
+          bron: r'x\[TR24][OF] Eagles - Hotel California (40th Anniversary Expanded Edition)\01. Hotel California.flac');
+      expect((await eenPerSoort(dubbel: dubbel())).bronVinyl, 0);
+      expect(versies.versiesVan(anker).single.soort, Kopiesoort.studio);
+      versies.wis();
+      final gekozen = versie('Spice (studio)', Kopiesoort.studio, '', sinds: 1, bron: r'y\Album [LP TR24]\01.flac');
+      zetSoort(gekozen, Kopiesoort.studio, gekozen: true);
+      expect((await eenPerSoort(dubbel: dubbel())).bronVinyl, 0, reason: 'jouw keuze wint');
+      expect(File(of).existsSync(), isTrue);
     });
 
     test('al in de map van zijn soort, maar de albumnaam draagt nog een persing: rechtgezet (Voyager)', () async {
