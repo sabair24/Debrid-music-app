@@ -721,6 +721,12 @@ TrackTags? readTags(File f) {
   if (!tagParserWouldClaim(f)) return viaEigenId3();
   try {
     final m = readMetadata(f, getImage: false);
+    // Niets bruikbaars gelezen: dan beslist het eigen vangnet, zoals bij een weigering. audio_metadata_reader 1.6 weigerde
+    // een mp3 met reclame in TRCK ("WWW.CLUB-BOX.COM") en kwam zo bij [viaEigenId3]; 1.8.1 (14-11-2026) leest hem zonder
+    // fout maar zonder titel, artiest of album — en dan werd hij "Onbekende artiest" in plaats van overgeslagen.
+    if ((m.title?.trim().isEmpty ?? true) && (m.artist?.trim().isEmpty ?? true) && (m.album?.trim().isEmpty ?? true)) {
+      return viaEigenId3();
+    }
     return TrackTags(
       title: (m.title?.trim().isNotEmpty ?? false) ? m.title!.trim() : noExt,
       artist: (m.artist?.trim().isNotEmpty ?? false) ? m.artist!.trim() : '',

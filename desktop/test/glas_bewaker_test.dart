@@ -235,8 +235,13 @@ void main() {
     final frag = File('shaders/glas_lens.frag').readAsStringSync();
     expect(frag, isNot(contains('uv.y = 1.0 - uv.y;')));
     expect(frag, isNot(contains('#ifdef IMPELLER_TARGET_OPENGLES')));
+    // Minstens 3.47 (eerst stond hier precies '3.47.7'; 14-11-2026 kwam 3.47.9 en daarna 3.50).
     for (final werk in ['build-release.yml', 'windows_build.yml', 'apple_build.yml']) {
-      expect(File('../.github/workflows/$werk').readAsStringSync(), contains("flutter-version: '3.47.7'"),
+      final m = RegExp(r"flutter-version: '(\d+)\.(\d+)\.(\d+)'")
+          .firstMatch(File('../.github/workflows/$werk').readAsStringSync());
+      expect(m, isNotNull, reason: '$werk: geen vaste Flutter-versie');
+      final (hoofd, minor) = (int.parse(m!.group(1)!), int.parse(m.group(2)!));
+      expect(hoofd > 3 || (hoofd == 3 && minor >= 47), isTrue,
           reason: '$werk: de shader is geschreven voor 3.47; op 3.41 zou hij op GLES op zijn kop staan');
     }
   });
