@@ -99,7 +99,8 @@ class HoesProvider : ContentProvider() {
         val f = bestandVoor(uri) ?: return null
         val kolommen = projection ?: arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
         val c = MatrixCursor(kolommen)
-        c.addRow(kolommen.map {
+        // Expliciet Any?: Kotlin 2.4 (Flutter 3.50) weigert hier het afgeleide snijtype Comparable & Serializable.
+        c.addRow(kolommen.map<String, Any?> {
             when (it) {
                 OpenableColumns.DISPLAY_NAME -> f.name
                 OpenableColumns.SIZE -> f.length()
