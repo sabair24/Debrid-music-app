@@ -54,7 +54,10 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
-          java-version: '17'
+          # 21 sinds Flutter 3.50 / AGP 9.3 (14-11-2026): de lint van AGP 9.3 roept List.removeLast() aan, en
+          # dat bestaat pas vanaf Java 21 (op 17 crashte :url_launcher_android:lintVitalAnalyzeRelease).
+          # De app zelf compileert nog voor Java 17 (compileOptions en jvmTarget in app/build.gradle.kts).
+          java-version: '21'
           distribution: 'temurin'
 
       # **Geen `android-actions/setup-android` meer, en dat is de reparatie.**
