@@ -33,10 +33,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
-
     defaultConfig {
         // The id the Kotlin app already uses. Keeping it means this APK REPLACES that app on the
         // Shield and the phone instead of installing a second icon beside it — which is the whole
@@ -101,6 +97,14 @@ android {
             applicationIdSuffix = ".dev"
             versionNameSuffix = "-dev"
         }
+    }
+}
+
+// Kotlin 2.4 (Flutter 3.50): de JVM-doelversie hier, zoals in het sjabloon — `kotlinOptions` binnen
+// `android {}` is weg.
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
 }
 
