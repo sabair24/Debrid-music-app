@@ -9,7 +9,7 @@
 /// geen weg: dit ís hier de manier om te zien dat het venster het doet.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/editions.dart';

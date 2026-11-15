@@ -6,7 +6,7 @@ import 'package:debridmusic/ai.dart';
 import 'package:debridmusic/credits.dart';
 import 'package:debridmusic/main.dart' show BioText;
 import 'package:debridmusic/vertaler.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _engels = 'V is the fifth album by the band Live, released in 2001. It featured the singles '

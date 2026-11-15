@@ -18,7 +18,7 @@ library;
 
 import 'dart:math' as wiskunde;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Licht of donker (Saber, 18-10-2026: "licht thema als keuze — Licht, Donker of Volgens systeem").
 ///

@@ -18,8 +18,12 @@ import 'package:debridmusic/ui/glas.dart' show GlasKwaliteit, GlasStand, glasMat
 import 'package:debridmusic/player.dart' show Rijbediening, Speelbron;
 import 'package:debridmusic/ui/kantel_hoes.dart';
 import 'package:debridmusic/zone_opdracht.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+/// De SnapshotWidget van [FotoTijdensSchuiven] zelf. Sinds material_ui (Flutter 3.50, 15-11-2026) zet ook de
+/// standaard pagina-overgang van MaterialApp er een in de boom.
+Finder _fotoVan() => find.descendant(of: find.byType(FotoTijdensSchuiven), matching: find.byType(SnapshotWidget));
 
 void main() {
   group('de cijfers', () {
@@ -104,7 +108,7 @@ void main() {
       Future<bool> foto({bool open = false, bool dicht = true}) async {
         await t.pumpWidget(MaterialApp(
             home: FotoTijdensSchuiven(animatie: c, open: open, dicht: dicht, child: const ColoredBox(color: Colors.red))));
-        return t.widget<SnapshotWidget>(find.byType(SnapshotWidget)).controller.allowSnapshotting;
+        return t.widget<SnapshotWidget>(_fotoVan()).controller.allowSnapshotting;
       }
 
       c.forward();
@@ -129,7 +133,7 @@ void main() {
     await t.pumpWidget(MaterialApp(
         home: FotoTijdensSchuiven(
             animatie: c, open: true, openNaBeelden: 3, herFotoBij: klaar, child: const ColoredBox(color: Colors.red))));
-    SnapshotController foto() => t.widget<SnapshotWidget>(find.byType(SnapshotWidget)).controller;
+    SnapshotController foto() => t.widget<SnapshotWidget>(_fotoVan()).controller;
     c.forward();
     await t.pump(const Duration(milliseconds: 8));
     expect(foto().allowSnapshotting, isFalse, reason: 'het eerste beeld levend');

@@ -3,7 +3,7 @@
 import 'dart:io';
 
 import 'package:debridmusic/ui/wachtrij_stapel.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een voorste hoes die telt hoe vaak hij opnieuw begint, en hoe vaak hij aangetikt werd.

@@ -21,7 +21,7 @@ library;
 
 import 'package:debridmusic/ui/glas.dart';
 import 'package:debridmusic/ui/vlak.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een scherm van een telefoon (onder de 600 punten) of van een pc.

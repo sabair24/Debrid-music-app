@@ -7,7 +7,7 @@ import 'dart:typed_data' show BytesBuilder;
 import 'dart:ui' show ImageFilter;
 // Flutter 3.36+ exports a RepeatMode of its own (for RepeatingAnimationBuilder), which collides
 // with the player's. Ours is the one this app means everywhere.
-import 'package:flutter/material.dart' hide RepeatMode;
+import 'package:material_ui/material_ui.dart' hide RepeatMode;
 import 'package:flutter/gestures.dart' show PointerDeviceKind, kBackMouseButton;
 import 'package:flutter/foundation.dart' show mapEquals, setEquals, visibleForTesting;
 // AppExitResponse hoort bij de haak die Windows gebruikt als het de app wil beëindigen — zie

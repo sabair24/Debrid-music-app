@@ -13,7 +13,7 @@ import 'package:debridmusic/settings.dart';
 import 'package:debridmusic/tidal.dart';
 import 'package:debridmusic/tidaler.dart';
 import 'package:debridmusic/zoek_geheugen.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 

@@ -3,7 +3,7 @@
 // dat niemand liet weten dat hij er nu wel was. Nu Speelt (later gebouwd) had de knop wel.
 import 'package:debridmusic/lan/client.dart';
 import 'package:debridmusic/speakers.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 

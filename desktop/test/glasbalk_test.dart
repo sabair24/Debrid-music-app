@@ -18,7 +18,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/glas.dart';
 import 'package:debridmusic/ui/vlak.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// De balk zoals de albumpagina hem gebruikt: als `flexibleSpace` van een vastgezette SliverAppBar,

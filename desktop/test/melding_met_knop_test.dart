@@ -4,7 +4,7 @@
 import 'dart:io';
 
 import 'package:debridmusic/main.dart' show kMeldingMetKnop;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Future<void> _toon(WidgetTester t, {bool? persist}) async {

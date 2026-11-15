@@ -7,7 +7,7 @@
 /// kwijt bent, haal je hier weg; de andere toestellen merken niets.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'lan/tokens.dart';
 import 'tv.dart';

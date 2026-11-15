@@ -7,7 +7,7 @@ import 'dart:io';
 import 'package:debridmusic/main.dart' show SamenVertragingInstelling;
 import 'package:debridmusic/settings.dart';
 import 'package:debridmusic/tv.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';

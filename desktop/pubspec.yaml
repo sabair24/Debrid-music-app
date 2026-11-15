@@ -74,6 +74,8 @@ dependencies:
   package_info_plus: ^9.0.1
   basic_utils: ^5.8.2
   sensors_plus: ^7.1.1
+  material_ui: ^1.11.0
+  cupertino_ui: ^1.1.6
 
 dev_dependencies:
   flutter_test:
@@ -95,6 +97,7 @@ dev_dependencies:
 # following page: https://dart.dev/tools/pub/pubspec
 
 # The following section is specific to Flutter packages.
+  vector_math: any
 flutter:
 
   # The following line ensures that the Material Icons font is

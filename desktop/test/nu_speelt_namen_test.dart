@@ -14,7 +14,7 @@
 /// is precies wat deze toets aftast — vandaag zou hij zakken, straks niet meer.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 

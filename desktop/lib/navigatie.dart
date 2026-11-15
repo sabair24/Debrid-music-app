@@ -16,7 +16,7 @@
 /// toetsrun niet bestaan — zie `test/terug_test.dart` en `test/binnen_navigator_test.dart`.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'haperlog.dart';
 import 'tv.dart';

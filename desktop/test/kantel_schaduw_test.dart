@@ -6,7 +6,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:debridmusic/ui/kantel_hoes.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _vak = Rect.fromLTWH(0, 0, 200, 200);

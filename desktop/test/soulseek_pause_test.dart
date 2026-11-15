@@ -106,14 +106,29 @@ void main() {
         reason: 'three timeouts had pushed this to fifteen minutes');
   });
 
-  test('a kick names the other app, and never the password', () {
+  test('a kick (the server says Relogged) names the other app, and never the password', () {
     final c = SoulseekClient()
       ..noteLoggedIn()
-      ..noteConnectionLost();
+      ..noteConnectionLost(relogged: true);
     expect(c.pause, SlskPause.kicked);
     expect(c.whyNotLogin, contains('andere Soulseek-app'));
     expect(c.pauseLabel, isNot(contains('weiger')),
         reason: 'the login worked; something took the account afterwards');
+  });
+
+  // Saber, 15-11-2026: twee sluitingen kort na een login, zonder code 41, terwijl de server net nog onbereikbaar was —
+  // en de app stuurde hem naar "een andere Soulseek-app" die niet draaide.
+  test('DE KERN (15-11): zonder Relogged is het de server die sloot — geen andere app, wel dezelfde rust', () {
+    final c = SoulseekClient()
+      ..noteLoggedIn()
+      ..noteConnectionLost();
+    expect(c.pause, SlskPause.serverSloot);
+    expect(c.mustNotLogin, isTrue, reason: 'vijf minuten rust, zoals bij een kick');
+    expect(c.blockedFor!.inMinutes, greaterThanOrEqualTo(4));
+    expect(c.whyNotLogin, contains('Soulseek-server sloot de verbinding'));
+    expect(c.whyNotLogin, isNot(contains('andere Soulseek-app')));
+    expect(c.whyNotLogin, isNot(contains('Sluit de officiële app')));
+    expect(c.pauseLabel, contains('server'));
   });
 
   test('a connection that dies long after logging in is nobody being kicked', () {
@@ -180,12 +195,31 @@ void main() {
   test('a kick survives a restart as a kick', () async {
     final a = SoulseekClient()
       ..noteLoggedIn()
-      ..noteConnectionLost();
+      ..noteConnectionLost(relogged: true);
     await a.guardSaved();
     final b = SoulseekClient();
     await b.loadGuard();
     expect(b.pause, SlskPause.kicked);
     expect(b.whyNotLogin, contains('andere Soulseek-app'));
+  });
+
+  test('aangesloten: na een server die sloot probeert de app het zelf opnieuw (hoogstens twee keer), na een kick niet', () {
+    final online = File('lib/online.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    final m = RegExp(r'static const _zelfOplosbaar = \{([^}]*)\};').firstMatch(online);
+    expect(m, isNotNull);
+    expect(m!.group(1), contains('SlskPause.serverSloot'), reason: '14-11: na de sluiting een uur stil');
+    expect(m.group(1), isNot(contains('SlskPause.kicked')), reason: 'geen kickoorlog met een echte andere app');
+  });
+
+  test('een server die sloot blijft na een herstart een server die sloot', () async {
+    final a = SoulseekClient()
+      ..noteLoggedIn()
+      ..noteConnectionLost();
+    await a.guardSaved();
+    final b = SoulseekClient();
+    await b.loadGuard();
+    expect(b.pause, SlskPause.serverSloot);
+    expect(b.whyNotLogin, contains('Soulseek-server'));
   });
 
   test('an expired wait comes back with no reason attached', () async {
@@ -224,6 +258,10 @@ void main() {
         case SlskPause.noAnswer:
           c.noteLoginNoAnswer();
         case SlskPause.kicked:
+          c
+            ..noteLoggedIn()
+            ..noteConnectionLost(relogged: true);
+        case SlskPause.serverSloot:
           c
             ..noteLoggedIn()
             ..noteConnectionLost();

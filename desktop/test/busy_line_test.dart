@@ -6,7 +6,7 @@ library;
 
 import 'package:debridmusic/facts_warmer.dart';
 import 'package:debridmusic/main.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Widget _omhulsel(Widget kind) => MaterialApp(home: Scaffold(body: Center(child: kind)));

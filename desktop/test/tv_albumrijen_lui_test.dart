@@ -15,7 +15,7 @@ import 'package:debridmusic/meetronde.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/tv.dart' show setTvModeForTest;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 

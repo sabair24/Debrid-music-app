@@ -7,7 +7,7 @@ import 'package:debridmusic/artwork.dart' show HoesVlek;
 import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/glas.dart';
 import 'package:debridmusic/ui/vlak.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een rij beelden met deze tekentijd (in microseconden). De andere tijden doen er hier niet toe.

@@ -137,10 +137,10 @@ void main() {
         // wegvallende verbinding hier terechtkomen, ook een echte kick.
         ..noteLoggedIn(adressen: const {'203.0.113.99'})
         ..noteConnectionLost();
-      expect(c.pause, SlskPause.kicked, reason: 'de kick wordt meteen gezet, dat is de veilige kant');
+      expect(c.pause, SlskPause.serverSloot, reason: 'de rust wordt meteen gezet, dat is de veilige kant');
 
       // De controle op de netwerkkaarten is async.
-      for (var i = 0; i < 40 && c.pause == SlskPause.kicked; i++) {
+      for (var i = 0; i < 40 && c.pause == SlskPause.serverSloot; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 25));
       }
       expect(c.pause, SlskPause.netwerkGewisseld);
@@ -153,7 +153,7 @@ void main() {
           reason: 'de uitleg hoort te benoemen wat er wél aan de hand is');
     });
 
-    test('een netwerk dat gelijk gebleven is blijft gewoon een kick', () async {
+    test('een netwerk dat gelijk gebleven is: de server sloot (zonder Relogged geen kick)', () async {
       // De tegenhanger, en de belangrijkste van de drie: gaat de verbinding stuk terwijl onze kant
       // ongewijzigd is, dan is de oude verklaring de juiste en moet die blijven staan. Deze test zou
       // de socket-vergissing hierboven gevangen hebben — met het serveradres als maatstaf komt hier
@@ -165,8 +165,8 @@ void main() {
         ..noteLoggedIn(adressen: nu)
         ..noteConnectionLost();
       await Future<void>.delayed(const Duration(milliseconds: 300));
-      expect(c.pause, SlskPause.kicked);
-      expect(c.whyNotLogin, contains('andere Soulseek-app'));
+      expect(c.pause, SlskPause.serverSloot);
+      expect(c.whyNotLogin, contains('Soulseek-server sloot de verbinding'));
     });
 
     test('eigenAdressen levert onze kant, niet die van de tegenpartij', () async {
@@ -183,7 +183,7 @@ void main() {
         ..noteLoggedIn()
         ..noteConnectionLost();
       await Future<void>.delayed(const Duration(milliseconds: 300));
-      expect(c.pause, SlskPause.kicked, reason: 'niets om aan af te meten, dus niets beweren');
+      expect(c.pause, SlskPause.serverSloot, reason: 'niets om aan af te meten, dus niets beweren');
     });
   });
 

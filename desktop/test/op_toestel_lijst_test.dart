@@ -6,7 +6,7 @@ import 'dart:io';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/offline.dart';
 import 'package:debridmusic/ui/op_toestel.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Track _t(String pad, String titel, String artiest, String album, {int nr = 1}) =>

@@ -18,7 +18,7 @@
 /// Wat hier NIET in staat, en wat dus nog steeds ogen vraagt: of het er goed uitziet.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/editions.dart';

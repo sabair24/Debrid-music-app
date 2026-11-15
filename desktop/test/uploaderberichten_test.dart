@@ -8,7 +8,7 @@ import 'package:debridmusic/lan/server.dart' show weigerVanBuiten;
 import 'package:debridmusic/soulseek.dart' show bevestigPrivebericht, leesPrivebericht, priveberichtAan;
 import 'package:debridmusic/ui/berichten_scherm.dart';
 import 'package:debridmusic/uploaderberichten.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 String _bron(String pad) => File(pad).readAsStringSync().replaceAll('\r\n', '\n');

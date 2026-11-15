@@ -4,7 +4,7 @@
 // en per uploader het gesprek met onderaan een vak om te antwoorden. Op de tv bereik je het vak en de knop met de
 // pijltjes; de tekst van een uploader is te selecteren, zodat je het gevraagde woord kunt kopiëren.
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../uploaderberichten.dart';
 import 'kleuren.dart';

@@ -10,7 +10,7 @@
 /// punt vooraan; de feiten mogen zelf doorlopen, maar breken nooit midden in een feit.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Past "[artiest] · [feiten]" op één regel van [breedte]? Publiek voor de toets.
 bool kopFeitenOpEenRegel(String artiest, List<String> feiten, TextStyle stijl, TextScaler schaal, double breedte) {

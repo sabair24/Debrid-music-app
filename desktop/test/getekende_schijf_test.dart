@@ -7,7 +7,7 @@ import 'package:debridmusic/discogs.dart';
 import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/settings.dart';
 import 'package:debridmusic/ui/getekende_schijf.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 final _png = Uint8List.fromList([

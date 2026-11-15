@@ -8,7 +8,7 @@ import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/kop.dart';
 import 'package:debridmusic/ui/kopfeiten.dart';
 import 'package:debridmusic/ui/tegel.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 

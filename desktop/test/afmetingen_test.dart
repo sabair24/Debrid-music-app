@@ -20,7 +20,7 @@ import 'package:debridmusic/ui/kop.dart';
 import 'package:debridmusic/ui/leeg.dart';
 import 'package:debridmusic/ui/skelet.dart';
 import 'package:debridmusic/ui/tegel.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// De vier schermen die er zijn: een smalle telefoon, de Galaxy, een venster/iPad, en de Shield.

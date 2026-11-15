@@ -14,7 +14,7 @@ library;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Hoe groot het etiket is, als deel van de schijf. Op een echte cd is het bedrukte vlak ongeveer 46
 /// van de 120 mm; iets kleiner leest hier beter, want het is een hoes en geen ronde bedrukking.

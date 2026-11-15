@@ -946,7 +946,10 @@ class SoulseekService {
   /// Alleen voor de twee pauzes die over ONZE kant gaan — een botsing met de vorige sessie en een
   /// netwerk dat van route wisselde — en hoogstens twee keer. Een echte weigering hoort NIET
   /// automatisch herhaald te worden: dan is doorgaan met kloppen precies wat het erger maakt.
-  static const _zelfOplosbaar = {SlskPause.herstart, SlskPause.netwerkGewisseld};
+  ///
+  /// Sinds 15-11-2026 ook [SlskPause.serverSloot]: geen tweede app om mee te vechten, alleen een server die
+  /// even hapert — op 14-11 bleef de app na zo'n sluiting een uur stil.
+  static const _zelfOplosbaar = {SlskPause.herstart, SlskPause.netwerkGewisseld, SlskPause.serverSloot};
 
   Timer? _herkans;
   int _herkansingen = 0;

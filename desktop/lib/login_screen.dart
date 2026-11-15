@@ -9,7 +9,7 @@
 /// sitting two metres away.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'cloud/cloud_session.dart';
 import 'cloud/device_identity.dart';

@@ -18,7 +18,7 @@
 /// het soort verandering waarvan je pas op het toestel merkt dat er iets scheef staat.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'kleuren.dart';
 

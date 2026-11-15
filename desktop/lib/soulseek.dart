@@ -219,7 +219,20 @@ enum SlskPause {
 
   /// We logged in fine and were then thrown off — another client took the account. Soulseek allows
   /// one session per user, so this is the native client (or a phone) doing exactly what it should.
+  ///
+  /// Sinds 15-11-2026 alleen nog als de server het zelf zegt (code 41, "Relogged"); zonder dat bericht
+  /// is het [serverSloot].
   kicked,
+
+  /// De server sloot de verbinding kort na een geslaagde login, zonder "Relogged" (code 41).
+  ///
+  /// Saber, 15-11-2026: *"kan het zijn dat ik gisteren uit soulseek werd gegooid?"* Op 14-11 om 16:03 en
+  /// 16:04 liep het inloggen vast (server.slsknet.org:2242 onbereikbaar, terwijl TIDAL en de torrents op
+  /// datzelfde moment antwoordden); daarna sloot de server twee keer de verbinding, 38 en 48 seconden na
+  /// een login, zonder code 41. De app noemde dat een kick door "een andere Soulseek-app" en stuurde hem
+  /// zo naar een app die niet draaide. Dezelfde vijf minuten rust, maar daarna probeert de app het zelf
+  /// opnieuw (online.dart, `_zelfOplosbaar`): toen bleef hij een uur stil tot er toevallig weer iets nodig was.
+  serverSloot,
 
   /// Het netwerk onder ons vandaan: de verbinding brak omdat het IP waarmee we inlogden verdween.
   ///
@@ -1298,6 +1311,10 @@ class SoulseekClient {
         SlskPause.kicked =>
           'Je was ingelogd en bent er afgegooid: een andere Soulseek-app gebruikt dit account. '
               'Soulseek staat er één tegelijk toe. Sluit de officiële app, dan blijft deze verbonden.',
+        SlskPause.serverSloot =>
+          'De Soulseek-server sloot de verbinding kort na het inloggen, zonder te zeggen waarom. Dat ligt '
+              'meestal aan de server zelf; er is niets mis met je login. De app probeert het over vijf '
+              'minuten vanzelf opnieuw.',
         SlskPause.herstart =>
           'De vorige sessie staat bij Soulseek nog open — dat gebeurt als de app niet netjes kon '
               'afsluiten. Er is niets mis met je login; de app probeert het over anderhalve minuut '
@@ -1319,6 +1336,7 @@ class SoulseekClient {
         SlskPause.refused => 'Soulseek weigerde de login',
         SlskPause.noAnswer => 'Soulseek antwoordde niet',
         SlskPause.kicked => 'andere Soulseek-app heeft het account overgenomen',
+        SlskPause.serverSloot => 'Soulseek-server sloot de verbinding — probeert zo opnieuw',
         SlskPause.herstart => 'vorige sessie staat nog open — probeert zo opnieuw',
         SlskPause.netwerkGewisseld => 'netwerk wisselde van route — verbindt zo opnieuw',
         SlskPause.tooMany => 'te vaak ingelogd, even rustig aan',
@@ -1346,7 +1364,8 @@ class SoulseekClient {
     // [SlskPause.netwerkGewisseld]. De controle is async, dus de kick wordt meteen gezet en alleen
     // teruggedraaid als blijkt dat het netwerk het was — andersom zou een echte kick een gat van een
     // paar milliseconden krijgen waarin nog een login vertrekt.
-    _pause = SlskPause.kicked;
+    // Alleen met "Relogged" van de server een kick; zonder dat bericht sloot de server zelf ([serverSloot]).
+    _pause = relogged ? SlskPause.kicked : SlskPause.serverSloot;
     _serverSaid = '';
     _blockedUntil = DateTime.now().add(const Duration(minutes: 5));
     // Saved, like every other way the guard changes. Without this the screen said "wait 6 more
@@ -1356,7 +1375,7 @@ class SoulseekClient {
     if (relogged) return;
     unawaited(() async {
       if (!await _netwerkVeranderd()) return;
-      if (_pause != SlskPause.kicked) return; // er is intussen iets anders gebeurd
+      if (_pause != SlskPause.serverSloot) return; // er is intussen iets anders gebeurd
       logboek('verbinding weg en de adressen zijn veranderd '
           '(${_adressenBijLogin.join(", ")} -> ${(await eigenAdressen() ?? const {}).join(", ")}) '
           '— netwerk verlegd, geen kick');
