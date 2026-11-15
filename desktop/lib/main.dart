@@ -19,9 +19,9 @@ import 'package:url_launcher/url_launcher.dart' show launchUrl, LaunchMode;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:provider/provider.dart';
-import 'package:window_manager/window_manager.dart';
 
 import 'acoustid.dart';
+import 'venster.dart';
 import 'aanbevelingplan.dart';
 import 'ai.dart';
 import 'radio.dart';
@@ -391,8 +391,8 @@ Future<bool> _claimSingleInstance() async {
         WarmLog('$appDir${Platform.pathSeparator}start.log')
             .line('tweede start opgevangen — dit venster naar voren, geen nieuwe kopie');
       } catch (_) {/* observing must never break the observed */}
-      await windowManager.show();
-      await windowManager.focus();
+      await venster.show();
+      await venster.focus();
     });
     return true;
   } on SocketException {
@@ -491,7 +491,7 @@ _NetjesAfsluiten? _sluiter;
 /// sluit de app helemaal niet meer. Vandaar de tijdslimiet én `destroy()` in een `finally` — niet als
 /// nettigheid maar als vangnet. Twee seconden is ruim voor een socket die dichtgaat en een klein
 /// JSON-bestand, en kort genoeg om niet als vastloper te voelen.
-class _NetjesAfsluiten with WindowListener {
+class _NetjesAfsluiten with VensterLuisteraar {
   _NetjesAfsluiten(this.library, this.soulseek);
   final LibraryStore library;
   final SoulseekService soulseek;
@@ -506,9 +506,9 @@ class _NetjesAfsluiten with WindowListener {
       await afsluiten(library, soulseek).timeout(const Duration(seconds: 3));
     } catch (_) {/* een afscheid dat niet lukt mag het venster niet gijzelen */}
     try {
-      await windowManager.setPreventClose(false);
+      await venster.setPreventClose(false);
     } catch (_) {}
-    await windowManager.destroy();
+    await venster.destroy();
   }
 }
 
@@ -699,7 +699,7 @@ Future<void> main() async {
     // En één zin over hoe dat venster ervoor staat, zodat een lege lijst nooit woordloos is.
     RuTrackerService.vensterStand = () => RutrackerVenster.instantie.stand;
   }
-  if (_isDesktop) await windowManager.ensureInitialized();
+  if (_isDesktop) await venster.ensureInitialized();
   if (!await _claimSingleInstance()) {
     // HARD afkappen, en niet `exit(0)`.
     //
@@ -723,8 +723,8 @@ Future<void> main() async {
     // No system title bar: the app draws its own close/minimise/resize buttons into the top bar,
     // so the whole window is the app rather than the app inside a Windows frame. The size below
     // is only what it restores DOWN to — it opens filling the screen.
-    await windowManager.waitUntilReadyToShow(
-      const WindowOptions(
+    await venster.waitUntilReadyToShow(
+      const VensterOpties(
         size: Size(1240, 820),
         minimumSize: Size(940, 640),
         center: true,
@@ -732,8 +732,8 @@ Future<void> main() async {
         titleBarStyle: TitleBarStyle.hidden,
       ),
       () async {
-        await windowManager.show();
-        await windowManager.focus();
+        await venster.show();
+        await venster.focus();
       },
     );
   }
@@ -2463,8 +2463,8 @@ Future<void> main() async {
   // sluiten en wordt het proces gewoon weggehaald.
   if (mode.owner && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
     _sluiter = _NetjesAfsluiten(library, soulseek);
-    await windowManager.setPreventClose(true);
-    windowManager.addListener(_sluiter!);
+    await venster.setPreventClose(true);
+    venster.addListener(_sluiter!);
   }
 
   startLog.line('venster klaar, runApp');
@@ -2528,11 +2528,11 @@ Future<void> main() async {
   if (_isDesktop) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(vulVensterNaEersteBeeld(
-        isGemaximaliseerd: windowManager.isMaximized,
-        maximaliseer: windowManager.maximize,
-        maten: windowManager.getBounds,
-        isZichtbaar: windowManager.isVisible,
-        heeftVoorgrond: windowManager.isFocused,
+        isGemaximaliseerd: venster.isMaximized,
+        maximaliseer: venster.maximize,
+        maten: venster.getBounds,
+        isZichtbaar: venster.isVisible,
+        heeftVoorgrond: venster.isFocused,
         log: startLog.line,
       ));
       // Hier stond nog een verzoek om de systeemtitelbalk te verbergen, twee keer bijgesteld en
@@ -5569,7 +5569,7 @@ class _HomeShellState extends State<HomeShell> {
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
                   onDoubleTap: () async =>
-                      await windowManager.isMaximized() ? windowManager.unmaximize() : windowManager.maximize(),
+                      await venster.isMaximized() ? venster.unmaximize() : venster.maximize(),
                   child: const SizedBox.expand(),
                 ),
               ),
@@ -12159,7 +12159,7 @@ class _WindowButtons extends StatefulWidget {
   State<_WindowButtons> createState() => _WindowButtonsState();
 }
 
-class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
+class _WindowButtonsState extends State<_WindowButtons> with VensterLuisteraar {
   /// Drie knoppen van 38 punten. De balk rekent hiermee of de secties nog passen; zie [_tekstbreedte].
   static const breedte = 3 * 38.0;
 
@@ -12168,15 +12168,15 @@ class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
   @override
   void initState() {
     super.initState();
-    windowManager.addListener(this);
-    windowManager.isMaximized().then((v) {
+    venster.addListener(this);
+    venster.isMaximized().then((v) {
       if (mounted) setState(() => _maximized = v);
     });
   }
 
   @override
   void dispose() {
-    windowManager.removeListener(this);
+    venster.removeListener(this);
     super.dispose();
   }
 
@@ -12191,14 +12191,14 @@ class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
   Widget build(BuildContext context) => Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _btn(Icons.remove_rounded, 'Minimaliseren', () => windowManager.minimize()),
+          _btn(Icons.remove_rounded, 'Minimaliseren', () => venster.minimize()),
           _btn(
             _maximized ? Icons.filter_none_rounded : Icons.crop_square_rounded,
             _maximized ? 'Verkleinen' : 'Maximaliseren',
-            () async => _maximized ? windowManager.unmaximize() : windowManager.maximize(),
+            () async => _maximized ? venster.unmaximize() : venster.maximize(),
             size: _maximized ? 13 : 15,
           ),
-          _btn(Icons.close_rounded, 'Sluiten', () => windowManager.close(), danger: true),
+          _btn(Icons.close_rounded, 'Sluiten', () => venster.close(), danger: true),
         ],
       );
 

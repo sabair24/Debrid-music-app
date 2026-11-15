@@ -48,7 +48,7 @@ dependencies:
   path_provider: ^2.1.5
   provider: ^6.1.2
   http: ^1.2.2
-  window_manager: ^0.4.3
+  window_manager: ^0.7.0
   crypto: ^3.0.5
   # Opens the Tidal sign-in page. Replaces spawning rundll32, which existed only on Windows.
   url_launcher: ^6.3.1
