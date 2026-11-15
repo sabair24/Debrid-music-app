@@ -19,7 +19,7 @@ import 'package:debridmusic/online.dart';
 import 'package:debridmusic/organize.dart' show TrackTags;
 import 'package:debridmusic/settings.dart';
 import 'package:debridmusic/soulseek.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een downloadbeheer dat het starten OPSCHRIJFT in plaats van bij Soulseek in te loggen. Een toets

@@ -12,7 +12,7 @@ import 'package:debridmusic/ui/kleuren.dart';
 import 'package:debridmusic/ui/kopfeiten.dart';
 import 'package:debridmusic/ui/tv_rij.dart';
 import 'package:debridmusic/ui/vlak.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';

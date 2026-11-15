@@ -27,7 +27,7 @@ library;
 
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'artwork.dart' show decodeWidth;
 import 'enrichment.dart' show ArtiestFeiten;

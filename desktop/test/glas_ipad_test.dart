@@ -17,7 +17,7 @@ import 'package:debridmusic/main.dart' show glassSurface;
 import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/glas.dart';
 import 'package:debridmusic/ui/vlak.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een iPad liggend: 1194 punten breed, dus níét compact.

@@ -13,7 +13,7 @@
 /// bewaakt dat voor de gedeelde widgets.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'kleuren.dart';
 
 // ── Ruimte ───────────────────────────────────────────────────────────────────

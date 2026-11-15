@@ -2,7 +2,7 @@ import 'package:debridmusic/catalog.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/ui/zoek_paneel.dart';
 import 'package:debridmusic/zoek_suggesties.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -8,7 +8,7 @@ import 'package:debridmusic/ui/maten.dart';
 import 'package:debridmusic/ui/menu.dart';
 import 'package:debridmusic/ui/tegel.dart' show kTegelTitel, kTegelOnder;
 import 'package:debridmusic/ui/vlak.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// De kleuren die voor donker gekozen zijn en in de schermen staan (zie `leesbaar` in kleuren.dart).

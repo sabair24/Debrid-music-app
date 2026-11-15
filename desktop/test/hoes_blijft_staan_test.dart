@@ -5,7 +5,7 @@ import 'dart:io';
 
 import 'package:debridmusic/ui/draaihoes.dart';
 import 'package:debridmusic/ui/kantel_hoes.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 int _gebouwd = 0;

@@ -14,7 +14,7 @@ import 'dart:async';
 
 import 'player.dart' show Speakerbediening;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'lan/client.dart';
 import 'lan/verbindingsstand.dart' show kAlleenThuisSpeaker, vanBuitenaf;

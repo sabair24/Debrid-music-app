@@ -9,7 +9,7 @@
 /// hierna zou willen. Die knop mag ontbreken — niet elk leeg scherm heeft een volgende stap.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'kleuren.dart';
 import 'maten.dart';

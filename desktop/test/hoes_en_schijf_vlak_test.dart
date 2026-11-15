@@ -9,7 +9,7 @@ import 'package:debridmusic/ui/kantel_hoes.dart';
 import 'package:debridmusic/ui/langzame_draai.dart';
 import 'package:debridmusic/ui/wachtrij_eiland.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math_64.dart' show Vector4;
 

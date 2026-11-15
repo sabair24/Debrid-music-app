@@ -22,7 +22,7 @@ import 'package:debridmusic/tv.dart' show setTvModeForTest;
 import 'package:debridmusic/verder_luisteren.dart';
 import 'package:debridmusic/zone_lijst.dart';
 import 'package:debridmusic/zone_speler.dart';
-import 'package:flutter/material.dart' hide RepeatMode;
+import 'package:material_ui/material_ui.dart' hide RepeatMode;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';

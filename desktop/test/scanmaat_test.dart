@@ -17,7 +17,7 @@ import 'dart:typed_data';
 import 'package:debridmusic/editions.dart';
 import 'package:debridmusic/main.dart' show ScanMaatRegel, UitgaveRij, kScanTipTekst, kScanTipVlak;
 import 'package:debridmusic/scanmaat.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';

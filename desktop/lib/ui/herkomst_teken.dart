@@ -1,6 +1,6 @@
 // Waar het nummer dat nu speelt vandaan komt (Saber, 02-11-2026: "ik zou het ergens ook duidelijk moeten zien met een
 // icontje of ik online of offline stream"). Drie standen: van je pc thuis, van je pc via internet, van dit toestel.
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../player.dart' show Herkomst;
 import '../tv.dart';

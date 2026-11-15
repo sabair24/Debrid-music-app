@@ -8,7 +8,7 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'cloud/device_identity.dart';
 import 'lan/client.dart';

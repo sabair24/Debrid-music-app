@@ -12,7 +12,7 @@
 /// krijgt een nummer en een terugroep, geen stores — en dat is precies genoeg om hem op te meten.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:debridmusic/ui/menu_iconen.dart' show MenuIcoon, MenuIcoonSchilder;
 

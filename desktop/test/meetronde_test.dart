@@ -18,7 +18,7 @@ import 'package:debridmusic/ui/glas.dart' show GlasKwaliteit, GlasStand, glasMat
 import 'package:debridmusic/player.dart' show Rijbediening, Speelbron;
 import 'package:debridmusic/ui/kantel_hoes.dart';
 import 'package:debridmusic/zone_opdracht.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

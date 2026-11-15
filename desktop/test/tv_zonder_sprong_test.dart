@@ -9,7 +9,7 @@ library;
 import 'dart:io';
 
 import 'package:debridmusic/tv.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een rij tegels van [hoog] punten hoog, zodat hij op zijn vaste plek onder het beeld uit steekt.

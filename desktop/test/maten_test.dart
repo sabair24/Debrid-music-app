@@ -16,7 +16,7 @@ import 'package:debridmusic/ui/maten.dart';
 import 'package:debridmusic/ui/tegel.dart';
 import 'package:debridmusic/ui/typografie.dart';
 import 'package:debridmusic/ui/vlak.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 // `final` en niet `const`, en dat is geen slordigheid maar een regel van de taal: een `const`

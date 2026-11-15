@@ -12,7 +12,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/gestures.dart' show PointerScrollEvent;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../beeldvorm.dart';
 import 'kleuren.dart';

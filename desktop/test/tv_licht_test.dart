@@ -12,7 +12,7 @@ import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/glas.dart';
 import 'package:debridmusic/ui/kleuren.dart';
 import 'package:debridmusic/ui/vlak.dart' show GlasKnop, balkKleur;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Widget _app(Widget kind) => MaterialApp(home: Scaffold(body: Center(child: kind)));

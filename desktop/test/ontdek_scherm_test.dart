@@ -9,7 +9,7 @@ import 'package:debridmusic/main.dart' show OntdekRegel, ontdekKopregel, ontdekZ
 import 'package:debridmusic/ontdek.dart';
 import 'package:debridmusic/recommend.dart' show RecTrack;
 import 'package:debridmusic/ui/tegel.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 

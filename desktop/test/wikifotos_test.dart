@@ -12,7 +12,7 @@ import 'dart:typed_data';
 
 import 'package:debridmusic/ui/wikifoto_beeld.dart';
 import 'package:debridmusic/wikifotos.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 WikiFoto _f(String bestand, String onderschrift, String sectie) => WikiFoto(

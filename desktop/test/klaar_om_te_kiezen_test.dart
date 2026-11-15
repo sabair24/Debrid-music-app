@@ -8,7 +8,7 @@ import 'package:debridmusic/main.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/player.dart';
 import 'package:debridmusic/twijfel.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 

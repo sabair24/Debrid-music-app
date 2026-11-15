@@ -4,7 +4,7 @@
 import 'package:debridmusic/navigatie.dart';
 import 'package:debridmusic/tv.dart';
 import 'package:debridmusic/ui/maten.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Twee pagina's van de app op elkaar: "oud" is zelf al een pagina, en daar komt "nieuw" overheen.

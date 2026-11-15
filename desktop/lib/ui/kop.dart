@@ -7,7 +7,7 @@
 /// betekent, en het is een wijziging van twee tekens.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'kleuren.dart';
 import 'maten.dart';

@@ -6,7 +6,7 @@ import 'dart:io';
 import 'package:debridmusic/main.dart' show VeegUitkomst, veegUitkomst, kVeegDrempel;
 import 'package:debridmusic/ui/kleuren.dart';
 import 'package:debridmusic/ui/vlak.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
