@@ -172,6 +172,11 @@ class SpeakerRadio extends ChangeNotifier implements Radiospeler {
   @override
   RadioItem? wordtLokaalInRadio(RadioItem oud, Track t) => null;
 
+  /// Een voorstel van een manuele radio staat nooit in de rij van een speaker ([_speelbaar] laat alleen eigen nummers
+  /// door): wat je koos komt er gewoon achteraan.
+  @override
+  bool vervangInRadio(RadioItem oud, RadioItem? nieuw) => false;
+
   /// Stilvallen en de radio loslaten: de sessie op de speaker gaat dicht, zodat zijn zone niet meer "radio …" zegt.
   ///
   /// **Dicht, niet op pauze (23-10-2026).** Tot 3.9.579 zette dit de speaker op pauze, en de radio "afsluiten" op de

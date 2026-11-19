@@ -164,6 +164,9 @@ class _Pc extends ChangeNotifier implements Radiospeler {
   Future<bool> haalUitRadio(String pad) async => false;
   @override
   RadioItem? wordtLokaalInRadio(RadioItem oud, Track t) => null;
+
+  @override
+  bool vervangInRadio(RadioItem oud, RadioItem? nieuw) => false;
   @override
   Future<void> verlaatRadio() async => log.add('verlaat');
 }

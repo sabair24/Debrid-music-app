@@ -83,7 +83,8 @@ void main() {
 
     test('een tik in de wachtrij springt, zonder opnieuw te schudden', () {
       final main = _lees('lib/main.dart');
-      expect(main, contains('onTap: () => p.springNaar(plek),'));
+      // Behalve een voorstel van een manuele radio: dat klinkt niet (19-11-2026).
+      expect(main, contains('onTap: r?.voorstel != null ? null : () => p.springNaar(plek),'));
       expect(main, contains('p.springNaar(p.currentIndex + n),'));
       final speler = _lees('lib/player.dart');
       final s = speler.substring(speler.indexOf('  Future<void> springNaar(int plek) async {'));

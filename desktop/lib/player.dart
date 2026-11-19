@@ -30,14 +30,19 @@ class RadioItem {
   final String title;
   final Track? local; // non-null => in the library
   String? url; // resolved online stream URL (cached after first resolve)
-  bool failed = false;
+  bool failed;
   Future<String?>? pending; // in-flight resolve, so prefetch + open share one call
 
   /// Dit nummer klonk al eerder in deze radio: de radio vond niets nieuws en herhaalt wat er was (zie
   /// `radioladder.dart`, [kiesHerhaling]). Op het scherm staat er dan "opnieuw" bij — anders ziet een
   /// herhaling eruit als een fout.
   bool herhaling;
-  RadioItem({required this.artist, required this.title, this.local, this.herhaling = false});
+  /// Een VOORSTEL van een manuele radio (Saber, 19-11-2026: *"zonder ze te downloaden maar dat ik ze wel zie, en dan
+  /// beslis ik of ik ze wil of nie"*): een plaatshouder in de rij, met ⬇ Halen en ✕ Weg. Klinkt nooit — hij staat
+  /// meteen op [failed], zodat de speler eroverheen stapt en er geen bron voor zoekt.
+  final bool voorstel;
+  RadioItem({required this.artist, required this.title, this.local, this.herhaling = false, this.voorstel = false})
+      : failed = voorstel;
   bool get isLocal => local != null;
 }
 
@@ -522,7 +527,11 @@ int? plekNaKeuze(WachtrijKeuze keuze, {required int plek, required int lengte}) 
 /// [eigen] is het onderscheid waar alles om draait: staat dit nummer als BESTAND in je bibliotheek,
 /// of is het (nog) niets meer dan een artiest en een titel? Alleen het eerste kan zonder wachten
 /// klinken, en alleen het tweede mag straks weer weg.
-typedef Radioregel = ({Track nummer, bool eigen, bool mislukt, bool herhaling});
+typedef Radioregel = ({Track nummer, bool eigen, bool mislukt, bool herhaling, Voorstelstand? voorstel, RadioItem? item});
+
+/// Waar een voorstel van een manuele radio staat, voor op het scherm (19-11-2026): nog te kiezen, wordt gehaald, of
+/// niet gevonden.
+enum Voorstelstand { kies, bezig, mislukt }
 
 /// De radio als een lijst nummers, zodat een paneel er niets bijzonders voor hoeft te weten.
 ///
@@ -537,18 +546,52 @@ typedef Radioregel = ({Track nummer, bool eigen, bool mislukt, bool herhaling});
 /// Een nummer dat je niet hebt krijgt een [Track] met het adres als pad, of met een leeg pad als er
 /// nog geen adres is. Leeg is goed: elke opzoeking op pad — de hoes, het echtheidsmerk — vindt dan
 /// niets en toont niets, in plaats van per ongeluk de hoes van een ander nummer te pakken.
-List<Radioregel> radioAlsRij(List<RadioItem> radio) => [
+///
+/// [voorstel]: waar een voorstel van een manuele radio staat (`RadioBesturing.voorstelStand`); zonder: nog te kiezen.
+/// Een voorstel krijgt een eigen pad, zodat zijn regel in het paneel een vaste sleutel heeft.
+List<Radioregel> radioAlsRij(List<RadioItem> radio, {Voorstelstand Function(RadioItem it)? voorstel}) => [
       for (final it in radio)
         (
           nummer: it.local ??
-              Track(path: it.url ?? '', title: it.title, artist: it.artist, album: ''),
+              Track(
+                  path: it.voorstel ? 'voorstel:${it.artist} — ${it.title}' : it.url ?? '',
+                  title: it.title,
+                  artist: it.artist,
+                  album: ''),
           eigen: it.isLocal,
           // Mislukt telt alleen als er ook geen bestand ligt: een nummer dat je zelf hebt is er,
-          // wat een eerdere zoektocht online ook gedaan heeft.
-          mislukt: !it.isLocal && it.failed && it.url == null,
+          // wat een eerdere zoektocht online ook gedaan heeft. Een voorstel is niet mislukt: het wacht op jou.
+          mislukt: !it.voorstel && !it.isLocal && it.failed && it.url == null,
           herhaling: it.herhaling,
+          voorstel: it.voorstel ? (voorstel?.call(it) ?? Voorstelstand.kies) : null,
+          item: it,
         ),
     ];
+
+/// De rekensom van [PlayerStore.vervangInRadio], los van de speler (die bouwt libmpv in een veld en is in geen toets te
+/// maken): past [rij] aan en geeft de nieuwe plek van de radio terug ([index] was de oude), of null als [oud] er niet in
+/// stond.
+///
+/// Vóór of op de plek van de radio: ter plaatse. Al voorbij: weg daar, en meteen na wat nu speelt. Weghalen (null):
+/// de radio blijft op hetzelfde nummer staan.
+int? vervangInRij(List<RadioItem> rij, int index, RadioItem oud, RadioItem? nieuw) {
+  final i = rij.indexOf(oud);
+  if (i < 0) return null;
+  if (nieuw == null) {
+    rij.removeAt(i);
+    var j = i < index ? index - 1 : index;
+    if (j >= rij.length) j = rij.length - 1;
+    return j;
+  }
+  if (i >= index) {
+    rij[i] = nieuw;
+    return index;
+  }
+  rij.removeAt(i);
+  // Wat speelt staat nu een plek eerder (index - 1); het gekozen nummer komt erna.
+  rij.insert(index, nieuw);
+  return index - 1;
+}
 
 /// Wat er gebeurt als het laatste radionummer afloopt of overgeslagen wordt.
 enum NaRadioEinde { volgende, droog }
@@ -2430,6 +2473,29 @@ class PlayerStore extends ChangeNotifier
     return nieuw;
   }
 
+  /// Manuele radio (19-11-2026): de plaatshouder [oud] van een voorstel wordt [nieuw] — het nummer dat je koos en dat
+  /// nu binnen is — of verdwijnt (null: ✕ Weg). True als [oud] in de rij stond.
+  ///
+  /// Staat de plaatshouder nog vóór je, dan klinkt het nummer op die plek. Was de radio er al voorbij, dan komt het
+  /// meteen na wat nu speelt: je koos het, dan hoor je het ook. Stond de radio stil (droog, of doorgeklikt tot het
+  /// einde), dan begint het meteen — zoals bij [voegToeAanRadio].
+  @override
+  bool vervangInRadio(RadioItem oud, RadioItem? nieuw) {
+    if (!radioMode) return false;
+    final plek = vervangInRij(_radio, _radioIndex, oud, nieuw);
+    if (plek == null) return false;
+    _radioIndex = plek;
+    if (nieuw != null && (_radioDroog || _wilVerder)) {
+      _radioDroog = false;
+      _wilVerder = false;
+      _radioIndex = _radio.indexOf(nieuw);
+      unawaited(_openRadioCurrent());
+      return true; // die roept zelf notifyListeners aan
+    }
+    notifyListeners();
+    return true;
+  }
+
   /// Hetzelfde nummer opnieuw openen en terugspringen naar waar het afbrak.
   ///
   /// Niet [_openCurrent], want die zet de teller terug naar nul en meldt het nummer opnieuw als
@@ -4120,6 +4186,9 @@ abstract interface class Radiospeler implements Listenable {
   void voegToeAanRadio(List<RadioItem> meer);
   Future<bool> haalUitRadio(String pad);
   RadioItem? wordtLokaalInRadio(RadioItem oud, Track t);
+
+  /// De plaatshouder van een voorstel (manuele radio) vervangen door het gekozen nummer, of weghalen (null).
+  bool vervangInRadio(RadioItem oud, RadioItem? nieuw);
 
   /// De radio speelt voortaan op een andere uitgang: stilvallen en de radio loslaten.
   Future<void> verlaatRadio();
