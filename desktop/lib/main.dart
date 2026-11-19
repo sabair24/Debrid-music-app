@@ -18229,6 +18229,9 @@ class _WachtrijRij extends StatelessWidget {
                           cacheWidth: decodeWidth(34),
                           fit: BoxFit.cover),
                     )
+                  // Een voorstel van een manuele radio: de hoes van Deezer, zoals bij Zoeken (19-11-2026).
+                  : r?.item?.hoes != null
+                      ? _netCover(r!.item!.hoes, size: 34, radius: 4)
                   : Container(
                       width: 34,
                       height: 34,
@@ -22413,6 +22416,8 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
         eigen: eigenVoor(bruikbaar[gekozen[v]]),
         bron: bron,
         deezerArtiest: bruikbaar[gekozen[v]].artistId,
+        // Voor een voorstel van een manuele radio: de hoes, zoals bij Zoeken (19-11-2026).
+        hoes: bruikbaar[gekozen[v]].cover,
       ),
   ];
 }

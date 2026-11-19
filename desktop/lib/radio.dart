@@ -49,11 +49,16 @@ class Radioplek {
     this.reserve = false,
     this.herhaling = false,
     this.album,
+    this.hoes,
   }) : teHalen = eigen == null {
     // Wat je al hebt is meteen klaar: het bestand staat er, er valt niets aan te halen. Dat is de
     // enige plek waar het onderscheid tussen "eigen muziek" en "moet nog komen" gemaakt wordt.
     if (eigen != null) stand = Haalstand.klaar;
   }
+
+  /// De hoes van de uitgave volgens Deezer (een adres), of null: voor een voorstel van een manuele radio, dat geen
+  /// bestand heeft om een hoes uit te lezen (Saber, 19-11-2026: *"maar zijn er geen album hoezen ?"*).
+  final String? hoes;
 
   /// De uitgave waarop je dit nummer zag (▶ in de zoekuitslag of op een albumpagina), of null. Het geland
   /// bestand krijgt die als album — zie `DownloadManager.gezagVoorHaal`.
@@ -1453,7 +1458,7 @@ class RadioBesturing extends ChangeNotifier {
 
   /// De plaatshouder van een voorstel (manuele radio) — zie [Haalstand.voorstel].
   RadioItem _voorstelVan(Radioplek p) {
-    final it = RadioItem(artist: p.artiest, title: p.titel, voorstel: true);
+    final it = RadioItem(artist: p.artiest, title: p.titel, voorstel: true, hoes: p.hoes);
     _plekVan[it] = p;
     p.voorstelItem = it;
     return it;
