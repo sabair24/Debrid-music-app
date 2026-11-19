@@ -94,8 +94,10 @@ void main() {
     test('de regels: OK speelt, lang OK het menu, geen greep en geen kruisje', () {
       final rij = main.substring(main.indexOf('class _WachtrijRij extends StatelessWidget {'));
       final stuk = rij.substring(0, rij.indexOf('\n// ── Now playing'));
-      expect(stuk, contains('    if (tv) {\n      return Pressable(\n        focusNode: focusNode,\n'
-          '        onPressed: () => p.springNaar(plek),\n        onLongPress: tvMenu,'));
+      expect(stuk, contains('    if (tv) {\n      return Pressable(\n        focusNode: focusNode,\n'));
+      // Een voorstel van een manuele radio speelt niet: OK opent dan de keuze (19-11-2026).
+      expect(stuk, contains('          if (r?.voorstel != null) {\n            tvMenu?.call();\n          } else {\n'
+          '            unawaited(p.springNaar(plek));\n          }\n        },\n        onLongPress: tvMenu,'));
       expect(stuk, contains(': tv\n                            ? null\n                            : TvLabelled(\n'
           "                        label: 'Uit de wachtrij halen',"));
       expect(main, contains('        sleepIndex: tv ? null : sleep,'));

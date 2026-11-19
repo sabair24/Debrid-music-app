@@ -41,6 +41,10 @@ enum Haalstand {
 
   /// Niet te vinden. Slaat over, en telt nergens meer in mee.
   mislukt,
+
+  /// Manuele radio (Saber, 19-11-2026): gekeurd, maar je hebt het niet en niemand koos het nog. Komt als VOORSTEL in
+  /// de rij — een plaatshouder met ⬇ Halen en ✕ Weg — telt niet als speelbaar nummer en wordt nooit vanzelf gehaald.
+  voorstel,
 }
 
 /// Waarom een plek [Haalstand.mislukt] werd — voor het bijvullen, dat per reden iets anders doet.
@@ -246,8 +250,14 @@ Voorraadbesluit voorraadPlan(
     return false;
   }
 
-  // Eerst alles wat net binnengekomen is, ongeacht hoeveel er al vooruit staat.
+  // Eerst alles wat net binnengekomen is, ongeacht hoeveel er al vooruit staat. En een voorstel van een manuele radio
+  // meteen: je moet het zien om te kunnen kiezen. Het telt niet mee in [vooruit] en niet in de afstand tussen
+  // artiesten — het klinkt pas als je het haalt.
   for (var i = 0; i < standen.length; i++) {
+    if (standen[i] == Haalstand.voorstel) {
+      inRij.add(i);
+      continue;
+    }
     if (standen[i] != Haalstand.geland) continue;
     final a = naam(i);
     if (ruim() && vlakErvoor(a)) continue;
@@ -297,6 +307,39 @@ Voorraadbesluit voorraadPlan(
   }
 
   return (starten: starten, inRij: inRij, vooruit: vooruit);
+}
+
+/// Hoeveel voorstellen een manuele radio minstens vóór je laat zien — zie [manueelBegrensd].
+const int kManueelVoorstellen = 4;
+
+/// Manuele radio (19-11-2026): wat er nu gekeurd mag worden om een voorstel te worden.
+///
+/// Een plek die niemand koos wordt in een manuele radio niet gehaald maar alleen gekeurd, en komt dan als voorstel in
+/// de rij. Niet alles tegelijk: evenveel voorstellen vóór je als er speelbare nummers staan, en minstens
+/// [kManueelVoorstellen]. Zo wisselen ze elkaar af in de rij, en keurt de radio niet zijn hele plan voor niets — een
+/// keuring vraagt Discogs en het model (Saber: *"alles moet vlot gaan"*).
+///
+/// [gekozen] per plek: zelf gekozen (⬇ Halen) of het zaad — die worden gewoon gehaald en tellen hier niet.
+/// [voorstellenVooruit]: hoeveel voorstellen er al vóór je in de rij op jouw keuze wachten. Geeft [standen] terug met
+/// wat nu niet mag als [Haalstand.mislukt], zodat [voorraadPlan] er niets mee begint; de echte stand blijft wacht.
+List<Haalstand> manueelBegrensd(List<Haalstand> standen,
+    {required List<bool> gekozen, required int voorstellenVooruit, required int speelbaar}) {
+  bool vrij(int i) => i >= gekozen.length || !gekozen[i];
+  var al = voorstellenVooruit;
+  for (var i = 0; i < standen.length; i++) {
+    if (vrij(i) && (standen[i] == Haalstand.onderweg || standen[i] == Haalstand.voorstel)) al++;
+  }
+  var ruimte = (speelbaar > kManueelVoorstellen ? speelbaar : kManueelVoorstellen) - al;
+  final uit = List.of(standen);
+  for (var i = 0; i < uit.length; i++) {
+    if (uit[i] != Haalstand.wacht || !vrij(i)) continue;
+    if (ruimte > 0) {
+      ruimte--;
+    } else {
+      uit[i] = Haalstand.mislukt;
+    }
+  }
+  return uit;
 }
 
 /// Hoe lang een radiohaal hoogstens op één peer wacht.

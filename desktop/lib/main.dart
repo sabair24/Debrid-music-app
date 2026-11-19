@@ -15293,6 +15293,7 @@ ItemMenu _ontbrekendMenu(
         // Deze twee gaan over de ARTIEST, en die heb je wel — ook als dit ene nummer ontbreekt.
         MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, artiest)),
         MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, artiest)),
+        MenuRegel(Icons.radio_outlined, 'Manuele radio', () => startRadio(context, artiest, manueel: true)),
       ],
       [
         // Waar het om begonnen was. [tags] gaat mee zodat de bronnenlijst weet wélke opname dit is
@@ -16632,6 +16633,7 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
               () => showDialog<bool>(context: context, builder: (_) => ReleaseGallery(album))),
         MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
         MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, t.artist, titel: t.title, zaad: t)),
+        MenuRegel(Icons.radio_outlined, 'Manuele radio', () => startRadio(context, t.artist, titel: t.title, zaad: t, manueel: true)),
       ],
       [
         // Dezelfde lijst die "Ontbrekende downloaden" gebruikt, alleen dan voor een nummer dat je al
@@ -16944,6 +16946,7 @@ ItemMenu _netAlbumMenu(BuildContext context, String artiest, CatalogAlbum al) =>
           MenuRegel(Icons.album_rounded, 'Album openen', () => openPagina(context, (_) => AlbumBrowsePage(artiest, al))),
           MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, artiest)),
           MenuRegel(Icons.radio_rounded, 'Radio van deze artiest', () => startRadio(context, artiest)),
+          MenuRegel(Icons.radio_outlined, 'Manuele radio', () => startRadio(context, artiest, manueel: true)),
         ],
       ],
     );
@@ -16986,6 +16989,7 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
               () => showDialog<bool>(context: context, builder: (_) => MetadataEditor(a, nummer: a.tracks.first))),
         MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, a.artist)),
         MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, a.artist)),
+        MenuRegel(Icons.radio_outlined, 'Manuele radio', () => startRadio(context, a.artist, manueel: true)),
       ],
       [
         // Geen tags mee: er wordt hier geen bestand vervangen, er wordt een plaat gezocht.
@@ -17154,8 +17158,19 @@ class _RadioOpruimregel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (aan, n) = context.select<RadioBesturing, (bool, int)>(
-        (r) => (r.loopt && r.houdt != null && (r.opruimenOnderweg?.call() ?? false), r.opgeruimd));
+    final (aan, n, manueel) = context.select<RadioBesturing, (bool, int, bool)>((r) => (
+          r.loopt && r.houdt != null && (r.opruimenOnderweg?.call() ?? false),
+          r.opgeruimd,
+          r.loopt && r.manueel,
+        ));
+    // Een manuele radio haalt alleen wat je koos, en dat blijft (Saber, 19-11-2026): er valt niets op te ruimen.
+    if (manueel) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Text('Manuele radio · ⬇ haalt een voorstel, en wat je haalt blijft',
+            style: TextStyle(color: _muted, fontSize: 12)),
+      );
+    }
     if (!aan) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(top: 6),
@@ -17379,6 +17394,22 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
   /// Het menu van een regel op een tv (lang OK): de keuzes voor de wachtrij ([wachtrijKeuzes]) bovenaan, daaronder wat
   /// je met een nummer kunt ([_nummerMenu]).
   void _tvMenu(BuildContext context, Speelbron p, Track t, int plek, {Radioregel? regel}) {
+    // Een voorstel van een manuele radio: halen of niet (19-11-2026).
+    if ((regel?.voorstel, regel?.item) case (final v?, final it?)) {
+      unawaited(_toonItemMenu(
+          context,
+          ItemMenu(titel: t.title, ondertitel: t.artist, blokken: [
+            [
+              if (v == Voorstelstand.kies)
+                MenuRegel(Icons.download_rounded, 'Halen — het blijft', () => _haalVoorstel(context, it)),
+              if (v == Voorstelstand.bezig) MenuRegel(Icons.hourglass_top_rounded, 'Wordt gehaald…', () {}),
+              if (v != Voorstelstand.bezig)
+                MenuRegel(Icons.close_rounded, v == Voorstelstand.kies ? 'Past niet in deze radio' : 'Uit de rij',
+                    () => unawaited(_wegVoorstel(context, it, oordeel: v == Voorstelstand.kies))),
+            ],
+          ])));
+      return;
+    }
     final radio = regel != null;
     // Bij het kiezen opnieuw opzoeken: speelde intussen het volgende nummer, of veranderde de rij elders, dan is de plek
     // verschoven (zoals bij het kruisje).
@@ -17469,7 +17500,9 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
     final paneel = context.read<WachtrijPaneel>();
     // De radio van een zone op afstand staat op dat toestel: hier alleen het nummer dat speelt.
     final radio = p is PlayerStore && p.radioMode;
-    final regels = radio ? radioAlsRij(lokaal.radioQueue) : const <Radioregel>[];
+    final regels = radio
+        ? radioAlsRij(lokaal.radioQueue, voorstel: context.read<RadioBesturing>().voorstelStand)
+        : const <Radioregel>[];
     final rij = radio ? [for (final r in regels) r.nummer] : p.queueTracks;
     final nu = rij.isEmpty ? -1 : p.currentIndex.clamp(0, rij.length - 1);
     final sleutels = _sleutels(rij);
@@ -17517,6 +17550,15 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
     }
 
     final hierna = nu < 0 ? 0 : rij.length - nu - 1;
+    // Een manuele radio (19-11-2026): de voorstellen klinken pas als je ze haalt, dus de kop telt ze apart.
+    var voorstellenHierna = 0;
+    var nietSpeelbaar = 0;
+    for (var k = nu + 1; k < regels.length; k++) {
+      final v = regels[k].voorstel;
+      if (v == null) continue;
+      nietSpeelbaar++;
+      if (v == Voorstelstand.kies) voorstellenHierna++;
+    }
     // Een zone op afstand geeft een venster op haar wachtrij ([ZoneSpeler]): de koppen tellen de HELE wachtrij, en wie
     // het einde van het venster nadert, krijgt er meer bij (Saber, 25-10-2026: "shuffle heel men bibliotheek, hierna
     // 400 ????" — de Shield had er 1769, allemaal verschillend).
@@ -17540,11 +17582,13 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text('Radio', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      Text(context.watch<RadioBesturing>().manueel ? 'Manuele radio' : 'Radio',
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                       if (rij.isNotEmpty)
                         Text(
                             radioKop(
-                                hierna: hierna,
+                                hierna: hierna - nietSpeelbaar,
+                                voorstellen: voorstellenHierna,
                                 onderweg: context.watch<RadioBesturing>().onderweg,
                                 loopt: context.watch<RadioBesturing>().loopt,
                                 zoekt: !context.watch<RadioBesturing>().aantalBereikt &&
@@ -18012,6 +18056,69 @@ class _BalkjesSchilder extends CustomPainter {
   bool shouldRepaint(_BalkjesSchilder oud) => oud.t != t || oud.speelt != speelt;
 }
 
+/// ⬇ Halen bij een voorstel van een manuele radio (Saber, 19-11-2026): nu ophalen, en het blijft.
+void _haalVoorstel(BuildContext context, RadioItem it) {
+  if (!context.read<RadioBesturing>().haalVoorstel(it)) return;
+  _srcToast(context, '⬇ ${it.artist} — ${it.title} wordt gehaald, en blijft.');
+}
+
+/// ✕ bij een voorstel: past niet in deze radio ([oordeel] — hetzelfde oordeel als "Past niet", zie [radioPastNiet]), of
+/// bij een gekozen nummer dat niet te vinden was alleen de regel weg.
+Future<void> _wegVoorstel(BuildContext context, RadioItem it, {required bool oordeel}) async {
+  final radio = context.read<RadioBesturing>();
+  final klaar = oordeel
+      ? context
+          .read<RadioSfeer>()
+          .zet(
+              artiest: it.artist,
+              titel: it.title,
+              zaad: radio.sfeerZaad,
+              familie: radio.familie,
+              naar: Sfeeroordeel.pastNiet)
+          .catchError((Object _) {})
+      : null;
+  radio.wegVoorstel(it);
+  await klaar;
+}
+
+/// ⬇ Halen en ✕ Weg naast een voorstel. Wordt het gehaald, dan een draaiend wieltje; niet gevonden, dan het teken
+/// daarvoor en een kruisje om de regel weg te doen.
+class _VoorstelKnoppen extends StatelessWidget {
+  const _VoorstelKnoppen({required this.item, required this.stand});
+
+  final RadioItem item;
+  final Voorstelstand stand;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget knop(IconData icoon, String tip, VoidCallback doe, {Color? kleur}) => IconButton(
+          icon: Icon(icoon, size: 17),
+          color: kleur ?? _muted,
+          tooltip: tip,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+          onPressed: doe,
+        );
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      switch (stand) {
+        Voorstelstand.kies =>
+          knop(Icons.download_rounded, 'Halen — het blijft', () => _haalVoorstel(context, item), kleur: _accent),
+        Voorstelstand.bezig => const SizedBox(
+            width: 30,
+            height: 30,
+            child: Center(child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)))),
+        Voorstelstand.mislukt => Tooltip(
+            message: 'Niet gevonden',
+            child: SizedBox(
+                width: 30, height: 30, child: Icon(Icons.report_gmailerrorred_rounded, size: 15, color: _muted))),
+      },
+      if (stand != Voorstelstand.bezig)
+        knop(Icons.close_rounded, stand == Voorstelstand.kies ? 'Past niet in deze radio' : 'Uit de rij',
+            () => unawaited(_wegVoorstel(context, item, oordeel: stand == Voorstelstand.kies))),
+    ]);
+  }
+}
+
 class _WachtrijRij extends StatelessWidget {
   const _WachtrijRij({
     super.key,
@@ -18148,6 +18255,9 @@ class _WachtrijRij extends StatelessWidget {
                       // Achter de naam en niet erin: een lange naam kortte "opnieuw" anders juist weg.
                       if (r != null && r.herhaling)
                         Text(' · opnieuw', style: TextStyle(fontSize: 11, color: _accent2)),
+                      // Een voorstel van een manuele radio: je hebt het niet, en het klinkt pas als je het haalt.
+                      if (r != null && r.voorstel != null)
+                        Text(' · nieuw', style: TextStyle(fontSize: 11, color: _accent2)),
                     ]),
                   ],
                 ),
@@ -18172,6 +18282,10 @@ class _WachtrijRij extends StatelessWidget {
               // regels zijn gewone rijregels, maar het zijn dezelfde nummers van dezelfde radio.
               if (!isTv && (r != null ? r.eigen : _radioOpGekozenZone(context, luister: false)))
                 _RijDuimen(track: track),
+              // ⬇ Halen en ✕ Weg bij een voorstel (manuele radio). Op de tv via lang OK ([_tvMenu]).
+              if ((r?.voorstel, r?.item) case (final v?, final it?) when !tv)
+                _VoorstelKnoppen(item: it, stand: v)
+              else
               SizedBox(
                 width: 28,
                 child: speeltNu
@@ -18223,7 +18337,14 @@ class _WachtrijRij extends StatelessWidget {
     if (tv) {
       return Pressable(
         focusNode: focusNode,
-        onPressed: () => p.springNaar(plek),
+        // Een voorstel speelt niet: OK opent dan de keuze (Halen of Past niet).
+        onPressed: () {
+          if (r?.voorstel != null) {
+            tvMenu?.call();
+          } else {
+            unawaited(p.springNaar(plek));
+          }
+        },
         onLongPress: tvMenu,
         onFocusChange: onFocusChange,
         borderRadius: BorderRadius.circular(10),
@@ -18238,7 +18359,8 @@ class _WachtrijRij extends StatelessWidget {
       child: Container(
         color: speeltNu ? _panel2 : Colors.transparent,
         child: InkWell(
-          onTap: () => p.springNaar(plek),
+          // Een voorstel klinkt niet: een tik zou naar het volgende nummer springen. Kiezen gaat met de knoppen.
+          onTap: r?.voorstel != null ? null : () => p.springNaar(plek),
           onLongPress: _menuOpHouden ? menu : null,
           onSecondaryTapDown: menu == null
               ? null
@@ -18622,9 +18744,10 @@ List<Uint8List?> volgendeHoezen(Speelbron p, LibraryStore bib, {int max = 13}) {
   if (p is PlayerStore && p.radioMode) {
     final r = p.radioQueue;
     final i = p.radioIndex;
+    // Zonder de voorstellen van een manuele radio: die klinken pas als je ze haalt.
     return [
       for (var k = i + 1; k < r.length && k <= i + max; k++)
-        r[k].local == null ? null : bib.coverForTrack(r[k].local!),
+        if (!r[k].voorstel) r[k].local == null ? null : bib.coverForTrack(r[k].local!),
     ];
   }
   final q = p.queueTracks;
@@ -22423,11 +22546,20 @@ Future<List<String>> _lastfmTopArtiesten(AppSettings cfg,
 }
 
 Future<void> startRadio(BuildContext context, String artist,
-    {String? titel, Track? zaad, int? seconden, bool hier = false, String? naar, String? door}) async {
+    {String? titel,
+    Track? zaad,
+    int? seconden,
+    bool hier = false,
+    String? naar,
+    String? door,
+    bool manueel = false}) async {
   // Een zone op afstand gekozen: daar (Saber, 21-10-2026: een radio starten in een andere zone "op elk
   // toestel meteen"). [hier] als het per se dit toestel moet zijn: bij overnemen, of als een ander
   // toestel dit toestel net vroeg een radio te starten.
-  final afstand = hier ? null : _misschien<GekozenZone>(context)?.opAfstand;
+  //
+  // [manueel] (Saber, 19-11-2026): wat je niet hebt komt als voorstel in de rij, en jij kiest wat er gehaald wordt. Dat
+  // kiezen gebeurt op dit scherm, dus deze radio draait altijd hier.
+  final afstand = hier || manueel ? null : _misschien<GekozenZone>(context)?.opAfstand;
   if (afstand != null) {
     // Ook een speaker: dan draait de pc de radio en speelt de speaker (`speaker_radio.dart`).
     final waar = afstand.zone?.naam ?? 'de gekozen zone';
@@ -22447,7 +22579,8 @@ Future<void> startRadio(BuildContext context, String artist,
   }
   final haalTitel = zaad == null && titel != null && titel.trim().isNotEmpty ? titel : null;
   final radio = context.read<RadioBesturing>();
-  _srcToast(context, '📻 Radio starten voor $artist…');
+  _srcToast(context,
+      manueel ? '📻 Manuele radio voor $artist — jij kiest wat er gehaald wordt…' : '📻 Radio starten voor $artist…');
   final rec = RecommendService();
   final cfg = context.read<AppSettings>();
   final standen = context.read<Speelstanden>();
@@ -22698,6 +22831,7 @@ Future<void> startRadio(BuildContext context, String artist,
       if (p.eigen == null || artiestSleutel(p.artiest) == zelf) p,
   ], naar: uitgang, naam: artist, zaadArtiest: artist, zaad: zaad, keur: keuring.keur, bijvul: bijvuller.call, groen: bijvuller.lastfmVan == null ? null : bijvuller.groenRonde, spoor: log.line,
       door: door,
+      manueel: manueel,
       bijStart: (s) {
     gestart = s;
     _keuring = keuring;
@@ -23290,7 +23424,11 @@ Future<void> stemRadioAf(BuildContext context, Radiosmaak smaak) async {
   // komt, plus de laatste veertig die voorbij kwamen.
   final blijft = artiestenVoorPlafond([
     for (final p in radio.plan)
-      if (p.zaad || p.reserve || (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar)) p
+      if (p.zaad ||
+          p.reserve ||
+          p.gekozen ||
+          (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar && p.stand != Haalstand.voorstel))
+        p
   ], voorbijteller: radio.voorbijteller);
   final nieuw = _radioplan(recs, lib,
       zaadArtiest: artist,
@@ -24608,6 +24746,8 @@ class _HomeStartViewState extends State<HomeStartView> {
                   MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, ts[i].artist)),
                   MenuRegel(Icons.radio_rounded, 'Radio vanaf hier',
                       () => startRadio(context, ts[i].artist, titel: ts[i].title)),
+                  MenuRegel(Icons.radio_outlined, 'Manuele radio',
+                      () => startRadio(context, ts[i].artist, titel: ts[i].title, manueel: true)),
                 ],
               ])),
           heroTag: ts[i].hasAlbum ? 'net:${ts[i].albumId}@$rij' : null,
@@ -24793,6 +24933,8 @@ void _nieuwNummerMenu(BuildContext context, NieuwNummer n, {Offset? bij}) => _to
         MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, n.artiest)),
         MenuRegel(Icons.radio_rounded, 'Radio vanaf hier',
             () => startRadio(context, n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null)),
+        MenuRegel(Icons.radio_outlined, 'Manuele radio',
+            () => startRadio(context, n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null, manueel: true)),
         if (!isTv)
           MenuRegel(Icons.download_rounded, 'Bronnen / download',
               () => _bronnenVenster(context, '${n.artiest} — ${n.titel}', '${n.artiest} ${n.titel}')),
@@ -24807,6 +24949,7 @@ void _nieuwAlbumMenu(BuildContext context, NieuweUitgave u, {Offset? bij}) => _t
         MenuRegel(Icons.album_rounded, 'Album openen', () => _openNieuwAlbum(context, u.album, u.artiest)),
         MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, u.artiest)),
         MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, u.artiest)),
+        MenuRegel(Icons.radio_outlined, 'Manuele radio', () => startRadio(context, u.artiest, manueel: true)),
       ],
     ]),
     bij: bij);
@@ -25709,6 +25852,8 @@ class _OntdekViewState extends State<OntdekView> {
             MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
             MenuRegel(Icons.radio_rounded, 'Radio vanaf hier',
                 () => startRadio(context, t.artist, titel: t.title, seconden: t.seconds)),
+            MenuRegel(Icons.radio_outlined, 'Manuele radio',
+                () => startRadio(context, t.artist, titel: t.title, seconden: t.seconds, manueel: true)),
           ],
           [
             MenuRegel(Icons.download_rounded, 'Downloaden (beste bron)', () => _haal(n)),

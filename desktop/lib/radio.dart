@@ -132,6 +132,13 @@ class Radioplek {
   /// De regel in de speelrij die deze plek al laat klinken terwijl hij binnenkomt, of null. Landt het
   /// nummer, dan wordt DIE regel je eigen nummer — er komt geen tweede bij.
   RadioItem? stroomItem;
+
+  /// Manuele radio: jij koos ⬇ Halen (of het is het zaad). Dan wordt hij gewoon gehaald, en wat binnenkomt blijft —
+  /// het telt niet als iets van de radio ([doorRadio] blijft onwaar). Saber, 19-11-2026: *"Blijft voor altijd"*.
+  bool gekozen = false;
+
+  /// De plaatshouder van dit voorstel in de rij, of null. Landt het gekozen nummer, dan wordt DIE regel het nummer.
+  RadioItem? voorstelItem;
 }
 
 /// Waar een radio zijn nummers vandaan haalt.
@@ -382,11 +389,16 @@ String? radioStatusTekst({
 ///
 /// "0 hierna" alleen klonk als het einde, ook als er acht onderweg waren. [zoekt] is onwaar als hij
 /// niet zoekt: het genoemde aantal is er, of het ophalen staat even stil — dan geen "zoekt verder".
-String radioKop({required int hierna, required int onderweg, required bool loopt, bool zoekt = true}) {
+///
+/// [voorstellen]: hoeveel voorstellen van een manuele radio er vóór je op jouw keuze wachten — die klinken niet, dus
+/// ze staan apart (19-11-2026).
+String radioKop(
+    {required int hierna, required int onderweg, required bool loopt, bool zoekt = true, int voorstellen = 0}) {
   final h = hierna < 0 ? 0 : hierna;
-  if (!loopt) return '$h hierna';
-  if (onderweg > 0) return '$h hierna · $onderweg onderweg';
-  return h == 0 && zoekt ? '0 hierna · zoekt verder' : '$h hierna';
+  final v = voorstellen > 0 ? ' · $voorstellen ${voorstellen == 1 ? 'voorstel' : 'voorstellen'}' : '';
+  if (!loopt) return '$h hierna$v';
+  if (onderweg > 0) return '$h hierna · $onderweg onderweg$v';
+  return h == 0 && zoekt ? '0 hierna · zoekt verder$v' : '$h hierna$v';
 }
 
 /// Waar de nakomers in het plan terechtkomen.
@@ -434,7 +446,13 @@ List<Radioplek> mengNakomers(List<Radioplek> plan, List<Radioplek> nieuw) {
 List<Radioplek> stemPlanAf(List<Radioplek> plan, List<Radioplek> nieuw) {
   final blijft = [
     for (final p in plan)
-      if (p.zaad || p.reserve || (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar)) p
+      // Ook wat je in een manuele radio koos en nog op halen wacht: dat was jouw keuze, niet die van de vorige stand. Een
+      // voorstel dat nog niet in de rij stond gaat weg, net als wat wacht.
+      if (p.zaad ||
+          p.reserve ||
+          p.gekozen ||
+          (p.stand != Haalstand.wacht && p.stand != Haalstand.klaar && p.stand != Haalstand.voorstel))
+        p
   ];
   return [...blijft, ...nieuweNakomers(blijft, nieuw)];
 }
@@ -493,6 +511,10 @@ class RadioBesturing extends ChangeNotifier {
   /// Het nummer waar de radio vanaf begon, als dat er was. Voor het afstemmen: dat liedje hoort er
   /// daarna evenmin nog een keer in.
   Track? zaad;
+
+  /// Een manuele radio (Saber, 19-11-2026): wat je niet hebt komt als voorstel in de rij en wordt pas gehaald als jij
+  /// het kiest — zie [Haalstand.voorstel], [haalVoorstel] en [wegVoorstel].
+  bool manueel = false;
 
   /// "Past / past niet in deze radio" — zie `radiosfeer.dart`. Gezet door wie de radio maakt.
   RadioSfeer? sfeer;
@@ -917,7 +939,9 @@ class RadioBesturing extends ChangeNotifier {
   }
 
   /// Hoeveel er nog opgehaald wordt, en hoeveel er door deze radio binnengekomen is.
-  int get onderweg => _plan.where((p) => p.stand == Haalstand.onderweg).length;
+  ///
+  /// In een manuele radio alleen wat gehaald wordt: een plek die gekeurd wordt om een voorstel te worden, haalt niets.
+  int get onderweg => _plan.where((p) => p.stand == Haalstand.onderweg && (!manueel || p.gekozen)).length;
   int get gehaald => _plan.where((p) => p.doorRadio).length;
 
   /// Starten. Geeft null terug als het gelukt is, of de reden waarom niet — in gewone taal.
@@ -932,7 +956,8 @@ class RadioBesturing extends ChangeNotifier {
       Future<int> Function(int sessie, String artiest, String titel)? groen,
       void Function(String regel)? spoor,
       int? aantal,
-      String? door}) async {
+      String? door,
+      bool manueel = false}) async {
     if (nieuw.isEmpty) return 'Er viel niets te vinden om een radio van te maken.';
 
     // Eerst vragen of het KAN, en pas daarna de lopende radio verlaten. Andersom zou een radio die
@@ -983,6 +1008,13 @@ class RadioBesturing extends ChangeNotifier {
     this.naam = naam;
     this.zaadArtiest = zaadArtiest;
     this.zaad = zaad;
+    this.manueel = manueel;
+    // Het zaad koos je zelf: ook in een manuele radio wordt het gehaald, en het blijft.
+    if (manueel) {
+      for (final p in nieuw) {
+        if (p.zaad) p.gekozen = true;
+      }
+    }
     familie = '';
     _plan = _zonderPastNiet(_plan, 'de start');
     _loopt = true;
@@ -1011,7 +1043,12 @@ class RadioBesturing extends ChangeNotifier {
     // radio loopt.
     // Met de tijd erbij: er klinkt nog niets, en wat er in gaat telt op — zie `kRuimeRest`. Zonder
     // dat kwam er bij de start meteen een tweede nummer van de zaadartiest achter het zaad.
-    final besluit = voorraadPlan([for (final p in nieuw) p.stand],
+    final standen = [for (final p in nieuw) p.stand];
+    final besluit = voorraadPlan(
+        manueel
+            ? manueelBegrensd(standen,
+                gekozen: [for (final p in nieuw) p.gekozen], voorstellenVooruit: 0, speelbaar: 0)
+            : standen,
         artiesten: [for (final p in nieuw) p.artiest],
         vooruitNu: 0,
         restSeconden: 0,
@@ -1388,6 +1425,7 @@ class RadioBesturing extends ChangeNotifier {
     var rest = lengte - speler.positieErgens.inSeconds;
     if (rest < 0) rest = 0;
     for (final it in rij.skip(i + 1)) {
+      if (it.voorstel) continue; // klinkt niet
       final s = it.local?.duration?.inSeconds;
       rest += s != null && s > 0 ? s : kOnbekendeLengte;
     }
@@ -1413,6 +1451,99 @@ class RadioBesturing extends ChangeNotifier {
     return it;
   }
 
+  /// De plaatshouder van een voorstel (manuele radio) — zie [Haalstand.voorstel].
+  RadioItem _voorstelVan(Radioplek p) {
+    final it = RadioItem(artist: p.artiest, title: p.titel, voorstel: true);
+    _plekVan[it] = p;
+    p.voorstelItem = it;
+    return it;
+  }
+
+  /// Hoeveel nummers er vóór je staan die werkelijk klinken: zonder de voorstellen van een manuele radio.
+  int _speelbaarVooruit() {
+    final rij = speler.radioQueue;
+    var n = 0;
+    for (var k = speler.radioIndex + 1; k < rij.length; k++) {
+      if (!rij[k].voorstel) n++;
+    }
+    return n;
+  }
+
+  /// Hoeveel voorstellen er vóór je staan die nog op jouw keuze wachten.
+  int _voorstellenVooruit() {
+    final rij = speler.radioQueue;
+    var n = 0;
+    for (var k = speler.radioIndex + 1; k < rij.length; k++) {
+      if (rij[k].voorstel && _plekVan[rij[k]]?.gekozen != true) n++;
+    }
+    return n;
+  }
+
+  /// De artiesten achteraan de rij die werkelijk klinken: de laatste [kZaadAfstand], zonder voorstellen.
+  List<String> _staartVan(List<RadioItem> rij) {
+    final uit = <String>[];
+    for (var k = rij.length - 1; k >= 0 && uit.length < kZaadAfstand; k--) {
+      if (!rij[k].voorstel) uit.add(rij[k].artist);
+    }
+    return uit.reversed.toList();
+  }
+
+  /// Waar een voorstel staat, voor op het scherm.
+  Voorstelstand voorstelStand(RadioItem it) {
+    final p = _plekVan[it];
+    if (p == null || !p.gekozen) return Voorstelstand.kies;
+    return p.stand == Haalstand.mislukt ? Voorstelstand.mislukt : Voorstelstand.bezig;
+  }
+
+  /// ⬇ Halen bij een voorstel (manuele radio): nu ophalen, en het blijft. Saber, 19-11-2026: *"dan beslis ik of ik ze
+  /// wil of nie, dan pas mogen ze downloaden"*. Meteen, en niet pas bij de volgende tik binnen [kMaxOnderweg]: je
+  /// drukte op een knop. Staat Soulseek even stil, dan wacht het als gekozen plek en gaat het mee zodra het weer kan.
+  bool haalVoorstel(RadioItem it) {
+    final p = _plekVan[it];
+    if (!_loopt || p == null || !identical(p.voorstelItem, it) || p.gekozen) return false;
+    p.gekozen = true;
+    p.stand = Haalstand.onderweg;
+    _spoor?.call('radio-manueel: halen — ${p.artiest} — ${p.titel}');
+    notifyListeners();
+    unawaited(_haal(_sessie, p));
+    return true;
+  }
+
+  /// ✕ bij een voorstel: uit de rij. Nog niet gekozen, dan "past niet in deze radio" (Saber, 19-11-2026) — het
+  /// OORDEEL geeft wie dit aanroept via [sfeer], net als bij [pastNiet]. Gekozen maar niet gevonden: alleen de regel.
+  bool wegVoorstel(RadioItem it) {
+    final p = _plekVan[it];
+    if (p == null || !identical(p.voorstelItem, it)) return false;
+    if (p.gekozen && p.stand != Haalstand.mislukt) return false; // wordt nog gehaald
+    p.voorstelItem = null;
+    if (p.stand != Haalstand.mislukt) {
+      p.stand = Haalstand.mislukt;
+      p.weer = Weerreden.sfeer;
+    }
+    speler.vervangInRadio(it, null);
+    _spoor?.call('radio-manueel: weg — ${p.artiest} — ${p.titel}');
+    notifyListeners();
+    _pas(_sessie);
+    return true;
+  }
+
+  /// Een zelf gekozen nummer klinkt op de plek van zijn voorstel: die regel wordt het nummer. Klonk het al als
+  /// groeistroom ([gestroomd]), dan staat het er al en gaat alleen de plaatshouder weg. True als het nu op de plek
+  /// van het voorstel staat.
+  bool _opVoorstelPlek(Radioplek p, Track t, {required bool gestroomd}) {
+    final oud = p.voorstelItem;
+    if (oud == null) return false;
+    p.voorstelItem = null;
+    if (gestroomd) {
+      speler.vervangInRadio(oud, null);
+      return false;
+    }
+    final nieuw = RadioItem(artist: p.artiest, title: p.titel, local: t);
+    if (!speler.vervangInRadio(oud, nieuw)) return false;
+    _plekVan[nieuw] = p;
+    return true;
+  }
+
   /// Wat er in de rij vóór het spelende nummer staat, is voorbij — gespeeld of overgeslagen. Alles
   /// wat in één beweging voorbij ging (een tik van regel 10 naar 30) krijgt dezelfde stempel: één stap.
   /// Wordt een nummer weer het spelende (terug met "vorige"), dan is het niet meer voorbij.
@@ -1435,13 +1566,14 @@ class RadioBesturing extends ChangeNotifier {
 
   /// Moet er bijgevuld worden? Zie [bijvulBesluit].
   ({Bijvulbesluit besluit, double verwacht}) _bijvulNu() {
-    final rij = speler.radioQueue;
-    final vooruit = rij.length - speler.radioIndex - 1;
+    final vooruit = _speelbaarVooruit();
     final opbrengst = recenteOpbrengst(_uitkomsten);
     final klaar = [for (final p in _plan) if (p.stand == Haalstand.klaar && !p.reserve) p.artiest];
     final geland = _plan.where((p) => p.stand == Haalstand.geland).length;
-    final onderweg = _plan.where((p) => p.stand == Haalstand.onderweg).length;
-    final wacht = _plan.where((p) => p.stand == Haalstand.wacht).length;
+    // In een manuele radio klinkt alleen wat je koos: wat niemand koos, telt hier niet als iets wat komt.
+    bool komt(Radioplek p) => !manueel || p.gekozen;
+    final onderweg = _plan.where((p) => p.stand == Haalstand.onderweg && komt(p)).length;
+    final wacht = _plan.where((p) => p.stand == Haalstand.wacht && komt(p)).length;
     final verwacht = verwachtVooruit(
       rijVooruit: vooruit < 0 ? 0 : vooruit,
       geland: geland,
@@ -1596,6 +1728,18 @@ class RadioBesturing extends ChangeNotifier {
     return true;
   }
 
+  /// [_pas] zodra wat nu loopt klaar is; meer verzoeken tot dan worden één tik.
+  void _pasStraks(int sessie) {
+    if (_pasGepland) return;
+    _pasGepland = true;
+    scheduleMicrotask(() {
+      _pasGepland = false;
+      _pas(sessie);
+    });
+  }
+
+  bool _pasGepland = false;
+
   /// Kijken wat er nu te doen valt, en het doen.
   void _pas(int sessie) {
     if (sessie != _sessie) return;
@@ -1609,22 +1753,31 @@ class RadioBesturing extends ChangeNotifier {
     _ruimOnderwegOp(sessie);
     // Wat klaarstaat of net landde, maar intussen "past niet" kreeg: niet de rij in.
     for (final p in _plan) {
-      if (p.zaad || (p.stand != Haalstand.klaar && p.stand != Haalstand.geland)) continue;
+      if (p.zaad || (p.stand != Haalstand.klaar && p.stand != Haalstand.geland && p.stand != Haalstand.voorstel)) {
+        continue;
+      }
       if (!pastHierNiet(p.artiest, p.titel)) continue;
       p.stand = Haalstand.mislukt;
       p.weer = Weerreden.sfeer;
     }
     final bijvul = _bijvulNu();
     final reserveVoor = _plan.where((p) => p.reserve && p.stand == Haalstand.klaar).length;
-    final vooruit = speler.radioQueue.length - speler.radioIndex - 1;
+    // Wat werkelijk klinkt: de voorstellen van een manuele radio tellen niet mee.
+    final vooruit = _speelbaarVooruit();
     final rij = speler.radioQueue;
+    final standen = [for (final p in _plan) p.stand];
     final besluit = voorraadPlan(
-      [for (final p in _plan) p.stand],
+      manueel
+          ? manueelBegrensd(standen,
+              gekozen: [for (final p in _plan) p.gekozen],
+              voorstellenVooruit: _voorstellenVooruit(),
+              speelbaar: vooruit)
+          : standen,
       artiesten: [for (final p in _plan) p.artiest],
       // Wat er achteraan de rij staat, zodat een net geland nummer niet vlak achter zijn eigen
       // artiest belandt.
       // Tien, en niet acht: de zaadartiest moet tien plekken terug kunnen kijken ([kZaadAfstand]).
-      staart: [for (final it in rij.skip(rij.length > kZaadAfstand ? rij.length - kZaadAfstand : 0)) it.artist],
+      staart: _staartVan(rij),
       vooruitNu: vooruit < 0 ? 0 : vooruit,
       rust: _rustTot != null && DateTime.now().isBefore(_rustTot!),
       restSeconden: _restSeconden(),
@@ -1639,8 +1792,10 @@ class RadioBesturing extends ChangeNotifier {
     if (besluit.inRij.isNotEmpty) {
       final erbij = <RadioItem>[];
       for (final i in besluit.inRij) {
-        _plan[i].stand = Haalstand.inRij;
-        erbij.add(_itemVan(_plan[i]));
+        final p = _plan[i];
+        final voorstel = p.stand == Haalstand.voorstel;
+        p.stand = Haalstand.inRij;
+        erbij.add(voorstel ? _voorstelVan(p) : _itemVan(p));
       }
       speler.voegToeAanRadio(erbij);
     }
@@ -1683,7 +1838,8 @@ class RadioBesturing extends ChangeNotifier {
       return;
     }
     final keur = _keur;
-    if (keur != null) {
+    // Wat je zelf koos is al gekeurd (als voorstel), of het is het zaad.
+    if (keur != null && !p.gekozen) {
       var mag = true;
       try {
         mag = await keur(p);
@@ -1707,6 +1863,17 @@ class RadioBesturing extends ChangeNotifier {
         _pas(sessie);
         return;
       }
+    }
+    // Manuele radio: wat niemand koos wordt niet gehaald maar een voorstel in de rij — zie [Haalstand.voorstel].
+    if (manueel && !p.gekozen) {
+      if (sessie != _sessie) return;
+      p.stand = Haalstand.voorstel;
+      notifyListeners();
+      // Niet meteen: zonder keuring komt dit hier zonder één await aan, midden in de lus van [start] of [_pas] die
+      // deze plek startte. Een tik nú zou de plekken die daarna aan de beurt zijn al starten, en die lus startte ze
+      // dan nog eens — twee keer hetzelfde voorstel in de rij.
+      _pasStraks(sessie);
+      return;
     }
     Track? t;
     var later = false;
@@ -1764,10 +1931,14 @@ class RadioBesturing extends ChangeNotifier {
       p.weer = Weerreden.nietGevonden;
       p.mislukteOp = _klok();
       _uitkomsten.add(false);
-    } else if (!vanRadio) {
-      // Van jou: in de rij, maar niet in de notitie van deze radio — zie [AlVanJou].
+    } else if (!vanRadio || p.gekozen) {
+      // Van jou: in de rij, maar niet in de notitie van deze radio — zie [AlVanJou]. En zo ook wat je in een manuele
+      // radio zelf koos: dat blijft (Saber, 19-11-2026: "Blijft voor altijd"), en klinkt op de plek van zijn voorstel.
       p.eigen = t;
-      p.stand = _alsGestroomd(p, t) ? Haalstand.inRij : Haalstand.geland;
+      final gestroomd = _alsGestroomd(p, t);
+      final opPlek = _opVoorstelPlek(p, t, gestroomd: gestroomd);
+      p.stand = gestroomd || opPlek ? Haalstand.inRij : Haalstand.geland;
+      if (p.gekozen) _spoor?.call('radio-manueel: binnen, en het blijft — ${p.artiest} — ${p.titel}');
       _uitkomsten.add(true);
       _eersteLanding = true;
     } else {
