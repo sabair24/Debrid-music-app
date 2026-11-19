@@ -18091,6 +18091,10 @@ class _VoorstelKnoppen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Na "Radio afsluiten" houdt de speler zijn rij, maar valt er niets meer te halen: dan het gewone teken.
+    if (!context.select<RadioBesturing, bool>((r) => r.loopt)) {
+      return SizedBox(width: 28, child: Icon(Icons.cloud_download_outlined, size: 15, color: _muted));
+    }
     Widget knop(IconData icoon, String tip, VoidCallback doe, {Color? kleur}) => IconButton(
           icon: Icon(icoon, size: 17),
           color: kleur ?? _muted,
