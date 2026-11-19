@@ -397,8 +397,8 @@ void main() {
     });
 
     test('de kop telt de voorstellen apart', () {
-      expect(radioKop(hierna: 6, onderweg: 1, loopt: true, voorstellen: 4), '6 hierna · 1 onderweg · 4 voorstellen');
-      expect(radioKop(hierna: 6, onderweg: 0, loopt: true, voorstellen: 1), '6 hierna · 1 voorstel');
+      expect(radioKop(hierna: 6, onderweg: 1, loopt: true, voorstellen: 4), '6 hierna · 1 onderweg · 4 nieuw');
+      expect(radioKop(hierna: 6, onderweg: 0, loopt: true, voorstellen: 1), '6 hierna · 1 nieuw');
       expect(radioKop(hierna: 6, onderweg: 0, loopt: true), '6 hierna');
     });
   });
@@ -416,6 +416,9 @@ void main() {
       expect(m, contains('radioAlsRij(lokaal.radioQueue, voorstel: context.read<RadioBesturing>().voorstelStand)'));
       expect(m, contains('hierna: hierna - nietSpeelbaar,'));
       expect(m, contains('                _VoorstelKnoppen(item: it, stand: v)'));
+      expect(m, contains('    if (!context.select<RadioBesturing, bool>((r) => r.loopt)) {\n'
+          '      return SizedBox(width: 28, child: Icon(Icons.cloud_download_outlined, size: 15, color: _muted));'),
+          reason: 'na het afsluiten geen knoppen die niets doen');
       expect(m, contains('        if (!r[k].voorstel) r[k].local == null ? null : bib.coverForTrack(r[k].local!),'),
           reason: 'de hoezenstapel van Nu speelt toont wat klinkt');
     });

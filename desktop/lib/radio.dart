@@ -391,11 +391,11 @@ String? radioStatusTekst({
 /// niet zoekt: het genoemde aantal is er, of het ophalen staat even stil — dan geen "zoekt verder".
 ///
 /// [voorstellen]: hoeveel voorstellen van een manuele radio er vóór je op jouw keuze wachten — die klinken niet, dus
-/// ze staan apart (19-11-2026).
+/// ze staan apart, als "nieuw" zoals op hun regel (19-11-2026). "voorstellen" viel op de pc af naast "Radio afsluiten".
 String radioKop(
     {required int hierna, required int onderweg, required bool loopt, bool zoekt = true, int voorstellen = 0}) {
   final h = hierna < 0 ? 0 : hierna;
-  final v = voorstellen > 0 ? ' · $voorstellen ${voorstellen == 1 ? 'voorstel' : 'voorstellen'}' : '';
+  final v = voorstellen > 0 ? ' · $voorstellen nieuw' : '';
   if (!loopt) return '$h hierna$v';
   if (onderweg > 0) return '$h hierna · $onderweg onderweg$v';
   return h == 0 && zoekt ? '0 hierna · zoekt verder$v' : '$h hierna$v';
