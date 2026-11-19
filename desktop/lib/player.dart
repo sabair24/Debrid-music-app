@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection' show UnmodifiableListView;
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -11,6 +12,7 @@ import 'netsoort.dart' show heropenVoorStand;
 import 'lan/stroomstand.dart' show grensUitUrl;
 import 'luidheid.dart' show Bijstelbron, Bijstelling, Luidheidsmeting, abVersterking, adresSleutel;
 import 'models.dart';
+import 'naklok.dart';
 import 'paths.dart';
 import 'schudvolgorde.dart';
 import 'vaste_keuze.dart' show sleutelVoor;
@@ -893,12 +895,39 @@ class _WisselGestopt implements Exception {
   const _WisselGestopt();
 }
 
+/// Hoe lang het wachtrijbestand hoogstens wacht na een wijziging (zie [PlayerStore.bewaarRijNu]).
+const Duration kRijBewaarRust = Duration(seconds: 2);
+
 class PlayerStore extends ChangeNotifier
     implements NowPlayingSource, Speelbron, Rijbediening, VolgSpeler, Radiospeler {
+  /// De speler van dit proces, voor het afsluiten ([bewaarRijNu]).
+  static PlayerStore? laatst;
+
   /// Wat de luisteraars samen kosten, in haper.log als het traag is (28-10-2026: een nummerwissel hield de
   /// tekendraad tot 1,3 s vast). Zie haperlog.dart.
   @override
-  void notifyListeners() => traagMeten('speler meldt', super.notifyListeners);
+  void notifyListeners() {
+    if (!_positieTik) _staatVersie++;
+    traagMeten('speler meldt', super.notifyListeners);
+  }
+
+  /// Telt elke melding behalve de positietik (19-11-2026, Saber: *"alles moet vlot gaan"*). Wie alleen de rij of
+  /// de stand toont — het wachtrijpaneel — luistert hierop met `context.select` en hertekent niet vier keer per
+  /// seconde mee met de tijdbalk. Bij Shuffle alles kostte elke hertekening een kopie van 2000 nummers, 2000
+  /// sleutels en een verzameling ervan.
+  int get staatVersie => _staatVersie;
+  int _staatVersie = 0;
+  bool _positieTik = false;
+
+  /// De melding van de tijdbalk (vier per seconde, zie de positiestroom): telt niet als nieuwe stand.
+  void _meldPositie() {
+    _positieTik = true;
+    try {
+      notifyListeners();
+    } finally {
+      _positieTik = false;
+    }
+  }
 
   /// **Ruim vooruit lezen, want de muziek komt over het netwerk.**
   ///
@@ -1557,8 +1586,23 @@ class PlayerStore extends ChangeNotifier
   }
 
   /// The queue as it will actually play, shuffle applied.
+  ///
+  /// Een venster op de rij, geen kopie (19-11-2026): `List.unmodifiable` kopieerde bij elke aanroep alle 2000
+  /// nummers van een Shuffle alles, en het wachtrijpaneel vroeg hem bij elke hertekening. De rij zelf wordt bij
+  /// een wijziging vervangen (`_pas`), dus een nieuw venster volgt vanzelf; alleen een betere versie van een
+  /// nummer wordt ter plaatse ingezet.
   @override
-  List<Track> get queueTracks => List.unmodifiable(_order);
+  List<Track> get queueTracks {
+    final o = _order;
+    if (!identical(o, _rijVan)) {
+      _rijVan = o;
+      _rijZicht = UnmodifiableListView(o);
+    }
+    return _rijZicht;
+  }
+
+  List<Track>? _rijVan;
+  List<Track> _rijZicht = const [];
 
   /// Waar we in [queueTracks] staan, of -1. Nodig zodra iemand die lijst tóónt: `current` zegt wél
   /// wat er klinkt maar niet wélke van twee gelijke regels het is.
@@ -1628,6 +1672,7 @@ class PlayerStore extends ChangeNotifier
   }
 
   PlayerStore() {
+    laatst = this;
     unawaited(_zetVooruitlezen());
     unawaited(_zetLuidheidBasis());
     // **Wanneer mpv op de stroom wacht (paused-for-cache), en hoe lang.** Stap 6 van "verbinden zoals
@@ -1671,7 +1716,7 @@ class PlayerStore extends ChangeNotifier
       final vak = p.inMilliseconds ~/ 250;
       if (vak == _laatsteMeldvak) return;
       _laatsteMeldvak = vak;
-      notifyListeners();
+      _meldPositie();
     });
     // De foutstroom van media_kit. Die bestond al en werd door niemand beluisterd — dezelfde soort
     // stilte als `RemoteException.isUnauthorized`, dat een comment had die het probleem exact
@@ -3717,7 +3762,7 @@ class PlayerStore extends ChangeNotifier
   /// die op het scherm. [CastManager.requeue] heropent het lopende nummer niet, dus de muziek slaat
   /// nergens over.
   void _naWijziging() {
-    unawaited(_saveQueue());
+    _rijBewaren.straks();
     unawaited(castReorder?.call(_order, _index) ?? Future<void>.value());
     notifyListeners();
   }
@@ -3855,6 +3900,14 @@ class PlayerStore extends ChangeNotifier
   }
 
   // ── Resume (persist the library queue + position) ──────────────────────────
+
+  /// Het wachtrijbestand hoogstens om de [kRijBewaarRust] (19-11-2026). Een wijziging na een gewone tik, een
+  /// verplaatsing of een nummer dat elders opende: allemaal `_naWijziging`, en die schreef telkens 2000 paden weg.
+  late final Naklok _rijBewaren = Naklok(kRijBewaarRust, _saveQueue);
+
+  /// Bij het afsluiten: een wachtende beurt meteen doen.
+  Future<void> bewaarRijNu() => _rijBewaren.wacht ? _rijBewaren.nu() : Future<void>.value();
+
   Future<void> _saveQueue() async {
     if (!_resumable) return;
     try {
@@ -3977,6 +4030,7 @@ class PlayerStore extends ChangeNotifier
 
   @override
   void dispose() {
+    _rijBewaren.stop();
     _stilstandTikker?.cancel();
     _player.dispose();
     _proef?.dispose();
