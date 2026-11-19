@@ -517,6 +517,10 @@ Future<void> afsluiten(LibraryStore library, SoulseekService soulseek) async {
   try {
     await _flushStores(library);
   } catch (_) {}
+  // De wachtrij die nog in de rust van [kRijBewaarRust] stond (19-11-2026).
+  try {
+    await PlayerStore.laatst?.bewaarRijNu();
+  } catch (_) {}
   try {
     await soulseek.signOff();
   } catch (_) {}
@@ -17455,7 +17459,11 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
   @override
   Widget build(BuildContext context) {
     // De wachtrij van de gekozen zone (zones, 21-10-2026), of die van dit toestel.
-    final lokaal = context.watch<PlayerStore>();
+    //
+    // Alleen hertekenen als de rij of de stand verandert, niet bij de vier positietikken per seconde
+    // (19-11-2026, [PlayerStore.staatVersie]).
+    context.select<PlayerStore, int>((p) => p.staatVersie);
+    final lokaal = context.read<PlayerStore>();
     final Speelbron p = _misschien<GekozenZone>(context, luister: true)?.opAfstand ?? lokaal;
     final lib = context.watch<LibraryStore>();
     final paneel = context.read<WachtrijPaneel>();
