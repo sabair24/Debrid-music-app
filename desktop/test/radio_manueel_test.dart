@@ -194,7 +194,7 @@ void main() {
       addTearDown(radio.stop);
       await radio.start([
         Radioplek(artiest: 'Zaad', titel: 'Zaadnummer', eigen: zaad, zaad: true),
-        Radioplek(artiest: 'Artiest B', titel: 'B'),
+        Radioplek(artiest: 'Artiest B', titel: 'B', hoes: 'https://deezer.test/b.jpg'),
         Radioplek(artiest: 'Artiest C', titel: 'C'),
       ], manueel: true);
       await _totAllesTerug(radio);
@@ -204,6 +204,8 @@ void main() {
       expect(radio.onderweg, 0, reason: 'keuren is geen halen');
 
       final itB = speler.rij[1];
+      expect(itB.hoes, 'https://deezer.test/b.jpg', reason: 'de hoes, zoals bij Zoeken');
+      expect(speler.rij[2].hoes, isNull);
       expect(radio.voorstelStand(itB), Voorstelstand.kies);
       expect(radio.haalVoorstel(itB), isTrue);
       expect(radio.voorstelStand(itB), Voorstelstand.bezig);
@@ -416,6 +418,8 @@ void main() {
       expect(m, contains('radioAlsRij(lokaal.radioQueue, voorstel: context.read<RadioBesturing>().voorstelStand)'));
       expect(m, contains('hierna: hierna - nietSpeelbaar,'));
       expect(m, contains('                _VoorstelKnoppen(item: it, stand: v)'));
+      expect(m, contains('                      ? _netCover(r!.item!.hoes, size: 34, radius: 4)'), reason: 'de hoes');
+      expect(m, contains('        hoes: bruikbaar[gekozen[v]].cover,'), reason: 'van Deezer, in het plan');
       expect(m, contains('    if (!context.select<RadioBesturing, bool>((r) => r.loopt)) {\n'
           '      return SizedBox(width: 28, child: Icon(Icons.cloud_download_outlined, size: 15, color: _muted));'),
           reason: 'na het afsluiten geen knoppen die niets doen');

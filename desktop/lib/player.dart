@@ -41,7 +41,16 @@ class RadioItem {
   /// beslis ik of ik ze wil of nie"*): een plaatshouder in de rij, met ⬇ Halen en ✕ Weg. Klinkt nooit — hij staat
   /// meteen op [failed], zodat de speler eroverheen stapt en er geen bron voor zoekt.
   final bool voorstel;
-  RadioItem({required this.artist, required this.title, this.local, this.herhaling = false, this.voorstel = false})
+
+  /// De hoes van een nummer dat je niet hebt (een adres van Deezer), of null — voor een voorstel in de rij.
+  final String? hoes;
+  RadioItem(
+      {required this.artist,
+      required this.title,
+      this.local,
+      this.herhaling = false,
+      this.voorstel = false,
+      this.hoes})
       : failed = voorstel;
   bool get isLocal => local != null;
 }
