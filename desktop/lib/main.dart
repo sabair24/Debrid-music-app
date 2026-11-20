@@ -5515,7 +5515,9 @@ class _HomeShellState extends State<HomeShell> {
             ),
             // The one badge worth carrying out of the drawer: a download running while you are
             // somewhere else is the thing you would otherwise have to go looking for.
-            const _DownloadBadge(marge: EdgeInsets.only(right: 4)),
+            // Een tik gaat naar Mijn downloads (Saber, 20-11-2026: "als ik klik op de download aantal button dat ik naar de
+            // downloads gaan").
+            _DownloadBadge(marge: const EdgeInsets.only(right: 4), opTik: () => gaNaarSectie?.call(6)),
             TvLabelled(
               label: 'Instellingen',
               child: IconButton(
@@ -6004,7 +6006,7 @@ class _HomeShellState extends State<HomeShell> {
 /// GETAL verandert, en dan alleen dit hoekje. Een download van twintig nummers kost zo twintig
 /// hertekeningen van een pilletje in plaats van duizenden van het hele scherm.
 class _DownloadBadge extends StatelessWidget {
-  const _DownloadBadge({this.marge = EdgeInsets.zero})
+  const _DownloadBadge({this.marge = EdgeInsets.zero, this.opTik})
       : horizontaal = 8,
         verticaal = 3,
         tekstmaat = 11.5,
@@ -6019,13 +6021,18 @@ class _DownloadBadge extends StatelessWidget {
   /// `Padding` in de balk, dan bleef die ruimte staan als er niets te tellen valt.
   final EdgeInsets marge;
 
+  /// Een tik op het getal (naar Mijn downloads, in de balk bovenaan op de gsm). Null: alleen het getal — in de la staat
+  /// het al naast "Downloads".
+  final VoidCallback? opTik;
+
   /// De maat zoals hij in de la staat, naast "Downloads".
   const _DownloadBadge.la()
       : horizontaal = 7,
         verticaal = 2,
         tekstmaat = 11,
         ronding = 9,
-        marge = EdgeInsets.zero;
+        marge = EdgeInsets.zero,
+        opTik = null;
 
   @override
   Widget build(BuildContext context) {
@@ -6033,11 +6040,23 @@ class _DownloadBadge extends StatelessWidget {
     // Niets in plaats van null: waar dit stond werd het al met een `if` weggelaten, en als
     // `trailing` van een ListTile is een lege doos hetzelfde als geen trailing.
     if (n == 0) return const SizedBox.shrink();
-    return Container(
+    final pil = Container(
       margin: marge,
       padding: EdgeInsets.symmetric(horizontal: horizontaal, vertical: verticaal),
       decoration: BoxDecoration(color: _accent, borderRadius: BorderRadius.circular(ronding)),
       child: Text('$n', style: TextStyle(fontSize: tekstmaat, fontWeight: FontWeight.w800)),
+    );
+    final tik = opTik;
+    if (tik == null) return pil;
+    // Het raakvlak ruimer dan het pilletje: een getal van twintig punten raak je met een duim niet in één keer.
+    return Tooltip(
+      message: 'Naar Mijn downloads',
+      child: InkResponse(
+        key: const ValueKey('download-teller'),
+        onTap: tik,
+        radius: 22,
+        child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10), child: pil),
+      ),
     );
   }
 }
