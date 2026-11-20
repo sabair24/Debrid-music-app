@@ -11,7 +11,7 @@ import 'dart:async';
 
 import 'models.dart';
 import 'lan/zones.dart' show plekVoorNummer;
-import 'player.dart' show Rijbediening, Speelbron;
+import 'player.dart' show PlayerStore, Rijbediening, Speelbron, radioMelding, radioPlekUitMelding;
 import 'wekker.dart' show wektToestel;
 import 'zone_speler.dart' show herhaalUit;
 
@@ -90,8 +90,14 @@ class ZoneUitvoerder {
   int _plek(int plek, String trackId) {
     final f = idVan;
     if (f == null || trackId.isEmpty) return plek;
-    return plekVoorNummer([for (final t in speler.queueTracks) f(t) ?? ''], plek, trackId);
+    return plekVoorNummer([for (final t in _rijNu) f(t) ?? ''], plek, trackId);
   }
+
+  /// De rij zoals dit toestel hem meldt: in een radio die van de radio ([radioMelding], 20-11-2026), anders de wachtrij.
+  List<Track> get _rijNu => switch (speler) {
+        final PlayerStore p when p.radioMode => radioMelding(p.radioQueue, p.radioIndex).rij,
+        final s => s.queueTracks,
+      };
 
   final Speelbron speler;
   final Rijbediening rij;
@@ -165,6 +171,14 @@ class ZoneUitvoerder {
           final i = _plek((op['plek'] as num?)?.toInt() ?? 0, '${op['trackId'] ?? ''}');
           if (i < 0) {
             fout = 'Dat nummer staat niet meer in de wachtrij';
+          } else if (speler case final PlayerStore p when p.radioMode) {
+            // Een tik in de radio van deze zone op een ander toestel: de gemelde plek is zonder voorstellen.
+            final k = radioPlekUitMelding(p.radioQueue, i);
+            if (k < 0) {
+              fout = 'Dat nummer staat niet meer in de radio';
+            } else {
+              await p.springInRadio(k);
+            }
           } else {
             await speler.springNaar(i);
           }
