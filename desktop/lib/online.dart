@@ -5456,6 +5456,10 @@ class DownloadManager extends ChangeNotifier {
     // De radio is achtergrond; ▶ (los van de radio) niet — daar wacht je op.
     final zoek = soulseek.search(zoekvraagVoorNummer(titel, artist: artiest),
         achtergrond: _radiohalen.contains(job),
+        // Is het nummer al binnen (of gaf de radio het op), dan gaan de varianten die nog op de zoekrem wachten niet meer
+        // uit (20-11-2026, radiometing: minstens 11 van de 137 gewachte zoektochten waren voor een nummer dat al geleverd
+        // was — Stardust vijf keer). Alleen voor de radio: bij ▶ wacht je er zelf op.
+        nogNodig: _radiohalen.contains(job) ? () => _radiohalen.contains(job) && !job.cancelled : null,
         onPartial: vroeg == null
             ? null
             : (lijst) {

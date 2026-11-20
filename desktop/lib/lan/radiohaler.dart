@@ -84,6 +84,10 @@ class Radiohaler {
   Timer? _verloop;
   int _volgnummer = 0;
 
+  /// Haalt er nu een toestel met een radio via deze pc ([begin] leende de aanmelding)? Dan wacht de blijvende jacht
+  /// (20-11-2026, radiometing: haar zoektochten aten van dezelfde zoekrem als de radio).
+  bool get inGebruik => _los != null;
+
   /// Wat er in de weg staat, of null. Neemt bij succes meteen de aanmelding vast.
   String? begin() {
     final s = soulseek;

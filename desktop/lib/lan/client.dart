@@ -454,6 +454,14 @@ class RemoteClient {
   /// discogs.dart. Null als de pc ze niet heeft of het niet kent.
   /// [klein]: in gsm-formaat (`kKleinScan`, op mobiele data).
   Future<Map<String, dynamic>?> releaseArtJson(String albumId, {bool klein = false}) async {
+    final body = await releaseArtBytes(albumId, klein: klein);
+    if (body == null) return null;
+    final decoded = jsonDecode(utf8.decode(body));
+    return decoded is Map<String, dynamic> ? decoded : null;
+  }
+
+  /// Hetzelfde antwoord, onontleed: wie het ontleedt, doet dat buiten de UI-draad (`kunstUitBytes` in discogs.dart).
+  Future<Uint8List?> releaseArtBytes(String albumId, {bool klein = false}) async {
     final http.Response res;
     try {
       res = await _get('/api/releaseart', query: {'albumId': albumId, if (klein) 'klein': '1'});
@@ -464,8 +472,7 @@ class RemoteClient {
       rethrow;
     }
     if (res.statusCode != 200) return null;
-    final decoded = jsonDecode(utf8.decode(res.bodyBytes));
-    return decoded is Map<String, dynamic> ? decoded : null;
+    return res.bodyBytes;
   }
 
   Future<AlbumFacts?> albumFacts(String albumId, {String? etag, bool force = false}) async {

@@ -875,7 +875,15 @@ class LibraryStore extends ChangeNotifier {
   /// Wat de luisteraars van een melding samen op de tekendraad kosten, in haper.log als het traag is (28-10-2026:
   /// een herscan na een download hield de draad ~0,5 s vast, en het meeste daarvan stond in geen enkele stap).
   @override
-  void notifyListeners() => traagMeten('bibliotheek meldt', super.notifyListeners);
+  void notifyListeners() {
+    _standVersie++;
+    traagMeten('bibliotheek meldt', super.notifyListeners);
+  }
+
+  /// Telt elke melding: wie iets uit [tracks] afleidt en bewaart (de index van het radioplan in main.dart), weet zo of
+  /// het nog klopt — [tracks] zelf is altijd dezelfde lijst.
+  int get standVersie => _standVersie;
+  int _standVersie = 0;
 
   /// Loopt er een hoezenronde? Voor de hartslag. Het regeltje onder het menu kijkt naar [hoezenOphalen].
   bool enriching = false;

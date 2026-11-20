@@ -41,6 +41,7 @@ class ZoneUitvoerder {
     this.idVan,
     this.radio,
     this.radioStop,
+    this.radioOordeel,
     this.kijkInBrievenbus,
     this.verplaatst,
     this.meet,
@@ -111,6 +112,10 @@ class ZoneUitvoerder {
   /// De radio van dit toestel afsluiten, op verzoek van [door] (een zone): daar komt het overzicht (Saber, 23-10-2026:
   /// "waar ik 'Radio afsluiten' tik"). Null: hier kan dat niet.
   final void Function({String? door})? radioStop;
+
+  /// Een oordeel over het spelende radionummer, van een ander toestel: `wat` ('houden') en het `trackId`. Geeft de
+  /// reden terug als het niet kon. Null: hier niet (20-11-2026, de knop "Houden" op Nu speelt van de gsm).
+  final Future<String?> Function(String wat, String trackId)? radioOordeel;
 
   /// Er ligt een overzicht in de brievenbus van dit toestel (een seintje van de pc): kijk meteen.
   final void Function()? kijkInBrievenbus;
@@ -233,6 +238,13 @@ class ZoneUitvoerder {
             final titel = '${op['titel'] ?? ''}'.trim();
             final door = '${op['door'] ?? ''}';
             await r(artiest, zaad: zaad, titel: titel.isEmpty ? null : titel, door: door.isEmpty ? null : door);
+          }
+        case 'radioOordeel':
+          final f = radioOordeel;
+          if (f == null) {
+            fout = 'Hier kan dat niet';
+          } else {
+            fout = await f('${op['wat'] ?? ''}', '${op['trackId'] ?? ''}');
           }
         case 'radioStop':
           final f = radioStop;

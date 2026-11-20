@@ -110,7 +110,8 @@ void main() {
       String lees(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
       final main = lees('lib/main.dart');
       expect(main, contains('DiscogsArtwork.vanDePc = (artist, album, {bool klein = false, String? plaat}) async {'));
-      expect(main, contains('return kunstUitJson(await c.releaseArtJson(id, klein: klein));'));
+      // Sinds 20-11-2026 buiten de UI-draad ontleed (kunstUitBytes): op de Shield haperde het beeld op 7,7 MB JSON.
+      expect(main, contains('      final body = await c.releaseArtBytes(id, klein: klein);\n      return body == null ? null : compute(kunstUitBytes, body);'));
       expect(main, contains('    DiscogsArtwork.zuinig = () => netStore.net == Netsoort.mobiel;\n'));
       final server = lees('lib/lan/server.dart');
       expect(server, contains("case '/api/releaseart':\n        return _releaseArt(req);"));

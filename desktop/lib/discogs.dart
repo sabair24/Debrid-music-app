@@ -1723,6 +1723,19 @@ Map<String, dynamic> kunstNaarJson(ReleaseArt a, {required bool klaar}) => {
       'klaar': klaar,
     };
 
+/// [kunstUitJson] uit het antwoord van de pc zoals het binnenkwam — voor `compute`, buiten de UI-draad.
+///
+/// Gemeten op de Shield (20-11-2026, radio): een antwoord met scans is tot 7,7 MB JSON met base64-beelden, en dat werd
+/// op de UI-draad ontleed — "WACHT OP START" tot 467 ms in fps.log, telkens als Nu speelt de scans van het volgende
+/// nummer ophaalde.
+({ReleaseArt art, bool klaar})? kunstUitBytes(Uint8List body) {
+  try {
+    return kunstUitJson(jsonDecode(utf8.decode(body)));
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Het omgekeerde van [kunstNaarJson]; null als er geen enkel beeld in zit of het geen geldige JSON is.
 ({ReleaseArt art, bool klaar})? kunstUitJson(Object? j) {
   if (j is! Map) return null;

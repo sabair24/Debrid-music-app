@@ -279,7 +279,8 @@ void main() {
     expect(jacht, contains('                    ? Kopieuitslag.beter\n                    : nepKopie'));
     final main = _bron('lib/main.dart');
     expect(main, contains('        jaag: downloads.jaagBlijvend,'));
-    expect(main, contains('        kan: () => downloads.kanBlijvendJagen,'));
+    // Niet zolang er een radio loopt (20-11-2026, radiometing).
+    expect(main, contains('        kan: () => downloads.kanBlijvendJagen && !radio.loopt && !(sharing.server?.radiohaler.inGebruik ?? false),'));
     expect(main, contains('            !(t.isFlac || isVerliesvrij(t.ext)) ||'), reason: 'mp3: de verlanglijst loopt al');
     expect(main, contains('                prullenbak: naarPrullenbak);'));
   });

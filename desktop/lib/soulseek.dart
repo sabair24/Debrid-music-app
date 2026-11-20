@@ -377,7 +377,7 @@ class _Inbound {
   _Inbound(this.sock, this.owner, {this.alleenVerwacht = false}) {
     owner.levendeInbound++;
     _sub = sock.listen(_onData, onError: (_) => _drop(), onDone: _drop);
-    _bump(alleenVerwacht ? kBovenGrensKijktijd : const Duration(seconds: 30));
+    _bump(alleenVerwacht ? kBovenGrensKijktijd : kInitGeduld);
   }
 
   /// Boven de grens binnengelaten: alleen welkom als iemand op hem wacht — zie [SoulseekClient._onInbound].
@@ -448,6 +448,13 @@ class _Inbound {
         _messages!.add(payload);
       } else {
         owner._onFramed(payload);
+        // Een zoekantwoord is af ([isZoekantwoord]): wie dat bracht, heeft niets meer te zeggen. Meteen dicht, in plaats
+        // van nog [stilTot] open te staan (20-11-2026, radiometing: 170 744 binnenkomende verbindingen geweigerd in 78
+        // minuten — de grens van [SoulseekClient.maxInbound] stond vol met peers die al klaar waren).
+        if (isZoekantwoord(payload)) {
+          _drop();
+          return;
+        }
       }
       if (_mode == 3) return;
     }
@@ -483,6 +490,15 @@ class _Inbound {
     sock.destroy();
   }
 }
+
+/// Hoe lang een binnenkomende verbinding heeft om te zeggen wie hij is. Een peer stuurt dat meteen; wie na tien seconden
+/// nog zwijgt, houdt alleen een plek bezet onder [SoulseekClient.maxInbound] (dertig tot 20-11-2026).
+const kInitGeduld = Duration(seconds: 10);
+
+/// Is dit bericht van een peer een zoekantwoord (FileSearchResponse, code 9)? Na zo'n antwoord gaat zijn verbinding
+/// dicht — zie [_Inbound._onData].
+bool isZoekantwoord(Uint8List payload) =>
+    payload.length >= 4 && payload[0] == 9 && payload[1] == 0 && payload[2] == 0 && payload[3] == 0;
 
 /// Wacht er nog iemand op dit uitgepakte zoekantwoord?
 ///
