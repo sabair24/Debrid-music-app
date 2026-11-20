@@ -102,7 +102,7 @@ void main() {
           "                        label: 'Uit de wachtrij halen',"));
       expect(main, contains('        sleepIndex: tv ? null : sleep,'));
       // Op een tv een gewone lijst, geen SliverReorderableList: verplaatsen gaat via het menu.
-      expect(main, contains('            if (radio || tv)\n              SliverList('));
+      expect(main, contains('            if (rijRadio || tv)\n              SliverList('));
     });
 
     test('het menu: de keuzes bovenaan, daaronder wat je met een nummer kunt', () {

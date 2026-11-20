@@ -17498,11 +17498,20 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
     final Speelbron p = _misschien<GekozenZone>(context, luister: true)?.opAfstand ?? lokaal;
     final lib = context.watch<LibraryStore>();
     final paneel = context.read<WachtrijPaneel>();
-    // De radio van een zone op afstand staat op dat toestel: hier alleen het nummer dat speelt.
     final radio = p is PlayerStore && p.radioMode;
+    // De radio van een zone op afstand (20-11-2026, Saber: "ik zie wat er speelt op shield maar niet de wachtrij"): dat
+    // toestel meldt zijn radiorij als gewone rij ([radioMelding]); hier staat hij als radio — geen greep, geen kruisje,
+    // en een tik springt binnen die radio.
+    final zoneRadio = p is ZoneSpeler && p.radioMode;
+    final rijRadio = radio || zoneRadio;
     final regels = radio
         ? radioAlsRij(lokaal.radioQueue, voorstel: context.read<RadioBesturing>().voorstelStand)
-        : const <Radioregel>[];
+        : zoneRadio
+            ? [
+                for (final t in p.queueTracks)
+                  (nummer: t, eigen: true, mislukt: false, herhaling: false, voorstel: null, item: null) as Radioregel,
+              ]
+            : const <Radioregel>[];
     final rij = radio ? [for (final r in regels) r.nummer] : p.queueTracks;
     final nu = rij.isEmpty ? -1 : p.currentIndex.clamp(0, rij.length - 1);
     final sleutels = _sleutels(rij);
@@ -17533,8 +17542,8 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
         speeltNu: false,
         gespeeld: gespeeld,
         sleepIndex: tv ? null : sleep,
-        cover: radio && !regels[i].eigen ? null : lib.coverForTrack(rij[i]),
-        regel: radio ? regels[i] : null,
+        cover: rijRadio && !regels[i].eigen ? null : lib.coverForTrack(rij[i]),
+        regel: rijRadio ? regels[i] : null,
         tv: tv,
         focusNode: tv ? _knoop(s) : null,
         onFocusChange: !tv
@@ -17544,7 +17553,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                 _focusOp = s;
                 _focusOpPlek = i;
               },
-        tvMenu: tv ? () => _tvMenu(context, p, rij[i], i, regel: radio ? regels[i] : null) : null,
+        tvMenu: tv ? () => _tvMenu(context, p, rij[i], i, regel: rijRadio ? regels[i] : null) : null,
       );
       return _Uitklap(key: ValueKey('uit-$s'), binnenschuiven: nieuw.contains(s), child: r);
     }
@@ -17577,7 +17586,23 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
           // kruisje paste "12 hierna · 6 onderweg" op 340 punt maar net, en op de tv (tekstschaal
           // 1,35) bleef er "12 hierna…" van over (beoordeling van 08-10-2026).
           Expanded(
-            child: radio
+            child: zoneOpAfstand != null && zoneRadio
+                // De radio van die zone: rond welke artiest, en hoeveel er nog komt (de hele rij, niet het venster).
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('Radio · ${zoneOpAfstand.zone?.radio ?? ''}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      Text('$hiernaTotaal hierna · op ${zoneOpAfstand.zone?.naam ?? 'de gekozen zone'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: _muted, fontSize: 12)),
+                    ],
+                  )
+                : radio
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
@@ -17632,6 +17657,16 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
           // ziet de lijst verdwijnen, en de radio speelt gewoon door — met het overzicht van
           // wat er opgehaald is nog altijd niet in beeld. Gemeld op 28-08-2026, en terecht:
           // de knop die het wél doet stond op een scherm dat je vanaf hier niet ziet.
+          // En de radio van een zone op afstand afsluiten: het overzicht komt dan hier (zie [ZoneSpeler.radioStop]).
+          if (zoneOpAfstand != null && zoneRadio)
+            TextButton(
+              onPressed: () => unawaited(zoneOpAfstand.radioStop()),
+              style: TextButton.styleFrom(
+                  foregroundColor: _muted,
+                  padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
+                  minimumSize: const Size(0, 30)),
+              child: const Text('Radio afsluiten', style: TextStyle(fontSize: 12)),
+            ),
           if (radio)
             TextButton(
               onPressed: context.read<RadioBesturing>().stop,
@@ -17643,13 +17678,13 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
             ),
           if (!widget.inBlad)
             TvLabelled(
-              label: radio ? 'Paneel sluiten' : 'Sluiten',
+              label: rijRadio ? 'Paneel sluiten' : 'Sluiten',
               child: IconButton(
                 icon: const Icon(Icons.close_rounded, size: 18),
                 color: _muted,
                 // Uitgeschreven tijdens een radio, want daar is "Sluiten" dubbelzinnig: het
                 // sluit de lijst en niet de radio.
-                tooltip: radio ? 'Paneel sluiten' : 'Sluiten',
+                tooltip: rijRadio ? 'Paneel sluiten' : 'Sluiten',
                 onPressed: widget.onSluit ?? paneel.sluit,
               ),
             ),
@@ -17721,7 +17756,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                       onPressed: () {
                         if (!(p.playing || context.read<SpeakerTarget>().isCasting)) p.speelAf();
                       },
-                      onLongPress: radio && !regels[huidig].eigen
+                      onLongPress: rijRadio && !regels[huidig].eigen
                           ? null
                           : () => _toonItemMenu(context, _nummerMenu(context, rij[huidig])),
                       onFocusChange: (v) {
@@ -17732,17 +17767,17 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
                       vastePlek: false,
                       child: _NuSpeeltRegel(
                         track: rij[huidig],
-                        cover: radio && !regels[huidig].eigen ? null : lib.coverForTrack(rij[huidig]),
+                        cover: rijRadio && !regels[huidig].eigen ? null : lib.coverForTrack(rij[huidig]),
                         speelt: p.playing || context.watch<SpeakerTarget>().isCasting,
-                        regel: radio ? regels[huidig] : null,
+                        regel: rijRadio ? regels[huidig] : null,
                       ),
                     )
                   else
                     _NuSpeeltRegel(
                       track: rij[huidig],
-                      cover: radio && !regels[huidig].eigen ? null : lib.coverForTrack(rij[huidig]),
+                      cover: rijRadio && !regels[huidig].eigen ? null : lib.coverForTrack(rij[huidig]),
                       speelt: p.playing || context.watch<SpeakerTarget>().isCasting,
-                      regel: radio ? regels[huidig] : null,
+                      regel: rijRadio ? regels[huidig] : null,
                     ),
                   if (hierna > 0) zoneKop('Hierna', extra: '$hiernaTotaal'),
                 ],
@@ -17752,7 +17787,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
             // lijst dus, en een tik springt binnen de radio in plaats van hem te verlaten — zie
             // [PlayerStore.springInRadio].
             // Op een tv ook een gewone lijst: met pijltjes sleep je niet, verplaatsen gaat via het menu (lang OK).
-            if (radio || tv)
+            if (rijRadio || tv)
               SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (_, j) {

@@ -602,6 +602,33 @@ int? vervangInRij(List<RadioItem> rij, int index, RadioItem oud, RadioItem? nieu
   return index - 1;
 }
 
+/// Wat een radio aan andere toestellen meldt als zijn rij (20-11-2026, Saber: *"ik zie wat er speelt op shield maar niet
+/// de wachtrij"*): de nummers die klinken, met de plek van het spelende. Zonder de voorstellen van een manuele radio —
+/// die zijn er op een ander toestel niet te halen. Tot nu toe meldde een radio alleen het spelende nummer, en zag je op
+/// je gsm bij de radio van de tv niets komen terwijl er tien klaarstonden.
+({List<Track> rij, int index}) radioMelding(List<RadioItem> radio, int index) {
+  final rij = <Track>[];
+  var plek = 0;
+  for (var k = 0; k < radio.length; k++) {
+    final it = radio[k];
+    if (it.voorstel) continue;
+    if (k <= index) plek = rij.length;
+    rij.add(it.local ?? Track(path: it.url ?? '', title: it.title, artist: it.artist, album: ''));
+  }
+  return (rij: rij, index: rij.isEmpty ? 0 : plek.clamp(0, rij.length - 1));
+}
+
+/// Andersom: de plek in de radio van het [plek]-de gemelde nummer ([radioMelding]), of -1.
+int radioPlekUitMelding(List<RadioItem> radio, int plek) {
+  var n = 0;
+  for (var k = 0; k < radio.length; k++) {
+    if (radio[k].voorstel) continue;
+    if (n == plek) return k;
+    n++;
+  }
+  return -1;
+}
+
 /// Wat er gebeurt als het laatste radionummer afloopt of overgeslagen wordt.
 enum NaRadioEinde { volgende, droog }
 
@@ -4003,13 +4030,17 @@ class PlayerStore extends ChangeNotifier
     if (_restoring) return;
     if (!_resumable) {
       // Een radio wordt niet bewaard (hij is niet te herstellen), maar wel gemeld: "Hier verder
-      // luisteren" neemt ook een radio over (Saber, 17-10-2026). Alleen het nummer dat nu speelt.
+      // luisteren" neemt ook een radio over (Saber, 17-10-2026) — rond het nummer dat nu speelt. En de rij van
+      // de radio, voor wie deze zone op een ander toestel bekijkt (20-11-2026, zie [radioMelding]).
       if (!radioMode) return;
       final nu = DateTime.now();
       if (!force && nu.difference(_lastPosSave).inSeconds < 5) return;
       _lastPosSave = nu;
       final t = current;
-      if (t != null) onProgress?.call(t, positieNauwkeurig, playing, [t], 0);
+      if (t != null) {
+        final m = radioMelding(_radio, _radioIndex);
+        onProgress?.call(t, positieNauwkeurig, playing, m.rij.isEmpty ? [t] : m.rij, m.index);
+      }
       return;
     }
     final now = DateTime.now();
