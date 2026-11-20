@@ -805,7 +805,17 @@ class RadioBesturing extends ChangeNotifier {
 
   /// Wat deze radio ophaalde en nog niet nagekeken is — de lopende radio en het overzicht dat wacht: op proef. Dat gaat
   /// pas vanzelf naar een toestel als het blijft (nieuw_op_toestel.dart; Saber, 02-11-2026: geen radionummers).
-  List<Gehaald> get opProef => [...?_lopend?.gehaald, ...?openstaand?.gehaald];
+  ///
+  /// Zonder wat je al hield (👍 of favoriet, [gehouden]): dat is van jou, en mag als nieuw nummer naar de gsm
+  /// (20-11-2026, de knop "Houden" op Nu speelt).
+  List<Gehaald> get opProef => [
+        for (final g in [...?_lopend?.gehaald, ...?openstaand?.gehaald])
+          if (!(gehouden?.call(g.pad) ?? false)) g,
+      ];
+
+  /// Hield je dit bestand al (👍 of favoriet)? Ingehangen vanuit main.dart. Strenger dan [houdt]: een nummer dat de
+  /// bibliotheek hier (nog) niet kent, is níet gehouden — op een toestel staat een verse landing er pas na even.
+  bool Function(String pad)? gehouden;
 
   File get _bestand => File('$appDir${Platform.pathSeparator}radio_sessie.json');
 

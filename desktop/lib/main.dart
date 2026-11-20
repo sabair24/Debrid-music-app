@@ -9,7 +9,7 @@ import 'dart:ui' show ImageFilter;
 // with the player's. Ours is the one this app means everywhere.
 import 'package:material_ui/material_ui.dart' hide RepeatMode;
 import 'package:flutter/gestures.dart' show PointerDeviceKind, kBackMouseButton;
-import 'package:flutter/foundation.dart' show mapEquals, setEquals, visibleForTesting;
+import 'package:flutter/foundation.dart' show compute, mapEquals, setEquals, visibleForTesting;
 // AppExitResponse hoort bij de haak die Windows gebruikt als het de app wil beëindigen — zie
 // _saveOnLeaving. Hij woont in dart:ui; material.dart exporteert hem niet.
 import 'dart:ui' show AppExitResponse, PlatformDispatcher;
@@ -1135,7 +1135,9 @@ Future<void> main() async {
       final al = library.albums.where((a) => a.artist == artist && a.title == album && a.plaat == plaat).firstOrNull;
       final id = al == null ? '' : library.uidOf(al);
       if (id.isEmpty) return null;
-      return kunstUitJson(await c.releaseArtJson(id, klein: klein));
+      // Buiten de UI-draad ontleed ([kunstUitBytes]): tot 7,7 MB, en op de Shield haperde het beeld daarop.
+      final body = await c.releaseArtBytes(id, klein: klein);
+      return body == null ? null : compute(kunstUitBytes, body);
     };
     // Op mobiele data de scans in gsm-formaat (Saber, 02-11-2026: "Kleiner op mobiele data"); op wifi volle resolutie.
     DiscogsArtwork.zuinig = () => netStore.net == Netsoort.mobiel;
@@ -1706,6 +1708,11 @@ Future<void> main() async {
   };
   // Groen gaat bij het herhalen voor — zie [RadioBesturing.voegHerhalingBij].
   radio.isGroen = (t) => oordelen.vanTrack(t) == Oordeel.omhoog;
+  // Wat je al hield (👍 of favoriet), staat niet meer op proef (20-11-2026, de knop "Houden"). Onbekend = niet gehouden.
+  radio.gehouden = (pad) {
+    final t = library.trackByPath(pad);
+    return t != null && (oordelen.vanTrack(t) == Oordeel.omhoog || favorieten.isFavorietTrack(t));
+  };
   // Onderweg opruimen (Saber, 08-10 en 23-10-2026: "Na 20 nummers, ook Past niet"): wat je niet houdt, gaat 20
   // nummers later naar de prullenbak. Dezelfde regel als het overzicht bij het afsluiten: Houden, favoriet of in een
   // afspeellijst blijft. Wat de bibliotheek hier niet (meer) kent, blijft ook: daar valt niets te controleren.
@@ -2230,8 +2237,14 @@ Future<void> main() async {
       }
     },
     // Afsluiten vanaf een ander toestel: het overzicht komt daar (Saber, 23-10-2026).
-    radioStop: ({door}) {
-      if (radio.loopt) radio.stop(naar: door);
+    radioStop: ({door}) => radioAfsluiten(radio, player, naar: door),
+    // "Houden" van een ander toestel voor het spelende radionummer (20-11-2026, de knop op Nu speelt).
+    radioOordeel: (wat, trackId) async {
+      if (wat != 'houden') return 'Dat kan alleen op het toestel zelf';
+      final t = verder.bron.nummer(trackId) ?? player.current;
+      if (t == null) return 'Er speelt niets';
+      await radioHoudenVast(oordelen, library, library.remote == null ? downloads : null, t);
+      return null;
     },
     kijkInBrievenbus: () => kijkInBrievenbus(),
     // Tussendoor beluisteren voor een toestel dat deze zone gekozen heeft ("Klaar om te kiezen", Saber 26-10-2026: "op
@@ -2665,6 +2678,9 @@ Future<void> main() async {
       }
 
       radio.addListener(() => unawaited(meldOpProef()));
+      // Houden (👍) of favoriet maken haalt een nummer uit de proef: meteen melden.
+      oordelen.addListener(() => unawaited(meldOpProef()));
+      favorieten.addListener(() => unawaited(meldOpProef()));
       Timer.periodic(const Duration(minutes: 5), (_) => unawaited(meldOpProef()));
       // Slaapt deze tv (scherm uit)? Dan staat er op de zonekaart "Slaapt · wordt gewekt als je hier speelt" (Saber,
       // 31-10-2026). Om de twintig seconden kijken; een verandering meteen naar de pc, en om de vijf minuten toch eens —
@@ -3212,11 +3228,15 @@ Future<void> main() async {
         nummers: () => library.tracks,
         bewijs: bewijs,
         jaag: downloads.jaagBlijvend,
-        kan: () => downloads.kanBlijvendJagen,
+        // Niet zolang er een radio loopt, hier of op een toestel dat via deze pc haalt (20-11-2026, radiometing: 21 van de
+        // 24 zoektochten zonder enig antwoord waren van deze jacht, en elke zoektocht telt mee in de zoekrem van de radio).
+        kan: () => downloads.kanBlijvendJagen && !radio.loopt && !(sharing.server?.radiohaler.inGebruik ?? false),
         overslaan: (t) =>
             !(t.isFlac || isVerliesvrij(t.ext)) ||
             isVasteKeuze(t.path) ||
             radio.doorDezeRadio(t.path) ||
+            // Ook niet wat een radio op een ánder toestel op proef heeft (20-11-2026): dat is nog niet van jou.
+            (sharing.server?.state.radioOpProefIds.contains(library.gedeeldId(t.path)) ?? false) ||
             twijfelVoor(t.path) != null,
         log: downloads.logRegel,
       );
@@ -17695,7 +17715,7 @@ class _WachtrijPaneelViewState extends State<WachtrijPaneelView> with SingleTick
             ),
           if (radio)
             TextButton(
-              onPressed: context.read<RadioBesturing>().stop,
+              onPressed: () => radioAfsluiten(context.read<RadioBesturing>(), context.read<PlayerStore>()),
               style: TextButton.styleFrom(
                   foregroundColor: _muted,
                   padding: const EdgeInsets.symmetric(horizontal: kRuimte8),
@@ -19711,6 +19731,20 @@ Future<void> radioHouden(Oordelen oordelen, LibraryStore lib, DownloadManager? d
   unawaited(dm.zoekBeterVoor([t], gezag: lib.tagsVoorVervanger));
 }
 
+/// "Houden" dat niet omdraait: staat het al op 👍, dan blijft het zo — een tweede druk, of een druk op een ander
+/// toestel, haalt het niet weg. Zie [radioHouden].
+Future<void> radioHoudenVast(Oordelen oordelen, LibraryStore lib, DownloadManager? dm, Track t) async {
+  if (oordelen.vanTrack(t) == Oordeel.omhoog) return;
+  await radioHouden(oordelen, lib, dm, t);
+}
+
+/// "Radio afsluiten": de radio stopt, én wat er nog klaarstond (20-11-2026). Saber sloot de radio op de tv af en die
+/// speelde gewoon door — twee keer afsluiten, en daarna nog pauzeren. De speler hield zijn rij en speelde die uit.
+void radioAfsluiten(RadioBesturing radio, PlayerStore speler, {String? naar}) {
+  if (radio.loopt) radio.stop(naar: naar);
+  unawaited(speler.verlaatRadio());
+}
+
 Future<void> _duimOmlaag(BuildContext context, Track t) async {
   final meldingen = ScaffoldMessenger.of(context);
   final zin = await radioWeg(context.read<RadioBesturing>(), context.read<Oordelen>(), t,
@@ -19833,6 +19867,145 @@ String? _radioRegel(BuildContext context, Speelbron p) {
     aantalBereikt: r.aantalOp,
     aantal: r.aantal,
   );
+}
+
+/// "Houden" bij een radionummer dat nog op proef is — voorbeeld A (Saber, 20-11-2026: *"dit liedje dat nu speelt direct
+/// bijhouden want dit vindt ik direct een leuk liedje … knop direct bijhouden. Met animatie"*). Een pil onder de
+/// kwaliteit; een tik zet het nummer op 👍 — houden: nooit opgeruimd, niet meer op proef, daarna ook vanzelf op de gsm —
+/// met een vinkje dat ronddraait en "Staat nu in je bibliotheek". Favoriet telt ook als gehouden.
+///
+/// Voor de radio van dit toestel ([RadioBesturing.doorDezeRadio]) en voor die van een ander toestel als zone
+/// ([ZoneSpeler.radioOordeel] 'houden'); of het spelende nummer daar op proef is, zegt de pc (`/api/radio/opproef`).
+class _HoudenKnop extends StatefulWidget {
+  const _HoudenKnop({required this.track, required this.naast});
+
+  final Track track;
+  final bool naast;
+
+  @override
+  State<_HoudenKnop> createState() => _HoudenKnopState();
+}
+
+class _HoudenKnopState extends State<_HoudenKnop> with SingleTickerProviderStateMixin {
+  late final AnimationController _draai = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+
+  // Een zone op afstand: welke nummers daar op proef zijn (van de pc), en voor welk nummer dat gevraagd werd.
+  Set<String> _opProefElders = const {};
+  String? _gevraagdVoor;
+
+  // Net getikt: meteen "Gehouden", ook voor de gedeelde staat het bevestigt.
+  String? _netGehouden;
+
+  @override
+  void dispose() {
+    _draai.dispose();
+    super.dispose();
+  }
+
+  void _vraagOpProef(String trackId) {
+    if (_gevraagdVoor == trackId) return;
+    _gevraagdVoor = trackId;
+    final remote = context.read<LibraryStore>().remote;
+    if (remote == null) {
+      _opProefElders = _misschien<LanSharing>(context)?.server?.state.radioOpProefIds ?? const {};
+      return;
+    }
+    unawaited(remote.radioOpProef().then((ids) {
+      if (mounted && _gevraagdVoor == trackId) setState(() => _opProefElders = ids);
+    }));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.track;
+    final zone = _misschien<GekozenZone>(context, luister: true)?.opAfstand;
+    final oordelen = context.watch<Oordelen>();
+    final favorieten = context.watch<Favorieten>();
+    var opProef = false;
+    Future<void> Function()? houd;
+    if (zone != null) {
+      // De radio van een ander toestel (niet die van de pc op een speaker: daar staan de duimen al).
+      final id = zone.zone?.trackId ?? '';
+      if (zone.radioMode && !zone.radioVanDePc && id.isNotEmpty) {
+        _vraagOpProef(id);
+        opProef = _opProefElders.contains(id);
+        houd = () => zone.radioOordeel('houden');
+      }
+    } else if (_radioHier(context)) {
+      final radio = context.watch<RadioBesturing>();
+      opProef = radio.doorDezeRadio(t.path);
+      final lib = context.read<LibraryStore>();
+      final dm = lib.remote == null ? context.read<DownloadManager>() : null;
+      houd = () => radioHoudenVast(oordelen, lib, dm, t);
+    }
+    final net = _netGehouden == t.path;
+    if (!opProef && !net) return const SizedBox.shrink();
+    final gehouden = net || oordelen.vanTrack(t) == Oordeel.omhoog || favorieten.isFavorietTrack(t);
+    final voorgrond = gehouden ? Colors.white : _text;
+    final pil = AnimatedContainer(
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOut,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+      decoration: BoxDecoration(
+        color: gehouden ? _accent2 : Colors.transparent,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: gehouden ? _accent2 : _muted.withValues(alpha: .5)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        RotationTransition(
+          turns: CurvedAnimation(parent: _draai, curve: Curves.easeOutBack),
+          child: ScaleTransition(
+            scale: TweenSequence<double>([
+              TweenSequenceItem(tween: Tween(begin: 1, end: 1.35), weight: 1),
+              TweenSequenceItem(tween: Tween(begin: 1.35, end: 1), weight: 1),
+            ]).animate(_draai),
+            child: Icon(gehouden ? Icons.check_rounded : Icons.bookmark_add_outlined, size: 18, color: voorgrond),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(gehouden ? 'Gehouden' : 'Houden',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: voorgrond)),
+      ]),
+    );
+    final h = houd;
+    return Padding(
+      key: const ValueKey('np-houden'),
+      padding: const EdgeInsets.only(top: 2, bottom: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: widget.naast ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+        children: [
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: gehouden || h == null
+                  ? null
+                  : () {
+                      setState(() => _netGehouden = t.path);
+                      _draai.forward(from: 0);
+                      unawaited(h());
+                    },
+              child: pil,
+            ),
+          ),
+          AnimatedOpacity(
+            opacity: gehouden ? 1 : 0,
+            duration: const Duration(milliseconds: 400),
+            child: AnimatedSlide(
+              offset: gehouden ? Offset.zero : const Offset(0, -0.4),
+              duration: const Duration(milliseconds: 400),
+              curve: Curves.easeOut,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text('Staat nu in je bibliotheek', style: TextStyle(fontSize: 12, color: _accent2)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _RadioOordeel extends StatelessWidget {
@@ -20183,7 +20356,7 @@ class _RadioAfsluitknop extends StatelessWidget {
               const SizedBox(width: kRuimte8),
             ],
             TextButton.icon(
-              onPressed: radio.stop,
+              onPressed: () => radioAfsluiten(radio, context.read<PlayerStore>()),
               icon: const Icon(Icons.close_rounded, size: 15),
               label: const Text('Radio afsluiten'),
               style: TextButton.styleFrom(foregroundColor: _muted),
@@ -20947,6 +21120,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         const SizedBox(height: 10),
       ] else
         SizedBox(height: isTv ? 14 : 26),
+      // "Houden" bij een radionummer op proef (20-11-2026) — zie [_HoudenKnop].
+      if (t != null) _HoudenKnop(track: t, naast: zij),
       SizedBox(
         width: kolom,
         child: Row(
@@ -22407,6 +22582,24 @@ void _srcToastAction(BuildContext context, String m, String label, VoidCallback 
 /// aanbeveling); dat liedje komt er niet nóg een keer in, ook niet in een andere uitvoering — zie
 /// [isZaadlied]. [al] is wat er al in de radio staat, voor het plafond per artiest — zie
 /// [spreidArtiesten].
+/// De nummers van je bibliotheek op [eigenSleutel], voor [_radioplan]. Bewaard zolang de bibliotheek dezelfde lijst is
+/// (20-11-2026): elke bijvulronde bouwde hem opnieuw, 2100 nummers door een normalisatie met reguliere expressies, en op
+/// de Shield viel dat samen met haperingen van een halve seconde.
+Map<String, List<Track>> _radioIndexVoor(LibraryStore lib) {
+  final stand = (lib, lib.standVersie, lib.tracks.length);
+  if (stand == _radioIndexVan) return _radioIndex;
+  final index = <String, List<Track>>{};
+  for (final t in lib.tracks) {
+    if (nooitOpRadio(t.title)) continue;
+    (index[eigenSleutel(t.artist, t.title)] ??= []).add(t);
+  }
+  _radioIndexVan = stand;
+  return _radioIndex = index;
+}
+
+(LibraryStore, int, int)? _radioIndexVan;
+Map<String, List<Track>> _radioIndex = const {};
+
 List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
     {String? zaadArtiest,
     Track? zaad,
@@ -22417,11 +22610,7 @@ List<Radioplek> _radioplan(List<RecTrack> recs, LibraryStore lib,
     bool elkeLengte = false}) {
   // Op het liedje en niet op de hele titel — zie [eigenSleutel]: op de hele titel haalde de radio
   // Haddaway "What Is Love" drie keer, omdat je hem als "(Single Version)" had en niet als "(7" Mix)".
-  final index = <String, List<Track>>{};
-  for (final t in lib.tracks) {
-    if (nooitOpRadio(t.title)) continue;
-    (index[eigenSleutel(t.artist, t.title)] ??= []).add(t);
-  }
+  final index = _radioIndexVoor(lib);
   // Van wat je hebt alleen wat dezelfde uitvoering is, en even lang — zie [eigenPastOpPlek]. Dezelfde
   // titel eerst: heb je "Mr. Vain (Original Radio Edit)" en ook de albumversie, dan wint die.
   Track? eigenVoor(RecTrack r) {

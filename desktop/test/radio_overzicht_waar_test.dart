@@ -409,7 +409,9 @@ void main() {
   test('aangesloten: wie startte en wie afsloot reizen mee', () {
     final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
     expect(m, contains('radio.stop(naar: door.isEmpty ? null : door);'), reason: 'een speaker via de zone');
-    expect(m, contains('if (radio.loopt) radio.stop(naar: door);'), reason: 'een toestel via zijn lijn');
+    // Sinds 20-11-2026 via radioAfsluiten: de radio stopt, en de muziek ook.
+    expect(m, contains('    radioStop: ({door}) => radioAfsluiten(radio, player, naar: door),'), reason: 'een toestel via zijn lijn');
+    expect(m, contains('  if (radio.loopt) radio.stop(naar: naar);'));
     expect(m, contains("door: '\${op['door'] ?? ''}'.isEmpty ? null : '\${op['door']}');"), reason: 'een speakerradio');
     expect(m, contains('return soort == ZoneSoort.tv ? \'gsm\' : doel;'));
     expect(m, contains("toonUitBrievenbus((s['radioOverzichten'] as Map?)?.cast<String, dynamic>());"));

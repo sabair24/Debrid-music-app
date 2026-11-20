@@ -236,10 +236,11 @@ class LanStateStore {
   final Map<String, Map<String, dynamic>> radioOpProef = {};
 
   /// Alle id's die ergens een radio op proef heeft ([radioOpProef]).
-  Set<String> get radioOpProefIds => {
+  Set<String> get radioOpProefIds => _opProefIds ??= {
         for (final v in radioOpProef.values)
           for (final x in (v['ids'] as List? ?? const [])) '$x',
       };
+  Set<String>? _opProefIds;
 
   /// De toestellen die nu slapen (een Shield met het scherm uit, wekker.dart): voor "slaapt" op de zonekaart (Saber,
   /// 31-10-2026). Niet op schijf: na een herstart van de pc meldt elk toestel het opnieuw.
@@ -327,6 +328,7 @@ class LanStateStore {
       (m['radioOpProef'] as Map?)?.forEach((k, v) {
         if (v is Map && ((v['at'] as num?) ?? 0) >= tweeWekenGeleden) radioOpProef[k.toString()] = v.cast<String, dynamic>();
       });
+      _opProefIds = null;
       _snoeiGeopend(DateTime.now().millisecondsSinceEpoch);
       if (m['progress'] != null) {
         progress = PlaybackProgress.fromJson((m['progress'] as Map).cast<String, dynamic>());
@@ -460,6 +462,7 @@ class LanStateStore {
           // Wat de radio op [deviceId] op proef heeft — zie [radioOpProef]. Leeg: niets (meer).
           if (deviceId.isEmpty) break;
           final ids = [for (final x in (op['ids'] as List? ?? const [])) '$x'];
+          _opProefIds = null;
           if (ids.isEmpty) {
             if (radioOpProef.remove(deviceId) != null) stilBewaren = true;
           } else {
