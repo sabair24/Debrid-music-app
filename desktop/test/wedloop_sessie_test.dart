@@ -31,24 +31,59 @@ Future<int> _dichtePoort() async {
 /// Een luik voor [doel] op een eigen poort, zodat de toets bepaalt wie eerst antwoordt. Wat
 /// binnenkomt gaat ongewijzigd door, maar pas als [eerst] klaar is; [opgehangen] hoort het als
 /// de vrager ophangt.
+///
+/// **Alles van het luik is dicht voor de toets eindigt.** Een socket waarop geschreven is, meldt een
+/// fout van de overkant twee keer: aan zijn luisteraar en aan `done`. Op 20-11-2026 (CI, run
+/// 44793497853, poging 1) kwam zo een reset van de pc pas na afloop binnen. Op de luisteraar zat een
+/// `onError`, maar niemand wachtte op `done`, dus faalde de toets "after it had already completed".
+/// De reset komt uit de tearDown van de groep. Die sluit de [LanServer] met `force: true`, terwijl
+/// het luik nog een verbinding openhield. Daarom vangt elke socket hier meteen zijn `done` op. Het
+/// luik sluit in zijn eigen tearDown de server en elke verbinding, en wacht eerst op wie nog aan het
+/// verbinden is. Een tearDown van de toets loopt vóór die van de groep, dus het luik is dicht voor de
+/// pc's dichtgaan.
 Future<Uri> _luik(Uri doel, {Future<void>? eerst, void Function()? opgehangen}) async {
   final luik = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-  addTearDown(luik.close);
-  luik.listen((vrager) async {
-    await eerst;
-    final Socket pc;
-    try {
-      pc = await Socket.connect(InternetAddress.loopbackIPv4, doel.port);
-    } catch (_) {
-      vrager.destroy();
-      return;
+  final open = <Socket>[];
+  final bezig = <Future<void>>[];
+  final dicht = Completer<void>();
+  void houdBij(Socket s) {
+    open.add(s);
+    s.done.ignore();
+  }
+
+  addTearDown(() async {
+    dicht.complete();
+    await luik.close();
+    await Future.wait(bezig);
+    for (final s in open) {
+      s.destroy();
     }
-    pc.listen(vrager.add, onDone: vrager.destroy, onError: (Object _) => vrager.destroy());
-    vrager.listen(pc.add, onDone: () {
-      pc.destroy();
-      opgehangen?.call();
-    }, onError: (Object _) => pc.destroy());
   });
+  luik.listen((vrager) {
+    houdBij(vrager);
+    bezig.add(() async {
+      await Future.any([eerst ?? Future<void>.value(), dicht.future]);
+      if (dicht.isCompleted) {
+        vrager.destroy();
+        return;
+      }
+      final Socket pc;
+      try {
+        pc = await Socket.connect(InternetAddress.loopbackIPv4, doel.port);
+      } catch (_) {
+        vrager.destroy();
+        return;
+      }
+      houdBij(pc);
+      // De toets is intussen klaar: niet meer doorgeven, de tearDown sluit beide.
+      if (dicht.isCompleted) return;
+      pc.listen(vrager.add, onDone: vrager.destroy, onError: (Object _) => vrager.destroy());
+      vrager.listen(pc.add, onDone: () {
+        pc.destroy();
+        opgehangen?.call();
+      }, onError: (Object _) => pc.destroy());
+    }());
+  }, onError: (Object _) {});
   return Uri.parse('http://127.0.0.1:${luik.port}');
 }
 
