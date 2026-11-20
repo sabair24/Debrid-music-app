@@ -225,6 +225,22 @@ class LanStateStore {
   /// over de zonelijnen, zie `LanServer`).
   Stream<({String trackId, String dev, int at})> get geopendNu => _geopendNu.stream;
 
+  /// Wat een radio op een toestel op proef haalde (zijn `RadioBesturing.opProef`), per toestel-id: `{ids, at}`.
+  ///
+  /// Saber, 20-11-2026, met TiK ToK "Op dit toestel" op zijn gsm terwijl de radio op de Shield liep: *"Kan het zijn dat
+  /// hij de nummers opslaat op men gsm ?? Dat mag niet e voor de nummers die ik nog niet heb in men bibliotheek. Enkel na
+  /// men beslissing als ik ze hou of niet"*. Een radio op de Shield laat de pc halen, maar zijn notitie staat op de Shield:
+  /// de pc kende alleen zijn eigen radio, en de gsm zag die nummers als gewone nieuwe downloads (nieuw_op_toestel.dart).
+  /// Op schijf, maar zonder [rev]: dit verandert bij elke landing en geen toestel hoeft daarvoor de staat opnieuw te
+  /// halen. Een toestel dat twee weken niets meldde valt eruit.
+  final Map<String, Map<String, dynamic>> radioOpProef = {};
+
+  /// Alle id's die ergens een radio op proef heeft ([radioOpProef]).
+  Set<String> get radioOpProefIds => {
+        for (final v in radioOpProef.values)
+          for (final x in (v['ids'] as List? ?? const [])) '$x',
+      };
+
   /// De toestellen die nu slapen (een Shield met het scherm uit, wekker.dart): voor "slaapt" op de zonekaart (Saber,
   /// 31-10-2026). Niet op schijf: na een herstart van de pc meldt elk toestel het opnieuw.
   final Set<String> slapend = {};
@@ -307,6 +323,10 @@ class LanStateStore {
       (m['geopend'] as Map?)?.forEach((k, v) {
         if (v is Map) geopend[k.toString()] = v.cast<String, dynamic>();
       });
+      final tweeWekenGeleden = DateTime.now().millisecondsSinceEpoch - const Duration(days: 14).inMilliseconds;
+      (m['radioOpProef'] as Map?)?.forEach((k, v) {
+        if (v is Map && ((v['at'] as num?) ?? 0) >= tweeWekenGeleden) radioOpProef[k.toString()] = v.cast<String, dynamic>();
+      });
       _snoeiGeopend(DateTime.now().millisecondsSinceEpoch);
       if (m['progress'] != null) {
         progress = PlaybackProgress.fromJson((m['progress'] as Map).cast<String, dynamic>());
@@ -328,6 +348,7 @@ class LanStateStore {
         'radioSfeer': radioSfeer,
         'radioOverzichten': radioOverzichten,
         'geopend': geopend,
+        if (radioOpProef.isNotEmpty) 'radioOpProef': radioOpProef,
         'progress': progress.toJson(),
       };
 
@@ -355,6 +376,8 @@ class LanStateStore {
   Map<String, int> applyOps(List<dynamic> ops, {String deviceId = '', String deviceName = ''}) {
     var durableChanged = false;
     var progressChanged = false;
+    // Wel op schijf, maar geen nieuwe [rev] (zie [radioOpProef]).
+    var stilBewaren = false;
     // Een stand zonder rij ("queueMerk" alleen) waarvan de pc de rij niet (meer) heeft: het toestel moet hem opnieuw sturen.
     var rijNodig = false;
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -432,6 +455,17 @@ class LanStateStore {
           stat.count += 1;
           if (at > stat.lastPlayedMs) stat.lastPlayedMs = at;
           durableChanged = true;
+
+        case 'radioOpProef':
+          // Wat de radio op [deviceId] op proef heeft — zie [radioOpProef]. Leeg: niets (meer).
+          if (deviceId.isEmpty) break;
+          final ids = [for (final x in (op['ids'] as List? ?? const [])) '$x'];
+          if (ids.isEmpty) {
+            if (radioOpProef.remove(deviceId) != null) stilBewaren = true;
+          } else {
+            radioOpProef[deviceId] = {'ids': ids, 'at': at};
+            stilBewaren = true;
+          }
 
         case 'slaapt':
           // Een toestel valt in slaap of wordt wakker. Alleen de zonelijst hoeft het te weten.
@@ -575,6 +609,7 @@ class LanStateStore {
       }
     }
 
+    if (stilBewaren && !durableChanged && !progressChanged) _scheduleSave();
     if (durableChanged) rev++;
     if (progressChanged) progressRev++;
     if (durableChanged || progressChanged) {
