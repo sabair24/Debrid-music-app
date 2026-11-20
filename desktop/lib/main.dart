@@ -2640,6 +2640,32 @@ Future<void> main() async {
       radioSfeer.duwOps = duw;
       // De brievenbus van het overzicht "Radio afsluiten" staat op de pc.
       schrijfStaat = duw;
+      // Wat de radio hier op proef haalde, naar de pc (20-11-2026, Saber: "Kan het zijn dat hij de nummers opslaat op men
+      // gsm ?? Dat mag niet e voor de nummers die ik nog niet heb"). Een radio op dit toestel laat de pc halen, maar de
+      // notitie staat hier: zonder deze melding zag de gsm ze als gewone nieuwe downloads. Bij elke verandering, en om de
+      // vijf minuten toch eens — na een herstart van de pc.
+      String? opProefGemeld;
+      var opProefOp = DateTime(2000);
+      var opProefBezig = false;
+      Future<void> meldOpProef() async {
+        if (opProefBezig) return;
+        final ids = [for (final g in radio.opProef) if (g.id case final id?) id]..sort();
+        final sleutel = ids.join(',');
+        if (sleutel == opProefGemeld && DateTime.now().difference(opProefOp) < const Duration(minutes: 5)) return;
+        opProefBezig = true;
+        try {
+          await duw([
+            {'type': 'radioOpProef', 'ids': ids}
+          ]);
+          opProefGemeld = sleutel;
+          opProefOp = DateTime.now();
+        } catch (_) {/* geen pc: de volgende keer */} finally {
+          opProefBezig = false;
+        }
+      }
+
+      radio.addListener(() => unawaited(meldOpProef()));
+      Timer.periodic(const Duration(minutes: 5), (_) => unawaited(meldOpProef()));
       // Slaapt deze tv (scherm uit)? Dan staat er op de zonekaart "Slaapt · wordt gewekt als je hier speelt" (Saber,
       // 31-10-2026). Om de twintig seconden kijken; een verandering meteen naar de pc, en om de vijf minuten toch eens —
       // na een herstart van de pc weet die het anders niet meer.

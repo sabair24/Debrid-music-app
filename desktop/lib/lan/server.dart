@@ -1336,9 +1336,13 @@ class LanServer {
       case '/api/zones':
         return _json(res, zones.snapshot());
       case '/api/radio/opproef':
-        // Wat een radio op de pc op proef haalde, als gedeelde id's (nieuw_op_toestel.dart).
+        // Wat een radio op proef haalde, als gedeelde id's (nieuw_op_toestel.dart): die van de pc, én die van een radio op
+        // een ander toestel die de pc voor hem haalde (20-11-2026, [LanStateStore.radioOpProef]).
         return _json(res, {
-          'ids': [for (final p in radioOpProef?.call() ?? const <String>[]) catalog.idVoorPad(p)],
+          'ids': {
+            for (final p in radioOpProef?.call() ?? const <String>[]) catalog.idVoorPad(p),
+            ...state.radioOpProefIds,
+          }.toList(),
         });
       case '/api/toestel/nogbezig':
         // Wat de pc nog keurt of verbetert ([DownloadManager.inBehandeling]): een toestel haalt het pas daarna
