@@ -80,13 +80,41 @@ Track _t(String titel) => Track(
     artist: 'Artiest $titel',
     album: '');
 
+/// Wacht tot de schrijfrij van [r] werkelijk leeg is. Eén keer [RadioBesturing.schrijfrijVoorToets] afwachten is niet
+/// genoeg: een beurt kan er een volgende achter zetten (een brievenbus die mislukt schrijft de notitie alsnog, zie
+/// `_stop`). Dus opnieuw lezen tot hij niet meer verandert.
+Future<void> _schrijfrijLeeg(RadioBesturing r) async {
+  var rij = r.schrijfrijVoorToets;
+  for (var i = 0; i < 100; i++) {
+    await rij;
+    await Future<void>.delayed(Duration.zero);
+    final nu = r.schrijfrijVoorToets;
+    if (identical(nu, rij)) return;
+    rij = nu;
+  }
+}
+
 void main() {
   late Directory wortel;
+  // Elke radio van deze toetsen. Hun schrijfrij moet leeg zijn vóór de volgende toets begint: `_bestand` leest appDir
+  // pas bij het schrijven, dus een late beurt van de vorige toets schreef of wiste de notitie in de map van de
+  // volgende. Zo vond "op de tv: naar de gsm" op CI na zijn eigen wissen tóch een notitie (win-v3.9.744, 20-11-2026,
+  // poging 1). De toets ervoor, "lukt de brievenbus niet", wacht maar 10 ms en laat zo'n beurt achter.
+  final radios = <RadioBesturing>[];
+  RadioBesturing bijgehouden(RadioBesturing r) {
+    radios.add(r);
+    return r;
+  }
+
   setUp(() {
     wortel = Directory.systemTemp.createTempSync('dm_ovz_');
     setAppDirForTest(wortel.path);
   });
-  tearDown(() {
+  tearDown(() async {
+    for (final r in radios) {
+      await _schrijfrijLeeg(r);
+    }
+    radios.clear();
     try {
       wortel.deleteSync(recursive: true);
     } catch (_) {}
@@ -95,7 +123,7 @@ void main() {
   /// Een radio die twee nummers ophaalde, op deze zone [hier], gestart door [door].
   Future<RadioBesturing> radio({String hier = 'dev:pc-THUIS', String? door, List<String>? elders}) async {
     final tracks = {'1': _t('1'), '2': _t('2')};
-    final r = RadioBesturing(speler: _Speler(), bron: _Bron(tracks))..hier = hier;
+    final r = bijgehouden(RadioBesturing(speler: _Speler(), bron: _Bron(tracks))..hier = hier);
     if (elders != null) {
       r.bijOverzichtElders = (s, doel) async {
         elders.add('$doel:${s.gehaald.length}');
@@ -177,13 +205,13 @@ void main() {
     }
 
     RadioBesturing opDeTv(List<String> elders, {bool Function()? lukt}) =>
-        RadioBesturing(speler: _Speler(), bron: _Bron({'3': _t('3')}))
+        bijgehouden(RadioBesturing(speler: _Speler(), bron: _Bron({'3': _t('3')}))
           ..hier = 'dev:shield'
           ..richt = ((doel) => doel == 'dev:shield' ? 'gsm' : doel)
           ..bijOverzichtElders = (s, doel) async {
             elders.add('$doel:${s.gehaald.length}');
             return lukt?.call() ?? true;
-          };
+          });
 
     test('op de tv: naar de gsm, en nooit op het scherm', () async {
       await notitieOpSchijf();
@@ -241,13 +269,13 @@ void main() {
     test('op de pc of een gsm: gewoon hier, zoals altijd', () async {
       await notitieOpSchijf();
       final elders = <String>[];
-      final r = RadioBesturing(speler: _Speler(), bron: _Bron(const {}))
+      final r = bijgehouden(RadioBesturing(speler: _Speler(), bron: _Bron(const {}))
         ..hier = 'dev:pc-THUIS'
         ..richt = ((doel) => doel)
         ..bijOverzichtElders = (s, doel) async {
           elders.add(doel);
           return true;
-        };
+        });
       await r.laadOpenstaand();
       expect(r.openstaand?.gehaald, hasLength(2));
       expect(elders, isEmpty);
@@ -279,7 +307,7 @@ void main() {
     });
 
     test('tonen, afhandelen, en wat niet weg kon gaat terug', () async {
-      final r = RadioBesturing(speler: _Speler(), bron: _Bron(const {}));
+      final r = bijgehouden(RadioBesturing(speler: _Speler(), bron: _Bron(const {})));
       final gemeld = <String>[];
       r.bijOverzichtAfgehandeld = (sleutel, rest) => gemeld.add('$sleutel:${rest?.gehaald.length ?? 'klaar'}');
       final s = RadioSessie.fromJson(post('dev:gsm-1', 1, nummers: 2)['sessie'])!;
