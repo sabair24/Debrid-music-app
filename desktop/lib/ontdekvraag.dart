@@ -22,6 +22,7 @@ class OntdekProfiel {
     this.hoeken = const {},
     this.decennia = const {},
     this.weggetikt = const [],
+    this.alGetoond = const [],
   });
 
   /// De artiesten die het zwaarst wegen (gedraaid, bezit, duimen), zwaarst eerst.
@@ -41,6 +42,9 @@ class OntdekProfiel {
 
   /// Wat hij in Ontdek wegtikte (artiest — titel): daar wil hij niet meer van.
   final List<String> weggetikt;
+
+  /// Wat er nu al in zijn lijst staat (artiest — titel): verversen moet iets ANDERS geven (21-11-2026).
+  final List<String> alGetoond;
 
   bool get leeg => zwaarst.isEmpty && recent.isEmpty;
 }
@@ -98,7 +102,7 @@ Zijn smaak:
 - Waar hij een duim of hartje op zette: ${p.groen.take(15).join('; ')}
 - Zijn bibliotheek naar hoek: ${procent(p.hoeken)}
 - Naar decennium: ${procent(p.decennia)}
-${p.weggetikt.isEmpty ? '' : '- Wat hij wegtikte als "niet voor mij": ${p.weggetikt.take(15).join('; ')}\n'}
+${p.weggetikt.isEmpty ? '' : '- Wat hij wegtikte als "niet voor mij": ${p.weggetikt.take(15).join('; ')}\n'}${p.alGetoond.isEmpty ? '' : '- Wat er al in zijn lijst staat — noem die NIET opnieuw, hij wil iets nieuws: ${p.alGetoond.take(60).join('; ')}\n'}
 Noem ongeveer $kOntdekVragen NUMMERS die hij waarschijnlijk nog niet heeft.
 
 Wat er echt toe doet:

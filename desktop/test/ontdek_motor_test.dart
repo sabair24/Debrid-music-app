@@ -413,21 +413,22 @@ void main() {
     });
 
     test(
-      'Claude één keer per dag; verversen gebruikt zijn pool, en vraagt pas opnieuw als die op is (hoogstens twee)',
+      'Claude: met de hand verversen vraagt hem telkens opnieuw, tot tien keer per dag (21-11-2026)',
       () async {
         final vragen = <int>[];
         var klok = _nu;
         final d = dienst(klok: () => klok, claudeVragen: vragen);
         await d.ververs();
         expect(vragen, hasLength(1));
-        await d.ververs();
-        expect(vragen, hasLength(2), reason: 'de pool van 12 stond al helemaal in de eerste lijst');
-        await d.ververs();
-        expect(vragen, hasLength(2), reason: 'hoogstens twee per dag');
+        for (var i = 0; i < 12; i++) {
+          await d.ververs(handmatig: true);
+        }
+        expect(vragen, hasLength(OntdekVoorJou.kClaudePerDag), reason: 'hoogstens tien per dag');
+        expect(OntdekVoorJou.kClaudePerDag, 10);
         klok = _nu.add(const Duration(days: 1));
         expect(d.verouderd, isTrue, reason: 'een nieuwe dag, een nieuwe lijst');
         await d.ververs();
-        expect(vragen, hasLength(3));
+        expect(vragen, hasLength(OntdekVoorJou.kClaudePerDag + 1));
       },
     );
 
@@ -441,7 +442,7 @@ void main() {
         deezer: (_) async => [for (var i = 0; i < 60; i++) _n('Deezer $i', 'd$i')],
         claude: (_) async {
           vragen.add(1);
-          return [for (var i = 0; i < 40; i++) _n('Claude $i', 'c$i', bron: Ontdekbron.claude)];
+          return [for (var i = 0; i < 200; i++) _n('Claude $i', 'c$i', bron: Ontdekbron.claude)];
         },
         klok: () => _nu,
         toeval: math.Random(5),
@@ -451,6 +452,8 @@ void main() {
           reason: 'de helft van de eerste vijftig, de rest van de pool blijft voor straks');
       await d.ververs();
       expect(vragen, hasLength(1), reason: 'nog genoeg van Claude dat niet getoond is: geen tweede vraag');
+      await d.ververs(handmatig: true);
+      expect(vragen, hasLength(2), reason: 'met de hand: wel opnieuw, ook als de pool nog vol is (21-11-2026)');
     });
 
     test('wegtikken: meteen uit wat een scherm ziet, bewaard, en ongedaan te maken', () async {
