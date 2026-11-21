@@ -69,6 +69,23 @@ Future<void> initTvMode() async {
 @visibleForTesting
 void setTvModeForTest(bool value) => _isTv = value;
 
+/// Wanneer iemand de afstandsbediening van deze tv het laatst gebruikte (een toets omlaag, main.dart). Zie [tvOnbediend].
+DateTime tvLaatstBediend = DateTime.now();
+
+/// Zo lang zonder één toets heet de tv onbediend ([tvOnbediend]).
+const Duration kTvOnbediendNa = Duration(minutes: 2);
+
+/// Speelt de tv voor zich uit, zonder dat iemand hem bedient?
+///
+/// **Waarom (21-11-2026).** Een radio op de Shield, live gemeten: de tekendraad stond om de ~15 s 250–300 ms stil, 3 tot
+/// 6 keer per minuut, en vóór de radio nul keer. Tijdens een radio verandert de catalogus van de pc bij bijna elke ronde
+/// van vijftien seconden (een nummer landt, zijn plaat wordt rechtgezet, de luidheid gemeten, een hoes gevonden), en dan
+/// haalde de Shield telkens de hele catalogus (3 MB, 2150 nummers) en bouwde hij alles opnieuw op — op de tekendraad.
+/// Saber: *"los dit op nu"*. Wie naar de draaiende cd kijkt, heeft die verse catalogus niet nodig: de radio krijgt een
+/// geland nummer rechtstreeks van de pc. Dus vraagt een onbediende tv alleen of er iets veranderde
+/// ([LibraryStore.onbediend]), en haalt hij de catalogus pas bij de eerste toets — of na tien minuten.
+bool tvOnbediend({DateTime? nu}) => isTv && (nu ?? DateTime.now()).difference(tvLaatstBediend) >= kTvOnbediendNa;
+
 /// Is the window narrow enough that things have to stack rather than sit side by side?
 ///
 /// A phone in portrait is about 412 points wide. Until now the app had exactly one breakpoint, and

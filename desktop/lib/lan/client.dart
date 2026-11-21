@@ -204,6 +204,20 @@ Map<String, String> sleutelKop(RemoteEndpoint e) =>
 Future<Map<String, dynamic>?> ontleedCatalogus(Uint8List bytes) =>
     Isolate.run(() => _ontleedCatalogus(bytes));
 
+/// Hetzelfde, en meteen tot [CatalogDto] (21-11-2026): ook dat kostte op de Shield tientallen milliseconden op de
+/// tekendraad, elke keer dat de catalogus veranderde — tijdens een radio om de vijftien seconden.
+Future<CatalogDto?> ontleedCatalogusDto(Uint8List bytes) => Isolate.run(() => _ontleedCatalogusDto(bytes));
+
+CatalogDto? _ontleedCatalogusDto(Uint8List bytes) {
+  final d = _ontleedCatalogus(bytes);
+  if (d == null) return null;
+  try {
+    return CatalogDto.fromJson(d);
+  } catch (_) {
+    return null;
+  }
+}
+
 Map<String, dynamic>? _ontleedCatalogus(Uint8List bytes) {
   try {
     final d = jsonDecode(utf8.decode(bytes));
@@ -429,13 +443,13 @@ class RemoteClient {
     final res = await _get('/api/catalog', etag: etag, query: alleenMerk ? {'alleenMerk': '1'} : null);
     if (res.statusCode == 304) return CatalogResponse(null, etag);
     if (res.headers['x-alleen-merk'] == '1') return CatalogResponse(null, res.headers['etag'], uitgesteld: true);
-    // Op een ANDERE isolate. Zie [ontleedCatalogus] voor waarom dat hier het verschil maakt.
-    final decoded = await ontleedCatalogus(res.bodyBytes);
-    if (decoded == null) {
+    // Op een ANDERE isolate, en de DTO's meteen ook. Zie [ontleedCatalogusDto] voor waarom dat hier het verschil maakt.
+    final dto = await ontleedCatalogusDto(res.bodyBytes);
+    if (dto == null) {
       throw const RemoteException('De pc stuurde geen bibliotheek terug.');
     }
     return CatalogResponse(
-      CatalogDto.fromJson(decoded),
+      dto,
       res.headers['etag'],
       bytes: res.bodyBytes,
     );
