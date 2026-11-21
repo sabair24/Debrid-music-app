@@ -18,6 +18,7 @@ import 'radiobuurt.dart';
 import 'radiolijst.dart';
 import 'radiosmaak.dart';
 import 'radioplan.dart';
+import 'verzamelvraag.dart';
 
 /// Het model. Klein werk, dus lage inspanning; zie [anthropicBody].
 const String kRadioModel = 'claude-opus-5';
@@ -28,6 +29,10 @@ const String kRadioModel = 'claude-opus-5';
 /// Achtduizend en geen vierduizend: op 26-09-2026 kwam er een keer één nummer terug in plaats van 36
 /// — zie `kMinModelNummers`. Een ruimere grens kost niets zolang hij niet gebruikt wordt.
 const int kRadioMaxTokens = 8000;
+
+/// Voor de verzamelvoorstellen (`verzamelvraag.dart`): het denken over een hele bibliotheek, en daarna tientallen
+/// artiesten en correcties. Een afgebroken antwoord is niet te lezen, dus ruim.
+const int kVerzamelMaxTokens = 24000;
 
 /// De vraag zoals hij de deur uitgaat.
 ///
@@ -361,6 +366,36 @@ class AiService {
     return leesNummers(jsonUitAntwoord(body));
   }
 
+  /// Verzamelingen voorstellen uit je bibliotheek (`verzamelvraag.dart`; Saber, 21-11-2026: "gebruik ook ai om de genre te
+  /// onderscheiden"). Gemiddelde inspanning en niet laag: dit is wél een puzzel — vocal jazz van crooners en soul
+  /// onderscheiden, "kritisch en juist". En ruim de tijd: de hele bibliotheek gaat mee. Geeft de JSON van het antwoord;
+  /// [leesVerzamelvoorstel] leest hem uit. Gooit [AiFout] met een leesbare reden.
+  Future<Object?> vraagVerzamelvoorstel(String prompt) async {
+    final sleutel = sleutelVan().trim();
+    if (sleutel.isEmpty) throw const AiFout('Er staat geen AI-sleutel in Instellingen.');
+    final body = await _verstuur(
+      {
+        'model': kRadioModel,
+        'max_tokens': kVerzamelMaxTokens,
+        'output_config': {
+          'effort': 'medium',
+          'format': {'type': 'json_schema', 'schema': verzamelSchema()},
+        },
+        'messages': [
+          {'role': 'user', 'content': prompt}
+        ],
+      },
+      sleutel,
+      werkruimteVan().trim(),
+      wacht: const Duration(minutes: 8),
+    );
+    _meldGebruik('verzamelvoorstel', body);
+    if (body is Map && body['stop_reason'] == 'max_tokens') {
+      throw const AiFout('Het antwoord van het taalmodel was te lang en werd afgebroken. Probeer het zo nog eens.');
+    }
+    return jsonUitAntwoord(body);
+  }
+
   /// Hoeveel een vraag kostte (`usage` van de API), voor het radiologboek: `radio-model: lijst, 2140 in /
   /// 3880 uit tokens`. Gezet door wie het wil weten.
   void Function(String soort, int inTokens, int uitTokens)? bijGebruik;
@@ -482,8 +517,8 @@ class AiService {
   /// die aan een persoon hangt in plaats van aan een werkruimte, de weigering die als 200 met
   /// `stop_reason: refusal` binnenkomt. Ze een tweede keer overtypen betekent dat ze na de eerste
   /// verbetering uit elkaar gaan lopen.
-  Future<Object?> _verstuur(
-      Map<String, dynamic> vraag, String sleutel, String werkruimte) async {
+  Future<Object?> _verstuur(Map<String, dynamic> vraag, String sleutel, String werkruimte,
+      {Duration wacht = const Duration(seconds: 60)}) async {
     http.Response res;
     try {
       res = await _http
@@ -499,7 +534,7 @@ class AiService {
             },
             body: jsonEncode(vraag),
           )
-          .timeout(const Duration(seconds: 60));
+          .timeout(wacht);
     } catch (e) {
       throw AiFout('Kon het taalmodel niet bereiken: $e');
     }

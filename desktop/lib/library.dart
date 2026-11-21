@@ -2001,6 +2001,79 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Een correctie uit een voorstel (`verzamelvoorstellen.dart`; Saber, 21-11-2026: "Ja, met een voorstel") in de
+  /// bestanden: [veld] `genre`, `jaar` of `artiest` op [naar], voor de nummers op [paden]. Langs [writeTagFields] en mét
+  /// [_tagUndo] — de oudere regel wint, net als in [_schrijfBewerking] — zodat "Tags terugzetten" ook dit terugdraait. In
+  /// het geheugen meteen; de volgende scan leest het bestand toch opnieuw. Op een toestel doet de pc het.
+  Future<({int geschreven, int mislukt})> zetGegevens(Iterable<String> paden, String veld, String naar) async {
+    final lijst = paden.toList();
+    if (isRemote) {
+      final ids = [
+        for (final p in lijst)
+          if (_remoteTrackId(p) case final id?) id,
+      ];
+      if (ids.isEmpty) return (geschreven: 0, mislukt: 0);
+      await _editOnPc({'op': 'gegevens', 'trackIds': ids, 'veld': veld, 'naar': naar});
+      return (geschreven: ids.length, mislukt: 0);
+    }
+    final sleutel = switch (veld) {
+      'jaar' => 'DATE',
+      'artiest' => 'ARTIST',
+      _ => 'GENRE',
+    };
+    final waarde = veld == 'artiest' ? cleanArtistName(naar) : naar.trim();
+    final jaar = veld == 'jaar' ? int.tryParse(waarde) : null;
+    if (waarde.isEmpty || (veld == 'jaar' && jaar == null)) return (geschreven: 0, mislukt: lijst.length);
+    var geschreven = 0, mislukt = 0;
+    for (final pad in lijst) {
+      final laag = pad.toLowerCase();
+      final mp3 = laag.endsWith('.mp3');
+      // Wat [writeTagFields] niet veilig kan, blijft zoals het is.
+      if (!mp3 && !laag.endsWith('.flac')) {
+        mislukt++;
+        continue;
+      }
+      final f = File(pad);
+      final raw = mp3 ? readMp3RawFields(f) : readFlacRawFields(f);
+      String? reden;
+      if (!await writeTagFields(f, {sleutel: waarde}, waarom: (w) => reden = w)) {
+        meetlog?.call('  correctie: $veld "$waarde" niet in $pad — ${reden ?? 'onbekend waarom'}');
+        mislukt++;
+        continue;
+      }
+      _tagUndo[pad] = {sleutel: raw[sleutel.toLowerCase()], ...?_tagUndo[pad]};
+      final i = tracks.indexWhere((t) => t.path == pad);
+      if (i >= 0) {
+        final t = tracks[i];
+        tracks[i] = Track(
+          path: t.path,
+          title: t.title,
+          artist: veld == 'artiest' ? waarde : t.artist,
+          album: t.album,
+          trackNo: t.trackNo,
+          trackTotal: t.trackTotal,
+          duration: t.duration,
+          isFlac: t.isFlac,
+          year: jaar ?? t.year,
+          genre: veld == 'genre' ? waarde : t.genre,
+          addedMs: t.addedMs,
+          sizeBytes: t.sizeBytes,
+          sampleRate: t.sampleRate,
+          bitsPerSample: t.bitsPerSample,
+          verzameling: t.verzameling,
+        );
+      }
+      geschreven++;
+    }
+    if (geschreven > 0) {
+      await _saveTagUndo();
+      rebuildAlbums();
+      _bumpMeta();
+      notifyListeners();
+    }
+    return (geschreven: geschreven, mislukt: mislukt);
+  }
+
   static Track _metJaar(Track t, int jaar) => Track(
         path: t.path,
         title: t.title,

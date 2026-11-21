@@ -41,6 +41,7 @@ import '../torbox.dart';
 import 'cast_manager.dart';
 import 'radiohaler.dart';
 import '../verzameling.dart' show verzamelMapnaam;
+import '../verzamelvoorstellen.dart' show Verzamelvoorstellen;
 import 'remming.dart';
 import 'accountkoppeling.dart';
 import 'catalog.dart';
@@ -103,6 +104,9 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/zones', '/api/zones/events', '/api/zones/stand', '/api/zone/cmd', '/api/zone/transfer', '/api/tijd',
     '/api/twijfel',
     '/api/soort/vraag',
+    // De voorstellen voor verzamelingen (verzamelvoorstellen.dart): lezen, Claude laten vragen, en zeggen wat je deed.
+    // Er verdwijnt niets mee; het verhuizen en rechtzetten gaat langs /api/edit.
+    '/api/verzamelvoorstel',
     // Het schudlogboek van een toestel (schudlog.dart): onderweg schudt Saber ook (26-10-2026: "Ik heb vandaag op de gsm
     // verschillende keer gesnuffeld" — en niets kwam aan). schud.log heeft een plafond ([kSchudLogBytes]).
     '/api/diag/schud',
@@ -1068,6 +1072,19 @@ class LanServer {
   /// Zichzelf bijwerken op verzoek van een gekoppeld toestel. Zie `pc_bijwerker.dart`.
   final PcBijwerker bijwerker = PcBijwerker();
 
+  /// De voorstellen van de AI voor verzamelingen en correcties (`verzamelvoorstellen.dart`), en hoe Claude te vragen —
+  /// gezet door de app.
+  Verzamelvoorstellen? verzamelvoorstellen;
+  Future<void> Function()? vraagVerzamelvoorstellen;
+
+  Future<void> _verzamelvoorstel(HttpRequest req) async {
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final v = verzamelvoorstellen;
+    if (v == null) return _unavailable(req, 'Deze pc heeft geen voorstellen.');
+    return _json(req.response, await v.beantwoord(body, opPc: vraagVerzamelvoorstellen));
+  }
+
   /// Nummers ophalen voor de radio van een gekoppeld toestel. Zie `radiohaler.dart`.
   late final Radiohaler radiohaler = Radiohaler(downloads, soulseek, library, settings)
     ..opProef = ((id) => state.radioOpProefIds.contains(id))
@@ -1467,6 +1484,8 @@ class LanServer {
         return _update(req, ingang);
       case '/api/radio':
         return _radio(req);
+      case '/api/verzamelvoorstel':
+        return _verzamelvoorstel(req);
       case '/api/diag/warmte':
         return _warmte(req);
       case '/api/diag/verbruik':
@@ -3986,6 +4005,20 @@ class LanServer {
           if (naam.isNotEmpty) state.applyOps([{'type': 'verzameling.maak', 'naam': verzamelMapnaam(naam)}]);
           final r = await library.naarVerzameling(paden, naam.isEmpty ? null : naam);
           return await _json(req.response, {'ok': true, 'verhuisd': r.verhuisd, 'bezet': r.bezet});
+        case 'gegevens':
+          // Een correctie uit een voorstel (verzamelvoorstellen.dart): genre, jaar of artiest in de bestanden, mét de
+          // weg terug ("Tags terugzetten").
+          final paden = <String>[];
+          for (final id in (body['trackIds'] as List? ?? const [])) {
+            final t = id is String ? catalog.track(id) : null;
+            if (t != null) paden.add(t.path);
+          }
+          final veld = '${body['veld'] ?? ''}';
+          if (paden.isEmpty || !const {'genre', 'jaar', 'artiest'}.contains(veld)) {
+            return await _json(req.response, {'ok': false, 'reason': 'niets gevonden'});
+          }
+          final r = await library.zetGegevens(paden, veld, '${body['naar'] ?? ''}');
+          return await _json(req.response, {'ok': true, 'geschreven': r.geschreven, 'mislukt': r.mislukt});
         case 'removeTracks':
           final paths = <String>[];
           for (final id in (body['trackIds'] as List? ?? const [])) {

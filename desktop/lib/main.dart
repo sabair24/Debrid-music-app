@@ -71,6 +71,8 @@ import 'radiosessie.dart';
 import 'verzameling.dart' show verzamelMapnaam;
 import 'verzamelvoorstel.dart';
 import 'verzamelingen.dart';
+import 'verzamelvoorstellen.dart';
+import 'verzamelvraag.dart';
 import 'ui/draaihoes.dart';
 import 'ui/tv_rij.dart';
 import 'ui/nieuw_kaarten.dart';
@@ -1438,6 +1440,15 @@ Future<void> main() async {
   // De verzamelingen (verzameling.dart, verzamelingen.dart; 21-11-2026): dezelfde weg als de afspeellijsten. Hier al,
   // want het hartje van een album volgt een verhuizing naar een verzameling ([Favorieten.volgTegels]).
   final verzamelingen = Verzamelingen();
+  // De voorstellen van Claude voor verzamelingen en correcties (verzamelvoorstellen.dart): op de pc op schijf, op een
+  // toestel van de pc.
+  final verzamelvoorstellen = Verzamelvoorstellen(
+      bestand: mode.owner ? File('$appDir${Platform.pathSeparator}verzamelvoorstellen.json') : null)
+    ..viaPc = () {
+      final r = library.remote;
+      return r == null ? null : (body) => r.ask('/api/verzamelvoorstel', body);
+    };
+  if (mode.owner) unawaited(verzamelvoorstellen.laad());
   // Favorieten. Op de pc rechtstreeks in de gedeelde staat; op een Mac of iPad gaat dezelfde op over
   // de lijn (zie waar `duwOps` gezet wordt). Eén weg, dus geen tweede waarheid die kan afwijken.
   final favorieten = Favorieten()..idVanPad = library.gedeeldId;
@@ -2414,6 +2425,11 @@ Future<void> main() async {
         tempo: _radiotempo,
         spoor: radioLog.line,
       );
+      // De voorstellen van Claude voor verzamelingen, ook voor een toestel (verzamelvoorstellen.dart).
+      s.verzamelvoorstellen = verzamelvoorstellen;
+      s.vraagVerzamelvoorstellen = () => verzamelvoorstellen.vraagOpPc(() => maakVerzamelvoorstellen(library,
+          verzamelingen, AiService(() => settings.anthropicKey, werkruimteVan: () => settings.anthropicWorkspace),
+          afgewezen: verzamelvoorstellen.afgewezen, spoor: radioLog.line));
       zoneLijst
         ..zetVerbonden(true)
         ..zet(s.zones.snapshot());
@@ -2547,6 +2563,7 @@ Future<void> main() async {
         ChangeNotifierProvider<Speelstanden>.value(value: speelstanden),
         ChangeNotifierProvider<Afspeellijsten>.value(value: lijsten),
         ChangeNotifierProvider<Verzamelingen>.value(value: verzamelingen),
+        ChangeNotifierProvider<Verzamelvoorstellen>.value(value: verzamelvoorstellen),
         ChangeNotifierProvider<OfflineStore>.value(value: offline),
         ChangeNotifierProvider<SpeakerTarget>.value(value: speakers),
         Provider<OnlineService>.value(value: online),
@@ -18954,14 +18971,20 @@ class VerzamelingenView extends StatelessWidget {
     final verz = context.watch<Verzamelingen>();
     final namen = alleVerzamelingNamen(lib, verz);
     if (namen.isEmpty) {
-      return LeegVlak(
-        teken: Icons.collections_bookmark_outlined,
-        kop: 'Nog geen verzamelingen',
-        uitleg: 'Een verzameling is een tweede bibliotheek voor muziek die je apart wilt — vocal jazz, kerst, een genre '
-            'voor als je er zin in hebt. Ze staat niet tussen je albums en je shuffle, maar zoeken vindt haar wel.',
-        knop: 'Nieuwe verzameling',
-        opKnop: () => nieuweVerzameling(context),
-      );
+      return ListView(children: [
+        const SizedBox(height: kRuimte32),
+        LeegVlak(
+          gecentreerd: false,
+          teken: Icons.collections_bookmark_outlined,
+          kop: 'Nog geen verzamelingen',
+          uitleg: 'Een verzameling is een tweede bibliotheek voor muziek die je apart wilt — vocal jazz, kerst, een genre '
+              'voor als je er zin in hebt. Ze staat niet tussen je albums en je shuffle, maar zoeken vindt haar wel.',
+          knop: 'Nieuwe verzameling',
+          opKnop: () => nieuweVerzameling(context),
+        ),
+        const SizedBox(height: kRuimte24),
+        const _AiVoorstelKaarten(),
+      ]);
     }
     return CustomScrollView(
       slivers: [
@@ -18989,6 +19012,7 @@ class VerzamelingenView extends StatelessWidget {
             ),
           ),
         ),
+        const SliverToBoxAdapter(child: _AiVoorstelKaarten()),
         SliverPadding(
           padding: const EdgeInsets.symmetric(horizontal: kGoot),
           sliver: SliverLayoutBuilder(
@@ -19005,6 +19029,471 @@ class VerzamelingenView extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Claude laten voorstellen (verzamelvoorstellen.dart): op de pc met de sleutel van hier, op een toestel via de pc.
+Future<void> vraagVerzamelvoorstellen(BuildContext context) {
+  final v = context.read<Verzamelvoorstellen>();
+  final lib = context.read<LibraryStore>();
+  final verz = context.read<Verzamelingen>();
+  final cfg = context.read<AppSettings>();
+  return v.vraag(
+      opPc: () => v.vraagOpPc(() => maakVerzamelvoorstellen(
+          lib, verz, AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace),
+          afgewezen: v.afgewezen)));
+}
+
+/// De vraag aan Claude op de pc (verzamelvraag.dart): je gewone bibliotheek per artiest, je verzamelingen erbij, en het
+/// antwoord terug naar de nummers. [spoor] krijgt een regel over wat er gevraagd en gekregen werd.
+Future<({List<VerzamelAiVoorstel> voorstellen, List<AiCorrectieVoorstel> correcties})> maakVerzamelvoorstellen(
+    LibraryStore lib, Verzamelingen verz, AiService ai,
+    {List<String> afgewezen = const [], void Function(String regel)? spoor}) async {
+  final nummers = <BibNummer>[
+    for (final t in lib.mixTracks)
+      if (lib.gedeeldId(t.path) case final id?) (id: id, artiest: t.artist, titel: t.title, genre: t.genre, jaar: t.year),
+  ];
+  final artiesten = vraagArtiesten(nummers, lib.tagsOf);
+  final bestaande = <VraagVerzameling>[
+    for (final n in alleVerzamelingNamen(lib, verz))
+      (naam: n, artiesten: {for (final t in nummersVanVerzameling(lib, verz, n)) t.artist}.toList()),
+  ];
+  final prompt = verzamelPrompt(artiesten, bestaande, afgewezen: afgewezen);
+  ai.bijGebruik = (soort, inT, uitT) => spoor?.call('verzamelvoorstel: $inT in / $uitT uit tokens');
+  final json = await ai.vraagVerzamelvoorstel(prompt);
+  final aantal = {for (final a in artiesten) vraagSleutel(a.artiest): a.aantal};
+  final gelezen = leesVerzamelvoorstel(json,
+      bekend: {for (final a in artiesten) vraagSleutel(a.artiest): a.artiest},
+      aantalVan: (a) => aantal[vraagSleutel(a)] ?? 0,
+      vandaagJaar: DateTime.now().year);
+  final uit = voorstellenUit(gelezen, nummers, nuMs: DateTime.now().millisecondsSinceEpoch);
+  spoor?.call('verzamelvoorstel: ${artiesten.length} artiesten (${nummers.length} nummers) gevraagd — '
+      '${uit.voorstellen.map((v) => '${v.naam} ${v.nummers.length}').join(', ')}; ${uit.correcties.length} correcties');
+  return uit;
+}
+
+/// De voorstellen van Claude boven je verzamelingen (Saber, 21-11-2026: "gebruik ook ai om de genre te onderscheiden …
+/// Voorstel, ik keur goed"): de knop om ze te laten maken, en per voorstel een kaart.
+class _AiVoorstelKaarten extends StatefulWidget {
+  const _AiVoorstelKaarten();
+
+  @override
+  State<_AiVoorstelKaarten> createState() => _AiVoorstelKaartenState();
+}
+
+class _AiVoorstelKaartenState extends State<_AiVoorstelKaarten> {
+  @override
+  void initState() {
+    super.initState();
+    // Op een toestel: wat de pc heeft. Op de pc staat het al in het geheugen.
+    final v = _misschien<Verzamelvoorstellen>(context);
+    if (v != null && v.viaPc?.call() != null) unawaited(v.laad());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final v = _misschien<Verzamelvoorstellen>(context, luister: true);
+    if (v == null) return const SizedBox.shrink();
+    final lib = context.read<LibraryStore>();
+    final verz = context.read<Verzamelingen>();
+    final bestaat = {for (final n in alleVerzamelingNamen(lib, verz)) n.toLowerCase()};
+    final sleutel = context.select<AppSettings, bool>((s) => s.anthropicKey.trim().isNotEmpty);
+    final kan = lib.isRemote || sleutel;
+    final stijl = TextStyle(color: _muted, fontSize: 12.5, height: 1.4);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(kGoot, 0, kGoot, kRuimte16),
+      child: Container(
+        padding: const EdgeInsets.all(kRuimte16),
+        decoration: BoxDecoration(
+          color: _panel,
+          borderRadius: BorderRadius.circular(kHoek18),
+          border: Border.all(color: _line),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.auto_awesome_rounded, size: 18, color: _accent),
+              const SizedBox(width: 8),
+              const Text('Claude deelt in', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            ]),
+            const SizedBox(height: kRuimte6),
+            Text(
+                'Claude kijkt welke muziek in je bibliotheek een eigen hoek is — vocal jazz, crooners, soul — en stelt '
+                'voor die apart te zetten. Er verhuist niets zonder jouw ja. Gegevens die niet kloppen (een genre dat '
+                'geen genre is, het jaar van een heruitgave) komen ook als voorstel.',
+                style: stijl),
+            const SizedBox(height: kRuimte12),
+            if (v.bezig != null)
+              Row(children: [
+                const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(width: 10),
+                Flexible(child: Text(v.bezig!, style: stijl)),
+              ])
+            else
+              FilledButton.tonalIcon(
+                key: const ValueKey('verzameling-ai'),
+                autofocus: isTv && v.open.isEmpty,
+                onPressed: kan ? () => unawaited(vraagVerzamelvoorstellen(context)) : null,
+                icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+                label: Text(v.voorstellen.isEmpty && v.correcties.isEmpty
+                    ? 'Laat Claude je bibliotheek indelen'
+                    : 'Opnieuw laten indelen'),
+              ),
+            if (!kan)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text('Zet eerst een AI-sleutel in Instellingen.', style: stijl),
+              ),
+            if (v.fout != null && v.bezig == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(v.fout!, style: stijl.copyWith(color: kWeg)),
+              ),
+            for (final p in v.open)
+              _AiVoorstelRegel(key: ValueKey('ai-voorstel-${p.id}'), voorstel: p, bestaat: bestaat.contains(p.naam.toLowerCase())),
+            if (v.openCorrecties.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: kRuimte12),
+                child: OutlinedButton.icon(
+                  key: const ValueKey('ai-correcties'),
+                  onPressed: () => toonAiCorrecties(context),
+                  icon: const Icon(Icons.rule_rounded, size: 18),
+                  label: Text('${v.openCorrecties.length} '
+                      '${v.openCorrecties.length == 1 ? 'gegeven rechtzetten' : 'gegevens rechtzetten'}…'),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Eén voorstel: de naam, waarom, wat erin zou gaan, en Bekijken of Niet doen.
+class _AiVoorstelRegel extends StatelessWidget {
+  const _AiVoorstelRegel({super.key, required this.voorstel, required this.bestaat});
+
+  final VerzamelAiVoorstel voorstel;
+  final bool bestaat;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = voorstel;
+    final artiesten = {for (final n in p.nummers) n.artiest.toLowerCase()}.length;
+    final twijfel = p.nummers.where((n) => n.twijfel).length;
+    return Padding(
+      padding: const EdgeInsets.only(top: kRuimte12),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(kRuimte12, kRuimte12, kRuimte8, kRuimte8),
+        decoration: BoxDecoration(
+          color: _accent.withValues(alpha: .07),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _accent.withValues(alpha: .3)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('“${p.naam}”${bestaat ? ' · bij je verzameling' : ' · nieuw'}',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          if (p.waarom.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(p.waarom, style: TextStyle(color: _muted, fontSize: 12.5)),
+            ),
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+                '${p.nummers.length} ${p.nummers.length == 1 ? 'nummer' : 'nummers'} van $artiesten '
+                '${artiesten == 1 ? 'artiest' : 'artiesten'}${twijfel == 0 ? '' : ' · $twijfel twijfel'}',
+                style: TextStyle(color: _muted, fontSize: 12)),
+          ),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            TextButton(
+              onPressed: () => unawaited(context.read<Verzamelvoorstellen>().zet(p.id, VoorstelStand.weg)),
+              child: const Text('Niet doen'),
+            ),
+            const SizedBox(width: 4),
+            FilledButton(
+              key: ValueKey('ai-voorstel-bekijk-${p.id}'),
+              onPressed: () => toonAiVoorstel(context, p),
+              child: const Text('Bekijken'),
+            ),
+          ]),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Een voorstel nakijken: de naam aanpassen ("AI stelt voor, ik pas aan"), per nummer aan of uit (twijfel staat uit),
+/// en verhuizen.
+Future<void> toonAiVoorstel(BuildContext context, VerzamelAiVoorstel p) async {
+  final keuze = await showModalBottomSheet<({String naam, Set<String> ids})>(
+    context: context,
+    backgroundColor: _panel,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(kHoek18))),
+    builder: (blad) => _AiVoorstelBlad(voorstel: p),
+  );
+  if (keuze == null || !context.mounted) return;
+  final lib = context.read<LibraryStore>();
+  final v = context.read<Verzamelvoorstellen>();
+  final nummers = [
+    for (final t in lib.tracks)
+      if (keuze.ids.contains(lib.gedeeldId(t.path) ?? '')) t
+  ];
+  await naarVerzamelingMet(context, nummers, verzamelMapnaam(keuze.naam));
+  await v.zet(p.id, VoorstelStand.gedaan);
+}
+
+/// Het blad van [toonAiVoorstel]. Een eigen widget, zodat het naamveld zijn controller pas opruimt als het blad echt weg
+/// is — en niet al terwijl het nog dichtschuift.
+class _AiVoorstelBlad extends StatefulWidget {
+  const _AiVoorstelBlad({required this.voorstel});
+
+  final VerzamelAiVoorstel voorstel;
+
+  @override
+  State<_AiVoorstelBlad> createState() => _AiVoorstelBladState();
+}
+
+class _AiVoorstelBladState extends State<_AiVoorstelBlad> {
+  late final TextEditingController _naam = TextEditingController(text: widget.voorstel.naam);
+  late final Set<String> _aan = {
+    for (final n in widget.voorstel.nummers)
+      if (!n.twijfel) n.id
+  };
+  late final Map<String, List<VoorgesteldNummer>> _perArtiest = () {
+    final per = <String, List<VoorgesteldNummer>>{};
+    for (final n in widget.voorstel.nummers) {
+      (per[n.artiest] ??= []).add(n);
+    }
+    return per;
+  }();
+
+  @override
+  void dispose() {
+    _naam.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.voorstel;
+    final naam = _naam.text.trim();
+    return SafeArea(
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .88),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(kRuimte24, kRuimte24, kRuimte24, kRuimte8),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Voorstel van Claude'.toUpperCase(),
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .6, color: _accent)),
+                const SizedBox(height: kRuimte8),
+                TextField(
+                  key: const ValueKey('ai-voorstel-naam'),
+                  controller: _naam,
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+                  decoration: const InputDecoration(labelText: 'Naam van de verzameling'),
+                  onChanged: (_) => setState(() {}),
+                ),
+                if (p.waarom.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: kRuimte8),
+                    child: Text(p.waarom, style: TextStyle(color: _muted, fontSize: 13)),
+                  ),
+              ]),
+            ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(horizontal: kRuimte16),
+                children: [
+                  for (final e in _perArtiest.entries) ...[
+                    CheckboxListTile(
+                      dense: true,
+                      tristate: true,
+                      value: e.value.every((n) => _aan.contains(n.id))
+                          ? true
+                          : e.value.any((n) => _aan.contains(n.id))
+                              ? null
+                              : false,
+                      onChanged: (_) => setState(() {
+                        final alles = e.value.every((n) => _aan.contains(n.id));
+                        for (final n in e.value) {
+                          alles ? _aan.remove(n.id) : _aan.add(n.id);
+                        }
+                      }),
+                      title: Text('${e.key} (${e.value.length})', style: const TextStyle(fontWeight: FontWeight.w700)),
+                      subtitle: e.value.first.twijfel
+                          ? Text('Twijfel${e.value.first.opmerking.isEmpty ? '' : ': ${e.value.first.opmerking}'}',
+                              style: TextStyle(color: _accent2, fontSize: 12))
+                          : null,
+                      controlAffinity: ListTileControlAffinity.leading,
+                    ),
+                    for (final n in e.value)
+                      CheckboxListTile(
+                        key: ValueKey('ai-nummer-${n.id}'),
+                        dense: true,
+                        visualDensity: VisualDensity.compact,
+                        contentPadding: const EdgeInsets.only(left: 40),
+                        value: _aan.contains(n.id),
+                        onChanged: (j) => setState(() => j == true ? _aan.add(n.id) : _aan.remove(n.id)),
+                        title: Text(n.titel, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        controlAffinity: ListTileControlAffinity.leading,
+                      ),
+                  ],
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(kRuimte24, kRuimte12, kRuimte24, kRuimte16),
+              child: Row(children: [
+                Expanded(
+                  child: OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Later')),
+                ),
+                const SizedBox(width: kRuimte16),
+                Expanded(
+                  child: FilledButton(
+                    key: const ValueKey('ai-voorstel-doen'),
+                    onPressed: _aan.isEmpty || naam.isEmpty
+                        ? null
+                        : () => Navigator.pop(context, (naam: naam, ids: {..._aan})),
+                    child: Text('${_aan.length} naar “$naam”',
+                        maxLines: 2, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis),
+                  ),
+                ),
+              ]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// De correcties nakijken: per regel Toepassen of Nee, of alles in één keer.
+Future<void> toonAiCorrecties(BuildContext context) async {
+  final v = context.read<Verzamelvoorstellen>();
+  final lib = context.read<LibraryStore>();
+  final melding = ScaffoldMessenger.of(context);
+  var geschreven = 0, mislukt = 0;
+  Future<void> pasToe(AiCorrectieVoorstel c) async {
+    final ids = c.ids.toSet();
+    final paden = [
+      for (final t in lib.tracks)
+        if (ids.contains(lib.gedeeldId(t.path) ?? '')) t.path
+    ];
+    final r = await lib.zetGegevens(paden, c.veld, c.naar);
+    geschreven += r.geschreven;
+    mislukt += r.mislukt + (ids.length - paden.length);
+    await v.zet(c.id, VoorstelStand.gedaan);
+  }
+
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: _panel,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(kHoek18))),
+    builder: (blad) => ListenableBuilder(
+      listenable: v,
+      builder: (blad, _) {
+        final open = v.openCorrecties;
+        return SafeArea(
+          top: false,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(blad).height * .85),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(kRuimte24, kRuimte24, kRuimte24, kRuimte8),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Gegevens rechtzetten'.toUpperCase(),
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .6, color: _accent)),
+                    const SizedBox(height: kRuimte6),
+                    Text(
+                        'Wat Claude zag dat niet klopt. Toepassen zet het in de bestanden; "Tags terugzetten" draait het '
+                        'terug.',
+                        style: TextStyle(color: _muted, fontSize: 12.5)),
+                  ]),
+                ),
+                Flexible(
+                  child: open.isEmpty
+                      ? Padding(
+                          padding: const EdgeInsets.all(kRuimte24),
+                          child: Text('Alles is nagekeken.', style: TextStyle(color: _muted)),
+                        )
+                      : ListView(
+                          shrinkWrap: true,
+                          padding: const EdgeInsets.symmetric(horizontal: kRuimte24),
+                          children: [
+                            for (final c in open)
+                              Padding(
+                                key: ValueKey('ai-correctie-${c.id}'),
+                                padding: const EdgeInsets.only(bottom: kRuimte12),
+                                child: Row(children: [
+                                  Expanded(
+                                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                      Text(
+                                          '${c.artiest}${c.titel.isEmpty ? ' · ${c.ids.length} ${c.ids.length == 1 ? 'nummer' : 'nummers'}' : ' — ${c.titel}'}',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                                      Text(c.regel, style: TextStyle(fontSize: 12.5, color: _accent2)),
+                                      if (c.waarom.isNotEmpty)
+                                        Text(c.waarom, style: TextStyle(fontSize: 11.5, color: _muted)),
+                                    ]),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => unawaited(v.zet(c.id, VoorstelStand.weg)),
+                                    child: const Text('Nee'),
+                                  ),
+                                  FilledButton.tonal(
+                                    onPressed: () => unawaited(pasToe(c)),
+                                    child: const Text('Toepassen'),
+                                  ),
+                                ]),
+                              ),
+                          ],
+                        ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(kRuimte24, kRuimte8, kRuimte24, kRuimte16),
+                  child: Row(children: [
+                    Expanded(
+                      child: OutlinedButton(onPressed: () => Navigator.pop(blad), child: const Text('Sluiten')),
+                    ),
+                    const SizedBox(width: kRuimte16),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: open.isEmpty
+                            ? null
+                            : () async {
+                                for (final c in [...open]) {
+                                  await pasToe(c);
+                                }
+                              },
+                        child: Text('Alle ${open.length} toepassen', textAlign: TextAlign.center),
+                      ),
+                    ),
+                  ]),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
+  if (geschreven + mislukt == 0) return;
+  melding.showSnackBar(SnackBar(
+      content: Text('$geschreven ${geschreven == 1 ? 'nummer' : 'nummers'} rechtgezet'
+          '${mislukt == 0 ? '.' : ', $mislukt niet (op slot, of geen FLAC of MP3).'}')));
 }
 
 enum _VerzamelingTab { albums, nummers, artiesten }
