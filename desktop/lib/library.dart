@@ -1907,6 +1907,17 @@ class LibraryStore extends ChangeNotifier {
   /// [writeTagFields] en mét [_tagUndo] — de oudere regel wint, net als in [_schrijfBewerking], zodat "Tags terugzetten"
   /// naar de oorspronkelijke waarde gaat. Nummers zonder pin blijven staan: van die is de plaat een gok.
   Future<void> _zetPlaatJarenRecht() async {
+    // Eerst de hoezen van de tegels die net gescheiden zijn ([_hoezenNaPlaatwissel]). Die leest het eerste nummer van
+    // elke nieuwe tegel op een andere isolate: precies de bestanden die hieronder vervangen worden. Zolang een bestand
+    // ergens openstaat, lukt vervangen op Windows niet ("kon het bestand niet vervangen"). En wat hier mislukt, komt pas
+    // de volgende sessie terug ([_jaarGeprobeerd]). Gemeten 21-11-2026 in de Lavoine-toets: zonder dit wachten bleef
+    // "Elle a les yeux revolver" in 6 van de 14 losse runs op 1994 staan. "J'ai tout oublié" is als tweede aan de
+    // beurt en lukte altijd. Er wordt gewacht tot het niet meer verandert, want een herbouw tijdens het wachten kan er
+    // nog een ronde achter zetten.
+    for (var hoezen = hoezenNaPlaatwissel;; hoezen = hoezenNaPlaatwissel) {
+      await hoezen;
+      if (identical(hoezen, hoezenNaPlaatwissel)) break;
+    }
     if (plaatOpzoeker == null || isRemote || scanning) return;
     final stappen = [
       for (final indeling in _plaatIndeling.values)
