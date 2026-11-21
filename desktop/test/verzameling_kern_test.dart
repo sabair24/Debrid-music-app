@@ -175,8 +175,8 @@ void main() {
       expect(m, contains('    List<OntdekEigen> ontdekEigen() => [\n          for (final t in library.mixTracks)'));
       expect(m, contains('              bibliotheek: library.mixTracks,'));
       expect(m, contains('      alleNummers: () => library.mixTracks,'));
-      expect(m, contains('List<Track> _reserveUit(LibraryStore lib, Set<String> artiesten, {String? verzameling}) => [\n'
-          '      for (final t in radioEigen(lib, verzameling))'));
+      expect(m, contains('List<Track> _reserveUit(LibraryStore lib, Set<String> artiesten, {String? verzameling, Verzamelingen? koppel}) => [\n'
+          '      for (final t in radioEigen(lib, verzameling, koppel))'));
     });
 
     test('wat je al hebt, kijkt over alles: de radio-index en het bezit van Aanbevolen', () {

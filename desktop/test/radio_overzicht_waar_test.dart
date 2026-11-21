@@ -443,7 +443,7 @@ void main() {
     expect(m, contains("door: '\${op['door'] ?? ''}'.isEmpty ? null : '\${op['door']}');"), reason: 'een speakerradio');
     expect(m, contains('return soort == ZoneSoort.tv ? \'gsm\' : doel;'));
     expect(m, contains("toonUitBrievenbus((s['radioOverzichten'] as Map?)?.cast<String, dynamic>());"));
-    expect(m, contains('if (vooraf.weg.isEmpty) {\n    kortGemeld(vooraf.blijft.length);'));
+    expect(m, contains('if (vooraf.weg.isEmpty) {\n    kortGemeld(vooraf.blijft.length, await verhuisGehouden(vooraf.blijft));'));
     final z = File('lib/zone_speler.dart').readAsStringSync();
     expect(z, contains("Future<void> radioStop() => _stuur('radioStop', {'door': lijst.hier});"));
     expect(z, contains("        'door': lijst.hier,"));
