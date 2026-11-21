@@ -18,7 +18,11 @@ library;
 /// de server stuurt (die noemde om 17:40 zes zinnen: bryan adams, from zero, housezzz, look outside your window, paper
 /// kingdom, village people) — het netwerk weert ze op een andere manier. "The Police Roxanne" werkte wel. Wat hier niet
 /// staat, vangt `SoulseekService.search` op met een tweede vraag zonder "The".
-const Set<String> kBekendeGeweerdeZinnen = {'the weeknd', 'the beatles'};
+///
+/// **"madeleine peyroux" (21-11-2026).** Een radio vanaf Nancy Wilson: alle vijf de vragen met haar naam bleven stil
+/// ("Madeleine Peyroux Smile", kaal "Madeleine Peyroux", ook de jokervorm "*adeleine Peyroux …"), terwijl de vragen
+/// ervoor en erna antwoord kregen. Niet op lijst 160. Eén proefvraag "Peyroux Smile": 477 bestanden in 5,7 s.
+const Set<String> kBekendeGeweerdeZinnen = {'the weeknd', 'the beatles', 'madeleine peyroux'};
 
 String _plat(String s) => s.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
 
@@ -35,8 +39,17 @@ String zonderGeweerdeZinnen(String vraag, Iterable<String> geweerd) {
   var uit = vraag;
   for (final z in zinnen) {
     final woorden = z.split(' ');
-    final patroon = RegExp(r'(?<![\p{L}\p{N}])' + woorden.map(RegExp.escape).join(r'\s+') + r'(?![\p{L}\p{N}])',
-        caseSensitive: false, unicode: true);
+    // Ook in de jokervorm: "*adeleine Peyroux" bleef net zo stil als "Madeleine Peyroux" (21-11-2026). De joker staat
+    // alleen op het eerste woord ([jokerHelpt] in zoekladder.dart: het eerste teken van de vraag wordt "*").
+    String woord(int i) {
+      final w = RegExp.escape(woorden[i]);
+      return i == 0 && woorden[i].length > 1 ? '(?:$w|\\*${RegExp.escape(woorden[i].substring(1))})' : w;
+    }
+
+    final patroon = RegExp(
+        r'(?<![\p{L}\p{N}*])' + [for (var i = 0; i < woorden.length; i++) woord(i)].join(r'\s+') + r'(?![\p{L}\p{N}])',
+        caseSensitive: false,
+        unicode: true);
     uit = uit.replaceAllMapped(patroon, (m) {
       final echt = m.group(0)!.split(RegExp(r'\s+'));
       for (var k = 1; k < echt.length; k++) {

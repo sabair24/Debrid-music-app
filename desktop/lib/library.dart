@@ -2568,6 +2568,10 @@ class LibraryStore extends ChangeNotifier {
   /// Waar [removeTracks] met `naarPrullenbak` heen gaat, en of dat hier kan. Haken, zodat een toets
   /// niets in een echte prullenbak gooit — en op de Linux-bouwstraat hetzelfde toetst als op Windows.
   Future<Set<String>> Function(List<String> paden) prullenbak = pb.naarPrullenbak;
+
+  /// Staat dit bestand nog als spelend of komend nummer in een rij? Ingehangen vanuit main.dart: de eigen speler, en op de
+  /// pc ook de rij die elk toestel meldt. Zie [removeTracks] (`behoudInEenRij`) en [staatNogInEenRij].
+  bool Function(String pad)? inEenRij;
   bool heeftPrullenbak = pb.heeftPrullenbak;
 
   /// Remove tracks from the library. With [fromDisk] the files are DELETED permanently;
@@ -2579,10 +2583,16 @@ class LibraryStore extends ChangeNotifier {
   /// daar niet heen kon blijft dan staan, in de bibliotheek én op de schijf: wie om een weg terug
   /// vraagt, krijgt nooit alsnog een definitieve. Alleen op een systeem zonder prullenbak wordt het
   /// gewoon gewist, want anders kan er daar nooit meer iets opgeruimd worden.
+  ///
+  /// [behoudInEenRij] (het opruimen na een radio, 21-11-2026): wat nog als spelend of komend nummer in een rij staat
+  /// ([inEenRij]: hier, en op de pc ook bij elk toestel), blijft staan. Op een toestel gaat de vraag mee naar de pc, die
+  /// de rijen van alle toestellen kent. Wat bleef, komt de volgende keer terug in het overzicht.
   Future<int> removeTracks(Iterable<String> paths,
-      {required bool fromDisk, bool naarPrullenbak = false}) async {
+      {required bool fromDisk, bool naarPrullenbak = false, bool behoudInEenRij = false}) async {
+    if (behoudInEenRij) paths = [for (final p in paths) if (!(inEenRij?.call(p) ?? false)) p];
     if (isRemote) {
       final lijst = paths.toList();
+      if (lijst.isEmpty) return 0;
       // **Ook hier eerst de speler.** Saber op 11-10-2026: *"als ik een nummer verwijder op ipad, mac,
       // en gsm, blijft nummer spelen, dit klopt toch niet ?"* Klopte niet: deze tak stuurde de opdracht
       // naar de pc en hield op, en [speelNietMeer] — die het nummer uit de rij haalt en doorgaat naar
@@ -2600,6 +2610,7 @@ class LibraryStore extends ChangeNotifier {
         'trackIds': ids,
         'fromDisk': fromDisk,
         if (naarPrullenbak) 'naarPrullenbak': true,
+        if (behoudInEenRij) 'behoudInEenRij': true,
       });
       // What the PC deleted from disk is its count to give; the caller only shows it.
       return fromDisk ? ids.length : 0;
