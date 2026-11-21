@@ -54,7 +54,8 @@ Future<({int status, String lijf, String? etag})> _vraag(int poort, String pad,
 class _Vanger extends LibraryStore {
   final weg = <({bool fromDisk, bool naarPrullenbak})>[];
   @override
-  Future<int> removeTracks(Iterable<String> paths, {required bool fromDisk, bool naarPrullenbak = false}) async {
+  Future<int> removeTracks(Iterable<String> paths,
+      {required bool fromDisk, bool naarPrullenbak = false, bool behoudInEenRij = false}) async {
     weg.add((fromDisk: fromDisk, naarPrullenbak: naarPrullenbak));
     return paths.length;
   }

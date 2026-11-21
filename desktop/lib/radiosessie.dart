@@ -143,6 +143,22 @@ Opruimplan opruimplan({
   return (blijft: blijft, weg: weg);
 }
 
+/// Staat [sleutel] nog als spelend of komend nummer in een van [rijen] (elk een rij en de plek van wat speelt)?
+///
+/// **Waarom (21-11-2026).** Een radio op de Mac, naar de tv verplaatst met zijn rij; daarna vanaf de Mac een nieuwe radio
+/// op de tv. Op de Mac sloot de eerste radio af, het overzicht gooide zijn proefnummers weg — en Louis Armstrong, "Can
+/// Anyone Explain?", stond nog in de rij van de tv: 404, overgeslagen, en twee minuten later nog eens. Wat er al
+/// gespeeld is (vóór [index]) mag weg; wat nog komt niet.
+bool staatNogInEenRij(String sleutel, Iterable<({List<String> rij, int index})> rijen) {
+  if (sleutel.isEmpty) return false;
+  for (final r in rijen) {
+    for (var i = r.index < 0 ? 0 : r.index; i < r.rij.length; i++) {
+      if (r.rij[i] == sleutel) return true;
+    }
+  }
+  return false;
+}
+
 /// Welk bestand hoort bij [g] — of null als het er niet meer is.
 ///
 /// [eigenPad] en [eigenId] zijn van het nummer dat de bibliotheek op artiest + titel vindt. Dat telt

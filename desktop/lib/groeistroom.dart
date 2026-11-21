@@ -565,12 +565,16 @@ class Groei implements Groeiend {
   }
 
   /// Geen enkele peer leverde: wie wacht, krijgt een nee.
-  void opgegeven() {
+  ///
+  /// [waarom] staat erbij in het logboek. Op 21-11-2026 las "opgegeven" als "deze radio liet een geleverd nummer
+  /// vallen", terwijl het een tweede vraag was naar een nummer dat al binnen was ([Radiohaler]): niets gezocht, niets
+  /// verloren — alleen deze stroom was overbodig.
+  void opgegeven({String? waarom}) {
     if (_geland != null) return;
     _opgegeven = true;
     afgebroken();
     _laatNiemandWachten();
-    _log('opgegeven');
+    _log(waarom == null ? 'opgegeven' : 'opgegeven ($waarom)');
   }
 
   /// Weg: geheugen vrij, het adres bestaat niet meer.

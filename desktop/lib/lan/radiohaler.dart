@@ -201,9 +201,12 @@ class Radiohaler {
       } catch (_) {
         pad = null;
       } finally {
-        // Niets geland: wie (een toestel) op een volgende uploader wacht, hoort dat er geen komt.
+        // Niets geland: wie (een toestel) op een volgende uploader wacht, hoort dat er geen komt. Was het er al (een tweede
+        // vraag naar wat al binnen is, of iets van jou), dan zegt het logboek dat ook.
         final g = haal.groei;
-        if (g != null && g.geborgen == null) g.opgegeven();
+        if (g != null && g.geborgen == null) {
+          g.opgegeven(waarom: pad == null ? null : (haal.eigen ? 'niet nodig: al van jou' : 'niet nodig: al binnen'));
+        }
       }
       // Meteen de bibliotheek in, en niet wachten op een volledige scan: dat is wat de catalogus
       // die de telefoon ophaalt actueel maakt. Zie [LibraryStore.voegBestandToe].

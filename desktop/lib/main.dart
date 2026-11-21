@@ -1417,6 +1417,21 @@ Future<void> main() async {
     uidVanSleutel: mode.owner ? (t) => cloud.uidVanSleutel(t) : null,
     firebaseProject: mode.owner ? () => cloud.config.projectId : null,
   );
+  // Wat nog in een rij staat, gooit het opruimen na een radio niet weg (radiosessie.dart, [staatNogInEenRij]): de rij van
+  // de eigen speler, en op de pc ook wat elk toestel het afgelopen uur als zijn rij meldde.
+  library.inEenRij = (pad) {
+    String sleutel(String p) => library.gedeeldId(p) ?? p;
+    final eigen = player.radioMode
+        ? radioMelding(player.radioQueue, player.radioIndex)
+        : (rij: player.queueTracks, index: player.currentIndex);
+    final nu = DateTime.now().millisecondsSinceEpoch;
+    return staatNogInEenRij(sleutel(pad), [
+      (rij: [for (final t in eigen.rij) sleutel(t.path)], index: eigen.index),
+      if (mode.owner)
+        for (final s in sharing.state.perToestel.values)
+          if (nu - s.updatedAt < const Duration(hours: 1).inMilliseconds) (rij: s.queue, index: s.index),
+    ]);
+  };
   // Favorieten. Op de pc rechtstreeks in de gedeelde staat; op een Mac of iPad gaat dezelfde op over
   // de lijn (zie waar `duwOps` gezet wordt). Eén weg, dus geen tweede waarheid die kan afwijken.
   final favorieten = Favorieten()..idVanPad = library.gedeeldId;
@@ -19652,7 +19667,7 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
     await radio.vergeetOpenstaand();
     return;
   }
-  final weg = await lib.removeTracks(paden, fromDisk: true, naarPrullenbak: true);
+  final weg = await lib.removeTracks(paden, fromDisk: true, naarPrullenbak: true, behoudInEenRij: true);
   // Alleen vergeten wat beslist IS: wat blijft, en wat werkelijk van zijn plek is. Wat niet naar de
   // prullenbak kon — een schijf zonder prullenbak, een bestand dat openstond — staat er nog, en komt
   // de volgende keer terug in dit overzicht in plaats van voorgoed uit beeld te raken.
@@ -19678,7 +19693,7 @@ Future<void> toonRadioOverzicht(BuildContext context, RadioSessie sessie) async 
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
     content: Text(bleef == 0
         ? gedaan
-        : '$gedaan $bleef ${bleef == 1 ? "kon" : "konden"} niet — een schijf zonder prullenbak of '
+        : '$gedaan $bleef ${bleef == 1 ? "kon" : "konden"} niet — nog in een rij, een schijf zonder prullenbak of '
             'een bestand dat openstond. Ze staan er nog, en komen de volgende keer terug in dit '
             'overzicht.'),
     duration: Duration(seconds: bleef == 0 ? 4 : 10),

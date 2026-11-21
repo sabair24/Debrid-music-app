@@ -334,6 +334,23 @@ void main() {
       expect(await niets.speelbaar, isFalse);
     });
 
+    test('opgegeven met een reden: een tweede vraag naar wat al binnen was, leest niet als verlies (21-11-2026)', () async {
+      // Een radio op de Shield: tien keer "opgegeven" in een minuut las als "de radio liet geleverde nummers vallen".
+      // Het waren tweede vragen naar nummers die al binnen waren — niets gezocht, niets verloren.
+      final regels = <String>[];
+      final oud = server.spoor;
+      server.spoor = regels.add;
+      addTearDown(() => server.spoor = oud);
+      final g = await server.nieuw('Frank Sinatra — All Of Me');
+      g.opgegeven(waarom: 'niet nodig: al binnen');
+      expect(regels.last, 'groeistroom "Frank Sinatra — All Of Me": opgegeven (niet nodig: al binnen)');
+      final h = await server.nieuw('niets');
+      h.opgegeven();
+      expect(regels.last, 'groeistroom "niets": opgegeven', reason: 'zonder reden: echt niemand leverde');
+      final haler = File('lib/lan/radiohaler.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(haler, contains("g.opgegeven(waarom: pad == null ? null : (haal.eigen ? 'niet nodig: al van jou' : 'niet nodig: al binnen'));"));
+    });
+
     test('een afgekeurde kop klinkt nooit: niet goedgekeurd = geen bytes', () async {
       final f = File(pad('in.flac'))..writeAsBytesSync(_bytes(50 * 1024));
       final g = await server.nieuw('afgekeurd');

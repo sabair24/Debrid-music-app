@@ -1874,6 +1874,9 @@ const kZwijgZin = 'Soulseek geeft nu geen antwoord op zoekopdrachten';
 /// vraag van de ronde, [opRij] hoeveel zoekopdrachten na elkaar zo eindigden, [zoekMinuut]/[zoekVijf] hoeveel vragen we
 /// zelf in de laatste minuut en vijf minuten stuurden. Eén lege vraag zegt niets (een zeldzaam nummer); een reeks van
 /// lege vragen bij gewone namen is de server die zwijgt, en dan staat erbij bij welk tempo.
+///
+/// [duur] loopt vanaf het VERSTUREN, en [gewacht] is wat de vraag daarvoor in de zoekrem stond (21-11-2026: "geen enkel
+/// antwoord in 1260.3 s" was 1251 s in de rij en 9 s bij de server — dat las als een server die twintig minuten zweeg).
 String zoekZonderAntwoordRegel({
   required String vraag,
   required Duration duur,
@@ -1881,9 +1884,12 @@ String zoekZonderAntwoordRegel({
   required int zoekMinuut,
   required int zoekVijf,
   bool achtergrond = false,
+  Duration gewacht = Duration.zero,
 }) =>
     'zoekopdracht "$vraag"${achtergrond ? ' (achtergrond)' : ''}: geen enkel antwoord in '
-    '${(duur.inMilliseconds / 1000).toStringAsFixed(1)} s${opRij > 1 ? ' ($opRij op rij)' : ''} — '
+    '${(duur.inMilliseconds / 1000).toStringAsFixed(1)} s'
+    '${gewacht >= const Duration(seconds: 1) ? ' (na ${gewacht.inSeconds} s in de zoekrem)' : ''}'
+    '${opRij > 1 ? ' ($opRij op rij)' : ''} — '
     'zoekopdrachten: $zoekMinuut in de laatste minuut, $zoekVijf in 5 min';
 
 /// Zo lang mag een rechtstreekse verbinding met een uploader duren, voordat de server gevraagd wordt hem
@@ -2024,10 +2030,22 @@ class SlskSession {
     final run = _SearchRun(client, onPartial);
     _searches.add(run);
     final begon = DateTime.now();
+    // Wanneer de laatste vraag echt de deur uitging, en hoe lang de vragen samen in de zoekrem stonden. "Meteen leeg" en
+    // "geen antwoord in … s" tellen vanaf het versturen: op 21-11-2026 stond een vraag tot 1773 s in de rij, en dan
+    // herkende [kZoekMeteenLeeg] een dode verbinding nooit meer (alles was "langer dan 0,8 s").
+    DateTime? verstuurd;
+    var inDeRem = Duration.zero;
     Object? fout;
     try {
       _conn!.send(_message(2, (_W()..u32(client.boundPort)).bytes())); // SetWaitPort
+      final gevraagd = <String>{};
       for (final q in queries) {
+        // Een geweerde zin krijgt geen antwoord: vervangen ([zonderGeweerdeZinnen], "the weeknd" → "weeknd").
+        final vraag = zonderGeweerdeZinnen(q, client.geweerdeZinnen);
+        // Wat na het vervangen gelijk is aan een vraag van deze ronde, gaat niet nog eens de deur uit: "Madeleine Peyroux
+        // Smile" en zijn jokervorm "*adeleine Peyroux Smile" worden allebei "Peyroux Smile" (21-11-2026). Vóór de
+        // zoekrem, want een tweede keer hetzelfde kost een plek van de dertig per vijf minuten en levert niets op.
+        if (!gevraagd.add(vraag.toLowerCase())) continue;
         if (eigenRem != null && await eigenRem.neem(nogNodig: nogNodig) == null) {
           client.logboek('zoekopdracht "$q" niet meer nodig — niet verstuurd');
           break;
@@ -2037,6 +2055,7 @@ class SlskSession {
           client.logboek('zoekopdracht "$q" niet meer nodig — niet verstuurd');
           break;
         }
+        inDeRem += gewacht;
         if (gewacht >= const Duration(seconds: 1)) {
           client.logboek('zoekrem: "$q" wachtte ${gewacht.inSeconds} s'
               '${telling ? ' (telling)' : achtergrond ? ' (achtergrond)' : ''} — hoogstens $kZoekPerMinuut zoekopdrachten per minuut en '
@@ -2047,11 +2066,9 @@ class SlskSession {
         final t = client._nextTicket();
         run.tickets.add(t);
         client._searchSinks[t] = run.add;
-        // Een geweerde zin krijgt geen antwoord: vervangen ([zonderGeweerdeZinnen], "the weeknd" → "weeknd").
-        final vraag = zonderGeweerdeZinnen(q, client.geweerdeZinnen);
         if (vraag != q) client.logboek('zoekopdracht "$q" bevat een geweerde zin — gezocht op "$vraag"');
         _conn!.send(_message(26, (_W()..u32(t)..str(vraag)).bytes())); // FileSearch
-        final nu = DateTime.now();
+        final nu = verstuurd = DateTime.now();
         _zoektijden
           ..add(nu)
           ..removeWhere((z) => nu.difference(z) > const Duration(minutes: 5));
@@ -2070,8 +2087,9 @@ class SlskSession {
     // **Meteen leeg is een dode verbinding, geen "niets gevonden".** Gezien op de pc (25-10-2026, 17:44): elke
     // zoekopdracht gaf in 0,0 s nul bestanden, ook "Daft Punk Digital Love", en in het logboek stond niets — de sessie
     // gold als ingelogd, dus logde hij nooit opnieuw in. Echt zoeken duurt seconden (het venster wacht op antwoorden).
-    if (uit.isEmpty && _alive && (fout != null || DateTime.now().difference(begon) < kZoekMeteenLeeg)) {
-      client.logboek('zoeken gaf meteen niets (${fout ?? 'binnen ${DateTime.now().difference(begon).inMilliseconds} ms'}) — '
+    final sinds = verstuurd ?? begon;
+    if (uit.isEmpty && _alive && (fout != null || DateTime.now().difference(sinds) < kZoekMeteenLeeg)) {
+      client.logboek('zoeken gaf meteen niets (${fout ?? 'binnen ${DateTime.now().difference(sinds).inMilliseconds} ms'}) — '
           'de verbinding geldt als dood; de volgende zoekopdracht logt opnieuw in');
       _drop();
     } else if (run.merged.isEmpty && fout == null) {
@@ -2082,7 +2100,8 @@ class SlskSession {
       final nu = DateTime.now();
       client.logboek(zoekZonderAntwoordRegel(
         vraag: queries.isEmpty ? '' : queries.last,
-        duur: nu.difference(begon),
+        duur: nu.difference(sinds),
+        gewacht: inDeRem,
         opRij: client.zonderAntwoordOpRij,
         zoekMinuut: _zoektijden.where((z) => nu.difference(z) <= const Duration(minutes: 1)).length,
         zoekVijf: _zoektijden.where((z) => nu.difference(z) <= const Duration(minutes: 5)).length,

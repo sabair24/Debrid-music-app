@@ -37,12 +37,41 @@ void main() {
         reason: '"The Police" werkte gewoon');
   });
 
+  test('DE KERN: "Madeleine Peyroux" wordt "Peyroux", ook in de jokervorm (21-11-2026)', () {
+    // Alle vijf de vragen met haar naam bleven stil, ook "*adeleine Peyroux …"; "Peyroux Smile" gaf 477 bestanden.
+    expect(zonderGeweerdeZinnen('Madeleine Peyroux Smile', kBekendeGeweerdeZinnen), 'Peyroux Smile');
+    expect(zonderGeweerdeZinnen('*adeleine Peyroux Smile', kBekendeGeweerdeZinnen), 'Peyroux Smile');
+    expect(zonderGeweerdeZinnen('Madeleine Peyroux', kBekendeGeweerdeZinnen), 'Peyroux');
+    expect(zonderGeweerdeZinnen('*he Weeknd Alone Again', kBekendeGeweerdeZinnen), 'Weeknd Alone Again',
+        reason: 'de jokervorm van "The Weeknd" bleef net zo stil');
+  });
+
+  test('DE GRENS: de joker alleen vooraan, en wat er niet bij hoort blijft staan', () {
+    expect(zonderGeweerdeZinnen('Madeleine Smile', kBekendeGeweerdeZinnen), 'Madeleine Smile');
+    expect(zonderGeweerdeZinnen('Peyroux Smile', kBekendeGeweerdeZinnen), 'Peyroux Smile');
+    expect(zonderGeweerdeZinnen('Madeleine *eyroux Smile', kBekendeGeweerdeZinnen), 'Madeleine *eyroux Smile',
+        reason: 'de joker staat alleen op het eerste woord van de vraag');
+    expect(zonderGeweerdeZinnen('*ladeleine Peyroux', kBekendeGeweerdeZinnen), '*ladeleine Peyroux');
+  });
+
+  test('aangesloten: twee vragen die na het vervangen gelijk zijn, gaan één keer — en vóór de zoekrem', () {
+    final s = _bron('lib/soulseek.dart');
+    expect(s, contains('        final vraag = zonderGeweerdeZinnen(q, client.geweerdeZinnen);\n'));
+    final lus = s.substring(s.indexOf('      final gevraagd = <String>{};\n      for (final q in queries) {'));
+    final dubbel = lus.indexOf('        if (!gevraagd.add(vraag.toLowerCase())) continue;\n');
+    expect(dubbel, greaterThan(0));
+    expect(dubbel, lessThan(lus.indexOf('await zoekrem.neem(')), reason: 'anders kost hij toch een plek in de zoekrem');
+  });
+
   test('aangesloten: niets gevonden met "The" vooraan — nog één keer zonder; en meteen leeg is een dode verbinding', () {
     final online = _bron('lib/online.dart');
     expect(online, contains("    final zonderThe = query.trim().replaceFirst(RegExp(r'^the\\s+', caseSensitive: false), '');"));
     expect(online, contains('    if (terugval && !telling && !stil && laatste.isEmpty && zonderThe != query.trim() && zonderThe.isNotEmpty) {'));
     final s = _bron('lib/soulseek.dart');
-    expect(s, contains('    if (uit.isEmpty && _alive && (fout != null || DateTime.now().difference(begon) < kZoekMeteenLeeg)) {'));
+    expect(s, contains('    final sinds = verstuurd ?? begon;\n'
+        '    if (uit.isEmpty && _alive && (fout != null || DateTime.now().difference(sinds) < kZoekMeteenLeeg)) {'),
+        reason: 'vanaf het versturen: na een wachttijd in de zoekrem werd een dode verbinding anders nooit herkend');
+    expect(s, contains('        final nu = verstuurd = DateTime.now();\n'));
     expect(s, contains('const kZoekMeteenLeeg = Duration(milliseconds: 800);'));
   });
 

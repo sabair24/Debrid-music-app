@@ -3976,7 +3976,8 @@ class LanServer {
           }
           await library.removeTracks(paths,
               fromDisk: vanSchijf,
-              naarPrullenbak: body['naarPrullenbak'] == true || (vanBuiten && vanSchijf));
+              naarPrullenbak: body['naarPrullenbak'] == true || (vanBuiten && vanSchijf),
+              behoudInEenRij: body['behoudInEenRij'] == true);
         default:
           return await _json(req.response, {'error': 'Onbekende bewerking: $op'},
               status: HttpStatus.badRequest);

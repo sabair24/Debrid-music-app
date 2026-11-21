@@ -74,6 +74,27 @@ void main() {
           ' — zoekopdrachten: 18 in de laatste minuut, 71 in 5 min');
     });
 
+    test('DE KERN: de tijd sinds het versturen, en het wachten in de zoekrem apart (21-11-2026)', () {
+      // "geen enkel antwoord in 1260.3 s" was 1251 s in de rij en 9 s bij de server.
+      final r = zoekZonderAntwoordRegel(
+          vraag: 'Madeleine Peyroux Fun out of Life',
+          duur: const Duration(milliseconds: 9120),
+          gewacht: const Duration(seconds: 1251),
+          opRij: 1,
+          zoekMinuut: 8,
+          zoekVijf: 22,
+          achtergrond: true);
+      expect(r, 'zoekopdracht "Madeleine Peyroux Fun out of Life" (achtergrond): geen enkel antwoord in 9.1 s'
+          ' (na 1251 s in de zoekrem) — zoekopdrachten: 8 in de laatste minuut, 22 in 5 min');
+      final kort = zoekZonderAntwoordRegel(
+          vraag: 'x', duur: const Duration(seconds: 8), gewacht: const Duration(milliseconds: 900), opRij: 2, zoekMinuut: 1, zoekVijf: 1);
+      expect(kort, 'zoekopdracht "x": geen enkel antwoord in 8.0 s (2 op rij) — zoekopdrachten: 1 in de laatste minuut, 1 in 5 min',
+          reason: 'minder dan een seconde wachten is geen wachten');
+      final s = File('lib/soulseek.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(s, contains('        duur: nu.difference(sinds),\n        gewacht: inDeRem,\n'));
+      expect(s, contains('        inDeRem += gewacht;\n'));
+    });
+
     test('één lege vraag heet niet "op rij", en achtergrondwerk staat erbij', () {
       final r = zoekZonderAntwoordRegel(
           vraag: 'x 24bit', duur: const Duration(seconds: 8), opRij: 1, zoekMinuut: 2, zoekVijf: 3, achtergrond: true);
