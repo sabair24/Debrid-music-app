@@ -2968,8 +2968,11 @@ class LanServer {
     final d = AanbevolenVoorJou.pc;
     if (d == null) return _unavailable(req, 'Deze pc rekent geen aanbevelingen uit.');
     var l = d.lijst;
-    if (l == null || req.uri.queryParameters['ververs'] == '1') {
-      l = await d.ververs().timeout(const Duration(seconds: 20), onTimeout: () => d.lijst);
+    if (req.uri.queryParameters['ververs'] == '1') {
+      // Verversen: meteen een nieuwe trekking uit de voorraad (21-11-2026, [AanbevolenVoorJou.volgende]).
+      l = await d.volgende().timeout(const Duration(seconds: 45), onTimeout: () => d.lijst);
+    } else if (l == null) {
+      l = await d.ververs().timeout(const Duration(seconds: 45), onTimeout: () => d.lijst);
     } else if (d.verouderd) {
       unawaited(d.ververs());
     }
@@ -2983,7 +2986,9 @@ class LanServer {
     if (d == null) return _unavailable(req, 'Deze pc rekent Ontdek niet uit.');
     var l = d.lijst;
     if (l == null || req.uri.queryParameters['ververs'] == '1') {
-      l = await d.ververs().timeout(const Duration(seconds: 45), onTimeout: () => d.lijst);
+      l = await d
+          .ververs(handmatig: req.uri.queryParameters['ververs'] == '1')
+          .timeout(const Duration(seconds: 45), onTimeout: () => d.lijst);
     } else if (d.verouderd) {
       unawaited(d.ververs());
     }

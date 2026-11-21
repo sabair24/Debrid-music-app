@@ -1,5 +1,5 @@
 import 'dart:math';
-import 'aanbevolen.dart' show Kandidaat, kiesNummers, rangschikKandidaten;
+import 'aanbevolen.dart' show Kandidaat, kAanbevolenVoorraad, kiesNummers, rangschikKandidaten, verdeelOverZaden;
 
 import 'deezerbaan.dart';
 import 'isrc.dart' as isrc;
@@ -690,32 +690,61 @@ class RecommendService {
 
   /// "Aanbevolen voor jou" (16-10-2026): zie `aanbevolen.dart` voor het waarom.
   ///
-  /// Alle zaden TEGELIJK (eerst stond hier elk zaad na het vorige), dan de bovenste [kandidaten]
-  /// verwante artiesten die je nog niet hebt, ook tegelijk. Zes zaden en twaalf kandidaten zijn
-  /// samen 24 vragen in twee golven, in plaats van zes keer na elkaar zes.
+  /// Alle zaden TEGELIJK, dan de verwanten. Sinds 21-11-2026 een voorraad van [max] ([kAanbevolenVoorraad]) uit
+  /// [kandidaten] artiesten, evenredig over de zaden ([verdeelOverZaden]). Een zaad waarvan je de verwanten bijna allemaal
+  /// al hebt (pop: Michael Jackson, Whitney Houston) leverde haast niets nieuws, en dan vulde één zaad met onbekende
+  /// verwanten (Khaled: raï) de hele rij. Zo'n zaad zoekt een stap verder: de verwanten van zijn eerste [verder]
+  /// verwanten, ook die je al hebt.
   Future<List<RecTrack>> ontdekVoorJou(List<({String naam, double gewicht})> zaden, Set<String> bezit,
-      {int kandidaten = 12, int max = 15}) async {
+      {int kandidaten = 150, int max = kAanbevolenVoorraad, int verder = 4}) async {
+    Future<List<({int id, String naam})>> verwantVan(int id) async {
+      final rel = ((await _get('$_base/artist/$id/related?limit=20'))?['data'] as List?) ?? const [];
+      return [
+        for (final a in rel)
+          if (a is Map && a['id'] is num) (id: (a['id'] as num).toInt(), naam: '${a['name'] ?? ''}'),
+      ];
+    }
+
     final verwant = await Future.wait([
       for (final z in zaden)
         () async {
           final id = await _artistId(z.naam);
-          if (id == null) return (z.naam, const <({int id, String naam})>[]);
-          final rel = ((await _get('$_base/artist/$id/related?limit=20'))?['data'] as List?) ?? const [];
-          return (
-            z.naam,
-            [
-              for (final a in rel)
-                if (a is Map && a['id'] is num) (id: (a['id'] as num).toInt(), naam: '${a['name'] ?? ''}'),
-            ]
-          );
+          return (z.naam, id == null ? const <({int id, String naam})>[] : await verwantVan(id));
         }(),
     ]);
-    final rang = rangschikKandidaten({for (final (zaad, lijst) in verwant) zaad: lijst},
-        gewicht: {for (final z in zaden) z.naam: z.gewicht}, bezit: bezit);
-    final top = rang.take(kandidaten).toList();
+    final eerste = {for (final (zaad, lijst) in verwant) zaad: lijst};
+    var rang = rangschikKandidaten(eerste, gewicht: {for (final z in zaden) z.naam: z.gewicht}, bezit: bezit);
+    final quotum = zaden.isEmpty ? 0 : (kandidaten / zaden.length).ceil();
+    final tekort = [for (final z in zaden) if (rang.where((k) => k.via.contains(z.naam)).length < quotum) z];
+    if (tekort.isNotEmpty) {
+      final bekend = {for (final k in rang) k.id};
+      final zaadSleutels = {for (final z in zaden) artistKey(z.naam)};
+      final tweede = await Future.wait([
+        for (final z in tekort)
+          for (final a in (eerste[z.naam] ?? const <({int id, String naam})>[]).take(verder))
+            (() async => (zaad: z, lijst: await verwantVan(a.id)))(),
+      ]);
+      final extra = <int, Kandidaat>{};
+      for (final t in tweede) {
+        for (var i = 0; i < t.lijst.length; i++) {
+          final a = t.lijst[i];
+          final k = artistKey(a.naam);
+          if (a.id <= 0 || k.isEmpty || bezit.contains(k) || zaadSleutels.contains(k) || bekend.contains(a.id)) continue;
+          final score = t.zaad.gewicht * .5 * (1 - i / 25);
+          final was = extra[a.id];
+          if (was == null || was.score < score) extra[a.id] = (id: a.id, naam: a.naam, score: score, via: [t.zaad.naam]);
+        }
+      }
+      rang = [...rang, ...extra.values]
+        ..sort((a, b) {
+          final v = b.score.compareTo(a.score);
+          return v != 0 ? v : a.naam.compareTo(b.naam);
+        });
+    }
+    final top = verdeelOverZaden(rang, zaden: [for (final z in zaden) z.naam], aantal: kandidaten);
     final toppers = await Future.wait([for (final k in top) _top(k.id, k.naam, limit: 8)]);
     return kiesNummers([for (var i = 0; i < top.length; i++) (kandidaat: top[i], toppers: _tracks(toppers[i]))],
-        max: max);
+        max: max, perArtiest: 3);
   }
 
   /// Ontdek (Saber, 04-11-2026; `ontdek.dart`): de verwanten van alle zaden samen, gerangschikt

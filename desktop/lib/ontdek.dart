@@ -389,6 +389,7 @@ OntdekProfiel ontdekProfiel(
   List<OntdekArtiest> artiesten, {
   required int nuMs,
   List<String> weggetikt = const [],
+  List<String> alGetoond = const [],
 }) {
   final zwaar = [...artiesten]..sort((a, b) => b.gewicht.compareTo(a.gewicht));
   final recent = [
@@ -425,6 +426,7 @@ OntdekProfiel ontdekProfiel(
     hoeken: procent(hoeken),
     decennia: procent(decennia),
     weggetikt: weggetikt.take(15).toList(),
+    alGetoond: alGetoond.take(60).toList(),
   );
 }
 
@@ -636,7 +638,11 @@ class OntdekVoorJou {
   final DateTime Function() klok;
   final math.Random _toeval;
 
-  static const int kClaudePerDag = 2;
+  ///
+  /// Tien (Saber, 21-11-2026: *"limiet op 10 keer per dag, want dat kost tokens zeker ?"* — over Ontdek, waar de
+  /// Anthropic-sleutel op zit). Een vraag kost zoveel als een radiolijst; elke keer dat je met de hand ververst, mag hij
+  /// opnieuw ([OntdekVoorJou.ververs] met `handmatig`). Daarboven ververst Ontdek met Deezer en Last.fm.
+  static const int kClaudePerDag = 10;
 
   /// Minder ongetoonde nummers van Claude dan dit, en een ververs mag hem (de tweede keer die dag) opnieuw vragen.
   static const int kPoolVers = 10;
@@ -657,6 +663,12 @@ class OntdekVoorJou {
         if (!weg.contains(n.sleutel) && !artiesten.contains(ontdekArtiest(n.nummer.artist))) n,
     ];
   }
+
+  /// Wat er nu in de lijst staat (artiest — titel): Claude krijgt het mee, zodat verversen iets anders oplevert
+  /// (21-11-2026).
+  List<String> alGetoond() => [
+        for (final n in _lijst?.nummers ?? const <OntdekNummer>[]) '${n.nummer.artist} — ${n.nummer.title}',
+      ];
 
   /// Wat Claude vandaag gaf, en hoe vaak hij vandaag gevraagd is.
   List<OntdekNummer> _pool = const [];
@@ -718,10 +730,13 @@ class OntdekVoorJou {
   void stop() => _klokje?.cancel();
 
   /// Rekent opnieuw; loopt er al een berekening, dan wacht deze daarop.
-  Future<OntdekLijst?> ververs() {
+  ///
+  /// [handmatig]: je drukte zelf op verversen. Dan vraagt hij Claude opnieuw om nieuwe nummers (zolang het vandaag
+  /// minder dan [kClaudePerDag] keer was), niet alleen als de pool van vandaag op is.
+  Future<OntdekLijst?> ververs({bool handmatig = false}) {
     final lopend = _bezig;
     if (lopend != null) return lopend;
-    final werk = _reken();
+    final werk = _reken(handmatig: handmatig);
     _bezig = werk;
     return werk.whenComplete(() => _bezig = null);
   }
@@ -739,7 +754,7 @@ class OntdekVoorJou {
     } catch (_) {}
   }
 
-  Future<OntdekLijst?> _reken() async {
+  Future<OntdekLijst?> _reken({bool handmatig = false}) async {
     final t0 = DateTime.now();
     final nu = klok();
     final nuMs = nu.millisecondsSinceEpoch;
@@ -766,7 +781,7 @@ class OntdekVoorJou {
               !_getoond.containsKey(n.sleutel),
         )
         .length;
-    final vraagClaude = claude != null && _claudeVandaag < kClaudePerDag && poolVers < kPoolVers;
+    final vraagClaude = claude != null && _claudeVandaag < kClaudePerDag && (handmatig || poolVers < kPoolVers);
     Future<List<OntdekNummer>> veilig(OntdekBronFn? f, String naam) async {
       if (f == null) return const [];
       try {

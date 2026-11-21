@@ -121,7 +121,7 @@ import 'fingerprint.dart';
 import 'flac_tags.dart';
 import 'groeistroom.dart';
 import 'mp3_tags.dart';
-import 'aanbevolen.dart' show AanbevolenLijst, AanbevolenVoorJou;
+import 'aanbevolen.dart' show AanbevolenLijst, AanbevolenVoorJou, kAanbevolenInRij;
 import 'ontdek.dart';
 import 'ontdek_bronnen.dart';
 import 'afspeellijsten.dart';
@@ -1798,7 +1798,7 @@ Future<void> main() async {
         final nuMs = DateTime.now().millisecondsSinceEpoch;
         return ontdekProfiel(
             eigen, ontdekArtiesten(eigen, tags: library.tagsOf, nuMs: nuMs, weg: ontdek.weg, overslaan: _genericArtist),
-            nuMs: nuMs, weggetikt: ontdek.weg.namen());
+            nuMs: nuMs, weggetikt: ontdek.weg.namen(), alGetoond: ontdek.alGetoond());
       }, rec),
       log: WarmLog('$logDir${Platform.pathSeparator}releases.log').line,
     );
@@ -18479,6 +18479,80 @@ class _WachtrijRij extends StatelessWidget {
   }
 }
 
+/// "Alles" van Aanbevolen voor jou: alle [kAanbevolenNummers] als raster (21-11-2026, Saber: "Rij 100, Alles 200").
+class _AanbevolenAllesPagina extends StatelessWidget {
+  const _AanbevolenAllesPagina({required this.nummers, required this.open, required this.menu});
+
+  final List<RecTrack> nummers;
+  final void Function(RecTrack t) open;
+  final void Function(RecTrack t) menu;
+
+  @override
+  Widget build(BuildContext context) {
+    final boven = MediaQuery.paddingOf(context).top + kToolbarHeight;
+    return Scaffold(
+      backgroundColor: _bg,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
+        leading: glasInBalk(
+            plat: isCompact(context),
+            IconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              tooltip: 'Terug',
+              onPressed: () => Navigator.of(context).pop(),
+            )),
+      ),
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(kGoot, boven + kRuimte8, kGoot, kRuimte16),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Aanbevolen voor jou',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: kTekst, height: 1.15)),
+                const SizedBox(height: kRuimte4),
+                Text('${nummers.length} nummers · artiesten die je nog niet hebt, evenredig over wat je draait',
+                    style: kTekstBij),
+              ]),
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: kGoot),
+            sliver: SliverLayoutBuilder(
+              builder: (context, c) => SliverGrid(
+                gridDelegate: tegelRaster(context, c.crossAxisExtent),
+                delegate: SliverChildBuilderDelegate(
+                  (context, i) {
+                    final t = nummers[i];
+                    return AlbumTegel(
+                      hoes: (maat) => _netCover(t.cover, size: maat),
+                      spiegel: spiegelVanUrl(t.cover),
+                      titel: t.title,
+                      ondertitel: t.artist,
+                      onTap: () => open(t),
+                      onLongPress: () => menu(t),
+                      onSecondaryTap: (_) => menu(t),
+                    );
+                  },
+                  childCount: nummers.length,
+                ),
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(child: SizedBox(height: kRuimte24 + MediaQuery.paddingOf(context).bottom)),
+        ],
+      ),
+    );
+  }
+}
+
 // ── Now playing (full screen, enlargeable art) ───────────────────────────────
 /// Where the music comes out — and, while it is somewhere else, a way back.
 ///
@@ -24363,7 +24437,12 @@ class _HomeStartViewState extends State<HomeStartView> {
     _StartCache.aanbevolenDwingen = false;
     final pc = AanbevolenVoorJou.pc;
     if (pc != null) {
-      if (dwing || pc.verouderd) await pc.ververs();
+      // Verversen: meteen een nieuwe trekking uit de voorraad (21-11-2026, zie [AanbevolenVoorJou.volgende]).
+      if (dwing) {
+        await pc.volgende();
+      } else if (pc.verouderd) {
+        await pc.ververs();
+      }
       return pc.lijst?.nummers ?? const [];
     }
     final client = context.read<LibraryStore>().remote;
@@ -24776,7 +24855,19 @@ class _HomeStartViewState extends State<HomeStartView> {
         // Nu staat het skelet er meteen, en het vult zich in plaats van in te schuiven.
         if (_forYou.isNotEmpty || _komtNog)
           _section('Aanbevolen voor jou',
-              _forYou.isEmpty ? _loadingRow() : _recRow(_forYou.take(15).toList(), rij: 'voorjou')),
+              _forYou.isEmpty ? _loadingRow() : _recRow(_forYou.take(kAanbevolenInRij).toList(), rij: 'voorjou'),
+              // 100 in de rij, alle 200 via "Alles" (Saber, 21-11-2026).
+              rechts: _forYou.isEmpty
+                  ? null
+                  : _AllesKnop(
+                      key: const ValueKey('voorjou-alles'),
+                      aantal: _forYou.length,
+                      onPressed: () => openPagina(
+                          context,
+                          (_) => _AanbevolenAllesPagina(
+                              nummers: _forYou,
+                              open: (t) => _openRec(t),
+                              menu: (t) => _toonItemMenu(context, _recItemMenu(t)))))),
         if (_charts.isNotEmpty || _chartsLoading)
           _section('Top van dit moment',
               _charts.isEmpty ? _loadingRow() : _catalogRow(_charts.take(20).toList(), rij: 'top'),
@@ -24863,6 +24954,17 @@ class _HomeStartViewState extends State<HomeStartView> {
         _legeRij('Niets nieuws van jouw artiesten de laatste zes maanden.'),
     ];
   }
+
+  /// Het menu van een aanbevolen nummer — in de rij en op "Alles".
+  ItemMenu _recItemMenu(RecTrack t) => ItemMenu(titel: t.title, ondertitel: t.artist, blokken: [
+        [MenuRegel(Icons.play_arrow_rounded, 'Afspelen', () => _playRec(t))],
+        [
+          if (t.hasAlbum) MenuRegel(Icons.album_rounded, 'Album openen', () => _openRec(t)),
+          MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, t.artist)),
+          MenuRegel(Icons.radio_rounded, 'Radio vanaf hier', () => startRadio(context, t.artist, titel: t.title)),
+          MenuRegel(Icons.radio_outlined, 'Manuele radio', () => startRadio(context, t.artist, titel: t.title, manueel: true)),
+        ],
+      ]);
 
   Widget _section(String title, Widget row, {String? bij, Widget? rechts}) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -25014,20 +25116,7 @@ class _HomeStartViewState extends State<HomeStartView> {
           // eerste weten wie dat is. `RecTrack` draagt alleen een naam, en dat is genoeg.
           subtitleWidget: ts[i].artist.trim().isEmpty ? null : _naamLink(ts[i].artist),
           onTap: () => _openRec(ts[i], heroTag: 'net:${ts[i].albumId}@$rij'),
-          onLongPress: () => _toonItemMenu(
-              context,
-              ItemMenu(titel: ts[i].title, ondertitel: ts[i].artist, blokken: [
-                [MenuRegel(Icons.play_arrow_rounded, 'Afspelen', () => _playRec(ts[i]))],
-                [
-                  if (ts[i].hasAlbum)
-                    MenuRegel(Icons.album_rounded, 'Album openen', () => _openRec(ts[i])),
-                  MenuRegel(Icons.person_rounded, 'Ga naar artiest', () => openArtist(context, ts[i].artist)),
-                  MenuRegel(Icons.radio_rounded, 'Radio vanaf hier',
-                      () => startRadio(context, ts[i].artist, titel: ts[i].title)),
-                  MenuRegel(Icons.radio_outlined, 'Manuele radio',
-                      () => startRadio(context, ts[i].artist, titel: ts[i].title, manueel: true)),
-                ],
-              ])),
+          onLongPress: () => _toonItemMenu(context, _recItemMenu(ts[i])),
           heroTag: ts[i].hasAlbum ? 'net:${ts[i].albumId}@$rij' : null,
           spiegel: spiegelVanUrl(ts[i].cover),
         ),
@@ -25993,7 +26082,8 @@ class _OntdekViewState extends State<OntdekView> {
       final pc = OntdekVoorJou.pc;
       if (pc != null) {
         if (ververs || pc.lijst == null) {
-          await pc.ververs();
+          // Met de hand ververst: Claude mag opnieuw (tot tien keer per dag, zie [OntdekVoorJou.kClaudePerDag]).
+          await pc.ververs(handmatig: ververs);
         } else if (pc.verouderd) {
           // Van gisteren: die van vandaag komt zo, en tot dan de vorige.
           unawaited(pc.ververs().then((_) {

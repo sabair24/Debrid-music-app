@@ -146,6 +146,88 @@ List<RecTrack> kiesNummers(List<({Kandidaat kandidaat, List<RecTrack> toppers})>
   return uit;
 }
 
+/// Zoveel nummers staan er in "Aanbevolen voor jou" (21-11-2026, Saber: *"aanbevolen mag ook 200 liedjes bevatten"*).
+const int kAanbevolenNummers = 200;
+
+/// Zoveel daarvan in de rij op Start; alle [kAanbevolenNummers] via "Alles" (Saber: "Rij 100, Alles 200").
+const int kAanbevolenInRij = 100;
+
+/// Zoveel nummers rekent de pc op de achtergrond uit als voorraad. Zo is verversen meteen klaar, met telkens
+/// [kAanbevolenNummers] die je nog niet zag ([AanbevolenVoorJou.volgende]): een berekening is een paar honderd vragen
+/// aan Deezer, en dat duurt een minuut of meer — te lang om op te wachten als je omlaag trekt.
+const int kAanbevolenVoorraad = 600;
+
+/// Zoveel zaden per berekening, gewogen getrokken uit je bovenste [kAanbevolenPoel] artiesten. Het waren er zes uit
+/// twaalf: dan zaten er bijna altijd dezelfde in, en kwam je elke dag hetzelfde tegen (Saber, 21-11-2026: *"het is elke
+/// dag dezelfde"*).
+const int kAanbevolenZaden = 20;
+const int kAanbevolenPoel = 40;
+
+/// Zo lang gaat een nummer dat al in de lijst stond achteraan: verversen geeft eerst wat je nog niet zag.
+const Duration kAanbevolenGezien = Duration(days: 14);
+
+/// De sleutel van een aanbevolen nummer: artiest en titel.
+String aanbevolenSleutel(RecTrack t) => '${artistKey(t.artist)}|${t.title.toLowerCase().trim()}';
+
+/// De kandidaten evenredig over de zaden: elk zaad krijgt een gelijk deel ([aantal] / zaden), en de lijst wisselt om de
+/// beurt van zaad.
+///
+/// **Waarom (Saber, 21-11-2026).** *"aanbevolen, zit vol met enkel rai of arabische muziek, wat mag maar dit is veel te
+/// veel"*. Zijn zaden waren vooral pop (Michael Jackson, Whitney Houston, Adele), maar van die artiesten heeft hij de
+/// verwanten bij Deezer bijna allemaal al — en wat je al hebt valt weg. Van Khaled had hij de verwanten nog niet, en dus
+/// bleef alleen raï over. Gekozen: "Evenredig met wat ik draai".
+///
+/// Een kandidaat telt bij het zaad dat hem noemt en nog het minst heeft. Heeft een zaad te weinig, dan vult de rest op
+/// score aan tot [aantal] — liever een volle lijst dan een lege plek.
+List<Kandidaat> verdeelOverZaden(List<Kandidaat> rang, {required List<String> zaden, required int aantal}) {
+  if (zaden.isEmpty) return rang.take(aantal).toList();
+  final quotum = (aantal / zaden.length).ceil();
+  final perZaad = {for (final z in zaden) z: <Kandidaat>[]};
+  final gekozen = <int>{};
+  for (final k in rang) {
+    String? beste;
+    for (final z in k.via) {
+      final l = perZaad[z];
+      if (l == null || l.length >= quotum) continue;
+      if (beste == null || l.length < perZaad[beste]!.length) beste = z;
+    }
+    if (beste == null) continue;
+    perZaad[beste]!.add(k);
+    gekozen.add(k.id);
+  }
+  final uit = <Kandidaat>[];
+  for (var i = 0; i < quotum && uit.length < aantal; i++) {
+    for (final z in zaden) {
+      final l = perZaad[z]!;
+      if (i < l.length && uit.length < aantal) uit.add(l[i]);
+    }
+  }
+  for (final k in rang) {
+    if (uit.length >= aantal) break;
+    if (gekozen.add(k.id)) uit.add(k);
+  }
+  return uit;
+}
+
+/// Een trekking van [aantal] uit de voorraad: eerst wat de laatste [kAanbevolenGezien] niet in de lijst stond, in de
+/// volgorde van de voorraad (die wisselt al om de beurt van zaad); is dat te weinig, dan aangevuld met wat het langst
+/// geleden getoond werd.
+List<RecTrack> trekUitVoorraad(List<RecTrack> voorraad, Map<String, int> getoondOp,
+    {required int aantal, required int nuMs}) {
+  bool vers(RecTrack t) {
+    final ms = getoondOp[aanbevolenSleutel(t)];
+    return ms == null || nuMs - ms > kAanbevolenGezien.inMilliseconds;
+  }
+
+  final uit = [for (final t in voorraad) if (vers(t)) t].take(aantal).toList();
+  if (uit.length < aantal) {
+    final oud = [for (final t in voorraad) if (!vers(t)) t]
+      ..sort((a, b) => (getoondOp[aanbevolenSleutel(a)] ?? 0).compareTo(getoondOp[aanbevolenSleutel(b)] ?? 0));
+    uit.addAll(oud.take(aantal - uit.length));
+  }
+  return uit;
+}
+
 /// Wat er bewaard wordt: de lijst en wanneer hij berekend is.
 class AanbevolenLijst {
   const AanbevolenLijst(this.berekendMs, this.nummers);
@@ -225,13 +307,39 @@ class AanbevolenVoorJou {
   Future<AanbevolenLijst?>? _bezig;
   Timer? _klokje;
 
+  /// De voorraad van de laatste berekening ([kAanbevolenVoorraad]), en wanneer elk nummer voor het eerst in de lijst
+  /// stond ([kAanbevolenGezien]).
+  List<RecTrack> _voorraad = const [];
+  final Map<String, int> _getoond = {};
+
   bool get verouderd =>
       _lijst == null || klok().millisecondsSinceEpoch - _lijst!.berekendMs > houdbaar.inMilliseconds;
   bool get bezig => _bezig != null;
 
+  /// Hoeveel nummers van de voorraad je nog niet zag.
+  int get nogVers {
+    final nuMs = klok().millisecondsSinceEpoch;
+    return _voorraad.where((t) {
+      final ms = _getoond[aanbevolenSleutel(t)];
+      return ms == null || nuMs - ms > kAanbevolenGezien.inMilliseconds;
+    }).length;
+  }
+
   Future<void> laad() async {
     try {
-      if (await bestand.exists()) _lijst = AanbevolenLijst.fromJson(jsonDecode(await bestand.readAsString()));
+      if (await bestand.exists()) {
+        final j = jsonDecode(await bestand.readAsString());
+        _lijst = AanbevolenLijst.fromJson(j);
+        if (j is Map) {
+          _voorraad = [for (final t in (j['voorraad'] as List? ?? const [])) ?recTrackUitJson(t)];
+          final g = j['getoond'];
+          if (g is Map) {
+            for (final e in g.entries) {
+              if (e.value is num) _getoond['${e.key}'] = (e.value as num).toInt();
+            }
+          }
+        }
+      }
     } catch (_) {/* kapot of oud: dan rekenen we opnieuw */}
   }
 
@@ -256,6 +364,35 @@ class AanbevolenVoorJou {
     });
   }
 
+  /// Verversen (omlaag trekken): meteen [kAanbevolenNummers] nummers uit de voorraad die je nog niet zag (Saber,
+  /// 21-11-2026: *"ik wil als ik ververs elke keer nieuwe liedjes"*). Raakt de voorraad op, dan rekent de pc op de
+  /// achtergrond een nieuwe, met andere zaden. Nog geen voorraad: dan wel wachten op een berekening.
+  Future<AanbevolenLijst?> volgende() async {
+    if (_voorraad.isEmpty) return ververs();
+    await _trek(klok());
+    if (nogVers < kAanbevolenNummers && _bezig == null) unawaited(ververs());
+    log?.call('aanbevolen: ververst — ${_lijst?.nummers.length ?? 0} nummers, nog $nogVers nieuw in de voorraad');
+    return _lijst;
+  }
+
+  /// Een nieuwe trekking uit de voorraad, als lijst, en bewaren.
+  Future<void> _trek(DateTime nu) async {
+    final nuMs = nu.millisecondsSinceEpoch;
+    _getoond.removeWhere((_, ms) => nuMs - ms > kAanbevolenGezien.inMilliseconds);
+    final nummers = trekUitVoorraad(_voorraad, _getoond, aantal: kAanbevolenNummers, nuMs: nuMs);
+    for (final t in nummers) {
+      _getoond.putIfAbsent(aanbevolenSleutel(t), () => nuMs);
+    }
+    _lijst = AanbevolenLijst(nuMs, nummers);
+    try {
+      await bestand.writeAsString(jsonEncode({
+        ..._lijst!.toJson(),
+        'voorraad': [for (final t in _voorraad) recTrackNaarJson(t)],
+        'getoond': _getoond,
+      }));
+    } catch (_) {}
+  }
+
   Future<AanbevolenLijst?> _reken() async {
     final t0 = DateTime.now();
     final nu = klok();
@@ -265,20 +402,21 @@ class AanbevolenVoorJou {
       Timer(const Duration(minutes: 2), () => unawaited(ververs()));
       return _lijst;
     }
-    final zaden = kiesZaden(alle, nuMs: nu.millisecondsSinceEpoch, groen: groen());
+    final zaden = kiesZaden(alle,
+        nuMs: nu.millisecondsSinceEpoch, groen: groen(), aantal: kAanbevolenZaden, poel: kAanbevolenPoel);
     try {
-      final nummers = await zoeker(zaden, bezit());
+      final voorraad = await zoeker(zaden, bezit());
       // Niets gevonden is geen beter antwoord dan wat er lag.
-      if (nummers.isEmpty && _lijst != null) {
+      if (voorraad.isEmpty && _lijst != null) {
         log?.call('aanbevolen: niets gevonden — de vorige lijst blijft');
         return _lijst;
       }
-      final l = AanbevolenLijst(nu.millisecondsSinceEpoch, nummers);
-      _lijst = l;
-      await bestand.writeAsString(jsonEncode(l.toJson()));
-      log?.call('aanbevolen: ${nummers.length} nummers uit ${zaden.map((z) => z.naam).join(', ')} '
+      _voorraad = voorraad;
+      await _trek(nu);
+      log?.call('aanbevolen: ${_lijst!.nummers.length} nummers (voorraad ${voorraad.length}, nog $nogVers nieuw) uit '
+          '${zaden.length} zaden: ${zaden.map((z) => z.naam).join(', ')} '
           'in ${DateTime.now().difference(t0).inMilliseconds} ms');
-      return l;
+      return _lijst;
     } catch (e) {
       log?.call('aanbevolen: mislukt na ${DateTime.now().difference(t0).inMilliseconds} ms — $e');
       return _lijst;
