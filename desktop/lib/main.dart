@@ -68,6 +68,7 @@ import 'radioplan.dart';
 import 'oordelen.dart';
 import 'prullenbak.dart' show heeftPrullenbak, naarPrullenbak;
 import 'radiosessie.dart';
+import 'verzameling.dart' show verzamelMapnaam;
 import 'verzamelingen.dart';
 import 'ui/draaihoes.dart';
 import 'ui/tv_rij.dart';
@@ -5441,6 +5442,7 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   void _gaNaar(int id) {
+    if (id == 0 || id == 1 || id == 4) _laatsteBib = id;
     binnenNav.currentState?.popUntil((r) => r.isFirst);
     if (_view != id) GlasKwaliteit.paginaGewisseld();
     if (_menuIn) setState(() => _menuIn = false);
@@ -5864,13 +5866,45 @@ class _HomeShellState extends State<HomeShell> {
   /// Dit is de WORTELROUTE van de binnennavigator. Hij wordt aangeroepen vanuit [_SectieHost], die
   /// zijn afhankelijkheid op [ShellScope] registreert -- daardoor komt een wissel van sectie,
   /// zoekterm, filter of sortering hier wél binnen, dwars door de routecache heen.
+  /// Je bibliotheek (Albums, Nummers, Artiesten) en Verzamelingen: daarboven de tab "Mijn muziek | Verzamelingen"
+  /// (Saber, 21-11-2026: "Tab in Bibliotheek"). Buiten de wissel, zodat hij blijft staan terwijl de pagina eronder
+  /// verandert.
+  bool get _bibSectie => _view == 0 || _view == 1 || _view == 4 || _view == 11;
+
+  /// Welke van Albums, Nummers en Artiesten je het laatst open had: "Mijn muziek" brengt je daar terug.
+  int _laatsteBib = 0;
+
+  Widget _bibTabs() => Padding(
+        padding: const EdgeInsets.fromLTRB(kGoot, kRuimte8, kGoot, kRuimte4),
+        child: Wrap(spacing: 8, runSpacing: 8, children: [
+          ChoiceChip(
+            key: const ValueKey('bib-tab-mijn'),
+            label: const Text('Mijn muziek'),
+            selected: _view != 11,
+            onSelected: (_) {
+              if (_view == 11) _gaNaar(_laatsteBib);
+            },
+          ),
+          ChoiceChip(
+            key: const ValueKey('bib-tab-verzamelingen'),
+            label: const Text('Verzamelingen'),
+            selected: _view == 11,
+            onSelected: (_) {
+              if (_view != 11) _gaNaar(11);
+            },
+          ),
+        ]),
+      );
+
   Widget _sectieKolom(BuildContext context) {
     final wissel = _sectieWissel(context);
     // No permanent search field on a television. It cost 75 points of height for a control you
     // cannot type into without the on-screen keyboard taking over the screen — and the rail has a
     // "Zoeken" entry that asks for the words once and then gets out of the way. Op een pc, Mac en iPad
     // staat het zoekveld sinds 17-10-2026 in de capsule ([_openZoeken]).
-    if (!schilKop(context)) return wissel;
+    if (!schilKop(context)) {
+      return _bibSectie ? Column(children: [_bibTabs(), Expanded(child: wissel)]) : wissel;
+    }
     // Op een gsm: de grote titel en het zoekveld boven de pagina, en ze klappen in terwijl je scrolt
     // (Saber, 18-10-2026: "één keer de titel", als grote kop die inklapt). Een NestedScrollView en geen
     // kop die krimpt: krimpt de kop terwijl de lijst ook schuift, dan loopt de inhoud twee keer zo snel
@@ -5886,6 +5920,7 @@ class _HomeShellState extends State<HomeShell> {
       headerSliverBuilder: (context, _) => [
         SliverToBoxAdapter(child: GroteKop(titel, key: const ValueKey('gsm-grote-kop'))),
         if (_searchable) SliverToBoxAdapter(child: _searchBar(context)),
+        if (_bibSectie) SliverToBoxAdapter(child: _bibTabs()),
       ],
       body: wissel,
     );
@@ -5937,6 +5972,7 @@ class _HomeShellState extends State<HomeShell> {
     if (_view == 7) return const KwaliteitView();
     if (_view == 8) return const FavorietenView();
     if (_view == 9) return const AfspeellijstenView();
+    if (_view == 11) return const VerzamelingenView();
     if (_view == 2) return const OnlineSearchScreen();
     if (_view == 3) return const OntdekView();
     if (_view == 4) return TracksView(match: _matches, query: _q);
@@ -6917,6 +6953,8 @@ class NavSections {
     (0, 'Albums', Icons.album_rounded),
     (4, 'Tracks', Icons.music_note_rounded),
     (1, 'Artiesten', Icons.person_rounded),
+    // Een tweede bibliotheek voor muziek die je apart wilt (verzameling.dart; Saber, 21-11-2026).
+    (11, 'Verzamelingen', Icons.collections_bookmark_rounded),
     (2, 'Online zoeken', Icons.travel_explore_rounded),
     (3, 'Ontdek', Icons.explore_rounded),
     (6, 'Mijn downloads', Icons.download_rounded),
@@ -14364,6 +14402,103 @@ class _HartKnop extends StatelessWidget {
 /// Eén dialoog voor beide, want "welke lijst" en "een nieuwe" zijn dezelfde vraag: bij de eerste
 /// keer is er nog niets om uit te kiezen, en een apart scherm om eerst een lege lijst te maken zou
 /// dat moment onnodig in tweeën knippen.
+/// In het menu van een nummer of plaat (verzameling.dart, 21-11-2026): "Naar verzameling…" verhuist, "Ook in
+/// verzameling…" zet een verwijzing (Saber: "Ja, mag in meerdere"), en wat al in een verzameling staat kan terug.
+List<MenuRegel> _verzamelingRegels(BuildContext context, List<Track> nummers) {
+  if (nummers.isEmpty) return const [];
+  final thuis = {for (final t in nummers) t.verzameling};
+  return [
+    MenuRegel(Icons.drive_file_move_outline, 'Naar verzameling…',
+        () => _kiesVerzameling(context, nummers, verhuizen: true)),
+    MenuRegel(Icons.collections_bookmark_outlined, 'Ook in verzameling…',
+        () => _kiesVerzameling(context, nummers, verhuizen: false)),
+    if (thuis.any((v) => v != null))
+      MenuRegel(Icons.undo_rounded, 'Terug naar je bibliotheek', () => naarVerzamelingMet(context, nummers, null)),
+  ];
+}
+
+/// Nummers [nummers] verhuizen naar verzameling [naam] (null: terug naar je bibliotheek), en zeggen wat er gebeurde.
+Future<void> naarVerzamelingMet(BuildContext context, List<Track> nummers, String? naam) async {
+  final lib = context.read<LibraryStore>();
+  final verz = context.read<Verzamelingen>();
+  final melding = ScaffoldMessenger.of(context);
+  if (naam != null) await verz.maak(naam);
+  final r = await lib.naarVerzameling([for (final t in nummers) t.path], naam);
+  final wat = '${r.verhuisd} ${r.verhuisd == 1 ? 'nummer' : 'nummers'}';
+  final bezet = r.bezet == 0
+      ? ''
+      : ' ${r.bezet} ${r.bezet == 1 ? 'speelde nog of stond er al, en bleef' : 'speelden nog of stonden er al, en bleven'} staan.';
+  melding.showSnackBar(SnackBar(
+      content: Text(naam == null ? '$wat terug in je bibliotheek.$bezet' : '$wat naar “$naam”.$bezet'),
+      duration: Duration(seconds: r.bezet == 0 ? 4 : 8)));
+}
+
+/// Een verzameling kiezen (of een nieuwe maken) voor [nummers]: verhuizen ([verhuizen]) of koppelen.
+Future<void> _kiesVerzameling(BuildContext context, List<Track> nummers, {required bool verhuizen}) async {
+  final lib = context.read<LibraryStore>();
+  final verz = context.read<Verzamelingen>();
+  final namen = alleVerzamelingNamen(lib, verz);
+  final gekozen = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: _panel,
+      title: Text(
+          '${nummers.length == 1 ? 'Dit nummer' : '${nummers.length} nummers'} '
+          '${verhuizen ? 'naar welke verzameling?' : 'ook in welke verzameling?'}',
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+      contentPadding: const EdgeInsets.fromLTRB(0, 12, 0, 0),
+      content: SizedBox(
+        width: dialogWidth(context, 420),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: Text(
+                  verhuizen
+                      ? 'Verhuist naar de map van de verzameling: niet meer tussen je albums en je shuffle, wel te vinden.'
+                      : 'Blijft ook in je gewone bibliotheek staan; de verzameling krijgt een verwijzing.',
+                  style: TextStyle(color: _muted, fontSize: 12.5)),
+            ),
+            ListTile(
+              autofocus: true,
+              leading: Icon(Icons.add_rounded, color: _accent),
+              title: Text('Nieuwe verzameling…', style: TextStyle(color: _accent)),
+              onTap: () => Navigator.pop(ctx, ''),
+            ),
+            for (final n in namen)
+              ListTile(
+                leading: Icon(Icons.collections_bookmark_rounded, color: _muted),
+                title: Text(n),
+                onTap: () => Navigator.pop(ctx, n),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuleren')),
+      ],
+    ),
+  );
+  if (gekozen == null || !context.mounted) return;
+  var naam = gekozen;
+  if (naam.isEmpty) {
+    final nieuw = (await _vraagNaam(context, 'Nieuwe verzameling', ''))?.trim();
+    if (nieuw == null || nieuw.isEmpty || !context.mounted) return;
+    naam = verzamelMapnaam(nieuw);
+  }
+  if (verhuizen) {
+    await naarVerzamelingMet(context, nummers, naam);
+    return;
+  }
+  final fav = context.read<Favorieten>();
+  final ids = [for (final t in nummers) if (fav.idVanTrack(t) case final i?) i];
+  await verz.koppel(naam, ids);
+  if (context.mounted) {
+    _srcToast(context, '${ids.length} ${ids.length == 1 ? 'nummer staat' : 'nummers staan'} nu ook in “$naam”.');
+  }
+}
+
 Future<void> _kiesAfspeellijst(BuildContext context, List<String> nummers) async {
   if (nummers.isEmpty) return;
   final lijsten = context.read<Afspeellijsten>();
@@ -16720,6 +16855,7 @@ ItemMenu _nummerMenu(BuildContext context, Track t,
         MenuRegel(Icons.library_add_outlined, 'Toevoegen aan afspeellijst…',
             () => _kiesAfspeellijst(context, [if (fav.idVanTrack(t) case final i?) i])),
       ],
+      _verzamelingRegels(context, [t]),
       [
         // Leeg blok als er geen album is, en dan valt de streep vanzelf weg. Dat is de hele reden
         // dat het menu blokken zijn en geen platte lijst met scheidingsposten erin.
@@ -17079,6 +17215,7 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
             () => _kiesAfspeellijst(
                 context, [for (final t in nummers) if (fav.idVanTrack(t) case final i?) i])),
       ],
+      _verzamelingRegels(context, nummers),
       [
         MenuRegel(Icons.open_in_new_rounded, 'Album openen',
             () => openOp(nav, (_) => AlbumDetailPage(album: a))),
@@ -18585,6 +18722,301 @@ class _AanbevolenAllesPagina extends StatelessWidget {
             ),
           ),
           SliverToBoxAdapter(child: SizedBox(height: kRuimte24 + MediaQuery.paddingOf(context).bottom)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Alle verzamelingen (verzameling.dart): wat er een map met muziek heeft, en wat er — nog leeg — in de gedeelde staat
+/// staat. Op alfabet, hoofdletters tellen niet.
+List<String> alleVerzamelingNamen(LibraryStore lib, Verzamelingen verz) {
+  final namen = <String, String>{};
+  for (final n in [...lib.verzamelingNamen, ...verz.namen]) {
+    namen.putIfAbsent(n.toLowerCase(), () => n);
+  }
+  return namen.values.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+}
+
+/// De nummers van verzameling [naam]: wat in haar map staat, en wat er als verwijzing in staat (Saber, 21-11-2026: "Ja,
+/// mag in meerdere").
+List<Track> nummersVanVerzameling(LibraryStore lib, Verzamelingen verz, String naam) {
+  final thuis = lib.tracksIn(naam);
+  final gekoppeld = verz.koppelingenVan(naam).toSet();
+  if (gekoppeld.isEmpty) return thuis;
+  final paden = {for (final t in thuis) t.path};
+  return [
+    ...thuis,
+    for (final t in lib.tracks)
+      if (!paden.contains(t.path) && gekoppeld.contains(lib.gedeeldId(t.path) ?? '')) t,
+  ];
+}
+
+/// Een nieuwe verzameling: een naam vragen en hem aanmaken. Geeft de naam terug, of null.
+Future<String?> nieuweVerzameling(BuildContext context) async {
+  final naam = (await _vraagNaam(context, 'Nieuwe verzameling', ''))?.trim();
+  if (naam == null || naam.isEmpty || !context.mounted) return null;
+  final schoon = verzamelMapnaam(naam);
+  await context.read<Verzamelingen>().maak(schoon);
+  return schoon;
+}
+
+/// De tegel van een verzameling: de hoes van haar eerste plaat met een hoes, de naam, en wat erin staat.
+Widget verzamelingTegel(BuildContext context, String naam, {required LibraryStore lib, required Verzamelingen verz}) {
+  final albums = lib.albumsIn(naam);
+  final nummers = nummersVanVerzameling(lib, verz, naam);
+  final metHoes = albums.where((a) => a.cover != null).firstOrNull;
+  return AlbumTegel(
+    key: ValueKey('verzameling-$naam'),
+    hoes: (maat) => metHoes == null
+        ? Container(
+            width: maat,
+            height: maat,
+            decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(12)),
+            child: Icon(Icons.collections_bookmark_rounded, size: maat * .36, color: _muted))
+        : cover(metHoes.cover, size: maat),
+    spiegel: metHoes == null ? null : spiegelVan(metHoes.cover),
+    titel: naam,
+    ondertitel: nummers.isEmpty
+        ? 'Nog leeg'
+        : '${albums.length} ${albums.length == 1 ? 'plaat' : 'platen'} · ${nummers.length} '
+            '${nummers.length == 1 ? 'nummer' : 'nummers'}',
+    onTap: () => openPagina(context, (_) => VerzamelingPagina(naam: naam)),
+  );
+}
+
+/// Verzamelingen (sectie 11; verzameling.dart): elke verzameling als tegel. Saber, 21-11-2026: een tweede bibliotheek,
+/// "specifiek als ik er zin in heb" — met een eigen menu-item, een rij op Start en een tab boven je bibliotheek.
+class VerzamelingenView extends StatelessWidget {
+  const VerzamelingenView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final verz = context.watch<Verzamelingen>();
+    final namen = alleVerzamelingNamen(lib, verz);
+    if (namen.isEmpty) {
+      return LeegVlak(
+        teken: Icons.collections_bookmark_outlined,
+        kop: 'Nog geen verzamelingen',
+        uitleg: 'Een verzameling is een tweede bibliotheek voor muziek die je apart wilt — vocal jazz, kerst, een genre '
+            'voor als je er zin in hebt. Ze staat niet tussen je albums en je shuffle, maar zoeken vindt haar wel.',
+        knop: 'Nieuwe verzameling',
+        opKnop: () => nieuweVerzameling(context),
+      );
+    }
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(kGoot, kRuimte16, kGoot, kRuimte12),
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 10,
+              runSpacing: 8,
+              children: [
+                if (!schilKop(context))
+                  const Text('Verzamelingen',
+                      style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+                Text('${namen.length} ${namen.length == 1 ? 'verzameling' : 'verzamelingen'}',
+                    style: TextStyle(color: _muted, fontSize: 12.5)),
+                GlasKnop(
+                  key: const ValueKey('verzameling-nieuw'),
+                  autofocus: isTv,
+                  onPressed: () => nieuweVerzameling(context),
+                  icoon: Icons.add_rounded,
+                  label: 'Nieuwe verzameling',
+                ),
+              ],
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: kGoot),
+          sliver: SliverLayoutBuilder(
+            builder: (context, c) => SliverGrid(
+              gridDelegate: tegelRaster(context, c.crossAxisExtent),
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => verzamelingTegel(context, namen[i], lib: lib, verz: verz),
+                childCount: namen.length,
+              ),
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(child: SizedBox(height: kRuimte24 + MediaQuery.paddingOf(context).bottom)),
+      ],
+    );
+  }
+}
+
+enum _VerzamelingTab { albums, nummers, artiesten }
+
+/// Eén verzameling, als een eigen bibliotheek: haar platen, nummers en artiesten, met Afspelen en Shuffle.
+class VerzamelingPagina extends StatefulWidget {
+  const VerzamelingPagina({super.key, required this.naam});
+
+  final String naam;
+
+  @override
+  State<VerzamelingPagina> createState() => _VerzamelingPaginaState();
+}
+
+class _VerzamelingPaginaState extends State<VerzamelingPagina> {
+  var _tab = _VerzamelingTab.albums;
+  late String _naam = widget.naam;
+
+  Future<void> _hernoem() async {
+    final nieuw = (await _vraagNaam(context, 'Verzameling hernoemen', _naam))?.trim();
+    if (nieuw == null || nieuw.isEmpty || nieuw == _naam || !mounted) return;
+    final schoon = verzamelMapnaam(nieuw);
+    final lib = context.read<LibraryStore>();
+    final verz = context.read<Verzamelingen>();
+    final melding = ScaffoldMessenger.of(context);
+    final r = await lib.naarVerzameling([for (final t in lib.tracksIn(_naam)) t.path], schoon);
+    await verz.hernoem(_naam, schoon);
+    if (!mounted) return;
+    setState(() => _naam = schoon);
+    melding.showSnackBar(SnackBar(
+        content: Text(r.bezet == 0
+            ? 'Heet nu “$schoon”.'
+            : 'Heet nu “$schoon”. ${r.bezet} ${r.bezet == 1 ? 'nummer speelde' : 'nummers speelden'} nog en '
+                '${r.bezet == 1 ? 'verhuist' : 'verhuizen'} de volgende keer.')));
+  }
+
+  Future<void> _allesTerug() async {
+    final lib = context.read<LibraryStore>();
+    final verz = context.read<Verzamelingen>();
+    final thuis = lib.tracksIn(_naam);
+    final zeker = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _panel,
+        title: Text('“$_naam” opheffen?'),
+        content: Text(thuis.isEmpty
+            ? 'De verzameling is leeg; alleen de naam verdwijnt.'
+            : 'De ${thuis.length} ${thuis.length == 1 ? 'nummer gaat' : 'nummers gaan'} terug naar je gewone '
+                'bibliotheek. Er wordt niets weggegooid.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Annuleren')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Opheffen')),
+        ],
+      ),
+    );
+    if (zeker != true || !mounted) return;
+    final nav = Navigator.of(context);
+    if (thuis.isNotEmpty) await lib.naarVerzameling([for (final t in thuis) t.path], null);
+    await verz.weg(_naam);
+    if (mounted) nav.pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryStore>();
+    final verz = context.watch<Verzamelingen>();
+    final albums = lib.albumsIn(_naam);
+    final nummers = nummersVanVerzameling(lib, verz, _naam);
+    final boven = MediaQuery.paddingOf(context).top + kToolbarHeight;
+    final inhoud = switch (_tab) {
+      _VerzamelingTab.albums => albums.isEmpty
+          ? LeegVlak(
+              teken: Icons.album_outlined,
+              kop: 'Nog geen platen',
+              uitleg: 'Zet er nummers in vanuit een radio (Houden), vanuit het menu van een nummer of plaat, of laat '
+                  'de AI je bibliotheek indelen.')
+          : AlbumsGrid(albums: albums, title: '${albums.length} ${albums.length == 1 ? 'plaat' : 'platen'} in $_naam'),
+      _VerzamelingTab.nummers => TracksView(lijst: nummers, kop: false),
+      _VerzamelingTab.artiesten => ArtistsView(key: ValueKey('verz-artiesten-$_naam'), lib: lib, albums: albums),
+    };
+    return Scaffold(
+      backgroundColor: _bg,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
+        leading: glasInBalk(
+            plat: isCompact(context),
+            IconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              tooltip: 'Terug',
+              onPressed: () => Navigator.of(context).pop(),
+            )),
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(kGoot, boven + kRuimte8, kGoot, kRuimte8),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_naam,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: kTekst, height: 1.15)),
+              const SizedBox(height: kRuimte4),
+              Text(
+                  '${albums.length} ${albums.length == 1 ? 'plaat' : 'platen'} · ${nummers.length} '
+                  '${nummers.length == 1 ? 'nummer' : 'nummers'} · niet tussen je gewone bibliotheek',
+                  style: kTekstBij),
+              const SizedBox(height: kRuimte12),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                GlasKnop(
+                  key: const ValueKey('verzameling-afspelen'),
+                  autofocus: isTv,
+                  onPressed: nummers.isEmpty ? null : () => speelLijst(context, nummers, schud: false, melding: (nu) => '$_naam · ${nu.length} nummers'),
+                  icoon: Icons.play_arrow_rounded,
+                  label: 'Afspelen',
+                ),
+                GlasKnop(
+                  key: const ValueKey('verzameling-shuffle'),
+                  onPressed: nummers.isEmpty
+                      ? null
+                      : () => speelLijst(context, nummers,
+                          schud: true, melding: (nu) => 'Shuffle · $_naam · ${nu.length} nummers'),
+                  icoon: Icons.shuffle_rounded,
+                  label: 'Shuffle',
+                ),
+                TextButton.icon(
+                  key: const ValueKey('verzameling-hernoem'),
+                  onPressed: _hernoem,
+                  icon: const Icon(Icons.edit_outlined, size: 17),
+                  label: const Text('Hernoemen'),
+                ),
+                TextButton.icon(
+                  key: const ValueKey('verzameling-opheffen'),
+                  onPressed: _allesTerug,
+                  icon: const Icon(Icons.undo_rounded, size: 17),
+                  label: const Text('Opheffen'),
+                ),
+              ]),
+            ]),
+          ),
+          SizedBox(
+            height: 48,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: kGoot),
+              children: [
+                for (final (tab, label) in [
+                  (_VerzamelingTab.albums, 'Albums · ${albums.length}'),
+                  (_VerzamelingTab.nummers, 'Nummers · ${nummers.length}'),
+                  (_VerzamelingTab.artiesten, 'Artiesten'),
+                ])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      key: ValueKey('verzameling-tab-${tab.name}'),
+                      label: Text(label),
+                      selected: _tab == tab,
+                      onSelected: (_) => setState(() => _tab = tab),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          Expanded(child: inhoud),
         ],
       ),
     );
@@ -24862,6 +25294,29 @@ class _HomeStartViewState extends State<HomeStartView> {
               rechts: naarRecentToegevoegd == null
                   ? null
                   : _AllesKnop(key: const ValueKey('recent-alles'), aantal: recent.length, onPressed: naarRecentToegevoegd)),
+        // Je verzamelingen (verzameling.dart; Saber, 21-11-2026: "Een rij op Start"): één tegel per verzameling, en
+        // "Alles" naar de sectie.
+        if (alleVerzamelingNamen(lib, context.watch<Verzamelingen>()) case final namen when namen.isNotEmpty)
+          _section(
+              'Verzamelingen',
+              ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: kGoot),
+                itemCount: namen.length,
+                separatorBuilder: (_, __) => const SizedBox(width: kRuimte12),
+                itemBuilder: (context, i) => Binnenkomst(
+                  index: i,
+                  child: SizedBox(
+                    width: kTegelHoes,
+                    child: verzamelingTegel(context, namen[i],
+                        lib: lib, verz: context.read<Verzamelingen>()),
+                  ),
+                ),
+              ),
+              rechts: _AllesKnop(
+                  key: const ValueKey('verzamelingen-alles'),
+                  aantal: namen.length,
+                  onPressed: () => gaNaarSectie?.call(11))),
         // Een nieuwe versie van een plaat die je al had (versies.dart, Saber 26-10-2026): een eigen rij — Recent
         // toegevoegd blijft voor echt nieuwe platen. De tegel draagt de naam van de versie, zoals de map op schijf.
         if (lib.nieuweVersies() case final nv when nv.isNotEmpty)

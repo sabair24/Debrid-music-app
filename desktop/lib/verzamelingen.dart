@@ -99,6 +99,24 @@ class Verzamelingen extends GedeeldeOps {
     );
   }
 
+  /// Verzameling [van] heet voortaan [naar] (de bestanden verhuist de pc apart: [LibraryStore.naarVerzameling]).
+  Future<void> hernoem(String van, String naar) {
+    final v = van.trim(), n = naar.trim();
+    if (v.isEmpty || n.isEmpty || v.toLowerCase() == n.toLowerCase() && v == n) return Future.value();
+    final oud = _vanPc.remove(v.toLowerCase());
+    final at = nu;
+    return pasToe(
+      [
+        {'type': 'verzameling.hernoem', 'van': v, 'naar': n, 'at': at}
+      ],
+      vooruit: () => _vanPc[n.toLowerCase()] = VerzamelingInfo(naam: n, koppelingen: [...?oud?.koppelingen], updatedAt: at),
+      terug: () {
+        _vanPc.remove(n.toLowerCase());
+        if (oud != null) _vanPc[v.toLowerCase()] = oud;
+      },
+    );
+  }
+
   /// De naam (het record) weggooien. De map en haar bestanden regelt de pc apart: dit gooit nooit muziek weg.
   Future<void> weg(String naam) {
     final n = naam.trim().toLowerCase();

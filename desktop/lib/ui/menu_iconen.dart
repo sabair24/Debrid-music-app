@@ -51,6 +51,7 @@ enum MenuIcoonSoort {
   favorieten,
   afspeellijsten,
   kwaliteit,
+  verzamelingen,
   instellingen,
 }
 
@@ -67,6 +68,7 @@ MenuIcoonSoort? menuIcoonVoorSectie(int id) => switch (id) {
       8 => MenuIcoonSoort.favorieten,
       9 => MenuIcoonSoort.afspeellijsten,
       7 => MenuIcoonSoort.kwaliteit,
+      11 => MenuIcoonSoort.verzamelingen,
       _ => null,
     };
 
@@ -328,6 +330,8 @@ class MenuIcoonSchilder extends CustomPainter {
         _afspeellijsten(canvas, s);
       case MenuIcoonSoort.kwaliteit:
         _kwaliteit(canvas, s);
+      case MenuIcoonSoort.verzamelingen:
+        _verzamelingen(canvas, s);
       case MenuIcoonSoort.instellingen:
         _instellingen(canvas, s);
     }
@@ -577,6 +581,23 @@ class MenuIcoonSchilder extends CustomPainter {
     c.drawLine(const Offset(18.8, 5.2), const Offset(21, 6.4), _lijn);
     final kop = Path()..addOval(Rect.fromCircle(center: const Offset(16.7, 16.6), radius: 2.2));
     _vorm(c, kop);
+  }
+
+  /// Verzamelingen: twee hoezen achter elkaar, met een plaat op de voorste. Bij het kiezen schuift de voorste even uit de
+  /// bak en terug — een plaat die je eruit pakt.
+  void _verzamelingen(Canvas c, double s) {
+    final achter = Path()
+      ..addRRect(RRect.fromRectAndRadius(const Rect.fromLTWH(7.5, 3.5, 13, 13), const Radius.circular(2.2)));
+    c.drawPath(achter, _lijn);
+    final schuif = s * _bult(t, 0, .8) * 3.4;
+    c.save();
+    c.translate(-schuif, schuif * .4);
+    final voor = Path()
+      ..addRRect(RRect.fromRectAndRadius(const Rect.fromLTWH(3.5, 7.5, 13, 13), const Radius.circular(2.2)));
+    _vorm(c, voor);
+    _detail(c, Path()..addOval(Rect.fromCircle(center: const Offset(10, 14), radius: 3.6)), dikte: 1.4);
+    _snij(c, Path()..addOval(Rect.fromCircle(center: const Offset(10, 14), radius: 1.0)));
+    c.restore();
   }
 
   Path _ster(Offset m, double r, double binnen) => Path()
