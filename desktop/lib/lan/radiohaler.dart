@@ -36,6 +36,9 @@ const Duration _bewaartijd = Duration(minutes: 10);
 /// van tot de volgende herstart open te blijven.
 const Duration _leenverloop = Duration(minutes: 30);
 
+/// Onder deze naam staan in `LanStateStore.radioOpProef` de radiohalen die een toestel losliet maar die toch landden.
+const String kRadioWees = 'pc:wees';
+
 /// Eén haal, zoals het toestel hem terugziet.
 class Radiohaal {
   Radiohaal(this.id);
@@ -57,6 +60,12 @@ class Radiohaal {
 
   /// ▶ op het toestel, geen radio: [Radiohaler.staak] laat hem staan.
   bool los = false;
+
+  /// Breekt deze ene haal af in de downloadmanager ([DownloadManager.laatRadiohaalVallen]).
+  void Function()? stop;
+
+  /// Het toestel liet hem vallen ([Radiohaler.laatVallen]): landt hij toch nog, dan kent geen radio hem.
+  bool losgelaten = false;
 }
 
 /// De pc-kant van een radio op een gekoppeld toestel.
@@ -78,6 +87,15 @@ class Radiohaler {
   /// Om een hoes op te halen voor wat er net geland is. Null op een pc zonder instellingen (alleen
   /// in toetsen); dan komt de hoes er bij de volgende volledige scan alsnog.
   final AppSettings? instellingen;
+
+  /// Staat het nummer met dit gedeelde id op proef bij een radio (`LanStateStore.radioOpProefIds`)? Dan is een tweede
+  /// vraag ernaar geen "van jou" maar "klaar": het toestel zet het dan als radionummer in de rij en in zijn overzicht.
+  /// Gezet door de server. Null: zoals vroeger, alles wat er al is heet "van jou".
+  bool Function(String trackId)? opProef;
+
+  /// Een haal die het toestel losliet, landde toch ([Radiohaal.losgelaten]): de server zet hem op proef, zodat hij niet
+  /// ongemerkt tussen je bibliotheek blijft staan.
+  void Function(String trackId)? bijWees;
 
   final Map<String, Radiohaal> _halen = {};
   void Function()? _los;
@@ -131,6 +149,16 @@ class Radiohaler {
       h.stand = 'mislukt';
       h.klaarOm = DateTime.now();
     }
+  }
+
+  /// Het toestel wacht niet meer op haal [id] ([PcRadiobron.haal] gaf op): afbreken, ook in de zoekrem. Waar als er iets
+  /// liep. Zie [DownloadManager.laatRadiohaalVallen] voor het waarom.
+  bool laatVallen(String id) {
+    final h = _halen[id];
+    if (h == null || h.stand != 'onderweg' || h.losgelaten) return false;
+    h.losgelaten = true;
+    h.stop?.call();
+    return true;
   }
 
   /// Eén nummer gaan halen. Keert METEEN terug met een nummer om naar te vragen.
@@ -187,7 +215,8 @@ class Radiohaler {
                 vroeg: g,
                 zoekDaarnaBeter: zoekBeter,
                 losVanDeRadio: luistertMee,
-                album: album);
+                album: album,
+                bijStop: (s) => haal.stop = s);
       } on RadioLaterOpnieuw {
         later = true; // Soulseek op de pc doet even niet mee; het toestel probeert het straks weer
       } on RadioAlGehad catch (e) {
@@ -197,7 +226,10 @@ class Radiohaler {
         // die het weggooit (tweede beoordeling van 26-09-2026). Alles wat niet 'klaar' is, is daar
         // een gemiste plek, en dat is veilig.
         pad = e.pad;
-        haal.eigen = true;
+        // Wat een radio eerder binnenhaalde en nog op proef staat, is niet van jou: een tweede vraag ernaar (de tv
+        // liet de eerste vallen, of een andere radio vraagt hetzelfde) hoort er als radionummer in te komen.
+        final id = library.gedeeldId(e.pad) ?? '';
+        haal.eigen = !(id.isNotEmpty && (opProef?.call(id) ?? false));
       } catch (_) {
         pad = null;
       } finally {
@@ -220,6 +252,9 @@ class Radiohaler {
       }
       haal.pad = pad;
       if (pad != null) haal.trackId = library.gedeeldId(pad);
+      // Losgelaten en toch geland: op proef, anders staat hij voorgoed ongemerkt in je bibliotheek.
+      final wees = haal.trackId;
+      if (haal.losgelaten && pad != null && !haal.eigen && wees != null) bijWees?.call(wees);
       haal.stand = later ? 'later' : (pad == null ? 'mislukt' : (haal.eigen ? 'eigen' : 'klaar'));
       haal.klaarOm = DateTime.now();
     }());

@@ -103,7 +103,11 @@ class PcRadiobron implements Radiobron {
     required this.clientOf,
     this.peilritme = _peilritme,
     this.catalogusRitme = const Duration(seconds: 2),
+    this.geduld = _geduld,
   });
+
+  /// Zie [_geduld]; een toets zet hem korter.
+  final Duration geduld;
 
   final LibraryStore library;
   final RemoteClient? Function() clientOf;
@@ -211,7 +215,7 @@ class PcRadiobron implements Radiobron {
 
     if (ronde != _ronde) return null;
 
-    final tot = DateTime.now().add(_geduld);
+    final tot = DateTime.now().add(geduld);
     var gemeld = false;
     while (DateTime.now().isBefore(tot)) {
       // Wacht er iemand op geluid ([klinkt]) en klinkt het nog niet, dan elke halve seconde: de pc laat
@@ -289,6 +293,10 @@ class PcRadiobron implements Radiobron {
       }
       return null; // het staat er nog steeds niet — liever een gemiste plek dan een verkeerd bestand
     }
+    // De tijd is om: zeggen dat het niet meer hoeft. Anders haalde de pc gewoon door en landde het nummer zonder dat een
+    // radio het kende — niet op proef, nooit in het opruimoverzicht (21-11-2026: 51 van de 67). Niet afwachten: de radio
+    // gaat verder met de volgende plek.
+    unawaited(c.ask('/api/radio', {'op': 'laatvallen', 'id': id}).catchError((_) => <String, dynamic>{}));
     return null;
   }
 

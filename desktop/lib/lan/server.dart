@@ -1068,7 +1068,19 @@ class LanServer {
   final PcBijwerker bijwerker = PcBijwerker();
 
   /// Nummers ophalen voor de radio van een gekoppeld toestel. Zie `radiohaler.dart`.
-  late final Radiohaler radiohaler = Radiohaler(downloads, soulseek, library, settings);
+  late final Radiohaler radiohaler = Radiohaler(downloads, soulseek, library, settings)
+    ..opProef = ((id) => state.radioOpProefIds.contains(id))
+    ..bijWees = _radioWees;
+
+  /// Een radiohaal die het toestel losliet maar die toch landde: op proef onder [kRadioWees], zodat hij niet vanzelf naar
+  /// een toestel gaat en een volgende radio die hem vraagt hem als radionummer krijgt ([Radiohaler.opProef]).
+  void _radioWees(String trackId) {
+    final al = [for (final x in (state.radioOpProef[kRadioWees]?['ids'] as List? ?? const [])) '$x'];
+    if (al.contains(trackId)) return;
+    state.applyOps([
+      {'type': 'radioOpProef', 'ids': [...al, trackId]},
+    ], deviceId: kRadioWees);
+  }
   final int port;
   final String version;
   String token;
@@ -3716,6 +3728,10 @@ class LanServer {
         return _json(req.response, {'id': h.id});
       case 'stand':
         return _json(req.response, radiohaler.stand((body['id'] ?? '') as String));
+      case 'laatvallen':
+        // Het toestel wacht niet meer op deze haal (21-11-2026): ook hier afbreken, en de vraag in de zoekrem laten
+        // vervallen. Een ouder toestel stuurt dit niet; dan blijft het zoals het was.
+        return _json(req.response, {'ok': radiohaler.laatVallen('${body['id'] ?? ''}')});
       case 'groeiwacht':
         // Het toestel speelde een nummer dat nog binnenkwam, en de uploader haakte af: wacht tot het bij
         // de volgende vanaf [vanaf] (ms) zonder haperen kan klinken — zoals `_hervatGroei` op de pc.

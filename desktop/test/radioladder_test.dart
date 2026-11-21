@@ -158,10 +158,10 @@ void main() {
     });
 
     test('genoeg vooruit, of net een ronde gehad: niet', () {
-      // Vijftig vooruit (Saber, 22-10-2026: "zeker 50 liedjes").
-      expect(kBijvulOnder, 50);
-      expect(_besluit(verwacht: 50).nu, isFalse);
-      expect(_besluit(verwacht: 49.9).nu, isTrue);
+      // Twintig vooruit sinds 21-11-2026 (was vijftig, Saber 22-10-2026: "zeker 50 liedjes"), gelijk aan kMaxVooruit.
+      expect(kBijvulOnder, 20);
+      expect(_besluit(verwacht: 20).nu, isFalse);
+      expect(_besluit(verwacht: 19.9).nu, isTrue);
       expect(_besluit(verwacht: 5, sindsVorige: const Duration(seconds: 30)).nu, isFalse);
       expect(_besluit(verwacht: 5, sindsVorige: const Duration(seconds: 90)).nu, isTrue);
     });

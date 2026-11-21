@@ -110,7 +110,8 @@ class _Groeiend extends DownloadManager {
       Groei? vroeg,
       bool zoekDaarnaBeter = false,
       bool losVanDeRadio = false,
-      String? album}) async {
+      String? album,
+      void Function(void Function() stop)? bijStop}) async {
     gekregen = vroeg;
     zoekBeterGevraagd = zoekDaarnaBeter;
     losGevraagd[titel] = losVanDeRadio;
@@ -439,6 +440,7 @@ class _Oud extends DownloadManager {
           Groei? vroeg,
           bool zoekDaarnaBeter = false,
       bool losVanDeRadio = false,
-      String? album}) =>
+      String? album,
+      void Function(void Function() stop)? bijStop}) =>
       fail('met de proef uit de oude weg');
 }
