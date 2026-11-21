@@ -90,6 +90,7 @@ void main() {
     expect(verzamelingVanLijstId('verz:vocal jazz', ['Crooners & standards', 'Vocal jazz']), 'Vocal jazz');
     expect(verzamelingVanLijstId('verz:kerst', ['Vocal jazz']), isNull, reason: 'opgeheven: dan gaat ze eraf');
     expect(verzamelingVanLijstId('a1b2c3', ['Vocal jazz']), isNull, reason: 'een afspeellijst');
+    expect(verzamelingVanLijstId('vocal jazz', ['Vocal jazz']), isNull, reason: 'zonder voorvoegsel: een afspeellijst');
   });
 
   testWidgets('DE KERN: de tab "Meer …" toont wat erbij past', (tester) async {

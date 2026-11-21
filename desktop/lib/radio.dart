@@ -847,8 +847,14 @@ class RadioBesturing extends ChangeNotifier {
     }
     s.verzameling = n;
     notifyListeners();
-    unawaited(_bewaar(s));
+    if (_eigenNotitie(s)) unawaited(_bewaar(s));
   }
+
+  /// Mag [s] als de notitie van dit toestel op schijf? De lopende radio en een eigen overzicht wel; een overzicht uit de
+  /// brievenbus ([ontvangOverzicht], van een radio die elders draaide) niet — dat gaat terug langs
+  /// [bijOverzichtAfgehandeld], en als notitie hier kwam het na een herstart een tweede keer.
+  bool _eigenNotitie(RadioSessie s) =>
+      identical(s, _lopend) || (identical(s, openstaand) && _overzichtSleutel == null);
 
   /// Nummer [pad] (of met id [id]) houden in verzameling [naam] (null: je bibliotheek) — de tweede keuze van Houden.
   void houdIn(String pad, String? naam, {String? id}) {
@@ -857,7 +863,7 @@ class RadioBesturing extends ChangeNotifier {
       final g = s.gehaald.where((g) => g.pad == pad || (id != null && g.id == id)).firstOrNull;
       if (g == null) continue;
       s.doelen[g.pad] = naam?.trim() ?? '';
-      unawaited(_bewaar(s));
+      if (_eigenNotitie(s)) unawaited(_bewaar(s));
     }
     notifyListeners();
   }

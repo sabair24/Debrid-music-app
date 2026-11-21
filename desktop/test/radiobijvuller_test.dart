@@ -494,7 +494,9 @@ void main() {
 
     test('zonder model is de laag er niet', () {
       final m = File('lib/main.dart').readAsStringSync();
-      expect(m, contains('familieKandidaten: ai == null ? null : () async => _familieUit(lib, (await keuring.zaadStijl).familie),'));
+      // Sinds 21-11-2026 met de verzameling erbij (een radio vanuit een verzameling vult eruit).
+      expect(m, contains('    familieKandidaten: ai == null\n        ? null\n'
+          '        : () async => _familieUit(lib, (await keuring.zaadStijl).familie,'));
       expect(m, contains('sfeerVoorReserve: ai == null ? null : keuring.sfeerJa,'));
       expect(m, contains('if (!nooitOpRadio(t.title) && familieVan(t.genre) == familie) t'));
       // Fout = nee: de familielaag vraagt het model zelf, en een fout of een vol budget geeft null.

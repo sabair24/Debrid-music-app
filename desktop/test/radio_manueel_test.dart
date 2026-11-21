@@ -410,7 +410,7 @@ void main() {
       final m = _bron('lib/main.dart');
       expect("MenuRegel(Icons.radio_outlined, 'Manuele radio',".allMatches(m).length, 8);
       expect(m, contains('final afstand = hier || manueel ? null : _misschien<GekozenZone>(context)?.opAfstand;'));
-      expect(m, contains('      manueel: manueel,\n      bijStart: (s) {'));
+      expect(m, contains('      manueel: manueel,\n      verzameling: verz,\n      bijStart: (s) {'));
     });
 
     test('het paneel toont de stand en telt wat klinkt', () {

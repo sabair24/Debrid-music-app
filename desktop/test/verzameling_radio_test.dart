@@ -157,6 +157,14 @@ void main() {
         bibliotheek: [_n('Sade', 'Soul'), _n('Sade', 'Soul')],
       );
       expect(v, isNull, reason: 'Sade hoort bij je gewone muziek; "Soul" staat niet vooral in Vocal jazz');
+      final gelijk = verzamelingVoorRadio(
+        zaadArtiest: 'Sade',
+        verzamelingen: {
+          'Vocal jazz': [_n('Sade', 'Soul')],
+        },
+        bibliotheek: [_n('Sade', 'Soul')],
+      );
+      expect(gelijk, isNull, reason: 'even vaak is niet meer');
     });
 
     test('DE KERN: een genre dat vooral in een verzameling staat, stelt die voor', () {
@@ -322,6 +330,36 @@ void main() {
       expect(radio.doelVoor(b.path), isNull, reason: 'de eigen keuze blijft');
       radio.houdIn(c.path, 'Vocal jazz', id: null);
       expect(radio.doelVoor(c.path), 'Vocal jazz');
+    });
+
+    test('op id: Houden vindt het nummer ook als het pad hier anders heet (een toestel, een verhuisd bestand)', () async {
+      final zaad = _t('Zaad', artiest: 'Nancy Wilson'), b = _t('B', artiest: 'Sarah Vaughan');
+      final radio = RadioBesturing(speler: _Speler(), bron: _Bron({'B': b}))..idVanPad = (p) => 'id:${p.split(Platform.pathSeparator).last}';
+      addTearDown(radio.stop);
+      await radio.start([
+        Radioplek(artiest: 'Nancy Wilson', titel: 'Zaad', eigen: zaad, zaad: true),
+        Radioplek(artiest: 'Sarah Vaughan', titel: 'B'),
+      ], verzameling: 'Vocal jazz');
+      await _totGeland(radio, 1);
+      expect(radio.doelVoor('elders/B.flac', id: 'id:B.flac'), 'Vocal jazz');
+      radio.houdIn('elders/B.flac', 'Soul classics', id: 'id:B.flac');
+      expect(radio.doelVoor(b.path), 'Soul classics', reason: 'op het pad van de radio zelf bewaard');
+      expect(radio.doelVoor('elders/B.flac', id: 'id:B.flac'), 'Soul classics', reason: 'en zo ook weer gevonden');
+      expect(radio.doelVoor('nergens.flac'), 'Vocal jazz', reason: 'onbekend: die van de radio');
+    });
+
+    test('DE KERN: een overzicht uit de brievenbus komt niet als eigen notitie op schijf', () async {
+      final radio = RadioBesturing(speler: _Speler(), bron: _Bron(const {}));
+      final elders = RadioSessie(
+          naam: 'Op de tv', begonnenMs: 1, gehaald: [const Gehaald(pad: 'p/b.flac', artiest: 'X', titel: 'B')]);
+      expect(radio.ontvangOverzicht(elders, 'tv-1'), isTrue);
+      radio.zetVerzameling('Vocal jazz', sessie: elders);
+      radio.houdIn('p/b.flac', 'Soul classics');
+      await radio.schrijfrijVoorToets;
+      expect(elders.verzameling, 'Vocal jazz');
+      expect(elders.doelen, {'p/b.flac': 'Soul classics'});
+      expect(File('${wortel.path}${Platform.pathSeparator}radio_sessie.json').existsSync(), isFalse,
+          reason: 'anders kwam het na een herstart een tweede keer');
     });
 
     test('een voorstel verdwijnt bij aannemen, bij nee, en bij een nieuwe start', () async {

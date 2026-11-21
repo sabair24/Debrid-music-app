@@ -489,7 +489,9 @@ void main() {
 
   test('aangesloten: de pc laat de hartjes volgen, het toestel vraagt de scans van zijn eigen tegel', () {
     final main = File('lib/main.dart').readAsStringSync();
-    expect(main, contains('library.addListener(() => favorieten.volgTegels(library.albums));'));
+    // Sinds 21-11-2026 met de namen van de verzamelingen: een hartje volgt ook een verhuizing naar een verzameling.
+    expect(main, contains('library.addListener(() => favorieten.volgTegels(library.albums,\n'
+        '        verzamelingNamen: {...library.verzamelingNamen, ...verzamelingen.namen}));'));
     expect(main, contains('a.artist == artist && a.title == album && a.plaat == plaat'));
     final server = File('lib/lan/server.dart').readAsStringSync();
     expect(server, contains('await library.clearAlbumArtRoles(rolArtiest, rolAlbum, plaat: rolPlaat);'));

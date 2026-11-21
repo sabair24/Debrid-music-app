@@ -46,10 +46,10 @@ void main() {
     expect(main, contains('final aan = _gsmKop.offset > GroteKop.inklapGrens;'));
     expect(main, contains('valueListenable: _titelInBalk,'));
     expect(main, contains('if (_gsmKop.hasClients) _gsmKop.jumpTo(0);'), reason: 'een nieuwe sectie begint met de kop');
-    // De acht sectiepagina's met een eigen titel laten die op de gsm weg, Start zijn groet, en het
-    // artiestenraster zijn kop zonder zoekopdracht.
-    expect('if (!schilKop(context))'.allMatches(main).length, 10,
-        reason: 'acht paginas, de schil zelf en de groet');
+    // De negen sectiepagina's met een eigen titel (sinds 21-11-2026 ook Verzamelingen) laten die op de gsm weg, Start
+    // zijn groet, en het artiestenraster zijn kop zonder zoekopdracht.
+    expect('if (!schilKop(context))'.allMatches(main).length, 11,
+        reason: 'negen paginas, de schil zelf en de groet');
     expect(main, contains('if (!schilKop(context) || artists.length != widget.lib.artists.length)'),
         reason: 'artiestenraster');
     expect(main, contains('if (!ingebed && (title != null || !schilKop(context)))'), reason: 'albumraster');

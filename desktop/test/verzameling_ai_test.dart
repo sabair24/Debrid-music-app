@@ -267,7 +267,12 @@ void main() {
       final klaar = Completer<({List<VerzamelAiVoorstel> voorstellen, List<AiCorrectieVoorstel> correcties})>();
       final loopt = v.vraagOpPc(() => klaar.future);
       expect(v.bezig, isNotNull);
-      unawaited(v.vraagOpPc(() async => throw StateError('tweede')));
+      var tweede = false;
+      unawaited(v.vraagOpPc(() async {
+        tweede = true;
+        throw StateError('tweede');
+      }));
+      expect(tweede, isFalse, reason: 'één vraag aan Claude tegelijk');
       klaar.completeError('Het taalmodel heeft het even te druk.');
       await loopt;
       expect(v.fout, 'Het taalmodel heeft het even te druk.', reason: 'en de tweede vraag liep niet: één tegelijk');
