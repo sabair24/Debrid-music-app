@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'organize.dart' show artistKey, normKey;
+import 'verzameling.dart' show verzamelingUitPad;
 
 /// One playable track. Covers are NOT stored per-track (memory) — they live on the
 /// Album. Only a queued/playing track carries its cover, passed via the player.
@@ -47,7 +48,14 @@ class Track {
     this.sizeBytes = 0,
     this.sampleRate = 0,
     this.bitsPerSample = 0,
-  });
+    String? verzameling,
+  }) : _verzameling = verzameling;
+
+  final String? _verzameling;
+
+  /// De verzameling waarin dit nummer staat (verzameling.dart), of null: dan hoort het bij je gewone bibliotheek. Op de
+  /// pc volgt het uit het pad; op een toestel, waar het pad een stroomadres is, uit de catalogus.
+  late final String? verzameling = _verzameling ?? verzamelingUitPad(path);
 
   /// Do these two read the same on screen?
   ///
@@ -84,6 +92,10 @@ class Album {
   final String artist;
   final List<Track> tracks;
   final bool isSingle;
+
+  /// De verzameling van dit album ([Track.verzameling]): een album mengt nooit nummers uit een verzameling met nummers
+  /// uit je bibliotheek (de groepsleutel in library.dart neemt haar mee).
+  String? get verzameling => tracks.isEmpty ? null : tracks.first.verzameling;
 
   /// Which pressing this is, when the library holds more than one of the same record and had to
   /// split them. Without it the six Backstreet Boys tiles are indistinguishable, and you cannot

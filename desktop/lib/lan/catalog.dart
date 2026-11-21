@@ -140,7 +140,7 @@ class LanCatalog {
       if (album.tracks.isEmpty) continue;
       final aKey = artistKey(album.artist);
       artiesten[artistIdFor(aKey)] = album.artist;
-      platen[albumIdFor(aKey, normKey(album.title), album.edition)] = album;
+      platen[albumIdFor(aKey, normKey(album.title), album.edition, verzameling: album.verzameling)] = album;
     }
     _platenPerId = platen;
     _artiestenPerId = artiesten;
@@ -274,7 +274,7 @@ class LanCatalog {
       artistNameById[aId] = album.artist;
       albumCounts.update(aId, (n) => n + 1, ifAbsent: () => 1);
 
-      final albId = albumIdFor(aKey, normKey(album.title), album.edition);
+      final albId = albumIdFor(aKey, normKey(album.title), album.edition, verzameling: album.verzameling);
       albumById[albId] = album;
       albums.add(AlbumDto(
         id: albId,
@@ -336,6 +336,7 @@ class LanCatalog {
           ext: ext,
           // Waar hij op de pc staat, zodat een gsm zijn kopie op dezelfde plek legt (zie [TrackDto.rel]).
           rel: relPathOf(t.path, root),
+          verzameling: t.verzameling,
           addedMs: t.addedMs,
           // De meting gaat mee de lijn over. Alleen hier is `t.path` nog een echt bestandspad; op
           // een iPad heet ditzelfde nummer straks een stream-URL, en dan valt er niets meer te
@@ -460,6 +461,8 @@ class LanCatalog {
       if (t.twijfel != null) fingerprint.add('T${t.twijfel!['id']}');
       if (t.soort != null) fingerprint.add('S${t.soort}${t.soortGekozen ? '!' : ''}');
       if (t.zoekt != null) fingerprint.add('Z${t.zoekt}');
+      // De verzameling (verzameling.dart): alleen als hij er is, zodat elke andere catalogus blijft wat hij was.
+      if (t.verzameling != null) fingerprint.add('C${t.verzameling}');
       // De versies en de keuze ertussen: geen enkel nummer verandert, dus zonder dit hoort geen toestel ervan.
       if (t.versies != null) fingerprint.add('V${jsonEncode(t.versies)}');
       // De luidheid alleen als hij er is: een bibliotheek zonder metingen (of een pc zonder winkel,

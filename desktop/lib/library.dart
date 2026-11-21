@@ -38,6 +38,7 @@ import 'nultoets_meter.dart' show alleNultoetsen;
 import 'integriteit.dart' show kapotSleutels, onthoudHeelheid;
 import 'luidheid_winkel.dart' show onthoudLuidheidVanPc, zetLuidheidStatusVanPc;
 import 'organize.dart';
+import 'verzameling.dart';
 import 'plaat_indeling.dart';
 import 'settings.dart';
 import 'vaste_keuze.dart';
@@ -1291,6 +1292,53 @@ class LibraryStore extends ChangeNotifier {
   /// vinyl harder of zachter dan de cd die speelde.
   List<Track> get metVersies => _versieTracks.isEmpty ? tracks : [...tracks, ..._versieTracks.values];
 
+  /// "De mix": je gewone bibliotheek, zonder wat in een verzameling staat (verzameling.dart). Albums, artiesten, Start,
+  /// shuffle, de vulling van een radio en je smaak (Aanbevolen, Ontdek) kijken hiernaar; zoeken, afspelen en alles wat
+  /// op een pad of id opzoekt, kijkt naar [tracks] en [albums]. Zonder verzamelingen precies [tracks] en [albums] zelf,
+  /// zodat wat op identiteit bewaart (de radio-index, de suggesties) blijft werken.
+  List<Track> get mixTracks {
+    final sleutel = (tracks.length, _standVersie);
+    if (_mixTracksVan != sleutel) {
+      _mixTracksVan = sleutel;
+      _mixTracks = tracks.any((t) => t.verzameling != null) ? [for (final t in tracks) if (t.verzameling == null) t] : null;
+    }
+    return _mixTracks ?? tracks;
+  }
+
+  /// Zie [mixTracks].
+  List<Album> get mixAlbums {
+    final a = albums;
+    final sleutel = (identityHashCode(a), a.length, _standVersie);
+    if (_mixAlbumsVan != sleutel) {
+      _mixAlbumsVan = sleutel;
+      _mixAlbums = a.any((x) => x.verzameling != null) ? [for (final x in a) if (x.verzameling == null) x] : null;
+    }
+    return _mixAlbums ?? a;
+  }
+
+  (int, int)? _mixTracksVan;
+  List<Track>? _mixTracks;
+  (int, int, int)? _mixAlbumsVan;
+  List<Album>? _mixAlbums;
+
+  /// De namen van de verzamelingen die er nu nummers hebben, op alfabet.
+  List<String> get verzamelingNamen {
+    final namen = <String, String>{};
+    for (final t in tracks) {
+      final v = t.verzameling;
+      if (v != null) namen.putIfAbsent(v.toLowerCase(), () => v);
+    }
+    return namen.values.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  }
+
+  /// De albums van verzameling [naam] (hoofdletters tellen niet).
+  List<Album> albumsIn(String naam) =>
+      [for (final a in albums) if (a.verzameling?.toLowerCase() == naam.toLowerCase()) a];
+
+  /// De nummers van verzameling [naam] (hoofdletters tellen niet).
+  List<Track> tracksIn(String naam) =>
+      [for (final t in tracks) if (t.verzameling?.toLowerCase() == naam.toLowerCase()) t];
+
   /// De versie op [pad] als nummer (op de pc), of null.
   Track? versieTrack(String pad) => _versieTracks[_padSleutel(pad)];
 
@@ -1968,6 +2016,7 @@ class LibraryStore extends ChangeNotifier {
         sizeBytes: t.sizeBytes,
         sampleRate: t.sampleRate,
         bitsPerSample: t.bitsPerSample,
+        verzameling: t.verzameling,
       );
 
   /// The exact Discogs release the user pinned to this album, if they pinned one.
@@ -2585,6 +2634,76 @@ class LibraryStore extends ChangeNotifier {
   bool Function(String pad)? inEenRij;
   bool heeftPrullenbak = pb.heeftPrullenbak;
 
+  /// Nummers op [paden] verhuizen naar verzameling [naam] (verzameling.dart) — of, met [naam] null, terug naar je gewone
+  /// bibliotheek. Op een toestel gaat de vraag naar de pc.
+  ///
+  /// Elk bestand houdt zijn pad binnen de nieuwe map ([relInVerzameling]): zijn id, je favorieten, je lijsten en wat je
+  /// draaide gaan mee. **Nooit kopiëren** ([verplaatsZonderKopie]): een bestand dat openstaat (het speelt, of een toestel
+  /// leest het) laat zich op Windows niet hernoemen, en een kopie waarvan het origineel blijft staan, gaf twee bestanden
+  /// met één id. Zo'n bestand blijft staan en telt in [bezet]; de volgende keer gaat het alsnog. Blijft er in een map
+  /// geen muziek meer over, dan gaan de hoes en de rest mee, en de lege map verdwijnt.
+  Future<({int verhuisd, int bezet})> naarVerzameling(Iterable<String> paden, String? naam) async {
+    final lijst = paden.toList();
+    final doelNaam = naam == null || naam.trim().isEmpty ? null : verzamelMapnaam(naam);
+    if (isRemote) {
+      final ids = [
+        for (final p in lijst)
+          if (_remoteTrackId(p) case final id?) id,
+      ];
+      if (ids.isEmpty) return (verhuisd: 0, bezet: 0);
+      await _editOnPc({'op': 'naarVerzameling', 'trackIds': ids, if (doelNaam != null) 'naam': doelNaam});
+      return (verhuisd: ids.length, bezet: 0);
+    }
+    if (rootPath.isEmpty) return (verhuisd: 0, bezet: 0);
+    final sep = Platform.pathSeparator;
+    String doelVan(String rel) =>
+        '$rootPath$sep${(doelNaam == null ? relZonderVerzameling(rel) : relInVerzameling(rel, doelNaam)).replaceAll('/', sep)}';
+    var verhuisd = 0, bezet = 0;
+    final mappen = <String, String>{}; // oude map → nieuwe map
+    for (final p in lijst) {
+      final rel = relPathOf(p, rootPath);
+      final doel = File(doelVan(rel));
+      if (doel.path.toLowerCase() == p.toLowerCase()) continue;
+      try {
+        if (await doel.exists()) {
+          bezet++; // nooit overschrijven
+          continue;
+        }
+        await doel.parent.create(recursive: true);
+        final at = await verplaatsZonderKopie(File(p), doel);
+        if (at == null) {
+          bezet++;
+          continue;
+        }
+        _reKeyCorrection(p, at);
+        mappen[File(p).parent.path] = doel.parent.path;
+        verhuisd++;
+      } catch (e) {
+        debugPrint('naar verzameling: $p — $e');
+        bezet++;
+      }
+    }
+    if (verhuisd == 0) return (verhuisd: 0, bezet: bezet);
+    // Wat er in een leeggelopen map nog lag (de hoes, een sidecar), gaat mee: anders stond de plaat in de verzameling
+    // zonder zijn hoes, en bleef de oude map staan.
+    for (final e in mappen.entries) {
+      try {
+        final oud = Directory(e.key);
+        if (!await oud.exists()) continue;
+        final rest = await oud.list(followLinks: false).toList();
+        if (rest.any((x) => x is Directory || isAudioBestand(x.path))) continue;
+        for (final f in rest.whereType<File>()) {
+          final naar = File('${e.value}$sep${f.uri.pathSegments.last}');
+          if (!await naar.exists()) await verplaatsZonderKopie(f, naar);
+        }
+        await pruneVacated(oud.path, rootPath);
+      } catch (_) {/* de muziek staat goed; een achtergebleven hoes is geen ramp */}
+    }
+    await saveCorrectionsNow();
+    await scan();
+    return (verhuisd: verhuisd, bezet: bezet);
+  }
+
   /// Remove tracks from the library. With [fromDisk] the files are DELETED permanently;
   /// otherwise they're only excluded from the library and stay on disk.
   /// Returns how many files were actually deleted from disk.
@@ -3023,6 +3142,7 @@ class LibraryStore extends ChangeNotifier {
       sizeBytes: t.sizeBytes,
       sampleRate: t.sampleRate,
       bitsPerSample: t.bitsPerSample,
+      verzameling: t.verzameling,
     );
   }
 
@@ -4116,6 +4236,7 @@ class LibraryStore extends ChangeNotifier {
         sizeBytes: d.sizeBytes,
         sampleRate: d.sampleRate ?? 0,
         bitsPerSample: d.bitsPerSample ?? 0,
+        verzameling: d.verzameling,
       );
 
   /// Covers, over the network, after the grid is already on screen.
@@ -4598,7 +4719,14 @@ class LibraryStore extends ChangeNotifier {
   String _basisSleutel(Track t) =>
       'album::${artistKey(splitFeatured(t.artist, t.title).main)}|${normKey(t.album)}';
 
+  /// Een album in een verzameling is een eigen tegel: zonder het voorvoegsel smolt het samen met hetzelfde album in je
+  /// bibliotheek. De opzoekingen hieronder ([_merged], [_gesplitst], [_plaatIndeling]) blijven op de gewone sleutel.
   String _groupKey(Track t) {
+    final v = t.verzameling;
+    return v == null ? _groupKeyZonderVerzameling(t) : 'v:${v.toLowerCase()}|${_groupKeyZonderVerzameling(t)}';
+  }
+
+  String _groupKeyZonderVerzameling(Track t) {
     if (t.album.isEmpty) return 'single::${t.path}';
     final base = _basisSleutel(t);
     // The user's word beats the tags: a record they merged stays merged.

@@ -68,6 +68,7 @@ import 'radioplan.dart';
 import 'oordelen.dart';
 import 'prullenbak.dart' show heeftPrullenbak, naarPrullenbak;
 import 'radiosessie.dart';
+import 'verzamelingen.dart';
 import 'ui/draaihoes.dart';
 import 'ui/tv_rij.dart';
 import 'ui/nieuw_kaarten.dart';
@@ -1432,6 +1433,9 @@ Future<void> main() async {
           if (nu - s.updatedAt < const Duration(hours: 1).inMilliseconds) (rij: s.queue, index: s.index),
     ]);
   };
+  // De verzamelingen (verzameling.dart, verzamelingen.dart; 21-11-2026): dezelfde weg als de afspeellijsten. Hier al,
+  // want het hartje van een album volgt een verhuizing naar een verzameling ([Favorieten.volgTegels]).
+  final verzamelingen = Verzamelingen();
   // Favorieten. Op de pc rechtstreeks in de gedeelde staat; op een Mac of iPad gaat dezelfde op over
   // de lijn (zie waar `duwOps` gezet wordt). Eén weg, dus geen tweede waarheid die kan afwijken.
   final favorieten = Favorieten()..idVanPad = library.gedeeldId;
@@ -1440,7 +1444,8 @@ Future<void> main() async {
       ..winkel = sharing.state
       ..wortel = () => library.rootPath;
     // Valt een tegel uiteen (Marc Lavoine 1985 en 2001) of weer samen, dan gaat het hartje mee ([Favorieten.volgTegels]).
-    library.addListener(() => favorieten.volgTegels(library.albums));
+    library.addListener(() => favorieten.volgTegels(library.albums,
+        verzamelingNamen: {...library.verzamelingNamen, ...verzamelingen.namen}));
   }
   final lijsten = Afspeellijsten();
   // Favorieten en de afspeellijsten die je op dit toestel houdt (Saber, 28-10-2026): wat erbij komt gaat op je gsm,
@@ -1489,7 +1494,8 @@ Future<void> main() async {
               if (g.id case final id?) id,
           };
           final nieuw = nieuweNummers(
-              bibliotheek: library.tracks,
+              // Niet uit een verzameling: die gaat alleen naar de gsm als je dat per verzameling kiest (21-11-2026).
+              bibliotheek: library.mixTracks,
               bekend: bekendOpPc.paden,
               sindsMs: bekendOpPc.sinds ?? 0,
               opProef: opProef,
@@ -1756,15 +1762,16 @@ Future<void> main() async {
     final rec = RecommendService();
     final aanbevolen = AanbevolenVoorJou(
       zoeker: (zaden, bezit) => rec.ontdekVoorJou(zaden, bezit),
+      // De smaak uit de mix ([LibraryStore.mixTracks]): wat in een verzameling staat, telt alleen daar (21-11-2026).
       artiesten: () => eigenArtiesten(
-          library.tracks.map((t) {
+          library.mixTracks.map((t) {
             final s = speelstanden.standVan(t);
             return EigenNummer(
                 artiest: t.artist, album: t.album, titel: t.title, beurten: s?.aantal ?? 0, laatstMs: s?.laatstMs ?? 0);
           }),
           overslaan: _genericArtist),
       groen: () => {
-        for (final t in library.tracks)
+        for (final t in library.mixTracks)
           if (oordelen.vanTrack(t) == Oordeel.omhoog) artistKey(hoofdartiest(t.artist)),
       },
       bezit: () => {for (final t in library.tracks) artistKey(hoofdartiest(t.artist))},
@@ -1776,7 +1783,7 @@ Future<void> main() async {
     // Ontdek (Saber, 04-11-2026; `ontdek.dart`): elke dag ~50 nummers uit Deezer, Last.fm en Claude, gespreid zoals je
     // bibliotheek en één per artiest. Een toestel vraagt het de pc (`/api/ontdek`).
     List<OntdekEigen> ontdekEigen() => [
-          for (final t in library.tracks)
+          for (final t in library.mixTracks)
             () {
               final s = speelstanden.standVan(t);
               final al = library.albumForPath(t.path);
@@ -1957,15 +1964,15 @@ Future<void> main() async {
   // bladeren.
   autoBladerBron = () {
     return (
-      albums: () => library.albums,
+      albums: () => library.mixAlbums,
       recent: () {
-        final gesorteerd = [...library.albums.where((a) => a.addedMs > 0)]
+        final gesorteerd = [...library.mixAlbums.where((a) => a.addedMs > 0)]
           ..sort((a, b) => b.addedMs.compareTo(a.addedMs));
         return [for (final a in gesorteerd.take(25)) ...a.tracks];
       },
       favorieten: () => favorieten.nummers(library.tracks),
       // Dezelfde lijst als het Tracks-scherm in de app.
-      alleNummers: () => library.tracks,
+      alleNummers: () => library.mixTracks,
       // "Verder waar je was" is letterlijk de wachtrij die er nog staat — inclusief de plek waar je
       // gebleven was, want die wordt bij het afsluiten bewaard.
       verder: () => player.queueTracks,
@@ -2000,6 +2007,7 @@ Future<void> main() async {
       'bib ${library.albums.length}a/${library.tracks.length}n'
       '${library.scanning ? ' SCANT' : ''}${library.enriching ? ' VERRIJKT' : ''}');
   if (mode.owner) lijsten.winkel = sharing.state;
+  if (mode.owner) verzamelingen.winkel = sharing.state;
 
   // Signing in. Restoring a saved session is deliberately NOT awaited before the first frame: a
   // slow network would otherwise hold the whole app on a blank screen, and on the PC it would delay
@@ -2536,6 +2544,7 @@ Future<void> main() async {
         // startpagina hoeft daar niet van te hertekenen.
         ChangeNotifierProvider<Speelstanden>.value(value: speelstanden),
         ChangeNotifierProvider<Afspeellijsten>.value(value: lijsten),
+        ChangeNotifierProvider<Verzamelingen>.value(value: verzamelingen),
         ChangeNotifierProvider<OfflineStore>.value(value: offline),
         ChangeNotifierProvider<SpeakerTarget>.value(value: speakers),
         Provider<OnlineService>.value(value: online),
@@ -2635,6 +2644,7 @@ Future<void> main() async {
             [for (final x in (s['favoriteAlbums'] as List? ?? const [])) x.toString()],
           );
           lijsten.vanServer((s['playlists'] as List? ?? const []));
+          verzamelingen.vanServer((s['verzamelingen'] as List? ?? const []));
           // `plays` reisde altijd al mee in dit antwoord en werd hier weggegooid. Dit is het enige
           // wat de shuffle op een telefoon nodig heeft om te weten wat je al veel gehoord hebt.
           speelstanden.vanServer(
@@ -2672,6 +2682,7 @@ Future<void> main() async {
 
       favorieten.duwOps = duw;
       lijsten.duwOps = duw;
+      verzamelingen.duwOps = duw;
       speelstanden.duwOps = duw;
       oordelen.duwOps = duw;
       radioSfeer.duwOps = duw;
@@ -5953,7 +5964,9 @@ class _HomeShellState extends State<HomeShell> {
         }
         // An album stays in view when any of its tracks matches (so searching an artist or a
         // single song still surfaces the album it lives on).
-        final albums = lib.albums.where((a) => a.tracks.any(_matches)).toList();
+        // Zonder zoekvraag de mix ([LibraryStore.mixAlbums]): een verzameling staat er niet tussen. Met een zoekvraag
+        // alles — "vindbaar, niet gemengd" (Saber, 21-11-2026).
+        final albums = (_q.isEmpty ? lib.mixAlbums : lib.albums).where((a) => a.tracks.any(_matches)).toList();
         if (albums.isEmpty) {
           return LeegVlak(
             teken: Icons.search_off_rounded,
@@ -6108,7 +6121,7 @@ class _SectionsDrawer extends StatelessWidget {
   Widget build(BuildContext context) {
     // Eén `select` op de twee getallen samen: een record vergelijkt op inhoud, dus een scan die
     // niets aan de aantallen verandert hertekent ook niets.
-    final maten = context.select<LibraryStore, (int, int)>((l) => (l.albums.length, l.tracks.length));
+    final maten = context.select<LibraryStore, (int, int)>((l) => (l.mixAlbums.length, l.mixTracks.length));
     return Drawer(
       backgroundColor: _panel,
       child: SafeArea(
@@ -11419,7 +11432,7 @@ class ArtistsView extends StatefulWidget {
 }
 
 class _ArtistsViewState extends State<ArtistsView> {
-  List<Album> get _source => widget.albums ?? widget.lib.albums;
+  List<Album> get _source => widget.albums ?? widget.lib.mixAlbums;
 
   /// De gekozen taal of stijl (zie `artiest_tags.dart`), of null voor alles.
   String? _groep;
@@ -11434,7 +11447,7 @@ class _ArtistsViewState extends State<ArtistsView> {
     }
     if (tags.isEmpty) return const [];
     final genres = <String, List<String?>>{};
-    for (final t in lib.tracks) {
+    for (final t in lib.mixTracks) {
       (genres[t.artist] ??= []).add(t.genre);
     }
     return bibliotheekGroepen(tags, genres);
@@ -19265,7 +19278,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
       maakPlan: (recs) => _radioplan(recs, lib,
           al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller), bron: 'buren'),
       reserveKandidaten: (artiesten) => [
-        for (final t in lib.tracks)
+        for (final t in radioEigen(lib, null))
           if (!nooitOpRadio(t.title) && artiesten.contains(artiestSleutel(t.artist))) t
       ],
       keurEigen: (p) => keuring.keur(p, eigen: true),
@@ -19300,7 +19313,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
         bijStart: (s) {
           gestart = s;
           radio.eigenVanZaad = () => [
-                for (final t in lib.tracks)
+                for (final t in radioEigen(lib, null))
                   if (!nooitOpRadio(t.title) && genoemd.contains(artiestSleutel(t.artist))) t
               ];
         });
@@ -23014,7 +23027,7 @@ Future<void> startRadio(BuildContext context, String artist,
   final viaPc = remote != null && context.read<ClientSession>().pcHeeftModel;
   if ((!lib.isRemote && cfg.anthropicKey.trim().isNotEmpty) || viaPc) {
     final beurten = <Beurt>[
-      for (final t in lib.tracks)
+      for (final t in radioEigen(lib, null))
         if (standen.standVan(t) case final s?)
           (artiest: t.artist, aantal: s.aantal, laatstMs: s.laatstMs),
     ];
@@ -23027,7 +23040,7 @@ Future<void> startRadio(BuildContext context, String artist,
     // daar niet op (zie [_lastfmTopArtiesten]).
     final lfm = await _lastfmTopArtiesten(cfg, al: gespeeld, geduld: const Duration(milliseconds: 800));
     profiel = profielUit(
-      nummers: [for (final t in lib.tracks) (artiest: t.artist, jaar: t.year, genre: t.genre)],
+      nummers: [for (final t in radioEigen(lib, null)) (artiest: t.artist, jaar: t.year, genre: t.genre)],
       gespeeld: [...gespeeld, ...lfm].take(15).toList(),
       overslaan: _genericArtist,
     );
@@ -23219,7 +23232,7 @@ Future<void> startRadio(BuildContext context, String artist,
     // Het laatste vangnet van het herhalen: je eigen nummers van de zaadartiest. Pas hier, als deze
     // start het werd — anders kreeg een lopende radio het vangnet van een start die geweigerd werd.
     radio.eigenVanZaad = () => [
-          for (final t in lib.tracks)
+          for (final t in radioEigen(lib, null))
             if (artiestSleutel(t.artist) == zelf && !nooitOpRadio(t.title)) t
         ];
   });
@@ -23686,17 +23699,24 @@ class _Radiokeuring {
 /// alleen mee met een ja van het model (23-10-2026).
 ///
 /// Geen jaargrens (Saber, 22-10-2026): de keuring beslist op stijl en sfeer.
-List<Track> _reserveUit(LibraryStore lib, Set<String> artiesten) => [
-      for (final t in lib.tracks)
+List<Track> _reserveUit(LibraryStore lib, Set<String> artiesten, {String? verzameling}) => [
+      for (final t in radioEigen(lib, verzameling))
         if (!nooitOpRadio(t.title) && artiesten.contains(artiestSleutel(t.artist))) t
     ];
 
+/// Je eigen muziek waarmee een radio vult (de reserve, de familielaag, het vangnet van de zaadartiest, het smaakprofiel):
+/// je gewone bibliotheek zonder verzamelingen ([LibraryStore.mixTracks]), of — bij een radio vanuit een verzameling — die
+/// verzameling (Saber, 21-11-2026: "Binnen de verzameling"). Wat je al HEBT (de radio-index, [_radioIndexVoor]) blijft
+/// over alles kijken: anders haalde een radio een nummer dat al in "Vocal jazz" staat een tweede keer.
+List<Track> radioEigen(LibraryStore lib, String? verzameling) =>
+    verzameling == null ? lib.mixTracks : lib.tracksIn(verzameling);
+
 /// De tweede laag van de reserve: eigen nummers waarvan het genre bij [familie] hoort — zie
 /// `Radiobijvuller._familieLaag`. Leeg zonder familie. Gaat nooit zonder sfeeroordeel van het model de reserve in.
-List<Track> _familieUit(LibraryStore lib, Stijlfamilie? familie) => familie == null
+List<Track> _familieUit(LibraryStore lib, Stijlfamilie? familie, {String? verzameling}) => familie == null
     ? const []
     : [
-        for (final t in lib.tracks)
+        for (final t in radioEigen(lib, verzameling))
           if (!nooitOpRadio(t.title) && familieVan(t.genre) == familie) t
       ];
 
@@ -23860,7 +23880,7 @@ NieuweReleases maakNieuweReleases(LibraryStore library, Speelstanden standen, {r
     NieuweReleases(
       zoeker: NieuweReleasesZoeker(DeezerBaan.haal),
       nummers: () => eigenArtiesten(
-          library.tracks.map((t) {
+          library.mixTracks.map((t) {
             final s = standen.standVan(t);
             return EigenNummer(
               artiest: t.artist,
@@ -23908,7 +23928,7 @@ class TracksView extends StatelessWidget {
     // elkaar: de KNOPPEN roepen hem aan (via [speelLijst], pas bij de tik), en één RIJ wil
     // weten of zij het is die speelt. Dat laatste staat hieronder per rij in een `select`, precies
     // zoals `TrackRow` het al doet — met dezelfde uitleg erboven.
-    final all = lijst ?? lib.tracks;
+    final all = lijst ?? (query.isEmpty ? lib.mixTracks : lib.tracks);
     final tracks = match == null ? all : all.where(match!).toList();
     if (lib.scanning && all.isEmpty) {
       // Regels in de vorm van nummerregels, op dezelfde marges, zodat er niets verspringt zodra de
@@ -24550,12 +24570,12 @@ class _HomeStartViewState extends State<HomeStartView> {
     };
     // Het genreprofiel komt uit de tags die er al liggen — nul verzoeken. Zie [genreProfiel] voor
     // waarom "Top van dit moment" anders over sludge metal en musicals gaat.
-    final profiel = genreProfiel([for (final t in lib.tracks) t.genre]);
+    final profiel = genreProfiel([for (final t in lib.mixTracks) t.genre]);
     // En de artiest die je wérkelijk draait, uit de 510 afspeelbeurten die er al lagen.
     final standen = context.read<Speelstanden>();
     final nuMs = DateTime.now().millisecondsSinceEpoch;
     final beurten = <Beurt>[
-      for (final t in lib.tracks)
+      for (final t in lib.mixTracks)
         if (standen.standVan(t) case final s?)
           (artiest: t.artist, aantal: s.aantal, laatstMs: s.laatstMs),
     ];
@@ -24581,7 +24601,7 @@ class _HomeStartViewState extends State<HomeStartView> {
         ? Future.value(<AiVoorstel>[])
         : lfmArtiestenF.then((extra) => AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace)
             .maakAanbevelingen(profielUit(
-              nummers: [for (final t in lib.tracks) (artiest: t.artist, jaar: t.year, genre: t.genre)],
+              nummers: [for (final t in lib.mixTracks) (artiest: t.artist, jaar: t.year, genre: t.genre)],
               gespeeld: [...gespeeldeNamen, ...extra].take(15).toList(),
               overslaan: _genericArtist,
             )));
@@ -24726,7 +24746,9 @@ class _HomeStartViewState extends State<HomeStartView> {
   @override
   Widget build(BuildContext context) {
     final lib = context.watch<LibraryStore>();
-    final artists = lib.artists.where((a) => !_genericArtist(a)).toList();
+    // De mix: een verzameling heeft haar eigen smaak (Saber, 21-11-2026: "Alleen binnen de verzameling").
+    final mixArtiesten = {for (final a in lib.mixAlbums) a.artist};
+    final artists = lib.artists.where((a) => mixArtiesten.contains(a) && !_genericArtist(a)).toList();
     // Fire the personal rows the first time the library actually has artists.
     // Alleen als ze er nog niet zijn — een terugkeer naar Start hoeft ze niet opnieuw te halen.
     if (!_seedsRequested && artists.isNotEmpty && _StartCache.forYou.isEmpty) {
@@ -24747,18 +24769,18 @@ class _HomeStartViewState extends State<HomeStartView> {
         });
       }
     }
-    final recent = [...lib.albums.where((a) => a.addedMs > 0)]..sort((a, b) => b.addedMs.compareTo(a.addedMs));
+    final recent = [...lib.mixAlbums.where((a) => a.addedMs > 0)]..sort((a, b) => b.addedMs.compareTo(a.addedMs));
 
     // TWEE RIJEN UIT JE EIGEN KAST, en die kosten geen enkel verzoek.
     //
     // Alles hierboven wacht op Deezer. Deze twee staan er meteen, en ze zijn per definitie raak:
     // het is muziek die je al hebt en die dus meteen speelt. Dat is ook waarom ze bovenaan de
     // netwerkrijen komen — het eerste wat je ziet hoort niet een skelet te zijn.
-    final decennium = zwaartepuntDecennium([for (final a in lib.albums) a.year]);
+    final decennium = zwaartepuntDecennium([for (final a in lib.mixAlbums) a.year]);
     final uitDecennium = decennium == null
         ? const <Album>[]
         : vastGeschud(
-            lib.albums.where((a) => a.year != null && a.year! >= decennium && a.year! < decennium + 10),
+            lib.mixAlbums.where((a) => a.year != null && a.year! >= decennium && a.year! < decennium + 10),
             _StartCache.zaad);
 
     // Lang niet gedraaid: albums waarvan geen enkel nummer de laatste honderdtachtig dagen is
@@ -24768,7 +24790,7 @@ class _HomeStartViewState extends State<HomeStartView> {
     final grens = DateTime.now().millisecondsSinceEpoch - const Duration(days: 180).inMilliseconds;
     final standen = context.read<Speelstanden>();
     final vergeten = vastGeschud([
-      for (final a in lib.albums)
+      for (final a in lib.mixAlbums)
         if (a.tracks.isNotEmpty &&
             a.tracks.every((t) {
               final s = standen.standVan(t);
@@ -26168,7 +26190,8 @@ class _OntdekViewState extends State<OntdekView> {
   /// Een pc die Ontdek nog niet kent (of geen pc): dan zoekt dit toestel zelf, zoals vroeger, maar wel met één nummer
   /// per artiest en zonder versies ([stelOntdekSamen]).
   Future<OntdekLijst?> _zelf(LibraryStore lib) async {
-    final seeds = lib.artists.where((a) => !_genericArtist(a)).toList()..shuffle();
+    final mix = {for (final a in lib.mixAlbums) a.artist};
+    final seeds = lib.artists.where((a) => mix.contains(a) && !_genericArtist(a)).toList()..shuffle();
     if (seeds.isEmpty) return null;
     final recs = await _rec.discover(seeds.take(6).toList());
     final bezit = {for (final t in lib.tracks) ...bezitSleutelsVan(t.artist, t.title)};

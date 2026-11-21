@@ -10,6 +10,7 @@ import 'editions.dart';
 import 'flac_tags.dart';
 import 'mp3_duur.dart' show readMp3Duur;
 import 'mp3_tags.dart';
+import 'verzameling.dart' show verzamelMap;
 import 'echtheid.dart';
 import 'echtheid_oordelen.dart';
 import 'integriteit.dart';
@@ -2372,7 +2373,9 @@ Future<TidyReport> bergMapOp(String map, String downloadsRoot,
     if (onder.contains('${sep}_inkomend$sep') ||
         onder.contains('$sep$parkeerMap$sep') ||
         onder.contains('$sep$torrentWerkMap$sep') ||
-        onder.contains('$sep$keuringMap$sep')) {
+        onder.contains('$sep$keuringMap$sep') ||
+        // Een verzameling heeft haar eigen map (verzameling.dart): "Opruimen" zette ze anders terug in Albums\.
+        onder.contains('$sep$verzamelMap$sep')) {
       continue;
     }
     // Wat de aanroeper nog niet af vindt — een download die er nog in schrijft. Zie `_inAanmaak` in

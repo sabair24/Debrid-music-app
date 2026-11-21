@@ -40,6 +40,7 @@ import '../soulseek.dart';
 import '../torbox.dart';
 import 'cast_manager.dart';
 import 'radiohaler.dart';
+import '../verzameling.dart' show verzamelMapnaam;
 import 'remming.dart';
 import 'accountkoppeling.dart';
 import 'catalog.dart';
@@ -3807,6 +3808,7 @@ class LanServer {
     // album-id, net als een artiestportret. Zonder deze uitzondering kreeg elke rolwijziging van een
     // client een 404 op een album dat de client niet meestuurt.
     if (op != 'removeTracks' &&
+        op != 'naarVerzameling' &&
         op != 'artistArt' &&
         op != 'artistKop' &&
         op != 'albumArtRole' &&
@@ -3971,6 +3973,19 @@ class LanServer {
                 status: HttpStatus.badRequest);
           }
           await library.wijsRijenToe(keuzes);
+        case 'naarVerzameling':
+          // Nummers naar een verzameling (verzameling.dart), of zonder naam terug naar de bibliotheek. Verhuizen, nooit
+          // wissen: dit mag ook van buiten.
+          final paden = <String>[];
+          for (final id in (body['trackIds'] as List? ?? const [])) {
+            final t = id is String ? catalog.track(id) : null;
+            if (t != null) paden.add(t.path);
+          }
+          if (paden.isEmpty) return await _json(req.response, {'ok': false, 'reason': 'niets gevonden'});
+          final naam = body['naam'] is String ? (body['naam'] as String).trim() : '';
+          if (naam.isNotEmpty) state.applyOps([{'type': 'verzameling.maak', 'naam': verzamelMapnaam(naam)}]);
+          final r = await library.naarVerzameling(paden, naam.isEmpty ? null : naam);
+          return await _json(req.response, {'ok': true, 'verhuisd': r.verhuisd, 'bezet': r.bezet});
         case 'removeTracks':
           final paths = <String>[];
           for (final id in (body['trackIds'] as List? ?? const [])) {
