@@ -785,6 +785,28 @@ void main() {
       expect(c.edits.single['url'], 'https://ergens/portret.jpg');
     });
 
+    test('DE KERN: een tv die niemand bedient, haalt de catalogus niet bij elke verandering (21-11-2026)', () async {
+      // Een radio op de Shield, live gemeten: om de ~15 s stond de tekendraad 250–300 ms stil, telkens als de catalogus
+      // veranderd was en hij hem helemaal opnieuw opbouwde. Saber: "los dit op nu".
+      final pc = _pc();
+      final c = _client(pc.library);
+      var onbediend = true;
+      c.library.onbediend = () => onbediend;
+      String vraag() => c.requests.where((r) => r.startsWith('/api/catalog')).single;
+      await c.library.loadRemote();
+      expect(vraag(), isNot(contains('alleenMerk')), reason: 'de eerste keer de hele catalogus');
+      c.requests.clear();
+      await c.library.loadRemote(quiet: true);
+      expect(vraag(), contains('alleenMerk=1'), reason: 'onbediend: alleen vragen óf er iets veranderde');
+      c.requests.clear();
+      await c.library.loadRemote(quiet: true, vers: true);
+      expect(vraag(), isNot(contains('alleenMerk')), reason: 'na je eigen keuze toch de echte');
+      c.requests.clear();
+      onbediend = false;
+      await c.library.loadRemote(quiet: true);
+      expect(vraag(), isNot(contains('alleenMerk')), reason: 'bij de eerste toets weer gewoon de catalogus');
+    });
+
     test('na je eigen keuze vraagt het toestel de echte catalogus, ook onderweg', () async {
       // Saber, 28-10-2026, op de wifi van een bedrijf: "Al men behandelingen blijven hangen als ik bevoorbeeld vinyl
       // als standaard wil kiezen, moet ik de app sluiten voor de verandering er is". Onderweg vroeg elke herlading

@@ -3541,6 +3541,13 @@ class LibraryStore extends ChangeNotifier {
   /// [kCatalogusOnderwegElke] helemaal ophalen. Null of onwaar: altijd meteen, zoals thuis.
   bool Function()? zuinigeCatalogus;
 
+  /// Op een tv die niemand bedient (gezet in main.dart, [tvOnbediend]): verandert de catalogus, dan hoogstens om de
+  /// [kCatalogusOnbediendElke] helemaal ophalen en opnieuw opbouwen. Zie [tvOnbediend] voor het waarom.
+  bool Function()? onbediend;
+
+  /// Zo vaak hoogstens een nieuwe catalogus op een onbediende tv ([onbediend]).
+  static const kCatalogusOnbediendElke = Duration(minutes: 10);
+
   /// Wanneer de catalogus het laatst helemaal binnenkwam.
   DateTime? _laatsteVolleCatalogus;
 
@@ -3579,12 +3586,17 @@ class LibraryStore extends ChangeNotifier {
 
     CatalogResponse res;
     final laatst = _laatsteVolleCatalogus;
+    final venster = (zuinigeCatalogus?.call() ?? false)
+        ? kCatalogusOnderwegElke
+        : (onbediend?.call() ?? false)
+            ? kCatalogusOnbediendElke
+            : null;
     final alleenMerk = !vers &&
-        (zuinigeCatalogus?.call() ?? false) &&
+        venster != null &&
         _catalogEtag != null &&
         !fromCloudMirror &&
         laatst != null &&
-        DateTime.now().difference(laatst) < kCatalogusOnderwegElke;
+        DateTime.now().difference(laatst) < venster;
     try {
       res = await client.catalog(etag: _catalogEtag, alleenMerk: alleenMerk);
     } catch (e) {
@@ -3644,7 +3656,7 @@ class LibraryStore extends ChangeNotifier {
       return false;
     }
 
-    _adoptCatalog(catalog, client);
+    traagMeten('catalogus overnemen', () => _adoptCatalog(catalog, client), vanafMs: 5);
     laatsteCatalogusBytes = res.bytes;
     _laatsteVolleCatalogus = DateTime.now();
     // Live again: what is on screen is playable, whatever it was a moment ago.
@@ -3712,15 +3724,17 @@ class LibraryStore extends ChangeNotifier {
     tracks.clear();
     _versiesVanPc.clear();
     _versieTracksVanPc.clear();
-    for (final dto in catalog.tracks) {
-      final t = _trackFromDto(dto, client);
-      tracks.add(t);
-      byAlbum.putIfAbsent(dto.albumId, () => []).add(t);
-    }
+    traagMeten('catalogus: nummers', () {
+      for (final dto in catalog.tracks) {
+        final t = _trackFromDto(dto, client);
+        tracks.add(t);
+        byAlbum.putIfAbsent(dto.albumId, () => []).add(t);
+      }
+    }, vanafMs: 5);
     // Vanaf de tweede catalogus meldt een nieuwe klaargezette kopie zich (twijfel.dart, [klaarVanPc]).
-    twijfelsVanPcGelezen();
+    traagMeten('catalogus: twijfels', twijfelsVanPcGelezen, vanafMs: 5);
 
-    _rebuildCanonicalArtists();
+    traagMeten('catalogus: artiesten', _rebuildCanonicalArtists, vanafMs: 5);
 
     final built = <Album>[];
     _remoteAlbums.clear();
@@ -3794,13 +3808,13 @@ class LibraryStore extends ChangeNotifier {
           if (a.tags.isNotEmpty) MapEntry(artistKey(a.name), a.tags),
       ]);
 
-    _rebuildTrackIndexes();
+    traagMeten('catalogus: indexen', _rebuildTrackIndexes, vanafMs: 5);
     // Ook hier, en niet alleen bij een schijfscan. Deze weg bouwt de platen voor de TELEFOON, en die
     // krijgt zijn ingebakken hoezen van de pc — dus krijgt hij dezelfde verkeerde verzamelhoes te
     // zien. Gemeld op 06-09-2026: *"kan ik die nieuwe fucties ook doen op de andere platformen ?
     // want ik zie dit nie op men smartphone?"* Van alles wat er die dag bij kwam was dit het enige
     // dat de telefoon écht niet haalde; de rest deelt gewoon dezelfde code.
-    _merkVreemdeHoezen();
+    traagMeten('catalogus: vreemde hoezen', _merkVreemdeHoezen, vanafMs: 5);
 
     // **De speler moet weten dat namen veranderd kunnen zijn.** Zie [PlayerStore.refreshTracks]:
     // de wachtrij houdt de `Track`-waarden vast van toen hij gebouwd werd, en hierboven zijn ze
@@ -3817,7 +3831,7 @@ class LibraryStore extends ChangeNotifier {
     // Onvoorwaardelijk mag hier, en dat is de moeite waard om te weten: deze functie draait alleen
     // als de pc werkelijk een nieuwe catalogus stuurde -- op "er is niets veranderd" antwoordt hij
     // 304 en komen we hier niet. Een toets die elke seconde langskomt loopt hier dus niet langs.
-    _bumpMeta();
+    traagMeten('catalogus: meta', _bumpMeta, vanafMs: 5);
   }
 
   /// What the PC calls each album we are showing: its id (for a write, in phase C) and the

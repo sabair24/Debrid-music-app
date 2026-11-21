@@ -832,6 +832,8 @@ Future<void> main() async {
   unawaited(netStore.ververs());
   // Onderweg de catalogus hoogstens om de vijf minuten helemaal (library.dart, dataverbruik 27-10-2026).
   library.zuinigeCatalogus = () => netStore.onderweg;
+  // Een tv die niemand bedient haalt de catalogus pas bij de eerste toets, of na tien minuten (tv.dart, 21-11-2026).
+  library.onbediend = tvOnbediend;
 
   // Hier al gedeclareerd, verderop pas gemaakt: de sessie hieronder wil hem kunnen vragen om een
   // verse sleutel, en dat gebeurt pas als er ooit een pc geweigerd heeft -- lang na dit punt.
@@ -1853,6 +1855,10 @@ Future<void> main() async {
     });
   }
 
+  // Op een Android-toestel ook haper.log, in de map die adb kan lezen (paths.dart, [logDir]): welk zwaar werk de
+  // tekendraad vasthield ([traagMeten]). De Shield haperde op 21-11-2026 om de 15 s, en waardoor stond nergens.
+  if (!mode.owner && Platform.isAndroid) haperlogAan = true;
+
   // Wat dit toestel tekent en hoe warm het wordt, naar `warmte.log` op de pc. Zie warmtemeter.dart:
   // de iPad werd heet en kon niet gemeten worden. Alleen op een toestel dat met een pc praat; de pc
   // zelf heeft zijn eigen fps.log. Het adres wordt bij elke zending opgezocht, zodat koppelen
@@ -1873,6 +1879,9 @@ Future<void> main() async {
       },
       // En de stand van het glas: of het nog vervaagt, en zo niet, waarom de bewaker het terugzette.
       extra: () => '${player.playing ? 'speelt' : 'stil'} | ${GlasKwaliteit.verslag()}',
+      // Elke stilstand van de tekendraad apart in haper.log (alleen op Android aan, zie hierboven), naast de meetpunten:
+      // de Shield stond op 21-11-2026 na "volgende" 2 s stil, en wat er toen liep viel nergens te lezen.
+      bijStilstand: haperVast,
     ).start();
   } else if (_isDesktop) {
     // De pc schrijft dezelfde regels in zijn eigen warmte.log. fps.log meet alleen terwijl er een
@@ -4265,6 +4274,7 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   bool _tvVangnet(KeyEvent e) {
+    if (isTv && e is KeyDownEvent) tvLaatstBediend = DateTime.now();
     if (isTv && mounted && _tvStilWekker(e)) return true;
     if (isTv && e is KeyDownEvent) _tvAlBediend = true;
     if (isTv && mounted && _tvDubbelOk(e)) return true;
