@@ -1490,6 +1490,14 @@ Future<void> main() async {
                 for (final tid in l.trackIds)
                   if (perId[tid] case final t?) t,
               ],
+          // Een verzameling die je hier houdt (Saber, 21-11-2026: op de gsm "Alleen als ik het kies"); opgeheven of
+          // hernoemd: leeg, en dan gaat ze eraf.
+          for (final id in toestelRedenen.lijsten)
+            if (id.startsWith('verz:'))
+              redenLijst(id): switch (verzamelingVanLijstId(id, alleVerzamelingNamen(library, verzamelingen))) {
+                final naam? => nummersVanVerzameling(library, verzamelingen, naam),
+                null => const <Track>[],
+              },
         };
         // Wat de gsm ophaalt, is wat er speelt: de gekozen versie (versies.dart). Haar handtekening ziet een betere kopie.
         String geluidHier(Track t) => geluidVan(library.trackByPath(library.speelPadVoor(t.path)) ?? t);
@@ -1594,6 +1602,7 @@ Future<void> main() async {
 
     favorieten.addListener(houdBij);
     lijsten.addListener(houdBij);
+    verzamelingen.addListener(houdBij);
     toestelRedenen.addListener(houdBij);
     library.addListener(houdBij);
     // Aan, uit, of een andere grens: meteen opnieuw bekijken.
@@ -19496,7 +19505,184 @@ Future<void> toonAiCorrecties(BuildContext context) async {
           '${mislukt == 0 ? '.' : ', $mislukt niet (op slot, of geen FLAC of MP3).'}')));
 }
 
-enum _VerzamelingTab { albums, nummers, artiesten }
+/// De zaden van een verzameling voor "Meer …": haar artiesten (op hoofdartiest), gewogen naar hoeveel nummers je van
+/// elk hebt — de bovenste [hoeveel].
+List<({String naam, double gewicht})> verzamelZaden(List<Track> nummers, {int hoeveel = 8}) {
+  final tel = <String, int>{};
+  final naam = <String, String>{};
+  for (final t in nummers) {
+    final wie = hoofdartiest(t.artist);
+    final k = artistKey(wie);
+    if (k.isEmpty) continue;
+    tel[k] = (tel[k] ?? 0) + 1;
+    naam.putIfAbsent(k, () => wie);
+  }
+  final l = tel.entries.toList()..sort((a, b) => b.value != a.value ? b.value - a.value : a.key.compareTo(b.key));
+  if (l.isEmpty) return const [];
+  final meest = l.first.value;
+  return [for (final e in l.take(hoeveel)) (naam: naam[e.key]!, gewicht: e.value / meest)];
+}
+
+/// Per verzameling (klein geschreven) wat "Meer …" vond, en wanneer: een uur lang hetzelfde, zodat heen en terug op de
+/// pagina geen honderd vragen aan Deezer kost.
+final Map<String, ({int ms, Future<List<RecTrack>> lijst})> _meerVanVerzameling = {};
+
+/// "Meer Vocal jazz" (Saber, 21-11-2026: smaak "Alleen binnen de verzameling"): nummers die je nog niet hebt, van
+/// artiesten verwant aan die van verzameling [naam] ([verzamelZaden]) — langs dezelfde weg als Aanbevolen voor jou
+/// (`RecommendService.ontdekVoorJou`), maar met alleen de verzameling als smaak. [bezit]: alle artiesten die je hebt,
+/// ook buiten de verzameling.
+Future<List<RecTrack>> meerVanVerzameling(String naam, List<Track> nummers, Set<String> bezit,
+    {RecommendService? rec, int Function()? nuMs}) {
+  final sleutel = naam.toLowerCase();
+  final nu = (nuMs ?? () => DateTime.now().millisecondsSinceEpoch)();
+  final al = _meerVanVerzameling[sleutel];
+  if (al != null && nu - al.ms < const Duration(hours: 1).inMilliseconds) return al.lijst;
+  final zaden = verzamelZaden(nummers);
+  final lijst = zaden.isEmpty
+      ? Future.value(const <RecTrack>[])
+      : (rec ?? RecommendService())
+          .ontdekVoorJou(zaden, bezit, kandidaten: 30, max: 24)
+          .catchError((Object _) => const <RecTrack>[]);
+  _meerVanVerzameling[sleutel] = (ms: nu, lijst: lijst);
+  return lijst;
+}
+
+/// De tab "Meer …" op de pagina van een verzameling. Een tik start een radio vanaf dat nummer bínnen de verzameling: de
+/// vulling komt eruit, en wat je houdt gaat erin.
+class _MeerVanVerzameling extends StatefulWidget {
+  const _MeerVanVerzameling({required this.naam, required this.nummers});
+
+  final String naam;
+  final List<Track> nummers;
+
+  @override
+  State<_MeerVanVerzameling> createState() => _MeerVanVerzamelingState();
+}
+
+class _MeerVanVerzamelingState extends State<_MeerVanVerzameling> {
+  late Future<List<RecTrack>> _lijst = _vraag();
+
+  Future<List<RecTrack>> _vraag() {
+    final lib = context.read<LibraryStore>();
+    return meerVanVerzameling(
+        widget.naam, widget.nummers, {for (final t in lib.tracks) artistKey(hoofdartiest(t.artist))});
+  }
+
+  @override
+  void didUpdateWidget(_MeerVanVerzameling oud) {
+    super.didUpdateWidget(oud);
+    if (oud.naam != widget.naam) _lijst = _vraag();
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<List<RecTrack>>(
+        future: _lijst,
+        builder: (context, s) {
+          final lijst = s.data ?? const <RecTrack>[];
+          if (s.connectionState != ConnectionState.done) {
+            return Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(height: 10),
+                Text('Zoeken naar wat erbij past…', style: TextStyle(color: _muted, fontSize: 12.5)),
+              ]),
+            );
+          }
+          if (lijst.isEmpty) {
+            return const LeegVlak(
+              teken: Icons.travel_explore_rounded,
+              kop: 'Niets gevonden',
+              uitleg: 'Deezer kende geen verwante artiesten die je nog niet hebt. Probeer het later nog eens.',
+            );
+          }
+          return CustomScrollView(slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(kGoot, kRuimte4, kGoot, kRuimte12),
+                child: Text(
+                    'Wat je nog niet hebt, verwant aan je verzameling. Een tik start een radio erbinnen: wat je houdt, '
+                    'komt in “${widget.naam}”.',
+                    style: TextStyle(color: _muted, fontSize: 12.5)),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: kGoot),
+              sliver: SliverLayoutBuilder(
+                builder: (context, c) => SliverGrid(
+                  gridDelegate: tegelRaster(context, c.crossAxisExtent),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, i) {
+                      final t = lijst[i];
+                      return AlbumTegel(
+                        key: ValueKey('meer-${t.artist}-${t.title}'),
+                        hoes: (maat) => _netCover(t.cover, size: maat),
+                        spiegel: spiegelVanUrl(t.cover),
+                        titel: t.title,
+                        ondertitel: t.artist,
+                        onTap: () => unawaited(startRadio(context, t.artist,
+                            titel: t.title, seconden: t.seconds > 0 ? t.seconds : null, verzameling: widget.naam)),
+                      );
+                    },
+                    childCount: lijst.length,
+                  ),
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(child: SizedBox(height: kRuimte24 + MediaQuery.paddingOf(context).bottom)),
+          ]);
+        },
+      );
+}
+
+/// Het id waaronder een verzameling op dit toestel staat (`toestel_redenen.dart`, naast de afspeellijsten).
+String verzamelingLijstId(String naam) => 'verz:${naam.toLowerCase()}';
+
+/// De verzameling achter zo'n id, of null voor een afspeellijst.
+String? verzamelingVanLijstId(String id, Iterable<String> namen) {
+  if (!id.startsWith('verz:')) return null;
+  final k = id.substring(5);
+  for (final n in namen) {
+    if (n.toLowerCase() == k) return n;
+  }
+  return null;
+}
+
+/// "Op dit toestel" voor een verzameling (Saber, 21-11-2026: op de gsm "Alleen als ik het kies"): wat erbij komt gaat
+/// mee, wat eruit gaat verdwijnt vanzelf — zoals bij een afspeellijst. Niet op de pc en de tv.
+class _VerzamelingOpToestel extends StatelessWidget {
+  const _VerzamelingOpToestel({required this.naam, required this.nummers});
+
+  final String naam;
+  final List<Track> nummers;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: toestelRedenen,
+        builder: (context, _) {
+          final id = verzamelingLijstId(naam);
+          final aan = toestelRedenen.houdtLijst(id);
+          return TextButton.icon(
+            key: const ValueKey('verzameling-op-toestel'),
+            onPressed: () async {
+              if (aan) {
+                final offline = context.read<OfflineStore>();
+                final zeker = await vraagVanToestelHalen(context,
+                    aantal: nummers.length, bytes: offline.bytesVan([for (final t in nummers) t.path]));
+                if (!zeker) return;
+              } else if (!await _magOpToestel(context, nummers)) {
+                return;
+              }
+              await toestelRedenen.zetLijst(id, !aan);
+            },
+            icon: Icon(aan ? Icons.offline_pin_rounded : Icons.download_for_offline_outlined,
+                size: 17, color: aan ? kAccent2 : null),
+            label: Text(aan ? 'Op dit toestel' : 'Op dit toestel houden'),
+          );
+        },
+      );
+}
+
+enum _VerzamelingTab { albums, nummers, artiesten, meer }
 
 /// Eén verzameling, als een eigen bibliotheek: haar platen, nummers en artiesten, met Afspelen en Shuffle.
 class VerzamelingPagina extends StatefulWidget {
@@ -19528,6 +19714,10 @@ class _VerzamelingPaginaState extends State<VerzamelingPagina> {
     final melding = ScaffoldMessenger.of(context);
     final r = await lib.naarVerzameling([for (final t in lib.tracksIn(_naam)) t.path], schoon);
     await verz.hernoem(_naam, schoon);
+    if (toestelRedenen.houdtLijst(verzamelingLijstId(_naam))) {
+      await toestelRedenen.zetLijst(verzamelingLijstId(schoon), true);
+      await toestelRedenen.zetLijst(verzamelingLijstId(_naam), false);
+    }
     if (!mounted) return;
     setState(() => _naam = schoon);
     melding.showSnackBar(SnackBar(
@@ -19560,6 +19750,7 @@ class _VerzamelingPaginaState extends State<VerzamelingPagina> {
     final nav = Navigator.of(context);
     if (thuis.isNotEmpty) await lib.naarVerzameling([for (final t in thuis) t.path], null);
     await verz.weg(_naam);
+    await toestelRedenen.zetLijst(verzamelingLijstId(_naam), false);
     if (mounted) nav.pop();
   }
 
@@ -19580,6 +19771,7 @@ class _VerzamelingPaginaState extends State<VerzamelingPagina> {
           : AlbumsGrid(albums: albums, title: '${albums.length} ${albums.length == 1 ? 'plaat' : 'platen'} in $_naam'),
       _VerzamelingTab.nummers => TracksView(lijst: nummers, kop: false),
       _VerzamelingTab.artiesten => ArtistsView(key: ValueKey('verz-artiesten-$_naam'), lib: lib, albums: albums),
+      _VerzamelingTab.meer => _MeerVanVerzameling(naam: _naam, nummers: nummers),
     };
     return Scaffold(
       backgroundColor: _bg,
@@ -19649,6 +19841,7 @@ class _VerzamelingPaginaState extends State<VerzamelingPagina> {
                   icon: const Icon(Icons.undo_rounded, size: 17),
                   label: const Text('Opheffen'),
                 ),
+                if (lib.isRemote && !isTv) _VerzamelingOpToestel(naam: _naam, nummers: nummers),
               ]),
             ]),
           ),
@@ -19662,6 +19855,7 @@ class _VerzamelingPaginaState extends State<VerzamelingPagina> {
                   (_VerzamelingTab.albums, 'Albums · ${albums.length}'),
                   (_VerzamelingTab.nummers, 'Nummers · ${nummers.length}'),
                   (_VerzamelingTab.artiesten, 'Artiesten'),
+                  if (nummers.isNotEmpty) (_VerzamelingTab.meer, 'Meer $_naam'),
                 ])
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
