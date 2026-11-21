@@ -43,6 +43,38 @@ class Playlist {
       );
 }
 
+/// Een verzameling (verzameling.dart): haar naam — ook de naam van haar map op de pc — en de nummers die er als
+/// verwijzing in staan zonder dat ze verhuisden ([koppelingen], gedeelde id's; Saber, 21-11-2026: "Ja, mag in meerdere").
+/// Wat er in haar MAP staat, hoort er vanzelf bij; dit record is er ook voor een verzameling die nog leeg is.
+class VerzamelingInfo {
+  VerzamelingInfo({required this.naam, List<String>? koppelingen, required this.updatedAt, this.deletedAt})
+      : koppelingen = koppelingen ?? [];
+
+  String naam;
+  List<String> koppelingen;
+  int updatedAt;
+  int? deletedAt;
+
+  bool get deleted => deletedAt != null;
+
+  /// De sleutel in [LanStateStore.verzamelingen]: de naam klein geschreven, zoals het bestandssysteem van Windows.
+  String get sleutel => naam.toLowerCase();
+
+  Map<String, dynamic> toJson() => {
+        'naam': naam,
+        if (koppelingen.isNotEmpty) 'koppelingen': koppelingen,
+        'updatedAt': updatedAt,
+        if (deletedAt != null) 'deletedAt': deletedAt,
+      };
+
+  static VerzamelingInfo fromJson(Map<String, dynamic> m) => VerzamelingInfo(
+        naam: (m['naam'] ?? '') as String,
+        koppelingen: [for (final t in (m['koppelingen'] as List? ?? const [])) t.toString()],
+        updatedAt: (m['updatedAt'] as int?) ?? 0,
+        deletedAt: m['deletedAt'] as int?,
+      );
+}
+
 /// Where you are in a track, and what is queued behind it — the "carry on where you left off"
 /// that follows you from the Mac to the iPad.
 /// Het merkteken van een wachtrij (de id's op volgorde): hetzelfde merkteken is dezelfde rij. De lengte, en FNV-1a over
@@ -196,6 +228,9 @@ class LanStateStore {
   final Set<String> favoriteTracks = {};
   final Set<String> favoriteAlbums = {};
   final Map<String, Playlist> playlists = {};
+
+  /// De verzamelingen ([VerzamelingInfo]), op [VerzamelingInfo.sleutel].
+  final Map<String, VerzamelingInfo> verzamelingen = {};
   final Map<String, PlayStat> plays = {};
 
   /// Duim omhoog of omlaag per nummer: id → `'up'` of `'down'`.
@@ -300,6 +335,10 @@ class LanStateStore {
         final pl = Playlist.fromJson((p as Map).cast<String, dynamic>());
         playlists[pl.id] = pl;
       }
+      for (final v in (m['verzamelingen'] as List? ?? const [])) {
+        final x = VerzamelingInfo.fromJson((v as Map).cast<String, dynamic>());
+        if (x.naam.trim().isNotEmpty) verzamelingen[x.sleutel] = x;
+      }
       (m['plays'] as Map?)?.forEach((k, v) {
         plays[k.toString()] = PlayStat.fromJson((v as Map).cast<String, dynamic>());
       });
@@ -345,6 +384,7 @@ class LanStateStore {
         'favoriteTracks': favoriteTracks.toList(),
         'favoriteAlbums': favoriteAlbums.toList(),
         'playlists': [for (final p in playlists.values) p.toJson()],
+        if (verzamelingen.isNotEmpty) 'verzamelingen': [for (final v in verzamelingen.values) v.toJson()],
         'plays': {for (final e in plays.entries) e.key: e.value.toJson()},
         'ratings': ratings,
         'radioSfeer': radioSfeer,
@@ -362,6 +402,7 @@ class LanStateStore {
         'favoriteTracks': favoriteTracks.toList(),
         'favoriteAlbums': favoriteAlbums.toList(),
         'playlists': [for (final p in playlists.values) p.toJson()],
+        if (verzamelingen.isNotEmpty) 'verzamelingen': [for (final v in verzamelingen.values) v.toJson()],
         'plays': {for (final e in plays.entries) e.key: e.value.toJson()},
         'ratings': ratings,
         'radioSfeer': radioSfeer,
@@ -448,6 +489,68 @@ class LanStateStore {
           p.deletedAt = at;
           p.trackIds = const [];
           p.updatedAt = at;
+          durableChanged = true;
+
+        // Verzamelingen (verzameling.dart, 21-11-2026). Een naam is de sleutel, klein geschreven; een nieuwere bewerking
+        // wint, net als bij een afspeellijst. Wat er in de MAP staat, regelt de pc zelf (een verhuizing); dit is de naam,
+        // de koppelingen, en een verzameling die nog leeg is.
+        case 'verzameling.maak':
+          final naam = ((op['naam'] ?? '') as String).trim();
+          if (naam.isEmpty) break;
+          final v = verzamelingen[naam.toLowerCase()];
+          if (v == null) {
+            verzamelingen[naam.toLowerCase()] = VerzamelingInfo(naam: naam, updatedAt: at);
+            durableChanged = true;
+          } else if (v.deleted && at >= v.updatedAt) {
+            v
+              ..deletedAt = null
+              ..naam = naam
+              ..koppelingen = []
+              ..updatedAt = at;
+            durableChanged = true;
+          }
+
+        case 'verzameling.koppel':
+        case 'verzameling.ontkoppel':
+          final naam = ((op['naam'] ?? '') as String).trim();
+          if (naam.isEmpty) break;
+          final ids = [for (final t in (op['ids'] as List? ?? const [])) t.toString()];
+          final v = verzamelingen.putIfAbsent(naam.toLowerCase(), () => VerzamelingInfo(naam: naam, updatedAt: at));
+          if (v.deleted) {
+            if (at < v.updatedAt) break;
+            v.deletedAt = null;
+          }
+          if (op['type'] == 'verzameling.koppel') {
+            final al = v.koppelingen.toSet();
+            v.koppelingen = [...v.koppelingen, for (final id in ids) if (al.add(id)) id];
+          } else {
+            final weg = ids.toSet();
+            v.koppelingen = [for (final id in v.koppelingen) if (!weg.contains(id)) id];
+          }
+          v.updatedAt = at;
+          durableChanged = true;
+
+        case 'verzameling.hernoem':
+          final van = ((op['van'] ?? '') as String).trim().toLowerCase();
+          final naar = ((op['naar'] ?? '') as String).trim();
+          final v = verzamelingen[van];
+          if (v == null || v.deleted || naar.isEmpty || at < v.updatedAt) break;
+          verzamelingen.remove(van);
+          final doel = verzamelingen[naar.toLowerCase()];
+          verzamelingen[naar.toLowerCase()] = VerzamelingInfo(
+            naam: naar,
+            koppelingen: [...{...?doel?.koppelingen, ...v.koppelingen}],
+            updatedAt: at,
+          );
+          durableChanged = true;
+
+        case 'verzameling.weg':
+          final v = verzamelingen[((op['naam'] ?? '') as String).trim().toLowerCase()];
+          if (v == null || v.deleted || at < v.updatedAt) break;
+          v
+            ..deletedAt = at
+            ..koppelingen = []
+            ..updatedAt = at;
           durableChanged = true;
 
         case 'played':
@@ -634,6 +737,7 @@ class LanStateStore {
   void _pruneTombstones() {
     final cutoff = DateTime.now().millisecondsSinceEpoch - _tombstoneTtlMs;
     playlists.removeWhere((_, p) => p.deleted && p.deletedAt! < cutoff);
+    verzamelingen.removeWhere((_, v) => v.deleted && v.deletedAt! < cutoff);
   }
 
   /// Writes are debounced: the play position alone would otherwise hit the disk several times a

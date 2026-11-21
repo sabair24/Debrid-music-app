@@ -18,10 +18,10 @@ import 'radiokeuze.dart' show artiestSleutel, kArtiestAfstand, kMaxPerArtiest;
 /// Onder hoeveel verwachte nummers vooruit er bijgevuld wordt.
 ///
 /// Een ronde (Deezer, de keuring met 1,1 s per Discogs-vraag, en dan het halen van 30–90 s per
-/// nummer) moet klaar zijn voordat de rij leeg is. Vijftig, zoals `kMaxVooruit` (radiovoorraad.dart): Saber,
-/// 22-10-2026, *"zeker 50 liedjes"* vooruit. Bij vijftien hield het bijvullen op terwijl de voorraad nooit verder
-/// dan twaalf mocht.
-const double kBijvulOnder = 50;
+/// nummer) moet klaar zijn voordat de rij leeg is. Zoveel als `kMaxVooruit` (radiovoorraad.dart): twintig sinds
+/// 21-11-2026 (was vijftig, Saber 22-10-2026 *"zeker 50 liedjes"*). Bij vijftien hield het bijvullen op terwijl de
+/// voorraad nooit verder dan twaalf mocht: deze twee horen gelijk te zijn.
+const double kBijvulOnder = 20;
 
 /// Hoe lang er minstens tussen twee rondes zit, behalve bij nood.
 const Duration kBijvulAdem = Duration(seconds: 90);

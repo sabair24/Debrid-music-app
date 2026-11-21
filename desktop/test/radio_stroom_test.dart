@@ -87,7 +87,8 @@ class _Groeiend extends DownloadManager {
       Groei? vroeg,
       bool zoekDaarnaBeter = false,
       bool losVanDeRadio = false,
-      String? album}) async {
+      String? album,
+      void Function(void Function() stop)? bijStop}) async {
     gekregen = vroeg;
     zoekBeterGevraagd = zoekDaarnaBeter;
     final pad = '$map${Platform.pathSeparator}in.flac';

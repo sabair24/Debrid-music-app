@@ -38,7 +38,8 @@ void main() {
   late final String hoofd = File('lib/main.dart').readAsStringSync();
 
   Future<List<MenuPunt>> menu(WidgetTester t,
-      {double breedte = 2400, String actief = 'sectie-5', Duration wiel = kMenuWielWacht, bool in_ = false}) async {
+      // Breed genoeg voor alle secties zonder te scrollen: met Verzamelingen (21-11-2026) veertien punten.
+      {double breedte = 2700, String actief = 'sectie-5', Duration wiel = kMenuWielWacht, bool in_ = false}) async {
     final gekozen = <MenuPunt>[];
     t.view.physicalSize = Size(breedte, 120);
     t.view.devicePixelRatio = 1;

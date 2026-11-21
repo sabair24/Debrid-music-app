@@ -174,6 +174,32 @@ void main() {
     expect(tegels(opnieuw).map((a) => a.edition), ['1985', '2001']);
   });
 
+  test('het jaartal wacht op de hoezen van de nieuwe tegels: zolang die het bestand openhouden, lukt vervangen niet',
+      () async {
+    final revolver = nummer('Compilaties/Marc Lavoine/Best Of 85-95/02 - Elle a les yeux revolver.flac',
+        'Elle a les yeux revolver', 1994);
+    final oublie = nummer("Albums/Marc Lavoine/Marc Lavoine/11 - J'ai tout oublié.flac", "J'ai tout oublié", 1985);
+    final nep = _Nep({'discogs:2436536': lavoine1985, 'discogs:1441911': lavoine2001});
+    final lib = await maak([revolver, oublie], {revolver: 'discogs:2436536', oublie: 'discogs:1441911'}, nep: nep);
+    // Zoals [readCoversInIsolate] na het scheiden: een lezer houdt het eerste nummer van de nieuwe tegel open, en de
+    // hoezenronde van het scheiden komt hier achter in de rij. De toets hierboven viel zo 6 van de 14 keer om, en
+    // alleen als de lezer net op tijd was. Hier is hij altijd op tijd. Op Linux lukt vervangen ook over een open
+    // bestand heen; daar zegt deze toets niets.
+    final open = File(revolver.path).openSync();
+    var dicht = false;
+    void sluit() {
+      if (dicht) return;
+      dicht = true;
+      open.closeSync();
+    }
+
+    addTearDown(sluit);
+    lib.hoezenNaPlaatwissel = Future<void>.delayed(const Duration(seconds: 1), sluit);
+    await lib.zoekPlatenOp();
+    expect(readFlacRawFields(File(revolver.path))['date'], '1985');
+    expect(readFlacRawFields(File(oublie.path))['date'], '2001');
+  });
+
   test('vanzelf: na een herbouw zoekt de pc het zelf op, zonder dat iemand erom vraagt', () async {
     final revolver = nummer('Compilaties/Best Of/02 - Elle a les yeux revolver.flac', 'Elle a les yeux revolver', 1994);
     final oublie = nummer("Albums/Marc Lavoine/Marc Lavoine/11 - J'ai tout oublié.flac", "J'ai tout oublié", 1985);

@@ -61,7 +61,7 @@ class Favorieten extends GedeeldeOps {
     return trackIdFor(t.path, r);
   }
 
-  String? idVanAlbum(Album a) => albumIdFor(artistKey(a.artist), normKey(a.title), a.edition);
+  String? idVanAlbum(Album a) => albumIdFor(artistKey(a.artist), normKey(a.title), a.edition, verzameling: a.verzameling);
 
   bool isFavoriet(String? id) {
     if (id == null) return false;
@@ -116,7 +116,11 @@ class Favorieten extends GedeeldeOps {
   /// zonder editie het hartje van een verdwenen tegel met een editie die zijn nummers dragen: het jaar ervan, of
   /// "12 nummers". Het oude id gaat er pas uit als een tegel het overnam — wie zelf een hartje weghaalt, ziet het niet
   /// terugkomen, want dan is het oude id al weg. Alleen ids die bij geen enkele tegel meer horen tellen mee.
-  int volgTegels(List<Album> albums) {
+  ///
+  /// **En een verhuizing naar een verzameling** (verzameling.dart, 21-11-2026): een album daarin heeft een eigen id, dus
+  /// het hartje van dezelfde plaat zonder verzameling gaat mee — en terug, het hartje van die plaat in een verzameling
+  /// uit [verzamelingNamen].
+  int volgTegels(List<Album> albums, {Iterable<String> verzamelingNamen = const []}) {
     final w = winkel;
     if (w == null || w.favoriteAlbums.isEmpty || albums.isEmpty) return 0;
     // Bij elke melding van de bibliotheek, en die komen vaak (elke hoes): alleen opnieuw kijken als de tegels of de
@@ -132,14 +136,20 @@ class Favorieten extends GedeeldeOps {
       final id = idVanAlbum(a);
       if (id == null || w.favoriteAlbums.contains(id)) continue;
       final basis = (artistKey(a.artist), normKey(a.title));
-      final kandidaten = a.edition != null
-          ? {albumIdFor(basis.$1, basis.$2, null)}
-          : {
-              for (final t in a.tracks) ...[
-                if ((t.year ?? 0) > 0) albumIdFor(basis.$1, basis.$2, '${t.year}'),
-                albumIdFor(basis.$1, basis.$2, t.trackTotal > 0 ? '${t.trackTotal} nummers' : 'zonder nummering'),
-              ],
-            };
+      final kandidaten = a.verzameling != null
+          ? {albumIdFor(basis.$1, basis.$2, a.edition)}
+          : a.edition != null
+              ? {
+                  albumIdFor(basis.$1, basis.$2, null),
+                  for (final v in verzamelingNamen) albumIdFor(basis.$1, basis.$2, a.edition, verzameling: v),
+                }
+              : {
+                  for (final v in verzamelingNamen) albumIdFor(basis.$1, basis.$2, null, verzameling: v),
+                  for (final t in a.tracks) ...[
+                    if ((t.year ?? 0) > 0) albumIdFor(basis.$1, basis.$2, '${t.year}'),
+                    albumIdFor(basis.$1, basis.$2, t.trackTotal > 0 ? '${t.trackTotal} nummers' : 'zonder nummering'),
+                  ],
+                };
       final van = kandidaten.where(wees.contains).toSet();
       if (van.isEmpty) continue;
       aan.add(id);

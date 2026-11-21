@@ -69,8 +69,30 @@ class Gehaald {
 /// binnengehaald — en dan blijven ze voor altijd staan zonder dat iemand weet waar ze vandaan komen.
 /// Met deze notitie komt het overzicht van gisteren gewoon alsnog.
 class RadioSessie {
-  RadioSessie({required this.naam, required this.begonnenMs, List<Gehaald>? gehaald, this.opgeruimd = 0})
-      : gehaald = gehaald ?? [];
+  RadioSessie(
+      {required this.naam,
+      required this.begonnenMs,
+      List<Gehaald>? gehaald,
+      this.opgeruimd = 0,
+      this.verzameling,
+      Map<String, String>? doelen})
+      : gehaald = gehaald ?? [],
+        doelen = doelen ?? {};
+
+  /// Waar wat je van deze radio houdt naartoe gaat: een verzameling (verzameling.dart; Saber, 21-11-2026: "Bij de start
+  /// van de radio"), of null — je gewone bibliotheek.
+  String? verzameling;
+
+  /// Per nummer (op [Gehaald.pad]) een andere bestemming, gekozen bij Houden of meegekomen van een vorige radio. Leeg:
+  /// je gewone bibliotheek.
+  final Map<String, String> doelen;
+
+  /// Waar [g] naartoe gaat als je het houdt: een verzameling, of null voor je gewone bibliotheek.
+  String? doelVan(Gehaald g) {
+    final d = doelen[g.pad];
+    if (d != null) return d.isEmpty ? null : d;
+    return verzameling;
+  }
 
   final String naam;
   final int begonnenMs;
@@ -90,6 +112,8 @@ class RadioSessie {
         'begonnenMs': begonnenMs,
         'gehaald': [for (final g in gehaald) g.toJson()],
         if (opgeruimd > 0) 'opgeruimd': opgeruimd,
+        if (verzameling != null) 'verzameling': verzameling,
+        if (doelen.isNotEmpty) 'doelen': doelen,
       };
 
   static RadioSessie? fromJson(Object? j) {
@@ -105,6 +129,12 @@ class RadioSessie {
       begonnenMs: j['begonnenMs'] is num ? (j['begonnenMs'] as num).toInt() : 0,
       gehaald: uit,
       opgeruimd: j['opgeruimd'] is num ? (j['opgeruimd'] as num).toInt() : 0,
+      verzameling: j['verzameling'] is String && (j['verzameling'] as String).isNotEmpty ? j['verzameling'] as String : null,
+      doelen: {
+        if (j['doelen'] is Map)
+          for (final e in (j['doelen'] as Map).entries)
+            if (e.value is String) '${e.key}': e.value as String,
+      },
     );
   }
 }

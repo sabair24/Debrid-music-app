@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
+import '../verzameling.dart' show relZonderVerzameling;
+
 /// Stable, content-free ids, so a rescan produces the same id for the same file.
 ///
 /// Same scheme as the Kotlin server's `server/src/main/kotlin/com/debridmusic/server/util/Ids.kt`
@@ -17,7 +19,10 @@ String idOf(String kind, String value) {
 /// Relative on purpose. The absolute path carries the drive letter and the root folder's name,
 /// so moving the library from `D:\Flac music 2024` to `E:\Music` — or serving it from a second
 /// machine — would re-issue every id and detach every favourite from its track.
-String trackIdFor(String path, String root) => idOf('track', relPathOf(path, root));
+///
+/// Een bestand dat naar een verzameling verhuisde, houdt zijn id: het pad telt zonder het stuk van de verzameling
+/// ([relZonderVerzameling], verzameling.dart). Anders raakten je favorieten, lijsten en wat je draaide los.
+String trackIdFor(String path, String root) => idOf('track', relZonderVerzameling(relPathOf(path, root)));
 
 /// [path] relative to [root], forward-slashed. Falls back to the file name when the path lies
 /// outside the root (a track added from elsewhere), which is still stable for that file.
@@ -32,7 +37,10 @@ String relPathOf(String path, String root) {
 
 /// An album's identity. The edition is part of it: a record the library had to split into two
 /// pressings is two albums to every client, and they must not collide on one id.
-String albumIdFor(String artistKey, String normTitle, String? edition) =>
-    idOf('album', '$artistKey|$normTitle|${edition ?? ''}');
+///
+/// [verzameling]: hetzelfde album in een verzameling is een ander album dan dat in je bibliotheek — anders voegt een
+/// toestel ze weer samen (het groepeert op dit id). Zonder verzameling blijft elk id wat het was.
+String albumIdFor(String artistKey, String normTitle, String? edition, {String? verzameling}) =>
+    idOf('album', '$artistKey|$normTitle|${edition ?? ''}${verzameling == null ? '' : '|v:${verzameling.toLowerCase()}'}');
 
 String artistIdFor(String artistKey) => idOf('artist', artistKey);

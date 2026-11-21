@@ -4800,6 +4800,25 @@ class DownloadManager extends ChangeNotifier {
   static String _radioSleutel(String artiest, String titel) =>
       '${normKey(artiest)}|${normKey(titel)}';
 
+  /// Eén radiohaal afbreken: het toestel dat erom vroeg, wacht er niet meer op.
+  ///
+  /// **Waarom (21-11-2026).** Een radio op de Shield, live gemeten: de tv gaf een haal na acht minuten op, terwijl de vraag
+  /// tot dertig minuten in de zoekrem stond. De pc wist dat niet en haalde gewoon door: van de 67 nummers die die ochtend
+  /// voor de radio binnenkwamen, stonden er 51 nergens op proef — ze kwamen nooit in het opruimoverzicht en mengden zich
+  /// ongemerkt tussen de bibliotheek. Nu valt de haal hier ook, en de vraag in de zoekrem vervalt mee
+  /// (`nogNodig` kijkt naar [_radiohalen]).
+  bool laatRadiohaalVallen(DownloadJob job) {
+    if (job.cancelled) return false;
+    job.cancelled = true;
+    for (final c in job.live) {
+      c.cancel();
+    }
+    job.live.clear();
+    _radiohalen.remove(job);
+    _log.line('radio "${job.name}": het toestel wacht er niet meer op — haal losgelaten');
+    return true;
+  }
+
   /// Alles wat er voor de radio loopt onmiddellijk afbreken. Geeft terug hoeveel er weggehaald zijn.
   ///
   /// Het halfbakken bestand ruimt de overdracht zelf op: een afgebroken overdracht eindigt niet als
@@ -4853,6 +4872,7 @@ class DownloadManager extends ChangeNotifier {
     bool zoekDaarnaBeter = false,
     bool losVanDeRadio = false,
     String? album,
+    void Function(void Function() stop)? bijStop,
   }) async {
     if (!soulseek.available) return null;
     // Heb je dit al? Dan valt er niets te halen — en, net zo belangrijk, dan mag het straks ook niet
@@ -4872,6 +4892,8 @@ class DownloadManager extends ChangeNotifier {
     // zich bevinden als je de radio afsluit.
     final job = DownloadJob(titel); // wegwerp: bewust niet in `jobs`
     if (!losVanDeRadio) _radiohalen.add(job);
+    // Wie het vroeg (een toestel via de pc), kan deze ene haal laten vallen ([laatRadiohaalVallen]).
+    bijStop?.call(() => laatRadiohaalVallen(job));
     try {
       final pad = await _haalVoorRadio(job, artiest, titel, seconden, jaar,
           vroeg: vroeg, zoekBeter: zoekDaarnaBeter, album: album);

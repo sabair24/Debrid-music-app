@@ -295,6 +295,10 @@ class TrackDto {
   /// 28-10-2026: "Zoals op de pc"). Null van een oudere pc.
   final String? rel;
 
+  /// De verzameling waarin dit nummer op de pc staat (verzameling.dart), of null. Alleen als het er is: een catalogus
+  /// zonder verzamelingen blijft byte voor byte wat hij was.
+  final String? verzameling;
+
   const TrackDto({
     required this.id,
     required this.albumId,
@@ -328,6 +332,7 @@ class TrackDto {
     this.zoekt,
     this.versies,
     this.rel,
+    this.verzameling,
   });
 
   /// True when the file is beyond what Sonos will accept (it plays FLAC/ALAC up to 24-bit but
@@ -368,6 +373,7 @@ class TrackDto {
         zoekt: j['zoekt'] is String ? j['zoekt'] as String : null,
         versies: j['versies'] is Map ? Map<String, dynamic>.from(j['versies'] as Map) : null,
         rel: j['rel'] is String ? j['rel'] as String : null,
+        verzameling: j['verz'] is String && (j['verz'] as String).isNotEmpty ? j['verz'] as String : null,
       );
 
   Map<String, dynamic> toJson() => {
@@ -405,6 +411,7 @@ class TrackDto {
         if (zoekt != null) 'zoekt': zoekt,
         if (versies != null) 'versies': versies,
         if (rel != null) 'rel': rel,
+        if (verzameling != null) 'verz': verzameling,
       };
 }
 

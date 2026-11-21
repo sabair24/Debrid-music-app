@@ -34,6 +34,7 @@ import 'radioladder.dart';
 import 'radiosessie.dart';
 import 'radiosfeer.dart';
 import 'radiovoorraad.dart';
+import 'verzamelvoorstel.dart' show Verzamelvoorstel;
 
 /// Eén plek in het radioplan: wat er zou moeten spelen, en hoe ver het daarmee is.
 class Radioplek {
@@ -794,6 +795,79 @@ class RadioBesturing extends ChangeNotifier {
 
   bool doorDezeRadio(String pad) => _doorRadio.contains(pad);
 
+  /// Waar wat je van de lopende radio houdt naartoe gaat (verzameling.dart): een verzameling, of null voor je gewone
+  /// bibliotheek. Ook de vulling met je eigen muziek komt dan uit die verzameling (`radioEigen` in main.dart).
+  String? get verzameling => _lopend?.verzameling;
+
+  /// "Vanzelf op genre" (`verzamelvoorstel.dart`): het voorstel om wat je van deze radio houdt apart te houden, tot je
+  /// het aanneemt ([zetVerzameling]) of afwijst ([wijsVoorstelAf]). Null: niets voor te stellen. Elke start begint
+  /// zonder.
+  Verzamelvoorstel? get verzamelvoorstel => _loopt ? _verzamelvoorstel : null;
+  Verzamelvoorstel? _verzamelvoorstel;
+  set verzamelvoorstel(Verzamelvoorstel? v) {
+    _verzamelvoorstel = v;
+    notifyListeners();
+  }
+
+  /// De voorstellen waar je nee tegen zei (op naam, klein geschreven): die komen niet terug zolang de app draait.
+  final Set<String> afgewezenVoorstellen = {};
+
+  /// "Nee": het voorstel weg, en deze radio blijft voor je bibliotheek.
+  void wijsVoorstelAf() {
+    final v = _verzamelvoorstel;
+    if (v == null) return;
+    afgewezenVoorstellen.add(v.naam.toLowerCase());
+    _verzamelvoorstel = null;
+    notifyListeners();
+  }
+
+  /// Waar nummer [pad] (of met id [id]) naartoe gaat als je het houdt: zijn eigen keuze ([houdIn]), anders die van de
+  /// radio. Null: je bibliotheek.
+  String? doelVoor(String pad, {String? id}) {
+    final s = _lopend ?? openstaand;
+    if (s == null) return null;
+    for (final g in s.gehaald) {
+      if (g.pad == pad || (id != null && g.id == id)) return s.doelVan(g);
+    }
+    return s.verzameling;
+  }
+
+  /// Wat je vanaf nu van deze radio houdt, gaat naar verzameling [naam] (null: je bibliotheek). Ook wat je al hield en
+  /// geen eigen bestemming koos (Saber, 21-11-2026: "Bij de start van de radio" — of zodra de app voorstelt).
+  ///
+  /// Met [sessie]: die van het overzicht bij het afsluiten, die al gestopt is.
+  void zetVerzameling(String? naam, {RadioSessie? sessie}) {
+    final s = sessie ?? _lopend;
+    if (s == null) return;
+    final n = naam == null || naam.trim().isEmpty ? null : naam.trim();
+    _verzamelvoorstel = null;
+    if (s.verzameling == n) {
+      notifyListeners();
+      return;
+    }
+    s.verzameling = n;
+    notifyListeners();
+    if (_eigenNotitie(s)) unawaited(_bewaar(s));
+  }
+
+  /// Mag [s] als de notitie van dit toestel op schijf? De lopende radio en een eigen overzicht wel; een overzicht uit de
+  /// brievenbus ([ontvangOverzicht], van een radio die elders draaide) niet — dat gaat terug langs
+  /// [bijOverzichtAfgehandeld], en als notitie hier kwam het na een herstart een tweede keer.
+  bool _eigenNotitie(RadioSessie s) =>
+      identical(s, _lopend) || (identical(s, openstaand) && _overzichtSleutel == null);
+
+  /// Nummer [pad] (of met id [id]) houden in verzameling [naam] (null: je bibliotheek) — de tweede keuze van Houden.
+  void houdIn(String pad, String? naam, {String? id}) {
+    for (final s in [_lopend, openstaand]) {
+      if (s == null) continue;
+      final g = s.gehaald.where((g) => g.pad == pad || (id != null && g.id == id)).firstOrNull;
+      if (g == null) continue;
+      s.doelen[g.pad] = naam?.trim() ?? '';
+      if (_eigenNotitie(s)) unawaited(_bewaar(s));
+    }
+    notifyListeners();
+  }
+
   /// De radio die gestopt is en nog nagekeken moet worden, of null.
   ///
   /// Dit is wat het overzicht bij het afsluiten toont. Het overleeft een herstart, want anders is na
@@ -972,7 +1046,8 @@ class RadioBesturing extends ChangeNotifier {
       void Function(String regel)? spoor,
       int? aantal,
       String? door,
-      bool manueel = false}) async {
+      bool manueel = false,
+      String? verzameling}) async {
     if (nieuw.isEmpty) return 'Er viel niets te vinden om een radio van te maken.';
 
     // Eerst vragen of het KAN, en pas daarna de lopende radio verlaten. Andersom zou een radio die
@@ -1024,6 +1099,7 @@ class RadioBesturing extends ChangeNotifier {
     this.zaadArtiest = zaadArtiest;
     this.zaad = zaad;
     this.manueel = manueel;
+    _verzamelvoorstel = null;
     // Het zaad koos je zelf: ook in een manuele radio wordt het gehaald, en het blijft.
     if (manueel) {
       for (final p in nieuw) {
@@ -1034,7 +1110,7 @@ class RadioBesturing extends ChangeNotifier {
     _plan = _zonderPastNiet(_plan, 'de start');
     _loopt = true;
     _doorRadio.clear();
-    _lopend = RadioSessie(naam: naam, begonnenMs: DateTime.now().millisecondsSinceEpoch);
+    _lopend = RadioSessie(naam: naam, begonnenMs: DateTime.now().millisecondsSinceEpoch, verzameling: verzameling);
     // Stond er nog een overzicht open ("Later beslissen"), dan gaat dat MEE in deze radio. Er is één
     // notitie op schijf, en de eerste landing van deze radio zou hem anders overschrijven — waarna die
     // bestanden voor altijd blijven staan zonder dat iemand nog weet dat ze van een radio kwamen.
@@ -1047,7 +1123,13 @@ class RadioBesturing extends ChangeNotifier {
     final onderweg = _voorElders;
     _voorElders = null;
     for (final v in [vorige, onderweg, nogLopend]) {
-      if (v != null) _lopend!.gehaald.addAll(v.gehaald);
+      if (v == null) continue;
+      _lopend!.gehaald.addAll(v.gehaald);
+      // Elk nummer houdt de bestemming van zijn eigen radio: een vorige radio voor je bibliotheek gaat niet mee in de
+      // verzameling van deze (verzameling.dart).
+      for (final g in v.gehaald) {
+        _lopend!.doelen.putIfAbsent(g.pad, () => v.doelVan(g) ?? '');
+      }
     }
     if (vorige != null || onderweg != null || nogLopend != null) {
       openstaand = null;

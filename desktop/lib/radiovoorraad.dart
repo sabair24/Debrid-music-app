@@ -148,11 +148,12 @@ const int kOnbekendeLengte = 180;
 
 /// Hoeveel speelbare nummers er hoogstens vooruit staan voor er niets nieuws meer gehaald wordt.
 ///
-/// Vijftig, zo'n drie uur muziek (Saber, 22-10-2026, radio vanaf Lambda: *"die lijst moet veel langer voorgeladen
-/// zijn zeker 50 liedjes al"*). Het waren er twaalf: zonder grens haalde de radio zijn hele plan binnen in een minuut
-/// of twintig (review van 26-09-2026) — dat tempo houdt nu de zoekrem tegen (`kZoekPerMinuut`, soulseek.dart), en de
-/// grens zelf blijft, op vijftig. Meer in het opruimoverzicht bij het afsluiten is de prijs.
-const int kMaxVooruit = 50;
+/// Twintig, ruim een uur muziek (Saber, 21-11-2026: "ok doe maar zo dan"). Het waren er vijftig sinds 22-10-2026 (radio
+/// vanaf Lambda: *"die lijst moet veel langer voorgeladen zijn zeker 50 liedjes al"*), daarvoor twaalf. Gemeten op
+/// 21-11-2026, radio vanaf Nancy Wilson: de zoekrem wachtte mediaan vier minuten en tot een halfuur voor nummers die nog
+/// lang niet aan de beurt waren, en wat niet speelde belandt bij het afsluiten in het opruimoverzicht. De pc haalt twee à
+/// drie nummers per minuut; er speelt er één per drie en een halve minuut — twintig vooruit loopt nooit droog.
+const int kMaxVooruit = 20;
 
 /// Wat er nu bij mag en wat er nu gestart mag worden.
 ///
