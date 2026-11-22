@@ -210,10 +210,12 @@ List<VraagArtiest> vraagArtiesten(List<BibNummer> nummers, List<String> Function
 /// Het uitgelezen antwoord ([leesVerzamelvoorstel]) terug naar nummers van je bibliotheek ([nummers]): elke artiest
 /// met al zijn nummers behalve wat bij `nietDeze` staat, en elke correctie met de nummers waar ze over gaat en wat er nu
 /// staat. Een correctie die niets verandert of over niets gaat, valt weg — ook een jaar voor een nummer op een album.
+/// Een verzameling van meer dan [hoogstens] nummers ook ([verzamelHoogstens]).
 ({List<VerzamelAiVoorstel> voorstellen, List<AiCorrectieVoorstel> correcties}) voorstellenUit(
   ({List<AiVerzameling> verzamelingen, List<AiCorrectie> correcties}) antwoord,
   List<BibNummer> nummers, {
   required int nuMs,
+  int? hoogstens,
 }) {
   final per = <String, List<BibNummer>>{};
   for (final n in nummers) {
@@ -232,6 +234,8 @@ List<VraagArtiest> vraagArtiesten(List<BibNummer> nummers, List<String> Function
       }
     }
     if (lijst.isEmpty) continue;
+    // Een kleine hoek, geen blok uit je kern ([verzamelHoogstens]; Saber, 22-11-2026: "alleen kleine hoeken").
+    if (hoogstens != null && lijst.length > hoogstens) continue;
     voorstellen.add(VerzamelAiVoorstel(id: 'v$nuMs-$i', naam: v.naam, waarom: v.waarom, nummers: lijst));
   }
   final correcties = <AiCorrectieVoorstel>[];

@@ -19105,7 +19105,8 @@ Future<({List<VerzamelAiVoorstel> voorstellen, List<AiCorrectieVoorstel> correct
     for (final n in alleVerzamelingNamen(lib, verz))
       (naam: n, artiesten: {for (final t in nummersVanVerzameling(lib, verz, n)) t.artist}.toList()),
   ];
-  final prompt = verzamelPrompt(artiesten, bestaande, afgewezen: afgewezen);
+  final hoogstens = verzamelHoogstens(nummers.length);
+  final prompt = verzamelPrompt(artiesten, bestaande, afgewezen: afgewezen, hoogstens: hoogstens);
   ai.bijGebruik = (soort, inT, uitT) => spoor?.call('verzamelvoorstel: $inT in / $uitT uit tokens');
   final json = await ai.vraagVerzamelvoorstel(prompt);
   final aantal = {for (final a in artiesten) vraagSleutel(a.artiest): a.aantal};
@@ -19113,7 +19114,7 @@ Future<({List<VerzamelAiVoorstel> voorstellen, List<AiCorrectieVoorstel> correct
       bekend: {for (final a in artiesten) vraagSleutel(a.artiest): a.artiest},
       aantalVan: (a) => aantal[vraagSleutel(a)] ?? 0,
       vandaagJaar: DateTime.now().year);
-  final uit = voorstellenUit(gelezen, nummers, nuMs: DateTime.now().millisecondsSinceEpoch);
+  final uit = voorstellenUit(gelezen, nummers, nuMs: DateTime.now().millisecondsSinceEpoch, hoogstens: hoogstens);
   spoor?.call('verzamelvoorstel: ${artiesten.length} artiesten (${nummers.length} nummers) gevraagd — '
       '${uit.voorstellen.map((v) => '${v.naam} ${v.nummers.length}').join(', ')}; ${uit.correcties.length} correcties');
   return uit;

@@ -102,7 +102,7 @@ void main() {
         'soulklassiekers (Sam Cooke, Ben E. King, Etta James)',
         'Bigband en swing (Glenn Miller, Benny Goodman) staan apart',
         'Een popzanger of -zangeres die een standard zingt (Annie Lennox, Eva Cassidy, Wayne Newton) hoort in geen van\n     alle',
-        'stel nooit een verzameling voor\n   van wat hij het meest heeft',
+        'dat stel je nooit voor, ook niet als aanvulling van een bestaande verzameling',
         'gebruik dan precies haar naam',
         'Liever geen correctie dan een gok.',
         '- Vocal jazz: Ella Fitzgerald',
@@ -336,6 +336,48 @@ void main() {
       ]) {
         expect(p, contains(zin));
       }
+    });
+  });
+
+  group('alleen kleine hoeken (22-11-2026)', () {
+    test('DE KERN: hoogstens 3 % van je gewone bibliotheek, en nooit minder dan 25', () {
+      expect(verzamelHoogstens(2000), 60);
+      expect(verzamelHoogstens(2200), 66);
+      expect(verzamelHoogstens(500), 25);
+      expect(verzamelHoogstens(0), 25);
+    });
+
+    test('DE KERN: een groter blok valt weg — de vocal jazz blijft, de eurodance niet', () {
+      final nummers = [
+        for (var i = 0; i < 30; i++) _b('e$i', 'Technotronic', 'Pump $i', genre: 'Eurodance'),
+        for (var i = 0; i < 5; i++) _b('j$i', 'Mel Tormé', 'Blue Moon $i', genre: 'Jazz'),
+      ];
+      AiVerzameling v(String naam, String artiest) =>
+          (naam: naam, waarom: 'w', artiesten: [(artiest: artiest, twijfel: false, opmerking: '', nietDeze: const <String>[])]);
+      final antwoord = (verzamelingen: [v('Eurodance', 'Technotronic'), v('Vocal jazz', 'Mel Tormé')], correcties: const <AiCorrectie>[]);
+      expect(voorstellenUit(antwoord, nummers, nuMs: 1, hoogstens: 25).voorstellen.map((x) => x.naam), ['Vocal jazz']);
+      expect(voorstellenUit(antwoord, nummers, nuMs: 1).voorstellen.map((x) => x.naam), ['Eurodance', 'Vocal jazz'],
+          reason: 'zonder grens alles, zoals de toetsen hierboven');
+    });
+
+    test('de vraag zegt het, met het getal en zijn woorden', () {
+      final p = verzamelPrompt(const [], const [], hoogstens: 60);
+      expect(p, contains('een KLEINE hoek,\n   vanaf $kVerzamelMinstens en hoogstens 60 nummers (ongeveer drie procent)'));
+      expect(p, contains('zijn eurodance, zijn\n   trance en house, zijn Franse of Nederlandstalige pop'));
+      expect(p, contains('"alleen\n   kleine hoeken"'));
+    });
+
+    test('"Various" wordt geen andere verzamelnaam, en geen naam wordt "Various"', () {
+      expect(artiestCorrectie('Various', 'Verschillende artiesten', const {}), isNull);
+      expect(artiestCorrectie('Various Artists', 'Kadoc', const {}), isNull);
+      expect(artiestCorrectie('Kadoc', 'Various', const {}), isNull);
+    });
+
+    test('aangesloten: de taak op de pc rekent de grens uit en geeft hem mee', () {
+      final m = _bron('lib/main.dart');
+      expect(m, contains('  final hoogstens = verzamelHoogstens(nummers.length);'));
+      expect(m, contains('afgewezen: afgewezen, hoogstens: hoogstens);'));
+      expect(m, contains('nuMs: DateTime.now().millisecondsSinceEpoch, hoogstens: hoogstens);'));
     });
   });
 
