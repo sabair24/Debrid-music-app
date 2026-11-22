@@ -1931,7 +1931,7 @@ extension DiscogsArtwork on DiscogsService {
             .catchError((Object _) => null)
         : null;
     final cached = await _readArt(dir);
-    if (cached != null && await _afgerond(dir, cached)) {
+    if (cached != null && await _afgerond(dir, cached) && await _rollenNagekeken(dir, roles)) {
       // Getoond: zo blijft hij op een toestel staan als er gesnoeid wordt (cache_snoei.dart, kReleaseartToestel).
       unawaited(gezienMerk(dir, artist, album));
       return _metDigitaal(cached, await digitaalF);
@@ -2048,17 +2048,75 @@ extension DiscogsArtwork on DiscogsService {
       try {
         v = await pc(artist, album, klein: klein, plaat: plaat).timeout(const Duration(seconds: 10));
       } catch (_) {/* dan de keten, zoals altijd */}
-      final a = v?.art;
-      if (v != null && a != null && (a.back != null || a.disc != null)) {
+      final vanPc = v?.art;
+      if (v != null && vanPc != null && (vanPc.back != null || vanPc.disc != null)) {
+        // De rollen die DIT toestel vraagt, zelf over het antwoord van de pc ([_metEigenRollen]).
+        final r = roles.isEmpty ? (art: vanPc, af: true) : await _metEigenRollen(vanPc, roles);
+        final a = r.art;
         trace?.call('  [kunst] van de pc:${a.front != null ? " voorkant" : ""}${a.back != null ? " achterkant" : ""}'
-            '${a.disc != null ? " cd" : ""}${klein ? " — gsm-formaat" : v.klaar ? " — af" : " — de keten vult aan"}');
+            '${a.disc != null ? " cd" : ""}${roles.isEmpty ? "" : r.af ? " — met de rollen van hier" : " — een rol niet te halen"}'
+            '${klein ? " — gsm-formaat" : v.klaar ? " — af" : " — de keten vult aan"}');
         meld(a);
-        // Klein is nooit af (op wifi opnieuw), en op mobiele data geen keten over je databundel.
-        await _writeArt(dir, a, done: v.klaar && !klein, klein: klein);
+        // Klein is nooit af (op wifi opnieuw), en op mobiele data geen keten over je databundel. Een rol die niet te halen
+        // was, ook niet: dan de volgende keer opnieuw.
+        await _writeArt(dir, a, done: v.klaar && !klein && r.af, klein: klein);
+        if (roles.isNotEmpty && r.af) await _merkRollen(dir);
+        // Een rol die niet te halen was: toch dit antwoord (de keten haalt hem langs dezelfde weg ook niet), maar niet
+        // afgerond — zie hierboven.
         if (v.klaar || klein) return a;
       }
     }
-    return _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld);
+    final vers = await _releaseArtFresh(artist, album, expectedTracks, pinned, pinnedMbid, roles, dir, trace, freeOnly, meld);
+    // De keten zelf legt de rollen eroverheen ("What the user SAID an image is outranks everything below").
+    if (pc != null && roles.isNotEmpty && vers != null) await _merkRollen(dir);
+    return vers;
+  }
+
+  /// [vanPc] met de scans die [roles] aanwijzen eroverheen, zelf opgehaald op dit toestel. Af als elke rol er is.
+  ///
+  /// **Waarom.** Op een toestel komt een rol eerst HIER te staan en pas daarna bij de pc. Het scherm laadt meteen opnieuw,
+  /// onder de nieuwe sleutel (de rollen horen bij [artCacheKey]), vraagt de pc — en die kende de rol nog niet. Zijn
+  /// antwoord ("af", met de oude cd) werd dan als afgerond bewaard onder de sleutel van de NIEUWE keuze, en daarna vroeg
+  /// het toestel niets meer. Saber, 22-11-2026, de cd van Nicoletta — *Visage* op de Mac: *"wou niet direct aanpassen …
+  /// dat moet echt voor goed eens opgelost worden"*. Wat je aanwees, haalt het toestel nu zelf: dan maakt het niet uit wat
+  /// de pc op dat moment weet, of welke versie hij draait.
+  Future<({ReleaseArt art, bool af})> _metEigenRollen(ReleaseArt vanPc, Map<String, String> roles) async {
+    const volgorde = ['front', 'back', 'disc'];
+    final got = await Future.wait([
+      for (final r in volgorde)
+        (roles[r] ?? '').isEmpty
+            ? Future<Uint8List?>.value(null)
+            : _rolPlaatje(roles[r]!).catchError((Object _) => null as Uint8List?),
+    ]);
+    var af = true;
+    for (var i = 0; i < volgorde.length; i++) {
+      if ((roles[volgorde[i]] ?? '').isNotEmpty && got[i] == null) af = false;
+    }
+    return (
+      art: ReleaseArt(
+          front: got[0] ?? vanPc.front,
+          back: got[1] ?? vanPc.back,
+          disc: got[2] ?? vanPc.disc,
+          bron: vanPc.bron,
+          formaat: vanPc.formaat),
+      af: af,
+    );
+  }
+
+  /// Het briefje "de rollen van dit toestel liggen hierin" ([_metEigenRollen]). Een map met rollen op een toestel zonder
+  /// dit briefje is van vóór 22-11-2026 en kan het antwoord van een pc bevatten die de rol nog niet kende: die wordt één
+  /// keer opnieuw gevuld ([_rollenNagekeken]).
+  Future<void> _merkRollen(Directory dir) async {
+    try {
+      await File('${dir.path}${Platform.pathSeparator}rollen').writeAsString('1');
+    } catch (_) {/* dan de volgende keer nog eens */}
+  }
+
+  /// Mag een afgeronde map met [roles] als antwoord dienen? Op de pc altijd (die past zijn eigen rollen toe); op een
+  /// toestel alleen met het briefje van [_merkRollen].
+  Future<bool> _rollenNagekeken(Directory dir, Map<String, String> roles) async {
+    if (vanDePc == null || roles.isEmpty) return true;
+    return File('${dir.path}${Platform.pathSeparator}rollen').exists();
   }
 
   /// [art] met de digitale voorkant [d] erin — en elke keer HETZELFDE object voor dezelfde twee, zie
