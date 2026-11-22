@@ -198,7 +198,9 @@ void main() {
   test('"Radio afsluiten" stopt ook de muziek — op elke knop, en op afstand', () {
     final m = _bron('lib/main.dart');
     expect(m, contains('  if (radio.loopt) radio.stop(naar: naar);\n  unawaited(speler.verlaatRadio());'));
-    expect('radioAfsluiten('.allMatches(m).length, 4, reason: 'de functie, twee knoppen en de opdracht van een zone');
+    // En sinds 22-11-2026 een vijfde: een radio die met een overdracht naar een andere zone ging (radioNaOvername).
+    expect('radioAfsluiten('.allMatches(m).length, 5,
+        reason: 'de functie, twee knoppen, de opdracht van een zone en de overname');
     expect(m, contains('    radioStop: ({door}) => radioAfsluiten(radio, player, naar: door),'));
   });
 
