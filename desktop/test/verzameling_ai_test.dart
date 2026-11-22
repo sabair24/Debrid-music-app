@@ -7,11 +7,12 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:debridmusic/ai.dart';
 import 'package:debridmusic/flac_tags.dart';
 import 'package:debridmusic/lan/server.dart' show weigerVanBuiten;
 import 'package:debridmusic/lan/state_store.dart';
 import 'package:debridmusic/library.dart';
-import 'package:debridmusic/main.dart' show VerzamelingenView;
+import 'package:debridmusic/main.dart' show VerzamelingenView, maakVerzamelvoorstellen;
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/settings.dart';
@@ -26,8 +27,27 @@ import 'place_file_test.dart' show buildFlac;
 
 String _bron(String pad) => File(pad).readAsStringSync().replaceAll('\r\n', '\n');
 
-BibNummer _b(String id, String artiest, String titel, {String? genre, int? jaar}) =>
-    (id: id, artiest: artiest, titel: titel, genre: genre, jaar: jaar);
+BibNummer _b(String id, String artiest, String titel, {String? genre, int? jaar, bool single = true}) =>
+    (id: id, artiest: artiest, titel: titel, genre: genre, jaar: jaar, single: single);
+
+/// Een bibliotheek met vaste id's.
+class _IdLib extends LibraryStore {
+  @override
+  String? gedeeldId(String path) => 'id:${path.split(r'\').last}';
+}
+
+/// Claude zonder het net: onthoudt de vraag en geeft een vast antwoord.
+class _NepAi extends AiService {
+  _NepAi(this.antwoord) : super(() => 'sleutel');
+  final Object? antwoord;
+  String vraag = '';
+
+  @override
+  Future<Object?> vraagVerzamelvoorstel(String prompt) async {
+    vraag = prompt;
+    return antwoord;
+  }
+}
 
 /// Alle `properties` van een schema staan ook in `required` — anders weigert de API het hele schema.
 void _volledig(Object? s, String waar) {
@@ -81,7 +101,7 @@ void main() {
         'crooners en standards uit de traditional pop',
         'soulklassiekers (Sam Cooke, Ben E. King, Etta James)',
         'Bigband en swing (Glenn Miller, Benny Goodman) staan apart',
-        'Een popzanger of -zangeres die een standard zingt (Annie Lennox, Eva Cassidy) hoort in geen van alle',
+        'Een popzanger of -zangeres die een standard zingt (Annie Lennox, Eva Cassidy, Wayne Newton) hoort in geen van\n     alle',
         'stel nooit een verzameling voor\n   van wat hij het meest heeft',
         'gebruik dan precies haar naam',
         'Liever geen correctie dan een gok.',
@@ -220,6 +240,102 @@ void main() {
         ('c7-0', 'e1', '1990', 'Jaar: 1990 → 1960'),
         ('c7-2', 'b1', 'Toccara0217', 'Genre: Toccara0217 → Vocal Jazz'),
       ], reason: 'een correctie die niets verandert valt weg');
+    });
+  });
+
+  group('strenger na de eerste ronde (22-11-2026)', () {
+    final bekend = {
+      for (final a in [
+        'Hélène Ségara',
+        'Hélène Segara',
+        'Âme',
+        'Ame',
+        'Kiko Ségara',
+        'a‐ha',
+        'DJ Stijn Feat. Ali Tcheelab',
+        'Drivers Seed* Feat. MC Ramon',
+        'Dominion (3)',
+        'Claude Francois',
+        'Billie Holiday & Her Orchestra',
+      ])
+        vraagSleutel(a): a
+    };
+
+    test('DE KERN: een accent weghalen wordt andersom — de versie zonder accent krijgt het', () {
+      expect(artiestCorrectie('Hélène Ségara', 'Hélène Segara', bekend), (artiest: 'Hélène Segara', naar: 'Hélène Ségara'));
+      expect(artiestCorrectie('Âme', 'Ame', bekend), (artiest: 'Ame', naar: 'Âme'));
+      expect(artiestCorrectie('Kiko Ségara', 'Kiko Segara', bekend), isNull, reason: 'zonder accent staat ze nergens');
+    });
+
+    test('DE KERN: geen Discogs-nummer erbij, geen gast die wegvalt, geen hoofdletters of streepjes alleen', () {
+      expect(artiestCorrectie('DJ Stijn Feat. Ali Tcheelab', 'DJ Stijn (2) feat. Ali Tcheelab', bekend), isNull);
+      expect(artiestCorrectie('Drivers Seed* Feat. MC Ramon', 'Drivers Seed', bekend), isNull);
+      expect(artiestCorrectie('Drivers Seed* Feat. MC Ramon', 'Drivers Seed feat. MC Ramon', bekend),
+          (artiest: 'Drivers Seed* Feat. MC Ramon', naar: 'Drivers Seed feat. MC Ramon'),
+          reason: 'het sterretje eruit, de gast blijft');
+      expect(artiestCorrectie('a‐ha', 'A-Ha', bekend), isNull, reason: 'welke de officiële is, weet de app niet');
+      expect(artiestCorrectie('Dominion (3)', 'Dominion', bekend), (artiest: 'Dominion (3)', naar: 'Dominion'));
+      expect(artiestCorrectie('Dominion (3)', 'Dominion*', bekend), isNull);
+    });
+
+    test('wat goed was, blijft: een accent erbij, een tweede schrijfwijze naar de gewone naam', () {
+      expect(artiestCorrectie('Claude Francois', 'Claude François', bekend),
+          (artiest: 'Claude Francois', naar: 'Claude François'));
+      expect(artiestCorrectie('Billie Holiday & Her Orchestra', 'Billie Holiday', bekend),
+          (artiest: 'Billie Holiday & Her Orchestra', naar: 'Billie Holiday'));
+    });
+
+    test('het uitlezen gebruikt die controle', () {
+      Map<String, Object> c(String artiest, String naar) =>
+          {'artiest': artiest, 'titel': '', 'veld': 'artiest', 'naar': naar, 'waarom': 'w'};
+      final r = leesVerzamelvoorstel({
+        'verzamelingen': [],
+        'correcties': [
+          c('Hélène Ségara', 'Hélène Segara'),
+          c('a‐ha', 'A-Ha'),
+          c('DJ Stijn Feat. Ali Tcheelab', 'DJ Stijn (2) feat. Ali Tcheelab'),
+          c('Claude Francois', 'Claude François'),
+        ],
+      }, bekend: bekend);
+      expect([for (final x in r.correcties) '${x.artiest} → ${x.naar}'],
+          ['Hélène Segara → Hélène Ségara', 'Claude Francois → Claude François']);
+    });
+
+    test('de accenten: elke letter naar een gewone letter', () {
+      expect(zonderAccenten('Hélène Ségara · Âme · Bjørk · Ñandú'), 'Helene Segara · Ame · Bjork · Nandu');
+      expect(aantalAccenten('Hélène Ségara'), 3);
+      expect(aantalAccenten('a-ha'), 0);
+      expect(kaleNaam('A‐Ha  ’n'), "a-ha 'n");
+    });
+
+    test('DE KERN: een jaar alleen voor een los nummer — op een album is het dat van de plaat', () {
+      final r = voorstellenUit((
+        verzamelingen: const [],
+        correcties: [
+          (artiest: 'Aretha Franklin', titel: 'Respect', veld: 'jaar', naar: '1967', waarom: 'w'),
+          (artiest: 'Aretha Franklin', titel: 'Think', veld: 'jaar', naar: '1968', waarom: 'w'),
+          (artiest: 'Aretha Franklin', titel: 'Think', veld: 'genre', naar: 'Soul', waarom: 'w'),
+        ],
+      ), [
+        _b('a1', 'Aretha Franklin', 'Respect', jaar: 2017, single: false),
+        _b('a2', 'Aretha Franklin', 'Think', jaar: 2017, genre: 'Pop', single: true),
+      ], nuMs: 1);
+      expect([for (final c in r.correcties) '${c.veld}:${c.ids.join(',')}'], ['jaar:a2', 'genre:a2'],
+          reason: 'Respect staat op een verzamelplaat van 2017');
+    });
+
+    test('de vraag zegt het ook, met de redenen', () {
+      final p = verzamelPrompt(const [], const []);
+      for (final zin in [
+        'Frank Sinatra "Bad, Bad Leroy Brown" (een popnummer van Jim Croce)',
+        '(Annie Lennox, Eva Cassidy, Wayne Newton)',
+        'alleen voor een los nummer (een single)',
+        'haal nooit een accent weg',
+        'Zet nooit een Discogs-nummer als "(2)" of een sterretje in een\n     naam',
+        'Laat een gast ("feat. MC Ramon") nooit wegvallen.',
+      ]) {
+        expect(p, contains(zin));
+      }
     });
   });
 
@@ -402,6 +518,38 @@ void main() {
     // De melding ("0 nummers naar …") laten verlopen.
     await tester.pump(const Duration(seconds: 10));
     await tester.pumpAndSettle();
+  });
+
+  test('DE KERN: de taak op de pc — de vraag met je gewone bibliotheek, en een jaar alleen voor een los nummer', () async {
+    final lib = _IdLib()
+      ..tracks.addAll([
+        Track(path: r'D:\m\DebridMusic Downloads\Singles\think.flac', title: 'Think', artist: 'Aretha Franklin', album: '', year: 2017),
+        Track(path: r'D:\m\Albums\Greatest\respect.flac', title: 'Respect', artist: 'Aretha Franklin', album: 'Greatest', year: 2017),
+        Track(path: r'D:\m\Albums\Greatest\chain.flac', title: 'Chain of Fools', artist: 'Aretha Franklin', album: 'Greatest', year: 2017),
+        Track(
+            path: r'D:\m\DebridMusic Downloads\Verzamelingen\Vocal jazz\Singles\ella.flac',
+            title: 'Misty',
+            artist: 'Ella Fitzgerald',
+            album: ''),
+      ])
+      ..rebuildAlbums();
+    final verz = Verzamelingen()
+      ..winkel = LanStateStore(File('${Directory.systemTemp.createTempSync('dm_pctaak_').path}${Platform.pathSeparator}s.json'));
+    final ai = _NepAi({
+      'verzamelingen': [],
+      'correcties': [
+        {'artiest': 'Aretha Franklin', 'titel': 'Think', 'veld': 'jaar', 'naar': '1968', 'waarom': 'w'},
+        {'artiest': 'Aretha Franklin', 'titel': 'Respect', 'veld': 'jaar', 'naar': '1967', 'waarom': 'w'},
+      ],
+    });
+    final regels = <String>[];
+    final r = await maakVerzamelvoorstellen(lib, verz, ai, spoor: regels.add);
+    expect(ai.vraag, contains('Aretha Franklin · 3 nummers'));
+    expect(ai.vraag, isNot(contains('Ella Fitzgerald ·')), reason: 'wat al in een verzameling staat, staat er niet in');
+    expect(ai.vraag, contains('- Vocal jazz: Ella Fitzgerald'));
+    expect([for (final c in r.correcties) (c.titel, c.ids.join(','))], [('Think', 'id:think.flac')],
+        reason: 'Respect staat op een album: daar is 2017 het jaar van de plaat');
+    expect(regels.last, contains('1 artiesten (3 nummers) gevraagd'));
   });
 
   test('aangesloten: de pc beantwoordt toestellen, ook van buitenshuis, en zet gegevens recht', () {

@@ -17,8 +17,9 @@ import 'package:flutter/foundation.dart';
 
 import 'verzamelvraag.dart';
 
-/// Een nummer uit je bibliotheek zoals de voorstellen het zien.
-typedef BibNummer = ({String id, String artiest, String titel, String? genre, int? jaar});
+/// Een nummer uit je bibliotheek zoals de voorstellen het zien. [single]: een los nummer, geen deel van een album — alleen
+/// daar mag een jaarcorrectie, want bij een albumnummer is het jaar dat van de plaat (22-11-2026).
+typedef BibNummer = ({String id, String artiest, String titel, String? genre, int? jaar, bool single});
 
 /// Eén nummer in een voorstel.
 class VoorgesteldNummer {
@@ -208,7 +209,7 @@ List<VraagArtiest> vraagArtiesten(List<BibNummer> nummers, List<String> Function
 
 /// Het uitgelezen antwoord ([leesVerzamelvoorstel]) terug naar nummers van je bibliotheek ([nummers]): elke artiest
 /// met al zijn nummers behalve wat bij `nietDeze` staat, en elke correctie met de nummers waar ze over gaat en wat er nu
-/// staat. Een correctie die niets verandert of over niets gaat, valt weg.
+/// staat. Een correctie die niets verandert of over niets gaat, valt weg — ook een jaar voor een nummer op een album.
 ({List<VerzamelAiVoorstel> voorstellen, List<AiCorrectieVoorstel> correcties}) voorstellenUit(
   ({List<AiVerzameling> verzamelingen, List<AiCorrectie> correcties}) antwoord,
   List<BibNummer> nummers, {
@@ -237,7 +238,7 @@ List<VraagArtiest> vraagArtiesten(List<BibNummer> nummers, List<String> Function
   for (final (i, c) in antwoord.correcties.indexed) {
     final raak = [
       for (final n in per[vraagSleutel(c.artiest)] ?? const <BibNummer>[])
-        if (c.titel.isEmpty || t(n.titel) == t(c.titel)) n
+        if ((c.titel.isEmpty || t(n.titel) == t(c.titel)) && (c.veld != 'jaar' || n.single)) n
     ];
     String nu(BibNummer n) => switch (c.veld) {
           'jaar' => n.jaar == null || n.jaar == 0 ? '' : '${n.jaar}',

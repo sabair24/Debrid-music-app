@@ -132,6 +132,20 @@ String _fold(String s) {
   return b.toString();
 }
 
+/// [s] klein en zonder accenten ("Hélène Ségara Voici" → "helene segara voici"), voor de tweede vraag van een
+/// Soulseek-ronde (`SoulseekService._searchOnce`). Null als er niets te vouwen viel.
+///
+/// Saber, 22-11-2026: *"in soulseek veelal, de accenten niet gebruikt worden of teveel, dus dit mag geen impact hebben op
+/// resultaten"*. Soulseek telt "ségara" en "segara" als verschillende woorden: gemeten op 26-10-2026 gaf "france gall
+/// débranche" 789 bestanden en "france gall debranche" 550 — elk een ander deel van wat er is. Met beide vormen in één
+/// ronde maakt het niet meer uit hoe een naam in je tags staat; het vergelijken achteraf vouwt al ([fileWords]).
+String? zonderAccentenVoorZoeken(String s) {
+  final klein = s.toLowerCase();
+  if (!_buitenAscii(klein)) return null;
+  final gevouwen = _fold(klein);
+  return gevouwen == klein ? null : gevouwen;
+}
+
 /// "feat." and friends, as they appear in an artist tag or a title.
 /// Deliberately NOT "&" or "and": "Simon & Garfunkel" and "Hall & Oates" are single acts, and
 /// splitting those would invent artists that don't exist.
