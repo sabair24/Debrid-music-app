@@ -1,10 +1,17 @@
 package com.debridmusic.app
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
+import android.app.job.JobInfo
+import android.app.job.JobParameters
+import android.app.job.JobScheduler
+import android.app.job.JobService
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -14,7 +21,9 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.ryanheise.audioservice.AudioServicePlugin
 import io.flutter.embedding.engine.FlutterEngine
@@ -36,12 +45,39 @@ import io.flutter.plugin.common.MethodChannel
  * blijft in Dart (lib/lan/cast_receiver.dart), net als de lijn naar de pc.
  *
  * Alleen op een televisie. Een gsm die altijd luistert, start muziek zodra iemand in huis een speaker kiest.
+ *
+ * **Terugkomen na een stop die niemand vroeg (Saber, 22-11-2026).** *"Ik zie tv in woonkamer niet meer? Vroeger zag ik
+ * hem zelf als hij slaapt"*. Gemeten op de Shield (logcat): om 17:27:58 sloot de geheugenbewaker (lmkd) tijdens een
+ * installatie een hele reeks processen tegelijk, ook deze app met zijn voorgronddienst ("prcp FGS"). Android plande de
+ * herstart van de dienst (START_STICKY) en voerde die om 17:28:24 uit — maar stopte hem in dezelfde milliseconde weer:
+ * "Stopping service due to app idle". Een herstarte dienst is eerst een gewone dienst, geen voorgronddienst, en die
+ * mag een app die al uren op de achtergrond staat niet hebben. Om 17:30:33 ruimde Android het lege proces op, en de
+ * Shield stond niet meer in de zones tot iemand de app opende.
+ *
+ * Daarom twee vangnetten. [onDestroy] plant een herstart met een wekker die ook in de slaap mag afgaan
+ * (setAndAllowWhileIdle): Android geeft de app dan een paar seconden vrijstelling, en de dienst start als
+ * voorgronddienst, zoals bij [start]. De wekker wekt alleen de processor, nooit het scherm. Stopt hij telkens meteen
+ * weer, dan wacht hij langer ([herstartNa]). En [OntvangerWacht] kijkt elk kwartier of de dienst er nog is, voor een
+ * stop waarbij Android [onDestroy] niet eens aanroept.
  */
 class OntvangerDienst : Service() {
 
     companion object {
         private const val KANAAL = "ontvanger"
         private const val MELDING = 4712
+        private const val WACHTER = 4713
+        private const val HERSTART = 4714
+        private const val VOORKEUR = "ontvanger"
+        private const val SNEL_GESTOPT = "snelGestopt"
+        private const val LOG = "DebridOntvanger"
+
+        /** Hoe lang hij moet draaien om als "gewoon" te gelden; korter telt als een stop die meteen volgde. */
+        private const val GEWOON_NA_MS = 10 * 60_000L
+
+        /** Wachttijd voor de herstart, na zoveel stops op rij die kort na de start kwamen. */
+        private val kHerstartNa = longArrayOf(5_000L, 30_000L, 5 * 60_000L, 15 * 60_000L)
+
+        fun herstartNa(snelGestopt: Int): Long = kHerstartNa[snelGestopt.coerceIn(0, kHerstartNa.size - 1)]
 
         /** Is dit een televisie? Dezelfde vraag als in MainActivity ("isTv"). */
         fun isTv(context: Context): Boolean {
@@ -59,12 +95,41 @@ class OntvangerDienst : Service() {
                 else context.startService(i)
             } catch (e: Exception) {
                 // Bijvoorbeeld een start vanaf de achtergrond die Android weigert; bij de volgende start van de app opnieuw.
+                Log.w(LOG, "starten geweigerd: ${e.javaClass.simpleName}")
+            }
+        }
+
+        /** De wekker voor de herstart: dezelfde start als [start], als voorgronddienst. */
+        private fun herstartWekker(context: Context): PendingIntent {
+            val i = Intent(context, OntvangerDienst::class.java)
+            val vlag = PendingIntent.FLAG_UPDATE_CURRENT or
+                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                PendingIntent.getForegroundService(context, HERSTART, i, vlag)
+            } else {
+                PendingIntent.getService(context, HERSTART, i, vlag)
+            }
+        }
+
+        /** Elk kwartier nakijken of de dienst er nog is ([OntvangerWacht]). Eén keer gepland is genoeg. */
+        fun zetWachter(context: Context) {
+            try {
+                val js = context.getSystemService(JobScheduler::class.java) ?: return
+                if (js.allPendingJobs.any { it.id == WACHTER }) return
+                js.schedule(
+                    JobInfo.Builder(WACHTER, ComponentName(context, OntvangerWacht::class.java))
+                        .setPeriodic(15 * 60_000L)
+                        .build()
+                )
+            } catch (e: Exception) {
+                Log.w(LOG, "wachter niet gepland: ${e.javaClass.simpleName}")
             }
         }
     }
 
     private val hoofd = Handler(Looper.getMainLooper())
     @Volatile private var draait = false
+    private var gestartOm = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -75,6 +140,13 @@ class OntvangerDienst : Service() {
             startForeground(MELDING, melding)
         }
         draait = true
+        gestartOm = SystemClock.elapsedRealtime()
+        Log.i(LOG, "dienst gestart")
+        try {
+            getSystemService(AlarmManager::class.java)?.cancel(herstartWekker(this))
+        } catch (e: Exception) {
+        }
+        zetWachter(applicationContext)
         zorgVoorEngine()
     }
 
@@ -113,7 +185,33 @@ class OntvangerDienst : Service() {
 
     override fun onDestroy() {
         draait = false
+        plantHerstart()
         super.onDestroy()
+    }
+
+    /**
+     * Niemand stopt deze dienst met opzet: er is geen knop voor, en hij stopt zichzelf nooit. Een onDestroy komt dus van Android, en dan moet hij
+     * terug (zie de uitleg bij de klasse). Na een gewone looptijd over vijf seconden; stopt hij telkens kort na de
+     * start, dan langer, tot een kwartier, zodat een fout nooit een eindeloze reeks herstarts wordt.
+     */
+    private fun plantHerstart() {
+        try {
+            val vk = getSharedPreferences(VOORKEUR, Context.MODE_PRIVATE)
+            val leefde = SystemClock.elapsedRealtime() - gestartOm
+            val snel = if (leefde >= GEWOON_NA_MS) 0 else vk.getInt(SNEL_GESTOPT, 0)
+            val wacht = herstartNa(snel)
+            vk.edit().putInt(SNEL_GESTOPT, if (leefde >= GEWOON_NA_MS) 0 else snel + 1).apply()
+            val wekker = getSystemService(AlarmManager::class.java) ?: return
+            val wanneer = SystemClock.elapsedRealtime() + wacht
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                wekker.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, wanneer, herstartWekker(this))
+            } else {
+                wekker.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, wanneer, herstartWekker(this))
+            }
+            Log.i(LOG, "dienst gestopt na ${leefde / 1000} s; herstart over ${wacht / 1000} s")
+        } catch (e: Exception) {
+            Log.w(LOG, "herstart niet gepland: ${e.javaClass.simpleName}")
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -137,6 +235,22 @@ class OntvangerDienst : Service() {
             .setOngoing(true)
             .build()
     }
+}
+
+/**
+ * Elk kwartier: draait [OntvangerDienst] nog? Zo niet, dan start hij opnieuw. Draait hij al, dan is [OntvangerDienst.start]
+ * onschuldig (Android roept alleen onStartCommand aan) — dezelfde start die MainActivity bij elke opening doet.
+ *
+ * Het tweede vangnet naast de wekker uit onDestroy: voor een stop waarbij Android de dienst opruimt zonder onDestroy.
+ * In de diepe slaap draait een taak pas in een onderhoudsvenster, dus dit kan langer duren dan een kwartier.
+ */
+class OntvangerWacht : JobService() {
+    override fun onStartJob(params: JobParameters?): Boolean {
+        OntvangerDienst.start(applicationContext)
+        return false
+    }
+
+    override fun onStopJob(params: JobParameters?): Boolean = false
 }
 
 /**
