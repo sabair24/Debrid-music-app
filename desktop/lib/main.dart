@@ -12997,7 +12997,11 @@ class PlayerBar extends StatelessWidget {
                           // werd naar nul geknepen, en in de balk stond alleen nog de artiest met twee
                           // getallen erboven. Van drie meter afstand is de titel juist het enige wat
                           // telt -- en de kwaliteit staat voluit op het nu-speelt-scherm, één knop weg.
-                          if (t != null && !isTv) _echtheidMerk(_klinktAls(context, t)),
+                          // Zonder de gedempte vraag "tot 20,6 kHz?": die staat op de regel eronder, naast de artiest. Het
+                          // zijvak is hoogstens 280 punten; na de hoes blijft er 214 over, en titel, herkomst, hart, vraag
+                          // en label samen pasten daar nooit in (Saber, 22-11-2026, op de Mac: "FLAC · 16/44" afgekapt en
+                          // de titel weg). Beschadigd en nep blijven hier.
+                          if (t != null && !isTv) _echtheidMerk(_klinktAls(context, t), metVraag: false),
                           if (t != null && !isTv && t.sizeBytes > 0)
                             _qualityBadge(_trackQuality(_klinktAls(context, t))),
                         ],
@@ -13032,13 +13036,19 @@ class PlayerBar extends StatelessWidget {
                         ])
                       else
                         // Everyone on the track, each name tappable — a guest artist is exactly
-                        // who you want to look up while their verse is playing.
-                        ArtistLine(
-                          artist: t.artist,
-                          title: t.title,
-                          lookup: true,
-                          style: TextStyle(color: _muted, fontSize: 12.5),
-                        ),
+                        // who you want to look up while their verse is playing. En daarachter de gedempte vraag
+                        // "tot 20,6 kHz?", die in de regel erboven niet paste.
+                        Row(children: [
+                          Flexible(
+                            child: ArtistLine(
+                              artist: t.artist,
+                              title: t.title,
+                              lookup: true,
+                              style: TextStyle(color: _muted, fontSize: 12.5),
+                            ),
+                          ),
+                          if (!isTv) _echtheidMerk(_klinktAls(context, t), alleenVraag: true),
+                        ]),
                     ],
                   ),
                   ),
@@ -29866,12 +29876,18 @@ Future<void> _toonKwaliteitBlad(BuildContext context, Speelbron p, Track anker, 
 /// dezelfde zin uit [waarom] die de badge ook toonde.
 /// [metVraag] onwaar: zonder de gedempte vraag "tot 20,9 kHz?" — in een lijst op een gsm knijpt die de titel tot niets,
 /// en het kwaliteitsblad zegt het voluit. Beschadigd en nep staan er altijd.
-Widget _echtheidMerk(Track? t, {bool metVraag = true, EdgeInsets marge = const EdgeInsets.symmetric(horizontal: 8)}) {
+///
+/// [alleenVraag]: alleen die gedempte vraag, en verder niets — voor de tweede regel van de spelerbalk op een pc of Mac, waar
+/// ze naast de artiest past. In de bovenste regel kneep ze de titel tot niets en liep het kwaliteitslabel over de rand
+/// (Saber, 22-11-2026, op de Mac: "FLAC · 16/44" afgekapt).
+Widget _echtheidMerk(Track? t,
+    {bool metVraag = true, bool alleenVraag = false, EdgeInsets marge = const EdgeInsets.symmetric(horizontal: 8)}) {
   final pad = t?.path;
   if (t == null || pad == null || pad.isEmpty) return const SizedBox.shrink();
   final sr = t.sampleRate, bits = t.bitsPerSample;
   final o = gemeten(pad);
   if (o == null) return const SizedBox.shrink();
+  if (alleenVraag && (o.isKapot || o.isNep || !o.isVermoedelijk)) return const SizedBox.shrink();
   // Beschadigd gaat voor alles: de controlesom van de samples klopt niet (volle meting, 20-10-2026).
   if (o.isKapot) {
     return Tooltip(
@@ -41417,9 +41433,14 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       for (final e in _staged.entries) {
         teBewaren[e.key] = await _volleScan(e.key, e.value, settings);
       }
+      // In één bewerking over wat er al stond ([LibraryStore.zetAlbumArtRoles]). Eén plaatje is één ding: wat nu een
+      // andere rol krijgt, valt uit de rol die het had (zoals [LibraryStore.setAlbumArtRole] dat altijd deed).
+      final rollen = {...lib.albumArtRoles(widget.album.artist, widget.album.title, plaat: widget.album.plaat)};
       for (final e in teBewaren.entries) {
-        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value.uri, plaat: widget.album.plaat);
+        rollen.removeWhere((_, v) => v == e.value.uri);
+        rollen[e.key] = e.value.uri;
       }
+      await lib.zetAlbumArtRoles(widget.album.artist, widget.album.title, rollen, plaat: widget.album.plaat);
       final front = teBewaren['front'];
       if (front != null) {
         // Each catalogue serves its own images, and Discogs wants its token on the request.
@@ -41939,13 +41960,11 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
       // Choosing an EDITION means using its scans — all three of them. Any single scan picked
       // earlier is an override that outranks the pressing, so leaving those in place made this
       // button look like it did nothing: you chose the CD and kept the digital sleeve.
-      await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title, plaat: widget.album.plaat);
       // Behalve wat je in ditzelfde venster net zelf hebt aangewezen. Anders is "zoek de scan op,
       // wijs hem toe, kies dan deze uitgave" een handeling die zichzelf ongedaan maakt — en dat is
-      // precies de weg die openstaat als de app de schijf-scan in het verkeerde vak zette.
-      for (final e in _eigenRollen.entries) {
-        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value, plaat: widget.album.plaat);
-      }
+      // precies de weg die openstaat als de app de schijf-scan in het verkeerde vak zette. In één bewerking
+      // ([LibraryStore.zetAlbumArtRoles]).
+      await lib.zetAlbumArtRoles(widget.album.artist, widget.album.title, {..._eigenRollen}, plaat: widget.album.plaat);
       await lib.applyCorrection(widget.album, settings,
           coverBytes: front,
           // Een TheAudioDB-rij zet niets vast: het is een album, geen persing. Wat er al vaststond
@@ -42312,6 +42331,9 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
     if (shown.isEmpty) {
       return Center(child: Text('Geen uitgaves in dit formaat.', style: TextStyle(color: _muted)));
     }
+    // Wat je eerder zelf aanwees, ook als je het venster opnieuw opent ([scanHoortBijUitgave]).
+    final bewaard =
+        context.read<LibraryStore>().albumArtRoles(widget.album.artist, widget.album.title, plaat: widget.album.plaat);
     return ListView.separated(
       controller: _scroll,
       itemCount: shown.length,
@@ -42329,6 +42351,7 @@ class _ReleaseGalleryState extends State<ReleaseGallery> {
           vastgezet: isPinned,
           opgevraagd: gevraagd,
           eigenScans: _rolOverride[c.key],
+          bewaardeRollen: bewaard,
           klaargezet: _staged,
           onKiezen: () => _choose(c),
           onScans: () => _assign(c),
@@ -42473,6 +42496,7 @@ class UitgaveRij extends StatelessWidget {
     this.vastgezet = false,
     this.opgevraagd = false,
     this.eigenScans,
+    this.bewaardeRollen = const {},
     this.klaargezet = const {},
   });
 
@@ -42484,6 +42508,10 @@ class UitgaveRij extends StatelessWidget {
 
   /// Wat de gebruiker voor DEZE uitgave zelf aanwees: rol → scan. Gaat voor op de gok van de app.
   final Map<String, ChoiceImage>? eigenScans;
+
+  /// De rollen die voor dit album bewaard zijn (rol → adres). Hoort zo'n scan bij deze uitgave
+  /// ([scanHoortBijUitgave]), dan staat hij in zijn vakje — ook na het opnieuw openen van het venster, en vóór de gok.
+  final Map<String, String> bewaardeRollen;
 
   /// Wat er in de kiezer klaarstaat om overgenomen te worden: rol → scan. Alleen om de rand om het
   /// gekozen plaatje te tekenen.
@@ -42543,14 +42571,20 @@ class UitgaveRij extends StatelessWidget {
     // the back and the disc the wrong way round often enough to need an answer.
     // Wat de gebruiker zelf aanwees gaat vóór de gok van de app — zie [eigenScans].
     final eigen = eigenScans;
+    // Daarna wat er voor dit album bewaard is, als het van deze uitgave is; dan pas de gok.
+    ChoiceImage? bewaard(String rol) {
+      final u = bewaardeRollen[rol];
+      return u != null && scanHoortBijUitgave(u, c) ? ChoiceImage(u, u) : null;
+    }
+
     final scans = <Widget>[
-      _thumb(eigen?['front'] ?? c.front, 'hoes',
+      _thumb(eigen?['front'] ?? bewaard('front') ?? c.front, 'hoes',
           role: 'front', row: c, onLongPress: onScans),
       const SizedBox(width: 8),
-      _thumb(eigen?['back'] ?? c.back, 'achter',
+      _thumb(eigen?['back'] ?? bewaard('back') ?? c.back, 'achter',
           role: 'back', row: c, onLongPress: onScans),
       const SizedBox(width: 8),
-      _thumb(eigen?['disc'] ?? c.disc, 'cd',
+      _thumb(eigen?['disc'] ?? bewaard('disc') ?? c.disc, 'cd',
           role: 'disc', row: c, onLongPress: onScans),
     ];
     final knoppen = <Widget>[
@@ -42864,11 +42898,9 @@ class _AssignScansDialogState extends State<AssignScansDialog> {
     setState(() => _opslaan = true);
     final lib = context.read<LibraryStore>();
     try {
-      // Wissen en opnieuw zetten: wat hier staat IS de keuze, inclusief wat je weghaalde.
-      await lib.clearAlbumArtRoles(widget.album.artist, widget.album.title, plaat: widget.album.plaat);
-      for (final e in _rollen.entries) {
-        await lib.setAlbumArtRole(widget.album.artist, widget.album.title, e.key, e.value, plaat: widget.album.plaat);
-      }
+      // Wat hier staat IS de keuze, inclusief wat je weghaalde — in één bewerking ([LibraryStore.zetAlbumArtRoles];
+      // Saber, 22-11-2026: op de Mac "moeizaam", want wissen en elke rol apart waren elk een herlading van de catalogus).
+      await lib.zetAlbumArtRoles(widget.album.artist, widget.album.title, {..._rollen}, plaat: widget.album.plaat);
     } catch (e) {
       if (!mounted) return;
       setState(() => _opslaan = false);

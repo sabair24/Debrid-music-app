@@ -3814,7 +3814,11 @@ class LanServer {
     final op = (body['op'] ?? '') as String;
     final vanBuiten = _ingangVan[req] == Ingang.tlsBuiten;
     // Van buiten: een adres dat de pc later zelf ophaalt, alleen naar het internet. Zie [adresVanBuitenMag].
-    if (vanBuiten && body['url'] is String && !adresVanBuitenMag(body['url'] as String)) {
+    // Ook elk adres in een lijst van rollen (`albumArtRoles`, 22-11-2026).
+    final rolAdressen = body['rollen'] is Map ? [for (final v in (body['rollen'] as Map).values) '$v'] : const <String>[];
+    if (vanBuiten &&
+        ((body['url'] is String && !adresVanBuitenMag(body['url'] as String)) ||
+            rolAdressen.any((a) => a.isNotEmpty && !adresVanBuitenMag(a)))) {
       _koppelLog?.line('BEWERKING VAN BUITEN geweigerd: $op met een adres dat niet naar het internet wijst');
       return _json(req.response, {'error': 'Van buitenaf kan alleen een https-adres op het internet.'},
           status: HttpStatus.forbidden);
@@ -3831,6 +3835,7 @@ class LanServer {
         op != 'artistArt' &&
         op != 'artistKop' &&
         op != 'albumArtRole' &&
+        op != 'albumArtRoles' &&
         op != 'renumber' &&
         op != 'assignRows' &&
         album == null) {
@@ -3968,6 +3973,24 @@ class LanServer {
             await library.setAlbumArtRole(rolArtiest, rolAlbum, (body['role'] ?? '') as String,
                 (body['url'] ?? '') as String, plaat: rolPlaat);
           }
+        case 'albumArtRoles':
+          // Alle rollen van een plaat in één keer ([LibraryStore.zetAlbumArtRoles], 22-11-2026): één bewerking en één
+          // herlading op het toestel, in plaats van wissen en dan elke rol apart.
+          final artiest = (body['artist'] ?? '') as String;
+          final titel = (body['album'] ?? '') as String;
+          if (artiest.isEmpty || titel.isEmpty || body['rollen'] is! Map) {
+            return await _json(req.response, {'error': 'Geen album of rollen opgegeven.'},
+                status: HttpStatus.badRequest);
+          }
+          final plaat = body['plaat'] is String && (body['plaat'] as String).isNotEmpty ? body['plaat'] as String : null;
+          await library.zetAlbumArtRoles(
+              artiest,
+              titel,
+              {
+                for (final e in (body['rollen'] as Map).entries)
+                  if (const {'front', 'back', 'disc'}.contains('${e.key}') && '${e.value}'.isNotEmpty) '${e.key}': '${e.value}',
+              },
+              plaat: plaat);
         case 'assignRows':
           // "Nummers toewijzen" namens een ander toestel.
           //

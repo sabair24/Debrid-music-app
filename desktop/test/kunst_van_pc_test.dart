@@ -5,12 +5,21 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 import 'package:debridmusic/discogs.dart';
 import 'package:debridmusic/paths.dart';
 import 'package:debridmusic/settings.dart';
 
 Uint8List _b(int n, [int lengte = 400]) => Uint8List.fromList(List.filled(lengte, n));
+
+/// De aangewezen voorkant van deze toetsen, zoals een echte scan hem geeft. Sinds 22-11-2026 legt een toestel zijn eigen
+/// rollen over het antwoord van de pc, en een rol die niet te halen is telt niet als afgerond (rollen_meteen_test.dart).
+Future<T> _metRol<T>(Future<T> Function() f) => http.runWithClient(
+    f,
+    () => MockClient((req) async =>
+        req.url.host == 'voorbeeld.invalid' ? http.Response.bytes(_b(9, 800), 200) : http.Response('', 404)));
 
 void main() {
   group('kunstNaarJson / kunstUitJson', () {
@@ -62,7 +71,8 @@ void main() {
       // Een aangewezen voorkant (rol) houdt de digitale zoektocht en dus het net buiten deze toets.
       const rollen = {'front': 'https://voorbeeld.invalid/voor.jpg'};
       final dienst = DiscogsService(AppSettings());
-      final art = await dienst.releaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen, tussenstand: tussen.add);
+      final art = await _metRol(
+          () => dienst.releaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen, tussenstand: tussen.add));
       expect(gevraagd, ['Ed Sheeran|Azizam']);
       expect(art?.disc, vanPc.disc);
       expect(art?.back, vanPc.back);
@@ -87,18 +97,18 @@ void main() {
       };
       const rollen = {'front': 'https://voorbeeld.invalid/voor.jpg'};
       final dienst = DiscogsService(AppSettings());
-      final eerst = await dienst.releaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen);
+      final eerst = await _metRol(() => dienst.releaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen));
       expect(gevraagd, [true]);
       expect(eerst?.disc, klein.disc);
       expect(await dienst.hasReleaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen), isFalse,
           reason: 'klein is nooit af: op wifi komen ze op volle resolutie');
       // Nog op mobiele data: van schijf, zonder de pc en zonder de keten.
-      final weer = await dienst.releaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen);
+      final weer = await _metRol(() => dienst.releaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen));
       expect(gevraagd, [true], reason: 'het gsm-formaat ligt er al');
       expect(weer?.disc, klein.disc);
       // Op wifi: de volle scans, en dan is het af.
       mobiel = false;
-      final opWifi = await dienst.releaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen);
+      final opWifi = await _metRol(() => dienst.releaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen));
       expect(gevraagd, [true, false]);
       expect(opWifi?.disc, vol.disc);
       expect(await dienst.hasReleaseArt('Ed Sheeran', 'Azizam', expectedTracks: 1, roles: rollen), isTrue);

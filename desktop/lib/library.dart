@@ -2243,6 +2243,10 @@ class LibraryStore extends ChangeNotifier {
       m.removeWhere((_, v) => v == url);
       m[role] = url;
     }
+    // Op een toestel ook in wat de pc het laatst meestuurde: [albumArtRoles] leest dat EERST, dus zonder deze regel bleef
+    // het scherm de oude rol tonen tot de catalogus opnieuw binnen was (Saber, 22-11-2026: de cd van Visage "wou niet
+    // direct aanpassen").
+    if (isRemote) _zetRemoteRollen(k, _albumArtRoles[k] ?? const {});
     await _saveAlbumArtRoles();
     notifyListeners();
     if (isRemote) {
@@ -2275,11 +2279,59 @@ class LibraryStore extends ChangeNotifier {
     // heeft — dan zou "wis alles" op een client niets doen, en na de eerstvolgende synchronisatie
     // stonden ze er weer.
     _albumArtRoles.remove(albumArtKey(artist, album, plaat));
+    if (isRemote) _zetRemoteRollen(albumArtKey(artist, album, plaat), const {});
     await _saveAlbumArtRoles();
     notifyListeners();
     if (isRemote) {
       await _editOnPc(
           {'op': 'albumArtRole', 'artist': artist, 'album': album, if (plaat != null) 'plaat': plaat, 'clear': true});
+    }
+  }
+
+  /// Alle aangewezen scans van een plaat in één keer: wat in [rollen] staat (rol → adres), en verder niets — leeg laat de
+  /// app weer raden.
+  ///
+  /// **Waarom één bewerking.** "Scans toewijzen" wiste eerst alles en zette daarna elke rol apart. Op een toestel ging elk
+  /// van die stappen naar de pc, gevolgd door een volledige herlading van de catalogus — voor één cd twee keer, terwijl het
+  /// venster wachtte. En tussendoor vroeg het scherm de scans al aan de pc voordat die de rol kende (zie
+  /// `DiscogsService._metEigenRollen`). Saber, 22-11-2026, de cd van Nicoletta — *Visage* op de Mac: *"dit lukte echt
+  /// moeizaam en wou niet direct aanpassen … dat moet echt voor goed eens opgelost worden"*.
+  ///
+  /// Een pc die deze bewerking nog niet kent (400), krijgt het op de oude manier: wissen en dan elke rol.
+  Future<void> zetAlbumArtRoles(String artist, String album, Map<String, String> rollen, {String? plaat}) async {
+    final k = albumArtKey(artist, album, plaat);
+    final schoon = <String, String>{
+      for (final e in rollen.entries)
+        if (e.value.isNotEmpty) e.key: e.value,
+    };
+    if (schoon.isEmpty) {
+      _albumArtRoles.remove(k);
+    } else {
+      _albumArtRoles[k] = {...schoon};
+    }
+    if (isRemote) _zetRemoteRollen(k, schoon);
+    await _saveAlbumArtRoles();
+    notifyListeners();
+    if (!isRemote) return;
+    final basis = {'artist': artist, 'album': album, if (plaat != null) 'plaat': plaat};
+    try {
+      await _editOnPc({'op': 'albumArtRoles', ...basis, 'rollen': schoon});
+    } on RemoteException catch (e) {
+      if (e.statusCode != 400) rethrow;
+      await _editOnPc({'op': 'albumArtRole', ...basis, 'clear': true});
+      for (final e in schoon.entries) {
+        await _editOnPc({'op': 'albumArtRole', ...basis, 'role': e.key, 'url': e.value});
+      }
+    }
+  }
+
+  /// Op een toestel: de rollen van plaat [k] ook in de kopie van de pc ([_remoteAlbumRoles]), tot de volgende catalogus
+  /// het bevestigt.
+  void _zetRemoteRollen(String k, Map<String, String> rollen) {
+    if (rollen.isEmpty) {
+      _remoteAlbumRoles.remove(k);
+    } else {
+      _remoteAlbumRoles[k] = {...rollen};
     }
   }
 

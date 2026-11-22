@@ -9,7 +9,54 @@
 /// afterwards that the disc animation has nothing to spin.
 library;
 
+import 'dart:convert';
+
 enum EditionSource { musicbrainz, discogs, audiodb }
+
+/// Van welke Discogs-uitgave een scan is, gelezen uit zijn adres — of null.
+///
+/// Een scan op `i.discogs.com` draagt na zijn opties ("…/h:595/w:600/") het oorspronkelijke pad in base64:
+/// `czM6Ly9kaXNjb2dz/…` is `s3://discogs-database-images/R-14586295-1577647934-7531.jpeg`, en "R-14586295" is de
+/// uitgave. Een ouder adres (`img.discogs.com/…/R-14586295-…`) noemt hem gewoon.
+int? discogsUitgaveVanScan(String url) {
+  final u = Uri.tryParse(url);
+  if (u == null || !u.host.endsWith('discogs.com')) return null;
+  final r = RegExp(r'R-(\d+)-');
+  final direct = r.firstMatch(u.path);
+  if (direct != null) return int.tryParse(direct.group(1)!);
+  final delen = u.pathSegments;
+  final opties = delen.lastIndexWhere((d) => d.contains(':'));
+  if (opties < 0 || opties + 1 >= delen.length) return null;
+  var b = delen.sublist(opties + 1).join().replaceAll(RegExp(r'\.[A-Za-z0-9]+$'), '');
+  b = b.replaceAll('-', '+').replaceAll('_', '/');
+  while (b.length % 4 != 0) {
+    b += '=';
+  }
+  try {
+    final m = r.firstMatch(utf8.decode(base64.decode(b), allowMalformed: true));
+    return m == null ? null : int.tryParse(m.group(1)!);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Hoort scan [url] bij uitgave [c]? Dezelfde scan als een van haar drie vakjes, een Discogs-scan van haar nummer
+/// ([discogsUitgaveVanScan]), of een scan van het Cover Art Archive onder haar MusicBrainz-id.
+///
+/// Voor "Uitgave kiezen" (Saber, 22-11-2026): wie de cd van Nicoletta — *Visage* zelf aanwees en het venster daarna
+/// opnieuw opende, zag bij die uitgave weer de gok van de app staan, alsof de keuze niet bewaard was.
+bool scanHoortBijUitgave(String url, ReleaseChoice c) {
+  if (url.isEmpty) return false;
+  for (final i in [c.front, c.back, c.disc]) {
+    if (i != null && (i.uri == url || i.thumb == url)) return true;
+  }
+  if (c.isDiscogs && c.releaseId > 0) {
+    final r = discogsUitgaveVanScan(url);
+    if (r != null) return r == c.releaseId;
+  }
+  final mb = c.mbid;
+  return c.isMb && mb != null && mb.isNotEmpty && url.contains('coverartarchive.org/release/$mb/');
+}
 
 /// Wie een scan mag ophalen, gezien aan zijn adres.
 ///
