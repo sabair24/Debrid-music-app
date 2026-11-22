@@ -150,6 +150,31 @@ void main() {
           '        OntvangerDienst.start(applicationContext)\n'));
     });
 
+    // Saber, 22-11-2026: "Ik zie tv in woonkamer niet meer?" De geheugenbewaker sloot de app; Android herstartte de dienst
+    // en stopte hem meteen weer ("Stopping service due to app idle"). Twee vangnetten brengen hem terug.
+    test('Android: de dienst komt terug na een stop die niemand vroeg — wekker uit onDestroy en een wachter per kwartier', () {
+      final kt = _bron('android/app/src/main/kotlin/com/debridmusic/app/Ontvanger.kt');
+      expect(kt, contains('        draait = false\n        plantHerstart()\n        super.onDestroy()\n'));
+      // De wekker mag in de slaap afgaan (dan krijgt de app even vrijstelling) en wekt alleen de processor, nooit het scherm.
+      expect(kt, contains('wekker.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, wanneer, herstartWekker(this))'));
+      expect(kt, contains('PendingIntent.getForegroundService(context, HERSTART, i, vlag)'));
+      // Nooit een eindeloze reeks: wie telkens kort na de start stopt, wacht langer, tot een kwartier.
+      expect(kt, contains('private val kHerstartNa = longArrayOf(5_000L, 30_000L, 5 * 60_000L, 15 * 60_000L)'));
+      expect(kt, contains('val snel = if (leefde >= GEWOON_NA_MS) 0 else vk.getInt(SNEL_GESTOPT, 0)'));
+      expect(kt, contains('vk.edit().putInt(SNEL_GESTOPT, if (leefde >= GEWOON_NA_MS) 0 else snel + 1).apply()'));
+      // Bij elke start: een openstaande herstart weg, en de wachter gepland.
+      expect(kt, contains('getSystemService(AlarmManager::class.java)?.cancel(herstartWekker(this))'));
+      expect(kt, contains('        zetWachter(applicationContext)\n        zorgVoorEngine()\n'));
+      expect(kt, contains('class OntvangerWacht : JobService() {\n'
+          '    override fun onStartJob(params: JobParameters?): Boolean {\n'
+          '        OntvangerDienst.start(applicationContext)\n'));
+      expect(kt, contains('.setPeriodic(15 * 60_000L)'));
+      expect(kt, isNot(contains('stopSelf')), reason: 'niemand stopt de dienst met opzet; anders kwam hij elke keer terug');
+      final manifest = _bron('android/app/src/main/AndroidManifest.xml');
+      expect(manifest, contains('android:name=".OntvangerWacht"\n'
+          '            android:permission="android.permission.BIND_JOB_SERVICE"'));
+    });
+
     test('Dart: dezelfde kanaalnaam, en de ontvanger, de zone en de lijn wekken of blijven open', () {
       expect(_bron('lib/wekker.dart'), contains("const _kanaal = MethodChannel('debridmusic/wekker');"));
       final hoofd = _bron('lib/main.dart');

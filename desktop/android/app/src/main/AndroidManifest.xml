@@ -175,6 +175,12 @@
             android:name=".OntvangerDienst"
             android:foregroundServiceType="connectedDevice"
             android:exported="false"/>
+        <!-- Elk kwartier nakijken of OntvangerDienst er nog is (22-11-2026: Android had hem gestopt en niet herstart).
+             Alleen het systeem mag hem aanroepen (BIND_JOB_SERVICE). -->
+        <service
+            android:name=".OntvangerWacht"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="true"/>
         <!-- Opnieuw na een herstart of een update: OntvangerStart, alleen in de Shield-versie (src/tv/AndroidManifest.xml). -->
 
         <!-- Don't delete the meta-data below.
