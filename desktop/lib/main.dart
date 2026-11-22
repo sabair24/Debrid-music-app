@@ -2116,6 +2116,8 @@ Future<void> main() async {
   // Nam een ander toestel deze muziek over, dan klinkt hier daarna niet opnieuw wat daar verder speelde (Saber,
   // 06-11-2026: No Scrubs op de Shield, en daarna nog eens op de gsm). Zie PlayerStore.markeerOvergenomen.
   verder.bijOvername = (id) {
+    // Een radio die hier speelde, ging mee: hier dicht, niet alleen gepauzeerd ([radioNaOvername]).
+    radioNaOvername(radio, player);
     if (id == null || id.isEmpty) {
       player.markeerOvergenomen();
       return;
@@ -21405,6 +21407,23 @@ Future<void> radioHoudenVast(Oordelen oordelen, LibraryStore lib, DownloadManage
 void radioAfsluiten(RadioBesturing radio, PlayerStore speler, {String? naar}) {
   if (radio.loopt) radio.stop(naar: naar);
   unawaited(speler.verlaatRadio());
+}
+
+/// De muziek van dit toestel speelt nu op een andere zone (de pc verplaatste haar, of een ander toestel nam over). Draaide
+/// hier een radio, dan ging die mee — de andere zone begint hem opnieuw, rond dezelfde artiest — en hoort hij hier dicht,
+/// niet alleen gepauzeerd.
+///
+/// **Waarom (Saber, 22-11-2026).** Van de Mac naar de tv in de woonkamer: *"dan stopt hij niet op mac, en spelen ze beide,
+/// dat mag niet"*. De Mac pauzeerde alleen de speler; zijn radio haalde door (om 10:59:56, elf seconden na het stopsignaal,
+/// vroeg hij nog het model om raad), en een nummer dat binnenkwam kon de muziek weer aanzetten. Dicht is dicht: de speler
+/// verlaat de radio, en niets wat nog landt zet hem aan. Wat deze radio haalde, komt hier in het overzicht.
+///
+/// Een radio die de pc op een speaker draait ([RadioBesturing.opAndereUitgang]) hoort bij die speaker en niet bij deze
+/// zone: die blijft. Geeft terug of er een radio dichtging.
+bool radioNaOvername(RadioBesturing radio, PlayerStore speler) {
+  if (!radio.loopt || radio.opAndereUitgang) return false;
+  radioAfsluiten(radio, speler);
+  return true;
 }
 
 Future<void> _duimOmlaag(BuildContext context, Track t) async {

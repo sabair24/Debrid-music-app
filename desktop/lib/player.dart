@@ -1945,6 +1945,10 @@ class PlayerStore extends ChangeNotifier
   bool get speeltHerhaling =>
       radioMode && _radioIndex >= 0 && _radioIndex < _radio.length && _radio[_radioIndex].herhaling;
 
+  /// Telt elke pauze en elk verlaten van de radio. Een radionummer dat opende terwijl deze teller verschoof, begint niet
+  /// alsnog te spelen ([_openRadioCurrent]).
+  int _pauzeGen = 0;
+
   /// Hoe vaak deze stroom al afgebroken is. Nul bij elk nieuw nummer.
   int _hervatpogingen = 0;
 
@@ -3217,6 +3221,7 @@ class PlayerStore extends ChangeNotifier
 
   void _verlaatRadio() {
     if (!radioMode) return;
+    _pauzeGen++;
     radioMode = false;
     radioStatus = '';
     _radioSession++;
@@ -3262,7 +3267,14 @@ class PlayerStore extends ChangeNotifier
         // Radio is per nummer: geen plaat op volgorde.
         _zetLuidheid(it.local ?? Track(path: path, title: it.title, artist: it.artist, album: ''),
             adres: bron, rij: const [], plek: 0, opVolgorde: false);
+        final pauze = _pauzeGen;
         await _player.open(Media(bron), play: true);
+        // Gepauzeerd of de radio verlaten terwijl dit opende (Saber, 22-11-2026: Mac → tv, "spelen ze beide"): niet
+        // alsnog laten klinken.
+        if (pauze != _pauzeGen || !radioMode) {
+          if (gen == _radioGen) await _player.pause();
+          return;
+        }
         if (gen != _radioGen) return; // superseded while opening
         _prefetchNext();
         _maybeExtend();
@@ -3662,6 +3674,8 @@ class PlayerStore extends ChangeNotifier
     // begint zodra de verbinding terug is. En niet zodra er een radionummer landt.
     _stopPcWacht();
     _wilVerder = false;
+    // En niet als er net een radionummer opent: dan is [playing] nog onwaar en deed de pauze niets ([_pauzeGen]).
+    _pauzeGen++;
     if (_proefSpeeltMee) {
       if (_proef!.state.playing) unawaited(_proef!.pause());
       notifyListeners();
