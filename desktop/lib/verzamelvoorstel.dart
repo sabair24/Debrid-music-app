@@ -144,3 +144,47 @@ Verzamelvoorstel? verzamelingVoorRadio({
     nieuw: true,
   );
 }
+
+/// Hoort een radio uit een zin ("Zeg wat je wil horen") bij een verzameling? Saber, 22-11-2026: *"de radio functie bij
+/// ai moet ook geupdate worden … met de nieuwe en verbeterde functie's"*.
+///
+/// Noemen [zin] of het [genre] dat het model eruit haalde haar naam (zonder hoofdletters en leestekens; de langste naam
+/// wint), dan die, [zeker]: de radio blijft erin, zoals een radio vanuit de verzameling zelf — de vulling met je eigen
+/// muziek komt eruit, en wat je houdt gaat erheen. Anders: staan minstens twee en een derde van de [zaadArtiesten] in
+/// één verzameling, en daar meer dan in je gewone [bibliotheek], dan die als voorstel. Null: geen van beide.
+({String naam, bool zeker, String waarom})? verzamelingVoorZin({
+  required String zin,
+  required String genre,
+  required List<String> zaadArtiesten,
+  required Map<String, List<VoorstelNummer>> verzamelingen,
+  required List<VoorstelNummer> bibliotheek,
+}) {
+  final z = ' ${genreSleutel(zin) ?? ''} ';
+  final g = genreSleutel(genre);
+  String? beste;
+  var besteLengte = 0;
+  for (final naam in verzamelingen.keys) {
+    final k = genreSleutel(naam);
+    if (k == null || (k != g && !z.contains(' $k '))) continue;
+    if (k.length > besteLengte) {
+      beste = naam;
+      besteLengte = k.length;
+    }
+  }
+  if (beste != null) return (naam: beste, zeker: true, waarom: 'je zin noemt “$beste”');
+  final zaad = {for (final a in zaadArtiesten) artiestSleutel(a)}..remove('');
+  if (zaad.isEmpty) return null;
+  int hoeveel(List<VoorstelNummer> l) => {for (final n in l) artiestSleutel(n.artiest)}.intersection(zaad).length;
+  final inBib = hoeveel(bibliotheek);
+  String? naam;
+  var tal = 0;
+  for (final e in verzamelingen.entries) {
+    final n = hoeveel(e.value);
+    if (n > tal) {
+      naam = e.key;
+      tal = n;
+    }
+  }
+  if (naam == null || tal < 2 || tal * 3 < zaad.length || tal <= inBib) return null;
+  return (naam: naam, zeker: false, waarom: '$tal van de ${zaad.length} artiesten uit je zin staan in “$naam”');
+}

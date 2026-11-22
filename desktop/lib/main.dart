@@ -17558,6 +17558,21 @@ Future<({String? naam})?> kiesBestemming(BuildContext context, {required String 
   return nieuw == null ? null : (naam: nieuw);
 }
 
+/// Hoort een radio uit zin [zin] (begrepen als [o]) bij een van je verzamelingen? Zie `verzamelingVoorZin`.
+({String naam, bool zeker, String waarom})? radioVerzamelingVoorZin(
+    LibraryStore lib, Verzamelingen verz, String zin, RadioOpdracht o) {
+  VoorstelNummer van(Track t) => (artiest: t.artist, genre: t.genre);
+  return verzamelingVoorZin(
+    zin: zin,
+    genre: o.genre,
+    zaadArtiesten: o.zaadArtiesten,
+    verzamelingen: {
+      for (final n in alleVerzamelingNamen(lib, verz)) n: [for (final t in nummersVanVerzameling(lib, verz, n)) van(t)],
+    },
+    bibliotheek: [for (final t in lib.mixTracks) van(t)],
+  );
+}
+
 /// "Vanzelf op genre" voor een radio vanaf [artiest] met genre [genre] (zie `verzamelvoorstel.dart`), uit je
 /// verzamelingen en je gewone bibliotheek. Null: niets voor te stellen, of je zei er deze sessie al nee tegen.
 Verzamelvoorstel? radioVerzamelvoorstel(LibraryStore lib, Verzamelingen verz, String artiest, String? genre,
@@ -20538,6 +20553,11 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
     final rec = RecommendService();
     final log = WarmLog('$appDir${Platform.pathSeparator}radio.log');
     final genoemd = {for (final a in o.zaadArtiesten) artiestSleutel(a)};
+    // Je verzamelingen (verzamelvoorstel.dart, Saber 22-11-2026): noemt je zin er een ("vocal jazz radio"), dan blijft de
+    // radio erin, zoals een radio vanuit die verzameling; anders hoogstens een voorstel om apart te houden.
+    final verzStore = _misschien<Verzamelingen>(context);
+    final bij = verzStore == null ? null : radioVerzamelingVoorZin(lib, verzStore, widget.ctl.text, o);
+    final verz = bij != null && bij.zeker ? bij.naam : null;
     // Dezelfde keuring als een radio vanaf een nummer (Saber, 22-10-2026: "Werkt dit voor alle radio functies in
     // de app?"): het genre van de zin als familie en danstak, het sfeeroordeel van het model, en de jaren die je
     // zelf noemde. Zonder zaadnummer: geen tempo, en het "zaad" van de sfeervraag is de naam van de radio.
@@ -20578,7 +20598,7 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
       maakPlan: (recs) => _radioplan(recs, lib,
           al: artiestenVoorPlafond(radio.plan, voorbijteller: radio.voorbijteller), bron: 'buren'),
       reserveKandidaten: (artiesten) => [
-        for (final t in radioEigen(lib, null))
+        for (final t in radioEigen(lib, verz, verzStore))
           if (!nooitOpRadio(t.title) && artiesten.contains(artiestSleutel(t.artist))) t
       ],
       keurEigen: (p) => keuring.keur(p, eigen: true),
@@ -20596,7 +20616,8 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
       spoor: log.line,
     );
     log.line('radio uit een zin "${o.naam}": ${o.zaadArtiesten.length} artiesten, '
-        '${o.aantalGenoemd ? 'stopt bij ${o.aantal}' : 'geen aantal genoemd, vult door'}');
+        '${o.aantalGenoemd ? 'stopt bij ${o.aantal}' : 'geen aantal genoemd, vult door'}'
+        '${verz == null ? '' : ', binnen de verzameling "$verz"'}');
     final plan = _radioplan(nummers, lib);
     keuring.vraagSfeer(plan);
     // Eigen nummers pas na de keuring, zoals bij [startRadio]; wat gehaald moet worden keurt de haal zelf.
@@ -20609,13 +20630,25 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
         groen: bijvuller.lastfmVan == null ? null : bijvuller.groenRonde,
         spoor: log.line,
         aantal: o.aantalGenoemd ? o.aantal : null,
+        verzameling: verz,
         // Het vangnet pas als deze start het werd.
         bijStart: (s) {
           gestart = s;
           radio.eigenVanZaad = () => [
-                for (final t in radioEigen(lib, null))
+                for (final t in radioEigen(lib, verz, verzStore))
                   if (!nooitOpRadio(t.title) && genoemd.contains(artiestSleutel(t.artist))) t
               ];
+          // "Vanzelf op genre", ook hier: hoort deze radio waarschijnlijk bij een verzameling, of is het genre zeldzaam
+          // in je bibliotheek, dan stelt het radiopaneel apart houden voor.
+          if (verz == null && verzStore != null) {
+            final afgewezen = radio.afgewezenVoorstellen;
+            radio.verzamelvoorstel = switch (bij) {
+              final b? when !afgewezen.contains(b.naam.toLowerCase()) => (naam: b.naam, waarom: b.waarom, nieuw: false),
+              _ => o.zaadArtiesten.isEmpty
+                  ? null
+                  : radioVerzamelvoorstel(lib, verzStore, o.zaadArtiesten.first, o.genre, afgewezen: afgewezen),
+            };
+          }
         });
     final sessie = gestart;
     if (reden == null && sessie != null && halen.isNotEmpty) {

@@ -257,6 +257,53 @@ void main() {
     });
   });
 
+  group('een radio uit een zin (22-11-2026)', () {
+    final verz = {
+      'Vocal jazz': [_n('Nancy Wilson', 'Vocal Jazz'), _n('Sarah Vaughan', 'Jazz'), _n('Ella Fitzgerald', 'Jazz')],
+      'Jazz': [_n('Miles Davis', 'Jazz')],
+      'Soul': [_n('Sam Cooke', 'Soul')],
+    };
+    final bib = [_n('Sade', 'Soul'), _n('Khaled', 'Raï')];
+    ({String naam, bool zeker, String waarom})? zin(String z, {String genre = '', List<String> zaad = const []}) =>
+        verzamelingVoorZin(zin: z, genre: genre, zaadArtiesten: zaad, verzamelingen: verz, bibliotheek: bib);
+
+    test('DE KERN: noemt je zin een verzameling, dan blijft de radio erin — de langste naam wint', () {
+      expect(zin('maak me een Vocal Jazz radio uit de jaren 50'),
+          (naam: 'Vocal jazz', zeker: true, waarom: 'je zin noemt “Vocal jazz”'));
+      expect(zin('wat jazz voor vanavond')?.naam, 'Jazz');
+      expect(zin('jazzzangeressen uit de jaren 60', genre: 'vocal jazz')?.naam, 'Vocal jazz', reason: 'het genre van het model');
+      expect(zin('soulful house voor de zomer'), isNull, reason: 'een heel woord, geen stukje ervan');
+    });
+
+    test('DE KERN: staan de artiesten uit je zin vooral in een verzameling, dan alleen een voorstel', () {
+      final v = zin('zangeressen zoals Nancy Wilson', zaad: ['Nancy Wilson', 'Sarah Vaughan', 'Diana Krall', 'Stacey Kent']);
+      expect(v, (naam: 'Vocal jazz', zeker: false, waarom: '2 van de 4 artiesten uit je zin staan in “Vocal jazz”'));
+    });
+
+    test('DE GRENS: minstens twee, minstens een derde, en meer dan in je bibliotheek', () {
+      expect(zin('x', zaad: ['Nancy Wilson', 'A', 'B']), isNull, reason: 'één is toeval');
+      expect(zin('x', zaad: ['Nancy Wilson', 'Sarah Vaughan', 'A', 'B', 'C', 'D'])?.naam, 'Vocal jazz', reason: 'een derde precies');
+      expect(zin('x', zaad: ['Nancy Wilson', 'Sarah Vaughan', 'A', 'B', 'C', 'D', 'E']), isNull, reason: 'minder dan een derde');
+      final ookThuis = verzamelingVoorZin(
+          zin: 'x',
+          genre: '',
+          zaadArtiesten: ['Nancy Wilson', 'Sarah Vaughan'],
+          verzamelingen: verz,
+          bibliotheek: [_n('Nancy Wilson'), _n('Sarah Vaughan')]);
+      expect(ookThuis, isNull, reason: 'evenveel in je bibliotheek: geen reden om apart te houden');
+    });
+
+    test('aangesloten: de zinradio vult uit de verzameling en houdt erin, en stelt anders voor', () {
+      final m = _bron('lib/main.dart');
+      expect(m, contains('    final bij = verzStore == null ? null : radioVerzamelingVoorZin(lib, verzStore, widget.ctl.text, o);'));
+      expect(m, contains('        aantal: o.aantalGenoemd ? o.aantal : null,\n        verzameling: verz,'));
+      expect('radioEigen(lib, verz, verzStore)'.allMatches(m).length, 5, reason: 'drie in startRadio, twee in de zinradio');
+      expect(m, isNot(contains('radioEigen(lib, null)')));
+      expect(m, contains('    final verz = bij != null && bij.zeker ? bij.naam : null;'), reason: 'alleen zeker blijft erin');
+      expect(m, contains('              final b? when !afgewezen.contains(b.naam.toLowerCase()) => (naam: b.naam, waarom: b.waarom, nieuw: false),'));
+    });
+  });
+
   group('de sessie', () {
     test('DE KERN: elk nummer gaat naar zijn eigen keuze, anders naar die van de radio', () {
       final s = RadioSessie(naam: 'Nancy Wilson', begonnenMs: 1, verzameling: 'Vocal jazz', doelen: {
