@@ -15,6 +15,24 @@
 /// Geen IO: de vraag, het schema en het uitlezen, zodat het na te rekenen is.
 library;
 
+import 'dart:math' as math;
+
+import 'lossless_want.dart' show isVerzamelnaam;
+
+/// Een verzameling is een kleine hoek: hoogstens dit deel van je gewone bibliotheek ([verzamelHoogstens]).
+///
+/// Saber, 22-11-2026, na de tweede ronde (Eurodance 113, Trance 135, Franse pop 155, Nederlandstalig 75): *"Nee, alleen
+/// kleine hoeken"*. Een groter blok is zijn gewone muziek — dat hoort in zijn shuffle en zijn radio. Zijn eerste
+/// verzamelingen lagen allemaal onder 2,5 % (Vocal jazz 51 van ~2200, Raï 49, Franse chanson 43).
+const double kVerzamelAandeel = .03;
+
+/// En nooit minder dan zoveel, zodat een kleine bibliotheek nog een hoek kan hebben.
+const int kVerzamelGrensMinstens = 25;
+
+/// Hoeveel nummers een voorgestelde verzameling hoogstens telt bij een gewone bibliotheek van [bibliotheek] nummers.
+int verzamelHoogstens(int bibliotheek) =>
+    math.max(kVerzamelGrensMinstens, (bibliotheek * kVerzamelAandeel).floor());
+
 /// Een artiest zoals de vraag hem telt: zijn naam zoals hij in de bestanden staat, zonder hoofdletters. Bewust niet
 /// `artiestSleutel` (radiokeuze.dart): die maakt van "Billie Holiday & Her Orchestra" Billie Holiday, en dan kan de
 /// correctie die de twee schrijfwijzen samenbrengt er nooit komen.
@@ -129,7 +147,8 @@ String vraagRegel(VraagArtiest a) {
 
 /// De vraag. Met de redenen erbij: een model dat weet waaróm een regel er is, houdt zich er beter aan.
 String verzamelPrompt(List<VraagArtiest> bibliotheek, List<VraagVerzameling> bestaande,
-    {List<String> afgewezen = const []}) {
+    {List<String> afgewezen = const [], int? hoogstens}) {
+  final grens = hoogstens ?? verzamelHoogstens(bibliotheek.fold<int>(0, (s, a) => s + a.aantal));
   final bib = bibliotheek.map(vraagRegel).join('\n');
   final al = bestaande.isEmpty
       ? '(nog geen)'
@@ -147,9 +166,11 @@ titels):
 $bib
 
 Wat er echt toe doet:
-1. Alleen een duidelijke, samenhangende niche die afwijkt van het grootste deel van zijn bibliotheek, en pas vanaf
-   $kVerzamelMinstens nummers. Het grootste deel van zijn muziek blijft in de bibliotheek: stel nooit een verzameling voor
-   van wat hij het meest heeft.
+1. Alleen een duidelijke, samenhangende niche die afwijkt van het grootste deel van zijn bibliotheek: een KLEINE hoek,
+   vanaf $kVerzamelMinstens en hoogstens $grens nummers (ongeveer drie procent). Een groter blok — zijn eurodance, zijn
+   trance en house, zijn Franse of Nederlandstalige pop — IS zijn gewone muziek: dat wil hij in zijn shuffle en zijn
+   radio, en dat stel je nooit voor, ook niet als aanvulling van een bestaande verzameling. Hij zei het zelf: "alleen
+   kleine hoeken".
 2. Wees kritisch en juist in het genre. Hij keurde dit onderscheid al goed, en wil het zo:
    - vocal jazz (Ella Fitzgerald, Sarah Vaughan, Nancy Wilson, Madeleine Peyroux) is iets anders dan
    - crooners en standards uit de traditional pop (Frank Sinatra, Dean Martin, Bing Crosby, Nat King Cole als zanger),
@@ -254,6 +275,9 @@ Wat er echt toe doet:
 ({String artiest, String naar})? artiestCorrectie(String wie, String naar, Map<String, String> bekend) {
   final a = kaleNaam(wie), b = kaleNaam(naar);
   if (a == b) return null;
+  // "Various" of "Verschillende artiesten" is geen naam: daar hoort per nummer de echte artiest, niet een andere
+  // verzamelnaam (de tweede ronde maakte van "Various" "Verschillende artiesten").
+  if (isVerzamelnaam(wie) || isVerzamelnaam(naar)) return null;
   if (RegExp(r'\(\d+\)|\*').hasMatch(naar)) return null;
   final gast = RegExp(r'\b(?:feat\.?|ft\.?|featuring)\s+(.+)$', caseSensitive: false).firstMatch(wie)?.group(1);
   if (gast != null && !b.contains(kaleNaam(gast).replaceAll('*', '').trim())) return null;

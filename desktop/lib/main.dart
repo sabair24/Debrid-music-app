@@ -18970,21 +18970,144 @@ Future<String?> nieuweVerzameling(BuildContext context) async {
   return schoon;
 }
 
-/// De tegel van een verzameling: de hoes van haar eerste plaat met een hoes, de naam, en wat erin staat.
+/// Het icoon van een verzameling op haar poster, uit haar naam: een microfoon voor jazz en crooners, een piano voor
+/// klassiek, en zo verder. Niets herkend: het teken van Verzamelingen zelf.
+IconData verzamelingIcoon(String naam) {
+  final n = naam.toLowerCase();
+  bool heeft(List<String> woorden) => woorden.any(n.contains);
+  if (heeft(['jazz', 'crooner', 'standard', 'swing', 'blues'])) return Icons.mic_rounded;
+  // "classical" en niet "classic": anders kreeg Soul classics een piano.
+  if (heeft(['klassiek', 'classical', 'opera', 'piano'])) return Icons.piano_rounded;
+  if (heeft(['kind', 'kids', 'kinder', 'disney'])) return Icons.child_care_rounded;
+  if (heeft(['soul', 'r&b', 'rnb', 'motown', 'funk'])) return Icons.graphic_eq_rounded;
+  if (heeft(['raï', 'rai', 'arab', 'world', 'oriental', 'latin'])) return Icons.public_rounded;
+  if (heeft(['hardcore', 'gabber', 'techno', 'trance', 'house', 'dance', 'rave'])) return Icons.bolt_rounded;
+  if (heeft(['reggae', 'dancehall', 'ska'])) return Icons.wb_sunny_rounded;
+  if (heeft(['chanson', 'frans', 'french', 'variété'])) return Icons.local_florist_rounded;
+  if (heeft(['kerst', 'christmas', 'xmas'])) return Icons.ac_unit_rounded;
+  if (heeft(['rock', 'metal', 'punk'])) return Icons.electric_bolt_rounded;
+  return Icons.collections_bookmark_rounded;
+}
+
+/// De achtergrond van een poster: de hoofdkleur van de hoezen ([kleur], ARGB) donker genoeg voor witte letters, en
+/// niet grauw. Zonder kleur (een zwart-witte hoes, of nog niet berekend): een vaste tint uit [naam], elke keer dezelfde.
+Color posterKleur(String naam, int? kleur) {
+  if (kleur != null) {
+    final hsl = HSLColor.fromColor(Color(kleur));
+    return hsl.withSaturation(hsl.saturation.clamp(.35, .7)).withLightness(.3).toColor();
+  }
+  // Een eigen som, geen hashCode: die verschilt per start van de app (zie object-hash-is-per-proces).
+  var som = 0;
+  for (final c in naam.toLowerCase().codeUnits) {
+    som = (som * 31 + c) & 0x7fffffff;
+  }
+  return HSLColor.fromAHSL(1, (som % 360).toDouble(), .45, .3).toColor();
+}
+
+/// De hoofdkleur per hoes, eenmaal berekend ([kleurBuitenDeTekendraad]); null: zwart-wit.
+final Expando<_Kleur> _posterKleuren = Expando('posterkleur');
+
+class _Kleur {
+  const _Kleur(this.argb);
+  final int? argb;
+}
+
+/// De poster van een verzameling (Saber, 22-11-2026: *"verzameling cover moet wel duidelijker, nu denk ik dat dit 1
+/// album is, het moet de genre voorstellen"* — gekozen: "C · genreposter"). Een vlak in een kleur uit haar hoezen, de
+/// naam groot, een icoon voor het genre ([verzamelingIcoon]) en onderaan drie kleine hoezen: zo ziet geen enkele plaat
+/// eruit.
+class VerzamelingPoster extends StatefulWidget {
+  const VerzamelingPoster({super.key, required this.naam, required this.albums, required this.maat});
+
+  final String naam;
+  final List<Album> albums;
+  final double maat;
+
+  @override
+  State<VerzamelingPoster> createState() => _VerzamelingPosterState();
+}
+
+class _VerzamelingPosterState extends State<VerzamelingPoster> {
+  Uint8List? _bron;
+
+  Uint8List? get _eersteHoes => widget.albums.where((a) => a.cover != null).firstOrNull?.cover;
+
+  @override
+  void initState() {
+    super.initState();
+    _bereken();
+  }
+
+  @override
+  void didUpdateWidget(VerzamelingPoster oud) {
+    super.didUpdateWidget(oud);
+    if (!identical(_eersteHoes, _bron)) _bereken();
+  }
+
+  void _bereken() {
+    final b = _eersteHoes;
+    _bron = b;
+    if (b == null || _posterKleuren[b] != null) return;
+    unawaited(kleurBuitenDeTekendraad(b).then((k) {
+      _posterKleuren[b] = _Kleur(k);
+      if (mounted && identical(_bron, b)) setState(() {});
+    }, onError: (Object _) {}));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final m = widget.maat;
+    final b = _eersteHoes;
+    final achter = posterKleur(widget.naam, b == null ? null : _posterKleuren[b]?.argb);
+    final hoezen = [
+      for (final a in widget.albums)
+        if (a.cover != null) a,
+    ].take(3).toList();
+    final klein = m * .2;
+    return Container(
+      key: ValueKey('verzameling-poster-${widget.naam}'),
+      width: m,
+      height: m,
+      padding: EdgeInsets.all(m * .08),
+      decoration: BoxDecoration(color: achter, borderRadius: BorderRadius.circular(12)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(verzamelingIcoon(widget.naam), size: m * .15, color: Colors.white.withValues(alpha: .8)),
+          const Spacer(),
+          Text(widget.naam,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: (m * .12).clamp(12.0, 30.0),
+                  fontWeight: FontWeight.w800,
+                  height: 1.1,
+                  letterSpacing: -.3)),
+          if (hoezen.isNotEmpty) ...[
+            SizedBox(height: m * .05),
+            Row(children: [
+              for (final a in hoezen)
+                Padding(
+                  padding: EdgeInsets.only(right: m * .03),
+                  child: cover(a.cover, size: klein, radius: 4),
+                ),
+            ]),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// De tegel van een verzameling: haar poster ([VerzamelingPoster]), de naam, en wat erin staat.
 Widget verzamelingTegel(BuildContext context, String naam, {required LibraryStore lib, required Verzamelingen verz}) {
   final albums = lib.albumsIn(naam);
   final nummers = nummersVanVerzameling(lib, verz, naam);
-  final metHoes = albums.where((a) => a.cover != null).firstOrNull;
   return AlbumTegel(
     key: ValueKey('verzameling-$naam'),
-    hoes: (maat) => metHoes == null
-        ? Container(
-            width: maat,
-            height: maat,
-            decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(12)),
-            child: Icon(Icons.collections_bookmark_rounded, size: maat * .36, color: _muted))
-        : cover(metHoes.cover, size: maat),
-    spiegel: metHoes == null ? null : spiegelVan(metHoes.cover),
+    // Geen hoes van één plaat meer: dan leek het een album (Saber, 22-11-2026).
+    hoes: (maat) => VerzamelingPoster(naam: naam, albums: albums, maat: maat),
     titel: naam,
     ondertitel: nummers.isEmpty
         ? 'Nog leeg'
@@ -19105,7 +19228,8 @@ Future<({List<VerzamelAiVoorstel> voorstellen, List<AiCorrectieVoorstel> correct
     for (final n in alleVerzamelingNamen(lib, verz))
       (naam: n, artiesten: {for (final t in nummersVanVerzameling(lib, verz, n)) t.artist}.toList()),
   ];
-  final prompt = verzamelPrompt(artiesten, bestaande, afgewezen: afgewezen);
+  final hoogstens = verzamelHoogstens(nummers.length);
+  final prompt = verzamelPrompt(artiesten, bestaande, afgewezen: afgewezen, hoogstens: hoogstens);
   ai.bijGebruik = (soort, inT, uitT) => spoor?.call('verzamelvoorstel: $inT in / $uitT uit tokens');
   final json = await ai.vraagVerzamelvoorstel(prompt);
   final aantal = {for (final a in artiesten) vraagSleutel(a.artiest): a.aantal};
@@ -19113,7 +19237,7 @@ Future<({List<VerzamelAiVoorstel> voorstellen, List<AiCorrectieVoorstel> correct
       bekend: {for (final a in artiesten) vraagSleutel(a.artiest): a.artiest},
       aantalVan: (a) => aantal[vraagSleutel(a)] ?? 0,
       vandaagJaar: DateTime.now().year);
-  final uit = voorstellenUit(gelezen, nummers, nuMs: DateTime.now().millisecondsSinceEpoch);
+  final uit = voorstellenUit(gelezen, nummers, nuMs: DateTime.now().millisecondsSinceEpoch, hoogstens: hoogstens);
   spoor?.call('verzamelvoorstel: ${artiesten.length} artiesten (${nummers.length} nummers) gevraagd — '
       '${uit.voorstellen.map((v) => '${v.naam} ${v.nummers.length}').join(', ')}; ${uit.correcties.length} correcties');
   return uit;
