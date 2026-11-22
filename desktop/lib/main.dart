@@ -19057,9 +19057,23 @@ Future<void> vraagVerzamelvoorstellen(BuildContext context) {
 Future<({List<VerzamelAiVoorstel> voorstellen, List<AiCorrectieVoorstel> correcties})> maakVerzamelvoorstellen(
     LibraryStore lib, Verzamelingen verz, AiService ai,
     {List<String> afgewezen = const [], void Function(String regel)? spoor}) async {
+  // Los: geen album, of een tegel met één nummer (Album.isSingle). Alleen daar mag een jaarcorrectie.
+  final los = {
+    for (final a in lib.albums)
+      if (a.isSingle)
+        for (final t in a.tracks) t.path,
+  };
   final nummers = <BibNummer>[
     for (final t in lib.mixTracks)
-      if (lib.gedeeldId(t.path) case final id?) (id: id, artiest: t.artist, titel: t.title, genre: t.genre, jaar: t.year),
+      if (lib.gedeeldId(t.path) case final id?)
+        (
+          id: id,
+          artiest: t.artist,
+          titel: t.title,
+          genre: t.genre,
+          jaar: t.year,
+          single: t.album.trim().isEmpty || los.contains(t.path),
+        ),
   ];
   final artiesten = vraagArtiesten(nummers, lib.tagsOf);
   final bestaande = <VraagVerzameling>[

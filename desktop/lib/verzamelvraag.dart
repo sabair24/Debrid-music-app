@@ -156,10 +156,13 @@ Wat er echt toe doet:
      en dat weer iets anders dan
    - soulklassiekers (Sam Cooke, Ben E. King, Etta James).
    - Bigband en swing (Glenn Miller, Benny Goodman) staan apart; staan ze bij een van de andere, dan als twijfel.
-   - Een popzanger of -zangeres die een standard zingt (Annie Lennox, Eva Cassidy) hoort in geen van alle: laat die weg.
+   - Een popzanger of -zangeres die een standard zingt (Annie Lennox, Eva Cassidy, Wayne Newton) hoort in geen van
+     alle: laat die weg.
    Valt een artiest tussen twee in, zet "twijfel" op true en zeg waarom.
-3. Een nummer dat niet past bij de rest van die artiest in de verzameling (een popcover van een crooner, een kerstnummer),
-   zet je bij "nietDeze", met de titel precies zoals in de lijst.
+3. Kijk bij elke artiest ELKE titel na. Een nummer dat niet past bij de rest in de verzameling (een popnummer van een
+   crooner, een novelty, een kerstnummer, een cover van een popsong) zet je bij "nietDeze", met de titel precies zoals
+   in de lijst. Hij wees al af: Frank Sinatra "Bad, Bad Leroy Brown" (een popnummer van Jim Croce) hoort niet bij de
+   crooners, ook al hoort Sinatra er zelf wel bij.
 4. Hoort iets bij een bestaande verzameling, gebruik dan precies haar naam; verzin geen tweede naam voor hetzelfde.
    Wat al in een verzameling staat, staat niet in de lijst hierboven.
 5. Namen kort en gewoon, zoals "Vocal jazz", "Crooners & standards", "Soul classics", "Raï". Elke artiest in hoogstens
@@ -168,9 +171,13 @@ Wat er echt toe doet:
    - genre: een genre dat geen genre is (een uploadernaam als "Toccara0217", "Various", "Unknown") of dat duidelijk
      niet klopt; zet er het genre van de artiest voor in de plaats.
    - jaar: het jaar van een heruitgave of verzamelaar in plaats van dat van de opname, als je het zeker weet (Etta James
-     "At Last!" is van 1960, niet van 1990). Alleen met een titel.
+     "At Last!" is van 1960, niet van 1990). Alleen met een titel, en alleen voor een los nummer (een single): bij een
+     nummer op een album is het jaar dat van de plaat, en dat klopt dan.
    - artiest: twee schrijfwijzen van één artiest ("Billie Holiday & Her Orchestra" naast "Billie Holiday") naar de
-     gewone naam.
+     gewone naam. De juiste naam is de officiële schrijfwijze, mét accenten, hoofdletters en tekens zoals de artiest
+     zelf ze schrijft (Hélène Ségara, Édith Piaf, Âme, a-ha, Beyoncé): haal nooit een accent weg — staan beide er, zet
+     dan de versie zonder accent recht naar die mét. Zet nooit een Discogs-nummer als "(2)" of een sterretje in een
+     naam; eruit halen mag wel ("Dominion (3)" wordt "Dominion"). Laat een gast ("feat. MC Ramon") nooit wegvallen.
    Gebruik artiest en titel precies zoals in de lijst. Liever geen correctie dan een gok.
 7. Alles wat je zegt in het Nederlands.
 ''';
@@ -226,8 +233,59 @@ Wat er echt toe doet:
       final j = int.tryParse(naar);
       if (j == null || j < 1900 || j > vandaagJaar || titel.isEmpty) continue;
     }
-    if (veld == 'artiest' && vraagSleutel(naar) == vraagSleutel(wie)) continue;
+    if (veld == 'artiest') {
+      final r = artiestCorrectie(wie, naar, bekend);
+      if (r == null) continue;
+      corr.add((artiest: r.artiest, titel: titel, veld: veld, naar: r.naar, waarom: '${c['waarom'] ?? ''}'.trim()));
+      continue;
+    }
     corr.add((artiest: wie, titel: titel, veld: veld, naar: naar, waarom: '${c['waarom'] ?? ''}'.trim()));
   }
   return (verzamelingen: verz, correcties: corr);
 }
+
+/// Een naamcorrectie van [wie] naar [naar] nakijken (Saber, 22-11-2026: de eerste ronde maakte van Hélène Ségara
+/// "Segara", van a-ha "A-Ha", van DJ Stijn "DJ Stijn (2)", en liet bij Drivers Seed MC Ramon wegvallen). Null: niet
+/// voorstellen. Haalt ze een accent weg terwijl de naam mét accent ook in de bibliotheek staat ([bekend]), dan
+/// andersom: de versie zonder accent wordt die mét.
+///
+/// Niet voorstellen: alleen hoofdletters of de vorm van een streepje anders (welke de officiële is, weet de app niet);
+/// een Discogs-nummer of sterretje erbij; een gast die verdwijnt; een accent weg dat nergens anders staat.
+({String artiest, String naar})? artiestCorrectie(String wie, String naar, Map<String, String> bekend) {
+  final a = kaleNaam(wie), b = kaleNaam(naar);
+  if (a == b) return null;
+  if (RegExp(r'\(\d+\)|\*').hasMatch(naar)) return null;
+  final gast = RegExp(r'\b(?:feat\.?|ft\.?|featuring)\s+(.+)$', caseSensitive: false).firstMatch(wie)?.group(1);
+  if (gast != null && !b.contains(kaleNaam(gast).replaceAll('*', '').trim())) return null;
+  if (zonderAccenten(a) == zonderAccenten(b) && aantalAccenten(naar) < aantalAccenten(wie)) {
+    final andersom = bekend[vraagSleutel(naar)];
+    return andersom == null || andersom == wie ? null : (artiest: andersom, naar: wie);
+  }
+  return (artiest: wie, naar: naar);
+}
+
+/// Een naam om te vergelijken: klein, elk soort streepje als "-", rechte aanhalingstekens, één spatie.
+String kaleNaam(String s) => s
+    .toLowerCase()
+    .replaceAll(RegExp('[‐-―−]'), '-')
+    .replaceAll(RegExp('[‘’‚‛′]'), "'")
+    .replaceAll(RegExp('[“”„″]'), '"')
+    .replaceAll(RegExp(r'\s+'), ' ')
+    .trim();
+
+const String _metAccent = 'àáâãäåāăąçćčďèéêëēęěìíîïīñńňòóôõöøōőŕřśšşťùúûüūůűýÿžźżÀÁÂÃÄÅĀĂĄÇĆČĎÈÉÊËĒĘĚÌÍÎÏĪÑŃŇÒÓÔÕÖØŌŐŔŘŚŠŞŤÙÚÛÜŪŮŰÝŸŽŹŻ';
+const String _zonderAccent = 'aaaaaaaaacccdeeeeeeeiiiiinnnoooooooorrssstuuuuuuuyyzzzAAAAAAAAACCCDEEEEEEEIIIIINNNOOOOOOOORRSSSTUUUUUUUYYZZZ';
+
+/// [s] zonder accenten ("Ségara" → "Segara").
+String zonderAccenten(String s) {
+  final b = StringBuffer();
+  for (final r in s.runes) {
+    final c = String.fromCharCode(r);
+    final i = _metAccent.indexOf(c);
+    b.write(i < 0 ? c : _zonderAccent[i]);
+  }
+  return b.toString();
+}
+
+/// Hoeveel letters met een accent [s] heeft.
+int aantalAccenten(String s) => s.runes.where((r) => _metAccent.contains(String.fromCharCode(r))).length;
