@@ -1207,8 +1207,16 @@ class SoulseekService {
       // Alleen op de eerste vraag. De jokervariant vangt één weggevallen eerste teken op; hem voor
       // élke vraag meesturen verdubbelt het aantal tickets zonder er iets tegenover te zetten.
       // Een telling ([search] met telling) zonder: die zou anders elk nummer twee zoekopdrachten kosten.
+      final eerste = variants.isEmpty;
       if (!telling && variants.isEmpty && jokerHelpt(q)) variants.add('*${q.substring(1)}');
       variants.add(q);
+      // En dezelfde vraag zonder accenten, ook alleen bij de eerste ([zonderAccentenVoorZoeken]; Saber, 22-11-2026):
+      // Soulseek vindt met "ségara" andere bestanden dan met "segara", en zo hangt wat je vindt niet af van hoe een naam in
+      // je tags staat. Kost één plek in de zoekrem, en alleen bij een vraag met accenten.
+      if (!telling && eerste) {
+        final gevouwen = zonderAccentenVoorZoeken(q);
+        if (gevouwen != null) variants.add(gevouwen);
+      }
     }
     if (variants.isEmpty) return [];
     try {
