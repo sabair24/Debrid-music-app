@@ -29,8 +29,9 @@ const Duration kTidalBeterStart = Duration(minutes: 5);
 /// Na een fout van tidaler (niet ingelogd, geen netwerk) zo lang niets.
 const Duration kTidalBeterRust = Duration(hours: 1);
 
-/// Een nummer zonder betere kopie op TIDAL wordt na zoveel dagen opnieuw bekeken: TIDAL voegt hi-res toe.
-const int kTidalBeterOpnieuwDagen = 60;
+/// Een nummer zonder betere kopie op TIDAL wordt na zoveel dagen opnieuw bekeken: TIDAL voegt hi-res toe. Zestig tot
+/// 23-11-2026; Saber koos "TIDAL vaker" — elke twee weken, en dat past ruim binnen één nummer per drie minuten.
+const int kTidalBeterOpnieuwDagen = 14;
 
 /// Hoeveel de lengte op TIDAL mag schelen. Strenger dan de keuring na het halen (6 s): "You Got It" heeft op TIDAL
 /// naast het origineel (Mystery Girl, 210 s, alleen cd-kwaliteit) de orkestversie van 2017 (216 s) in hi-res, en dat

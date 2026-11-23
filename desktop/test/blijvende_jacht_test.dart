@@ -78,18 +78,43 @@ void main() {
   });
 
   group('het ritme', () {
-    test('DE KERN: na je klik een uur, drie, acht, een dag …; na een bewijs een maand', () {
-      Duration w(int r, {bool g = true, Jachtbewijs b = Jachtbewijs.geen}) =>
+    // Saber, 23-11-2026: "het zou elke dag minstens 1 keer moeten zoeken of meer als het kan" — onbewezen elke dag,
+    // bewezen gemengd: echt 24/88+ maandelijks, "alleen cd op TIDAL" en "drie uploaders" wekelijks.
+    test('DE KERN: onbewezen elke dag; na je klik eerst een uur, drie, acht; top maandelijks, officieel en eensgezind wekelijks',
+        () {
+      Duration w(int r, {bool g = false, Jachtbewijs b = Jachtbewijs.geen}) =>
           jachtWacht(Jachtstand(rondes: r, gevraagd: g), b);
       expect(w(0), Duration.zero);
-      expect(w(1), const Duration(hours: 1));
-      expect(w(2), const Duration(hours: 3));
-      expect(w(3), const Duration(hours: 8));
-      expect(w(4), const Duration(days: 1, hours: 20), reason: 'een dag, en een ander uur van de dag');
-      expect(w(7), kJachtDaarna + const Duration(hours: 11));
-      expect(w(1, g: false), const Duration(days: 2, hours: 5), reason: 'de rest van de bibliotheek: rustiger');
-      expect(w(1, b: Jachtbewijs.officieel), kJachtNaBewijs + const Duration(hours: 5));
+      for (final r in [1, 2, 3, 4, 7, 30]) {
+        expect(w(r), const Duration(hours: 22), reason: 'ronde $r: elke dag, ook na de zevende ronde (was om de twee weken)');
+      }
+      expect(kJachtDagelijks, lessThan(const Duration(days: 1)), reason: 'elke kalenderdag minstens één keer');
+      expect(w(1, g: true), const Duration(hours: 1));
+      expect(w(2, g: true), const Duration(hours: 3));
+      expect(w(3, g: true), const Duration(hours: 8));
+      expect(w(4, g: true), kJachtDagelijks, reason: 'na je klik daarna gewoon elke dag, niet trager (was 1, 3, 7 dagen)');
+      expect(w(9, g: true), kJachtDagelijks);
+      expect(w(1, b: Jachtbewijs.top), kJachtNaBewijs + const Duration(hours: 5));
+      expect(kJachtNaBewijs, const Duration(days: 30));
+      expect(w(1, b: Jachtbewijs.officieel), const Duration(days: 7, hours: 5));
+      expect(w(2, b: Jachtbewijs.eensgezind), const Duration(days: 7, hours: 10), reason: 'elke week een ander uur');
       expect(jachtAanDeBeurt(null, 0, Jachtbewijs.top), isTrue, reason: 'nog nooit gezocht: meteen');
+      // Elke dag twee uur vroeger op de klok: na twaalf rondes is elk uur van de dag eens geweest.
+      final start = DateTime(2026, 11, 23, 9);
+      final uren = {for (var r = 0; r < 12; r++) start.add(kJachtDagelijks * r).hour};
+      expect(uren, hasLength(12));
+    });
+
+    test('tijdens een radio traag door, en na een gezochte plaat meteen de volgende', () {
+      expect(kJachtZoekTijdensRadio, 3);
+      expect(jachtMagZoeken(traag: false, zochtInVijf: 9), isTrue, reason: 'zonder radio beslist de gewone rem');
+      expect(jachtMagZoeken(traag: true, zochtInVijf: 0), isTrue);
+      expect(jachtMagZoeken(traag: true, zochtInVijf: 2), isTrue);
+      expect(jachtMagZoeken(traag: true, zochtInVijf: 3), isFalse, reason: 'de radio gaat voor');
+      expect(jachtMagZoeken(traag: true, zochtInVijf: 8), isFalse,
+          reason: 'net nog op vol tempo gezocht: dat telt mee, anders kreeg een radio die begint er drie bovenop');
+      expect(jachtVolgendeTik(gezocht: true), const Duration(seconds: 5));
+      expect(jachtVolgendeTik(gezocht: false), const Duration(minutes: 1));
     });
   });
 
@@ -184,6 +209,12 @@ void main() {
           rondes: 2, laatsteMs: nu.millisecondsSinceEpoch, gevraagd: true, nee: [_a('a', 1, '2026-10-27')]);
       expect(jachtZin(t, s, Jachtbewijs.geen, nu: nu),
           'Zoekt verder naar een betere kopie: 2 keer gezocht, 1 kopie binnengehaald en niet beter. Volgende keer vandaag om 12:00.');
+      final gewoon = Jachtstand(rondes: 5, laatsteMs: nu.millisecondsSinceEpoch);
+      expect(jachtZin(t, gewoon, Jachtbewijs.geen, nu: nu), endsWith('Volgende keer morgen om 07:00.'),
+          reason: 'elke dag, twee uur vroeger');
+      expect(jachtZin(t, null, Jachtbewijs.top, nu: nu), endsWith('De app kijkt nog één keer per maand.'));
+      expect(jachtZin(t, null, Jachtbewijs.officieel, nu: nu), endsWith('De app kijkt elke week, voor een vinyl of een nieuwe uitgave.'));
+      expect(jachtZin(t, gewoon, Jachtbewijs.eensgezind, nu: nu), endsWith('De app kijkt elke week.'));
     });
   });
 
@@ -269,7 +300,11 @@ void main() {
 
   test('aangesloten: de ronde in de downloadbeheerder, de jacht onthoudt elke kopie, een verliezende download gaat weg', () {
     final online = _bron('lib/online.dart');
-    expect(online, contains('hits = await soulseek.search(vraag, achtergrond: true, extra: kHiresZoekwoorden, eigenRem: _jachtRem);'));
+    expect(online, contains('      hits = await soulseek.search(vraag,\n'
+        '          achtergrond: true, extra: kHiresZoekwoorden, eigenRem: traag ? _jachtRemRadio : _jachtRem);'));
+    expect(online, contains('    if (!jachtMagZoeken(traag: traag, zochtInVijf: jachtZochtInVijf)) return Jachtronde.nietGezocht;'));
+    expect(online, contains('      Zoekrem(max: kJachtZoekTijdensRadio, voorJou: 0, maxVijf: kJachtZoekTijdensRadio, voorJouVijf: 0);'));
+    expect(_bron('lib/blijvende_jacht.dart'), contains('      _plan(jachtVolgendeTik(gezocht: gezocht != null));'));
     expect(online, contains('      jachten.vraag([for (final t in te) t.path], DateTime.now().millisecondsSinceEpoch);'));
     expect(online, contains('!(jachten?.isAfgewezen(t.path, k.username, k.size) ?? false)'));
     expect(online, contains('blijvend != null && soulseek.available && !soulseek.client.serverZwijgt && _jachten.wachtend == 0;'));
@@ -278,9 +313,10 @@ void main() {
     expect(jacht, contains('bijUitslag?.call(f, Kopieuitslag.anders);'));
     expect(jacht, contains('                    ? Kopieuitslag.beter\n                    : nepKopie'));
     final main = _bron('lib/main.dart');
-    expect(main, contains('        jaag: downloads.jaagBlijvend,'));
-    // Niet zolang er een radio loopt (20-11-2026, radiometing).
-    expect(main, contains('        kan: () => downloads.kanBlijvendJagen && !radio.loopt && !(sharing.server?.radiohaler.inGebruik ?? false),'));
+    // Tijdens een radio traag (23-11-2026), niet meer stil (20-11-2026, radiometing).
+    expect(main, contains('        jaag: (plaat) => downloads.jaagBlijvend(plaat,\n'
+        '            traag: radio.loopt || (sharing.server?.radiohaler.inGebruik ?? false)),\n'
+        '        kan: () => downloads.kanBlijvendJagen,'));
     expect(main, contains('            !(t.isFlac || isVerliesvrij(t.ext)) ||'), reason: 'mp3: de verlanglijst loopt al');
     expect(main, contains('                prullenbak: naarPrullenbak);'));
   });

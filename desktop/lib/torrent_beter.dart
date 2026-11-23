@@ -35,8 +35,9 @@ const Duration kTorrentBeterNiets = Duration(minutes: 10);
 /// Na een storing (TorBox antwoordt niet, of zoeken lukte niet) zo lang niets.
 const Duration kTorrentBeterRust = Duration(minutes: 15);
 
-/// Een plaat zonder betere torrent komt na zoveel dagen opnieuw aan de beurt: er komen torrents bij.
-const int kTorrentBeterOpnieuwDagen = 30;
+/// Een plaat zonder betere torrent komt na zoveel dagen opnieuw aan de beurt: er komen torrents bij. Dertig tot
+/// 23-11-2026; Saber koos "Torrents vaker" — elke week. De torrent-ronde heeft geen uurplafond (torrent-beter-ronde).
+const int kTorrentBeterOpnieuwDagen = 7;
 
 /// Een plaat die "Zoek hi-res" nu al afzoekt, slaat de ronde zo lang over.
 const Duration kTorrentBeterAlBezig = Duration(minutes: 30);

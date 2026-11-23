@@ -6189,6 +6189,14 @@ class DownloadManager extends ChangeNotifier {
   final Zoekrem _jachtRem = Zoekrem(
       max: kJachtZoekPerVijfMinuten, voorJou: 0, maxVijf: kJachtZoekPerVijfMinuten, voorJouVijf: 0);
 
+  /// Zolang er ergens een radio speelt: hoogstens [kJachtZoekTijdensRadio] per vijf minuten (Saber, 23-11-2026).
+  final Zoekrem _jachtRemRadio =
+      Zoekrem(max: kJachtZoekTijdensRadio, voorJou: 0, maxVijf: kJachtZoekTijdensRadio, voorJouVijf: 0);
+
+  /// Wat de blijvende jacht in de laatste vijf minuten zocht, op beide remmen samen — voor de toets en het logboek.
+  @visibleForTesting
+  int get jachtZochtInVijf => _jachtRem.inVijf + _jachtRemRadio.inVijf;
+
   /// Wat een jacht voor [pad] binnenkreeg, in het geheugen van de blijvende jacht: zo komt dezelfde kopie nooit terug, en
   /// tellen echte kopieën die niet beter waren mee voor het bewijs ([Jachtbewijs.eensgezind]).
   void Function(SoulseekFile f, Kopieuitslag u)? _onthoudVoor(String pad) {
@@ -6209,9 +6217,14 @@ class DownloadManager extends ChangeNotifier {
   /// erachter — en voor elk nummer met een kandidaat die beter kan zijn en nog niet binnen was, de gewone jacht
   /// ([_queueUpgrade]). Geen TIDAL en geen torrents: die hebben hun eigen ronde. Hoogstens [kJachtZoekPerVijfMinuten]
   /// zoekopdrachten per vijf minuten ([_jachtRem]).
-  Future<Jachtronde> jaagBlijvend(Jachtplaat plaat) async {
+  ///
+  /// [traag]: er speelt ergens een radio. Dan hoogstens [kJachtZoekTijdensRadio] per vijf minuten ([_jachtRemRadio]) —
+  /// ook als de jacht vlak ervoor op vol tempo zocht: wat er toen al ging, telt mee, anders kreeg een radio die net begint
+  /// er nog eens drie bovenop.
+  Future<Jachtronde> jaagBlijvend(Jachtplaat plaat, {bool traag = false}) async {
     final jachten = blijvend;
     if (jachten == null || !soulseek.available) return Jachtronde.nietGezocht;
+    if (!jachtMagZoeken(traag: traag, zochtInVijf: jachtZochtInVijf)) return Jachtronde.nietGezocht;
     final te = [
       for (final t in plaat.nummers)
         if (t.artist.trim().isNotEmpty && t.title.trim().isNotEmpty && !isVasteKeuze(t.path)) t
@@ -6223,7 +6236,8 @@ class DownloadManager extends ChangeNotifier {
         : zoekvraagVoorNummer(eerste.title, artist: eerste.artist, album: eerste.album);
     final List<SoulseekFile> hits;
     try {
-      hits = await soulseek.search(vraag, achtergrond: true, extra: kHiresZoekwoorden, eigenRem: _jachtRem);
+      hits = await soulseek.search(vraag,
+          achtergrond: true, extra: kHiresZoekwoorden, eigenRem: traag ? _jachtRemRadio : _jachtRem);
     } catch (_) {
       // De server zwijgt, of we zijn niet ingelogd: dan is er niet gezocht, en telt de ronde niet.
       return Jachtronde.nietGezocht;
@@ -6255,7 +6269,8 @@ class DownloadManager extends ChangeNotifier {
     }
     final wat = plaat.album.isNotEmpty ? '${eerste.artist} — ${plaat.album}' : '${eerste.artist} — ${eerste.title}';
     _log.line('blijvende jacht: "$wat" — ${hits.length} treffers, '
-        '${gestart == 0 ? 'niets beters voor ${te.length == 1 ? 'dit nummer' : 'deze ${te.length} nummers'}' : '$gestart van ${te.length} op jacht'}');
+        '${gestart == 0 ? 'niets beters voor ${te.length == 1 ? 'dit nummer' : 'deze ${te.length} nummers'}' : '$gestart van ${te.length} op jacht'}'
+        '${traag ? ' (traag: er speelt een radio)' : ''}');
     return Jachtronde.gezocht;
   }
 
@@ -7297,18 +7312,76 @@ class DownloadManager extends ChangeNotifier {
   }
 
 
+  /// Wie er nu geduldig in een wachtrij staat ([_wachtGeduldig]): uploader|bestand.
+  final Set<String> _geduldig = {};
+
+  /// De pauzes van het geduld ([kGeduldOpnieuwWachtrij], [kGeduldOpnieuwWeg]); een toets maakt ze kort.
+  @visibleForTesting
+  Duration geduldOpnieuwWachtrij = kGeduldOpnieuwWachtrij;
+  @visibleForTesting
+  Duration geduldOpnieuwWeg = kGeduldOpnieuwWeg;
+
+  /// De jacht op een betere kopie ([_chaseUpgrade]), voor een toets met nep-uploaders.
+  @visibleForTesting
+  Future<void> jachtVoorToets(List<SoulseekFile> beter, DownloadJob job) => _chaseUpgrade(beter, job);
+
+  /// Hoeveel kopieën er nu geduldig in een wachtrij wachten.
+  int get geduldigWachtend => _geduldig.length;
+
+  /// Kan [f] nog geduldig wachten: er is plaats ([kWachtrijGeduldHoogstens]) en hij wacht nog niet.
+  bool _magGeduldig(SoulseekFile f) =>
+      _geduldig.length < kWachtrijGeduldHoogstens && !_geduldig.contains('${f.username}|${f.filename}'.toLowerCase());
+
+  /// **Geduld in de wachtrij** (Saber, 23-11-2026). Een betere kopie bij een uploader met een wachtrij hield de jacht tot
+  /// het budget van tien minuten op was ([_upgradeBudget]), en dan was het voorbij: "budget op — N peers niet meer
+  /// geprobeerd". Nu gaat de jacht meteen verder met de volgende uploader, en wacht deze kopie apart, tot
+  /// [kJachtWachtrijGeduld]. Dat kost geen zoekopdrachten: de uploader kent ons al. Wat binnenkomt, gaat door dezelfde keuring
+  /// als elke andere kopie ([_chaseUpgrade]), met een eigen, onzichtbare taak — de rij op het scherm is al klaar.
+  void _wachtGeduldig(SoulseekFile f, DownloadJob job,
+      {TrackTags? gezag,
+      String? speeltPad,
+      bool parkeerAltijd = false,
+      void Function(SoulseekFile f, Kopieuitslag u)? bijUitslag}) {
+    final sleutel = '${f.username}|${f.filename}'.toLowerCase();
+    if (!_geduldig.add(sleutel)) return;
+    final wachter = DownloadJob(job.name)
+      ..authority = job.authority
+      ..exact = job.exact
+      ..jouwKeuze = job.jouwKeuze;
+    _log.line('   ${f.username}: wachtrij — de jacht gaat verder, deze kopie wacht geduldig tot '
+        '${kJachtWachtrijGeduld.inHours} u (${_geduldig.length} wachtend)');
+    unawaited(_chaseUpgrade([f], wachter,
+            gezag: gezag,
+            speeltPad: speeltPad,
+            parkeerAltijd: parkeerAltijd,
+            bijUitslag: bijUitslag,
+            budget: kJachtWachtrijGeduld,
+            geduldig: true)
+        .catchError((Object _) {})
+        .whenComplete(() {
+      _geduldig.remove(sleutel);
+    }));
+  }
+
   /// Chase a BETTER copy of a track that already landed.
   ///
   /// Bounded on purpose: you HAVE the track, so this must never cost you anything. It holds the
   /// shared session for its whole run — dipping out between peers would let the 120s idle close
   /// fire and make the next attempt a fresh LOGIN, which is what gets the account blocked — and
   /// deliberately takes no download slot, so a track you have nothing of never waits behind it.
+  ///
+  /// Zet een uploader ons in zijn wachtrij, dan wacht die kopie apart ([_wachtGeduldig]) en gaat de jacht verder.
+  /// [geduldig]: dit ís dat wachten — één kopie, [budget] lang ([kJachtWachtrijGeduld]); verbreekt de uploader de wachtrij of
+  /// is hij even weg, dan opnieuw ([kGeduldOpnieuwWachtrij], [kGeduldOpnieuwWeg]).
   Future<void> _chaseUpgrade(List<SoulseekFile> better, DownloadJob job,
       {TrackTags? gezag,
       String? speeltPad,
       bool parkeerAltijd = false,
-      void Function(SoulseekFile f, Kopieuitslag u)? bijUitslag}) async {
-    final deadline = DateTime.now().add(_upgradeBudget);
+      void Function(SoulseekFile f, Kopieuitslag u)? bijUitslag,
+      Duration budget = _upgradeBudget,
+      bool geduldig = false}) async {
+    final deadline = DateTime.now().add(budget);
+    var pogingen = 0;
     // Hoeveel kopieën er al binnen waren die niet bewezen beter bleken ([kJachtKopieen]).
     var nietBeter = 0;
     // A shadow job absorbs the transfer's own status/progress writes: the visible job is already
@@ -7323,14 +7396,17 @@ class DownloadManager extends ChangeNotifier {
       notifyListeners();
     }
 
-    _log.line('"${job.name}": jacht op betere kwaliteit start, budget ${_kort(_upgradeBudget)} '
-        'voor ${better.length} peers samen');
+    if (!geduldig) {
+      _log.line('"${job.name}": jacht op betere kwaliteit start, budget ${_kort(budget)} '
+          'voor ${better.length} peers samen');
+    }
     // Jouw nummer, om te weten wat je al hebt ([alGekend]).
     final g = job.authority;
     final anker = speeltPad ?? (g == null ? null : mapVanBestaande?.call(g.artist, g.title, seconds: g.seconds));
     try {
       await soulseek.withSession((session) async {
-        for (final f in better) {
+        for (var i = 0; i < better.length; i++) {
+          final f = better[i];
           if (job.cancelled) return; // the user stopped this track; don't keep chasing it
           if (alGekend(f, anker) case final wat?) {
             _log.line('   ${f.username}: overgeslagen — hetzelfde bestand als $wat');
@@ -7340,8 +7416,12 @@ class DownloadManager extends ChangeNotifier {
           if (left <= const Duration(seconds: 30)) {
             // DE grens waar dit stukloopt, en zonder deze regel is hij van buitenaf onzichtbaar: de
             // jacht houdt gewoon op en er komt nooit iets binnen.
-            _log.line('   budget op na ${_kort(_upgradeBudget - left)} — '
-                '${better.length - better.indexOf(f)} peers niet meer geprobeerd');
+            if (geduldig) {
+              _log.line('   ${f.username}: ${kJachtWachtrijGeduld.inHours} u geduld op na $pogingen pogingen — de vorige blijft');
+              return;
+            }
+            _log.line('   budget op na ${_kort(budget - left)} — '
+                '${better.length - i} peers niet meer geprobeerd');
             return;
           }
           job.status = 'upgrading';
@@ -7353,8 +7433,15 @@ class DownloadManager extends ChangeNotifier {
           final c = SlskCancel();
           job.live.add(c);
           final t0 = DateTime.now();
+          // Een wachtrij: niet de hele jacht laten wachten, maar deze kopie apart ([_wachtGeduldig]).
+          var naarWachtrij = false;
+          pogingen++;
           try {
-            res = await _rawTransfer(session, f, shadow, () {}, waitInQueue: true, maxWait: left, cancel: c);
+            res = await _rawTransfer(session, f, shadow, () {
+              if (geduldig || naarWachtrij || !_magGeduldig(f)) return;
+              naarWachtrij = true;
+              c.cancel();
+            }, waitInQueue: true, maxWait: left, cancel: c);
           } catch (_) {
             _log.line('   ${f.username}: fout  na ${_kort(DateTime.now().difference(t0))}'
                 '  (${_kort(left)} budget over bij de start)');
@@ -7362,12 +7449,30 @@ class DownloadManager extends ChangeNotifier {
           } finally {
             job.live.remove(c);
           }
+          if (naarWachtrij && !job.cancelled) {
+            _wachtGeduldig(f, job,
+                gezag: gezag, speeltPad: speeltPad, parkeerAltijd: parkeerAltijd, bijUitslag: bijUitslag);
+            continue;
+          }
           // De looptijd naast het resterende budget: zo zie je of een peer nog aan de gang was toen
-          // het budget hem afkapte, of dat hij zelf niets deed.
+          // het budget hem afkapte, of dat hij zelf niets deed. Bij geduld alleen de eerste poging en elke tiende.
           final duur = DateTime.now().difference(t0);
-          _log.line('   ${f.username}: ${_uitkomst(res)}  na ${_kort(duur)}${_tempo(res, duur)}'
-              '  (${_kort(left)} budget over bij de start)');
+          if (!geduldig || pogingen == 1 || pogingen % 10 == 0 || res is SlskDone) {
+            _log.line('   ${f.username}: ${_uitkomst(res)}  na ${_kort(duur)}${_tempo(res, duur)}'
+                '  (${_kort(left)} ${geduldig ? 'geduld' : 'budget'} over bij de start'
+                '${geduldig ? ', poging $pogingen' : ''})');
+          }
           if (res is SlskCancelled) return;
+          if (geduldig && res is! SlskDone) {
+            // De uploader verbrak de wachtrij of is even weg: opnieuw vragen, zolang het geduld duurt. Een wachtrij snel
+            // (hij houdt je plaats meestal), een uploader die er niet is om het halfuur.
+            final pauze = res is SlskQueued ? geduldOpnieuwWachtrij : geduldOpnieuwWeg;
+            if (deadline.difference(DateTime.now()) > pauze + const Duration(minutes: 1)) {
+              await Future<void>.delayed(pauze);
+              i--;
+            }
+            continue;
+          }
           if (res is! SlskDone) continue;
 
           // placeFileDetailed drops the copy this supersedes — but only if it actually won.
@@ -7380,6 +7485,11 @@ class DownloadManager extends ChangeNotifier {
             // dat verkeerd om: een opgeschaalde of uit mp3 omgezette kopie is juist GROTER dan het
             // origineel, dus de jacht op iets beters kon de betere kopie weggooien.
             final bestaand = await _bereidVergelijkingVoor(staged, job.authority);
+            if (geduldig && bestaand == null) {
+              _log.line('   ${job.name}: ${f.username} leverde na het wachten, maar je nummer is er niet meer — weggegooid');
+              await _discardStaged(staged.path);
+              return;
+            }
             var score = bestaand == null ? null : await _opnameScore(staged.path, bestaand);
             // Een vinylrip begint vaak verder van de eerste noot dan de cd: dan nog eens, met meer ruimte om te schuiven.
             if (isVinylRip(f.filename) && bestaand != null && score != null && score < maybeSameRecordingScore) {
@@ -7516,8 +7626,8 @@ class DownloadManager extends ChangeNotifier {
       // Hier eindigt de jacht zonder resultaat, en dit is de regel die zegt DAT hij geëindigd is.
       // Zonder hem lijkt een opwaardering die niets vond precies op een die nog loopt -- en de app
       // begint hem niet opnieuw, ook niet na een herstart.
-      _log.line('"${job.name}": jacht klaar zonder betere kopie, '
-          '${_kort(_upgradeBudget - deadline.difference(DateTime.now()))} verbruikt — komt niet terug');
+      _log.line('"${job.name}": ${geduldig ? 'geduld in de wachtrij' : 'jacht'} klaar zonder betere kopie, '
+          '${_kort(budget - deadline.difference(DateTime.now()))} verbruikt — komt niet terug');
       settle('beste vrije kwaliteit behouden');
     }
   }

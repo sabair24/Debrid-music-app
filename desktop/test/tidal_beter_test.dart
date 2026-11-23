@@ -185,16 +185,17 @@ void main() {
       expect(volgende(), isNull);
     });
 
-    test('opnieuw: mislukt na een dag, de rest na zestig dagen', () {
+    test('opnieuw: mislukt na een dag, de rest na twee weken (Saber, 23-11-2026: "TIDAL vaker"; was zestig dagen)', () {
       final g = TidalBeterGeheugen('${map.path}/tidal_beter.json');
       const dag = 24 * 3600 * 1000;
       g.zet('a/1.flac', TidalBeterUitslag.mislukt, 0);
       g.zet('a/2.flac', TidalBeterUitslag.geen, 0);
       expect(g.aanDeBeurt('a/1.flac', dag - 1), isFalse);
       expect(g.aanDeBeurt('a/1.flac', dag), isTrue);
-      expect(g.aanDeBeurt('a/2.flac', 59 * dag), isFalse);
+      expect(kTidalBeterOpnieuwDagen, 14);
+      expect(g.aanDeBeurt('a/2.flac', 13 * dag), isFalse);
       expect(g.aanDeBeurt('a/2.flac', kTidalBeterOpnieuwDagen * dag), isTrue);
-      expect(g.aanDeBeurt(r'A\2.FLAC', 59 * dag), isFalse, reason: 'een pad met andere schuine strepen of hoofdletters');
+      expect(g.aanDeBeurt(r'A\2.FLAC', 13 * dag), isFalse, reason: 'een pad met andere schuine strepen of hoofdletters');
     });
 
     test('het geheugen overleeft een herstart, met de afgewezen ids', () async {
