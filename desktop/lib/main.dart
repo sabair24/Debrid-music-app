@@ -24,6 +24,12 @@ import 'acoustid.dart';
 import 'venster.dart';
 import 'aanbevelingplan.dart';
 import 'ai.dart';
+import 'ai_lijst.dart';
+import 'ai_lijst_vraag.dart';
+import 'voorproef.dart';
+import 'ui/voorproef_knop.dart';
+import 'ui/ai_lijst_scherm.dart';
+import 'ai_lijst_natrekken.dart';
 import 'radio.dart';
 import 'modelbudget.dart';
 import 'pc_model.dart';
@@ -1407,6 +1413,45 @@ Future<void> main() async {
     // Spelen terwijl het binnenkomt (groeistroom.dart): dezelfde schakelaar als bij een nieuw nummer.
     ..vroegLuisteren = (() => settings.vroegLuisteren);
 
+  // De voorproef (voorproef.dart; Saber, 23-11-2026): een fragment, of een Soulseek-proef die na 30 s weer opruimt. Op de
+  // pc haalt hij zelf met een groeistroom, op een toestel haalt de pc (altijd met een groeistroom) en klinkt het via de pc.
+  Radiobron proefbron() => mode.owner
+      ? EigenRadiobron(downloads: downloads, soulseek: soulseek, library: library, instellingen: settings)
+      : PcRadiobron(library: library, clientOf: () => library.remote);
+  final voorproef = Voorproef(
+    speel: (adres, sleutel, duur) => player.voorproef(adres, sleutel: sleutel, duur: duur),
+    stopSpeler: (sleutel) => player.voorproefKlaar(sleutel: sleutel),
+    klinktNog: (sleutel) => player.voorproefVan == sleutel,
+    vergeet: (t) async {
+      await proefbron().vergeet(pad: t.path, artiest: t.artist, titel: t.title);
+    },
+    haal: (plek, {alleen, required klinkt, required bijStop}) async {
+      final bron = proefbron();
+      if (await bron.begin() != null) return null;
+      try {
+        if (bron is EigenRadiobron) {
+          final vroeg = await Groeistroom.gedeeld.nieuw('proef: ${plek.artiest} — ${plek.titel}');
+          vroeg.zalKlinken();
+          unawaited(vroeg.speelbaar.then((kan) {
+            if (kan) klinkt(vroeg.adres);
+          }));
+          try {
+            return await bron.haal(plek, vroeg: vroeg, los: true, bijStop: bijStop, alleen: alleen);
+          } finally {
+            if (vroeg.geborgen == null) vroeg.opgegeven();
+          }
+        }
+        return await (bron as PcRadiobron).haal(plek, proef: true, alleen: alleen, bijStop: bijStop, klinkt: (groeiId) {
+          final g = GroeiOpPc(() => library.remote, groeiId);
+          player.groeitElders(g.pad, g);
+          klinkt(player.mediaResolver(g.pad));
+        });
+      } finally {
+        bron.einde();
+      }
+    },
+  );
+
   // Share this library with the Mac, the iPad and the Shield. Started before the scan finishes:
   // a device probing /health then gets a real answer straight away, and the catalogue fills in
   // by itself as the scan lands.
@@ -1468,6 +1513,61 @@ Future<void> main() async {
         verzamelingNamen: {...library.verzamelingNamen, ...verzamelingen.namen}));
   }
   final lijsten = Afspeellijsten();
+  // "Op dit toestel houden" op een AI-lijst (ai_lijst.dart; Saber, 23-11-2026: "aan = de gsm haalt de hele lijst bij de
+  // pc"): alles wat nog ontbreekt, één voor één op de achtergrond, zoals de radio haalt. Elke landing wordt de regel, gaat
+  // de lijst in (en zo naar het toestel dat hem houdt) en meteen naar de verzameling van de lijst — er is geen radio die
+  // afsluit om het te verhuizen. Eén keer tegelijk per lijst; wat niet lukt, komt bij een volgende keer terug.
+  final aiLijstHalen = <String>{};
+  Future<void> haalAiLijstHelemaal(String id) async {
+    if (!mode.owner || !aiLijstHalen.add(id)) return;
+    final log = WarmLog('$appDir${Platform.pathSeparator}radio.log');
+    final bron = EigenRadiobron(downloads: downloads, soulseek: soulseek, library: library, instellingen: settings);
+    var gehaald = 0, mislukt = 0;
+    try {
+      final begin = AiLijstVoorstel.fromJson(lijsten.byId(id)?.ai);
+      if (begin == null || await bron.begin() != null) return;
+      final open = [for (final n in begin.actief) if (n.eigenId == null) (artiest: n.artiest, titel: n.titel)];
+      log.line('ai-lijst "${begin.naam}": de hele lijst halen voor een toestel — ${open.length} nummers ontbreken');
+      for (final o in open) {
+        final nu = AiLijstVoorstel.fromJson(lijsten.byId(id)?.ai);
+        if (nu == null) break; // de lijst is weg
+        final regel = nu.actief.where((n) => n.artiest == o.artiest && n.titel == o.titel).firstOrNull;
+        if (regel == null || regel.eigenId != null) continue; // intussen weggehaald, of al binnen
+        Track? t;
+        var vanJou = false;
+        try {
+          t = await bron.haal(Radioplek(
+              artiest: regel.artiest,
+              titel: regel.titel,
+              seconden: regel.seconden > 0 ? regel.seconden : null,
+              jaar: regel.jaar,
+              album: regel.album.isEmpty ? null : regel.album,
+              bron: 'ailijst'));
+        } on AlVanJou catch (e) {
+          t = e.nummer;
+          vanJou = true;
+        } on RadioLaterOpnieuw catch (e) {
+          log.line('ai-lijst "${nu.naam}": halen even niet (${e.waarom}) — de rest bij een volgende keer');
+          break;
+        } catch (_) {}
+        final tid = t == null ? null : library.gedeeldId(t.path);
+        if (t == null || tid == null) {
+          mislukt++;
+          continue;
+        }
+        final verder = AiLijstVoorstel.fromJson(lijsten.byId(id)?.ai);
+        if (verder == null || !regelGeland(verder, regel.artiest, regel.titel, tid)) continue;
+        await lijsten.zetAi(id, ai: verder.toJson(), naam: lijsten.byId(id)?.name ?? verder.naam, eigen: eigenIdsVan(verder));
+        if (!vanJou && verder.verzameling != null) await library.naarVerzameling([t.path], verder.verzameling);
+        gehaald++;
+      }
+      log.line('ai-lijst "${begin.naam}": $gehaald gehaald${mislukt == 0 ? '' : ', $mislukt niet gevonden'}');
+    } finally {
+      bron.einde();
+      aiLijstHalen.remove(id);
+    }
+  }
+
   // Favorieten en de afspeellijsten die je op dit toestel houdt (Saber, 28-10-2026): wat erbij komt gaat op je gsm,
   // wat eruit gaat verdwijnt vanzelf — tenzij het er ook om een andere reden staat (toestel_redenen.dart). Even
   // wachten na elke wijziging, zodat een rits hartjes één ronde is.
@@ -1763,7 +1863,11 @@ Future<void> main() async {
   // Wat je al hield (👍 of favoriet), staat niet meer op proef (20-11-2026, de knop "Houden"). Onbekend = niet gehouden.
   radio.gehouden = (pad) {
     final t = library.trackByPath(pad);
-    return t != null && (oordelen.vanTrack(t) == Oordeel.omhoog || favorieten.isFavorietTrack(t));
+    if (t == null) return false;
+    if (oordelen.vanTrack(t) == Oordeel.omhoog || favorieten.isFavorietTrack(t)) return true;
+    // In een afspeellijst, ook een AI-lijst die hem net haalde (ai_lijst.dart): dat is van jou, niet op proef.
+    final id = library.gedeeldId(t.path);
+    return id != null && lijsten.lijsten.any((l) => l.trackIds.contains(id));
   };
   // Onderweg opruimen (Saber, 08-10 en 23-10-2026: "Na 20 nummers, ook Past niet"): wat je niet houdt, gaat 20
   // nummers later naar de prullenbak. Dezelfde regel als het overzicht bij het afsluiten: Houden, favoriet of in een
@@ -2443,6 +2547,17 @@ Future<void> main() async {
         tempo: _radiotempo,
         spoor: radioLog.line,
       );
+      // AI-afspeellijsten voor een toestel (ai_lijst_vraag.dart; Saber, 23-11-2026): de sleutel staat hier.
+      s.aiLijsten = AiLijstTaken(haalAlles: (id) => unawaited(haalAiLijstHelemaal(id)), (vraag) async {
+        final ai = AiService(() => settings.anthropicKey, werkruimteVan: () => settings.anthropicWorkspace);
+        final zin = '${vraag['zin'] ?? ''}';
+        if (vraag['op'] == 'bijsturen') {
+          final v = AiLijstVoorstel.fromJson(vraag['voorstel']);
+          if (v == null) throw const AiFout('De lijst kwam niet goed aan.');
+          return {'bijsturing': (await ai.stuurAiLijstBij(v, zin)).toJson()};
+        }
+        return {'voorstel': (await ai.maakAiLijst(zin, eigen: aiLijstEigen([for (final t in library.tracks) '${t.artist} — ${t.title}']))).toJson()};
+      });
       // De voorstellen van Claude voor verzamelingen, ook voor een toestel (verzamelvoorstellen.dart).
       s.verzamelvoorstellen = verzamelvoorstellen;
       s.vraagVerzamelvoorstellen = () => verzamelvoorstellen.vraagOpPc(() => maakVerzamelvoorstellen(library,
@@ -2593,6 +2708,7 @@ Future<void> main() async {
         Provider<TidalService>.value(value: tidal),
         ChangeNotifierProvider<DownloadManager>.value(value: downloads),
         ChangeNotifierProvider<RadioBesturing>.value(value: radio),
+        ChangeNotifierProvider<Voorproef>.value(value: voorproef),
         ChangeNotifierProvider<Oordelen>.value(value: oordelen),
         ChangeNotifierProvider<RadioSfeer>.value(value: radioSfeer),
         ChangeNotifierProvider<LanSharing>.value(value: sharing),
@@ -14666,6 +14782,14 @@ class AfspeellijstenView extends StatelessWidget {
               icon: const Icon(Icons.add_rounded, size: 18),
               label: const Text('Nieuwe'),
             ),
+            const SizedBox(width: 8),
+            // Een lijst die de AI voorstelt (Saber, 23-11-2026): eerst zien, dan pas downloaden.
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: _accent),
+              onPressed: () => openAiLijst(context),
+              icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+              label: const Text('Met AI'),
+            ),
           ],
         ),
         const SizedBox(height: 16),
@@ -14701,9 +14825,21 @@ class _AfspeellijstRij extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(10)),
       child: ListTile(
-        leading: Icon(Icons.queue_music_rounded, color: _accent),
+        leading: lijst.ai == null
+            ? Icon(Icons.queue_music_rounded, color: _accent)
+            // Een AI-lijst: een kleine genreposter (Saber, 23-11-2026: "AI-naam + genreposter"), zoals de verzamelingen.
+            : Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(color: posterKleur(lijst.name, null), borderRadius: BorderRadius.circular(10)),
+                alignment: Alignment.center,
+                child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 22)),
         title: Text(lijst.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: Text('${lijst.trackIds.length} nummers',
+        subtitle: Text(
+            lijst.ai == null
+                ? '${lijst.trackIds.length} nummers'
+                : 'AI-lijst · ${AiLijstVoorstel.fromJson(lijst.ai)?.actief.length ?? lijst.trackIds.length} nummers, '
+                    '${lijst.trackIds.length} al van jou',
             style: TextStyle(color: _muted, fontSize: 12)),
         onTap: () => openPagina(context, (_) => AfspeellijstPagina(id: lijst.id)),
         trailing: Row(
@@ -14838,7 +14974,27 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
         title: Text(lijst.name),
         actions: [
           for (final actie in <Widget>[
-          if (nummers.isNotEmpty) ...[
+          // Een AI-lijst (ai_lijst.dart): alles afspelen, ook wat nog gehaald moet worden, en altijd bijsturen.
+          if (lijst.ai != null) ...[
+            TvLabelled(
+              label: 'Afspelen',
+              child: IconButton(
+                icon: const Icon(Icons.play_arrow_rounded),
+                tooltip: 'Afspelen (haalt wat nog ontbreekt)',
+                onPressed: () async {
+                  final reden = await speelAiLijst(context, id);
+                  if (reden != null && context.mounted) _srcToast(context, reden);
+                },
+              ),
+            ),
+            if (!isTv)
+              IconButton(
+                icon: const Icon(Icons.auto_awesome_rounded),
+                tooltip: 'Bijsturen met AI',
+                onPressed: () => openAiLijst(context, lijstId: id),
+              ),
+          ],
+          if (nummers.isNotEmpty && lijst.ai == null) ...[
             TvLabelled(
               label: 'Afspelen',
               child: IconButton(
@@ -14879,6 +15035,13 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
                       return;
                     }
                     await toestelRedenen.zetLijst(id, !aan);
+                    // Een AI-lijst: de pc haalt eerst wat nog ontbreekt (Saber: "aan = de gsm haalt de hele lijst bij de
+                    // pc"); wat landt, komt in de lijst en zo vanzelf hierheen.
+                    final r = context.mounted ? context.read<LibraryStore>().remote : null;
+                    if (!aan && lijst.ai != null && r != null) {
+                      unawaited(r.ask('/api/ailijst', {'op': 'haalAlles', 'id': id}).then((_) {}, onError: (Object _) {}));
+                      if (context.mounted) _srcToast(context, 'Je pc haalt de hele lijst; hij komt hier zodra hij binnen is.');
+                    }
                   },
                 );
               },
@@ -14887,7 +15050,14 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
           const SizedBox(width: 8),
         ],
       ),
-      body: nummers.isEmpty
+      body: nummers.isEmpty && lijst.ai != null
+          ? const LeegVlak(
+              teken: Icons.auto_awesome_rounded,
+              kop: 'Nog niets gehaald',
+              uitleg: 'Een AI-lijst haalt zijn nummers pas als je hem afspeelt. Tik op ▶, of op ✦ om het voorstel te '
+                  'bekijken en bij te sturen.',
+            )
+          : nummers.isEmpty
           ? const LeegVlak(
               teken: Icons.playlist_add_rounded,
               kop: 'Deze lijst is nog leeg',
@@ -20812,9 +20982,26 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
     Navigator.pop(context);
   }
 
+  /// Radio of Afspeellijst (Saber, 23-11-2026): wat je koos, of anders wat de zin vraagt ([zinVraagtLijst]).
+  bool? _lijstGekozen;
+  bool get _lijst => _lijstGekozen ?? zinVraagtLijst(widget.ctl.text);
+
+  /// Een AI-lijst: het blad dicht en het scherm van de lijst open, met deze zin.
+  void _maakLijst() {
+    final zin = widget.ctl.text.trim();
+    if (zin.isEmpty) {
+      setState(() => _fout = 'Typ eerst wat voor lijst je wil.');
+      return;
+    }
+    final nav = Navigator.of(context);
+    nav.pop();
+    unawaited(openAiLijst(nav.context, zin: zin));
+  }
+
   @override
   Widget build(BuildContext context) {
     final o = _begrepen;
+    final lijst = _lijst;
     return SafeArea(
       top: false,
       child: Padding(
@@ -20823,18 +21010,33 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('NIEUWE RADIO',
+            Text(lijst ? 'NIEUWE LIJST' : 'NIEUWE RADIO',
                 style: TextStyle(
                     fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .6, color: kAccent2)),
             const SizedBox(height: kRuimte8),
             const Text('Zeg wat je wil horen',
                 style: TextStyle(fontSize: 25, fontWeight: FontWeight.w700, letterSpacing: -.4)),
             const SizedBox(height: kRuimte6),
-            Text('Gewoon een zin. De rest zoekt hij zelf uit.',
+            Text(
+                lijst
+                    ? 'Gewoon een zin. Je ziet eerst de lijst — er wordt niets gedownload tot je hem afspeelt.'
+                    : 'Gewoon een zin. De rest zoekt hij zelf uit.',
                 style: TextStyle(fontSize: 13.5, color: _muted)),
-            const SizedBox(height: kRuimte16),
+            const SizedBox(height: kRuimte12),
+            Wrap(spacing: 8, children: [
+              ChoiceChip(
+                  label: const Text('Radio'),
+                  selected: !lijst,
+                  onSelected: (_) => setState(() => _lijstGekozen = false)),
+              ChoiceChip(
+                  label: const Text('Afspeellijst'),
+                  selected: lijst,
+                  onSelected: (_) => setState(() => _lijstGekozen = true)),
+            ]),
+            const SizedBox(height: kRuimte12),
             TextField(
               controller: widget.ctl,
+              onChanged: (_) => setState(() {}),
               autofocus: true,
               maxLines: 3,
               minLines: 2,
@@ -20851,11 +21053,14 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
               const SizedBox(height: kRuimte12),
               Text(_fout!, style: TextStyle(fontSize: 12.5, color: leesbaar(const Color(0xFFE8913A)))),
             ],
-            if (o != null) ...[
+            if (o != null && !lijst) ...[
               const SizedBox(height: kRuimte16),
               _begrip(o),
             ],
             const SizedBox(height: kRuimte16),
+            if (lijst)
+              FilledButton(onPressed: _bezig ? null : _maakLijst, child: const Text('Maak de lijst'))
+            else
             FilledButton(
               onPressed: _bezig ? null : (o == null ? _denk : _start),
               child: _bezig
@@ -28865,6 +29070,90 @@ Future<void> haalTrefferBesteBron(BuildContext context, CatalogTrackHit t, {requ
   }
 }
 
+/// Het scherm van een AI-lijst openen (ui/ai_lijst_scherm.dart): nieuw (met [zin], of leeg) of een bewaarde ([lijstId])
+/// bijsturen. Op de pc vraagt hij het de AI zelf; op een toestel via de pc (`/api/ailijst`). Natrekken gebeurt hier:
+/// je eigen bibliotheek, Deezer en iTunes.
+Future<void> openAiLijst(BuildContext context, {String? zin, String? lijstId}) {
+  final lib = context.read<LibraryStore>();
+  final cfg = context.read<AppSettings>();
+  final lijsten = context.read<Afspeellijsten>();
+  final remote = lib.remote;
+  AiService ai() => AiService(() => cfg.anthropicKey, werkruimteVan: () => cfg.anthropicWorkspace);
+  final vrager = remote == null
+      ? AiLijstVrager(
+          maakLokaal: (z) => ai().maakAiLijst(z, eigen: aiLijstEigen([for (final t in lib.tracks) '${t.artist} — ${t.title}'])),
+          bijsturenLokaal: (v, z) => ai().stuurAiLijstBij(v, z))
+      : AiLijstVrager(ask: (pad, body) => remote.ask(pad, body));
+  final bestaand = lijstId == null ? null : AiLijstVoorstel.fromJson(lijsten.byId(lijstId)?.ai);
+  final rec = RecommendService();
+  return Navigator.of(context).push(MaterialPageRoute<void>(
+    builder: (ctx) => AiLijstPagina(
+      zin: zin,
+      voorstel: bestaand,
+      lijstId: bestaand == null ? null : lijstId,
+      vrager: vrager,
+      natrekken: (nummers, voortgang) => trekLijstNa(nummers,
+          eigenId: eigenIndex([
+            for (final t in lib.tracks)
+              if (lib.gedeeldId(t.path) case final id?) (artiest: t.artist, titel: t.title, id: id),
+          ]),
+          trekNa: (l, stap) => rec.trekNa(l, elders: _itunesVoorModel, voortgang: stap),
+          bijVoortgang: voortgang),
+      opslaan: (v, id) async {
+        final i = id ?? await lijsten.maak(v.naam);
+        await lijsten.zetAi(i, ai: v.toJson(), naam: v.naam, eigen: eigenIdsVan(v));
+        return i;
+      },
+      afspelen: (id) => speelAiLijst(ctx, id),
+    ),
+  ));
+}
+
+/// Een AI-lijst afspelen (ai_lijst.dart; Saber, 23-11-2026: "Pas bij afspelen" halen): een radio uit de vaste lijst, in de
+/// volgorde van de opbouw, zonder bijvullen en zonder keuring — jij koos de nummers. Wat je al hebt, speelt meteen; wat
+/// landt, wordt de regel (`regelGeland`), komt in de lijst (dus gehouden) en verhuist bij het afsluiten naar de
+/// verzameling van de lijst. [vanaf]: de plek in de lijst waar hij begint.
+Future<String?> speelAiLijst(BuildContext context, String lijstId, {int vanaf = 0}) async {
+  final lijsten = context.read<Afspeellijsten>();
+  final lib = context.read<LibraryStore>();
+  final radio = context.read<RadioBesturing>();
+  final p = lijsten.byId(lijstId);
+  final v = AiLijstVoorstel.fromJson(p?.ai);
+  if (p == null || v == null) return 'Deze lijst is er niet meer.';
+  final perId = {
+    for (final t in lib.tracks)
+      if (lib.gedeeldId(t.path) case final i?) i: t,
+  };
+  final plan = <Radioplek>[
+    for (final n in v.actief.skip(vanaf))
+      Radioplek(
+        artiest: n.artiest,
+        titel: n.titel,
+        seconden: n.seconden > 0 ? n.seconden : null,
+        jaar: n.jaar,
+        album: n.album.isEmpty ? null : n.album,
+        hoes: n.hoes,
+        eigen: (n.eigenId == null ? null : perId[n.eigenId]) ?? lib.ownedTrack(n.artiest, n.titel),
+        bron: 'ailijst',
+      ),
+  ];
+  if (plan.isEmpty) return 'Er staat niets meer in deze lijst.';
+  final log = WarmLog('$appDir${Platform.pathSeparator}radio.log');
+  log.line('ai-lijst "${v.naam}": ${plan.length} nummers, ${plan.where((x) => x.eigen != null).length} al van jou'
+      '${v.verzameling == null ? '' : ', gehaald naar de verzameling "${v.verzameling}"'}');
+  return radio.start(plan,
+      naam: v.naam,
+      aantal: plan.length,
+      verzameling: v.verzameling,
+      spoor: log.line,
+      bijStart: (_) => radio.bijLanding = (plek, t) {
+            final id = lib.gedeeldId(t.path);
+            final nu = AiLijstVoorstel.fromJson(lijsten.byId(lijstId)?.ai);
+            if (id == null || nu == null || !regelGeland(nu, plek.artiest, plek.titel, id)) return;
+            unawaited(lijsten.zetAi(lijstId, ai: nu.toJson(), naam: lijsten.byId(lijstId)?.name ?? nu.naam, eigen: eigenIdsVan(nu)));
+          });
+}
+
 Widget _downloadControl(BuildContext context,
     {required String jobKey, required VoidCallback onDownload, String tooltip = 'Downloaden via Soulseek'}) {
   return Consumer<DownloadManager>(
@@ -30622,9 +30911,21 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
         ),
         if (!smal)
           for (final m in merken) Padding(padding: const EdgeInsets.only(left: 6), child: m),
-        _downloadControl(context,
-            jobKey: _slskKey(f),
-            onDownload: () => _downloadSoulseek(context, f, all, authority: authority)),
+        // Horen of dit bestand het juiste is (Saber, 23-11-2026: "bij elke bron"): alleen FLAC, want alleen dat kan klinken
+        // terwijl het binnenkomt; en alleen met artiest en titel, want houden bergt het op als dit nummer.
+        if (f.isFlac && authority != null && authority.artist.trim().isNotEmpty && authority.title.trim().isNotEmpty)
+          VoorproefKnop(
+              sleutel: 'bron:${_slskKey(f)}',
+              bestand: f,
+              plek: Radioplek(
+                  artiest: authority.artist,
+                  titel: authority.title,
+                  seconden: authority.seconds ?? f.durationSec,
+                  album: authority.album)),
+        _downloadControl(context, jobKey: _slskKey(f), onDownload: () {
+          if (houdLopendeProef(context, 'bron:${_slskKey(f)}')) return;
+          _downloadSoulseek(context, f, all, authority: authority);
+        }),
       ],
     ),
   );
@@ -32974,9 +33275,16 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     child: Icon(Icons.library_add_check_rounded, color: _accent2),
                   )
                 else ...[
+                  // Horen of dit het nummer is (Saber, 23-11-2026): het fragment van Deezer, anders een Soulseek-proef.
+                  VoorproefKnop(
+                      sleutel: 'zoek:${_zoekSleutel(t)}',
+                      fragment: t.preview,
+                      plek: Radioplek(artiest: t.artist, titel: t.title, seconden: t.seconden, album: t.album)),
                   SpeelNuKnop(artiest: t.artist, titel: t.title, seconden: t.seconden, album: t.album, hoes: t.cover),
-                  _downloadControl(context,
-                      jobKey: _zoekSleutel(t), onDownload: () => _downloadHit(t), tooltip: 'Downloaden (beste bron)'),
+                  _downloadControl(context, jobKey: _zoekSleutel(t), onDownload: () {
+                    if (houdLopendeProef(context, 'zoek:${_zoekSleutel(t)}')) return;
+                    _downloadHit(t);
+                  }, tooltip: 'Downloaden (beste bron)'),
                 ],
                 Icon(open ? Icons.expand_less_rounded : Icons.chevron_right_rounded, color: _muted),
               ],

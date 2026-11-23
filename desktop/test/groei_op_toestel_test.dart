@@ -12,6 +12,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:debridmusic/groeistroom.dart';
+import 'package:debridmusic/soulseek.dart' show SoulseekFile;
 import 'package:debridmusic/lan/client.dart';
 import 'package:debridmusic/lan/pairing.dart';
 import 'package:debridmusic/lan/pc_radiobron.dart';
@@ -111,7 +112,8 @@ class _Groeiend extends DownloadManager {
       bool zoekDaarnaBeter = false,
       bool losVanDeRadio = false,
       String? album,
-      void Function(void Function() stop)? bijStop}) async {
+      void Function(void Function() stop)? bijStop,
+      SoulseekFile? alleen}) async {
     gekregen = vroeg;
     zoekBeterGevraagd = zoekDaarnaBeter;
     losGevraagd[titel] = losVanDeRadio;
@@ -441,6 +443,7 @@ class _Oud extends DownloadManager {
           bool zoekDaarnaBeter = false,
       bool losVanDeRadio = false,
       String? album,
-      void Function(void Function() stop)? bijStop}) =>
+      void Function(void Function() stop)? bijStop,
+      SoulseekFile? alleen}) =>
       fail('met de proef uit de oude weg');
 }

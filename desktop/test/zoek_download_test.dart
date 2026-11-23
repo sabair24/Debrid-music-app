@@ -17,7 +17,8 @@ void main() {
   test('elke rij in Nummers heeft de downloadknop van de albumpagina', () {
     final rij = main.substring(main.indexOf('Widget _browseTrackRow('), main.indexOf('String _zoekSleutel('));
     expect(rij, contains('_downloadControl(context,'));
-    expect(rij, contains('jobKey: _zoekSleutel(t), onDownload: () => _downloadHit(t)'));
+    expect(rij, contains('_downloadControl(context, jobKey: _zoekSleutel(t), onDownload: () {'));
+    expect(rij, contains('                    _downloadHit(t);'), reason: 'tenzij een lopende voorproef gehouden wordt (23-11-2026)');
     expect(rij, contains('ownedTrack(t.artist, t.title) != null'), reason: 'wat je al hebt, krijgt het vinkje');
     expect(rij, contains('SourcesView(query: t.query)'), reason: 'een tik op de rij opent nog steeds de bronnen');
   });

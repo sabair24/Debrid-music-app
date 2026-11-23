@@ -515,7 +515,7 @@ void main() {
     test('de haal begint vroeg en valt terug op de hele uitslag zonder wie afviel', () {
       final online = File('lib/online.dart').readAsStringSync();
       final haal = online.substring(online.indexOf('  Future<String?> _haalVoorRadio('));
-      expect(haal, contains('final eerste = vroeg == null ? null : await vroegeKeus.future;'));
+      expect(haal, contains('final eerste = alleen ?? (vroeg == null ? null : await vroegeKeus.future);'));
       expect(haal, contains('if (wedloop != _Uit.volgende) return;'));
       expect(haal, contains('viel: (u) => (_radioNietBij[sleutel] ??= {}).add(u));'));
       expect(haal, contains('onPartial: vroeg == null'), reason: 'zonder groeistroom zoals altijd: de hele uitslag');

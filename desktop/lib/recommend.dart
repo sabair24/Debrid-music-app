@@ -184,8 +184,22 @@ class RecTrack {
   /// Deezers id voor de artiest — 0 als de bron het niet zei. Een naam alleen is niet genoeg: "Camille"
   /// is bij Deezer op naam de Franse (646), en de Vlaamse (108271532) vind je alleen via de buurt.
   final int artistId;
+
+  /// Deezers id voor het nummer zelf — 0 als de bron het niet zei. Stond altijd in `/search` en werd weggegooid; de
+  /// AI-lijst (ai_lijst.dart) bewaart het, zodat een regel later precies dit nummer is.
+  final int deezerId;
+
+  /// Een fragment van 30 s om te beluisteren zonder iets te downloaden (Deezer `preview`, iTunes `previewUrl`), of
+  /// null. Saber, 23-11-2026: "ja van deezer" — de voorproef in de AI-lijst.
+  final String? preview;
   const RecTrack(this.artist, this.title, this.cover,
-      {this.album = '', this.albumId = 0, this.seconds = 0, this.rank = 0, this.artistId = 0});
+      {this.album = '',
+      this.albumId = 0,
+      this.seconds = 0,
+      this.rank = 0,
+      this.artistId = 0,
+      this.deezerId = 0,
+      this.preview});
 
   /// True when there is a record to open rather than only a song to play.
   bool get hasAlbum => albumId > 0 && album.trim().isNotEmpty && artist.trim().isNotEmpty;
@@ -324,6 +338,8 @@ class RecommendService {
               seconds: (t['duration'] as num?)?.toInt() ?? 0,
               rank: (t['rank'] as num?)?.toInt() ?? 0,
               artistId: ((t['artist']?['id']) as num?)?.toInt() ?? 0,
+              deezerId: (t['id'] as num?)?.toInt() ?? 0,
+              preview: t['preview'] is String && (t['preview'] as String).startsWith('http') ? t['preview'] as String : null,
             ))
         .where((r) => r.title.isNotEmpty)
         .toList();
@@ -448,6 +464,58 @@ class RecommendService {
         '${daar.isEmpty ? '' : ' | niet op Deezer, wel op $eldersNaam: ${daar.join('; ')}'}'
         '${weg.isEmpty ? '' : ' | niet gevonden: ${weg.join('; ')}'}'
         '${stil.isEmpty ? '' : ' | geen antwoord: ${stil.join('; ')} (${zwijgt.values.toSet().join('; ')})'}');
+    return uit;
+  }
+
+  /// De nummers van een AI-lijst (ai_lijst.dart), elk apart nagetrokken: per voorstel de treffer, of null — op dezelfde
+  /// plek als in [lijst]. Anders dan [lijstOpDeezer] valt er niets stilletjes weg: de lijst toont wat niemand kent
+  /// grijs ("niet gevonden, misschien verzonnen"). Zes tegelijk bij Deezer, wat zwijgt na [adem] nog eens; wat Deezer
+  /// niet kent, gaat naar [elders] (iTunes), twee tegelijk en hoogstens [eldersHoogstens]. [voortgang]: hoeveel er klaar
+  /// zijn, na elk zestal — de lijst vult zich terwijl je kijkt.
+  Future<List<RecTrack?>> trekNa(List<AiNummer> lijst,
+      {Future<RecTrack?> Function(AiNummer n)? elders,
+      int eldersHoogstens = 60,
+      void Function(int klaar, List<RecTrack?> tot)? voortgang}) async {
+    final uit = List<RecTrack?>.filled(lijst.length, null);
+    final zwijgt = <int>{};
+    Future<void> zoek(int i) async {
+      final n = lijst[i];
+      try {
+        final j = await _haal('$_base/search?q=${Uri.encodeComponent('${n.artiest} ${n.titel}')}&limit=15');
+        if (j == null) {
+          zwijgt.add(i);
+          return;
+        }
+        zwijgt.remove(i);
+        final treffers = _tracks(j);
+        final k = besteTreffer(
+            [for (final t in treffers) (artiest: t.artist, titel: t.title, rang: t.rank, seconden: t.seconds)],
+            n.artiest,
+            n.titel);
+        if (k != null) uit[i] = treffers[k];
+      } catch (_) {
+        zwijgt.add(i);
+      }
+    }
+
+    for (var i = 0; i < lijst.length; i += 6) {
+      await Future.wait([for (var k = i; k < min(i + 6, lijst.length); k++) zoek(k)]);
+      voortgang?.call(min(i + 6, lijst.length), uit);
+    }
+    if (zwijgt.isNotEmpty) {
+      await Future<void>.delayed(adem);
+      await Future.wait([for (final i in zwijgt.toList()) zoek(i)]);
+    }
+    if (elders != null) {
+      final vragen = [for (var i = 0; i < lijst.length; i++) if (uit[i] == null) i].take(eldersHoogstens).toList();
+      for (var i = 0; i < vragen.length; i += 2) {
+        await Future.wait([
+          for (final k in vragen.skip(i).take(2))
+            elders(lijst[k]).then((t) => uit[k] = t, onError: (Object _) => null),
+        ]);
+      }
+    }
+    voortgang?.call(lijst.length, uit);
     return uit;
   }
 

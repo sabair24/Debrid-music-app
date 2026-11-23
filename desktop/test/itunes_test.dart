@@ -124,7 +124,8 @@ void main() {
       // Geteld tegen het aantal opzoekingen en niet tegen een vast getal: er kwamen er sinds de eerste drie bij
       // (Last.fm bij de start en onderweg, de rij uit je Last.fm-geschiedenis), en elke nieuwe hoort iTunes ook te vragen.
       final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
-      final opzoekingen = RegExp(r'lijstOpDeezer\(').allMatches(main).length;
+      // Ook het natrekken van een AI-lijst (`trekNa`, 23-11-2026).
+      final opzoekingen = RegExp(r'lijstOpDeezer\(|\.trekNa\(').allMatches(main).length;
       expect(opzoekingen, greaterThanOrEqualTo(3));
       expect('elders: _itunesVoorModel'.allMatches(main).length, opzoekingen);
       expect(main, contains('Future<RecTrack?> _itunesVoorModel(AiNummer n) => _itunes.vind(n.artiest, n.titel);'));

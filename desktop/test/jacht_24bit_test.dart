@@ -62,7 +62,7 @@ void main() {
       expect('achtergrond: true, extra: kHiresZoekwoorden);'.allMatches(online).length, 2,
           reason: 'de wens, en Zoek hi-res (album en nummer delen één zoekregel)');
       // ▶ wacht op de volledige uitslag als er niet meteen een bron is: "24bit" erachter maakte dat 8 s trager.
-      final radio = online.substring(online.indexOf('    final zoek = soulseek.search(zoekvraagVoorNummer(titel, artist: artiest),'));
+      final radio = online.substring(online.indexOf('        : soulseek.search(zoekvraagVoorNummer(titel, artist: artiest),'));
       expect(radio.substring(0, radio.indexOf(');\n')), isNot(contains('extra:')));
       final main = _bron('lib/main.dart');
       expect(main, isNot(contains('extra: kHiresZoekwoorden')), reason: 'downloaden en direct zoeken zonder extra');

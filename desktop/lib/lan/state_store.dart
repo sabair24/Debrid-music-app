@@ -16,6 +16,7 @@ class Playlist {
     required this.trackIds,
     required this.updatedAt,
     this.deletedAt,
+    this.ai,
   });
 
   final String id;
@@ -23,6 +24,11 @@ class Playlist {
   List<String> trackIds;
   int updatedAt;
   int? deletedAt;
+
+  /// Een AI-lijst (ai_lijst.dart; Saber, 23-11-2026): het voorstel zoals `AiLijstVoorstel.toJson` — de regels, ook die
+  /// nog niet gehaald zijn, de reserve, de hoeken en de zin. Null bij een gewone lijst. [trackIds] blijft de nummers die
+  /// je al hebt: een toestel dat dit veld niet kent, toont en speelt die gewoon, en ze zijn beschermd tegen opruimen.
+  Map<String, dynamic>? ai;
 
   bool get deleted => deletedAt != null;
 
@@ -32,6 +38,7 @@ class Playlist {
         'trackIds': trackIds,
         'updatedAt': updatedAt,
         'deletedAt': deletedAt,
+        if (ai != null) 'ai': ai,
       };
 
   static Playlist fromJson(Map<String, dynamic> m) => Playlist(
@@ -40,6 +47,7 @@ class Playlist {
         trackIds: [for (final t in (m['trackIds'] as List? ?? const [])) t.toString()],
         updatedAt: (m['updatedAt'] as int?) ?? 0,
         deletedAt: m['deletedAt'] as int?,
+        ai: m['ai'] is Map ? Map<String, dynamic>.from(m['ai'] as Map) : null,
       );
 }
 
@@ -463,6 +471,18 @@ class LanStateStore {
           final p = playlists[op['id']];
           if (p == null || at < p.updatedAt) break;
           p.trackIds = [for (final t in (op['trackIds'] as List? ?? const [])) t.toString()];
+          p.updatedAt = at;
+          durableChanged = true;
+
+        case 'playlist.ai':
+          // Een AI-lijst (ai_lijst.dart): het hele voorstel en de nummers die je al hebt in één keer, laatste schrijver
+          // wint — zoals setTracks. Een toestel dat deze op niet kent, slaat hem over ([applyOps]: onbekend = overslaan).
+          final p = playlists[op['id']];
+          if (p == null || at < p.updatedAt) break;
+          final ai = op['ai'];
+          p.ai = ai is Map ? Map<String, dynamic>.from(ai) : null;
+          if (op['trackIds'] is List) p.trackIds = [for (final t in op['trackIds'] as List) t.toString()];
+          if (op['name'] is String && (op['name'] as String).trim().isNotEmpty) p.name = op['name'] as String;
           p.updatedAt = at;
           durableChanged = true;
 

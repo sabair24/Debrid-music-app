@@ -21,6 +21,7 @@ import '../library.dart';
 import '../settings.dart';
 import '../online.dart';
 import '../radiovoorraad.dart' show RadioAlGehad, RadioLaterOpnieuw;
+import '../soulseek.dart' show SoulseekFile;
 
 /// Hoe lang een afgelopen haal opvraagbaar blijft.
 ///
@@ -185,6 +186,8 @@ class Radiohaler {
     bool zoekBeter = false,
     bool luistertMee = false,
     String? album,
+    SoulseekFile? alleen,
+    bool proef = false,
   }) {
     _ruimOp();
     // De leen kan verlopen zijn terwijl de radio nog loopt; hem hier opnieuw vastnemen is goedkoper
@@ -196,7 +199,7 @@ class Radiohaler {
       String? pad;
       var later = false;
       try {
-        final g = (instellingen?.vroegLuisteren ?? false)
+        final g = (proef || (instellingen?.vroegLuisteren ?? false))
             ? await Groeistroom.gedeeld.nieuw('toestel: $artiest — $titel')
             : null;
         haal.groei = g;
@@ -216,7 +219,8 @@ class Radiohaler {
                 zoekDaarnaBeter: zoekBeter,
                 losVanDeRadio: luistertMee,
                 album: album,
-                bijStop: (s) => haal.stop = s);
+                bijStop: (s) => haal.stop = s,
+                alleen: alleen);
       } on RadioLaterOpnieuw {
         later = true; // Soulseek op de pc doet even niet mee; het toestel probeert het straks weer
       } on RadioAlGehad catch (e) {

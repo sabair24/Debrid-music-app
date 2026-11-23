@@ -2927,6 +2927,72 @@ class PlayerStore extends ChangeNotifier
 
   ({Track t, String b, bool opB, bool speelde, Bijstelling luidA, Bijstelling luidB})? _tussendoor;
 
+  // ── Voorproef (Saber, 23-11-2026) ─────────────────────────────────────────
+
+  /// Een fragment beluisteren zonder iets te downloaden en zonder de rij aan te raken: de AI-lijst ("ja van deezer"),
+  /// Bronnen en zoekresultaten ("kunnen we ook gebruiken als ik een liedjes zoek en nie zeker weet of het dit is").
+  /// Dezelfde tweede speler als [tussendoor]: het spelende nummer pauzeert op zijn plek en gaat na [voorproefKlaar]
+  /// verder. [bron]: een http(s)-adres — een fragment van Deezer of iTunes (30 s), of een groeistroom (de Soulseek-proef).
+  /// [sleutel]: wat er klinkt, voor de knop die het startte ([voorproefVan]). [duur]: stopt vanzelf (de Soulseek-proef: het
+  /// begin van het nummer); een fragment stopt aan zijn eigen einde. Niet tijdens [tussendoor]. Geeft terug of het lukte.
+  Future<bool> voorproef(String bron, {required String sleutel, Duration? duur}) async {
+    if (_tussendoor != null) return false;
+    final al = _voorproef;
+    // Met een speaker speelt de pc de rij; die laten we gaan — de proef klinkt hier, op dit toestel.
+    final speelde = al?.speelde ?? (playing && _bijSpeaker == null);
+    if (al == null && speelde) await _player.pause();
+    _voorproef = (sleutel: sleutel, speelde: speelde);
+    _voorproefKlok?.cancel();
+    _voorproefKlok = duur == null ? null : Timer(duur, () => unawaited(voorproefKlaar(sleutel: sleutel)));
+    _log?.line('VOORPROEF: $sleutel${duur == null ? '' : ' (${duur.inSeconds} s)'}${speelde ? ' — het spelende nummer wacht' : ''}');
+    notifyListeners();
+    try {
+      final p = _proef ??= Player();
+      final n = p.platform;
+      if (n is NativePlayer) {
+        if (!_proefKlaar) {
+          await n.setProperty('replaygain', 'no');
+          _proefKlaar = true;
+        }
+        await n.setProperty('replaygain-fallback', '0');
+      }
+      await p.setVolume(_gedempt ? _volume * 0.25 : _volume);
+      await _voorproefEinde?.cancel();
+      _voorproefEinde = p.stream.completed.listen((klaar) {
+        if (klaar && _voorproef?.sleutel == sleutel) unawaited(voorproefKlaar(sleutel: sleutel));
+      });
+      await p.open(Media(bron), play: true);
+      return true;
+    } catch (e) {
+      _log?.line('VOORPROEF mislukt: $e');
+      await voorproefKlaar(sleutel: sleutel);
+      return false;
+    }
+  }
+
+  /// Wat er nu als voorproef klinkt ([voorproef]), of null.
+  String? get voorproefVan => _voorproef?.sleutel;
+
+  /// De voorproef stoppen. [sleutel]: alleen als die nog klinkt (een oude klok stopt geen nieuwe proef). [hervat]: het
+  /// nummer dat speelde, gaat verder waar het stond.
+  Future<void> voorproefKlaar({String? sleutel, bool hervat = true}) async {
+    final vp = _voorproef;
+    if (vp == null || (sleutel != null && vp.sleutel != sleutel)) return;
+    _voorproef = null;
+    _voorproefKlok?.cancel();
+    _voorproefKlok = null;
+    try {
+      await _proef?.stop();
+    } catch (_) {}
+    _log?.line('VOORPROEF klaar${vp.speelde && hervat ? ' — het nummer gaat verder' : ''}');
+    if (hervat && vp.speelde && !playing && _bijSpeaker == null) await _player.play();
+    notifyListeners();
+  }
+
+  ({String sleutel, bool speelde})? _voorproef;
+  Timer? _voorproefKlok;
+  StreamSubscription<bool>? _voorproefEinde;
+
   /// De tweede speler, voor [tussendoor]. Pas gemaakt bij de eerste keer, en daarna bewaard.
   Player? _proef;
   bool _proefKlaar = false;

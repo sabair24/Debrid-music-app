@@ -9,6 +9,7 @@
 library;
 
 import 'dart:convert';
+import 'ai_lijst.dart';
 
 import 'package:http/http.dart' as http;
 
@@ -394,6 +395,56 @@ class AiService {
       throw const AiFout('Het antwoord van het taalmodel was te lang en werd afgebroken. Probeer het zo nog eens.');
     }
     return jsonUitAntwoord(body);
+  }
+
+  /// Een AI-afspeellijst uit een zin (ai_lijst.dart; Saber, 23-11-2026). Lage inspanning, zoals de radio: opzoekwerk in wat
+  /// het model al weet; elk nummer wordt daarna nagetrokken. Ruim de tijd en de ruimte: 200 nummers en een reserve van
+  /// honderd is een lang antwoord. [eigen]: een greep uit je bibliotheek, zodat hij vooral iets anders kiest. Gooit
+  /// [AiFout] met een leesbare reden.
+  Future<AiLijstVoorstel> maakAiLijst(String zin, {List<String> eigen = const []}) async {
+    final sleutel = sleutelVan().trim();
+    if (sleutel.isEmpty) throw const AiFout('Er staat geen AI-sleutel in Instellingen.');
+    if (zin.trim().isEmpty) throw const AiFout('Typ eerst wat voor lijst je wil.');
+    final body = await _verstuur(_aiLijstVraag(aiLijstPrompt(zin, eigen: eigen), aiLijstSchema()), sleutel, werkruimteVan().trim(),
+        wacht: const Duration(minutes: 8));
+    _meldGebruik('ai-lijst', body);
+    _nietAfgebroken(body);
+    final v = leesAiLijst(jsonUitAntwoord(body), zin: zin);
+    if (v == null) {
+      throw const AiFout('Ik kreeg geen nummers terug. Probeer het wat concreter — bijvoorbeeld "60 kerstliedjes, '
+          'klassiek en modern".');
+    }
+    return v;
+  }
+
+  /// Een AI-lijst bijsturen met een zin ("meer modern", "nog 20 zoals deze"); geeft eerst het verschil ([Bijsturing]).
+  Future<Bijsturing> stuurAiLijstBij(AiLijstVoorstel v, String zin) async {
+    final sleutel = sleutelVan().trim();
+    if (sleutel.isEmpty) throw const AiFout('Er staat geen AI-sleutel in Instellingen.');
+    if (zin.trim().isEmpty) throw const AiFout('Typ eerst wat er anders moet.');
+    final body = await _verstuur(_aiLijstVraag(bijsturenPrompt(v, zin), bijsturenSchema()), sleutel, werkruimteVan().trim(),
+        wacht: const Duration(minutes: 5));
+    _meldGebruik('ai-lijst bijsturen', body);
+    _nietAfgebroken(body);
+    return leesBijsturing(jsonUitAntwoord(body), v);
+  }
+
+  Map<String, dynamic> _aiLijstVraag(String prompt, Map<String, dynamic> schema) => {
+        'model': kRadioModel,
+        'max_tokens': kAiLijstMaxTokens,
+        'output_config': {
+          'effort': 'low',
+          'format': {'type': 'json_schema', 'schema': schema},
+        },
+        'messages': [
+          {'role': 'user', 'content': prompt}
+        ],
+      };
+
+  void _nietAfgebroken(Object? body) {
+    if (body is Map && body['stop_reason'] == 'max_tokens') {
+      throw const AiFout('Het antwoord van het taalmodel was te lang en werd afgebroken. Vraag minder nummers in één keer.');
+    }
   }
 
   /// Hoeveel een vraag kostte (`usage` van de API), voor het radiologboek: `radio-model: lijst, 2140 in /

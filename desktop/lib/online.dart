@@ -4881,6 +4881,7 @@ class DownloadManager extends ChangeNotifier {
     bool losVanDeRadio = false,
     String? album,
     void Function(void Function() stop)? bijStop,
+    SoulseekFile? alleen,
   }) async {
     if (!soulseek.available) return null;
     // Heb je dit al? Dan valt er niets te halen — en, net zo belangrijk, dan mag het straks ook niet
@@ -4904,7 +4905,7 @@ class DownloadManager extends ChangeNotifier {
     bijStop?.call(() => laatRadiohaalVallen(job));
     try {
       final pad = await _haalVoorRadio(job, artiest, titel, seconden, jaar,
-          vroeg: vroeg, zoekBeter: zoekDaarnaBeter, album: album);
+          vroeg: vroeg, zoekBeter: zoekDaarnaBeter, album: album, alleen: alleen);
       if (pad != null || job.cancelled) return pad;
       // Soulseek had geen enkele kopie van dit nummer (niet: alle uploaders faalden) — dan TIDAL als reserve.
       if (!_radioZonderKandidaat.contains(_radioSleutel(artiest, titel))) return null;
@@ -5391,8 +5392,9 @@ class DownloadManager extends ChangeNotifier {
           seconds: gezag.seconds,
         );
 
+  /// [alleen]: dit ene bestand, zonder te zoeken — de Soulseek-proef in Bronnen (Saber, 23-11-2026: "bij elke bron").
   Future<String?> _haalVoorRadio(DownloadJob job, String artiest, String titel, int? seconden, int? jaar,
-      {Groei? vroeg, bool zoekBeter = false, String? album}) async {
+      {Groei? vroeg, bool zoekBeter = false, String? album, SoulseekFile? alleen}) async {
     final sleutel = _radioSleutel(artiest, titel);
     // Alleen wat ECHT dit nummer is, in de gevraagde uitvoering en ongeveer de juiste lengte — zie
     // `radiobestand.dart` voor de zes verkeerde nummers van 26-09-2026 — en niet bij een uploader die
@@ -5484,7 +5486,9 @@ class DownloadManager extends ChangeNotifier {
     }
 
     // De radio is achtergrond; ▶ (los van de radio) niet — daar wacht je op.
-    final zoek = soulseek.search(zoekvraagVoorNummer(titel, artist: artiest),
+    final zoek = alleen != null
+        ? Future.value(<SoulseekFile>[alleen])
+        : soulseek.search(zoekvraagVoorNummer(titel, artist: artiest),
         achtergrond: _radiohalen.contains(job),
         // Is het nummer al binnen (of gaf de radio het op), dan gaan de varianten die nog op de zoekrem wachten niet meer
         // uit (20-11-2026, radiometing: minstens 11 van de 137 gewachte zoektochten waren voor een nummer dat al geleverd
@@ -5504,7 +5508,7 @@ class DownloadManager extends ChangeNotifier {
         if (!vroegeKeus.isCompleted) vroegeKeus.complete(null);
       }));
     }
-    final eerste = vroeg == null ? null : await vroegeKeus.future;
+    final eerste = alleen ?? (vroeg == null ? null : await vroegeKeus.future);
 
     Future<List<SoulseekFile>?> uitslag() async {
       try {

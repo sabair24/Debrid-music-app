@@ -10,6 +10,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:debridmusic/groeistroom.dart';
+import 'package:debridmusic/soulseek.dart' show SoulseekFile;
 import 'package:debridmusic/lan/client.dart';
 import 'package:debridmusic/lan/pc_radiobron.dart';
 import 'package:debridmusic/lan/radiohaler.dart';
@@ -48,7 +49,8 @@ class _Wacht extends DownloadManager {
       bool zoekDaarnaBeter = false,
       bool losVanDeRadio = false,
       String? album,
-      void Function(void Function() stop)? bijStop}) {
+      void Function(void Function() stop)? bijStop,
+      SoulseekFile? alleen}) {
     stopGekregen = bijStop != null;
     bijStop?.call(() => gestopt++);
     return landen.future;
@@ -74,7 +76,8 @@ class _AlBinnen extends DownloadManager {
       bool zoekDaarnaBeter = false,
       bool losVanDeRadio = false,
       String? album,
-      void Function(void Function() stop)? bijStop}) async {
+      void Function(void Function() stop)? bijStop,
+      SoulseekFile? alleen}) async {
     throw RadioAlGehad(pad);
   }
 }
@@ -203,7 +206,7 @@ void main() {
       final o = _bron('lib/online.dart');
       expect(o, contains('    bijStop?.call(() => laatRadiohaalVallen(job));\n'));
       expect(o, contains('    _radiohalen.remove(job);\n    _log.line('), reason: 'uit de lijst: dan vervalt ook de vraag in de zoekrem');
-      expect(_bron('lib/lan/radiohaler.dart'), contains('                bijStop: (s) => haal.stop = s);'));
+      expect(_bron('lib/lan/radiohaler.dart'), contains('                bijStop: (s) => haal.stop = s,\n                alleen: alleen);'));
     });
   });
 }

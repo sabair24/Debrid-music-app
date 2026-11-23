@@ -389,7 +389,7 @@ void main() {
       final online = _lees('lib/online.dart');
       expect(online,
           contains('var gezag = gezagVoorHaal(artiest: artiest, titel: titel, album: album, jaar: jaar, seconden: seconden);'));
-      expect(online, contains('vroeg: vroeg, zoekBeter: zoekDaarnaBeter, album: album);'));
+      expect(online, contains('vroeg: vroeg, zoekBeter: zoekDaarnaBeter, album: album, alleen: alleen);'));
       expect(online, contains('final velden = veldenNaHaal(gezag,'));
       expect(online, contains('gezag: metPlek(gezag, plek),'));
       expect(main, contains('if (mode.owner) DownloadManager.plekOpAlbum = deezerPlekOpAlbum;'));

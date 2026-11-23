@@ -21,6 +21,7 @@ import '../models.dart';
 import '../radio.dart';
 import '../radiovoorraad.dart' show RadioLaterOpnieuw;
 import 'client.dart';
+import '../soulseek.dart' show SoulseekFile;
 import 'vaste_naam.dart' show kPcHost;
 
 /// Hoe vaak er gevraagd wordt hoe het met een haal staat.
@@ -181,8 +182,15 @@ class PcRadiobron implements Radiobron {
   /// [zoekBeter]: ▶ op dit toestel — de pc zoekt na het landen een betere kopie (de radio niet).
   /// [klinkt]: de pc zegt dat het nummer al te horen is terwijl het nog binnenkomt (groeistroom.dart op de
   /// pc) — met het nummer van die groei, één keer. Dan peilt dit ook vaker: iemand wacht op geluid.
+  /// [bijStop]: het handvat om deze haal af te breken (de Soulseek-proef: de pc laat hem los). [alleen]: dit ene bestand.
+  /// [proef]: de pc maakt altijd een groeistroom, ook als "al spelen terwijl het binnenkomt" daar uit staat.
   @override
-  Future<Track?> haal(Radioplek plek, {bool zoekBeter = false, void Function(String groeiId)? klinkt}) async {
+  Future<Track?> haal(Radioplek plek,
+      {bool zoekBeter = false,
+      void Function(String groeiId)? klinkt,
+      void Function(void Function() stop)? bijStop,
+      SoulseekFile? alleen,
+      bool proef = false}) async {
     // Geen pc is geen mislukte plek maar een plek voor straks: op de sportschool valt de pc anderhalf
     // tot vijf minuten weg (zie `sportschool-pc-onbereikbaar`), en elke keer werd zo het plan
     // opgebrand — acht plekken per poging. Zie [RadioLaterOpnieuw].
@@ -201,6 +209,8 @@ class PcRadiobron implements Radiobron {
         if ((plek.album ?? '').trim().isNotEmpty) 'album': plek.album,
         if (zoekBeter) 'zoekBeter': true,
         if (klinkt != null) 'meeluisteren': true,
+        if (alleen != null) 'bestand': alleen.toJson(),
+        if (proef) 'proef': true,
       });
       final gekregen = a['id'];
       if (gekregen is! String || gekregen.isEmpty) return null;
@@ -214,6 +224,12 @@ class PcRadiobron implements Radiobron {
     }
 
     if (ronde != _ronde) return null;
+    var gestopt = false;
+    bijStop?.call(() {
+      if (gestopt) return;
+      gestopt = true;
+      unawaited(c.ask('/api/radio', {'op': 'laatvallen', 'id': id}).catchError((_) => <String, dynamic>{}));
+    });
 
     final tot = DateTime.now().add(geduld);
     var gemeld = false;
@@ -221,7 +237,7 @@ class PcRadiobron implements Radiobron {
       // Wacht er iemand op geluid ([klinkt]) en klinkt het nog niet, dan elke halve seconde: de pc laat
       // een vlot nummer na 2 à 4 s klinken, en een peiling om de drie seconden at daar de helft van op.
       await Future<void>.delayed(klinkt != null && !gemeld ? kPeilritmeVoorGeluid : peilritme);
-      if (ronde != _ronde) return null; // de radio is intussen afgesloten
+      if (ronde != _ronde || gestopt) return null; // de radio is intussen afgesloten, of de proef is voorbij
       Map<String, dynamic> a;
       try {
         a = await c.ask('/api/radio', {'op': 'stand', 'id': id});
