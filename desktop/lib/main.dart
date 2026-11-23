@@ -124,6 +124,7 @@ import 'facts_warmer.dart';
 import 'ffmpeg.dart';
 import 'fingerprint.dart';
 import 'flac_tags.dart';
+import 'geweerde_zinnen.dart' show GeleerdeZinnen;
 import 'groeistroom.dart';
 import 'mp3_tags.dart';
 import 'aanbevolen.dart' show AanbevolenLijst, AanbevolenVoorJou, kAanbevolenInRij;
@@ -1009,6 +1010,12 @@ Future<void> main() async {
   if (mode.owner) {
     soulseek.client.bijBericht = (id, op, van, tekst) => uploaderberichten
         .voegToe(Uploaderbericht(id: id, ms: op.millisecondsSinceEpoch, uploader: van, tekst: tekst));
+    // Namen die het netwerk weert en die de app zelf leerde (geweerde_zinnen.dart, 23-11-2026: Nicki Minaj).
+    final geleerd = GeleerdeZinnen('$appDir${Platform.pathSeparator}geweerde_zinnen.json');
+    final alGeleerd = await geleerd.laad();
+    soulseek.client.geleerdeZinnen.addAll(alGeleerd);
+    soulseek.client.geweerdeZinnen.addAll(alGeleerd);
+    soulseek.client.bijGeleerdeZin = (naam) => unawaited(geleerd.voegToe(naam, DateTime.now()));
   }
   // Wat er van elk bestand gemeten is. Vóór de eerste scan, want `firstIsBetter` vraagt hier bij elke
   // vergelijking naar — en een lijst die nog niet is ingelezen beschermt niets.

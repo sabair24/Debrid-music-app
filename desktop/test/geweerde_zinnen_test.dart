@@ -83,4 +83,89 @@ void main() {
     expect(s, contains('        _conn!.send(_message(26, (_W()..u32(t)..str(vraag)).bytes())); // FileSearch'));
     expect(RegExp(r'_message\(26,').allMatches(s).length, 1, reason: 'één plek waar gezocht wordt');
   });
+  // Saber, 23-11-2026: "de app vindt niets van Nicki minaj ???? … Blijft maar draaien ook weer ???". Elke vraag met haar
+  // naam bleef stil; "Minaj Starships" gaf 929 bestanden in 1,8 s.
+  test('DE KERN: "Nicki Minaj" wordt "Minaj"', () {
+    expect(zonderGeweerdeZinnen('Nicki Minaj Starships', kBekendeGeweerdeZinnen), 'Minaj Starships');
+    expect(zonderGeweerdeZinnen('nicki minaj', kBekendeGeweerdeZinnen), 'minaj');
+    expect(zonderGeweerdeZinnen('Nicki Minaj Pink Friday: Roman Reloaded', kBekendeGeweerdeZinnen),
+        'Minaj Pink Friday: Roman Reloaded');
+    expect(zonderGeweerdeZinnen('*icki Minaj Starships', kBekendeGeweerdeZinnen), 'Minaj Starships');
+  });
+
+  group('zelf leren', () {
+    ({String naam, String proefvraag})? proef(String v,
+            {Set<String> geweerd = const {}, Set<String> niet = const {}, bool zwijgt = false, int opRij = 0}) =>
+        geweerdeNaamProef(v, geweerd: geweerd, nietGeweerd: niet, serverZwijgt: zwijgt, zonderAntwoordOpRij: opRij);
+
+    test('DE KERN: een stille vraag met twee woorden vooraan: één proef zonder het eerste woord', () {
+      final p = proef('Charli Xcx Brat');
+      expect(p?.naam, 'charli xcx');
+      expect(p?.proefvraag, 'Xcx Brat');
+      expect(proef('Nicki Minaj', geweerd: {})?.proefvraag, 'Minaj', reason: 'ook de kale naam (de artiestpagina)');
+    });
+
+    test('DE GRENS: geen proef als de server zwijgt of net zweeg, bij een bekende of geprobeerde naam, of zonder twee echte woorden',
+        () {
+      expect(proef('Charli Xcx Brat', zwijgt: true), isNull);
+      expect(proef('Charli Xcx Brat', opRij: 1), isNull, reason: 'de vorige vraag bleef ook stil: dat zegt niets over een naam');
+      expect(proef('Charli Xcx Brat', geweerd: {'charli xcx'}), isNull);
+      expect(proef('Charli Xcx Brat', niet: {'charli xcx'}), isNull, reason: 'niet bij elke stille vraag opnieuw');
+      expect(proef('*harli Xcx Brat'), isNull, reason: 'een joker');
+      expect(proef('A Xcx Brat'), isNull, reason: 'één letter');
+      expect(proef('Twarres'), isNull);
+      expect(proef('2024 01 Brat'), isNull, reason: 'geen letters');
+    });
+
+    test('bewezen: minstens drie bestanden met de hele naam in hun pad — niet bij een naam die gewoon niemand heeft', () {
+      expect(bevatNaam(r'@@x\Nicki_Minaj\Pink Friday\01 Starships.flac', 'nicki minaj'), isTrue);
+      expect(bevatNaam(r'@@x\Nicki Minaj - Starships (Explicit).flac', 'nicki minaj'), isTrue);
+      expect(bevatNaam(r'@@x\Minaj\Starships.flac', 'nicki minaj'), isFalse);
+      expect(bevatNaam(r'@@x\Nickiminaj\Starships.flac', 'nicki minaj'), isFalse, reason: 'hele woorden');
+      expect(bevatNaam(r'@@x\Mnicki Minajx\Starships.flac', 'nicki minaj'), isFalse, reason: 'niet binnen een langer woord');
+      final nicki = [
+        r'@@a\Nicki Minaj\Starships.flac',
+        r'@@b\Nicki Minaj - Pink Friday Roman Reloaded\12 Starships.flac',
+        r'@@c\nicki.minaj-starships.mp3',
+        r'@@d\Starships (Minaj).flac',
+      ];
+      expect(geweerdBewezen(nicki, 'nicki minaj'), isTrue);
+      expect(geweerdBewezen(nicki.take(2), 'nicki minaj'), isFalse, reason: 'twee is niet genoeg');
+      expect(geweerdBewezen([r'@@a\Xcx\Brat.flac', r'@@b\Brat Pack\Brat.flac', r'@@c\Brat.mp3'], 'charli xcx'), isFalse,
+          reason: 'zonder het eerste woord vond hij iets anders: dat bewijst niets');
+      expect(kGeweerdBewijs, 3);
+    });
+
+    test('wat geleerd is, blijft na een herstart', () async {
+      final map = Directory.systemTemp.createTempSync('dm_geweerd_');
+      addTearDown(() => map.deleteSync(recursive: true));
+      final a = GeleerdeZinnen('${map.path}/geweerde_zinnen.json');
+      expect(await a.laad(), isEmpty);
+      await a.voegToe('Charli XCX', DateTime(2026, 11, 23));
+      await a.voegToe('charli xcx', DateTime(2026, 11, 24));
+      final b = GeleerdeZinnen('${map.path}/geweerde_zinnen.json');
+      expect(await b.laad(), {'charli xcx'});
+      expect(File('${map.path}/geweerde_zinnen.json').readAsStringSync(), contains('2026-11-23'),
+          reason: 'de eerste dag blijft');
+    });
+
+    test('aangesloten: de proef vóór de telling van stille vragen, het geleerde overleeft lijst 160, en de pc bewaart het', () {
+      final s = _bron('lib/soulseek.dart');
+      final stil = s.substring(s.indexOf('    } else if (run.merged.isEmpty && fout == null) {'));
+      expect(stil.indexOf('final zonder = await _zonderGeweerdeNaam(queries,'), greaterThan(0));
+      expect(stil.indexOf('final zonder = await _zonderGeweerdeNaam(queries,'),
+          lessThan(stil.indexOf('client.noteerZoekuitslag(antwoord: false)')),
+          reason: 'een geweerde naam is geen zwijgende server');
+      expect(s, contains('      if (!proef) {\n        final zonder = await _zonderGeweerdeNaam('));
+      expect(s,
+          contains('    final uit = await search([p.proefvraag], achtergrond: achtergrond, telling: telling, nogNodig: nogNodig, proef: true);'));
+      expect(s, contains('    if (!geweerdBewezen(uit.map((f) => f.filename), p.naam)) {'));
+      expect(s, contains('    client.geleerdeZinnen.add(p.naam);\n    client.geweerdeZinnen.add(p.naam);\n'
+          '    client.bijGeleerdeZin?.call(p.naam);\n'));
+      expect(s, contains('              ..addAll(kBekendeGeweerdeZinnen)\n              ..addAll(client.geleerdeZinnen)\n'));
+      final main = _bron('lib/main.dart');
+      expect(main, contains("    final geleerd = GeleerdeZinnen('\$appDir\${Platform.pathSeparator}geweerde_zinnen.json');"));
+      expect(main, contains('    soulseek.client.bijGeleerdeZin = (naam) => unawaited(geleerd.voegToe(naam, DateTime.now()));'));
+    });
+  });
 }

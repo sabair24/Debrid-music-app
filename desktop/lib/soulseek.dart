@@ -928,6 +928,15 @@ class SoulseekClient {
   /// geweerde_zinnen.dart. Begint met wat er gemeten is, voor het geval de lijst (nog) niet binnen is.
   final Set<String> geweerdeZinnen = {...kBekendeGeweerdeZinnen};
 
+  /// Wat de app zelf leerde ([SlskSession.search], [geweerdeNaamProef]); overleeft een nieuwe lijst 160.
+  final Set<String> geleerdeZinnen = {};
+
+  /// Namen die al geprobeerd zijn en niet geweerd bleken (of nu geprobeerd worden): niet bij elke stille vraag opnieuw.
+  final Set<String> nietGeweerd = {};
+
+  /// Een naam is net geleerd: bewaren ([GeleerdeZinnen]); gezet door main.dart op de pc.
+  void Function(String naam)? bijGeleerdeZin;
+
   /// Een privébericht van een uploader kwam binnen (al bevestigd aan de server) — zie uploaderberichten.dart.
   void Function(int id, DateTime op, String van, String tekst)? bijBericht;
 
@@ -2005,12 +2014,14 @@ class SlskSession {
   ///
   /// [eigenRem]: een rem die vóór [zoekrem] komt, voor werk dat zelf minder mag dan de rest van de achtergrond (de
   /// blijvende jacht, [kJachtZoekPerVijfMinuten] in blijvende_jacht.dart).
+  /// [proef]: dit is de proef zonder het eerste woord ([_zonderGeweerdeNaam]) — die probeert zelf niets meer.
   Future<List<SoulseekFile>> search(List<String> queries,
       {void Function(List<SoulseekFile>)? onPartial,
       bool achtergrond = false,
       bool telling = false,
       bool Function()? nogNodig,
-      Zoekrem? eigenRem}) async {
+      Zoekrem? eigenRem,
+      bool proef = false}) async {
     if (client.blocked) return const [];
     if (!await _ensure()) {
       // Niet ingelogd en (nog) niet opnieuw mogen: dan is er niet gezocht. Dat stond nergens, en op het scherm was het
@@ -2093,6 +2104,13 @@ class SlskSession {
           'de verbinding geldt als dood; de volgende zoekopdracht logt opnieuw in');
       _drop();
     } else if (run.merged.isEmpty && fout == null) {
+      // Een naam die het netwerk weert? Eerst één proef zonder het eerste woord — vóór de telling van stille vragen, want
+      // een geweerde naam is geen zwijgende server (23-11-2026: vier vragen met "Nicki Minaj" zetten tien minuten alle
+      // achtergrondzoeken stil).
+      if (!proef) {
+        final zonder = await _zonderGeweerdeNaam(queries, achtergrond: achtergrond, telling: telling, nogNodig: nogNodig);
+        if (zonder != null) return zonder;
+      }
       // **Het hele venster zonder één antwoord, met hoeveel we zochten.** Op 25-10-2026 om 17:43 gaf ook "Daft Punk
       // Digital Love" (eerder 1002 bestanden) 0 in 8,0 s: de server gaf onze vragen niet meer door, na ~25 proefvragen
       // in tien minuten. Hoeveel er te veel is, stond nergens — met deze regel staat het er de volgende keer wel.
@@ -2117,6 +2135,36 @@ class SlskSession {
       final omslag = client.noteerZoekuitslag(antwoord: true);
       if (omslag != null) client.logboek(omslag);
     }
+    return uit;
+  }
+
+  /// **Een naam die het netwerk weert, zelf leren** — zie geweerde_zinnen.dart. [queries] bleef helemaal stil: is dat
+  /// de naam vooraan ([geweerdeNaamProef])? Eén proef zonder het eerste woord; geeft die bestanden met de hele naam in hun
+  /// pad ([geweerdBewezen]), dan is de naam geleerd en is de proef het antwoord. Null: geen proef, of niet bewezen.
+  Future<List<SoulseekFile>?> _zonderGeweerdeNaam(List<String> queries,
+      {required bool achtergrond, required bool telling, bool Function()? nogNodig}) async {
+    if (queries.isEmpty) return null;
+    final vraag = zonderGeweerdeZinnen(queries.first, client.geweerdeZinnen);
+    final p = geweerdeNaamProef(vraag,
+        geweerd: client.geweerdeZinnen,
+        nietGeweerd: client.nietGeweerd,
+        serverZwijgt: client.serverZwijgt,
+        zonderAntwoordOpRij: client.zonderAntwoordOpRij);
+    if (p == null) return null;
+    client.nietGeweerd.add(p.naam); // nu bezig: een tweede stille vraag met dezelfde naam probeert niet ook
+    client.logboek('zoekopdracht "$vraag": geen enkel antwoord — één proef zonder het eerste woord: "${p.proefvraag}"');
+    final uit = await search([p.proefvraag], achtergrond: achtergrond, telling: telling, nogNodig: nogNodig, proef: true);
+    if (!geweerdBewezen(uit.map((f) => f.filename), p.naam)) {
+      client.logboek('proef "${p.proefvraag}": ${uit.length} bestanden, niet genoeg met "${p.naam}" — '
+          'het netwerk weert die naam niet');
+      return null;
+    }
+    client.nietGeweerd.remove(p.naam);
+    client.geleerdeZinnen.add(p.naam);
+    client.geweerdeZinnen.add(p.naam);
+    client.bijGeleerdeZin?.call(p.naam);
+    client.logboek('het netwerk weert "${p.naam}": zonder het eerste woord ${uit.length} bestanden, met die naam erin — '
+        'geleerd, voortaan zo gezocht');
     return uit;
   }
 
@@ -2201,6 +2249,7 @@ class SlskSession {
             client.geweerdeZinnen
               ..clear()
               ..addAll(kBekendeGeweerdeZinnen)
+              ..addAll(client.geleerdeZinnen)
               ..addAll(zinnen.where((z) => z.isNotEmpty));
             client.logboek('de server weert ${zinnen.length} zoekzinnen (code 160): '
                 '${zinnen.take(40).join(', ')}${zinnen.length > 40 ? ', …' : ''}');
