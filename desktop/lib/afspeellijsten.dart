@@ -63,6 +63,31 @@ class Afspeellijsten extends GedeeldeOps {
   String _nieuwId() =>
       'pl${nu.toRadixString(36)}${_random.nextInt(0x100000).toRadixString(36).padLeft(4, '0')}';
 
+  /// Een AI-lijst (ai_lijst.dart) bewaren of bijwerken: het voorstel [ai] (`AiLijstVoorstel.toJson`), de naam en de
+  /// nummers die je al hebt ([eigen], gedeelde id's, in de volgorde van de lijst). Eén op, zodat een toestel nooit een
+  /// half bijgewerkte lijst ziet.
+  Future<void> zetAi(String id, {required Map<String, dynamic> ai, required String naam, required List<String> eigen}) async {
+    final at = nu;
+    final oud = _vanPc[id];
+    await pasToe(
+      [
+        {'type': 'playlist.ai', 'id': id, 'ai': ai, 'name': naam, 'trackIds': eigen, 'at': at}
+      ],
+      vooruit: () {
+        final p = _vanPc[id];
+        if (p == null) return;
+        p
+          ..ai = ai
+          ..name = naam
+          ..trackIds = List.of(eigen)
+          ..updatedAt = at;
+      },
+      terug: () {
+        if (oud != null) _vanPc[id] = oud;
+      },
+    );
+  }
+
   /// Maak een lijst en geef zijn id terug.
   Future<String> maak(String naam, {List<String> nummers = const []}) async {
     final id = _nieuwId();
