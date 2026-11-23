@@ -7,6 +7,7 @@ import 'dart:typed_data' show BytesBuilder;
 import 'package:flutter/foundation.dart';
 
 import '../ai.dart';
+import '../ai_lijst_vraag.dart' show AiLijstTaken;
 import '../beeldvorm.dart' show KopInstelling, KopScherm, kopSoort;
 import '../album_facts.dart';
 import '../cloud/device_identity.dart';
@@ -107,6 +108,8 @@ String? weigerVanBuiten(String pad, String methode) {
     // De voorstellen voor verzamelingen (verzamelvoorstellen.dart): lezen, Claude laten vragen, en zeggen wat je deed.
     // Er verdwijnt niets mee; het verhuizen en rechtzetten gaat langs /api/edit.
     '/api/verzamelvoorstel',
+    // AI-afspeellijsten (ai_lijst_vraag.dart): een toestel vraagt een lijst of een bijsturing, de pc vraagt het de AI.
+    '/api/ailijst',
     // Het schudlogboek van een toestel (schudlog.dart): onderweg schudt Saber ook (26-10-2026: "Ik heb vandaag op de gsm
     // verschillende keer gesnuffeld" — en niets kwam aan). schud.log heeft een plafond ([kSchudLogBytes]).
     '/api/diag/schud',
@@ -1085,6 +1088,17 @@ class LanServer {
     return _json(req.response, await v.beantwoord(body, opPc: vraagVerzamelvoorstellen));
   }
 
+  /// AI-afspeellijsten voor een toestel (ai_lijst_vraag.dart): gezet door de app als er een AI-sleutel is.
+  AiLijstTaken? aiLijsten;
+
+  Future<void> _aiLijst(HttpRequest req) async {
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final t = aiLijsten;
+    if (t == null) return _unavailable(req, 'Deze pc kan geen AI-lijsten maken (geen AI-sleutel).');
+    return _json(req.response, t.beantwoord(body));
+  }
+
   /// Nummers ophalen voor de radio van een gekoppeld toestel. Zie `radiohaler.dart`.
   late final Radiohaler radiohaler = Radiohaler(downloads, soulseek, library, settings)
     ..opProef = ((id) => state.radioOpProefIds.contains(id))
@@ -1486,6 +1500,8 @@ class LanServer {
         return _radio(req);
       case '/api/verzamelvoorstel':
         return _verzamelvoorstel(req);
+      case '/api/ailijst':
+        return _aiLijst(req);
       case '/api/diag/warmte':
         return _warmte(req);
       case '/api/diag/verbruik':

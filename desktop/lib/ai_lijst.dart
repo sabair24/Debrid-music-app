@@ -246,6 +246,13 @@ Stel die lijst samen.
 9. Een korte naam voor de lijst, in het Nederlands.
 ''';
 
+/// Een greep uit wat je al hebt ("artiest — titel"), voor [aiLijstPrompt]: gelijk verdeeld over [regels], hoogstens [hoeveel].
+List<String> aiLijstEigen(List<String> regels, {int hoeveel = 40}) {
+  if (regels.isEmpty) return const [];
+  final stap = (regels.length / hoeveel).ceil().clamp(1, regels.length);
+  return [for (var i = 0; i < regels.length; i += stap) regels[i]].take(hoeveel).toList();
+}
+
 /// Leest het antwoord van [aiLijstPrompt]: dubbels weg, hoogstens [kAiLijstPerArtiest] per artiest (wat erover gaat,
 /// schuift naar de reserve), het aantal begrensd. Null als er niets bruikbaars in staat.
 AiLijstVoorstel? leesAiLijst(Object? j, {required String zin}) {
@@ -396,6 +403,21 @@ class Bijsturing {
   final String? naam;
 
   bool get leeg => weg.isEmpty && erbij.isEmpty;
+
+  Map<String, dynamic> toJson() => {
+        'weg': weg,
+        'erbij': [for (final n in erbij) n.toJson()],
+        if (naam != null) 'naam': naam,
+      };
+
+  static Bijsturing fromJson(Object? m) {
+    if (m is! Map) return const Bijsturing(weg: [], erbij: []);
+    return Bijsturing(
+      weg: [for (final i in (m['weg'] is List ? m['weg'] as List : const [])) if (i is num) i.toInt()],
+      erbij: [for (final x in (m['erbij'] is List ? m['erbij'] as List : const [])) ?LijstNummer.fromJson(x)],
+      naam: m['naam'] is String && (m['naam'] as String).trim().isNotEmpty ? m['naam'] as String : null,
+    );
+  }
 }
 
 /// Het schema voor [bijsturenPrompt].

@@ -24,6 +24,8 @@ import 'acoustid.dart';
 import 'venster.dart';
 import 'aanbevelingplan.dart';
 import 'ai.dart';
+import 'ai_lijst.dart';
+import 'ai_lijst_vraag.dart';
 import 'radio.dart';
 import 'modelbudget.dart';
 import 'pc_model.dart';
@@ -2443,6 +2445,17 @@ Future<void> main() async {
         tempo: _radiotempo,
         spoor: radioLog.line,
       );
+      // AI-afspeellijsten voor een toestel (ai_lijst_vraag.dart; Saber, 23-11-2026): de sleutel staat hier.
+      s.aiLijsten = AiLijstTaken((vraag) async {
+        final ai = AiService(() => settings.anthropicKey, werkruimteVan: () => settings.anthropicWorkspace);
+        final zin = '${vraag['zin'] ?? ''}';
+        if (vraag['op'] == 'bijsturen') {
+          final v = AiLijstVoorstel.fromJson(vraag['voorstel']);
+          if (v == null) throw const AiFout('De lijst kwam niet goed aan.');
+          return {'bijsturing': (await ai.stuurAiLijstBij(v, zin)).toJson()};
+        }
+        return {'voorstel': (await ai.maakAiLijst(zin, eigen: aiLijstEigen([for (final t in library.tracks) '${t.artist} — ${t.title}']))).toJson()};
+      });
       // De voorstellen van Claude voor verzamelingen, ook voor een toestel (verzamelvoorstellen.dart).
       s.verzamelvoorstellen = verzamelvoorstellen;
       s.vraagVerzamelvoorstellen = () => verzamelvoorstellen.vraagOpPc(() => maakVerzamelvoorstellen(library,
