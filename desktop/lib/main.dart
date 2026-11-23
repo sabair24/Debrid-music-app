@@ -1513,6 +1513,61 @@ Future<void> main() async {
         verzamelingNamen: {...library.verzamelingNamen, ...verzamelingen.namen}));
   }
   final lijsten = Afspeellijsten();
+  // "Op dit toestel houden" op een AI-lijst (ai_lijst.dart; Saber, 23-11-2026: "aan = de gsm haalt de hele lijst bij de
+  // pc"): alles wat nog ontbreekt, één voor één op de achtergrond, zoals de radio haalt. Elke landing wordt de regel, gaat
+  // de lijst in (en zo naar het toestel dat hem houdt) en meteen naar de verzameling van de lijst — er is geen radio die
+  // afsluit om het te verhuizen. Eén keer tegelijk per lijst; wat niet lukt, komt bij een volgende keer terug.
+  final aiLijstHalen = <String>{};
+  Future<void> haalAiLijstHelemaal(String id) async {
+    if (!mode.owner || !aiLijstHalen.add(id)) return;
+    final log = WarmLog('$appDir${Platform.pathSeparator}radio.log');
+    final bron = EigenRadiobron(downloads: downloads, soulseek: soulseek, library: library, instellingen: settings);
+    var gehaald = 0, mislukt = 0;
+    try {
+      final begin = AiLijstVoorstel.fromJson(lijsten.byId(id)?.ai);
+      if (begin == null || await bron.begin() != null) return;
+      final open = [for (final n in begin.actief) if (n.eigenId == null) (artiest: n.artiest, titel: n.titel)];
+      log.line('ai-lijst "${begin.naam}": de hele lijst halen voor een toestel — ${open.length} nummers ontbreken');
+      for (final o in open) {
+        final nu = AiLijstVoorstel.fromJson(lijsten.byId(id)?.ai);
+        if (nu == null) break; // de lijst is weg
+        final regel = nu.actief.where((n) => n.artiest == o.artiest && n.titel == o.titel).firstOrNull;
+        if (regel == null || regel.eigenId != null) continue; // intussen weggehaald, of al binnen
+        Track? t;
+        var vanJou = false;
+        try {
+          t = await bron.haal(Radioplek(
+              artiest: regel.artiest,
+              titel: regel.titel,
+              seconden: regel.seconden > 0 ? regel.seconden : null,
+              jaar: regel.jaar,
+              album: regel.album.isEmpty ? null : regel.album,
+              bron: 'ailijst'));
+        } on AlVanJou catch (e) {
+          t = e.nummer;
+          vanJou = true;
+        } on RadioLaterOpnieuw catch (e) {
+          log.line('ai-lijst "${nu.naam}": halen even niet (${e.waarom}) — de rest bij een volgende keer');
+          break;
+        } catch (_) {}
+        final tid = t == null ? null : library.gedeeldId(t.path);
+        if (t == null || tid == null) {
+          mislukt++;
+          continue;
+        }
+        final verder = AiLijstVoorstel.fromJson(lijsten.byId(id)?.ai);
+        if (verder == null || !regelGeland(verder, regel.artiest, regel.titel, tid)) continue;
+        await lijsten.zetAi(id, ai: verder.toJson(), naam: lijsten.byId(id)?.name ?? verder.naam, eigen: eigenIdsVan(verder));
+        if (!vanJou && verder.verzameling != null) await library.naarVerzameling([t.path], verder.verzameling);
+        gehaald++;
+      }
+      log.line('ai-lijst "${begin.naam}": $gehaald gehaald${mislukt == 0 ? '' : ', $mislukt niet gevonden'}');
+    } finally {
+      bron.einde();
+      aiLijstHalen.remove(id);
+    }
+  }
+
   // Favorieten en de afspeellijsten die je op dit toestel houdt (Saber, 28-10-2026): wat erbij komt gaat op je gsm,
   // wat eruit gaat verdwijnt vanzelf — tenzij het er ook om een andere reden staat (toestel_redenen.dart). Even
   // wachten na elke wijziging, zodat een rits hartjes één ronde is.
@@ -2493,7 +2548,7 @@ Future<void> main() async {
         spoor: radioLog.line,
       );
       // AI-afspeellijsten voor een toestel (ai_lijst_vraag.dart; Saber, 23-11-2026): de sleutel staat hier.
-      s.aiLijsten = AiLijstTaken((vraag) async {
+      s.aiLijsten = AiLijstTaken(haalAlles: (id) => unawaited(haalAiLijstHelemaal(id)), (vraag) async {
         final ai = AiService(() => settings.anthropicKey, werkruimteVan: () => settings.anthropicWorkspace);
         final zin = '${vraag['zin'] ?? ''}';
         if (vraag['op'] == 'bijsturen') {
@@ -14980,6 +15035,13 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
                       return;
                     }
                     await toestelRedenen.zetLijst(id, !aan);
+                    // Een AI-lijst: de pc haalt eerst wat nog ontbreekt (Saber: "aan = de gsm haalt de hele lijst bij de
+                    // pc"); wat landt, komt in de lijst en zo vanzelf hierheen.
+                    final r = context.mounted ? context.read<LibraryStore>().remote : null;
+                    if (!aan && lijst.ai != null && r != null) {
+                      unawaited(r.ask('/api/ailijst', {'op': 'haalAlles', 'id': id}).then((_) {}, onError: (Object _) {}));
+                      if (context.mounted) _srcToast(context, 'Je pc haalt de hele lijst; hij komt hier zodra hij binnen is.');
+                    }
                   },
                 );
               },
@@ -14988,7 +15050,14 @@ class _AfspeellijstPaginaState extends State<AfspeellijstPagina> {
           const SizedBox(width: 8),
         ],
       ),
-      body: nummers.isEmpty
+      body: nummers.isEmpty && lijst.ai != null
+          ? const LeegVlak(
+              teken: Icons.auto_awesome_rounded,
+              kop: 'Nog niets gehaald',
+              uitleg: 'Een AI-lijst haalt zijn nummers pas als je hem afspeelt. Tik op ▶, of op ✦ om het voorstel te '
+                  'bekijken en bij te sturen.',
+            )
+          : nummers.isEmpty
           ? const LeegVlak(
               teken: Icons.playlist_add_rounded,
               kop: 'Deze lijst is nog leeg',

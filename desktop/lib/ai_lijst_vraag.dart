@@ -65,8 +65,12 @@ class AiLijstVrager {
 /// en geeft het antwoord als JSON. Een antwoord wordt één keer opgehaald; wat na [kAiLijstGeduld] niemand ophaalde,
 /// verdwijnt.
 class AiLijstTaken {
-  AiLijstTaken(this.doe);
+  AiLijstTaken(this.doe, {this.haalAlles});
   final Future<Map<String, dynamic>> Function(Map<String, dynamic> vraag) doe;
+
+  /// "Op dit toestel houden" op een AI-lijst (Saber: "aan = de gsm haalt de hele lijst bij de pc"): de pc haalt alles wat
+  /// nog ontbreekt, op de achtergrond. Null: deze pc kan dat niet.
+  final void Function(String lijstId)? haalAlles;
   final Map<String, ({DateTime sinds, Map<String, dynamic>? uit})> _taken = {};
   int _nr = 0;
 
@@ -79,6 +83,13 @@ class AiLijstTaken {
       if (t.uit == null) return {'klaar': false};
       _taken.remove(id);
       return {'klaar': true, ...t.uit!};
+    }
+    if (op == 'haalAlles') {
+      final id = '${body['id'] ?? ''}';
+      final h = haalAlles;
+      if (h == null || id.isEmpty) return {'fout': 'Deze pc kan de lijst niet halen.'};
+      h(id);
+      return {'gestart': true};
     }
     if (op != 'maak' && op != 'bijsturen') return {'fout': 'Onbekende vraag.'};
     final nu = DateTime.now();

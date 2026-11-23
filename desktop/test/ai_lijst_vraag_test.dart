@@ -75,4 +75,13 @@ void main() {
     final vrager = AiLijstVrager(maakLokaal: (zin) async => _voorstel(zin));
     expect((await vrager.maak('lokaal')).zin, 'lokaal');
   });
+
+  test('Op dit toestel houden op een AI-lijst: de pc haalt de hele lijst; zonder die mogelijkheid een leesbare fout', () {
+    final gevraagd = <String>[];
+    final pc = AiLijstTaken((_) async => {}, haalAlles: gevraagd.add);
+    expect(pc.beantwoord({'op': 'haalAlles', 'id': 'pl1'}), {'gestart': true});
+    expect(gevraagd, ['pl1']);
+    expect(pc.beantwoord({'op': 'haalAlles'})['fout'], isA<String>(), reason: 'zonder id');
+    expect(AiLijstTaken((_) async => {}).beantwoord({'op': 'haalAlles', 'id': 'pl1'})['fout'], isA<String>());
+  });
 }

@@ -261,6 +261,12 @@ void main() {
       expect(m, contains('                  final reden = await speelAiLijst(context, id);'));
       expect(m, contains('        await lijsten.zetAi(i, ai: v.toJson(), naam: v.naam, eigen: eigenIdsVan(v));'));
       expect(m, contains('          trekNa: (l, stap) => rec.trekNa(l, elders: _itunesVoorModel, voortgang: stap),'));
+      // Op dit toestel houden: de pc haalt de hele lijst, en elke landing gaat de lijst in en naar de verzameling.
+      expect(m, contains("unawaited(r.ask('/api/ailijst', {'op': 'haalAlles', 'id': id})"));
+      final heel = m.substring(m.indexOf('  Future<void> haalAiLijstHelemaal(String id) async {'));
+      expect(heel, contains('        if (verder == null || !regelGeland(verder, regel.artiest, regel.titel, tid)) continue;'));
+      expect(heel, contains('        if (!vanJou && verder.verzameling != null) await library.naarVerzameling([t.path], verder.verzameling);'));
+      expect(m, contains('      s.aiLijsten = AiLijstTaken(haalAlles: (id) => unawaited(haalAiLijstHelemaal(id)), (vraag) async {'));
     });
   });
 }
