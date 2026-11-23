@@ -34,6 +34,8 @@ List<RecTrack> itunesNummers(Map<String, dynamic>? j) {
           r['artworkUrl100'] is String ? r['artworkUrl100'] as String : null,
           album: '${r['collectionName'] ?? ''}',
           seconds: ((r['trackTimeMillis'] is num ? r['trackTimeMillis'] as num : 0) / 1000).round(),
+          // Een fragment van 30 s, voor de AI-lijst als Deezer het nummer niet kent (Saber, 23-11-2026).
+          preview: r['previewUrl'] is String && (r['previewUrl'] as String).startsWith('http') ? r['previewUrl'] as String : null,
         ),
   ];
 }
