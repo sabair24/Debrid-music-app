@@ -144,9 +144,13 @@ class AiLijstVoorstel {
     required this.nummers,
     required this.reserve,
     this.aantal = kAiLijstStandaard,
+    this.verzameling,
   });
 
   String naam;
+
+  /// De verzameling waar wat gehaald wordt naartoe gaat (Saber: "In een eigen verzameling"); gezet bij het opslaan.
+  String? verzameling;
   final String zin;
   List<LijstHoek> hoeken;
   final List<LijstNummer> nummers;
@@ -162,6 +166,7 @@ class AiLijstVoorstel {
         'naam': naam,
         'zin': zin,
         'aantal': aantal,
+        if (verzameling != null) 'verzameling': verzameling,
         'hoeken': [for (final h in hoeken) {'naam': h.naam, 'aandeel': h.aandeel}],
         'nummers': [for (final n in nummers) n.toJson()],
         'reserve': [for (final n in reserve) n.toJson()],
@@ -175,6 +180,7 @@ class AiLijstVoorstel {
       naam: '${m['naam'] ?? ''}',
       zin: '${m['zin'] ?? ''}',
       aantal: (m['aantal'] as num?)?.toInt() ?? kAiLijstStandaard,
+      verzameling: m['verzameling'] is String && (m['verzameling'] as String).trim().isNotEmpty ? m['verzameling'] as String : null,
       hoeken: [
         for (final h in (m['hoeken'] is List ? m['hoeken'] as List : const []))
           if (h is Map && '${h['naam'] ?? ''}'.trim().isNotEmpty)
@@ -392,6 +398,24 @@ List<LijstNummer> kiesMix(AiLijstVoorstel v, Map<String, int> aandelen, int aant
   // Houd de volgorde van de opbouw: eerst wat al in de lijst stond, dan de reserve.
   return [for (final n in pool) if (gekozen.contains(n)) n];
 }
+
+/// Een nummer van de lijst landde (afspelen haalt het): de regel van [artiest] — [titel] krijgt [id], en is voortaan van
+/// jou. Geeft terug of er een regel was. Op het liedje en niet de letterlijke titel ("X (Remastered)" is X).
+bool regelGeland(AiLijstVoorstel v, String artiest, String titel, String id) {
+  final s = LijstNummer(artiest: artiest, titel: titel).sleutel;
+  for (final n in v.nummers) {
+    if (n.sleutel != s) continue;
+    n
+      ..eigenId = id
+      ..aan = true;
+    if (n.bron == LijstBron.nergens || n.bron == LijstBron.bezig) n.bron = LijstBron.soulseek;
+    return true;
+  }
+  return false;
+}
+
+/// De gedeelde id's van wat je al hebt in [v], in de volgorde van de lijst — voor `Playlist.trackIds`.
+List<String> eigenIdsVan(AiLijstVoorstel v) => [for (final n in v.actief) if (n.eigenId case final id?) id];
 
 /// Wat een zin om bij te sturen voorstelt: wat eruit gaat (plekken in [AiLijstVoorstel.nummers]) en wat erbij komt.
 class Bijsturing {

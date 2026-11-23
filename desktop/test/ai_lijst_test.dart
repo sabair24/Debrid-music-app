@@ -1,6 +1,8 @@
 // AI-afspeellijsten (Saber, 23-11-2026): "ik wil dat AI ook afspeel lijsten kan maken, met op voorhand een lijst zonder
 // iets te downloaden om te kijken wat hij voorstelt, eventueel liedjes eruit haalt of toevoegd". Zijn keuzes: vooral
 // nieuw, hoogstens 2 per artiest, de opbouw van de AI, een reserve voor ↻ en de mix, bijsturen toont eerst het verschil.
+import 'dart:io';
+
 import 'package:debridmusic/ai_lijst.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -202,6 +204,40 @@ void main() {
       expect(p, contains('"meer modern"'));
       expect(p, contains('- A — 1 [Klassiekers]'));
       expect(p, isNot(contains('- B — 2')));
+    });
+  });
+
+  group('afspelen', () {
+    test('DE KERN: wat landt, wordt de regel — op het liedje, ook een niet-gevonden; de lijst kent dan je nummer', () {
+      final v = _v([
+        _l('Bing Crosby', 'White Christmas'),
+        _l('Plaza', 'Yo-Yo', b: LijstBron.nergens)..aan = false,
+        _l('Wham!', 'Last Christmas'),
+      ]);
+      expect(regelGeland(v, 'Bing Crosby', 'White Christmas (Remastered 2019)', 'id1'), isTrue);
+      expect(regelGeland(v, 'Plaza', 'Yo-Yo', 'id2'), isTrue);
+      expect(regelGeland(v, 'Iemand', 'Anders', 'id3'), isFalse);
+      expect(v.nummers[0].eigenId, 'id1');
+      expect((v.nummers[1].aan, v.nummers[1].bron), (true, LijstBron.soulseek), reason: 'Soulseek had hem toch');
+      expect(eigenIdsVan(v), ['id1', 'id2'], reason: 'in de volgorde van de lijst, alleen wat je hebt');
+    });
+
+    test('de verzameling gaat mee in het bewaren', () {
+      final v = _v([_l('A', '1')])..verzameling = 'Kerst';
+      expect(AiLijstVoorstel.fromJson(v.toJson())!.verzameling, 'Kerst');
+      expect(AiLijstVoorstel.fromJson(_v([_l('A', '1')]).toJson())!.verzameling, isNull);
+    });
+
+    test('aangesloten: een radio uit de vaste lijst, zonder bijvullen; elke landing wordt de regel; in een lijst = gehouden', () {
+      final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      final s = m.substring(m.indexOf('Future<String?> speelAiLijst('));
+      expect(s, contains('      aantal: plan.length,\n      verzameling: v.verzameling,'));
+      expect(s.substring(0, s.indexOf('Widget _downloadControl')), isNot(contains('bijvul:')), reason: 'jij koos de nummers');
+      expect(s, contains('if (id == null || nu == null || !regelGeland(nu, plek.artiest, plek.titel, id)) return;'));
+      expect(m, contains('    return id != null && lijsten.lijsten.any((l) => l.trackIds.contains(id));\n  };\n'));
+      final r = File('lib/radio.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(r, contains('      _doorRadio.add(t.path);\n      bijLanding?.call(p, t);\n'));
+      expect(r, contains("    if (nieuw.isEmpty) return 'Er viel niets te vinden om een radio van te maken.';\n    bijLanding = null;\n"));
     });
   });
 }

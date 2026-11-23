@@ -865,6 +865,10 @@ class RadioBesturing extends ChangeNotifier {
   bool _eigenNotitie(RadioSessie s) =>
       identical(s, _lopend) || (identical(s, openstaand) && _overzichtSleutel == null);
 
+  /// Een nummer van deze radio landde ([Radioplek] [p] is nu [Track] t). Voor een AI-lijst (ai_lijst.dart): de regel wordt
+  /// het nummer. Gezet via `bijStart`; elke nieuwe radio begint zonder.
+  void Function(Radioplek p, Track t)? bijLanding;
+
   /// Nummer [pad] (of met id [id]) houden in verzameling [naam] (null: je bibliotheek) — de tweede keuze van Houden.
   void houdIn(String pad, String? naam, {String? id}) {
     for (final s in [_lopend, openstaand]) {
@@ -1058,6 +1062,7 @@ class RadioBesturing extends ChangeNotifier {
       bool manueel = false,
       String? verzameling}) async {
     if (nieuw.isEmpty) return 'Er viel niets te vinden om een radio van te maken.';
+    bijLanding = null;
 
     // Eerst vragen of het KAN, en pas daarna de lopende radio verlaten. Andersom zou een radio die
     // niet blijkt te kunnen starten — Soulseek uit, pc niet bereikbaar — de radio die wél liep
@@ -2057,6 +2062,7 @@ class RadioBesturing extends ChangeNotifier {
       // Klonk het al terwijl het binnenkwam, dan stáát het in de rij: die regel wordt het nummer.
       p.stand = _alsGestroomd(p, t) ? Haalstand.inRij : Haalstand.geland;
       _doorRadio.add(t.path);
+      bijLanding?.call(p, t);
       _lopend?.gehaald.add(Gehaald(
         pad: t.path,
         artiest: p.artiest,

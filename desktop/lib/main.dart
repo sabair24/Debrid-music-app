@@ -1806,7 +1806,11 @@ Future<void> main() async {
   // Wat je al hield (👍 of favoriet), staat niet meer op proef (20-11-2026, de knop "Houden"). Onbekend = niet gehouden.
   radio.gehouden = (pad) {
     final t = library.trackByPath(pad);
-    return t != null && (oordelen.vanTrack(t) == Oordeel.omhoog || favorieten.isFavorietTrack(t));
+    if (t == null) return false;
+    if (oordelen.vanTrack(t) == Oordeel.omhoog || favorieten.isFavorietTrack(t)) return true;
+    // In een afspeellijst, ook een AI-lijst die hem net haalde (ai_lijst.dart): dat is van jou, niet op proef.
+    final id = library.gedeeldId(t.path);
+    return id != null && lijsten.lijsten.any((l) => l.trackIds.contains(id));
   };
   // Onderweg opruimen (Saber, 08-10 en 23-10-2026: "Na 20 nummers, ook Past niet"): wat je niet houdt, gaat 20
   // nummers later naar de prullenbak. Dezelfde regel als het overzicht bij het afsluiten: Houden, favoriet of in een
@@ -28918,6 +28922,51 @@ Future<void> haalTrefferBesteBron(BuildContext context, CatalogTrackHit t, {requ
   } catch (e) {
     if (context.mounted) _srcToast(context, 'Download mislukt: $e');
   }
+}
+
+/// Een AI-lijst afspelen (ai_lijst.dart; Saber, 23-11-2026: "Pas bij afspelen" halen): een radio uit de vaste lijst, in de
+/// volgorde van de opbouw, zonder bijvullen en zonder keuring — jij koos de nummers. Wat je al hebt, speelt meteen; wat
+/// landt, wordt de regel (`regelGeland`), komt in de lijst (dus gehouden) en verhuist bij het afsluiten naar de
+/// verzameling van de lijst. [vanaf]: de plek in de lijst waar hij begint.
+Future<String?> speelAiLijst(BuildContext context, String lijstId, {int vanaf = 0}) async {
+  final lijsten = context.read<Afspeellijsten>();
+  final lib = context.read<LibraryStore>();
+  final radio = context.read<RadioBesturing>();
+  final p = lijsten.byId(lijstId);
+  final v = AiLijstVoorstel.fromJson(p?.ai);
+  if (p == null || v == null) return 'Deze lijst is er niet meer.';
+  final perId = {
+    for (final t in lib.tracks)
+      if (lib.gedeeldId(t.path) case final i?) i: t,
+  };
+  final plan = <Radioplek>[
+    for (final n in v.actief.skip(vanaf))
+      Radioplek(
+        artiest: n.artiest,
+        titel: n.titel,
+        seconden: n.seconden > 0 ? n.seconden : null,
+        jaar: n.jaar,
+        album: n.album.isEmpty ? null : n.album,
+        hoes: n.hoes,
+        eigen: (n.eigenId == null ? null : perId[n.eigenId]) ?? lib.ownedTrack(n.artiest, n.titel),
+        bron: 'ailijst',
+      ),
+  ];
+  if (plan.isEmpty) return 'Er staat niets meer in deze lijst.';
+  final log = WarmLog('$appDir${Platform.pathSeparator}radio.log');
+  log.line('ai-lijst "${v.naam}": ${plan.length} nummers, ${plan.where((x) => x.eigen != null).length} al van jou'
+      '${v.verzameling == null ? '' : ', gehaald naar de verzameling "${v.verzameling}"'}');
+  return radio.start(plan,
+      naam: v.naam,
+      aantal: plan.length,
+      verzameling: v.verzameling,
+      spoor: log.line,
+      bijStart: (_) => radio.bijLanding = (plek, t) {
+            final id = lib.gedeeldId(t.path);
+            final nu = AiLijstVoorstel.fromJson(lijsten.byId(lijstId)?.ai);
+            if (id == null || nu == null || !regelGeland(nu, plek.artiest, plek.titel, id)) return;
+            unawaited(lijsten.zetAi(lijstId, ai: nu.toJson(), naam: lijsten.byId(lijstId)?.name ?? nu.naam, eigen: eigenIdsVan(nu)));
+          });
 }
 
 Widget _downloadControl(BuildContext context,
