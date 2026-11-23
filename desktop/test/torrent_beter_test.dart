@@ -72,17 +72,18 @@ void main() {
     expect(alleen, isNull);
   });
 
-  test('aan de beurt: niets beters na 30 dagen opnieuw, mislukt na een dag', () {
+  test('aan de beurt: niets beters na een week opnieuw (Saber, 23-11-2026; was 30 dagen), mislukt na een dag', () {
     final g = geheugen();
     const dag = 24 * 3600 * 1000;
     g.zet('a', TorrentBeterUitslag.geen, 0);
     g.zet('b', TorrentBeterUitslag.mislukt, 0);
     g.zet('c', TorrentBeterUitslag.vervangen, 0, n: 3);
-    expect(g.aanDeBeurt('a', 29 * dag), isFalse);
+    expect(kTorrentBeterOpnieuwDagen, 7);
+    expect(g.aanDeBeurt('a', 6 * dag), isFalse);
     expect(g.aanDeBeurt('a', kTorrentBeterOpnieuwDagen * dag), isTrue);
     expect(g.aanDeBeurt('b', dag - 1), isFalse);
     expect(g.aanDeBeurt('b', dag), isTrue);
-    expect(g.aanDeBeurt('c', 29 * dag), isFalse);
+    expect(g.aanDeBeurt('c', 6 * dag), isFalse, reason: 'ook een vervangen plaat: een week');
     expect(g.aanDeBeurt('nooit', 0), isTrue);
   });
 

@@ -6,8 +6,16 @@
 /// worden"*. Hij koos: na een bewijs nog één keer per maand kijken, alles wat niet bewezen het beste is, en hoogstens
 /// tien Soulseek-zoekopdrachten per vijf minuten ([kJachtZoekPerVijfMinuten]).
 ///
+/// **Vaker sinds 23-11-2026.** Saber: *"als een liedje niets gevonden heeft, doet hij nog maar 1 keer per maand niet ?
+/// dat is veel te weinig … het zou elke dag minstens 1 keer moeten zoeken of meer als het kan"*. Gemeten die dag: 1118
+/// onbewezen nummers zochten na 2, 4 en 7 dagen en daarna om de twee weken; de jacht liep niet achter, het ritme zelf was
+/// de rem — en een minuut pauze na elke plaat ([kJachtTik]), en stilstand zolang er een radio speelde. Hij koos:
+/// onbewezen **elke dag** ([kJachtDagelijks]), [Jachtbewijs.top] maandelijks, [Jachtbewijs.officieel] en
+/// [Jachtbewijs.eensgezind] **wekelijks** ([kJachtBewezenWekelijks]), en tijdens een radio traag door
+/// ([kJachtZoekTijdensRadio]) in plaats van stil.
+///
 /// **Wat "bewezen" hier betekent ([Jachtbewijs]).** Honderd procent kan niemand: morgen kan iemand een plaat rippen.
-/// Wel zeker genoeg om het zoeken te vertragen tot één keer per maand:
+/// Wel zeker genoeg om het zoeken te vertragen tot één keer per week of per maand:
 ///  * [Jachtbewijs.top]: echt 24 bit, met echte inhoud boven 24,5 kHz, op 88,2 kHz of meer — gemeten 27-10-2026 bij
 ///    455 van 1789 nummers;
 ///  * [Jachtbewijs.officieel]: TIDAL heeft precies deze opname alleen in cd-kwaliteit, en jouw kopie is een echte
@@ -52,24 +60,24 @@ enum Kopieuitslag {
 /// Eén kopie die al binnen was: nooit nog eens halen. [dag] als `2026-10-27`, voor [kEensgezindDagen].
 typedef Afwijzing = ({String uploader, int grootte, String dag, Kopieuitslag uit});
 
-/// Zo vaak na jouw klik op "Zoek hi-res": een uur, drie, acht, een dag, drie dagen, een week; daarna [kJachtDaarna].
+/// Zo vaak na jouw klik op "Zoek hi-res": een uur, drie, acht; daarna elke dag ([kJachtDagelijks]).
 const kJachtRitmeGevraagd = [
   Duration(hours: 1),
   Duration(hours: 3),
   Duration(hours: 8),
-  Duration(days: 1),
-  Duration(days: 3),
-  Duration(days: 7),
 ];
 
-/// Zo vaak voor de rest van de bibliotheek, na de eerste ronde; daarna [kJachtDaarna].
-const kJachtRitme = [Duration(days: 2), Duration(days: 4), Duration(days: 7)];
+/// Een nummer dat niet bewezen het beste is: elke dag (Saber, 23-11-2026). Tweeëntwintig uur en niet vierentwintig:
+/// zo komt het elke kalenderdag minstens één keer aan de beurt, en telkens twee uur vroeger op de klok — wie 's avonds
+/// online is, is dat 's ochtends niet.
+const kJachtDagelijks = Duration(hours: 22);
 
-/// Daarna elke twee weken.
-const kJachtDaarna = Duration(days: 14);
-
-/// Na een bewijs nog één keer per maand (Saber: "Na bewijs maandelijks").
+/// Echt 24 bit op 88,2 kHz of meer ([Jachtbewijs.top]): nog één keer per maand. Beter bestaat bijna niet.
 const kJachtNaBewijs = Duration(days: 30);
+
+/// TIDAL heeft alleen cd ([Jachtbewijs.officieel]) of drie uploaders hadden niets beters ([Jachtbewijs.eensgezind]):
+/// elke week (Saber, 23-11-2026: "gemengd") — een vinylrip of een nieuwe uitgave kan opduiken.
+const kJachtBewezenWekelijks = Duration(days: 7);
 
 /// Zoveel echte kopieën van evenveel uploaders, geen enkele beter: [Jachtbewijs.eensgezind].
 const kEensgezindKopieen = 3;
@@ -81,8 +89,31 @@ const kEensgezindDagen = 2;
 /// achtergrondwerk mag ([kZoekPerVijfMinuten] min [kZoekVoorJouVijf] in soulseek.dart). Saber koos "Sneller".
 const kJachtZoekPerVijfMinuten = 10;
 
-/// Om de zoveel kijkt de ronde of er een plaat aan de beurt is.
+/// Zoveel Soulseek-zoekopdrachten hoogstens per vijf minuten zolang er ergens een radio speelt (Saber, 23-11-2026:
+/// "traag doorzoeken" in plaats van stilstaan). De radio gaat voor: op 20-11-2026 waren 21 van de 24 zoektochten zonder
+/// antwoord van deze jacht, op vol tempo.
+const kJachtZoekTijdensRadio = 3;
+
+/// Zo lang wacht een betere kopie in de wachtrij van een uploader (Saber, 23-11-2026: "geduld in de wachtrij"). Tot dan
+/// gaf de jacht na tien minuten op. Een gewone Soulseek-gebruiker laat zijn rij ook gewoon staan.
+const kJachtWachtrijGeduld = Duration(hours: 24);
+
+/// Zoveel kopieën hoogstens tegelijk geduldig in een wachtrij: elk houdt een verbinding met zijn uploader open.
+const kWachtrijGeduldHoogstens = 20;
+
+/// De uploader verbrak de wachtrij (een herstart, een dichte verbinding): zo snel opnieuw vragen. Hij houdt je plaats
+/// meestal, zolang je terugkomt.
+const kGeduldOpnieuwWachtrij = Duration(minutes: 3);
+
+/// De uploader is er even niet (offline, onbereikbaar): om het halfuur opnieuw proberen, tot het geduld op is.
+const kGeduldOpnieuwWeg = Duration(minutes: 30);
+
+/// Om de zoveel kijkt de ronde of er een plaat aan de beurt is, als er niets te doen was.
 const kJachtTik = Duration(minutes: 1);
+
+/// Na een plaat die gezocht is: zo snel de volgende. De rem ([kJachtZoekPerVijfMinuten], [kJachtZoekTijdensRadio])
+/// bepaalt het tempo; een vaste minuut ertussen kostte meer dan het zoeken zelf (23-11-2026: ~15 s zoeken, 60 s wachten).
+const kJachtDoor = Duration(seconds: 5);
 
 /// Pas zo lang na het opstarten de eerste ronde: eerst de rest van de app.
 const kJachtStart = Duration(minutes: 7);
@@ -163,12 +194,19 @@ Jachtbewijs bewijsVoor(Track t, {Echtheidsoordeel? o, TidalKwaliteit? tidalHoogs
 /// Hoe lang na de vorige ronde de volgende komt.
 Duration jachtWacht(Jachtstand s, Jachtbewijs b) {
   if (s.rondes <= 0) return Duration.zero;
-  if (b != Jachtbewijs.geen) return kJachtNaBewijs + _spreiding(s.rondes);
-  final ritme = s.gevraagd ? kJachtRitmeGevraagd : kJachtRitme;
+  if (b == Jachtbewijs.top) return kJachtNaBewijs + _spreiding(s.rondes);
+  if (b != Jachtbewijs.geen) return kJachtBewezenWekelijks + _spreiding(s.rondes);
   final i = s.rondes - 1;
-  final w = i < ritme.length ? ritme[i] : kJachtDaarna;
+  final w = s.gevraagd && i < kJachtRitmeGevraagd.length ? kJachtRitmeGevraagd[i] : kJachtDagelijks;
   return w >= const Duration(days: 1) ? w + _spreiding(s.rondes) : w;
 }
+
+/// Mag de jacht nu een plaat zoeken? Speelt er ergens een radio ([traag]), dan alleen als hij in de laatste vijf minuten
+/// minder dan [kJachtZoekTijdensRadio] keer zocht — ook wat hij vlak daarvoor op vol tempo zocht, telt mee.
+bool jachtMagZoeken({required bool traag, required int zochtInVijf}) => !traag || zochtInVijf < kJachtZoekTijdensRadio;
+
+/// Wanneer de ronde weer kijkt: na een gezochte plaat meteen ([kJachtDoor]), anders over [kJachtTik].
+Duration jachtVolgendeTik({required bool gezocht}) => gezocht ? kJachtDoor : kJachtTik;
 
 /// Bij elke ronde van een dag of langer een ander uur: wie 's avonds online is, is dat 's ochtends niet.
 Duration _spreiding(int rondes) => Duration(hours: (rondes * 5) % 24);
@@ -351,12 +389,14 @@ class BlijvendeJachtRonde {
     if (_gestopt) return;
     _wekker?.cancel();
     _wekker = Timer(na, () async {
+      Jachtplaat? gezocht;
       try {
-        await stap();
+        gezocht = await stap();
       } catch (e) {
         log?.call('blijvende jacht: $e');
       }
-      _plan(kJachtTik);
+      // Gezocht: meteen de volgende, de rem houdt het tempo. Niets gedaan: over een minuut weer kijken.
+      _plan(jachtVolgendeTik(gezocht: gezocht != null));
     });
   }
 
@@ -384,19 +424,20 @@ class BlijvendeJachtRonde {
 
 /// De regel in het kwaliteitsblad: wat de blijvende jacht van [t] weet ([s], [b]), op [nu].
 String jachtZin(Track t, Jachtstand? s, Jachtbewijs b, {required DateTime nu}) {
-  final maand = 'De app kijkt nog één keer per maand.';
   switch (b) {
     case Jachtbewijs.top:
       final khz = (t.sampleRate / 1000).toStringAsFixed(1).replaceAll('.0', '').replaceAll('.', ',');
-      return 'Bewezen het beste: echt ${t.bitsPerSample}/$khz, met echte klank boven 24,5 kHz. $maand';
+      return 'Bewezen het beste: echt ${t.bitsPerSample}/$khz, met echte klank boven 24,5 kHz. '
+          'De app kijkt nog één keer per maand.';
     case Jachtbewijs.officieel:
       return 'Het beste dat officieel bestaat: TIDAL heeft deze opname alleen in cd-kwaliteit, en de jouwe is een echte. '
-          'De app kijkt nog één keer per maand, voor een vinyl of een nieuwe uitgave.';
+          'De app kijkt elke week, voor een vinyl of een nieuwe uitgave.';
     case Jachtbewijs.eensgezind:
       final gelijk = [for (final a in s?.nee ?? const <Afwijzing>[]) if (a.uit == Kopieuitslag.gelijk) a];
       final uploaders = {for (final a in gelijk) a.uploader.toLowerCase()}.length;
       final dagen = {for (final a in gelijk) a.dag}.length;
-      return '${gelijk.length} andere echte kopieën van $uploaders uploaders, op $dagen dagen — geen enkele beter. $maand';
+      return '${gelijk.length} andere echte kopieën van $uploaders uploaders, op $dagen dagen — geen enkele beter. '
+          'De app kijkt elke week.';
     case Jachtbewijs.geen:
       if (s == null || s.rondes == 0) return 'Nog niet gezocht: dit nummer komt vanzelf aan de beurt.';
       final volgende = DateTime.fromMillisecondsSinceEpoch(s.laatsteMs).add(jachtWacht(s, b));

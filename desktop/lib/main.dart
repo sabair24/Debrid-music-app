@@ -3292,10 +3292,13 @@ Future<void> main() async {
         jachten: jachten,
         nummers: () => library.tracks,
         bewijs: bewijs,
-        jaag: downloads.jaagBlijvend,
-        // Niet zolang er een radio loopt, hier of op een toestel dat via deze pc haalt (20-11-2026, radiometing: 21 van de
-        // 24 zoektochten zonder enig antwoord waren van deze jacht, en elke zoektocht telt mee in de zoekrem van de radio).
-        kan: () => downloads.kanBlijvendJagen && !radio.loopt && !(sharing.server?.radiohaler.inGebruik ?? false),
+        // Traag zolang er een radio loopt, hier of op een toestel dat via deze pc haalt: hoogstens kJachtZoekTijdensRadio
+        // per vijf minuten (Saber, 23-11-2026: "traag doorzoeken"). Van 20-11 tot 23-11 stond de jacht dan stil — 21 van de
+        // 24 zoektochten zonder enig antwoord waren van deze jacht op vol tempo, en elke zoektocht telt mee in de zoekrem
+        // van de radio.
+        jaag: (plaat) => downloads.jaagBlijvend(plaat,
+            traag: radio.loopt || (sharing.server?.radiohaler.inGebruik ?? false)),
+        kan: () => downloads.kanBlijvendJagen,
         overslaan: (t) =>
             !(t.isFlac || isVerliesvrij(t.ext)) ||
             isVasteKeuze(t.path) ||
@@ -3307,7 +3310,8 @@ Future<void> main() async {
       );
       unawaited(ronde.start().then(
           (_) => startLog.line('blijvende jacht: ${jachten.aantal} nummers in het geheugen (eerste ronde na '
-              '${kJachtStart.inMinutes} min, hoogstens $kJachtZoekPerVijfMinuten zoekopdrachten per 5 min)'),
+              '${kJachtStart.inMinutes} min, hoogstens $kJachtZoekPerVijfMinuten zoekopdrachten per 5 min, '
+              '$kJachtZoekTijdensRadio tijdens een radio)'),
           onError: (Object e) => startLog.line('blijvende jacht: MISLUKT: $e')));
       // _dubbel: na 30 dagen naar de prullenbak (Saber, 27-10-2026). Een kwartier na het opstarten, daarna elke dag.
       if (heeftPrullenbak) {

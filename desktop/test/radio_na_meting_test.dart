@@ -99,10 +99,12 @@ void main() {
       expect(o, contains('        nogNodig: _radiohalen.contains(job) ? () => _radiohalen.contains(job) && !job.cancelled : null,'));
     });
 
-    test('de blijvende jacht wacht zolang er een radio loopt, en laat proefnummers van elders liggen', () {
+    // Sinds 23-11-2026 niet meer stil maar traag (Saber: "traag doorzoeken"): hoogstens kJachtZoekTijdensRadio per vijf
+    // minuten zolang er hier of op een toestel via deze pc een radio loopt (blijvende_jacht_test).
+    test('de blijvende jacht zoekt traag zolang er een radio loopt, en laat proefnummers van elders liggen', () {
       final m = _bron('lib/main.dart');
-      expect(m, contains('        kan: () => downloads.kanBlijvendJagen && !radio.loopt && '
-          '!(sharing.server?.radiohaler.inGebruik ?? false),'));
+      expect(m, contains('        jaag: (plaat) => downloads.jaagBlijvend(plaat,\n'
+          '            traag: radio.loopt || (sharing.server?.radiohaler.inGebruik ?? false)),'));
       expect(m, contains('            (sharing.server?.state.radioOpProefIds.contains(library.gedeeldId(t.path)) ?? false) ||'));
       expect(_bron('lib/lan/radiohaler.dart'), contains('  bool get inGebruik => _los != null;'));
     });
