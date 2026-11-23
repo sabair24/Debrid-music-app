@@ -8,6 +8,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:debridmusic/groeistroom.dart';
+import 'package:debridmusic/soulseek.dart' show SoulseekFile;
 import 'package:debridmusic/library.dart';
 import 'package:debridmusic/models.dart';
 import 'package:debridmusic/online.dart';
@@ -88,7 +89,8 @@ class _Groeiend extends DownloadManager {
       bool zoekDaarnaBeter = false,
       bool losVanDeRadio = false,
       String? album,
-      void Function(void Function() stop)? bijStop}) async {
+      void Function(void Function() stop)? bijStop,
+      SoulseekFile? alleen}) async {
     gekregen = vroeg;
     zoekBeterGevraagd = zoekDaarnaBeter;
     final pad = '$map${Platform.pathSeparator}in.flac';

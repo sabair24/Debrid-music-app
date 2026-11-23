@@ -21,6 +21,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'soulseek.dart' show SoulseekFile;
 
 import 'groeistroom.dart' show Groei, Groeistroom;
 import 'library.dart';
@@ -261,7 +262,13 @@ class EigenRadiobron implements Radiobron {
   /// radio zelf. [los]: ▶ — een radio die stopt, breekt deze haal niet af (zie
   /// `DownloadManager.haalEnLaatHoren`).
   @override
-  Future<Track?> haal(Radioplek plek, {Groei? vroeg, bool zoekBeter = false, bool los = false}) async {
+  /// [bijStop]: het handvat om deze haal af te breken (de Soulseek-proef). [alleen]: dit ene bestand, zonder te zoeken.
+  Future<Track?> haal(Radioplek plek,
+      {Groei? vroeg,
+      bool zoekBeter = false,
+      bool los = false,
+      void Function(void Function() stop)? bijStop,
+      SoulseekFile? alleen}) async {
     final String? pad;
     try {
       pad = vroeg == null
@@ -280,6 +287,8 @@ class EigenRadiobron implements Radiobron {
               zoekDaarnaBeter: zoekBeter,
               losVanDeRadio: los,
               album: plek.album,
+              bijStop: bijStop,
+              alleen: alleen,
             );
     } on RadioAlGehad catch (e) {
       // Geland op muziek die je al had: laten klinken, maar als JOUW nummer — zie [AlVanJou].

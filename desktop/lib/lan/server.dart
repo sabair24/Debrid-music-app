@@ -3760,6 +3760,9 @@ class LanServer {
           // ▶ op het toestel: na het landen op jacht naar beter. Een ouder toestel stuurt dit niet.
           zoekBeter: body['zoekBeter'] == true,
           luistertMee: body['meeluisteren'] == true,
+          // De Soulseek-proef (Saber, 23-11-2026): één gekozen bestand, en altijd een groeistroom.
+          alleen: body['bestand'] is Map ? SoulseekFile.fromJson(Map<String, dynamic>.from(body['bestand'] as Map)) : null,
+          proef: body['proef'] == true,
         );
         return _json(req.response, {'id': h.id});
       case 'stand':
