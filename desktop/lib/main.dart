@@ -26,6 +26,8 @@ import 'aanbevelingplan.dart';
 import 'ai.dart';
 import 'ai_lijst.dart';
 import 'ai_lijst_vraag.dart';
+import 'voorproef.dart';
+import 'ui/voorproef_knop.dart';
 import 'radio.dart';
 import 'modelbudget.dart';
 import 'pc_model.dart';
@@ -1409,6 +1411,45 @@ Future<void> main() async {
     // Spelen terwijl het binnenkomt (groeistroom.dart): dezelfde schakelaar als bij een nieuw nummer.
     ..vroegLuisteren = (() => settings.vroegLuisteren);
 
+  // De voorproef (voorproef.dart; Saber, 23-11-2026): een fragment, of een Soulseek-proef die na 30 s weer opruimt. Op de
+  // pc haalt hij zelf met een groeistroom, op een toestel haalt de pc (altijd met een groeistroom) en klinkt het via de pc.
+  Radiobron proefbron() => mode.owner
+      ? EigenRadiobron(downloads: downloads, soulseek: soulseek, library: library, instellingen: settings)
+      : PcRadiobron(library: library, clientOf: () => library.remote);
+  final voorproef = Voorproef(
+    speel: (adres, sleutel, duur) => player.voorproef(adres, sleutel: sleutel, duur: duur),
+    stopSpeler: (sleutel) => player.voorproefKlaar(sleutel: sleutel),
+    klinktNog: (sleutel) => player.voorproefVan == sleutel,
+    vergeet: (t) async {
+      await proefbron().vergeet(pad: t.path, artiest: t.artist, titel: t.title);
+    },
+    haal: (plek, {alleen, required klinkt, required bijStop}) async {
+      final bron = proefbron();
+      if (await bron.begin() != null) return null;
+      try {
+        if (bron is EigenRadiobron) {
+          final vroeg = await Groeistroom.gedeeld.nieuw('proef: ${plek.artiest} — ${plek.titel}');
+          vroeg.zalKlinken();
+          unawaited(vroeg.speelbaar.then((kan) {
+            if (kan) klinkt(vroeg.adres);
+          }));
+          try {
+            return await bron.haal(plek, vroeg: vroeg, los: true, bijStop: bijStop, alleen: alleen);
+          } finally {
+            if (vroeg.geborgen == null) vroeg.opgegeven();
+          }
+        }
+        return await (bron as PcRadiobron).haal(plek, proef: true, alleen: alleen, bijStop: bijStop, klinkt: (groeiId) {
+          final g = GroeiOpPc(() => library.remote, groeiId);
+          player.groeitElders(g.pad, g);
+          klinkt(player.mediaResolver(g.pad));
+        });
+      } finally {
+        bron.einde();
+      }
+    },
+  );
+
   // Share this library with the Mac, the iPad and the Shield. Started before the scan finishes:
   // a device probing /health then gets a real answer straight away, and the catalogue fills in
   // by itself as the scan lands.
@@ -2606,6 +2647,7 @@ Future<void> main() async {
         Provider<TidalService>.value(value: tidal),
         ChangeNotifierProvider<DownloadManager>.value(value: downloads),
         ChangeNotifierProvider<RadioBesturing>.value(value: radio),
+        ChangeNotifierProvider<Voorproef>.value(value: voorproef),
         ChangeNotifierProvider<Oordelen>.value(value: oordelen),
         ChangeNotifierProvider<RadioSfeer>.value(value: radioSfeer),
         ChangeNotifierProvider<LanSharing>.value(value: sharing),
@@ -30635,9 +30677,21 @@ Widget _soulseekTile(BuildContext context, SoulseekFile f, List<SoulseekFile> al
         ),
         if (!smal)
           for (final m in merken) Padding(padding: const EdgeInsets.only(left: 6), child: m),
-        _downloadControl(context,
-            jobKey: _slskKey(f),
-            onDownload: () => _downloadSoulseek(context, f, all, authority: authority)),
+        // Horen of dit bestand het juiste is (Saber, 23-11-2026: "bij elke bron"): alleen FLAC, want alleen dat kan klinken
+        // terwijl het binnenkomt; en alleen met artiest en titel, want houden bergt het op als dit nummer.
+        if (f.isFlac && authority != null && authority.artist.trim().isNotEmpty && authority.title.trim().isNotEmpty)
+          VoorproefKnop(
+              sleutel: 'bron:${_slskKey(f)}',
+              bestand: f,
+              plek: Radioplek(
+                  artiest: authority.artist,
+                  titel: authority.title,
+                  seconden: authority.seconds ?? f.durationSec,
+                  album: authority.album)),
+        _downloadControl(context, jobKey: _slskKey(f), onDownload: () {
+          if (houdLopendeProef(context, 'bron:${_slskKey(f)}')) return;
+          _downloadSoulseek(context, f, all, authority: authority);
+        }),
       ],
     ),
   );
@@ -32987,9 +33041,16 @@ class _OnlineSearchScreenState extends State<OnlineSearchScreen> {
                     child: Icon(Icons.library_add_check_rounded, color: _accent2),
                   )
                 else ...[
+                  // Horen of dit het nummer is (Saber, 23-11-2026): het fragment van Deezer, anders een Soulseek-proef.
+                  VoorproefKnop(
+                      sleutel: 'zoek:${_zoekSleutel(t)}',
+                      fragment: t.preview,
+                      plek: Radioplek(artiest: t.artist, titel: t.title, seconden: t.seconden, album: t.album)),
                   SpeelNuKnop(artiest: t.artist, titel: t.title, seconden: t.seconden, album: t.album, hoes: t.cover),
-                  _downloadControl(context,
-                      jobKey: _zoekSleutel(t), onDownload: () => _downloadHit(t), tooltip: 'Downloaden (beste bron)'),
+                  _downloadControl(context, jobKey: _zoekSleutel(t), onDownload: () {
+                    if (houdLopendeProef(context, 'zoek:${_zoekSleutel(t)}')) return;
+                    _downloadHit(t);
+                  }, tooltip: 'Downloaden (beste bron)'),
                 ],
                 Icon(open ? Icons.expand_less_rounded : Icons.chevron_right_rounded, color: _muted),
               ],
