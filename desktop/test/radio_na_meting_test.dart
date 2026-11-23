@@ -192,8 +192,8 @@ void main() {
       final m = _bron('lib/main.dart');
       expect(m, contains('      oordelen.addListener(() => unawaited(meldOpProef()));'));
       expect(m, contains('      favorieten.addListener(() => unawaited(meldOpProef()));'));
-      expect(m, contains('    return t != null && (oordelen.vanTrack(t) == Oordeel.omhoog || favorieten.isFavorietTrack(t));'),
-          reason: 'onbekend is niet gehouden');
+      expect(m, contains('    if (t == null) return false;\n    if (oordelen.vanTrack(t) == Oordeel.omhoog || favorieten.isFavorietTrack(t)) return true;'),
+          reason: 'onbekend is niet gehouden; sinds 23-11-2026 ook gehouden als het in een (AI-)lijst staat');
     });
   });
 
