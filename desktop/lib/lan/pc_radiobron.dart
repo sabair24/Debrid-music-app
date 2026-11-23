@@ -182,9 +182,9 @@ class PcRadiobron implements Radiobron {
   /// [zoekBeter]: ▶ op dit toestel — de pc zoekt na het landen een betere kopie (de radio niet).
   /// [klinkt]: de pc zegt dat het nummer al te horen is terwijl het nog binnenkomt (groeistroom.dart op de
   /// pc) — met het nummer van die groei, één keer. Dan peilt dit ook vaker: iemand wacht op geluid.
-  @override
   /// [bijStop]: het handvat om deze haal af te breken (de Soulseek-proef: de pc laat hem los). [alleen]: dit ene bestand.
   /// [proef]: de pc maakt altijd een groeistroom, ook als "al spelen terwijl het binnenkomt" daar uit staat.
+  @override
   Future<Track?> haal(Radioplek plek,
       {bool zoekBeter = false,
       void Function(String groeiId)? klinkt,

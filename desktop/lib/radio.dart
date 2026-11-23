@@ -261,8 +261,8 @@ class EigenRadiobron implements Radiobron {
   /// [zoekBeter]: na het landen op jacht naar een betere kopie — voor ▶ ([NieuwSpeler]), niet voor de
   /// radio zelf. [los]: ▶ — een radio die stopt, breekt deze haal niet af (zie
   /// `DownloadManager.haalEnLaatHoren`).
-  @override
   /// [bijStop]: het handvat om deze haal af te breken (de Soulseek-proef). [alleen]: dit ene bestand, zonder te zoeken.
+  @override
   Future<Track?> haal(Radioplek plek,
       {Groei? vroeg,
       bool zoekBeter = false,

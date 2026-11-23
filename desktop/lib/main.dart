@@ -20982,7 +20982,6 @@ class _RadioUitZinBladState extends State<_RadioUitZinBlad> {
     Navigator.pop(context);
   }
 
-  @override
   /// Radio of Afspeellijst (Saber, 23-11-2026): wat je koos, of anders wat de zin vraagt ([zinVraagtLijst]).
   bool? _lijstGekozen;
   bool get _lijst => _lijstGekozen ?? zinVraagtLijst(widget.ctl.text);
