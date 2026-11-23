@@ -240,4 +240,27 @@ void main() {
       expect(r, contains("    if (nieuw.isEmpty) return 'Er viel niets te vinden om een radio van te maken.';\n    bijLanding = null;\n"));
     });
   });
+
+  group('de ingangen', () {
+    test('DE KERN: zegt de zin "lijst", dan staat Afspeellijst aan in plaats van Radio', () {
+      expect(zinVraagtLijst('maak me een lijst van 200 kerstliedjes, klasiekers, maar ook modernere liedjes'), isTrue);
+      expect(zinVraagtLijst('een afspeellijst voor de zomer'), isTrue);
+      expect(zinVraagtLijst('Playlist met eurodance'), isTrue);
+      expect(zinVraagtLijst('een lijstje met slow songs'), isTrue);
+      expect(zinVraagtLijst('maak me een radio met 300 liedjes van de jaren 90'), isFalse);
+      expect(zinVraagtLijst('verlanglijstje'), isFalse, reason: 'een heel woord');
+    });
+
+    test('aangesloten: Radio of Afspeellijst in de zinradio, Met AI bij Afspeellijsten, bijsturen en afspelen op de lijst', () {
+      final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+      expect(m, contains('  bool get _lijst => _lijstGekozen ?? zinVraagtLijst(widget.ctl.text);'));
+      expect(m, contains("              FilledButton(onPressed: _bezig ? null : _maakLijst, child: const Text('Maak de lijst'))"));
+      expect(m, contains('    unawaited(openAiLijst(nav.context, zin: zin));'));
+      expect(m, contains("              onPressed: () => openAiLijst(context),\n              icon: const Icon(Icons.auto_awesome_rounded, size: 18),\n              label: const Text('Met AI'),"));
+      expect(m, contains('                onPressed: () => openAiLijst(context, lijstId: id),'));
+      expect(m, contains('                  final reden = await speelAiLijst(context, id);'));
+      expect(m, contains('        await lijsten.zetAi(i, ai: v.toJson(), naam: v.naam, eigen: eigenIdsVan(v));'));
+      expect(m, contains('          trekNa: (l, stap) => rec.trekNa(l, elders: _itunesVoorModel, voortgang: stap),'));
+    });
+  });
 }

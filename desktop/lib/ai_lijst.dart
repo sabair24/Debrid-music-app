@@ -259,6 +259,11 @@ List<String> aiLijstEigen(List<String> regels, {int hoeveel = 40}) {
   return [for (var i = 0; i < regels.length; i += stap) regels[i]].take(hoeveel).toList();
 }
 
+/// Vraagt de zin om een lijst ("maak me een lijst van 200 kerstliedjes", "afspeellijst", "playlist")? Dan staat in
+/// "Zeg wat je wil horen" Afspeellijst al aan in plaats van Radio.
+bool zinVraagtLijst(String zin) =>
+    RegExp(r'\b(afspeel)?lijst(je)?\b|\bplaylist', caseSensitive: false).hasMatch(zin);
+
 /// Leest het antwoord van [aiLijstPrompt]: dubbels weg, hoogstens [kAiLijstPerArtiest] per artiest (wat erover gaat,
 /// schuift naar de reserve), het aantal begrensd. Null als er niets bruikbaars in staat.
 AiLijstVoorstel? leesAiLijst(Object? j, {required String zin}) {
