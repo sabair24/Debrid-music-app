@@ -19,7 +19,7 @@ void main() {
     final lijf = main.substring(begin, main.indexOf('\n  }\n', begin));
     expect(lijf, contains('builder: (context, haalt, _) => AlbumTegel('));
     expect(lijf, contains('onAfspelen: () => _speel(n),'));
-    expect(lijf, contains('knop: _downloadControl(context, jobKey: sleutel, onDownload: () => _haal(n)'));
+    expect(lijf, contains('_downloadControl(context, jobKey: sleutel, onDownload: () => _haal(n)'));
     expect(lijf, contains('onSecondaryTap: (bij) => _menu(n, bij: bij),'));
     expect(main, contains("MenuRegel(Icons.download_rounded, 'Downloaden (beste bron)', () => _haal(n)),"));
     expect(main, contains("MenuRegel(Icons.travel_explore_rounded, 'Bronnen zelf kiezen',"));

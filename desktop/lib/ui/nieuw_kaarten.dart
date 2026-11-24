@@ -108,11 +108,19 @@ class DatumLint extends StatelessWidget {
       );
 }
 
-Widget _hoesMetLint(NieuwKaart k, double maat, double hoek) => SizedBox.square(
+/// [naast]: [NieuwKaart.naast] als rondje rechtsboven op de hoes — op de grote kaart, waar naast de knop geen plaats is.
+Widget _hoesMetLint(NieuwKaart k, double maat, double hoek, {bool naast = false}) => SizedBox.square(
       dimension: maat,
       child: Stack(fit: StackFit.expand, children: [
         ClipRRect(borderRadius: BorderRadius.circular(hoek), child: k.hoes(maat)),
         if (k.lint != null) Positioned(left: 4, bottom: 4, child: DatumLint(k.lint!)),
+        if (naast && k.naast != null)
+          Positioned(
+            right: 4,
+            top: 4,
+            child: DecoratedBox(
+                decoration: const BoxDecoration(color: Color(0xE6FFFFFF), shape: BoxShape.circle), child: k.naast!),
+          ),
         if (k.bezig)
           Center(
             child: Container(
@@ -244,7 +252,7 @@ class GroteKaart extends StatelessWidget {
           ),
         ),
         child: Row(children: [
-          _hoesMetLint(k, hoes, kHoek12),
+          _hoesMetLint(k, hoes, kHoek12, naast: true),
           const SizedBox(width: kRuimte16),
           Expanded(
             child: Column(
@@ -276,7 +284,6 @@ class GroteKaart extends StatelessWidget {
                       style: TextStyle(fontSize: 12, color: kGedempt, height: 1.35)),
                 if (k.onKnop != null) ...[
                   const SizedBox(height: kRuimte8),
-                  Row(mainAxisSize: MainAxisSize.min, children: [
                   FilledButton.icon(
                     onPressed: k.onKnop,
                     icon: Icon(k.knopIcoon, size: 18),
@@ -288,8 +295,6 @@ class GroteKaart extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 14),
                     ),
                   ),
-                  ?k.naast,
-                  ]),
                 ],
               ],
             ),

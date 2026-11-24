@@ -135,6 +135,7 @@ void main() {
     expect(m, contains('  final uit = await _fragmentZoeker.trekNa([AiNummer(artiest, titel)], elders: _itunesVoorModel);'));
     expect(m, contains('      fragmentZoeker: deezerFragment,'), reason: 'ook het AI-scherm zoekt een vers fragment');
     final k = File('lib/ui/nieuw_kaarten.dart').readAsStringSync();
-    expect('?k.naast,'.allMatches(k).length, 2, reason: 'de brede en de grote kaart');
+    expect(k, contains('          ?k.naast,'), reason: 'de brede kaart: naast de tekst');
+    expect(k, contains('_hoesMetLint(k, hoes, kHoek12, naast: true),'), reason: 'de grote kaart: een rondje op de hoes, naast de knop is geen plaats');
   });
 }

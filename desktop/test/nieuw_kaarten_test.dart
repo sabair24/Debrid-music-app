@@ -10,7 +10,7 @@ import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart' show FontLoader;
 import 'package:flutter_test/flutter_test.dart';
 
-NieuwKaart _k(int i, {VoidCallback? knop}) => NieuwKaart(
+NieuwKaart _k(int i, {VoidCallback? knop, Widget? naast}) => NieuwKaart(
       titel: 'Een heel lange titel van een nieuw nummer nummer $i',
       regel2: 'Een artiest met een lange naam $i',
       regel3: 'Van Een Album Met Een Lange Naam',
@@ -19,6 +19,7 @@ NieuwKaart _k(int i, {VoidCallback? knop}) => NieuwKaart(
       lint: i.isEven ? '3 dagen' : '6 nov',
       onTap: () {},
       onKnop: knop,
+      naast: naast,
     );
 
 Widget _scherm(double breedte, {double tekst = 1, required Widget kind}) => MediaQuery(
@@ -60,6 +61,21 @@ void main() {
         expect(find.text('Afspelen'), findsOneWidget, reason: 'de knop op de grote kaart');
       });
     }
+  }
+
+  // Het oortje naast de tekst en naast de knop (Saber, 24-11-2026): ook dan geen overloop op een gsm.
+  for (final breedte in [360.0, 411.0]) {
+    testWidgets('rij op $breedte punten met het oortje, tekst ×1.3: geen overloop', (t) async {
+      t.view.physicalSize = Size(breedte, 800);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.reset);
+      const oor = SizedBox(width: 40, height: 40);
+      await t.pumpWidget(_scherm(breedte,
+          tekst: 1.3,
+          kind: NieuwRij(aantal: 20, groot: () => _k(0, knop: () {}, naast: oor), kaart: (i) => _k(i, naast: oor))));
+      expect(t.takeException(), isNull);
+      expect(find.text('Afspelen'), findsOneWidget);
+    });
   }
 
   group('de kop op een gsm, met het echte lettertype', () {
