@@ -307,7 +307,8 @@ void main() {
     expect(_bron('lib/blijvende_jacht.dart'), contains('      _plan(jachtVolgendeTik(gezocht: gezocht != null));'));
     expect(online, contains('      jachten.vraag([for (final t in te) t.path], DateTime.now().millisecondsSinceEpoch);'));
     expect(online, contains('!(jachten?.isAfgewezen(t.path, k.username, k.size) ?? false)'));
-    expect(online, contains('blijvend != null && soulseek.available && !soulseek.client.serverZwijgt && _jachten.wachtend == 0;'));
+    expect(online, contains('      blijvend != null &&\n      soulseek.available &&\n      !soulseek.client.serverZwijgt &&\n'
+        '      _jachten.wachtend == 0 &&\n'));
     final jacht = online.substring(online.indexOf('  Future<void> _chaseUpgrade('));
     expect(jacht, contains('parkeerAltijd: parkeerAltijd, parkeerBinnenkomend: false);'));
     expect(jacht, contains('bijUitslag?.call(f, Kopieuitslag.anders);'));

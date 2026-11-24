@@ -101,4 +101,41 @@ void main() {
     final c = File('lib/catalog.dart').readAsStringSync();
     expect(RegExp(r"preview: t\['preview'\] is String").allMatches(c).length, 2, reason: 'beide zoekpaden van Deezer');
   });
+
+  testWidgets('zonder fragment, met een zoeker: het gevonden fragment speelt; een verlopen fragment wordt vers gezocht',
+      (tester) async {
+    final v = maak();
+    var gezocht = 0;
+    await tester.pumpWidget(app(
+        v,
+        VoorproefKnop(
+            sleutel: 'z',
+            fragment: 'https://cdnt-preview.dzcdn.net/a.mp3?hdnea=exp=1000000000~acl=x',
+            fragmentZoeker: () async {
+              gezocht++;
+              return 'https://deezer/vers.mp3';
+            },
+            plek: Radioplek(artiest: 'Metejoor', titel: 'Wie ga ik zijn'))));
+    await tester.tap(find.byType(IconButton));
+    await tester.pump();
+    await tester.pump();
+    expect(gezocht, 1, reason: 'het bewaarde fragment was verlopen');
+    expect(gespeeld, ['https://deezer/vers.mp3']);
+    await v.stop('z');
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  test('aangesloten: het oortje op albumpagina, Ontdek (rij en tegel), de artiestpagina en Nieuwe releases', () {
+    final m = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
+    expect(m, contains("                  oortje('alb:\${widget.album.ref.keyPart}:\$i',"));
+    expect("oortje('ontdek:\${t.artist}|\${t.title}',".allMatches(m).length, 2, reason: 'de rij (gsm) en de tegel (pc)');
+    expect(m, contains("                  oortje('artiest:\${n.artiest}|\${n.titel}',"));
+    expect(m, contains("        : oortje('nieuw:\${n.sleutel}', artiest: n.artiest, titel: n.titel,"));
+    expect(m, contains('      fragmentZoeker: () => deezerFragment(artiest, titel),'));
+    expect(m, contains('  final uit = await _fragmentZoeker.trekNa([AiNummer(artiest, titel)], elders: _itunesVoorModel);'));
+    expect(m, contains('      fragmentZoeker: deezerFragment,'), reason: 'ook het AI-scherm zoekt een vers fragment');
+    final k = File('lib/ui/nieuw_kaarten.dart').readAsStringSync();
+    expect(k, contains('          ?k.naast,'), reason: 'de brede kaart: naast de tekst');
+    expect(k, contains('_hoesMetLint(k, hoes, kHoek12, naast: true),'), reason: 'de grote kaart: een rondje op de hoes, naast de knop is geen plaats');
+  });
 }

@@ -21,6 +21,16 @@ import 'models.dart' show Track;
 import 'radio.dart' show AlVanJou, Radioplek;
 import 'soulseek.dart' show SoulseekFile;
 
+/// Is dit fragment verlopen? Deezer zet een vervaltijd in het adres (`hdnea=exp=1732460000~…`): een fragment dat in
+/// Ontdek of een bewaarde AI-lijst stond, speelt na een tijd niet meer. Een minuut speling; zonder vervaltijd (iTunes)
+/// verloopt het niet.
+bool fragmentVerlopen(String adres, {DateTime? nu}) {
+  final m = RegExp(r'exp=(\d{9,})').firstMatch(adres);
+  if (m == null) return false;
+  final tot = int.parse(m.group(1)!);
+  return (nu ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000 >= tot - 60;
+}
+
 /// Hoe lang een Soulseek-proef klinkt: het begin van het nummer.
 const Duration kProefDuur = Duration(seconds: 30);
 
@@ -143,6 +153,23 @@ class Voorproef extends ChangeNotifier {
     }
     // Voorbij en niet gehouden, maar het landde toch (een klein bestand, net op tijd): weer weg.
     if (p.afgelopen && !p.gehouden && !p.alVanJou) await vergeet(t);
+  }
+
+  /// Eerst een fragment zoeken ([zoekFragment]: Deezer, iTunes), en is er geen, de Soulseek-proef — voor waar de app geen
+  /// fragment bij de hand heeft (een albumpagina, Ontdek, de artiestpagina, Nieuwe releases; Saber, 24-11-2026). Intussen
+  /// staat de knop op "zoekt"; nog eens tikken stopt ook dit.
+  Future<void> zoekEnProef(String sleutel, Radioplek plek, Future<String?> Function() zoekFragment) async {
+    await _rondAf();
+    final p = _nu = _Proef(sleutel, soulseek: false);
+    notifyListeners();
+    String? f;
+    try {
+      f = await zoekFragment();
+    } catch (_) {}
+    if (!identical(_nu, p)) return; // intussen gestopt of een andere proef
+    _nu = null;
+    if (f != null) return fragment(sleutel, f);
+    return soulseek(sleutel, plek);
   }
 
   /// Houden: de download gaat door; geeft het nummer zodra het landt (null als het niet lukte).

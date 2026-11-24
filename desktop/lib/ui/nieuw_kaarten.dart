@@ -39,6 +39,7 @@ class NieuwKaart {
     this.onKnop,
     this.knopIcoon = Icons.play_arrow_rounded,
     this.knopTekst = 'Afspelen',
+    this.naast,
   });
 
   final String titel, regel2;
@@ -63,6 +64,9 @@ class NieuwKaart {
   final VoidCallback? onKnop;
   final IconData knopIcoon;
   final String knopTekst;
+
+  /// Rechts naast de tekst, of naast de knop: de voorproef van een nieuw nummer (Saber, 24-11-2026).
+  final Widget? naast;
 }
 
 /// De maten van de rij, uit de breedte die er is en de tekstschaal van het toestel.
@@ -104,11 +108,19 @@ class DatumLint extends StatelessWidget {
       );
 }
 
-Widget _hoesMetLint(NieuwKaart k, double maat, double hoek) => SizedBox.square(
+/// [naast]: [NieuwKaart.naast] als rondje rechtsboven op de hoes — op de grote kaart, waar naast de knop geen plaats is.
+Widget _hoesMetLint(NieuwKaart k, double maat, double hoek, {bool naast = false}) => SizedBox.square(
       dimension: maat,
       child: Stack(fit: StackFit.expand, children: [
         ClipRRect(borderRadius: BorderRadius.circular(hoek), child: k.hoes(maat)),
         if (k.lint != null) Positioned(left: 4, bottom: 4, child: DatumLint(k.lint!)),
+        if (naast && k.naast != null)
+          Positioned(
+            right: 4,
+            top: 4,
+            child: DecoratedBox(
+                decoration: const BoxDecoration(color: Color(0xE6FFFFFF), shape: BoxShape.circle), child: k.naast!),
+          ),
         if (k.bezig)
           Center(
             child: Container(
@@ -204,6 +216,7 @@ class BredeKaart extends StatelessWidget {
               ],
             ),
           ),
+          ?k.naast,
         ]),
       ),
     );
@@ -239,7 +252,7 @@ class GroteKaart extends StatelessWidget {
           ),
         ),
         child: Row(children: [
-          _hoesMetLint(k, hoes, kHoek12),
+          _hoesMetLint(k, hoes, kHoek12, naast: true),
           const SizedBox(width: kRuimte16),
           Expanded(
             child: Column(

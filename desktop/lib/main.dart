@@ -27154,6 +27154,10 @@ NieuwKaart nieuwNummerKaart(BuildContext context, NieuwNummer n, DateTime nu, {b
     onLang: () => _nieuwNummerMenu(context, n),
     onRechts: (bij) => _nieuwNummerMenu(context, n, bij: bij),
     onKnop: groot && !komt ? () => speler.speel(context, n) : null,
+    // De voorproef (Saber, 24-11-2026), niet voor wat nog moet uitkomen.
+    naast: komt
+        ? null
+        : oortje('nieuw:${n.sleutel}', artiest: n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null, album: n.album.title),
   );
 }
 
@@ -28254,7 +28258,15 @@ class _OntdekViewState extends State<OntdekView> {
         ),
         onTap: () => _open(n, heroTag: held),
         onAfspelen: () => _speel(n),
-        knop: _downloadControl(context, jobKey: sleutel, onDownload: () => _haal(n), tooltip: 'Downloaden (beste bron)'),
+        knop: Row(mainAxisSize: MainAxisSize.min, children: [
+          oortje('ontdek:${t.artist}|${t.title}',
+              artiest: t.artist,
+              titel: t.title,
+              seconden: t.seconds > 0 ? t.seconds : null,
+              album: t.album.isEmpty ? null : t.album,
+              fragment: t.preview),
+          _downloadControl(context, jobKey: sleutel, onDownload: () => _haal(n), tooltip: 'Downloaden (beste bron)'),
+        ]),
         knoppenAltijd: _isTouch,
         knopAltijd: haalt,
         onLongPress: () => _menu(n),
@@ -28281,9 +28293,16 @@ class _OntdekViewState extends State<OntdekView> {
   Widget _row(OntdekNummer n) {
     final t = n.nummer;
     final klein = VisualDensity.compact;
+    final proef = oortje('ontdek:${t.artist}|${t.title}',
+        artiest: t.artist,
+        titel: t.title,
+        seconden: t.seconds > 0 ? t.seconds : null,
+        album: t.album.isEmpty ? null : t.album,
+        fragment: t.preview);
     final knoppen = Theme(
       data: Theme.of(context).copyWith(visualDensity: klein),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
+        proef,
         SpeelNuKnop(
             artiest: t.artist,
             titel: t.title,
@@ -29105,6 +29124,7 @@ Future<void> openAiLijst(BuildContext context, {String? zin, String? lijstId}) {
         return i;
       },
       afspelen: (id) => speelAiLijst(ctx, id),
+      fragmentZoeker: deezerFragment,
     ),
   ));
 }
@@ -29153,6 +29173,23 @@ Future<String?> speelAiLijst(BuildContext context, String lijstId, {int vanaf = 
             unawaited(lijsten.zetAi(lijstId, ai: nu.toJson(), naam: lijsten.byId(lijstId)?.name ?? nu.naam, eigen: eigenIdsVan(nu)));
           });
 }
+
+/// Een fragment van 30 s voor [artiest] — [titel]: Deezer, anders iTunes; null als geen van beide het nummer kent. Voor
+/// het oortje waar de app geen fragment bij de hand heeft ([VoorproefKnop.fragmentZoeker]; Saber, 24-11-2026).
+final _fragmentZoeker = RecommendService();
+Future<String?> deezerFragment(String artiest, String titel) async {
+  final uit = await _fragmentZoeker.trekNa([AiNummer(artiest, titel)], elders: _itunesVoorModel);
+  return uit.firstOrNull?.preview;
+}
+
+/// Het oortje voor een nummer dat je niet hebt: het fragment als het er al is, anders er een zoeken, anders Soulseek.
+Widget oortje(String sleutel, {required String artiest, required String titel, int? seconden, String? album, String? fragment}) =>
+    VoorproefKnop(
+      sleutel: sleutel,
+      fragment: fragment,
+      fragmentZoeker: () => deezerFragment(artiest, titel),
+      plek: Radioplek(artiest: artiest, titel: titel, seconden: seconden, album: album),
+    );
 
 Widget _downloadControl(BuildContext context,
     {required String jobKey, required VoidCallback onDownload, String tooltip = 'Downloaden via Soulseek'}) {
@@ -35903,6 +35940,8 @@ class _BekendNietVanJou extends StatelessWidget {
                 onTap: () => speelGetiktNieuw(context,
                     artiest: n.artiest, titel: n.titel, seconden: seconden, album: album, hoes: d?.cover),
                 child: Row(children: [
+                  oortje('artiest:${n.artiest}|${n.titel}',
+                      artiest: n.artiest, titel: n.titel, seconden: seconden, album: album, fragment: d?.preview),
                   SpeelNuKnop(artiest: n.artiest, titel: n.titel, seconden: seconden, album: album, hoes: d?.cover),
                   const SizedBox(width: 4),
                   Expanded(
@@ -38542,8 +38581,17 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 if (soulseekReady && srcCount > 0)
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
-                    child: Text('$srcCount ⌄',
-                        style: TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text('$srcCount ⌄', style: TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
+                      // De vraag voor dit nummer zelf is nog niet binnen: het getal groeit nog (24-11-2026, Edith Piaf:
+                      // "1 ⌄" leek af, terwijl de telling per nummer nog in de zoekrem stond).
+                      if (_perNummerLoopt && _owned(t) == null && !_perNummerOp.containsKey('${t.title}|${t.durationSec}'))
+                        Padding(
+                          padding: const EdgeInsets.only(left: 4),
+                          child: SizedBox(
+                              width: 9, height: 9, child: CircularProgressIndicator(strokeWidth: 1.4, color: _muted)),
+                        ),
+                    ]),
                   )
                 else if (soulseekReady && (_slskBusy || !_zeefKlaar || _perNummerLoopt))
                   Padding(
@@ -38560,6 +38608,12 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                     ),
                   )
                 else if (soulseekReady) ...[
+                  // De voorproef (Saber, 24-11-2026: "waar zie ik de preview button?").
+                  oortje('alb:${widget.album.ref.keyPart}:$i',
+                      artiest: t.artist.isEmpty ? widget.artistName : t.artist,
+                      titel: t.title,
+                      seconden: t.durationSec > 0 ? t.durationSec : null,
+                      album: widget.album.title),
                   SpeelNuKnop(
                       artiest: t.artist.isEmpty ? widget.artistName : t.artist,
                       titel: t.title,

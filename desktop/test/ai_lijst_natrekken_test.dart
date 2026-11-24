@@ -2,6 +2,7 @@
 // "niet gevonden, misschien verzonnen". Met hoes, lengte en een fragment van 30 s, voor er iets gedownload wordt.
 import 'package:debridmusic/ai_lijst.dart';
 import 'package:debridmusic/ai_lijst_natrekken.dart';
+import 'package:debridmusic/aanbevolen.dart' show recTrackNaarJson, recTrackUitJson;
 import 'package:debridmusic/recommend.dart' show RecTrack;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -56,5 +57,12 @@ void main() {
       return [];
     });
     expect(gevraagd, isFalse);
+  });
+
+  test('Ontdek naar het toestel: het Deezer-id en het fragment gaan mee', () {
+    final t = recTrackUitJson(recTrackNaarJson(
+        const RecTrack('Metejoor', 'Wie ga ik zijn', null, seconds: 208, deezerId: 99, preview: 'https://deezer/p.mp3')))!;
+    expect((t.deezerId, t.preview, t.seconds), (99, 'https://deezer/p.mp3', 208));
+    expect(recTrackUitJson(recTrackNaarJson(const RecTrack('A', 'B', null)))!.preview, isNull);
   });
 }

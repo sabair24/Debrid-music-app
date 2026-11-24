@@ -6215,7 +6215,12 @@ class DownloadManager extends ChangeNotifier {
   /// Mag de blijvende jacht nu een plaat zoeken? Soulseek is er en zwijgt niet, en er wacht geen jacht in de rij: een
   /// plaat met twaalf kandidaten zou anders twaalf jachten achter de vorige zetten.
   bool get kanBlijvendJagen =>
-      blijvend != null && soulseek.available && !soulseek.client.serverZwijgt && _jachten.wachtend == 0;
+      blijvend != null &&
+      soulseek.available &&
+      !soulseek.client.serverZwijgt &&
+      _jachten.wachtend == 0 &&
+      // Een albumpagina wacht op haar telling: die gaat voor (24-11-2026, Edith Piaf — zie [Zoekrem.tellingWacht]).
+      !zoekrem.tellingWacht;
 
   /// De blijvende jacht (blijvende_jacht.dart): één zoekopdracht voor [plaat] — met "24bit" als eigen zoekopdracht
   /// erachter — en voor elk nummer met een kandidaat die beter kan zijn en nog niet binnen was, de gewone jacht
@@ -6429,6 +6434,8 @@ class DownloadManager extends ChangeNotifier {
     final c = cdjacht, lijst = twijfel;
     if (c == null || lijst == null || DateTime.now().isBefore(cdjachtVanaf)) return;
     if (_soortBezig.isNotEmpty) return;
+    // Een albumpagina wacht op haar telling: die gaat voor ([Zoekrem.tellingWacht]).
+    if (zoekrem.tellingWacht) return;
     final geveegd = _cdjachtGeveegd;
     if (geveegd == null || DateTime.now().difference(geveegd) >= const Duration(hours: 6)) await cdjachtVegen();
     final nu = DateTime.now();

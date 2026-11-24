@@ -259,6 +259,8 @@ Map<String, dynamic> recTrackNaarJson(RecTrack t) => {
       if (t.seconds != 0) 'seconds': t.seconds,
       if (t.rank != 0) 'rank': t.rank,
       if (t.artistId != 0) 'artistId': t.artistId,
+      if (t.deezerId != 0) 'deezerId': t.deezerId,
+      if (t.preview != null) 'preview': t.preview,
     };
 
 RecTrack? recTrackUitJson(Object? j) {
@@ -271,7 +273,9 @@ RecTrack? recTrackUitJson(Object? j) {
       albumId: n(j['albumId']),
       seconds: n(j['seconds']),
       rank: n(j['rank']),
-      artistId: n(j['artistId']));
+      artistId: n(j['artistId']),
+      deezerId: n(j['deezerId']),
+      preview: j['preview'] is String ? j['preview'] as String : null);
 }
 
 /// Hoe de kandidaten en hun nummers gevonden worden — Deezer in de app, een nep in de toets.

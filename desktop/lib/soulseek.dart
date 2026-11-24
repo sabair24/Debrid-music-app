@@ -1808,6 +1808,24 @@ class Zoekrem {
   /// [telling]: de telling per nummer op een albumpagina — achtergrond, en dan nog [kZoekTellingMarge] en
   /// [kZoekTellingMargeVijf] onder die grens, zodat ze nooit iets anders laat wachten.
   Future<Duration?> neem({bool achtergrond = false, bool telling = false, bool Function()? nogNodig}) async {
+    if (telling) _tellingWacht++;
+    try {
+      return await _neem(achtergrond: achtergrond, telling: telling, nogNodig: nogNodig);
+    } finally {
+      if (telling) _tellingWacht--;
+    }
+  }
+
+  int _tellingWacht = 0;
+
+  /// Wacht er een telling van een albumpagina op een plek ([neem] met `telling`)? Dan stappen de onzichtbare jachten
+  /// opzij (de blijvende jacht, de cd-jacht): wat je bekijkt gaat voor. Saber, 24-11-2026, bij Edith Piaf — The Best Of:
+  /// *"is dit niet wat weinig resultaat ?"* — 1 bron per nummer, terwijl één vraag 378 bestanden gaf. Sinds de jacht elke
+  /// dag zoekt (3.9.754) zat de achtergrond vol (518 keer gewacht in zestien uur), en de telling, die onder die grens
+  /// blijft, kwam er niet meer tussen.
+  bool get tellingWacht => _tellingWacht > 0;
+
+  Future<Duration?> _neem({required bool achtergrond, required bool telling, bool Function()? nogNodig}) async {
     var gewacht = Duration.zero;
     final achter = achtergrond || telling;
     if (!achter) _jijLaatst = _klok();

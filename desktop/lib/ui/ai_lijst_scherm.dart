@@ -27,7 +27,11 @@ class AiLijstPagina extends StatefulWidget {
     required this.natrekken,
     required this.opslaan,
     required this.afspelen,
+    this.fragmentZoeker,
   });
+
+  /// Een vers fragment voor een regel waarvan het bewaarde verlopen is (Deezer zet een vervaltijd in het adres).
+  final Future<String?> Function(String artiest, String titel)? fragmentZoeker;
 
   /// Meteen een lijst vragen met deze zin (uit "Zeg wat je wil horen").
   final String? zin;
@@ -434,6 +438,7 @@ class _AiLijstPaginaState extends State<AiLijstPagina> {
       : VoorproefKnop(
           sleutel: 'ai:${n.sleutel}',
           fragment: n.fragment,
+          fragmentZoeker: widget.fragmentZoeker == null ? null : () => widget.fragmentZoeker!(n.artiest, n.titel),
           maat: maat,
           plek: Radioplek(artiest: n.artiest, titel: n.titel, seconden: n.seconden > 0 ? n.seconden : null));
 
