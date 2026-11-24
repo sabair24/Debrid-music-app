@@ -132,4 +132,40 @@ void main() {
     expect(gekregen, same(f));
     await v.stop('bron');
   });
+
+  group('een fragment zoeken (Saber, 24-11-2026: het oortje op albumpagina, Ontdek, artiest, nieuwe releases)', () {
+    test('DE KERN: gevonden = het fragment, niets gedownload; niet gevonden = de Soulseek-proef', () async {
+      final v = maak();
+      await v.zoekEnProef('a', _plek(), () async => 'https://deezer/p.mp3');
+      expect(speler.gespeeld.last, ('https://deezer/p.mp3', null));
+      expect(gestopt, 0, reason: 'geen haal begonnen');
+      await v.stop('a');
+      unawaited(v.zoekEnProef('b', _plek(), () async => null));
+      await _even();
+      expect(speler.gespeeld.last, ('http://127.0.0.1/groei/1.flac', kProefDuur), reason: 'geen fragment: Soulseek');
+      await v.stop('b');
+    });
+
+    test('tijdens het zoeken staat de knop op zoekt; nog eens tikken stopt, en dan speelt er niets', () async {
+      final v = maak();
+      final zoek = Completer<String?>();
+      unawaited(v.zoekEnProef('a', _plek(), () => zoek.future));
+      await _even();
+      expect(v.faseVan('a'), ProefFase.zoekt);
+      await v.stop('a');
+      zoek.complete('https://deezer/p.mp3');
+      await _even();
+      expect(speler.gespeeld, isEmpty);
+      expect(v.faseVan('a'), ProefFase.niets);
+    });
+
+    test('een verlopen fragment van Deezer (exp= in het adres) telt niet; iTunes verloopt niet', () {
+      final nu = DateTime.fromMillisecondsSinceEpoch(1764000000 * 1000);
+      expect(fragmentVerlopen('https://cdnt-preview.dzcdn.net/a.mp3?hdnea=exp=1763999000~acl=x~hmac=y', nu: nu), isTrue);
+      expect(fragmentVerlopen('https://cdnt-preview.dzcdn.net/a.mp3?hdnea=exp=1764000030~acl=x', nu: nu), isTrue,
+          reason: 'een minuut speling');
+      expect(fragmentVerlopen('https://cdnt-preview.dzcdn.net/a.mp3?hdnea=exp=1764090000~acl=x', nu: nu), isFalse);
+      expect(fragmentVerlopen('https://audio-ssl.itunes.apple.com/x/mzaf_1.plus.aac.p.m4a', nu: nu), isFalse);
+    });
+  });
 }

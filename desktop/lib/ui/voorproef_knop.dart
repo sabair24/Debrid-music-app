@@ -13,22 +13,33 @@ import 'kleuren.dart';
 /// gedownload); anders een Soulseek-proef voor [plek] ([bestand]: dit ene bestand, uit Bronnen). [sleutel]: wat deze
 /// knop beproeft — ▶ of ⬇ ernaast vraagt [Voorproef.loopt] om dezelfde download te laten doorgaan.
 class VoorproefKnop extends StatelessWidget {
-  const VoorproefKnop({super.key, required this.sleutel, this.fragment, this.plek, this.bestand, this.maat = 22});
+  const VoorproefKnop(
+      {super.key, required this.sleutel, this.fragment, this.fragmentZoeker, this.plek, this.bestand, this.maat = 22});
 
   final String sleutel;
   final String? fragment;
+
+  /// Geen [fragment] bij de hand: zoek er bij het tikken een (Deezer, iTunes); anders de Soulseek-proef.
+  final Future<String?> Function()? fragmentZoeker;
   final Radioplek? plek;
   final SoulseekFile? bestand;
   final double maat;
 
   bool get _kan => fragment != null || plek != null;
 
+  /// Het fragment, als het nog geldt; verlopen (Deezer) = er een nieuw zoeken ([fragmentZoeker]).
+  String? get _vers {
+    final f = fragment;
+    if (f == null) return null;
+    return fragmentVerlopen(f) && fragmentZoeker != null && plek != null ? null : f;
+  }
+
   @override
   Widget build(BuildContext context) {
     final v = context.watch<Voorproef?>();
     if (v == null || !_kan) return const SizedBox.shrink();
     final fase = v.faseVan(sleutel);
-    final soulseek = fragment == null;
+    final soulseek = fragment == null && fragmentZoeker == null;
     final (Widget icoon, String uitleg) = switch (fase) {
       ProefFase.zoekt => (
           SizedBox(width: maat * 0.8, height: maat * 0.8, child: CircularProgressIndicator(strokeWidth: 2, color: kAccent)),
@@ -52,7 +63,11 @@ class VoorproefKnop extends StatelessWidget {
       onPressed: switch (fase) {
         ProefFase.zoekt || ProefFase.klinkt => () => v.stop(sleutel),
         ProefFase.gehouden => null,
-        _ => () => fragment != null ? v.fragment(sleutel, fragment!) : v.soulseek(sleutel, plek!, alleen: bestand),
+        _ => () => _vers != null
+            ? v.fragment(sleutel, _vers!)
+            : fragmentZoeker != null && bestand == null
+                ? v.zoekEnProef(sleutel, plek!, fragmentZoeker!)
+                : v.soulseek(sleutel, plek!, alleen: bestand),
       },
     );
   }

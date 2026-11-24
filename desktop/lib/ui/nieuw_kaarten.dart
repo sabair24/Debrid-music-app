@@ -39,6 +39,7 @@ class NieuwKaart {
     this.onKnop,
     this.knopIcoon = Icons.play_arrow_rounded,
     this.knopTekst = 'Afspelen',
+    this.naast,
   });
 
   final String titel, regel2;
@@ -63,6 +64,9 @@ class NieuwKaart {
   final VoidCallback? onKnop;
   final IconData knopIcoon;
   final String knopTekst;
+
+  /// Rechts naast de tekst, of naast de knop: de voorproef van een nieuw nummer (Saber, 24-11-2026).
+  final Widget? naast;
 }
 
 /// De maten van de rij, uit de breedte die er is en de tekstschaal van het toestel.
@@ -204,6 +208,7 @@ class BredeKaart extends StatelessWidget {
               ],
             ),
           ),
+          ?k.naast,
         ]),
       ),
     );
@@ -271,6 +276,7 @@ class GroteKaart extends StatelessWidget {
                       style: TextStyle(fontSize: 12, color: kGedempt, height: 1.35)),
                 if (k.onKnop != null) ...[
                   const SizedBox(height: kRuimte8),
+                  Row(mainAxisSize: MainAxisSize.min, children: [
                   FilledButton.icon(
                     onPressed: k.onKnop,
                     icon: Icon(k.knopIcoon, size: 18),
@@ -282,6 +288,8 @@ class GroteKaart extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 14),
                     ),
                   ),
+                  ?k.naast,
+                  ]),
                 ],
               ],
             ),
