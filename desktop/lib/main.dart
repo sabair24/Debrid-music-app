@@ -38581,8 +38581,17 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 if (soulseekReady && srcCount > 0)
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
-                    child: Text('$srcCount ⌄',
-                        style: TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text('$srcCount ⌄', style: TextStyle(color: _accent2, fontSize: 11, fontWeight: FontWeight.w600)),
+                      // De vraag voor dit nummer zelf is nog niet binnen: het getal groeit nog (24-11-2026, Edith Piaf:
+                      // "1 ⌄" leek af, terwijl de telling per nummer nog in de zoekrem stond).
+                      if (_perNummerLoopt && _owned(t) == null && !_perNummerOp.containsKey('${t.title}|${t.durationSec}'))
+                        Padding(
+                          padding: const EdgeInsets.only(left: 4),
+                          child: SizedBox(
+                              width: 9, height: 9, child: CircularProgressIndicator(strokeWidth: 1.4, color: _muted)),
+                        ),
+                    ]),
                   )
                 else if (soulseekReady && (_slskBusy || !_zeefKlaar || _perNummerLoopt))
                   Padding(

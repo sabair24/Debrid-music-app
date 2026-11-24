@@ -162,4 +162,54 @@ void main() {
       expect(s, contains('await zoekrem.neem(achtergrond: achtergrond, telling: telling, nogNodig: nogNodig);'));
     });
   });
+  // Saber, 24-11-2026, bij Edith Piaf — The Best Of: 1 bron per nummer, terwijl één vraag 378 bestanden gaf. De achtergrond
+  // zat vol sinds de jacht elke dag zoekt (3.9.754), en de telling kwam er niet meer tussen. Nu stappen de onzichtbare
+  // jachten opzij zolang er een telling wacht; de radio en jouw eigen tik blijven voorgaan.
+  group('de telling wacht: de jachten stappen opzij', () {
+    test('DE KERN: tellingWacht staat aan zolang een telling op een plek wacht, en gaat daarna uit', () {
+      fakeAsync((fa) {
+        final rem = Zoekrem(klok: () => _t0.add(fa.elapsed));
+        for (var i = 0; i < 40; i++) {
+          unawaited(rem.neem(achtergrond: true));
+        }
+        fa.flushMicrotasks();
+        expect(rem.tellingWacht, isFalse, reason: 'achtergrond telt niet als telling');
+        var klaar = false;
+        unawaited(rem.neem(telling: true).then((_) => klaar = true));
+        fa.flushMicrotasks();
+        expect(klaar, isFalse, reason: 'de achtergrond zit vol');
+        expect(rem.tellingWacht, isTrue);
+        fa.elapse(const Duration(minutes: 30));
+        expect(klaar, isTrue);
+        expect(rem.tellingWacht, isFalse);
+      });
+    });
+
+    test('een telling die niet meer nodig is (de pagina is dicht), laat de jachten ook weer gaan', () {
+      fakeAsync((fa) {
+        final rem = Zoekrem(klok: () => _t0.add(fa.elapsed));
+        for (var i = 0; i < 40; i++) {
+          unawaited(rem.neem(achtergrond: true));
+        }
+        var open = true;
+        unawaited(rem.neem(telling: true, nogNodig: () => open));
+        fa.flushMicrotasks();
+        expect(rem.tellingWacht, isTrue);
+        open = false;
+        fa.elapse(const Duration(minutes: 10));
+        expect(rem.tellingWacht, isFalse);
+      });
+    });
+
+    test('aangesloten: de blijvende jacht en de cd-jacht wachten op een telling; het getal toont dat het nog groeit', () {
+      final o = _bron('lib/online.dart');
+      expect(o, contains('      _jachten.wachtend == 0 &&\n'), reason: 'kanBlijvendJagen');
+      expect(o, contains('      !zoekrem.tellingWacht;'));
+      expect(o, contains('    if (_soortBezig.isNotEmpty) return;\n'
+          '    // Een albumpagina wacht op haar telling: die gaat voor ([Zoekrem.tellingWacht]).\n'
+          '    if (zoekrem.tellingWacht) return;'));
+      final m = _bron('lib/main.dart');
+      expect(m, contains("if (_perNummerLoopt && _owned(t) == null && !_perNummerOp.containsKey('\${t.title}|\${t.durationSec}'))"));
+    });
+  });
 }
