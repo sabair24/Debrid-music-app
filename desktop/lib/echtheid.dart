@@ -29,6 +29,7 @@
 /// ffmpeg staat in `echtheid_meter.dart`.
 library;
 
+import 'spiegel.dart' show kSpiegelOpgeschaald;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -79,6 +80,11 @@ class Echtheidsoordeel {
   /// 24,5-40 kHz ten opzichte van de muziek (dB), alleen boven 48 kHz.
   final double? ultraDb;
 
+  /// De spiegeltest (spiegel.dart), alleen bij 48 kHz: hoe vast wat boven 22,05 kHz zit aan zijn spiegelbeeld rond
+  /// 22,05 kHz hangt. Vanaf [kSpiegelOpgeschaald] opgeschaald vanaf 44,1 kHz ([Bovenband.leeg]). Null: niet gemeten
+  /// (geen 48 kHz, of een meting van vóór 25-11-2026 — die meet de veger opnieuw).
+  final double? spiegel;
+
   /// Waarmee een ANDERE kopie van dezelfde opname bewees dat deze afgekapt is ([bewezenDoor]): "je cd loopt door tot
   /// 21,3 kHz", "precies 1024 monsters achter je cd". Null als alleen deze meting sprak.
   final String? bewijs;
@@ -94,6 +100,7 @@ class Echtheidsoordeel {
     this.integriteit = Integriteit.onbekend,
     this.ultraDb,
     this.bewijs,
+    this.spiegel,
   });
 
   /// Dit oordeel, maar afgekapt — bewezen door een andere kopie van dezelfde opname ([bewijs]).
@@ -114,6 +121,7 @@ class Echtheidsoordeel {
         integriteit: integriteit,
         ultraDb: ultraDb,
         bewijs: bewijs,
+        spiegel: spiegel,
       );
 
   /// Alleen wat BEWEZEN is telt. `onbekend` is nadrukkelijk geen "nep" — zie [isOnbekend].
@@ -145,6 +153,7 @@ class Echtheidsoordeel {
         'integriteit': integriteit.name,
         if (ultraDb != null) 'ultraDb': ultraDb,
         if (bewijs != null) 'bewijs': bewijs,
+        if (spiegel != null) 'spiegel': spiegel,
       };
 
   /// Null voor rommel én voor een oordeel van een oudere meting ([echtheidsVersie]): dat wordt dan
@@ -174,8 +183,15 @@ class Echtheidsoordeel {
       integriteit: lees(Integriteit.values, 'integriteit') ?? Integriteit.onbekend,
       ultraDb: (j['ultraDb'] as num?)?.toDouble(),
       bewijs: j['bewijs'] as String?,
+      spiegel: (j['spiegel'] as num?)?.toDouble(),
     );
   }
+
+  /// Bij 48 kHz is de spiegeltest nog niet gemeten: een oordeel van vóór 25-11-2026. Dan meet de veger opnieuw.
+  bool mistSpiegel(int kopSampleRate) => kopSampleRate == 48000 && spiegel == null && !isOnbekend;
+
+  /// Opgeschaald vanaf 44,1 kHz volgens de spiegeltest (en niet om een andere reden nep).
+  bool get gespiegeld => (spiegel ?? 0) >= kSpiegelOpgeschaald;
 }
 
 // ── Proef A: de bitdiepte ──────────────────────────────────────────────────
@@ -325,6 +341,7 @@ Echtheidsoordeel oordeelVol({
   required int gebruikteBits,
   required int nietNulSamples,
   Integriteit integriteit = Integriteit.onbekend,
+  double? spiegel,
 }) {
   final sr = s.sampleRate;
   final nyq = sr / 2;
@@ -353,6 +370,10 @@ Echtheidsoordeel oordeelVol({
           (wand != null && wand.db >= volOpgeschaaldWand && ultra <= volOpgeschaaldLeeg);
       boven = leeg ? Bovenband.leeg : Bovenband.vol;
     }
+  } else if (kopSampleRate == 48000 && sr == 48000 && spiegel != null && spiegel >= kSpiegelOpgeschaald) {
+    // ── B bij 48 kHz: wat boven 22,05 kHz zit, is het spiegelbeeld van 20–22 kHz (spiegel.dart) — opgeschaald vanaf
+    // 44,1 kHz. Saber, 25-11-2026, bij Chris Isaak "Blue Hotel" ("24/48 · studio"): "of het 100 procent klopt?" ──
+    boven = Bovenband.leeg;
   }
 
   // ── C: staat er een muur tussen 14 en 20,9 kHz? ──
@@ -388,6 +409,7 @@ Echtheidsoordeel oordeelVol({
     vensters: s.luid,
     integriteit: integriteit,
     ultraDb: ultra,
+    spiegel: spiegel,
   );
 }
 
@@ -551,6 +573,9 @@ String waarom(Echtheidsoordeel o) {
   }
   if (o.bits == Bitdiepte.opgeblazen) {
     return 'zegt meer dan 16 bits, maar gebruikt er ${o.gebruikteBits} — opgeblazen';
+  }
+  if (o.boven == Bovenband.leeg && o.gespiegeld) {
+    return 'wat boven 22 kHz zit is het spiegelbeeld van 20–22 kHz — opgeschaald vanaf 44,1 kHz, geen echte 24/48';
   }
   if (o.boven == Bovenband.leeg) {
     return 'boven 24,5 kHz vrijwel leeg — opgeschaald uit 44,1 of 48 kHz, geen echte hi-res';
