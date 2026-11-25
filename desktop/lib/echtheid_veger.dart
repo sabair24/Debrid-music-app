@@ -111,12 +111,24 @@ class EchtheidVeger {
     return !_gestopt;
   }
 
-  /// De nog ongemeten FLAC's, nieuwste eerst: wat er net binnenkwam, wil je het eerst weten.
+  /// Nog te meten: nooit gemeten, of een 48 kHz-bestand zonder spiegeltest ([Echtheidsoordeel.mistSpiegel]).
+  bool _moetMeten(Track t) {
+    final o = gemeten(t.path);
+    return o == null || o.mistSpiegel(t.sampleRate);
+  }
+
+  /// Een studioversie die de spiegeltest als opgeschaald betrapte: de pc gooit hem weg (prullenbak), het nummer blijft.
+  /// Saber, 25-11-2026, na Chris Isaak "Blue Hotel": "Weggooien + app leert het" — en 28-10-2026: "Ik wil geen fake enkel
+  /// echt". Gezet in main.dart; null in een toets.
+  Future<void> Function(Track versie, Echtheidsoordeel o)? bijGespiegeldeVersie;
+
+  /// De nog ongemeten FLAC's — ook de versies (studio, cd, vinyl naast het nummer) —, nieuwste eerst: wat er net
+  /// binnenkwam, wil je het eerst weten.
   List<Track> _teMeten() => [
-        for (final t in library.tracks)
+        for (final t in library.metVersies)
           if (t.isFlac &&
               t.path.isNotEmpty &&
-              gemeten(t.path) == null &&
+              _moetMeten(t) &&
               !_isGeblokkeerd(t.path) &&
               !_onbeoordeelbaar.contains(t.path.toLowerCase()))
             t,
@@ -139,9 +151,9 @@ class EchtheidVeger {
       while (lijst.isNotEmpty && !_gestopt) {
         final t = lijst.removeAt(0);
         if (!await _wachtOpRust()) break;
-        if (gemeten(t.path) != null || _isGeblokkeerd(t.path) || !File(t.path).existsSync()) continue;
+        if (!_moetMeten(t) || _isGeblokkeerd(t.path) || !File(t.path).existsSync()) continue;
         voortgang.value = 'echtheid ${gedaan + 1}/${gedaan + lijst.length + 1}';
-        final vers = moetVersGemeten(t.path);
+        final vers = moetVersGemeten(t.path) || (gemeten(t.path)?.mistSpiegel(t.sampleRate) ?? false);
         final o = await _meter.van(t.path,
             gebruikCache: !vers,
             kopSampleRate: t.sampleRate,
@@ -160,6 +172,11 @@ class EchtheidVeger {
         } else {
           await onthoudOordeel(t.path, o);
           if (o.isNep) nep++;
+          if (o.gespiegeld) {
+            _log.line('OPGESCHAALD (spiegel ${o.spiegel!.toStringAsFixed(2)}): ${t.path}');
+            final weg = bijGespiegeldeVersie;
+            if (weg != null) await weg(t, o);
+          }
           if (o.isVermoedelijk) vermoedelijk++;
           if (o.integriteit == Integriteit.fout) {
             kapot++;

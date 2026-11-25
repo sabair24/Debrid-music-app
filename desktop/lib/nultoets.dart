@@ -214,6 +214,133 @@ Nuluitkomst nuluitkomst(List<Nulpunt> punten) {
   return Nuluitkomst.anders;
 }
 
+// ── Over bemonsteringen heen (25-11-2026) ──
+//
+// Saber, 25-11-2026, bij Modjo "Lady (Hear Me Tonight)" ("FLAC · 24/48 · studio"): *"of het 100 procent klopt ?"*. Het
+// was zijn cd — tot op het monster gelijk in de tijd, op 0,00 dB — door een codec gehaald en als 24/48 bewaard: per
+// lijn een rest van −18 dB (0,25–1 kHz) tot −10 dB (4–12 kHz), boven 16 kHz alleen nog ruis met dezelfde sterkte, en een
+// muur op 20,0 kHz waar zijn cd doorliep tot 22 kHz. De nultoets mat het niet: hij weigerde een andere bemonstering
+// ("het omzetten zelf laat een rest achter"). De bibliotheek gaf er die dag nog drie: Destiny's Child "Girl", Jennifer
+// Lopez "Do It Well" en "I'm Real" — dezelfde muur op 20,0–20,1 kHz (Opus kapt op 20 kHz en decodeert op 48 kHz).
+//
+// Over bemonsteringen heen zegt de toets daarom NOOIT bron of bewerkt — een echte 24/48 en de cd die ervan gemaakt is
+// mogen in volume schelen (Céline Dion "Bonjour, Pardon, Merci": 0,6 dB, verder tot op −69 dB gelijk) —, alleen lossy of
+// anders. Lossy vraagt alles tegelijk ([isCodecOverRates]).
+
+/// De banden van [samenhangPerBand]: 60–250, 250–1000, 1000–4000 en 4000–8000 Hz.
+const List<(double, double)> kSamenhangBanden = [(60, 250), (250, 1000), (1000, 4000), (4000, 8000)];
+
+/// Wat de samenhang per lijn tussen kandidaat en cd zegt: per band van [kSamenhangBanden] de verhouding signaal/rest
+/// (dB, uit het gemiddelde van γ² over de lijnen) en de energie van de kandidaat tegenover de cd (dB); en hoeveel er
+/// tussen 20,5 en 21,5 kHz zit tegenover 1–5 kHz, bij elk van de twee (dB).
+typedef Samenhang = ({List<double> snrDb, List<double> verhoudingDb, double hoogKandidaat, double hoogCd});
+
+/// Codecvingerafdruk: hoogstens zoveel signaal/rest tussen 1 en 4 kHz. Modjo 15, Girl 16, Do It Well 15, I'm Real 15;
+/// echte paren 26 en meer (Confessions 40, Céline Dion: geen rest te meten).
+const double kCodecSnrHoogstens = 24;
+
+/// En het laag zoveel beter dan 1–4 kHz: codecruis groeit naar boven toe (Modjo 26 tegen 15, Do It Well 21 tegen 15).
+const double kCodecLaagBeter = 2;
+
+/// Zoveel mag een hogere band beter zijn dan de band eronder (dB): codecruis groeit naar boven toe.
+const double kCodecStijgtNiet = 3;
+
+/// Zoveel mag de energie per band (250 Hz–8 kHz) schelen: een codec houdt de energie, een andere mastering niet.
+const double kCodecVlakDb = 0.5;
+
+/// Zoveel minder tussen 20,5 en 21,5 kHz dan je cd: de kandidaat is de smalle, niet je cd (Modjo 30, Girl 31, Do It
+/// Well 18, I'm Real 22 dB).
+const double kCodecSmallerDb = 6;
+
+/// De samenhang per lijn tussen [kandidaat] en [cd] (beide mono op [kNulRate]) over de [plekken] (seconden), bij
+/// verschuiving [v] (`cd[i + v] ≈ kandidaat[i]`). Vensters van 4096 met Hann, om de 2048.
+Samenhang samenhangPerBand(Float32List kandidaat, Float32List cd, List<int> plekken, int v) {
+  const n = 4096, k2 = n ~/ 2, stuk = kStukSeconden * kNulRate;
+  final hann = Float64List(n);
+  for (var i = 0; i < n; i++) {
+    hann[i] = 0.5 - 0.5 * math.cos(2 * math.pi * i / (n - 1));
+  }
+  final sxx = Float64List(k2), syy = Float64List(k2), sr = Float64List(k2), si = Float64List(k2);
+  final xr = Float64List(n), xi = Float64List(n), yr = Float64List(n), yi = Float64List(n);
+  for (final t in plekken) {
+    final start = t * kNulRate;
+    for (var s = start; s + n <= start + stuk; s += n ~/ 2) {
+      if (s < 0 || s + n > kandidaat.length || s + v < 0 || s + v + n > cd.length) continue;
+      for (var i = 0; i < n; i++) {
+        xr[i] = cd[s + v + i] * hann[i];
+        yr[i] = kandidaat[s + i] * hann[i];
+        xi[i] = 0;
+        yi[i] = 0;
+      }
+      fft(xr, xi);
+      fft(yr, yi);
+      for (var k = 1; k < k2; k++) {
+        sxx[k] += xr[k] * xr[k] + xi[k] * xi[k];
+        syy[k] += yr[k] * yr[k] + yi[k] * yi[k];
+        sr[k] += yr[k] * xr[k] + yi[k] * xi[k];
+        si[k] += yi[k] * xr[k] - yr[k] * xi[k];
+      }
+    }
+  }
+  double db(double x) => x <= 0 ? -300 : 10 * math.log(x) / math.ln10;
+  final hz = kNulRate / n;
+  final snr = <double>[], verh = <double>[];
+  for (final (lo, hi) in kSamenhangBanden) {
+    var som = 0.0, aantal = 0, ex = 0.0, ey = 0.0;
+    for (var k = (lo / hz).ceil(); k * hz < hi; k++) {
+      ex += sxx[k];
+      ey += syy[k];
+      if (sxx[k] <= 0 || syy[k] <= 0) continue;
+      som += (sr[k] * sr[k] + si[k] * si[k]) / (sxx[k] * syy[k]);
+      aantal++;
+    }
+    final c = aantal == 0 ? 0.0 : som / aantal;
+    snr.add(c >= 1 ? 90 : db(c / (1 - c)));
+    verh.add(db(ey) - db(ex));
+  }
+  double band(Float64List s, double lo, double hi) {
+    var e = 0.0;
+    for (var k = (lo / hz).ceil(); k * hz < hi; k++) {
+      e += s[k];
+    }
+    return e;
+  }
+
+  return (
+    snrDb: snr,
+    verhoudingDb: verh,
+    hoogKandidaat: db(band(syy, 20500, 21500)) - db(band(syy, 1000, 5000)),
+    hoogCd: db(band(sxx, 20500, 21500)) - db(band(sxx, 1000, 5000)),
+  );
+}
+
+/// De codecvingerafdruk over bemonsteringen heen: zelfde volume ([kMaxVerzet]), zelfde energie per band
+/// ([kCodecVlakDb]), maar tussen 1 en 4 kHz een rest die een verliesvrije omzetting nooit laat ([kCodecSnrHoogstens]),
+/// beter in het laag ([kCodecLaagBeter]), en de kandidaat smaller dan je cd ([kCodecSmallerDb]).
+bool isCodecOverRates(Samenhang s, {required double verzetDb}) =>
+    verzetDb.abs() <= kMaxVerzet &&
+    [for (var i = 1; i < s.verhoudingDb.length; i++) s.verhoudingDb[i]].every((d) => d.abs() <= kCodecVlakDb) &&
+    s.snrDb[2] <= kCodecSnrHoogstens &&
+    s.snrDb[0] >= s.snrDb[2] + kCodecLaagBeter &&
+    // En nergens terug omhoog: codecruis groeit naar boven toe. Een andere zangopname (clean tegenover explicit: Hozier
+    // "Too Sweet", Sabrina Carpenter "Taste") wijkt alleen in de zangbanden af en is daarboven weer gelijk (90 dB).
+    s.snrDb[1] <= s.snrDb[0] + kCodecStijgtNiet &&
+    s.snrDb[2] <= s.snrDb[1] + kCodecStijgtNiet &&
+    s.snrDb[3] <= s.snrDb[2] + kCodecStijgtNiet &&
+    s.hoogCd - s.hoogKandidaat >= kCodecSmallerDb;
+
+/// De nultoets over bemonsteringen heen: [kandidaat] (bv. 24/48) tegen [cd], beide al met soxr naar [kNulRate] gerekend.
+/// Alleen [Nuluitkomst.lossy] ([isCodecOverRates]) of [Nuluitkomst.anders] — nooit bron of bewerkt.
+Nuloordeel? nultoetsOverRates(Float32List kandidaat, Float32List cd, List<int> plekken) {
+  final basis = nultoetsOp(kandidaat, cd, plekken);
+  if (basis == null) return null;
+  final v = _mediaan([for (final p in basis.punten) p.verschuiving.toDouble()]).round();
+  final verzet = _mediaan([for (final p in basis.punten) p.versterkingDb]);
+  final s = samenhangPerBand(kandidaat, cd, plekken, v);
+  final lossy = isCodecOverRates(s, verzetDb: verzet);
+  return (uitkomst: lossy ? Nuluitkomst.lossy : Nuluitkomst.anders, punten: basis.punten);
+}
+
 double _mediaan(List<double> x) {
   final s = [...x]..sort();
   return s[s.length ~/ 2];
@@ -232,7 +359,10 @@ String nulZin(Nuloordeel o) {
     Nuluitkomst.bewerkt =>
       'je cd, bewerkt: dezelfde master tot ${getal(diepste.restDb)} dB, ${getal(verzet.abs(), 1)} dB in volume verzet — '
           'niet méér dan je cd',
-    Nuluitkomst.lossy => 'precies ${-diepste.verschuiving} monsters achter je cd: een gedecodeerde stream',
+    Nuluitkomst.lossy => kVoorloop.contains(-diepste.verschuiving)
+        ? 'precies ${-diepste.verschuiving} monsters achter je cd: een gedecodeerde stream'
+        : 'zelfde opname, volume en timing als je cd, maar door een codec gehaald — een muur rond 20 kHz waar je cd '
+            'doorloopt: een gedecodeerde stream',
     Nuluitkomst.anders => 'een andere master of mix (rest ${getal(diepste.restDb)} dB) — niets bewezen',
   };
 }

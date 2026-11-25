@@ -3242,6 +3242,19 @@ Future<void> main() async {
     // De echtheid: elk nummer één keer volledig gemeten (echtheid_veger.dart, 20-10-2026), en wacht op
     // de luidheidsveger zodat de harde schijf niet twee kanten op moet.
     final echtVeger = EchtheidVeger(library: library, enabled: mode.owner, bezigElders: () => veger.bezig);
+    // Een studioversie die de spiegeltest als opgeschaald betrapte (spiegel.dart): naar de prullenbak, het nummer blijft.
+    // Saber, 25-11-2026, na Chris Isaak "Blue Hotel" en Modjo "Lady" ("24/48 · studio", allebei nep): "Weggooien + app
+    // leert het". Alleen een studioversie naast een nummer dat er nog is — nooit het nummer zelf, nooit een vinylrip.
+    echtVeger.bijGespiegeldeVersie = (versie, o) async {
+      final ankerPad = versies.ankerVan(versie.path);
+      final v = versies.versie(versie.path);
+      if (ankerPad == null || v == null || v.soort != Kopiesoort.studio || !File(ankerPad).existsSync()) return;
+      final anker = library.tracks.where((x) => x.path.toLowerCase() == ankerPad.toLowerCase()).firstOrNull;
+      if (anker == null) return;
+      final zin = await gooiVersieWeg(library, anker, versie.path);
+      WarmLog('${library.configDir}${Platform.pathSeparator}versies.log')
+          .line('spiegeltest ${o.spiegel?.toStringAsFixed(2)}: $zin — ${versie.path}');
+    };
     // De gekozen voorkant ook IN de bestanden (Saber, 21-10-2026: "doe dit altijd bij allemaal") — zie
     // hoes_in_bestand.dart. Na de twee meters, zodat de harde schijf niet drie kanten op moet.
     final hoesVeger = HoesInBestandVeger(

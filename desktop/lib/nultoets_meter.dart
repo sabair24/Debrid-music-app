@@ -145,13 +145,16 @@ class Nultoetser {
     final exe = Ffmpeg(pad: _ffmpeg).pad;
     if (exe == null) return null;
     final a = leesStreaminfo(kandidaat), b = leesStreaminfo(cd);
-    if (a != null && b != null && a.sr != b.sr) return null;
+    // Over bemonsteringen heen (25-11-2026, Modjo): beide met soxr naar [kNulRate], en alleen de codectoets
+    // ([nultoetsOverRates]) — een rest van het omzetten zegt niets over bron of bewerkt.
+    final overRates = a != null && b != null && a.sr != b.sr;
+    if (overRates && (a.sr < kNulRate || b.sr < kNulRate)) return null;
     final rate = b?.sr ?? a?.sr ?? kNulRate;
     final seconden = b != null && b.totaal > 0 ? b.totaal / rate : 240.0;
     final plekken = meetplekken(seconden);
     if (plekken.length < 2) return null;
     final tot = plekken.last + kStukSeconden + kZoekSeconden + 2;
-    final o = await _inIsolate(exe, kandidaat, cd, plekken, tot);
+    final o = await _inIsolate(exe, kandidaat, cd, plekken, tot, overRates);
     if (o == null) return null;
     final s = nulSleutel(kandidaat, cd);
     _details[s] = {
@@ -172,23 +175,25 @@ double? _rond(double x) => x.isFinite ? (x * 10).round() / 10 : null;
 
 /// De isolate, vanuit een functie op het hoogste niveau: een closure die in een methode ontstaat, neemt `this` mee — en
 /// daarmee [Nultoetser._rij], een Future, en die is niet te verzenden (de hoesveger, 3.9.538).
-Future<Nuloordeel?> _inIsolate(String exe, String kandidaat, String cd, List<int> plekken, int tot) =>
-    Isolate.run(() => _meetBuiten(exe, kandidaat, cd, plekken, tot));
+Future<Nuloordeel?> _inIsolate(String exe, String kandidaat, String cd, List<int> plekken, int tot, bool overRates) =>
+    Isolate.run(() => _meetBuiten(exe, kandidaat, cd, plekken, tot, overRates));
 
 /// In de isolate: decoderen en meten.
-Future<Nuloordeel?> _meetBuiten(String exe, String kandidaat, String cd, List<int> plekken, int tot) async {
-  final a = await _decodeer(exe, kandidaat, tot), b = await _decodeer(exe, cd, tot);
+Future<Nuloordeel?> _meetBuiten(String exe, String kandidaat, String cd, List<int> plekken, int tot, bool overRates) async {
+  final a = await _decodeer(exe, kandidaat, tot, soxr: overRates), b = await _decodeer(exe, cd, tot, soxr: overRates);
   if (a == null || b == null) return null;
-  return nultoetsOp(a, b, plekken);
+  return overRates ? nultoetsOverRates(a, b, plekken) : nultoetsOp(a, b, plekken);
 }
 
-/// Mono, [kNulRate], 32-bit float, de eerste [tot] seconden.
-Future<Float32List?> _decodeer(String exe, String pad, int tot) async {
+/// Mono, [kNulRate], 32-bit float, de eerste [tot] seconden. [soxr]: omrekenen met soxr (precisie 28, doorlaat tot
+/// 99 %) — over bemonsteringen heen, zodat het omrekenen zelf geen rest achterlaat tot 20 kHz.
+Future<Float32List?> _decodeer(String exe, String pad, int tot, {bool soxr = false}) async {
   try {
     final r = await Process.run(
         exe,
         [
           '-v', 'error', '-nostdin', '-i', pad, '-t', '$tot', '-map', '0:a:0', //
+          if (soxr) ...['-af', 'aresample=$kNulRate:resampler=soxr:precision=28:cutoff=0.99'],
           '-ac', '1', '-ar', '$kNulRate', '-f', 'f32le', '-',
         ],
         stdoutEncoding: null,

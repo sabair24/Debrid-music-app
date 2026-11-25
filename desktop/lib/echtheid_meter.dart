@@ -29,6 +29,7 @@ import 'package:crypto/crypto.dart';
 import 'echtheid.dart';
 import 'ffmpeg.dart';
 import 'fft.dart';
+import 'spiegel.dart';
 
 /// Vensters van 8192 met Hann: zo is de meting geijkt (echtheid.dart). Bij 44,1 kHz is een bin 5,4 Hz.
 const int _vensterN = 8192;
@@ -121,15 +122,17 @@ class Echtheidsmeter {
 
   bool get available => _ffmpeg.available;
 
-  Future<File?> _cacheBestand(String pad) async {
+  Future<File?> _cacheBestand(String pad, int kopSampleRate) async {
     final map = cacheMap;
     if (map == null) return null;
     try {
       final f = File(pad);
       final st = await f.stat();
-      // De versie in de sleutel: een uitslag van de oude meting wordt niet meer gelezen.
+      // De versie in de sleutel: een uitslag van de oude meting wordt niet meer gelezen. Bij 48 kHz een eigen merk sinds
+      // de spiegeltest (25-11-2026): alleen die bestanden worden opnieuw gemeten, niet de hele bibliotheek.
+      final merk = kopSampleRate == 48000 ? 's' : '';
       final sleutel = sha1
-          .convert(utf8.encode('$pad|${st.size}|${st.modified.millisecondsSinceEpoch}|v$echtheidsVersie'))
+          .convert(utf8.encode('$pad|${st.size}|${st.modified.millisecondsSinceEpoch}|v$echtheidsVersie$merk'))
           .toString();
       return File('$map${Platform.pathSeparator}$sleutel.json');
     } catch (_) {
@@ -150,7 +153,7 @@ class Echtheidsmeter {
     void Function(int pid)? opStart,
   }) async {
     try {
-      final cache = await _cacheBestand(pad);
+      final cache = await _cacheBestand(pad, kopSampleRate);
       if (gebruikCache && cache != null && await cache.exists()) {
         final j = jsonDecode(await cache.readAsString());
         if (j is Map<String, dynamic>) {
@@ -299,6 +302,8 @@ Future<Echtheidsoordeel?> meetHeelBestand({
   final nBanden = (sr / 2 / _bandHz).floor();
   final binsPerBand = _bandHz / (sr / _vensterN);
   final re = Float64List(_vensterN), im = Float64List(_vensterN);
+  // De spiegeltest (spiegel.dart): bij 48 kHz het begin van elk venster, eerste kanaal, met zijn plek in het nummer.
+  final spiegel = sr == 48000 ? Spiegelmeter() : null;
   final vensterRms = <double>[];
   final vensterBanden = <List<Float32List>>[];
 
@@ -356,6 +361,7 @@ Future<Echtheidsoordeel?> meetHeelBestand({
         buf[c][inVenster] = v / 2147483648.0;
         if (c == kanalen - 1 && ++inVenster == _vensterN) {
           sluitVenster();
+          spiegel?.venster(buf[0], volgendeStart);
           inVenster = -1;
           volgendeStart += stride;
         }
@@ -431,6 +437,7 @@ Future<Echtheidsoordeel?> meetHeelBestand({
     gebruikteBits: gebruikt,
     nietNulSamples: nietNul,
     integriteit: integriteit,
+    spiegel: spiegel?.uitslag,
   );
 }
 
