@@ -3255,6 +3255,24 @@ Future<void> main() async {
       WarmLog('${library.configDir}${Platform.pathSeparator}versies.log')
           .line('spiegeltest ${o.spiegel?.toStringAsFixed(2)}: $zin — ${versie.path}');
     };
+    // Een studioversie die de meter anders tegenspreekt — nep, of een muur rond 20 kHz — met dezelfde maat als bij
+    // binnenkomst (nepStudioVersieWeg). Saber, 26-11-2026, na Ricky Martin "Maria" ("24/48 · studio", een Opus-muur op
+    // 20,0 kHz die het gemiddelde door afgekapte pieken niet zag): "ik wil geen nep in de app". Nooit het nummer zelf,
+    // nooit een cd- of vinylversie, en niet als je nummer dezelfde twijfel heeft.
+    echtVeger.bijTegengesprokenStudio = (versie, o) async {
+      final ankerPad = versies.ankerVan(versie.path);
+      final v = versies.versie(versie.path);
+      if (ankerPad == null || v == null || v.soort != Kopiesoort.studio || !File(ankerPad).existsSync()) return;
+      final anker = library.tracks.where((x) => x.path.toLowerCase() == ankerPad.toLowerCase()).firstOrNull;
+      if (anker == null) return;
+      final log = WarmLog('${library.configDir}${Platform.pathSeparator}versies.log');
+      if (!nepStudioVersieWeg(o, gemeten(ankerPad))) {
+        log.line('studio tegengesproken (${waarom(o)}), maar je nummer niet schoon gemeten — blijft: ${versie.path}');
+        return;
+      }
+      final zin = await gooiVersieWeg(library, anker, versie.path);
+      log.line('nep-studio (${waarom(o)}): $zin — ${versie.path}');
+    };
     // De gekozen voorkant ook IN de bestanden (Saber, 21-10-2026: "doe dit altijd bij allemaal") — zie
     // hoes_in_bestand.dart. Na de twee meters, zodat de harde schijf niet drie kanten op moet.
     final hoesVeger = HoesInBestandVeger(

@@ -122,7 +122,7 @@ class Echtheidsmeter {
 
   bool get available => _ffmpeg.available;
 
-  Future<File?> _cacheBestand(String pad, int kopSampleRate) async {
+  Future<File?> _cacheBestand(String pad, int kopSampleRate, int kopBits) async {
     final map = cacheMap;
     if (map == null) return null;
     try {
@@ -130,7 +130,8 @@ class Echtheidsmeter {
       final st = await f.stat();
       // De versie in de sleutel: een uitslag van de oude meting wordt niet meer gelezen. Bij 48 kHz een eigen merk sinds
       // de spiegeltest (25-11-2026): alleen die bestanden worden opnieuw gemeten, niet de hele bibliotheek.
-      final merk = kopSampleRate == 48000 ? 's' : '';
+      // En een merk "m" sinds de muurproef op de mediaan (26-11-2026), alleen voor wat meer dan cd belooft.
+      final merk = '${kopSampleRate == 48000 ? 's' : ''}${mediaanNodig(kopSampleRate: kopSampleRate, kopBits: kopBits) ? 'm' : ''}';
       final sleutel = sha1
           .convert(utf8.encode('$pad|${st.size}|${st.modified.millisecondsSinceEpoch}|v$echtheidsVersie$merk'))
           .toString();
@@ -153,7 +154,7 @@ class Echtheidsmeter {
     void Function(int pid)? opStart,
   }) async {
     try {
-      final cache = await _cacheBestand(pad, kopSampleRate);
+      final cache = await _cacheBestand(pad, kopSampleRate, kopBits);
       if (gebruikCache && cache != null && await cache.exists()) {
         final j = jsonDecode(await cache.readAsString());
         if (j is Map<String, dynamic>) {
@@ -412,7 +413,7 @@ Future<Echtheidsoordeel?> meetHeelBestand({
     for (var i = 0; i < vensterRms.length; i++)
       if (vensterRms[i] >= mediaan && vensterRms[i] > -60) vensterBanden[i],
   ];
-  final gemiddeld = Float64List(nBanden), p95 = Float64List(nBanden);
+  final gemiddeld = Float64List(nBanden), p95 = Float64List(nBanden), mediaanBand = Float64List(nBanden);
   if (luid.isNotEmpty) {
     final kolom = Float64List(luid.length * kanalen);
     for (var k = 0; k < nBanden; k++) {
@@ -427,11 +428,18 @@ Future<Echtheidsoordeel?> meetHeelBestand({
       gemiddeld[k] = dB(s / (luid.length * kanalen));
       kolom.sort();
       p95[k] = kolom[(kolom.length * 0.95).floor().clamp(0, kolom.length - 1)];
+      mediaanBand[k] = kolom[(kolom.length * 0.5).floor().clamp(0, kolom.length - 1)];
     }
   }
 
   return oordeelVol(
-    s: Spectrumstaat(sampleRate: sr, bandHz: _bandHz, gemiddeld: gemiddeld, p95: p95, luid: luid.length * kanalen),
+    s: Spectrumstaat(
+        sampleRate: sr,
+        bandHz: _bandHz,
+        gemiddeld: gemiddeld,
+        p95: p95,
+        luid: luid.length * kanalen,
+        mediaan: luid.isEmpty ? null : mediaanBand),
     kopSampleRate: kopSampleRate > 0 ? kopSampleRate : sr,
     kopBits: kopBits > 0 ? kopBits : bps,
     gebruikteBits: gebruikt,

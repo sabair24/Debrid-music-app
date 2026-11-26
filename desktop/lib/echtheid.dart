@@ -85,6 +85,10 @@ class Echtheidsoordeel {
   /// (geen 48 kHz, of een meting van vóór 25-11-2026 — die meet de veger opnieuw).
   final double? spiegel;
 
+  /// Of de muurproef ook op de mediaan per band liep ([oordeelVol], [Spectrumstaat.mediaan]) — alleen bij een bestand
+  /// dat meer dan cd belooft. Onwaar bij een oordeel van vóór 26-11-2026: dat meet de veger opnieuw ([mistMediaan]).
+  final bool mediaan;
+
   /// Waarmee een ANDERE kopie van dezelfde opname bewees dat deze afgekapt is ([bewezenDoor]): "je cd loopt door tot
   /// 21,3 kHz", "precies 1024 monsters achter je cd". Null als alleen deze meting sprak.
   final String? bewijs;
@@ -101,6 +105,7 @@ class Echtheidsoordeel {
     this.ultraDb,
     this.bewijs,
     this.spiegel,
+    this.mediaan = false,
   });
 
   /// Dit oordeel, maar afgekapt — bewezen door een andere kopie van dezelfde opname ([bewijs]).
@@ -122,6 +127,7 @@ class Echtheidsoordeel {
         ultraDb: ultraDb,
         bewijs: bewijs,
         spiegel: spiegel,
+        mediaan: mediaan,
       );
 
   /// Alleen wat BEWEZEN is telt. `onbekend` is nadrukkelijk geen "nep" — zie [isOnbekend].
@@ -154,6 +160,7 @@ class Echtheidsoordeel {
         if (ultraDb != null) 'ultraDb': ultraDb,
         if (bewijs != null) 'bewijs': bewijs,
         if (spiegel != null) 'spiegel': spiegel,
+        if (mediaan) 'med': true,
       };
 
   /// Null voor rommel én voor een oordeel van een oudere meting ([echtheidsVersie]): dat wordt dan
@@ -184,11 +191,17 @@ class Echtheidsoordeel {
       ultraDb: (j['ultraDb'] as num?)?.toDouble(),
       bewijs: j['bewijs'] as String?,
       spiegel: (j['spiegel'] as num?)?.toDouble(),
+      mediaan: j['med'] == true,
     );
   }
 
   /// Bij 48 kHz is de spiegeltest nog niet gemeten: een oordeel van vóór 25-11-2026. Dan meet de veger opnieuw.
   bool mistSpiegel(int kopSampleRate) => kopSampleRate == 48000 && spiegel == null && !isOnbekend;
+
+  /// Belooft dit bestand meer dan cd, maar is de muurproef nog niet op de mediaan gelopen? Een oordeel van vóór
+  /// 26-11-2026 — dan meet de veger opnieuw ([mediaanNodig]).
+  bool mistMediaan(int kopSampleRate, int kopBits) =>
+      mediaanNodig(kopSampleRate: kopSampleRate, kopBits: kopBits) && !mediaan && !isOnbekend;
 
   /// Opgeschaald vanaf 44,1 kHz volgens de spiegeltest (en niet om een andere reden nep).
   bool get gespiegeld => (spiegel ?? 0) >= kSpiegelOpgeschaald;
@@ -243,11 +256,27 @@ class Spectrumstaat {
     required this.gemiddeld,
     required this.p95,
     required this.luid,
+    this.mediaan,
   });
   final int sampleRate;
   final double bandHz;
   final Float64List gemiddeld, p95;
   final int luid;
+
+  /// De mediaan per band over dezelfde luide vensters (dB), of null (een toets, of een spectrum zonder).
+  ///
+  /// **Waarom (26-11-2026, Ricky Martin "Maria", 24/48 "studio").** Een gedecodeerde stream die boven 0 dBFS uitkwam,
+  /// wordt bij het wegschrijven afgekapt (2665 monsters), en elke afgekapte piek strooit over het hele spectrum — ook
+  /// boven de muur. In het vermogensgemiddelde wegen die luidste vensters het zwaarst: de Opus-muur op 20,0 kHz (in een
+  /// gewoon venster 50 dB diep) mat daar 23,7 dB, net onder [volMuurDb]. De mediaan kijkt naar het gewone venster.
+  final Float64List? mediaan;
+
+  /// Dit spectrum met de mediaan in de plaats van het gemiddelde, of null als er geen mediaan is.
+  Spectrumstaat? get alsMediaan {
+    final m = mediaan;
+    if (m == null || m.length != gemiddeld.length) return null;
+    return Spectrumstaat(sampleRate: sampleRate, bandHz: bandHz, gemiddeld: m, p95: p95, luid: luid);
+  }
 
   ({int a, int z}) _banden(double van, double tot) => (
         a: math.max(0, (van / bandHz).round()),
@@ -332,6 +361,38 @@ const int volMinLuid = 50;
   return beste;
 }
 
+/// Belooft een bestand meer dan cd (meer dan 16 bit, of meer dan 44,1 kHz)? Dan beslist de meter of het "studio" mag
+/// heten ([studioTegengesproken]), en dan loopt de muurproef ook op de mediaan ([Spectrumstaat.mediaan]).
+bool mediaanNodig({required int kopSampleRate, required int kopBits}) => kopBits > 16 || kopSampleRate > 44100;
+
+/// Proef C op één spectrum: staat er een muur tussen 14 en 20,9 kHz? [muziek] is 500-5000 Hz van datzelfde spectrum.
+({Bandbreedte band, double? hz, double? db}) _muurproef(Spectrumstaat s, double muziek) {
+  final nyq = s.sampleRate / 2;
+  final w = steilsteVal(s, 11000, math.min(21500, nyq - 600));
+  if (w == null) return (band: Bandbreedte.doorlopend, hz: null, db: null);
+  final erboven = (s.db(w.hz + 150, nyq - 200) ?? muziek) - muziek;
+  final eronder = (s.db(w.hz - 3000, w.hz - 500) ?? muziek) - muziek;
+  final leegErboven = erboven <= volErbovenDb && (eronder - erboven) >= volInhoudDb;
+  final muur = w.db >= volMuurDb && leegErboven;
+  var band = Bandbreedte.doorlopend;
+  if (muur && w.hz >= laagsteAfkapHz && w.hz < zekerAfkapTot) {
+    band = Bandbreedte.afgekapt;
+  } else if (muur && w.hz >= zekerAfkapTot && w.hz <= vermoedelijkAfkapTot) {
+    band = Bandbreedte.vermoedelijk;
+  } else if (leegErboven && w.db >= volBijnaMuurDb && w.hz >= laagsteAfkapHz && w.hz < zekerAfkapTot) {
+    band = Bandbreedte.vermoedelijk;
+  }
+  return (band: band, hz: w.hz, db: w.db);
+}
+
+/// Hoe zwaar een uitslag van de muurproef weegt: afgekapt boven vermoedelijk boven doorlopend.
+int _gewicht(Bandbreedte b) => switch (b) {
+      Bandbreedte.afgekapt => 3,
+      Bandbreedte.vermoedelijk => 2,
+      Bandbreedte.doorlopend => 1,
+      Bandbreedte.onbekend => 0,
+    };
+
 /// Het oordeel van de volle meting: de drie proeven uit de kop van dit bestand, met
 /// [Bandbreedte.vermoedelijk] erbij en de controlesom ([integriteit]).
 Echtheidsoordeel oordeelVol({
@@ -380,21 +441,23 @@ Echtheidsoordeel oordeelVol({
   var band = Bandbreedte.onbekend;
   double? afkapHz, wandDb;
   if (s.luid >= volMinLuid) {
-    band = Bandbreedte.doorlopend;
-    final w = steilsteVal(s, 11000, math.min(21500, nyq - 600));
-    if (w != null) {
-      afkapHz = w.hz;
-      wandDb = w.db;
-      final erboven = (s.db(w.hz + 150, nyq - 200) ?? muziek) - muziek;
-      final eronder = (s.db(w.hz - 3000, w.hz - 500) ?? muziek) - muziek;
-      final leegErboven = erboven <= volErbovenDb && (eronder - erboven) >= volInhoudDb;
-      final muur = w.db >= volMuurDb && leegErboven;
-      if (muur && w.hz >= laagsteAfkapHz && w.hz < zekerAfkapTot) {
-        band = Bandbreedte.afgekapt;
-      } else if (muur && w.hz >= zekerAfkapTot && w.hz <= vermoedelijkAfkapTot) {
-        band = Bandbreedte.vermoedelijk;
-      } else if (leegErboven && w.db >= volBijnaMuurDb && w.hz >= laagsteAfkapHz && w.hz < zekerAfkapTot) {
-        band = Bandbreedte.vermoedelijk;
+    final c = _muurproef(s, muziek);
+    band = c.band;
+    afkapHz = c.hz;
+    wandDb = c.db;
+  }
+  // ── C ook op de mediaan, bij een bestand dat meer dan cd belooft: afgekapte pieken strooien boven de muur, en in het
+  // gemiddelde wegen juist die vensters het zwaarst ([Spectrumstaat.mediaan]). De zwaarste van de twee uitslagen telt.
+  // Bij een cd verandert er niets: daar beslist de muur geen soort. ──
+  final m = mediaanNodig(kopSampleRate: kopSampleRate, kopBits: kopBits) ? s.alsMediaan : null;
+  if (m != null && s.luid >= volMinLuid) {
+    final muziekM = m.db(500, 5000);
+    if (muziekM != null && muziekM > -250) {
+      final c = _muurproef(m, muziekM);
+      if (_gewicht(c.band) > _gewicht(band)) {
+        band = c.band;
+        afkapHz = c.hz;
+        wandDb = c.db;
       }
     }
   }
@@ -410,6 +473,7 @@ Echtheidsoordeel oordeelVol({
     integriteit: integriteit,
     ultraDb: ultra,
     spiegel: spiegel,
+    mediaan: m != null,
   );
 }
 
