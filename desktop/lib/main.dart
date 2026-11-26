@@ -37814,6 +37814,12 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   final _catalog = CatalogService();
   List<CatalogTrack> _tracks = [];
   bool _busy = true;
+
+  /// Van wie de plaat is, als Deezer een ander noemt dan wie de pagina meekreeg — zie [albumArtiestVoorPagina].
+  String? _albumArtiest;
+
+  /// De artiest van deze plaat: die van Deezer zodra die er is, anders wie de pagina meekreeg.
+  String get _artiest => _albumArtiest ?? widget.artistName;
   late int? _expanded = widget.bronnenOpen ? _albumLevel : null; // track index whose sources are shown; -1 = whole album
 
   // Soulseek sources for the WHOLE album, pre-loaded in the background with ONE search when the
@@ -37829,7 +37835,11 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   void initState() {
     super.initState();
     _load().then((_) => _laadHits());
-    WidgetsBinding.instance.addPostFrameCallback((_) => _preloadSoulseek());
+    // Een plaat uit Deezer kan van een ander zijn dan wie de pagina meekreeg ([_albumArtiest]); dan zoekt Soulseek pas als dat
+    // bekend is, in [_load] — één zoekvraag, op de goede naam.
+    if (widget.album.ref.source != CatalogSource.deezer) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _preloadSoulseek());
+    }
   }
 
   /// Saber, 22-10-2026, bij de Last.fm-ideeën: "hits aanduiden". Per nummer de luisteraars (een maand in de buffer),
@@ -37842,7 +37852,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     if (sleutel.isEmpty || lijst.isEmpty || lijst.length > 40) return;
     final luisteraars = <int?>[];
     for (final t in lijst) {
-      luisteraars.add(await _lastfmBron.luisteraars(t.artist.isEmpty ? widget.artistName : t.artist, t.title,
+      luisteraars.add(await _lastfmBron.luisteraars(t.artist.isEmpty ? _artiest : t.artist, t.title,
           sleutel: sleutel));
       if (!mounted || !identical(lijst, _tracks)) return;
     }
@@ -37885,10 +37895,18 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       // kon de torrentlijst een verzameling van 1990–2003 niet uitsluiten onder een remix van 2026
       // (gezien op de pc, 15-10-2026). Zie [torrentVoorNummer].
       _deezerJaar = int.tryParse(album?.year ?? '');
-      if (mounted) setState(() { _tracks = tracks; _busy = false; });
+      final eigen = albumArtiestVoorPagina(widget.artistName, album?.artiest);
+      if (mounted) {
+        setState(() {
+          _tracks = tracks;
+          _busy = false;
+          _albumArtiest = eigen;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _busy = false);
     }
+    unawaited(_preloadSoulseek());
     await _preferOfficialTracklist();
   }
 
@@ -37932,7 +37950,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
               // name anyway, which is all this page does with it.
               -(i + 1),
               e.tracks[i].title,
-              widget.artistName,
+              _artiest,
               e.tracks[i].seconds ?? 0,
               i + 1,
             )
@@ -37975,7 +37993,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
               // Soulseek with, which is all this page does with it.
               -(i + 1),
               e.tracklist[i].title,
-              widget.artistName,
+              _artiest,
               e.tracklist[i].seconds ?? 0,
               i + 1,
             )
@@ -38007,7 +38025,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     final settings = context.read<AppSettings>();
     try {
       final hits = await mb.searchReleases(
-          widget.artistName, DiscogsService.plainTitle(widget.album.title),
+          _artiest, DiscogsService.plainTitle(widget.album.title),
           expectedTracks: _tracks.length);
       if (hits.isNotEmpty) {
         final full = await mb.release(hits.first.mbid);
@@ -38029,7 +38047,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
     if (titles.isEmpty) {
       try {
         final e = await DiscogsService(settings)
-            .edition(widget.artistName, widget.album.title, expectedTracks: _tracks.length);
+            .edition(_artiest, widget.album.title, expectedTracks: _tracks.length);
         final dg = e?.tracklist ?? const <DiscogsTrack>[];
         if (dg.length == _tracks.length) {
           titles = [for (final t in dg) t.title];
@@ -38090,7 +38108,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
 
   /// De vraag voor de hele plaat, voor de telling naast de rijen én voor "Bronnen voor album". Zie
   /// [albumZoekvraag]: "Live V" werd voor Soulseek "live" — 60.143 bestanden, en een crash.
-  String get _albumVraag => albumZoekvraag(widget.artistName, widget.album.title,
+  String get _albumVraag => albumZoekvraag(_artiest, widget.album.title,
       jaar: int.tryParse(widget.album.year ?? ''));
 
   Future<void> _preloadSoulseek() async {
@@ -38145,7 +38163,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       zoek: (t) async {
         // Het laagste werk van de app: één zoekopdracht, alleen in wat de achtergrond overlaat (`telling`).
         final gevonden = await soulseek.search(
-          soulseekQuery(widget.artistName, t.title, album: widget.album.title),
+          soulseekQuery(_artiest, t.title, album: widget.album.title),
           telling: true,
           terugval: false,
           nogNodig: () => mounted,
@@ -38154,7 +38172,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         final passend = await zeefKandidaten(gevonden,
             titel: t.title,
             seconden: t.durationSec,
-            artiest: widget.artistName,
+            artiest: _artiest,
             album: widget.album.title,
             albumTitels: albumTitels);
         if (passend.isEmpty || !mounted) return;
@@ -38207,7 +38225,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         final uit = lijst.isEmpty
             ? [for (final _ in sporen) const <int>[]]
             : await zeefPerTitel(lijst, [for (final t in sporen) (titel: t.title, seconden: t.durationSec)],
-                artiest: widget.artistName, album: widget.album.title);
+                artiest: _artiest, album: widget.album.title);
         if (!mounted) return;
         setState(() {
           _slskPerTitel
@@ -38229,7 +38247,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// are part of the identity, so a Live/Radio-Edit/compilation cut still counts as NOT owned.
   /// Ook als alleen de gast anders geschreven staat, met de tracklijst en de lengte erbij — zie
   /// [LibraryStore.ownedOpPlaat].
-  Track? _owned(CatalogTrack t) => context.read<LibraryStore>().ownedOpPlaat(widget.artistName, t.title,
+  Track? _owned(CatalogTrack t) => context.read<LibraryStore>().ownedOpPlaat(_artiest, t.title,
       albumTitels: [for (final x in _tracks) x.title], seconden: t.durationSec);
 
   /// What year the RECORD is from, according to whichever catalogue described it.
@@ -38249,9 +38267,9 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// or Discogs's idea of the record rather than a streaming catalogue's — and emphatically rather
   /// than a Soulseek uploader's.
   ReleaseAuthority get _release => ReleaseAuthority(
-        artist: widget.artistName,
+        artist: _artiest,
         album: widget.album.title,
-        albumArtist: widget.artistName,
+        albumArtist: _artiest,
         year: _officialYear ?? _deezerJaar ?? int.tryParse(widget.album.year ?? ''),
         tracks: [
           for (var i = 0; i < _tracks.length; i++)
@@ -38277,9 +38295,9 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
   /// downloading any of them must still produce track 2 of this album.
   TrackTags _authorityFor(CatalogTrack t, int i) => TrackTags(
         title: t.title,
-        artist: widget.artistName,
+        artist: _artiest,
         album: widget.album.title,
-        albumArtist: widget.artistName,
+        albumArtist: _artiest,
         trackNo: _numberOf(t, i),
         trackTotal: _tracks.length,
         year: _officialYear ?? _deezerJaar ?? int.tryParse(widget.album.year ?? ''),
@@ -38305,7 +38323,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
         : await zeefKandidaten(_albumSlsk,
             titel: t.title,
             seconden: t.durationSec,
-            artiest: widget.artistName,
+            artiest: _artiest,
             album: widget.album.title,
             albumTitels: albumTitels);
     final pool = <String, SoulseekFile>{
@@ -38323,13 +38341,13 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
       // noemen ([zonderGast]). Hier stond een eigen lus met alleen [fileOffersTitle]: "À 20 ans (feat.
       // Diam's)" van Amel Bent kreeg zo nul bronnen naast een rij peers met "03. A 20 Ans.flac".
       // Vroeg beginnen als de tussenstand al genoeg zekere kopieën toont — zie [SoulseekService.zoekVroeg].
-      for (final f in await soulseek.zoekVroeg(soulseekQuery(widget.artistName, t.title, album: widget.album.title),
+      for (final f in await soulseek.zoekVroeg(soulseekQuery(_artiest, t.title, album: widget.album.title),
           seconden: t.durationSec,
-          zeefOp: (titel: t.title, artiest: widget.artistName, album: widget.album.title),
+          zeefOp: (titel: t.title, artiest: _artiest, album: widget.album.title),
           zeef: (l) => zeefKandidaten(l,
               titel: t.title,
               seconden: t.durationSec,
-              artiest: widget.artistName,
+              artiest: _artiest,
               album: widget.album.title,
               albumTitels: albumTitels))) {
         pool.putIfAbsent('${f.username}|${f.filename}', () => f);
@@ -38473,9 +38491,9 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                       // volgende regel, net als in de kop van je eigen albums.
                       _maybeFocusable(KopFeiten(
                         artiest: ArtistNames(
-                            names: [widget.artistName],
+                            names: [_artiest],
                             style: TextStyle(color: _muted, fontSize: 13)),
-                        artiestTekst: widget.artistName,
+                        artiestTekst: _artiest,
                         feiten: [
                           if ((_officialYear ?? al.year) != null) '${_officialYear ?? al.year}',
                           if (_tracks.isNotEmpty) '${_tracks.length} ${_tracks.length == 1 ? 'nummer' : 'nummers'}',
@@ -38517,7 +38535,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
           // het verkeerde — dat was de klacht.
           if (!_busy && _tracks.isNotEmpty) ...[
             AlbumInfoPanel(
-                artist: widget.artistName,
+                artist: _artiest,
                 album: al.title,
                 eersteJaar: _officialYear,
                 // Zonder dit stond de vormcontrole UIT: DiscogsService.edition weegt alleen op
@@ -38533,7 +38551,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                   setState(() => _achter = b);
                 }),
             CreditsPanel(
-                artist: widget.artistName, album: al.title, volledigAantal: _tracks.length),
+                artist: _artiest, album: al.title, volledigAantal: _tracks.length),
           ],
           if (_busy)
             Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator(color: _accent)))
@@ -38582,7 +38600,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 Builder(builder: (context) {
                   // Dezelfde vraag als [_owned]: "J'irai où tu iras (with Jean-Jacques Goldman)" is het bestand
                   // "J'irai où tu iras" (Saber, 24-10-2026).
-                  final have = context.watch<LibraryStore>().ownedOpPlaat(widget.artistName, t.title,
+                  final have = context.watch<LibraryStore>().ownedOpPlaat(_artiest, t.title,
                           albumTitels: [for (final x in _tracks) x.title], seconden: t.durationSec) !=
                       null;
                   return SizedBox(
@@ -38638,12 +38656,12 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
                 else if (soulseekReady) ...[
                   // De voorproef (Saber, 24-11-2026: "waar zie ik de preview button?").
                   oortje('alb:${widget.album.ref.keyPart}:$i',
-                      artiest: t.artist.isEmpty ? widget.artistName : t.artist,
+                      artiest: t.artist.isEmpty ? _artiest : t.artist,
                       titel: t.title,
                       seconden: t.durationSec > 0 ? t.durationSec : null,
                       album: widget.album.title),
                   SpeelNuKnop(
-                      artiest: t.artist.isEmpty ? widget.artistName : t.artist,
+                      artiest: t.artist.isEmpty ? _artiest : t.artist,
                       titel: t.title,
                       seconden: t.durationSec > 0 ? t.durationSec : null,
                       grootte: 20,
@@ -38665,7 +38683,7 @@ class _AlbumBrowsePageState extends State<AlbumBrowsePage> {
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: SourcesView(
-                query: '${widget.artistName} ${t.title}',
+                query: '$_artiest ${t.title}',
                 authority: _release,
                 track: ChoiceTrack('${_numberOf(t, i)}', t.title, t.durationSec)),
           ),

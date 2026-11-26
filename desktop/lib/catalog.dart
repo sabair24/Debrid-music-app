@@ -1,5 +1,6 @@
 import 'deezerbaan.dart';
-import 'organize.dart' show isAansprekingVan, kAansprekingWint;
+import 'lossless_want.dart' show isVerzamelnaam;
+import 'organize.dart' show artistKey, isAansprekingVan, kAansprekingWint;
 
 /// Deezer catalog (keyless) — powers the Stremio-style browse:
 /// search artist → their albums → an album's tracks. Sources (torrents/Soulseek)
@@ -100,8 +101,11 @@ class CatalogAlbum {
   /// of [id] — [ref] reads that encoding, so no existing call site had to change at once.
   final CatalogRef? origin;
 
+  /// Van wie de PLAAT is volgens de catalogus, als die het zei (Deezer `/album/{id}`). Null waar het niet gevraagd is.
+  final String? artiest;
+
   const CatalogAlbum(this.id, this.title, this.cover, this.releaseDate, this.trackCount,
-      this.recordType, {this.origin});
+      this.recordType, {this.origin, this.artiest});
 
   CatalogRef get ref => origin ?? (id < 0 ? CatalogRef.discogsRelease(-id) : CatalogRef.deezer(id));
 
@@ -187,6 +191,11 @@ class CatalogTrackHit {
 class CatalogService {
   static const _base = 'https://api.deezer.com';
 
+  CatalogService({this.haalVoorToets});
+
+  /// In een toets in plaats van [DeezerBaan.haal]: geeft het antwoord op een adres, zonder net.
+  final Future<Map<String, dynamic>?> Function(String url)? haalVoorToets;
+
   /// Waar de laatste aanroep op stukliep, of leeg. Zodat een scherm "Deezer weigerde" kan
   /// onderscheiden van "er is niets gevonden" — twee antwoorden die er van buiten hetzelfde
   /// uitzagen zolang beide een lege lijst opleverden.
@@ -197,7 +206,7 @@ class CatalogService {
   /// foutlichaam binnen — dus als een lege lijst.
   Future<Map<String, dynamic>?> _get(String url) async {
     try {
-      final j = await DeezerBaan.haal(url);
+      final j = await (haalVoorToets ?? DeezerBaan.haal)(url);
       if (j != null) laatsteFout = '';
       return j;
     } on DeezerFout catch (e) {
@@ -579,23 +588,34 @@ class CatalogService {
   }
 
   /// The album (with cover) + its ordered tracklist.
+  ///
+  /// **Alle nummers, niet de eerste 25** (26-11-2026). `/album/{id}` geeft er hoogstens 25 mee: "Entre nous" van Chimène Badi
+  /// heeft er 43 (`nb_tracks`), en de pagina toonde "25 nummers". Zegt de plaat meer dan er meekwam, dan de volledige lijst
+  /// via `/album/{id}/tracks`, pagina na pagina ([kAlbumPaginas] hoogstens).
   Future<(CatalogAlbum?, List<CatalogTrack>)> albumTracks(int albumId) async {
     final j = await _get('$_base/album/$albumId');
     if (j == null) return (null, const <CatalogTrack>[]);
     final album = _album(j);
     final artistName = (j['artist']?['name'] ?? '') as String;
-    final td = ((j['tracks']?['data']) as List?) ?? const [];
-    final tracks = td
-        .map((t) => CatalogTrack(
-              t['id'] as int,
-              (t['title'] ?? '') as String,
-              ((t['artist']?['name']) ?? artistName) as String,
-              (t['duration'] ?? 0) as int,
-              (t['track_position'] ?? 0) as int,
-            ))
-        .toList();
-    return (album, tracks);
+    var td = ((j['tracks']?['data']) as List?) ?? const [];
+    if (album.trackCount > td.length) {
+      final alle = [];
+      String? volgende = '$_base/album/$albumId/tracks?limit=100';
+      for (var p = 0; volgende != null && p < kAlbumPaginas; p++) {
+        final pj = await _get(volgende);
+        final data = pj?['data'];
+        if (data is! List || data.isEmpty) break;
+        alle.addAll(data);
+        volgende = pj?['next'] is String ? pj!['next'] as String : null;
+      }
+      // Alleen als het er meer zijn: een lijst die halverwege stukliep, is niet beter dan de 25 die er al waren.
+      if (alle.length > td.length) td = alle;
+    }
+    return (album, deezerAlbumNummers(td, artistName));
   }
+
+  /// Hoeveel pagina's van honderd nummers [albumTracks] hoogstens vraagt: genoeg voor een box van duizend.
+  static const kAlbumPaginas = 10;
 
   CatalogAlbum _album(dynamic a) => CatalogAlbum(
         a['id'] as int,
@@ -604,5 +624,36 @@ class CatalogService {
         a['release_date'] as String?,
         (a['nb_tracks'] ?? 0) as int,
         (a['record_type'] ?? 'album') as String,
+        artiest: a['artist'] is Map ? a['artist']['name'] as String? : null,
       );
+}
+
+/// De nummers uit een Deezer-lijst (`tracks.data` van `/album/{id}`, of `data` van `/album/{id}/tracks`). Een nummer zonder
+/// eigen artiest krijgt die van de plaat ([artiestVanPlaat]).
+List<CatalogTrack> deezerAlbumNummers(List td, String artiestVanPlaat) => [
+      for (final t in td)
+        if (t is Map && t['id'] is int)
+          CatalogTrack(
+            t['id'] as int,
+            (t['title'] ?? '') as String,
+            ((t['artist']?['name']) ?? artiestVanPlaat) as String,
+            (t['duration'] ?? 0) as int,
+            (t['track_position'] ?? 0) as int,
+          )
+    ];
+
+/// Wie er boven een plaat uit de catalogus hoort, als dat iemand anders is dan [gegeven] — anders null.
+///
+/// **Waarom (Saber, 26-11-2026: "verkeerde artist bij dit album, dit moet chimene badi zijn").** De pagina kreeg de artiest van
+/// het nummer waar je op tikte. In Ontdek stond "Zina (ici ou là-bas)" van Julie Zenatti — een duet met Chimène Badi, op
+/// Chimène Badi's verzamelplaat "Entre nous" (Deezer 175653082). Dan stond er Julie Zenatti boven een plaat van Chimène Badi,
+/// en zocht de pagina ook onder haar naam naar bronnen.
+///
+/// Niet bij een verzamelaar ("Various Artists"): dat is geen naam om op te zoeken. En niet als het dezelfde artiest is in een
+/// andere schrijfwijze ([artistKey]) — dan blijft de naam staan die de rest van de app kent.
+String? albumArtiestVoorPagina(String gegeven, String? vanPlaat) {
+  final p = (vanPlaat ?? '').trim();
+  if (p.isEmpty || isVerzamelnaam(p)) return null;
+  if (artistKey(p) == artistKey(gegeven)) return null;
+  return p;
 }

@@ -526,7 +526,7 @@ void main() {
       expect(RegExp(r'SpeelNuKnop\(').allMatches(main).length, greaterThanOrEqualTo(3));
       expect(main, contains('SpeelNuKnop(artiest: t.artist, titel: t.title, seconden: t.seconden, album: t.album, hoes: t.cover),'),
           reason: 'Online zoeken, met album en hoes');
-      expect(main, contains("artiest: t.artist.isEmpty ? widget.artistName : t.artist,"), reason: 'een albumpagina');
+      expect(main, contains("artiest: t.artist.isEmpty ? _artiest : t.artist,"), reason: 'een albumpagina');
       expect(main, contains('artiest: widget.artiest, titel: s.title, seconden: s.seconds, grootte: 20, album: widget.tags?.album),'),
           reason: 'een ontbrekend nummer van een album dat je hebt');
       expect(main, contains('artiest: artiest, titel: titel, seconden: seconden, album: album, hoes: hoes),'));
