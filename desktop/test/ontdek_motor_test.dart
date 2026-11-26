@@ -253,8 +253,9 @@ void main() {
         },
         heb: _niets,
         nuMs: _nuMs,
+        max: 120,
       );
-      expect(uit, hasLength(kOntdekLengte));
+      expect(uit, hasLength(120));
     });
   });
 
@@ -448,8 +449,8 @@ void main() {
         toeval: math.Random(5),
       );
       await d.ververs();
-      expect(d.lijst!.nummers.take(kOntdekGetoond).where((n) => n.bron == Ontdekbron.claude).length, lessThan(30),
-          reason: 'de helft van de eerste vijftig, de rest van de pool blijft voor straks');
+      expect(d.lijst!.nummers.take(50).where((n) => n.bron == Ontdekbron.claude).length, lessThan(30),
+          reason: 'de helft van de eerste vijftig: om de beurt met Deezer');
       await d.ververs();
       expect(vragen, hasLength(1), reason: 'nog genoeg van Claude dat niet getoond is: geen tweede vraag');
       await d.ververs(handmatig: true);
