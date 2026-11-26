@@ -454,8 +454,12 @@ Echtheidsoordeel oordeelVol({
     final muziekM = m.db(500, 5000);
     if (muziekM != null && muziekM > -250) {
       final c = _muurproef(m, muziekM);
-      if (_gewicht(c.band) > _gewicht(band)) {
-        band = c.band;
+      // De mediaan alleen bewijst niets: hoogstens vermoedelijk, nooit afgekapt. Over 1392 hi-res bestanden gemeten maakte
+      // hij "Children (Radio Edit)" afgekapt op 16,15 kHz — en die val zit in de officiële TIDAL-master. Een studio
+      // spreekt "vermoedelijk" al tegen ([studioTegengesproken]); bewijs blijft voor het gemiddelde en een andere kopie.
+      final mb = c.band == Bandbreedte.afgekapt ? Bandbreedte.vermoedelijk : c.band;
+      if (_gewicht(mb) > _gewicht(band)) {
+        band = mb;
         afkapHz = c.hz;
         wandDb = c.db;
       }

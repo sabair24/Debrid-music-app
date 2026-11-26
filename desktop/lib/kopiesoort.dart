@@ -121,7 +121,7 @@ bool studioTegengesproken(Echtheidsoordeel o) => o.isNep || o.isVermoedelijk;
 ///
 /// * Bewezen nep (opgeschaald, opgeblazen, afgekapt): altijd.
 /// * Een muur rond 20 kHz ([Bandbreedte.vermoedelijk]): als je nummer schoon gemeten is. Dat is dezelfde maat als bij
-///   binnenkomst (`OnlineFinder.nepStudioZin`): wat vandaag als nep-studio geweigerd wordt, blijft ook niet als versie
+///   binnenkomst (`DownloadManager.nepStudioZin`): wat vandaag als nep-studio geweigerd wordt, blijft ook niet als versie
 ///   staan. Heeft je nummer zelf zo'n twijfel, of is het niet gemeten, dan blijft hij: dan ligt er niets aantoonbaar
 ///   beters naast, en zit de muur misschien in de master (All Saints "Never Ever", Jorja Smith "Burn", 28-10-2026).
 ///

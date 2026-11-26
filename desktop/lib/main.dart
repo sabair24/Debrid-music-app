@@ -225,6 +225,7 @@ import 'soulseek.dart';
 import 'tidal.dart';
 import 'tidaler.dart';
 import 'tidal_beter.dart';
+import 'studio_op_tidal.dart';
 import 'blijvende_jacht.dart';
 import 'dubbel_opruimer.dart';
 import 'torrent_beter.dart';
@@ -3400,6 +3401,33 @@ Future<void> main() async {
       )..speeltNu = ergensInGebruik;
       // "Zoek hi-res" en 👍 op een radionummer kijken meteen ook bij TIDAL ([DownloadManager.zoekBeterVoor]).
       downloads.tidalNu = tidalBeter.nu;
+      // Bestaat een studio officieel? TIDAL vragen (studio_op_tidal.dart): bij binnenkomst, en traag voor de studioversies
+      // die er al staan. Saber, 26-11-2026, na Ricky Martin "Maria" ("Studio · 24/48", op TIDAL alleen LOSSLESS): "Laat
+      // de app controleren via qobuz en tidal of dit daadwerkelijk studio bestaat". Qobuz laat geen app binnen.
+      final studioVraag = studioOpTidalVraag(zoek: (vraag) => tidalHulpUitvoer([vraag, '20']));
+      DownloadManager.studioOpTidalVraag = studioVraag;
+      final studioNakijker = StudioNakijker(
+        bestand: '$appDir${Platform.pathSeparator}studio_op_tidal.json',
+        teKijken: () sync* {
+          for (final t in library.metVersies) {
+            final v = versies.versie(t.path);
+            final anker = versies.ankerVan(t.path);
+            if (v == null || anker == null || v.soort != Kopiesoort.studio) continue;
+            yield (versie: t.path, anker: anker, artiest: t.artist, titel: t.title, seconden: t.duration?.inSeconds ?? 0);
+          }
+        },
+        vraag: studioVraag,
+        weg: (s) async {
+          final anker = library.tracks.where((x) => x.path.toLowerCase() == s.anker.toLowerCase()).firstOrNull;
+          if (anker == null || !File(s.versie).existsSync()) return;
+          final zin = await gooiVersieWeg(library, anker, s.versie);
+          WarmLog('${library.configDir}${Platform.pathSeparator}versies.log').line('$kGeenStudioOpTidal: $zin — ${s.versie}');
+        },
+        log: downloads.logRegel,
+      );
+      unawaited(studioNakijker.start().then(
+          (_) => startLog.line('studio op TIDAL: nakijker gestart (eerste na 8 min, dan één per 6 min)'),
+          onError: (Object e) => startLog.line('studio op TIDAL: MISLUKT: $e')));
       unawaited(tidalBeter.start().then(
           (_) => startLog.line('TIDAL beter: ronde gestart (eerste na 5 min, dan één per 3 min)'),
           onError: (Object e) => startLog.line('TIDAL beter: MISLUKT: $e')));

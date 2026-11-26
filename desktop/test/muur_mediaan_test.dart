@@ -75,10 +75,12 @@ void main() {
       expect(o.afkapHz, inInclusiveRange(16500, 17000));
     });
 
-    test('een mp3-muur onder 19,4 kHz die alleen de mediaan ziet: afgekapt, bewezen', () {
+    test('een muur onder 19,4 kHz die alleen de mediaan ziet: vermoedelijk, niet bewezen — maar wel geen studio', () {
+      // "Children (Radio Edit)": op de mediaan afgekapt op 16,15 kHz, maar die val zit in de officiële TIDAL-master.
       final o = oordeel(gemiddeld: banden(tot: 16800, erboven: -50), mediaan: banden(tot: 16800));
-      expect(o.band, Bandbreedte.afgekapt);
-      expect(o.isNep, isTrue);
+      expect(o.band, Bandbreedte.vermoedelijk);
+      expect(o.isNep, isFalse);
+      expect(studioTegengesproken(o), isTrue);
     });
 
     test('echte hi-res, doorlopend tot 24 kHz in allebei: doorlopend', () {
@@ -164,7 +166,8 @@ void main() {
 
     test('het oordeel neemt de zwaarste van de twee, en onthoudt dat de mediaan liep', () {
       final e = bron('lib/echtheid.dart');
-      expect(e, contains('      if (_gewicht(c.band) > _gewicht(band)) {\n'));
+      expect(e, contains('      final mb = c.band == Bandbreedte.afgekapt ? Bandbreedte.vermoedelijk : c.band;\n'));
+      expect(e, contains('      if (_gewicht(mb) > _gewicht(band)) {\n'));
       expect(e, contains('    mediaan: m != null,\n'));
     });
 
