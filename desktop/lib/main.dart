@@ -225,6 +225,7 @@ import 'soulseek.dart';
 import 'tidal.dart';
 import 'tidaler.dart';
 import 'tidal_beter.dart';
+import 'studio_op_tidal.dart';
 import 'blijvende_jacht.dart';
 import 'dubbel_opruimer.dart';
 import 'torrent_beter.dart';
@@ -3255,6 +3256,24 @@ Future<void> main() async {
       WarmLog('${library.configDir}${Platform.pathSeparator}versies.log')
           .line('spiegeltest ${o.spiegel?.toStringAsFixed(2)}: $zin — ${versie.path}');
     };
+    // Een studioversie die de meter anders tegenspreekt — nep, of een muur rond 20 kHz — met dezelfde maat als bij
+    // binnenkomst (nepStudioVersieWeg). Saber, 26-11-2026, na Ricky Martin "Maria" ("24/48 · studio", een Opus-muur op
+    // 20,0 kHz die het gemiddelde door afgekapte pieken niet zag): "ik wil geen nep in de app". Nooit het nummer zelf,
+    // nooit een cd- of vinylversie, en niet als je nummer dezelfde twijfel heeft.
+    echtVeger.bijTegengesprokenStudio = (versie, o) async {
+      final ankerPad = versies.ankerVan(versie.path);
+      final v = versies.versie(versie.path);
+      if (ankerPad == null || v == null || v.soort != Kopiesoort.studio || !File(ankerPad).existsSync()) return;
+      final anker = library.tracks.where((x) => x.path.toLowerCase() == ankerPad.toLowerCase()).firstOrNull;
+      if (anker == null) return;
+      final log = WarmLog('${library.configDir}${Platform.pathSeparator}versies.log');
+      if (!nepStudioVersieWeg(o, gemeten(ankerPad))) {
+        log.line('studio tegengesproken (${waarom(o)}), maar je nummer niet schoon gemeten — blijft: ${versie.path}');
+        return;
+      }
+      final zin = await gooiVersieWeg(library, anker, versie.path);
+      log.line('nep-studio (${waarom(o)}): $zin — ${versie.path}');
+    };
     // De gekozen voorkant ook IN de bestanden (Saber, 21-10-2026: "doe dit altijd bij allemaal") — zie
     // hoes_in_bestand.dart. Na de twee meters, zodat de harde schijf niet drie kanten op moet.
     final hoesVeger = HoesInBestandVeger(
@@ -3382,6 +3401,33 @@ Future<void> main() async {
       )..speeltNu = ergensInGebruik;
       // "Zoek hi-res" en 👍 op een radionummer kijken meteen ook bij TIDAL ([DownloadManager.zoekBeterVoor]).
       downloads.tidalNu = tidalBeter.nu;
+      // Bestaat een studio officieel? TIDAL vragen (studio_op_tidal.dart): bij binnenkomst, en traag voor de studioversies
+      // die er al staan. Saber, 26-11-2026, na Ricky Martin "Maria" ("Studio · 24/48", op TIDAL alleen LOSSLESS): "Laat
+      // de app controleren via qobuz en tidal of dit daadwerkelijk studio bestaat". Qobuz laat geen app binnen.
+      final studioVraag = studioOpTidalVraag(zoek: (vraag) => tidalHulpUitvoer([vraag, '20']));
+      DownloadManager.studioOpTidalVraag = studioVraag;
+      final studioNakijker = StudioNakijker(
+        bestand: '$appDir${Platform.pathSeparator}studio_op_tidal.json',
+        teKijken: () sync* {
+          for (final t in library.metVersies) {
+            final v = versies.versie(t.path);
+            final anker = versies.ankerVan(t.path);
+            if (v == null || anker == null || v.soort != Kopiesoort.studio) continue;
+            yield (versie: t.path, anker: anker, artiest: t.artist, titel: t.title, seconden: t.duration?.inSeconds ?? 0);
+          }
+        },
+        vraag: studioVraag,
+        weg: (s) async {
+          final anker = library.tracks.where((x) => x.path.toLowerCase() == s.anker.toLowerCase()).firstOrNull;
+          if (anker == null || !File(s.versie).existsSync()) return;
+          final zin = await gooiVersieWeg(library, anker, s.versie);
+          WarmLog('${library.configDir}${Platform.pathSeparator}versies.log').line('$kGeenStudioOpTidal: $zin — ${s.versie}');
+        },
+        log: downloads.logRegel,
+      );
+      unawaited(studioNakijker.start().then(
+          (_) => startLog.line('studio op TIDAL: nakijker gestart (eerste na 8 min, dan één per 6 min)'),
+          onError: (Object e) => startLog.line('studio op TIDAL: MISLUKT: $e')));
       unawaited(tidalBeter.start().then(
           (_) => startLog.line('TIDAL beter: ronde gestart (eerste na 5 min, dan één per 3 min)'),
           onError: (Object e) => startLog.line('TIDAL beter: MISLUKT: $e')));

@@ -143,13 +143,14 @@ void main() {
       expect(m, contains('final spiegel = sr == 48000 ? Spiegelmeter() : null;'));
       expect(m, contains('          sluitVenster();\n          spiegel?.venster(buf[0], volgendeStart);\n'));
       expect(m, contains('    spiegel: spiegel?.uitslag,\n'));
-      expect(m, contains("final merk = kopSampleRate == 48000 ? 's' : '';"));
+      expect(m, contains(r"final merk = '${kopSampleRate == 48000 ? 's' : ''}${mediaanNodig(kopSampleRate: kopSampleRate, kopBits: kopBits) ? 'm' : ''}';"));
     });
 
     test('de veger meet ook de versies, en opnieuw wat bij 48 kHz nog geen spiegel had', () {
       final v = bron('lib/echtheid_veger.dart');
       expect(v, contains('        for (final t in library.metVersies)\n'));
-      expect(v, contains('    return o == null || o.mistSpiegel(t.sampleRate);'));
+      expect(v, contains('    return o == null || _mistIets(o, t);'));
+      expect(v, contains('      o.mistSpiegel(t.sampleRate) || o.mistMediaan(t.sampleRate, t.bitsPerSample);'));
       expect(v, contains('        if (!_moetMeten(t) || _isGeblokkeerd(t.path) || !File(t.path).existsSync()) continue;'));
       expect(v, contains('            if (weg != null) await weg(t, o);'));
     });

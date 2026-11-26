@@ -41,6 +41,7 @@ import 'keuring.dart' show Heelheid, kwaliteitZin;
 import 'wavpack_kop.dart' show readWvKop;
 import 'tidal.dart' show TidalTrack;
 import 'tidal_beter.dart' show TidalBeterUitslag, TidalMinstens, tidalMinstens;
+import 'studio_op_tidal.dart' show StudioOpTidal, kGeenStudioOpTidal;
 import 'torrent_hires.dart';
 import 'torrent_beter.dart' show TorrentJacht;
 import 'twijfel.dart';
@@ -2689,6 +2690,28 @@ class DownloadManager extends ChangeNotifier {
   /// Waarom [f] zich studio noemt maar het niet is ([echteSoort]): "nep-studio: 24/44,1 volgens de kop, maar muur op
   /// 20,9 kHz — …", of null. Zonder dit ging zo'n kopie weg als "een andere opname dan wat je hebt" (Lil' Kim — How
   /// Many Licks?, 28-10-2026), of werd hij als studioversie aangeboden.
+  /// TIDAL: bestaat deze opname officieel in hi-res ([studioOpTidal])? Gezet in main.dart (tidalers zoekhulpje), null in
+  /// een toets en op een pc zonder tidaler — dan beslist alleen de meter.
+  static Future<StudioOpTidal> Function(String artiest, String titel, int seconden)? studioOpTidalVraag;
+
+  /// Waarom [staged] volgens TIDAL geen studio kan zijn ([kGeenStudioOpTidal]), of null: TIDAL heeft hem in hi-res,
+  /// kent hem niet, of antwoordt niet — niets weten is geen bewijs. [artiest] en [titel]: van je nummer.
+  ///
+  /// **Waarom (Saber, 26-11-2026, bij Ricky Martin "Maria", "Studio · 24/48" van Soulseek).** *"Laat de app
+  /// controleren via qobuz en tidal of dit daadwerkelijk studio bestaat"*. TIDAL heeft die 271 seconden alleen als
+  /// LOSSLESS. Qobuz laat geen app binnen (login, en zijn winkel weigert automatische verzoeken): zie studio_op_tidal.dart.
+  Future<String?> geenStudioVolgensTidal(File staged, {required String artiest, required String titel}) async {
+    final vraag = studioOpTidalVraag;
+    if (vraag == null || artiest.trim().isEmpty || titel.trim().isEmpty) return null;
+    final sec = _duurVan(staged.path) ?? gedecodeerdeLengte(staged.path)?.round() ?? 0;
+    if (sec <= 0) return null;
+    try {
+      return await vraag(artiest, titel, sec) == StudioOpTidal.alleenCd ? kGeenStudioOpTidal : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   @visibleForTesting
   static String? nepStudioZin(File f) {
     final o = gemeten(f.path);
@@ -4676,6 +4699,20 @@ class DownloadManager extends ChangeNotifier {
       _log.line('   $bron: "$naam" is ${waarom(oordeel)} — geen versie, weggegooid');
       await _discardStaged(staged.path);
       return _Wenskeuring.afgewezen;
+    }
+    // Een studio die officieel niet bestaat: TIDAL heeft deze opname alleen in cd-kwaliteit (geenStudioVolgensTidal).
+    if (plan.soort == Kopiesoort.studio) {
+      final eigen = gezag == null ? readFlacTags(File(plan.anker)) : null;
+      final geen = await geenStudioVolgensTidal(staged,
+          artiest: gezag?.artist ?? eigen?.artist ?? '', titel: gezag?.title ?? eigen?.title ?? '');
+      if (geen != null) {
+        _log.line('   $bron: "$naam" — $geen — weggegooid');
+        if (inJacht) {
+          jacht.value = jacht.value.met(weggegooid: jacht.value.weggegooid + 1, regel: 'Bij $bron: $geen — weggegooid.');
+        }
+        await _discardStaged(staged.path);
+        return _Wenskeuring.afgewezen;
+      }
     }
     final label = versieLabel(plan.soort!, plan.persing, bits: readFlacTags(staged)?.bitsPerSample ?? 0,
         hz: readFlacTags(staged)?.sampleRate ?? 0);
@@ -7073,6 +7110,9 @@ class DownloadManager extends ChangeNotifier {
     await merkVinylspoor(staged.path, v.pad, bronpad, log: _log.line);
     final soort = versieplanVoor(staged, v.pad, bronpad).soort;
     if (soort != v.soort) return weg(nepStudioZin(staged) ?? 'geen ${v.soort.voluit} maar ${soort?.voluit ?? kwaliteitZin(kwaliteitVan(staged))}');
+    if (soort == Kopiesoort.studio) {
+      if (await geenStudioVolgensTidal(staged, artiest: v.artiest, titel: v.titel) case final geen?) return weg(geen);
+    }
     // Bit voor bit wat je al hebt, van een andere uploader en onder een andere naam: die voegt niets toe (Saber,
     // 26-10-2026, bij All Saints: "Ik heb 2 cd kwaliteit").
     if (await _zelfdeAlsWatJeHebt(staged.path, v.pad) case final wat?) return weg('bit voor bit dezelfde als $wat');

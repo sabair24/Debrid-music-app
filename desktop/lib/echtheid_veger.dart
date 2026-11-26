@@ -21,6 +21,7 @@ import 'echtheid.dart';
 import 'echtheid_meter.dart';
 import 'echtheid_oordelen.dart';
 import 'integriteit.dart';
+import 'kopiesoort.dart' show studioTegengesproken;
 import 'lan/transcode.dart' show Transcoder;
 import 'library.dart';
 import 'models.dart';
@@ -111,16 +112,25 @@ class EchtheidVeger {
     return !_gestopt;
   }
 
-  /// Nog te meten: nooit gemeten, of een 48 kHz-bestand zonder spiegeltest ([Echtheidsoordeel.mistSpiegel]).
+  /// Nog te meten: nooit gemeten, een 48 kHz-bestand zonder spiegeltest ([Echtheidsoordeel.mistSpiegel]), of een bestand
+  /// dat meer dan cd belooft zonder de muurproef op de mediaan ([Echtheidsoordeel.mistMediaan]).
   bool _moetMeten(Track t) {
     final o = gemeten(t.path);
-    return o == null || o.mistSpiegel(t.sampleRate);
+    return o == null || _mistIets(o, t);
   }
+
+  bool _mistIets(Echtheidsoordeel o, Track t) =>
+      o.mistSpiegel(t.sampleRate) || o.mistMediaan(t.sampleRate, t.bitsPerSample);
 
   /// Een studioversie die de spiegeltest als opgeschaald betrapte: de pc gooit hem weg (prullenbak), het nummer blijft.
   /// Saber, 25-11-2026, na Chris Isaak "Blue Hotel": "Weggooien + app leert het" — en 28-10-2026: "Ik wil geen fake enkel
   /// echt". Gezet in main.dart; null in een toets.
   Future<void> Function(Track versie, Echtheidsoordeel o)? bijGespiegeldeVersie;
+
+  /// Een ander bestand dat de meter als studio tegenspreekt ([studioTegengesproken]): nep, of een muur rond 20 kHz. Of
+  /// het een studioversie is en weg mag, beslist main.dart (`nepStudioVersieWeg`). Saber, 26-11-2026, na Ricky Martin
+  /// "Maria": "ik wil geen nep in de app". Null in een toets.
+  Future<void> Function(Track versie, Echtheidsoordeel o)? bijTegengesprokenStudio;
 
   /// De nog ongemeten FLAC's — ook de versies (studio, cd, vinyl naast het nummer) —, nieuwste eerst: wat er net
   /// binnenkwam, wil je het eerst weten.
@@ -153,7 +163,8 @@ class EchtheidVeger {
         if (!await _wachtOpRust()) break;
         if (!_moetMeten(t) || _isGeblokkeerd(t.path) || !File(t.path).existsSync()) continue;
         voortgang.value = 'echtheid ${gedaan + 1}/${gedaan + lijst.length + 1}';
-        final vers = moetVersGemeten(t.path) || (gemeten(t.path)?.mistSpiegel(t.sampleRate) ?? false);
+        final oud = gemeten(t.path);
+        final vers = moetVersGemeten(t.path) || (oud != null && _mistIets(oud, t));
         final o = await _meter.van(t.path,
             gebruikCache: !vers,
             kopSampleRate: t.sampleRate,
@@ -175,6 +186,9 @@ class EchtheidVeger {
           if (o.gespiegeld) {
             _log.line('OPGESCHAALD (spiegel ${o.spiegel!.toStringAsFixed(2)}): ${t.path}');
             final weg = bijGespiegeldeVersie;
+            if (weg != null) await weg(t, o);
+          } else if (studioTegengesproken(o)) {
+            final weg = bijTegengesprokenStudio;
             if (weg != null) await weg(t, o);
           }
           if (o.isVermoedelijk) vermoedelijk++;

@@ -116,6 +116,23 @@ Kopiesoort? ankerSoortGemeten(Kopiesoort? soort, Echtheidsoordeel? o) {
 /// Saber wil alleen echt.
 bool studioTegengesproken(Echtheidsoordeel o) => o.isNep || o.isVermoedelijk;
 
+/// Mag een studioVERSIE weg die de meter tegenspreekt ([studioTegengesproken])? [nummer]: het oordeel over het nummer
+/// ernaast (de cd of de vinylrip), of null als dat niet gemeten is.
+///
+/// * Bewezen nep (opgeschaald, opgeblazen, afgekapt): altijd.
+/// * Een muur rond 20 kHz ([Bandbreedte.vermoedelijk]): als je nummer schoon gemeten is. Dat is dezelfde maat als bij
+///   binnenkomst (`DownloadManager.nepStudioZin`): wat vandaag als nep-studio geweigerd wordt, blijft ook niet als versie
+///   staan. Heeft je nummer zelf zo'n twijfel, of is het niet gemeten, dan blijft hij: dan ligt er niets aantoonbaar
+///   beters naast, en zit de muur misschien in de master (All Saints "Never Ever", Jorja Smith "Burn", 28-10-2026).
+///
+/// **Waarom (Saber, 26-11-2026, bij Ricky Martin "Maria", 24/48 "studio" met een Opus-muur op 20,0 kHz).** *"Ja maar
+/// waarom liet de app die door, ik wil geen nep in de app"* — en 28-10-2026: *"liever cd kwaliteit dan fake studio"*.
+bool nepStudioVersieWeg(Echtheidsoordeel versie, Echtheidsoordeel? nummer) {
+  if (versie.isNep) return true;
+  if (!versie.isVermoedelijk) return false;
+  return nummer != null && !nummer.isNep && !nummer.isVermoedelijk && !nummer.isOnbekend;
+}
+
 /// Kan een kandidaat uit een zoeklijst [gevraagd] zijn? Waar als zijn pad en zijn opgave het zeggen, onwaar als ze
 /// het tegenspreken, null als de uploader de diepte niet meldt ([bits] 0) — dan zegt pas het bestand het.
 bool? kanSoortZijn(Kopiesoort gevraagd, {required String bronpad, int bits = 0, int hz = 0}) {
