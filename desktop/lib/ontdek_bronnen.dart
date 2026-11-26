@@ -29,7 +29,7 @@ OntdekBronFn deezerOntdekBron(RecommendService rec, {Set<String> Function()? eig
     (zaden) async => deezerNummers(
       await rec.ontdekVerwanten([
         for (final z in zaden) (naam: z.naam, gewicht: z.gewicht),
-      ], eigen: eigen?.call() ?? const {}),
+      ], eigen: eigen?.call() ?? const {}, kandidaten: kOntdekKandidaten, verderVan: kOntdekVerderVan),
     );
 
 /// Wat [RecommendService.ontdekVerwanten] gaf, als nummers voor Ontdek: zie [deezerOntdekBron].

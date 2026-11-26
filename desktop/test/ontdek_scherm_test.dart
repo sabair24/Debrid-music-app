@@ -20,12 +20,13 @@ OntdekNummer _n(String artiest, String titel, {String waarom = ''}) =>
 
 void main() {
   group('wat er op het scherm staat', () {
-    test('zonder wat je nu hebt en wat je hier wegtikte, hoogstens 50 — de reserve schuift in', () {
-      final lijst = [for (var i = 0; i < 60; i++) _n('A$i', 'T$i')];
+    test('zonder wat je nu hebt en wat je hier wegtikte, hoogstens 200 — de reserve schuift in', () {
+      final lijst = [for (var i = 0; i < 210; i++) _n('A$i', 'T$i')];
       final uit = ontdekZichtbaar(lijst, bezit: {ontdekSleutel('A0', 'T0')}, weg: {ontdekSleutel('A1', 'T1')});
       expect(uit, hasLength(kOntdekGetoond));
+      expect(kOntdekGetoond, 200, reason: 'Saber, 26-11-2026: "daar moeten ook zeker 200 liedjes"');
       expect(uit.first.nummer.artist, 'A2');
-      expect(uit.last.nummer.artist, 'A51', reason: 'de twee die weggingen, worden aangevuld uit de reserve');
+      expect(uit.last.nummer.artist, 'A201', reason: 'de twee die weggingen, worden aangevuld uit de reserve');
     });
 
     test('de regel onder de kop', () {

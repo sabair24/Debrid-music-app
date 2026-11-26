@@ -146,22 +146,39 @@ List<RecTrack> kiesNummers(List<({Kandidaat kandidaat, List<RecTrack> toppers})>
   return uit;
 }
 
-/// Zoveel nummers staan er in "Aanbevolen voor jou" (21-11-2026, Saber: *"aanbevolen mag ook 200 liedjes bevatten"*).
-const int kAanbevolenNummers = 200;
+/// Zoveel nummers staan er in "Aanbevolen voor jou" (21-11-2026, Saber: *"aanbevolen mag ook 200 liedjes bevatten"*;
+/// 26-11-2026: *"ik wil daar zeker 200 liedjes zien"*). Iets meer dan 200: een toestel zeeft er nog uit wat het zelf al
+/// heeft, en dan blijven er toch 200.
+const int kAanbevolenNummers = 240;
 
-/// Zoveel daarvan in de rij op Start; alle [kAanbevolenNummers] via "Alles" (Saber: "Rij 100, Alles 200").
-const int kAanbevolenInRij = 100;
+/// Zoveel daarvan in de rij op Start: allemaal (26-11-2026: "zeker 200" in de rij; tot dan 100, de rest onder "Alles").
+const int kAanbevolenInRij = kAanbevolenNummers;
+
+/// Hoogstens zoveel nummers van één artiest in één trekking ([trekUitVoorraad]).
+const int kAanbevolenPerArtiest = 2;
+
+/// De breedte van de voorraad (26-11-2026, `RecommendService.ontdekVoorJou`): zoveel nieuwe artiesten, met elk zoveel
+/// toppers bij Deezer, en zoveel daarvan in de voorraad. Een trekking neemt er hoogstens [kAanbevolenPerArtiest] per
+/// artiest; de volgende trekking zijn andere nummers. Was 150 · 8 · 3.
+const int kAanbevolenKandidaten = 450;
+const int kAanbevolenToppers = 12;
+const int kAanbevolenVoorraadPerArtiest = 5;
 
 /// Zoveel nummers rekent de pc op de achtergrond uit als voorraad. Zo is verversen meteen klaar, met telkens
 /// [kAanbevolenNummers] die je nog niet zag ([AanbevolenVoorJou.volgende]): een berekening is een paar honderd vragen
 /// aan Deezer, en dat duurt een minuut of meer — te lang om op te wachten als je omlaag trekt.
-const int kAanbevolenVoorraad = 600;
+///
+/// 2000 sinds 26-11-2026. Met 600 (in de praktijk ~430: de verwanten van je bovenste veertig die je nog niet hebt, zijn
+/// op) stond er na elke berekening "nog 0 nieuw": na twee keer verversen had je alles gezien, en kwam hetzelfde terug.
+const int kAanbevolenVoorraad = 2000;
 
 /// Zoveel zaden per berekening, gewogen getrokken uit je bovenste [kAanbevolenPoel] artiesten. Het waren er zes uit
 /// twaalf: dan zaten er bijna altijd dezelfde in, en kwam je elke dag hetzelfde tegen (Saber, 21-11-2026: *"het is elke
 /// dag dezelfde"*).
-const int kAanbevolenZaden = 20;
-const int kAanbevolenPoel = 40;
+///
+/// 26-11-2026: veertig uit je bovenste 120 (was twintig uit veertig) — de voorraad moet breder dan je vaste kern.
+const int kAanbevolenZaden = 40;
+const int kAanbevolenPoel = 120;
 
 /// Zo lang gaat een nummer dat al in de lijst stond achteraan: verversen geeft eerst wat je nog niet zag.
 const Duration kAanbevolenGezien = Duration(days: 14);
@@ -211,19 +228,36 @@ List<Kandidaat> verdeelOverZaden(List<Kandidaat> rang, {required List<String> za
 
 /// Een trekking van [aantal] uit de voorraad: eerst wat de laatste [kAanbevolenGezien] niet in de lijst stond, in de
 /// volgorde van de voorraad (die wisselt al om de beurt van zaad); is dat te weinig, dan aangevuld met wat het langst
-/// geleden getoond werd.
+/// geleden getoond werd. Hoogstens [perArtiest] per artiest: een toestel toont er ook niet meer, en anders bleef er van
+/// 200 minder over.
 List<RecTrack> trekUitVoorraad(List<RecTrack> voorraad, Map<String, int> getoondOp,
-    {required int aantal, required int nuMs}) {
+    {required int aantal, required int nuMs, int perArtiest = kAanbevolenPerArtiest}) {
   bool vers(RecTrack t) {
     final ms = getoondOp[aanbevolenSleutel(t)];
     return ms == null || nuMs - ms > kAanbevolenGezien.inMilliseconds;
   }
 
-  final uit = [for (final t in voorraad) if (vers(t)) t].take(aantal).toList();
+  final uit = <RecTrack>[];
+  final perA = <String, int>{};
+  final gekozen = <String>{};
+  void neem(RecTrack t) {
+    final k = artistKey(t.artist);
+    if ((perA[k] ?? 0) >= perArtiest || !gekozen.add(aanbevolenSleutel(t))) return;
+    perA[k] = (perA[k] ?? 0) + 1;
+    uit.add(t);
+  }
+
+  for (final t in voorraad) {
+    if (uit.length >= aantal) break;
+    if (vers(t)) neem(t);
+  }
   if (uit.length < aantal) {
     final oud = [for (final t in voorraad) if (!vers(t)) t]
       ..sort((a, b) => (getoondOp[aanbevolenSleutel(a)] ?? 0).compareTo(getoondOp[aanbevolenSleutel(b)] ?? 0));
-    uit.addAll(oud.take(aantal - uit.length));
+    for (final t in oud) {
+      if (uit.length >= aantal) break;
+      neem(t);
+    }
   }
   return uit;
 }
@@ -350,18 +384,25 @@ class AanbevolenVoorJou {
   void start({Duration eerst = const Duration(seconds: 60)}) {
     _klokje?.cancel();
     Timer(eerst, () {
-      if (verouderd) unawaited(ververs());
+      if (verouderd) {
+        unawaited(ververs());
+      } else if (_voorraad.length < kAanbevolenVoorraad ~/ 2) {
+        // Een smalle voorraad van vóór 26-11-2026 (~430): meteen een brede, en de lijst die er staat blijft.
+        unawaited(ververs(bijvullen: true));
+      }
     });
     _klokje = Timer.periodic(houdbaar, (_) => unawaited(ververs()));
   }
 
   void stop() => _klokje?.cancel();
 
-  /// Rekent opnieuw; loopt er al een berekening, dan wacht deze daarop.
-  Future<AanbevolenLijst?> ververs() {
+  /// Rekent opnieuw; loopt er al een berekening, dan wacht deze daarop. [bijvullen]: alleen de voorraad aanvullen, de
+  /// lijst die er staat (net getrokken bij een ververs) blijft — anders kreeg je na een minuut een andere, en telde alles
+  /// daarin als gezien zonder dat iemand het zag.
+  Future<AanbevolenLijst?> ververs({bool bijvullen = false}) {
     final lopend = _bezig;
     if (lopend != null) return lopend;
-    final werk = _reken();
+    final werk = _reken(bijvullen: bijvullen);
     _bezig = werk;
     return werk.whenComplete(() {
       _bezig = null;
@@ -374,9 +415,22 @@ class AanbevolenVoorJou {
   Future<AanbevolenLijst?> volgende() async {
     if (_voorraad.isEmpty) return ververs();
     await _trek(klok());
-    if (nogVers < kAanbevolenNummers && _bezig == null) unawaited(ververs());
+    if (nogVers < kAanbevolenNummers && _bezig == null) unawaited(ververs(bijvullen: true));
     log?.call('aanbevolen: ververst — ${_lijst?.nummers.length ?? 0} nummers, nog $nogVers nieuw in de voorraad');
     return _lijst;
+  }
+
+  /// Alleen de voorraad bewaren, bij de lijst die er staat.
+  Future<void> _bewaarVoorraad() async {
+    final l = _lijst;
+    if (l == null) return;
+    try {
+      await bestand.writeAsString(jsonEncode({
+        ...l.toJson(),
+        'voorraad': [for (final t in _voorraad) recTrackNaarJson(t)],
+        'getoond': _getoond,
+      }));
+    } catch (_) {}
   }
 
   /// Een nieuwe trekking uit de voorraad, als lijst, en bewaren.
@@ -397,7 +451,7 @@ class AanbevolenVoorJou {
     } catch (_) {}
   }
 
-  Future<AanbevolenLijst?> _reken() async {
+  Future<AanbevolenLijst?> _reken({bool bijvullen = false}) async {
     final t0 = DateTime.now();
     final nu = klok();
     final alle = artiesten();
@@ -416,7 +470,11 @@ class AanbevolenVoorJou {
         return _lijst;
       }
       _voorraad = voorraad;
-      await _trek(nu);
+      if (bijvullen && _lijst != null) {
+        await _bewaarVoorraad();
+      } else {
+        await _trek(nu);
+      }
       log?.call('aanbevolen: ${_lijst!.nummers.length} nummers (voorraad ${voorraad.length}, nog $nogVers nieuw) uit '
           '${zaden.length} zaden: ${zaden.map((z) => z.naam).join(', ')} '
           'in ${DateTime.now().difference(t0).inMilliseconds} ms');

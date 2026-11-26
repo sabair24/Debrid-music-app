@@ -33,17 +33,31 @@ import 'organize.dart' show artistKey;
 import 'radiostijl.dart' show familieVan;
 import 'recommend.dart' show RecTrack, recNorm;
 
-/// Zoveel nummers staan er op het scherm; de rest van de lijst is reserve voor wat je ophaalt of wegtikt.
-const int kOntdekGetoond = 50;
+/// Zoveel nummers staan er op het scherm; de rest van de lijst is reserve voor wat je ophaalt of wegtikt. 200 sinds
+/// 26-11-2026 (Saber: *"daar moeten ook zeker 200 liedjes"*; was 50).
+const int kOntdekGetoond = 200;
 
-/// Zoveel nummers rekent de pc in één keer uit: [kOntdekGetoond] plus de reserve.
-const int kOntdekLengte = 90;
+/// Zoveel trekt één lijst uit de voorraad ([trekOntdek]): [kOntdekGetoond] plus de reserve.
+const int kOntdekTrekking = 250;
+
+/// Zoveel nummers rekent de pc in één keer uit, als VOORRAAD: verversen trekt er meteen een nieuwe lijst uit, en de pc
+/// rekent op de achtergrond bij. Tot 26-11-2026 rekende verversen alles opnieuw (35–56 s), en een toestel gaf het na
+/// 30 s op — *"de ververs button bij ontdek werkt niet"*: je kreeg de vorige lijst terug.
+const int kOntdekLengte = 1200;
+
+/// Zoveel nummers per artiest in de voorraad. Een getrokken lijst neemt er één (Saber, 04-11-2026: één per artiest);
+/// de volgende trekking een ander.
+const int kOntdekPerArtiestVoorraad = 3;
+
+/// Zoveel verwante artiesten van Deezer (dichtbij), en van zoveel kandidaten de tweede graad ("iets verder").
+const int kOntdekKandidaten = 250;
+const int kOntdekVerderVan = 40;
 
 /// Elke zoveelste plek is iets verder van je smaak (Saber: "Vooral dichtbij, 1 op 5 iets verder").
 const int kVerderElke = 5;
 
-/// Zoveel zaden per berekening, gespreid over de hoeken van de bibliotheek.
-const int kOntdekZaden = 14;
+/// Zoveel zaden per berekening, gespreid over de hoeken van de bibliotheek (30 sinds 26-11-2026, was 14).
+const int kOntdekZaden = 30;
 
 /// Een hoek met minder dan dit deel van de bibliotheek krijgt geen eigen zaad (tenzij er plaats over is).
 const double kHoekDrempel = 0.03;
@@ -450,6 +464,7 @@ List<OntdekNummer> stelOntdekSamen(
   required int nuMs,
   int max = kOntdekLengte,
   int verderElke = kVerderElke,
+  int perArtiest = 1,
   DateTime? nu,
 }) {
   final dag = nu ?? DateTime.fromMillisecondsSinceEpoch(nuMs);
@@ -479,11 +494,14 @@ List<OntdekNummer> stelOntdekSamen(
   final verder = {for (final b in bronnen) b: rij(perBron[b]!.where((n) => n.verder))};
 
   final uit = <OntdekNummer>[];
-  final artiesten = <String>{};
+  // Hoeveel er per artiest al in staan: in een lijst één, in de voorraad [kOntdekPerArtiestVoorraad].
+  final artiesten = <String, int>{};
   // En één per lied ([ontdekLied]): geen twee covers van "The Rhythm of the Night".
   final liederen = <String>{};
+  final sleutels = <String>{};
   bool alGehad(OntdekNummer n) {
-    if (artiesten.contains(ontdekArtiest(n.nummer.artist))) return true;
+    if ((artiesten[ontdekArtiest(n.nummer.artist)] ?? 0) >= perArtiest) return true;
+    if (sleutels.contains(n.sleutel)) return true;
     final l = ontdekLied(n.nummer.title);
     return l != null && liederen.contains(l);
   }
@@ -521,9 +539,48 @@ List<OntdekNummer> stelOntdekSamen(
       n ??= neem(verder, beurtVer++);
     }
     if (n == null) break;
-    artiesten.add(ontdekArtiest(n.nummer.artist));
+    final a = ontdekArtiest(n.nummer.artist);
+    artiesten[a] = (artiesten[a] ?? 0) + 1;
+    sleutels.add(n.sleutel);
     if (ontdekLied(n.nummer.title) case final l?) liederen.add(l);
     uit.add(n);
+  }
+  return uit;
+}
+
+/// Een lijst van [aantal] uit de voorraad ([kOntdekLengte]): één per artiest en één per lied, in de volgorde van de
+/// voorraad (die wisselt al van bron, zaad en "iets verder"). Eerst wat de laatste [kAlGetoond] niet in een lijst stond;
+/// is dat te weinig, dan aangevuld met wat het langst geleden getoond werd. [bruikbaar]: wat nu nog mag (je haalde het
+/// intussen op, of tikte het weg).
+List<OntdekNummer> trekOntdek(List<OntdekNummer> voorraad, Map<String, int> getoondOp,
+    {required int aantal, required int nuMs, bool Function(OntdekNummer n)? bruikbaar}) {
+  bool vers(OntdekNummer n) {
+    final ms = getoondOp[n.sleutel];
+    return ms == null || nuMs - ms > kAlGetoond.inMilliseconds;
+  }
+
+  final uit = <OntdekNummer>[];
+  final artiesten = <String>{}, liederen = <String>{};
+  void neem(OntdekNummer n) {
+    if (bruikbaar != null && !bruikbaar(n)) return;
+    final l = ontdekLied(n.nummer.title);
+    if (artiesten.contains(ontdekArtiest(n.nummer.artist)) || (l != null && liederen.contains(l))) return;
+    artiesten.add(ontdekArtiest(n.nummer.artist));
+    if (l != null) liederen.add(l);
+    uit.add(n);
+  }
+
+  for (final n in voorraad) {
+    if (uit.length >= aantal) break;
+    if (vers(n)) neem(n);
+  }
+  if (uit.length < aantal) {
+    final oud = [for (final n in voorraad) if (!vers(n)) n]
+      ..sort((a, b) => (getoondOp[a.sleutel] ?? 0).compareTo(getoondOp[b.sleutel] ?? 0));
+    for (final n in oud) {
+      if (uit.length >= aantal) break;
+      neem(n);
+    }
   }
   return uit;
 }
@@ -678,6 +735,29 @@ class OntdekVoorJou {
   /// Sleutel → wanneer hij voor het eerst in een lijst stond.
   final Map<String, int> _getoond = {};
 
+  /// De voorraad van de laatste berekening ([kOntdekLengte]); een lijst wordt eruit getrokken ([trekOntdek]).
+  List<OntdekNummer> _voorraad = const [];
+
+  /// Mag nu nog: niet in bezit, niet weggetikt (ook niet de artiest).
+  bool _bruikbaar(OntdekNummer n, int nuMs) =>
+      !heb(n.nummer.artist, n.nummer.title) &&
+      !_weg.nummers.contains(n.sleutel) &&
+      !_weg.artiesten(nuMs: nuMs).contains(ontdekArtiest(n.nummer.artist));
+
+  /// Hoeveel artiesten in de voorraad nog een nummer hebben dat je de laatste [kAlGetoond] niet zag: zoveel kan een
+  /// volgende trekking nog nieuw geven.
+  int get nogVers {
+    final nuMs = klok().millisecondsSinceEpoch;
+    final weg = _weg.artiesten(nuMs: nuMs);
+    return {
+      for (final n in _voorraad)
+        if (!weg.contains(ontdekArtiest(n.nummer.artist)) &&
+            !_weg.nummers.contains(n.sleutel) &&
+            (_getoond[n.sleutel] == null || nuMs - _getoond[n.sleutel]! > kAlGetoond.inMilliseconds))
+          ontdekArtiest(n.nummer.artist),
+    }.length;
+  }
+
   Future<OntdekLijst?>? _bezig;
   bool get bezig => _bezig != null;
   Timer? _klokje;
@@ -700,6 +780,7 @@ class OntdekVoorJou {
           _poolDag = (j['poolDag'] as String?) ?? '';
           _claudeVandaag = (j['claudeVandaag'] as num?)?.toInt() ?? 0;
           _pool = [for (final n in (j['pool'] as List? ?? const [])) ?OntdekNummer.fromJson(n)];
+          _voorraad = [for (final n in (j['voorraad'] as List? ?? const [])) ?OntdekNummer.fromJson(n)];
           final g = j['getoond'];
           if (g is Map) {
             for (final e in g.entries) {
@@ -720,7 +801,12 @@ class OntdekVoorJou {
   void start({Duration eerst = const Duration(seconds: 60)}) {
     _klokje?.cancel();
     Timer(eerst, () {
-      if (verouderd) unawaited(ververs());
+      if (verouderd) {
+        unawaited(ververs());
+      } else if (_voorraad.isEmpty) {
+        // Nog geen voorraad (een lijst van vóór 26-11-2026): meteen een, zodat de eerste ververs niet hoeft te wachten.
+        unawaited(ververs(bijvullen: true));
+      }
     });
     _klokje = Timer.periodic(const Duration(hours: 1), (_) {
       if (verouderd) unawaited(ververs());
@@ -733,12 +819,60 @@ class OntdekVoorJou {
   ///
   /// [handmatig]: je drukte zelf op verversen. Dan vraagt hij Claude opnieuw om nieuwe nummers (zolang het vandaag
   /// minder dan [kClaudePerDag] keer was), niet alleen als de pool van vandaag op is.
-  Future<OntdekLijst?> ververs({bool handmatig = false}) {
+  ///
+  /// [bijvullen]: alleen de voorraad aanvullen (na [volgende]); de lijst die je net kreeg, blijft staan.
+  Future<OntdekLijst?> ververs({bool handmatig = false, bool bijvullen = false}) {
     final lopend = _bezig;
     if (lopend != null) return lopend;
-    final werk = _reken(handmatig: handmatig);
+    final werk = _reken(handmatig: handmatig, bijvullen: bijvullen);
     _bezig = werk;
     return werk.whenComplete(() => _bezig = null);
+  }
+
+  /// Verversen met de hand: meteen een nieuwe lijst uit de voorraad ([trekOntdek]), met wat je de laatste [kAlGetoond]
+  /// nog niet zag. Raakt de voorraad op (minder dan [kOntdekTrekking] artiesten met iets nieuws), dan rekent de pc op de
+  /// achtergrond een nieuwe — en daar mag Claude opnieuw bij (hoogstens [kClaudePerDag] keer per dag). Nog geen
+  /// voorraad: dan wel wachten op een berekening.
+  Future<OntdekLijst?> volgende() async {
+    if (_voorraad.isEmpty) return ververs(handmatig: true);
+    final t0 = DateTime.now();
+    await _trek(klok());
+    final vers = nogVers;
+    if (vers < kOntdekTrekking && _bezig == null) unawaited(ververs(handmatig: true, bijvullen: true));
+    log?.call('ontdek: ververst — ${_lijst?.nummers.length ?? 0} uit de voorraad (${_voorraad.length}), nog $vers '
+        'artiesten met iets nieuws${vers < kOntdekTrekking ? ' — de pc rekent bij' : ''} — in '
+        '${DateTime.now().difference(t0).inMilliseconds} ms');
+    return _lijst;
+  }
+
+  /// Een nieuwe lijst uit de voorraad, en bewaren. Wat erin komt (de eerste [kOntdekGetoond]) telt als getoond.
+  Future<void> _trek(DateTime nu) async {
+    final nuMs = nu.millisecondsSinceEpoch;
+    _getoond.removeWhere((_, ms) => nuMs - ms > kAlGetoond.inMilliseconds);
+    final nummers = trekOntdek(_voorraad, _getoond,
+        aantal: kOntdekTrekking, nuMs: nuMs, bruikbaar: (n) => _bruikbaar(n, nuMs));
+    for (final n in nummers.take(kOntdekGetoond)) {
+      _getoond.putIfAbsent(n.sleutel, () => nuMs);
+    }
+    _lijst = OntdekLijst(nuMs, nummers);
+    await _bewaar();
+  }
+
+  Future<void> _bewaar() async {
+    final l = _lijst;
+    if (l == null) return;
+    try {
+      await bestand.writeAsString(
+        jsonEncode({
+          ...l.toJson(),
+          'poolDag': _poolDag,
+          'claudeVandaag': _claudeVandaag,
+          'pool': [for (final n in _pool) n.toJson()],
+          'voorraad': [for (final n in _voorraad) n.toJson()],
+          'getoond': _getoond,
+        }),
+      );
+    } catch (_) {}
   }
 
   /// Wegtikken (of met [terug] ongedaan maken), en bewaren.
@@ -754,7 +888,7 @@ class OntdekVoorJou {
     } catch (_) {}
   }
 
-  Future<OntdekLijst?> _reken({bool handmatig = false}) async {
+  Future<OntdekLijst?> _reken({bool handmatig = false, bool bijvullen = false}) async {
     final t0 = DateTime.now();
     final nu = klok();
     final nuMs = nu.millisecondsSinceEpoch;
@@ -808,34 +942,28 @@ class OntdekVoorJou {
     };
     // Vergeet wat al lang niet meer getoond werd: het mag weer vooraan.
     _getoond.removeWhere((_, ms) => nuMs - ms > kAlGetoond.inMilliseconds);
-    final nummers = stelOntdekSamen(
+    // De voorraad: tot [kOntdekPerArtiestVoorraad] per artiest; een lijst trekt er één per artiest uit ([_trek]).
+    final voorraad = stelOntdekSamen(
       perBron,
       heb: heb,
       weg: _weg.nummers,
       wegArtiesten: _weg.artiesten(nuMs: nuMs),
       getoondOp: _getoond,
       nuMs: nuMs,
+      perArtiest: kOntdekPerArtiestVoorraad,
     );
-    if (nummers.isEmpty && _lijst != null) {
+    if (voorraad.isEmpty && _lijst != null) {
       log?.call('ontdek: niets gevonden — de vorige lijst blijft');
       return _lijst;
     }
-    for (final n in nummers.take(kOntdekGetoond)) {
-      _getoond.putIfAbsent(n.sleutel, () => nuMs);
+    _voorraad = voorraad;
+    if (bijvullen && _lijst != null) {
+      await _bewaar();
+    } else {
+      await _trek(nu);
     }
-    final l = OntdekLijst(nuMs, nummers);
-    _lijst = l;
-    try {
-      await bestand.writeAsString(
-        jsonEncode({
-          ...l.toJson(),
-          'poolDag': _poolDag,
-          'claudeVandaag': _claudeVandaag,
-          'pool': [for (final n in _pool) n.toJson()],
-          'getoond': _getoond,
-        }),
-      );
-    } catch (_) {}
+    final nummers = _lijst!.nummers;
+    final l = _lijst!;
     final hoeken = <String, int>{};
     for (final z in zaden) {
       hoeken[z.hoek] = (hoeken[z.hoek] ?? 0) + 1;
@@ -843,7 +971,8 @@ class OntdekVoorJou {
     int van(Ontdekbron b) => nummers.where((n) => n.bron == b).length;
     log?.call(
       'ontdek: ${math.min(nummers.length, kOntdekGetoond)} + '
-      '${math.max(0, nummers.length - kOntdekGetoond)} reserve uit ${zaden.length} zaden '
+      '${math.max(0, nummers.length - kOntdekGetoond)} reserve (voorraad ${voorraad.length}, nog $nogVers artiesten '
+      'met iets nieuws) uit ${zaden.length} zaden '
       '(${hoeken.entries.map((e) => '${e.key} ${e.value}').join(', ')}) — '
       'claude ${van(Ontdekbron.claude)}${vraagClaude ? ' (gevraagd: ${cl.length})' : ''}, '
       'last.fm ${van(Ontdekbron.lastfm)} (van ${lf.length}), deezer ${van(Ontdekbron.deezer)} (van ${dz.length}), '

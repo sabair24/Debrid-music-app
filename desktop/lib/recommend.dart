@@ -1,5 +1,14 @@
 import 'dart:math';
-import 'aanbevolen.dart' show Kandidaat, kAanbevolenVoorraad, kiesNummers, rangschikKandidaten, verdeelOverZaden;
+import 'aanbevolen.dart'
+    show
+        Kandidaat,
+        kAanbevolenKandidaten,
+        kAanbevolenToppers,
+        kAanbevolenVoorraad,
+        kAanbevolenVoorraadPerArtiest,
+        kiesNummers,
+        rangschikKandidaten,
+        verdeelOverZaden;
 
 import 'deezerbaan.dart';
 import 'isrc.dart' as isrc;
@@ -764,7 +773,7 @@ class RecommendService {
   /// verwanten (Khaled: raï) de hele rij. Zo'n zaad zoekt een stap verder: de verwanten van zijn eerste [verder]
   /// verwanten, ook die je al hebt.
   Future<List<RecTrack>> ontdekVoorJou(List<({String naam, double gewicht})> zaden, Set<String> bezit,
-      {int kandidaten = 150, int max = kAanbevolenVoorraad, int verder = 4}) async {
+      {int kandidaten = kAanbevolenKandidaten, int max = kAanbevolenVoorraad, int verder = 4}) async {
     Future<List<({int id, String naam})>> verwantVan(int id) async {
       final rel = ((await _get('$_base/artist/$id/related?limit=20'))?['data'] as List?) ?? const [];
       return [
@@ -810,9 +819,9 @@ class RecommendService {
         });
     }
     final top = verdeelOverZaden(rang, zaden: [for (final z in zaden) z.naam], aantal: kandidaten);
-    final toppers = await Future.wait([for (final k in top) _top(k.id, k.naam, limit: 8)]);
+    final toppers = await Future.wait([for (final k in top) _top(k.id, k.naam, limit: kAanbevolenToppers)]);
     return kiesNummers([for (var i = 0; i < top.length; i++) (kandidaat: top[i], toppers: _tracks(toppers[i]))],
-        max: max, perArtiest: 3);
+        max: max, perArtiest: kAanbevolenVoorraadPerArtiest);
   }
 
   /// Ontdek (Saber, 04-11-2026; `ontdek.dart`): de verwanten van alle zaden samen, gerangschikt

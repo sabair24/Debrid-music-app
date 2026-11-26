@@ -3033,10 +3033,11 @@ class LanServer {
     final d = OntdekVoorJou.pc;
     if (d == null) return _unavailable(req, 'Deze pc rekent Ontdek niet uit.');
     var l = d.lijst;
-    if (l == null || req.uri.queryParameters['ververs'] == '1') {
-      l = await d
-          .ververs(handmatig: req.uri.queryParameters['ververs'] == '1')
-          .timeout(const Duration(seconds: 45), onTimeout: () => d.lijst);
+    if (req.uri.queryParameters['ververs'] == '1') {
+      // Meteen een nieuwe lijst uit de voorraad (26-11-2026, [OntdekVoorJou.volgende]); rekenen gebeurt op de achtergrond.
+      l = await d.volgende().timeout(const Duration(seconds: 25), onTimeout: () => d.lijst);
+    } else if (l == null) {
+      l = await d.ververs().timeout(const Duration(seconds: 25), onTimeout: () => d.lijst);
     } else if (d.verouderd) {
       unawaited(d.ververs());
     }

@@ -108,11 +108,11 @@ void main() {
           bestand: File('${map.path}${Platform.pathSeparator}aanbevolen.json'),
         );
 
-    test('DE KERN: 200 nummers uit twintig zaden, en verversen geeft meteen 200 nieuwe', () async {
+    test('DE KERN: 240 nummers uit veertig zaden, en verversen geeft meteen 240 nieuwe', () async {
       final berekeningen = <int>[];
-      final d = dienst(berekeningen, voorraad: 650);
+      final d = dienst(berekeningen, voorraad: 800);
       await d.ververs();
-      expect(berekeningen, [kAanbevolenZaden], reason: 'twintig zaden, niet zes');
+      expect(berekeningen, [kAanbevolenZaden], reason: 'veertig zaden (26-11-2026; eerst zes, toen twintig)');
       final eerst = {for (final t in d.lijst!.nummers) aanbevolenSleutel(t)};
       expect(eerst, hasLength(kAanbevolenNummers));
       await d.volgende();
@@ -126,20 +126,20 @@ void main() {
       final berekeningen = <int>[];
       final d = dienst(berekeningen);
       await d.ververs();
-      expect(d.nogVers, 250);
+      expect(d.nogVers, 450 - kAanbevolenNummers);
       await d.volgende();
       for (var i = 0; i < 50 && berekeningen.length < 2; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 5));
       }
-      expect(berekeningen, hasLength(2), reason: 'minder dan 200 nieuwe over: een nieuwe voorraad');
+      expect(berekeningen, hasLength(2), reason: 'minder dan een lijst nieuwe over: een nieuwe voorraad');
     });
 
     test('de voorraad en wat je zag blijven over een herstart', () async {
       final berekeningen = <int>[];
-      final d = dienst(berekeningen, voorraad: 650);
+      final d = dienst(berekeningen, voorraad: 800);
       await d.ververs();
       final eerst = {for (final t in d.lijst!.nummers) aanbevolenSleutel(t)};
-      final na = dienst(berekeningen, voorraad: 650);
+      final na = dienst(berekeningen, voorraad: 800);
       await na.laad();
       await na.volgende();
       expect(berekeningen, hasLength(1), reason: 'de voorraad kwam van schijf');
@@ -208,15 +208,15 @@ void main() {
   });
 
   group('aangesloten', () {
-    test('de rij toont 100, "Alles" alle 200; verversen trekt meteen uit de voorraad', () {
+    test('de rij toont alles (26-11-2026: "zeker 200"), "Alles" als raster; verversen trekt meteen uit de voorraad', () {
       final m = _bron('lib/main.dart');
       expect(m, contains("_recRow(_forYou.take(kAanbevolenInRij).toList(), rij: 'voorjou')"));
       expect(m, contains('(_) => _AanbevolenAllesPagina('));
       expect(m, contains('      if (dwing) {\n        await pc.volgende();'));
       expect(_bron('lib/lan/server.dart'),
           contains('      l = await d.volgende().timeout(const Duration(seconds: 45), onTimeout: () => d.lijst);'));
-      expect(kAanbevolenInRij, 100);
-      expect(kAanbevolenNummers, 200);
+      expect(kAanbevolenInRij, kAanbevolenNummers);
+      expect(kAanbevolenNummers, greaterThanOrEqualTo(200));
     });
 
     test('een zaad met te weinig nieuws zoekt een stap verder, en de kandidaten gaan evenredig', () {
@@ -231,8 +231,12 @@ void main() {
       expect(vraag, contains('Seal — Kiss From A Rose'));
       final m = _bron('lib/main.dart');
       expect(m, contains('weggetikt: ontdek.weg.namen(), alGetoond: ontdek.alGetoond());'));
-      expect(m, contains('          await pc.ververs(handmatig: ververs);'));
-      expect(_bron('lib/lan/server.dart'), contains(".ververs(handmatig: req.uri.queryParameters['ververs'] == '1')"));
+      // Sinds 26-11-2026 trekt verversen meteen uit de voorraad; Claude mag bij het bijrekenen ([OntdekVoorJou.volgende]).
+      expect(m, contains('          await pc.volgende();'));
+      expect(_bron('lib/lan/server.dart'),
+          contains('      l = await d.volgende().timeout(const Duration(seconds: 25), onTimeout: () => d.lijst);'));
+      expect(_bron('lib/ontdek.dart'),
+          contains('    if (vers < kOntdekTrekking && _bezig == null) unawaited(ververs(handmatig: true, bijvullen: true));'));
     });
   });
 }

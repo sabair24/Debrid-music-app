@@ -26034,6 +26034,15 @@ class _StartCache {
   /// Vraagt bij de volgende lading een VERSE lijst "Aanbevolen voor jou" (omlaag trekken).
   static bool aanbevolenDwingen = false;
 
+  /// De eigen rijen ("Aanbevolen voor jou", "Omdat je … draaide", …) zijn deze sessie (of na de laatste [leeg]) opgehaald.
+  ///
+  /// **Waarom een eigen vlag (26-11-2026).** Het ophalen hing aan "`forYou` is leeg", maar bij het openen vult
+  /// `_aanbevolenUitVoorraad` die meteen met wat er ligt — op een toestel de lijst op schijf. Dan werd er nooit meer
+  /// gevraagd: op Sabers Mac stonden vijf dagen lang dezelfde 15 nummers vol raï van vóór 21-11 (*"is nog niets
+  /// veranderd ?? teveel rai"*), en omlaag trekken hield die ook vast. Op de pc laadden de andere eigen rijen daardoor
+  /// helemaal niet.
+  static bool persoonlijkGeladen = false;
+
   /// De twee rijen nieuwe releases (nummers, albums & EP's), en wanneer ze het laatst gevraagd zijn.
   /// NIET in [leeg]: ze hebben hun eigen houdbaarheid (op de pc drie uur, zie `nieuwe_releases.dart`),
   /// en een Ververs vraagt ze apart opnieuw — zonder eerst een leeg vlak te tonen.
@@ -26089,6 +26098,7 @@ class _StartCache {
     vroeger = [];
     nieuweArtiesten = [];
     uitgezocht = [];
+    persoonlijkGeladen = false;
     ronde++;
     geladen = false;
     opgehaaldMs = 0;
@@ -26509,6 +26519,7 @@ class _HomeStartViewState extends State<HomeStartView> {
     final vroegerSchoon = maxPerArtiest(nogNietInBezit(vroegerRij, bezit), (t) => t.artist, 2);
     if (vroegerSchoon.isNotEmpty) _StartCache.vroeger = vroegerSchoon;
     if (nieuweArtiestenRij.isNotEmpty) _StartCache.nieuweArtiesten = nieuweArtiestenRij;
+    _StartCache.persoonlijkGeladen = true;
     _StartCache.opgehaaldMs = DateTime.now().millisecondsSinceEpoch;
     setState(() {
       _forYou = _StartCache.forYou;
@@ -26580,8 +26591,9 @@ class _HomeStartViewState extends State<HomeStartView> {
     final mixArtiesten = {for (final a in lib.mixAlbums) a.artist};
     final artists = lib.artists.where((a) => mixArtiesten.contains(a) && !_genericArtist(a)).toList();
     // Fire the personal rows the first time the library actually has artists.
-    // Alleen als ze er nog niet zijn — een terugkeer naar Start hoeft ze niet opnieuw te halen.
-    if (!_seedsRequested && artists.isNotEmpty && _StartCache.forYou.isEmpty) {
+    // Eén keer per sessie (en na Ververs): een terugkeer naar Start hoeft ze niet opnieuw te halen — maar wat er van
+    // schijf staat, is geen reden om het niet te vragen ([_StartCache.persoonlijkGeladen]).
+    if (!_seedsRequested && artists.isNotEmpty && !_StartCache.persoonlijkGeladen) {
       _seedsRequested = true;
       final seeds = [...artists]..shuffle();
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadSeeds(seeds));
@@ -26756,7 +26768,7 @@ class _HomeStartViewState extends State<HomeStartView> {
         if (_forYou.isNotEmpty || _komtNog)
           _section('Aanbevolen voor jou',
               _forYou.isEmpty ? _loadingRow() : _recRow(_forYou.take(kAanbevolenInRij).toList(), rij: 'voorjou'),
-              // 100 in de rij, alle 200 via "Alles" (Saber, 21-11-2026).
+              // Alles in de rij (Saber, 26-11-2026: "zeker 200"), en "Alles" als raster.
               rechts: _forYou.isEmpty
                   ? null
                   : _AllesKnop(
@@ -27985,9 +27997,12 @@ class _OntdekViewState extends State<OntdekView> {
     try {
       final pc = OntdekVoorJou.pc;
       if (pc != null) {
-        if (ververs || pc.lijst == null) {
-          // Met de hand ververst: Claude mag opnieuw (tot tien keer per dag, zie [OntdekVoorJou.kClaudePerDag]).
-          await pc.ververs(handmatig: ververs);
+        if (ververs) {
+          // Met de hand ververst: meteen een nieuwe lijst uit de voorraad; de pc rekent op de achtergrond bij, en daar
+          // mag Claude opnieuw (tot tien keer per dag, zie [OntdekVoorJou.kClaudePerDag]).
+          await pc.volgende();
+        } else if (pc.lijst == null) {
+          await pc.ververs();
         } else if (pc.verouderd) {
           // Van gisteren: die van vandaag komt zo, en tot dan de vorige.
           unawaited(pc.ververs().then((_) {
@@ -28002,8 +28017,8 @@ class _OntdekViewState extends State<OntdekView> {
         } else if (r.lijst case final j?) {
           l = OntdekLijst.fromJson(j);
           if (l != null && l.nummers.isNotEmpty) unawaited(_bewaarHier(j));
-          // Rekent de pc nog (de eerste keer van de dag), dan straks nog eens kijken.
-          if (j['bezig'] == true && !ververs) {
+          // Rekent de pc nog (de eerste keer van de dag, of een ververs zonder voorraad), dan straks nog eens kijken.
+          if (j['bezig'] == true) {
             Timer(const Duration(seconds: 25), () {
               if (mounted && !_ververst) unawaited(_load());
             });
