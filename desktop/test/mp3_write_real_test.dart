@@ -27,6 +27,38 @@ Uint8List _audioNa(File f) {
   }
 }
 
+/// Een echte v2.3-mp3 als v2.4, voor als de bibliotheek er zelf geen meer heeft — of null als dit bestand zich er niet voor leent.
+///
+/// **Waarom (26-11-2026).** De app ruimde die ochtend dubbele mp3's op (`_dubbel` naar de prullenbak), en daarna stonden er nog
+/// vier in de bibliotheek, geen enkele v2.4. Toen werd deze toets rood op een terugval die er niet was. Een v2.3- en een
+/// v2.4-framekop zijn even lang (tien bytes); alleen de grootte is syncsafe en de vlaggen betekenen iets anders. Dus: de
+/// versiebyte op 4, elke framegrootte syncsafe, en alleen frames zonder vlaggen — dan blijft de rest byte voor byte staan,
+/// de audio ook.
+File? _alsV24(File bron, String doel) {
+  final b = bron.readAsBytesSync();
+  final h = readId3Header(bron);
+  if (h == null || h.major != 3 || !h.writable || 10 + h.size > b.length) return null;
+  final uit = Uint8List.fromList(b);
+  uit[3] = 4;
+  uit[4] = 0;
+  var i = 10;
+  final eind = 10 + h.size;
+  var frames = 0;
+  while (i + 10 <= eind && b[i] != 0) {
+    final size = (b[i + 4] << 24) | (b[i + 5] << 16) | (b[i + 6] << 8) | b[i + 7];
+    if (size <= 0 || size >= (1 << 28) || i + 10 + size > eind) return null;
+    if (b[i + 8] != 0 || b[i + 9] != 0) return null;
+    uit[i + 4] = (size >> 21) & 0x7F;
+    uit[i + 5] = (size >> 14) & 0x7F;
+    uit[i + 6] = (size >> 7) & 0x7F;
+    uit[i + 7] = size & 0x7F;
+    i += 10 + size;
+    frames++;
+  }
+  if (frames == 0) return null;
+  return File(doel)..writeAsBytesSync(uit);
+}
+
 /// De ruwe inhoud van elk frame dat wij NIET aanraken, per id, zodat we byte voor byte kunnen
 /// vergelijken. Bewust op de ruwe bytes en niet op een uitgelezen waarde.
 Map<String, List<int>> _vreemdeFrames(File f) {
@@ -81,6 +113,19 @@ void main() {
         dir.deleteSync(recursive: true);
       } catch (_) {}
     });
+
+    // Geen echte v2.4 meer in de bibliotheek: een omgezette kopie van een echte v2.3 — zie [_alsV24].
+    if (!mp3s.any((f) => readId3Header(f)?.major == 4)) {
+      for (final f in mp3s.where((f) => readId3Header(f)?.major == 3)) {
+        final v24 = _alsV24(f, '${dir.path}${Platform.pathSeparator}v24.mp3');
+        if (v24 == null) continue;
+        expect(readId3Header(v24)?.major, 4);
+        expect(_audioNa(v24), _audioNa(f), reason: 'de omzetting raakt de audio niet');
+        mp3s.add(v24);
+        print('   v2.4 omgezet uit ${f.path.split(Platform.pathSeparator).last}');
+        break;
+      }
+    }
 
     var geschreven = 0, geweigerd = 0;
     final versiesGeschreven = <int>{};

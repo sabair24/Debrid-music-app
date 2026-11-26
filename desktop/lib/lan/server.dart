@@ -127,6 +127,9 @@ String? weigerVanBuiten(String pad, String methode) {
     '/api/toestel/nogbezig',
     // Ontdek (ontdek.dart; Saber, 04-11-2026): de lijst (klein, zonder hoezen) en een weggetikt nummer.
     '/api/ontdek', '/api/ontdek/weg',
+    // "Aanbevolen voor jou" (aanbevolen.dart): de lijst, zoals Ontdek. Stond er niet, en onderweg bleef de gsm daardoor
+    // op de 14 nummers van vóór 21-11 staan (Saber, 26-11-2026: "Aanbevolen nog niet goed ?? Op gsm?").
+    '/api/aanbevolen',
   };
   // TIDAL ook (Saber, 23-10-2026: "ik moet ook buitenshuis kunnen zoeken en downloaden"); ophalen telt mee in het
   // quotum voor downloads, zoals Soulseek.

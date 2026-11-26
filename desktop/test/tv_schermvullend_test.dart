@@ -105,7 +105,7 @@ void main() {
     final w = staat.indexOf('_maybeFocusable(KopFeiten(');
     expect(w, greaterThan(-1),
         reason: 'een Row met een beletselteken knipt artiest · jaar · aantal af zodra het niet past');
-    expect(staat.substring(w, w + 300), contains('names: [widget.artistName]'));
+    expect(staat.substring(w, w + 300), contains('names: [_artiest]'));
     expect(staat, contains("_tracks.length == 1 ? 'nummer' : 'nummers'"),
         reason: '"1 nummers" is geen Nederlands');
   });

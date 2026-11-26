@@ -59,7 +59,9 @@ void main() {
 
   test('de albumpagina vraagt het zo, op beide plekken', () {
     final main = File('lib/main.dart').readAsStringSync().replaceAll('\r\n', '\n');
-    expect(RegExp(r'ownedOpPlaat\(widget\.artistName, t\.title,').allMatches(main).length, 2);
+    // _artiest: de artiest van de plaat (26-11-2026, albumArtiestVoorPagina).
+    expect(RegExp(r'ownedOpPlaat\(_artiest, t\.title,').allMatches(main).length, 2);
+    expect(main, isNot(contains('ownedTrack(_artiest, t.title)')));
     expect(main, isNot(contains('ownedTrack(widget.artistName, t.title)')));
   });
 }
