@@ -676,6 +676,24 @@ bool meldtAnderBestand(String melding, Iterable<String?> namen) {
   return !eigen.any(m.contains);
 }
 
+/// Zo lang na het einde van een nummer hoort een decodeerfout nog bij de stroom die net afliep ([foutVanVorigeStroom]).
+const kEindeVorigeBinnen = Duration(milliseconds: 1500);
+
+/// Hoort [fout] bij de stroom die [msSindsEinde] ms geleden afliep, en niet bij het nummer dat nu opent?
+///
+/// **Waarom (27-11-2026).** Op de Shield stond bij een wissel geregeld "OPENEN MISLUKT — (het nieuwe nummer) — Error
+/// decoding audio." (IDGAF, Sign Of The Times, Cheap Thrills, Red Alert, Sing Hallelujah). Telkens 2–5 ms na het einde
+/// van het VORIGE nummer (`WACHT OP DE STROOM … buffer nog 0`), en 250–380 ms vóór het nieuwe nummer zelfs geopend
+/// werd: het laatste stukje van de afgelopen stroom liet zich niet ontcijferen. De app schreef het het nieuwe nummer
+/// aan, toonde "Kan dit nummer niet openen" en liet de pc dat (gave) bestand nakijken.
+///
+/// Alleen een decodeerfout: "Failed to open" en netwerkfouten gaan over een opening, en die zijn altijd van nu.
+bool foutVanVorigeStroom({required String fout, required int? msSindsEinde}) =>
+    msSindsEinde != null &&
+    msSindsEinde >= 0 &&
+    msSindsEinde <= kEindeVorigeBinnen.inMilliseconds &&
+    fout.contains('Error decoding audio');
+
 /// Is [fout] de tweede regel van een netwerkfout waarvoor de radio al op de pc wacht? Dan niets doen:
 /// de wachtklok doet het werk.
 ///
@@ -1802,6 +1820,8 @@ class PlayerStore extends ChangeNotifier
     // beschreef en nergens werd aangeroepen.
     _player.stream.error.listen((e) {
       if (e.trim().isEmpty) return;
+      // Het staartje van de stroom die net afliep, niet het nummer dat nu opent ([foutVanVorigeStroom]).
+      if (_staartVanVorige(e)) return;
       if (_breukInGroeistroom(e)) return;
       // Tijdens het overslaan van een radionummer: onthouden, niet weggooien en niet meteen
       // afhandelen. Zie [_radioOverslaan]: mpv meldt twee keer per mislukte opening, en de tweede
@@ -2319,7 +2339,22 @@ class PlayerStore extends ChangeNotifier
     }
   }
 
+  /// Hoort [e] bij de stroom die net afliep ([foutVanVorigeStroom])? Dan opschrijven, en verder niets.
+  bool _staartVanVorige(String e) {
+    final einde = _eindeVorige;
+    if (einde == null ||
+        !foutVanVorigeStroom(fout: e, msSindsEinde: DateTime.now().difference(einde.op).inMilliseconds)) {
+      return false;
+    }
+    _log?.line('EINDE VAN DE VORIGE STROOM — ${einde.titel} — ${e.trim()} (niet van ${current?.title ?? "?"})');
+    return true;
+  }
+
+  /// Wanneer het laatste nummer afliep, en welk ([foutVanVorigeStroom]).
+  ({DateTime op, String titel})? _eindeVorige;
+
   void _onCompleted() {
+    _eindeVorige = (op: DateTime.now(), titel: current?.title ?? '?');
     // Een nummer dat nog binnenkomt en vóór zijn einde ophoudt — de uploader haakte af: niet het algemene
     // hervatten (dat opent meteen opnieuw en springt; hier is er misschien nog geen volgende uploader),
     // maar wachten tot de volgende ver genoeg is. Zie [_hervatGroei]. Ook in de laatste tien seconden
@@ -3049,6 +3084,17 @@ class PlayerStore extends ChangeNotifier
     final g = _versieGekozen;
     if (g != null && g.anker == path) return g.pad;
     return versieVoor?.call(path) ?? path;
+  }
+
+  /// De leider van een groep speelt een andere versie van het spelende nummer (samen.dart, `_volgVersie`): die hier ook,
+  /// op dezelfde plek. Gelijk springen doet de volger daarna zelf.
+  Future<void> volgVersie(String pad) async {
+    final t = current;
+    if (t == null || _speelPad(t.path) == pad) return;
+    _versieGekozen = (anker: t.path, pad: pad);
+    _versieWissel++;
+    _log?.line('VERSIE VAN DE LEIDER — ${t.title}: ${pad.split(RegExp(r'[\\/]')).last}');
+    await _hervatOpDezelfdePlek();
   }
 
   /// Het bestand dat er voor [path] gaat klinken — voor wie het alvast wil klaarzetten (het vooruithalen in main.dart).

@@ -174,6 +174,36 @@ void main() {
       expect(bron.substring(bouw, bouw + 1500), contains('stuurLid: stuurNaarZone'));
     });
 
+    test('dezelfde stand binnen één beweging gaat maar één keer (34,2 en 34,4 zijn allebei 34)', () {
+      fakeAsync((fa) {
+        var klok = _nu;
+        final o = _opzet(_groep(), klok: () => klok);
+        for (final v in [34.2, 34.4, 34.0, 35.1, 35.3, 34.4]) {
+          o.speler.setVolume(v);
+          fa.elapse(const Duration(milliseconds: 100));
+          klok += 100;
+        }
+        expect(o.leider, [34, 35, 34], reason: 'elke nieuwe stand gaat, ook terug naar 34');
+        expect(o.leden[_tv], hasLength(3));
+        o.speler.dispose();
+      });
+    });
+
+    test('dezelfde stand na een pauze gaat wél opnieuw (verloren onderweg, of iemand anders veranderde het)', () {
+      fakeAsync((fa) {
+        var klok = _nu;
+        final o = _opzet(_groep(), klok: () => klok);
+        o.speler.setVolume(40);
+        fa.elapse(const Duration(milliseconds: 100));
+        klok += kZoneVolumeBeweging.inMilliseconds + 100;
+        fa.elapse(const Duration(seconds: 2));
+        o.speler.setVolume(40);
+        fa.elapse(const Duration(milliseconds: 100));
+        expect(o.leider, [40, 40]);
+        o.speler.dispose();
+      });
+    });
+
     test('een lid dat geen volume meldt (-1) krijgt niets', () {
       fakeAsync((fa) {
         final o = _opzet(_groep(tv: -1), klok: () => _nu);

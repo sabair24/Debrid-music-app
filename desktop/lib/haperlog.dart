@@ -44,6 +44,11 @@ T traagMeten<T>(String naam, T Function() werk, {int vanafMs = 30}) {
   }
 }
 
+/// Wat de bewaker van het beeld zag (warmtemeter.dart, `kijkBeeld`): bevroren, losgemaakt, weer terug.
+void haperBevroren(String regel) {
+  if (haperlogAan) _log.line(regel);
+}
+
 /// Eén beeld dat [bouwenMs] bouwde en [rasterenMs] rasterde, als een van beide 25 ms of meer was.
 void haperBeeld(int bouwenMs, int rasterenMs) {
   if (haperlogAan) _log.line('BEELD bouwen $bouwenMs ms, rasteren $rasterenMs ms');

@@ -26,6 +26,7 @@ class SamenAnker {
   const SamenAnker({
     required this.groep,
     required this.trackId,
+    this.speelId = '',
     required this.rij,
     required this.index,
     required this.positieMs,
@@ -40,6 +41,9 @@ class SamenAnker {
   /// De groep (de zone van de leider).
   final String groep;
   final String trackId;
+
+  /// De versie die de leider van [trackId] echt speelt (een gekozen versie, of de standaard). Leeg: een oudere pc.
+  final String speelId;
   final List<String> rij;
   final int index;
   final int positieMs;
@@ -51,6 +55,7 @@ class SamenAnker {
   Map<String, dynamic> toJson() => {
         'groep': groep,
         'trackId': trackId,
+        if (speelId.isNotEmpty) 'speelId': speelId,
         'rij': rij,
         'index': index,
         'positieMs': positieMs,
@@ -64,6 +69,7 @@ class SamenAnker {
     return SamenAnker(
       groep: '${m['groep'] ?? ''}',
       trackId: '${m['trackId']}',
+      speelId: '${m['speelId'] ?? ''}',
       rij: [for (final x in (m['rij'] as List? ?? const [])) '$x'],
       index: (m['index'] as num?)?.toInt() ?? 0,
       positieMs: (m['positieMs'] as num?)?.toInt() ?? 0,
@@ -198,6 +204,8 @@ class SamenVolger {
     required this.idVan,
     required this.klok,
     required this.vertragingMs,
+    this.speelPad,
+    this.kiesVersie,
     this.log,
     int Function()? nuMs,
   }) : _nuMs = nuMs ?? (() => DateTime.now().millisecondsSinceEpoch);
@@ -212,6 +220,12 @@ class SamenVolger {
 
   /// De vertraging van dit toestel (ms; positief = later), uit de instellingen.
   final int Function() vertragingMs;
+
+  /// Het bestand dat hier nu klinkt voor het spelende nummer (een versie ervan, of het nummer zelf), en een andere
+  /// versie daarvan laten klinken op dezelfde plek. Null: de versie van de leider niet volgen.
+  final String? Function()? speelPad;
+  final Future<void> Function(String pad)? kiesVersie;
+  bool _versieBezig = false;
   final void Function(String)? log;
 
   SamenAnker? _anker;
@@ -275,6 +289,7 @@ class SamenVolger {
       await _open(a);
     } else {
       _volgRij(a);
+      await _volgVersie(a);
     }
     if (zelfde && !speler.playing) {
       speler.seek(verwachtePlek(a, nuPcMs: klok.nuPcMs(), vertragingMs: vertragingMs()));
@@ -303,6 +318,23 @@ class SamenVolger {
     if (gelijk || speler.zetRijRondHuidig(rij, plek)) {
       if (!gelijk) log?.call('samen: wachtrij van de leider overgenomen (${rij.length} nummers)');
       _rij = a.rij;
+    }
+  }
+
+  /// Speelt de leider een andere versie van dit nummer dan hier klinkt (Saber koos er een, of de standaard verschilt):
+  /// die hier ook. De sprong naar de juiste plek doet de gewone bijsturing daarna, zoals na elke herstart.
+  Future<void> _volgVersie(SamenAnker a) async {
+    final pad = speelPad, kies = kiesVersie;
+    if (pad == null || kies == null || a.speelId.isEmpty || _versieBezig) return;
+    final v = nummer(a.speelId);
+    if (v == null || pad() == v.path) return;
+    _versieBezig = true;
+    try {
+      log?.call('samen: de leider speelt een andere versie — ${v.title} (${v.album})');
+      await kies(v.path);
+      _herstartOp = _nuMs();
+    } finally {
+      _versieBezig = false;
     }
   }
 
