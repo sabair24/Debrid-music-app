@@ -58,6 +58,18 @@ const Set<String> verliesgevendeSoorten = {
   'mka', // Matroska-audio: kan van alles bevatten, dus nooit een verliesvrij merkje
 };
 
+/// Verliesvrije formaten die niet elke speler leest. Een speaker of een toestel krijgt ze als FLAC: verliesvrij, op
+/// dezelfde maat ([alsFlacVersturen]).
+///
+/// **Waarom (Saber, 27-11-2026: "oei nu skipte het liedjes sign of time ? hoe komt dit").** "Sign Of The Times" van
+/// Harry Styles is een AIFF van 24/44,1. De pc stuurde het origineel naar de groep Sonos Move + Shield: de Sonos stopte
+/// (STOPPED op 0:00) en de Shield meldde "Error decoding audio" — allebei sprongen ze door. FLAC speelt overal. DSD staat
+/// er niet in: dat moet eerst naar PCM, en dat doet het plafond van een speaker al.
+const Set<String> alsFlacSoorten = {'aiff', 'aif', 'aifc', 'wav', 'wv', 'ape', 'tta', 'tak', 'als', 'shn', 'alac'};
+
+/// Gaat een bestand met extensie [ext] (met of zonder punt) als FLAC naar speakers en toestellen? Zie [alsFlacSoorten].
+bool alsFlacVersturen(String ext) => alsFlacSoorten.contains(ext.toLowerCase().replaceFirst('.', ''));
+
 /// Alles bij elkaar, zonder punt, kleine letters.
 final Set<String> audioSoorten = {...verliesvrijeSoorten, ...verliesgevendeSoorten};
 

@@ -3851,8 +3851,15 @@ class PlayerStore extends ChangeNotifier
     if (!_gedempt) _player.setVolume(v);
     bijVolume?.call(v);
     notifyListeners();
-    unawaited(_saveProgress(force: true));
+    // Melden (en bewaren) pas als het schuiven even stilstaat: elke stap meldde de hele stand aan de pc, en die gaf
+    // hem door aan elk toestel — bij een schuif van de Mac twintig keer per seconde, per lid (27-11-2026).
+    _volumeMelding?.cancel();
+    _volumeMelding = Timer(kVolumeMeldenNa, () => unawaited(_saveProgress(force: true)));
   }
+
+  /// Zo lang na de laatste volumestap meldt de speler zijn stand ([setVolume]).
+  static const kVolumeMeldenNa = Duration(milliseconds: 250);
+  Timer? _volumeMelding;
 
   /// Een kwart van de ingestelde stand. Zacht genoeg om overheen te praten, hard genoeg om te horen
   /// dat de muziek niet gestopt is.
@@ -4216,6 +4223,7 @@ class PlayerStore extends ChangeNotifier
 
   @override
   void dispose() {
+    _volumeMelding?.cancel();
     _rijBewaren.stop();
     _stilstandTikker?.cancel();
     _player.dispose();

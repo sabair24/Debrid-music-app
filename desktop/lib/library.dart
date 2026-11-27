@@ -3839,6 +3839,9 @@ class LibraryStore extends ChangeNotifier {
   /// catalogus, ook onderweg. Saber, 28-10-2026, op de wifi van een bedrijf: "Al men behandelingen blijven hangen als ik
   /// bevoorbeeld vinyl als standaard wil kiezen, moet ik de app sluiten voor de verandering er is" — onderweg kwam er
   /// alleen het merkteken terug ([zuinigeCatalogus]), en de keuze pas na vijf minuten.
+  /// Het keuzemerk van de laatst overgenomen catalogus ([CatalogResponse.keuzeMerk]), of null.
+  String? _keuzeMerk;
+
   Future<bool> loadRemote({bool quiet = false, bool naEen304 = false, bool vers = false}) async {
     final client = _remote;
     if (client == null) return false;
@@ -3888,6 +3891,14 @@ class LibraryStore extends ChangeNotifier {
     final wasWeg = geenVerbinding != null;
     geenVerbinding = null;
     if (wasWeg) notifyListeners();
+    // Een keuze van de eigenaar (een hoes, een cd, een artiestfoto — [CatalogResponse.keuzeMerk]) wacht niet op het
+    // venster van een onbediende tv of van onderweg: meteen de echte catalogus. Saber, 27-11-2026: de cd die hij op de
+    // Mac aanwees, kwam pas na tien minuten op de Shield.
+    final keuze = res.keuzeMerk;
+    if (res.uitgesteld && !vers && keuze != null && _keuzeMerk != null && keuze != _keuzeMerk) {
+      scanning = false;
+      return loadRemote(quiet: quiet, vers: true);
+    }
     if (res.uitgesteld) {
       // Er is een nieuwe, maar die komt bij de eerste ronde na [kCatalogusOnderwegElke]: het oude merkteken blijft staan.
       scanning = false;
@@ -3924,6 +3935,7 @@ class LibraryStore extends ChangeNotifier {
     }
 
     traagMeten('catalogus overnemen', () => _adoptCatalog(catalog, client), vanafMs: 5);
+    _keuzeMerk = res.keuzeMerk;
     laatsteCatalogusBytes = res.bytes;
     _laatsteVolleCatalogus = DateTime.now();
     // Live again: what is on screen is playable, whatever it was a moment ago.

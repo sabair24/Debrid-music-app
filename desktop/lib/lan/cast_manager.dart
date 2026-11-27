@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../audioformaten.dart' show alsFlacVersturen;
 import '../models.dart';
 import '../warm_log.dart';
 import 'catalog.dart';
@@ -757,7 +758,7 @@ class CastManager {
               title: track.title,
               artist: track.artist,
               album: track.album,
-              mime: mimeForExt(track.ext),
+              mime: _mimeVoor(track.ext),
               artUrl: hoes,
               vanaf: Duration(milliseconds: vanaf));
         } else {
@@ -765,7 +766,7 @@ class CastManager {
               title: track.title,
               artist: track.artist,
               album: track.album,
-              mime: mimeForExt(track.ext),
+              mime: _mimeVoor(track.ext),
               artUrl: hoes,
               duration: track.duration);
         }
@@ -809,7 +810,7 @@ class CastManager {
     try {
       final url = await _streamUrlFor(id, t.ext, r, t.sampleRate, t.bitsPerSample);
       await _voor(r).setNextUrl(r, url,
-          title: t.title, artist: t.artist, album: t.album, mime: mimeForExt(t.ext), duration: t.duration);
+          title: t.title, artist: t.artist, album: t.album, mime: _mimeVoor(t.ext), duration: t.duration);
     } catch (e) {
       v.klaarPaar = null;
       _log?.line('samen: ${r.name} kreeg het volgende niet mee: $e');
@@ -1581,7 +1582,7 @@ class CastManager {
           title: track.title,
           artist: track.artist,
           album: track.album,
-          mime: mimeForExt(track.ext),
+          mime: _mimeVoor(track.ext),
           artUrl: hoes,
           duration: track.duration,
         );
@@ -1627,7 +1628,7 @@ class CastManager {
       title: nextTrack.title,
       artist: nextTrack.artist,
       album: nextTrack.album,
-      mime: mimeForExt(nextTrack.ext),
+      mime: _mimeVoor(nextTrack.ext),
       duration: nextTrack.duration,
     );
     session.nextUrl = nextUrl;
@@ -1821,8 +1822,14 @@ class CastManager {
     } else {
       probleem = null;
     }
+    // Een formaat dat een speaker niet leest (AIFF, WAV, WavPack, APE …): als FLAC, op dezelfde maat ([alsFlacVersturen]).
+    // De Sonos Move stopte op "Sign Of The Times" (AIFF 24/44,1) en de wachtrij sprong door (Saber, 27-11-2026).
+    if (alsFlacVersturen(ext) && _transcoder.available) return 'http://$base:$port/stream/$id.flac?token=$token&cast=1';
     return 'http://$base:$port/stream/$id.$ext?token=$token';
   }
+
+  /// Het audiotype dat een speaker voor [ext] hoort: FLAC voor wat [_streamUrlFor] als FLAC stuurt.
+  String _mimeVoor(String ext) => mimeForExt(alsFlacVersturen(ext) && _transcoder.available ? 'flac' : ext);
 
   Future<String?> _artUrlFor(String id, Renderer renderer) async {
     final track = catalog.track(id);

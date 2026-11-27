@@ -246,7 +246,11 @@ class CatalogResponse {
   /// download is dat om de paar seconden.
   final List<int>? bytes;
 
-  const CatalogResponse(this.catalog, this.etag, {this.bytes, this.uitgesteld = false});
+  const CatalogResponse(this.catalog, this.etag, {this.bytes, this.uitgesteld = false, this.keuzeMerk});
+
+  /// Het merk van alleen de keuzes van de eigenaar (`X-Keuze-Merk`, zie `CatalogSnapshot.keuzeMerk`), of null bij een
+  /// oudere pc.
+  final String? keuzeMerk;
 
   bool get unchanged => catalog == null;
 
@@ -441,8 +445,11 @@ class RemoteClient {
   /// zonder de catalogus van 373 KB te sturen ([CatalogResponse.uitgesteld]). Een oudere pc stuurt hem gewoon.
   Future<CatalogResponse> catalog({String? etag, bool alleenMerk = false}) async {
     final res = await _get('/api/catalog', etag: etag, query: alleenMerk ? {'alleenMerk': '1'} : null);
-    if (res.statusCode == 304) return CatalogResponse(null, etag);
-    if (res.headers['x-alleen-merk'] == '1') return CatalogResponse(null, res.headers['etag'], uitgesteld: true);
+    final keuze = res.headers['x-keuze-merk'];
+    if (res.statusCode == 304) return CatalogResponse(null, etag, keuzeMerk: keuze);
+    if (res.headers['x-alleen-merk'] == '1') {
+      return CatalogResponse(null, res.headers['etag'], uitgesteld: true, keuzeMerk: keuze);
+    }
     // Op een ANDERE isolate, en de DTO's meteen ook. Zie [ontleedCatalogusDto] voor waarom dat hier het verschil maakt.
     final dto = await ontleedCatalogusDto(res.bodyBytes);
     if (dto == null) {
@@ -452,6 +459,7 @@ class RemoteClient {
       dto,
       res.headers['etag'],
       bytes: res.bodyBytes,
+      keuzeMerk: keuze,
     );
   }
 
