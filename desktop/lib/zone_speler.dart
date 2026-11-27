@@ -630,6 +630,10 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
   bool _volumeBezig = false;
   double? _volumeTeSturen;
 
+  // De laatst gestuurde stand en wanneer: dezelfde stand binnen één beweging gaat niet nog eens ([setVolume]).
+  int? _volumeGestuurd;
+  int _volumeGestuurdOp = 0;
+
   /// Zo snel als de pc antwoordt, hoogstens elke [kZoneVolumeTussen]: één opdracht tegelijk, zodat ze in volgorde
   /// aankomen (twee tegelijk over twee verbindingen kunnen elkaar inhalen, en dan blijft een oudere stand staan). De
   /// laatste stand komt altijd aan; tussenstanden die intussen al voorbij zijn, slaat hij over.
@@ -647,9 +651,16 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
           final w = _volumeTeSturen;
           if (w == null) break;
           _volumeTeSturen = null;
+          // Dezelfde stand als net (de schuif geeft 34,2 en 34,4, allebei 34): niet nog eens. Gezien op 27-11-2026, waar
+          // de gsm elke stand twee tot vier keer stuurde. Alleen binnen één beweging: een latere 34 gaat wel, voor het
+          // geval de vorige onderweg verloren ging of iemand anders intussen het volume veranderde.
+          final waarde = w.round();
+          if (waarde == _volumeGestuurd && _nu - _volumeGestuurdOp < kZoneVolumeBeweging.inMilliseconds) continue;
+          _volumeGestuurd = waarde;
+          _volumeGestuurdOp = _nu;
           final klaar = Future<void>.delayed(kZoneVolumeTussen);
-          await _stuur('volume', {'waarde': w.round()});
-          _volumeNaarVolgers(w.round());
+          await _stuur('volume', {'waarde': waarde});
+          _volumeNaarVolgers(waarde);
           await klaar;
         }
       } finally {

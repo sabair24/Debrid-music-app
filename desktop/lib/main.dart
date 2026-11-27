@@ -2038,6 +2038,10 @@ Future<void> main() async {
       // Elke stilstand van de tekendraad apart in haper.log (alleen op Android aan, zie hierboven), naast de meetpunten:
       // de Shield stond op 21-11-2026 na "volgende" 2 s stil, en wat er toen liep viel nergens te lezen.
       bijStilstand: haperVast,
+      // Een beeld dat stilstaat terwijl de app doorloopt (warmtemeter.dart, `kijkBeeld`): opschrijven en een beeld
+      // afdwingen. Losmaken alleen op een pc of Mac, die een venster hebben.
+      bijBevroren: haperBevroren,
+      losmaken: _isDesktop ? vensterLosmaken : null,
     ).start();
   } else if (_isDesktop) {
     // De pc schrijft dezelfde regels in zijn eigen warmte.log. fps.log meet alleen terwijl er een
@@ -2054,6 +2058,11 @@ Future<void> main() async {
       // Elke stilstand van de tekendraad apart in haper.log, naast de andere logboeken te leggen (28-10-2026).
       bijStilstand: haperVast,
       bijTraagBeeld: haperBeeld,
+      // Saber, 27-11-2026: "oei de app zit vast op de pc" — het scherm stond van 11:34:50 tot na 12:15 op hetzelfde
+      // beeld, terwijl de app eronder antwoordde en de muziek doorliep. Nu: opschrijven, een beeld afdwingen, en na
+      // nog eens 5 s het venster even van maat laten veranderen (venster.dart, `vensterLosmaken`).
+      bijBevroren: haperBevroren,
+      losmaken: vensterLosmaken,
     ).start();
     haperlogAan = true;
   }
@@ -2373,6 +2382,9 @@ Future<void> main() async {
     idVan: (t) => library.gedeeldId(t.path),
     klok: samenKlok,
     vertragingMs: () => settings.samenVertragingMs,
+    // Dezelfde versie als de leider (samen.dart, `_volgVersie`).
+    speelPad: () => player.speelPad,
+    kiesVersie: player.volgVersie,
     log: (regel) {
       samenLog.line(regel);
       // Ook in logcat, zodat een meting aan de kabel het meteen ziet.

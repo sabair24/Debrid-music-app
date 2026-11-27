@@ -220,6 +220,26 @@ final _kaderPrive = RegExp(
   return (animaties: uit, glas: glas);
 }
 
+/// Wat de bewaker van het beeld ([Warmtemeter.kijkBeeld]) over de tekenaar weet: mag hij tekenen ([aan]: niet
+/// verborgen of geminimaliseerd), staat er een beeld gevraagd ([gepland]), hoeveel tikkers wachten er op een beeld, en
+/// alles samen als tekst voor het logboek.
+typedef Beeldstand = ({bool aan, bool gepland, int tikkers, String tekst});
+
+/// De echte [Beeldstand], van [SchedulerBinding].
+Beeldstand echteBeeldstand() {
+  final sb = SchedulerBinding.instance;
+  final v = WidgetsBinding.instance.platformDispatcher.views;
+  final maat = v.isEmpty ? '' : ' ${v.first.physicalSize.width.round()}×${v.first.physicalSize.height.round()}';
+  return (
+    aan: sb.framesEnabled,
+    gepland: sb.hasScheduledFrame,
+    tikkers: sb.transientCallbackCount,
+    tekst: 'staat ${sb.lifecycleState?.name ?? "?"} | tekenen ${sb.framesEnabled ? "aan" : "uit"} | fase '
+        '${sb.schedulerPhase.name} | beeld gevraagd ${sb.hasScheduledFrame ? "ja" : "nee"} | tikkers '
+        '${sb.transientCallbackCount} | vensters ${v.length}$maat',
+  );
+}
+
 /// De meetlat zelf. Eén per app; [start] na het koppelen, [stop] bij het afsluiten.
 class Warmtemeter {
   Warmtemeter({
@@ -231,7 +251,36 @@ class Warmtemeter {
     this.bijStilstand,
     this.stilstandVanafMs = 120,
     this.bijTraagBeeld,
-  });
+    this.bijBevroren,
+    this.losmaken,
+    this.bevrorenNaMs = 5000,
+    this.beeldstand = echteBeeldstand,
+    this.forceerBeeld = _forceer,
+    int Function()? nuMs,
+  }) : _nuMs = nuMs ?? _klokNu;
+
+  static int _klokNu() => DateTime.now().millisecondsSinceEpoch;
+  static void _forceer() => SchedulerBinding.instance.scheduleForcedFrame();
+
+  /// Het beeld staat stil terwijl de app er een vraagt, of komt weer terug: één regel voor het logboek (haper.log).
+  ///
+  /// **Waarom (27-11-2026).** Het scherm van de pc stond van 11:34:50 tot na 12:15 stil op "Dancing On The Ceiling",
+  /// terwijl de app eronder gewoon draaide: verzoeken in 4 ms beantwoord, de muziek liep door, Windows noemde hem
+  /// "reageert". warmte.log zag het wel (0 beelden/s, tikkers 1, later een schuifovergang en drie aanrakingen) maar
+  /// niets zei wát er stilstond, en niets probeerde het. Windows meldde niets: geen fout van de grafische kaart, het
+  /// scherm gaat op netstroom nooit uit.
+  final void Function(String regel)? bijBevroren;
+
+  /// Nog altijd geen beeld [bevrorenNaMs] na een gedwongen beeld: het venster losmaken (op de pc: even van maat
+  /// veranderen, zodat de tekenaar een nieuw vlak krijgt). Geeft terug wat er gedaan is. Null: alleen opschrijven.
+  final Future<String> Function()? losmaken;
+
+  /// Zo lang (ms) geen beeld terwijl er een gevraagd staat = bevroren.
+  final int bevrorenNaMs;
+
+  final Beeldstand Function() beeldstand;
+  final void Function() forceerBeeld;
+  final int Function() _nuMs;
 
   /// Elke keer dat de klok van 100 ms [stilstandVanafMs] of meer te laat afging, met hoeveel (ms). Op de pc schrijft
   /// dat `haper.log` (haperlog.dart); los meegegeven, zodat een toets nooit in de echte appmap schrijft.
@@ -270,6 +319,67 @@ class Warmtemeter {
   bool _bezig = false;
   final Stopwatch _draad = Stopwatch();
 
+  // De bewaker van het beeld ([kijkBeeld]).
+  int _laatsteBeeldMs = 0;
+  int? _wilSindsMs;
+  int _bevrorenStap = 0;
+  int _bevrorenOpMs = 0;
+  int _volgendeLosMs = 0;
+  int _losPogingen = 0;
+
+  /// Hoe ver de bewaker is: 0 = het beeld loopt, 1 = bevroren gezien en een beeld afgedwongen, 2 = losgemaakt.
+  @visibleForTesting
+  int get bevrorenStap => _bevrorenStap;
+
+  /// Er kwam een beeld. Openbaar voor de toets; normaal via de beeldtijden.
+  @visibleForTesting
+  void beeldGezien() {
+    final nu = _nuMs();
+    _laatsteBeeldMs = nu;
+    if (_bevrorenStap > 0) {
+      final hoe = _bevrorenStap == 1 ? 'na een gedwongen beeld' : 'na $_losPogingen× losmaken';
+      bijBevroren?.call('BEELD WEER TERUG na ${((nu - _bevrorenOpMs) / 1000).toStringAsFixed(1)} s ($hoe)');
+      _bevrorenStap = 0;
+      _losPogingen = 0;
+    }
+  }
+
+  /// Elke 100 ms: vraagt de app een beeld (een geplande beurt of een lopende tikker, en tekenen mag) en kwam er al
+  /// [bevrorenNaMs] geen, dan staat het beeld stil. Eerst opschrijven en een beeld afdwingen; nog niets na nog eens
+  /// [bevrorenNaMs], dan [losmaken], en daarna hoogstens elke minuut opnieuw. Openbaar voor de toets.
+  @visibleForTesting
+  void kijkBeeld() {
+    final nu = _nuMs();
+    final s = beeldstand();
+    if (!s.aan || (!s.gepland && s.tikkers == 0)) {
+      _wilSindsMs = null;
+      return;
+    }
+    final wil = _wilSindsMs ??= nu;
+    final sinds = nu - (wil > _laatsteBeeldMs ? wil : _laatsteBeeldMs);
+    if (sinds < bevrorenNaMs) return;
+    if (_bevrorenStap == 0) {
+      _bevrorenStap = 1;
+      _bevrorenOpMs = nu - sinds;
+      bijBevroren?.call('BEELD BEVROREN — ${(sinds / 1000).toStringAsFixed(1)} s geen beeld terwijl de app er een vraagt | '
+          '${s.tekst} — dwing een beeld af');
+      forceerBeeld();
+      return;
+    }
+    final los = losmaken;
+    if (los == null) return;
+    if (_bevrorenStap == 1 ? sinds >= 2 * bevrorenNaMs : nu >= _volgendeLosMs) {
+      _bevrorenStap = 2;
+      _losPogingen++;
+      _volgendeLosMs = nu + 60000;
+      final poging = _losPogingen;
+      unawaited(los().then(
+        (hoe) => bijBevroren?.call('BEELD NOG BEVROREN na ${(sinds / 1000).toStringAsFixed(1)} s — losgemaakt ($poging): $hoe | ${s.tekst}'),
+        onError: (Object e) => bijBevroren?.call('BEELD NOG BEVROREN — losmaken ($poging) mislukt: $e'),
+      ));
+    }
+  }
+
   bool get loopt => _vensterKlok != null;
 
   /// De regels die nog niet verstuurd zijn. Voor de toets.
@@ -284,6 +394,7 @@ class Warmtemeter {
     GestureBinding.instance.pointerRouter.addGlobalRoute(_aanraakRoute!);
     SchedulerBinding.instance.addTimingsCallback(_haak!);
     _nieuwVenster();
+    _laatsteBeeldMs = _nuMs();
     _draad
       ..reset()
       ..start();
@@ -296,6 +407,7 @@ class Warmtemeter {
       final te = us - 100000;
       if (te > 0) _vertraagdUs += te > 2000000 ? 2000000 : te;
       if (te >= stilstandVanafMs * 1000) bijStilstand?.call(te ~/ 1000);
+      if (bijBevroren != null) kijkBeeld();
     });
     _vensterKlok = Timer.periodic(venster, (_) => unawaited(sluitVenster()));
   }
@@ -325,6 +437,7 @@ class Warmtemeter {
   }
 
   void _tel(List<FrameTiming> t) {
+    if (t.isNotEmpty) beeldGezien();
     for (final f in t) {
       _beelden++;
       final b = f.buildDuration.inMicroseconds;

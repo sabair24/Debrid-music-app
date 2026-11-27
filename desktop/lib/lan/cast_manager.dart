@@ -434,6 +434,9 @@ class CastManager {
     return {
       'groep': 'spk:$id',
       'trackId': tid,
+      // De versie die de speaker echt speelt (een gekozen versie, of de standaard): de volger speelt dezelfde. Saber
+      // wisselde op 27-11-2026 om 08:49 "Underneath Your Clothes" naar de cd; de Shield bleef op de vinylrip.
+      'speelId': _speelId(s, s.index, tid),
       'rij': List.of(s.queue),
       'index': s.index,
       'positieMs': plek.positieMs,
