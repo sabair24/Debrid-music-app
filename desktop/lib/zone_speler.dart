@@ -30,6 +30,15 @@ const kZoneVerwacht = Duration(seconds: 3);
 /// opdracht de Shield in 140–230 ms, dus kan het vlotter zonder dat er een rij ontstaat.
 const kZoneVolumeTussen = Duration(milliseconds: 40);
 
+/// Zo lang na de laatste volumeopdracht hoort een nieuwe nog bij dezelfde beweging: de verhouding tussen de leden van
+/// een groep blijft die van het begin ([ZoneSpeler.setVolume]).
+const kZoneVolumeBeweging = Duration(milliseconds: 1500);
+
+/// Het nieuwe volume van een lid dat [volger] meldt, als de leider van [leider] naar [doel] gaat: naar verhouding, zoals
+/// [groepsVolumes]. Een stille leider (0) geeft het lid de stand zelf.
+int volgerVolume(int volger, {required int leider, required int doel}) =>
+    (leider <= 0 ? doel : (volger * doel / leider).round()).clamp(0, 100).toInt();
+
 /// Wat elk lid van een groep krijgt als de groepsschuif op [doel] komt: elk naar verhouding, zoals een Sonos-groep, zodat
 /// wie luider stond luider blijft — en op 0 alles stil is. [leden]: id → het volume dat het lid nu meldt (0–100).
 ///
@@ -104,6 +113,7 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
     required this.idVan,
     required this.hoesVan,
     required this.stuur,
+    this.stuurLid,
     this.haalRij,
     this.meet,
     int Function()? klok,
@@ -123,6 +133,9 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
 
   final ZoneLijst lijst;
   final String zoneId;
+
+  /// Een opdracht naar een ander lid van de groep van deze zone (zijn eigen zone-id), of null: dan alleen de leider.
+  final Future<String?> Function(String lid, Map<String, dynamic> op)? stuurLid;
 
   /// Een id van de pc als nummer hier, of null.
   final Track? Function(String id) nummer;
@@ -636,6 +649,7 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
           _volumeTeSturen = null;
           final klaar = Future<void>.delayed(kZoneVolumeTussen);
           await _stuur('volume', {'waarde': w.round()});
+          _volumeNaarVolgers(w.round());
           await klaar;
         }
       } finally {
@@ -643,6 +657,37 @@ class ZoneSpeler extends ChangeNotifier implements Speelbron, Rijbediening {
       }
     }());
   }
+
+  /// Wie in de groep van deze zone meespeelt (een toestel dat de Sonos volgt), naar verhouding mee: de leider gaat naar
+  /// [doel], elk ander lid evenveel keer luider of zachter ([volgerVolume]).
+  ///
+  /// **Waarom (Saber, 27-11-2026: "Volume liep soms niet gelijk van de groep").** De zijknoppen en de schuif in Nu speelt
+  /// stuurden alleen de leider: om 11:37:40–43 kreeg de Sonos 60, 66 en 34, en de tv bleef op 45 staan. Alleen de
+  /// groepsschuif op de zonekaart stuurde iedereen.
+  ///
+  /// De verhouding komt uit de standen bij het begin van de beweging ([kZoneVolumeBeweging]): tijdens het schuiven melden
+  /// de leider en de volgers hun nieuwe stand niet tegelijk terug, en een half bijgewerkt paar trok de verhouding scheef.
+  void _volumeNaarVolgers(int doel) {
+    final z = _zone;
+    final naar = stuurLid;
+    if (z == null || naar == null) return;
+    final nu = _nu;
+    if (_volgerBasis == null || nu > _volgerBasisTot) {
+      _volgerLeider = z.volume;
+      _volgerBasis = {
+        for (final l in z.leden)
+          if (l.id != zoneId && l.volume >= 0) l.id: l.volume,
+      };
+    }
+    _volgerBasisTot = nu + kZoneVolumeBeweging.inMilliseconds;
+    for (final e in _volgerBasis!.entries) {
+      unawaited(naar(e.key, {'cmd': 'volume', 'waarde': volgerVolume(e.value, leider: _volgerLeider, doel: doel)}));
+    }
+  }
+
+  Map<String, int>? _volgerBasis;
+  int _volgerLeider = -1;
+  int _volgerBasisTot = 0;
 
   /// Een zone op afstand: haar volume regel je hier niet zachter voor een navigatiestem.
   @override
