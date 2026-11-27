@@ -2339,6 +2339,8 @@ Future<void> main() async {
       idVan: (t) => library.gedeeldId(t.path),
       hoesVan: library.coverForTrack,
       stuur: (op) => stuurNaarZone(zone, op),
+      // De andere leden van haar groep, voor het volume (zone_speler.dart, `_volumeNaarVolgers`).
+      stuurLid: stuurNaarZone,
       // Een venster op haar wachtrij (stap 2.4): op de pc uit zijn eigen server, op een toestel gevraagd.
       haalRij: mode.owner
           ? (na) async => sharing.server?.zones.rijVenster(zone, na: na)
