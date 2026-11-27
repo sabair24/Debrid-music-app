@@ -50,7 +50,8 @@ void main() {
       expect(bijsturing(5).snelheid, 1.0);
       expect(bijsturing(40).snelheid, lessThan(1.0), reason: 'voor: even trager');
       expect(bijsturing(-40).snelheid, greaterThan(1.0), reason: 'achter: even sneller');
-      expect(bijsturing(390).snelheid, closeTo(0.97, 1e-9), reason: 'nooit meer dan 3 %');
+      expect(bijsturing(140).snelheid, closeTo(0.99, 1e-9), reason: 'nooit meer dan 1 % — 3 % hoorde Saber (27-11-2026)');
+      expect(bijsturing(200).spoel, isTrue, reason: 'vanaf 150 ms spoelen in plaats van seconden slepen');
     });
 
     test('niet heen en weer rond één grens', () {

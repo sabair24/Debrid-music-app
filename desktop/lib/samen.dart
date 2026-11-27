@@ -75,8 +75,18 @@ Duration verwachtePlek(SamenAnker a, {required int nuPcMs, int vertragingMs = 0}
   return Duration(milliseconds: ms < 0 ? 0 : ms);
 }
 
-/// Verder dan dit weg: spoelen in plaats van bijsturen.
-const kSamenSpoelVanaf = 400;
+/// Verder dan dit weg: spoelen in plaats van bijsturen. 400 tot 27-11-2026; maar wat daaronder lag, werkte de volger weg
+/// door seconden lang 3 % trager of sneller te spelen, en dat hoorde Saber: *"tijdens het liedje zelf alsof het
+/// vertraagd en weer op tempo komt"*. Eén kort sprongetje is minder erg dan zes seconden slepen.
+const kSamenSpoelVanaf = 150;
+
+/// In de eerste [kSamenBeginTot] van een nummer al spoelen vanaf dit verschil. Bij elke overgang liep de Shield ±200 ms
+/// voor op de Sonos Move (die neemt tussen twee nummers meer tijd), en haalde dat in met 0,970 — zes seconden trager,
+/// aan het begin van elk nummer (samen.log, 27-11-2026). Eén keer per nummer: zie [SamenVolger].
+const kSamenSpoelBegin = 40;
+
+/// Zo lang heet een nummer "net begonnen" ([kSamenSpoelBegin]).
+const kSamenBeginTot = Duration(seconds: 10);
 
 /// Binnen dit verschil is het goed (en houdt het bijsturen op).
 const kSamenGoed = 8;
@@ -84,15 +94,18 @@ const kSamenGoed = 8;
 /// Vanaf dit verschil begint het bijsturen.
 const kSamenBijsturenVanaf = 20;
 
-/// Hoe ver de snelheid hoogstens van 1 afwijkt (3 %: niet te horen, mpv houdt de toonhoogte).
-const kSamenMaxAfwijking = 0.03;
+/// Hoe ver de snelheid hoogstens van 1 afwijkt. Was 3 % ("niet te horen, mpv houdt de toonhoogte") — maar het tempo
+/// hoor je wel (Saber, 27-11-2026). 1 % niet; wat meer is, wordt gespoeld ([kSamenSpoelVanaf]).
+const kSamenMaxAfwijking = 0.01;
 
 /// Wat een volger met zijn [afwijkingMs] doet (positief = hij loopt voor). [bezig]: stuurde hij al bij?
 /// Dan pas ophouden binnen [kSamenGoed], anders pas beginnen vanaf [kSamenBijsturenVanaf] — zo blijft hij
 /// niet heen en weer schakelen rond één grens.
-({bool spoel, double snelheid}) bijsturing(int afwijkingMs, {bool bezig = false}) {
+///
+/// [begin]: het nummer is net begonnen en er is in dit nummer nog niet gespoeld — dan al vanaf [kSamenSpoelBegin].
+({bool spoel, double snelheid}) bijsturing(int afwijkingMs, {bool bezig = false, bool begin = false}) {
   final a = afwijkingMs.abs();
-  if (a > kSamenSpoelVanaf) return (spoel: true, snelheid: 1.0);
+  if (a > (begin ? kSamenSpoelBegin : kSamenSpoelVanaf)) return (spoel: true, snelheid: 1.0);
   if (a <= kSamenGoed || (!bezig && a < kSamenBijsturenVanaf)) return (spoel: false, snelheid: 1.0);
   // Het verschil in ongeveer twee seconden wegwerken.
   final v = (1 - afwijkingMs / 2000).clamp(1 - kSamenMaxAfwijking, 1 + kSamenMaxAfwijking).toDouble();
@@ -165,7 +178,11 @@ class SamenVolger {
     required this.klok,
     required this.vertragingMs,
     this.log,
-  });
+    int Function()? nuMs,
+  }) : _nuMs = nuMs ?? (() => DateTime.now().millisecondsSinceEpoch);
+
+  /// De klok van dit toestel in ms, voor de rust tussen twee sprongen ([_spoelRust]); een toets zet hem.
+  final int Function() _nuMs;
 
   final VolgSpeler speler;
   final Track? Function(String id) nummer;
@@ -185,6 +202,19 @@ class SamenVolger {
   bool _bezig = false;
   bool _opent = false;
   int _laatsteLog = 0;
+
+  /// Het nummer waarin al vroeg gespoeld is ([kSamenSpoelBegin]): één keer per nummer, anders kon een sprong die net
+  /// verkeerd uitkomt (de vertraging van het spoelen zelf) de volgende uitlokken, en stotterde het begin.
+  String? _beginGespoeld;
+
+  /// Wanneer deze volger het laatst zelf begon te spelen (ms): na een pauze of het openen geldt het begin opnieuw — één
+  /// vroege sprong, zoals bij een nieuw nummer. Om 09:16 (27-11-2026) hervatte de Shield na een pauze 120 ms voor de
+  /// Sonos, en dat was met 1 % twaalf seconden echo geweest.
+  int _herstartOp = -1 << 40;
+
+  /// Wanneer er het laatst gespoeld is (ms): niet vaker dan om de [_spoelRust].
+  int _gespoeldOp = 0;
+  static const _spoelRust = Duration(seconds: 4);
 
   /// Volgt dit toestel nu een groep?
   bool get volgt => _anker != null;
@@ -215,6 +245,7 @@ class SamenVolger {
     if (zelfde && !speler.playing) {
       speler.seek(verwachtePlek(a, nuPcMs: klok.nuPcMs(), vertragingMs: vertragingMs()));
       speler.speelAf();
+      _herstartOp = _nuMs();
     }
     _startLus();
   }
@@ -268,7 +299,10 @@ class SamenVolger {
       _rij = a.rij;
       final wacht = doel - verwachtePlek(a, nuPcMs: klok.nuPcMs(), vertragingMs: vertragingMs());
       if (wacht > Duration.zero) await Future<void>.delayed(wacht);
-      if (identical(_anker, a) || _anker?.trackId == a.trackId) speler.speelAf();
+      if (identical(_anker, a) || _anker?.trackId == a.trackId) {
+        speler.speelAf();
+        _herstartOp = _nuMs();
+      }
     } finally {
       _opent = false;
     }
@@ -291,14 +325,24 @@ class SamenVolger {
     if (t == null || idVan(t) != a.trackId) return;
     final moet = verwachtePlek(a, nuPcMs: klok.nuPcMs(), vertragingMs: vertragingMs());
     final afwijking = (speler.positieNauwkeurig - moet).inMilliseconds;
-    final b = bijsturing(afwijking, bezig: _bezig);
-    final nu = DateTime.now().millisecondsSinceEpoch;
+    final nu = _nuMs();
+    // Net begonnen: het nummer (de eerste seconden) of het spelen hier (na een pauze, na het openen). Eén vroege sprong per
+    // keer — de sleutel is het nummer plus dat begin.
+    final sleutel = '${t.path}@$_herstartOp';
+    final begin = (speler.positieNauwkeurig < kSamenBeginTot || nu - _herstartOp < kSamenBeginTot.inMilliseconds) &&
+        _beginGespoeld != sleutel;
+    final rust = nu - _gespoeldOp < _spoelRust.inMilliseconds;
+    var b = bijsturing(afwijking, bezig: _bezig, begin: begin);
+    // Net gespoeld: eerst bijsturen, niet meteen weer springen.
+    if (b.spoel && rust) b = (spoel: false, snelheid: bijsturing(afwijking.clamp(-kSamenSpoelVanaf, kSamenSpoelVanaf), bezig: true).snelheid);
     if (nu - _laatsteLog > 2000) {
       _laatsteLog = nu;
       log?.call('samen: afwijking ${afwijking >= 0 ? '+' : ''}$afwijking ms → '
           '${b.spoel ? 'spoelen' : 'snelheid ${b.snelheid.toStringAsFixed(3)}'}');
     }
     if (b.spoel) {
+      _gespoeldOp = nu;
+      if (begin) _beginGespoeld = sleutel;
       speler.seek(moet + const Duration(milliseconds: 60));
       unawaited(speler.zetSnelheid(1.0));
       _bezig = false;

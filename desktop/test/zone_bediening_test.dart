@@ -306,7 +306,7 @@ void main() {
       });
     });
 
-    test('de volumeschuif stuurt hoogstens elke 80 ms, één tegelijk, en de laatste stand komt aan', () {
+    test('de volumeschuif stuurt hoogstens elke 40 ms (80 tot 27-11-2026), één tegelijk, en de laatste stand komt aan', () {
       fakeAsync((fa) {
         final gestuurd = <Map<String, dynamic>>[];
         final z = ZoneSpeler(
@@ -327,8 +327,8 @@ void main() {
         expect(gestuurd, [
           {'cmd': 'volume', 'waarde': 10}
         ], reason: 'de eerste meteen');
-        fa.elapse(const Duration(milliseconds: 79));
-        expect(gestuurd, hasLength(1), reason: 'nog geen 80 ms');
+        fa.elapse(const Duration(milliseconds: 39));
+        expect(gestuurd, hasLength(1), reason: 'nog geen 40 ms');
         fa.elapse(const Duration(milliseconds: 600));
         expect(gestuurd.length, 2, reason: 'de tussenstanden zijn voorbij: alleen de laatste');
         expect(gestuurd.last, {'cmd': 'volume', 'waarde': 60});

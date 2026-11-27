@@ -28,7 +28,22 @@ const kZoneVerwacht = Duration(seconds: 3);
 
 /// Hoogstens zo vaak een nieuw volume naar de zone ([ZoneSpeler.setVolume]). Was 250 ms; gemeten op 27-10-2026 haalt een
 /// opdracht de Shield in 140–230 ms, dus kan het vlotter zonder dat er een rij ontstaat.
-const kZoneVolumeTussen = Duration(milliseconds: 80);
+const kZoneVolumeTussen = Duration(milliseconds: 40);
+
+/// Wat elk lid van een groep krijgt als de groepsschuif op [doel] komt: elk naar verhouding, zoals een Sonos-groep, zodat
+/// wie luider stond luider blijft — en op 0 alles stil is. [leden]: id → het volume dat het lid nu meldt (0–100).
+///
+/// **Waarom (Saber, 27-11-2026: "volume aanpassen moet nog iets vlotter", bij de Sonos Move en de Shield).** De schuif
+/// zette elk lid op dezelfde waarde. De Sonos stond op 38 en de Shield op 44, de schuif toonde 41 — en bij de eerste
+/// beweging sprongen allebei naar 41. Nu verschuiven ze samen, met hun verschil.
+Map<String, int> groepsVolumes(Map<String, int> leden, int doel) {
+  if (leden.isEmpty) return const {};
+  final gemiddeld = leden.values.fold<int>(0, (s, v) => s + v) / leden.length;
+  // Allemaal stil: dan krijgt iedereen de stand zelf (er is geen verhouding meer om te bewaren).
+  if (gemiddeld <= 0) return {for (final k in leden.keys) k: doel.clamp(0, 100).toInt()};
+  final factor = doel / gemiddeld;
+  return {for (final e in leden.entries) e.key: (e.value * factor).round().clamp(0, 100).toInt()};
+}
 
 /// Hoe lang het volgende nummer na "volgende" blijft staan als de zone nog het oude meldt. Ruimer dan
 /// [kZoneVerwacht]: het nummer moet eerst openen, en terugspringen naar het oude en dan weer vooruit is erger dan even

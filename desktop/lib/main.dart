@@ -13852,9 +13852,11 @@ class _ZoneRij extends StatelessWidget {
                     key: ValueKey('zone-volume-${zone.id}'),
                     groep: true,
                     waarde: (metVolume.fold<int>(0, (s, l) => s + l.volume) / metVolume.length).round(),
+                    // Elk lid evenveel erbij of eraf ([groepsVolumes]); een lid dat geen volume meldt, krijgt de stand zelf.
                     zet: (v) {
+                      final doelen = groepsVolumes({for (final l in metVolume) l.id: l.volume}, v);
                       for (final l in zone.leden) {
-                        opdracht(l.id, {'cmd': 'volume', 'waarde': v});
+                        opdracht(l.id, {'cmd': 'volume', 'waarde': doelen[l.id] ?? v});
                       }
                     },
                   ))

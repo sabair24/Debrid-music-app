@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io' show gzip;
 import 'dart:typed_data';
 
+import '../audioformaten.dart' show alsFlacVersturen;
 import '../beeldvorm.dart';
 import '../library.dart';
 import '../echtheid_oordelen.dart';
@@ -31,12 +32,21 @@ class CatalogSnapshot {
   /// Komt uit de vingerafdruk en NIET uit [json] — daarom is hij er zonder dat er iets gecodeerd is.
   final String etag;
 
+  /// Een vingerafdruk van alleen wat de eigenaar zelf AANWEES: een hoes, een cd of achterkant, een artiestfoto.
+  ///
+  /// **Waarom (Saber, 27-11-2026).** Een tv die niemand bedient haalt een veranderde catalogus hoogstens om de tien
+  /// minuten ([LibraryStore.onbediend], tegen het haperen tijdens een radio). Een cd die je op de Mac aanwees voor het
+  /// nummer dat op de Shield speelde, kwam daar zo pas na het nummer aan: *"op de mac veranderde die maar niet op de
+  /// shield terwijl die daar speelde?"*. Verandert dit merk, dan haalt ook een onbediende tv de catalogus meteen.
+  final String keuzeMerk;
+
   CatalogSnapshot({
     required this.catalog,
     required this.trackById,
     required this.albumById,
     required this.artistNameById,
     required this.etag,
+    this.keuzeMerk = '',
   });
 
   /// De catalogus als verstuurbare bytes — pas berekend als iemand hem werkelijk opvraagt.
@@ -328,10 +338,14 @@ class LanCatalog {
           sizeBytes: t.sizeBytes,
           year: t.year,
           genre: t.genre,
-          mime: mimeForExt(ext),
+          mime: mimeForExt(alsFlacVersturen(ext) ? 'flac' : ext),
           // The real extension is on the path on purpose: AVFoundation on the Apple clients works
           // out the format from it, and refuses an asset it cannot type.
-          streamPath: '/stream/$tId.$ext',
+          //
+          // Behalve bij een formaat dat niet elke speler leest (AIFF, WAV, WavPack, APE …, [alsFlacVersturen]): dat
+          // adres staat op `.flac`, en dan stuurt de pc ook FLAC (`_streamBestand`). De Shield sloeg "Sign Of The Times"
+          // (AIFF) over met "Error decoding audio" (27-11-2026). [TrackDto.ext] blijft wat het bestand is.
+          streamPath: '/stream/$tId.${alsFlacVersturen(ext) ? 'flac' : ext}',
           artworkRef: albId,
           ext: ext,
           // Waar hij op de pc staat, zodat een gsm zijn kopie op dezelfde plek legt (zie [TrackDto.rel]).
@@ -410,7 +424,12 @@ class LanCatalog {
     // Folded from a few fields rather than from the encoded body, because the body runs to
     // megabytes and encoding it twice to get a hash would be the most expensive thing here.
     final fingerprint = _Fnv();
+    // Alleen de keuzes ([CatalogSnapshot.keuzeMerk]): dezelfde velden als hieronder, zonder wat vanzelf verandert.
+    final keuzes = _Fnv();
     for (final a in artistList) {
+      // Alleen wie er een HEEFT: een nieuwe artiest of plaat zonder keuze laat het merk staan (anders haalde een
+      // onbediende tv bij elk geland nummer weer de hele catalogus, en dat was het haperen van 21-11-2026).
+      if (a.artChoice.isNotEmpty) keuzes.add('${a.id}:${a.artChoice.entries.map((e) => '${e.key}=${e.value}').join(',')}');
       fingerprint
         ..add(a.id)
         ..add(a.name)
@@ -421,6 +440,9 @@ class LanCatalog {
         ..add(a.tags.join(','));
     }
     for (final a in albums) {
+      if ((a.artTag ?? '').isNotEmpty || a.artRoles.isNotEmpty) {
+        keuzes.add('${a.id}:${a.artTag ?? ''}:${a.artRoles.entries.map((e) => '${e.key}=${e.value}').join(',')}');
+      }
       fingerprint
         ..add(a.id)
         ..add(a.title)
@@ -477,6 +499,7 @@ class LanCatalog {
       albumById: albumById,
       artistNameById: artistNameById,
       etag: '"${tracks.length}-${fingerprint.value}"',
+      keuzeMerk: keuzes.value,
     );
   }
 }

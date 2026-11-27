@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 
 import '../ai.dart';
 import '../ai_lijst_vraag.dart' show AiLijstTaken;
+import '../audioformaten.dart' show alsFlacVersturen;
 import '../beeldvorm.dart' show KopInstelling, KopScherm, kopSoort;
 import '../album_facts.dart';
 import '../cloud/device_identity.dart';
@@ -1697,6 +1698,9 @@ class LanServer {
     // A client that already has this version gets 304 and no body. With a library of tens of
     // thousands of tracks that is the difference between a sync costing megabytes and costing
     // nothing, which matters when four devices re-check every time they wake up.
+    // Het merk van alleen je keuzes ([CatalogSnapshot.keuzeMerk]) bij elk antwoord: een onbediende tv die alleen het
+    // merkteken vraagt, haalt de catalogus dan toch meteen als je een hoes of cd aanwees.
+    res.headers.set('X-Keuze-Merk', snap.keuzeMerk);
     if (req.headers.value(HttpHeaders.ifNoneMatchHeader) == snap.etag) {
       res.statusCode = HttpStatus.notModified;
       res.headers.set(HttpHeaders.etagHeader, snap.etag);
@@ -2751,9 +2755,14 @@ class LanServer {
     // NIET weet — zie `metStand` — en dan meet de pc het bestand hier zelf na in plaats van op een
     // nul te beslissen. Een speaker blijft precies zoals hij was.
     final toestelVraagt = !vanSpeaker && (maxRate != null || maxBits != null);
+    // Een adres op `.flac` voor een bestand dat niet elke speler leest (AIFF, WAV, WavPack, APE …): dan FLAC sturen,
+    // verliesvrij en op dezelfde maat. De catalogus en de speakers vragen het zo ([alsFlacVersturen]); Saber, 27-11-2026:
+    // "Sign Of The Times" (AIFF 24/44,1) ging als origineel naar de Sonos Move en de Shield, en beide sprongen door.
+    final alsFlac = Uri.decodeComponent(req.uri.pathSegments.last).toLowerCase().endsWith('.flac') &&
+        alsFlacVersturen(track.ext);
     var rate = track.sampleRate;
     var bits = track.bitsPerSample;
-    if (toestelVraagt && (rate <= 0 || bits <= 0)) {
+    if ((toestelVraagt || alsFlac) && (rate <= 0 || bits <= 0)) {
       final maat = await transcoder.meet(file);
       if (rate <= 0) rate = maat?.rate ?? 0;
       if (bits <= 0) bits = maat?.bits ?? 0;
@@ -2772,6 +2781,11 @@ class LanServer {
     // AVFoundation, en ongecomprimeerd is het over 5G bovendien bijna het dubbele.
     if (toestelVraagt && !grens.omzetten && track.ext.toLowerCase() != 'flac') {
       grens = (omzetten: true, rate: grens.rate, bits: grens.bits);
+    }
+    // Op dezelfde maat, maar hoogstens 24 bit: zo diep gaat FLAC bij ffmpeg, en een WavPack van 32 bit (zwevend) verliest
+    // daar niets hoorbaars bij. Zonder gemeten frequentie niet: dan het origineel, zoals altijd.
+    if (alsFlac && !grens.omzetten && grens.rate > 0) {
+      grens = (omzetten: true, rate: grens.rate, bits: grens.bits > 24 ? 24 : grens.bits);
     }
     if (grens.omzetten) {
       // Een gekoppeld toestel vraagt om KLEIN (het gaat over iemands databundel), een speaker om
