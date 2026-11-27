@@ -96,6 +96,12 @@ const kSamenSpoelBegin = 40;
 /// 70 à 90 ms over, die de volger met 1 % pas na seconden wegwerkte).
 const kSamenPreciesMs = 25;
 
+/// Een anker dat onzekerder is dan dit (ms), laat de volger liggen: niet spoelen, niet bijsturen, gewoon doorspelen tot
+/// er een betere meting is. Live gezien op 27-11-2026: na een hik van de Sonos mat de pc hem op ±545 en ±2500 ms, en de
+/// Shield joeg die ruis na (−129, +149, +499 ms); na een wissel sprong hij op een meting van ±600 ms en landde 440 ms
+/// naast de Sonos.
+const kSamenNegeerVanaf = 100;
+
 /// Zo lang heet een nummer "net begonnen" ([kSamenSpoelBegin]).
 const kSamenBeginTot = Duration(seconds: 10);
 
@@ -356,6 +362,18 @@ class SamenVolger {
     final nu = _nuMs();
     // Net begonnen: het nummer (de eerste seconden) of het spelen hier (na een pauze, na het openen). Eén vroege sprong per
     // keer — de sleutel is het nummer plus dat begin.
+    // Een meting die de pc zelf niet vertrouwt: niets doen tot er een betere is ([kSamenNegeerVanaf]).
+    if (a.onzekerMs > kSamenNegeerVanaf) {
+      if (nu - _laatsteLog > 2000) {
+        _laatsteLog = nu;
+        log?.call('samen: meting te onzeker (±${a.onzekerMs} ms) — wacht op een betere');
+      }
+      if (_bezig) {
+        _bezig = false;
+        unawaited(speler.zetSnelheid(1.0));
+      }
+      return;
+    }
     final sleutel = '${t.path}@$_herstartOp';
     final precies = a.onzekerMs <= kSamenPreciesMs;
     // Al gesprongen in dit begin — tenzij dat op een grove meting was en deze precies is: dan nog één keer.

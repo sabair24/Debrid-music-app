@@ -176,6 +176,26 @@ void main() {
       });
     });
 
+    test('een meting die de pc niet vertrouwt (±600 ms): niet springen en niet bijsturen, wachten op een betere', () {
+      fakeAsync((fa) {
+        final t = nr('u');
+        final s = _Speler(t)
+          ..plek = const Duration(milliseconds: 2400)
+          ..naSprong = (d) => d;
+        final v = volger(s, fa);
+        v.opAnker(anker('u', 2000, onzeker: 600));
+        fa.elapse(const Duration(seconds: 3));
+        expect(s.seeks, isEmpty);
+        expect(s.snelheden.where((x) => x != 1.0), isEmpty);
+        // Dan een goede meting: nu wel.
+        v.opAnker(anker('u', 2000, onzeker: 8));
+        fa.elapse(const Duration(milliseconds: 600));
+        expect(s.seeks, hasLength(1));
+        v.stop(pauzeer: false);
+        fa.flushTimers(flushPeriodicTimers: false);
+      });
+    });
+
     test('op een precieze meting maar één vroege sprong', () {
       fakeAsync((fa) {
         final t = nr('y');
