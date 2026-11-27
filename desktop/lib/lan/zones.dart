@@ -778,6 +778,23 @@ class ZoneRegister {
   /// die kan niet bijsturen, dus volgen de toestellen hem.
   final Map<String, List<String>> toestelGroepen = {};
 
+  /// Na elke wijziging van [toestelGroepen]: bewaren (gezet door de server, `zone_groepen.json`).
+  ///
+  /// **Waarom (27-11-2026).** De groepen stonden alleen in het geheugen. Na de update van de pc was de groep "Sonos Move
+  /// + Tv" weg: de Shield volgde nog zijn laatste anker, maar speelde vanaf het volgende nummer los, en om 10:14 klonken
+  /// er twee verschillende nummers in huis.
+  void Function(Map<String, List<String>> groepen)? bijGroepen;
+
+  /// De bewaarde groepen terug ([bijGroepen]), bij het opstarten. Een leider of volger zonder naam valt weg.
+  void laadGroepen(Map<String, List<String>> groepen) {
+    toestelGroepen
+      ..clear()
+      ..addAll({
+        for (final e in groepen.entries)
+          if (e.key.isNotEmpty && e.value.any((v) => v.isNotEmpty)) e.key: [for (final v in e.value) if (v.isNotEmpty) v],
+      });
+  }
+
   /// Waar een speaker is voor wie met hem meespeelt (`CastManager.ankerVan`). Gezet door de server.
   Map<String, dynamic>? Function(String speaker)? speakerAnker;
 
@@ -829,6 +846,7 @@ class ZoneRegister {
     } else {
       toestelGroepen[leider] = nieuw;
     }
+    bijGroepen?.call({for (final e in toestelGroepen.entries) e.key: List.of(e.value)});
     _meld();
     return [for (final w in weg.toSet()) if (!nieuw.contains(w) && w != leider) w];
   }

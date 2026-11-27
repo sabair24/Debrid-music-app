@@ -284,6 +284,28 @@ class LanServer {
         _bronVerplaatst(o.van.startsWith('spk:') ? o.van : 'dev:${o.van}', 'dev:${o.naar}', o.trackId)));
     // En met een speaker (stap 3.3): de speakerklok meldt waar hij is, op de ms.
     zones.speakerAnker = cast.ankerVan;
+    // De groepen over een herstart van de pc heen ([ZoneRegister.bijGroepen]): terugzetten, en de klok van een speaker
+    // die leidt meteen aan, zodat zijn volgers bij het verbinden weer een anker krijgen.
+    if (dir.isNotEmpty) {
+      final groepenBestand = File('$dir${Platform.pathSeparator}zone_groepen.json');
+      try {
+        if (groepenBestand.existsSync()) {
+          final j = jsonDecode(groepenBestand.readAsStringSync());
+          if (j is Map) {
+            zones.laadGroepen({for (final e in j.entries) '${e.key}': [for (final v in (e.value as List? ?? const [])) '$v']});
+            for (final leider in zones.toestelGroepen.keys) {
+              if (leider.startsWith('spk:')) cast.volgKlok(leider.substring(4), true);
+            }
+            if (zones.toestelGroepen.isNotEmpty) _zoneLog.line('groepen terug na het opstarten: ${zones.toestelGroepen}');
+          }
+        }
+      } catch (_) {/* een kapot bestand: zonder groepen beginnen, zoals vroeger */}
+      zones.bijGroepen = (g) {
+        try {
+          groepenBestand.writeAsStringSync(jsonEncode(g));
+        } catch (_) {/* niet kunnen bewaren: dan alleen tot de volgende herstart */}
+      };
+    }
     zones.speakerVertraging.addAll(settings?.samenSpeakerMs ?? const {});
     // De schuif van een speaker die via de pc met een andere meespeelt (speaker_volger.dart).
     cast.volgVertraging = (id) => zones.speakerVertraging[id] ?? 0;

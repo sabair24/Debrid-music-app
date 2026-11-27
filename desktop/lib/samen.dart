@@ -16,7 +16,7 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show listEquals, visibleForTesting;
 
 import 'models.dart';
 import 'player.dart' show VolgSpeler;
@@ -31,7 +31,11 @@ class SamenAnker {
     required this.positieMs,
     required this.pcMs,
     required this.speelt,
+    this.onzekerMs = 0,
   });
+
+  /// Hoe zeker [positieMs] is (ms), of 0: precies, of onbekend (een toestel als leider, een oudere pc).
+  final int onzekerMs;
 
   /// De groep (de zone van de leider).
   final String groep;
@@ -52,6 +56,7 @@ class SamenAnker {
         'positieMs': positieMs,
         'pcMs': pcMs,
         'speelt': speelt,
+        if (onzekerMs > 0) 'onzekerMs': onzekerMs,
       };
 
   static SamenAnker? fromJson(Map<String, dynamic>? m) {
@@ -64,6 +69,7 @@ class SamenAnker {
       positieMs: (m['positieMs'] as num?)?.toInt() ?? 0,
       pcMs: (m['pcMs'] as num?)?.toInt() ?? 0,
       speelt: m['speelt'] == true,
+      onzekerMs: (m['onzekerMs'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -85,8 +91,17 @@ const kSamenSpoelVanaf = 150;
 /// aan het begin van elk nummer (samen.log, 27-11-2026). Eén keer per nummer: zie [SamenVolger].
 const kSamenSpoelBegin = 40;
 
+/// Zo zeker moet het anker zijn voor een precieze sprong (ms). Vlak na een wissel meet de pc de Sonos op ±70 ms; viel de
+/// vroege sprong op zo'n grove meting, dan mag er nog één zodra de meting precies is (27-11-2026: na de sprong bleef er
+/// 70 à 90 ms over, die de volger met 1 % pas na seconden wegwerkte).
+const kSamenPreciesMs = 25;
+
 /// Zo lang heet een nummer "net begonnen" ([kSamenSpoelBegin]).
 const kSamenBeginTot = Duration(seconds: 10);
+
+/// Waar de sprongmarge begint ([SamenVolger.spoelMarge]): 60 tot 27-11-2026, maar op de Shield landde een sprong dan
+/// gemiddeld ±50 ms te vroeg.
+const kSamenSpoelMarge = 20;
 
 /// Binnen dit verschil is het goed (en houdt het bijsturen op).
 const kSamenGoed = 8;
@@ -212,6 +227,19 @@ class SamenVolger {
   /// Sonos, en dat was met 1 % twaalf seconden echo geweest.
   int _herstartOp = -1 << 40;
 
+  /// Of de vroege sprong van [_beginGespoeld] op een precies anker viel ([kSamenPreciesMs]).
+  bool _beginPrecies = false;
+
+  /// Hoeveel verder dan het doel er gespoeld wordt: de tijd die het spoelen zelf kost. Begint op [kSamenSpoelMarge] en leert
+  /// bij uit wat er na een precieze sprong overblijft. Op de Shield bleef er na een sprong met 60 ms gemiddeld ±50 ms
+  /// voorsprong over (27-11-2026).
+  int _spoelMarge = kSamenSpoelMarge;
+  bool _leerNaSprong = false;
+
+  /// De huidige marge ([_spoelMarge]), voor de toetsen.
+  @visibleForTesting
+  int get spoelMarge => _spoelMarge;
+
   /// Wanneer er het laatst gespoeld is (ms): niet vaker dan om de [_spoelRust].
   int _gespoeldOp = 0;
   static const _spoelRust = Duration(seconds: 4);
@@ -329,8 +357,19 @@ class SamenVolger {
     // Net begonnen: het nummer (de eerste seconden) of het spelen hier (na een pauze, na het openen). Eén vroege sprong per
     // keer — de sleutel is het nummer plus dat begin.
     final sleutel = '${t.path}@$_herstartOp';
+    final precies = a.onzekerMs <= kSamenPreciesMs;
+    // Al gesprongen in dit begin — tenzij dat op een grove meting was en deze precies is: dan nog één keer.
+    final beginKlaar = _beginGespoeld == sleutel && (_beginPrecies || !precies);
     final begin = (speler.positieNauwkeurig < kSamenBeginTot || nu - _herstartOp < kSamenBeginTot.inMilliseconds) &&
-        _beginGespoeld != sleutel;
+        !beginKlaar;
+    // Wat er na een precieze sprong overblijft, is de tijd die het spoelen hier kost: de marge daarop bijstellen.
+    if (_leerNaSprong && nu - _gespoeldOp >= 1500) {
+      _leerNaSprong = false;
+      if (precies && afwijking.abs() < kSamenSpoelVanaf) {
+        _spoelMarge = (_spoelMarge - (afwijking * 0.7).round()).clamp(0, 200).toInt();
+        log?.call('samen: spoelmarge $_spoelMarge ms (na de sprong ${afwijking >= 0 ? '+' : ''}$afwijking ms)');
+      }
+    }
     final rust = nu - _gespoeldOp < _spoelRust.inMilliseconds;
     var b = bijsturing(afwijking, bezig: _bezig, begin: begin);
     // Net gespoeld: eerst bijsturen, niet meteen weer springen.
@@ -342,8 +381,12 @@ class SamenVolger {
     }
     if (b.spoel) {
       _gespoeldOp = nu;
-      if (begin) _beginGespoeld = sleutel;
-      speler.seek(moet + const Duration(milliseconds: 60));
+      if (begin) {
+        _beginGespoeld = sleutel;
+        _beginPrecies = precies;
+      }
+      _leerNaSprong = precies;
+      speler.seek(moet + Duration(milliseconds: _spoelMarge));
       unawaited(speler.zetSnelheid(1.0));
       _bezig = false;
       return;

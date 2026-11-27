@@ -439,6 +439,9 @@ class CastManager {
       'positieMs': plek.positieMs,
       'pcMs': _klokUs() ~/ 1000,
       'speelt': plek.speelt,
+      // Hoe zeker die plek is (ms, de halve breedte van de schatting): vlak na een wissel ±70, na een paar metingen ±5.
+      // De volger springt pas precies als hij dat weet (samen.dart, [kSamenPreciesMs]).
+      if (klok.schatting.breedteUs case final b?) 'onzekerMs': (b / 2000).round(),
     };
   }
 
