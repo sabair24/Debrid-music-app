@@ -15,6 +15,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show listEquals, visibleForTesting;
 
@@ -121,6 +122,35 @@ const kSamenGoed = 8;
 /// Vanaf dit verschil begint het bijsturen.
 const kSamenBijsturenVanaf = 20;
 
+/// Over hoeveel ankers van de leider de volger zijn plek bepaalt: de middelste ([mediaan]) van de laatste zoveel, van
+/// hetzelfde nummer ([SamenVolger.leiderStart]).
+const kSamenVenster = 5;
+
+/// Waarin de volger een verschil wegwerkt (ms): 20 ms is dan 0,2 % sneller of trager, en pas vanaf 100 ms de volle
+/// [kSamenMaxAfwijking]. Was 2000 — dan was elk verschil vanaf 20 ms meteen 1 %, en met de ruis van een KEF sprong de
+/// Shield in 70 s veertien keer tussen 0,990 en 1,010 (28-11-2026).
+const kSamenBijsturingTijd = 10000;
+
+/// Hoe ver de drempel hoogstens meegroeit met de ruis van de leider ([ruisUit]).
+const kSamenDrempelHoogstens = 80;
+
+/// De middelste van [xs] (bij een even aantal de hoogste van de twee middelste). [xs] mag niet leeg zijn.
+int mediaan(List<int> xs) => ([...xs]..sort())[xs.length ~/ 2];
+
+/// De ruis van de leider (ms, één meting): uit de [verschillen] tussen twee opeenvolgende ankers van hetzelfde nummer,
+/// elk doorgerekend naar hetzelfde moment. Twee metingen met elk ruis σ verschillen gemiddeld σ·√2. 0 met minder dan
+/// twee verschillen.
+///
+/// **Waarom (Saber, 28-11-2026, Shield met de KEF LS50: "ik hoor een zakking in tempo").** De KEF meldt zijn plek met
+/// ±24 ms ruis (de pc dacht ±2 ms): tussen twee ankers tot 47 ms verschil. De volger stuurde op elke meting vanaf 20 ms
+/// bij en sprong in 70 s veertien keer tussen 0,990 en 1,010 — dat golvende tempo hoorde hij. Bij de Sonos was de ruis
+/// een paar ms.
+int ruisUit(List<int> verschillen) {
+  if (verschillen.length < 2) return 0;
+  final kwadraat = verschillen.fold<double>(0, (s, d) => s + d * d) / verschillen.length;
+  return math.sqrt(kwadraat / 2).round();
+}
+
 /// Hoe ver de snelheid hoogstens van 1 afwijkt. Was 3 % ("niet te horen, mpv houdt de toonhoogte") — maar het tempo
 /// hoor je wel (Saber, 27-11-2026). 1 % niet; wat meer is, wordt gespoeld ([kSamenSpoelVanaf]).
 const kSamenMaxAfwijking = 0.01;
@@ -130,12 +160,19 @@ const kSamenMaxAfwijking = 0.01;
 /// niet heen en weer schakelen rond één grens.
 ///
 /// [begin]: het nummer is net begonnen en er is in dit nummer nog niet gespoeld — dan al vanaf [kSamenSpoelBegin].
-({bool spoel, double snelheid}) bijsturing(int afwijkingMs, {bool bezig = false, bool begin = false}) {
+///
+/// [drempel], [goed] en [spoelBegin]: dezelfde grenzen, opgerekt voor een leider met ruis ([ruisUit]).
+({bool spoel, double snelheid}) bijsturing(int afwijkingMs,
+    {bool bezig = false,
+    bool begin = false,
+    int drempel = kSamenBijsturenVanaf,
+    int goed = kSamenGoed,
+    int spoelBegin = kSamenSpoelBegin}) {
   final a = afwijkingMs.abs();
-  if (a > (begin ? kSamenSpoelBegin : kSamenSpoelVanaf)) return (spoel: true, snelheid: 1.0);
-  if (a <= kSamenGoed || (!bezig && a < kSamenBijsturenVanaf)) return (spoel: false, snelheid: 1.0);
-  // Het verschil in ongeveer twee seconden wegwerken.
-  final v = (1 - afwijkingMs / 2000).clamp(1 - kSamenMaxAfwijking, 1 + kSamenMaxAfwijking).toDouble();
+  if (a > (begin ? spoelBegin : kSamenSpoelVanaf)) return (spoel: true, snelheid: 1.0);
+  if (a <= goed || (!bezig && a < drempel)) return (spoel: false, snelheid: 1.0);
+  // Het verschil zacht wegwerken ([kSamenBijsturingTijd]): een paar promille hoor je niet.
+  final v = (1 - afwijkingMs / kSamenBijsturingTijd).clamp(1 - kSamenMaxAfwijking, 1 + kSamenMaxAfwijking).toDouble();
   return (spoel: false, snelheid: v);
 }
 
@@ -254,6 +291,23 @@ class SamenVolger {
   /// bij uit wat er na een precieze sprong overblijft. Op de Shield bleef er na een sprong met 60 ms gemiddeld ±50 ms
   /// voorsprong over (27-11-2026).
   int _spoelMarge = kSamenSpoelMarge;
+
+  /// Per anker van dit nummer: wanneer het bij de leider op 0 stond (pc-klok, ms) — [kSamenVenster] stuks. Hun mediaan
+  /// is de plek van de leider zonder de ruis van één meting ([leiderStart]).
+  final List<int> _starts = [];
+  String _startsVan = '';
+
+  /// Wanneer het nummer bij de leider op 0 stond (pc-klok, ms), uit de mediaan van de laatste ankers; null met minder dan
+  /// drie (net begonnen, of net gesprongen bij de leider).
+  @visibleForTesting
+  int? get leiderStart => _starts.length >= 3 ? mediaan(_starts) : null;
+
+  /// De verschillen tussen opeenvolgende ankers van de leider ([ruisUit]); blijft over nummers heen (het is de speaker).
+  final List<int> _ankerVerschillen = [];
+
+  /// De ruis van de leider (ms), zoals de volger hem nu schat.
+  @visibleForTesting
+  int get ruisMs => ruisUit(_ankerVerschillen);
   bool _leerNaSprong = false;
 
   /// De huidige marge ([_spoelMarge]), voor de toetsen.
@@ -273,6 +327,31 @@ class SamenVolger {
   /// Een nieuw anker van de pc.
   Future<void> opAnker(SamenAnker a) async {
     final eerste = _anker == null;
+    // Hoe ver dit anker het vorige van hetzelfde nummer tegenspreekt, op hetzelfde moment doorgerekend: de ruis van de
+    // leider ([ruisUit]). Alleen een nieuwe meting (een andere tijd), en geen sprong van een seconde of meer (spoelen).
+    final oud = _anker;
+    if (oud != null && oud.trackId == a.trackId && oud.speelt && a.speelt && oud.pcMs != a.pcMs) {
+      final t = math.max(oud.pcMs, a.pcMs);
+      final d = (verwachtePlek(oud, nuPcMs: t, vertragingMs: 0) - verwachtePlek(a, nuPcMs: t, vertragingMs: 0))
+          .inMilliseconds;
+      if (d.abs() < 1000) {
+        _ankerVerschillen.add(d);
+        if (_ankerVerschillen.length > 8) _ankerVerschillen.removeAt(0);
+      }
+    }
+    // Wanneer het nummer bij de leider op 0 stond, volgens dit anker. Een ander nummer, een pauze of een sprong van een
+    // seconde of meer bij de leider: opnieuw beginnen.
+    if (a.speelt) {
+      final s = a.pcMs - a.positieMs;
+      if (_startsVan != a.trackId || (_starts.isNotEmpty && (s - mediaan(_starts)).abs() >= 1000)) {
+        _starts.clear();
+        _startsVan = a.trackId;
+      }
+      if (_starts.isEmpty || oud?.pcMs != a.pcMs) _starts.add(s);
+      if (_starts.length > kSamenVenster) _starts.removeAt(0);
+    } else {
+      _starts.clear();
+    }
     _anker = a;
     await klok.ijk();
     if (eerste) log?.call('samen: volgt ${a.groep} (klok ±${((klok.rttUs ?? 0) / 2000).toStringAsFixed(1)} ms)');
@@ -389,7 +468,12 @@ class SamenVolger {
     if (a == null || !a.speelt || _opent || !speler.playing) return;
     final t = speler.current;
     if (t == null || idVan(t) != a.trackId) return;
-    final moet = verwachtePlek(a, nuPcMs: klok.nuPcMs(), vertragingMs: vertragingMs());
+    // De plek van de leider uit de mediaan van de laatste ankers ([leiderStart]); net na een wissel uit het laatste.
+    final start = leiderStart;
+    final nuPc = klok.nuPcMs();
+    final moet = start == null
+        ? verwachtePlek(a, nuPcMs: nuPc, vertragingMs: vertragingMs())
+        : Duration(milliseconds: math.max(0, nuPc - start - vertragingMs()));
     final afwijking = (speler.positieNauwkeurig - moet).inMilliseconds;
     final nu = _nuMs();
     // Net begonnen: het nummer (de eerste seconden) of het spelen hier (na een pauze, na het openen). Eén vroege sprong per
@@ -421,12 +505,27 @@ class SamenVolger {
       }
     }
     final rust = nu - _gespoeldOp < _spoelRust.inMilliseconds;
-    var b = bijsturing(afwijking, bezig: _bezig, begin: begin);
+    // Grenzen die meegroeien met de ruis van de leider: een KEF meldt zijn plek eens per seconde, in stappen van 48 ms,
+    // met tientallen ms ruis; ook de mediaan schommelt dan nog. Bijsturen pas boven die ruis.
+    final gemeten = afwijking;
+    final ruis = ruisMs;
+    final drempel = math.max(kSamenBijsturenVanaf, math.min(ruis, kSamenDrempelHoogstens));
+    final goed = math.max(kSamenGoed, math.min(ruis ~/ 2, kSamenDrempelHoogstens ~/ 2));
+    final spoelBegin = math.max(kSamenSpoelBegin, math.min(2 * ruis, kSamenSpoelVanaf - 1));
+    var b = bijsturing(gemeten, bezig: _bezig, begin: begin, drempel: drempel, goed: goed, spoelBegin: spoelBegin);
     // Net gespoeld: eerst bijsturen, niet meteen weer springen.
-    if (b.spoel && rust) b = (spoel: false, snelheid: bijsturing(afwijking.clamp(-kSamenSpoelVanaf, kSamenSpoelVanaf), bezig: true).snelheid);
+    if (b.spoel && rust) {
+      b = (
+        spoel: false,
+        snelheid: bijsturing(gemeten.clamp(-kSamenSpoelVanaf, kSamenSpoelVanaf),
+                bezig: true, drempel: drempel, goed: goed, spoelBegin: spoelBegin)
+            .snelheid
+      );
+    }
     if (nu - _laatsteLog > 2000) {
       _laatsteLog = nu;
-      log?.call('samen: afwijking ${afwijking >= 0 ? '+' : ''}$afwijking ms → '
+      log?.call('samen: afwijking ${afwijking >= 0 ? '+' : ''}$afwijking ms'
+          '${ruis > 0 ? ' (ruis ±$ruis${start == null ? '' : ', mediaan van ${_starts.length}'})' : ''} → '
           '${b.spoel ? 'spoelen' : 'snelheid ${b.snelheid.toStringAsFixed(3)}'}');
     }
     if (b.spoel) {

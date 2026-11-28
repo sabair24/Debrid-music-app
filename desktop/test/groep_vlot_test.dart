@@ -318,7 +318,8 @@ void main() {
         fa.elapse(const Duration(seconds: 2));
         expect(speler.seeks, isEmpty);
         expect(speler.snelheden, isNotEmpty);
-        expect(speler.snelheden.last, closeTo(0.99, 1e-9));
+        // Sinds 28-11-2026 zacht ([kSamenBijsturingTijd]): rond 100 ms is dat bijna 1 %, nooit meer.
+        expect(speler.snelheden.last, inInclusiveRange(0.99, 0.991));
         v.stop(pauzeer: false);
         fa.flushTimers(flushPeriodicTimers: false);
       });
