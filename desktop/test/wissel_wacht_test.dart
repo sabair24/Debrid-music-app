@@ -188,6 +188,98 @@ void main() {
     });
   });
 
+  test('een sprong op een grove meting vlak na de wissel telt mee in wat hij leert (Trick Me, 28-11-2026)', () {
+    // Live: "In begin van de liedjes verspringt het". Grof +278 ms → gesprongen; de eerste precieze meting zag daarna
+    // nog +17, en alleen dat leerde hij (66 → 80 ms). De wissel was +295: dat moet hij leren.
+    fakeAsync((fa) {
+      // Al op de plek van de leider bij a: geen sprong daar (dan gold de rust van 4 s erna).
+      s.plek = const Duration(milliseconds: 60000);
+      v = volger(fa)..opAnker(anker('a', 60000));
+      fa.elapse(const Duration(milliseconds: 600));
+      expect(s.seeks, isEmpty);
+      s
+        ..t = _nr('b')
+        ..plek = const Duration(milliseconds: 300 + 278);
+      v.wisselWacht();
+      v.opAnker(anker('b', 300, onzeker: 70));
+      fa.elapse(const Duration(milliseconds: 600));
+      expect(s.seeks, hasLength(1), reason: 'in het begin mag een grove meting springen');
+      expect(v.wisselWachtVoor('spk:kef'), 0, reason: 'een grove meting leert niets');
+      // Na de sprong (de speler springt hier niet zelf): nog 17 ms te vroeg, nu precies gemeten.
+      s.plek = const Duration(milliseconds: 300 + 17);
+      v.opAnker(anker('b', 300));
+      fa.elapse(const Duration(milliseconds: 600));
+      // 0,8 × (17 + 278 − de spoelmarge van 20) = 220.
+      expect(v.wisselWachtVoor('spk:kef'), closeTo(220, 2));
+      expect(log.where((r) => r.contains('wachten bij een wissel')).last, contains('waarvan 258 gesprongen'));
+      // De volgende wissel begint weer bij nul: zonder sprong leert hij alleen wat hij dan meet.
+      s
+        ..t = _nr('c')
+        ..plek = const Duration(milliseconds: 300 + 10);
+      v.wisselWacht();
+      v.opAnker(anker('c', 300));
+      fa.elapse(const Duration(milliseconds: 600));
+      expect(v.wisselWachtVoor('spk:kef'), closeTo(228, 2), reason: '220 + 0,8 × 10, niet nog eens de sprong van b');
+      expect(log.where((r) => r.contains('wachten bij een wissel')).last, isNot(contains('gesprongen')));
+      v.stop(pauzeer: false);
+      fa.flushTimers(flushPeriodicTimers: false);
+    });
+  });
+
+  test('twee sprongen na één wissel (grof, en na de rust nog eens): allebei tellen mee', () {
+    fakeAsync((fa) {
+      // Al op de plek van de leider bij a: geen sprong daar.
+      s.plek = const Duration(milliseconds: 60000);
+      v = volger(fa)..opAnker(anker('a', 60000));
+      fa.elapse(const Duration(milliseconds: 600));
+      s
+        ..t = _nr('b')
+        ..plek = const Duration(milliseconds: 300 + 500);
+      v.wisselWacht();
+      v.opAnker(anker('b', 300, onzeker: 70));
+      fa.elapse(const Duration(milliseconds: 600));
+      expect(s.seeks, hasLength(1));
+      // De sprong landde nog 200 ms te vroeg (grof gemeten); na de rust van 4 s springt hij nog eens.
+      s.plek = const Duration(milliseconds: 300 + 200);
+      fa.elapse(const Duration(milliseconds: 4500));
+      expect(s.seeks, hasLength(2));
+      s.plek = const Duration(milliseconds: 300 + 10);
+      v.opAnker(anker('b', 300));
+      fa.elapse(const Duration(milliseconds: 600));
+      // 0,8 × (10 + (500 − 20) + (200 − 20)) = 536.
+      expect(v.wisselWachtVoor('spk:kef'), closeTo(536, 2));
+      v.stop(pauzeer: false);
+      fa.flushTimers(flushPeriodicTimers: false);
+    });
+  });
+
+  test('een sprong buiten een gewone wissel telt niet mee bij de volgende', () {
+    fakeAsync((fa) {
+      // Al op de plek van de leider bij a: geen sprong daar (dan gold de rust van 4 s erna).
+      s.plek = const Duration(milliseconds: 60000);
+      v = volger(fa)..opAnker(anker('a', 60000));
+      fa.elapse(const Duration(milliseconds: 600));
+      expect(s.seeks, isEmpty);
+      // Zelf naar b gegaan (geen gewone wissel): de volger springt, maar leert niets.
+      s
+        ..t = _nr('b')
+        ..plek = const Duration(milliseconds: 300 + 400);
+      v.opAnker(anker('b', 300, onzeker: 70));
+      fa.elapse(const Duration(milliseconds: 600));
+      expect(s.seeks, hasLength(1));
+      // Daarna een gewone wissel naar c, 30 ms te vroeg: alleen die 30 telt.
+      s
+        ..t = _nr('c')
+        ..plek = const Duration(milliseconds: 300 + 30);
+      v.wisselWacht();
+      v.opAnker(anker('c', 300));
+      fa.elapse(const Duration(milliseconds: 600));
+      expect(v.wisselWachtVoor('spk:kef'), closeTo(24, 2));
+      v.stop(pauzeer: false);
+      fa.flushTimers(flushPeriodicTimers: false);
+    });
+  });
+
   test('de speler: na een gewone wissel gepauzeerd openen en na de wachttijd spelen; een tik begint meteen', () {
     final p = _bron('lib/player.dart');
     final einde = p.indexOf('      case NaHetEinde.volgende:');

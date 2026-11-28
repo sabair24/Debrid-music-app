@@ -194,6 +194,28 @@ void main() {
       });
     });
 
+    test('een anker dat de pc zelf niet vertrouwt (±242 ms na een wissel), telt niet mee in de ruis en de mediaan', () {
+      fakeAsync((fa) {
+        final s = _Speler(t);
+        final v = volger(s, fa);
+        for (var i = 0; i < 5; i++) {
+          v.opAnker(anker(i, ruis: i.isEven ? 2 : -2));
+        }
+        final start = v.leiderStart;
+        final ruis = v.ruisMs;
+        final pc = KlokIjk().nuPcMs();
+        for (var i = 0; i < 3; i++) {
+          v.opAnker(SamenAnker(
+              groep: 'spk:kef', trackId: 'x', rij: const ['x'], index: 0, positieMs: 60300 + i, pcMs: pc + 10 + i,
+              speelt: true, onzekerMs: 242));
+        }
+        expect(v.ruisMs, ruis, reason: 'live 16:34: de ruis schoot zo naar ±43 en ±63 ms');
+        expect(v.leiderStart, start, reason: 'en de mediaan gaf één keer +188 ms');
+        v.stop(pauzeer: false);
+        fa.flushTimers(flushPeriodicTimers: false);
+      });
+    });
+
     test('de mediaan begint opnieuw bij een ander nummer, en bij een sprong van de leider', () {
       fakeAsync((fa) {
         final s = _Speler(t);

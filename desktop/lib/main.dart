@@ -13364,7 +13364,8 @@ class PlayerBar extends StatelessWidget {
                 ),
                 Row(
                   children: [
-                    Text(_fmt(x.position), style: TextStyle(color: _muted, fontSize: 11.5)),
+                    VasteTijd(_fmt(x.position),
+                        zoals: _fmt(x.duration), stijl: TextStyle(color: _muted, fontSize: 11.5)),
                     Expanded(
                       child: SliderTheme(
                         data: SliderTheme.of(context).copyWith(
@@ -13382,7 +13383,8 @@ class PlayerBar extends StatelessWidget {
                         )),
                       ),
                     ),
-                    Text(_fmt(x.duration), style: TextStyle(color: _muted, fontSize: 11.5)),
+                    VasteTijd(_fmt(x.duration),
+                        zoals: _fmt(x.position), rechts: true, stijl: TextStyle(color: _muted, fontSize: 11.5)),
                   ],
                 ),
               ],
@@ -23216,7 +23218,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
         width: kolom,
         child: Row(
           children: [
-            Text(_fmt(position), style: TextStyle(color: _muted, fontSize: 12)),
+            VasteTijd(_fmt(position), zoals: _fmt(duration), stijl: TextStyle(color: _muted, fontSize: 12)),
 
             Expanded(
               child: SliderTheme(
@@ -23243,7 +23245,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> with SingleTickerPr
                 )),
               ),
             ),
-            Text(_fmt(duration), style: TextStyle(color: _muted, fontSize: 12)),
+            VasteTijd(_fmt(duration),
+                zoals: _fmt(position), rechts: true, stijl: TextStyle(color: _muted, fontSize: 12)),
           ],
         ),
       ),
@@ -41052,6 +41055,35 @@ class _SettingsDialogState extends State<SettingsDialog> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Een tijd naast een afspeelbalk die niet verspringt (Saber, 28-11-2026: "die springt van plaats doordat de seconden
+/// veranderen ernaast"). Cijfers even breed (tabulair), en altijd de ruimte van de langste tijd die hier kan staan
+/// ([zoals], meestal de duur): de balk ertussen verandert dan nooit van breedte, ook niet van 9:59 naar 10:00.
+class VasteTijd extends StatelessWidget {
+  const VasteTijd(this.tekst, {super.key, required this.zoals, required this.stijl, this.rechts = false});
+
+  final String tekst;
+  final String zoals;
+  final TextStyle stijl;
+
+  /// Rechts uitgelijnd (de duur, rechts van de balk).
+  final bool rechts;
+
+  static String _nullen(String s) => s.replaceAll(RegExp(r'\d'), '0');
+
+  @override
+  Widget build(BuildContext context) {
+    final s = stijl.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+    return Stack(
+      alignment: rechts ? Alignment.centerRight : Alignment.centerLeft,
+      children: [
+        // Onzichtbaar: alleen voor de breedte van wat hier ook kan staan (de zichtbare tekst geeft zijn eigen breedte).
+        Opacity(opacity: 0, child: Text(_nullen(zoals), style: s)),
+        Text(tekst, style: s),
+      ],
     );
   }
 }
