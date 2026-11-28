@@ -2410,9 +2410,20 @@ class PlayerStore extends ChangeNotifier
           notifyListeners();
           return;
         }
+        // Een gewone wissel: in een groep wacht het volgende nummer misschien op de leider ([wisselWacht]).
+        if (!radioMode) _natuurlijkeWissel = true;
         next();
     }
   }
+
+  /// In een groep (samen.dart, `SamenVolger.wisselWacht`): hoe lang het volgende nummer na een gewone wissel gepauzeerd
+  /// wacht op de leider. Een KEF begint het volgende nummer een paar tienden later dan dit toestel (Saber,
+  /// 28-11-2026: de Shield sprong bij elke wissel terug, "ja dat stoort"). Null of 0: meteen.
+  Duration Function()? wisselWacht;
+
+  /// Het nummer opent door een gewone wissel (het vorige liep af), niet door een tik of "volgende" ([_openCurrent]).
+  bool _natuurlijkeWissel = false;
+  int _wisselGen = 0;
 
   /// Een melding van een groeistroom (groeistroom.dart) die midden in het nummer afbrak? Die eindigt in een
   /// half frame: mpv meldt "Error decoding audio" en speelt door tot het einde van wat er is. Dat einde
@@ -3702,7 +3713,18 @@ class PlayerStore extends ChangeNotifier
     _nieuwVoorDeTelling(t);
     final bron = _bron(t.path);
     _zetLuidheid(t, adres: bron, rij: _order, plek: _index, opVolgorde: !shuffle);
-    await _player.open(Media(bron), play: true);
+    // Een gewone wissel in een groep: gepauzeerd openen en pas na [wisselWacht] spelen — of eerder, als het anker van de
+    // leider er is (samen.dart start dan zelf op de juiste plek).
+    final wacht = _natuurlijkeWissel ? (wisselWacht?.call() ?? Duration.zero) : Duration.zero;
+    _natuurlijkeWissel = false;
+    final gen = ++_wisselGen;
+    await _player.open(Media(bron), play: wacht <= Duration.zero);
+    if (wacht > Duration.zero) {
+      _log?.line('WISSEL IN DE GROEP — ${t.title}: ${wacht.inMilliseconds} ms wachten op de leider');
+      Timer(wacht, () {
+        if (gen == _wisselGen && current?.path == t.path && !playing) unawaited(_player.play());
+      });
+    }
     _saveProgress(force: true); // track changed → persist the new spot
     _zetVolgendeKlaar();
     notifyListeners();
@@ -3840,6 +3862,7 @@ class PlayerStore extends ChangeNotifier
       _index = 0;
       await _openCurrent();
     }
+    _natuurlijkeWissel = false;
   }
 
   @override

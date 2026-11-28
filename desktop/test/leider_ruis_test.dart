@@ -92,10 +92,12 @@ void main() {
         expect(v.ruisMs, greaterThan(15), reason: 'de volger ziet zelf dat deze leider ruist');
         // De eerste twee tellen (één anker, de ruis nog onbekend) telt niet: in het echt kent de volger de ruis dan al van
         // het vorige nummer — die schatting blijft over nummers heen.
-        final daarna = s.snelheden.skip(4).toList();
+        final daarna = s.snelheden.skip(2).toList();
         expect(daarna.where((x) => (x - 1).abs() > 0.004), isEmpty,
             reason: 'voorheen sprong hij hier keer op keer naar 0,990 en 1,010');
-        expect(daarna.where((x) => x == 1.0).length, greaterThan(daarna.length * 3 ~/ 4), reason: 'meestal gewoon 1,000');
+        // Sinds 3.9.769 krijgt de speler alleen een opdracht als de snelheid echt verandert, in stappen van 0,25 % en
+        // hoogstens eens per 5 s (elke opdracht kan een tikje geven): in 26 s hooguit een paar.
+        expect(s.snelheden.length, lessThanOrEqualTo(4));
         expect(s.seeks, isEmpty);
         v.stop(pauzeer: false);
         fa.flushTimers(flushPeriodicTimers: false);
@@ -127,6 +129,66 @@ void main() {
         }
         expect(v.ruisMs, lessThan(5));
         expect(s.snelheden.last, inInclusiveRange(0.996, 0.998), reason: '30 ms voor: 0,3 % trager');
+        v.stop(pauzeer: false);
+        fa.flushTimers(flushPeriodicTimers: false);
+      });
+    });
+
+    test('stappen van 0,25 %, en een gezette snelheid blijft minstens 5 s staan (elke opdracht kan een tikje geven)', () {
+      expect(snelheidsstap(0.9902), 0.99);
+      expect(snelheidsstap(1.0012), 1.0);
+      expect(snelheidsstap(0.9963), 0.9975);
+      expect(snelheidsstap(1.0038), 1.005);
+      fakeAsync((fa) {
+        final s = _Speler(t);
+        final v = volger(s, fa);
+        for (var i = 0; i < 3; i++) {
+          v.opAnker(anker(i, verschil: 60, ruis: i.isEven ? 1 : -1));
+        }
+        fa.elapse(const Duration(milliseconds: 600));
+        expect(s.snelheden, [1.005], reason: '60 ms achter: 0,6 % sneller, afgerond 0,5 %');
+        // Meteen daarna staat hij 60 ms vóór: binnen 5 s niet omgooien.
+        for (var i = 3; i < 9; i++) {
+          v.opAnker(anker(i, verschil: -60, ruis: i.isEven ? 1 : -1));
+        }
+        fa.elapse(const Duration(seconds: 3));
+        expect(s.snelheden, [1.005], reason: 'vasthouden');
+        fa.elapse(const Duration(seconds: 3));
+        expect(s.snelheden, [1.005, 0.995], reason: 'na 5 s mag hij');
+        v.stop(pauzeer: false);
+        fa.flushTimers(flushPeriodicTimers: false);
+      });
+    });
+
+    test('na een pauze van de leider, of een onzekere meting, weet de volger dat de speler weer op 1,000 staat', () {
+      fakeAsync((fa) {
+        final s = _Speler(t);
+        final v = volger(s, fa);
+        for (var i = 0; i < 3; i++) {
+          v.opAnker(anker(i, verschil: 60, ruis: i.isEven ? 1 : -1));
+        }
+        fa.elapse(const Duration(milliseconds: 600));
+        expect(s.snelheden.last, 1.005);
+        final pc = KlokIjk().nuPcMs();
+        // De leider pauzeert en speelt weer, nog steeds 60 ms voor: de volger zet opnieuw 1,005 (hij weet dat de speler op
+        // 1,000 staat).
+        v.opAnker(SamenAnker(
+            groep: 'spk:kef', trackId: 'x', rij: const ['x'], index: 0, positieMs: 60060, pcMs: pc + 60, speelt: false));
+        fa.elapse(const Duration(seconds: 6));
+        expect(s.snelheden.last, 1.0);
+        s.playing = true;
+        for (var i = 70; i < 73; i++) {
+          v.opAnker(anker(i, verschil: 60, ruis: i.isEven ? 1 : -1));
+        }
+        fa.elapse(const Duration(milliseconds: 600));
+        expect(s.snelheden.last, 1.005, reason: 'na de pauze opnieuw gezet');
+        // Een meting die de pc zelf niet vertrouwt: terug naar 1,000.
+        fa.elapse(const Duration(seconds: 6));
+        v.opAnker(SamenAnker(
+            groep: 'spk:kef', trackId: 'x', rij: const ['x'], index: 0, positieMs: 60060, pcMs: pc + 90, speelt: true,
+            onzekerMs: 200));
+        fa.elapse(const Duration(milliseconds: 600));
+        expect(s.snelheden.last, 1.0);
         v.stop(pauzeer: false);
         fa.flushTimers(flushPeriodicTimers: false);
       });

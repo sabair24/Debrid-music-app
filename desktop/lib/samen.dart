@@ -131,6 +131,17 @@ const kSamenVenster = 5;
 /// Shield in 70 s veertien keer tussen 0,990 en 1,010 (28-11-2026).
 const kSamenBijsturingTijd = 10000;
 
+/// In welke stappen de volger zijn snelheid zet: 0,25 %. Fijner betekent vaker een nieuwe snelheid voor de speler, en
+/// elke nieuwe snelheid kan een tikje geven (Saber, 28-11-2026 met 3.9.768: "haperingen, sprongen eigenlijk").
+const kSamenSnelheidStap = 0.0025;
+
+/// Hoe lang een gezette snelheid minstens blijft staan (behalve bij een sprong of een onzekere meting).
+const kSamenSnelheidHoud = Duration(seconds: 5);
+
+/// [v] afgerond op een stap van [kSamenSnelheidStap] rond 1.
+double snelheidsstap(double v) =>
+    double.parse((1 + ((v - 1) / kSamenSnelheidStap).round() * kSamenSnelheidStap).toStringAsFixed(4));
+
 /// Hoe ver de drempel hoogstens meegroeit met de ruis van de leider ([ruisUit]).
 const kSamenDrempelHoogstens = 80;
 
@@ -272,6 +283,18 @@ class SamenVolger {
   List<String> _rij = const [];
   Timer? _lus;
   bool _bezig = false;
+
+  /// De snelheid die de volger het laatst aan de speler gaf, en wanneer ([kSamenSnelheidHoud]).
+  double _gezetteSnelheid = 1.0;
+  int _snelheidOp = 0;
+
+  /// De speler op [v] zetten, alleen als dat iets anders is dan wat hij al kreeg.
+  void _zetSnelheid(double v, int nu) {
+    if (v == _gezetteSnelheid) return;
+    _gezetteSnelheid = v;
+    _snelheidOp = nu;
+    unawaited(speler.zetSnelheid(v));
+  }
   bool _opent = false;
   int _laatsteLog = 0;
 
@@ -324,6 +347,46 @@ class SamenVolger {
   /// De groep die het volgt, of null.
   String? get groep => _anker?.groep;
 
+  /// Hoe lang (ms) de volger bij een gewone wissel wacht voor hij het volgende nummer begint, per leider ([groep]).
+  ///
+  /// **Waarom (Saber, 28-11-2026: "ja dat stoort").** Een KEF heeft geen klaargezet volgend nummer: de pc start het
+  /// pas als het vorige afgelopen is, en de KEF begint 0,2–0,35 s later dan de Shield, die zelf meteen doorging. De
+  /// Shield sprong dan terug (+251, +358, +215, +309 ms gemeten) en je hoorde een stukje dubbel. Geleerd uit de eerste
+  /// precieze meting na een wissel ([_leerWissel]); bij een naadloze leider (Sonos) blijft het rond 0.
+  final Map<String, int> _wisselWacht = {};
+  bool _wisselLeren = false;
+  int _wisselOp = 0;
+  String? _wisselNummer;
+
+  /// Voor de speler (`PlayerStore.wisselWacht`), bij een nummer dat gewoon afliep: zoveel gepauzeerd wachten voor het
+  /// volgende begint (of tot het anker van de leider er is: [opAnker] start dan op de juiste plek). Zonder groep 0.
+  Duration wisselWacht() {
+    final a = _anker;
+    if (a == null || !a.speelt) return Duration.zero;
+    _wisselLeren = true;
+    _wisselOp = _nuMs();
+    // Het nummer dat nu opent: alleen een meting van dát nummer zegt iets over deze wissel.
+    final t = speler.current;
+    _wisselNummer = t == null ? null : idVan(t);
+    return Duration(milliseconds: _wisselWacht[a.groep] ?? 0);
+  }
+
+  /// De geleerde wachttijd bij een wissel voor [groep] (ms), voor de toetsen.
+  @visibleForTesting
+  int wisselWachtVoor(String groep) => _wisselWacht[groep] ?? 0;
+
+  /// Na een gewone wissel: de eerste precieze meting zegt hoeveel de volger te vroeg (positief) of te laat begon. De
+  /// wachttijd schuift daarmee op, hoogstens 1,5 s; binnen 15 s na de wissel, anders zegt het niets meer.
+  void _leerWissel(SamenAnker a, int afwijking, int nu) {
+    if (!_wisselLeren || a.trackId != _wisselNummer) return;
+    _wisselLeren = false;
+    if (nu - _wisselOp > 15000) return;
+    final oud = _wisselWacht[a.groep] ?? 0;
+    final nieuw = (oud + afwijking * 0.8).round().clamp(0, 1500).toInt();
+    _wisselWacht[a.groep] = nieuw;
+    log?.call('samen: wachten bij een wissel $nieuw ms (na de wissel ${afwijking >= 0 ? '+' : ''}$afwijking ms)');
+  }
+
   /// Een nieuw anker van de pc.
   Future<void> opAnker(SamenAnker a) async {
     final eerste = _anker == null;
@@ -360,6 +423,7 @@ class SamenVolger {
     if (!a.speelt) {
       if (speler.playing) speler.pauzeer();
       if (zelfde) speler.seek(Duration(milliseconds: a.positieMs));
+      _gezetteSnelheid = 1.0;
       await speler.zetSnelheid(1.0);
       _stopLus();
       return;
@@ -486,7 +550,7 @@ class SamenVolger {
       }
       if (_bezig) {
         _bezig = false;
-        unawaited(speler.zetSnelheid(1.0));
+        _zetSnelheid(1.0, nu);
       }
       return;
     }
@@ -497,6 +561,8 @@ class SamenVolger {
     final begin = (speler.positieNauwkeurig < kSamenBeginTot || nu - _herstartOp < kSamenBeginTot.inMilliseconds) &&
         !beginKlaar;
     // Wat er na een precieze sprong overblijft, is de tijd die het spoelen hier kost: de marge daarop bijstellen.
+    // De eerste precieze meting na een gewone wissel: de wachttijd voor de volgende keer ([wisselWacht]).
+    if (_wisselLeren && precies && begin) _leerWissel(a, afwijking, nu);
     if (_leerNaSprong && nu - _gespoeldOp >= 1500) {
       _leerNaSprong = false;
       if (precies && afwijking.abs() < kSamenSpoelVanaf) {
@@ -536,12 +602,16 @@ class SamenVolger {
       }
       _leerNaSprong = precies;
       speler.seek(moet + Duration(milliseconds: _spoelMarge));
-      unawaited(speler.zetSnelheid(1.0));
+      _zetSnelheid(1.0, nu);
       _bezig = false;
       return;
     }
-    _bezig = b.snelheid != 1.0;
-    unawaited(speler.zetSnelheid(b.snelheid));
+    // Zo weinig mogelijk snelheidsopdrachten: in stappen van [kSamenSnelheidStap], en een gezette snelheid blijft
+    // minstens [kSamenSnelheidHoud] staan.
+    var doel = snelheidsstap(b.snelheid);
+    if (doel != _gezetteSnelheid && nu - _snelheidOp < kSamenSnelheidHoud.inMilliseconds) doel = _gezetteSnelheid;
+    _bezig = doel != 1.0;
+    _zetSnelheid(doel, nu);
   }
 
   /// Uit de groep: niet meer volgen, gewoon weer op dit toestel.
@@ -550,6 +620,7 @@ class SamenVolger {
     log?.call('samen: volgt ${_anker!.groep} niet meer');
     _anker = null;
     _stopLus();
+    _gezetteSnelheid = 1.0;
     await speler.zetSnelheid(1.0);
     if (pauzeer && speler.playing) speler.pauzeer();
   }
