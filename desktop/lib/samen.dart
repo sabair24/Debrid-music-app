@@ -393,7 +393,14 @@ class SamenVolger {
     // Hoe ver dit anker het vorige van hetzelfde nummer tegenspreekt, op hetzelfde moment doorgerekend: de ruis van de
     // leider ([ruisUit]). Alleen een nieuwe meting (een andere tijd), en geen sprong van een seconde of meer (spoelen).
     final oud = _anker;
-    if (oud != null && oud.trackId == a.trackId && oud.speelt && a.speelt && oud.pcMs != a.pcMs) {
+    final betrouwbaar = a.onzekerMs <= kSamenNegeerVanaf;
+    if (oud != null &&
+        oud.trackId == a.trackId &&
+        oud.speelt &&
+        a.speelt &&
+        oud.pcMs != a.pcMs &&
+        betrouwbaar &&
+        oud.onzekerMs <= kSamenNegeerVanaf) {
       final t = math.max(oud.pcMs, a.pcMs);
       final d = (verwachtePlek(oud, nuPcMs: t, vertragingMs: 0) - verwachtePlek(a, nuPcMs: t, vertragingMs: 0))
           .inMilliseconds;
@@ -404,7 +411,8 @@ class SamenVolger {
     }
     // Wanneer het nummer bij de leider op 0 stond, volgens dit anker. Een ander nummer, een pauze of een sprong van een
     // seconde of meer bij de leider: opnieuw beginnen.
-    if (a.speelt) {
+    // Een anker dat de pc zelf niet vertrouwt, telt niet mee (ook niet in de ruis hierboven).
+    if (a.speelt && betrouwbaar) {
       final s = a.pcMs - a.positieMs;
       if (_startsVan != a.trackId || (_starts.isNotEmpty && (s - mediaan(_starts)).abs() >= 1000)) {
         _starts.clear();
@@ -412,7 +420,7 @@ class SamenVolger {
       }
       if (_starts.isEmpty || oud?.pcMs != a.pcMs) _starts.add(s);
       if (_starts.length > kSamenVenster) _starts.removeAt(0);
-    } else {
+    } else if (!a.speelt) {
       _starts.clear();
     }
     _anker = a;

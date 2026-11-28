@@ -166,7 +166,8 @@ void main() {
           '              ? (isTv ? _qualityBadge(_stroomKwaliteit(p, _klinktAls(context, t))) : _kwaliteitKnop(context, p, t, cast))\n'));
       expect(bron, contains('merk: gestapeld || t == null ? null : _luidheidMerk(context, p, t, cast),'));
       final regel = bron.indexOf("key: const ValueKey('np-kwaliteitsregel'),");
-      final balk = bron.indexOf('Text(_fmt(position), style: TextStyle(color: _muted, fontSize: 12)),');
+      // Sinds 3.9.770 een VasteTijd (vaste_tijd_test.dart): de balk verspringt niet meer met de seconden.
+      final balk = bron.indexOf('VasteTijd(_fmt(position), zoals: _fmt(duration),');
       expect(regel, greaterThan(0));
       expect(regel, lessThan(balk), reason: 'vlak boven de afspeelbalk');
       expect(bron.substring(regel, regel + 400), contains('KwaliteitsRegel('));
