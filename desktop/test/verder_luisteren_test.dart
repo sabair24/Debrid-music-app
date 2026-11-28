@@ -169,7 +169,11 @@ void main() {
       expect(v.meldNu().alleenZone, isTrue, reason: 'anders overschrijft "gepauzeerd hier" de stand van de iPad');
       expect(v.meldNu().overname, isNull);
       nu += 7000;
-      expect(v.meldNu().alleenZone, isFalse);
+      // Sinds 28-11-2026 volgt dit toestel de iPad (na_overname_volgen_test.dart): zolang het hier stil is, blijft de
+      // stand van de iPad "waar je bent"; de eerste spelende melding is een overname terug.
+      expect(v.meldNu().alleenZone, isTrue);
+      expect(v.meldNu(speelt: true), (overname: 'ipad-2', alleenZone: false));
+      expect(v.meldNu(speelt: true).alleenZone, isFalse);
       // Dezelfde melding nog eens (de volgende keer kijken): niet nog eens pauzeren.
       n.speelt = true;
       await v.opStand(_stand(van: 'ipad-2', overname: 'gsm-1', op: 1999000));

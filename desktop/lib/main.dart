@@ -2246,6 +2246,25 @@ Future<void> main() async {
     final t = verder.bron.nummer(id);
     if (t != null) player.markeerOvergenomen(t.path);
   };
+  // Na een overname volgt dit toestel het toestel dat overnam (verder_luisteren.dart; Saber, 28-11-2026: "het moet nu
+  // hernemen waar de pc het achtergelaten heeft"), ook na een herstart van de app.
+  final volgBestand = appFile('verder_volgt.txt');
+  try {
+    if (volgBestand.existsSync()) verder.volg(volgBestand.readAsStringSync().trim());
+  } catch (_) {/* dan volgt dit toestel niemand */}
+  verder.bewaarVolgen = (toestel) {
+    try {
+      if (toestel == null) {
+        if (volgBestand.existsSync()) volgBestand.deleteSync();
+      } else {
+        volgBestand.writeAsStringSync(toestel);
+      }
+    } catch (_) {/* volgende keer opnieuw */}
+  };
+  verder.zetPlek = (t, plek) {
+    if (player.current?.path == t.path) player.seek(plek);
+  };
+  verder.bijGevolgd = player.vergeetOvergenomen;
 
   // Het overzicht "Radio afsluiten" op het juiste toestel (Saber, 23-10-2026): waar je afsluit, of — vanzelf geëindigd
   // — waar je startte; nooit op de tv (dan de gsm); een ander toestel krijgt het via de brievenbus op de pc.
@@ -2481,8 +2500,9 @@ Future<void> main() async {
       // minuut eerder speelde, met een nummer van dagen geleden (17-10-2026).
       if (player.resumedPaused) return;
       // Na een overname even alleen voor de zonelijst (zie [VerderLuisteren.meldNu]); en de eerste
-      // melding na zelf overnemen zegt van welk toestel, zodat dat pauzeert.
-      final m = verder.meldNu();
+      // melding na zelf overnemen zegt van welk toestel, zodat dat pauzeert. Volgt dit toestel een ander, dan is de
+      // eerste spelende melding een overname terug.
+      final m = verder.meldNu(speelt: playing);
       sharing.reportProgress(track.path, position, playing, [for (final t in queue) t.path], index,
           shuffle: player.shuffle,
           herhaal: player.repeat.name,
@@ -2934,7 +2954,7 @@ Future<void> main() async {
         gemeldNummer = track.path;
         gemeldSpeelt = playing;
         gemeldOp = nu;
-        final m = verder.meldNu();
+        final m = verder.meldNu(speelt: playing);
         final id = library.gedeeldId(track.path);
         if (id == null) return;
         final rij = [for (final t in queue) library.gedeeldId(t.path) ?? ''];

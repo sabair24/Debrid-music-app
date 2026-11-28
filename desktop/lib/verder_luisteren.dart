@@ -224,6 +224,70 @@ class VerderLuisteren extends ChangeNotifier {
   /// het nummer dat daar verder speelde (null: wat hier klaarstaat). Gezet door main: `PlayerStore.markeerOvergenomen`.
   void Function(String? trackId)? bijOvername;
 
+  /// Het toestel dat de muziek van hier overnam, en dat dit toestel sindsdien volgt: zolang hier niets speelt, staan hier
+  /// zijn wachtrij, nummer en plek, gepauzeerd ([_volgNa]). Druk je hier op afspelen, dan neemt dit toestel terug over
+  /// en pauzeert het andere ([meldNu]). Nam een derde toestel het daar weer over, dan volgt dit toestel dat.
+  ///
+  /// **Waarom (Saber, 28-11-2026).** Hij nam op de pc de shuffle van de gsm over en speelde daar verder; daarna stond de
+  /// gsm nog op Oxley — Reason of pleasure, 0:11: *"het moet nu hernemen waar de pc het achtergelaten heeft, want
+  /// anders moet ik weer alle nummers herspelen die ik al gehoord of gezien heb"*. Hij koos "Altijd waar de pc nu is".
+  String? _volgt;
+
+  /// Wie dit toestel volgt ([_volgt]), of null.
+  String? get volgt => _volgt;
+
+  /// Welke stand van [_volgt] hier al staat (toestel, nummer, plek in de rij, lengte): dan niet opnieuw laden.
+  String _gevolgdSleutel = '';
+
+  /// De laatst gevolgde stand: bij afspelen hier naar waar het andere toestel intussen is ([spelerVeranderd]).
+  VerderAanbod? _laatsteGevolgd;
+  Duration? _gevolgdePauze;
+
+  /// Om [volgt] te bewaren over een herstart van de app (main.dart: een bestandje). Null: niet bewaren.
+  void Function(String? toestel)? bewaarVolgen;
+
+  /// Naar [positie] in [nummer], als dat hier klaarstaat (main.dart: `PlayerStore.seek`).
+  void Function(Track nummer, Duration positie)? zetPlek;
+
+  /// Hier staat nu de stand van een ander toestel: wat hier "al gespeeld" gemarkeerd stond (main.dart:
+  /// `PlayerStore.vergeetOvergenomen`), geldt niet meer — de plek komt nu van daar.
+  void Function()? bijGevolgd;
+
+  /// Volg [toestel], of niemand (null of leeg). Ook om het na een herstart terug te zetten.
+  void volg(String? toestel) {
+    final t = toestel == null || toestel.isEmpty || toestel == bron.mijnId ? null : toestel;
+    if (t == _volgt) return;
+    _volgt = t;
+    _gevolgdSleutel = '';
+    if (t == null) _gevolgdePauze = null;
+    bewaarVolgen?.call(t);
+  }
+
+  static String _sleutelVan(Map<String, dynamic> s) => '${s['deviceId']}|${s['trackId']}|${s['index']}|'
+      '${(s['queue'] as List?)?.length ?? s['queueMerk'] ?? ''}';
+
+  /// Volgt dit toestel [stand]? Dan die stand hier, gepauzeerd: bij een ander nummer de hele wachtrij opnieuw, bij een
+  /// pauze daar alleen de plek. Niet als hier iets speelt, en niet bij een radio (die zou hier gaan spelen; daarvoor
+  /// blijft de balk). True als er gevolgd is (dan geen balk voor hetzelfde).
+  Future<bool> _volgNa(Map<String, dynamic>? stand, int nu) async {
+    final x = _volgt;
+    if (x == null || stand == null || (stand['deviceId'] ?? '') != x || bron.ikSpeel) return false;
+    final a = aanbodUit(stand, mijnId: bron.mijnId, nuMs: nu, ikSpeel: false, nummer: bron.nummer);
+    if (a == null || a.radioArtiest != null) return false;
+    _laatsteGevolgd = a;
+    final sleutel = _sleutelVan(stand);
+    if (sleutel != _gevolgdSleutel) {
+      _gevolgdSleutel = sleutel;
+      await bron.speel(a.rij, a.index, startPositie(a, nu), spelen: false, shuffle: a.shuffle, herhaal: a.herhaal);
+      bijGevolgd?.call();
+    } else if (!a.speelde && _gevolgdePauze != a.positie) {
+      zetPlek?.call(a.nummer, a.positie);
+      bijGevolgd?.call();
+    }
+    _gevolgdePauze = a.speelde ? null : a.positie;
+    return true;
+  }
+
   /// Het toestel waarvan zojuist overgenomen werd: gaat één keer mee in de volgende melding.
   String? _overnameVan;
 
@@ -302,6 +366,12 @@ class VerderLuisteren extends ChangeNotifier {
     if (overgenomenVanMij(stand, mijnId: bron.mijnId, alGedaanOp: _overnameGezienOp)) {
       _overnameGezienOp = (stand!['updatedAt'] as num?)?.toInt() ?? nu;
       bijOvername?.call('${stand['trackId'] ?? ''}');
+      volg('${stand['deviceId'] ?? ''}');
+      _gevolgdSleutel = _sleutelVan(stand);
+    } else if (_volgt != null && stand != null && (stand['overname'] ?? '') == _volgt &&
+        (stand['deviceId'] ?? '') != bron.mijnId) {
+      // Een derde toestel nam het over van wie hier gevolgd werd: nu dat toestel volgen.
+      volg('${stand['deviceId']}');
     }
     if (verzoekVoorMij(verzoek, mijnId: bron.mijnId, nuMs: nu, alGedaanOp: _verzoekOp)) {
       _verzoekOp = (verzoek!['at'] as num?)?.toInt() ?? nu;
@@ -311,6 +381,13 @@ class VerderLuisteren extends ChangeNotifier {
         await neemOver(a);
         return;
       }
+    }
+    if (await _volgNa(stand, nu)) {
+      if (_aanbod != null) {
+        _aanbod = null;
+        notifyListeners();
+      }
+      return;
     }
     final nieuw = aanbodUit(stand,
         mijnId: bron.mijnId, nuMs: nu, ikSpeel: bron.ikSpeel, nummer: bron.nummer, afgewezen: _afgewezen);
@@ -347,8 +424,19 @@ class VerderLuisteren extends ChangeNotifier {
   /// bent" worden? Binnen het stilvenster na een overname ([_stilTot]) alleen voor de eigen zone ([alleenZone]): de
   /// pauze hoort in de zonelijst, maar mag de stand van wie overnam niet overschrijven. Tot 23-10-2026 werd die melding
   /// helemaal ingeslikt, en dan stond dit toestel in de lijst nog als spelend, met een klok die doorliep.
-  ({String? overname, bool alleenZone}) meldNu() {
+  ///
+  /// Volgt dit toestel een ander ([volgt]), dan blijft een stille melding van hier alleen voor de zonelijst (de stand van
+  /// wie gevolgd wordt, blijft "waar je bent"), en is de eerste spelende melding een overname: het andere toestel
+  /// pauzeert, en het volgen is voorbij.
+  ({String? overname, bool alleenZone}) meldNu({bool speelt = false}) {
     if (_nu < _stilTot) return (overname: null, alleenZone: true);
+    final x = _volgt;
+    if (x != null) {
+      if (!speelt) return (overname: null, alleenZone: true);
+      volg(null);
+      _overnameVan = null;
+      return (overname: x, alleenZone: false);
+    }
     final van = _overnameVan;
     _overnameVan = null;
     return (overname: van, alleenZone: false);
@@ -368,6 +456,12 @@ class VerderLuisteren extends ChangeNotifier {
     if (_aanbod != null && bron.ikSpeel) {
       _aanbod = null;
       notifyListeners();
+    }
+    // Hier op afspelen gedrukt na volgen: speelde het andere toestel door, dan naar waar het nu is (één keer).
+    final a = _laatsteGevolgd;
+    if (a != null && bron.ikSpeel) {
+      _laatsteGevolgd = null;
+      if (a.speelde) zetPlek?.call(a.nummer, startPositie(a, _nu));
     }
   }
 

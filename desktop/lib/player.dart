@@ -1399,6 +1399,14 @@ class PlayerStore extends ChangeNotifier
     unawaited(_saveProgress(force: true));
   }
 
+  /// Hier staat nu de stand van het toestel dat overnam (verder_luisteren.dart, volgen): de markering van
+  /// [markeerOvergenomen] geldt niet meer — afspelen gaat verder waar dat toestel was, niet een nummer verder.
+  void vergeetOvergenomen() {
+    if (_overgenomenPad == null) return;
+    _overgenomenPad = null;
+    unawaited(_saveProgress(force: true));
+  }
+
   bool _overgenomenWeg() {
     final t = current;
     if (t == null || t.path != _overgenomenPad || !shuffle || radioMode) return false;
