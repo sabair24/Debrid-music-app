@@ -214,6 +214,51 @@ String twijfelNummer(String artiest, String titel) {
   return '${k(artiest)}|${k(titel)}';
 }
 
+String _genoegDeel(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9À-ɏ]'), '');
+
+/// De sleutel van een artiest voor "Genoeg" ([GenoegStand]).
+String genoegArtiest(String artiest) => _genoegDeel(artiest);
+
+/// De sleutel van een plaat voor "Genoeg": wiens plaat het is (de albumartiest) en de titel.
+String genoegPlaat(String artiest, String album) => '${_genoegDeel(artiest)}|${_genoegDeel(album)}';
+
+/// Voor welke platen en artiesten Kiezen niets meer vraagt (Saber, 28-11-2026: "het moet eens stoppen" — met een knop
+/// "Genoeg" op de albumpagina en de artiestpagina). De jacht zoekt daar wel door, maar neemt alleen nog stil een bewezen
+/// betere kopie van dezelfde opname; een twijfelkopie wordt niet meer voorgelegd.
+class GenoegStand {
+  const GenoegStand({this.platen = const {}, this.artiesten = const {}});
+  final Set<String> platen;
+  final Set<String> artiesten;
+
+  bool artiest(String naam) => naam.isNotEmpty && artiesten.contains(genoegArtiest(naam));
+  bool plaat(String artiest, String album) => album.isNotEmpty && platen.contains(genoegPlaat(artiest, album));
+
+  /// Geldt "Genoeg" voor een nummer van [artiest] op [album] (van [albumArtiest])?
+  bool voorNummer({required String artiest, String? albumArtiest, required String album}) =>
+      this.artiest(artiest) ||
+      (albumArtiest != null && this.artiest(albumArtiest)) ||
+      plaat(albumArtiest ?? artiest, album) ||
+      plaat(artiest, album);
+
+  Map<String, dynamic> toJson() => {'platen': platen.toList(), 'artiesten': artiesten.toList()};
+  static GenoegStand fromJson(Object? j) {
+    if (j is! Map) return const GenoegStand();
+    Set<String> lijst(Object? x) => {for (final s in (x is List ? x : const [])) if (s is String && s.isNotEmpty) s};
+    return GenoegStand(platen: lijst(j['platen']), artiesten: lijst(j['artiesten']));
+  }
+}
+
+/// Wat de pc over "Genoeg" zegt, op elk toestel (op de pc gevuld door [Twijfellijst], op een toestel door
+/// `/api/genoeg`).
+final ValueNotifier<GenoegStand> genoegVanPc = ValueNotifier<GenoegStand>(const GenoegStand());
+
+/// Mag een twijfelkopie van soort [kandidaat] nog voorgelegd worden? Alleen als het een soort is die je voor dat nummer
+/// nog niet hebt: niet die van het nummer zelf ([anker]) en niet die van een van zijn versies (Saber, 28-11-2026:
+/// "Alleen een soort die ik mis" — heb je al cd, studio en vinyl, dan nooit). Een kopie zonder soort (niet verliesvrij)
+/// nooit.
+bool soortOntbreekt(Kopiesoort? kandidaat, Kopiesoort? anker, Iterable<Kopiesoort?> versies) =>
+    kandidaat != null && kandidaat != anker && !versies.contains(kandidaat);
+
 // ── Wat de albumpagina leest ────────────────────────────────────────────────────────────────────
 // Op de pc gevuld door [Twijfellijst], op een toestel door de catalogus ([zetTwijfelVanPc]) — zoals `gemeten()`.
 
@@ -259,6 +304,52 @@ class Twijfellijst {
 
   /// Per nummer de groottes van kandidaten die je weggooide: die komen niet terug.
   final Map<String, Set<int>> _nee = {};
+
+  /// De nummers ([twijfelNummer]) waarvoor je in Kiezen al koos (Bewaren of Vervangen): die vraagt de app nooit meer
+  /// iets (Saber, 28-11-2026, na Thriller: "gaat de hunt nu stoppen ?").
+  final Set<String> _gekozen = {};
+  bool _gekozenGelezen = false;
+
+  /// Stond er nog geen lijst van keuzes in het bestand (de eerste keer met deze versie)? Dan neemt main.dart de keuzes
+  /// uit downloads.log over ([neemKeuzesUitLog]).
+  bool get keuzesNogNooitBewaard => !_gekozenGelezen;
+
+  bool gekozen(String artiest, String titel) => _gekozen.contains(twijfelNummer(artiest, titel));
+
+  void onthoudGekozen(String artiest, String titel) {
+    if (artiest.isEmpty || titel.isEmpty) return;
+    _gekozen.add(twijfelNummer(artiest, titel));
+    _gekozenGelezen = true;
+  }
+
+  /// De keuzes uit `downloads.log` ("\"Artiest — Titel\": twijfelkopie bewaard als versie" of "… twijfelkopie gekozen"):
+  /// zo telt wat je vóór deze versie koos (Thriller, 28-11-2026 om 08:25) ook. Hoeveel er nieuw bij kwamen.
+  int neemKeuzesUitLog(String tekst) {
+    var n = 0;
+    for (final m in RegExp(r'"([^"\n]+?) — ([^"\n]+?)": (?:twijfelkopie|studio-kopie|cd-kopie|vinyl-kopie) (?:bewaard als versie|gekozen)')
+        .allMatches(tekst)) {
+      if (_gekozen.add(twijfelNummer(m[1]!, m[2]!))) n++;
+    }
+    _gekozenGelezen = true;
+    return n;
+  }
+
+  Set<String> _genoegPlaten = {};
+  Set<String> _genoegArtiesten = {};
+
+  GenoegStand get genoeg => GenoegStand(platen: {..._genoegPlaten}, artiesten: {..._genoegArtiesten});
+
+  /// "Genoeg" voor [artiest] (met [album]: alleen die plaat) aan of uit.
+  void zetGenoeg({required String artiest, String? album, required bool aan}) {
+    final doel = album == null ? _genoegArtiesten : _genoegPlaten;
+    final k = album == null ? genoegArtiest(artiest) : genoegPlaat(artiest, album);
+    if (aan) {
+      doel.add(k);
+    } else {
+      doel.remove(k);
+    }
+    genoegVanPc.value = genoeg;
+  }
 
   Iterable<Twijfelgeval> get alle => _perPad.values;
 
@@ -323,6 +414,15 @@ class Twijfellijst {
           _nee['${e.key}'] = {for (final x in (e.value is List ? e.value as List : const [])) if (x is num) x.toInt()};
         }
       }
+      final gekozen = j['gekozen'];
+      if (gekozen is List) {
+        _gekozen.addAll([for (final x in gekozen) if (x is String) x]);
+        _gekozenGelezen = true;
+      }
+      final g = GenoegStand.fromJson(j['genoeg']);
+      _genoegPlaten = {...g.platen};
+      _genoegArtiesten = {...g.artiesten};
+      genoegVanPc.value = genoeg;
       final geluid = j['neeGeluid'];
       if (geluid is Map) {
         for (final e in geluid.entries) {
@@ -341,6 +441,8 @@ class Twijfellijst {
         'gevallen': [for (final g in _perPad.values) g.toJson()],
         'nee': {for (final e in _nee.entries) e.key: e.value.toList()},
         'neeGeluid': {for (final e in _neeGeluid.entries) e.key: e.value.toList()},
+        if (_gekozenGelezen) 'gekozen': _gekozen.toList(),
+        'genoeg': genoeg.toJson(),
       }));
       await tmp.rename(_bestand);
     } catch (_) {/* volgende keer opnieuw */}

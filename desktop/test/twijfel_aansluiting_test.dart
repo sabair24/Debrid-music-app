@@ -22,7 +22,7 @@ void main() {
     expect(online, contains('                opname == Opnameoordeel.twijfel &&\n'
         '                (firstIsBetter(staged, File(bestaand)) || (plan?.isVersie ?? false)) &&\n'
         "                await bewaarAlsTwijfel(staged, bestaand, score!, 'Soulseek \${f.username}', job.authority,\n"
-        '                    bronpad: f.filename)) {'));
+        '                    bronpad: f.filename, nietGevraagd: () => bijUitslag?.call(f, Kopieuitslag.anders))) {'));
     // Een gewone vervanging maakt een twijfelkopie achterhaald.
     expect(online, contains('      if (bestaand != null) await _vergeetTwijfel(bestaand);'));
     expect(online, contains('            if (how == Placement.moved && bestaand != null) await _vergeetTwijfel(bestaand);'));
@@ -118,10 +118,15 @@ void main() {
 
     test('bewaren: de kopie gaat naar de twijfelmap, één per nummer, en een weggegooide komt niet terug', () async {
       final eigen = File('${map.path}/Albums/Daft Punk/Discovery/06 - Nightvision.flac')..createSync(recursive: true);
-      File binnen(String naam, int grootte) =>
-          File('${map.path}/_keuring/$naam/06 Nightvision.flac')
-            ..createSync(recursive: true)
-            ..writeAsBytesSync(List.filled(grootte, 2));
+      // Een echte (kleine) FLAC-kop van 24 bit: een studiokopie, de soort die het nummer nog niet heeft — sinds
+      // 28-11-2026 wordt alleen die voorgelegd ("Alleen een soort die ik mis").
+      File binnen(String naam, int grootte) {
+        final kop = <int>[...'fLaC'.codeUnits, 0x80, 0, 0, 34, 0x10, 0, 0x10, 0, 0, 0, 0, 0, 0, 0, 0x0a, 0xc4, 0x42, 0xf0,
+          0, 0x06, 0xba, 0xa8, ...List.filled(16, 2)];
+        return File('${map.path}/_keuring/$naam/06 Nightvision.flac')
+          ..createSync(recursive: true)
+          ..writeAsBytesSync([...kop, ...List.filled(grootte, 2)]);
+      }
       final eerste = binnen('a', 300);
       expect(await d.bewaarAlsTwijfel(eerste, eigen.path, 0.858, 'torrent "Discovery 24/96"', null), isTrue);
       expect(eerste.existsSync(), isFalse, reason: 'weg uit de keuringsmap');

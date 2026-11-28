@@ -70,6 +70,7 @@ import '../dataverbruik.dart' show Verkeerssoort, soortVanPad;
 import '../discogs.dart' show DiscogsArtwork, DiscogsService, ReleaseArt, kKleinScan, kunstNaarJson, persingUitHerkomst;
 import '../aanbevolen.dart';
 import '../ontdek.dart' show OntdekLijst, OntdekVoorJou;
+import '../twijfel.dart' show GenoegStand;
 import '../vertaler.dart';
 
 /// The port the other devices look for. Fixed on purpose — an ephemeral port would mean every
@@ -131,6 +132,8 @@ String? weigerVanBuiten(String pad, String methode) {
     // "Aanbevolen voor jou" (aanbevolen.dart): de lijst, zoals Ontdek. Stond er niet, en onderweg bleef de gsm daardoor
     // op de 14 nummers van vóór 21-11 staan (Saber, 26-11-2026: "Aanbevolen nog niet goed ?? Op gsm?").
     '/api/aanbevolen',
+    // "Genoeg" voor een plaat of artiest (twijfel.dart; Saber, 28-11-2026), ook onderweg.
+    '/api/genoeg',
   };
   // TIDAL ook (Saber, 23-10-2026: "ik moet ook buitenshuis kunnen zoeken en downloaden"); ophalen telt mee in het
   // quotum voor downloads, zoals Soulseek.
@@ -1474,6 +1477,8 @@ class LanServer {
         return _soulseekDownloadAlbum(req);
       case '/api/soulseek/zoek-beter':
         return _soulseekZoekBeter(req);
+      case '/api/genoeg':
+        return _genoeg(req);
       case '/api/twijfel':
         return _twijfel(req);
       case '/api/soulseek/berichten':
@@ -2564,6 +2569,21 @@ class LanServer {
     };
     if (zin == null) return _json(req.response, {'error': 'Onbekende keuze.'}, status: HttpStatus.badRequest);
     return _json(req.response, {'zin': zin});
+  }
+
+  /// "Genoeg" (twijfel.dart; Saber, 28-11-2026): GET geeft voor welke platen en artiesten Kiezen niets meer vraagt;
+  /// POST {artiest, album?, aan} zet het aan of uit. Antwoord: {genoeg, weg} (weg: hoeveel twijfelgevallen weggingen).
+  Future<void> _genoeg(HttpRequest req) async {
+    final manager = downloads;
+    if (manager == null) return _unavailable(req, 'Deze pc kan niet downloaden.');
+    if (req.method == 'GET') return _json(req.response, (manager.twijfel?.genoeg ?? const GenoegStand()).toJson());
+    final body = await _jsonBody(req);
+    if (body == null) return;
+    final artiest = '${body['artiest'] ?? ''}'.trim();
+    if (artiest.isEmpty) return _json(req.response, {'error': 'Geen artiest.'}, status: HttpStatus.badRequest);
+    final album = '${body['album'] ?? ''}'.trim();
+    final uit = await manager.zetGenoeg(artiest: artiest, album: album.isEmpty ? null : album, aan: body['aan'] == true);
+    return _json(req.response, {'genoeg': uit.stand.toJson(), 'weg': uit.weg});
   }
 
   /// "Download in studio-kwaliteit / cd-kwaliteit / vinyl" vanaf een toestel: {trackIds, soort, album?}. De pc zoekt
