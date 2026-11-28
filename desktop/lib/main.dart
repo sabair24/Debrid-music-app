@@ -2411,6 +2411,9 @@ Future<void> main() async {
     },
   );
 
+  // Bij een gewone wissel in een groep wacht het volgende nummer op de leider (samen.dart, wisselWacht).
+  player.wisselWacht = samenVolger.wisselWacht;
+
   // Wat dit toestel doet met een opdracht van een ander toestel dat het als zone bedient.
   final zoneUitvoerder = ZoneUitvoerder(
     speler: player,
