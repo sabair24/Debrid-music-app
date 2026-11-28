@@ -30,11 +30,37 @@ import 'organize.dart' show artistKey, isAansprekingVan, kAansprekingWint;
 /// omdat het een andere mix is. De strengere weg bestaat ook — `LibraryStore.ownedTrack` houdt de
 /// markeringen juist vast — maar die beantwoordt een andere vraag: "heb ik precies dít bestand?".
 String recNorm(String s) {
-  var x = s.toLowerCase();
+  var x = ontsensureer(s.toLowerCase());
   x = x.replaceAll(RegExp(r'[\(\[].*?[\)\]]'), ' ');
   final f = x.indexOf(' feat');
   if (f > 0) x = x.substring(0, f);
   return x.replaceAll(RegExp(r'[^a-z0-9]'), '');
+}
+
+/// Woorden die vaak met sterretjes geschreven worden, zonder sterretjes ([ontsensureer]).
+const kVloekwoorden = [
+  'motherfucker', 'motherfuckers', 'fucking', 'fucked', 'fucker', 'fuck', 'shit', 'bitches', 'bitch', 'asshole',
+  'ass', 'damn', 'dick', 'pussy', 'niggas', 'nigga', 'cunt', 'bastard', 'whore', 'hoes', 'hoe', 'cock', 'hell',
+];
+
+/// Een gecensureerd woord ("b**ch", "f*ck", "sh*t", "n***as") als het woord dat er staat: elk sterretje is één letter,
+/// en het moet een woord uit [kVloekwoorden] zijn. Wat daar niet op past, blijft staan (en [recNorm] laat de
+/// sterretjes dan weg, zoals vroeger).
+///
+/// **Waarom (Saber, 28-11-2026).** Ontdek gaf "Britney Spears — Work Bitch", terwijl hij "Work B**ch" al had:
+/// [recNorm] maakte er "workbch" en "workbitch" van, en die verschillen.
+String ontsensureer(String s) {
+  if (!s.contains('*')) return s;
+  return s.replaceAllMapped(RegExp(r'[a-z]*\*+[a-z*]*', caseSensitive: false), (m) {
+    final w = m[0]!.toLowerCase();
+    // Minstens één echte letter: "***" alleen zegt niet welk woord het is.
+    if (!w.contains(RegExp('[a-z]'))) return m[0]!;
+    final patroon = RegExp('^${w.replaceAll('*', '[a-z]')}\$');
+    for (final v in kVloekwoorden) {
+      if (patroon.hasMatch(v)) return v;
+    }
+    return m[0]!;
+  });
 }
 
 /// De sleutels van alles wat er al staat, om aanbevelingen tegen te houden.

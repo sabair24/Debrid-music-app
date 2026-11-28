@@ -717,7 +717,12 @@ class OntdekVoorJou {
     final weg = _weg.nummers, artiesten = _weg.artiesten(nuMs: klok().millisecondsSinceEpoch);
     return [
       for (final n in l.nummers)
-        if (!weg.contains(n.sleutel) && !artiesten.contains(ontdekArtiest(n.nummer.artist))) n,
+        if (!weg.contains(n.sleutel) &&
+            !artiesten.contains(ontdekArtiest(n.nummer.artist)) &&
+            // Wat je intussen hebt (gedownload, of nu pas herkend: "Work B**ch" is "Work Bitch"), meteen weg —
+            // niet pas bij de volgende trekking (28-11-2026).
+            !heb(n.nummer.artist, n.nummer.title))
+          n,
     ];
   }
 
