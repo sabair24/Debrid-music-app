@@ -23,6 +23,7 @@ import 'package:http/http.dart' as http;
 
 import '../album_facts.dart';
 import '../dataverbruik.dart' show TellendeClient;
+import '../twijfel.dart' show GenoegStand;
 import 'dtos.dart';
 import 'state_store.dart' show rijMerk;
 import 'pin_client.dart';
@@ -817,6 +818,17 @@ class RemoteClient {
   }
 
   /// "Aanbevolen voor jou" van de pc. [onbekend] = de pc kent `/api/aanbevolen` nog niet (oude versie).
+  /// "Genoeg" (twijfel.dart): voor welke platen en artiesten Kiezen niets meer vraagt. Null: een oudere pc, of geen
+  /// antwoord.
+  Future<GenoegStand?> genoeg() async {
+    try {
+      final res = await _get('/api/genoeg');
+      return GenoegStand.fromJson(jsonDecode(utf8.decode(res.bodyBytes)));
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<({Map<String, dynamic>? lijst, bool onbekend})> aanbevolen({bool ververs = false}) async {
     try {
       final res = await _get('/api/aanbevolen', query: ververs ? const {'ververs': '1'} : null);

@@ -303,7 +303,8 @@ void main() {
   test('aangesloten: elke weg die keurt, meet eerst; de pc meet en onthoudt', () {
     String bron(String p) => File(p).readAsStringSync().replaceAll('\r\n', '\n');
     final online = bron('lib/online.dart');
-    expect(RegExp(r'await bereidNultoets\(').allMatches(online), hasLength(4));
+    // Vijf: sinds 28-11-2026 ook vóór een twijfelkopie aangeboden wordt (bewaarAlsTwijfel: alleen een soort die mist).
+    expect(RegExp(r'await bereidNultoets\(').allMatches(online), hasLength(5));
     expect(online, contains('    await bereidNultoets(nieuw.path, bestaand, log: (z) => _log.line(\'   \$z\'));\n'
         '    return bestaand;'));
     expect(online, contains('      await nultoetsTussen(f.path, c, log: (z) => _log.line(\'   \$z\'));\n'

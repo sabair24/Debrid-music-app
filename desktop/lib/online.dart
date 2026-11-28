@@ -2283,7 +2283,7 @@ class DownloadManager extends ChangeNotifier {
   /// [bronpad]: waar hij vandaan kwam als pad (bij de uploader, in de torrent) — wat hem tot vinyl maakt, als je hem straks
   /// als versie bewaart (versies.dart).
   Future<bool> bewaarAlsTwijfel(File staged, String bestaand, double score, String bron, TrackTags? gezag,
-      {String? bronpad}) async {
+      {String? bronpad, void Function()? nietGevraagd}) async {
     final lijst = twijfel;
     if (lijst == null) return false;
     final naam = gezag == null ? baseName(bestaand) : '${gezag.artist} — ${gezag.title}';
@@ -2296,6 +2296,22 @@ class DownloadManager extends ChangeNotifier {
       _log.line('   $bron: twijfel ($s) voor "$naam", maar er wacht al een twijfelgeval of je gooide deze weg — weggegooid');
       await _discardStaged(staged.path);
       return true;
+    }
+    // Je koos al voor dit nummer (Bewaren of Vervangen), of zei "Genoeg" voor zijn plaat of artiest: niet meer vragen
+    // (Saber, 28-11-2026: "ik blijf maar nummers krijgen bij kiezen, vooral adele, het moet eens stoppen"). De jacht
+    // onthoudt de kopie als niet nodig ([nietGevraagd]), zodat hij hem morgen niet opnieuw binnenhaalt.
+    if (gezag != null) {
+      final waarom = lijst.gekozen(gezag.artist, gezag.title)
+          ? 'je koos al voor dit nummer'
+          : lijst.genoeg.voorNummer(artiest: gezag.artist, albumArtiest: gezag.albumArtist, album: gezag.album)
+              ? 'je zei genoeg voor deze plaat of artiest'
+              : null;
+      if (waarom != null) {
+        _log.line('   $bron: twijfel ($s) voor "$naam", maar $waarom — niet gevraagd, weggegooid');
+        nietGevraagd?.call();
+        await _discardStaged(staged.path);
+        return true;
+      }
     }
     // Wat je al hebt, sample voor sample (je nummer of een van je versies), vraag je niet nog eens (Saber, 05-11-2026:
     // "bij klaar om te kiezen komen vaak dezelfde liedjes steeds terug"). Gala en Kings Of Leon kwamen van dezelfde
@@ -2313,6 +2329,19 @@ class DownloadManager extends ChangeNotifier {
         lijst.onthoudNeeGeluid(gezag.artist, gezag.title, md5);
         await lijst.bewaar();
       }
+      await _discardStaged(staged.path);
+      return true;
+    }
+    // Alleen een soort die je voor dit nummer nog niet hebt (Saber, 28-11-2026: "Alleen een soort die ik mis"): heb je
+    // al een studio, dan geen tweede twijfelende studio. Eerst de nultoets en het vinylspoor, zoals bij het bewaren
+    // ([_bewaarTwijfelAlsVersie]): een "studio" die een vinylrip blijkt, is vinyl.
+    await bereidNultoets(staged.path, bestaand, log: (z) => _log.line('   $z'));
+    await merkVinylspoor(staged.path, bestaand, bronpad ?? bron, log: _log.line);
+    final plan = versieplanVoor(staged, bestaand, bronpad ?? bron);
+    if (!soortOntbreekt(plan.soort, plan.ankerSoort, [for (final v in versies.versiesVan(bestaand)) v.soort])) {
+      final welke = plan.soort == null ? 'geen verliesvrije kopie' : 'je hebt al een ${plan.soort!.naam}';
+      _log.line('   $bron: twijfel ($s) voor "$naam", maar $welke — niet gevraagd, weggegooid');
+      nietGevraagd?.call();
       await _discardStaged(staged.path);
       return true;
     }
@@ -2356,6 +2385,33 @@ class DownloadManager extends ChangeNotifier {
     return true;
   }
 
+  /// "Genoeg" voor [artiest] (met [album]: alleen die plaat) aan of uit (Saber, 28-11-2026). Aan: de twijfelgevallen
+  /// van de app die daar nog wachten, gaan weg (wat je zelf vroeg — een studio-, cd- of vinylkopie — blijft staan).
+  /// Geeft de nieuwe stand terug, en hoeveel gevallen er weggingen.
+  Future<({GenoegStand stand, int weg})> zetGenoeg({required String artiest, String? album, required bool aan}) async {
+    final lijst = twijfel;
+    if (lijst == null) return (stand: const GenoegStand(), weg: 0);
+    lijst.zetGenoeg(artiest: artiest, album: album, aan: aan);
+    var weg = 0;
+    if (aan) {
+      final stand = lijst.genoeg;
+      for (final g in [...lijst.alle]) {
+        if (g.soort != null) continue;
+        final t = g.gezag == null ? readTags(File(g.pad)) : TrackTags.fromJson(g.gezag!);
+        if (t == null || !stand.voorNummer(artiest: t.artist, albumArtiest: t.albumArtist, album: t.album)) continue;
+        lijst.verwijder(g.pad);
+        weg++;
+        try {
+          await File(g.kandidaat).delete();
+        } catch (_) {/* de opruimronde van de twijfelmap neemt hem mee */}
+      }
+    }
+    await lijst.bewaar();
+    _log.line('genoeg ${aan ? 'aan' : 'uit'}: ${album == null ? artiest : '$artiest — $album'}'
+        '${weg > 0 ? ' ($weg twijfelgevallen weg)' : ''}');
+    return (stand: lijst.genoeg, weg: weg);
+  }
+
   /// "Vervangen" uit het twijfelmenu: de twijfelkopie in de plaats van [pad], zoals een opwaardering — wat er lag gaat
   /// naar `_dubbel`. Geeft de zin voor op het scherm terug.
   ///
@@ -2375,6 +2431,13 @@ class DownloadManager extends ChangeNotifier {
       lijst.verwijder(pad);
       await lijst.bewaar();
       return 'De twijfelkopie staat er niet meer';
+    }
+    // Je kiest (Bewaren of Vervangen): daarna vraagt Kiezen voor dit nummer niets meer, wat er ook uitkomt (Saber,
+    // 28-11-2026: "Nooit meer vragen"). Weg telt niet: dan zoekt de app juist verder.
+    final gekozenTags = g.gezag == null ? readTags(File(pad)) : TrackTags.fromJson(g.gezag!);
+    if (gekozenTags != null) {
+      lijst.onthoudGekozen(gekozenTags.artist, gekozenTags.title);
+      await lijst.bewaar();
     }
     if (alsVersie) {
       return _bewaarTwijfelAlsVersie(pad, g, lijst,
@@ -7589,7 +7652,7 @@ class DownloadManager extends ChangeNotifier {
                 opname == Opnameoordeel.twijfel &&
                 (firstIsBetter(staged, File(bestaand)) || (plan?.isVersie ?? false)) &&
                 await bewaarAlsTwijfel(staged, bestaand, score!, 'Soulseek ${f.username}', job.authority,
-                    bronpad: f.filename)) {
+                    bronpad: f.filename, nietGevraagd: () => bijUitslag?.call(f, Kopieuitslag.anders))) {
               continue;
             }
             if (bestaand != null && (opname == Opnameoordeel.andere || opname == Opnameoordeel.twijfel)) {

@@ -24,8 +24,10 @@ import 'package:debridmusic/versies.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Een FLAC met alleen een kop (STREAMINFO): genoeg voor "dezelfde samples?" ([zelfdeSamples] kijkt naar de kop).
-File _flac(String pad, {required int som, int extra = 0, int totaal = 441000}) {
-  const sr = 44100, ch = 2, bps = 16;
+/// [bps] 24: een studiokopie (24 bit digitaal). Sinds 28-11-2026 wordt een twijfelkopie alleen voorgelegd als het een
+/// soort is die het nummer nog niet heeft (Saber: "Alleen een soort die ik mis"); het nummer zelf is hier een cd.
+File _flac(String pad, {required int som, int extra = 0, int totaal = 441000, int bps = 16}) {
+  const sr = 44100, ch = 2;
   final s = Uint8List(34);
   s[0] = 0x10;
   s[2] = 0x10;
@@ -128,7 +130,7 @@ void main() {
       expect(d.twijfel!.van(eigen.path), isNull, reason: 'niet gevraagd: je hebt hem al');
       expect(binnen.existsSync(), isFalse, reason: 'weg uit de keuringsmap');
 
-      final ander = _flac('${map.path}/_keuring/b/Freed From Desire.flac', som: 3);
+      final ander = _flac('${map.path}/_keuring/b/Freed From Desire.flac', som: 3, bps: 24);
       expect(await d.bewaarAlsTwijfel(ander, eigen.path, .84, 'Soulseek x', null), isTrue);
       expect(d.twijfel!.van(eigen.path), isNotNull, reason: 'een andere opname wel');
       expect(d.twijfel!.van(eigen.path)!.md5, '03' * 16);
@@ -161,11 +163,11 @@ void main() {
     test('wat je weggooide, komt niet terug als dezelfde opname bij een andere uploader', () async {
       final eigen = _flac('${map.path}/Albums/Adele/30/11 - To Be Loved.flac', som: 1);
       const gezag = TrackTags(title: 'To Be Loved', artist: 'Adele', album: '30', albumArtist: 'Adele', trackNo: 11);
-      final eerste = _flac('${map.path}/_keuring/a/To Be Loved.flac', som: 9);
+      final eerste = _flac('${map.path}/_keuring/a/To Be Loved.flac', som: 9, bps: 24);
       await d.bewaarAlsTwijfel(eerste, eigen.path, .89, 'Soulseek Ichraew', gezag);
       expect(d.twijfel!.van(eigen.path), isNotNull);
       await d.gooiTwijfelWeg(eigen.path);
-      final weer = _flac('${map.path}/_keuring/b/To Be Loved.flac', som: 9, extra: 1234);
+      final weer = _flac('${map.path}/_keuring/b/To Be Loved.flac', som: 9, extra: 1234, bps: 24);
       expect(await d.bewaarAlsTwijfel(weer, eigen.path, .89, 'Soulseek yukioh', gezag), isTrue);
       expect(d.twijfel!.van(eigen.path), isNull, reason: 'zelfde samples, andere grootte: toch weg');
     });
@@ -194,8 +196,12 @@ void main() {
       expect(await d.bewaarAlsTwijfel(weer, eigen.path, .88, 'Soulseek willhub', gezag), isTrue);
       expect(d.twijfel!.van(eigen.path), isNull);
 
-      final ander = _flac('${map.path}/_keuring/c/06 - Shiny Happy People.flac', som: 5);
-      expect(await d.bewaarAlsTwijfel(ander, eigen.path, .88, 'Soulseek x', gezag), isTrue);
+      // Een vinylrip (de soort die R.E.M. hier nog mist), niet tot op het sample even lang als het nummer: anders is hij
+      // een tweeling van de cd ([isTweeling]).
+      final ander = _flac('${map.path}/_keuring/c/06 - Shiny Happy People.flac', som: 5, totaal: 452333);
+      expect(await d.bewaarAlsTwijfel(ander, eigen.path, .88, 'Soulseek x', gezag,
+              bronpad: r'music\R.E.M\Out Of Time (Vinyl LP 1991)\06 - Shiny Happy People.flac'),
+          isTrue);
       expect(d.twijfel!.van(eigen.path), isNotNull, reason: 'een andere opname mag je wel kiezen');
     });
 

@@ -3369,6 +3369,16 @@ Future<void> main() async {
     if (mode.owner) {
       final twijfels = Twijfellijst('$appDir${Platform.pathSeparator}twijfel.json');
       await twijfels.laad();
+      // De eerste keer met 3.9.766: wat je al koos in Kiezen, uit downloads.log (Saber, 28-11-2026: Thriller om 08:25).
+      // Daarna vraagt de app voor die nummers niets meer.
+      if (twijfels.keuzesNogNooitBewaard) {
+        try {
+          final logboek = File('$logDir${Platform.pathSeparator}downloads.log');
+          final n = await logboek.exists() ? twijfels.neemKeuzesUitLog(await logboek.readAsString()) : 0;
+          await twijfels.bewaar();
+          startLog.line('kiezen: $n eerdere keuzes uit downloads.log overgenomen');
+        } catch (_) {/* dan begint de lijst van keuzes leeg */}
+      }
       downloads.twijfel = twijfels;
       // Wat er wacht en je al hebt (je eigen versie, sample voor sample), hoef je niet te kiezen (05-11-2026).
       unawaited(downloads.ruimBekendeTwijfelsOp());
@@ -8895,6 +8905,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
           if (!album.isSingle && lokaal && lib.undoableTagWrites(album) > 0)
             MenuRegel(Icons.undo_rounded, 'Tags terugzetten', _undoTagWrites),
         ],
+        // Genoeg voor deze plaat: Kiezen vraagt er niets meer (Saber, 28-11-2026).
+        [genoegRegel(context, artiest: album.artist, album: album.title)],
         [
           if (!album.isSingle)
             MenuRegel(Icons.merge_rounded, 'Ander album hierin samenvoegen…', () async {
@@ -9043,7 +9055,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> with WasHouder<AlbumD
     super.initState();
     // After the first frame: this reads providers, and initState runs before the element is
     // fully mounted in the tree.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadOfficial());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadOfficial();
+      // Op een toestel: "Genoeg" vers van de pc, voor het menu.
+      if (mounted) unawaited(genoegVerversen(context.read<LibraryStore>()));
+    });
   }
 
   @override
@@ -17537,6 +17553,8 @@ ItemMenu _albumMenu(BuildContext context, Album a) {
         ..._soortRegels(context, nummers, album: a.title),
         if (_klaargezet(nummers) case final k when k.isNotEmpty)
           MenuRegel(Icons.done_all_rounded, 'Alle klaargezette houden (${k.length})', () => _houdAlleKlaargezette(context, k)),
+        // Genoeg voor deze plaat: Kiezen vraagt er niets meer (Saber, 28-11-2026).
+        genoegRegel(context, artiest: a.artist, album: a.title),
       ],
       [
         // De map van de plaat, via het eerste nummer erin. Zelfde voorwaarde als bij een nummer: dit
@@ -21627,6 +21645,50 @@ Future<void> _zoekHires(BuildContext context, Album album) async {
               'bewezen beter is');
 }
 
+/// "Genoeg" voor een plaat ([album]) of een hele artiest aan of uit (Saber, 28-11-2026: "ik blijf maar nummers krijgen bij
+/// kiezen, vooral adele, het moet eens stoppen"). Op de pc meteen, op een toestel via de pc (`/api/genoeg`). Daarna
+/// vraagt Kiezen daar niets meer; de jacht neemt alleen nog stil een bewezen betere kopie.
+Future<void> zetGenoegOveral(BuildContext context, {required String artiest, String? album, required bool aan}) async {
+  final lib = context.read<LibraryStore>();
+  final dm = lib.isRemote ? null : context.read<DownloadManager>();
+  final melder = ScaffoldMessenger.maybeOf(context);
+  final wat = album == null ? artiest : '“$album”';
+  try {
+    var weg = 0;
+    if (lib.remote case final c?) {
+      final res = await c.ask('/api/genoeg', {'artiest': artiest, if (album != null) 'album': album, 'aan': aan});
+      genoegVanPc.value = GenoegStand.fromJson(res['genoeg']);
+      weg = (res['weg'] as num?)?.toInt() ?? 0;
+      if (weg > 0) await lib.loadRemote(quiet: true, vers: true);
+    } else if (dm != null) {
+      weg = (await dm.zetGenoeg(artiest: artiest, album: album, aan: aan)).weg;
+    }
+    melder?.showSnackBar(SnackBar(
+        content: Text(aan
+            ? 'Genoeg: Kiezen vraagt niets meer voor $wat${weg > 0 ? ' — $weg ${weg == 1 ? 'keuze' : 'keuzes'} weg' : ''}'
+            : 'Kiezen vraagt weer voor $wat')));
+  } catch (e) {
+    melder?.showSnackBar(SnackBar(content: Text('Genoeg zetten lukte niet: $e')));
+  }
+}
+
+/// Op een toestel: wat de pc over "Genoeg" zegt, vers ([genoegVanPc]). Op de pc staat het er al (twijfel.dart).
+Future<void> genoegVerversen(LibraryStore lib) async {
+  final c = lib.remote;
+  if (c == null) return;
+  final s = await c.genoeg();
+  if (s != null) genoegVanPc.value = s;
+}
+
+/// De menuregel "Genoeg — niet meer vragen" (of terug: "Weer vragen bij Kiezen") voor een plaat of een artiest.
+MenuRegel genoegRegel(BuildContext context, {required String artiest, String? album}) {
+  final s = genoegVanPc.value;
+  final aan = album == null ? s.artiest(artiest) : s.plaat(artiest, album);
+  return MenuRegel(aan ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+      aan ? 'Weer vragen bij Kiezen' : 'Genoeg — niet meer vragen',
+      () => unawaited(zetGenoegOveral(context, artiest: artiest, album: album, aan: !aan)));
+}
+
 /// Het keuzemenu achter "Zoek hi-res" op een plaat: wat de app zelf kiest (de beste kwaliteit, vervangen alleen als het
 /// bewezen beter is), of zelf een soort voor de hele plaat — dan staat elke kopie eerst klaar ([_soortRegels]).
 ItemMenu _zoekHiresMenu(BuildContext context, Album album) => ItemMenu(
@@ -21643,6 +21705,7 @@ ItemMenu _zoekHiresMenu(BuildContext context, Album album) => ItemMenu(
             MenuRegel(Icons.done_all_rounded, 'Alle klaargezette houden (${k.length})',
                 () => _houdAlleKlaargezette(context, k)),
           ],
+        [genoegRegel(context, artiest: album.artist, album: album.title)],
       ],
     );
 
@@ -36249,6 +36312,10 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
     _loadArt();
     _loadWie();
     CoverEnricher.naamgenootGevonden.addListener(_naamgenoot);
+    // Op een toestel: "Genoeg" vers van de pc, voor de knop.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(genoegVerversen(context.read<LibraryStore>()));
+    });
     // Op een tv vijf tellen beeldtijden in fps.log: bouwen, tekenen en "wacht op start". Het openen
     // van een artiest kostte op de Shield na 17-10-2026 opeens 8 tot 12 beelden boven 17 ms, en
     // zonder dit onderscheid is niet te zeggen of dat de hoofddraad is of het tekenen.
@@ -37186,6 +37253,20 @@ class _ArtistBrowsePageState extends State<ArtistBrowsePage> {
                       autofocus: isTv,
                       onPressed: () => startRadio(context, widget.artist.name),
                     ),
+                    // Genoeg voor deze artiest: Kiezen vraagt niets meer voor zijn nummers (Saber, 28-11-2026: "vooral
+                    // adele, het moet eens stoppen"). Alleen voor wie je hebt.
+                    if (mine.isNotEmpty)
+                      ValueListenableBuilder<GenoegStand>(
+                        valueListenable: genoegVanPc,
+                        builder: (context, s, _) {
+                          final aan = s.artiest(widget.artist.name);
+                          return GlasKnop(
+                            icoon: aan ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+                            label: aan ? 'Weer vragen' : 'Genoeg',
+                            onPressed: () => zetGenoegOveral(context, artiest: widget.artist.name, aan: !aan),
+                          );
+                        },
+                      ),
                     // De app raadt portret-of-achtergrond uit de vorm van een plaatje, en juist een
                     // gok hoor je te kunnen overrulen.
                     //
