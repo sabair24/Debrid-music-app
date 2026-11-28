@@ -26458,6 +26458,11 @@ class _HomeStartViewState extends State<HomeStartView> {
         elders: _itunesVoorModel, eldersNaam: 'iTunes', van: 'je Last.fm');
   }
 
+  /// Eén regel over het laden van Start naar `warmte.log` op de pc ("[start] …"), van elk toestel.
+  void _meldStart(String regel) {
+    unawaited((_meldMeting?.call(['[start] $regel']) ?? Future<void>.value()).then((_) {}, onError: (_) {}));
+  }
+
   Future<void> _loadSeeds(List<String> seeds) async {
     if (mounted) setState(() => _seedsLoading = true);
     // De bibliotheek NU lezen, vóór de eerste `await`.
@@ -26514,6 +26519,18 @@ class _HomeStartViewState extends State<HomeStartView> {
         cfg, gespeeldeNamen, lfmArtiestenF, {for (final t in lib.tracks) artiestSleutel(t.artist)});
     // De nieuwe releases staan hier niet meer tussen: die komen apart, en meteen — zie [_laadNieuw].
     final fyF = _haalAanbevolen(seeds);
+    // Aanbevolen meteen tonen zodra het er is, niet pas als ALLE rijen hieronder klaar zijn. Saber, 28-11-2026: de Mac
+    // toonde nog de oude 15 raï-nummers, terwijl de pc er al dagen 240 nieuwe had (in 12 ms opgevraagd). De rij wachtte
+    // op Last.fm, "Vroeger", de nieuwe artiesten en het model; bleef daar één hangen, dan bleef de schijfkopie staan.
+    // Hoe lang het duurde, gaat naar warmte.log op de pc ([_meldStart]), zodat het de volgende keer te zien is.
+    final fyKlok = Stopwatch()..start();
+    unawaited(fyF.then((fy) {
+      final schoon = maxPerArtiest(nogNietInBezit(fy, bezit), (t) => t.artist, 2);
+      _meldStart('aanbevolen: ${fy.length} nummers in ${fyKlok.elapsedMilliseconds} ms, ${schoon.length} nog niet van jou');
+      if (!mounted || schoon.isEmpty) return;
+      _StartCache.forYou = schoon;
+      setState(() => _forYou = schoon);
+    }, onError: (Object e) => _meldStart('aanbevolen mislukt na ${fyKlok.elapsedMilliseconds} ms: $e')));
     final genreF = profiel.isEmpty
         ? Future.value(<CatalogAlbumHit>[])
         : _catalog.chartPerGenre(profiel);
@@ -26560,7 +26577,9 @@ class _HomeStartViewState extends State<HomeStartView> {
     // verwante artiesten binnen, en de verwanten van jouw bibliotheek zijn geregeld je bibliotheek.
     // Dezelfde functie als Ontdek gebruikt, zodat de twee schermen niet elk hun eigen antwoord op
     // "heb ik dit al?" krijgen.
-    _StartCache.forYou = maxPerArtiest(nogNietInBezit(fy, bezit), (t) => t.artist, 2);
+    // Niets gekregen (een fout): de rij laten zoals hij stond, in plaats van leeg.
+    if (fy.isNotEmpty) _StartCache.forYou = maxPerArtiest(nogNietInBezit(fy, bezit), (t) => t.artist, 2);
+    _meldStart('persoonlijke rijen klaar na ${fyKlok.elapsedMilliseconds} ms');
     // De hitlijst van JOUW genres vervangt de wereldlijst, zodra er een is. Eén per artiest, want
     // een hitlijst met dezelfde act op plaats 3 en 7 leest als een fout.
     //
