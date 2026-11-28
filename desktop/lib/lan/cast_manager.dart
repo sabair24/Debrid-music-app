@@ -186,6 +186,17 @@ int? herstelPlek(List<String> rij, int bewaard, String? speeltId) {
   return i < 0 ? null : i;
 }
 
+/// Hoe dicht bij het einde (ms, volgens de speaker) de pc een KEF vaker gaat vragen of hij klaar is ([kEindTik]).
+///
+/// **Waarom.** Een KEF zet geen volgend nummer klaar: hij stopt, en de pc opent het volgende. Om de seconde vragen gaf
+/// 0,15–1,15 s stilte tussen twee nummers, elke wissel anders (gemeten 28-11-2026) — en wie meespeelt, kon dat niet
+/// voorspellen: de Shield sprong aan het begin van bijna elk nummer terug (Saber: "In begin van de liedjes verspringt
+/// het"). De plek van een KEF is tot een seconde oud ([KefApi.plekMs]): daarom ruim 2,5 s.
+const kEindInZicht = Duration(milliseconds: 2500);
+
+/// Hoe vaak de pc een KEF vlak voor het einde vraagt of hij klaar is ([kEindInZicht]). Drie vragen van ~10 ms.
+const kEindTik = Duration(milliseconds: 100);
+
 class CastManager {
   CastManager({
     required this.catalog,
@@ -1118,6 +1129,8 @@ class CastManager {
   void _sluit(_Session s, {bool melden = true}) {
     s.advance?.cancel();
     s.advance = null;
+    s.eindTik?.cancel();
+    s.eindTik = null;
     _meldRadio(s, weg: true);
     s.klok?.stop();
     s.klok = null;
@@ -1863,15 +1876,43 @@ class CastManager {
   /// toets zet hem op nul.
   final Duration startGrace;
 
+  /// Vlak voor het einde van het nummer ([kEindInZicht]) een KEF om de [kEindTik] vragen of hij klaar is, één keer per
+  /// nummer: dan begint het volgende telkens even snel na het einde, in plaats van ergens binnen een seconde.
+  void _eindInZicht(_Session s, Duration? positie, Duration? duur) {
+    if (!isKef(s.renderer) || s.eindTik != null || s.eindVoor == s.index) return;
+    if (positie == null || duur == null || duur <= Duration.zero) return;
+    // De klok weet het preciezer dan de plek, die de KEF eens per seconde bijwerkt (als iemand meespeelt).
+    final plek = s.klok?.plekNu;
+    final nu = plek != null && plek.speelt ? plek.positieMs : positie.inMilliseconds;
+    final rest = duur.inMilliseconds - nu;
+    if (rest <= 0 || rest > kEindInZicht.inMilliseconds) return;
+    final index = s.index;
+    s.eindVoor = index;
+    final hoogstens = (rest + 4000) ~/ kEindTik.inMilliseconds;
+    var tikken = 0;
+    _log?.line('einde in zicht op ${s.renderer.name}: nog $rest ms — om de ${kEindTik.inMilliseconds} ms kijken');
+    s.eindTik = Timer.periodic(kEindTik, (t) {
+      // Het volgende nummer is open (of de sessie is weg, of hij bleef staan): weer om de seconde.
+      if (s.index != index || !identical(_sessies[s.renderer.id], s) || ++tikken > hoogstens) {
+        t.cancel();
+        if (identical(s.eindTik, t)) s.eindTik = null;
+        return;
+      }
+      unawaited(_maybeAdvance(s, tussendoor: true));
+    });
+  }
+
   /// Move to the next track once the speaker says it has finished.
-  Future<void> _maybeAdvance(_Session session) async {
+  ///
+  /// [tussendoor]: een vraag van [_eindInZicht], naast de gewone tijdklok — die telt niet mee voor het volume.
+  Future<void> _maybeAdvance(_Session session, {bool tussendoor = false}) async {
     if (session.advancing) return;
     // Een sessie die intussen vervangen of gesloten is, schuift niets meer door.
     if (!identical(_sessies[session.renderer.id], session)) return;
     // Waar de rij nu staat, op schijf als dat veranderde (volgende, vorige, doorgeschoven). Zie [herstelSessies].
     _bewaarSessies();
     // Om de zes tikken (een halve minuut) het volume: dat verandert zelden vanzelf.
-    if (++session.tikken % 6 == 0) unawaited(_haalVolume(session));
+    if (!tussendoor && ++session.tikken % 6 == 0) unawaited(_haalVolume(session));
     // Give the renderer a moment after a start before believing "STOPPED" — a Sonos reports
     // exactly that for a second or two while it fetches the first bytes.
     if (DateTime.now().difference(session.startedAt) < startGrace) return;
@@ -1883,6 +1924,7 @@ class CastManager {
       // de rest van deze functie niets doen terwijl de index achterloopt.
       final pos = await _voor(session.renderer).positionInfo(session.renderer).catchError((_) => null);
       if (pos != null) _zag(session, positie: pos.position, duur: pos.duration);
+      if (!tussendoor) _eindInZicht(session, pos?.position, pos?.duration);
       if (await _followedRenderer(session, pos?.trackUri, pos?.position)) return;
 
       final state = await _voor(session.renderer).transportState(session.renderer);
@@ -2160,6 +2202,7 @@ class CastManager {
     _groepKijker?.cancel();
     for (final s in _sessies.values) {
       s.advance?.cancel();
+      s.eindTik?.cancel();
       s.klok?.stop();
     }
     _sessies.clear();
@@ -2235,6 +2278,11 @@ class _Session {
   Timer? advance;
   bool advancing = false;
   int tikken = 0;
+
+  /// Vlak voor het einde vaker vragen ([CastManager._eindInZicht]): de tijdklok daarvoor, en voor welk nummer (index)
+  /// hij al liep — één keer per nummer.
+  Timer? eindTik;
+  int eindVoor = -1;
 
   /// Het volume van de speaker (0–100), als hij het meldt.
   int? volume;

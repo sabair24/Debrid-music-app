@@ -202,19 +202,48 @@ int? klokVerschilUit(List<KlokMeting> metingen) {
   return beste.pc - (beste.t0 + beste.t1) ~/ 2;
 }
 
+/// Hoeveel (µs) de wandklok van dit toestel mag verschuiven tegenover een klok die nooit verspringt, voor een volger
+/// opnieuw ijkt ([KlokIjk.ijk]): een tijdserver die hem rechtzet (de Shield, 28-11-2026: +6,1 s), of een slaap (dan staat
+/// de gestage klok stil en loopt de wandklok door). Gewoon bijsturen door de tijdserver is hoogstens ~30 ms per minuut.
+const kKlokSprongUs = 200000;
+
 /// De klok van de pc, op dit toestel. Zie de uitleg bovenaan.
+///
+/// **Op een volger telt een klok die nooit verspringt ([gestaagUs]), niet de wandklok.** Op 28-11-2026 om 17:11:29 zette
+/// de Shield zijn wandklok 6,1 s vooruit (SNTP); met `DateTime.now()` sprong de pc-tijd mee, de volger dacht 6,1 s achter
+/// te lopen en sprong vooruit — en 39 s later, bij de volgende ijking, weer terug. Zo'n sprong (of een slaap) laat
+/// [ijk] meteen opnieuw meten. Op de pc zelf (zonder [vraag]) is de wandklok de maat: de ankers dragen die tijd.
 class KlokIjk {
-  KlokIjk({this.vraag});
+  KlokIjk({this.vraag, @visibleForTesting int Function()? hierUs, @visibleForTesting int Function()? wandUs})
+      : _wandUs = wandUs ?? _wandNu,
+        _hierUs = hierUs ?? (vraag == null ? (wandUs ?? _wandNu) : gestaagUs);
+
+  static int _wandNu() => DateTime.now().microsecondsSinceEpoch;
+  static final int _basisUs = DateTime.now().microsecondsSinceEpoch;
+  static final Stopwatch _sw = Stopwatch()..start();
+
+  /// Een klok die nooit verspringt (µs): de wandklok bij de eerste vraag, plus een stopwatch. Staat stil in een slaap.
+  static int gestaagUs() => _basisUs + _sw.elapsedMicroseconds;
+
+  /// Waarmee dit toestel de tijd meet: op een volger [gestaagUs], op de pc de wandklok.
+  final int Function() _hierUs;
+  final int Function() _wandUs;
 
   /// Vraag de pc hoe laat het is (µs), of null zonder pc. Null = dit IS de pc.
   final Future<int?> Function()? vraag;
 
   int _verschilUs = 0;
   int? _rttUs;
-  DateTime? _gemeten;
+
+  /// Wanneer het laatst gemeten is ([_hierUs]), en hoe de wandklok toen tegenover die klok stond.
+  int? _gemetenUs;
+  int _scheefUs = 0;
+
+  /// Een sprong van de wandklok die [ijk] zag (µs), tot [sprongGezien] hem ophaalt.
+  int? _sprongUs;
 
   /// Hoe laat het nu op de pc is (ms).
-  int nuPcMs() => (DateTime.now().microsecondsSinceEpoch + _verschilUs) ~/ 1000;
+  int nuPcMs() => (_hierUs() + _verschilUs) ~/ 1000;
 
   /// De snelste rondgang van de laatste meting (µs), of null.
   int? get rttUs => _rttUs;
@@ -223,24 +252,43 @@ class KlokIjk {
   Future<void> ijk({Duration geldig = const Duration(seconds: 60), int keer = 7}) async {
     final v = vraag;
     if (v == null) return;
-    if (_gemeten != null && DateTime.now().difference(_gemeten!) < geldig) return;
+    final hier = _hierUs();
+    final gemeten = _gemetenUs;
+    if (gemeten != null) {
+      // Versprong de wandklok (of sliep het toestel)? Dan nu meten, ook binnen [geldig].
+      final sprong = _wandUs() - hier - _scheefUs;
+      if (sprong.abs() >= kKlokSprongUs) {
+        _sprongUs = sprong;
+      } else if (hier - gemeten < geldig.inMicroseconds) {
+        return;
+      }
+    }
     final metingen = <KlokMeting>[];
     for (var i = 0; i < keer; i++) {
-      final t0 = DateTime.now().microsecondsSinceEpoch;
+      final t0 = _hierUs();
       int? pc;
       try {
         pc = await v();
       } catch (_) {
         pc = null;
       }
-      final t1 = DateTime.now().microsecondsSinceEpoch;
+      final t1 = _hierUs();
       if (pc != null) metingen.add((t0: t0, pc: pc, t1: t1));
     }
     final verschil = klokVerschilUit(metingen);
     if (verschil == null) return;
     _verschilUs = verschil;
     _rttUs = [for (final m in metingen) m.t1 - m.t0].reduce((a, b) => a < b ? a : b);
-    _gemeten = DateTime.now();
+    final na = _hierUs();
+    _gemetenUs = na;
+    _scheefUs = _wandUs() - na;
+  }
+
+  /// Een sprong van de wandklok die de laatste [ijk] zag (µs), één keer: voor het logboek.
+  int? sprongGezien() {
+    final s = _sprongUs;
+    _sprongUs = null;
+    return s;
   }
 }
 
@@ -256,7 +304,7 @@ class SamenVolger {
     this.kiesVersie,
     this.log,
     int Function()? nuMs,
-  }) : _nuMs = nuMs ?? (() => DateTime.now().millisecondsSinceEpoch);
+  }) : _nuMs = nuMs ?? (() => KlokIjk.gestaagUs() ~/ 1000);
 
   /// De klok van dit toestel in ms, voor de rust tussen twee sprongen ([_spoelRust]); een toets zet hem.
   final int Function() _nuMs;
@@ -358,6 +406,10 @@ class SamenVolger {
   int _wisselOp = 0;
   String? _wisselNummer;
 
+  /// Hoeveel er sinds de wissel al gesprongen is (ms, wat de volger te vroeg was): een grove meting mag in het begin
+  /// springen en leert niet; de eerste precieze meting erna ziet alleen wat er nog over is. Samen is het de wissel.
+  int _wisselGespoeld = 0;
+
   /// Voor de speler (`PlayerStore.wisselWacht`), bij een nummer dat gewoon afliep: zoveel gepauzeerd wachten voor het
   /// volgende begint (of tot het anker van de leider er is: [opAnker] start dan op de juiste plek). Zonder groep 0.
   Duration wisselWacht() {
@@ -365,6 +417,7 @@ class SamenVolger {
     if (a == null || !a.speelt) return Duration.zero;
     _wisselLeren = true;
     _wisselOp = _nuMs();
+    _wisselGespoeld = 0;
     // Het nummer dat nu opent: alleen een meting van dát nummer zegt iets over deze wissel.
     final t = speler.current;
     _wisselNummer = t == null ? null : idVan(t);
@@ -382,9 +435,12 @@ class SamenVolger {
     _wisselLeren = false;
     if (nu - _wisselOp > 15000) return;
     final oud = _wisselWacht[a.groep] ?? 0;
-    final nieuw = (oud + afwijking * 0.8).round().clamp(0, 1500).toInt();
+    // Wat er al gesprongen is hoort erbij: zonder dat leerde hij +17 waar de wissel +295 was (28-11-2026, Trick Me).
+    final wissel = afwijking + _wisselGespoeld;
+    final nieuw = (oud + wissel * 0.8).round().clamp(0, 1500).toInt();
     _wisselWacht[a.groep] = nieuw;
-    log?.call('samen: wachten bij een wissel $nieuw ms (na de wissel ${afwijking >= 0 ? '+' : ''}$afwijking ms)');
+    log?.call('samen: wachten bij een wissel $nieuw ms (na de wissel ${wissel >= 0 ? '+' : ''}$wissel ms'
+        '${_wisselGespoeld == 0 ? '' : ', waarvan $_wisselGespoeld gesprongen'})');
   }
 
   /// Een nieuw anker van de pc.
@@ -426,6 +482,9 @@ class SamenVolger {
     _anker = a;
     await klok.ijk();
     if (eerste) log?.call('samen: volgt ${a.groep} (klok ±${((klok.rttUs ?? 0) / 2000).toStringAsFixed(1)} ms)');
+    if (klok.sprongGezien() case final s?) {
+      log?.call('samen: de klok van dit toestel versprong ${s >= 0 ? '+' : ''}${s ~/ 1000} ms — opnieuw geijkt');
+    }
     final t = speler.current;
     final zelfde = t != null && idVan(t) == a.trackId;
     if (!a.speelt) {
@@ -609,6 +668,9 @@ class SamenVolger {
         _beginPrecies = precies;
       }
       _leerNaSprong = precies;
+      // Voor het leren na een wissel ([_leerWissel]): de volger schuift [afwijking] terug, min de marge. Elke wissel begint
+      // weer bij 0 ([wisselWacht]), en alleen het leren leest het.
+      _wisselGespoeld += afwijking - _spoelMarge;
       speler.seek(moet + Duration(milliseconds: _spoelMarge));
       _zetSnelheid(1.0, nu);
       _bezig = false;
